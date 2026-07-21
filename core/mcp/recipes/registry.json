@@ -597,6 +597,47 @@
         "default": false
       },
       "warning": "Workflows must be individually marked 'Available in MCP' in your n8n instance before they appear as tools. For n8n Cloud, your hostname is <slug>.app.n8n.cloud. For self-hosted n8n, use your instance's domain name (without https://)."
+    },
+    {
+      "id": "workato",
+      "display_name": "Workato",
+      "description": "Run recipes and trigger workflows in your Workato workspace via Workato's Enterprise MCP server. Each collection has its own MCP URL — copy it from AI Hub > Enterprise MCP in your Workato account.",
+      "category": "automation",
+      "transport": "http",
+      "url": "https://app.workato.com/${WORKATO_MCP_PATH}",
+      "headers_template": {
+        "Authorization": "Bearer ${WORKATO_MCP_TOKEN}"
+      },
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "WORKATO_MCP_PATH",
+          "display": "Workato MCP collection path (the path portion of your MCP URL from AI Hub > Enterprise MCP, e.g. mcp/your-collection-id)",
+          "docs_url": "https://docs.workato.com/en/mcp/mcp-server-access-and-configuration",
+          "required": true
+        },
+        {
+          "name": "WORKATO_MCP_TOKEN",
+          "display": "Workato Developer MCP token (from AI Hub > Enterprise MCP > Developer MCP Token)",
+          "docs_url": "https://docs.workato.com/en/mcp/developer-api-mcp",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.workato.com/en/mcp/mcp-server-access-and-configuration",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Workato Enterprise MCP requires an Enterprise plan. Your Workato admin must add you to a user group with MCP access. Each MCP server collection has its own URL — copy the path portion from AI Hub > Enterprise MCP (everything after app.workato.com/)."
     }
   ]
 }

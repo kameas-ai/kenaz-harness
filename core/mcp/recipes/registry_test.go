@@ -30,6 +30,7 @@ var expectedRegistryIDs = []string{
 	"pipedream",
 	"composio",
 	"n8n",
+	"workato",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -500,6 +501,41 @@ func TestN8nRecipe(t *testing.T) {
 	}
 	if !envNames["N8N_MCP_ACCESS_TOKEN"] {
 		t.Errorf("EnvKeys = %+v, want N8N_MCP_ACCESS_TOKEN", r.EnvKeys)
+	}
+	if r.Category != "automation" {
+		t.Errorf("Category = %q, want automation", r.Category)
+	}
+}
+
+// TestWorkatoRecipe — WP06 acceptance: per-collection path, bearer token, primary_auth keys, warning present.
+func TestWorkatoRecipe(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("workato")
+	if !ok {
+		t.Fatal("workato not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	// No OAuth flow — bearer token via headers_template.
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for Workato (bearer token auth), got %+v", r.Auth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["WORKATO_MCP_PATH"] {
+		t.Errorf("EnvKeys = %+v, want WORKATO_MCP_PATH", r.EnvKeys)
+	}
+	if !envNames["WORKATO_MCP_TOKEN"] {
+		t.Errorf("EnvKeys = %+v, want WORKATO_MCP_TOKEN", r.EnvKeys)
+	}
+	if r.Warning == "" {
+		t.Error("Workato recipe should carry a Warning (enterprise-only, admin setup required)")
 	}
 	if r.Category != "automation" {
 		t.Errorf("Category = %q, want automation", r.Category)
