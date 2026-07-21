@@ -220,7 +220,7 @@
     {
       "id": "gmail",
       "display_name": "Gmail",
-      "description": "Read, search, send, draft, and label Gmail messages through the Gmail API. Requires a Google Cloud OAuth client and a one-time browser sign-in (see setup notes).",
+      "description": "Read, search, send, draft, and label Gmail messages through the Gmail API. Requires a Google Cloud OAuth 2.0 credentials file (~/.gmail-mcp/gcp-oauth.keys.json). The install dialog includes a step-by-step guided setup — no command-line work needed.",
       "category": "communication",
       "command": [
         "npx",
@@ -242,7 +242,7 @@
         "allowed": false,
         "default": false
       },
-      "warning": "One-time setup required before install works: create a Google Cloud OAuth client (Desktop or Web), save gcp-oauth.keys.json to ~/.gmail-mcp/, then run `npx @gongrzhe/server-gmail-autoauth-mcp auth` once to authorize in your browser (creds cached at ~/.gmail-mcp/credentials.json). First npm fetch can take 10\u201320 s.",
+      "warning": "One-time Google Cloud setup required. The install dialog will guide you through creating an OAuth 2.0 client in the Google Cloud Console and placing the credentials file in ~/.gmail-mcp/. After install the server opens a browser sign-in once to authorize access (credentials cached at ~/.gmail-mcp/credentials.json). First npm fetch can take 10\u201320 s.",
       "primary_auth": "none"
     },
     {

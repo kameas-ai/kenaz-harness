@@ -235,11 +235,12 @@ func (a *API) InstallRecipe(ctx context.Context, id string, env map[string]strin
 	}
 
 	// Prereq pre-flight BEFORE any keychain write or enabled-list mutation:
-	// detect missing runtimes (uv/uvx, npx/node) up front so a missing runtime
-	// returns a friendly, actionable error WITHOUT staging the user's secrets in
-	// the OS keychain for a recipe that never installs. Depends only on
-	// recipe.Command, so nothing config- or secret-related is needed yet.
-	if missing := CheckPrereqs(recipe.Command); len(missing) > 0 {
+	// detect missing runtimes (uv/uvx, npx/node) and required files (e.g.
+	// Gmail OAuth credentials) up front so a missing prereq returns a
+	// friendly, actionable error WITHOUT staging the user's secrets in the OS
+	// keychain for a recipe that never installs. Pass the recipe ID so
+	// file-based prereqs (recipeFilePrereqs) are also consulted.
+	if missing := CheckPrereqs(recipe.Command, recipe.ID); len(missing) > 0 {
 		return stdio.RecipeStatus{}, PrereqError(missing)
 	}
 
@@ -842,6 +843,10 @@ func (a *API) RequestAdditionalAllowedDir(ctx context.Context, recipeID, path, r
 // recipe from the merged catalog and delegates to CheckPrereqs. Returns an
 // empty slice (not nil) when all prerequisites are satisfied, so the JSON wire
 // shape is always an array rather than null.
+//
+// The recipe ID is forwarded to CheckPrereqs so file-based prereqs (e.g.
+// Gmail's ~/.gmail-mcp/gcp-oauth.keys.json) are also consulted, in addition
+// to the standard binary-in-PATH runtime checks.
 func (a *API) CheckRecipePrereqs(_ context.Context, id string) ([]MissingPrereq, error) {
 	if a.cfg.Catalog == nil {
 		return []MissingPrereq{}, nil
@@ -850,7 +855,7 @@ func (a *API) CheckRecipePrereqs(_ context.Context, id string) ([]MissingPrereq,
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", recipes.ErrRecipeNotFound, id)
 	}
-	missing := CheckPrereqs(recipe.Command)
+	missing := CheckPrereqs(recipe.Command, recipe.ID)
 	if missing == nil {
 		return []MissingPrereq{}, nil
 	}
