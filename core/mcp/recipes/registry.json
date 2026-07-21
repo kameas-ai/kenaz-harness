@@ -464,6 +464,34 @@
         "allowed": false,
         "default": false
       }
+    },
+    {
+      "id": "sentry",
+      "display_name": "Sentry",
+      "description": "Search and triage Sentry errors, inspect stack traces, manage projects and teams. Sign in with Sentry — no token to paste.",
+      "category": "developer",
+      "transport": "http",
+      "url": "https://mcp.sentry.dev/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": ["org:read", "project:read", "project:write", "team:read", "event:write"]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://mcp.sentry.dev",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
     }
   ]
 }
