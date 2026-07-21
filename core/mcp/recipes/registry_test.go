@@ -26,6 +26,18 @@ var expectedRegistryIDs = []string{
 	"git",
 	"puppeteer",
 	"playwright",
+	"notion",
+	"linear",
+	"sentry",
+	"cloudflare",
+	"asana",
+	"atlassian",
+	"zapier",
+	"make",
+	"pipedream",
+	"composio",
+	"n8n",
+	"workato",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -377,5 +389,403 @@ func TestRegistryWiresIntoMergedCatalog(t *testing.T) {
 	}
 	if registrySeen != len(recipes.Registry().List()) {
 		t.Errorf("registry count in merged = %d, want %d", registrySeen, len(recipes.Registry().List()))
+	}
+}
+
+func TestRecipe_Notion(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("notion")
+	if !ok {
+		t.Fatal("notion not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.notion.com/mcp" {
+		t.Errorf("URL = %q, want https://mcp.notion.com/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	if r.Auth.ClientID != "" {
+		t.Errorf("notion auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "productivity" {
+		t.Errorf("Category = %q, want productivity", r.Category)
+	}
+	if r.Warning == "" {
+		t.Error("notion should carry a Warning (beta label)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+func TestRecipe_Linear(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("linear")
+	if !ok {
+		t.Fatal("linear not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.linear.app/mcp" {
+		t.Errorf("URL = %q, want https://mcp.linear.app/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	if r.Auth.ClientID != "" {
+		t.Errorf("linear auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	if len(r.Auth.Scopes) == 0 {
+		t.Error("linear Auth.Scopes should list requested scopes")
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "productivity" {
+		t.Errorf("Category = %q, want productivity", r.Category)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+func TestRecipe_Sentry(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("sentry")
+	if !ok {
+		t.Fatal("sentry not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.sentry.dev/mcp" {
+		t.Errorf("URL = %q, want https://mcp.sentry.dev/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	if r.Auth.ClientID != "" {
+		t.Errorf("sentry auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	if len(r.Auth.Scopes) == 0 {
+		t.Error("sentry Auth.Scopes should list requested scopes")
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "developer" {
+		t.Errorf("Category = %q, want developer", r.Category)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+func TestRecipe_Cloudflare(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("cloudflare")
+	if !ok {
+		t.Fatal("cloudflare not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.cloudflare.com/mcp" {
+		t.Errorf("URL = %q, want https://mcp.cloudflare.com/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	if r.Auth.ClientID != "" {
+		t.Errorf("cloudflare auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "developer" {
+		t.Errorf("Category = %q, want developer", r.Category)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+func TestRecipe_Asana(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("asana")
+	if !ok {
+		t.Fatal("asana not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.asana.com/v2/mcp" {
+		t.Errorf("URL = %q, want https://mcp.asana.com/v2/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	if r.Auth.ClientID != "" {
+		t.Errorf("asana auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	if len(r.Auth.Scopes) == 0 {
+		t.Error("asana Auth.Scopes should list requested scopes")
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "productivity" {
+		t.Errorf("Category = %q, want productivity", r.Category)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+func TestRecipe_Atlassian(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("atlassian")
+	if !ok {
+		t.Fatal("atlassian not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.atlassian.com/v1/mcp" {
+		t.Errorf("URL = %q, want https://mcp.atlassian.com/v1/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// Atlassian uses a placeholder client_id (no DCR — must register Kameas OAuth app).
+	if r.Auth.ClientID != "${KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID}" {
+		t.Errorf("atlassian auth.client_id = %q, want ${KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID} placeholder", r.Auth.ClientID)
+	}
+	if len(r.Auth.Scopes) == 0 {
+		t.Error("atlassian Auth.Scopes should list requested scopes")
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthPKCE {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_pkce", r.PrimaryAuth)
+	}
+	if r.Category != "productivity" {
+		t.Errorf("Category = %q, want productivity", r.Category)
+	}
+	// Must have the KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID env key so install modal can surface it.
+	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID" {
+		t.Errorf("EnvKeys = %+v, want one entry named KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID", r.EnvKeys)
+	}
+	if !r.EnvKeys[0].Required {
+		t.Error("KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID should be required (no DCR — needs registered Kameas app)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+func TestZapierRecipe(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("zapier")
+	if !ok {
+		t.Fatal("zapier not in registry")
+	}
+	if r.Category != "automation" {
+		t.Errorf("Category = %q, want automation", r.Category)
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL == "" {
+		t.Error("URL must be non-empty")
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// DCR zero-app: no baked client_id.
+	if r.Auth.ClientID != "" {
+		t.Errorf("Auth.ClientID = %q, want empty (DCR zero-app — no baked client_id)", r.Auth.ClientID)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthOAuth {
+		t.Errorf("PrimaryAuth = %q, want oauth", r.PrimaryAuth)
+	}
+}
+
+func TestMakeRecipe(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("make")
+	if !ok {
+		t.Fatal("make not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.make.com/" {
+		t.Errorf("URL = %q, want https://mcp.make.com/", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// DCR zero-app: no baked client_id.
+	if r.Auth.ClientID != "" {
+		t.Errorf("Auth.ClientID = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	if r.Category != "automation" {
+		t.Errorf("Category = %q, want automation", r.Category)
+	}
+}
+
+func TestPipedreamRecipe(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("pipedream")
+	if !ok {
+		t.Fatal("pipedream not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// DCR zero-app: no baked client_id.
+	if r.Auth.ClientID != "" {
+		t.Errorf("Auth.ClientID = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	// "mcp" scope required for Pipedream Connect MCP.
+	hasMCPScope := false
+	for _, s := range r.Auth.Scopes {
+		if s == "mcp" {
+			hasMCPScope = true
+		}
+	}
+	if !hasMCPScope {
+		t.Errorf("Auth.Scopes = %v, must include \"mcp\"", r.Auth.Scopes)
+	}
+	// env_keys must include PIPEDREAM_PROJECT_ID.
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["PIPEDREAM_PROJECT_ID"] {
+		t.Errorf("EnvKeys = %+v, want PIPEDREAM_PROJECT_ID", r.EnvKeys)
+	}
+	if r.Category != "automation" {
+		t.Errorf("Category = %q, want automation", r.Category)
+	}
+}
+
+func TestComposioRecipe(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("composio")
+	if !ok {
+		t.Fatal("composio not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	// Auth block absent — no OAuth flow for this recipe.
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for Composio (API-key auth), got %+v", r.Auth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["COMPOSIO_SERVER_ID"] {
+		t.Errorf("EnvKeys = %+v, want COMPOSIO_SERVER_ID", r.EnvKeys)
+	}
+	if !envNames["COMPOSIO_API_KEY"] {
+		t.Errorf("EnvKeys = %+v, want COMPOSIO_API_KEY", r.EnvKeys)
+	}
+	if r.Category != "automation" {
+		t.Errorf("Category = %q, want automation", r.Category)
+	}
+}
+
+func TestN8nRecipe(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("n8n")
+	if !ok {
+		t.Fatal("n8n not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	// No OAuth flow — bearer token via headers_template.
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for n8n (bearer token auth), got %+v", r.Auth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["N8N_INSTANCE_HOST"] {
+		t.Errorf("EnvKeys = %+v, want N8N_INSTANCE_HOST", r.EnvKeys)
+	}
+	if !envNames["N8N_MCP_ACCESS_TOKEN"] {
+		t.Errorf("EnvKeys = %+v, want N8N_MCP_ACCESS_TOKEN", r.EnvKeys)
+	}
+	if r.Category != "automation" {
+		t.Errorf("Category = %q, want automation", r.Category)
+	}
+}
+
+func TestWorkatoRecipe(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("workato")
+	if !ok {
+		t.Fatal("workato not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	// No OAuth flow — bearer token via headers_template.
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for Workato (bearer token auth), got %+v", r.Auth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["WORKATO_MCP_PATH"] {
+		t.Errorf("EnvKeys = %+v, want WORKATO_MCP_PATH", r.EnvKeys)
+	}
+	if !envNames["WORKATO_MCP_TOKEN"] {
+		t.Errorf("EnvKeys = %+v, want WORKATO_MCP_TOKEN", r.EnvKeys)
+	}
+	if r.Warning == "" {
+		t.Error("Workato recipe should carry a Warning (enterprise-only, admin setup required)")
+	}
+	if r.Category != "automation" {
+		t.Errorf("Category = %q, want automation", r.Category)
+	}
+}
+
+func TestAutomationCategoryGroup(t *testing.T) {
+	cat := recipes.Registry()
+	iPaaSIDs := []string{"zapier", "make", "pipedream", "composio", "n8n", "workato"}
+	for _, id := range iPaaSIDs {
+		r, ok := cat.Get(id)
+		if !ok {
+			t.Errorf("iPaaS recipe %q not found in registry", id)
+			continue
+		}
+		if r.Category != "automation" {
+			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
+		}
 	}
 }

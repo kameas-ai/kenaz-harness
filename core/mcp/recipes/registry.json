@@ -4,7 +4,7 @@
     {
       "id": "github",
       "display_name": "GitHub",
-      "description": "Search repositories, read files, manage issues + pull requests, and fetch repository metadata via GitHub's official remote MCP server. Sign in with GitHub (OAuth) \u2014 no token to paste \u2014 or supply a personal access token as a fallback.",
+      "description": "Search repositories, read files, manage issues + pull requests, and fetch repository metadata via GitHub's official remote MCP server. Sign in with GitHub (OAuth) — no token to paste — or supply a personal access token as a fallback.",
       "category": "search",
       "transport": "http",
       "url": "https://api.githubcopilot.com/mcp/",
@@ -21,7 +21,7 @@
       "env_keys": [
         {
           "name": "GITHUB_PERSONAL_ACCESS_TOKEN",
-          "display": "GitHub personal access token (optional \u2014 fallback if you don't sign in)",
+          "display": "GitHub personal access token (optional — fallback if you don't sign in)",
           "docs_url": "https://github.com/settings/tokens",
           "required": false
         }
@@ -44,7 +44,7 @@
     {
       "id": "fetch",
       "display_name": "Fetch (HTTP)",
-      "description": "Generic HTTP fetch tool: the model can request a URL and read the response. No credentials required; the recipe imposes no allow-list \u2014 limit access via Cedar policy if you need a domain whitelist.",
+      "description": "Generic HTTP fetch tool: the model can request a URL and read the response. No credentials required; the recipe imposes no allow-list — limit access via Cedar policy if you need a domain whitelist.",
       "category": "fetch",
       "command": [
         "uvx",
@@ -65,7 +65,7 @@
         "allowed": false,
         "default": false
       },
-      "warning": "Python server (PyPI mcp-server-fetch) launched via uvx; requires uv installed. First run downloads the package (5\u201315 s).",
+      "warning": "Python server (PyPI mcp-server-fetch) launched via uvx; requires uv installed. First run downloads the package (5–15 s).",
       "primary_auth": "none"
     },
     {
@@ -100,7 +100,7 @@
         "allowed": false,
         "default": false
       },
-      "warning": "npm fetch on first run can take 5\u201315 s.",
+      "warning": "npm fetch on first run can take 5–15 s.",
       "primary_auth": "keys"
     },
     {
@@ -138,7 +138,7 @@
         "allowed": false,
         "default": false
       },
-      "warning": "Python server (PyPI mcp-server-sqlite) launched via uvx; requires uv installed. First run downloads the package (5\u201315 s).",
+      "warning": "Python server (PyPI mcp-server-sqlite) launched via uvx; requires uv installed. First run downloads the package (5–15 s).",
       "primary_auth": "none"
     },
     {
@@ -173,13 +173,13 @@
         "allowed": false,
         "default": false
       },
-      "warning": "npm fetch on first run can take 5\u201315 s.",
+      "warning": "npm fetch on first run can take 5–15 s.",
       "primary_auth": "keys"
     },
     {
       "id": "slack",
       "display_name": "Slack",
-      "description": "Read channels, post messages, search, and look up users in your Slack workspace via Slack\u2019s official remote MCP server. Sign in with Slack (OAuth + PKCE \u2014 no token to paste). Advanced: supply bot + app-level tokens to use the legacy stdio server instead.",
+      "description": "Read channels, post messages, search, and look up users in your Slack workspace via Slack’s official remote MCP server. Sign in with Slack (OAuth + PKCE — no token to paste). Advanced: supply bot + app-level tokens to use the legacy stdio server instead.",
       "category": "communication",
       "transport": "http",
       "url": "https://mcp.slack.com",
@@ -213,12 +213,12 @@
         "default": false
       },
       "primary_auth": "oauth",
-      "warning": "OAuth sign-in requires the Kameas Slack app to be registered (client_id placeholder \u2014 set KAMEAS_SLACK_OAUTH_CLIENT_ID at build time or register the app and bake the client_id). Advanced: use the token-based stdio server below (id: slack-tokens)."
+      "warning": "OAuth sign-in requires the Kameas Slack app to be registered (client_id placeholder — set KAMEAS_SLACK_OAUTH_CLIENT_ID at build time or register the app and bake the client_id). Advanced: use the token-based stdio server below (id: slack-tokens)."
     },
     {
       "id": "slack-tokens",
       "display_name": "Slack (Advanced: use tokens)",
-      "description": "Read channels, post messages, and look up users in a Slack workspace using a bot token and app-level token. Advanced fallback \u2014 prefer the \u2018Slack\u2019 recipe (remote MCP, OAuth sign-in) for token-free setup.",
+      "description": "Read channels, post messages, and look up users in a Slack workspace using a bot token and app-level token. Advanced fallback — prefer the ‘Slack’ recipe (remote MCP, OAuth sign-in) for token-free setup.",
       "category": "communication",
       "command": [
         "npx",
@@ -253,7 +253,7 @@
         "allowed": false,
         "default": false
       },
-      "warning": "npm fetch on first run can take 5\u201315 s. Prefer the \u2018Slack\u2019 recipe (remote MCP, OAuth sign-in) instead.",
+      "warning": "npm fetch on first run can take 5–15 s. Prefer the ‘Slack’ recipe (remote MCP, OAuth sign-in) instead.",
       "primary_auth": "keys"
     },
     {
@@ -281,13 +281,13 @@
         "allowed": false,
         "default": false
       },
-      "warning": "One-time Google Cloud setup required. The install dialog will guide you through creating an OAuth 2.0 client in the Google Cloud Console and placing the credentials file in ~/.gmail-mcp/. After install the server opens a browser sign-in once to authorize access (credentials cached at ~/.gmail-mcp/credentials.json). First npm fetch can take 10\u201320 s.",
+      "warning": "One-time Google Cloud setup required. The install dialog will guide you through creating an OAuth 2.0 client in the Google Cloud Console and placing the credentials file in ~/.gmail-mcp/. After install the server opens a browser sign-in once to authorize access (credentials cached at ~/.gmail-mcp/credentials.json). First npm fetch can take 10–20 s.",
       "primary_auth": "none"
     },
     {
       "id": "outlook",
       "display_name": "Outlook (Microsoft 365)",
-      "description": "Read, search, send, and organize Outlook mail \u2014 plus calendar and contacts \u2014 via the Microsoft Graph API. Signs in with a device code in your browser on first use; personal accounts need no credentials.",
+      "description": "Read, search, send, and organize Outlook mail — plus calendar and contacts — via the Microsoft Graph API. Signs in with a device code in your browser on first use; personal accounts need no credentials.",
       "category": "communication",
       "command": [
         "npx",
@@ -300,13 +300,13 @@
       "env_keys": [
         {
           "name": "MS365_MCP_CLIENT_ID",
-          "display": "Azure app client ID (optional \u2014 for work/school accounts)",
+          "display": "Azure app client ID (optional — for work/school accounts)",
           "docs_url": "https://github.com/softeria/ms-365-mcp-server#authentication",
           "required": false
         },
         {
           "name": "MS365_MCP_TENANT_ID",
-          "display": "Azure tenant ID (optional \u2014 defaults to 'common'; 'consumers' for personal)",
+          "display": "Azure tenant ID (optional — defaults to 'common'; 'consumers' for personal)",
           "docs_url": "https://github.com/softeria/ms-365-mcp-server#authentication",
           "required": false
         }
@@ -325,7 +325,7 @@
         "allowed": false,
         "default": false
       },
-      "warning": "First use triggers a device-code sign-in: the server prints a URL + code for you to authorize in your browser. Personal accounts work out of the box; work/school accounts may require a custom Azure app (set the optional client/tenant IDs above). First npm fetch can take 10\u201320 s."
+      "warning": "First use triggers a device-code sign-in: the server prints a URL + code for you to authorize in your browser. Personal accounts work out of the box; work/school accounts may require a custom Azure app (set the optional client/tenant IDs above). First npm fetch can take 10–20 s."
     },
     {
       "id": "time",
@@ -351,7 +351,7 @@
         "allowed": false,
         "default": false
       },
-      "warning": "Python server (PyPI mcp-server-time) launched via uvx; requires uv installed. First run downloads the package (5\u201315 s).",
+      "warning": "Python server (PyPI mcp-server-time) launched via uvx; requires uv installed. First run downloads the package (5–15 s).",
       "primary_auth": "none"
     },
     {
@@ -389,13 +389,13 @@
         "allowed": false,
         "default": false
       },
-      "warning": "Python server (PyPI mcp-server-git) launched via uvx; requires uv installed. First run downloads the package (5\u201315 s).",
+      "warning": "Python server (PyPI mcp-server-git) launched via uvx; requires uv installed. First run downloads the package (5–15 s).",
       "primary_auth": "none"
     },
     {
       "id": "puppeteer",
       "display_name": "Puppeteer",
-      "description": "Headless Chrome browser automation: navigate, screenshot, click, fill forms, evaluate JavaScript. The first run downloads a Chromium binary (~170 MB) \u2014 be patient.",
+      "description": "Headless Chrome browser automation: navigate, screenshot, click, fill forms, evaluate JavaScript. The first run downloads a Chromium binary (~170 MB) — be patient.",
       "category": "fetch",
       "command": [
         "npx",
@@ -417,13 +417,13 @@
         "allowed": false,
         "default": false
       },
-      "warning": "npm fetch on first run can take 5\u201315 s. First spawn also downloads a Chromium binary (~170 MB).",
+      "warning": "npm fetch on first run can take 5–15 s. First spawn also downloads a Chromium binary (~170 MB).",
       "primary_auth": "none"
     },
     {
       "id": "playwright",
       "display_name": "Playwright",
-      "description": "Cross-browser automation (Chromium, Firefox, WebKit): navigate, screenshot, click, fill forms, evaluate JavaScript. The first run downloads browser binaries (~300 MB total) \u2014 be patient.",
+      "description": "Cross-browser automation (Chromium, Firefox, WebKit): navigate, screenshot, click, fill forms, evaluate JavaScript. The first run downloads browser binaries (~300 MB total) — be patient.",
       "category": "fetch",
       "command": [
         "npx",
@@ -445,8 +445,440 @@
         "allowed": false,
         "default": false
       },
-      "warning": "npm fetch on first run can take 5\u201315 s. First spawn also downloads browser binaries (~300 MB).",
+      "warning": "npm fetch on first run can take 5–15 s. First spawn also downloads browser binaries (~300 MB).",
       "primary_auth": "none"
+    },
+    {
+      "id": "notion",
+      "display_name": "Notion",
+      "description": "Read and write Notion pages, databases, blocks, and comments. Sign in with Notion — no token to paste.",
+      "category": "productivity",
+      "transport": "http",
+      "url": "https://mcp.notion.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth"
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.notion.com/docs/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Notion MCP is in beta — tool surface may change across Notion releases."
+    },
+    {
+      "id": "linear",
+      "display_name": "Linear",
+      "description": "Search issues, create and update issues, manage projects and cycles in Linear. Sign in with Linear — no token to paste.",
+      "category": "productivity",
+      "transport": "http",
+      "url": "https://mcp.linear.app/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "read",
+          "write"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://linear.app/docs/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "sentry",
+      "display_name": "Sentry",
+      "description": "Search and triage Sentry errors, inspect stack traces, manage projects and teams. Sign in with Sentry — no token to paste.",
+      "category": "developer",
+      "transport": "http",
+      "url": "https://mcp.sentry.dev/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "org:read",
+          "project:read",
+          "project:write",
+          "team:read",
+          "event:write"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://mcp.sentry.dev",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "cloudflare",
+      "display_name": "Cloudflare",
+      "description": "Manage Cloudflare zones, Workers, R2, KV, DNS, and analytics via Cloudflare's official MCP server. Sign in with Cloudflare — no token to paste.",
+      "category": "developer",
+      "transport": "http",
+      "url": "https://mcp.cloudflare.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth"
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/cloudflare/mcp-server-cloudflare",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "asana",
+      "display_name": "Asana",
+      "description": "Search tasks, create and update tasks, manage projects and workspaces in Asana. Sign in with Asana — no token to paste.",
+      "category": "productivity",
+      "transport": "http",
+      "url": "https://mcp.asana.com/v2/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "default"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.asana.com/docs/using-asanas-mcp-server",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "atlassian",
+      "display_name": "Atlassian (Jira & Confluence)",
+      "description": "Search and manage Jira issues, sprints, and projects; read and write Confluence pages and spaces. Sign in with your Atlassian account.",
+      "category": "productivity",
+      "transport": "http",
+      "url": "https://mcp.atlassian.com/v1/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID}",
+        "scopes": [
+          "read:jira-work",
+          "write:jira-work",
+          "read:confluence-content.all",
+          "write:confluence-content",
+          "offline_access"
+        ]
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID",
+          "display": "Kameas Atlassian OAuth client ID (pre-configured)",
+          "docs_url": "https://developer.atlassian.com/console/myapps/",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.atlassian.com/cloud/jira/platform/mcp-server/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "zapier",
+      "display_name": "Zapier",
+      "description": "Connect to thousands of apps via Zapier’s official remote MCP server. Run Zaps, browse available actions, and trigger automations from the model. Sign in with Zapier (OAuth — no token to paste). Supports a fallback connection token if OAuth is unavailable.",
+      "category": "automation",
+      "transport": "http",
+      "url": "https://mcp.zapier.com/api/v1/connect",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "openid",
+          "profile",
+          "email"
+        ]
+      },
+      "primary_auth": "oauth",
+      "env_keys": [
+        {
+          "name": "ZAPIER_MCP_CONNECTION_TOKEN",
+          "display": "Zapier MCP connection token (optional — fallback if OAuth unavailable)",
+          "docs_url": "https://mcp.zapier.com",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://mcp.zapier.com",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "make",
+      "display_name": "Make",
+      "description": "Automate workflows across hundreds of apps via Make's official remote MCP server. Build and run scenarios, inspect executions, and manage your automation modules. Sign in with Make (OAuth — no token to paste).",
+      "category": "automation",
+      "transport": "http",
+      "url": "https://mcp.make.com/",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": []
+      },
+      "primary_auth": "oauth",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://www.make.com/en/help/home",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "pipedream",
+      "display_name": "Pipedream",
+      "description": "Access 2,400+ connected apps via Pipedream's remote MCP server. Run workflows, list components, and call actions across Slack, GitHub, Google, and thousands more. Sign in with Pipedream (OAuth — no token to paste). Requires a Pipedream project ID and environment.",
+      "category": "automation",
+      "transport": "http",
+      "url": "https://remote.mcp.pipedream.net",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "openid",
+          "profile",
+          "email",
+          "offline_access",
+          "mcp"
+        ]
+      },
+      "primary_auth": "oauth",
+      "headers_template": {
+        "x-pd-project-id": "${PIPEDREAM_PROJECT_ID}",
+        "x-pd-environment": "${PIPEDREAM_ENVIRONMENT}"
+      },
+      "env_keys": [
+        {
+          "name": "PIPEDREAM_PROJECT_ID",
+          "display": "Pipedream project ID (e.g. proj_xxxxxxx — from Project Settings)",
+          "docs_url": "https://pipedream.com/docs/connect/mcp/developers",
+          "required": true
+        },
+        {
+          "name": "PIPEDREAM_ENVIRONMENT",
+          "display": "Pipedream environment (development or production)",
+          "docs_url": "https://pipedream.com/docs/connect/mcp/developers",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://pipedream.com/docs/connect/mcp/developers",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "composio",
+      "display_name": "Composio",
+      "description": "Access 250+ tools across GitHub, Slack, Linear, Notion, and more via Composio's remote MCP server. Each user gets a unique MCP server URL from the Composio dashboard. Requires a Composio API key and your personal MCP server ID.",
+      "category": "automation",
+      "transport": "http",
+      "url": "https://backend.composio.dev/v3/mcp/${COMPOSIO_SERVER_ID}",
+      "headers_template": {
+        "x-api-key": "${COMPOSIO_API_KEY}"
+      },
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "COMPOSIO_SERVER_ID",
+          "display": "Composio MCP server ID (from Composio dashboard — the ID portion of your MCP URL)",
+          "docs_url": "https://docs.composio.dev/patterns/auth/integration",
+          "required": true
+        },
+        {
+          "name": "COMPOSIO_API_KEY",
+          "display": "Composio API key (from app.composio.dev/developers)",
+          "docs_url": "https://app.composio.dev/developers",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.composio.dev/patterns/auth/integration",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "n8n",
+      "display_name": "n8n",
+      "description": "Trigger and inspect n8n workflows via the n8n MCP server. Works with self-hosted and n8n Cloud instances. Supply your instance hostname (e.g. myorg.app.n8n.cloud) and the MCP access token generated in your n8n instance settings.",
+      "category": "automation",
+      "transport": "http",
+      "url": "https://${N8N_INSTANCE_HOST}/mcp-server/http",
+      "headers_template": {
+        "Authorization": "Bearer ${N8N_MCP_ACCESS_TOKEN}"
+      },
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "N8N_INSTANCE_HOST",
+          "display": "n8n instance hostname (e.g. myorg.app.n8n.cloud for n8n Cloud, or your self-hosted domain)",
+          "docs_url": "https://docs.n8n.io/connect/connect-to-n8n-mcp-server/",
+          "required": true
+        },
+        {
+          "name": "N8N_MCP_ACCESS_TOKEN",
+          "display": "n8n MCP access token (from Instance Settings > MCP > Access Token tab)",
+          "docs_url": "https://docs.n8n.io/connect/connect-to-n8n-mcp-server/",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.n8n.io/connect/connect-to-n8n-mcp-server/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Workflows must be individually marked 'Available in MCP' in your n8n instance before they appear as tools. For n8n Cloud, your hostname is <slug>.app.n8n.cloud. For self-hosted n8n, use your instance's domain name (without https://)."
+    },
+    {
+      "id": "workato",
+      "display_name": "Workato",
+      "description": "Run recipes and trigger workflows in your Workato workspace via Workato's Enterprise MCP server. Each collection has its own MCP URL — copy it from AI Hub > Enterprise MCP in your Workato account.",
+      "category": "automation",
+      "transport": "http",
+      "url": "https://app.workato.com/${WORKATO_MCP_PATH}",
+      "headers_template": {
+        "Authorization": "Bearer ${WORKATO_MCP_TOKEN}"
+      },
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "WORKATO_MCP_PATH",
+          "display": "Workato MCP collection path (the path portion of your MCP URL from AI Hub > Enterprise MCP, e.g. mcp/your-collection-id)",
+          "docs_url": "https://docs.workato.com/en/mcp/mcp-server-access-and-configuration",
+          "required": true
+        },
+        {
+          "name": "WORKATO_MCP_TOKEN",
+          "display": "Workato Developer MCP token (from AI Hub > Enterprise MCP > Developer MCP Token)",
+          "docs_url": "https://docs.workato.com/en/mcp/developer-api-mcp",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.workato.com/en/mcp/mcp-server-access-and-configuration",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Workato Enterprise MCP requires an Enterprise plan. Your Workato admin must add you to a user group with MCP access. Each MCP server collection has its own URL — copy the path portion from AI Hub > Enterprise MCP (everything after app.workato.com/)."
     }
   ]
 }

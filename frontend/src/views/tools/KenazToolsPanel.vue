@@ -18,13 +18,18 @@ import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { useToolsRecipes, useShell } from '@/lib/useHarnessAPI';
 import {
   Brain,
+  CheckSquare,
   ChevronDown,
   ChevronRight,
+  Code,
   Folder,
   FolderOpen,
   Globe,
+  MessageSquare,
+  Scale,
   Search,
   Wrench,
+  Zap,
 } from '@/shell/icons';
 import RecipeKeyPromptModal from './RecipeKeyPromptModal.vue';
 import AddMCPServerModal from './AddMCPServerModal.vue';
@@ -368,6 +373,16 @@ function categoryIcon(category: RecipeCategory) {
       return Brain;
     case 'fetch':
       return Globe;
+    case 'productivity':
+      return CheckSquare;
+    case 'developer':
+      return Code;
+    case 'finance':
+      return Scale;
+    case 'communication':
+      return MessageSquare;
+    case 'automation':
+      return Zap;
     default:
       return Wrench;
   }
