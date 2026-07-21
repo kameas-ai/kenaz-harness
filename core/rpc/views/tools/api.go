@@ -119,4 +119,21 @@ type ToolsAPI interface {
 	// NEVER returned via any RPC value) and the recipe is installed/respawned
 	// so the bearer takes effect immediately. Returns the live RecipeStatus.
 	PollDeviceAuth(ctx context.Context, id string) (stdio.RecipeStatus, error)
+
+	// PlaceRecipeFile copies srcPath into the target path declared by the
+	// recipe's file prereq (e.g. ~/.gmail-mcp/gcp-oauth.keys.json). The
+	// harness creates the target directory (0700) if it does not exist, and
+	// writes the file with mode 0600 so credentials stay owner-readable only.
+	//
+	// Validation rules (security boundary):
+	//   - recipeID must be a known recipe that HAS a file prereq entry in
+	//     recipeFilePrereqs. Unknown recipes and recipes without file prereqs
+	//     are rejected with a clear error — this is NOT a generic file-copy
+	//     primitive.
+	//   - The destination is always exactly the recipe's declared
+	//     FileSetupGuide.TargetPath. The caller cannot specify an arbitrary dst.
+	//   - srcPath must be non-empty; the file must be readable by the harness.
+	//
+	// Returns nil on success; a descriptive error otherwise.
+	PlaceRecipeFile(ctx context.Context, recipeID, srcPath string) error
 }

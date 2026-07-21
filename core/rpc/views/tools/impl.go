@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -860,6 +862,84 @@ func (a *API) CheckRecipePrereqs(_ context.Context, id string) ([]MissingPrereq,
 		return []MissingPrereq{}, nil
 	}
 	return missing, nil
+}
+
+// PlaceRecipeFile copies srcPath into the target path declared by the
+// recipe's file prereq (e.g. ~/.gmail-mcp/gcp-oauth.keys.json).
+//
+// Security invariants:
+//   - recipeID must be present in recipeFilePrereqs (has a file prereq).
+//   - The destination is always exactly the recipe's declared
+//     FileSetupGuide.TargetPath — callers cannot specify an arbitrary dst.
+//   - The target directory is created with mode 0700 (owner-only).
+//   - The file is written with mode 0600 (owner read/write only).
+func (a *API) PlaceRecipeFile(_ context.Context, recipeID, srcPath string) error {
+	if srcPath == "" {
+		return errors.New("tools: PlaceRecipeFile: srcPath must not be empty")
+	}
+
+	// Validate recipeID has a file prereq registered.
+	fp, ok := recipeFilePrereqs[recipeID]
+	if !ok {
+		return fmt.Errorf("tools: PlaceRecipeFile: recipe %q has no registered file prereq", recipeID)
+	}
+	if fp.FileSetupGuide == nil {
+		return fmt.Errorf("tools: PlaceRecipeFile: recipe %q file prereq has no FileSetupGuide", recipeID)
+	}
+	dstPath := fp.FileSetupGuide.TargetPath
+	if dstPath == "" {
+		return fmt.Errorf("tools: PlaceRecipeFile: recipe %q file prereq has empty TargetPath", recipeID)
+	}
+
+	// Create target directory (owner-only) if it does not exist.
+	dstDir := filepath.Dir(dstPath)
+	if err := os.MkdirAll(dstDir, 0700); err != nil {
+		return fmt.Errorf("tools: PlaceRecipeFile: create target directory %q: %w", dstDir, err)
+	}
+
+	// Open source file.
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("tools: PlaceRecipeFile: open source file %q: %w", srcPath, err)
+	}
+	defer src.Close()
+
+	// Write to a temp file in the same directory so we can atomically rename.
+	// This avoids leaving a partial file at the destination if the copy fails.
+	tmp, err := os.CreateTemp(dstDir, ".place-recipe-*.tmp")
+	if err != nil {
+		return fmt.Errorf("tools: PlaceRecipeFile: create temp file in %q: %w", dstDir, err)
+	}
+	tmpName := tmp.Name()
+	// Ensure cleanup on any failure path.
+	success := false
+	defer func() {
+		if !success {
+			_ = os.Remove(tmpName)
+		}
+	}()
+
+	// Copy bytes.
+	if _, err := io.Copy(tmp, src); err != nil {
+		tmp.Close()
+		return fmt.Errorf("tools: PlaceRecipeFile: copy to temp: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("tools: PlaceRecipeFile: close temp: %w", err)
+	}
+
+	// Set permissions to 0600 before rename so the file is never briefly
+	// world-readable at the destination.
+	if err := os.Chmod(tmpName, 0600); err != nil {
+		return fmt.Errorf("tools: PlaceRecipeFile: chmod temp: %w", err)
+	}
+
+	// Atomic rename into place.
+	if err := os.Rename(tmpName, dstPath); err != nil {
+		return fmt.Errorf("tools: PlaceRecipeFile: rename to %q: %w", dstPath, err)
+	}
+	success = true
+	return nil
 }
 
 // restartRecipe closes and re-opens the MCP server with updatedConfig.
