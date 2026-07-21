@@ -447,6 +447,222 @@
       },
       "warning": "npm fetch on first run can take 5\u201315 s. First spawn also downloads browser binaries (~300 MB).",
       "primary_auth": "none"
+    },
+    {
+      "id": "notion",
+      "display_name": "Notion",
+      "description": "Read and write Notion pages, databases, blocks, and comments. Sign in with Notion \u2014 no token to paste.",
+      "category": "productivity",
+      "transport": "http",
+      "url": "https://mcp.notion.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth"
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.notion.com/docs/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Notion MCP is in beta \u2014 tool surface may change across Notion releases."
+    },
+    {
+      "id": "linear",
+      "display_name": "Linear",
+      "description": "Search issues, create and update issues, manage projects and cycles in Linear. Sign in with Linear \u2014 no token to paste.",
+      "category": "productivity",
+      "transport": "http",
+      "url": "https://mcp.linear.app/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": ["read", "write"]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://linear.app/docs/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "sentry",
+      "display_name": "Sentry",
+      "description": "Search and triage Sentry errors, inspect stack traces, manage projects and teams. Sign in with Sentry — no token to paste.",
+      "category": "developer",
+      "transport": "http",
+      "url": "https://mcp.sentry.dev/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": ["org:read", "project:read", "project:write", "team:read", "event:write"]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://mcp.sentry.dev",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "cloudflare",
+      "display_name": "Cloudflare",
+      "description": "Manage Cloudflare zones, Workers, R2, KV, DNS, and analytics via Cloudflare's official MCP server. Sign in with Cloudflare — no token to paste.",
+      "category": "developer",
+      "transport": "http",
+      "url": "https://mcp.cloudflare.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth"
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/cloudflare/mcp-server-cloudflare",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "stripe",
+      "display_name": "Stripe",
+      "description": "Query payments, customers, subscriptions, and invoices in Stripe. Sign in with Stripe OAuth — or supply a restricted API key. Read/query use only — do not expose to agents with write permissions without explicit policy.",
+      "category": "finance",
+      "transport": "http",
+      "url": "https://mcp.stripe.com",
+      "auth": {
+        "kind": "mcp_oauth"
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [
+        {
+          "name": "STRIPE_API_KEY",
+          "display": "Stripe restricted API key (optional — fallback if you don't sign in)",
+          "docs_url": "https://dashboard.stripe.com/apikeys",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.stripe.com/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Stripe MCP exposes payment-mutation tools (charges, refunds, transfers). FR-003: restrict agent access via Cedar policy to read-only tools unless you explicitly authorise write operations."
+    },
+    {
+      "id": "asana",
+      "display_name": "Asana",
+      "description": "Search tasks, create and update tasks, manage projects and workspaces in Asana. Sign in with Asana — no token to paste.",
+      "category": "productivity",
+      "transport": "http",
+      "url": "https://mcp.asana.com/v2/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": ["default"]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.asana.com/docs/using-asanas-mcp-server",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "atlassian",
+      "display_name": "Atlassian (Jira & Confluence)",
+      "description": "Search and manage Jira issues, sprints, and projects; read and write Confluence pages and spaces. Sign in with your Atlassian account.",
+      "category": "productivity",
+      "transport": "http",
+      "url": "https://mcp.atlassian.com/v1/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID}",
+        "scopes": [
+          "read:jira-work",
+          "write:jira-work",
+          "read:confluence-content.all",
+          "write:confluence-content",
+          "offline_access"
+        ]
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID",
+          "display": "Kameas Atlassian OAuth client ID (pre-configured)",
+          "docs_url": "https://developer.atlassian.com/console/myapps/",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.atlassian.com/cloud/jira/platform/mcp-server/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
     }
   ]
 }

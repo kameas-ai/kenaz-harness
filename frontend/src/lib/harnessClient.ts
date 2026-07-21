@@ -1063,6 +1063,10 @@ const KNOWN_CATEGORIES: readonly RecipeCategory[] = [
   'filesystem',
   'memory',
   'fetch',
+  'productivity',
+  'developer',
+  'finance',
+  'communication',
   'other',
 ];
 

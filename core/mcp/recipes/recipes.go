@@ -206,6 +206,13 @@ const (
 	// PrimaryAuthNone signals no credential is required. Any optional env keys
 	// are collapsed under "Advanced" by default.
 	PrimaryAuthNone = "none"
+	// PrimaryAuthBrowserOAuthDCR leads with a browser OAuth "Sign in" button using
+	// RFC 7591 Dynamic Client Registration — no pre-registered Kameas app needed.
+	// The DCR engine registers the client dynamically at first use.
+	PrimaryAuthBrowserOAuthDCR = "browser_oauth_dcr"
+	// PrimaryAuthBrowserOAuthPKCE leads with a browser OAuth "Sign in" button using
+	// PKCE with a pre-registered Kameas OAuth app (no DCR support at the auth server).
+	PrimaryAuthBrowserOAuthPKCE = "browser_oauth_pkce"
 )
 
 // RecipeAuth declares OAuth sign-in for a remote recipe. It is advisory
@@ -440,10 +447,11 @@ func (r *Recipe) Validate() error {
 		return fmt.Errorf("%w: recipe %q has invalid pre_seeding_policy %q (want \"\", \"allow_all\", \"prompt_only\", or \"none\")", ErrInvalidRecipe, r.ID, r.PreSeedingPolicy)
 	}
 	switch r.PrimaryAuth {
-	case "", PrimaryAuthOAuth, PrimaryAuthDeviceCode, PrimaryAuthKeys, PrimaryAuthNone:
+	case "", PrimaryAuthOAuth, PrimaryAuthDeviceCode, PrimaryAuthKeys, PrimaryAuthNone,
+		PrimaryAuthBrowserOAuthDCR, PrimaryAuthBrowserOAuthPKCE:
 		// valid
 	default:
-		return fmt.Errorf("%w: recipe %q has invalid primary_auth %q (want \"\", \"oauth\", \"device_code\", \"keys\", or \"none\")", ErrInvalidRecipe, r.ID, r.PrimaryAuth)
+		return fmt.Errorf("%w: recipe %q has invalid primary_auth %q (want \"\", \"oauth\", \"device_code\", \"keys\", \"none\", \"browser_oauth_dcr\", or \"browser_oauth_pkce\")", ErrInvalidRecipe, r.ID, r.PrimaryAuth)
 	}
 	return nil
 }
