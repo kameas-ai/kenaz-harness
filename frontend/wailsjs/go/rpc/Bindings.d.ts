@@ -876,6 +876,8 @@ export function Tools_ListRecipes():Promise<Array<tools.RecipeListing>>;
 
 export function Tools_PickDirectory(arg1:string,arg2:string):Promise<string>;
 
+export function Tools_PlaceRecipeFile(arg1:string,arg2:string):Promise<void>;
+
 export function Tools_PollDeviceAuth(arg1:string):Promise<transport.RecipeStatus>;
 
 export function Tools_RecipeConfig(arg1:string):Promise<Record<string, any>>;
