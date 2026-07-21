@@ -7,10 +7,11 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 )
 
-// expectedRegistryIDs is the WP06 mandate: these ten ids — and only
+// expectedRegistryIDs is the WP06 mandate: these ids — and only
 // these — make up the curated registry catalog. Drift from the list
 // fails the test so a future PR that adds an entry without updating
 // the spec gets caught.
+// slack-tokens is the advanced stdio fallback; slack is the primary remote MCP recipe.
 var expectedRegistryIDs = []string{
 	"github",
 	"fetch",
@@ -18,6 +19,7 @@ var expectedRegistryIDs = []string{
 	"sqlite",
 	"postgres",
 	"slack",
+	"slack-tokens",
 	"gmail",
 	"outlook",
 	"time",
@@ -229,19 +231,54 @@ func TestRegistryPostgresRecipe(t *testing.T) {
 
 func TestRegistrySlackRecipe(t *testing.T) {
 	cat := recipes.Registry()
+
+	// Primary recipe: remote MCP over HTTP with OAuth PKCE.
 	r, ok := cat.Get("slack")
 	if !ok {
 		t.Fatal("slack not in registry")
 	}
-	if r.Category != "fetch" {
-		t.Errorf("Category = %q, want fetch", r.Category)
+	if r.Category != "communication" {
+		t.Errorf("Category = %q, want communication", r.Category)
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.slack.com" {
+		t.Errorf("URL = %q, want https://mcp.slack.com", r.URL)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthOAuth {
+		t.Errorf("PrimaryAuth = %q, want oauth", r.PrimaryAuth)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Errorf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// client_id is intentionally empty (placeholder); must resolve at runtime via
+	// KAMEAS_SLACK_OAUTH_CLIENT_ID env / build override.
+	if r.Auth.ClientID != "" {
+		t.Errorf("slack auth.client_id = %q, want empty placeholder (TODO: bake registered Kameas Slack app client_id)", r.Auth.ClientID)
+	}
+	if hdr, ok := r.HeadersTemplate["Authorization"]; !ok || hdr == "" {
+		t.Errorf("HeadersTemplate[Authorization] missing or empty; want Bearer ${SLACK_TOKEN}")
+	}
+	// No env keys required for primary path — token is injected via OAuth.
+	if len(r.EnvKeys) != 0 {
+		t.Errorf("slack remote recipe should have no required env keys, got %d", len(r.EnvKeys))
+	}
+
+	// Advanced fallback: stdio recipe with bot + app tokens.
+	rt, ok := cat.Get("slack-tokens")
+	if !ok {
+		t.Fatal("slack-tokens not in registry")
+	}
+	if rt.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("slack-tokens PrimaryAuth = %q, want keys", rt.PrimaryAuth)
 	}
 	envNames := map[string]bool{}
-	for _, e := range r.EnvKeys {
+	for _, e := range rt.EnvKeys {
 		envNames[e.Name] = true
 	}
 	if !envNames["SLACK_BOT_TOKEN"] || !envNames["SLACK_APP_TOKEN"] {
-		t.Errorf("slack EnvKeys = %+v, want both SLACK_BOT_TOKEN and SLACK_APP_TOKEN", r.EnvKeys)
+		t.Errorf("slack-tokens EnvKeys = %+v, want both SLACK_BOT_TOKEN and SLACK_APP_TOKEN", rt.EnvKeys)
 	}
 }
 

@@ -19,6 +19,18 @@ var ErrStateMismatch = errors.New("oauth: authorization callback state mismatch"
 // error on the redirect (e.g. the user denied consent).
 var ErrAuthorizationDenied = errors.New("oauth: authorization denied")
 
+// ErrFixedPortInUse is returned when the fixed-port loopback listener cannot
+// bind because the configured port is already in use by another process.
+var ErrFixedPortInUse = errors.New("oauth: fixed-port loopback listener: port already in use")
+
+// SlackLoopbackPort is the fixed local port used for Slack PKCE OAuth redirect.
+// The registered Kameas Slack app must list http://127.0.0.1:SlackLoopbackPort/callback
+// as an allowed redirect URI — this constant must match that registration.
+//
+// TODO(slack-oauth): confirm this port when registering the Kameas Slack app
+// and update the registered redirect URI if changed.
+const SlackLoopbackPort = 47242
+
 // InteractiveConfig parameterizes one interactive authorization-code+PKCE run.
 type InteractiveConfig struct {
 	// AuthServer is the resolved authorization server metadata.
@@ -37,10 +49,20 @@ type InteractiveConfig struct {
 	HTTPClient *http.Client
 	// Now stamps token expiry; nil → time.Now.
 	Now func() time.Time
+	// FixedPort, when non-zero, pins the loopback listener to this port instead
+	// of using an ephemeral port (the default). Use this when the OAuth provider
+	// requires the redirect_uri to exactly match a pre-registered callback URL —
+	// e.g. Slack (use SlackLoopbackPort). The registered app must declare
+	// http://127.0.0.1:<FixedPort>/callback as an allowed redirect URI.
+	//
+	// When zero (the default), an ephemeral port is chosen by the OS. This is
+	// suitable for providers that accept any loopback redirect (most PKCE flows).
+	FixedPort int
 }
 
 // AuthorizeInteractive runs the full authorization-code + PKCE grant against a
-// loopback redirect URI. It starts an ephemeral 127.0.0.1 listener, opens the
+// loopback redirect URI. It starts a 127.0.0.1 listener — ephemeral port by
+// default, or a fixed port when cfg.FixedPort is non-zero — opens the
 // authorization URL via cfg.OpenBrowser, waits for the redirect, validates
 // state, and exchanges the code for tokens. The listener is always torn down
 // before returning. ctx cancellation (and an internal timeout) bound the wait.
@@ -68,8 +90,16 @@ func AuthorizeInteractive(ctx context.Context, cfg InteractiveConfig) (*Tokens, 
 		return nil, err
 	}
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	// Determine the loopback address: fixed port or ephemeral.
+	listenAddr := "127.0.0.1:0"
+	if cfg.FixedPort != 0 {
+		listenAddr = fmt.Sprintf("127.0.0.1:%d", cfg.FixedPort)
+	}
+	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
+		if cfg.FixedPort != 0 {
+			return nil, fmt.Errorf("%w: %d: %v", ErrFixedPortInUse, cfg.FixedPort, err)
+		}
 		return nil, fmt.Errorf("oauth: loopback listener: %w", err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
