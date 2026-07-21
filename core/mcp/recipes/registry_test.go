@@ -26,6 +26,7 @@ var expectedRegistryIDs = []string{
 	"playwright",
 	// iPaaS meta-connectors (pack 01NCONN10)
 	"zapier",
+	"make",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -370,5 +371,30 @@ func TestZapierRecipe(t *testing.T) {
 	}
 	if r.PrimaryAuth != recipes.PrimaryAuthOAuth {
 		t.Errorf("PrimaryAuth = %q, want oauth", r.PrimaryAuth)
+	}
+}
+
+// TestMakeRecipe — WP02 acceptance: DCR zero-app, transport http, mcp_oauth.
+func TestMakeRecipe(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("make")
+	if !ok {
+		t.Fatal("make not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.make.com/" {
+		t.Errorf("URL = %q, want https://mcp.make.com/", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// DCR zero-app: no baked client_id.
+	if r.Auth.ClientID != "" {
+		t.Errorf("Auth.ClientID = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	if r.Category != "automation" {
+		t.Errorf("Category = %q, want automation", r.Category)
 	}
 }

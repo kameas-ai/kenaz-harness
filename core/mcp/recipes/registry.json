@@ -443,6 +443,34 @@
         "allowed": false,
         "default": false
       }
+    },
+    {
+      "id": "make",
+      "display_name": "Make",
+      "description": "Automate workflows across hundreds of apps via Make's official remote MCP server. Build and run scenarios, inspect executions, and manage your automation modules. Sign in with Make (OAuth — no token to paste).",
+      "category": "automation",
+      "transport": "http",
+      "url": "https://mcp.make.com/",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": []
+      },
+      "primary_auth": "oauth",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://www.make.com/en/help/home",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
     }
   ]
 }
