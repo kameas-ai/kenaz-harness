@@ -554,6 +554,34 @@
         "default": false
       },
       "warning": "Stripe MCP exposes payment-mutation tools (charges, refunds, transfers). FR-003: restrict agent access via Cedar policy to read-only tools unless you explicitly authorise write operations."
+    },
+    {
+      "id": "asana",
+      "display_name": "Asana",
+      "description": "Search tasks, create and update tasks, manage projects and workspaces in Asana. Sign in with Asana — no token to paste.",
+      "category": "productivity",
+      "transport": "http",
+      "url": "https://mcp.asana.com/v2/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": ["default"]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.asana.com/docs/using-asanas-mcp-server",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
     }
   ]
 }
