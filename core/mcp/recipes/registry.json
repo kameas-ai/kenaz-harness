@@ -519,6 +519,41 @@
         "allowed": false,
         "default": false
       }
+    },
+    {
+      "id": "stripe",
+      "display_name": "Stripe",
+      "description": "Query payments, customers, subscriptions, and invoices in Stripe. Sign in with Stripe OAuth — or supply a restricted API key. Read/query use only — do not expose to agents with write permissions without explicit policy.",
+      "category": "finance",
+      "transport": "http",
+      "url": "https://mcp.stripe.com",
+      "auth": {
+        "kind": "mcp_oauth"
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [
+        {
+          "name": "STRIPE_API_KEY",
+          "display": "Stripe restricted API key (optional — fallback if you don't sign in)",
+          "docs_url": "https://dashboard.stripe.com/apikeys",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.stripe.com/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Stripe MCP exposes payment-mutation tools (charges, refunds, transfers). FR-003: restrict agent access via Cedar policy to read-only tools unless you explicitly authorise write operations."
     }
   ]
 }

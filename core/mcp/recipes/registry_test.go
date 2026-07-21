@@ -28,6 +28,7 @@ var expectedRegistryIDs = []string{
 	"linear",
 	"sentry",
 	"cloudflare",
+	"stripe",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -344,6 +345,45 @@ func TestRegistryWiresIntoMergedCatalog(t *testing.T) {
 	}
 	if registrySeen != len(recipes.Registry().List()) {
 		t.Errorf("registry count in merged = %d, want %d", registrySeen, len(recipes.Registry().List()))
+	}
+}
+
+func TestRecipe_Stripe(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("stripe")
+	if !ok {
+		t.Fatal("stripe not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.stripe.com" {
+		t.Errorf("URL = %q, want https://mcp.stripe.com", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	if r.Auth.ClientID != "" {
+		t.Errorf("stripe auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "finance" {
+		t.Errorf("Category = %q, want finance", r.Category)
+	}
+	if r.Warning == "" {
+		t.Error("stripe should carry a Warning (payment-mutation agentic risk)")
+	}
+	// Optional API key fallback — must not be required.
+	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "STRIPE_API_KEY" {
+		t.Errorf("EnvKeys = %+v, want one optional STRIPE_API_KEY", r.EnvKeys)
+	}
+	if r.EnvKeys[0].Required {
+		t.Error("STRIPE_API_KEY should be optional (OAuth is the primary path)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 
