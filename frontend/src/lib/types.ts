@@ -1936,13 +1936,14 @@ export interface DryRunResult {
 /**
  * RecipeCategory groups recipes in the Tools panel. Drives the icon
  * mapping in `KenazToolsPanel.vue` (search→Search, filesystem→Folder,
- * memory→Brain, fetch→Globe, default→Wrench).
+ * memory→Brain, fetch→Globe, automation→Zap, default→Wrench).
  */
 export type RecipeCategory =
   | 'search'
   | 'filesystem'
   | 'memory'
   | 'fetch'
+  | 'automation'
   | 'other';
 
 /**

@@ -25,6 +25,7 @@ import {
   Globe,
   Search,
   Wrench,
+  Zap,
 } from '@/shell/icons';
 import RecipeKeyPromptModal from './RecipeKeyPromptModal.vue';
 import AddMCPServerModal from './AddMCPServerModal.vue';
@@ -368,6 +369,8 @@ function categoryIcon(category: RecipeCategory) {
       return Brain;
     case 'fetch':
       return Globe;
+    case 'automation':
+      return Zap;
     default:
       return Wrench;
   }

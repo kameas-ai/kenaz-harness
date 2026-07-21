@@ -443,6 +443,22 @@ func TestPipedreamRecipe(t *testing.T) {
 	}
 }
 
+// TestAutomationCategoryGroup — WP07 acceptance: all 6 iPaaS recipes share category "automation".
+func TestAutomationCategoryGroup(t *testing.T) {
+	cat := recipes.Registry()
+	iPaaSIDs := []string{"zapier", "make", "pipedream", "composio", "n8n", "workato"}
+	for _, id := range iPaaSIDs {
+		r, ok := cat.Get(id)
+		if !ok {
+			t.Errorf("iPaaS recipe %q not found in registry", id)
+			continue
+		}
+		if r.Category != "automation" {
+			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
+		}
+	}
+}
+
 // TestComposioRecipe — WP04 acceptance: per-user server ID in URL, API key header, primary_auth keys.
 func TestComposioRecipe(t *testing.T) {
 	cat := recipes.Registry()

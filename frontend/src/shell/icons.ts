@@ -43,6 +43,7 @@ import {
   Webhook,
   Wrench,
   X,
+  Zap,
 } from 'lucide-vue-next';
 
 export {
@@ -88,4 +89,5 @@ export {
   Webhook,
   Wrench,
   X,
+  Zap,
 };
