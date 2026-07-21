@@ -492,6 +492,33 @@
         "allowed": false,
         "default": false
       }
+    },
+    {
+      "id": "cloudflare",
+      "display_name": "Cloudflare",
+      "description": "Manage Cloudflare zones, Workers, R2, KV, DNS, and analytics via Cloudflare's official MCP server. Sign in with Cloudflare — no token to paste.",
+      "category": "developer",
+      "transport": "http",
+      "url": "https://mcp.cloudflare.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth"
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/cloudflare/mcp-server-cloudflare",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
     }
   ]
 }
