@@ -802,6 +802,8 @@ describe('RecipeKeyPromptModal — file prereq guided setup', () => {
       },
       shell: {
         openInOSBrowser: async () => {},
+        pathComplete: async () => [],
+        readFile: async () => ({ dataBase64: '', mediaType: '' }),
         pickFile: pickFileMock,
       },
     } as Partial<import('@/lib/harnessClient').HarnessClient>);

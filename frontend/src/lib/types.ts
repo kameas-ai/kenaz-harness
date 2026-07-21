@@ -1943,6 +1943,8 @@ export type RecipeCategory =
   | 'filesystem'
   | 'memory'
   | 'fetch'
+  | 'communication'
+  | 'deployment'
   | 'other';
 
 /**
