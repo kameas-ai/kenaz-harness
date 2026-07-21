@@ -115,7 +115,7 @@ var recipeFilePrereqs = map[string]MissingPrereq{
 				"Create an OAuth 2.0 client: go to APIs & Services → Credentials → Create Credentials → OAuth client ID.",
 				"Select \"Desktop app\" as the application type, give it a name, and click Create.",
 				"On the credential detail page, click \"Download JSON\" to save the file.",
-				"Use the file picker below to place the downloaded file into ~/.gmail-mcp/ — the harness will rename it to gcp-oauth.keys.json automatically.",
+				"Use the file picker below to select the downloaded file — the harness will copy it to ~/.gmail-mcp/gcp-oauth.keys.json automatically.",
 			},
 			DocsURL: "https://developers.google.com/gmail/api/quickstart/go#authorize_credentials_for_a_desktop_application",
 		},

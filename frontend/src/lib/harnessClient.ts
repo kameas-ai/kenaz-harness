@@ -577,6 +577,7 @@ interface WailsBindingsLike {
   Tools_RecipeStatus(id: string): Promise<WireRecipeStatus>;
   Tools_RecipeConfig(id: string): Promise<Record<string, unknown>>;
   Tools_CheckRecipePrereqs(id: string): Promise<WireMissingPrereq[]>;
+  Tools_PlaceRecipeFile(recipeID: string, srcPath: string): Promise<void>;
   Tools_BeginDeviceAuth(id: string): Promise<{
     userCode: string;
     verificationUri: string;
@@ -2314,6 +2315,17 @@ export interface ToolsRecipesClient {
   checkPrereqs(id: string): Promise<MissingPrereq[]>;
 
   /**
+   * placeRecipeFile copies the user-selected credentials file (srcPath) into
+   * the target location declared by the recipe's file prereq
+   * (e.g. ~/.gmail-mcp/gcp-oauth.keys.json). The harness creates the target
+   * directory (0700) if absent and writes the file at mode 0600.
+   *
+   * Security: recipeID must be a known recipe with a registered file prereq —
+   * the destination is always the recipe's declared TargetPath.
+   */
+  placeRecipeFile(recipeID: string, srcPath: string): Promise<void>;
+
+  /**
    * beginDeviceAuth starts the RFC 8628 device-authorization flow for a
    * recipe whose `primary_auth === 'device_code'`. Posts to the provider
    * device-authorization endpoint and returns the display-safe
@@ -3660,6 +3672,8 @@ export function createHarnessClient(): HarnessClient {
         config: (id) => b().Tools_RecipeConfig(id),
         checkPrereqs: async (id) =>
           (await b().Tools_CheckRecipePrereqs(id)).map(adaptMissingPrereq),
+        placeRecipeFile: (recipeID, srcPath) =>
+          b().Tools_PlaceRecipeFile(recipeID, srcPath),
         beginDeviceAuth: async (id) => {
           const r = await b().Tools_BeginDeviceAuth(id);
           return {
@@ -4779,6 +4793,7 @@ export function createFakeHarnessClient(
         }),
         config: async () => ({}),
         checkPrereqs: async () => [],
+        placeRecipeFile: async () => {},
         beginDeviceAuth: async () => ({
           userCode: 'STUB-0000',
           verificationUri: 'https://github.com/login/device',

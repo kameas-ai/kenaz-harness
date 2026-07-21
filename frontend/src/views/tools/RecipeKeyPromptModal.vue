@@ -148,10 +148,9 @@ const filePlaced = ref<Record<string, boolean>>({});
 const filePicking = ref<Record<string, boolean>>({});
 
 /**
- * Opens the OS native file picker and copies the selected file to the
- * target directory defined in guide.targetPath (e.g. ~/.gmail-mcp/).
- * The picked file path is passed to the backend via a re-check so the
- * install can proceed.
+ * Opens the OS native file picker, copies the selected file into the
+ * recipe's declared target path (via Tools_PlaceRecipeFile), then
+ * re-checks prereqs to confirm placement before marking filePlaced.
  */
 async function pickCredentialsFile(prereq: MissingPrereq) {
   if (!prereq.fileSetupGuide) return;
@@ -169,25 +168,28 @@ async function pickCredentialsFile(prereq: MissingPrereq) {
     );
     if (!pickedPath) return; // user cancelled
 
-    // Re-run the prereq check to verify the file was placed correctly
-    // (the user may have renamed or moved it).
-    // Re-run the prereq check to verify the file is reachable at the
-    // expected path. The user's OS file picker may have selected the
-    // correct file, or they may need to move/copy it manually.
+    // Copy the picked file into the recipe's declared target path.
+    // PlaceRecipeFile creates ~/.gmail-mcp/ (0700) if absent and writes
+    // the file at mode 0600. Destination is always the recipe's declared
+    // TargetPath — not caller-controlled.
+    await client.tools.recipes.placeRecipeFile(props.recipe.id, pickedPath);
+
+    // Re-run the prereq check to confirm the file is now present at the
+    // expected target path. This is a belt-and-braces verification step;
+    // if PlaceRecipeFile succeeded the file should be there.
     const stillMissing = await client.tools.recipes.checkPrereqs(props.recipe.id);
     const stillMissingFile = stillMissing.some(
       (p) => p.kind === 'file' && p.name === name,
     );
     if (!stillMissingFile) {
-      // The file is now in place — mark it placed so the section switches
-      // to the confirmation view (filePlaced[name] === true). We do NOT
-      // remove the prereq from missingPrereqs so the guided section stays
+      // File is in place — switch the section to the confirmation view.
+      // We keep the prereq in missingPrereqs so the guided section stays
       // visible; the v-else branch inside the section shows the confirmation.
       filePlaced.value = { ...filePlaced.value, [name]: true };
     } else {
-      // File was picked but is not yet at the expected path.
-      // The user may need to copy it to the target location manually.
-      errorMsg.value = `The selected file was not found at the expected location (${prereq.fileSetupGuide.targetPath}). Please move or copy the file there and try again, or navigate to that location directly in the file picker.`;
+      // Unexpected: PlaceRecipeFile succeeded but the post-check still fails.
+      // Surface a clear error so the user can investigate.
+      errorMsg.value = `The file was copied but the harness still reports it missing at ${prereq.fileSetupGuide.targetPath}. Please try again or check filesystem permissions.`;
     }
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : String(e);
@@ -466,10 +468,19 @@ const requiredConfigFilled = computed(() => {
   return true;
 });
 
+// allFilesPlaced is true when every file prereq has been copied into place
+// (or when there are no file prereqs). This gates the Install button so the
+// UX does not mislead the user into thinking they can install before creds
+// are present. The backend PrereqError remains the authoritative gate.
+const allFilesPlaced = computed(() =>
+  filePrereqs.value.every((fp) => filePlaced.value[fp.name]),
+);
+
 const canSubmit = computed(
   () =>
     requiredEnvFilled.value &&
     requiredConfigFilled.value &&
+    allFilesPlaced.value &&
     (!hasWarning.value || warningAck.value),
 );
 

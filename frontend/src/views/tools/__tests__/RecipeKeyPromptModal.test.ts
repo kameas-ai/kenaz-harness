@@ -693,6 +693,7 @@ describe('RecipeKeyPromptModal — prereq pre-flight', () => {
                     status: async () => okStatus('test'),
                     config: async () => ({}),
                     checkPrereqs: async () => missing,
+                    placeRecipeFile: async () => {},
                     beginDeviceAuth: async () => ({
                       userCode: 'ABCD-1234',
                       verificationUri: 'https://github.com/login/device',
@@ -762,16 +763,18 @@ describe('RecipeKeyPromptModal — prereq pre-flight', () => {
 describe('RecipeKeyPromptModal — file prereq guided setup', () => {
   /**
    * Mounts the modal with a fake harness client that returns the given
-   * missingPrereqs from checkPrereqs and records pickFile calls.
+   * missingPrereqs from checkPrereqs and records pickFile / placeRecipeFile calls.
    */
   function withFilePrereqClient(
     missing: MissingPrereq[],
     opts: {
       pickFileMock?: ReturnType<typeof vi.fn>;
+      placeRecipeFileMock?: ReturnType<typeof vi.fn>;
       checkPrereqsSecondCall?: MissingPrereq[];
     } = {},
   ) {
     const pickFileMock = opts.pickFileMock ?? vi.fn().mockResolvedValue('');
+    const placeRecipeFileMock = opts.placeRecipeFileMock ?? vi.fn().mockResolvedValue(undefined);
     let callCount = 0;
     const checkPrereqsMock = vi.fn().mockImplementation(async () => {
       callCount++;
@@ -790,6 +793,7 @@ describe('RecipeKeyPromptModal — file prereq guided setup', () => {
           status: async () => okStatus('gmail'),
           config: async () => ({}),
           checkPrereqs: checkPrereqsMock,
+          placeRecipeFile: placeRecipeFileMock,
           beginDeviceAuth: async () => ({
             userCode: 'ABCD-1234',
             verificationUri: 'https://github.com/login/device',
@@ -822,6 +826,7 @@ describe('RecipeKeyPromptModal — file prereq guided setup', () => {
         ],
       },
       pickFileMock,
+      placeRecipeFileMock,
       checkPrereqsMock,
     };
   }
@@ -973,6 +978,80 @@ describe('RecipeKeyPromptModal — file prereq guided setup', () => {
     const [title, , filters] = pickFileMock.mock.calls[0];
     expect(title).toContain('Gmail OAuth credentials file');
     expect(filters).toContain('*.json');
+  });
+
+  it('picking a file calls placeRecipeFile with recipeID + picked path', async () => {
+    const filePrereq = makeGmailFilePrereq();
+    const srcPath = '/Users/me/Downloads/client_secret.json';
+    const pickFileMock = vi.fn().mockResolvedValue(srcPath);
+    const placeRecipeFileMock = vi.fn().mockResolvedValue(undefined);
+    const { global } = withFilePrereqClient([filePrereq], {
+      pickFileMock,
+      placeRecipeFileMock,
+      checkPrereqsSecondCall: [], // post-placement check: file present
+    });
+    const recipe = gmailRecipe();
+    const install = vi.fn(async () => okStatus(recipe.id));
+
+    const w = mount(RecipeKeyPromptModal, {
+      global,
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+
+    await w.find('[data-testid=recipe-modal-file-prereq-pick-btn]').trigger('click');
+    await flushPromises();
+
+    // placeRecipeFile must have been called with the recipe ID and picked path.
+    expect(placeRecipeFileMock).toHaveBeenCalledOnce();
+    expect(placeRecipeFileMock).toHaveBeenCalledWith(recipe.id, srcPath);
+  });
+
+  it('Install button is disabled when a file prereq is not yet placed', async () => {
+    const filePrereq = makeGmailFilePrereq();
+    // pickFile never resolves (no interaction) — file prereq stays unplaced.
+    const { global } = withFilePrereqClient([filePrereq]);
+    const recipe = gmailRecipe();
+    const install = vi.fn(async () => okStatus(recipe.id));
+
+    const w = mount(RecipeKeyPromptModal, {
+      global,
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+
+    const submit = w.get('[data-testid=recipe-key-modal-submit]');
+    // The warning ack checkbox is also required for gmail, but even ignoring
+    // that, the file-not-placed gate must fire. We check disabled state.
+    expect((submit.element as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('Install button becomes enabled after file is placed + warning acked', async () => {
+    const filePrereq = makeGmailFilePrereq();
+    const pickFileMock = vi.fn().mockResolvedValue('/Users/me/Downloads/client_secret.json');
+    const { global } = withFilePrereqClient([filePrereq], {
+      pickFileMock,
+      checkPrereqsSecondCall: [], // file is now present
+    });
+    // Use a recipe without a warning so only the file-gate is in play.
+    const recipe: Recipe = { ...gmailRecipe(), warning: undefined };
+    const install = vi.fn(async () => okStatus(recipe.id));
+
+    const w = mount(RecipeKeyPromptModal, {
+      global,
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+
+    // Before picking: button disabled.
+    expect((w.get('[data-testid=recipe-key-modal-submit]').element as HTMLButtonElement).disabled).toBe(true);
+
+    // Pick the file.
+    await w.find('[data-testid=recipe-modal-file-prereq-pick-btn]').trigger('click');
+    await flushPromises();
+
+    // After placement confirmed: button enabled.
+    expect((w.get('[data-testid=recipe-key-modal-submit]').element as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('shows placed confirmation after successful file selection', async () => {
