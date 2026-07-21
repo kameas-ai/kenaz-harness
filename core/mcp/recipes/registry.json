@@ -179,8 +179,47 @@
     {
       "id": "slack",
       "display_name": "Slack",
-      "description": "Read channels, post messages, and look up users in a Slack workspace. Requires a bot token and an app-level token from a Slack app installed in the workspace.",
-      "category": "fetch",
+      "description": "Read channels, post messages, search, and look up users in your Slack workspace via Slack\u2019s official remote MCP server. Sign in with Slack (OAuth + PKCE \u2014 no token to paste). Advanced: supply bot + app-level tokens to use the legacy stdio server instead.",
+      "category": "communication",
+      "transport": "http",
+      "url": "https://mcp.slack.com",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "",
+        "scopes": [
+          "channels:read",
+          "channels:history",
+          "chat:write",
+          "users:read",
+          "search:read"
+        ]
+      },
+      "headers_template": {
+        "Authorization": "Bearer ${SLACK_TOKEN}"
+      },
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://api.slack.com/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "primary_auth": "oauth",
+      "warning": "OAuth sign-in requires the Kameas Slack app to be registered (client_id placeholder \u2014 set KAMEAS_SLACK_OAUTH_CLIENT_ID at build time or register the app and bake the client_id). Advanced: use the token-based stdio server below (id: slack-tokens)."
+    },
+    {
+      "id": "slack-tokens",
+      "display_name": "Slack (Advanced: use tokens)",
+      "description": "Read channels, post messages, and look up users in a Slack workspace using a bot token and app-level token. Advanced fallback \u2014 prefer the \u2018Slack\u2019 recipe (remote MCP, OAuth sign-in) for token-free setup.",
+      "category": "communication",
       "command": [
         "npx",
         "-y",
@@ -214,7 +253,7 @@
         "allowed": false,
         "default": false
       },
-      "warning": "npm fetch on first run can take 5\u201315 s.",
+      "warning": "npm fetch on first run can take 5\u201315 s. Prefer the \u2018Slack\u2019 recipe (remote MCP, OAuth sign-in) instead.",
       "primary_auth": "keys"
     },
     {
