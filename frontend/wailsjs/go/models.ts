@@ -3943,6 +3943,47 @@ export namespace log {
 
 }
 
+export namespace logstore {
+	
+	export class Filter {
+	    level?: string;
+	    source?: string;
+	    search?: string;
+	    limit?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Filter(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.level = source["level"];
+	        this.source = source["source"];
+	        this.search = source["search"];
+	        this.limit = source["limit"];
+	    }
+	}
+	export class Row {
+	    timestamp: string;
+	    level: string;
+	    source: string;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Row(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.timestamp = source["timestamp"];
+	        this.level = source["level"];
+	        this.source = source["source"];
+	        this.message = source["message"];
+	    }
+	}
+
+}
+
 export namespace mcp {
 	
 	export class ImportRequest {

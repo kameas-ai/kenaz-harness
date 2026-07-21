@@ -334,12 +334,17 @@ func installSlogBridge(lp *sdklog.LoggerProvider, fallback *slog.Logger) {
 	if lp == nil {
 		return
 	}
-	fileH := logging.FileHandler()
-	if fileH == nil && fallback != nil {
-		fileH = fallback.Handler()
+	// Wrap the CURRENT handler chain — not the raw file handler — so any
+	// handler installed after boot (notably the logstore ring-buffer TEE that
+	// feeds the in-app Logs view) survives this Replace(). Using FileHandler()
+	// here silently orphaned the logstore, leaving the Logs tab empty in
+	// production (01NLOGS01 review).
+	baseH := logging.Handler()
+	if baseH == nil && fallback != nil {
+		baseH = fallback.Handler()
 	}
 	otelLogger := lp.Logger("kenaz-harness/slog-bridge")
-	bridge := NewSlogBridge(fileH, otelLogger)
+	bridge := NewSlogBridge(baseH, otelLogger)
 	logging.Replace(bridge)
 }
 

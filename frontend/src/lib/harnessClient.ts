@@ -418,6 +418,8 @@ interface WailsBindingsLike {
   Audit_BulkPurge(eventIDs: string[]): Promise<void>;
   Audit_StartStream(filter: AuditFilter): Promise<string>;
   Audit_StopStream(id: string): Promise<void>;
+  // ── Runtime logs (mission 01NLOGS01 WP04) ───────────────────────────────
+  Logs_Tail(filter: LogFilter): Promise<LogRow[]>;
 
   Settings_Get(): Promise<Settings>;
   Settings_Set(s: Settings): Promise<void>;
@@ -1745,6 +1747,30 @@ export interface AuditClient {
   bulkPurge(eventIDs: string[]): Promise<void>;
   startStream(filter: AuditFilter): Promise<string>;
   stopStream(id: string): Promise<void>;
+}
+
+// ── Runtime logs client (mission 01NLOGS01 WP03) ─────────────────────────────
+
+/** Wire-shape for a single runtime log row returned by Logs_Tail. */
+export interface LogRow {
+  timestamp: string;
+  level: 'debug' | 'info' | 'warn' | 'error';
+  source: string;
+  message: string;
+}
+
+/** Filter passed to Logs_Tail. */
+export interface LogFilter {
+  level?: 'debug' | 'info' | 'warn' | 'error';
+  source?: string;
+  search?: string;
+  limit?: number;
+}
+
+/** Client surface for the in-app runtime log store. */
+export interface RuntimeLogsClient {
+  /** Returns log rows newest-first, filtered by f. */
+  tail(filter: LogFilter): Promise<LogRow[]>;
 }
 
 export interface SettingsClient {
@@ -3119,6 +3145,8 @@ export interface HarnessClient {
   bundle: BundleClient;
   policy: PolicyClient;
   audit: AuditClient;
+  /** Runtime log store — Settings → Logs panel (mission 01NLOGS01 WP03). */
+  runtimeLogs: RuntimeLogsClient;
   settings: SettingsClient;
   permissions: PermissionsClient;
   memory: MemoryClient;
@@ -3435,6 +3463,10 @@ export function createHarnessClient(): HarnessClient {
       bulkPurge: (eventIDs) => b().Audit_BulkPurge(eventIDs),
       startStream: (filter) => b().Audit_StartStream(filter),
       stopStream: (id) => b().Audit_StopStream(id),
+    },
+    // ── Runtime logs (mission 01NLOGS01 WP03) ────────────────────────────────
+    runtimeLogs: {
+      tail: (filter) => b().Logs_Tail(filter),
     },
     settings: {
       get: () => b().Settings_Get(),
@@ -4423,6 +4455,10 @@ export function createFakeHarnessClient(
       bulkPurge: noop,
       startStream: async () => 'fake-sub',
       stopStream: noop,
+    },
+    // ── Runtime logs fake (mission 01NLOGS01 WP03) ───────────────────────────
+    runtimeLogs: {
+      tail: async () => [],
     },
     settings: {
       get: async () => ({
