@@ -582,6 +582,48 @@
         "allowed": false,
         "default": false
       }
+    },
+    {
+      "id": "atlassian",
+      "display_name": "Atlassian (Jira & Confluence)",
+      "description": "Search and manage Jira issues, sprints, and projects; read and write Confluence pages and spaces. Sign in with your Atlassian account.",
+      "category": "productivity",
+      "transport": "http",
+      "url": "https://mcp.atlassian.com/v1/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID}",
+        "scopes": [
+          "read:jira-work",
+          "write:jira-work",
+          "read:confluence-content.all",
+          "write:confluence-content",
+          "offline_access"
+        ]
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID",
+          "display": "Kameas Atlassian OAuth client ID (pre-configured)",
+          "docs_url": "https://developer.atlassian.com/console/myapps/",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.atlassian.com/cloud/jira/platform/mcp-server/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
     }
   ]
 }

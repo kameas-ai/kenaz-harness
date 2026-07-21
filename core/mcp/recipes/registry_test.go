@@ -30,6 +30,7 @@ var expectedRegistryIDs = []string{
 	"cloudflare",
 	"stripe",
 	"asana",
+	"atlassian",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -346,6 +347,46 @@ func TestRegistryWiresIntoMergedCatalog(t *testing.T) {
 	}
 	if registrySeen != len(recipes.Registry().List()) {
 		t.Errorf("registry count in merged = %d, want %d", registrySeen, len(recipes.Registry().List()))
+	}
+}
+
+func TestRecipe_Atlassian(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("atlassian")
+	if !ok {
+		t.Fatal("atlassian not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.atlassian.com/v1/mcp" {
+		t.Errorf("URL = %q, want https://mcp.atlassian.com/v1/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// Atlassian uses a placeholder client_id (no DCR — must register Kameas OAuth app).
+	if r.Auth.ClientID != "${KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID}" {
+		t.Errorf("atlassian auth.client_id = %q, want ${KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID} placeholder", r.Auth.ClientID)
+	}
+	if len(r.Auth.Scopes) == 0 {
+		t.Error("atlassian Auth.Scopes should list requested scopes")
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthPKCE {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_pkce", r.PrimaryAuth)
+	}
+	if r.Category != "productivity" {
+		t.Errorf("Category = %q, want productivity", r.Category)
+	}
+	// Must have the KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID env key so install modal can surface it.
+	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID" {
+		t.Errorf("EnvKeys = %+v, want one entry named KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID", r.EnvKeys)
+	}
+	if !r.EnvKeys[0].Required {
+		t.Error("KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID should be required (no DCR — needs registered Kameas app)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 
