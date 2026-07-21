@@ -24,6 +24,8 @@ var expectedRegistryIDs = []string{
 	"git",
 	"puppeteer",
 	"playwright",
+	// iPaaS meta-connectors (pack 01NCONN10)
+	"zapier",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -340,5 +342,33 @@ func TestRegistryWiresIntoMergedCatalog(t *testing.T) {
 	}
 	if registrySeen != len(recipes.Registry().List()) {
 		t.Errorf("registry count in merged = %d, want %d", registrySeen, len(recipes.Registry().List()))
+	}
+}
+
+// TestZapierRecipe — WP01 acceptance: DCR zero-app, transport http, no client_id.
+func TestZapierRecipe(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("zapier")
+	if !ok {
+		t.Fatal("zapier not in registry")
+	}
+	if r.Category != "automation" {
+		t.Errorf("Category = %q, want automation", r.Category)
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL == "" {
+		t.Error("URL must be non-empty")
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// DCR zero-app: no baked client_id.
+	if r.Auth.ClientID != "" {
+		t.Errorf("Auth.ClientID = %q, want empty (DCR zero-app — no baked client_id)", r.Auth.ClientID)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthOAuth {
+		t.Errorf("PrimaryAuth = %q, want oauth", r.PrimaryAuth)
 	}
 }

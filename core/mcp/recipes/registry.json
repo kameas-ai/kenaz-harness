@@ -408,6 +408,41 @@
       },
       "warning": "npm fetch on first run can take 5\u201315 s. First spawn also downloads browser binaries (~300 MB).",
       "primary_auth": "none"
+    },
+    {
+      "id": "zapier",
+      "display_name": "Zapier",
+      "description": "Connect to thousands of apps via Zapier\u2019s official remote MCP server. Run Zaps, browse available actions, and trigger automations from the model. Sign in with Zapier (OAuth \u2014 no token to paste). Supports a fallback connection token if OAuth is unavailable.",
+      "category": "automation",
+      "transport": "http",
+      "url": "https://mcp.zapier.com/api/v1/connect",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": ["openid", "profile", "email"]
+      },
+      "primary_auth": "oauth",
+      "env_keys": [
+        {
+          "name": "ZAPIER_MCP_CONNECTION_TOKEN",
+          "display": "Zapier MCP connection token (optional \u2014 fallback if OAuth unavailable)",
+          "docs_url": "https://mcp.zapier.com",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://mcp.zapier.com",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
     }
   ]
 }
