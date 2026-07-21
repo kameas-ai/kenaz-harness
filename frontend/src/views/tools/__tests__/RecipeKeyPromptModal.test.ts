@@ -758,6 +758,285 @@ describe('RecipeKeyPromptModal — prereq pre-flight', () => {
   });
 });
 
+// ── file prereq guided-setup section tests (Gmail / gcp-oauth.keys.json) ────
+describe('RecipeKeyPromptModal — file prereq guided setup', () => {
+  /**
+   * Mounts the modal with a fake harness client that returns the given
+   * missingPrereqs from checkPrereqs and records pickFile calls.
+   */
+  function withFilePrereqClient(
+    missing: MissingPrereq[],
+    opts: {
+      pickFileMock?: ReturnType<typeof vi.fn>;
+      checkPrereqsSecondCall?: MissingPrereq[];
+    } = {},
+  ) {
+    const pickFileMock = opts.pickFileMock ?? vi.fn().mockResolvedValue('');
+    let callCount = 0;
+    const checkPrereqsMock = vi.fn().mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) return missing;
+      return opts.checkPrereqsSecondCall ?? [];
+    });
+
+    const client = createFakeHarnessClient({
+      tools: {
+        recipes: {
+          list: async () => [],
+          install: async () => okStatus('gmail'),
+          signIn: async () => okStatus('gmail'),
+          uninstall: async () => {},
+          forgetKey: async () => {},
+          status: async () => okStatus('gmail'),
+          config: async () => ({}),
+          checkPrereqs: checkPrereqsMock,
+          beginDeviceAuth: async () => ({
+            userCode: 'ABCD-1234',
+            verificationUri: 'https://github.com/login/device',
+            expiresIn: 900,
+          }),
+          pollDeviceAuth: async () => okStatus('gmail'),
+        },
+        pickDirectory: async () => '',
+        requestAdditionalAllowedDir: async () => ({ granted: false, expanded: '', message: '' }),
+      },
+      shell: {
+        openInOSBrowser: async () => {},
+        pickFile: pickFileMock,
+      },
+    } as Partial<import('@/lib/harnessClient').HarnessClient>);
+
+    return {
+      global: {
+        plugins: [
+          {
+            install(app: import('vue').App) {
+              app.provide(
+                Symbol.for('kenaz.harnessClient') as import('vue').InjectionKey<import('@/lib/harnessClient').HarnessClient>,
+                client,
+              );
+            },
+          },
+        ],
+      },
+      pickFileMock,
+      checkPrereqsMock,
+    };
+  }
+
+  function makeGmailFilePrereq(): MissingPrereq {
+    return {
+      name: 'Gmail OAuth credentials file',
+      installHint: 'create a Google Cloud OAuth client and save JSON to ~/.gmail-mcp/gcp-oauth.keys.json',
+      kind: 'file',
+      fileSetupGuide: {
+        targetPath: '/Users/testuser/.gmail-mcp/gcp-oauth.keys.json',
+        steps: [
+          'Open the Google Cloud Console and create or select a project.',
+          'Enable the Gmail API.',
+          'Create an OAuth 2.0 client (Desktop app type).',
+          'Download the credentials JSON.',
+          'Use the file picker below to place the downloaded file.',
+        ],
+        docsUrl: 'https://developers.google.com/gmail/api/quickstart/go',
+      },
+    };
+  }
+
+  function gmailRecipe(): Recipe {
+    return {
+      id: 'gmail',
+      displayName: 'Gmail',
+      description: 'Read, search, and send Gmail messages.',
+      category: 'communication',
+      primaryAuth: 'none',
+      envKeys: [],
+      capabilities: { tools: true, resources: false, prompts: false, sampling: false },
+      warning: 'One-time Google Cloud setup required.',
+    };
+  }
+
+  it('shows the guided setup section when a file prereq is missing', async () => {
+    const filePrereq = makeGmailFilePrereq();
+    const { global } = withFilePrereqClient([filePrereq]);
+    const recipe = gmailRecipe();
+    const install = vi.fn(async () => okStatus(recipe.id));
+
+    const w = mount(RecipeKeyPromptModal, {
+      global,
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+
+    // The guided setup section should be visible.
+    const section = w.find(`[data-testid="recipe-modal-file-prereq-${filePrereq.name}"]`);
+    expect(section.exists()).toBe(true);
+
+    // The raw prereq banner should NOT be shown for file-kind prereqs.
+    expect(w.find('[data-testid=recipe-modal-prereq-banner]').exists()).toBe(false);
+  });
+
+  it('renders all setup steps in the guided section', async () => {
+    const filePrereq = makeGmailFilePrereq();
+    const { global } = withFilePrereqClient([filePrereq]);
+    const recipe = gmailRecipe();
+    const install = vi.fn(async () => okStatus(recipe.id));
+
+    const w = mount(RecipeKeyPromptModal, {
+      global,
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+
+    const steps = w.findAll('[data-testid^="recipe-modal-file-prereq-step-"]');
+    expect(steps).toHaveLength(filePrereq.fileSetupGuide!.steps.length);
+    // First step text should match.
+    expect(steps[0].text()).toContain('Google Cloud Console');
+  });
+
+  it('shows the native file picker button for file prereqs', async () => {
+    const filePrereq = makeGmailFilePrereq();
+    const { global } = withFilePrereqClient([filePrereq]);
+    const recipe = gmailRecipe();
+    const install = vi.fn(async () => okStatus(recipe.id));
+
+    const w = mount(RecipeKeyPromptModal, {
+      global,
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+
+    const pickerBtn = w.find('[data-testid=recipe-modal-file-prereq-pick-btn]');
+    expect(pickerBtn.exists()).toBe(true);
+    expect(pickerBtn.text()).toContain('Select credentials file');
+  });
+
+  it('shows the target path in the guided section', async () => {
+    const filePrereq = makeGmailFilePrereq();
+    const { global } = withFilePrereqClient([filePrereq]);
+    const recipe = gmailRecipe();
+    const install = vi.fn(async () => okStatus(recipe.id));
+
+    const w = mount(RecipeKeyPromptModal, {
+      global,
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+
+    const pathEl = w.find('[data-testid=recipe-modal-file-prereq-target-path]');
+    expect(pathEl.exists()).toBe(true);
+    expect(pathEl.text()).toContain('gcp-oauth.keys.json');
+  });
+
+  it('shows docs link when docsUrl is set', async () => {
+    const filePrereq = makeGmailFilePrereq();
+    const { global } = withFilePrereqClient([filePrereq]);
+    const recipe = gmailRecipe();
+    const install = vi.fn(async () => okStatus(recipe.id));
+
+    const w = mount(RecipeKeyPromptModal, {
+      global,
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+
+    const docsLink = w.find('[data-testid=recipe-modal-file-prereq-docs-link]');
+    expect(docsLink.exists()).toBe(true);
+    expect(docsLink.attributes('href')).toContain('developers.google.com');
+    expect(docsLink.attributes('target')).toBe('_blank');
+    expect(docsLink.attributes('rel')).toContain('noopener');
+  });
+
+  it('clicking the file picker button calls shell.pickFile with JSON filter', async () => {
+    const filePrereq = makeGmailFilePrereq();
+    const pickFileMock = vi.fn().mockResolvedValue('/Users/me/Downloads/client_secret.json');
+    // Second checkPrereqs call returns empty (file now present).
+    const { global } = withFilePrereqClient([filePrereq], {
+      pickFileMock,
+      checkPrereqsSecondCall: [],
+    });
+    const recipe = gmailRecipe();
+    const install = vi.fn(async () => okStatus(recipe.id));
+
+    const w = mount(RecipeKeyPromptModal, {
+      global,
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+
+    await w.find('[data-testid=recipe-modal-file-prereq-pick-btn]').trigger('click');
+    await flushPromises();
+
+    expect(pickFileMock).toHaveBeenCalledOnce();
+    const [title, , filters] = pickFileMock.mock.calls[0];
+    expect(title).toContain('Gmail OAuth credentials file');
+    expect(filters).toContain('*.json');
+  });
+
+  it('shows placed confirmation after successful file selection', async () => {
+    const filePrereq = makeGmailFilePrereq();
+    const pickFileMock = vi.fn().mockResolvedValue('/Users/me/Downloads/client_secret.json');
+    const { global } = withFilePrereqClient([filePrereq], {
+      pickFileMock,
+      checkPrereqsSecondCall: [], // file is now present
+    });
+    const recipe = gmailRecipe();
+    const install = vi.fn(async () => okStatus(recipe.id));
+
+    const w = mount(RecipeKeyPromptModal, {
+      global,
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+
+    await w.find('[data-testid=recipe-modal-file-prereq-pick-btn]').trigger('click');
+    await flushPromises();
+
+    // Placed confirmation should appear; picker button should be gone.
+    const placed = w.find('[data-testid=recipe-modal-file-prereq-placed]');
+    expect(placed.exists()).toBe(true);
+    expect(w.find('[data-testid=recipe-modal-file-prereq-pick-btn]').exists()).toBe(false);
+  });
+
+  it('does NOT show the guided section when no file prereq is missing', async () => {
+    // Empty prereqs — no file prereq.
+    const { global } = withFilePrereqClient([]);
+    const recipe = gmailRecipe();
+    const install = vi.fn(async () => okStatus(recipe.id));
+
+    const w = mount(RecipeKeyPromptModal, {
+      global,
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+
+    expect(w.find('[data-testid=recipe-modal-file-prereq-pick-btn]').exists()).toBe(false);
+    expect(w.find('[data-testid=recipe-modal-prereq-banner]').exists()).toBe(false);
+  });
+
+  it('shows both runtime banner AND guided section when both prereqs are missing', async () => {
+    const runtimePrereq: MissingPrereq = { name: 'uv / uvx', installHint: 'brew install uv' };
+    const filePrereq = makeGmailFilePrereq();
+    const { global } = withFilePrereqClient([runtimePrereq, filePrereq]);
+    const recipe = gmailRecipe();
+    const install = vi.fn(async () => okStatus(recipe.id));
+
+    const w = mount(RecipeKeyPromptModal, {
+      global,
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+
+    // Runtime banner present.
+    const banner = w.find('[data-testid=recipe-modal-prereq-banner]');
+    expect(banner.exists()).toBe(true);
+    expect(banner.text()).toContain('uv / uvx');
+
+    // Guided file section also present.
+    expect(w.find('[data-testid=recipe-modal-file-prereq-pick-btn]').exists()).toBe(true);
+  });
+});
+
 // ── path-picker button tests ──────────────────────────────────────────────
 describe('RecipeKeyPromptModal — string config path picker', () => {
   function makePathRecipe(): Recipe {

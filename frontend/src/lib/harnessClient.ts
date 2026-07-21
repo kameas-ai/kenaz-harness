@@ -971,9 +971,19 @@ interface WireConfigOption {
   choices?: string[];
 }
 
+interface WireFileSetupGuide {
+  target_path: string;
+  steps: string[];
+  docs_url?: string;
+}
+
 interface WireMissingPrereq {
   name: string;
   install_hint: string;
+  /** Optional — present when kind == "file". */
+  kind?: string;
+  /** Optional — present when kind == "file". */
+  file_setup_guide?: WireFileSetupGuide;
 }
 
 interface WireRecipe {
@@ -1119,10 +1129,19 @@ function adaptPrimaryAuth(raw: string | undefined): PrimaryAuth | undefined {
 }
 
 function adaptMissingPrereq(w: WireMissingPrereq): MissingPrereq {
-  return {
+  const base: MissingPrereq = {
     name: w.name,
     installHint: w.install_hint,
   };
+  if (w.kind === 'file' || w.kind === 'runtime') base.kind = w.kind;
+  if (w.file_setup_guide) {
+    base.fileSetupGuide = {
+      targetPath: w.file_setup_guide.target_path,
+      steps: w.file_setup_guide.steps,
+      docsUrl: w.file_setup_guide.docs_url,
+    };
+  }
+  return base;
 }
 
 function adaptRecipe(w: WireRecipe): Recipe {

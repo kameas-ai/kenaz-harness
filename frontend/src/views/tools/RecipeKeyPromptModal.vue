@@ -35,6 +35,18 @@ import DirectoryPicker from './DirectoryPicker.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { push as pushToast } from '@/composables/useToastQueue';
 
+// KAMEAS_GOOGLE_OAUTH_CLIENT_ID seam:
+// TODO: When a Kameas-registered Google OAuth client completes restricted-
+// scope verification (Gmail + CASA tier 2) and is approved by Google, the
+// gmail-autoauth server can be bundled with its own client credentials and
+// KAMEAS_GOOGLE_OAUTH_CLIENT_ID will be set at build time (env var / build
+// override). At that point, the guided BYO-credentials flow below will be
+// removed: the in-app guided section renders only when fileSetupGuide is
+// present (i.e., when the env var is not set / creds not registered).
+// Blocked on: Google restricted-scope review + CASA; do NOT implement until
+// Google approval lands. One-line wiring: point the gmail recipe auth.kind
+// to "mcp_oauth" with auth.client_id = process.env.KAMEAS_GOOGLE_OAUTH_CLIENT_ID.
+
 const props = withDefaults(
   defineProps<{
     open: boolean;
@@ -111,6 +123,78 @@ const envKeysAreSecondary = computed(() => {
 // Prereq pre-flight — populated when the modal opens.
 const missingPrereqs = ref<MissingPrereq[]>([]);
 const prereqsChecked = ref(false);
+
+// File-kind prereqs: prereqs where the user needs to place a credentials
+// file. These render as guided setup sections rather than generic banners.
+// Present when any MissingPrereq has kind === "file" AND fileSetupGuide.
+const filePrereqs = computed(() =>
+  missingPrereqs.value.filter(
+    (p): p is MissingPrereq & Required<Pick<MissingPrereq, 'fileSetupGuide'>> =>
+      p.kind === 'file' && p.fileSetupGuide !== undefined,
+  ),
+);
+
+// Runtime-kind prereqs (binary missing from PATH). These use the existing
+// generic banner. Includes any prereq without an explicit kind (backwards compat).
+const runtimePrereqs = computed(() =>
+  missingPrereqs.value.filter((p) => p.kind !== 'file'),
+);
+
+// Tracks whether the file placement step has been completed for each file prereq.
+// Key is the prereq name; value is true once the user has placed the file.
+const filePlaced = ref<Record<string, boolean>>({});
+
+// filePicking is true while the OS file picker is open for a given prereq name.
+const filePicking = ref<Record<string, boolean>>({});
+
+/**
+ * Opens the OS native file picker and copies the selected file to the
+ * target directory defined in guide.targetPath (e.g. ~/.gmail-mcp/).
+ * The picked file path is passed to the backend via a re-check so the
+ * install can proceed.
+ */
+async function pickCredentialsFile(prereq: MissingPrereq) {
+  if (!prereq.fileSetupGuide) return;
+  const name = prereq.name;
+  if (filePicking.value[name]) return;
+  filePicking.value = { ...filePicking.value, [name]: true };
+  errorMsg.value = null;
+  try {
+    // Open the OS file picker — the user selects the downloaded credentials
+    // JSON. Filters to JSON files for discoverability.
+    const pickedPath = await client.shell.pickFile(
+      `Select ${name}`,
+      '',
+      ['*.json'],
+    );
+    if (!pickedPath) return; // user cancelled
+
+    // Re-run the prereq check to verify the file was placed correctly
+    // (the user may have renamed or moved it).
+    // Re-run the prereq check to verify the file is reachable at the
+    // expected path. The user's OS file picker may have selected the
+    // correct file, or they may need to move/copy it manually.
+    const stillMissing = await client.tools.recipes.checkPrereqs(props.recipe.id);
+    const stillMissingFile = stillMissing.some(
+      (p) => p.kind === 'file' && p.name === name,
+    );
+    if (!stillMissingFile) {
+      // The file is now in place — mark it placed so the section switches
+      // to the confirmation view (filePlaced[name] === true). We do NOT
+      // remove the prereq from missingPrereqs so the guided section stays
+      // visible; the v-else branch inside the section shows the confirmation.
+      filePlaced.value = { ...filePlaced.value, [name]: true };
+    } else {
+      // File was picked but is not yet at the expected path.
+      // The user may need to copy it to the target location manually.
+      errorMsg.value = `The selected file was not found at the expected location (${prereq.fileSetupGuide.targetPath}). Please move or copy the file there and try again, or navigate to that location directly in the file picker.`;
+    }
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    filePicking.value = { ...filePicking.value, [name]: false };
+  }
+}
 
 // OAuth sign-in (preferred over pasting a token). When the recipe declares
 // auth.kind === 'mcp_oauth', the modal leads with a "Sign in" button that runs
@@ -574,11 +658,12 @@ function onKeydown(event: KeyboardEvent) {
           {{ recipe.description }}
         </p>
 
-        <!-- Prereq pre-flight banner: shown when required runtimes (uv, npx) are
-             not installed. This surfaces an actionable message early rather than
-             letting the user click Install and see a cryptic spawn error. -->
+        <!-- Prereq pre-flight banner (runtime kind): shown when required runtimes
+             (uv, npx) are not installed. Surfaces an actionable message early
+             rather than letting the user click Install and see a cryptic spawn
+             error. Only shown for binary-in-PATH prereqs (kind != "file"). -->
         <section
-          v-if="prereqsChecked && missingPrereqs.length > 0"
+          v-if="prereqsChecked && runtimePrereqs.length > 0"
           class="rounded-sm border border-signal-warn bg-signal-warn/10 px-3 py-3 space-y-1"
           role="alert"
           data-testid="recipe-modal-prereq-banner"
@@ -587,11 +672,11 @@ function onKeydown(event: KeyboardEvent) {
             <svg class="w-3.5 h-3.5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <path d="M12 9v4M12 17h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
             </svg>
-            Missing runtime{{ missingPrereqs.length > 1 ? 's' : '' }}
+            Missing runtime{{ runtimePrereqs.length > 1 ? 's' : '' }}
           </div>
           <ul class="space-y-1.5">
             <li
-              v-for="p in missingPrereqs"
+              v-for="p in runtimePrereqs"
               :key="p.name"
               class="text-[12px] text-ink leading-snug"
               :data-testid="`recipe-modal-prereq-${p.name}`"
@@ -600,6 +685,105 @@ function onKeydown(event: KeyboardEvent) {
               <span class="text-ink-muted"> — {{ p.installHint }}</span>
             </li>
           </ul>
+        </section>
+
+        <!-- File prereq guided-setup section (kind === "file"): shown when a
+             required credentials file is absent from the filesystem. Replaces
+             the raw "stdio: read initialize: EOF" error surface with an in-app
+             guided setup flow that:
+               1. Lists the concrete steps to create the credentials file.
+               2. Provides a native file picker to place it at the target path.
+               3. Notes what happens after the file is placed.
+             One section is rendered per file prereq (typically just one). -->
+        <section
+          v-for="fp in filePrereqs"
+          :key="fp.name"
+          class="rounded-sm border border-accent-hairline bg-accent-glow/20 px-3 py-3 space-y-3"
+          role="region"
+          :aria-label="`Setup required: ${fp.name}`"
+          :data-testid="`recipe-modal-file-prereq-${fp.name}`"
+        >
+          <div class="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-ink-subtle">
+            <svg class="w-3.5 h-3.5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+            </svg>
+            Setup required: {{ fp.name }}
+          </div>
+
+          <!-- Steps list -->
+          <div class="space-y-2">
+            <p class="text-[11px] text-ink-muted leading-snug">
+              Complete these steps to create your OAuth credentials:
+            </p>
+            <ol class="space-y-1.5 list-none" data-testid="recipe-modal-file-prereq-steps">
+              <li
+                v-for="(step, i) in fp.fileSetupGuide.steps"
+                :key="i"
+                class="flex items-start gap-2 text-[12px] text-ink leading-snug"
+                :data-testid="`recipe-modal-file-prereq-step-${i}`"
+              >
+                <span class="flex-shrink-0 w-4 h-4 rounded-full bg-accent-glow border border-accent-hairline text-[9px] font-mono flex items-center justify-center text-accent mt-0.5">
+                  {{ i + 1 }}
+                </span>
+                <span>{{ step }}</span>
+              </li>
+            </ol>
+          </div>
+
+          <!-- File placement: target path + file picker -->
+          <div
+            v-if="!filePlaced[fp.name]"
+            class="space-y-2"
+            data-testid="recipe-modal-file-prereq-picker"
+          >
+            <p class="text-[11px] text-ink-muted leading-snug">
+              Select the downloaded credentials JSON using the button below.
+              The file will be used from:
+              <code class="font-mono text-[11px] text-ink bg-surface-1 px-1 rounded-sm break-all" data-testid="recipe-modal-file-prereq-target-path">
+                {{ fp.fileSetupGuide.targetPath }}
+              </code>
+            </p>
+            <button
+              type="button"
+              class="rounded-sm border border-accent-hairline bg-surface-0 px-3 py-1.5 font-ui text-[12px] text-accent hover:bg-accent-glow disabled:opacity-50 disabled:cursor-not-allowed"
+              :disabled="filePicking[fp.name]"
+              data-testid="recipe-modal-file-prereq-pick-btn"
+              @click="pickCredentialsFile(fp)"
+            >
+              {{ filePicking[fp.name] ? 'Opening file picker…' : 'Select credentials file…' }}
+            </button>
+          </div>
+
+          <!-- Placed confirmation -->
+          <div
+            v-else
+            class="flex items-center gap-1.5 text-[12px] text-signal-ok"
+            data-testid="recipe-modal-file-prereq-placed"
+          >
+            <svg class="w-3.5 h-3.5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M20 6 9 17l-5-5" />
+            </svg>
+            Credentials file detected — you can now click Install.
+          </div>
+
+          <!-- What happens next note -->
+          <p class="text-[11px] text-ink-subtle leading-snug max-w-prose">
+            After install, the server will open a browser sign-in once to authorise
+            Gmail access. The token is saved locally and does not need to be
+            re-entered.
+          </p>
+
+          <!-- Docs link -->
+          <a
+            v-if="fp.fileSetupGuide.docsUrl"
+            :href="fp.fileSetupGuide.docsUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="inline-block text-[11px] text-accent hover:text-accent-muted"
+            data-testid="recipe-modal-file-prereq-docs-link"
+          >
+            Google Cloud setup guide →
+          </a>
         </section>
 
         <!-- Device-code sign-in banner — two variants:
