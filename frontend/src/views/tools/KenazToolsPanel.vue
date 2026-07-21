@@ -18,11 +18,15 @@ import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { useToolsRecipes, useShell } from '@/lib/useHarnessAPI';
 import {
   Brain,
+  CheckSquare,
   ChevronDown,
   ChevronRight,
+  Code,
   Folder,
   FolderOpen,
   Globe,
+  MessageSquare,
+  Scale,
   Search,
   Wrench,
 } from '@/shell/icons';
@@ -368,6 +372,14 @@ function categoryIcon(category: RecipeCategory) {
       return Brain;
     case 'fetch':
       return Globe;
+    case 'productivity':
+      return CheckSquare;
+    case 'developer':
+      return Code;
+    case 'finance':
+      return Scale;
+    case 'communication':
+      return MessageSquare;
     default:
       return Wrench;
   }
