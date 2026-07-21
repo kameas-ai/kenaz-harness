@@ -516,6 +516,46 @@
         "allowed": false,
         "default": false
       }
+    },
+    {
+      "id": "composio",
+      "display_name": "Composio",
+      "description": "Access 250+ tools across GitHub, Slack, Linear, Notion, and more via Composio's remote MCP server. Each user gets a unique MCP server URL from the Composio dashboard. Requires a Composio API key and your personal MCP server ID.",
+      "category": "automation",
+      "transport": "http",
+      "url": "https://backend.composio.dev/v3/mcp/${COMPOSIO_SERVER_ID}",
+      "headers_template": {
+        "x-api-key": "${COMPOSIO_API_KEY}"
+      },
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "COMPOSIO_SERVER_ID",
+          "display": "Composio MCP server ID (from Composio dashboard — the ID portion of your MCP URL)",
+          "docs_url": "https://docs.composio.dev/patterns/auth/integration",
+          "required": true
+        },
+        {
+          "name": "COMPOSIO_API_KEY",
+          "display": "Composio API key (from app.composio.dev/developers)",
+          "docs_url": "https://app.composio.dev/developers",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.composio.dev/patterns/auth/integration",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
     }
   ]
 }

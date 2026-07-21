@@ -28,6 +28,7 @@ var expectedRegistryIDs = []string{
 	"zapier",
 	"make",
 	"pipedream",
+	"composio",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -434,6 +435,38 @@ func TestPipedreamRecipe(t *testing.T) {
 	}
 	if !envNames["PIPEDREAM_PROJECT_ID"] {
 		t.Errorf("EnvKeys = %+v, want PIPEDREAM_PROJECT_ID", r.EnvKeys)
+	}
+	if r.Category != "automation" {
+		t.Errorf("Category = %q, want automation", r.Category)
+	}
+}
+
+// TestComposioRecipe — WP04 acceptance: per-user server ID in URL, API key header, primary_auth keys.
+func TestComposioRecipe(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("composio")
+	if !ok {
+		t.Fatal("composio not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	// Auth block absent — no OAuth flow for this recipe.
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for Composio (API-key auth), got %+v", r.Auth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["COMPOSIO_SERVER_ID"] {
+		t.Errorf("EnvKeys = %+v, want COMPOSIO_SERVER_ID", r.EnvKeys)
+	}
+	if !envNames["COMPOSIO_API_KEY"] {
+		t.Errorf("EnvKeys = %+v, want COMPOSIO_API_KEY", r.EnvKeys)
 	}
 	if r.Category != "automation" {
 		t.Errorf("Category = %q, want automation", r.Category)
