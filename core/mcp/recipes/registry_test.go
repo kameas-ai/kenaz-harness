@@ -7,7 +7,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 )
 
-// expectedRegistryIDs is the WP06 mandate: these ten ids — and only
+// expectedRegistryIDs is the WP06 mandate: these ids — and only
 // these — make up the curated registry catalog. Drift from the list
 // fails the test so a future PR that adds an entry without updating
 // the spec gets caught.
@@ -24,6 +24,7 @@ var expectedRegistryIDs = []string{
 	"git",
 	"puppeteer",
 	"playwright",
+	"notion",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -340,5 +341,37 @@ func TestRegistryWiresIntoMergedCatalog(t *testing.T) {
 	}
 	if registrySeen != len(recipes.Registry().List()) {
 		t.Errorf("registry count in merged = %d, want %d", registrySeen, len(recipes.Registry().List()))
+	}
+}
+
+func TestRecipe_Notion(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("notion")
+	if !ok {
+		t.Fatal("notion not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.notion.com/mcp" {
+		t.Errorf("URL = %q, want https://mcp.notion.com/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	if r.Auth.ClientID != "" {
+		t.Errorf("notion auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "productivity" {
+		t.Errorf("Category = %q, want productivity", r.Category)
+	}
+	if r.Warning == "" {
+		t.Error("notion should carry a Warning (beta label)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }

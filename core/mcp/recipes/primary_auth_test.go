@@ -30,6 +30,8 @@ func TestPrimaryAuthValidation(t *testing.T) {
 		{"device_code", recipes.PrimaryAuthDeviceCode},
 		{"keys", recipes.PrimaryAuthKeys},
 		{"none", recipes.PrimaryAuthNone},
+		{"browser_oauth_dcr", recipes.PrimaryAuthBrowserOAuthDCR},
+		{"browser_oauth_pkce", recipes.PrimaryAuthBrowserOAuthPKCE},
 	}
 	for _, tc := range valid {
 		tc := tc

@@ -408,6 +408,34 @@
       },
       "warning": "npm fetch on first run can take 5\u201315 s. First spawn also downloads browser binaries (~300 MB).",
       "primary_auth": "none"
+    },
+    {
+      "id": "notion",
+      "display_name": "Notion",
+      "description": "Read and write Notion pages, databases, blocks, and comments. Sign in with Notion \u2014 no token to paste.",
+      "category": "productivity",
+      "transport": "http",
+      "url": "https://mcp.notion.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth"
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.notion.com/docs/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Notion MCP is in beta \u2014 tool surface may change across Notion releases."
     }
   ]
 }
