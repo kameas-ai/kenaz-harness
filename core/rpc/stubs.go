@@ -416,6 +416,10 @@ func (s *stubTools) PollDeviceAuth(_ context.Context, _ string) (stdio.RecipeSta
 	return stdio.RecipeStatus{}, errNotWired
 }
 
+func (s *stubTools) PlaceRecipeFile(_ context.Context, _, _ string) error {
+	return errNotWired
+}
+
 // ── shell ──────────────────────────────────────────────────────────────
 
 type stubShell struct{}

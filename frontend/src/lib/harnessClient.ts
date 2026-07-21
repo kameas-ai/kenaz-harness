@@ -577,6 +577,7 @@ interface WailsBindingsLike {
   Tools_RecipeStatus(id: string): Promise<WireRecipeStatus>;
   Tools_RecipeConfig(id: string): Promise<Record<string, unknown>>;
   Tools_CheckRecipePrereqs(id: string): Promise<WireMissingPrereq[]>;
+  Tools_PlaceRecipeFile(recipeID: string, srcPath: string): Promise<void>;
   Tools_BeginDeviceAuth(id: string): Promise<{
     userCode: string;
     verificationUri: string;
@@ -971,9 +972,19 @@ interface WireConfigOption {
   choices?: string[];
 }
 
+interface WireFileSetupGuide {
+  target_path: string;
+  steps: string[];
+  docs_url?: string;
+}
+
 interface WireMissingPrereq {
   name: string;
   install_hint: string;
+  /** Optional — present when kind == "file". */
+  kind?: string;
+  /** Optional — present when kind == "file". */
+  file_setup_guide?: WireFileSetupGuide;
 }
 
 interface WireRecipe {
@@ -1119,10 +1130,19 @@ function adaptPrimaryAuth(raw: string | undefined): PrimaryAuth | undefined {
 }
 
 function adaptMissingPrereq(w: WireMissingPrereq): MissingPrereq {
-  return {
+  const base: MissingPrereq = {
     name: w.name,
     installHint: w.install_hint,
   };
+  if (w.kind === 'file' || w.kind === 'runtime') base.kind = w.kind;
+  if (w.file_setup_guide) {
+    base.fileSetupGuide = {
+      targetPath: w.file_setup_guide.target_path,
+      steps: w.file_setup_guide.steps,
+      docsUrl: w.file_setup_guide.docs_url,
+    };
+  }
+  return base;
 }
 
 function adaptRecipe(w: WireRecipe): Recipe {
@@ -2293,6 +2313,17 @@ export interface ToolsRecipesClient {
    * so missing-runtime errors surface before the user clicks Install.
    */
   checkPrereqs(id: string): Promise<MissingPrereq[]>;
+
+  /**
+   * placeRecipeFile copies the user-selected credentials file (srcPath) into
+   * the target location declared by the recipe's file prereq
+   * (e.g. ~/.gmail-mcp/gcp-oauth.keys.json). The harness creates the target
+   * directory (0700) if absent and writes the file at mode 0600.
+   *
+   * Security: recipeID must be a known recipe with a registered file prereq —
+   * the destination is always the recipe's declared TargetPath.
+   */
+  placeRecipeFile(recipeID: string, srcPath: string): Promise<void>;
 
   /**
    * beginDeviceAuth starts the RFC 8628 device-authorization flow for a
@@ -3641,6 +3672,8 @@ export function createHarnessClient(): HarnessClient {
         config: (id) => b().Tools_RecipeConfig(id),
         checkPrereqs: async (id) =>
           (await b().Tools_CheckRecipePrereqs(id)).map(adaptMissingPrereq),
+        placeRecipeFile: (recipeID, srcPath) =>
+          b().Tools_PlaceRecipeFile(recipeID, srcPath),
         beginDeviceAuth: async (id) => {
           const r = await b().Tools_BeginDeviceAuth(id);
           return {
@@ -4760,6 +4793,7 @@ export function createFakeHarnessClient(
         }),
         config: async () => ({}),
         checkPrereqs: async () => [],
+        placeRecipeFile: async () => {},
         beginDeviceAuth: async () => ({
           userCode: 'STUB-0000',
           verificationUri: 'https://github.com/login/device',

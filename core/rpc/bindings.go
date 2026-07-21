@@ -2008,6 +2008,20 @@ func (b *Bindings) Tools_CheckRecipePrereqs(id string) ([]tools.MissingPrereq, e
 	return b.api.Tools().CheckRecipePrereqs(b.ctx(), id)
 }
 
+// Tools_PlaceRecipeFile copies the user-selected credentials file (srcPath)
+// into the target location declared by the recipe's file prereq
+// (e.g. ~/.gmail-mcp/gcp-oauth.keys.json). The harness creates the target
+// directory (mode 0700) if absent and writes the file with mode 0600 so
+// credentials are owner-readable only.
+//
+// Security: recipeID must be a known recipe with a registered file prereq —
+// this is NOT a generic copy primitive. The destination path is always the
+// recipe's declared TargetPath; callers cannot supply an arbitrary dst.
+func (b *Bindings) Tools_PlaceRecipeFile(recipeID, srcPath string) error {
+	defer sentry.WrapBinding("Tools_PlaceRecipeFile")()
+	return b.api.Tools().PlaceRecipeFile(b.ctx(), recipeID, srcPath)
+}
+
 // Tools_BeginDeviceAuth starts the RFC 8628 device-authorization flow for a
 // recipe whose primary_auth == "device_code" (e.g. the GitHub recipe). It
 // posts to the provider device-authorization endpoint and returns

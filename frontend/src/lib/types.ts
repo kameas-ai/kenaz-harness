@@ -1943,6 +1943,8 @@ export type RecipeCategory =
   | 'filesystem'
   | 'memory'
   | 'fetch'
+  | 'communication'
+  | 'deployment'
   | 'other';
 
 /**
@@ -2082,6 +2084,28 @@ export interface Recipe {
 }
 
 /**
+ * FileSetupGuide — guided-setup details for a "file" kind MissingPrereq.
+ * Mirrors tools.FileSetupGuide (Go-side). Present only when
+ * MissingPrereq.kind === "file".
+ */
+export interface FileSetupGuide {
+  /**
+   * Absolute path where the required file must be placed.
+   * Used as the default destination path in the native file-picker.
+   */
+  targetPath: string;
+  /**
+   * Ordered list of human-readable setup steps (rendered as a numbered
+   * list in the guided-setup section of the install modal).
+   */
+  steps: string[];
+  /**
+   * Optional link to provider documentation.
+   */
+  docsUrl?: string;
+}
+
+/**
  * MissingPrereq — one missing runtime dependency reported by
  * Tools_CheckRecipePrereqs. Mirrors tools.MissingPrereq (Go-side).
  */
@@ -2090,6 +2114,18 @@ export interface MissingPrereq {
   name: string;
   /** Short install hint, e.g. "install uv: https://astral.sh/uv". */
   installHint: string;
+  /**
+   * Prereq type. Absent (or "runtime") means a binary is missing from PATH.
+   * "file" means a required file is absent; the frontend renders a
+   * guided setup section rather than the generic banner.
+   */
+  kind?: 'runtime' | 'file';
+  /**
+   * Guided setup details. Present when kind === "file". Contains the
+   * target file path, ordered setup steps, and an optional docs URL
+   * so the modal can render a concrete in-app onboarding flow.
+   */
+  fileSetupGuide?: FileSetupGuide;
 }
 
 /**

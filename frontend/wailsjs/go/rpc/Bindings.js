@@ -1642,6 +1642,10 @@ export function Tools_PickDirectory(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Tools_PickDirectory'](arg1, arg2);
 }
 
+export function Tools_PlaceRecipeFile(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Tools_PlaceRecipeFile'](arg1, arg2);
+}
+
 export function Tools_PollDeviceAuth(arg1) {
   return window['go']['rpc']['Bindings']['Tools_PollDeviceAuth'](arg1);
 }
