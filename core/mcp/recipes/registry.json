@@ -357,6 +357,35 @@
       "warning": "Personal Microsoft accounts: if your session expires after ~1 hour, set MS365_MCP_TENANT_ID=consumers. Work/school accounts: set MS365_MCP_TENANT_ID to your Azure tenant ID (or use a custom MS365_MCP_CLIENT_ID if your org blocks third-party apps)."
     },
     {
+      "id": "teams",
+      "display_name": "Microsoft Teams",
+      "description": "Read and send messages in Teams chats and channels, manage team members, list meetings, and fetch transcripts. Requires a work or school Microsoft account — personal accounts are not supported by Teams.",
+      "category": "communication",
+      "command": ["npx", "-y", "@softeria/ms-365-mcp-server", "--org-mode", "--preset", "teams"],
+      "primary_auth": "device_code",
+      "env_keys": [
+        {
+          "name": "MS365_MCP_TENANT_ID",
+          "display": "Azure tenant ID (required for org sign-in — enter your organisation's tenant ID or 'common')",
+          "docs_url": "https://github.com/softeria/ms-365-mcp-server#authentication",
+          "required": false
+        },
+        {
+          "name": "MS365_MCP_CLIENT_ID",
+          "display": "Azure app client ID (optional — use a custom app if your org blocks third-party apps)",
+          "docs_url": "https://github.com/softeria/ms-365-mcp-server#authentication",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
+      "docs_url": "https://github.com/softeria/ms-365-mcp-server",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": { "allowed": false, "default": false },
+      "warning": "Teams requires a work or school Microsoft account. Personal Microsoft accounts will fail at sign-in. If your organisation's IT policy blocks the default app, set MS365_MCP_CLIENT_ID to your custom Azure AD app client ID and MS365_MCP_TENANT_ID to your tenant ID."
+    },
+    {
       "id": "time",
       "display_name": "Time",
       "description": "Time-zone aware utilities: get the current time in a given IANA timezone, convert times between zones. No credentials required.",
