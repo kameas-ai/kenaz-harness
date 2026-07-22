@@ -993,6 +993,40 @@
         "allowed": false,
         "default": false
       }
+    },
+    {
+      "id": "greenhouse",
+      "display_name": "Greenhouse",
+      "description": "Search candidates, jobs, applications, interviews, and offers in Greenhouse Recruiting. Read-only access via the Harvest API. Requires a Greenhouse Harvest API key.",
+      "category": "hr_people",
+      "command": [
+        "uvx",
+        "open-greenhouse-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "GREENHOUSE_API_KEY",
+          "display": "Greenhouse Harvest API key",
+          "docs_url": "https://developers.greenhouse.io/harvest.html#authentication",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.greenhouse.io/harvest.html",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Python server launched via uvx; requires uv installed. First run downloads the package (5–15 s). Verify package name 'open-greenhouse-mcp' at build — select the most actively maintained Greenhouse MCP package on PyPI."
     }
   ]
 }
