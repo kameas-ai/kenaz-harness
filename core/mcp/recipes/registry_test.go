@@ -911,3 +911,61 @@ func TestRecipe_Ramp(t *testing.T) {
 		t.Errorf("Validate() error: %v", err)
 	}
 }
+
+func TestRecipe_Deel(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("deel")
+	if !ok {
+		t.Fatal("deel not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://api.letsdeel.com/mcp" {
+		t.Errorf("URL = %q, want https://api.letsdeel.com/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// DCR zero-app: no pre-registered client_id.
+	if r.Auth.ClientID != "" {
+		t.Errorf("deel auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "hr_people" {
+		t.Errorf("Category = %q, want hr_people", r.Category)
+	}
+	// FR-003: no write or money-movement scopes.
+	forbiddenDeelScopes := []string{
+		"contracts:write",
+		"timesheets:write",
+		"invoice-adjustments:write",
+		"adjustments:write",
+		"time-off:write",
+		"invoice:create",
+		"treasury-vendorbill:write",
+		"auth:write",
+		"ai:write",
+		"profile:write",
+	}
+	presentScopes := map[string]bool{}
+	for _, s := range r.Auth.Scopes {
+		presentScopes[s] = true
+	}
+	for _, forbidden := range forbiddenDeelScopes {
+		if presentScopes[forbidden] {
+			t.Errorf("deel Auth.Scopes must not include write scope %q", forbidden)
+		}
+	}
+	// No KAMEAS_DEEL_OAUTH_CLIENT_ID (zero-app).
+	for _, k := range r.EnvKeys {
+		if k.Name == "KAMEAS_DEEL_OAUTH_CLIENT_ID" {
+			t.Error("deel should not have KAMEAS_DEEL_OAUTH_CLIENT_ID env key (DCR zero-app)")
+		}
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}

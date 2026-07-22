@@ -960,6 +960,39 @@
         "allowed": false,
         "default": false
       }
+    },
+    {
+      "id": "deel",
+      "display_name": "Deel",
+      "description": "Read contracts, people, timesheets, and invoice data from Deel — read-only, no payroll or money-movement actions. Sign in with Deel (DCR OAuth — no token to paste).",
+      "category": "hr_people",
+      "transport": "http",
+      "url": "https://api.letsdeel.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "contracts:read",
+          "people:read",
+          "timesheets:read",
+          "invoice-adjustments:read"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.deel.com/mcp/introduction",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
     }
   ]
 }
