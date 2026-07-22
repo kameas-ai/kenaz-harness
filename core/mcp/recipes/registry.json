@@ -1380,6 +1380,52 @@
         "default": false
       },
       "warning": "Community package (PyPI metabase-mcp v1.0.0). API key auth recommended (Metabase v0.47+); email/password fallback for older versions. METABASE_URL must point to your specific Metabase instance. Requires uv installed."
+    },
+    {
+      "id": "looker",
+      "display_name": "Looker",
+      "description": "Query Looker: browse explores, run LookML queries, access dashboards and looks via community MCP server. Uses Looker API3 key (client_id + client_secret). Works with self-hosted Looker and Looker Cloud.",
+      "category": "bi",
+      "command": [
+        "uvx",
+        "looker-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "LOOKER_BASE_URL",
+          "display": "Looker instance base URL (e.g. https://your-company.looker.com)",
+          "docs_url": "https://cloud.google.com/looker/docs/api-auth#authentication_with_an_sdk",
+          "required": true
+        },
+        {
+          "name": "LOOKER_CLIENT_ID",
+          "display": "Looker API3 client ID (from Admin > Users > API3 Keys)",
+          "docs_url": "https://cloud.google.com/looker/docs/api-auth#authentication_with_an_sdk",
+          "required": true
+        },
+        {
+          "name": "LOOKER_CLIENT_SECRET",
+          "display": "Looker API3 client secret (from Admin > Users > API3 Keys)",
+          "docs_url": "https://cloud.google.com/looker/docs/api-auth#authentication_with_an_sdk",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://pypi.org/project/looker-mcp/",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Community package (PyPI looker-mcp v0.1.0 — not Google-official). Env var prefix is LOOKER_* (not LOOKERSDK_*). A Google-official Looker MCP may supersede this. Requires uv installed. First run downloads package (5–15 s)."
     }
   ]
 }
