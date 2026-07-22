@@ -53,6 +53,7 @@ var expectedRegistryIDs = []string{
 	"ga4",
 	"mailchimp",
 	"braze",
+	"marketo",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -1327,6 +1328,45 @@ func TestRecipe_Braze(t *testing.T) {
 	}
 	if r.Warning == "" {
 		t.Error("braze should carry a Warning (read-only note, cluster URL note)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+func TestRecipe_Marketo(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("marketo")
+	if !ok {
+		t.Fatal("marketo not in registry")
+	}
+	if len(r.Command) == 0 || r.Command[0] != "npx" {
+		t.Errorf("Command[0] = %q, want npx", r.Command[0])
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for Marketo (client-credentials auth), got %+v", r.Auth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["MARKETO_CLIENT_ID"] {
+		t.Errorf("EnvKeys = %+v, want MARKETO_CLIENT_ID", r.EnvKeys)
+	}
+	if !envNames["MARKETO_CLIENT_SECRET"] {
+		t.Errorf("EnvKeys = %+v, want MARKETO_CLIENT_SECRET", r.EnvKeys)
+	}
+	if !envNames["MARKETO_MUNCHKIN_ID"] {
+		t.Errorf("EnvKeys = %+v, want MARKETO_MUNCHKIN_ID", r.EnvKeys)
+	}
+	if r.Category != "marketing" {
+		t.Errorf("Category = %q, want marketing", r.Category)
+	}
+	if r.Warning == "" {
+		t.Error("marketo should carry a Warning (stretch: package unconfirmed)")
 	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)

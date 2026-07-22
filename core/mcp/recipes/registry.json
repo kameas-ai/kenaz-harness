@@ -1540,6 +1540,53 @@
         "default": false
       },
       "warning": "Braze-affiliated package (PyPI braze-mcp-server v1.2.0). Read-only: BRAZE_ALLOW_WRITES not set. Use a least-privilege API key with only the read permissions your use case requires. BRAZE_BASE_URL is cluster-specific (e.g. rest.iad-01.braze.com, rest.eu-01.braze.com) — check your Braze dashboard URL. Requires uv installed."
+    },
+    {
+      "id": "marketo",
+      "display_name": "Marketo (Adobe)",
+      "description": "Access Marketo: leads, programs, campaigns, forms, lists, and assets via community MCP server. Uses Marketo REST API with client credentials OAuth (client_id + client_secret + Munchkin ID). Read-only scopes. STRETCH: package unconfirmed on npm registry at planning time — verify at build.",
+      "category": "marketing",
+      "command": [
+        "npx",
+        "-y",
+        "marketo-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "MARKETO_CLIENT_ID",
+          "display": "Marketo API client ID (from Marketo Admin > LaunchPoint > View Details)",
+          "docs_url": "https://developers.marketo.com/rest-api/authentication/",
+          "required": true
+        },
+        {
+          "name": "MARKETO_CLIENT_SECRET",
+          "display": "Marketo API client secret (from Marketo Admin > LaunchPoint > View Details)",
+          "docs_url": "https://developers.marketo.com/rest-api/authentication/",
+          "required": true
+        },
+        {
+          "name": "MARKETO_MUNCHKIN_ID",
+          "display": "Marketo Munchkin ID (from Marketo Admin > Integration > Munchkin, e.g. 000-AAA-000)",
+          "docs_url": "https://developers.marketo.com/rest-api/authentication/",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/alexleventer/marketo-mcp",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "STRETCH: marketo-mcp npm package unconfirmed at planning time (2026-07-21) — verify exact npm package name and availability before installing. Community package (GitHub alexleventer/marketo-mcp, JS/TypeScript). Read-only Marketo API access. Marketo REST API uses client-credentials OAuth internally; no browser OAuth flow."
     }
   ]
 }
