@@ -1466,6 +1466,40 @@
         "default": false
       },
       "warning": "Community package (PyPI google-analytics-mcp v2.8.1 — not Google-official). Uses GA4 Data API with service account auth. Enable Google Analytics Data API in Google Cloud Console. No official Google MCP for GA4 as of 2026-07-21 — future official server may supersede. Requires uv installed."
+    },
+    {
+      "id": "mailchimp",
+      "display_name": "Mailchimp",
+      "description": "Access Mailchimp: campaigns, lists, audiences, templates, and analytics via community MCP server. API key authentication — datacenter derived from the API key suffix (e.g. -us6).",
+      "category": "marketing",
+      "command": [
+        "uvx",
+        "mcp-mailchimp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "MAILCHIMP_API_KEY",
+          "display": "Mailchimp API key (from Mailchimp Account > Extras > API keys; datacenter derived from key suffix)",
+          "docs_url": "https://mailchimp.com/developer/marketing/guides/quick-start/#generate-your-api-key",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://pypi.org/project/mcp-mailchimp/",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Community package (PyPI mcp-mailchimp v0.3.0 — not Mailchimp-official). Only MAILCHIMP_API_KEY is needed; datacenter/server prefix is derived from the key suffix (e.g. key ending in -us6 → us6 datacenter). No separate server prefix env var needed. Requires uv installed."
     }
   ]
 }

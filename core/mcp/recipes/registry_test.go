@@ -51,6 +51,7 @@ var expectedRegistryIDs = []string{
 	"metabase",
 	"looker",
 	"ga4",
+	"mailchimp",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -1257,6 +1258,32 @@ func TestRecipe_GA4(t *testing.T) {
 	}
 	if r.Category != "analytics" {
 		t.Errorf("Category = %q, want analytics", r.Category)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+func TestRecipe_Mailchimp(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("mailchimp")
+	if !ok {
+		t.Fatal("mailchimp not in registry")
+	}
+	if len(r.Command) == 0 || r.Command[0] != "uvx" {
+		t.Errorf("Command[0] = %q, want uvx", r.Command[0])
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for Mailchimp (API-key auth), got %+v", r.Auth)
+	}
+	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "MAILCHIMP_API_KEY" {
+		t.Errorf("EnvKeys = %+v, want one entry named MAILCHIMP_API_KEY", r.EnvKeys)
+	}
+	if r.Category != "marketing" {
+		t.Errorf("Category = %q, want marketing", r.Category)
 	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)
