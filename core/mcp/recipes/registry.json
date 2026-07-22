@@ -975,6 +975,34 @@
         "default": false
       },
       "warning": "DCR zero-app: sign-in is token-free. EU region: use https://mcp.eu.amplitude.com/mcp. Append ?discovery=progressive to the URL to reduce token overhead."
+    },
+    {
+      "id": "klaviyo",
+      "display_name": "Klaviyo",
+      "description": "Access Klaviyo marketing automation: campaigns, flows, lists, profiles, metrics, segments, and templates via Klaviyo's official remote MCP server. Sign in with Klaviyo (OAuth DCR — no token paste, no app registration required). Scopes derived from private key permissions.",
+      "category": "marketing",
+      "transport": "http",
+      "url": "https://mcp.klaviyo.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth"
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.klaviyo.com/en/docs/klaviyo_mcp_server",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "DCR zero-app: sign-in is token-free. Scopes are assigned by Klaviyo based on your private key permissions (Accounts, Campaigns, Catalogs, Events, Flows, Images, Lists, Metrics, Profiles, Segments, Subscriptions, Tags, Templates, Translations). No scopes declared in recipe — server assigns based on key."
     }
   ]
 }

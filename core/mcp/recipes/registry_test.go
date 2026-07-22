@@ -41,6 +41,7 @@ var expectedRegistryIDs = []string{
 	// WP01–WP18 — marketing analytics + data/BI pack (01NCONN09)
 	"mixpanel",
 	"amplitude",
+	"klaviyo",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -867,6 +868,43 @@ func TestRecipe_Amplitude(t *testing.T) {
 	}
 	if len(r.EnvKeys) != 0 {
 		t.Errorf("amplitude should have no env keys (DCR zero-app), got %d", len(r.EnvKeys))
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+func TestRecipe_Klaviyo(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("klaviyo")
+	if !ok {
+		t.Fatal("klaviyo not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.klaviyo.com/mcp" {
+		t.Errorf("URL = %q, want https://mcp.klaviyo.com/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// DCR zero-app: no baked client_id.
+	if r.Auth.ClientID != "" {
+		t.Errorf("klaviyo auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	// Klaviyo intentionally omits scopes — server assigns based on private key permissions.
+	if len(r.Auth.Scopes) != 0 {
+		t.Errorf("klaviyo Auth.Scopes = %v, want empty (scopes assigned by server based on key permissions)", r.Auth.Scopes)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "marketing" {
+		t.Errorf("Category = %q, want marketing", r.Category)
+	}
+	if len(r.EnvKeys) != 0 {
+		t.Errorf("klaviyo should have no env keys (DCR zero-app), got %d", len(r.EnvKeys))
 	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)
