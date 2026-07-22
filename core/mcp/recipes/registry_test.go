@@ -41,6 +41,7 @@ var expectedRegistryIDs = []string{
 	"clickup",
 	"monday",
 	"shortcut",
+	"smartsheet",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -775,6 +776,46 @@ func TestWorkatoRecipe(t *testing.T) {
 	}
 	if r.Category != "automation" {
 		t.Errorf("Category = %q, want automation", r.Category)
+	}
+}
+
+func TestRecipe_Smartsheet(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("smartsheet")
+	if !ok {
+		t.Fatal("smartsheet not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.smartsheet.com/mcp" {
+		t.Errorf("URL = %q, want https://mcp.smartsheet.com/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// Kameas app: placeholder client_id seam required.
+	if r.Auth.ClientID != "${KAMEAS_SMARTSHEET_OAUTH_CLIENT_ID}" {
+		t.Errorf("smartsheet auth.client_id = %q, want ${KAMEAS_SMARTSHEET_OAUTH_CLIENT_ID}", r.Auth.ClientID)
+	}
+	if len(r.Auth.Scopes) == 0 {
+		t.Error("smartsheet Auth.Scopes should list requested scopes")
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthPKCE {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_pkce", r.PrimaryAuth)
+	}
+	if r.Category != "productivity" {
+		t.Errorf("Category = %q, want productivity", r.Category)
+	}
+	// Must expose KAMEAS_SMARTSHEET_OAUTH_CLIENT_ID as required env_key.
+	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "KAMEAS_SMARTSHEET_OAUTH_CLIENT_ID" {
+		t.Errorf("EnvKeys = %+v, want one entry KAMEAS_SMARTSHEET_OAUTH_CLIENT_ID", r.EnvKeys)
+	}
+	if !r.EnvKeys[0].Required {
+		t.Error("KAMEAS_SMARTSHEET_OAUTH_CLIENT_ID should be required (no DCR — needs registered Kameas app)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 

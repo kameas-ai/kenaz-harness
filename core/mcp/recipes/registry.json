@@ -969,6 +969,53 @@
         "allowed": false,
         "default": false
       }
+    },
+    {
+      "id": "smartsheet",
+      "display_name": "Smartsheet",
+      "description": "Read and update Smartsheet sheets, rows, columns, workspaces, and dashboards. Sign in with your Smartsheet account.",
+      "category": "productivity",
+      "transport": "http",
+      "url": "https://mcp.smartsheet.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_SMARTSHEET_OAUTH_CLIENT_ID}",
+        "scopes": [
+          "READ_SHEETS",
+          "WRITE_SHEETS",
+          "CREATE_SHEETS",
+          "ADMIN_SHEETS",
+          "ADMIN_WORKSPACES",
+          "READ_SIGHTS",
+          "CREATE_SIGHTS",
+          "SHARE_SHEETS",
+          "SHARE_SIGHTS"
+        ]
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_SMARTSHEET_OAUTH_CLIENT_ID",
+          "display": "Kameas Smartsheet OAuth client ID (pre-configured)",
+          "docs_url": "https://developers.smartsheet.com",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.smartsheet.com/api/smartsheet",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Requires Kameas Smartsheet OAuth app registration at developers.smartsheet.com. Set KAMEAS_SMARTSHEET_OAUTH_CLIENT_ID to activate sign-in."
     }
   ]
 }
