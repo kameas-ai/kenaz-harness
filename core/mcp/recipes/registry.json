@@ -950,6 +950,37 @@
         "default": false
       },
       "warning": "This recipe connects to gitlab.com only. Self-managed GitLab instances have a different MCP URL — use the custom MCP add flow for those."
+    },
+    {
+      "id": "google-maps",
+      "display_name": "Google Maps",
+      "description": "Geocode addresses, get directions, search for places, and calculate distances via the Google Maps APIs. Requires a Google Maps API key with the relevant APIs enabled.",
+      "category": "fetch",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-google-maps"],
+      "env_keys": [
+        {
+          "name": "GOOGLE_MAPS_API_KEY",
+          "display": "Google Maps API key",
+          "docs_url": "https://developers.google.com/maps/documentation/javascript/get-api-key",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/google-maps",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "npm fetch on first run can take 5–15 s. Enable the Geocoding API, Directions API, Places API, and Distance Matrix API in your Google Cloud project.",
+      "primary_auth": "keys"
     }
   ]
 }

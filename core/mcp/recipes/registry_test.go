@@ -40,6 +40,7 @@ var expectedRegistryIDs = []string{
 	"workato",
 	"supabase",
 	"gitlab",
+	"google-maps",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -789,6 +790,39 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_GoogleMaps(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("google-maps")
+	if !ok {
+		t.Fatal("google-maps not in registry")
+	}
+	// stdio recipe — no transport field, command must be set.
+	if r.Transport != "" && r.Transport != recipes.TransportStdio {
+		t.Errorf("Transport = %q, want stdio (empty)", r.Transport)
+	}
+	if len(r.Command) == 0 || r.Command[0] != "npx" {
+		t.Errorf("Command = %v, want npx-based command", r.Command)
+	}
+	if r.Category != "fetch" {
+		t.Errorf("Category = %q, want fetch", r.Category)
+	}
+	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "GOOGLE_MAPS_API_KEY" {
+		t.Fatalf("EnvKeys = %+v, want one entry named GOOGLE_MAPS_API_KEY", r.EnvKeys)
+	}
+	if !r.EnvKeys[0].Required {
+		t.Error("GOOGLE_MAPS_API_KEY should be required")
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	if r.Warning == "" {
+		t.Error("google-maps should carry a Warning (npm fetch + API enablement)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 
