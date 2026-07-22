@@ -1053,6 +1053,60 @@
         "default": false
       },
       "warning": "DCR supported on Enterprise+ plans; token-based works on all plans (set DBT_ACCESS_TOKEN). MCP URL is per-account — override dbt_host config_option for custom domains. Consumption-only: read/query only, no dbt run/build. DCR registration_endpoint auth-gated at discovery time; verify at build."
+    },
+    {
+      "id": "tableau",
+      "display_name": "Tableau",
+      "description": "Query Tableau Cloud: browse datasources, workbooks, views, Pulse insights, and site content via Tableau's official remote MCP server. Sign in with Tableau (OAuth PKCE — requires Kameas Connected App registration). Read-only access.",
+      "category": "bi",
+      "transport": "http",
+      "url": "https://mcp.tableau.com",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_TABLEAU_OAUTH_CLIENT_ID}",
+        "scopes": [
+          "tableau:mcp:datasource:read",
+          "tableau:mcp:workbook:read",
+          "tableau:mcp:view:read",
+          "tableau:mcp:view:download",
+          "tableau:mcp:pulse:read",
+          "tableau:mcp:insight:create",
+          "tableau:mcp:content:read",
+          "tableau:content:read",
+          "tableau:mcp_site_settings:read",
+          "tableau:viz_data_service:read",
+          "tableau:views:download",
+          "tableau:insight_definitions_metrics:read",
+          "tableau:insight_metrics:read",
+          "tableau:metric_subscriptions:read",
+          "tableau:insights:read",
+          "tableau:insight_brief:create"
+        ]
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_TABLEAU_OAUTH_CLIENT_ID",
+          "display": "Kameas Tableau OAuth client ID (from Tableau Cloud Connected Apps)",
+          "docs_url": "https://help.tableau.com/current/online/en-us/connected_apps_eas.htm",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://mcp.tableau.com",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Owner action required: register Kameas Connected App in Tableau Cloud Admin (Connected Apps > Create Connected App). Redirect URI: https://app.kameas.ai/oauth/callback. Set KAMEAS_TABLEAU_OAUTH_CLIENT_ID once registered. Auth server: sso.online.tableau.com (no DCR — PKCE only). Read-only scopes; no write/admin tools."
     }
   ]
 }

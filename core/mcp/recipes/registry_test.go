@@ -43,6 +43,7 @@ var expectedRegistryIDs = []string{
 	"amplitude",
 	"klaviyo",
 	"dbt-cloud",
+	"tableau",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -944,6 +945,45 @@ func TestRecipe_DbtCloud(t *testing.T) {
 	}
 	if !envNames["DBT_ACCESS_TOKEN"] {
 		t.Errorf("EnvKeys = %+v, want DBT_ACCESS_TOKEN (token fallback)", r.EnvKeys)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+func TestRecipe_Tableau(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("tableau")
+	if !ok {
+		t.Fatal("tableau not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.tableau.com" {
+		t.Errorf("URL = %q, want https://mcp.tableau.com", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// Tableau requires Kameas owner-app — placeholder client_id.
+	if r.Auth.ClientID != "${KAMEAS_TABLEAU_OAUTH_CLIENT_ID}" {
+		t.Errorf("tableau auth.client_id = %q, want ${KAMEAS_TABLEAU_OAUTH_CLIENT_ID} placeholder", r.Auth.ClientID)
+	}
+	if len(r.Auth.Scopes) == 0 {
+		t.Error("tableau Auth.Scopes should list read-only scopes")
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthPKCE {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_pkce", r.PrimaryAuth)
+	}
+	if r.Category != "bi" {
+		t.Errorf("Category = %q, want bi", r.Category)
+	}
+	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "KAMEAS_TABLEAU_OAUTH_CLIENT_ID" {
+		t.Errorf("EnvKeys = %+v, want one entry named KAMEAS_TABLEAU_OAUTH_CLIENT_ID", r.EnvKeys)
+	}
+	if !r.EnvKeys[0].Required {
+		t.Error("KAMEAS_TABLEAU_OAUTH_CLIENT_ID should be required (no DCR — needs registered Kameas Connected App)")
 	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)
