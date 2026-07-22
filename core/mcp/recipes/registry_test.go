@@ -46,6 +46,7 @@ var expectedRegistryIDs = []string{
 	"netlify",
 	"vercel",
 	"bitbucket",
+	"pagerduty",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -795,6 +796,45 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_PagerDuty(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("pagerduty")
+	if !ok {
+		t.Fatal("pagerduty not in registry")
+	}
+	// Stdio transport (uvx).
+	if r.Transport != "" && r.Transport != recipes.TransportStdio {
+		t.Errorf("Transport = %q, want stdio (or empty)", r.Transport)
+	}
+	if len(r.Command) < 2 || r.Command[0] != "uvx" || r.Command[1] != "pagerduty-mcp" {
+		t.Errorf("Command = %v, want [uvx pagerduty-mcp]", r.Command)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["PAGERDUTY_USER_API_KEY"] {
+		t.Errorf("EnvKeys = %+v, want PAGERDUTY_USER_API_KEY", r.EnvKeys)
+	}
+	for _, e := range r.EnvKeys {
+		if e.Name == "PAGERDUTY_USER_API_KEY" && !e.Required {
+			t.Error("PAGERDUTY_USER_API_KEY should be required")
+		}
+	}
+	if r.Category != "observability" {
+		t.Errorf("Category = %q, want observability", r.Category)
+	}
+	if r.Warning == "" {
+		t.Error("pagerduty should carry a Warning (uvx download / read-only note)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 

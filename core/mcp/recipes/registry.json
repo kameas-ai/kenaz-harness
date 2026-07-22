@@ -1124,6 +1124,37 @@
         "default": false
       },
       "warning": "Requires Bitbucket Cloud account. Uses Atlassian OAuth app — same sign-in as Jira/Confluence connectors. Ensure KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID is configured."
+    },
+    {
+      "id": "pagerduty",
+      "display_name": "PagerDuty",
+      "description": "Query PagerDuty incidents, services, schedules, on-call assignments, and alerts. Requires a PagerDuty User API Token. Read-only by default.",
+      "category": "observability",
+      "command": ["uvx", "pagerduty-mcp"],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "PAGERDUTY_USER_API_KEY",
+          "display": "PagerDuty User API Token",
+          "docs_url": "https://support.pagerduty.com/main/docs/api-access-keys#generate-a-user-token-rest-api-key",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/PagerDuty/pagerduty-mcp-server",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "uvx downloads pagerduty-mcp package on first run (5–15 s). EU accounts: set PAGERDUTY_API_HOST=https://api.eu.pagerduty.com. Write tools are disabled by default (omit --enable-write-tools to stay read-only)."
     }
   ]
 }
