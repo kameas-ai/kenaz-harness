@@ -879,6 +879,47 @@
         "default": false
       },
       "warning": "Workato Enterprise MCP requires an Enterprise plan. Your Workato admin must add you to a user group with MCP access. Each MCP server collection has its own URL — copy the path portion from AI Hub > Enterprise MCP (everything after app.workato.com/)."
+    },
+    {
+      "id": "google-calendar",
+      "display_name": "Google Calendar",
+      "description": "List, create, and update Google Calendar events via a stdio MCP server. Supports calendar.events (read + write) and calendar.readonly scopes. Requires one-time sign-in — reuses same Google Cloud OAuth client (gcp-oauth.keys.json) as Gmail if already set up.",
+      "category": "communication",
+      "command": [
+        "npx",
+        "-y",
+        "@cocal/google-calendar-mcp"
+      ],
+      "primary_auth": "oauth",
+      "env_keys": [
+        {
+          "name": "GOOGLE_OAUTH_CREDENTIALS",
+          "display": "Path to saved Google OAuth credentials file (auto-created on first browser sign-in)",
+          "docs_url": "https://github.com/nspady/google-calendar-mcp#authentication",
+          "required": false
+        },
+        {
+          "name": "KAMEAS_GOOGLE_OAUTH_CLIENT_ID",
+          "display": "Kameas Google OAuth client ID (provided — no action needed when using built-in install flow)",
+          "docs_url": "",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/nspady/google-calendar-mcp",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "One-time setup required: create or reuse a Google Cloud OAuth client (Desktop app type), save gcp-oauth.keys.json and set GOOGLE_OAUTH_CREDENTIALS path, then complete browser sign-in when prompted. Tokens expire weekly in Google test-mode; completing Google app verification removes this limit. If you already set up Gmail, reuse the same gcp-oauth.keys.json — just re-authorize to include Calendar scopes. First npm fetch can take 10–20 s."
     }
   ]
 }

@@ -38,6 +38,7 @@ var expectedRegistryIDs = []string{
 	"composio",
 	"n8n",
 	"workato",
+	"google-calendar", // WP01
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -787,5 +788,48 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRegistryGoogleCalendarRecipe(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("google-calendar")
+	if !ok {
+		t.Fatal("google-calendar not in registry")
+	}
+	if r.Category != "communication" {
+		t.Errorf("Category = %q, want communication", r.Category)
+	}
+	// stdio recipe — no transport field (empty string = stdio)
+	if r.Transport != "" {
+		t.Errorf("Transport = %q, want empty (stdio)", r.Transport)
+	}
+	if len(r.Command) == 0 || r.Command[0] == "" {
+		t.Error("Command must be non-empty")
+	}
+	if r.Command[0] != "npx" {
+		t.Errorf("Command[0] = %q, want npx", r.Command[0])
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthOAuth {
+		t.Errorf("PrimaryAuth = %q, want oauth", r.PrimaryAuth)
+	}
+	if r.Warning == "" {
+		t.Error("google-calendar should carry a Warning (one-time OAuth setup, token expiry in test-mode)")
+	}
+	// Must carry KAMEAS_GOOGLE_OAUTH_CLIENT_ID env key as placeholder seam (not required).
+	foundPlaceholder := false
+	for _, k := range r.EnvKeys {
+		if k.Name == "KAMEAS_GOOGLE_OAUTH_CLIENT_ID" {
+			foundPlaceholder = true
+			if k.Required {
+				t.Error("KAMEAS_GOOGLE_OAUTH_CLIENT_ID should not be required (Kameas-provided; guided-setup path)")
+			}
+		}
+	}
+	if !foundPlaceholder {
+		t.Error("google-calendar missing KAMEAS_GOOGLE_OAUTH_CLIENT_ID env_key placeholder seam")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
