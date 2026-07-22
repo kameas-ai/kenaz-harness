@@ -912,6 +912,40 @@
         "allowed": false,
         "default": false
       }
+    },
+    {
+      "id": "canva",
+      "display_name": "Canva",
+      "description": "Create, read, and edit Canva designs, folders, brand templates, and assets. Sign in with Canva \u2014 no token to paste.",
+      "category": "design",
+      "transport": "http",
+      "url": "https://mcp.canva.com",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "profile:read",
+          "design:meta:read",
+          "design:content:read",
+          "folder:read",
+          "asset:read"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://www.canva.com/developers/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
     }
   ]
 }
