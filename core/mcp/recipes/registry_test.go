@@ -46,6 +46,7 @@ var expectedRegistryIDs = []string{
 	"tableau",
 	"fivetran",
 	"redshift",
+	"snowflake",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -1052,6 +1053,58 @@ func TestRecipe_Redshift(t *testing.T) {
 	}
 	if r.Category != "data" {
 		t.Errorf("Category = %q, want data", r.Category)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+func TestRecipe_Snowflake(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("snowflake")
+	if !ok {
+		t.Fatal("snowflake not in registry")
+	}
+	if len(r.Command) == 0 || r.Command[0] != "uvx" {
+		t.Errorf("Command[0] = %q, want uvx", r.Command[0])
+	}
+	// Command must contain --account flag.
+	hasAccount := false
+	hasAllowWrite := false
+	for _, arg := range r.Command {
+		if arg == "--account" {
+			hasAccount = true
+		}
+		if arg == "--allow_write" {
+			hasAllowWrite = true
+		}
+	}
+	if !hasAccount {
+		t.Error("snowflake Command should include --account flag")
+	}
+	if hasAllowWrite {
+		t.Error("snowflake Command must NOT include --allow_write (read-only enforcement)")
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for Snowflake (CLI-flag auth), got %+v", r.Auth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	for _, name := range []string{"SNOWFLAKE_ACCOUNT", "SNOWFLAKE_USER", "SNOWFLAKE_PASSWORD", "SNOWFLAKE_WAREHOUSE", "SNOWFLAKE_DATABASE"} {
+		if !envNames[name] {
+			t.Errorf("EnvKeys missing %s", name)
+		}
+	}
+	if r.Category != "data" {
+		t.Errorf("Category = %q, want data", r.Category)
+	}
+	if r.Warning == "" {
+		t.Error("snowflake should carry a Warning (read-only note, community package)")
 	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)

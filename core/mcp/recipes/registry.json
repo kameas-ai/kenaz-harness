@@ -1198,6 +1198,90 @@
         "default": false
       },
       "warning": "Requires uv installed. AWS IAM credentials must be configured (aws configure or environment variables). Package name: awslabs.amazon-redshift-mcp-server — verify at build. Read-only access via IAM permissions; use least-privilege IAM policy."
+    },
+    {
+      "id": "snowflake",
+      "display_name": "Snowflake",
+      "description": "Query Snowflake data warehouse via community MCP server. Read-only access (no --allow_write flag). Connection credentials passed as CLI flags. Supports account, user, password, warehouse, database, schema, and role.",
+      "category": "data",
+      "command": [
+        "uvx",
+        "mcp_server_snowflake",
+        "--account",
+        "${SNOWFLAKE_ACCOUNT}",
+        "--user",
+        "${SNOWFLAKE_USER}",
+        "--password",
+        "${SNOWFLAKE_PASSWORD}",
+        "--warehouse",
+        "${SNOWFLAKE_WAREHOUSE}",
+        "--database",
+        "${SNOWFLAKE_DATABASE}",
+        "--schema",
+        "${SNOWFLAKE_SCHEMA}",
+        "--role",
+        "${SNOWFLAKE_ROLE}"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "SNOWFLAKE_ACCOUNT",
+          "display": "Snowflake account identifier (e.g. myorg-myaccount or myaccount.us-east-1)",
+          "docs_url": "https://docs.snowflake.com/en/user-guide/admin-account-identifier",
+          "required": true
+        },
+        {
+          "name": "SNOWFLAKE_USER",
+          "display": "Snowflake username",
+          "docs_url": "https://docs.snowflake.com/en/user-guide/connecting-overview",
+          "required": true
+        },
+        {
+          "name": "SNOWFLAKE_PASSWORD",
+          "display": "Snowflake password",
+          "docs_url": "https://docs.snowflake.com/en/user-guide/connecting-overview",
+          "required": true
+        },
+        {
+          "name": "SNOWFLAKE_WAREHOUSE",
+          "display": "Snowflake virtual warehouse name",
+          "docs_url": "https://docs.snowflake.com/en/sql-reference/sql/use-warehouse",
+          "required": true
+        },
+        {
+          "name": "SNOWFLAKE_DATABASE",
+          "display": "Snowflake database name",
+          "docs_url": "https://docs.snowflake.com/en/sql-reference/sql/use-database",
+          "required": true
+        },
+        {
+          "name": "SNOWFLAKE_SCHEMA",
+          "display": "Snowflake schema name (e.g. PUBLIC)",
+          "docs_url": "https://docs.snowflake.com/en/sql-reference/sql/use-schema",
+          "required": true
+        },
+        {
+          "name": "SNOWFLAKE_ROLE",
+          "display": "Snowflake role (e.g. SYSADMIN, ANALYST)",
+          "docs_url": "https://docs.snowflake.com/en/sql-reference/sql/use-role",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://pypi.org/project/mcp-server-snowflake/",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Community package (PyPI mcp_server_snowflake v0.3.8 — underscores in package name). Read-only: --allow_write flag intentionally omitted. Requires uv installed. First run downloads package (5–15 s). Credentials passed as CLI flags; store in env/credstore, not plaintext."
     }
   ]
 }
