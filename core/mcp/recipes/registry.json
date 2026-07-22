@@ -1054,6 +1054,55 @@
       },
       "warning": "npm fetch on first run can take 5–15 s. This is a community server — not an official MySQL/Anthropic package. Write operations are disabled by default; enable only for trusted databases.",
       "primary_auth": "keys"
+    },
+    {
+      "id": "mongodb",
+      "display_name": "MongoDB",
+      "description": "Query MongoDB databases, inspect schemas, and run aggregation pipelines. Supports both local MongoDB and MongoDB Atlas. Supply a connection string to connect — Atlas API credentials are optional for Atlas management tools.",
+      "category": "filesystem",
+      "command": ["npx", "-y", "mongodb-mcp-server@latest"],
+      "env_keys": [
+        {
+          "name": "MDB_MCP_CONNECTION_STRING",
+          "display": "MongoDB connection string (e.g. mongodb://localhost:27017/db or Atlas SRV URI)",
+          "docs_url": "https://www.mongodb.com/docs/manual/reference/connection-string/",
+          "required": true
+        },
+        {
+          "name": "MDB_MCP_READ_ONLY",
+          "display": "Read-only mode — set to 'true' to restrict to read operations (recommended)",
+          "docs_url": "https://github.com/mongodb-labs/mongodb-mcp-server",
+          "required": false
+        },
+        {
+          "name": "MDB_MCP_API_CLIENT_ID",
+          "display": "MongoDB Atlas API service account client ID (optional — Atlas management tools only)",
+          "docs_url": "https://www.mongodb.com/docs/atlas/configure-api-access-service-accounts/",
+          "required": false
+        },
+        {
+          "name": "MDB_MCP_API_CLIENT_SECRET",
+          "display": "MongoDB Atlas API service account client secret (optional — Atlas management tools only)",
+          "docs_url": "https://www.mongodb.com/docs/atlas/configure-api-access-service-accounts/",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/mongodb-labs/mongodb-mcp-server",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "npm fetch on first run can take 5–15 s. Atlas cluster management tools (create/delete) require Atlas API credentials and carry real cost implications — omit them for query-only usage.",
+      "primary_auth": "keys"
     }
   ]
 }

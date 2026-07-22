@@ -42,6 +42,7 @@ var expectedRegistryIDs = []string{
 	"gitlab",
 	"google-maps",
 	"mysql",
+	"mongodb",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -791,6 +792,55 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_MongoDB(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("mongodb")
+	if !ok {
+		t.Fatal("mongodb not in registry")
+	}
+	if r.Transport != "" && r.Transport != recipes.TransportStdio {
+		t.Errorf("Transport = %q, want stdio (empty)", r.Transport)
+	}
+	if len(r.Command) == 0 || r.Command[0] != "npx" {
+		t.Errorf("Command = %v, want npx-based command", r.Command)
+	}
+	if r.Category != "filesystem" {
+		t.Errorf("Category = %q, want filesystem", r.Category)
+	}
+	envNames := map[string]bool{}
+	requiredCount := 0
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+		if e.Required {
+			requiredCount++
+		}
+	}
+	if !envNames["MDB_MCP_CONNECTION_STRING"] {
+		t.Error("EnvKeys missing required MDB_MCP_CONNECTION_STRING")
+	}
+	// Connection string must be required.
+	for _, e := range r.EnvKeys {
+		if e.Name == "MDB_MCP_CONNECTION_STRING" && !e.Required {
+			t.Error("MDB_MCP_CONNECTION_STRING should be required")
+		}
+	}
+	if !envNames["MDB_MCP_READ_ONLY"] {
+		t.Error("EnvKeys missing optional MDB_MCP_READ_ONLY")
+	}
+	if !envNames["MDB_MCP_API_CLIENT_ID"] || !envNames["MDB_MCP_API_CLIENT_SECRET"] {
+		t.Error("EnvKeys missing optional Atlas credentials (MDB_MCP_API_CLIENT_ID / MDB_MCP_API_CLIENT_SECRET)")
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	if r.Warning == "" {
+		t.Error("mongodb should carry a Warning (Atlas management cost implications)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 
