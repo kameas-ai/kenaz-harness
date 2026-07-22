@@ -5511,6 +5511,7 @@ export namespace recipes {
 	    args_template?: string[];
 	    config_options?: ConfigOption[];
 	    warning?: string;
+	    warning_severity?: string;
 	    recommended_policy_template?: string;
 	    required_capability?: string;
 	    prompt_on_first_use?: string[];
@@ -5542,6 +5543,7 @@ export namespace recipes {
 	        this.args_template = source["args_template"];
 	        this.config_options = this.convertValues(source["config_options"], ConfigOption);
 	        this.warning = source["warning"];
+	        this.warning_severity = source["warning_severity"];
 	        this.recommended_policy_template = source["recommended_policy_template"];
 	        this.required_capability = source["required_capability"];
 	        this.prompt_on_first_use = source["prompt_on_first_use"];
