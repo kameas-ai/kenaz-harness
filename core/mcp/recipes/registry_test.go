@@ -40,6 +40,7 @@ var expectedRegistryIDs = []string{
 	"workato",
 	// Observability & CI pack (01NCONN07)
 	"grafana",
+	"datadog",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -789,6 +790,46 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Datadog(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("datadog")
+	if !ok {
+		t.Fatal("datadog not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.datadoghq.com/v1/mcp" {
+		t.Errorf("URL = %q, want https://mcp.datadoghq.com/v1/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	if r.Auth.ClientID != "" {
+		t.Errorf("datadog auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "observability" {
+		t.Errorf("Category = %q, want observability", r.Category)
+	}
+	// DD_API_KEY and DD_APPLICATION_KEY are optional fallback keys.
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["DD_API_KEY"] {
+		t.Errorf("EnvKeys = %+v, want DD_API_KEY", r.EnvKeys)
+	}
+	if r.Warning == "" {
+		t.Error("datadog should carry a Warning (rate limits / GovCloud not supported)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 

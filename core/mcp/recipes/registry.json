@@ -908,6 +908,57 @@
         "default": false
       },
       "warning": "Grafana Cloud only — self-hosted Grafana OSS does not expose a remote MCP server."
+    },
+    {
+      "id": "datadog",
+      "display_name": "Datadog",
+      "description": "Query Datadog metrics, monitors, dashboards, logs, incidents, and infrastructure. Sign in with your Datadog account — no token to paste. Supports US1 site by default; configure for EU or other regions.",
+      "category": "observability",
+      "transport": "http",
+      "url": "https://mcp.datadoghq.com/v1/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": ["mcp_read"]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [
+        {
+          "name": "DD_API_KEY",
+          "display": "Datadog API key (optional — fallback for non-OAuth auth)",
+          "docs_url": "https://docs.datadoghq.com/account_management/api-app-keys/",
+          "required": false
+        },
+        {
+          "name": "DD_APPLICATION_KEY",
+          "display": "Datadog Application key (optional — required with DD_API_KEY fallback)",
+          "docs_url": "https://docs.datadoghq.com/account_management/api-app-keys/",
+          "required": false
+        }
+      ],
+      "config_options": [
+        {
+          "name": "datadog_site",
+          "display": "Datadog MCP server URL",
+          "kind": "string",
+          "default": "https://mcp.datadoghq.com/v1/mcp",
+          "required": false,
+          "description": "Override for non-US1 Datadog sites. EU: https://mcp.datadoghq.eu/v1/mcp; US3: https://mcp.us3.datadoghq.com/v1/mcp; US5: https://mcp.us5.datadoghq.com/v1/mcp."
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.datadoghq.com/bits_ai/mcp_server/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "GovCloud sites (ddog-gov.com) not supported. Rate limit: 50 req/10 s, 50 k calls/month."
     }
   ]
 }
