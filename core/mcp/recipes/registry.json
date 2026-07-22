@@ -879,6 +879,60 @@
         "default": false
       },
       "warning": "Workato Enterprise MCP requires an Enterprise plan. Your Workato admin must add you to a user group with MCP access. Each MCP server collection has its own URL — copy the path portion from AI Hub > Enterprise MCP (everything after app.workato.com/)."
+    },
+    {
+      "id": "mixpanel",
+      "display_name": "Mixpanel",
+      "description": "Query Mixpanel analytics: events, funnels, retention, segmentation, insights, cohorts, and business context via Mixpanel's official remote MCP server. Sign in with Mixpanel (OAuth DCR — no token paste, no app registration required). US region default; EU/IN URL configurable.",
+      "category": "analytics",
+      "transport": "http",
+      "url": "https://mcp.mixpanel.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "projects",
+          "analysis",
+          "events",
+          "insights",
+          "segmentation",
+          "retention",
+          "data:read",
+          "funnels",
+          "flows",
+          "data_definitions",
+          "bookmarks",
+          "business_context",
+          "cohorts",
+          "metrics",
+          "user_details"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [
+        {
+          "name": "mixpanel_server_url",
+          "display": "Mixpanel MCP server URL (override for EU/IN region)",
+          "kind": "string",
+          "default": "https://mcp.mixpanel.com/mcp",
+          "required": false,
+          "description": "US default: https://mcp.mixpanel.com/mcp. EU/IN variants: verify server URLs at build — not live-confirmed."
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.mixpanel.com/docs/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "DCR zero-app: sign-in is token-free. Read-only analytics access — no data ingestion or project-admin tools. EU/IN server URLs not live-confirmed; verify at build."
     }
   ]
 }

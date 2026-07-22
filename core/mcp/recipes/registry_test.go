@@ -38,6 +38,8 @@ var expectedRegistryIDs = []string{
 	"composio",
 	"n8n",
 	"workato",
+	// WP01 — marketing analytics + data/BI pack (01NCONN09)
+	"mixpanel",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -787,5 +789,43 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+// WP01 — Marketing analytics + data/BI pack (01NCONN09)
+
+func TestRecipe_Mixpanel(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("mixpanel")
+	if !ok {
+		t.Fatal("mixpanel not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.mixpanel.com/mcp" {
+		t.Errorf("URL = %q, want https://mcp.mixpanel.com/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// DCR zero-app: no baked client_id.
+	if r.Auth.ClientID != "" {
+		t.Errorf("mixpanel auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	if len(r.Auth.Scopes) == 0 {
+		t.Error("mixpanel Auth.Scopes should list requested scopes")
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "analytics" {
+		t.Errorf("Category = %q, want analytics", r.Category)
+	}
+	if len(r.EnvKeys) != 0 {
+		t.Errorf("mixpanel should have no env keys (DCR zero-app), got %d", len(r.EnvKeys))
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
