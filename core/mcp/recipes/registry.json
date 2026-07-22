@@ -840,6 +840,43 @@
       "warning": "Workflows must be individually marked 'Available in MCP' in your n8n instance before they appear as tools. For n8n Cloud, your hostname is <slug>.app.n8n.cloud. For self-hosted n8n, use your instance's domain name (without https://)."
     },
     {
+      "id": "discord",
+      "display_name": "Discord",
+      "description": "Read messages and channels, search server members, look up guilds in Discord. Sign in with Discord (OAuth) — no token to paste.",
+      "category": "communication",
+      "transport": "http",
+      "url": "https://mcp.discord.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_DISCORD_OAUTH_CLIENT_ID}",
+        "scopes": ["identify", "guilds", "messages.read"]
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_DISCORD_OAUTH_CLIENT_ID",
+          "display": "Kameas Discord OAuth client ID (pre-configured)",
+          "docs_url": "https://discord.com/developers/applications",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://discord.com/developers/docs/topics/oauth2",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "No official Discord MCP server was confirmed at plan time — verify URL before shipping. Requires Kameas Discord OAuth app registration at discord.com/developers."
+    },
+    {
       "id": "zoom",
       "display_name": "Zoom",
       "description": "List and create Zoom meetings, retrieve recordings, look up users and meeting details. Sign in with Zoom (OAuth) — no token to paste.",
