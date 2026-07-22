@@ -44,6 +44,7 @@ var expectedRegistryIDs = []string{
 	"smartsheet",
 	"wrike",
 	"trello",
+	"coda",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -778,6 +779,46 @@ func TestWorkatoRecipe(t *testing.T) {
 	}
 	if r.Category != "automation" {
 		t.Errorf("Category = %q, want automation", r.Category)
+	}
+}
+
+func TestRecipe_Coda(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("coda")
+	if !ok {
+		t.Fatal("coda not in registry")
+	}
+	// stdio recipe: no transport/url, has command.
+	if r.Transport != "" && r.Transport != recipes.TransportStdio {
+		t.Errorf("Transport = %q, want stdio or empty", r.Transport)
+	}
+	if len(r.Command) == 0 {
+		t.Fatal("coda Command must be non-empty")
+	}
+	if r.Command[0] != "npx" {
+		t.Errorf("Command[0] = %q, want npx", r.Command[0])
+	}
+	if r.Category != "productivity" {
+		t.Errorf("Category = %q, want productivity", r.Category)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	// Auth is nil — bearer API token, no OAuth 2.0 server.
+	if r.Auth != nil {
+		t.Errorf("coda Auth should be nil (bearer API token, not OAuth 2.0), got %+v", r.Auth)
+	}
+	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "CODA_API_TOKEN" {
+		t.Errorf("EnvKeys = %+v, want one entry CODA_API_TOKEN", r.EnvKeys)
+	}
+	if !r.EnvKeys[0].Required {
+		t.Error("CODA_API_TOKEN should be required")
+	}
+	if r.Warning == "" {
+		t.Error("coda should carry a Warning (rebrand note + community package)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 

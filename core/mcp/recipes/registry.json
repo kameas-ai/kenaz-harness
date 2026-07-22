@@ -1106,6 +1106,37 @@
       },
       "primary_auth": "keys",
       "warning": "Uses community package @delorenj/mcp-server-trello (verify at build — check license and maintenance). Trello uses API key + OAuth 1.0 token (not OAuth 2.0). Generate your token at: https://trello.com/1/authorize?key=YOUR_API_KEY&scope=read,write&expiration=never&response_type=token. npm fetch on first run can take 5–15 s."
+    },
+    {
+      "id": "coda",
+      "display_name": "Coda",
+      "description": "Read and write Coda docs, pages, tables, and rows via the Coda API. Requires a Coda API token.",
+      "category": "productivity",
+      "command": ["npx", "-y", "mcp-server-coda"],
+      "env_keys": [
+        {
+          "name": "CODA_API_TOKEN",
+          "display": "Coda API token (from coda.io/account → API Settings)",
+          "docs_url": "https://coda.io/account",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://coda.io/developers/apis/v1",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "primary_auth": "keys",
+      "warning": "Coda is transitioning to Superhuman Docs (coda.io now redirects to docs.superhuman.com). This recipe targets the current Coda API; verify compatibility if you have recently migrated. Uses community package mcp-server-coda — verify at build (check license and maintenance). npm fetch on first run can take 5–15 s."
     }
   ]
 }
