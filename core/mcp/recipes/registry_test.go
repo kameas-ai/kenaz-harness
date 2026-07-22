@@ -1036,3 +1036,43 @@ func TestRecipe_Ashby(t *testing.T) {
 		t.Errorf("Validate() error: %v", err)
 	}
 }
+
+func TestRecipe_BambooHR(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("bamboohr")
+	if !ok {
+		t.Fatal("bamboohr not in registry")
+	}
+	if r.Category != "hr_people" {
+		t.Errorf("Category = %q, want hr_people", r.Category)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["BAMBOOHR_API_KEY"] {
+		t.Errorf("EnvKeys = %+v, want BAMBOOHR_API_KEY", r.EnvKeys)
+	}
+	// bamboohr_subdomain config option required.
+	hasSubdomain := false
+	for _, opt := range r.ConfigOptions {
+		if opt.Name == "bamboohr_subdomain" {
+			hasSubdomain = true
+			if !opt.Required {
+				t.Error("bamboohr_subdomain config option should be required")
+			}
+		}
+	}
+	if !hasSubdomain {
+		t.Error("bamboohr should have bamboohr_subdomain config option")
+	}
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for BambooHR (API key auth), got %+v", r.Auth)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}

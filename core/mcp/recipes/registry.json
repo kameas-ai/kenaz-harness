@@ -1062,6 +1062,56 @@
         "default": false
       },
       "warning": "Verify the npm package name 'ashby-mcp' at build — search npm for the most actively maintained Ashby MCP package. If no community package exists, a minimal wrapper calling the Ashby GraphQL API at https://app.ashbyhq.com/api/graphql may be needed. First npm fetch can take 5–15 s."
+    },
+    {
+      "id": "bamboohr",
+      "display_name": "BambooHR",
+      "description": "Browse employee directory, org chart, time-off records, and custom HR fields from BambooHR. API key auth (simpler than OAuth — no Kameas app registration needed). Requires your company subdomain and an API key.",
+      "category": "hr_people",
+      "command": [
+        "npx",
+        "-y",
+        "bamboohr-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "BAMBOOHR_API_KEY",
+          "display": "BambooHR API key",
+          "docs_url": "https://documentation.bamboohr.com/docs/getting-started",
+          "required": true
+        },
+        {
+          "name": "BAMBOOHR_SUBDOMAIN",
+          "display": "BambooHR company subdomain (e.g. 'acmecorp' if you log in at acmecorp.bamboohr.com)",
+          "docs_url": "https://documentation.bamboohr.com/docs/getting-started",
+          "required": true
+        }
+      ],
+      "config_options": [
+        {
+          "name": "bamboohr_subdomain",
+          "display": "Company subdomain",
+          "kind": "string",
+          "default": "",
+          "required": true,
+          "description": "Your BambooHR subdomain — e.g. 'acmecorp' if you access BambooHR at acmecorp.bamboohr.com"
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://documentation.bamboohr.com/docs/getting-started",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Verify npm package 'bamboohr-mcp' at build — search npm for the most actively maintained BambooHR MCP package. First npm fetch can take 5–15 s."
     }
   ]
 }
