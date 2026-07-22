@@ -1186,6 +1186,58 @@
         "default": false
       },
       "warning": "npm downloads snyk package on first run (5–15 s). Snyk CLI requires Node.js to be available. SNYK_TOKEN can also be set as SNYK_AUTH_TOKEN for older CLI versions."
+    },
+    {
+      "id": "sonar",
+      "display_name": "SonarQube / SonarCloud",
+      "description": "Analyse code quality and security with SonarQube Server or SonarCloud via the official SonarSource MCP server. Requires Docker and a SonarQube user token.",
+      "category": "security",
+      "command": [
+        "docker", "run", "-i", "--rm", "--init", "--pull=always",
+        "-e", "SONARQUBE_TOKEN", "-e", "SONARQUBE_URL",
+        "sonarsource/sonarqube-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "SONARQUBE_TOKEN",
+          "display": "SonarQube / SonarCloud user token",
+          "docs_url": "https://docs.sonarsource.com/sonarqube-server/latest/user-guide/user-account/generating-and-using-tokens/",
+          "required": true
+        }
+      ],
+      "config_options": [
+        {
+          "name": "sonar_url",
+          "display": "SonarQube / SonarCloud URL",
+          "kind": "string",
+          "default": "https://sonarcloud.io",
+          "required": true,
+          "description": "SonarCloud: https://sonarcloud.io. Self-hosted SonarQube Server: your instance URL (e.g. https://sonar.mycompany.com)."
+        },
+        {
+          "name": "sonar_org",
+          "display": "SonarCloud organisation key (SonarCloud only)",
+          "kind": "string",
+          "default": "",
+          "required": false,
+          "description": "Required for SonarCloud. Your organisation key from SonarCloud Settings. Omit for self-hosted SonarQube Server."
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.sonarsource.com/sonarqube-mcp-server/setup/self-hosted/",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Requires Docker installed locally. First run pulls sonarsource/sonarqube-mcp image (may take 1–2 min). Use a User token — project/global/scoped tokens will not work with the MCP server."
     }
   ]
 }

@@ -48,6 +48,7 @@ var expectedRegistryIDs = []string{
 	"bitbucket",
 	"pagerduty",
 	"snyk",
+	"sonar",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -797,6 +798,48 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Sonar(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("sonar")
+	if !ok {
+		t.Fatal("sonar not in registry")
+	}
+	// Stdio transport (Docker).
+	if r.Transport != "" && r.Transport != recipes.TransportStdio {
+		t.Errorf("Transport = %q, want stdio (or empty)", r.Transport)
+	}
+	if len(r.Command) == 0 || r.Command[0] != "docker" {
+		t.Errorf("Command = %v, want docker as first element", r.Command)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["SONARQUBE_TOKEN"] {
+		t.Errorf("EnvKeys = %+v, want SONARQUBE_TOKEN", r.EnvKeys)
+	}
+	// Must have sonar_url config_option.
+	optNames := map[string]bool{}
+	for _, o := range r.ConfigOptions {
+		optNames[o.Name] = true
+	}
+	if !optNames["sonar_url"] {
+		t.Errorf("ConfigOptions = %+v, want sonar_url", r.ConfigOptions)
+	}
+	if r.Category != "security" {
+		t.Errorf("Category = %q, want security", r.Category)
+	}
+	if r.Warning == "" {
+		t.Error("sonar should carry a Warning (Docker required / token type note)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 
