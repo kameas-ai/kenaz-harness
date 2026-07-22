@@ -38,6 +38,7 @@ var expectedRegistryIDs = []string{
 	"composio",
 	"n8n",
 	"workato",
+	"supabase",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -787,5 +788,45 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Supabase(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("supabase")
+	if !ok {
+		t.Fatal("supabase not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.supabase.com/mcp" {
+		t.Errorf("URL = %q, want https://mcp.supabase.com/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// DCR zero-app: no baked client_id.
+	if r.Auth.ClientID != "" {
+		t.Errorf("supabase auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "dev" {
+		t.Errorf("Category = %q, want dev", r.Category)
+	}
+	// PAT fallback env key present but optional.
+	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "SUPABASE_ACCESS_TOKEN" {
+		t.Fatalf("EnvKeys = %+v, want one entry named SUPABASE_ACCESS_TOKEN", r.EnvKeys)
+	}
+	if r.EnvKeys[0].Required {
+		t.Error("SUPABASE_ACCESS_TOKEN should be optional (DCR OAuth is the primary path)")
+	}
+	if r.Warning == "" {
+		t.Error("supabase should carry a Warning (dev/test only, all-or-nothing scopes)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }

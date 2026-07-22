@@ -879,6 +879,41 @@
         "default": false
       },
       "warning": "Workato Enterprise MCP requires an Enterprise plan. Your Workato admin must add you to a user group with MCP access. Each MCP server collection has its own URL — copy the path portion from AI Hub > Enterprise MCP (everything after app.workato.com/)."
+    },
+    {
+      "id": "supabase",
+      "display_name": "Supabase",
+      "description": "Query databases, manage tables, run migrations, and access Supabase projects. Sign in with Supabase (OAuth) — no token to paste. For CI/headless environments, supply a personal access token as a fallback.",
+      "category": "dev",
+      "transport": "http",
+      "url": "https://mcp.supabase.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth"
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [
+        {
+          "name": "SUPABASE_ACCESS_TOKEN",
+          "display": "Supabase personal access token (optional — CI fallback only)",
+          "docs_url": "https://supabase.com/dashboard/account/tokens",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://supabase.com/docs/guides/getting-started/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Supabase MCP is intended for development and testing — do not connect to production databases. Scopes are currently all-or-nothing (write access to all available features)."
     }
   ]
 }
