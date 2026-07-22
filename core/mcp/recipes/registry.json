@@ -976,6 +976,38 @@
         "allowed": false,
         "default": false
       }
+    },
+    {
+      "id": "miro",
+      "display_name": "Miro",
+      "description": "Read and update Miro boards, frames, and sticky notes. Sign in with Miro \u2014 no token to paste.",
+      "category": "design",
+      "transport": "http",
+      "url": "https://mcp.miro.com",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "boards:read",
+          "boards:write"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.miro.com/docs/miro-mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Miro MCP requires a Miro Enterprise plan. An org admin must enable the MCP Server integration before users can connect."
     }
   ]
 }

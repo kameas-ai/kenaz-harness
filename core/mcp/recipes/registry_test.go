@@ -41,6 +41,7 @@ var expectedRegistryIDs = []string{
 	"airtable",
 	"canva",
 	"figma",
+	"miro",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -790,6 +791,38 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Miro(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("miro")
+	if !ok {
+		t.Fatal("miro not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.miro.com" {
+		t.Errorf("URL = %q, want https://mcp.miro.com", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	if r.Auth.ClientID != "" {
+		t.Errorf("miro auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "design" {
+		t.Errorf("Category = %q, want design", r.Category)
+	}
+	if r.Warning == "" {
+		t.Error("miro should carry a Warning (Enterprise plan required)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 
