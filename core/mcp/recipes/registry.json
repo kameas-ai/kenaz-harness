@@ -1587,6 +1587,46 @@
         "default": false
       },
       "warning": "STRETCH: marketo-mcp npm package unconfirmed at planning time (2026-07-21) — verify exact npm package name and availability before installing. Community package (GitHub alexleventer/marketo-mcp, JS/TypeScript). Read-only Marketo API access. Marketo REST API uses client-credentials OAuth internally; no browser OAuth flow."
+    },
+    {
+      "id": "databricks",
+      "display_name": "Databricks",
+      "description": "Query Databricks SQL warehouses and Unity Catalog via community MCP server. Uses Databricks personal access token (PAT) + workspace host. STRETCH: databricks-mcp package is a library component — verify runnable entry point and exact uvx invocation at build.",
+      "category": "data",
+      "command": [
+        "uvx",
+        "databricks-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "DATABRICKS_HOST",
+          "display": "Databricks workspace URL (e.g. https://adb-1234567890.12.azuredatabricks.net)",
+          "docs_url": "https://docs.databricks.com/en/workspace/workspace-details.html",
+          "required": true
+        },
+        {
+          "name": "DATABRICKS_TOKEN",
+          "display": "Databricks personal access token (from User Settings > Developer > Access tokens)",
+          "docs_url": "https://docs.databricks.com/en/dev-tools/auth/pat.html",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://pypi.org/project/databricks-mcp/",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "STRETCH: databricks-mcp v0.9.0 (Databricks-affiliated, PyPI) may be a library component rather than a directly runnable MCP server — verify uvx entry point and exact CLI invocation at build. If not uvx-runnable, use Databricks SQL Connector via generic SQL tool or defer. Read/query only — no cluster management or admin writes."
     }
   ]
 }

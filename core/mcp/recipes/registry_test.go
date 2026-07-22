@@ -54,6 +54,7 @@ var expectedRegistryIDs = []string{
 	"mailchimp",
 	"braze",
 	"marketo",
+	"databricks",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -1367,6 +1368,43 @@ func TestRecipe_Marketo(t *testing.T) {
 	}
 	if r.Warning == "" {
 		t.Error("marketo should carry a Warning (stretch: package unconfirmed)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+func TestRecipe_Databricks(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("databricks")
+	if !ok {
+		t.Fatal("databricks not in registry")
+	}
+	if len(r.Command) == 0 || r.Command[0] != "uvx" {
+		t.Errorf("Command[0] = %q, want uvx", r.Command[0])
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for Databricks (PAT auth), got %+v", r.Auth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["DATABRICKS_HOST"] {
+		t.Errorf("EnvKeys = %+v, want DATABRICKS_HOST", r.EnvKeys)
+	}
+	if !envNames["DATABRICKS_TOKEN"] {
+		t.Errorf("EnvKeys = %+v, want DATABRICKS_TOKEN", r.EnvKeys)
+	}
+	if r.Category != "data" {
+		t.Errorf("Category = %q, want data", r.Category)
+	}
+	// Must have stretch warning about package verification.
+	if r.Warning == "" {
+		t.Error("databricks should carry a Warning (stretch: verify runnable entry point)")
 	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)
