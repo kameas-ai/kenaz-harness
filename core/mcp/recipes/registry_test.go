@@ -38,6 +38,8 @@ var expectedRegistryIDs = []string{
 	"composio",
 	"n8n",
 	"workato",
+	// Observability & CI pack (01NCONN07)
+	"grafana",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -787,5 +789,40 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Grafana(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("grafana")
+	if !ok {
+		t.Fatal("grafana not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.grafana.com/mcp" {
+		t.Errorf("URL = %q, want https://mcp.grafana.com/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	if r.Auth.ClientID != "" {
+		t.Errorf("grafana auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	if len(r.Auth.Scopes) == 0 {
+		t.Error("grafana Auth.Scopes should list requested scopes")
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "observability" {
+		t.Errorf("Category = %q, want observability", r.Category)
+	}
+	if r.Warning == "" {
+		t.Error("grafana should carry a Warning (Grafana Cloud only)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
