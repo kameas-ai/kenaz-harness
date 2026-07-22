@@ -987,6 +987,34 @@
         "allowed": false,
         "default": false
       }
+    },
+    {
+      "id": "circleci",
+      "display_name": "CircleCI",
+      "description": "Query CircleCI pipelines, workflows, jobs, and build artifacts. Sign in with your CircleCI account — no token to paste.",
+      "category": "developer",
+      "transport": "http",
+      "url": "https://mcp.circleci.com",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": ["read:pipeline", "read:workflow", "read:job"]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://circleci.com/docs/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
     }
   ]
 }
