@@ -41,6 +41,7 @@ var expectedRegistryIDs = []string{
 	"supabase",
 	"gitlab",
 	"google-maps",
+	"mysql",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -790,6 +791,53 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_MySQL(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("mysql")
+	if !ok {
+		t.Fatal("mysql not in registry")
+	}
+	if r.Transport != "" && r.Transport != recipes.TransportStdio {
+		t.Errorf("Transport = %q, want stdio (empty)", r.Transport)
+	}
+	if len(r.Command) == 0 || r.Command[0] != "npx" {
+		t.Errorf("Command = %v, want npx-based command", r.Command)
+	}
+	if r.Category != "filesystem" {
+		t.Errorf("Category = %q, want filesystem", r.Category)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	for _, required := range []string{"MYSQL_HOST", "MYSQL_USER", "MYSQL_PASS", "MYSQL_DB"} {
+		if !envNames[required] {
+			t.Errorf("EnvKeys missing required key %q", required)
+		}
+	}
+	if !envNames["MYSQL_PORT"] {
+		t.Error("EnvKeys missing optional MYSQL_PORT")
+	}
+	if !envNames["ALLOW_INSERT_OPERATION"] || !envNames["ALLOW_UPDATE_OPERATION"] || !envNames["ALLOW_DELETE_OPERATION"] {
+		t.Error("EnvKeys missing write-enable optional flags (ALLOW_INSERT/UPDATE/DELETE_OPERATION)")
+	}
+	// Write flags must be optional.
+	for _, e := range r.EnvKeys {
+		if (e.Name == "ALLOW_INSERT_OPERATION" || e.Name == "ALLOW_UPDATE_OPERATION" || e.Name == "ALLOW_DELETE_OPERATION") && e.Required {
+			t.Errorf("env key %q should be optional (write flag)", e.Name)
+		}
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	if r.Warning == "" {
+		t.Error("mysql should carry a Warning (community server, write ops disabled by default)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 

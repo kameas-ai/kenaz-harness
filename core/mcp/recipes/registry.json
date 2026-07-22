@@ -981,6 +981,79 @@
       },
       "warning": "npm fetch on first run can take 5–15 s. Enable the Geocoding API, Directions API, Places API, and Distance Matrix API in your Google Cloud project.",
       "primary_auth": "keys"
+    },
+    {
+      "id": "mysql",
+      "display_name": "MySQL",
+      "description": "Query a MySQL database: list tables, describe schemas, and run read queries. Write operations (INSERT/UPDATE/DELETE) are disabled by default and can be enabled via optional env vars.",
+      "category": "filesystem",
+      "command": ["npx", "-y", "@benborla29/mcp-server-mysql"],
+      "env_keys": [
+        {
+          "name": "MYSQL_HOST",
+          "display": "MySQL host (e.g. 127.0.0.1 or mydb.example.com)",
+          "docs_url": "https://github.com/benborla/mcp-server-mysql",
+          "required": true
+        },
+        {
+          "name": "MYSQL_PORT",
+          "display": "MySQL port (default 3306)",
+          "docs_url": "https://github.com/benborla/mcp-server-mysql",
+          "required": false
+        },
+        {
+          "name": "MYSQL_USER",
+          "display": "MySQL username",
+          "docs_url": "https://github.com/benborla/mcp-server-mysql",
+          "required": true
+        },
+        {
+          "name": "MYSQL_PASS",
+          "display": "MySQL password",
+          "docs_url": "https://github.com/benborla/mcp-server-mysql",
+          "required": true
+        },
+        {
+          "name": "MYSQL_DB",
+          "display": "MySQL database name",
+          "docs_url": "https://github.com/benborla/mcp-server-mysql",
+          "required": true
+        },
+        {
+          "name": "ALLOW_INSERT_OPERATION",
+          "display": "Allow INSERT operations — set to 'true' to enable (use with caution)",
+          "docs_url": "https://github.com/benborla/mcp-server-mysql",
+          "required": false
+        },
+        {
+          "name": "ALLOW_UPDATE_OPERATION",
+          "display": "Allow UPDATE operations — set to 'true' to enable (use with caution)",
+          "docs_url": "https://github.com/benborla/mcp-server-mysql",
+          "required": false
+        },
+        {
+          "name": "ALLOW_DELETE_OPERATION",
+          "display": "Allow DELETE operations — set to 'true' to enable (use with extreme caution)",
+          "docs_url": "https://github.com/benborla/mcp-server-mysql",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/benborla/mcp-server-mysql",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "npm fetch on first run can take 5–15 s. This is a community server — not an official MySQL/Anthropic package. Write operations are disabled by default; enable only for trusted databases.",
+      "primary_auth": "keys"
     }
   ]
 }
