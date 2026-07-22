@@ -1149,6 +1149,55 @@
         "default": false
       },
       "warning": "Installs directly from official Fivetran GitHub repo (not PyPI fivetran-mcp — that is a different community package). Read-only by default; FIVETRAN_ALLOW_WRITES=true enables writes (not set). First run clones and installs the package (may take 30–60 s). Requires uv installed."
+    },
+    {
+      "id": "redshift",
+      "display_name": "Amazon Redshift",
+      "description": "Query Amazon Redshift data warehouse via the official AWS Labs MCP server. Read-only access using AWS IAM credentials (profile or environment credentials). Supports cluster and Serverless endpoints.",
+      "category": "data",
+      "command": [
+        "uvx",
+        "awslabs.amazon-redshift-mcp-server@latest"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "AWS_PROFILE",
+          "display": "AWS profile name (from ~/.aws/credentials; use 'default' if unsure)",
+          "docs_url": "https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-profiles.html",
+          "required": false
+        },
+        {
+          "name": "AWS_REGION",
+          "display": "AWS region (e.g. us-east-1)",
+          "docs_url": "https://docs.aws.amazon.com/general/latest/gr/rande.html",
+          "required": true
+        }
+      ],
+      "config_options": [
+        {
+          "name": "cluster_identifier",
+          "display": "Redshift cluster identifier (for provisioned cluster; omit for Serverless)",
+          "kind": "string",
+          "default": "",
+          "required": false,
+          "description": "Provisioned cluster identifier. Leave empty for Redshift Serverless (uses workgroup instead)."
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/awslabs/mcp/tree/main/src/amazon-redshift-mcp-server",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Requires uv installed. AWS IAM credentials must be configured (aws configure or environment variables). Package name: awslabs.amazon-redshift-mcp-server — verify at build. Read-only access via IAM permissions; use least-privilege IAM policy."
     }
   ]
 }

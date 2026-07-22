@@ -45,6 +45,7 @@ var expectedRegistryIDs = []string{
 	"dbt-cloud",
 	"tableau",
 	"fivetran",
+	"redshift",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -1021,6 +1022,36 @@ func TestRecipe_Fivetran(t *testing.T) {
 	}
 	if r.Warning == "" {
 		t.Error("fivetran should carry a Warning (git install, read-only note)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+func TestRecipe_Redshift(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("redshift")
+	if !ok {
+		t.Fatal("redshift not in registry")
+	}
+	if len(r.Command) == 0 || r.Command[0] != "uvx" {
+		t.Errorf("Command[0] = %q, want uvx", r.Command[0])
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for Redshift (IAM auth), got %+v", r.Auth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["AWS_REGION"] {
+		t.Errorf("EnvKeys = %+v, want AWS_REGION", r.EnvKeys)
+	}
+	if r.Category != "data" {
+		t.Errorf("Category = %q, want data", r.Category)
 	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)
