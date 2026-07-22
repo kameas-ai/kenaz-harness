@@ -859,3 +859,55 @@ func TestRecipe_Mercury(t *testing.T) {
 		t.Errorf("Validate() error: %v", err)
 	}
 }
+
+func TestRecipe_Ramp(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("ramp")
+	if !ok {
+		t.Fatal("ramp not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.ramp.com/mcp" {
+		t.Errorf("URL = %q, want https://mcp.ramp.com/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// DCR zero-app: no pre-registered client_id.
+	if r.Auth.ClientID != "" {
+		t.Errorf("ramp auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "finance_accounting" {
+		t.Errorf("Category = %q, want finance_accounting", r.Category)
+	}
+	// FR-003: CRITICAL — enumerate every forbidden write/money-movement scope.
+	forbiddenRampScopes := []string{
+		"bank_accounts:write",
+		"banking_drawdown_requests:write",
+		"transactions:write",
+		"limits:write",
+		"x402:write",
+		"trips:write",
+	}
+	presentScopes := map[string]bool{}
+	for _, s := range r.Auth.Scopes {
+		presentScopes[s] = true
+	}
+	for _, forbidden := range forbiddenRampScopes {
+		if presentScopes[forbidden] {
+			t.Errorf("ramp Auth.Scopes must not include write/money-movement scope %q", forbidden)
+		}
+	}
+	// Finance safety copy.
+	if !strings.Contains(r.Description, "read-only") {
+		t.Error("ramp description must include read-only safety copy")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}

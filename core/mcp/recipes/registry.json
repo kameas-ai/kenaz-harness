@@ -910,6 +910,56 @@
         "allowed": false,
         "default": false
       }
+    },
+    {
+      "id": "ramp",
+      "display_name": "Ramp",
+      "description": "Browse Ramp cards, spend data, vendors, bills, and corporate travel — read-only, no transactions initiated. Sign in with Ramp (DCR OAuth — no token to paste).",
+      "category": "finance_accounting",
+      "transport": "http",
+      "url": "https://mcp.ramp.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "bills:read",
+          "cards:read",
+          "departments:read",
+          "entities:read",
+          "memos:read",
+          "spend_programs:read",
+          "vendors:read",
+          "cards:read_agentic",
+          "trips:read",
+          "spend_requests:read",
+          "agent_account_numbers:read"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [
+        {
+          "name": "environment",
+          "display": "Ramp environment",
+          "kind": "enum",
+          "default": "production",
+          "required": false,
+          "description": "Use 'demo' to connect to Ramp's sandbox environment (https://demo-mcp.ramp.com/mcp). Use 'production' for live data.",
+          "choices": ["production", "demo"]
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.ramp.com/developer-guide/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
     }
   ]
 }
