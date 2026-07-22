@@ -936,17 +936,7 @@
       },
       "primary_auth": "browser_oauth_dcr",
       "env_keys": [],
-      "config_options": [
-        {
-          "name": "environment",
-          "display": "Ramp environment",
-          "kind": "enum",
-          "default": "production",
-          "required": false,
-          "description": "Use 'demo' to connect to Ramp's sandbox environment (https://demo-mcp.ramp.com/mcp). Use 'production' for live data.",
-          "choices": ["production", "demo"]
-        }
-      ],
+      "config_options": [],
       "capabilities": {
         "tools": true,
         "resources": false,
