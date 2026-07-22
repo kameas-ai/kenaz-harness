@@ -43,6 +43,7 @@ var expectedRegistryIDs = []string{
 	"figma",
 	"miro",
 	"dropbox",
+	"paypal",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -792,6 +793,39 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_PayPal(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("paypal")
+	if !ok {
+		t.Fatal("paypal not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.paypal.com" {
+		t.Errorf("URL = %q, want https://mcp.paypal.com", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	if r.Auth.ClientID != "" {
+		t.Errorf("paypal auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "finance" {
+		t.Errorf("Category = %q, want finance", r.Category)
+	}
+	// FR-003: read/query-only enforcement documented in Warning field.
+	if r.Warning == "" {
+		t.Error("paypal should carry a Warning (read/query only constraint)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 

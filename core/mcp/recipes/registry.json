@@ -1041,6 +1041,34 @@
         "allowed": false,
         "default": false
       }
+    },
+    {
+      "id": "paypal",
+      "display_name": "PayPal",
+      "description": "Query PayPal transactions, orders, and account balance. Read/query only \u2014 no payment initiation. Sign in with PayPal \u2014 no token to paste.",
+      "category": "finance",
+      "transport": "http",
+      "url": "https://mcp.paypal.com",
+      "auth": {
+        "kind": "mcp_oauth"
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.paypal.com/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "This recipe exposes read and query tools only. No payment-initiation or money-movement tools are enabled."
     }
   ]
 }
