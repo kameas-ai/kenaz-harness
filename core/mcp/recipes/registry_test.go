@@ -49,6 +49,7 @@ var expectedRegistryIDs = []string{
 	"hubspot",
 	"box",
 	"salesforce",
+	"plaid",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -798,6 +799,44 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Plaid(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("plaid")
+	if !ok {
+		t.Fatal("plaid not in registry")
+	}
+	// Stdio recipe — no official Plaid remote MCP server confirmed at research time.
+	if r.Transport != "" && r.Transport != "stdio" {
+		t.Errorf("Transport = %q, want stdio (no official Plaid remote MCP server)", r.Transport)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for Plaid (API-key auth, no OAuth flow), got %+v", r.Auth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["PLAID_CLIENT_ID"] {
+		t.Errorf("EnvKeys = %+v, want PLAID_CLIENT_ID", r.EnvKeys)
+	}
+	if !envNames["PLAID_SECRET"] {
+		t.Errorf("EnvKeys = %+v, want PLAID_SECRET", r.EnvKeys)
+	}
+	if r.Category != "finance" {
+		t.Errorf("Category = %q, want finance", r.Category)
+	}
+	// FR-003: Warning must document read-only constraint.
+	if r.Warning == "" {
+		t.Error("plaid should carry a Warning (read/query only + pending package verification)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 

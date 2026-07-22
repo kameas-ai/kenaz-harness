@@ -1224,6 +1224,53 @@
         "allowed": false,
         "default": false
       }
+    },
+    {
+      "id": "plaid",
+      "display_name": "Plaid",
+      "description": "Query Plaid-linked bank accounts, transactions, and balances. Read/query only \u2014 no payment initiation. Requires Plaid API credentials.",
+      "category": "finance",
+      "command": [
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-plaid"
+      ],
+      "env_keys": [
+        {
+          "name": "PLAID_CLIENT_ID",
+          "display": "Plaid client ID",
+          "docs_url": "https://dashboard.plaid.com/team/keys",
+          "required": true
+        },
+        {
+          "name": "PLAID_SECRET",
+          "display": "Plaid secret",
+          "docs_url": "https://dashboard.plaid.com/team/keys",
+          "required": true
+        },
+        {
+          "name": "PLAID_ENV",
+          "display": "Plaid environment (sandbox or production)",
+          "docs_url": "https://plaid.com/docs/api/",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://plaid.com/docs/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "primary_auth": "keys",
+      "warning": "Read and query only \u2014 no payment-initiation or Link-flow tools are enabled. Verify at build: confirm the npx package name for the Plaid MCP server \u2014 no official Plaid MCP server was confirmed at research time."
     }
   ]
 }
