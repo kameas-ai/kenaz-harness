@@ -51,6 +51,7 @@ var expectedRegistryIDs = []string{
 	"salesforce",
 	"plaid",
 	"bigcommerce-docs",
+	"shopify",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -800,6 +801,36 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Shopify(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("shopify")
+	if !ok {
+		t.Fatal("shopify not in registry")
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for Shopify (API-key auth), got %+v", r.Auth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["SHOPIFY_STORE_URL"] {
+		t.Errorf("EnvKeys = %+v, want SHOPIFY_STORE_URL", r.EnvKeys)
+	}
+	if !envNames["SHOPIFY_ACCESS_TOKEN"] {
+		t.Errorf("EnvKeys = %+v, want SHOPIFY_ACCESS_TOKEN", r.EnvKeys)
+	}
+	if r.Category != "ecommerce" {
+		t.Errorf("Category = %q, want ecommerce", r.Category)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 

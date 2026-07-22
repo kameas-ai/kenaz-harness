@@ -1299,6 +1299,47 @@
         "default": false
       },
       "warning": "This connector provides read-only access to BigCommerce developer documentation only \u2014 not to store data."
+    },
+    {
+      "id": "shopify",
+      "display_name": "Shopify",
+      "description": "Query and manage Shopify store products, orders, customers, and inventory. Requires a Shopify store Admin API access token.",
+      "category": "ecommerce",
+      "command": [
+        "npx",
+        "-y",
+        "@shopify/dev-mcp@latest"
+      ],
+      "env_keys": [
+        {
+          "name": "SHOPIFY_STORE_URL",
+          "display": "Shopify store URL (e.g. mystore.myshopify.com)",
+          "docs_url": "https://shopify.dev/docs/apps/build/authentication-and-authorization",
+          "required": true
+        },
+        {
+          "name": "SHOPIFY_ACCESS_TOKEN",
+          "display": "Shopify Admin API access token",
+          "docs_url": "https://shopify.dev/docs/apps/build/authentication-and-authorization/access-tokens",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://shopify.dev/docs/apps/build/authentication-and-authorization",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "primary_auth": "keys",
+      "warning": "Verify at build: confirm whether this Shopify MCP server exposes store data (products, orders, customers) or only developer-tooling docs. If store-data access is required, substitute a community store-data MCP package."
     }
   ]
 }
