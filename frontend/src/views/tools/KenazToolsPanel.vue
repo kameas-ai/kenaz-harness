@@ -369,6 +369,8 @@ function categoryIcon(category: RecipeCategory) {
       return Search;
     case 'filesystem':
       return Folder;
+    case 'files':
+      return FolderOpen;
     case 'memory':
       return Brain;
     case 'fetch':

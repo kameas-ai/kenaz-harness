@@ -1063,12 +1063,15 @@ interface WireRecipeListing {
 const KNOWN_CATEGORIES: readonly RecipeCategory[] = [
   'search',
   'filesystem',
+  'files',
   'memory',
   'fetch',
   'productivity',
   'developer',
   'finance',
   'communication',
+  'deployment',
+  'automation',
   'other',
 ];
 
