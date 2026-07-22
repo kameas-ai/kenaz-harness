@@ -959,6 +959,34 @@
         "default": false
       },
       "warning": "GovCloud sites (ddog-gov.com) not supported. Rate limit: 50 req/10 s, 50 k calls/month."
+    },
+    {
+      "id": "new-relic",
+      "display_name": "New Relic",
+      "description": "Query New Relic observability data including APM, infrastructure, logs, and alerts. Sign in with your New Relic account — no token to paste.",
+      "category": "observability",
+      "transport": "http",
+      "url": "https://mcp.newrelic.com/mcp/",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": ["openid", "profile", "email"]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.newrelic.com/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
     }
   ]
 }
