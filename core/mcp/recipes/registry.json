@@ -1352,6 +1352,53 @@
         "default": false
       },
       "warning": "Owner must register a Kameas Rippling OAuth2 app at developer.rippling.com before use. Note: Rippling supports PKCE S256 but no DCR — a Kameas app is required. Scopes are defined at app-registration time; request minimal read-only scopes (employees, groups, org). Verify best npm MCP package for Rippling at build — 'rippling-mcp-server' is a placeholder. Auth endpoints: authorize=https://app.rippling.com/oauth token=https://api.rippling.com/o/token/. No payroll-run tools."
+    },
+    {
+      "id": "billdotcom",
+      "display_name": "Bill.com",
+      "description": "Read bills, invoices, and vendor data from Bill.com — read-only, no transactions initiated, no payment-initiation tools. Uses Bill.com Spend and Expense bearer token or legacy session-key auth.",
+      "category": "finance_accounting",
+      "command": [
+        "npx",
+        "-y",
+        "billdotcom-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "BILLDOTCOM_API_TOKEN",
+          "display": "Bill.com API token (preferred — from the Bill.com developer dashboard Spend & Expense API)",
+          "docs_url": "https://developer.bill.com/docs/authentication",
+          "required": false
+        },
+        {
+          "name": "BILLDOTCOM_DEV_KEY",
+          "display": "Bill.com developer key (legacy session auth — for the v3 API)",
+          "docs_url": "https://developer.bill.com/docs/authentication",
+          "required": false
+        },
+        {
+          "name": "BILLDOTCOM_ORG_ID",
+          "display": "Bill.com organization ID (legacy session auth — for the v3 API)",
+          "docs_url": "https://developer.bill.com/docs/authentication",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.bill.com/docs/authentication",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Prefer the Spend and Expense bearer token path (BILLDOTCOM_API_TOKEN) over session-key auth to avoid session expiry complexity. Verify best npm MCP package for Bill.com at build — 'billdotcom-mcp' is a placeholder; no confirmed package found at research time. Legacy v3 session auth requires BILLDOTCOM_DEV_KEY + BILLDOTCOM_ORG_ID (sessions expire after 35 min inactivity). No payment-initiation tools."
     }
   ]
 }

@@ -1279,3 +1279,31 @@ func TestRecipe_Rippling(t *testing.T) {
 		t.Errorf("Validate() error: %v", err)
 	}
 }
+
+func TestRecipe_BillDotCom(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("billdotcom")
+	if !ok {
+		t.Fatal("billdotcom not in registry")
+	}
+	if r.Category != "finance_accounting" {
+		t.Errorf("Category = %q, want finance_accounting", r.Category)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	// Finance safety copy.
+	if !strings.Contains(r.Description, "read-only") {
+		t.Error("billdotcom description must include read-only safety copy")
+	}
+	// No payment-initiation in description.
+	if strings.Contains(strings.ToLower(r.Description), "payment-initiation") {
+		t.Error("billdotcom description should not surface payment-initiation (these tools are excluded)")
+	}
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for Bill.com (API key/token auth), got %+v", r.Auth)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
