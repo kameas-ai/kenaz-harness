@@ -920,6 +920,53 @@
         "default": false
       },
       "warning": "One-time setup required: create or reuse a Google Cloud OAuth client (Desktop app type), save gcp-oauth.keys.json and set GOOGLE_OAUTH_CREDENTIALS path, then complete browser sign-in when prompted. Tokens expire weekly in Google test-mode; completing Google app verification removes this limit. If you already set up Gmail, reuse the same gcp-oauth.keys.json — just re-authorize to include Calendar scopes. First npm fetch can take 10–20 s."
+    },
+    {
+      "id": "google-drive",
+      "display_name": "Google Drive",
+      "description": "Search, read, and create files in Google Drive. Uses drive.file scope (access limited to files created by this app) — upgrade to full drive.readonly access requires Google security review (CASA). Requires one-time Google sign-in (reuses same Google Cloud OAuth client as Gmail and Calendar).",
+      "category": "filesystem",
+      "command": [
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-gdrive"
+      ],
+      "primary_auth": "oauth",
+      "env_keys": [
+        {
+          "name": "GDRIVE_OAUTH_PATH",
+          "display": "Path to Google OAuth keys file (gcp-oauth.keys.json)",
+          "docs_url": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/gdrive",
+          "required": false
+        },
+        {
+          "name": "GDRIVE_CREDENTIALS_PATH",
+          "display": "Path to saved Drive credentials file (auto-created on first sign-in)",
+          "docs_url": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/gdrive",
+          "required": false
+        },
+        {
+          "name": "KAMEAS_GOOGLE_OAUTH_CLIENT_ID",
+          "display": "Kameas Google OAuth client ID (provided — no action needed when using built-in install flow)",
+          "docs_url": "",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/gdrive",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "One-time Google OAuth setup required: create or reuse a Google Cloud OAuth client (Desktop app type), save gcp-oauth.keys.json and set GDRIVE_OAUTH_PATH to its location. On first run the server opens a browser sign-in to authorize access; credentials are cached at GDRIVE_CREDENTIALS_PATH. Current scope is drive.file (app-created files only); upgrade to drive.readonly requires Google OAuth app verification + annual CASA third-party security assessment. If you already set up Gmail or Calendar, reuse the same gcp-oauth.keys.json. First npm fetch can take 10–20 s."
     }
   ]
 }

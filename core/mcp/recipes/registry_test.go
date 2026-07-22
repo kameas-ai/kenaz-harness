@@ -39,6 +39,7 @@ var expectedRegistryIDs = []string{
 	"n8n",
 	"workato",
 	"google-calendar", // WP01
+	"google-drive",    // WP02
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -828,6 +829,49 @@ func TestRegistryGoogleCalendarRecipe(t *testing.T) {
 	}
 	if !foundPlaceholder {
 		t.Error("google-calendar missing KAMEAS_GOOGLE_OAUTH_CLIENT_ID env_key placeholder seam")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+func TestRegistryGoogleDriveRecipe(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("google-drive")
+	if !ok {
+		t.Fatal("google-drive not in registry")
+	}
+	if r.Category != "filesystem" {
+		t.Errorf("Category = %q, want filesystem", r.Category)
+	}
+	// stdio recipe — no transport field (empty string = stdio)
+	if r.Transport != "" {
+		t.Errorf("Transport = %q, want empty (stdio)", r.Transport)
+	}
+	if len(r.Command) == 0 || r.Command[0] == "" {
+		t.Error("Command must be non-empty")
+	}
+	if r.Command[0] != "npx" {
+		t.Errorf("Command[0] = %q, want npx", r.Command[0])
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthOAuth {
+		t.Errorf("PrimaryAuth = %q, want oauth", r.PrimaryAuth)
+	}
+	if r.Warning == "" {
+		t.Error("google-drive should carry a Warning (OAuth setup, scope limitation, CASA upgrade path)")
+	}
+	// Must carry KAMEAS_GOOGLE_OAUTH_CLIENT_ID env key as placeholder seam (not required).
+	foundPlaceholder := false
+	for _, k := range r.EnvKeys {
+		if k.Name == "KAMEAS_GOOGLE_OAUTH_CLIENT_ID" {
+			foundPlaceholder = true
+			if k.Required {
+				t.Error("KAMEAS_GOOGLE_OAUTH_CLIENT_ID should not be required (Kameas-provided; guided-setup path)")
+			}
+		}
+	}
+	if !foundPlaceholder {
+		t.Error("google-drive missing KAMEAS_GOOGLE_OAUTH_CLIENT_ID env_key placeholder seam")
 	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)
