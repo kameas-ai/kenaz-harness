@@ -1143,6 +1143,44 @@
         "allowed": false,
         "default": false
       }
+    },
+    {
+      "id": "box",
+      "display_name": "Box",
+      "description": "Browse, search, and read files and folders stored in Box. Sign in with Box.",
+      "category": "files",
+      "transport": "http",
+      "url": "https://mcp.box.com",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_BOX_OAUTH_CLIENT_ID}",
+        "scopes": [
+          "root_readwrite"
+        ]
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_BOX_OAUTH_CLIENT_ID",
+          "display": "Box OAuth client ID (Kameas managed \u2014 from Box Admin Console)",
+          "docs_url": "https://developer.box.com/guides/box-mcp/remote/",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.box.com/guides/box-mcp/remote/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
     }
   ]
 }

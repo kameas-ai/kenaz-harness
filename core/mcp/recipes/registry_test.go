@@ -47,6 +47,7 @@ var expectedRegistryIDs = []string{
 	"paypal",
 	"square",
 	"hubspot",
+	"box",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -796,6 +797,42 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Box(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("box")
+	if !ok {
+		t.Fatal("box not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.box.com" {
+		t.Errorf("URL = %q, want https://mcp.box.com", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// Owner-app: placeholder seam — no DCR.
+	if r.Auth.ClientID != "${KAMEAS_BOX_OAUTH_CLIENT_ID}" {
+		t.Errorf("box auth.client_id = %q, want ${KAMEAS_BOX_OAUTH_CLIENT_ID} placeholder", r.Auth.ClientID)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthPKCE {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_pkce", r.PrimaryAuth)
+	}
+	if r.Category != "files" {
+		t.Errorf("Category = %q, want files", r.Category)
+	}
+	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "KAMEAS_BOX_OAUTH_CLIENT_ID" {
+		t.Errorf("EnvKeys = %+v, want one entry named KAMEAS_BOX_OAUTH_CLIENT_ID", r.EnvKeys)
+	}
+	if !r.EnvKeys[0].Required {
+		t.Error("KAMEAS_BOX_OAUTH_CLIENT_ID should be required (no DCR — needs Box Admin Console app)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 
