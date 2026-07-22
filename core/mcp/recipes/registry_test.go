@@ -43,6 +43,7 @@ var expectedRegistryIDs = []string{
 	"datadog",
 	"new-relic",
 	"circleci",
+	"netlify",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -792,6 +793,41 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Netlify(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("netlify")
+	if !ok {
+		t.Fatal("netlify not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://netlify-mcp.netlify.app/mcp" {
+		t.Errorf("URL = %q, want https://netlify-mcp.netlify.app/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	if r.Auth.ClientID != "" {
+		t.Errorf("netlify auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	if len(r.Auth.Scopes) == 0 {
+		t.Error("netlify Auth.Scopes should list requested scopes")
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "developer" {
+		t.Errorf("Category = %q, want developer", r.Category)
+	}
+	if r.Warning == "" {
+		t.Error("netlify should carry a Warning (hosting note)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 

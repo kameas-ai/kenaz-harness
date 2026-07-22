@@ -1015,6 +1015,35 @@
         "allowed": false,
         "default": false
       }
+    },
+    {
+      "id": "netlify",
+      "display_name": "Netlify",
+      "description": "Manage Netlify sites, deploys, environment variables, and domain configuration. Sign in with your Netlify account — no token to paste.",
+      "category": "developer",
+      "transport": "http",
+      "url": "https://netlify-mcp.netlify.app/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": ["read", "write", "offline_access"]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.netlify.com/build/build-with-ai/agent-setup-guides/set-up-claude-code-for-netlify/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Netlify MCP server is hosted at netlify-mcp.netlify.app. Stdio alternative available via 'npx -y @netlify/mcp' for offline use."
     }
   ]
 }
