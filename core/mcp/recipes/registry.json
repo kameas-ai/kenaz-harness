@@ -1422,6 +1422,69 @@
       },
       "primary_auth": "keys",
       "warning": "Verify at build: confirm the npx package name for the Pipedrive MCP server \u2014 no official Pipedrive remote MCP server was confirmed at research time."
+    },
+    {
+      "id": "zoho-crm",
+      "display_name": "Zoho CRM",
+      "description": "Search and update Zoho CRM leads, contacts, accounts, and deals. Requires Zoho OAuth credentials.",
+      "category": "crm",
+      "command": [
+        "npx",
+        "-y",
+        "@zoho/crm-mcp-server@latest"
+      ],
+      "env_keys": [
+        {
+          "name": "ZOHO_CLIENT_ID",
+          "display": "Zoho OAuth client ID",
+          "docs_url": "https://api-console.zoho.com/",
+          "required": true
+        },
+        {
+          "name": "ZOHO_CLIENT_SECRET",
+          "display": "Zoho OAuth client secret",
+          "docs_url": "https://api-console.zoho.com/",
+          "required": true
+        },
+        {
+          "name": "ZOHO_REFRESH_TOKEN",
+          "display": "Zoho OAuth refresh token",
+          "docs_url": "https://www.zoho.com/crm/developer/docs/api/v7/oauth-overview.html",
+          "required": true
+        }
+      ],
+      "config_options": [
+        {
+          "name": "region",
+          "display": "Zoho data center region",
+          "kind": "enum",
+          "choices": [
+            "com",
+            "eu",
+            "in",
+            "com.au",
+            "jp"
+          ],
+          "default": "com",
+          "required": false,
+          "description": "Your Zoho account's data center region (e.g. 'eu' for zoho.eu accounts)."
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://www.zoho.com/crm/developer/docs/api/v7/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "primary_auth": "keys",
+      "warning": "Verify at build: confirm the npx package name for the Zoho CRM MCP server \u2014 no official Zoho CRM remote MCP server was confirmed at research time."
     }
   ]
 }

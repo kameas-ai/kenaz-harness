@@ -54,6 +54,7 @@ var expectedRegistryIDs = []string{
 	"shopify",
 	"woocommerce",
 	"pipedrive",
+	"zoho-crm",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -803,6 +804,42 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_ZohoCRM(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("zoho-crm")
+	if !ok {
+		t.Fatal("zoho-crm not in registry")
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for Zoho CRM (OAuth refresh token via env, no harness OAuth flow), got %+v", r.Auth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["ZOHO_CLIENT_ID"] {
+		t.Errorf("EnvKeys = %+v, want ZOHO_CLIENT_ID", r.EnvKeys)
+	}
+	if !envNames["ZOHO_CLIENT_SECRET"] {
+		t.Errorf("EnvKeys = %+v, want ZOHO_CLIENT_SECRET", r.EnvKeys)
+	}
+	if !envNames["ZOHO_REFRESH_TOKEN"] {
+		t.Errorf("EnvKeys = %+v, want ZOHO_REFRESH_TOKEN", r.EnvKeys)
+	}
+	if len(r.ConfigOptions) == 0 || r.ConfigOptions[0].Name != "region" {
+		t.Errorf("ConfigOptions = %+v, want one entry named region", r.ConfigOptions)
+	}
+	if r.Category != "crm" {
+		t.Errorf("Category = %q, want crm", r.Category)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 
