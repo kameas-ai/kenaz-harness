@@ -1338,3 +1338,34 @@ func TestRecipe_NetSuite(t *testing.T) {
 		t.Errorf("Validate() error: %v", err)
 	}
 }
+
+func TestRecipe_Workday(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("workday")
+	if !ok {
+		t.Fatal("workday not in registry")
+	}
+	if r.Category != "hr_people" {
+		t.Errorf("Category = %q, want hr_people", r.Category)
+	}
+	// Must have workday_tenant_url config option (per-tenant URL required).
+	hasTenantURL := false
+	for _, opt := range r.ConfigOptions {
+		if opt.Name == "workday_tenant_url" {
+			hasTenantURL = true
+			if !opt.Required {
+				t.Error("workday_tenant_url config option should be required")
+			}
+		}
+	}
+	if !hasTenantURL {
+		t.Error("workday should have workday_tenant_url config option")
+	}
+	// Description should reference enterprise/iPaaS alternative.
+	if !strings.Contains(strings.ToLower(r.Description), "enterprise") {
+		t.Error("workday description should note enterprise setup requirement")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}

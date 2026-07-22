@@ -1467,6 +1467,56 @@
         "default": false
       },
       "warning": "Enterprise — requires NetSuite TBA setup by a NetSuite administrator. No confirmed community MCP package at research time; 'netsuite-mcp' is a placeholder — verify at build. For quick access, connect via Zapier or Workato in the Automation section instead. TBA requires 4 tokens: consumer_key, consumer_secret, token_id, token_secret — all per-account."
+    },
+    {
+      "id": "workday",
+      "display_name": "Workday (Enterprise)",
+      "description": "Enterprise — Workday uses tenant-specific URLs and ISU (Integration System User) or OAuth2 client credentials, both requiring per-tenant setup by a Workday administrator. No confirmed community MCP package as of July 2026. For quick access to Workday HR data, connect via Zapier or Workato in the Automation section.",
+      "category": "hr_people",
+      "command": [
+        "npx",
+        "-y",
+        "workday-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "WORKDAY_ISU_USERNAME",
+          "display": "Workday ISU username (Integration System User — from your Workday tenant)",
+          "docs_url": "https://developer.workday.com",
+          "required": false
+        },
+        {
+          "name": "WORKDAY_ISU_PASSWORD",
+          "display": "Workday ISU password (from your Workday tenant)",
+          "docs_url": "https://developer.workday.com",
+          "required": false
+        }
+      ],
+      "config_options": [
+        {
+          "name": "workday_tenant_url",
+          "display": "Workday tenant URL",
+          "kind": "string",
+          "default": "",
+          "required": true,
+          "description": "Your Workday tenant URL — e.g. https://acmecorp.workday.com (from your Workday admin)"
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.workday.com",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Enterprise — requires Workday ISU setup by a Workday administrator. No confirmed community MCP package at research time; 'workday-mcp' is a placeholder — verify at developer.workday.com at build. For quick access to Workday HR data, connect via Zapier or Workato in the Automation section instead."
     }
   ]
 }
