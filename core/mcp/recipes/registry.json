@@ -840,6 +840,47 @@
       "warning": "Workflows must be individually marked 'Available in MCP' in your n8n instance before they appear as tools. For n8n Cloud, your hostname is <slug>.app.n8n.cloud. For self-hosted n8n, use your instance's domain name (without https://)."
     },
     {
+      "id": "mattermost",
+      "display_name": "Mattermost",
+      "description": "Read and post messages in Mattermost channels, look up teams and users. Requires your self-hosted Mattermost server URL and a Personal Access Token.",
+      "category": "communication",
+      "command": [
+        "npx",
+        "-y",
+        "@mattermost/mcp"
+      ],
+      "env_keys": [
+        {
+          "name": "MATTERMOST_URL",
+          "display": "Mattermost server URL (e.g. https://mattermost.yourcompany.com)",
+          "docs_url": "https://docs.mattermost.com/developer/personal-access-tokens.html",
+          "required": true
+        },
+        {
+          "name": "MATTERMOST_TOKEN",
+          "display": "Mattermost Personal Access Token",
+          "docs_url": "https://docs.mattermost.com/developer/personal-access-tokens.html",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.mattermost.com/developer/personal-access-tokens.html",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Requires a self-hosted Mattermost server. Personal Access Tokens must be enabled by your Mattermost admin. The @mattermost/mcp npm package name was unverified at plan time — confirm before shipping.",
+      "primary_auth": "keys"
+    },
+    {
       "id": "ringcentral",
       "display_name": "RingCentral",
       "description": "Read call logs, messages, and presence; send SMS via RingCentral. Sign in with RingCentral (OAuth) — no token to paste.",

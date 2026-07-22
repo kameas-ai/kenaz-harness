@@ -38,6 +38,7 @@ var expectedRegistryIDs = []string{
 	"pipedream",
 	"composio",
 	"n8n",
+	"mattermost",
 	"ringcentral",
 	"webex",
 	"front",
@@ -795,6 +796,44 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Mattermost(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("mattermost")
+	if !ok {
+		t.Fatal("mattermost not in registry")
+	}
+	if r.Category != "communication" {
+		t.Errorf("Category = %q, want communication", r.Category)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	// stdio recipe: no transport/URL
+	if r.Transport != "" && r.Transport != recipes.TransportStdio {
+		t.Errorf("Transport = %q, want stdio or empty", r.Transport)
+	}
+	// Must have two required env keys.
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+		if !e.Required {
+			t.Errorf("env key %q should be required", e.Name)
+		}
+	}
+	if !envNames["MATTERMOST_URL"] {
+		t.Error("missing env key MATTERMOST_URL")
+	}
+	if !envNames["MATTERMOST_TOKEN"] {
+		t.Error("missing env key MATTERMOST_TOKEN")
+	}
+	if r.Warning == "" {
+		t.Error("mattermost should carry a Warning (self-hosted, PAT required, package unverified)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 
