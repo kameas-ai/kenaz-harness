@@ -17,6 +17,7 @@ import { useRouter } from 'vue-router';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { useToolsRecipes, useShell } from '@/lib/useHarnessAPI';
 import {
+  Activity,
   Brain,
   CheckSquare,
   ChevronDown,
@@ -28,6 +29,7 @@ import {
   MessageSquare,
   Scale,
   Search,
+  Shield,
   Wrench,
   Zap,
 } from '@/shell/icons';
@@ -385,6 +387,10 @@ function categoryIcon(category: RecipeCategory) {
       return MessageSquare;
     case 'automation':
       return Zap;
+    case 'observability':
+      return Activity;
+    case 'security':
+      return Shield;
     default:
       return Wrench;
   }
