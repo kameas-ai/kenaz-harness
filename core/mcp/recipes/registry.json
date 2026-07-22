@@ -1000,6 +1000,53 @@
       "ping_period_ms": 30000,
       "sampling_policy": { "allowed": false, "default": false },
       "warning": "Third-party server (drewburchfield/help-scout-mcp-server). Before installing, create a Help Scout App in Help Scout My Apps to get your App ID and Secret. npm fetch on first run can take 5–15 s."
+    },
+    {
+      "id": "okta",
+      "display_name": "Okta",
+      "description": "Query Okta users, groups, apps, logs, and policies via the Okta Admin Management API. Read-only by default (okta.users.read, okta.groups.read, okta.apps.read, okta.logs.read). Sign in with device authorization (browser) or Private Key JWT. Requires your Okta org URL and an Okta app integration.",
+      "category": "security",
+      "command": ["uvx", "okta-mcp-server"],
+      "env_keys": [
+        {
+          "name": "OKTA_ORG_URL",
+          "display": "Okta org URL (e.g. https://yourcompany.okta.com)",
+          "docs_url": "https://developer.okta.com/docs/guides/implement-oauth-for-okta/main/",
+          "required": true
+        },
+        {
+          "name": "OKTA_CLIENT_ID",
+          "display": "Okta app integration Client ID",
+          "docs_url": "https://developer.okta.com/docs/guides/implement-oauth-for-okta/main/",
+          "required": true
+        },
+        {
+          "name": "OKTA_SCOPES",
+          "display": "Space-separated Okta scopes (default: okta.users.read okta.groups.read okta.apps.read okta.logs.read — read-only)",
+          "docs_url": "https://developer.okta.com/docs/reference/scopes/",
+          "required": false
+        },
+        {
+          "name": "OKTA_PRIVATE_KEY",
+          "display": "Okta private key PEM string (optional — for Private Key JWT / server-to-server auth)",
+          "docs_url": "https://developer.okta.com/docs/guides/implement-oauth-for-okta/main/",
+          "required": false
+        },
+        {
+          "name": "OKTA_KEY_ID",
+          "display": "Okta key ID / KID (optional — required with OKTA_PRIVATE_KEY)",
+          "docs_url": "https://developer.okta.com/docs/guides/implement-oauth-for-okta/main/",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "primary_auth": "device_code",
+      "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
+      "docs_url": "https://github.com/okta/okta-mcp-server",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": { "allowed": false, "default": false },
+      "warning": "Security read-only by default. The OKTA_SCOPES env var controls which tools are loaded — omitting manage scopes prevents write operations. Okta app integration must be created in the Okta Admin Console and scopes explicitly granted. Device authorization grant requires browser interaction at first use."
     }
   ]
 }

@@ -42,6 +42,7 @@ var expectedRegistryIDs = []string{
 	"freshdesk",
 	"crowdstrike-aidr",
 	"help-scout",
+	"okta",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -791,6 +792,46 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Okta(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("okta")
+	if !ok {
+		t.Fatal("okta not in registry")
+	}
+	if len(r.Command) == 0 || r.Command[0] == "" {
+		t.Error("Okta recipe must have a non-empty Command")
+	}
+	if r.URL != "" {
+		t.Errorf("Okta is stdio — URL should be empty, got %q", r.URL)
+	}
+	// Security connector: device_code primary auth, read-only scopes by default.
+	if r.PrimaryAuth != recipes.PrimaryAuthDeviceCode {
+		t.Errorf("PrimaryAuth = %q, want device_code", r.PrimaryAuth)
+	}
+	if r.Category != "security" {
+		t.Errorf("Category = %q, want security", r.Category)
+	}
+	if r.SamplingPolicy.Allowed {
+		t.Error("security recipe sampling_policy.allowed must be false")
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["OKTA_ORG_URL"] {
+		t.Errorf("EnvKeys = %+v, want OKTA_ORG_URL", r.EnvKeys)
+	}
+	if !envNames["OKTA_CLIENT_ID"] {
+		t.Errorf("EnvKeys = %+v, want OKTA_CLIENT_ID", r.EnvKeys)
+	}
+	if !envNames["OKTA_SCOPES"] {
+		t.Errorf("EnvKeys = %+v, want OKTA_SCOPES (read-only scope default)", r.EnvKeys)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 
