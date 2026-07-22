@@ -933,6 +933,48 @@
         "default": false
       },
       "warning": "DCR zero-app: sign-in is token-free. Read-only analytics access — no data ingestion or project-admin tools. EU/IN server URLs not live-confirmed; verify at build."
+    },
+    {
+      "id": "amplitude",
+      "display_name": "Amplitude",
+      "description": "Query Amplitude analytics: events, funnels, user behavior, and product insights via Amplitude's official remote MCP server. Sign in with Amplitude (OAuth DCR — no token paste, no app registration required). US region default; EU region configurable.",
+      "category": "analytics",
+      "transport": "http",
+      "url": "https://mcp.amplitude.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "mcp:read",
+          "mcp:write",
+          "offline_access"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [
+        {
+          "name": "amplitude_server_url",
+          "display": "Amplitude MCP server URL (override for EU region)",
+          "kind": "string",
+          "default": "https://mcp.amplitude.com/mcp",
+          "required": false,
+          "description": "US default: https://mcp.amplitude.com/mcp. EU: https://mcp.eu.amplitude.com/mcp (live-verified). Append ?discovery=progressive to reduce token overhead (optional)."
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://amplitude.com/docs/analytics/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "DCR zero-app: sign-in is token-free. EU region: use https://mcp.eu.amplitude.com/mcp. Append ?discovery=progressive to the URL to reduce token overhead."
     }
   ]
 }

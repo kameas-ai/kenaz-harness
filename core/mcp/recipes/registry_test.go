@@ -38,8 +38,9 @@ var expectedRegistryIDs = []string{
 	"composio",
 	"n8n",
 	"workato",
-	// WP01 — marketing analytics + data/BI pack (01NCONN09)
+	// WP01–WP18 — marketing analytics + data/BI pack (01NCONN09)
 	"mixpanel",
+	"amplitude",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -824,6 +825,48 @@ func TestRecipe_Mixpanel(t *testing.T) {
 	}
 	if len(r.EnvKeys) != 0 {
 		t.Errorf("mixpanel should have no env keys (DCR zero-app), got %d", len(r.EnvKeys))
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+func TestRecipe_Amplitude(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("amplitude")
+	if !ok {
+		t.Fatal("amplitude not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.amplitude.com/mcp" {
+		t.Errorf("URL = %q, want https://mcp.amplitude.com/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// DCR zero-app: no baked client_id.
+	if r.Auth.ClientID != "" {
+		t.Errorf("amplitude auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	hasMCPRead := false
+	for _, s := range r.Auth.Scopes {
+		if s == "mcp:read" {
+			hasMCPRead = true
+		}
+	}
+	if !hasMCPRead {
+		t.Errorf("Auth.Scopes = %v, must include mcp:read", r.Auth.Scopes)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "analytics" {
+		t.Errorf("Category = %q, want analytics", r.Category)
+	}
+	if len(r.EnvKeys) != 0 {
+		t.Errorf("amplitude should have no env keys (DCR zero-app), got %d", len(r.EnvKeys))
 	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)
