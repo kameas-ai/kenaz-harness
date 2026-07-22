@@ -96,23 +96,19 @@ type Recipe struct {
 	// ConfigOptions declares the per-install config fields the modal
 	// renders. Empty for recipes that need only env keys.
 	ConfigOptions []ConfigOption `json:"config_options,omitempty"`
-	// Warning is an optional user-facing message rendered by the install
-	// modal alongside the install controls. Its severity — how alarming the
-	// rendering is — is governed by WarningSeverity, NOT by mere presence:
-	// an empty WarningSeverity (the default) renders a calm, neutral notice;
-	// only WarningSeverityDanger escalates to the stark red banner + explicit
-	// confirmation checkbox. Most recipes that set Warning are conveying a
-	// benign setup/latency/maturity note (e.g. "requires uv installed",
-	// "first run downloads a browser binary") and should stay at the default
-	// (info) severity. Reserve WarningSeverityDanger for recipes that grant
-	// genuinely elevated trust — e.g. an unrestricted filesystem MCP.
+	// Warning is an optional user-facing hazard message rendered by the
+	// install modal in a stark style (red banner, explicit confirmation
+	// checkbox). Used by recipes that grant elevated trust — e.g. the
+	// unrestricted filesystem MCP. Empty for ordinary recipes.
 	Warning string `json:"warning,omitempty"`
-	// WarningSeverity controls how Warning is rendered. "" / WarningSeverityInfo
-	// → calm neutral notice (no risk acknowledgment, ordinary Install button).
-	// WarningSeverityDanger → red hazard banner with a required "I understand
-	// the risk" checkbox gating an "Install with risk" button. Ignored when
-	// Warning is empty.
-	WarningSeverity string `json:"warning_severity,omitempty"`
+	// Aliases is an optional list of alternate search terms (lowercase) that the
+	// catalog UI uses to surface this recipe when the user's search string does
+	// not match the ID or DisplayName. For example, the Google Calendar recipe
+	// can declare aliases: ["google meet"] so that searching "meet" or "google
+	// meet" surfaces the Calendar connector, since Meet has no standalone MCP.
+	// The alias list is indexed alongside the ID and DisplayName; matches are
+	// shown in the catalog with a note indicating the alternate name.
+	Aliases []string `json:"aliases,omitempty"`
 	// RecommendedPolicyTemplate names a Cedar policy file under
 	// `core/policy/cedar/policies/` that the user is encouraged to
 	// install alongside this recipe. The install modal surfaces a
@@ -204,19 +200,6 @@ type Recipe struct {
 // token for a remote server.
 const AuthKindMCPOAuth = "mcp_oauth"
 
-// WarningSeverity constants for Recipe.WarningSeverity. They govern how the
-// install modal renders a recipe's Warning string.
-const (
-	// WarningSeverityInfo (also the zero value "") renders Warning as a calm,
-	// neutral notice — no risk acknowledgment, ordinary Install button. This is
-	// the right level for setup/latency/maturity notes.
-	WarningSeverityInfo = "info"
-	// WarningSeverityDanger renders Warning as a red hazard banner with a
-	// required acknowledgment checkbox gating an "Install with risk" button.
-	// Reserve for recipes that grant genuinely elevated trust.
-	WarningSeverityDanger = "danger"
-)
-
 // PrimaryAuth hint constants for Recipe.PrimaryAuth. The install modal leads
 // with the primary auth method and collapses secondary fields under "Advanced".
 const (
@@ -254,6 +237,14 @@ type RecipeAuth struct {
 	// Empty is permitted at rest (the recipe ships before the operator has
 	// registered an app); sign-in fails with a clear error until it is set.
 	ClientID string `json:"client_id,omitempty" yaml:"client_id,omitempty"`
+	// ClientSecret is a pre-registered confidential OAuth client secret.
+	// Required only for providers that mandate a confidential client (e.g.
+	// Front). Most OAuth 2.1/PKCE providers do not require a client secret
+	// and this field should be left empty. The value is treated as a
+	// credential: it must be stored in the credstore (not hardcoded), and
+	// the ${KAMEAS_<PROVIDER>_OAUTH_CLIENT_SECRET} seam pattern is used as
+	// a placeholder in the recipe definition.
+	ClientSecret string `json:"client_secret,omitempty" yaml:"client_secret,omitempty"`
 	// Scopes requested during the grant. When empty the harness falls back to
 	// the scopes advertised in the protected-resource metadata.
 	Scopes []string `json:"scopes,omitempty" yaml:"scopes,omitempty"`

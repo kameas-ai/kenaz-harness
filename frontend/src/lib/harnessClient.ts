@@ -1067,10 +1067,8 @@ const KNOWN_CATEGORIES: readonly RecipeCategory[] = [
   'developer',
   'finance',
   'communication',
-  'automation',
   'deployment',
-  'observability',
-  'security',
+  'automation',
   'other',
 ];
 
