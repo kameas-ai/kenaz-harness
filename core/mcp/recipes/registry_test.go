@@ -50,6 +50,7 @@ var expectedRegistryIDs = []string{
 	"bigquery",
 	"metabase",
 	"looker",
+	"ga4",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -1223,6 +1224,39 @@ func TestRecipe_Looker(t *testing.T) {
 	}
 	if r.Category != "bi" {
 		t.Errorf("Category = %q, want bi", r.Category)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+func TestRecipe_GA4(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("ga4")
+	if !ok {
+		t.Fatal("ga4 not in registry")
+	}
+	if len(r.Command) == 0 || r.Command[0] != "uvx" {
+		t.Errorf("Command[0] = %q, want uvx", r.Command[0])
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for GA4 (service account auth), got %+v", r.Auth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["GOOGLE_APPLICATION_CREDENTIALS"] {
+		t.Errorf("EnvKeys = %+v, want GOOGLE_APPLICATION_CREDENTIALS", r.EnvKeys)
+	}
+	if !envNames["GA4_PROPERTY_ID"] {
+		t.Errorf("EnvKeys = %+v, want GA4_PROPERTY_ID", r.EnvKeys)
+	}
+	if r.Category != "analytics" {
+		t.Errorf("Category = %q, want analytics", r.Category)
 	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)

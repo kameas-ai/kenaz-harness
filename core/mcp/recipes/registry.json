@@ -1426,6 +1426,46 @@
         "default": false
       },
       "warning": "Community package (PyPI looker-mcp v0.1.0 — not Google-official). Env var prefix is LOOKER_* (not LOOKERSDK_*). A Google-official Looker MCP may supersede this. Requires uv installed. First run downloads package (5–15 s)."
+    },
+    {
+      "id": "ga4",
+      "display_name": "Google Analytics 4 (GA4)",
+      "description": "Query GA4 analytics: dimensions, metrics, reports, and real-time data via community MCP server. Uses Google service account credentials (Application Default Credentials or JSON key file). No official Google remote MCP server for GA4.",
+      "category": "analytics",
+      "command": [
+        "uvx",
+        "google-analytics-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "GOOGLE_APPLICATION_CREDENTIALS",
+          "display": "Path to Google service account key JSON file (or use Application Default Credentials via gcloud auth)",
+          "docs_url": "https://cloud.google.com/docs/authentication/application-default-credentials",
+          "required": true
+        },
+        {
+          "name": "GA4_PROPERTY_ID",
+          "display": "GA4 property ID (numeric, e.g. 123456789 — from GA4 Admin > Property Settings)",
+          "docs_url": "https://support.google.com/analytics/answer/10976610",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://pypi.org/project/google-analytics-mcp/",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Community package (PyPI google-analytics-mcp v2.8.1 — not Google-official). Uses GA4 Data API with service account auth. Enable Google Analytics Data API in Google Cloud Console. No official Google MCP for GA4 as of 2026-07-21 — future official server may supersede. Requires uv installed."
     }
   ]
 }
