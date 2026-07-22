@@ -1149,3 +1149,34 @@ func TestRecipe_Gusto(t *testing.T) {
 		t.Errorf("Validate() error: %v", err)
 	}
 }
+
+func TestRecipe_QuickBooks(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("quickbooks")
+	if !ok {
+		t.Fatal("quickbooks not in registry")
+	}
+	if r.Category != "finance_accounting" {
+		t.Errorf("Category = %q, want finance_accounting", r.Category)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["QUICKBOOKS_CLIENT_ID"] {
+		t.Errorf("EnvKeys = %+v, want QUICKBOOKS_CLIENT_ID (Kameas OAuth seam)", r.EnvKeys)
+	}
+	if !envNames["QUICKBOOKS_CLIENT_SECRET"] {
+		t.Errorf("EnvKeys = %+v, want QUICKBOOKS_CLIENT_SECRET", r.EnvKeys)
+	}
+	// Finance safety copy.
+	if !strings.Contains(r.Description, "read-only") {
+		t.Error("quickbooks description must include read-only safety copy")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}

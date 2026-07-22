@@ -1200,6 +1200,47 @@
         "default": false
       },
       "warning": "Owner must register a Kameas Gusto OAuth app at developer.gusto.com before use. Verify best npm MCP package for Gusto at build — no confirmed official package at research time; 'gusto-mcp-server' is a placeholder. Auth endpoints: authorize=https://app.gusto.com/oauth/authorize token=https://api.gusto.com/oauth/token. No payroll-run tools — read-only employees/pay stubs only."
+    },
+    {
+      "id": "quickbooks",
+      "display_name": "QuickBooks Online",
+      "description": "Read accounting data from QuickBooks Online — read-only, no transactions initiated. Requires a Kameas Intuit OAuth app (register at developer.intuit.com).",
+      "category": "finance_accounting",
+      "command": [
+        "npx",
+        "-y",
+        "quickbooks-mcp-server"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "QUICKBOOKS_CLIENT_ID",
+          "display": "Intuit/QuickBooks OAuth client ID (${KAMEAS_QUICKBOOKS_OAUTH_CLIENT_ID} — from developer.intuit.com)",
+          "docs_url": "https://developer.intuit.com/app/developer/qbo/docs/get-started",
+          "required": true
+        },
+        {
+          "name": "QUICKBOOKS_CLIENT_SECRET",
+          "display": "Intuit/QuickBooks OAuth client secret (from developer.intuit.com)",
+          "docs_url": "https://developer.intuit.com/app/developer/qbo/docs/get-started",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.intuit.com/app/developer/qbo/docs/api/accounting/all-entities/account",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Owner must register a Kameas Intuit app at developer.intuit.com before use. Verify best npm MCP package for QuickBooks at build — no confirmed official package at research time; 'quickbooks-mcp-server' is a placeholder. Auth endpoints: authorize=https://appcenter.intuit.com/connect/oauth2 token=https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer. Scope: com.intuit.quickbooks.accounting (read tier). Read-only — no transactions initiated."
     }
   ]
 }
