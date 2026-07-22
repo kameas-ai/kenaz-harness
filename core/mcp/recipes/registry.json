@@ -879,6 +879,40 @@
         "default": false
       },
       "warning": "Workato Enterprise MCP requires an Enterprise plan. Your Workato admin must add you to a user group with MCP access. Each MCP server collection has its own URL — copy the path portion from AI Hub > Enterprise MCP (everything after app.workato.com/)."
+    },
+    {
+      "id": "front",
+      "display_name": "Front",
+      "description": "Search and reply to conversations, manage teammates and inboxes, view contacts in Front. Sign in with Front — browser OAuth (PKCE). Requires a Kameas Front developer app registered at app.frontapp.com.",
+      "category": "support",
+      "transport": "http",
+      "url": "https://mcp.frontapp.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_FRONT_OAUTH_CLIENT_ID}",
+        "scopes": ["read", "write", "send"]
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_FRONT_OAUTH_CLIENT_ID",
+          "display": "Front OAuth client ID (Kameas app — pre-configured)",
+          "docs_url": "https://app.frontapp.com/settings/tools/apps",
+          "required": true
+        },
+        {
+          "name": "KAMEAS_FRONT_OAUTH_CLIENT_SECRET",
+          "display": "Front OAuth client secret (Kameas app — pre-configured)",
+          "docs_url": "https://app.frontapp.com/settings/tools/apps",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
+      "docs_url": "https://dev.frontapp.com/docs/mcp-server",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": { "allowed": false, "default": false }
     }
   ]
 }

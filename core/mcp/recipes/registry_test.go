@@ -38,6 +38,7 @@ var expectedRegistryIDs = []string{
 	"composio",
 	"n8n",
 	"workato",
+	"front",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -787,5 +788,50 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Front(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("front")
+	if !ok {
+		t.Fatal("front not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.frontapp.com/mcp" {
+		t.Errorf("URL = %q, want https://mcp.frontapp.com/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// Confidential client — client_id is a placeholder for the Kameas-registered Front app.
+	if r.Auth.ClientID != "${KAMEAS_FRONT_OAUTH_CLIENT_ID}" {
+		t.Errorf("Auth.ClientID = %q, want ${KAMEAS_FRONT_OAUTH_CLIENT_ID}", r.Auth.ClientID)
+	}
+	if len(r.Auth.Scopes) == 0 {
+		t.Error("Front Auth.Scopes should list requested scopes (read, write, send)")
+	}
+	// No DCR — owner must register the Kameas Front developer app.
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthPKCE {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_pkce", r.PrimaryAuth)
+	}
+	if r.Category != "support" {
+		t.Errorf("Category = %q, want support", r.Category)
+	}
+	// Must carry both env_keys so the install modal can surface them.
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["KAMEAS_FRONT_OAUTH_CLIENT_ID"] {
+		t.Errorf("EnvKeys = %+v, want KAMEAS_FRONT_OAUTH_CLIENT_ID", r.EnvKeys)
+	}
+	if !envNames["KAMEAS_FRONT_OAUTH_CLIENT_SECRET"] {
+		t.Errorf("EnvKeys = %+v, want KAMEAS_FRONT_OAUTH_CLIENT_SECRET", r.EnvKeys)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
