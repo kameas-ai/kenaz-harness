@@ -914,6 +914,42 @@
         "default": false
       },
       "warning": "Supabase MCP is intended for development and testing — do not connect to production databases. Scopes are currently all-or-nothing (write access to all available features)."
+    },
+    {
+      "id": "gitlab",
+      "display_name": "GitLab",
+      "description": "Search repositories, read files, manage merge requests and issues, and access GitLab projects. Sign in with GitLab (OAuth) — no token to paste — or supply a personal access token as a fallback.",
+      "category": "dev",
+      "transport": "http",
+      "url": "https://gitlab.com/api/v4/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": ["mcp", "mcp_orbit"]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [
+        {
+          "name": "GITLAB_PERSONAL_ACCESS_TOKEN",
+          "display": "GitLab personal access token (optional — fallback if you don't sign in)",
+          "docs_url": "https://gitlab.com/-/user_settings/personal_access_tokens",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.gitlab.com/ee/user/gitlab_duo/mcp.html",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "This recipe connects to gitlab.com only. Self-managed GitLab instances have a different MCP URL — use the custom MCP add flow for those."
     }
   ]
 }

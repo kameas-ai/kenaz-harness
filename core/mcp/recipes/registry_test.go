@@ -39,6 +39,7 @@ var expectedRegistryIDs = []string{
 	"n8n",
 	"workato",
 	"supabase",
+	"gitlab",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -788,6 +789,58 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_GitLab(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("gitlab")
+	if !ok {
+		t.Fatal("gitlab not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://gitlab.com/api/v4/mcp" {
+		t.Errorf("URL = %q, want https://gitlab.com/api/v4/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// DCR zero-app: no baked client_id.
+	if r.Auth.ClientID != "" {
+		t.Errorf("gitlab auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	if len(r.Auth.Scopes) == 0 {
+		t.Error("gitlab Auth.Scopes should list requested scopes")
+	}
+	hasMCP := false
+	for _, s := range r.Auth.Scopes {
+		if s == "mcp" {
+			hasMCP = true
+		}
+	}
+	if !hasMCP {
+		t.Errorf("Auth.Scopes = %v, must include \"mcp\"", r.Auth.Scopes)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "dev" {
+		t.Errorf("Category = %q, want dev", r.Category)
+	}
+	// PAT fallback env key present but optional.
+	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "GITLAB_PERSONAL_ACCESS_TOKEN" {
+		t.Fatalf("EnvKeys = %+v, want one entry named GITLAB_PERSONAL_ACCESS_TOKEN", r.EnvKeys)
+	}
+	if r.EnvKeys[0].Required {
+		t.Error("GITLAB_PERSONAL_ACCESS_TOKEN should be optional (DCR OAuth is the primary path)")
+	}
+	if r.Warning == "" {
+		t.Error("gitlab should carry a Warning (gitlab.com only, self-managed caveat)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 
