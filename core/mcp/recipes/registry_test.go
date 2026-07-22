@@ -44,6 +44,7 @@ var expectedRegistryIDs = []string{
 	"help-scout",
 	"okta",
 	"zendesk",
+	"servicenow",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -793,6 +794,34 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_ServiceNow(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("servicenow")
+	if !ok {
+		t.Fatal("servicenow not in registry")
+	}
+	if len(r.Command) == 0 || r.Command[0] == "" {
+		t.Error("ServiceNow recipe must have a non-empty Command")
+	}
+	if r.URL != "" {
+		t.Errorf("ServiceNow is stdio — URL should be empty, got %q", r.URL)
+	}
+	if r.Category != "itsm" {
+		t.Errorf("Category = %q, want itsm", r.Category)
+	}
+	// SERVICENOW_INSTANCE_URL must be present (per-tenant required config).
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["SERVICENOW_INSTANCE_URL"] {
+		t.Errorf("EnvKeys = %+v, want SERVICENOW_INSTANCE_URL", r.EnvKeys)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 

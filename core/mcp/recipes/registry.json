@@ -1082,6 +1082,53 @@
       "ping_period_ms": 30000,
       "sampling_policy": { "allowed": false, "default": false },
       "warning": "No official Zendesk MCP server — uses community zendesk-mcp (PyPI). Verify at build: uvx zendesk-mcp. If unavailable, fall back to npx github:mattcoatsworth/zendesk-mcp-server. ZENDESK_EMAIL is the agent email used as Basic Auth username paired with the API token."
+    },
+    {
+      "id": "servicenow",
+      "display_name": "ServiceNow",
+      "description": "Query ServiceNow incidents, change requests, users, and CMDB records. Read-only by default. Requires your ServiceNow instance URL and credentials (OAuth client ID + secret, or API key, or basic auth).",
+      "category": "itsm",
+      "command": ["uvx", "servicenow-mcp"],
+      "env_keys": [
+        {
+          "name": "SERVICENOW_INSTANCE_URL",
+          "display": "ServiceNow instance URL (e.g. https://yourcompany.service-now.com)",
+          "docs_url": "https://docs.servicenow.com/",
+          "required": true
+        },
+        {
+          "name": "SERVICENOW_CLIENT_ID",
+          "display": "ServiceNow OAuth client ID (from Application Registry — required for OAuth auth)",
+          "docs_url": "https://docs.servicenow.com/bundle/washingtondc-platform-security/page/administer/security/concept/c_OAuthApplications.html",
+          "required": false
+        },
+        {
+          "name": "SERVICENOW_CLIENT_SECRET",
+          "display": "ServiceNow OAuth client secret (required for OAuth auth)",
+          "docs_url": "https://docs.servicenow.com/bundle/washingtondc-platform-security/page/administer/security/concept/c_OAuthApplications.html",
+          "required": false
+        },
+        {
+          "name": "SERVICENOW_API_KEY",
+          "display": "ServiceNow API key (alternative to OAuth — from System Web Services > REST API Explorer)",
+          "docs_url": "https://docs.servicenow.com/",
+          "required": false
+        },
+        {
+          "name": "SERVICENOW_AUTH_TYPE",
+          "display": "Auth type: oauth, api_key, or basic (default: oauth)",
+          "docs_url": "https://github.com/echelon-ai-labs/servicenow-mcp",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "primary_auth": "keys",
+      "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
+      "docs_url": "https://github.com/echelon-ai-labs/servicenow-mcp",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": { "allowed": false, "default": false },
+      "warning": "Community server (echelon-ai-labs/servicenow-mcp). Verify at build: uvx servicenow-mcp (PyPI package may not be published — if unavailable, install via pip from source or use a Docker image). Read-only by default; check server docs for --read-only flag. ServiceNow instance URL and credentials are per-tenant."
     }
   ]
 }
