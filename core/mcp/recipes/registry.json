@@ -1159,6 +1159,47 @@
         "default": false
       },
       "warning": "Owner must register a Kameas Xero OAuth app at developer.xero.com before use. Set XERO_CLIENT_ID and XERO_CLIENT_SECRET. Default scopes: accounting.transactions.read accounting.contacts.read accounting.settings.read. Verify DCR availability at identity.xero.com at build — if DCR is present, this recipe can be upgraded to zero-app. First npm fetch can take 5–15 s."
+    },
+    {
+      "id": "gusto",
+      "display_name": "Gusto",
+      "description": "Read employee profiles, pay periods, and pay stubs from Gusto — read-only, no payroll-run or money-movement actions. Requires a Kameas Gusto OAuth app (register at developer.gusto.com).",
+      "category": "hr_people",
+      "command": [
+        "npx",
+        "-y",
+        "gusto-mcp-server"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "GUSTO_CLIENT_ID",
+          "display": "Gusto OAuth client ID (${KAMEAS_GUSTO_OAUTH_CLIENT_ID} — from your Kameas app at developer.gusto.com)",
+          "docs_url": "https://developer.gusto.com/docs/api/getting-started",
+          "required": true
+        },
+        {
+          "name": "GUSTO_CLIENT_SECRET",
+          "display": "Gusto OAuth client secret (from your Kameas app at developer.gusto.com)",
+          "docs_url": "https://developer.gusto.com/docs/api/getting-started",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.gusto.com/docs/api/getting-started",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Owner must register a Kameas Gusto OAuth app at developer.gusto.com before use. Verify best npm MCP package for Gusto at build — no confirmed official package at research time; 'gusto-mcp-server' is a placeholder. Auth endpoints: authorize=https://app.gusto.com/oauth/authorize token=https://api.gusto.com/oauth/token. No payroll-run tools — read-only employees/pay stubs only."
     }
   ]
 }
