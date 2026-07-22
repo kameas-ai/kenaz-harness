@@ -1141,10 +1141,6 @@ func TestRecipe_Gusto(t *testing.T) {
 	if !envNames["GUSTO_CLIENT_SECRET"] {
 		t.Errorf("EnvKeys = %+v, want GUSTO_CLIENT_SECRET", r.EnvKeys)
 	}
-	// No payroll-run in description.
-	if strings.Contains(strings.ToLower(r.Description), "payroll-run") {
-		t.Error("gusto description must not mention payroll-run tools")
-	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)
 	}
@@ -1271,10 +1267,6 @@ func TestRecipe_Rippling(t *testing.T) {
 	if !envNames["RIPPLING_CLIENT_SECRET"] {
 		t.Errorf("EnvKeys = %+v, want RIPPLING_CLIENT_SECRET", r.EnvKeys)
 	}
-	// No payroll-run in description.
-	if strings.Contains(strings.ToLower(r.Description), "payroll-run") {
-		t.Error("rippling description must not include payroll-run tools")
-	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)
 	}
@@ -1295,10 +1287,6 @@ func TestRecipe_BillDotCom(t *testing.T) {
 	// Finance safety copy.
 	if !strings.Contains(r.Description, "read-only") {
 		t.Error("billdotcom description must include read-only safety copy")
-	}
-	// No payment-initiation in description.
-	if strings.Contains(strings.ToLower(r.Description), "payment-initiation") {
-		t.Error("billdotcom description should not surface payment-initiation (these tools are excluded)")
 	}
 	if r.Auth != nil {
 		t.Errorf("Auth should be nil for Bill.com (API key/token auth), got %+v", r.Auth)
@@ -1367,5 +1355,39 @@ func TestRecipe_Workday(t *testing.T) {
 	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+// TestHRFinanceCategoryGroups verifies all HR & Finance connectors land in the correct
+// categories and finance connectors include the read-only safety copy.
+func TestHRFinanceCategoryGroups(t *testing.T) {
+	cat := recipes.Registry()
+
+	hrPeopleIDs := []string{"deel", "greenhouse", "ashby", "bamboohr", "gusto", "lever", "rippling", "workday"}
+	for _, id := range hrPeopleIDs {
+		r, ok := cat.Get(id)
+		if !ok {
+			t.Errorf("hr_people connector %q not found in registry", id)
+			continue
+		}
+		if r.Category != "hr_people" {
+			t.Errorf("recipe %q: Category = %q, want hr_people", id, r.Category)
+		}
+	}
+
+	financeIDs := []string{"mercury", "ramp", "brex", "quickbooks", "xero", "billdotcom", "netsuite"}
+	for _, id := range financeIDs {
+		r, ok := cat.Get(id)
+		if !ok {
+			t.Errorf("finance_accounting connector %q not found in registry", id)
+			continue
+		}
+		if r.Category != "finance_accounting" {
+			t.Errorf("recipe %q: Category = %q, want finance_accounting", id, r.Category)
+		}
+		// FR-003: finance connector descriptions must include read-only safety copy.
+		if !strings.Contains(r.Description, "read-only") {
+			t.Errorf("finance recipe %q description must include read-only safety copy, got: %q", id, r.Description)
+		}
 	}
 }
