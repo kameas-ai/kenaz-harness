@@ -1068,6 +1068,33 @@ func TestRecipe_ClickUp(t *testing.T) {
 	}
 }
 
+// TestProductivityCategoryGroup_Pack06b verifies that all pack-06b connectors
+// are present in the registry and correctly placed in the "productivity" category,
+// so they appear grouped together in the Tools catalog alongside pack-01
+// connectors (Jira/Linear/Asana/Notion).
+func TestProductivityCategoryGroup_Pack06b(t *testing.T) {
+	pack06bIDs := []string{
+		"clickup",
+		"monday",
+		"shortcut",
+		"smartsheet",
+		"wrike",
+		"trello",
+		"coda",
+	}
+	cat := recipes.Registry()
+	for _, id := range pack06bIDs {
+		r, ok := cat.Get(id)
+		if !ok {
+			t.Errorf("pack-06b recipe %q not found in registry", id)
+			continue
+		}
+		if r.Category != "productivity" {
+			t.Errorf("recipe %q: Category = %q, want productivity", id, r.Category)
+		}
+	}
+}
+
 func TestAutomationCategoryGroup(t *testing.T) {
 	cat := recipes.Registry()
 	iPaaSIDs := []string{"zapier", "make", "pipedream", "composio", "n8n", "workato"}
