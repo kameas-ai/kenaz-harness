@@ -40,6 +40,7 @@ var expectedRegistryIDs = []string{
 	"workato",
 	"front",
 	"freshdesk",
+	"crowdstrike-aidr",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -789,6 +790,38 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_CrowdStrikeAIDR(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("crowdstrike-aidr")
+	if !ok {
+		t.Fatal("crowdstrike-aidr not in registry")
+	}
+	// stdio recipe — command present, no URL.
+	if len(r.Command) == 0 || r.Command[0] == "" {
+		t.Error("CrowdStrike AIDR recipe must have a non-empty Command")
+	}
+	if r.URL != "" {
+		t.Errorf("CrowdStrike AIDR is stdio — URL should be empty, got %q", r.URL)
+	}
+	// Security connector: read/query-only, no sampling.
+	if r.Category != "security" {
+		t.Errorf("Category = %q, want security", r.Category)
+	}
+	if r.SamplingPolicy.Allowed {
+		t.Error("security recipe sampling_policy.allowed must be false")
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["CS_AIDR_TOKEN"] {
+		t.Errorf("EnvKeys = %+v, want CS_AIDR_TOKEN", r.EnvKeys)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 

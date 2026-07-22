@@ -942,6 +942,35 @@
       "ping_period_ms": 30000,
       "sampling_policy": { "allowed": false, "default": false },
       "warning": "Python server (PyPI freshdesk-mcp by effytech) launched via uvx; requires uv installed. First run downloads the package (5–15 s). Verify at build: uvx freshdesk-mcp (package name may differ from binary name)."
+    },
+    {
+      "id": "crowdstrike-aidr",
+      "display_name": "CrowdStrike AIDR",
+      "description": "CrowdStrike AI Guard: analyze and redact text to detect LLM prompt injection and data exfiltration attempts. Read/query-only. Requires a CrowdStrike AIDR API token.",
+      "category": "security",
+      "command": ["npx", "-y", "@crowdstrike/aidr-mcp-server"],
+      "env_keys": [
+        {
+          "name": "CS_AIDR_TOKEN",
+          "display": "CrowdStrike AIDR API token",
+          "docs_url": "https://www.crowdstrike.com/products/ai-security/falcon-aidr/",
+          "required": true
+        },
+        {
+          "name": "CS_AIDR_BASE_URL_TEMPLATE",
+          "display": "AIDR base URL template (optional — default: https://api.crowdstrike.com/aidr/{SERVICE_NAME})",
+          "docs_url": "https://www.crowdstrike.com/products/ai-security/falcon-aidr/",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "primary_auth": "keys",
+      "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
+      "docs_url": "https://github.com/CrowdStrike/aidr-mcp-server",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": { "allowed": false, "default": false },
+      "warning": "AIDR only (AI Guard / prompt safety) — not Falcon detection or SOC investigation. Requires Node.js v20+ (README notes v24+). npm fetch on first run can take 5–15 s."
     }
   ]
 }
