@@ -798,6 +798,22 @@ func TestAutomationCategoryGroup(t *testing.T) {
 	}
 }
 
+// TestRecipe_1PasswordDeferred asserts no 1Password recipe is in the registry.
+// Decision: 1Password MCP server (1password-mcp binary) is macOS-only Beta, manages
+// Developer Environments only (not vault secrets), and is launched interactively
+// via the local 1Password desktop app (no env vars, no remote endpoint). Too narrow
+// and platform-limited for a general Kameas recipe. Revisit when 1Password ships a
+// cross-platform remote MCP with vault access (track at developer.1password.com).
+func TestRecipe_1PasswordDeferred(t *testing.T) {
+	cat := recipes.Registry()
+	if _, ok := cat.Get("1password"); ok {
+		t.Error("1password recipe should not be in registry (deferred — macOS beta, Environments-only, no vault access)")
+	}
+	if _, ok := cat.Get("onepassword"); ok {
+		t.Error("onepassword recipe should not be in registry (deferred)")
+	}
+}
+
 func TestRecipe_JamfDocs(t *testing.T) {
 	cat := recipes.Registry()
 	r, ok := cat.Get("jamf-docs")
