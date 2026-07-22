@@ -38,6 +38,7 @@ var expectedRegistryIDs = []string{
 	"pipedream",
 	"composio",
 	"n8n",
+	"ringcentral",
 	"webex",
 	"front",
 	"discord",
@@ -794,6 +795,35 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_RingCentral(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("ringcentral")
+	if !ok {
+		t.Fatal("ringcentral not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	if r.Auth.ClientID != "${KAMEAS_RINGCENTRAL_OAUTH_CLIENT_ID}" {
+		t.Errorf("auth.client_id = %q, want ${KAMEAS_RINGCENTRAL_OAUTH_CLIENT_ID}", r.Auth.ClientID)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthPKCE {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_pkce", r.PrimaryAuth)
+	}
+	if r.Category != "communication" {
+		t.Errorf("Category = %q, want communication", r.Category)
+	}
+	if r.Warning == "" {
+		t.Error("ringcentral should carry a Warning (URL unverified at plan time)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 
