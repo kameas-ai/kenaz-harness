@@ -48,6 +48,7 @@ var expectedRegistryIDs = []string{
 	"redshift",
 	"snowflake",
 	"bigquery",
+	"metabase",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -1152,6 +1153,39 @@ func TestRecipe_BigQuery(t *testing.T) {
 	}
 	if r.Warning == "" {
 		t.Error("bigquery should carry a Warning (verify at build note)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+func TestRecipe_Metabase(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("metabase")
+	if !ok {
+		t.Fatal("metabase not in registry")
+	}
+	if len(r.Command) == 0 || r.Command[0] != "uvx" {
+		t.Errorf("Command[0] = %q, want uvx", r.Command[0])
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for Metabase (API-key auth), got %+v", r.Auth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["METABASE_URL"] {
+		t.Errorf("EnvKeys = %+v, want METABASE_URL", r.EnvKeys)
+	}
+	if !envNames["METABASE_API_KEY"] {
+		t.Errorf("EnvKeys = %+v, want METABASE_API_KEY", r.EnvKeys)
+	}
+	if r.Category != "bi" {
+		t.Errorf("Category = %q, want bi", r.Category)
 	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)

@@ -1328,6 +1328,58 @@
         "default": false
       },
       "warning": "Google-maintained genai-toolbox (npm @toolbox-sdk/server --prebuilt=bigquery). Verify exact --prebuilt=bigquery flag syntax and project_id config arg at build (toolbox docs at mcp-toolbox.dev). ADC or GOOGLE_APPLICATION_CREDENTIALS for auth. First npm fetch can take 5–15 s."
+    },
+    {
+      "id": "metabase",
+      "display_name": "Metabase",
+      "description": "Query Metabase: browse questions, dashboards, databases, and run queries via community MCP server. Works with self-hosted and Metabase Cloud instances. API key authentication recommended (Metabase v0.47+).",
+      "category": "bi",
+      "command": [
+        "uvx",
+        "metabase-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "METABASE_URL",
+          "display": "Metabase instance URL (e.g. https://your-metabase.example.com or https://your-company.metabaseapp.com)",
+          "docs_url": "https://www.metabase.com/docs/latest/api-documentation.html",
+          "required": true
+        },
+        {
+          "name": "METABASE_API_KEY",
+          "display": "Metabase API key (recommended; requires Metabase v0.47+)",
+          "docs_url": "https://www.metabase.com/docs/latest/people-and-groups/api-keys.html",
+          "required": false
+        },
+        {
+          "name": "METABASE_USER_EMAIL",
+          "display": "Metabase user email (fallback if API key not used)",
+          "docs_url": "https://www.metabase.com/docs/latest/api-documentation.html",
+          "required": false
+        },
+        {
+          "name": "METABASE_PASSWORD",
+          "display": "Metabase password (fallback if API key not used)",
+          "docs_url": "https://www.metabase.com/docs/latest/api-documentation.html",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://pypi.org/project/metabase-mcp/",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Community package (PyPI metabase-mcp v1.0.0). API key auth recommended (Metabase v0.47+); email/password fallback for older versions. METABASE_URL must point to your specific Metabase instance. Requires uv installed."
     }
   ]
 }
