@@ -1276,6 +1276,41 @@
         "default": false
       },
       "warning": "Prefer the API-token path (BREX_API_TOKEN) over OAuth to avoid Kameas app registration. Verify best npm MCP package for Brex at build — 'brex-mcp-server' is a placeholder. If OAuth2 path is required, register a Kameas Brex app at accounts.brex.com; use read-only scopes only: expenses.readonly transactions.readonly accounts.readonly. Read-only — no transfers or payment-initiation tools."
+    },
+    {
+      "id": "lever",
+      "display_name": "Lever",
+      "description": "Read candidates, job postings, applications, interviews, and users from Lever ATS via the Lever Harvest API. API key auth — no Kameas app registration needed.",
+      "category": "hr_people",
+      "command": [
+        "npx",
+        "-y",
+        "lever-mcp-server"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "LEVER_API_KEY",
+          "display": "Lever API key (from Lever Settings > Integrations > API Credentials)",
+          "docs_url": "https://hire.lever.co/developer/v1/introduction",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://hire.lever.co/developer/v1/introduction",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Verify best npm MCP package for Lever at build — 'lever-mcp-server' is a placeholder; no confirmed package found at research time. API key auth preferred (no Kameas app needed). If OAuth2 partner integration is required, register a Kameas app at hire.lever.co/developer. First npm fetch can take 5–15 s."
     }
   ]
 }

@@ -1216,3 +1216,35 @@ func TestRecipe_Brex(t *testing.T) {
 		t.Errorf("Validate() error: %v", err)
 	}
 }
+
+func TestRecipe_Lever(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("lever")
+	if !ok {
+		t.Fatal("lever not in registry")
+	}
+	if r.Category != "hr_people" {
+		t.Errorf("Category = %q, want hr_people", r.Category)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["LEVER_API_KEY"] {
+		t.Errorf("EnvKeys = %+v, want LEVER_API_KEY", r.EnvKeys)
+	}
+	for _, e := range r.EnvKeys {
+		if e.Name == "LEVER_API_KEY" && !e.Required {
+			t.Error("LEVER_API_KEY should be required")
+		}
+	}
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for Lever (API key auth), got %+v", r.Auth)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
