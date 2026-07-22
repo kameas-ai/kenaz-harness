@@ -907,6 +907,40 @@
         "allowed": false,
         "default": false
       }
+    },
+    {
+      "id": "monday",
+      "display_name": "Monday.com",
+      "description": "Access boards, items, workflows, and automations in Monday.com. Sign in with Monday — no token to paste — or supply a personal API token.",
+      "category": "productivity",
+      "transport": "http",
+      "url": "https://mcp.monday.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth"
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [
+        {
+          "name": "MONDAY_API_TOKEN",
+          "display": "Monday.com personal API token (optional — fallback if you don't sign in)",
+          "docs_url": "https://developer.monday.com/api-reference/docs/authentication",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/mondaycom/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
     }
   ]
 }

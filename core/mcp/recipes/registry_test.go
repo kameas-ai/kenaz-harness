@@ -39,6 +39,7 @@ var expectedRegistryIDs = []string{
 	"n8n",
 	"workato",
 	"clickup",
+	"monday",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -773,6 +774,42 @@ func TestWorkatoRecipe(t *testing.T) {
 	}
 	if r.Category != "automation" {
 		t.Errorf("Category = %q, want automation", r.Category)
+	}
+}
+
+func TestRecipe_Monday(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("monday")
+	if !ok {
+		t.Fatal("monday not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.monday.com/mcp" {
+		t.Errorf("URL = %q, want https://mcp.monday.com/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	if r.Auth.ClientID != "" {
+		t.Errorf("monday auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "productivity" {
+		t.Errorf("Category = %q, want productivity", r.Category)
+	}
+	// Optional API token fallback env key must be present and not required.
+	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "MONDAY_API_TOKEN" {
+		t.Errorf("EnvKeys = %+v, want one entry MONDAY_API_TOKEN", r.EnvKeys)
+	}
+	if r.EnvKeys[0].Required {
+		t.Error("MONDAY_API_TOKEN should be optional (fallback only)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 
