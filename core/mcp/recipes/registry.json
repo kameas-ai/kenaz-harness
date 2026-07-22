@@ -1181,6 +1181,49 @@
         "allowed": false,
         "default": false
       }
+    },
+    {
+      "id": "salesforce",
+      "display_name": "Salesforce",
+      "description": "Search, read, and update Salesforce records (contacts, accounts, opportunities, cases). Sign in with Salesforce.",
+      "category": "crm",
+      "transport": "http",
+      "url": "https://${SALESFORCE_ORG_DOMAIN}.my.salesforce.com",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_SALESFORCE_OAUTH_CLIENT_ID}"
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_SALESFORCE_OAUTH_CLIENT_ID",
+          "display": "Salesforce OAuth client ID (Kameas External Client App)",
+          "docs_url": "https://developer.salesforce.com/docs/platform/hosted-mcp-servers/guide",
+          "required": true
+        }
+      ],
+      "config_options": [
+        {
+          "name": "org_domain",
+          "display": "Salesforce My Domain",
+          "kind": "string",
+          "required": true,
+          "description": "Your Salesforce My Domain prefix (e.g. 'mycompany' for mycompany.my.salesforce.com)."
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.salesforce.com/docs/platform/hosted-mcp-servers/guide",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
     }
   ]
 }

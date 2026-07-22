@@ -48,6 +48,7 @@ var expectedRegistryIDs = []string{
 	"square",
 	"hubspot",
 	"box",
+	"salesforce",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -797,6 +798,43 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Salesforce(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("salesforce")
+	if !ok {
+		t.Fatal("salesforce not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	// URL uses per-org substitution token (verify URL templating at build).
+	if !strings.Contains(r.URL, "${SALESFORCE_ORG_DOMAIN}") {
+		t.Errorf("URL = %q, want ${SALESFORCE_ORG_DOMAIN} substitution token", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	if r.Auth.ClientID != "${KAMEAS_SALESFORCE_OAUTH_CLIENT_ID}" {
+		t.Errorf("salesforce auth.client_id = %q, want ${KAMEAS_SALESFORCE_OAUTH_CLIENT_ID} placeholder", r.Auth.ClientID)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthPKCE {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_pkce", r.PrimaryAuth)
+	}
+	if r.Category != "crm" {
+		t.Errorf("Category = %q, want crm", r.Category)
+	}
+	// Must have org_domain config option.
+	if len(r.ConfigOptions) == 0 || r.ConfigOptions[0].Name != "org_domain" {
+		t.Errorf("ConfigOptions = %+v, want one entry named org_domain", r.ConfigOptions)
+	}
+	if !r.ConfigOptions[0].Required {
+		t.Error("org_domain should be required")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 
