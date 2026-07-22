@@ -946,6 +946,36 @@
         "allowed": false,
         "default": false
       }
+    },
+    {
+      "id": "figma",
+      "display_name": "Figma",
+      "description": "Browse Figma files, components, and design tokens. Sign in with Figma \u2014 no token to paste.",
+      "category": "design",
+      "transport": "http",
+      "url": "https://mcp.figma.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "mcp:connect"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.figma.com/docs/figma-mcp-server/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
     }
   ]
 }

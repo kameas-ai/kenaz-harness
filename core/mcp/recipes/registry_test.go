@@ -40,6 +40,7 @@ var expectedRegistryIDs = []string{
 	"workato",
 	"airtable",
 	"canva",
+	"figma",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -789,6 +790,35 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Figma(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("figma")
+	if !ok {
+		t.Fatal("figma not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.figma.com/mcp" {
+		t.Errorf("URL = %q, want https://mcp.figma.com/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	if r.Auth.ClientID != "" {
+		t.Errorf("figma auth.client_id = %q, want empty (DCR zero-app, verify at build)", r.Auth.ClientID)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "design" {
+		t.Errorf("Category = %q, want design", r.Category)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 
