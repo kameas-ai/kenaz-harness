@@ -1248,3 +1248,34 @@ func TestRecipe_Lever(t *testing.T) {
 		t.Errorf("Validate() error: %v", err)
 	}
 }
+
+func TestRecipe_Rippling(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("rippling")
+	if !ok {
+		t.Fatal("rippling not in registry")
+	}
+	if r.Category != "hr_people" {
+		t.Errorf("Category = %q, want hr_people", r.Category)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["RIPPLING_CLIENT_ID"] {
+		t.Errorf("EnvKeys = %+v, want RIPPLING_CLIENT_ID (Kameas OAuth seam)", r.EnvKeys)
+	}
+	if !envNames["RIPPLING_CLIENT_SECRET"] {
+		t.Errorf("EnvKeys = %+v, want RIPPLING_CLIENT_SECRET", r.EnvKeys)
+	}
+	// No payroll-run in description.
+	if strings.Contains(strings.ToLower(r.Description), "payroll-run") {
+		t.Error("rippling description must not include payroll-run tools")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}

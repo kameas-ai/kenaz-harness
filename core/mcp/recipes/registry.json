@@ -1311,6 +1311,47 @@
         "default": false
       },
       "warning": "Verify best npm MCP package for Lever at build — 'lever-mcp-server' is a placeholder; no confirmed package found at research time. API key auth preferred (no Kameas app needed). If OAuth2 partner integration is required, register a Kameas app at hire.lever.co/developer. First npm fetch can take 5–15 s."
+    },
+    {
+      "id": "rippling",
+      "display_name": "Rippling",
+      "description": "Read employee profiles, org groups, and HR structure from Rippling. Read-only — no payroll-run or admin writes. Requires a Kameas Rippling OAuth app (register at developer.rippling.com).",
+      "category": "hr_people",
+      "command": [
+        "npx",
+        "-y",
+        "rippling-mcp-server"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "RIPPLING_CLIENT_ID",
+          "display": "Rippling OAuth client ID (${KAMEAS_RIPPLING_OAUTH_CLIENT_ID} — from developer.rippling.com)",
+          "docs_url": "https://developer.rippling.com/docs",
+          "required": true
+        },
+        {
+          "name": "RIPPLING_CLIENT_SECRET",
+          "display": "Rippling OAuth client secret (from developer.rippling.com)",
+          "docs_url": "https://developer.rippling.com/docs",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.rippling.com/docs",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Owner must register a Kameas Rippling OAuth2 app at developer.rippling.com before use. Note: Rippling supports PKCE S256 but no DCR — a Kameas app is required. Scopes are defined at app-registration time; request minimal read-only scopes (employees, groups, org). Verify best npm MCP package for Rippling at build — 'rippling-mcp-server' is a placeholder. Auth endpoints: authorize=https://app.rippling.com/oauth token=https://api.rippling.com/o/token/. No payroll-run tools."
     }
   ]
 }
