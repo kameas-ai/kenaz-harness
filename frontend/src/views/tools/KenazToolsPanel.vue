@@ -17,6 +17,7 @@ import { useRouter } from 'vue-router';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { useToolsRecipes, useShell } from '@/lib/useHarnessAPI';
 import {
+  Activity,
   Brain,
   CheckSquare,
   ChevronDown,
@@ -25,9 +26,11 @@ import {
   Folder,
   FolderOpen,
   Globe,
+  Layers,
   MessageSquare,
   Scale,
   Search,
+  Server,
   Wrench,
   Zap,
 } from '@/shell/icons';
@@ -383,6 +386,15 @@ function categoryIcon(category: RecipeCategory) {
       return MessageSquare;
     case 'automation':
       return Zap;
+    // Marketing analytics + data/BI categories (01NCONN09 pack)
+    case 'analytics':
+      return Activity;
+    case 'marketing':
+      return Zap;
+    case 'bi':
+      return Layers;
+    case 'data':
+      return Server;
     default:
       return Wrench;
   }
