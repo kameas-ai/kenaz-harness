@@ -881,6 +881,137 @@
       "warning": "Workato Enterprise MCP requires an Enterprise plan. Your Workato admin must add you to a user group with MCP access. Each MCP server collection has its own URL — copy the path portion from AI Hub > Enterprise MCP (everything after app.workato.com/)."
     },
     {
+      "id": "onedrive",
+      "display_name": "OneDrive",
+      "description": "Browse, search, upload, download, and organize files in Microsoft OneDrive. Signs in with a device code in your browser on first use; personal accounts need no credentials.",
+      "category": "files",
+      "command": [
+        "npx",
+        "-y",
+        "@softeria/ms-365-mcp-server",
+        "--preset",
+        "onedrive"
+      ],
+      "primary_auth": "device_code",
+      "env_keys": [
+        {
+          "name": "MS365_MCP_CLIENT_ID",
+          "display": "Azure app client ID (optional — for work/school accounts)",
+          "docs_url": "https://github.com/softeria/ms-365-mcp-server#authentication",
+          "required": false
+        },
+        {
+          "name": "MS365_MCP_TENANT_ID",
+          "display": "Azure tenant ID (optional — set 'consumers' for personal; tenant ID for org)",
+          "docs_url": "https://github.com/softeria/ms-365-mcp-server#authentication",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/softeria/ms-365-mcp-server",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Personal Microsoft accounts: if your session expires after ~1 hour, set MS365_MCP_TENANT_ID=consumers. Work/school accounts: set MS365_MCP_TENANT_ID to your Azure tenant ID (or use a custom MS365_MCP_CLIENT_ID if your org blocks third-party apps)."
+    },
+    {
+      "id": "teams",
+      "display_name": "Microsoft Teams",
+      "description": "Read and send messages in Teams chats and channels, manage team members, list meetings, and fetch transcripts. Requires a work or school Microsoft account — personal accounts are not supported by Teams.",
+      "category": "communication",
+      "command": [
+        "npx",
+        "-y",
+        "@softeria/ms-365-mcp-server",
+        "--org-mode",
+        "--preset",
+        "teams"
+      ],
+      "primary_auth": "device_code",
+      "env_keys": [
+        {
+          "name": "MS365_MCP_TENANT_ID",
+          "display": "Azure tenant ID (required for org sign-in — enter your organisation's tenant ID or 'common')",
+          "docs_url": "https://github.com/softeria/ms-365-mcp-server#authentication",
+          "required": false
+        },
+        {
+          "name": "MS365_MCP_CLIENT_ID",
+          "display": "Azure app client ID (optional — use a custom app if your org blocks third-party apps)",
+          "docs_url": "https://github.com/softeria/ms-365-mcp-server#authentication",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/softeria/ms-365-mcp-server",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Teams requires a work or school Microsoft account. Personal Microsoft accounts will fail at sign-in. If your organisation's IT policy blocks the default app, set MS365_MCP_CLIENT_ID to your custom Azure AD app client ID and MS365_MCP_TENANT_ID to your tenant ID."
+    },
+    {
+      "id": "sharepoint",
+      "display_name": "SharePoint",
+      "description": "Search SharePoint sites, read and write lists and list items, manage list columns, and navigate site drives. Also exposes shared-mailbox and org-presence tools (work preset). Requires a work or school Microsoft account and your Azure tenant ID.",
+      "category": "files",
+      "command": [
+        "npx",
+        "-y",
+        "@softeria/ms-365-mcp-server",
+        "--org-mode",
+        "--preset",
+        "work"
+      ],
+      "primary_auth": "device_code",
+      "env_keys": [
+        {
+          "name": "MS365_MCP_TENANT_ID",
+          "display": "Azure tenant ID (required — SharePoint is an org resource; enter your organisation's tenant ID)",
+          "docs_url": "https://github.com/softeria/ms-365-mcp-server#authentication",
+          "required": false
+        },
+        {
+          "name": "MS365_MCP_CLIENT_ID",
+          "display": "Azure app client ID (optional — use a custom app if your org blocks third-party apps)",
+          "docs_url": "https://github.com/softeria/ms-365-mcp-server#authentication",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/softeria/ms-365-mcp-server",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "SharePoint requires a work or school Microsoft account and your Azure tenant ID (set MS365_MCP_TENANT_ID). The 'work' preset also exposes shared-mailbox and user-management tools alongside SharePoint. If your organisation's IT policy blocks the default app, set MS365_MCP_CLIENT_ID to your custom Azure AD app client ID."
+    },
+    {
       "id": "supabase",
       "display_name": "Supabase",
       "description": "Query databases, manage tables, run migrations, and access Supabase projects. Sign in with Supabase (OAuth) — no token to paste. For CI/headless environments, supply a personal access token as a fallback.",
@@ -924,7 +1055,10 @@
       "url": "https://gitlab.com/api/v4/mcp",
       "auth": {
         "kind": "mcp_oauth",
-        "scopes": ["mcp", "mcp_orbit"]
+        "scopes": [
+          "mcp",
+          "mcp_orbit"
+        ]
       },
       "primary_auth": "browser_oauth_dcr",
       "env_keys": [
@@ -956,7 +1090,11 @@
       "display_name": "Google Maps",
       "description": "Geocode addresses, get directions, search for places, and calculate distances via the Google Maps APIs. Requires a Google Maps API key with the relevant APIs enabled.",
       "category": "fetch",
-      "command": ["npx", "-y", "@modelcontextprotocol/server-google-maps"],
+      "command": [
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-google-maps"
+      ],
       "env_keys": [
         {
           "name": "GOOGLE_MAPS_API_KEY",
@@ -987,7 +1125,11 @@
       "display_name": "MySQL",
       "description": "Query a MySQL database: list tables, describe schemas, and run read queries. Write operations (INSERT/UPDATE/DELETE) are disabled by default and can be enabled via optional env vars.",
       "category": "filesystem",
-      "command": ["npx", "-y", "@benborla29/mcp-server-mysql"],
+      "command": [
+        "npx",
+        "-y",
+        "@benborla29/mcp-server-mysql"
+      ],
       "env_keys": [
         {
           "name": "MYSQL_HOST",
@@ -1060,7 +1202,11 @@
       "display_name": "MongoDB",
       "description": "Query MongoDB databases, inspect schemas, and run aggregation pipelines. Supports both local MongoDB and MongoDB Atlas. Supply a connection string to connect — Atlas API credentials are optional for Atlas management tools.",
       "category": "filesystem",
-      "command": ["npx", "-y", "mongodb-mcp-server@latest"],
+      "command": [
+        "npx",
+        "-y",
+        "mongodb-mcp-server@latest"
+      ],
       "env_keys": [
         {
           "name": "MDB_MCP_CONNECTION_STRING",
@@ -1109,7 +1255,12 @@
       "display_name": "Redis",
       "description": "Read and write Redis keys, lists, hashes, sets, and streams. Supports local Redis, Redis Cloud, Upstash, and Azure Cache for Redis. Provide a connection URL to connect.",
       "category": "filesystem",
-      "command": ["uvx", "--from", "redis-mcp-server@latest", "redis-mcp-server"],
+      "command": [
+        "uvx",
+        "--from",
+        "redis-mcp-server@latest",
+        "redis-mcp-server"
+      ],
       "env_keys": [
         {
           "name": "REDIS_URL",
@@ -1134,6 +1285,3463 @@
       },
       "warning": "Python server (PyPI redis-mcp-server) launched via uvx; requires uv installed. First run downloads the package (5–15 s). Use rediss:// scheme for TLS-encrypted connections (Redis Cloud, Azure). REDIS_URL is read from environment — the URL is never exposed in process arguments.",
       "primary_auth": "keys"
+    },
+    {
+      "id": "mattermost",
+      "display_name": "Mattermost",
+      "description": "Read and post messages in Mattermost channels, look up teams and users. Requires your self-hosted Mattermost server URL and a Personal Access Token.",
+      "category": "communication",
+      "command": [
+        "npx",
+        "-y",
+        "@mattermost/mcp"
+      ],
+      "env_keys": [
+        {
+          "name": "MATTERMOST_URL",
+          "display": "Mattermost server URL (e.g. https://mattermost.yourcompany.com)",
+          "docs_url": "https://docs.mattermost.com/developer/personal-access-tokens.html",
+          "required": true
+        },
+        {
+          "name": "MATTERMOST_TOKEN",
+          "display": "Mattermost Personal Access Token",
+          "docs_url": "https://docs.mattermost.com/developer/personal-access-tokens.html",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.mattermost.com/developer/personal-access-tokens.html",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Requires a self-hosted Mattermost server. Personal Access Tokens must be enabled by your Mattermost admin. The @mattermost/mcp npm package name was unverified at plan time — confirm before shipping.",
+      "primary_auth": "keys"
+    },
+    {
+      "id": "ringcentral",
+      "display_name": "RingCentral",
+      "description": "Read call logs, messages, and presence; send SMS via RingCentral. Sign in with RingCentral (OAuth) — no token to paste.",
+      "category": "communication",
+      "transport": "http",
+      "url": "https://mcp.ringcentral.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_RINGCENTRAL_OAUTH_CLIENT_ID}",
+        "scopes": [
+          "ReadCallLog",
+          "ReadMessages",
+          "ReadPresence",
+          "SMS"
+        ]
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_RINGCENTRAL_OAUTH_CLIENT_ID",
+          "display": "Kameas RingCentral OAuth client ID (pre-configured)",
+          "docs_url": "https://developers.ringcentral.com/guide/authentication",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.ringcentral.com/guide/authentication",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "No official RingCentral MCP server was confirmed at plan time — verify URL before shipping. Requires Kameas RingCentral OAuth app registration at developers.ringcentral.com."
+    },
+    {
+      "id": "webex",
+      "display_name": "Webex",
+      "description": "Read Webex messages, rooms, and memberships; send messages and look up meeting details. Sign in with Webex (OAuth) — no token to paste.",
+      "category": "communication",
+      "transport": "http",
+      "url": "https://mcp.webex.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_WEBEX_OAUTH_CLIENT_ID}",
+        "scopes": [
+          "spark:messages_read",
+          "spark:messages_write",
+          "spark:rooms_read",
+          "spark:memberships_read"
+        ]
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_WEBEX_OAUTH_CLIENT_ID",
+          "display": "Kameas Webex OAuth client ID (pre-configured)",
+          "docs_url": "https://developer.webex.com/docs/integrations",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.webex.com/docs/integrations",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "No official Webex MCP server was confirmed at plan time — verify URL before shipping. Requires Kameas Webex OAuth integration registration at developer.webex.com."
+    },
+    {
+      "id": "front",
+      "display_name": "Front",
+      "description": "Read and manage Front conversations, drafts, and contacts. Sign in with Front (OAuth) — browser consent, per-user token. Read-only by default; add 'write' or 'send' scopes only if needed.",
+      "category": "communication",
+      "transport": "http",
+      "url": "https://mcp.frontapp.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_FRONT_OAUTH_CLIENT_ID}",
+        "client_secret": "${KAMEAS_FRONT_OAUTH_CLIENT_SECRET}",
+        "scopes": [
+          "read"
+        ]
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_FRONT_OAUTH_CLIENT_ID",
+          "display": "Kameas Front OAuth client ID (pre-configured)",
+          "docs_url": "https://dev.frontapp.com/docs/mcp-server",
+          "required": true
+        },
+        {
+          "name": "KAMEAS_FRONT_OAUTH_CLIENT_SECRET",
+          "display": "Kameas Front OAuth client secret (pre-configured)",
+          "docs_url": "https://dev.frontapp.com/docs/mcp-server",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://dev.frontapp.com/docs/mcp-server",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Front MCP is in open beta. Enable only 'MCP Server' in your Front developer app — enabling other features causes 403 errors. Requires Kameas Front OAuth app with client ID and secret."
+    },
+    {
+      "id": "discord",
+      "display_name": "Discord",
+      "description": "Read messages and channels, search server members, look up guilds in Discord. Sign in with Discord (OAuth) — no token to paste.",
+      "category": "communication",
+      "transport": "http",
+      "url": "https://mcp.discord.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_DISCORD_OAUTH_CLIENT_ID}",
+        "scopes": [
+          "identify",
+          "guilds",
+          "messages.read"
+        ]
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_DISCORD_OAUTH_CLIENT_ID",
+          "display": "Kameas Discord OAuth client ID (pre-configured)",
+          "docs_url": "https://discord.com/developers/applications",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://discord.com/developers/docs/topics/oauth2",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "No official Discord MCP server was confirmed at plan time — verify URL before shipping. Requires Kameas Discord OAuth app registration at discord.com/developers."
+    },
+    {
+      "id": "zoom",
+      "display_name": "Zoom",
+      "description": "List and create Zoom meetings, retrieve recordings, look up users and meeting details. Sign in with Zoom (OAuth) — no token to paste.",
+      "category": "communication",
+      "transport": "http",
+      "url": "https://mcp.zoom.us/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_ZOOM_OAUTH_CLIENT_ID}",
+        "scopes": [
+          "meeting:read",
+          "meeting:write",
+          "recording:read",
+          "user:read"
+        ]
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_ZOOM_OAUTH_CLIENT_ID",
+          "display": "Kameas Zoom OAuth client ID (pre-configured)",
+          "docs_url": "https://marketplace.zoom.us/develop/create",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.zoom.us/docs/mcp/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "No official Zoom MCP server was confirmed at plan time — verify URL before shipping. Requires Kameas Zoom OAuth app registration at marketplace.zoom.us."
+    },
+    {
+      "id": "twilio",
+      "display_name": "Twilio",
+      "description": "Send and query SMS messages, voice calls, and phone number lookups via Twilio's official MCP server. Requires Twilio Account SID and API Key credentials.",
+      "category": "communication",
+      "command": [
+        "npx",
+        "-y",
+        "@twilio-alpha/mcp",
+        "${TWILIO_ACCOUNT_SID}/${TWILIO_API_KEY}:${TWILIO_API_SECRET}"
+      ],
+      "env_keys": [
+        {
+          "name": "TWILIO_ACCOUNT_SID",
+          "display": "Twilio Account SID (starts with AC)",
+          "docs_url": "https://www.twilio.com/console",
+          "required": true
+        },
+        {
+          "name": "TWILIO_API_KEY",
+          "display": "Twilio API Key (starts with SK)",
+          "docs_url": "https://www.twilio.com/docs/iam/api-keys",
+          "required": true
+        },
+        {
+          "name": "TWILIO_API_SECRET",
+          "display": "Twilio API Secret",
+          "docs_url": "https://www.twilio.com/docs/iam/api-keys",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/twilio-labs/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "npm fetch on first run can take 5–15 s. Load only needed Twilio services — full API surface may exceed LLM context limits.",
+      "primary_auth": "keys"
+    },
+    {
+      "id": "intercom",
+      "display_name": "Intercom",
+      "description": "Search conversations, contacts, and companies; fetch conversation details and contact profiles via Intercom's official remote MCP server. Sign in with Intercom — no token to paste. US-hosted workspaces only.",
+      "category": "communication",
+      "transport": "http",
+      "url": "https://mcp.intercom.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth"
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/intercom/intercom-mcp-server",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Intercom MCP is currently available for US-hosted workspaces only."
+    },
+    {
+      "id": "freshdesk",
+      "display_name": "Freshdesk",
+      "description": "Search and manage Freshdesk support tickets, contacts, agents, and companies. Requires a Freshdesk API key and your Freshdesk domain.",
+      "category": "support",
+      "command": [
+        "uvx",
+        "freshdesk-mcp"
+      ],
+      "env_keys": [
+        {
+          "name": "FRESHDESK_API_KEY",
+          "display": "Freshdesk API key",
+          "docs_url": "https://support.freshdesk.com/en/support/solutions/articles/215517",
+          "required": true
+        },
+        {
+          "name": "FRESHDESK_DOMAIN",
+          "display": "Freshdesk domain (e.g. yourcompany.freshdesk.com)",
+          "docs_url": "https://support.freshdesk.com/en/support/solutions/articles/215517",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "primary_auth": "keys",
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.freshdesk.com/api/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Python server (PyPI freshdesk-mcp by effytech) launched via uvx; requires uv installed. First run downloads the package (5–15 s). Verify at build: uvx freshdesk-mcp (package name may differ from binary name)."
+    },
+    {
+      "id": "crowdstrike-aidr",
+      "display_name": "CrowdStrike AIDR",
+      "description": "CrowdStrike AI Guard: analyze and redact text to detect LLM prompt injection and data exfiltration attempts. Read/query-only. Requires a CrowdStrike AIDR API token.",
+      "category": "security",
+      "command": [
+        "npx",
+        "-y",
+        "@crowdstrike/aidr-mcp-server"
+      ],
+      "env_keys": [
+        {
+          "name": "CS_AIDR_TOKEN",
+          "display": "CrowdStrike AIDR API token",
+          "docs_url": "https://www.crowdstrike.com/products/ai-security/falcon-aidr/",
+          "required": true
+        },
+        {
+          "name": "CS_AIDR_BASE_URL_TEMPLATE",
+          "display": "AIDR base URL template (optional — default: https://api.crowdstrike.com/aidr/{SERVICE_NAME})",
+          "docs_url": "https://www.crowdstrike.com/products/ai-security/falcon-aidr/",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "primary_auth": "keys",
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/CrowdStrike/aidr-mcp-server",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "AIDR only (AI Guard / prompt safety) — not Falcon detection or SOC investigation. Requires Node.js v20+ (README notes v24+). npm fetch on first run can take 5–15 s."
+    },
+    {
+      "id": "help-scout",
+      "display_name": "Help Scout",
+      "description": "Search conversations, threads, and inboxes in Help Scout. Requires a Help Scout App (App ID + Secret) created in Help Scout My Apps — each user registers their own app (no Kameas registration needed).",
+      "category": "support",
+      "command": [
+        "npx",
+        "-y",
+        "help-scout-mcp-server"
+      ],
+      "env_keys": [
+        {
+          "name": "HELPSCOUT_APP_ID",
+          "display": "Help Scout App ID (from My Apps in Help Scout)",
+          "docs_url": "https://secure.helpscout.net/authentication/oauth2-registration",
+          "required": true
+        },
+        {
+          "name": "HELPSCOUT_APP_SECRET",
+          "display": "Help Scout App Secret (from My Apps in Help Scout)",
+          "docs_url": "https://secure.helpscout.net/authentication/oauth2-registration",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "primary_auth": "keys",
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.helpscout.com/mailbox-api/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Third-party server (drewburchfield/help-scout-mcp-server). Before installing, create a Help Scout App in Help Scout My Apps to get your App ID and Secret. npm fetch on first run can take 5–15 s."
+    },
+    {
+      "id": "okta",
+      "display_name": "Okta",
+      "description": "Query Okta users, groups, apps, logs, and policies via the Okta Admin Management API. Read-only by default (okta.users.read, okta.groups.read, okta.apps.read, okta.logs.read). Sign in with device authorization (browser) or Private Key JWT. Requires your Okta org URL and an Okta app integration.",
+      "category": "security",
+      "command": [
+        "uvx",
+        "okta-mcp-server"
+      ],
+      "env_keys": [
+        {
+          "name": "OKTA_ORG_URL",
+          "display": "Okta org URL (e.g. https://yourcompany.okta.com)",
+          "docs_url": "https://developer.okta.com/docs/guides/implement-oauth-for-okta/main/",
+          "required": true
+        },
+        {
+          "name": "OKTA_CLIENT_ID",
+          "display": "Okta app integration Client ID",
+          "docs_url": "https://developer.okta.com/docs/guides/implement-oauth-for-okta/main/",
+          "required": true
+        },
+        {
+          "name": "OKTA_SCOPES",
+          "display": "Space-separated Okta scopes (default: okta.users.read okta.groups.read okta.apps.read okta.logs.read — read-only)",
+          "docs_url": "https://developer.okta.com/docs/reference/scopes/",
+          "required": false
+        },
+        {
+          "name": "OKTA_PRIVATE_KEY",
+          "display": "Okta private key PEM string (optional — for Private Key JWT / server-to-server auth)",
+          "docs_url": "https://developer.okta.com/docs/guides/implement-oauth-for-okta/main/",
+          "required": false
+        },
+        {
+          "name": "OKTA_KEY_ID",
+          "display": "Okta key ID / KID (optional — required with OKTA_PRIVATE_KEY)",
+          "docs_url": "https://developer.okta.com/docs/guides/implement-oauth-for-okta/main/",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "primary_auth": "device_code",
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/okta/okta-mcp-server",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Security read-only by default. The OKTA_SCOPES env var controls which tools are loaded — omitting manage scopes prevents write operations. Okta app integration must be created in the Okta Admin Console and scopes explicitly granted. Device authorization grant requires browser interaction at first use."
+    },
+    {
+      "id": "zendesk",
+      "display_name": "Zendesk",
+      "description": "Search and manage Zendesk tickets, comments, users, and knowledge base. Requires a Zendesk API token, your agent email, and your subdomain (yourcompany.zendesk.com).",
+      "category": "support",
+      "command": [
+        "uvx",
+        "zendesk-mcp"
+      ],
+      "env_keys": [
+        {
+          "name": "ZENDESK_SUBDOMAIN",
+          "display": "Zendesk subdomain (the part before .zendesk.com)",
+          "docs_url": "https://developer.zendesk.com/api-reference/introduction/security-and-auth/",
+          "required": true
+        },
+        {
+          "name": "ZENDESK_EMAIL",
+          "display": "Zendesk agent email address (used as API username)",
+          "docs_url": "https://developer.zendesk.com/api-reference/introduction/security-and-auth/",
+          "required": true
+        },
+        {
+          "name": "ZENDESK_API_TOKEN",
+          "display": "Zendesk API token (from Admin Center > Apps & Integrations > APIs > API Tokens)",
+          "docs_url": "https://support.zendesk.com/hc/en-us/articles/4408889192858",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "primary_auth": "keys",
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.zendesk.com/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "No official Zendesk MCP server — uses community zendesk-mcp (PyPI). Verify at build: uvx zendesk-mcp. If unavailable, fall back to npx github:mattcoatsworth/zendesk-mcp-server. ZENDESK_EMAIL is the agent email used as Basic Auth username paired with the API token."
+    },
+    {
+      "id": "servicenow",
+      "display_name": "ServiceNow",
+      "description": "Query ServiceNow incidents, change requests, users, and CMDB records. Read-only by default. Requires your ServiceNow instance URL and credentials (OAuth client ID + secret, or API key, or basic auth).",
+      "category": "itsm",
+      "command": [
+        "uvx",
+        "servicenow-mcp"
+      ],
+      "env_keys": [
+        {
+          "name": "SERVICENOW_INSTANCE_URL",
+          "display": "ServiceNow instance URL (e.g. https://yourcompany.service-now.com)",
+          "docs_url": "https://docs.servicenow.com/",
+          "required": true
+        },
+        {
+          "name": "SERVICENOW_CLIENT_ID",
+          "display": "ServiceNow OAuth client ID (from Application Registry — required for OAuth auth)",
+          "docs_url": "https://docs.servicenow.com/bundle/washingtondc-platform-security/page/administer/security/concept/c_OAuthApplications.html",
+          "required": false
+        },
+        {
+          "name": "SERVICENOW_CLIENT_SECRET",
+          "display": "ServiceNow OAuth client secret (required for OAuth auth)",
+          "docs_url": "https://docs.servicenow.com/bundle/washingtondc-platform-security/page/administer/security/concept/c_OAuthApplications.html",
+          "required": false
+        },
+        {
+          "name": "SERVICENOW_API_KEY",
+          "display": "ServiceNow API key (alternative to OAuth — from System Web Services > REST API Explorer)",
+          "docs_url": "https://docs.servicenow.com/",
+          "required": false
+        },
+        {
+          "name": "SERVICENOW_AUTH_TYPE",
+          "display": "Auth type: oauth, api_key, or basic (default: oauth)",
+          "docs_url": "https://github.com/echelon-ai-labs/servicenow-mcp",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "primary_auth": "keys",
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/echelon-ai-labs/servicenow-mcp",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Community server (echelon-ai-labs/servicenow-mcp). Verify at build: uvx servicenow-mcp (PyPI package may not be published — if unavailable, install via pip from source or use a Docker image). Read-only by default; check server docs for --read-only flag. ServiceNow instance URL and credentials are per-tenant."
+    },
+    {
+      "id": "jamf-docs",
+      "display_name": "Jamf Developer Docs",
+      "description": "Search Jamf developer documentation, API references, and code examples. No authentication required. Note: this is the Jamf documentation MCP only — not the Jamf Pro management API.",
+      "category": "itsm",
+      "transport": "http",
+      "url": "https://developer.jamf.com/mcp",
+      "primary_auth": "none",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.jamf.com/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Jamf Developer Docs MCP — documentation search only (no Jamf Pro management capabilities). Verify at build that developer.jamf.com/mcp serves MCP tools. Jamf Pro management recipe deferred pending official Jamf MCP or published community npm package."
+    },
+    {
+      "id": "mercury",
+      "display_name": "Mercury",
+      "description": "Query Mercury bank accounts, transactions, and financial data — read-only, no transactions initiated. Sign in with Mercury (DCR OAuth — no token to paste).",
+      "category": "finance_accounting",
+      "transport": "http",
+      "url": "https://mcp.mercury.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "read",
+          "offline_access"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://mercury.com/api",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "ramp",
+      "display_name": "Ramp",
+      "description": "Browse Ramp cards, spend data, vendors, bills, and corporate travel — read-only, no transactions initiated. Sign in with Ramp (DCR OAuth — no token to paste).",
+      "category": "finance_accounting",
+      "transport": "http",
+      "url": "https://mcp.ramp.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "bills:read",
+          "cards:read",
+          "departments:read",
+          "entities:read",
+          "memos:read",
+          "spend_programs:read",
+          "vendors:read",
+          "cards:read_agentic",
+          "trips:read",
+          "spend_requests:read",
+          "agent_account_numbers:read"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.ramp.com/developer-guide/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "deel",
+      "display_name": "Deel",
+      "description": "Read contracts, people, timesheets, and invoice data from Deel — read-only, no payroll or money-movement actions. Sign in with Deel (DCR OAuth — no token to paste).",
+      "category": "hr_people",
+      "transport": "http",
+      "url": "https://api.letsdeel.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "contracts:read",
+          "people:read",
+          "timesheets:read",
+          "invoice-adjustments:read"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.deel.com/mcp/introduction",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "greenhouse",
+      "display_name": "Greenhouse",
+      "description": "Search candidates, jobs, applications, interviews, and offers in Greenhouse Recruiting. Read-only access via the Harvest API. Requires a Greenhouse Harvest API key.",
+      "category": "hr_people",
+      "command": [
+        "uvx",
+        "open-greenhouse-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "GREENHOUSE_API_KEY",
+          "display": "Greenhouse Harvest API key",
+          "docs_url": "https://developers.greenhouse.io/harvest.html#authentication",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.greenhouse.io/harvest.html",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Python server launched via uvx; requires uv installed. First run downloads the package (5–15 s). Verify package name 'open-greenhouse-mcp' at build — select the most actively maintained Greenhouse MCP package on PyPI."
+    },
+    {
+      "id": "ashby",
+      "display_name": "Ashby",
+      "description": "Browse candidates, jobs, applications, interviews, and offers in Ashby ATS. Read-only access via the Ashby GraphQL API. Requires an Ashby API key.",
+      "category": "hr_people",
+      "command": [
+        "npx",
+        "-y",
+        "ashby-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "ASHBY_API_KEY",
+          "display": "Ashby API key",
+          "docs_url": "https://app.ashbyhq.com/admin/api",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://app.ashbyhq.com/admin/api",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Verify the npm package name 'ashby-mcp' at build — search npm for the most actively maintained Ashby MCP package. If no community package exists, a minimal wrapper calling the Ashby GraphQL API at https://app.ashbyhq.com/api/graphql may be needed. First npm fetch can take 5–15 s."
+    },
+    {
+      "id": "bamboohr",
+      "display_name": "BambooHR",
+      "description": "Browse employee directory, org chart, time-off records, and custom HR fields from BambooHR. API key auth (simpler than OAuth — no Kameas app registration needed). Requires your company subdomain and an API key.",
+      "category": "hr_people",
+      "command": [
+        "npx",
+        "-y",
+        "bamboohr-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "BAMBOOHR_API_KEY",
+          "display": "BambooHR API key",
+          "docs_url": "https://documentation.bamboohr.com/docs/getting-started",
+          "required": true
+        },
+        {
+          "name": "BAMBOOHR_SUBDOMAIN",
+          "display": "BambooHR company subdomain (e.g. 'acmecorp' if you log in at acmecorp.bamboohr.com)",
+          "docs_url": "https://documentation.bamboohr.com/docs/getting-started",
+          "required": true
+        }
+      ],
+      "config_options": [
+        {
+          "name": "bamboohr_subdomain",
+          "display": "Company subdomain",
+          "kind": "string",
+          "default": "",
+          "required": true,
+          "description": "Your BambooHR subdomain — e.g. 'acmecorp' if you access BambooHR at acmecorp.bamboohr.com"
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://documentation.bamboohr.com/docs/getting-started",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Verify npm package 'bamboohr-mcp' at build — search npm for the most actively maintained BambooHR MCP package. First npm fetch can take 5–15 s."
+    },
+    {
+      "id": "xero",
+      "display_name": "Xero",
+      "description": "Read accounting transactions, contacts, and settings from Xero — read-only, no transactions initiated. Uses Xero's official npm MCP package. Requires a Kameas Xero OAuth app (register at developer.xero.com).",
+      "category": "finance_accounting",
+      "command": [
+        "npx",
+        "-y",
+        "@xeroapi/xero-mcp-server@latest"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "XERO_CLIENT_ID",
+          "display": "Xero OAuth client ID (from your Kameas app at developer.xero.com)",
+          "docs_url": "https://developer.xero.com/documentation/guides/oauth2/overview/",
+          "required": true
+        },
+        {
+          "name": "XERO_CLIENT_SECRET",
+          "display": "Xero OAuth client secret (from your Kameas app at developer.xero.com)",
+          "docs_url": "https://developer.xero.com/documentation/guides/oauth2/overview/",
+          "required": true
+        },
+        {
+          "name": "XERO_SCOPES",
+          "display": "Xero OAuth scopes (optional — defaults to read-only accounting scopes)",
+          "docs_url": "https://developer.xero.com/documentation/guides/oauth2/scopes/",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/XeroAPI/xero-mcp-server",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Owner must register a Kameas Xero OAuth app at developer.xero.com before use. Set XERO_CLIENT_ID and XERO_CLIENT_SECRET. Default scopes: accounting.transactions.read accounting.contacts.read accounting.settings.read. Verify DCR availability at identity.xero.com at build — if DCR is present, this recipe can be upgraded to zero-app. First npm fetch can take 5–15 s."
+    },
+    {
+      "id": "gusto",
+      "display_name": "Gusto",
+      "description": "Read employee profiles, pay periods, and pay stubs from Gusto — read-only, no payroll-run or money-movement actions. Requires a Kameas Gusto OAuth app (register at developer.gusto.com).",
+      "category": "hr_people",
+      "command": [
+        "npx",
+        "-y",
+        "gusto-mcp-server"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "GUSTO_CLIENT_ID",
+          "display": "Gusto OAuth client ID (${KAMEAS_GUSTO_OAUTH_CLIENT_ID} — from your Kameas app at developer.gusto.com)",
+          "docs_url": "https://developer.gusto.com/docs/api/getting-started",
+          "required": true
+        },
+        {
+          "name": "GUSTO_CLIENT_SECRET",
+          "display": "Gusto OAuth client secret (from your Kameas app at developer.gusto.com)",
+          "docs_url": "https://developer.gusto.com/docs/api/getting-started",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.gusto.com/docs/api/getting-started",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Owner must register a Kameas Gusto OAuth app at developer.gusto.com before use. Verify best npm MCP package for Gusto at build — no confirmed official package at research time; 'gusto-mcp-server' is a placeholder. Auth endpoints: authorize=https://app.gusto.com/oauth/authorize token=https://api.gusto.com/oauth/token. No payroll-run tools — read-only employees/pay stubs only."
+    },
+    {
+      "id": "quickbooks",
+      "display_name": "QuickBooks Online",
+      "description": "Read accounting data from QuickBooks Online — read-only, no transactions initiated. Requires a Kameas Intuit OAuth app (register at developer.intuit.com).",
+      "category": "finance_accounting",
+      "command": [
+        "npx",
+        "-y",
+        "quickbooks-mcp-server"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "QUICKBOOKS_CLIENT_ID",
+          "display": "Intuit/QuickBooks OAuth client ID (${KAMEAS_QUICKBOOKS_OAUTH_CLIENT_ID} — from developer.intuit.com)",
+          "docs_url": "https://developer.intuit.com/app/developer/qbo/docs/get-started",
+          "required": true
+        },
+        {
+          "name": "QUICKBOOKS_CLIENT_SECRET",
+          "display": "Intuit/QuickBooks OAuth client secret (from developer.intuit.com)",
+          "docs_url": "https://developer.intuit.com/app/developer/qbo/docs/get-started",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.intuit.com/app/developer/qbo/docs/api/accounting/all-entities/account",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Owner must register a Kameas Intuit app at developer.intuit.com before use. Verify best npm MCP package for QuickBooks at build — no confirmed official package at research time; 'quickbooks-mcp-server' is a placeholder. Auth endpoints: authorize=https://appcenter.intuit.com/connect/oauth2 token=https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer. Scope: com.intuit.quickbooks.accounting (read tier). Read-only — no transactions initiated."
+    },
+    {
+      "id": "brex",
+      "display_name": "Brex",
+      "description": "Read Brex card expenses, transactions, and account data — read-only, no transactions initiated. Uses a Brex API token (no Kameas app registration needed — generate a token at developer.brex.com).",
+      "category": "finance_accounting",
+      "command": [
+        "npx",
+        "-y",
+        "brex-mcp-server"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "BREX_API_TOKEN",
+          "display": "Brex API token (read-only — from developer.brex.com or the Brex dashboard)",
+          "docs_url": "https://developer.brex.com/docs/authentication/",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.brex.com/docs/getting_started/",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Prefer the API-token path (BREX_API_TOKEN) over OAuth to avoid Kameas app registration. Verify best npm MCP package for Brex at build — 'brex-mcp-server' is a placeholder. If OAuth2 path is required, register a Kameas Brex app at accounts.brex.com; use read-only scopes only: expenses.readonly transactions.readonly accounts.readonly. Read-only — no transfers or payment-initiation tools."
+    },
+    {
+      "id": "lever",
+      "display_name": "Lever",
+      "description": "Read candidates, job postings, applications, interviews, and users from Lever ATS via the Lever Harvest API. API key auth — no Kameas app registration needed.",
+      "category": "hr_people",
+      "command": [
+        "npx",
+        "-y",
+        "lever-mcp-server"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "LEVER_API_KEY",
+          "display": "Lever API key (from Lever Settings > Integrations > API Credentials)",
+          "docs_url": "https://hire.lever.co/developer/v1/introduction",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://hire.lever.co/developer/v1/introduction",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Verify best npm MCP package for Lever at build — 'lever-mcp-server' is a placeholder; no confirmed package found at research time. API key auth preferred (no Kameas app needed). If OAuth2 partner integration is required, register a Kameas app at hire.lever.co/developer. First npm fetch can take 5–15 s."
+    },
+    {
+      "id": "rippling",
+      "display_name": "Rippling",
+      "description": "Read employee profiles, org groups, and HR structure from Rippling. Read-only — no payroll-run or admin writes. Requires a Kameas Rippling OAuth app (register at developer.rippling.com).",
+      "category": "hr_people",
+      "command": [
+        "npx",
+        "-y",
+        "rippling-mcp-server"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "RIPPLING_CLIENT_ID",
+          "display": "Rippling OAuth client ID (${KAMEAS_RIPPLING_OAUTH_CLIENT_ID} — from developer.rippling.com)",
+          "docs_url": "https://developer.rippling.com/docs",
+          "required": true
+        },
+        {
+          "name": "RIPPLING_CLIENT_SECRET",
+          "display": "Rippling OAuth client secret (from developer.rippling.com)",
+          "docs_url": "https://developer.rippling.com/docs",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.rippling.com/docs",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Owner must register a Kameas Rippling OAuth2 app at developer.rippling.com before use. Note: Rippling supports PKCE S256 but no DCR — a Kameas app is required. Scopes are defined at app-registration time; request minimal read-only scopes (employees, groups, org). Verify best npm MCP package for Rippling at build — 'rippling-mcp-server' is a placeholder. Auth endpoints: authorize=https://app.rippling.com/oauth token=https://api.rippling.com/o/token/. No payroll-run tools."
+    },
+    {
+      "id": "billdotcom",
+      "display_name": "Bill.com",
+      "description": "Read bills, invoices, and vendor data from Bill.com — read-only, no transactions initiated, no payment-initiation tools. Uses Bill.com Spend and Expense bearer token or legacy session-key auth.",
+      "category": "finance_accounting",
+      "command": [
+        "npx",
+        "-y",
+        "billdotcom-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "BILLDOTCOM_API_TOKEN",
+          "display": "Bill.com API token (preferred — from the Bill.com developer dashboard Spend & Expense API)",
+          "docs_url": "https://developer.bill.com/docs/authentication",
+          "required": false
+        },
+        {
+          "name": "BILLDOTCOM_DEV_KEY",
+          "display": "Bill.com developer key (legacy session auth — for the v3 API)",
+          "docs_url": "https://developer.bill.com/docs/authentication",
+          "required": false
+        },
+        {
+          "name": "BILLDOTCOM_ORG_ID",
+          "display": "Bill.com organization ID (legacy session auth — for the v3 API)",
+          "docs_url": "https://developer.bill.com/docs/authentication",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.bill.com/docs/authentication",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Prefer the Spend and Expense bearer token path (BILLDOTCOM_API_TOKEN) over session-key auth to avoid session expiry complexity. Verify best npm MCP package for Bill.com at build — 'billdotcom-mcp' is a placeholder; no confirmed package found at research time. Legacy v3 session auth requires BILLDOTCOM_DEV_KEY + BILLDOTCOM_ORG_ID (sessions expire after 35 min inactivity). No payment-initiation tools."
+    },
+    {
+      "id": "netsuite",
+      "display_name": "NetSuite (Enterprise)",
+      "description": "Enterprise — NetSuite uses per-account Token-Based Authentication (TBA) or OAuth2, both requiring per-tenant setup. No community MCP package confirmed at research time. For quick read-only access to NetSuite data, connect via Zapier or Workato in the Automation section.",
+      "category": "finance_accounting",
+      "command": [
+        "npx",
+        "-y",
+        "netsuite-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "NETSUITE_ACCOUNT_ID",
+          "display": "NetSuite account ID (e.g. 1234567 — from your NetSuite account URL)",
+          "docs_url": "https://docs.oracle.com/en/cloud/saas/netsuite/ns-online-help/section_4221490781.html",
+          "required": true
+        },
+        {
+          "name": "NETSUITE_CONSUMER_KEY",
+          "display": "NetSuite TBA consumer key",
+          "docs_url": "https://docs.oracle.com/en/cloud/saas/netsuite/ns-online-help/section_4221490781.html",
+          "required": false
+        },
+        {
+          "name": "NETSUITE_CONSUMER_SECRET",
+          "display": "NetSuite TBA consumer secret",
+          "docs_url": "https://docs.oracle.com/en/cloud/saas/netsuite/ns-online-help/section_4221490781.html",
+          "required": false
+        },
+        {
+          "name": "NETSUITE_TOKEN_ID",
+          "display": "NetSuite TBA token ID",
+          "docs_url": "https://docs.oracle.com/en/cloud/saas/netsuite/ns-online-help/section_4221490781.html",
+          "required": false
+        },
+        {
+          "name": "NETSUITE_TOKEN_SECRET",
+          "display": "NetSuite TBA token secret",
+          "docs_url": "https://docs.oracle.com/en/cloud/saas/netsuite/ns-online-help/section_4221490781.html",
+          "required": false
+        }
+      ],
+      "config_options": [
+        {
+          "name": "netsuite_account_id",
+          "display": "NetSuite account ID",
+          "kind": "string",
+          "default": "",
+          "required": true,
+          "description": "Your NetSuite account ID — the numeric portion of your NetSuite URL (e.g. 1234567 from 1234567.app.netsuite.com)"
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.oracle.com/en/cloud/saas/netsuite/ns-online-help/section_4221490781.html",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Enterprise — requires NetSuite TBA setup by a NetSuite administrator. No confirmed community MCP package at research time; 'netsuite-mcp' is a placeholder — verify at build. For quick access, connect via Zapier or Workato in the Automation section instead. TBA requires 4 tokens: consumer_key, consumer_secret, token_id, token_secret — all per-account."
+    },
+    {
+      "id": "workday",
+      "display_name": "Workday (Enterprise)",
+      "description": "Enterprise — Workday uses tenant-specific URLs and ISU (Integration System User) or OAuth2 client credentials, both requiring per-tenant setup by a Workday administrator. No confirmed community MCP package as of July 2026. For quick access to Workday HR data, connect via Zapier or Workato in the Automation section.",
+      "category": "hr_people",
+      "command": [
+        "npx",
+        "-y",
+        "workday-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "WORKDAY_ISU_USERNAME",
+          "display": "Workday ISU username (Integration System User — from your Workday tenant)",
+          "docs_url": "https://developer.workday.com",
+          "required": false
+        },
+        {
+          "name": "WORKDAY_ISU_PASSWORD",
+          "display": "Workday ISU password (from your Workday tenant)",
+          "docs_url": "https://developer.workday.com",
+          "required": false
+        }
+      ],
+      "config_options": [
+        {
+          "name": "workday_tenant_url",
+          "display": "Workday tenant URL",
+          "kind": "string",
+          "default": "",
+          "required": true,
+          "description": "Your Workday tenant URL — e.g. https://acmecorp.workday.com (from your Workday admin)"
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.workday.com",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Enterprise — requires Workday ISU setup by a Workday administrator. No confirmed community MCP package at research time; 'workday-mcp' is a placeholder — verify at developer.workday.com at build. For quick access to Workday HR data, connect via Zapier or Workato in the Automation section instead."
+    },
+    {
+      "id": "grafana",
+      "display_name": "Grafana",
+      "description": "Query Grafana Cloud dashboards, datasources, incidents, and alerts. Sign in with your Grafana Cloud account — no token to paste.",
+      "category": "observability",
+      "transport": "http",
+      "url": "https://mcp.grafana.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "grafana:read",
+          "grafana:write"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://grafana.com/docs/grafana-cloud/developer-resources/mcp/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Grafana Cloud only — self-hosted Grafana OSS does not expose a remote MCP server."
+    },
+    {
+      "id": "datadog",
+      "display_name": "Datadog",
+      "description": "Query Datadog metrics, monitors, dashboards, logs, incidents, and infrastructure. Sign in with your Datadog account — no token to paste. Supports US1 site by default; configure for EU or other regions.",
+      "category": "observability",
+      "transport": "http",
+      "url": "https://mcp.datadoghq.com/v1/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "mcp_read"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [
+        {
+          "name": "DD_API_KEY",
+          "display": "Datadog API key (optional — fallback for non-OAuth auth)",
+          "docs_url": "https://docs.datadoghq.com/account_management/api-app-keys/",
+          "required": false
+        },
+        {
+          "name": "DD_APPLICATION_KEY",
+          "display": "Datadog Application key (optional — required with DD_API_KEY fallback)",
+          "docs_url": "https://docs.datadoghq.com/account_management/api-app-keys/",
+          "required": false
+        }
+      ],
+      "config_options": [
+        {
+          "name": "datadog_site",
+          "display": "Datadog MCP server URL",
+          "kind": "string",
+          "default": "https://mcp.datadoghq.com/v1/mcp",
+          "required": false,
+          "description": "Override for non-US1 Datadog sites. EU: https://mcp.datadoghq.eu/v1/mcp; US3: https://mcp.us3.datadoghq.com/v1/mcp; US5: https://mcp.us5.datadoghq.com/v1/mcp."
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.datadoghq.com/bits_ai/mcp_server/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "GovCloud sites (ddog-gov.com) not supported. Rate limit: 50 req/10 s, 50 k calls/month."
+    },
+    {
+      "id": "new-relic",
+      "display_name": "New Relic",
+      "description": "Query New Relic observability data including APM, infrastructure, logs, and alerts. Sign in with your New Relic account — no token to paste.",
+      "category": "observability",
+      "transport": "http",
+      "url": "https://mcp.newrelic.com/mcp/",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "openid",
+          "profile",
+          "email"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.newrelic.com/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "circleci",
+      "display_name": "CircleCI",
+      "description": "Query CircleCI pipelines, workflows, jobs, and build artifacts. Sign in with your CircleCI account — no token to paste.",
+      "category": "developer",
+      "transport": "http",
+      "url": "https://mcp.circleci.com",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "read:pipeline",
+          "read:workflow",
+          "read:job"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://circleci.com/docs/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "netlify",
+      "display_name": "Netlify",
+      "description": "Manage Netlify sites, deploys, environment variables, and domain configuration. Sign in with your Netlify account — no token to paste.",
+      "category": "developer",
+      "transport": "http",
+      "url": "https://netlify-mcp.netlify.app/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "read",
+          "write",
+          "offline_access"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.netlify.com/build/build-with-ai/agent-setup-guides/set-up-claude-code-for-netlify/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Netlify MCP server is hosted at netlify-mcp.netlify.app. Stdio alternative available via 'npx -y @netlify/mcp' for offline use."
+    },
+    {
+      "id": "vercel",
+      "display_name": "Vercel",
+      "description": "Manage Vercel projects, deployments, domains, and environment variables. Sign in with your Vercel account — no token to paste.",
+      "category": "developer",
+      "transport": "http",
+      "url": "https://mcp.vercel.com",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_VERCEL_OAUTH_CLIENT_ID}",
+        "scopes": [
+          "openid",
+          "offline_access"
+        ]
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_VERCEL_OAUTH_CLIENT_ID",
+          "display": "Kameas Vercel OAuth client ID (pre-configured)",
+          "docs_url": "https://vercel.com/docs/agent-resources/vercel-mcp",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://vercel.com/docs/agent-resources/vercel-mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Vercel MCP only supports AI clients reviewed and approved by Vercel — DCR registrations from unknown clients may be blocked. A Kameas OAuth app must be registered at https://vercel.com/account/tokens and KAMEAS_VERCEL_OAUTH_CLIENT_ID set before sign-in works."
+    },
+    {
+      "id": "bitbucket",
+      "display_name": "Bitbucket",
+      "description": "Search and manage Bitbucket Cloud repositories, pull requests, and pipelines via the Atlassian MCP server. Sign in with your Atlassian account.",
+      "category": "developer",
+      "transport": "http",
+      "url": "https://mcp.atlassian.com/v1/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID}",
+        "scopes": [
+          "repository",
+          "pullrequest",
+          "pipeline",
+          "account",
+          "offline_access"
+        ]
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID",
+          "display": "Kameas Atlassian OAuth client ID (pre-configured)",
+          "docs_url": "https://developer.atlassian.com/console/myapps/",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.atlassian.com/cloud/bitbucket/rest/intro/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Requires Bitbucket Cloud account. Uses Atlassian OAuth app — same sign-in as Jira/Confluence connectors. Ensure KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID is configured."
+    },
+    {
+      "id": "pagerduty",
+      "display_name": "PagerDuty",
+      "description": "Query PagerDuty incidents, services, schedules, on-call assignments, and alerts. Requires a PagerDuty User API Token. Read-only by default.",
+      "category": "observability",
+      "command": [
+        "uvx",
+        "pagerduty-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "PAGERDUTY_USER_API_KEY",
+          "display": "PagerDuty User API Token",
+          "docs_url": "https://support.pagerduty.com/main/docs/api-access-keys#generate-a-user-token-rest-api-key",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/PagerDuty/pagerduty-mcp-server",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "uvx downloads pagerduty-mcp package on first run (5–15 s). EU accounts: set PAGERDUTY_API_HOST=https://api.eu.pagerduty.com. Write tools are disabled by default (omit --enable-write-tools to stay read-only)."
+    },
+    {
+      "id": "snyk",
+      "display_name": "Snyk",
+      "description": "Run Snyk security scans: SAST, SCA (open-source), IaC, and container vulnerability analysis. Requires a Snyk API token.",
+      "category": "security",
+      "command": [
+        "npx",
+        "-y",
+        "snyk",
+        "mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "SNYK_TOKEN",
+          "display": "Snyk API token (from Snyk account settings → API token)",
+          "docs_url": "https://docs.snyk.io/snyk-api/authentication-for-api",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.snyk.io/",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "npm downloads snyk package on first run (5–15 s). Snyk CLI requires Node.js to be available. SNYK_TOKEN can also be set as SNYK_AUTH_TOKEN for older CLI versions."
+    },
+    {
+      "id": "sonar",
+      "display_name": "SonarQube / SonarCloud",
+      "description": "Analyse code quality and security with SonarQube Server or SonarCloud via the official SonarSource MCP server. Requires Docker and a SonarQube user token.",
+      "category": "security",
+      "command": [
+        "docker",
+        "run",
+        "-i",
+        "--rm",
+        "--init",
+        "--pull=always",
+        "-e",
+        "SONARQUBE_TOKEN",
+        "-e",
+        "SONARQUBE_URL",
+        "sonarsource/sonarqube-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "SONARQUBE_TOKEN",
+          "display": "SonarQube / SonarCloud user token",
+          "docs_url": "https://docs.sonarsource.com/sonarqube-server/latest/user-guide/user-account/generating-and-using-tokens/",
+          "required": true
+        }
+      ],
+      "config_options": [
+        {
+          "name": "sonar_url",
+          "display": "SonarQube / SonarCloud URL",
+          "kind": "string",
+          "default": "https://sonarcloud.io",
+          "required": true,
+          "description": "SonarCloud: https://sonarcloud.io. Self-hosted SonarQube Server: your instance URL (e.g. https://sonar.mycompany.com)."
+        },
+        {
+          "name": "sonar_org",
+          "display": "SonarCloud organisation key (SonarCloud only)",
+          "kind": "string",
+          "default": "",
+          "required": false,
+          "description": "Required for SonarCloud. Your organisation key from SonarCloud Settings. Omit for self-hosted SonarQube Server."
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.sonarsource.com/sonarqube-mcp-server/setup/self-hosted/",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Requires Docker installed locally. First run pulls sonarsource/sonarqube-mcp image (may take 1–2 min). Use a User token — project/global/scoped tokens will not work with the MCP server."
+    },
+    {
+      "id": "jenkins",
+      "display_name": "Jenkins",
+      "description": "Query Jenkins builds, pipelines, jobs, nodes, and artifacts. Requires a running Jenkins instance with the MCP Server Plugin installed.",
+      "category": "developer",
+      "transport": "http",
+      "url": "https://${JENKINS_INSTANCE_HOST}/mcp-server/mcp",
+      "headers_template": {
+        "Authorization": "Basic ${JENKINS_BASIC_AUTH}"
+      },
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "JENKINS_INSTANCE_HOST",
+          "display": "Jenkins instance hostname (e.g. jenkins.mycompany.com or 192.168.1.10:8080)",
+          "docs_url": "https://plugins.jenkins.io/mcp-server/",
+          "required": true
+        },
+        {
+          "name": "JENKINS_BASIC_AUTH",
+          "display": "Jenkins Basic auth credentials (base64 of user:api-token — see Jenkins user profile → API Token)",
+          "docs_url": "https://www.jenkins.io/doc/book/using/using-credentials/#user-api-token",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://plugins.jenkins.io/mcp-server/",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Requires Jenkins MCP Server Plugin installed. Plugin exposes MCP at https://<your-jenkins>/mcp-server/mcp. JENKINS_BASIC_AUTH must be base64(username:api-token). Jenkins must be network-accessible from your machine."
+    },
+    {
+      "id": "google-calendar",
+      "display_name": "Google Calendar",
+      "description": "List, create, and update Google Calendar events via a stdio MCP server. Supports calendar.events (read + write) and calendar.readonly scopes. Requires one-time sign-in — reuses same Google Cloud OAuth client (gcp-oauth.keys.json) as Gmail if already set up.",
+      "category": "productivity",
+      "command": [
+        "npx",
+        "-y",
+        "@cocal/google-calendar-mcp"
+      ],
+      "primary_auth": "oauth",
+      "env_keys": [
+        {
+          "name": "GOOGLE_OAUTH_CREDENTIALS",
+          "display": "Path to saved Google OAuth credentials file (auto-created on first browser sign-in)",
+          "docs_url": "https://github.com/nspady/google-calendar-mcp#authentication",
+          "required": false
+        },
+        {
+          "name": "KAMEAS_GOOGLE_OAUTH_CLIENT_ID",
+          "display": "Kameas Google OAuth client ID (provided — no action needed when using built-in install flow)",
+          "docs_url": "",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/nspady/google-calendar-mcp",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "One-time setup required: create or reuse a Google Cloud OAuth client (Desktop app type), save gcp-oauth.keys.json and set GOOGLE_OAUTH_CREDENTIALS path, then complete browser sign-in when prompted. Tokens expire weekly in Google test-mode; completing Google app verification removes this limit. If you already set up Gmail, reuse the same gcp-oauth.keys.json — just re-authorize to include Calendar scopes. First npm fetch can take 10–20 s."
+    },
+    {
+      "id": "google-drive",
+      "display_name": "Google Drive",
+      "description": "Search, read, and create files in Google Drive. Uses drive.file scope (access limited to files created by this app) — upgrade to full drive.readonly access requires Google security review (CASA). Requires one-time Google sign-in (reuses same Google Cloud OAuth client as Gmail and Calendar).",
+      "category": "filesystem",
+      "command": [
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-gdrive"
+      ],
+      "primary_auth": "oauth",
+      "env_keys": [
+        {
+          "name": "GDRIVE_OAUTH_PATH",
+          "display": "Path to Google OAuth keys file (gcp-oauth.keys.json)",
+          "docs_url": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/gdrive",
+          "required": false
+        },
+        {
+          "name": "GDRIVE_CREDENTIALS_PATH",
+          "display": "Path to saved Drive credentials file (auto-created on first sign-in)",
+          "docs_url": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/gdrive",
+          "required": false
+        },
+        {
+          "name": "KAMEAS_GOOGLE_OAUTH_CLIENT_ID",
+          "display": "Kameas Google OAuth client ID (provided — no action needed when using built-in install flow)",
+          "docs_url": "",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/gdrive",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "One-time Google OAuth setup required: create or reuse a Google Cloud OAuth client (Desktop app type), save gcp-oauth.keys.json and set GDRIVE_OAUTH_PATH to its location. On first run the server opens a browser sign-in to authorize access; credentials are cached at GDRIVE_CREDENTIALS_PATH. Current scope is drive.file (app-created files only); upgrade to drive.readonly requires Google OAuth app verification + annual CASA third-party security assessment. If you already set up Gmail or Calendar, reuse the same gcp-oauth.keys.json. First npm fetch can take 10–20 s."
+    },
+    {
+      "id": "clickup",
+      "display_name": "ClickUp",
+      "description": "Manage tasks, docs, and chat in ClickUp — search, create, update tasks and projects. Sign in with ClickUp — no token to paste.",
+      "category": "productivity",
+      "transport": "http",
+      "url": "https://mcp.clickup.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "read",
+          "write"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://help.clickup.com/hc/en-us/articles/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "monday",
+      "display_name": "Monday.com",
+      "description": "Access boards, items, workflows, and automations in Monday.com. Sign in with Monday — no token to paste — or supply a personal API token.",
+      "category": "productivity",
+      "transport": "http",
+      "url": "https://mcp.monday.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth"
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [
+        {
+          "name": "MONDAY_API_TOKEN",
+          "display": "Monday.com personal API token (optional — fallback if you don't sign in)",
+          "docs_url": "https://developer.monday.com/api-reference/docs/authentication",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/mondaycom/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "shortcut",
+      "display_name": "Shortcut",
+      "description": "Search stories, create and update epics, iterations, and sprints in Shortcut. Sign in with Shortcut — no token to paste.",
+      "category": "productivity",
+      "transport": "http",
+      "url": "https://mcp.shortcut.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "read",
+          "story-write",
+          "comment-write"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://shortcut.com/integrations/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "smartsheet",
+      "display_name": "Smartsheet",
+      "description": "Read and update Smartsheet sheets, rows, columns, workspaces, and dashboards. Sign in with your Smartsheet account.",
+      "category": "productivity",
+      "transport": "http",
+      "url": "https://mcp.smartsheet.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_SMARTSHEET_OAUTH_CLIENT_ID}",
+        "scopes": [
+          "READ_SHEETS",
+          "WRITE_SHEETS",
+          "CREATE_SHEETS",
+          "ADMIN_SHEETS",
+          "ADMIN_WORKSPACES",
+          "READ_SIGHTS",
+          "CREATE_SIGHTS",
+          "SHARE_SHEETS",
+          "SHARE_SIGHTS"
+        ]
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_SMARTSHEET_OAUTH_CLIENT_ID",
+          "display": "Kameas Smartsheet OAuth client ID (pre-configured)",
+          "docs_url": "https://developers.smartsheet.com",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.smartsheet.com/api/smartsheet",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Requires Kameas Smartsheet OAuth app registration at developers.smartsheet.com. Set KAMEAS_SMARTSHEET_OAUTH_CLIENT_ID to activate sign-in."
+    },
+    {
+      "id": "wrike",
+      "display_name": "Wrike",
+      "description": "Search tasks, projects, and folders in Wrike; create and update work items. Sign in with your Wrike account.",
+      "category": "productivity",
+      "transport": "http",
+      "url": "https://mcp.wrike.com/app/mcp/stream",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_WRIKE_OAUTH_CLIENT_ID}",
+        "scopes": []
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_WRIKE_OAUTH_CLIENT_ID",
+          "display": "Kameas Wrike OAuth client ID (pre-configured)",
+          "docs_url": "https://developers.wrike.com/oauth-20-authorization/",
+          "required": true
+        },
+        {
+          "name": "WRIKE_PERMANENT_TOKEN",
+          "display": "Wrike Permanent Access Token (optional — fallback for headless/automation use)",
+          "docs_url": "https://developers.wrike.com/oauth-20-authorization/",
+          "required": false
+        }
+      ],
+      "config_options": [
+        {
+          "name": "datacenter",
+          "display": "Datacenter",
+          "kind": "enum",
+          "choices": [
+            "us",
+            "eu"
+          ],
+          "default": "us",
+          "required": false,
+          "description": "EU customers: select 'eu' to use app-eu.wrike.com endpoints."
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.wrike.com/mcp-server/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Requires Kameas Wrike OAuth app registration at wrike.com/frontend/apps/index.html#/api. Set KAMEAS_WRIKE_OAUTH_CLIENT_ID to activate sign-in. EU customers: set datacenter=eu to use app-eu.wrike.com endpoints."
+    },
+    {
+      "id": "trello",
+      "display_name": "Trello",
+      "description": "Manage Trello boards, lists, and cards — search, create, update via the Trello REST API. Requires a Trello API key and token.",
+      "category": "productivity",
+      "command": [
+        "npx",
+        "-y",
+        "@delorenj/mcp-server-trello"
+      ],
+      "env_keys": [
+        {
+          "name": "TRELLO_API_KEY",
+          "display": "Trello API key (from trello.com/power-ups/admin)",
+          "docs_url": "https://trello.com/power-ups/admin",
+          "required": true
+        },
+        {
+          "name": "TRELLO_TOKEN",
+          "display": "Trello OAuth token — generate at: https://trello.com/1/authorize?key=YOUR_KEY&scope=read,write&expiration=never&response_type=token",
+          "docs_url": "https://developer.atlassian.com/cloud/trello/guides/rest-api/authorization/",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.atlassian.com/cloud/trello/rest/",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "primary_auth": "keys",
+      "warning": "Uses community package @delorenj/mcp-server-trello (verify at build — check license and maintenance). Trello uses API key + OAuth 1.0 token (not OAuth 2.0). Generate your token at: https://trello.com/1/authorize?key=YOUR_API_KEY&scope=read,write&expiration=never&response_type=token. npm fetch on first run can take 5–15 s."
+    },
+    {
+      "id": "coda",
+      "display_name": "Coda",
+      "description": "Read and write Coda docs, pages, tables, and rows via the Coda API. Requires a Coda API token.",
+      "category": "productivity",
+      "command": [
+        "npx",
+        "-y",
+        "mcp-server-coda"
+      ],
+      "env_keys": [
+        {
+          "name": "CODA_API_TOKEN",
+          "display": "Coda API token (from coda.io/account → API Settings)",
+          "docs_url": "https://coda.io/account",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://coda.io/developers/apis/v1",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "primary_auth": "keys",
+      "warning": "Coda is transitioning to Superhuman Docs (coda.io now redirects to docs.superhuman.com). This recipe targets the current Coda API; verify compatibility if you have recently migrated. Uses community package mcp-server-coda — verify at build (check license and maintenance). npm fetch on first run can take 5–15 s."
+    },
+    {
+      "id": "mixpanel",
+      "display_name": "Mixpanel",
+      "description": "Query Mixpanel analytics: events, funnels, retention, segmentation, insights, cohorts, and business context via Mixpanel's official remote MCP server. Sign in with Mixpanel (OAuth DCR — no token paste, no app registration required). US region default; EU/IN URL configurable.",
+      "category": "analytics",
+      "transport": "http",
+      "url": "https://mcp.mixpanel.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "projects",
+          "analysis",
+          "events",
+          "insights",
+          "segmentation",
+          "retention",
+          "data:read",
+          "funnels",
+          "flows",
+          "data_definitions",
+          "bookmarks",
+          "business_context",
+          "cohorts",
+          "metrics",
+          "user_details"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [
+        {
+          "name": "mixpanel_server_url",
+          "display": "Mixpanel MCP server URL (override for EU/IN region)",
+          "kind": "string",
+          "default": "https://mcp.mixpanel.com/mcp",
+          "required": false,
+          "description": "US default: https://mcp.mixpanel.com/mcp. EU/IN variants: verify server URLs at build — not live-confirmed."
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.mixpanel.com/docs/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "DCR zero-app: sign-in is token-free. Read-only analytics access — no data ingestion or project-admin tools. EU/IN server URLs not live-confirmed; verify at build."
+    },
+    {
+      "id": "amplitude",
+      "display_name": "Amplitude",
+      "description": "Query Amplitude analytics: events, funnels, user behavior, and product insights via Amplitude's official remote MCP server. Sign in with Amplitude (OAuth DCR — no token paste, no app registration required). US region default; EU region configurable.",
+      "category": "analytics",
+      "transport": "http",
+      "url": "https://mcp.amplitude.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "mcp:read",
+          "mcp:write",
+          "offline_access"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [
+        {
+          "name": "amplitude_server_url",
+          "display": "Amplitude MCP server URL (override for EU region)",
+          "kind": "string",
+          "default": "https://mcp.amplitude.com/mcp",
+          "required": false,
+          "description": "US default: https://mcp.amplitude.com/mcp. EU: https://mcp.eu.amplitude.com/mcp (live-verified). Append ?discovery=progressive to reduce token overhead (optional)."
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://amplitude.com/docs/analytics/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "DCR zero-app: sign-in is token-free. EU region: use https://mcp.eu.amplitude.com/mcp. Append ?discovery=progressive to the URL to reduce token overhead."
+    },
+    {
+      "id": "klaviyo",
+      "display_name": "Klaviyo",
+      "description": "Access Klaviyo marketing automation: campaigns, flows, lists, profiles, metrics, segments, and templates via Klaviyo's official remote MCP server. Sign in with Klaviyo (OAuth DCR — no token paste, no app registration required). Scopes derived from private key permissions.",
+      "category": "marketing",
+      "transport": "http",
+      "url": "https://mcp.klaviyo.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth"
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.klaviyo.com/en/docs/klaviyo_mcp_server",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "DCR zero-app: sign-in is token-free. Scopes are assigned by Klaviyo based on your private key permissions (Accounts, Campaigns, Catalogs, Events, Flows, Images, Lists, Metrics, Profiles, Segments, Subscriptions, Tags, Templates, Translations). No scopes declared in recipe — server assigns based on key."
+    },
+    {
+      "id": "dbt-cloud",
+      "display_name": "dbt Cloud",
+      "description": "Query dbt Cloud: explore models, lineage, docs, jobs, environments, and semantic layer via dbt Cloud's remote MCP server. OAuth DCR (Enterprise+) or personal access token. Per-workspace URL supported. Consumption-only — no dbt run or build triggers.",
+      "category": "data",
+      "transport": "http",
+      "url": "https://cloud.getdbt.com/api/ai/v1/mcp/",
+      "auth": {
+        "kind": "mcp_oauth"
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [
+        {
+          "name": "DBT_ACCESS_TOKEN",
+          "display": "dbt Cloud personal access token (fallback for non-Enterprise plans)",
+          "docs_url": "https://docs.getdbt.com/docs/dbt-cloud-apis/user-tokens",
+          "required": false
+        },
+        {
+          "name": "DBT_PROD_ENV_ID",
+          "display": "dbt Cloud production environment ID (optional — for semantic layer queries)",
+          "docs_url": "https://docs.getdbt.com/docs/dbt-cloud-apis/sl-api-overview",
+          "required": false
+        }
+      ],
+      "config_options": [
+        {
+          "name": "dbt_host",
+          "display": "dbt Cloud instance hostname (e.g. cloud.getdbt.com or your custom domain)",
+          "kind": "string",
+          "default": "cloud.getdbt.com",
+          "required": false,
+          "description": "Per-workspace hostname. Default: cloud.getdbt.com. Custom domains: replace with your dbt Cloud subdomain."
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.getdbt.com/docs/dbt-cloud-apis/ai-api",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "DCR supported on Enterprise+ plans; token-based works on all plans (set DBT_ACCESS_TOKEN). MCP URL is per-account — override dbt_host config_option for custom domains. Consumption-only: read/query only, no dbt run/build. DCR registration_endpoint auth-gated at discovery time; verify at build."
+    },
+    {
+      "id": "tableau",
+      "display_name": "Tableau",
+      "description": "Query Tableau Cloud: browse datasources, workbooks, views, Pulse insights, and site content via Tableau's official remote MCP server. Sign in with Tableau (OAuth PKCE — requires Kameas Connected App registration). Read-only access.",
+      "category": "bi",
+      "transport": "http",
+      "url": "https://mcp.tableau.com",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_TABLEAU_OAUTH_CLIENT_ID}",
+        "scopes": [
+          "tableau:mcp:datasource:read",
+          "tableau:mcp:workbook:read",
+          "tableau:mcp:view:read",
+          "tableau:mcp:view:download",
+          "tableau:mcp:pulse:read",
+          "tableau:mcp:insight:create",
+          "tableau:mcp:content:read",
+          "tableau:content:read",
+          "tableau:mcp_site_settings:read",
+          "tableau:viz_data_service:read",
+          "tableau:views:download",
+          "tableau:insight_definitions_metrics:read",
+          "tableau:insight_metrics:read",
+          "tableau:metric_subscriptions:read",
+          "tableau:insights:read",
+          "tableau:insight_brief:create"
+        ]
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_TABLEAU_OAUTH_CLIENT_ID",
+          "display": "Kameas Tableau OAuth client ID (from Tableau Cloud Connected Apps)",
+          "docs_url": "https://help.tableau.com/current/online/en-us/connected_apps_eas.htm",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://mcp.tableau.com",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Owner action required: register Kameas Connected App in Tableau Cloud Admin (Connected Apps > Create Connected App). Redirect URI: https://app.kameas.ai/oauth/callback. Set KAMEAS_TABLEAU_OAUTH_CLIENT_ID once registered. Auth server: sso.online.tableau.com (no DCR — PKCE only). Read-only scopes; no write/admin tools."
+    },
+    {
+      "id": "fivetran",
+      "display_name": "Fivetran",
+      "description": "Inspect Fivetran connectors, schemas, sync history, and metadata via the official Fivetran MCP server. Read-only by default (FIVETRAN_ALLOW_WRITES not set). API key + secret authentication.",
+      "category": "data",
+      "command": [
+        "uvx",
+        "--from",
+        "git+https://github.com/fivetran/fivetran-mcp",
+        "fivetran-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "FIVETRAN_API_KEY",
+          "display": "Fivetran API key (from Fivetran Dashboard > API Config)",
+          "docs_url": "https://fivetran.com/docs/rest-api/getting-started#gettingstarted",
+          "required": true
+        },
+        {
+          "name": "FIVETRAN_API_SECRET",
+          "display": "Fivetran API secret (from Fivetran Dashboard > API Config)",
+          "docs_url": "https://fivetran.com/docs/rest-api/getting-started#gettingstarted",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/fivetran/fivetran-mcp",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Installs directly from official Fivetran GitHub repo (not PyPI fivetran-mcp — that is a different community package). Read-only by default; FIVETRAN_ALLOW_WRITES=true enables writes (not set). First run clones and installs the package (may take 30–60 s). Requires uv installed."
+    },
+    {
+      "id": "redshift",
+      "display_name": "Amazon Redshift",
+      "description": "Query Amazon Redshift data warehouse via the official AWS Labs MCP server. Read-only access using AWS IAM credentials (profile or environment credentials). Supports cluster and Serverless endpoints.",
+      "category": "data",
+      "command": [
+        "uvx",
+        "awslabs.amazon-redshift-mcp-server@latest"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "AWS_PROFILE",
+          "display": "AWS profile name (from ~/.aws/credentials; use 'default' if unsure)",
+          "docs_url": "https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-profiles.html",
+          "required": false
+        },
+        {
+          "name": "AWS_REGION",
+          "display": "AWS region (e.g. us-east-1)",
+          "docs_url": "https://docs.aws.amazon.com/general/latest/gr/rande.html",
+          "required": true
+        }
+      ],
+      "config_options": [
+        {
+          "name": "cluster_identifier",
+          "display": "Redshift cluster identifier (for provisioned cluster; omit for Serverless)",
+          "kind": "string",
+          "default": "",
+          "required": false,
+          "description": "Provisioned cluster identifier. Leave empty for Redshift Serverless (uses workgroup instead)."
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/awslabs/mcp/tree/main/src/amazon-redshift-mcp-server",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Requires uv installed. AWS IAM credentials must be configured (aws configure or environment variables). Package name: awslabs.amazon-redshift-mcp-server — verify at build. Read-only access via IAM permissions; use least-privilege IAM policy."
+    },
+    {
+      "id": "snowflake",
+      "display_name": "Snowflake",
+      "description": "Query Snowflake data warehouse via community MCP server. Read-only access (no --allow_write flag). Connection credentials passed as CLI flags. Supports account, user, password, warehouse, database, schema, and role.",
+      "category": "data",
+      "command": [
+        "uvx",
+        "mcp_server_snowflake",
+        "--account",
+        "${SNOWFLAKE_ACCOUNT}",
+        "--user",
+        "${SNOWFLAKE_USER}",
+        "--password",
+        "${SNOWFLAKE_PASSWORD}",
+        "--warehouse",
+        "${SNOWFLAKE_WAREHOUSE}",
+        "--database",
+        "${SNOWFLAKE_DATABASE}",
+        "--schema",
+        "${SNOWFLAKE_SCHEMA}",
+        "--role",
+        "${SNOWFLAKE_ROLE}"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "SNOWFLAKE_ACCOUNT",
+          "display": "Snowflake account identifier (e.g. myorg-myaccount or myaccount.us-east-1)",
+          "docs_url": "https://docs.snowflake.com/en/user-guide/admin-account-identifier",
+          "required": true
+        },
+        {
+          "name": "SNOWFLAKE_USER",
+          "display": "Snowflake username",
+          "docs_url": "https://docs.snowflake.com/en/user-guide/connecting-overview",
+          "required": true
+        },
+        {
+          "name": "SNOWFLAKE_PASSWORD",
+          "display": "Snowflake password",
+          "docs_url": "https://docs.snowflake.com/en/user-guide/connecting-overview",
+          "required": true
+        },
+        {
+          "name": "SNOWFLAKE_WAREHOUSE",
+          "display": "Snowflake virtual warehouse name",
+          "docs_url": "https://docs.snowflake.com/en/sql-reference/sql/use-warehouse",
+          "required": true
+        },
+        {
+          "name": "SNOWFLAKE_DATABASE",
+          "display": "Snowflake database name",
+          "docs_url": "https://docs.snowflake.com/en/sql-reference/sql/use-database",
+          "required": true
+        },
+        {
+          "name": "SNOWFLAKE_SCHEMA",
+          "display": "Snowflake schema name (e.g. PUBLIC)",
+          "docs_url": "https://docs.snowflake.com/en/sql-reference/sql/use-schema",
+          "required": true
+        },
+        {
+          "name": "SNOWFLAKE_ROLE",
+          "display": "Snowflake role (e.g. SYSADMIN, ANALYST)",
+          "docs_url": "https://docs.snowflake.com/en/sql-reference/sql/use-role",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://pypi.org/project/mcp-server-snowflake/",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Community package (PyPI mcp_server_snowflake v0.3.8 — underscores in package name). Read-only: --allow_write flag intentionally omitted. Requires uv installed. First run downloads package (5–15 s). Credentials passed as CLI flags; store in env/credstore, not plaintext."
+    },
+    {
+      "id": "bigquery",
+      "display_name": "BigQuery",
+      "description": "Query Google BigQuery data warehouse via Google's genai-toolbox MCP server. Read-only access using Application Default Credentials (ADC) or service account key file. No official Google remote MCP server exists yet.",
+      "category": "data",
+      "command": [
+        "npx",
+        "-y",
+        "@toolbox-sdk/server",
+        "--prebuilt=bigquery",
+        "--stdio"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "GOOGLE_APPLICATION_CREDENTIALS",
+          "display": "Path to Google service account key JSON file (leave empty to use Application Default Credentials)",
+          "docs_url": "https://cloud.google.com/docs/authentication/application-default-credentials",
+          "required": false
+        }
+      ],
+      "config_options": [
+        {
+          "name": "project_id",
+          "display": "Google Cloud project ID",
+          "kind": "string",
+          "default": "",
+          "required": true,
+          "description": "Google Cloud project ID containing the BigQuery datasets to query."
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://mcp-toolbox.dev",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Google-maintained genai-toolbox (npm @toolbox-sdk/server --prebuilt=bigquery). Verify exact --prebuilt=bigquery flag syntax and project_id config arg at build (toolbox docs at mcp-toolbox.dev). ADC or GOOGLE_APPLICATION_CREDENTIALS for auth. First npm fetch can take 5–15 s."
+    },
+    {
+      "id": "metabase",
+      "display_name": "Metabase",
+      "description": "Query Metabase: browse questions, dashboards, databases, and run queries via community MCP server. Works with self-hosted and Metabase Cloud instances. API key authentication recommended (Metabase v0.47+).",
+      "category": "bi",
+      "command": [
+        "uvx",
+        "metabase-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "METABASE_URL",
+          "display": "Metabase instance URL (e.g. https://your-metabase.example.com or https://your-company.metabaseapp.com)",
+          "docs_url": "https://www.metabase.com/docs/latest/api-documentation.html",
+          "required": true
+        },
+        {
+          "name": "METABASE_API_KEY",
+          "display": "Metabase API key (recommended; requires Metabase v0.47+)",
+          "docs_url": "https://www.metabase.com/docs/latest/people-and-groups/api-keys.html",
+          "required": false
+        },
+        {
+          "name": "METABASE_USER_EMAIL",
+          "display": "Metabase user email (fallback if API key not used)",
+          "docs_url": "https://www.metabase.com/docs/latest/api-documentation.html",
+          "required": false
+        },
+        {
+          "name": "METABASE_PASSWORD",
+          "display": "Metabase password (fallback if API key not used)",
+          "docs_url": "https://www.metabase.com/docs/latest/api-documentation.html",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://pypi.org/project/metabase-mcp/",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Community package (PyPI metabase-mcp v1.0.0). API key auth recommended (Metabase v0.47+); email/password fallback for older versions. METABASE_URL must point to your specific Metabase instance. Requires uv installed."
+    },
+    {
+      "id": "looker",
+      "display_name": "Looker",
+      "description": "Query Looker: browse explores, run LookML queries, access dashboards and looks via community MCP server. Uses Looker API3 key (client_id + client_secret). Works with self-hosted Looker and Looker Cloud.",
+      "category": "bi",
+      "command": [
+        "uvx",
+        "looker-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "LOOKER_BASE_URL",
+          "display": "Looker instance base URL (e.g. https://your-company.looker.com)",
+          "docs_url": "https://cloud.google.com/looker/docs/api-auth#authentication_with_an_sdk",
+          "required": true
+        },
+        {
+          "name": "LOOKER_CLIENT_ID",
+          "display": "Looker API3 client ID (from Admin > Users > API3 Keys)",
+          "docs_url": "https://cloud.google.com/looker/docs/api-auth#authentication_with_an_sdk",
+          "required": true
+        },
+        {
+          "name": "LOOKER_CLIENT_SECRET",
+          "display": "Looker API3 client secret (from Admin > Users > API3 Keys)",
+          "docs_url": "https://cloud.google.com/looker/docs/api-auth#authentication_with_an_sdk",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://pypi.org/project/looker-mcp/",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Community package (PyPI looker-mcp v0.1.0 — not Google-official). Env var prefix is LOOKER_* (not LOOKERSDK_*). A Google-official Looker MCP may supersede this. Requires uv installed. First run downloads package (5–15 s)."
+    },
+    {
+      "id": "ga4",
+      "display_name": "Google Analytics 4 (GA4)",
+      "description": "Query GA4 analytics: dimensions, metrics, reports, and real-time data via community MCP server. Uses Google service account credentials (Application Default Credentials or JSON key file). No official Google remote MCP server for GA4.",
+      "category": "analytics",
+      "command": [
+        "uvx",
+        "google-analytics-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "GOOGLE_APPLICATION_CREDENTIALS",
+          "display": "Path to Google service account key JSON file (or use Application Default Credentials via gcloud auth)",
+          "docs_url": "https://cloud.google.com/docs/authentication/application-default-credentials",
+          "required": true
+        },
+        {
+          "name": "GA4_PROPERTY_ID",
+          "display": "GA4 property ID (numeric, e.g. 123456789 — from GA4 Admin > Property Settings)",
+          "docs_url": "https://support.google.com/analytics/answer/10976610",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://pypi.org/project/google-analytics-mcp/",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Community package (PyPI google-analytics-mcp v2.8.1 — not Google-official). Uses GA4 Data API with service account auth. Enable Google Analytics Data API in Google Cloud Console. No official Google MCP for GA4 as of 2026-07-21 — future official server may supersede. Requires uv installed."
+    },
+    {
+      "id": "mailchimp",
+      "display_name": "Mailchimp",
+      "description": "Access Mailchimp: campaigns, lists, audiences, templates, and analytics via community MCP server. API key authentication — datacenter derived from the API key suffix (e.g. -us6).",
+      "category": "marketing",
+      "command": [
+        "uvx",
+        "mcp-mailchimp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "MAILCHIMP_API_KEY",
+          "display": "Mailchimp API key (from Mailchimp Account > Extras > API keys; datacenter derived from key suffix)",
+          "docs_url": "https://mailchimp.com/developer/marketing/guides/quick-start/#generate-your-api-key",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://pypi.org/project/mcp-mailchimp/",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Community package (PyPI mcp-mailchimp v0.3.0 — not Mailchimp-official). Only MAILCHIMP_API_KEY is needed; datacenter/server prefix is derived from the key suffix (e.g. key ending in -us6 → us6 datacenter). No separate server prefix env var needed. Requires uv installed."
+    },
+    {
+      "id": "braze",
+      "display_name": "Braze",
+      "description": "Access Braze: campaigns, segments, canvases, content blocks, subscription groups, and analytics via the Braze-maintained MCP server. Read-only access using API key + cluster endpoint. BRAZE_ALLOW_WRITES not set (read-only enforcement).",
+      "category": "marketing",
+      "command": [
+        "uvx",
+        "braze-mcp-server"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "BRAZE_API_KEY",
+          "display": "Braze REST API key (create with least-privilege read-only permissions in Braze > Settings > API Keys)",
+          "docs_url": "https://www.braze.com/docs/api/basics/#creating-and-managing-rest-api-keys",
+          "required": true
+        },
+        {
+          "name": "BRAZE_BASE_URL",
+          "display": "Braze cluster REST endpoint (e.g. https://rest.iad-01.braze.com — see Braze dashboard URL for cluster)",
+          "docs_url": "https://www.braze.com/docs/api/basics/#endpoints",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://pypi.org/project/braze-mcp-server/",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Braze-affiliated package (PyPI braze-mcp-server v1.2.0). Read-only: BRAZE_ALLOW_WRITES not set. Use a least-privilege API key with only the read permissions your use case requires. BRAZE_BASE_URL is cluster-specific (e.g. rest.iad-01.braze.com, rest.eu-01.braze.com) — check your Braze dashboard URL. Requires uv installed."
+    },
+    {
+      "id": "marketo",
+      "display_name": "Marketo (Adobe)",
+      "description": "Access Marketo: leads, programs, campaigns, forms, lists, and assets via community MCP server. Uses Marketo REST API with client credentials OAuth (client_id + client_secret + Munchkin ID). Read-only scopes. STRETCH: package unconfirmed on npm registry at planning time — verify at build.",
+      "category": "marketing",
+      "command": [
+        "npx",
+        "-y",
+        "marketo-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "MARKETO_CLIENT_ID",
+          "display": "Marketo API client ID (from Marketo Admin > LaunchPoint > View Details)",
+          "docs_url": "https://developers.marketo.com/rest-api/authentication/",
+          "required": true
+        },
+        {
+          "name": "MARKETO_CLIENT_SECRET",
+          "display": "Marketo API client secret (from Marketo Admin > LaunchPoint > View Details)",
+          "docs_url": "https://developers.marketo.com/rest-api/authentication/",
+          "required": true
+        },
+        {
+          "name": "MARKETO_MUNCHKIN_ID",
+          "display": "Marketo Munchkin ID (from Marketo Admin > Integration > Munchkin, e.g. 000-AAA-000)",
+          "docs_url": "https://developers.marketo.com/rest-api/authentication/",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/alexleventer/marketo-mcp",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "STRETCH: marketo-mcp npm package unconfirmed at planning time (2026-07-21) — verify exact npm package name and availability before installing. Community package (GitHub alexleventer/marketo-mcp, JS/TypeScript). Read-only Marketo API access. Marketo REST API uses client-credentials OAuth internally; no browser OAuth flow."
+    },
+    {
+      "id": "databricks",
+      "display_name": "Databricks",
+      "description": "Query Databricks SQL warehouses and Unity Catalog via community MCP server. Uses Databricks personal access token (PAT) + workspace host. STRETCH: databricks-mcp package is a library component — verify runnable entry point and exact uvx invocation at build.",
+      "category": "data",
+      "command": [
+        "uvx",
+        "databricks-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "DATABRICKS_HOST",
+          "display": "Databricks workspace URL (e.g. https://adb-1234567890.12.azuredatabricks.net)",
+          "docs_url": "https://docs.databricks.com/en/workspace/workspace-details.html",
+          "required": true
+        },
+        {
+          "name": "DATABRICKS_TOKEN",
+          "display": "Databricks personal access token (from User Settings > Developer > Access tokens)",
+          "docs_url": "https://docs.databricks.com/en/dev-tools/auth/pat.html",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://pypi.org/project/databricks-mcp/",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "STRETCH: databricks-mcp v0.9.0 (Databricks-affiliated, PyPI) may be a library component rather than a directly runnable MCP server — verify uvx entry point and exact CLI invocation at build. If not uvx-runnable, use Databricks SQL Connector via generic SQL tool or defer. Read/query only — no cluster management or admin writes."
+    },
+    {
+      "id": "airtable",
+      "display_name": "Airtable",
+      "description": "Read and write Airtable bases, tables, and records. Sign in with Airtable — no token to paste.",
+      "category": "productivity",
+      "transport": "http",
+      "url": "https://mcp.airtable.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "data.records:read",
+          "data.records:write",
+          "schema.bases:read",
+          "workspacesAndBases:read"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://airtable.com/developers/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "canva",
+      "display_name": "Canva",
+      "description": "Create, read, and edit Canva designs, folders, brand templates, and assets. Sign in with Canva — no token to paste.",
+      "category": "design",
+      "transport": "http",
+      "url": "https://mcp.canva.com",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "profile:read",
+          "design:meta:read",
+          "design:content:read",
+          "folder:read",
+          "asset:read"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://www.canva.com/developers/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "figma",
+      "display_name": "Figma",
+      "description": "Browse Figma files, components, and design tokens. Sign in with Figma — no token to paste.",
+      "category": "design",
+      "transport": "http",
+      "url": "https://mcp.figma.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "mcp:connect"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.figma.com/docs/figma-mcp-server/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "miro",
+      "display_name": "Miro",
+      "description": "Read and update Miro boards, frames, and sticky notes. Sign in with Miro — no token to paste.",
+      "category": "design",
+      "transport": "http",
+      "url": "https://mcp.miro.com",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "boards:read",
+          "boards:write"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.miro.com/docs/miro-mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Miro MCP requires a Miro Enterprise plan. An org admin must enable the MCP Server integration before users can connect."
+    },
+    {
+      "id": "dropbox",
+      "display_name": "Dropbox",
+      "description": "Browse, search, and read files and folders in Dropbox. Sign in with Dropbox — no token to paste.",
+      "category": "files",
+      "transport": "http",
+      "url": "https://mcp.dropbox.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "files.metadata.read",
+          "files.content.read",
+          "account_info.read",
+          "sharing.read"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.dropbox.com/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "paypal",
+      "display_name": "PayPal",
+      "description": "Query PayPal transactions, orders, and account balance. Read/query only — no payment initiation. Sign in with PayPal — no token to paste.",
+      "category": "finance",
+      "transport": "http",
+      "url": "https://mcp.paypal.com",
+      "auth": {
+        "kind": "mcp_oauth"
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.paypal.com/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "This recipe exposes read and query tools only. No payment-initiation or money-movement tools are enabled."
+    },
+    {
+      "id": "square",
+      "display_name": "Square",
+      "description": "Query Square customers, orders, catalog items, and merchant profile. Read/query only — no payment processing. Sign in with Square — no token to paste.",
+      "category": "finance",
+      "transport": "http",
+      "url": "https://mcp.squareup.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "CUSTOMERS_READ",
+          "MERCHANT_PROFILE_READ",
+          "APPOINTMENTS_READ",
+          "LOYALTY_READ",
+          "BANK_ACCOUNTS_READ",
+          "CASH_DRAWER_READ",
+          "EMPLOYEES_READ",
+          "VENDOR_READ",
+          "ONLINE_STORE_SNIPPETS_READ"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.squareup.com/docs/mcp-server",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Square MCP is in Beta. This recipe requests read-only scopes — no payment or charge tools are enabled."
+    },
+    {
+      "id": "hubspot",
+      "display_name": "HubSpot",
+      "description": "Search and update CRM contacts, companies, deals, and engagements in HubSpot. Sign in with HubSpot.",
+      "category": "crm",
+      "transport": "http",
+      "url": "https://mcp.hubspot.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_HUBSPOT_OAUTH_CLIENT_ID}"
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_HUBSPOT_OAUTH_CLIENT_ID",
+          "display": "HubSpot OAuth client ID (Kameas managed)",
+          "docs_url": "https://developers.hubspot.com/apps",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.hubspot.com/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "box",
+      "display_name": "Box",
+      "description": "Browse, search, and read files and folders stored in Box. Sign in with Box.",
+      "category": "files",
+      "transport": "http",
+      "url": "https://mcp.box.com",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_BOX_OAUTH_CLIENT_ID}",
+        "scopes": [
+          "root_readwrite"
+        ]
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_BOX_OAUTH_CLIENT_ID",
+          "display": "Box OAuth client ID (Kameas managed — from Box Admin Console)",
+          "docs_url": "https://developer.box.com/guides/box-mcp/remote/",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.box.com/guides/box-mcp/remote/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "salesforce",
+      "display_name": "Salesforce",
+      "description": "Search, read, and update Salesforce records (contacts, accounts, opportunities, cases). Sign in with Salesforce.",
+      "category": "crm",
+      "transport": "http",
+      "url": "https://${SALESFORCE_ORG_DOMAIN}.my.salesforce.com",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_SALESFORCE_OAUTH_CLIENT_ID}"
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_SALESFORCE_OAUTH_CLIENT_ID",
+          "display": "Salesforce OAuth client ID (Kameas External Client App)",
+          "docs_url": "https://developer.salesforce.com/docs/platform/hosted-mcp-servers/guide",
+          "required": true
+        }
+      ],
+      "config_options": [
+        {
+          "name": "org_domain",
+          "display": "Salesforce My Domain",
+          "kind": "string",
+          "required": true,
+          "description": "Your Salesforce My Domain prefix (e.g. 'mycompany' for mycompany.my.salesforce.com)."
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.salesforce.com/docs/platform/hosted-mcp-servers/guide",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
+    },
+    {
+      "id": "plaid",
+      "display_name": "Plaid",
+      "description": "Query Plaid-linked bank accounts, transactions, and balances. Read/query only — no payment initiation. Requires Plaid API credentials.",
+      "category": "finance",
+      "command": [
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-plaid"
+      ],
+      "env_keys": [
+        {
+          "name": "PLAID_CLIENT_ID",
+          "display": "Plaid client ID",
+          "docs_url": "https://dashboard.plaid.com/team/keys",
+          "required": true
+        },
+        {
+          "name": "PLAID_SECRET",
+          "display": "Plaid secret",
+          "docs_url": "https://dashboard.plaid.com/team/keys",
+          "required": true
+        },
+        {
+          "name": "PLAID_ENV",
+          "display": "Plaid environment (sandbox or production)",
+          "docs_url": "https://plaid.com/docs/api/",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://plaid.com/docs/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "primary_auth": "keys",
+      "warning": "Read and query only — no payment-initiation or Link-flow tools are enabled. Verify at build: confirm the npx package name for the Plaid MCP server — no official Plaid MCP server was confirmed at research time."
+    },
+    {
+      "id": "bigcommerce-docs",
+      "display_name": "BigCommerce Docs",
+      "description": "Search and read BigCommerce developer documentation — API references, guides, and webhooks. No authentication required.",
+      "category": "ecommerce",
+      "transport": "http",
+      "url": "https://docs.bigcommerce.com/_mcp/server",
+      "auth": {
+        "kind": "none"
+      },
+      "primary_auth": "none",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.bigcommerce.com/",
+      "init_timeout_ms": 10000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "This connector provides read-only access to BigCommerce developer documentation only — not to store data."
+    },
+    {
+      "id": "shopify",
+      "display_name": "Shopify",
+      "description": "Query and manage Shopify store products, orders, customers, and inventory. Requires a Shopify store Admin API access token.",
+      "category": "ecommerce",
+      "command": [
+        "npx",
+        "-y",
+        "@shopify/dev-mcp@latest"
+      ],
+      "env_keys": [
+        {
+          "name": "SHOPIFY_STORE_URL",
+          "display": "Shopify store URL (e.g. mystore.myshopify.com)",
+          "docs_url": "https://shopify.dev/docs/apps/build/authentication-and-authorization",
+          "required": true
+        },
+        {
+          "name": "SHOPIFY_ACCESS_TOKEN",
+          "display": "Shopify Admin API access token",
+          "docs_url": "https://shopify.dev/docs/apps/build/authentication-and-authorization/access-tokens",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://shopify.dev/docs/apps/build/authentication-and-authorization",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "primary_auth": "keys",
+      "warning": "Verify at build: confirm whether this Shopify MCP server exposes store data (products, orders, customers) or only developer-tooling docs. If store-data access is required, substitute a community store-data MCP package."
+    },
+    {
+      "id": "woocommerce",
+      "display_name": "WooCommerce",
+      "description": "Query WooCommerce orders, products, customers, and store stats. Requires your WooCommerce store URL and REST API keys.",
+      "category": "ecommerce",
+      "command": [
+        "npx",
+        "-y",
+        "@wp-api/woocommerce-mcp@latest"
+      ],
+      "env_keys": [
+        {
+          "name": "WOOCOMMERCE_URL",
+          "display": "WooCommerce store URL (e.g. https://myshop.com)",
+          "docs_url": "https://woocommerce.com/document/woocommerce-rest-api/",
+          "required": true
+        },
+        {
+          "name": "WOOCOMMERCE_CONSUMER_KEY",
+          "display": "WooCommerce REST API consumer key",
+          "docs_url": "https://woocommerce.com/document/woocommerce-rest-api/",
+          "required": true
+        },
+        {
+          "name": "WOOCOMMERCE_CONSUMER_SECRET",
+          "display": "WooCommerce REST API consumer secret",
+          "docs_url": "https://woocommerce.com/document/woocommerce-rest-api/",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://woocommerce.com/document/woocommerce-rest-api/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "primary_auth": "keys",
+      "warning": "Verify at build: confirm the npx package name for the WooCommerce MCP server — substitute the correct community package at build time."
+    },
+    {
+      "id": "pipedrive",
+      "display_name": "Pipedrive",
+      "description": "Search and update Pipedrive deals, contacts, organizations, and activities. Requires a Pipedrive API token.",
+      "category": "crm",
+      "command": [
+        "npx",
+        "-y",
+        "@pipedrive/mcp-server@latest"
+      ],
+      "env_keys": [
+        {
+          "name": "PIPEDRIVE_API_TOKEN",
+          "display": "Pipedrive API token",
+          "docs_url": "https://pipedrive.readme.io/docs/how-to-find-the-api-token",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://pipedrive.readme.io/docs/core-api-concepts-about-pipedrive-api",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "primary_auth": "keys",
+      "warning": "Verify at build: confirm the npx package name for the Pipedrive MCP server — no official Pipedrive remote MCP server was confirmed at research time."
+    },
+    {
+      "id": "zoho-crm",
+      "display_name": "Zoho CRM",
+      "description": "Search and update Zoho CRM leads, contacts, accounts, and deals. Requires Zoho OAuth credentials.",
+      "category": "crm",
+      "command": [
+        "npx",
+        "-y",
+        "@zoho/crm-mcp-server@latest"
+      ],
+      "env_keys": [
+        {
+          "name": "ZOHO_CLIENT_ID",
+          "display": "Zoho OAuth client ID",
+          "docs_url": "https://api-console.zoho.com/",
+          "required": true
+        },
+        {
+          "name": "ZOHO_CLIENT_SECRET",
+          "display": "Zoho OAuth client secret",
+          "docs_url": "https://api-console.zoho.com/",
+          "required": true
+        },
+        {
+          "name": "ZOHO_REFRESH_TOKEN",
+          "display": "Zoho OAuth refresh token",
+          "docs_url": "https://www.zoho.com/crm/developer/docs/api/v7/oauth-overview.html",
+          "required": true
+        }
+      ],
+      "config_options": [
+        {
+          "name": "region",
+          "display": "Zoho data center region",
+          "kind": "enum",
+          "choices": [
+            "com",
+            "eu",
+            "in",
+            "com.au",
+            "jp"
+          ],
+          "default": "com",
+          "required": false,
+          "description": "Your Zoho account's data center region (e.g. 'eu' for zoho.eu accounts)."
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://www.zoho.com/crm/developer/docs/api/v7/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "primary_auth": "keys",
+      "warning": "Verify at build: confirm the npx package name for the Zoho CRM MCP server — no official Zoho CRM remote MCP server was confirmed at research time."
+    },
+    {
+      "id": "stripe",
+      "display_name": "Stripe",
+      "description": "Query Stripe payments, customers, subscriptions, and invoices. Read/query only — no charge, refund, transfer, or payout tools. Requires a Stripe Restricted Key with read-only permissions.",
+      "category": "finance",
+      "command": [
+        "npx",
+        "-y",
+        "@stripe/mcp@latest",
+        "--tools=read-only"
+      ],
+      "env_keys": [
+        {
+          "name": "STRIPE_RESTRICTED_KEY",
+          "display": "Stripe Restricted Key (read-only — generated in Stripe Dashboard → API Keys → Restricted Keys)",
+          "docs_url": "https://docs.stripe.com/keys#limit-access",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.stripe.com/stripe-apps/build-backend",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "primary_auth": "keys",
+      "warning": "Read and query only — no charge, refund, transfer, payout, or other write tools are enabled. You MUST supply a Stripe Restricted Key (not a Secret Key) with read-only permissions. Never paste a full Secret Key here."
     }
   ]
 }
