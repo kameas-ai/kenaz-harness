@@ -43,6 +43,7 @@ var expectedRegistryIDs = []string{
 	"shortcut",
 	"smartsheet",
 	"wrike",
+	"trello",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -777,6 +778,50 @@ func TestWorkatoRecipe(t *testing.T) {
 	}
 	if r.Category != "automation" {
 		t.Errorf("Category = %q, want automation", r.Category)
+	}
+}
+
+func TestRecipe_Trello(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("trello")
+	if !ok {
+		t.Fatal("trello not in registry")
+	}
+	// stdio recipe: no transport/url, has command.
+	if r.Transport != "" && r.Transport != recipes.TransportStdio {
+		t.Errorf("Transport = %q, want stdio or empty", r.Transport)
+	}
+	if len(r.Command) == 0 {
+		t.Fatal("trello Command must be non-empty")
+	}
+	if r.Command[0] != "npx" {
+		t.Errorf("Command[0] = %q, want npx", r.Command[0])
+	}
+	if r.Category != "productivity" {
+		t.Errorf("Category = %q, want productivity", r.Category)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	// Auth is nil — no OAuth 2.0 server.
+	if r.Auth != nil {
+		t.Errorf("trello Auth should be nil (API key + OAuth 1.0 token, not OAuth 2.0), got %+v", r.Auth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = e.Required
+	}
+	if !envNames["TRELLO_API_KEY"] {
+		t.Error("TRELLO_API_KEY should be present and required")
+	}
+	if _, ok := envNames["TRELLO_TOKEN"]; !ok {
+		t.Error("TRELLO_TOKEN should be present")
+	}
+	if !envNames["TRELLO_TOKEN"] {
+		t.Error("TRELLO_TOKEN should be required")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 

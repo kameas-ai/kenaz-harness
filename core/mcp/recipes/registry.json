@@ -1069,6 +1069,43 @@
         "default": false
       },
       "warning": "Requires Kameas Wrike OAuth app registration at wrike.com/frontend/apps/index.html#/api. Set KAMEAS_WRIKE_OAUTH_CLIENT_ID to activate sign-in. EU customers: set datacenter=eu to use app-eu.wrike.com endpoints."
+    },
+    {
+      "id": "trello",
+      "display_name": "Trello",
+      "description": "Manage Trello boards, lists, and cards — search, create, update via the Trello REST API. Requires a Trello API key and token.",
+      "category": "productivity",
+      "command": ["npx", "-y", "@delorenj/mcp-server-trello"],
+      "env_keys": [
+        {
+          "name": "TRELLO_API_KEY",
+          "display": "Trello API key (from trello.com/power-ups/admin)",
+          "docs_url": "https://trello.com/power-ups/admin",
+          "required": true
+        },
+        {
+          "name": "TRELLO_TOKEN",
+          "display": "Trello OAuth token — generate at: https://trello.com/1/authorize?key=YOUR_KEY&scope=read,write&expiration=never&response_type=token",
+          "docs_url": "https://developer.atlassian.com/cloud/trello/guides/rest-api/authorization/",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.atlassian.com/cloud/trello/rest/",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "primary_auth": "keys",
+      "warning": "Uses community package @delorenj/mcp-server-trello (verify at build — check license and maintenance). Trello uses API key + OAuth 1.0 token (not OAuth 2.0). Generate your token at: https://trello.com/1/authorize?key=YOUR_API_KEY&scope=read,write&expiration=never&response_type=token. npm fetch on first run can take 5–15 s."
     }
   ]
 }
