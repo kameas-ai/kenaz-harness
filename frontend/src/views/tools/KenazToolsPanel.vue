@@ -26,10 +26,11 @@ import {
   Folder,
   FolderOpen,
   Globe,
+  Layers,
   MessageSquare,
   Scale,
   Search,
-  Shield,
+  Server,
   Wrench,
   Zap,
 } from '@/shell/icons';
@@ -371,8 +372,6 @@ function categoryIcon(category: RecipeCategory) {
       return Search;
     case 'filesystem':
       return Folder;
-    case 'files':
-      return FolderOpen;
     case 'memory':
       return Brain;
     case 'fetch':
@@ -387,10 +386,15 @@ function categoryIcon(category: RecipeCategory) {
       return MessageSquare;
     case 'automation':
       return Zap;
-    case 'observability':
+    // Marketing analytics + data/BI categories (01NCONN09 pack)
+    case 'analytics':
       return Activity;
-    case 'security':
-      return Shield;
+    case 'marketing':
+      return Zap;
+    case 'bi':
+      return Layers;
+    case 'data':
+      return Server;
     default:
       return Wrench;
   }

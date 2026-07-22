@@ -1951,8 +1951,11 @@ export type RecipeCategory =
   | 'communication'
   | 'deployment'
   | 'automation'
-  | 'observability'
-  | 'security'
+  // Marketing analytics + data/BI categories (01NCONN09 pack)
+  | 'analytics'
+  | 'marketing'
+  | 'bi'
+  | 'data'
   | 'other';
 
 /**
