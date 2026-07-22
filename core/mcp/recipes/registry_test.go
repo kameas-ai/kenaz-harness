@@ -1004,3 +1004,35 @@ func TestRecipe_Greenhouse(t *testing.T) {
 		t.Errorf("Validate() error: %v", err)
 	}
 }
+
+func TestRecipe_Ashby(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("ashby")
+	if !ok {
+		t.Fatal("ashby not in registry")
+	}
+	if r.Category != "hr_people" {
+		t.Errorf("Category = %q, want hr_people", r.Category)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["ASHBY_API_KEY"] {
+		t.Errorf("EnvKeys = %+v, want ASHBY_API_KEY", r.EnvKeys)
+	}
+	for _, e := range r.EnvKeys {
+		if e.Name == "ASHBY_API_KEY" && !e.Required {
+			t.Error("ASHBY_API_KEY should be required")
+		}
+	}
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for Ashby (API key auth), got %+v", r.Auth)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}

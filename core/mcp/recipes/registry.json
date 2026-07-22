@@ -1027,6 +1027,41 @@
         "default": false
       },
       "warning": "Python server launched via uvx; requires uv installed. First run downloads the package (5–15 s). Verify package name 'open-greenhouse-mcp' at build — select the most actively maintained Greenhouse MCP package on PyPI."
+    },
+    {
+      "id": "ashby",
+      "display_name": "Ashby",
+      "description": "Browse candidates, jobs, applications, interviews, and offers in Ashby ATS. Read-only access via the Ashby GraphQL API. Requires an Ashby API key.",
+      "category": "hr_people",
+      "command": [
+        "npx",
+        "-y",
+        "ashby-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "ASHBY_API_KEY",
+          "display": "Ashby API key",
+          "docs_url": "https://app.ashbyhq.com/admin/api",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://app.ashbyhq.com/admin/api",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Verify the npm package name 'ashby-mcp' at build — search npm for the most actively maintained Ashby MCP package. If no community package exists, a minimal wrapper calling the Ashby GraphQL API at https://app.ashbyhq.com/api/graphql may be needed. First npm fetch can take 5–15 s."
     }
   ]
 }
