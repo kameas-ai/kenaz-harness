@@ -42,6 +42,7 @@ var expectedRegistryIDs = []string{
 	"mixpanel",
 	"amplitude",
 	"klaviyo",
+	"dbt-cloud",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -905,6 +906,44 @@ func TestRecipe_Klaviyo(t *testing.T) {
 	}
 	if len(r.EnvKeys) != 0 {
 		t.Errorf("klaviyo should have no env keys (DCR zero-app), got %d", len(r.EnvKeys))
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+func TestRecipe_DbtCloud(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("dbt-cloud")
+	if !ok {
+		t.Fatal("dbt-cloud not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL == "" {
+		t.Error("dbt-cloud URL must be non-empty")
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// DCR zero-app: no baked client_id.
+	if r.Auth.ClientID != "" {
+		t.Errorf("dbt-cloud auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "data" {
+		t.Errorf("Category = %q, want data", r.Category)
+	}
+	// Must have token fallback env key.
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["DBT_ACCESS_TOKEN"] {
+		t.Errorf("EnvKeys = %+v, want DBT_ACCESS_TOKEN (token fallback)", r.EnvKeys)
 	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)

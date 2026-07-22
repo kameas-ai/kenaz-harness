@@ -1003,6 +1003,56 @@
         "default": false
       },
       "warning": "DCR zero-app: sign-in is token-free. Scopes are assigned by Klaviyo based on your private key permissions (Accounts, Campaigns, Catalogs, Events, Flows, Images, Lists, Metrics, Profiles, Segments, Subscriptions, Tags, Templates, Translations). No scopes declared in recipe — server assigns based on key."
+    },
+    {
+      "id": "dbt-cloud",
+      "display_name": "dbt Cloud",
+      "description": "Query dbt Cloud: explore models, lineage, docs, jobs, environments, and semantic layer via dbt Cloud's remote MCP server. OAuth DCR (Enterprise+) or personal access token. Per-workspace URL supported. Consumption-only — no dbt run or build triggers.",
+      "category": "data",
+      "transport": "http",
+      "url": "https://cloud.getdbt.com/api/ai/v1/mcp/",
+      "auth": {
+        "kind": "mcp_oauth"
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [
+        {
+          "name": "DBT_ACCESS_TOKEN",
+          "display": "dbt Cloud personal access token (fallback for non-Enterprise plans)",
+          "docs_url": "https://docs.getdbt.com/docs/dbt-cloud-apis/user-tokens",
+          "required": false
+        },
+        {
+          "name": "DBT_PROD_ENV_ID",
+          "display": "dbt Cloud production environment ID (optional — for semantic layer queries)",
+          "docs_url": "https://docs.getdbt.com/docs/dbt-cloud-apis/sl-api-overview",
+          "required": false
+        }
+      ],
+      "config_options": [
+        {
+          "name": "dbt_host",
+          "display": "dbt Cloud instance hostname (e.g. cloud.getdbt.com or your custom domain)",
+          "kind": "string",
+          "default": "cloud.getdbt.com",
+          "required": false,
+          "description": "Per-workspace hostname. Default: cloud.getdbt.com. Custom domains: replace with your dbt Cloud subdomain."
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.getdbt.com/docs/dbt-cloud-apis/ai-api",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "DCR supported on Enterprise+ plans; token-based works on all plans (set DBT_ACCESS_TOKEN). MCP URL is per-account — override dbt_host config_option for custom domains. Consumption-only: read/query only, no dbt run/build. DCR registration_endpoint auth-gated at discovery time; verify at build."
     }
   ]
 }
