@@ -879,6 +879,34 @@
         "default": false
       },
       "warning": "Workato Enterprise MCP requires an Enterprise plan. Your Workato admin must add you to a user group with MCP access. Each MCP server collection has its own URL — copy the path portion from AI Hub > Enterprise MCP (everything after app.workato.com/)."
+    },
+    {
+      "id": "clickup",
+      "display_name": "ClickUp",
+      "description": "Manage tasks, docs, and chat in ClickUp — search, create, update tasks and projects. Sign in with ClickUp — no token to paste.",
+      "category": "productivity",
+      "transport": "http",
+      "url": "https://mcp.clickup.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": ["read", "write"]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://help.clickup.com/hc/en-us/articles/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
     }
   ]
 }
