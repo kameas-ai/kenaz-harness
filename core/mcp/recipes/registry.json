@@ -879,6 +879,37 @@
         "default": false
       },
       "warning": "Workato Enterprise MCP requires an Enterprise plan. Your Workato admin must add you to a user group with MCP access. Each MCP server collection has its own URL — copy the path portion from AI Hub > Enterprise MCP (everything after app.workato.com/)."
+    },
+    {
+      "id": "mercury",
+      "display_name": "Mercury",
+      "description": "Query Mercury bank accounts, transactions, and financial data — read-only, no transactions initiated. Sign in with Mercury (DCR OAuth — no token to paste).",
+      "category": "finance_accounting",
+      "transport": "http",
+      "url": "https://mcp.mercury.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "read",
+          "offline_access"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://mercury.com/api",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
     }
   ]
 }

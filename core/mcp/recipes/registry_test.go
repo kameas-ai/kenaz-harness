@@ -2,6 +2,7 @@ package recipes_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
@@ -38,6 +39,22 @@ var expectedRegistryIDs = []string{
 	"composio",
 	"n8n",
 	"workato",
+	// HR & Finance pack (mcp-connector-pack-hr-finance-01NCONN08b)
+	"mercury",
+	"ramp",
+	"deel",
+	"greenhouse",
+	"ashby",
+	"bamboohr",
+	"xero",
+	"gusto",
+	"quickbooks",
+	"brex",
+	"lever",
+	"rippling",
+	"billdotcom",
+	"netsuite",
+	"workday",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -787,5 +804,58 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HR & Finance connector pack (mcp-connector-pack-hr-finance-01NCONN08b)
+// ---------------------------------------------------------------------------
+
+func TestRecipe_Mercury(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("mercury")
+	if !ok {
+		t.Fatal("mercury not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.mercury.com/mcp" {
+		t.Errorf("URL = %q, want https://mcp.mercury.com/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// DCR zero-app: no pre-registered client_id.
+	if r.Auth.ClientID != "" {
+		t.Errorf("mercury auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	wantScopes := map[string]bool{"read": true, "offline_access": true}
+	for _, s := range r.Auth.Scopes {
+		if !wantScopes[s] {
+			t.Errorf("mercury Auth.Scopes contains unexpected scope %q", s)
+		}
+	}
+	if len(r.Auth.Scopes) != 2 {
+		t.Errorf("mercury Auth.Scopes = %v, want [read offline_access]", r.Auth.Scopes)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "finance_accounting" {
+		t.Errorf("Category = %q, want finance_accounting", r.Category)
+	}
+	// No owner app registration needed (zero-app DCR).
+	for _, k := range r.EnvKeys {
+		if k.Name == "KAMEAS_MERCURY_OAUTH_CLIENT_ID" {
+			t.Error("mercury should not have KAMEAS_MERCURY_OAUTH_CLIENT_ID env key (DCR zero-app)")
+		}
+	}
+	// Finance safety copy.
+	if !strings.Contains(r.Description, "read-only") {
+		t.Error("mercury description must include read-only safety copy")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
