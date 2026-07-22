@@ -787,6 +787,36 @@ func TestWorkatoRecipe(t *testing.T) {
 	}
 }
 
+func TestObservabilityCategoryGroup(t *testing.T) {
+	cat := recipes.Registry()
+	observabilityIDs := []string{"grafana", "datadog", "new-relic", "pagerduty"}
+	for _, id := range observabilityIDs {
+		r, ok := cat.Get(id)
+		if !ok {
+			t.Errorf("observability recipe %q not found in registry", id)
+			continue
+		}
+		if r.Category != "observability" {
+			t.Errorf("recipe %q: Category = %q, want observability", id, r.Category)
+		}
+	}
+}
+
+func TestSecurityCategoryGroup(t *testing.T) {
+	cat := recipes.Registry()
+	securityIDs := []string{"snyk", "sonar"}
+	for _, id := range securityIDs {
+		r, ok := cat.Get(id)
+		if !ok {
+			t.Errorf("security recipe %q not found in registry", id)
+			continue
+		}
+		if r.Category != "security" {
+			t.Errorf("recipe %q: Category = %q, want security", id, r.Category)
+		}
+	}
+}
+
 func TestAutomationCategoryGroup(t *testing.T) {
 	cat := recipes.Registry()
 	iPaaSIDs := []string{"zapier", "make", "pipedream", "composio", "n8n", "workato"}
