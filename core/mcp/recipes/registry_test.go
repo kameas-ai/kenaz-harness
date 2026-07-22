@@ -43,6 +43,7 @@ var expectedRegistryIDs = []string{
 	"google-maps",
 	"mysql",
 	"mongodb",
+	"redis",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -792,6 +793,38 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Redis(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("redis")
+	if !ok {
+		t.Fatal("redis not in registry")
+	}
+	if r.Transport != "" && r.Transport != recipes.TransportStdio {
+		t.Errorf("Transport = %q, want stdio (empty)", r.Transport)
+	}
+	if len(r.Command) == 0 || r.Command[0] != "uvx" {
+		t.Errorf("Command = %v, want uvx-based command", r.Command)
+	}
+	if r.Category != "filesystem" {
+		t.Errorf("Category = %q, want filesystem", r.Category)
+	}
+	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "REDIS_URL" {
+		t.Fatalf("EnvKeys = %+v, want one entry named REDIS_URL", r.EnvKeys)
+	}
+	if !r.EnvKeys[0].Required {
+		t.Error("REDIS_URL should be required")
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	if r.Warning == "" {
+		t.Error("redis should carry a Warning (uvx/uv required, TLS note)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 

@@ -1103,6 +1103,37 @@
       },
       "warning": "npm fetch on first run can take 5–15 s. Atlas cluster management tools (create/delete) require Atlas API credentials and carry real cost implications — omit them for query-only usage.",
       "primary_auth": "keys"
+    },
+    {
+      "id": "redis",
+      "display_name": "Redis",
+      "description": "Read and write Redis keys, lists, hashes, sets, and streams. Supports local Redis, Redis Cloud, Upstash, and Azure Cache for Redis. Provide a connection URL to connect.",
+      "category": "filesystem",
+      "command": ["uvx", "--from", "redis-mcp-server@latest", "redis-mcp-server"],
+      "env_keys": [
+        {
+          "name": "REDIS_URL",
+          "display": "Redis connection URL (e.g. redis://user:pass@host:6379/0 or rediss:// for TLS)",
+          "docs_url": "https://github.com/redis/mcp-redis",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/redis/mcp-redis",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Python server (PyPI redis-mcp-server) launched via uvx; requires uv installed. First run downloads the package (5–15 s). Use rediss:// scheme for TLS-encrypted connections (Redis Cloud, Azure). REDIS_URL is read from environment — the URL is never exposed in process arguments.",
+      "primary_auth": "keys"
     }
   ]
 }
