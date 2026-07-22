@@ -1069,6 +1069,45 @@
         "default": false
       },
       "warning": "This recipe exposes read and query tools only. No payment-initiation or money-movement tools are enabled."
+    },
+    {
+      "id": "square",
+      "display_name": "Square",
+      "description": "Query Square customers, orders, catalog items, and merchant profile. Read/query only \u2014 no payment processing. Sign in with Square \u2014 no token to paste.",
+      "category": "finance",
+      "transport": "http",
+      "url": "https://mcp.squareup.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "CUSTOMERS_READ",
+          "MERCHANT_PROFILE_READ",
+          "APPOINTMENTS_READ",
+          "LOYALTY_READ",
+          "BANK_ACCOUNTS_READ",
+          "CASH_DRAWER_READ",
+          "EMPLOYEES_READ",
+          "VENDOR_READ",
+          "ONLINE_STORE_SNIPPETS_READ"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.squareup.com/docs/mcp-server",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Square MCP is in Beta. This recipe requests read-only scopes \u2014 no payment or charge tools are enabled."
     }
   ]
 }

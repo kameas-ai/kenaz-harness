@@ -2,6 +2,7 @@ package recipes_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
@@ -44,6 +45,7 @@ var expectedRegistryIDs = []string{
 	"miro",
 	"dropbox",
 	"paypal",
+	"square",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -793,6 +795,44 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Square(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("square")
+	if !ok {
+		t.Fatal("square not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.squareup.com/mcp" {
+		t.Errorf("URL = %q, want https://mcp.squareup.com/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	if r.Auth.ClientID != "" {
+		t.Errorf("square auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	// FR-003: all scopes must be read-only variants (no WRITE/payment).
+	for _, scope := range r.Auth.Scopes {
+		if !strings.HasSuffix(scope, "_READ") {
+			t.Errorf("square scope %q is not a read-only scope (must end with _READ)", scope)
+		}
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "finance" {
+		t.Errorf("Category = %q, want finance", r.Category)
+	}
+	if r.Warning == "" {
+		t.Error("square should carry a Warning (Beta + read-only constraint)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 
