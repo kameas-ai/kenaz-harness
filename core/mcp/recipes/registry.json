@@ -386,6 +386,35 @@
       "warning": "Teams requires a work or school Microsoft account. Personal Microsoft accounts will fail at sign-in. If your organisation's IT policy blocks the default app, set MS365_MCP_CLIENT_ID to your custom Azure AD app client ID and MS365_MCP_TENANT_ID to your tenant ID."
     },
     {
+      "id": "sharepoint",
+      "display_name": "SharePoint",
+      "description": "Search SharePoint sites, read and write lists and list items, manage list columns, and navigate site drives. Also exposes shared-mailbox and org-presence tools (work preset). Requires a work or school Microsoft account and your Azure tenant ID.",
+      "category": "files",
+      "command": ["npx", "-y", "@softeria/ms-365-mcp-server", "--org-mode", "--preset", "work"],
+      "primary_auth": "device_code",
+      "env_keys": [
+        {
+          "name": "MS365_MCP_TENANT_ID",
+          "display": "Azure tenant ID (required — SharePoint is an org resource; enter your organisation's tenant ID)",
+          "docs_url": "https://github.com/softeria/ms-365-mcp-server#authentication",
+          "required": false
+        },
+        {
+          "name": "MS365_MCP_CLIENT_ID",
+          "display": "Azure app client ID (optional — use a custom app if your org blocks third-party apps)",
+          "docs_url": "https://github.com/softeria/ms-365-mcp-server#authentication",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
+      "docs_url": "https://github.com/softeria/ms-365-mcp-server",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": { "allowed": false, "default": false },
+      "warning": "SharePoint requires a work or school Microsoft account and your Azure tenant ID (set MS365_MCP_TENANT_ID). The 'work' preset also exposes shared-mailbox and user-management tools alongside SharePoint. If your organisation's IT policy blocks the default app, set MS365_MCP_CLIENT_ID to your custom Azure AD app client ID."
+    },
+    {
       "id": "time",
       "display_name": "Time",
       "description": "Time-zone aware utilities: get the current time in a given IANA timezone, convert times between zones. No credentials required.",

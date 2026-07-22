@@ -40,6 +40,7 @@ var expectedRegistryIDs = []string{
 	"workato",
 	"onedrive",
 	"teams",
+	"sharepoint",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -774,6 +775,49 @@ func TestWorkatoRecipe(t *testing.T) {
 	}
 	if r.Category != "automation" {
 		t.Errorf("Category = %q, want automation", r.Category)
+	}
+}
+
+func TestRegistrySharePointRecipe(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("sharepoint")
+	if !ok {
+		t.Fatal("sharepoint not in registry")
+	}
+	if r.Category != "files" {
+		t.Errorf("Category = %q, want files", r.Category)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthDeviceCode {
+		t.Errorf("PrimaryAuth = %q, want device_code", r.PrimaryAuth)
+	}
+	// Command must contain both --org-mode and --preset work.
+	hasOrgMode := false
+	hasPresetWork := false
+	for i, arg := range r.Command {
+		if arg == "--org-mode" {
+			hasOrgMode = true
+		}
+		if arg == "--preset" && i+1 < len(r.Command) && r.Command[i+1] == "work" {
+			hasPresetWork = true
+		}
+	}
+	if !hasOrgMode {
+		t.Errorf("Command = %v, must contain --org-mode", r.Command)
+	}
+	if !hasPresetWork {
+		t.Errorf("Command = %v, must contain --preset work", r.Command)
+	}
+	// Server-bundled app: no required env keys.
+	for _, e := range r.EnvKeys {
+		if e.Required {
+			t.Errorf("env key %q should be optional (server-bundled app)", e.Name)
+		}
+	}
+	if r.Warning == "" {
+		t.Error("sharepoint should carry a Warning (work/school account + tenant ID required)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 
