@@ -1047,6 +1047,41 @@
       "ping_period_ms": 30000,
       "sampling_policy": { "allowed": false, "default": false },
       "warning": "Security read-only by default. The OKTA_SCOPES env var controls which tools are loaded — omitting manage scopes prevents write operations. Okta app integration must be created in the Okta Admin Console and scopes explicitly granted. Device authorization grant requires browser interaction at first use."
+    },
+    {
+      "id": "zendesk",
+      "display_name": "Zendesk",
+      "description": "Search and manage Zendesk tickets, comments, users, and knowledge base. Requires a Zendesk API token, your agent email, and your subdomain (yourcompany.zendesk.com).",
+      "category": "support",
+      "command": ["uvx", "zendesk-mcp"],
+      "env_keys": [
+        {
+          "name": "ZENDESK_SUBDOMAIN",
+          "display": "Zendesk subdomain (the part before .zendesk.com)",
+          "docs_url": "https://developer.zendesk.com/api-reference/introduction/security-and-auth/",
+          "required": true
+        },
+        {
+          "name": "ZENDESK_EMAIL",
+          "display": "Zendesk agent email address (used as API username)",
+          "docs_url": "https://developer.zendesk.com/api-reference/introduction/security-and-auth/",
+          "required": true
+        },
+        {
+          "name": "ZENDESK_API_TOKEN",
+          "display": "Zendesk API token (from Admin Center > Apps & Integrations > APIs > API Tokens)",
+          "docs_url": "https://support.zendesk.com/hc/en-us/articles/4408889192858",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "primary_auth": "keys",
+      "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
+      "docs_url": "https://developer.zendesk.com/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": { "allowed": false, "default": false },
+      "warning": "No official Zendesk MCP server — uses community zendesk-mcp (PyPI). Verify at build: uvx zendesk-mcp. If unavailable, fall back to npx github:mattcoatsworth/zendesk-mcp-server. ZENDESK_EMAIL is the agent email used as Basic Auth username paired with the API token."
     }
   ]
 }

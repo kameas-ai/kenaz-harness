@@ -43,6 +43,7 @@ var expectedRegistryIDs = []string{
 	"crowdstrike-aidr",
 	"help-scout",
 	"okta",
+	"zendesk",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -792,6 +793,42 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Zendesk(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("zendesk")
+	if !ok {
+		t.Fatal("zendesk not in registry")
+	}
+	if len(r.Command) == 0 || r.Command[0] == "" {
+		t.Error("Zendesk recipe must have a non-empty Command")
+	}
+	if r.URL != "" {
+		t.Errorf("Zendesk is stdio — URL should be empty, got %q", r.URL)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	if r.Category != "support" {
+		t.Errorf("Category = %q, want support", r.Category)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["ZENDESK_SUBDOMAIN"] {
+		t.Errorf("EnvKeys = %+v, want ZENDESK_SUBDOMAIN", r.EnvKeys)
+	}
+	if !envNames["ZENDESK_EMAIL"] {
+		t.Errorf("EnvKeys = %+v, want ZENDESK_EMAIL", r.EnvKeys)
+	}
+	if !envNames["ZENDESK_API_TOKEN"] {
+		t.Errorf("EnvKeys = %+v, want ZENDESK_API_TOKEN", r.EnvKeys)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 
