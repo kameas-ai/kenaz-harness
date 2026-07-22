@@ -23,9 +23,9 @@ jobs:
     name: Go lint + vet + codegen drift
     runs-on: [self-hosted, Linux, ARM64, ci-medium]
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
           # cache: false on self-hosted ARM64 runners — they persist
@@ -60,7 +60,7 @@ jobs:
         # block on lint) and ALSO works around golangci-lint-action's
         # 300-file diff API limit which fails any PR with > 300 changed
         # files (e.g. our v0.2.0 release PR which bundles 83 commits).
-        uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         continue-on-error: true
         with:
           version: v2.5.0
@@ -125,9 +125,9 @@ jobs:
     # an on-demand ephemeral tier (autostarter EPHEMERAL_TIERS=ci-medium,ci-large).
     runs-on: [self-hosted, Linux, ARM64, ci-large]
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
           # cache: false on self-hosted ARM64 runners — they persist
@@ -166,9 +166,9 @@ jobs:
     # httptest.Server that replays recorded fixture responses.
     runs-on: [self-hosted, Linux, ARM64, ci-medium]
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false
@@ -200,9 +200,9 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
