@@ -1936,14 +1936,14 @@ export interface DryRunResult {
 /**
  * RecipeCategory groups recipes in the Tools panel. Drives the icon
  * mapping in `KenazToolsPanel.vue` (search→Search, filesystem→Folder,
- * files→FolderOpen, memory→Brain, fetch→Globe, productivity→CheckSquare,
+ * memory→Brain, fetch→Globe, productivity→CheckSquare,
  * developer→Code, finance→Scale, communication→MessageSquare,
- * automation→Zap, default→Wrench).
+ * automation→Zap, hr_people→Users, finance_accounting→Scale,
+ * default→Wrench).
  */
 export type RecipeCategory =
   | 'search'
   | 'filesystem'
-  | 'files'
   | 'memory'
   | 'fetch'
   | 'productivity'
@@ -1952,9 +1952,8 @@ export type RecipeCategory =
   | 'communication'
   | 'deployment'
   | 'automation'
-  | 'support'
-  | 'itsm'
-  | 'security'
+  | 'hr_people'
+  | 'finance_accounting'
   | 'other';
 
 /**
@@ -2077,21 +2076,12 @@ export interface Recipe {
    */
   primaryAuth?: PrimaryAuth;
   /**
-   * Optional user-facing message shown by the install modal. How it
-   * renders is governed by `warningSeverity`, not by mere presence:
-   * by default (info) it's a calm neutral notice; only `'danger'`
-   * escalates to the red hazard banner + confirmation checkbox. Most
-   * recipes that set this convey a benign setup/latency/maturity note.
-   * Empty / undefined for recipes with nothing to say.
+   * Optional hazard message rendered by the install modal in a stark
+   * red banner with an explicit confirmation checkbox. Set on recipes
+   * that grant elevated trust (e.g. `filesystem-full`, the unrestricted
+   * filesystem MCP). Empty / undefined for ordinary recipes.
    */
   warning?: string;
-  /**
-   * Severity of `warning`. `'info'` / undefined → calm neutral notice,
-   * no risk acknowledgment, ordinary "Install" button. `'danger'` → red
-   * hazard banner with a required "I understand the risk" checkbox gating
-   * an "Install with risk" button. Ignored when `warning` is empty.
-   */
-  warningSeverity?: 'info' | 'danger';
   /**
    * Optional filename (under `core/policy/cedar/policies/`) of a Cedar
    * policy template the user is encouraged to install alongside this
