@@ -55,6 +55,7 @@ var expectedRegistryIDs = []string{
 	"woocommerce",
 	"pipedrive",
 	"zoho-crm",
+	"stripe",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -804,6 +805,59 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+// TestRecipe_Stripe asserts the Stripe recipe is read-only and uses a restricted key.
+// Stripe was pulled from v0.44.0 for exposing payment-mutation tools; this rebuild
+// uses a restricted read-only API key path with the --tools=read-only flag.
+func TestRecipe_Stripe(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("stripe")
+	if !ok {
+		t.Fatal("stripe not in registry")
+	}
+	// Stdio recipe — restricted-key path, not mcp.stripe.com (which cannot constrain tools).
+	if r.Transport != "" && r.Transport != "stdio" {
+		t.Errorf("Transport = %q, want stdio (restricted-key server path)", r.Transport)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys (read-only restricted key)", r.PrimaryAuth)
+	}
+	// No OAuth block — auth is purely the restricted env key.
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for Stripe (restricted-key auth, no OAuth flow), got %+v", r.Auth)
+	}
+	// Must have STRIPE_RESTRICTED_KEY env key (not STRIPE_SECRET_KEY — never a full secret key).
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["STRIPE_RESTRICTED_KEY"] {
+		t.Errorf("EnvKeys = %+v, want STRIPE_RESTRICTED_KEY (read-only Restricted Key)", r.EnvKeys)
+	}
+	if envNames["STRIPE_SECRET_KEY"] {
+		t.Error("STRIPE_SECRET_KEY must not appear — use STRIPE_RESTRICTED_KEY with read-only permissions only")
+	}
+	if r.Category != "finance" {
+		t.Errorf("Category = %q, want finance", r.Category)
+	}
+	// FR-003: Warning must document read-only constraint and restricted-key requirement.
+	if r.Warning == "" {
+		t.Error("stripe should carry a Warning (read-only + restricted key required)")
+	}
+	// Command must include a read-only flag to prevent write tool exposure.
+	hasReadOnlyFlag := false
+	for _, arg := range r.Command {
+		if arg == "--tools=read-only" || strings.Contains(arg, "read-only") {
+			hasReadOnlyFlag = true
+		}
+	}
+	if !hasReadOnlyFlag {
+		t.Errorf("stripe Command = %v, want --tools=read-only flag to prevent write tool exposure", r.Command)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 

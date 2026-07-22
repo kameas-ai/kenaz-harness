@@ -1485,6 +1485,42 @@
       },
       "primary_auth": "keys",
       "warning": "Verify at build: confirm the npx package name for the Zoho CRM MCP server \u2014 no official Zoho CRM remote MCP server was confirmed at research time."
+    },
+    {
+      "id": "stripe",
+      "display_name": "Stripe",
+      "description": "Query Stripe payments, customers, subscriptions, and invoices. Read/query only \u2014 no charge, refund, transfer, or payout tools. Requires a Stripe Restricted Key with read-only permissions.",
+      "category": "finance",
+      "command": [
+        "npx",
+        "-y",
+        "@stripe/mcp@latest",
+        "--tools=read-only"
+      ],
+      "env_keys": [
+        {
+          "name": "STRIPE_RESTRICTED_KEY",
+          "display": "Stripe Restricted Key (read-only \u2014 generated in Stripe Dashboard \u2192 API Keys \u2192 Restricted Keys)",
+          "docs_url": "https://docs.stripe.com/keys#limit-access",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.stripe.com/stripe-apps/build-backend",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "primary_auth": "keys",
+      "warning": "Read and query only \u2014 no charge, refund, transfer, payout, or other write tools are enabled. You MUST supply a Stripe Restricted Key (not a Secret Key) with read-only permissions. Never paste a full Secret Key here."
     }
   ]
 }
