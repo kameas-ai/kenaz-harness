@@ -42,6 +42,7 @@ var expectedRegistryIDs = []string{
 	"monday",
 	"shortcut",
 	"smartsheet",
+	"wrike",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -776,6 +777,53 @@ func TestWorkatoRecipe(t *testing.T) {
 	}
 	if r.Category != "automation" {
 		t.Errorf("Category = %q, want automation", r.Category)
+	}
+}
+
+func TestRecipe_Wrike(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("wrike")
+	if !ok {
+		t.Fatal("wrike not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.wrike.com/app/mcp/stream" {
+		t.Errorf("URL = %q, want https://mcp.wrike.com/app/mcp/stream", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// Kameas app: placeholder client_id seam required.
+	if r.Auth.ClientID != "${KAMEAS_WRIKE_OAUTH_CLIENT_ID}" {
+		t.Errorf("wrike auth.client_id = %q, want ${KAMEAS_WRIKE_OAUTH_CLIENT_ID}", r.Auth.ClientID)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthPKCE {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_pkce", r.PrimaryAuth)
+	}
+	if r.Category != "productivity" {
+		t.Errorf("Category = %q, want productivity", r.Category)
+	}
+	// Must expose KAMEAS_WRIKE_OAUTH_CLIENT_ID as required + WRIKE_PERMANENT_TOKEN as optional.
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = e.Required
+	}
+	if _, ok := envNames["KAMEAS_WRIKE_OAUTH_CLIENT_ID"]; !ok {
+		t.Error("wrike should have KAMEAS_WRIKE_OAUTH_CLIENT_ID env_key")
+	}
+	if !envNames["KAMEAS_WRIKE_OAUTH_CLIENT_ID"] {
+		t.Error("KAMEAS_WRIKE_OAUTH_CLIENT_ID should be required")
+	}
+	if _, ok := envNames["WRIKE_PERMANENT_TOKEN"]; !ok {
+		t.Error("wrike should have WRIKE_PERMANENT_TOKEN env_key (optional PAT fallback)")
+	}
+	if envNames["WRIKE_PERMANENT_TOKEN"] {
+		t.Error("WRIKE_PERMANENT_TOKEN should be optional (fallback only)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 

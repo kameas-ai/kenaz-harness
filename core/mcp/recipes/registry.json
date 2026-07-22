@@ -1016,6 +1016,59 @@
         "default": false
       },
       "warning": "Requires Kameas Smartsheet OAuth app registration at developers.smartsheet.com. Set KAMEAS_SMARTSHEET_OAUTH_CLIENT_ID to activate sign-in."
+    },
+    {
+      "id": "wrike",
+      "display_name": "Wrike",
+      "description": "Search tasks, projects, and folders in Wrike; create and update work items. Sign in with your Wrike account.",
+      "category": "productivity",
+      "transport": "http",
+      "url": "https://mcp.wrike.com/app/mcp/stream",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_WRIKE_OAUTH_CLIENT_ID}",
+        "scopes": []
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_WRIKE_OAUTH_CLIENT_ID",
+          "display": "Kameas Wrike OAuth client ID (pre-configured)",
+          "docs_url": "https://developers.wrike.com/oauth-20-authorization/",
+          "required": true
+        },
+        {
+          "name": "WRIKE_PERMANENT_TOKEN",
+          "display": "Wrike Permanent Access Token (optional — fallback for headless/automation use)",
+          "docs_url": "https://developers.wrike.com/oauth-20-authorization/",
+          "required": false
+        }
+      ],
+      "config_options": [
+        {
+          "name": "datacenter",
+          "display": "Datacenter",
+          "kind": "enum",
+          "choices": ["us", "eu"],
+          "default": "us",
+          "required": false,
+          "description": "EU customers: select 'eu' to use app-eu.wrike.com endpoints."
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.wrike.com/mcp-server/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Requires Kameas Wrike OAuth app registration at wrike.com/frontend/apps/index.html#/api. Set KAMEAS_WRIKE_OAUTH_CLIENT_ID to activate sign-in. EU customers: set datacenter=eu to use app-eu.wrike.com endpoints."
     }
   ]
 }
