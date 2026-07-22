@@ -53,6 +53,7 @@ var expectedRegistryIDs = []string{
 	"bigcommerce-docs",
 	"shopify",
 	"woocommerce",
+	"pipedrive",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -802,6 +803,29 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Pipedrive(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("pipedrive")
+	if !ok {
+		t.Fatal("pipedrive not in registry")
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for Pipedrive (API-key auth), got %+v", r.Auth)
+	}
+	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "PIPEDRIVE_API_TOKEN" {
+		t.Errorf("EnvKeys = %+v, want one entry named PIPEDRIVE_API_TOKEN", r.EnvKeys)
+	}
+	if r.Category != "crm" {
+		t.Errorf("Category = %q, want crm", r.Category)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 

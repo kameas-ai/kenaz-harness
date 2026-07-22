@@ -1387,6 +1387,41 @@
       },
       "primary_auth": "keys",
       "warning": "Verify at build: confirm the npx package name for the WooCommerce MCP server \u2014 substitute the correct community package at build time."
+    },
+    {
+      "id": "pipedrive",
+      "display_name": "Pipedrive",
+      "description": "Search and update Pipedrive deals, contacts, organizations, and activities. Requires a Pipedrive API token.",
+      "category": "crm",
+      "command": [
+        "npx",
+        "-y",
+        "@pipedrive/mcp-server@latest"
+      ],
+      "env_keys": [
+        {
+          "name": "PIPEDRIVE_API_TOKEN",
+          "display": "Pipedrive API token",
+          "docs_url": "https://pipedrive.readme.io/docs/how-to-find-the-api-token",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://pipedrive.readme.io/docs/core-api-concepts-about-pipedrive-api",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "primary_auth": "keys",
+      "warning": "Verify at build: confirm the npx package name for the Pipedrive MCP server \u2014 no official Pipedrive remote MCP server was confirmed at research time."
     }
   ]
 }
