@@ -840,6 +840,34 @@
       "warning": "Workflows must be individually marked 'Available in MCP' in your n8n instance before they appear as tools. For n8n Cloud, your hostname is <slug>.app.n8n.cloud. For self-hosted n8n, use your instance's domain name (without https://)."
     },
     {
+      "id": "intercom",
+      "display_name": "Intercom",
+      "description": "Search conversations, contacts, and companies; fetch conversation details and contact profiles via Intercom's official remote MCP server. Sign in with Intercom — no token to paste. US-hosted workspaces only.",
+      "category": "communication",
+      "transport": "http",
+      "url": "https://mcp.intercom.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth"
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/intercom/intercom-mcp-server",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Intercom MCP is currently available for US-hosted workspaces only."
+    },
+    {
       "id": "workato",
       "display_name": "Workato",
       "description": "Run recipes and trigger workflows in your Workato workspace via Workato's Enterprise MCP server. Each collection has its own MCP URL — copy it from AI Hub > Enterprise MCP in your Workato account.",
