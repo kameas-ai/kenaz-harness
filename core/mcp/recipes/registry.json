@@ -971,6 +971,35 @@
       "ping_period_ms": 30000,
       "sampling_policy": { "allowed": false, "default": false },
       "warning": "AIDR only (AI Guard / prompt safety) — not Falcon detection or SOC investigation. Requires Node.js v20+ (README notes v24+). npm fetch on first run can take 5–15 s."
+    },
+    {
+      "id": "help-scout",
+      "display_name": "Help Scout",
+      "description": "Search conversations, threads, and inboxes in Help Scout. Requires a Help Scout App (App ID + Secret) created in Help Scout My Apps — each user registers their own app (no Kameas registration needed).",
+      "category": "support",
+      "command": ["npx", "-y", "help-scout-mcp-server"],
+      "env_keys": [
+        {
+          "name": "HELPSCOUT_APP_ID",
+          "display": "Help Scout App ID (from My Apps in Help Scout)",
+          "docs_url": "https://secure.helpscout.net/authentication/oauth2-registration",
+          "required": true
+        },
+        {
+          "name": "HELPSCOUT_APP_SECRET",
+          "display": "Help Scout App Secret (from My Apps in Help Scout)",
+          "docs_url": "https://secure.helpscout.net/authentication/oauth2-registration",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "primary_auth": "keys",
+      "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
+      "docs_url": "https://developer.helpscout.com/mailbox-api/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": { "allowed": false, "default": false },
+      "warning": "Third-party server (drewburchfield/help-scout-mcp-server). Before installing, create a Help Scout App in Help Scout My Apps to get your App ID and Secret. npm fetch on first run can take 5–15 s."
     }
   ]
 }

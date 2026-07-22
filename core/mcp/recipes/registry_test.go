@@ -41,6 +41,7 @@ var expectedRegistryIDs = []string{
 	"front",
 	"freshdesk",
 	"crowdstrike-aidr",
+	"help-scout",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -790,6 +791,39 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_HelpScout(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("help-scout")
+	if !ok {
+		t.Fatal("help-scout not in registry")
+	}
+	if len(r.Command) == 0 || r.Command[0] == "" {
+		t.Error("Help Scout recipe must have a non-empty Command")
+	}
+	if r.URL != "" {
+		t.Errorf("Help Scout is stdio — URL should be empty, got %q", r.URL)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	if r.Category != "support" {
+		t.Errorf("Category = %q, want support", r.Category)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["HELPSCOUT_APP_ID"] {
+		t.Errorf("EnvKeys = %+v, want HELPSCOUT_APP_ID", r.EnvKeys)
+	}
+	if !envNames["HELPSCOUT_APP_SECRET"] {
+		t.Errorf("EnvKeys = %+v, want HELPSCOUT_APP_SECRET", r.EnvKeys)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 
