@@ -1399,6 +1399,74 @@
         "default": false
       },
       "warning": "Prefer the Spend and Expense bearer token path (BILLDOTCOM_API_TOKEN) over session-key auth to avoid session expiry complexity. Verify best npm MCP package for Bill.com at build — 'billdotcom-mcp' is a placeholder; no confirmed package found at research time. Legacy v3 session auth requires BILLDOTCOM_DEV_KEY + BILLDOTCOM_ORG_ID (sessions expire after 35 min inactivity). No payment-initiation tools."
+    },
+    {
+      "id": "netsuite",
+      "display_name": "NetSuite (Enterprise)",
+      "description": "Enterprise — NetSuite uses per-account Token-Based Authentication (TBA) or OAuth2, both requiring per-tenant setup. No community MCP package confirmed at research time. For quick read-only access to NetSuite data, connect via Zapier or Workato in the Automation section.",
+      "category": "finance_accounting",
+      "command": [
+        "npx",
+        "-y",
+        "netsuite-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "NETSUITE_ACCOUNT_ID",
+          "display": "NetSuite account ID (e.g. 1234567 — from your NetSuite account URL)",
+          "docs_url": "https://docs.oracle.com/en/cloud/saas/netsuite/ns-online-help/section_4221490781.html",
+          "required": true
+        },
+        {
+          "name": "NETSUITE_CONSUMER_KEY",
+          "display": "NetSuite TBA consumer key",
+          "docs_url": "https://docs.oracle.com/en/cloud/saas/netsuite/ns-online-help/section_4221490781.html",
+          "required": false
+        },
+        {
+          "name": "NETSUITE_CONSUMER_SECRET",
+          "display": "NetSuite TBA consumer secret",
+          "docs_url": "https://docs.oracle.com/en/cloud/saas/netsuite/ns-online-help/section_4221490781.html",
+          "required": false
+        },
+        {
+          "name": "NETSUITE_TOKEN_ID",
+          "display": "NetSuite TBA token ID",
+          "docs_url": "https://docs.oracle.com/en/cloud/saas/netsuite/ns-online-help/section_4221490781.html",
+          "required": false
+        },
+        {
+          "name": "NETSUITE_TOKEN_SECRET",
+          "display": "NetSuite TBA token secret",
+          "docs_url": "https://docs.oracle.com/en/cloud/saas/netsuite/ns-online-help/section_4221490781.html",
+          "required": false
+        }
+      ],
+      "config_options": [
+        {
+          "name": "netsuite_account_id",
+          "display": "NetSuite account ID",
+          "kind": "string",
+          "default": "",
+          "required": true,
+          "description": "Your NetSuite account ID — the numeric portion of your NetSuite URL (e.g. 1234567 from 1234567.app.netsuite.com)"
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.oracle.com/en/cloud/saas/netsuite/ns-online-help/section_4221490781.html",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Enterprise — requires NetSuite TBA setup by a NetSuite administrator. No confirmed community MCP package at research time; 'netsuite-mcp' is a placeholder — verify at build. For quick access, connect via Zapier or Workato in the Automation section instead. TBA requires 4 tokens: consumer_key, consumer_secret, token_id, token_secret — all per-account."
     }
   ]
 }

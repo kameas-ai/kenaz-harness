@@ -1307,3 +1307,34 @@ func TestRecipe_BillDotCom(t *testing.T) {
 		t.Errorf("Validate() error: %v", err)
 	}
 }
+
+func TestRecipe_NetSuite(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("netsuite")
+	if !ok {
+		t.Fatal("netsuite not in registry")
+	}
+	if r.Category != "finance_accounting" {
+		t.Errorf("Category = %q, want finance_accounting", r.Category)
+	}
+	// Must have netsuite_account_id config option (per-account URL config required).
+	hasAccountID := false
+	for _, opt := range r.ConfigOptions {
+		if opt.Name == "netsuite_account_id" {
+			hasAccountID = true
+			if !opt.Required {
+				t.Error("netsuite_account_id config option should be required")
+			}
+		}
+	}
+	if !hasAccountID {
+		t.Error("netsuite should have netsuite_account_id config option")
+	}
+	// Description should reference enterprise/iPaaS alternative.
+	if !strings.Contains(strings.ToLower(r.Description), "enterprise") {
+		t.Error("netsuite description should note enterprise setup requirement")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
