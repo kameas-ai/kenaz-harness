@@ -1108,6 +1108,41 @@
         "default": false
       },
       "warning": "Square MCP is in Beta. This recipe requests read-only scopes \u2014 no payment or charge tools are enabled."
+    },
+    {
+      "id": "hubspot",
+      "display_name": "HubSpot",
+      "description": "Search and update CRM contacts, companies, deals, and engagements in HubSpot. Sign in with HubSpot.",
+      "category": "crm",
+      "transport": "http",
+      "url": "https://mcp.hubspot.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_HUBSPOT_OAUTH_CLIENT_ID}"
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_HUBSPOT_OAUTH_CLIENT_ID",
+          "display": "HubSpot OAuth client ID (Kameas managed)",
+          "docs_url": "https://developers.hubspot.com/apps",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.hubspot.com/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
     }
   ]
 }
