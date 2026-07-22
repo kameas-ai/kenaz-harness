@@ -1282,6 +1282,52 @@
         "default": false
       },
       "warning": "Community package (PyPI mcp_server_snowflake v0.3.8 — underscores in package name). Read-only: --allow_write flag intentionally omitted. Requires uv installed. First run downloads package (5–15 s). Credentials passed as CLI flags; store in env/credstore, not plaintext."
+    },
+    {
+      "id": "bigquery",
+      "display_name": "BigQuery",
+      "description": "Query Google BigQuery data warehouse via Google's genai-toolbox MCP server. Read-only access using Application Default Credentials (ADC) or service account key file. No official Google remote MCP server exists yet.",
+      "category": "data",
+      "command": [
+        "npx",
+        "-y",
+        "@toolbox-sdk/server",
+        "--prebuilt=bigquery",
+        "--stdio"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "GOOGLE_APPLICATION_CREDENTIALS",
+          "display": "Path to Google service account key JSON file (leave empty to use Application Default Credentials)",
+          "docs_url": "https://cloud.google.com/docs/authentication/application-default-credentials",
+          "required": false
+        }
+      ],
+      "config_options": [
+        {
+          "name": "project_id",
+          "display": "Google Cloud project ID",
+          "kind": "string",
+          "default": "",
+          "required": true,
+          "description": "Google Cloud project ID containing the BigQuery datasets to query."
+        }
+      ],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://mcp-toolbox.dev",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Google-maintained genai-toolbox (npm @toolbox-sdk/server --prebuilt=bigquery). Verify exact --prebuilt=bigquery flag syntax and project_id config arg at build (toolbox docs at mcp-toolbox.dev). ADC or GOOGLE_APPLICATION_CREDENTIALS for auth. First npm fetch can take 5–15 s."
     }
   ]
 }

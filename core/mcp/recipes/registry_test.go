@@ -47,6 +47,7 @@ var expectedRegistryIDs = []string{
 	"fivetran",
 	"redshift",
 	"snowflake",
+	"bigquery",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -1105,6 +1106,52 @@ func TestRecipe_Snowflake(t *testing.T) {
 	}
 	if r.Warning == "" {
 		t.Error("snowflake should carry a Warning (read-only note, community package)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+func TestRecipe_BigQuery(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("bigquery")
+	if !ok {
+		t.Fatal("bigquery not in registry")
+	}
+	if len(r.Command) == 0 || r.Command[0] != "npx" {
+		t.Errorf("Command[0] = %q, want npx", r.Command[0])
+	}
+	// Must include --prebuilt=bigquery flag.
+	hasPrebuilt := false
+	for _, arg := range r.Command {
+		if arg == "--prebuilt=bigquery" {
+			hasPrebuilt = true
+		}
+	}
+	if !hasPrebuilt {
+		t.Error("bigquery Command should include --prebuilt=bigquery flag")
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for BigQuery (ADC auth), got %+v", r.Auth)
+	}
+	if r.Category != "data" {
+		t.Errorf("Category = %q, want data", r.Category)
+	}
+	// Must have project_id config option.
+	hasProjectID := false
+	for _, c := range r.ConfigOptions {
+		if c.Name == "project_id" {
+			hasProjectID = true
+		}
+	}
+	if !hasProjectID {
+		t.Error("bigquery ConfigOptions should include project_id")
+	}
+	if r.Warning == "" {
+		t.Error("bigquery should carry a Warning (verify at build note)")
 	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)
