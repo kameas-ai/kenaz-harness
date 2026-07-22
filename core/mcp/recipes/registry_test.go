@@ -50,6 +50,7 @@ var expectedRegistryIDs = []string{
 	"box",
 	"salesforce",
 	"plaid",
+	"bigcommerce-docs",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -799,6 +800,36 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_BigCommerceDocs(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("bigcommerce-docs")
+	if !ok {
+		t.Fatal("bigcommerce-docs not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://docs.bigcommerce.com/_mcp/server" {
+		t.Errorf("URL = %q, want https://docs.bigcommerce.com/_mcp/server", r.URL)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthNone {
+		t.Errorf("PrimaryAuth = %q, want none", r.PrimaryAuth)
+	}
+	// No auth block needed since auth.kind is "none".
+	if r.Auth == nil || r.Auth.Kind != "none" {
+		t.Errorf("Auth = %+v, want kind=none", r.Auth)
+	}
+	if r.Category != "ecommerce" {
+		t.Errorf("Category = %q, want ecommerce", r.Category)
+	}
+	if r.Warning == "" {
+		t.Error("bigcommerce-docs should carry a Warning (docs only, not store data)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 

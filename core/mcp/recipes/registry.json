@@ -1271,6 +1271,34 @@
       },
       "primary_auth": "keys",
       "warning": "Read and query only \u2014 no payment-initiation or Link-flow tools are enabled. Verify at build: confirm the npx package name for the Plaid MCP server \u2014 no official Plaid MCP server was confirmed at research time."
+    },
+    {
+      "id": "bigcommerce-docs",
+      "display_name": "BigCommerce Docs",
+      "description": "Search and read BigCommerce developer documentation \u2014 API references, guides, and webhooks. No authentication required.",
+      "category": "ecommerce",
+      "transport": "http",
+      "url": "https://docs.bigcommerce.com/_mcp/server",
+      "auth": {
+        "kind": "none"
+      },
+      "primary_auth": "none",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.bigcommerce.com/",
+      "init_timeout_ms": 10000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "This connector provides read-only access to BigCommerce developer documentation only \u2014 not to store data."
     }
   ]
 }
