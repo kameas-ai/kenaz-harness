@@ -1500,6 +1500,46 @@
         "default": false
       },
       "warning": "Community package (PyPI mcp-mailchimp v0.3.0 — not Mailchimp-official). Only MAILCHIMP_API_KEY is needed; datacenter/server prefix is derived from the key suffix (e.g. key ending in -us6 → us6 datacenter). No separate server prefix env var needed. Requires uv installed."
+    },
+    {
+      "id": "braze",
+      "display_name": "Braze",
+      "description": "Access Braze: campaigns, segments, canvases, content blocks, subscription groups, and analytics via the Braze-maintained MCP server. Read-only access using API key + cluster endpoint. BRAZE_ALLOW_WRITES not set (read-only enforcement).",
+      "category": "marketing",
+      "command": [
+        "uvx",
+        "braze-mcp-server"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "BRAZE_API_KEY",
+          "display": "Braze REST API key (create with least-privilege read-only permissions in Braze > Settings > API Keys)",
+          "docs_url": "https://www.braze.com/docs/api/basics/#creating-and-managing-rest-api-keys",
+          "required": true
+        },
+        {
+          "name": "BRAZE_BASE_URL",
+          "display": "Braze cluster REST endpoint (e.g. https://rest.iad-01.braze.com — see Braze dashboard URL for cluster)",
+          "docs_url": "https://www.braze.com/docs/api/basics/#endpoints",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://pypi.org/project/braze-mcp-server/",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Braze-affiliated package (PyPI braze-mcp-server v1.2.0). Read-only: BRAZE_ALLOW_WRITES not set. Use a least-privilege API key with only the read permissions your use case requires. BRAZE_BASE_URL is cluster-specific (e.g. rest.iad-01.braze.com, rest.eu-01.braze.com) — check your Braze dashboard URL. Requires uv installed."
     }
   ]
 }

@@ -52,6 +52,7 @@ var expectedRegistryIDs = []string{
 	"looker",
 	"ga4",
 	"mailchimp",
+	"braze",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -1284,6 +1285,48 @@ func TestRecipe_Mailchimp(t *testing.T) {
 	}
 	if r.Category != "marketing" {
 		t.Errorf("Category = %q, want marketing", r.Category)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+func TestRecipe_Braze(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("braze")
+	if !ok {
+		t.Fatal("braze not in registry")
+	}
+	if len(r.Command) == 0 || r.Command[0] != "uvx" {
+		t.Errorf("Command[0] = %q, want uvx", r.Command[0])
+	}
+	// Must NOT include ALLOW_WRITES in command (read-only enforcement).
+	for _, arg := range r.Command {
+		if arg == "BRAZE_ALLOW_WRITES" || arg == "--allow_writes" {
+			t.Error("braze Command must NOT include BRAZE_ALLOW_WRITES (read-only enforcement)")
+		}
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for Braze (API-key auth), got %+v", r.Auth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["BRAZE_API_KEY"] {
+		t.Errorf("EnvKeys = %+v, want BRAZE_API_KEY", r.EnvKeys)
+	}
+	if !envNames["BRAZE_BASE_URL"] {
+		t.Errorf("EnvKeys = %+v, want BRAZE_BASE_URL", r.EnvKeys)
+	}
+	if r.Category != "marketing" {
+		t.Errorf("Category = %q, want marketing", r.Category)
+	}
+	if r.Warning == "" {
+		t.Error("braze should carry a Warning (read-only note, cluster URL note)")
 	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)
