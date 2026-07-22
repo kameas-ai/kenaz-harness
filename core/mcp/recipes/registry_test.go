@@ -807,6 +807,38 @@ func TestAutomationCategoryGroup(t *testing.T) {
 	}
 }
 
+// TestRecipe_CatalogCategories asserts all CRM/commerce pack recipes carry a
+// non-empty category that matches the valid set introduced by this pack.
+func TestRecipe_CatalogCategories(t *testing.T) {
+	validCategories := map[string]bool{
+		"crm": true, "design": true, "ecommerce": true, "finance": true,
+		"files": true, "productivity": true, "automation": true, "communication": true,
+		"search": true, "filesystem": true, "fetch": true, "memory": true,
+		"developer": true, "deployment": true,
+	}
+	packIDs := []string{
+		"airtable", "canva", "figma", "miro", "dropbox",
+		"paypal", "square", "hubspot", "box", "salesforce",
+		"plaid", "bigcommerce-docs", "shopify", "woocommerce",
+		"pipedrive", "zoho-crm",
+	}
+	cat := recipes.Registry()
+	for _, id := range packIDs {
+		r, ok := cat.Get(id)
+		if !ok {
+			t.Errorf("recipe %q not found in registry", id)
+			continue
+		}
+		if r.Category == "" {
+			t.Errorf("recipe %q has empty category", id)
+			continue
+		}
+		if !validCategories[r.Category] {
+			t.Errorf("recipe %q has unrecognised category %q", id, r.Category)
+		}
+	}
+}
+
 func TestRecipe_ZohoCRM(t *testing.T) {
 	cat := recipes.Registry()
 	r, ok := cat.Get("zoho-crm")
