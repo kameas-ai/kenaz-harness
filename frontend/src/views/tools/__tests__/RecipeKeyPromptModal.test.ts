@@ -1021,8 +1021,8 @@ describe('RecipeKeyPromptModal — file prereq guided setup', () => {
     await flushPromises();
 
     const submit = w.get('[data-testid=recipe-key-modal-submit]');
-    // The warning ack checkbox is also required for gmail, but even ignoring
-    // that, the file-not-placed gate must fire. We check disabled state.
+    // Gmail's warning is a calm setup notice (no danger severity) so it does
+    // not gate install — but the file-not-placed gate must still fire.
     expect((submit.element as HTMLButtonElement).disabled).toBe(true);
   });
 
@@ -1180,5 +1180,93 @@ describe('RecipeKeyPromptModal — string config path picker', () => {
     await flushPromises();
 
     expect(w.find('[data-testid=recipe-config-string-picker-workspace_name]').exists()).toBe(false);
+  });
+});
+
+describe('RecipeKeyPromptModal — warning severity', () => {
+  // A recipe whose only gate is its warning (no required keys), so we can
+  // isolate whether the warning blocks install.
+  function noticeRecipe(overrides: Partial<Recipe> = {}): Recipe {
+    return makeRecipe({
+      id: 'notion',
+      displayName: 'Notion',
+      description: 'Notion.',
+      envKeys: [],
+      warning: 'Notion MCP is in beta — tool surface may change.',
+      ...overrides,
+    });
+  }
+
+  it('renders a calm notice (not the red hazard) for a warning with no severity', async () => {
+    const recipe = noticeRecipe();
+    const install = vi.fn(async () => okStatus(recipe.id));
+    const w = mount(RecipeKeyPromptModal, {
+      ...withFakeClient,
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+
+    expect(w.find('[data-testid=recipe-modal-notice]').exists()).toBe(true);
+    expect(w.find('[data-testid=recipe-modal-notice-text]').text()).toContain('beta');
+    // No red hazard banner, no ack checkbox.
+    expect(w.find('[data-testid=recipe-modal-warning]').exists()).toBe(false);
+    expect(w.find('[data-testid=recipe-modal-warning-ack]').exists()).toBe(false);
+  });
+
+  it('a calm-notice recipe does not gate install on acknowledgment', async () => {
+    const recipe = noticeRecipe();
+    const install = vi.fn(async () => okStatus(recipe.id));
+    const w = mount(RecipeKeyPromptModal, {
+      ...withFakeClient,
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+
+    const submit = w.get('[data-testid=recipe-key-modal-submit]');
+    // No required keys + calm notice → install is immediately available.
+    expect((submit.element as HTMLButtonElement).disabled).toBe(false);
+    expect(submit.text()).toBe('Install');
+  });
+
+  it('treats explicit warningSeverity "info" the same as the default (calm)', async () => {
+    const recipe = noticeRecipe({ warningSeverity: 'info' });
+    const install = vi.fn(async () => okStatus(recipe.id));
+    const w = mount(RecipeKeyPromptModal, {
+      ...withFakeClient,
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+
+    expect(w.find('[data-testid=recipe-modal-notice]').exists()).toBe(true);
+    expect(w.find('[data-testid=recipe-modal-warning]').exists()).toBe(false);
+    expect(
+      (w.get('[data-testid=recipe-key-modal-submit]').element as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+  });
+
+  it('renders the red hazard banner and gates install on ack for warningSeverity "danger"', async () => {
+    const recipe = noticeRecipe({
+      warning: 'This grants the model unrestricted access.',
+      warningSeverity: 'danger',
+    });
+    const install = vi.fn(async () => okStatus(recipe.id));
+    const w = mount(RecipeKeyPromptModal, {
+      ...withFakeClient,
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+
+    // Red hazard banner present, calm notice absent.
+    expect(w.find('[data-testid=recipe-modal-warning]').exists()).toBe(true);
+    expect(w.find('[data-testid=recipe-modal-notice]').exists()).toBe(false);
+
+    const submit = w.get('[data-testid=recipe-key-modal-submit]');
+    // Gated on acknowledgment.
+    expect((submit.element as HTMLButtonElement).disabled).toBe(true);
+    expect(submit.text()).toBe('Install with risk');
+
+    await w.get('[data-testid=recipe-modal-warning-ack]').setValue(true);
+    expect((submit.element as HTMLButtonElement).disabled).toBe(false);
   });
 });

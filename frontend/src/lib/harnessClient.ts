@@ -1002,6 +1002,8 @@ interface WireRecipe {
   args_template?: string[];
   config_options?: WireConfigOption[];
   warning?: string;
+  /** warning severity; omitempty on the Go side. "" / "info" → calm notice, "danger" → red hazard. */
+  warning_severity?: string;
   recommended_policy_template?: string;
   /** primary_auth hint; omitempty on the Go side (absent when empty). */
   primary_auth?: string;
@@ -1164,6 +1166,12 @@ function adaptRecipe(w: WireRecipe): Recipe {
     argsTemplate: w.args_template ? [...w.args_template] : undefined,
     configOptions,
     warning: w.warning || undefined,
+    warningSeverity:
+      w.warning_severity === 'danger'
+        ? 'danger'
+        : w.warning_severity === 'info'
+          ? 'info'
+          : undefined,
     recommendedPolicyTemplate: w.recommended_policy_template || undefined,
     primaryAuth: adaptPrimaryAuth(w.primary_auth),
   };
