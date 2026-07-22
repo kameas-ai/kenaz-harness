@@ -45,6 +45,7 @@ var expectedRegistryIDs = []string{
 	"okta",
 	"zendesk",
 	"servicenow",
+	"jamf-docs",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -794,6 +795,37 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_JamfDocs(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("jamf-docs")
+	if !ok {
+		t.Fatal("jamf-docs not in registry")
+	}
+	// Remote HTTP — docs search, no auth.
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://developer.jamf.com/mcp" {
+		t.Errorf("URL = %q, want https://developer.jamf.com/mcp", r.URL)
+	}
+	// No auth object — docs MCP is public.
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for no-auth HTTP MCP, got %+v", r.Auth)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthNone {
+		t.Errorf("PrimaryAuth = %q, want none", r.PrimaryAuth)
+	}
+	if len(r.EnvKeys) != 0 {
+		t.Errorf("EnvKeys should be empty for no-auth recipe, got %+v", r.EnvKeys)
+	}
+	if r.Category != "itsm" {
+		t.Errorf("Category = %q, want itsm", r.Category)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 

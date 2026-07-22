@@ -1129,6 +1129,23 @@
       "ping_period_ms": 30000,
       "sampling_policy": { "allowed": false, "default": false },
       "warning": "Community server (echelon-ai-labs/servicenow-mcp). Verify at build: uvx servicenow-mcp (PyPI package may not be published — if unavailable, install via pip from source or use a Docker image). Read-only by default; check server docs for --read-only flag. ServiceNow instance URL and credentials are per-tenant."
+    },
+    {
+      "id": "jamf-docs",
+      "display_name": "Jamf Developer Docs",
+      "description": "Search Jamf developer documentation, API references, and code examples. No authentication required. Note: this is the Jamf documentation MCP only — not the Jamf Pro management API.",
+      "category": "itsm",
+      "transport": "http",
+      "url": "https://developer.jamf.com/mcp",
+      "primary_auth": "none",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
+      "docs_url": "https://developer.jamf.com/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": { "allowed": false, "default": false },
+      "warning": "Jamf Developer Docs MCP — documentation search only (no Jamf Pro management capabilities). Verify at build that developer.jamf.com/mcp serves MCP tools. Jamf Pro management recipe deferred pending official Jamf MCP or published community npm package."
     }
   ]
 }
