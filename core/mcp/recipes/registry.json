@@ -913,6 +913,35 @@
       "init_timeout_ms": 15000,
       "ping_period_ms": 30000,
       "sampling_policy": { "allowed": false, "default": false }
+    },
+    {
+      "id": "freshdesk",
+      "display_name": "Freshdesk",
+      "description": "Search and manage Freshdesk support tickets, contacts, agents, and companies. Requires a Freshdesk API key and your Freshdesk domain.",
+      "category": "support",
+      "command": ["uvx", "freshdesk-mcp"],
+      "env_keys": [
+        {
+          "name": "FRESHDESK_API_KEY",
+          "display": "Freshdesk API key",
+          "docs_url": "https://support.freshdesk.com/en/support/solutions/articles/215517",
+          "required": true
+        },
+        {
+          "name": "FRESHDESK_DOMAIN",
+          "display": "Freshdesk domain (e.g. yourcompany.freshdesk.com)",
+          "docs_url": "https://support.freshdesk.com/en/support/solutions/articles/215517",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "primary_auth": "keys",
+      "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
+      "docs_url": "https://developers.freshdesk.com/api/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": { "allowed": false, "default": false },
+      "warning": "Python server (PyPI freshdesk-mcp by effytech) launched via uvx; requires uv installed. First run downloads the package (5–15 s). Verify at build: uvx freshdesk-mcp (package name may differ from binary name)."
     }
   ]
 }

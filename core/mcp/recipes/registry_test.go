@@ -39,6 +39,7 @@ var expectedRegistryIDs = []string{
 	"n8n",
 	"workato",
 	"front",
+	"freshdesk",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -788,6 +789,40 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Freshdesk(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("freshdesk")
+	if !ok {
+		t.Fatal("freshdesk not in registry")
+	}
+	// stdio recipe — command present, no URL.
+	if len(r.Command) == 0 || r.Command[0] == "" {
+		t.Error("Freshdesk recipe must have a non-empty Command")
+	}
+	if r.URL != "" {
+		t.Errorf("Freshdesk is stdio — URL should be empty, got %q", r.URL)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	if r.Category != "support" {
+		t.Errorf("Category = %q, want support", r.Category)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["FRESHDESK_API_KEY"] {
+		t.Errorf("EnvKeys = %+v, want FRESHDESK_API_KEY", r.EnvKeys)
+	}
+	if !envNames["FRESHDESK_DOMAIN"] {
+		t.Errorf("EnvKeys = %+v, want FRESHDESK_DOMAIN", r.EnvKeys)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 
