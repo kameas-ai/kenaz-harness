@@ -40,6 +40,7 @@ var expectedRegistryIDs = []string{
 	"workato",
 	"clickup",
 	"monday",
+	"shortcut",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -774,6 +775,50 @@ func TestWorkatoRecipe(t *testing.T) {
 	}
 	if r.Category != "automation" {
 		t.Errorf("Category = %q, want automation", r.Category)
+	}
+}
+
+func TestRecipe_Shortcut(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("shortcut")
+	if !ok {
+		t.Fatal("shortcut not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.shortcut.com/mcp" {
+		t.Errorf("URL = %q, want https://mcp.shortcut.com/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	if r.Auth.ClientID != "" {
+		t.Errorf("shortcut auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	if len(r.Auth.Scopes) == 0 {
+		t.Error("shortcut Auth.Scopes should list requested scopes")
+	}
+	hasRead := false
+	for _, s := range r.Auth.Scopes {
+		if s == "read" {
+			hasRead = true
+		}
+	}
+	if !hasRead {
+		t.Errorf("shortcut Auth.Scopes = %v, must include \"read\"", r.Auth.Scopes)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "productivity" {
+		t.Errorf("Category = %q, want productivity", r.Category)
+	}
+	if len(r.EnvKeys) != 0 {
+		t.Errorf("shortcut should have no env_keys (DCR zero-app), got %d", len(r.EnvKeys))
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 

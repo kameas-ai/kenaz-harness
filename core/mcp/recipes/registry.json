@@ -941,6 +941,34 @@
         "allowed": false,
         "default": false
       }
+    },
+    {
+      "id": "shortcut",
+      "display_name": "Shortcut",
+      "description": "Search stories, create and update epics, iterations, and sprints in Shortcut. Sign in with Shortcut — no token to paste.",
+      "category": "productivity",
+      "transport": "http",
+      "url": "https://mcp.shortcut.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": ["read", "story-write", "comment-write"]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://shortcut.com/integrations/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
     }
   ]
 }
