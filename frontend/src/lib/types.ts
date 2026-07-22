@@ -1951,6 +1951,9 @@ export type RecipeCategory =
   | 'communication'
   | 'deployment'
   | 'automation'
+  | 'support'
+  | 'itsm'
+  | 'security'
   | 'other';
 
 /**
