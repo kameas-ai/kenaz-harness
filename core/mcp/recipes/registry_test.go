@@ -52,6 +52,7 @@ var expectedRegistryIDs = []string{
 	"plaid",
 	"bigcommerce-docs",
 	"shopify",
+	"woocommerce",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -801,6 +802,39 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_WooCommerce(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("woocommerce")
+	if !ok {
+		t.Fatal("woocommerce not in registry")
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for WooCommerce (API-key auth), got %+v", r.Auth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["WOOCOMMERCE_URL"] {
+		t.Errorf("EnvKeys = %+v, want WOOCOMMERCE_URL", r.EnvKeys)
+	}
+	if !envNames["WOOCOMMERCE_CONSUMER_KEY"] {
+		t.Errorf("EnvKeys = %+v, want WOOCOMMERCE_CONSUMER_KEY", r.EnvKeys)
+	}
+	if !envNames["WOOCOMMERCE_CONSUMER_SECRET"] {
+		t.Errorf("EnvKeys = %+v, want WOOCOMMERCE_CONSUMER_SECRET", r.EnvKeys)
+	}
+	if r.Category != "ecommerce" {
+		t.Errorf("Category = %q, want ecommerce", r.Category)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 

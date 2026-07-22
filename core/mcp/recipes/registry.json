@@ -1340,6 +1340,53 @@
       },
       "primary_auth": "keys",
       "warning": "Verify at build: confirm whether this Shopify MCP server exposes store data (products, orders, customers) or only developer-tooling docs. If store-data access is required, substitute a community store-data MCP package."
+    },
+    {
+      "id": "woocommerce",
+      "display_name": "WooCommerce",
+      "description": "Query WooCommerce orders, products, customers, and store stats. Requires your WooCommerce store URL and REST API keys.",
+      "category": "ecommerce",
+      "command": [
+        "npx",
+        "-y",
+        "@wp-api/woocommerce-mcp@latest"
+      ],
+      "env_keys": [
+        {
+          "name": "WOOCOMMERCE_URL",
+          "display": "WooCommerce store URL (e.g. https://myshop.com)",
+          "docs_url": "https://woocommerce.com/document/woocommerce-rest-api/",
+          "required": true
+        },
+        {
+          "name": "WOOCOMMERCE_CONSUMER_KEY",
+          "display": "WooCommerce REST API consumer key",
+          "docs_url": "https://woocommerce.com/document/woocommerce-rest-api/",
+          "required": true
+        },
+        {
+          "name": "WOOCOMMERCE_CONSUMER_SECRET",
+          "display": "WooCommerce REST API consumer secret",
+          "docs_url": "https://woocommerce.com/document/woocommerce-rest-api/",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://woocommerce.com/document/woocommerce-rest-api/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "primary_auth": "keys",
+      "warning": "Verify at build: confirm the npx package name for the WooCommerce MCP server \u2014 substitute the correct community package at build time."
     }
   ]
 }
