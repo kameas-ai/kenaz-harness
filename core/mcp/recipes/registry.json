@@ -1112,6 +1112,53 @@
         "default": false
       },
       "warning": "Verify npm package 'bamboohr-mcp' at build — search npm for the most actively maintained BambooHR MCP package. First npm fetch can take 5–15 s."
+    },
+    {
+      "id": "xero",
+      "display_name": "Xero",
+      "description": "Read accounting transactions, contacts, and settings from Xero — read-only, no transactions initiated. Uses Xero's official npm MCP package. Requires a Kameas Xero OAuth app (register at developer.xero.com).",
+      "category": "finance_accounting",
+      "command": [
+        "npx",
+        "-y",
+        "@xeroapi/xero-mcp-server@latest"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "XERO_CLIENT_ID",
+          "display": "Xero OAuth client ID (from your Kameas app at developer.xero.com)",
+          "docs_url": "https://developer.xero.com/documentation/guides/oauth2/overview/",
+          "required": true
+        },
+        {
+          "name": "XERO_CLIENT_SECRET",
+          "display": "Xero OAuth client secret (from your Kameas app at developer.xero.com)",
+          "docs_url": "https://developer.xero.com/documentation/guides/oauth2/overview/",
+          "required": true
+        },
+        {
+          "name": "XERO_SCOPES",
+          "display": "Xero OAuth scopes (optional — defaults to read-only accounting scopes)",
+          "docs_url": "https://developer.xero.com/documentation/guides/oauth2/scopes/",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/XeroAPI/xero-mcp-server",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Owner must register a Kameas Xero OAuth app at developer.xero.com before use. Set XERO_CLIENT_ID and XERO_CLIENT_SECRET. Default scopes: accounting.transactions.read accounting.contacts.read accounting.settings.read. Verify DCR availability at identity.xero.com at build — if DCR is present, this recipe can be upgraded to zero-app. First npm fetch can take 5–15 s."
     }
   ]
 }

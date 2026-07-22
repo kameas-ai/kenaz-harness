@@ -1076,3 +1076,45 @@ func TestRecipe_BambooHR(t *testing.T) {
 		t.Errorf("Validate() error: %v", err)
 	}
 }
+
+func TestRecipe_Xero(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("xero")
+	if !ok {
+		t.Fatal("xero not in registry")
+	}
+	if r.Category != "finance_accounting" {
+		t.Errorf("Category = %q, want finance_accounting", r.Category)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["XERO_CLIENT_ID"] {
+		t.Errorf("EnvKeys = %+v, want XERO_CLIENT_ID", r.EnvKeys)
+	}
+	if !envNames["XERO_CLIENT_SECRET"] {
+		t.Errorf("EnvKeys = %+v, want XERO_CLIENT_SECRET", r.EnvKeys)
+	}
+	for _, e := range r.EnvKeys {
+		switch e.Name {
+		case "XERO_CLIENT_ID", "XERO_CLIENT_SECRET":
+			if !e.Required {
+				t.Errorf("%q should be required", e.Name)
+			}
+		}
+	}
+	// Finance safety copy.
+	if !strings.Contains(r.Description, "read-only") {
+		t.Error("xero description must include read-only safety copy")
+	}
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for Xero (client_id/secret-based OAuth, not mcp_oauth flow), got %+v", r.Auth)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
