@@ -47,6 +47,7 @@ var expectedRegistryIDs = []string{
 	"vercel",
 	"bitbucket",
 	"pagerduty",
+	"snyk",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -796,6 +797,45 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Snyk(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("snyk")
+	if !ok {
+		t.Fatal("snyk not in registry")
+	}
+	// Stdio transport (npx).
+	if r.Transport != "" && r.Transport != recipes.TransportStdio {
+		t.Errorf("Transport = %q, want stdio (or empty)", r.Transport)
+	}
+	if len(r.Command) < 3 || r.Command[0] != "npx" {
+		t.Errorf("Command = %v, want [npx -y snyk mcp ...]", r.Command)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["SNYK_TOKEN"] {
+		t.Errorf("EnvKeys = %+v, want SNYK_TOKEN", r.EnvKeys)
+	}
+	for _, e := range r.EnvKeys {
+		if e.Name == "SNYK_TOKEN" && !e.Required {
+			t.Error("SNYK_TOKEN should be required")
+		}
+	}
+	if r.Category != "security" {
+		t.Errorf("Category = %q, want security", r.Category)
+	}
+	if r.Warning == "" {
+		t.Error("snyk should carry a Warning (npm download / Node.js required)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 
