@@ -38,6 +38,12 @@ var expectedRegistryIDs = []string{
 	"composio",
 	"n8n",
 	"workato",
+	"supabase",
+	"gitlab",
+	"google-maps",
+	"mysql",
+	"mongodb",
+	"redis",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -787,5 +793,258 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Redis(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("redis")
+	if !ok {
+		t.Fatal("redis not in registry")
+	}
+	if r.Transport != "" && r.Transport != recipes.TransportStdio {
+		t.Errorf("Transport = %q, want stdio (empty)", r.Transport)
+	}
+	if len(r.Command) == 0 || r.Command[0] != "uvx" {
+		t.Errorf("Command = %v, want uvx-based command", r.Command)
+	}
+	if r.Category != "filesystem" {
+		t.Errorf("Category = %q, want filesystem", r.Category)
+	}
+	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "REDIS_URL" {
+		t.Fatalf("EnvKeys = %+v, want one entry named REDIS_URL", r.EnvKeys)
+	}
+	if !r.EnvKeys[0].Required {
+		t.Error("REDIS_URL should be required")
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	if r.Warning == "" {
+		t.Error("redis should carry a Warning (uvx/uv required, TLS note)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+func TestRecipe_MongoDB(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("mongodb")
+	if !ok {
+		t.Fatal("mongodb not in registry")
+	}
+	if r.Transport != "" && r.Transport != recipes.TransportStdio {
+		t.Errorf("Transport = %q, want stdio (empty)", r.Transport)
+	}
+	if len(r.Command) == 0 || r.Command[0] != "npx" {
+		t.Errorf("Command = %v, want npx-based command", r.Command)
+	}
+	if r.Category != "filesystem" {
+		t.Errorf("Category = %q, want filesystem", r.Category)
+	}
+	envNames := map[string]bool{}
+	requiredCount := 0
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+		if e.Required {
+			requiredCount++
+		}
+	}
+	if !envNames["MDB_MCP_CONNECTION_STRING"] {
+		t.Error("EnvKeys missing required MDB_MCP_CONNECTION_STRING")
+	}
+	// Connection string must be required.
+	for _, e := range r.EnvKeys {
+		if e.Name == "MDB_MCP_CONNECTION_STRING" && !e.Required {
+			t.Error("MDB_MCP_CONNECTION_STRING should be required")
+		}
+	}
+	if !envNames["MDB_MCP_READ_ONLY"] {
+		t.Error("EnvKeys missing optional MDB_MCP_READ_ONLY")
+	}
+	if !envNames["MDB_MCP_API_CLIENT_ID"] || !envNames["MDB_MCP_API_CLIENT_SECRET"] {
+		t.Error("EnvKeys missing optional Atlas credentials (MDB_MCP_API_CLIENT_ID / MDB_MCP_API_CLIENT_SECRET)")
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	if r.Warning == "" {
+		t.Error("mongodb should carry a Warning (Atlas management cost implications)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+func TestRecipe_MySQL(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("mysql")
+	if !ok {
+		t.Fatal("mysql not in registry")
+	}
+	if r.Transport != "" && r.Transport != recipes.TransportStdio {
+		t.Errorf("Transport = %q, want stdio (empty)", r.Transport)
+	}
+	if len(r.Command) == 0 || r.Command[0] != "npx" {
+		t.Errorf("Command = %v, want npx-based command", r.Command)
+	}
+	if r.Category != "filesystem" {
+		t.Errorf("Category = %q, want filesystem", r.Category)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	for _, required := range []string{"MYSQL_HOST", "MYSQL_USER", "MYSQL_PASS", "MYSQL_DB"} {
+		if !envNames[required] {
+			t.Errorf("EnvKeys missing required key %q", required)
+		}
+	}
+	if !envNames["MYSQL_PORT"] {
+		t.Error("EnvKeys missing optional MYSQL_PORT")
+	}
+	if !envNames["ALLOW_INSERT_OPERATION"] || !envNames["ALLOW_UPDATE_OPERATION"] || !envNames["ALLOW_DELETE_OPERATION"] {
+		t.Error("EnvKeys missing write-enable optional flags (ALLOW_INSERT/UPDATE/DELETE_OPERATION)")
+	}
+	// Write flags must be optional.
+	for _, e := range r.EnvKeys {
+		if (e.Name == "ALLOW_INSERT_OPERATION" || e.Name == "ALLOW_UPDATE_OPERATION" || e.Name == "ALLOW_DELETE_OPERATION") && e.Required {
+			t.Errorf("env key %q should be optional (write flag)", e.Name)
+		}
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	if r.Warning == "" {
+		t.Error("mysql should carry a Warning (community server, write ops disabled by default)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+func TestRecipe_GoogleMaps(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("google-maps")
+	if !ok {
+		t.Fatal("google-maps not in registry")
+	}
+	// stdio recipe — no transport field, command must be set.
+	if r.Transport != "" && r.Transport != recipes.TransportStdio {
+		t.Errorf("Transport = %q, want stdio (empty)", r.Transport)
+	}
+	if len(r.Command) == 0 || r.Command[0] != "npx" {
+		t.Errorf("Command = %v, want npx-based command", r.Command)
+	}
+	if r.Category != "fetch" {
+		t.Errorf("Category = %q, want fetch", r.Category)
+	}
+	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "GOOGLE_MAPS_API_KEY" {
+		t.Fatalf("EnvKeys = %+v, want one entry named GOOGLE_MAPS_API_KEY", r.EnvKeys)
+	}
+	if !r.EnvKeys[0].Required {
+		t.Error("GOOGLE_MAPS_API_KEY should be required")
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	if r.Warning == "" {
+		t.Error("google-maps should carry a Warning (npm fetch + API enablement)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+func TestRecipe_GitLab(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("gitlab")
+	if !ok {
+		t.Fatal("gitlab not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://gitlab.com/api/v4/mcp" {
+		t.Errorf("URL = %q, want https://gitlab.com/api/v4/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// DCR zero-app: no baked client_id.
+	if r.Auth.ClientID != "" {
+		t.Errorf("gitlab auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	if len(r.Auth.Scopes) == 0 {
+		t.Error("gitlab Auth.Scopes should list requested scopes")
+	}
+	hasMCP := false
+	for _, s := range r.Auth.Scopes {
+		if s == "mcp" {
+			hasMCP = true
+		}
+	}
+	if !hasMCP {
+		t.Errorf("Auth.Scopes = %v, must include \"mcp\"", r.Auth.Scopes)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "dev" {
+		t.Errorf("Category = %q, want dev", r.Category)
+	}
+	// PAT fallback env key present but optional.
+	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "GITLAB_PERSONAL_ACCESS_TOKEN" {
+		t.Fatalf("EnvKeys = %+v, want one entry named GITLAB_PERSONAL_ACCESS_TOKEN", r.EnvKeys)
+	}
+	if r.EnvKeys[0].Required {
+		t.Error("GITLAB_PERSONAL_ACCESS_TOKEN should be optional (DCR OAuth is the primary path)")
+	}
+	if r.Warning == "" {
+		t.Error("gitlab should carry a Warning (gitlab.com only, self-managed caveat)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+func TestRecipe_Supabase(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("supabase")
+	if !ok {
+		t.Fatal("supabase not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.supabase.com/mcp" {
+		t.Errorf("URL = %q, want https://mcp.supabase.com/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// DCR zero-app: no baked client_id.
+	if r.Auth.ClientID != "" {
+		t.Errorf("supabase auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "dev" {
+		t.Errorf("Category = %q, want dev", r.Category)
+	}
+	// PAT fallback env key present but optional.
+	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "SUPABASE_ACCESS_TOKEN" {
+		t.Fatalf("EnvKeys = %+v, want one entry named SUPABASE_ACCESS_TOKEN", r.EnvKeys)
+	}
+	if r.EnvKeys[0].Required {
+		t.Error("SUPABASE_ACCESS_TOKEN should be optional (DCR OAuth is the primary path)")
+	}
+	if r.Warning == "" {
+		t.Error("supabase should carry a Warning (dev/test only, all-or-nothing scopes)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
