@@ -2,6 +2,7 @@ package recipes_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
@@ -37,6 +38,7 @@ var expectedRegistryIDs = []string{
 	"pipedream",
 	"composio",
 	"n8n",
+	"twilio",
 	"intercom",
 	"workato",
 }
@@ -788,6 +790,54 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Twilio(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("twilio")
+	if !ok {
+		t.Fatal("twilio not in registry")
+	}
+	if r.Category != "communication" {
+		t.Errorf("Category = %q, want communication", r.Category)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	// stdio recipe: no transport/URL
+	if r.Transport != "" && r.Transport != recipes.TransportStdio {
+		t.Errorf("Transport = %q, want stdio or empty", r.Transport)
+	}
+	// Must have three required env keys.
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+		if !e.Required {
+			t.Errorf("env key %q should be required", e.Name)
+		}
+	}
+	if !envNames["TWILIO_ACCOUNT_SID"] {
+		t.Error("missing env key TWILIO_ACCOUNT_SID")
+	}
+	if !envNames["TWILIO_API_KEY"] {
+		t.Error("missing env key TWILIO_API_KEY")
+	}
+	if !envNames["TWILIO_API_SECRET"] {
+		t.Error("missing env key TWILIO_API_SECRET")
+	}
+	// Command must include credential positional arg template.
+	found := false
+	for _, arg := range r.Command {
+		if strings.Contains(arg, "TWILIO_ACCOUNT_SID") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("command should include credential positional arg with TWILIO_ACCOUNT_SID")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 

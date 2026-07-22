@@ -840,6 +840,54 @@
       "warning": "Workflows must be individually marked 'Available in MCP' in your n8n instance before they appear as tools. For n8n Cloud, your hostname is <slug>.app.n8n.cloud. For self-hosted n8n, use your instance's domain name (without https://)."
     },
     {
+      "id": "twilio",
+      "display_name": "Twilio",
+      "description": "Send and query SMS messages, voice calls, and phone number lookups via Twilio's official MCP server. Requires Twilio Account SID and API Key credentials.",
+      "category": "communication",
+      "command": [
+        "npx",
+        "-y",
+        "@twilio-alpha/mcp",
+        "${TWILIO_ACCOUNT_SID}/${TWILIO_API_KEY}:${TWILIO_API_SECRET}"
+      ],
+      "env_keys": [
+        {
+          "name": "TWILIO_ACCOUNT_SID",
+          "display": "Twilio Account SID (starts with AC)",
+          "docs_url": "https://www.twilio.com/console",
+          "required": true
+        },
+        {
+          "name": "TWILIO_API_KEY",
+          "display": "Twilio API Key (starts with SK)",
+          "docs_url": "https://www.twilio.com/docs/iam/api-keys",
+          "required": true
+        },
+        {
+          "name": "TWILIO_API_SECRET",
+          "display": "Twilio API Secret",
+          "docs_url": "https://www.twilio.com/docs/iam/api-keys",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/twilio-labs/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "npm fetch on first run can take 5–15 s. Load only needed Twilio services — full API surface may exceed LLM context limits.",
+      "primary_auth": "keys"
+    },
+    {
       "id": "intercom",
       "display_name": "Intercom",
       "description": "Search conversations, contacts, and companies; fetch conversation details and contact profiles via Intercom's official remote MCP server. Sign in with Intercom — no token to paste. US-hosted workspaces only.",
