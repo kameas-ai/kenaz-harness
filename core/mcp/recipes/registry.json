@@ -328,6 +328,35 @@
       "warning": "First use triggers a device-code sign-in: the server prints a URL + code for you to authorize in your browser. Personal accounts work out of the box; work/school accounts may require a custom Azure app (set the optional client/tenant IDs above). First npm fetch can take 10–20 s."
     },
     {
+      "id": "onedrive",
+      "display_name": "OneDrive",
+      "description": "Browse, search, upload, download, and organize files in Microsoft OneDrive. Signs in with a device code in your browser on first use; personal accounts need no credentials.",
+      "category": "files",
+      "command": ["npx", "-y", "@softeria/ms-365-mcp-server", "--preset", "onedrive"],
+      "primary_auth": "device_code",
+      "env_keys": [
+        {
+          "name": "MS365_MCP_CLIENT_ID",
+          "display": "Azure app client ID (optional — for work/school accounts)",
+          "docs_url": "https://github.com/softeria/ms-365-mcp-server#authentication",
+          "required": false
+        },
+        {
+          "name": "MS365_MCP_TENANT_ID",
+          "display": "Azure tenant ID (optional — set 'consumers' for personal; tenant ID for org)",
+          "docs_url": "https://github.com/softeria/ms-365-mcp-server#authentication",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
+      "docs_url": "https://github.com/softeria/ms-365-mcp-server",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": { "allowed": false, "default": false },
+      "warning": "Personal Microsoft accounts: if your session expires after ~1 hour, set MS365_MCP_TENANT_ID=consumers. Work/school accounts: set MS365_MCP_TENANT_ID to your Azure tenant ID (or use a custom MS365_MCP_CLIENT_ID if your org blocks third-party apps)."
+    },
+    {
       "id": "time",
       "display_name": "Time",
       "description": "Time-zone aware utilities: get the current time in a given IANA timezone, convert times between zones. No credentials required.",

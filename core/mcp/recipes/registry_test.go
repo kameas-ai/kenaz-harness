@@ -38,6 +38,7 @@ var expectedRegistryIDs = []string{
 	"composio",
 	"n8n",
 	"workato",
+	"onedrive",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -772,6 +773,35 @@ func TestWorkatoRecipe(t *testing.T) {
 	}
 	if r.Category != "automation" {
 		t.Errorf("Category = %q, want automation", r.Category)
+	}
+}
+
+func TestRegistryOneDriveRecipe(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("onedrive")
+	if !ok {
+		t.Fatal("onedrive not in registry")
+	}
+	if r.Category != "files" {
+		t.Errorf("Category = %q, want files", r.Category)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthDeviceCode {
+		t.Errorf("PrimaryAuth = %q, want device_code", r.PrimaryAuth)
+	}
+	if len(r.Command) < 5 || r.Command[3] != "--preset" || r.Command[4] != "onedrive" {
+		t.Errorf("Command = %v, want --preset onedrive at positions [3][4]", r.Command)
+	}
+	// Server-bundled app: no required env keys.
+	for _, e := range r.EnvKeys {
+		if e.Required {
+			t.Errorf("env key %q should be optional (server-bundled app, no Kameas app needed)", e.Name)
+		}
+	}
+	if r.Warning == "" {
+		t.Error("onedrive should carry a Warning (personal account refresh token caveat)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 
