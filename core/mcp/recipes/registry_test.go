@@ -784,6 +784,26 @@ func TestWorkatoRecipe(t *testing.T) {
 	}
 }
 
+func TestCommunicationCategoryGroup(t *testing.T) {
+	// WP09: all communication connectors in this pack must use
+	// category="communication" so the catalog UI groups them together.
+	commIDs := []string{
+		"slack", "slack-tokens", "gmail", "outlook",
+		"intercom", "twilio", "zoom", "discord", "front", "webex", "ringcentral", "mattermost",
+	}
+	cat := recipes.Registry()
+	for _, id := range commIDs {
+		r, ok := cat.Get(id)
+		if !ok {
+			t.Errorf("communication recipe %q not found in registry", id)
+			continue
+		}
+		if r.Category != "communication" {
+			t.Errorf("recipe %q: Category = %q, want communication", id, r.Category)
+		}
+	}
+}
+
 func TestAutomationCategoryGroup(t *testing.T) {
 	cat := recipes.Registry()
 	iPaaSIDs := []string{"zapier", "make", "pipedream", "composio", "n8n", "workato"}

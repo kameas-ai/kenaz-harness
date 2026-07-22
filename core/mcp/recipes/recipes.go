@@ -101,6 +101,14 @@ type Recipe struct {
 	// checkbox). Used by recipes that grant elevated trust — e.g. the
 	// unrestricted filesystem MCP. Empty for ordinary recipes.
 	Warning string `json:"warning,omitempty"`
+	// Aliases is an optional list of alternate search terms (lowercase) that the
+	// catalog UI uses to surface this recipe when the user's search string does
+	// not match the ID or DisplayName. For example, the Google Calendar recipe
+	// can declare aliases: ["google meet"] so that searching "meet" or "google
+	// meet" surfaces the Calendar connector, since Meet has no standalone MCP.
+	// The alias list is indexed alongside the ID and DisplayName; matches are
+	// shown in the catalog with a note indicating the alternate name.
+	Aliases []string `json:"aliases,omitempty"`
 	// RecommendedPolicyTemplate names a Cedar policy file under
 	// `core/policy/cedar/policies/` that the user is encouraged to
 	// install alongside this recipe. The install modal surfaces a
