@@ -44,6 +44,7 @@ var expectedRegistryIDs = []string{
 	"new-relic",
 	"circleci",
 	"netlify",
+	"vercel",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -793,6 +794,45 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Vercel(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("vercel")
+	if !ok {
+		t.Fatal("vercel not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.vercel.com" {
+		t.Errorf("URL = %q, want https://mcp.vercel.com", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// Vercel gates DCR: uses PKCE with a Kameas-registered app (placeholder seam).
+	if r.Auth.ClientID != "${KAMEAS_VERCEL_OAUTH_CLIENT_ID}" {
+		t.Errorf("vercel auth.client_id = %q, want ${KAMEAS_VERCEL_OAUTH_CLIENT_ID} placeholder", r.Auth.ClientID)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthPKCE {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_pkce", r.PrimaryAuth)
+	}
+	if r.Category != "developer" {
+		t.Errorf("Category = %q, want developer", r.Category)
+	}
+	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "KAMEAS_VERCEL_OAUTH_CLIENT_ID" {
+		t.Errorf("EnvKeys = %+v, want one entry named KAMEAS_VERCEL_OAUTH_CLIENT_ID", r.EnvKeys)
+	}
+	if !r.EnvKeys[0].Required {
+		t.Error("KAMEAS_VERCEL_OAUTH_CLIENT_ID should be required")
+	}
+	if r.Warning == "" {
+		t.Error("vercel should carry a Warning (DCR gated / Kameas app required)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 
