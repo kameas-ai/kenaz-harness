@@ -38,6 +38,7 @@ var expectedRegistryIDs = []string{
 	"pipedream",
 	"composio",
 	"n8n",
+	"zoom",
 	"twilio",
 	"intercom",
 	"workato",
@@ -790,6 +791,35 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Zoom(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("zoom")
+	if !ok {
+		t.Fatal("zoom not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	if r.Auth.ClientID != "${KAMEAS_ZOOM_OAUTH_CLIENT_ID}" {
+		t.Errorf("auth.client_id = %q, want ${KAMEAS_ZOOM_OAUTH_CLIENT_ID}", r.Auth.ClientID)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthPKCE {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_pkce", r.PrimaryAuth)
+	}
+	if r.Category != "communication" {
+		t.Errorf("Category = %q, want communication", r.Category)
+	}
+	if r.Warning == "" {
+		t.Error("zoom should carry a Warning (URL unverified at plan time)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 
