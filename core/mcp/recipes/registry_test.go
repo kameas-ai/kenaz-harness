@@ -38,6 +38,7 @@ var expectedRegistryIDs = []string{
 	"pipedream",
 	"composio",
 	"n8n",
+	"front",
 	"discord",
 	"zoom",
 	"twilio",
@@ -792,6 +793,51 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Front(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("front")
+	if !ok {
+		t.Fatal("front not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.frontapp.com/mcp" {
+		t.Errorf("URL = %q, want https://mcp.frontapp.com/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	if r.Auth.ClientID != "${KAMEAS_FRONT_OAUTH_CLIENT_ID}" {
+		t.Errorf("auth.client_id = %q, want ${KAMEAS_FRONT_OAUTH_CLIENT_ID}", r.Auth.ClientID)
+	}
+	if r.Auth.ClientSecret != "${KAMEAS_FRONT_OAUTH_CLIENT_SECRET}" {
+		t.Errorf("auth.client_secret = %q, want ${KAMEAS_FRONT_OAUTH_CLIENT_SECRET}", r.Auth.ClientSecret)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthPKCE {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_pkce", r.PrimaryAuth)
+	}
+	if r.Category != "communication" {
+		t.Errorf("Category = %q, want communication", r.Category)
+	}
+	// Must have read scope (read-only default).
+	hasRead := false
+	for _, s := range r.Auth.Scopes {
+		if s == "read" {
+			hasRead = true
+		}
+	}
+	if !hasRead {
+		t.Error("front auth.scopes should include 'read' (read-only default)")
+	}
+	if r.Warning == "" {
+		t.Error("front should carry a Warning (open beta + MCP-only feature flag)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 

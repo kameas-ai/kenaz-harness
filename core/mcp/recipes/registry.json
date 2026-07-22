@@ -840,6 +840,50 @@
       "warning": "Workflows must be individually marked 'Available in MCP' in your n8n instance before they appear as tools. For n8n Cloud, your hostname is <slug>.app.n8n.cloud. For self-hosted n8n, use your instance's domain name (without https://)."
     },
     {
+      "id": "front",
+      "display_name": "Front",
+      "description": "Read and manage Front conversations, drafts, and contacts. Sign in with Front (OAuth) — browser consent, per-user token. Read-only by default; add 'write' or 'send' scopes only if needed.",
+      "category": "communication",
+      "transport": "http",
+      "url": "https://mcp.frontapp.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_FRONT_OAUTH_CLIENT_ID}",
+        "client_secret": "${KAMEAS_FRONT_OAUTH_CLIENT_SECRET}",
+        "scopes": ["read"]
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_FRONT_OAUTH_CLIENT_ID",
+          "display": "Kameas Front OAuth client ID (pre-configured)",
+          "docs_url": "https://dev.frontapp.com/docs/mcp-server",
+          "required": true
+        },
+        {
+          "name": "KAMEAS_FRONT_OAUTH_CLIENT_SECRET",
+          "display": "Kameas Front OAuth client secret (pre-configured)",
+          "docs_url": "https://dev.frontapp.com/docs/mcp-server",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://dev.frontapp.com/docs/mcp-server",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Front MCP is in open beta. Enable only 'MCP Server' in your Front developer app — enabling other features causes 403 errors. Requires Kameas Front OAuth app with client ID and secret."
+    },
+    {
       "id": "discord",
       "display_name": "Discord",
       "description": "Read messages and channels, search server members, look up guilds in Discord. Sign in with Discord (OAuth) — no token to paste.",

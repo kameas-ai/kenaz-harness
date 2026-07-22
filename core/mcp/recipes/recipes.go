@@ -229,6 +229,14 @@ type RecipeAuth struct {
 	// Empty is permitted at rest (the recipe ships before the operator has
 	// registered an app); sign-in fails with a clear error until it is set.
 	ClientID string `json:"client_id,omitempty" yaml:"client_id,omitempty"`
+	// ClientSecret is a pre-registered confidential OAuth client secret.
+	// Required only for providers that mandate a confidential client (e.g.
+	// Front). Most OAuth 2.1/PKCE providers do not require a client secret
+	// and this field should be left empty. The value is treated as a
+	// credential: it must be stored in the credstore (not hardcoded), and
+	// the ${KAMEAS_<PROVIDER>_OAUTH_CLIENT_SECRET} seam pattern is used as
+	// a placeholder in the recipe definition.
+	ClientSecret string `json:"client_secret,omitempty" yaml:"client_secret,omitempty"`
 	// Scopes requested during the grant. When empty the harness falls back to
 	// the scopes advertised in the protected-resource metadata.
 	Scopes []string `json:"scopes,omitempty" yaml:"scopes,omitempty"`
