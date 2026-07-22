@@ -1107,6 +1107,48 @@
         "default": false
       },
       "warning": "Owner action required: register Kameas Connected App in Tableau Cloud Admin (Connected Apps > Create Connected App). Redirect URI: https://app.kameas.ai/oauth/callback. Set KAMEAS_TABLEAU_OAUTH_CLIENT_ID once registered. Auth server: sso.online.tableau.com (no DCR — PKCE only). Read-only scopes; no write/admin tools."
+    },
+    {
+      "id": "fivetran",
+      "display_name": "Fivetran",
+      "description": "Inspect Fivetran connectors, schemas, sync history, and metadata via the official Fivetran MCP server. Read-only by default (FIVETRAN_ALLOW_WRITES not set). API key + secret authentication.",
+      "category": "data",
+      "command": [
+        "uvx",
+        "--from",
+        "git+https://github.com/fivetran/fivetran-mcp",
+        "fivetran-mcp"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "FIVETRAN_API_KEY",
+          "display": "Fivetran API key (from Fivetran Dashboard > API Config)",
+          "docs_url": "https://fivetran.com/docs/rest-api/getting-started#gettingstarted",
+          "required": true
+        },
+        {
+          "name": "FIVETRAN_API_SECRET",
+          "display": "Fivetran API secret (from Fivetran Dashboard > API Config)",
+          "docs_url": "https://fivetran.com/docs/rest-api/getting-started#gettingstarted",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/fivetran/fivetran-mcp",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Installs directly from official Fivetran GitHub repo (not PyPI fivetran-mcp — that is a different community package). Read-only by default; FIVETRAN_ALLOW_WRITES=true enables writes (not set). First run clones and installs the package (may take 30–60 s). Requires uv installed."
     }
   ]
 }

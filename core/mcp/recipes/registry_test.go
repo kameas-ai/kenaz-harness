@@ -44,6 +44,7 @@ var expectedRegistryIDs = []string{
 	"klaviyo",
 	"dbt-cloud",
 	"tableau",
+	"fivetran",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -984,6 +985,42 @@ func TestRecipe_Tableau(t *testing.T) {
 	}
 	if !r.EnvKeys[0].Required {
 		t.Error("KAMEAS_TABLEAU_OAUTH_CLIENT_ID should be required (no DCR — needs registered Kameas Connected App)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
+
+func TestRecipe_Fivetran(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("fivetran")
+	if !ok {
+		t.Fatal("fivetran not in registry")
+	}
+	if len(r.Command) == 0 || r.Command[0] != "uvx" {
+		t.Errorf("Command[0] = %q, want uvx", r.Command[0])
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for Fivetran (API-key auth), got %+v", r.Auth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["FIVETRAN_API_KEY"] {
+		t.Errorf("EnvKeys = %+v, want FIVETRAN_API_KEY", r.EnvKeys)
+	}
+	if !envNames["FIVETRAN_API_SECRET"] {
+		t.Errorf("EnvKeys = %+v, want FIVETRAN_API_SECRET", r.EnvKeys)
+	}
+	if r.Category != "data" {
+		t.Errorf("Category = %q, want data", r.Category)
+	}
+	if r.Warning == "" {
+		t.Error("fivetran should carry a Warning (git install, read-only note)")
 	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)
