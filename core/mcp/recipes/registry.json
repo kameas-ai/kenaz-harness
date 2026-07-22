@@ -1241,6 +1241,41 @@
         "default": false
       },
       "warning": "Owner must register a Kameas Intuit app at developer.intuit.com before use. Verify best npm MCP package for QuickBooks at build — no confirmed official package at research time; 'quickbooks-mcp-server' is a placeholder. Auth endpoints: authorize=https://appcenter.intuit.com/connect/oauth2 token=https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer. Scope: com.intuit.quickbooks.accounting (read tier). Read-only — no transactions initiated."
+    },
+    {
+      "id": "brex",
+      "display_name": "Brex",
+      "description": "Read Brex card expenses, transactions, and account data — read-only, no transactions initiated. Uses a Brex API token (no Kameas app registration needed — generate a token at developer.brex.com).",
+      "category": "finance_accounting",
+      "command": [
+        "npx",
+        "-y",
+        "brex-mcp-server"
+      ],
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "BREX_API_TOKEN",
+          "display": "Brex API token (read-only — from developer.brex.com or the Brex dashboard)",
+          "docs_url": "https://developer.brex.com/docs/authentication/",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.brex.com/docs/getting_started/",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Prefer the API-token path (BREX_API_TOKEN) over OAuth to avoid Kameas app registration. Verify best npm MCP package for Brex at build — 'brex-mcp-server' is a placeholder. If OAuth2 path is required, register a Kameas Brex app at accounts.brex.com; use read-only scopes only: expenses.readonly transactions.readonly accounts.readonly. Read-only — no transfers or payment-initiation tools."
     }
   ]
 }

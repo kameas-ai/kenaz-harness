@@ -1180,3 +1180,39 @@ func TestRecipe_QuickBooks(t *testing.T) {
 		t.Errorf("Validate() error: %v", err)
 	}
 }
+
+func TestRecipe_Brex(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("brex")
+	if !ok {
+		t.Fatal("brex not in registry")
+	}
+	if r.Category != "finance_accounting" {
+		t.Errorf("Category = %q, want finance_accounting", r.Category)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["BREX_API_TOKEN"] {
+		t.Errorf("EnvKeys = %+v, want BREX_API_TOKEN", r.EnvKeys)
+	}
+	// No write/money-movement scopes (this is an API-token recipe, no scopes in auth block).
+	if r.Auth != nil {
+		for _, s := range r.Auth.Scopes {
+			if strings.Contains(s, "write") || strings.Contains(s, "transfer") || strings.Contains(s, "payment") {
+				t.Errorf("brex Auth.Scopes must not include write/money-movement scope %q", s)
+			}
+		}
+	}
+	// Finance safety copy.
+	if !strings.Contains(r.Description, "read-only") {
+		t.Error("brex description must include read-only safety copy")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
+	}
+}
