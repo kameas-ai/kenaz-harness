@@ -884,7 +884,7 @@
       "id": "google-calendar",
       "display_name": "Google Calendar",
       "description": "List, create, and update Google Calendar events via a stdio MCP server. Supports calendar.events (read + write) and calendar.readonly scopes. Requires one-time sign-in — reuses same Google Cloud OAuth client (gcp-oauth.keys.json) as Gmail if already set up.",
-      "category": "communication",
+      "category": "productivity",
       "command": [
         "npx",
         "-y",

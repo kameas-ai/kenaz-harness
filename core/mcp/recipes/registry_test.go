@@ -798,8 +798,8 @@ func TestRegistryGoogleCalendarRecipe(t *testing.T) {
 	if !ok {
 		t.Fatal("google-calendar not in registry")
 	}
-	if r.Category != "communication" {
-		t.Errorf("Category = %q, want communication", r.Category)
+	if r.Category != "productivity" {
+		t.Errorf("Category = %q, want productivity", r.Category)
 	}
 	// stdio recipe — no transport field (empty string = stdio)
 	if r.Transport != "" {
