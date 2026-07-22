@@ -49,6 +49,7 @@ var expectedRegistryIDs = []string{
 	"pagerduty",
 	"snyk",
 	"sonar",
+	"jenkins",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -798,6 +799,43 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Jenkins(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("jenkins")
+	if !ok {
+		t.Fatal("jenkins not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	// URL uses a host token — per-instance host supplied by user via env var.
+	if r.URL != "https://${JENKINS_INSTANCE_HOST}/mcp-server/mcp" {
+		t.Errorf("URL = %q, want https://${JENKINS_INSTANCE_HOST}/mcp-server/mcp", r.URL)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["JENKINS_INSTANCE_HOST"] {
+		t.Errorf("EnvKeys = %+v, want JENKINS_INSTANCE_HOST", r.EnvKeys)
+	}
+	if !envNames["JENKINS_BASIC_AUTH"] {
+		t.Errorf("EnvKeys = %+v, want JENKINS_BASIC_AUTH", r.EnvKeys)
+	}
+	if r.Category != "developer" {
+		t.Errorf("Category = %q, want developer", r.Category)
+	}
+	if r.Warning == "" {
+		t.Error("jenkins should carry a Warning (plugin required / self-hosted)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 

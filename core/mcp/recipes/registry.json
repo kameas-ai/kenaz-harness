@@ -1238,6 +1238,47 @@
         "default": false
       },
       "warning": "Requires Docker installed locally. First run pulls sonarsource/sonarqube-mcp image (may take 1–2 min). Use a User token — project/global/scoped tokens will not work with the MCP server."
+    },
+    {
+      "id": "jenkins",
+      "display_name": "Jenkins",
+      "description": "Query Jenkins builds, pipelines, jobs, nodes, and artifacts. Requires a running Jenkins instance with the MCP Server Plugin installed.",
+      "category": "developer",
+      "transport": "http",
+      "url": "https://${JENKINS_INSTANCE_HOST}/mcp-server/mcp",
+      "headers_template": {
+        "Authorization": "Basic ${JENKINS_BASIC_AUTH}"
+      },
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "JENKINS_INSTANCE_HOST",
+          "display": "Jenkins instance hostname (e.g. jenkins.mycompany.com or 192.168.1.10:8080)",
+          "docs_url": "https://plugins.jenkins.io/mcp-server/",
+          "required": true
+        },
+        {
+          "name": "JENKINS_BASIC_AUTH",
+          "display": "Jenkins Basic auth credentials (base64 of user:api-token — see Jenkins user profile → API Token)",
+          "docs_url": "https://www.jenkins.io/doc/book/using/using-credentials/#user-api-token",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://plugins.jenkins.io/mcp-server/",
+      "init_timeout_ms": 20000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Requires Jenkins MCP Server Plugin installed. Plugin exposes MCP at https://<your-jenkins>/mcp-server/mcp. JENKINS_BASIC_AUTH must be base64(username:api-token). Jenkins must be network-accessible from your machine."
     }
   ]
 }
