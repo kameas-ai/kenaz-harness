@@ -840,6 +840,48 @@
       "warning": "Workflows must be individually marked 'Available in MCP' in your n8n instance before they appear as tools. For n8n Cloud, your hostname is <slug>.app.n8n.cloud. For self-hosted n8n, use your instance's domain name (without https://)."
     },
     {
+      "id": "webex",
+      "display_name": "Webex",
+      "description": "Read Webex messages, rooms, and memberships; send messages and look up meeting details. Sign in with Webex (OAuth) — no token to paste.",
+      "category": "communication",
+      "transport": "http",
+      "url": "https://mcp.webex.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_WEBEX_OAUTH_CLIENT_ID}",
+        "scopes": [
+          "spark:messages_read",
+          "spark:messages_write",
+          "spark:rooms_read",
+          "spark:memberships_read"
+        ]
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_WEBEX_OAUTH_CLIENT_ID",
+          "display": "Kameas Webex OAuth client ID (pre-configured)",
+          "docs_url": "https://developer.webex.com/docs/integrations",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.webex.com/docs/integrations",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "No official Webex MCP server was confirmed at plan time — verify URL before shipping. Requires Kameas Webex OAuth integration registration at developer.webex.com."
+    },
+    {
       "id": "front",
       "display_name": "Front",
       "description": "Read and manage Front conversations, drafts, and contacts. Sign in with Front (OAuth) — browser consent, per-user token. Read-only by default; add 'write' or 'send' scopes only if needed.",
