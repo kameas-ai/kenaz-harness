@@ -45,6 +45,7 @@ var expectedRegistryIDs = []string{
 	"circleci",
 	"netlify",
 	"vercel",
+	"bitbucket",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -794,6 +795,48 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Bitbucket(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("bitbucket")
+	if !ok {
+		t.Fatal("bitbucket not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.atlassian.com/v1/mcp" {
+		t.Errorf("URL = %q, want https://mcp.atlassian.com/v1/mcp", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// Bitbucket uses the Atlassian OAuth app (no DCR on auth.atlassian.com).
+	if r.Auth.ClientID != "${KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID}" {
+		t.Errorf("bitbucket auth.client_id = %q, want ${KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID} placeholder", r.Auth.ClientID)
+	}
+	if len(r.Auth.Scopes) == 0 {
+		t.Error("bitbucket Auth.Scopes should list Bitbucket-specific scopes")
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthPKCE {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_pkce", r.PrimaryAuth)
+	}
+	if r.Category != "developer" {
+		t.Errorf("Category = %q, want developer", r.Category)
+	}
+	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID" {
+		t.Errorf("EnvKeys = %+v, want one entry named KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID", r.EnvKeys)
+	}
+	if !r.EnvKeys[0].Required {
+		t.Error("KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID should be required")
+	}
+	if r.Warning == "" {
+		t.Error("bitbucket should carry a Warning (Atlassian app required)")
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 

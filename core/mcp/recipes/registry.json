@@ -1081,6 +1081,49 @@
         "default": false
       },
       "warning": "Vercel MCP only supports AI clients reviewed and approved by Vercel — DCR registrations from unknown clients may be blocked. A Kameas OAuth app must be registered at https://vercel.com/account/tokens and KAMEAS_VERCEL_OAUTH_CLIENT_ID set before sign-in works."
+    },
+    {
+      "id": "bitbucket",
+      "display_name": "Bitbucket",
+      "description": "Search and manage Bitbucket Cloud repositories, pull requests, and pipelines via the Atlassian MCP server. Sign in with your Atlassian account.",
+      "category": "developer",
+      "transport": "http",
+      "url": "https://mcp.atlassian.com/v1/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "${KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID}",
+        "scopes": [
+          "repository",
+          "pullrequest",
+          "pipeline",
+          "account",
+          "offline_access"
+        ]
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [
+        {
+          "name": "KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID",
+          "display": "Kameas Atlassian OAuth client ID (pre-configured)",
+          "docs_url": "https://developer.atlassian.com/console/myapps/",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developer.atlassian.com/cloud/bitbucket/rest/intro/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Requires Bitbucket Cloud account. Uses Atlassian OAuth app — same sign-in as Jira/Confluence connectors. Ensure KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID is configured."
     }
   ]
 }
