@@ -1008,6 +1008,39 @@
         "default": false
       },
       "warning": "Miro MCP requires a Miro Enterprise plan. An org admin must enable the MCP Server integration before users can connect."
+    },
+    {
+      "id": "dropbox",
+      "display_name": "Dropbox",
+      "description": "Browse, search, and read files and folders in Dropbox. Sign in with Dropbox \u2014 no token to paste.",
+      "category": "files",
+      "transport": "http",
+      "url": "https://mcp.dropbox.com/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": [
+          "files.metadata.read",
+          "files.content.read",
+          "account_info.read",
+          "sharing.read"
+        ]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.dropbox.com/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
     }
   ]
 }

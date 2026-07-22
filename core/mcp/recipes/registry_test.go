@@ -42,6 +42,7 @@ var expectedRegistryIDs = []string{
 	"canva",
 	"figma",
 	"miro",
+	"dropbox",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -791,6 +792,38 @@ func TestAutomationCategoryGroup(t *testing.T) {
 		if r.Category != "automation" {
 			t.Errorf("recipe %q: Category = %q, want automation", id, r.Category)
 		}
+	}
+}
+
+func TestRecipe_Dropbox(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("dropbox")
+	if !ok {
+		t.Fatal("dropbox not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.URL != "https://mcp.dropbox.com/mcp" {
+		t.Errorf("URL = %q, want https://mcp.dropbox.com/mcp (verify at build)", r.URL)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	if r.Auth.ClientID != "" {
+		t.Errorf("dropbox auth.client_id = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	if len(r.Auth.Scopes) == 0 {
+		t.Error("dropbox Auth.Scopes should list requested scopes")
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
+		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
+	}
+	if r.Category != "files" {
+		t.Errorf("Category = %q, want files", r.Category)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("Validate() error: %v", err)
 	}
 }
 
