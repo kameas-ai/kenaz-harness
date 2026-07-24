@@ -5,7 +5,14 @@
       "id": "github",
       "display_name": "GitHub",
       "description": "Search repositories, read files, manage issues + pull requests, and fetch repository metadata via GitHub's official remote MCP server. Sign in with GitHub (OAuth) — no token to paste — or supply a personal access token as a fallback.",
-      "category": "search",
+      "category": "web",
+      "aliases": [
+        "git",
+        "repos",
+        "pull requests",
+        "issues",
+        "code review"
+      ],
       "transport": "http",
       "url": "https://api.githubcopilot.com/mcp/",
       "auth": {
@@ -45,7 +52,13 @@
       "id": "fetch",
       "display_name": "Fetch (HTTP)",
       "description": "Generic HTTP fetch tool: the model can request a URL and read the response. No credentials required; the recipe imposes no allow-list — limit access via Cedar policy if you need a domain whitelist.",
-      "category": "fetch",
+      "category": "web",
+      "aliases": [
+        "get request",
+        "url",
+        "web request",
+        "scrape"
+      ],
       "command": [
         "uvx",
         "mcp-server-fetch"
@@ -72,7 +85,12 @@
       "id": "brave-search",
       "display_name": "Brave Search",
       "description": "Web and local search via the Brave Search API. Requires a Brave Search API key (free tier available).",
-      "category": "search",
+      "category": "web",
+      "aliases": [
+        "web lookup",
+        "online lookup",
+        "find online"
+      ],
       "command": [
         "npx",
         "-y",
@@ -107,7 +125,12 @@
       "id": "sqlite",
       "display_name": "SQLite",
       "description": "Read and write a local SQLite database. The model gets read_query, write_query, create_table, list_tables, and describe_table tools scoped to the database file you point it at.",
-      "category": "filesystem",
+      "category": "files",
+      "aliases": [
+        "database",
+        "sql",
+        "db"
+      ],
       "command": [
         "uvx",
         "mcp-server-sqlite",
@@ -145,7 +168,13 @@
       "id": "postgres",
       "display_name": "PostgreSQL",
       "description": "Read-only access to a PostgreSQL database. The model gets query and schema-introspection tools against the connection string you supply.",
-      "category": "filesystem",
+      "category": "files",
+      "aliases": [
+        "psql",
+        "sql database",
+        "db",
+        "relational database"
+      ],
       "command": [
         "npx",
         "-y",
@@ -181,6 +210,12 @@
       "display_name": "Slack",
       "description": "Read channels, post messages, search, and look up users in your Slack workspace via Slack’s official remote MCP server. Sign in with Slack (OAuth + PKCE — no token to paste). Advanced: supply bot + app-level tokens to use the legacy stdio server instead.",
       "category": "communication",
+      "aliases": [
+        "chat",
+        "messaging",
+        "team chat",
+        "channels"
+      ],
       "transport": "http",
       "url": "https://mcp.slack.com",
       "auth": {
@@ -220,6 +255,12 @@
       "display_name": "Slack (Advanced: use tokens)",
       "description": "Read channels, post messages, and look up users in a Slack workspace using a bot token and app-level token. Advanced fallback — prefer the ‘Slack’ recipe (remote MCP, OAuth sign-in) for token-free setup.",
       "category": "communication",
+      "aliases": [
+        "bot auth",
+        "manual setup",
+        "xoxb",
+        "advanced auth"
+      ],
       "command": [
         "npx",
         "-y",
@@ -261,6 +302,12 @@
       "display_name": "Gmail",
       "description": "Read, search, send, draft, and label Gmail messages through the Gmail API. Requires a Google Cloud OAuth 2.0 credentials file (~/.gmail-mcp/gcp-oauth.keys.json). The install dialog includes a step-by-step guided setup — no command-line work needed.",
       "category": "communication",
+      "aliases": [
+        "email",
+        "google mail",
+        "inbox",
+        "mail"
+      ],
       "command": [
         "npx",
         "-y",
@@ -289,6 +336,13 @@
       "display_name": "Outlook (Microsoft 365)",
       "description": "Read, search, send, and organize Outlook mail — plus calendar and contacts — via the Microsoft Graph API. Signs in with a device code in your browser on first use; personal accounts need no credentials.",
       "category": "communication",
+      "aliases": [
+        "email",
+        "exchange",
+        "o365",
+        "m365",
+        "corporate email"
+      ],
       "command": [
         "npx",
         "-y",
@@ -331,7 +385,12 @@
       "id": "time",
       "display_name": "Time",
       "description": "Time-zone aware utilities: get the current time in a given IANA timezone, convert times between zones. No credentials required.",
-      "category": "fetch",
+      "category": "web",
+      "aliases": [
+        "clock",
+        "timezone",
+        "date"
+      ],
       "command": [
         "uvx",
         "mcp-server-time"
@@ -358,7 +417,13 @@
       "id": "git",
       "display_name": "Git",
       "description": "Read git history, diff, blame, and branch metadata for a single repository checkout. The recipe is read-only by default and is scoped to the repo path you select.",
-      "category": "filesystem",
+      "category": "files",
+      "aliases": [
+        "version control",
+        "commits",
+        "repository",
+        "vcs"
+      ],
       "command": [
         "uvx",
         "mcp-server-git",
@@ -396,7 +461,13 @@
       "id": "puppeteer",
       "display_name": "Puppeteer",
       "description": "Headless Chrome browser automation: navigate, screenshot, click, fill forms, evaluate JavaScript. The first run downloads a Chromium binary (~170 MB) — be patient.",
-      "category": "fetch",
+      "category": "web",
+      "aliases": [
+        "browser automation",
+        "headless chrome",
+        "web scraping",
+        "screenshot"
+      ],
       "command": [
         "npx",
         "-y",
@@ -424,7 +495,13 @@
       "id": "playwright",
       "display_name": "Playwright",
       "description": "Cross-browser automation (Chromium, Firefox, WebKit): navigate, screenshot, click, fill forms, evaluate JavaScript. The first run downloads browser binaries (~300 MB total) — be patient.",
-      "category": "fetch",
+      "category": "web",
+      "aliases": [
+        "browser automation",
+        "e2e testing",
+        "web scraping",
+        "headless browser"
+      ],
       "command": [
         "npx",
         "-y",
@@ -453,6 +530,13 @@
       "display_name": "Notion",
       "description": "Read and write Notion pages, databases, blocks, and comments. Sign in with Notion — no token to paste.",
       "category": "productivity",
+      "aliases": [
+        "wiki",
+        "docs",
+        "notes",
+        "knowledge base",
+        "pages"
+      ],
       "transport": "http",
       "url": "https://mcp.notion.com/mcp",
       "auth": {
@@ -481,6 +565,12 @@
       "display_name": "Linear",
       "description": "Search issues, create and update issues, manage projects and cycles in Linear. Sign in with Linear — no token to paste.",
       "category": "productivity",
+      "aliases": [
+        "issue tracker",
+        "tickets",
+        "project management",
+        "sprints"
+      ],
       "transport": "http",
       "url": "https://mcp.linear.app/mcp",
       "auth": {
@@ -512,6 +602,12 @@
       "display_name": "Sentry",
       "description": "Search and triage Sentry errors, inspect stack traces, manage projects and teams. Sign in with Sentry — no token to paste.",
       "category": "developer",
+      "aliases": [
+        "error tracking",
+        "crash reporting",
+        "exception monitoring",
+        "bugs"
+      ],
       "transport": "http",
       "url": "https://mcp.sentry.dev/mcp",
       "auth": {
@@ -546,6 +642,12 @@
       "display_name": "Cloudflare",
       "description": "Manage Cloudflare zones, Workers, R2, KV, DNS, and analytics via Cloudflare's official MCP server. Sign in with Cloudflare — no token to paste.",
       "category": "developer",
+      "aliases": [
+        "cdn",
+        "dns",
+        "workers",
+        "waf"
+      ],
       "transport": "http",
       "url": "https://mcp.cloudflare.com/mcp",
       "auth": {
@@ -573,6 +675,12 @@
       "display_name": "Asana",
       "description": "Search tasks, create and update tasks, manage projects and workspaces in Asana. Sign in with Asana — no token to paste.",
       "category": "productivity",
+      "aliases": [
+        "task management",
+        "project management",
+        "to-do list",
+        "tasks"
+      ],
       "transport": "http",
       "url": "https://mcp.asana.com/v2/mcp",
       "auth": {
@@ -603,6 +711,13 @@
       "display_name": "Atlassian (Jira & Confluence)",
       "description": "Search and manage Jira issues, sprints, and projects; read and write Confluence pages and spaces. Sign in with your Atlassian account.",
       "category": "productivity",
+      "aliases": [
+        "kanban",
+        "tickets",
+        "wiki",
+        "sprints",
+        "issue tracker"
+      ],
       "transport": "http",
       "url": "https://mcp.atlassian.com/v1/mcp",
       "auth": {
@@ -645,6 +760,12 @@
       "display_name": "Zapier",
       "description": "Connect to thousands of apps via Zapier’s official remote MCP server. Run Zaps, browse available actions, and trigger automations from the model. Sign in with Zapier (OAuth — no token to paste). Supports a fallback connection token if OAuth is unavailable.",
       "category": "automation",
+      "aliases": [
+        "workflow automation",
+        "integrations",
+        "zaps",
+        "no-code automation"
+      ],
       "transport": "http",
       "url": "https://mcp.zapier.com/api/v1/connect",
       "auth": {
@@ -684,6 +805,12 @@
       "display_name": "Make",
       "description": "Automate workflows across hundreds of apps via Make's official remote MCP server. Build and run scenarios, inspect executions, and manage your automation modules. Sign in with Make (OAuth — no token to paste).",
       "category": "automation",
+      "aliases": [
+        "integromat",
+        "workflow automation",
+        "no-code automation",
+        "scenarios"
+      ],
       "transport": "http",
       "url": "https://mcp.make.com/",
       "auth": {
@@ -712,6 +839,12 @@
       "display_name": "Pipedream",
       "description": "Access 2,400+ connected apps via Pipedream's remote MCP server. Run workflows, list components, and call actions across Slack, GitHub, Google, and thousands more. Sign in with Pipedream (OAuth — no token to paste). Requires a Pipedream project ID and environment.",
       "category": "automation",
+      "aliases": [
+        "workflow automation",
+        "webhooks",
+        "serverless workflows",
+        "integrations"
+      ],
       "transport": "http",
       "url": "https://remote.mcp.pipedream.net",
       "auth": {
@@ -763,6 +896,11 @@
       "display_name": "Composio",
       "description": "Access 250+ tools across GitHub, Slack, Linear, Notion, and more via Composio's remote MCP server. Each user gets a unique MCP server URL from the Composio dashboard. Requires a Composio API key and your personal MCP server ID.",
       "category": "automation",
+      "aliases": [
+        "tool integrations",
+        "agent tools",
+        "action platform"
+      ],
       "transport": "http",
       "url": "https://backend.composio.dev/v3/mcp/${COMPOSIO_SERVER_ID}",
       "headers_template": {
@@ -803,6 +941,11 @@
       "display_name": "n8n",
       "description": "Trigger and inspect n8n workflows via the n8n MCP server. Works with self-hosted and n8n Cloud instances. Supply your instance hostname (e.g. myorg.app.n8n.cloud) and the MCP access token generated in your n8n instance settings.",
       "category": "automation",
+      "aliases": [
+        "workflow automation",
+        "no-code automation",
+        "self-hosted automation"
+      ],
       "transport": "http",
       "url": "https://${N8N_INSTANCE_HOST}/mcp-server/http",
       "headers_template": {
@@ -844,6 +987,12 @@
       "display_name": "Workato",
       "description": "Run recipes and trigger workflows in your Workato workspace via Workato's Enterprise MCP server. Each collection has its own MCP URL — copy it from AI Hub > Enterprise MCP in your Workato account.",
       "category": "automation",
+      "aliases": [
+        "ipaas",
+        "workflow automation",
+        "enterprise automation",
+        "integrations"
+      ],
       "transport": "http",
       "url": "https://app.workato.com/${WORKATO_MCP_PATH}",
       "headers_template": {
@@ -885,6 +1034,11 @@
       "display_name": "OneDrive",
       "description": "Browse, search, upload, download, and organize files in Microsoft OneDrive. Signs in with a device code in your browser on first use; personal accounts need no credentials.",
       "category": "files",
+      "aliases": [
+        "microsoft cloud storage",
+        "file storage",
+        "cloud drive"
+      ],
       "command": [
         "npx",
         "-y",
@@ -928,6 +1082,12 @@
       "display_name": "Microsoft Teams",
       "description": "Read and send messages in Teams chats and channels, manage team members, list meetings, and fetch transcripts. Requires a work or school Microsoft account — personal accounts are not supported by Teams.",
       "category": "communication",
+      "aliases": [
+        "chat",
+        "video call",
+        "messaging",
+        "meetings"
+      ],
       "command": [
         "npx",
         "-y",
@@ -972,6 +1132,12 @@
       "display_name": "SharePoint",
       "description": "Search SharePoint sites, read and write lists and list items, manage list columns, and navigate site drives. Also exposes shared-mailbox and org-presence tools (work preset). Requires a work or school Microsoft account and your Azure tenant ID.",
       "category": "files",
+      "aliases": [
+        "intranet",
+        "document library",
+        "file storage",
+        "microsoft sites"
+      ],
       "command": [
         "npx",
         "-y",
@@ -1015,7 +1181,13 @@
       "id": "supabase",
       "display_name": "Supabase",
       "description": "Query databases, manage tables, run migrations, and access Supabase projects. Sign in with Supabase (OAuth) — no token to paste. For CI/headless environments, supply a personal access token as a fallback.",
-      "category": "dev",
+      "category": "developer",
+      "aliases": [
+        "postgres backend",
+        "baas",
+        "database",
+        "auth backend"
+      ],
       "transport": "http",
       "url": "https://mcp.supabase.com/mcp",
       "auth": {
@@ -1050,7 +1222,13 @@
       "id": "gitlab",
       "display_name": "GitLab",
       "description": "Search repositories, read files, manage merge requests and issues, and access GitLab projects. Sign in with GitLab (OAuth) — no token to paste — or supply a personal access token as a fallback.",
-      "category": "dev",
+      "category": "developer",
+      "aliases": [
+        "repos",
+        "merge requests",
+        "ci/cd",
+        "devops platform"
+      ],
       "transport": "http",
       "url": "https://gitlab.com/api/v4/mcp",
       "auth": {
@@ -1089,7 +1267,13 @@
       "id": "google-maps",
       "display_name": "Google Maps",
       "description": "Geocode addresses, get directions, search for places, and calculate distances via the Google Maps APIs. Requires a Google Maps API key with the relevant APIs enabled.",
-      "category": "fetch",
+      "category": "web",
+      "aliases": [
+        "geocoding",
+        "directions",
+        "places",
+        "location api"
+      ],
       "command": [
         "npx",
         "-y",
@@ -1124,7 +1308,12 @@
       "id": "mysql",
       "display_name": "MySQL",
       "description": "Query a MySQL database: list tables, describe schemas, and run read queries. Write operations (INSERT/UPDATE/DELETE) are disabled by default and can be enabled via optional env vars.",
-      "category": "filesystem",
+      "category": "files",
+      "aliases": [
+        "sql database",
+        "relational database",
+        "db"
+      ],
       "command": [
         "npx",
         "-y",
@@ -1201,7 +1390,12 @@
       "id": "mongodb",
       "display_name": "MongoDB",
       "description": "Query MongoDB databases, inspect schemas, and run aggregation pipelines. Supports both local MongoDB and MongoDB Atlas. Supply a connection string to connect — Atlas API credentials are optional for Atlas management tools.",
-      "category": "filesystem",
+      "category": "files",
+      "aliases": [
+        "nosql",
+        "document database",
+        "db"
+      ],
       "command": [
         "npx",
         "-y",
@@ -1254,7 +1448,13 @@
       "id": "redis",
       "display_name": "Redis",
       "description": "Read and write Redis keys, lists, hashes, sets, and streams. Supports local Redis, Redis Cloud, Upstash, and Azure Cache for Redis. Provide a connection URL to connect.",
-      "category": "filesystem",
+      "category": "files",
+      "aliases": [
+        "cache",
+        "key-value store",
+        "in-memory database",
+        "db"
+      ],
       "command": [
         "uvx",
         "--from",
@@ -1291,6 +1491,11 @@
       "display_name": "Mattermost",
       "description": "Read and post messages in Mattermost channels, look up teams and users. Requires your self-hosted Mattermost server URL and a Personal Access Token.",
       "category": "communication",
+      "aliases": [
+        "team chat",
+        "messaging",
+        "self-hosted chat"
+      ],
       "command": [
         "npx",
         "-y",
@@ -1332,6 +1537,12 @@
       "display_name": "RingCentral",
       "description": "Read call logs, messages, and presence; send SMS via RingCentral. Sign in with RingCentral (OAuth) — no token to paste.",
       "category": "communication",
+      "aliases": [
+        "voip",
+        "phone system",
+        "calling",
+        "sms"
+      ],
       "transport": "http",
       "url": "https://mcp.ringcentral.com/mcp",
       "auth": {
@@ -1374,6 +1585,12 @@
       "display_name": "Webex",
       "description": "Read Webex messages, rooms, and memberships; send messages and look up meeting details. Sign in with Webex (OAuth) — no token to paste.",
       "category": "communication",
+      "aliases": [
+        "video call",
+        "video conferencing",
+        "cisco meetings",
+        "meetings"
+      ],
       "transport": "http",
       "url": "https://mcp.webex.com/mcp",
       "auth": {
@@ -1416,6 +1633,12 @@
       "display_name": "Front",
       "description": "Read and manage Front conversations, drafts, and contacts. Sign in with Front (OAuth) — browser consent, per-user token. Read-only by default; add 'write' or 'send' scopes only if needed.",
       "category": "communication",
+      "aliases": [
+        "shared inbox",
+        "email",
+        "customer communication",
+        "helpdesk"
+      ],
       "transport": "http",
       "url": "https://mcp.frontapp.com/mcp",
       "auth": {
@@ -1462,6 +1685,12 @@
       "display_name": "Discord",
       "description": "Read messages and channels, search server members, look up guilds in Discord. Sign in with Discord (OAuth) — no token to paste.",
       "category": "communication",
+      "aliases": [
+        "chat",
+        "community",
+        "servers",
+        "messaging"
+      ],
       "transport": "http",
       "url": "https://mcp.discord.com/mcp",
       "auth": {
@@ -1503,6 +1732,12 @@
       "display_name": "Zoom",
       "description": "List and create Zoom meetings, retrieve recordings, look up users and meeting details. Sign in with Zoom (OAuth) — no token to paste.",
       "category": "communication",
+      "aliases": [
+        "video call",
+        "video conferencing",
+        "meetings",
+        "webinar"
+      ],
       "transport": "http",
       "url": "https://mcp.zoom.us/mcp",
       "auth": {
@@ -1545,6 +1780,12 @@
       "display_name": "Twilio",
       "description": "Send and query SMS messages, voice calls, and phone number lookups via Twilio's official MCP server. Requires Twilio Account SID and API Key credentials.",
       "category": "communication",
+      "aliases": [
+        "sms",
+        "text messaging",
+        "voice calls",
+        "phone api"
+      ],
       "command": [
         "npx",
         "-y",
@@ -1593,6 +1834,12 @@
       "display_name": "Intercom",
       "description": "Search conversations, contacts, and companies; fetch conversation details and contact profiles via Intercom's official remote MCP server. Sign in with Intercom — no token to paste. US-hosted workspaces only.",
       "category": "communication",
+      "aliases": [
+        "live chat",
+        "customer support",
+        "helpdesk",
+        "chatbot"
+      ],
       "transport": "http",
       "url": "https://mcp.intercom.com/mcp",
       "auth": {
@@ -1621,6 +1868,11 @@
       "display_name": "Freshdesk",
       "description": "Search and manage Freshdesk support tickets, contacts, agents, and companies. Requires a Freshdesk API key and your Freshdesk domain.",
       "category": "support",
+      "aliases": [
+        "helpdesk",
+        "tickets",
+        "customer support"
+      ],
       "command": [
         "uvx",
         "freshdesk-mcp"
@@ -1661,6 +1913,12 @@
       "display_name": "CrowdStrike AIDR",
       "description": "CrowdStrike AI Guard: analyze and redact text to detect LLM prompt injection and data exfiltration attempts. Read/query-only. Requires a CrowdStrike AIDR API token.",
       "category": "security",
+      "aliases": [
+        "edr",
+        "endpoint security",
+        "threat detection",
+        "siem"
+      ],
       "command": [
         "npx",
         "-y",
@@ -1702,6 +1960,12 @@
       "display_name": "Help Scout",
       "description": "Search conversations, threads, and inboxes in Help Scout. Requires a Help Scout App (App ID + Secret) created in Help Scout My Apps — each user registers their own app (no Kameas registration needed).",
       "category": "support",
+      "aliases": [
+        "helpdesk",
+        "tickets",
+        "customer support",
+        "shared inbox"
+      ],
       "command": [
         "npx",
         "-y",
@@ -1743,6 +2007,12 @@
       "display_name": "Okta",
       "description": "Query Okta users, groups, apps, logs, and policies via the Okta Admin Management API. Read-only by default (okta.users.read, okta.groups.read, okta.apps.read, okta.logs.read). Sign in with device authorization (browser) or Private Key JWT. Requires your Okta org URL and an Okta app integration.",
       "category": "security",
+      "aliases": [
+        "sso",
+        "identity management",
+        "iam",
+        "user provisioning"
+      ],
       "command": [
         "uvx",
         "okta-mcp-server"
@@ -1801,6 +2071,11 @@
       "display_name": "Zendesk",
       "description": "Search and manage Zendesk tickets, comments, users, and knowledge base. Requires a Zendesk API token, your agent email, and your subdomain (yourcompany.zendesk.com).",
       "category": "support",
+      "aliases": [
+        "helpdesk",
+        "tickets",
+        "customer support"
+      ],
       "command": [
         "uvx",
         "zendesk-mcp"
@@ -1846,7 +2121,13 @@
       "id": "servicenow",
       "display_name": "ServiceNow",
       "description": "Query ServiceNow incidents, change requests, users, and CMDB records. Read-only by default. Requires your ServiceNow instance URL and credentials (OAuth client ID + secret, or API key, or basic auth).",
-      "category": "itsm",
+      "category": "support",
+      "aliases": [
+        "itsm",
+        "tickets",
+        "incident management",
+        "snow"
+      ],
       "command": [
         "uvx",
         "servicenow-mcp"
@@ -1904,7 +2185,12 @@
       "id": "jamf-docs",
       "display_name": "Jamf Developer Docs",
       "description": "Search Jamf developer documentation, API references, and code examples. No authentication required. Note: this is the Jamf documentation MCP only — not the Jamf Pro management API.",
-      "category": "itsm",
+      "category": "support",
+      "aliases": [
+        "mdm",
+        "apple device management",
+        "mac management"
+      ],
       "transport": "http",
       "url": "https://developer.jamf.com/mcp",
       "primary_auth": "none",
@@ -1929,7 +2215,12 @@
       "id": "mercury",
       "display_name": "Mercury",
       "description": "Query Mercury bank accounts, transactions, and financial data — read-only, no transactions initiated. Sign in with Mercury (DCR OAuth — no token to paste).",
-      "category": "finance_accounting",
+      "category": "finance",
+      "aliases": [
+        "business banking",
+        "startup bank",
+        "banking api"
+      ],
       "transport": "http",
       "url": "https://mcp.mercury.com/mcp",
       "auth": {
@@ -1960,7 +2251,12 @@
       "id": "ramp",
       "display_name": "Ramp",
       "description": "Browse Ramp cards, spend data, vendors, bills, and corporate travel — read-only, no transactions initiated. Sign in with Ramp (DCR OAuth — no token to paste).",
-      "category": "finance_accounting",
+      "category": "finance",
+      "aliases": [
+        "corporate card",
+        "expense management",
+        "spend management"
+      ],
       "transport": "http",
       "url": "https://mcp.ramp.com/mcp",
       "auth": {
@@ -2001,6 +2297,12 @@
       "display_name": "Deel",
       "description": "Read contracts, people, timesheets, and invoice data from Deel — read-only, no payroll or money-movement actions. Sign in with Deel (DCR OAuth — no token to paste).",
       "category": "hr_people",
+      "aliases": [
+        "global payroll",
+        "contractor payments",
+        "hr platform",
+        "eor"
+      ],
       "transport": "http",
       "url": "https://api.letsdeel.com/mcp",
       "auth": {
@@ -2034,6 +2336,12 @@
       "display_name": "Greenhouse",
       "description": "Search candidates, jobs, applications, interviews, and offers in Greenhouse Recruiting. Read-only access via the Harvest API. Requires a Greenhouse Harvest API key.",
       "category": "hr_people",
+      "aliases": [
+        "ats",
+        "recruiting",
+        "hiring",
+        "applicant tracking"
+      ],
       "command": [
         "uvx",
         "open-greenhouse-mcp"
@@ -2068,6 +2376,12 @@
       "display_name": "Ashby",
       "description": "Browse candidates, jobs, applications, interviews, and offers in Ashby ATS. Read-only access via the Ashby GraphQL API. Requires an Ashby API key.",
       "category": "hr_people",
+      "aliases": [
+        "ats",
+        "recruiting",
+        "hiring",
+        "applicant tracking"
+      ],
       "command": [
         "npx",
         "-y",
@@ -2103,6 +2417,12 @@
       "display_name": "BambooHR",
       "description": "Browse employee directory, org chart, time-off records, and custom HR fields from BambooHR. API key auth (simpler than OAuth — no Kameas app registration needed). Requires your company subdomain and an API key.",
       "category": "hr_people",
+      "aliases": [
+        "hris",
+        "hr software",
+        "employee records",
+        "pto"
+      ],
       "command": [
         "npx",
         "-y",
@@ -2152,7 +2472,12 @@
       "id": "xero",
       "display_name": "Xero",
       "description": "Read accounting transactions, contacts, and settings from Xero — read-only, no transactions initiated. Uses Xero's official npm MCP package. Requires a Kameas Xero OAuth app (register at developer.xero.com).",
-      "category": "finance_accounting",
+      "category": "finance",
+      "aliases": [
+        "accounting",
+        "invoices",
+        "bookkeeping"
+      ],
       "command": [
         "npx",
         "-y",
@@ -2200,6 +2525,11 @@
       "display_name": "Gusto",
       "description": "Read employee profiles, pay periods, and pay stubs from Gusto — read-only, no payroll-run or money-movement actions. Requires a Kameas Gusto OAuth app (register at developer.gusto.com).",
       "category": "hr_people",
+      "aliases": [
+        "payroll",
+        "benefits",
+        "hr platform"
+      ],
       "command": [
         "npx",
         "-y",
@@ -2240,7 +2570,13 @@
       "id": "quickbooks",
       "display_name": "QuickBooks Online",
       "description": "Read accounting data from QuickBooks Online — read-only, no transactions initiated. Requires a Kameas Intuit OAuth app (register at developer.intuit.com).",
-      "category": "finance_accounting",
+      "category": "finance",
+      "aliases": [
+        "accounting",
+        "invoices",
+        "bookkeeping",
+        "qbo"
+      ],
       "command": [
         "npx",
         "-y",
@@ -2281,7 +2617,12 @@
       "id": "brex",
       "display_name": "Brex",
       "description": "Read Brex card expenses, transactions, and account data — read-only, no transactions initiated. Uses a Brex API token (no Kameas app registration needed — generate a token at developer.brex.com).",
-      "category": "finance_accounting",
+      "category": "finance",
+      "aliases": [
+        "corporate card",
+        "expense management",
+        "spend management"
+      ],
       "command": [
         "npx",
         "-y",
@@ -2317,6 +2658,12 @@
       "display_name": "Lever",
       "description": "Read candidates, job postings, applications, interviews, and users from Lever ATS via the Lever Harvest API. API key auth — no Kameas app registration needed.",
       "category": "hr_people",
+      "aliases": [
+        "ats",
+        "recruiting",
+        "hiring",
+        "applicant tracking"
+      ],
       "command": [
         "npx",
         "-y",
@@ -2352,6 +2699,12 @@
       "display_name": "Rippling",
       "description": "Read employee profiles, org groups, and HR structure from Rippling. Read-only — no payroll-run or admin writes. Requires a Kameas Rippling OAuth app (register at developer.rippling.com).",
       "category": "hr_people",
+      "aliases": [
+        "hris",
+        "payroll",
+        "hr platform",
+        "it management"
+      ],
       "command": [
         "npx",
         "-y",
@@ -2392,7 +2745,13 @@
       "id": "billdotcom",
       "display_name": "Bill.com",
       "description": "Read bills, invoices, and vendor data from Bill.com — read-only, no transactions initiated, no payment-initiation tools. Uses Bill.com Spend and Expense bearer token or legacy session-key auth.",
-      "category": "finance_accounting",
+      "category": "finance",
+      "aliases": [
+        "accounts payable",
+        "invoices",
+        "ap automation",
+        "vendor payments"
+      ],
       "command": [
         "npx",
         "-y",
@@ -2439,7 +2798,13 @@
       "id": "netsuite",
       "display_name": "NetSuite (Enterprise)",
       "description": "Enterprise — NetSuite uses per-account Token-Based Authentication (TBA) or OAuth2, both requiring per-tenant setup. No community MCP package confirmed at research time. For quick read-only access to NetSuite data, connect via Zapier or Workato in the Automation section.",
-      "category": "finance_accounting",
+      "category": "finance",
+      "aliases": [
+        "erp",
+        "accounting",
+        "financials",
+        "oracle"
+      ],
       "command": [
         "npx",
         "-y",
@@ -2508,6 +2873,12 @@
       "display_name": "Workday (Enterprise)",
       "description": "Enterprise — Workday uses tenant-specific URLs and ISU (Integration System User) or OAuth2 client credentials, both requiring per-tenant setup by a Workday administrator. No confirmed community MCP package as of July 2026. For quick access to Workday HR data, connect via Zapier or Workato in the Automation section.",
       "category": "hr_people",
+      "aliases": [
+        "hris",
+        "hr platform",
+        "payroll",
+        "hcm"
+      ],
       "command": [
         "npx",
         "-y",
@@ -2558,6 +2929,12 @@
       "display_name": "Grafana",
       "description": "Query Grafana Cloud dashboards, datasources, incidents, and alerts. Sign in with your Grafana Cloud account — no token to paste.",
       "category": "observability",
+      "aliases": [
+        "dashboards",
+        "metrics",
+        "monitoring",
+        "observability"
+      ],
       "transport": "http",
       "url": "https://mcp.grafana.com/mcp",
       "auth": {
@@ -2590,6 +2967,12 @@
       "display_name": "Datadog",
       "description": "Query Datadog metrics, monitors, dashboards, logs, incidents, and infrastructure. Sign in with your Datadog account — no token to paste. Supports US1 site by default; configure for EU or other regions.",
       "category": "observability",
+      "aliases": [
+        "monitoring",
+        "apm",
+        "logs",
+        "metrics"
+      ],
       "transport": "http",
       "url": "https://mcp.datadoghq.com/v1/mcp",
       "auth": {
@@ -2643,6 +3026,12 @@
       "display_name": "New Relic",
       "description": "Query New Relic observability data including APM, infrastructure, logs, and alerts. Sign in with your New Relic account — no token to paste.",
       "category": "observability",
+      "aliases": [
+        "apm",
+        "monitoring",
+        "observability",
+        "telemetry"
+      ],
       "transport": "http",
       "url": "https://mcp.newrelic.com/mcp/",
       "auth": {
@@ -2675,6 +3064,11 @@
       "display_name": "CircleCI",
       "description": "Query CircleCI pipelines, workflows, jobs, and build artifacts. Sign in with your CircleCI account — no token to paste.",
       "category": "developer",
+      "aliases": [
+        "ci/cd",
+        "continuous integration",
+        "build pipeline"
+      ],
       "transport": "http",
       "url": "https://mcp.circleci.com",
       "auth": {
@@ -2707,6 +3101,11 @@
       "display_name": "Netlify",
       "description": "Manage Netlify sites, deploys, environment variables, and domain configuration. Sign in with your Netlify account — no token to paste.",
       "category": "developer",
+      "aliases": [
+        "static hosting",
+        "deploy previews",
+        "jamstack hosting"
+      ],
       "transport": "http",
       "url": "https://netlify-mcp.netlify.app/mcp",
       "auth": {
@@ -2740,6 +3139,11 @@
       "display_name": "Vercel",
       "description": "Manage Vercel projects, deployments, domains, and environment variables. Sign in with your Vercel account — no token to paste.",
       "category": "developer",
+      "aliases": [
+        "deployments",
+        "next.js hosting",
+        "frontend hosting"
+      ],
       "transport": "http",
       "url": "https://mcp.vercel.com",
       "auth": {
@@ -2780,6 +3184,12 @@
       "display_name": "Bitbucket",
       "description": "Search and manage Bitbucket Cloud repositories, pull requests, and pipelines via the Atlassian MCP server. Sign in with your Atlassian account.",
       "category": "developer",
+      "aliases": [
+        "repos",
+        "pull requests",
+        "atlassian git",
+        "code review"
+      ],
       "transport": "http",
       "url": "https://mcp.atlassian.com/v1/mcp",
       "auth": {
@@ -2823,6 +3233,12 @@
       "display_name": "PagerDuty",
       "description": "Query PagerDuty incidents, services, schedules, on-call assignments, and alerts. Requires a PagerDuty User API Token. Read-only by default.",
       "category": "observability",
+      "aliases": [
+        "on-call",
+        "incident management",
+        "alerting",
+        "paging"
+      ],
       "command": [
         "uvx",
         "pagerduty-mcp"
@@ -2857,6 +3273,12 @@
       "display_name": "Snyk",
       "description": "Run Snyk security scans: SAST, SCA (open-source), IaC, and container vulnerability analysis. Requires a Snyk API token.",
       "category": "security",
+      "aliases": [
+        "vulnerability scanning",
+        "dependency scanning",
+        "security scanning",
+        "sca"
+      ],
       "command": [
         "npx",
         "-y",
@@ -2893,6 +3315,11 @@
       "display_name": "SonarQube / SonarCloud",
       "description": "Analyse code quality and security with SonarQube Server or SonarCloud via the official SonarSource MCP server. Requires Docker and a SonarQube user token.",
       "category": "security",
+      "aliases": [
+        "static analysis",
+        "code quality",
+        "linting"
+      ],
       "command": [
         "docker",
         "run",
@@ -2953,6 +3380,11 @@
       "display_name": "Jenkins",
       "description": "Query Jenkins builds, pipelines, jobs, nodes, and artifacts. Requires a running Jenkins instance with the MCP Server Plugin installed.",
       "category": "developer",
+      "aliases": [
+        "ci/cd",
+        "build automation",
+        "pipelines"
+      ],
       "transport": "http",
       "url": "https://${JENKINS_INSTANCE_HOST}/mcp-server/mcp",
       "headers_template": {
@@ -2994,6 +3426,12 @@
       "display_name": "Google Calendar",
       "description": "List, create, and update Google Calendar events via a stdio MCP server. Supports calendar.events (read + write) and calendar.readonly scopes. Requires one-time sign-in — reuses same Google Cloud OAuth client (gcp-oauth.keys.json) as Gmail if already set up.",
       "category": "productivity",
+      "aliases": [
+        "gcal",
+        "scheduling",
+        "meetings",
+        "events"
+      ],
       "command": [
         "npx",
         "-y",
@@ -3034,7 +3472,13 @@
       "id": "google-drive",
       "display_name": "Google Drive",
       "description": "Search, read, and create files in Google Drive. Uses drive.file scope (access limited to files created by this app) — upgrade to full drive.readonly access requires Google security review (CASA). Requires one-time Google sign-in (reuses same Google Cloud OAuth client as Gmail and Calendar).",
-      "category": "filesystem",
+      "category": "files",
+      "aliases": [
+        "gdrive",
+        "cloud storage",
+        "docs",
+        "file storage"
+      ],
       "command": [
         "npx",
         "-y",
@@ -3082,6 +3526,12 @@
       "display_name": "ClickUp",
       "description": "Manage tasks, docs, and chat in ClickUp — search, create, update tasks and projects. Sign in with ClickUp — no token to paste.",
       "category": "productivity",
+      "aliases": [
+        "task management",
+        "project management",
+        "tickets",
+        "docs"
+      ],
       "transport": "http",
       "url": "https://mcp.clickup.com/mcp",
       "auth": {
@@ -3113,6 +3563,11 @@
       "display_name": "Monday.com",
       "description": "Access boards, items, workflows, and automations in Monday.com. Sign in with Monday — no token to paste — or supply a personal API token.",
       "category": "productivity",
+      "aliases": [
+        "project management",
+        "work os",
+        "task boards"
+      ],
       "transport": "http",
       "url": "https://mcp.monday.com/mcp",
       "auth": {
@@ -3147,6 +3602,11 @@
       "display_name": "Shortcut",
       "description": "Search stories, create and update epics, iterations, and sprints in Shortcut. Sign in with Shortcut — no token to paste.",
       "category": "productivity",
+      "aliases": [
+        "issue tracker",
+        "clubhouse",
+        "project management"
+      ],
       "transport": "http",
       "url": "https://mcp.shortcut.com/mcp",
       "auth": {
@@ -3179,6 +3639,11 @@
       "display_name": "Smartsheet",
       "description": "Read and update Smartsheet sheets, rows, columns, workspaces, and dashboards. Sign in with your Smartsheet account.",
       "category": "productivity",
+      "aliases": [
+        "spreadsheet",
+        "project management",
+        "work management"
+      ],
       "transport": "http",
       "url": "https://mcp.smartsheet.com/mcp",
       "auth": {
@@ -3226,6 +3691,11 @@
       "display_name": "Wrike",
       "description": "Search tasks, projects, and folders in Wrike; create and update work items. Sign in with your Wrike account.",
       "category": "productivity",
+      "aliases": [
+        "project management",
+        "task management",
+        "work management"
+      ],
       "transport": "http",
       "url": "https://mcp.wrike.com/app/mcp/stream",
       "auth": {
@@ -3282,6 +3752,12 @@
       "display_name": "Trello",
       "description": "Manage Trello boards, lists, and cards — search, create, update via the Trello REST API. Requires a Trello API key and token.",
       "category": "productivity",
+      "aliases": [
+        "kanban",
+        "boards",
+        "task cards",
+        "atlassian"
+      ],
       "command": [
         "npx",
         "-y",
@@ -3323,6 +3799,12 @@
       "display_name": "Coda",
       "description": "Read and write Coda docs, pages, tables, and rows via the Coda API. Requires a Coda API token.",
       "category": "productivity",
+      "aliases": [
+        "docs",
+        "wiki",
+        "spreadsheet-doc hybrid",
+        "notes"
+      ],
       "command": [
         "npx",
         "-y",
@@ -3357,7 +3839,12 @@
       "id": "mixpanel",
       "display_name": "Mixpanel",
       "description": "Query Mixpanel analytics: events, funnels, retention, segmentation, insights, cohorts, and business context via Mixpanel's official remote MCP server. Sign in with Mixpanel (OAuth DCR — no token paste, no app registration required). US region default; EU/IN URL configurable.",
-      "category": "analytics",
+      "category": "marketing",
+      "aliases": [
+        "product analytics",
+        "event tracking",
+        "user analytics"
+      ],
       "transport": "http",
       "url": "https://mcp.mixpanel.com/mcp",
       "auth": {
@@ -3411,7 +3898,12 @@
       "id": "amplitude",
       "display_name": "Amplitude",
       "description": "Query Amplitude analytics: events, funnels, user behavior, and product insights via Amplitude's official remote MCP server. Sign in with Amplitude (OAuth DCR — no token paste, no app registration required). US region default; EU region configurable.",
-      "category": "analytics",
+      "category": "marketing",
+      "aliases": [
+        "product analytics",
+        "event tracking",
+        "user analytics"
+      ],
       "transport": "http",
       "url": "https://mcp.amplitude.com/mcp",
       "auth": {
@@ -3454,6 +3946,11 @@
       "display_name": "Klaviyo",
       "description": "Access Klaviyo marketing automation: campaigns, flows, lists, profiles, metrics, segments, and templates via Klaviyo's official remote MCP server. Sign in with Klaviyo (OAuth DCR — no token paste, no app registration required). Scopes derived from private key permissions.",
       "category": "marketing",
+      "aliases": [
+        "email marketing",
+        "sms marketing",
+        "ecommerce marketing"
+      ],
       "transport": "http",
       "url": "https://mcp.klaviyo.com/mcp",
       "auth": {
@@ -3482,6 +3979,12 @@
       "display_name": "dbt Cloud",
       "description": "Query dbt Cloud: explore models, lineage, docs, jobs, environments, and semantic layer via dbt Cloud's remote MCP server. OAuth DCR (Enterprise+) or personal access token. Per-workspace URL supported. Consumption-only — no dbt run or build triggers.",
       "category": "data",
+      "aliases": [
+        "data transformation",
+        "data build tool",
+        "elt",
+        "analytics engineering"
+      ],
       "transport": "http",
       "url": "https://cloud.getdbt.com/api/ai/v1/mcp/",
       "auth": {
@@ -3531,7 +4034,13 @@
       "id": "tableau",
       "display_name": "Tableau",
       "description": "Query Tableau Cloud: browse datasources, workbooks, views, Pulse insights, and site content via Tableau's official remote MCP server. Sign in with Tableau (OAuth PKCE — requires Kameas Connected App registration). Read-only access.",
-      "category": "bi",
+      "category": "data",
+      "aliases": [
+        "business intelligence",
+        "dashboards",
+        "data visualization",
+        "bi"
+      ],
       "transport": "http",
       "url": "https://mcp.tableau.com",
       "auth": {
@@ -3586,6 +4095,12 @@
       "display_name": "Fivetran",
       "description": "Inspect Fivetran connectors, schemas, sync history, and metadata via the official Fivetran MCP server. Read-only by default (FIVETRAN_ALLOW_WRITES not set). API key + secret authentication.",
       "category": "data",
+      "aliases": [
+        "data pipeline",
+        "elt",
+        "data ingestion",
+        "connectors"
+      ],
       "command": [
         "uvx",
         "--from",
@@ -3628,6 +4143,11 @@
       "display_name": "Amazon Redshift",
       "description": "Query Amazon Redshift data warehouse via the official AWS Labs MCP server. Read-only access using AWS IAM credentials (profile or environment credentials). Supports cluster and Serverless endpoints.",
       "category": "data",
+      "aliases": [
+        "data warehouse",
+        "aws data warehouse",
+        "sql analytics"
+      ],
       "command": [
         "uvx",
         "awslabs.amazon-redshift-mcp-server@latest"
@@ -3677,6 +4197,11 @@
       "display_name": "Snowflake",
       "description": "Query Snowflake data warehouse via community MCP server. Read-only access (no --allow_write flag). Connection credentials passed as CLI flags. Supports account, user, password, warehouse, database, schema, and role.",
       "category": "data",
+      "aliases": [
+        "data warehouse",
+        "sql analytics",
+        "cloud data platform"
+      ],
       "command": [
         "uvx",
         "mcp_server_snowflake",
@@ -3761,6 +4286,12 @@
       "display_name": "BigQuery",
       "description": "Query Google BigQuery data warehouse via Google's genai-toolbox MCP server. Read-only access using Application Default Credentials (ADC) or service account key file. No official Google remote MCP server exists yet.",
       "category": "data",
+      "aliases": [
+        "data warehouse",
+        "gcp analytics",
+        "sql analytics",
+        "bq"
+      ],
       "command": [
         "npx",
         "-y",
@@ -3806,7 +4337,13 @@
       "id": "metabase",
       "display_name": "Metabase",
       "description": "Query Metabase: browse questions, dashboards, databases, and run queries via community MCP server. Works with self-hosted and Metabase Cloud instances. API key authentication recommended (Metabase v0.47+).",
-      "category": "bi",
+      "category": "data",
+      "aliases": [
+        "business intelligence",
+        "dashboards",
+        "bi",
+        "data visualization"
+      ],
       "command": [
         "uvx",
         "metabase-mcp"
@@ -3858,7 +4395,13 @@
       "id": "looker",
       "display_name": "Looker",
       "description": "Query Looker: browse explores, run LookML queries, access dashboards and looks via community MCP server. Uses Looker API3 key (client_id + client_secret). Works with self-hosted Looker and Looker Cloud.",
-      "category": "bi",
+      "category": "data",
+      "aliases": [
+        "business intelligence",
+        "dashboards",
+        "bi",
+        "data visualization"
+      ],
       "command": [
         "uvx",
         "looker-mcp"
@@ -3904,7 +4447,13 @@
       "id": "ga4",
       "display_name": "Google Analytics 4 (GA4)",
       "description": "Query GA4 analytics: dimensions, metrics, reports, and real-time data via community MCP server. Uses Google service account credentials (Application Default Credentials or JSON key file). No official Google remote MCP server for GA4.",
-      "category": "analytics",
+      "category": "marketing",
+      "aliases": [
+        "web tracking",
+        "pageviews",
+        "conversion tracking",
+        "site metrics"
+      ],
       "command": [
         "uvx",
         "google-analytics-mcp"
@@ -3945,6 +4494,11 @@
       "display_name": "Mailchimp",
       "description": "Access Mailchimp: campaigns, lists, audiences, templates, and analytics via community MCP server. API key authentication — datacenter derived from the API key suffix (e.g. -us6).",
       "category": "marketing",
+      "aliases": [
+        "email marketing",
+        "newsletters",
+        "email campaigns"
+      ],
       "command": [
         "uvx",
         "mcp-mailchimp"
@@ -3979,6 +4533,11 @@
       "display_name": "Braze",
       "description": "Access Braze: campaigns, segments, canvases, content blocks, subscription groups, and analytics via the Braze-maintained MCP server. Read-only access using API key + cluster endpoint. BRAZE_ALLOW_WRITES not set (read-only enforcement).",
       "category": "marketing",
+      "aliases": [
+        "customer engagement",
+        "push notifications",
+        "marketing automation"
+      ],
       "command": [
         "uvx",
         "braze-mcp-server"
@@ -4019,6 +4578,11 @@
       "display_name": "Marketo (Adobe)",
       "description": "Access Marketo: leads, programs, campaigns, forms, lists, and assets via community MCP server. Uses Marketo REST API with client credentials OAuth (client_id + client_secret + Munchkin ID). Read-only scopes. STRETCH: package unconfirmed on npm registry at planning time — verify at build.",
       "category": "marketing",
+      "aliases": [
+        "marketing automation",
+        "lead nurturing",
+        "email marketing"
+      ],
       "command": [
         "npx",
         "-y",
@@ -4066,6 +4630,12 @@
       "display_name": "Databricks",
       "description": "Query Databricks SQL warehouses and Unity Catalog via community MCP server. Uses Databricks personal access token (PAT) + workspace host. STRETCH: databricks-mcp package is a library component — verify runnable entry point and exact uvx invocation at build.",
       "category": "data",
+      "aliases": [
+        "data lakehouse",
+        "spark",
+        "data engineering",
+        "ml platform"
+      ],
       "command": [
         "uvx",
         "databricks-mcp"
@@ -4106,6 +4676,11 @@
       "display_name": "Airtable",
       "description": "Read and write Airtable bases, tables, and records. Sign in with Airtable — no token to paste.",
       "category": "productivity",
+      "aliases": [
+        "spreadsheet database",
+        "no-code database",
+        "bases"
+      ],
       "transport": "http",
       "url": "https://mcp.airtable.com/mcp",
       "auth": {
@@ -4139,6 +4714,11 @@
       "display_name": "Canva",
       "description": "Create, read, and edit Canva designs, folders, brand templates, and assets. Sign in with Canva — no token to paste.",
       "category": "design",
+      "aliases": [
+        "graphic design",
+        "templates",
+        "social media graphics"
+      ],
       "transport": "http",
       "url": "https://mcp.canva.com",
       "auth": {
@@ -4173,6 +4753,12 @@
       "display_name": "Figma",
       "description": "Browse Figma files, components, and design tokens. Sign in with Figma — no token to paste.",
       "category": "design",
+      "aliases": [
+        "ui design",
+        "prototyping",
+        "design files",
+        "wireframes"
+      ],
       "transport": "http",
       "url": "https://mcp.figma.com/mcp",
       "auth": {
@@ -4203,6 +4789,12 @@
       "display_name": "Miro",
       "description": "Read and update Miro boards, frames, and sticky notes. Sign in with Miro — no token to paste.",
       "category": "design",
+      "aliases": [
+        "whiteboard",
+        "brainstorming",
+        "diagrams",
+        "collaboration board"
+      ],
       "transport": "http",
       "url": "https://mcp.miro.com",
       "auth": {
@@ -4235,6 +4827,11 @@
       "display_name": "Dropbox",
       "description": "Browse, search, and read files and folders in Dropbox. Sign in with Dropbox — no token to paste.",
       "category": "files",
+      "aliases": [
+        "cloud storage",
+        "file sync",
+        "file sharing"
+      ],
       "transport": "http",
       "url": "https://mcp.dropbox.com/mcp",
       "auth": {
@@ -4268,6 +4865,11 @@
       "display_name": "PayPal",
       "description": "Query PayPal transactions, orders, and account balance. Read/query only — no payment initiation. Sign in with PayPal — no token to paste.",
       "category": "finance",
+      "aliases": [
+        "payments",
+        "invoices",
+        "transactions"
+      ],
       "transport": "http",
       "url": "https://mcp.paypal.com",
       "auth": {
@@ -4296,6 +4898,12 @@
       "display_name": "Square",
       "description": "Query Square customers, orders, catalog items, and merchant profile. Read/query only — no payment processing. Sign in with Square — no token to paste.",
       "category": "finance",
+      "aliases": [
+        "payments",
+        "pos",
+        "point of sale",
+        "invoices"
+      ],
       "transport": "http",
       "url": "https://mcp.squareup.com/mcp",
       "auth": {
@@ -4335,6 +4943,12 @@
       "display_name": "HubSpot",
       "description": "Search and update CRM contacts, companies, deals, and engagements in HubSpot. Sign in with HubSpot.",
       "category": "crm",
+      "aliases": [
+        "crm",
+        "marketing automation",
+        "sales pipeline",
+        "contacts"
+      ],
       "transport": "http",
       "url": "https://mcp.hubspot.com/mcp",
       "auth": {
@@ -4370,6 +4984,11 @@
       "display_name": "Box",
       "description": "Browse, search, and read files and folders stored in Box. Sign in with Box.",
       "category": "files",
+      "aliases": [
+        "cloud storage",
+        "file sharing",
+        "enterprise content management"
+      ],
       "transport": "http",
       "url": "https://mcp.box.com",
       "auth": {
@@ -4408,6 +5027,12 @@
       "display_name": "Salesforce",
       "description": "Search, read, and update Salesforce records (contacts, accounts, opportunities, cases). Sign in with Salesforce.",
       "category": "crm",
+      "aliases": [
+        "crm",
+        "sfdc",
+        "sales pipeline",
+        "leads"
+      ],
       "transport": "http",
       "url": "https://${SALESFORCE_ORG_DOMAIN}.my.salesforce.com",
       "auth": {
@@ -4451,6 +5076,11 @@
       "display_name": "Plaid",
       "description": "Query Plaid-linked bank accounts, transactions, and balances. Read/query only — no payment initiation. Requires Plaid API credentials.",
       "category": "finance",
+      "aliases": [
+        "bank data",
+        "financial data api",
+        "account verification"
+      ],
       "command": [
         "npx",
         "-y",
@@ -4498,6 +5128,11 @@
       "display_name": "BigCommerce Docs",
       "description": "Search and read BigCommerce developer documentation — API references, guides, and webhooks. No authentication required.",
       "category": "ecommerce",
+      "aliases": [
+        "ecommerce platform",
+        "storefront api",
+        "online store"
+      ],
       "transport": "http",
       "url": "https://docs.bigcommerce.com/_mcp/server",
       "auth": {
@@ -4526,6 +5161,12 @@
       "display_name": "Shopify",
       "description": "Query and manage Shopify store products, orders, customers, and inventory. Requires a Shopify store Admin API access token.",
       "category": "ecommerce",
+      "aliases": [
+        "ecommerce platform",
+        "online store",
+        "orders",
+        "storefront"
+      ],
       "command": [
         "npx",
         "-y",
@@ -4567,6 +5208,11 @@
       "display_name": "WooCommerce",
       "description": "Query WooCommerce orders, products, customers, and store stats. Requires your WooCommerce store URL and REST API keys.",
       "category": "ecommerce",
+      "aliases": [
+        "wordpress ecommerce",
+        "online store",
+        "orders"
+      ],
       "command": [
         "npx",
         "-y",
@@ -4614,6 +5260,12 @@
       "display_name": "Pipedrive",
       "description": "Search and update Pipedrive deals, contacts, organizations, and activities. Requires a Pipedrive API token.",
       "category": "crm",
+      "aliases": [
+        "crm",
+        "sales pipeline",
+        "deals",
+        "leads"
+      ],
       "command": [
         "npx",
         "-y",
@@ -4649,6 +5301,12 @@
       "display_name": "Zoho CRM",
       "description": "Search and update Zoho CRM leads, contacts, accounts, and deals. Requires Zoho OAuth credentials.",
       "category": "crm",
+      "aliases": [
+        "sales pipeline",
+        "leads",
+        "contacts",
+        "deals"
+      ],
       "command": [
         "npx",
         "-y",
@@ -4712,6 +5370,12 @@
       "display_name": "Stripe",
       "description": "Query Stripe payments, customers, subscriptions, and invoices. Read/query only — no charge, refund, transfer, or payout tools. Requires a Stripe Restricted Key with read-only permissions.",
       "category": "finance",
+      "aliases": [
+        "payments",
+        "invoices",
+        "billing",
+        "transactions"
+      ],
       "command": [
         "npx",
         "-y",

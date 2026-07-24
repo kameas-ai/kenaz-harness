@@ -52,8 +52,10 @@ type Recipe struct {
 	DisplayName string `json:"display_name"`
 	// Description is the user-visible blurb in the install modal.
 	Description string `json:"description"`
-	// Category groups recipes in the modal ("search", "filesystem",
-	// "memory", "fetch", ...).
+	// Category groups recipes in the modal. Canonical taxonomy (16
+	// buckets): automation, communication, crm, data, design, developer,
+	// ecommerce, files, finance, hr_people, marketing, observability,
+	// productivity, security, support, web.
 	Category string `json:"category"`
 	// Command is the argv used to spawn the stdio server.
 	// Command[0] must be non-empty for stdio recipes.
