@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { createFakeHarnessClient } from '@/lib/harnessClient';
+import { adaptCategory, createFakeHarnessClient } from '@/lib/harnessClient';
+import { isCanonicalCategory } from '@/lib/recipeCategories';
 
 describe('createFakeHarnessClient (FR-008 / SC-006)', () => {
   it('returns sane defaults across every view-scoped client', async () => {
@@ -103,6 +104,29 @@ describe('OnboardingClient — account step feedback (review blocker 3)', () => 
     // Feedback must be present — never a silent no-op
     expect(res.card.error_message).toBeTruthy();
     expect(res.card.error_message).toContain('unavailable');
+  });
+});
+
+// ── adaptCategory — case normalization at the wire→model boundary ────────
+
+describe('adaptCategory folds category case (catalog bucketing)', () => {
+  it('lowercases a mixed-case wire category so it matches its canonical peer', () => {
+    // "Automation" and "automation" must resolve to the SAME model value so
+    // the catalog groups them under one curated section rather than two.
+    expect(adaptCategory('Automation')).toBe('automation');
+    expect(adaptCategory('AUTOMATION')).toBe(adaptCategory('automation'));
+  });
+
+  it('normalized mixed-case value is recognised as canonical', () => {
+    // Pre-fix, "Automation" would not be canonical → generic Wrench icon +
+    // title-cased "Automation" label, splitting it from "automation".
+    expect(isCanonicalCategory(adaptCategory('Automation'))).toBe(true);
+    expect(adaptCategory('HR_People')).toBe('hr_people');
+    expect(isCanonicalCategory(adaptCategory('HR_People'))).toBe(true);
+  });
+
+  it('empty category folds to empty string', () => {
+    expect(adaptCategory('')).toBe('');
   });
 });
 
