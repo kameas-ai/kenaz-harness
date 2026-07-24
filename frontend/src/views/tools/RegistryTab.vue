@@ -10,12 +10,19 @@
  * backend surfaces a `source` field (WP10+), this filter should be
  * tightened to `source === 'registry'`.
  */
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
-import { Search } from '@/shell/icons';
+import { Search, Zap, Plus } from '@/shell/icons';
 import { categoryIconFor, categoryLabel } from '@/lib/recipeCategories';
 import type { RecipeListing, Recipe, RecipeStatus } from '@/lib/types';
 import RecipeKeyPromptModal from './RecipeKeyPromptModal.vue';
+
+/** Category the long-tail callout points users at (FR-006). */
+const AUTOMATION_CATEGORY = 'automation';
+
+/** Prefilled GitHub new-issue URL for the "Request a connector" link. */
+const REQUEST_CONNECTOR_URL =
+  'https://github.com/kameas-ai/kenaz-harness/issues/new?title=Connector%20request%3A%20';
 
 type IconComponent = ReturnType<typeof categoryIconFor>;
 
@@ -26,6 +33,8 @@ type CatalogRow =
 
 const emit = defineEmits<{
   (e: 'installed'): void;
+  /** Ask the parent modal to switch tabs (FR-006 custom-recipe path). */
+  (e: 'switch-tab', tab: 'custom'): void;
 }>();
 
 const client = useHarnessClient();
@@ -40,6 +49,13 @@ const rowError = ref<Record<string, string | null>>({});
 // non-empty → flat, filtered list.
 const search = ref('');
 const searchActive = computed(() => search.value.trim().length > 0);
+
+// Optional single-category filter driven by the long-tail callout (FR-006).
+// Mutually exclusive with text search: typing clears it.
+const categoryFilter = ref<string | null>(null);
+watch(search, (q) => {
+  if (q.trim()) categoryFilter.value = null;
+});
 
 // Recipe currently being configured in the install modal. When set, the
 // RecipeKeyPromptModal collects the recipe's env keys / config options /
@@ -179,8 +195,11 @@ const catalogRows = computed<CatalogRow[]>(() => {
       listing,
     }));
   }
+  const sections = categoryFilter.value
+    ? groupedSections.value.filter((s) => s.category === categoryFilter.value)
+    : groupedSections.value;
   const rows: CatalogRow[] = [];
-  for (const section of groupedSections.value) {
+  for (const section of sections) {
     rows.push({
       kind: 'header',
       category: section.category,
@@ -199,6 +218,29 @@ const catalogRows = computed<CatalogRow[]>(() => {
 const noResults = computed(
   () => searchActive.value && filteredListings.value.length === 0,
 );
+
+// The active category label shown in the filter chip, if any.
+const activeCategoryLabel = computed(() =>
+  categoryFilter.value ? categoryLabel(categoryFilter.value) : '',
+);
+
+// FR-006 — long-tail affordances.
+function browseAutomation() {
+  search.value = '';
+  categoryFilter.value = AUTOMATION_CATEGORY;
+}
+
+function clearCategoryFilter() {
+  categoryFilter.value = null;
+}
+
+function addCustomServer() {
+  emit('switch-tab', 'custom');
+}
+
+function requestConnector() {
+  client.openExternalURL(REQUEST_CONNECTOR_URL);
+}
 </script>
 
 <template>
@@ -240,6 +282,26 @@ const noResults = computed(
           class="w-full rounded-sm border border-border-muted bg-surface-1 pl-8 pr-3 py-2 font-ui text-[12px] text-ink placeholder:text-ink-subtle focus:border-accent focus:outline-none"
           data-testid="registry-search"
         />
+      </div>
+
+      <!-- Active category filter chip (set by the long-tail callout). -->
+      <div
+        v-if="categoryFilter"
+        class="flex items-center gap-2 font-ui text-[11px] text-ink-muted"
+        data-testid="registry-active-filter"
+      >
+        <span>Showing</span>
+        <span class="rounded-sm bg-surface-2 px-2 py-0.5 text-ink">{{
+          activeCategoryLabel
+        }}</span>
+        <button
+          type="button"
+          class="text-accent hover:text-accent-muted"
+          data-testid="registry-clear-filter"
+          @click="clearCategoryFilter"
+        >
+          Clear
+        </button>
       </div>
 
       <!-- Zero-result state under active search. -->
@@ -315,6 +377,55 @@ const noResults = computed(
             </button>
           </div>
         </template>
+      </div>
+
+      <!-- FR-006 — long-tail affordance. Always at the bottom of results;
+           rendered prominently when a search returns nothing. -->
+      <div
+        :class="[
+          'rounded-sm border px-4 py-3',
+          noResults
+            ? 'border-accent-hairline bg-accent-glow'
+            : 'border-border-muted bg-surface-1',
+        ]"
+        data-testid="registry-long-tail"
+      >
+        <div class="font-ui text-[12px] font-semibold text-ink">
+          Don't see your tool?
+        </div>
+        <p class="mt-1 text-[11px] text-ink-muted max-w-prose">
+          Reach thousands more apps through Automation &amp; iPaaS connectors
+          (Zapier, Make, n8n, Pipedream, Composio, Workato), or add any MCP
+          server yourself.
+        </p>
+        <div class="mt-2 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            class="inline-flex items-center gap-1 rounded-sm border border-accent-hairline bg-surface-1 px-2.5 py-1 font-ui text-[11px] text-accent hover:bg-accent-glow"
+            data-testid="registry-browse-automation"
+            @click="browseAutomation"
+          >
+            <Zap class="h-3.5 w-3.5" aria-hidden="true" />
+            Browse automation connectors
+          </button>
+          <button
+            type="button"
+            class="inline-flex items-center gap-1 rounded-sm border border-accent-hairline bg-surface-1 px-2.5 py-1 font-ui text-[11px] text-accent hover:bg-accent-glow"
+            data-testid="registry-add-custom"
+            @click="addCustomServer"
+          >
+            <Plus class="h-3.5 w-3.5" aria-hidden="true" />
+            Add a custom MCP server
+          </button>
+          <button
+            type="button"
+            class="font-ui text-[11px] text-ink-dim hover:text-ink underline"
+            data-testid="registry-request-connector"
+            @click="requestConnector"
+          >
+            Request a connector →
+          </button>
+        </div>
       </div>
     </template>
 
