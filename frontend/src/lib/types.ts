@@ -1934,24 +1934,38 @@ export interface DryRunResult {
 //     these types see camelCase throughout.
 
 /**
- * RecipeCategory groups recipes in the Tools panel. Drives the icon
- * mapping in `KenazToolsPanel.vue` (search→Search, filesystem→Folder,
- * memory→Brain, fetch→Globe, productivity→CheckSquare,
- * developer→Code, finance→Scale, communication→MessageSquare,
- * automation→Zap, default→Wrench).
+ * CanonicalRecipeCategory — the 16 canonical MCP-connector categories the
+ * registry normalizes to. Display names + icons live in
+ * `lib/recipeCategories.ts` (the single source of truth consumed by both
+ * `RegistryTab.vue` and `KenazToolsPanel.vue`).
  */
-export type RecipeCategory =
-  | 'search'
-  | 'filesystem'
-  | 'memory'
-  | 'fetch'
-  | 'productivity'
-  | 'developer'
-  | 'finance'
-  | 'communication'
-  | 'deployment'
+export type CanonicalRecipeCategory =
   | 'automation'
-  | 'other';
+  | 'communication'
+  | 'crm'
+  | 'data'
+  | 'design'
+  | 'developer'
+  | 'ecommerce'
+  | 'files'
+  | 'finance'
+  | 'hr_people'
+  | 'marketing'
+  | 'observability'
+  | 'productivity'
+  | 'security'
+  | 'support'
+  | 'web';
+
+/**
+ * RecipeCategory groups recipes in the Tools panel and drives the icon +
+ * label mapping in `lib/recipeCategories.ts`. It is kept open to arbitrary
+ * strings (`string & {}`) so legacy / not-yet-known category slugs pass
+ * through and render via the title-cased + generic-icon fallback rather
+ * than being dropped. The `string & {}` member preserves editor
+ * autocomplete for the canonical values.
+ */
+export type RecipeCategory = CanonicalRecipeCategory | (string & {});
 
 /**
  * EnvKey — one credential-bearing env var the recipe's server reads.
@@ -2056,6 +2070,12 @@ export interface Recipe {
   displayName: string;
   description: string;
   category: RecipeCategory;
+  /**
+   * Alternate names / keywords the recipe can be found under. Populated
+   * from the registry and matched (case-insensitively) by the Registry
+   * catalog search (FR-005). Absent for recipes with no aliases.
+   */
+  aliases?: string[];
   envKeys: EnvKey[];
   capabilities: RecipeCapabilities;
   docsUrl?: string;
@@ -2073,12 +2093,21 @@ export interface Recipe {
    */
   primaryAuth?: PrimaryAuth;
   /**
-   * Optional hazard message rendered by the install modal in a stark
-   * red banner with an explicit confirmation checkbox. Set on recipes
-   * that grant elevated trust (e.g. `filesystem-full`, the unrestricted
-   * filesystem MCP). Empty / undefined for ordinary recipes.
+   * Optional user-facing message shown by the install modal. How it
+   * renders is governed by `warningSeverity`, not by mere presence:
+   * by default (info) it's a calm neutral notice; only `'danger'`
+   * escalates to the red hazard banner + confirmation checkbox. Most
+   * recipes that set this convey a benign setup/latency/maturity note.
+   * Empty / undefined for recipes with nothing to say.
    */
   warning?: string;
+  /**
+   * Severity of `warning`. `'info'` / undefined → calm neutral notice,
+   * `'danger'` → red hazard banner with a required "I understand the risk"
+   * checkbox gating an "Install with risk" button. Ignored when `warning`
+   * is empty.
+   */
+  warningSeverity?: 'info' | 'danger';
   /**
    * Optional filename (under `core/policy/cedar/policies/`) of a Cedar
    * policy template the user is encouraged to install alongside this

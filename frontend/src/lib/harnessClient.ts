@@ -992,6 +992,7 @@ interface WireRecipe {
   display_name: string;
   description: string;
   category: string;
+  aliases?: string[];
   command?: string[];
   env_keys?: WireEnvKey[];
   capabilities: WireCapabilities;
@@ -1002,6 +1003,8 @@ interface WireRecipe {
   args_template?: string[];
   config_options?: WireConfigOption[];
   warning?: string;
+  /** warning severity; omitempty on the Go side. "" / "info" → calm notice, "danger" → red hazard. */
+  warning_severity?: string;
   recommended_policy_template?: string;
   /** primary_auth hint; omitempty on the Go side (absent when empty). */
   primary_auth?: string;
@@ -1058,22 +1061,12 @@ interface WireRecipeListing {
   keysPresent: boolean;
 }
 
-const KNOWN_CATEGORIES: readonly RecipeCategory[] = [
-  'search',
-  'filesystem',
-  'memory',
-  'fetch',
-  'productivity',
-  'developer',
-  'finance',
-  'communication',
-  'other',
-];
-
 function adaptCategory(raw: string): RecipeCategory {
-  return (KNOWN_CATEGORIES as readonly string[]).includes(raw)
-    ? (raw as RecipeCategory)
-    : 'other';
+  // RecipeCategory is an open type: the Tools catalog groups by the 16
+  // canonical categories and renders a title-cased + generic-icon fallback
+  // for anything unrecognised (FR-005), so the raw category string passes
+  // through unchanged rather than being collapsed to a catch-all bucket.
+  return (raw || '') as RecipeCategory;
 }
 
 const KNOWN_STATES: readonly RecipeState[] = [
@@ -1158,12 +1151,19 @@ function adaptRecipe(w: WireRecipe): Recipe {
     displayName: w.display_name,
     description: w.description,
     category: adaptCategory(w.category),
+    aliases: w.aliases ? [...w.aliases] : undefined,
     envKeys: (w.env_keys ?? []).map(adaptEnvKey),
     capabilities: w.capabilities,
     docsUrl: w.docs_url || undefined,
     argsTemplate: w.args_template ? [...w.args_template] : undefined,
     configOptions,
     warning: w.warning || undefined,
+    warningSeverity:
+      w.warning_severity === 'danger'
+        ? 'danger'
+        : w.warning_severity === 'info'
+          ? 'info'
+          : undefined,
     recommendedPolicyTemplate: w.recommended_policy_template || undefined,
     primaryAuth: adaptPrimaryAuth(w.primary_auth),
   };
