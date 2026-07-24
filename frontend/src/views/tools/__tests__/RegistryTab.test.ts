@@ -69,6 +69,9 @@ function clientWithRecipes(
         forgetKey: vi.fn(),
         status: vi.fn(),
         config: vi.fn(async () => ({})),
+        // The install modal probes prerequisites on mount; stub it so the
+        // modal renders when a configurable recipe opens it.
+        checkPrereqs: vi.fn(async () => []),
       },
     } as unknown as HarnessClient['tools'],
     ...extra,
@@ -272,6 +275,30 @@ describe('RegistryTab — long-tail affordance', () => {
     const url = openExternalURL.mock.calls[0][0] as string;
     expect(url).toContain('github.com/kameas-ai/kenaz-harness/issues/new');
     expect(url).toContain('Connector');
+    // No search term active → the title is left blank (bare prefix).
+    expect(url.endsWith('title=Connector%20request%3A%20')).toBe(true);
+  });
+
+  it('request-a-connector appends the active search term to the issue title', async () => {
+    const openExternalURL = vi.fn();
+    const w = mountRegistryTab(
+      clientWithRecipes([makeListing(makeRecipe('gh', { displayName: 'GitHub' }))], {
+        openExternalURL,
+      }),
+    );
+    await flushPromises();
+
+    // The request link is most prominent after a failed search.
+    await w.find('[data-testid="registry-search"]').setValue('  Acme CRM  ');
+    await flushPromises();
+
+    await w.find('[data-testid="registry-request-connector"]').trigger('click');
+
+    expect(openExternalURL).toHaveBeenCalledTimes(1);
+    const url = openExternalURL.mock.calls[0][0] as string;
+    // Trimmed + URL-encoded term is appended after the prefill prefix.
+    expect(url).toContain(encodeURIComponent('Acme CRM'));
+    expect(url.endsWith('title=Connector%20request%3A%20Acme%20CRM')).toBe(true);
   });
 
   it('browse-automation filters to the automation category', async () => {
@@ -303,6 +330,28 @@ describe('RegistryTab — long-tail affordance', () => {
     expect(w.find('[data-testid="registry-row-dev"]').exists()).toBe(true);
   });
 
+  it('shows the exhausted-category empty state when the filtered category has no rows', async () => {
+    // No automation connectors remain to install (all already enabled): the
+    // catalog for that filter is empty. Reproduces "installed the last one".
+    const w = mountRegistryTab(
+      clientWithRecipes([makeListing(makeRecipe('dev', { category: 'developer' }))]),
+    );
+    await flushPromises();
+
+    await w.find('[data-testid="registry-browse-automation"]').trigger('click');
+    await flushPromises();
+
+    // The filter chip is shown, but instead of a bare empty list we surface a
+    // distinct "you've installed all of these" message (not the search miss).
+    expect(w.find('[data-testid="registry-active-filter"]').exists()).toBe(true);
+    const empty = w.find('[data-testid="registry-category-empty"]');
+    expect(empty.exists()).toBe(true);
+    expect(empty.text()).toContain('Automation & iPaaS');
+    // Neither the row list nor the search-miss state renders.
+    expect(w.find('[data-testid="registry-list"]').exists()).toBe(false);
+    expect(w.find('[data-testid="registry-no-results"]').exists()).toBe(false);
+  });
+
   it('add-custom emits switch-tab targeting the custom recipe tab', async () => {
     const w = mountRegistryTab(
       clientWithRecipes([makeListing(makeRecipe('gh'))]),
@@ -315,9 +364,88 @@ describe('RegistryTab — long-tail affordance', () => {
   });
 });
 
-// ── WP16 (hr-finance pack): category row rendering ─────────────────────
+// ── Install action ─────────────────────────────────────────────────────
 
-describe('RegistryTab — WP16 HR & Finance category UX', () => {
+describe('RegistryTab — install action', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /** Pull the install mock off the seed so calls can be asserted directly. */
+  function installMock(client: Partial<HarnessClient>) {
+    return (client.tools as unknown as {
+      recipes: { install: ReturnType<typeof vi.fn> };
+    }).recipes.install;
+  }
+
+  it('installs a zero-config recipe directly and emits installed', async () => {
+    // Default recipe: no envKeys, no configOptions, no warning → one click.
+    const client = clientWithRecipes([
+      makeListing(makeRecipe('fetch', { category: 'web' })),
+    ]);
+    const install = installMock(client);
+    const w = mountRegistryTab(client);
+    await flushPromises();
+
+    await w.find('[data-testid="registry-install-fetch"]').trigger('click');
+    await flushPromises();
+
+    // Installed with empty env + config maps (no configuration to collect).
+    expect(install).toHaveBeenCalledTimes(1);
+    expect(install).toHaveBeenCalledWith('fetch', {}, {});
+    expect(w.emitted('installed')).toEqual([[]]);
+    // No intermediate config dialog for a zero-config recipe.
+    expect(w.find('[data-testid="recipe-key-prompt-modal"]').exists()).toBe(false);
+  });
+
+  it('opens the config modal (not a direct install) for a recipe with env keys', async () => {
+    const client = clientWithRecipes([
+      makeListing(
+        makeRecipe('github', {
+          displayName: 'GitHub',
+          envKeys: [
+            { name: 'GITHUB_TOKEN', display: 'GitHub token', required: true },
+          ],
+        }),
+      ),
+    ]);
+    const install = installMock(client);
+    const w = mountRegistryTab(client);
+    await flushPromises();
+
+    await w.find('[data-testid="registry-install-github"]').trigger('click');
+    await flushPromises();
+
+    // Credentials must be collected up front — the modal opens and no blank
+    // install is fired.
+    expect(w.find('[data-testid="recipe-key-prompt-modal"]').exists()).toBe(true);
+    expect(install).not.toHaveBeenCalled();
+    expect(w.emitted('installed')).toBeUndefined();
+  });
+
+  it('opens the config modal for a recipe that only carries a warning', async () => {
+    const client = clientWithRecipes([
+      makeListing(
+        makeRecipe('beta-tool', {
+          displayName: 'Beta Tool',
+          warning: 'This connector is in early access.',
+        }),
+      ),
+    ]);
+    const install = installMock(client);
+    const w = mountRegistryTab(client);
+    await flushPromises();
+
+    await w.find('[data-testid="registry-install-beta-tool"]').trigger('click');
+    await flushPromises();
+
+    // A warning alone requires acknowledgement via the modal.
+    expect(w.find('[data-testid="recipe-key-prompt-modal"]').exists()).toBe(true);
+    expect(install).not.toHaveBeenCalled();
+  });
+});
+
+// ── Connector row rendering ────────────────────────────────────────────
+
+describe('RegistryTab — connector row rendering', () => {
   it('renders an hr_people connector row without crashing', async () => {
     const recipe = makeRecipe('deel', {
       displayName: 'Deel',
@@ -385,19 +513,5 @@ describe('RegistryTab — WP16 HR & Finance category UX', () => {
     const w = mountRegistryTab(clientWithRecipes([]));
     await flushPromises();
     expect(w.find('[data-testid="registry-empty"]').exists()).toBe(true);
-  });
-
-  it('finance recipe descriptions include read-only safety copy', () => {
-    const financeDescriptions = [
-      'Query Mercury bank accounts — read-only, no transactions initiated.',
-      'Browse Ramp cards — read-only, no transactions initiated.',
-      'Read Brex card expenses — read-only, no transactions initiated.',
-      'Read accounting data from QuickBooks — read-only, no transactions initiated.',
-      'Read Xero transactions — read-only, no transactions initiated.',
-      'Read bills from Bill.com — read-only, no transactions initiated.',
-    ];
-    for (const desc of financeDescriptions) {
-      expect(desc).toContain('read-only');
-    }
   });
 });
