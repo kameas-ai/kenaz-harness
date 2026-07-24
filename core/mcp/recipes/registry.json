@@ -203,7 +203,8 @@
         "default": false
       },
       "warning": "npm fetch on first run can take 5–15 s.",
-      "primary_auth": "keys"
+      "primary_auth": "keys",
+      "warning_severity": "danger"
     },
     {
       "id": "slack",
@@ -1384,7 +1385,8 @@
         "default": false
       },
       "warning": "npm fetch on first run can take 5–15 s. This is a community server — not an official MySQL/Anthropic package. Write operations are disabled by default; enable only for trusted databases.",
-      "primary_auth": "keys"
+      "primary_auth": "keys",
+      "warning_severity": "danger"
     },
     {
       "id": "mongodb",
@@ -1399,7 +1401,7 @@
       "command": [
         "npx",
         "-y",
-        "mongodb-mcp-server@latest"
+        "mongodb-mcp-server@1.14.0"
       ],
       "env_keys": [
         {
@@ -1442,7 +1444,8 @@
         "default": false
       },
       "warning": "npm fetch on first run can take 5–15 s. Atlas cluster management tools (create/delete) require Atlas API credentials and carry real cost implications — omit them for query-only usage.",
-      "primary_auth": "keys"
+      "primary_auth": "keys",
+      "warning_severity": "danger"
     },
     {
       "id": "redis",
@@ -1458,7 +1461,7 @@
       "command": [
         "uvx",
         "--from",
-        "redis-mcp-server@latest",
+        "redis-mcp-server==0.5.0",
         "redis-mcp-server"
       ],
       "env_keys": [
@@ -1483,54 +1486,9 @@
         "allowed": false,
         "default": false
       },
-      "warning": "Python server (PyPI redis-mcp-server) launched via uvx; requires uv installed. First run downloads the package (5–15 s). Use rediss:// scheme for TLS-encrypted connections (Redis Cloud, Azure). REDIS_URL is read from environment — the URL is never exposed in process arguments.",
-      "primary_auth": "keys"
-    },
-    {
-      "id": "mattermost",
-      "display_name": "Mattermost",
-      "description": "Read and post messages in Mattermost channels, look up teams and users. Requires your self-hosted Mattermost server URL and a Personal Access Token.",
-      "category": "communication",
-      "aliases": [
-        "team chat",
-        "messaging",
-        "self-hosted chat"
-      ],
-      "command": [
-        "npx",
-        "-y",
-        "@mattermost/mcp"
-      ],
-      "env_keys": [
-        {
-          "name": "MATTERMOST_URL",
-          "display": "Mattermost server URL (e.g. https://mattermost.yourcompany.com)",
-          "docs_url": "https://docs.mattermost.com/developer/personal-access-tokens.html",
-          "required": true
-        },
-        {
-          "name": "MATTERMOST_TOKEN",
-          "display": "Mattermost Personal Access Token",
-          "docs_url": "https://docs.mattermost.com/developer/personal-access-tokens.html",
-          "required": true
-        }
-      ],
-      "config_options": [],
-      "capabilities": {
-        "tools": true,
-        "resources": false,
-        "prompts": false,
-        "sampling": false
-      },
-      "docs_url": "https://docs.mattermost.com/developer/personal-access-tokens.html",
-      "init_timeout_ms": 15000,
-      "ping_period_ms": 30000,
-      "sampling_policy": {
-        "allowed": false,
-        "default": false
-      },
-      "warning": "Requires a self-hosted Mattermost server. Personal Access Tokens must be enabled by your Mattermost admin. The @mattermost/mcp npm package name was unverified at plan time — confirm before shipping.",
-      "primary_auth": "keys"
+      "warning": "Read/query Redis via the official Redis PyPI package redis-mcp-server (pinned 0.5.0), launched with uvx; requires uv installed. First run downloads the package.",
+      "primary_auth": "keys",
+      "warning_severity": "danger"
     },
     {
       "id": "ringcentral",
@@ -1789,8 +1747,7 @@
       "command": [
         "npx",
         "-y",
-        "@twilio-alpha/mcp",
-        "${TWILIO_ACCOUNT_SID}/${TWILIO_API_KEY}:${TWILIO_API_SECRET}"
+        "@twilio-alpha/mcp"
       ],
       "env_keys": [
         {
@@ -1826,8 +1783,9 @@
         "allowed": false,
         "default": false
       },
-      "warning": "npm fetch on first run can take 5–15 s. Load only needed Twilio services — full API surface may exceed LLM context limits.",
-      "primary_auth": "keys"
+      "warning": "Credentials are read from the environment (TWILIO_ACCOUNT_SID / TWILIO_API_KEY / TWILIO_API_SECRET), not the command line. npm fetch on first run can take 5–15 s. Twilio can send SMS and place calls, which incurs charges.",
+      "primary_auth": "keys",
+      "warning_severity": "danger"
     },
     {
       "id": "intercom",
@@ -2064,7 +2022,8 @@
         "allowed": false,
         "default": false
       },
-      "warning": "Security read-only by default. The OKTA_SCOPES env var controls which tools are loaded — omitting manage scopes prevents write operations. Okta app integration must be created in the Okta Admin Console and scopes explicitly granted. Device authorization grant requires browser interaction at first use."
+      "warning": "Security read-only by default. The OKTA_SCOPES env var controls which tools are loaded — omitting manage scopes prevents write operations. Okta app integration must be created in the Okta Admin Console and scopes explicitly granted. Device authorization grant requires browser interaction at first use.",
+      "warning_severity": "danger"
     },
     {
       "id": "zendesk",
@@ -2245,7 +2204,9 @@
       "sampling_policy": {
         "allowed": false,
         "default": false
-      }
+      },
+      "warning_severity": "danger",
+      "warning": "Grants elevated access — review scopes before installing."
     },
     {
       "id": "ramp",
@@ -2290,7 +2251,9 @@
       "sampling_policy": {
         "allowed": false,
         "default": false
-      }
+      },
+      "warning_severity": "danger",
+      "warning": "Grants elevated access — review scopes before installing."
     },
     {
       "id": "deel",
@@ -2413,62 +2376,6 @@
       "warning": "Verify the npm package name 'ashby-mcp' at build — search npm for the most actively maintained Ashby MCP package. If no community package exists, a minimal wrapper calling the Ashby GraphQL API at https://app.ashbyhq.com/api/graphql may be needed. First npm fetch can take 5–15 s."
     },
     {
-      "id": "bamboohr",
-      "display_name": "BambooHR",
-      "description": "Browse employee directory, org chart, time-off records, and custom HR fields from BambooHR. API key auth (simpler than OAuth — no Kameas app registration needed). Requires your company subdomain and an API key.",
-      "category": "hr_people",
-      "aliases": [
-        "hris",
-        "hr software",
-        "employee records",
-        "pto"
-      ],
-      "command": [
-        "npx",
-        "-y",
-        "bamboohr-mcp"
-      ],
-      "primary_auth": "keys",
-      "env_keys": [
-        {
-          "name": "BAMBOOHR_API_KEY",
-          "display": "BambooHR API key",
-          "docs_url": "https://documentation.bamboohr.com/docs/getting-started",
-          "required": true
-        },
-        {
-          "name": "BAMBOOHR_SUBDOMAIN",
-          "display": "BambooHR company subdomain (e.g. 'acmecorp' if you log in at acmecorp.bamboohr.com)",
-          "docs_url": "https://documentation.bamboohr.com/docs/getting-started",
-          "required": true
-        }
-      ],
-      "config_options": [
-        {
-          "name": "bamboohr_subdomain",
-          "display": "Company subdomain",
-          "kind": "string",
-          "default": "",
-          "required": true,
-          "description": "Your BambooHR subdomain — e.g. 'acmecorp' if you access BambooHR at acmecorp.bamboohr.com"
-        }
-      ],
-      "capabilities": {
-        "tools": true,
-        "resources": false,
-        "prompts": false,
-        "sampling": false
-      },
-      "docs_url": "https://documentation.bamboohr.com/docs/getting-started",
-      "init_timeout_ms": 20000,
-      "ping_period_ms": 30000,
-      "sampling_policy": {
-        "allowed": false,
-        "default": false
-      },
-      "warning": "Verify npm package 'bamboohr-mcp' at build — search npm for the most actively maintained BambooHR MCP package. First npm fetch can take 5–15 s."
-    },
-    {
       "id": "xero",
       "display_name": "Xero",
       "description": "Read accounting transactions, contacts, and settings from Xero — read-only, no transactions initiated. Uses Xero's official npm MCP package. Requires a Kameas Xero OAuth app (register at developer.xero.com).",
@@ -2481,7 +2388,7 @@
       "command": [
         "npx",
         "-y",
-        "@xeroapi/xero-mcp-server@latest"
+        "@xeroapi/xero-mcp-server@0.0.17"
       ],
       "primary_auth": "keys",
       "env_keys": [
@@ -2521,52 +2428,6 @@
       "warning": "Owner must register a Kameas Xero OAuth app at developer.xero.com before use. Set XERO_CLIENT_ID and XERO_CLIENT_SECRET. Default scopes: accounting.transactions.read accounting.contacts.read accounting.settings.read. Verify DCR availability at identity.xero.com at build — if DCR is present, this recipe can be upgraded to zero-app. First npm fetch can take 5–15 s."
     },
     {
-      "id": "gusto",
-      "display_name": "Gusto",
-      "description": "Read employee profiles, pay periods, and pay stubs from Gusto — read-only, no payroll-run or money-movement actions. Requires a Kameas Gusto OAuth app (register at developer.gusto.com).",
-      "category": "hr_people",
-      "aliases": [
-        "payroll",
-        "benefits",
-        "hr platform"
-      ],
-      "command": [
-        "npx",
-        "-y",
-        "gusto-mcp-server"
-      ],
-      "primary_auth": "keys",
-      "env_keys": [
-        {
-          "name": "GUSTO_CLIENT_ID",
-          "display": "Gusto OAuth client ID (${KAMEAS_GUSTO_OAUTH_CLIENT_ID} — from your Kameas app at developer.gusto.com)",
-          "docs_url": "https://developer.gusto.com/docs/api/getting-started",
-          "required": true
-        },
-        {
-          "name": "GUSTO_CLIENT_SECRET",
-          "display": "Gusto OAuth client secret (from your Kameas app at developer.gusto.com)",
-          "docs_url": "https://developer.gusto.com/docs/api/getting-started",
-          "required": true
-        }
-      ],
-      "config_options": [],
-      "capabilities": {
-        "tools": true,
-        "resources": false,
-        "prompts": false,
-        "sampling": false
-      },
-      "docs_url": "https://developer.gusto.com/docs/api/getting-started",
-      "init_timeout_ms": 20000,
-      "ping_period_ms": 30000,
-      "sampling_policy": {
-        "allowed": false,
-        "default": false
-      },
-      "warning": "Owner must register a Kameas Gusto OAuth app at developer.gusto.com before use. Verify best npm MCP package for Gusto at build — no confirmed official package at research time; 'gusto-mcp-server' is a placeholder. Auth endpoints: authorize=https://app.gusto.com/oauth/authorize token=https://api.gusto.com/oauth/token. No payroll-run tools — read-only employees/pay stubs only."
-    },
-    {
       "id": "quickbooks",
       "display_name": "QuickBooks Online",
       "description": "Read accounting data from QuickBooks Online — read-only, no transactions initiated. Requires a Kameas Intuit OAuth app (register at developer.intuit.com).",
@@ -2580,7 +2441,7 @@
       "command": [
         "npx",
         "-y",
-        "quickbooks-mcp-server"
+        "quickbooks-mcp@0.5.2"
       ],
       "primary_auth": "keys",
       "env_keys": [
@@ -2611,7 +2472,8 @@
         "allowed": false,
         "default": false
       },
-      "warning": "Owner must register a Kameas Intuit app at developer.intuit.com before use. Verify best npm MCP package for QuickBooks at build — no confirmed official package at research time; 'quickbooks-mcp-server' is a placeholder. Auth endpoints: authorize=https://appcenter.intuit.com/connect/oauth2 token=https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer. Scope: com.intuit.quickbooks.accounting (read tier). Read-only — no transactions initiated."
+      "warning": "Owner must register a Kameas Intuit app at developer.intuit.com before use. Community MCP package quickbooks-mcp (pinned 0.5.2); QuickBooks Online exposes no read-only accounting scope, so restrict tool use to reads.",
+      "warning_severity": "danger"
     },
     {
       "id": "brex",
@@ -2651,48 +2513,8 @@
         "allowed": false,
         "default": false
       },
-      "warning": "Prefer the API-token path (BREX_API_TOKEN) over OAuth to avoid Kameas app registration. Verify best npm MCP package for Brex at build — 'brex-mcp-server' is a placeholder. If OAuth2 path is required, register a Kameas Brex app at accounts.brex.com; use read-only scopes only: expenses.readonly transactions.readonly accounts.readonly. Read-only — no transfers or payment-initiation tools."
-    },
-    {
-      "id": "lever",
-      "display_name": "Lever",
-      "description": "Read candidates, job postings, applications, interviews, and users from Lever ATS via the Lever Harvest API. API key auth — no Kameas app registration needed.",
-      "category": "hr_people",
-      "aliases": [
-        "ats",
-        "recruiting",
-        "hiring",
-        "applicant tracking"
-      ],
-      "command": [
-        "npx",
-        "-y",
-        "lever-mcp-server"
-      ],
-      "primary_auth": "keys",
-      "env_keys": [
-        {
-          "name": "LEVER_API_KEY",
-          "display": "Lever API key (from Lever Settings > Integrations > API Credentials)",
-          "docs_url": "https://hire.lever.co/developer/v1/introduction",
-          "required": true
-        }
-      ],
-      "config_options": [],
-      "capabilities": {
-        "tools": true,
-        "resources": false,
-        "prompts": false,
-        "sampling": false
-      },
-      "docs_url": "https://hire.lever.co/developer/v1/introduction",
-      "init_timeout_ms": 20000,
-      "ping_period_ms": 30000,
-      "sampling_policy": {
-        "allowed": false,
-        "default": false
-      },
-      "warning": "Verify best npm MCP package for Lever at build — 'lever-mcp-server' is a placeholder; no confirmed package found at research time. API key auth preferred (no Kameas app needed). If OAuth2 partner integration is required, register a Kameas app at hire.lever.co/developer. First npm fetch can take 5–15 s."
+      "warning": "Prefer the API-token path (BREX_API_TOKEN) over OAuth to avoid Kameas app registration. Verify best npm MCP package for Brex at build — 'brex-mcp-server' is a placeholder. If OAuth2 path is required, register a Kameas Brex app at accounts.brex.com; use read-only scopes only: expenses.readonly transactions.readonly accounts.readonly. Read-only — no transfers or payment-initiation tools.",
+      "warning_severity": "danger"
     },
     {
       "id": "rippling",
@@ -2742,59 +2564,6 @@
       "warning": "Owner must register a Kameas Rippling OAuth2 app at developer.rippling.com before use. Note: Rippling supports PKCE S256 but no DCR — a Kameas app is required. Scopes are defined at app-registration time; request minimal read-only scopes (employees, groups, org). Verify best npm MCP package for Rippling at build — 'rippling-mcp-server' is a placeholder. Auth endpoints: authorize=https://app.rippling.com/oauth token=https://api.rippling.com/o/token/. No payroll-run tools."
     },
     {
-      "id": "billdotcom",
-      "display_name": "Bill.com",
-      "description": "Read bills, invoices, and vendor data from Bill.com — read-only, no transactions initiated, no payment-initiation tools. Uses Bill.com Spend and Expense bearer token or legacy session-key auth.",
-      "category": "finance",
-      "aliases": [
-        "accounts payable",
-        "invoices",
-        "ap automation",
-        "vendor payments"
-      ],
-      "command": [
-        "npx",
-        "-y",
-        "billdotcom-mcp"
-      ],
-      "primary_auth": "keys",
-      "env_keys": [
-        {
-          "name": "BILLDOTCOM_API_TOKEN",
-          "display": "Bill.com API token (preferred — from the Bill.com developer dashboard Spend & Expense API)",
-          "docs_url": "https://developer.bill.com/docs/authentication",
-          "required": false
-        },
-        {
-          "name": "BILLDOTCOM_DEV_KEY",
-          "display": "Bill.com developer key (legacy session auth — for the v3 API)",
-          "docs_url": "https://developer.bill.com/docs/authentication",
-          "required": false
-        },
-        {
-          "name": "BILLDOTCOM_ORG_ID",
-          "display": "Bill.com organization ID (legacy session auth — for the v3 API)",
-          "docs_url": "https://developer.bill.com/docs/authentication",
-          "required": false
-        }
-      ],
-      "config_options": [],
-      "capabilities": {
-        "tools": true,
-        "resources": false,
-        "prompts": false,
-        "sampling": false
-      },
-      "docs_url": "https://developer.bill.com/docs/authentication",
-      "init_timeout_ms": 20000,
-      "ping_period_ms": 30000,
-      "sampling_policy": {
-        "allowed": false,
-        "default": false
-      },
-      "warning": "Prefer the Spend and Expense bearer token path (BILLDOTCOM_API_TOKEN) over session-key auth to avoid session expiry complexity. Verify best npm MCP package for Bill.com at build — 'billdotcom-mcp' is a placeholder; no confirmed package found at research time. Legacy v3 session auth requires BILLDOTCOM_DEV_KEY + BILLDOTCOM_ORG_ID (sessions expire after 35 min inactivity). No payment-initiation tools."
-    },
-    {
       "id": "netsuite",
       "display_name": "NetSuite (Enterprise)",
       "description": "Enterprise — NetSuite uses per-account Token-Based Authentication (TBA) or OAuth2, both requiring per-tenant setup. No community MCP package confirmed at research time. For quick read-only access to NetSuite data, connect via Zapier or Workato in the Automation section.",
@@ -2808,7 +2577,7 @@
       "command": [
         "npx",
         "-y",
-        "netsuite-mcp"
+        "netsuite-mcp-server@1.0.2"
       ],
       "primary_auth": "keys",
       "env_keys": [
@@ -2866,7 +2635,8 @@
         "allowed": false,
         "default": false
       },
-      "warning": "Enterprise — requires NetSuite TBA setup by a NetSuite administrator. No confirmed community MCP package at research time; 'netsuite-mcp' is a placeholder — verify at build. For quick access, connect via Zapier or Workato in the Automation section instead. TBA requires 4 tokens: consumer_key, consumer_secret, token_id, token_secret — all per-account."
+      "warning": "Enterprise — requires NetSuite TBA setup by a NetSuite administrator. Community MCP package netsuite-mcp-server (pinned 1.0.2).",
+      "warning_severity": "danger"
     },
     {
       "id": "workday",
@@ -4104,7 +3874,7 @@
       "command": [
         "uvx",
         "--from",
-        "git+https://github.com/fivetran/fivetran-mcp",
+        "git+https://github.com/fivetran/fivetran-mcp@d5bf139e27bf07f965f3e100a0cc527ef8385e20",
         "fivetran-mcp"
       ],
       "primary_auth": "keys",
@@ -4136,7 +3906,7 @@
         "allowed": false,
         "default": false
       },
-      "warning": "Installs directly from official Fivetran GitHub repo (not PyPI fivetran-mcp — that is a different community package). Read-only by default; FIVETRAN_ALLOW_WRITES=true enables writes (not set). First run clones and installs the package (may take 30–60 s). Requires uv installed."
+      "warning": "Installs directly from the official Fivetran GitHub repo, pinned to commit d5bf139. Requires uv installed."
     },
     {
       "id": "redshift",
@@ -4150,7 +3920,7 @@
       ],
       "command": [
         "uvx",
-        "awslabs.amazon-redshift-mcp-server@latest"
+        "awslabs.redshift-mcp-server==0.0.30"
       ],
       "primary_auth": "keys",
       "env_keys": [
@@ -4190,7 +3960,8 @@
         "allowed": false,
         "default": false
       },
-      "warning": "Requires uv installed. AWS IAM credentials must be configured (aws configure or environment variables). Package name: awslabs.amazon-redshift-mcp-server — verify at build. Read-only access via IAM permissions; use least-privilege IAM policy."
+      "warning": "Amazon Redshift via the official AWS Labs package awslabs.redshift-mcp-server (pinned 0.0.30), launched with uvx; requires uv installed. AWS IAM credentials must be configured (aws configure or environment variables).",
+      "warning_severity": "danger"
     },
     {
       "id": "snowflake",
@@ -4209,8 +3980,6 @@
         "${SNOWFLAKE_ACCOUNT}",
         "--user",
         "${SNOWFLAKE_USER}",
-        "--password",
-        "${SNOWFLAKE_PASSWORD}",
         "--warehouse",
         "${SNOWFLAKE_WAREHOUSE}",
         "--database",
@@ -4279,7 +4048,8 @@
         "allowed": false,
         "default": false
       },
-      "warning": "Community package (PyPI mcp_server_snowflake v0.3.8 — underscores in package name). Read-only: --allow_write flag intentionally omitted. Requires uv installed. First run downloads package (5–15 s). Credentials passed as CLI flags; store in env/credstore, not plaintext."
+      "warning": "Community package (PyPI mcp_server_snowflake). Password is read from the SNOWFLAKE_PASSWORD environment variable, not the command line. Read-only unless the server is started with a write flag.",
+      "warning_severity": "danger"
     },
     {
       "id": "bigquery",
@@ -4586,7 +4356,7 @@
       "command": [
         "npx",
         "-y",
-        "marketo-mcp"
+        "marketo-mcp-server@1.4.0"
       ],
       "primary_auth": "keys",
       "env_keys": [
@@ -4623,7 +4393,7 @@
         "allowed": false,
         "default": false
       },
-      "warning": "STRETCH: marketo-mcp npm package unconfirmed at planning time (2026-07-21) — verify exact npm package name and availability before installing. Community package (GitHub alexleventer/marketo-mcp, JS/TypeScript). Read-only Marketo API access. Marketo REST API uses client-credentials OAuth internally; no browser OAuth flow."
+      "warning": "Owner must register a Marketo API client. Community MCP package marketo-mcp-server (pinned 1.4.0). First run downloads the package."
     },
     {
       "id": "databricks",
@@ -4891,7 +4661,8 @@
         "allowed": false,
         "default": false
       },
-      "warning": "This recipe exposes read and query tools only. No payment-initiation or money-movement tools are enabled."
+      "warning": "This recipe exposes read and query tools only. No payment-initiation or money-movement tools are enabled.",
+      "warning_severity": "danger"
     },
     {
       "id": "square",
@@ -4936,7 +4707,8 @@
         "allowed": false,
         "default": false
       },
-      "warning": "Square MCP is in Beta. This recipe requests read-only scopes — no payment or charge tools are enabled."
+      "warning": "Square MCP is in Beta. This recipe requests read-only scopes — no payment or charge tools are enabled.",
+      "warning_severity": "danger"
     },
     {
       "id": "hubspot",
@@ -5072,58 +4844,6 @@
       }
     },
     {
-      "id": "plaid",
-      "display_name": "Plaid",
-      "description": "Query Plaid-linked bank accounts, transactions, and balances. Read/query only — no payment initiation. Requires Plaid API credentials.",
-      "category": "finance",
-      "aliases": [
-        "bank data",
-        "financial data api",
-        "account verification"
-      ],
-      "command": [
-        "npx",
-        "-y",
-        "@modelcontextprotocol/server-plaid"
-      ],
-      "env_keys": [
-        {
-          "name": "PLAID_CLIENT_ID",
-          "display": "Plaid client ID",
-          "docs_url": "https://dashboard.plaid.com/team/keys",
-          "required": true
-        },
-        {
-          "name": "PLAID_SECRET",
-          "display": "Plaid secret",
-          "docs_url": "https://dashboard.plaid.com/team/keys",
-          "required": true
-        },
-        {
-          "name": "PLAID_ENV",
-          "display": "Plaid environment (sandbox or production)",
-          "docs_url": "https://plaid.com/docs/api/",
-          "required": false
-        }
-      ],
-      "config_options": [],
-      "capabilities": {
-        "tools": true,
-        "resources": false,
-        "prompts": false,
-        "sampling": false
-      },
-      "docs_url": "https://plaid.com/docs/",
-      "init_timeout_ms": 15000,
-      "ping_period_ms": 30000,
-      "sampling_policy": {
-        "allowed": false,
-        "default": false
-      },
-      "primary_auth": "keys",
-      "warning": "Read and query only — no payment-initiation or Link-flow tools are enabled. Verify at build: confirm the npx package name for the Plaid MCP server — no official Plaid MCP server was confirmed at research time."
-    },
-    {
       "id": "bigcommerce-docs",
       "display_name": "BigCommerce Docs",
       "description": "Search and read BigCommerce developer documentation — API references, guides, and webhooks. No authentication required.",
@@ -5170,7 +4890,7 @@
       "command": [
         "npx",
         "-y",
-        "@shopify/dev-mcp@latest"
+        "@shopify/dev-mcp@1.14.3"
       ],
       "env_keys": [
         {
@@ -5204,58 +4924,6 @@
       "warning": "Verify at build: confirm whether this Shopify MCP server exposes store data (products, orders, customers) or only developer-tooling docs. If store-data access is required, substitute a community store-data MCP package."
     },
     {
-      "id": "woocommerce",
-      "display_name": "WooCommerce",
-      "description": "Query WooCommerce orders, products, customers, and store stats. Requires your WooCommerce store URL and REST API keys.",
-      "category": "ecommerce",
-      "aliases": [
-        "wordpress ecommerce",
-        "online store",
-        "orders"
-      ],
-      "command": [
-        "npx",
-        "-y",
-        "@wp-api/woocommerce-mcp@latest"
-      ],
-      "env_keys": [
-        {
-          "name": "WOOCOMMERCE_URL",
-          "display": "WooCommerce store URL (e.g. https://myshop.com)",
-          "docs_url": "https://woocommerce.com/document/woocommerce-rest-api/",
-          "required": true
-        },
-        {
-          "name": "WOOCOMMERCE_CONSUMER_KEY",
-          "display": "WooCommerce REST API consumer key",
-          "docs_url": "https://woocommerce.com/document/woocommerce-rest-api/",
-          "required": true
-        },
-        {
-          "name": "WOOCOMMERCE_CONSUMER_SECRET",
-          "display": "WooCommerce REST API consumer secret",
-          "docs_url": "https://woocommerce.com/document/woocommerce-rest-api/",
-          "required": true
-        }
-      ],
-      "config_options": [],
-      "capabilities": {
-        "tools": true,
-        "resources": false,
-        "prompts": false,
-        "sampling": false
-      },
-      "docs_url": "https://woocommerce.com/document/woocommerce-rest-api/",
-      "init_timeout_ms": 15000,
-      "ping_period_ms": 30000,
-      "sampling_policy": {
-        "allowed": false,
-        "default": false
-      },
-      "primary_auth": "keys",
-      "warning": "Verify at build: confirm the npx package name for the WooCommerce MCP server — substitute the correct community package at build time."
-    },
-    {
       "id": "pipedrive",
       "display_name": "Pipedrive",
       "description": "Search and update Pipedrive deals, contacts, organizations, and activities. Requires a Pipedrive API token.",
@@ -5269,7 +4937,7 @@
       "command": [
         "npx",
         "-y",
-        "@pipedrive/mcp-server@latest"
+        "pipedrive-mcp-server@2.1.0"
       ],
       "env_keys": [
         {
@@ -5294,76 +4962,7 @@
         "default": false
       },
       "primary_auth": "keys",
-      "warning": "Verify at build: confirm the npx package name for the Pipedrive MCP server — no official Pipedrive remote MCP server was confirmed at research time."
-    },
-    {
-      "id": "zoho-crm",
-      "display_name": "Zoho CRM",
-      "description": "Search and update Zoho CRM leads, contacts, accounts, and deals. Requires Zoho OAuth credentials.",
-      "category": "crm",
-      "aliases": [
-        "sales pipeline",
-        "leads",
-        "contacts",
-        "deals"
-      ],
-      "command": [
-        "npx",
-        "-y",
-        "@zoho/crm-mcp-server@latest"
-      ],
-      "env_keys": [
-        {
-          "name": "ZOHO_CLIENT_ID",
-          "display": "Zoho OAuth client ID",
-          "docs_url": "https://api-console.zoho.com/",
-          "required": true
-        },
-        {
-          "name": "ZOHO_CLIENT_SECRET",
-          "display": "Zoho OAuth client secret",
-          "docs_url": "https://api-console.zoho.com/",
-          "required": true
-        },
-        {
-          "name": "ZOHO_REFRESH_TOKEN",
-          "display": "Zoho OAuth refresh token",
-          "docs_url": "https://www.zoho.com/crm/developer/docs/api/v7/oauth-overview.html",
-          "required": true
-        }
-      ],
-      "config_options": [
-        {
-          "name": "region",
-          "display": "Zoho data center region",
-          "kind": "enum",
-          "choices": [
-            "com",
-            "eu",
-            "in",
-            "com.au",
-            "jp"
-          ],
-          "default": "com",
-          "required": false,
-          "description": "Your Zoho account's data center region (e.g. 'eu' for zoho.eu accounts)."
-        }
-      ],
-      "capabilities": {
-        "tools": true,
-        "resources": false,
-        "prompts": false,
-        "sampling": false
-      },
-      "docs_url": "https://www.zoho.com/crm/developer/docs/api/v7/",
-      "init_timeout_ms": 15000,
-      "ping_period_ms": 30000,
-      "sampling_policy": {
-        "allowed": false,
-        "default": false
-      },
-      "primary_auth": "keys",
-      "warning": "Verify at build: confirm the npx package name for the Zoho CRM MCP server — no official Zoho CRM remote MCP server was confirmed at research time."
+      "warning": "Community MCP package pipedrive-mcp-server (pinned 2.1.0). First run downloads the package."
     },
     {
       "id": "stripe",
@@ -5379,7 +4978,7 @@
       "command": [
         "npx",
         "-y",
-        "@stripe/mcp@latest",
+        "@stripe/mcp@0.3.3",
         "--tools=read-only"
       ],
       "env_keys": [
@@ -5405,7 +5004,8 @@
         "default": false
       },
       "primary_auth": "keys",
-      "warning": "Read and query only — no charge, refund, transfer, payout, or other write tools are enabled. You MUST supply a Stripe Restricted Key (not a Secret Key) with read-only permissions. Never paste a full Secret Key here."
+      "warning": "Read and query only — no charge, refund, transfer, payout, or other write tools are enabled. You MUST supply a Stripe Restricted Key (not a Secret Key) with read-only permissions. Never paste a full Secret Key here.",
+      "warning_severity": "danger"
     }
   ]
 }

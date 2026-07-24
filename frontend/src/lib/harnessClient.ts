@@ -1061,12 +1061,17 @@ interface WireRecipeListing {
   keysPresent: boolean;
 }
 
-function adaptCategory(raw: string): RecipeCategory {
+export function adaptCategory(raw: string): RecipeCategory {
   // RecipeCategory is an open type: the Tools catalog groups by the 16
   // canonical categories and renders a title-cased + generic-icon fallback
   // for anything unrecognised (FR-005), so the raw category string passes
   // through unchanged rather than being collapsed to a catch-all bucket.
-  return (raw || '') as RecipeCategory;
+  //
+  // Normalize case once here at the wire→model boundary: the canonical set
+  // is lowercase, and the catalog buckets by the raw string, so a mixed-case
+  // wire value like "Automation" must fold to "automation" or it would split
+  // into a duplicate section with no curated icon.
+  return ((raw || '').toLowerCase()) as RecipeCategory;
 }
 
 const KNOWN_STATES: readonly RecipeState[] = [

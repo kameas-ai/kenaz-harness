@@ -48,7 +48,6 @@ var expectedRegistryIDs = []string{
 	"mysql",
 	"mongodb",
 	"redis",
-	"mattermost",
 	"ringcentral",
 	"webex",
 	"front",
@@ -68,14 +67,10 @@ var expectedRegistryIDs = []string{
 	"deel",
 	"greenhouse",
 	"ashby",
-	"bamboohr",
 	"xero",
-	"gusto",
 	"quickbooks",
 	"brex",
-	"lever",
 	"rippling",
-	"billdotcom",
 	"netsuite",
 	"workday",
 	"grafana",
@@ -124,12 +119,9 @@ var expectedRegistryIDs = []string{
 	"hubspot",
 	"box",
 	"salesforce",
-	"plaid",
 	"bigcommerce-docs",
 	"shopify",
-	"woocommerce",
 	"pipedrive",
-	"zoho-crm",
 	"stripe",
 }
 
@@ -1256,7 +1248,7 @@ func TestCommunicationCategoryGroup(t *testing.T) {
 	// category="communication" so the catalog UI groups them together.
 	commIDs := []string{
 		"slack", "slack-tokens", "gmail", "outlook",
-		"intercom", "twilio", "zoom", "discord", "front", "webex", "ringcentral", "mattermost",
+		"intercom", "twilio", "zoom", "discord", "front", "webex", "ringcentral",
 	}
 	cat := recipes.Registry()
 	for _, id := range commIDs {
@@ -1268,44 +1260,6 @@ func TestCommunicationCategoryGroup(t *testing.T) {
 		if r.Category != "communication" {
 			t.Errorf("recipe %q: Category = %q, want communication", id, r.Category)
 		}
-	}
-}
-
-func TestRecipe_Mattermost(t *testing.T) {
-	cat := recipes.Registry()
-	r, ok := cat.Get("mattermost")
-	if !ok {
-		t.Fatal("mattermost not in registry")
-	}
-	if r.Category != "communication" {
-		t.Errorf("Category = %q, want communication", r.Category)
-	}
-	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
-		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
-	}
-	// stdio recipe: no transport/URL
-	if r.Transport != "" && r.Transport != recipes.TransportStdio {
-		t.Errorf("Transport = %q, want stdio or empty", r.Transport)
-	}
-	// Must have two required env keys.
-	envNames := map[string]bool{}
-	for _, e := range r.EnvKeys {
-		envNames[e.Name] = true
-		if !e.Required {
-			t.Errorf("env key %q should be required", e.Name)
-		}
-	}
-	if !envNames["MATTERMOST_URL"] {
-		t.Error("missing env key MATTERMOST_URL")
-	}
-	if !envNames["MATTERMOST_TOKEN"] {
-		t.Error("missing env key MATTERMOST_TOKEN")
-	}
-	if r.Warning == "" {
-		t.Error("mattermost should carry a Warning (self-hosted, PAT required, package unverified)")
-	}
-	if err := r.Validate(); err != nil {
-		t.Errorf("Validate() error: %v", err)
 	}
 }
 
@@ -1514,15 +1468,14 @@ func TestRecipe_Twilio(t *testing.T) {
 	if !envNames["TWILIO_API_SECRET"] {
 		t.Error("missing env key TWILIO_API_SECRET")
 	}
-	// Command must include credential positional arg template.
-	found := false
+	// Credentials must be delivered via the environment (env_keys), never on the
+	// command line where they would be visible in process listings / crash logs.
 	for _, arg := range r.Command {
-		if strings.Contains(arg, "TWILIO_ACCOUNT_SID") {
-			found = true
+		for _, secret := range []string{"TWILIO_ACCOUNT_SID", "TWILIO_API_KEY", "TWILIO_API_SECRET"} {
+			if strings.Contains(arg, secret) {
+				t.Errorf("command must not interpolate %s into argv (leaks via ps); rely on env_keys", secret)
+			}
 		}
-	}
-	if !found {
-		t.Error("command should include credential positional arg with TWILIO_ACCOUNT_SID")
 	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)
@@ -2031,46 +1984,6 @@ func TestRecipe_Ashby(t *testing.T) {
 	}
 }
 
-func TestRecipe_BambooHR(t *testing.T) {
-	cat := recipes.Registry()
-	r, ok := cat.Get("bamboohr")
-	if !ok {
-		t.Fatal("bamboohr not in registry")
-	}
-	if r.Category != "hr_people" {
-		t.Errorf("Category = %q, want hr_people", r.Category)
-	}
-	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
-		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
-	}
-	envNames := map[string]bool{}
-	for _, e := range r.EnvKeys {
-		envNames[e.Name] = true
-	}
-	if !envNames["BAMBOOHR_API_KEY"] {
-		t.Errorf("EnvKeys = %+v, want BAMBOOHR_API_KEY", r.EnvKeys)
-	}
-	// bamboohr_subdomain config option required.
-	hasSubdomain := false
-	for _, opt := range r.ConfigOptions {
-		if opt.Name == "bamboohr_subdomain" {
-			hasSubdomain = true
-			if !opt.Required {
-				t.Error("bamboohr_subdomain config option should be required")
-			}
-		}
-	}
-	if !hasSubdomain {
-		t.Error("bamboohr should have bamboohr_subdomain config option")
-	}
-	if r.Auth != nil {
-		t.Errorf("Auth should be nil for BambooHR (API key auth), got %+v", r.Auth)
-	}
-	if err := r.Validate(); err != nil {
-		t.Errorf("Validate() error: %v", err)
-	}
-}
-
 func TestRecipe_Xero(t *testing.T) {
 	cat := recipes.Registry()
 	r, ok := cat.Get("xero")
@@ -2107,33 +2020,6 @@ func TestRecipe_Xero(t *testing.T) {
 	}
 	if r.Auth != nil {
 		t.Errorf("Auth should be nil for Xero (client_id/secret-based OAuth, not mcp_oauth flow), got %+v", r.Auth)
-	}
-	if err := r.Validate(); err != nil {
-		t.Errorf("Validate() error: %v", err)
-	}
-}
-
-func TestRecipe_Gusto(t *testing.T) {
-	cat := recipes.Registry()
-	r, ok := cat.Get("gusto")
-	if !ok {
-		t.Fatal("gusto not in registry")
-	}
-	if r.Category != "hr_people" {
-		t.Errorf("Category = %q, want hr_people", r.Category)
-	}
-	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
-		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
-	}
-	envNames := map[string]bool{}
-	for _, e := range r.EnvKeys {
-		envNames[e.Name] = true
-	}
-	if !envNames["GUSTO_CLIENT_ID"] {
-		t.Errorf("EnvKeys = %+v, want GUSTO_CLIENT_ID (Kameas OAuth seam)", r.EnvKeys)
-	}
-	if !envNames["GUSTO_CLIENT_SECRET"] {
-		t.Errorf("EnvKeys = %+v, want GUSTO_CLIENT_SECRET", r.EnvKeys)
 	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)
@@ -2207,38 +2093,6 @@ func TestRecipe_Brex(t *testing.T) {
 	}
 }
 
-func TestRecipe_Lever(t *testing.T) {
-	cat := recipes.Registry()
-	r, ok := cat.Get("lever")
-	if !ok {
-		t.Fatal("lever not in registry")
-	}
-	if r.Category != "hr_people" {
-		t.Errorf("Category = %q, want hr_people", r.Category)
-	}
-	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
-		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
-	}
-	envNames := map[string]bool{}
-	for _, e := range r.EnvKeys {
-		envNames[e.Name] = true
-	}
-	if !envNames["LEVER_API_KEY"] {
-		t.Errorf("EnvKeys = %+v, want LEVER_API_KEY", r.EnvKeys)
-	}
-	for _, e := range r.EnvKeys {
-		if e.Name == "LEVER_API_KEY" && !e.Required {
-			t.Error("LEVER_API_KEY should be required")
-		}
-	}
-	if r.Auth != nil {
-		t.Errorf("Auth should be nil for Lever (API key auth), got %+v", r.Auth)
-	}
-	if err := r.Validate(); err != nil {
-		t.Errorf("Validate() error: %v", err)
-	}
-}
-
 func TestRecipe_Rippling(t *testing.T) {
 	cat := recipes.Registry()
 	r, ok := cat.Get("rippling")
@@ -2260,30 +2114,6 @@ func TestRecipe_Rippling(t *testing.T) {
 	}
 	if !envNames["RIPPLING_CLIENT_SECRET"] {
 		t.Errorf("EnvKeys = %+v, want RIPPLING_CLIENT_SECRET", r.EnvKeys)
-	}
-	if err := r.Validate(); err != nil {
-		t.Errorf("Validate() error: %v", err)
-	}
-}
-
-func TestRecipe_BillDotCom(t *testing.T) {
-	cat := recipes.Registry()
-	r, ok := cat.Get("billdotcom")
-	if !ok {
-		t.Fatal("billdotcom not in registry")
-	}
-	if r.Category != "finance" {
-		t.Errorf("Category = %q, want finance", r.Category)
-	}
-	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
-		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
-	}
-	// Finance safety copy.
-	if !strings.Contains(r.Description, "read-only") {
-		t.Error("billdotcom description must include read-only safety copy")
-	}
-	if r.Auth != nil {
-		t.Errorf("Auth should be nil for Bill.com (API key/token auth), got %+v", r.Auth)
 	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)
@@ -2355,7 +2185,7 @@ func TestRecipe_Workday(t *testing.T) {
 func TestHRFinanceCategoryGroups(t *testing.T) {
 	cat := recipes.Registry()
 
-	hrPeopleIDs := []string{"deel", "greenhouse", "ashby", "bamboohr", "gusto", "lever", "rippling", "workday"}
+	hrPeopleIDs := []string{"deel", "greenhouse", "ashby", "rippling", "workday"}
 	for _, id := range hrPeopleIDs {
 		r, ok := cat.Get(id)
 		if !ok {
@@ -2367,7 +2197,7 @@ func TestHRFinanceCategoryGroups(t *testing.T) {
 		}
 	}
 
-	financeIDs := []string{"mercury", "ramp", "brex", "quickbooks", "xero", "billdotcom", "netsuite"}
+	financeIDs := []string{"mercury", "ramp", "brex", "quickbooks", "xero", "netsuite"}
 	for _, id := range financeIDs {
 		r, ok := cat.Get(id)
 		if !ok {
@@ -3931,39 +3761,59 @@ func TestRecipe_CatalogAliasesPopulated(t *testing.T) {
 	}
 }
 
-func TestRecipe_ZohoCRM(t *testing.T) {
+// TestRecipe_NoFloatingPackageSpecs forbids the two package-spec anti-patterns
+// that the v0.45.0 catalog exhibited and that are never defensible:
+//
+//   - an explicit "@latest" tag (floating — resolves to whatever is published at
+//     launch, so a hijacked publish runs with the user's credentials), and
+//   - a git install with no pinned ref (git+https://…/repo with no @<sha|tag>),
+//     which tracks the default branch HEAD.
+//
+// Bare package names (the catalog's long-standing convention for both official
+// reference servers and vetted community packages) are allowed here — moving the
+// whole catalog to exact-version pins is a separate hygiene effort. This test
+// exists so a new connector can never reintroduce @latest or an unpinned git URL,
+// the specific drift that shipped broken/squattable recipes in v0.45.0.
+func TestRecipe_NoFloatingPackageSpecs(t *testing.T) {
 	cat := recipes.Registry()
-	r, ok := cat.Get("zoho-crm")
-	if !ok {
-		t.Fatal("zoho-crm not in registry")
-	}
-	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
-		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
-	}
-	if r.Auth != nil {
-		t.Errorf("Auth should be nil for Zoho CRM (OAuth refresh token via env, no harness OAuth flow), got %+v", r.Auth)
-	}
-	envNames := map[string]bool{}
-	for _, e := range r.EnvKeys {
-		envNames[e.Name] = true
-	}
-	if !envNames["ZOHO_CLIENT_ID"] {
-		t.Errorf("EnvKeys = %+v, want ZOHO_CLIENT_ID", r.EnvKeys)
-	}
-	if !envNames["ZOHO_CLIENT_SECRET"] {
-		t.Errorf("EnvKeys = %+v, want ZOHO_CLIENT_SECRET", r.EnvKeys)
-	}
-	if !envNames["ZOHO_REFRESH_TOKEN"] {
-		t.Errorf("EnvKeys = %+v, want ZOHO_REFRESH_TOKEN", r.EnvKeys)
-	}
-	if len(r.ConfigOptions) == 0 || r.ConfigOptions[0].Name != "region" {
-		t.Errorf("ConfigOptions = %+v, want one entry named region", r.ConfigOptions)
-	}
-	if r.Category != "crm" {
-		t.Errorf("Category = %q, want crm", r.Category)
-	}
-	if err := r.Validate(); err != nil {
-		t.Errorf("Validate() error: %v", err)
+	for _, r := range cat.List() {
+		if len(r.Command) == 0 {
+			continue
+		}
+		runner := r.Command[0]
+		if runner != "npx" && runner != "uvx" {
+			continue
+		}
+		// The package spec is the token after --from, else the first non-flag arg.
+		var spec string
+		args := r.Command[1:]
+		for i, a := range args {
+			if a == "--from" && i+1 < len(args) {
+				spec = args[i+1]
+				break
+			}
+		}
+		if spec == "" {
+			for _, a := range args {
+				if !strings.HasPrefix(a, "-") {
+					spec = a
+					break
+				}
+			}
+		}
+		if spec == "" {
+			t.Errorf("recipe %q: could not find package spec in command %v", r.ID, r.Command)
+			continue
+		}
+		if strings.HasSuffix(spec, "@latest") {
+			t.Errorf("recipe %q: package %q uses floating @latest — pin an exact version", r.ID, spec)
+		}
+		if strings.Contains(spec, "git+") {
+			// Require a ref beyond the scheme's "://": git+https://host/repo@<ref>.
+			if strings.LastIndex(spec, "@") <= strings.Index(spec, "://")+2 {
+				t.Errorf("recipe %q: git install %q has no pinned ref — append @<commit-or-tag>", r.ID, spec)
+			}
+		}
 	}
 }
 
@@ -3984,39 +3834,6 @@ func TestRecipe_Pipedrive(t *testing.T) {
 	}
 	if r.Category != "crm" {
 		t.Errorf("Category = %q, want crm", r.Category)
-	}
-	if err := r.Validate(); err != nil {
-		t.Errorf("Validate() error: %v", err)
-	}
-}
-
-func TestRecipe_WooCommerce(t *testing.T) {
-	cat := recipes.Registry()
-	r, ok := cat.Get("woocommerce")
-	if !ok {
-		t.Fatal("woocommerce not in registry")
-	}
-	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
-		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
-	}
-	if r.Auth != nil {
-		t.Errorf("Auth should be nil for WooCommerce (API-key auth), got %+v", r.Auth)
-	}
-	envNames := map[string]bool{}
-	for _, e := range r.EnvKeys {
-		envNames[e.Name] = true
-	}
-	if !envNames["WOOCOMMERCE_URL"] {
-		t.Errorf("EnvKeys = %+v, want WOOCOMMERCE_URL", r.EnvKeys)
-	}
-	if !envNames["WOOCOMMERCE_CONSUMER_KEY"] {
-		t.Errorf("EnvKeys = %+v, want WOOCOMMERCE_CONSUMER_KEY", r.EnvKeys)
-	}
-	if !envNames["WOOCOMMERCE_CONSUMER_SECRET"] {
-		t.Errorf("EnvKeys = %+v, want WOOCOMMERCE_CONSUMER_SECRET", r.EnvKeys)
-	}
-	if r.Category != "ecommerce" {
-		t.Errorf("Category = %q, want ecommerce", r.Category)
 	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)
@@ -4077,44 +3894,6 @@ func TestRecipe_BigCommerceDocs(t *testing.T) {
 	}
 	if r.Warning == "" {
 		t.Error("bigcommerce-docs should carry a Warning (docs only, not store data)")
-	}
-	if err := r.Validate(); err != nil {
-		t.Errorf("Validate() error: %v", err)
-	}
-}
-
-func TestRecipe_Plaid(t *testing.T) {
-	cat := recipes.Registry()
-	r, ok := cat.Get("plaid")
-	if !ok {
-		t.Fatal("plaid not in registry")
-	}
-	// Stdio recipe — no official Plaid remote MCP server confirmed at research time.
-	if r.Transport != "" && r.Transport != "stdio" {
-		t.Errorf("Transport = %q, want stdio (no official Plaid remote MCP server)", r.Transport)
-	}
-	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
-		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
-	}
-	if r.Auth != nil {
-		t.Errorf("Auth should be nil for Plaid (API-key auth, no OAuth flow), got %+v", r.Auth)
-	}
-	envNames := map[string]bool{}
-	for _, e := range r.EnvKeys {
-		envNames[e.Name] = true
-	}
-	if !envNames["PLAID_CLIENT_ID"] {
-		t.Errorf("EnvKeys = %+v, want PLAID_CLIENT_ID", r.EnvKeys)
-	}
-	if !envNames["PLAID_SECRET"] {
-		t.Errorf("EnvKeys = %+v, want PLAID_SECRET", r.EnvKeys)
-	}
-	if r.Category != "finance" {
-		t.Errorf("Category = %q, want finance", r.Category)
-	}
-	// FR-003: Warning must document read-only constraint.
-	if r.Warning == "" {
-		t.Error("plaid should carry a Warning (read/query only + pending package verification)")
 	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)
