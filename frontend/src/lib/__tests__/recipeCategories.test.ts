@@ -1,78 +1,61 @@
 /**
- * WP18 — Marketing & analytics + data/BI category groupings (01NCONN09)
+ * Tests for the shared recipe-category taxonomy (FR-005).
  *
- * Verifies that the four new recipe categories introduced by the
- * marketing-data connector pack are valid RecipeCategory values and are
- * handled by the shared type system without compile errors (vitest
- * type-checks via vue-tsc).
+ * Exercises the real `recipeCategories.ts` module: canonical values resolve
+ * to their curated label + icon; unknown slugs fall back to a title-cased
+ * label + the generic Wrench icon; empty/undefined categories render as
+ * "Other". This is the single source of truth both the Registry catalog and
+ * the built-in Tools panel resolve icons + labels through.
  */
 import { describe, it, expect } from 'vitest';
-import type { RecipeCategory } from '@/lib/types';
+import {
+  CANONICAL_RECIPE_CATEGORIES,
+  categoryIconFor,
+  categoryLabel,
+  isCanonicalCategory,
+} from '@/lib/recipeCategories';
+import { CircleUser, Server, Wrench, Zap } from '@/shell/icons';
 
-/** Categories introduced by pack 01NCONN09. */
-const MARKETING_DATA_CATEGORIES: RecipeCategory[] = [
-  'analytics',
-  'marketing',
-  'bi',
-  'data',
-];
-
-/** Full set of categories expected in the registry. */
-const ALL_EXPECTED_CATEGORIES: RecipeCategory[] = [
-  'search',
-  'filesystem',
-  'memory',
-  'fetch',
-  'productivity',
-  'developer',
-  'finance',
-  'communication',
-  'deployment',
-  'automation',
-  'analytics',
-  'marketing',
-  'bi',
-  'data',
-  'other',
-];
-
-describe('RecipeCategory — marketing & data/BI pack (01NCONN09)', () => {
-  it('defines all four new categories as valid RecipeCategory values', () => {
-    // If any of these were not in the RecipeCategory union, TypeScript
-    // would fail the type assertion above and the build would reject.
-    expect(MARKETING_DATA_CATEGORIES).toHaveLength(4);
-    for (const cat of MARKETING_DATA_CATEGORIES) {
-      expect(cat).toBeTruthy();
+describe('isCanonicalCategory', () => {
+  it('accepts every canonical value', () => {
+    for (const cat of CANONICAL_RECIPE_CATEGORIES) {
+      expect(isCanonicalCategory(cat)).toBe(true);
     }
   });
 
-  it('analytics category is a valid RecipeCategory', () => {
-    const cat: RecipeCategory = 'analytics';
-    expect(cat).toBe('analytics');
+  it('rejects unknown, mixed-case, and empty values', () => {
+    expect(isCanonicalCategory('deployment')).toBe(false);
+    expect(isCanonicalCategory('Automation')).toBe(false); // case-sensitive by design
+    expect(isCanonicalCategory('')).toBe(false);
+  });
+});
+
+describe('categoryLabel', () => {
+  it('maps a canonical value to its curated display label', () => {
+    expect(categoryLabel('automation')).toBe('Automation & iPaaS');
+    expect(categoryLabel('hr_people')).toBe('HR & People');
+    expect(categoryLabel('support')).toBe('Support & ITSM');
   });
 
-  it('marketing category is a valid RecipeCategory', () => {
-    const cat: RecipeCategory = 'marketing';
-    expect(cat).toBe('marketing');
+  it('title-cases an unknown slug rather than dropping it', () => {
+    expect(categoryLabel('deployment')).toBe('Deployment');
+    expect(categoryLabel('legacy_bi_tool')).toBe('Legacy Bi Tool');
   });
 
-  it('bi category is a valid RecipeCategory', () => {
-    const cat: RecipeCategory = 'bi';
-    expect(cat).toBe('bi');
+  it('falls back to "Other" for an empty category', () => {
+    expect(categoryLabel('')).toBe('Other');
+  });
+});
+
+describe('categoryIconFor', () => {
+  it('maps canonical values to their curated icon', () => {
+    expect(categoryIconFor('automation')).toBe(Zap);
+    expect(categoryIconFor('hr_people')).toBe(CircleUser);
+    expect(categoryIconFor('support')).toBe(Server);
   });
 
-  it('data category is a valid RecipeCategory', () => {
-    const cat: RecipeCategory = 'data';
-    expect(cat).toBe('data');
-  });
-
-  it('all expected categories are present in the complete set', () => {
-    expect(ALL_EXPECTED_CATEGORIES).toContain('analytics');
-    expect(ALL_EXPECTED_CATEGORIES).toContain('marketing');
-    expect(ALL_EXPECTED_CATEGORIES).toContain('bi');
-    expect(ALL_EXPECTED_CATEGORIES).toContain('data');
-    expect(ALL_EXPECTED_CATEGORIES).toContain('automation');
-    // Guard: total count matches (prevent accidental shrinkage).
-    expect(ALL_EXPECTED_CATEGORIES.length).toBeGreaterThanOrEqual(15);
+  it('falls back to the generic Wrench icon for unknown / empty values', () => {
+    expect(categoryIconFor('deployment')).toBe(Wrench);
+    expect(categoryIconFor('')).toBe(Wrench);
   });
 });
