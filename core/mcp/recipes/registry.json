@@ -5,7 +5,7 @@
       "id": "github",
       "display_name": "GitHub",
       "description": "Search repositories, read files, manage issues + pull requests, and fetch repository metadata via GitHub's official remote MCP server. Sign in with GitHub (OAuth) — no token to paste — or supply a personal access token as a fallback.",
-      "category": "search",
+      "category": "web",
       "transport": "http",
       "url": "https://api.githubcopilot.com/mcp/",
       "auth": {
@@ -45,7 +45,7 @@
       "id": "fetch",
       "display_name": "Fetch (HTTP)",
       "description": "Generic HTTP fetch tool: the model can request a URL and read the response. No credentials required; the recipe imposes no allow-list — limit access via Cedar policy if you need a domain whitelist.",
-      "category": "fetch",
+      "category": "web",
       "command": [
         "uvx",
         "mcp-server-fetch"
@@ -72,7 +72,7 @@
       "id": "brave-search",
       "display_name": "Brave Search",
       "description": "Web and local search via the Brave Search API. Requires a Brave Search API key (free tier available).",
-      "category": "search",
+      "category": "web",
       "command": [
         "npx",
         "-y",
@@ -107,7 +107,7 @@
       "id": "sqlite",
       "display_name": "SQLite",
       "description": "Read and write a local SQLite database. The model gets read_query, write_query, create_table, list_tables, and describe_table tools scoped to the database file you point it at.",
-      "category": "filesystem",
+      "category": "files",
       "command": [
         "uvx",
         "mcp-server-sqlite",
@@ -145,7 +145,7 @@
       "id": "postgres",
       "display_name": "PostgreSQL",
       "description": "Read-only access to a PostgreSQL database. The model gets query and schema-introspection tools against the connection string you supply.",
-      "category": "filesystem",
+      "category": "files",
       "command": [
         "npx",
         "-y",
@@ -331,7 +331,7 @@
       "id": "time",
       "display_name": "Time",
       "description": "Time-zone aware utilities: get the current time in a given IANA timezone, convert times between zones. No credentials required.",
-      "category": "fetch",
+      "category": "web",
       "command": [
         "uvx",
         "mcp-server-time"
@@ -358,7 +358,7 @@
       "id": "git",
       "display_name": "Git",
       "description": "Read git history, diff, blame, and branch metadata for a single repository checkout. The recipe is read-only by default and is scoped to the repo path you select.",
-      "category": "filesystem",
+      "category": "files",
       "command": [
         "uvx",
         "mcp-server-git",
@@ -396,7 +396,7 @@
       "id": "puppeteer",
       "display_name": "Puppeteer",
       "description": "Headless Chrome browser automation: navigate, screenshot, click, fill forms, evaluate JavaScript. The first run downloads a Chromium binary (~170 MB) — be patient.",
-      "category": "fetch",
+      "category": "web",
       "command": [
         "npx",
         "-y",
@@ -424,7 +424,7 @@
       "id": "playwright",
       "display_name": "Playwright",
       "description": "Cross-browser automation (Chromium, Firefox, WebKit): navigate, screenshot, click, fill forms, evaluate JavaScript. The first run downloads browser binaries (~300 MB total) — be patient.",
-      "category": "fetch",
+      "category": "web",
       "command": [
         "npx",
         "-y",
@@ -1015,7 +1015,7 @@
       "id": "supabase",
       "display_name": "Supabase",
       "description": "Query databases, manage tables, run migrations, and access Supabase projects. Sign in with Supabase (OAuth) — no token to paste. For CI/headless environments, supply a personal access token as a fallback.",
-      "category": "dev",
+      "category": "developer",
       "transport": "http",
       "url": "https://mcp.supabase.com/mcp",
       "auth": {
@@ -1050,7 +1050,7 @@
       "id": "gitlab",
       "display_name": "GitLab",
       "description": "Search repositories, read files, manage merge requests and issues, and access GitLab projects. Sign in with GitLab (OAuth) — no token to paste — or supply a personal access token as a fallback.",
-      "category": "dev",
+      "category": "developer",
       "transport": "http",
       "url": "https://gitlab.com/api/v4/mcp",
       "auth": {
@@ -1089,7 +1089,7 @@
       "id": "google-maps",
       "display_name": "Google Maps",
       "description": "Geocode addresses, get directions, search for places, and calculate distances via the Google Maps APIs. Requires a Google Maps API key with the relevant APIs enabled.",
-      "category": "fetch",
+      "category": "web",
       "command": [
         "npx",
         "-y",
@@ -1124,7 +1124,7 @@
       "id": "mysql",
       "display_name": "MySQL",
       "description": "Query a MySQL database: list tables, describe schemas, and run read queries. Write operations (INSERT/UPDATE/DELETE) are disabled by default and can be enabled via optional env vars.",
-      "category": "filesystem",
+      "category": "files",
       "command": [
         "npx",
         "-y",
@@ -1201,7 +1201,7 @@
       "id": "mongodb",
       "display_name": "MongoDB",
       "description": "Query MongoDB databases, inspect schemas, and run aggregation pipelines. Supports both local MongoDB and MongoDB Atlas. Supply a connection string to connect — Atlas API credentials are optional for Atlas management tools.",
-      "category": "filesystem",
+      "category": "files",
       "command": [
         "npx",
         "-y",
@@ -1254,7 +1254,7 @@
       "id": "redis",
       "display_name": "Redis",
       "description": "Read and write Redis keys, lists, hashes, sets, and streams. Supports local Redis, Redis Cloud, Upstash, and Azure Cache for Redis. Provide a connection URL to connect.",
-      "category": "filesystem",
+      "category": "files",
       "command": [
         "uvx",
         "--from",
@@ -1846,7 +1846,7 @@
       "id": "servicenow",
       "display_name": "ServiceNow",
       "description": "Query ServiceNow incidents, change requests, users, and CMDB records. Read-only by default. Requires your ServiceNow instance URL and credentials (OAuth client ID + secret, or API key, or basic auth).",
-      "category": "itsm",
+      "category": "support",
       "command": [
         "uvx",
         "servicenow-mcp"
@@ -1904,7 +1904,7 @@
       "id": "jamf-docs",
       "display_name": "Jamf Developer Docs",
       "description": "Search Jamf developer documentation, API references, and code examples. No authentication required. Note: this is the Jamf documentation MCP only — not the Jamf Pro management API.",
-      "category": "itsm",
+      "category": "support",
       "transport": "http",
       "url": "https://developer.jamf.com/mcp",
       "primary_auth": "none",
@@ -1929,7 +1929,7 @@
       "id": "mercury",
       "display_name": "Mercury",
       "description": "Query Mercury bank accounts, transactions, and financial data — read-only, no transactions initiated. Sign in with Mercury (DCR OAuth — no token to paste).",
-      "category": "finance_accounting",
+      "category": "finance",
       "transport": "http",
       "url": "https://mcp.mercury.com/mcp",
       "auth": {
@@ -1960,7 +1960,7 @@
       "id": "ramp",
       "display_name": "Ramp",
       "description": "Browse Ramp cards, spend data, vendors, bills, and corporate travel — read-only, no transactions initiated. Sign in with Ramp (DCR OAuth — no token to paste).",
-      "category": "finance_accounting",
+      "category": "finance",
       "transport": "http",
       "url": "https://mcp.ramp.com/mcp",
       "auth": {
@@ -2152,7 +2152,7 @@
       "id": "xero",
       "display_name": "Xero",
       "description": "Read accounting transactions, contacts, and settings from Xero — read-only, no transactions initiated. Uses Xero's official npm MCP package. Requires a Kameas Xero OAuth app (register at developer.xero.com).",
-      "category": "finance_accounting",
+      "category": "finance",
       "command": [
         "npx",
         "-y",
@@ -2240,7 +2240,7 @@
       "id": "quickbooks",
       "display_name": "QuickBooks Online",
       "description": "Read accounting data from QuickBooks Online — read-only, no transactions initiated. Requires a Kameas Intuit OAuth app (register at developer.intuit.com).",
-      "category": "finance_accounting",
+      "category": "finance",
       "command": [
         "npx",
         "-y",
@@ -2281,7 +2281,7 @@
       "id": "brex",
       "display_name": "Brex",
       "description": "Read Brex card expenses, transactions, and account data — read-only, no transactions initiated. Uses a Brex API token (no Kameas app registration needed — generate a token at developer.brex.com).",
-      "category": "finance_accounting",
+      "category": "finance",
       "command": [
         "npx",
         "-y",
@@ -2392,7 +2392,7 @@
       "id": "billdotcom",
       "display_name": "Bill.com",
       "description": "Read bills, invoices, and vendor data from Bill.com — read-only, no transactions initiated, no payment-initiation tools. Uses Bill.com Spend and Expense bearer token or legacy session-key auth.",
-      "category": "finance_accounting",
+      "category": "finance",
       "command": [
         "npx",
         "-y",
@@ -2439,7 +2439,7 @@
       "id": "netsuite",
       "display_name": "NetSuite (Enterprise)",
       "description": "Enterprise — NetSuite uses per-account Token-Based Authentication (TBA) or OAuth2, both requiring per-tenant setup. No community MCP package confirmed at research time. For quick read-only access to NetSuite data, connect via Zapier or Workato in the Automation section.",
-      "category": "finance_accounting",
+      "category": "finance",
       "command": [
         "npx",
         "-y",
@@ -3034,7 +3034,7 @@
       "id": "google-drive",
       "display_name": "Google Drive",
       "description": "Search, read, and create files in Google Drive. Uses drive.file scope (access limited to files created by this app) — upgrade to full drive.readonly access requires Google security review (CASA). Requires one-time Google sign-in (reuses same Google Cloud OAuth client as Gmail and Calendar).",
-      "category": "filesystem",
+      "category": "files",
       "command": [
         "npx",
         "-y",
@@ -3357,7 +3357,7 @@
       "id": "mixpanel",
       "display_name": "Mixpanel",
       "description": "Query Mixpanel analytics: events, funnels, retention, segmentation, insights, cohorts, and business context via Mixpanel's official remote MCP server. Sign in with Mixpanel (OAuth DCR — no token paste, no app registration required). US region default; EU/IN URL configurable.",
-      "category": "analytics",
+      "category": "marketing",
       "transport": "http",
       "url": "https://mcp.mixpanel.com/mcp",
       "auth": {
@@ -3411,7 +3411,7 @@
       "id": "amplitude",
       "display_name": "Amplitude",
       "description": "Query Amplitude analytics: events, funnels, user behavior, and product insights via Amplitude's official remote MCP server. Sign in with Amplitude (OAuth DCR — no token paste, no app registration required). US region default; EU region configurable.",
-      "category": "analytics",
+      "category": "marketing",
       "transport": "http",
       "url": "https://mcp.amplitude.com/mcp",
       "auth": {
@@ -3531,7 +3531,7 @@
       "id": "tableau",
       "display_name": "Tableau",
       "description": "Query Tableau Cloud: browse datasources, workbooks, views, Pulse insights, and site content via Tableau's official remote MCP server. Sign in with Tableau (OAuth PKCE — requires Kameas Connected App registration). Read-only access.",
-      "category": "bi",
+      "category": "data",
       "transport": "http",
       "url": "https://mcp.tableau.com",
       "auth": {
@@ -3806,7 +3806,7 @@
       "id": "metabase",
       "display_name": "Metabase",
       "description": "Query Metabase: browse questions, dashboards, databases, and run queries via community MCP server. Works with self-hosted and Metabase Cloud instances. API key authentication recommended (Metabase v0.47+).",
-      "category": "bi",
+      "category": "data",
       "command": [
         "uvx",
         "metabase-mcp"
@@ -3858,7 +3858,7 @@
       "id": "looker",
       "display_name": "Looker",
       "description": "Query Looker: browse explores, run LookML queries, access dashboards and looks via community MCP server. Uses Looker API3 key (client_id + client_secret). Works with self-hosted Looker and Looker Cloud.",
-      "category": "bi",
+      "category": "data",
       "command": [
         "uvx",
         "looker-mcp"
@@ -3904,7 +3904,7 @@
       "id": "ga4",
       "display_name": "Google Analytics 4 (GA4)",
       "description": "Query GA4 analytics: dimensions, metrics, reports, and real-time data via community MCP server. Uses Google service account credentials (Application Default Credentials or JSON key file). No official Google remote MCP server for GA4.",
-      "category": "analytics",
+      "category": "marketing",
       "command": [
         "uvx",
         "google-analytics-mcp"

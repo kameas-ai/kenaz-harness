@@ -250,8 +250,8 @@ func TestRegistryGitHubRecipe(t *testing.T) {
 	if !ok {
 		t.Fatal("github not in registry")
 	}
-	if r.Category != "search" {
-		t.Errorf("Category = %q, want search", r.Category)
+	if r.Category != "web" {
+		t.Errorf("Category = %q, want web", r.Category)
 	}
 	// GitHub now points at the official remote MCP server over HTTP and signs
 	// in via OAuth (no token to paste); the PAT env key is an optional fallback.
@@ -281,8 +281,8 @@ func TestRegistryFetchRecipe(t *testing.T) {
 	if !ok {
 		t.Fatal("fetch not in registry")
 	}
-	if r.Category != "fetch" {
-		t.Errorf("Category = %q, want fetch", r.Category)
+	if r.Category != "web" {
+		t.Errorf("Category = %q, want web", r.Category)
 	}
 	if len(r.EnvKeys) != 0 {
 		t.Errorf("fetch should have no env keys, got %d", len(r.EnvKeys))
@@ -295,8 +295,8 @@ func TestRegistryBraveSearchRecipe(t *testing.T) {
 	if !ok {
 		t.Fatal("brave-search not in registry")
 	}
-	if r.Category != "search" {
-		t.Errorf("Category = %q, want search", r.Category)
+	if r.Category != "web" {
+		t.Errorf("Category = %q, want web", r.Category)
 	}
 	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "BRAVE_API_KEY" {
 		t.Errorf("EnvKeys = %+v, want one entry named BRAVE_API_KEY", r.EnvKeys)
@@ -309,8 +309,8 @@ func TestRegistrySQLiteRecipe(t *testing.T) {
 	if !ok {
 		t.Fatal("sqlite not in registry")
 	}
-	if r.Category != "filesystem" {
-		t.Errorf("Category = %q, want filesystem", r.Category)
+	if r.Category != "files" {
+		t.Errorf("Category = %q, want files", r.Category)
 	}
 	if len(r.ConfigOptions) != 1 || r.ConfigOptions[0].Name != "db_path" {
 		t.Errorf("ConfigOptions = %+v, want one entry named db_path", r.ConfigOptions)
@@ -326,8 +326,8 @@ func TestRegistryPostgresRecipe(t *testing.T) {
 	if !ok {
 		t.Fatal("postgres not in registry")
 	}
-	if r.Category != "filesystem" {
-		t.Errorf("Category = %q, want filesystem", r.Category)
+	if r.Category != "files" {
+		t.Errorf("Category = %q, want files", r.Category)
 	}
 	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "POSTGRES_CONNECTION_STRING" {
 		t.Errorf("EnvKeys = %+v, want one entry named POSTGRES_CONNECTION_STRING", r.EnvKeys)
@@ -404,8 +404,8 @@ func TestRegistryGitRecipe(t *testing.T) {
 	if !ok {
 		t.Fatal("git not in registry")
 	}
-	if r.Category != "filesystem" {
-		t.Errorf("Category = %q, want filesystem", r.Category)
+	if r.Category != "files" {
+		t.Errorf("Category = %q, want files", r.Category)
 	}
 	if len(r.ConfigOptions) != 1 || r.ConfigOptions[0].Name != "repo_path" {
 		t.Errorf("ConfigOptions = %+v, want one entry named repo_path", r.ConfigOptions)
@@ -1010,8 +1010,8 @@ func TestRecipe_Redis(t *testing.T) {
 	if len(r.Command) == 0 || r.Command[0] != "uvx" {
 		t.Errorf("Command = %v, want uvx-based command", r.Command)
 	}
-	if r.Category != "filesystem" {
-		t.Errorf("Category = %q, want filesystem", r.Category)
+	if r.Category != "files" {
+		t.Errorf("Category = %q, want files", r.Category)
 	}
 	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "REDIS_URL" {
 		t.Fatalf("EnvKeys = %+v, want one entry named REDIS_URL", r.EnvKeys)
@@ -1042,8 +1042,8 @@ func TestRecipe_MongoDB(t *testing.T) {
 	if len(r.Command) == 0 || r.Command[0] != "npx" {
 		t.Errorf("Command = %v, want npx-based command", r.Command)
 	}
-	if r.Category != "filesystem" {
-		t.Errorf("Category = %q, want filesystem", r.Category)
+	if r.Category != "files" {
+		t.Errorf("Category = %q, want files", r.Category)
 	}
 	envNames := map[string]bool{}
 	requiredCount := 0
@@ -1091,8 +1091,8 @@ func TestRecipe_MySQL(t *testing.T) {
 	if len(r.Command) == 0 || r.Command[0] != "npx" {
 		t.Errorf("Command = %v, want npx-based command", r.Command)
 	}
-	if r.Category != "filesystem" {
-		t.Errorf("Category = %q, want filesystem", r.Category)
+	if r.Category != "files" {
+		t.Errorf("Category = %q, want files", r.Category)
 	}
 	envNames := map[string]bool{}
 	for _, e := range r.EnvKeys {
@@ -1139,8 +1139,8 @@ func TestRecipe_GoogleMaps(t *testing.T) {
 	if len(r.Command) == 0 || r.Command[0] != "npx" {
 		t.Errorf("Command = %v, want npx-based command", r.Command)
 	}
-	if r.Category != "fetch" {
-		t.Errorf("Category = %q, want fetch", r.Category)
+	if r.Category != "web" {
+		t.Errorf("Category = %q, want web", r.Category)
 	}
 	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "GOOGLE_MAPS_API_KEY" {
 		t.Fatalf("EnvKeys = %+v, want one entry named GOOGLE_MAPS_API_KEY", r.EnvKeys)
@@ -1193,8 +1193,8 @@ func TestRecipe_GitLab(t *testing.T) {
 	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
 		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
 	}
-	if r.Category != "dev" {
-		t.Errorf("Category = %q, want dev", r.Category)
+	if r.Category != "developer" {
+		t.Errorf("Category = %q, want developer", r.Category)
 	}
 	// PAT fallback env key present but optional.
 	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "GITLAB_PERSONAL_ACCESS_TOKEN" {
@@ -1233,8 +1233,8 @@ func TestRecipe_Supabase(t *testing.T) {
 	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
 		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
 	}
-	if r.Category != "dev" {
-		t.Errorf("Category = %q, want dev", r.Category)
+	if r.Category != "developer" {
+		t.Errorf("Category = %q, want developer", r.Category)
 	}
 	// PAT fallback env key present but optional.
 	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "SUPABASE_ACCESS_TOKEN" {
@@ -1594,8 +1594,8 @@ func TestRecipe_JamfDocs(t *testing.T) {
 	if len(r.EnvKeys) != 0 {
 		t.Errorf("EnvKeys should be empty for no-auth recipe, got %+v", r.EnvKeys)
 	}
-	if r.Category != "itsm" {
-		t.Errorf("Category = %q, want itsm", r.Category)
+	if r.Category != "support" {
+		t.Errorf("Category = %q, want support", r.Category)
 	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)
@@ -1614,8 +1614,8 @@ func TestRecipe_ServiceNow(t *testing.T) {
 	if r.URL != "" {
 		t.Errorf("ServiceNow is stdio — URL should be empty, got %q", r.URL)
 	}
-	if r.Category != "itsm" {
-		t.Errorf("Category = %q, want itsm", r.Category)
+	if r.Category != "support" {
+		t.Errorf("Category = %q, want support", r.Category)
 	}
 	// SERVICENOW_INSTANCE_URL must be present (per-tenant required config).
 	envNames := map[string]bool{}
@@ -1836,8 +1836,8 @@ func TestRecipe_Mercury(t *testing.T) {
 	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
 		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
 	}
-	if r.Category != "finance_accounting" {
-		t.Errorf("Category = %q, want finance_accounting", r.Category)
+	if r.Category != "finance" {
+		t.Errorf("Category = %q, want finance", r.Category)
 	}
 	// No owner app registration needed (zero-app DCR).
 	for _, k := range r.EnvKeys {
@@ -1876,8 +1876,8 @@ func TestRecipe_Ramp(t *testing.T) {
 	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
 		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
 	}
-	if r.Category != "finance_accounting" {
-		t.Errorf("Category = %q, want finance_accounting", r.Category)
+	if r.Category != "finance" {
+		t.Errorf("Category = %q, want finance", r.Category)
 	}
 	// FR-003: CRITICAL — enumerate every forbidden write/money-movement scope.
 	forbiddenRampScopes := []string{
@@ -2077,8 +2077,8 @@ func TestRecipe_Xero(t *testing.T) {
 	if !ok {
 		t.Fatal("xero not in registry")
 	}
-	if r.Category != "finance_accounting" {
-		t.Errorf("Category = %q, want finance_accounting", r.Category)
+	if r.Category != "finance" {
+		t.Errorf("Category = %q, want finance", r.Category)
 	}
 	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
 		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
@@ -2146,8 +2146,8 @@ func TestRecipe_QuickBooks(t *testing.T) {
 	if !ok {
 		t.Fatal("quickbooks not in registry")
 	}
-	if r.Category != "finance_accounting" {
-		t.Errorf("Category = %q, want finance_accounting", r.Category)
+	if r.Category != "finance" {
+		t.Errorf("Category = %q, want finance", r.Category)
 	}
 	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
 		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
@@ -2177,8 +2177,8 @@ func TestRecipe_Brex(t *testing.T) {
 	if !ok {
 		t.Fatal("brex not in registry")
 	}
-	if r.Category != "finance_accounting" {
-		t.Errorf("Category = %q, want finance_accounting", r.Category)
+	if r.Category != "finance" {
+		t.Errorf("Category = %q, want finance", r.Category)
 	}
 	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
 		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
@@ -2272,8 +2272,8 @@ func TestRecipe_BillDotCom(t *testing.T) {
 	if !ok {
 		t.Fatal("billdotcom not in registry")
 	}
-	if r.Category != "finance_accounting" {
-		t.Errorf("Category = %q, want finance_accounting", r.Category)
+	if r.Category != "finance" {
+		t.Errorf("Category = %q, want finance", r.Category)
 	}
 	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
 		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
@@ -2296,8 +2296,8 @@ func TestRecipe_NetSuite(t *testing.T) {
 	if !ok {
 		t.Fatal("netsuite not in registry")
 	}
-	if r.Category != "finance_accounting" {
-		t.Errorf("Category = %q, want finance_accounting", r.Category)
+	if r.Category != "finance" {
+		t.Errorf("Category = %q, want finance", r.Category)
 	}
 	// Must have netsuite_account_id config option (per-account URL config required).
 	hasAccountID := false
@@ -2374,8 +2374,8 @@ func TestHRFinanceCategoryGroups(t *testing.T) {
 			t.Errorf("finance_accounting connector %q not found in registry", id)
 			continue
 		}
-		if r.Category != "finance_accounting" {
-			t.Errorf("recipe %q: Category = %q, want finance_accounting", id, r.Category)
+		if r.Category != "finance" {
+			t.Errorf("recipe %q: Category = %q, want finance", id, r.Category)
 		}
 		// FR-003: finance connector descriptions must include read-only safety copy.
 		if !strings.Contains(r.Description, "read-only") {
@@ -2872,8 +2872,8 @@ func TestRegistryGoogleDriveRecipe(t *testing.T) {
 	if !ok {
 		t.Fatal("google-drive not in registry")
 	}
-	if r.Category != "filesystem" {
-		t.Errorf("Category = %q, want filesystem", r.Category)
+	if r.Category != "files" {
+		t.Errorf("Category = %q, want files", r.Category)
 	}
 	// stdio recipe — no transport field (empty string = stdio)
 	if r.Transport != "" {
@@ -3243,8 +3243,8 @@ func TestRecipe_Mixpanel(t *testing.T) {
 	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
 		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
 	}
-	if r.Category != "analytics" {
-		t.Errorf("Category = %q, want analytics", r.Category)
+	if r.Category != "marketing" {
+		t.Errorf("Category = %q, want marketing", r.Category)
 	}
 	if len(r.EnvKeys) != 0 {
 		t.Errorf("mixpanel should have no env keys (DCR zero-app), got %d", len(r.EnvKeys))
@@ -3285,8 +3285,8 @@ func TestRecipe_Amplitude(t *testing.T) {
 	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthDCR {
 		t.Errorf("PrimaryAuth = %q, want browser_oauth_dcr", r.PrimaryAuth)
 	}
-	if r.Category != "analytics" {
-		t.Errorf("Category = %q, want analytics", r.Category)
+	if r.Category != "marketing" {
+		t.Errorf("Category = %q, want marketing", r.Category)
 	}
 	if len(r.EnvKeys) != 0 {
 		t.Errorf("amplitude should have no env keys (DCR zero-app), got %d", len(r.EnvKeys))
@@ -3396,8 +3396,8 @@ func TestRecipe_Tableau(t *testing.T) {
 	if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthPKCE {
 		t.Errorf("PrimaryAuth = %q, want browser_oauth_pkce", r.PrimaryAuth)
 	}
-	if r.Category != "bi" {
-		t.Errorf("Category = %q, want bi", r.Category)
+	if r.Category != "data" {
+		t.Errorf("Category = %q, want data", r.Category)
 	}
 	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "KAMEAS_TABLEAU_OAUTH_CLIENT_ID" {
 		t.Errorf("EnvKeys = %+v, want one entry named KAMEAS_TABLEAU_OAUTH_CLIENT_ID", r.EnvKeys)
@@ -3599,8 +3599,8 @@ func TestRecipe_Metabase(t *testing.T) {
 	if !envNames["METABASE_API_KEY"] {
 		t.Errorf("EnvKeys = %+v, want METABASE_API_KEY", r.EnvKeys)
 	}
-	if r.Category != "bi" {
-		t.Errorf("Category = %q, want bi", r.Category)
+	if r.Category != "data" {
+		t.Errorf("Category = %q, want data", r.Category)
 	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)
@@ -3635,8 +3635,8 @@ func TestRecipe_Looker(t *testing.T) {
 	if !envNames["LOOKER_CLIENT_SECRET"] {
 		t.Errorf("EnvKeys = %+v, want LOOKER_CLIENT_SECRET", r.EnvKeys)
 	}
-	if r.Category != "bi" {
-		t.Errorf("Category = %q, want bi", r.Category)
+	if r.Category != "data" {
+		t.Errorf("Category = %q, want data", r.Category)
 	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)
@@ -3668,8 +3668,8 @@ func TestRecipe_GA4(t *testing.T) {
 	if !envNames["GA4_PROPERTY_ID"] {
 		t.Errorf("EnvKeys = %+v, want GA4_PROPERTY_ID", r.EnvKeys)
 	}
-	if r.Category != "analytics" {
-		t.Errorf("Category = %q, want analytics", r.Category)
+	if r.Category != "marketing" {
+		t.Errorf("Category = %q, want marketing", r.Category)
 	}
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)
@@ -3870,32 +3870,30 @@ func TestRecipe_Stripe(t *testing.T) {
 	}
 }
 
+// canonicalCategories is the FR-005 taxonomy every registry recipe's
+// Category must fall into. 16 buckets, kept in sync with the mapping
+// documented on Recipe.Category (core/mcp/recipes/recipes.go).
+var canonicalCategories = map[string]bool{
+	"automation": true, "communication": true, "crm": true, "data": true,
+	"design": true, "developer": true, "ecommerce": true, "files": true,
+	"finance": true, "hr_people": true, "marketing": true, "observability": true,
+	"productivity": true, "security": true, "support": true, "web": true,
+}
+
+// TestRecipe_CatalogCategories enforces the canonical category taxonomy
+// (FR-005) across every recipe in the registry, not just a spot-checked
+// subset — this is what stops a future connector pack from reintroducing
+// a drifted category name (e.g. "filesystem" or "itsm") that the Tools
+// catalog UI wouldn't know how to bucket.
 func TestRecipe_CatalogCategories(t *testing.T) {
-	validCategories := map[string]bool{
-		"crm": true, "design": true, "ecommerce": true, "finance": true,
-		"files": true, "productivity": true, "automation": true, "communication": true,
-		"search": true, "filesystem": true, "fetch": true, "memory": true,
-		"developer": true, "deployment": true,
-	}
-	packIDs := []string{
-		"airtable", "canva", "figma", "miro", "dropbox",
-		"paypal", "square", "hubspot", "box", "salesforce",
-		"plaid", "bigcommerce-docs", "shopify", "woocommerce",
-		"pipedrive", "zoho-crm",
-	}
 	cat := recipes.Registry()
-	for _, id := range packIDs {
-		r, ok := cat.Get(id)
-		if !ok {
-			t.Errorf("recipe %q not found in registry", id)
-			continue
-		}
+	for _, r := range cat.List() {
 		if r.Category == "" {
-			t.Errorf("recipe %q has empty category", id)
+			t.Errorf("recipe %q has empty category", r.ID)
 			continue
 		}
-		if !validCategories[r.Category] {
-			t.Errorf("recipe %q has unrecognised category %q", id, r.Category)
+		if !canonicalCategories[r.Category] {
+			t.Errorf("recipe %q has non-canonical category %q; want one of the 16-bucket taxonomy", r.ID, r.Category)
 		}
 	}
 }
