@@ -1,25 +1,217 @@
 name: tag-on-merge
 
-# Cuts a SemVer tag + GitHub Release on every release-worthy conventional-commit
-# merge to main, then dispatches release.yml so the signed cross-platform
-# binaries build and publish to the prod downloads CDN.
+# NOTE (2026-07-24): reverted from the shared reusable workflow
+# (kameas-ai/.github/.github/workflows/tag-on-merge.yml, adopted in #247) back
+# to this inline implementation. The reusable caller failed at startup here with
+# `referenced_workflows: []` — GitHub could not resolve the private reusable
+# workflow for THIS repo — while kenaz-workbench's byte-identical caller resolved
+# and tagged fine. Every API-visible setting (Actions permissions, .github access
+# level, caller permissions) matches workbench, so the block is a harness-specific
+# access quirk to the private .github repo that isn't visible via the API. Two
+# merges (#247, v0.45.1) shipped untagged as a result. Re-adopt the reusable once
+# harness's access to kameas-ai/.github reusable workflows is fixed at the org/
+# repo-admin level. Until then this inline copy (the version that tagged through
+# v0.45.0) is the source of truth; keep it in sync with the shared one.
 #
-# The logic now lives in the shared reusable workflow so every desktop product
-# (kenaz-harness, kenaz-workbench, …) stays in lockstep. Previously this file
-# carried the full inline implementation; it was extracted verbatim into
-# kameas-ai/.github/.github/workflows/tag-on-merge.yml. Harness runs on the
-# shared self-hosted ci-fast pool, which is the reusable workflow's default, so
-# no inputs are needed.
+# Immediately cuts a SemVer tag + GitHub Release on every push to main
+# whose commit subject is a release-worthy conventional commit.
+#
+# Mapping (squash-merged PR title becomes the commit subject verbatim):
+#   feat(scope)?:        → minor (0.x.0)
+#   fix|perf|revert|deps → patch (0.x.y)
+#   feat!: / BREAKING CHANGE in body → major, capped to minor while < 1.0.0
+#   docs|chore|ci|style|refactor|test|build → no release
+#
+# Source of truth: git tags. The next version = bump(latest `vX.Y.Z` tag).
+# No CHANGELOG file maintained — release notes are GitHub's auto-generated
+# "What's Changed" body (groups by PR + contributor).
+#
+# After tagging, dispatches release.yml against the new tag so the cross-
+# platform signed binaries attach to the proper release. (GITHUB_TOKEN-issued
+# release events do not chain — explicit workflow_dispatch is required.)
 
 on:
   push:
     branches: [main]
 
 permissions:
-  contents: write
-  actions: write
+  contents: read
+
+concurrency:
+  group: tag-on-merge
+  cancel-in-progress: false
 
 jobs:
-  tag-on-merge:
-    uses: kameas-ai/.github/.github/workflows/tag-on-merge.yml@main
-    secrets: inherit
+  bump-and-release:
+    name: Bump version + cut release
+    runs-on: [self-hosted, Linux, ARM64, ci-fast]
+    permissions:
+      contents: write     # tag + release
+      actions: write      # workflow_dispatch
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          fetch-depth: 0  # tags + history needed to find the latest tag
+
+      - name: classify commit + compute next version
+        id: ver
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          SUBJECT=$(git log -1 --pretty=%s)
+          BODY=$(git log -1 --pretty=%B | tail -n +3)
+          echo "Commit subject: $SUBJECT"
+
+          # Skip self-tagging-bot commits to avoid loops.
+          AUTHOR=$(git log -1 --pretty=%ae)
+          if [[ "$AUTHOR" == *"github-actions[bot]"* ]]; then
+            echo "Bot commit; skipping."
+            echo "bump=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Parse conventional-commit prefix:
+          #   <type>[(scope)][!]: <subject>
+          # Hold the regex in a variable — bash's `[[ =~ ]]` parser chokes
+          # on nested `[[:space:]]` POSIX classes when the regex is inline
+          # (the `[[` is misread as a nested test expression).
+          re='^([a-z]+)(\([^)]+\))?(!?):[[:space:]]'
+          if [[ "$SUBJECT" =~ $re ]]; then
+            TYPE="${BASH_REMATCH[1]}"
+            BANG="${BASH_REMATCH[3]}"
+          else
+            echo "Subject is not a conventional commit; skipping release."
+            echo "bump=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Detect breaking change: trailing `!` after type/scope, or
+          # BREAKING CHANGE / BREAKING-CHANGE token in the commit body.
+          BREAKING=false
+          if [ -n "$BANG" ] || echo "$BODY" | grep -qE '^BREAKING[ -]CHANGE:'; then
+            BREAKING=true
+          fi
+
+          # Map type → bump.
+          case "$TYPE" in
+            feat)                 BUMP="minor" ;;
+            fix|perf|revert|deps) BUMP="patch" ;;
+            *)                    BUMP="none"  ;;
+          esac
+          if [ "$BREAKING" = true ]; then
+            BUMP="major"
+          fi
+
+          if [ "$BUMP" = "none" ]; then
+            echo "Type '$TYPE' does not trigger a release."
+            echo "bump=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Latest semver tag (default v0.0.0 if none).
+          LAST=$(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)
+          LAST=${LAST:-v0.0.0}
+          BASE=${LAST#v}
+          IFS=. read -r MAJ MIN PAT <<<"$BASE"
+
+          # Pre-1.0 cap: breaking bumps minor instead of major while at 0.x.
+          if [ "$MAJ" = "0" ] && [ "$BUMP" = "major" ]; then
+            BUMP="minor"
+            echo "::notice::Pre-1.0 cap — breaking change bumps minor instead of major"
+          fi
+
+          case "$BUMP" in
+            major) MAJ=$((MAJ+1)); MIN=0; PAT=0 ;;
+            minor) MIN=$((MIN+1)); PAT=0 ;;
+            patch) PAT=$((PAT+1)) ;;
+          esac
+          NEXT="v${MAJ}.${MIN}.${PAT}"
+
+          echo "Last tag: $LAST → next: $NEXT (bump=$BUMP, breaking=$BREAKING)"
+          echo "bump=$BUMP" >> "$GITHUB_OUTPUT"
+          echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "previous_tag=$LAST" >> "$GITHUB_OUTPUT"
+          {
+            echo "## tag-on-merge"
+            echo ""
+            echo "- subject: \`$SUBJECT\`"
+            echo "- type: \`$TYPE\` (breaking=$BREAKING)"
+            echo "- bump: \`$BUMP\`"
+            echo "- $LAST → **$NEXT**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Workaround: self-hosted ARM64 ci-fast runner image lacks the gh CLI,
+      # which the `generate release notes` and `tag + release` steps below
+      # both rely on. Install on demand. Once kameas-infra bakes gh into the
+      # runner AMI, this step can be deleted (mirrors release.yml:807).
+      - name: install gh CLI if missing
+        if: steps.ver.outputs.bump != 'none'
+        run: |
+          set -euo pipefail
+          if command -v gh >/dev/null 2>&1; then
+            echo "gh already installed: $(gh --version | head -n1)"
+            exit 0
+          fi
+          GH_VERSION="2.62.0"
+          ARCH="$(uname -m)"
+          case "$ARCH" in
+            x86_64) ARCH=amd64 ;;
+            aarch64|arm64) ARCH=arm64 ;;
+            *) echo "::error::unsupported arch: $ARCH"; exit 1 ;;
+          esac
+          curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${ARCH}.tar.gz" -o /tmp/gh.tgz
+          tar -xzf /tmp/gh.tgz -C /tmp
+          sudo install -m 755 "/tmp/gh_${GH_VERSION}_linux_${ARCH}/bin/gh" /usr/local/bin/gh
+          gh --version | head -n1
+
+      - name: generate release notes
+        if: steps.ver.outputs.bump != 'none'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG:  ${{ steps.ver.outputs.tag }}
+          PREV: ${{ steps.ver.outputs.previous_tag }}
+        run: |
+          set -euo pipefail
+          # GitHub auto-generates "What's Changed" notes from PRs since
+          # PREV. Falls back to a stub if PREV is the v0.0.0 sentinel
+          # (no prior tag yet).
+          if [ "$PREV" = "v0.0.0" ] && ! git rev-parse "$PREV" >/dev/null 2>&1; then
+            echo "Initial release $TAG." > notes.md
+          else
+            gh api -X POST repos/$GITHUB_REPOSITORY/releases/generate-notes \
+              -f tag_name="$TAG" \
+              -f target_commitish="$GITHUB_SHA" \
+              -f previous_tag_name="$PREV" \
+              --jq .body > notes.md \
+              || echo "Automated release for $TAG." > notes.md
+          fi
+
+      - name: tag + release
+        if: steps.ver.outputs.bump != 'none'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file notes.md \
+            --target "$GITHUB_SHA"
+
+      - name: dispatch release.yml for binary build
+        if: steps.ver.outputs.bump != 'none'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh workflow run release.yml \
+            -R "$GITHUB_REPOSITORY" \
+            --ref "$TAG" \
+            -f version="$TAG"
+          echo "Dispatched release.yml for $TAG"
