@@ -69,6 +69,9 @@ function clientWithRecipes(
         forgetKey: vi.fn(),
         status: vi.fn(),
         config: vi.fn(async () => ({})),
+        // The install modal probes prerequisites on mount; stub it so the
+        // modal renders when a configurable recipe opens it.
+        checkPrereqs: vi.fn(async () => []),
       },
     } as unknown as HarnessClient['tools'],
     ...extra,
@@ -358,6 +361,85 @@ describe('RegistryTab — long-tail affordance', () => {
     await w.find('[data-testid="registry-add-custom"]').trigger('click');
 
     expect(w.emitted('switch-tab')).toEqual([['custom']]);
+  });
+});
+
+// ── Install action ─────────────────────────────────────────────────────
+
+describe('RegistryTab — install action', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /** Pull the install mock off the seed so calls can be asserted directly. */
+  function installMock(client: Partial<HarnessClient>) {
+    return (client.tools as unknown as {
+      recipes: { install: ReturnType<typeof vi.fn> };
+    }).recipes.install;
+  }
+
+  it('installs a zero-config recipe directly and emits installed', async () => {
+    // Default recipe: no envKeys, no configOptions, no warning → one click.
+    const client = clientWithRecipes([
+      makeListing(makeRecipe('fetch', { category: 'web' })),
+    ]);
+    const install = installMock(client);
+    const w = mountRegistryTab(client);
+    await flushPromises();
+
+    await w.find('[data-testid="registry-install-fetch"]').trigger('click');
+    await flushPromises();
+
+    // Installed with empty env + config maps (no configuration to collect).
+    expect(install).toHaveBeenCalledTimes(1);
+    expect(install).toHaveBeenCalledWith('fetch', {}, {});
+    expect(w.emitted('installed')).toEqual([[]]);
+    // No intermediate config dialog for a zero-config recipe.
+    expect(w.find('[data-testid="recipe-key-prompt-modal"]').exists()).toBe(false);
+  });
+
+  it('opens the config modal (not a direct install) for a recipe with env keys', async () => {
+    const client = clientWithRecipes([
+      makeListing(
+        makeRecipe('github', {
+          displayName: 'GitHub',
+          envKeys: [
+            { name: 'GITHUB_TOKEN', display: 'GitHub token', required: true },
+          ],
+        }),
+      ),
+    ]);
+    const install = installMock(client);
+    const w = mountRegistryTab(client);
+    await flushPromises();
+
+    await w.find('[data-testid="registry-install-github"]').trigger('click');
+    await flushPromises();
+
+    // Credentials must be collected up front — the modal opens and no blank
+    // install is fired.
+    expect(w.find('[data-testid="recipe-key-prompt-modal"]').exists()).toBe(true);
+    expect(install).not.toHaveBeenCalled();
+    expect(w.emitted('installed')).toBeUndefined();
+  });
+
+  it('opens the config modal for a recipe that only carries a warning', async () => {
+    const client = clientWithRecipes([
+      makeListing(
+        makeRecipe('beta-tool', {
+          displayName: 'Beta Tool',
+          warning: 'This connector is in early access.',
+        }),
+      ),
+    ]);
+    const install = installMock(client);
+    const w = mountRegistryTab(client);
+    await flushPromises();
+
+    await w.find('[data-testid="registry-install-beta-tool"]').trigger('click');
+    await flushPromises();
+
+    // A warning alone requires acknowledgement via the modal.
+    expect(w.find('[data-testid="recipe-key-prompt-modal"]').exists()).toBe(true);
+    expect(install).not.toHaveBeenCalled();
   });
 });
 
