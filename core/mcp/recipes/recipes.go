@@ -101,6 +101,14 @@ type Recipe struct {
 	// checkbox). Used by recipes that grant elevated trust — e.g. the
 	// unrestricted filesystem MCP. Empty for ordinary recipes.
 	Warning string `json:"warning,omitempty"`
+	// Aliases is an optional list of alternate search terms (lowercase) that the
+	// catalog UI uses to surface this recipe when the user's search string does
+	// not match the ID or DisplayName. For example, the Google Calendar recipe
+	// can declare aliases: ["google meet"] so that searching "meet" or "google
+	// meet" surfaces the Calendar connector, since Meet has no standalone MCP.
+	// The alias list is indexed alongside the ID and DisplayName; matches are
+	// shown in the catalog with a note indicating the alternate name.
+	Aliases []string `json:"aliases,omitempty"`
 	// RecommendedPolicyTemplate names a Cedar policy file under
 	// `core/policy/cedar/policies/` that the user is encouraged to
 	// install alongside this recipe. The install modal surfaces a
@@ -229,6 +237,14 @@ type RecipeAuth struct {
 	// Empty is permitted at rest (the recipe ships before the operator has
 	// registered an app); sign-in fails with a clear error until it is set.
 	ClientID string `json:"client_id,omitempty" yaml:"client_id,omitempty"`
+	// ClientSecret is a pre-registered confidential OAuth client secret.
+	// Required only for providers that mandate a confidential client (e.g.
+	// Front). Most OAuth 2.1/PKCE providers do not require a client secret
+	// and this field should be left empty. The value is treated as a
+	// credential: it must be stored in the credstore (not hardcoded), and
+	// the ${KAMEAS_<PROVIDER>_OAUTH_CLIENT_SECRET} seam pattern is used as
+	// a placeholder in the recipe definition.
+	ClientSecret string `json:"client_secret,omitempty" yaml:"client_secret,omitempty"`
 	// Scopes requested during the grant. When empty the harness falls back to
 	// the scopes advertised in the protected-resource metadata.
 	Scopes []string `json:"scopes,omitempty" yaml:"scopes,omitempty"`

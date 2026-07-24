@@ -288,10 +288,17 @@ async function startDeviceSignIn() {
     devicePolling.value = false;
   }
 }
-// Hazard-recipe acknowledgment (recipes carrying a `warning` string).
-// The user must check this box before Install becomes clickable.
+// A recipe's `warning` renders at one of two severities. Only `danger`
+// (a genuine trust hazard) shows the red banner + requires acknowledgment;
+// the default (`info`) is a calm setup/latency/maturity notice that never
+// blocks install. Most recipes that carry a warning are the latter.
 const warningAck = ref(false);
 const hasWarning = computed(() => Boolean(props.recipe.warning));
+const isHazard = computed(
+  () => hasWarning.value && props.recipe.warningSeverity === 'danger',
+);
+// A calm, informational notice — has a message but is not a hazard.
+const hasNotice = computed(() => hasWarning.value && !isHazard.value);
 
 const configOptions = computed<readonly ConfigOption[]>(
   () => props.recipe.configOptions ?? [],
@@ -481,7 +488,9 @@ const canSubmit = computed(
     requiredEnvFilled.value &&
     requiredConfigFilled.value &&
     allFilesPlaced.value &&
-    (!hasWarning.value || warningAck.value),
+    // Only a genuine hazard gates install on acknowledgment; a calm
+    // notice never blocks the button.
+    (!isHazard.value || warningAck.value),
 );
 
 const lastEnvName = computed(
@@ -950,9 +959,28 @@ function onKeydown(event: KeyboardEvent) {
           </span>
         </div>
 
-        <!-- Hazard banner (recipes carrying a `warning` string) -->
+        <!-- Calm notice (default severity): a setup/latency/maturity note.
+             No red, no acknowledgment — never blocks install. -->
         <section
-          v-if="hasWarning"
+          v-if="hasNotice"
+          class="rounded-sm border border-border-muted bg-surface-2 px-3 py-2.5 flex items-start gap-2"
+          data-testid="recipe-modal-notice"
+        >
+          <svg class="w-4 h-4 mt-0.5 shrink-0 text-ink-dim" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <circle cx="12" cy="12" r="10" />
+            <path d="M12 16v-4M12 8h.01" />
+          </svg>
+          <p
+            class="text-[12px] text-ink-muted leading-snug max-w-prose"
+            data-testid="recipe-modal-notice-text"
+          >
+            {{ recipe.warning }}
+          </p>
+        </section>
+
+        <!-- Hazard banner (only genuinely dangerous recipes, warning_severity=danger) -->
+        <section
+          v-if="isHazard"
           class="rounded-sm border-2 border-signal-danger bg-signal-danger/10 px-3 py-3 space-y-2"
           role="alert"
           data-testid="recipe-modal-warning"
@@ -1229,7 +1257,7 @@ function onKeydown(event: KeyboardEvent) {
           type="button"
           :class="[
             'rounded-sm px-3 py-1 text-[12px] disabled:opacity-50 disabled:cursor-not-allowed',
-            hasWarning
+            isHazard
               ? 'border border-signal-danger bg-signal-danger/10 text-signal-danger hover:bg-signal-danger/20'
               : 'border border-accent-hairline bg-surface-1 text-accent hover:bg-accent-glow',
           ]"
@@ -1237,7 +1265,7 @@ function onKeydown(event: KeyboardEvent) {
           data-testid="recipe-key-modal-submit"
           @click="submit"
         >
-          {{ submitting ? 'Installing…' : hasWarning ? 'Install with risk' : 'Install' }}
+          {{ submitting ? 'Installing…' : isHazard ? 'Install with risk' : 'Install' }}
         </button>
       </footer>
     </div>
