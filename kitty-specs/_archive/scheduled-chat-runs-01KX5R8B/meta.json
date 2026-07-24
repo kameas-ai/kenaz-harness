@@ -1,9 +1,0 @@
-{
-  "mission_id": "scheduled-chat-runs-01KX5R8B",
-  "friendly_name": "Scheduled Chat Runs",
-  "mission_type": "feature",
-  "target_branch": "release/v0.10.0",
-  "status": "active",
-  "owner": "alecfeeman",
-  "created_at": "2026-05-12"
-}

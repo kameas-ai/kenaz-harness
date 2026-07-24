@@ -1,8 +1,0 @@
-{
-  "mission_id": "unified-search-01KX5R8C",
-  "friendly_name": "Unified Cross-Corpus Search Backend",
-  "mission_type": "feature",
-  "target_branch": "release/v0.10.0",
-  "version": "v0.10.0",
-  "status": "in-progress"
-}
