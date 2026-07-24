@@ -327,6 +327,28 @@ describe('RegistryTab — long-tail affordance', () => {
     expect(w.find('[data-testid="registry-row-dev"]').exists()).toBe(true);
   });
 
+  it('shows the exhausted-category empty state when the filtered category has no rows', async () => {
+    // No automation connectors remain to install (all already enabled): the
+    // catalog for that filter is empty. Reproduces "installed the last one".
+    const w = mountRegistryTab(
+      clientWithRecipes([makeListing(makeRecipe('dev', { category: 'developer' }))]),
+    );
+    await flushPromises();
+
+    await w.find('[data-testid="registry-browse-automation"]').trigger('click');
+    await flushPromises();
+
+    // The filter chip is shown, but instead of a bare empty list we surface a
+    // distinct "you've installed all of these" message (not the search miss).
+    expect(w.find('[data-testid="registry-active-filter"]').exists()).toBe(true);
+    const empty = w.find('[data-testid="registry-category-empty"]');
+    expect(empty.exists()).toBe(true);
+    expect(empty.text()).toContain('Automation & iPaaS');
+    // Neither the row list nor the search-miss state renders.
+    expect(w.find('[data-testid="registry-list"]').exists()).toBe(false);
+    expect(w.find('[data-testid="registry-no-results"]').exists()).toBe(false);
+  });
+
   it('add-custom emits switch-tab targeting the custom recipe tab', async () => {
     const w = mountRegistryTab(
       clientWithRecipes([makeListing(makeRecipe('gh'))]),

@@ -219,6 +219,17 @@ const noResults = computed(
   () => searchActive.value && filteredListings.value.length === 0,
 );
 
+// True when a category filter is active but produces no rows — i.e. the user
+// has installed every connector in the filtered category. Distinct from
+// `noResults` (a search miss) so the copy can say "you've installed all of
+// these" rather than "no matches".
+const categoryExhausted = computed(
+  () =>
+    !searchActive.value &&
+    categoryFilter.value !== null &&
+    catalogRows.value.length === 0,
+);
+
 // The active category label shown in the filter chip, if any.
 const activeCategoryLabel = computed(() =>
   categoryFilter.value ? categoryLabel(categoryFilter.value) : '',
@@ -316,6 +327,16 @@ function requestConnector() {
         data-testid="registry-no-results"
       >
         No connectors match “{{ search.trim() }}”.
+      </div>
+
+      <!-- Exhausted-category state: the filter is active but every connector
+           in it is already installed. Distinct copy from the search miss. -->
+      <div
+        v-else-if="categoryExhausted"
+        class="py-4 text-center font-ui text-[12px] text-ink-muted"
+        data-testid="registry-category-empty"
+      >
+        You've installed every {{ activeCategoryLabel }} connector.
       </div>
 
       <!-- Grouped default view / flat search results share one list. -->
