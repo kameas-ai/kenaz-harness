@@ -1934,29 +1934,38 @@ export interface DryRunResult {
 //     these types see camelCase throughout.
 
 /**
- * RecipeCategory groups recipes in the Tools panel. Drives the icon
- * mapping in `KenazToolsPanel.vue` (search→Search, filesystem→Folder,
- * memory→Brain, fetch→Globe, productivity→CheckSquare,
- * developer→Code, finance→Scale, communication→MessageSquare,
- * automation→Zap, default→Wrench).
+ * CanonicalRecipeCategory — the 16 canonical MCP-connector categories the
+ * registry normalizes to. Display names + icons live in
+ * `lib/recipeCategories.ts` (the single source of truth consumed by both
+ * `RegistryTab.vue` and `KenazToolsPanel.vue`).
  */
-export type RecipeCategory =
-  | 'search'
-  | 'filesystem'
-  | 'memory'
-  | 'fetch'
-  | 'productivity'
-  | 'developer'
-  | 'finance'
-  | 'communication'
-  | 'deployment'
+export type CanonicalRecipeCategory =
   | 'automation'
-  // Marketing analytics + data/BI categories (01NCONN09 pack)
-  | 'analytics'
-  | 'marketing'
-  | 'bi'
+  | 'communication'
+  | 'crm'
   | 'data'
-  | 'other';
+  | 'design'
+  | 'developer'
+  | 'ecommerce'
+  | 'files'
+  | 'finance'
+  | 'hr_people'
+  | 'marketing'
+  | 'observability'
+  | 'productivity'
+  | 'security'
+  | 'support'
+  | 'web';
+
+/**
+ * RecipeCategory groups recipes in the Tools panel and drives the icon +
+ * label mapping in `lib/recipeCategories.ts`. It is kept open to arbitrary
+ * strings (`string & {}`) so legacy / not-yet-known category slugs pass
+ * through and render via the title-cased + generic-icon fallback rather
+ * than being dropped. The `string & {}` member preserves editor
+ * autocomplete for the canonical values.
+ */
+export type RecipeCategory = CanonicalRecipeCategory | (string & {});
 
 /**
  * EnvKey — one credential-bearing env var the recipe's server reads.
@@ -2061,6 +2070,12 @@ export interface Recipe {
   displayName: string;
   description: string;
   category: RecipeCategory;
+  /**
+   * Alternate names / keywords the recipe can be found under. Populated
+   * from the registry and matched (case-insensitively) by the Registry
+   * catalog search (FR-005). Absent for recipes with no aliases.
+   */
+  aliases?: string[];
   envKeys: EnvKey[];
   capabilities: RecipeCapabilities;
   docsUrl?: string;

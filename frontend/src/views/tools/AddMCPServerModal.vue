@@ -138,6 +138,7 @@ function onKeydown(event: KeyboardEvent) {
         <RegistryTab
           v-if="activeTab === 'registry'"
           @installed="onInstalled"
+          @switch-tab="activeTab = $event"
         />
         <PasteConfigTab
           v-else-if="activeTab === 'paste'"
