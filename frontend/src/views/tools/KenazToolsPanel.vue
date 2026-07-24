@@ -16,28 +16,14 @@ import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { useToolsRecipes, useShell } from '@/lib/useHarnessAPI';
-import {
-  Brain,
-  CheckSquare,
-  ChevronDown,
-  ChevronRight,
-  Code,
-  Folder,
-  FolderOpen,
-  Globe,
-  MessageSquare,
-  Scale,
-  Search,
-  Wrench,
-  Zap,
-} from '@/shell/icons';
+import { ChevronDown, ChevronRight, FolderOpen } from '@/shell/icons';
+import { categoryIconFor } from '@/lib/recipeCategories';
 import RecipeKeyPromptModal from './RecipeKeyPromptModal.vue';
 import AddMCPServerModal from './AddMCPServerModal.vue';
 import HealthPill from './HealthPill.vue';
 import type {
   EnvKey,
   Recipe,
-  RecipeCategory,
   RecipeListing,
   RecipeState,
   RecipeStatus,
@@ -361,31 +347,6 @@ function isWarming(id: string, state: RecipeState): boolean {
   const t = startedAt.value[id];
   if (!t) return false;
   return now.value - t > COLD_SPAWN_MS;
-}
-
-function categoryIcon(category: RecipeCategory) {
-  switch (category) {
-    case 'search':
-      return Search;
-    case 'filesystem':
-      return Folder;
-    case 'memory':
-      return Brain;
-    case 'fetch':
-      return Globe;
-    case 'productivity':
-      return CheckSquare;
-    case 'developer':
-      return Code;
-    case 'finance':
-      return Scale;
-    case 'communication':
-      return MessageSquare;
-    case 'automation':
-      return Zap;
-    default:
-      return Wrench;
-  }
 }
 
 function setRowError(id: string, msg: string | null) {
@@ -1166,7 +1127,7 @@ watch(
           style="grid-template-columns: 1.25rem 1fr auto"
         >
           <component
-            :is="categoryIcon(listing.recipe.category)"
+            :is="categoryIconFor(listing.recipe.category)"
             class="mt-0.5 h-4 w-4 text-ink-dim"
             aria-hidden="true"
           />

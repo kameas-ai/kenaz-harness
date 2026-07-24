@@ -12,8 +12,8 @@
  */
 import { ref, computed, onMounted } from 'vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
-import { Wrench, Search, Folder, Brain, Globe, CheckSquare, Code, Scale, MessageSquare, Zap } from '@/shell/icons';
-import type { RecipeListing, RecipeCategory, Recipe, RecipeStatus } from '@/lib/types';
+import { categoryIconFor } from '@/lib/recipeCategories';
+import type { RecipeListing, Recipe, RecipeStatus } from '@/lib/types';
 import RecipeKeyPromptModal from './RecipeKeyPromptModal.vue';
 
 const emit = defineEmits<{
@@ -58,31 +58,6 @@ function onModalInstalled() {
   configuringRecipe.value = null;
   emit('installed');
   void load();
-}
-
-function categoryIcon(category: RecipeCategory) {
-  switch (category) {
-    case 'search':
-      return Search;
-    case 'filesystem':
-      return Folder;
-    case 'memory':
-      return Brain;
-    case 'fetch':
-      return Globe;
-    case 'productivity':
-      return CheckSquare;
-    case 'developer':
-      return Code;
-    case 'finance':
-      return Scale;
-    case 'communication':
-      return MessageSquare;
-    case 'automation':
-      return Zap;
-    default:
-      return Wrench;
-  }
 }
 
 async function load() {
@@ -171,7 +146,7 @@ const visibleListings = computed(() => listings.value);
         :data-testid="`registry-row-${listing.recipe.id}`"
       >
         <component
-          :is="categoryIcon(listing.recipe.category)"
+          :is="categoryIconFor(listing.recipe.category)"
           class="mt-0.5 h-4 w-4 text-ink-dim"
           aria-hidden="true"
         />
