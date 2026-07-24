@@ -239,7 +239,12 @@ function addCustomServer() {
 }
 
 function requestConnector() {
-  client.openExternalURL(REQUEST_CONNECTOR_URL);
+  // The request link is shown most prominently on a failed search, so seed
+  // the prefilled GitHub issue title with the term the user just searched for.
+  const term = search.value.trim();
+  client.openExternalURL(
+    term ? REQUEST_CONNECTOR_URL + encodeURIComponent(term) : REQUEST_CONNECTOR_URL,
+  );
 }
 </script>
 

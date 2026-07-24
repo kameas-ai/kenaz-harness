@@ -272,6 +272,30 @@ describe('RegistryTab — long-tail affordance', () => {
     const url = openExternalURL.mock.calls[0][0] as string;
     expect(url).toContain('github.com/kameas-ai/kenaz-harness/issues/new');
     expect(url).toContain('Connector');
+    // No search term active → the title is left blank (bare prefix).
+    expect(url.endsWith('title=Connector%20request%3A%20')).toBe(true);
+  });
+
+  it('request-a-connector appends the active search term to the issue title', async () => {
+    const openExternalURL = vi.fn();
+    const w = mountRegistryTab(
+      clientWithRecipes([makeListing(makeRecipe('gh', { displayName: 'GitHub' }))], {
+        openExternalURL,
+      }),
+    );
+    await flushPromises();
+
+    // The request link is most prominent after a failed search.
+    await w.find('[data-testid="registry-search"]').setValue('  Acme CRM  ');
+    await flushPromises();
+
+    await w.find('[data-testid="registry-request-connector"]').trigger('click');
+
+    expect(openExternalURL).toHaveBeenCalledTimes(1);
+    const url = openExternalURL.mock.calls[0][0] as string;
+    // Trimmed + URL-encoded term is appended after the prefill prefix.
+    expect(url).toContain(encodeURIComponent('Acme CRM'));
+    expect(url.endsWith('title=Connector%20request%3A%20Acme%20CRM')).toBe(true);
   });
 
   it('browse-automation filters to the automation category', async () => {
