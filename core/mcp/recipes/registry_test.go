@@ -3898,6 +3898,39 @@ func TestRecipe_CatalogCategories(t *testing.T) {
 	}
 }
 
+// TestRecipe_CatalogAliasesPopulated is the FR-005 search-expansion
+// guarantee: every registry recipe must carry at least one search alias
+// so the Tools catalog's search box can surface a connector by an
+// alternate name, abbreviation, or generic task word (e.g. "email" ->
+// gmail/outlook) even when the query doesn't match the id or display
+// name. Also guards against accidental keyword stuffing / duplication.
+func TestRecipe_CatalogAliasesPopulated(t *testing.T) {
+	cat := recipes.Registry()
+	for _, r := range cat.List() {
+		if len(r.Aliases) == 0 {
+			t.Errorf("recipe %q has no aliases", r.ID)
+			continue
+		}
+		if len(r.Aliases) > 6 {
+			t.Errorf("recipe %q has %d aliases, want at most 6", r.ID, len(r.Aliases))
+		}
+		seen := map[string]bool{}
+		for _, a := range r.Aliases {
+			if a == "" {
+				t.Errorf("recipe %q has an empty alias entry", r.ID)
+				continue
+			}
+			if strings.ToLower(a) != a {
+				t.Errorf("recipe %q alias %q is not lowercase", r.ID, a)
+			}
+			if seen[a] {
+				t.Errorf("recipe %q has duplicate alias %q", r.ID, a)
+			}
+			seen[a] = true
+		}
+	}
+}
+
 func TestRecipe_ZohoCRM(t *testing.T) {
 	cat := recipes.Registry()
 	r, ok := cat.Get("zoho-crm")
