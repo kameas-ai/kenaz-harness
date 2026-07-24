@@ -271,7 +271,7 @@ function requestConnector() {
       <!-- Search box (FR-005). Empty search shows the categorized view. -->
       <div class="relative">
         <Search
-          class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-ink-dim"
+          class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-ink-subtle"
           aria-hidden="true"
         />
         <input
@@ -328,7 +328,7 @@ function requestConnector() {
           >
             <component
               :is="row.icon"
-              class="h-3.5 w-3.5 text-ink-dim"
+              class="h-3.5 w-3.5 text-ink-subtle"
               aria-hidden="true"
             />
             <span
@@ -347,7 +347,7 @@ function requestConnector() {
           >
             <component
               :is="categoryIconFor(row.listing.recipe.category)"
-              class="mt-0.5 h-4 w-4 text-ink-dim"
+              class="mt-0.5 h-4 w-4 text-ink-subtle"
               aria-hidden="true"
             />
             <div>
@@ -419,7 +419,7 @@ function requestConnector() {
           </button>
           <button
             type="button"
-            class="font-ui text-[11px] text-ink-dim hover:text-ink underline"
+            class="font-ui text-[11px] text-ink-muted hover:text-ink underline"
             data-testid="registry-request-connector"
             @click="requestConnector"
           >
