@@ -443,9 +443,9 @@ describe('RegistryTab — install action', () => {
   });
 });
 
-// ── WP16 (hr-finance pack): category row rendering ─────────────────────
+// ── Connector row rendering ────────────────────────────────────────────
 
-describe('RegistryTab — WP16 HR & Finance category UX', () => {
+describe('RegistryTab — connector row rendering', () => {
   it('renders an hr_people connector row without crashing', async () => {
     const recipe = makeRecipe('deel', {
       displayName: 'Deel',
@@ -513,19 +513,5 @@ describe('RegistryTab — WP16 HR & Finance category UX', () => {
     const w = mountRegistryTab(clientWithRecipes([]));
     await flushPromises();
     expect(w.find('[data-testid="registry-empty"]').exists()).toBe(true);
-  });
-
-  it('finance recipe descriptions include read-only safety copy', () => {
-    const financeDescriptions = [
-      'Query Mercury bank accounts — read-only, no transactions initiated.',
-      'Browse Ramp cards — read-only, no transactions initiated.',
-      'Read Brex card expenses — read-only, no transactions initiated.',
-      'Read accounting data from QuickBooks — read-only, no transactions initiated.',
-      'Read Xero transactions — read-only, no transactions initiated.',
-      'Read bills from Bill.com — read-only, no transactions initiated.',
-    ];
-    for (const desc of financeDescriptions) {
-      expect(desc).toContain('read-only');
-    }
   });
 });
