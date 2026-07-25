@@ -265,6 +265,7 @@ const isSelected = (c: ModelChoice) =>
   >
     <div
       :data-testid="'new-session-dialog'"
+      class="flex min-h-0 flex-1 flex-col"
     >
       <header class="flex items-center justify-between border-b border-border-muted px-5 py-3">
         <div>
@@ -278,7 +279,7 @@ const isSelected = (c: ModelChoice) =>
         <Button variant="ghost" size="sm" @click="close">Close</Button>
       </header>
 
-      <div class="flex-1 overflow-y-auto px-5 py-4 space-y-4 font-ui">
+      <div class="min-h-0 flex-1 overflow-y-auto px-5 py-4 space-y-4 font-ui">
         <div>
           <label
             for="new-session-project"
@@ -369,7 +370,7 @@ const isSelected = (c: ModelChoice) =>
               Add a provider →
             </button>
           </div>
-          <div v-else class="mt-2 space-y-2">
+          <div v-else class="mt-2 max-h-[40vh] space-y-2 overflow-y-auto pr-1">
             <div
               v-for="[family, list] in choicesByFamily"
               :key="family"
