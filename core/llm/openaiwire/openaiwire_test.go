@@ -252,3 +252,72 @@ func TestBuildFinalResponse_TextOnly(t *testing.T) {
 		t.Errorf("usage.input_tokens = %d, want 5", resp.Usage.InputTokens)
 	}
 }
+
+// TestBuildRequestBody_ToolCallRoundTrip verifies that an assistant tool_use
+// block serializes to an OpenAI `tool_calls` array (with id) and a tool_result
+// block serializes to a separate `tool` message carrying `tool_call_id`.
+// Regression for the openaiwire builder dropping tool ids, which made providers
+// reject the follow-up turn ("tool_call_id is not found", 400).
+func TestBuildRequestBody_ToolCallRoundTrip(t *testing.T) {
+	req := llm.GenerationRequest{
+		ProfileID: "test",
+		Model:     "gpt-4o",
+		Messages: []llm.Message{
+			llm.NewTextMessage(llm.RoleUser, "list files"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				{Type: "tool_use", ToolUse: &llm.ToolUse{
+					ID: "call_abc", Name: "list_dir", Input: json.RawMessage(`{"path":"."}`),
+				}},
+			}},
+			{Role: "tool", Content: []llm.ContentBlock{
+				{Type: "tool_result", ToolResult: &llm.ToolResult{
+					ToolUseID: "call_abc", Content: json.RawMessage(`"a.txt\nb.txt"`),
+				}},
+			}},
+		},
+	}
+
+	body, err := openaiwire.BuildRequestBody(req, "gpt-4o", nil)
+	if err != nil {
+		t.Fatalf("BuildRequestBody: %v", err)
+	}
+	msgs, ok := body["messages"].([]map[string]any)
+	if !ok {
+		t.Fatalf("messages type = %T, want []map[string]any", body["messages"])
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("messages len = %d, want 3", len(msgs))
+	}
+
+	// Assistant message must carry a tool_calls array with the id.
+	asst := msgs[1]
+	if asst["role"] != "assistant" {
+		t.Fatalf("msgs[1].role = %v, want assistant", asst["role"])
+	}
+	tcs, ok := asst["tool_calls"].([]map[string]any)
+	if !ok || len(tcs) != 1 {
+		t.Fatalf("assistant tool_calls = %v, want one entry", asst["tool_calls"])
+	}
+	if tcs[0]["id"] != "call_abc" {
+		t.Errorf("tool_call id = %v, want call_abc", tcs[0]["id"])
+	}
+	fn, _ := tcs[0]["function"].(map[string]any)
+	if fn["name"] != "list_dir" {
+		t.Errorf("tool_call function.name = %v, want list_dir", fn["name"])
+	}
+	if fn["arguments"] != `{"path":"."}` {
+		t.Errorf("tool_call function.arguments = %v", fn["arguments"])
+	}
+
+	// Tool message must carry tool_call_id and unwrapped content.
+	tool := msgs[2]
+	if tool["role"] != "tool" {
+		t.Fatalf("msgs[2].role = %v, want tool", tool["role"])
+	}
+	if tool["tool_call_id"] != "call_abc" {
+		t.Errorf("tool_call_id = %v, want call_abc", tool["tool_call_id"])
+	}
+	if tool["content"] != "a.txt\nb.txt" {
+		t.Errorf("tool content = %q, want unwrapped result", tool["content"])
+	}
+}
