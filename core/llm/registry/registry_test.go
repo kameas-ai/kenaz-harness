@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -147,6 +148,39 @@ func TestRegistry_StreamCapabilityRejection(t *testing.T) {
 	}
 	if sawReq {
 		t.Fatal("must not emit request_submitted on capability rejection")
+	}
+}
+
+// TestRegistry_StreamRejectsEmptyToolCallID verifies the adapter-agnostic
+// pre-send guard: a request whose tool_use carries an empty id is rejected
+// before any wire call, so a provider never sees an empty tool_call_id (which
+// it would bounce with a cryptic 400 mid-conversation).
+func TestRegistry_StreamRejectsEmptyToolCallID(t *testing.T) {
+	r, _ := newReg(t)
+	adapter := &fakeAdapter{kind: "ollama"}
+	r.RegisterAdapter(adapter)
+	prof := llm.ProviderProfile{ID: "p", Kind: "ollama", Model: "llama3.1",
+		Cred: llm.CredentialReference{Kind: "env", Locator: "K"}}
+	if err := r.LoadProfiles([]llm.ProviderProfile{prof}); err != nil {
+		t.Fatal(err)
+	}
+	req := llm.GenerationRequest{
+		ProfileID: "p",
+		Messages: []llm.Message{
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				{Type: "tool_use", ToolUse: &llm.ToolUse{ID: "", Name: "bash"}},
+			}},
+		},
+	}
+	_, err := r.Stream(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error for empty tool_use id, got nil")
+	}
+	if !strings.Contains(err.Error(), "tool_use") {
+		t.Fatalf("error should name the offending tool_use, got %v", err)
+	}
+	if n := atomic.LoadInt32(&adapter.calls); n != 0 {
+		t.Fatalf("adapter must not be dispatched on validation failure, calls=%d", n)
 	}
 }
 

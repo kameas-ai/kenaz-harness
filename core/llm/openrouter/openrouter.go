@@ -913,22 +913,13 @@ func (s *chatStream) pump() {
 				calls = make([]llm.ToolUse, 0, len(idxs))
 				for _, i := range idxs {
 					a := s.toolCalls[i]
-					id := a.id
-					if id == "" {
-						// Some providers (e.g. Moonshot/kimi via OpenRouter)
-						// stream tool calls with no `id`. A tool result must
-						// echo a non-empty tool_call_id or the provider rejects
-						// the next turn ("tool_call_id  is not found"), so
-						// synthesize a stable one from the generation id +
-						// index. It is stored on the assistant message and
-						// reused verbatim for the tool result, keeping the pair
-						// matched.
-						if s.respID != "" {
-							id = fmt.Sprintf("%s-%d", s.respID, i)
-						} else {
-							id = fmt.Sprintf("call_%d", i)
-						}
-					}
+					// Some providers (e.g. Moonshot/kimi via OpenRouter) stream
+					// tool calls with no `id`. A tool result must echo a
+					// non-empty tool_call_id or the provider rejects the next
+					// turn ("tool_call_id  is not found"), so synthesize a
+					// stable one from the generation id + index. See
+					// core/llm/toolcall_id.go.
+					id := llm.EnsureToolCallID(a.id, s.respID, i)
 					calls = append(calls, llm.ToolUse{
 						ID:    id,
 						Name:  a.name,

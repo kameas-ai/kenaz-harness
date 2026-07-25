@@ -350,6 +350,14 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 		return nil, fmt.Errorf("llm: no adapter registered for kind %q", prof.Kind)
 	}
 
+	// Adapter-agnostic guard: reject an empty tool_call id before it reaches
+	// the provider. Without this a tool result with an empty tool_use_id (e.g.
+	// from a provider that streams tool calls without ids) surfaces only as a
+	// cryptic provider 400 mid-conversation.
+	if err := llm.ValidateToolCallIDs(req.Messages); err != nil {
+		return nil, err
+	}
+
 	// Per-call model override: when the chat surface picks a model
 	// other than the profile default (and that model is in the
 	// authorised set), substitute prof.Model so the adapter,
