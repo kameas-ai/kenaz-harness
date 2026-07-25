@@ -327,3 +327,60 @@ func TestOpenRouterAdapter_StreamedToolCalls_ToolCallsParsed(t *testing.T) {
 func TestOpenRouterAdapter_ToolCall_ToolCallsParsed(t *testing.T) {
 	TestOpenRouterAdapter_StreamedToolCalls_ToolCallsParsed(t)
 }
+
+// TestOpenRouterAdapter_StreamedToolCall_MissingID_SynthesizesID reproduces the
+// Moonshot/kimi shape: tool-call deltas that never carry an `id` (only `index`
+// + `function`). The adapter must synthesize a stable, non-empty tool_call id
+// from the generation id so the follow-up tool result echoes a valid
+// tool_call_id — otherwise the provider rejects the next turn with
+// "Invalid request: tool_call_id  is not found" (status 400).
+func TestOpenRouterAdapter_StreamedToolCall_MissingID_SynthesizesID(t *testing.T) {
+	fs := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, _ int) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		frames := []string{
+			`{"id":"gen-moonshot-1","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"function":{"name":"bash","arguments":""}}]},"finish_reason":null}]}`,
+			`{"id":"gen-moonshot-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"command\":"}}]},"finish_reason":null}]}`,
+			`{"id":"gen-moonshot-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"ls\"}"}}]},"finish_reason":null}]}`,
+			`{"id":"gen-moonshot-1","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+			`[DONE]`,
+		}
+		for _, f := range frames {
+			fmt.Fprintf(w, "data: %s\n\n", f)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	})
+	a := New(WithEndpoint(fs.URL), WithHTTPClient(fs.Client()))
+	req := minReqOR()
+	req.Tools = []llm.ToolSpec{
+		{Name: "bash", Description: "Run", InputSchema: json.RawMessage(`{"type":"object"}`)},
+	}
+	stream, err := a.Stream(context.Background(), req, stdProfOR("moonshotai/kimi-k3"), []byte("sk-or-test"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for range stream.Events() {
+	}
+	resp, ferr := stream.Final()
+	if ferr != nil {
+		t.Fatalf("Final: %v", ferr)
+	}
+
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("Response.ToolCalls len = %d, want 1", len(resp.ToolCalls))
+	}
+	if resp.ToolCalls[0].Name != "bash" {
+		t.Errorf("ToolCalls[0].Name = %q, want %q", resp.ToolCalls[0].Name, "bash")
+	}
+	// The provider sent no id; the adapter must have synthesized a non-empty
+	// one so the tool result can pair against it.
+	if resp.ToolCalls[0].ID == "" {
+		t.Fatal("ToolCalls[0].ID is empty — a synthesized tool_call id is required for providers that omit one (Moonshot/kimi)")
+	}
+	if want := "gen-moonshot-1-0"; resp.ToolCalls[0].ID != want {
+		t.Errorf("ToolCalls[0].ID = %q, want %q (generation id + index)", resp.ToolCalls[0].ID, want)
+	}
+}
