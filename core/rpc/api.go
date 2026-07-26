@@ -29,6 +29,7 @@ import (
 	acppeers "github.com/kameas-ai/kenaz-harness/core/acp/peers"
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	corenodes "github.com/kameas-ai/kenaz-harness/core/agentgraph/nodes"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph/prompts"
 	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
 	coreatt "github.com/kameas-ai/kenaz-harness/core/attachments"
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
@@ -4111,14 +4112,26 @@ func buildChatRunner(
 		}
 	}
 	runner, err := chat.New(chat.Config{
-		Kernel:           graphMgr.Kernel(),
-		Registry:         reg,
-		Pool:             chatToolPoolAdapter{inner: wrappedPool},
-		Perms:            chatPermsAdapter{inner: perms},
-		Broker:           chatBrokerAdapter{broker: broker},
-		History:          historyReader,
-		HistoryWriter:    historyWriter,
-		GraphLoader:      func() (coreag.Graph, error) { return graphMgr.LoadGraphSpec("chat_default") },
+		Kernel:        graphMgr.Kernel(),
+		Registry:      reg,
+		Pool:          chatToolPoolAdapter{inner: wrappedPool},
+		Perms:         chatPermsAdapter{inner: perms},
+		Broker:        chatBrokerAdapter{broker: broker},
+		History:       historyReader,
+		HistoryWriter: historyWriter,
+		GraphLoader: func() (coreag.Graph, error) {
+			g, err := graphMgr.LoadGraphSpec("chat_default")
+			if err != nil {
+				return g, err
+			}
+			// Seed the graph's base system prompt from the shared
+			// constitution (base.md is the single source of truth —
+			// chat_default.yaml never pastes the constitution into
+			// YAML). Any chat-specific base text the YAML sets on
+			// SystemPrompt is appended after the constitution.
+			g.SystemPrompt = prompts.Compose(prompts.DefaultBaseConstitution(), g.SystemPrompt)
+			return g, nil
+		},
 		MaxTurns:         maxTurns,
 		EnvDefaults:      envDefaults,
 		ToolDiscoverer:   chatToolDiscovererAdapter{inner: tools},

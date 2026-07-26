@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph/prompts"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
@@ -514,18 +515,12 @@ func estimateTokens(ms []Message) int {
 
 // composePrompt joins system-prompt fragments (e.g. a graph-level base
 // constitution + a model node's own role prompt) into a single system
-// prompt. Each part is trimmed of surrounding whitespace; empty parts
-// are dropped; the survivors are joined with a blank line ("\n\n") so
-// the sections stay visually distinct. A single non-empty part is
-// returned as-is; all-empty input yields "".
+// prompt. It delegates to prompts.Compose so there is a single
+// implementation shared by the kernel and any graph-authoring code that
+// wants the same joining semantics (e.g. seeding a graph's base from
+// prompts.DefaultBaseConstitution()).
 func composePrompt(parts ...string) string {
-	kept := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if trimmed := strings.TrimSpace(p); trimmed != "" {
-			kept = append(kept, trimmed)
-		}
-	}
-	return strings.Join(kept, "\n\n")
+	return prompts.Compose(parts...)
 }
 
 // ---- TransformNode ----
