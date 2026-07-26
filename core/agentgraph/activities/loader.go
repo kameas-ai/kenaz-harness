@@ -28,6 +28,7 @@ import (
 	"strings"
 
 	agentgraph "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph/prompts"
 	"gopkg.in/yaml.v3"
 )
 
@@ -197,6 +198,15 @@ func parseEntry(data []byte, source string) (Entry, error) {
 	if g.ID == "" {
 		return Entry{}, errors.New("activity yaml missing top-level id")
 	}
+	// WP05 (system-prompt-grounding): seed the shared base constitution
+	// onto every activity's graph-level SystemPrompt at load time. This
+	// is the single choke point every activity YAML (bundled, user
+	// override, or programmatic AddGraph) passes through, so activities
+	// never need the constitution text pasted into their own YAML. Note
+	// this runs after Hash is computed from the raw on-disk bytes below,
+	// so Hash still reflects the author's source file, not the seeded
+	// prompt.
+	g.SystemPrompt = seedBaseConstitution(g.SystemPrompt)
 	// The agentgraph wire format does not currently round-trip a
 	// dedicated `version:` field; we tolerate two storage shapes:
 	//   1. A `version: "vN"` sibling at the top level (parsed below).
@@ -218,6 +228,25 @@ func parseEntry(data []byte, source string) (Entry, error) {
 		Source:  source,
 		Graph:   g,
 	}, nil
+}
+
+// seedBaseConstitution prepends the shared prompts.DefaultBaseConstitution()
+// to an existing graph-level system prompt. Both parts are trimmed of
+// surrounding whitespace and empty parts are dropped before joining with a
+// blank line — the same shape as the kernel's own composePrompt
+// (core/agentgraph/exec_compute.go), duplicated here in miniature so this
+// leaf package doesn't need to import the kernel's exec internals.
+func seedBaseConstitution(existing string) string {
+	base := strings.TrimSpace(prompts.DefaultBaseConstitution())
+	existing = strings.TrimSpace(existing)
+	switch {
+	case base == "":
+		return existing
+	case existing == "":
+		return base
+	default:
+		return base + "\n\n" + existing
+	}
 }
 
 // unmarshalEnvelope reads only the version sibling from the YAML
