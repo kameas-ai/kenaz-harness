@@ -3672,7 +3672,15 @@ func newLLMStack(
 		chatAutoTitleGen = autotitle.New(llmCaller)
 	}
 
-	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen)
+	// system-prompt-layers WP03: derive the agent-workspace path from the
+	// harness DataDir (mirrors tools.EnsureWorkspace's <dataDir>/agent-workspace
+	// convention). Empty dataDir (test chassis) yields an empty path and the
+	// environment layer falls back to a generic sandboxed-workspace note.
+	chatWorkspaceDir := ""
+	if dataDir != "" {
+		chatWorkspaceDir = filepath.Join(dataDir, "agent-workspace")
+	}
+	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatWorkspaceDir)
 	var capCatalog llm.CapCatalog
 	if cat, err := llmcap.LoadDefault(); err == nil {
 		capCatalog = &capCatalogAdapter{cat: cat}
@@ -3902,6 +3910,7 @@ func buildChatRunner(
 	usageMgr usage.Manager,
 	sessionMgr *session.Manager,
 	autoTitleGen chat.AutoTitleGenerator,
+	workspaceDir string,
 ) *chat.ChatRunner {
 	if graphMgr == nil || graphMgr.Kernel() == nil {
 		logging.L().Warn("chat.runner.disabled", "reason", "graph manager unavailable")
@@ -4120,6 +4129,11 @@ func buildChatRunner(
 		HistoryWriter:    historyWriter,
 		GraphLoader:      func() (coreag.Graph, error) { return graphMgr.LoadGraphSpec("chat_default") },
 		MaxTurns:         maxTurns,
+		// system-prompt-layers WP03: surface the sandboxed agent-workspace
+		// path in the environment-context layer of the system prompt. Empty
+		// when DataDir is unset (test path) — the adapter then renders a
+		// generic sandboxed-workspace note.
+		WorkspaceDir:     workspaceDir,
 		EnvDefaults:      envDefaults,
 		ToolDiscoverer:   chatToolDiscovererAdapter{inner: tools},
 		Compaction:       compactionDeps,

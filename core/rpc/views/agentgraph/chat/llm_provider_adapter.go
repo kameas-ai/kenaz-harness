@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -74,6 +76,15 @@ type LLMProviderAdapter struct {
 	// assistant message and produced a stable messageID.
 	// (multimodal-io-extended-01KQ8TD2 WP02)
 	pendingImages []artview.GeneratedImagePayload
+
+	// now is the injected clock for the environment-context layer
+	// (system-prompt-layers WP03). nil falls back to time.Now so tests
+	// can pin a deterministic date while production reads the wall clock.
+	now func() time.Time
+	// workspaceDir is the absolute agent-workspace path used to render the
+	// environment block's workspace line. Empty renders a generic
+	// "sandboxed workspace" note instead of a concrete path.
+	workspaceDir string
 }
 
 // NewLLMProviderAdapter constructs an adapter pinned to a specific
@@ -97,6 +108,50 @@ func NewLLMProviderAdapter(reg corellm.Registry, profileID, modelOverride string
 func (a *LLMProviderAdapter) WithSessionID(sessionID string) *LLMProviderAdapter {
 	a.sessionID = sessionID
 	return a
+}
+
+// WithEnvContext pins the environment-context inputs (injected clock +
+// agent-workspace path) onto the adapter so Generate can render the
+// dynamic environment layer that stacks on top of the composed graph +
+// node-role system prompt. A nil clock falls back to time.Now; an empty
+// workspaceDir renders a generic sandboxed-workspace note.
+// (system-prompt-layers WP03)
+func (a *LLMProviderAdapter) WithEnvContext(now func() time.Time, workspaceDir string) *LLMProviderAdapter {
+	a.now = now
+	a.workspaceDir = workspaceDir
+	return a
+}
+
+// envClockNow reads the injected clock, defaulting to the wall clock.
+func (a *LLMProviderAdapter) envClockNow() time.Time {
+	if a != nil && a.now != nil {
+		return a.now()
+	}
+	return time.Now()
+}
+
+// buildEnvBlock gathers the live environment facts and renders the
+// compact environment-context Markdown block. Called once per Generate.
+// The workspace entry count is a cheap top-level os.ReadDir; a failure
+// (missing dir, permission) degrades gracefully to "path only" rather
+// than aborting the turn. (system-prompt-layers WP03)
+func (a *LLMProviderAdapter) buildEnvBlock() string {
+	in := envContextInput{
+		Now:    a.envClockNow(),
+		GOOS:   runtime.GOOS,
+		GOARCH: runtime.GOARCH,
+		Model:  a.ActiveModelID(),
+		Tools:  a.tools,
+	}
+	if ws := strings.TrimSpace(a.workspaceDir); ws != "" {
+		in.WorkspaceDir = ws
+		in.WorkspaceKnown = true
+		if entries, err := os.ReadDir(ws); err == nil {
+			in.WorkspaceEntries = len(entries)
+			in.WorkspaceCounted = true
+		}
+	}
+	return buildEnvContext(in)
 }
 
 // DrainPendingImages returns and clears the buffered GeneratedImagePayload
@@ -207,10 +262,15 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 		llmMsgs = append(llmMsgs, corellm.Message{Role: corellm.Role(m.Role), Content: blocks})
 	}
 
+	// Layer the dynamic environment context on top of the composed
+	// graph-base + node-role system prompt (WP01/WP02 populate
+	// req.SystemPrompt). Only the seam has the harness runtime context
+	// (platform, clock, workspace, live tool catalog), so the layering
+	// happens here rather than graph-side. (system-prompt-layers WP03)
 	gen := corellm.GenerationRequest{
 		ProfileID: a.profileID,
 		Model:     a.modelOverride,
-		System:    req.SystemPrompt,
+		System:    composeSystemPrompt(req.SystemPrompt, a.buildEnvBlock()),
 		Messages:  llmMsgs,
 		Tools:     a.tools,
 	}
