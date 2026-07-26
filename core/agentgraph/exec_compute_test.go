@@ -547,3 +547,88 @@ func TestEscalateExecutor_AllowsRepeatWhenFlagOff(t *testing.T) {
 		t.Fatalf("second call should succeed: %v", err)
 	}
 }
+
+// ---- composePrompt (WP01: graph-level base system prompt) ----
+
+func (s *stubLLM) lastRequest() (LLMRequest, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.calls) == 0 {
+		return LLMRequest{}, false
+	}
+	return s.calls[len(s.calls)-1], true
+}
+
+func TestComposePrompt(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		parts []string
+		want  string
+	}{
+		{"both parts, order preserved", []string{"BASE", "ROLE"}, "BASE\n\nROLE"},
+		{"empty base dropped", []string{"", "ROLE"}, "ROLE"},
+		{"empty role dropped", []string{"BASE", ""}, "BASE"},
+		{"single part as-is", []string{"ONLY"}, "ONLY"},
+		{"all empty", []string{"", "   ", "\n"}, ""},
+		{"no parts", nil, ""},
+		{"trims each part", []string{"  BASE  ", "\tROLE\n"}, "BASE\n\nROLE"},
+		{"three parts", []string{"A", "B", "C"}, "A\n\nB\n\nC"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := composePrompt(tc.parts...); got != tc.want {
+				t.Errorf("composePrompt(%q) = %q, want %q", tc.parts, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestModelExecutor_ComposesGraphBaseWithNodeRole asserts that a model
+// node inside a graph whose SystemPrompt is "BASE" and whose own
+// system_prompt attr is "ROLE" produces a request SystemPrompt of
+// "BASE\n\nROLE".
+func TestModelExecutor_ComposesGraphBaseWithNodeRole(t *testing.T) {
+	t.Parallel()
+	llm := &stubLLM{responses: []LLMResponse{{Content: "ok", FinishReason: "stop"}}}
+	g := &Graph{ID: "g", SystemPrompt: "BASE"}
+	env := &Env{RunID: "r", SessionID: "s", Graph: g, LLM: llm}
+	applyEnvDefaults(env)
+	ex := modelExecutor{}
+	node := &Node{ID: "n", Kind: NodeKindModel, Attrs: ModelAttrs{Model: "x", SystemPrompt: "ROLE"}}
+	if _, err := ex.Execute(context.Background(), env, node, nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	req, ok := llm.lastRequest()
+	if !ok {
+		t.Fatalf("no LLM request captured")
+	}
+	if req.SystemPrompt != "BASE\n\nROLE" {
+		t.Errorf("SystemPrompt = %q, want %q", req.SystemPrompt, "BASE\n\nROLE")
+	}
+}
+
+// TestModelExecutor_NoGraphBaseYieldsNodeRoleOnly confirms the
+// no-behaviour-change path: an empty graph base yields just the node's
+// own role prompt.
+func TestModelExecutor_NoGraphBaseYieldsNodeRoleOnly(t *testing.T) {
+	t.Parallel()
+	llm := &stubLLM{responses: []LLMResponse{{Content: "ok", FinishReason: "stop"}}}
+	g := &Graph{ID: "g"} // no SystemPrompt
+	env := &Env{RunID: "r", SessionID: "s", Graph: g, LLM: llm}
+	applyEnvDefaults(env)
+	ex := modelExecutor{}
+	node := &Node{ID: "n", Kind: NodeKindModel, Attrs: ModelAttrs{Model: "x", SystemPrompt: "ROLE"}}
+	if _, err := ex.Execute(context.Background(), env, node, nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	req, ok := llm.lastRequest()
+	if !ok {
+		t.Fatalf("no LLM request captured")
+	}
+	if req.SystemPrompt != "ROLE" {
+		t.Errorf("SystemPrompt = %q, want %q", req.SystemPrompt, "ROLE")
+	}
+}
