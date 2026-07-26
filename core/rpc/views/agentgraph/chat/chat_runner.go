@@ -190,6 +190,12 @@ type Config struct {
 	// a generic "sandboxed workspace" note instead of a concrete path.
 	WorkspaceDir string
 
+	// CustomInstructions returns the user's chat custom-instructions text,
+	// read on every StartStream so a Settings edit takes effect on the
+	// next turn (system-prompt-layers WP04). nil / empty appends no user
+	// layer to the system prompt.
+	CustomInstructions func() string
+
 	// GeneratedImageCapturer is the optional auto-capture pipeline for
 	// model-generated images (multimodal-io-extended-01KQ8TD2 WP02).
 	// When non-nil, the LLMProviderAdapter calls OnGeneratedImage for
@@ -520,7 +526,8 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	}
 	llmAdapter := NewLLMProviderAdapter(r.cfg.Registry, profileID, modelOverride, toolCatalog, imageCapturer).
 		WithSessionID(sessionID).
-		WithEnvContext(r.cfg.Clock, r.cfg.WorkspaceDir)
+		WithEnvContext(r.cfg.Clock, r.cfg.WorkspaceDir).
+		WithCustomInstructions(r.cfg.CustomInstructions)
 	toolAdapter := newKernelToolAdapter(r.cfg.Pool, r.cfg.Perms, sessionID)
 	if r.cfg.AutonomyKnobs != nil {
 		toolAdapter.withAutonomy(r.cfg.AutonomyKnobs)

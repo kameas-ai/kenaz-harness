@@ -85,6 +85,11 @@ type LLMProviderAdapter struct {
 	// environment block's workspace line. Empty renders a generic
 	// "sandboxed workspace" note instead of a concrete path.
 	workspaceDir string
+	// customInstructions returns the user's chat custom-instructions text,
+	// evaluated once per Generate so a Settings edit takes effect on the
+	// next turn (system-prompt-layers WP04). nil / empty appends no user
+	// layer.
+	customInstructions func() string
 }
 
 // NewLLMProviderAdapter constructs an adapter pinned to a specific
@@ -152,6 +157,31 @@ func (a *LLMProviderAdapter) buildEnvBlock() string {
 		}
 	}
 	return buildEnvContext(in)
+}
+
+// WithCustomInstructions pins the user chat custom-instructions resolver
+// onto the adapter. The resolver is evaluated once per Generate so a
+// Settings edit takes effect on the next turn. A nil resolver / empty
+// value appends no user layer. (system-prompt-layers WP04)
+func (a *LLMProviderAdapter) WithCustomInstructions(fn func() string) *LLMProviderAdapter {
+	a.customInstructions = fn
+	return a
+}
+
+// buildUserInstructionsBlock renders the user custom-instructions layer,
+// or "" when unset/blank. It is the FINAL system-prompt layer, stacked
+// after the graph base, node role, and environment context so the user's
+// standing preferences take precedence in the composed prompt.
+// (system-prompt-layers WP04)
+func (a *LLMProviderAdapter) buildUserInstructionsBlock() string {
+	if a == nil || a.customInstructions == nil {
+		return ""
+	}
+	text := strings.TrimSpace(a.customInstructions())
+	if text == "" {
+		return ""
+	}
+	return "## User instructions\n\n" + text
 }
 
 // DrainPendingImages returns and clears the buffered GeneratedImagePayload
@@ -262,15 +292,18 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 		llmMsgs = append(llmMsgs, corellm.Message{Role: corellm.Role(m.Role), Content: blocks})
 	}
 
-	// Layer the dynamic environment context on top of the composed
-	// graph-base + node-role system prompt (WP01/WP02 populate
-	// req.SystemPrompt). Only the seam has the harness runtime context
-	// (platform, clock, workspace, live tool catalog), so the layering
-	// happens here rather than graph-side. (system-prompt-layers WP03)
+	// Layer the dynamic environment context and the user custom
+	// instructions on top of the composed graph-base + node-role system
+	// prompt (WP01/WP02 populate req.SystemPrompt). Only the seam has the
+	// harness runtime context (platform, clock, workspace, live tool
+	// catalog) and the user settings, so the layering happens here rather
+	// than graph-side. Order: base → environment → user instructions, so
+	// the user's standing preferences come last. (system-prompt-layers
+	// WP03/WP04)
 	gen := corellm.GenerationRequest{
 		ProfileID: a.profileID,
 		Model:     a.modelOverride,
-		System:    composeSystemPrompt(req.SystemPrompt, a.buildEnvBlock()),
+		System:    composeSystemPrompt(req.SystemPrompt, a.buildEnvBlock(), a.buildUserInstructionsBlock()),
 		Messages:  llmMsgs,
 		Tools:     a.tools,
 	}

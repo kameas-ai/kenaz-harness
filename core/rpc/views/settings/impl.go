@@ -976,6 +976,28 @@ func (s *FileStore) SaveSummarizerProfileID(profileID string) error {
 	return s.saveLocked(got)
 }
 
+// LoadChatCustomInstructions returns the user's chat custom-instructions
+// text. Empty means "no user layer". (system-prompt-layers WP04)
+func (s *FileStore) LoadChatCustomInstructions() (string, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return "", err
+	}
+	return got.ChatCustomInstructions, nil
+}
+
+// SaveChatCustomInstructions persists the chat custom-instructions text.
+func (s *FileStore) SaveChatCustomInstructions(text string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.ChatCustomInstructions = text
+	return s.saveLocked(got)
+}
+
 // LoadMemoryNarrativeEnabled returns the narrative-layer opt-in.
 func (s *FileStore) LoadMemoryNarrativeEnabled() (bool, error) {
 	got, err := s.LoadAll()
@@ -1427,6 +1449,17 @@ func (a *API) SetSummarizerProfileID(_ context.Context, profileID string) error 
 	return a.store.SaveSummarizerProfileID(profileID)
 }
 
+// GetChatCustomInstructions returns the user's chat custom-instructions
+// text. Empty means "no user layer". (system-prompt-layers WP04)
+func (a *API) GetChatCustomInstructions(_ context.Context) (string, error) {
+	return a.store.LoadChatCustomInstructions()
+}
+
+// SetChatCustomInstructions persists the chat custom-instructions text.
+func (a *API) SetChatCustomInstructions(_ context.Context, text string) error {
+	return a.store.SaveChatCustomInstructions(text)
+}
+
 // GetMemoryNarrativeEnabled returns the narrative-layer opt-in.
 func (a *API) GetMemoryNarrativeEnabled(_ context.Context) (bool, error) {
 	return a.store.LoadMemoryNarrativeEnabled()
@@ -1855,6 +1888,19 @@ func (m *memoryStore) SaveSummarizerProfileID(profileID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data.SummarizerProfileID = profileID
+	return nil
+}
+
+func (m *memoryStore) LoadChatCustomInstructions() (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.ChatCustomInstructions, nil
+}
+
+func (m *memoryStore) SaveChatCustomInstructions(text string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.ChatCustomInstructions = text
 	return nil
 }
 

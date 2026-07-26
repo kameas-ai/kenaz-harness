@@ -474,6 +474,10 @@ interface WailsBindingsLike {
   Settings_SetShortcuts(m: Record<string, string>): Promise<void>;
   Settings_GetAutoTitleEnabled(): Promise<boolean>;
   Settings_SetAutoTitleEnabled(enabled: boolean): Promise<void>;
+  /** Read the user's chat custom-instructions text (default empty). */
+  Settings_GetChatCustomInstructions(): Promise<string>;
+  /** Persist the user's chat custom-instructions text (empty clears it). */
+  Settings_SetChatCustomInstructions(text: string): Promise<void>;
   /** Returns the persisted embedder provider profile ID and model override. */
   Settings_GetEmbedderConfig(): Promise<EmbedderConfigResult>;
   /** Persists the embedder provider selection and optional model override. */
@@ -2049,6 +2053,11 @@ export interface SettingsClient {
   /** Persist the auto-title opt-in flag. */
   setAutoTitleEnabled(enabled: boolean): Promise<void>;
 
+  /** Read the user's chat custom-instructions text (default empty). */
+  getChatCustomInstructions(): Promise<string>;
+  /** Persist the user's chat custom-instructions text (empty clears it). */
+  setChatCustomInstructions(text: string): Promise<void>;
+
   // ── audit-log-enhancement-01KX5R8F WP07 — retention settings ──────────
   /** Read the audit-log retention strategy and window. */
   getAuditSettings(): Promise<import('./types').AuditSettings>;
@@ -3586,6 +3595,8 @@ export function createHarnessClient(): HarnessClient {
       getArtifactPreview: () => b().Settings_GetArtifactPreview(),
       getAutoTitleEnabled: () => b().Settings_GetAutoTitleEnabled(),
       setAutoTitleEnabled: (enabled) => b().Settings_SetAutoTitleEnabled(enabled),
+      getChatCustomInstructions: () => b().Settings_GetChatCustomInstructions(),
+      setChatCustomInstructions: (text) => b().Settings_SetChatCustomInstructions(text),
       // audit-log-enhancement-01KX5R8F WP07
       getAuditSettings: () => b().Settings_GetAuditSettings(),
       setAuditSettings: (s) => b().Settings_SetAuditSettings(s),
@@ -4577,6 +4588,8 @@ export function createFakeHarnessClient(
       }),
       getAutoTitleEnabled: async () => true,
       setAutoTitleEnabled: noop,
+      getChatCustomInstructions: async () => '',
+      setChatCustomInstructions: noop,
       // audit-log-enhancement-01KX5R8F WP07
       getAuditSettings: async () => ({ strategy: 'keep_forever', window_days: 90 }),
       setAuditSettings: noop,

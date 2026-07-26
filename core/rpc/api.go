@@ -3927,6 +3927,20 @@ func buildChatRunner(
 		s := settings.Settings{MaxAgentTurns: raw}
 		return s.EffectiveMaxAgentTurns()
 	}
+	// system-prompt-layers WP04: resolve the user's chat custom
+	// instructions on every StartStream so a Settings edit takes effect on
+	// the next turn without a restart. A read error degrades to no user
+	// layer rather than failing the turn.
+	customInstructions := func() string {
+		if settingsImpl == nil || settingsImpl.Store() == nil {
+			return ""
+		}
+		text, err := settingsImpl.Store().LoadChatCustomInstructions()
+		if err != nil {
+			return ""
+		}
+		return text
+	}
 	historyReader := chatSessionMessageReader{inner: historyAdapter}
 	historyWriter := &llmHistoryWriter{inner: historyAdapter}
 	baseEnvDefaults := graphMgr.EnvDefaults()
@@ -4133,8 +4147,11 @@ func buildChatRunner(
 		// path in the environment-context layer of the system prompt. Empty
 		// when DataDir is unset (test path) — the adapter then renders a
 		// generic sandboxed-workspace note.
-		WorkspaceDir:     workspaceDir,
-		EnvDefaults:      envDefaults,
+		WorkspaceDir: workspaceDir,
+		// system-prompt-layers WP04: append the user's chat custom
+		// instructions as the final system-prompt layer.
+		CustomInstructions: customInstructions,
+		EnvDefaults:        envDefaults,
 		ToolDiscoverer:   chatToolDiscovererAdapter{inner: tools},
 		Compaction:       compactionDeps,
 		PartialPersister: partialPersister,

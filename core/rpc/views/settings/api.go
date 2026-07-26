@@ -531,6 +531,15 @@ type Settings struct {
 	// Persisted so the onboarding dialog does not re-show on relaunch.
 	// (harness-onboarding-01NHON01 WP01)
 	FirstRunOnboardingCompleted bool `json:"firstRunOnboardingCompleted,omitempty"`
+
+	// ChatCustomInstructions is the user's free-text custom instructions
+	// appended as the FINAL layer of the chat system prompt, after the
+	// graph base, node role, and dynamic environment context
+	// (system-prompt-layers WP04). Empty (the default) appends no user
+	// layer. The chat runner reads this on every StartStream via
+	// LoadChatCustomInstructions so an edit takes effect on the next turn
+	// without a restart.
+	ChatCustomInstructions string `json:"chatCustomInstructions,omitempty"`
 }
 
 // ProviderProfileRef is the wire shape that identifies a provider+model
@@ -1114,6 +1123,14 @@ type SettingsStore interface {
 	LoadSummarizerProfileID() (string, error)
 	SaveSummarizerProfileID(profileID string) error
 
+	// LoadChatCustomInstructions / SaveChatCustomInstructions expose the
+	// user's chat custom-instructions text (system-prompt-layers WP04)
+	// independently of the full Settings record so the chat runner can
+	// read it on the hot path (every StartStream) without serializing the
+	// whole record. Empty means "no user layer".
+	LoadChatCustomInstructions() (string, error)
+	SaveChatCustomInstructions(text string) error
+
 	// LoadMemoryNarrativeEnabled / SaveMemoryNarrativeEnabled expose the
 	// narrative layer opt-out dial (WP12). Default true after Phase 2.
 	LoadMemoryNarrativeEnabled() (bool, error)
@@ -1186,6 +1203,14 @@ type SettingsAPI interface {
 	// SetSummarizerProfileID persists the summariser profile ID. An
 	// empty string resets to auto-select.
 	SetSummarizerProfileID(ctx context.Context, profileID string) error
+
+	// GetChatCustomInstructions returns the user's chat custom-instructions
+	// text appended as the final system-prompt layer. Empty means none.
+	// (system-prompt-layers WP04)
+	GetChatCustomInstructions(ctx context.Context) (string, error)
+	// SetChatCustomInstructions persists the chat custom-instructions text.
+	// An empty string clears the user layer.
+	SetChatCustomInstructions(ctx context.Context, text string) error
 
 	// GetMemoryNarrativeEnabled returns whether the narrative layer is
 	// enabled in Settings (additional env-var gate applies). Default

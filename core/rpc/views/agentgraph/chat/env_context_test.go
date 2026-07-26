@@ -196,3 +196,71 @@ func TestGenerate_LayersEnvAfterNodePrompt(t *testing.T) {
 		t.Errorf("expected model line in composed System:\n%s", sys)
 	}
 }
+
+func TestBuildUserInstructionsBlock(t *testing.T) {
+	// nil resolver → no block.
+	a := &LLMProviderAdapter{}
+	if got := a.buildUserInstructionsBlock(); got != "" {
+		t.Errorf("nil resolver should yield empty block, got %q", got)
+	}
+	// blank resolver → no block.
+	a.WithCustomInstructions(func() string { return "   \n  " })
+	if got := a.buildUserInstructionsBlock(); got != "" {
+		t.Errorf("blank instructions should yield empty block, got %q", got)
+	}
+	// present → labeled block, trimmed.
+	a.WithCustomInstructions(func() string { return "  Always answer in British English.  " })
+	got := a.buildUserInstructionsBlock()
+	want := "## User instructions\n\nAlways answer in British English."
+	if got != want {
+		t.Errorf("user block: got %q want %q", got, want)
+	}
+}
+
+func TestGenerate_CustomInstructionsLayerOrdering(t *testing.T) {
+	const base = "You are the chat node."
+
+	// Absent: no user layer, env still present.
+	t.Run("absent", func(t *testing.T) {
+		reg := &capturingRegistry{}
+		adapter := NewLLMProviderAdapter(reg, "p", "m", nil, nil).
+			WithEnvContext(fixedClock(), "")
+		if _, err := adapter.Generate(context.Background(), coreag.LLMRequest{SystemPrompt: base}); err != nil {
+			t.Fatalf("Generate: %v", err)
+		}
+		sys := reg.snapshot().System
+		if strings.Contains(sys, "## User instructions") {
+			t.Errorf("no user layer expected when instructions unset:\n%s", sys)
+		}
+		if !strings.Contains(sys, "## Environment") {
+			t.Errorf("environment layer should still be present:\n%s", sys)
+		}
+	})
+
+	// Present: user layer appears LAST, after the environment layer.
+	t.Run("present-after-env", func(t *testing.T) {
+		reg := &capturingRegistry{}
+		adapter := NewLLMProviderAdapter(reg, "p", "m", nil, nil).
+			WithEnvContext(fixedClock(), "").
+			WithCustomInstructions(func() string { return "Prefer tables over prose." })
+		if _, err := adapter.Generate(context.Background(), coreag.LLMRequest{SystemPrompt: base}); err != nil {
+			t.Fatalf("Generate: %v", err)
+		}
+		sys := reg.snapshot().System
+		baseIdx := strings.Index(sys, base)
+		envIdx := strings.Index(sys, "## Environment")
+		userIdx := strings.Index(sys, "## User instructions")
+		if baseIdx != 0 {
+			t.Fatalf("base must lead the composed System:\n%s", sys)
+		}
+		if envIdx <= baseIdx {
+			t.Fatalf("environment must follow the node prompt:\n%s", sys)
+		}
+		if userIdx <= envIdx {
+			t.Fatalf("user instructions must be the FINAL layer (after env):\n%s", sys)
+		}
+		if !strings.Contains(sys, "Prefer tables over prose.") {
+			t.Errorf("expected user instructions text in composed System:\n%s", sys)
+		}
+	})
+}
