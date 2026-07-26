@@ -842,6 +842,10 @@ type chatStream struct {
 	usage           llm.Usage
 	providerCostUSD *float64 // non-nil when OpenRouter reports usage.cost
 	finishStop      string
+	// respID is the generation id ("gen-…") the provider stamps on every SSE
+	// frame. Used to synthesize a stable tool_call id for providers (e.g.
+	// Moonshot/kimi) that stream tool calls without one — see Final().
+	respID string
 	// toolCalls is the index-keyed accumulator for streamed tool calls.
 	// OpenAI's wire format sends `id` and `function.name` once on the
 	// opening fragment of a given `index`, then fragments `arguments`
@@ -909,8 +913,15 @@ func (s *chatStream) pump() {
 				calls = make([]llm.ToolUse, 0, len(idxs))
 				for _, i := range idxs {
 					a := s.toolCalls[i]
+					// Some providers (e.g. Moonshot/kimi via OpenRouter) stream
+					// tool calls with no `id`. A tool result must echo a
+					// non-empty tool_call_id or the provider rejects the next
+					// turn ("tool_call_id  is not found"), so synthesize a
+					// stable one from the generation id + index. See
+					// core/llm/toolcall_id.go.
+					id := llm.EnsureToolCallID(a.id, s.respID, i)
 					calls = append(calls, llm.ToolUse{
-						ID:    a.id,
+						ID:    id,
 						Name:  a.name,
 						Input: json.RawMessage(a.argsBuf.String()),
 					})
@@ -1032,6 +1043,7 @@ func (s *chatStream) handleSSEData(raw []byte) {
 		"head", truncForLog(trimmed, 512),
 	)
 	var env struct {
+		ID      string `json:"id"`
 		Choices []struct {
 			Delta struct {
 				Content   string `json:"content"`
@@ -1062,6 +1074,16 @@ func (s *chatStream) handleSSEData(raw []byte) {
 	if err := json.Unmarshal(trimmed, &env); err != nil {
 		s.events <- llm.StreamEvent{Kind: llm.StreamError, Err: "openrouter: malformed SSE frame: " + err.Error()}
 		return
+	}
+
+	// Remember the generation id from the first frame that carries one, so
+	// Final() can synthesize tool_call ids for providers that omit them.
+	if env.ID != "" {
+		s.mu.Lock()
+		if s.respID == "" {
+			s.respID = env.ID
+		}
+		s.mu.Unlock()
 	}
 
 	// Mid-stream error frame (rare, but OpenRouter forwards upstream

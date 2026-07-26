@@ -143,6 +143,10 @@ type Graph struct {
 	ID          string  `json:"id" yaml:"id"`
 	Name        string  `json:"name,omitempty" yaml:"name,omitempty"`
 	Description string  `json:"description,omitempty" yaml:"description,omitempty"`
+	// SystemPrompt is the graph-level base system prompt prepended to
+	// every model node's own system_prompt. Empty ⇒ each model node uses
+	// only its own role prompt (no behaviour change).
+	SystemPrompt string  `json:"system_prompt,omitempty" yaml:"system_prompt,omitempty"`
 	Entrypoints []string `json:"entrypoints" yaml:"entrypoints"`
 	Nodes       []Node  `json:"nodes" yaml:"nodes"`
 	Edges       []Edge  `json:"edges,omitempty" yaml:"edges,omitempty"`

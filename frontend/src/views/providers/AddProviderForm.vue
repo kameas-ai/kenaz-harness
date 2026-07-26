@@ -330,7 +330,11 @@ watch(
 
 async function onProbe(): Promise<void> {
   if (probing.value) return;
-  if (requiresApiKey.value && !form.apiKey.trim()) {
+  // In edit mode the key field may be left blank ("keep current key"): probe
+  // with the blank key so providers whose catalog is public (e.g. OpenRouter)
+  // still return their model list. Key-required providers will surface an auth
+  // error from the backend, and the user can type a key to re-probe.
+  if (requiresApiKey.value && !isEditing.value && !form.apiKey.trim()) {
     probeError.value = 'API key is required.';
     return;
   }
@@ -344,8 +348,14 @@ async function onProbe(): Promise<void> {
       fallbackToManual.value = true;
     } else {
       fallbackToManual.value = false;
-      // Default to first model ticked. User can tick more.
-      form.selectedModelIds = [models.value[0].id];
+      // Preserve the already-configured models when editing (intersect prior
+      // ids with the freshly probed catalog); otherwise default to the first.
+      const prior = props.editing
+        ? (props.editing.models ?? [props.editing.model]).filter(Boolean)
+        : [];
+      const available = new Set(models.value.map((m) => m.id));
+      const keep = prior.filter((id) => available.has(id));
+      form.selectedModelIds = keep.length > 0 ? keep : [models.value[0].id];
     }
   } catch (err) {
     probeError.value = err instanceof Error ? err.message : String(err);
@@ -745,7 +755,7 @@ defineExpose({ form, validation, isValid, customProbeMatrix });
         <Button
           variant="ghost"
           type="button"
-          :disabled="probing || !form.apiKey.trim()"
+          :disabled="probing || (!isEditing && !form.apiKey.trim())"
           :data-testid="'add-provider-connect'"
           @click="onProbe"
         >

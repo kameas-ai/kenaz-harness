@@ -484,7 +484,7 @@ func (s *geminiStream) handleFrame(raw []byte) {
 
 			case part.FunctionCall != nil:
 				s.mu.Lock()
-				id := fmt.Sprintf("call_%d", s.toolCounter)
+				id := llm.SynthesizeToolCallID("", s.toolCounter)
 				s.toolCounter++
 				tu := llm.ToolUse{
 					ID:    id,

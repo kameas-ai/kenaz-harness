@@ -2,7 +2,6 @@ package gemini
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	llm "github.com/kameas-ai/kenaz-harness/core/llm"
@@ -392,8 +391,9 @@ func FromGeminiResponse(gr geminiResponse) (llm.Response, error) {
 			switch {
 			case p.FunctionCall != nil:
 				resp.ToolCalls = append(resp.ToolCalls, llm.ToolUse{
-					// Gemini doesn't assign IDs; synthesise positional ones.
-					ID:    fmt.Sprintf("call_%d", len(resp.ToolCalls)),
+					// Gemini doesn't assign IDs; synthesise positional ones
+					// via the shared helper (see core/llm/toolcall_id.go).
+					ID:    llm.SynthesizeToolCallID("", len(resp.ToolCalls)),
 					Name:  p.FunctionCall.Name,
 					Input: p.FunctionCall.Args,
 				})
