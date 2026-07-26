@@ -1315,6 +1315,19 @@ func (b *Bindings) Settings_SetAutoTitleEnabled(enabled bool) error {
 	return b.api.Settings().SetAutoTitleEnabled(b.ctx(), enabled)
 }
 
+// Settings_GetChatCustomInstructions returns the user's chat
+// custom-instructions text appended as the final system-prompt layer.
+// Empty means no user layer. (system-prompt-layers WP04)
+func (b *Bindings) Settings_GetChatCustomInstructions() (string, error) {
+	return b.api.Settings().GetChatCustomInstructions(b.ctx())
+}
+
+// Settings_SetChatCustomInstructions persists the chat custom-instructions
+// text. An empty string clears the user layer.
+func (b *Bindings) Settings_SetChatCustomInstructions(text string) error {
+	return b.api.Settings().SetChatCustomInstructions(b.ctx(), text)
+}
+
 // EmbedderConfigResult is the wire shape returned by
 // Settings_GetEmbedderConfig so the frontend can bind both fields in
 // a single RPC call.

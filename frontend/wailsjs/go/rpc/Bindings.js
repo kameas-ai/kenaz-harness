@@ -1262,6 +1262,10 @@ export function Settings_GetAutoTitleEnabled() {
   return window['go']['rpc']['Bindings']['Settings_GetAutoTitleEnabled']();
 }
 
+export function Settings_GetChatCustomInstructions() {
+  return window['go']['rpc']['Bindings']['Settings_GetChatCustomInstructions']();
+}
+
 export function Settings_GetAutonomy() {
   return window['go']['rpc']['Bindings']['Settings_GetAutonomy']();
 }
@@ -1376,6 +1380,10 @@ export function Settings_SetAutoResumeOnKeyRotation(arg1) {
 
 export function Settings_SetAutoTitleEnabled(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetAutoTitleEnabled'](arg1);
+}
+
+export function Settings_SetChatCustomInstructions(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetChatCustomInstructions'](arg1);
 }
 
 export function Settings_SetAutonomy(arg1) {

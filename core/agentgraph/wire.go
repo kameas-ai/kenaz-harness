@@ -17,6 +17,7 @@ type wireGraph struct {
 	ID            string         `json:"id" yaml:"id"`
 	Name          string         `json:"name,omitempty" yaml:"name,omitempty"`
 	Description   string         `json:"description,omitempty" yaml:"description,omitempty"`
+	SystemPrompt  string         `json:"system_prompt,omitempty" yaml:"system_prompt,omitempty"`
 	Entrypoints   []string       `json:"entrypoints" yaml:"entrypoints"`
 	Nodes         []wireNode     `json:"nodes" yaml:"nodes"`
 	Edges         []Edge         `json:"edges,omitempty" yaml:"edges,omitempty"`
@@ -43,6 +44,7 @@ func graphToWire(g Graph) (wireGraph, error) {
 		ID:            g.ID,
 		Name:          g.Name,
 		Description:   g.Description,
+		SystemPrompt:  g.SystemPrompt,
 		Entrypoints:   append([]string(nil), g.Entrypoints...),
 		Edges:         append([]Edge(nil), g.Edges...),
 		Budget:        g.Budget,
@@ -82,6 +84,7 @@ func wireToGraph(w wireGraph) (Graph, error) {
 		ID:            w.ID,
 		Name:          w.Name,
 		Description:   w.Description,
+		SystemPrompt:  w.SystemPrompt,
 		Entrypoints:   append([]string(nil), w.Entrypoints...),
 		Edges:         append([]Edge(nil), w.Edges...),
 		Budget:        w.Budget,

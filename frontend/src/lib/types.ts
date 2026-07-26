@@ -766,6 +766,15 @@ export interface Settings {
   maxAgentTurns?: number;
 
   /**
+   * User chat custom instructions appended as the FINAL layer of the
+   * chat system prompt, after the graph base, node role, and dynamic
+   * environment context (system-prompt-layers WP04). Empty (default)
+   * appends no user layer. The chat runner reads this on every send so
+   * an edit takes effect on the next turn without a restart.
+   */
+  chatCustomInstructions?: string;
+
+  /**
    * Compaction aggressiveness tier (mission
    * compaction-strategy-ui-01KQ8TDI §2.9). Empty == "balanced" (the
    * documented default). The Settings panel's five-stop slider emits

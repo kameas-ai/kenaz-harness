@@ -15,6 +15,7 @@ import (
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph/activities"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph/prompts"
 )
 
 // Manager owns the kernel, the on-disk graph library, the activity
@@ -191,7 +192,35 @@ func (m *Manager) LoadGraphSpec(id string) (coreag.Graph, error) {
 	if err != nil {
 		return coreag.Graph{}, fmt.Errorf("agentgraph: parse %q: %w", id, err)
 	}
+	// WP05 (system-prompt-grounding): seed the shared base constitution
+	// onto every non-chat graph's SystemPrompt at load time — the single
+	// source of truth for base grounding, so graph authors never have to
+	// paste the constitution text into YAML. chat_default is excluded:
+	// the chat graph is grounded via its own dedicated mission (WP02) so
+	// seeding it here too would double-compose (or fight) that path.
+	if id != "chat_default" {
+		g.SystemPrompt = seedBaseConstitution(g.SystemPrompt)
+	}
 	return g, nil
+}
+
+// seedBaseConstitution prepends the shared prompts.DefaultBaseConstitution()
+// to an existing graph-level system prompt. Both parts are trimmed of
+// surrounding whitespace and empty parts are dropped before joining with a
+// blank line, mirroring the kernel's own composePrompt behaviour
+// (core/agentgraph/exec_compute.go) without importing it — this package
+// sits above core/agentgraph and only needs the two-part join.
+func seedBaseConstitution(existing string) string {
+	base := strings.TrimSpace(prompts.DefaultBaseConstitution())
+	existing = strings.TrimSpace(existing)
+	switch {
+	case base == "":
+		return existing
+	case existing == "":
+		return base
+	default:
+		return base + "\n\n" + existing
+	}
 }
 
 // listLibrary returns the bundled + user library entries.
@@ -368,13 +397,13 @@ func (m *Manager) startRun(req StartRunRequest) (StartRunResponse, error) {
 	if req.GraphID == "" {
 		return StartRunResponse{}, errors.New("agentgraph: graphId required")
 	}
-	spec, err := m.loadGraph(req.GraphID)
+	// LoadGraphSpec seeds the shared base constitution onto non-chat
+	// graphs (WP05, system-prompt-grounding) — every graph started here
+	// (toolloop_default plus any user-saved library graph) picks up the
+	// base grounding without startRun re-implementing the composition.
+	g, err := m.LoadGraphSpec(req.GraphID)
 	if err != nil {
 		return StartRunResponse{}, err
-	}
-	g, err := coreag.LoadYAML([]byte(spec.YAML))
-	if err != nil {
-		return StartRunResponse{}, fmt.Errorf("agentgraph: parse: %w", err)
 	}
 	if err := coreag.Validate(g, coreag.WithActivityRegistry(m.catalog)); err != nil {
 		return StartRunResponse{}, fmt.Errorf("agentgraph: validate: %w", err)

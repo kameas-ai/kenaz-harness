@@ -179,6 +179,23 @@ type Config struct {
 	// the session's resolved autonomy knobs at StartStream time.
 	AutonomyKnobs AutonomyKnobsProvider
 
+	// Clock is the optional injected time source for the environment-
+	// context layer of the system prompt (system-prompt-layers WP03).
+	// nil falls back to time.Now inside the adapter; production leaves
+	// this nil and tests pin it for deterministic dates.
+	Clock func() time.Time
+
+	// WorkspaceDir is the absolute agent-workspace path surfaced in the
+	// environment-context layer (system-prompt-layers WP03). Empty renders
+	// a generic "sandboxed workspace" note instead of a concrete path.
+	WorkspaceDir string
+
+	// CustomInstructions returns the user's chat custom-instructions text,
+	// read on every StartStream so a Settings edit takes effect on the
+	// next turn (system-prompt-layers WP04). nil / empty appends no user
+	// layer to the system prompt.
+	CustomInstructions func() string
+
 	// GeneratedImageCapturer is the optional auto-capture pipeline for
 	// model-generated images (multimodal-io-extended-01KQ8TD2 WP02).
 	// When non-nil, the LLMProviderAdapter calls OnGeneratedImage for
@@ -508,7 +525,9 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		imageCapturer = nil
 	}
 	llmAdapter := NewLLMProviderAdapter(r.cfg.Registry, profileID, modelOverride, toolCatalog, imageCapturer).
-		WithSessionID(sessionID)
+		WithSessionID(sessionID).
+		WithEnvContext(r.cfg.Clock, r.cfg.WorkspaceDir).
+		WithCustomInstructions(r.cfg.CustomInstructions)
 	toolAdapter := newKernelToolAdapter(r.cfg.Pool, r.cfg.Perms, sessionID)
 	if r.cfg.AutonomyKnobs != nil {
 		toolAdapter.withAutonomy(r.cfg.AutonomyKnobs)

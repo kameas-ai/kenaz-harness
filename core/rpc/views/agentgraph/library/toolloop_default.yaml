@@ -31,6 +31,12 @@ nodes:
       model: "default"
       stream_to_chat: true
       max_tokens: 4096
+      system_prompt: |
+        You are running the default tool loop: respond to the user, and
+        call tools whenever a task needs a real action or a real fact
+        you don't already have from this conversation. Keep making tool
+        calls until the task is actually done, then reply without a
+        tool call to end the turn.
   - id: dispatch_tools
     kind: parallel
     title: "Fan-out tool calls"

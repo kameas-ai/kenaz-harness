@@ -91,9 +91,58 @@ func BuildRequestBody(req llm.GenerationRequest, model string, profileDefaults m
 		if role == "" {
 			role = string(llm.RoleUser)
 		}
-		entry := map[string]any{
-			"role":    role,
-			"content": BuildOpenAIContent(m.Content),
+
+		// Tool-result blocks each become their own OpenAI "tool" message
+		// carrying the tool_call_id that pairs the result to its parent tool
+		// call. Omitting tool_call_id makes OpenAI-compatible providers reject
+		// the turn (e.g. Moonshot: "tool_call_id is not found", 400).
+		emittedToolResult := false
+		for _, blk := range m.Content {
+			if blk.Type == "tool_result" && blk.ToolResult != nil {
+				msgs = append(msgs, map[string]any{
+					"role":         "tool",
+					"tool_call_id": blk.ToolResult.ToolUseID,
+					"content":      toolResultContent(blk.ToolResult),
+				})
+				emittedToolResult = true
+			}
+		}
+		if emittedToolResult {
+			continue
+		}
+
+		// Assistant turns that emitted tool calls carry a tool_calls array;
+		// without it the next turn's tool_call_id has no parent.
+		var toolCalls []map[string]any
+		for _, blk := range m.Content {
+			if blk.Type == "tool_use" && blk.ToolUse != nil {
+				args := string(blk.ToolUse.Input)
+				if args == "" {
+					args = "{}"
+				}
+				toolCalls = append(toolCalls, map[string]any{
+					"id":   blk.ToolUse.ID,
+					"type": "function",
+					"function": map[string]any{
+						"name":      blk.ToolUse.Name,
+						"arguments": args,
+					},
+				})
+			}
+		}
+
+		entry := map[string]any{"role": role}
+		if len(toolCalls) > 0 {
+			entry["tool_calls"] = toolCalls
+			// OpenAI accepts null content alongside tool_calls; include any
+			// text the assistant emitted with the calls.
+			if txt := flattenTextContent(m.Content); txt != "" {
+				entry["content"] = txt
+			} else {
+				entry["content"] = nil
+			}
+		} else {
+			entry["content"] = BuildOpenAIContent(m.Content)
 		}
 		msgs = append(msgs, entry)
 	}
@@ -119,6 +168,20 @@ func BuildOpenAIContent(parts []llm.ContentBlock) any {
 		return buildMultipartContent(parts)
 	}
 	return flattenTextContent(parts)
+}
+
+// toolResultContent renders a tool result's payload for the OpenAI "tool"
+// message content. ToolResult.Content is JSON-encoded; unwrap a plain JSON
+// string so the model sees raw text rather than an escaped, quoted blob.
+func toolResultContent(tr *llm.ToolResult) string {
+	content := string(tr.Content)
+	if len(content) >= 2 && content[0] == '"' && content[len(content)-1] == '"' {
+		var unq string
+		if err := json.Unmarshal(tr.Content, &unq); err == nil {
+			content = unq
+		}
+	}
+	return content
 }
 
 func flattenTextContent(parts []llm.ContentBlock) string {

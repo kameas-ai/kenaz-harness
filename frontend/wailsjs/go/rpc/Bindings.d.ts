@@ -686,6 +686,8 @@ export function Settings_GetAutoResumeOnKeyRotation():Promise<boolean>;
 
 export function Settings_GetAutoTitleEnabled():Promise<boolean>;
 
+export function Settings_GetChatCustomInstructions():Promise<string>;
+
 export function Settings_GetAutonomy():Promise<autonomy.Layer>;
 
 export function Settings_GetBash():Promise<boolean>;
@@ -743,6 +745,8 @@ export function Settings_SetAutoCaptureGeneratedImages(arg1:boolean):Promise<voi
 export function Settings_SetAutoResumeOnKeyRotation(arg1:boolean):Promise<void>;
 
 export function Settings_SetAutoTitleEnabled(arg1:boolean):Promise<void>;
+
+export function Settings_SetChatCustomInstructions(arg1:string):Promise<void>;
 
 export function Settings_SetAutonomy(arg1:autonomy.Layer):Promise<void>;
 

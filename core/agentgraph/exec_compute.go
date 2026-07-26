@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph/prompts"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
@@ -39,6 +40,12 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 	// for an LLMNode is "messages"; we accept either a []Message slice
 	// or a []llm.Message payload. Anything else falls back to a
 	// blank history.
+	// Compose the graph-level base system prompt (if any) with this
+	// node's own role prompt. When the graph sets no base, composePrompt
+	// yields just the node role — no behaviour change for graphs that
+	// don't ground their model calls.
+	systemPrompt := composePrompt(graphBaseOf(env), a.SystemPrompt)
+
 	var msgs []Message
 	if v, ok := inputs.Get("messages"); ok {
 		switch typed := v.(type) {
@@ -81,7 +88,7 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 			NodeID:        node.ID,
 			SessionID:     env.SessionID,
 			ProjectID:     env.ProjectID,
-			SystemPrompt:  a.SystemPrompt,
+			SystemPrompt:  systemPrompt,
 			Messages:      msgs,
 			TargetTokens:  a.MaxTokens,
 			CurrentTokens: estimateTokens(msgs),
@@ -110,7 +117,7 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 	req := LLMRequest{
 		Provider:     a.Provider,
 		Model:        a.Model,
-		SystemPrompt: a.SystemPrompt,
+		SystemPrompt: systemPrompt,
 		Messages:     msgs,
 		Tools:        tools,
 		MaxTokens:    a.MaxTokens,
@@ -158,7 +165,7 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 		"run_id", env.RunID, "session_id", env.SessionID, "node_id", node.ID,
 		"provider", a.Provider, "model", a.Model,
 		"messages", len(msgs), "tools", len(tools),
-		"max_tokens", a.MaxTokens, "system_prompt_len", len(a.SystemPrompt),
+		"max_tokens", a.MaxTokens, "system_prompt_len", len(systemPrompt),
 	)
 	resp, err := env.LLM.Generate(llmCtx, req)
 	if err != nil {
@@ -315,8 +322,8 @@ func (toolExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 			// Apply updated_input: rewrite args if the hook provided new input.
 			if len(merged.UpdatedInput) > 0 {
 				_ = res.Events.AppendKind(env.RunID, node.ID, EventHookInputRewrite, map[string]any{
-					"tool":     a.Name,
-					"original": string(argsJSON),
+					"tool":      a.Name,
+					"original":  string(argsJSON),
 					"rewritten": string(merged.UpdatedInput),
 				})
 				var rewrittenArgs map[string]any
@@ -500,6 +507,27 @@ func estimateTokens(ms []Message) int {
 		n += len(m.Content) + len(m.Name)
 	}
 	return (n + 3) / 4
+}
+
+// composePrompt joins system-prompt fragments (e.g. a graph-level base
+// constitution + a model node's own role prompt) into a single system
+// prompt. It delegates to prompts.Compose so there is a single
+// implementation shared by the kernel and any graph-authoring code that
+// wants the same joining semantics (e.g. seeding a graph's base from
+// prompts.DefaultBaseConstitution()).
+func composePrompt(parts ...string) string {
+	return prompts.Compose(parts...)
+}
+
+// graphBaseOf returns the graph-level base system prompt, nil-safe (env.Graph
+// may be nil in unit tests). Every model-driven executor composes this with its
+// node's own system_prompt so the shared grounding constitution reaches
+// planner/reflect/review nodes too, not just plain model nodes.
+func graphBaseOf(env *Env) string {
+	if env == nil || env.Graph == nil {
+		return ""
+	}
+	return env.Graph.SystemPrompt
 }
 
 // ---- TransformNode ----
@@ -704,7 +732,6 @@ func (reflectExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs
 	if !ok {
 		return res, fmt.Errorf("reflect: node %q has wrong attrs type %T", node.ID, node.Attrs)
 	}
-	_ = a // kept for future config
 	_ = res.Events.AppendKind(env.RunID, node.ID, EventReflectStarted, map[string]any{
 		"model":              a.Model,
 		"severity_threshold": a.SeverityThreshold,
@@ -728,7 +755,8 @@ func (reflectExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs
 	}
 	resp, err := env.LLM.Generate(ctx, LLMRequest{
 		Model: model, MaxTokens: 512,
-		Messages: []Message{{Role: "user", Content: prompt}},
+		SystemPrompt: composePrompt(graphBaseOf(env), a.SystemPrompt),
+		Messages:     []Message{{Role: "user", Content: prompt}},
 	})
 	if err != nil {
 		return res, fmt.Errorf("reflect: node %q: %w", node.ID, err)
@@ -748,8 +776,8 @@ func (reflectExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs
 	}
 
 	critique := map[string]any{
-		"severity":            severity,
-		"text":                resp.Content,
+		"severity":           severity,
+		"text":               resp.Content,
 		"suggested_revision": resp.Content,
 	}
 	res.Outputs["critique"] = critique
@@ -804,7 +832,8 @@ func (reviewExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs 
 	}
 	resp, err := env.LLM.Generate(ctx, LLMRequest{
 		Model: model, MaxTokens: 256,
-		Messages: []Message{{Role: "user", Content: "Review this. Reply PASS or FAIL with one-line reason.\n\n" + draft}},
+		SystemPrompt: composePrompt(graphBaseOf(env), a.SystemPrompt),
+		Messages:     []Message{{Role: "user", Content: "Review this. Reply PASS or FAIL with one-line reason.\n\n" + draft}},
 	})
 	if err != nil {
 		return res, fmt.Errorf("review: node %q: %w", node.ID, err)
@@ -893,7 +922,8 @@ func (plannerExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs
 		verbosity, task)
 	resp, err := env.LLM.Generate(ctx, LLMRequest{
 		Model: model, MaxTokens: 1024,
-		Messages: []Message{{Role: "user", Content: prompt}},
+		SystemPrompt: composePrompt(graphBaseOf(env), a.SystemPrompt),
+		Messages:     []Message{{Role: "user", Content: prompt}},
 	})
 	if err != nil {
 		return res, fmt.Errorf("planner: node %q: %w", node.ID, err)
@@ -1069,9 +1099,9 @@ func (compactExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs
 
 	target := a.TargetTokenBudget
 	co, err := env.Compactor.Compact(ctx, CompactionInput{
-		Site:          CompactionSiteManual,
-		Messages:      msgs,
-		TargetTokens:  target,
+		Site:         CompactionSiteManual,
+		Messages:     msgs,
+		TargetTokens: target,
 	})
 	if err != nil {
 		_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
@@ -1083,12 +1113,12 @@ func (compactExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs
 
 	res.Outputs["result"] = co.Messages
 	_ = res.Events.AppendKind(env.RunID, node.ID, EventCompactionApplied, map[string]any{
-		"strategy":          a.Strategy,
-		"target_tokens":     target,
-		"input_messages":    len(msgs),
-		"output_messages":   len(co.Messages),
-		"skipped":           co.Skipped,
-		"custom_subgraph":   a.CustomSubgraphId,
+		"strategy":        a.Strategy,
+		"target_tokens":   target,
+		"input_messages":  len(msgs),
+		"output_messages": len(co.Messages),
+		"skipped":         co.Skipped,
+		"custom_subgraph": a.CustomSubgraphId,
 	})
 	return res, nil
 }
