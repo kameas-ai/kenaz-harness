@@ -150,3 +150,73 @@
   --modal-overlay: rgba(15, 15, 18, 0.45);
   --modal-shadow: rgba(15, 15, 18, 0.18);
 }
+
+/*
+ * ─── Named host themes (spec 073, HARNESS VENDOR SECTION) ─────────────
+ * Vendored from @kameas-ai/kenaz-design-system@0.6.0 src/tokens/tokens.css
+ * (spec 071 blocks), selectors strengthened to `:root[data-theme=…]` so
+ * they override the `:root:not(.dark)` light block above (equal
+ * specificity, later in file wins). Applied ONLY when the workbench chrome
+ * passes ?theme=<id> (see useTheme.ts hostThemeParam) — standalone
+ * harness never sets data-theme and never reaches these blocks.
+ * Refresh procedure: REFRESH.md (source is the DS package, not kenaz).
+ */
+:root[data-theme="ink"] {
+  --surface-0: #0A0A0B; --surface-1: #101012; --surface-2: #17171A;
+  --surface-3: #1E1E22; --surface-4: #26262C;
+  --border-muted: #18181D; --border: #22222A; --border-strong: #2E2E36;
+  --ink: #F4F1EA; --ink-muted: #A0A0A8; --ink-subtle: #6F6F78;
+  --ink-dim: #48484F; --ink-trace: #2E2E34;
+  --accent: #C8A56A; --accent-muted: #8A7550; --accent-dim: #4A3F2A;
+  --accent-glow: rgba(200, 165, 106, 0.12);
+  --accent-hairline: rgba(200, 165, 106, 0.30);
+  --ok: #7FB392; --warn: #D4A34A; --danger: #D48280; --info: #8DA4C4;
+  --violet: #A58BC4; --signal-neutral: #8A8F99; --signal-git: #6FA8A0;
+  --modal-overlay: rgba(10, 10, 11, 0.72);
+  --modal-shadow: rgba(0, 0, 0, 0.6);
+}
+
+:root[data-theme="linen"] {
+  --surface-0: #F4EFE4; --surface-1: #EDE7D8; --surface-2: #E4DCC9;
+  --surface-3: #D8CFB8; --surface-4: #C8BCA0;
+  --border-muted: #DED5C0; --border: #C5B99E; --border-strong: #A89A78;
+  --ink: #1A1814; --ink-muted: #4E4940; --ink-subtle: #756E62;
+  --ink-dim: #9A9181; --ink-trace: #BDB39E;
+  --accent: #8F6B26; --accent-muted: #B89763; --accent-dim: #EDDFB7;
+  --accent-glow: rgba(143, 107, 38, 0.10);
+  --accent-hairline: rgba(143, 107, 38, 0.35);
+  --ok: #4F8264; --warn: #9C7220; --danger: #B14E4B; --info: #4D6B96;
+  --violet: #7A5DA0; --signal-neutral: #5C616B; --signal-git: #3E7972;
+  --modal-overlay: rgba(244, 239, 228, 0.78);
+  --modal-shadow: rgba(50, 40, 20, 0.18);
+}
+
+:root[data-theme="azure"] {
+  --surface-0: #0B1C2E; --surface-1: #102538; --surface-2: #163046;
+  --surface-3: #1D3B56; --surface-4: #244668;
+  --border-muted: #152C42; --border: #1F3C58; --border-strong: #2E5378;
+  --ink: #E8EFF6; --ink-muted: #9CB3C7; --ink-subtle: #6F87A3;
+  --ink-dim: #4D6485; --ink-trace: #2D4264;
+  --accent: #C8A56A; --accent-muted: #8A7550; --accent-dim: #3D3525;
+  --accent-glow: rgba(200, 165, 106, 0.14);
+  --accent-hairline: rgba(200, 165, 106, 0.35);
+  --ok: #82BA9A; --warn: #D9AA50; --danger: #DD8682; --info: #B7CCE6;
+  --violet: #B097D4; --signal-neutral: #97A4BC; --signal-git: #79B2AA;
+  --modal-overlay: rgba(11, 28, 46, 0.78);
+  --modal-shadow: rgba(0, 0, 0, 0.55);
+}
+
+:root[data-theme="paper"] {
+  --surface-0: #F4EEDF; --surface-1: #FBF7EC; --surface-2: #EDE5D0;
+  --surface-3: #E2D7BC; --surface-4: #D3C5A4;
+  --border-muted: #E7DEC8; --border: #D0C4A6; --border-strong: #A99B77;
+  --ink: #201D16; --ink-muted: #554D3E; --ink-subtle: #7D7462;
+  --ink-dim: #9E9480; --ink-trace: #C4BAA2;
+  --accent: #2F5380; --accent-muted: #7A92B0; --accent-dim: #DEE6F0;
+  --accent-glow: rgba(47, 83, 128, 0.10);
+  --accent-hairline: rgba(47, 83, 128, 0.35);
+  --ok: #4F8264; --warn: #9C7220; --danger: #B14E4B; --info: #4D6B96;
+  --violet: #7A5DA0; --signal-neutral: #5C616B; --signal-git: #3E7972;
+  --modal-overlay: rgba(244, 238, 223, 0.80);
+  --modal-shadow: rgba(50, 40, 20, 0.15);
+}
