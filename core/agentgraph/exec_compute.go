@@ -39,6 +39,16 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 	// for an LLMNode is "messages"; we accept either a []Message slice
 	// or a []llm.Message payload. Anything else falls back to a
 	// blank history.
+	// Compose the graph-level base system prompt (if any) with this
+	// node's own role prompt. When the graph sets no base, composePrompt
+	// yields just the node role — no behaviour change for graphs that
+	// don't ground their model calls.
+	var graphBase string
+	if env.Graph != nil {
+		graphBase = env.Graph.SystemPrompt
+	}
+	systemPrompt := composePrompt(graphBase, a.SystemPrompt)
+
 	var msgs []Message
 	if v, ok := inputs.Get("messages"); ok {
 		switch typed := v.(type) {
@@ -81,7 +91,7 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 			NodeID:        node.ID,
 			SessionID:     env.SessionID,
 			ProjectID:     env.ProjectID,
-			SystemPrompt:  a.SystemPrompt,
+			SystemPrompt:  systemPrompt,
 			Messages:      msgs,
 			TargetTokens:  a.MaxTokens,
 			CurrentTokens: estimateTokens(msgs),
@@ -110,7 +120,7 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 	req := LLMRequest{
 		Provider:     a.Provider,
 		Model:        a.Model,
-		SystemPrompt: a.SystemPrompt,
+		SystemPrompt: systemPrompt,
 		Messages:     msgs,
 		Tools:        tools,
 		MaxTokens:    a.MaxTokens,
@@ -158,7 +168,7 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 		"run_id", env.RunID, "session_id", env.SessionID, "node_id", node.ID,
 		"provider", a.Provider, "model", a.Model,
 		"messages", len(msgs), "tools", len(tools),
-		"max_tokens", a.MaxTokens, "system_prompt_len", len(a.SystemPrompt),
+		"max_tokens", a.MaxTokens, "system_prompt_len", len(systemPrompt),
 	)
 	resp, err := env.LLM.Generate(llmCtx, req)
 	if err != nil {
@@ -500,6 +510,22 @@ func estimateTokens(ms []Message) int {
 		n += len(m.Content) + len(m.Name)
 	}
 	return (n + 3) / 4
+}
+
+// composePrompt joins system-prompt fragments (e.g. a graph-level base
+// constitution + a model node's own role prompt) into a single system
+// prompt. Each part is trimmed of surrounding whitespace; empty parts
+// are dropped; the survivors are joined with a blank line ("\n\n") so
+// the sections stay visually distinct. A single non-empty part is
+// returned as-is; all-empty input yields "".
+func composePrompt(parts ...string) string {
+	kept := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			kept = append(kept, trimmed)
+		}
+	}
+	return strings.Join(kept, "\n\n")
 }
 
 // ---- TransformNode ----
