@@ -93,6 +93,11 @@ nodes:
       model: "default"
       stream_to_chat: true
       max_tokens: 4096
+      # Role only — the shared grounding constitution is seeded onto
+      # the graph's top-level system_prompt by the chassis GraphLoader
+      # (core/rpc/api.go), which composes it with this role via
+      # prompts.Compose. Do not paste the constitution here.
+      system_prompt: "You are the primary assistant in a direct conversation with the user. Use the available tools to get real, verified information before answering."
 
   - id: tool_dispatch
     kind: tool_dispatch
