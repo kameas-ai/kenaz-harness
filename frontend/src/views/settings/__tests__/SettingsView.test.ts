@@ -215,6 +215,59 @@ describe('SettingsView (FR-001b numbered-section header)', () => {
     await flushPromises();
     expect(setAutoTitleEnabled).toHaveBeenCalledWith(false);
   });
+
+  // ── system-prompt-layers WP04: chat custom instructions ───────────────
+
+  it('renders the chat custom-instructions textarea', async () => {
+    const { client } = provide();
+    const w = mount(SettingsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(w.find('[data-testid="chat-custom-instructions-section"]').exists()).toBe(true);
+    expect(w.find('[data-testid="chat-custom-instructions-input"]').exists()).toBe(true);
+  });
+
+  it('loads the persisted custom-instructions value into the textarea', async () => {
+    const getChatCustomInstructions = vi.fn().mockResolvedValue('Answer in British English.');
+    const { client: baseClient } = provide();
+    const client = {
+      ...baseClient,
+      settings: {
+        ...baseClient.settings,
+        getChatCustomInstructions,
+        setChatCustomInstructions: vi.fn().mockResolvedValue(undefined),
+      },
+    };
+    const w = mount(SettingsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    const ta = w.find<HTMLTextAreaElement>('[data-testid="chat-custom-instructions-input"]');
+    expect((ta.element as HTMLTextAreaElement).value).toBe('Answer in British English.');
+  });
+
+  it('persists the custom-instructions value on change (round-trip)', async () => {
+    const setChatCustomInstructions = vi.fn().mockResolvedValue(undefined);
+    const { client: baseClient } = provide();
+    const client = {
+      ...baseClient,
+      settings: {
+        ...baseClient.settings,
+        getChatCustomInstructions: vi.fn().mockResolvedValue(''),
+        setChatCustomInstructions,
+      },
+    };
+    const w = mount(SettingsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    const ta = w.find<HTMLTextAreaElement>('[data-testid="chat-custom-instructions-input"]');
+    await ta.setValue('Prefer tables over prose.');
+    await ta.trigger('change');
+    await flushPromises();
+    expect(setChatCustomInstructions).toHaveBeenCalledWith('Prefer tables over prose.');
+  });
 });
 
 // ── v0.5.5: no-eligible-embedder-provider banner ──────────────────────────

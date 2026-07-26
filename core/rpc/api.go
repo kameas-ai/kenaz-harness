@@ -3673,7 +3673,15 @@ func newLLMStack(
 		chatAutoTitleGen = autotitle.New(llmCaller)
 	}
 
-	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen)
+	// system-prompt-layers WP03: derive the agent-workspace path from the
+	// harness DataDir (mirrors tools.EnsureWorkspace's <dataDir>/agent-workspace
+	// convention). Empty dataDir (test chassis) yields an empty path and the
+	// environment layer falls back to a generic sandboxed-workspace note.
+	chatWorkspaceDir := ""
+	if dataDir != "" {
+		chatWorkspaceDir = filepath.Join(dataDir, "agent-workspace")
+	}
+	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatWorkspaceDir)
 	var capCatalog llm.CapCatalog
 	if cat, err := llmcap.LoadDefault(); err == nil {
 		capCatalog = &capCatalogAdapter{cat: cat}
@@ -3903,6 +3911,7 @@ func buildChatRunner(
 	usageMgr usage.Manager,
 	sessionMgr *session.Manager,
 	autoTitleGen chat.AutoTitleGenerator,
+	workspaceDir string,
 ) *chat.ChatRunner {
 	if graphMgr == nil || graphMgr.Kernel() == nil {
 		logging.L().Warn("chat.runner.disabled", "reason", "graph manager unavailable")
@@ -3918,6 +3927,20 @@ func buildChatRunner(
 		}
 		s := settings.Settings{MaxAgentTurns: raw}
 		return s.EffectiveMaxAgentTurns()
+	}
+	// system-prompt-layers WP04: resolve the user's chat custom
+	// instructions on every StartStream so a Settings edit takes effect on
+	// the next turn without a restart. A read error degrades to no user
+	// layer rather than failing the turn.
+	customInstructions := func() string {
+		if settingsImpl == nil || settingsImpl.Store() == nil {
+			return ""
+		}
+		text, err := settingsImpl.Store().LoadChatCustomInstructions()
+		if err != nil {
+			return ""
+		}
+		return text
 	}
 	historyReader := chatSessionMessageReader{inner: historyAdapter}
 	historyWriter := &llmHistoryWriter{inner: historyAdapter}
@@ -4133,7 +4156,15 @@ func buildChatRunner(
 			return g, nil
 		},
 		MaxTurns:         maxTurns,
-		EnvDefaults:      envDefaults,
+		// system-prompt-layers WP03: surface the sandboxed agent-workspace
+		// path in the environment-context layer of the system prompt. Empty
+		// when DataDir is unset (test path) — the adapter then renders a
+		// generic sandboxed-workspace note.
+		WorkspaceDir: workspaceDir,
+		// system-prompt-layers WP04: append the user's chat custom
+		// instructions as the final system-prompt layer.
+		CustomInstructions: customInstructions,
+		EnvDefaults:        envDefaults,
 		ToolDiscoverer:   chatToolDiscovererAdapter{inner: tools},
 		Compaction:       compactionDeps,
 		PartialPersister: partialPersister,

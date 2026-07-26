@@ -412,6 +412,28 @@ async function toggleAutoTitleEnabled() {
   });
 }
 
+// system-prompt-layers WP04: user chat custom instructions, appended as
+// the final layer of the chat system prompt.
+const chatCustomInstructions = ref('');
+
+async function loadChatCustomInstructions() {
+  try {
+    chatCustomInstructions.value = await client.settings.getChatCustomInstructions();
+  } catch {
+    // Graceful fallback: the Go binding may not exist yet; default empty.
+    chatCustomInstructions.value = '';
+  }
+}
+
+async function saveChatCustomInstructions() {
+  const text = chatCustomInstructions.value;
+  try {
+    await client.settings.setChatCustomInstructions(text);
+  } catch {
+    // Non-fatal; keep local state so the textarea does not clear.
+  }
+}
+
 // v0.5.2: embedder provider config (Bug #2 universal-embedder fix)
 const embedderProviders = ref<Provider[]>([]);
 const embedderProfileId = ref('');
@@ -660,6 +682,7 @@ async function refresh() {
   await loadEmbedderEligibility();
   await loadShowPerMessageTokenMeter();
   await loadOnboardingState();
+  await loadChatCustomInstructions();
 }
 
 function setCompactionTier(t: CompactionAggressiveness) {
@@ -1283,6 +1306,28 @@ onMounted(() => {
           each new session after the first exchange. You can override or
           clear it at any time.
         </p>
+      </section>
+
+      <!-- system-prompt-layers WP04: user chat custom instructions,
+           appended as the final layer of every chat system prompt. -->
+      <section data-testid="chat-custom-instructions-section">
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Chat — Custom instructions
+        </h2>
+        <p class="mt-1 text-[11px] text-ink-muted">
+          Standing instructions added to the end of every chat's system
+          prompt — after the built-in role and environment context. Use it
+          for lasting preferences (tone, language, formatting). Applies on
+          your next message.
+        </p>
+        <textarea
+          v-model="chatCustomInstructions"
+          rows="5"
+          class="mt-2 w-full rounded-sm border border-accent-hairline bg-surface-1 px-3 py-2 font-ui text-[12px] text-ink placeholder:text-ink-dim focus:border-accent focus:outline-none"
+          placeholder="e.g. Always answer in British English. Prefer tables over long prose."
+          data-testid="chat-custom-instructions-input"
+          @change="saveChatCustomInstructions"
+        ></textarea>
       </section>
 
       <!-- v0.5.2: Memory → Embedder configuration (Bug #2 universal-embedder fix).
