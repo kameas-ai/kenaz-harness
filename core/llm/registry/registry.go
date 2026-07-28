@@ -317,6 +317,7 @@ func (r *Registry) PreflightAll(ctx context.Context) []llm.PreflightResult {
 //
 //  1. Profile lookup
 //  2. CapabilityGate.Check  → llm/capability_rejected on failure
+//  2b. KnobPolicy.Apply     → sanitises req.Knobs; llm/error on refusal
 //  3. PolicyGuard.Allow     → llm/policy_denied on failure
 //  4. CredentialResolver    → llm/error on resolution failure
 //  5. AuditEmitter.RequestSubmitted
@@ -330,6 +331,7 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 	emitter := r.em
 	policy := r.policy
 	gate := r.gate
+	cat := r.cat
 	reducer := r.reducer
 	resolver := r.resolver
 	r.mu.RUnlock()
@@ -391,6 +393,32 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 	// for every image/document ContentBlock in the request.
 	if err := gate.CheckAttachments(req, prof); err != nil {
 		return nil, err
+	}
+
+	// 2c. KnobPolicy (model-request-path-live-01PMDL01 WP03). Sanitises
+	// req.Knobs against the resolved model's rich capability record
+	// before anything downstream (audit, retry, adapter body-build) sees
+	// it: unsupported-but-droppable knobs (Seed/TopK/ParallelToolCalls/
+	// mismatched Reasoning style) are stripped and logged; irreconcilable
+	// mismatches are refused with ErrUnsupportedFeature before the wire
+	// call (llm.go RequestKnobs doc, capabilities/knob_policy.go).
+	if req.Knobs != nil {
+		richCaps := cat.DescribeRich(prof.Kind, prof.Model)
+		cleaned, dropped, kerr := capabilities.NewKnobPolicy(richCaps).Apply(req.Knobs)
+		if kerr != nil {
+			_ = emitter.Error(ctx, req, prof, kerr)
+			return nil, kerr
+		}
+		req.Knobs = cleaned
+		for _, d := range dropped {
+			log.Debug("registry.stream.knob_dropped",
+				"profile_id", req.ProfileID,
+				"provider", prof.Kind,
+				"model", prof.Model,
+				"knob", d.Name,
+				"reason", d.Reason,
+			)
+		}
 	}
 
 	// 3. PolicyGuard.
@@ -473,10 +501,45 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 		return nil, err
 	}
 
+	// 6b. Structured-output validate + repair-once (model-request-path-live-
+	// 01PMDL01 WP04). Only requests carrying a JSON response format opt in;
+	// "grammar" mode is enforced by the runtime's token sampler and needs no
+	// text re-validation here. Wraps the *raw* stream (before auditedStream)
+	// so a corrective retry can still use the live (unzeroed) credBytes and
+	// so response_final audits the validated/repaired response.
+	var pipelineStream llm.Stream = stream
+	if rf := req.ResponseFormat; rf != nil && (rf.Mode == "json" || rf.Mode == "json_schema") {
+		pipelineStream = &structuredStream{
+			inner:  stream,
+			schema: rf.Schema,
+			mode:   rf.Mode,
+			strict: rf.StrictValidation,
+			ctx:    ctx,
+			retry: func(rctx context.Context, priorResp llm.Response, hint string) (llm.Response, error) {
+				req2 := req
+				req2.Messages = append(append([]llm.Message{}, req.Messages...),
+					llm.Message{Role: llm.RoleAssistant, Content: priorResp.Content},
+					llm.NewTextMessage(llm.RoleUser, hint),
+				)
+				s2, _, rerr := retry.Run(mw, rctx, policyP, func(c context.Context) (llm.Stream, error) {
+					return adapter.Stream(c, req2, prof, credBytes)
+				})
+				if rerr != nil {
+					return llm.Response{}, rerr
+				}
+				// Drain; the corrective attempt is a Final()-time repair, not
+				// something streamed to the caller (see structuredStream doc).
+				for range s2.Events() {
+				}
+				return s2.Final()
+			},
+		}
+	}
+
 	// 7. Wrap the returned stream so we can attach the cost reducer and
 	// audit terminal events on Final()/Cancel().
 	wrapped := &auditedStream{
-		inner:    stream,
+		inner:    pipelineStream,
 		req:      req,
 		prof:     prof,
 		emitter:  emitter,
