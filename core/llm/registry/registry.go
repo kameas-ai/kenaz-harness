@@ -501,10 +501,45 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 		return nil, err
 	}
 
+	// 6b. Structured-output validate + repair-once (model-request-path-live-
+	// 01PMDL01 WP04). Only requests carrying a JSON response format opt in;
+	// "grammar" mode is enforced by the runtime's token sampler and needs no
+	// text re-validation here. Wraps the *raw* stream (before auditedStream)
+	// so a corrective retry can still use the live (unzeroed) credBytes and
+	// so response_final audits the validated/repaired response.
+	var pipelineStream llm.Stream = stream
+	if rf := req.ResponseFormat; rf != nil && (rf.Mode == "json" || rf.Mode == "json_schema") {
+		pipelineStream = &structuredStream{
+			inner:  stream,
+			schema: rf.Schema,
+			mode:   rf.Mode,
+			strict: rf.StrictValidation,
+			ctx:    ctx,
+			retry: func(rctx context.Context, priorResp llm.Response, hint string) (llm.Response, error) {
+				req2 := req
+				req2.Messages = append(append([]llm.Message{}, req.Messages...),
+					llm.Message{Role: llm.RoleAssistant, Content: priorResp.Content},
+					llm.NewTextMessage(llm.RoleUser, hint),
+				)
+				s2, _, rerr := retry.Run(mw, rctx, policyP, func(c context.Context) (llm.Stream, error) {
+					return adapter.Stream(c, req2, prof, credBytes)
+				})
+				if rerr != nil {
+					return llm.Response{}, rerr
+				}
+				// Drain; the corrective attempt is a Final()-time repair, not
+				// something streamed to the caller (see structuredStream doc).
+				for range s2.Events() {
+				}
+				return s2.Final()
+			},
+		}
+	}
+
 	// 7. Wrap the returned stream so we can attach the cost reducer and
 	// audit terminal events on Final()/Cancel().
 	wrapped := &auditedStream{
-		inner:    stream,
+		inner:    pipelineStream,
 		req:      req,
 		prof:     prof,
 		emitter:  emitter,

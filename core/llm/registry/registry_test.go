@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/fstest"
@@ -27,6 +28,16 @@ type fakeAdapter struct {
 	wantCap llm.CapabilityDescriptor
 	gotCred []byte
 	gotReq  llm.GenerationRequest // last GenerationRequest passed to Stream (post-pipeline)
+
+	// respByCall, when non-nil, selects the Response returned on the Nth
+	// call (1-indexed, clamped to the last entry) instead of the fixed
+	// `final` field. Used by the WP04 structured-output tests to script a
+	// first-attempt-invalid / retry-valid (or retry-still-invalid)
+	// sequence.
+	respByCall []llm.Response
+
+	mu           sync.Mutex
+	gotReqByCall []llm.GenerationRequest // every GenerationRequest passed to Stream, in call order
 }
 
 func (a *fakeAdapter) Kind() string { return a.kind }
@@ -40,7 +51,27 @@ func (a *fakeAdapter) Stream(_ context.Context, req llm.GenerationRequest, _ llm
 	}
 	a.gotCred = append([]byte(nil), cred...)
 	a.gotReq = req
-	return &fakeStream{chunks: a.chunks, final: a.final}, nil
+	a.mu.Lock()
+	a.gotReqByCall = append(a.gotReqByCall, req)
+	a.mu.Unlock()
+
+	final := a.final
+	if a.respByCall != nil {
+		idx := int(n) - 1
+		if idx >= len(a.respByCall) {
+			idx = len(a.respByCall) - 1
+		}
+		final = a.respByCall[idx]
+	}
+	return &fakeStream{chunks: a.chunks, final: final}, nil
+}
+
+func (a *fakeAdapter) callReqs() []llm.GenerationRequest {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]llm.GenerationRequest, len(a.gotReqByCall))
+	copy(out, a.gotReqByCall)
+	return out
 }
 
 type fakeStream struct {
@@ -740,5 +771,220 @@ func TestRegistry_StreamKnobPolicy_RefusesIrreconcilableReasoning(t *testing.T) 
 	}
 	if n := atomic.LoadInt32(&adapter.calls); n != 0 {
 		t.Fatalf("adapter must not be dispatched on knob-policy refusal, calls=%d", n)
+	}
+}
+
+// --- WP04: structured-output validate + repair-once
+// (model-request-path-live-01PMDL01) ---
+
+// nameRequiredSchema requires a top-level string "name" field.
+const nameRequiredSchema = `{"type":"object","required":["name"],"properties":{"name":{"type":"string"}}}`
+
+func newRegForStructured(t *testing.T) (*Registry, *fakeAdapter) {
+	t.Helper()
+	const key = "TEST_REG_STRUCTURED_KEY"
+	os.Setenv(key, "secret-bytes")
+	t.Cleanup(func() { os.Unsetenv(key) })
+
+	r, _ := newReg(t)
+	r.resolver = credref.New(secrets.NewMemoryBackend())
+	adapter := &fakeAdapter{kind: "anthropic"}
+	r.RegisterAdapter(adapter)
+	prof := llm.ProviderProfile{
+		ID: "p", Kind: "anthropic", Model: "claude-sonnet-4-7",
+		Cred: llm.CredentialReference{Kind: "env", Locator: key},
+	}
+	if err := r.LoadProfiles([]llm.ProviderProfile{prof}); err != nil {
+		t.Fatalf("LoadProfiles: %v", err)
+	}
+	return r, adapter
+}
+
+func jsonResp(text string) llm.Response {
+	return llm.Response{
+		Content:      []llm.ContentBlock{{Type: "text", Text: text}},
+		FinishReason: "stop",
+	}
+}
+
+// TestRegistry_StructuredOutput_PassesValidFirstTry verifies a response that
+// validates against the schema on the first attempt passes through
+// unmodified and triggers no retry.
+func TestRegistry_StructuredOutput_PassesValidFirstTry(t *testing.T) {
+	r, adapter := newRegForStructured(t)
+	adapter.respByCall = []llm.Response{jsonResp(`{"name":"ok"}`)}
+
+	req := llm.GenerationRequest{
+		ProfileID:      "p",
+		ResponseFormat: &llm.ResponseFormat{Mode: "json_schema", Schema: []byte(nameRequiredSchema)},
+	}
+	stream, err := r.Stream(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Stream: unexpected error: %v", err)
+	}
+	resp, ferr := stream.Final()
+	if ferr != nil {
+		t.Fatalf("Final: unexpected error: %v", ferr)
+	}
+	if got := (llm.Message{Content: resp.Content}).Text(); got != `{"name":"ok"}` {
+		t.Errorf("unexpected content: %q", got)
+	}
+	if n := atomic.LoadInt32(&adapter.calls); n != 1 {
+		t.Fatalf("expected exactly 1 adapter call (no retry needed), got %d", n)
+	}
+}
+
+// TestRegistry_StructuredOutput_RetriesOnceAndRepairs verifies a first
+// response that fails schema validation triggers exactly one corrective
+// retry naming the specific field violation, and the repaired response is
+// what the caller ultimately observes.
+func TestRegistry_StructuredOutput_RetriesOnceAndRepairs(t *testing.T) {
+	r, adapter := newRegForStructured(t)
+	adapter.respByCall = []llm.Response{
+		jsonResp(`{}`),               // missing required "name" -> invalid
+		jsonResp(`{"name":"fixed"}`), // corrective retry -> valid
+	}
+
+	req := llm.GenerationRequest{
+		ProfileID:      "p",
+		ResponseFormat: &llm.ResponseFormat{Mode: "json_schema", Schema: []byte(nameRequiredSchema)},
+	}
+	stream, err := r.Stream(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Stream: unexpected error: %v", err)
+	}
+	resp, ferr := stream.Final()
+	if ferr != nil {
+		t.Fatalf("Final: unexpected error: %v", ferr)
+	}
+	if got := (llm.Message{Content: resp.Content}).Text(); got != `{"name":"fixed"}` {
+		t.Errorf("want repaired response surfaced to caller, got %q", got)
+	}
+	if n := atomic.LoadInt32(&adapter.calls); n != 2 {
+		t.Fatalf("expected exactly 2 adapter calls (1 retry), got %d", n)
+	}
+
+	// The corrective retry's request must name the specific field
+	// violation (".name") so the model knows what to fix.
+	reqs := adapter.callReqs()
+	if len(reqs) != 2 {
+		t.Fatalf("expected 2 recorded requests, got %d", len(reqs))
+	}
+	last := reqs[1]
+	if len(last.Messages) == 0 {
+		t.Fatal("expected retry request to carry appended messages")
+	}
+	hintMsg := last.Messages[len(last.Messages)-1]
+	if hintMsg.Role != llm.RoleUser {
+		t.Errorf("want corrective hint as a user message, got role %q", hintMsg.Role)
+	}
+	if !strings.Contains(hintMsg.Text(), "name") {
+		t.Errorf("want corrective hint to name the offending field, got %q", hintMsg.Text())
+	}
+}
+
+// TestRegistry_StructuredOutput_TypedErrorAfterRepairFails verifies that
+// when both the first attempt and the single corrective retry fail schema
+// validation, the caller sees the typed llm.ErrResponseValidationFailed.
+func TestRegistry_StructuredOutput_TypedErrorAfterRepairFails(t *testing.T) {
+	r, adapter := newRegForStructured(t)
+	adapter.respByCall = []llm.Response{
+		jsonResp(`{}`), // missing "name" -> invalid
+		jsonResp(`{}`), // still missing "name" -> invalid
+	}
+
+	req := llm.GenerationRequest{
+		ProfileID:      "p",
+		ResponseFormat: &llm.ResponseFormat{Mode: "json_schema", Schema: []byte(nameRequiredSchema)},
+	}
+	stream, err := r.Stream(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Stream: unexpected error: %v", err)
+	}
+	_, ferr := stream.Final()
+	if ferr == nil {
+		t.Fatal("expected ErrResponseValidationFailed, got nil")
+	}
+	var verr *llm.ErrResponseValidationFailed
+	if !errors.As(ferr, &verr) {
+		t.Fatalf("expected *llm.ErrResponseValidationFailed, got %T: %v", ferr, ferr)
+	}
+	if !strings.Contains(verr.SchemaError, "name") {
+		t.Errorf("want SchemaError to name the offending field, got %q", verr.SchemaError)
+	}
+	if n := atomic.LoadInt32(&adapter.calls); n != 2 {
+		t.Fatalf("expected exactly 2 adapter calls (1 retry, no more), got %d", n)
+	}
+}
+
+// TestRegistry_StructuredOutput_StrictValidationSkipsRetry verifies
+// StrictValidation:true fails immediately on the first violation with no
+// corrective retry.
+func TestRegistry_StructuredOutput_StrictValidationSkipsRetry(t *testing.T) {
+	r, adapter := newRegForStructured(t)
+	adapter.respByCall = []llm.Response{jsonResp(`{}`)}
+
+	req := llm.GenerationRequest{
+		ProfileID: "p",
+		ResponseFormat: &llm.ResponseFormat{
+			Mode: "json_schema", Schema: []byte(nameRequiredSchema), StrictValidation: true,
+		},
+	}
+	stream, err := r.Stream(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Stream: unexpected error: %v", err)
+	}
+	_, ferr := stream.Final()
+	var verr *llm.ErrResponseValidationFailed
+	if !errors.As(ferr, &verr) {
+		t.Fatalf("expected *llm.ErrResponseValidationFailed, got %T: %v", ferr, ferr)
+	}
+	if n := atomic.LoadInt32(&adapter.calls); n != 1 {
+		t.Fatalf("strict mode must not retry, expected 1 call, got %d", n)
+	}
+}
+
+// TestRegistry_StructuredOutput_GrammarModeSkipsValidation verifies
+// Mode=="grammar" responses are passed through with no JSON-schema
+// re-validation (grammar constraints are enforced by the runtime's
+// token sampler, not this post-hoc validator).
+func TestRegistry_StructuredOutput_GrammarModeSkipsValidation(t *testing.T) {
+	// Grammar mode requests CapGrammar (llm.go GenerationRequest.RequiredCapabilities);
+	// Anthropic doesn't advertise it, so use Ollama (llama.cpp backend, native
+	// GBNF support per capabilities/data/ollama.yaml) to reach the structured
+	// stream at all.
+	const key = "TEST_REG_STRUCTURED_GRAMMAR_KEY"
+	os.Setenv(key, "secret-bytes")
+	t.Cleanup(func() { os.Unsetenv(key) })
+	r, _ := newReg(t)
+	r.resolver = credref.New(secrets.NewMemoryBackend())
+	adapter := &fakeAdapter{kind: "ollama"}
+	r.RegisterAdapter(adapter)
+	prof := llm.ProviderProfile{
+		ID: "p", Kind: "ollama", Model: "llama3.1",
+		Cred: llm.CredentialReference{Kind: "env", Locator: key},
+	}
+	if err := r.LoadProfiles([]llm.ProviderProfile{prof}); err != nil {
+		t.Fatalf("LoadProfiles: %v", err)
+	}
+	adapter.respByCall = []llm.Response{jsonResp(`not json at all`)}
+
+	req := llm.GenerationRequest{
+		ProfileID:      "p",
+		ResponseFormat: &llm.ResponseFormat{Mode: "grammar"},
+	}
+	stream, err := r.Stream(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Stream: unexpected error: %v", err)
+	}
+	resp, ferr := stream.Final()
+	if ferr != nil {
+		t.Fatalf("Final: unexpected error for grammar mode, got %v", ferr)
+	}
+	if got := (llm.Message{Content: resp.Content}).Text(); got != "not json at all" {
+		t.Errorf("want passthrough content, got %q", got)
+	}
+	if n := atomic.LoadInt32(&adapter.calls); n != 1 {
+		t.Fatalf("grammar mode must not retry, expected 1 call, got %d", n)
 	}
 }
