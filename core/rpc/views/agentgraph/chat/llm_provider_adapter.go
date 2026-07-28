@@ -330,17 +330,23 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 		}
 	}
 
-	// WP02 (long-turn-resilience): wrap the stream open with classified
-	// retry-with-backoff. Pre-stream transient errors (5xx, network blips)
-	// are retried up to 3 times with 500ms exponential backoff ±10%.
+	// WP02 (long-turn-resilience) / WP02 (model-request-path-live-
+	// 01PMDL01): wrap the stream open with classified retry-with-backoff,
+	// driven by the resolved profile's retry.Policy rather than a
+	// hardcoded literal — a bundle author's per-profile Retry config
+	// (retry.FromLLM(prof.Retry)) now reaches this layer, not just the
+	// registry's own internal RetryMiddleware. Falls back to
+	// retry.StreamPolicyFromLLM's defaults (matching DefaultRetryPolicy)
+	// when the profile can't be resolved. Pre-stream transient errors
+	// (5xx, network blips) are retried with exponential backoff ±jitter.
 	// Mid-stream transient errors that have not yet emitted any content
 	// are silently retried by the retryableStream wrapper. Non-transient
 	// errors (auth, invalid-request, cancelled) propagate immediately.
-	retryPolicy := retry.StreamPolicy{
-		MaxAttempts: 3,
-		BaseDelay:   500 * time.Millisecond,
-		JitterPct:   0.10,
+	var profileRetry *corellm.RetryPolicy
+	if prof, profErr := a.reg.Profile(a.profileID); profErr == nil {
+		profileRetry = prof.Retry
 	}
+	retryPolicy := retry.StreamPolicyFromLLM(profileRetry)
 	stream, err := retry.RetryStream(ctx, retryPolicy, func() (corellm.Stream, error) {
 		return a.reg.Stream(ctx, gen)
 	})
