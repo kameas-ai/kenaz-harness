@@ -317,6 +317,7 @@ func (r *Registry) PreflightAll(ctx context.Context) []llm.PreflightResult {
 //
 //  1. Profile lookup
 //  2. CapabilityGate.Check  → llm/capability_rejected on failure
+//  2b. KnobPolicy.Apply     → sanitises req.Knobs; llm/error on refusal
 //  3. PolicyGuard.Allow     → llm/policy_denied on failure
 //  4. CredentialResolver    → llm/error on resolution failure
 //  5. AuditEmitter.RequestSubmitted
@@ -330,6 +331,7 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 	emitter := r.em
 	policy := r.policy
 	gate := r.gate
+	cat := r.cat
 	reducer := r.reducer
 	resolver := r.resolver
 	r.mu.RUnlock()
@@ -391,6 +393,32 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 	// for every image/document ContentBlock in the request.
 	if err := gate.CheckAttachments(req, prof); err != nil {
 		return nil, err
+	}
+
+	// 2c. KnobPolicy (model-request-path-live-01PMDL01 WP03). Sanitises
+	// req.Knobs against the resolved model's rich capability record
+	// before anything downstream (audit, retry, adapter body-build) sees
+	// it: unsupported-but-droppable knobs (Seed/TopK/ParallelToolCalls/
+	// mismatched Reasoning style) are stripped and logged; irreconcilable
+	// mismatches are refused with ErrUnsupportedFeature before the wire
+	// call (llm.go RequestKnobs doc, capabilities/knob_policy.go).
+	if req.Knobs != nil {
+		richCaps := cat.DescribeRich(prof.Kind, prof.Model)
+		cleaned, dropped, kerr := capabilities.NewKnobPolicy(richCaps).Apply(req.Knobs)
+		if kerr != nil {
+			_ = emitter.Error(ctx, req, prof, kerr)
+			return nil, kerr
+		}
+		req.Knobs = cleaned
+		for _, d := range dropped {
+			log.Debug("registry.stream.knob_dropped",
+				"profile_id", req.ProfileID,
+				"provider", prof.Kind,
+				"model", prof.Model,
+				"knob", d.Name,
+				"reason", d.Reason,
+			)
+		}
 	}
 
 	// 3. PolicyGuard.

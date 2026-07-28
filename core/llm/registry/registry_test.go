@@ -7,9 +7,11 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	llm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
 	"github.com/kameas-ai/kenaz-harness/core/llm/credref"
 	"github.com/kameas-ai/kenaz-harness/core/llm/events"
 	"github.com/kameas-ai/kenaz-harness/core/secrets"
@@ -24,18 +26,20 @@ type fakeAdapter struct {
 	chunks  []llm.StreamEvent
 	wantCap llm.CapabilityDescriptor
 	gotCred []byte
+	gotReq  llm.GenerationRequest // last GenerationRequest passed to Stream (post-pipeline)
 }
 
 func (a *fakeAdapter) Kind() string { return a.kind }
 func (a *fakeAdapter) Capabilities(_ string) llm.CapabilityDescriptor {
 	return a.wantCap
 }
-func (a *fakeAdapter) Stream(_ context.Context, _ llm.GenerationRequest, _ llm.ProviderProfile, cred []byte) (llm.Stream, error) {
+func (a *fakeAdapter) Stream(_ context.Context, req llm.GenerationRequest, _ llm.ProviderProfile, cred []byte) (llm.Stream, error) {
 	n := atomic.AddInt32(&a.calls, 1)
 	if int32(n) <= a.failN {
 		return nil, &llm.ErrTransient{Status: 503, Message: "blip"}
 	}
 	a.gotCred = append([]byte(nil), cred...)
+	a.gotReq = req
 	return &fakeStream{chunks: a.chunks, final: a.final}, nil
 }
 
@@ -587,5 +591,154 @@ func TestRegistry_GeminiNotRegisteredWhenFlagOff(t *testing.T) {
 	a := r.Adapter("gemini")
 	if a != nil {
 		t.Error("expected gemini adapter NOT to be registered when HARNESS_GOOGLE_GEMINI=off")
+	}
+}
+
+// ─── WP03: KnobPolicy.Apply wired into Stream ──────────────────────────────
+// (model-request-path-live-01PMDL01). These tests use a synthetic Catalog
+// (rather than the embedded default) so ProviderCapabilities knob fields
+// are controlled precisely and the test isn't coupled to the shipped
+// capability YAML's per-model coverage of the newer knob fields.
+//
+// NB: as discovered while writing these tests, none of the shipped
+// core/llm/capabilities/data/*.yaml model entries currently set the
+// seed/top_k/top_p/frequency_penalty/presence_penalty/parallel_tool_calls
+// fields — and Catalog.DescribeRich's applyRichEntry unconditionally
+// overwrites (not merges) those fields from the matched model entry, so
+// every *known* model currently resolves all of these to false regardless
+// of the provider-level `defaults:` block. That's a pre-existing data/loader
+// gap in core/llm/capabilities (not touched by this WP) worth a follow-up;
+// seeded here in this test's doc comment rather than silently worked around.
+
+func testKnobProfile() llm.ProviderProfile {
+	return llm.ProviderProfile{
+		ID: "p", Kind: "testknob", Model: "test-knob-model-1",
+		Cred: llm.CredentialReference{Kind: "env", Locator: "TEST_REG_KNOB_KEY"},
+	}
+}
+
+// testKnobCatalog returns a Catalog for a synthetic "testknob" provider with
+// one model ("test-knob-model*") that: does not support seed, does support
+// top_k, and supports reasoning via token_budget style only.
+func testKnobCatalog(t *testing.T) *capabilities.Catalog {
+	t.Helper()
+	fsys := fstest.MapFS{
+		"data/testknob.yaml": &fstest.MapFile{Data: []byte(`
+provider: testknob
+models:
+  - match: "test-knob-model*"
+    streaming: true
+    tool_calling: true
+    seed: false
+    top_k: true
+    reasoning: true
+    reasoning_style: "token_budget"
+`)},
+	}
+	cat, err := capabilities.Load(fsys, "data")
+	if err != nil {
+		t.Fatalf("testKnobCatalog: %v", err)
+	}
+	return cat
+}
+
+func newRegWithResolvedCred(t *testing.T) (*Registry, *fakeAdapter) {
+	t.Helper()
+	os.Setenv("TEST_REG_KNOB_KEY", "secret-bytes")
+	t.Cleanup(func() { os.Unsetenv("TEST_REG_KNOB_KEY") })
+
+	sink := &events.MemorySink{}
+	emit := events.New(sink)
+	emit.SetClock(func() time.Time { return time.Unix(0, 0) })
+	r, err := New(Options{Emitter: emit, Catalog: testKnobCatalog(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.resolver = credref.New(secrets.NewMemoryBackend())
+	adapter := &fakeAdapter{
+		kind: "testknob",
+		chunks: []llm.StreamEvent{
+			{Kind: llm.StreamFinish, Finish: "stop"},
+		},
+		final: llm.Response{FinishReason: "stop"},
+	}
+	r.RegisterAdapter(adapter)
+	if err := r.LoadProfiles([]llm.ProviderProfile{testKnobProfile()}); err != nil {
+		t.Fatal(err)
+	}
+	return r, adapter
+}
+
+// TestRegistry_StreamKnobPolicy_DropsUnsupportedKnob verifies an unsupported
+// knob (seed, unsupported per testKnobCatalog) is stripped
+// from the request before it reaches the adapter, and the stream still
+// succeeds (silent drop, not a refusal).
+func TestRegistry_StreamKnobPolicy_DropsUnsupportedKnob(t *testing.T) {
+	r, adapter := newRegWithResolvedCred(t)
+	seed := 42
+	req := llm.GenerationRequest{
+		ProfileID: "p",
+		Knobs:     &llm.RequestKnobs{Seed: &seed},
+	}
+	stream, err := r.Stream(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Stream: unexpected error: %v", err)
+	}
+	_, _ = stream.Final()
+	if adapter.gotReq.Knobs == nil {
+		t.Fatal("adapter did not receive knobs at all")
+	}
+	if adapter.gotReq.Knobs.Seed != nil {
+		t.Errorf("want seed dropped before reaching adapter, got %v", adapter.gotReq.Knobs.Seed)
+	}
+	if n := atomic.LoadInt32(&adapter.calls); n != 1 {
+		t.Fatalf("expected exactly 1 adapter call, got %d", n)
+	}
+}
+
+// TestRegistry_StreamKnobPolicy_PassesSupportedKnob verifies a knob the
+// profile's model DOES support (top_k, per testKnobCatalog) reaches the
+// adapter unmodified.
+func TestRegistry_StreamKnobPolicy_PassesSupportedKnob(t *testing.T) {
+	r, adapter := newRegWithResolvedCred(t)
+	topK := 40
+	req := llm.GenerationRequest{
+		ProfileID: "p",
+		Knobs:     &llm.RequestKnobs{TopK: &topK},
+	}
+	stream, err := r.Stream(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Stream: unexpected error: %v", err)
+	}
+	_, _ = stream.Final()
+	if adapter.gotReq.Knobs == nil || adapter.gotReq.Knobs.TopK == nil {
+		t.Fatal("want top_k retained on the request reaching the adapter")
+	}
+	if *adapter.gotReq.Knobs.TopK != 40 {
+		t.Errorf("want top_k=40 unmodified, got %d", *adapter.gotReq.Knobs.TopK)
+	}
+}
+
+// TestRegistry_StreamKnobPolicy_RefusesIrreconcilableReasoning verifies the
+// registry refuses (does not dispatch to the adapter) when the request's
+// reasoning knob is irreconcilable with the model's reasoning style — here
+// an OpenAI-style effort string against an Anthropic token-budget model.
+func TestRegistry_StreamKnobPolicy_RefusesIrreconcilableReasoning(t *testing.T) {
+	r, adapter := newRegWithResolvedCred(t)
+	req := llm.GenerationRequest{
+		ProfileID: "p",
+		Knobs: &llm.RequestKnobs{
+			Reasoning: &llm.ReasoningConfig{OpenAIEffort: "high"},
+		},
+	}
+	_, err := r.Stream(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected ErrUnsupportedFeature refusal, got nil")
+	}
+	if !llm.IsUnsupportedFeature(err) {
+		t.Errorf("want ErrUnsupportedFeature, got %T: %v", err, err)
+	}
+	if n := atomic.LoadInt32(&adapter.calls); n != 0 {
+		t.Fatalf("adapter must not be dispatched on knob-policy refusal, calls=%d", n)
 	}
 }
