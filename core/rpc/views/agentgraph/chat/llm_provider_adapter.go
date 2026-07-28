@@ -308,17 +308,45 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 		Tools:     a.tools,
 	}
 
-	// WP02 (long-turn-resilience): wrap the stream open with classified
-	// retry-with-backoff. Pre-stream transient errors (5xx, network blips)
-	// are retried up to 3 times with 500ms exponential backoff ±10%.
+	// Carry the per-node sampling knobs already threaded through the
+	// kernel seam (agentgraph.LLMRequest.MaxTokens/Temperature, populated
+	// from ModelAttrs in exec_compute.go) onto the wire request. Every
+	// production adapter reads max_tokens/temperature from
+	// GenerationRequest.Params (anthropic.go:434,446; gemini/wire.go:293;
+	// azure/adapter.go:381; openaiwire/body.go:51 as the fallback layer
+	// under Knobs), so Params is the universal cross-provider channel —
+	// not the OpenAI-only Knobs struct. Zero/nil means "no override; let
+	// the provider/profile default apply," matching ModelAttrs' documented
+	// zero-value semantics. Before this fix Generate() dropped both fields
+	// entirely, silently discarding every per-node sampling knob authored
+	// in ModelAttrs graph-wide (model-request-path-live-01PMDL01 WP01).
+	if req.MaxTokens > 0 || req.Temperature != nil {
+		gen.Params = make(map[string]any, 2)
+		if req.MaxTokens > 0 {
+			gen.Params["max_tokens"] = req.MaxTokens
+		}
+		if req.Temperature != nil {
+			gen.Params["temperature"] = *req.Temperature
+		}
+	}
+
+	// WP02 (long-turn-resilience) / WP02 (model-request-path-live-
+	// 01PMDL01): wrap the stream open with classified retry-with-backoff,
+	// driven by the resolved profile's retry.Policy rather than a
+	// hardcoded literal — a bundle author's per-profile Retry config
+	// (retry.FromLLM(prof.Retry)) now reaches this layer, not just the
+	// registry's own internal RetryMiddleware. Falls back to
+	// retry.StreamPolicyFromLLM's defaults (matching DefaultRetryPolicy)
+	// when the profile can't be resolved. Pre-stream transient errors
+	// (5xx, network blips) are retried with exponential backoff ±jitter.
 	// Mid-stream transient errors that have not yet emitted any content
 	// are silently retried by the retryableStream wrapper. Non-transient
 	// errors (auth, invalid-request, cancelled) propagate immediately.
-	retryPolicy := retry.StreamPolicy{
-		MaxAttempts: 3,
-		BaseDelay:   500 * time.Millisecond,
-		JitterPct:   0.10,
+	var profileRetry *corellm.RetryPolicy
+	if prof, profErr := a.reg.Profile(a.profileID); profErr == nil {
+		profileRetry = prof.Retry
 	}
+	retryPolicy := retry.StreamPolicyFromLLM(profileRetry)
 	stream, err := retry.RetryStream(ctx, retryPolicy, func() (corellm.Stream, error) {
 		return a.reg.Stream(ctx, gen)
 	})
