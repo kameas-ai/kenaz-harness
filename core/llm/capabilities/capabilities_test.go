@@ -3,6 +3,7 @@ package capabilities
 import (
 	"encoding/json"
 	"testing"
+	"testing/fstest"
 
 	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
@@ -325,5 +326,158 @@ func TestCapabilityDescriptor_JSONRoundTrip(t *testing.T) {
 	}
 	if back.Provider != d.Provider || back.Model != d.Model {
 		t.Errorf("round-trip lost provider/model: %+v", back)
+	}
+}
+
+// TestCatalog_DescribeRich_InheritsProviderKnobDefaults is the regression
+// test for WP08 (model-request-path-live-01PMDL01): applyRichEntry used to
+// wholesale-overwrite every ProviderCapabilities knob field with the
+// matched model row's (Go zero-value) fields, silently zeroing every knob
+// the shipped YAML never sets at model level even when the provider-level
+// `defaults:` block declares real support. Real model rows for every
+// provider here are silent on the extended knob fields, so a correct merge
+// must resolve them to the provider defaults — not false/"" across the
+// board — while an explicit model-level override (e.g. vision on gpt-4o)
+// must still win.
+func TestCatalog_DescribeRich_InheritsProviderKnobDefaults(t *testing.T) {
+	t.Parallel()
+	c := mustCatalog(t)
+
+	t.Run("openai/gpt-4o inherits defaults' knob support", func(t *testing.T) {
+		t.Parallel()
+		caps := c.DescribeRich("openai", "gpt-4o")
+		wantTrue := map[string]bool{
+			"ParallelToolCalls": caps.ParallelToolCalls,
+			"Seed":              caps.Seed,
+			"Logprobs":          caps.Logprobs,
+			"TopP":              caps.TopP,
+			"FrequencyPenalty":  caps.FrequencyPenalty,
+			"PresencePenalty":   caps.PresencePenalty,
+			"ResponseFormat":    caps.ResponseFormat,
+		}
+		for name, got := range wantTrue {
+			if !got {
+				t.Errorf("openai/gpt-4o: %s = false, want true (inherited from provider defaults)", name)
+			}
+		}
+		if caps.TopK {
+			t.Errorf("openai/gpt-4o: TopK = true, want false (OpenAI does not support top_k)")
+		}
+		if caps.Batch {
+			t.Errorf("openai/gpt-4o: Batch = true, want false")
+		}
+		// Explicit model-level override must still win over the provider
+		// default (openai defaults declare vision:false).
+		if !caps.Vision {
+			t.Errorf("openai/gpt-4o: Vision = false, want true (explicit model-level override)")
+		}
+	})
+
+	t.Run("anthropic/claude-sonnet-4-5 inherits defaults' knob support", func(t *testing.T) {
+		t.Parallel()
+		caps := c.DescribeRich("anthropic", "claude-sonnet-4-5")
+		if !caps.TopK {
+			t.Errorf("anthropic/claude-sonnet-4-5: TopK = false, want true (Anthropic supports top_k)")
+		}
+		if !caps.TopP {
+			t.Errorf("anthropic/claude-sonnet-4-5: TopP = false, want true")
+		}
+		if caps.Seed {
+			t.Errorf("anthropic/claude-sonnet-4-5: Seed = true, want false (Anthropic has no seed param)")
+		}
+		if caps.ParallelToolCalls {
+			t.Errorf("anthropic/claude-sonnet-4-5: ParallelToolCalls = true, want false")
+		}
+		if !caps.ResponseFormat {
+			t.Errorf("anthropic/claude-sonnet-4-5: ResponseFormat = false, want true")
+		}
+		// Explicit model-level override must still win (claude-sonnet-*
+		// sets reasoning_style: token_budget explicitly).
+		if caps.Reasoning_ != llm.ReasoningTokenBudget {
+			t.Errorf("anthropic/claude-sonnet-4-5: Reasoning_ = %v, want ReasoningTokenBudget", caps.Reasoning_)
+		}
+	})
+
+	t.Run("gemini/gemini-2.5-pro inherits defaults' knob support", func(t *testing.T) {
+		t.Parallel()
+		caps := c.DescribeRich("gemini", "gemini-2.5-pro")
+		if !caps.TopP {
+			t.Errorf("gemini/gemini-2.5-pro: TopP = false, want true (inherited)")
+		}
+		if !caps.TopK {
+			t.Errorf("gemini/gemini-2.5-pro: TopK = false, want true (inherited)")
+		}
+	})
+
+	t.Run("bedrock/anthropic.claude-sonnet-* inherits defaults' knob support", func(t *testing.T) {
+		t.Parallel()
+		caps := c.DescribeRich("bedrock", "anthropic.claude-sonnet-4-5-v1:0")
+		if !caps.TopK {
+			t.Errorf("bedrock claude-sonnet: TopK = false, want true (inherited)")
+		}
+		if !caps.TopP {
+			t.Errorf("bedrock claude-sonnet: TopP = false, want true (inherited)")
+		}
+		if caps.Seed {
+			t.Errorf("bedrock claude-sonnet: Seed = true, want false")
+		}
+	})
+}
+
+// TestCatalog_DescribeRich_ModelOverrideWinsOverDefault builds a synthetic
+// provider spec (rather than relying on shipped data, none of which
+// currently overrides a knob at model level) to pin the other half of the
+// merge contract directly: when a model row DOES explicitly set a knob
+// field, that value must win over the provider-level default, including
+// the case where the override is the more restrictive `false`.
+func TestCatalog_DescribeRich_ModelOverrideWinsOverDefault(t *testing.T) {
+	t.Parallel()
+	const doc = `
+provider: synthtest
+defaults:
+  streaming: true
+  seed: true
+  top_p: true
+  top_k: false
+  parallel_tool_calls: true
+models:
+  - match: "no-override-model"
+    streaming: true
+  - match: "override-model"
+    streaming: true
+    seed: false
+    top_k: true
+`
+	fsys := fstest.MapFS{
+		"data/synthtest.yaml": &fstest.MapFile{Data: []byte(doc)},
+	}
+	c, err := Load(fsys, "data")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Model row silent on seed/top_p/top_k/parallel_tool_calls: must
+	// inherit every default verbatim.
+	inherited := c.DescribeRich("synthtest", "no-override-model")
+	if !inherited.Seed || !inherited.TopP || inherited.TopK || !inherited.ParallelToolCalls {
+		t.Errorf("no-override-model: got Seed=%v TopP=%v TopK=%v ParallelToolCalls=%v, want true/true/false/true (all inherited)",
+			inherited.Seed, inherited.TopP, inherited.TopK, inherited.ParallelToolCalls)
+	}
+
+	// Model row explicitly overrides seed (true->false) and top_k
+	// (false->true); top_p and parallel_tool_calls are left unset and
+	// must still fall through to the provider default.
+	overridden := c.DescribeRich("synthtest", "override-model")
+	if overridden.Seed {
+		t.Errorf("override-model: Seed = true, want false (explicit model override should win)")
+	}
+	if !overridden.TopK {
+		t.Errorf("override-model: TopK = false, want true (explicit model override should win)")
+	}
+	if !overridden.TopP {
+		t.Errorf("override-model: TopP = false, want true (unset field must inherit default)")
+	}
+	if !overridden.ParallelToolCalls {
+		t.Errorf("override-model: ParallelToolCalls = false, want true (unset field must inherit default)")
 	}
 }
