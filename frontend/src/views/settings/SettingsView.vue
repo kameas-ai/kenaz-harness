@@ -1465,14 +1465,14 @@ onMounted(() => {
             </button>
             <span
               v-if="embedderTestStatus === 'ok'"
-              class="font-ui text-[11px] text-green-600"
+              class="font-ui text-[11px] text-signal-ok"
               data-testid="embedder-test-ok"
             >
               Connection OK
             </span>
             <span
               v-else-if="embedderTestStatus === 'error'"
-              class="font-ui text-[11px] text-red-500"
+              class="font-ui text-[11px] text-signal-danger"
               data-testid="embedder-test-error"
             >
               {{ embedderTestError ?? 'Test failed' }}
@@ -1596,7 +1596,7 @@ onMounted(() => {
         </label>
         <p
           v-if="maxGeneratedImageMiBError"
-          class="mt-0.5 text-[11px] text-red-400"
+          class="mt-0.5 text-[11px] text-signal-danger"
           data-testid="max-generated-image-mib-error"
         >
           {{ maxGeneratedImageMiBError }}

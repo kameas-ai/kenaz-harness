@@ -107,8 +107,8 @@ function viewOutput(id: string) {
 function statusClass(status: string): string {
   switch (status) {
     case 'running':  return 'text-accent';
-    case 'completed': return 'text-success';
-    case 'failed':   return 'text-error';
+    case 'completed': return 'text-signal-ok';
+    case 'failed':   return 'text-signal-danger';
     case 'cancelled':
     case 'crashed':  return 'text-ink-muted';
     default:         return 'text-ink-muted';
@@ -160,7 +160,7 @@ function kindIcon(kind: string): string {
     <!-- Error -->
     <p
       v-if="error"
-      class="text-error text-[13px]"
+      class="text-signal-danger text-[13px]"
       data-testid="tasks-error"
     >
       {{ error }}
@@ -228,7 +228,7 @@ function kindIcon(kind: string): string {
             <button
               v-if="task.status === 'running'"
               type="button"
-              class="text-[11px] text-error hover:text-error-dark transition-colors"
+              class="text-[11px] text-signal-danger hover:brightness-90 transition-colors"
               :disabled="abortingId === task.id"
               data-testid="task-abort-btn"
               @click="abort(task.id)"

@@ -54,7 +54,7 @@ const needsMoreRAM = computed<boolean>(() => {
     <span class="text-xs text-ink-muted font-mono">{{ displayText }}</span>
     <span
       v-if="needsMoreRAM"
-      class="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-ui font-medium bg-amber-50 text-amber-700 border border-amber-200"
+      class="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-ui font-medium bg-signal-warn-soft text-signal-warn border border-signal-warn"
       data-testid="needs-more-ram-pill"
     >
       Needs more RAM

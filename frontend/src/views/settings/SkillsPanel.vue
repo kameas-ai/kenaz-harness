@@ -186,7 +186,7 @@ async function saveRename(skill: SkillItem): Promise<void> {
               <!-- Shadowed warning (FR-401) -->
               <span
                 v-if="skill.shadowed"
-                class="mt-0.5 rounded-sm bg-amber-100 px-1.5 py-0.5 font-ui text-[10px] font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                class="mt-0.5 rounded-sm bg-signal-warn-soft px-1.5 py-0.5 font-ui text-[10px] font-medium text-signal-warn"
                 :data-testid="`skill-shadowed-badge-${skill.id}`"
               >
                 Shadowed — /{{ skill.trigger }} is taken by a personal command
@@ -205,7 +205,7 @@ async function saveRename(skill: SkillItem): Promise<void> {
               <!-- Org-managed badge (FR-302) -->
               <span
                 v-if="skill.orgManaged"
-                class="rounded-sm bg-blue-100 px-1.5 py-0.5 font-ui text-[10px] font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+                class="rounded-sm bg-signal-info-soft px-1.5 py-0.5 font-ui text-[10px] font-medium text-signal-info"
                 :data-testid="`skill-orgmanaged-badge-${skill.id}`"
               >
                 Org-managed

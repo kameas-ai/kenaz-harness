@@ -50,19 +50,22 @@ function categoryFor(e: AuditEntry): Category {
     : 'STORAGE';
 }
 
+// DS-token category legend. 8 categories over the DS's 7 signal tokens
+// means one deliberate reuse (MCP / A2A both -> violet — both are
+// "delegated execution" categories, so the visual grouping is coherent).
 const categoryColour: Record<string, string> = {
-  LLM: 'bg-blue-500',
-  MCP: 'bg-purple-500',
-  POLICY: 'bg-yellow-500',
-  SECRETS: 'bg-red-500',
-  STORAGE: 'bg-gray-500',
-  CONTEXT: 'bg-teal-500',
-  A2A: 'bg-orange-500',
-  BUNDLE: 'bg-green-500',
+  LLM: 'bg-signal-info',
+  MCP: 'bg-signal-violet',
+  POLICY: 'bg-signal-warn',
+  SECRETS: 'bg-signal-danger',
+  STORAGE: 'bg-signal-neutral',
+  CONTEXT: 'bg-signal-git',
+  A2A: 'bg-signal-violet',
+  BUNDLE: 'bg-signal-ok',
 };
 
 function dotColour(e: AuditEntry): string {
-  return categoryColour[categoryFor(e)] ?? 'bg-gray-400';
+  return categoryColour[categoryFor(e)] ?? 'bg-signal-neutral';
 }
 
 onMounted(() => {

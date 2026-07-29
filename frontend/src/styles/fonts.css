@@ -1,7 +1,15 @@
 /*
- * Geist + Geist Mono @font-face declarations. Files live under
- * frontend/src/assets/fonts/ — see that README. SIL OFL 1.1 license at
- * frontend/src/assets/fonts/OFL.txt; NOTICES entry at repo root.
+ * Geist, Geist Mono, and Newsreader @font-face declarations.
+ *
+ * The woff2 binaries are NOT vendored into this repo — they're sourced
+ * directly from the @kameas-ai/kenaz-design-system package (the same
+ * byte-identical files previously duplicated here; see
+ * src/assets/fonts/README.md). Referencing them via a relative path into
+ * node_modules is safe under Vite: `url()` in CSS resolves as a plain
+ * filesystem path (not a package "exports"-gated module specifier), and
+ * Vite still copies + hashes the resolved file into the build output —
+ * so the served asset stays same-origin, satisfying CSP `font-src 'self'`
+ * (plan §4.3 invariant #1) exactly as it did when the file lived locally.
  *
  * `font-display: swap` keeps the UI legible during font load; the
  * critical-token block in index.html prevents the surface flash that
@@ -13,7 +21,8 @@
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('@/assets/fonts/Geist-Regular.woff2') format('woff2');
+  src: url('../../node_modules/@kameas-ai/kenaz-design-system/src/assets/fonts/Geist-Regular.woff2')
+    format('woff2');
 }
 
 @font-face {
@@ -21,7 +30,8 @@
   font-style: normal;
   font-weight: 500;
   font-display: swap;
-  src: url('@/assets/fonts/Geist-Medium.woff2') format('woff2');
+  src: url('../../node_modules/@kameas-ai/kenaz-design-system/src/assets/fonts/Geist-Medium.woff2')
+    format('woff2');
 }
 
 @font-face {
@@ -29,7 +39,8 @@
   font-style: normal;
   font-weight: 600;
   font-display: swap;
-  src: url('@/assets/fonts/Geist-SemiBold.woff2') format('woff2');
+  src: url('../../node_modules/@kameas-ai/kenaz-design-system/src/assets/fonts/Geist-SemiBold.woff2')
+    format('woff2');
 }
 
 @font-face {
@@ -37,7 +48,8 @@
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('@/assets/fonts/GeistMono-Regular.woff2') format('woff2');
+  src: url('../../node_modules/@kameas-ai/kenaz-design-system/src/assets/fonts/GeistMono-Regular.woff2')
+    format('woff2');
 }
 
 @font-face {
@@ -45,5 +57,25 @@
   font-style: normal;
   font-weight: 500;
   font-display: swap;
-  src: url('@/assets/fonts/GeistMono-Medium.woff2') format('woff2');
+  src: url('../../node_modules/@kameas-ai/kenaz-design-system/src/assets/fonts/GeistMono-Medium.woff2')
+    format('woff2');
+}
+
+/*
+ * Newsreader — serif register (DS 0.6 paper direction / spec 071 FR-004,
+ * mirrored from how kenaz/frontend consumes it). Sanctioned contexts only:
+ * page/view titles, editorial headlines, card titles, digest prose. Never
+ * rail, toolbar, tables, or buttons — see `--font-serif` usage sites.
+ * Variable font (wght 400/500 sanctioned), optical sizing on, font-display:
+ * block so editorial headlines don't reflow from the Georgia fallback once
+ * Newsreader arrives.
+ */
+@font-face {
+  font-family: 'Newsreader';
+  font-style: normal;
+  font-weight: 400 500;
+  font-display: block;
+  font-optical-sizing: auto;
+  src: url('../../node_modules/@kameas-ai/kenaz-design-system/src/assets/fonts/Newsreader-Variable.woff2')
+    format('woff2');
 }

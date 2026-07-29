@@ -44,11 +44,11 @@ const rateLabel = computed(() => {
 const dotClass = computed(() => {
   switch (snapshot.value.embedderHealth) {
     case 'error':
-      return 'bg-red-500';
+      return 'bg-signal-danger';
     case 'slow':
-      return 'bg-amber-400';
+      return 'bg-signal-warn';
     default:
-      return 'bg-emerald-500';
+      return 'bg-signal-ok';
   }
 });
 

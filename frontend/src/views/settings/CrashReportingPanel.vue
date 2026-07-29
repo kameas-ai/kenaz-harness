@@ -197,7 +197,7 @@ async function testDsn() {
           {{ testingDsn ? 'Testing…' : 'Test' }}
         </button>
       </div>
-      <p v-if="testDsnResult" class="text-xs" :class="testDsnResult.ok ? 'text-green-500' : 'text-red-500'">
+      <p v-if="testDsnResult" class="text-xs" :class="testDsnResult.ok ? 'text-signal-ok' : 'text-signal-danger'">
         {{ testDsnResult.ok ? 'DSN reachable' : `DSN error: ${testDsnResult.error}` }}
       </p>
     </div>
@@ -252,6 +252,6 @@ async function testDsn() {
       </p>
     </div>
 
-    <p v-if="errorMsg" class="text-xs text-red-500">{{ errorMsg }}</p>
+    <p v-if="errorMsg" class="text-xs text-signal-danger">{{ errorMsg }}</p>
   </section>
 </template>

@@ -271,13 +271,13 @@ describe('ScheduledInbox', () => {
     await flushPromises();
 
     const completedStatus = wrapper.find(`[data-testid="scheduled-run-status-${RUN_COMPLETED.runId}"]`);
-    expect(completedStatus.classes()).toContain('text-emerald-400');
+    expect(completedStatus.classes()).toContain('text-signal-ok');
 
     const runningStatus = wrapper.find(`[data-testid="scheduled-run-status-${RUN_RUNNING.runId}"]`);
-    expect(runningStatus.classes()).toContain('text-amber-400');
+    expect(runningStatus.classes()).toContain('text-signal-warn');
 
     const failedStatus = wrapper.find(`[data-testid="scheduled-run-status-${RUN_FAILED.runId}"]`);
-    expect(failedStatus.classes()).toContain('text-red-400');
+    expect(failedStatus.classes()).toContain('text-signal-danger');
   });
 });
 
@@ -509,9 +509,9 @@ describe('ScheduledInbox — Chat Runs section', () => {
     await flushPromises();
 
     const completedEl = wrapper.find(`[data-testid="chat-run-hist-status-${CHAT_HIST_COMPLETED.id}"]`);
-    expect(completedEl.classes()).toContain('text-emerald-400');
+    expect(completedEl.classes()).toContain('text-signal-ok');
 
     const failedEl = wrapper.find(`[data-testid="chat-run-hist-status-${CHAT_HIST_FAILED.id}"]`);
-    expect(failedEl.classes()).toContain('text-red-400');
+    expect(failedEl.classes()).toContain('text-signal-danger');
   });
 });

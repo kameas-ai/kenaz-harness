@@ -278,6 +278,11 @@ jobs:
     permissions:
       contents: read
       id-token: write   # required for Azure OIDC federation on Windows signing
+      # job-level permissions replace the workflow-level block entirely, so
+      # `packages: write` up top doesn't carry down here — `frontend deps`
+      # runs `npm ci` against @kameas-ai/kenaz-design-system on GitHub
+      # Packages and needs this listed explicitly.
+      packages: read
     # Lift the gating-only secrets to job-level env so step `if:`
     # expressions can read them. GitHub evaluates step `if:` *before*
     # the step's own `env:` block is materialized, so per-step
@@ -301,6 +306,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
+          registry-url: https://npm.pkg.github.com
 
       - name: install wails system deps (linux)
         if: runner.os == 'Linux'
@@ -316,9 +322,15 @@ jobs:
         # breaking generator changes (the Wails CLI emits TS bindings, etc.).
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
 
+      # @kameas-ai/kenaz-design-system is published to GitHub Packages —
+      # NODE_AUTH_TOKEN from the workflow's own GITHUB_TOKEN has
+      # packages:read by default, no new secret needed. See
+      # frontend/PACKAGES_AUTH.md.
       - name: frontend deps
         working-directory: frontend
         run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Sync wails.json info.productVersion to the resolved release
       # version BEFORE wails build, so the OS-visible bundle metadata

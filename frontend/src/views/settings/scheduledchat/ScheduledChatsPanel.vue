@@ -130,7 +130,7 @@ function fmtDate(iso: string): string {
     <!-- Action error banner -->
     <div
       v-if="actionError"
-      class="rounded-sm border border-red-700 bg-red-950 px-3 py-2 font-ui text-sm text-red-200"
+      class="rounded-sm border border-signal-danger bg-signal-danger-soft px-3 py-2 font-ui text-sm text-signal-danger"
       data-testid="scheduled-chats-action-error"
     >
       {{ actionError }}
@@ -148,7 +148,7 @@ function fmtDate(iso: string): string {
     <!-- Load error -->
     <div
       v-else-if="loadError"
-      class="rounded-sm border border-red-700 bg-red-950 p-4 font-ui text-sm text-red-200"
+      class="rounded-sm border border-signal-danger bg-signal-danger-soft p-4 font-ui text-sm text-signal-danger"
       data-testid="scheduled-chats-load-error"
     >
       {{ loadError }}
@@ -231,7 +231,7 @@ function fmtDate(iso: string): string {
             </button>
             <button
               type="button"
-              class="rounded-sm border border-red-800 bg-red-950 px-2 py-0.5 font-ui text-xs text-red-300 hover:text-red-100"
+              class="rounded-sm border border-signal-danger bg-signal-danger-soft px-2 py-0.5 font-ui text-xs text-signal-danger hover:bg-signal-danger hover:text-white"
               :data-testid="`scheduled-chat-delete-${run.id}`"
               @click="deleteRun(run.id)"
             >

@@ -1,0 +1,44 @@
+/*
+ * Signal-tint backgrounds — soft, low-opacity fills for status badges,
+ * chips, and alert banners built on the `--ok/--warn/--danger/--info/
+ * --violet/--signal-neutral/--signal-git` tokens (tokens.css, via the DS
+ * import).
+ *
+ * Why this file exists: Tailwind's `/opacity` modifier (`bg-signal-danger/10`)
+ * only works on colors it can decompose into components at build time —
+ * hex, an rgb-family function, hsl, or an alpha-placeholder-shaped theme
+ * entry (Tailwind docs: "using CSS variables"). Our tokens resolve
+ * through a plain `var(--x)` that already
+ * carries a hex value, which Tailwind can't re-derive an alpha channel
+ * from — the modifier silently produces no output. `color-mix()` is the
+ * project's existing idiom for this (see the `search-focus-pulse`
+ * keyframes in global.css); these classes just make it reusable instead
+ * of repeating the color-mix() expression at every call site.
+ *
+ * Pair with the existing `text-signal-*` / `border-signal-*` /
+ * `bg-signal-*` Tailwind utilities (tailwind.config.ts) for the solid
+ * variants — e.g. an alert banner: `border-signal-danger
+ * bg-signal-danger-soft text-signal-danger`.
+ */
+
+.bg-signal-ok-soft {
+  background-color: color-mix(in srgb, var(--ok) 14%, var(--surface-0));
+}
+.bg-signal-warn-soft {
+  background-color: color-mix(in srgb, var(--warn) 14%, var(--surface-0));
+}
+.bg-signal-danger-soft {
+  background-color: color-mix(in srgb, var(--danger) 14%, var(--surface-0));
+}
+.bg-signal-info-soft {
+  background-color: color-mix(in srgb, var(--info) 14%, var(--surface-0));
+}
+.bg-signal-violet-soft {
+  background-color: color-mix(in srgb, var(--violet) 14%, var(--surface-0));
+}
+.bg-signal-neutral-soft {
+  background-color: color-mix(in srgb, var(--signal-neutral) 14%, var(--surface-0));
+}
+.bg-signal-git-soft {
+  background-color: color-mix(in srgb, var(--signal-git) 14%, var(--surface-0));
+}

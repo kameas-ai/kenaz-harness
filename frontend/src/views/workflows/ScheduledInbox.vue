@@ -49,9 +49,9 @@ const hasRows = computed(() => rows.value.length > 0);
 // ── helpers ───────────────────────────────────────────────────────────────
 
 function statusClass(status: string): string {
-  if (status === 'completed') return 'text-emerald-400';
-  if (status === 'running') return 'text-amber-400';
-  if (status === 'failed') return 'text-red-400';
+  if (status === 'completed') return 'text-signal-ok';
+  if (status === 'running') return 'text-signal-warn';
+  if (status === 'failed') return 'text-signal-danger';
   if (status === 'cancelled') return 'text-ink-muted';
   return 'text-ink-muted';
 }
@@ -238,9 +238,9 @@ async function chatRunNow(id: string) {
 }
 
 function chatHistoryStatusClass(status: string): string {
-  if (status === 'completed') return 'text-emerald-400';
-  if (status === 'running') return 'text-amber-400';
-  if (status === 'failed') return 'text-red-400';
+  if (status === 'completed') return 'text-signal-ok';
+  if (status === 'running') return 'text-signal-warn';
+  if (status === 'failed') return 'text-signal-danger';
   return 'text-ink-muted';
 }
 
@@ -278,7 +278,7 @@ onUnmounted(() => {
     <!-- Top-level load error -->
     <div
       v-else-if="loadError"
-      class="rounded-sm border border-red-700 bg-red-950 p-4 font-ui text-sm text-red-200"
+      class="rounded-sm border border-signal-danger bg-signal-danger-soft p-4 font-ui text-sm text-signal-danger"
       data-testid="scheduled-inbox-error"
     >
       {{ loadError }}
@@ -374,7 +374,7 @@ onUnmounted(() => {
 
           <div
             v-else-if="row.loadError"
-            class="font-ui text-xs text-red-300 py-2"
+            class="font-ui text-xs text-signal-danger py-2"
             :data-testid="`scheduled-runs-error-${row.entry.workflowId}`"
           >
             {{ row.loadError }}
@@ -416,7 +416,7 @@ onUnmounted(() => {
                 </div>
                 <div
                   v-if="run.error"
-                  class="font-ui text-xs text-red-300 truncate"
+                  class="font-ui text-xs text-signal-danger truncate"
                   :data-testid="`scheduled-run-error-${run.runId}`"
                 >
                   {{ run.error }}
@@ -438,7 +438,7 @@ onUnmounted(() => {
                 <button
                   v-if="run.status === 'running'"
                   type="button"
-                  class="rounded-sm border border-red-800 bg-red-950 px-2 py-0.5 font-ui text-xs text-red-300 hover:text-red-100"
+                  class="rounded-sm border border-signal-danger bg-signal-danger-soft px-2 py-0.5 font-ui text-xs text-signal-danger hover:bg-signal-danger hover:text-white"
                   :data-testid="`scheduled-run-cancel-${run.runId}`"
                   @click="cancelRun(run.runId)"
                 >
@@ -454,7 +454,7 @@ onUnmounted(() => {
     <!-- Action error banner (re-run / cancel — shared by workflow and chat rows) -->
     <div
       v-if="actionError"
-      class="mt-3 rounded-sm border border-red-700 bg-red-950 px-3 py-2 font-ui text-sm text-red-200"
+      class="mt-3 rounded-sm border border-signal-danger bg-signal-danger-soft px-3 py-2 font-ui text-sm text-signal-danger"
       data-testid="scheduled-inbox-action-error"
     >
       {{ actionError }}
@@ -482,7 +482,7 @@ onUnmounted(() => {
         <!-- Chat load error -->
         <div
           v-else-if="chatLoadError"
-          class="rounded-sm border border-red-700 bg-red-950 p-4 font-ui text-sm text-red-200"
+          class="rounded-sm border border-signal-danger bg-signal-danger-soft p-4 font-ui text-sm text-signal-danger"
           data-testid="chat-runs-load-error"
         >
           {{ chatLoadError }}
@@ -570,7 +570,7 @@ onUnmounted(() => {
 
               <div
                 v-else-if="row.loadError"
-                class="font-ui text-xs text-red-300 py-2"
+                class="font-ui text-xs text-signal-danger py-2"
                 :data-testid="`chat-run-history-error-${row.entry.id}`"
               >
                 {{ row.loadError }}
@@ -612,7 +612,7 @@ onUnmounted(() => {
                     </div>
                     <div
                       v-if="hist.error"
-                      class="font-ui text-xs text-red-300 truncate"
+                      class="font-ui text-xs text-signal-danger truncate"
                       :data-testid="`chat-run-hist-error-${hist.id}`"
                     >
                       {{ hist.error }}
