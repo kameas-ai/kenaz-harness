@@ -178,6 +178,9 @@ const html = computed(() => {
 const containerRef = ref<HTMLElement | null>(null);
 // Track mounted child apps for cleanup.
 const mountedApps: App[] = [];
+// Upgrades await dynamic imports; if the component unmounts while one is
+// in flight, a late app.mount() would run against a torn-down document.
+let disposed = false;
 
 function unmountAll() {
   for (const app of mountedApps) {
@@ -239,6 +242,7 @@ async function upgradeCodeBlocks(root: HTMLElement) {
       };
     }
 
+    if (disposed) return;
     const app = createApp(componentDef, componentProps);
     app.mount(host);
     mountedApps.push(app);
@@ -444,6 +448,7 @@ async function upgradeMentions(root: HTMLElement) {
     for (const node of fileNodes) {
       const path = node.getAttribute('data-path') ?? '';
       if (!path) continue;
+      if (disposed) return;
       const host = document.createElement('span');
       node.replaceWith(host);
       const app = createApp(FilenameChip, { path });
@@ -496,6 +501,7 @@ function upgradeTables(root: HTMLElement) {
 }
 
 async function runUpgrades() {
+  if (disposed) return;
   const root = containerRef.value;
   if (!root) return;
   unmountAll();
@@ -522,6 +528,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  disposed = true;
   unmountAll();
 });
 </script>
