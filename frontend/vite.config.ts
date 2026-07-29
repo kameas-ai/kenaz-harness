@@ -2,13 +2,25 @@ import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import path from 'node:path';
 
+// Hash of the single inline "read ?theme= before first paint" script
+// shared verbatim by index.html and served.html (P0 theme fix — see the
+// comment above that script). CSP script-src 'self' blocks all inline
+// script; this is the strict alternative to 'unsafe-inline' — a CSP
+// hash-source only matches this exact script body, byte for byte. If the
+// script text changes, recompute with:
+//   node -e "const c=require('fs').readFileSync('frontend/index.html','utf8').match(/<script>\n(.*?)<\/script>/s)[0]"
+// (or any sha256+base64 of the exact text between the <script> tags) and
+// update this constant AND servedCSP in core/serve/server.go (must stay
+// in sync — see that file's comment).
+const THEME_SCRIPT_HASH = "'sha256-S9VfhoaWcxszZps4jluBpniHVTyGsrOIZlLNj5x7ekE='";
+
 // Two-CSP build-time substitution. Production CSP forbids CDNs and disables
 // connect-src; dev CSP is relaxed to permit Vite HMR.
 //
 // Privacy CI invariant #1 (plan §4.3) is enforced post-build by
 // scripts/ci/check-csp.sh against the produced dist/index.html.
 const PROD_CSP =
-  "default-src 'none'; connect-src 'none'; script-src 'self'; " +
+  `default-src 'none'; connect-src 'none'; script-src 'self' ${THEME_SCRIPT_HASH}; ` +
   "style-src 'self' 'unsafe-inline'; img-src 'self' data:; " +
   "font-src 'self'; base-uri 'none'; form-action 'none'; " +
   "frame-ancestors 'none'; object-src 'none'";
@@ -16,7 +28,7 @@ const PROD_CSP =
 // Served-mode CSP: connect-src must allow same-origin HTTP + WS so the
 // browser can reach /rpc and /ws on the harness HTTP server.
 const SERVED_CSP =
-  "default-src 'none'; connect-src 'self'; script-src 'self'; " +
+  `default-src 'none'; connect-src 'self'; script-src 'self' ${THEME_SCRIPT_HASH}; ` +
   "style-src 'self' 'unsafe-inline'; img-src 'self' data:; " +
   "font-src 'self'; base-uri 'none'; form-action 'none'; " +
   "frame-ancestors 'none'; object-src 'none'";

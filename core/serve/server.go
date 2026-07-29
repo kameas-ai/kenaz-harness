@@ -93,7 +93,14 @@ const cspPlaceholder = "__CSP_PLACEHOLDER__"
 // in sync with SERVED_CSP in frontend/vite.config.ts. Unlike the desktop
 // production CSP (connect-src 'none'), served mode allows same-origin
 // connect-src so the browser can reach /rpc and /ws on the harness server.
-const servedCSP = "default-src 'none'; connect-src 'self'; script-src 'self'; " +
+//
+// script-src carries a CSP hash-source (not 'unsafe-inline') that allowlists
+// exactly one inline script: the "read ?theme= before first paint" snippet
+// in served.html (P0 theme fix). If that script's text ever changes, this
+// hash AND THEME_SCRIPT_HASH in frontend/vite.config.ts must be
+// recomputed together — see the comment there.
+const servedCSP = "default-src 'none'; connect-src 'self'; " +
+	"script-src 'self' 'sha256-S9VfhoaWcxszZps4jluBpniHVTyGsrOIZlLNj5x7ekE='; " +
 	"style-src 'self' 'unsafe-inline'; img-src 'self' data:; " +
 	"font-src 'self'; base-uri 'none'; form-action 'none'; " +
 	"frame-ancestors 'none'; object-src 'none'"

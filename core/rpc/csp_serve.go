@@ -8,10 +8,11 @@ package rpc
 
 import "net/http"
 
-// productionCSP is the strict CSP policy (identical value to csp.go).
+// productionCSP is the strict CSP policy (identical value to csp.go,
+// including the theme-script hash — see that file's comment).
 const productionCSP = "default-src 'none'; " +
 	"connect-src 'none'; " +
-	"script-src 'self'; " +
+	"script-src 'self' 'sha256-S9VfhoaWcxszZps4jluBpniHVTyGsrOIZlLNj5x7ekE='; " +
 	"style-src 'self' 'unsafe-inline'; " +
 	"img-src 'self' data:; " +
 	"font-src 'self'; " +

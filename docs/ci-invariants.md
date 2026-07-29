@@ -5,7 +5,7 @@ gate runs on every PR and blocks merge on failure.
 
 ## #1 — Strict CSP (no CDNs, no outbound traffic)
 
-- **Production CSP**: `default-src 'none'; connect-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'`.
+- **Production CSP**: `default-src 'none'; connect-src 'none'; script-src 'self' 'sha256-S9VfhoaWcxszZps4jluBpniHVTyGsrOIZlLNj5x7ekE='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'`. The `script-src` hash-source allowlists exactly one inline script — the "read `?theme=` before first paint" snippet duplicated in `index.html`/`served.html` (P0 theme fix) — rather than weakening to `'unsafe-inline'`.
 - **Set in two places**: `<meta http-equiv>` in `frontend/index.html` (substituted by `frontend/vite.config.ts`) AND a Wails asset-server middleware (`core/rpc/csp.go`). The TS-side test (`main_test.go`) covers the middleware.
 - **CI gate**: `bash scripts/ci/check-csp.sh frontend/dist/index.html` greps the production-built HTML and asserts the policy is not weakened.
 - **Dev CSP**: relaxed to permit Vite HMR (`unsafe-eval`, `ws://localhost:*`) — guarded by `command === 'build'` in `vite.config.ts`.

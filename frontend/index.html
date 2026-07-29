@@ -7,13 +7,45 @@
     <title>kenaz-harness</title>
     <link rel="icon" type="image/svg+xml" href="/src/assets/images/favicon.svg" />
     <!--
+      Host theme param, read synchronously before first paint (P0 theme
+      fix — see useTheme.ts hostThemeParam/applyHostTheme, spec 073 FR-2/
+      CONTRACTS.md § kenaz.workbench.surface-theme-param v1). Sets
+      data-theme on <html> before the critical <style> block below is
+      parsed, so an embedded workbench negotiating linen/paper never
+      flashes the dark ink palette. Standalone (no param) falls through to
+      the prefers-color-scheme block. Duplicated by design: useTheme.ts's
+      HOST_THEMES/DARK_HOST_THEMES can't run this early (it's behind the
+      Vue mount + bundle load), so this is the same 4-name allowlist
+      inlined for the pre-paint path only.
+    -->
+    <script>
+      (function () {
+        var HOST_THEMES = ['ink', 'linen', 'azure', 'paper'];
+        var m = /[?&]theme=([a-z]+)/.exec(location.search);
+        var t = m && HOST_THEMES.indexOf(m[1]) !== -1 ? m[1] : null;
+        if (t) document.documentElement.setAttribute('data-theme', t);
+      })();
+    </script>
+    <!--
       Critical token block per plan §8 R-9: prevent first-paint flash of
       unthemed content while tokens.css parses. Surfaces + ink + accent
-      only — kept under 200 bytes. Privacy CI invariant #4 allowlists this
-      block via the `// css-tokens-allow` mechanism in check-css-tokens.
+      only, one rule per host theme — kept in sync with
+      kenaz-design-system tokens.css's [data-theme] blocks (see LeftRail.tsx
+      in kenaz/frontend for the same surface-0/ink/accent hex triples).
+      The unscoped :root rule + prefers-color-scheme media query cover the
+      standalone (no ?theme= param) case until the persisted setting
+      applies post-mount. Privacy CI invariant #4 allowlists this block via
+      the `// css-tokens-allow` mechanism in check-css-tokens.
     -->
     <style>
       :root { color-scheme: dark; --surface-0:#0A0A0B; --ink:#F4F1EA; --accent:#C8A56A; }
+      @media (prefers-color-scheme: light) {
+        :root { color-scheme: light; --surface-0:#F4EFE4; --ink:#1A1814; --accent:#8F6B26; }
+      }
+      :root[data-theme="ink"]   { color-scheme: dark;  --surface-0:#0A0A0B; --ink:#F4F1EA; --accent:#C8A56A; }
+      :root[data-theme="azure"] { color-scheme: dark;  --surface-0:#0B1C2E; --ink:#E8EFF6; --accent:#C8A56A; }
+      :root[data-theme="linen"] { color-scheme: light; --surface-0:#F4EFE4; --ink:#1A1814; --accent:#8F6B26; }
+      :root[data-theme="paper"] { color-scheme: light; --surface-0:#F4EEDF; --ink:#201D16; --accent:#2F5380; }
       html, body { margin: 0; background: var(--surface-0); color: var(--ink); }
     </style>
 </head>
