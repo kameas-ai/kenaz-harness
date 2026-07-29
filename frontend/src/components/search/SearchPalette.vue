@@ -81,11 +81,11 @@ function corpusFilterArg(): string[] | undefined {
 /** Badge colour class per corpus (Tailwind). */
 function corpusBadgeClass(corpus: string): string {
   switch (corpus) {
-    case 'messages':  return 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300';
-    case 'artifacts': return 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300';
-    case 'memory':    return 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300';
-    case 'corpus':    return 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300';
-    case 'audit':     return 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300';
+    case 'messages':  return 'bg-signal-info-soft text-signal-info';
+    case 'artifacts': return 'bg-signal-warn-soft text-signal-warn';
+    case 'memory':    return 'bg-signal-violet-soft text-signal-violet';
+    case 'corpus':    return 'bg-signal-ok-soft text-signal-ok';
+    case 'audit':     return 'bg-signal-danger-soft text-signal-danger';
     default:          return 'bg-surface-1 text-ink-subtle';
   }
 }

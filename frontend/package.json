@@ -17,6 +17,7 @@
     "check:bundle-size": "node ../scripts/ci/check-bundle-size.mjs"
   },
   "dependencies": {
+    "@kameas-ai/kenaz-design-system": "0.6.1",
     "@sentry/vue": "^10.53.1",
     "@types/dompurify": "^3.0.5",
     "@vueuse/core": "^12.4.0",

@@ -105,7 +105,7 @@ async function setRetention(days: number) {
 <template>
   <section class="space-y-6 p-4" data-testid="compliance-panel">
     <!-- Load error -->
-    <p v-if="loadError" class="text-xs text-red-500" data-testid="compliance-load-error">
+    <p v-if="loadError" class="text-xs text-signal-danger" data-testid="compliance-load-error">
       Failed to load compliance status: {{ loadError }}
     </p>
 
@@ -136,13 +136,13 @@ async function setRetention(days: number) {
     <!-- Chain-break banner (shown only when enabled) -->
     <div
       v-if="enabled && chainBreak"
-      class="rounded border border-red-400 bg-red-50 dark:bg-red-950 p-4 space-y-1"
+      class="rounded border border-signal-danger bg-signal-danger-soft p-4 space-y-1"
       data-testid="compliance-chain-break-banner"
     >
-      <p class="text-sm font-semibold text-red-700 dark:text-red-300">
+      <p class="text-sm font-semibold text-signal-danger">
         Hash-chain continuity break detected
       </p>
-      <p class="text-xs text-red-600 dark:text-red-400">
+      <p class="text-xs text-signal-danger">
         Archival has been halted. A gap in the audit hash chain was detected
         since the last successful flush. Review
         <code>fleet.audit_chain_break</code> events in the audit log, then
@@ -202,7 +202,7 @@ async function setRetention(days: number) {
           <span class="text-sm text-ink">{{ opt.label }}</span>
         </label>
       </div>
-      <p v-if="retentionError" class="text-xs text-red-500" data-testid="compliance-retention-error">
+      <p v-if="retentionError" class="text-xs text-signal-danger" data-testid="compliance-retention-error">
         {{ retentionError }}
       </p>
       <p v-if="retentionSaving" class="text-xs text-ink-muted">Saving…</p>
@@ -219,10 +219,10 @@ async function setRetention(days: number) {
       >
         {{ archiving ? 'Archiving…' : 'Archive now' }}
       </button>
-      <p v-if="chainBreak" class="text-xs text-red-500">
+      <p v-if="chainBreak" class="text-xs text-signal-danger">
         Resolve chain break before archiving.
       </p>
-      <p v-if="archiveError" class="text-xs text-red-500" data-testid="compliance-archive-error">
+      <p v-if="archiveError" class="text-xs text-signal-danger" data-testid="compliance-archive-error">
         {{ archiveError }}
       </p>
     </div>

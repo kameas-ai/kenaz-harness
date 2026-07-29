@@ -37,6 +37,10 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  # Node attribution generation runs `npm ci` against frontend/, which
+  # installs @kameas-ai/kenaz-design-system from GitHub Packages — needs
+  # to be explicit since this block zeroes out every unlisted scope.
+  packages: read
 
 jobs:
   regenerate:
@@ -106,6 +110,7 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ inputs.node-version || '20' }}
+          registry-url: https://npm.pkg.github.com
 
       - name: Install license-checker
         if: steps.detect.outputs.node == 'true'
@@ -114,6 +119,11 @@ jobs:
 
       - name: Generate Node attributions
         if: steps.detect.outputs.node == 'true'
+        # @kameas-ai/kenaz-design-system is published to GitHub Packages —
+        # NODE_AUTH_TOKEN from the workflow's own GITHUB_TOKEN has
+        # packages:read by default, no new secret needed.
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p .oss-attributions
           fe="${{ inputs.frontend-dir || 'frontend' }}"

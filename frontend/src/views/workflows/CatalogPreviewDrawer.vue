@@ -135,7 +135,7 @@ function formatCost(usd: number): string {
 
         <div
           v-else-if="previewError"
-          class="rounded-sm border border-red-700 bg-red-950 p-3 font-ui text-sm text-red-200"
+          class="rounded-sm border border-signal-danger bg-signal-danger-soft p-3 font-ui text-sm text-signal-danger"
           data-testid="catalog-drawer-error"
         >
           {{ previewError }}
@@ -159,7 +159,7 @@ function formatCost(usd: number): string {
               <span
                 v-for="grant in preview.entry.requiresCedarGrants"
                 :key="grant"
-                class="rounded-full bg-amber-900/60 px-2 py-0.5 font-ui text-xs text-amber-300"
+                class="rounded-full bg-signal-warn-soft px-2 py-0.5 font-ui text-xs text-signal-warn"
                 :data-testid="`catalog-grant-${grant}`"
               >
                 {{ grant }}
@@ -179,8 +179,8 @@ function formatCost(usd: number): string {
                 class="rounded-full px-2 py-0.5 font-ui text-xs"
                 :class="
                   credStatus(cred) === 'missing'
-                    ? 'bg-red-900/60 text-red-300'
-                    : 'bg-emerald-900/60 text-emerald-300'
+                    ? 'bg-signal-danger-soft text-signal-danger'
+                    : 'bg-signal-ok-soft text-signal-ok'
                 "
                 :data-testid="`catalog-cred-${cred}`"
               >
@@ -216,7 +216,7 @@ function formatCost(usd: number): string {
       <footer class="border-t border-border-muted px-4 py-3 space-y-2">
         <div
           v-if="installError"
-          class="font-ui text-sm text-red-300"
+          class="font-ui text-sm text-signal-danger"
           data-testid="catalog-drawer-install-error"
         >
           {{ installError }}
@@ -224,7 +224,7 @@ function formatCost(usd: number): string {
 
         <div
           v-if="hasMissingCreds && !installError"
-          class="font-ui text-xs text-amber-400"
+          class="font-ui text-xs text-signal-warn"
           data-testid="catalog-drawer-missing-creds-warning"
         >
           Some credentials are missing. You will be redirected to add them after install.

@@ -165,7 +165,7 @@ async function saveConsent(level: 'none' | 'aggregate' | 'full') {
       </ul>
     </div>
 
-    <p v-if="errorMsg" class="text-xs text-red-500" data-testid="fleet-error">
+    <p v-if="errorMsg" class="text-xs text-signal-danger" data-testid="fleet-error">
       {{ errorMsg }}
     </p>
     <p v-if="saving" class="text-xs text-ink-muted">Saving…</p>

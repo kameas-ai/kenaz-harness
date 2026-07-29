@@ -33,8 +33,17 @@ defineProps<{
         {{ section }}
       </span>
     </div>
+    <!--
+      Serif register (DS 0.6 paper direction / spec 071 FR-004). Mirrors
+      the DS's own `.canvas-head__title` rule: sanctioned context #1 is
+      "page/view titles", and every view in this shell renders its title
+      through this component, so wiring serif here covers the app-wide
+      requirement in one place — same pattern kenaz/frontend gets for
+      free from the DS's Shell/CanvasHead. Never applied to rail, toolbar,
+      tables, or buttons.
+    -->
     <h1
-      class="font-ui text-2xl font-semibold tracking-tight text-ink"
+      class="font-serif text-[28px] font-medium tracking-tight text-ink"
       :class="number && section ? 'mt-2' : ''"
     >
       {{ title }}

@@ -65,7 +65,7 @@ const displayText = computed(() =>
       <span>JSON</span>
       <span
         v-if="!isValidJson"
-        class="text-amber-400"
+        class="text-signal-warn"
         data-testid="json-response-block-invalid"
         title="The model returned text that could not be parsed as valid JSON."
       >

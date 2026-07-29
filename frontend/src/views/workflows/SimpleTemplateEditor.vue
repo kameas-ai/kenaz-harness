@@ -221,7 +221,7 @@ defineExpose({ assembleYaml });
         </p>
       </div>
       <span
-        class="font-ui text-[10px] uppercase tracking-wide text-amber-300"
+        class="font-ui text-[10px] uppercase tracking-wide text-signal-warn"
         aria-label="beta surface"
       >
         beta
@@ -324,7 +324,7 @@ defineExpose({ assembleYaml });
 
     <div
       v-if="saveError"
-      class="rounded-sm border border-red-700 bg-red-950 p-2 font-ui text-sm text-red-200"
+      class="rounded-sm border border-signal-danger bg-signal-danger-soft p-2 font-ui text-sm text-signal-danger"
       data-testid="template-editor-error"
     >
       {{ saveError }}

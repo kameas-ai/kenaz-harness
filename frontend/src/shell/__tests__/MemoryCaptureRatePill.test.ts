@@ -85,19 +85,19 @@ describe('MemoryCaptureRatePill (§2.7)', () => {
   it('dot is green on "ok" health', async () => {
     const { w } = await mountPill({ chunksPerMinute: 2, embedderHealth: 'ok' });
     const dot = w.find('.rounded-full');
-    expect(dot.classes()).toContain('bg-emerald-500');
+    expect(dot.classes()).toContain('bg-signal-ok');
   });
 
   it('dot is amber on "slow" health', async () => {
     const { w } = await mountPill({ chunksPerMinute: 2, embedderHealth: 'slow' });
     const dot = w.find('.rounded-full');
-    expect(dot.classes()).toContain('bg-amber-400');
+    expect(dot.classes()).toContain('bg-signal-warn');
   });
 
   it('dot is red on "error" health', async () => {
     const { w } = await mountPill({ chunksPerMinute: 0, recentErrorCount: 4, embedderHealth: 'error' });
     const dot = w.find('.rounded-full');
-    expect(dot.classes()).toContain('bg-red-500');
+    expect(dot.classes()).toContain('bg-signal-danger');
   });
 
   it('click navigates to /memory', async () => {

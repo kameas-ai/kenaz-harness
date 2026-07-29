@@ -119,7 +119,7 @@ function cancel() {
         </p>
       </div>
       <span
-        class="font-ui text-[10px] uppercase tracking-wide text-amber-300"
+        class="font-ui text-[10px] uppercase tracking-wide text-signal-warn"
         aria-label="beta surface"
       >
         beta
@@ -146,13 +146,13 @@ function cancel() {
 
     <div
       v-if="saveError"
-      class="rounded-sm border border-red-700 bg-red-950 p-2 font-ui text-sm text-red-200"
+      class="rounded-sm border border-signal-danger bg-signal-danger-soft p-2 font-ui text-sm text-signal-danger"
       data-testid="workflow-editor-error"
     >
       <p>Save failed: {{ saveError }}</p>
       <p
         v-if="offendingStep"
-        class="mt-1 text-xs text-red-300"
+        class="mt-1 text-xs text-signal-danger"
         data-testid="workflow-editor-error-step"
       >
         Offending step: <code class="font-mono">{{ offendingStep }}</code>

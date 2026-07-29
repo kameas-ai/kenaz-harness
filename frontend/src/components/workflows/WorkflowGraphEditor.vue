@@ -46,18 +46,18 @@ interface PaletteItem {
 
 const PALETTE: PaletteItem[] = [
   { kind: 'model_turn',      label: 'Model turn',      color: 'bg-accent' },
-  { kind: 'tool_call',       label: 'Tool call',        color: 'bg-violet-600' },
-  { kind: 'shell',           label: 'Shell',            color: 'bg-amber-600' },
-  { kind: 'http_request',    label: 'HTTP request',     color: 'bg-sky-600' },
-  { kind: 'write_artifact',  label: 'Write artifact',   color: 'bg-emerald-600' },
-  { kind: 'read_artifact',   label: 'Read artifact',    color: 'bg-teal-600' },
-  { kind: 'transform',       label: 'Transform',        color: 'bg-fuchsia-600' },
-  { kind: 'conditional',     label: 'Conditional',      color: 'bg-orange-600' },
-  { kind: 'web_fetch',       label: 'Web fetch',        color: 'bg-blue-600' },
-  { kind: 'web_scrape',      label: 'Web scrape',       color: 'bg-indigo-600' },
-  { kind: 'notify',          label: 'Notify',           color: 'bg-pink-600' },
-  { kind: 'wait_until',      label: 'Wait until',       color: 'bg-slate-500' },
-  { kind: 'aggregate',       label: 'Aggregate',        color: 'bg-lime-600' },
+  { kind: 'tool_call',       label: 'Tool call',        color: 'bg-signal-violet' },
+  { kind: 'shell',           label: 'Shell',            color: 'bg-signal-warn' },
+  { kind: 'http_request',    label: 'HTTP request',     color: 'bg-signal-info' },
+  { kind: 'write_artifact',  label: 'Write artifact',   color: 'bg-signal-ok' },
+  { kind: 'read_artifact',   label: 'Read artifact',    color: 'bg-signal-git' },
+  { kind: 'transform',       label: 'Transform',        color: 'bg-signal-neutral' },
+  { kind: 'conditional',     label: 'Conditional',      color: 'bg-signal-danger' },
+  { kind: 'web_fetch',       label: 'Web fetch',        color: 'bg-signal-info' },
+  { kind: 'web_scrape',      label: 'Web scrape',       color: 'bg-signal-info' },
+  { kind: 'notify',          label: 'Notify',           color: 'bg-signal-violet' },
+  { kind: 'wait_until',      label: 'Wait until',       color: 'bg-signal-neutral' },
+  { kind: 'aggregate',       label: 'Aggregate',        color: 'bg-signal-git' },
 ];
 
 function paletteColor(kind: string): string {
@@ -439,7 +439,7 @@ function handleSave() {
                 </button>
                 <button
                   type="button"
-                  class="font-ui text-[10px] text-red-400 hover:text-red-300 px-1 leading-tight"
+                  class="font-ui text-[10px] text-signal-danger hover:brightness-110 px-1 leading-tight"
                   :data-testid="`wge-node-delete-${step.name}`"
                   @click.stop="removeStep(idx)"
                 >
@@ -636,7 +636,7 @@ function handleSave() {
       <li
         v-for="err in validationErrors"
         :key="err"
-        class="font-ui text-xs text-red-300"
+        class="font-ui text-xs text-signal-danger"
       >
         {{ err }}
       </li>

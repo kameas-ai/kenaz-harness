@@ -402,7 +402,7 @@ function showToast(msg: string) {
         </div>
         <div
           v-if="publishError"
-          class="mt-2 rounded-sm border border-red-200 bg-red-50 px-3 py-2 font-ui text-xs text-red-700"
+          class="mt-2 rounded-sm border border-signal-danger bg-signal-danger-soft px-3 py-2 font-ui text-xs text-signal-danger"
           role="alert"
           data-testid="cedar-publish-error"
         >
