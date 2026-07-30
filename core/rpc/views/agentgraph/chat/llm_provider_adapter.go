@@ -377,6 +377,19 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 		gen.StopSequences = req.StopSequences
 	}
 
+	// ReasoningBudgetTokens -> GenerationRequest.Reasoning
+	// (model-request-path-live-01PMDL01 WP06b). Nil/zero means "no
+	// override; reasoning stays off unless the profile/provider default
+	// enables it" — mirrors StopSequences' typed-field shape rather than
+	// folding into Params, matching how anthropic.go/bedrock already read
+	// req.Reasoning (WP06a).
+	if req.ReasoningBudgetTokens != nil && *req.ReasoningBudgetTokens > 0 {
+		gen.Reasoning = &corellm.ReasoningSpec{
+			Enabled:      true,
+			BudgetTokens: *req.ReasoningBudgetTokens,
+		}
+	}
+
 	// WP02 (long-turn-resilience) / WP02 (model-request-path-live-
 	// 01PMDL01): wrap the stream open with classified retry-with-backoff,
 	// driven by the resolved profile's retry.Policy rather than a

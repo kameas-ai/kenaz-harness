@@ -99,16 +99,18 @@ func TestGenerate_CarriesExpandedKnobSurface(t *testing.T) {
 	topK := 40
 	seed := 12345
 	parallelToolCalls := true
+	reasoningBudget := 4096
 
 	req := coreag.LLMRequest{
-		SystemPrompt:      "base",
-		TopP:              &topP,
-		TopK:              &topK,
-		FrequencyPenalty:  &freqPenalty,
-		PresencePenalty:   &presPenalty,
-		Seed:              &seed,
-		ParallelToolCalls: &parallelToolCalls,
-		StopSequences:     []string{"STOP", "END"},
+		SystemPrompt:          "base",
+		TopP:                  &topP,
+		TopK:                  &topK,
+		FrequencyPenalty:      &freqPenalty,
+		PresencePenalty:       &presPenalty,
+		Seed:                  &seed,
+		ParallelToolCalls:     &parallelToolCalls,
+		StopSequences:         []string{"STOP", "END"},
+		ReasoningBudgetTokens: &reasoningBudget,
 	}
 
 	reg := &capturingRegistry{}
@@ -140,6 +142,9 @@ func TestGenerate_CarriesExpandedKnobSurface(t *testing.T) {
 	if len(gen.StopSequences) != 2 || gen.StopSequences[0] != "STOP" || gen.StopSequences[1] != "END" {
 		t.Errorf("StopSequences = %#v, want [STOP END]", gen.StopSequences)
 	}
+	if gen.Reasoning == nil || !gen.Reasoning.Enabled || gen.Reasoning.BudgetTokens != 4096 {
+		t.Errorf("Reasoning = %#v, want {Enabled:true BudgetTokens:4096}", gen.Reasoning)
+	}
 }
 
 // TestGenerate_OmittedKnobsProduceNoOverride verifies that a node with
@@ -164,5 +169,8 @@ func TestGenerate_OmittedKnobsProduceNoOverride(t *testing.T) {
 	}
 	if len(gen.StopSequences) != 0 {
 		t.Errorf("StopSequences = %#v, want empty", gen.StopSequences)
+	}
+	if gen.Reasoning != nil {
+		t.Errorf("Reasoning = %#v, want nil", gen.Reasoning)
 	}
 }

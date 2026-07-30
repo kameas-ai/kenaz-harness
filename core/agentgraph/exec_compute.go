@@ -149,21 +149,31 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 		v := a.ParallelToolCalls
 		parallelToolCallsPtr = &v
 	}
+	// ReasoningBudgetTokens follows the same zero-means-unset convention
+	// (model-request-path-live-01PMDL01 WP06b): a node that doesn't author
+	// reasoning_budget_tokens must not force reasoning on with a budget of
+	// zero.
+	var reasoningBudgetPtr *int
+	if a.ReasoningBudgetTokens != 0 {
+		v := a.ReasoningBudgetTokens
+		reasoningBudgetPtr = &v
+	}
 	req := LLMRequest{
-		Provider:          a.Provider,
-		Model:             a.Model,
-		SystemPrompt:      systemPrompt,
-		Messages:          msgs,
-		Tools:             tools,
-		MaxTokens:         a.MaxTokens,
-		Temperature:       tempPtr,
-		TopP:              topPPtr,
-		TopK:              topKPtr,
-		FrequencyPenalty:  freqPenaltyPtr,
-		PresencePenalty:   presPenaltyPtr,
-		Seed:              seedPtr,
-		ParallelToolCalls: parallelToolCallsPtr,
-		StopSequences:     append([]string(nil), a.StopSequences...),
+		Provider:              a.Provider,
+		Model:                 a.Model,
+		SystemPrompt:          systemPrompt,
+		Messages:              msgs,
+		Tools:                 tools,
+		MaxTokens:             a.MaxTokens,
+		Temperature:           tempPtr,
+		TopP:                  topPPtr,
+		TopK:                  topKPtr,
+		FrequencyPenalty:      freqPenaltyPtr,
+		PresencePenalty:       presPenaltyPtr,
+		Seed:                  seedPtr,
+		ParallelToolCalls:     parallelToolCallsPtr,
+		StopSequences:         append([]string(nil), a.StopSequences...),
+		ReasoningBudgetTokens: reasoningBudgetPtr,
 	}
 
 	if env.Counters != nil {

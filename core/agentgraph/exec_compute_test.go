@@ -181,6 +181,8 @@ func TestLLMExecutor_BasicCall(t *testing.T) {
 // threads the rest of the ModelAttrs knob surface (TopP, TopK,
 // FrequencyPenalty, PresencePenalty, Seed, ParallelToolCalls,
 // StopSequences) onto the LLMRequest seam handed to LLMProvider.Generate.
+// Also covers WP06b (ReasoningBudgetTokens), which follows the same
+// node-attr -> seam threading pattern.
 func TestLLMExecutor_CarriesExpandedKnobSurface(t *testing.T) {
 	t.Parallel()
 	llm := &stubLLM{}
@@ -188,14 +190,15 @@ func TestLLMExecutor_CarriesExpandedKnobSurface(t *testing.T) {
 	applyEnvDefaults(env)
 	ex := modelExecutor{}
 	node := &Node{ID: "n1", Kind: NodeKindModel, Attrs: ModelAttrs{
-		Model:             "x",
-		TopP:              0.9,
-		TopK:              40,
-		FrequencyPenalty:  0.25,
-		PresencePenalty:   -0.1,
-		Seed:              12345,
-		ParallelToolCalls: true,
-		StopSequences:     []string{"STOP", "END"},
+		Model:                 "x",
+		TopP:                  0.9,
+		TopK:                  40,
+		FrequencyPenalty:      0.25,
+		PresencePenalty:       -0.1,
+		Seed:                  12345,
+		ParallelToolCalls:     true,
+		StopSequences:         []string{"STOP", "END"},
+		ReasoningBudgetTokens: 4096,
 	}}
 	if _, err := ex.Execute(context.Background(), env, node, PortValues{
 		"messages": []Message{{Role: "user", Content: "hello"}},
@@ -228,6 +231,9 @@ func TestLLMExecutor_CarriesExpandedKnobSurface(t *testing.T) {
 	if len(req.StopSequences) != 2 || req.StopSequences[0] != "STOP" || req.StopSequences[1] != "END" {
 		t.Errorf("StopSequences = %#v, want [STOP END]", req.StopSequences)
 	}
+	if req.ReasoningBudgetTokens == nil || *req.ReasoningBudgetTokens != 4096 {
+		t.Errorf("ReasoningBudgetTokens = %v, want 4096", req.ReasoningBudgetTokens)
+	}
 }
 
 // TestLLMExecutor_OmittedKnobsProduceNoOverride verifies the zero-value-
@@ -258,6 +264,9 @@ func TestLLMExecutor_OmittedKnobsProduceNoOverride(t *testing.T) {
 	}
 	if len(req.StopSequences) != 0 {
 		t.Errorf("StopSequences = %#v, want empty", req.StopSequences)
+	}
+	if req.ReasoningBudgetTokens != nil {
+		t.Errorf("ReasoningBudgetTokens = %v, want nil", req.ReasoningBudgetTokens)
 	}
 }
 

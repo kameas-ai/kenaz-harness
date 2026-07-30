@@ -43,6 +43,13 @@ type LLMRequest struct {
 	Seed              *int
 	ParallelToolCalls *bool
 	StopSequences     []string
+
+	// ReasoningBudgetTokens threads the model node's reasoning_budget_tokens
+	// attr (model-request-path-live-01PMDL01 WP06b) through to
+	// GenerationRequest.Reasoning. Nil means "no override; reasoning stays
+	// off unless the profile/provider default enables it," matching the
+	// rest of this knob surface's zero-means-unset convention.
+	ReasoningBudgetTokens *int
 }
 
 // Message is the narrow chat-message shape the kernel works with.
