@@ -451,6 +451,12 @@ func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]by
 		}
 	}
 
+	// StopSequences (model-request-path-live-01PMDL01 WP05): typed field
+	// on GenerationRequest maps onto Anthropic's stop_sequences.
+	if len(req.StopSequences) > 0 {
+		out["stop_sequences"] = req.StopSequences
+	}
+
 	// system: a single string at top-level (Anthropic's contract). We
 	// merge a dedicated System field with any role=system messages for
 	// convenience — RoleSystem in the connector represents either form.

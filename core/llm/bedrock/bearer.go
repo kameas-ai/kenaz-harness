@@ -47,6 +47,14 @@ func (a *Adapter) streamWithBearer(ctx context.Context, req llm.GenerationReques
 	if len(system) > 0 {
 		body["system"] = system
 	}
+
+	// StopSequences (model-request-path-live-01PMDL01 WP05): mirrors the
+	// SDK path's InferenceConfiguration.StopSequences for the bearer/REST
+	// Converse endpoint.
+	if len(req.StopSequences) > 0 {
+		body["inferenceConfig"] = map[string]any{"stopSequences": req.StopSequences}
+	}
+
 	// Tool serialization — the REST Converse endpoint accepts the same
 	// toolConfig.tools[].toolSpec shape the SDK builds. inputSchema.json
 	// carries the raw JSON Schema.

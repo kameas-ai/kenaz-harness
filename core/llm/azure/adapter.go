@@ -377,12 +377,18 @@ func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]by
 	}
 
 	// Apply optional sampling knobs.
-	for _, key := range []string{"temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty"} {
+	for _, key := range []string{"temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty", "seed", "parallel_tool_calls"} {
 		if v, ok := req.Params[key]; ok {
 			out[key] = v
 		} else if v, ok := prof.Defaults[key]; ok {
 			out[key] = v
 		}
+	}
+
+	// StopSequences (model-request-path-live-01PMDL01 WP05): typed field
+	// on GenerationRequest maps onto the OpenAI-compatible `stop` param.
+	if len(req.StopSequences) > 0 {
+		out["stop"] = req.StopSequences
 	}
 
 	// Apply reasoning_effort for o1/o3 models (WP07).

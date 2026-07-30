@@ -374,11 +374,11 @@ func resolveAWSConfig(ctx context.Context, profile, region string) (aws.Config, 
 // The auth path is selected by the profile's CredentialReference kind:
 //
 //   - "keychain"    long-lived Bedrock API key (bearer token); the
-//                    cred bytes ARE the key. Routed through the REST
-//                    endpoint with our own event-stream parser.
+//     cred bytes ARE the key. Routed through the REST
+//     endpoint with our own event-stream parser.
 //   - "aws_profile" AWS shared-credentials profile name; the cred
-//                    bytes ARE the profile name. Routed through the
-//                    SDK with SigV4 signing.
+//     bytes ARE the profile name. Routed through the
+//     SDK with SigV4 signing.
 func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof llm.ProviderProfile, cred []byte) (llm.Stream, error) {
 	if len(cred) == 0 {
 		return nil, &llm.ErrAuth{Message: "bedrock: empty credential"}
@@ -409,6 +409,13 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 	if len(system) > 0 {
 		in.System = system
 	}
+
+	// StopSequences (model-request-path-live-01PMDL01 WP05): typed field
+	// on GenerationRequest maps onto Converse's InferenceConfiguration.
+	if len(req.StopSequences) > 0 {
+		in.InferenceConfig = &types.InferenceConfiguration{StopSequences: req.StopSequences}
+	}
+
 	// Tool serialization — Converse wraps each spec in a
 	// toolConfig.tools[].toolSpec envelope. The tool's input schema is
 	// carried as a smithy `document.Interface` whose JSON encoding is
@@ -975,4 +982,3 @@ func classifyBedrockError(err error) error {
 		return &llm.ErrTransient{Message: msg, Cause: err}
 	}
 }
-

@@ -176,6 +176,91 @@ func TestLLMExecutor_BasicCall(t *testing.T) {
 	}
 }
 
+// TestLLMExecutor_CarriesExpandedKnobSurface is WP05 of
+// model-request-path-live-01PMDL01: asserts modelExecutor.Execute
+// threads the rest of the ModelAttrs knob surface (TopP, TopK,
+// FrequencyPenalty, PresencePenalty, Seed, ParallelToolCalls,
+// StopSequences) onto the LLMRequest seam handed to LLMProvider.Generate.
+func TestLLMExecutor_CarriesExpandedKnobSurface(t *testing.T) {
+	t.Parallel()
+	llm := &stubLLM{}
+	env := &Env{RunID: "r", SessionID: "s", LLM: llm}
+	applyEnvDefaults(env)
+	ex := modelExecutor{}
+	node := &Node{ID: "n1", Kind: NodeKindModel, Attrs: ModelAttrs{
+		Model:             "x",
+		TopP:              0.9,
+		TopK:              40,
+		FrequencyPenalty:  0.25,
+		PresencePenalty:   -0.1,
+		Seed:              12345,
+		ParallelToolCalls: true,
+		StopSequences:     []string{"STOP", "END"},
+	}}
+	if _, err := ex.Execute(context.Background(), env, node, PortValues{
+		"messages": []Message{{Role: "user", Content: "hello"}},
+	}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	req, ok := llm.lastRequest()
+	if !ok {
+		t.Fatal("expected a captured LLMRequest")
+	}
+	if req.TopP == nil || *req.TopP != 0.9 {
+		t.Errorf("TopP = %v, want 0.9", req.TopP)
+	}
+	if req.TopK == nil || *req.TopK != 40 {
+		t.Errorf("TopK = %v, want 40", req.TopK)
+	}
+	if req.FrequencyPenalty == nil || *req.FrequencyPenalty != 0.25 {
+		t.Errorf("FrequencyPenalty = %v, want 0.25", req.FrequencyPenalty)
+	}
+	if req.PresencePenalty == nil || *req.PresencePenalty != -0.1 {
+		t.Errorf("PresencePenalty = %v, want -0.1", req.PresencePenalty)
+	}
+	if req.Seed == nil || *req.Seed != 12345 {
+		t.Errorf("Seed = %v, want 12345", req.Seed)
+	}
+	if req.ParallelToolCalls == nil || !*req.ParallelToolCalls {
+		t.Errorf("ParallelToolCalls = %v, want true", req.ParallelToolCalls)
+	}
+	if len(req.StopSequences) != 2 || req.StopSequences[0] != "STOP" || req.StopSequences[1] != "END" {
+		t.Errorf("StopSequences = %#v, want [STOP END]", req.StopSequences)
+	}
+}
+
+// TestLLMExecutor_OmittedKnobsProduceNoOverride verifies the zero-value-
+// means-unset convention: a node with none of the WP05 knobs set must
+// produce nil pointers on the seam, not forced zero overrides that would
+// clobber a provider/profile default.
+func TestLLMExecutor_OmittedKnobsProduceNoOverride(t *testing.T) {
+	t.Parallel()
+	llm := &stubLLM{}
+	env := &Env{RunID: "r", SessionID: "s", LLM: llm}
+	applyEnvDefaults(env)
+	ex := modelExecutor{}
+	node := &Node{ID: "n1", Kind: NodeKindModel, Attrs: ModelAttrs{Model: "x"}}
+	if _, err := ex.Execute(context.Background(), env, node, PortValues{
+		"messages": []Message{{Role: "user", Content: "hello"}},
+	}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	req, ok := llm.lastRequest()
+	if !ok {
+		t.Fatal("expected a captured LLMRequest")
+	}
+	if req.TopP != nil || req.TopK != nil || req.FrequencyPenalty != nil ||
+		req.PresencePenalty != nil || req.Seed != nil || req.ParallelToolCalls != nil {
+		t.Errorf("expected all-nil knob pointers, got: TopP=%v TopK=%v FreqPenalty=%v PresPenalty=%v Seed=%v ParallelToolCalls=%v",
+			req.TopP, req.TopK, req.FrequencyPenalty, req.PresencePenalty, req.Seed, req.ParallelToolCalls)
+	}
+	if len(req.StopSequences) != 0 {
+		t.Errorf("StopSequences = %#v, want empty", req.StopSequences)
+	}
+}
+
 func TestLLMExecutor_BudgetCap(t *testing.T) {
 	t.Parallel()
 	llm := &stubLLM{}

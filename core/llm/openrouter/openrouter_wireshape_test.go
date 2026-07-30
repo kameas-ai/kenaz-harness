@@ -238,6 +238,21 @@ func TestOpenRouterAdapter_Params_ParamsSerialized(t *testing.T) {
 	})
 }
 
+// TestOpenRouterAdapter_StopSequences_StopSequencesSerialized verifies that
+// the typed GenerationRequest.StopSequences field maps onto the stop wire
+// key via the shared openaiwire body builder (model-request-path-live-01PMDL01
+// WP05).
+func TestOpenRouterAdapter_StopSequences_StopSequencesSerialized(t *testing.T) {
+	req := minReqOR()
+	req.StopSequences = []string{"STOP", "END"}
+	body := serialiseOR(t, req, stdProfOR("openai/gpt-4o"))
+	wirecheck.AssertSerialized(t, body, []wirecheck.FieldExpectation{
+		{Pointer: "/stop", WantPresent: true},
+		{Pointer: "/stop/0", WantString: "STOP"},
+		{Pointer: "/stop/1", WantString: "END"},
+	})
+}
+
 // ── Response / StreamEvent parsing ───────────────────────────────────────────
 
 // TestOpenRouterAdapter_ChatDefault_ResponseParsed verifies the happy-path SSE

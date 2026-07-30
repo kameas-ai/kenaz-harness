@@ -249,6 +249,24 @@ func TestBedrockAdapter_Params_ParamsSerialized(t *testing.T) {
 	})
 }
 
+// TestBedrockAdapter_StopSequences_StopSequencesSerialized verifies that
+// the typed GenerationRequest.StopSequences field maps onto Bedrock's
+// inferenceConfig.stopSequences wire key (model-request-path-live-01PMDL01
+// WP05). stdRequest uses the "keychain" cred kind, which routes through
+// the bearer/REST path (bearer.go); the SDK path (bedrock.go Stream())
+// sets the equivalent InferenceConfiguration.StopSequences field, mirrored
+// identically.
+func TestBedrockAdapter_StopSequences_StopSequencesSerialized(t *testing.T) {
+	req, _ := stdRequest("anthropic.claude-3-haiku-20240307-v1:0")
+	req.StopSequences = []string{"STOP", "END"}
+	body := capturedBody(t, req, "anthropic.claude-3-haiku-20240307-v1:0")
+	wirecheck.AssertSerialized(t, body, []wirecheck.FieldExpectation{
+		{Pointer: "/inferenceConfig/stopSequences", WantPresent: true},
+		{Pointer: "/inferenceConfig/stopSequences/0", WantString: "STOP"},
+		{Pointer: "/inferenceConfig/stopSequences/1", WantString: "END"},
+	})
+}
+
 // ── Response / StreamEvent parsing ───────────────────────────────────────────
 
 // TestBedrockAdapter_ChatDefault_ResponseParsed verifies that the adapter

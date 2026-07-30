@@ -16,15 +16,15 @@ import (
 type Capability string
 
 const (
-	CapStreaming        Capability = "streaming"
-	CapToolCalling      Capability = "tool_calling"
-	CapVision           Capability = "vision"
-	CapDocuments        Capability = "documents"
-	CapJSONMode         Capability = "json_mode"
-	CapPromptCaching    Capability = "prompt_caching"
-	CapReasoning        Capability = "reasoning"
-	CapCancellation     Capability = "cancellation"
-	CapUsageReporting   Capability = "usage_reporting"
+	CapStreaming      Capability = "streaming"
+	CapToolCalling    Capability = "tool_calling"
+	CapVision         Capability = "vision"
+	CapDocuments      Capability = "documents"
+	CapJSONMode       Capability = "json_mode"
+	CapPromptCaching  Capability = "prompt_caching"
+	CapReasoning      Capability = "reasoning"
+	CapCancellation   Capability = "cancellation"
+	CapUsageReporting Capability = "usage_reporting"
 	// CapStructuredOutput reports that the model/provider natively supports
 	// JSON-schema-constrained output (response_format or tool-call workaround
 	// with validated extraction). When false, Mode="json_schema" falls back
@@ -34,16 +34,16 @@ const (
 	// grammar constraints. Cloud providers return false; local runtimes
 	// (llama.cpp via Ollama) return true. Mode="grammar" returns
 	// ErrUnsupportedFormat when this is false. (structured-output-and-grammar-01KX5R8A FR-005)
-	CapGrammar          Capability = "grammar"
+	CapGrammar Capability = "grammar"
 	// CapRegexGrammar reports that the model/runtime supports regex-shorthand
 	// grammar constraints (subset of full GBNF). (structured-output-and-grammar-01KX5R8A FR-002)
-	CapRegexGrammar     Capability = "regex_grammar"
+	CapRegexGrammar Capability = "regex_grammar"
 	// CapImageOutput reports that the model/provider supports generating
 	// images as output (e.g. DALL-E 3, gpt-image-1, Titan Image).
 	// Requests that populate GenerationRequest.ImageOutput or are routed to
 	// an image-generation endpoint require this capability.
 	// (multimodal-io-extended-01KQ8TD2 WP01)
-	CapImageOutput      Capability = "image_output"
+	CapImageOutput Capability = "image_output"
 )
 
 // AllCapabilities is the canonical ordered list (used for tests / docs).
@@ -113,9 +113,9 @@ func DefaultRetryPolicy() RetryPolicy {
 // ProviderProfile is the materialized form of one bundle Provider Profile
 // artifact (FR-002 / C-004).
 type ProviderProfile struct {
-	ID    string              `json:"id"               yaml:"id"`
-	Kind  string              `json:"kind"             yaml:"kind"`
-	Model string              `json:"model"            yaml:"model"`
+	ID    string `json:"id"               yaml:"id"`
+	Kind  string `json:"kind"             yaml:"kind"`
+	Model string `json:"model"            yaml:"model"`
 	// Models is the full set of models the credential is authorised
 	// for. When empty, callers fall back to [Model]. The first entry is
 	// the default; the chat surface picks via GenerationRequest.Model.
@@ -221,7 +221,7 @@ func (m Message) Text() string {
 //   - "tool_use"        → ToolUse
 //   - "tool_result"     → ToolResult OR ToolData (legacy raw-bytes shape)
 //   - "generated_image" → ArtifactID (captured model-generated image;
-//                         bytes resolved via harness-artifact://<ArtifactID>)
+//     bytes resolved via harness-artifact://<ArtifactID>)
 //
 // (multimodal-io-extended-01KQ8TD2 WP01)
 type ContentBlock struct {
@@ -266,18 +266,18 @@ func (d *ImageDimensions) Pixels() int64 {
 // them to enforce per-provider byte and pixel caps without re-decoding
 // the base64 payload.
 type MediaSource struct {
-	Kind         string           `json:"kind"`
-	MediaType    string           `json:"media_type"`
-	Data         string           `json:"data,omitempty"`
-	URI          string           `json:"uri,omitempty"`
-	OriginalName string           `json:"original_name,omitempty"`
+	Kind         string `json:"kind"`
+	MediaType    string `json:"media_type"`
+	Data         string `json:"data,omitempty"`
+	URI          string `json:"uri,omitempty"`
+	OriginalName string `json:"original_name,omitempty"`
 	// SizeBytes is the decoded byte size of the attachment. Populated by
 	// core/attachments.Put and by the frontend before Attachments_AddMedia.
 	// Zero means unknown (skip byte-cap check in the gate).
-	SizeBytes        int64            `json:"size_bytes,omitempty"`
+	SizeBytes int64 `json:"size_bytes,omitempty"`
 	// ImageDimensions carries width × height in pixels for image blocks.
 	// Nil means unknown. The gate skips the pixel-cap check when nil.
-	ImageDimensions  *ImageDimensions `json:"image_dimensions,omitempty"`
+	ImageDimensions *ImageDimensions `json:"image_dimensions,omitempty"`
 }
 
 // ToolUse is a model-emitted tool call (FR-006).
@@ -307,11 +307,11 @@ type ToolSpec struct {
 // Attachment carries non-text input for a message (vision images, audio,
 // etc.; FR-007).
 type Attachment struct {
-	Kind     string `json:"kind"`           // "image" | "audio" | ...
-	MIME     string `json:"mime,omitempty"` // image/png, image/jpeg, ...
-	URI      string `json:"uri,omitempty"`  // file://, data:, https://...
-	Data     []byte `json:"-"`              // inline bytes; never logged
-	AltText  string `json:"alt_text,omitempty"`
+	Kind    string `json:"kind"`           // "image" | "audio" | ...
+	MIME    string `json:"mime,omitempty"` // image/png, image/jpeg, ...
+	URI     string `json:"uri,omitempty"`  // file://, data:, https://...
+	Data    []byte `json:"-"`              // inline bytes; never logged
+	AltText string `json:"alt_text,omitempty"`
 }
 
 // ResponseFormat constrains the model's output. Three modes:
@@ -324,11 +324,11 @@ type Attachment struct {
 // The adapter chooses the strongest backing it supports via the cascade
 // documented in spec §2.1:
 //
-//   Mode=json_schema + CapStructuredOutput  → native schema pass-through
-//   Mode=json_schema + CapJSONMode only     → JSON mode + post-hoc validate
-//   Mode=json_schema + neither              → prompt-engineering + post-hoc validate
-//   Mode=grammar     + CapGrammar           → native grammar
-//   Mode=grammar     + !CapGrammar          → ErrUnsupportedFormat (no emulation)
+//	Mode=json_schema + CapStructuredOutput  → native schema pass-through
+//	Mode=json_schema + CapJSONMode only     → JSON mode + post-hoc validate
+//	Mode=json_schema + neither              → prompt-engineering + post-hoc validate
+//	Mode=grammar     + CapGrammar           → native grammar
+//	Mode=grammar     + !CapGrammar          → ErrUnsupportedFormat (no emulation)
 //
 // Callers never reason about the cascade; they receive either a valid
 // response or a typed error (structured-output-and-grammar-01KX5R8A §2.1).
@@ -368,24 +368,24 @@ type StructuredOutputAdapter interface {
 // The Strict and Name fields extend the base shape for WP03 per-adapter
 // translation (multimodal-io-extended-01KQ8TD2 WP01 / WP03):
 //   - Strict=true   → propagates "strict: true" to OpenAI's json_schema
-//                     response_format (additionalProperties: false injected).
+//     response_format (additionalProperties: false injected).
 //   - Name          → names the schema object in providers that require one
-//                     (OpenAI json_schema.name). Falls back to "response" when empty.
+//     (OpenAI json_schema.name). Falls back to "response" when empty.
 type JSONModeSpec struct {
 	Enabled bool            `json:"enabled"`
 	Schema  json.RawMessage `json:"schema,omitempty"`
 	// Strict, when true, enables strict schema validation mode on providers
 	// that support it (OpenAI strict JSON schema). Ignored on providers without
 	// strict-mode support. (multimodal-io-extended-01KQ8TD2 WP01)
-	Strict bool   `json:"strict,omitempty"`
+	Strict bool `json:"strict,omitempty"`
 	// Name is the schema name forwarded to providers that require one.
 	// Defaults to "response" when empty. (multimodal-io-extended-01KQ8TD2 WP01)
-	Name   string `json:"name,omitempty"`
+	Name string `json:"name,omitempty"`
 }
 
 // CachingSpec is an opt-in marker for prompt-caching (FR-009).
 type CachingSpec struct {
-	Enabled bool   `json:"enabled"`
+	Enabled bool `json:"enabled"`
 	// Breakpoints is a list of message indexes that mark cacheable prefixes.
 	// Anthropic's `cache_control` semantics are the canonical exemplar.
 	Breakpoints []int `json:"breakpoints,omitempty"`
@@ -393,8 +393,8 @@ type CachingSpec struct {
 
 // ReasoningSpec opts into extended-thinking output (FR-010).
 type ReasoningSpec struct {
-	Enabled        bool `json:"enabled"`
-	BudgetTokens   int  `json:"budget_tokens,omitempty"`
+	Enabled          bool `json:"enabled"`
+	BudgetTokens     int  `json:"budget_tokens,omitempty"`
 	IncludeRawFrames bool `json:"include_raw_frames,omitempty"`
 }
 
@@ -404,16 +404,16 @@ type ReasoningSpec struct {
 // requires CapImageOutput. (multimodal-io-extended-01KQ8TD2 WP01)
 type ImageOutputSpec struct {
 	// N is the number of images to generate. Defaults to 1 when zero.
-	N       int    `json:"n,omitempty"`
+	N int `json:"n,omitempty"`
 	// Size is the image dimensions as a provider-specific string
 	// (e.g. "1024x1024", "1792x1024"). Empty means provider default.
-	Size    string `json:"size,omitempty"`
+	Size string `json:"size,omitempty"`
 	// Quality is the image quality level (e.g. "standard", "hd" for DALL-E 3;
 	// "standard", "premium" for gpt-image-1). Empty means provider default.
 	Quality string `json:"quality,omitempty"`
 	// Style is a provider-specific style hint (e.g. "vivid", "natural" for
 	// DALL-E 3). Empty means provider default.
-	Style   string `json:"style,omitempty"`
+	Style string `json:"style,omitempty"`
 }
 
 // GenerationRequest is the provider-agnostic invocation shape (FR-004).
@@ -438,15 +438,22 @@ type GenerationRequest struct {
 	// ResponseFormat constrains the model's output to a JSON schema or GBNF
 	// grammar. Nil means free-form text (today's behavior unchanged).
 	// (structured-output-and-grammar-01KX5R8A FR-001)
-	ResponseFormat *ResponseFormat  `json:"response_format,omitempty"`
+	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
 	// ImageOutput opts the request into image-generation mode. Non-nil
 	// triggers CapImageOutput capability gating. The adapter routes to the
 	// image-generation endpoint rather than the chat-completions endpoint.
 	// (multimodal-io-extended-01KQ8TD2 WP01)
-	ImageOutput    *ImageOutputSpec `json:"image_output,omitempty"`
-	Params         map[string]any   `json:"params,omitempty"`
-	RetryOverride  *RetryPolicy     `json:"retry_override,omitempty"`
-	SessionID      string           `json:"session_id,omitempty"`
+	ImageOutput   *ImageOutputSpec `json:"image_output,omitempty"`
+	Params        map[string]any   `json:"params,omitempty"`
+	RetryOverride *RetryPolicy     `json:"retry_override,omitempty"`
+	SessionID     string           `json:"session_id,omitempty"`
+	// StopSequences overrides the sequences that stop generation when
+	// produced. Nil/empty means "no custom stop sequences; use provider
+	// default." Typed as a top-level field (rather than folded into
+	// Params) so every adapter has a single unambiguous source to read
+	// from, matching Reasoning's shape (model-request-path-live-01PMDL01
+	// WP05).
+	StopSequences []string `json:"stop_sequences,omitempty"`
 	// Knobs carries typed per-request fine-tuning overrides (FR-017 of
 	// provider-implementation-uniformity-01KQ8V4F). Nil means "inherit
 	// from session / global / profile defaults." Individual sub-fields
@@ -457,7 +464,7 @@ type GenerationRequest struct {
 	// serialises as flattened sub-fields on the wire — each sub-field
 	// carries its own adapter-level coverage entry when they are tracked
 	// in coverage_registry.yaml (WP08).
-	Knobs          *RequestKnobs    `json:"knobs,omitempty" wirecheck:"-"`
+	Knobs *RequestKnobs `json:"knobs,omitempty" wirecheck:"-"`
 }
 
 // RequestedCapabilities returns the set of capabilities this request
@@ -504,12 +511,12 @@ func (r GenerationRequest) RequestedCapabilities() []Capability {
 type StreamEventKind string
 
 const (
-	StreamText           StreamEventKind = "text"
-	StreamTool           StreamEventKind = "tool"
-	StreamReasoning      StreamEventKind = "reasoning"
-	StreamUsage          StreamEventKind = "usage"
-	StreamFinish         StreamEventKind = "finish"
-	StreamError          StreamEventKind = "error"
+	StreamText      StreamEventKind = "text"
+	StreamTool      StreamEventKind = "tool"
+	StreamReasoning StreamEventKind = "reasoning"
+	StreamUsage     StreamEventKind = "usage"
+	StreamFinish    StreamEventKind = "finish"
+	StreamError     StreamEventKind = "error"
 	// StreamGeneratedImage is emitted by image-generation adapters when the
 	// model produces an image output. The event carries a GeneratedImagePayload
 	// with the raw bytes (or a URL for providers that return a URL instead of
@@ -543,14 +550,14 @@ type GeneratedImagePayload struct {
 
 // StreamEvent is one delta delivered through a Stream.
 type StreamEvent struct {
-	Kind           StreamEventKind        `json:"kind"`
-	Text           string                 `json:"text,omitempty"`
-	Tool           *ToolUse               `json:"tool,omitempty"`
-	Reasoning      *ReasoningBlock        `json:"reasoning,omitempty"`
-	Usage          *Usage                 `json:"usage,omitempty"`
-	Finish         string                 `json:"finish,omitempty"`
-	Err            string                 `json:"err,omitempty"`
-	Raw            json.RawMessage        `json:"raw,omitempty"`
+	Kind      StreamEventKind `json:"kind"`
+	Text      string          `json:"text,omitempty"`
+	Tool      *ToolUse        `json:"tool,omitempty"`
+	Reasoning *ReasoningBlock `json:"reasoning,omitempty"`
+	Usage     *Usage          `json:"usage,omitempty"`
+	Finish    string          `json:"finish,omitempty"`
+	Err       string          `json:"err,omitempty"`
+	Raw       json.RawMessage `json:"raw,omitempty"`
 	// GeneratedImage is set when Kind==StreamGeneratedImage.
 	// (multimodal-io-extended-01KQ8TD2 WP01)
 	GeneratedImage *GeneratedImagePayload `json:"generated_image,omitempty"`
@@ -591,15 +598,15 @@ type ReasoningBlock struct {
 
 // Usage aggregates per-request token accounting (FR-011).
 type Usage struct {
-	InputTokens       int `json:"input_tokens"`
-	OutputTokens      int `json:"output_tokens"`
-	CachedInputRead   int `json:"cached_input_read,omitempty"`
-	CachedInputWrite  int `json:"cached_input_write,omitempty"`
-	ReasoningTokens   int `json:"reasoning_tokens,omitempty"`
+	InputTokens      int `json:"input_tokens"`
+	OutputTokens     int `json:"output_tokens"`
+	CachedInputRead  int `json:"cached_input_read,omitempty"`
+	CachedInputWrite int `json:"cached_input_write,omitempty"`
+	ReasoningTokens  int `json:"reasoning_tokens,omitempty"`
 	// ImagesGenerated is the count of images produced in the response.
 	// Non-zero for image-generation requests (DALL-E 3, gpt-image-1, Titan Image).
 	// (multimodal-io-extended-01KQ8TD2 WP01)
-	ImagesGenerated   int `json:"images_generated,omitempty"`
+	ImagesGenerated int `json:"images_generated,omitempty"`
 }
 
 // Cost is the derived currency cost for a Usage snapshot (FR-011).
@@ -613,7 +620,7 @@ type Cost struct {
 	// ImageCost is the dollar cost for images generated in this request.
 	// Non-zero only when ImagesGenerated > 0 and a pricing entry was found
 	// for the image model. (multimodal-io-extended-01KQ8TD2 WP01)
-	ImageCost     float64 `json:"image_cost,omitempty"`
+	ImageCost float64 `json:"image_cost,omitempty"`
 	// Indeterminate signals that no price-table entry matched the
 	// (kind, model) pair — the request still completes (US3 Acceptance 1).
 	Indeterminate bool   `json:"indeterminate,omitempty"`
@@ -649,10 +656,10 @@ type ProviderAdapter interface {
 // carries enough metadata to populate the AddProvider model-picker
 // dropdown without round-tripping back to the adapter.
 type ModelInfo struct {
-	ID            string `json:"id"`                          // canonical model id (e.g. "claude-sonnet-4-5")
-	DisplayName   string `json:"display_name"`                // user-facing label (e.g. "Claude Sonnet 4.5")
+	ID            string `json:"id"`           // canonical model id (e.g. "claude-sonnet-4-5")
+	DisplayName   string `json:"display_name"` // user-facing label (e.g. "Claude Sonnet 4.5")
 	Description   string `json:"description,omitempty"`
-	ContextWindow int    `json:"context_window,omitempty"`   // max input+output tokens; 0 = unknown
+	ContextWindow int    `json:"context_window,omitempty"` // max input+output tokens; 0 = unknown
 	// MaxOutputTokens is the provider's hard cap on tokens in a single
 	// response. 0 means unknown — the UI should not render an explicit
 	// cap in that case. Sourced from the capabilities catalog

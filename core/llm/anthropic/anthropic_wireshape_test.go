@@ -315,6 +315,20 @@ func TestAnthropicAdapter_Params_ParamsSerialized(t *testing.T) {
 	})
 }
 
+// TestAnthropicAdapter_StopSequences_StopSequencesSerialized verifies that
+// the typed GenerationRequest.StopSequences field maps onto Anthropic's
+// stop_sequences wire key (model-request-path-live-01PMDL01 WP05).
+func TestAnthropicAdapter_StopSequences_StopSequencesSerialized(t *testing.T) {
+	req := minReq()
+	req.StopSequences = []string{"STOP", "END"}
+	body := serialise(t, req, stdProf("claude-sonnet-4-5"))
+	wirecheck.AssertSerialized(t, body, []wirecheck.FieldExpectation{
+		{Pointer: "/stop_sequences", WantPresent: true},
+		{Pointer: "/stop_sequences/0", WantString: "STOP"},
+		{Pointer: "/stop_sequences/1", WantString: "END"},
+	})
+}
+
 // ── Response / StreamEvent parsing ───────────────────────────────────────────
 
 // TestAnthropicAdapter_ChatDefault_ResponseParsed verifies that a normal
