@@ -47,6 +47,27 @@ func (a *Adapter) streamWithBearer(ctx context.Context, req llm.GenerationReques
 	if len(system) > 0 {
 		body["system"] = system
 	}
+
+	// StopSequences (model-request-path-live-01PMDL01 WP05): mirrors the
+	// SDK path's InferenceConfiguration.StopSequences for the bearer/REST
+	// Converse endpoint.
+	if len(req.StopSequences) > 0 {
+		body["inferenceConfig"] = map[string]any{"stopSequences": req.StopSequences}
+	}
+
+	// Reasoning (extended thinking) — model-request-path-live-01PMDL01
+	// WP06. Mirrors the SDK path's additionalModelRequestFields.
+	// reasoning_config for the bearer/REST Converse endpoint. Capability
+	// gating happens one layer up in the registry's CapabilityGate.
+	if req.Reasoning != nil && req.Reasoning.Enabled && req.Reasoning.BudgetTokens > 0 {
+		body["additionalModelRequestFields"] = map[string]any{
+			"reasoning_config": map[string]any{
+				"type":          "enabled",
+				"budget_tokens": req.Reasoning.BudgetTokens,
+			},
+		}
+	}
+
 	// Tool serialization — the REST Converse endpoint accepts the same
 	// toolConfig.tools[].toolSpec shape the SDK builds. inputSchema.json
 	// carries the raw JSON Schema.

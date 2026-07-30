@@ -30,6 +30,19 @@ type LLMRequest struct {
 	Tools        []string
 	MaxTokens    int
 	Temperature  *float64
+
+	// The following fields widen the ModelAttrs knob surface
+	// (model-request-path-live-01PMDL01 WP05): the rest of
+	// core/llm.RequestKnobs plus stop sequences. Nil/zero means "no
+	// override; let the provider/profile default apply," matching
+	// MaxTokens/Temperature's existing zero-value semantics.
+	TopP              *float64
+	TopK              *int
+	FrequencyPenalty  *float64
+	PresencePenalty   *float64
+	Seed              *int
+	ParallelToolCalls *bool
+	StopSequences     []string
 }
 
 // Message is the narrow chat-message shape the kernel works with.
@@ -118,11 +131,11 @@ type StreamEvent struct {
 	// content; the structured frame stays inside the chassis.
 	Reasoning string `json:"reasoning,omitempty"`
 	// Usage / Finish / ErrMsg are populated for the matching kinds.
-	UsageInputTokens   int    `json:"usage_input_tokens,omitempty"`
-	UsageOutputTokens  int    `json:"usage_output_tokens,omitempty"`
-	UsageReasoningTokens int  `json:"usage_reasoning_tokens,omitempty"`
-	Finish             string `json:"finish,omitempty"`
-	ErrMsg             string `json:"err,omitempty"`
+	UsageInputTokens     int    `json:"usage_input_tokens,omitempty"`
+	UsageOutputTokens    int    `json:"usage_output_tokens,omitempty"`
+	UsageReasoningTokens int    `json:"usage_reasoning_tokens,omitempty"`
+	Finish               string `json:"finish,omitempty"`
+	ErrMsg               string `json:"err,omitempty"`
 }
 
 // StreamSink is the kernel-side seam the LLMNode-bound provider feeds
@@ -255,9 +268,9 @@ type MemoryWrite struct {
 
 // MemoryReadFilter narrows a memory read.
 type MemoryReadFilter struct {
-	Scopes  []string // which scopes to query (default: all)
-	Query   string   // free-text query (embedding-driven retrieval)
-	TopK    int
+	Scopes []string // which scopes to query (default: all)
+	Query  string   // free-text query (embedding-driven retrieval)
+	TopK   int
 }
 
 // MemoryHit is one returned chunk.
@@ -388,11 +401,11 @@ type AttachmentRegistrar interface {
 // downstream LLMNode is responsible for converting it to a
 // content block in its provider request.
 type AttachmentBlock struct {
-	MIME    string
-	Data    []byte
-	URI     string
-	Title   string
-	Inline  bool
+	MIME   string
+	Data   []byte
+	URI    string
+	Title  string
+	Inline bool
 }
 
 // ---- Bash output cache ----
@@ -729,10 +742,10 @@ func (nilBashOutput) Get(_ context.Context, _ string) (BashOutput, error) {
 // nil so the executor proceeds.
 type allowAllPolicy struct{}
 
-func (allowAllPolicy) CheckFileRead(_ context.Context, _ string) error    { return nil }
-func (allowAllPolicy) CheckFileWrite(_ context.Context, _ string) error   { return nil }
-func (allowAllPolicy) CheckStateRead(_ context.Context, _ string) error   { return nil }
-func (allowAllPolicy) CheckStateWrite(_ context.Context, _ string) error  { return nil }
+func (allowAllPolicy) CheckFileRead(_ context.Context, _ string) error   { return nil }
+func (allowAllPolicy) CheckFileWrite(_ context.Context, _ string) error  { return nil }
+func (allowAllPolicy) CheckStateRead(_ context.Context, _ string) error  { return nil }
+func (allowAllPolicy) CheckStateWrite(_ context.Context, _ string) error { return nil }
 
 // applyEnvDefaults fills missing seams with safe stubs so executors
 // don't need to nil-check every dependency.

@@ -12,10 +12,10 @@ import (
 // geminiRequest is the JSON body sent to the streamGenerateContent endpoint.
 type geminiRequest struct {
 	// SystemInstruction carries the system prompt.
-	SystemInstruction *geminiContent      `json:"systemInstruction,omitempty"`
-	Contents          []geminiContent     `json:"contents"`
-	Tools             []geminiToolDef     `json:"tools,omitempty"`
-	GenerationConfig  *geminiGenConfig    `json:"generationConfig,omitempty"`
+	SystemInstruction *geminiContent   `json:"systemInstruction,omitempty"`
+	Contents          []geminiContent  `json:"contents"`
+	Tools             []geminiToolDef  `json:"tools,omitempty"`
+	GenerationConfig  *geminiGenConfig `json:"generationConfig,omitempty"`
 }
 
 // geminiContent is one turn in the conversation.
@@ -27,10 +27,10 @@ type geminiContent struct {
 // geminiPart is a polymorphic content fragment.
 // Exactly one of the fields is non-zero.
 type geminiPart struct {
-	Text             string               `json:"text,omitempty"`
-	InlineData       *geminiInlineData    `json:"inlineData,omitempty"`
-	FunctionCall     *geminiFunctionCall  `json:"functionCall,omitempty"`
-	FunctionResponse *geminiFuncResponse  `json:"functionResponse,omitempty"`
+	Text             string              `json:"text,omitempty"`
+	InlineData       *geminiInlineData   `json:"inlineData,omitempty"`
+	FunctionCall     *geminiFunctionCall `json:"functionCall,omitempty"`
+	FunctionResponse *geminiFuncResponse `json:"functionResponse,omitempty"`
 }
 
 // geminiInlineData carries base64-encoded media.
@@ -65,14 +65,14 @@ type geminiFuncDecl struct {
 
 // geminiGenConfig holds generation parameters.
 type geminiGenConfig struct {
-	Temperature      *float64         `json:"temperature,omitempty"`
-	TopP             *float64         `json:"topP,omitempty"`
-	TopK             *int             `json:"topK,omitempty"`
-	MaxOutputTokens  *int             `json:"maxOutputTokens,omitempty"`
-	StopSequences    []string         `json:"stopSequences,omitempty"`
-	CandidateCount   *int             `json:"candidateCount,omitempty"`
-	ResponseMimeType string           `json:"responseMimeType,omitempty"`
-	ThinkingConfig   *geminiThinking  `json:"thinkingConfig,omitempty"`
+	Temperature      *float64        `json:"temperature,omitempty"`
+	TopP             *float64        `json:"topP,omitempty"`
+	TopK             *int            `json:"topK,omitempty"`
+	MaxOutputTokens  *int            `json:"maxOutputTokens,omitempty"`
+	StopSequences    []string        `json:"stopSequences,omitempty"`
+	CandidateCount   *int            `json:"candidateCount,omitempty"`
+	ResponseMimeType string          `json:"responseMimeType,omitempty"`
+	ThinkingConfig   *geminiThinking `json:"thinkingConfig,omitempty"`
 }
 
 // geminiThinking enables Gemini 2.5 extended-thinking mode.
@@ -84,16 +84,16 @@ type geminiThinking struct {
 
 // geminiResponse is one SSE frame from the streamGenerateContent endpoint.
 type geminiResponse struct {
-	Candidates    []geminiCandidate   `json:"candidates"`
-	UsageMetadata *geminiUsage        `json:"usageMetadata,omitempty"`
-	ModelVersion  string              `json:"modelVersion,omitempty"`
+	Candidates    []geminiCandidate `json:"candidates"`
+	UsageMetadata *geminiUsage      `json:"usageMetadata,omitempty"`
+	ModelVersion  string            `json:"modelVersion,omitempty"`
 }
 
 // geminiCandidate is one generation candidate (we always request 1).
 type geminiCandidate struct {
-	Content       *geminiContent   `json:"content,omitempty"`
-	FinishReason  string           `json:"finishReason,omitempty"`
-	Index         int              `json:"index"`
+	Content      *geminiContent `json:"content,omitempty"`
+	FinishReason string         `json:"finishReason,omitempty"`
+	Index        int            `json:"index"`
 }
 
 // geminiUsage holds token counts from the terminal usageMetadata frame.
@@ -341,6 +341,13 @@ func buildGenerationConfig(req llm.GenerationRequest, prof llm.ProviderProfile) 
 	setInt("max_tokens")
 	setInt("max_output_tokens")
 	setInt("top_k")
+
+	// StopSequences (model-request-path-live-01PMDL01 WP05): typed field
+	// on GenerationRequest, maps directly onto the wire's stopSequences.
+	if len(req.StopSequences) > 0 {
+		gc.StopSequences = req.StopSequences
+		hasAny = true
+	}
 
 	// JSON mode → responseMimeType
 	if req.JSONMode != nil && req.JSONMode.Enabled {

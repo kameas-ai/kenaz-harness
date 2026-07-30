@@ -451,6 +451,37 @@ func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]by
 		}
 	}
 
+	// StopSequences (model-request-path-live-01PMDL01 WP05): typed field
+	// on GenerationRequest maps onto Anthropic's stop_sequences.
+	if len(req.StopSequences) > 0 {
+		out["stop_sequences"] = req.StopSequences
+	}
+
+	// Reasoning (extended thinking) — model-request-path-live-01PMDL01
+	// WP06. Anthropic's `thinking` param takes a discriminated union;
+	// "enabled" mode requires a non-zero budget_tokens strictly less than
+	// max_tokens. Capability gating (does this model support reasoning?)
+	// happens one layer up, in the registry's CapabilityGate — which
+	// refuses the request before the adapter is ever called when the
+	// model's capability record has reasoning=false — mirroring how
+	// azure/adapter.go and gemini/wire.go wire req.Reasoning without an
+	// inline capability check of their own.
+	if req.Reasoning != nil && req.Reasoning.Enabled && req.Reasoning.BudgetTokens > 0 {
+		budget := req.Reasoning.BudgetTokens
+		if budget >= maxTokens {
+			// Anthropic requires budget_tokens < max_tokens. Clamp rather
+			// than send a request the API will reject outright; the
+			// adjustment keeps at least 1 output token headroom.
+			budget = maxTokens - 1
+		}
+		if budget > 0 {
+			out["thinking"] = map[string]any{
+				"type":          "enabled",
+				"budget_tokens": budget,
+			}
+		}
+	}
+
 	// system: a single string at top-level (Anthropic's contract). We
 	// merge a dedicated System field with any role=system messages for
 	// convenience — RoleSystem in the connector represents either form.

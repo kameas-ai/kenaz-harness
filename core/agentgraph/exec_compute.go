@@ -114,14 +114,56 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 		t := a.Temperature
 		tempPtr = &t
 	}
+	// The rest of the ModelAttrs knob surface (model-request-path-live-
+	// 01PMDL01 WP05) follows the same zero-means-unset convention as
+	// Temperature above: codegen emits bare value types for manifest
+	// attrs (no *T), so a zero value is indistinguishable from "not
+	// authored" — matching Temperature's pre-existing limitation.
+	var topPPtr *float64
+	if a.TopP != 0 {
+		v := a.TopP
+		topPPtr = &v
+	}
+	var topKPtr *int
+	if a.TopK != 0 {
+		v := a.TopK
+		topKPtr = &v
+	}
+	var freqPenaltyPtr *float64
+	if a.FrequencyPenalty != 0 {
+		v := a.FrequencyPenalty
+		freqPenaltyPtr = &v
+	}
+	var presPenaltyPtr *float64
+	if a.PresencePenalty != 0 {
+		v := a.PresencePenalty
+		presPenaltyPtr = &v
+	}
+	var seedPtr *int
+	if a.Seed != 0 {
+		v := a.Seed
+		seedPtr = &v
+	}
+	var parallelToolCallsPtr *bool
+	if a.ParallelToolCalls {
+		v := a.ParallelToolCalls
+		parallelToolCallsPtr = &v
+	}
 	req := LLMRequest{
-		Provider:     a.Provider,
-		Model:        a.Model,
-		SystemPrompt: systemPrompt,
-		Messages:     msgs,
-		Tools:        tools,
-		MaxTokens:    a.MaxTokens,
-		Temperature:  tempPtr,
+		Provider:          a.Provider,
+		Model:             a.Model,
+		SystemPrompt:      systemPrompt,
+		Messages:          msgs,
+		Tools:             tools,
+		MaxTokens:         a.MaxTokens,
+		Temperature:       tempPtr,
+		TopP:              topPPtr,
+		TopK:              topKPtr,
+		FrequencyPenalty:  freqPenaltyPtr,
+		PresencePenalty:   presPenaltyPtr,
+		Seed:              seedPtr,
+		ParallelToolCalls: parallelToolCallsPtr,
+		StopSequences:     append([]string(nil), a.StopSequences...),
 	}
 
 	if env.Counters != nil {

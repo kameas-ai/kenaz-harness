@@ -330,6 +330,53 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 		}
 	}
 
+	// Widen the knob surface to the rest of core/llm.RequestKnobs plus
+	// stop sequences (model-request-path-live-01PMDL01 WP05). Same
+	// Params channel as MaxTokens/Temperature above — every adapter reads
+	// these keys directly (anthropic.go, gemini/wire.go, azure/adapter.go)
+	// or via KnobsToParams' Params-first precedence layer (openaiwire).
+	// StopSequences is carried as a typed field (mirrors Reasoning's
+	// shape) rather than folded into Params.
+	if req.TopP != nil {
+		if gen.Params == nil {
+			gen.Params = make(map[string]any, 6)
+		}
+		gen.Params["top_p"] = *req.TopP
+	}
+	if req.TopK != nil {
+		if gen.Params == nil {
+			gen.Params = make(map[string]any, 6)
+		}
+		gen.Params["top_k"] = *req.TopK
+	}
+	if req.FrequencyPenalty != nil {
+		if gen.Params == nil {
+			gen.Params = make(map[string]any, 6)
+		}
+		gen.Params["frequency_penalty"] = *req.FrequencyPenalty
+	}
+	if req.PresencePenalty != nil {
+		if gen.Params == nil {
+			gen.Params = make(map[string]any, 6)
+		}
+		gen.Params["presence_penalty"] = *req.PresencePenalty
+	}
+	if req.Seed != nil {
+		if gen.Params == nil {
+			gen.Params = make(map[string]any, 6)
+		}
+		gen.Params["seed"] = *req.Seed
+	}
+	if req.ParallelToolCalls != nil {
+		if gen.Params == nil {
+			gen.Params = make(map[string]any, 6)
+		}
+		gen.Params["parallel_tool_calls"] = *req.ParallelToolCalls
+	}
+	if len(req.StopSequences) > 0 {
+		gen.StopSequences = req.StopSequences
+	}
+
 	// WP02 (long-turn-resilience) / WP02 (model-request-path-live-
 	// 01PMDL01): wrap the stream open with classified retry-with-backoff,
 	// driven by the resolved profile's retry.Policy rather than a

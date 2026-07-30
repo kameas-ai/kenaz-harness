@@ -41,17 +41,28 @@ func BuildRequestBody(req llm.GenerationRequest, model string, profileDefaults m
 	}
 
 	// Apply profile defaults first (lowest precedence).
-	for _, key := range []string{"temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty"} {
+	for _, key := range []string{"temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty", "seed", "parallel_tool_calls", "stop"} {
 		if v, ok := profileDefaults[key]; ok {
 			out[key] = v
 		}
 	}
 
-	// Apply Params (middle precedence).
-	for _, key := range []string{"temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty"} {
+	// Apply Params (middle precedence). Params is the universal
+	// cross-provider channel (model-request-path-live-01PMDL01 WP01/WP05);
+	// seed/parallel_tool_calls/stop are included here so a ModelAttrs-driven
+	// request that never touches Knobs still reaches the wire. top_k is
+	// deliberately excluded — OpenAI Chat Completions has no top_k
+	// parameter (KnobsToParams omits it for the same reason).
+	for _, key := range []string{"temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty", "seed", "parallel_tool_calls", "stop"} {
 		if v, ok := req.Params[key]; ok {
 			out[key] = v
 		}
+	}
+
+	// req.StopSequences (typed field, WP05) sits above Params but below
+	// Knobs, mirroring the Reasoning field's precedence.
+	if len(req.StopSequences) > 0 {
+		out["stop"] = req.StopSequences
 	}
 
 	// Apply Knobs (highest precedence).
