@@ -886,6 +886,9 @@ type ModelAttrs struct {
 	// Provider: LLM provider identifier (e.g. anthropic, bedrock).
 	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
 
+	// ReasoningBudgetTokens: Extended-thinking/reasoning token budget; 0 = reasoning disabled (provider default).
+	ReasoningBudgetTokens int `json:"reasoning_budget_tokens,omitempty" yaml:"reasoning_budget_tokens,omitempty"`
+
 	// Seed: Best-effort deterministic sampling seed; 0 = no seed requested.
 	Seed int `json:"seed,omitempty" yaml:"seed,omitempty"`
 
@@ -936,6 +939,9 @@ func (a ModelAttrs) Validate() error {
 	}
 	if a.PresencePenalty > 2 {
 		return fmt.Errorf("presence_penalty.max: got %v, want <= %v", a.PresencePenalty, 2)
+	}
+	if a.ReasoningBudgetTokens != 0 && float64(a.ReasoningBudgetTokens) < 0 {
+		return fmt.Errorf("reasoning_budget_tokens.min: got %d, want >= %v", a.ReasoningBudgetTokens, 0)
 	}
 	if a.Temperature < 0 {
 		return fmt.Errorf("temperature.min: got %v, want >= %v", a.Temperature, 0)
