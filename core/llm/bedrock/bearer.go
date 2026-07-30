@@ -48,13 +48,6 @@ func (a *Adapter) streamWithBearer(ctx context.Context, req llm.GenerationReques
 		body["system"] = system
 	}
 
-	// StopSequences (model-request-path-live-01PMDL01 WP05): mirrors the
-	// SDK path's InferenceConfiguration.StopSequences for the bearer/REST
-	// Converse endpoint.
-	if len(req.StopSequences) > 0 {
-		body["inferenceConfig"] = map[string]any{"stopSequences": req.StopSequences}
-	}
-
 	// Reasoning (extended thinking) — model-request-path-live-01PMDL01
 	// WP06. Mirrors the SDK path's additionalModelRequestFields.
 	// reasoning_config for the bearer/REST Converse endpoint. Capability
@@ -78,6 +71,12 @@ func (a *Adapter) streamWithBearer(ctx context.Context, req llm.GenerationReques
 			return nil, &llm.ErrInvalidRequest{Message: err.Error()}
 		}
 		body["toolConfig"] = toolCfg
+	}
+
+	// Sampling knobs — max_tokens/temperature/top_p/stop_sequences
+	// (WP09), mirroring the SDK path's buildInferenceConfig.
+	if cfg := buildInferenceConfigJSON(req); cfg != nil {
+		body["inferenceConfig"] = cfg
 	}
 
 	// Structured-output injection for the bearer/REST path
@@ -261,6 +260,60 @@ func (a *Adapter) bearerClient() *http.Client {
 		return a.httpc
 	}
 	return http.DefaultClient
+}
+
+// buildInferenceConfigJSON builds the "inferenceConfig" JSON object for
+// the bearer/REST Converse path — the map-based equivalent of
+// buildInferenceConfig (bedrock.go), which produces the SDK-typed
+// *types.InferenceConfiguration for the aws_profile/SigV4 path. Field
+// names follow the Converse REST API's camelCase wire shape
+// (maxTokens / temperature / topP / stopSequences).
+//
+// Returns nil when no knob was present, so callers never attach an
+// empty inferenceConfig object to the request body.
+func buildInferenceConfigJSON(req llm.GenerationRequest) map[string]any {
+	cfg := map[string]any{}
+
+	if v, ok := req.Params["max_tokens"]; ok {
+		if i, ok := bedrockNumToInt32(v); ok && i > 0 {
+			cfg["maxTokens"] = i
+		}
+	}
+	if req.Knobs != nil && req.Knobs.MaxTokens > 0 {
+		cfg["maxTokens"] = req.Knobs.MaxTokens
+	}
+
+	if v, ok := req.Params["temperature"]; ok {
+		if f, ok := bedrockNumToFloat32(v); ok {
+			cfg["temperature"] = f
+		}
+	}
+	if req.Knobs != nil && req.Knobs.Temperature != nil {
+		cfg["temperature"] = *req.Knobs.Temperature
+	}
+
+	if v, ok := req.Params["top_p"]; ok {
+		if f, ok := bedrockNumToFloat32(v); ok {
+			cfg["topP"] = f
+		}
+	}
+	if req.Knobs != nil && req.Knobs.TopP != nil {
+		cfg["topP"] = *req.Knobs.TopP
+	}
+
+	if stops := bedrockStopSequences(req.Params); len(stops) > 0 {
+		cfg["stopSequences"] = stops
+	}
+	// The typed StopSequences field (WP05) is the canonical carrier and
+	// wins over the loose Params channel, mirroring the SDK path.
+	if len(req.StopSequences) > 0 {
+		cfg["stopSequences"] = req.StopSequences
+	}
+
+	if len(cfg) == 0 {
+		return nil
+	}
+	return cfg
 }
 
 // toConverseToolConfigJSON converts the harness's ToolSpec slice into

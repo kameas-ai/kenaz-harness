@@ -234,10 +234,11 @@ func TestBedrockAdapter_Reasoning_ReasoningSerialized(t *testing.T) {
 	})
 }
 
-// ── Params ────────────────────────────────────────────────────────────────────
+// ── Params / InferenceConfig ─────────────────────────────────────────────────
 
-// TestBedrockAdapter_Params_ParamsSerialized verifies that Params does not
-// corrupt the request (Bedrock handles temperature via inferenceConfig).
+// TestBedrockAdapter_Params_ParamsSerialized verifies that Params
+// carrying a single sampling knob (temperature) reaches the wire under
+// inferenceConfig.temperature (WP09) rather than being dropped.
 func TestBedrockAdapter_Params_ParamsSerialized(t *testing.T) {
 	req := llm.GenerationRequest{
 		Messages: []llm.Message{bedrockUserMsg("hi")},
@@ -246,6 +247,7 @@ func TestBedrockAdapter_Params_ParamsSerialized(t *testing.T) {
 	body := capturedBody(t, req, "anthropic.claude-3-haiku-20240307-v1:0")
 	wirecheck.AssertSerialized(t, body, []wirecheck.FieldExpectation{
 		{Pointer: "/messages", WantPresent: true},
+		{Pointer: "/inferenceConfig/temperature", WantNumber: float64Ptr(0.7)},
 	})
 }
 
@@ -266,6 +268,104 @@ func TestBedrockAdapter_StopSequences_StopSequencesSerialized(t *testing.T) {
 		{Pointer: "/inferenceConfig/stopSequences/1", WantString: "END"},
 	})
 }
+
+// TestBedrockAdapter_InferenceConfig_AllKnobsSerialized verifies
+// max_tokens/temperature/top_p/stop_sequences all land together under
+// a single inferenceConfig object on the bearer/REST wire path, and
+// that setting all four does not clobber any individual field (WP09).
+func TestBedrockAdapter_InferenceConfig_AllKnobsSerialized(t *testing.T) {
+	req := llm.GenerationRequest{
+		Messages: []llm.Message{bedrockUserMsg("hi")},
+		Params: map[string]any{
+			"max_tokens":     json.Number("512"),
+			"temperature":    0.4,
+			"top_p":          float32(0.9),
+			"stop_sequences": []any{"STOP", "END"},
+		},
+	}
+	body := capturedBody(t, req, "anthropic.claude-3-haiku-20240307-v1:0")
+	wirecheck.AssertSerialized(t, body, []wirecheck.FieldExpectation{
+		{Pointer: "/inferenceConfig/maxTokens", WantNumber: float64Ptr(512)},
+		{Pointer: "/inferenceConfig/temperature", WantNumber: float64Ptr(0.4)},
+		{Pointer: "/inferenceConfig/topP", WantNumber: float64Ptr(0.9)},
+		{Pointer: "/inferenceConfig/stopSequences", WantPresent: true, WantArrayLen: 2, WantArrayLenSet: true},
+		{Pointer: "/inferenceConfig/stopSequences/0", WantString: "STOP"},
+		{Pointer: "/inferenceConfig/stopSequences/1", WantString: "END"},
+	})
+}
+
+// TestBedrockAdapter_InferenceConfig_TypedStopSequencesWinOverParams
+// pins the precedence introduced when WP09 was reconciled with WP05: the
+// typed GenerationRequest.StopSequences field is the canonical carrier
+// and overrides the loose Params channel when both are set. Without this
+// the two independently-written stop-sequence paths silently clobbered
+// each other.
+func TestBedrockAdapter_InferenceConfig_TypedStopSequencesWinOverParams(t *testing.T) {
+	req := llm.GenerationRequest{
+		Messages:      []llm.Message{bedrockUserMsg("hi")},
+		Params:        map[string]any{"stop_sequences": []any{"FROM_PARAMS"}},
+		StopSequences: []string{"TYPED"},
+	}
+	body := capturedBody(t, req, "anthropic.claude-3-haiku-20240307-v1:0")
+	wirecheck.AssertSerialized(t, body, []wirecheck.FieldExpectation{
+		{Pointer: "/inferenceConfig/stopSequences", WantPresent: true, WantArrayLen: 1, WantArrayLenSet: true},
+		{Pointer: "/inferenceConfig/stopSequences/0", WantString: "TYPED"},
+	})
+}
+
+// TestBedrockAdapter_InferenceConfig_KnobsOverrideParams verifies the
+// typed req.Knobs carrier wins over the untyped req.Params channel when
+// both set the same field (matches the openaiwire adapter's Params <
+// Knobs precedence — see buildInferenceConfig doc comment).
+func TestBedrockAdapter_InferenceConfig_KnobsOverrideParams(t *testing.T) {
+	knobTemp := 0.9
+	req := llm.GenerationRequest{
+		Messages: []llm.Message{bedrockUserMsg("hi")},
+		Params:   map[string]any{"temperature": 0.1},
+		Knobs:    &llm.RequestKnobs{Temperature: &knobTemp},
+	}
+	body := capturedBody(t, req, "anthropic.claude-3-haiku-20240307-v1:0")
+	wirecheck.AssertSerialized(t, body, []wirecheck.FieldExpectation{
+		{Pointer: "/inferenceConfig/temperature", WantNumber: float64Ptr(0.9)},
+	})
+}
+
+// TestBedrockAdapter_InferenceConfig_UnsetOmitted verifies that when no
+// sampling knob is present anywhere on the request, no inferenceConfig
+// object is attached to the wire body at all (WP09 — don't force an
+// empty struct onto every call).
+func TestBedrockAdapter_InferenceConfig_UnsetOmitted(t *testing.T) {
+	req := llm.GenerationRequest{
+		Messages: []llm.Message{bedrockUserMsg("hi")},
+	}
+	body := capturedBody(t, req, "anthropic.claude-3-haiku-20240307-v1:0")
+	wirecheck.AssertSerialized(t, body, []wirecheck.FieldExpectation{
+		{Pointer: "/inferenceConfig", WantAbsent: true},
+	})
+}
+
+// TestBedrockAdapter_InferenceConfig_SurvivesAlongsideReasoning verifies
+// that inferenceConfig (WP09) and additionalModelRequestFields.
+// reasoning_config (WP06a) coexist on one request. These two landed from
+// separate branches that could not see each other, so this pins that
+// neither assignment clobbers the other.
+func TestBedrockAdapter_InferenceConfig_SurvivesAlongsideReasoning(t *testing.T) {
+	req := llm.GenerationRequest{
+		Messages:  []llm.Message{bedrockUserMsg("think hard")},
+		Reasoning: &llm.ReasoningSpec{Enabled: true, BudgetTokens: 512},
+		Params:    map[string]any{"max_tokens": 256},
+	}
+	body := capturedBody(t, req, "anthropic.claude-3-haiku-20240307-v1:0")
+	wirecheck.AssertSerialized(t, body, []wirecheck.FieldExpectation{
+		{Pointer: "/messages", WantPresent: true},
+		{Pointer: "/inferenceConfig/maxTokens", WantNumber: float64Ptr(256)},
+		{Pointer: "/additionalModelRequestFields/reasoning_config/type", WantString: "enabled"},
+		{Pointer: "/additionalModelRequestFields/reasoning_config/budget_tokens", WantNumber: float64Ptr(512)},
+	})
+}
+
+// float64Ptr is a small test helper for wirecheck.FieldExpectation.WantNumber.
+func float64Ptr(f float64) *float64 { return &f }
 
 // ── Response / StreamEvent parsing ───────────────────────────────────────────
 
