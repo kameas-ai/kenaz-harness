@@ -174,6 +174,7 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 		ParallelToolCalls:     parallelToolCallsPtr,
 		StopSequences:         append([]string(nil), a.StopSequences...),
 		ReasoningBudgetTokens: reasoningBudgetPtr,
+		FallbackChainId:       a.FallbackChainId,
 	}
 
 	if env.Counters != nil {
@@ -1083,6 +1084,7 @@ func (escalateExecutor) Execute(ctx context.Context, env *Env, node *Node, input
 		Messages: []Message{
 			{Role: "user", Content: "Re-do this with higher quality:\n\n" + draft},
 		},
+		FallbackChainId: a.FallbackChainId,
 	})
 	if err != nil {
 		return res, fmt.Errorf("escalate: node %q: %w", node.ID, err)

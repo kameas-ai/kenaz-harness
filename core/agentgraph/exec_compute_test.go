@@ -181,8 +181,8 @@ func TestLLMExecutor_BasicCall(t *testing.T) {
 // threads the rest of the ModelAttrs knob surface (TopP, TopK,
 // FrequencyPenalty, PresencePenalty, Seed, ParallelToolCalls,
 // StopSequences) onto the LLMRequest seam handed to LLMProvider.Generate.
-// Also covers WP06b (ReasoningBudgetTokens), which follows the same
-// node-attr -> seam threading pattern.
+// Also covers WP06b (ReasoningBudgetTokens) and WP07 (FallbackChainId),
+// which follow the same node-attr -> seam threading pattern.
 func TestLLMExecutor_CarriesExpandedKnobSurface(t *testing.T) {
 	t.Parallel()
 	llm := &stubLLM{}
@@ -199,6 +199,7 @@ func TestLLMExecutor_CarriesExpandedKnobSurface(t *testing.T) {
 		ParallelToolCalls:     true,
 		StopSequences:         []string{"STOP", "END"},
 		ReasoningBudgetTokens: 4096,
+		FallbackChainId:       "anthropic-with-openrouter-fallback",
 	}}
 	if _, err := ex.Execute(context.Background(), env, node, PortValues{
 		"messages": []Message{{Role: "user", Content: "hello"}},
@@ -234,6 +235,9 @@ func TestLLMExecutor_CarriesExpandedKnobSurface(t *testing.T) {
 	if req.ReasoningBudgetTokens == nil || *req.ReasoningBudgetTokens != 4096 {
 		t.Errorf("ReasoningBudgetTokens = %v, want 4096", req.ReasoningBudgetTokens)
 	}
+	if req.FallbackChainId != "anthropic-with-openrouter-fallback" {
+		t.Errorf("FallbackChainId = %q, want anthropic-with-openrouter-fallback", req.FallbackChainId)
+	}
 }
 
 // TestLLMExecutor_OmittedKnobsProduceNoOverride verifies the zero-value-
@@ -267,6 +271,9 @@ func TestLLMExecutor_OmittedKnobsProduceNoOverride(t *testing.T) {
 	}
 	if req.ReasoningBudgetTokens != nil {
 		t.Errorf("ReasoningBudgetTokens = %v, want nil", req.ReasoningBudgetTokens)
+	}
+	if req.FallbackChainId != "" {
+		t.Errorf("FallbackChainId = %q, want empty", req.FallbackChainId)
 	}
 }
 

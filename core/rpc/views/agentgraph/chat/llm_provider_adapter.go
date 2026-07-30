@@ -12,6 +12,7 @@ import (
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/fallback"
 	"github.com/kameas-ai/kenaz-harness/core/llm/retry"
 	artview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
 )
@@ -407,9 +408,28 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 		profileRetry = prof.Retry
 	}
 	retryPolicy := retry.StreamPolicyFromLLM(profileRetry)
-	stream, err := retry.RetryStream(ctx, retryPolicy, func() (corellm.Stream, error) {
+
+	// FallbackChainId routing (model-request-path-live-01PMDL01 WP07,
+	// last mile): when the firing node authored a fallback_chain_id, wrap
+	// the registry in a fallback.Runner so a failing primary call walks
+	// the resolved chain instead of surfacing the error directly. The
+	// node-attr override (WithChainIDOverride) is the highest-priority
+	// level of the 3-level hierarchy documented on the fallback package;
+	// StoreResolver falls through to the bundled defaults when no
+	// operator-saved chain matches. When FallbackChainId is empty the
+	// streamFn closure is byte-for-byte the pre-WP07 call — no Runner is
+	// constructed and behaviour is unchanged.
+	streamFn := func() (corellm.Stream, error) {
 		return a.reg.Stream(ctx, gen)
-	})
+	}
+	if req.FallbackChainId != "" {
+		runner := fallback.NewRunner(a.reg, &fallback.StoreResolver{})
+		fbCtx := fallback.WithChainIDOverride(ctx, req.FallbackChainId)
+		streamFn = func() (corellm.Stream, error) {
+			return runner.Stream(fbCtx, gen)
+		}
+	}
+	stream, err := retry.RetryStream(ctx, retryPolicy, streamFn)
 	if err != nil {
 		return coreag.LLMResponse{}, fmt.Errorf("chat: registry stream: %w", err)
 	}
