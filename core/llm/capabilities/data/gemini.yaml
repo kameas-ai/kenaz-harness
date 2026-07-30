@@ -15,6 +15,23 @@ defaults:
   regex_grammar: false
   # Gemini does not offer an image-generation API via this adapter.
   image_output: false
+  # Extended knob capabilities (provider-implementation-uniformity-01KQ8V4F WP06;
+  # corrected for model-request-path-live-01PMDL01 WP08 — source of truth is
+  # core/llm/gemini/wire.go's buildGenerationConfig, which maps top_p → topP
+  # and top_k → topK. seed/frequency_penalty/presence_penalty/
+  # parallel_tool_calls have no wire mapping in this adapter today; declaring
+  # them true would let KnobPolicy pass them through only for the adapter to
+  # silently drop them on the floor.
+  parallel_tool_calls: false
+  seed: false
+  logprobs: false
+  top_k: true
+  top_p: true
+  frequency_penalty: false
+  presence_penalty: false
+  batch: false
+  response_format: false
+  reasoning_style: ""
   # Attachment limits for inline image input via inlineData parts.
   # Gemini accepts PNG, JPEG, WebP, HEIC/HEIF. GIF is rejected.
   image_input: true
