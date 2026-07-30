@@ -416,6 +416,22 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 		in.InferenceConfig = &types.InferenceConfiguration{StopSequences: req.StopSequences}
 	}
 
+	// Reasoning (extended thinking) — model-request-path-live-01PMDL01
+	// WP06. Bedrock's Converse API exposes Anthropic's native `thinking`
+	// param under additionalModelRequestFields.reasoning_config (NOT
+	// `thinking` directly — that's the Anthropic-native API's field
+	// name; Bedrock renames it). Capability gating happens one layer up
+	// in the registry's CapabilityGate, same as anthropic.go/azure/
+	// gemini.
+	if req.Reasoning != nil && req.Reasoning.Enabled && req.Reasoning.BudgetTokens > 0 {
+		in.AdditionalModelRequestFields = document.NewLazyDocument(map[string]any{
+			"reasoning_config": map[string]any{
+				"type":          "enabled",
+				"budget_tokens": req.Reasoning.BudgetTokens,
+			},
+		})
+	}
+
 	// Tool serialization — Converse wraps each spec in a
 	// toolConfig.tools[].toolSpec envelope. The tool's input schema is
 	// carried as a smithy `document.Interface` whose JSON encoding is
