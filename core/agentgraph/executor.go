@@ -190,6 +190,17 @@ type Env struct {
 	// recent trace).
 	State *RunState
 
+	// TaskState is the structured goal / completed-step summary /
+	// forbidden-actions object (autonomy-recovery-runtime-01PMDL03
+	// WP03) — re-injected as a pinned system-context block on every
+	// compute re-entry via graphBaseOf (exec_compute.go). nil is
+	// equivalent to "empty" (every TaskState method tolerates a nil
+	// receiver); applyEnvDefaults installs an empty one so production
+	// runs never see nil here. Mutated + persisted via the Kernel's
+	// SetTaskGoal / AddTaskCompletedStep / AddTaskForbidden helpers
+	// (kernel.go) so changes survive Kernel.RebuildState on resume.
+	TaskState *TaskState
+
 	// Hooks fires greedy memory-write hooks at kernel boundaries.
 	Hooks *HookManager
 

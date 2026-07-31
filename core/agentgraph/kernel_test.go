@@ -245,6 +245,100 @@ func TestKernel_RebuildStateFromEventLog(t *testing.T) {
 	}
 }
 
+// TestKernel_TaskStateSurvivesRebuildState exercises the WP03
+// persistence contract end to end: SetTaskGoal / AddTaskCompletedStep
+// / AddTaskForbidden write durable events, and a fresh Env rebuilt via
+// RebuildState (as Kernel.Resume does) sees the same TaskState content
+// without ever re-firing a node.
+func TestKernel_TaskStateSurvivesRebuildState(t *testing.T) {
+	t.Parallel()
+	g := threeNodeChain()
+	log := NewMemoryEventLog()
+	k := NewKernel(WithEventLog(log))
+	env := &Env{RunID: "ts-rb", Graph: g}
+	applyEnvDefaults(env)
+	if err := k.Run(context.Background(), env); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if err := k.SetTaskGoal(env, "ship the report"); err != nil {
+		t.Fatalf("SetTaskGoal: %v", err)
+	}
+	if err := k.AddTaskCompletedStep(env, "outline drafted"); err != nil {
+		t.Fatalf("AddTaskCompletedStep: %v", err)
+	}
+	if err := k.AddTaskForbidden(env, "delete_file", "bash"); err != nil {
+		t.Fatalf("AddTaskForbidden: %v", err)
+	}
+
+	env2 := &Env{RunID: "ts-rb", Graph: g}
+	applyEnvDefaults(env2)
+	if err := k.RebuildState(env2); err != nil {
+		t.Fatalf("RebuildState: %v", err)
+	}
+
+	if got := env2.TaskState.Goal(); got != "ship the report" {
+		t.Errorf("rebuilt Goal() = %q, want %q", got, "ship the report")
+	}
+	steps, elided := env2.TaskState.CompletedSteps()
+	if elided != 0 || len(steps) != 1 || steps[0] != "outline drafted" {
+		t.Errorf("rebuilt CompletedSteps() = %v, %d, want [\"outline drafted\"], 0", steps, elided)
+	}
+	forbidden := env2.TaskState.ForbiddenActions()
+	if len(forbidden) != 2 || forbidden[0] != "bash" || forbidden[1] != "delete_file" {
+		t.Errorf("rebuilt ForbiddenActions() = %v, want [bash delete_file]", forbidden)
+	}
+}
+
+// TestKernel_FailureAnnotationsSurviveRebuildState pins the WP01 gap
+// this WP03 change fixes: before, EventBacktrackFired was never
+// replayed by RebuildState, so a resumed run silently lost every
+// backtrack's rejection memory. It also doubles as the "FailedAttempts
+// survives resume" half of the WP03 contract (FailedAttempt is a type
+// alias for FailureAnnotation — see task_state.go).
+func TestKernel_FailureAnnotationsSurviveRebuildState(t *testing.T) {
+	t.Parallel()
+	kind := NodeKind("fake_backtrack_resume")
+	g := &Graph{
+		SpecVersion: SpecVersion, ID: "bt-resume-graph", Entrypoints: []string{"draft"},
+		Nodes: []Node{
+			{ID: "draft", Kind: kind},
+			{ID: "review", Kind: kind},
+			{ID: "sink", Kind: kind},
+		},
+		Edges: []Edge{
+			{From: EndpointRef{Node: "draft", Port: "value"}, To: EndpointRef{Node: "review", Port: "in"}},
+			{From: EndpointRef{Node: "review", Port: "value"}, To: EndpointRef{Node: "sink", Port: "in"}},
+		},
+	}
+	ex := &fakeBacktrackExecutor{kind: kind, calls: map[string]int{}, reviewer: "review", target: "draft"}
+	log := NewMemoryEventLog()
+	k := NewKernel(WithExecutor(ex), WithEventLog(log))
+	env := &Env{RunID: "bt-resume-run", Graph: g}
+	applyEnvDefaults(env)
+	if err := k.Run(context.Background(), env); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	original := env.State.FailureAnnotations()
+	if len(original) != 1 {
+		t.Fatalf("original failure annotations = %d, want 1", len(original))
+	}
+
+	env2 := &Env{RunID: "bt-resume-run", Graph: g}
+	applyEnvDefaults(env2)
+	if err := k.RebuildState(env2); err != nil {
+		t.Fatalf("RebuildState: %v", err)
+	}
+	rebuilt := env2.State.FailureAnnotations()
+	if len(rebuilt) != 1 {
+		t.Fatalf("rebuilt failure annotations = %d, want 1", len(rebuilt))
+	}
+	if rebuilt[0].Node != original[0].Node || rebuilt[0].Reason != original[0].Reason ||
+		rebuilt[0].RejectedApproach != original[0].RejectedApproach || rebuilt[0].Iteration != original[0].Iteration {
+		t.Errorf("rebuilt annotation = %+v, want %+v (Timestamp excluded — see RebuildState doc)", rebuilt[0], original[0])
+	}
+}
+
 func TestKernel_RejectsMissingEntrypoint(t *testing.T) {
 	t.Parallel()
 	g := &Graph{SpecVersion: SpecVersion, ID: "g", Entrypoints: []string{"missing"}, Nodes: []Node{

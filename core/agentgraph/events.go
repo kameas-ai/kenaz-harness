@@ -105,6 +105,18 @@ const (
 	// existing checkBudget pattern.
 	EventBacktrackFired EventKind = "backtrack_fired"
 
+	// TaskState persistence (autonomy-recovery-runtime-01PMDL03 WP03).
+	// TaskState is the structured "goal / completed-step summary /
+	// forbidden-actions" object re-injected on every compute re-entry
+	// (task_state.go); these three events are how mutations survive
+	// Kernel.RebuildState on resume. FailedAttempts deliberately has NO
+	// event of its own here — it is a rendered view over the existing
+	// FailureAnnotation records EventBacktrackFired already carries, so
+	// resume reconstructs it by replaying that event, not a new one.
+	EventTaskGoalSet       EventKind = "task_goal_set"
+	EventTaskStepCompleted EventKind = "task_step_completed"
+	EventTaskForbidden     EventKind = "task_forbidden_added"
+
 	// Run lifecycle.
 	EventRunStart    EventKind = "run_start"
 	EventRunComplete EventKind = "run_complete"
@@ -133,6 +145,7 @@ func AllEventKinds() []EventKind {
 		EventEscalateTriggered, EventPlanCreated,
 		EventHookFired,
 		EventBacktrackFired,
+		EventTaskGoalSet, EventTaskStepCompleted, EventTaskForbidden,
 		EventRunStart, EventRunComplete, EventRunPaused,
 	}
 }
