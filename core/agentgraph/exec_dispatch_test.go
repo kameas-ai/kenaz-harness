@@ -2,6 +2,8 @@ package agentgraph
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
@@ -398,5 +400,185 @@ func TestToolDispatchExecutor_BudgetGate(t *testing.T) {
 	}
 	if capHits != 1 {
 		t.Errorf("EventBudgetCapHit count = %d, want 1", capHits)
+	}
+}
+
+// TestToolDispatchExecutor_DoomLoopFiresOnNthRepeat asserts the doom-loop
+// guard trips on the Nth (default 3) near-identical call to the same
+// tool with the same (normalized) arguments, across separate Execute
+// invocations that share a run-scoped RunState — mirroring how a real
+// run re-fires tool_dispatch once per LoopNode iteration.
+func TestToolDispatchExecutor_DoomLoopFiresOnNthRepeat(t *testing.T) {
+	t.Parallel()
+	tools := newStubTools()
+	tools.allow("svc__search", "no matches", true)
+
+	env := &Env{
+		RunID:    "run-doom-1",
+		Tools:    tools,
+		Counters: &RunCounters{},
+		State:    NewRunState(),
+	}
+	applyEnvDefaults(env)
+	node := &Node{ID: "td", Kind: NodeKindToolDispatch, Attrs: ToolDispatchAttrs{}}
+
+	// Same tool, byte-identical arguments, three separate turns.
+	call := ToolCallRequest{ID: "c", Name: "svc__search", Arguments: `{"query":"widgets"}`}
+
+	var lastRes Result
+	for i := 0; i < 3; i++ {
+		call.ID = fmt.Sprintf("c%d", i)
+		res, err := toolDispatchExecutor{}.Execute(context.Background(), env, node,
+			PortValues{"tool_calls": []ToolCallRequest{call}})
+		if err != nil {
+			t.Fatalf("Execute iter %d: %v", i, err)
+		}
+		lastRes = res
+	}
+
+	if got, _ := lastRes.Outputs["should_replan"].(bool); !got {
+		t.Fatalf("should_replan = %v on 3rd identical call, want true", lastRes.Outputs["should_replan"])
+	}
+	var found bool
+	for _, e := range lastRes.Events.Events {
+		if e.Kind == EventDoomLoopDetected {
+			found = true
+			var payload map[string]any
+			if err := json.Unmarshal(e.Payload, &payload); err != nil {
+				t.Fatalf("EventDoomLoopDetected payload does not decode: %v", err)
+			}
+			if payload["tool"] != "svc__search" {
+				t.Errorf("payload[tool] = %v, want svc__search", payload["tool"])
+			}
+			if e.RunID != "run-doom-1" {
+				t.Errorf("event RunID = %q, want run-doom-1", e.RunID)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("EventDoomLoopDetected not emitted on 3rd identical call")
+	}
+
+	// Sanity: the kind is a registered member of AllEventKinds so log
+	// consumers that whitelist known kinds accept it.
+	var registered bool
+	for _, k := range AllEventKinds() {
+		if k == EventDoomLoopDetected {
+			registered = true
+		}
+	}
+	if !registered {
+		t.Fatalf("EventDoomLoopDetected missing from AllEventKinds()")
+	}
+}
+
+// TestToolDispatchExecutor_DoomLoopDoesNotFireOnFirstTwoCalls asserts the
+// guard stays quiet before the threshold is reached.
+func TestToolDispatchExecutor_DoomLoopDoesNotFireOnFirstTwoCalls(t *testing.T) {
+	t.Parallel()
+	tools := newStubTools()
+	tools.allow("svc__search", "no matches", true)
+	env := &Env{
+		RunID:    "run-doom-2",
+		Tools:    tools,
+		Counters: &RunCounters{},
+		State:    NewRunState(),
+	}
+	applyEnvDefaults(env)
+	node := &Node{ID: "td", Kind: NodeKindToolDispatch, Attrs: ToolDispatchAttrs{}}
+	call := ToolCallRequest{ID: "c", Name: "svc__search", Arguments: `{"query":"widgets"}`}
+
+	for i := 0; i < 2; i++ {
+		call.ID = fmt.Sprintf("c%d", i)
+		res, err := toolDispatchExecutor{}.Execute(context.Background(), env, node,
+			PortValues{"tool_calls": []ToolCallRequest{call}})
+		if err != nil {
+			t.Fatalf("Execute iter %d: %v", i, err)
+		}
+		if _, ok := res.Outputs["should_replan"]; ok {
+			t.Fatalf("iter %d: should_replan set before threshold reached", i)
+		}
+		for _, e := range res.Events.Events {
+			if e.Kind == EventDoomLoopDetected {
+				t.Fatalf("iter %d: EventDoomLoopDetected fired before threshold reached", i)
+			}
+		}
+	}
+}
+
+// TestToolDispatchExecutor_DoomLoopNotTrippedByPagination is the
+// negative case the spec calls out explicitly: a model paginating
+// through results with a changing offset must never be misdetected as a
+// doom loop, even though it calls the same tool repeatedly.
+func TestToolDispatchExecutor_DoomLoopNotTrippedByPagination(t *testing.T) {
+	t.Parallel()
+	tools := newStubTools()
+	tools.allow("svc__list", "page", false)
+	env := &Env{
+		RunID:    "run-doom-3",
+		Tools:    tools,
+		Counters: &RunCounters{},
+		State:    NewRunState(),
+	}
+	applyEnvDefaults(env)
+	node := &Node{ID: "td", Kind: NodeKindToolDispatch, Attrs: ToolDispatchAttrs{}}
+
+	for page := 0; page < 5; page++ {
+		call := ToolCallRequest{
+			ID:        fmt.Sprintf("p%d", page),
+			Name:      "svc__list",
+			Arguments: fmt.Sprintf(`{"offset":%d,"limit":50}`, page*50),
+		}
+		res, err := toolDispatchExecutor{}.Execute(context.Background(), env, node,
+			PortValues{"tool_calls": []ToolCallRequest{call}})
+		if err != nil {
+			t.Fatalf("Execute page %d: %v", page, err)
+		}
+		if _, ok := res.Outputs["should_replan"]; ok {
+			t.Fatalf("page %d: should_replan set for a varying-offset pagination call", page)
+		}
+		for _, e := range res.Events.Events {
+			if e.Kind == EventDoomLoopDetected {
+				t.Fatalf("page %d: EventDoomLoopDetected fired for a varying-offset pagination call", page)
+			}
+		}
+	}
+}
+
+// TestToolDispatchExecutor_DoomLoopThresholdConfigurable asserts
+// Budget.DoomLoopThreshold overrides DefaultDoomLoopThreshold.
+func TestToolDispatchExecutor_DoomLoopThresholdConfigurable(t *testing.T) {
+	t.Parallel()
+	tools := newStubTools()
+	tools.allow("svc__search", "no matches", true)
+	env := &Env{
+		RunID:    "run-doom-4",
+		Tools:    tools,
+		Counters: &RunCounters{},
+		State:    NewRunState(),
+		Budget:   Budget{DoomLoopThreshold: 2},
+	}
+	applyEnvDefaults(env)
+	node := &Node{ID: "td", Kind: NodeKindToolDispatch, Attrs: ToolDispatchAttrs{}}
+	call := ToolCallRequest{Name: "svc__search", Arguments: `{"query":"widgets"}`}
+
+	call.ID = "c0"
+	res, err := toolDispatchExecutor{}.Execute(context.Background(), env, node,
+		PortValues{"tool_calls": []ToolCallRequest{call}})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if _, ok := res.Outputs["should_replan"]; ok {
+		t.Fatalf("should_replan set on 1st call with threshold=2")
+	}
+
+	call.ID = "c1"
+	res, err = toolDispatchExecutor{}.Execute(context.Background(), env, node,
+		PortValues{"tool_calls": []ToolCallRequest{call}})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got, _ := res.Outputs["should_replan"].(bool); !got {
+		t.Fatalf("should_replan = %v on 2nd call with threshold=2, want true", res.Outputs["should_replan"])
 	}
 }

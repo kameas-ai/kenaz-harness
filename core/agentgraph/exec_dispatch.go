@@ -46,6 +46,13 @@ type dispatchOutcome struct {
 	result  ToolResult
 	err     error
 	events  EventBatch
+
+	// doomLoopHit / doomLoopCount are set when this call's (tool,
+	// normalized-arg-hash) key has repeated at least the configured
+	// threshold this run (WP02 doom-loop guard). Aggregated after
+	// dispatch into the node-level `should_replan` signal.
+	doomLoopHit   bool
+	doomLoopCount int
 }
 
 func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
@@ -119,6 +126,29 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 	dispatchOne := func(i int) {
 		oc := &outcomes[i]
 		oc.args, oc.rawArgs = parseToolArgs(oc.call.Arguments)
+
+		// Doom-loop guard (autonomy-recovery-runtime-01PMDL03 WP02):
+		// record this (tool, normalized-args) pair against the
+		// run-scoped bounded LRU before validation, so a model stuck
+		// resending the same malformed arguments to a tool trips the
+		// guard too — not just well-formed thrash. This is a
+		// *behavioral* cap distinct from MaxToolCallsPerRun: it fires
+		// on repeated near-identical calls regardless of remaining
+		// budget.
+		threshold := env.Budget.DoomLoopThreshold
+		if threshold <= 0 {
+			threshold = DefaultDoomLoopThreshold
+		}
+		if repeats := env.State.RecordToolCall(oc.call.Name, oc.args); repeats >= threshold {
+			oc.doomLoopHit = true
+			oc.doomLoopCount = repeats
+			_ = oc.events.AppendKind(env.RunID, node.ID, EventDoomLoopDetected, map[string]any{
+				"tool":      oc.call.Name,
+				"call_id":   oc.call.ID,
+				"repeats":   repeats,
+				"threshold": threshold,
+			})
+		}
 
 		// WP06 — tool-input schema validation (FR-006):
 		// Validate args against the tool's input_schema before dispatch.
@@ -338,6 +368,7 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 	// model and EventLog projection see stable indexing.
 	results := make([]ToolResult, 0, len(outcomes))
 	toolMsgs := make([]Message, 0, len(outcomes))
+	var doomLoopHits []map[string]any
 	for _, oc := range outcomes {
 		results = append(results, oc.result)
 		toolMsgs = append(toolMsgs, Message{
@@ -350,6 +381,24 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 		for _, e := range oc.events.Events {
 			res.Events.Append(e)
 		}
+		if oc.doomLoopHit {
+			doomLoopHits = append(doomLoopHits, map[string]any{
+				"tool":    oc.call.Name,
+				"call_id": oc.call.ID,
+				"repeats": oc.doomLoopCount,
+			})
+		}
+	}
+
+	// WP02 — surface the doom-loop signal at node level so a future
+	// ladder controller (WP04, not yet built) can force a
+	// replan/escalation regardless of remaining budget. Kept as a plain
+	// output rather than an error: the underlying tool calls still ran
+	// and their real results still flow to the model this turn — only
+	// the *next* turn's routing decision is what should_replan informs.
+	if len(doomLoopHits) > 0 {
+		res.Outputs["should_replan"] = true
+		res.Outputs["doom_loop_hits"] = doomLoopHits
 	}
 
 	// Build the messages port to feed the next LLMNode iteration: the

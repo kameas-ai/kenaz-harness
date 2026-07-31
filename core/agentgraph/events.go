@@ -70,6 +70,17 @@ const (
 	EventCostCapHit     EventKind = "cost_cap_hit"
 	EventBudgetCapHit   EventKind = "budget_cap_hit"
 
+	// EventDoomLoopDetected fires from the tool-dispatch executor when a
+	// (tool name, normalized-arg-hash) pair repeats DoomLoopThreshold+
+	// times within a run (autonomy-recovery-runtime-01PMDL03 WP02). This
+	// is a *behavioral* signal, distinct from the blunt budget caps
+	// above: a model can thrash on the same failing call indefinitely
+	// within MaxToolCallsPerRun and never trip a cap. Payload carries
+	// the tool name, repeat count, and threshold; the node also sets
+	// `should_replan=true` on its Outputs so a future ladder controller
+	// (WP04) can force escalation regardless of remaining budget.
+	EventDoomLoopDetected EventKind = "doom_loop_detected"
+
 	// Ask flow.
 	EventAskPending  EventKind = "ask_pending"
 	EventAskAnswered EventKind = "ask_answered"
@@ -107,6 +118,7 @@ func AllEventKinds() []EventKind {
 		EventArtifactEmitted, EventKindAliasResolved,
 		EventFileRead, EventFileWrite, EventBashOutputRead,
 		EventDialOverridden, EventCostCapHit, EventBudgetCapHit,
+		EventDoomLoopDetected,
 		EventAskPending, EventAskAnswered,
 		EventReflectStarted, EventReflectCompleted,
 		EventReviewPass, EventReviewFail, EventReviewUnrecov,
