@@ -613,6 +613,50 @@ func (a EscalateAttrs) Validate() error {
 	return nil
 }
 
+// EscalationLadderAttrs is the typed payload for `kind: escalation_ladder`.
+//
+// Runtime-orchestrated recovery: on repeated failure walks retry (same model) -> escalate (stronger model) -> replan -> ask (human) automatically, instead of requiring a graph author to hand-wire the progression node-by-node (autonomy-recovery-runtime-01PMDL03 WP04).
+type EscalationLadderAttrs struct {
+
+	// AskQuestion: Question posed to a human at the final (ask) rung. A generic default is used when empty.
+	AskQuestion string `json:"ask_question,omitempty" yaml:"ask_question,omitempty"`
+
+	// FallbackChainId: Optional fallback chain ID used by the escalate rung's model call (model-fallback-routing-01NDFSEX04).
+	FallbackChainId string `json:"fallback_chain_id,omitempty" yaml:"fallback_chain_id,omitempty"`
+
+	// MaxRetries: Same-model retry attempts (rung 1) before moving to escalate. Default 1.
+	MaxRetries int `json:"max_retries,omitempty" yaml:"max_retries,omitempty"`
+
+	// PlannerModel: Model used for the replan rung. Empty uses the run default model.
+	PlannerModel string `json:"planner_model,omitempty" yaml:"planner_model,omitempty"`
+
+	// TargetModel: Stronger model used for the escalate rung.
+	TargetModel string `json:"target_model,omitempty" yaml:"target_model,omitempty"`
+
+	// UpstreamNode: ID of the failing node the retry rung rewinds to via the kernel backtrack primitive (WP01).
+	UpstreamNode string `json:"upstream_node,omitempty" yaml:"upstream_node,omitempty"`
+}
+
+func (EscalationLadderAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: escalation_ladder`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`escalation_ladder.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a EscalationLadderAttrs) Validate() error {
+	if a.MaxRetries != 0 && float64(a.MaxRetries) < 1 {
+		return fmt.Errorf("max_retries.min: got %d, want >= %v", a.MaxRetries, 1)
+	}
+	if a.TargetModel == "" {
+		return fmt.Errorf("target_model: target_model is required (manifest constraint)")
+	}
+	if a.UpstreamNode == "" {
+		return fmt.Errorf("upstream_node: upstream_node is required (manifest constraint)")
+	}
+	return nil
+}
+
 // HistoryReadAttrs is the typed payload for `kind: history_read`.
 //
 // Reads the last-N messages from the conversation history (FR-051).

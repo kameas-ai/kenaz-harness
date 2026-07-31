@@ -28,6 +28,7 @@ const (
 	NodeKindCorpusWrite      NodeKind = "corpus_write"
 	NodeKindDecision         NodeKind = "decision"
 	NodeKindEscalate         NodeKind = "escalate"
+	NodeKindEscalationLadder NodeKind = "escalation_ladder"
 	NodeKindHistoryRead      NodeKind = "history_read"
 	NodeKindJoin             NodeKind = "join"
 	NodeKindLoop             NodeKind = "loop"
@@ -67,6 +68,7 @@ func AllNodeKinds() []NodeKind {
 		NodeKindCorpusWrite,
 		NodeKindDecision,
 		NodeKindEscalate,
+		NodeKindEscalationLadder,
 		NodeKindHistoryRead,
 		NodeKindJoin,
 		NodeKindLoop,
@@ -120,6 +122,8 @@ func defaultAttrsFor(kind NodeKind) NodeAttrs {
 		return DecisionAttrs{}
 	case NodeKindEscalate:
 		return EscalateAttrs{}
+	case NodeKindEscalationLadder:
+		return EscalationLadderAttrs{}
 	case NodeKindHistoryRead:
 		return HistoryReadAttrs{}
 	case NodeKindJoin:
@@ -241,6 +245,12 @@ func defaultPortsFor(kind NodeKind) (inputs, outputs []Port) {
 				{Name: "false", Type: PortType("any")},
 			}
 	case NodeKindEscalate:
+		return []Port{
+				{Name: "trigger", Type: PortType("any")},
+			}, []Port{
+				{Name: "result", Type: PortType("any")},
+			}
+	case NodeKindEscalationLadder:
 		return []Port{
 				{Name: "trigger", Type: PortType("any")},
 			}, []Port{
@@ -470,6 +480,12 @@ func decodeAttrs(kind NodeKind, raw map[string]any, nodeID string) (NodeAttrs, e
 		return v, nil
 	case NodeKindEscalate:
 		var v EscalateAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindEscalationLadder:
+		var v EscalationLadderAttrs
 		if err := json.Unmarshal(buf, &v); err != nil {
 			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
 		}

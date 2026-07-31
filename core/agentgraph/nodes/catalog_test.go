@@ -41,13 +41,13 @@ func TestCatalogGetListArchetypes(t *testing.T) {
 		}
 	}
 
-	// Kinds() returns the 33 callable kinds shipped after the
-	// branch-subagent-interactive-01KZNP3B WP03 mission added
-	// the `subagent_dispatch` node (was 32 before).
+	// Kinds() returns the 34 callable kinds shipped after
+	// autonomy-recovery-runtime-01PMDL03 WP04 added the
+	// `escalation_ladder` control node (was 33 before).
 	kinds := cat.Kinds()
-	const wantCallable = 33
+	const wantCallable = 34
 	if len(kinds) != wantCallable {
-		t.Errorf("expected %d kinds (WP04+WP05+session_write+tool_dispatch+sleep+subagent_dispatch), got %d", wantCallable, len(kinds))
+		t.Errorf("expected %d kinds (WP04+WP05+session_write+tool_dispatch+sleep+subagent_dispatch+escalation_ladder), got %d", wantCallable, len(kinds))
 	}
 
 	// IsCallable returns false for archetypes and unknown IDs.
