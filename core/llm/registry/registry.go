@@ -395,21 +395,36 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 		return nil, err
 	}
 
-	// 2c. KnobPolicy (model-request-path-live-01PMDL01 WP03). Sanitises
-	// req.Knobs against the resolved model's rich capability record
-	// before anything downstream (audit, retry, adapter body-build) sees
-	// it: unsupported-but-droppable knobs (Seed/TopK/ParallelToolCalls/
-	// mismatched Reasoning style) are stripped and logged; irreconcilable
-	// mismatches are refused with ErrUnsupportedFeature before the wire
-	// call (llm.go RequestKnobs doc, capabilities/knob_policy.go).
-	if req.Knobs != nil {
-		richCaps := cat.DescribeRich(prof.Kind, prof.Model)
-		cleaned, dropped, kerr := capabilities.NewKnobPolicy(richCaps).Apply(req.Knobs)
+	// 2c. KnobPolicy (model-request-path-live-01PMDL01 WP03, widened by
+	// the registry-seam bugfix below). Sanitises req.Knobs against the
+	// resolved model's rich capability record before anything downstream
+	// (audit, retry, adapter body-build) sees it: unsupported-but-droppable
+	// knobs (Seed/TopK/ParallelToolCalls/mismatched Reasoning style) are
+	// stripped and logged; irreconcilable mismatches are refused with
+	// ErrUnsupportedFeature before the wire call (llm.go RequestKnobs doc,
+	// capabilities/knob_policy.go).
+	//
+	// No production caller ever populates req.Knobs — every real caller
+	// (the chat seam's llm_provider_adapter.go, and every adapter that
+	// reads its own wire body: anthropic.go, gemini/wire.go,
+	// azure/adapter.go) wires per-node sampling knobs onto the untyped
+	// req.Params map instead, which bypassed KnobPolicy entirely. Building
+	// a synthetic RequestKnobs view from req.Params (knobsFromParams) and
+	// merging it with any caller-set req.Knobs closes that gap at this
+	// single seam, so every caller is protected rather than requiring each
+	// one to invoke KnobPolicy itself. Precedence: a field already set on
+	// req.Knobs wins over the Params-derived value for that field — Knobs
+	// is the deliberate typed surface a caller opts into explicitly, so
+	// the wider best-effort Params channel must not silently clobber it
+	// (see mergeRequestKnobs doc in knob_params.go).
+	richCaps := cat.DescribeRich(prof.Kind, prof.Model)
+	paramKnobs, paramKnobKeys := knobsFromParams(req.Params)
+	if merged := mergeRequestKnobs(req.Knobs, paramKnobs); merged != nil {
+		cleaned, dropped, kerr := capabilities.NewKnobPolicy(richCaps).Apply(merged)
 		if kerr != nil {
 			_ = emitter.Error(ctx, req, prof, kerr)
 			return nil, kerr
 		}
-		req.Knobs = cleaned
 		for _, d := range dropped {
 			log.Debug("registry.stream.knob_dropped",
 				"profile_id", req.ProfileID,
@@ -418,6 +433,12 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 				"knob", d.Name,
 				"reason", d.Reason,
 			)
+		}
+		if req.Knobs != nil {
+			req.Knobs = cleaned
+		}
+		if len(paramKnobKeys) > 0 {
+			req.Params = writeKnobsToParams(req.Params, paramKnobKeys, cleaned)
 		}
 	}
 
