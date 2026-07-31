@@ -3,6 +3,7 @@ package agentgraph
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 )
 
@@ -165,6 +166,92 @@ func TestEscalationLadderExecutor_GlobalEscalationSharedAcrossNodes(t *testing.T
 	}
 	if req, ok := llm.lastRequest(); !ok || req.Model == "strong2" {
 		t.Fatalf("node2 must not call LLMProvider.Generate against strong2; last request = %+v", req)
+	}
+}
+
+// TestEscalationLadderExecutor_GlobalEscalationClaimIsAtomicUnderConcurrency
+// is the regression test for the review-flagged TOCTOU: the escalate
+// rung used to read env.State.Outputs(ladderGlobalEscalatedKey), run a
+// slow env.LLM.Generate call with no lock held, and only then write
+// the flag back — leaving a window in which two concurrent
+// EscalationLadder nodes could both observe "not yet escalated" and
+// both fire a real, costed escalation. Unlike the sequential
+// TestEscalationLadderExecutor_GlobalEscalationSharedAcrossNodes test
+// above, this drives two nodes' Execute calls from actual concurrent
+// goroutines (release via a shared start gate so both attempt the
+// claim at the same instant) and repeats it to make a reintroduced
+// race likely to surface even without -race, though -race is what
+// definitively proves RunState.CompareAndSetOnce itself is race-free.
+func TestEscalationLadderExecutor_GlobalEscalationClaimIsAtomicUnderConcurrency(t *testing.T) {
+	t.Parallel()
+	const iterations = 50
+	for i := 0; i < iterations; i++ {
+		llm := &stubLLM{}
+		env := &Env{RunID: "r", LLM: llm}
+		applyEnvDefaults(env)
+
+		ex := escalationLadderExecutor{}
+		node1 := &Node{ID: "ladder1", Kind: NodeKindEscalationLadder, Attrs: EscalationLadderAttrs{
+			UpstreamNode: "src1", TargetModel: "strong1", MaxRetries: 1,
+		}}
+		node2 := &Node{ID: "ladder2", Kind: NodeKindEscalationLadder, Attrs: EscalationLadderAttrs{
+			UpstreamNode: "src2", TargetModel: "strong2", MaxRetries: 1,
+		}}
+		env.State.SetOutputs(ladderStateKey(node1.ID), PortValues{"rung": ladderRungEscalate, "retry_attempts": 1})
+		env.State.SetOutputs(ladderStateKey(node2.ID), PortValues{"rung": ladderRungEscalate, "retry_attempts": 1})
+
+		type outcome struct {
+			rung string
+			err  error
+		}
+		results := make(chan outcome, 2)
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for _, n := range []*Node{node1, node2} {
+			n := n
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				r, err := ex.Execute(context.Background(), env, n, PortValues{"trigger": "draft"})
+				rung, _ := r.Outputs["rung"].(string)
+				results <- outcome{rung: rung, err: err}
+			}()
+		}
+		close(start)
+		wg.Wait()
+		close(results)
+
+		var escalateCount, replanCount int
+		for o := range results {
+			if o.err != nil {
+				t.Fatalf("iteration %d: Execute error: %v", i, o.err)
+			}
+			switch o.rung {
+			case "escalate":
+				escalateCount++
+			case "replan":
+				replanCount++
+			default:
+				t.Fatalf("iteration %d: unexpected rung %q", i, o.rung)
+			}
+		}
+		// Exactly one goroutine must win the claim (rung="escalate",
+		// calling Generate at its own TargetModel) and the other must
+		// lose it and fall through to the replan rung (rung="replan",
+		// calling Generate at the planner model) — same fallthrough
+		// behavior TestEscalationLadderExecutor_GlobalEscalationSharedAcrossNodes
+		// exercises sequentially above. A non-atomic claim would let
+		// both goroutines win, producing escalateCount==2 with two
+		// distinct strong-model calls instead of one.
+		if escalateCount != 1 || replanCount != 1 {
+			t.Fatalf("iteration %d: escalateCount=%d replanCount=%d, want exactly one of each (the claim must be exclusive)",
+				i, escalateCount, replanCount)
+		}
+		if got := llm.callCount(); got != 2 {
+			t.Fatalf("iteration %d: llm calls = %d, want exactly 2 (1 escalate + 1 replan fallthrough) — "+
+				"a non-atomic claim would double-escalate instead", i, got)
+		}
 	}
 }
 
