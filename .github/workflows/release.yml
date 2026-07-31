@@ -695,10 +695,17 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
+      # NOTE: azure/trusted-signing-action was renamed upstream to
+      # Azure/artifact-signing-action. The Actions runner does NOT follow repo
+      # renames when resolving `uses:` (the REST API does, which masks it), so
+      # the old name fails the job at "Set up job" with "Unable to resolve
+      # action. Repository not found". Because these steps are
+      # continue-on-error, that failure would silently ship UNSIGNED Windows
+      # binaries rather than failing loudly. Reference the new name explicitly.
       - name: artifact signing (windows .exe)
         if: runner.os == 'Windows' && env.AZURE_CLIENT_ID_PRESENT == 'true' && steps.azure_login.outcome == 'success'
         continue-on-error: true
-        uses: azure/trusted-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
         with:
