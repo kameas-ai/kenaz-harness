@@ -813,6 +813,9 @@ func applyEnvDefaults(env *Env) {
 	if env.State == nil {
 		env.State = NewRunState()
 	}
+	if env.TaskState == nil {
+		env.TaskState = NewTaskState()
+	}
 	if env.Hooks == nil {
 		env.Hooks = NewHookManager(env.Memory, env.SessionID, env.ProjectID)
 		// Production-wired journal writer (memory_hook_journal table)

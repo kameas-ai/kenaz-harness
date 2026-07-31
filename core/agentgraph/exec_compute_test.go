@@ -754,6 +754,102 @@ func TestModelExecutor_NoGraphBaseYieldsNodeRoleOnly(t *testing.T) {
 	}
 }
 
+// TestModelExecutor_TaskStateReinjectedOnEveryReEntry asserts the WP03
+// contract: TaskState (goal / completed-step summary / forbidden
+// actions) is re-injected as a pinned system-context block ahead of
+// the node's own role prompt on *every* compute re-entry — not just
+// once at graph start. Firing the same node twice with different
+// TaskState content each time must produce a different SystemPrompt
+// each time, dynamically re-grounding the model call.
+func TestModelExecutor_TaskStateReinjectedOnEveryReEntry(t *testing.T) {
+	t.Parallel()
+	llm := &stubLLM{responses: []LLMResponse{
+		{Content: "first", FinishReason: "stop"},
+		{Content: "second", FinishReason: "stop"},
+	}}
+	g := &Graph{ID: "g", SystemPrompt: "BASE"}
+	env := &Env{RunID: "r", SessionID: "s", Graph: g, LLM: llm}
+	applyEnvDefaults(env)
+	ex := modelExecutor{}
+	node := &Node{ID: "n", Kind: NodeKindModel, Attrs: ModelAttrs{Model: "x", SystemPrompt: "ROLE"}}
+
+	// First fire: no TaskState content set yet.
+	if _, err := ex.Execute(context.Background(), env, node, nil); err != nil {
+		t.Fatalf("Execute (1st): %v", err)
+	}
+	first, ok := llm.lastRequest()
+	if !ok {
+		t.Fatalf("no LLM request captured (1st)")
+	}
+	if strings.Contains(first.SystemPrompt, "write the report") {
+		t.Errorf("1st SystemPrompt unexpectedly contains not-yet-set goal: %q", first.SystemPrompt)
+	}
+
+	// Mutate TaskState between fires (as a re-entry after a backtrack
+	// or ladder rung would) and fire again.
+	env.TaskState.SetGoal("write the report")
+	env.TaskState.AddForbidden("delete_file")
+	if _, err := ex.Execute(context.Background(), env, node, nil); err != nil {
+		t.Fatalf("Execute (2nd): %v", err)
+	}
+	second, ok := llm.lastRequest()
+	if !ok {
+		t.Fatalf("no LLM request captured (2nd)")
+	}
+	if !strings.Contains(second.SystemPrompt, "write the report") ||
+		!strings.Contains(second.SystemPrompt, "delete_file") {
+		t.Errorf("2nd SystemPrompt = %q, want it to contain the freshly-set goal and forbidden action", second.SystemPrompt)
+	}
+	if !strings.Contains(second.SystemPrompt, "BASE") || !strings.Contains(second.SystemPrompt, "ROLE") {
+		t.Errorf("2nd SystemPrompt = %q, want BASE and ROLE still present", second.SystemPrompt)
+	}
+}
+
+// TestModelExecutor_ComposesFullTaskStateOrdering asserts goal,
+// completed-step summary, forbidden actions, and failed attempts all
+// land in the composed SystemPrompt in a stable order ahead of the
+// node's own role prompt.
+func TestModelExecutor_ComposesFullTaskStateOrdering(t *testing.T) {
+	t.Parallel()
+	llm := &stubLLM{responses: []LLMResponse{{Content: "ok", FinishReason: "stop"}}}
+	g := &Graph{ID: "g", SystemPrompt: "BASE"}
+	env := &Env{RunID: "r", SessionID: "s", Graph: g, LLM: llm}
+	applyEnvDefaults(env)
+	env.TaskState.SetGoal("GOALTEXT")
+	env.TaskState.AddCompletedStep("STEPTEXT")
+	env.TaskState.AddForbidden("FORBIDDENTEXT")
+	env.State.AddFailureAnnotation(FailureAnnotation{Node: "draft", Reason: "ANNOTATIONTEXT", Iteration: 1})
+
+	ex := modelExecutor{}
+	node := &Node{ID: "n", Kind: NodeKindModel, Attrs: ModelAttrs{Model: "x", SystemPrompt: "ROLE"}}
+	if _, err := ex.Execute(context.Background(), env, node, nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	req, ok := llm.lastRequest()
+	if !ok {
+		t.Fatalf("no LLM request captured")
+	}
+	sp := req.SystemPrompt
+	idx := map[string]int{
+		"BASE":           strings.Index(sp, "BASE"),
+		"GOALTEXT":       strings.Index(sp, "GOALTEXT"),
+		"STEPTEXT":       strings.Index(sp, "STEPTEXT"),
+		"FORBIDDENTEXT":  strings.Index(sp, "FORBIDDENTEXT"),
+		"ANNOTATIONTEXT": strings.Index(sp, "ANNOTATIONTEXT"),
+		"ROLE":           strings.Index(sp, "ROLE"),
+	}
+	for k, v := range idx {
+		if v < 0 {
+			t.Fatalf("SystemPrompt missing %q: %q", k, sp)
+		}
+	}
+	if !(idx["BASE"] < idx["GOALTEXT"] && idx["GOALTEXT"] < idx["STEPTEXT"] &&
+		idx["STEPTEXT"] < idx["FORBIDDENTEXT"] && idx["FORBIDDENTEXT"] < idx["ANNOTATIONTEXT"] &&
+		idx["ANNOTATIONTEXT"] < idx["ROLE"]) {
+		t.Errorf("unexpected ordering in SystemPrompt: %q (indices: %v)", sp, idx)
+	}
+}
+
 // ---- FailureAnnotations rendering (autonomy-recovery-runtime-01PMDL03 WP01) ----
 
 func TestRenderFailureAnnotations(t *testing.T) {
