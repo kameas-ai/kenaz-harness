@@ -202,8 +202,11 @@ func (a *kernelToolAdapter) Call(ctx context.Context, call coreag.ToolCall) (cor
 	// Tools that don't read it pay nothing.
 	out, err := a.pool.Call(toolloop.WithSessionID(ctx, a.sessionID), server, tool, argsJSON)
 	if err != nil {
+		// WP02 (tool-error-legibility-01PMDL02): append a conservative
+		// environment-drift hint when the raw error signature-matches a
+		// well-known case. Never rewrites err.Error().
 		return coreag.ToolResult{
-			Content: err.Error(),
+			Content: coreag.AppendEnvironmentDriftHint(err.Error()),
 			IsError: true,
 		}, nil
 	}

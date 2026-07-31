@@ -250,6 +250,48 @@ func TestToolDispatchExecutor_ToolErrorBecomesIsError(t *testing.T) {
 	}
 }
 
+// TestToolDispatchExecutor_EnvironmentDriftHintAppended is WP02 of
+// tool-error-legibility-01PMDL02: a genuine dispatch-level error (not a
+// well-formed IsError ToolResult) that signature-matches a known
+// environment-drift case gets the standard diagnostic suffix appended,
+// while an unrelated dispatch error (like the plain "denied: ..." case
+// in TestToolDispatchExecutor_ToolErrorBecomesIsError above) is left
+// untouched.
+func TestToolDispatchExecutor_EnvironmentDriftHintAppended(t *testing.T) {
+	t.Parallel()
+	tools := newStubTools()
+	tools.failWith("svc__read_file", `open /workspace/gone.txt: no such file or directory`)
+
+	env := &Env{
+		Tools: tools,
+		State: NewRunState(),
+	}
+	applyEnvDefaults(env)
+	node := &Node{
+		ID:    "td",
+		Kind:  NodeKindToolDispatch,
+		Attrs: ToolDispatchAttrs{},
+	}
+	calls := []ToolCallRequest{
+		{ID: "1", Name: "svc__read_file", Arguments: `{}`},
+	}
+	res, err := toolDispatchExecutor{}.Execute(context.Background(), env, node,
+		PortValues{"tool_calls": calls})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	results := res.Outputs["tool_results"].([]ToolResult)
+	if len(results) != 1 || !results[0].IsError {
+		t.Fatalf("expected IsError result; got %+v", results)
+	}
+	if !strings.Contains(results[0].Content, "no such file or directory") {
+		t.Fatalf("original error text must be preserved verbatim; got %q", results[0].Content)
+	}
+	if !strings.Contains(results[0].Content, "Environment-drift hint:") {
+		t.Errorf("expected environment-drift hint appended; got %q", results[0].Content)
+	}
+}
+
 // TestToolDispatchExecutor_PanicingToolYieldsIsError asserts that a panicking
 // tool goroutine produces an is_error ToolResult (visible to the model), that
 // sibling tool calls in the same fan-out still complete, and that the test

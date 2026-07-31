@@ -87,10 +87,10 @@ func (e *ErrCredentialResolution) Unwrap() error { return e.Cause }
 // actual sleep so rate-limit storms don't retry faster than the server
 // requests.
 type ErrTransient struct {
-	Status         int
-	Message        string
-	Cause          error
-	RetryAfterSec  float64 // server-requested backoff in seconds; 0 means not specified
+	Status        int
+	Message       string
+	Cause         error
+	RetryAfterSec float64 // server-requested backoff in seconds; 0 means not specified
 }
 
 func (e *ErrTransient) Error() string {
@@ -105,10 +105,10 @@ func (e *ErrTransient) Unwrap() error { return e.Cause }
 // AttemptOutcome records the outcome of one retry attempt for the
 // budget-exhausted error.
 type AttemptOutcome struct {
-	Attempt    int
-	Err        error
-	BackoffMS  int
-	ActualMS   int
+	Attempt   int
+	Err       error
+	BackoffMS int
+	ActualMS  int
 }
 
 // ErrRetryBudgetExhausted is returned when the retry middleware has
@@ -152,6 +152,17 @@ func (e *ErrAuth) Error() string {
 	return fmt.Sprintf("llm: auth error (status=%d): %s", e.Status, e.Message)
 }
 
+// Friendly renders ErrAuth in the model-agnostic, type-specific style of
+// the attachment-error family (tool-error-legibility-01PMDL02 WP02): a
+// 401/403 is a distinct failure leg from a crashed tool or a rejected
+// request, and the recovery action (re-check the credential) differs
+// from either.
+func (e *ErrAuth) Friendly() string {
+	return fmt.Sprintf(
+		"Authentication failed (status=%d): %s. Check the provider's API key — open the providers tab, re-paste the key, or verify it hasn't been revoked/rotated.",
+		e.Status, e.Message)
+}
+
 // ErrInvalidRequest marks a 4xx (other than 408/425/429) provider
 // rejection. Non-transient — never retried (FR-017).
 type ErrInvalidRequest struct {
@@ -161,6 +172,18 @@ type ErrInvalidRequest struct {
 
 func (e *ErrInvalidRequest) Error() string {
 	return fmt.Sprintf("llm: invalid request (status=%d): %s", e.Status, e.Message)
+}
+
+// Friendly renders ErrInvalidRequest in the model-agnostic, type-specific
+// style of the attachment-error family (tool-error-legibility-01PMDL02
+// WP02): a 4xx request rejection is a distinct failure leg from an auth
+// failure, a tool crash, or a policy denial — it usually means the
+// request shape/parameters themselves were rejected by the provider, not
+// that anything about the environment or credentials changed.
+func (e *ErrInvalidRequest) Friendly() string {
+	return fmt.Sprintf(
+		"Request rejected by the provider (status=%d): %s. This usually means malformed parameters or an unsupported option for this model — check the request shape rather than retrying unchanged.",
+		e.Status, e.Message)
 }
 
 // ErrPolicyDenied indicates a policy-engine refusal pre-call.

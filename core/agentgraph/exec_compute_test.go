@@ -43,10 +43,11 @@ func (s *stubLLM) callCount() int {
 
 // stubTools satisfies ToolRegistry with an in-memory map of named tools.
 type stubTools struct {
-	mu      sync.Mutex
-	allowed map[string]ToolResult
-	denied  map[string]bool
-	calls   []ToolCall
+	mu       sync.Mutex
+	allowed  map[string]ToolResult
+	denied   map[string]bool
+	failures map[string]string
+	calls    []ToolCall
 }
 
 func newStubTools() *stubTools {
@@ -65,6 +66,22 @@ func (t *stubTools) deny(name string) {
 	t.mu.Unlock()
 }
 
+// failWith makes Call return a genuine (non-nil) error with the given
+// message for name, rather than a ToolResult with IsError set. This
+// exercises the callErr wrapping path in exec_dispatch.go (as opposed to
+// the allow(..., isErr=true) path, which returns a well-formed
+// ToolResult straight through with no error). Used by WP02's
+// environment-drift classifier tests
+// (tool-error-legibility-01PMDL02).
+func (t *stubTools) failWith(name, errMsg string) {
+	t.mu.Lock()
+	if t.failures == nil {
+		t.failures = map[string]string{}
+	}
+	t.failures[name] = errMsg
+	t.mu.Unlock()
+}
+
 func (t *stubTools) Has(name string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -76,6 +93,9 @@ func (t *stubTools) Call(_ context.Context, c ToolCall) (ToolResult, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.calls = append(t.calls, c)
+	if msg, ok := t.failures[c.Name]; ok {
+		return ToolResult{}, errors.New(msg)
+	}
 	if t.denied[c.Name] {
 		return ToolResult{}, errors.New("denied: " + c.Name)
 	}
