@@ -443,6 +443,41 @@ func (o EscalateOutputs) ToPortValues() PortValues {
 	return pv
 }
 
+// ---- EscalationLadder port types ----
+
+// EscalationLadderInputs is the typed input port surface for `kind: escalation_ladder`.
+// Use ReadEscalationLadderInputs to populate it from a PortValues map.
+type EscalationLadderInputs struct {
+	Trigger any
+}
+
+// EscalationLadderOutputs is the typed output port surface for `kind: escalation_ladder`.
+// Call ToPortValues to convert back to the wire format.
+type EscalationLadderOutputs struct {
+	Result any
+}
+
+// ReadEscalationLadderInputs extracts the typed inputs for `kind: escalation_ladder` from pv.
+// Required ports that are absent in pv return a descriptive error.
+// The function never mutates pv.
+func ReadEscalationLadderInputs(pv PortValues) (EscalationLadderInputs, error) {
+	var out EscalationLadderInputs
+
+	if raw, ok := pv["trigger"]; ok {
+		out.Trigger = raw
+	}
+	return out, nil
+}
+
+// ToPortValues converts EscalationLadderOutputs to the PortValues wire format.
+// Fields with zero values are included; callers can remove unwanted keys
+// after the fact using PortValues.Clone + delete.
+func (o EscalationLadderOutputs) ToPortValues() PortValues {
+	pv := make(PortValues, 1)
+	pv["result"] = o.Result
+	return pv
+}
+
 // ---- HistoryRead port types ----
 
 // HistoryReadInputs is the typed input port surface for `kind: history_read`.

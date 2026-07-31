@@ -1,0 +1,36 @@
+schema_version: "1"
+manifest_version: "1.0.0"
+id: escalation_ladder
+extends: control
+display_name: Escalation Ladder
+description: "Runtime-orchestrated recovery: on repeated failure walks retry (same model) -> escalate (stronger model) -> replan -> ask (human) automatically, instead of requiring a graph author to hand-wire the progression node-by-node (autonomy-recovery-runtime-01PMDL03 WP04)."
+executor: agentgraph.ExecEscalationLadder
+ports:
+  inputs:
+    - { name: trigger, type: any }
+  outputs:
+    - { name: result, type: any }
+attrs:
+  upstream_node:
+    type: node_id_ref
+    required: true
+    description: "ID of the failing node the retry rung rewinds to via the kernel backtrack primitive (WP01)."
+  target_model:
+    type: model_ref
+    required: true
+    description: "Stronger model used for the escalate rung."
+  planner_model:
+    type: model_ref
+    description: "Model used for the replan rung. Empty uses the run default model."
+  ask_question:
+    type: string
+    description: "Question posed to a human at the final (ask) rung. A generic default is used when empty."
+  max_retries:
+    type: int
+    min: 1
+    description: "Same-model retry attempts (rung 1) before moving to escalate. Default 1."
+  fallback_chain_id:
+    type: string
+    description: "Optional fallback chain ID used by the escalate rung's model call (model-fallback-routing-01NDFSEX04)."
+budget: llm
+budget_consumes: [tokens, llm_calls, cost_usd]

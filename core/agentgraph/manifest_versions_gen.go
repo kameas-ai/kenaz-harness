@@ -126,6 +126,15 @@ const (
 	// subset of `kind: escalate` at the time of last codegen.
 	EscalateManifestFingerprint = "6c641de5adcafd4bf2a4cfee067a96b2e1a2293de7157aaf4972cffad6add9c8"
 
+	// EscalationLadderManifestVersion is the behavior-contract semver for `kind: escalation_ladder`.
+	// Bump this in the manifest's `manifest_version:` field when any
+	// behavior-affecting field changes (ports, attrs, budget).
+	EscalationLadderManifestVersion = "1.0.0"
+
+	// EscalationLadderManifestFingerprint is the sha256 of the behavior-affecting
+	// subset of `kind: escalation_ladder` at the time of last codegen.
+	EscalationLadderManifestFingerprint = "4e925f13223c5f97e94926967380fb17930bc08cc708da11340b291c4498b67e"
+
 	// HistoryReadManifestVersion is the behavior-contract semver for `kind: history_read`.
 	// Bump this in the manifest's `manifest_version:` field when any
 	// behavior-affecting field changes (ports, attrs, budget).
@@ -332,6 +341,7 @@ var allGeneratedManifestVersions = map[string]string{
 	"corpus_write":      CorpusWriteManifestVersion,
 	"decision":          DecisionManifestVersion,
 	"escalate":          EscalateManifestVersion,
+	"escalation_ladder": EscalationLadderManifestVersion,
 	"history_read":      HistoryReadManifestVersion,
 	"join":              JoinManifestVersion,
 	"loop":              LoopManifestVersion,

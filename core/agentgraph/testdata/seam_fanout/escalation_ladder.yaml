@@ -1,0 +1,21 @@
+# Seam fanout fixture for kind=escalation_ladder
+# The ladder advances exactly one rung per fire:
+#   retry    — kernel backtrack only (Result.Backtrack); no external seam call.
+#   escalate — LLMProvider.Generate against target_model (skipped once the
+#              run-global escalation flag is already spent).
+#   replan   — LLMProvider.Generate against planner_model.
+#   ask      — AskBus.Pending on first fire, AskBus.LookupAnswer on resume.
+kind: escalation_ladder
+seams:
+  - seam: LLMProvider.Generate
+    required: false
+  - seam: AskBus.Pending
+    required: false
+  - seam: AskBus.LookupAnswer
+    required: false
+notes: |
+  escalation_ladder is a control node that walks retry(same model) ->
+  escalate(stronger model) -> replan -> ask(human) automatically. Only
+  the escalate/replan rungs call LLMProvider.Generate; only the ask rung
+  calls AskBus. The retry rung's only side effect is a kernel-level
+  BacktrackRequest, so no seam in this list fires on that rung.

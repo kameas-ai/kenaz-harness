@@ -105,6 +105,25 @@ const (
 	// existing checkBudget pattern.
 	EventBacktrackFired EventKind = "backtrack_fired"
 
+	// EventRetryAttempt promotes RetryNode's per-attempt detail
+	// (previously logging.L() only) into the replayable EventLog for
+	// audit parity with the other verifier/recovery node kinds
+	// (autonomy-recovery-runtime-01PMDL03 WP04). Payload carries
+	// attempt/max_attempts/phase ("start"|"error"|"success"|
+	// "exhausted") and, for the error/exhausted phases, the error text.
+	EventRetryAttempt EventKind = "retry_attempt"
+
+	// EventLadderRung fires once per EscalationLadder node-kind
+	// invocation (autonomy-recovery-runtime-01PMDL03 WP04), recording
+	// which rung of the retry -> escalate -> replan -> ask progression
+	// was selected on that fire. The rung's own side effects still
+	// emit their existing sibling events too (EventBacktrackFired for
+	// retry/replan, EventEscalateTriggered for escalate,
+	// EventAskPending/EventAskAnswered for ask) — this event is the
+	// ladder-level "which rung, which attempt" audit trail that ties
+	// them together.
+	EventLadderRung EventKind = "escalation_ladder_rung"
+
 	// Run lifecycle.
 	EventRunStart    EventKind = "run_start"
 	EventRunComplete EventKind = "run_complete"
@@ -133,6 +152,8 @@ func AllEventKinds() []EventKind {
 		EventEscalateTriggered, EventPlanCreated,
 		EventHookFired,
 		EventBacktrackFired,
+		EventRetryAttempt,
+		EventLadderRung,
 		EventRunStart, EventRunComplete, EventRunPaused,
 	}
 }
