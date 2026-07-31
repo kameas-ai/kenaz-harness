@@ -119,12 +119,19 @@ func (escalationLadderExecutor) Execute(ctx context.Context, env *Env, node *Nod
 	}
 
 	if rung == ladderRungEscalate {
-		globalSt := env.State.Outputs(ladderGlobalEscalatedKey)
-		alreadyEscalated, _ := globalSt["fired"].(bool)
+		// Claim the run's single shared escalation slot atomically
+		// (RunState.CompareAndSetOnce), *before* doing the slow,
+		// unlocked env.LLM.Generate call below. The previous
+		// read-then-Generate-then-write sequence had a TOCTOU window
+		// in which two concurrent EscalationLadder nodes could both
+		// observe "not yet escalated" and both fire a real, costed
+		// escalation call — this collapses the check-and-claim into
+		// one atomic, mutex-guarded step.
+		claimed := env.State.CompareAndSetOnce(ladderGlobalEscalatedKey)
 		_ = res.Events.AppendKind(env.RunID, node.ID, EventLadderRung, map[string]any{
-			"rung": "escalate", "already_used": alreadyEscalated,
+			"rung": "escalate", "already_used": !claimed,
 		})
-		if !alreadyEscalated {
+		if claimed {
 			resp, err := env.LLM.Generate(ctx, LLMRequest{
 				Model:     a.TargetModel,
 				MaxTokens: 1024,
@@ -134,13 +141,17 @@ func (escalationLadderExecutor) Execute(ctx context.Context, env *Env, node *Nod
 				FallbackChainId: a.FallbackChainId,
 			})
 			if err != nil {
+				// The claim was spent on an attempt that never
+				// actually escalated anything — release it so a
+				// retry (by this node or another ladder node in the
+				// run) can still use the run's one shared slot.
+				env.State.ReleaseOnce(ladderGlobalEscalatedKey)
 				return res, fmt.Errorf("escalation_ladder: node %q: escalate: %w", node.ID, err)
 			}
 			if env.Counters != nil {
 				env.Counters.AddLLM(resp.TokensUsed)
 				env.Counters.AddCost(resp.CostUSD)
 			}
-			env.State.SetOutputs(ladderGlobalEscalatedKey, PortValues{"fired": true})
 			env.State.SetOutputs(stateKey, PortValues{"rung": ladderRungReplan, "retry_attempts": retryAttempts})
 			res.Outputs["result"] = []Message{{Role: "assistant", Content: resp.Content}}
 			res.Outputs["rung"] = "escalate"
