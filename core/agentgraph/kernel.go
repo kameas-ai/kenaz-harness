@@ -2,6 +2,7 @@ package agentgraph
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime/debug"
@@ -561,33 +562,164 @@ func (k *Kernel) Resume(ctx context.Context, env *Env) error {
 	return k.Run(ctx, env)
 }
 
-// RebuildState walks the EventLog and re-derives env.State from the
-// recorded node_complete events. It does NOT re-fire any executors —
-// the durable execution model says once a node has completed in the
-// log, we treat its recorded outputs as authoritative on resume
-// (NFR-007 documents the LLM-token-level relaxation).
+// RebuildState walks the EventLog and re-derives env.State (and, as of
+// autonomy-recovery-runtime-01PMDL03 WP03, env.TaskState) from the
+// recorded events. It does NOT re-fire any executors — the durable
+// execution model says once a node has completed in the log, we treat
+// its recorded outputs as authoritative on resume (NFR-007 documents
+// the LLM-token-level relaxation).
 //
 // In v1 we only track the completion bit for each node. The actual
 // port values are not stored in the event payload (storing every
 // LLM response verbatim explodes the log size). On resume the kernel
 // re-fires unfinished nodes; completed ones are skipped.
+//
+// TaskState reconstruction (WP03):
+//   - FailureAnnotations (and therefore TaskState's rendered
+//     FailedAttempts view) are rebuilt by replaying EventBacktrackFired.
+//     This also fixes a WP01 gap: before this change, backtrack
+//     annotations were never restored on resume at all — a resumed run
+//     silently lost the "why was this rewound" memory the whole
+//     mechanism exists to preserve.
+//   - Goal (EventTaskGoalSet), the completed-step summary
+//     (EventTaskStepCompleted), and forbidden actions
+//     (EventTaskForbidden) are rebuilt verbatim from their own events.
+//     These are the fields SetTaskGoal / AddTaskCompletedStep /
+//     AddTaskForbidden persist below.
+//
+// What does NOT survive resume: nothing, by design — every TaskState
+// dimension that can be mutated has a corresponding event and a replay
+// case here. The one caveat is FailureAnnotation.Timestamp, which on
+// replay reflects the EventLog row's wall-clock Timestamp rather than
+// the original kernel-clock value passed to WithClock in tests (the
+// backtrack_fired payload itself does not carry a timestamp field) —
+// immaterial in production (both are real wall-clock time) but worth
+// knowing if a test pins an exact mocked timestamp across a resume.
 func (k *Kernel) RebuildState(env *Env) error {
 	if env.State == nil {
 		env.State = NewRunState()
 	}
+	if env.TaskState == nil {
+		env.TaskState = NewTaskState()
+	}
 	return k.log.Replay(env.RunID, func(e Event) error {
-		if e.Kind == EventNodeComplete && e.NodeID != "" {
-			// We don't have the original outputs in payload — replay
-			// is conservative: mark complete but leave outputs nil.
-			// Re-firing downstream of a re-fired node is the kernel's
-			// job; we surface completion via env.State.completed.
-			env.State.SetOutputs(e.NodeID, PortValues{})
-		}
-		if e.Kind == EventNodeError && e.NodeID != "" {
-			env.State.MarkFailed(e.NodeID, errors.New(string(e.Payload)))
+		switch e.Kind {
+		case EventNodeComplete:
+			if e.NodeID != "" {
+				// We don't have the original outputs in payload — replay
+				// is conservative: mark complete but leave outputs nil.
+				// Re-firing downstream of a re-fired node is the kernel's
+				// job; we surface completion via env.State.completed.
+				env.State.SetOutputs(e.NodeID, PortValues{})
+			}
+		case EventNodeError:
+			if e.NodeID != "" {
+				env.State.MarkFailed(e.NodeID, errors.New(string(e.Payload)))
+			}
+		case EventBacktrackFired:
+			var payload struct {
+				Target           string `json:"target"`
+				Reason           string `json:"reason"`
+				RejectedApproach string `json:"rejected_approach"`
+				Iteration        int    `json:"iteration"`
+			}
+			if err := json.Unmarshal(e.Payload, &payload); err == nil {
+				env.State.AddFailureAnnotation(FailureAnnotation{
+					Node:             payload.Target,
+					Reason:           payload.Reason,
+					RejectedApproach: payload.RejectedApproach,
+					Iteration:        payload.Iteration,
+					Timestamp:        e.Timestamp,
+				})
+			}
+		case EventTaskGoalSet:
+			var payload struct {
+				Goal string `json:"goal"`
+			}
+			if err := json.Unmarshal(e.Payload, &payload); err == nil {
+				env.TaskState.SetGoal(payload.Goal)
+			}
+		case EventTaskStepCompleted:
+			var payload struct {
+				Summary string `json:"summary"`
+			}
+			if err := json.Unmarshal(e.Payload, &payload); err == nil {
+				env.TaskState.AddCompletedStep(payload.Summary)
+			}
+		case EventTaskForbidden:
+			var payload struct {
+				Actions []string `json:"actions"`
+			}
+			if err := json.Unmarshal(e.Payload, &payload); err == nil {
+				env.TaskState.AddForbidden(payload.Actions...)
+			}
 		}
 		return nil
 	})
+}
+
+// SetTaskGoal updates env.TaskState's goal and durably persists the
+// change (EventTaskGoalSet) so it survives Kernel.RebuildState on
+// resume (autonomy-recovery-runtime-01PMDL03 WP03). Callable mid-run
+// by anything with access to the owning Kernel + Env — a future
+// escalation-ladder/replan controller (WP04) is the expected caller;
+// no built-in executor calls this yet (see the WP03 completion report
+// for what is and isn't wired).
+func (k *Kernel) SetTaskGoal(env *Env, goal string) error {
+	if env.TaskState == nil {
+		env.TaskState = NewTaskState()
+	}
+	env.TaskState.SetGoal(goal)
+	var b EventBatch
+	if err := b.AppendKind(env.RunID, "", EventTaskGoalSet, map[string]any{"goal": goal}); err != nil {
+		return fmt.Errorf("agentgraph: kernel: SetTaskGoal: %w", err)
+	}
+	if _, err := k.log.Append(b); err != nil {
+		return fmt.Errorf("agentgraph: kernel: SetTaskGoal: append: %w", err)
+	}
+	return nil
+}
+
+// AddTaskCompletedStep appends a completed-step summary line to
+// env.TaskState and durably persists it (EventTaskStepCompleted) so it
+// survives resume. A no-op for an empty summary.
+func (k *Kernel) AddTaskCompletedStep(env *Env, summary string) error {
+	if summary == "" {
+		return nil
+	}
+	if env.TaskState == nil {
+		env.TaskState = NewTaskState()
+	}
+	env.TaskState.AddCompletedStep(summary)
+	var b EventBatch
+	if err := b.AppendKind(env.RunID, "", EventTaskStepCompleted, map[string]any{"summary": summary}); err != nil {
+		return fmt.Errorf("agentgraph: kernel: AddTaskCompletedStep: %w", err)
+	}
+	if _, err := k.log.Append(b); err != nil {
+		return fmt.Errorf("agentgraph: kernel: AddTaskCompletedStep: append: %w", err)
+	}
+	return nil
+}
+
+// AddTaskForbidden merges one or more forbidden-action names into
+// env.TaskState and durably persists them (EventTaskForbidden) so they
+// survive resume. A no-op when actions is empty.
+func (k *Kernel) AddTaskForbidden(env *Env, actions ...string) error {
+	if len(actions) == 0 {
+		return nil
+	}
+	if env.TaskState == nil {
+		env.TaskState = NewTaskState()
+	}
+	env.TaskState.AddForbidden(actions...)
+	var b EventBatch
+	if err := b.AppendKind(env.RunID, "", EventTaskForbidden, map[string]any{"actions": actions}); err != nil {
+		return fmt.Errorf("agentgraph: kernel: AddTaskForbidden: %w", err)
+	}
+	if _, err := k.log.Append(b); err != nil {
+		return fmt.Errorf("agentgraph: kernel: AddTaskForbidden: append: %w", err)
+	}
+	return nil
 }
 
 // Leaves returns the IDs of nodes that have no outgoing edges (or
