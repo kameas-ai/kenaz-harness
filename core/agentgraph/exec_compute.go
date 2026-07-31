@@ -576,11 +576,42 @@ func composePrompt(parts ...string) string {
 // may be nil in unit tests). Every model-driven executor composes this with its
 // node's own system_prompt so the shared grounding constitution reaches
 // planner/reflect/review nodes too, not just plain model nodes.
+//
+// It also folds in the accumulated backtrack FailureAnnotations
+// (autonomy-recovery-runtime-01PMDL03 WP01): every honored
+// BacktrackRequest records why the prior attempt was rejected and what
+// was tried, and every subsequent compute-executor call re-grounds
+// with that history via this pinned system-prompt block — otherwise a
+// re-fired node has no memory of its own rejected attempt and is free
+// to repeat it verbatim, defeating the point of the rewind.
 func graphBaseOf(env *Env) string {
 	if env == nil || env.Graph == nil {
 		return ""
 	}
-	return env.Graph.SystemPrompt
+	base := env.Graph.SystemPrompt
+	if env.State == nil {
+		return base
+	}
+	return prompts.Compose(base, renderFailureAnnotations(env.State.FailureAnnotations()))
+}
+
+// renderFailureAnnotations formats the accumulated backtrack rejection
+// records into a single pinned system-prompt block. Returns "" when
+// there are none (the common case — most runs never backtrack).
+func renderFailureAnnotations(anns []FailureAnnotation) string {
+	if len(anns) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Prior attempts were rejected and rewound — do not repeat them verbatim:\n")
+	for _, a := range anns {
+		fmt.Fprintf(&b, "- [backtrack %d] node %q was rewound: %s", a.Iteration, a.Node, a.Reason)
+		if a.RejectedApproach != "" {
+			fmt.Fprintf(&b, " (rejected approach: %s)", a.RejectedApproach)
+		}
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // ---- TransformNode ----

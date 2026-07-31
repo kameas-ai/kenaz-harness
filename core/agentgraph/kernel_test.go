@@ -289,3 +289,176 @@ func TestKernel_LLMNodeRunsThroughKernel(t *testing.T) {
 		t.Errorf("memory hook writes = %d (want 2 = pre+post-llm)", mem.writeCount())
 	}
 }
+
+// fakeBacktrackExecutor is a minimal Executor used to exercise the
+// kernel backtrack primitive (autonomy-recovery-runtime-01PMDL03
+// WP01): it counts fires per node ID and, on the reviewer node's
+// first fire only, returns a BacktrackRequest targeting an upstream
+// node before behaving normally on every subsequent fire.
+type fakeBacktrackExecutor struct {
+	kind NodeKind
+
+	mu       sync.Mutex
+	calls    map[string]int
+	reviewer string
+	target   string
+}
+
+func (e *fakeBacktrackExecutor) Kind() NodeKind { return e.kind }
+
+func (e *fakeBacktrackExecutor) Execute(_ context.Context, _ *Env, node *Node, _ PortValues) (Result, error) {
+	e.mu.Lock()
+	e.calls[node.ID]++
+	n := e.calls[node.ID]
+	e.mu.Unlock()
+
+	r := NewResult()
+	r.Outputs["value"] = node.ID
+	if node.ID == e.reviewer && n == 1 {
+		r.Backtrack = &BacktrackRequest{
+			TargetNode:       e.target,
+			Reason:           "rejected",
+			RejectedApproach: "v1",
+		}
+	}
+	return r, nil
+}
+
+func (e *fakeBacktrackExecutor) callCount(id string) int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.calls[id]
+}
+
+func TestKernel_BacktrackRewindsAndRefires(t *testing.T) {
+	t.Parallel()
+	kind := NodeKind("fake_backtrack")
+	g := &Graph{
+		SpecVersion: SpecVersion, ID: "bt-graph", Entrypoints: []string{"draft"},
+		Nodes: []Node{
+			{ID: "draft", Kind: kind},
+			{ID: "review", Kind: kind},
+			{ID: "sink", Kind: kind},
+		},
+		Edges: []Edge{
+			{From: EndpointRef{Node: "draft", Port: "value"}, To: EndpointRef{Node: "review", Port: "in"}},
+			{From: EndpointRef{Node: "review", Port: "value"}, To: EndpointRef{Node: "sink", Port: "in"}},
+		},
+	}
+	ex := &fakeBacktrackExecutor{kind: kind, calls: map[string]int{}, reviewer: "review", target: "draft"}
+	k := NewKernel(WithExecutor(ex))
+	env := &Env{RunID: "bt-run", Graph: g}
+	applyEnvDefaults(env)
+
+	if err := k.Run(context.Background(), env); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if got := ex.callCount("draft"); got != 2 {
+		t.Errorf("draft calls = %d, want 2", got)
+	}
+	if got := ex.callCount("review"); got != 2 {
+		t.Errorf("review calls = %d, want 2", got)
+	}
+	if got := ex.callCount("sink"); got != 1 {
+		t.Errorf("sink calls = %d, want 1", got)
+	}
+	if !env.State.Completed("draft") || !env.State.Completed("review") || !env.State.Completed("sink") {
+		t.Errorf("expected all completed: draft=%v review=%v sink=%v",
+			env.State.Completed("draft"), env.State.Completed("review"), env.State.Completed("sink"))
+	}
+
+	anns := env.State.FailureAnnotations()
+	if len(anns) != 1 {
+		t.Fatalf("failure annotations = %d, want 1", len(anns))
+	}
+	if anns[0].Node != "draft" || anns[0].Reason != "rejected" || anns[0].RejectedApproach != "v1" || anns[0].Iteration != 1 {
+		t.Errorf("unexpected annotation: %+v", anns[0])
+	}
+	if got := env.Counters.BacktracksSnapshot(); got != 1 {
+		t.Errorf("BacktracksSnapshot = %d, want 1", got)
+	}
+}
+
+// alwaysBacktrackExecutor models a reviewer that never approves —
+// every fire of the reviewer node requests a rewind to its upstream
+// target, exercising the MaxBacktracksPerRun cap (an unbounded rewind
+// must halt the run with ErrBudgetExceeded rather than looping
+// forever).
+type alwaysBacktrackExecutor struct {
+	kind NodeKind
+
+	mu       sync.Mutex
+	calls    map[string]int
+	reviewer string
+	target   string
+}
+
+func (e *alwaysBacktrackExecutor) Kind() NodeKind { return e.kind }
+
+func (e *alwaysBacktrackExecutor) Execute(_ context.Context, _ *Env, node *Node, _ PortValues) (Result, error) {
+	e.mu.Lock()
+	e.calls[node.ID]++
+	e.mu.Unlock()
+
+	r := NewResult()
+	r.Outputs["value"] = node.ID
+	if node.ID == e.reviewer {
+		r.Backtrack = &BacktrackRequest{TargetNode: e.target, Reason: "never good enough"}
+	}
+	return r, nil
+}
+
+func TestKernel_BacktrackBudgetCapHaltsInfiniteRewind(t *testing.T) {
+	t.Parallel()
+	kind := NodeKind("fake_backtrack_loop")
+	g := &Graph{
+		SpecVersion: SpecVersion, ID: "bt-loop-graph", Entrypoints: []string{"draft"},
+		Nodes: []Node{
+			{ID: "draft", Kind: kind},
+			{ID: "review", Kind: kind},
+		},
+		Edges: []Edge{
+			{From: EndpointRef{Node: "draft", Port: "value"}, To: EndpointRef{Node: "review", Port: "in"}},
+		},
+	}
+	ex := &alwaysBacktrackExecutor{kind: kind, calls: map[string]int{}, reviewer: "review", target: "draft"}
+	k := NewKernel(WithExecutor(ex))
+	env := &Env{RunID: "bt-loop-run", Graph: g, Budget: Budget{MaxBacktracksPerRun: 2}}
+	applyEnvDefaults(env)
+
+	err := k.Run(context.Background(), env)
+	if !errors.Is(err, ErrBudgetExceeded) {
+		t.Fatalf("err = %v, want ErrBudgetExceeded", err)
+	}
+	if got := env.Counters.BacktracksSnapshot(); got != 3 {
+		t.Errorf("BacktracksSnapshot = %d, want 3 (2 honored + 1 that trips the cap)", got)
+	}
+}
+
+func TestKernel_BacktrackRejectsUnknownTarget(t *testing.T) {
+	t.Parallel()
+	kind := NodeKind("fake_backtrack_badtarget")
+	g := &Graph{
+		SpecVersion: SpecVersion, ID: "bt-badtarget-graph", Entrypoints: []string{"draft"},
+		Nodes: []Node{
+			{ID: "draft", Kind: kind},
+			{ID: "review", Kind: kind},
+		},
+		Edges: []Edge{
+			{From: EndpointRef{Node: "draft", Port: "value"}, To: EndpointRef{Node: "review", Port: "in"}},
+		},
+	}
+	ex := &fakeBacktrackExecutor{kind: kind, calls: map[string]int{}, reviewer: "review", target: "does-not-exist"}
+	k := NewKernel(WithExecutor(ex))
+	env := &Env{RunID: "bt-badtarget-run", Graph: g}
+	applyEnvDefaults(env)
+
+	err := k.Run(context.Background(), env)
+	if err == nil {
+		t.Fatal("expected an error for an unknown backtrack target")
+	}
+	if errors.Is(err, ErrBudgetExceeded) || errors.Is(err, ErrPaused) {
+		t.Errorf("unexpected sentinel error: %v", err)
+	}
+}

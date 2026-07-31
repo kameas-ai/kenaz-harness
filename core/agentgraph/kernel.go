@@ -392,8 +392,94 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 		env.State.SetOutputs(nd.ID, r.Outputs)
 		end(nil)
 
+		// Resolve a typed backtrack request either from the executor's
+		// Result.Backtrack field or (back-compat) the legacy
+		// should_retry/retry_target Outputs convention ReviewNode's
+		// fail path already emits (autonomy-recovery-runtime-01PMDL03
+		// WP01). Validate the target + budget before touching any
+		// kernel traversal state.
+		var backtrackErr error
+		var validBacktrack bool
+		bt := resolveBacktrack(r)
+		if bt != nil {
+			if _, hidden := inside[bt.TargetNode]; hidden {
+				backtrackErr = fmt.Errorf("agentgraph: kernel: backtrack target %q is inside a Loop/Retry body", bt.TargetNode)
+			} else if _, ok := idx[bt.TargetNode]; !ok {
+				backtrackErr = fmt.Errorf("agentgraph: kernel: backtrack target %q does not exist", bt.TargetNode)
+			} else {
+				used := env.Counters.AddBacktrack()
+				maxBT := env.Budget.MaxBacktracksPerRun
+				if maxBT <= 0 {
+					maxBT = DefaultMaxBacktracksPerRun
+				}
+				if used > maxBT {
+					k.emitCapHit(env, EventBudgetCapHit, "max_backtracks_per_run", float64(maxBT), float64(used))
+					backtrackErr = ErrBudgetExceeded
+				} else {
+					validBacktrack = true
+					ann := FailureAnnotation{
+						Node:             bt.TargetNode,
+						Reason:           bt.Reason,
+						RejectedApproach: bt.RejectedApproach,
+						Iteration:        used,
+						Timestamp:        k.now(),
+					}
+					env.State.AddFailureAnnotation(ann)
+
+					var btBatch EventBatch
+					_ = btBatch.AppendKind(env.RunID, nd.ID, EventBacktrackFired, map[string]any{
+						"target":            bt.TargetNode,
+						"reason":            bt.Reason,
+						"rejected_approach": bt.RejectedApproach,
+						"iteration":         used,
+					})
+					if _, lerr := k.log.Append(btBatch); lerr != nil {
+						backtrackErr = fmt.Errorf("agentgraph: kernel: append backtrack batch: %w", lerr)
+					}
+				}
+			}
+		}
+
 		mu.Lock()
-		completed[nd.ID] = true
+
+		// refire holds TargetNode + everything downstream of it when a
+		// backtrack was honored — these nodes lose their completed bit
+		// and have their in-degree re-armed to count only edges from
+		// other refire-set members (edges from outside the set are
+		// already satisfied and don't need to fire again).
+		var refire map[string]bool
+		var backtrackReady bool
+		if validBacktrack {
+			refireSet := descendantsInclusive(bt.TargetNode, outEdges, inside)
+			refire = make(map[string]bool, len(refireSet))
+			for _, id := range refireSet {
+				refire[id] = true
+				delete(completed, id)
+			}
+			for _, id := range refireSet {
+				n := 0
+				for _, e := range inEdges[id] {
+					if refire[e.From.Node] {
+						n++
+					}
+				}
+				inDeg[id] = n
+			}
+			backtrackReady = inDeg[bt.TargetNode] <= 0
+		}
+
+		// nd.ID completed this firing UNLESS it is itself downstream of
+		// the TargetNode it just requested a rewind to — in that case
+		// it is part of the refire set and must re-fire once
+		// TargetNode produces fresh outputs, so its completed bit stays
+		// cleared.
+		if !refire[nd.ID] {
+			completed[nd.ID] = true
+		}
+		if backtrackErr != nil && firstErr == nil {
+			firstErr = backtrackErr
+		}
+
 		if r.Pause {
 			pause = true
 			pauseReason = r.PauseReason
@@ -401,19 +487,24 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 			return
 		}
 
-		// Promote downstream nodes whose in-degree drops to 0.
+		// Promote downstream nodes whose in-degree drops to 0. Skipped
+		// when nd.ID is itself being rewound — its children's in-degree
+		// was already set above by the refire-set computation and must
+		// not be double-decremented here.
 		newReady := []string{}
-		for _, e := range outEdges[nd.ID] {
-			to := e.To.Node
-			if _, hidden := inside[to]; hidden {
-				continue
-			}
-			if completed[to] {
-				continue
-			}
-			inDeg[to]--
-			if inDeg[to] <= 0 {
-				newReady = append(newReady, to)
+		if !refire[nd.ID] {
+			for _, e := range outEdges[nd.ID] {
+				to := e.To.Node
+				if _, hidden := inside[to]; hidden {
+					continue
+				}
+				if completed[to] {
+					continue
+				}
+				inDeg[to]--
+				if inDeg[to] <= 0 {
+					newReady = append(newReady, to)
+				}
 			}
 		}
 		mu.Unlock()
@@ -423,6 +514,11 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 			sem <- struct{}{}
 			wg.Add(1)
 			go dispatch(id)
+		}
+		if backtrackReady {
+			sem <- struct{}{}
+			wg.Add(1)
+			go dispatch(bt.TargetNode)
 		}
 	}
 
@@ -516,6 +612,136 @@ func (k *Kernel) Leaves(_ string, g *Graph) []string {
 		}
 	}
 	return out
+}
+
+// ---- Backtrack primitive (autonomy-recovery-runtime-01PMDL03 WP01) ----
+//
+// The kernel is otherwise a strict DAG walk keyed by in-degree: once a
+// node lands in the `completed` set (kernel.go dispatch closure) its
+// outgoing edges are never re-promoted (`if completed[to] { continue }`).
+// BacktrackRequest is the explicit, typed escape hatch: an executor
+// asks the kernel to clear an earlier node's completed flag and
+// re-fire it (and everything downstream of it), instead of walking
+// forward only.
+
+// BacktrackRequest is the kernel-level rewind signal. A compute
+// executor sets Result.Backtrack to ask the kernel to clear
+// TargetNode's completed flag, re-queue it, and re-fire everything
+// downstream of it once it produces fresh outputs.
+//
+// This is the typed successor to the legacy convention ReviewNode's
+// fail path already emits — res.Outputs["should_retry"] = true and
+// res.Outputs["retry_target"] = a.UpstreamNode (exec_compute.go) — a
+// signal that, before this WP, nothing read. The kernel honors both:
+// new node kinds should set Backtrack directly; resolveBacktrack below
+// still translates the legacy Outputs convention so ReviewNode did not
+// need to change.
+type BacktrackRequest struct {
+	// TargetNode is the node ID to rewind to. Must be a node the
+	// kernel walks directly (not hidden inside a Loop/Retry body).
+	TargetNode string
+	// Reason is a short human-readable explanation of why the prior
+	// attempt was rejected (e.g. a review verdict's text).
+	Reason string
+	// RejectedApproach captures what was actually tried and should not
+	// be repeated verbatim (e.g. the rejected draft).
+	RejectedApproach string
+}
+
+// FailureAnnotation is the structured record of why a backtracked
+// node's prior attempt was rejected. The kernel injects one on every
+// honored backtrack and appends it to RunState; graphBaseOf
+// (exec_compute.go) renders the accumulated list into every compute
+// executor's SystemPrompt ahead of the model call — a pinned system
+// message, never a bare user-role string like reflectExecutor's
+// "revision" output.
+//
+// Because it rides in SystemPrompt (not the Messages slice), it is
+// naturally exempt from compaction: CompactionInput.SystemPrompt is
+// documented as "preserved across compaction"
+// (core/agentgraph/compaction/compactor.go) and no compaction strategy
+// folds it into the prunable message slice — no new pinning mechanism
+// was needed.
+type FailureAnnotation struct {
+	// Node is the target node the backtrack rewound to.
+	Node string `json:"node"`
+	// Reason is why the prior attempt was rejected.
+	Reason string `json:"reason"`
+	// RejectedApproach is what was tried and must not be repeated.
+	RejectedApproach string `json:"rejected_approach"`
+	// Iteration is this run's 1-based backtrack sequence number
+	// (mirrors RunCounters.BacktracksUsed at the time it fired).
+	Iteration int `json:"iteration"`
+	// Timestamp is when the backtrack fired (kernel clock, so tests
+	// with WithClock get deterministic values).
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// DefaultMaxBacktracksPerRun is the ceiling applied when
+// Budget.MaxBacktracksPerRun is unset (<= 0). Unlike the other Budget
+// fields, backtrack has no "0 == unlimited" escape hatch — re-firing a
+// completed node is inherently unsafe unbounded, so a cap always
+// applies (spec risk: "the backtrack primitive must be explicit and
+// bounded ... to avoid infinite rewind").
+const DefaultMaxBacktracksPerRun = 3
+
+// resolveBacktrack extracts a typed BacktrackRequest from a node's
+// Result, preferring the explicit Result.Backtrack field and falling
+// back to the legacy should_retry/retry_target Outputs convention
+// ReviewNode's fail path emits. Returns nil when neither is present.
+func resolveBacktrack(r Result) *BacktrackRequest {
+	if r.Backtrack != nil {
+		return r.Backtrack
+	}
+	shouldRetry, _ := r.Outputs["should_retry"].(bool)
+	if !shouldRetry {
+		return nil
+	}
+	target, _ := r.Outputs["retry_target"].(string)
+	if target == "" {
+		return nil
+	}
+	reason := "verification failed"
+	if v, ok := r.Outputs["verdict"].(map[string]any); ok {
+		if txt, ok := v["text"].(string); ok && txt != "" {
+			reason = txt
+		}
+	}
+	rejected, _ := r.Outputs["approved"].(string)
+	return &BacktrackRequest{
+		TargetNode:       target,
+		Reason:           reason,
+		RejectedApproach: rejected,
+	}
+}
+
+// descendantsInclusive returns TargetNode's ID plus every node
+// reachable from it via outEdges (excluding nodes hidden inside a
+// Loop/Retry body), i.e. the set the kernel must clear from `completed`
+// and re-arm the in-degree of when honoring a backtrack. The graph is
+// a DAG (validated at load time), so this terminates and TargetNode
+// itself can never appear as its own descendant.
+func descendantsInclusive(target string, outEdges map[string][]Edge, inside map[string]struct{}) []string {
+	seen := map[string]bool{target: true}
+	order := []string{target}
+	queue := []string{target}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		for _, e := range outEdges[cur] {
+			to := e.To.Node
+			if _, hidden := inside[to]; hidden {
+				continue
+			}
+			if seen[to] {
+				continue
+			}
+			seen[to] = true
+			order = append(order, to)
+			queue = append(queue, to)
+		}
+	}
+	return order
 }
 
 // PauseMarker is the EventBudgetCapHit / EventCostCapHit payload

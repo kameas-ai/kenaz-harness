@@ -129,11 +129,11 @@ type Edge struct {
 // Budget declares per-graph hard caps the kernel enforces (FR-048).
 // All fields zero ⇒ kernel defaults apply.
 type Budget struct {
-	MaxTokensPerRun         int     `json:"max_tokens_per_run,omitempty" yaml:"max_tokens_per_run,omitempty"`
-	MaxWallclockPerRunSecs  int     `json:"max_wallclock_per_run_seconds,omitempty" yaml:"max_wallclock_per_run_seconds,omitempty"`
-	MaxLLMCallsPerRun       int     `json:"max_llm_calls_per_run,omitempty" yaml:"max_llm_calls_per_run,omitempty"`
-	MaxToolCallsPerRun      int     `json:"max_tool_calls_per_run,omitempty" yaml:"max_tool_calls_per_run,omitempty"`
-	MaxCostUSDPerRun        float64 `json:"max_cost_usd_per_run,omitempty" yaml:"max_cost_usd_per_run,omitempty"`
+	MaxTokensPerRun        int     `json:"max_tokens_per_run,omitempty" yaml:"max_tokens_per_run,omitempty"`
+	MaxWallclockPerRunSecs int     `json:"max_wallclock_per_run_seconds,omitempty" yaml:"max_wallclock_per_run_seconds,omitempty"`
+	MaxLLMCallsPerRun      int     `json:"max_llm_calls_per_run,omitempty" yaml:"max_llm_calls_per_run,omitempty"`
+	MaxToolCallsPerRun     int     `json:"max_tool_calls_per_run,omitempty" yaml:"max_tool_calls_per_run,omitempty"`
+	MaxCostUSDPerRun       float64 `json:"max_cost_usd_per_run,omitempty" yaml:"max_cost_usd_per_run,omitempty"`
 
 	// DoomLoopThreshold is the repeat count (inclusive) of a
 	// near-identical (tool name, normalized args) call that trips the
@@ -142,23 +142,33 @@ type Budget struct {
 	// cap — distinct from MaxToolCallsPerRun, which only bounds total
 	// call volume and never notices thrash within budget.
 	DoomLoopThreshold int `json:"doom_loop_threshold,omitempty" yaml:"doom_loop_threshold,omitempty"`
+
+	// MaxBacktracksPerRun bounds the kernel backtrack primitive
+	// (autonomy-recovery-runtime-01PMDL03 WP01): the number of times a
+	// completed node may be rewound and re-fired over the life of a
+	// run. Unlike the other Budget fields, zero does NOT mean
+	// "unlimited" — re-firing a completed node breaks the kernel's
+	// normal completed-once invariant, so an explicit cap always
+	// applies; zero falls back to DefaultMaxBacktracksPerRun
+	// (kernel.go) rather than disabling the check.
+	MaxBacktracksPerRun int `json:"max_backtracks_per_run,omitempty" yaml:"max_backtracks_per_run,omitempty"`
 }
 
 // Graph is the top-level immutable spec. Authors construct it directly
 // in Go, in YAML, or via the (future) UI editor.
 type Graph struct {
-	SpecVersion string  `json:"spec_version" yaml:"spec_version"`
-	ID          string  `json:"id" yaml:"id"`
-	Name        string  `json:"name,omitempty" yaml:"name,omitempty"`
-	Description string  `json:"description,omitempty" yaml:"description,omitempty"`
+	SpecVersion string `json:"spec_version" yaml:"spec_version"`
+	ID          string `json:"id" yaml:"id"`
+	Name        string `json:"name,omitempty" yaml:"name,omitempty"`
+	Description string `json:"description,omitempty" yaml:"description,omitempty"`
 	// SystemPrompt is the graph-level base system prompt prepended to
 	// every model node's own system_prompt. Empty ⇒ each model node uses
 	// only its own role prompt (no behaviour change).
-	SystemPrompt string  `json:"system_prompt,omitempty" yaml:"system_prompt,omitempty"`
-	Entrypoints []string `json:"entrypoints" yaml:"entrypoints"`
-	Nodes       []Node  `json:"nodes" yaml:"nodes"`
-	Edges       []Edge  `json:"edges,omitempty" yaml:"edges,omitempty"`
-	Budget      Budget  `json:"budget,omitempty" yaml:"budget,omitempty"`
+	SystemPrompt string   `json:"system_prompt,omitempty" yaml:"system_prompt,omitempty"`
+	Entrypoints  []string `json:"entrypoints" yaml:"entrypoints"`
+	Nodes        []Node   `json:"nodes" yaml:"nodes"`
+	Edges        []Edge   `json:"edges,omitempty" yaml:"edges,omitempty"`
+	Budget       Budget   `json:"budget,omitempty" yaml:"budget,omitempty"`
 	// DialOverrides at graph scope (FR-050).
 	DialOverrides map[string]any `json:"dial_overrides,omitempty" yaml:"dial_overrides,omitempty"`
 

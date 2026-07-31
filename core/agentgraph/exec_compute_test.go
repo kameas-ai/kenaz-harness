@@ -753,3 +753,62 @@ func TestModelExecutor_NoGraphBaseYieldsNodeRoleOnly(t *testing.T) {
 		t.Errorf("SystemPrompt = %q, want %q", req.SystemPrompt, "ROLE")
 	}
 }
+
+// ---- FailureAnnotations rendering (autonomy-recovery-runtime-01PMDL03 WP01) ----
+
+func TestRenderFailureAnnotations(t *testing.T) {
+	t.Parallel()
+	if got := renderFailureAnnotations(nil); got != "" {
+		t.Errorf("empty annotations = %q, want \"\"", got)
+	}
+	anns := []FailureAnnotation{
+		{Node: "draft", Reason: "too vague", RejectedApproach: "v1 text", Iteration: 1},
+		{Node: "draft", Reason: "still off-topic", Iteration: 2},
+	}
+	got := renderFailureAnnotations(anns)
+	want := "Prior attempts were rejected and rewound — do not repeat them verbatim:\n" +
+		"- [backtrack 1] node \"draft\" was rewound: too vague (rejected approach: v1 text)\n" +
+		"- [backtrack 2] node \"draft\" was rewound: still off-topic"
+	if got != want {
+		t.Errorf("renderFailureAnnotations =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// TestModelExecutor_ComposesFailureAnnotationsIntoGraphBase asserts
+// that once the kernel backtrack primitive has recorded a
+// FailureAnnotation on env.State, the next compute-executor fire
+// (modelExecutor here) folds the rendered annotation into the
+// composed SystemPrompt ahead of the node's own role prompt — the
+// re-fired node must see why its prior attempt was rejected, or it is
+// free to repeat it verbatim.
+func TestModelExecutor_ComposesFailureAnnotationsIntoGraphBase(t *testing.T) {
+	t.Parallel()
+	llm := &stubLLM{responses: []LLMResponse{{Content: "ok", FinishReason: "stop"}}}
+	g := &Graph{ID: "g", SystemPrompt: "BASE"}
+	env := &Env{RunID: "r", SessionID: "s", Graph: g, LLM: llm}
+	applyEnvDefaults(env)
+	env.State.AddFailureAnnotation(FailureAnnotation{
+		Node: "draft", Reason: "rejected", RejectedApproach: "v1", Iteration: 1,
+	})
+	ex := modelExecutor{}
+	node := &Node{ID: "n", Kind: NodeKindModel, Attrs: ModelAttrs{Model: "x", SystemPrompt: "ROLE"}}
+	if _, err := ex.Execute(context.Background(), env, node, nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	req, ok := llm.lastRequest()
+	if !ok {
+		t.Fatalf("no LLM request captured")
+	}
+	if !strings.Contains(req.SystemPrompt, "BASE") ||
+		!strings.Contains(req.SystemPrompt, "rejected") ||
+		!strings.Contains(req.SystemPrompt, "ROLE") {
+		t.Errorf("SystemPrompt = %q, want it to contain BASE, the rendered annotation, and ROLE", req.SystemPrompt)
+	}
+	// BASE / annotation / ROLE must appear in that order.
+	base := strings.Index(req.SystemPrompt, "BASE")
+	annIdx := strings.Index(req.SystemPrompt, "rejected")
+	role := strings.Index(req.SystemPrompt, "ROLE")
+	if !(base < annIdx && annIdx < role) {
+		t.Errorf("expected BASE < annotation < ROLE ordering in %q", req.SystemPrompt)
+	}
+}
