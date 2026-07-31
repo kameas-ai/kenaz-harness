@@ -774,6 +774,150 @@ func TestRegistry_StreamKnobPolicy_RefusesIrreconcilableReasoning(t *testing.T) 
 	}
 }
 
+// ─── Registry-seam bugfix: KnobPolicy over the req.Params channel ─────────
+// (PR #257 review blocker). No production caller ever populates req.Knobs
+// directly — every real caller (the chat seam's llm_provider_adapter.go,
+// plus every adapter's own body-builder) wires per-node sampling knobs
+// onto the untyped req.Params map instead. These tests start where
+// production actually starts: a request carrying knobs in Params, not
+// Knobs. Assertions are against the captured adapter request's Params
+// (and, where relevant, Knobs), never against a caller-constructed Knobs
+// value the production path never sets.
+
+// TestRegistry_StreamKnobPolicy_ParamsChannel_DropsUnsupportedKnob verifies
+// an unsupported knob (seed, per testKnobCatalog) arriving via req.Params —
+// the channel azure/adapter.go and the chat seam actually use — is removed
+// from Params before the adapter is invoked, and req.Knobs is left nil
+// (the request never used that channel).
+func TestRegistry_StreamKnobPolicy_ParamsChannel_DropsUnsupportedKnob(t *testing.T) {
+	r, adapter := newRegWithResolvedCred(t)
+	req := llm.GenerationRequest{
+		ProfileID: "p",
+		Params:    map[string]any{"seed": 42},
+	}
+	stream, err := r.Stream(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Stream: unexpected error: %v", err)
+	}
+	_, _ = stream.Final()
+	if _, ok := adapter.gotReq.Params["seed"]; ok {
+		t.Errorf("want seed removed from Params before reaching adapter, got %v", adapter.gotReq.Params["seed"])
+	}
+	if adapter.gotReq.Knobs != nil {
+		t.Errorf("want Knobs left nil (request only used Params), got %+v", adapter.gotReq.Knobs)
+	}
+	if n := atomic.LoadInt32(&adapter.calls); n != 1 {
+		t.Fatalf("expected exactly 1 adapter call, got %d", n)
+	}
+}
+
+// TestRegistry_StreamKnobPolicy_ParamsChannel_PassesSupportedKnob verifies a
+// knob the model DOES support (top_k, per testKnobCatalog) reaches the
+// adapter via Params unmodified.
+func TestRegistry_StreamKnobPolicy_ParamsChannel_PassesSupportedKnob(t *testing.T) {
+	r, adapter := newRegWithResolvedCred(t)
+	req := llm.GenerationRequest{
+		ProfileID: "p",
+		Params:    map[string]any{"top_k": 40},
+	}
+	stream, err := r.Stream(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Stream: unexpected error: %v", err)
+	}
+	_, _ = stream.Final()
+	got, ok := adapter.gotReq.Params["top_k"]
+	if !ok {
+		t.Fatal("want top_k retained in Params on the request reaching the adapter")
+	}
+	if got != 40 {
+		t.Errorf("want top_k=40 unmodified, got %v", got)
+	}
+}
+
+// TestRegistry_StreamKnobPolicy_ParamsChannel_PreservesUnrelatedKeys
+// verifies Params keys KnobPolicy doesn't govern (max_tokens, temperature)
+// survive sanitisation untouched, alongside a dropped unsupported knob in
+// the same map — Params is a general-purpose channel and this seam must
+// not wipe entries it has no opinion about.
+func TestRegistry_StreamKnobPolicy_ParamsChannel_PreservesUnrelatedKeys(t *testing.T) {
+	r, adapter := newRegWithResolvedCred(t)
+	req := llm.GenerationRequest{
+		ProfileID: "p",
+		Params: map[string]any{
+			"seed":        42, // unsupported: dropped
+			"max_tokens":  1024,
+			"temperature": 0.7,
+		},
+	}
+	stream, err := r.Stream(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Stream: unexpected error: %v", err)
+	}
+	_, _ = stream.Final()
+	if _, ok := adapter.gotReq.Params["seed"]; ok {
+		t.Error("want seed dropped")
+	}
+	if v, ok := adapter.gotReq.Params["max_tokens"]; !ok || v != 1024 {
+		t.Errorf("want max_tokens=1024 preserved, got %v (present=%v)", v, ok)
+	}
+	if v, ok := adapter.gotReq.Params["temperature"]; !ok || v != 0.7 {
+		t.Errorf("want temperature=0.7 preserved, got %v (present=%v)", v, ok)
+	}
+}
+
+// TestRegistry_StreamKnobPolicy_ParamsChannel_RefusalStillFires verifies
+// the irreconcilable-mismatch refusal path (reasoning style mismatch, via
+// the existing req.Knobs surface) still fires and the adapter is never
+// dispatched even when the same request also carries an unrelated,
+// supported knob on the Params channel — i.e. merging the two channels
+// doesn't paper over a refusal.
+func TestRegistry_StreamKnobPolicy_ParamsChannel_RefusalStillFires(t *testing.T) {
+	r, adapter := newRegWithResolvedCred(t)
+	req := llm.GenerationRequest{
+		ProfileID: "p",
+		Params:    map[string]any{"top_k": 40},
+		Knobs: &llm.RequestKnobs{
+			Reasoning: &llm.ReasoningConfig{OpenAIEffort: "high"},
+		},
+	}
+	_, err := r.Stream(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected ErrUnsupportedFeature refusal, got nil")
+	}
+	if !llm.IsUnsupportedFeature(err) {
+		t.Errorf("want ErrUnsupportedFeature, got %T: %v", err, err)
+	}
+	if n := atomic.LoadInt32(&adapter.calls); n != 0 {
+		t.Fatalf("adapter must not be dispatched on knob-policy refusal, calls=%d", n)
+	}
+}
+
+// TestRegistry_StreamKnobPolicy_KnobsTakesPrecedenceOverParams verifies the
+// documented precedence: when the same knob is set on both channels with
+// different values, the explicit req.Knobs value wins, and the winning
+// value is written back into Params too (so adapters that only read Params
+// see the value that actually governs, not a stale Params-derived one).
+func TestRegistry_StreamKnobPolicy_KnobsTakesPrecedenceOverParams(t *testing.T) {
+	r, adapter := newRegWithResolvedCred(t)
+	knobsTopK := 99
+	req := llm.GenerationRequest{
+		ProfileID: "p",
+		Params:    map[string]any{"top_k": 40},
+		Knobs:     &llm.RequestKnobs{TopK: &knobsTopK},
+	}
+	stream, err := r.Stream(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Stream: unexpected error: %v", err)
+	}
+	_, _ = stream.Final()
+	if adapter.gotReq.Knobs == nil || adapter.gotReq.Knobs.TopK == nil || *adapter.gotReq.Knobs.TopK != 99 {
+		t.Fatalf("want Knobs.TopK=99 to win, got %+v", adapter.gotReq.Knobs)
+	}
+	if got, ok := adapter.gotReq.Params["top_k"]; !ok || got != 99 {
+		t.Errorf("want Params[top_k] reconciled to the winning value 99, got %v (present=%v)", got, ok)
+	}
+}
+
 // --- WP04: structured-output validate + repair-once
 // (model-request-path-live-01PMDL01) ---
 
