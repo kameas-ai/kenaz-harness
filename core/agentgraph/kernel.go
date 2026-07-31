@@ -714,6 +714,24 @@ func (k *Kernel) Resume(ctx context.Context, env *Env) error {
 // backtrack_fired payload itself does not carry a timestamp field) —
 // immaterial in production (both are real wall-clock time) but worth
 // knowing if a test pins an exact mocked timestamp across a resume.
+// RebuildState replays a run's EventLog into a fresh env's RunState +
+// TaskState after a process restart or resumed pause. Alongside the
+// pre-existing TaskState/backtrack-annotation replay cases, this also
+// reconstructs EscalationLadder progress: without this, a resumed run
+// would silently reset every ladder node back to rung 0 (retry) and
+// clear the run-global escalation-used flag, so a paused-and-resumed
+// run could re-escalate (burning the shared slot a second time) or
+// re-ask a question the human already answered before the pause.
+//
+// ladderAnswered tracks, per node, whether an EventAskAnswered has
+// already been observed for it in the replay so a later EventLadderRung
+// "ask" entry (which the executor also appends alongside
+// EventAskAnswered, see exec_escalation_ladder.go) is reconstructed as
+// the exhausted rung rather than re-armed as still-pending. This
+// relies on the EventLog preserving strict append order per run
+// (confirmed in memEventLog.Append/Replay), since EventAskAnswered is
+// always appended before the "ask" EventLadderRung entry it pairs
+// with.
 func (k *Kernel) RebuildState(env *Env) error {
 	if env.State == nil {
 		env.State = NewRunState()
@@ -721,6 +739,7 @@ func (k *Kernel) RebuildState(env *Env) error {
 	if env.TaskState == nil {
 		env.TaskState = NewTaskState()
 	}
+	ladderAnswered := make(map[string]bool)
 	return k.log.Replay(env.RunID, func(e Event) error {
 		switch e.Kind {
 		case EventNodeComplete:
@@ -772,6 +791,45 @@ func (k *Kernel) RebuildState(env *Env) error {
 			if err := json.Unmarshal(e.Payload, &payload); err == nil {
 				env.TaskState.AddForbidden(payload.Actions...)
 			}
+		case EventAskAnswered:
+			if e.NodeID != "" {
+				ladderAnswered[e.NodeID] = true
+			}
+		case EventLadderRung:
+			if e.NodeID == "" {
+				return nil
+			}
+			var payload struct {
+				Rung    string `json:"rung"`
+				Attempt int    `json:"attempt"`
+			}
+			if err := json.Unmarshal(e.Payload, &payload); err != nil {
+				return nil
+			}
+			stateKey := ladderStateKey(e.NodeID)
+			prior := env.State.Outputs(stateKey)
+			retryAttempts, _ := prior["retry_attempts"].(int)
+			var rung int
+			switch payload.Rung {
+			case "retry":
+				rung = ladderRungRetry
+				retryAttempts = payload.Attempt
+			case "escalate":
+				rung = ladderRungEscalate
+			case "replan":
+				rung = ladderRungReplan
+			case "ask":
+				if ladderAnswered[e.NodeID] {
+					rung = ladderRungExhausted
+				} else {
+					rung = ladderRungAsk
+				}
+			default:
+				return nil
+			}
+			env.State.SetOutputs(stateKey, PortValues{"rung": rung, "retry_attempts": retryAttempts})
+		case EventEscalateTriggered:
+			env.State.SetOutputs(ladderGlobalEscalatedKey, PortValues{"fired": true})
 		}
 		return nil
 	})
