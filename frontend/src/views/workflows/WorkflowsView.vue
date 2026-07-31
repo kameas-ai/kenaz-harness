@@ -304,9 +304,9 @@ async function runWorkflow() {
 }
 
 function statusClass(s: string): string {
-  if (s === 'completed') return 'text-emerald-400';
-  if (s === 'running') return 'text-amber-400';
-  if (s === 'failed') return 'text-red-400';
+  if (s === 'completed') return 'text-signal-ok';
+  if (s === 'running') return 'text-signal-warn';
+  if (s === 'failed') return 'text-signal-danger';
   if (s === 'skipped') return 'text-ink-muted';
   return 'text-ink-muted';
 }
@@ -432,7 +432,7 @@ onMounted(loadCatalog);
 
       <div
         v-else-if="loadError"
-        class="rounded-sm border border-red-700 bg-red-950 p-4 font-ui text-sm text-red-200"
+        class="rounded-sm border border-signal-danger bg-signal-danger-soft p-4 font-ui text-sm text-signal-danger"
         data-testid="workflows-load-error"
       >
         Failed to load workflows: {{ loadError }}
@@ -512,7 +512,7 @@ onMounted(loadCatalog);
                 {{ inp.name }}
                 <span
                   v-if="inp.required"
-                  class="text-red-400"
+                  class="text-signal-danger"
                   aria-label="required"
                   >*</span
                 >
@@ -555,7 +555,7 @@ onMounted(loadCatalog);
             </button>
             <button
               type="button"
-              class="rounded-sm border border-border-muted bg-surface-2 px-3 py-1.5 font-ui text-sm text-ink-muted hover:text-red-300 hover:border-red-700 disabled:opacity-50"
+              class="rounded-sm border border-border-muted bg-surface-2 px-3 py-1.5 font-ui text-sm text-ink-muted hover:text-signal-danger hover:border-signal-danger disabled:opacity-50"
               :disabled="saving"
               data-testid="workflows-delete-button"
               @click="deleteSelected"
@@ -584,13 +584,13 @@ onMounted(loadCatalog);
           />
           <div
             v-if="saveError"
-            class="font-ui text-sm text-red-300"
+            class="font-ui text-sm text-signal-danger"
             data-testid="workflows-save-error"
           >
             {{ saveError }}
           </div>
 
-          <div v-if="runError" class="font-ui text-sm text-red-300" data-testid="workflows-run-error">
+          <div v-if="runError" class="font-ui text-sm text-signal-danger" data-testid="workflows-run-error">
             {{ runError }}
           </div>
 
@@ -624,7 +624,7 @@ onMounted(loadCatalog);
                 >{{ step.output }}</pre>
                 <p
                   v-if="step.error"
-                  class="mt-1 font-ui text-xs text-red-300"
+                  class="mt-1 font-ui text-xs text-signal-danger"
                 >
                   {{ step.error }}
                 </p>

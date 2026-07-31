@@ -126,7 +126,7 @@ function scrollToBottom() {
 }
 
 function lineClass(stream: string): string {
-  return stream === 'stderr' ? 'text-error' : 'text-ink';
+  return stream === 'stderr' ? 'text-signal-danger' : 'text-ink';
 }
 
 function statusLabel(): string {
@@ -165,7 +165,7 @@ function statusLabel(): string {
     <p v-if="loading" class="p-4 text-ink-muted text-[13px]">Loading…</p>
 
     <!-- Error -->
-    <p v-if="error" class="p-4 text-error text-[13px]" data-testid="viewer-error">
+    <p v-if="error" class="p-4 text-signal-danger text-[13px]" data-testid="viewer-error">
       {{ error }}
     </p>
 

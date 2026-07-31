@@ -186,21 +186,21 @@ function goToMCPTools() {
       <!-- Pending MCP secrets banner -->
       <div
         v-if="pendingCount > 0"
-        class="flex items-start gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3"
+        class="flex items-start gap-3 rounded-md border border-signal-warn bg-signal-warn-soft px-4 py-3"
         data-testid="sync-pending-secrets-banner"
       >
-        <span class="mt-0.5 text-amber-600" aria-hidden="true">⚠</span>
+        <span class="mt-0.5 text-signal-warn" aria-hidden="true">⚠</span>
         <div class="flex-1">
-          <p class="text-sm font-medium text-amber-800">
+          <p class="text-sm font-medium text-signal-warn">
             {{ pendingCount }} MCP {{ pendingCount === 1 ? 'server' : 'servers' }} need credentials
           </p>
-          <p class="text-xs text-amber-700">
+          <p class="text-xs text-signal-warn">
             MCP servers synced from another device are waiting for credentials before they can start.
           </p>
         </div>
         <button
           type="button"
-          class="shrink-0 rounded-sm bg-amber-600 px-3 py-1 text-xs font-medium text-white hover:bg-amber-700"
+          class="shrink-0 rounded-sm bg-signal-warn px-3 py-1 text-xs font-medium text-white hover:brightness-90"
           data-testid="sync-go-to-mcp-btn"
           @click="goToMCPTools"
         >
@@ -211,7 +211,7 @@ function goToMCPTools() {
       <!-- Error -->
       <div
         v-if="errorMsg"
-        class="rounded-sm border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700"
+        class="rounded-sm border border-signal-danger bg-signal-danger-soft px-3 py-2 text-xs text-signal-danger"
         role="alert"
         data-testid="sync-error"
       >
@@ -281,7 +281,7 @@ function goToMCPTools() {
                 </span>
                 <span
                   v-if="lastError(cat.id)"
-                  class="text-red-500"
+                  class="text-signal-danger"
                   :data-testid="`sync-last-error-${cat.id}`"
                 >
                   Error: {{ lastError(cat.id) }}

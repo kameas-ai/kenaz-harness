@@ -1,222 +1,33 @@
 /*
- * Kenaz design tokens — authoritative per FR-008 / FR-009.
+ * Kenaz design tokens — sourced from @kameas-ai/kenaz-design-system, the
+ * authoritative design system for the whole Kameas AI product family
+ * (parent brand + Kenaz host control plane + this harness).
  *
- * The color / radius values below are lifted verbatim from the `:root`
- * block of `kenaz-native-app.html` (spec 023 design reference). The
- * typography tokens below are derived from the reference HTML's font-family
- * declarations; they exist as named variables so no component has to
- * hardcode a font stack.
+ * Importing the package IS the drift check going forward: there is no
+ * vendored copy to fall out of sync. Bumping the DS dependency in
+ * package.json is the entire "refresh procedure" — see REFRESH.md.
  *
- * Brass (--accent) MUST be used only for active / live / CTA states per
- * FR-011 — never decorative.
+ * The DS's tokens.css defines the base (`:root`) token set — which resolves
+ * to the "ink" (near-black) palette — plus the four named themes
+ * (`[data-theme="ink|linen|azure|paper"]`). useTheme.ts drives which one
+ * applies; see the "Theme model" note in REFRESH.md for how the harness's
+ * light/dark/system toggle maps onto the DS theme set.
  *
- * Do NOT add new tokens here without updating spec 023 FR-009.
- *
- * ─── HARNESS VENDOR HEADER ─────────────────────────────────────────────
- * Source: /Users/alecfeeman/PycharmProjects/kenaz/frontend/src/styles/tokens.css
- * Vendored verbatim; refresh procedure documented in REFRESH.md.
- * Privacy CI invariant #4 (plan §4.3) forbids any other file under
- * frontend/src/ from declaring a raw color literal.
+ * Privacy CI invariant #4 (check:css-tokens) forbids any other file under
+ * frontend/src/ from declaring a raw color literal — this file (via the
+ * import below) remains the sole allowlisted exception.
  */
 
+@import '@kameas-ai/kenaz-design-system/tokens.css';
+
+/*
+ * ── motion (HARNESS-LOCAL) ──────────────────────────────────────────────
+ * The DS does not yet publish motion tokens (plan §5.1 footnote — tracked
+ * upstream). Kept here, layered after the DS import, until the DS ships
+ * its own --motion-* tokens.
+ */
 :root {
-  /* ── surfaces ─────────────────────────────────────────────────── */
-  --surface-0: #0A0A0B;
-  --surface-1: #101012;
-  --surface-2: #17171A;
-  --surface-3: #1E1E22;
-  --surface-4: #26262C;
-
-  /* ── borders ──────────────────────────────────────────────────── */
-  --border: #22222A;
-  --border-muted: #18181D;
-  --border-strong: #2E2E36;
-
-  /* ── ink (foreground text & iconography) ──────────────────────── */
-  /* WP04 contrast audit (WCAG AA 4.5:1 on --surface-0):            */
-  /*   --ink         ~82:1 ✓                                         */
-  /*   --ink-muted   ~7.5:1 ✓                                        */
-  /*   --ink-subtle  was #6F6F78 (~3.5:1 ✗) → bumped to #8C8C96    */
-  /*   --ink-dim     was #48484F (~2.1:1 ✗) → DEMOTION: non-text    */
-  /*                 roles only (borders, decorative, dividers)      */
-  /*   --ink-trace   non-text only (hairlines) ✓                     */
-  --ink: #F4F1EA;
-  --ink-muted: #A0A0A8;
-  /* Corrected to ≥4.5:1 on --surface-0 (WCAG AA). Previously #6F6F78. */
-  --ink-subtle: #8C8C96;
-  /* NON-TEXT ONLY: decorative, borders, dividers. Do NOT use for text.
-     Contrast ~2.1:1 on surface-0 — fails AA. Use --ink-subtle for text. */
-  --ink-dim: #48484F;
-  --ink-trace: #2E2E34;
-
-  /* ── accent (brass) — active / live / CTA only ────────────────── */
-  --accent: #C8A56A;
-  --accent-muted: #8A7550;
-  --accent-dim: #4A3F2A;
-  --accent-glow: rgba(200, 165, 106, 0.12);
-
-  /* ── signal colors ────────────────────────────────────────────── */
-  --ok: #7FB392;
-  --warn: #D4A34A;
-  --danger: #D48280;
-  --info: #8DA4C4;
-  --violet: #A58BC4;
-  /* --signal-neutral: introduced in spec 024 for the App context
-     source legend dot. Distinct from --info and --ink-muted. */
-  --signal-neutral: #8A8F99;
-  /* --signal-git: introduced in spec 027 FR-010b for git.* event tags in
-     the Observer Event Stream. Muted teal chosen to evoke version-control
-     tooling (green family) while staying distinct from --ok (#7FB392, which
-     reads as sage/seafoam) and --info (#8DA4C4, blue-grey). Desaturated
-     enough to respect the palette's muted-color discipline. */
-  --signal-git: #6FA8A0;
-
-  /* --accent-hairline: brass-tinted low-opacity border variant used
-     for the Privacy Guarantees callout outer edge (spec 024 FR-006). */
-  --accent-hairline: rgba(200, 165, 106, 0.3);
-
-  /* ── modal overlay ───────────────────────────────────────────── */
-  /* Semi-transparent dark scrim used by StartVMModal backdrop. */
-  --modal-overlay: rgba(10, 10, 11, 0.72);
-  /* Drop shadow for modal panel. */
-  --modal-shadow: rgba(0, 0, 0, 0.6);
-
-  /* ── radii ────────────────────────────────────────────────────── */
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-
-  /* ── responsive breakpoints (spec 024 FR-001 carve-out) ────────── */
-  --breakpoint-two-col: 960px;
-
-  /* ── typography (families; sizes/weights are component-local) ── */
-  --font-ui: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
-    ui-sans-serif, sans-serif;
-  --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, Consolas,
-    'Liberation Mono', monospace;
-
-  /* ── motion (HARNESS-LOCAL until Kenaz publishes per plan §5.1) ── */
   --motion-fast: 120ms;
   --motion-base: 200ms;
   --motion-slow: 320ms;
-}
-
-/*
- * Light-mode override. useTheme adds `.dark` to <html> when the resolved
- * theme is dark (explicit dark, or system + prefers-color-scheme:dark).
- * Absence of `.dark` therefore means light mode — these overrides flip
- * the surface + ink stacks while keeping the brass accent and signal
- * palette tonally consistent across themes.
- *
- * HARNESS-LOCAL extension; not yet vendored from Kenaz.
- */
-:root:not(.dark) {
-  /* ── surfaces ─────────────────────────────────────────────────── */
-  --surface-0: #FFFFFF;
-  --surface-1: #F8F8FA;
-  --surface-2: #F0F0F4;
-  --surface-3: #E6E6EC;
-  --surface-4: #D9D9E0;
-
-  /* ── borders ──────────────────────────────────────────────────── */
-  --border: #D7D7DC;
-  --border-muted: #E5E5EA;
-  --border-strong: #B8B8C0;
-
-  /* ── ink ──────────────────────────────────────────────────────── */
-  --ink: #15151A;
-  --ink-muted: #5A5A65;
-  --ink-subtle: #8A8A95;
-  --ink-dim: #B0B0BA;
-  --ink-trace: #D5D5DC;
-
-  /* ── accent (brass) — slightly darker for contrast on white ───── */
-  --accent: #B5904A;
-  --accent-muted: #8A7550;
-  --accent-dim: #C9B98A;
-  --accent-glow: rgba(181, 144, 74, 0.14);
-  --accent-hairline: rgba(181, 144, 74, 0.35);
-
-  /* ── signal colors (slightly desaturated for light bg) ────────── */
-  --ok: #4F8B68;
-  --warn: #B8862E;
-  --danger: #C25A56;
-  --info: #5E7BA8;
-  --violet: #8A6EB0;
-  --signal-neutral: #6F747E;
-  --signal-git: #4F8881;
-
-  /* ── modal overlay (light scrim over light surfaces) ──────────── */
-  --modal-overlay: rgba(15, 15, 18, 0.45);
-  --modal-shadow: rgba(15, 15, 18, 0.18);
-}
-
-/*
- * ─── Named host themes (spec 073, HARNESS VENDOR SECTION) ─────────────
- * Vendored from @kameas-ai/kenaz-design-system@0.6.0 src/tokens/tokens.css
- * (spec 071 blocks), selectors strengthened to `:root[data-theme=…]` so
- * they override the `:root:not(.dark)` light block above (equal
- * specificity, later in file wins). Applied ONLY when the workbench chrome
- * passes ?theme=<id> (see useTheme.ts hostThemeParam) — standalone
- * harness never sets data-theme and never reaches these blocks.
- * Refresh procedure: REFRESH.md (source is the DS package, not kenaz).
- */
-:root[data-theme="ink"] {
-  --surface-0: #0A0A0B; --surface-1: #101012; --surface-2: #17171A;
-  --surface-3: #1E1E22; --surface-4: #26262C;
-  --border-muted: #18181D; --border: #22222A; --border-strong: #2E2E36;
-  --ink: #F4F1EA; --ink-muted: #A0A0A8; --ink-subtle: #6F6F78;
-  --ink-dim: #48484F; --ink-trace: #2E2E34;
-  --accent: #C8A56A; --accent-muted: #8A7550; --accent-dim: #4A3F2A;
-  --accent-glow: rgba(200, 165, 106, 0.12);
-  --accent-hairline: rgba(200, 165, 106, 0.30);
-  --ok: #7FB392; --warn: #D4A34A; --danger: #D48280; --info: #8DA4C4;
-  --violet: #A58BC4; --signal-neutral: #8A8F99; --signal-git: #6FA8A0;
-  --modal-overlay: rgba(10, 10, 11, 0.72);
-  --modal-shadow: rgba(0, 0, 0, 0.6);
-}
-
-:root[data-theme="linen"] {
-  --surface-0: #F4EFE4; --surface-1: #EDE7D8; --surface-2: #E4DCC9;
-  --surface-3: #D8CFB8; --surface-4: #C8BCA0;
-  --border-muted: #DED5C0; --border: #C5B99E; --border-strong: #A89A78;
-  --ink: #1A1814; --ink-muted: #4E4940; --ink-subtle: #756E62;
-  --ink-dim: #9A9181; --ink-trace: #BDB39E;
-  --accent: #8F6B26; --accent-muted: #B89763; --accent-dim: #EDDFB7;
-  --accent-glow: rgba(143, 107, 38, 0.10);
-  --accent-hairline: rgba(143, 107, 38, 0.35);
-  --ok: #4F8264; --warn: #9C7220; --danger: #B14E4B; --info: #4D6B96;
-  --violet: #7A5DA0; --signal-neutral: #5C616B; --signal-git: #3E7972;
-  --modal-overlay: rgba(244, 239, 228, 0.78);
-  --modal-shadow: rgba(50, 40, 20, 0.18);
-}
-
-:root[data-theme="azure"] {
-  --surface-0: #0B1C2E; --surface-1: #102538; --surface-2: #163046;
-  --surface-3: #1D3B56; --surface-4: #244668;
-  --border-muted: #152C42; --border: #1F3C58; --border-strong: #2E5378;
-  --ink: #E8EFF6; --ink-muted: #9CB3C7; --ink-subtle: #6F87A3;
-  --ink-dim: #4D6485; --ink-trace: #2D4264;
-  --accent: #C8A56A; --accent-muted: #8A7550; --accent-dim: #3D3525;
-  --accent-glow: rgba(200, 165, 106, 0.14);
-  --accent-hairline: rgba(200, 165, 106, 0.35);
-  --ok: #82BA9A; --warn: #D9AA50; --danger: #DD8682; --info: #B7CCE6;
-  --violet: #B097D4; --signal-neutral: #97A4BC; --signal-git: #79B2AA;
-  --modal-overlay: rgba(11, 28, 46, 0.78);
-  --modal-shadow: rgba(0, 0, 0, 0.55);
-}
-
-:root[data-theme="paper"] {
-  --surface-0: #F4EEDF; --surface-1: #FBF7EC; --surface-2: #EDE5D0;
-  --surface-3: #E2D7BC; --surface-4: #D3C5A4;
-  --border-muted: #E7DEC8; --border: #D0C4A6; --border-strong: #A99B77;
-  --ink: #201D16; --ink-muted: #554D3E; --ink-subtle: #7D7462;
-  --ink-dim: #9E9480; --ink-trace: #C4BAA2;
-  --accent: #2F5380; --accent-muted: #7A92B0; --accent-dim: #DEE6F0;
-  --accent-glow: rgba(47, 83, 128, 0.10);
-  --accent-hairline: rgba(47, 83, 128, 0.35);
-  --ok: #4F8264; --warn: #9C7220; --danger: #B14E4B; --info: #4D6B96;
-  --violet: #7A5DA0; --signal-neutral: #5C616B; --signal-git: #3E7972;
-  --modal-overlay: rgba(244, 238, 223, 0.80);
-  --modal-shadow: rgba(50, 40, 20, 0.15);
 }

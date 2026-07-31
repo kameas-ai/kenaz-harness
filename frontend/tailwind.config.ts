@@ -2,10 +2,11 @@ import type { Config } from 'tailwindcss';
 
 /**
  * Token-driven Tailwind theme. Every color resolves to a CSS variable
- * defined in `frontend/src/styles/tokens.css` (vendored verbatim from
- * Kenaz). Do NOT redefine token values here — only map them to utility
- * names. Privacy CI invariant #4 (plan §4.3) enforces no raw color
- * literal outside `tokens.css`.
+ * defined in `frontend/src/styles/tokens.css`, which `@import`s
+ * `@kameas-ai/kenaz-design-system/tokens.css` directly (see that file's
+ * header + REFRESH.md). Do NOT redefine token values here — only map
+ * them to utility names. Privacy CI invariant #4 (plan §4.3) enforces no
+ * raw color literal outside `tokens.css`.
  */
 export default {
   content: ['./index.html', './src/**/*.{vue,ts,tsx,js,jsx}'],
@@ -61,6 +62,10 @@ export default {
       fontFamily: {
         ui: 'var(--font-ui)',
         mono: 'var(--font-mono)',
+        // Serif register (DS 0.6 paper direction / spec 071 FR-004).
+        // Sanctioned contexts only: page/view titles, editorial headlines,
+        // card titles, digest prose. Never rail, toolbar, tables, buttons.
+        serif: 'var(--font-serif)',
       },
       transitionDuration: {
         fast: 'var(--motion-fast)',

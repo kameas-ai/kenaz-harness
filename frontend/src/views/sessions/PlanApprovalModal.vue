@@ -130,7 +130,7 @@ function cancelEdit() {
     <div class="absolute inset-0 bg-modal-overlay" aria-hidden="true" />
 
     <div
-      class="relative flex w-full max-w-2xl flex-col rounded-md border border-amber-300 bg-surface-1 shadow-xl dark:border-amber-700"
+      class="relative flex w-full max-w-2xl flex-col rounded-md border border-signal-warn bg-surface-1 shadow-xl"
       data-testid="plan-approval-modal-content"
       @click.stop
     >
@@ -138,7 +138,7 @@ function cancelEdit() {
       <div class="flex items-center justify-between border-b border-border-muted px-5 py-3">
         <div>
           <div
-            class="font-ui text-[11px] uppercase tracking-[0.18em] text-amber-600 dark:text-amber-400"
+            class="font-ui text-[11px] uppercase tracking-[0.18em] text-signal-warn"
           >
             Plan review
           </div>
@@ -226,7 +226,7 @@ function cancelEdit() {
           <button
             v-if="editMode"
             type="button"
-            class="rounded border border-amber-500 bg-amber-50 px-3 py-1.5 font-ui text-xs uppercase tracking-[0.12em] text-amber-700 hover:bg-amber-100 disabled:opacity-50 dark:bg-amber-900 dark:text-amber-300"
+            class="rounded border border-signal-warn bg-signal-warn-soft px-3 py-1.5 font-ui text-xs uppercase tracking-[0.12em] text-signal-warn hover:bg-signal-warn hover:text-white disabled:opacity-50"
             :disabled="submitting || editedText.trim() === ''"
             data-testid="plan-approval-modal-save-edit"
             @click="doSaveEdit"
@@ -238,7 +238,7 @@ function cancelEdit() {
           <button
             v-if="!editMode"
             type="button"
-            class="rounded border border-amber-500 bg-amber-500 px-3 py-1.5 font-ui text-xs uppercase tracking-[0.12em] text-white hover:bg-amber-600 disabled:opacity-50"
+            class="rounded border border-signal-warn bg-signal-warn px-3 py-1.5 font-ui text-xs uppercase tracking-[0.12em] text-white hover:brightness-90 disabled:opacity-50"
             :disabled="submitting"
             data-testid="plan-approval-modal-approve"
             @click="doApprove"

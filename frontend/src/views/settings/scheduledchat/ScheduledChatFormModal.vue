@@ -199,11 +199,11 @@ async function handleSubmit() {
               v-model="cron"
               type="text"
               class="w-full rounded-sm border px-3 py-1.5 font-mono text-sm text-ink focus:outline-none focus:ring-1 focus:ring-accent"
-              :class="cronValid ? 'border-border-muted bg-surface-1' : 'border-red-700 bg-red-950'"
+              :class="cronValid ? 'border-border-muted bg-surface-1' : 'border-signal-danger bg-signal-danger-soft'"
               placeholder="0 9 * * *"
               data-testid="sc-cron-input"
             />
-            <p v-if="!cronValid" class="mt-1 font-ui text-xs text-red-300">
+            <p v-if="!cronValid" class="mt-1 font-ui text-xs text-signal-danger">
               Enter a valid 5-field cron expression
             </p>
           </div>
@@ -286,7 +286,7 @@ async function handleSubmit() {
         <!-- Save error -->
         <div
           v-if="saveError"
-          class="rounded-sm border border-red-700 bg-red-950 px-3 py-2 font-ui text-sm text-red-200"
+          class="rounded-sm border border-signal-danger bg-signal-danger-soft px-3 py-2 font-ui text-sm text-signal-danger"
           data-testid="sc-save-error"
         >
           {{ saveError }}

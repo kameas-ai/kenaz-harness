@@ -272,7 +272,7 @@ async function clearSchedule(id: string) {
     <!-- Load error -->
     <div
       v-if="loadError"
-      class="rounded-sm border border-red-700 bg-red-950 p-3 font-ui text-sm text-red-200"
+      class="rounded-sm border border-signal-danger bg-signal-danger-soft p-3 font-ui text-sm text-signal-danger"
       data-testid="wsp-load-error"
     >
       {{ loadError }}
@@ -326,7 +326,7 @@ async function clearSchedule(id: string) {
             <td class="px-3 py-2">
               <span
                 v-if="scheduleFor(wf.id)"
-                class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-xs bg-emerald-900 text-emerald-300"
+                class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-xs bg-signal-ok-soft text-signal-ok"
                 :data-testid="`wsp-schedule-badge-${wf.id}`"
               >
                 {{ scheduleFor(wf.id)!.cron }}
@@ -359,7 +359,7 @@ async function clearSchedule(id: string) {
                 <button
                   v-if="scheduleFor(wf.id)"
                   type="button"
-                  class="rounded-sm px-2 py-1 font-ui text-xs text-ink-muted hover:text-red-300 hover:border-red-700"
+                  class="rounded-sm px-2 py-1 font-ui text-xs text-ink-muted hover:text-signal-danger hover:border-signal-danger"
                   :data-testid="`wsp-clear-schedule-${wf.id}`"
                   @click="clearSchedule(wf.id)"
                 >
@@ -368,7 +368,7 @@ async function clearSchedule(id: string) {
                 <button
                   v-if="wf.source === 'user'"
                   type="button"
-                  class="rounded-sm px-2 py-1 font-ui text-xs text-ink-muted hover:text-red-300"
+                  class="rounded-sm px-2 py-1 font-ui text-xs text-ink-muted hover:text-signal-danger"
                   :data-testid="`wsp-delete-${wf.id}`"
                   @click="confirmDelete(wf.id)"
                 >
@@ -389,7 +389,7 @@ async function clearSchedule(id: string) {
       data-testid="wsp-delete-dialog"
     >
       <h3 class="font-ui text-base text-ink mb-2">Delete workflow?</h3>
-      <p v-if="pendingDeleteHasSchedule" class="font-ui text-sm text-amber-300 mb-3">
+      <p v-if="pendingDeleteHasSchedule" class="font-ui text-sm text-signal-warn mb-3">
         This workflow has an active cron schedule. Deleting it will also remove the schedule.
       </p>
       <p class="font-ui text-sm text-ink-muted mb-4">
@@ -397,7 +397,7 @@ async function clearSchedule(id: string) {
       </p>
       <div
         v-if="deleteError"
-        class="mb-3 font-ui text-sm text-red-300"
+        class="mb-3 font-ui text-sm text-signal-danger"
         data-testid="wsp-delete-error"
       >
         {{ deleteError }}
@@ -413,7 +413,7 @@ async function clearSchedule(id: string) {
         </button>
         <button
           type="button"
-          class="rounded-sm bg-red-700 px-3 py-1.5 font-ui text-sm text-white hover:bg-red-600 disabled:opacity-50"
+          class="rounded-sm bg-signal-danger px-3 py-1.5 font-ui text-sm text-white hover:brightness-90 disabled:opacity-50"
           :disabled="deleting"
           data-testid="wsp-delete-confirm"
           @click="executeDelete"
@@ -461,7 +461,7 @@ async function clearSchedule(id: string) {
       </div>
       <div
         v-if="scheduleError"
-        class="mb-3 font-ui text-sm text-red-300"
+        class="mb-3 font-ui text-sm text-signal-danger"
         data-testid="wsp-schedule-error"
       >
         {{ scheduleError }}

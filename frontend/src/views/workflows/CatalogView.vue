@@ -47,9 +47,9 @@ function statusLabel(status: string): string {
 function statusClass(status: string): string {
   switch (status) {
     case 'installed':
-      return 'bg-emerald-900 text-emerald-300';
+      return 'bg-signal-ok-soft text-signal-ok';
     case 'installed_outdated':
-      return 'bg-amber-900 text-amber-300';
+      return 'bg-signal-warn-soft text-signal-warn';
     default:
       return 'bg-surface-2 text-ink-muted';
   }
@@ -89,7 +89,7 @@ onMounted(load);
 
     <div
       v-else-if="loadError"
-      class="rounded-sm border border-red-700 bg-red-950 p-4 font-ui text-sm text-red-200"
+      class="rounded-sm border border-signal-danger bg-signal-danger-soft p-4 font-ui text-sm text-signal-danger"
       data-testid="catalog-load-error"
     >
       Failed to load catalog: {{ loadError }}

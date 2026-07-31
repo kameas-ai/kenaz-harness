@@ -12,9 +12,15 @@ import (
 // MUST be byte-identical to the production CSP injected into index.html
 // at build time (frontend/vite.config.ts). scripts/ci/check-csp.sh greps
 // the produced dist/index.html and asserts the policy is not weakened.
+//
+// script-src carries a CSP hash-source (not 'unsafe-inline') that
+// allowlists exactly one inline script: the "read ?theme= before first
+// paint" snippet in index.html (P0 theme fix). If that script's text ever
+// changes, this hash AND THEME_SCRIPT_HASH in frontend/vite.config.ts
+// must be recomputed together — see the comment there.
 const productionCSP = "default-src 'none'; " +
 	"connect-src 'none'; " +
-	"script-src 'self'; " +
+	"script-src 'self' 'sha256-S9VfhoaWcxszZps4jluBpniHVTyGsrOIZlLNj5x7ekE='; " +
 	"style-src 'self' 'unsafe-inline'; " +
 	"img-src 'self' data:; " +
 	"font-src 'self'; " +

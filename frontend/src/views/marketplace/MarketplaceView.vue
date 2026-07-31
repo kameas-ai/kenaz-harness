@@ -192,7 +192,7 @@ async function applyFilters() {
       <!-- Error -->
       <div
         v-if="errorMsg"
-        class="border-b border-red-200 bg-red-50 px-4 py-2 font-ui text-xs text-red-700"
+        class="border-b border-signal-danger bg-signal-danger-soft px-4 py-2 font-ui text-xs text-signal-danger"
         role="alert"
         data-testid="marketplace-error"
       >

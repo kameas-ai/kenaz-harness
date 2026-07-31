@@ -84,7 +84,7 @@ function onCancel() { emit('cancel'); }
         <div class="flex flex-col gap-2">
           <button
             type="button"
-            class="w-full px-4 py-2 text-[13px] font-ui bg-error text-white rounded-lg hover:bg-error-dark transition-colors"
+            class="w-full px-4 py-2 text-[13px] font-ui bg-signal-danger text-white rounded-lg hover:brightness-90 transition-colors"
             data-testid="session-close-kill-btn"
             @click="onKill"
           >

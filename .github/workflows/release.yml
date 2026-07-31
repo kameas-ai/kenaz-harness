@@ -278,6 +278,11 @@ jobs:
     permissions:
       contents: read
       id-token: write   # required for Azure OIDC federation on Windows signing
+      # job-level permissions replace the workflow-level block entirely, so
+      # `packages: write` up top doesn't carry down here — `frontend deps`
+      # runs `npm ci` against @kameas-ai/kenaz-design-system on GitHub
+      # Packages and needs this listed explicitly.
+      packages: read
     # Lift the gating-only secrets to job-level env so step `if:`
     # expressions can read them. GitHub evaluates step `if:` *before*
     # the step's own `env:` block is materialized, so per-step
@@ -301,6 +306,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
+          registry-url: https://npm.pkg.github.com
 
       - name: install wails system deps (linux)
         if: runner.os == 'Linux'
@@ -316,9 +322,15 @@ jobs:
         # breaking generator changes (the Wails CLI emits TS bindings, etc.).
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
 
+      # @kameas-ai/kenaz-design-system is published to GitHub Packages —
+      # NODE_AUTH_TOKEN from the workflow's own GITHUB_TOKEN has
+      # packages:read by default, no new secret needed. See
+      # frontend/PACKAGES_AUTH.md.
       - name: frontend deps
         working-directory: frontend
         run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Sync wails.json info.productVersion to the resolved release
       # version BEFORE wails build, so the OS-visible bundle metadata
@@ -803,9 +815,76 @@ jobs:
   # release: publishes the GitHub Release (assets + asset manifest).
   # Only runs for prod-destined triggers — dev/stage don't create GH Releases.
   # ────────────────────────────────────────────────────────────────────────────
+  # ────────────────────────────────────────────────────────────────────────────
+  # served-spa: builds the served-mode SPA (frontend/dist-served) and ships it
+  # as a release asset (kenaz-harness-served-spa.tar.gz). The kenaz-workbench
+  # pinned image bake consumes this tarball instead of running npm inside a
+  # Nix fixed-output derivation — the frontend depends on
+  # @kameas-ai/kenaz-design-system on the private GitHub Packages registry,
+  # which a FOD cannot authenticate to (prefetch-npm-deps has no credential
+  # channel). This repo is public, so release assets are anonymously
+  # fetchable and the image pipeline stays tokenless. Dev-bake counterpart
+  # (local checkout, prebuilt SPA): kenaz #111.
+  # The artifact name matches the release job's `kenaz-harness-*` download
+  # pattern, so the existing `gh release upload dist-flat/*` sweeps it in;
+  # the docs-site manifest builder skips it (no os-arch suffix).
+  # ────────────────────────────────────────────────────────────────────────────
+  served-spa:
+    name: Served SPA release asset
+    needs: [resolve-env, derive-version]
+    # Prod releases only — the image bake pins stable tags; dev/stage
+    # channels don't need the asset.
+    if: needs.resolve-env.outputs.target_env == 'prod'
+    runs-on: [self-hosted, Linux, ARM64, ci-medium]
+    permissions:
+      contents: read
+      packages: read
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          # workflow_dispatch runs against the default branch; build the SPA
+          # from the tagged tree, not main.
+          ref: ${{ needs.derive-version.outputs.version }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+          registry-url: https://npm.pkg.github.com
+
+      # Same GITHUB_TOKEN/packages:read pattern as pr.yml's test-frontend;
+      # see frontend/PACKAGES_AUTH.md.
+      - name: npm ci
+        run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: build served SPA
+        run: npm run build:served
+
+      - name: pack tarball
+        run: |
+          set -euo pipefail
+          test -f dist-served/served.html
+          tar -czf kenaz-harness-served-spa.tar.gz -C dist-served .
+          sha256sum kenaz-harness-served-spa.tar.gz > kenaz-harness-served-spa.tar.gz.sha256
+          ls -la kenaz-harness-served-spa.tar.gz*
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kenaz-harness-served-spa
+          path: |
+            frontend/kenaz-harness-served-spa.tar.gz
+            frontend/kenaz-harness-served-spa.tar.gz.sha256
+          if-no-files-found: error
+
   release:
     name: Publish GitHub Release
-    needs: [resolve-env, derive-version, build]
+    needs: [resolve-env, derive-version, build, served-spa]
     # Only create/update a GitHub Release for prod-bound triggers.
     # dev (main push) and stage (rc tag) publish to S3 only.
     if: needs.resolve-env.outputs.target_env == 'prod'

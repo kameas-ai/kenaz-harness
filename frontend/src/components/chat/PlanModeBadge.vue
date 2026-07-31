@@ -31,17 +31,17 @@ const tooltipText =
   >
     <span
       class="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-ui text-[11px] uppercase tracking-[0.12em]
-             border-amber-500 text-amber-600 bg-amber-50 dark:bg-amber-950 dark:text-amber-400 dark:border-amber-600"
+             border-signal-warn text-signal-warn bg-signal-warn-soft"
       :title="tooltipText"
       data-testid="plan-mode-badge-chip"
       role="status"
       :aria-label="tooltipText"
     >
-      <span aria-hidden="true" class="text-amber-500">◆</span>
+      <span aria-hidden="true" class="text-signal-warn">◆</span>
       PLAN MODE
       <span
         v-if="props.pendingPlanId"
-        class="ml-0.5 text-[9px] font-normal not-italic text-amber-500"
+        class="ml-0.5 text-[9px] font-normal not-italic text-signal-warn"
         data-testid="plan-mode-badge-pending"
       >
         pending approval

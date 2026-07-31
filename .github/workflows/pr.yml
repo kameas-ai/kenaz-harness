@@ -9,6 +9,11 @@ on:
 
 permissions:
   contents: read
+  # test-frontend's `npm ci` installs @kameas-ai/kenaz-design-system from
+  # GitHub Packages — an explicit `permissions:` block zeroes out every
+  # unlisted scope (including packages), so this has to be listed
+  # explicitly or GITHUB_TOKEN can't authenticate against npm.pkg.github.com.
+  packages: read
 
 concurrency:
   group: pr-${{ github.ref }}
@@ -207,9 +212,17 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
+          registry-url: https://npm.pkg.github.com
 
+      # @kameas-ai/kenaz-design-system is published to GitHub Packages
+      # (frontend/.npmrc routes the @kameas-ai scope there). NODE_AUTH_TOKEN
+      # from the workflow's own GITHUB_TOKEN has packages:read by default —
+      # no new secret needed. Same pattern as kenaz/frontend's ci.yml; see
+      # frontend/PACKAGES_AUTH.md.
       - name: npm ci
         run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: typecheck
         run: npm run typecheck --if-present
