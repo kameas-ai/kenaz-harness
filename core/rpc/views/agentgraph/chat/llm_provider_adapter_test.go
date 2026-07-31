@@ -174,3 +174,56 @@ func TestGenerate_OmittedKnobsProduceNoOverride(t *testing.T) {
 		t.Errorf("Reasoning = %#v, want nil", gen.Reasoning)
 	}
 }
+
+// TestGenerate_ToolMessage_CarriesIsError is WP01 of
+// tool-error-legibility-01PMDL02: before this fix, a Role="tool" Message
+// with IsError=true was translated into a corellm.ToolResult without
+// IsError, so a failed tool call reached the wire looking identical to a
+// success. Asserts the seam's IsError flag threads through onto the
+// tool_result content block for both a failing and a succeeding call.
+func TestGenerate_ToolMessage_CarriesIsError(t *testing.T) {
+	cases := []struct {
+		name        string
+		isError     bool
+		wantIsError bool
+	}{
+		{name: "failing tool result sets IsError", isError: true, wantIsError: true},
+		{name: "succeeding tool result leaves IsError false", isError: false, wantIsError: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := &capturingRegistry{}
+			adapter := NewLLMProviderAdapter(reg, "profile-1", "openai/gpt-4o", nil, nil)
+
+			req := coreag.LLMRequest{
+				SystemPrompt: "base",
+				Messages: []coreag.Message{
+					{
+						Role:       "tool",
+						Name:       "svc__broken",
+						ToolCallID: "call-1",
+						Content:    "boom",
+						IsError:    tc.isError,
+					},
+				},
+			}
+
+			if _, err := adapter.Generate(context.Background(), req); err != nil {
+				t.Fatalf("Generate: %v", err)
+			}
+
+			gen := reg.snapshot()
+			if len(gen.Messages) != 1 {
+				t.Fatalf("expected 1 translated message, got %d: %#v", len(gen.Messages), gen.Messages)
+			}
+			blocks := gen.Messages[0].Content
+			if len(blocks) != 1 || blocks[0].Type != "tool_result" || blocks[0].ToolResult == nil {
+				t.Fatalf("expected one tool_result block, got %#v", blocks)
+			}
+			if got := blocks[0].ToolResult.IsError; got != tc.wantIsError {
+				t.Errorf("ToolResult.IsError = %v, want %v", got, tc.wantIsError)
+			}
+		})
+	}
+}
