@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 )
 
 // trivial 3-node DAG: a -> b -> c, all transforms.
@@ -554,5 +555,339 @@ func TestKernel_BacktrackRejectsUnknownTarget(t *testing.T) {
 	}
 	if errors.Is(err, ErrBudgetExceeded) || errors.Is(err, ErrPaused) {
 		t.Errorf("unexpected sentinel error: %v", err)
+	}
+}
+
+// fanOutSiblingExecutor models a backtrack target ("draft") with two
+// children: a reviewer that requests a rewind to draft on its first
+// fire, and a sibling ("sib") that becomes ready via the very same
+// fan-out and is deliberately held in flight (blocked on release)
+// until the rewind's in-degree recompute has already run and attempted
+// to re-promote it. This reproduces the PR #260 review's fan-out
+// double-dispatch finding: an ordinary DAG shape (any node with 2+
+// outgoing edges) where, without in-flight tracking, draft's second
+// completion would fire "sib" a second, concurrent time while sib's
+// first execution is still running.
+type fanOutSiblingExecutor struct {
+	kind     NodeKind
+	target   string
+	reviewer string
+	sib      string
+
+	mu        sync.Mutex
+	calls     map[string]int
+	active    int
+	maxActive int
+	release   chan struct{}
+
+	sibFirstOnce     sync.Once
+	sibFirst         chan struct{}
+	reviewSecondOnce sync.Once
+	reviewSecond     chan struct{}
+}
+
+func newFanOutSiblingExecutor(kind NodeKind, target, reviewer, sib string) *fanOutSiblingExecutor {
+	return &fanOutSiblingExecutor{
+		kind: kind, target: target, reviewer: reviewer, sib: sib,
+		calls:        map[string]int{},
+		release:      make(chan struct{}),
+		sibFirst:     make(chan struct{}),
+		reviewSecond: make(chan struct{}),
+	}
+}
+
+func (e *fanOutSiblingExecutor) Kind() NodeKind { return e.kind }
+
+func (e *fanOutSiblingExecutor) Execute(_ context.Context, _ *Env, node *Node, _ PortValues) (Result, error) {
+	e.mu.Lock()
+	e.calls[node.ID]++
+	n := e.calls[node.ID]
+	e.mu.Unlock()
+
+	if node.ID == e.sib {
+		e.mu.Lock()
+		e.active++
+		if e.active > e.maxActive {
+			e.maxActive = e.active
+		}
+		e.mu.Unlock()
+		if n == 1 {
+			// Signal the test that sib's first fire has begun, then
+			// block — held "in flight" (not yet returned from
+			// Execute) across the moment the reviewer's backtrack
+			// fires and recomputes in-degrees for the whole refire
+			// set, including sib.
+			e.sibFirstOnce.Do(func() { close(e.sibFirst) })
+			<-e.release
+		}
+		e.mu.Lock()
+		e.active--
+		e.mu.Unlock()
+	}
+
+	if node.ID == e.reviewer && n == 2 {
+		// review's second fire can only happen after draft's second
+		// completion has run its promote-downstream section — which,
+		// in the same critical section, already evaluated (and, if
+		// the fix holds, deferred) sib. Safe checkpoint for the test
+		// to inspect sib's call count while sib is still blocked.
+		e.reviewSecondOnce.Do(func() { close(e.reviewSecond) })
+	}
+
+	r := NewResult()
+	r.Outputs["value"] = node.ID
+	if node.ID == e.reviewer && n == 1 {
+		r.Backtrack = &BacktrackRequest{TargetNode: e.target, Reason: "rejected", RejectedApproach: "v1"}
+	}
+	return r, nil
+}
+
+func (e *fanOutSiblingExecutor) callCount(id string) int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.calls[id]
+}
+
+func (e *fanOutSiblingExecutor) maxConcurrent() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.maxActive
+}
+
+// TestKernel_BacktrackFanOutSiblingNotDoubleDispatched is the required
+// regression test for backtrack double-dispatch (PR #260 review, FIX
+// 1, mode 1): a fan-out sibling of the backtrack target must never be
+// dispatched a second, concurrent time while its first execution is
+// still in flight.
+func TestKernel_BacktrackFanOutSiblingNotDoubleDispatched(t *testing.T) {
+	t.Parallel()
+	kind := NodeKind("fake_backtrack_fanout")
+	g := &Graph{
+		SpecVersion: SpecVersion, ID: "bt-fanout-graph", Entrypoints: []string{"draft"},
+		Nodes: []Node{
+			{ID: "draft", Kind: kind},
+			{ID: "review", Kind: kind},
+			{ID: "sib", Kind: kind},
+		},
+		Edges: []Edge{
+			{From: EndpointRef{Node: "draft", Port: "value"}, To: EndpointRef{Node: "review", Port: "in"}},
+			{From: EndpointRef{Node: "draft", Port: "value"}, To: EndpointRef{Node: "sib", Port: "in"}},
+		},
+	}
+	ex := newFanOutSiblingExecutor(kind, "draft", "review", "sib")
+	k := NewKernel(WithExecutor(ex))
+	env := &Env{RunID: "bt-fanout-run", Graph: g}
+	applyEnvDefaults(env)
+
+	runErr := make(chan error, 1)
+	go func() { runErr <- k.Run(context.Background(), env) }()
+
+	select {
+	case <-ex.sibFirst:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for sib's first fire")
+	}
+	select {
+	case <-ex.reviewSecond:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for review's second fire — draft never refired")
+	}
+
+	// draft has already refired and run its promote-downstream section
+	// for both review (fired again above) and sib in the very same
+	// critical section, while sib's first fire is still blocked on
+	// release. Assert the kernel has not launched a second dispatch of
+	// sib here — the exact double-dispatch race window the review
+	// flagged.
+	if got := ex.callCount("sib"); got != 1 {
+		t.Fatalf("sib was dispatched %d times before its first execution finished — double-dispatch", got)
+	}
+
+	close(ex.release)
+
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for Run to finish after releasing sib")
+	}
+
+	if got := ex.callCount("sib"); got != 2 {
+		t.Errorf("sib calls = %d, want 2 (one before the rewind, one fresh fire after)", got)
+	}
+	if got := ex.maxConcurrent(); got > 1 {
+		t.Errorf("sib had %d concurrent executions, want at most 1 (double-dispatch)", got)
+	}
+	if got := ex.callCount("draft"); got != 2 {
+		t.Errorf("draft calls = %d, want 2", got)
+	}
+	if got := ex.callCount("review"); got != 2 {
+		t.Errorf("review calls = %d, want 2", got)
+	}
+	if !env.State.Completed("draft") || !env.State.Completed("review") || !env.State.Completed("sib") {
+		t.Errorf("expected all nodes to have fired: draft=%v review=%v sib=%v",
+			env.State.Completed("draft"), env.State.Completed("review"), env.State.Completed("sib"))
+	}
+}
+
+// droppedDependencyExecutor models a backtrack target ("draft") with a
+// child ("z") that also depends on a sibling branch ("w") which is NOT
+// reachable from draft and therefore falls outside the refire set. It
+// reproduces the PR #260 review's dropped-dependency finding (FIX 1,
+// mode 2): the in-degree recompute must not treat every edge from
+// outside the refire set as already satisfied — only ones from nodes
+// that have actually completed.
+type droppedDependencyExecutor struct {
+	kind      NodeKind
+	target    string // draft
+	reviewer  string // requests a rewind to target on its first fire
+	sideSrc   string // w: independent branch, blocks until released
+	dependent string // z: depends on both target and sideSrc
+
+	mu                  sync.Mutex
+	calls               map[string]int
+	sideDone            bool
+	firedDependentEarly bool
+	release             chan struct{}
+
+	sideStartedOnce  sync.Once
+	sideStarted      chan struct{}
+	reviewSecondOnce sync.Once
+	reviewSecond     chan struct{}
+}
+
+func newDroppedDependencyExecutor(kind NodeKind, target, reviewer, sideSrc, dependent string) *droppedDependencyExecutor {
+	return &droppedDependencyExecutor{
+		kind: kind, target: target, reviewer: reviewer, sideSrc: sideSrc, dependent: dependent,
+		calls:        map[string]int{},
+		release:      make(chan struct{}),
+		sideStarted:  make(chan struct{}),
+		reviewSecond: make(chan struct{}),
+	}
+}
+
+func (e *droppedDependencyExecutor) Kind() NodeKind { return e.kind }
+
+func (e *droppedDependencyExecutor) Execute(_ context.Context, _ *Env, node *Node, _ PortValues) (Result, error) {
+	e.mu.Lock()
+	e.calls[node.ID]++
+	n := e.calls[node.ID]
+	e.mu.Unlock()
+
+	if node.ID == e.sideSrc {
+		e.sideStartedOnce.Do(func() { close(e.sideStarted) })
+		<-e.release
+		e.mu.Lock()
+		e.sideDone = true
+		e.mu.Unlock()
+	}
+
+	if node.ID == e.dependent {
+		e.mu.Lock()
+		if !e.sideDone {
+			e.firedDependentEarly = true
+		}
+		e.mu.Unlock()
+	}
+
+	if node.ID == e.reviewer && n == 2 {
+		e.reviewSecondOnce.Do(func() { close(e.reviewSecond) })
+	}
+
+	r := NewResult()
+	r.Outputs["value"] = node.ID
+	if node.ID == e.reviewer && n == 1 {
+		r.Backtrack = &BacktrackRequest{TargetNode: e.target, Reason: "rejected", RejectedApproach: "v1"}
+	}
+	return r, nil
+}
+
+func (e *droppedDependencyExecutor) callCount(id string) int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.calls[id]
+}
+
+func (e *droppedDependencyExecutor) firedEarly() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.firedDependentEarly
+}
+
+// TestKernel_BacktrackDoesNotDropPendingOutsideDependency is the
+// required regression test for the dropped-dependency mode of FIX 1: a
+// refire-set member with an in-edge from outside the refire set that
+// has not yet completed must not fire early with a missing input.
+func TestKernel_BacktrackDoesNotDropPendingOutsideDependency(t *testing.T) {
+	t.Parallel()
+	kind := NodeKind("fake_backtrack_dropdep")
+	g := &Graph{
+		SpecVersion: SpecVersion, ID: "bt-dropdep-graph", Entrypoints: []string{"root"},
+		Nodes: []Node{
+			{ID: "root", Kind: kind},
+			{ID: "draft", Kind: kind},
+			{ID: "w", Kind: kind},
+			{ID: "review", Kind: kind},
+			{ID: "z", Kind: kind},
+		},
+		Edges: []Edge{
+			{From: EndpointRef{Node: "root", Port: "value"}, To: EndpointRef{Node: "draft", Port: "in"}},
+			{From: EndpointRef{Node: "root", Port: "value"}, To: EndpointRef{Node: "w", Port: "in"}},
+			{From: EndpointRef{Node: "draft", Port: "value"}, To: EndpointRef{Node: "review", Port: "in"}},
+			{From: EndpointRef{Node: "draft", Port: "value"}, To: EndpointRef{Node: "z", Port: "in"}},
+			{From: EndpointRef{Node: "w", Port: "value"}, To: EndpointRef{Node: "z", Port: "in2"}},
+		},
+	}
+	ex := newDroppedDependencyExecutor(kind, "draft", "review", "w", "z")
+	k := NewKernel(WithExecutor(ex))
+	env := &Env{RunID: "bt-dropdep-run", Graph: g}
+	applyEnvDefaults(env)
+
+	runErr := make(chan error, 1)
+	go func() { runErr <- k.Run(context.Background(), env) }()
+
+	select {
+	case <-ex.sideStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for w's fire")
+	}
+	select {
+	case <-ex.reviewSecond:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for review's second fire — draft never refired")
+	}
+
+	// draft has already refired and run its promote-downstream section
+	// for review and z in the same critical section, while w (z's
+	// other, refire-set-external dependency) is still blocked. If the
+	// in-degree recompute dropped w's still-pending edge — treating
+	// every non-refire predecessor as already satisfied regardless of
+	// completion — z would already have fired here with a missing
+	// input port.
+	if got := ex.callCount("z"); got != 0 {
+		t.Fatalf("z fired %d times before w produced its output — dropped dependency", got)
+	}
+
+	close(ex.release)
+
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for Run to finish after releasing w")
+	}
+
+	if ex.firedEarly() {
+		t.Error("z fired before w completed")
+	}
+	if got := ex.callCount("z"); got != 1 {
+		t.Errorf("z calls = %d, want 1", got)
+	}
+	if !env.State.Completed("root") || !env.State.Completed("draft") || !env.State.Completed("w") || !env.State.Completed("z") {
+		t.Errorf("expected root/draft/w/z to have fired")
 	}
 }
