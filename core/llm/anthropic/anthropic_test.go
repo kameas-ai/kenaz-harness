@@ -21,10 +21,10 @@ import (
 // disconnects). Each test constructs one via newFakeServer.
 type fakeServer struct {
 	*httptest.Server
-	mu              sync.Mutex
-	lastBody        []byte
-	lastHeaders     http.Header
-	requestCount    int
+	mu           sync.Mutex
+	lastBody     []byte
+	lastHeaders  http.Header
+	requestCount int
 }
 
 // newFakeServer builds a fakeServer whose handler is supplied by the
@@ -192,10 +192,10 @@ func TestAdapter_EmptyResponse(t *testing.T) {
 func TestAdapter_ErrorClassification(t *testing.T) {
 	// Table-driven: status, body → expected typed-error matcher.
 	cases := []struct {
-		name       string
-		status     int
-		body       string
-		assertErr  func(t *testing.T, err error)
+		name      string
+		status    int
+		body      string
+		assertErr func(t *testing.T, err error)
 	}{
 		{
 			name:   "401 auth",
@@ -789,6 +789,46 @@ func TestConvertContent_ToolResult_NormalizesObjectPayload(t *testing.T) {
 				t.Fatalf("convertContent did not emit tool_result: %+v", out)
 			}
 			tc.want(t, out[0]["content"])
+		})
+	}
+}
+
+// TestConvertContent_ToolResult_IsError is WP01 of
+// tool-error-legibility-01PMDL02: the wire renderer already emits
+// is_error when ToolResult.IsError is set, but until this mission that
+// flag was never threaded from the live chat path. This golden pins the
+// existing behavior (present-when-true, absent-when-false) so a future
+// regression on either side of the seam is caught here.
+func TestConvertContent_ToolResult_IsError(t *testing.T) {
+	cases := []struct {
+		name        string
+		isError     bool
+		wantPresent bool
+	}{
+		{name: "failing tool result emits is_error true", isError: true, wantPresent: true},
+		{name: "succeeding tool result omits is_error", isError: false, wantPresent: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			parts := []llm.ContentBlock{{
+				Type: "tool_result",
+				ToolResult: &llm.ToolResult{
+					ToolUseID: "tu_1",
+					Content:   json.RawMessage(`"boom"`),
+					IsError:   tc.isError,
+				},
+			}}
+			out := convertContent(parts)
+			if len(out) != 1 || out[0]["type"] != "tool_result" {
+				t.Fatalf("convertContent did not emit tool_result: %+v", out)
+			}
+			isErr, present := out[0]["is_error"]
+			if present != tc.wantPresent {
+				t.Fatalf("is_error present = %v, want %v (block=%+v)", present, tc.wantPresent, out[0])
+			}
+			if tc.wantPresent && isErr != true {
+				t.Fatalf("is_error = %v, want true", isErr)
+			}
 		})
 	}
 }

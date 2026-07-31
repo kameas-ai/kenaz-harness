@@ -239,7 +239,12 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 			// context.DeadlineExceeded string.
 			if !errors.Is(callErr, context.DeadlineExceeded) {
 				tr = ToolResult{
-					Content: callErr.Error(),
+					// WP02 (tool-error-legibility-01PMDL02): append a
+					// conservative environment-drift hint when the raw
+					// error signature-matches a well-known case
+					// ("no such file or directory", "permission denied",
+					// "not found"). Never rewrites callErr.Error().
+					Content: AppendEnvironmentDriftHint(callErr.Error()),
 					IsError: true,
 				}
 			}
@@ -340,6 +345,7 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 			Name:       oc.call.Name,
 			ToolCallID: oc.call.ID,
 			Content:    oc.result.Content,
+			IsError:    oc.result.IsError,
 		})
 		for _, e := range oc.events.Events {
 			res.Events.Append(e)

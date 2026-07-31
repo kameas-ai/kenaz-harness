@@ -136,6 +136,159 @@ func TestStreamWireShape(t *testing.T) {
 	}
 }
 
+// TestStreamEmbeddedToolCallExtraction verifies WP03: tolerant extraction of
+// JSON-shaped tool-call envelopes leaked into assistant prose (a common
+// llama.cpp/Ollama/LM Studio failure mode) is applied to the custom-openai
+// streaming adapter, including when the envelope is wrapped in a ```json
+// fence.
+func TestStreamEmbeddedToolCallExtraction(t *testing.T) {
+	content := "Let me check that for you.\n\n```json\n" +
+		`{"type": "function", "name": "get_weather", "parameters": {"city": "Boise"}}` +
+		"\n```\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		frame := map[string]any{
+			"choices": []map[string]any{
+				{"delta": map[string]any{"content": content}, "finish_reason": "stop"},
+			},
+		}
+		data, _ := json.Marshal(frame)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	a := &Adapter{
+		httpc:     srv.Client(),
+		templates: &Registry{templates: nil, byID: map[string]*Template{}},
+	}
+	prof := llm.ProviderProfile{
+		ID:       "test",
+		Kind:     Kind,
+		Model:    "llama-3",
+		Endpoint: srv.URL + "/v1",
+		Cred:     llm.CredentialReference{Kind: "env", Locator: "TEST"},
+		Defaults: map[string]any{"auth_scheme": "none"},
+	}
+	req := llm.GenerationRequest{
+		ProfileID: "test",
+		Messages:  []llm.Message{llm.NewTextMessage(llm.RoleUser, "what's the weather in Boise?")},
+	}
+
+	stream, err := a.Stream(context.Background(), req, prof, nil)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for range stream.Events() {
+	}
+	resp, err := stream.Final()
+	if err != nil {
+		t.Fatalf("Final: %v", err)
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("ToolCalls = %d, want 1 (extracted from prose): %+v", len(resp.ToolCalls), resp.ToolCalls)
+	}
+	if resp.ToolCalls[0].Name != "get_weather" {
+		t.Errorf("ToolCalls[0].Name = %q, want get_weather", resp.ToolCalls[0].Name)
+	}
+	var args map[string]any
+	if err := json.Unmarshal(resp.ToolCalls[0].Input, &args); err != nil {
+		t.Fatalf("unmarshal tool args: %v", err)
+	}
+	if args["city"] != "Boise" {
+		t.Errorf("tool args city = %v, want Boise", args["city"])
+	}
+	for _, block := range resp.Content {
+		if strings.Contains(block.Text, `"type": "function"`) {
+			t.Errorf("residual text still contains the raw envelope: %q", block.Text)
+		}
+	}
+}
+
+// TestStreamNativeToolCallsNoDoubleExtraction verifies that when the
+// endpoint already returns native tool_calls structure, incidental
+// JSON-looking prose in the same response is NOT also parsed as an
+// embedded tool-call envelope — that would cause a duplicate tool
+// invocation, which is worse than the missed-extraction bug WP03 fixes.
+func TestStreamNativeToolCallsNoDoubleExtraction(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		// Native structured tool call.
+		toolFrame := map[string]any{
+			"choices": []map[string]any{
+				{
+					"delta": map[string]any{
+						"tool_calls": []map[string]any{
+							{
+								"index": 0,
+								"id":    "call_1",
+								"type":  "function",
+								"function": map[string]any{
+									"name":      "get_weather",
+									"arguments": `{"city":"Boise"}`,
+								},
+							},
+						},
+					},
+					"finish_reason": nil,
+				},
+			},
+		}
+		data, _ := json.Marshal(toolFrame)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+
+		// Incidental content that happens to look like a second
+		// tool-call envelope but arrives alongside the native call.
+		contentFrame := map[string]any{
+			"choices": []map[string]any{
+				{
+					"delta":         map[string]any{"content": `Example: {"type": "function", "name": "unrelated", "parameters": {}}`},
+					"finish_reason": "tool_calls",
+				},
+			},
+		}
+		data, _ = json.Marshal(contentFrame)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	a := &Adapter{
+		httpc:     srv.Client(),
+		templates: &Registry{templates: nil, byID: map[string]*Template{}},
+	}
+	prof := llm.ProviderProfile{
+		ID:       "test",
+		Kind:     Kind,
+		Model:    "llama-3",
+		Endpoint: srv.URL + "/v1",
+		Cred:     llm.CredentialReference{Kind: "env", Locator: "TEST"},
+		Defaults: map[string]any{"auth_scheme": "none"},
+	}
+	req := llm.GenerationRequest{
+		ProfileID: "test",
+		Messages:  []llm.Message{llm.NewTextMessage(llm.RoleUser, "what's the weather in Boise?")},
+	}
+
+	stream, err := a.Stream(context.Background(), req, prof, nil)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for range stream.Events() {
+	}
+	resp, err := stream.Final()
+	if err != nil {
+		t.Fatalf("Final: %v", err)
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("ToolCalls = %d, want 1 (native only, no double-parse): %+v", len(resp.ToolCalls), resp.ToolCalls)
+	}
+	if resp.ToolCalls[0].Name != "get_weather" {
+		t.Errorf("ToolCalls[0].Name = %q, want get_weather (native), got extraction leakage", resp.ToolCalls[0].Name)
+	}
+}
+
 // TestGateOutgoingToolsBlocked verifies tools request is blocked when matrix says false.
 func TestGateOutgoingToolsBlocked(t *testing.T) {
 	// Create adapter with a fake store that returns tool_calling:false.
