@@ -77,6 +77,12 @@ type Message struct {
 	// ToolCalls is the (subset of) tool-call records the assistant
 	// emitted; populated by LLMProvider on responses.
 	ToolCalls []ToolCallRequest
+	// IsError marks a Role="tool" message as carrying a failed tool
+	// result (tool-error-legibility-01PMDL02 WP01). Threaded from
+	// ToolResult.IsError in exec_dispatch.go so the LLM provider adapter
+	// can surface it on the wire (Anthropic tool_result.is_error, etc.)
+	// instead of silently rendering a failure as a normal success.
+	IsError bool
 }
 
 // ToolCallRequest is one model-emitted tool invocation.

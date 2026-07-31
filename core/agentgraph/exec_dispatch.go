@@ -340,6 +340,7 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 			Name:       oc.call.Name,
 			ToolCallID: oc.call.ID,
 			Content:    oc.result.Content,
+			IsError:    oc.result.IsError,
 		})
 		for _, e := range oc.events.Events {
 			res.Events.Append(e)

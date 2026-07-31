@@ -239,6 +239,15 @@ func TestToolDispatchExecutor_ToolErrorBecomesIsError(t *testing.T) {
 	if len(results) != 1 || !results[0].IsError {
 		t.Errorf("expected IsError result; got %+v", results)
 	}
+
+	// tool-error-legibility-01PMDL02 WP01: the tool-role Message built for
+	// the next LLMNode iteration must carry the same IsError signal —
+	// otherwise the model sees a failed call rendered as an ordinary
+	// success.
+	toolMsgs := res.Outputs["tool_messages"].([]Message)
+	if len(toolMsgs) != 1 || !toolMsgs[0].IsError {
+		t.Errorf("expected tool message IsError=true; got %+v", toolMsgs)
+	}
 }
 
 // TestToolDispatchExecutor_PanicingToolYieldsIsError asserts that a panicking
