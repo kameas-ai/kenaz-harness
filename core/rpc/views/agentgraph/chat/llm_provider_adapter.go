@@ -277,6 +277,7 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 			tr := corellm.ToolResult{
 				ToolUseID: m.ToolCallID,
 				Content:   content,
+				IsError:   m.IsError,
 			}
 			blocks = append(blocks, corellm.ContentBlock{Type: "tool_result", ToolResult: &tr})
 			llmMsgs = append(llmMsgs, corellm.Message{Role: corellm.Role(m.Role), Content: blocks})
