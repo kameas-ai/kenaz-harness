@@ -27,34 +27,40 @@ type providerSpec struct {
 }
 
 // modelEntry is one per-model override row in a provider YAML.
-// Boolean fields mirror the capability constants; integer/slice fields
-// carry attachment limits (multimodal-io-01KQ8TDF FR-005).
+//
+// The capability/knob flags are `*bool` (rather than `bool`) so the loader
+// can distinguish "this row explicitly sets the field" (non-nil) from
+// "this row is silent on the field" (nil) — the latter must inherit the
+// provider-level `defaults:` value instead of zeroing it out. See
+// applyRichEntry / Describe, which merge on that distinction. Integer/slice
+// fields carry attachment limits (multimodal-io-01KQ8TDF FR-005) and are
+// unaffected (they already merge via a nonzero/non-empty check).
 type modelEntry struct {
 	Match          string `yaml:"match"`
-	Streaming      bool   `yaml:"streaming"`
-	ToolCalling    bool   `yaml:"tool_calling"`
-	Vision         bool   `yaml:"vision"`
-	Documents      bool   `yaml:"documents"`
-	JSONMode       bool   `yaml:"json_mode"`
-	PromptCaching  bool   `yaml:"prompt_caching"`
-	Reasoning      bool   `yaml:"reasoning"`
-	Cancellation   bool   `yaml:"cancellation"`
-	UsageReporting bool   `yaml:"usage_reporting"`
+	Streaming      *bool  `yaml:"streaming"`
+	ToolCalling    *bool  `yaml:"tool_calling"`
+	Vision         *bool  `yaml:"vision"`
+	Documents      *bool  `yaml:"documents"`
+	JSONMode       *bool  `yaml:"json_mode"`
+	PromptCaching  *bool  `yaml:"prompt_caching"`
+	Reasoning      *bool  `yaml:"reasoning"`
+	Cancellation   *bool  `yaml:"cancellation"`
+	UsageReporting *bool  `yaml:"usage_reporting"`
 	// StructuredOutput is true when the model/provider supports native
 	// JSON-schema-constrained output (response_format or tool-call workaround
 	// with validated extraction). (structured-output-and-grammar-01KX5R8A FR-002)
-	StructuredOutput bool `yaml:"structured_output"`
+	StructuredOutput *bool `yaml:"structured_output"`
 	// Grammar is true when the model/runtime supports token-level GBNF
 	// grammar constraints. True only for local runtimes (llama.cpp / Ollama).
 	// (structured-output-and-grammar-01KX5R8A FR-002)
-	Grammar bool `yaml:"grammar"`
+	Grammar *bool `yaml:"grammar"`
 	// RegexGrammar is true when the model/runtime supports regex-shorthand
 	// grammar constraints. (structured-output-and-grammar-01KX5R8A FR-002)
-	RegexGrammar bool `yaml:"regex_grammar"`
+	RegexGrammar *bool `yaml:"regex_grammar"`
 	// ImageOutput is true when the model/provider supports generating images
 	// as output (e.g. DALL-E 3, gpt-image-1, Amazon Titan Image).
 	// (multimodal-io-extended-01KQ8TD2 WP05)
-	ImageOutput bool `yaml:"image_output"`
+	ImageOutput *bool `yaml:"image_output"`
 	// ContextWindow is the model's max context length in tokens (0 = unknown).
 	ContextWindow int `yaml:"context_window"`
 	// MaxOutputTokens is the provider's hard cap on completion tokens per
@@ -67,27 +73,28 @@ type modelEntry struct {
 
 	// ParallelToolCalls is true when the model/provider supports issuing
 	// multiple tool calls in a single response (OpenAI parallel_tool_calls).
-	ParallelToolCalls bool `yaml:"parallel_tool_calls"`
+	ParallelToolCalls *bool `yaml:"parallel_tool_calls"`
 	// Seed is true when the provider accepts the seed parameter for
 	// deterministic outputs (OpenAI, OpenRouter; not Anthropic/Bedrock).
-	Seed bool `yaml:"seed"`
+	Seed *bool `yaml:"seed"`
 	// Logprobs is true when the provider supports log-probability output.
-	Logprobs bool `yaml:"logprobs"`
+	Logprobs *bool `yaml:"logprobs"`
 	// TopK is true when the provider supports the top_k sampling parameter
 	// (Anthropic, Bedrock; not OpenAI).
-	TopK bool `yaml:"top_k"`
+	TopK *bool `yaml:"top_k"`
 	// TopP is true when the provider supports the top_p sampling parameter.
-	TopP bool `yaml:"top_p"`
+	TopP *bool `yaml:"top_p"`
 	// FrequencyPenalty is true when the provider supports frequency_penalty.
-	FrequencyPenalty bool `yaml:"frequency_penalty"`
+	FrequencyPenalty *bool `yaml:"frequency_penalty"`
 	// PresencePenalty is true when the provider supports presence_penalty.
-	PresencePenalty bool `yaml:"presence_penalty"`
+	PresencePenalty *bool `yaml:"presence_penalty"`
 	// Batch is true when the provider supports asynchronous batch inference.
-	Batch bool `yaml:"batch"`
+	Batch *bool `yaml:"batch"`
 	// ResponseFormat is true when the adapter honours the ResponseFormat field.
-	ResponseFormat bool `yaml:"response_format"`
+	ResponseFormat *bool `yaml:"response_format"`
 	// ReasoningStyle is the reasoning effort configuration style:
-	// "" | "none" | "effort_string" | "token_budget" | "both".
+	// "" | "none" | "effort_string" | "token_budget" | "both". Empty string
+	// means "row doesn't override" — inherit the provider-level default.
 	ReasoningStyle string `yaml:"reasoning_style"`
 
 	// Attachment limits (multimodal-io-01KQ8TDF FR-005).
@@ -181,24 +188,33 @@ func (c *Catalog) Describe(provider, model string) llm.CapabilityDescriptor {
 	}
 	// Start from defaults.
 	applyDefaults(&desc, spec.Defaults)
-	// Apply the first model glob that matches.
+	// Apply the first model glob that matches. A nil field on the matched
+	// row means "row is silent on this capability" — keep whatever
+	// applyDefaults already populated from the provider-level defaults
+	// rather than zeroing it out (this mirrors applyRichEntry's merge
+	// behaviour below; see WP08).
+	setIfPresent := func(cap llm.Capability, v *bool) {
+		if v != nil {
+			desc.Supported[cap] = *v
+		}
+	}
 	for _, m := range spec.Models {
 		if matchGlob(m.Match, model) {
-			desc.Supported[llm.CapStreaming] = m.Streaming
-			desc.Supported[llm.CapToolCalling] = m.ToolCalling
-			desc.Supported[llm.CapVision] = m.Vision
-			desc.Supported[llm.CapDocuments] = m.Documents
-			desc.Supported[llm.CapJSONMode] = m.JSONMode
-			desc.Supported[llm.CapPromptCaching] = m.PromptCaching
-			desc.Supported[llm.CapReasoning] = m.Reasoning
-			desc.Supported[llm.CapCancellation] = m.Cancellation
-			desc.Supported[llm.CapUsageReporting] = m.UsageReporting
+			setIfPresent(llm.CapStreaming, m.Streaming)
+			setIfPresent(llm.CapToolCalling, m.ToolCalling)
+			setIfPresent(llm.CapVision, m.Vision)
+			setIfPresent(llm.CapDocuments, m.Documents)
+			setIfPresent(llm.CapJSONMode, m.JSONMode)
+			setIfPresent(llm.CapPromptCaching, m.PromptCaching)
+			setIfPresent(llm.CapReasoning, m.Reasoning)
+			setIfPresent(llm.CapCancellation, m.Cancellation)
+			setIfPresent(llm.CapUsageReporting, m.UsageReporting)
 			// Structured-output capability flags (structured-output-and-grammar-01KX5R8A FR-002).
-			desc.Supported[llm.CapStructuredOutput] = m.StructuredOutput
-			desc.Supported[llm.CapGrammar] = m.Grammar
-			desc.Supported[llm.CapRegexGrammar] = m.RegexGrammar
+			setIfPresent(llm.CapStructuredOutput, m.StructuredOutput)
+			setIfPresent(llm.CapGrammar, m.Grammar)
+			setIfPresent(llm.CapRegexGrammar, m.RegexGrammar)
 			// Image output capability flag (multimodal-io-extended-01KQ8TD2 WP05).
-			desc.Supported[llm.CapImageOutput] = m.ImageOutput
+			setIfPresent(llm.CapImageOutput, m.ImageOutput)
 			return desc
 		}
 	}
@@ -298,34 +314,59 @@ func applyRichDefaults(caps *llm.ProviderCapabilities, defaults map[string]any) 
 	}
 }
 
-// applyRichEntry copies all capability flags from a modelEntry into a
-// ProviderCapabilities.
+// applyRichEntry overlays a matched modelEntry's explicitly-set capability
+// flags onto caps, which must already carry the provider-level defaults
+// (via applyRichDefaults). A nil flag means the model row is silent on
+// that capability and caps keeps whatever the provider defaults gave it —
+// this is the merge that was missing before WP08 (model-request-path-live-
+// 01PMDL01): the old wholesale-overwrite copied every field's Go zero
+// value (false) for any knob a model row didn't mention, defeating the
+// provider-level defaults regardless of what they declared.
 func applyRichEntry(caps *llm.ProviderCapabilities, m *modelEntry) {
-	caps.Streaming = m.Streaming
-	caps.ToolCalling = m.ToolCalling
-	caps.Vision = m.Vision
-	caps.Documents = m.Documents
-	caps.JSONMode = m.JSONMode
-	caps.PromptCaching = m.PromptCaching
-	caps.Reasoning = m.Reasoning
-	caps.Cancellation = m.Cancellation
-	caps.UsageReporting = m.UsageReporting
-	caps.StructuredOutput = m.StructuredOutput
-	caps.Grammar = m.Grammar
-	caps.RegexGrammar = m.RegexGrammar
-	caps.ImageOutput = m.ImageOutput
-	caps.ContextWindow = m.ContextWindow
-	caps.MaxOutputTokens = m.MaxOutputTokens
-	caps.ParallelToolCalls = m.ParallelToolCalls
-	caps.Seed = m.Seed
-	caps.Logprobs = m.Logprobs
-	caps.TopK = m.TopK
-	caps.TopP = m.TopP
-	caps.FrequencyPenalty = m.FrequencyPenalty
-	caps.PresencePenalty = m.PresencePenalty
-	caps.Batch = m.Batch
-	caps.ResponseFormat = m.ResponseFormat
-	caps.Reasoning_ = parseReasoningStyle(m.ReasoningStyle)
+	setBool := func(dst *bool, v *bool) {
+		if v != nil {
+			*dst = *v
+		}
+	}
+	setBool(&caps.Streaming, m.Streaming)
+	setBool(&caps.ToolCalling, m.ToolCalling)
+	setBool(&caps.Vision, m.Vision)
+	setBool(&caps.Documents, m.Documents)
+	setBool(&caps.JSONMode, m.JSONMode)
+	setBool(&caps.PromptCaching, m.PromptCaching)
+	setBool(&caps.Reasoning, m.Reasoning)
+	setBool(&caps.Cancellation, m.Cancellation)
+	setBool(&caps.UsageReporting, m.UsageReporting)
+	setBool(&caps.StructuredOutput, m.StructuredOutput)
+	setBool(&caps.Grammar, m.Grammar)
+	setBool(&caps.RegexGrammar, m.RegexGrammar)
+	setBool(&caps.ImageOutput, m.ImageOutput)
+	setBool(&caps.ParallelToolCalls, m.ParallelToolCalls)
+	setBool(&caps.Seed, m.Seed)
+	setBool(&caps.Logprobs, m.Logprobs)
+	setBool(&caps.TopK, m.TopK)
+	setBool(&caps.TopP, m.TopP)
+	setBool(&caps.FrequencyPenalty, m.FrequencyPenalty)
+	setBool(&caps.PresencePenalty, m.PresencePenalty)
+	setBool(&caps.Batch, m.Batch)
+	setBool(&caps.ResponseFormat, m.ResponseFormat)
+
+	// ContextWindow / MaxOutputTokens: no provider-level default concept
+	// exists today (applyRichDefaults never sets them), so a nonzero-only
+	// overlay is equivalent to the old unconditional copy but is also
+	// forward-safe should a defaults-level value ever be introduced.
+	if m.ContextWindow != 0 {
+		caps.ContextWindow = m.ContextWindow
+	}
+	if m.MaxOutputTokens != 0 {
+		caps.MaxOutputTokens = m.MaxOutputTokens
+	}
+
+	// ReasoningStyle: empty means "row doesn't override" — keep whatever
+	// applyRichDefaults resolved from the provider's reasoning_style default.
+	if m.ReasoningStyle != "" {
+		caps.Reasoning_ = parseReasoningStyle(m.ReasoningStyle)
+	}
 }
 
 // ContextWindow returns the curated max context length in tokens for
@@ -484,15 +525,15 @@ func anySliceToStrings(in []any) []string {
 
 func applyDefaults(desc *llm.CapabilityDescriptor, defaults map[string]any) {
 	boolKeymap := map[string]llm.Capability{
-		"streaming":        llm.CapStreaming,
-		"tool_calling":     llm.CapToolCalling,
-		"vision":           llm.CapVision,
-		"documents":        llm.CapDocuments,
-		"json_mode":        llm.CapJSONMode,
-		"prompt_caching":   llm.CapPromptCaching,
-		"reasoning":        llm.CapReasoning,
-		"cancellation":     llm.CapCancellation,
-		"usage_reporting":  llm.CapUsageReporting,
+		"streaming":       llm.CapStreaming,
+		"tool_calling":    llm.CapToolCalling,
+		"vision":          llm.CapVision,
+		"documents":       llm.CapDocuments,
+		"json_mode":       llm.CapJSONMode,
+		"prompt_caching":  llm.CapPromptCaching,
+		"reasoning":       llm.CapReasoning,
+		"cancellation":    llm.CapCancellation,
+		"usage_reporting": llm.CapUsageReporting,
 		// Structured-output capability keys (structured-output-and-grammar-01KX5R8A FR-002).
 		"structured_output": llm.CapStructuredOutput,
 		"grammar":           llm.CapGrammar,

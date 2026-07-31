@@ -9,11 +9,12 @@
 // parser are shared.
 //
 // Accepted OpenAI-wire shape (subset relevant to this library):
-//   POST /v1/chat/completions
-//   Content-Type: application/json
-//   Authorization: Bearer <key>
-//   data: {"choices":[{"delta":{"content":"...","tool_calls":[...]}}]}
-//   data: [DONE]
+//
+//	POST /v1/chat/completions
+//	Content-Type: application/json
+//	Authorization: Bearer <key>
+//	data: {"choices":[{"delta":{"content":"...","tool_calls":[...]}}]}
+//	data: [DONE]
 //
 // (provider-implementation-uniformity-01KQ8V4F WP03)
 package openaiwire
@@ -99,6 +100,9 @@ func KnobsToParams(k *llm.RequestKnobs) map[string]any {
 	}
 	if k.Seed != nil {
 		out["seed"] = *k.Seed
+	}
+	if len(k.StopSequences) > 0 {
+		out["stop"] = k.StopSequences
 	}
 	return out
 }

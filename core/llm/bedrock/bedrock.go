@@ -374,11 +374,11 @@ func resolveAWSConfig(ctx context.Context, profile, region string) (aws.Config, 
 // The auth path is selected by the profile's CredentialReference kind:
 //
 //   - "keychain"    long-lived Bedrock API key (bearer token); the
-//                    cred bytes ARE the key. Routed through the REST
-//                    endpoint with our own event-stream parser.
+//     cred bytes ARE the key. Routed through the REST
+//     endpoint with our own event-stream parser.
 //   - "aws_profile" AWS shared-credentials profile name; the cred
-//                    bytes ARE the profile name. Routed through the
-//                    SDK with SigV4 signing.
+//     bytes ARE the profile name. Routed through the
+//     SDK with SigV4 signing.
 func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof llm.ProviderProfile, cred []byte) (llm.Stream, error) {
 	if len(cred) == 0 {
 		return nil, &llm.ErrAuth{Message: "bedrock: empty credential"}
@@ -409,6 +409,23 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 	if len(system) > 0 {
 		in.System = system
 	}
+
+	// Reasoning (extended thinking) — model-request-path-live-01PMDL01
+	// WP06. Bedrock's Converse API exposes Anthropic's native `thinking`
+	// param under additionalModelRequestFields.reasoning_config (NOT
+	// `thinking` directly — that's the Anthropic-native API's field
+	// name; Bedrock renames it). Capability gating happens one layer up
+	// in the registry's CapabilityGate, same as anthropic.go/azure/
+	// gemini.
+	if req.Reasoning != nil && req.Reasoning.Enabled && req.Reasoning.BudgetTokens > 0 {
+		in.AdditionalModelRequestFields = document.NewLazyDocument(map[string]any{
+			"reasoning_config": map[string]any{
+				"type":          "enabled",
+				"budget_tokens": req.Reasoning.BudgetTokens,
+			},
+		})
+	}
+
 	// Tool serialization — Converse wraps each spec in a
 	// toolConfig.tools[].toolSpec envelope. The tool's input schema is
 	// carried as a smithy `document.Interface` whose JSON encoding is
@@ -422,6 +439,14 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 			return nil, &llm.ErrInvalidRequest{Message: err.Error()}
 		}
 		in.ToolConfig = toolCfg
+	}
+
+	// Sampling knobs — max_tokens/temperature/top_p/stop_sequences
+	// (WP09). Built once via buildInferenceConfig so no single knob
+	// clobbers the others; only assigned when at least one knob was
+	// actually present on the request.
+	if cfg := buildInferenceConfig(req); cfg != nil {
+		in.InferenceConfig = cfg
 	}
 
 	// Structured-output injection (structured-output-and-grammar-01KX5R8A WP03d).
@@ -762,6 +787,168 @@ func toBedrockContentBlocks(parts []llm.ContentBlock) []types.ContentBlock {
 	return out
 }
 
+// buildInferenceConfig assembles Bedrock's InferenceConfiguration from
+// the harness's provider-agnostic sampling knobs (WP09). It is built
+// exactly once and returned as a single struct so that no individual
+// knob (e.g. StopSequences) clobbers the others — the caller assigns
+// the result to ConverseStreamInput.InferenceConfig wholesale.
+//
+// Source precedence mirrors the openaiwire adapter's contract
+// (core/llm/openaiwire/body.go): req.Params (the loose, provider-
+// agnostic knob channel already read by anthropic/gemini/azure) is
+// applied first, then req.Knobs (typed per-request overrides) wins if
+// set — Knobs is the newer, more specific carrier.
+//
+// Returns nil when no knob was present anywhere, so Stream() never
+// assigns an empty *InferenceConfiguration.
+func buildInferenceConfig(req llm.GenerationRequest) *types.InferenceConfiguration {
+	var cfg types.InferenceConfiguration
+	set := false
+
+	if v, ok := req.Params["max_tokens"]; ok {
+		if i, ok := bedrockNumToInt32(v); ok && i > 0 {
+			mt := i
+			cfg.MaxTokens = &mt
+			set = true
+		}
+	}
+	if req.Knobs != nil && req.Knobs.MaxTokens > 0 {
+		mt := int32(req.Knobs.MaxTokens)
+		cfg.MaxTokens = &mt
+		set = true
+	}
+
+	if v, ok := req.Params["temperature"]; ok {
+		if f, ok := bedrockNumToFloat32(v); ok {
+			t := f
+			cfg.Temperature = &t
+			set = true
+		}
+	}
+	if req.Knobs != nil && req.Knobs.Temperature != nil {
+		t := float32(*req.Knobs.Temperature)
+		cfg.Temperature = &t
+		set = true
+	}
+
+	if v, ok := req.Params["top_p"]; ok {
+		if f, ok := bedrockNumToFloat32(v); ok {
+			p := f
+			cfg.TopP = &p
+			set = true
+		}
+	}
+	if req.Knobs != nil && req.Knobs.TopP != nil {
+		p := float32(*req.Knobs.TopP)
+		cfg.TopP = &p
+		set = true
+	}
+
+	if stops := bedrockStopSequences(req.Params); len(stops) > 0 {
+		cfg.StopSequences = stops
+		set = true
+	}
+	// The typed StopSequences field (WP05) is the canonical carrier and
+	// wins over the loose Params channel, mirroring the Knobs-over-Params
+	// precedence applied to the numeric knobs above.
+	if len(req.StopSequences) > 0 {
+		cfg.StopSequences = req.StopSequences
+		set = true
+	}
+
+	if !set {
+		return nil
+	}
+	return &cfg
+}
+
+// bedrockNumToInt32 coerces a Params value into an int32. Params
+// arrives as `any` off the wire (JSON decode, direct Go construction,
+// or a fallback-runner merge) so the concrete type varies: int,
+// int32, int64, float64, or json.Number are all observed in practice.
+func bedrockNumToInt32(v any) (int32, bool) {
+	switch n := v.(type) {
+	case int:
+		return int32(n), true
+	case int32:
+		return n, true
+	case int64:
+		return int32(n), true
+	case float32:
+		return int32(n), true
+	case float64:
+		return int32(n), true
+	case json.Number:
+		if i, err := n.Int64(); err == nil {
+			return int32(i), true
+		}
+		if f, err := n.Float64(); err == nil {
+			return int32(f), true
+		}
+		return 0, false
+	default:
+		return 0, false
+	}
+}
+
+// bedrockNumToFloat32 coerces a Params value into a float32. Same
+// type-variance rationale as bedrockNumToInt32.
+func bedrockNumToFloat32(v any) (float32, bool) {
+	switch n := v.(type) {
+	case float32:
+		return n, true
+	case float64:
+		return float32(n), true
+	case int:
+		return float32(n), true
+	case int32:
+		return float32(n), true
+	case int64:
+		return float32(n), true
+	case json.Number:
+		if f, err := n.Float64(); err == nil {
+			return float32(f), true
+		}
+		return 0, false
+	default:
+		return 0, false
+	}
+}
+
+// bedrockStopSequences extracts a stop-sequence list from Params.
+// GenerationRequest has no typed StopSequences field today, so this
+// is the only channel available; "stop_sequences" is the Bedrock/
+// Converse-native key, "stop" (OpenAI's) is accepted as a fallback so
+// callers that set the more common key still work.
+func bedrockStopSequences(params map[string]any) []string {
+	v, ok := params["stop_sequences"]
+	if !ok {
+		v, ok = params["stop"]
+	}
+	if !ok {
+		return nil
+	}
+	switch vv := v.(type) {
+	case []string:
+		return vv
+	case []any:
+		out := make([]string, 0, len(vv))
+		for _, item := range vv {
+			if s, ok := item.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case string:
+		if vv == "" {
+			return nil
+		}
+		return []string{vv}
+	default:
+		return nil
+	}
+}
+
 // buildToolConfig converts the harness's ToolSpec slice into the
 // Converse SDK's nested ToolConfiguration shape. Each spec becomes
 // one ToolMemberToolSpec; the JSON Schema is wrapped in a
@@ -975,4 +1162,3 @@ func classifyBedrockError(err error) error {
 		return &llm.ErrTransient{Message: msg, Cause: err}
 	}
 }
-

@@ -162,18 +162,18 @@ const CapabilitySchemaVersion = 1
 func (c ProviderCapabilities) ToDescriptor() CapabilityDescriptor {
 	sup := map[Capability]bool{
 		CapStreaming:        c.Streaming,
-		CapToolCalling:     c.ToolCalling,
-		CapVision:          c.Vision,
-		CapDocuments:       c.Documents,
-		CapJSONMode:        c.JSONMode,
-		CapPromptCaching:   c.PromptCaching,
-		CapReasoning:       c.Reasoning,
-		CapCancellation:    c.Cancellation,
-		CapUsageReporting:  c.UsageReporting,
+		CapToolCalling:      c.ToolCalling,
+		CapVision:           c.Vision,
+		CapDocuments:        c.Documents,
+		CapJSONMode:         c.JSONMode,
+		CapPromptCaching:    c.PromptCaching,
+		CapReasoning:        c.Reasoning,
+		CapCancellation:     c.Cancellation,
+		CapUsageReporting:   c.UsageReporting,
 		CapStructuredOutput: c.StructuredOutput,
-		CapGrammar:         c.Grammar,
-		CapRegexGrammar:    c.RegexGrammar,
-		CapImageOutput:     c.ImageOutput,
+		CapGrammar:          c.Grammar,
+		CapRegexGrammar:     c.RegexGrammar,
+		CapImageOutput:      c.ImageOutput,
 	}
 	return CapabilityDescriptor{
 		Provider:  c.Provider,
@@ -295,6 +295,11 @@ type RequestKnobs struct {
 	// ParallelToolCalls, when set, overrides the provider's default
 	// parallel tool-call behaviour. Nil means "use provider default."
 	ParallelToolCalls *bool `json:"parallel_tool_calls,omitempty"`
+
+	// StopSequences overrides the sequences that stop generation when
+	// produced. Nil/empty means "no custom stop sequences; use provider
+	// default."
+	StopSequences []string `json:"stop_sequences,omitempty"`
 
 	// VendorExtensions carries arbitrary provider-specific wire-level
 	// overrides forwarded verbatim to the adapter. Keys should be

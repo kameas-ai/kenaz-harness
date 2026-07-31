@@ -724,6 +724,69 @@ func TestApplyResponseFormatToConverseInput_Grammar_Unsupported(t *testing.T) {
 	}
 }
 
+// TestBuildInferenceConfig_AllKnobsSet verifies max_tokens/temperature/top_p
+// all populate a single *types.InferenceConfiguration together on the
+// aws_profile/SDK path (WP09), and that no field clobbers another.
+func TestBuildInferenceConfig_AllKnobsSet(t *testing.T) {
+	req := llm.GenerationRequest{
+		Params: map[string]any{
+			"max_tokens":  int64(256),
+			"temperature": json.Number("0.55"),
+			"top_p":       0.8,
+		},
+	}
+	cfg := buildInferenceConfig(req)
+	if cfg == nil {
+		t.Fatal("expected non-nil InferenceConfiguration")
+	}
+	if cfg.MaxTokens == nil || *cfg.MaxTokens != 256 {
+		t.Errorf("MaxTokens = %v, want 256", cfg.MaxTokens)
+	}
+	if cfg.Temperature == nil || *cfg.Temperature != float32(0.55) {
+		t.Errorf("Temperature = %v, want 0.55", cfg.Temperature)
+	}
+	if cfg.TopP == nil || *cfg.TopP != float32(0.8) {
+		t.Errorf("TopP = %v, want 0.8", cfg.TopP)
+	}
+}
+
+// TestBuildInferenceConfig_Unset verifies buildInferenceConfig returns nil
+// (not a zero-valued struct) when no sampling knob is present anywhere.
+func TestBuildInferenceConfig_Unset(t *testing.T) {
+	if cfg := buildInferenceConfig(llm.GenerationRequest{}); cfg != nil {
+		t.Fatalf("expected nil InferenceConfiguration, got %+v", cfg)
+	}
+}
+
+// TestBuildInferenceConfig_KnobsOverrideParams verifies the typed
+// req.Knobs carrier wins over req.Params when both set the same field.
+func TestBuildInferenceConfig_KnobsOverrideParams(t *testing.T) {
+	knobTopP := 0.99
+	req := llm.GenerationRequest{
+		Params: map[string]any{"top_p": 0.1},
+		Knobs:  &llm.RequestKnobs{TopP: &knobTopP},
+	}
+	cfg := buildInferenceConfig(req)
+	if cfg == nil || cfg.TopP == nil || *cfg.TopP != float32(0.99) {
+		t.Fatalf("expected TopP=0.99 (Knobs wins), got %+v", cfg)
+	}
+}
+
+// TestBuildInferenceConfig_StopSequences verifies stop sequences sourced
+// from Params reach InferenceConfiguration.StopSequences.
+func TestBuildInferenceConfig_StopSequences(t *testing.T) {
+	req := llm.GenerationRequest{
+		Params: map[string]any{"stop_sequences": []any{"STOP", "DONE"}},
+	}
+	cfg := buildInferenceConfig(req)
+	if cfg == nil {
+		t.Fatal("expected non-nil InferenceConfiguration")
+	}
+	if len(cfg.StopSequences) != 2 || cfg.StopSequences[0] != "STOP" || cfg.StopSequences[1] != "DONE" {
+		t.Errorf("StopSequences = %v, want [STOP DONE]", cfg.StopSequences)
+	}
+}
+
 // TestApplyResponseFormatToConverseBodyJSON_JSON verifies the bearer/REST path
 // appends a system block for Mode="json".
 func TestApplyResponseFormatToConverseBodyJSON_JSON(t *testing.T) {

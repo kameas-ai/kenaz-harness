@@ -25,5 +25,37 @@ attrs:
   fallback_chain_id:
     type: string
     description: "Optional fallback chain ID to use when this node's primary model call fails (model-fallback-routing-01NDFSEX04). Overrides session and app-level defaults."
+  top_p:
+    type: float
+    min: 0.0
+    max: 1.0
+    description: "Nucleus sampling probability mass; 0 = provider default."
+  top_k:
+    type: int
+    min: 0
+    description: "Top-k sampling cutoff; 0 = provider default."
+  frequency_penalty:
+    type: float
+    min: -2.0
+    max: 2.0
+    description: "Penalizes tokens by their existing frequency in the generation so far; 0 = provider default."
+  presence_penalty:
+    type: float
+    min: -2.0
+    max: 2.0
+    description: "Penalizes tokens that have already appeared at all so far; 0 = provider default."
+  seed:
+    type: int
+    description: "Best-effort deterministic sampling seed; 0 = no seed requested."
+  parallel_tool_calls:
+    type: bool
+    description: "When true, allow the model to request multiple tool calls in one turn (provider-dependent)."
+  stop_sequences:
+    type: "[]string"
+    description: "Sequences that stop generation when produced; empty = no custom stop sequences."
+  reasoning_budget_tokens:
+    type: int
+    min: 0
+    description: "Extended-thinking/reasoning token budget; 0 = reasoning disabled (provider default)."
 budget: llm
 budget_consumes: [tokens, llm_calls, cost_usd]

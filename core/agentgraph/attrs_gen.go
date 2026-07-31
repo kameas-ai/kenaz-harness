@@ -865,6 +865,9 @@ type ModelAttrs struct {
 	// FallbackChainId: Optional fallback chain ID to use when this node's primary model call fails (model-fallback-routing-01NDFSEX04). Overrides session and app-level defaults.
 	FallbackChainId string `json:"fallback_chain_id,omitempty" yaml:"fallback_chain_id,omitempty"`
 
+	// FrequencyPenalty: Penalizes tokens by their existing frequency in the generation so far; 0 = provider default.
+	FrequencyPenalty float64 `json:"frequency_penalty,omitempty" yaml:"frequency_penalty,omitempty"`
+
 	// JsonSchema: Optional JSON schema constraint for structured output.
 	JsonSchema map[string]any `json:"json_schema,omitempty" yaml:"json_schema,omitempty"`
 
@@ -874,8 +877,23 @@ type ModelAttrs struct {
 	// Model: Provider-specific model name.
 	Model string `json:"model,omitempty" yaml:"model,omitempty"`
 
+	// ParallelToolCalls: When true, allow the model to request multiple tool calls in one turn (provider-dependent).
+	ParallelToolCalls bool `json:"parallel_tool_calls,omitempty" yaml:"parallel_tool_calls,omitempty"`
+
+	// PresencePenalty: Penalizes tokens that have already appeared at all so far; 0 = provider default.
+	PresencePenalty float64 `json:"presence_penalty,omitempty" yaml:"presence_penalty,omitempty"`
+
 	// Provider: LLM provider identifier (e.g. anthropic, bedrock).
 	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
+
+	// ReasoningBudgetTokens: Extended-thinking/reasoning token budget; 0 = reasoning disabled (provider default).
+	ReasoningBudgetTokens int `json:"reasoning_budget_tokens,omitempty" yaml:"reasoning_budget_tokens,omitempty"`
+
+	// Seed: Best-effort deterministic sampling seed; 0 = no seed requested.
+	Seed int `json:"seed,omitempty" yaml:"seed,omitempty"`
+
+	// StopSequences: Sequences that stop generation when produced; empty = no custom stop sequences.
+	StopSequences []string `json:"stop_sequences,omitempty" yaml:"stop_sequences,omitempty"`
 
 	// StreamToChat: When true, stream tokens directly to the active chat surface.
 	StreamToChat bool `json:"stream_to_chat,omitempty" yaml:"stream_to_chat,omitempty"`
@@ -888,6 +906,12 @@ type ModelAttrs struct {
 
 	// ToolAllowlist: Tool IDs this node may call. Empty = allow-all per policy.
 	ToolAllowlist []string `json:"tool_allowlist,omitempty" yaml:"tool_allowlist,omitempty"`
+
+	// TopK: Top-k sampling cutoff; 0 = provider default.
+	TopK int `json:"top_k,omitempty" yaml:"top_k,omitempty"`
+
+	// TopP: Nucleus sampling probability mass; 0 = provider default.
+	TopP float64 `json:"top_p,omitempty" yaml:"top_p,omitempty"`
 }
 
 func (ModelAttrs) nodeAttrsMarker() {}
@@ -898,17 +922,41 @@ func (ModelAttrs) nodeAttrsMarker() {}
 // (`model.attrs.<attr>.<rule>: ...`) so callers can grep for the
 // constraint that fired.
 func (a ModelAttrs) Validate() error {
+	if a.FrequencyPenalty < -2 {
+		return fmt.Errorf("frequency_penalty.min: got %v, want >= %v", a.FrequencyPenalty, -2)
+	}
+	if a.FrequencyPenalty > 2 {
+		return fmt.Errorf("frequency_penalty.max: got %v, want <= %v", a.FrequencyPenalty, 2)
+	}
 	if a.MaxTokens != 0 && float64(a.MaxTokens) < 0 {
 		return fmt.Errorf("max_tokens.min: got %d, want >= %v", a.MaxTokens, 0)
 	}
 	if a.Model == "" {
 		return fmt.Errorf("model: model is required (manifest constraint)")
 	}
+	if a.PresencePenalty < -2 {
+		return fmt.Errorf("presence_penalty.min: got %v, want >= %v", a.PresencePenalty, -2)
+	}
+	if a.PresencePenalty > 2 {
+		return fmt.Errorf("presence_penalty.max: got %v, want <= %v", a.PresencePenalty, 2)
+	}
+	if a.ReasoningBudgetTokens != 0 && float64(a.ReasoningBudgetTokens) < 0 {
+		return fmt.Errorf("reasoning_budget_tokens.min: got %d, want >= %v", a.ReasoningBudgetTokens, 0)
+	}
 	if a.Temperature < 0 {
 		return fmt.Errorf("temperature.min: got %v, want >= %v", a.Temperature, 0)
 	}
 	if a.Temperature > 2 {
 		return fmt.Errorf("temperature.max: got %v, want <= %v", a.Temperature, 2)
+	}
+	if a.TopK != 0 && float64(a.TopK) < 0 {
+		return fmt.Errorf("top_k.min: got %d, want >= %v", a.TopK, 0)
+	}
+	if a.TopP < 0 {
+		return fmt.Errorf("top_p.min: got %v, want >= %v", a.TopP, 0)
+	}
+	if a.TopP > 1 {
+		return fmt.Errorf("top_p.max: got %v, want <= %v", a.TopP, 1)
 	}
 	return nil
 }

@@ -124,16 +124,29 @@ func TestComposeSystemPrompt(t *testing.T) {
 // capturingRegistry records the GenerationRequest handed to Stream so the
 // test can assert the composed System field. It returns a pre-canned
 // closed stream.
+//
+// profile is the corellm.ProviderProfile Profile() returns; the zero
+// value (default, unset — matches prior hardcoded behavior) unless a
+// test opts in via withProfile, e.g. to exercise a custom Retry policy
+// (model-request-path-live-01PMDL01 WP02).
 type capturingRegistry struct {
 	mu      sync.Mutex
 	lastReq corellm.GenerationRequest
+	profile corellm.ProviderProfile
+}
+
+// withProfile sets the ProviderProfile returned by Profile() and returns
+// the receiver for fluent construction in tests.
+func (r *capturingRegistry) withProfile(p corellm.ProviderProfile) *capturingRegistry {
+	r.profile = p
+	return r
 }
 
 func (r *capturingRegistry) RegisterAdapter(_ corellm.ProviderAdapter)      {}
 func (r *capturingRegistry) LoadProfiles(_ []corellm.ProviderProfile) error { return nil }
-func (r *capturingRegistry) Evict(_ string) error                          { return nil }
+func (r *capturingRegistry) Evict(_ string) error                           { return nil }
 func (r *capturingRegistry) Profile(_ string) (corellm.ProviderProfile, error) {
-	return corellm.ProviderProfile{}, nil
+	return r.profile, nil
 }
 func (r *capturingRegistry) PreflightAll(_ context.Context) []corellm.PreflightResult { return nil }
 func (r *capturingRegistry) Stream(_ context.Context, req corellm.GenerationRequest) (corellm.Stream, error) {

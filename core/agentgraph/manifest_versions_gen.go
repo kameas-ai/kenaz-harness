@@ -178,7 +178,7 @@ const (
 
 	// ModelManifestFingerprint is the sha256 of the behavior-affecting
 	// subset of `kind: model` at the time of last codegen.
-	ModelManifestFingerprint = "bf29804d11bfe833d5dde332ccd8c72ad7adcb31d43c5e00a394f9a0c4569fad"
+	ModelManifestFingerprint = "ac16f050dab4de976de8a75e606a8db369d34ec5676ad1a43a1b3e2caf01c5ac"
 
 	// ParallelManifestVersion is the behavior-contract semver for `kind: parallel`.
 	// Bump this in the manifest's `manifest_version:` field when any

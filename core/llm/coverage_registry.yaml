@@ -280,6 +280,25 @@ entries:
     adapter: bedrock
     unsupported: "internal session tracking — never sent on the wire"
 
+  # StopSequences — typed top-level field (model-request-path-live-01PMDL01
+  # WP05); custom sequences that halt generation when produced.
+  - struct: GenerationRequest
+    field: StopSequences
+    adapter: anthropic
+    tests: [TestAnthropicAdapter_StopSequences_StopSequencesSerialized]
+  - struct: GenerationRequest
+    field: StopSequences
+    adapter: openai
+    tests: [TestOpenAIAdapter_StopSequences_StopSequencesSerialized]
+  - struct: GenerationRequest
+    field: StopSequences
+    adapter: openrouter
+    tests: [TestOpenRouterAdapter_StopSequences_StopSequencesSerialized]
+  - struct: GenerationRequest
+    field: StopSequences
+    adapter: bedrock
+    tests: [TestBedrockAdapter_StopSequences_StopSequencesSerialized]
+
   # ============================================================
   # Response fields
   # ============================================================

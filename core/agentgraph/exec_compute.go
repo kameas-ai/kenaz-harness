@@ -114,14 +114,67 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 		t := a.Temperature
 		tempPtr = &t
 	}
+	// The rest of the ModelAttrs knob surface (model-request-path-live-
+	// 01PMDL01 WP05) follows the same zero-means-unset convention as
+	// Temperature above: codegen emits bare value types for manifest
+	// attrs (no *T), so a zero value is indistinguishable from "not
+	// authored" — matching Temperature's pre-existing limitation.
+	var topPPtr *float64
+	if a.TopP != 0 {
+		v := a.TopP
+		topPPtr = &v
+	}
+	var topKPtr *int
+	if a.TopK != 0 {
+		v := a.TopK
+		topKPtr = &v
+	}
+	var freqPenaltyPtr *float64
+	if a.FrequencyPenalty != 0 {
+		v := a.FrequencyPenalty
+		freqPenaltyPtr = &v
+	}
+	var presPenaltyPtr *float64
+	if a.PresencePenalty != 0 {
+		v := a.PresencePenalty
+		presPenaltyPtr = &v
+	}
+	var seedPtr *int
+	if a.Seed != 0 {
+		v := a.Seed
+		seedPtr = &v
+	}
+	var parallelToolCallsPtr *bool
+	if a.ParallelToolCalls {
+		v := a.ParallelToolCalls
+		parallelToolCallsPtr = &v
+	}
+	// ReasoningBudgetTokens follows the same zero-means-unset convention
+	// (model-request-path-live-01PMDL01 WP06b): a node that doesn't author
+	// reasoning_budget_tokens must not force reasoning on with a budget of
+	// zero.
+	var reasoningBudgetPtr *int
+	if a.ReasoningBudgetTokens != 0 {
+		v := a.ReasoningBudgetTokens
+		reasoningBudgetPtr = &v
+	}
 	req := LLMRequest{
-		Provider:     a.Provider,
-		Model:        a.Model,
-		SystemPrompt: systemPrompt,
-		Messages:     msgs,
-		Tools:        tools,
-		MaxTokens:    a.MaxTokens,
-		Temperature:  tempPtr,
+		Provider:              a.Provider,
+		Model:                 a.Model,
+		SystemPrompt:          systemPrompt,
+		Messages:              msgs,
+		Tools:                 tools,
+		MaxTokens:             a.MaxTokens,
+		Temperature:           tempPtr,
+		TopP:                  topPPtr,
+		TopK:                  topKPtr,
+		FrequencyPenalty:      freqPenaltyPtr,
+		PresencePenalty:       presPenaltyPtr,
+		Seed:                  seedPtr,
+		ParallelToolCalls:     parallelToolCallsPtr,
+		StopSequences:         append([]string(nil), a.StopSequences...),
+		ReasoningBudgetTokens: reasoningBudgetPtr,
+		FallbackChainId:       a.FallbackChainId,
 	}
 
 	if env.Counters != nil {
@@ -1031,6 +1084,7 @@ func (escalateExecutor) Execute(ctx context.Context, env *Env, node *Node, input
 		Messages: []Message{
 			{Role: "user", Content: "Re-do this with higher quality:\n\n" + draft},
 		},
+		FallbackChainId: a.FallbackChainId,
 	})
 	if err != nil {
 		return res, fmt.Errorf("escalate: node %q: %w", node.ID, err)
