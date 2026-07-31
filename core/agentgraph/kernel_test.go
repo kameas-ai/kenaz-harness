@@ -340,6 +340,142 @@ func TestKernel_FailureAnnotationsSurviveRebuildState(t *testing.T) {
 	}
 }
 
+// TestKernel_LadderStateSurvivesRebuildState pins the fix for a gap in
+// RebuildState: before, EventLadderRung / EventEscalateTriggered were
+// never replayed, so a resumed run silently reset every
+// EscalationLadder node back to rung 0 (retry) and cleared the
+// run-global escalation-used flag — a paused-and-resumed run could
+// burn the shared escalation slot a second time, or re-pose a
+// question the human had already answered before the pause.
+//
+// This drives a real escalationLadderExecutor through retry ->
+// escalate -> replan -> ask, committing each Execute call's
+// EventBatch to a real EventLog exactly as the kernel would, then
+// rebuilds a fresh Env from that log and asserts both the per-node
+// rung/retry_attempts and the shared global-escalation flag survive.
+// It also exercises the ask/exhausted disambiguation: once the
+// question is answered, RebuildState must reconstruct the exhausted
+// rung, not the still-pending ask rung.
+func TestKernel_LadderStateSurvivesRebuildState(t *testing.T) {
+	t.Parallel()
+	const runID = "ladder-rebuild-run"
+	const nodeID = "ladder1"
+
+	log := NewMemoryEventLog()
+	k := NewKernel(WithEventLog(log))
+
+	llm := &stubLLM{}
+	env := &Env{RunID: runID, State: NewRunState(), LLM: llm}
+	applyEnvDefaults(env)
+
+	node := &Node{
+		ID:   nodeID,
+		Kind: NodeKindEscalationLadder,
+		Attrs: EscalationLadderAttrs{
+			TargetModel:  "strong-model",
+			PlannerModel: "planner-model",
+			UpstreamNode: "draft",
+			MaxRetries:   1,
+		},
+	}
+	ex := escalationLadderExecutor{}
+	ctx := context.Background()
+
+	commit := func(res Result) {
+		t.Helper()
+		if res.Events.Len() == 0 {
+			return
+		}
+		if _, err := log.Append(res.Events); err != nil {
+			t.Fatalf("log.Append: %v", err)
+		}
+	}
+
+	// Fire 1: rung 0 (retry), retryAttempts 1 <= MaxRetries(1) -> requests
+	// a backtrack and stays on the retry rung.
+	res1, err := ex.Execute(ctx, env, node, PortValues{})
+	if err != nil {
+		t.Fatalf("Execute #1: %v", err)
+	}
+	if res1.Backtrack == nil {
+		t.Fatalf("Execute #1: expected a Backtrack request")
+	}
+	commit(res1)
+
+	// Fire 2: retryAttempts becomes 2 > MaxRetries(1) -> advances straight
+	// into escalate, claims the global slot, and calls Generate.
+	res2, err := ex.Execute(ctx, env, node, PortValues{})
+	if err != nil {
+		t.Fatalf("Execute #2: %v", err)
+	}
+	if res2.Outputs["rung"] != "escalate" {
+		t.Fatalf("Execute #2: rung = %v, want escalate", res2.Outputs["rung"])
+	}
+	commit(res2)
+	if fired, _ := env.State.Outputs(ladderGlobalEscalatedKey)["fired"].(bool); !fired {
+		t.Fatalf("expected global escalation flag set after Execute #2")
+	}
+
+	// Fire 3: rung replan -> calls Generate, advances to ask.
+	res3, err := ex.Execute(ctx, env, node, PortValues{})
+	if err != nil {
+		t.Fatalf("Execute #3: %v", err)
+	}
+	if res3.Outputs["rung"] != "replan" {
+		t.Fatalf("Execute #3: rung = %v, want replan", res3.Outputs["rung"])
+	}
+	commit(res3)
+
+	// Fire 4: rung ask, no answer yet -> pauses on the AskBus.
+	res4, err := ex.Execute(ctx, env, node, PortValues{})
+	if err != nil {
+		t.Fatalf("Execute #4: %v", err)
+	}
+	if !res4.Pause {
+		t.Fatalf("Execute #4: expected Pause=true")
+	}
+	commit(res4)
+
+	// --- Round trip #1: mid-pause, still unanswered. ---
+	env2 := &Env{RunID: runID}
+	applyEnvDefaults(env2)
+	if err := k.RebuildState(env2); err != nil {
+		t.Fatalf("RebuildState (mid-pause): %v", err)
+	}
+	st2 := env2.State.Outputs(ladderStateKey(nodeID))
+	if rung, _ := st2["rung"].(int); rung != ladderRungAsk {
+		t.Errorf("rebuilt (mid-pause) rung = %v, want ladderRungAsk(%d)", rung, ladderRungAsk)
+	}
+	if fired, _ := env2.State.Outputs(ladderGlobalEscalatedKey)["fired"].(bool); !fired {
+		t.Errorf("rebuilt (mid-pause) global escalation flag = false, want true")
+	}
+
+	// Answer the question and fire once more: rung ask -> exhausted.
+	env.Ask.(*memAskBus).Answer(runID, nodeID, "proceed with plan B")
+	res5, err := ex.Execute(ctx, env, node, PortValues{})
+	if err != nil {
+		t.Fatalf("Execute #5: %v", err)
+	}
+	if res5.Outputs["rung"] != "ask" {
+		t.Fatalf("Execute #5: rung = %v, want ask", res5.Outputs["rung"])
+	}
+	commit(res5)
+
+	// --- Round trip #2: post-answer, ladder exhausted. ---
+	env3 := &Env{RunID: runID}
+	applyEnvDefaults(env3)
+	if err := k.RebuildState(env3); err != nil {
+		t.Fatalf("RebuildState (post-answer): %v", err)
+	}
+	st3 := env3.State.Outputs(ladderStateKey(nodeID))
+	if rung, _ := st3["rung"].(int); rung != ladderRungExhausted {
+		t.Errorf("rebuilt (post-answer) rung = %v, want ladderRungExhausted(%d) — the answered ask must not replay as still-pending", rung, ladderRungExhausted)
+	}
+	if fired, _ := env3.State.Outputs(ladderGlobalEscalatedKey)["fired"].(bool); !fired {
+		t.Errorf("rebuilt (post-answer) global escalation flag = false, want true")
+	}
+}
+
 func TestKernel_RejectsMissingEntrypoint(t *testing.T) {
 	t.Parallel()
 	g := &Graph{SpecVersion: SpecVersion, ID: "g", Entrypoints: []string{"missing"}, Nodes: []Node{
