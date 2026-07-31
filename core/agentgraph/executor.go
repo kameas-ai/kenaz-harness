@@ -471,6 +471,44 @@ func (s *RunState) AllCompleted() []string {
 	return out
 }
 
+// CompareAndSetOnce atomically claims a boolean "fired" flag stored
+// under key, returning true only for the caller that flips it from
+// unset to set (every subsequent caller sees it already set and gets
+// false). Added for the escalation ladder's run-global escalation gate
+// (autonomy-recovery-runtime-01PMDL03 WP04 review follow-up): the
+// prior code read Outputs(key), ran a slow, unlocked
+// env.LLM.Generate call, and only then wrote the flag back — a TOCTOU
+// window in which two concurrent EscalationLadder nodes could both
+// observe "not yet escalated" and both fire a real, costed escalation
+// call against the run's single shared slot.
+//
+// Callers must claim the flag with this method *before* starting the
+// gated work, and call ReleaseOnce if that work subsequently fails, so
+// a failed attempt doesn't permanently strand the slot for the rest of
+// the run.
+func (s *RunState) CompareAndSetOnce(key string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if fired, _ := s.values[key]["fired"].(bool); fired {
+		return false
+	}
+	s.values[key] = PortValues{"fired": true}
+	s.completed[key] = true
+	return true
+}
+
+// ReleaseOnce undoes a CompareAndSetOnce claim. Intended for a caller
+// whose gated work failed after claiming the flag: the slot must
+// remain available for the next attempt (this node's own retry, or
+// another node racing for the same key) rather than being permanently
+// burned by one failed call.
+func (s *RunState) ReleaseOnce(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.values, key)
+	delete(s.completed, key)
+}
+
 // ---- registry ----
 
 // executorRegistry is the kind→Executor map. Executor instances are
