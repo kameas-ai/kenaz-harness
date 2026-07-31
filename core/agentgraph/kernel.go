@@ -229,6 +229,33 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 
 	completed := make(map[string]bool, len(idx))
 
+	// inFlight + generation close a double-dispatch / dropped-dependency
+	// hole in the backtrack in-degree recompute below (see the
+	// "refire" block). A node whose in-degree just closed is normally
+	// safe to dispatch immediately — but a sibling fan-out branch below
+	// a backtrack target can already be executing (dispatched off a
+	// path independent of the node that requested the rewind) at the
+	// moment the recompute clears its completed bit and re-arms its
+	// in-degree. Without tracking that a dispatch is already running,
+	// the promote-downstream/backtrackReady paths can fire a second,
+	// concurrent dispatch of the same node while the first is still
+	// executing (double-dispatch — breaks MutatingTools serialization
+	// for ToolNode), or the stale run's own completion can mark the
+	// node done before the fresh run ever happens (dropped dependency).
+	//
+	// inFlight[id] is true from the moment a dispatch goroutine for id
+	// is launched until that goroutine's own completion bookkeeping
+	// runs. generation[id] is bumped every time a backtrack recompute
+	// re-arms id (a member of the refire set); a dispatch captures the
+	// generation value at launch time (myGen) and, on completion,
+	// compares it against the current generation[id] — a mismatch
+	// means a rewind superseded this run's inputs while it was still
+	// executing, so its completion is a no-op for topology purposes
+	// (no completed bit, no child promotion) rather than a real
+	// completion. See the stale-generation guard inside dispatch.
+	inFlight := make(map[string]bool, len(idx))
+	generation := make(map[string]int, len(idx))
+
 	// Concurrency: simple counting semaphore.
 	sem := make(chan struct{}, k.maxInFlight)
 	var wg sync.WaitGroup
@@ -237,8 +264,8 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 	pause := false
 	pauseReason := ""
 
-	var dispatch func(nodeID string)
-	dispatch = func(nodeID string) {
+	var dispatch func(nodeID string, myGen int)
+	dispatch = func(nodeID string, myGen int) {
 		defer wg.Done()
 		defer func() { <-sem }()
 		// Backstop: safeExecute already wraps the executor call, but a
@@ -251,6 +278,7 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 					"run_id", env.RunID, "node_id", nodeID,
 					"panic", fmt.Sprintf("%v", rec), "stack", string(debug.Stack()))
 				mu.Lock()
+				inFlight[nodeID] = false
 				if firstErr == nil {
 					firstErr = fmt.Errorf("agentgraph: kernel: dispatch %q panicked: %v", nodeID, rec)
 				}
@@ -355,6 +383,7 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 			env.State.MarkFailed(nd.ID, err)
 			end(err)
 			mu.Lock()
+			inFlight[nd.ID] = false
 			if firstErr == nil {
 				if errors.Is(err, ErrPaused) {
 					pause = true
@@ -392,6 +421,44 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 		}
 		env.State.SetOutputs(nd.ID, r.Outputs)
 		end(nil)
+
+		// Stale-generation guard: a backtrack targeting an ancestor of
+		// nd.ID may have fired — and re-armed nd.ID for a fresh run —
+		// while THIS execution of nd.ID (captured at dispatch time as
+		// myGen) was already in flight. That is the ordinary
+		// sibling-fan-out case: nd.ID became ready via a path
+		// independent of whatever node requested the rewind, so its
+		// inputs here predate the rewind and are already superseded.
+		// Treat this completion as a no-op for topology purposes —
+		// no completed bit, no child promotion, no honoring of any
+		// backtrack this stale run itself requests — rather than
+		// letting stale data mark the node done (dropping the fresh
+		// dependency) or racing a concurrent fresh dispatch of the
+		// same node (double-dispatch). Freeing inFlight here is also
+		// what the promote-downstream/backtrackReady launch sites are
+		// waiting on, so re-check readiness before returning: if this
+		// node's in-degree already closed while it was stuck in
+		// flight, this is the only place left to fire the fresh run.
+		mu.Lock()
+		stale := generation[nd.ID] != myGen
+		inFlight[nd.ID] = false
+		if stale {
+			var refireNow bool
+			var refireGen int
+			if !completed[nd.ID] && inDeg[nd.ID] <= 0 {
+				inFlight[nd.ID] = true
+				refireGen = generation[nd.ID]
+				refireNow = true
+			}
+			mu.Unlock()
+			if refireNow {
+				sem <- struct{}{}
+				wg.Add(1)
+				go dispatch(nd.ID, refireGen)
+			}
+			return
+		}
+		mu.Unlock()
 
 		// Resolve a typed backtrack request either from the executor's
 		// Result.Backtrack field or (back-compat) the legacy
@@ -456,17 +523,43 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 			for _, id := range refireSet {
 				refire[id] = true
 				delete(completed, id)
+				// Bump the generation of every refire-set member. A
+				// dispatch of one of these nodes that is currently in
+				// flight (the sibling-fan-out case — see the
+				// stale-generation guard above) was launched under an
+				// older generation number; on its own completion it
+				// will observe the mismatch and no-op instead of
+				// marking the node done or promoting its children with
+				// now-superseded outputs.
+				generation[id]++
 			}
 			for _, id := range refireSet {
 				n := 0
 				for _, e := range inEdges[id] {
 					if refire[e.From.Node] {
+						// Edge from another refire-set member: it just
+						// lost its completed bit above, so this
+						// dependency is unsatisfied again regardless of
+						// where it sits in the set.
+						n++
+					} else if !completed[e.From.Node] {
+						// Edge from a node outside the refire set that
+						// simply hasn't fired yet (a concurrent sibling
+						// branch, e.g. root -> {target, W}, W -> this
+						// node). Dropping this edge from the count — as
+						// if every non-refire predecessor were already
+						// satisfied — let a fan-out member become
+						// "ready" and dispatch before W ever produced
+						// its output, firing with a silently missing
+						// input port. Completed non-refire predecessors
+						// correctly contribute 0 (already satisfied,
+						// no need to re-wait).
 						n++
 					}
 				}
 				inDeg[id] = n
 			}
-			backtrackReady = inDeg[bt.TargetNode] <= 0
+			backtrackReady = inDeg[bt.TargetNode] <= 0 && !inFlight[bt.TargetNode]
 		}
 
 		// nd.ID completed this firing UNLESS it is itself downstream of
@@ -492,7 +585,19 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 		// when nd.ID is itself being rewound — its children's in-degree
 		// was already set above by the refire-set computation and must
 		// not be double-decremented here.
-		newReady := []string{}
+		//
+		// A node whose in-degree closes here but is already inFlight
+		// (dispatched off a path independent of nd.ID — the
+		// sibling-fan-out race) is deliberately left alone: launching
+		// it again now would run two concurrent executions of the same
+		// node. Its own completion (the stale-generation guard above)
+		// re-checks readiness once the in-flight slot frees up, so the
+		// fresh run still happens exactly once.
+		type launch struct {
+			id  string
+			gen int
+		}
+		var toLaunch []launch
 		if !refire[nd.ID] {
 			for _, e := range outEdges[nd.ID] {
 				to := e.To.Node
@@ -503,31 +608,45 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 					continue
 				}
 				inDeg[to]--
-				if inDeg[to] <= 0 {
-					newReady = append(newReady, to)
+				if inDeg[to] <= 0 && !inFlight[to] {
+					inFlight[to] = true
+					toLaunch = append(toLaunch, launch{id: to, gen: generation[to]})
 				}
 			}
 		}
+		if backtrackReady {
+			inFlight[bt.TargetNode] = true
+			toLaunch = append(toLaunch, launch{id: bt.TargetNode, gen: generation[bt.TargetNode]})
+		}
 		mu.Unlock()
 
-		for _, nID := range newReady {
-			id := nID
+		for _, l := range toLaunch {
+			id, gen := l.id, l.gen
 			sem <- struct{}{}
 			wg.Add(1)
-			go dispatch(id)
-		}
-		if backtrackReady {
-			sem <- struct{}{}
-			wg.Add(1)
-			go dispatch(bt.TargetNode)
+			go dispatch(id, gen)
 		}
 	}
 
+	// Claim inFlight for every entrypoint under mu before any goroutine
+	// launches. Setting it inline in this loop (read: no lock) would
+	// race against the very goroutines the earlier iterations spawn,
+	// which mutate the same map under mu as soon as they complete.
+	type seed struct {
+		id  string
+		gen int
+	}
+	seeds := make([]seed, 0, len(ready))
+	mu.Lock()
 	for _, id := range ready {
-		nID := id
+		inFlight[id] = true
+		seeds = append(seeds, seed{id: id, gen: generation[id]})
+	}
+	mu.Unlock()
+	for _, s := range seeds {
 		sem <- struct{}{}
 		wg.Add(1)
-		go dispatch(nID)
+		go dispatch(s.id, s.gen)
 	}
 	wg.Wait()
 
