@@ -305,6 +305,13 @@ type RunState struct {
 	// userAnswer is set by the kernel when an AskNode resumes; the
 	// AskNode reads it on its second fire.
 	userAnswer string
+
+	// toolCalls backs the doom-loop guard (autonomy-recovery-runtime-
+	// 01PMDL03 WP02): a bounded LRU of (tool name, normalized-arg-hash)
+	// repeat counts, scoped to this run. The pointer is fixed at
+	// construction and never reassigned, so reads are safe without s.mu
+	// — toolCallHistory guards its own internal state.
+	toolCalls *toolCallHistory
 }
 
 // NewRunState returns a fresh state.
@@ -313,7 +320,21 @@ func NewRunState() *RunState {
 		values:    make(map[string]PortValues),
 		completed: make(map[string]bool),
 		failed:    make(map[string]error),
+		toolCalls: newToolCallHistory(doomLoopHistoryCapacity),
 	}
+}
+
+// RecordToolCall registers one more occurrence of a (toolName, args) pair
+// for the doom-loop guard and returns the updated repeat count (1 on
+// first sighting). Bounded — see toolCallHistory / doomLoopHistoryCapacity.
+// Safe to call with a nil *RunState (returns 1, i.e. "never repeated") so
+// executors that fire without a run-scoped state (rare, mostly tests)
+// degrade to "guard disabled" rather than panicking.
+func (s *RunState) RecordToolCall(toolName string, args map[string]any) int {
+	if s == nil || s.toolCalls == nil {
+		return 1
+	}
+	return s.toolCalls.touch(doomLoopKey(toolName, args))
 }
 
 // SetOutputs records the outputs of a node fire.
