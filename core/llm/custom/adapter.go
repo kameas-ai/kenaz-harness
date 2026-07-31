@@ -391,13 +391,13 @@ type chatStream struct {
 	events chan llm.StreamEvent
 	done   chan struct{}
 
-	mu         sync.Mutex
-	final      llm.Response
-	finalErr   error
-	cancelled  bool
-	textBuf    strings.Builder
-	usage      llm.Usage
-	finishStop string
+	mu          sync.Mutex
+	final       llm.Response
+	finalErr    error
+	cancelled   bool
+	textBuf     strings.Builder
+	usage       llm.Usage
+	finishStop  string
 	toolPartial map[int]*toolCallState
 	toolOrder   []int
 	toolCalls   []llm.ToolUse
@@ -443,9 +443,26 @@ func (s *chatStream) pump() {
 		s.mu.Lock()
 		s.flushPendingToolCallsLocked()
 		if s.finalErr == nil && !s.cancelled {
+			text := s.textBuf.String()
+			toolCalls := s.toolCalls
+			// Guard: only attempt tolerant extraction when the endpoint
+			// did not already return native tool-call structure (via
+			// delta.tool_calls). llama.cpp/Ollama/LM Studio-family models
+			// routed through this OpenAI-compatible adapter are the most
+			// prone to leaking JSON-shaped tool-call envelopes into plain
+			// text instead of using the structured channel. Double-parsing
+			// when native tool calls are already present would risk
+			// duplicate tool invocations, so this only fires when
+			// toolCalls is empty.
+			if len(toolCalls) == 0 {
+				if extracted, residual := llm.ExtractEmbeddedToolCalls(text); len(extracted) > 0 {
+					toolCalls = extracted
+					text = strings.TrimSpace(residual)
+				}
+			}
 			s.final = llm.Response{
-				Content:      []llm.ContentBlock{{Type: "text", Text: s.textBuf.String()}},
-				ToolCalls:    s.toolCalls,
+				Content:      []llm.ContentBlock{{Type: "text", Text: text}},
+				ToolCalls:    toolCalls,
 				FinishReason: s.finishStop,
 				Usage:        s.usage,
 			}
