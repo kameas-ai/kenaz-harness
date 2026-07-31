@@ -86,6 +86,14 @@ const (
 	// Greedy memory hook journal (FR-027).
 	EventHookFired EventKind = "memory_hook_fired"
 
+	// Kernel backtrack primitive (autonomy-recovery-runtime-01PMDL03
+	// WP01). Fired when the kernel honors a BacktrackRequest and
+	// rewinds a completed node + its downstream. Cap-hit on the
+	// backtrack budget reuses EventBudgetCapHit (reason
+	// "max_backtracks_per_run") rather than a new kind, matching the
+	// existing checkBudget pattern.
+	EventBacktrackFired EventKind = "backtrack_fired"
+
 	// Run lifecycle.
 	EventRunStart    EventKind = "run_start"
 	EventRunComplete EventKind = "run_complete"
@@ -112,6 +120,7 @@ func AllEventKinds() []EventKind {
 		EventReviewPass, EventReviewFail, EventReviewUnrecov,
 		EventEscalateTriggered, EventPlanCreated,
 		EventHookFired,
+		EventBacktrackFired,
 		EventRunStart, EventRunComplete, EventRunPaused,
 	}
 }

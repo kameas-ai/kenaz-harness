@@ -134,6 +134,15 @@ type Budget struct {
 	MaxLLMCallsPerRun       int     `json:"max_llm_calls_per_run,omitempty" yaml:"max_llm_calls_per_run,omitempty"`
 	MaxToolCallsPerRun      int     `json:"max_tool_calls_per_run,omitempty" yaml:"max_tool_calls_per_run,omitempty"`
 	MaxCostUSDPerRun        float64 `json:"max_cost_usd_per_run,omitempty" yaml:"max_cost_usd_per_run,omitempty"`
+	// MaxBacktracksPerRun bounds the kernel backtrack primitive
+	// (autonomy-recovery-runtime-01PMDL03 WP01): the number of times a
+	// completed node may be rewound and re-fired over the life of a
+	// run. Unlike the other Budget fields, zero does NOT mean
+	// "unlimited" — re-firing a completed node breaks the kernel's
+	// normal completed-once invariant, so an explicit cap always
+	// applies; zero falls back to DefaultMaxBacktracksPerRun
+	// (kernel.go) rather than disabling the check.
+	MaxBacktracksPerRun int `json:"max_backtracks_per_run,omitempty" yaml:"max_backtracks_per_run,omitempty"`
 }
 
 // Graph is the top-level immutable spec. Authors construct it directly

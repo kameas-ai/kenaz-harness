@@ -78,6 +78,15 @@ type Result struct {
 	// PauseReason is a human-readable explanation; persisted in the
 	// EventLog as the `pending_*` event payload.
 	PauseReason string
+	// Backtrack, when non-nil, asks the kernel to rewind execution to
+	// an earlier, already-completed node (autonomy-recovery-runtime-
+	// 01PMDL03 WP01): clear its completed flag, re-queue it, and
+	// re-fire everything downstream of it. This is the typed successor
+	// to the legacy should_retry/retry_target Outputs convention
+	// ReviewNode's fail path uses (exec_compute.go) — the kernel still
+	// honors that convention for back-compat (see resolveBacktrack in
+	// kernel.go), but new node kinds should set this field directly.
+	Backtrack *BacktrackRequest
 }
 
 // NewResult is the canonical constructor.
@@ -262,6 +271,10 @@ type RunCounters struct {
 	ToolCallsMade  int
 	CostUSD        float64
 	WallclockStart int64 // unix nanos
+	// BacktracksUsed counts kernel backtrack primitive rewinds fired
+	// this run (autonomy-recovery-runtime-01PMDL03 WP01). See
+	// AddBacktrack / BacktracksSnapshot.
+	BacktracksUsed int
 }
 
 // AddLLM bumps the token + call counter atomically.
@@ -293,6 +306,26 @@ func (c *RunCounters) Snapshot() (tokens, calls, tools int, cost float64) {
 	return c.LLMTokensUsed, c.LLMCallsMade, c.ToolCallsMade, c.CostUSD
 }
 
+// AddBacktrack bumps the run's backtrack counter and returns the new
+// total (autonomy-recovery-runtime-01PMDL03 WP01). Kept on RunCounters
+// rather than RunState so it lives alongside the other budget-style
+// counters checkBudget's pattern mirrors, even though the kernel checks
+// it reactively (at backtrack time) rather than pre-emptively at fire
+// time like checkBudget's other caps.
+func (c *RunCounters) AddBacktrack() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.BacktracksUsed++
+	return c.BacktracksUsed
+}
+
+// BacktracksSnapshot returns the current backtrack count.
+func (c *RunCounters) BacktracksSnapshot() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.BacktracksUsed
+}
+
 // RunState is the in-memory ContextGraph projection — what each node
 // produced this run, plus completion flags. It is the slice of
 // EventLog state the executors actually need at runtime; the EventLog
@@ -305,6 +338,13 @@ type RunState struct {
 	// userAnswer is set by the kernel when an AskNode resumes; the
 	// AskNode reads it on its second fire.
 	userAnswer string
+	// failureAnnotations accumulates the structured rejection records
+	// the kernel backtrack primitive attaches on every rewind
+	// (autonomy-recovery-runtime-01PMDL03 WP01). Read by graphBaseOf
+	// (exec_compute.go) so every compute executor re-grounds its next
+	// model call with explicit memory of what was already tried and
+	// rejected.
+	failureAnnotations []FailureAnnotation
 }
 
 // NewRunState returns a fresh state.
@@ -365,6 +405,24 @@ func (s *RunState) UserAnswer() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.userAnswer
+}
+
+// AddFailureAnnotation appends a backtrack rejection record. Called by
+// the kernel (kernel.go) when a BacktrackRequest is honored.
+func (s *RunState) AddFailureAnnotation(ann FailureAnnotation) {
+	s.mu.Lock()
+	s.failureAnnotations = append(s.failureAnnotations, ann)
+	s.mu.Unlock()
+}
+
+// FailureAnnotations returns a snapshot copy of the accumulated
+// backtrack rejection records, oldest first.
+func (s *RunState) FailureAnnotations() []FailureAnnotation {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]FailureAnnotation, len(s.failureAnnotations))
+	copy(out, s.failureAnnotations)
+	return out
 }
 
 // AllCompleted returns the set of nodes that have been fired.
