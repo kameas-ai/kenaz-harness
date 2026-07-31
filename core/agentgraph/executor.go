@@ -78,6 +78,15 @@ type Result struct {
 	// PauseReason is a human-readable explanation; persisted in the
 	// EventLog as the `pending_*` event payload.
 	PauseReason string
+	// Backtrack, when non-nil, asks the kernel to rewind execution to
+	// an earlier, already-completed node (autonomy-recovery-runtime-
+	// 01PMDL03 WP01): clear its completed flag, re-queue it, and
+	// re-fire everything downstream of it. This is the typed successor
+	// to the legacy should_retry/retry_target Outputs convention
+	// ReviewNode's fail path uses (exec_compute.go) — the kernel still
+	// honors that convention for back-compat (see resolveBacktrack in
+	// kernel.go), but new node kinds should set this field directly.
+	Backtrack *BacktrackRequest
 }
 
 // NewResult is the canonical constructor.
@@ -181,6 +190,17 @@ type Env struct {
 	// recent trace).
 	State *RunState
 
+	// TaskState is the structured goal / completed-step summary /
+	// forbidden-actions object (autonomy-recovery-runtime-01PMDL03
+	// WP03) — re-injected as a pinned system-context block on every
+	// compute re-entry via graphBaseOf (exec_compute.go). nil is
+	// equivalent to "empty" (every TaskState method tolerates a nil
+	// receiver); applyEnvDefaults installs an empty one so production
+	// runs never see nil here. Mutated + persisted via the Kernel's
+	// SetTaskGoal / AddTaskCompletedStep / AddTaskForbidden helpers
+	// (kernel.go) so changes survive Kernel.RebuildState on resume.
+	TaskState *TaskState
+
 	// Hooks fires greedy memory-write hooks at kernel boundaries.
 	Hooks *HookManager
 
@@ -262,6 +282,10 @@ type RunCounters struct {
 	ToolCallsMade  int
 	CostUSD        float64
 	WallclockStart int64 // unix nanos
+	// BacktracksUsed counts kernel backtrack primitive rewinds fired
+	// this run (autonomy-recovery-runtime-01PMDL03 WP01). See
+	// AddBacktrack / BacktracksSnapshot.
+	BacktracksUsed int
 }
 
 // AddLLM bumps the token + call counter atomically.
@@ -293,6 +317,26 @@ func (c *RunCounters) Snapshot() (tokens, calls, tools int, cost float64) {
 	return c.LLMTokensUsed, c.LLMCallsMade, c.ToolCallsMade, c.CostUSD
 }
 
+// AddBacktrack bumps the run's backtrack counter and returns the new
+// total (autonomy-recovery-runtime-01PMDL03 WP01). Kept on RunCounters
+// rather than RunState so it lives alongside the other budget-style
+// counters checkBudget's pattern mirrors, even though the kernel checks
+// it reactively (at backtrack time) rather than pre-emptively at fire
+// time like checkBudget's other caps.
+func (c *RunCounters) AddBacktrack() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.BacktracksUsed++
+	return c.BacktracksUsed
+}
+
+// BacktracksSnapshot returns the current backtrack count.
+func (c *RunCounters) BacktracksSnapshot() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.BacktracksUsed
+}
+
 // RunState is the in-memory ContextGraph projection — what each node
 // produced this run, plus completion flags. It is the slice of
 // EventLog state the executors actually need at runtime; the EventLog
@@ -305,6 +349,21 @@ type RunState struct {
 	// userAnswer is set by the kernel when an AskNode resumes; the
 	// AskNode reads it on its second fire.
 	userAnswer string
+
+	// toolCalls backs the doom-loop guard (autonomy-recovery-runtime-
+	// 01PMDL03 WP02): a bounded LRU of (tool name, normalized-arg-hash)
+	// repeat counts, scoped to this run. The pointer is fixed at
+	// construction and never reassigned, so reads are safe without s.mu
+	// — toolCallHistory guards its own internal state.
+	toolCalls *toolCallHistory
+
+	// failureAnnotations accumulates the structured rejection records
+	// the kernel backtrack primitive attaches on every rewind
+	// (autonomy-recovery-runtime-01PMDL03 WP01). Read by graphBaseOf
+	// (exec_compute.go) so every compute executor re-grounds its next
+	// model call with explicit memory of what was already tried and
+	// rejected.
+	failureAnnotations []FailureAnnotation
 }
 
 // NewRunState returns a fresh state.
@@ -313,7 +372,21 @@ func NewRunState() *RunState {
 		values:    make(map[string]PortValues),
 		completed: make(map[string]bool),
 		failed:    make(map[string]error),
+		toolCalls: newToolCallHistory(doomLoopHistoryCapacity),
 	}
+}
+
+// RecordToolCall registers one more occurrence of a (toolName, args) pair
+// for the doom-loop guard and returns the updated repeat count (1 on
+// first sighting). Bounded — see toolCallHistory / doomLoopHistoryCapacity.
+// Safe to call with a nil *RunState (returns 1, i.e. "never repeated") so
+// executors that fire without a run-scoped state (rare, mostly tests)
+// degrade to "guard disabled" rather than panicking.
+func (s *RunState) RecordToolCall(toolName string, args map[string]any) int {
+	if s == nil || s.toolCalls == nil {
+		return 1
+	}
+	return s.toolCalls.touch(doomLoopKey(toolName, args))
 }
 
 // SetOutputs records the outputs of a node fire.
@@ -367,6 +440,24 @@ func (s *RunState) UserAnswer() string {
 	return s.userAnswer
 }
 
+// AddFailureAnnotation appends a backtrack rejection record. Called by
+// the kernel (kernel.go) when a BacktrackRequest is honored.
+func (s *RunState) AddFailureAnnotation(ann FailureAnnotation) {
+	s.mu.Lock()
+	s.failureAnnotations = append(s.failureAnnotations, ann)
+	s.mu.Unlock()
+}
+
+// FailureAnnotations returns a snapshot copy of the accumulated
+// backtrack rejection records, oldest first.
+func (s *RunState) FailureAnnotations() []FailureAnnotation {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]FailureAnnotation, len(s.failureAnnotations))
+	copy(out, s.failureAnnotations)
+	return out
+}
+
 // AllCompleted returns the set of nodes that have been fired.
 func (s *RunState) AllCompleted() []string {
 	s.mu.RLock()
@@ -378,6 +469,44 @@ func (s *RunState) AllCompleted() []string {
 		}
 	}
 	return out
+}
+
+// CompareAndSetOnce atomically claims a boolean "fired" flag stored
+// under key, returning true only for the caller that flips it from
+// unset to set (every subsequent caller sees it already set and gets
+// false). Added for the escalation ladder's run-global escalation gate
+// (autonomy-recovery-runtime-01PMDL03 WP04 review follow-up): the
+// prior code read Outputs(key), ran a slow, unlocked
+// env.LLM.Generate call, and only then wrote the flag back — a TOCTOU
+// window in which two concurrent EscalationLadder nodes could both
+// observe "not yet escalated" and both fire a real, costed escalation
+// call against the run's single shared slot.
+//
+// Callers must claim the flag with this method *before* starting the
+// gated work, and call ReleaseOnce if that work subsequently fails, so
+// a failed attempt doesn't permanently strand the slot for the rest of
+// the run.
+func (s *RunState) CompareAndSetOnce(key string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if fired, _ := s.values[key]["fired"].(bool); fired {
+		return false
+	}
+	s.values[key] = PortValues{"fired": true}
+	s.completed[key] = true
+	return true
+}
+
+// ReleaseOnce undoes a CompareAndSetOnce claim. Intended for a caller
+// whose gated work failed after claiming the flag: the slot must
+// remain available for the next attempt (this node's own retry, or
+// another node racing for the same key) rather than being permanently
+// burned by one failed call.
+func (s *RunState) ReleaseOnce(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.values, key)
+	delete(s.completed, key)
 }
 
 // ---- registry ----
@@ -415,6 +544,7 @@ func newExecutorRegistry() *executorRegistry {
 	r.register(&branchExecutor{})
 	r.register(&mergeExecutor{})
 	r.register(&approvalExecutor{})
+	r.register(&escalationLadderExecutor{})
 
 	// State (FR-051..FR-058).
 	r.register(&memoryExecutor{})

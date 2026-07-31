@@ -70,6 +70,17 @@ const (
 	EventCostCapHit     EventKind = "cost_cap_hit"
 	EventBudgetCapHit   EventKind = "budget_cap_hit"
 
+	// EventDoomLoopDetected fires from the tool-dispatch executor when a
+	// (tool name, normalized-arg-hash) pair repeats DoomLoopThreshold+
+	// times within a run (autonomy-recovery-runtime-01PMDL03 WP02). This
+	// is a *behavioral* signal, distinct from the blunt budget caps
+	// above: a model can thrash on the same failing call indefinitely
+	// within MaxToolCallsPerRun and never trip a cap. Payload carries
+	// the tool name, repeat count, and threshold; the node also sets
+	// `should_replan=true` on its Outputs so a future ladder controller
+	// (WP04) can force escalation regardless of remaining budget.
+	EventDoomLoopDetected EventKind = "doom_loop_detected"
+
 	// Ask flow.
 	EventAskPending  EventKind = "ask_pending"
 	EventAskAnswered EventKind = "ask_answered"
@@ -85,6 +96,45 @@ const (
 
 	// Greedy memory hook journal (FR-027).
 	EventHookFired EventKind = "memory_hook_fired"
+
+	// Kernel backtrack primitive (autonomy-recovery-runtime-01PMDL03
+	// WP01). Fired when the kernel honors a BacktrackRequest and
+	// rewinds a completed node + its downstream. Cap-hit on the
+	// backtrack budget reuses EventBudgetCapHit (reason
+	// "max_backtracks_per_run") rather than a new kind, matching the
+	// existing checkBudget pattern.
+	EventBacktrackFired EventKind = "backtrack_fired"
+
+	// TaskState persistence (autonomy-recovery-runtime-01PMDL03 WP03).
+	// TaskState is the structured "goal / completed-step summary /
+	// forbidden-actions" object re-injected on every compute re-entry
+	// (task_state.go); these three events are how mutations survive
+	// Kernel.RebuildState on resume. FailedAttempts deliberately has NO
+	// event of its own here — it is a rendered view over the existing
+	// FailureAnnotation records EventBacktrackFired already carries, so
+	// resume reconstructs it by replaying that event, not a new one.
+	EventTaskGoalSet       EventKind = "task_goal_set"
+	EventTaskStepCompleted EventKind = "task_step_completed"
+	EventTaskForbidden     EventKind = "task_forbidden_added"
+
+	// EventRetryAttempt promotes RetryNode's per-attempt detail
+	// (previously logging.L() only) into the replayable EventLog for
+	// audit parity with the other verifier/recovery node kinds
+	// (autonomy-recovery-runtime-01PMDL03 WP04). Payload carries
+	// attempt/max_attempts/phase ("start"|"error"|"success"|
+	// "exhausted") and, for the error/exhausted phases, the error text.
+	EventRetryAttempt EventKind = "retry_attempt"
+
+	// EventLadderRung fires once per EscalationLadder node-kind
+	// invocation (autonomy-recovery-runtime-01PMDL03 WP04), recording
+	// which rung of the retry -> escalate -> replan -> ask progression
+	// was selected on that fire. The rung's own side effects still
+	// emit their existing sibling events too (EventBacktrackFired for
+	// retry/replan, EventEscalateTriggered for escalate,
+	// EventAskPending/EventAskAnswered for ask) — this event is the
+	// ladder-level "which rung, which attempt" audit trail that ties
+	// them together.
+	EventLadderRung EventKind = "escalation_ladder_rung"
 
 	// Run lifecycle.
 	EventRunStart    EventKind = "run_start"
@@ -107,11 +157,17 @@ func AllEventKinds() []EventKind {
 		EventArtifactEmitted, EventKindAliasResolved,
 		EventFileRead, EventFileWrite, EventBashOutputRead,
 		EventDialOverridden, EventCostCapHit, EventBudgetCapHit,
+		EventDoomLoopDetected,
 		EventAskPending, EventAskAnswered,
 		EventReflectStarted, EventReflectCompleted,
 		EventReviewPass, EventReviewFail, EventReviewUnrecov,
 		EventEscalateTriggered, EventPlanCreated,
 		EventHookFired,
+		EventBacktrackFired,
+		EventTaskGoalSet, EventTaskStepCompleted, EventTaskForbidden,
+
+		EventRetryAttempt,
+		EventLadderRung,
 		EventRunStart, EventRunComplete, EventRunPaused,
 	}
 }
@@ -212,8 +268,8 @@ type EventLog interface {
 // default when the kernel boots without a SQLite-backed log. It is
 // safe for concurrent use.
 type memEventLog struct {
-	mu     sync.Mutex
-	rows   map[string][]Event
+	mu      sync.Mutex
+	rows    map[string][]Event
 	nextSeq map[string]int64
 }
 

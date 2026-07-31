@@ -691,6 +691,13 @@ func (retryExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 		logging.L().Info("agentgraph.retry.attempt",
 			"run_id", env.RunID, "node_id", node.ID,
 			"attempt", attempt, "max_attempts", a.MaxAttempts)
+		// EventRetryAttempt promotes this per-attempt detail into the
+		// replayable EventLog for audit parity with the other
+		// verifier/recovery node kinds (autonomy-recovery-runtime-
+		// 01PMDL03 WP04) — previously logging.L() only.
+		_ = res.Events.AppendKind(env.RunID, node.ID, EventRetryAttempt, map[string]any{
+			"phase": "start", "attempt": attempt, "max_attempts": a.MaxAttempts,
+		})
 		var stepErr error
 		for _, bID := range a.Body {
 			target := lookupNode(env.Graph, bID)
@@ -737,8 +744,15 @@ func (retryExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 			logging.L().Info("agentgraph.retry.end",
 				"run_id", env.RunID, "node_id", node.ID, "outcome", "ok",
 				"attempts", attempt, "duration_ms", time.Since(retryStart).Milliseconds())
+			_ = res.Events.AppendKind(env.RunID, node.ID, EventRetryAttempt, map[string]any{
+				"phase": "success", "attempt": attempt, "max_attempts": a.MaxAttempts,
+			})
 			return res, nil
 		}
+		_ = res.Events.AppendKind(env.RunID, node.ID, EventRetryAttempt, map[string]any{
+			"phase": "error", "attempt": attempt, "max_attempts": a.MaxAttempts,
+			"err": stepErr.Error(),
+		})
 		// classify retryable / fatal: anything not ErrBudgetExceeded /
 		// ErrPaused / ErrNotImplemented is retryable for now.
 		if stepErr == ErrBudgetExceeded || stepErr == ErrPaused {
@@ -774,6 +788,10 @@ func (retryExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 		"run_id", env.RunID, "node_id", node.ID, "outcome", "exhausted",
 		"attempts", a.MaxAttempts, "err", errString(lastErr),
 		"duration_ms", time.Since(retryStart).Milliseconds())
+	_ = res.Events.AppendKind(env.RunID, node.ID, EventRetryAttempt, map[string]any{
+		"phase": "exhausted", "attempt": a.MaxAttempts, "max_attempts": a.MaxAttempts,
+		"err": errString(lastErr),
+	})
 	return res, fmt.Errorf("retry: node %q: exhausted %d attempts: %w", node.ID, a.MaxAttempts, lastErr)
 }
 
