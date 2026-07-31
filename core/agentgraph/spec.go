@@ -134,6 +134,14 @@ type Budget struct {
 	MaxLLMCallsPerRun       int     `json:"max_llm_calls_per_run,omitempty" yaml:"max_llm_calls_per_run,omitempty"`
 	MaxToolCallsPerRun      int     `json:"max_tool_calls_per_run,omitempty" yaml:"max_tool_calls_per_run,omitempty"`
 	MaxCostUSDPerRun        float64 `json:"max_cost_usd_per_run,omitempty" yaml:"max_cost_usd_per_run,omitempty"`
+
+	// DoomLoopThreshold is the repeat count (inclusive) of a
+	// near-identical (tool name, normalized args) call that trips the
+	// tool-dispatch doom-loop guard (autonomy-recovery-runtime-01PMDL03
+	// WP02). Zero uses DefaultDoomLoopThreshold. This is a *behavioral*
+	// cap — distinct from MaxToolCallsPerRun, which only bounds total
+	// call volume and never notices thrash within budget.
+	DoomLoopThreshold int `json:"doom_loop_threshold,omitempty" yaml:"doom_loop_threshold,omitempty"`
 }
 
 // Graph is the top-level immutable spec. Authors construct it directly
