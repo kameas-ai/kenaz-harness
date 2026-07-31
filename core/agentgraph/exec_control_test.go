@@ -2,6 +2,7 @@ package agentgraph
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 )
@@ -197,6 +198,99 @@ func TestRetryExecutor_ExhaustReturnsError(t *testing.T) {
 	ex := retryExecutor{}
 	if _, err := ex.Execute(context.Background(), env, &g.Nodes[0], nil); err == nil {
 		t.Fatalf("expected exhaustion error")
+	}
+}
+
+// TestRetryExecutor_PromotesAttemptsToEventLog covers WP04's audit-parity
+// requirement: RetryNode's per-attempt detail (previously logging.L()
+// only, per exec_control.go:691,710,737 pre-WP04) must land in the
+// replayable EventLog as EventRetryAttempt so an audit consumer can
+// reconstruct the same detail without grepping structured logs.
+func TestRetryExecutor_PromotesAttemptsToEventLog(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	g := &Graph{Nodes: []Node{
+		{ID: "retry", Kind: NodeKindRetry, Attrs: RetryAttrs{
+			MaxAttempts: 3, BackoffBaseMs: 1, Body: []string{"flake"},
+		}},
+		{ID: "flake", Kind: NodeKindTransform, Attrs: TransformAttrs{Name: "flaky"}},
+	}}
+	env := newTestEnv(g)
+	env.Transforms.Register("flaky", func(_ context.Context, in PortValues, _ map[string]any) (PortValues, error) {
+		calls++
+		if calls < 3 {
+			return nil, errors.New("flake")
+		}
+		return PortValues{"out": "yes"}, nil
+	})
+	ex := retryExecutor{}
+	r, err := ex.Execute(context.Background(), env, &g.Nodes[0], PortValues{"in": "x"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	var phases []string
+	for _, e := range r.Events.Events {
+		if e.Kind != EventRetryAttempt {
+			continue
+		}
+		var payload map[string]any
+		if uerr := json.Unmarshal(e.Payload, &payload); uerr != nil {
+			t.Fatalf("decode EventRetryAttempt payload: %v", uerr)
+		}
+		phase, _ := payload["phase"].(string)
+		phases = append(phases, phase)
+	}
+	// 3 attempts: attempt 1 start+error, attempt 2 start+error,
+	// attempt 3 start+success.
+	want := []string{"start", "error", "start", "error", "start", "success"}
+	if len(phases) != len(want) {
+		t.Fatalf("EventRetryAttempt phases = %v, want %v", phases, want)
+	}
+	for i, p := range phases {
+		if p != want[i] {
+			t.Errorf("phase[%d] = %q, want %q (full: %v)", i, p, want[i], phases)
+		}
+	}
+}
+
+// TestRetryExecutor_PromotesExhaustionToEventLog covers the exhausted
+// phase: when every attempt fails, EventRetryAttempt still records a
+// final "exhausted" entry even though Execute returns an error (the
+// kernel commits Result.Events on the error path too — kernel.go's
+// dispatch closure always appends r.Events.Events before checking err).
+func TestRetryExecutor_PromotesExhaustionToEventLog(t *testing.T) {
+	t.Parallel()
+	g := &Graph{Nodes: []Node{
+		{ID: "retry", Kind: NodeKindRetry, Attrs: RetryAttrs{
+			MaxAttempts: 2, BackoffBaseMs: 1, Body: []string{"always"},
+		}},
+		{ID: "always", Kind: NodeKindTransform, Attrs: TransformAttrs{Name: "always_fail"}},
+	}}
+	env := newTestEnv(g)
+	env.Transforms.Register("always_fail", func(_ context.Context, _ PortValues, _ map[string]any) (PortValues, error) {
+		return nil, errors.New("nope")
+	})
+	ex := retryExecutor{}
+	r, err := ex.Execute(context.Background(), env, &g.Nodes[0], nil)
+	if err == nil {
+		t.Fatalf("expected exhaustion error")
+	}
+	var sawExhausted bool
+	for _, e := range r.Events.Events {
+		if e.Kind != EventRetryAttempt {
+			continue
+		}
+		var payload map[string]any
+		if uerr := json.Unmarshal(e.Payload, &payload); uerr != nil {
+			t.Fatalf("decode EventRetryAttempt payload: %v", uerr)
+		}
+		if payload["phase"] == "exhausted" {
+			sawExhausted = true
+		}
+	}
+	if !sawExhausted {
+		t.Fatalf("expected an EventRetryAttempt with phase=exhausted among %d events", len(r.Events.Events))
 	}
 }
 

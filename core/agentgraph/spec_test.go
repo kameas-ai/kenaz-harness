@@ -23,6 +23,7 @@ func TestNodeKindEnumeration(t *testing.T) {
 		NodeKindActivity, NodeKindApproval, NodeKindArtifact, NodeKindAsk,
 		NodeKindAttachment, NodeKindBranch, NodeKindCheckpoint, NodeKindCompact,
 		NodeKindCorpusRead, NodeKindCorpusWrite, NodeKindDecision, NodeKindEscalate,
+		NodeKindEscalationLadder,
 		NodeKindHistoryRead, NodeKindJoin, NodeKindLoop, NodeKindMemory,
 		NodeKindMerge, NodeKindModel, NodeKindParallel, NodeKindPlanner,
 		NodeKindReadBashOutput, NodeKindReadFile, NodeKindReflect, NodeKindRetry,

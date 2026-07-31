@@ -506,6 +506,7 @@ func newExecutorRegistry() *executorRegistry {
 	r.register(&branchExecutor{})
 	r.register(&mergeExecutor{})
 	r.register(&approvalExecutor{})
+	r.register(&escalationLadderExecutor{})
 
 	// State (FR-051..FR-058).
 	r.register(&memoryExecutor{})
