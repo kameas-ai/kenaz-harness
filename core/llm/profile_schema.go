@@ -42,15 +42,27 @@ func ValidateProfile(p ProviderProfile) error {
 		}
 	}
 	if p.Retry != nil {
-		if p.Retry.MaxAttempts < 1 {
-			return fmt.Errorf("llm: profile %q: retry.max_attempts must be >= 1", p.ID)
+		if err := validateRetryPolicy(p.ID, p.Retry); err != nil {
+			return err
 		}
-		if p.Retry.BaseMS < 0 || p.Retry.MaxMS < 0 {
-			return fmt.Errorf("llm: profile %q: retry delays must be >= 0", p.ID)
-		}
-		if p.Retry.MaxMS > 0 && p.Retry.BaseMS > p.Retry.MaxMS {
-			return fmt.Errorf("llm: profile %q: retry.base_ms exceeds retry.max_ms", p.ID)
-		}
+	}
+	return nil
+}
+
+// validateRetryPolicy applies the shared retry-shape rules to r, prefixing
+// errors with the given identifier (a ProviderProfile.ID or a
+// ModelProfile.ID). Shared between ValidateProfile and
+// ValidateModelProfile so the two artifact kinds can't drift on what
+// "a well-formed retry policy" means.
+func validateRetryPolicy(id string, r *RetryPolicy) error {
+	if r.MaxAttempts < 1 {
+		return fmt.Errorf("llm: profile %q: retry.max_attempts must be >= 1", id)
+	}
+	if r.BaseMS < 0 || r.MaxMS < 0 {
+		return fmt.Errorf("llm: profile %q: retry delays must be >= 0", id)
+	}
+	if r.MaxMS > 0 && r.BaseMS > r.MaxMS {
+		return fmt.Errorf("llm: profile %q: retry.base_ms exceeds retry.max_ms", id)
 	}
 	return nil
 }
