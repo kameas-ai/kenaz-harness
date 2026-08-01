@@ -21,8 +21,12 @@ import (
 // never touch credential state. Nothing in core/llm wires this type into
 // a runtime path yet — resolution is WP02 ((model_id, version) lookup with
 // family-glob inheritance, mirroring capabilities/loader.go's Match
-// pattern), eval-fit gating is WP03, and the layering validator that
-// rejects Cedar/budget-policy fields smuggled into a profile is WP06.
+// pattern), eval-fit gating is WP03. The layering validator that rejects
+// Cedar/budget-policy fields smuggled into a profile bundle is
+// ValidateModelProfileBundle (model_profile_schema.go, WP06) — it must be
+// the entry point any future bundle-parsing seam (WP02) uses for
+// ModelProfile bundles, since it operates on raw bytes before unknown
+// keys are silently dropped by unmarshal.
 //
 // Zero value is valid and inert: an absent ModelProfile must mean "today's
 // behavior", never a forced default. Every field is a pointer or omittable

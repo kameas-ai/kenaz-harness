@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/kameas-ai/kenaz-harness/core/compaction"
@@ -137,5 +138,127 @@ func TestModelProfile_IndependentOfProviderProfile(t *testing.T) {
 	}
 	if err := ValidateModelProfile(mp); err != nil {
 		t.Fatalf("behavioral profile invalidated by unrelated credential rotation: %v", err)
+	}
+}
+
+// --- WP06: bundle-build layering validator --------------------------------
+
+func TestValidateModelProfileBundle_CleanProfilePasses(t *testing.T) {
+	raw := []byte(`
+id: claude-sonnet-*
+version: "2026.07.30"
+prompt_template:
+  id: constitution-anthropic
+  version: "3"
+  format: xml
+tool_dialect:
+  dialect: native
+  max_tool_description_bytes: 2000
+context:
+  aggressiveness: balanced
+  context_window_override: 180000
+retry:
+  max_attempts: 3
+  base_ms: 250
+  max_ms: 5000
+  jitter: full
+fallback_chain_id: anthropic-then-openrouter
+eval_manifest:
+  id: chat-default-suite
+  version: "1"
+`)
+	p, err := ValidateModelProfileBundle(raw)
+	if err != nil {
+		t.Fatalf("clean bundle rejected: %v", err)
+	}
+	if p.ID != "claude-sonnet-*" || p.Version != "2026.07.30" {
+		t.Fatalf("unexpected parsed profile: %+v", p)
+	}
+}
+
+func TestValidateModelProfileBundle_MinimalCleanProfilePasses(t *testing.T) {
+	raw := []byte(`
+id: gpt-4o
+version: "1"
+`)
+	if _, err := ValidateModelProfileBundle(raw); err != nil {
+		t.Fatalf("minimal clean bundle rejected: %v", err)
+	}
+}
+
+func TestValidateModelProfileBundle_RejectsTopLevelCedarField(t *testing.T) {
+	raw := []byte(`
+id: p
+version: "1"
+cedar_actions:
+  - AllowSpend
+`)
+	_, err := ValidateModelProfileBundle(raw)
+	if err == nil {
+		t.Fatalf("expected rejection of a profile carrying a cedar field, got nil")
+	}
+	if !strings.Contains(err.Error(), "cedar_actions") {
+		t.Fatalf("error must name the offending key %q, got: %v", "cedar_actions", err)
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "cedar") {
+		t.Fatalf("error should hint at Cedar/authorization, got: %v", err)
+	}
+}
+
+func TestValidateModelProfileBundle_RejectsTopLevelBudgetField(t *testing.T) {
+	raw := []byte(`
+id: p
+version: "1"
+budget:
+  max_spend_usd: 100
+`)
+	_, err := ValidateModelProfileBundle(raw)
+	if err == nil {
+		t.Fatalf("expected rejection of a profile carrying a budget field, got nil")
+	}
+	if !strings.Contains(err.Error(), "budget") {
+		t.Fatalf("error must name the offending key %q, got: %v", "budget", err)
+	}
+}
+
+func TestValidateModelProfileBundle_RejectsNestedSpendField(t *testing.T) {
+	// The governance/budget check must not be a top-level-only allow-list
+	// diff — it recurses into ModelProfile's own declared nested objects
+	// too, since a smuggled key could just as easily be appended one
+	// level down inside a legitimate object (e.g. "context:").
+	raw := []byte(`
+id: p
+version: "1"
+context:
+  aggressiveness: balanced
+  spend_cap_usd: 50
+`)
+	_, err := ValidateModelProfileBundle(raw)
+	if err == nil {
+		t.Fatalf("expected rejection of a nested spend field, got nil")
+	}
+	if !strings.Contains(err.Error(), "context.spend_cap_usd") {
+		t.Fatalf("error must name the full nested key path, got: %v", err)
+	}
+}
+
+func TestValidateModelProfileBundle_RejectsTypoedLegitimateKey(t *testing.T) {
+	// Strict unknown-field rejection is the same mechanism that catches
+	// governance smuggling; it also catches an honest typo of a real
+	// field name. Documented trade-off: bundle authors get a fail-closed,
+	// exact-schema UX rather than the key being silently ignored.
+	raw := []byte(`
+id: p
+versoin: "1"
+`)
+	_, err := ValidateModelProfileBundle(raw)
+	if err == nil {
+		t.Fatalf("expected rejection of a typo'd field, got nil")
+	}
+	if !strings.Contains(err.Error(), "versoin") {
+		t.Fatalf("error must name the offending (typo'd) key, got: %v", err)
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "cedar") || strings.Contains(strings.ToLower(err.Error()), "budget") {
+		t.Fatalf("typo should get the generic unknown-field message, not a governance hint: %v", err)
 	}
 }
