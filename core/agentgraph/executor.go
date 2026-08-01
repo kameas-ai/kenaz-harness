@@ -236,6 +236,16 @@ type Env struct {
 	// the parent model.
 	Recommender *BranchRecommender
 
+	// TierSource resolves a model tier for (providerKind, modelID) pairs
+	// (versioned-model-profile-01PMDL04 WP04/WP05). The Planner/Review/
+	// Reflect executors consult it to derive a Verbosity / MaxIterations
+	// default when a node leaves the attr unset, instead of hardcoding
+	// one tier's behaviour for every model. nil (test runs, scripted
+	// activities) makes every lookup resolve to ModelTierMedium via
+	// resolveNodeTier's fallback — this is the pre-WP05 behaviour, so
+	// omitting a TierSource never changes an existing graph's output.
+	TierSource TierSource
+
 	// MergeSuggester powers the kernel's "merge?" toast. nil disables
 	// the suggestion stream.
 	MergeSuggester *MergeSuggester

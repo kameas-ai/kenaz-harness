@@ -4916,6 +4916,17 @@ func newGraphManagerWithDeps(
 		deps.BashStore = bashStore
 		deps.BashOutput = graphview.NewBashOutputStoreAdapter(bashStore)
 	}
+	// Tier source: lets the Planner/Review/Reflect executors derive a
+	// Verbosity / MaxIterations default from the active model's size
+	// tier when a node leaves the attr unset (versioned-model-profile-
+	// 01PMDL04 WP05). Loaded independently of the later capCatalog
+	// (buildLLMSubsystem) since this constructor runs before that stack
+	// exists — same pattern as recommenderCat above. A load failure
+	// leaves deps.TierSource nil, so applyTo skips it and every node
+	// keeps its pre-WP05 hardcoded default (ModelTierMedium fallback).
+	if tierCat, err := llmcap.LoadDefault(); err == nil {
+		deps.TierSource = &tierSourceAdapter{cat: tierCat}
+	}
 	// Memory hook journal: bind the SQL writer (migration 0308) when
 	// the storage layer exposes a stdlib *sql.DB. The HookManager's
 	// in-memory ring buffer continues to work either way; the SQL
