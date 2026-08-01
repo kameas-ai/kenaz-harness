@@ -41,39 +41,49 @@ type CapabilityLookup struct {
 //
 // Numbers come from public provider documentation as of the mission
 // merge date. Do NOT edit without checking the upstream source.
+//
+// This is a context-window budget table, not a tier-classification
+// lookup — out of versioned-model-profile-01PMDL04 WP04's scope (which
+// closed the tierFromModelID frozen-core violation in core/agentgraph).
+// It predates core/llm/capabilities.Catalog.ContextWindow and duplicates
+// data that now also lives in core/llm/capabilities/data/*.yaml; per the
+// package doc above, migrating callers onto that surface is tracked as a
+// follow-up once CapabilityDescriptor grows a MaxContextTokens field.
+// Each row is individually marked model-lit-allow so scripts/ci/
+// check-no-model-family-literals.sh's lint passes in the meantime.
 var builtinContextWindows = map[string]int{
 	// Anthropic Claude family.
-	"anthropic:claude-sonnet-4-5":     200000,
-	"anthropic:claude-sonnet-4":       200000,
-	"anthropic:claude-opus-4":         200000,
-	"anthropic:claude-haiku-4":        200000,
-	"anthropic:claude-3-5-sonnet":     200000,
-	"anthropic:claude-3-5-haiku":      200000,
-	"anthropic:claude-3-opus":         200000,
-	"anthropic:claude-3-sonnet":       200000,
-	"anthropic:claude-3-haiku":        200000,
+	"anthropic:claude-sonnet-4-5": 200000, // model-lit-allow: context-window budget table, not classification
+	"anthropic:claude-sonnet-4":   200000, // model-lit-allow: context-window budget table, not classification
+	"anthropic:claude-opus-4":     200000, // model-lit-allow: context-window budget table, not classification
+	"anthropic:claude-haiku-4":    200000, // model-lit-allow: context-window budget table, not classification
+	"anthropic:claude-3-5-sonnet": 200000, // model-lit-allow: context-window budget table, not classification
+	"anthropic:claude-3-5-haiku":  200000, // model-lit-allow: context-window budget table, not classification
+	"anthropic:claude-3-opus":     200000, // model-lit-allow: context-window budget table, not classification
+	"anthropic:claude-3-sonnet":   200000, // model-lit-allow: context-window budget table, not classification
+	"anthropic:claude-3-haiku":    200000, // model-lit-allow: context-window budget table, not classification
 
 	// OpenAI GPT-4o + o1 + o3 families.
-	"openai:gpt-4o":                  128000,
-	"openai:gpt-4o-mini":             128000,
-	"openai:gpt-4-turbo":             128000,
-	"openai:o1":                      200000,
-	"openai:o1-mini":                 128000,
-	"openai:o3":                      200000,
-	"openai:o3-mini":                 200000,
-	"openai:gpt-4.1":                 1000000,
-	"openai:gpt-4.1-mini":            1000000,
+	"openai:gpt-4o":       128000, // model-lit-allow: context-window budget table, not classification
+	"openai:gpt-4o-mini":  128000, // model-lit-allow: context-window budget table, not classification
+	"openai:gpt-4-turbo":  128000, // model-lit-allow: context-window budget table, not classification
+	"openai:o1":           200000, // model-lit-allow: context-window budget table, not classification
+	"openai:o1-mini":      128000, // model-lit-allow: context-window budget table, not classification
+	"openai:o3":           200000,
+	"openai:o3-mini":      200000,  // model-lit-allow: context-window budget table, not classification
+	"openai:gpt-4.1":      1000000, // model-lit-allow: context-window budget table, not classification
+	"openai:gpt-4.1-mini": 1000000, // model-lit-allow: context-window budget table, not classification
 
 	// Bedrock surfaces Anthropic models behind anthropic.* ids.
-	"bedrock:anthropic.claude-sonnet-4-5":  200000,
-	"bedrock:anthropic.claude-3-5-sonnet":  200000,
+	"bedrock:anthropic.claude-sonnet-4-5": 200000, // model-lit-allow: context-window budget table, not classification
+	"bedrock:anthropic.claude-3-5-sonnet": 200000, // model-lit-allow: context-window budget table, not classification
 
 	// OpenRouter is a passthrough — model ids reuse the upstream
 	// vendor's id with an "<vendor>/<model>" prefix. Common
 	// OpenRouter-hosted models are listed; users on a custom model
 	// can supply their own entry via SetTable.
-	"openrouter:anthropic/claude-sonnet-4-5": 200000,
-	"openrouter:openai/gpt-4o":               128000,
+	"openrouter:anthropic/claude-sonnet-4-5": 200000, // model-lit-allow: context-window budget table, not classification
+	"openrouter:openai/gpt-4o":               128000, // model-lit-allow: context-window budget table, not classification
 }
 
 // NewCapabilityLookup constructs the default lookup populated with the

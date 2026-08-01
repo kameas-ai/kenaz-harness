@@ -41,6 +41,36 @@ defaults:
   max_document_pages: 0
   image_input_mime_types: [image/png, image/jpeg, image/gif, image/webp]
   document_input_mime_types: []
+  # Size-tier default (versioned-model-profile-01PMDL04 WP04): any model
+  # not matched below resolves here.
+  tier: medium
+# Size tiers (versioned-model-profile-01PMDL04 WP04) — the provider-owned
+# replacement for core/agentgraph's historical tierFromModelID name
+# matching. Exact (non-"*") rows double as the branch-recommender's v1
+# stopgap known-model list (Catalog.KnownModels). More specific globs
+# (gpt-4o-mini*) are listed before the broader glob they'd otherwise be
+# shadowed by (gpt-4o*) since Tier/TierAny return on first match.
+tiers:
+  - match: "gpt-4o-mini"
+    tier: small
+  - match: "gpt-4o"
+    tier: medium
+  - match: "o1-preview"
+    tier: large
+  - match: "gpt-4o-mini*"
+    tier: small
+  - match: "gpt-4o*"
+    tier: medium
+  - match: "gpt-4-turbo*"
+    tier: large
+  - match: "gpt-4-vision*"
+    tier: medium
+  - match: "o1*"
+    tier: large
+  - match: "gpt-3.5-turbo*"
+    tier: small
+  - match: "gpt-4*"
+    tier: medium
 models:
   - match: "gpt-4o*"
     streaming: true

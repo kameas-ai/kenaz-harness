@@ -39,6 +39,37 @@ defaults:
   max_document_pages: 0             # 0 = unbounded default; overridden per-model below
   image_input_mime_types: [image/png, image/jpeg, image/gif, image/webp]
   document_input_mime_types: [application/pdf]
+  # Size-tier default (versioned-model-profile-01PMDL04 WP04): any model
+  # not matched below (or by an exact/glob row in tiers:) resolves here.
+  tier: medium
+# Size tiers (versioned-model-profile-01PMDL04 WP04) — the provider-owned
+# replacement for core/agentgraph's historical tierFromModelID name
+# matching. Exact (non-"*") rows double as the branch-recommender's v1
+# stopgap known-model list (Catalog.KnownModels); glob rows classify
+# other Claude models by family without needing an exact match.
+tiers:
+  - match: "claude-haiku-4"
+    tier: small
+  - match: "claude-sonnet-4"
+    tier: medium
+  - match: "claude-opus-4"
+    tier: large
+  - match: "claude-haiku-*"
+    tier: small
+  - match: "claude-sonnet-*"
+    tier: medium
+  - match: "claude-opus-*"
+    tier: large
+  - match: "claude-3-5-haiku*"
+    tier: small
+  - match: "claude-3-5-sonnet*"
+    tier: medium
+  - match: "claude-3-haiku*"
+    tier: small
+  - match: "claude-3-sonnet*"
+    tier: medium
+  - match: "claude-3-opus*"
+    tier: large
 models:
   - match: "claude-sonnet-*"
     streaming: true
