@@ -18,6 +18,32 @@ type MatrixCase struct {
 	Overrides []StrategyOverride
 	// CachedOnly mirrors ReplayOptions.CachedOnly; default true for matrix runs.
 	CachedOnly bool
+
+	// BaselineSessionID is the capture session Diff compares the replay
+	// output against. Empty means "diff against SessionID's own capture" —
+	// today's compaction-only behavior, unchanged: replaying a session and
+	// diffing it against itself trivially scores ~1.0 because Replay never
+	// mutates KindMessage payloads, so the compaction-strategy matrix (which
+	// only ever set SessionID) never regresses.
+	//
+	// The model-profile dimension (versioned-model-profile-01PMDL04 WP03)
+	// is the reason this field exists: a candidate ModelProfile version is
+	// exercised as its own capture session (CandidateSessionID in
+	// ModelProfileSuiteCase, threaded through as SessionID here) and diffed
+	// against a *different*, previously-recorded known-good capture
+	// (BaselineSessionID) — genuinely comparing two distinct transcripts
+	// rather than a session against itself, which is what makes the gate
+	// capable of actually failing.
+	BaselineSessionID string
+
+	// ModelProfileID / ModelProfileVersion optionally label this case with
+	// the candidate profile identity under test. Purely informational —
+	// they do not change replay behavior (the mechanism to re-render a
+	// request under an alternate profile is
+	// per-family-message-shaping-01PMDL06's concern; this mission only
+	// gives eval a dimension to diff distinct captures against).
+	ModelProfileID      string
+	ModelProfileVersion string
 }
 
 // MatrixResult is the outcome for one MatrixCase.
@@ -81,8 +107,17 @@ func RunMatrix(
 		mr.ResponsesServed = rr.ResponsesServed
 		mr.ResponsesMissed = rr.ResponsesMissed
 
-		// Run diff against the baseline capture.
-		baselinePath := fmt.Sprintf("%s/%s.jsonl", captureDir, mc.SessionID)
+		// Run diff against the baseline capture. Defaults to the replayed
+		// session's own capture (today's compaction-only behavior); the
+		// model-profile dimension (WP03) sets BaselineSessionID to a
+		// distinct known-good session so the diff is a genuine
+		// candidate-vs-baseline comparison rather than a session against
+		// itself.
+		baselineSessionID := mc.SessionID
+		if mc.BaselineSessionID != "" {
+			baselineSessionID = mc.BaselineSessionID
+		}
+		baselinePath := fmt.Sprintf("%s/%s.jsonl", captureDir, baselineSessionID)
 		tracePath := fmt.Sprintf("%s/%s/trace.jsonl", runsDir, rr.RunID)
 		runDir := fmt.Sprintf("%s/%s", runsDir, rr.RunID)
 
