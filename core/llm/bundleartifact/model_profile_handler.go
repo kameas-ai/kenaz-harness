@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"gopkg.in/yaml.v3"
-
 	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
@@ -54,9 +52,18 @@ func NewModelProfileHandler(store *llm.ModelProfileStore) *ModelProfileHandler {
 func (h *ModelProfileHandler) Kind() string { return ModelProfileKind }
 
 // Parse decodes raw YAML into a ModelProfile.
+//
+// It routes through llm.ValidateModelProfileBundle rather than a plain
+// yaml.Unmarshal: both encoding/json and yaml.v3 silently DROP keys that
+// have no counterpart on the target struct, so a bundle carrying
+// `cedar:` or `budget:` would parse cleanly and then sail through the
+// struct-level ValidateModelProfile — which can only inspect fields that
+// survived decoding. Strict unknown-field rejection at the parse
+// boundary is what actually enforces the layering tenet that a model
+// profile carries behaviour, never governance.
 func (h *ModelProfileHandler) Parse(raw []byte) (any, error) {
-	var p llm.ModelProfile
-	if err := yaml.Unmarshal(raw, &p); err != nil {
+	p, err := llm.ValidateModelProfileBundle(raw)
+	if err != nil {
 		return nil, err
 	}
 	return p, nil

@@ -74,12 +74,17 @@ func TestModelProfileHandler_ActivateCollision(t *testing.T) {
 
 func TestModelProfileHandler_RejectsMissingVersion(t *testing.T) {
 	h := NewModelProfileHandler(newModelProfileStore(t))
+	// Stage-agnostic on purpose: Parse now routes through the strict
+	// bundle validator (so it rejects a missing version fail-fast), but
+	// the property under test is that the pipeline refuses the bundle —
+	// not which stage happens to catch it. Asserting the outcome keeps
+	// this test honest if the Parse/Validate split is ever rebalanced.
 	parsed, err := h.Parse([]byte("id: some-model\n"))
 	if err != nil {
-		t.Fatal(err)
+		return // rejected at parse — the property holds
 	}
 	if err := h.Validate(parsed); err == nil {
-		t.Fatal("expected validation error for missing version")
+		t.Fatal("expected the pipeline to reject a profile with no version")
 	}
 }
 
@@ -161,5 +166,42 @@ func TestConnectionAndBehavioralProfilesResolveIndependently(t *testing.T) {
 	}
 	if connAfter.Kind != "anthropic" {
 		t.Fatalf("connection profile content changed after unrelated behavioral re-promotion: %+v", connAfter)
+	}
+}
+
+// TestModelProfileHandler_ParseRejectsGovernanceSmuggling pins the
+// integration between WP02's bundle handler and WP06's strict bundle
+// validator. These landed from parallel branches that could not see each
+// other: the handler originally used a plain yaml.Unmarshal, which
+// silently drops unknown keys, so a bundle carrying `cedar:`/`budget:`
+// parsed cleanly and the struct-level ValidateModelProfile had nothing
+// left to object to. Each half was correct alone and the guarantee was
+// absent in combination.
+//
+// If Parse is ever reverted to a permissive unmarshal, this test fails.
+func TestModelProfileHandler_ParseRejectsGovernanceSmuggling(t *testing.T) {
+	h := &ModelProfileHandler{}
+	for _, tc := range []struct {
+		name string
+		raw  string
+	}{
+		{"top-level cedar", "id: m\nversion: \"1\"\ncedar:\n  actions: [\"Tool::Invoke\"]\n"},
+		{"top-level budget", "id: m\nversion: \"1\"\nbudget:\n  max_cost_usd_per_run: 999\n"},
+		{"nested spend cap", "id: m\nversion: \"1\"\ncontext:\n  spend_cap_usd: 999\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := h.Parse([]byte(tc.raw)); err == nil {
+				t.Fatalf("Parse accepted a bundle smuggling governance/budget policy: %q", tc.raw)
+			}
+		})
+	}
+}
+
+// TestModelProfileHandler_ParseAcceptsCleanBundle guards the other
+// direction: strictness must not reject a legitimate profile.
+func TestModelProfileHandler_ParseAcceptsCleanBundle(t *testing.T) {
+	h := &ModelProfileHandler{}
+	if _, err := h.Parse([]byte("id: claude-sonnet-*\nversion: \"1\"\n")); err != nil {
+		t.Fatalf("Parse rejected a clean bundle: %v", err)
 	}
 }
