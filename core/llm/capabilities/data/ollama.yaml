@@ -30,6 +30,11 @@ defaults:
   max_document_pages: 0
   image_input_mime_types: [image/png, image/jpeg, image/gif, image/webp]
   document_input_mime_types: []
+  # Size-tier default (versioned-model-profile-01PMDL04 WP04). None of
+  # Ollama's model names (llama3, llava, bakllava) matched a
+  # tierFromModelID keyword under the old heuristic, so every model
+  # resolved to medium — unchanged behaviour.
+  tier: medium
 models:
   - match: "llama3.*"
     streaming: true

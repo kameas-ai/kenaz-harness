@@ -13,7 +13,7 @@ import (
 type modelCommand struct{}
 
 func (modelCommand) Name() string        { return "model" }
-func (modelCommand) Description() string { return "Switch the active model — e.g. /model gpt-4o" }
+func (modelCommand) Description() string { return "Switch the active model — e.g. /model gpt-4o" } // model-lit-allow: help-text example, not classification logic
 func (modelCommand) Hidden() bool        { return false }
 func (modelCommand) ComingSoon() bool    { return false }
 

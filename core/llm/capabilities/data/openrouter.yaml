@@ -44,6 +44,17 @@ defaults:
   max_document_pages: 0
   image_input_mime_types: [image/png, image/jpeg, image/gif, image/webp]
   document_input_mime_types: []
+  # Size-tier default (versioned-model-profile-01PMDL04 WP04): any model
+  # not matched below resolves here.
+  tier: medium
+# Size tiers (versioned-model-profile-01PMDL04 WP04) — see anthropic.yaml
+# for the pattern. Only the row that previously hit a tierFromModelID
+# keyword ("opus" -> large) is listed; the routed OpenAI/other Claude
+# models matched no keyword under the old heuristic either, so they
+# resolve via the medium default above — unchanged behaviour.
+tiers:
+  - match: "anthropic/claude-opus*"
+    tier: large
 models:
   # Claude-via-OpenRouter: vision + documents pass through to Anthropic
   - match: "anthropic/claude-sonnet*"

@@ -13,7 +13,7 @@ import (
 	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	llmcap "github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
-	"github.com/kameas-ai/kenaz-harness/core/llm/gemini"
+	"github.com/kameas-ai/kenaz-harness/core/llm/gemini" // model-lit-allow: import path into core/llm/** itself, not a literal
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
@@ -25,7 +25,6 @@ import (
 	artifactsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/attachments"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/audit"
-	logsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/logs"
 	branchesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/branches"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/bundle"
 	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
@@ -41,6 +40,7 @@ import (
 	fleetview "github.com/kameas-ai/kenaz-harness/core/rpc/views/fleet"
 	hooksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/hooks"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
+	logsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/logs"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/mcp"
 	memoryview "github.com/kameas-ai/kenaz-harness/core/rpc/views/memory"
 	nodesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/nodes"
@@ -2240,14 +2240,14 @@ func (b *Bindings) Config_GetFlags() ([]FeatureFlagInfo, error) {
 		{
 			Name:        "multimodal-out",
 			Enabled:     llmcap.MultimodalOutEnabled(),
-			Description: "Model-generated image output pipeline (DALL-E 3, gpt-image-1, Titan Image). When off, StreamGeneratedImage events are silently discarded regardless of the auto-capture dial.",
+			Description: "Model-generated image output pipeline (DALL-E 3, gpt-image-1, Titan Image). When off, StreamGeneratedImage events are silently discarded regardless of the auto-capture dial.", // model-lit-allow: feature-flag description prose, not classification
 			EnvVar:      "HARNESS_MULTIMODAL_OUT",
 		},
 		{
-			Name:        "google-gemini",
-			Enabled:     gemini.IsEnabled(),
-			Description: "Google Gemini adapter (AI Studio API key and Vertex AI service-account / ADC auth). Supports gemini-2.5-pro/flash with streaming, tool calling, vision, and reasoning.",
-			EnvVar:      gemini.EnvFlag,
+			Name:        "google-gemini",                                                                                                                                                          // model-lit-allow: feature-flag name, not classification
+			Enabled:     gemini.IsEnabled(),                                                                                                                                                       // model-lit-allow: gemini package symbol, not a model-family literal
+			Description: "Google Gemini adapter (AI Studio API key and Vertex AI service-account / ADC auth). Supports gemini-2.5-pro/flash with streaming, tool calling, vision, and reasoning.", // model-lit-allow: feature-flag description prose, not classification
+			EnvVar:      gemini.EnvFlag,                                                                                                                                                           // model-lit-allow: gemini package symbol, not a model-family literal
 		},
 	}, nil
 }

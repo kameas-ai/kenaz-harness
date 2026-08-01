@@ -4,6 +4,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core"
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	coreconv "github.com/kameas-ai/kenaz-harness/core/conversation"
+	llmcap "github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 )
 
@@ -32,18 +33,59 @@ func sessionManagerOrNil(c *core.Core) *session.Manager {
 	return c.SessionManager()
 }
 
+// tierSourceAdapter wraps *llmcap.Catalog to satisfy agentgraph.TierSource
+// (versioned-model-profile-01PMDL04 WP04): the recommender asks a data
+// question through this seam instead of string-matching model family
+// names itself. A nil cat (capabilities data failed to load) makes every
+// lookup report "no opinion" so callers fall through to their own default.
+type tierSourceAdapter struct {
+	cat *llmcap.Catalog
+}
+
+func (a *tierSourceAdapter) Tier(providerKind, modelID string) (agentgraph.ModelTier, bool) {
+	if a == nil || a.cat == nil {
+		return "", false
+	}
+	t, ok := a.cat.Tier(providerKind, modelID)
+	if !ok {
+		return "", false
+	}
+	return agentgraph.ModelTier(t), true
+}
+
+// knownModelProviders lists the (providerID, providerKind) pairs the v1
+// recommender enumerates concrete candidates for. providerID and
+// providerKind coincide for the two directly-configured providers
+// covered here; a real multi-connection setup would key providerID off
+// the user's configured connection name instead — tracked below.
+var knownModelProviders = []string{"anthropic", "openai"}
+
 // newBranchRecommender returns the v1 recommender pre-loaded with a
-// small canned model table. Production wiring (a follow-up patch)
-// should hydrate this from the LLM connector view's ListProviders so
-// the recommendation chip surfaces real models. Until then the v1
-// table covers the most common cases (Anthropic + OpenAI tiers).
-func newBranchRecommender() *agentgraph.BranchRecommender {
-	return agentgraph.NewBranchRecommender([]agentgraph.ModelInfo{
-		{ProviderID: "anthropic", ProviderKind: "anthropic", ModelID: "claude-haiku-4", Tier: agentgraph.ModelTierSmall},
-		{ProviderID: "anthropic", ProviderKind: "anthropic", ModelID: "claude-sonnet-4", Tier: agentgraph.ModelTierMedium},
-		{ProviderID: "anthropic", ProviderKind: "anthropic", ModelID: "claude-opus-4", Tier: agentgraph.ModelTierLarge},
-		{ProviderID: "openai", ProviderKind: "openai", ModelID: "gpt-4o-mini", Tier: agentgraph.ModelTierSmall},
-		{ProviderID: "openai", ProviderKind: "openai", ModelID: "gpt-4o", Tier: agentgraph.ModelTierMedium},
-		{ProviderID: "openai", ProviderKind: "openai", ModelID: "o1-preview", Tier: agentgraph.ModelTierLarge},
-	})
+// known-model table sourced from the LLM capabilities registry
+// (versioned-model-profile-01PMDL04 WP04) instead of the hand-maintained
+// literal list this replaces — that table duplicated model-family names
+// already tracked in core/llm/capabilities/data/*.yaml (tiers:), which is
+// exactly the frozen-core violation WP04 closes. cat may be nil (e.g. the
+// embedded YAML failed to load); the recommender degrades to its
+// medium-tier default in that case rather than panicking.
+//
+// Production wiring (a follow-up patch) should still hydrate provider
+// IDs from the LLM connector view's ListProviders so the recommendation
+// chip surfaces the user's actually-configured providers/models, not
+// just the two enumerated here.
+func newBranchRecommender(cat *llmcap.Catalog) *agentgraph.BranchRecommender {
+	var models []agentgraph.ModelInfo
+	if cat != nil {
+		for _, providerID := range knownModelProviders {
+			for _, km := range cat.KnownModels(providerID) {
+				models = append(models, agentgraph.ModelInfo{
+					ProviderID:   providerID,
+					ProviderKind: providerID,
+					ModelID:      km.ModelID,
+					Tier:         agentgraph.ModelTier(km.Tier),
+				})
+			}
+		}
+	}
+	return agentgraph.NewBranchRecommenderWithTierSource(models, &tierSourceAdapter{cat: cat})
 }

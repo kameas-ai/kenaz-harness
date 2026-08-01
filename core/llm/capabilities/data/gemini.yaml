@@ -43,6 +43,12 @@ defaults:
   max_document_pages: 0
   image_input_mime_types: [image/png, image/jpeg, image/webp, image/heic, image/heif]
   document_input_mime_types: []
+  # Size-tier default (versioned-model-profile-01PMDL04 WP04). None of
+  # Gemini's model names ("flash"/"pro") matched a tierFromModelID
+  # keyword under the old heuristic, so every model resolved to medium —
+  # unchanged behaviour, expressed here as data instead of a fallback
+  # a caller would otherwise have to string-match for.
+  tier: medium
 models:
   # Gemini 2.5 Pro — supports reasoning (extended thinking)
   - match: "gemini-2.5-pro*"

@@ -65,20 +65,46 @@ type Recommendation struct {
 	Notes      string
 }
 
+// TierSource resolves a model tier when the recommender has no
+// directly-configured ModelInfo for a (provider, model) pair. The core
+// asks a data question through this seam instead of string-matching
+// model family names itself (versioned-model-profile-01PMDL04 WP04
+// closes the historical tierFromModelID frozen-core violation: tier
+// resolution now lives in provider-owned data under core/llm/**, e.g.
+// core/llm/capabilities' Tier/TierAny, with rpc wiring adapting it to
+// this interface).
+type TierSource interface {
+	// Tier returns the tier for (providerKind, modelID) and whether the
+	// source has an opinion. ok=false means "no data"; the caller
+	// applies its own final default.
+	Tier(providerKind, modelID string) (ModelTier, bool)
+}
+
 // BranchRecommender picks a (provider, model) pair for a forked child
 // session. v1 is a small heuristic table — spec §4.6 / FR-036 explicitly
 // notes that this is dial-tunable and OK to start crude.
 type BranchRecommender struct {
-	models []ModelInfo
+	models     []ModelInfo
+	tierSource TierSource
 }
 
 // NewBranchRecommender constructs a recommender from the available
 // model list. The slice is copied so subsequent caller mutations don't
-// surprise the recommender.
+// surprise the recommender. There is no tier source configured, so a
+// (provider, model) pair outside the given list resolves to
+// ModelTierMedium; use NewBranchRecommenderWithTierSource to widen
+// coverage without hardcoding model-family names here.
 func NewBranchRecommender(models []ModelInfo) *BranchRecommender {
+	return NewBranchRecommenderWithTierSource(models, nil)
+}
+
+// NewBranchRecommenderWithTierSource is NewBranchRecommender plus a
+// TierSource consulted for (provider, model) pairs not present in
+// models. Pass nil for ts to get NewBranchRecommender's behaviour.
+func NewBranchRecommenderWithTierSource(models []ModelInfo, ts TierSource) *BranchRecommender {
 	cp := make([]ModelInfo, len(models))
 	copy(cp, models)
-	return &BranchRecommender{models: cp}
+	return &BranchRecommender{models: cp, tierSource: ts}
 }
 
 // Recommend takes the parent's (providerID, modelID) and a free-text
@@ -139,15 +165,21 @@ func (r *BranchRecommender) Recommend(parentProviderID, parentModelID, taskHint 
 	return rec
 }
 
-// tierOf finds the tier of a (provider, model) pair, defaulting to medium.
+// tierOf finds the tier of a (provider, model) pair. If no configured
+// ModelInfo matches, it asks the injected TierSource (when one is
+// configured); if that has no opinion either, it defaults to medium.
 func (r *BranchRecommender) tierOf(providerID, modelID string) ModelTier {
 	for _, m := range r.models {
 		if m.ProviderID == providerID && m.ModelID == modelID {
 			return m.Tier
 		}
 	}
-	// Heuristic on the model id itself.
-	return tierFromModelID(modelID)
+	if r.tierSource != nil {
+		if t, ok := r.tierSource.Tier(providerID, modelID); ok {
+			return t
+		}
+	}
+	return ModelTierMedium
 }
 
 // pickAtTier returns the first configured model at the given tier,
@@ -187,28 +219,6 @@ func stepUp(t ModelTier) ModelTier {
 		return ModelTierLarge
 	default:
 		return ModelTierLarge
-	}
-}
-
-// tierFromModelID falls back to a name-based guess when the recommender
-// has no metadata for the parent model. Matches stable family names so
-// it doesn't flip every time a provider ships a new revision.
-func tierFromModelID(id string) ModelTier {
-	lower := strings.ToLower(id)
-	switch {
-	case strings.Contains(lower, "haiku"),
-		strings.Contains(lower, "mini"),
-		strings.Contains(lower, "nano"),
-		strings.Contains(lower, "small"),
-		strings.Contains(lower, "instant"):
-		return ModelTierSmall
-	case strings.Contains(lower, "opus"),
-		strings.Contains(lower, "ultra"),
-		strings.Contains(lower, "o1"),
-		strings.Contains(lower, "large"):
-		return ModelTierLarge
-	default:
-		return ModelTierMedium
 	}
 }
 
