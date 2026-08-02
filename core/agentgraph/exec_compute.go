@@ -103,7 +103,7 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 			// threaded through Env for this seam to size against.
 			// SiteConfig.PreCallThreshold (compaction/presets.go)
 			// reserves the config-driven slot for that follow-up;
-			// today it is not yet consumed by Pipeline.Run.
+			// today it is consumed by Pipeline.Run (see its threshold gate).
 			// Strategies must treat TargetTokens<=0 as a no-op (see
 			// DropOldestStrategy.Compact), not an unconditional trim
 			// — see compaction-convergence-01PMDL05 WP02.

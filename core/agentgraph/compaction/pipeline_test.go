@@ -322,9 +322,17 @@ func TestPipeline_PreCallThreshold_FiresOnlyNearContextMax(t *testing.T) {
 	}
 	short := []agentgraph.Message{{Role: "user", Content: "hi"}}
 
+	// pre_call is disabled in ProductionDefaults (the pre-send dial is
+	// the authoritative automatic compactor). Enable it explicitly here:
+	// this test covers the threshold gate itself, which is what makes
+	// the site safe to turn on once its preconditions are met.
 	newPipe := func() *compaction.Pipeline {
+		cfg := compaction.ProductionDefaults()
+		pre := cfg.ForSite(compaction.SitePreCall)
+		pre.Enabled = true
+		cfg.Sites[compaction.SitePreCall] = pre
 		p := compaction.NewPipeline(
-			compaction.WithResolver(compaction.NewMemoryResolverWithDefaults(compaction.ProductionDefaults())),
+			compaction.WithResolver(compaction.NewMemoryResolverWithDefaults(cfg)),
 		)
 		p.RegisterStrategy(compaction.NewDropOldestStrategy())
 		return p
@@ -394,23 +402,4 @@ func TestPipeline_PreCallThreshold_FiresOnlyNearContextMax(t *testing.T) {
 			t.Fatalf("compacted toward a guessed target with no known window")
 		}
 	})
-}
-
-// TestProductionDefaults_PreCallEnabledWithSafeStrategy pins the default
-// posture: automatic pre-call compaction is ON (otherwise long chats
-// eventually fail), and it uses the deterministic no-LLM strategy.
-// summary/semantic_cluster rewrite the entire transcript, so they stay
-// opt-in.
-func TestProductionDefaults_PreCallEnabledWithSafeStrategy(t *testing.T) {
-	cfg := compaction.ProductionDefaults()
-	pre := cfg.ForSite(compaction.SitePreCall)
-	if !pre.Enabled {
-		t.Fatal("pre_call disabled by default — long conversations would overflow the context window")
-	}
-	if pre.Strategy != compaction.StrategyDropOldest {
-		t.Fatalf("pre_call default strategy = %q, want drop_oldest (deterministic, no LLM call)", pre.Strategy)
-	}
-	if post := cfg.ForSite(compaction.SitePostTool); post.Enabled {
-		t.Fatal("post_tool enabled by default — it overwrites tool-result content in place")
-	}
 }

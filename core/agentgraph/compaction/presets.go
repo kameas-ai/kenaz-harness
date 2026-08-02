@@ -5,18 +5,19 @@
 // global layer with something that reproduces today's shipped behaviour
 // instead of FR-041's own SafeDefaults.
 //
-// SitePreCall is ENABLED by default with the deterministic drop_oldest
-// strategy, gated on PreCallThreshold * ContextWindow. SitePostTool stays
-// disabled (Enabled: false)
+// SitePreCall and SitePostTool are disabled (Enabled: false)
 // in every tier preset, including "balanced" (ProductionDefaults). The
 // pre-send dial already performs all automatic context-shrinking on
 // persisted session history before the kernel ever runs; enabling the
 // kernel-side pre_call/post_tool sites in addition would double-compact
 // every real conversation the day this ships. The dial's tier is
-// preserved here only as PreCallThreshold metadata (informational —
-// Pipeline.Run does not currently consult it) so a future WP that
-// retires the pre-send path has a starting point for re-enabling these
-// sites without losing the user's chosen aggressiveness.
+// preserved here as PreCallThreshold, which Pipeline.Run DOES now
+// evaluate against the model's ContextWindow — so a future WP that
+// retires the pre-send path can re-enable these sites without losing
+// the user's chosen aggressiveness, and the gate is already correct
+// when it does. See the Enabled comment below for the two hard
+// preconditions (tool-pair-aware trimming, and reconciling the two
+// compaction systems) that must land first.
 //
 // SiteManual is enabled at every tier (including "off"): it is the
 // explicit user/graph-author "compact now" trigger, a distinct feature
@@ -33,16 +34,31 @@ package compaction
 // "balanced", mirroring core/compaction.Tier's own default behaviour.
 func PresetForTier(tier string) CompactionConfig {
 	pre := SiteConfig{
-		// Enabled for every tier except "off": without automatic
-		// compaction a long conversation eventually overflows the
-		// model's context window and the call simply fails. "off" must
-		// still mean off — that dial position is the user opting out.
-		// drop_oldest is the deterministic, no-LLM-call strategy; it
-		// trims oldest turns only once CurrentTokens crosses
-		// PreCallThreshold * ContextWindow, and no-ops when the window
-		// is unknown. summary/semantic_cluster rewrite the whole
-		// transcript, so they stay opt-in.
-		Enabled:               tier != "off",
+		// DISABLED by default, deliberately. Automatic compaction
+		// already happens: ChatRunner.runPreSendCompaction fires on
+		// every send (chat_runner.go:482), triggering at 80% of the
+		// model cap on the "balanced" default tier and using the real
+		// tokenizer. Enabling this kernel site as well would compact a
+		// second time, on the slice the pre-send pass just produced,
+		// with a different token estimate and a different context-window
+		// table — strictly worse than either alone.
+		//
+		// Two hard preconditions before this may ever default to true:
+		//  1. DropOldestStrategy must become tool_use/tool_result pair
+		//     aware. It trims front-to-back (out = out[1:]) with zero
+		//     knowledge of ToolCallID, so it can drop a tool_use and
+		//     strand its tool_result — which OpenAI-compat providers
+		//     reject outright (see llm_provider_adapter.go:265-271).
+		//     That is a hard request failure, not a quality regression.
+		//  2. The two systems must be reconciled — either one is
+		//     authoritative, or they share a trigger. Note also that
+		//     ProductionDefaults() is hardcoded to PresetForTier
+		//     ("balanced"), so the user's own aggressiveness dial
+		//     (including "off") does not reach this site at all.
+		//
+		// The threshold machinery below is real and correct; it is what
+		// makes this site safe to enable once the above are addressed.
+		Enabled:               false,
 		Strategy:              StrategyDropOldest,
 		PreCallThreshold:      preCallThresholdForTier(tier),
 		MaxRecursionDepth:     DefaultMaxRecursionDepth,
