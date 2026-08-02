@@ -226,11 +226,22 @@ type MemoryResolver struct {
 // NewMemoryResolver constructs an empty resolver populated with
 // SafeDefaults at the global layer.
 func NewMemoryResolver() *MemoryResolver {
+	return NewMemoryResolverWithDefaults(SafeDefaults())
+}
+
+// NewMemoryResolverWithDefaults constructs an empty resolver populated
+// with the given global-layer config instead of SafeDefaults. This is
+// the seam production wiring uses to boot the resolver with a
+// backward-compatible preset (see the compaction package's
+// ProductionDefaults) rather than FR-041's own "safe" defaults, which
+// enable pre_call/post_tool out of the box and are not equivalent to
+// today's shipped pre-send-dial behaviour.
+func NewMemoryResolverWithDefaults(global CompactionConfig) *MemoryResolver {
 	r := &MemoryResolver{layers: make(map[Layer]map[string]CompactionConfig)}
 	for _, l := range AllLayers() {
 		r.layers[l] = make(map[string]CompactionConfig)
 	}
-	r.layers[LayerGlobal][""] = SafeDefaults()
+	r.layers[LayerGlobal][""] = global
 	return r
 }
 
