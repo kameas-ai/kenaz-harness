@@ -56,6 +56,12 @@ tiers:
     tier: large
 models:
   # Claude-via-OpenRouter: vision + documents pass through to Anthropic
+  # context_window (compaction-convergence-01PMDL05): matches the old
+  # core/compaction/wiring hardcoded table's
+  # "openrouter:anthropic/claude-sonnet-4-5" entry (200000). This row
+  # previously had no context_window set (defaulted to 0/unknown), which
+  # is the gap that forced that wiring package to keep its own duplicate
+  # table instead of reading this catalog.
   - match: "anthropic/claude-sonnet*"
     streaming: true
     tool_calling: true
@@ -68,6 +74,7 @@ models:
     structured_output: true
     grammar: false
     regex_grammar: false
+    context_window: 200000
     image_input: true
     document_input: true
     max_image_bytes: 5242880
@@ -121,6 +128,9 @@ models:
     max_image_bytes: 5242880
     max_image_count_per_message: 20
   # GPT-4o-via-OpenRouter: vision, no documents, native structured output
+  # context_window (compaction-convergence-01PMDL05): matches the old
+  # "openrouter:openai/gpt-4o" hardcoded-table entry (128000); see the
+  # anthropic/claude-sonnet* row above for the same rationale.
   - match: "openai/gpt-4o*"
     streaming: true
     tool_calling: true
@@ -133,6 +143,7 @@ models:
     structured_output: true
     grammar: false
     regex_grammar: false
+    context_window: 128000
     image_input: true
     document_input: false
     max_image_bytes: 20971520

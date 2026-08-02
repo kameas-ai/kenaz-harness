@@ -5,101 +5,58 @@ import (
 	"sync"
 
 	"github.com/kameas-ai/kenaz-harness/core/compaction"
+	llmcapabilities "github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
 )
 
-// CapabilityLookup maps (providerID, modelID) → MaxContextTokens budget.
-// The compaction engine uses the answer for its pre-flight cap check
-// (engine.go step 6 / rolling.go step 7); a missing budget (ok=false)
-// makes the engine skip the check and let the provider call surface
-// its own context_length_exceeded error.
+// CapabilityLookup maps a (providerID, modelID) pair to its
+// MaxContextTokens budget. The compaction engine uses the answer for
+// its pre-flight cap check (engine.go step 6 / rolling.go step 7); a
+// missing budget (ok=false) makes the engine skip the check and let
+// the provider call surface its own context_length_exceeded error.
 //
-// The current core/llm/capabilities.CapabilityDescriptor does not carry
-// MaxContextTokens (per-(provider, model) descriptors track per-feature
-// support flags but not numeric budgets). Until that surface lands —
-// follow-up mission likely on capability-data — this adapter ships a
-// curated table of "well-known" model context windows so the harness
-// can still drive the threshold-mode pre-flight check on real models
-// today. Unknown models return (0, false), which tells the engine to
-// skip the pre-flight gracefully (the provider's own gate will catch
-// any over-cap span).
-//
-// New entries land here when a model is added to the harness's known
-// providers; the table itself is intentionally small to avoid drift
-// against upstream provider docs. Operators with a custom model can
-// supply their own table via WithCustomTable or override an entry via
-// SetTable.
+// compaction-convergence-01PMDL05: this used to carry its own
+// hardcoded `builtinContextWindows` table, duplicating context-window
+// numbers that also live in core/llm/capabilities/data/*.yaml
+// (core/llm/capabilities.Catalog.ContextWindow). That duplication was
+// closed by adding the (previously missing) o3 / o3-mini / gpt-4.1 /
+// gpt-4.1-mini / o1-mini rows to the YAML catalog and making it the
+// sole source of context-window numbers: NewCapabilityLookup no longer
+// seeds `table` with any builtins, and MaxContextTokens falls back to
+// the shared Catalog (loaded once via llmcapabilities.LoadDefault)
+// when the operator-supplied `table` has no entry. `table` /
+// WithCustomTable / SetTable remain as the override layer for a model
+// the YAML catalog doesn't know about yet — that is a legitimate
+// escape hatch, not the duplicate this mission removed.
 type CapabilityLookup struct {
 	mu    sync.RWMutex
 	table map[string]int
+
+	// cat is the shared YAML-backed capability catalog. Falls back to
+	// nil (fallback disabled, not a crash) if the embedded data
+	// fails to parse — see NewCapabilityLookup.
+	cat *llmcapabilities.Catalog
 }
 
-// builtinContextWindows is the curated default table. Keys are
-// "<providerID>:<modelID>" lowercased; values are documented context
-// windows in tokens. Multiple variants of a model that share a window
-// are listed by their canonical id; the lookup tries the exact id
-// first and then a prefix match against family heads.
-//
-// Numbers come from public provider documentation as of the mission
-// merge date. Do NOT edit without checking the upstream source.
-//
-// This is a context-window budget table, not a tier-classification
-// lookup — out of versioned-model-profile-01PMDL04 WP04's scope (which
-// closed the tierFromModelID frozen-core violation in core/agentgraph).
-// It predates core/llm/capabilities.Catalog.ContextWindow and duplicates
-// data that now also lives in core/llm/capabilities/data/*.yaml; per the
-// package doc above, migrating callers onto that surface is tracked as a
-// follow-up once CapabilityDescriptor grows a MaxContextTokens field.
-// Each row is individually marked model-lit-allow so scripts/ci/
-// check-no-model-family-literals.sh's lint passes in the meantime.
-var builtinContextWindows = map[string]int{
-	// Anthropic Claude family.
-	"anthropic:claude-sonnet-4-5": 200000, // model-lit-allow: context-window budget table, not classification
-	"anthropic:claude-sonnet-4":   200000, // model-lit-allow: context-window budget table, not classification
-	"anthropic:claude-opus-4":     200000, // model-lit-allow: context-window budget table, not classification
-	"anthropic:claude-haiku-4":    200000, // model-lit-allow: context-window budget table, not classification
-	"anthropic:claude-3-5-sonnet": 200000, // model-lit-allow: context-window budget table, not classification
-	"anthropic:claude-3-5-haiku":  200000, // model-lit-allow: context-window budget table, not classification
-	"anthropic:claude-3-opus":     200000, // model-lit-allow: context-window budget table, not classification
-	"anthropic:claude-3-sonnet":   200000, // model-lit-allow: context-window budget table, not classification
-	"anthropic:claude-3-haiku":    200000, // model-lit-allow: context-window budget table, not classification
-
-	// OpenAI GPT-4o + o1 + o3 families.
-	"openai:gpt-4o":       128000, // model-lit-allow: context-window budget table, not classification
-	"openai:gpt-4o-mini":  128000, // model-lit-allow: context-window budget table, not classification
-	"openai:gpt-4-turbo":  128000, // model-lit-allow: context-window budget table, not classification
-	"openai:o1":           200000, // model-lit-allow: context-window budget table, not classification
-	"openai:o1-mini":      128000, // model-lit-allow: context-window budget table, not classification
-	"openai:o3":           200000,
-	"openai:o3-mini":      200000,  // model-lit-allow: context-window budget table, not classification
-	"openai:gpt-4.1":      1000000, // model-lit-allow: context-window budget table, not classification
-	"openai:gpt-4.1-mini": 1000000, // model-lit-allow: context-window budget table, not classification
-
-	// Bedrock surfaces Anthropic models behind anthropic.* ids.
-	"bedrock:anthropic.claude-sonnet-4-5": 200000, // model-lit-allow: context-window budget table, not classification
-	"bedrock:anthropic.claude-3-5-sonnet": 200000, // model-lit-allow: context-window budget table, not classification
-
-	// OpenRouter is a passthrough — model ids reuse the upstream
-	// vendor's id with an "<vendor>/<model>" prefix. Common
-	// OpenRouter-hosted models are listed; users on a custom model
-	// can supply their own entry via SetTable.
-	"openrouter:anthropic/claude-sonnet-4-5": 200000, // model-lit-allow: context-window budget table, not classification
-	"openrouter:openai/gpt-4o":               128000, // model-lit-allow: context-window budget table, not classification
-}
-
-// NewCapabilityLookup constructs the default lookup populated with the
-// curated builtin table.
+// NewCapabilityLookup constructs a CapabilityLookup with an empty
+// override table, backed by the default YAML capability catalog for
+// context-window lookups. A caller wanting the pre-01PMDL05 curated-table
+// behaviour verbatim (e.g. a test pinning specific numbers) should use
+// WithCustomTable instead.
 func NewCapabilityLookup() *CapabilityLookup {
-	c := &CapabilityLookup{table: make(map[string]int, len(builtinContextWindows))}
-	for k, v := range builtinContextWindows {
-		c.table[k] = v
-	}
-	return c
+	cat, _ := llmcapabilities.LoadDefault()
+	// A load error here means the embedded catalog itself is broken
+	// (a build-time invariant, not a runtime condition) — cat stays
+	// nil and MaxContextTokens simply reports (0, false) for anything
+	// not in an explicitly-supplied table, exactly like an unknown
+	// model does today.
+	return &CapabilityLookup{table: make(map[string]int), cat: cat}
 }
 
-// WithCustomTable returns a CapabilityLookup backed by a caller-
-// supplied table. The supplied table is copied so later mutations of
-// the input map don't affect the lookup. Pass an empty map to start
-// from a clean slate (no builtins).
+// WithCustomTable returns a CapabilityLookup backed only by the
+// caller-supplied table (the supplied table is copied so later
+// mutations to the input map don't affect the lookup) — no YAML
+// catalog fallback. Pass an empty map to start from a clean slate
+// with no context-window answers at all.
 func WithCustomTable(table map[string]int) *CapabilityLookup {
 	c := &CapabilityLookup{table: make(map[string]int, len(table))}
 	for k, v := range table {
@@ -108,8 +65,9 @@ func WithCustomTable(table map[string]int) *CapabilityLookup {
 	return c
 }
 
-// SetTable replaces or adds an entry. Useful for tests and for
-// operators wiring a custom model.
+// SetTable adds or replaces a single entry. Useful for tests and for
+// operators wiring in a custom model the shared YAML catalog doesn't
+// carry yet.
 func (c *CapabilityLookup) SetTable(providerID, modelID string, maxTokens int) {
 	if c == nil {
 		return
@@ -123,42 +81,48 @@ func (c *CapabilityLookup) SetTable(providerID, modelID string, maxTokens int) {
 }
 
 // MaxContextTokens implements compaction.CapabilityLookup. Returns
-// (max, true) on an exact match; (max, true) on a known prefix match
-// (so a fresh model in a known family inherits its family head's
-// budget); (0, false) when nothing matches — the engine skips its
-// pre-flight check on a false reply.
+// (max, true) on an exact table match; (max, true) on a known table
+// prefix match (so a fresh model in a known family inherits its family
+// head's budget); otherwise falls back to the shared YAML capability
+// catalog's Catalog.ContextWindow; (0, false) when nothing matches
+// anywhere — the engine skips its pre-flight check on a false reply.
 func (c *CapabilityLookup) MaxContextTokens(model compaction.ProviderProfileRef) (int, bool) {
 	if c == nil {
 		return 0, false
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.table == nil {
-		return 0, false
-	}
-	exact := normalizeKey(model.ProviderID, model.ModelID)
-	if v, ok := c.table[exact]; ok {
-		return v, true
-	}
-	// Prefix match: walk every entry whose provider matches and whose
-	// model prefix matches the requested id. The table is small enough
-	// (≤ 30 entries) that a linear scan stays cheap.
+
 	wantProv := strings.ToLower(strings.TrimSpace(model.ProviderID))
 	wantModel := strings.ToLower(strings.TrimSpace(model.ModelID))
-	for key, v := range c.table {
-		colon := strings.IndexByte(key, ':')
-		if colon < 0 {
-			continue
+
+	if c.table != nil {
+		exact := normalizeKey(model.ProviderID, model.ModelID)
+		if v, ok := c.table[exact]; ok {
+			return v, true
 		}
-		prov := key[:colon]
-		mod := key[colon+1:]
-		if prov != wantProv {
-			continue
+		for key, v := range c.table {
+			colon := strings.IndexByte(key, ':')
+			if colon < 0 {
+				continue
+			}
+			prov := key[:colon]
+			mod := key[colon+1:]
+			if prov != wantProv {
+				continue
+			}
+			if wantModel != "" && strings.HasPrefix(wantModel, mod) {
+				return v, true
+			}
 		}
-		if wantModel != "" && strings.HasPrefix(wantModel, mod) {
+	}
+
+	if c.cat != nil {
+		if v := c.cat.ContextWindow(wantProv, wantModel); v > 0 {
 			return v, true
 		}
 	}
+
 	return 0, false
 }
 
