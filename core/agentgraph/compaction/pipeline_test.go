@@ -302,3 +302,61 @@ func TestPipeline_AdaptsToAgentgraphCompactor(t *testing.T) {
 		t.Fatalf("expected one event emitted")
 	}
 }
+
+// TestPipeline_AutomaticSitesRefuseWithoutTokenBudget pins the fix
+// for a blocker found in review of PR #264.
+//
+// Wiring SetCompactionAPI to the live pipeline made the shipped
+// Settings -> Compaction panel functional for the first time. That panel
+// lets a user enable the pre_call site AND pick the "summary" strategy,
+// persisted globally to disk. Two gaps combined into a
+// history-destroying one-click path: Pipeline.Run never consulted
+// PreCallThreshold (so an enabled site fired on EVERY node execution,
+// not only when over budget), and SummaryStrategy/SemanticClusterStrategy
+// never consulted TargetTokens (which exec_compute always passes as 0),
+// so each fire collapsed the whole transcript into one message.
+//
+// The guard lives in Pipeline.Run so safety does not depend on every
+// strategy remembering to self-limit.
+func TestPipeline_AutomaticSitesRefuseWithoutTokenBudget(t *testing.T) {
+	msgs := []agentgraph.Message{
+		{Role: "user", Content: "first"},
+		{Role: "assistant", Content: "second"},
+		{Role: "user", Content: "third"},
+	}
+
+	for _, site := range []compaction.Site{compaction.SitePreCall, compaction.SitePostTool} {
+		t.Run(string(site), func(t *testing.T) {
+			cfg := compaction.ProductionDefaults()
+			sc := cfg.ForSite(site)
+			sc.Enabled = true
+			sc.Strategy = compaction.StrategySummary // the destructive combination
+			cfg.Sites[site] = sc
+
+			p := compaction.NewPipeline(
+				compaction.WithResolver(compaction.NewMemoryResolverWithDefaults(cfg)),
+			)
+			// Register the destructive strategy so the guard, not a
+			// missing registration, is what stops the fire.
+			p.RegisterStrategy(compaction.NewSummaryStrategy(nil))
+			res, err := p.Run(context.Background(), compaction.CompactRequest{
+				Site:  site,
+				Input: compaction.ContextSlice{Messages: msgs, TargetTokens: 0},
+			})
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if !res.Skipped {
+				t.Fatalf("site %s with TargetTokens=0 was NOT skipped - history would be destroyed", site)
+			}
+			if len(res.Compacted.Messages) != len(msgs) {
+				t.Fatalf("history mutated: got %d messages, want %d", len(res.Compacted.Messages), len(msgs))
+			}
+			for i := range msgs {
+				if res.Compacted.Messages[i].Content != msgs[i].Content {
+					t.Fatalf("message %d altered: %q != %q", i, res.Compacted.Messages[i].Content, msgs[i].Content)
+				}
+			}
+		})
+	}
+}

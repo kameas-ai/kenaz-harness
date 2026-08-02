@@ -271,9 +271,9 @@ type Embedder interface {
 // the tie-break). When no embedder is wired the strategy falls back
 // to a degraded "every other message" pick if FallbackEnabled.
 type SemanticClusterStrategy struct {
-	Embedder         Embedder
-	DefaultClusters  int
-	FallbackEnabled  bool
+	Embedder        Embedder
+	DefaultClusters int
+	FallbackEnabled bool
 }
 
 // NewSemanticClusterStrategy constructs the strategy with sensible
@@ -372,7 +372,7 @@ func (s *SemanticClusterStrategy) Compact(ctx context.Context, in ContextSlice, 
 	}
 
 	// For each cluster keep the longest-content message (most info).
-	picked := make(map[int]int)        // cluster idx -> message idx
+	picked := make(map[int]int) // cluster idx -> message idx
 	pickedLen := make(map[int]int)
 	for i, m := range in.Messages {
 		c := assign[i]

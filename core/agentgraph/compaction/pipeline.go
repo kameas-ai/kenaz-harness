@@ -144,10 +144,10 @@ type CompactResult struct {
 }
 
 // Run runs one compaction request end-to-end:
-//   1. Resolve the effective config for the request scope + site.
-//   2. Pick the strategy (override > resolved > default drop_oldest).
-//   3. Look up the registered compactor.
-//   4. Run it, emit compaction_fired, return.
+//  1. Resolve the effective config for the request scope + site.
+//  2. Pick the strategy (override > resolved > default drop_oldest).
+//  3. Look up the registered compactor.
+//  4. Run it, emit compaction_fired, return.
 //
 // Returns ErrUnknownStrategy if the resolved name has no registered
 // compactor, ErrRecursionExceeded if a custom_subgraph nests past the
@@ -197,6 +197,45 @@ func (p *Pipeline) Run(ctx context.Context, req CompactRequest) (CompactResult, 
 	p.mu.RUnlock()
 	if !ok {
 		return CompactResult{}, fmt.Errorf("%w: %q", ErrUnknownStrategy, strat)
+	}
+
+	// No budget signal ⇒ no automatic compaction. The automatic sites
+	// (pre_call / post_tool) fire per node execution, so without a
+	// target to aim at there is no way to decide *how much* to drop —
+	// and several strategies (summary, semantic_cluster) do not consult
+	// TargetTokens at all, meaning they would collapse the entire
+	// history on every fire. Today exec_compute always passes
+	// TargetTokens: 0 (the real context-window budget seam is still
+	// pending), so this guard is what keeps enabling a site from being
+	// destructive. Gate here at the pipeline rather than trusting each
+	// strategy to self-limit: a future strategy that forgets the check
+	// is then safe by construction.
+	//
+	// SiteManual is deliberately exempt — a user (or a graph author
+	// placing a `compact` node) asking to compact now means it, and the
+	// compact node carries its own TargetTokenBudget attr.
+	if req.Site != SiteManual && req.Input.TargetTokens <= 0 {
+		bytesIn := bytesOf(req.Input.Messages)
+		p.emit(req.RunID, req.NodeID, Event{
+			Strategy:   siteCfg.Strategy,
+			Site:       req.Site,
+			MsgsIn:     len(req.Input.Messages),
+			MsgsOut:    len(req.Input.Messages),
+			BytesIn:    bytesIn,
+			BytesOut:   bytesIn,
+			Skipped:    true,
+			SkipReason: "no target token budget",
+		})
+		passthrough := append([]agentgraph.Message(nil), req.Input.Messages...)
+		return CompactResult{
+			Compacted: CompactedContext{
+				Messages:    passthrough,
+				TokensAfter: approxTokens(bytesIn),
+				Strategy:    siteCfg.Strategy,
+			},
+			Skipped: true,
+			Reason:  "no target token budget",
+		}, nil
 	}
 
 	// Merge resolved-config opts on top of caller opts (caller wins).
