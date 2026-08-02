@@ -125,8 +125,10 @@ export interface Provider {
   region?: string;
   cred?: CredentialReference;
   /**
-   * "bundle" | "personal" — surfaced so the UI can show whether a
-   * provider came from a signed bundle or the user's providers.json.
+   * "bundle" | "host" | "personal" — surfaced so the UI can show where a
+   * provider came from: a signed bundle, the surrounding host control
+   * plane (Kenaz delivered it to this workbench), or the user's own
+   * providers.json.
    */
   source?: ProviderSource;
   /**
@@ -136,7 +138,12 @@ export interface Provider {
   validated?: boolean;
 }
 
-export type ProviderSource = 'bundle' | 'personal';
+/**
+ * Where a Provider came from. "host" means the surrounding control plane
+ * (Kenaz) configured it and it is READ-ONLY from inside this process —
+ * mirrors llm.SourceHost in core/rpc/views/llm.
+ */
+export type ProviderSource = 'bundle' | 'host' | 'personal';
 
 /**
  * Reference-only credential pointer. NEVER carries a plaintext value;

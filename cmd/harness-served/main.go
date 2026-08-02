@@ -100,7 +100,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	api := rpc.New(c)
+	// Seed the provider the Kenaz control plane granted this workbench
+	// (Spec 078). Mirrors main.go's runServeMode — both served entry points
+	// must agree, or which binary the image happens to bake would change
+	// whether the workbench boots configured.
+	api := rpc.New(c, rpc.WithHostProviders(serve.HostProviders(os.Getenv, log)))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -3,8 +3,12 @@
  * ProviderRow — single-row presentation of one configured Provider.
  *
  * Renders name / kind / model + a status pill driven by the most-recent
- * TestProvider outcome. Bundle entries are rendered with a "bundle" tag
- * and no remove affordance; personal entries expose a Remove button.
+ * TestProvider outcome. Personal entries expose Edit/Remove; bundle and
+ * host entries are read-only and carry a tag naming where they came from.
+ *
+ * `readOnly` additionally hides the Test affordance. Served mode passes it:
+ * TestProvider is not ported to the HTTP transport, so the button would
+ * reject on click — an affordance that cannot work is worse than none.
  *
  * Events:
  *   - `test`   — caller should run TestProvider against this row.
@@ -18,6 +22,8 @@ import Button from '@/components/ui/Button.vue';
 const props = defineProps<{
   provider: Provider;
   testing?: boolean;
+  /** Hide every mutating affordance, including Test. */
+  readOnly?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -26,7 +32,25 @@ const emit = defineEmits<{
   (e: 'remove', id: string): void;
 }>();
 
-const isPersonal = computed(() => props.provider.source === 'personal');
+const isPersonal = computed(
+  () => props.provider.source === 'personal' && !props.readOnly,
+);
+
+/**
+ * Tag shown beside the name for providers the user cannot edit here.
+ * A host provider must NOT be mislabelled "bundle" — the two have very
+ * different remediation paths (re-sign a bundle vs. edit the Kenaz profile).
+ */
+const sourceTag = computed(() => {
+  switch (props.provider.source) {
+    case 'host':
+      return 'host';
+    case 'personal':
+      return null;
+    default:
+      return 'bundle';
+  }
+});
 
 const statusLabel = computed(() =>
   props.provider.validated ? 'VALIDATED' : 'UNVALIDATED',
@@ -46,10 +70,11 @@ const statusClass = computed(() =>
       <div class="flex items-center gap-2">
         <span class="font-medium">{{ provider.name || provider.id }}</span>
         <span
-          v-if="!isPersonal"
+          v-if="sourceTag"
           class="rounded-sm border border-border-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-ink-muted"
+          :data-testid="`provider-source-tag-${provider.id}`"
         >
-          bundle
+          {{ sourceTag }}
         </span>
       </div>
     </td>
@@ -77,6 +102,7 @@ const statusClass = computed(() =>
     <td class="px-4 py-2.5">
       <div class="flex items-center justify-end gap-2">
         <Button
+          v-if="!readOnly"
           size="sm"
           variant="ghost"
           :disabled="testing"

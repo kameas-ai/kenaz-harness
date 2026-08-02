@@ -394,6 +394,11 @@ type API struct {
 	// (model-fallback-routing-01NDFSEX04 WP04)
 	fallbackStore *fallback.FSStore
 
+	// hostProfiles are control-plane-supplied, read-only provider profiles
+	// (Config.HostProviders). Fixed at construction — never mutated — so no
+	// lock guards it.
+	hostProfiles []corellm.ProviderProfile
+
 	mu             sync.Mutex
 	subs           map[string]*subscription
 	nextID         uint64
@@ -496,6 +501,17 @@ type Config struct {
 	// Delete to be a no-op.
 	// (model-fallback-routing-01NDFSEX04 WP04)
 	FallbackStore *fallback.FSStore
+
+	// HostProviders are provider profiles supplied by the surrounding
+	// control plane rather than by the user inside this process — today,
+	// the profile the SERVED harness derives from the Kenaz-delivered
+	// EnvGrant environment (Spec 078). They surface in ListProviders with
+	// Source "host", are loaded into the registry so StartStream can
+	// resolve them, and are IMMUTABLE from inside the harness: the
+	// operator manages them in Kenaz, not here.
+	//
+	// Empty (the desktop default) → behaviour is byte-for-byte unchanged.
+	HostProviders []corellm.ProviderProfile
 }
 
 // New constructs a concrete API.
@@ -523,6 +539,7 @@ func New(cfg Config) *API {
 		credInvalidator: cfg.CredInvalidator,
 		auditRotation:   cfg.AuditRotation,
 		customAdapter:   cfg.CustomAdapter,
+		hostProfiles:    cfg.HostProviders,
 		subs:            map[string]*subscription{},
 		validated:       map[string]bool{},
 		fallbackStore:   cfg.FallbackStore,
@@ -699,6 +716,37 @@ var ErrPersonalStoreUnavailable = errors.New("llm: personal provider store unava
 // caller targets a bundle-derived profile.
 var ErrBundleProviderImmutable = errors.New("llm: bundle providers are read-only")
 
+// SourceHost is the Provider.Source value for a profile the surrounding
+// control plane supplied (Config.HostProviders). The frontend keys its
+// read-only rendering off this exact string.
+const SourceHost = "host"
+
+// ErrHostProviderImmutable is returned by AddProvider / UpdateProvider /
+// RemoveProvider when the caller targets a host-supplied profile. The
+// message is user-facing: it names where the provider IS editable, because
+// inside a workbench there is no local edit path at all.
+var ErrHostProviderImmutable = errors.New(
+	"llm: this provider is configured by the host control plane; manage it in Kenaz → profile → provider")
+
+// isHostProvider reports whether id names a control-plane-supplied profile.
+func (a *API) isHostProvider(id string) bool {
+	for _, p := range a.hostProfiles {
+		if p.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// HostProviders returns the control-plane-supplied profiles this API was
+// constructed with. Used by the served transport to answer "did the host
+// configure a provider?" without a registry round-trip.
+func (a *API) HostProviders() []corellm.ProviderProfile {
+	out := make([]corellm.ProviderProfile, len(a.hostProfiles))
+	copy(out, a.hostProfiles)
+	return out
+}
+
 // Compile-time assertion: *API satisfies LLMConnectorAPI.
 var _ LLMConnectorAPI = (*API)(nil)
 
@@ -716,6 +764,17 @@ func (a *API) ListProviders(ctx context.Context) ([]Provider, error) {
 		for _, p := range a.bundles.BundleProfiles() {
 			seen[p.ID] = profileToProvider(p, "bundle", a.isValidated(p.ID))
 		}
+	}
+	// Host-supplied profiles sit between bundle and personal: a signed
+	// bundle still wins, but a control-plane grant outranks whatever the
+	// user happened to leave in providers.json. Without this the served
+	// harness has nothing to list and the UI's only honest answer is
+	// "no provider configured".
+	for _, p := range a.hostProfiles {
+		if _, exists := seen[p.ID]; exists {
+			continue
+		}
+		seen[p.ID] = profileToProvider(p, SourceHost, a.isValidated(p.ID))
 	}
 	if a.store != nil {
 		personalList, err := a.store.List()
@@ -972,6 +1031,9 @@ func (a *API) AddProvider(ctx context.Context, in AddProviderInput) error {
 		log.Error("llm.add_provider.failed", "id", in.ID, "reason", "no store")
 		return ErrPersonalStoreUnavailable
 	}
+	if a.isHostProvider(in.ID) {
+		return fmt.Errorf("%w: %q", ErrHostProviderImmutable, in.ID)
+	}
 	switch in.Cred.Kind {
 	case "keychain", "aws_profile", "env", "file":
 		// indirect references — accepted
@@ -1033,6 +1095,9 @@ func (a *API) UpdateProvider(ctx context.Context, in AddProviderInput) error {
 	if a.store == nil {
 		return ErrPersonalStoreUnavailable
 	}
+	if a.isHostProvider(in.ID) {
+		return fmt.Errorf("%w: %q", ErrHostProviderImmutable, in.ID)
+	}
 	switch in.Cred.Kind {
 	case "keychain", "aws_profile", "env", "file":
 	default:
@@ -1093,6 +1158,9 @@ func (a *API) UpdateProvider(ctx context.Context, in AddProviderInput) error {
 func (a *API) RemoveProvider(_ context.Context, id string) error {
 	if a.store == nil {
 		return ErrPersonalStoreUnavailable
+	}
+	if a.isHostProvider(id) {
+		return fmt.Errorf("%w: %q", ErrHostProviderImmutable, id)
 	}
 	if a.bundles != nil {
 		for _, p := range a.bundles.BundleProfiles() {
@@ -1177,6 +1245,9 @@ func (a *API) UpdateProviderCredential(ctx context.Context, profileID, plaintext
 	if a.store == nil {
 		return ErrPersonalStoreUnavailable
 	}
+	if a.isHostProvider(profileID) {
+		return fmt.Errorf("%w: %q", ErrHostProviderImmutable, profileID)
+	}
 	if a.bundles != nil {
 		for _, p := range a.bundles.BundleProfiles() {
 			if p.ID == profileID {
@@ -1245,7 +1316,21 @@ func (a *API) ensurePersonalLoaded() error {
 		return nil
 	}
 	a.mu.Unlock()
-	if a.store == nil || a.reg == nil {
+	if a.reg == nil {
+		a.mu.Lock()
+		a.personalLoaded = true
+		a.mu.Unlock()
+		return nil
+	}
+	// Host-supplied profiles are loaded first and unconditionally: they are
+	// what makes StartStream resolvable in a workbench where the personal
+	// store is empty by construction.
+	if len(a.hostProfiles) > 0 {
+		if err := a.reg.LoadProfiles(a.hostProfiles); err != nil {
+			return fmt.Errorf("llm: load host profiles: %w", err)
+		}
+	}
+	if a.store == nil {
 		a.mu.Lock()
 		a.personalLoaded = true
 		a.mu.Unlock()
@@ -1272,6 +1357,11 @@ func (a *API) lookupProfile(id string) (corellm.ProviderProfile, error) {
 			if p.ID == id {
 				return p, nil
 			}
+		}
+	}
+	for _, p := range a.hostProfiles {
+		if p.ID == id {
+			return p, nil
 		}
 	}
 	if a.store != nil {

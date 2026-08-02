@@ -13,7 +13,6 @@
 
 import { computed, onMounted, ref } from 'vue';
 import { useServedMode } from '@/lib/useServedMode';
-import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import {
   DialogRoot,
   DialogPortal,
@@ -44,6 +43,26 @@ const editingProvider = ref<Provider | null>(null);
 const testingId = ref<string | null>(null);
 const lastTestResult = ref<{ id: string; result: TestResult } | null>(null);
 const errorMessage = ref<string>('');
+
+/**
+ * Providers the surrounding host control plane delivered to this workbench
+ * (Spec 078: Kenaz grants a credential, the served harness seeds a profile
+ * from it). Read-only here — the edit path lives in the Kenaz profile editor.
+ */
+const hostProviders = computed(() =>
+  providers.value.filter((p) => p.source === 'host'),
+);
+
+/** Comma-separated provider kinds, for the read-only notice. */
+const hostProviderKinds = computed(() =>
+  hostProviders.value.map((p) => p.kind ?? p.id).join(', '),
+);
+
+/**
+ * Served mode is READ-ONLY, always: the harness runs inside a VM where the
+ * only provider source is the host, and no in-VM write can change it.
+ */
+const readOnly = computed(() => servedMode.value);
 
 async function refresh(): Promise<void> {
   loading.value = true;
@@ -181,18 +200,17 @@ const inlineTestClass = computed(() =>
 </script>
 
 <template>
-  <NotAvailableInServedMode
-    v-if="servedMode"
-    feature="Providers"
-  />
   <SettingsShell
-    v-else
     number="04"
     section="PROVIDERS"
     title="Configured LLM providers"
-    subtitle="Bundle providers ship with a signed bundle. Personal providers live in your local providers.json — credentials always behind the OS keychain."
+    :subtitle="
+      readOnly
+        ? 'This workbench uses the provider your Kenaz profile grants it. Credentials are delivered by the host at boot and are never stored inside the VM.'
+        : 'Bundle providers ship with a signed bundle. Personal providers live in your local providers.json — credentials always behind the OS keychain.'
+    "
   >
-    <template #head-trailing>
+    <template v-if="!readOnly" #head-trailing>
       <Button
         variant="accent"
         :data-testid="'open-add-provider'"
@@ -203,8 +221,46 @@ const inlineTestClass = computed(() =>
     </template>
 
     <div class="px-6 py-4">
+      <!--
+        Served mode: state the truth and point at the ONE place the user can
+        act. The previous behaviour told workbench users to "run the harness
+        as a desktop app" — impossible from inside the VM, and the reason
+        provider setup read as broken.
+      -->
+      <div
+        v-if="readOnly && hostProviders.length > 0"
+        class="mb-4 rounded-md border border-accent-hairline bg-surface-1 px-4 py-3 font-ui text-[12px]"
+        role="status"
+        :data-testid="'host-provider-notice'"
+      >
+        <div class="uppercase tracking-[0.18em] text-[11px] text-ink-subtle">
+          Configured by the host
+        </div>
+        <p class="mt-1 text-ink">
+          Provider configured by the host control plane:
+          <span class="font-mono">{{ hostProviderKinds }}</span
+          >. Manage it in Kenaz → profile → provider.
+        </p>
+      </div>
+
+      <div
+        v-else-if="readOnly"
+        class="mb-4 rounded-md border border-signal-warn bg-surface-1 px-4 py-3 font-ui text-[12px]"
+        role="status"
+        :data-testid="'no-host-provider-notice'"
+      >
+        <div class="uppercase tracking-[0.18em] text-[11px] text-signal-warn">
+          No provider configured
+        </div>
+        <p class="mt-1 text-ink">
+          This workbench was started without a provider credential, so chat is
+          unavailable. Add one in Kenaz → profile → provider, then reopen the
+          workbench to pick it up.
+        </p>
+      </div>
+
       <!-- Local runtimes detection cards (absent when feature flag off) -->
-      <LocalRuntimesSection :on-provider-added="refresh" />
+      <LocalRuntimesSection v-if="!readOnly" :on-provider-added="refresh" />
 
       <div
         v-if="errorMessage"
@@ -245,6 +301,7 @@ const inlineTestClass = computed(() =>
             :key="p.id"
             :provider="p"
             :testing="testingId === p.id"
+            :read-only="readOnly"
             @test="onTest"
             @edit="openEditDrawer"
             @remove="onRemove"
@@ -254,7 +311,11 @@ const inlineTestClass = computed(() =>
               colspan="5"
               class="px-4 py-6 text-center text-sm text-ink-muted"
             >
-              No providers configured. Click "Add provider" to add one.
+              {{
+                readOnly
+                  ? 'No provider was delivered to this workbench. Configure one in Kenaz → profile → provider, then reopen the workbench.'
+                  : 'No providers configured. Click "Add provider" to add one.'
+              }}
             </td>
           </tr>
         </tbody>

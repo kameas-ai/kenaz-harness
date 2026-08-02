@@ -22,10 +22,15 @@
 //	                      provider's default from defaultAgentModels.
 //
 // Auto-detection (no KENAZ_AGENT_PROVIDER): the first non-empty credential
-// env var in agentProviderDetection order picks the provider. When NOTHING
-// resolves in real mode, tasks fail with errNoModelCredential — the honest
-// degraded mode Spec 058 US3 requires. Echo is reachable ONLY via the
-// explicit stub flag (FR-004).
+// env var in core/llm/envprovider.Detections order picks the provider. When
+// NOTHING resolves in real mode, tasks fail with a named no_model_credential
+// error — the honest degraded mode Spec 058 US3 requires. Echo is reachable
+// ONLY via the explicit stub flag (FR-004).
+//
+// The detection table, the per-provider default models, and the resolution
+// rules live in core/llm/envprovider so this executor and the SERVED harness
+// (--serve, which seeds a host provider profile from the same env) can never
+// disagree about which provider a given VM environment implies.
 //
 // PRIVACY: credential VALUES never leave the resolver (core/llm/credref /
 // core/secrets); this file logs only the provider kind, model id, and the
@@ -34,7 +39,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -42,6 +46,7 @@ import (
 
 	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/llm/credref"
+	"github.com/kameas-ai/kenaz-harness/core/llm/envprovider"
 	"github.com/kameas-ai/kenaz-harness/core/llm/registry"
 	"github.com/kameas-ai/kenaz-harness/core/secrets"
 )
@@ -57,12 +62,20 @@ const (
 	agentProfileID = "agent-exec"
 )
 
-// errNoModelCredential is the named, actionable error a real-mode task fails
-// with when no usable provider credential resolves from the VM environment
-// (Spec 058 FR-003 / SC-002). The leading token is the stable name; keep it
-// first so the wire's message_truncated (64 runes) always carries it.
-var errNoModelCredential = errors.New(
-	"no_model_credential: no provider API key in VM env; grant one (e.g. ANTHROPIC_API_KEY) or set KENAZ_AGENT_EXEC=stub")
+// agentNoCredentialHint is this surface's caller-specific advice appended to
+// envprovider.ErrNoCredential (Spec 058 FR-003 / SC-002). The sentinel's
+// leading "no_model_credential:" token stays first so the wire's
+// message_truncated (64 runes) always carries the stable name.
+const agentNoCredentialHint = "grant one (e.g. ANTHROPIC_API_KEY) or set KENAZ_AGENT_EXEC=stub"
+
+// agentEnvOptions binds this surface's override env vars to the shared
+// resolver in core/llm/envprovider.
+var agentEnvOptions = envprovider.Options{
+	ProviderVar:      agentProviderEnv,
+	CredVar:          agentCredEnvEnv,
+	ModelVar:         agentModelEnv,
+	NoCredentialHint: agentNoCredentialHint,
+}
 
 // agentExecutor is the seam between the graph's run node and the model call.
 // Implementations MUST honour ctx cancellation so a task.cancel aborts an
@@ -104,34 +117,10 @@ type agentConfigError struct{ inner error }
 func (e *agentConfigError) Error() string { return e.inner.Error() }
 func (e *agentConfigError) Unwrap() error { return e.inner }
 
-// agentProviderDetection maps conventional credential env vars to adapter
-// kinds, in priority order, for real-mode auto-detection.
-var agentProviderDetection = []struct{ kind, credEnv string }{
-	{"anthropic", "ANTHROPIC_API_KEY"},
-	{"openrouter", "OPENROUTER_API_KEY"},
-	{"openai", "OPENAI_API_KEY"},
-	{"gemini", "GEMINI_API_KEY"},
-}
-
 // defaultAgentModels is the per-provider model used when KENAZ_AGENT_MODEL is
-// unset. Each id matches its provider's capabilities catalog entry.
-var defaultAgentModels = map[string]string{
-	"anthropic":  "claude-sonnet-4-5",
-	"openrouter": "anthropic/claude-sonnet-4-5",
-	"openai":     "gpt-4o",
-	"gemini":     "gemini-2.5-flash",
-}
-
-// defaultAgentCredEnv returns the conventional credential env var for kind,
-// or "" when the kind has no convention (caller must set KENAZ_AGENT_CRED_ENV).
-func defaultAgentCredEnv(kind string) string {
-	for _, d := range agentProviderDetection {
-		if d.kind == kind {
-			return d.credEnv
-		}
-	}
-	return ""
-}
+// unset. It is an alias of the shared table — this executor and the served
+// harness resolve identical defaults by construction, not by convention.
+var defaultAgentModels = envprovider.DefaultModels
 
 // resolveAgentExecutor picks the executor for this process from the
 // environment. It never fails the process: an unresolvable real mode returns
@@ -177,37 +166,9 @@ type llmExecutor struct {
 // and builds a registry around it. Errors are named and actionable — they are
 // what real-mode tasks fail with when the VM has no usable grant.
 func newLLMExecutor() (*llmExecutor, error) {
-	kind := os.Getenv(agentProviderEnv)
-	credEnv := os.Getenv(agentCredEnvEnv)
-
-	if kind != "" {
-		if credEnv == "" {
-			credEnv = defaultAgentCredEnv(kind)
-		}
-		if credEnv == "" {
-			return nil, fmt.Errorf("no_model_credential: provider %q has no conventional key var; set KENAZ_AGENT_CRED_ENV", kind)
-		}
-		if os.Getenv(credEnv) == "" {
-			return nil, fmt.Errorf("no_model_credential: %s is empty (provider %q); grant the credential or set KENAZ_AGENT_EXEC=stub", credEnv, kind)
-		}
-	} else {
-		for _, d := range agentProviderDetection {
-			if os.Getenv(d.credEnv) != "" {
-				kind, credEnv = d.kind, d.credEnv
-				break
-			}
-		}
-		if kind == "" {
-			return nil, errNoModelCredential
-		}
-	}
-
-	model := os.Getenv(agentModelEnv)
-	if model == "" {
-		model = defaultAgentModels[kind]
-	}
-	if model == "" {
-		return nil, fmt.Errorf("no_model_default: provider %q has no default model; set KENAZ_AGENT_MODEL", kind)
+	res, err := envprovider.Resolve(os.Getenv, agentEnvOptions)
+	if err != nil {
+		return nil, err
 	}
 
 	// A private registry with the env-backed secrets resolver: credential
@@ -217,21 +178,15 @@ func newLLMExecutor() (*llmExecutor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("agent_exec_registry: %w", err)
 	}
-	prof := llm.ProviderProfile{
-		ID:    agentProfileID,
-		Kind:  kind,
-		Model: model,
-		Cred:  llm.CredentialReference{Kind: "env", Locator: credEnv},
-	}
-	if err := reg.LoadProfiles([]llm.ProviderProfile{prof}); err != nil {
+	if err := reg.LoadProfiles([]llm.ProviderProfile{res.Profile(agentProfileID)}); err != nil {
 		return nil, fmt.Errorf("agent_exec_profile: %w", err)
 	}
 	return &llmExecutor{
 		reg:       reg,
 		profileID: agentProfileID,
-		kind:      kind,
-		model:     model,
-		credEnv:   credEnv,
+		kind:      res.Kind,
+		model:     res.Model,
+		credEnv:   res.CredEnv,
 	}, nil
 }
 

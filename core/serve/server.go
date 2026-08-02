@@ -503,6 +503,24 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 	case "Elicit_ListPending":
 		return s.elicitAPI().ListPending(ctx)
 
+	// LLM_ListProviders is READ-ONLY provider state. It exists so a served
+	// harness inside a Kenaz workbench can tell its user the truth about
+	// provider configuration instead of the old dead end ("Providers is not
+	// available in served mode … run the harness as a desktop app" — advice
+	// nobody inside a VM can act on).
+	//
+	// The only providers a served harness has are the ones the host control
+	// plane delivered (Source "host", seeded from the EnvGrant environment
+	// via rpc.WithHostProviders). The corresponding WRITE methods
+	// (LLM_AddProvider / Update / Remove) are deliberately NOT ported: host
+	// providers are immutable from inside the VM, so a write surface here
+	// would be a lie with a spinner on it.
+	//
+	// Privacy: Provider carries only an INDIRECT credential reference — the
+	// credential env var NAME (e.g. "ANTHROPIC_API_KEY"), never its bytes.
+	case "LLM_ListProviders":
+		return s.api.LLMConnector().ListProviders(ctx)
+
 	default:
 		// Explicit "not ported" error so the served frontend can distinguish
 		// "this method exists on desktop but is not yet wired in serve mode"
