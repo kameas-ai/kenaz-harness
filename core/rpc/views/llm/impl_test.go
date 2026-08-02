@@ -730,3 +730,36 @@ func TestRemoveProvider_EvictsFromRegistry(t *testing.T) {
 		t.Error("expected profile to be absent from registry after RemoveProvider")
 	}
 }
+
+// TestStartStream_RegistersHostProfileWithoutAPriorListProviders pins the
+// fix for a bug found by smoking the served harness: a host-delivered
+// provider was only installed into the registry as a SIDE EFFECT of
+// ListProviders. Any client that started a turn without first reading the
+// provider list got `llm: profile "kenaz-host" not registered` — a
+// confusing message about a provider the control plane had just granted.
+//
+// StartStream must resolve providers itself, not inherit whatever the UI
+// happened to call first.
+func TestStartStream_RegistersHostProfileWithoutAPriorListProviders(t *testing.T) {
+	reg := &fakeRegistry{}
+	host := corellm.ProviderProfile{
+		ID:    "kenaz-host",
+		Kind:  "anthropic",
+		Model: "claude-sonnet-4-5",
+		Cred:  corellm.CredentialReference{Kind: "env", Locator: "ANTHROPIC_API_KEY"},
+	}
+	api := New(Config{Registry: reg, HostProviders: []corellm.ProviderProfile{host}})
+
+	// No ListProviders call first — straight to the turn.
+	_, err := api.StartStream(context.Background(), "kenaz-host", "sess-1", "")
+
+	// The chat runner is not wired in this chassis, so the call still
+	// fails — but it must fail for THAT reason, having already installed
+	// the profile.
+	if err == nil {
+		t.Fatal("expected the nil-chat-runner error")
+	}
+	if _, perr := reg.Profile("kenaz-host"); perr != nil {
+		t.Fatalf("StartStream did not register the host profile: %v", perr)
+	}
+}

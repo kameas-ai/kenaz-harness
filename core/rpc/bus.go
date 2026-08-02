@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 )
 
 // BusEvent is a single published event on the EventBus.
@@ -25,9 +26,36 @@ type EventBus struct {
 }
 
 type subscriber struct {
-	ch     chan BusEvent
-	topics map[string]struct{} // nil means subscribe to all topics
+	ch      chan BusEvent
+	topics  map[string]struct{} // nil means subscribe to all topics
+	dropped *atomic.Uint64      // events discarded because ch was full
 }
+
+// Subscription is a live bus subscription that also accounts for events
+// the bus had to discard because this subscriber's buffer was full.
+//
+// The plain [EventBus.Subscribe] API cannot tell a subscriber that it
+// missed events, which is fine for coarse "something changed, re-read it"
+// topics but NOT for token streams: silently swallowing part of a model
+// response and showing the remainder as if it were complete is a
+// correctness bug the user cannot even see. Consumers that forward
+// per-token events to a remote client (core/serve's WebSocket fan-out)
+// use [EventBus.SubscribeTracked] and surface [Subscription.Dropped] to
+// that client instead of pretending nothing was lost.
+type Subscription struct {
+	// C delivers matching events. Closed by Close.
+	C <-chan BusEvent
+
+	dropped *atomic.Uint64
+	cancel  context.CancelFunc
+}
+
+// Dropped returns the number of events the bus discarded for this
+// subscription because its buffer was full. Monotonically increasing.
+func (s *Subscription) Dropped() uint64 { return s.dropped.Load() }
+
+// Close releases the subscription and closes C. Safe to call more than once.
+func (s *Subscription) Close() { s.cancel() }
 
 // NewEventBus constructs an EventBus.
 func NewEventBus() *EventBus {
@@ -41,6 +69,15 @@ func NewEventBus() *EventBus {
 // function must be called when the subscriber is done to release resources.
 // bufSize controls the channel buffer; 0 uses a default of 64.
 func (b *EventBus) Subscribe(bufSize int, topics ...string) (<-chan BusEvent, context.CancelFunc) {
+	sub := b.SubscribeTracked(bufSize, topics...)
+	return sub.C, sub.Close
+}
+
+// SubscribeTracked is [EventBus.Subscribe] plus drop accounting: the
+// returned [Subscription] counts every event the bus had to discard
+// because this subscriber's buffer was full, so the consumer can tell
+// its own downstream that data was lost instead of hiding the gap.
+func (b *EventBus) SubscribeTracked(bufSize int, topics ...string) *Subscription {
 	if bufSize <= 0 {
 		bufSize = 64
 	}
@@ -54,10 +91,12 @@ func (b *EventBus) Subscribe(bufSize int, topics ...string) (<-chan BusEvent, co
 		}
 	}
 
+	dropped := &atomic.Uint64{}
+
 	b.mu.Lock()
 	id := b.seq
 	b.seq++
-	b.subs[id] = subscriber{ch: ch, topics: topicSet}
+	b.subs[id] = subscriber{ch: ch, topics: topicSet, dropped: dropped}
 	b.mu.Unlock()
 
 	cancel := func() {
@@ -69,7 +108,7 @@ func (b *EventBus) Subscribe(bufSize int, topics ...string) (<-chan BusEvent, co
 		}
 		b.mu.Unlock()
 	}
-	return ch, cancel
+	return &Subscription{C: ch, dropped: dropped, cancel: cancel}
 }
 
 // Publish sends ev to all matching subscribers.  Non-blocking: a full
@@ -86,7 +125,13 @@ func (b *EventBus) Publish(topic string, payload any) {
 		}
 		select {
 		case sub.ch <- ev:
-		default: // subscriber is slow; drop rather than block
+		default:
+			// Subscriber is slow; drop rather than block the publisher.
+			// The drop is COUNTED so a tracked subscriber can report the
+			// gap downstream instead of silently losing the event.
+			if sub.dropped != nil {
+				sub.dropped.Add(1)
+			}
 		}
 	}
 }

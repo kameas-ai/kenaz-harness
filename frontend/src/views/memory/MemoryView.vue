@@ -508,6 +508,7 @@ defineExpose({ refresh });
   <NotAvailableInServedMode
     v-if="servedMode"
     feature="Memory"
+      reason="Memory browsing, pruning and journal RPCs are not wired into the in-workbench build yet."
   />
   <div v-else>
     <CanvasHead

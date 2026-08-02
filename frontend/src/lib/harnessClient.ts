@@ -4026,11 +4026,58 @@ export function createUnsupportedServedClient(): HarnessClient {
 }
 
 /**
+ * SERVED_STREAM_TOPICS are the WebSocket event names the served server
+ * forwards verbatim from the backend event bus (see core/serve/wsstream.go
+ * `passthroughTopics`). Each one is re-published onto the in-process served
+ * event bus so `useEventStream(topic, …)` receives it exactly as it would
+ * over the Wails bridge on the desktop — no per-topic component changes.
+ *
+ * Keep this list in sync with `passthroughTopics` in core/serve/wsstream.go.
+ * A topic present there but missing here is delivered to the browser and
+ * then dropped on the floor, which looks to the user like the backend
+ * hanging.
+ */
+export const SERVED_STREAM_TOPICS = [
+  // Chat streaming.
+  'llm:stream-chunk',
+  'llm:stream-closed',
+  'llm:fallback-attempted',
+  // Per-turn accounting rendered inline in the chat surface.
+  'session.usage.updated',
+  'cost.threshold.crossed',
+  // Interactive gates. A tool call BLOCKS on the user's answer, so a
+  // dropped permission-pending event reads as "the harness hung".
+  'bash:permission-pending',
+  'cred:permission-pending',
+  'fs:permission-pending',
+  'tool:permission-pending',
+  // Blocking elicitation (kenaz__ask_user_question).
+  'elicit:pending',
+] as const;
+
+/**
+ * SERVED_STREAM_TRUNCATED is the transport-level event the served server
+ * emits when it could not deliver every frame to THIS browser (see the
+ * backpressure policy in core/serve/wsstream.go). It is not a backend
+ * topic — nothing publishes it on the event bus — so it is forwarded here
+ * under its own name for the chat surface to render as a visible notice.
+ *
+ * Must match serve.TopicStreamTruncated.
+ */
+export const SERVED_STREAM_TRUNCATED = 'served:stream-truncated';
+
+/**
  * createServedHarnessClient — a HarnessClient whose subset of methods that
- * core/serve exposes (AppInfo, ShellStatus, Sessions_List, Sessions_Get,
- * Sessions_Stream) are wired to the HTTP/WS transport.  All other methods
+ * core/serve exposes are wired to the HTTP/WS transport.  All other methods
  * reject with ServedUnsupportedError so that components can render an honest
  * "not available in served mode" state instead of fabricated data (FR-001).
+ *
+ * The wired set is chosen so that the flow the harness exists for — holding
+ * a conversation — completes end to end inside a workbench: browse and
+ * create sessions, read and append messages, start and stop a streaming
+ * turn, and answer the permission prompts a turn raises. Half-wired flows
+ * are worse than honest refusals, because the user only discovers the gap
+ * at the point where it breaks.
  *
  * Token resolution is handled inside ServedTransport (meta tag →
  * window.__HARNESS_TOKEN__ → empty).  Callers can pass an explicit token
@@ -4071,6 +4118,54 @@ export function createServedHarnessClient(opts?: {
       get: (id: string) =>
         transport.call<Session>('Sessions_Get', { id }),
 
+      // ── conversation lifecycle ──────────────────────────────────────
+      create: (name: string) =>
+        transport.call<Session>('Sessions_Create', { name }),
+
+      rename: (id: string, name: string) =>
+        transport.call<void>('Sessions_Rename', { id, name }),
+
+      delete: (id: string) => transport.call<void>('Sessions_Delete', { id }),
+
+      // moveToProject + setSystemPrompt exist here because the new-session
+      // dialog uses them in the same submit as create(): it optionally
+      // files the session under a project and seeds it with a system
+      // prompt. Wiring create() alone would leave that dialog throwing
+      // halfway through, with the session already made.
+      moveToProject: (id: string, projectId: string) =>
+        transport.call<void>('Sessions_MoveToProject', { id, projectId }),
+
+      setSystemPrompt: (id: string, content: string, kind: 'system' | 'user_seed') =>
+        transport.call<void>('Sessions_SetSystemPrompt', { id, content, kind }),
+
+      // ── transcript ──────────────────────────────────────────────────
+      listMessages: (id: string) =>
+        transport.call<Message[]>('Sessions_ListMessages', { id }),
+
+      listMessagesActive: (id: string) =>
+        transport.call<ListMessagesResult>('Sessions_ListMessagesActive', { id }),
+
+      listMessagesAll: (id: string) =>
+        transport.call<ListMessagesResult>('Sessions_ListMessagesAll', { id }),
+
+      appendMessage: (id: string, role: MessageRole, content: string) =>
+        transport.call<Message>('Sessions_AppendMessage', { id, role, content }),
+
+      sendMessageWithBlocks: (id: string, contentBlocks: ContentBlock[]) =>
+        transport.call<Message>('Sessions_SendMessageWithBlocks', {
+          id,
+          contentBlocks,
+        }),
+
+      saveDraft: (id: string, draft: string) =>
+        transport.call<void>('Sessions_SaveDraft', { id, draft }),
+
+      loadDraft: (id: string) =>
+        transport.call<string>('Sessions_LoadDraft', { id }),
+
+      getUsage: (id: string) =>
+        transport.call<SessionUsage>('Sessions_GetUsage', { id }),
+
       /**
        * startStream — opens a WebSocket subscription for Sessions_Stream.
        * Returns a synthetic subscription id; the caller must keep it to call
@@ -4088,13 +4183,19 @@ export function createServedHarnessClient(opts?: {
           onFrame: (event, data) => {
             // Dispatch WS frames into the served-event bus so composables
             // that use useEventStream() receive them without the Wails
-            // runtime bridge (FR-007).
-            //
-            // elicit:pending — a new blocking dialog was opened.
-            // elicit:pending:snapshot — list of in-flight asks on reconnect.
-            if (event === 'elicit:pending') {
-              dispatchServedEvent('elicit:pending', data);
-            } else if (event === 'elicit:pending:snapshot') {
+            // runtime bridge. This is the entire reason chat works in
+            // served mode: useSession() subscribes to llm:stream-chunk /
+            // llm:stream-closed with no idea which transport delivered
+            // them, so forwarding the frames verbatim makes the desktop
+            // and served chat surfaces the same code.
+            if (
+              (SERVED_STREAM_TOPICS as readonly string[]).includes(event) ||
+              event === SERVED_STREAM_TRUNCATED
+            ) {
+              dispatchServedEvent(event, data);
+              return;
+            }
+            if (event === 'elicit:pending:snapshot') {
               // Snapshot is an array of ElicitRequest; re-emit each as
               // an individual 'elicit:pending' event so the
               // AskUserQuestion component queues them normally.
@@ -4103,7 +4204,7 @@ export function createServedHarnessClient(opts?: {
                 dispatchServedEvent('elicit:pending', req);
               }
             }
-            // session:snapshot and sessions:update are handled via
+            // sessions:snapshot and sessions:update are handled via
             // sessions.list() polling; no action needed here.
           },
         });
@@ -4152,6 +4253,58 @@ export function createServedHarnessClient(opts?: {
        * form that cannot succeed would be worse than offering none.
        */
       listProviders: () => transport.call<Provider[]>('LLM_ListProviders'),
+
+      /**
+       * startStream / stopStream — the chat turn itself.
+       *
+       * These hit the same rpc.StartLLMStream / rpc.StopLLMStream entry
+       * points the desktop Wails bindings call, so the lockdown gate,
+       * provider resolution and error taxonomy are identical on both
+       * transports. The resulting per-token events arrive over the
+       * Sessions_Stream WebSocket and are re-published onto the served
+       * event bus by the onFrame handler above.
+       */
+      startStream: (profileID: string, sessionID: string, modelOverride?: string) =>
+        transport.call<string>('LLM_StartStream', {
+          profileId: profileID,
+          sessionId: sessionID,
+          modelOverride: modelOverride ?? '',
+        }),
+
+      stopStream: (id: string) =>
+        transport.call<void>('LLM_StopStream', { subId: id }),
+    },
+
+    projects: {
+      ...base.projects,
+
+      // Read-only: the new-session dialog lists projects to file the new
+      // session under. Project WRITES stay unported — nothing in the chat
+      // flow needs them, and an edit form that cannot succeed is worse
+      // than none.
+      list: () => transport.call<Project[]>('Projects_List'),
+    },
+
+    permissions: {
+      ...base.permissions,
+
+      /**
+       * resolve — answers a `<family>:permission-pending` prompt.
+       *
+       * Non-negotiable for an agentic harness: the first tool call a turn
+       * makes raises the prompt and then BLOCKS on the answer. Forwarding
+       * the event (see SERVED_STREAM_TOPICS) without this write would put
+       * a modal on screen whose buttons do nothing and leave the turn
+       * hanging until it timed out.
+       *
+       * listGrants / revokeGrant stay unported — grant management is a
+       * settings surface, not part of completing a turn.
+       */
+      resolve: (requestID: string, decision: string) =>
+        transport.call<void>('Permissions_Resolve', {
+          requestId: requestID,
+          decision,
+        }),
     },
   };
 }

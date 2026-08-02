@@ -177,6 +177,7 @@ onMounted(() => {
   <NotAvailableInServedMode
     v-if="servedMode"
     feature="Artifacts"
+      reason="The artifact store and its byte-fetch RPCs are not wired into the in-workbench build yet. Artifacts produced during a turn are still captured — you just cannot browse them from here."
   />
   <div
     v-else

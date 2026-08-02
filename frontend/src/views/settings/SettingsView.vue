@@ -1030,6 +1030,7 @@ onMounted(() => {
   <NotAvailableInServedMode
     v-if="servedMode"
     feature="Settings"
+        reason="Settings are read and written through desktop-only RPCs; the in-workbench build exposes no settings surface yet. Workbench-level configuration lives in Kenaz on the host."
   />
   <SettingsShell
     v-else

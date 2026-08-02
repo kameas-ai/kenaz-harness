@@ -29,7 +29,7 @@ import { useEventStream } from './useEventStream';
 import { logEvent } from './eventLog';
 import { isServedMode } from './useServedMode';
 import { useConnectionState } from './useConnectionState';
-import { friendlyRPCError } from './errors';
+import { friendly } from './errors';
 import type { ContentBlock, Message, Session } from './types';
 
 /**
@@ -44,6 +44,21 @@ export interface SessionUsagePayload {
   totalTokens: number;
   costUsd: number;
   costSource: string;
+}
+
+/**
+ * StreamTruncatedPayload mirrors serve.StreamTruncatedPayload
+ * (core/serve/wsstream.go). It arrives ONLY in served mode, on the
+ * transport-level `served:stream-truncated` event, when this browser could
+ * not keep up with the live stream and the server had to drop frames.
+ *
+ * It exists so the surface can say "you are missing part of this reply"
+ * instead of rendering a truncated answer that looks complete.
+ */
+export interface StreamTruncatedPayload {
+  dropped: number;
+  reason: string;
+  message: string;
 }
 
 export interface UseSessionResult {
@@ -81,6 +96,15 @@ export interface UseSessionResult {
    * promptTokens from this to update its numerator in near-real-time.
    */
   lastUsage: Ref<SessionUsagePayload | null>;
+  /**
+   * Set when the served transport tells us it could not deliver every
+   * stream frame to this browser. Non-null means the transcript on screen
+   * is INCOMPLETE and the surface must say so — silently showing a short
+   * answer as if it were the whole answer is the failure mode this
+   * exists to prevent. Always null in desktop mode. Cleared when a new
+   * turn starts or the session changes.
+   */
+  streamTruncated: Ref<StreamTruncatedPayload | null>;
   refresh(): Promise<void>;
   /**
    * Append a user message and start the assistant stream. modelOverride
@@ -121,6 +145,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
   const showFullHistory = ref(false);
   const sweptCount = ref(0);
   const lastUsage = ref<SessionUsagePayload | null>(null);
+  const streamTruncated = ref<StreamTruncatedPayload | null>(null);
 
   let streamTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
   let draftDebounceHandle: ReturnType<typeof setTimeout> | null = null;
@@ -389,6 +414,23 @@ export function useSession(id: Ref<string>): UseSessionResult {
     }
   });
 
+  // Served-mode transport backpressure (core/serve/wsstream.go). The
+  // server drops frames rather than blocking the harness-wide event bus
+  // when this browser cannot keep up, and tells us how many. We surface
+  // it instead of letting the user read a half-answer as a whole one.
+  //
+  // Not filtered by session id: the notice is a property of THIS
+  // connection, and the server cannot attribute a frame it never
+  // delivered to a particular conversation.
+  useEventStream<StreamTruncatedPayload>('served:stream-truncated', (payload) => {
+    if (!payload) return;
+    streamTruncated.value = payload;
+    logEvent('warn', 'served.stream.truncated', {
+      dropped: payload.dropped,
+      reason: payload.reason,
+    });
+  });
+
   // Auth-resume seam (provider-keychain-rotation-01KQ8TD9 follow-up):
   // RedriveLastTurn on the backend re-issues StartStream with a fresh
   // sub_id but the auth-pause path leaves the frontend with the OLD
@@ -423,6 +465,9 @@ export function useSession(id: Ref<string>): UseSessionResult {
     const sid = id.value;
     if (!sid) return;
     error.value = null;
+    // A new turn starts a fresh stream, so any truncation notice from the
+    // previous one no longer describes what is on screen.
+    streamTruncated.value = null;
     logEvent('info', 'send.requested', {
       session_id: sid,
       profile_id: profileID,
@@ -455,11 +500,11 @@ export function useSession(id: Ref<string>): UseSessionResult {
         }
       }, STREAM_TIMEOUT_MS);
     } catch (err) {
-      // FR-008 (agent-loop-robustness-parity WP08): if the backend returned a
-      // structured RPCErrorEnvelope, surface the hint/message instead of the
-      // raw Go error string.
-      const friendly = friendlyRPCError(err);
-      const msg = friendly ?? (err instanceof Error ? err.message : String(err));
+      // FR-008 (agent-loop-robustness-parity WP08): prefer the structured
+      // RPCErrorEnvelope hint over the raw Go string. friendly() also
+      // humanises served-mode and attachment errors, so the served chat
+      // surface never renders an internal error verbatim.
+      const msg = friendly(err);
       error.value = msg;
       logEvent('error', 'send.failed', {
         session_id: sid,
@@ -478,6 +523,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
     if (!sid) return;
     if (contentBlocks.length === 0) return;
     error.value = null;
+    streamTruncated.value = null;
     logEvent('info', 'send.requested', {
       session_id: sid,
       profile_id: profileID,
@@ -513,9 +559,9 @@ export function useSession(id: Ref<string>): UseSessionResult {
         }
       }, STREAM_TIMEOUT_MS);
     } catch (err) {
-      // FR-008: surface structured RPCErrorEnvelope hint/message when available.
-      const friendly = friendlyRPCError(err);
-      const msg = friendly ?? (err instanceof Error ? err.message : String(err));
+      // FR-008: surface the structured RPCErrorEnvelope hint when available;
+      // humanise everything else rather than leaking a Go error string.
+      const msg = friendly(err);
       error.value = msg;
       logEvent('error', 'send.failed', {
         session_id: sid,
@@ -570,6 +616,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
       streamSubscriptionId.value = null;
       streamingTimedOut.value = false;
       lastUsage.value = null;
+      streamTruncated.value = null;
       // showFullHistory is per-session UI state — reset on every
       // session reopen so a switch-back never resurrects the previous
       // view (compaction-strategy-ui WP07 plan §2.8).
@@ -628,6 +675,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
     showFullHistory,
     sweptCount,
     lastUsage,
+    streamTruncated,
     refresh,
     send,
     sendBlocks,

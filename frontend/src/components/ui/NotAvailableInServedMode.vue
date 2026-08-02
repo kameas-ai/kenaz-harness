@@ -8,8 +8,14 @@
  * Usage: render this component when the view detects a served-mode
  * limitation (e.g. catches ServedUnsupportedError or calls useServedMode()).
  *
- * Props:
- *   feature — short name of the unsupported feature, e.g. "Settings"
+ * # Copy rule
+ *
+ * The body text must stay ACTIONABLE FROM INSIDE A WORKBENCH. This
+ * harness is the default app in a Kenaz workbench VM; its user often has
+ * no desktop harness at all, so "run the desktop app" is not advice, it
+ * is a dead end. Say what this specific view needs and what does work
+ * here instead. Pass `reason` to be specific; the default only states the
+ * general truth.
  */
 
 const props = withDefaults(
@@ -19,8 +25,18 @@ const props = withDefaults(
      * Defaults to "This feature".
      */
     feature?: string;
+    /**
+     * One sentence explaining what this view needs that the in-workbench
+     * build does not expose yet. Keep it specific — a reader should learn
+     * something they did not already know from the heading.
+     */
+    reason?: string;
   }>(),
-  { feature: 'This feature' },
+  {
+    feature: 'This feature',
+    reason:
+      'It depends on parts of the harness API that the in-workbench build does not expose yet.',
+  },
 );
 </script>
 
@@ -54,7 +70,11 @@ const props = withDefaults(
         {{ props.feature }} is not available in served mode
       </span>
       <span class="font-ui text-xs text-ink-muted max-w-xs">
-        Served mode only supports session management. Run the harness as a desktop app to access this feature.
+        {{ props.reason }}
+      </span>
+      <span class="font-ui text-xs text-ink-muted max-w-xs">
+        Sessions work here: create a conversation, send a message, watch it
+        stream, and stop it.
       </span>
     </div>
   </div>

@@ -318,6 +318,7 @@ onMounted(loadCatalog);
   <NotAvailableInServedMode
     v-if="servedMode"
     feature="Workflows"
+      reason="Workflow definitions and runs are not wired into the in-workbench build yet."
   />
   <div v-else>
     <CanvasHead

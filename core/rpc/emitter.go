@@ -22,7 +22,21 @@ type WailsEmitter struct{}
 // Emit dispatches a payload on the given topic. THIS IS ONE OF ONLY
 // TWO FILES ALLOWED TO CALL runtime.EventsEmit (the other is
 // stream_broker.go).
+//
+// The nil-runtime guard is load-bearing, not defensive noise: Wails'
+// runtime.EventsEmit calls log.Fatalf — i.e. os.Exit — when the context
+// it is handed does not carry the Wails event dispatcher. Any emit that
+// happens before OnStartup wires that context, or from a build that
+// links the desktop emitter without running a Wails app (served mode
+// compiled without the `serve` tag; any test that drives a real core),
+// would therefore take the entire process down. Dropping one desktop
+// event is a strictly better outcome, and it is not silent data loss:
+// the MultiEmitter's EventBus sink still delivers, which is the sink
+// served mode actually reads.
 func (WailsEmitter) Emit(ctx context.Context, topic string, payload any) {
+	if ctx == nil || ctx.Value("events") == nil { //nolint:staticcheck // Wails' own key type
+		return
+	}
 	runtime.EventsEmit(ctx, topic, payload)
 }
 

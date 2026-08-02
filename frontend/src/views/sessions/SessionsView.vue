@@ -1683,6 +1683,28 @@ async function onShared() {
           >
             Branch from turn failed: {{ branchFromTurnError }}
           </div>
+          <!-- Live-stream truncation (served mode only). The server drops
+               frames rather than stalling the whole harness when this
+               browser cannot keep up; when it does, the transcript above
+               is INCOMPLETE. Saying nothing here would leave a half
+               answer looking like a whole one. The full turn is persisted
+               server-side, so reopening the conversation recovers it. -->
+          <div
+            v-if="session.streamTruncated.value"
+            class="mx-4 mb-2 rounded-sm border border-signal-warn bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-warn"
+            role="status"
+            data-testid="stream-truncated-notice"
+          >
+            {{ session.streamTruncated.value.message }}
+            <button
+              type="button"
+              class="ml-2 underline underline-offset-2"
+              data-testid="stream-truncated-reload"
+              @click="session.refresh()"
+            >
+              Reload conversation
+            </button>
+          </div>
           <BranchSidebar
             v-if="hasSession"
             :parent-session-id="sessionId"

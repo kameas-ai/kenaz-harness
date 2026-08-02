@@ -150,6 +150,26 @@ export function retryReconnectNow(): void {
   void attemptReconnect();
 }
 
+/**
+ * looksLikeRPCErrorEnvelope reports whether a server error string is a
+ * JSON-encoded core/rpc.RPCError. Mirrors the shape check in
+ * errors.ts parseRPCError() — kept local so servedTransport stays free of
+ * a dependency on the error-parsing module.
+ */
+function looksLikeRPCErrorEnvelope(raw: string): boolean {
+  if (!raw.startsWith('{')) return false;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return (
+      typeof parsed['code'] === 'string' &&
+      typeof parsed['message'] === 'string' &&
+      typeof parsed['retryable'] === 'boolean'
+    );
+  } catch {
+    return false;
+  }
+}
+
 export class ServedTransport {
   private readonly baseURL: string;
   private readonly token: string;
@@ -209,7 +229,19 @@ export class ServedTransport {
 
     const json = (await res.json()) as ServedRPCResponse<T>;
     if (json.error) {
-      throw new Error(`servedTransport: ${method}: ${json.error}`);
+      // Preserve a structured backend error envelope VERBATIM.
+      //
+      // The Go side encodes typed failures (auth / transient /
+      // context_overflow / …) as a JSON rpc.RPCError string, and the
+      // frontend's parseRPCError() recovers the hint and retryability from
+      // it. On the desktop transport Wails hands that string over
+      // untouched. Prefixing it here — as every other served error is
+      // prefixed — would make it unparseable, so served mode would show a
+      // raw Go string where the desktop shows "Your API key was rejected;
+      // rotate it in Kenaz". Same backend, same taxonomy, both transports.
+      throw new Error(looksLikeRPCErrorEnvelope(json.error)
+        ? json.error
+        : `servedTransport: ${method}: ${json.error}`);
     }
     return json.result as T;
   }

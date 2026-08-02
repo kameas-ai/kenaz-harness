@@ -64,6 +64,8 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
 	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
+	permissionsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/permissions"
+	sessionsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sessions"
 	"github.com/kameas-ai/kenaz-harness/core/serve/authbroker"
 )
 
@@ -116,6 +118,33 @@ type Server struct {
 	srv         *http.Server
 	authSession *authbroker.Session  // nil when serve mode is not wired with auth (tests / anonymous)
 	elicit      elicitview.ElicitAPI // nil → falls back to api.Elicit(); injected for a stable pending surface
+	queueCap    int                  // per-WS-client frame queue depth; 0 → defaultStreamQueueCap
+
+	// baseCtx is the server's lifetime context, captured in Serve. It is
+	// the context handed to RPCs that spawn work OUTLIVING the HTTP
+	// request that started them — see backgroundCtx.
+	baseCtx context.Context
+}
+
+// backgroundCtx returns a context scoped to the SERVER's lifetime rather
+// than to one HTTP request.
+//
+// This is not a nicety. LLM_StartStream returns a subscription id
+// immediately and leaves the chat runner streaming in a goroutine; the
+// tokens arrive later over the WebSocket. Handing it r.Context() means
+// the turn is cancelled the instant the POST response is written — the
+// runner dies with "context canceled" on its first history read and the
+// browser sits watching a stream that will never produce a token.
+//
+// The desktop transport has always had this right by accident: its
+// bindings pass the long-lived Wails app context. This is the served
+// equivalent, and it still cancels on shutdown so in-flight turns are
+// torn down when the harness stops.
+func (s *Server) backgroundCtx() context.Context {
+	if s.baseCtx != nil {
+		return s.baseCtx
+	}
+	return context.Background()
 }
 
 // ServerOption is a functional option for [New].
@@ -141,6 +170,18 @@ func WithAuthSession(s *authbroker.Session) ServerOption {
 // the tool layer writes to.
 func WithElicitAPI(e elicitview.ElicitAPI) ServerOption {
 	return func(srv *Server) { srv.elicit = e }
+}
+
+// WithStreamQueueCap overrides the per-WebSocket-client frame queue depth
+// (default [defaultStreamQueueCap]).
+//
+// The queue is what stands between a browser that stalls and the event bus
+// that must not stall with it; see the backpressure policy in wsstream.go.
+// Lower it to make the truncation path reachable deterministically in
+// tests, or to cap per-client memory in a very constrained workbench.
+// Values <= 0 keep the default.
+func WithStreamQueueCap(n int) ServerOption {
+	return func(srv *Server) { srv.queueCap = n }
 }
 
 // New constructs a Server backed by the given *rpc.API.
@@ -228,6 +269,10 @@ func New(api *rpc.API, addr, token string, staticFS fs.FS, log *slog.Logger, opt
 // encounters a fatal error.  It always returns a non-nil error; a context
 // cancellation surfaces as context.Canceled.
 func (s *Server) Serve(ctx context.Context) error {
+	// Capture the server-lifetime context for RPCs whose work outlives the
+	// request that started them (see backgroundCtx).
+	s.baseCtx = ctx
+
 	ln, err := net.Listen("tcp", s.srv.Addr)
 	if err != nil {
 		return err
@@ -467,7 +512,19 @@ func (s *Server) elicitAPI() elicitview.ElicitAPI {
 }
 
 // dispatch routes a method name to the appropriate rpc.API call.
-// Only a representative slice is wired here; the full port is deferred.
+//
+// The wired surface is deliberately a subset of the desktop binding
+// surface, chosen so that a browser inside a Kenaz workbench can do the
+// thing the harness exists to do — hold a conversation — end to end:
+// browse and create sessions, read and append messages, start and stop a
+// streaming turn, and answer the permission prompts a turn raises.
+//
+// Everything outside that set still returns the explicit "not ported"
+// error below rather than fake data. When adding to this switch, the bar
+// is: a method belongs here only when the whole user-visible flow it
+// participates in can actually complete inside a VM. Half a flow is worse
+// than an honest refusal, because the user only finds out at the point
+// where it breaks.
 func (s *Server) dispatch(ctx context.Context, method string, params json.RawMessage) (any, error) {
 	switch method {
 	case "AppInfo":
@@ -487,6 +544,149 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 			return nil, errors.New("Sessions_Get: bad params: " + err.Error())
 		}
 		return s.api.Sessions().Get(ctx, p.ID)
+
+	// ── chat: session lifecycle ──────────────────────────────────────
+	//
+	// These mirror the desktop Sessions_* bindings one-for-one. Without
+	// them a served harness could list conversations it could never start
+	// or continue — the default app in every Kenaz workbench was unable to
+	// hold a conversation at all.
+
+	case "Sessions_Create":
+		var p struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Sessions_Create: bad params: " + err.Error())
+		}
+		return s.api.Sessions().Create(ctx, p.Name)
+
+	case "Sessions_ListMessages":
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Sessions_ListMessages: bad params: " + err.Error())
+		}
+		return s.api.Sessions().ListMessages(ctx, p.ID)
+
+	case "Sessions_ListMessagesActive":
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Sessions_ListMessagesActive: bad params: " + err.Error())
+		}
+		return s.api.Sessions().ListMessagesActive(ctx, p.ID)
+
+	case "Sessions_ListMessagesAll":
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Sessions_ListMessagesAll: bad params: " + err.Error())
+		}
+		return s.api.Sessions().ListMessagesAll(ctx, p.ID)
+
+	case "Sessions_AppendMessage":
+		var p struct {
+			ID      string `json:"id"`
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Sessions_AppendMessage: bad params: " + err.Error())
+		}
+		return s.api.Sessions().AppendMessage(ctx, p.ID, p.Role, p.Content)
+
+	// Sessions_SendMessageWithBlocks goes through API.SendMessageBlocks so
+	// the fleet emergency-lockdown gate is the SAME code the desktop
+	// binding runs — a served client must not be able to dispatch a turn
+	// the desktop app would refuse. See core/rpc/chat_gates.go.
+	case "Sessions_SendMessageWithBlocks":
+		var p struct {
+			ID     string                      `json:"id"`
+			Blocks []sessionsview.ContentBlock `json:"contentBlocks"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Sessions_SendMessageWithBlocks: bad params: " + err.Error())
+		}
+		return rpc.SendMessageBlocks(ctx, s.api, p.ID, p.Blocks)
+
+	case "Sessions_SaveDraft":
+		var p struct {
+			ID    string `json:"id"`
+			Draft string `json:"draft"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Sessions_SaveDraft: bad params: " + err.Error())
+		}
+		return nil, s.api.Sessions().SaveDraft(ctx, p.ID, p.Draft)
+
+	case "Sessions_LoadDraft":
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Sessions_LoadDraft: bad params: " + err.Error())
+		}
+		return s.api.Sessions().LoadDraft(ctx, p.ID)
+
+	case "Sessions_GetUsage":
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Sessions_GetUsage: bad params: " + err.Error())
+		}
+		return s.api.Sessions().GetUsage(ctx, p.ID)
+
+	case "Sessions_Rename":
+		var p struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Sessions_Rename: bad params: " + err.Error())
+		}
+		return nil, s.api.Sessions().Rename(ctx, p.ID, p.Name)
+
+	case "Sessions_Delete":
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Sessions_Delete: bad params: " + err.Error())
+		}
+		return nil, s.api.Sessions().Delete(ctx, p.ID)
+
+	// SetSystemPrompt + MoveToProject + Projects_List exist here because the
+	// new-session dialog needs all three: it optionally files the session
+	// under a project and seeds it with a system prompt. Porting Create
+	// alone would leave that dialog throwing halfway through.
+	case "Sessions_SetSystemPrompt":
+		var p struct {
+			ID      string `json:"id"`
+			Content string `json:"content"`
+			Kind    string `json:"kind"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Sessions_SetSystemPrompt: bad params: " + err.Error())
+		}
+		return nil, s.api.Sessions().SetSystemPrompt(ctx, p.ID, p.Content, p.Kind)
+
+	case "Sessions_MoveToProject":
+		var p struct {
+			ID        string `json:"id"`
+			ProjectID string `json:"projectId"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Sessions_MoveToProject: bad params: " + err.Error())
+		}
+		return nil, s.api.Sessions().MoveToProject(ctx, p.ID, p.ProjectID)
+
+	case "Projects_List":
+		return s.api.Projects().List(ctx)
 
 	// Auth_State returns the current in-VM auth state for the served frontend.
 	// Privacy: no token bytes are included in the response.
@@ -520,6 +720,55 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 	// credential env var NAME (e.g. "ANTHROPIC_API_KEY"), never its bytes.
 	case "LLM_ListProviders":
 		return s.api.LLMConnector().ListProviders(ctx)
+
+	// ── chat: the turn itself ────────────────────────────────────────
+	//
+	// Both go through API.StartLLMStream / API.StopLLMStream — the same
+	// entry points the desktop Wails bindings call — so the lockdown gate,
+	// the provider resolution and the error taxonomy cannot drift between
+	// the two transports. The resulting llm:stream-chunk /
+	// llm:stream-closed events reach this browser over the Sessions_Stream
+	// WebSocket (see wsstream.go).
+
+	case "LLM_StartStream":
+		var p struct {
+			ProfileID     string `json:"profileId"`
+			SessionID     string `json:"sessionId"`
+			ModelOverride string `json:"modelOverride"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("LLM_StartStream: bad params: " + err.Error())
+		}
+		// Server-lifetime context, NOT the request context: the turn keeps
+		// streaming long after this POST has been answered.
+		return rpc.StartLLMStream(s.backgroundCtx(), s.api, p.ProfileID, p.SessionID, p.ModelOverride)
+
+	case "LLM_StopStream":
+		var p struct {
+			SubID string `json:"subId"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("LLM_StopStream: bad params: " + err.Error())
+		}
+		return nil, rpc.StopLLMStream(ctx, s.api, p.SubID)
+
+	// ── interactive gates ────────────────────────────────────────────
+	//
+	// The permission modal is not a nicety for an agentic harness: the
+	// first tool call a turn makes raises a `<family>:permission-pending`
+	// event and then BLOCKS on the user's answer. Forwarding the event
+	// without porting Resolve would put a dialog on screen whose buttons
+	// do nothing, so the pair ships together.
+
+	case "Permissions_Resolve":
+		var p struct {
+			RequestID string `json:"requestId"`
+			Decision  string `json:"decision"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Permissions_Resolve: bad params: " + err.Error())
+		}
+		return nil, s.api.Permissions().Resolve(ctx, p.RequestID, permissionsview.Decision(p.Decision))
 
 	default:
 		// Explicit "not ported" error so the served frontend can distinguish
@@ -570,116 +819,6 @@ func (s *Server) handleWS(ws *websocket.Conn) {
 		s.streamSessions(ctx, ws)
 	default:
 		_ = websocket.JSON.Send(ws, wsFrame{Error: "unknown stream method: " + req.Method})
-	}
-}
-
-// streamSessions sends an initial sessions snapshot then pushes events in
-// real time via the EventBus.  The bus receives every event the StreamBroker
-// publishes (both desktop Wails and served-mode paths share the same broker
-// with a MultiEmitter fan-out).
-//
-// In addition to session-list changes, this handler also bridges
-// elicit:pending events (FR-007) so the served frontend receives new
-// elicitation dialogs over the same WS connection without a separate stream.
-// The frontend should call Elicit_ListPending via POST /rpc on reconnect to
-// recover any asks that were in-flight before the connection was lost.
-//
-// The caller is the Sessions_Stream WS method handler and drains incoming
-// frames concurrently so a client ping or disconnect is detected promptly.
-func (s *Server) streamSessions(ctx context.Context, ws *websocket.Conn) {
-	// writeFrame sends a frame and returns false when the connection is broken.
-	writeFrame := func(event string, data any) bool {
-		err := websocket.JSON.Send(ws, wsFrame{Event: event, Data: data})
-		return err == nil
-	}
-
-	// Send an initial sessions snapshot before subscribing to the bus so the
-	// client always sees the current state even when no events arrive immediately.
-	sessions, err := s.api.Sessions().List(ctx)
-	if err != nil {
-		_ = websocket.JSON.Send(ws, wsFrame{Error: "sessions list: " + err.Error()})
-		return
-	}
-	if !writeFrame("sessions:snapshot", sessions) {
-		return
-	}
-
-	// Send any currently-pending elicitation asks as an initial snapshot so
-	// the frontend can reconstruct dialog state on reconnect (FR-007).
-	pending, err := s.elicitAPI().ListPending(ctx)
-	if err == nil && len(pending) > 0 {
-		if !writeFrame("elicit:pending:snapshot", pending) {
-			return
-		}
-	}
-
-	// Subscribe to session-list change events and elicit:pending events on
-	// the in-process bus.
-	busCh, busCancel := s.bus.Subscribe(64, rpc.TopicSessionListChanged, rpc.TopicElicitPending)
-	defer busCancel()
-
-	// Drain incoming messages in a separate goroutine so a client ping or
-	// a disconnect signal reaches us promptly. Recover panics (FR-003).
-	readDone := make(chan struct{})
-	go func() {
-		defer close(readDone)
-		defer func() {
-			if r := recover(); r != nil {
-				stack := debug.Stack()
-				logging.L().Error("serve.server.ws_read.panic",
-					"panic", fmt.Sprintf("%v", r),
-					"stack", string(stack),
-				)
-			}
-		}()
-		for {
-			var ignored json.RawMessage
-			if err := websocket.JSON.Receive(ws, &ignored); err != nil {
-				return // connection closed
-			}
-		}
-	}()
-
-	for {
-		select {
-		case <-ctx.Done():
-			_ = websocket.JSON.Send(ws, wsFrame{Event: "closed"})
-			return
-		case <-readDone:
-			return // client closed the connection
-		case ev, ok := <-busCh:
-			if !ok {
-				// bus channel was closed (server shutting down)
-				_ = websocket.JSON.Send(ws, wsFrame{Event: "closed"})
-				return
-			}
-			switch ev.Topic {
-			case rpc.TopicElicitPending:
-				// Forward elicitation ask as-is so the served frontend can
-				// open the ask dialog (FR-007).
-				if !writeFrame("elicit:pending", ev.Payload) {
-					return
-				}
-			default:
-				// Session-list change: re-fetch the full list so the client
-				// gets a consistent snapshot after each change rather than a
-				// bare delta.  The payload (SessionListChangedPayload) is
-				// forwarded as event metadata.
-				updated, err := s.api.Sessions().List(ctx)
-				if err != nil {
-					if !writeFrame("error", map[string]string{"message": err.Error()}) {
-						return
-					}
-					continue
-				}
-				if !writeFrame("sessions:update", map[string]any{
-					"sessions": updated,
-					"change":   ev.Payload,
-				}) {
-					return
-				}
-			}
-		}
 	}
 }
 
