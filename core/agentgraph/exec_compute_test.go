@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/kameas-ai/kenaz-harness/core/llm/tokenizer"
 )
 
 // stubLLM is a deterministic LLMProvider used across compute tests.
@@ -906,5 +908,46 @@ func TestModelExecutor_ComposesFailureAnnotationsIntoGraphBase(t *testing.T) {
 	role := strings.Index(req.SystemPrompt, "ROLE")
 	if !(base < annIdx && annIdx < role) {
 		t.Errorf("expected BASE < annotation < ROLE ordering in %q", req.SystemPrompt)
+	}
+}
+
+// TestEstimateTokens_DelegatesToCanonicalTokenizer is the
+// compaction-convergence-01PMDL05 "one token estimator" evidence:
+// estimateTokens used to be its own independent byte-length/4
+// heuristic; it must now produce exactly what
+// core/llm/tokenizer.CountRequestTokens produces for the same
+// messages, and — because the old heuristic counted bytes, not runes —
+// must diverge from a naive byte-length/4 count on multi-byte text.
+func TestEstimateTokens_DelegatesToCanonicalTokenizer(t *testing.T) {
+	msgs := []Message{
+		{Role: "user", Content: "hello world"},
+		// Multi-byte runes (each "é" is 2 bytes, 1 rune): a byte-based
+		// heuristic and a rune-based one disagree on content like this.
+		{Role: "assistant", Content: "café café café café café café café café"},
+	}
+
+	got := estimateTokens(msgs)
+
+	translated := make([]tokenizer.Message, len(msgs))
+	for i, m := range msgs {
+		translated[i] = tokenizer.Message{Role: m.Role, Content: m.Content}
+	}
+	want := tokenizer.CountRequestTokens("", translated)
+
+	if got != want {
+		t.Fatalf("estimateTokens = %d, want %d (tokenizer.CountRequestTokens output) — estimateTokens has drifted from the canonical estimator", got, want)
+	}
+
+	// Byte-length/4 (the old heuristic) would count each "é" as 2
+	// bytes; rune-based counts it as 1. Assert the two heuristics
+	// actually disagree here, so this test would fail if estimateTokens
+	// ever regressed back to byte-counting.
+	totalBytes := 0
+	for _, m := range msgs {
+		totalBytes += len(m.Content)
+	}
+	byteHeuristic := (totalBytes + 3) / 4
+	if got == byteHeuristic {
+		t.Fatalf("estimateTokens (%d) matches the old byte-length/4 heuristic (%d) on multi-byte input — expected rune-based tokenizer output to differ", got, byteHeuristic)
 	}
 }

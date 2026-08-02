@@ -565,6 +565,19 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		HistoryWriter: r.cfg.HistoryWriter,
 		StreamSink:    bridge,
 		Ask:           askBus,
+		// SuppressAutomaticCompaction (compaction-convergence-01PMDL05):
+		// runPreSendCompaction (above, in driveRun's caller) is the
+		// authoritative compactor for chat-driven runs — it already
+		// ran against the persisted session history before this Env
+		// was built. kernel.Run backfills env.Compactor from the
+		// kernel's shared FR-041 pipeline whenever it's nil at run
+		// start (see kernel.go), so without this flag a Settings-UI
+		// toggle enabling the pre_call/post_tool automatic sites would
+		// fire a *second* compaction on the same turn. Always true
+		// here, independent of the resolved SiteConfig, so chat runs
+		// stay single-fire regardless of what the cascading compaction
+		// config says.
+		SuppressAutomaticCompaction: true,
 	}
 	if r.cfg.History != nil {
 		env.History = historyAdapterFunc(r.cfg.History.History)

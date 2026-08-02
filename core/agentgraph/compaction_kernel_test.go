@@ -132,6 +132,89 @@ func TestKernel_FiresPostToolCompactionOnToolNode(t *testing.T) {
 	}
 }
 
+// TestKernel_SuppressAutomaticCompaction_BlocksPreCallSite is the
+// compaction-convergence-01PMDL05 single-fire proof for the pre_call
+// site: with Env.SuppressAutomaticCompaction set, the kernel must not
+// invoke the wired Compactor at all, even though everything else about
+// the run (compactor non-nil, an LLMNode in the graph) is identical to
+// TestKernel_FiresPreCallCompactionOnLLMNode, which asserts the
+// opposite (fires exactly once) when the flag is left at its zero
+// value. This is the mechanism that lets a chat-driven run (whose
+// authoritative compactor is the pre-send path, not this one) share a
+// kernel with graph-authored runs without double-compacting.
+func TestKernel_SuppressAutomaticCompaction_BlocksPreCallSite(t *testing.T) {
+	compactor := &recordingCompactor{}
+	llm := &fakeLLM{resp: "ok"}
+	graph := &agentgraph.Graph{
+		ID:          "g-suppress-precall",
+		SpecVersion: "1",
+		Entrypoints: []string{"llm1"},
+		Nodes: []agentgraph.Node{
+			{
+				ID:   "llm1",
+				Kind: agentgraph.NodeKindModel,
+				Attrs: agentgraph.ModelAttrs{
+					Provider: "test", Model: "m", MaxTokens: 100,
+				},
+			},
+		},
+	}
+	k := agentgraph.NewKernel(agentgraph.WithCompactor(compactor))
+	env := &agentgraph.Env{
+		RunID:                       "r-suppress-precall",
+		SessionID:                   "s-suppress-precall",
+		Graph:                       graph,
+		LLM:                         llm,
+		SuppressAutomaticCompaction: true,
+	}
+	env.State = agentgraph.NewRunState()
+	if err := k.Run(context.Background(), env); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(compactor.calls) != 0 {
+		t.Fatalf("expected 0 compaction calls with SuppressAutomaticCompaction=true, got %d: %+v",
+			len(compactor.calls), compactor.calls)
+	}
+}
+
+// TestKernel_SuppressAutomaticCompaction_BlocksPostToolSite is the
+// post_tool-site counterpart of the pre_call test above — same graph
+// shape as TestKernel_FiresPostToolCompactionOnToolNode, but with the
+// suppression flag set, asserting zero compaction calls instead of one.
+func TestKernel_SuppressAutomaticCompaction_BlocksPostToolSite(t *testing.T) {
+	compactor := &recordingCompactor{}
+	tools := &fakeTools{result: agentgraph.ToolResult{
+		Content: strings.Repeat("x", 32*1024), // big result — would trigger post_tool if not suppressed
+	}}
+	graph := &agentgraph.Graph{
+		ID:          "g-suppress-posttool",
+		SpecVersion: "1",
+		Entrypoints: []string{"t1"},
+		Nodes: []agentgraph.Node{
+			{
+				ID:    "t1",
+				Kind:  agentgraph.NodeKindTool,
+				Attrs: agentgraph.ToolAttrs{Name: "echo"},
+			},
+		},
+	}
+	k := agentgraph.NewKernel(agentgraph.WithCompactor(compactor))
+	env := &agentgraph.Env{
+		RunID:                       "r-suppress-posttool",
+		SessionID:                   "s-suppress-posttool",
+		Graph:                       graph,
+		Tools:                       tools,
+		SuppressAutomaticCompaction: true,
+	}
+	if err := k.Run(context.Background(), env); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(compactor.calls) != 0 {
+		t.Fatalf("expected 0 compaction calls with SuppressAutomaticCompaction=true, got %d: %+v",
+			len(compactor.calls), compactor.calls)
+	}
+}
+
 func TestKernel_NilCompactorIsNoOp(t *testing.T) {
 	llm := &fakeLLM{resp: "ok"}
 	graph := &agentgraph.Graph{
