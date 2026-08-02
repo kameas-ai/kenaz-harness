@@ -1322,7 +1322,7 @@ func New(c *core.Core) *API {
 	a.convMgr = newConversationManager(c)
 	a.corpusMgr = newCorpusManager(c, embedder)
 	var compactionPipeline *fr041compaction.Pipeline
-	a.graphMgr, compactionPipeline = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore)
+	a.graphMgr, compactionPipeline = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore, settingsImpl)
 	// Wire the same FR-041 pipeline instance the kernel runs onto the
 	// Settings RPC surface, so edits made through
 	// core/rpc/views/compaction reach the live kernel path instead of
@@ -4877,8 +4877,40 @@ func newCorpusManager(c *core.Core, embedder corememory.Embedder) *corecorpus.Ma
 // library and runs in-memory graphs; user-graph persistence is the
 // only feature lost when DataDir is empty.
 func newGraphManager(c *core.Core) *graphview.Manager {
-	mgr, _ := newGraphManagerWithDeps(c, nil, nil, nil, nil, nil)
+	mgr, _ := newGraphManagerWithDeps(c, nil, nil, nil, nil, nil, nil)
 	return mgr
+}
+
+// compactionGlobalSeed derives the FR-041 global-layer CompactionConfig
+// from the user's ACTUAL effective compaction aggressiveness dial
+// (settings.Settings.EffectiveCompactionAggressiveness — the same
+// resolver buildCompactionWiring's Aggressiveness closure reads for
+// the pre-send path) rather than a hardcoded tier string. This closes
+// the gap where fr041compaction.ProductionDefaults() was wired
+// unconditionally regardless of what the user actually dialed
+// (including "off").
+//
+// Falls back to fr041compaction.ProductionDefaults() — PresetForTier
+// ("balanced"), the documented default tier — when settingsImpl is nil,
+// its store is nil, or the load errors (nil-Core test-harness boot
+// paths, and any store I/O failure at construction time). This
+// preserves the exact pre-existing behaviour for every caller that
+// doesn't have a settings store available, and for a user who has
+// never touched the dial (empty persisted value resolves to
+// "balanced" via EffectiveCompactionAggressiveness itself).
+//
+// This is read ONCE, at kernel/pipeline construction time — see the
+// boot-time-seed discussion at the newGraphManagerWithDeps call site
+// for why a live-updating resolver is deliberately out of scope here.
+func compactionGlobalSeed(settingsImpl *settings.API) fr041compaction.CompactionConfig {
+	if settingsImpl == nil || settingsImpl.Store() == nil {
+		return fr041compaction.ProductionDefaults()
+	}
+	s, err := settingsImpl.Store().LoadAll()
+	if err != nil {
+		return fr041compaction.ProductionDefaults()
+	}
+	return fr041compaction.PresetForTier(string(s.EffectiveCompactionAggressiveness()))
 }
 
 // newGraphManagerWithDeps wires production seams into the graph
@@ -4904,6 +4936,7 @@ func newGraphManagerWithDeps(
 	memStore corememory.Store,
 	embedder corememory.Embedder,
 	bashStore *corebash.Store,
+	settingsImpl *settings.API,
 ) (*graphview.Manager, *fr041compaction.Pipeline) {
 	dataDir := ""
 	if c != nil {
@@ -4981,22 +5014,49 @@ func newGraphManagerWithDeps(
 	}
 
 	// FR-041 compaction pipeline (compaction-convergence-01PMDL05
-	// WP01): wire WithCompactor into the production kernel so
-	// env.Compactor is non-nil and the Settings RPC surface
-	// (core/rpc/views/compaction) takes effect. The global-layer seed
-	// is ProductionDefaults(), NOT fr041compaction.SafeDefaults() —
-	// SafeDefaults enables pre_call/post_tool out of the box, which
+	// WP01, dial-reconciliation follow-up): wire WithCompactor into the
+	// production kernel so env.Compactor is non-nil and the Settings
+	// RPC surface (core/rpc/views/compaction) takes effect. The
+	// global-layer seed is derived from the user's ACTUAL effective
+	// compaction aggressiveness (settingsImpl.Store().LoadAll().
+	// EffectiveCompactionAggressiveness() — the same accessor
+	// buildCompactionWiring reads for the pre-send path), NOT a
+	// hardcoded PresetForTier("balanced"). Previously ProductionDefaults()
+	// (== PresetForTier("balanced")) was wired unconditionally, so a
+	// user who dialed the aggressiveness to e.g. "off" or "aggressive"
+	// still got FR-041's PreCallThreshold/manual-site numerics for
+	// "balanced" — latent today because SitePreCall/SitePostTool are
+	// disabled at every tier, but already wrong for SiteManual and a
+	// live trap for whoever enables the automatic sites later.
+	//
+	// This is a BOOT-TIME seed, not a live resolver: settingsImpl is
+	// read once here, when the kernel/pipeline are constructed. If the
+	// user changes the aggressiveness dial afterward without
+	// restarting, this global layer keeps reflecting the tier that was
+	// effective at boot. That is an accepted, intentional limitation
+	// for this WP — see
+	// TestCompactionGlobalSeed_RuntimeDialChangeNotReflectedAfterConstruction
+	// in api_compaction_dial_test.go for the reasoning: the FR-041 global layer only
+	// matters for SiteManual (SitePreCall/SitePostTool are unconditionally
+	// disabled either way), the pre-send path (chat_runner.go's
+	// runPreSendCompaction) already re-resolves the dial on every send
+	// via Settings.Store().LoadAll() and remains the authoritative
+	// automatic compactor, and a disk compaction.yaml (loaded by
+	// NewYAMLResolverWithDefaults below) always wins over this seed —
+	// so a user who has explicitly configured the FR-041 layer (e.g.
+	// through the Settings UI's compaction view) is unaffected by a
+	// later dial change either. A future WP that wants a live-updating
+	// FR-041 global layer should push dial changes into the resolver
+	// (compactionPipeline's resolver.Set(LayerGlobal, "", ...)) from
+	// Settings.Save, not re-derive here.
+	//
+	// SafeDefaults (fr041compaction's own out-of-the-box config) is
+	// still deliberately avoided: it enables pre_call/post_tool, which
 	// would double-compact every conversation on top of the pre-send
-	// dial (core/compaction, invoked from chat_runner.go's
-	// runPreSendCompaction) that already rewrites persisted session
-	// history before the kernel ever runs. ProductionDefaults keeps
-	// pre_call/post_tool dormant and only enables SiteManual (the
-	// explicit "compact now" trigger, previously permanently broken in
-	// production because no Compactor was wired at all). See
-	// core/agentgraph/compaction/presets.go for the full rationale and
-	// kitty-specs/compaction-convergence-01PMDL05/spec.md for the
-	// mission contract.
-	compactionResolver, err := fr041compaction.NewYAMLResolverWithDefaults(dataDir, fr041compaction.ProductionDefaults())
+	// dial. See core/agentgraph/compaction/presets.go for the full
+	// rationale and kitty-specs/compaction-convergence-01PMDL05/spec.md
+	// for the original mission contract.
+	compactionResolver, err := fr041compaction.NewYAMLResolverWithDefaults(dataDir, compactionGlobalSeed(settingsImpl))
 	if err != nil {
 		slog.Warn("agentgraph: compaction resolver load error; using in-process defaults",
 			"data_dir", dataDir,
