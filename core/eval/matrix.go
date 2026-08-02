@@ -14,7 +14,13 @@ type MatrixCase struct {
 	// Label is a human-readable identifier for this case, used in the
 	// summary table. If empty it defaults to "<SessionID>/<strategy hash>".
 	Label string
-	// Overrides are the strategy overrides to apply for this case.
+	// Overrides are the strategy overrides to apply for this case. See
+	// ReplayOptions.StrategyOverrides: they are validated, resolved, and
+	// annotated into the replay trace, but — since Diff only compares
+	// assistant-role KindMessage text, which Replay never mutates —
+	// Overrides alone will not move this case's score. Pair Overrides
+	// with a distinct BaselineSessionID below for a case that can
+	// actually regress.
 	Overrides []StrategyOverride
 	// CachedOnly mirrors ReplayOptions.CachedOnly; default true for matrix runs.
 	CachedOnly bool
