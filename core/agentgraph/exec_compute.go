@@ -820,10 +820,24 @@ func (reflectExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs
 	if !ok {
 		return res, fmt.Errorf("reflect: node %q has wrong attrs type %T", node.ID, node.Attrs)
 	}
+	// MaxIterations: an explicit author value always wins; when unset
+	// (<= 0, the manifest's existing "optional" constraint), derive the
+	// cap from the active model's tier the same way reviewExecutor does
+	// (versioned-model-profile-01PMDL04 WP05). Note: nothing currently
+	// enforces this cap when a Reflect node is placed inside a Loop body
+	// — that wiring gap pre-dates WP05 and is out of scope here. This
+	// resolves and surfaces the value on the started event so a future
+	// Loop-embedding consumer has a real number to read instead of the
+	// schema-only zero value.
+	maxIterations := a.MaxIterations
+	if maxIterations <= 0 {
+		maxIterations = maxIterationsForTier(resolveNodeTier(env, a.Provider, a.Model))
+	}
 	_ = res.Events.AppendKind(env.RunID, node.ID, EventReflectStarted, map[string]any{
 		"model":              a.Model,
 		"severity_threshold": a.SeverityThreshold,
 		"include_trace":      a.IncludeTrace,
+		"max_iterations":     maxIterations,
 	})
 
 	// The reflect step takes a draft, asks the configured model for a
@@ -918,6 +932,18 @@ func (reviewExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs 
 	if model == "" {
 		model = "default"
 	}
+	// MaxIterations: an explicit author value (the manifest allows any
+	// non-negative int now — 0 means "unset") always wins. When unset,
+	// derive the cap from the active model's tier rather than the one
+	// fixed default every graph got before (versioned-model-profile-
+	// 01PMDL04 WP05). No tier data anywhere resolves to ModelTierMedium,
+	// which maxIterationsForTier maps to 3 — review.yaml's pre-existing
+	// explicit default — so a run with no tier source configured keeps
+	// today's behaviour.
+	maxIterations := a.MaxIterations
+	if maxIterations <= 0 {
+		maxIterations = maxIterationsForTier(resolveNodeTier(env, a.Provider, model))
+	}
 	resp, err := env.LLM.Generate(ctx, LLMRequest{
 		Model: model, MaxTokens: 256,
 		SystemPrompt: composePrompt(graphBaseOf(env), a.SystemPrompt),
@@ -956,9 +982,9 @@ func (reviewExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs 
 		"iter": iter, "tokens": resp.TokensUsed,
 	})
 
-	if iter >= a.MaxIterations {
+	if iter >= maxIterations {
 		_ = res.Events.AppendKind(env.RunID, node.ID, EventReviewUnrecov, map[string]any{
-			"iter": iter, "cap": a.MaxIterations,
+			"iter": iter, "cap": maxIterations,
 		})
 		switch a.OnCapHit {
 		case "escalate":
@@ -998,13 +1024,20 @@ func (plannerExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs
 	if task == "" {
 		task = "(unspecified task)"
 	}
-	verbosity := a.Verbosity
-	if verbosity == "" {
-		verbosity = "standard"
-	}
 	model := a.PlannerModel
 	if model == "" {
 		model = "default"
+	}
+	// Verbosity: an explicit author value always wins. When unset,
+	// derive it from the active model's tier instead of hardcoding one
+	// tier's behaviour for every model (versioned-model-profile-01PMDL04
+	// WP05) — resolveNodeTier resolves ModelTierMedium when there's no
+	// tier data anywhere, and verbosityForTier maps that to "standard",
+	// so a run with no tier source configured sees this executor's
+	// pre-WP05 output unchanged.
+	verbosity := a.Verbosity
+	if verbosity == "" {
+		verbosity = verbosityForTier(resolveNodeTier(env, a.Provider, model))
 	}
 	prompt := fmt.Sprintf("Produce a %s plan for the task. Reply with a numbered list of steps.\n\nTask: %s",
 		verbosity, task)

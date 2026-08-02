@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -24,6 +25,23 @@ type providerSpec struct {
 	Provider string         `yaml:"provider"`
 	Defaults map[string]any `yaml:"defaults"`
 	Models   []modelEntry   `yaml:"models"`
+	// Tiers is the provider-owned size-tier table (versioned-model-profile-
+	// 01PMDL04 WP04): it replaces the frozen-core `tierFromModelID` name
+	// matching that used to live in core/agentgraph. Matched independently
+	// of Models (own list, own match loop) so tier assignment never
+	// perturbs the existing capability glob rows or their match order.
+	Tiers []tierEntry `yaml:"tiers"`
+}
+
+// tierEntry is one row in a provider's tiers: table.
+//
+// Match is either a concrete model ID (no "*") — a real, enumerable
+// candidate model surfaced via Catalog.KnownModels — or a prefix/suffix
+// glob ("claude-haiku-*") used only to classify a model the caller
+// already knows the ID of (Catalog.Tier / Catalog.TierAny).
+type tierEntry struct {
+	Match string `yaml:"match"`
+	Tier  string `yaml:"tier"`
 }
 
 // modelEntry is one per-model override row in a provider YAML.
@@ -400,6 +418,87 @@ func (c *Catalog) MaxOutputTokens(provider, model string) int {
 		}
 	}
 	return 0
+}
+
+// Tier returns the curated size-tier ("small" | "medium" | "large") for
+// (provider, model): the first glob match in the provider's tiers:
+// table, falling back to the provider's `defaults: tier:` value. ok is
+// false only when the provider has no tier data at all (neither a
+// matching row nor a default), so callers can apply their own final
+// fallback (agentgraph.BranchRecommender defaults to "medium").
+//
+// This is the provider-owned replacement for the frozen-core
+// tierFromModelID name-matching that used to live in core/agentgraph
+// (versioned-model-profile-01PMDL04 WP04): the core asks a data
+// question through this method instead of string-matching model
+// families itself.
+func (c *Catalog) Tier(provider, model string) (string, bool) {
+	spec, ok := c.specs[provider]
+	if !ok {
+		return "", false
+	}
+	for _, t := range spec.Tiers {
+		if matchGlob(t.Match, model) {
+			return t.Tier, true
+		}
+	}
+	if t, ok := spec.Defaults["tier"].(string); ok && t != "" {
+		return t, true
+	}
+	return "", false
+}
+
+// TierAny resolves a tier for model without knowing which provider it
+// belongs to, scanning every loaded provider's tiers: table (in
+// alphabetical provider order, for determinism) for a glob match. It
+// exists so a caller with an unrecognised or custom provider kind
+// (e.g. a "personal" provider naming a model after a known family, like
+// "my-claude-haiku-mirror") can still get a tier opinion, without doing
+// the family-name string-matching itself. Provider-level defaults are
+// intentionally not consulted here (there is no single provider to pull
+// a default from); ok is false when no provider's tiers: table matches.
+func (c *Catalog) TierAny(model string) (string, bool) {
+	names := make([]string, 0, len(c.specs))
+	for name := range c.specs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		for _, t := range c.specs[name].Tiers {
+			if matchGlob(t.Match, model) {
+				return t.Tier, true
+			}
+		}
+	}
+	return "", false
+}
+
+// KnownModel is one concrete (non-glob) entry from a provider's tiers:
+// table, suitable for direct enumeration by callers that need real
+// candidate model IDs rather than just a match pattern — e.g. the v1
+// branch-recommender stopgap wiring (core/rpc/branches_wiring.go),
+// pending the follow-up ListProviders hydration its own comment tracks.
+type KnownModel struct {
+	ModelID string
+	Tier    string
+}
+
+// KnownModels returns every exact-match (non-wildcard) row in the
+// provider's tiers: table, in file order. Glob rows ("claude-haiku-*")
+// are skipped since they classify a model rather than name one.
+func (c *Catalog) KnownModels(provider string) []KnownModel {
+	spec, ok := c.specs[provider]
+	if !ok {
+		return nil
+	}
+	out := make([]KnownModel, 0, len(spec.Tiers))
+	for _, t := range spec.Tiers {
+		if strings.Contains(t.Match, "*") {
+			continue
+		}
+		out = append(out, KnownModel{ModelID: t.Match, Tier: t.Tier})
+	}
+	return out
 }
 
 // AttachmentLimits returns the resolved attachment capability descriptor for

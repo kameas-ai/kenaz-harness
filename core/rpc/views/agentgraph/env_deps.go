@@ -44,6 +44,13 @@ type EnvDeps struct {
 	// SessionWriteNode kind (chat-migration WP02). nil installs the
 	// nilHistoryWriter stub which errors on every call.
 	HistoryWriter coreag.HistoryWriter
+	// TierSource resolves a model tier for (providerKind, modelID) pairs
+	// so the Planner/Review/Reflect executors can derive a Verbosity /
+	// MaxIterations default when a node leaves the attr unset
+	// (versioned-model-profile-01PMDL04 WP05). nil disables tier-derived
+	// defaulting — the executors fall back to ModelTierMedium, matching
+	// their pre-WP05 hardcoded defaults.
+	TierSource coreag.TierSource
 }
 
 // WithEnvDeps installs production seams onto the Manager. The seams
@@ -96,5 +103,8 @@ func (d EnvDeps) applyTo(env *coreag.Env) {
 	}
 	if d.HistoryWriter != nil {
 		env.HistoryWriter = d.HistoryWriter
+	}
+	if d.TierSource != nil {
+		env.TierSource = d.TierSource
 	}
 }

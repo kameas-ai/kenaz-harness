@@ -52,9 +52,10 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/llm/personal"
 	llmregistry "github.com/kameas-ai/kenaz-harness/core/llm/registry"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/logstore"
 	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
-	"github.com/kameas-ai/kenaz-harness/core/mcp/dispatch"
 	harnessmcp "github.com/kameas-ai/kenaz-harness/core/mcp/builtin/harness"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/dispatch"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
 	mcphttp "github.com/kameas-ai/kenaz-harness/core/mcp/transport/http"
@@ -69,8 +70,6 @@ import (
 	artifactsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/attachments"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/audit"
-	logsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/logs"
-	"github.com/kameas-ai/kenaz-harness/core/logstore"
 	branchesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/branches"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/bundle"
 	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
@@ -87,6 +86,7 @@ import (
 	fleetview "github.com/kameas-ai/kenaz-harness/core/rpc/views/fleet"
 	hooksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/hooks"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
+	logsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/logs"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/mcp"
 	memoryview "github.com/kameas-ai/kenaz-harness/core/rpc/views/memory"
 	nodesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/nodes"
@@ -406,18 +406,18 @@ type API struct {
 	// mission mcp-server-install-01KQ8TDP). Wired in New when the
 	// merged catalog + data-dir are available; nil otherwise (the
 	// binding returns ErrImportNotConfigured).
-	mcpImportAPI   *mcp.ImportAPI
-	a2aAPI         a2a.A2AAPI
-	workflowAPI    workflow.WorkflowAPI
-	workflowsAPI   workflowsview.WorkflowsAPI
-	sessionsAPI    sessions.SessionsAPI
-	trustAPI       trust.TrustAPI
-	contextAPI     contextview.ContextAPI
-	contextsAPI    contextsview.ContextsAPI
-	bundleAPI      bundle.BundleAPI
-	policyAPI      policy.PolicyAPI
-	auditImpl      *audit.API
-	auditAPI       audit.AuditAPI
+	mcpImportAPI *mcp.ImportAPI
+	a2aAPI       a2a.A2AAPI
+	workflowAPI  workflow.WorkflowAPI
+	workflowsAPI workflowsview.WorkflowsAPI
+	sessionsAPI  sessions.SessionsAPI
+	trustAPI     trust.TrustAPI
+	contextAPI   contextview.ContextAPI
+	contextsAPI  contextsview.ContextsAPI
+	bundleAPI    bundle.BundleAPI
+	policyAPI    policy.PolicyAPI
+	auditImpl    *audit.API
+	auditAPI     audit.AuditAPI
 	// logStore + logsAPI back the Settings → Logs panel (mission 01NLOGS01 WP01/WP04).
 	logStore       *logstore.Store
 	logsAPI        logsview.LogsAPI
@@ -1504,10 +1504,17 @@ func New(c *core.Core) *API {
 	// Wired only when storage is up — falls back to a nil-manager
 	// surface (ErrManagerUnavailable) when c is nil so test harness
 	// callers (New(nil)) don't crash.
+	//
+	// recommenderCat is loaded independently of the later capCatalog
+	// (buildLLMSubsystem) since the branches subsystem is wired earlier
+	// in this constructor; a nil catalog degrades newBranchRecommender
+	// to its medium-tier default rather than failing construction
+	// (versioned-model-profile-01PMDL04 WP04).
+	recommenderCat, _ := llmcap.LoadDefault()
 	a.branchesAPI = branchesview.New(branchesview.Config{
 		Conversations: a.convMgr,
 		Sessions:      sessionManagerOrNil(c),
-		Recommender:   newBranchRecommender(),
+		Recommender:   newBranchRecommender(recommenderCat),
 		// Broker enables LeftRail real-time updates on branch creation
 		// (branch creates a new child session row): v0.5.3 fix.
 		Broker: a.broker,
@@ -4155,7 +4162,7 @@ func buildChatRunner(
 			g.SystemPrompt = prompts.Compose(prompts.DefaultBaseConstitution(), g.SystemPrompt)
 			return g, nil
 		},
-		MaxTurns:         maxTurns,
+		MaxTurns: maxTurns,
 		// system-prompt-layers WP03: surface the sandboxed agent-workspace
 		// path in the environment-context layer of the system prompt. Empty
 		// when DataDir is unset (test path) — the adapter then renders a
@@ -4165,11 +4172,11 @@ func buildChatRunner(
 		// instructions as the final system-prompt layer.
 		CustomInstructions: customInstructions,
 		EnvDefaults:        envDefaults,
-		ToolDiscoverer:   chatToolDiscovererAdapter{inner: tools},
-		Compaction:       compactionDeps,
-		PartialPersister: partialPersister,
-		UsageHook:        usageHookFn,
-		AutoTitle:        autoTitleDeps,
+		ToolDiscoverer:     chatToolDiscovererAdapter{inner: tools},
+		Compaction:         compactionDeps,
+		PartialPersister:   partialPersister,
+		UsageHook:          usageHookFn,
+		AutoTitle:          autoTitleDeps,
 		// multimodal-io-extended-01KQ8TD2 WP02: wire the concrete artifact
 		// sink as the generated-image capturer so StreamGeneratedImage
 		// events land in the artifact store with Source=="model_output".
@@ -4908,6 +4915,17 @@ func newGraphManagerWithDeps(
 	if bashStore != nil {
 		deps.BashStore = bashStore
 		deps.BashOutput = graphview.NewBashOutputStoreAdapter(bashStore)
+	}
+	// Tier source: lets the Planner/Review/Reflect executors derive a
+	// Verbosity / MaxIterations default from the active model's size
+	// tier when a node leaves the attr unset (versioned-model-profile-
+	// 01PMDL04 WP05). Loaded independently of the later capCatalog
+	// (buildLLMSubsystem) since this constructor runs before that stack
+	// exists — same pattern as recommenderCat above. A load failure
+	// leaves deps.TierSource nil, so applyTo skips it and every node
+	// keeps its pre-WP05 hardcoded default (ModelTierMedium fallback).
+	if tierCat, err := llmcap.LoadDefault(); err == nil {
+		deps.TierSource = &tierSourceAdapter{cat: tierCat}
 	}
 	// Memory hook journal: bind the SQL writer (migration 0308) when
 	// the storage layer exposes a stdlib *sql.DB. The HookManager's
@@ -5803,7 +5821,8 @@ func (a *API) Permissions() permissionsview.PermissionsAPI {
 	}
 	return a.permissionsAPI
 }
-func (a *API) Audit() audit.AuditAPI          { return a.auditAPI }
+func (a *API) Audit() audit.AuditAPI { return a.auditAPI }
+
 // Logs returns the in-app runtime log surface (mission 01NLOGS01 WP04).
 func (a *API) Logs() logsview.LogsAPI         { return a.logsAPI }
 func (a *API) Settings() settings.SettingsAPI { return a.settingsAPI }

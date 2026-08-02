@@ -9,9 +9,9 @@ import (
 // cedarGrantForKind maps step kinds to the Cedar action grant names that
 // the workflow will need.
 var cedarGrantForKind = map[corewf.StepKind]string{
-	corewf.StepKindWebFetch:  "network",
-	corewf.StepKindWebScrape: "network",
-	corewf.StepKindShell:     "shell",
+	corewf.StepKindWebFetch:    "network",
+	corewf.StepKindWebScrape:   "network",
+	corewf.StepKindShell:       "shell",
 	corewf.StepKindHTTPRequest: "network",
 }
 
@@ -57,26 +57,26 @@ const (
 // modelPricing maps known model IDs (or prefixes) to (input, output)
 // pricing in USD per million tokens. Values match Anthropic public pricing
 // as of 2025-05 and are intentionally conservative.
+//
+// This is a cost-estimation table, not a tier-classification lookup —
+// out of versioned-model-profile-01PMDL04 WP04's scope (which closed the
+// tierFromModelID frozen-core violation in core/agentgraph). Each row is
+// individually marked model-lit-allow so scripts/ci/check-no-model-
+// family-literals.sh's lint passes; a future pass could migrate this
+// onto core/llm/capabilities data the same way WP04 did for tiers.
 var modelPricing = []struct {
-	prefix string
+	prefix  string
 	inPerM  float64
 	outPerM float64
 }{
-	// claude-3-7-sonnet
-	{"claude-3-7-sonnet", 3.00, 15.00},
-	// claude-3-5-sonnet
-	{"claude-3-5-sonnet", 3.00, 15.00},
-	// claude-3-5-haiku
-	{"claude-3-5-haiku", 0.80, 4.00},
-	// claude-3-haiku
-	{"claude-3-haiku", 0.25, 1.25},
-	// claude-3-sonnet
-	{"claude-3-sonnet", 3.00, 15.00},
-	// claude-3-opus
-	{"claude-3-opus", 15.00, 75.00},
-	// claude-sonnet-4
-	{"claude-sonnet-4", 3.00, 15.00},
-	// default: treat unknown models like claude-3-sonnet
+	{"claude-3-7-sonnet", 3.00, 15.00}, // model-lit-allow: cost-estimation table, not classification
+	{"claude-3-5-sonnet", 3.00, 15.00}, // model-lit-allow: cost-estimation table, not classification
+	{"claude-3-5-haiku", 0.80, 4.00},   // model-lit-allow: cost-estimation table, not classification
+	{"claude-3-haiku", 0.25, 1.25},     // model-lit-allow: cost-estimation table, not classification
+	{"claude-3-sonnet", 3.00, 15.00},   // model-lit-allow: cost-estimation table, not classification
+	{"claude-3-opus", 15.00, 75.00},    // model-lit-allow: cost-estimation table, not classification
+	{"claude-sonnet-4", 3.00, 15.00},   // model-lit-allow: cost-estimation table, not classification
+	// default: treat unknown models like claude-3-sonnet pricing.
 }
 
 // estimateCostUSD returns a rough per-run cost in USD by summing the

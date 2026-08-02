@@ -18,9 +18,11 @@ attrs:
     description: "ID of the upstream node to re-fire on a fail verdict."
   max_iterations:
     type: int
-    required: true
-    min: 1
-    description: "Mandatory cap on review re-runs (FR-009)."
+    min: 0
+    description: >-
+      Cap on review re-runs (FR-009). Leave unset (0) to derive the cap
+      from the active model's tier at run time (versioned-model-profile-
+      01PMDL04 WP05); an explicit positive value always wins.
   on_cap_hit:
     type: enum
     enum: [escalate, halt]

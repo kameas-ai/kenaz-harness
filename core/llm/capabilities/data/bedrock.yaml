@@ -38,6 +38,20 @@ defaults:
   max_document_pages: 0
   image_input_mime_types: [image/png, image/jpeg, image/gif, image/webp]
   document_input_mime_types: [application/pdf]
+  # Size-tier default (versioned-model-profile-01PMDL04 WP04): any model
+  # not matched below resolves here.
+  tier: medium
+# Size tiers (versioned-model-profile-01PMDL04 WP04) — see anthropic.yaml
+# for the pattern this mirrors. Only Claude family rows that previously
+# hit a tierFromModelID keyword ("haiku" -> small, "opus" -> large) are
+# listed explicitly; everything else (Nova, Llama, Titan, Stable
+# Diffusion) matched no keyword under the old heuristic either, so it
+# resolves via the medium default above — unchanged behaviour.
+tiers:
+  - match: "anthropic.claude-3-5-haiku*"
+    tier: small
+  - match: "anthropic.claude-opus-*"
+    tier: large
 models:
   - match: "anthropic.claude-3-5-sonnet*"
     streaming: true

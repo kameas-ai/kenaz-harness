@@ -10,9 +10,11 @@ import (
 // StrategyOverride is a parsed key=value strategy dial override.
 //
 // Keys follow a dotted hierarchy: <domain>.<parameter>, e.g.:
-//   - compaction.tier   — one of off|conservative|balanced|aggressive|maximal
-//   - memory.enabled    — "true" | "false"
-//   - branching.auto    — "true" | "false"
+//   - compaction.tier      — one of off|conservative|balanced|aggressive|maximal
+//   - memory.enabled       — "true" | "false"
+//   - branching.auto       — "true" | "false"
+//   - model_profile.version — an arbitrary non-empty version label (the
+//     model-profile dimension, versioned-model-profile-01PMDL04 WP03)
 type StrategyOverride struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
@@ -58,6 +60,14 @@ type AppliedStrategy struct {
 	MemoryEnabled bool
 	// BranchingAuto controls whether the branch-advisor auto-suggestion is active.
 	BranchingAuto bool
+	// ModelProfileVersion is the resolved model-profile version dimension
+	// (versioned-model-profile-01PMDL04 WP03). Empty means "no
+	// model-profile override recorded" — the eval-fit gate does not read
+	// this field itself (it diffs distinct capture sessions instead, see
+	// MatrixCase.BaselineSessionID); it exists so a candidate version can
+	// be annotated into a replay trace's KindStrategyDecision entries the
+	// same way compaction.tier already is.
+	ModelProfileVersion string
 }
 
 // DefaultAppliedStrategy returns the production defaults for an AppliedStrategy.
@@ -120,6 +130,12 @@ func applyOne(s *AppliedStrategy, so StrategyOverride) error {
 		default:
 			return fmt.Errorf("eval/strategy: branching.auto=%q: expected true|false", so.Value)
 		}
+
+	case "model_profile.version":
+		if strings.TrimSpace(so.Value) == "" {
+			return fmt.Errorf("eval/strategy: model_profile.version=%q: value required", so.Value)
+		}
+		s.ModelProfileVersion = so.Value
 
 	default:
 		// Unknown keys are silently skipped; future keys can be added without

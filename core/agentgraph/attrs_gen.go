@@ -1337,7 +1337,7 @@ func (a RetryAttrs) Validate() error {
 // Verdict-driven re-run of an upstream node, bounded by max_iterations (FR-036).
 type ReviewAttrs struct {
 
-	// MaxIterations: Mandatory cap on review re-runs (FR-009).
+	// MaxIterations: Cap on review re-runs (FR-009). Leave unset (0) to derive the cap from the active model's tier at run time (versioned-model-profile- 01PMDL04 WP05); an explicit positive value always wins.
 	MaxIterations int `json:"max_iterations,omitempty" yaml:"max_iterations,omitempty"`
 
 	// MaxTokens: Upper bound on generated tokens; 0 = provider default.
@@ -1373,11 +1373,8 @@ func (ReviewAttrs) nodeAttrsMarker() {}
 // (`review.attrs.<attr>.<rule>: ...`) so callers can grep for the
 // constraint that fired.
 func (a ReviewAttrs) Validate() error {
-	if a.MaxIterations == 0 {
-		return fmt.Errorf("max_iterations: max_iterations is required (manifest constraint)")
-	}
-	if a.MaxIterations != 0 && float64(a.MaxIterations) < 1 {
-		return fmt.Errorf("max_iterations.min: got %d, want >= %v", a.MaxIterations, 1)
+	if a.MaxIterations != 0 && float64(a.MaxIterations) < 0 {
+		return fmt.Errorf("max_iterations.min: got %d, want >= %v", a.MaxIterations, 0)
 	}
 	if a.MaxTokens != 0 && float64(a.MaxTokens) < 0 {
 		return fmt.Errorf("max_tokens.min: got %d, want >= %v", a.MaxTokens, 0)

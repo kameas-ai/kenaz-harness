@@ -103,6 +103,15 @@ jobs:
         # absent (fork case). — fleet-auth-foundation-01NDFSEX08 WP07
         run: bash scripts/ci/check-no-fleet-imports.sh
 
+      - name: no-model-family-literals guard
+        # Bans hardcoded model-family name literals (claude, gemini,
+        # haiku, opus, sonnet, gpt-, o1, mini, nano, ultra) in core logic
+        # outside core/llm/** — closes the tierFromModelID frozen-core
+        # violation this WP fixed in core/agentgraph. A same-line
+        # `// model-lit-allow: <reason>` comment opts out a genuine
+        # non-classification reference. — versioned-model-profile-01PMDL04 WP04
+        run: bash scripts/ci/check-no-model-family-literals.sh
+
       - name: oss-first guard
         # Verifies non-fleet packages + frontend tests pass with
         # HARNESS_FLEET_DISABLED=1. — fleet-auth-foundation-01NDFSEX08 WP07
