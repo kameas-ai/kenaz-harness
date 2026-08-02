@@ -16,6 +16,7 @@
 
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { isServedMode } from '@/lib/useServedMode';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import NewSessionDialog from '@/shell/NewSessionDialog.vue';
 import MessageList from '@/components/chat/MessageList.vue';
@@ -857,6 +858,20 @@ async function onBranchFromTurn(message: { id?: string }) {
 
 const hasAnyProvider = computed(() => providers.value.length > 0);
 
+/**
+ * Served mode runs inside a Kenaz workbench, where providers come from the
+ * host control plane and there is no in-VM way to add one. The no-provider
+ * copy therefore has to point at Kenaz, not at a Providers form the user
+ * cannot submit.
+ */
+const servedMode = isServedMode();
+
+const noProviderHelp = computed(() =>
+  servedMode
+    ? 'No provider was delivered to this workbench. Add one in Kenaz → profile → provider, then reopen the workbench.'
+    : 'Configure an LLM provider, then start chatting. Sessions live locally and persist across restarts.',
+);
+
 // long-turn-resilience WP03: resume a partial message stream.
 // resumeMessage opens a continuation stream; errors surface via the
 // stream-closed event rather than here.
@@ -1396,7 +1411,7 @@ async function onShared() {
             {{
               hasAnyProvider
                 ? 'Pick a model and start chatting — sessions live locally and persist across restarts.'
-                : 'Configure an LLM provider, then start chatting. Sessions live locally and persist across restarts.'
+                : noProviderHelp
             }}
           </p>
           <div class="mt-6 flex items-center justify-center gap-2">
@@ -1406,7 +1421,7 @@ async function onShared() {
               class="rounded-md border border-accent text-accent px-4 py-2 text-xs uppercase tracking-[0.18em] font-ui hover:bg-surface-2"
               @click="gotoProviders"
             >
-              Configure providers
+              {{ servedMode ? 'Provider status' : 'Configure providers' }}
             </button>
             <button
               v-else

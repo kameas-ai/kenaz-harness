@@ -4133,6 +4133,26 @@ export function createServedHarnessClient(opts?: {
       listPending: () =>
         transport.call<import('./types').ElicitRequest[]>('Elicit_ListPending'),
     },
+
+    llm: {
+      ...base.llm,
+
+      /**
+       * listProviders — READ-ONLY provider state.
+       *
+       * A served harness runs inside a Kenaz workbench, where the only
+       * providers that exist are the ones the host control plane delivered
+       * (source "host", seeded from the EnvGrant environment). Wiring this
+       * one read lets the Providers screen and the chat empty state tell the
+       * truth instead of claiming no provider is configured.
+       *
+       * Every WRITE (addProvider / updateProvider / removeProvider /
+       * testProvider) is deliberately left on the base rejector: host
+       * providers are immutable from inside the VM, and offering an edit
+       * form that cannot succeed would be worse than offering none.
+       */
+      listProviders: () => transport.call<Provider[]>('LLM_ListProviders'),
+    },
   };
 }
 

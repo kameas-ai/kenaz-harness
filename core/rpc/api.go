@@ -908,7 +908,46 @@ func (a *API) Sessions_StopCapture(ctx context.Context, sessionID string) error 
 //     "llm:stream-chunk" topic via the broker so the privacy CI
 //     invariant (only emitter.go and stream_broker.go call
 //     runtime.EventsEmit) stays intact.
-func New(c *core.Core) *API {
+// Option customises API construction. Options exist so a caller can vary the
+// chassis WITHOUT changing what every other caller gets: the zero option set
+// reproduces the historical rpc.New(c) behaviour exactly.
+type Option func(*options)
+
+// options is the accumulated Option state.
+type options struct {
+	// hostProviders are provider profiles supplied by the surrounding
+	// control plane. See WithHostProviders.
+	hostProviders []corellm.ProviderProfile
+}
+
+// WithHostProviders seeds provider profiles that the surrounding control
+// plane configured, rather than the user configuring them inside this
+// process.
+//
+// The served harness (--serve, the default workbench app) uses this to turn
+// the Kenaz-delivered EnvGrant environment (Spec 078:
+// KENAZ_ENVGRANT_ANTHROPIC_API_KEY → ANTHROPIC_API_KEY in the unit's
+// environment) into a working provider, so a workbench boots configured
+// instead of showing an empty Providers screen with no in-VM way to fix it.
+//
+// Host profiles surface in ListProviders with Source "host", are loaded into
+// the registry so StartStream resolves them, and are rejected by
+// Add/Update/RemoveProvider — the operator manages them in Kenaz.
+//
+// The DESKTOP path never passes this option, so desktop behaviour is
+// unchanged: no ambient env var can conjure a provider row on a developer's
+// machine.
+func WithHostProviders(profiles []corellm.ProviderProfile) Option {
+	return func(o *options) { o.hostProviders = profiles }
+}
+
+func New(c *core.Core, opts ...Option) *API {
+	var opt options
+	for _, o := range opts {
+		if o != nil {
+			o(&opt)
+		}
+	}
 	// Capture the user's login PATH and prepend it to the process PATH
 	// before any tool construction or LookPath call site runs. macOS
 	// app-bundle launches inherit a stripped PATH (/usr/bin:/bin:...)
@@ -1331,7 +1370,7 @@ func New(c *core.Core) *API {
 	// compaction-convergence-01PMDL05 WP01).
 	a.SetCompactionAPI(compactionview.New(compactionPipeline))
 
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib)
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders)
 	a.llmAPI = stack.api
 	a.stdioPool = stack.pool
 	a.dispatchPool = stack.dispatchPool
@@ -3462,6 +3501,11 @@ func newLLMStack(
 	// kenaz__read_context_file built-in. nil is safe; the tool is
 	// simply not registered when no library is wired.
 	contextsLib *corecontexts.Library,
+	// hostProviders are control-plane-supplied provider profiles (the
+	// served harness's env-derived profile — see rpc.WithHostProviders).
+	// Empty on the desktop path, which is why desktop behaviour is
+	// unchanged by construction.
+	hostProviders []corellm.ProviderProfile,
 ) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
@@ -3716,6 +3760,7 @@ func newLLMStack(
 		Tools:         toolDiscoverer,
 		Artifacts:     &llmArtifactSinkAdapter{inner: artifactSink},
 		CapCatalog:    capCatalog,
+		HostProviders: hostProviders,
 	})
 
 	// Boot-time warm-up: kick a one-shot async ListModels refresh on every

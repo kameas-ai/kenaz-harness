@@ -353,7 +353,10 @@ func runServeMode(listenAddr string) {
 		os.Exit(1)
 	}
 
-	api := rpc.New(c)
+	// Seed the provider the Kenaz control plane granted this workbench
+	// (Spec 078). Without this the served harness boots with an empty
+	// provider list and no in-VM way to add one.
+	api := rpc.New(c, rpc.WithHostProviders(serve.HostProviders(os.Getenv, serveLog)))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

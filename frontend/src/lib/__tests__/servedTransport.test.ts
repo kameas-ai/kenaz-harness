@@ -295,6 +295,63 @@ describe('createServedHarnessClient', () => {
     expect(session.id).toBe('s42');
   });
 
+  it('routes llm.listProviders() to POST /rpc { method: "LLM_ListProviders" }', async () => {
+    const calls: string[] = [];
+
+    globalThis.fetch = makeFetchStub(async (_input, init) => {
+      const body = JSON.parse((init?.body as string) ?? '{}') as { method?: string };
+      calls.push(body.method ?? '');
+      return jsonOk({
+        result: [
+          {
+            id: 'kenaz-host',
+            name: 'kenaz-host',
+            tier: 'host',
+            kind: 'anthropic',
+            model: 'claude-sonnet-4-5',
+            cred: { kind: 'env', locator: 'ANTHROPIC_API_KEY' },
+            source: 'host',
+          },
+        ],
+      });
+    });
+
+    const { createServedHarnessClient } = await import('@/lib/harnessClient');
+    const client = createServedHarnessClient({ baseURL: 'http://127.0.0.1:7880', token: '' });
+
+    const providers = await client.llm.listProviders();
+    expect(calls).toContain('LLM_ListProviders');
+    expect(providers).toHaveLength(1);
+    expect(providers[0].source).toBe('host');
+    expect(providers[0].cred?.locator).toBe('ANTHROPIC_API_KEY');
+  });
+
+  it('keeps every provider WRITE unported — a served edit form could never succeed', async () => {
+    globalThis.fetch = makeFetchStub(async () => {
+      throw new Error('should not be called');
+    });
+
+    const { createServedHarnessClient } = await import('@/lib/harnessClient');
+    const { isServedUnsupportedError } = await import('@/lib/errors');
+    const client = createServedHarnessClient({ baseURL: 'http://127.0.0.1:7880', token: '' });
+
+    await expect(
+      client.llm.addProvider({
+        id: 'x',
+        name: 'x',
+        kind: 'anthropic',
+        model: 'm',
+        cred: { kind: 'keychain', locator: 'l' },
+      }),
+    ).rejects.toSatisfy(isServedUnsupportedError);
+    await expect(client.llm.removeProvider('x')).rejects.toSatisfy(
+      isServedUnsupportedError,
+    );
+    await expect(client.llm.testProvider('x')).rejects.toSatisfy(
+      isServedUnsupportedError,
+    );
+  });
+
   it('rejects with ServedUnsupportedError for methods not wired in served mode (FR-001)', async () => {
     globalThis.fetch = makeFetchStub(async () => {
       throw new Error('should not be called');
