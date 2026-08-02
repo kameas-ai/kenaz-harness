@@ -23,9 +23,6 @@
 //
 //   - tool_call.id — Gemini does not assign stable IDs to function calls;
 //     the adapter synthesises positional IDs ("call_0", "call_1", …).
-//   - CachingSpec.Breakpoints — Gemini Context Caching requires a named
-//     cached-content resource created out-of-band; the CachingSpec
-//     breakpoint model is not mapped.
 //   - ContentBlock type "document" (PDF) — Gemini accepts files via the
 //     File API only; inline PDF bytes are rejected with ErrInvalidRequest.
 //   - MediaSource.Kind=="uri" — the Gemini File API URI shape is out of

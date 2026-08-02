@@ -111,11 +111,8 @@ type ProviderCapabilities struct {
 	// PresencePenalty — the provider supports the `presence_penalty` knob.
 	PresencePenalty bool `json:"presence_penalty"`
 
-	// ── Session / caching ──────────────────────────────────────────────
+	// ── Session ──────────────────────────────────────────────────────
 
-	// PromptCaching — the provider supports prompt-caching breakpoints
-	// (Anthropic cache_control; not available on OpenAI/Bedrock).
-	PromptCaching bool `json:"prompt_caching"`
 	// Batch — the provider supports asynchronous batch inference.
 	Batch bool `json:"batch"`
 
@@ -166,7 +163,6 @@ func (c ProviderCapabilities) ToDescriptor() CapabilityDescriptor {
 		CapVision:           c.Vision,
 		CapDocuments:        c.Documents,
 		CapJSONMode:         c.JSONMode,
-		CapPromptCaching:    c.PromptCaching,
 		CapReasoning:        c.Reasoning,
 		CapCancellation:     c.Cancellation,
 		CapUsageReporting:   c.UsageReporting,

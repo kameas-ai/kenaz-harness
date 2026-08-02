@@ -204,21 +204,6 @@ func TestBedrockAdapter_JSONMode_JSONModeSerialized(t *testing.T) {
 	})
 }
 
-// ── Caching ───────────────────────────────────────────────────────────────────
-
-// TestBedrockAdapter_Caching_CachingSerialized verifies Caching does not
-// corrupt the Bedrock request body.
-func TestBedrockAdapter_Caching_CachingSerialized(t *testing.T) {
-	req := llm.GenerationRequest{
-		Messages: []llm.Message{bedrockUserMsg("hi")},
-		Caching:  &llm.CachingSpec{Enabled: true},
-	}
-	body := capturedBody(t, req, "anthropic.claude-3-haiku-20240307-v1:0")
-	wirecheck.AssertSerialized(t, body, []wirecheck.FieldExpectation{
-		{Pointer: "/messages", WantPresent: true},
-	})
-}
-
 // ── Reasoning ─────────────────────────────────────────────────────────────────
 
 // TestBedrockAdapter_Reasoning_ReasoningSerialized verifies Reasoning does
