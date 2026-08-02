@@ -254,6 +254,18 @@ type Env struct {
 	// than not compacting.
 	ContextWindows ContextWindowSource
 
+	// PromptTemplates resolves the per-family prompt-rendering template
+	// (llm.PromptTemplateRef, versioned-model-profile-01PMDL04) for a
+	// node's active (providerKind, modelID) pair
+	// (per-family-message-shaping-01PMDL06 WP01). Mirrors TierSource /
+	// ContextWindows: the frozen core asks this data question through a
+	// seam instead of string-matching model-family names itself. nil
+	// (every run today — nothing resolves a live ModelProfile yet; see
+	// resolvePromptTemplate) makes every lookup resolve to nil, which
+	// selects prompts.Compose's default renderer — today's exact
+	// behaviour, unchanged, until a concrete adapter is wired.
+	PromptTemplates PromptTemplateSource
+
 	// MergeSuggester powers the kernel's "merge?" toast. nil disables
 	// the suggestion stream.
 	MergeSuggester *MergeSuggester

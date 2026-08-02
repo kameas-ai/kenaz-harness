@@ -111,13 +111,27 @@ func TestSummarizeToolInventory(t *testing.T) {
 }
 
 func TestComposeSystemPrompt(t *testing.T) {
-	got := composeSystemPrompt("  base  ", "", "   ", "env", "user")
+	got := composeSystemPrompt(nil, "  base  ", "", "   ", "env", "user")
 	want := "base\n\nenv\n\nuser"
 	if got != want {
 		t.Fatalf("compose: got %q want %q", got, want)
 	}
-	if composeSystemPrompt("", "  ") != "" {
+	if composeSystemPrompt(nil, "", "  ") != "" {
 		t.Errorf("all-empty layers should compose to empty string")
+	}
+}
+
+// TestComposeSystemPrompt_XMLVariant asserts composeSystemPrompt threads
+// its tmpl param straight through to prompts.Compose's variant selection
+// (per-family-message-shaping-01PMDL06 WP01) — a profile with
+// Format=="xml" registered gets XML-tagged sections instead of the
+// default Markdown join.
+func TestComposeSystemPrompt_XMLVariant(t *testing.T) {
+	tmpl := &corellm.PromptTemplateRef{Format: "xml"}
+	got := composeSystemPrompt(tmpl, "base", "env")
+	want := "<section index=\"1\">\nbase\n</section>\n<section index=\"2\">\nenv\n</section>"
+	if got != want {
+		t.Fatalf("composeSystemPrompt(xml) = %q, want %q", got, want)
 	}
 }
 

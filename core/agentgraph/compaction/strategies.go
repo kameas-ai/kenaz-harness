@@ -92,15 +92,42 @@ func (s *DropOldestStrategy) Compact(_ context.Context, in ContextSlice, opts Co
 		}, nil
 	}
 
-	// Walk from the front, dropping until we're either under target or
-	// down to the floor.
-	out := append([]agentgraph.Message(nil), in.Messages...)
-	for len(out) > keep {
-		if approxTokens(bytesOf(out)) <= target {
+	// Group the input into trim-atomic units: a lone message, or an
+	// assistant tool_use turn plus every tool_result message that
+	// answers it. Front-to-back trimming then advances whole units so
+	// a surviving tool_result always keeps its tool_use and vice versa
+	// (see dropOldestUnits for the pairing rules and orphan handling).
+	units := dropOldestUnits(in.Messages)
+
+	totalMsgs := 0
+	remainingBytes := 0
+	unitBytes := make([]int, len(units))
+	for i, u := range units {
+		b := bytesOf(u)
+		unitBytes[i] = b
+		totalMsgs += len(u)
+		remainingBytes += b
+	}
+
+	// Walk from the front, dropping whole units until we're either
+	// under target or dropping the next unit would take the remaining
+	// message count below the floor. The would-be check (rather than a
+	// per-message counter) is what keeps the floor from splitting a
+	// unit: if trimming the oldest unit would cross the floor, it is
+	// kept in full instead of partially.
+	dropped := 0
+	for dropped < len(units) {
+		if approxTokens(remainingBytes) <= target {
 			break
 		}
-		out = out[1:]
+		if totalMsgs-len(units[dropped]) < keep {
+			break
+		}
+		totalMsgs -= len(units[dropped])
+		remainingBytes -= unitBytes[dropped]
+		dropped++
 	}
+	out := repairToolPairs(flattenUnits(units[dropped:]))
 	afterBytes := bytesOf(out)
 	return CompactedContext{
 		Messages:    out,
@@ -108,6 +135,78 @@ func (s *DropOldestStrategy) Compact(_ context.Context, in ContextSlice, opts Co
 		Strategy:    s.Strategy(),
 		BytesSaved:  beforeBytes - afterBytes,
 	}, nil
+}
+
+// dropOldestUnits groups a chronologically-ordered message slice into
+// trim-atomic units for DropOldestStrategy. Two shapes of unit exist:
+//
+//   - A single non-tool-pair message (any message that isn't an
+//     assistant tool_use turn or one of its tool_results).
+//   - An assistant message carrying one or more ToolCalls, plus every
+//     immediately-following tool-role message whose ToolCallID answers
+//     one of those calls. Multi-tool-call turns pull in all of their
+//     results as one unit.
+//
+// Tool results are only ever attached to the assistant turn that
+// requested them, and only when they appear contiguously right after
+// it — which is how the kernel actually appends tool_use/tool_result
+// pairs (a genuine agentic turn never interleaves an unrelated message
+// between a tool_use and its results). A tool-role message that
+// doesn't get claimed this way is an orphan (defensive: malformed
+// input, a duplicate/mismatched ToolCallID, or a result whose
+// tool_use never made it into this slice) and is dropped outright
+// rather than emitted as a stranded unit of its own — keeping it would
+// reproduce exactly the dangling-tool_result wire hazard this pairing
+// logic exists to prevent.
+func dropOldestUnits(msgs []agentgraph.Message) [][]agentgraph.Message {
+	units := make([][]agentgraph.Message, 0, len(msgs))
+	for i := 0; i < len(msgs); {
+		m := msgs[i]
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+			need := make(map[string]bool, len(m.ToolCalls))
+			for _, tc := range m.ToolCalls {
+				if tc.ID != "" {
+					need[tc.ID] = true
+				}
+			}
+			unit := []agentgraph.Message{m}
+			j := i + 1
+			for j < len(msgs) && len(need) > 0 && msgs[j].Role == "tool" && need[msgs[j].ToolCallID] {
+				unit = append(unit, msgs[j])
+				delete(need, msgs[j].ToolCallID)
+				j++
+			}
+			units = append(units, unit)
+			i = j
+			continue
+		}
+		if m.Role == "tool" {
+			// Orphaned tool_result: no preceding assistant turn in
+			// this slice claimed it. Drop silently rather than crash
+			// or surface it alone.
+			i++
+			continue
+		}
+		units = append(units, []agentgraph.Message{m})
+		i++
+	}
+	return units
+}
+
+// flattenUnits concatenates units back into a flat message slice,
+// preserving order. Returns a fresh slice (never aliasing the input
+// units' backing arrays beyond what append naturally shares) so
+// callers can treat the result as owned output.
+func flattenUnits(units [][]agentgraph.Message) []agentgraph.Message {
+	n := 0
+	for _, u := range units {
+		n += len(u)
+	}
+	out := make([]agentgraph.Message, 0, n)
+	for _, u := range units {
+		out = append(out, u...)
+	}
+	return out
 }
 
 // ---- summary ----
@@ -578,4 +677,70 @@ func approxTokens(b int) int {
 		return 0
 	}
 	return (b + 3) / 4
+}
+
+// repairToolPairs enforces the tool_use/tool_result invariant on an
+// already-trimmed slice, unconditionally.
+//
+// dropOldestUnits establishes pairing by *grouping*, which only holds
+// while a turn's results sit contiguously after it — true for histories
+// the kernel builds (exec_dispatch appends a turn's results atomically),
+// but not a property of the type. A caller that reorders messages (a
+// custom_subgraph strategy, or a hand-authored graph wiring the compact
+// node) can present a real pair non-contiguously; grouping then closes
+// the assistant unit with zero results and drops the real result as an
+// orphan, leaving a dangling ToolCalls entry. Providers reject that
+// outright (llm_provider_adapter.go), which is the exact failure this
+// strategy exists to avoid.
+//
+// So rather than rely on the caller, guarantee it here: one O(n) pass
+// that drops any tool result with no surviving originating call, and
+// any call with no surviving result. Cheap insurance for the one
+// invariant the whole strategy is responsible for.
+func repairToolPairs(msgs []agentgraph.Message) []agentgraph.Message {
+	if len(msgs) == 0 {
+		return msgs
+	}
+	// Which tool results survived, and which calls were issued.
+	haveResult := make(map[string]bool, len(msgs))
+	haveCall := make(map[string]bool, len(msgs))
+	for _, m := range msgs {
+		if m.Role == "tool" && m.ToolCallID != "" {
+			haveResult[m.ToolCallID] = true
+		}
+		for _, tc := range m.ToolCalls {
+			if tc.ID != "" {
+				haveCall[tc.ID] = true
+			}
+		}
+	}
+
+	out := make([]agentgraph.Message, 0, len(msgs))
+	for _, m := range msgs {
+		// A tool result whose originating call did not survive is not
+		// sendable on its own.
+		if m.Role == "tool" && !haveCall[m.ToolCallID] {
+			continue
+		}
+		if len(m.ToolCalls) > 0 {
+			kept := make([]agentgraph.ToolCallRequest, 0, len(m.ToolCalls))
+			for _, tc := range m.ToolCalls {
+				if haveResult[tc.ID] {
+					kept = append(kept, tc)
+				}
+			}
+			if len(kept) != len(m.ToolCalls) {
+				// Copy before mutating — the input slice may be shared
+				// with the caller's history.
+				m.ToolCalls = kept
+				// An assistant turn that existed only to carry calls,
+				// and now carries none, has nothing left to say.
+				if len(kept) == 0 && strings.TrimSpace(m.Content) == "" {
+					continue
+				}
+			}
+		}
+		out = append(out, m)
+	}
+	return out
 }
