@@ -14,8 +14,6 @@ import (
 	"context"
 	"errors"
 
-	"gopkg.in/yaml.v3"
-
 	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
@@ -47,9 +45,21 @@ func NewHandler(r llm.Registry) *Handler {
 func (h *Handler) Kind() string { return Kind }
 
 // Parse decodes raw YAML into a ProviderProfile.
+//
+// Routes through llm.ValidateProviderProfileBundle rather than a plain
+// yaml.Unmarshal (WP08, versioned-model-profile-01PMDL04): a foreign
+// top-level key is rejected instead of silently dropped, and — the live
+// vector this closes — a key placed inside Defaults (a map[string]any,
+// so unlike every other ProviderProfile field it is NOT dropped by
+// tolerant-of-unknown-fields unmarshal) is checked against the explicit
+// allow-list of sampling knobs and provider-specific config keys
+// adapters actually read. Mirrors ModelProfileHandler.Parse's use of
+// llm.ValidateModelProfileBundle (model_profile_handler.go) for the
+// same reason: unknown keys must be rejected at the parse boundary,
+// before they are silently dropped or, for Defaults, silently kept.
 func (h *Handler) Parse(raw []byte) (any, error) {
-	var p llm.ProviderProfile
-	if err := yaml.Unmarshal(raw, &p); err != nil {
+	p, err := llm.ValidateProviderProfileBundle(raw)
+	if err != nil {
 		return nil, err
 	}
 	return p, nil
