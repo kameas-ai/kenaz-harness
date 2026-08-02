@@ -253,6 +253,67 @@ func TestChatRunner_TerminalEmitsClosedPayload(t *testing.T) {
 	t.Fatalf("did not see llm:stream-closed payload; events = %+v", broker.snapshot())
 }
 
+// TestChatRunner_StartStream_SuppressesKernelAutomaticCompaction is the
+// compaction-convergence-01PMDL05 structural half of the single-fire
+// guarantee: every Env the chat runner builds must set
+// SuppressAutomaticCompaction so the kernel's own pre_call/post_tool
+// sites never fire on a chat-driven run, no matter what the cascading
+// CompactionConfig resolver says. (The *behavioural* half — that the
+// flag genuinely blocks the sites once set — is proven at the kernel
+// level by TestKernel_SuppressAutomaticCompaction_BlocksPreCallSite /
+// ...BlocksPostToolSite in core/agentgraph.) The runner's own
+// pre-send compactor (see the TestChatRunner_PreSendCompaction_*
+// tests) remains the sole authoritative compactor for this path —
+// this test's job is only to confirm the kernel-side one stays off.
+func TestChatRunner_StartStream_SuppressesKernelAutomaticCompaction(t *testing.T) {
+	t.Parallel()
+	broker := &recordingBroker{}
+	writer := &recordingHistoryWriter{}
+	graph := minimalChatGraph()
+
+	var mu sync.Mutex
+	var seenEnv *coreag.Env
+	captureEnvDefaults := func(env *coreag.Env) {
+		mu.Lock()
+		defer mu.Unlock()
+		seenEnv = env
+	}
+
+	runner, err := New(Config{
+		Kernel:        coreag.NewKernel(),
+		Registry:      stubRegistry{},
+		Broker:        broker,
+		HistoryWriter: writer,
+		History:       staticHistoryReader{},
+		GraphLoader:   func() (coreag.Graph, error) { return graph, nil },
+		MaxTurns:      func() int { return 25 },
+		EnvDefaults:   captureEnvDefaults,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = runner.StartStream(context.Background(), "profile-1", "session-1", "", "hello")
+	if err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+
+	// Drain the run goroutine until EnvDefaults has definitely fired.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		env := seenEnv
+		mu.Unlock()
+		if env != nil {
+			if !env.SuppressAutomaticCompaction {
+				t.Fatalf("Env.SuppressAutomaticCompaction = false, want true (kernel automatic compaction sites would be live on a chat-driven run)")
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("EnvDefaults callback never observed an Env")
+}
+
 // TestApplyMaxTurnsDial verifies the LoopNode max_iterations override.
 func TestApplyMaxTurnsDial(t *testing.T) {
 	t.Parallel()

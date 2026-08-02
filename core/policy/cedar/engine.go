@@ -466,6 +466,20 @@ func IsPolicyDenied(err error) bool {
 	return errors.As(err, &pe)
 }
 
+// DeniedSummary returns a short "<Action> <Resource>" description of
+// the denied action (e.g. "Read file:/etc/passwd"). core/agentgraph
+// intentionally does not import this package (see its PolicyGate
+// doc) — this plain-string accessor is the seam a structural
+// interface there matches via errors.As so the kernel can log a
+// forbidden-action summary without depending on this package's
+// Decision type directly.
+func (e *PolicyDeniedError) DeniedSummary() string {
+	if e == nil {
+		return ""
+	}
+	return strings.TrimSpace(e.Decision.Action + " " + e.Decision.Resource)
+}
+
 // policySource pairs a virtual filename with its body. Internal type.
 type policySource struct {
 	name  string

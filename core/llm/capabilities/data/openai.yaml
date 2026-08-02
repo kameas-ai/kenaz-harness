@@ -119,6 +119,27 @@ models:
     document_input: false
     max_image_bytes: 20971520
     max_image_count_per_message: 50
+  # o1-mini (compaction-convergence-01PMDL05): more specific than "o1*"
+  # below so it isn't shadowed — o1-mini's real context window (128000)
+  # is smaller than the rest of the o1 family (200000). All other fields
+  # are copied verbatim from the "o1*" row so this insertion changes
+  # only the context_window value, not any other capability flag.
+  - match: "o1-mini*"
+    streaming: true
+    tool_calling: true
+    vision: true
+    documents: false
+    json_mode: true
+    reasoning: true
+    reasoning_style: "effort_string"
+    cancellation: true
+    usage_reporting: true
+    context_window: 128000
+    max_output_tokens: 100000
+    image_input: true
+    document_input: false
+    max_image_bytes: 20971520
+    max_image_count_per_message: 50
   - match: "o1*"
     streaming: true
     tool_calling: true
@@ -135,6 +156,25 @@ models:
     document_input: false
     max_image_bytes: 20971520
     max_image_count_per_message: 50
+  # o3 / o3-mini / gpt-4.1 / gpt-4.1-mini (compaction-convergence-01PMDL05):
+  # these previously matched no row at all in this catalog (they'd fall
+  # through to "gpt-4*" for the 4.1 pair, or to bare provider defaults
+  # for o3/o3-mini), so Catalog.ContextWindow returned 8192 or 0 for a
+  # real, shipping model. That gap is what forced core/compaction/wiring's
+  # CapabilityLookup to keep its own hardcoded window table instead of
+  # reading this catalog. Only `match` + `context_window` are set here —
+  # every other field stays nil/unset so it inherits the provider-level
+  # `defaults:` block exactly as it did before this row existed (this is
+  # additive: a real context-window bug fix, not a capability-flag change).
+  # Mini variant listed first so it isn't shadowed by the broader glob.
+  - match: "gpt-4.1-mini*"
+    context_window: 1000000
+  - match: "gpt-4.1*"
+    context_window: 1000000
+  - match: "o3-mini*"
+    context_window: 200000
+  - match: "o3*"
+    context_window: 200000
   - match: "gpt-3.5-turbo*"
     streaming: true
     tool_calling: true
