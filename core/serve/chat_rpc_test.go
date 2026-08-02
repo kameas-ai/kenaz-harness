@@ -544,6 +544,12 @@ func TestServedChat_SlowConsumerIsToldItWasTruncated(t *testing.T) {
 // contract: the backpressure machinery must not cost correctness in the
 // normal case. A client that keeps up receives every chunk, in order,
 // with no truncation notice at all.
+//
+// The burst below is published as fast as the loop can run — far faster
+// than a real token stream arrives — so it also pins the buffer sizing:
+// a truncation notice must mean the BROWSER fell behind, never that the
+// pump goroutine was briefly descheduled during a burst. (This test
+// caught exactly that on a loaded CI runner when busBufferSize was 256.)
 func TestServedChat_HealthyConsumerIsNeverTruncated(t *testing.T) {
 	api, baseURL, cancel := newChatHarness(t)
 	defer cancel()

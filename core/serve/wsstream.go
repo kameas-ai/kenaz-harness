@@ -84,10 +84,17 @@ const (
 	// without ever truncating, while capping worst-case memory per client.
 	defaultStreamQueueCap = 512
 
-	// busBufferSize is the bus-subscription buffer. The pump drains it
-	// eagerly, so this only has to absorb a burst arriving while the pump
-	// is mid-transform.
-	busBufferSize = 256
+	// busBufferSize is the bus-subscription buffer.
+	//
+	// The pump drains it eagerly, so in steady state it barely fills — but
+	// "eagerly" means "as soon as the Go scheduler runs the pump", and a
+	// publisher can emit a whole burst before that happens. Anything the
+	// burst overruns is a bus-level drop, which is reported to the client
+	// as truncation. Sizing this well above any plausible single burst
+	// keeps that report meaningful: a truncation notice should mean the
+	// BROWSER could not keep up, not that a goroutine was briefly
+	// descheduled. Cost is one channel of small structs per WS client.
+	busBufferSize = 1024
 
 	// wsWriteTimeout bounds a single socket write. A client that has stopped
 	// reading entirely is disconnected rather than pinning resources.
