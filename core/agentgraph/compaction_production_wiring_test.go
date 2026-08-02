@@ -97,17 +97,18 @@ func TestKernel_ProductionCompactionDefaults_NoOpOnLLMNode(t *testing.T) {
 
 // TestPresetForTier_PreCallPostToolDisabledEverySite is a companion
 // unit test asserting the same guarantee at the config level, for
-// every dial tier — not just "balanced" (ProductionDefaults). Wiring
-// FR-041 in must never silently enable kernel-side automatic
-// compaction for ANY tier the user can pick, including "off" and
-// "maximal": the pre-send dial already encodes what those tiers mean
-// today, and this kernel seam does not yet participate in that
-// meaning.
-func TestPresetForTier_PreCallPostToolDisabledEverySite(t *testing.T) {
+// every dial tier. Automatic pre-call compaction is ON for every tier
+// except "off" — a long conversation must be trimmed before it
+// overflows the model's context window, and "off" is the user opting
+// out. It is gated on PreCallThreshold * ContextWindow, so enabling it
+// does not mean it fires every turn. SitePostTool stays off everywhere:
+// it overwrites tool-result content in place.
+func TestPresetForTier_SiteDefaultsPerTier(t *testing.T) {
 	for _, tier := range []string{"off", "conservative", "balanced", "aggressive", "maximal", "unknown-tier"} {
 		cfg := fr041compaction.PresetForTier(tier)
-		if cfg.ForSite(fr041compaction.SitePreCall).Enabled {
-			t.Errorf("tier %q: SitePreCall.Enabled = true, want false", tier)
+		wantPre := tier != "off"
+		if got := cfg.ForSite(fr041compaction.SitePreCall).Enabled; got != wantPre {
+			t.Errorf("tier %q: SitePreCall.Enabled = %v, want %v", tier, got, wantPre)
 		}
 		if cfg.ForSite(fr041compaction.SitePostTool).Enabled {
 			t.Errorf("tier %q: SitePostTool.Enabled = true, want false", tier)

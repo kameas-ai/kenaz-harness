@@ -4942,7 +4942,13 @@ func newGraphManagerWithDeps(
 	// leaves deps.TierSource nil, so applyTo skips it and every node
 	// keeps its pre-WP05 hardcoded default (ModelTierMedium fallback).
 	if tierCat, err := llmcap.LoadDefault(); err == nil {
-		deps.TierSource = &tierSourceAdapter{cat: tierCat}
+		adapter := &tierSourceAdapter{cat: tierCat}
+		deps.TierSource = adapter
+		// Same adapter satisfies ContextWindowSource: the compaction
+		// pipeline needs the model's context window as the denominator
+		// for its pre-call threshold, so automatic compaction fires as a
+		// conversation nears the limit instead of on every turn.
+		deps.ContextWindows = adapter
 	}
 	// Memory hook journal: bind the SQL writer (migration 0308) when
 	// the storage layer exposes a stdlib *sql.DB. The HookManager's

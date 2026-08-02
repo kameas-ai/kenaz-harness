@@ -199,43 +199,69 @@ func (p *Pipeline) Run(ctx context.Context, req CompactRequest) (CompactResult, 
 		return CompactResult{}, fmt.Errorf("%w: %q", ErrUnknownStrategy, strat)
 	}
 
-	// No budget signal ⇒ no automatic compaction. The automatic sites
-	// (pre_call / post_tool) fire per node execution, so without a
-	// target to aim at there is no way to decide *how much* to drop —
-	// and several strategies (summary, semantic_cluster) do not consult
-	// TargetTokens at all, meaning they would collapse the entire
-	// history on every fire. Today exec_compute always passes
-	// TargetTokens: 0 (the real context-window budget seam is still
-	// pending), so this guard is what keeps enabling a site from being
-	// destructive. Gate here at the pipeline rather than trusting each
-	// strategy to self-limit: a future strategy that forgets the check
-	// is then safe by construction.
+	// Budget evaluation for the automatic sites (pre_call / post_tool).
 	//
-	// SiteManual is deliberately exempt — a user (or a graph author
-	// placing a `compact` node) asking to compact now means it, and the
-	// compact node carries its own TargetTokenBudget attr.
+	// These fire on every node execution, so firing must be conditional
+	// on actually approaching the context limit — otherwise a strategy
+	// like summary collapses the whole transcript on every turn. Two
+	// things are needed and neither existed before: a real denominator
+	// (the model's context window) and an enforced threshold.
+	//
+	// PreCallThreshold is the fraction of the window above which we
+	// compact. Below it, skip. At or above it, hand the strategy a
+	// concrete TargetTokens to land under — strategies that ignore
+	// TargetTokens (summary, semantic_cluster) still rewrite the whole
+	// slice, but only once we are genuinely over budget, which is when
+	// that is the intended behaviour.
+	//
+	// An unknown window (0) means skip: compacting toward a guessed
+	// target is worse than not compacting.
+	//
+	// SiteManual is exempt throughout — an explicit request to compact
+	// means it, and the compact node carries its own budget attr.
+	// An explicitly pinned TargetTokens is a caller saying "compact to
+	// this size" — honour it without threshold evaluation. The kernel's
+	// automatic sites pass 0, so they always go through the gate below;
+	// only a deliberate caller bypasses it.
 	if req.Site != SiteManual && req.Input.TargetTokens <= 0 {
-		bytesIn := bytesOf(req.Input.Messages)
-		p.emit(req.RunID, req.NodeID, Event{
-			Strategy:   siteCfg.Strategy,
-			Site:       req.Site,
-			MsgsIn:     len(req.Input.Messages),
-			MsgsOut:    len(req.Input.Messages),
-			BytesIn:    bytesIn,
-			BytesOut:   bytesIn,
-			Skipped:    true,
-			SkipReason: "no target token budget",
-		})
-		passthrough := append([]agentgraph.Message(nil), req.Input.Messages...)
-		return CompactResult{
-			Compacted: CompactedContext{
-				Messages:    passthrough,
-				TokensAfter: approxTokens(bytesIn),
-				Strategy:    siteCfg.Strategy,
-			},
-			Skipped: true,
-			Reason:  "no target token budget",
-		}, nil
+		threshold := siteCfg.PreCallThreshold
+		if threshold <= 0 || threshold > 1 {
+			threshold = DefaultPreCallThreshold
+		}
+		window := req.Input.ContextWindow
+		current := req.Input.CurrentTokens
+		if window <= 0 || current <= 0 || float64(current) < threshold*float64(window) {
+			reason := "under compaction threshold"
+			if window <= 0 {
+				reason = "context window unknown"
+			}
+			bytesIn := bytesOf(req.Input.Messages)
+			p.emit(req.RunID, req.NodeID, Event{
+				Strategy:   strat,
+				Site:       req.Site,
+				MsgsIn:     len(req.Input.Messages),
+				MsgsOut:    len(req.Input.Messages),
+				BytesIn:    bytesIn,
+				BytesOut:   bytesIn,
+				Skipped:    true,
+				SkipReason: reason,
+			})
+			passthrough := append([]agentgraph.Message(nil), req.Input.Messages...)
+			return CompactResult{
+				Compacted: CompactedContext{
+					Messages:    passthrough,
+					TokensAfter: approxTokens(bytesIn),
+					Strategy:    strat,
+				},
+				Skipped: true,
+				Reason:  reason,
+			}, nil
+		}
+		// Over threshold: give the strategy a real target if the caller
+		// did not pin one.
+		if req.Input.TargetTokens <= 0 {
+			req.Input.TargetTokens = int(threshold * float64(window))
+		}
 	}
 
 	// Merge resolved-config opts on top of caller opts (caller wins).
@@ -397,6 +423,7 @@ func (p *Pipeline) Compact(ctx context.Context, in agentgraph.CompactionInput) (
 			SystemPrompt:  in.SystemPrompt,
 			TargetTokens:  in.TargetTokens,
 			CurrentTokens: in.CurrentTokens,
+			ContextWindow: in.ContextWindow,
 			Site:          kernelSiteToSite(in.Site),
 		},
 	})

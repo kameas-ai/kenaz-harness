@@ -5,7 +5,9 @@
 // global layer with something that reproduces today's shipped behaviour
 // instead of FR-041's own SafeDefaults.
 //
-// CRITICAL: SitePreCall and SitePostTool are disabled (Enabled: false)
+// SitePreCall is ENABLED by default with the deterministic drop_oldest
+// strategy, gated on PreCallThreshold * ContextWindow. SitePostTool stays
+// disabled (Enabled: false)
 // in every tier preset, including "balanced" (ProductionDefaults). The
 // pre-send dial already performs all automatic context-shrinking on
 // persisted session history before the kernel ever runs; enabling the
@@ -31,7 +33,16 @@ package compaction
 // "balanced", mirroring core/compaction.Tier's own default behaviour.
 func PresetForTier(tier string) CompactionConfig {
 	pre := SiteConfig{
-		Enabled:               false,
+		// Enabled for every tier except "off": without automatic
+		// compaction a long conversation eventually overflows the
+		// model's context window and the call simply fails. "off" must
+		// still mean off — that dial position is the user opting out.
+		// drop_oldest is the deterministic, no-LLM-call strategy; it
+		// trims oldest turns only once CurrentTokens crosses
+		// PreCallThreshold * ContextWindow, and no-ops when the window
+		// is unknown. summary/semantic_cluster rewrite the whole
+		// transcript, so they stay opt-in.
+		Enabled:               tier != "off",
 		Strategy:              StrategyDropOldest,
 		PreCallThreshold:      preCallThresholdForTier(tier),
 		MaxRecursionDepth:     DefaultMaxRecursionDepth,

@@ -141,8 +141,8 @@ func TestNewMemoryResolverWithDefaults_SeedsGivenGlobalConfig(t *testing.T) {
 	r := compaction.NewMemoryResolverWithDefaults(custom)
 	cfg := r.Resolve(compaction.ScopeKey{})
 	pre := cfg.ForSite(compaction.SitePreCall)
-	if pre.Enabled {
-		t.Fatalf("expected pre_call disabled from the aggressive-tier preset, got Enabled=true")
+	if !pre.Enabled {
+		t.Fatalf("expected pre_call enabled from the aggressive-tier preset, got Enabled=false")
 	}
 	if pre.PreCallThreshold != 0.60 {
 		t.Fatalf("expected pre_call_threshold 0.60 (aggressive tier), got %v", pre.PreCallThreshold)

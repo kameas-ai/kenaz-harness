@@ -89,3 +89,15 @@ func newBranchRecommender(cat *llmcap.Catalog) *agentgraph.BranchRecommender {
 	}
 	return agentgraph.NewBranchRecommenderWithTierSource(models, &tierSourceAdapter{cat: cat})
 }
+
+// ContextWindow satisfies agentgraph.ContextWindowSource, letting the
+// compaction pipeline evaluate its pre-call threshold against the real
+// model context window instead of firing on every turn. Returns 0 when
+// the catalog has no entry, which the pipeline reads as "unknown" and
+// skips on.
+func (a *tierSourceAdapter) ContextWindow(providerKind, modelID string) int {
+	if a == nil || a.cat == nil {
+		return 0
+	}
+	return a.cat.ContextWindow(providerKind, modelID)
+}

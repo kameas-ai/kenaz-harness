@@ -652,6 +652,11 @@ type CompactionInput struct {
 	TargetTokens int
 	// CurrentTokens is the kernel's estimate of the input size.
 	CurrentTokens int
+	// ContextWindow is the active model's max context length in tokens
+	// (0 = unknown). It is the denominator the compactor evaluates its
+	// pre-call threshold against, so automatic compaction fires as the
+	// conversation approaches the limit rather than on every turn.
+	ContextWindow int
 }
 
 // CompactionOutput is what the compactor returns. Skipped=true means

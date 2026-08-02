@@ -157,6 +157,12 @@ func (s *SiteConfig) MarkSubgraphOutputPort() *SiteConfig { s.Mark(fSubgraphOutp
 // MarkCustomGraphID flags CustomGraphID as explicitly set.
 func (s *SiteConfig) MarkCustomGraphID() *SiteConfig { s.Mark(fCustomGraphID); return s }
 
+// DefaultPreCallThreshold is the fraction of the model's context window
+// above which the automatic compaction sites fire. 0.85 leaves headroom
+// for the response plus the system prompt, so compaction happens *before*
+// a call would overflow rather than after it fails.
+const DefaultPreCallThreshold = 0.85
+
 // CompactionConfig is one layer's contribution. Each site has its
 // own SiteConfig; un-set sites fall through to the next layer.
 type CompactionConfig struct {

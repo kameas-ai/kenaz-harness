@@ -303,60 +303,114 @@ func TestPipeline_AdaptsToAgentgraphCompactor(t *testing.T) {
 	}
 }
 
-// TestPipeline_AutomaticSitesRefuseWithoutTokenBudget pins the fix
-// for a blocker found in review of PR #264.
+// TestPipeline_PreCallThreshold_FiresOnlyNearContextMax pins the
+// behaviour the compaction system exists for: a long conversation must
+// be compacted *before* it overflows the model's context window, and a
+// short one must be left completely alone.
 //
-// Wiring SetCompactionAPI to the live pipeline made the shipped
-// Settings -> Compaction panel functional for the first time. That panel
-// lets a user enable the pre_call site AND pick the "summary" strategy,
-// persisted globally to disk. Two gaps combined into a
-// history-destroying one-click path: Pipeline.Run never consulted
-// PreCallThreshold (so an enabled site fired on EVERY node execution,
-// not only when over budget), and SummaryStrategy/SemanticClusterStrategy
-// never consulted TargetTokens (which exec_compute always passes as 0),
-// so each fire collapsed the whole transcript into one message.
-//
-// The guard lives in Pipeline.Run so safety does not depend on every
-// strategy remembering to self-limit.
-func TestPipeline_AutomaticSitesRefuseWithoutTokenBudget(t *testing.T) {
-	msgs := []agentgraph.Message{
-		{Role: "user", Content: "first"},
-		{Role: "assistant", Content: "second"},
-		{Role: "user", Content: "third"},
+// Both halves matter. Firing too eagerly was a real defect found in
+// review of PR #264 — PreCallThreshold was never read, so an enabled
+// site fired on every single node execution; combined with a strategy
+// that ignores TargetTokens that silently gutted the context on every
+// turn. Not firing at all is the opposite failure: the call eventually
+// exceeds the window and errors.
+func TestPipeline_PreCallThreshold_FiresOnlyNearContextMax(t *testing.T) {
+	// ~4 bytes/token, so 400 messages of 100 bytes ≈ 10k tokens.
+	long := make([]agentgraph.Message, 400)
+	for i := range long {
+		long[i] = agentgraph.Message{Role: "user", Content: strings.Repeat("x", 100)}
+	}
+	short := []agentgraph.Message{{Role: "user", Content: "hi"}}
+
+	newPipe := func() *compaction.Pipeline {
+		p := compaction.NewPipeline(
+			compaction.WithResolver(compaction.NewMemoryResolverWithDefaults(compaction.ProductionDefaults())),
+		)
+		p.RegisterStrategy(compaction.NewDropOldestStrategy())
+		return p
+	}
+	tokensOf := func(msgs []agentgraph.Message) int {
+		n := 0
+		for _, m := range msgs {
+			n += len(m.Content)
+		}
+		return n / 4
 	}
 
-	for _, site := range []compaction.Site{compaction.SitePreCall, compaction.SitePostTool} {
-		t.Run(string(site), func(t *testing.T) {
-			cfg := compaction.ProductionDefaults()
-			sc := cfg.ForSite(site)
-			sc.Enabled = true
-			sc.Strategy = compaction.StrategySummary // the destructive combination
-			cfg.Sites[site] = sc
-
-			p := compaction.NewPipeline(
-				compaction.WithResolver(compaction.NewMemoryResolverWithDefaults(cfg)),
-			)
-			// Register the destructive strategy so the guard, not a
-			// missing registration, is what stops the fire.
-			p.RegisterStrategy(compaction.NewSummaryStrategy(nil))
-			res, err := p.Run(context.Background(), compaction.CompactRequest{
-				Site:  site,
-				Input: compaction.ContextSlice{Messages: msgs, TargetTokens: 0},
-			})
-			if err != nil {
-				t.Fatalf("Run: %v", err)
-			}
-			if !res.Skipped {
-				t.Fatalf("site %s with TargetTokens=0 was NOT skipped - history would be destroyed", site)
-			}
-			if len(res.Compacted.Messages) != len(msgs) {
-				t.Fatalf("history mutated: got %d messages, want %d", len(res.Compacted.Messages), len(msgs))
-			}
-			for i := range msgs {
-				if res.Compacted.Messages[i].Content != msgs[i].Content {
-					t.Fatalf("message %d altered: %q != %q", i, res.Compacted.Messages[i].Content, msgs[i].Content)
-				}
-			}
+	t.Run("near the limit: compacts", func(t *testing.T) {
+		cur := tokensOf(long)
+		res, err := newPipe().Run(context.Background(), compaction.CompactRequest{
+			Site: compaction.SitePreCall,
+			Input: compaction.ContextSlice{
+				Messages:      long,
+				CurrentTokens: cur,
+				ContextWindow: int(float64(cur) / 0.9), // ~90% full, over the 0.85 default
+			},
 		})
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if res.Skipped {
+			t.Fatalf("near context max the pipeline skipped — the conversation would overflow")
+		}
+		if len(res.Compacted.Messages) >= len(long) {
+			t.Fatalf("compaction did not shrink history: %d >= %d", len(res.Compacted.Messages), len(long))
+		}
+	})
+
+	t.Run("well under the limit: leaves history untouched", func(t *testing.T) {
+		res, err := newPipe().Run(context.Background(), compaction.CompactRequest{
+			Site: compaction.SitePreCall,
+			Input: compaction.ContextSlice{
+				Messages:      short,
+				CurrentTokens: tokensOf(short),
+				ContextWindow: 200000,
+			},
+		})
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if !res.Skipped {
+			t.Fatalf("a short conversation was compacted — should be untouched")
+		}
+		if len(res.Compacted.Messages) != len(short) {
+			t.Fatalf("history mutated: %d != %d", len(res.Compacted.Messages), len(short))
+		}
+	})
+
+	t.Run("unknown window: skips rather than guessing", func(t *testing.T) {
+		res, err := newPipe().Run(context.Background(), compaction.CompactRequest{
+			Site: compaction.SitePreCall,
+			Input: compaction.ContextSlice{
+				Messages:      long,
+				CurrentTokens: tokensOf(long),
+				ContextWindow: 0,
+			},
+		})
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if !res.Skipped {
+			t.Fatalf("compacted toward a guessed target with no known window")
+		}
+	})
+}
+
+// TestProductionDefaults_PreCallEnabledWithSafeStrategy pins the default
+// posture: automatic pre-call compaction is ON (otherwise long chats
+// eventually fail), and it uses the deterministic no-LLM strategy.
+// summary/semantic_cluster rewrite the entire transcript, so they stay
+// opt-in.
+func TestProductionDefaults_PreCallEnabledWithSafeStrategy(t *testing.T) {
+	cfg := compaction.ProductionDefaults()
+	pre := cfg.ForSite(compaction.SitePreCall)
+	if !pre.Enabled {
+		t.Fatal("pre_call disabled by default — long conversations would overflow the context window")
+	}
+	if pre.Strategy != compaction.StrategyDropOldest {
+		t.Fatalf("pre_call default strategy = %q, want drop_oldest (deterministic, no LLM call)", pre.Strategy)
+	}
+	if post := cfg.ForSite(compaction.SitePostTool); post.Enabled {
+		t.Fatal("post_tool enabled by default — it overwrites tool-result content in place")
 	}
 }

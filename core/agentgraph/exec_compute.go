@@ -109,6 +109,10 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 			// — see compaction-convergence-01PMDL05 WP02.
 			TargetTokens:  0,
 			CurrentTokens: estimateTokens(msgs),
+			// ContextWindow is the denominator for the site's
+			// PreCallThreshold. 0 (unknown model / no catalog) makes the
+			// pipeline skip rather than compact toward a guess.
+			ContextWindow: resolveContextWindow(env, a.Provider, a.Model),
 		}
 		co, err := env.Compactor.Compact(ctx, ci)
 		if err != nil {

@@ -104,3 +104,40 @@ func maxIterationsForTier(t ModelTier) int {
 		return 3
 	}
 }
+
+// ContextWindowSource resolves the maximum context length, in tokens,
+// for a (providerKind, modelID) pair. It mirrors TierSource: the frozen
+// core asks a data question through a seam rather than knowing anything
+// about specific models. Backed in production by core/llm/capabilities'
+// curated catalog; nil in tests and scripted runs, where a zero window
+// makes the automatic compaction sites skip rather than guess.
+type ContextWindowSource interface {
+	// ContextWindow returns the window in tokens, or 0 when unknown.
+	ContextWindow(providerKind, modelID string) int
+}
+
+// resolveContextWindow returns the active model's context window, or 0
+// when it cannot be determined. Mirrors resolveNodeTier's fallbacks: an
+// explicit node model wins, otherwise the run's ActiveModelSource is
+// consulted, and any missing piece yields 0 ("unknown") rather than a
+// guessed default — a wrong window would drive compaction to the wrong
+// target, which is worse than not compacting.
+func resolveContextWindow(env *Env, provider, model string) int {
+	if env == nil || env.ContextWindows == nil {
+		return 0
+	}
+	if model == "" || model == "default" {
+		if src, ok := env.LLM.(ActiveModelSource); ok {
+			if provider == "" {
+				provider = src.ProviderKind()
+			}
+			if m := src.ActiveModelID(); m != "" {
+				model = m
+			}
+		}
+	}
+	if model == "" || model == "default" {
+		return 0
+	}
+	return env.ContextWindows.ContextWindow(provider, model)
+}
