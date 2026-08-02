@@ -220,6 +220,34 @@ type Env struct {
 	// disables compaction; the rest of the pipeline runs unchanged.
 	Compactor Compactor
 
+	// SuppressAutomaticCompaction disables the kernel's own
+	// pre_call/post_tool automatic compaction sites (exec_compute.go)
+	// for this Env even when Compactor is non-nil and the resolved
+	// SiteConfig says "enabled" (compaction-convergence-01PMDL05).
+	//
+	// Two compaction systems coexist in this codebase: the chat
+	// surface's pre-send compactor (core/rpc/views/agentgraph/chat,
+	// operates on persisted session history with the 5-tier
+	// aggressiveness dial before ChatRunner ever calls kernel.Run) and
+	// this package's FR-041 automatic sites (fire *during* kernel.Run,
+	// driven by the cascading CompactionConfig resolver). Both can be
+	// wired to the same underlying Compactor. If both fire on the same
+	// turn a conversation is compacted twice — silently doubling
+	// however aggressive the configured strategy is, and burning a
+	// second real compaction call for no benefit.
+	//
+	// The chat surface is authoritative for chat-driven runs (it has
+	// the persisted-history view and the tokenizer-accurate trigger
+	// math the automatic sites don't); it sets this true on every Env
+	// it constructs. A graph author invoking the kernel directly for a
+	// non-chat run (batch pipeline, eval harness, a bespoke graph with
+	// no pre-send compactor in front of it) leaves this false and gets
+	// the automatic sites as documented. NodeKindCompact (the manual
+	// "compact" node any graph author can place explicitly) is
+	// intentionally NOT gated by this flag — an explicit node is never
+	// a double-fire risk since it only runs when the graph reaches it.
+	SuppressAutomaticCompaction bool
+
 	// Branch is the BranchSeam for ForkNode/MergeNode. nil installs the
 	// nilBranchSeam stub which errors with ErrNoBranchSeam — the
 	// chat surface surfaces this as "branching not enabled in this build".

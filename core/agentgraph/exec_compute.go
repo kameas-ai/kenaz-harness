@@ -10,6 +10,7 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph/prompts"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/tokenizer"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
@@ -82,7 +83,7 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 	// compacted messages. Errors from the compactor short-circuit the
 	// LLM call so a misconfigured strategy never silently runs an
 	// over-budget request.
-	if env.Compactor != nil {
+	if env.Compactor != nil && !env.SuppressAutomaticCompaction {
 		ci := CompactionInput{
 			Site:         CompactionSitePreCall,
 			RunID:        env.RunID,
@@ -455,7 +456,7 @@ func (toolExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 	// We hand the result content as a single Message so every
 	// strategy sees a uniform input shape; on success we replace
 	// tr.Content with the compacted message's content.
-	if env.Compactor != nil && tr.Content != "" {
+	if env.Compactor != nil && !env.SuppressAutomaticCompaction && tr.Content != "" {
 		ci := CompactionInput{
 			Site:          CompactionSitePostTool,
 			RunID:         env.RunID,
@@ -572,16 +573,29 @@ func summarizeArgs(args map[string]any) string {
 	return fmt.Sprintf("args: %v", keys)
 }
 
-// estimateTokens approximates the token count of a message slice
-// using the rule-of-thumb 4 bytes / token. The kernel uses this for
-// the pre-call compaction threshold check; the canonical token count
-// still comes from the LLM provider on the response side.
+// estimateTokens approximates the token count of a message slice.
+//
+// compaction-convergence-01PMDL05: this used to be its own independent
+// byte-length/4 heuristic (no per-message framing overhead, no rune
+// awareness) — a second, weaker token estimator living alongside
+// core/llm/tokenizer.CountRequestTokens, which core/compaction's
+// pre-send path already used. Two estimators meant the kernel's
+// pre_call/post_tool compaction sites and the pre-send compactor could
+// disagree about how close a conversation is to its context-window
+// cap. This now delegates to the canonical estimator so there is one
+// token-counting implementation regardless of which compaction path is
+// active. The kernel uses this for the pre-call/post-tool compaction
+// threshold checks; the canonical token count still comes from the LLM
+// provider on the response side.
 func estimateTokens(ms []Message) int {
-	n := 0
-	for _, m := range ms {
-		n += len(m.Content) + len(m.Name)
+	translated := make([]tokenizer.Message, len(ms))
+	for i, m := range ms {
+		translated[i] = tokenizer.Message{Role: m.Role, Content: m.Content}
 	}
-	return (n + 3) / 4
+	// No system prompt here: callers that track one separately (e.g.
+	// the pre_call site) pass it to the compactor via
+	// CompactionInput.SystemPrompt, not through this message slice.
+	return tokenizer.CountRequestTokens("", translated)
 }
 
 // composePrompt joins system-prompt fragments (e.g. a graph-level base
