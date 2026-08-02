@@ -159,6 +159,183 @@ func TestDropOldestStrategy_ZeroTargetIsNoOp(t *testing.T) {
 	}
 }
 
+// toolPairInvariant asserts the pair-aware invariant DropOldestStrategy
+// must uphold: every surviving tool-role message's ToolCallID resolves
+// to an assistant ToolCalls entry in the same slice, and every
+// surviving assistant ToolCalls entry has a matching tool-role result.
+func toolPairInvariant(t *testing.T, msgs []agentgraph.Message) {
+	t.Helper()
+	toolUseIDs := map[string]bool{}
+	for _, m := range msgs {
+		if m.Role == "assistant" {
+			for _, tc := range m.ToolCalls {
+				if tc.ID != "" {
+					toolUseIDs[tc.ID] = true
+				}
+			}
+		}
+	}
+	resultIDs := map[string]bool{}
+	for _, m := range msgs {
+		if m.Role == "tool" {
+			if !toolUseIDs[m.ToolCallID] {
+				t.Fatalf("surviving tool_result %q has no matching tool_use in output", m.ToolCallID)
+			}
+			resultIDs[m.ToolCallID] = true
+		}
+	}
+	for id := range toolUseIDs {
+		if !resultIDs[id] {
+			t.Fatalf("surviving assistant tool_use %q has no matching tool_result in output", id)
+		}
+	}
+}
+
+// TestDropOldestStrategy_ToolPairAware_NoDanglingResults reproduces the
+// hard-blocker shape from llm_provider_adapter.go: the oldest surviving
+// messages after a front-to-back trim are frequently an assistant
+// tool_use immediately followed by its tool-role tool_result. Naive
+// message-at-a-time trimming can drop one half of the pair and strand
+// the other, which upstream OpenAI-compat providers 5xx on. This test
+// fails against the pre-fix implementation (plain `out = out[1:]`).
+func TestDropOldestStrategy_ToolPairAware_NoDanglingResults(t *testing.T) {
+	s := compaction.NewDropOldestStrategy()
+	msgs := []agentgraph.Message{
+		{Role: "user", Content: strings.Repeat("u", 60)},
+		{Role: "assistant", Content: strings.Repeat("a", 60), ToolCalls: []agentgraph.ToolCallRequest{{ID: "A", Name: "toolA"}}},
+		{Role: "tool", Content: strings.Repeat("r", 60), ToolCallID: "A"},
+		{Role: "user", Content: strings.Repeat("u", 60)},
+		{Role: "assistant", Content: strings.Repeat("a", 60), ToolCalls: []agentgraph.ToolCallRequest{{ID: "B", Name: "toolB"}}},
+		{Role: "tool", Content: strings.Repeat("r", 60), ToolCallID: "B"},
+		{Role: "user", Content: strings.Repeat("u", 60)},
+	}
+	res, err := s.Compact(context.Background(), compaction.ContextSlice{
+		Messages:     msgs,
+		TargetTokens: 20, // ≈ 80 bytes — forces trimming down near the floor
+	}, compaction.CompactOpts{DropOldestKeepRecentN: 2})
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if len(res.Messages) >= len(msgs) {
+		t.Fatalf("expected trimming to occur, got %d messages (input had %d)", len(res.Messages), len(msgs))
+	}
+	toolPairInvariant(t, res.Messages)
+}
+
+// TestDropOldestStrategy_MultiToolCallTurnDroppedAsUnit verifies that an
+// assistant turn carrying multiple tool calls is dropped (or kept) as
+// one atomic unit together with all of its results — never partially.
+func TestDropOldestStrategy_MultiToolCallTurnDroppedAsUnit(t *testing.T) {
+	s := compaction.NewDropOldestStrategy()
+	msgs := []agentgraph.Message{
+		{Role: "user", Content: strings.Repeat("u", 40)},
+		{
+			Role:    "assistant",
+			Content: strings.Repeat("a", 40),
+			ToolCalls: []agentgraph.ToolCallRequest{
+				{ID: "A", Name: "toolA"},
+				{ID: "B", Name: "toolB"},
+			},
+		},
+		{Role: "tool", Content: strings.Repeat("r", 40), ToolCallID: "A"},
+		{Role: "tool", Content: strings.Repeat("r", 40), ToolCallID: "B"},
+		{Role: "user", Content: strings.Repeat("u", 200)},
+		{Role: "assistant", Content: strings.Repeat("a", 200)},
+	}
+	res, err := s.Compact(context.Background(), compaction.ContextSlice{
+		Messages:     msgs,
+		TargetTokens: 110, // ≈ 440 bytes — big enough to keep the tail, forces the multi-tool-call unit out
+	}, compaction.CompactOpts{DropOldestKeepRecentN: 2})
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	toolPairInvariant(t, res.Messages)
+
+	// The multi-tool-call unit (assistant + 2 results = 3 messages) must
+	// be dropped or kept as a whole — never partially.
+	var haveAssistant, haveA, haveB bool
+	for _, m := range res.Messages {
+		if m.Role == "assistant" {
+			for _, tc := range m.ToolCalls {
+				if tc.ID == "A" || tc.ID == "B" {
+					haveAssistant = true
+				}
+			}
+		}
+		if m.Role == "tool" && m.ToolCallID == "A" {
+			haveA = true
+		}
+		if m.Role == "tool" && m.ToolCallID == "B" {
+			haveB = true
+		}
+	}
+	if haveAssistant != haveA || haveA != haveB {
+		t.Fatalf("multi-tool-call unit split: assistant=%v resultA=%v resultB=%v", haveAssistant, haveA, haveB)
+	}
+	// This scenario is specifically constructed so the unit is fully
+	// dropped (its 3 messages are much cheaper to shed than keeping
+	// them, and the target only leaves room for the tail).
+	if haveAssistant || haveA || haveB {
+		t.Fatalf("expected the oldest multi-tool-call unit to be fully dropped, but part of it survived")
+	}
+}
+
+// TestDropOldestStrategy_KeepFloorDoesNotSplitPair locks in that the
+// keep-recent-N floor rounds outward to a whole unit rather than
+// landing mid-pair. With keep=1 and a target far below the input size,
+// naive per-message trimming would stop at exactly 1 surviving
+// message — which, given this input, would be a lone tool_result with
+// no tool_use. The fix must keep the whole trailing pair instead.
+func TestDropOldestStrategy_KeepFloorDoesNotSplitPair(t *testing.T) {
+	s := compaction.NewDropOldestStrategy()
+	msgs := []agentgraph.Message{
+		{Role: "user", Content: "hi"},
+		{Role: "user", Content: "hi again"},
+		{Role: "assistant", Content: strings.Repeat("a", 100), ToolCalls: []agentgraph.ToolCallRequest{{ID: "C", Name: "toolC"}}},
+		{Role: "tool", Content: strings.Repeat("r", 100), ToolCallID: "C"},
+	}
+	res, err := s.Compact(context.Background(), compaction.ContextSlice{
+		Messages:     msgs,
+		TargetTokens: 1, // far below current size — pressure to trim to the floor
+	}, compaction.CompactOpts{DropOldestKeepRecentN: 1})
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	toolPairInvariant(t, res.Messages)
+	if len(res.Messages) != 2 {
+		t.Fatalf("expected the floor to expand to keep the whole trailing pair (2 messages), got %d", len(res.Messages))
+	}
+	if res.Messages[0].Role != "assistant" || res.Messages[1].Role != "tool" {
+		t.Fatalf("expected surviving pair to be [assistant, tool], got %+v", res.Messages)
+	}
+}
+
+// TestDropOldestStrategy_NonToolHistoryUnchanged is a regression guard:
+// message histories with no tool_use/tool_result pairing must trim
+// exactly as before (unit-of-one per message).
+func TestDropOldestStrategy_NonToolHistoryUnchanged(t *testing.T) {
+	s := compaction.NewDropOldestStrategy()
+	msgs := []agentgraph.Message{
+		{Role: "user", Content: strings.Repeat("a", 80)},
+		{Role: "assistant", Content: strings.Repeat("b", 80)},
+		{Role: "user", Content: strings.Repeat("c", 80)},
+		{Role: "assistant", Content: strings.Repeat("d", 80)},
+	}
+	res, err := s.Compact(context.Background(), compaction.ContextSlice{
+		Messages:     msgs,
+		TargetTokens: 30, // ≈ 120 bytes
+	}, compaction.CompactOpts{})
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if len(res.Messages) != 2 {
+		t.Fatalf("expected front-to-back trim to leave the last 2 messages, got %d", len(res.Messages))
+	}
+	if res.Messages[0].Content != msgs[2].Content || res.Messages[1].Content != msgs[3].Content {
+		t.Fatalf("unexpected surviving messages: %+v", res.Messages)
+	}
+}
+
 // ---- SummaryStrategy ----
 
 func TestSummaryStrategy_UsesLLM(t *testing.T) {
