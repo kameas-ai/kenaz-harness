@@ -120,6 +120,45 @@ func TestDropOldestStrategy_KeepsFloor(t *testing.T) {
 	}
 }
 
+// TestDropOldestStrategy_ZeroTargetIsNoOp locks in the
+// compaction-convergence-01PMDL05 WP02 fix: TargetTokens<=0 means "no
+// specific target" (see ContextSlice's doc comment), and must be a
+// pure no-op rather than an unconditional trim to the keep-floor. This
+// is the exact shape of the pre-fix conflation bug — exec_compute.go
+// used to pass TargetTokens: a.MaxTokens (a node's small output-token
+// cap, e.g. 256), which read as "wildly over budget" for any
+// non-trivial history and drove this strategy to floor-trim on every
+// LLM call. Post-fix, exec_compute.go passes TargetTokens: 0 until a
+// real context-window budget is threaded through, and this guard is
+// what makes that zero value safe.
+func TestDropOldestStrategy_ZeroTargetIsNoOp(t *testing.T) {
+	s := compaction.NewDropOldestStrategy()
+	msgs := []agentgraph.Message{
+		{Role: "user", Content: strings.Repeat("a", 100)},
+		{Role: "assistant", Content: strings.Repeat("b", 100)},
+		{Role: "user", Content: strings.Repeat("c", 100)},
+		{Role: "assistant", Content: strings.Repeat("d", 100)},
+	}
+	res, err := s.Compact(context.Background(), compaction.ContextSlice{
+		Messages:     msgs,
+		TargetTokens: 0,
+	}, compaction.CompactOpts{DropOldestKeepRecentN: 2})
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if len(res.Messages) != len(msgs) {
+		t.Fatalf("expected zero-target no-op to keep all %d messages, got %d", len(msgs), len(res.Messages))
+	}
+	for i := range msgs {
+		if res.Messages[i].Content != msgs[i].Content {
+			t.Fatalf("message %d mutated by zero-target Compact: got %q want %q", i, res.Messages[i].Content, msgs[i].Content)
+		}
+	}
+	if res.BytesSaved != 0 {
+		t.Fatalf("expected 0 bytes saved for zero-target no-op, got %d", res.BytesSaved)
+	}
+}
+
 // ---- SummaryStrategy ----
 
 func TestSummaryStrategy_UsesLLM(t *testing.T) {
