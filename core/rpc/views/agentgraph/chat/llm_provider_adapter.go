@@ -305,9 +305,16 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 	gen := corellm.GenerationRequest{
 		ProfileID: a.profileID,
 		Model:     a.modelOverride,
-		System:    composeSystemPrompt(req.SystemPrompt, a.buildEnvBlock(), a.buildUserInstructionsBlock()),
-		Messages:  llmMsgs,
-		Tools:     a.tools,
+		// tmpl is nil: nothing resolves a live ModelProfile on this
+		// request path yet (versioned-model-profile-01PMDL04 WP02+ is
+		// the (provider, model) -> ModelProfile lookup; per-family-
+		// message-shaping-01PMDL06 WP01 only wires the mechanism).
+		// composeSystemPrompt's default renderer reproduces today's
+		// plain join byte-for-byte, so this is a deliberate, documented
+		// gap rather than a half-wire.
+		System:   composeSystemPrompt(nil, req.SystemPrompt, a.buildEnvBlock(), a.buildUserInstructionsBlock()),
+		Messages: llmMsgs,
+		Tools:    a.tools,
 	}
 
 	// Carry the per-node sampling knobs already threaded through the

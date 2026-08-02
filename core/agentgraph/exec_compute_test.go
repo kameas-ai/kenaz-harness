@@ -700,8 +700,8 @@ func TestComposePrompt(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := composePrompt(tc.parts...); got != tc.want {
-				t.Errorf("composePrompt(%q) = %q, want %q", tc.parts, got, tc.want)
+			if got := composePrompt(nil, tc.parts...); got != tc.want {
+				t.Errorf("composePrompt(nil, %q) = %q, want %q", tc.parts, got, tc.want)
 			}
 		})
 	}

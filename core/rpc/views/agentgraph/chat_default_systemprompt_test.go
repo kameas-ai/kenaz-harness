@@ -13,7 +13,7 @@ import (
 // chat GraphLoader closure in core/rpc/api.go performs on every load:
 //
 //	g, err := graphMgr.LoadGraphSpec("chat_default")
-//	g.SystemPrompt = prompts.Compose(prompts.DefaultBaseConstitution(), g.SystemPrompt)
+//	g.SystemPrompt = prompts.Compose(nil, prompts.DefaultBaseConstitution(), g.SystemPrompt)
 //
 // This guards that the wiring stays intact: the composed graph's
 // SystemPrompt must begin with the shared constitution (WP02), and the
@@ -39,7 +39,7 @@ func TestChatDefaultGraphLoader_SeedsConstitution(t *testing.T) {
 		t.Errorf("chat_default.yaml sets a top-level system_prompt = %q; expected unset (loader seeds it)", g.SystemPrompt)
 	}
 
-	composed := prompts.Compose(prompts.DefaultBaseConstitution(), g.SystemPrompt)
+	composed := prompts.Compose(nil, prompts.DefaultBaseConstitution(), g.SystemPrompt)
 	trimmedConstitution := strings.TrimSpace(prompts.DefaultBaseConstitution())
 	if !strings.HasPrefix(composed, trimmedConstitution) {
 		n := len(composed)
