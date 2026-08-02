@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -264,6 +265,35 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 	pause := false
 	pauseReason := ""
 
+	// TaskState population (autonomy-recovery-runtime-01PMDL03 WP05):
+	// Goal / completed-steps / forbidden-actions only start earning
+	// their place in the composed system prompt once this run has
+	// actually hit trouble — a node error or an honored backtrack.
+	// initialGoal is derived unconditionally (cheap: an in-memory/DB
+	// history read already exercised elsewhere on this path) but is
+	// never written to env.TaskState — and therefore never changes a
+	// single byte of any composed prompt — unless armRecovery fires.
+	// A run that never fails or backtracks never calls SetTaskGoal,
+	// AddTaskCompletedStep, or AddTaskForbidden, so its system prompt
+	// stays byte-identical to pre-WP05 behavior (see
+	// TestKernel_ZeroFailureRunComposesByteIdenticalPrompt).
+	initialGoal := firstUserTurnGoal(ctx, env)
+	recoveryArmed := false
+	armRecovery := func() {
+		mu.Lock()
+		already := recoveryArmed
+		recoveryArmed = true
+		mu.Unlock()
+		if !already && initialGoal != "" {
+			_ = k.SetTaskGoal(env, initialGoal)
+		}
+	}
+	isRecoveryArmed := func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return recoveryArmed
+	}
+
 	var dispatch func(nodeID string, myGen int)
 	dispatch = func(nodeID string, myGen int) {
 		defer wg.Done()
@@ -384,8 +414,9 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 			end(err)
 			mu.Lock()
 			inFlight[nd.ID] = false
+			isPause := errors.Is(err, ErrPaused)
 			if firstErr == nil {
-				if errors.Is(err, ErrPaused) {
+				if isPause {
 					pause = true
 					pauseReason = "paused"
 				} else {
@@ -393,6 +424,21 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 				}
 			}
 			mu.Unlock()
+
+			// A node error is this run's TaskState recovery trigger
+			// (unless it is just a nested Ask surfacing ErrPaused, which
+			// is a normal pause, not a failure). A policy-gate deny is
+			// additionally recorded as a forbidden action so a later
+			// re-entry after backtrack/resume knows not to repeat it.
+			if !isPause {
+				armRecovery()
+				var denial policyDenialError
+				if errors.As(err, &denial) {
+					if summary := strings.TrimSpace(denial.DeniedSummary()); summary != "" {
+						_ = k.AddTaskForbidden(env, summary)
+					}
+				}
+			}
 			return
 		}
 
@@ -494,6 +540,16 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 					}
 					env.State.AddFailureAnnotation(ann)
 
+					// An honored backtrack is this run's TaskState
+					// recovery trigger (autonomy-recovery-runtime-
+					// 01PMDL03 WP05): a rejected approach worth
+					// remembering is exactly what Review/Reflect's fail
+					// path just supplied via bt.RejectedApproach.
+					armRecovery()
+					if approach := strings.TrimSpace(bt.RejectedApproach); approach != "" {
+						_ = k.AddTaskForbidden(env, approach)
+					}
+
 					var btBatch EventBatch
 					_ = btBatch.AppendKind(env.RunID, nd.ID, EventBacktrackFired, map[string]any{
 						"target":            bt.TargetNode,
@@ -574,10 +630,21 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 			firstErr = backtrackErr
 		}
 
+		// stepDone mirrors the completed[nd.ID] write above: true unless
+		// nd.ID is itself part of the refire set (about to re-fire, not
+		// actually done yet). Captured now — a local, goroutine-private
+		// read of the `refire` map — for use after mu.Unlock() below;
+		// AddTaskCompletedStep/isRecoveryArmed take their own locks and
+		// must never be called while this dispatch's own mu is held.
+		stepDone := !refire[nd.ID]
+
 		if r.Pause {
 			pause = true
 			pauseReason = r.PauseReason
 			mu.Unlock()
+			if stepDone && isMeaningfulNodeKind(nd.Kind) && isRecoveryArmed() {
+				_ = k.AddTaskCompletedStep(env, completedStepSummary(nd))
+			}
 			return
 		}
 
@@ -619,6 +686,10 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 			toLaunch = append(toLaunch, launch{id: bt.TargetNode, gen: generation[bt.TargetNode]})
 		}
 		mu.Unlock()
+
+		if stepDone && isMeaningfulNodeKind(nd.Kind) && isRecoveryArmed() {
+			_ = k.AddTaskCompletedStep(env, completedStepSummary(nd))
+		}
 
 		for _, l := range toLaunch {
 			id, gen := l.id, l.gen
@@ -897,6 +968,111 @@ func (k *Kernel) AddTaskForbidden(env *Env, actions ...string) error {
 		return fmt.Errorf("agentgraph: kernel: AddTaskForbidden: append: %w", err)
 	}
 	return nil
+}
+
+// maxTaskGoalRunes caps the goal text firstUserTurnGoal derives from
+// the session's first user turn. A run's Goal only ever reaches the
+// composed system prompt once armRecovery fires (Run's dispatch
+// closure), but it should still stay bounded so a very long opening
+// message doesn't blow the token budget once it does.
+const maxTaskGoalRunes = 400
+
+// firstUserTurnGoal derives a run's TaskState goal from the session's
+// first user-role message, read through the same HistoryReader seam
+// modelExecutor already falls back to for multi-turn chat
+// (exec_compute.go). Returns "" when history is unavailable, empty, or
+// has no user turn — callers must treat that as "no goal available"
+// rather than an error; TaskState.Goal defaulting to "" is the
+// harmless no-op renderTaskState already handles.
+//
+// Called unconditionally at the top of every Run, but its result is
+// only ever committed to env.TaskState by Run's armRecovery closure —
+// which fires only once this run has actually hit a node error or an
+// honored backtrack — so a zero-failure run never calls SetTaskGoal
+// and its composed prompt stays byte-identical to pre-WP05 behavior.
+func firstUserTurnGoal(ctx context.Context, env *Env) string {
+	if env == nil || env.History == nil || env.SessionID == "" {
+		return ""
+	}
+	msgs, err := env.History.History(ctx, env.SessionID, 0)
+	if err != nil {
+		return ""
+	}
+	for _, m := range msgs {
+		if !strings.EqualFold(m.Role, "user") {
+			continue
+		}
+		goal := strings.TrimSpace(m.Content)
+		if goal == "" {
+			return ""
+		}
+		if r := []rune(goal); len(r) > maxTaskGoalRunes {
+			goal = string(r[:maxTaskGoalRunes]) + "…"
+		}
+		return goal
+	}
+	return ""
+}
+
+// policyDenialError is a narrow structural interface an error returned
+// through the PolicyGate seam may satisfy to signal an explicit
+// Cedar-style deny decision, as opposed to an ordinary I/O failure.
+// *cedar.PolicyDeniedError (core/policy/cedar/engine.go) satisfies
+// this via its DeniedSummary method. Matched here with errors.As
+// rather than a direct type assertion / import: core/agentgraph
+// intentionally does not depend on core/policy/cedar (see the
+// PolicyGate doc in seams.go) — the kernel only needs enough of the
+// error's shape to log a forbidden-action summary, not the concrete
+// Decision type.
+type policyDenialError interface {
+	error
+	// DeniedSummary returns a short human-readable description of the
+	// denied action (e.g. "Read file:/etc/passwd"), suitable for
+	// TaskState.AddForbidden.
+	DeniedSummary() string
+}
+
+// nonMeaningfulTaskStepKinds are node kinds whose completion is pure
+// graph plumbing (control flow, telemetry, pause/resume bookkeeping)
+// rather than a step a recovering model call would benefit from being
+// reminded of. Everything else counts as "meaningful" for
+// AddTaskCompletedStep — deliberately an inclusive default (deny-list,
+// not an allow-list) so a new node kind added later still gets logged
+// without this switch needing an update.
+var nonMeaningfulTaskStepKinds = map[NodeKind]bool{
+	NodeKindDecision:         true,
+	NodeKindJoin:             true,
+	NodeKindLoop:             true,
+	NodeKindRetry:            true,
+	NodeKindBranch:           true,
+	NodeKindMerge:            true,
+	NodeKindParallel:         true,
+	NodeKindCheckpoint:       true,
+	NodeKindTraceWrite:       true,
+	NodeKindAttachment:       true,
+	NodeKindHistoryRead:      true,
+	NodeKindAsk:              true,
+	NodeKindCompact:          true,
+	NodeKindSleep:            true,
+	NodeKindEscalationLadder: true,
+}
+
+// isMeaningfulNodeKind reports whether kind's completion is worth a
+// TaskState completed-step entry (see nonMeaningfulTaskStepKinds).
+func isMeaningfulNodeKind(kind NodeKind) bool {
+	return !nonMeaningfulTaskStepKinds[kind]
+}
+
+// completedStepSummary renders the short, human-readable line
+// AddTaskCompletedStep stores for nd's completion — the node's title
+// when the author set one (more meaningful than a raw ID), falling
+// back to its ID, paired with its kind for disambiguation.
+func completedStepSummary(nd *Node) string {
+	label := strings.TrimSpace(nd.Title)
+	if label == "" {
+		label = nd.ID
+	}
+	return fmt.Sprintf("%s (%s)", label, nd.Kind)
 }
 
 // Leaves returns the IDs of nodes that have no outgoing edges (or
