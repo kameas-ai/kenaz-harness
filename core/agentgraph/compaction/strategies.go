@@ -53,8 +53,26 @@ func (s *DropOldestStrategy) Compact(_ context.Context, in ContextSlice, opts Co
 	target := in.TargetTokens
 	beforeBytes := bytesOf(in.Messages)
 
+	// TargetTokens <= 0 means "no specific target" (see ContextSlice
+	// doc). Without a target there is no signal that this call is even
+	// over budget, so the safe interpretation is a no-op rather than an
+	// unconditional trim to the keep-floor — the loop below has no
+	// target-based break condition and would otherwise always drop down
+	// to `keep` regardless of actual size. This guard is what makes it
+	// safe for SitePreCall/SitePostTool to be enabled without also
+	// wiring a real token budget (see exec_compute.go's compaction
+	// target derivation).
+	if target <= 0 {
+		return CompactedContext{
+			Messages:    append([]agentgraph.Message(nil), in.Messages...),
+			TokensAfter: approxTokens(beforeBytes),
+			Strategy:    s.Strategy(),
+			BytesSaved:  0,
+		}, nil
+	}
+
 	// If we're already under target, no-op.
-	if target > 0 && approxTokens(beforeBytes) <= target {
+	if approxTokens(beforeBytes) <= target {
 		return CompactedContext{
 			Messages:    append([]agentgraph.Message(nil), in.Messages...),
 			TokensAfter: approxTokens(beforeBytes),
@@ -78,7 +96,7 @@ func (s *DropOldestStrategy) Compact(_ context.Context, in ContextSlice, opts Co
 	// down to the floor.
 	out := append([]agentgraph.Message(nil), in.Messages...)
 	for len(out) > keep {
-		if target > 0 && approxTokens(bytesOf(out)) <= target {
+		if approxTokens(bytesOf(out)) <= target {
 			break
 		}
 		out = out[1:]
