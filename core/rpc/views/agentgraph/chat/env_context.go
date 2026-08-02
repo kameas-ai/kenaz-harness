@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph/prompts"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
@@ -171,12 +172,19 @@ func joinWithAnd(items []string) string {
 // custom-instructions layer follow. Dropping empty layers means a nil
 // clock / absent custom instructions never introduce a dangling
 // separator. (system-prompt-layers WP03/WP04)
-func composeSystemPrompt(layers ...string) string {
-	parts := make([]string, 0, len(layers))
-	for _, l := range layers {
-		if t := strings.TrimSpace(l); t != "" {
-			parts = append(parts, t)
-		}
-	}
-	return strings.Join(parts, "\n\n")
+//
+// tmpl is the per-family-message-shaping-01PMDL06 mechanism: the
+// active model's ModelProfile.PromptTemplate (llm.PromptTemplateRef,
+// versioned-model-profile-01PMDL04), or nil. It delegates to
+// prompts.Compose, which is the single implementation that decides how
+// a nil vs. populated tmpl renders — nil (or an unregistered Format)
+// reproduces this function's pre-WP01 plain join byte-for-byte. This is
+// the harness seam (core/rpc/views/agentgraph/chat) where model
+// knowledge legitimately lives per the frozen-core discipline
+// (core/agentgraph must not string-match model-family names); the
+// caller resolving a live ModelProfile for tmpl is deferred (nothing
+// resolves one on the request path yet — see llm_provider_adapter.go's
+// call site).
+func composeSystemPrompt(tmpl *corellm.PromptTemplateRef, layers ...string) string {
+	return prompts.Compose(tmpl, layers...)
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph/prompts"
+	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
@@ -44,7 +45,7 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 	// node's own role prompt. When the graph sets no base, composePrompt
 	// yields just the node role — no behaviour change for graphs that
 	// don't ground their model calls.
-	systemPrompt := composePrompt(graphBaseOf(env), a.SystemPrompt)
+	systemPrompt := composePrompt(resolvePromptTemplate(env, a.Provider, a.Model), graphBaseOf(env), a.SystemPrompt)
 
 	var msgs []Message
 	if v, ok := inputs.Get("messages"); ok {
@@ -589,8 +590,14 @@ func estimateTokens(ms []Message) int {
 // implementation shared by the kernel and any graph-authoring code that
 // wants the same joining semantics (e.g. seeding a graph's base from
 // prompts.DefaultBaseConstitution()).
-func composePrompt(parts ...string) string {
-	return prompts.Compose(parts...)
+//
+// tmpl is the per-family-message-shaping-01PMDL06 descriptor (nil until
+// resolvePromptTemplate resolves a live one — see that function's doc
+// for why nothing does yet); it flows straight through to
+// prompts.Compose, which is the single place that decides what a nil
+// vs. populated tmpl renders as.
+func composePrompt(tmpl *corellm.PromptTemplateRef, parts ...string) string {
+	return prompts.Compose(tmpl, parts...)
 }
 
 // graphBaseOf returns the graph-level base system prompt, nil-safe (env.Graph
@@ -617,7 +624,12 @@ func graphBaseOf(env *Env) string {
 	if env.State == nil {
 		return base
 	}
-	return prompts.Compose(base, renderTaskState(env.TaskState, env.State.FailureAnnotations()))
+	// nil tmpl: this composition folds the graph base + task-state
+	// annotations into a single "base" string that becomes one of the
+	// *parts* fed to the outer composePrompt call at each executor call
+	// site — that outer call is the one that resolves and applies the
+	// per-family renderer, so this inner join stays the plain default.
+	return prompts.Compose(nil, base, renderTaskState(env.TaskState, env.State.FailureAnnotations()))
 }
 
 // renderFailureAnnotations formats the accumulated backtrack rejection
@@ -878,7 +890,7 @@ func (reflectExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs
 	}
 	resp, err := env.LLM.Generate(ctx, LLMRequest{
 		Model: model, MaxTokens: 512,
-		SystemPrompt: composePrompt(graphBaseOf(env), a.SystemPrompt),
+		SystemPrompt: composePrompt(resolvePromptTemplate(env, a.Provider, model), graphBaseOf(env), a.SystemPrompt),
 		Messages:     []Message{{Role: "user", Content: prompt}},
 	})
 	if err != nil {
@@ -967,7 +979,7 @@ func (reviewExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs 
 	}
 	resp, err := env.LLM.Generate(ctx, LLMRequest{
 		Model: model, MaxTokens: 256,
-		SystemPrompt: composePrompt(graphBaseOf(env), a.SystemPrompt),
+		SystemPrompt: composePrompt(resolvePromptTemplate(env, a.Provider, model), graphBaseOf(env), a.SystemPrompt),
 		Messages:     []Message{{Role: "user", Content: "Review this. Reply PASS or FAIL with one-line reason.\n\n" + draft}},
 	})
 	if err != nil {
@@ -1064,7 +1076,7 @@ func (plannerExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs
 		verbosity, task)
 	resp, err := env.LLM.Generate(ctx, LLMRequest{
 		Model: model, MaxTokens: 1024,
-		SystemPrompt: composePrompt(graphBaseOf(env), a.SystemPrompt),
+		SystemPrompt: composePrompt(resolvePromptTemplate(env, a.Provider, model), graphBaseOf(env), a.SystemPrompt),
 		Messages:     []Message{{Role: "user", Content: prompt}},
 	})
 	if err != nil {

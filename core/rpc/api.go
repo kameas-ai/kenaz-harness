@@ -4167,8 +4167,11 @@ func buildChatRunner(
 			// constitution (base.md is the single source of truth —
 			// chat_default.yaml never pastes the constitution into
 			// YAML). Any chat-specific base text the YAML sets on
-			// SystemPrompt is appended after the constitution.
-			g.SystemPrompt = prompts.Compose(prompts.DefaultBaseConstitution(), g.SystemPrompt)
+			// SystemPrompt is appended after the constitution. This is
+			// graph-registration time — no request-time model is known
+			// yet, so the per-family-message-shaping-01PMDL06 tmpl
+			// param is nil (default renderer).
+			g.SystemPrompt = prompts.Compose(nil, prompts.DefaultBaseConstitution(), g.SystemPrompt)
 			return g, nil
 		},
 		MaxTurns: maxTurns,
