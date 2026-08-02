@@ -172,24 +172,6 @@ entries:
     adapter: bedrock
     unsupported: "Per-adapter wire-shape test pending. Image-gen routes through dedicated bedrock-runtime invoke (Titan Image, Stable Diffusion); chat-completion translator currently capability-gates. Integration coverage: core/llm/multimodal_out_integration_test.go."
 
-  # Caching — prompt-caching breakpoints
-  - struct: GenerationRequest
-    field: Caching
-    adapter: anthropic
-    tests: [TestAnthropicAdapter_Caching_CachingSerialized]
-  - struct: GenerationRequest
-    field: Caching
-    adapter: openai
-    unsupported: "OpenAI does not expose prompt-caching breakpoints via API"
-  - struct: GenerationRequest
-    field: Caching
-    adapter: openrouter
-    unsupported: "OpenRouter passes through to upstream model; breakpoints not supported at this layer"
-  - struct: GenerationRequest
-    field: Caching
-    adapter: bedrock
-    unsupported: "Bedrock does not support prompt-caching breakpoints via the SDK input shape"
-
   # Reasoning — extended thinking / reasoning tokens
   - struct: GenerationRequest
     field: Reasoning

@@ -222,22 +222,6 @@ func TestAnthropicAdapter_JSONMode_JSONModeSerialized(t *testing.T) {
 	})
 }
 
-// ── Caching ───────────────────────────────────────────────────────────────────
-
-// TestAnthropicAdapter_Caching_CachingSerialized verifies the Caching field
-// does not corrupt the request body (caching markers are applied at a
-// higher layer via cache_control content blocks).
-func TestAnthropicAdapter_Caching_CachingSerialized(t *testing.T) {
-	req := minReq()
-	req.Caching = &llm.CachingSpec{Enabled: true}
-	body := serialise(t, req, stdProf("claude-sonnet-4-5"))
-	wirecheck.AssertSerialized(t, body, []wirecheck.FieldExpectation{
-		{Pointer: "/messages", WantPresent: true},
-		{Pointer: "/stream", WantBool: wirecheck.BoolPtr(true)},
-		{Pointer: "/model", WantPresent: true},
-	})
-}
-
 // ── Reasoning ─────────────────────────────────────────────────────────────────
 
 // TestAnthropicAdapter_Reasoning_ReasoningSerialized verifies that

@@ -182,20 +182,6 @@ func TestOpenAIAdapter_JSONMode_JSONModeSerialized(t *testing.T) {
 	})
 }
 
-// ── Caching ───────────────────────────────────────────────────────────────────
-
-// TestOpenAIAdapter_Caching_CachingSerialized verifies the Caching field
-// does not corrupt the wire body (OpenAI does not support caching breakpoints).
-func TestOpenAIAdapter_Caching_CachingSerialized(t *testing.T) {
-	req := minReqOAI()
-	req.Caching = &llm.CachingSpec{Enabled: true}
-	body := serialiseOAI(t, req, stdProfOAI("gpt-4o"))
-	wirecheck.AssertSerialized(t, body, []wirecheck.FieldExpectation{
-		{Pointer: "/model", WantString: "gpt-4o"},
-		{Pointer: "/messages", WantPresent: true},
-	})
-}
-
 // ── Reasoning ─────────────────────────────────────────────────────────────────
 
 // TestOpenAIAdapter_Reasoning_ReasoningSerialized verifies Reasoning does

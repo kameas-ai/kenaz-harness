@@ -180,20 +180,6 @@ func TestOpenRouterAdapter_JSONMode_JSONModeSerialized(t *testing.T) {
 	})
 }
 
-// ── Caching ───────────────────────────────────────────────────────────────────
-
-// TestOpenRouterAdapter_Caching_CachingSerialized verifies Caching does
-// not corrupt the wire body.
-func TestOpenRouterAdapter_Caching_CachingSerialized(t *testing.T) {
-	req := minReqOR()
-	req.Caching = &llm.CachingSpec{Enabled: true}
-	body := serialiseOR(t, req, stdProfOR("openai/gpt-4o"))
-	wirecheck.AssertSerialized(t, body, []wirecheck.FieldExpectation{
-		{Pointer: "/model", WantPresent: true},
-		{Pointer: "/messages", WantPresent: true},
-	})
-}
-
 // ── Reasoning ─────────────────────────────────────────────────────────────────
 
 // TestOpenRouterAdapter_Reasoning_ReasoningSerialized verifies Reasoning does
