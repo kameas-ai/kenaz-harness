@@ -507,3 +507,55 @@ func TestCustomSubgraphStrategy_MissingGraph(t *testing.T) {
 		t.Fatalf("expected ErrCustomSubgraphMissing, got %v", err)
 	}
 }
+
+// TestDropOldestStrategy_NonContiguousPairRepaired closes the gap an
+// adversarial review of PR #265 reproduced: unit-grouping establishes
+// tool_use/tool_result pairing by contiguity, so a caller that presents
+// a real pair non-contiguously (a custom_subgraph strategy, or a
+// hand-authored graph wiring the compact node) got the assistant unit
+// closed with zero results, the real result dropped as an "orphan", and
+// a dangling ToolCalls entry left behind — the exact provider-rejection
+// shape this strategy exists to prevent.
+//
+// repairToolPairs now guarantees the invariant structurally rather than
+// by assuming caller behaviour. This test fails without it.
+func TestDropOldestStrategy_NonContiguousPairRepaired(t *testing.T) {
+	msgs := []agentgraph.Message{
+		{Role: "user", Content: strings.Repeat("p", 400)},
+		{Role: "assistant", ToolCalls: []agentgraph.ToolCallRequest{{ID: "A"}}, Content: "call A"},
+		{Role: "tool", ToolCallID: "C", Content: "interleaved, unrelated"},
+		{Role: "tool", ToolCallID: "A", Content: "the real result for A"},
+		{Role: "user", Content: "tail"},
+	}
+	got, err := compaction.NewDropOldestStrategy().Compact(context.Background(), compaction.ContextSlice{
+		Messages: msgs, TargetTokens: 5,
+	}, compaction.CompactOpts{})
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+
+	survivingResults := map[string]bool{}
+	for _, m := range got.Messages {
+		if m.Role == "tool" {
+			survivingResults[m.ToolCallID] = true
+		}
+	}
+	for _, m := range got.Messages {
+		for _, tc := range m.ToolCalls {
+			if !survivingResults[tc.ID] {
+				t.Fatalf("surviving tool_call %q has no surviving result — provider would reject this request", tc.ID)
+			}
+		}
+	}
+	survivingCalls := map[string]bool{}
+	for _, m := range got.Messages {
+		for _, tc := range m.ToolCalls {
+			survivingCalls[tc.ID] = true
+		}
+	}
+	for _, m := range got.Messages {
+		if m.Role == "tool" && !survivingCalls[m.ToolCallID] {
+			t.Fatalf("surviving tool_result %q has no originating tool_use", m.ToolCallID)
+		}
+	}
+}

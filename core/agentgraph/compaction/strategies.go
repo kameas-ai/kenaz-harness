@@ -127,7 +127,7 @@ func (s *DropOldestStrategy) Compact(_ context.Context, in ContextSlice, opts Co
 		remainingBytes -= unitBytes[dropped]
 		dropped++
 	}
-	out := flattenUnits(units[dropped:])
+	out := repairToolPairs(flattenUnits(units[dropped:]))
 	afterBytes := bytesOf(out)
 	return CompactedContext{
 		Messages:    out,
@@ -677,4 +677,70 @@ func approxTokens(b int) int {
 		return 0
 	}
 	return (b + 3) / 4
+}
+
+// repairToolPairs enforces the tool_use/tool_result invariant on an
+// already-trimmed slice, unconditionally.
+//
+// dropOldestUnits establishes pairing by *grouping*, which only holds
+// while a turn's results sit contiguously after it — true for histories
+// the kernel builds (exec_dispatch appends a turn's results atomically),
+// but not a property of the type. A caller that reorders messages (a
+// custom_subgraph strategy, or a hand-authored graph wiring the compact
+// node) can present a real pair non-contiguously; grouping then closes
+// the assistant unit with zero results and drops the real result as an
+// orphan, leaving a dangling ToolCalls entry. Providers reject that
+// outright (llm_provider_adapter.go), which is the exact failure this
+// strategy exists to avoid.
+//
+// So rather than rely on the caller, guarantee it here: one O(n) pass
+// that drops any tool result with no surviving originating call, and
+// any call with no surviving result. Cheap insurance for the one
+// invariant the whole strategy is responsible for.
+func repairToolPairs(msgs []agentgraph.Message) []agentgraph.Message {
+	if len(msgs) == 0 {
+		return msgs
+	}
+	// Which tool results survived, and which calls were issued.
+	haveResult := make(map[string]bool, len(msgs))
+	haveCall := make(map[string]bool, len(msgs))
+	for _, m := range msgs {
+		if m.Role == "tool" && m.ToolCallID != "" {
+			haveResult[m.ToolCallID] = true
+		}
+		for _, tc := range m.ToolCalls {
+			if tc.ID != "" {
+				haveCall[tc.ID] = true
+			}
+		}
+	}
+
+	out := make([]agentgraph.Message, 0, len(msgs))
+	for _, m := range msgs {
+		// A tool result whose originating call did not survive is not
+		// sendable on its own.
+		if m.Role == "tool" && !haveCall[m.ToolCallID] {
+			continue
+		}
+		if len(m.ToolCalls) > 0 {
+			kept := make([]agentgraph.ToolCallRequest, 0, len(m.ToolCalls))
+			for _, tc := range m.ToolCalls {
+				if haveResult[tc.ID] {
+					kept = append(kept, tc)
+				}
+			}
+			if len(kept) != len(m.ToolCalls) {
+				// Copy before mutating — the input slice may be shared
+				// with the caller's history.
+				m.ToolCalls = kept
+				// An assistant turn that existed only to carry calls,
+				// and now carries none, has nothing left to say.
+				if len(kept) == 0 && strings.TrimSpace(m.Content) == "" {
+					continue
+				}
+			}
+		}
+		out = append(out, m)
+	}
+	return out
 }
