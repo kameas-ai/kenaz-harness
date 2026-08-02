@@ -38,6 +38,7 @@ func TestCapabilityLookup_MatchesPreConvergenceBuiltinTable(t *testing.T) {
 		{"openai", "gpt-4-turbo", 128000},
 		{"openai", "o1", 200000},
 		{"openai", "o1-mini", 128000},
+		{"openai", "o3", 200000},
 		{"openai", "o3-mini", 200000},
 		{"openai", "gpt-4.1", 1000000},
 		{"openai", "gpt-4.1-mini", 1000000},

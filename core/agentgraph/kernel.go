@@ -277,15 +277,26 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 	// AddTaskCompletedStep, or AddTaskForbidden, so its system prompt
 	// stays byte-identical to pre-WP05 behavior (see
 	// TestKernel_ZeroFailureRunComposesByteIdenticalPrompt).
-	initialGoal := firstUserTurnGoal(ctx, env)
 	recoveryArmed := false
 	armRecovery := func() {
 		mu.Lock()
 		already := recoveryArmed
 		recoveryArmed = true
 		mu.Unlock()
-		if !already && initialGoal != "" {
-			_ = k.SetTaskGoal(env, initialGoal)
+		if already {
+			return
+		}
+		// Resolve the goal lazily, here rather than at the top of Run.
+		// firstUserTurnGoal issues an unbounded History(..., 0) read,
+		// and chat_default.yaml's history_in node already performs the
+		// identical full read every turn — doing it eagerly meant two
+		// full-session reads per turn, growing with conversation
+		// length, on the common path where recovery never arms and the
+		// result is discarded. Deferring it means only a run that
+		// actually hits trouble pays. The read stays outside mu: it is
+		// I/O, and the `already` guard makes it at-most-once per run.
+		if goal := firstUserTurnGoal(ctx, env); goal != "" {
+			_ = k.SetTaskGoal(env, goal)
 		}
 	}
 	isRecoveryArmed := func() bool {
