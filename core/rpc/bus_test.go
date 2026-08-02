@@ -156,3 +156,64 @@ func TestMultiEmitter(t *testing.T) {
 type EmitterFunc func(ctx context.Context, topic string, payload any)
 
 func (f EmitterFunc) Emit(ctx context.Context, topic string, payload any) { f(ctx, topic, payload) }
+
+// TestSubscribeTracked_CountsDrops pins the accounting that lets a
+// consumer tell its downstream it lost data. Without it, a full buffer
+// discards events with no trace anywhere in the process — fine for
+// "re-read the list" topics, silently corrupting for token streams.
+func TestSubscribeTracked_CountsDrops(t *testing.T) {
+	bus := NewEventBus()
+	sub := bus.SubscribeTracked(2, "t")
+	defer sub.Close()
+
+	for i := 0; i < 5; i++ {
+		bus.Publish("t", i)
+	}
+
+	if got := sub.Dropped(); got != 3 {
+		t.Errorf("Dropped() = %d, want 3 (buffer 2, published 5)", got)
+	}
+
+	// The events that DID fit are intact and in order — dropping the tail
+	// must not corrupt the prefix.
+	for want := 0; want < 2; want++ {
+		ev := <-sub.C
+		if ev.Payload != want {
+			t.Errorf("buffered event %d = %v, want %d", want, ev.Payload, want)
+		}
+	}
+}
+
+// TestSubscribeTracked_NoDropsWhenDrained is the other half: a consumer
+// that keeps up is never told it lost anything.
+func TestSubscribeTracked_NoDropsWhenDrained(t *testing.T) {
+	bus := NewEventBus()
+	sub := bus.SubscribeTracked(2, "t")
+	defer sub.Close()
+
+	for i := 0; i < 50; i++ {
+		bus.Publish("t", i)
+		if ev := <-sub.C; ev.Payload != i {
+			t.Fatalf("event %d = %v", i, ev.Payload)
+		}
+	}
+	if got := sub.Dropped(); got != 0 {
+		t.Errorf("Dropped() = %d for a consumer that kept up, want 0", got)
+	}
+}
+
+// TestSubscribeTracked_OtherTopicsDoNotCount guards against inflating the
+// number a client is shown: only events this subscription was entitled to
+// receive can count as lost.
+func TestSubscribeTracked_OtherTopicsDoNotCount(t *testing.T) {
+	bus := NewEventBus()
+	sub := bus.SubscribeTracked(1, "wanted")
+	defer sub.Close()
+
+	for i := 0; i < 10; i++ {
+		bus.Publish("ignored", i)
+	}
+	if got := sub.Dropped(); got != 0 {
+		t.Errorf("Dropped() = %d after only off-topic publishes, want 0", got)
+	}
+}

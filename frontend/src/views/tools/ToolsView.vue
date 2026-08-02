@@ -61,6 +61,7 @@ onMounted(() => {
   <NotAvailableInServedMode
     v-if="servedMode"
     feature="Tools"
+      reason="The tool catalogue and enable/disable RPCs are not wired into the in-workbench build yet. Tools still run during a turn; you just cannot inspect or toggle them from here."
   />
   <div v-else>
     <CanvasHead

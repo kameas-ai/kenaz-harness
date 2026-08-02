@@ -909,6 +909,20 @@ func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverri
 		"model_override", modelOverride,
 		"chat_runner_wired", a.chatRunner != nil,
 	)
+	// Make sure the profile the caller named is actually IN the registry.
+	//
+	// Profiles are installed lazily, and until now the only thing that
+	// installed them was ListProviders. That made a successful turn depend
+	// on the UI having happened to read the provider list first: any client
+	// that started a stream without that incidental call got
+	// `llm: profile "kenaz-host" not registered` — a confusing message
+	// about a provider it had just been told exists. Found by smoking the
+	// served harness, where the ordering is easy to break, but the hazard
+	// was never transport-specific.
+	if err := a.ensurePersonalLoaded(); err != nil {
+		log.Error("llm.start_stream.failed", "reason", "provider load failed", "err", err.Error())
+		return "", err
+	}
 	if a.chatRunner == nil {
 		log.Error("llm.start_stream.failed", "reason", "chat runner not wired")
 		return "", errors.New("llm: chat runner not wired")

@@ -246,9 +246,16 @@ export function parseRPCError(err: unknown): RPCErrorEnvelope | null {
   }
 
   // JSON string: try to parse.
-  if (typeof err === 'string') {
+  //
+  // Wails rejects with a bare string, but the served HTTP transport
+  // rejects with an Error whose message carries the same envelope. Read
+  // through Error.message so both transports surface the same hint —
+  // otherwise served mode would show a raw Go JSON blob where the desktop
+  // shows "Rotate the key in Kenaz".
+  const raw = err instanceof Error ? err.message : err;
+  if (typeof raw === 'string') {
     try {
-      const parsed = JSON.parse(err) as Record<string, unknown>;
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
       if (typeof parsed['code'] === 'string' && typeof parsed['message'] === 'string' && typeof parsed['retryable'] === 'boolean') {
         return {
           code: parsed['code'] as string,
@@ -301,9 +308,15 @@ export class ServedUnsupportedError extends Error {
   /**
    * friendly returns a short, user-facing message suitable for display in a
    * "not available" badge or empty-state panel.
+   *
+   * It names the method, because the reader is usually someone who just
+   * clicked something and needs to know WHAT failed, and it never tells
+   * them to "run the desktop app": this harness is the default app inside
+   * a Kenaz workbench, and its user frequently has no desktop harness to
+   * run. Advice you cannot act on is worse than no advice.
    */
   friendly(): string {
-    return 'This feature is not available in served mode. Run the harness as a desktop app to use it.';
+    return `"${this.method}" is not wired into the in-workbench harness yet — this is a gap in the served build, not something you can enable from here. Sessions do work: create a conversation, send a message, watch it stream, and stop it.`;
   }
 }
 

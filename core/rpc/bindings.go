@@ -238,11 +238,9 @@ func (b *Bindings) Sessions_AppendMessage(id, role, content string) (sessions.Me
 }
 func (b *Bindings) Sessions_SendMessageWithBlocks(id string, contentBlocks []sessions.ContentBlock) (sessions.Message, error) {
 	defer sentry.WrapBinding("Sessions_SendMessageWithBlocks")()
-	// fleet-emergency-lockdown-01NDFSEX12 WP04: freeze chat dispatch during lockdown.
-	if err := middleware.CheckLockdown(); err != nil {
-		return sessions.Message{}, err
-	}
-	return b.api.Sessions().SendMessageWithBlocks(b.ctx(), id, contentBlocks)
+	// Gating (fleet emergency lockdown) lives in API.SendMessageBlocks so the
+	// served-mode HTTP transport applies the same check. See chat_gates.go.
+	return SendMessageBlocks(b.ctx(), b.api, id, contentBlocks)
 }
 func (b *Bindings) Sessions_SaveDraft(id, draft string) error {
 	defer sentry.WrapBinding("Sessions_SaveDraft")()
@@ -319,15 +317,14 @@ func (b *Bindings) LLM_ListProviders() ([]llm.Provider, error) {
 }
 func (b *Bindings) LLM_StartStream(profileID, sessionID, modelOverride string) (string, error) {
 	defer sentry.WrapBinding("LLM_StartStream")()
-	// fleet-emergency-lockdown-01NDFSEX12 WP04: freeze LLM dispatch during lockdown.
-	if err := middleware.CheckLockdown(); err != nil {
-		return "", err
-	}
-	return b.api.LLMConnector().StartStream(b.ctx(), profileID, sessionID, modelOverride)
+	// Gating (fleet emergency lockdown) lives in API.StartLLMStream so the
+	// served-mode HTTP transport in core/serve applies exactly the same
+	// checks. See core/rpc/chat_gates.go.
+	return StartLLMStream(b.ctx(), b.api, profileID, sessionID, modelOverride)
 }
 func (b *Bindings) LLM_StopStream(subID string) error {
 	defer sentry.WrapBinding("LLM_StopStream")()
-	return b.api.LLMConnector().StopStream(b.ctx(), subID)
+	return StopLLMStream(b.ctx(), b.api, subID)
 }
 func (b *Bindings) LLM_AddProvider(input llm.AddProviderInput) error {
 	defer sentry.WrapBinding("LLM_AddProvider")()

@@ -381,6 +381,7 @@ onBeforeUnmount(() => {
   <NotAvailableInServedMode
     v-if="servedMode"
     feature="Contexts"
+      reason="Context library reads and writes are not wired into the in-workbench build yet. A session's own system prompt is still set when you create it."
   />
   <div
     v-else

@@ -361,8 +361,12 @@ describe('createServedHarnessClient', () => {
     const { isServedUnsupportedError } = await import('@/lib/errors');
     const client = createServedHarnessClient({ baseURL: 'http://127.0.0.1:7880', token: '' });
 
-    // projects.list() is not wired in served mode — should reject with
+    // memory.list() is not wired in served mode — should reject with
     // ServedUnsupportedError (FR-001), not silently return fake data.
-    await expect(client.projects.list()).rejects.toSatisfy(isServedUnsupportedError);
+    //
+    // (This used to assert on projects.list(); projects are now readable
+    // in served mode because the new-session dialog lists them to file a
+    // conversation under a project.)
+    await expect(client.memory.listChunks()).rejects.toSatisfy(isServedUnsupportedError);
   });
 });
