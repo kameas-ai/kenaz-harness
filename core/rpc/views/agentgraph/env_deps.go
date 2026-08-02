@@ -51,6 +51,11 @@ type EnvDeps struct {
 	// defaulting — the executors fall back to ModelTierMedium, matching
 	// their pre-WP05 hardcoded defaults.
 	TierSource coreag.TierSource
+
+	// ContextWindows resolves the active model's context window so the
+	// compaction pipeline can fire as the conversation approaches the
+	// limit. nil ⇒ unknown ⇒ automatic compaction skips.
+	ContextWindows coreag.ContextWindowSource
 }
 
 // WithEnvDeps installs production seams onto the Manager. The seams
@@ -103,6 +108,9 @@ func (d EnvDeps) applyTo(env *coreag.Env) {
 	}
 	if d.HistoryWriter != nil {
 		env.HistoryWriter = d.HistoryWriter
+	}
+	if d.ContextWindows != nil {
+		env.ContextWindows = d.ContextWindows
 	}
 	if d.TierSource != nil {
 		env.TierSource = d.TierSource

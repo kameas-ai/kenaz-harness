@@ -85,8 +85,15 @@ type ContextSlice struct {
 	// under. Zero means "no specific target — apply default".
 	TargetTokens int
 	// CurrentTokens is the caller's estimate of the input size. Used
-	// for telemetry (bytes_saved / tokens_saved on the emitted event).
+	// for telemetry (bytes_saved / tokens_saved on the emitted event)
+	// and, with ContextWindow, to evaluate PreCallThreshold.
 	CurrentTokens int
+	// ContextWindow is the active model's maximum context length in
+	// tokens, 0 when unknown. Pipeline.Run needs it to decide whether a
+	// call is actually over budget: without it there is no denominator
+	// for SiteConfig.PreCallThreshold, so the automatic sites skip
+	// rather than fire blind.
+	ContextWindow int
 	// Site identifies which invocation site triggered this compaction.
 	// Strategies may use it to make different choices (e.g. post-tool
 	// trim only operates on the latest message).

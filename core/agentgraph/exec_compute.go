@@ -83,15 +83,36 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 	// over-budget request.
 	if env.Compactor != nil {
 		ci := CompactionInput{
-			Site:          CompactionSitePreCall,
-			RunID:         env.RunID,
-			NodeID:        node.ID,
-			SessionID:     env.SessionID,
-			ProjectID:     env.ProjectID,
-			SystemPrompt:  systemPrompt,
-			Messages:      msgs,
-			TargetTokens:  a.MaxTokens,
+			Site:         CompactionSitePreCall,
+			RunID:        env.RunID,
+			NodeID:       node.ID,
+			SessionID:    env.SessionID,
+			ProjectID:    env.ProjectID,
+			SystemPrompt: systemPrompt,
+			Messages:     msgs,
+			// TargetTokens is a *context-compaction* budget, not
+			// a.MaxTokens (the node's *output* token cap — how much
+			// the LLM is allowed to generate). Those are unrelated
+			// quantities; conflating them here used to mean a small
+			// output cap (e.g. 512-4096) made nearly every real
+			// conversation look "over budget" the moment
+			// env.Compactor went live in production. Leave it at the
+			// documented zero-value ("no specific target — apply
+			// cascading-config defaults", see ContextSlice) until a
+			// real per-session/model context-window budget is
+			// threaded through Env for this seam to size against.
+			// SiteConfig.PreCallThreshold (compaction/presets.go)
+			// reserves the config-driven slot for that follow-up;
+			// today it is consumed by Pipeline.Run (see its threshold gate).
+			// Strategies must treat TargetTokens<=0 as a no-op (see
+			// DropOldestStrategy.Compact), not an unconditional trim
+			// — see compaction-convergence-01PMDL05 WP02.
+			TargetTokens:  0,
 			CurrentTokens: estimateTokens(msgs),
+			// ContextWindow is the denominator for the site's
+			// PreCallThreshold. 0 (unknown model / no catalog) makes the
+			// pipeline skip rather than compact toward a guess.
+			ContextWindow: resolveContextWindow(env, a.Provider, a.Model),
 		}
 		co, err := env.Compactor.Compact(ctx, ci)
 		if err != nil {

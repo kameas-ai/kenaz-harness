@@ -21,7 +21,6 @@ const (
 	CapVision         Capability = "vision"
 	CapDocuments      Capability = "documents"
 	CapJSONMode       Capability = "json_mode"
-	CapPromptCaching  Capability = "prompt_caching"
 	CapReasoning      Capability = "reasoning"
 	CapCancellation   Capability = "cancellation"
 	CapUsageReporting Capability = "usage_reporting"
@@ -50,7 +49,7 @@ const (
 func AllCapabilities() []Capability {
 	return []Capability{
 		CapStreaming, CapToolCalling, CapVision, CapDocuments, CapJSONMode,
-		CapPromptCaching, CapReasoning, CapCancellation, CapUsageReporting,
+		CapReasoning, CapCancellation, CapUsageReporting,
 		CapStructuredOutput, CapGrammar, CapRegexGrammar, CapImageOutput,
 	}
 }
@@ -383,14 +382,6 @@ type JSONModeSpec struct {
 	Name string `json:"name,omitempty"`
 }
 
-// CachingSpec is an opt-in marker for prompt-caching (FR-009).
-type CachingSpec struct {
-	Enabled bool `json:"enabled"`
-	// Breakpoints is a list of message indexes that mark cacheable prefixes.
-	// Anthropic's `cache_control` semantics are the canonical exemplar.
-	Breakpoints []int `json:"breakpoints,omitempty"`
-}
-
 // ReasoningSpec opts into extended-thinking output (FR-010).
 type ReasoningSpec struct {
 	Enabled          bool `json:"enabled"`
@@ -433,7 +424,6 @@ type GenerationRequest struct {
 	// callers remain valid. (multimodal-io-01KQ8TDF FR-004)
 	Attachments []Attachment   `json:"attachments,omitempty"`
 	JSONMode    *JSONModeSpec  `json:"json_mode,omitempty"`
-	Caching     *CachingSpec   `json:"caching,omitempty"`
 	Reasoning   *ReasoningSpec `json:"reasoning,omitempty"`
 	// ResponseFormat constrains the model's output to a JSON schema or GBNF
 	// grammar. Nil means free-form text (today's behavior unchanged).
@@ -480,9 +470,6 @@ func (r GenerationRequest) RequestedCapabilities() []Capability {
 	}
 	if r.JSONMode != nil && r.JSONMode.Enabled {
 		caps = append(caps, CapJSONMode)
-	}
-	if r.Caching != nil && r.Caching.Enabled {
-		caps = append(caps, CapPromptCaching)
 	}
 	if r.Reasoning != nil && r.Reasoning.Enabled {
 		caps = append(caps, CapReasoning)

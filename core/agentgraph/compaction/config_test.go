@@ -129,3 +129,42 @@ func TestSafeDefaults_AllSitesPopulated(t *testing.T) {
 		}
 	}
 }
+
+// TestNewMemoryResolverWithDefaults_SeedsGivenGlobalConfig covers the
+// resolver-construction seam compaction-convergence-01PMDL05 WP01
+// added: production wiring boots the global layer with
+// compaction.ProductionDefaults() instead of SafeDefaults(), and this
+// is the constructor that lets it do so without duplicating
+// MemoryResolver's layer-map bookkeeping.
+func TestNewMemoryResolverWithDefaults_SeedsGivenGlobalConfig(t *testing.T) {
+	custom := compaction.PresetForTier("aggressive")
+	r := compaction.NewMemoryResolverWithDefaults(custom)
+	cfg := r.Resolve(compaction.ScopeKey{})
+	pre := cfg.ForSite(compaction.SitePreCall)
+	if pre.Enabled {
+		t.Fatalf("expected pre_call disabled from the aggressive-tier preset, got Enabled=true")
+	}
+	if pre.PreCallThreshold != 0.60 {
+		t.Fatalf("expected pre_call_threshold 0.60 (aggressive tier), got %v", pre.PreCallThreshold)
+	}
+	manual := cfg.ForSite(compaction.SiteManual)
+	if !manual.Enabled {
+		t.Fatalf("expected manual site enabled from the preset, got Enabled=false")
+	}
+}
+
+// TestNewMemoryResolver_StillSeedsSafeDefaults locks NewMemoryResolver
+// (the zero-arg constructor tests + non-production callers use) to its
+// pre-WP01 behaviour: SafeDefaults at the global layer, unaffected by
+// the new WithDefaults seam.
+func TestNewMemoryResolver_StillSeedsSafeDefaults(t *testing.T) {
+	r := compaction.NewMemoryResolver()
+	cfg := r.Resolve(compaction.ScopeKey{})
+	pre := cfg.ForSite(compaction.SitePreCall)
+	if !pre.Enabled {
+		t.Fatalf("expected NewMemoryResolver to keep seeding SafeDefaults (pre_call enabled), got Enabled=false")
+	}
+	if pre.PreCallThreshold != 0.85 {
+		t.Fatalf("expected default pre_call_threshold 0.85, got %v", pre.PreCallThreshold)
+	}
+}

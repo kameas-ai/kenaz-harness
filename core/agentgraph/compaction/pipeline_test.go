@@ -302,3 +302,104 @@ func TestPipeline_AdaptsToAgentgraphCompactor(t *testing.T) {
 		t.Fatalf("expected one event emitted")
 	}
 }
+
+// TestPipeline_PreCallThreshold_FiresOnlyNearContextMax pins the
+// behaviour the compaction system exists for: a long conversation must
+// be compacted *before* it overflows the model's context window, and a
+// short one must be left completely alone.
+//
+// Both halves matter. Firing too eagerly was a real defect found in
+// review of PR #264 — PreCallThreshold was never read, so an enabled
+// site fired on every single node execution; combined with a strategy
+// that ignores TargetTokens that silently gutted the context on every
+// turn. Not firing at all is the opposite failure: the call eventually
+// exceeds the window and errors.
+func TestPipeline_PreCallThreshold_FiresOnlyNearContextMax(t *testing.T) {
+	// ~4 bytes/token, so 400 messages of 100 bytes ≈ 10k tokens.
+	long := make([]agentgraph.Message, 400)
+	for i := range long {
+		long[i] = agentgraph.Message{Role: "user", Content: strings.Repeat("x", 100)}
+	}
+	short := []agentgraph.Message{{Role: "user", Content: "hi"}}
+
+	// pre_call is disabled in ProductionDefaults (the pre-send dial is
+	// the authoritative automatic compactor). Enable it explicitly here:
+	// this test covers the threshold gate itself, which is what makes
+	// the site safe to turn on once its preconditions are met.
+	newPipe := func() *compaction.Pipeline {
+		cfg := compaction.ProductionDefaults()
+		pre := cfg.ForSite(compaction.SitePreCall)
+		pre.Enabled = true
+		cfg.Sites[compaction.SitePreCall] = pre
+		p := compaction.NewPipeline(
+			compaction.WithResolver(compaction.NewMemoryResolverWithDefaults(cfg)),
+		)
+		p.RegisterStrategy(compaction.NewDropOldestStrategy())
+		return p
+	}
+	tokensOf := func(msgs []agentgraph.Message) int {
+		n := 0
+		for _, m := range msgs {
+			n += len(m.Content)
+		}
+		return n / 4
+	}
+
+	t.Run("near the limit: compacts", func(t *testing.T) {
+		cur := tokensOf(long)
+		res, err := newPipe().Run(context.Background(), compaction.CompactRequest{
+			Site: compaction.SitePreCall,
+			Input: compaction.ContextSlice{
+				Messages:      long,
+				CurrentTokens: cur,
+				ContextWindow: int(float64(cur) / 0.9), // ~90% full, over the 0.85 default
+			},
+		})
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if res.Skipped {
+			t.Fatalf("near context max the pipeline skipped — the conversation would overflow")
+		}
+		if len(res.Compacted.Messages) >= len(long) {
+			t.Fatalf("compaction did not shrink history: %d >= %d", len(res.Compacted.Messages), len(long))
+		}
+	})
+
+	t.Run("well under the limit: leaves history untouched", func(t *testing.T) {
+		res, err := newPipe().Run(context.Background(), compaction.CompactRequest{
+			Site: compaction.SitePreCall,
+			Input: compaction.ContextSlice{
+				Messages:      short,
+				CurrentTokens: tokensOf(short),
+				ContextWindow: 200000,
+			},
+		})
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if !res.Skipped {
+			t.Fatalf("a short conversation was compacted — should be untouched")
+		}
+		if len(res.Compacted.Messages) != len(short) {
+			t.Fatalf("history mutated: %d != %d", len(res.Compacted.Messages), len(short))
+		}
+	})
+
+	t.Run("unknown window: skips rather than guessing", func(t *testing.T) {
+		res, err := newPipe().Run(context.Background(), compaction.CompactRequest{
+			Site: compaction.SitePreCall,
+			Input: compaction.ContextSlice{
+				Messages:      long,
+				CurrentTokens: tokensOf(long),
+				ContextWindow: 0,
+			},
+		})
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if !res.Skipped {
+			t.Fatalf("compacted toward a guessed target with no known window")
+		}
+	})
+}

@@ -5,7 +5,6 @@ defaults:
   vision: true
   documents: false
   json_mode: true
-  prompt_caching: true
   reasoning: true
   cancellation: true
   usage_reporting: true
@@ -77,7 +76,6 @@ models:
     vision: true
     documents: true
     json_mode: true
-    prompt_caching: true
     reasoning: true
     reasoning_style: "token_budget"
     cancellation: true
@@ -99,7 +97,6 @@ models:
     vision: true
     documents: true
     json_mode: true
-    prompt_caching: true
     reasoning: true
     reasoning_style: "token_budget"
     cancellation: true
@@ -121,7 +118,6 @@ models:
     vision: true
     documents: false
     json_mode: true
-    prompt_caching: true
     reasoning: false
     cancellation: true
     usage_reporting: true
@@ -137,7 +133,6 @@ models:
     vision: true
     documents: true
     json_mode: true
-    prompt_caching: true
     reasoning: false
     cancellation: true
     usage_reporting: true
@@ -155,7 +150,6 @@ models:
     vision: true
     documents: false
     json_mode: true
-    prompt_caching: true
     reasoning: false
     cancellation: true
     usage_reporting: true
@@ -171,7 +165,6 @@ models:
     vision: true
     documents: false
     json_mode: true
-    prompt_caching: true
     reasoning: false
     cancellation: true
     usage_reporting: true
@@ -187,7 +180,6 @@ models:
     vision: true
     documents: false
     json_mode: true
-    prompt_caching: true
     reasoning: false
     cancellation: true
     usage_reporting: true
@@ -203,7 +195,6 @@ models:
     vision: true
     documents: false
     json_mode: true
-    prompt_caching: true
     reasoning: false
     cancellation: true
     usage_reporting: true

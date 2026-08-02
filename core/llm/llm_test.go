@@ -83,7 +83,6 @@ func TestRequestedCapabilities_Detection(t *testing.T) {
 		{"with-tools", GenerationRequest{Tools: []ToolSpec{{Name: "x"}}}, []Capability{CapStreaming, CapToolCalling}},
 		{"with-vision", GenerationRequest{Attachments: []Attachment{{Kind: "image"}}}, []Capability{CapStreaming, CapVision}},
 		{"with-json", GenerationRequest{JSONMode: &JSONModeSpec{Enabled: true}}, []Capability{CapStreaming, CapJSONMode}},
-		{"with-cache", GenerationRequest{Caching: &CachingSpec{Enabled: true}}, []Capability{CapStreaming, CapPromptCaching}},
 		{"with-reason", GenerationRequest{Reasoning: &ReasoningSpec{Enabled: true}}, []Capability{CapStreaming, CapReasoning}},
 	}
 	for _, tc := range cases {

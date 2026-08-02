@@ -246,6 +246,14 @@ type Env struct {
 	// omitting a TierSource never changes an existing graph's output.
 	TierSource TierSource
 
+	// ContextWindows resolves the active model's max context length so
+	// the compaction pipeline can evaluate PreCallThreshold against a
+	// real denominator (autonomy/compaction convergence). nil means
+	// "unknown window", which makes the automatic compaction sites skip
+	// — the safe reading, since compacting to a guessed target is worse
+	// than not compacting.
+	ContextWindows ContextWindowSource
+
 	// MergeSuggester powers the kernel's "merge?" toast. nil disables
 	// the suggestion stream.
 	MergeSuggester *MergeSuggester

@@ -157,6 +157,12 @@ func (s *SiteConfig) MarkSubgraphOutputPort() *SiteConfig { s.Mark(fSubgraphOutp
 // MarkCustomGraphID flags CustomGraphID as explicitly set.
 func (s *SiteConfig) MarkCustomGraphID() *SiteConfig { s.Mark(fCustomGraphID); return s }
 
+// DefaultPreCallThreshold is the fraction of the model's context window
+// above which the automatic compaction sites fire. 0.85 leaves headroom
+// for the response plus the system prompt, so compaction happens *before*
+// a call would overflow rather than after it fails.
+const DefaultPreCallThreshold = 0.85
+
 // CompactionConfig is one layer's contribution. Each site has its
 // own SiteConfig; un-set sites fall through to the next layer.
 type CompactionConfig struct {
@@ -226,11 +232,22 @@ type MemoryResolver struct {
 // NewMemoryResolver constructs an empty resolver populated with
 // SafeDefaults at the global layer.
 func NewMemoryResolver() *MemoryResolver {
+	return NewMemoryResolverWithDefaults(SafeDefaults())
+}
+
+// NewMemoryResolverWithDefaults constructs an empty resolver populated
+// with the given global-layer config instead of SafeDefaults. This is
+// the seam production wiring uses to boot the resolver with a
+// backward-compatible preset (see the compaction package's
+// ProductionDefaults) rather than FR-041's own "safe" defaults, which
+// enable pre_call/post_tool out of the box and are not equivalent to
+// today's shipped pre-send-dial behaviour.
+func NewMemoryResolverWithDefaults(global CompactionConfig) *MemoryResolver {
 	r := &MemoryResolver{layers: make(map[Layer]map[string]CompactionConfig)}
 	for _, l := range AllLayers() {
 		r.layers[l] = make(map[string]CompactionConfig)
 	}
-	r.layers[LayerGlobal][""] = SafeDefaults()
+	r.layers[LayerGlobal][""] = global
 	return r
 }
 

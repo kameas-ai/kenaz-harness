@@ -111,17 +111,16 @@ func (e *Emitter) emit(ctx context.Context, k Kind, base Entry, payload map[stri
 // outside of a graph context (test mode).
 func (e *Emitter) RequestSubmitted(ctx context.Context, req llm.GenerationRequest, prof llm.ProviderProfile, snapshotID string) error {
 	payload := map[string]any{
-		"profile_id":           prof.ID,
-		"provider":             prof.Kind,
-		"model":                prof.Model,
-		"snapshot_id":          snapshotID,
+		"profile_id":             prof.ID,
+		"provider":               prof.Kind,
+		"model":                  prof.Model,
+		"snapshot_id":            snapshotID,
 		"requested_capabilities": capList(req.RequestedCapabilities()),
-		"messages_count":       len(req.Messages),
-		"tools_count":          len(req.Tools),
-		"attachments_count":    len(req.Attachments),
-		"json_mode":            req.JSONMode != nil && req.JSONMode.Enabled,
-		"caching":              req.Caching != nil && req.Caching.Enabled,
-		"reasoning":            req.Reasoning != nil && req.Reasoning.Enabled,
+		"messages_count":         len(req.Messages),
+		"tools_count":            len(req.Tools),
+		"attachments_count":      len(req.Attachments),
+		"json_mode":              req.JSONMode != nil && req.JSONMode.Enabled,
+		"reasoning":              req.Reasoning != nil && req.Reasoning.Enabled,
 	}
 	return e.emit(ctx, KindRequestSubmitted, Entry{
 		SessionID: req.SessionID, ProfileID: prof.ID,

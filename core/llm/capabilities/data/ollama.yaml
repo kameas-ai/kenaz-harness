@@ -5,7 +5,6 @@ defaults:
   vision: false
   documents: false
   json_mode: true
-  prompt_caching: false
   reasoning: false
   cancellation: true
   usage_reporting: true
@@ -42,7 +41,6 @@ models:
     vision: false
     documents: false
     json_mode: true
-    prompt_caching: false
     reasoning: false
     cancellation: true
     usage_reporting: true
@@ -57,7 +55,6 @@ models:
     vision: true
     documents: false
     json_mode: false
-    prompt_caching: false
     reasoning: false
     cancellation: true
     usage_reporting: true
@@ -73,7 +70,6 @@ models:
     vision: true
     documents: false
     json_mode: false
-    prompt_caching: false
     reasoning: false
     cancellation: true
     usage_reporting: true

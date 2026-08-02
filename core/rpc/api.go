@@ -28,6 +28,7 @@ import (
 	acpenvelope "github.com/kameas-ai/kenaz-harness/core/acp/envelope"
 	acppeers "github.com/kameas-ai/kenaz-harness/core/acp/peers"
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	fr041compaction "github.com/kameas-ai/kenaz-harness/core/agentgraph/compaction"
 	corenodes "github.com/kameas-ai/kenaz-harness/core/agentgraph/nodes"
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph/prompts"
 	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
@@ -1320,7 +1321,15 @@ func New(c *core.Core) *API {
 	// falls back to ErrManagerUnavailable so the chassis still boots.
 	a.convMgr = newConversationManager(c)
 	a.corpusMgr = newCorpusManager(c, embedder)
-	a.graphMgr = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore)
+	var compactionPipeline *fr041compaction.Pipeline
+	a.graphMgr, compactionPipeline = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore)
+	// Wire the same FR-041 pipeline instance the kernel runs onto the
+	// Settings RPC surface, so edits made through
+	// core/rpc/views/compaction reach the live kernel path instead of
+	// landing on a disconnected Pipeline (SetCompactionAPI previously
+	// had zero production call sites — see
+	// compaction-convergence-01PMDL05 WP01).
+	a.SetCompactionAPI(compactionview.New(compactionPipeline))
 
 	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib)
 	a.llmAPI = stack.api
@@ -4868,7 +4877,8 @@ func newCorpusManager(c *core.Core, embedder corememory.Embedder) *corecorpus.Ma
 // library and runs in-memory graphs; user-graph persistence is the
 // only feature lost when DataDir is empty.
 func newGraphManager(c *core.Core) *graphview.Manager {
-	return newGraphManagerWithDeps(c, nil, nil, nil, nil, nil)
+	mgr, _ := newGraphManagerWithDeps(c, nil, nil, nil, nil, nil)
+	return mgr
 }
 
 // newGraphManagerWithDeps wires production seams into the graph
@@ -4880,6 +4890,13 @@ func newGraphManager(c *core.Core) *graphview.Manager {
 // bashStore must be the SAME instance the bash built-in tool writes
 // to so a downstream read_bash_output node sees transcripts written
 // by a prior bash call. Pass nil to disable read_bash_output entirely.
+//
+// Returns the graph Manager plus the FR-041 compaction pipeline it
+// built the kernel with, so the caller can wire the same pipeline
+// instance onto the RPC Settings surface (compactionview.API) — one
+// Pipeline, reachable both from live kernel runs and from the
+// Settings UI that edits its cascading config. See
+// compaction-convergence-01PMDL05 WP01.
 func newGraphManagerWithDeps(
 	c *core.Core,
 	convMgr *coreconv.Manager,
@@ -4887,7 +4904,7 @@ func newGraphManagerWithDeps(
 	memStore corememory.Store,
 	embedder corememory.Embedder,
 	bashStore *corebash.Store,
-) *graphview.Manager {
+) (*graphview.Manager, *fr041compaction.Pipeline) {
 	dataDir := ""
 	if c != nil {
 		dataDir = c.DataDir()
@@ -4925,7 +4942,13 @@ func newGraphManagerWithDeps(
 	// leaves deps.TierSource nil, so applyTo skips it and every node
 	// keeps its pre-WP05 hardcoded default (ModelTierMedium fallback).
 	if tierCat, err := llmcap.LoadDefault(); err == nil {
-		deps.TierSource = &tierSourceAdapter{cat: tierCat}
+		adapter := &tierSourceAdapter{cat: tierCat}
+		deps.TierSource = adapter
+		// Same adapter satisfies ContextWindowSource: the compaction
+		// pipeline needs the model's context window as the denominator
+		// for its pre-call threshold, so automatic compaction fires as a
+		// conversation nears the limit instead of on every turn.
+		deps.ContextWindows = adapter
 	}
 	// Memory hook journal: bind the SQL writer (migration 0308) when
 	// the storage layer exposes a stdlib *sql.DB. The HookManager's
@@ -4943,23 +4966,73 @@ func newGraphManagerWithDeps(
 	// stays empty across runs — RecentDecisions and the run-trace
 	// replay surfaces would have nothing to show. Best-effort: when
 	// the handle isn't available the manager falls back to memory.
+	//
+	// Built here (rather than left to Manager's own internal default)
+	// because the kernel we construct below also needs it: the kernel
+	// and the Manager must share one EventLog instance so a compaction
+	// pipeline's compaction_fired events land in the same trace the
+	// frontend's run-trace replay reads from RecentDecisions.
+	var agEventLog coreag.EventLog
+	if c != nil {
+		agEventLog = buildAgentGraphEventLog(c)
+	}
+	if agEventLog == nil {
+		agEventLog = coreag.NewMemoryEventLog()
+	}
+
+	// FR-041 compaction pipeline (compaction-convergence-01PMDL05
+	// WP01): wire WithCompactor into the production kernel so
+	// env.Compactor is non-nil and the Settings RPC surface
+	// (core/rpc/views/compaction) takes effect. The global-layer seed
+	// is ProductionDefaults(), NOT fr041compaction.SafeDefaults() —
+	// SafeDefaults enables pre_call/post_tool out of the box, which
+	// would double-compact every conversation on top of the pre-send
+	// dial (core/compaction, invoked from chat_runner.go's
+	// runPreSendCompaction) that already rewrites persisted session
+	// history before the kernel ever runs. ProductionDefaults keeps
+	// pre_call/post_tool dormant and only enables SiteManual (the
+	// explicit "compact now" trigger, previously permanently broken in
+	// production because no Compactor was wired at all). See
+	// core/agentgraph/compaction/presets.go for the full rationale and
+	// kitty-specs/compaction-convergence-01PMDL05/spec.md for the
+	// mission contract.
+	compactionResolver, err := fr041compaction.NewYAMLResolverWithDefaults(dataDir, fr041compaction.ProductionDefaults())
+	if err != nil {
+		slog.Warn("agentgraph: compaction resolver load error; using in-process defaults",
+			"data_dir", dataDir,
+			"error", err.Error(),
+		)
+	}
+	compactionPipeline := fr041compaction.NewPipeline(
+		fr041compaction.WithResolver(compactionResolver),
+		fr041compaction.WithEmitter(fr041compaction.EventLogEmitter(agEventLog)),
+	)
+	compactionPipeline.RegisterStrategy(fr041compaction.NewDropOldestStrategy())
+	// nil LLM: the summary strategy falls back to its inline heuristic
+	// summarizer. Wiring a real LLM provider here is a follow-up WP —
+	// this WP's scope is making SiteManual reachable at all, not
+	// picking which model does the summarizing.
+	compactionPipeline.RegisterStrategy(fr041compaction.NewSummaryStrategy(nil))
+
+	kernel := coreag.NewKernel(
+		coreag.WithEventLog(agEventLog),
+		coreag.WithCompactor(compactionPipeline),
+	)
+
 	mgrOpts := []graphview.ManagerOption{
 		graphview.WithDataDir(dataDir),
 		graphview.WithEnvDeps(deps),
-	}
-	if c != nil {
-		if log := buildAgentGraphEventLog(c); log != nil {
-			mgrOpts = append(mgrOpts, graphview.WithEventLog(log))
-		}
+		graphview.WithKernel(kernel),
+		graphview.WithEventLog(agEventLog),
 	}
 
 	mgr, err := graphview.NewManager(mgrOpts...)
 	if err != nil {
 		// Construction is best-effort; surface returns
 		// ErrManagerUnavailable when nil.
-		return nil
+		return nil, nil
 	}
-	return mgr
+	return mgr, compactionPipeline
 }
 
 // newNodesStack constructs the manifest-catalog view (mission

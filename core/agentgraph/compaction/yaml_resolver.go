@@ -51,8 +51,20 @@ type YAMLResolver struct {
 // errors at construction are non-fatal — the resolver falls back to
 // SafeDefaults. Subsequent Set calls do not retry the read.
 func NewYAMLResolver(dataDir string) (*YAMLResolver, error) {
+	return NewYAMLResolverWithDefaults(dataDir, SafeDefaults())
+}
+
+// NewYAMLResolverWithDefaults constructs a resolver whose in-memory
+// seed (used until a compaction.yaml section overrides a layer) is the
+// given global config rather than SafeDefaults. Production wiring uses
+// this to boot with a backward-compatible preset — see
+// ProductionDefaults in presets.go. On-disk sections still win once
+// loaded: loadFromDisk only overrides the layers actually present in
+// the file, so an empty/missing global section leaves this seed in
+// place.
+func NewYAMLResolverWithDefaults(dataDir string, global CompactionConfig) (*YAMLResolver, error) {
 	r := &YAMLResolver{
-		mem: NewMemoryResolver(),
+		mem: NewMemoryResolverWithDefaults(global),
 	}
 	if dataDir == "" {
 		r.disabled = true
@@ -61,7 +73,7 @@ func NewYAMLResolver(dataDir string) (*YAMLResolver, error) {
 	r.path = filepath.Join(dataDir, "config", "compaction.yaml")
 	if err := r.loadFromDisk(); err != nil && !os.IsNotExist(err) {
 		// Surface the error so the chassis can log at warn; the
-		// resolver still works (SafeDefaults from MemoryResolver).
+		// resolver still works (the seed passed above).
 		return r, fmt.Errorf("compaction: load %q: %w", r.path, err)
 	}
 	return r, nil

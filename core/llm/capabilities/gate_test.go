@@ -21,8 +21,8 @@ func mustCatalog(t *testing.T) *Catalog {
 func TestCatalog_Describe_Anthropic(t *testing.T) {
 	c := mustCatalog(t)
 	d := c.Describe("anthropic", "claude-sonnet-4-7")
-	if !d.Has(llm.CapStreaming) || !d.Has(llm.CapToolCalling) || !d.Has(llm.CapVision) || !d.Has(llm.CapPromptCaching) {
-		t.Fatalf("anthropic claude-sonnet should support streaming/tool/vision/cache: %+v", d.Supported)
+	if !d.Has(llm.CapStreaming) || !d.Has(llm.CapToolCalling) || !d.Has(llm.CapVision) {
+		t.Fatalf("anthropic claude-sonnet should support streaming/tool/vision: %+v", d.Supported)
 	}
 }
 
@@ -31,9 +31,6 @@ func TestCatalog_Describe_OpenAI_GPT4o(t *testing.T) {
 	d := c.Describe("openai", "gpt-4o-mini")
 	if !d.Has(llm.CapVision) {
 		t.Fatalf("gpt-4o-mini should support vision: %+v", d)
-	}
-	if d.Has(llm.CapPromptCaching) {
-		t.Fatalf("openai prompt caching not modeled: %+v", d)
 	}
 }
 
@@ -101,16 +98,6 @@ func TestGate_RejectsToolCallingOnNonToolModel(t *testing.T) {
 	req := llm.GenerationRequest{Tools: []llm.ToolSpec{{Name: "x"}}}
 	if _, err := g.Check(req, prof); err == nil {
 		t.Fatal("expected tool-calling rejection on non-tool ollama default")
-	}
-}
-
-func TestGate_AcceptsCachingForAnthropic(t *testing.T) {
-	c := mustCatalog(t)
-	g := NewGate(c)
-	prof := llm.ProviderProfile{ID: "p", Kind: "anthropic", Model: "claude-sonnet-4-7"}
-	req := llm.GenerationRequest{Caching: &llm.CachingSpec{Enabled: true}}
-	if _, err := g.Check(req, prof); err != nil {
-		t.Fatalf("anthropic should support caching: %v", err)
 	}
 }
 

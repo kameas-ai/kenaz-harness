@@ -60,7 +60,6 @@ type modelEntry struct {
 	Vision         *bool  `yaml:"vision"`
 	Documents      *bool  `yaml:"documents"`
 	JSONMode       *bool  `yaml:"json_mode"`
-	PromptCaching  *bool  `yaml:"prompt_caching"`
 	Reasoning      *bool  `yaml:"reasoning"`
 	Cancellation   *bool  `yaml:"cancellation"`
 	UsageReporting *bool  `yaml:"usage_reporting"`
@@ -223,7 +222,6 @@ func (c *Catalog) Describe(provider, model string) llm.CapabilityDescriptor {
 			setIfPresent(llm.CapVision, m.Vision)
 			setIfPresent(llm.CapDocuments, m.Documents)
 			setIfPresent(llm.CapJSONMode, m.JSONMode)
-			setIfPresent(llm.CapPromptCaching, m.PromptCaching)
 			setIfPresent(llm.CapReasoning, m.Reasoning)
 			setIfPresent(llm.CapCancellation, m.Cancellation)
 			setIfPresent(llm.CapUsageReporting, m.UsageReporting)
@@ -310,7 +308,6 @@ func applyRichDefaults(caps *llm.ProviderCapabilities, defaults map[string]any) 
 	caps.Vision = boolField("vision")
 	caps.Documents = boolField("documents")
 	caps.JSONMode = boolField("json_mode")
-	caps.PromptCaching = boolField("prompt_caching")
 	caps.Reasoning = boolField("reasoning")
 	caps.Cancellation = boolField("cancellation")
 	caps.UsageReporting = boolField("usage_reporting")
@@ -351,7 +348,6 @@ func applyRichEntry(caps *llm.ProviderCapabilities, m *modelEntry) {
 	setBool(&caps.Vision, m.Vision)
 	setBool(&caps.Documents, m.Documents)
 	setBool(&caps.JSONMode, m.JSONMode)
-	setBool(&caps.PromptCaching, m.PromptCaching)
 	setBool(&caps.Reasoning, m.Reasoning)
 	setBool(&caps.Cancellation, m.Cancellation)
 	setBool(&caps.UsageReporting, m.UsageReporting)
@@ -629,7 +625,6 @@ func applyDefaults(desc *llm.CapabilityDescriptor, defaults map[string]any) {
 		"vision":          llm.CapVision,
 		"documents":       llm.CapDocuments,
 		"json_mode":       llm.CapJSONMode,
-		"prompt_caching":  llm.CapPromptCaching,
 		"reasoning":       llm.CapReasoning,
 		"cancellation":    llm.CapCancellation,
 		"usage_reporting": llm.CapUsageReporting,
