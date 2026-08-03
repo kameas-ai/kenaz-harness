@@ -533,6 +533,17 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 	case "ShellStatus":
 		return s.api.ShellStatus(ctx)
 
+	// Serve_ListMethods enumerates the served surface from the RUNNING
+	// binary. It takes no params and touches no core API, so it answers even
+	// when the harness is otherwise misconfigured.
+	//
+	// This is the discovery path for anyone debugging a workbench: it settles
+	// "does this build have LLM_ListProviders?" against the binary that is
+	// actually listening, rather than against a source checkout that may not
+	// be what got baked into the image.
+	case "Serve_ListMethods":
+		return methodList(), nil
+
 	case "Sessions_List":
 		return s.api.Sessions().List(ctx)
 
@@ -771,11 +782,15 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 		return nil, s.api.Permissions().Resolve(ctx, p.RequestID, permissionsview.Decision(p.Decision))
 
 	default:
-		// Explicit "not ported" error so the served frontend can distinguish
-		// "this method exists on desktop but is not yet wired in serve mode"
-		// from a genuine typo.  FR-005: no fake success — the caller gets a
-		// clear error, never silent fake data.
-		return nil, fmt.Errorf("serve: %q is not ported to served mode; use the desktop app or file a ticket", method)
+		// FR-005: no fake success — the caller gets a clear error, never
+		// silent fake data.
+		//
+		// unknownMethodError draws the distinction this branch's comment used
+		// to claim but never made: a misspelled name gets the correct
+		// spelling, a stream method gets pointed at /ws, and only a name that
+		// is genuinely absent from the surface is described as possibly
+		// unported. See methods.go for why that distinction is load-bearing.
+		return nil, unknownMethodError(method)
 	}
 }
 
