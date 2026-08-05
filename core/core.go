@@ -39,6 +39,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/storage"
 	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
 	"github.com/kameas-ai/kenaz-harness/core/telemetry"
+	"github.com/kameas-ai/kenaz-harness/core/workspace"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
@@ -67,6 +68,15 @@ type FleetPipeline interface {
 // directly for embedding tests via the optional Subsystems struct.
 type Options struct {
 	DataDir string
+
+	// WorkspaceDir optionally overrides the agent workspace (spec 089).
+	// The served entrypoints read it from KENAZ_HARNESS_WORKSPACE — in a
+	// workbench that is the granted /workspace virtio-fs mount. Empty
+	// resolves to <DataDir>/agent-workspace. The override is PROBED at
+	// New (exists / readable / writable / mounted); an unusable override
+	// falls back to the private default so the harness never advertises
+	// a workspace whose first ls fails. See core/workspace.Resolve.
+	WorkspaceDir string
 
 	// BuildVersion is the harness build label embedded in the
 	// telemetry resource (service.version). Empty falls back to "dev"
@@ -148,6 +158,12 @@ type Subsystems struct {
 type Core struct {
 	opts Options
 
+	// workspaceRes is the agent-workspace resolution computed once at
+	// New (spec 089). Every consumer (bash sandbox root, chat env
+	// context, filesystem-recipe defaults) reads this — never a fresh
+	// <DataDir>/agent-workspace join.
+	workspaceRes workspace.Resolution
+
 	Events    event.Log
 	Bundles   bundle.Resolver
 	Sessions  session.Executor
@@ -217,6 +233,12 @@ func New(opts Options) (*Core, error) {
 		return nil, errors.New("core: DataDir required")
 	}
 	c := &Core{opts: opts}
+	// Spec 089: resolve the agent workspace once, up front — rpc.New
+	// wires the bash sandbox and recipe defaults before Start runs, so
+	// the resolution must be final here. Directory CREATION (default /
+	// fallback path) is deferred to Start, keeping New free of write
+	// side effects beyond the override's transient probe.
+	c.workspaceRes = workspace.Resolve(opts.WorkspaceDir, opts.DataDir)
 	c.Events = opts.Subsystems.Events
 	c.Bundles = opts.Subsystems.Bundles
 	c.Sessions = opts.Subsystems.Sessions
@@ -307,6 +329,22 @@ func (c *Core) Start(ctx context.Context) error {
 	// happen on Start rather than on first session-manager access.
 	if c.opts.DataDir != "" {
 		_ = c.Storage()
+	}
+	// Spec 089: guarantee the agent workspace exists before the first
+	// tool call (G2). Harness-owned paths (default/fallback) are created
+	// with the ownership marker; a granted override already exists (the
+	// Resolve probe proved it). Best-effort like the other Start hooks —
+	// a failure is logged, not fatal, and the first tool call surfaces
+	// the concrete error.
+	if c.opts.DataDir != "" && c.workspaceRes.Source != workspace.SourceGranted {
+		if _, err := workspace.Ensure(c.opts.DataDir); err != nil {
+			logging.L().Warn("core.workspace_ensure_failed", "err", err.Error())
+		}
+	}
+	if c.workspaceRes.Source == workspace.SourceFallback {
+		logging.L().Warn("core.workspace_fallback",
+			"dir", c.workspaceRes.Dir,
+			"reason", c.workspaceRes.FallbackReason)
 	}
 	// Telemetry init — wires the OTel SDK on top of the unified DB so
 	// every subsystem can emit spans / metrics / logs once WP04
@@ -450,6 +488,17 @@ func (c *Core) Shutdown(ctx context.Context) error {
 // DataDir returns the data-directory root opts.DataDir was constructed
 // with. Subsystems use this as the base for their on-disk state.
 func (c *Core) DataDir() string { return c.opts.DataDir }
+
+// WorkspaceDir returns the resolved agent-workspace directory (spec 089):
+// the granted override when one was configured and usable, otherwise
+// <DataDir>/agent-workspace. Consumers MUST use this instead of joining
+// "agent-workspace" themselves.
+func (c *Core) WorkspaceDir() string { return c.workspaceRes.Dir }
+
+// Workspace returns the full agent-workspace resolution — path, source
+// (granted / default / fallback), and the read-only flag — for surfaces
+// that explain the workspace to the user (chat env context, logs).
+func (c *Core) Workspace() workspace.Resolution { return c.workspaceRes }
 
 // BuildVersion returns the harness build label (semver string set
 // from main.Version via ldflags). Used by the auto-update subsystem

@@ -122,9 +122,14 @@ func registerBuiltinTools(
 		DataDir:        dataDir,
 	})
 	registry.Register(bashTool)
+	workspaceSource := "none"
+	if c != nil {
+		workspaceSource = string(c.Workspace().Source)
+	}
 	logging.L().Info("rpc.builtins.register",
 		"tool", bashTool.Name(),
 		"sandbox", sandboxRoot,
+		"workspace_source", workspaceSource,
 		"cedar_gate", cedarEngine != nil,
 	)
 
@@ -517,11 +522,12 @@ func constructWebSearch() *corewebsearch.Tool {
 }
 
 // defaultBashSandbox returns the workspace path the bash tool uses as
-// its sandbox root. Prefers <DataDir>/agent-workspace; falls back to
-// /tmp/kenaz-bash for the test harness path.
+// its sandbox root: the core's RESOLVED agent workspace (spec 089 —
+// the granted /workspace mount in a workbench, <DataDir>/agent-workspace
+// otherwise). Falls back to /tmp/kenaz-bash for the nil-core test path.
 func defaultBashSandbox(c *core.Core) string {
-	if c != nil && c.DataDir() != "" {
-		return filepath.Join(c.DataDir(), "agent-workspace")
+	if c != nil && c.WorkspaceDir() != "" {
+		return c.WorkspaceDir()
 	}
 	return filepath.Join("/tmp", "kenaz-bash")
 }

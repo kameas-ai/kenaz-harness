@@ -190,6 +190,11 @@ type Config struct {
 	// a generic "sandboxed workspace" note instead of a concrete path.
 	WorkspaceDir string
 
+	// WorkspaceNote is the honest trailing description for the workspace
+	// line (spec 089 FR-4): granted mount vs private sandbox vs fallback.
+	// Empty keeps the generic pre-089 wording.
+	WorkspaceNote string
+
 	// CustomInstructions returns the user's chat custom-instructions text,
 	// read on every StartStream so a Settings edit takes effect on the
 	// next turn (system-prompt-layers WP04). nil / empty appends no user
@@ -526,7 +531,7 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	}
 	llmAdapter := NewLLMProviderAdapter(r.cfg.Registry, profileID, modelOverride, toolCatalog, imageCapturer).
 		WithSessionID(sessionID).
-		WithEnvContext(r.cfg.Clock, r.cfg.WorkspaceDir).
+		WithEnvContext(r.cfg.Clock, r.cfg.WorkspaceDir, r.cfg.WorkspaceNote).
 		WithCustomInstructions(r.cfg.CustomInstructions)
 	toolAdapter := newKernelToolAdapter(r.cfg.Pool, r.cfg.Perms, sessionID)
 	if r.cfg.AutonomyKnobs != nil {

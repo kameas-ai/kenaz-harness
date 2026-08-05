@@ -3332,6 +3332,7 @@ func newToolsAPI(c *core.Core, pool tools.PoolController, secretsBackend *secret
 		Pool:           pool,
 		Secrets:        secretsBackend,
 		DataDir:        dataDir,
+		WorkspaceDir:   c.WorkspaceDir(),
 		Audit:          nil, // TODO(audit-wired): reuse process-wide event.Emitter once it's available
 		Keychain:       &keychainWriter{backend: secretsBackend},
 		Forgetter:      &keychainForgetter{backend: secretsBackend},
@@ -3733,15 +3734,18 @@ func newLLMStack(
 		chatAutoTitleGen = autotitle.New(llmCaller)
 	}
 
-	// system-prompt-layers WP03: derive the agent-workspace path from the
-	// harness DataDir (mirrors tools.EnsureWorkspace's <dataDir>/agent-workspace
-	// convention). Empty dataDir (test chassis) yields an empty path and the
-	// environment layer falls back to a generic sandboxed-workspace note.
+	// system-prompt-layers WP03 / spec 089: the workspace line renders the
+	// core's RESOLVED agent workspace — the granted /workspace mount in a
+	// workbench, <DataDir>/agent-workspace otherwise — plus an honest note
+	// saying which it is. Nil core (test chassis) yields an empty path and
+	// the environment layer falls back to a generic sandboxed-workspace note.
 	chatWorkspaceDir := ""
-	if dataDir != "" {
-		chatWorkspaceDir = filepath.Join(dataDir, "agent-workspace")
+	chatWorkspaceNote := ""
+	if c != nil && dataDir != "" {
+		chatWorkspaceDir = c.WorkspaceDir()
+		chatWorkspaceNote = c.Workspace().Note()
 	}
-	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatWorkspaceDir)
+	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatWorkspaceDir, chatWorkspaceNote)
 	var capCatalog llm.CapCatalog
 	if cat, err := llmcap.LoadDefault(); err == nil {
 		capCatalog = &capCatalogAdapter{cat: cat}
@@ -3973,6 +3977,7 @@ func buildChatRunner(
 	sessionMgr *session.Manager,
 	autoTitleGen chat.AutoTitleGenerator,
 	workspaceDir string,
+	workspaceNote string,
 ) *chat.ChatRunner {
 	if graphMgr == nil || graphMgr.Kernel() == nil {
 		logging.L().Warn("chat.runner.disabled", "reason", "graph manager unavailable")
@@ -4225,6 +4230,9 @@ func buildChatRunner(
 		// when DataDir is unset (test path) — the adapter then renders a
 		// generic sandboxed-workspace note.
 		WorkspaceDir: workspaceDir,
+		// spec 089 FR-4: honest workspace description (granted mount vs
+		// private sandbox vs fallback). Empty keeps the generic wording.
+		WorkspaceNote: workspaceNote,
 		// system-prompt-layers WP04: append the user's chat custom
 		// instructions as the final system-prompt layer.
 		CustomInstructions: customInstructions,

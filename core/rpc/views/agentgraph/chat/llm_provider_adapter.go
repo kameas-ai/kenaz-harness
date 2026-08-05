@@ -86,6 +86,10 @@ type LLMProviderAdapter struct {
 	// environment block's workspace line. Empty renders a generic
 	// "sandboxed workspace" note instead of a concrete path.
 	workspaceDir string
+	// workspaceNote is the honest trailing description for the workspace
+	// line (spec 089 FR-4): granted mount vs private sandbox vs fallback.
+	// Empty keeps the generic pre-089 wording.
+	workspaceNote string
 	// customInstructions returns the user's chat custom-instructions text,
 	// evaluated once per Generate so a Settings edit takes effect on the
 	// next turn (system-prompt-layers WP04). nil / empty appends no user
@@ -117,14 +121,16 @@ func (a *LLMProviderAdapter) WithSessionID(sessionID string) *LLMProviderAdapter
 }
 
 // WithEnvContext pins the environment-context inputs (injected clock +
-// agent-workspace path) onto the adapter so Generate can render the
-// dynamic environment layer that stacks on top of the composed graph +
-// node-role system prompt. A nil clock falls back to time.Now; an empty
-// workspaceDir renders a generic sandboxed-workspace note.
-// (system-prompt-layers WP03)
-func (a *LLMProviderAdapter) WithEnvContext(now func() time.Time, workspaceDir string) *LLMProviderAdapter {
+// agent-workspace path + its honest description) onto the adapter so
+// Generate can render the dynamic environment layer that stacks on top
+// of the composed graph + node-role system prompt. A nil clock falls
+// back to time.Now; an empty workspaceDir renders a generic
+// sandboxed-workspace note; an empty workspaceNote keeps the pre-089
+// generic wording. (system-prompt-layers WP03; spec 089 FR-4)
+func (a *LLMProviderAdapter) WithEnvContext(now func() time.Time, workspaceDir, workspaceNote string) *LLMProviderAdapter {
 	a.now = now
 	a.workspaceDir = workspaceDir
+	a.workspaceNote = workspaceNote
 	return a
 }
 
@@ -152,6 +158,7 @@ func (a *LLMProviderAdapter) buildEnvBlock() string {
 	if ws := strings.TrimSpace(a.workspaceDir); ws != "" {
 		in.WorkspaceDir = ws
 		in.WorkspaceKnown = true
+		in.WorkspaceNote = a.workspaceNote
 		if entries, err := os.ReadDir(ws); err == nil {
 			in.WorkspaceEntries = len(entries)
 			in.WorkspaceCounted = true

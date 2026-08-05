@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/kameas-ai/kenaz-harness/core/workspace"
 )
 
 // Sentinel errors. Callers branch on errors.Is.
@@ -79,10 +81,9 @@ var allowOverrides = []string{
 }
 
 // workspaceMarkerName is dropped at the root of the agent workspace
-// the first time EnsureWorkspace creates it. The marker lets a future
-// "Reset workspace" path identify which directory is harness-owned
-// without misidentifying a user's pre-existing folder.
-const workspaceMarkerName = ".kenaz-workspace"
+// the first time EnsureWorkspace creates it. Aliased from
+// core/workspace (spec 089) — the mkdir+marker logic lives there now.
+const workspaceMarkerName = workspace.MarkerName
 
 // agentWorkspaceDirName is the conventional subdirectory under
 // dataDir that EnsureWorkspace materialises.
@@ -263,29 +264,11 @@ func matchesDenyRoot(clean, root string) bool {
 // The returned path is the absolute workspace dir suitable to feed
 // into a filesystem recipe's allowed-directory list.
 func EnsureWorkspace(dataDir string) (string, error) {
-	if dataDir == "" {
-		return "", errors.New("tools: EnsureWorkspace: dataDir is empty")
-	}
-	abs, err := filepath.Abs(dataDir)
+	// Spec 089: single implementation in core/workspace so the served
+	// startup path and this recipe-config path cannot drift.
+	ws, err := workspace.Ensure(dataDir)
 	if err != nil {
-		return "", fmt.Errorf("tools: EnsureWorkspace: abs %q: %w", dataDir, err)
+		return "", fmt.Errorf("tools: EnsureWorkspace: %w", err)
 	}
-	workspace := filepath.Join(abs, agentWorkspaceDirName)
-	created := false
-	if _, err := os.Stat(workspace); err != nil {
-		if !os.IsNotExist(err) {
-			return "", fmt.Errorf("tools: EnsureWorkspace: stat %q: %w", workspace, err)
-		}
-		if err := os.MkdirAll(workspace, 0o700); err != nil {
-			return "", fmt.Errorf("tools: EnsureWorkspace: mkdir %q: %w", workspace, err)
-		}
-		created = true
-	}
-	if created {
-		marker := filepath.Join(workspace, workspaceMarkerName)
-		if err := os.WriteFile(marker, []byte("kenaz harness agent workspace\n"), 0o600); err != nil {
-			return "", fmt.Errorf("tools: EnsureWorkspace: write marker %q: %w", marker, err)
-		}
-	}
-	return workspace, nil
+	return ws, nil
 }
