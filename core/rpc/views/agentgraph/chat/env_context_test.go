@@ -48,6 +48,26 @@ func TestBuildEnvContext_DeterministicSnapshot(t *testing.T) {
 	}
 }
 
+// TestBuildEnvContext_WorkspaceNote (spec 089 FR-4): a granted-workspace
+// note replaces the generic sandboxed-workspace wording; an empty note
+// keeps it (covered by the snapshot test above).
+func TestBuildEnvContext_WorkspaceNote(t *testing.T) {
+	got := buildEnvContext(envContextInput{
+		Now:            fixedClock()(),
+		GOOS:           "linux",
+		GOARCH:         "arm64",
+		WorkspaceDir:   "/workspace",
+		WorkspaceKnown: true,
+		WorkspaceNote:  "the user's granted workspace, shared with the host.",
+	})
+	if !strings.Contains(got, "- Workspace: /workspace — the user's granted workspace, shared with the host.") {
+		t.Fatalf("granted-workspace note not rendered:\n%s", got)
+	}
+	if strings.Contains(got, "not the user's project") {
+		t.Fatalf("generic wording must be replaced when a note is supplied:\n%s", got)
+	}
+}
+
 func TestBuildEnvContext_UnknownWorkspaceAndNoTools(t *testing.T) {
 	got := buildEnvContext(envContextInput{
 		Now:    fixedClock()(),
@@ -192,7 +212,7 @@ func (s *cannedStream) Final() (corellm.Response, error) {
 func TestGenerate_LayersEnvAfterNodePrompt(t *testing.T) {
 	reg := &capturingRegistry{}
 	adapter := NewLLMProviderAdapter(reg, "profile-1", "openai/gpt-4o", nil, nil).
-		WithEnvContext(fixedClock(), "")
+		WithEnvContext(fixedClock(), "", "")
 
 	const base = "You are the chat node.\nBe concise."
 	_, err := adapter.Generate(context.Background(), coreag.LLMRequest{
@@ -251,7 +271,7 @@ func TestGenerate_CustomInstructionsLayerOrdering(t *testing.T) {
 	t.Run("absent", func(t *testing.T) {
 		reg := &capturingRegistry{}
 		adapter := NewLLMProviderAdapter(reg, "p", "m", nil, nil).
-			WithEnvContext(fixedClock(), "")
+			WithEnvContext(fixedClock(), "", "")
 		if _, err := adapter.Generate(context.Background(), coreag.LLMRequest{SystemPrompt: base}); err != nil {
 			t.Fatalf("Generate: %v", err)
 		}
@@ -268,7 +288,7 @@ func TestGenerate_CustomInstructionsLayerOrdering(t *testing.T) {
 	t.Run("present-after-env", func(t *testing.T) {
 		reg := &capturingRegistry{}
 		adapter := NewLLMProviderAdapter(reg, "p", "m", nil, nil).
-			WithEnvContext(fixedClock(), "").
+			WithEnvContext(fixedClock(), "", "").
 			WithCustomInstructions(func() string { return "Prefer tables over prose." })
 		if _, err := adapter.Generate(context.Background(), coreag.LLMRequest{SystemPrompt: base}); err != nil {
 			t.Fatalf("Generate: %v", err)

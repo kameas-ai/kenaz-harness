@@ -94,10 +94,27 @@ func main() {
 	c, err := core.New(core.Options{
 		DataDir:      dataDir,
 		BuildVersion: Version,
+		// Spec 089: the workbench image sets KENAZ_HARNESS_WORKSPACE to the
+		// granted /workspace mount so agent work lands on the host-shared
+		// directory the user consented to — not a VM-private DataDir path.
+		// Unset (host/dev) or unusable values resolve to
+		// <DataDir>/agent-workspace inside core (workspace.Resolve).
+		WorkspaceDir: os.Getenv("KENAZ_HARNESS_WORKSPACE"),
 	})
 	if err != nil {
 		log.Error("harness-served: core init", "err", err)
 		os.Exit(1)
+	}
+	// One line the operator can find when the workspace is not what they
+	// expected. Paths + probe reason only — never directory contents.
+	wsRes := c.Workspace()
+	log.Info("harness-served: agent workspace resolved",
+		"dir", wsRes.Dir,
+		"source", wsRes.Source,
+		"read_only", wsRes.ReadOnly)
+	if wsRes.FallbackReason != "" {
+		log.Warn("harness-served: configured workspace unusable; using private fallback",
+			"reason", wsRes.FallbackReason)
 	}
 
 	// Seed the provider the Kenaz control plane granted this workbench

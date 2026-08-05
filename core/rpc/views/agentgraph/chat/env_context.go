@@ -40,6 +40,11 @@ type envContextInput struct {
 	// WorkspaceDir is the absolute agent-workspace path. Only rendered
 	// when WorkspaceKnown is true.
 	WorkspaceDir string
+	// WorkspaceNote is the trailing description for the workspace line
+	// (spec 089 FR-4): says whether the path is the user's granted
+	// workspace mount, the harness-private sandbox, or a fallback.
+	// Empty keeps the pre-089 generic sandboxed-workspace wording.
+	WorkspaceNote string
 	// WorkspaceKnown reports whether WorkspaceDir is populated. When
 	// false the block states a generic sandboxed workspace instead of a
 	// concrete path.
@@ -88,8 +93,12 @@ func buildEnvContext(in envContextInput) string {
 				state = fmt.Sprintf(" (%d entries)", in.WorkspaceEntries)
 			}
 		}
-		fmt.Fprintf(&b, "- Workspace: %s%s — a sandboxed agent workspace, not the user's project.\n",
-			strings.TrimSpace(in.WorkspaceDir), state)
+		note := strings.TrimSpace(in.WorkspaceNote)
+		if note == "" {
+			note = "a sandboxed agent workspace, not the user's project."
+		}
+		fmt.Fprintf(&b, "- Workspace: %s%s — %s\n",
+			strings.TrimSpace(in.WorkspaceDir), state, note)
 	} else {
 		b.WriteString("- Workspace: a sandboxed agent workspace, not the user's project.\n")
 	}

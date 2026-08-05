@@ -347,10 +347,23 @@ func runServeMode(listenAddr string) {
 	c, err := core.New(core.Options{
 		DataDir:      dataDir,
 		BuildVersion: Version,
+		// Spec 089: mirror cmd/harness-served — both served entry points
+		// must agree (Spec 078 precedent) on the workspace override the
+		// workbench image supplies.
+		WorkspaceDir: os.Getenv("KENAZ_HARNESS_WORKSPACE"),
 	})
 	if err != nil {
 		serveLog.Error("harness.serve: core init", "err", err)
 		os.Exit(1)
+	}
+	wsRes := c.Workspace()
+	serveLog.Info("harness.serve: agent workspace resolved",
+		"dir", wsRes.Dir,
+		"source", wsRes.Source,
+		"read_only", wsRes.ReadOnly)
+	if wsRes.FallbackReason != "" {
+		serveLog.Warn("harness.serve: configured workspace unusable; using private fallback",
+			"reason", wsRes.FallbackReason)
 	}
 
 	// Seed the provider the Kenaz control plane granted this workbench

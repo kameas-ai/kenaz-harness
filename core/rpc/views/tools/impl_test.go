@@ -649,6 +649,45 @@ func TestInstallRecipe_UnknownConfigKindFails(t *testing.T) {
 	}
 }
 
+// TestInstallRecipe_GrantedWorkspaceOverridesDefault (spec 089 plan D4):
+// with a resolved workspace override active (a workbench's /workspace
+// mount), the shipped filesystem recipe's "${DATA_DIR}/agent-workspace"
+// default resolves to the OVERRIDE — the directory the agent actually
+// works in — and no harness marker or private workspace is materialised.
+func TestInstallRecipe_GrantedWorkspaceOverridesDefault(t *testing.T) {
+	t.Parallel()
+	dataDir := t.TempDir()
+	granted := t.TempDir()
+	enabled := &recipes.EnabledRecipes{}
+	api := New(Config{
+		Catalog:      fsCatalog(),
+		Enabled:      enabled,
+		Pool:         newFakePool(),
+		Secrets:      secrets.NewMemoryBackend(),
+		DataDir:      dataDir,
+		WorkspaceDir: granted,
+	})
+	if _, err := api.InstallRecipe(context.Background(), "filesystem", nil, nil); err != nil {
+		t.Fatalf("InstallRecipe: %v", err)
+	}
+	// The granted dir is the user's tree — never marked as harness-owned.
+	if _, err := os.Stat(filepath.Join(granted, ".kenaz-workspace")); !os.IsNotExist(err) {
+		t.Fatal("marker must not be written into a granted workspace (D3)")
+	}
+	// The private default is not created as a side effect either.
+	if _, err := os.Stat(filepath.Join(dataDir, "agent-workspace")); !os.IsNotExist(err) {
+		t.Fatal("private workspace must not be materialised when the override is in use")
+	}
+	entry, ok := enabled.Get("filesystem")
+	if !ok {
+		t.Fatal("filesystem not persisted")
+	}
+	dirs, ok := entry.Config["allowed_directories"].([]string)
+	if !ok || len(dirs) != 1 || dirs[0] != granted {
+		t.Fatalf("persisted dirs = %v, want [%s]", entry.Config["allowed_directories"], granted)
+	}
+}
+
 func TestInstallRecipe_DataDirSubstitutedInDefault(t *testing.T) {
 	t.Parallel()
 	dataDir := t.TempDir()

@@ -108,7 +108,14 @@ type Config struct {
 	Keychain  KeychainWriter
 	Forgetter KeychainForgetter
 	DataDir   string
-	Audit     AuditEmitter
+	// WorkspaceDir is the core's RESOLVED agent workspace (spec 089) —
+	// the granted /workspace mount in a workbench, <DataDir>/agent-workspace
+	// otherwise. A recipe default of exactly "${DATA_DIR}/agent-workspace"
+	// resolves here (plan D4), so the shipped filesystem recipe grants the
+	// directory the agent actually works in. Empty falls back to the
+	// DataDir join (nil-core test path).
+	WorkspaceDir string
+	Audit        AuditEmitter
 	// Gate is the Cedar policy gate for InstallRecipe (WP10). nil =
 	// default-permit (best-effort: a Cedar bug never blocks the chassis).
 	Gate cedar.Gate
@@ -467,7 +474,19 @@ func (a *API) resolveConfig(recipe recipes.Recipe, input map[string]any) (map[st
 				return nil, fmt.Errorf("tools: config option %q for recipe %q must be a list of strings", opt.Name, recipe.ID)
 			}
 			expanded := make([]string, 0, len(list))
+			// spec 089 (plan D4): the shipped filesystem recipe's default of
+			// exactly "${DATA_DIR}/agent-workspace" means "the agent's
+			// workspace" — which, when a granted workspace override is
+			// active (a workbench's /workspace mount), is cfg.WorkspaceDir,
+			// not a literal DataDir join. Any OTHER ${DATA_DIR}-prefixed
+			// value keeps literal substitution: those name harness state on
+			// purpose.
+			defaultWorkspaceRaw := "${DATA_DIR}/" + agentWorkspaceDirName
 			for _, p := range list {
+				if p == defaultWorkspaceRaw && a.cfg.WorkspaceDir != "" {
+					expanded = append(expanded, a.cfg.WorkspaceDir)
+					continue
+				}
 				// Two passes: ${DATA_DIR} substitution (for shipped
 				// recipe defaults) then user-friendly expansion of "~/",
 				// "$HOME", and bare common-folder names like "Desktop".
