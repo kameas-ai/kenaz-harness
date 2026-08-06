@@ -370,7 +370,11 @@ func runServeMode(listenAddr string) {
 		Getenv:       os.Getenv,
 		Tokens:       connTokens,
 		Ledger:       connectors.NewLedgerEmitterFromEnv(os.Getenv, serveLog),
-		Logger:       serveLog,
+		// D13/US5: include operator-authored user recipes baked under
+		// <dataDir>/mcp/recipes so whitelisted custom connector ids
+		// resolve in served mode. The whitelist still gates every id.
+		Catalog: connectors.CatalogWithUserRecipes(dataDir, serveLog),
+		Logger:  serveLog,
 	})
 
 	c, err := core.New(core.Options{

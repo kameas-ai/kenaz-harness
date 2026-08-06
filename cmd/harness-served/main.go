@@ -117,7 +117,11 @@ func main() {
 		Getenv:       os.Getenv,
 		Tokens:       connTokens,
 		Ledger:       connectors.NewLedgerEmitterFromEnv(os.Getenv, log),
-		Logger:       log,
+		// D13/US5: include operator-authored user recipes baked under
+		// <dataDir>/mcp/recipes so whitelisted custom connector ids
+		// resolve in served mode. The whitelist still gates every id.
+		Catalog: connectors.CatalogWithUserRecipes(dataDir, log),
+		Logger:  log,
 	})
 
 	c, err := core.New(core.Options{
