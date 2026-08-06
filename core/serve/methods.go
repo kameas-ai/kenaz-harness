@@ -36,6 +36,8 @@ var (
 	servedMethods = []string{
 		"AppInfo",
 		"Auth_State",
+		"Connectors_List",
+		"Connectors_Status",
 		"Elicit_ListPending",
 		"LLM_ListProviders",
 		"LLM_StartStream",

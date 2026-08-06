@@ -95,3 +95,76 @@ func TestInjectOAuthBearer_InjectsStoredToken(t *testing.T) {
 		t.Errorf("Authorization = %q, want Bearer stored-at", got)
 	}
 }
+
+// fakeTokenSource satisfies ConnectorTokenSource for the served-mode
+// broker fallback tests (spec 091 D8).
+type fakeTokenSource struct {
+	token string
+	err   error
+	calls int
+}
+
+func (f *fakeTokenSource) ConnectorToken(context.Context, string) (string, error) {
+	f.calls++
+	return f.token, f.err
+}
+
+func TestInjectOAuthBearer_BrokerFallbackWhenNoLocalCredential(t *testing.T) {
+	t.Parallel()
+	src := &fakeTokenSource{token: "broker-at"}
+	api := New(Config{Secrets: secrets.NewMemoryBackend(), ConnectorTokens: src})
+	spec := &coremcp.ServerSpec{Name: "remote-oauth"}
+	if err := api.injectOAuthBearer(context.Background(), oauthRecipe("cid"), spec); err != nil {
+		t.Fatalf("injectOAuthBearer: %v", err)
+	}
+	if got := spec.HeadersTemplate["Authorization"]; got != "Bearer broker-at" {
+		t.Errorf("Authorization = %q, want broker bearer", got)
+	}
+	if src.calls != 1 {
+		t.Errorf("broker calls = %d, want 1", src.calls)
+	}
+}
+
+func TestInjectOAuthBearer_BrokerFallbackFailureIsDeferred(t *testing.T) {
+	t.Parallel()
+	src := &fakeTokenSource{err: context.DeadlineExceeded}
+	api := New(Config{Secrets: secrets.NewMemoryBackend(), ConnectorTokens: src})
+	spec := &coremcp.ServerSpec{Name: "remote-oauth"}
+	// A broker failure is deferred auth — no header, no error, no spawn
+	// failure.
+	if err := api.injectOAuthBearer(context.Background(), oauthRecipe("cid"), spec); err != nil {
+		t.Fatalf("injectOAuthBearer: %v", err)
+	}
+	if _, ok := spec.HeadersTemplate["Authorization"]; ok {
+		t.Error("failed broker fallback must leave the spec unauthenticated")
+	}
+}
+
+func TestInjectOAuthBearer_LocalCredentialWinsOverBroker(t *testing.T) {
+	t.Parallel()
+	backend := secrets.NewMemoryBackend()
+	cred := &oauth.StoredCredential{
+		AccessToken: "stored-at",
+		TokenType:   "bearer",
+		ExpiresAt:   time.Now().Add(time.Hour),
+	}
+	blob, err := cred.Marshal()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	backend.SetEntries(map[string][]byte{
+		secrets.RefKeychain.String() + "|" + recipes.OAuthCredentialLocator("remote-oauth"): blob,
+	})
+	src := &fakeTokenSource{token: "broker-at"}
+	api := New(Config{Secrets: backend, ConnectorTokens: src})
+	spec := &coremcp.ServerSpec{Name: "remote-oauth"}
+	if err := api.injectOAuthBearer(context.Background(), oauthRecipe("cid"), spec); err != nil {
+		t.Fatalf("injectOAuthBearer: %v", err)
+	}
+	if got := spec.HeadersTemplate["Authorization"]; got != "Bearer stored-at" {
+		t.Errorf("Authorization = %q, want stored token", got)
+	}
+	if src.calls != 0 {
+		t.Errorf("broker consulted despite a valid local credential (%d calls)", src.calls)
+	}
+}

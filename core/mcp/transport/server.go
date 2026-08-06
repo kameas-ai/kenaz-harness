@@ -45,6 +45,11 @@ type SpawnSpec struct {
 	// clear a key.
 	Env map[string]string
 
+	// IsolateEnv, when true, replaces the inherit-and-merge child
+	// environment with an explicit one: a minimal base (PATH, HOME, …)
+	// plus Env only. See mcp.ServerSpec.IsolateEnv (spec 091 D6).
+	IsolateEnv bool
+
 	// FirstByteTimeout overrides DefaultFirstByteTimeout when > 0.
 	FirstByteTimeout time.Duration
 

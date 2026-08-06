@@ -43,6 +43,7 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/connectors"
 	"github.com/kameas-ai/kenaz-harness/core/paths"
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
 	"github.com/kameas-ai/kenaz-harness/core/serve"
@@ -91,6 +92,38 @@ func main() {
 	}
 	log.Info("harness-served.boot", "pid", os.Getpid(), "version", Version, "data_dir", dataDir)
 
+	// Spec 091 FR-004: served mode inverts the host-mode allow-all MCP
+	// default. The whitelist (KENAZ_MCP_ALLOWLIST) is parsed and applied
+	// BEFORE core boot so no recipe load can precede it; absent/empty/
+	// malformed all leave block-all standing. Mirrors main.go's
+	// runServeMode — both served entry points must agree (Spec 078
+	// precedent).
+	mcpProv := connectors.ProvisionFromEnv(os.Getenv, log)
+	// The supervisor spawns whitelisted connectors at core start (it
+	// replaces the persisted-enabled recipe bootstrap via
+	// rpc.WithServedConnectors) and records per-connector outcomes for
+	// the Connectors_List / Connectors_Status read RPCs (spec 091 D11).
+	// Ledger events (FR-014) ride the reporter ingest socket when the
+	// image provides one.
+	// KENAZ_AUTH_* is read here (pure env read) so the connector-token
+	// client exists before rpc.New; the renewal Session is still created
+	// after core start, below. Spec 091 D8: whitelisted OAuth connectors
+	// authenticate with host-brokered short-lived tokens — the refresh
+	// token never crosses into the VM.
+	authCfg := authbroker.ReadConfig(os.Getenv)
+	connTokens := authbroker.NewConnectorTokens(authCfg, log)
+	connSup := connectors.NewSupervisor(connectors.SupervisorConfig{
+		Provisioning: mcpProv,
+		Getenv:       os.Getenv,
+		Tokens:       connTokens,
+		Ledger:       connectors.NewLedgerEmitterFromEnv(os.Getenv, log),
+		// D13/US5: include operator-authored user recipes baked under
+		// <dataDir>/mcp/recipes so whitelisted custom connector ids
+		// resolve in served mode. The whitelist still gates every id.
+		Catalog: connectors.CatalogWithUserRecipes(dataDir, log),
+		Logger:  log,
+	})
+
 	c, err := core.New(core.Options{
 		DataDir:      dataDir,
 		BuildVersion: Version,
@@ -121,7 +154,10 @@ func main() {
 	// (Spec 078). Mirrors main.go's runServeMode — both served entry points
 	// must agree, or which binary the image happens to bake would change
 	// whether the workbench boots configured.
-	api := rpc.New(c, rpc.WithHostProviders(serve.HostProviders(os.Getenv, log)))
+	api := rpc.New(c,
+		rpc.WithHostProviders(serve.HostProviders(os.Getenv, log)),
+		rpc.WithServedConnectors(connSup),
+		rpc.WithConnectorTokens(connTokens))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -131,12 +167,11 @@ func main() {
 	}
 	api.SetContext(ctx)
 
-	// F2-WP8: initialise the in-VM auth session from KENAZ_AUTH_* env vars
-	// (injected via EnvironmentFile from the KENAZMETA disk, same mechanism as
-	// SIGIL_INGEST_TOKEN / HARNESS_VM_TOKEN).
+	// F2-WP8: initialise the in-VM auth session from the KENAZ_AUTH_* env
+	// vars read above (injected via EnvironmentFile from the KENAZMETA
+	// disk, same mechanism as SIGIL_INGEST_TOKEN / HARNESS_VM_TOKEN).
 	//
 	// Privacy: broker token and access token bytes are never logged.
-	authCfg := authbroker.ReadConfig(os.Getenv)
 	authSession := authbroker.NewSession(ctx, authCfg, log)
 	log.Info("harness-served: auth session initialised",
 		"auth_state", authSession.State().String(),
@@ -169,7 +204,9 @@ func main() {
 		cancel()
 	}()
 
-	srv := serve.New(api, addr, token, servedFS, log, serve.WithAuthSession(authSession))
+	srv := serve.New(api, addr, token, servedFS, log,
+		serve.WithAuthSession(authSession),
+		serve.WithConnectors(connSup))
 	if serveErr := srv.Serve(ctx); serveErr != nil && serveErr != context.Canceled {
 		log.Error("harness-served: server error", "err", serveErr)
 		os.Exit(1)

@@ -62,6 +62,7 @@ import (
 	"golang.org/x/net/websocket"
 
 	"github.com/kameas-ai/kenaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/connectors"
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
 	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
 	permissionsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/permissions"
@@ -116,9 +117,10 @@ type Server struct {
 	staticFS    fs.FS // embedded dist-served bundle; nil → 404 for static paths
 	log         *slog.Logger
 	srv         *http.Server
-	authSession *authbroker.Session  // nil when serve mode is not wired with auth (tests / anonymous)
-	elicit      elicitview.ElicitAPI // nil → falls back to api.Elicit(); injected for a stable pending surface
-	queueCap    int                  // per-WS-client frame queue depth; 0 → defaultStreamQueueCap
+	authSession *authbroker.Session    // nil when serve mode is not wired with auth (tests / anonymous)
+	elicit      elicitview.ElicitAPI   // nil → falls back to api.Elicit(); injected for a stable pending surface
+	queueCap    int                    // per-WS-client frame queue depth; 0 → defaultStreamQueueCap
+	connectors  *connectors.Supervisor // nil → Connectors_* report "not provisioned" (spec 091 D11)
 
 	// baseCtx is the server's lifetime context, captured in Serve. It is
 	// the context handed to RPCs that spawn work OUTLIVING the HTTP
@@ -170,6 +172,15 @@ func WithAuthSession(s *authbroker.Session) ServerOption {
 // the tool layer writes to.
 func WithElicitAPI(e elicitview.ElicitAPI) ServerOption {
 	return func(srv *Server) { srv.elicit = e }
+}
+
+// WithConnectors wires the served-mode connector supervisor so the
+// read-only Connectors_List / Connectors_Status RPC methods (spec 091
+// D11) can report the whitelist, per-connector boot outcomes, and live
+// health. When nil (default — tests, host-style embedding) both methods
+// answer as "not provisioned".
+func WithConnectors(sup *connectors.Supervisor) ServerOption {
+	return func(srv *Server) { srv.connectors = sup }
 }
 
 // WithStreamQueueCap overrides the per-WebSocket-client frame queue depth
@@ -713,6 +724,21 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 	// dialog that was open before the connection was lost.
 	case "Elicit_ListPending":
 		return s.elicitAPI().ListPending(ctx)
+
+	// ── connectors (spec 091 D11) ────────────────────────────────────
+	//
+	// READ-ONLY. The connector whitelist is host policy: management
+	// (install / uninstall / import / key entry) stays host-side, so no
+	// write method exists here and none should be added. provisioned:
+	// false lets the UI say "connectors not provisioned" instead of
+	// rendering an empty list as if the operator had granted nothing on
+	// purpose (FR-004's block-all-by-absence is the COMMON legacy case).
+
+	case "Connectors_List":
+		return s.connectorsList(ctx), nil
+
+	case "Connectors_Status":
+		return s.connectorsStatus(ctx), nil
 
 	// LLM_ListProviders is READ-ONLY provider state. It exists so a served
 	// harness inside a Kenaz workbench can tell its user the truth about

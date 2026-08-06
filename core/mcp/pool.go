@@ -14,6 +14,14 @@ type ServerSpec struct {
 	// populated when Transport=="sse".
 	PostURL string            `json:"post_url,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
+	// IsolateEnv, when true, spawns stdio children with an EXPLICIT
+	// environment: a minimal base (PATH, HOME, …) plus Env — nothing
+	// inherited from the harness process. Served-mode connectors set it
+	// (spec 091 D6): the served process env carries every whitelisted
+	// connector's namespaced credentials, and a child must never see a
+	// sibling's secret. Host mode leaves it false (full inherit,
+	// unchanged behaviour).
+	IsolateEnv bool `json:"isolate_env,omitempty"`
 	// HeadersTemplate carries static HTTP headers for the http and sse
 	// transports. Values may contain ${ENV_VAR} tokens that the factory
 	// substitutes from Env at connection-open time. The Authorization

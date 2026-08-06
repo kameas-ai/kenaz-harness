@@ -889,9 +889,52 @@ jobs:
             frontend/kenaz-harness-served-spa.tar.gz.sha256
           if-no-files-found: error
 
+  # ────────────────────────────────────────────────────────────────────────────
+  # mcp-registry: publishes core/mcp/recipes/registry.json VERBATIM as the
+  # release asset mcp-registry.json (spec 091 D1 /
+  # ADR-connector-catalog-consumption). kenaz vendors this asset checked-in
+  # (internal/connector/catalog/) pinned to harnessServedVersion; the CI
+  # parity gate over there fails on drift. No transform happens here — a
+  # transform in CI would be a second authoring surface. The artifact name
+  # matches the release job's `kenaz-harness-*` download pattern so the
+  # existing `gh release upload dist-flat/*` sweeps it in; the docs-site
+  # manifest builder skips it (no os-arch suffix), same as the SPA asset.
+  # ────────────────────────────────────────────────────────────────────────────
+  mcp-registry:
+    name: MCP registry release asset
+    needs: [resolve-env, derive-version]
+    # Prod releases only — same gating as served-spa: the image bake and
+    # the kenaz vendoring pin stable tags.
+    if: needs.resolve-env.outputs.target_env == 'prod'
+    runs-on: [self-hosted, Linux, ARM64, ci-fast]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          # workflow_dispatch runs against the default branch; export the
+          # registry from the tagged tree, not main.
+          ref: ${{ needs.derive-version.outputs.version }}
+
+      - name: stage registry asset (verbatim)
+        run: |
+          set -euo pipefail
+          test -f core/mcp/recipes/registry.json
+          cp core/mcp/recipes/registry.json mcp-registry.json
+          sha256sum mcp-registry.json > mcp-registry.json.sha256
+          ls -la mcp-registry.json*
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kenaz-harness-mcp-registry
+          path: |
+            mcp-registry.json
+            mcp-registry.json.sha256
+          if-no-files-found: error
+
   release:
     name: Publish GitHub Release
-    needs: [resolve-env, derive-version, build, served-spa]
+    needs: [resolve-env, derive-version, build, served-spa, mcp-registry]
     # Only create/update a GitHub Release for prod-bound triggers.
     # dev (main push) and stage (rc tag) publish to S3 only.
     if: needs.resolve-env.outputs.target_env == 'prod'

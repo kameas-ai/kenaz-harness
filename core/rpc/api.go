@@ -55,6 +55,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/logstore"
 	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/connectors"
 	harnessmcp "github.com/kameas-ai/kenaz-harness/core/mcp/builtin/harness"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/dispatch"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
@@ -918,6 +919,14 @@ type options struct {
 	// hostProviders are provider profiles supplied by the surrounding
 	// control plane. See WithHostProviders.
 	hostProviders []corellm.ProviderProfile
+
+	// servedConnectors is the served-mode connector supervisor. See
+	// WithServedConnectors.
+	servedConnectors *connectors.Supervisor
+
+	// connectorTokens is the broker-backed token source for OAuth
+	// connectors. See WithConnectorTokens.
+	connectorTokens tools.ConnectorTokenSource
 }
 
 // WithHostProviders seeds provider profiles that the surrounding control
@@ -940,6 +949,27 @@ type options struct {
 func WithHostProviders(profiles []corellm.ProviderProfile) Option {
 	return func(o *options) { o.hostProviders = profiles }
 }
+
+// WithServedConnectors installs the served-mode connector supervisor
+// (spec 091). When set, the persisted-enabled MCP recipe bootstrap is
+// REPLACED by the supervisor's whitelist-driven bootstrap — the profile
+// whitelist is the only thing that enables a connector in served mode
+// (FR-004) — and the dispatch pool's call observer is wired for the
+// FR-014 connector.tool_call ledger events.
+//
+// The DESKTOP path never passes this option; host behaviour is unchanged.
+func WithServedConnectors(sup *connectors.Supervisor) Option {
+	return func(o *options) { o.servedConnectors = sup }
+}
+
+// WithConnectorTokens installs the broker-backed token source the tools
+// view's OAuth bearer injection falls back to when a recipe has no
+// locally-stored credential (served mode, spec 091 D8). The DESKTOP path
+// never passes this option.
+func WithConnectorTokens(src tools.ConnectorTokenSource) Option {
+	return func(o *options) { o.connectorTokens = src }
+}
+
 
 func New(c *core.Core, opts ...Option) *API {
 	var opt options
@@ -1478,19 +1508,38 @@ func New(c *core.Core, opts ...Option) *API {
 		// context-sync engine and other core consumers can call both
 		// stdio and remote (http/sse) servers transparently.
 		c.SetMCP(a.dispatchPool)
-		// Persisted-recipes bootstrap — Core.Start invokes this once
-		// Storage() is up, so the pool is populated before the chat
-		// surface accepts a turn (FR-030).
-		// Pass the concrete stdio pool here so the bootstrap path only
-		// re-opens stdio recipes (it uses pool.Open(stdioSpecs)); remote
-		// recipes are re-opened through the tools view's InstallRecipe
-		// which already uses the dispatch pool's OpenOne.
-		c.SetMCPRecipeBootstrap(makeMCPRecipeBootstrap(c, a.stdioPool, stack.secrets, a.promptRegistry, buildCedarEngineOrNil(c.DataDir())))
+		if opt.servedConnectors != nil {
+			// Served mode (spec 091): the profile-whitelist connector
+			// supervisor REPLACES the persisted-enabled bootstrap —
+			// the whitelist is the only enable path (FR-004). The call
+			// observer feeds the FR-014 connector.tool_call ledger
+			// events (metadata only; no arguments cross).
+			opt.servedConnectors.SetPool(a.dispatchPool)
+			a.dispatchPool.SetCallObserver(opt.servedConnectors.ObserveToolCall)
+			c.SetMCPRecipeBootstrap(opt.servedConnectors.Bootstrap)
+		} else {
+			// Persisted-recipes bootstrap — Core.Start invokes this once
+			// Storage() is up, so the pool is populated before the chat
+			// surface accepts a turn (FR-030).
+			// Pass the concrete stdio pool here so the bootstrap path only
+			// re-opens stdio recipes (it uses pool.Open(stdioSpecs)); remote
+			// recipes are re-opened through the tools view's InstallRecipe
+			// which already uses the dispatch pool's OpenOne.
+			c.SetMCPRecipeBootstrap(makeMCPRecipeBootstrap(c, a.stdioPool, stack.secrets, a.promptRegistry, buildCedarEngineOrNil(c.DataDir())))
+		}
+	}
+	// Late-wire the health pool onto the mcp view (constructed before the
+	// transport pools exist) so HealthSnapshot reflects live recipe state —
+	// the served Connectors_List/Status surface reads it (spec 091 D11).
+	if a.dispatchPool != nil {
+		if mcpImpl, ok := a.mcpAPI.(*mcp.API); ok {
+			mcpImpl.SetHealthPool(a.dispatchPool)
+		}
 	}
 	// Pass the dispatch pool as the tools-view PoolController so
 	// InstallRecipe/UninstallRecipe route http/sse recipes to the right
 	// transport sub-pool.
-	a.toolsAPI = newToolsAPI(c, a.dispatchPool, stack.secrets, a.promptRegistry, a.cedarPolicyAPI)
+	a.toolsAPI = newToolsAPI(c, a.dispatchPool, stack.secrets, a.promptRegistry, a.cedarPolicyAPI, opt.connectorTokens)
 	// Register the fsrequest built-in after toolsAPI is wired so the
 	// tool's delegate can be the real (non-stub) implementation. The
 	// tool is registered unconditionally; the EnabledFilter gates
@@ -3268,6 +3317,14 @@ func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secr
 				logging.L().Warn("rpc.mcp_bootstrap.unknown_recipe", "recipe_id", entry.ID)
 				continue
 			}
+			// Allow-list gate (spec 091 FR-004): bootstrap is a load
+			// path — a persisted-enabled recipe outside the active
+			// allow-list is skipped, not spawned. No-op in host mode
+			// with no fleet allow-list (nil filter = unrestricted).
+			if !recipes.IsAllowed(entry.ID) {
+				logging.L().Warn("rpc.mcp_bootstrap.blocked_by_allowlist", "recipe_id", entry.ID)
+				continue
+			}
 			// Cedar credential gate (WP05): recipes with env keys trigger
 			// the mcp_spawn gate. The gate fires best-effort here —
 			// promptRegistry nil = default-allow (no engine wired at
@@ -3316,7 +3373,7 @@ func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secr
 // Returns the stub when c is nil — the test harness path constructs
 // rpc.New(nil) and we keep the chassis bootable without crashing on
 // the catalog access.
-func newToolsAPI(c *core.Core, pool tools.PoolController, secretsBackend *secrets.MemoryBackend, promptReg *cedar.Registry, cedarPolicyAPI cedarpolicyview.CedarPolicyAPI) tools.ToolsAPI {
+func newToolsAPI(c *core.Core, pool tools.PoolController, secretsBackend *secrets.MemoryBackend, promptReg *cedar.Registry, cedarPolicyAPI cedarpolicyview.CedarPolicyAPI, connectorTokens tools.ConnectorTokenSource) tools.ToolsAPI {
 	if c == nil {
 		return &stubTools{}
 	}
@@ -3338,6 +3395,9 @@ func newToolsAPI(c *core.Core, pool tools.PoolController, secretsBackend *secret
 		Forgetter:      &keychainForgetter{backend: secretsBackend},
 		PromptRegistry: promptReg,
 		CedarPolicy:    cedarPolicyAPI,
+		// Served mode only (spec 091 D8): broker-backed OAuth fallback.
+		// nil on the desktop path — behaviour unchanged.
+		ConnectorTokens: connectorTokens,
 	}
 	return tools.New(cfg)
 }

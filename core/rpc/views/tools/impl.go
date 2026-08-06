@@ -126,6 +126,20 @@ type Config struct {
 	// PromptRegistry is the Cedar interactive-prompt registry used by
 	// RequestAdditionalAllowedDir. When nil the call returns an error.
 	PromptRegistry *cedar.Registry
+	// ConnectorTokens mints host-brokered access tokens for whitelisted
+	// OAuth connectors (spec 091 D8). Served mode only; nil (the desktop
+	// default) disables the fallback and OAuth recipes rely solely on
+	// locally-stored credentials.
+	ConnectorTokens ConnectorTokenSource
+}
+
+// ConnectorTokenSource is the broker-backed token seam injectOAuthBearer
+// falls back to when an OAuth recipe has no locally-stored credential.
+// *authbroker.ConnectorTokens satisfies it.
+type ConnectorTokenSource interface {
+	// ConnectorToken returns a short-lived access token for recipeID.
+	// Callers MUST NOT log the returned value.
+	ConnectorToken(ctx context.Context, recipeID string) (string, error)
 }
 
 // API is the concrete ToolsAPI implementation.
@@ -221,6 +235,14 @@ func (a *API) InstallRecipe(ctx context.Context, id string, env map[string]strin
 	recipe, ok := a.cfg.Catalog.Get(id)
 	if !ok {
 		return stdio.RecipeStatus{}, fmt.Errorf("%w: %q", recipes.ErrRecipeNotFound, id)
+	}
+
+	// Allow-list gate (spec 091 FR-004): install is an enable path, so a
+	// recipe outside the active allow-list must be refused before any
+	// side effect. Host mode with no fleet allow-list is unrestricted
+	// (nil filter); served mode is block-all unless whitelisted.
+	if !recipes.IsAllowed(id) {
+		return stdio.RecipeStatus{}, fmt.Errorf("tools: recipe %q is not permitted by the active MCP allow-list", id)
 	}
 
 	// Validate required env keys before any side-effects.

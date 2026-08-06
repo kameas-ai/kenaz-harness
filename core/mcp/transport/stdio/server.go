@@ -20,6 +20,8 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"slices"
+	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -1115,4 +1117,53 @@ func mergeEnv(extra map[string]string) []string {
 		}
 	}
 	return out
+}
+
+// childEnv builds the child process environment for a spawn spec:
+// inherit-and-merge by default, explicit minimal base + spec.Env when
+// IsolateEnv is set (spec 091 D6).
+func childEnv(spec SpawnSpec) []string {
+	if spec.IsolateEnv {
+		return isolatedEnv(spec.Env)
+	}
+	return mergeEnv(spec.Env)
+}
+
+// isolatedBaseEnvKeys is the minimal base a spawned server still needs to
+// function (binary resolution, home-relative caches, locale). Everything
+// else — in particular every KENAZ_* / MCP_* credential grant in the
+// served harness's own environment — is withheld.
+var isolatedBaseEnvKeys = []string{
+	"PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "TERM", "TZ",
+}
+
+// isolatedEnv builds an EXPLICIT child environment: the minimal base
+// above (taken from the process env when set) plus extra. extra wins over
+// the base on key collision; an empty extra value withholds the key
+// entirely (mirroring mergeEnv's "empty clears" semantic). The result is
+// deterministic and duplicate-free — no other process env entry leaks
+// into the child.
+func isolatedEnv(extra map[string]string) []string {
+	out := make([]string, 0, len(isolatedBaseEnvKeys)+len(extra))
+	for _, k := range isolatedBaseEnvKeys {
+		if ev, hasOverride := extra[k]; hasOverride {
+			if ev != "" {
+				out = append(out, k+"="+ev)
+			}
+			continue
+		}
+		if v, ok := os.LookupEnv(k); ok {
+			out = append(out, k+"="+v)
+		}
+	}
+	// Remaining extra keys, sorted for a deterministic argv-adjacent shape.
+	rest := make([]string, 0, len(extra))
+	for k, v := range extra {
+		if v == "" || slices.Contains(isolatedBaseEnvKeys, k) {
+			continue
+		}
+		rest = append(rest, k+"="+v)
+	}
+	sort.Strings(rest)
+	return append(out, rest...)
 }

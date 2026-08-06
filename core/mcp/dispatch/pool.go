@@ -71,6 +71,12 @@ type Pool struct {
 	// Guarded by mu.
 	mu        sync.RWMutex
 	ownership map[string]string // id → "stdio" | "http" | "sse"
+
+	// callObserver, when set, is invoked with (server, tool) on every
+	// Call dispatch. Metadata only — arguments are never passed. Used by
+	// the served connector supervisor for FR-014 connector.tool_call
+	// ledger events. Guarded by mu.
+	callObserver func(server, tool string)
 }
 
 // Options bundles the three sub-pools. Nil entries are tolerated;
@@ -217,11 +223,24 @@ func (d *Pool) Tools(ctx context.Context) ([]coremcp.Tool, error) {
 	return out, nil
 }
 
+// SetCallObserver installs a metadata-only observer invoked with
+// (server, tool) on every Call dispatch. Pass nil to clear. The observer
+// never sees call arguments or results.
+func (d *Pool) SetCallObserver(fn func(server, tool string)) {
+	d.mu.Lock()
+	d.callObserver = fn
+	d.mu.Unlock()
+}
+
 // Call dispatches tools/call to the sub-pool that opened server.
 func (d *Pool) Call(ctx context.Context, server, tool string, args json.RawMessage) (json.RawMessage, error) {
 	d.mu.RLock()
 	tag, ok := d.ownership[server]
+	observer := d.callObserver
 	d.mu.RUnlock()
+	if observer != nil {
+		observer(server, tool)
+	}
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", stdio.ErrServerNotFound, server)
 	}
