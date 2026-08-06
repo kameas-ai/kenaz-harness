@@ -149,6 +149,7 @@ func (p *Pool) openOne(ctx context.Context, spec coremcp.ServerSpec) error {
 		ID:               spec.Name,
 		Command:          spec.Command,
 		Env:              spec.Env,
+		IsolateEnv:       spec.IsolateEnv,
 		FirstByteTimeout: p.opts.FirstByteTimeout,
 		InitTimeout:      p.opts.InitTimeout,
 		PingPeriod:       p.opts.PingPeriod,

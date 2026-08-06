@@ -125,7 +125,7 @@ func (c *Connection) Open(ctx context.Context) error {
 	// caller's context. The handshake above us still respects ctx
 	// via doInitialize / one-shot deadlines.
 	cmd := exec.Command(spec.Command[0], spec.Command[1:]...)
-	cmd.Env = mergeEnv(spec.Env)
+	cmd.Env = childEnv(spec)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
