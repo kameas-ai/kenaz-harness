@@ -52,12 +52,12 @@ func (c captureConn) Write(b []byte) (int, error) {
 	*c.buf = append(*c.buf, b...)
 	return len(b), nil
 }
-func (c captureConn) Close() error                       { return nil }
-func (c captureConn) LocalAddr() net.Addr                { return nil }
-func (c captureConn) RemoteAddr() net.Addr               { return nil }
-func (c captureConn) SetDeadline(time.Time) error        { return nil }
-func (c captureConn) SetReadDeadline(time.Time) error    { return nil }
-func (c captureConn) SetWriteDeadline(time.Time) error   { return nil }
+func (c captureConn) Close() error                     { return nil }
+func (c captureConn) LocalAddr() net.Addr              { return nil }
+func (c captureConn) RemoteAddr() net.Addr             { return nil }
+func (c captureConn) SetDeadline(time.Time) error      { return nil }
+func (c captureConn) SetReadDeadline(time.Time) error  { return nil }
+func (c captureConn) SetWriteDeadline(time.Time) error { return nil }
 
 // captureLedger returns an enabled emitter whose emitted NDJSON lines can
 // be decoded from the shared buffer.
@@ -146,7 +146,7 @@ func TestSupervisor_Bootstrap(t *testing.T) {
 	pool := &fakePool{}
 	ledger, drain := captureLedger()
 	env := map[string]string{
-		"MCP_DATADOG__DD_API_KEY":    "dd-secret",
+		"MCP_DATADOG__DD_API_KEY":        "dd-secret",
 		"MCP_GOOGLE_DRIVE__GDRIVE_TOKEN": "gd-secret",
 	}
 	sup := NewSupervisor(SupervisorConfig{

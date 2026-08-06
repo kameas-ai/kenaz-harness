@@ -117,9 +117,9 @@ type Server struct {
 	staticFS    fs.FS // embedded dist-served bundle; nil → 404 for static paths
 	log         *slog.Logger
 	srv         *http.Server
-	authSession *authbroker.Session  // nil when serve mode is not wired with auth (tests / anonymous)
-	elicit      elicitview.ElicitAPI // nil → falls back to api.Elicit(); injected for a stable pending surface
-	queueCap    int                  // per-WS-client frame queue depth; 0 → defaultStreamQueueCap
+	authSession *authbroker.Session    // nil when serve mode is not wired with auth (tests / anonymous)
+	elicit      elicitview.ElicitAPI   // nil → falls back to api.Elicit(); injected for a stable pending surface
+	queueCap    int                    // per-WS-client frame queue depth; 0 → defaultStreamQueueCap
 	connectors  *connectors.Supervisor // nil → Connectors_* report "not provisioned" (spec 091 D11)
 
 	// baseCtx is the server's lifetime context, captured in Serve. It is
