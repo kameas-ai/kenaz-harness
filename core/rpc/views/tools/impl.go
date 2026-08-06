@@ -223,6 +223,14 @@ func (a *API) InstallRecipe(ctx context.Context, id string, env map[string]strin
 		return stdio.RecipeStatus{}, fmt.Errorf("%w: %q", recipes.ErrRecipeNotFound, id)
 	}
 
+	// Allow-list gate (spec 091 FR-004): install is an enable path, so a
+	// recipe outside the active allow-list must be refused before any
+	// side effect. Host mode with no fleet allow-list is unrestricted
+	// (nil filter); served mode is block-all unless whitelisted.
+	if !recipes.IsAllowed(id) {
+		return stdio.RecipeStatus{}, fmt.Errorf("tools: recipe %q is not permitted by the active MCP allow-list", id)
+	}
+
 	// Validate required env keys before any side-effects.
 	for _, key := range recipe.EnvKeys {
 		if !key.Required {

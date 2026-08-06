@@ -3268,6 +3268,14 @@ func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secr
 				logging.L().Warn("rpc.mcp_bootstrap.unknown_recipe", "recipe_id", entry.ID)
 				continue
 			}
+			// Allow-list gate (spec 091 FR-004): bootstrap is a load
+			// path — a persisted-enabled recipe outside the active
+			// allow-list is skipped, not spawned. No-op in host mode
+			// with no fleet allow-list (nil filter = unrestricted).
+			if !recipes.IsAllowed(entry.ID) {
+				logging.L().Warn("rpc.mcp_bootstrap.blocked_by_allowlist", "recipe_id", entry.ID)
+				continue
+			}
 			// Cedar credential gate (WP05): recipes with env keys trigger
 			// the mcp_spawn gate. The gate fires best-effort here —
 			// promptRegistry nil = default-allow (no engine wired at

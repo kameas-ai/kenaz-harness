@@ -21,6 +21,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core"
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/connectors"
 	coremenus "github.com/kameas-ai/kenaz-harness/core/menu"
 	"github.com/kameas-ai/kenaz-harness/core/paths"
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
@@ -343,6 +344,15 @@ func runServeMode(listenAddr string) {
 		logging.Configure(logDir)
 	}
 	serveLog.Info("harness.serve.boot", "pid", os.Getpid(), "version", Version, "data_dir", dataDir)
+
+	// Spec 091 FR-004: served mode inverts the host-mode allow-all MCP
+	// default. The whitelist (KENAZ_MCP_ALLOWLIST) is parsed and applied
+	// BEFORE core boot so no recipe load can precede it; absent/empty/
+	// malformed all leave block-all standing. Mirrors cmd/harness-served —
+	// both served entry points must agree (Spec 078 precedent). The
+	// DESKTOP path never runs this: host mode keeps nil = unrestricted.
+	mcpProv := connectors.ProvisionFromEnv(os.Getenv, serveLog)
+	_ = mcpProv
 
 	c, err := core.New(core.Options{
 		DataDir:      dataDir,

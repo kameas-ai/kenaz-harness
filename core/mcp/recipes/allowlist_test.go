@@ -98,3 +98,63 @@ func TestGlobalAllowlist_ApplyFleetAllowlist(t *testing.T) {
 		t.Error("slack should be allowed after clearing")
 	}
 }
+
+// TestApplyServedAllowlist_SealsAgainstFleetWrites verifies the spec 091
+// FR-004 sole-writer rule: once the served (profile-derived) allow-list is
+// installed, a fleet-poller write must NOT replace it — never a silent
+// last-writer-wins on the process-global security singleton.
+func TestApplyServedAllowlist_SealsAgainstFleetWrites(t *testing.T) {
+	t.Cleanup(func() { globalAllowlist = AllowlistFilter{} })
+
+	ApplyServedAllowlist([]string{"datadog"})
+	if !AllowlistSealed() {
+		t.Fatal("AllowlistSealed() = false after ApplyServedAllowlist")
+	}
+	if !IsAllowed("datadog") || IsAllowed("slack") {
+		t.Fatal("served allow-list not in force")
+	}
+
+	// A fleet write must be ignored in every direction: widening,
+	// narrowing, and clearing.
+	ApplyFleetAllowlist([]string{"slack"})
+	if IsAllowed("slack") {
+		t.Error("fleet write widened a sealed allow-list")
+	}
+	ApplyFleetAllowlist(nil)
+	if IsAllowed("slack") {
+		t.Error("fleet nil write cleared a sealed allow-list")
+	}
+	if !IsAllowed("datadog") {
+		t.Error("sealed allow-list lost its own entries")
+	}
+}
+
+// TestApplyServedAllowlist_NilMeansBlockAll verifies the inversion: the
+// served entry point can never re-open the host-mode nil=unrestricted
+// meaning.
+func TestApplyServedAllowlist_NilMeansBlockAll(t *testing.T) {
+	t.Cleanup(func() { globalAllowlist = AllowlistFilter{} })
+
+	ApplyServedAllowlist(nil)
+	if IsAllowed("anything") {
+		t.Error("ApplyServedAllowlist(nil) must mean block-all, not unrestricted")
+	}
+}
+
+// TestApplyServedAllowlist_Recallable verifies the served boot path may
+// re-apply (idempotent boot) and the seal persists.
+func TestApplyServedAllowlist_Recallable(t *testing.T) {
+	t.Cleanup(func() { globalAllowlist = AllowlistFilter{} })
+
+	ApplyServedAllowlist([]string{"github"})
+	ApplyServedAllowlist([]string{"slack"})
+	if IsAllowed("github") {
+		t.Error("stale served entry survived re-apply")
+	}
+	if !IsAllowed("slack") {
+		t.Error("re-applied served entry not allowed")
+	}
+	if !AllowlistSealed() {
+		t.Error("seal lost across re-apply")
+	}
+}

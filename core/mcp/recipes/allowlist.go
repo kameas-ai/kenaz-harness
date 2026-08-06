@@ -13,6 +13,7 @@
 package recipes
 
 import (
+	"log"
 	"sync"
 )
 
@@ -22,6 +23,7 @@ type AllowlistFilter struct {
 	mu     sync.RWMutex
 	active bool              // true when a fleet allow-list is in effect
 	ids    map[string]bool   // set of allowed recipe IDs
+	sealed bool              // true in served mode — fleet writes are ignored
 }
 
 // globalAllowlist is the process-level singleton consulted by IsAllowed.
@@ -33,9 +35,41 @@ var globalAllowlist AllowlistFilter
 // Passing a non-nil empty slice activates block-all mode (no recipes allowed).
 //
 // This function is called by the fleet config poller after each successful
-// bundle apply. It is the only write path for the global allow-list.
+// bundle apply. It is the only write path for the global allow-list in HOST
+// mode. In SERVED mode the profile-derived whitelist installed via
+// ApplyServedAllowlist is the sole writer (spec 091 FR-004 / the
+// ADR-connector-catalog-consumption sole-writer rule): once the allow-list
+// is sealed, calls here are ignored — never a silent last-writer-wins on a
+// process-global security singleton.
 func ApplyFleetAllowlist(allowedIDs []string) {
+	if globalAllowlist.Sealed() {
+		log.Printf("recipes: fleet allow-list write ignored — allow-list is sealed (served mode; profile whitelist is the sole writer)")
+		return
+	}
 	globalAllowlist.Set(allowedIDs)
+}
+
+// ApplyServedAllowlist installs the profile-derived served-mode allow-list
+// globally and seals it against fleet writes. In served mode the harness
+// default is INVERTED: absence of a whitelist means block-all, so callers
+// must pass a non-nil slice — an empty slice activates block-all mode.
+// Passing nil is coerced to the empty slice so this entry point can never
+// re-open the host-mode "nil = unrestricted" meaning (spec 091 FR-004).
+//
+// Safe to call more than once (the served boot path is the only caller);
+// each call replaces the previous served list and keeps the seal.
+func ApplyServedAllowlist(allowedIDs []string) {
+	if allowedIDs == nil {
+		allowedIDs = []string{}
+	}
+	globalAllowlist.setAndSeal(allowedIDs)
+}
+
+// AllowlistSealed reports whether the global allow-list has been sealed by
+// ApplyServedAllowlist (served mode). While sealed, ApplyFleetAllowlist is
+// a no-op.
+func AllowlistSealed() bool {
+	return globalAllowlist.Sealed()
 }
 
 // IsAllowed reports whether recipeID is permitted under the current
@@ -65,6 +99,27 @@ func (f *AllowlistFilter) Set(allowedIDs []string) {
 	for _, id := range allowedIDs {
 		f.ids[id] = true
 	}
+}
+
+// setAndSeal replaces the current allow-list and seals the filter so
+// subsequent Set calls routed through ApplyFleetAllowlist are refused.
+// allowedIDs must be non-nil (the caller coerces).
+func (f *AllowlistFilter) setAndSeal(allowedIDs []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.active = true
+	f.sealed = true
+	f.ids = make(map[string]bool, len(allowedIDs))
+	for _, id := range allowedIDs {
+		f.ids[id] = true
+	}
+}
+
+// Sealed reports whether the filter has been sealed by setAndSeal.
+func (f *AllowlistFilter) Sealed() bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.sealed
 }
 
 // IsAllowed reports whether recipeID is permitted. Returns true when no
