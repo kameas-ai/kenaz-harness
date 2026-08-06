@@ -938,8 +938,26 @@ func (r *Registry) RequestInteractive(
 		// the registry doesn't leak; if the user later clicks Resolve,
 		// the RPC returns ErrUnknownRequest and the modal's stale
 		// state is reconciled by the frontend.
-		r.cancel(id, "ctx canceled")
-		return Resolution{Decision: DecisionDeny, Reason: "ctx canceled"}, ctx.Err()
+		//
+		// cancel reports whether cancellation actually WON at the
+		// registry. That distinction is load-bearing, because both
+		// cases are reachable here: Go's select picks at random among
+		// ready cases, so a resolution delivered in the same instant
+		// the context was cancelled can land us in this branch with
+		// the decision already decided and already announced.
+		if r.cancel(id, "ctx canceled") {
+			return Resolution{Decision: DecisionDeny, Reason: "ctx canceled"}, ctx.Err()
+		}
+		// Cancellation lost: some other path removed the entry and is
+		// therefore committed to firing resolveCh. Wait for it.
+		// Synthesising a deny here instead would let the caller act on
+		// a decision NO surface was ever told about — the registry, the
+		// served modal and the host would all record the winner while
+		// the gate site quietly denied. The send is guaranteed and
+		// immediate: fire() runs under the same sync.Once that removed
+		// the entry, and resolution observers are contractually
+		// non-blocking.
+		return <-entry.resolveCh, nil
 	}
 }
 
@@ -1035,12 +1053,18 @@ func (r *Registry) timeoutFire(requestID string) {
 // Used on ctx cancellation — the caller has already returned, so a
 // channel send would deadlock. The timer is stopped so a late-firing
 // timeoutFire is a no-op.
-func (r *Registry) cancel(requestID, reason string) {
+//
+// It reports whether cancellation WON: true when this call removed the
+// entry, false when some other resolution path got there first and is
+// therefore committed to delivering a real decision. The caller needs
+// that answer to avoid synthesising a deny over a decision that already
+// won and was already announced to every surface.
+func (r *Registry) cancel(requestID, reason string) (won bool) {
 	r.mu.Lock()
 	entry, ok := r.pending[requestID]
 	if !ok {
 		r.mu.Unlock()
-		return
+		return false
 	}
 	delete(r.pending, requestID)
 	if cnt := r.perTopicCount[entry.request.Family]; cnt > 0 {
@@ -1061,6 +1085,7 @@ func (r *Registry) cancel(requestID, reason string) {
 		r.notifyResolved(r.resolvedEvent(entry.request, DecisionDeny, SourceCancelled))
 	})
 	_ = reason
+	return true
 }
 
 // fire delivers the resolution to the pending entry's channel exactly

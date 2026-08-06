@@ -374,6 +374,104 @@ func TestApprovalRace_TaskAndSurfacesAgree(t *testing.T) {
 	}
 }
 
+// A decision that WINS at the registry must be what the parked gate site acts
+// on, even when the caller's context is cancelled in the same instant.
+//
+// Go's select picks at random among ready cases, so before this was fixed the
+// gate site could return a synthesised deny while the registry, the served
+// modal and the host had all been told the approval was allowed — a task
+// denying an action every surface believes it approved, with no trace of the
+// disagreement anywhere.
+//
+// The window is widened deterministically here by holding an observer inside
+// the resolving sync.Once, so the entry is already removed from the pending
+// map while resolveCh is still empty. That is exactly the interleaving the
+// randomised race test hits intermittently.
+func TestApprovalRace_CancelMustNotOverrideAWinningDecision(t *testing.T) {
+	t.Parallel()
+	disp := newIDCapturingDispatcher()
+	reg := NewRegistry(WithDispatcher(disp), WithTimeout(time.Hour))
+
+	observerEntered := make(chan struct{})
+	release := make(chan struct{})
+	reg.AddResolutionObserver(ResolutionObserverFunc(func(ev ResolvedEvent) {
+		if ev.Source == SourceHost {
+			close(observerEntered)
+			<-release
+		}
+	}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	resCh := make(chan Resolution, 1)
+	go func() {
+		res, _ := reg.RequestInteractive(ctx, toolSurface())
+		resCh <- res
+	}()
+	req := disp.await(t)
+
+	// The decision wins the registry: the entry is deleted and the observer
+	// is notified — but the resolve channel has not been written yet.
+	go func() { _ = reg.ResolveFrom(req.RequestID, DecisionAllowOnce, SourceHost) }()
+	<-observerEntered
+
+	// Cancel now. The gate site wakes on ctx.Done, finds the entry already
+	// gone, and must WAIT for the real decision rather than deny.
+	cancel()
+	select {
+	case got := <-resCh:
+		t.Fatalf("gate site returned %q before the winning decision was delivered", got.Decision)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case got := <-resCh:
+		if got.Decision != DecisionAllowOnce {
+			t.Fatalf("gate site acted on %q while every surface was told allow_once", got.Decision)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("gate site never received the winning decision")
+	}
+	if n := reg.PendingCount(); n != 0 {
+		t.Fatalf("pending map leaked %d entries", n)
+	}
+}
+
+// The converse: when cancellation genuinely wins, the deny stands and the
+// surfaces are told `cancelled`.
+func TestApprovalCancel_WinsCleanlyWhenUncontested(t *testing.T) {
+	t.Parallel()
+	disp := newIDCapturingDispatcher()
+	obs := &recordingObserver{}
+	reg := NewRegistry(WithDispatcher(disp), WithTimeout(time.Hour))
+	reg.AddResolutionObserver(obs)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	resCh := make(chan Resolution, 1)
+	go func() {
+		res, _ := reg.RequestInteractive(ctx, toolSurface())
+		resCh <- res
+	}()
+	_ = disp.await(t)
+	cancel()
+
+	select {
+	case got := <-resCh:
+		if got.Decision != DecisionDeny {
+			t.Fatalf("cancellation produced %q", got.Decision)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("gate site never unparked on cancellation")
+	}
+	evs := obs.snapshot()
+	if len(evs) != 1 || evs[0].Source != SourceCancelled || evs[0].Decision != DecisionDeny {
+		t.Fatalf("want one cancelled/deny event, got %+v", evs)
+	}
+	if n := reg.PendingCount(); n != 0 {
+		t.Fatalf("pending map leaked %d entries", n)
+	}
+}
+
 // --- timeout is a fail-closed deny -----------------------------------------
 
 func TestApprovalTimeout_IsFailClosedDeny(t *testing.T) {
