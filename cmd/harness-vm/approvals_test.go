@@ -775,7 +775,7 @@ func TestBridge_OverflowEmitsResolvedWithoutRequested(t *testing.T) {
 		wg.Add(1)
 		go func() { defer wg.Done(); _, _ = reg.RequestInteractive(ctx, s) }()
 	}
-	waitFor(t, func() bool { return reg.PendingForFamily(cedar.FamilyFilesystem) == cedar.PromptQueueCap })
+	waitForFrames(t, rc, "task.approval_requested", cedar.PromptQueueCap)
 
 	res, _ := reg.RequestInteractive(ctx, cedar.PromptSurface{
 		FS: &cedar.FSPromptSurface{Op: "write", CanonicalPath: "/over"},
@@ -911,7 +911,7 @@ func TestApprovalBridge_UnnamedSessionUsesTheInFlightTask(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	resCh := raiseApproval(reg, ctx, fsSurface()) // no SessionID
-	waitFor(t, func() bool { return b.pendingCount() == 1 })
+	waitForFrames(t, rc, "task.approval_requested", 1)
 
 	req := firstFrameOfKind(t, rc, "task.approval_requested")
 	if req == nil || req["task_id"] != "task-only" {
@@ -921,6 +921,25 @@ func TestApprovalBridge_UnnamedSessionUsesTheInFlightTask(t *testing.T) {
 		_ = reg.ResolveFrom(p.RequestID, cedar.DecisionDeny, cedar.SourceHost)
 	}
 	<-resCh
+}
+
+// waitForFrames waits until at least n frames of kind have been WRITTEN.
+//
+// Registry state is not a proxy for wire state: RequestInteractive registers
+// the pending entry under its mutex and dispatches only after releasing it, so
+// PendingForFamily can reach the cap while several frames are still in flight.
+// Tests that read frames must wait on frames.
+func waitForFrames(t *testing.T, rc *recordingConn, kind string, n int) {
+	t.Helper()
+	waitFor(t, func() bool {
+		c := 0
+		for _, f := range rc.frames(t) {
+			if f["kind"] == kind {
+				c++
+			}
+		}
+		return c >= n
+	})
 }
 
 func firstFrameOfKind(t *testing.T, rc *recordingConn, kind string) map[string]any {
