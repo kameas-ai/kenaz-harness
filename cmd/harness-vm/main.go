@@ -136,6 +136,24 @@ func main() {
 		log.Info("kenaz-harness-vm: read surface enabled", "data_dir", readDataDir)
 	}
 
+	// Approval brokering (spec 074 task 4.C1/4.C2). The gate is the cedar
+	// prompt registry the in-process chassis ALREADY built — the same
+	// singleton every gate site and the served (:7880) permission modal use.
+	// We attach a listener to it; we do not build a second one.
+	//
+	// A failed chassis bootstrap means there is no engine in this process and
+	// therefore no gate. The capability is then never granted, and the host
+	// renders its "approvals not brokered on this workbench" state — which is
+	// the honest answer, and specifically not an empty pending list (that is
+	// indistinguishable from "nothing is waiting").
+	var connOpts []connOption
+	if promptReg := reads.promptRegistry(); promptReg != nil {
+		connOpts = append(connOpts, withApprovalRegistry(promptReg, promptReg))
+		log.Info("kenaz-harness-vm: approval brokering available (negotiate capability \"approval\")")
+	} else {
+		log.Info("kenaz-harness-vm: approval brokering unavailable (no cedar gate in this process)")
+	}
+
 	// Agent execution (Spec 058): REAL model-backed by default, resolved from
 	// the in-VM environment (agentexec.go). KENAZ_AGENT_EXEC=stub keeps the
 	// offline echo graph for CI; a real mode with no resolvable credential
@@ -163,7 +181,7 @@ func main() {
 			log.Info("kenaz-harness-vm: accept loop exiting", "reason", err)
 			return
 		}
-		go handleConn(log, conn, token, exec, ledger, audit, reads)
+		go handleConn(log, conn, token, exec, ledger, audit, reads, connOpts...)
 	}
 }
 
@@ -190,10 +208,42 @@ func (w *connWriter) send(m msg) error {
 	return err
 }
 
+// connOption configures optional per-connection dependencies. It exists as a
+// variadic tail so surfaces added after Phase 8 (spec 074's approval bridge is
+// the first) do not churn handleConn's signature — and so the pre-existing
+// call sites, tests included, keep compiling untouched.
+type connOption func(*connConfig)
+
+type connConfig struct {
+	// approvals is the process's single cedar prompt registry. nil means this
+	// process has no gate to broker, in which case the `approval` capability
+	// is never granted and the wire stays exactly as it was.
+	approvals approvalRegistry
+	// approvalGate is the registry as the engine-side park seam. Held
+	// separately because approvalRegistry deliberately excludes
+	// RequestInteractive — listening to the gate and blocking on it are
+	// different privileges.
+	approvalGate approvalGate
+}
+
+// withApprovalRegistry wires the :7881 approval surface to the process's
+// existing cedar gate. Both arguments are normally the SAME *cedar.Registry.
+func withApprovalRegistry(reg approvalRegistry, gate approvalGate) connOption {
+	return func(c *connConfig) {
+		c.approvals = reg
+		c.approvalGate = gate
+	}
+}
+
 // handleConn manages the full lifecycle of one client connection:
 // auth handshake, then a loop dispatching task messages.
-func handleConn(log *slog.Logger, conn net.Conn, token string, exec agentExecutor, ledger *ledgerEmitter, audit *auditSink, reads *readService) {
+func handleConn(log *slog.Logger, conn net.Conn, token string, exec agentExecutor, ledger *ledgerEmitter, audit *auditSink, reads *readService, opts ...connOption) {
 	defer func() { _ = conn.Close() }()
+
+	var cfg connConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
 
 	w := &connWriter{conn: conn}
 	scanner := bufio.NewScanner(conn)
@@ -225,8 +275,35 @@ func handleConn(log *slog.Logger, conn net.Conn, token string, exec agentExecuto
 			return
 		}
 	}
-	if err := w.send(msg{"kind": "auth.ok"}); err != nil {
+	// --- Capability negotiation (spec 074 task 4.C1) ---
+	//
+	// One optional key each way. A client that sends no `capabilities` gets an
+	// auth.ok with no `capabilities` — the single-key object this wire has
+	// always emitted, byte for byte. A client that asks for something this
+	// build cannot honour gets it omitted from the grant rather than echoed,
+	// because auth.ok carries the GRANTED subset, not an echo of the request.
+	granted := negotiateCapabilities(authMsg["capabilities"], map[string]bool{
+		capabilityApproval: cfg.approvals != nil,
+	})
+	authOK := msg{"kind": "auth.ok"}
+	if len(granted) > 0 {
+		authOK["capabilities"] = granted
+	}
+	if err := w.send(authOK); err != nil {
 		return
+	}
+
+	// The approval bridge exists only when `approval` was granted. Everywhere
+	// below, a nil bridge is the "not negotiated" path and emits nothing —
+	// the fail-safe direction is silence, and the gate still resolves at the
+	// harness's own served (:7880) modal regardless.
+	var approvals *approvalBridge
+	if hasCapability(granted, capabilityApproval) {
+		approvals = newApprovalBridge(w, log)
+		removeDispatcher := cfg.approvals.AddDispatcher(approvals)
+		removeObserver := cfg.approvals.AddResolutionObserver(approvals)
+		defer removeDispatcher()
+		defer removeObserver()
 	}
 
 	// --- Per-connection session: one active task at a time ---
@@ -323,8 +400,22 @@ func handleConn(log *slog.Logger, conn net.Conn, token string, exec agentExecuto
 			ctx, cancel := context.WithCancel(context.Background())
 			cancelFn = cancel
 
+			// Bind the task to the approval bridge (correlation) and put the
+			// gate on the run context so any approval point in the task path
+			// parks on the process's single cedar registry. Both are no-ops
+			// when `approval` was not negotiated.
+			endTask := func() {}
+			if approvals != nil && cfg.approvalGate != nil {
+				var gate approvalGate
+				gate, endTask = approvals.beginTask(taskID, cfg.approvalGate)
+				ctx = withApprovalGate(ctx, gate)
+			}
+
 			// Spawn the task runner. It writes via w and clears busy when done.
-			go runTask(log, w, &busy, cancel, ctx, taskID, prompt, params, presetSteps, exec, ledger, audit)
+			go func() {
+				defer endTask()
+				runTask(log, w, &busy, cancel, ctx, taskID, prompt, params, presetSteps, exec, ledger, audit)
+			}()
 
 		case "task.cancel":
 			if busy.Load() == 0 {
@@ -335,6 +426,24 @@ func handleConn(log *slog.Logger, conn net.Conn, token string, exec agentExecuto
 			// and clears busy (Bug 1 + Bug 2 fix).
 			if cancelFn != nil {
 				cancelFn()
+			}
+
+		case "task.approval_decision":
+			// Only routed when `approval` was negotiated. Unnegotiated, this
+			// kind is unknown and falls through to bad_request exactly as it
+			// did before — an old host never sends it, and a new host that
+			// sends it without negotiating gets a truthful protocol error
+			// rather than a silently-accepted decision.
+			if approvals == nil {
+				_ = w.send(msg{
+					"kind":              "task.error",
+					"code":              "bad_request",
+					"message_truncated": truncate(fmt.Sprintf("unknown kind: %q", kind), maxMessageLen),
+				})
+				continue
+			}
+			if reply, ok := approvals.handleApprovalDecision(cfg.approvals, m); ok {
+				_ = w.send(reply)
 			}
 
 		default:

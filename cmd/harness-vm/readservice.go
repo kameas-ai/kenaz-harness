@@ -28,6 +28,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kameas-ai/kenaz-harness/core"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/memory"
@@ -88,6 +89,25 @@ func newReadService(ctx context.Context, dataDir string, log *slog.Logger) (*rea
 		return nil, err
 	}
 	return &readService{api: rpc.New(c), log: log}, nil
+}
+
+// promptRegistry returns the chassis's process-singleton cedar prompt registry
+// — the gate spec 074's :7881 approval bridge attaches to. It is exposed here
+// because the read service is what bootstraps the in-process rpc.API, so this
+// is the one place in cmd/harness-vm that holds a reference to it.
+//
+// Returns nil when the chassis never bootstrapped (nil api) or was built
+// without a registry. A nil result means this process has no gate, which the
+// caller turns into "do not grant the approval capability".
+func (s *readService) promptRegistry() *cedar.Registry {
+	if s == nil || s.api == nil {
+		return nil
+	}
+	full, ok := s.api.(*rpc.API)
+	if !ok {
+		return nil
+	}
+	return full.PromptRegistry()
 }
 
 // isReadKind reports whether kind names a Phase G read RPC. handleConn uses it
