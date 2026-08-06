@@ -852,3 +852,83 @@ func TestBridge_GuestDecisionIsReportedToTheHost(t *testing.T) {
 		t.Fatalf("source = %v; want guest", resolved["source"])
 	}
 }
+
+// The registry is process-global and fans every request to every attached
+// bridge. Without a session match, two connected hosts would each report the
+// other's approvals under their own run — an operator action attributed to a
+// task that never asked for it.
+func TestApprovalBridge_DoesNotClaimAnotherRunsApproval(t *testing.T) {
+	t.Parallel()
+	bA, rcA, reg := newBridgeHarness(t, time.Hour)
+	bB := newApprovalBridge(&connWriter{conn: &recordingConn{}}, newTestLogger())
+	t.Cleanup(reg.AddDispatcher(bB))
+	t.Cleanup(reg.AddResolutionObserver(bB))
+
+	_, endA := bA.beginTask("task-A", reg)
+	defer endA()
+	_, endB := bB.beginTask("task-B", reg)
+	defer endB()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// A gate site inside task-B's run names its session.
+	surface := fsSurface()
+	surface.SessionID = "task-B"
+	resCh := raiseApproval(reg, ctx, surface)
+	waitFor(t, func() bool { return bB.pendingCount() == 1 })
+
+	if n := bA.pendingCount(); n != 0 {
+		t.Fatalf("bridge A claimed %d of task-B's approvals", n)
+	}
+	for _, f := range rcA.frames(t) {
+		if strings.HasPrefix(f["kind"].(string), "task.approval") {
+			t.Fatalf("bridge A emitted %v for an approval belonging to task-B", f)
+		}
+	}
+
+	for _, p := range reg.ListPending() {
+		_ = reg.ResolveFrom(p.RequestID, cedar.DecisionDeny, cedar.SourceHost)
+	}
+	<-resCh
+	for _, f := range rcA.frames(t) {
+		if strings.HasPrefix(f["kind"].(string), "task.approval") {
+			t.Fatalf("bridge A emitted %v on resolution of task-B's approval", f)
+		}
+	}
+	waitFor(t, func() bool { return bB.pendingCount() == 0 })
+}
+
+// A gate site that names no session still correlates to the connection's
+// in-flight task — the busy-flag fallback, which is what every pre-074 gate
+// site will hit until it starts populating SessionID.
+func TestApprovalBridge_UnnamedSessionUsesTheInFlightTask(t *testing.T) {
+	t.Parallel()
+	b, rc, reg := newBridgeHarness(t, time.Hour)
+	_, end := b.beginTask("task-only", reg)
+	defer end()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	resCh := raiseApproval(reg, ctx, fsSurface()) // no SessionID
+	waitFor(t, func() bool { return b.pendingCount() == 1 })
+
+	req := firstFrameOfKind(t, rc, "task.approval_requested")
+	if req == nil || req["task_id"] != "task-only" {
+		t.Fatalf("unnamed approval correlated to %v", req)
+	}
+	for _, p := range reg.ListPending() {
+		_ = reg.ResolveFrom(p.RequestID, cedar.DecisionDeny, cedar.SourceHost)
+	}
+	<-resCh
+}
+
+func firstFrameOfKind(t *testing.T, rc *recordingConn, kind string) map[string]any {
+	t.Helper()
+	for _, f := range rc.frames(t) {
+		if f["kind"] == kind {
+			return f
+		}
+	}
+	return nil
+}

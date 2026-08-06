@@ -440,10 +440,16 @@ Unnegotiated, `task.approval_decision` is an unknown kind and earns the same
   approval-pause is not pause**: it is a parked goroutine with a deadline and
   exactly one exit — engine-internal, not durable, not addressable. No
   pause/resume verb is added to any wire.
-- **Task↔approval correlation** binds the approval to the connection's
-  in-flight `task_id`. This is unambiguous only because this surface enforces
-  one task per connection via its busy flag. **If that limit is ever lifted,
-  this binding MUST be revisited in the same change** — it is load-bearing.
+- **Task↔approval correlation.** cedar keys approvals by
+  `PromptSurface.SessionID` and this wire speaks `task_id`. The binding is: a
+  gate site that names its session owns the match, and only a gate site that
+  names no session falls back to "whatever task this connection is running".
+  That fallback is the busy-flag assumption and is safe only for one task per
+  connection — **if that limit is ever lifted, the fallback MUST be revisited
+  in the same change.** The session match is what keeps a second dispatch
+  connection from claiming the first one's approvals: the registry is
+  process-global and fans every request to every attached bridge. A gate site
+  in the task path SHOULD set `SessionID` to the task id.
   A corollary: an approval raised while the connection has no task in flight
   cannot be attributed and is **not forwarded**; it resolves at `:7880` as it
   always did. Speculating a `task_id` would attribute an action to the wrong

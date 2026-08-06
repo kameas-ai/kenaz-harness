@@ -154,6 +154,36 @@ func newApprovalBridge(w *connWriter, log *slog.Logger) *approvalBridge {
 	return &approvalBridge{w: w, log: log, pending: map[string]string{}}
 }
 
+// correlate maps an approval to the task_id this connection should report it
+// under, reporting false when the approval is not this connection's to speak
+// for.
+//
+// cedar keys approvals by PromptSurface.SessionID and :7881 speaks task_id, so
+// the binding is: a gate site that names its session owns the match, and only
+// a gate site that names NO session falls back to "whatever task this
+// connection is running".
+//
+// The fallback is the busy-flag assumption, and it is only safe for one task
+// per connection. The SessionID match is what keeps a second dispatch
+// connection from claiming the first one's approvals: the registry is
+// process-global and fans every request to every attached bridge, so without
+// this check two connected hosts would each report the other's approvals under
+// their own run. A gate site in the task path SHOULD therefore set
+// SessionID to the task id.
+func (b *approvalBridge) correlate(sessionID string) (taskID string, ok bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.taskID == "" {
+		// Nothing in flight here — there is no id to attribute this to, and
+		// speculating one would pin an action on the wrong run.
+		return "", false
+	}
+	if sessionID != "" && sessionID != b.taskID {
+		return "", false // another run's approval
+	}
+	return b.taskID, true
+}
+
 // Dispatch implements cedar.PromptDispatcher: it is the SECOND fan-out target
 // on the existing gate, running alongside whatever the served surface
 // registered. topic is ignored — the family already rides the payload, and
@@ -162,14 +192,11 @@ func (b *approvalBridge) Dispatch(_ context.Context, _ string, payload cedar.Pen
 	if b == nil {
 		return
 	}
-	b.mu.Lock()
-	taskID := b.taskID
-	if taskID == "" {
-		// No task in flight on this connection — see the correlation note on
-		// approvalBridge. Silence, not a speculated task_id.
-		b.mu.Unlock()
+	taskID, ok := b.correlate(payload.Surface.SessionID)
+	if !ok {
 		return
 	}
+	b.mu.Lock()
 	b.pending[payload.RequestID] = taskID
 	b.mu.Unlock()
 
@@ -209,16 +236,18 @@ func (b *approvalBridge) Resolved(ev cedar.ResolvedEvent) {
 	b.mu.Lock()
 	taskID, known := b.pending[ev.Request.RequestID]
 	delete(b.pending, ev.Request.RequestID)
+	b.mu.Unlock()
 	if !known {
 		// Queue overflow is the legitimate case: cedar denies at the cap with
-		// no dispatch at all, so we never recorded the id. Attribute it to the
-		// in-flight task so the denial is legible ("denied — too many pending
-		// approvals") rather than surfacing as an unexplained tool failure.
-		taskID = b.taskID
-	}
-	b.mu.Unlock()
-	if taskID == "" {
-		return
+		// no dispatch at all, so we never recorded the id. Correlate it the
+		// same way a request would have been, so the denial is legible
+		// ("denied — too many pending approvals") rather than surfacing as an
+		// unexplained tool failure — and so an overflow belonging to another
+		// run is not pinned on ours.
+		var ok bool
+		if taskID, ok = b.correlate(ev.Request.Surface.SessionID); !ok {
+			return
+		}
 	}
 
 	if err := b.w.send(msg{
