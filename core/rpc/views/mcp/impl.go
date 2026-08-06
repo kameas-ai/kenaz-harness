@@ -89,6 +89,16 @@ func WithHealthPool(p HealthPool) Option {
 	return func(a *API) { a.healthPool = p }
 }
 
+// SetHealthPool wires the health pool after construction. The rpc chassis
+// builds this view before the transport pools exist, so the pool is
+// attached once the dispatch pool is up (spec 091: the served
+// Connectors_List/Status surface reads HealthSnapshot).
+func (a *API) SetHealthPool(p HealthPool) {
+	a.mu.Lock()
+	a.healthPool = p
+	a.mu.Unlock()
+}
+
 // NewAPI constructs the mcp view-scoped API.
 func NewAPI(opts ...Option) *API {
 	a := &API{

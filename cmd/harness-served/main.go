@@ -99,7 +99,18 @@ func main() {
 	// runServeMode — both served entry points must agree (Spec 078
 	// precedent).
 	mcpProv := connectors.ProvisionFromEnv(os.Getenv, log)
-	_ = mcpProv
+	// The supervisor spawns whitelisted connectors at core start (it
+	// replaces the persisted-enabled recipe bootstrap via
+	// rpc.WithServedConnectors) and records per-connector outcomes for
+	// the Connectors_List / Connectors_Status read RPCs (spec 091 D11).
+	// Ledger events (FR-014) ride the reporter ingest socket when the
+	// image provides one.
+	connSup := connectors.NewSupervisor(connectors.SupervisorConfig{
+		Provisioning: mcpProv,
+		Getenv:       os.Getenv,
+		Ledger:       connectors.NewLedgerEmitterFromEnv(os.Getenv, log),
+		Logger:       log,
+	})
 
 	c, err := core.New(core.Options{
 		DataDir:      dataDir,
@@ -131,7 +142,9 @@ func main() {
 	// (Spec 078). Mirrors main.go's runServeMode — both served entry points
 	// must agree, or which binary the image happens to bake would change
 	// whether the workbench boots configured.
-	api := rpc.New(c, rpc.WithHostProviders(serve.HostProviders(os.Getenv, log)))
+	api := rpc.New(c,
+		rpc.WithHostProviders(serve.HostProviders(os.Getenv, log)),
+		rpc.WithServedConnectors(connSup))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -179,7 +192,9 @@ func main() {
 		cancel()
 	}()
 
-	srv := serve.New(api, addr, token, servedFS, log, serve.WithAuthSession(authSession))
+	srv := serve.New(api, addr, token, servedFS, log,
+		serve.WithAuthSession(authSession),
+		serve.WithConnectors(connSup))
 	if serveErr := srv.Serve(ctx); serveErr != nil && serveErr != context.Canceled {
 		log.Error("harness-served: server error", "err", serveErr)
 		os.Exit(1)

@@ -352,7 +352,18 @@ func runServeMode(listenAddr string) {
 	// both served entry points must agree (Spec 078 precedent). The
 	// DESKTOP path never runs this: host mode keeps nil = unrestricted.
 	mcpProv := connectors.ProvisionFromEnv(os.Getenv, serveLog)
-	_ = mcpProv
+	// The supervisor spawns whitelisted connectors at core start (it
+	// replaces the persisted-enabled recipe bootstrap via
+	// rpc.WithServedConnectors) and records per-connector outcomes for
+	// the Connectors_List / Connectors_Status read RPCs (spec 091 D11).
+	// Ledger events (FR-014) ride the reporter ingest socket when the
+	// image provides one.
+	connSup := connectors.NewSupervisor(connectors.SupervisorConfig{
+		Provisioning: mcpProv,
+		Getenv:       os.Getenv,
+		Ledger:       connectors.NewLedgerEmitterFromEnv(os.Getenv, serveLog),
+		Logger:       serveLog,
+	})
 
 	c, err := core.New(core.Options{
 		DataDir:      dataDir,
@@ -379,7 +390,9 @@ func runServeMode(listenAddr string) {
 	// Seed the provider the Kenaz control plane granted this workbench
 	// (Spec 078). Without this the served harness boots with an empty
 	// provider list and no in-VM way to add one.
-	api := rpc.New(c, rpc.WithHostProviders(serve.HostProviders(os.Getenv, serveLog)))
+	api := rpc.New(c,
+		rpc.WithHostProviders(serve.HostProviders(os.Getenv, serveLog)),
+		rpc.WithServedConnectors(connSup))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -417,7 +430,9 @@ func runServeMode(listenAddr string) {
 		os.Exit(1)
 	}
 
-	srv := serve.New(api, addr, token, servedFS, serveLog, serve.WithAuthSession(authSession))
+	srv := serve.New(api, addr, token, servedFS, serveLog,
+		serve.WithAuthSession(authSession),
+		serve.WithConnectors(connSup))
 	if serveErr := srv.Serve(ctx); serveErr != nil && serveErr != context.Canceled {
 		serveLog.Error("harness.serve: server error", "err", serveErr)
 		os.Exit(1)
