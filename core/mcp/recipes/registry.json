@@ -1179,6 +1179,55 @@
       "warning": "SharePoint requires a work or school Microsoft account and your Azure tenant ID (set MS365_MCP_TENANT_ID). The 'work' preset also exposes shared-mailbox and user-management tools alongside SharePoint. If your organisation's IT policy blocks the default app, set MS365_MCP_CLIENT_ID to your custom Azure AD app client ID."
     },
     {
+      "id": "excel",
+      "display_name": "Excel (Microsoft 365)",
+      "description": "Read and edit Excel workbooks stored in OneDrive via the Microsoft Graph workbook API — list worksheets, read and write ranges, and manage workbook data. Signs in with a device code in your browser on first use.",
+      "category": "productivity",
+      "aliases": [
+        "xlsx",
+        "spreadsheet",
+        "workbook",
+        "microsoft excel"
+      ],
+      "command": [
+        "npx",
+        "-y",
+        "@softeria/ms-365-mcp-server",
+        "--preset",
+        "excel"
+      ],
+      "primary_auth": "device_code",
+      "env_keys": [
+        {
+          "name": "MS365_MCP_CLIENT_ID",
+          "display": "Azure app client ID (optional — for work/school accounts)",
+          "docs_url": "https://github.com/softeria/ms-365-mcp-server#authentication",
+          "required": false
+        },
+        {
+          "name": "MS365_MCP_TENANT_ID",
+          "display": "Azure tenant ID (optional — defaults to 'common'; 'consumers' for personal)",
+          "docs_url": "https://github.com/softeria/ms-365-mcp-server#authentication",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/softeria/ms-365-mcp-server",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "First use triggers a device-code sign-in: the server prints a URL + code for you to authorize in your browser. Works on Excel files stored in OneDrive. In-workbench (served) use requires an image with the vendored Node runtime lane (US4). Word and PowerPoint have no Microsoft Graph content-editing API, so no equivalent presets exist — use the OneDrive connector for those files. First npm fetch can take 10–20 s."
+    },
+    {
       "id": "supabase",
       "display_name": "Supabase",
       "description": "Query databases, manage tables, run migrations, and access Supabase projects. Sign in with Supabase (OAuth) — no token to paste. For CI/headless environments, supply a personal access token as a fallback.",
@@ -2830,6 +2879,102 @@
       }
     },
     {
+      "id": "dynatrace",
+      "display_name": "Dynatrace",
+      "description": "Query Dynatrace observability data — problems, monitored entities, and DQL queries over Grail — via the official Dynatrace remote MCP endpoint on your environment. Authenticates with a Dynatrace platform token.",
+      "category": "observability",
+      "aliases": [
+        "apm",
+        "monitoring",
+        "davis",
+        "grail",
+        "problems"
+      ],
+      "transport": "http",
+      "url": "https://${DYNATRACE_ENVIRONMENT_NAME}.apps.dynatrace.com/platform-reserved/mcp-gateway/v0.1/servers/dynatrace-mcp/mcp",
+      "primary_auth": "keys",
+      "headers_template": {
+        "Authorization": "Bearer ${DYNATRACE_PLATFORM_TOKEN}"
+      },
+      "env_keys": [
+        {
+          "name": "DYNATRACE_ENVIRONMENT_NAME",
+          "display": "Dynatrace environment name (the <env> in <env>.apps.dynatrace.com)",
+          "docs_url": "https://docs.dynatrace.com/docs/dynatrace-intelligence/dynatrace-mcp",
+          "required": true
+        },
+        {
+          "name": "DYNATRACE_PLATFORM_TOKEN",
+          "display": "Dynatrace platform token (Account Management → Platform tokens)",
+          "docs_url": "https://docs.dynatrace.com/docs/dynatrace-intelligence/dynatrace-mcp",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.dynatrace.com/docs/dynatrace-intelligence/dynatrace-mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "The endpoint URL is environment-specific (<env>.apps.dynatrace.com). Direct remote MCP access does not support public OAuth clients — Dynatrace recommends platform tokens; tokens minted from OAuth clients are short-lived and need manual refresh."
+    },
+    {
+      "id": "splunk",
+      "display_name": "Splunk",
+      "description": "Search and analyze Splunk platform data via the official MCP Server for Splunk (streamable HTTP), installed as a Splunkbase app on your Splunk Enterprise or Splunk Cloud Platform deployment.",
+      "category": "observability",
+      "aliases": [
+        "siem",
+        "logs",
+        "spl",
+        "search",
+        "enterprise security"
+      ],
+      "transport": "http",
+      "url": "https://${SPLUNK_MCP_ENDPOINT}",
+      "primary_auth": "keys",
+      "headers_template": {
+        "Authorization": "Bearer ${SPLUNK_MCP_TOKEN}"
+      },
+      "env_keys": [
+        {
+          "name": "SPLUNK_MCP_ENDPOINT",
+          "display": "Splunk MCP endpoint host + path, without https:// (shown in the Splunk MCP Server app)",
+          "docs_url": "https://help.splunk.com/en/splunk-cloud-platform/mcp-server-for-splunk-platform",
+          "required": true
+        },
+        {
+          "name": "SPLUNK_MCP_TOKEN",
+          "display": "Encrypted MCP token (generated in the Splunk MCP Server app)",
+          "docs_url": "https://help.splunk.com/en/splunk-cloud-platform/mcp-server-for-splunk-platform",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://help.splunk.com/en/splunk-cloud-platform/mcp-server-for-splunk-platform",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Requires the Splunk MCP Server app (Splunkbase 7931) installed on your Splunk Enterprise (9.3+) or Splunk Cloud Platform deployment. Copy the endpoint and an encrypted MCP token from the app — encrypted tokens work only for MCP, not for direct Splunk API calls."
+    },
+    {
       "id": "circleci",
       "display_name": "CircleCI",
       "description": "Query CircleCI pipelines, workflows, jobs, and build artifacts. Sign in with your CircleCI account — no token to paste.",
@@ -3290,6 +3435,76 @@
         "default": false
       },
       "warning": "One-time Google OAuth setup required: create or reuse a Google Cloud OAuth client (Desktop app type), save gcp-oauth.keys.json and set GDRIVE_OAUTH_PATH to its location. On first run the server opens a browser sign-in to authorize access; credentials are cached at GDRIVE_CREDENTIALS_PATH. Current scope is drive.file (app-created files only); upgrade to drive.readonly requires Google OAuth app verification + annual CASA third-party security assessment. If you already set up Gmail or Calendar, reuse the same gcp-oauth.keys.json. First npm fetch can take 10–20 s."
+    },
+    {
+      "id": "google-docs",
+      "display_name": "Google Docs",
+      "description": "Read, create, and edit Google Docs documents via Google's official Workspace remote MCP server. Sign in with Google (OAuth).",
+      "category": "productivity",
+      "aliases": [
+        "docs",
+        "gdocs",
+        "documents",
+        "word processor"
+      ],
+      "transport": "http",
+      "url": "https://docsmcp.googleapis.com/mcp/v1",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": ""
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.google.com/workspace/guides/configure-mcp-servers",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Developer preview (Google Workspace Developer Preview Program). Google does not support dynamic client registration: sign-in needs a Google Cloud OAuth client (client_id placeholder — register the Kameas Google OAuth app or supply your own project's client) with the Google Docs API and the Docs MCP service enabled in that project."
+    },
+    {
+      "id": "google-sheets",
+      "display_name": "Google Sheets",
+      "description": "Read, create, and edit Google Sheets spreadsheets via Google's official Workspace remote MCP server. Sign in with Google (OAuth).",
+      "category": "productivity",
+      "aliases": [
+        "sheets",
+        "gsheets",
+        "spreadsheet",
+        "formulas"
+      ],
+      "transport": "http",
+      "url": "https://sheetsmcp.googleapis.com/mcp/v1",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": ""
+      },
+      "primary_auth": "browser_oauth_pkce",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://developers.google.com/workspace/guides/configure-mcp-servers",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Developer preview (Google Workspace Developer Preview Program). Google does not support dynamic client registration: sign-in needs a Google Cloud OAuth client (client_id placeholder — register the Kameas Google OAuth app or supply your own project's client) with the Google Sheets API and the Sheets MCP service enabled in that project."
     },
     {
       "id": "clickup",
@@ -4440,6 +4655,54 @@
         "default": false
       },
       "warning": "STRETCH: databricks-mcp v0.9.0 (Databricks-affiliated, PyPI) may be a library component rather than a directly runnable MCP server — verify uvx entry point and exact CLI invocation at build. If not uvx-runnable, use Databricks SQL Connector via generic SQL tool or defer. Read/query only — no cluster management or admin writes."
+    },
+    {
+      "id": "elasticsearch",
+      "display_name": "Elasticsearch",
+      "description": "Search Elasticsearch indices and run Agent Builder tools via the Elastic Agent Builder MCP endpoint on your deployment's Kibana (Elastic Stack 9.2+ or Serverless). Authenticates with a Kibana API key.",
+      "category": "data",
+      "aliases": [
+        "elastic",
+        "kibana",
+        "elk",
+        "search",
+        "agent builder"
+      ],
+      "transport": "http",
+      "url": "https://${KIBANA_HOST}/api/agent_builder/mcp",
+      "primary_auth": "keys",
+      "headers_template": {
+        "Authorization": "ApiKey ${ELASTIC_API_KEY}"
+      },
+      "env_keys": [
+        {
+          "name": "KIBANA_HOST",
+          "display": "Kibana host, without https:// (e.g. my-deployment.kb.us-east-1.aws.elastic.cloud)",
+          "docs_url": "https://www.elastic.co/docs/explore-analyze/ai-features/agent-builder/mcp-server",
+          "required": true
+        },
+        {
+          "name": "ELASTIC_API_KEY",
+          "display": "Kibana API key with the Agent Builder privilege",
+          "docs_url": "https://www.elastic.co/docs/explore-analyze/ai-features/agent-builder/mcp-server-api-keys",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://www.elastic.co/docs/explore-analyze/ai-features/agent-builder/mcp-server",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Requires Elastic Stack 9.2+ (or an Elasticsearch Serverless project) with Agent Builder enabled; the API key needs the feature_agentBuilder.read Kibana privilege. For a custom Kibana space, append /s/<space> to the host value. The older stdio server (@elastic/mcp-server-elasticsearch) is deprecated."
     },
     {
       "id": "airtable",

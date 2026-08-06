@@ -42,6 +42,7 @@ var expectedRegistryIDs = []string{
 	"onedrive",
 	"teams",
 	"sharepoint",
+	"excel",
 	"supabase",
 	"gitlab",
 	"google-maps",
@@ -76,6 +77,8 @@ var expectedRegistryIDs = []string{
 	"grafana",
 	"datadog",
 	"new-relic",
+	"dynatrace",
+	"splunk",
 	"circleci",
 	"netlify",
 	"vercel",
@@ -86,6 +89,8 @@ var expectedRegistryIDs = []string{
 	"jenkins",
 	"google-calendar",
 	"google-drive",
+	"google-docs",
+	"google-sheets",
 	"clickup",
 	"monday",
 	"shortcut",
@@ -109,6 +114,7 @@ var expectedRegistryIDs = []string{
 	"braze",
 	"marketo",
 	"databricks",
+	"elasticsearch",
 	"airtable",
 	"canva",
 	"figma",
@@ -4233,4 +4239,149 @@ func TestRecipe_Airtable(t *testing.T) {
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() error: %v", err)
 	}
+}
+
+// TestRecipe_FR013Additions covers the spec-091 FR-013 catalog additions:
+// dynatrace, splunk, elasticsearch (remote HTTP with key-based auth),
+// google-docs + google-sheets (Google's official Workspace remote MCP
+// servers, OAuth), and the ms-365 excel preset (stdio, US4-gated).
+// Word/PowerPoint presets do not exist upstream (no Microsoft Graph
+// content-editing API), so no recipes are added for them.
+func TestRecipe_FR013Additions(t *testing.T) {
+	cat := recipes.Registry()
+
+	t.Run("dynatrace", func(t *testing.T) {
+		r, ok := cat.Get("dynatrace")
+		if !ok {
+			t.Fatal("dynatrace not in registry")
+		}
+		if r.Transport != recipes.TransportHTTP {
+			t.Errorf("Transport = %q, want http", r.Transport)
+		}
+		if want := "https://${DYNATRACE_ENVIRONMENT_NAME}.apps.dynatrace.com/platform-reserved/mcp-gateway/v0.1/servers/dynatrace-mcp/mcp"; r.URL != want {
+			t.Errorf("URL = %q, want %q", r.URL, want)
+		}
+		if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+			t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+		}
+		if r.HeadersTemplate["Authorization"] != "Bearer ${DYNATRACE_PLATFORM_TOKEN}" {
+			t.Errorf("Authorization header template = %q", r.HeadersTemplate["Authorization"])
+		}
+		if r.Category != "observability" {
+			t.Errorf("Category = %q, want observability", r.Category)
+		}
+		if len(r.EnvKeys) != 2 || r.EnvKeys[0].Name != "DYNATRACE_ENVIRONMENT_NAME" || r.EnvKeys[1].Name != "DYNATRACE_PLATFORM_TOKEN" {
+			t.Errorf("EnvKeys = %+v, want DYNATRACE_ENVIRONMENT_NAME + DYNATRACE_PLATFORM_TOKEN", r.EnvKeys)
+		}
+		if err := r.Validate(); err != nil {
+			t.Errorf("Validate() error: %v", err)
+		}
+	})
+
+	t.Run("splunk", func(t *testing.T) {
+		r, ok := cat.Get("splunk")
+		if !ok {
+			t.Fatal("splunk not in registry")
+		}
+		if r.Transport != recipes.TransportHTTP {
+			t.Errorf("Transport = %q, want http", r.Transport)
+		}
+		if want := "https://${SPLUNK_MCP_ENDPOINT}"; r.URL != want {
+			t.Errorf("URL = %q, want %q", r.URL, want)
+		}
+		if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+			t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+		}
+		if r.HeadersTemplate["Authorization"] != "Bearer ${SPLUNK_MCP_TOKEN}" {
+			t.Errorf("Authorization header template = %q", r.HeadersTemplate["Authorization"])
+		}
+		if r.Category != "observability" {
+			t.Errorf("Category = %q, want observability", r.Category)
+		}
+		if err := r.Validate(); err != nil {
+			t.Errorf("Validate() error: %v", err)
+		}
+	})
+
+	t.Run("elasticsearch", func(t *testing.T) {
+		r, ok := cat.Get("elasticsearch")
+		if !ok {
+			t.Fatal("elasticsearch not in registry")
+		}
+		if r.Transport != recipes.TransportHTTP {
+			t.Errorf("Transport = %q, want http", r.Transport)
+		}
+		if want := "https://${KIBANA_HOST}/api/agent_builder/mcp"; r.URL != want {
+			t.Errorf("URL = %q, want %q", r.URL, want)
+		}
+		if r.HeadersTemplate["Authorization"] != "ApiKey ${ELASTIC_API_KEY}" {
+			t.Errorf("Authorization header template = %q", r.HeadersTemplate["Authorization"])
+		}
+		if r.Category != "data" {
+			t.Errorf("Category = %q, want data", r.Category)
+		}
+		if err := r.Validate(); err != nil {
+			t.Errorf("Validate() error: %v", err)
+		}
+	})
+
+	for _, id := range []string{"google-docs", "google-sheets"} {
+		id := id
+		t.Run(id, func(t *testing.T) {
+			r, ok := cat.Get(id)
+			if !ok {
+				t.Fatalf("%s not in registry", id)
+			}
+			if r.Transport != recipes.TransportHTTP {
+				t.Errorf("Transport = %q, want http", r.Transport)
+			}
+			if !strings.HasSuffix(r.URL, ".googleapis.com/mcp/v1") {
+				t.Errorf("URL = %q, want an official *.googleapis.com/mcp/v1 endpoint", r.URL)
+			}
+			if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+				t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+			}
+			// Google does not support DCR: PKCE with a registered app.
+			if r.PrimaryAuth != recipes.PrimaryAuthBrowserOAuthPKCE {
+				t.Errorf("PrimaryAuth = %q, want browser_oauth_pkce", r.PrimaryAuth)
+			}
+			if r.Category != "productivity" {
+				t.Errorf("Category = %q, want productivity", r.Category)
+			}
+			if err := r.Validate(); err != nil {
+				t.Errorf("Validate() error: %v", err)
+			}
+		})
+	}
+
+	t.Run("excel", func(t *testing.T) {
+		r, ok := cat.Get("excel")
+		if !ok {
+			t.Fatal("excel not in registry")
+		}
+		wantCmd := []string{"npx", "-y", "@softeria/ms-365-mcp-server", "--preset", "excel"}
+		if len(r.Command) != len(wantCmd) {
+			t.Fatalf("Command = %v, want %v", r.Command, wantCmd)
+		}
+		for i := range wantCmd {
+			if r.Command[i] != wantCmd[i] {
+				t.Fatalf("Command = %v, want %v", r.Command, wantCmd)
+			}
+		}
+		if r.PrimaryAuth != recipes.PrimaryAuthDeviceCode {
+			t.Errorf("PrimaryAuth = %q, want device_code", r.PrimaryAuth)
+		}
+		if r.Category != "productivity" {
+			t.Errorf("Category = %q, want productivity", r.Category)
+		}
+		if len(r.EnvKeys) != 2 || r.EnvKeys[0].Name != "MS365_MCP_CLIENT_ID" || r.EnvKeys[1].Name != "MS365_MCP_TENANT_ID" {
+			t.Errorf("EnvKeys = %+v, want optional MS365_MCP_CLIENT_ID + MS365_MCP_TENANT_ID", r.EnvKeys)
+		}
+		if !strings.Contains(r.Warning, "US4") {
+			t.Errorf("excel warning should note the vendored runtime lane (US4); got %q", r.Warning)
+		}
+		if err := r.Validate(); err != nil {
+			t.Errorf("Validate() error: %v", err)
+		}
+	})
 }
