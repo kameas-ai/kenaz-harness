@@ -32,8 +32,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // Default timing + capacity constants. Spec §4.2 FR-011 + tasks.md WP02.
@@ -244,6 +246,198 @@ type PendingRequest struct {
 	DeadlineAt time.Time    `json:"deadline_at"`
 }
 
+// SummaryMaxBytes caps PendingRequest.Summary at 512 UTF-8 bytes,
+// truncated on a rune boundary. Matches the live sibling cap on
+// cmd/harness-vm's task.error.message_truncated (512 runes) in intent,
+// and fixes the runes-vs-bytes ambiguity by choosing bytes — the E2E
+// frame budget beyond the host is a byte budget.
+const SummaryMaxBytes = 512
+
+// actionKindMaxBytes bounds the structural resource key. Spec 074
+// contracts/approval-events.md §3.1: ≤128 ASCII bytes.
+const actionKindMaxBytes = 128
+
+// Projection is the flat, surface-agnostic view of a PendingRequest that
+// every decision surface renders from. It exists so the served (:7880)
+// permission modal, the :7881 approval wire, and anything downstream
+// project from ONE function — the shared approval_id plus this shared
+// projection are the drift guard between the copies of the approval
+// concept that now exist.
+type Projection struct {
+	// ResourceDisplay is the human-readable identification of what is
+	// about to happen: a command line, a file path, a provider, a tool
+	// name. It is CONTENT — derived from the operator's work.
+	ResourceDisplay string
+	// ResourceUID is the stable identifier for the resource (bash
+	// pattern, canonical path, provider id, server__tool).
+	ResourceUID string
+	// Op is the filesystem operation, empty for other families.
+	Op string
+	// Dangerous mirrors the family's dangerous-tier flag so a surface
+	// can style the decision WITHOUT parsing ResourceDisplay.
+	Dangerous bool
+}
+
+// Project flattens the request's tagged-union surface. It is the single
+// projection function; core/rpc's flatPermissionRequest and the :7881
+// approval bridge both call it.
+func (p PendingRequest) Project() Projection {
+	var out Projection
+	s := p.Surface
+	switch {
+	case s.Bash != nil:
+		if len(s.Bash.Argv) > 0 {
+			out.ResourceDisplay = strings.Join(s.Bash.Argv, " ")
+		} else {
+			out.ResourceDisplay = s.Bash.Pattern
+		}
+		out.ResourceUID = s.Bash.Pattern
+		out.Dangerous = s.Bash.Dangerous
+	case s.FS != nil:
+		op, path := s.FS.Op, s.FS.CanonicalPath
+		switch {
+		case op != "" && path != "":
+			out.ResourceDisplay = op + " " + path
+		case path != "":
+			out.ResourceDisplay = path
+		default:
+			out.ResourceDisplay = op
+		}
+		out.ResourceUID = path
+		out.Op = op
+		out.Dangerous = s.FS.Dangerous
+	case s.Cred != nil:
+		provider, purpose := s.Cred.ProviderID, s.Cred.Purpose
+		switch {
+		case provider != "" && purpose != "":
+			out.ResourceDisplay = provider + " · " + purpose
+		case provider != "":
+			out.ResourceDisplay = provider
+		default:
+			out.ResourceDisplay = purpose
+		}
+		out.ResourceUID = provider
+	case s.Tool != nil:
+		server, tool := s.Tool.ServerName, s.Tool.ToolName
+		switch {
+		case server != "" && tool != "":
+			out.ResourceDisplay = server + "__" + tool
+		case tool != "":
+			out.ResourceDisplay = tool
+		default:
+			out.ResourceDisplay = server
+		}
+		out.ResourceUID = out.ResourceDisplay
+	}
+	return out
+}
+
+// Summary is the ≤512-UTF-8-byte, rune-boundary-truncated one-line
+// identification of what is about to happen: the projection's
+// ResourceDisplay, with the model's stated Reason appended when present.
+//
+// SUMMARY IS CONTENT. Callers that put it on a wire inherit spec 074's
+// content discipline: it MUST NOT enter a push payload, MUST NOT be
+// persisted, and MUST NOT be written to any ledger. It is deliberately
+// NOT the place to dump tool arguments, tool output, prompt text, or
+// diffs — it identifies the action, it does not carry the payload.
+func (p PendingRequest) Summary() string {
+	s := p.Project().ResourceDisplay
+	if r := strings.TrimSpace(p.Surface.Reason); r != "" {
+		if s != "" {
+			s += " — " + r
+		} else {
+			s = r
+		}
+	}
+	return truncateBytesOnRune(s, SummaryMaxBytes)
+}
+
+// ActionKind returns the STRUCTURAL resource class for the request:
+// `<domain>::<subsystem>::<action>`, ASCII [a-z0-9_:.-], ≤128 bytes.
+//
+// It is deliberately NOT resourceKey(). resourceKey embeds operator
+// content for three of the four families (the canonical path for fs, the
+// derived command pattern for bash, the purpose string for cred) because
+// it exists to key a transient-grants cache, where content is exactly
+// what must distinguish two entries. ActionKind exists for the opposite
+// job: it is the value a surface keys a notification category off and
+// the value the HOST writes to its ledger, and spec 074
+// contracts/approval-events.md §3.1 requires it to embed no path,
+// argument, URL, or credential name. Content rides in Summary, which the
+// same contract forbids from ever reaching the ledger.
+//
+// Only the tool family's resourceKey shape survives unchanged — server
+// and tool names are catalog identifiers, and `tool::filesystem::
+// read_file` is the contract's own worked example.
+func (s PromptSurface) ActionKind() string {
+	var kind string
+	switch s.Family() {
+	case FamilyBash:
+		// The bash pattern is a derived command shape, not a class —
+		// `rm -rf` is content. The class of every bash approval is the
+		// same: something wants to run a command.
+		kind = "bash::command::exec"
+	case FamilyFilesystem:
+		kind = "fs::file::" + sanitiseKeySegment(s.FS.Op)
+	case FamilyCredential:
+		// ProviderID is a configured provider identifier (the same class
+		// as a tool server name), not the credential itself. Purpose is
+		// free text and is excluded.
+		kind = "cred::" + sanitiseKeySegment(s.Cred.ProviderID) + "::grant"
+	case FamilyTool:
+		server := sanitiseKeySegment(s.Tool.ServerName)
+		if server == "unknown" {
+			server = "builtin"
+		}
+		kind = "tool::" + server + "::" + sanitiseKeySegment(s.Tool.ToolName)
+	default:
+		return ""
+	}
+	if len(kind) > actionKindMaxBytes {
+		kind = kind[:actionKindMaxBytes]
+	}
+	return kind
+}
+
+// sanitiseKeySegment lowercases seg and replaces every byte outside
+// [a-z0-9_.-] with '_', so a composed ActionKind always matches the
+// contract's ASCII grammar. An empty or fully-stripped segment becomes
+// "unknown" rather than collapsing two adjacent separators.
+func sanitiseKeySegment(seg string) string {
+	seg = strings.ToLower(strings.TrimSpace(seg))
+	if seg == "" {
+		return "unknown"
+	}
+	var b strings.Builder
+	b.Grow(len(seg))
+	for i := 0; i < len(seg); i++ {
+		c := seg[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '_', c == '.', c == '-':
+			b.WriteByte(c)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return b.String()
+}
+
+// truncateBytesOnRune returns s bounded to max UTF-8 bytes, cutting only
+// on a rune boundary so the result is always valid UTF-8. No ellipsis is
+// appended: the cap is a hard frame budget and three extra bytes would
+// breach it.
+func truncateBytesOnRune(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
+}
+
 // PromptDispatcher dispatches a PendingRequest to the broker. The rpc
 // layer wires a concrete implementation that emits on the family's
 // topic; tests inject a recording fake.
@@ -260,6 +454,80 @@ func (f PromptDispatcherFunc) Dispatch(ctx context.Context, topic string, payloa
 		return
 	}
 	f(ctx, topic, payload)
+}
+
+// ResolutionSource names WHICH surface produced a resolution. It is a
+// CLASS, never a device or account identity — spec 074
+// contracts/approval-events.md §3.3 forbids device identity from
+// crossing into the VM, so the registry deliberately has no field that
+// could carry one.
+//
+// Inbound (accepted by ResolveFrom): SourceHost, SourceGuest,
+// SourceRemote. Outbound-only (synthesised by the registry itself):
+// SourceTimeout, SourceCancelled, SourceOverflow.
+type ResolutionSource string
+
+const (
+	// SourceGuest is a decision taken at the harness's own served
+	// (:7880) permission modal. It is the default for Resolve, which is
+	// what the served RPC handler calls.
+	SourceGuest ResolutionSource = "guest"
+	// SourceHost is a decision taken at the kenaz desktop ApprovalPanel
+	// and forwarded over :7881.
+	SourceHost ResolutionSource = "host"
+	// SourceRemote is a decision taken on a paired device and brokered
+	// by the host over :7881.
+	SourceRemote ResolutionSource = "remote"
+	// SourceTimeout is the registry's own fail-closed deny on expiry.
+	SourceTimeout ResolutionSource = "timeout"
+	// SourceCancelled is a ctx cancellation — the caller (task) went
+	// away, which denies the pending approval.
+	SourceCancelled ResolutionSource = "cancelled"
+	// SourceOverflow is the queue-cap auto-deny. It is the one source
+	// that resolves an approval which was NEVER dispatched, so a
+	// surface can render "denied — too many pending approvals" rather
+	// than an unexplained tool failure.
+	SourceOverflow ResolutionSource = "overflow"
+)
+
+// ResolvedEvent is delivered to every registered ResolutionObserver
+// exactly once per approval id, in every interleaving. See
+// AddResolutionObserver for the exactly-once argument.
+type ResolvedEvent struct {
+	// Request is the pending request as dispatched. For SourceOverflow
+	// it is the request that was never dispatched (the id was already
+	// minted when the cap check rejected it).
+	Request PendingRequest
+	// Decision is the winning decision. Always DecisionDeny for the
+	// timeout / cancelled / overflow sources — absence of consent is
+	// denial, and there is no auto-allow reachable through this path.
+	Decision PromptDecision
+	// Source is the class of surface that produced the decision.
+	Source ResolutionSource
+	// ResolvedAt is the registry clock reading at resolution.
+	ResolvedAt time.Time
+	// Latency is ResolvedAt - Request.IssuedAt, floored at zero. It is
+	// exactly zero for SourceOverflow.
+	Latency time.Duration
+}
+
+// ResolutionObserver is notified once per approval id when the approval
+// leaves the pending set, whatever resolved it. Implementations MUST NOT
+// block: they run on the resolving goroutine (a user's Resolve call, the
+// timeout timer, or the cancelling task).
+type ResolutionObserver interface {
+	Resolved(ev ResolvedEvent)
+}
+
+// ResolutionObserverFunc adapts a function literal to ResolutionObserver.
+type ResolutionObserverFunc func(ev ResolvedEvent)
+
+// Resolved implements ResolutionObserver.
+func (f ResolutionObserverFunc) Resolved(ev ResolvedEvent) {
+	if f == nil {
+		return
+	}
+	f(ev)
 }
 
 // pendingEntry holds the state the registry tracks per in-flight prompt.
@@ -279,6 +547,16 @@ type pendingEntry struct {
 // callers (gate sites — WP03–WP06) and the permissions view.
 type Registry struct {
 	dispatcher PromptDispatcher
+
+	// hooksMu guards the additive fan-out registrations below. It is a
+	// SEPARATE mutex from mu: fan-out snapshots are taken on paths that
+	// already released mu (dispatch and resolution both run outside the
+	// pending-map critical section), and keeping the two locks disjoint
+	// means an observer can never deadlock against the pending map.
+	hooksMu          sync.RWMutex
+	nextHookID       uint64
+	extraDispatchers []dispatcherEntry
+	observers        []observerEntry
 
 	// permHooks fires v2 lifecycle hooks (permission_request /
 	// permission_denied). nil disables lifecycle hooks.
@@ -346,6 +624,112 @@ type RegistryOption func(*Registry)
 // that drive the round-trip without a broker.
 func WithDispatcher(d PromptDispatcher) RegistryOption {
 	return func(r *Registry) { r.dispatcher = d }
+}
+
+// dispatcherEntry / observerEntry are the registration records behind
+// AddDispatcher / AddResolutionObserver. The id makes removal O(n)
+// without relying on interface comparability (a func literal adapted
+// through PromptDispatcherFunc is not comparable).
+type dispatcherEntry struct {
+	id uint64
+	d  PromptDispatcher
+}
+
+type observerEntry struct {
+	id uint64
+	o  ResolutionObserver
+}
+
+// AddDispatcher registers an ADDITIONAL fan-out target for pending
+// requests, alongside the one installed by WithDispatcher. It returns a
+// remove func that is safe to call more than once.
+//
+// This is how the :7881 approval bridge attaches to the gate WITHOUT
+// becoming a second gate (spec 074 ADR-approval-broker §Decision-4):
+// one registry, one timer, one serializer, N listeners.
+func (r *Registry) AddDispatcher(d PromptDispatcher) (remove func()) {
+	if r == nil || d == nil {
+		return func() {}
+	}
+	r.hooksMu.Lock()
+	r.nextHookID++
+	id := r.nextHookID
+	r.extraDispatchers = append(r.extraDispatchers, dispatcherEntry{id: id, d: d})
+	r.hooksMu.Unlock()
+	return func() {
+		r.hooksMu.Lock()
+		defer r.hooksMu.Unlock()
+		for i, e := range r.extraDispatchers {
+			if e.id == id {
+				r.extraDispatchers = append(r.extraDispatchers[:i], r.extraDispatchers[i+1:]...)
+				return
+			}
+		}
+	}
+}
+
+// AddResolutionObserver registers an observer notified exactly once per
+// approval id when that approval leaves the pending set. It returns a
+// remove func that is safe to call more than once.
+//
+// EXACTLY-ONCE ARGUMENT. Every resolution path (Resolve / ResolveFrom,
+// timeoutFire, cancel) deletes the pending entry under r.mu and bails
+// when the entry is already gone, so at most one goroutine per approval
+// id ever reaches pendingEntry.resolved. Observers are notified from
+// INSIDE that sync.Once, so a decision racing the timeout, a second
+// decision racing the first, and a cancel racing either all collapse to
+// one notification carrying the winner. Queue overflow is the single
+// path with no pending entry; it is a straight-line synchronous deny
+// that notifies once and never enters the map.
+func (r *Registry) AddResolutionObserver(o ResolutionObserver) (remove func()) {
+	if r == nil || o == nil {
+		return func() {}
+	}
+	r.hooksMu.Lock()
+	r.nextHookID++
+	id := r.nextHookID
+	r.observers = append(r.observers, observerEntry{id: id, o: o})
+	r.hooksMu.Unlock()
+	return func() {
+		r.hooksMu.Lock()
+		defer r.hooksMu.Unlock()
+		for i, e := range r.observers {
+			if e.id == id {
+				r.observers = append(r.observers[:i], r.observers[i+1:]...)
+				return
+			}
+		}
+	}
+}
+
+// notifyResolved fans a ResolvedEvent out to every registered observer.
+// Callers MUST hold neither r.mu nor pendingEntry state.
+func (r *Registry) notifyResolved(ev ResolvedEvent) {
+	r.hooksMu.RLock()
+	obs := make([]ResolutionObserver, 0, len(r.observers))
+	for _, e := range r.observers {
+		obs = append(obs, e.o)
+	}
+	r.hooksMu.RUnlock()
+	for _, o := range obs {
+		o.Resolved(ev)
+	}
+}
+
+// resolvedEvent builds a ResolvedEvent for req at the registry clock.
+func (r *Registry) resolvedEvent(req PendingRequest, decision PromptDecision, source ResolutionSource) ResolvedEvent {
+	now := r.timeNow()
+	lat := now.Sub(req.IssuedAt)
+	if lat < 0 {
+		lat = 0
+	}
+	return ResolvedEvent{
+		Request:    req,
+		Decision:   decision,
+		Source:     source,
+		ResolvedAt: now,
+		Latency:    lat,
+	}
 }
 
 // WithPosture sets the prompt posture for the registry. Defaults to
@@ -508,6 +892,15 @@ func (r *Registry) RequestInteractive(
 	r.mu.Lock()
 	if r.perTopicCount[fam] >= PromptQueueCap {
 		r.mu.Unlock()
+		// The cap denies WITHOUT dispatching, so no surface ever saw a
+		// request. Observers are still notified so the denial is
+		// legible ("too many pending approvals") instead of presenting
+		// as an unexplained tool failure — spec 074
+		// contracts/approval-events.md §3.3. Latency is zero by
+		// construction: the request never waited on anyone.
+		ev := r.resolvedEvent(entry.request, DecisionDeny, SourceOverflow)
+		ev.Latency = 0
+		r.notifyResolved(ev)
 		return Resolution{Decision: DecisionDeny, Reason: "queue overflow"}, nil
 	}
 	r.pending[id] = entry
@@ -523,6 +916,17 @@ func (r *Registry) RequestInteractive(
 	// gate sites. nil dispatcher is intentional: tests skip emission.
 	if r.dispatcher != nil {
 		r.dispatcher.Dispatch(ctx, fam.Topic(), entry.request)
+	}
+	// Additive fan-out targets (the :7881 approval bridge). Same payload,
+	// same topic, no second gate.
+	r.hooksMu.RLock()
+	extra := make([]PromptDispatcher, 0, len(r.extraDispatchers))
+	for _, e := range r.extraDispatchers {
+		extra = append(extra, e.d)
+	}
+	r.hooksMu.RUnlock()
+	for _, d := range extra {
+		d.Dispatch(ctx, fam.Topic(), entry.request)
 	}
 
 	// Block on resolution / timeout / cancel.
@@ -549,11 +953,33 @@ func (r *Registry) RequestInteractive(
 // caller persists a Cedar policy file, and the engine reload picks it
 // up; we do not double-track.
 func (r *Registry) Resolve(requestID string, decision PromptDecision) error {
+	return r.ResolveFrom(requestID, decision, SourceGuest)
+}
+
+// ResolveFrom is Resolve with an explicit decision SOURCE class, so a
+// resolution observer can report which surface won the race. Resolve
+// delegates here with SourceGuest — the harness's own served (:7880)
+// modal, which is the only caller that existed before spec 074.
+//
+// source MUST be one of SourceHost / SourceGuest / SourceRemote: the
+// timeout / cancelled / overflow classes are registry-synthesised and
+// are rejected here so no external caller can forge one.
+//
+// Returns ErrUnknownRequest when the id has already been resolved or
+// never existed. The :7881 adapter absorbs that error rather than
+// propagating it — a duplicate decision on an at-least-once event
+// stream is expected traffic, not a fault.
+func (r *Registry) ResolveFrom(requestID string, decision PromptDecision, source ResolutionSource) error {
 	if r == nil {
 		return errors.New("cedar/prompt: registry nil")
 	}
 	if decision != DecisionAllowOnce && decision != DecisionAllowAlways && decision != DecisionDeny {
 		return fmt.Errorf("cedar/prompt: invalid decision %q", decision)
+	}
+	switch source {
+	case SourceHost, SourceGuest, SourceRemote:
+	default:
+		return fmt.Errorf("cedar/prompt: invalid resolution source %q", source)
 	}
 
 	r.mu.Lock()
@@ -575,7 +1001,7 @@ func (r *Registry) Resolve(requestID string, decision PromptDecision) error {
 	r.mu.Unlock()
 
 	resolution := Resolution{Decision: decision}
-	r.fire(entry, resolution)
+	r.fire(entry, resolution, source)
 	return nil
 }
 
@@ -602,7 +1028,7 @@ func (r *Registry) timeoutFire(requestID string) {
 
 	// TODO(WP07): once `KindPermissionTimeout` is registered, emit an
 	// audit event here so the timeout is auditable.
-	r.fire(entry, Resolution{Decision: DecisionDeny, Reason: "timeout"})
+	r.fire(entry, Resolution{Decision: DecisionDeny, Reason: "timeout"}, SourceTimeout)
 }
 
 // cancel removes a pending entry without firing the resolve channel.
@@ -626,6 +1052,13 @@ func (r *Registry) cancel(requestID, reason string) {
 		if entry.timer != nil {
 			entry.timer.Stop()
 		}
+		// The caller has already returned its own deny, so nothing is
+		// sent on resolveCh — but the approval DID leave the pending
+		// set, and every surface that rendered it needs to learn that
+		// it is void. Notified from inside the same sync.Once that
+		// guards fire(), so a cancel racing a decision or a timeout
+		// still yields exactly one notification.
+		r.notifyResolved(r.resolvedEvent(entry.request, DecisionDeny, SourceCancelled))
 	})
 	_ = reason
 }
@@ -633,11 +1066,12 @@ func (r *Registry) cancel(requestID, reason string) {
 // fire delivers the resolution to the pending entry's channel exactly
 // once and stops the timer. Subsequent fire / cancel calls on the same
 // entry are no-ops.
-func (r *Registry) fire(entry *pendingEntry, res Resolution) {
+func (r *Registry) fire(entry *pendingEntry, res Resolution, source ResolutionSource) {
 	entry.resolved.Do(func() {
 		if entry.timer != nil {
 			entry.timer.Stop()
 		}
+		r.notifyResolved(r.resolvedEvent(entry.request, res.Decision, source))
 		select {
 		case entry.resolveCh <- res:
 		default:
