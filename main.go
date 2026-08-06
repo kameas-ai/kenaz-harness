@@ -358,9 +358,17 @@ func runServeMode(listenAddr string) {
 	// the Connectors_List / Connectors_Status read RPCs (spec 091 D11).
 	// Ledger events (FR-014) ride the reporter ingest socket when the
 	// image provides one.
+	// KENAZ_AUTH_* is read here (pure env read) so the connector-token
+	// client exists before rpc.New; the renewal Session is still created
+	// after core start, below. Spec 091 D8: whitelisted OAuth connectors
+	// authenticate with host-brokered short-lived tokens — the refresh
+	// token never crosses into the VM.
+	authCfg := authbroker.ReadConfig(os.Getenv)
+	connTokens := authbroker.NewConnectorTokens(authCfg, serveLog)
 	connSup := connectors.NewSupervisor(connectors.SupervisorConfig{
 		Provisioning: mcpProv,
 		Getenv:       os.Getenv,
+		Tokens:       connTokens,
 		Ledger:       connectors.NewLedgerEmitterFromEnv(os.Getenv, serveLog),
 		Logger:       serveLog,
 	})
@@ -392,7 +400,8 @@ func runServeMode(listenAddr string) {
 	// provider list and no in-VM way to add one.
 	api := rpc.New(c,
 		rpc.WithHostProviders(serve.HostProviders(os.Getenv, serveLog)),
-		rpc.WithServedConnectors(connSup))
+		rpc.WithServedConnectors(connSup),
+		rpc.WithConnectorTokens(connTokens))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -402,12 +411,11 @@ func runServeMode(listenAddr string) {
 	}
 	api.SetContext(ctx)
 
-	// F2-WP8: initialise the in-VM auth session from KENAZ_AUTH_* env vars
-	// (injected via EnvironmentFile from the KENAZMETA disk, same mechanism as
-	// SIGIL_INGEST_TOKEN / HARNESS_VM_TOKEN).
+	// F2-WP8: initialise the in-VM auth session from the KENAZ_AUTH_* env
+	// vars read above (injected via EnvironmentFile from the KENAZMETA
+	// disk, same mechanism as SIGIL_INGEST_TOKEN / HARNESS_VM_TOKEN).
 	//
 	// Privacy: broker token and access token bytes are never logged.
-	authCfg := authbroker.ReadConfig(os.Getenv)
 	authSession := authbroker.NewSession(ctx, authCfg, serveLog)
 	serveLog.Info("harness.serve: auth session initialised",
 		"auth_state", authSession.State().String(),

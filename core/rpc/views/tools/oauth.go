@@ -88,15 +88,18 @@ func (a *API) injectOAuthBearer(ctx context.Context, recipe recipes.Recipe, spec
 		return err
 	}
 	if cred == nil {
-		// Not signed in yet — deferred auth. Leave the spec unauthenticated.
-		return nil
+		// No local credential. In served mode (spec 091 D8) fall back to a
+		// host-brokered short-lived token; otherwise deferred auth — leave
+		// the spec unauthenticated.
+		return a.injectBrokerBearer(ctx, recipe, spec)
 	}
 	valid, refreshed, err := oauth.EnsureValid(ctx, nil, cred, time.Now())
 	if err != nil {
-		// Token expired and unrefreshable → behave as deferred auth; the user
-		// must sign in again. Don't fail the spawn.
+		// Token expired and unrefreshable → behave as deferred auth (with
+		// the served broker fallback); the user must sign in again. Don't
+		// fail the spawn.
 		if errors.Is(err, oauth.ErrNotSignedIn) {
-			return nil
+			return a.injectBrokerBearer(ctx, recipe, spec)
 		}
 		return fmt.Errorf("tools: ensure oauth token for %q: %w", recipe.ID, err)
 	}
@@ -110,6 +113,31 @@ func (a *API) injectOAuthBearer(ctx context.Context, recipe recipes.Recipe, spec
 		spec.HeadersTemplate = map[string]string{}
 	}
 	spec.HeadersTemplate["Authorization"] = valid.AuthorizationHeader()
+	return nil
+}
+
+// injectBrokerBearer is the served-mode fallback for OAuth recipes with no
+// locally-stored credential (spec 091 D8): the host auth broker mints a
+// short-lived access token for the whitelisted connector — the refresh
+// token never crosses into the VM. A missing source or a broker failure
+// is deferred auth, never a spawn failure; the token bytes are never
+// logged or emitted.
+func (a *API) injectBrokerBearer(ctx context.Context, recipe recipes.Recipe, spec *coremcp.ServerSpec) error {
+	if a.cfg.ConnectorTokens == nil {
+		return nil
+	}
+	tok, err := a.cfg.ConnectorTokens.ConnectorToken(ctx, recipe.ID)
+	if err != nil || tok == "" {
+		if err != nil {
+			a.emit(ctx, "mcp.oauth.broker_fallback_failed",
+				map[string]any{"recipe_id": recipe.ID, "err": err.Error()})
+		}
+		return nil
+	}
+	if spec.HeadersTemplate == nil {
+		spec.HeadersTemplate = map[string]string{}
+	}
+	spec.HeadersTemplate["Authorization"] = "Bearer " + tok
 	return nil
 }
 

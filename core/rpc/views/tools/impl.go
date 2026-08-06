@@ -126,6 +126,20 @@ type Config struct {
 	// PromptRegistry is the Cedar interactive-prompt registry used by
 	// RequestAdditionalAllowedDir. When nil the call returns an error.
 	PromptRegistry *cedar.Registry
+	// ConnectorTokens mints host-brokered access tokens for whitelisted
+	// OAuth connectors (spec 091 D8). Served mode only; nil (the desktop
+	// default) disables the fallback and OAuth recipes rely solely on
+	// locally-stored credentials.
+	ConnectorTokens ConnectorTokenSource
+}
+
+// ConnectorTokenSource is the broker-backed token seam injectOAuthBearer
+// falls back to when an OAuth recipe has no locally-stored credential.
+// *authbroker.ConnectorTokens satisfies it.
+type ConnectorTokenSource interface {
+	// ConnectorToken returns a short-lived access token for recipeID.
+	// Callers MUST NOT log the returned value.
+	ConnectorToken(ctx context.Context, recipeID string) (string, error)
 }
 
 // API is the concrete ToolsAPI implementation.

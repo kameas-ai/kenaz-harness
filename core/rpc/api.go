@@ -923,6 +923,10 @@ type options struct {
 	// servedConnectors is the served-mode connector supervisor. See
 	// WithServedConnectors.
 	servedConnectors *connectors.Supervisor
+
+	// connectorTokens is the broker-backed token source for OAuth
+	// connectors. See WithConnectorTokens.
+	connectorTokens tools.ConnectorTokenSource
 }
 
 // WithHostProviders seeds provider profiles that the surrounding control
@@ -956,6 +960,14 @@ func WithHostProviders(profiles []corellm.ProviderProfile) Option {
 // The DESKTOP path never passes this option; host behaviour is unchanged.
 func WithServedConnectors(sup *connectors.Supervisor) Option {
 	return func(o *options) { o.servedConnectors = sup }
+}
+
+// WithConnectorTokens installs the broker-backed token source the tools
+// view's OAuth bearer injection falls back to when a recipe has no
+// locally-stored credential (served mode, spec 091 D8). The DESKTOP path
+// never passes this option.
+func WithConnectorTokens(src tools.ConnectorTokenSource) Option {
+	return func(o *options) { o.connectorTokens = src }
 }
 
 
@@ -1527,7 +1539,7 @@ func New(c *core.Core, opts ...Option) *API {
 	// Pass the dispatch pool as the tools-view PoolController so
 	// InstallRecipe/UninstallRecipe route http/sse recipes to the right
 	// transport sub-pool.
-	a.toolsAPI = newToolsAPI(c, a.dispatchPool, stack.secrets, a.promptRegistry, a.cedarPolicyAPI)
+	a.toolsAPI = newToolsAPI(c, a.dispatchPool, stack.secrets, a.promptRegistry, a.cedarPolicyAPI, opt.connectorTokens)
 	// Register the fsrequest built-in after toolsAPI is wired so the
 	// tool's delegate can be the real (non-stub) implementation. The
 	// tool is registered unconditionally; the EnabledFilter gates
@@ -3361,7 +3373,7 @@ func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secr
 // Returns the stub when c is nil — the test harness path constructs
 // rpc.New(nil) and we keep the chassis bootable without crashing on
 // the catalog access.
-func newToolsAPI(c *core.Core, pool tools.PoolController, secretsBackend *secrets.MemoryBackend, promptReg *cedar.Registry, cedarPolicyAPI cedarpolicyview.CedarPolicyAPI) tools.ToolsAPI {
+func newToolsAPI(c *core.Core, pool tools.PoolController, secretsBackend *secrets.MemoryBackend, promptReg *cedar.Registry, cedarPolicyAPI cedarpolicyview.CedarPolicyAPI, connectorTokens tools.ConnectorTokenSource) tools.ToolsAPI {
 	if c == nil {
 		return &stubTools{}
 	}
@@ -3383,6 +3395,9 @@ func newToolsAPI(c *core.Core, pool tools.PoolController, secretsBackend *secret
 		Forgetter:      &keychainForgetter{backend: secretsBackend},
 		PromptRegistry: promptReg,
 		CedarPolicy:    cedarPolicyAPI,
+		// Served mode only (spec 091 D8): broker-backed OAuth fallback.
+		// nil on the desktop path — behaviour unchanged.
+		ConnectorTokens: connectorTokens,
 	}
 	return tools.New(cfg)
 }
