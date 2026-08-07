@@ -30,7 +30,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"syscall"
 )
 
 // MarkerName is dropped at the root of a HARNESS-OWNED workspace the first
@@ -207,18 +206,9 @@ func writable(dir string) bool {
 }
 
 // statDevFn is the device-number probe, overridable in tests (bind mounts
-// need root; tests fake the parent/child device split instead).
-var statDevFn = func(path string) (uint64, bool) {
-	fi, err := os.Stat(path)
-	if err != nil {
-		return 0, false
-	}
-	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok {
-		return 0, false
-	}
-	return uint64(st.Dev), true
-}
+// need root; tests fake the parent/child device split instead). The default
+// is platform-specific — see statDev in workspace_unix.go / workspace_windows.go.
+var statDevFn = statDev
 
 // isMountpoint reports whether dir sits on a different device than its
 // parent — true for a virtio-fs bind mount at /workspace, false for a
