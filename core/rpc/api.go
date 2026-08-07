@@ -6542,63 +6542,38 @@ type flatPermissionRequest struct {
 //   - cred: provider_id + purpose (e.g. "openai · stream").
 //   - tool: server_name__tool_name (e.g. "filesystem__read_file").
 func flattenPendingRequest(p cedar.PendingRequest) flatPermissionRequest {
-	out := flatPermissionRequest{
-		RequestID:  p.RequestID,
-		SessionID:  p.Surface.SessionID,
-		Family:     string(p.Family),
-		Surface:    p.Surface,
-		IssuedAt:   p.IssuedAt.UTC().Format("2006-01-02T15:04:05.000Z07:00"),
-		DeadlineAt: p.DeadlineAt.UTC().Format("2006-01-02T15:04:05.000Z07:00"),
+	// Project through cedar.PendingRequest.Project() — the SINGLE
+	// projection function. The :7881 approval bridge
+	// (cmd/harness-vm/approvals.go) calls the same one, so the served
+	// modal and the host-brokered wire can never drift in what they
+	// call the same approval_id.
+	proj := p.Project()
+	return flatPermissionRequest{
+		RequestID:       p.RequestID,
+		SessionID:       p.Surface.SessionID,
+		Family:          string(p.Family),
+		Surface:         p.Surface,
+		IssuedAt:        p.IssuedAt.UTC().Format("2006-01-02T15:04:05.000Z07:00"),
+		DeadlineAt:      p.DeadlineAt.UTC().Format("2006-01-02T15:04:05.000Z07:00"),
+		ResourceDisplay: proj.ResourceDisplay,
+		ResourceUID:     proj.ResourceUID,
+		Op:              proj.Op,
+		DangerousTier:   proj.Dangerous,
 	}
-	switch {
-	case p.Surface.Bash != nil:
-		argv := p.Surface.Bash.Argv
-		if len(argv) > 0 {
-			out.ResourceDisplay = strings.Join(argv, " ")
-		} else {
-			out.ResourceDisplay = p.Surface.Bash.Pattern
-		}
-		out.ResourceUID = p.Surface.Bash.Pattern
-		out.DangerousTier = p.Surface.Bash.Dangerous
-	case p.Surface.FS != nil:
-		op := p.Surface.FS.Op
-		path := p.Surface.FS.CanonicalPath
-		if op != "" && path != "" {
-			out.ResourceDisplay = op + " " + path
-		} else if path != "" {
-			out.ResourceDisplay = path
-		} else {
-			out.ResourceDisplay = op
-		}
-		out.ResourceUID = path
-		out.Op = op
-		out.DangerousTier = p.Surface.FS.Dangerous
-	case p.Surface.Cred != nil:
-		provider := p.Surface.Cred.ProviderID
-		purpose := p.Surface.Cred.Purpose
-		switch {
-		case provider != "" && purpose != "":
-			out.ResourceDisplay = provider + " · " + purpose
-		case provider != "":
-			out.ResourceDisplay = provider
-		default:
-			out.ResourceDisplay = purpose
-		}
-		out.ResourceUID = provider
-	case p.Surface.Tool != nil:
-		server := p.Surface.Tool.ServerName
-		tool := p.Surface.Tool.ToolName
-		switch {
-		case server != "" && tool != "":
-			out.ResourceDisplay = server + "__" + tool
-		case tool != "":
-			out.ResourceDisplay = tool
-		default:
-			out.ResourceDisplay = server
-		}
-		out.ResourceUID = out.ResourceDisplay
+}
+
+// PromptRegistry exposes the process-singleton cedar prompt registry so
+// an out-of-band decision surface can attach to the EXISTING gate rather
+// than standing up a second one. cmd/harness-vm's :7881 approval bridge
+// is the caller (spec 074 ADR-approval-broker §Decision-4: one gate, one
+// timer, one serializer, N listeners).
+//
+// May be nil when the API was constructed without a chassis.
+func (a *API) PromptRegistry() *cedar.Registry {
+	if a == nil {
+		return nil
 	}
-	return out
+	return a.promptRegistry
 }
 
 // buildAgentGraphEventLog wires the agentgraph kernel's EventLog to the

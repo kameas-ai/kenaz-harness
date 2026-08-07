@@ -278,6 +278,204 @@ Privacy: `run_params` carries only structural selectors (preset names, tier
 labels, refs) — never prompt text, message bodies, or diffs. The ledger
 `task.start` still carries `prompt_len` only.
 
+### Approvals — capability negotiation + three additive kinds (Spec 074, `kenaz.approval-broker`)
+
+Normative source: [`ADR-approval-broker`](../../.specify/decisions/ADR-approval-broker.md)
+and `specs/074-kenaz-ios-remote/contracts/approval-events.md`. Where this
+section and those disagree, **they win**.
+
+**There is not a new approval engine.** `core/policy/cedar`'s `Registry` is the
+harness's existing gate — pending map, fail-closed timer, crypto-random
+approval id, first-decision-wins serialization. This surface adds one more
+listener to it and one more way to resolve it. No second gate, no second timer,
+no second serializer.
+
+#### Handshake delta — one optional key each way
+
+```jsonc
+C→S: {"kind":"auth","token":"<token>","capabilities":["approval"]}   // capabilities OPTIONAL
+S→C: {"kind":"auth.ok","capabilities":["approval"]}                  // the GRANTED subset
+```
+
+`capabilities` is a set of OPAQUE strings; unknown entries are ignored, so the
+same key carries future negotiations without another contract change. The
+`auth.ok` value is the **granted** subset, never an echo of the request.
+
+**Absent negotiation the wire is byte-for-byte unchanged.** A client that omits
+`capabilities` — or sends an empty list, a non-array, or only tokens this build
+does not implement — receives exactly `{"kind":"auth.ok"}`, the single-key
+object this surface has always emitted. Pinned by
+`TestAuthOK_ByteIdenticalWithoutNegotiation`.
+
+| Host | Harness | Handshake | Behaviour |
+|---|---|---|---|
+| old | old | neither sends `capabilities` | today's wire, byte-identical |
+| old | new | host sends none; harness grants none | no approval kinds emitted; the gate resolves at the served `:7880` modal only |
+| new | old | host sends `["approval"]`; `auth.ok` carries none | host MUST treat the granted set as **empty** and render "approvals not brokered on this workbench" — rendering an empty pending list is FORBIDDEN, being indistinguishable from "nothing is waiting" |
+| new | new | both carry `["approval"]` | full loop: desktop panel + N devices + `:7880` |
+
+**Gate on the negotiated set, never on a parsed version string.** Negotiation
+is the mechanism; the version number is documentation.
+
+The harness grants `approval` only when this process actually has a cedar gate
+to broker. A chassis that failed to bootstrap has none, so the capability is
+withheld rather than promised — a granted-but-undeliverable capability is a lie
+the host cannot detect.
+
+**The harness MUST NOT emit an approval kind unless `approval` was granted.**
+The fail-safe direction is silence, not speculation: emitting unilaterally is a
+wire-lock violation, and an old host would merely log "unexpected message kind"
+and let the task sit until the deny — a soft hang with no user-visible cause.
+Not emitting is safe because the gate still resolves at the served `:7880`
+modal, which is unconditionally present in every workbench. **This surface adds
+a decision surface; it never removes one.**
+
+Unnegotiated, `task.approval_decision` is an unknown kind and earns the same
+`task.error{code:"bad_request"}` as any other.
+
+#### `task.approval_requested` (guest → host, 0..N per task)
+
+```jsonc
+{"kind":"task.approval_requested",
+ "task_id":"<id>",
+ "approval_id":"rid-<24 hex>",       // cedar's RequestID verbatim — not a new id space
+ "family":"bash|tool|fs|cred",
+ "action_kind":"fs::file::write",     // STRUCTURAL: <domain>::<subsystem>::<action>, [a-z0-9_:.-], <=128 bytes
+ "summary":"write /workspace/notes.md — recording the plan",  // CONTENT, <=512 UTF-8 bytes, cut on a rune boundary
+ "dangerous":true,
+ "requested_at":"<RFC3339>",
+ "deadline_at":"<RFC3339>",           // ABSOLUTE — the only correct countdown source
+ "timeout_s":300}                     // display convenience; MUST NOT be used to compute the deadline
+```
+
+- **`action_kind` is structural and is what the host writes to its ledger**, so
+  it embeds no path, argument, URL, or credential name. It is deliberately NOT
+  cedar's internal `resourceKey()`, which embeds the canonical path, the
+  command pattern and the credential purpose because it keys a grants cache
+  where content is the point. Mapping: `bash::command::exec`,
+  `fs::file::<op>`, `cred::<provider_id>::grant`, `tool::<server>::<tool>`.
+- **`summary` IS content** — a surface that cannot see the path cannot decide.
+  It MUST NOT enter any push payload, MUST NOT be persisted by the host, the
+  relay, or a device, and MUST NOT be written to any ledger. In the emitting
+  direction it carries no tool argument bodies, tool output bodies, prompt
+  text, or diff content: it identifies the action, it does not carry the
+  payload.
+- `dangerous` exists so a surface can style the decision **without parsing
+  `summary`**.
+
+#### `task.approval_decision` (host → guest, 0..N)
+
+```jsonc
+{"kind":"task.approval_decision","task_id":"<id>","approval_id":"rid-<24 hex>",
+ "decision":"allow_once|allow_always|deny",
+ "source":"host|remote"}              // optional; defaults to host
+```
+
+- `decision` is cedar's **three-valued** enum verbatim. Collapsing it to
+  `allow|deny` would drop the transient-grant path the desktop already offers.
+  `allow_always` is desktop-only by host policy; the remote RPC surface is
+  two-valued and the broker maps a remote `allow` to `allow_once`.
+- **`source` is a CLASS, not a device identity.** No device id, device name, or
+  account identifier ever crosses into the VM. Only `host` and `remote` are
+  accepted: `guest` is the served modal's own class and
+  `timeout`/`cancelled`/`overflow` are registry-synthesised, so accepting
+  either inbound would let a caller forge provenance the host ledger then
+  records as fact. A malformed value ⇒ `task.error{code:"bad_request"}`.
+- **No wire field may assert that a device-auth challenge occurred.** Such a
+  field would be attacker-controlled on a compromised device and would turn a
+  real device-side control into protocol theatre.
+- **Wire idempotency:** a decision for an already-resolved or unknown
+  `approval_id` is **acked and dropped** — no `task.error`, no second
+  `task.approval_resolved`, no state change. cedar's registry is at-most-once
+  rather than idempotent, so idempotency is implemented at this adapter, which
+  is the only place it can be. It is what makes an at-least-once stream safe to
+  retry.
+
+#### `task.approval_resolved` (guest → host, exactly one per `approval_id`)
+
+```jsonc
+{"kind":"task.approval_resolved","task_id":"<id>","approval_id":"rid-<24 hex>",
+ "decision":"allow_once|allow_always|deny",
+ "source":"host|guest|remote|timeout|cancelled|overflow",
+ "resolved_at":"<RFC3339>","latency_ms":8123}
+```
+
+| `source` | Meaning |
+|---|---|
+| `host` | the kenaz desktop ApprovalPanel |
+| `guest` | the harness's own `:7880` modal — a real third decider the host cannot observe, which is why it must learn about it here |
+| `remote` | a paired device |
+| `timeout` | the harness's fail-closed deny on expiry |
+| `cancelled` | `ctx` cancellation — the task went away |
+| `overflow` | queue-cap auto-deny |
+
+- **Exactly one per `approval_id` in every interleaving.** Every resolution
+  path deletes the pending entry under the registry mutex and bails when it is
+  gone, so at most one goroutine reaches `pendingEntry.resolved`; the emission
+  happens inside that `sync.Once`. Race-tested for decision-vs-timeout,
+  decision-vs-cancel and double-decision.
+- `latency_ms` = `resolved_at - requested_at`; exactly `0` for `overflow`.
+- **`overflow` is emitted even though no `task.approval_requested` ever was.**
+  The queue cap denies with no dispatch at all; without this event the denial
+  is invisible on every surface and reaches the operator as an unexplained tool
+  failure.
+- `task.approval_resolved` carries **no `summary`** — a resolution is
+  provenance, not content.
+
+#### Timer, run status, and the limits
+
+- **The harness owns the timer** (`cedar.PromptTimeout`, 5 minutes, unchanged).
+  The host MUST NOT run a competing one and neither may a device: a second
+  timer is a second authority, and the loser of a timer-vs-timer race is the
+  operator. On expiry the harness self-resolves as
+  `{decision:"deny", source:"timeout"}`. **Absence of consent is denial; there
+  is no auto-allow reachable through this path.**
+- **`PostureAutoAllow` emits nothing at all.** At the autonomous tier there is
+  no approval, so there is no approval event — documented so an operator
+  running autonomous does not read the absence of traffic as a broken pipe.
+- **Run status is DERIVED, not a wire field.** A run with an unresolved
+  `task.approval_requested` is `waiting_for_input` on `kenaz.agent.run` and
+  returns to `running` on `task.approval_resolved`. `waiting_for_input` goes
+  live with this surface. **`paused` stays reserved (RUN-DEBT-1) and
+  approval-pause is not pause**: it is a parked goroutine with a deadline and
+  exactly one exit — engine-internal, not durable, not addressable. No
+  pause/resume verb is added to any wire.
+- **Task↔approval correlation.** cedar keys approvals by
+  `PromptSurface.SessionID` and this wire speaks `task_id`. The binding is: a
+  gate site that names its session owns the match, and only a gate site that
+  names no session falls back to "whatever task this connection is running".
+  That fallback is the busy-flag assumption and is safe only for one task per
+  connection — **if that limit is ever lifted, the fallback MUST be revisited
+  in the same change.** The session match is what keeps a second dispatch
+  connection from claiming the first one's approvals: the registry is
+  process-global and fans every request to every attached bridge. A gate site
+  in the task path SHOULD set `SessionID` to the task id.
+  A corollary: an approval raised while the connection has no task in flight
+  cannot be attributed and is **not forwarded**; it resolves at `:7880` as it
+  always did. Speculating a `task_id` would attribute an action to the wrong
+  run.
+- **Approvals are not durable (APPROVAL-DEBT-2).** A harness-vm restart loses
+  every pending approval: parked goroutines die with the process and the
+  pending map is memory-only. Surfaces MUST treat a connection drop as "all
+  pending approvals for that workbench are void" and say so, rather than
+  showing a stale sheet.
+- **There is no `approval.list_pending` (APPROVAL-DEBT-3).** A host that
+  reconnects mid-approval learns nothing until the timeout. Deliberately out of
+  scope; add a read RPC alongside the existing nine only if the Phase 4 smoke
+  shows it matters.
+
+#### Current reach of the gate in this process
+
+The approval bridge attaches to the cedar registry the in-VM chassis already
+builds, so **any** gate site reached in this process surfaces on `:7881`. The
+`task.start` graph path itself (`plan` → `run`, a bare model call) contains no
+gate site today: it has no tool dispatch, so it raises no approvals of its own.
+The four live gate sites — bash, tool dispatch, credential hooks, MCP recipe
+add — are reached through the served engine. Plumbed-and-listening, but the
+in-VM task graph will not exercise it until that path grows a gated call site.
+The engine seam is wired and ready: the run context carries an `approvalGate`,
+and a call site parks on it with `RequestInteractive`.
+
 ### Deferred (not in this surface)
 
 Write paths everywhere; `memory.get_chunk` (full text + audit); `workflows.get`
