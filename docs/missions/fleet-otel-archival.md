@@ -9,13 +9,24 @@ an opt-in pipeline that posts a signed, redacted copy to the fleet endpoint so
 per-team analytics (acceptance rates, latency p95s, error counts per provider)
 can populate the fleet dashboard.
 
+> **2026-08-06 — WP03 superseded.** The signed-JSON `FleetExporter`
+> (`core/fleet/otel_exporter.go`, POSTing an ed25519-signed batch to
+> `/api/v1/telemetry/otel`) never had a non-test caller. Telemetry actually
+> ships over OTLP/HTTP via `FleetOTLPPipeline`; Fleet's
+> `/api/v1/telemetry/otel` is now only an alias onto its OTLP **logs** handler,
+> which would reject the JSON envelope with 400 (and 401 first, since the old
+> client sent no bearer). It was removed as dead code that described a data
+> flow we do not have. The **log** lane of the OTLP pipeline is also off by
+> design — see `core/fleet/otlp_pipeline.go` "Logs" and
+> `scripts/ci/check-fleet-log-export-fence.sh`.
+
 ## Status
 
 | Work Package | Title | Status |
 |---|---|---|
 | WP01 | MultiExporter — local + fleet fan-out | Shipped |
 | WP02 | FleetRedactor — deny-list + @secret: pattern | Shipped |
-| WP03 | FleetBuffer ring + FleetExporter batch sender | Shipped |
+| WP03 | FleetBuffer ring + FleetExporter batch sender | Shipped, later **REMOVED** — see note below |
 | WP04 | Tier enum + Settings persistence + capability gate | Shipped |
 | WP05 | Settings → Privacy → Fleet Telemetry panel | Shipped |
 | WP06 | First-launch telemetry onboarding modal | Shipped |
@@ -104,8 +115,8 @@ reach the fleet endpoint:
 ### Disabling fleet telemetry organisation-wide
 
 Set the environment variable `HARNESS_FLEET_TELEMETRY=off` before starting the
-harness. This forces the `FleetExporter` to a nop regardless of the per-user
-consent tier, and hides the Settings tier picker from the UI.
+harness. This forces fleet telemetry export to a nop regardless of the
+per-user consent tier, and hides the Settings tier picker from the UI.
 
 ### Configuring the team default tier
 

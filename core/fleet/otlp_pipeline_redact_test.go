@@ -5,9 +5,9 @@ package fleet
 // resourceOverrideSpanExporter → OTLP HTTP) scrubs secrets before they
 // leave the process boundary.
 //
-// These tests exercise the REAL pipeline, not the dead-code JSON batcher
-// (FleetSpanExporter). A fake OTLP HTTP server captures the protobuf binary
-// payload and a substring search proves the secret pattern is absent.
+// A fake OTLP HTTP server captures the protobuf binary payload and a substring
+// search proves the secret pattern is absent. The log lane has its own suite —
+// see otlp_log_fence_test.go; it is off by design and ships nothing.
 //
 // String values in protobuf/proto3 are encoded as UTF-8, so the secret
 // appears verbatim in the binary payload when redaction is absent — making

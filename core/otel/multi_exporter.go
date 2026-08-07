@@ -5,7 +5,7 @@
 // Design note: the telemetry package (core/telemetry) already ships
 // CompositeSpanExporter / CompositeMetricExporter / CompositeLogExporter for
 // the specific local+OTLP fan-out pattern. MultiExporter is a generalised
-// N-child wrapper used when a third exporter (e.g. FleetExporter) needs to be
+// N-child wrapper used when a third exporter (e.g. the fleet OTLP exporter) needs to be
 // attached without modifying the existing composite.
 package otel
 
