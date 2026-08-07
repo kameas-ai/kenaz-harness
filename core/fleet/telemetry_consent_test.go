@@ -118,8 +118,11 @@ func TestTelemetryConsent_ConsentLevelImplementsInterface(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	c, _ := NewTelemetryConsent(dir, nil)
-	// TelemetryConsent must satisfy ConsentReader (used by FleetExporter).
-	var _ ConsentReader = c
+	// The ConsentLevel() string shape is part of the consent contract even
+	// though no interface names it any more (the FleetExporter that consumed
+	// ConsentReader was removed as dead code).
+	type consentLevelReader interface{ ConsentLevel() string }
+	var _ consentLevelReader = c
 	// Default when no tier: none.
 	if got := c.ConsentLevel(); got != "none" {
 		t.Errorf("want none, got %q", got)

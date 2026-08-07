@@ -1,0 +1,8 @@
+{
+  "fleet_repo": "github.com/kameas-ai/kenaz-fleet",
+  "fleet_rev": "b86d909b99891c5e772d52035e42f303077ae295",
+  "fleet_describe": "v1.0.69-1-gb86d909",
+  "source_path": "service/telemetry/schema/v1/kind.go",
+  "sha256": "ce5801a104be9181f19cd4b10ebdb1f1d5c4b2bf46df0927543aa46b47013a96",
+  "fetched_at": "2026-08-06"
+}

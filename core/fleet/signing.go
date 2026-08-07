@@ -14,6 +14,14 @@ import (
 	"sync"
 )
 
+// Signer signs the canonical payload bytes with the device key.
+// DeviceSigner (below) is the production implementation; audit_archive.go is
+// the sole consumer.
+type Signer interface {
+	// Sign returns the base64-encoded ed25519 signature over payload.
+	Sign(payload []byte) (sig string, pubkeyFP string, err error)
+}
+
 // deviceKeyFile is the filename within DataDir where the device ed25519 key is
 // persisted. The file is owner-read-only (mode 0600) and contains a JSON
 // envelope to allow schema evolution.

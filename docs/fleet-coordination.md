@@ -95,7 +95,7 @@ The natural "first call after sign-in" endpoint is **`POST /api/v1/enroll`** —
 
 | Dependency | Owner | Status | Blocks |
 |---|---|---|---|
-| `POST /api/v1/telemetry/otel` endpoint | kenaz-fleet | ❌ NOT IMPLEMENTED. Must accept signed batched OTel payload. | entire mission |
+| ~~`POST /api/v1/telemetry/otel` endpoint~~ | kenaz-fleet | ✅ SUPERSEDED. The signed-JSON-batch client (`core/fleet/otel_exporter.go`) was removed unused; telemetry now goes over OTLP/HTTP to `/otlp/v1/{traces,metrics}`. Fleet keeps `/api/v1/telemetry/otel` only as an alias onto its OTLP logs handler, which the old JSON envelope would not have parsed. | — |
 | OTel storage backend (Clickhouse? PG? immudb?) | kenaz-fleet ops | ❌ NOT SPECIFIED | mission ship |
 
 **`fleet-emergency-lockdown-01NDFSEX12`**

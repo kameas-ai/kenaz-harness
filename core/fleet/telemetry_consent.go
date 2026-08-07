@@ -13,7 +13,7 @@ import (
 type ConsentLevel string
 
 const (
-	// ConsentNone disables the FleetExporter entirely. No telemetry is
+	// ConsentNone disables fleet telemetry export entirely. No telemetry is
 	// posted. This is the default.
 	ConsentNone ConsentLevel = "none"
 
@@ -155,7 +155,8 @@ func (c *TelemetryConsent) SetLevel(level ConsentLevel) error {
 }
 
 // EffectiveLevel returns the effective consent level, clamped down to what the
-// current org tier permits. This is the safe read for the FleetExporter: even
+// current org tier permits. This is the safe read for the OTLP export
+// pipeline (FleetOTLPPipeline.Activate): even
 // if a stored level is too high for the current tier (e.g. after a downgrade),
 // the exporter sees the clamped value.
 func (c *TelemetryConsent) EffectiveLevel() ConsentLevel {

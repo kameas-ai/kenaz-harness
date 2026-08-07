@@ -97,6 +97,23 @@ jobs:
       - name: no-user-content-in-slog guard
         run: bash scripts/ci/check-no-user-content-in-slog.sh
 
+      - name: fleet log-export fence guard
+        # The harness must not ship its raw slog stream to Fleet. Verifies the
+        # compiled kind ceiling + its anti-drift gate exist, the wire-level
+        # regression tests still exist, and no OTLP *log* exporter is
+        # constructed without an explicit opt-out annotation.
+        run: bash scripts/ci/check-fleet-log-export-fence.sh
+
+      - name: fleet kind-schema parity (cross-repo)
+        # Compares the vendored core/fleet/schema/kinds.json against
+        # kenaz-fleet's schema v1 when a checkout is available. Skips
+        # (does not fail) when kenaz-fleet is not checked out — the private
+        # sibling repo is not cloned in harness CI today, so this runs green
+        # locally for engineers and in the workspace cross-repo job.
+        env:
+          CGO_ENABLED: "1"
+        run: go test -count=1 -run 'TestVendoredKindSchema' ./core/fleet/
+
       - name: no-fleet-imports guard
         # Enforces OSS-first contract: only core/rpc/views/settings/ is
         # permitted to import core/fleet/. Passes when core/fleet/ is
