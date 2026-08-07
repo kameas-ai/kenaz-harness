@@ -9,7 +9,6 @@ import (
 	"sync"
 
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	otellog "go.opentelemetry.io/otel/log"
@@ -50,8 +49,11 @@ func OTLPBaseURL(profile EnvProfile) string {
 //   - Metrics:  A resourceOverrideMetricExporter is registered at boot in
 //     telemetry.Config.MetricExporters (no-ops until Activate). Activate swaps
 //     in the real OTLP exporter + identity resource.
-//   - Logs:     Same lazy-wrapper approach via resourceOverrideLogExporter
-//     registered at boot in telemetry.Config.LogExporters.
+//   - Logs:     Not exported. kindGatedLogExporter is registered at boot in
+//     telemetry.Config.LogExporters but Activate never gives it an inner
+//     exporter — the resource problem above has no per-record solution for
+//     logs, and nothing emits kind-tagged log records. See the "Logs" section
+//     of Activate.
 //
 // # Constraint 2: Dynamic auth
 //
@@ -73,10 +75,12 @@ type FleetOTLPPipeline struct {
 	// active span processor (registered on TracerProvider) so Shutdown drains it.
 	activeSpanProc sdktrace.SpanProcessor
 
-	// Lazy metric and log exporters registered at boot; their inner
-	// exporter is swapped on Activate.
+	// Lazy metric and log exporters registered at boot; the metric
+	// exporter's inner exporter is swapped on Activate. The log exporter's
+	// inner exporter is deliberately never swapped in — see the comment on
+	// kindGatedLogExporter and the "Logs" section of Activate.
 	lazyMetricExp *resourceOverrideMetricExporter
-	lazyLogExp    *resourceOverrideLogExporter
+	lazyLogExp    *kindGatedLogExporter
 
 	// Back-ref to the TracerProvider we registered on.
 	tp *sdktrace.TracerProvider
@@ -90,7 +94,7 @@ func NewFleetOTLPPipeline(logger *slog.Logger) *FleetOTLPPipeline {
 	return &FleetOTLPPipeline{
 		logger:        logger,
 		lazyMetricExp: &resourceOverrideMetricExporter{},
-		lazyLogExp:    &resourceOverrideLogExporter{},
+		lazyLogExp:    &kindGatedLogExporter{},
 	}
 }
 
@@ -101,10 +105,30 @@ func (p *FleetOTLPPipeline) MetricExporter() sdkmetric.Exporter {
 	return p.lazyMetricExp
 }
 
-// LogExporter returns the lazy log exporter that should be registered at boot
-// time in telemetry.Config.LogExporters. It no-ops until Activate is called.
+// LogExporter returns the fleet log exporter registered at boot time in
+// telemetry.Config.LogExporters.
+//
+// It exports nothing. The fleet log lane is off (see the "Logs" section of
+// Activate for why, and what must change to turn it back on); this returns the
+// gate rather than nil so that the wiring, and the fail-closed admission rule
+// it enforces, stay in the live pipeline.
 func (p *FleetOTLPPipeline) LogExporter() sdklog.Exporter {
 	return p.lazyLogExp
+}
+
+// SetTelemetryOptIns supplies Fleet's per-class opt-in snapshot — the runtime
+// NARROWING channel for the log lane.
+//
+// The snapshot intersects with the compiled ceiling; it cannot widen it. A
+// class Fleet opts in that no compiled kind maps to contributes nothing, and
+// no field of TelemetryOptInItem can name a kind at all. See
+// LogKindsAdmittedBy for the intersection and log_event_kind.go for why the
+// ceiling is deliberately not remotely settable.
+//
+// Safe to call repeatedly; each call replaces the previous snapshot. Passing
+// nil (e.g. on sign-out) returns the lane to admitting nothing.
+func (p *FleetOTLPPipeline) SetTelemetryOptIns(optIns []TelemetryOptInItem) {
+	p.lazyLogExp.setOptIns(optIns)
 }
 
 // IdentityAttrs holds the OTel Resource attributes required by the fleet
@@ -211,17 +235,48 @@ func (p *FleetOTLPPipeline) Activate(
 	}
 
 	// ── Logs ─────────────────────────────────────────────────────────────────
-	logExp, err := otlploghttp.New(ctx,
-		otlploghttp.WithEndpointURL(otlpBase),
-		otlploghttp.WithURLPath("/v1/logs"),
-		otlploghttp.WithHTTPClient(httpClient),
-	)
-	if err != nil {
-		p.logger.Warn("fleet.otlp.log_exporter.failed", "err", err)
-	} else {
-		p.lazyLogExp.swapInner(ctx, logExp)
-		p.logger.Info("fleet.otlp.log_pipeline.activated", "endpoint", otlpBase)
-	}
+	//
+	// Deliberately not activated: no OTLP log exporter is constructed here, so
+	// the fleet log lane makes no network calls and ships no records. This is
+	// a decision, not an omission.
+	//
+	// What used to happen: an otlploghttp exporter was wired to /v1/logs and
+	// the harness's entire slog stream — every application log line, via the
+	// slog→OTel bridge installed by telemetry.Init — was batched and POSTed to
+	// Fleet. Application log bodies are content-bearing by nature (file paths,
+	// error strings, identifiers), which constitution §IX does not permit to
+	// leave the machine.
+	//
+	// Two independent facts make that traffic pure cost:
+	//
+	//  1. Nothing emits a kameas.event.kind attribute. The Fleet receiver
+	//     admits a log record only when ClassFor(kameas.event.kind) resolves
+	//     (kenaz-fleet service/telemetry/receiver.go, HandleLogs). No code in
+	//     any Kameas repo sets that attribute on a log record, so every record
+	//     the harness sent was counted DroppedInvalid — after crossing the
+	//     network and terminating TLS on Kameas infrastructure.
+	//
+	//  2. The batch is rejected before the kind check anyway. Log records
+	//     carry the LoggerProvider's resource, which is frozen at boot and has
+	//     no kameas.user.id (see Constraint 1 above — there is no per-record
+	//     Resource() hook to override, the way there is for spans). HandleLogs
+	//     validates the first ResourceLogs group's resource attrs up front and
+	//     401s the WHOLE request when kameas.user.id != the JWT sub.
+	//
+	// To turn the lane back on, both must be fixed, in this order:
+	//
+	//   a. Solve the resource problem — the records must carry
+	//      kameas.user.id / kameas.org.id / kameas.machine.id — e.g. by
+	//      building the ResourceLogs envelope directly instead of relying on
+	//      the boot-time LoggerProvider resource.
+	//   b. Emit records that actually carry an allowlisted AttrEventKind.
+	//      Everything else stays dropped by kindGatedLogExporter regardless.
+	//
+	// Re-adding an OTLP log exporter requires the fence's explicit opt-out
+	// annotation at the call site; scripts/ci/check-fleet-log-export-fence.sh
+	// documents it and fails the build without it.
+	p.logger.Debug("fleet.otlp.log_pipeline.disabled",
+		"reason", "no_kind_tagged_emitters_and_no_identity_resource")
 
 	return nil
 }
@@ -454,40 +509,93 @@ func (e *resourceOverrideMetricExporter) swapInner(ctx context.Context, newInner
 	}
 }
 
-// ── resourceOverrideLogExporter ──────────────────────────────────────────────
+// ── kindGatedLogExporter ─────────────────────────────────────────────────────
 
-// resourceOverrideLogExporter is the lazy log counterpart. Note: sdklog.Record
-// carries no Resource() — the LoggerProvider's resource is attached at the
-// OTLP encoding layer. Since we can't override it per-record, we route log
-// export through the lazy inner exporter directly; the resource injection
-// is handled by the LoggerProvider's own resource at export time.
+// kindGatedLogExporter is the fleet log lane's admission gate.
 //
-// For v1 we accept that the log records sent to fleet carry the startup
-// resource (missing kameas.user.id). The receiver validates user.id only for
-// the first ResourceLogs group; when the log body's kameas.event.kind maps to
-// a known class, records are accepted per the opt-in check. The receiver does
-// NOT hard-block on missing kameas.user.id for logs the way it does for traces
-// (trace resource validation fires before insert). This is a known v1
-// limitation documented in the spec open-questions section.
+// It admits a log record only when the record carries a recognised,
+// allowlisted kameas.event.kind (see log_event_kind.go). Unknown or absent
+// kind ⇒ the record is dropped locally, in this process, before any bytes are
+// serialised. A plain slog line — which is what the slog→OTel bridge feeds
+// into this pipeline, and which is content-bearing by nature — never carries a
+// kind and therefore can never leave.
 //
-// TODO(WP05): Add the resource override for logs once the receiver enforces it.
-type resourceOverrideLogExporter struct {
+// Fail-closed by construction: the gate is an allowlist, not a denylist, so a
+// new record shape is non-exportable until someone deliberately tags it.
+//
+// This is the fence, not the switch. The lane is additionally off at the
+// source: Activate never installs an inner exporter, so inner is nil in
+// production and nothing is transmitted at all. The gate stays in the live
+// pipeline so that installing an inner exporter — the one change that would
+// re-open the lane — cannot on its own put raw application logs on the wire.
+//
+// Consent composes on top of, not instead of, the gate: activateOTLPPipeline
+// (core/rpc/views/settings/fleet.go) refuses to call Activate at all while
+// consent is "none", and the receiver applies the per-class opt-in and org-tier
+// checks on anything that does arrive. The kind allowlist is the innermost of
+// the three and the only one that runs before the bytes leave the machine.
+//
+// # Ceiling ∩ narrowing
+//
+// Two inputs decide admission, and they compose in one direction only:
+//
+//   - the compiled ceiling (log_event_kind.go) — what this binary is capable
+//     of transmitting. Not remotely widenable.
+//   - Fleet's per-class opt-in snapshot, supplied via SetTelemetryOptIns —
+//     which can only remove kinds from the ceiling, never add to it.
+//
+// A nil snapshot admits nothing.
+//
+// # On the log resource
+//
+// sdklog.Record carries no Resource() — the LoggerProvider's resource is
+// attached at the OTLP encoding layer, and that resource is frozen at boot,
+// before login, so it has no kameas.user.id. There is no per-record override
+// hook the way there is for spans (resourceOverrideSpanExporter). Fleet's
+// HandleLogs validates the first ResourceLogs group's resource attrs and
+// rejects the entire request with 401 when kameas.user.id != the JWT sub, so
+// this is a hard blocker on the lane rather than a cosmetic gap. It is
+// recorded here, and in the "Logs" section of Activate, as a precondition for
+// re-enabling log export — it is not a live-pipeline TODO, because there is no
+// live log pipeline.
+type kindGatedLogExporter struct {
 	mu    sync.RWMutex
 	inner sdklog.Exporter
+
+	// admitted is ceiling ∩ Fleet opt-ins, recomputed whenever Fleet supplies
+	// a new opt-in snapshot. nil ⇒ nothing is admissible.
+	admitted map[LogEventKind]struct{}
 }
 
-func (e *resourceOverrideLogExporter) Export(ctx context.Context, records []sdklog.Record) error {
+// setOptIns recomputes the admitted set from a Fleet opt-in snapshot. The
+// snapshot can only narrow: LogKindsAdmittedBy iterates the compiled ceiling
+// and uses optIns solely to exclude.
+func (e *kindGatedLogExporter) setOptIns(optIns []TelemetryOptInItem) {
+	next := LogKindsAdmittedBy(optIns)
+	e.mu.Lock()
+	e.admitted = next
+	e.mu.Unlock()
+}
+
+func (e *kindGatedLogExporter) Export(ctx context.Context, records []sdklog.Record) error {
 	e.mu.RLock()
 	inner := e.inner
+	allowed := e.admitted
 	e.mu.RUnlock()
 	if inner == nil {
 		return nil
 	}
-	// Redact log bodies before they leave the process boundary
-	// (security fix: NFR-001 / FR-005 on the live OTLP path —
-	// harness-fleet-otlp-export-01NTLMEX01).
-	redacted := make([]sdklog.Record, len(records))
-	for i, r := range records {
+
+	// Admission first: drop anything without an allowlisted kind. Records that
+	// do not pass are never serialised, never buffered, never sent.
+	admitted := make([]sdklog.Record, 0, len(records))
+	for _, r := range records {
+		if !logRecordExportable(r, allowed) {
+			continue
+		}
+		// Redact log bodies before they leave the process boundary
+		// (security fix: NFR-001 / FR-005 on the live OTLP path —
+		// harness-fleet-otlp-export-01NTLMEX01).
 		body := r.Body()
 		if body.Kind() == otellog.KindString {
 			cleaned := DefaultRedactor.RedactLogBody(body.AsString())
@@ -495,12 +603,16 @@ func (e *resourceOverrideLogExporter) Export(ctx context.Context, records []sdkl
 				r.SetBody(otellog.StringValue(cleaned))
 			}
 		}
-		redacted[i] = r
+		admitted = append(admitted, r)
 	}
-	return inner.Export(ctx, redacted)
+	if len(admitted) == 0 {
+		// No HTTP request at all — an empty export would still be a POST.
+		return nil
+	}
+	return inner.Export(ctx, admitted)
 }
 
-func (e *resourceOverrideLogExporter) ForceFlush(ctx context.Context) error {
+func (e *kindGatedLogExporter) ForceFlush(ctx context.Context) error {
 	e.mu.RLock()
 	inner := e.inner
 	e.mu.RUnlock()
@@ -510,7 +622,7 @@ func (e *resourceOverrideLogExporter) ForceFlush(ctx context.Context) error {
 	return inner.ForceFlush(ctx)
 }
 
-func (e *resourceOverrideLogExporter) Shutdown(ctx context.Context) error {
+func (e *kindGatedLogExporter) Shutdown(ctx context.Context) error {
 	e.mu.Lock()
 	inner := e.inner
 	e.inner = nil
@@ -521,7 +633,7 @@ func (e *resourceOverrideLogExporter) Shutdown(ctx context.Context) error {
 	return inner.Shutdown(ctx)
 }
 
-func (e *resourceOverrideLogExporter) swapInner(_ context.Context, newInner sdklog.Exporter) {
+func (e *kindGatedLogExporter) swapInner(_ context.Context, newInner sdklog.Exporter) {
 	e.mu.Lock()
 	old := e.inner
 	e.inner = newInner

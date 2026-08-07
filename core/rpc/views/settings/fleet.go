@@ -311,7 +311,15 @@ func (a *API) StopFleetBackground() {
 	// Clear in-memory caches that are session-scoped.
 	a.fleet.fleetModelPrefs = nil
 	a.fleet.telemetryOptIns = nil
+	pipeline := a.fleet.otlpPipeline
 	a.fleet.mu.Unlock()
+
+	// Drop the OTLP log lane's narrowing snapshot too: an empty snapshot
+	// admits nothing, so a signed-out harness cannot keep exporting against a
+	// stale opt-in set.
+	if pipeline != nil {
+		pipeline.SetTelemetryOptIns(nil)
+	}
 
 	// Stop goroutines outside the lock.
 	if poller != nil {
@@ -466,7 +474,15 @@ func (a *API) refreshTelemetryOptIns(ctx context.Context) {
 	}
 	a.fleet.mu.Lock()
 	a.fleet.telemetryOptIns = items
+	pipeline := a.fleet.otlpPipeline
 	a.fleet.mu.Unlock()
+
+	// Feed the OTLP log lane its narrowing signal. This can only reduce what
+	// the lane admits — the compiled ceiling in core/fleet/log_event_kind.go
+	// bounds it from above and no server response can widen that.
+	if pipeline != nil {
+		pipeline.SetTelemetryOptIns(items)
+	}
 	logging.L().Info("fleet.telemetry_optins.refreshed", "classes", len(items))
 }
 

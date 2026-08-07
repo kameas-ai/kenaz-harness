@@ -1,0 +1,14 @@
+{
+  "schema_version": "v1",
+  "_comment": "VENDORED from kenaz-fleet service/telemetry/schema/v1/kind.go (Kind constants + kindToClass). Do not hand-edit: re-vendor with source.json in the same commit. core/fleet/log_event_kind_parity_test.go fails the build on drift.",
+  "kinds": [
+    { "kind": "harness.conversation_started", "class": "harness.usage_counts" },
+    { "kind": "harness.conversation_ended", "class": "harness.usage_counts" },
+    { "kind": "harness.tool_invoked", "class": "harness.tool_calls" },
+    { "kind": "sigil.stuck_predictor", "class": "sigil.predictions" },
+    { "kind": "sigil.routing_policy", "class": "sigil.predictions" },
+    { "kind": "sigil.suggestion_emitted", "class": "sigil.suggestions" },
+    { "kind": "sigil.suggestion_outcome", "class": "sigil.suggestions" },
+    { "kind": "harness.error", "class": "harness.errors" }
+  ]
+}
