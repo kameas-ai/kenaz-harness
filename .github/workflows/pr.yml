@@ -259,17 +259,42 @@ jobs:
       - name: build frontend (for csp guard)
         run: npm run build
 
+      # The served-mode SPA is a second real bundle with its own outDir
+      # (frontend/dist-served) — it is what release.yml packages as
+      # kenaz-harness-served-spa.tar.gz and what the workbench image fetches.
+      # Build it here so the bundle-size guard weighs both shipped bundles
+      # instead of only the desktop one. ~5s.
+      - name: build frontend (served, for bundle-size guard)
+        run: npm run build:served
+
       - name: csp guard
         working-directory: ${{ github.workspace }}
         run: bash scripts/ci/check-csp.sh
 
+      # Non-blocking, and deliberately so — but NOT because the number is
+      # unknown. As measured on main at a7f3e87 (2026-08-08): the desktop
+      # bundle is 1,572,873 bytes gzipped JS+CSS against the 1,500,000-byte
+      # NFR-006 budget — 72,873 bytes OVER — and the served bundle is
+      # 1,416,109 bytes (83,891 bytes of headroom). So this step fails on
+      # unmodified main today, and making it required would block every PR.
+      #
+      # It read "pass" for months only because it resolved dist/assets
+      # against the repo root, found nothing, and took its own not-built
+      # early-exit without gzipping a byte. That is fixed; the annotation in
+      # the Checks UI is now the real number.
+      #
+      # Before dropping continue-on-error (and adding this job to ruleset
+      # 15871858's required checks), one of:
+      #   1. bring the desktop bundle under 1.5 MB — mermaid, cytoscape and
+      #      wardley are the bulk of it and are async-import candidates; or
+      #   2. have the operator ratify a revised NFR-006 budget and raise
+      #      BUDGET_BYTES in scripts/ci/check-bundle-size.mjs to match.
+      # Either way, re-measure and update these numbers in the same change.
+      # Do not re-silence this by making the path cwd-relative again.
       - name: bundle-size guard
         working-directory: ${{ github.workspace }}
-        run: |
-          if [ -f scripts/ci/check-bundle-size.mjs ]; then
-            node scripts/ci/check-bundle-size.mjs
-          fi
-        continue-on-error: true # advisory until threshold is tuned
+        run: node scripts/ci/check-bundle-size.mjs
+        continue-on-error: true
 
       - name: css-tokens guard
         working-directory: ${{ github.workspace }}
