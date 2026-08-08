@@ -498,6 +498,7 @@ func (a *API) activateOTLPPipeline(ctx context.Context, id fleet.Identity, nodeI
 	baseRes := a.fleet.telemetryRes
 	consent := a.fleet.consent
 	tpFunc := a.fleet.tpFunc
+	client := a.fleet.client
 	a.fleet.mu.RUnlock()
 
 	// Resolve the TracerProvider lazily. By the time activateOTLPPipeline is
@@ -522,10 +523,23 @@ func (a *API) activateOTLPPipeline(ctx context.Context, id fleet.Identity, nodeI
 		return
 	}
 
-	profile := fleet.ResolveProfile()
-	otlpBase := fleet.OTLPBaseURL(profile)
+	// OTLP ingest lives on the API host, which is discovered from
+	// /config.json on the dashboard host — NOT on the dashboard host itself.
+	// Deriving it from profile.FleetBaseURL pointed telemetry at CloudFront,
+	// which returns 200 + index.html for any path, so exports "succeeded"
+	// into a void. See fleet.OTLPBaseURL.
+	if client == nil {
+		logging.L().Debug("fleet.otlp.activate.skipped", "reason", "no_fleet_client")
+		return
+	}
+	cfg, cfgErr := client.FleetConfig(ctx)
+	if cfgErr != nil {
+		logging.L().Warn("fleet.otlp.activate.api_host_unresolved", "err", cfgErr.Error())
+		return
+	}
+	otlpBase := fleet.OTLPBaseURL(cfg)
 	if otlpBase == "" {
-		logging.L().Debug("fleet.otlp.activate.skipped", "reason", "no_fleet_url")
+		logging.L().Debug("fleet.otlp.activate.skipped", "reason", "no_api_base_url")
 		return
 	}
 
