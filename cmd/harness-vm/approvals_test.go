@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -697,16 +698,35 @@ func TestApprovalBridge_DetachesOnDisconnect(t *testing.T) {
 }
 
 // waitFor polls cond until true or the deadline passes.
-func waitFor(t *testing.T, cond func() bool) {
+//
+// cond MUST BE MONOTONE — once true it has to stay true. Polling a condition
+// that something else can retract is a flake generator, and not a theoretical
+// one: TestRunStatus_DrainsInEveryInterleaving used to poll "the registry has
+// one pending approval" against a 5 ms approval TTL. A single 2 ms sleep that
+// overshoots on a loaded machine steps clean over the 5 ms window, the
+// approval self-resolves as a timeout, the count returns to zero for good, and
+// this loop then spins the full 3 s against a condition that can never become
+// true again. Wait on something append-only instead — a recorded frame, a
+// closed channel, a drained map.
+//
+// `what` names the condition so a future failure says which wait died rather
+// than just "condition never became true".
+func waitFor(t *testing.T, cond func() bool, what ...string) {
 	t.Helper()
+	label := "condition"
+	if len(what) > 0 && what[0] != "" {
+		label = what[0]
+	}
 	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
+	for polls := 1; ; polls++ {
 		if cond() {
 			return
 		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("waitFor: %s never became true (3s, %d polls)", label, polls)
+		}
 		time.Sleep(2 * time.Millisecond)
 	}
-	t.Fatal("waitFor: condition never became true")
 }
 
 // --- bridge unit tests -----------------------------------------------------
@@ -929,6 +949,11 @@ func TestApprovalBridge_UnnamedSessionUsesTheInFlightTask(t *testing.T) {
 // the pending entry under its mutex and dispatches only after releasing it, so
 // PendingForFamily can reach the cap while several frames are still in flight.
 // Tests that read frames must wait on frames.
+//
+// waitForFrames waits until rc has recorded at least n frames of the given
+// kind. The recorder is append-only, so this is the monotone way to wait for
+// "the bridge dispatched X" — unlike registry/bridge pending counts, a
+// recorded frame is never retracted by a timeout or a concurrent resolve.
 func waitForFrames(t *testing.T, rc *recordingConn, kind string, n int) {
 	t.Helper()
 	waitFor(t, func() bool {
@@ -939,7 +964,7 @@ func waitForFrames(t *testing.T, rc *recordingConn, kind string, n int) {
 			}
 		}
 		return c >= n
-	})
+	}, fmt.Sprintf("%d %s frame(s)", n, kind))
 }
 
 func firstFrameOfKind(t *testing.T, rc *recordingConn, kind string) map[string]any {
