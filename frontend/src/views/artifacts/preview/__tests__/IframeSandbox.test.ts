@@ -21,7 +21,7 @@ const withFakeClient = {
 };
 
 describe('IframeSandbox', () => {
-  it('renders an iframe with sandbox="allow-same-origin"', () => {
+  it('renders an iframe with a fully restrictive sandbox (no allow flags)', () => {
     const w = mount(IframeSandbox, {
       ...withFakeClient,
       props: { html: '<p>test</p>' },
@@ -29,7 +29,7 @@ describe('IframeSandbox', () => {
 
     const iframe = w.find('iframe');
     expect(iframe.exists()).toBe(true);
-    expect(iframe.attributes('sandbox')).toBe('allow-same-origin');
+    expect(iframe.attributes('sandbox')).toBe('');
   });
 
   it('iframe srcdoc contains the CSP meta tag', () => {
@@ -57,14 +57,19 @@ describe('IframeSandbox', () => {
     expect(srcdoc).toContain(`<body>${html}</body>`);
   });
 
-  it('sandbox attribute does NOT include allow-scripts', () => {
+  it('sandbox attribute does NOT include allow-scripts or allow-same-origin, even together', () => {
     const w = mount(IframeSandbox, {
       ...withFakeClient,
       props: { html: '<script>alert(1)</script>' },
     });
 
     const sandbox = w.find('iframe').attributes('sandbox') ?? '';
+    // The dangerous combination is the two together (a script running with
+    // same-origin access to its own frame can strip its own sandbox
+    // attribute). Assert neither is present, not just that they're not
+    // paired, so a partial regression (either flag alone) still fails.
     expect(sandbox).not.toContain('allow-scripts');
+    expect(sandbox).not.toContain('allow-same-origin');
   });
 
   it('shows Open in browser button when openExternallyPath is provided', () => {

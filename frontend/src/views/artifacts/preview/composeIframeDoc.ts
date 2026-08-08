@@ -16,10 +16,14 @@
  *   form-action 'none';
  *   frame-ancestors 'none'
  *
- * The `sandbox="allow-same-origin"` attribute on the outer iframe element
- * (set by IframeSandbox.vue) lets inline CSS work via `style-src 'self'`
- * while CSP `default-src 'none'` blocks all network. Scripts are blocked
- * both by the missing `allow-scripts` sandbox flag AND by CSP
+ * The outer iframe (IframeSandbox.vue) sets a fully restrictive
+ * `sandbox=""` — no allow flags at all, so the frame gets an opaque origin
+ * and cannot execute scripts. Inline CSS (`style=""` / `<style>`) works
+ * via CSP `'unsafe-inline'` in `style-src`, which is independent of the
+ * frame's origin; `'self'` in `style-src`/`img-src`/`font-src` can never
+ * match anything from an opaque-origin frame, which is fine because
+ * FR-006 requires everything to be inlined or `data:` already. Scripts
+ * are blocked both by the missing `allow-scripts` sandbox flag AND by CSP
  * `default-src 'none'` (belt-and-braces).
  */
 

@@ -4,9 +4,24 @@
  * sandboxed iframe path (artifact-preview-binary-rendering-01KQ8TD5 WP04).
  *
  * Renders `html` inside an iframe with:
- *   - sandbox="allow-same-origin" (inline CSS works; scripts blocked by
- *     the missing allow-scripts flag AND by the injected CSP).
+ *   - sandbox="" — no allow flags at all. Scripts are blocked by the
+ *     missing allow-scripts flag; the frame's origin is opaque (no
+ *     allow-same-origin), so even if a future change ever added
+ *     allow-scripts, script running in the frame could not reach the
+ *     parent's storage/cookies via a same-origin context. Belt-and-
+ *     braces with the injected CSP (also see FR-006).
  *   - A CSP meta-tag injected via composeIframeDoc() — see FR-006.
+ *
+ * Corrected 2026-08 (spec 092, Task 1.H-FR6): the previous posture set
+ * `allow-same-origin` with no script opt-in. That combination alone never
+ * enabled script execution here (allow-scripts was never present), but
+ * `allow-same-origin` + `allow-scripts` together is the canonical sandboxed-
+ * iframe escape (a script can rewrite its own frame's sandbox attribute via
+ * same-origin access to itself). Dropping allow-same-origin removes that
+ * latent risk for any future change to this file, at zero cost to rendering
+ * — nothing here relies on the frame's origin (everything is inlined /
+ * data-URI per FR-006, and 'self' in the CSP can never match an opaque
+ * origin anyway).
  *
  * The "Open in browser" button is offered when `openExternallyPath` is
  * provided. It calls shell.openInOSBrowser with that path.
@@ -55,7 +70,7 @@ async function openInBrowser() {
     </div>
     <iframe
       class="w-full h-[60vh] rounded-sm border border-border-muted bg-surface-1"
-      sandbox="allow-same-origin"
+      sandbox=""
       :srcdoc="srcdoc"
       title="Artifact preview"
       data-testid="iframe-sandbox"
