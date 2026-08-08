@@ -470,6 +470,42 @@ func TestServedChat_ForwardsInteractiveGateTopics(t *testing.T) {
 
 // ─── backpressure ─────────────────────────────────────────────────────────
 
+// TestServedChat_SnapshotImpliesSubscribed pins the ordering that everything
+// else in this section depends on: by the time a client has the
+// `sessions:snapshot` frame, its bus subscription is live.
+//
+// This is a real delivery guarantee, not test scaffolding. rpc.EventBus
+// discards events that have no subscriber, so any window between "client is
+// connected" and "client is subscribed" is a window of SILENTLY lost events —
+// not dropped-and-counted, so no truncation notice is owed and every surface
+// reports success. streamSessions used to write the snapshot first and
+// subscribe a Sessions().List and an elicit ListPending later, which meant a
+// browser reconnecting mid-answer could lose exactly the tokens it reconnected
+// to see.
+//
+// The test publishes the instant dialChatWS returns, with no sleep and no
+// retry: if the subscription is not already live the event is gone and the
+// read below times out. Under the old ordering that was a race the test would
+// lose under load; under the current ordering it cannot happen at all.
+func TestServedChat_SnapshotImpliesSubscribed(t *testing.T) {
+	api, baseURL, cancel := newChatHarness(t)
+	defer cancel()
+
+	ws := dialChatWS(t, baseURL)
+	defer ws.Close() //nolint:errcheck
+
+	// No pause here on purpose — the whole point is that none is needed.
+	api.EventBus().Publish("llm:stream-chunk", llmview.StreamChunkPayload{
+		SubID: "sub-first",
+		Chunk: corellm.StreamEvent{Kind: corellm.StreamText, Text: "first-token"},
+	})
+
+	f := readUntil(t, ws, "llm:stream-chunk", 10*time.Second)
+	if !strings.Contains(string(f.Data), "first-token") {
+		t.Errorf("first event after the snapshot was not delivered verbatim: %s", f.Data)
+	}
+}
+
 // TestServedChat_SlowConsumerIsToldItWasTruncated is the backpressure
 // contract test.
 //
@@ -496,32 +532,38 @@ func TestServedChat_SlowConsumerIsToldItWasTruncated(t *testing.T) {
 	// writer really blocks, rather than absorbing everything.
 	fat := strings.Repeat("x", 64*1024)
 
-	// SIZING THE BURST — this is what makes the test deterministic.
+	// THE TWO PRECONDITIONS. This test asserts that a stalled client is told
+	// it lost data, so it needs (1) the client to be subscribed, and (2) the
+	// burst to be undeliverable. Both used to be probabilistic. Both are now
+	// structural, and the difference is what this comment is for.
 	//
-	// The burst has to be bigger than everything the server can hold for one
-	// client. If the pipeline swallows it whole there is nothing to drop, no
-	// notice is ever generated, and the drain loop below blocks until its read
-	// deadline and reports an "i/o timeout" that looks like a slow runner but
-	// is really a missing precondition. That is how this test failed in CI.
+	// (1) SUBSCRIBED. Guaranteed by dialChatWS having read `sessions:snapshot`,
+	// which streamSessions writes only after SubscribeTracked returns. That
+	// ordering is a contract — see the note on Server.streamSessions.
 	//
-	// The pipeline is: the bus subscription buffer (busBufferSize, 1024
-	// frames) + the per-connection queue (4 here, via WithStreamQueueCap) +
-	// the one frame in flight in the writer + whatever the kernel socket
-	// buffers absorb.
+	// Before that ordering existed, the snapshot was written FIRST and the
+	// subscription came a Sessions().List and an elicit ListPending later.
+	// Publishing into that window reached a bus with no subscriber, which
+	// discards silently: nothing delivered, nothing counted as dropped, no
+	// notice owed. On a loaded CI runner the window swallowed an entire
+	// 2000-event burst and the client read ZERO frames, then sat on its read
+	// deadline. Note this failed the same way, with the same i/o timeout, as a
+	// burst that was merely too small — which is why the drain loop below now
+	// reports how many frames it actually read.
 	//
-	// At the 200 frames this test used to publish, the bus buffer ALONE holds
-	// the entire burst, so bus-level drops are impossible and the test depends
-	// wholly on the writer blocking on the socket before the client starts
-	// reading — i.e. on 12.8 MiB not fitting in the kernel's loopback buffers.
-	// That is a coin flip, and measuring it says so: drop counts on a dev Mac
-	// came out bimodal over 12 runs, either ~187-195 or 1-11, with a low of
-	// ONE. One frame from having nothing to assert. The CI runner reached zero.
+	// (2) UNDELIVERABLE. The pipeline holds busBufferSize (1024 frames) + the
+	// per-connection queue (4, via WithStreamQueueCap) + one frame in flight,
+	// plus whatever the kernel socket buffers absorb. At 200 frames — what
+	// this test used to publish — the bus buffer alone holds the whole burst,
+	// so everything rode on the writer blocking before the client started
+	// reading, i.e. on 12.8 MiB not fitting in kernel loopback buffers.
+	// Measured on a dev Mac that came out bimodal over 12 runs, ~187-195 or
+	// 1-11 drops, bottoming out at ONE. One frame from having nothing to
+	// assert, on numbers this test does not control.
 	//
-	// 2000 frames removes the kernel from the argument. Only 1029 can sit in
-	// the bus + queue + writer, so ~971 frames × 64 KiB ≈ 62 MiB would have to
-	// live in socket buffers for the burst to survive intact — several times
-	// past even a generously autotuned loopback socket. A drop is now
-	// guaranteed by arithmetic rather than by scheduling.
+	// 2000 frames takes the kernel out of the argument: ~971 frames × 64 KiB
+	// ≈ 62 MiB would have to live in socket buffers for the burst to survive
+	// intact, several times past even a generously autotuned loopback socket.
 	//
 	// Both drop classes — queue-level (writer blocked) and bus-level (pump
 	// outrun) — are the same contract here: this client lost data and must be
@@ -547,16 +589,25 @@ func TestServedChat_SlowConsumerIsToldItWasTruncated(t *testing.T) {
 		_ = ws.SetReadDeadline(time.Now().Add(10 * time.Second))
 		var f wsTestFrame
 		if err := websocket.JSON.Receive(ws, &f); err != nil {
-			// Name the two failure modes apart. A read that times out after
-			// the server has gone quiet means the burst was delivered whole
-			// and nothing was dropped — a broken precondition, not a slow
-			// runner — and the reader should be told which one they are
-			// looking at instead of inferring it from a bare i/o timeout.
-			t.Fatalf("draining backlog after %d frames (published %d): %v\n"+
-				"if this is a read timeout, the server ran out of frames to send without ever "+
-				"reporting a drop: the burst fit inside the bus buffer + queue + socket buffers, "+
-				"so the stalled-consumer precondition was never established",
-				framesRead, burst, err)
+			// Three failure modes reach this line as the same i/o timeout, and
+			// framesRead is what tells them apart. Say so explicitly — the
+			// first version of this message asserted the middle diagnosis for
+			// all of them and sent a reader looking at kernel socket buffers
+			// when the real answer was that the client was never subscribed.
+			diag := "the read was genuinely slow — a real timeout"
+			switch {
+			case framesRead == 0:
+				diag = "ZERO frames arrived: the server never sent this client anything. " +
+					"The subscription was probably not live when the burst was published, so the " +
+					"bus discarded all of it with nothing delivered and nothing counted as dropped. " +
+					"Check that streamSessions still subscribes BEFORE writing sessions:snapshot"
+			case framesRead >= burst:
+				diag = "the whole burst arrived intact and the server then ran out of frames " +
+					"without ever reporting a drop: the pipeline (bus buffer + queue + socket " +
+					"buffers) swallowed it, so the stalled-consumer precondition was never established"
+			}
+			t.Fatalf("draining backlog after %d frames (published %d): %v\n%s",
+				framesRead, burst, err, diag)
 		}
 		framesRead++
 		if f.Event == serve.TopicStreamTruncated {

@@ -61,6 +61,12 @@ import (
 //  5. Every socket write carries a deadline. A client that stops reading
 //     forever gets disconnected instead of pinning a server goroutine and
 //     a queue for the lifetime of the process.
+//
+//  6. The bus subscription is taken BEFORE the initial snapshot is built,
+//     because an unsubscribed connection loses events silently — the bus
+//     discards them, so they are not even counted as drops and rule 4
+//     never fires. Subscribing first makes "client received the snapshot"
+//     imply "client is subscribed". See [Server.streamSessions].
 
 const (
 	// TopicStreamTruncated is the synthetic WS event this server emits when
@@ -193,9 +199,14 @@ func (s *Server) streamQueueCap() int {
 	return defaultStreamQueueCap
 }
 
-// streamSessions sends the initial snapshots then pushes bus events to the
-// client in real time under the backpressure policy documented at the top
-// of this file.
+// streamSessions subscribes to the bus, sends the initial snapshots, then
+// pushes bus events to the client in real time under the backpressure policy
+// documented at the top of this file.
+//
+// Receipt of the `sessions:snapshot` frame is the client's proof that the
+// subscription is live: it is written after [rpc.EventBus.SubscribeTracked]
+// returns, so no event published after that frame arrives can be silently
+// lost. Callers and tests may rely on that ordering.
 //
 // The caller is the Sessions_Stream WS method handler.
 func (s *Server) streamSessions(ctx context.Context, ws *websocket.Conn) {
@@ -206,8 +217,36 @@ func (s *Server) streamSessions(ctx context.Context, ws *websocket.Conn) {
 		return websocket.JSON.Send(ws, wsFrame{Event: event, Data: data}) == nil
 	}
 
-	// Initial sessions snapshot, before subscribing, so the client always
-	// sees current state even if no events ever arrive.
+	// SUBSCRIBE FIRST, SNAPSHOT SECOND. The order matters and it is the
+	// opposite of what it looks like it should be.
+	//
+	// The subscription is what makes this connection exist as far as the bus
+	// is concerned, and rpc.EventBus.Publish DISCARDS events that have no
+	// subscriber. Taking the snapshot first left a window — a Sessions().List
+	// and an elicit ListPending, both real queries, plus two socket writes —
+	// during which every event published for this client went nowhere. Not
+	// dropped-and-counted: dropped and invisible. The connection was not
+	// subscribed, so [streamPump.totalDropped] stayed zero, no
+	// [TopicStreamTruncated] notice was owed, and the client was told nothing.
+	//
+	// That is the silent truncation this whole file exists to prevent, just
+	// relocated to connection setup: a browser reconnecting mid-answer lost
+	// precisely the tokens it reconnected to see, and every surface reported
+	// success. It also made TestServedChat_SlowConsumerIsToldItWasTruncated
+	// flaky on loaded CI, where the window stretched far enough to swallow an
+	// entire 2000-event burst and the client read zero frames.
+	//
+	// Subscribing first converts that window from lost events into buffered
+	// events: anything published while the snapshot is being built waits in
+	// the subscription buffer and is delivered once the pump starts. It also
+	// gives clients a guarantee worth having — receiving `sessions:snapshot`
+	// now PROVES the subscription is live, so nothing published after it can
+	// be missed.
+	sub := s.bus.SubscribeTracked(busBufferSize, subscribedTopics()...)
+	defer sub.Close()
+
+	// Initial sessions snapshot, so the client always sees current state even
+	// if no events ever arrive.
 	sessions, err := s.api.Sessions().List(ctx)
 	if err != nil {
 		_ = websocket.JSON.Send(ws, wsFrame{Error: "sessions list: " + err.Error()})
@@ -224,9 +263,6 @@ func (s *Server) streamSessions(ctx context.Context, ws *websocket.Conn) {
 			return
 		}
 	}
-
-	sub := s.bus.SubscribeTracked(busBufferSize, subscribedTopics()...)
-	defer sub.Close()
 
 	pump := &streamPump{
 		sub:  sub,
