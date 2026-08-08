@@ -20,15 +20,40 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
-// OTLPBaseURL derives the OTLP endpoint base from the fleet base URL.
-// Appending "/otlp" means the standard SDK subpaths resolve to
-// /otlp/v1/{traces,metrics,logs} which matches the fleet receiver routes.
-// Returns "" when FleetBaseURL is empty (OSS / prod-before-ldflags).
-func OTLPBaseURL(profile EnvProfile) string {
-	if profile.FleetBaseURL == "" {
+// OTLPBaseURL derives the OTLP ingest endpoint from the resolved fleet
+// config's API host. Appending "/otlp" means the standard SDK subpaths
+// resolve to /otlp/v1/{traces,metrics} which matches the fleet receiver
+// routes. Returns "" when APIBaseURL is empty (config not yet resolved /
+// OSS / prod-before-ldflags).
+//
+// # Why this takes FleetConfig and not EnvProfile
+//
+// It used to read EnvProfile.FleetBaseURL. That field is the *dashboard*
+// origin — the SPA host a user types in, the host that serves /config.json.
+// Fleet is a two-hostname SaaS shape (the Stripe / GitHub / Linear
+// convention): the SPA host serves the UI, a separate api.* host serves
+// /api/v1/* and OTLP ingest. Every other API call already routes through
+// Client.APIURL → FleetConfig.APIBaseURL; telemetry was the one caller left
+// pointing at the dashboard.
+//
+// The failure that caused was silent, not loud. https://fleet.kameas.ai is
+// CloudFront in front of an S3 SPA bucket, and an SPA bucket answers *any*
+// path with 200 + index.html. So POST /otlp/v1/traces returned 200, the
+// exporter recorded a successful export, and every span went into a void.
+// There was no error to find.
+//
+// The two origins must stay distinct rather than one string being repointed:
+// FleetBaseURL is still the correct input to /config.json discovery, which is
+// how APIBaseURL is learned in the first place.
+//
+// NewOTLPAckRoundTripper is the other half of this fix. Correct routing stops
+// today's data loss; rejecting a 200 that is not an OTLP acknowledgement is
+// what makes the *next* misroute loud instead of silent.
+func OTLPBaseURL(cfg FleetConfig) string {
+	if cfg.APIBaseURL == "" {
 		return ""
 	}
-	return strings.TrimRight(profile.FleetBaseURL, "/") + "/otlp"
+	return strings.TrimRight(cfg.APIBaseURL, "/") + "/otlp"
 }
 
 // FleetOTLPPipeline manages the post-login OTLP export side-channel for the
@@ -178,8 +203,13 @@ func (p *FleetOTLPPipeline) Activate(
 		return fmt.Errorf("fleet/otlp: build identity resource: %w", err)
 	}
 
-	// Shared auth transport.
-	httpClient := &http.Client{Transport: NewTokenRoundTripper(bearer, nil)}
+	// Shared transport: auth inside, ack validation outside. The ack wrapper
+	// turns a 2xx that is not an OTLP acknowledgement into an export error, so
+	// a misrouted endpoint fails loudly instead of reporting success into a
+	// void (see NewOTLPAckRoundTripper).
+	httpClient := &http.Client{
+		Transport: NewOTLPAckRoundTripper(NewTokenRoundTripper(bearer, nil)),
+	}
 
 	// ── Traces ────────────────────────────────────────────────────────────────
 	if tp != nil {
