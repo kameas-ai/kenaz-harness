@@ -1,0 +1,45 @@
+# release-integrity-ignore.txt — tags that will never have a published release.
+#
+# Read by scripts/ci/check-release-integrity.sh. One `vX.Y.Z` tag per line;
+# everything after `#` is a comment. Every entry MUST carry a reason.
+#
+# This file is an ignore list, not a floor. A floor tag ("only check >= vN")
+# would be shorter, but it hides every gap beneath it — including gaps that
+# appear later, if an old release is ever deleted. Ignoring tags one at a time,
+# with a written reason, is the only form that keeps the record honest and
+# keeps a new gap loud. A floor is also simply wrong for this repo: v0.56.0 and
+# v0.57.0 are dead while v0.55.1 below them and v0.57.1 above them are both
+# healthy, so no single cutoff separates good from bad.
+#
+# Adding an entry is a deliberate act. If you are adding one because a release
+# failed, first ask whether the release can be re-run against the tag instead —
+# a re-runnable failure is a bug to fix, not a line to add here.
+
+# ── Empty releases from the 2026-08-05 → 2026-08-07 publish gap ──────────────
+# tag-on-merge.yml creates the GitHub Release and then dispatches release.yml
+# to upload the artifacts. When release.yml failed, the Release row was left
+# behind with ZERO assets — which looks identical to a healthy release in the
+# releases list, and is why this went unnoticed. Both were superseded.
+#
+# This is the exact shape the asset check exists to catch.
+v0.56.0   # release.yml failed after the Release row was created; superseded by v0.57.1
+v0.57.0   # same; superseded by v0.57.1
+
+# ── Burned by the May 2026 release-pipeline migration ────────────────────────
+# Version numbers consumed by release-pipeline iterations are real tags on the
+# remote and cannot be reclaimed. See the "Note on burned version numbers"
+# preamble in docs/roadmap.md and the "Burned tags" section of CLAUDE.md.
+v0.7.0
+v0.7.1
+v0.7.2
+v0.7.4
+v0.7.5
+
+# ── Pre-release-train archaeology ────────────────────────────────────────────
+# v0.1.0 / v0.1.1 — cut before release.yml published GitHub Releases at all.
+# v0.4.5          — release build failed; superseded by v0.5.0.
+# v0.16.1         — release build failed; superseded by v0.17.0.
+v0.1.0
+v0.1.1
+v0.4.5
+v0.16.1
