@@ -460,17 +460,31 @@ func TestRunStatus_WaitingForInputAndBack(t *testing.T) {
 func TestRunStatus_DrainsInEveryInterleaving(t *testing.T) {
 	t.Parallel()
 	for i := 0; i < 50; i++ {
-		b, _, reg := newBridgeHarness(t, 5*time.Millisecond)
+		b, rc, reg := newBridgeHarness(t, 5*time.Millisecond)
 		_, end := b.beginTask("t-drain", reg)
 
 		ctx, cancel := context.WithCancel(context.Background())
 		resCh := raiseApproval(reg, ctx, fsSurface())
-		waitFor(t, func() bool { return reg.PendingCount() == 1 || b.pendingCount() == 1 })
+
+		// Wait for the DISPATCHED FRAME, not for a pending count.
+		//
+		// The 5 ms TTL above is deliberate — expiry is the third racer this
+		// test wants, alongside the remote deny and the ctx cancel. But that
+		// makes "the registry has one pending approval" a condition with a
+		// 5 ms lifetime, and polling it is how this test flaked on loaded CI:
+		// one overshooting poll and the approval had already self-resolved as
+		// a timeout, so the count sat at zero forever and the wait burned its
+		// full deadline. The recorded task.approval_requested frame proves the
+		// same precondition (the approval was raised AND dispatched) and is
+		// append-only, so no interleaving can take it away.
+		waitForFrames(t, rc, "task.approval_requested", 1)
 
 		var wg sync.WaitGroup
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
+			// May be empty if the TTL won the race — that is a legitimate
+			// interleaving, and the drain assertion below still has to hold.
 			for _, p := range reg.ListPending() {
 				_ = reg.ResolveFrom(p.RequestID, cedar.DecisionDeny, cedar.SourceRemote)
 			}
@@ -479,7 +493,8 @@ func TestRunStatus_DrainsInEveryInterleaving(t *testing.T) {
 		wg.Wait()
 		<-resCh
 
-		waitFor(t, func() bool { return b.pendingCount() == 0 && b.runStatus() == "running" })
+		waitFor(t, func() bool { return b.pendingCount() == 0 && b.runStatus() == "running" },
+			fmt.Sprintf("bridge drained on iteration %d", i))
 		end()
 	}
 }

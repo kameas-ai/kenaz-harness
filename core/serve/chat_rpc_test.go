@@ -496,8 +496,41 @@ func TestServedChat_SlowConsumerIsToldItWasTruncated(t *testing.T) {
 	// writer really blocks, rather than absorbing everything.
 	fat := strings.Repeat("x", 64*1024)
 
+	// SIZING THE BURST — this is what makes the test deterministic.
+	//
+	// The burst has to be bigger than everything the server can hold for one
+	// client. If the pipeline swallows it whole there is nothing to drop, no
+	// notice is ever generated, and the drain loop below blocks until its read
+	// deadline and reports an "i/o timeout" that looks like a slow runner but
+	// is really a missing precondition. That is how this test failed in CI.
+	//
+	// The pipeline is: the bus subscription buffer (busBufferSize, 1024
+	// frames) + the per-connection queue (4 here, via WithStreamQueueCap) +
+	// the one frame in flight in the writer + whatever the kernel socket
+	// buffers absorb.
+	//
+	// At the 200 frames this test used to publish, the bus buffer ALONE holds
+	// the entire burst, so bus-level drops are impossible and the test depends
+	// wholly on the writer blocking on the socket before the client starts
+	// reading — i.e. on 12.8 MiB not fitting in the kernel's loopback buffers.
+	// That is a coin flip, and measuring it says so: drop counts on a dev Mac
+	// came out bimodal over 12 runs, either ~187-195 or 1-11, with a low of
+	// ONE. One frame from having nothing to assert. The CI runner reached zero.
+	//
+	// 2000 frames removes the kernel from the argument. Only 1029 can sit in
+	// the bus + queue + writer, so ~971 frames × 64 KiB ≈ 62 MiB would have to
+	// live in socket buffers for the burst to survive intact — several times
+	// past even a generously autotuned loopback socket. A drop is now
+	// guaranteed by arithmetic rather than by scheduling.
+	//
+	// Both drop classes — queue-level (writer blocked) and bus-level (pump
+	// outrun) — are the same contract here: this client lost data and must be
+	// told. TestServedChat_HealthyConsumerIsNeverTruncated pins the other
+	// direction, that a client which keeps up never sees a notice.
+	const burst = 2000
+
 	// The client is NOT reading during this loop — that is the stall.
-	for i := range 200 {
+	for i := range burst {
 		api.EventBus().Publish("llm:stream-chunk", llmview.StreamChunkPayload{
 			SubID: fmt.Sprintf("sub-%d", i),
 			Chunk: corellm.StreamEvent{Kind: corellm.StreamText, Text: fat},
@@ -509,12 +542,23 @@ func TestServedChat_SlowConsumerIsToldItWasTruncated(t *testing.T) {
 	deadline := time.Now().Add(20 * time.Second)
 	var notice serve.StreamTruncatedPayload
 	sawNotice := false
+	framesRead := 0
 	for !sawNotice && time.Now().Before(deadline) {
 		_ = ws.SetReadDeadline(time.Now().Add(10 * time.Second))
 		var f wsTestFrame
 		if err := websocket.JSON.Receive(ws, &f); err != nil {
-			t.Fatalf("draining backlog: %v", err)
+			// Name the two failure modes apart. A read that times out after
+			// the server has gone quiet means the burst was delivered whole
+			// and nothing was dropped — a broken precondition, not a slow
+			// runner — and the reader should be told which one they are
+			// looking at instead of inferring it from a bare i/o timeout.
+			t.Fatalf("draining backlog after %d frames (published %d): %v\n"+
+				"if this is a read timeout, the server ran out of frames to send without ever "+
+				"reporting a drop: the burst fit inside the bus buffer + queue + socket buffers, "+
+				"so the stalled-consumer precondition was never established",
+				framesRead, burst, err)
 		}
+		framesRead++
 		if f.Event == serve.TopicStreamTruncated {
 			if err := json.Unmarshal(f.Data, &notice); err != nil {
 				t.Fatalf("unmarshal truncation notice %s: %v", f.Data, err)
@@ -524,7 +568,7 @@ func TestServedChat_SlowConsumerIsToldItWasTruncated(t *testing.T) {
 	}
 
 	if !sawNotice {
-		t.Fatal("a stalled client was silently starved of stream frames — no truncation notice arrived")
+		t.Fatalf("a stalled client was silently starved of stream frames — no truncation notice arrived in %d frames", framesRead)
 	}
 	if notice.Dropped == 0 {
 		t.Error("truncation notice reported zero dropped frames")

@@ -301,54 +301,148 @@ func (w *bootstrapContextWriter) Sync(ctx context.Context, payload contextbootst
 // subscribes to for live run progress.
 const TopicContextBootstrapProgress = "contextbootstrap:progress"
 
+// progressPatchQueueCap bounds the per-run queue of undelivered progress
+// PATCHes. Progress is advisory — the terminal PATCH in dispatch() carries
+// the authoritative status — so overflowing the queue drops updates rather
+// than blocking the engine or growing without bound.
+const progressPatchQueueCap = 32
+
+// bootstrapProgressPatch is one queued fleet progress update.
+type bootstrapProgressPatch struct {
+	runID string
+	patch corefleet.BootstrapRunPatch
+}
+
 // bootstrapProgressSink broadcasts run status to the frontend via the Wails
 // broker AND PATCHes fleet run progress (phase + counts). Non-blocking.
+//
+// # Why the fleet PATCHes go through one worker instead of one goroutine each
+//
+// Emit is called from the engine's run loop and must not block on the
+// network, so the fleet PATCH cannot happen inline. The obvious shape —
+// `go func() { PatchBootstrapRun(...) }()` per emission — was wrong in three
+// ways, all of which this queue fixes:
+//
+//  1. ORDERING. Concurrent PATCHes to the same run race, so fleet could
+//     observe `phase=extraction` *after* `phase=done`, leaving the run's
+//     server-side progress reading backwards. Worse, dispatch() finalises the
+//     run with a terminal `status=completed` PATCH the moment Engine.Run
+//     returns, so a straggling progress PATCH could mutate a run fleet had
+//     already been told was finished. One worker draining one queue means
+//     PATCHes leave in emission order, and drain() guarantees they are all
+//     done before the terminal PATCH is sent.
+//
+//  2. LIFETIME. Nothing owned those goroutines. They outlived the run, the
+//     dispatch call, and (in tests) the test that started them — which is how
+//     a leaked PATCH ended up calling fleet.LoadTokens() concurrently with a
+//     test cleanup's fleet.ClearTokens(), producing an intermittent
+//     `-race` failure in this package that was attributed to whichever
+//     unrelated test happened to be running when the detector fired.
+//
+//  3. CONCURRENCY. A chatty run fired unbounded simultaneous HTTP requests at
+//     fleet. The queue caps the outstanding work at progressPatchQueueCap.
 type bootstrapProgressSink struct {
 	broker    *StreamBroker
 	fleetBoot *corefleet.BootstrapClient
 
-	mu    sync.RWMutex // guards runID; write on SetRunID, read in Emit
+	// mu guards runID + the worker handles. Emit takes it for reading and
+	// sends on patches while still holding it; drain closes patches while
+	// holding it for writing. That pairing is what makes "send on a closed
+	// channel" unreachable.
+	mu    sync.RWMutex
 	runID string
+	// patches is nil when no run is active.
+	patches chan bootstrapProgressPatch
+	// workerDone closes when the worker has drained patches and returned.
+	workerDone chan struct{}
 }
 
 func newBootstrapProgressSink(broker *StreamBroker, fleetBoot *corefleet.BootstrapClient) *bootstrapProgressSink {
 	return &bootstrapProgressSink{broker: broker, fleetBoot: fleetBoot}
 }
 
-// SetRunID records the fleet run id for progress PATCH calls.
+// SetRunID records the fleet run id for progress PATCH calls and starts the
+// delivery worker for that run. dispatch() calls it once per run, before the
+// engine starts, and pairs it with drain() once the engine returns.
 func (p *bootstrapProgressSink) SetRunID(runID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.runID = runID
+	if p.patches != nil || runID == "" || p.fleetBoot == nil || !p.fleetBoot.Enabled() {
+		return
+	}
+	ch := make(chan bootstrapProgressPatch, progressPatchQueueCap)
+	done := make(chan struct{})
+	p.patches, p.workerDone = ch, done
+	go func() {
+		defer close(done)
+		for job := range ch {
+			if err := p.fleetBoot.PatchBootstrapRun(context.Background(), job.runID, job.patch); err != nil {
+				logging.L().Debug("contextbootstrap.progress.patch_failed", "err_class", classifyWiringErr(err))
+			}
+		}
+	}()
+}
+
+// drain stops the delivery worker and blocks until every progress PATCH that
+// was accepted for delivery has completed. It is the happens-before edge that
+// lets dispatch() send the terminal status PATCH knowing no progress PATCH can
+// still be in flight behind it.
+//
+// The wait is bounded: every PATCH goes through fleet.Client.do, which applies
+// the client's per-request httpTimeout, so a hung fleet cannot wedge a run.
+func (p *bootstrapProgressSink) drain() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	ch, done := p.patches, p.workerDone
+	p.patches, p.workerDone = nil, nil
+	if ch != nil {
+		// Closed under the write lock, so no Emit can be mid-send.
+		close(ch)
+	}
+	p.mu.Unlock()
+	if done != nil {
+		<-done
+	}
 }
 
 // Emit implements contextbootstrap.ProgressSink. It must not block: the broker
-// emit is a fire-and-forget, and the fleet PATCH runs in a goroutine.
+// emit is fire-and-forget, and the fleet PATCH is handed to the run's delivery
+// worker via a non-blocking send.
 func (p *bootstrapProgressSink) Emit(ctx context.Context, status contextbootstrap.RunStatus) {
 	if p.broker != nil {
 		p.broker.emitter.Emit(p.broker.EmitCtx(), TopicContextBootstrapProgress, status)
 	}
+	if p.fleetBoot == nil || !p.fleetBoot.Enabled() {
+		return
+	}
+
 	p.mu.RLock()
-	runID := p.runID
-	p.mu.RUnlock()
-	if p.fleetBoot != nil && p.fleetBoot.Enabled() && runID != "" {
-		patch := corefleet.BootstrapRunPatch{
-			Phase:        string(status.Phase),
-			NodesCreated: status.TotalNodesWritten,
-		}
-		for _, c := range status.Connectors {
-			patch.Connectors = append(patch.Connectors, corefleet.BootstrapConnectorStatus{
-				Name:           c.ConnectorID,
-				Status:         c.Status,
-				ItemsProcessed: c.ItemsFetched,
-				NodesCreated:   c.NodesExtracted,
-			})
-		}
-		go func() {
-			if err := p.fleetBoot.PatchBootstrapRun(context.Background(), runID, patch); err != nil {
-				logging.L().Debug("contextbootstrap.progress.patch_failed", "err_class", classifyWiringErr(err))
-			}
-		}()
+	defer p.mu.RUnlock()
+	if p.runID == "" || p.patches == nil {
+		return
+	}
+	patch := corefleet.BootstrapRunPatch{
+		Phase:        string(status.Phase),
+		NodesCreated: status.TotalNodesWritten,
+	}
+	for _, c := range status.Connectors {
+		patch.Connectors = append(patch.Connectors, corefleet.BootstrapConnectorStatus{
+			Name:           c.ConnectorID,
+			Status:         c.Status,
+			ItemsProcessed: c.ItemsFetched,
+			NodesCreated:   c.NodesExtracted,
+		})
+	}
+	select {
+	case p.patches <- bootstrapProgressPatch{runID: p.runID, patch: patch}:
+	default:
+		// Queue full — fleet is slower than the engine emits. Drop this
+		// update; the next one supersedes it and the terminal PATCH is
+		// authoritative either way.
+		logging.L().Debug("contextbootstrap.progress.patch_dropped", "reason", "queue_full")
 	}
 }
 
@@ -676,6 +770,13 @@ func (a *contextBootstrapImpl) dispatch(ctx context.Context, existingRunID strin
 		Interview: interview,
 		Gating:    gating,
 	})
+
+	// Flush progress PATCHes before the terminal one. Without this the run's
+	// last few phase updates are still in flight and can land *after*
+	// status=completed, leaving fleet showing a finished run stuck at a
+	// mid-run phase. drain() is bounded by the fleet client's per-request
+	// httpTimeout, so a slow fleet delays the finalise, it cannot wedge it.
+	a.progress.drain()
 
 	// Finalise the fleet run + emit the terminal audit event.
 	finalStatus := "completed"
