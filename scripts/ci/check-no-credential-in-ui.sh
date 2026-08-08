@@ -2,9 +2,17 @@
 # Privacy CI: no credential-shaped field on TS/Vue types whose name ends
 # in Reference|Credential|Secret. Forbidden field names (case-insensitive):
 # value, secret, password, apiKey, token. FR-020 / C-004.
+#
+# Paths are anchored to the repo root by lib/ci-gate.sh — with a cwd-relative
+# default ROOT this grep matched nothing from any other directory and the
+# script reported "no credential-shaped types found — clean."
 set -euo pipefail
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/ci-gate.sh"
+
 ROOT="${1:-frontend/src}"
+
+ci_require_dir "$ROOT" "[no-credential-in-ui]"
 
 fail=0
 

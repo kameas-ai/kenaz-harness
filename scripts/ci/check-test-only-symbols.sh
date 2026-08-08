@@ -2,7 +2,18 @@
 # Privacy CI invariant #3 (plan §4.3): exported identifiers prefixed
 # Test/Fake/Stub/Fixture must live only in `_test.go` files inside
 # core/rpc/ and core/rpc/views/*.
+#
+# Paths are anchored to the repo root by lib/ci-gate.sh. The `[[ ! -d ]] &&
+# continue` below is a real guard for a fork that removed a directory, but
+# with a cwd-relative DIRS it also skipped both directories — and printed
+# "clean" — whenever the script ran from anywhere but the repo root.
 set -euo pipefail
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/ci-gate.sh"
+
+# core/rpc must exist; core/rpc/views is covered by the recursive find below
+# but is listed explicitly for readability.
+ci_require_dir core/rpc "[test-only-symbols]"
 
 DIRS=(core/rpc core/rpc/views)
 

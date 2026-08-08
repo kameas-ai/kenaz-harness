@@ -92,17 +92,49 @@ iso_to_epoch() {
 }
 
 # ── 1. every strict-SemVer tag on the remote ─────────────────────────────────
-gh api "repos/$REPO/git/refs/tags" --paginate --jq '.[].ref' 2>/dev/null \
-  | sed 's|^refs/tags/||' \
-  | grep -E "$SEMVER_RE" \
-  | sort > "$WORK/tags.txt" || true
+#
+# Fetch and filter in two steps, on purpose. As one pipeline ending in
+# `|| true`, a `gh api` failure (rate limit, expired token, network) produced
+# an empty tags.txt, which produced an empty missing.txt, which produced
+# "✅ Every SemVer tag reconciles" and exit 0. Verified: with gh stubbed to
+# exit 1 the old script printed "OK: all 0 SemVer tags reconcile". The gate
+# whose entire purpose is to make silence audible was itself silent when its
+# data source went away.
+#
+# The `|| true` is still needed on the *filter* — grep exits 1 on no match —
+# but the *fetch* must be allowed to fail loudly.
+if ! gh api "repos/$REPO/git/refs/tags" --paginate --jq '.[].ref' > "$WORK/tags.raw" 2>"$WORK/tags.err"; then
+  echo "::error::could not list tags for $REPO — the reconciliation cannot run" >&2
+  sed 's/^/  /' "$WORK/tags.err" >&2 || true
+  exit 2
+fi
+sed 's|^refs/tags/||' "$WORK/tags.raw" | grep -E "$SEMVER_RE" | sort > "$WORK/tags.txt" || true
+
+# Zero SemVer tags in a repo that releases on every merge means the query
+# succeeded but returned something unexpected. Reconciling zero tags against
+# zero releases is a vacuous pass, so refuse it.
+if [ ! -s "$WORK/tags.txt" ]; then
+  echo "::error::$REPO has no vX.Y.Z tags at all — refusing to report 'all tags reconcile' over an empty set" >&2
+  echo "If this repo genuinely has no releases yet, remove this workflow until it does." >&2
+  exit 2
+fi
 
 # ── 2. every release, as `tag<TAB>draft<TAB>asset_count` ─────────────────────
 # The list endpoint is the only one that returns drafts — `releases/tags/<tag>`
 # 404s on a draft, so a per-tag lookup would misreport a draft as "no release".
-gh api "repos/$REPO/releases?per_page=100" --paginate \
-  --jq '.[] | "\(.tag_name)\t\(.draft)\t\(.assets | length)"' 2>/dev/null \
-  | sort > "$WORK/releases.tsv" || true
+#
+# Failing this fetch is less dangerous than failing the tag fetch — an empty
+# releases.tsv makes every tag look unreleased, which is loud rather than
+# silent. But it is loud in the wrong way: a hundred fabricated "no release
+# exists" errors would train the reader to ignore this workflow. Fail with the
+# real reason instead.
+if ! gh api "repos/$REPO/releases?per_page=100" --paginate \
+     --jq '.[] | "\(.tag_name)\t\(.draft)\t\(.assets | length)"' > "$WORK/releases.raw" 2>"$WORK/releases.err"; then
+  echo "::error::could not list releases for $REPO — the reconciliation cannot run" >&2
+  sed 's/^/  /' "$WORK/releases.err" >&2 || true
+  exit 2
+fi
+sort "$WORK/releases.raw" > "$WORK/releases.tsv"
 
 # Downloadable == published (not a draft) AND carrying at least one asset.
 awk -F'\t' '$2 == "false" && $3 > 0 { print $1 }' "$WORK/releases.tsv" \

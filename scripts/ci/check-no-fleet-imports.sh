@@ -50,6 +50,26 @@ if [ -z "$ALL_PKGS" ]; then
   ALL_PKGS=$(go list ./core/... 2>/dev/null | grep -v "^${MODULE}/core/fleet" || true)
 fi
 
+# If BOTH go list invocations came back empty we have no package set to check.
+# The `2>/dev/null || true` above exists so a partial load error doesn't abort
+# the script — but it also swallowed a total failure, and an empty package
+# list walked straight past the loop to "clean — no unauthorized fleet imports
+# found: PASS". Verified: with `go list` stubbed to exit 1 and a real
+# `import _ ".../core/fleet"` planted in core/sessions, the old script printed
+# PASS and exited 0.
+#
+# core/fleet/ exists (checked above), so core/ is a real Go tree and an empty
+# listing means the toolchain failed, not that there is nothing to inspect.
+if [ -z "$ALL_PKGS" ]; then
+  echo "[no-fleet-imports] FAIL: 'go list ./core/...' returned no packages." >&2
+  echo "[no-fleet-imports] core/fleet/ exists, so this is a toolchain failure (missing" >&2
+  echo "[no-fleet-imports] module cache? build error?), not an empty tree. Re-run" >&2
+  echo "[no-fleet-imports] 'go list ./core/...' to see the real error. Refusing to report" >&2
+  echo "[no-fleet-imports] a clean result from an empty package set." >&2
+  go list ./core/... >/dev/null || true
+  exit 1
+fi
+
 VIOLATIONS=()
 
 for pkg in $ALL_PKGS; do

@@ -7,7 +7,22 @@
 #   - font-src is 'self'
 #
 # Run after `npm run build`.
+#
+# Paths are anchored to the repo root by lib/ci-gate.sh so the default
+# argument means the same thing regardless of the caller's cwd. (This gate
+# already failed loudly on a missing file rather than passing, unlike its
+# siblings — the anchor keeps it that way for the right reason.)
+#
+# COVERAGE GAP: only the desktop bundle (frontend/dist) is checked. The
+# served-mode SPA is built from frontend/served.html into
+# frontend/dist-served and carries its own __CSP_PLACEHOLDER__ substitution;
+# nothing checks that one. pr.yml would need a second invocation
+# (`bash scripts/ci/check-csp.sh frontend/dist-served/index.html` after
+# `npm run build:served`) — the script already takes the path as $1. Left to
+# the pr.yml owner because #279 is concurrently editing that file.
 set -euo pipefail
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/ci-gate.sh"
 
 DIST_HTML="${1:-frontend/dist/index.html}"
 

@@ -184,7 +184,31 @@ EOF
   fi
   echo "check-codegen: wailsjs binding source hash OK (${CURRENT_HASH})"
 else
-  echo "check-codegen: WARN — ${WAILSJS_HASH_FILE} not found; skipping wailsjs hash gate"
+  # Previously this printed a WARN and fell through to "OK — generated files
+  # match", exit 0. Verified: `rm scripts/ci/wailsjs-bindings.sha256` plus a
+  # real edit to core/rpc/bindings.go passed the gate. Deleting the baseline
+  # is how you silence a hash gate, so deleting the baseline has to be the
+  # thing that fails it — same reasoning that removed the `if [ -f <script> ]`
+  # existence guard around the bundle-size gate in #279.
+  cat >&2 <<EOF
+
+check-codegen: FAIL — ${WAILSJS_HASH_FILE} not found.
+
+This file is the wailsjs drift gate's baseline. Without it the gate has
+nothing to compare against and would pass unconditionally, which is
+indistinguishable from having no gate at all.
+
+If the hash file was deleted by accident, restore it from git. If the
+wailsjs binding surface was intentionally regenerated, recreate it:
+
+  bash scripts/ci/check-codegen.sh --update-wailsjs-hash
+  git add scripts/ci/wailsjs-bindings.sha256
+
+If the wailsjs binding layer is being retired, delete this whole block in
+the same commit that deletes frontend/wailsjs/ — deliberately, in review.
+
+EOF
+  exit 1
 fi
 
 echo "check-codegen: OK — generated files match"
