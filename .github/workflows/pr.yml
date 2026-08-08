@@ -272,11 +272,16 @@ jobs:
         run: bash scripts/ci/check-csp.sh
 
       # Non-blocking, and deliberately so — but NOT because the number is
-      # unknown. As measured on main at a7f3e87 (2026-08-08): the desktop
-      # bundle is 1,572,873 bytes gzipped JS+CSS against the 1,500,000-byte
-      # NFR-006 budget — 72,873 bytes OVER — and the served bundle is
-      # 1,416,109 bytes (83,891 bytes of headroom). So this step fails on
-      # unmodified main today, and making it required would block every PR.
+      # unknown. As measured by this job on this runner pool against main at
+      # a7f3e87 (2026-08-08): the desktop bundle is 1,579,582 bytes gzipped
+      # JS+CSS against the 1,500,000-byte NFR-006 budget — 79,582 bytes OVER
+      # — and the served bundle is 1,422,393 bytes (77,607 bytes of
+      # headroom). So this step fails on unmodified main today, and making it
+      # required would block every PR.
+      #
+      # Expect ~0.4% drift between runners: the same commit measured
+      # 1,572,873 / 1,416,109 on a macOS/arm64 dev box. Treat the CI figure
+      # as authoritative and never tune the budget to a laptop number.
       #
       # It read "pass" for months only because it resolved dist/assets
       # against the repo root, found nothing, and took its own not-built
