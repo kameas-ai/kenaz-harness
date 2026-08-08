@@ -1,0 +1,77 @@
+name: release-integrity
+
+# Reconciles git tags against published GitHub Releases and FAILS when a tag
+# has no downloadable artifacts.
+#
+# The gap this closes: tag-on-merge.yml pushes the tag, dispatches release.yml,
+# and exits green — it never learns whether the release actually shipped. When
+# release.yml broke on 2026-08-02, eleven tags were cut over four days with
+# nothing published, and every check stayed green. Silence read as success.
+#
+# This workflow is the thing that makes silence audible. A scheduled failure
+# here turns into a red run in the Actions tab and a notification to the repo
+# owner, which is the signal that was missing.
+#
+# It runs on a schedule (the backstop — catches anything, including a release
+# deleted long after the fact) and immediately after every Release run
+# completes (the fast lane — a failed release is reported in minutes rather
+# than at the next scheduled tick, because the script treats an already-failed
+# release run as out-of-grace).
+
+on:
+  schedule:
+    # Every 6h. A four-day outage becomes a six-hour outage.
+    - cron: '23 */6 * * *'
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      grace_minutes:
+        description: 'Minutes a tag may go unreleased before it is failed'
+        required: false
+        default: '90'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: release-integrity
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    name: Tags vs published releases
+    runs-on: [self-hosted, Linux, ARM64, ci-fast]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # The self-hosted ARM64 ci-fast runner image lacks the gh CLI. Install on
+      # demand — same pattern as tag-on-merge.yml and release.yml. Once
+      # kameas-infra bakes gh into the runner AMI this step can be deleted.
+      - name: install gh CLI if missing
+        run: |
+          set -euo pipefail
+          if command -v gh >/dev/null 2>&1; then
+            echo "gh already installed: $(gh --version | head -n1)"
+            exit 0
+          fi
+          GH_VERSION="2.62.0"
+          ARCH="$(uname -m)"
+          case "$ARCH" in
+            x86_64) ARCH=amd64 ;;
+            aarch64|arm64) ARCH=arm64 ;;
+            *) echo "::error::unsupported arch: $ARCH"; exit 1 ;;
+          esac
+          curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${ARCH}.tar.gz" -o /tmp/gh.tgz
+          tar -xzf /tmp/gh.tgz -C /tmp
+          sudo install -m 755 "/tmp/gh_${GH_VERSION}_linux_${ARCH}/bin/gh" /usr/local/bin/gh
+          gh --version | head -n1
+
+      - name: reconcile tags against releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          GRACE_MINUTES: ${{ inputs.grace_minutes || '90' }}
+        run: bash scripts/ci/check-release-integrity.sh
