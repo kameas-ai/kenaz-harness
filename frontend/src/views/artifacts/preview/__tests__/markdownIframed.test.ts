@@ -117,7 +117,9 @@ describe('MarkdownIframedRenderer', () => {
     expect(w.find('[data-testid="markdown-iframed-renderer"]').exists()).toBe(true);
     const iframe = w.find('iframe');
     expect(iframe.exists()).toBe(true);
-    expect(iframe.attributes('sandbox')).toBe('allow-same-origin');
+    // MarkdownIframedRenderer delegates to IframeSandbox, which is fully
+    // restrictive (no allow flags) per FR-006 (spec 092, Task 1.H-FR6).
+    expect(iframe.attributes('sandbox')).toBe('');
   });
 
   it('iframe srcdoc contains compiled markdown heading', () => {

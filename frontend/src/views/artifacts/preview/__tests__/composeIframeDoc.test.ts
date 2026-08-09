@@ -6,7 +6,9 @@
  *   - Composed document starts with the exact CSP meta tag.
  *   - Adversarial corpus: artifact HTML containing </head>, </meta>, <base>,
  *     <script>, mixed quotes renders without hijacking the outer document.
- *   - Sandbox attribute exactly `allow-same-origin`.
+ *   - The sandbox attribute itself is set on the consuming iframe element
+ *     in IframeSandbox.vue (fully restrictive, `sandbox=""`), not here —
+ *     see IframeSandbox.test.ts.
  */
 
 import { describe, it, expect } from 'vitest';
