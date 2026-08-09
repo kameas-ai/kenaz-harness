@@ -2,7 +2,14 @@
 # Privacy CI invariant: only core/rpc/emitter.go and
 # core/rpc/stream_broker.go may call runtime.EventsEmit (plan §4.2,
 # WP11). Any third caller fails the build.
+#
+# Paths are anchored to the repo root by lib/ci-gate.sh — this gate greps `.`,
+# so invoked from any other directory it found nothing and reported "clean".
 set -euo pipefail
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/ci-gate.sh"
+
+ci_require_dir core "[emitter-isolation]"
 
 ALLOWED=(
   "core/rpc/emitter.go"

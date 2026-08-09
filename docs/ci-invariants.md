@@ -1,7 +1,55 @@
 # CI invariants
 
-The harness mirrors Kenaz's five privacy CI invariants (plan §4.3). Each
-gate runs on every PR and blocks merge on failure.
+The harness mirrors Kenaz's five privacy CI invariants (plan §4.3). Most
+gates run on every PR and block merge on failure. **Two do not** — see the
+"Enforcement status" table below. That sentence used to read "Each gate runs
+on every PR and blocks merge on failure", which was not true of #4 for
+months, and the sentence is part of why nobody checked.
+
+## Enforcement status
+
+Audited end-to-end on 2026-08-08 by injecting a violation into each gate and
+confirming it fired. Anything not listed as **blocking** is advisory today.
+
+| Gate | Runs on PR | Blocking | Notes |
+|---|---|---|---|
+| #1 CSP | yes | yes | desktop bundle only — the served bundle's CSP is unchecked |
+| #2 slog privacy | yes | yes | widened 2026-08-08 from `slog.` to any receiver |
+| #3 test-only symbols | yes | yes | |
+| #4 CSS tokens | yes | **no** — `continue-on-error: true` | 6 real violations on main; see below |
+| #5 single persistence file | yes | yes | rewritten 2026-08-08 — it could not fail before |
+| bundle-size | yes | **no** — `continue-on-error: true` | desktop bundle is over budget; see #279 |
+| serve-dispatch drift | yes | no, by design | informational; `SERVE_DRIFT_GATE=1` to gate |
+| cred-bytes hygiene | **no** | n/a | documented in CONTRIBUTING.md, wired to nothing |
+| manifest version bump | **no** | n/a | script works, no workflow invokes it |
+
+### Gates that could not fail before 2026-08-08
+
+Recorded so the shape stays recognisable:
+
+- **#4 CSS tokens** — resolved `src` against `process.cwd()`, so under pr.yml
+  (cwd = repo root) it threw ENOENT on every run, swallowed by
+  `continue-on-error: true`. Never inspected a line of CSS in CI.
+- **#5 single persistence file** — read `core/rpc/settings.go`, which has not
+  existed since the settings view moved; took the "not found — skipping"
+  branch. And its count used `sort -u` on a single fixed literal, so
+  `count > 1` was arithmetically unreachable either way.
+- **Six shell gates** (emitter/wailsjs/test-only-symbols/no-credential-in-UI/
+  slog/single-persistence) reported "clean" when invoked from any directory
+  other than the repo root, because their relative scan paths resolved to
+  nothing. Now anchored via `scripts/ci/lib/ci-gate.sh`.
+- **binding-names** matched only the receiver spelling `b`; renaming the
+  receiver reduced the method set to zero and a zero-method loop passed.
+- **no-fleet-imports** passed when `go list` failed, because the empty
+  package list walked past the loop to "clean".
+- **codegen (wailsjs half)** downgraded to a WARN and passed when its hash
+  baseline file was deleted.
+- **release-integrity** printed "✅ Every SemVer tag reconciles" and exited 0
+  when the `gh` API call failed and returned zero tags.
+
+`scripts/ci/gates_can_fail_test.go` is the regression test for this class. It
+does not run in CI yet — pr.yml's test-go step scopes to
+`./core/... ./cmd/harness-vm/...`, which excludes `./scripts/...`.
 
 ## #1 — Strict CSP (no CDNs, no outbound traffic)
 
@@ -26,11 +74,29 @@ gate runs on every PR and blocks merge on failure.
 - Forbidden outside `frontend/src/styles/tokens.css`: raw hex literal, `rgb()`, `rgba()`, `hsl()`, `hsla()`, `oklch()`, hard-coded font-family stack.
 - **CI gate**: `node scripts/ci/check-css-tokens.mjs` (npm: `npm run check:css-tokens`).
 - Allowlist: `// css-tokens-allow: <reason+ticket>` end-of-line marker.
+- **Non-blocking today, with a real number behind it.** Measured on main at
+  `a7f3e87` once the gate was pointed at `frontend/src`: **6 violations, all
+  in `frontend/src/styles/fonts.css`**, all of the form
+  `@font-face { font-family: 'Geist' }`. Zero colour-literal violations —
+  no hex, `rgb()`, `hsl()` or `oklch()` anywhere outside `tokens.css`.
+- The first run of the repaired gate reported 41, not 6. The other 35 were
+  false positives from a backtracking bug in the font-family pattern:
+  `/font-family\s*:\s*(?!var\()/i` re-tests its own negative lookahead after
+  giving back the whitespace it consumed, so every `font-family: var(--x)`
+  and every `font-family: inherit` matched. Fixed in the same change; do not
+  reintroduce a backtrackable `\s*` in front of that lookahead.
+- **Before this becomes required**, one of:
+  1. allowlist `frontend/src/styles/fonts.css` alongside `tokens.css` — it is
+     the same kind of file, and `@font-face` cannot name a family via
+     `var()`, so those six lines are unfixable by construction; or
+  2. teach the rule to skip `font-family` inside an `@font-face` block.
+  Either is a one-line change. Do it in its own PR, re-measure, and drop
+  `continue-on-error` from the css-tokens step in the same change.
 
 ## #5 — Single-file persistence with schema versioning
 
 - All UI state lives in `$USER_CONFIG_DIR/kenaz-harness/settings.json` with a top-level `schemaVersion: 1` integer.
-- **CI gate**: `bash scripts/ci/check-single-persistence-file.sh` (asserts a single canonical filename in `core/rpc/settings.go`).
+- **CI gate**: `bash scripts/ci/check-single-persistence-file.sh` (asserts a single canonical persistence filename in `core/rpc/views/settings/impl.go` — **not** `core/rpc/settings.go`, which no longer exists; pointing at the old path is what made this gate a no-op).
 - The Go-side test (when WP13 lands) covers schemaVersion migrations + corruption recovery.
 
 ## Adjacent guardrails

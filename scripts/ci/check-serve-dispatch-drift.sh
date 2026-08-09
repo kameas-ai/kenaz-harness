@@ -22,6 +22,8 @@
 
 set -euo pipefail
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/ci-gate.sh"
+
 BINDINGS_FILE="core/rpc/bindings.go"
 DISPATCH_FILE="core/serve/server.go"
 GATE="${SERVE_DRIFT_GATE:-0}"
@@ -51,8 +53,10 @@ fi
 # frontend JS.
 LIFECYCLE_SKIP="SetSettingsStore|SetContext"
 
+# Receiver name is a wildcard — see check-binding-names.sh for why hardcoding
+# `b` silently reduced the extracted set to zero.
 bindings_methods=$(
-  grep -oE 'func \(b \*Bindings\) [A-Z][A-Za-z0-9_]+' "$BINDINGS_FILE" \
+  grep -oE 'func \([A-Za-z_][A-Za-z0-9_]* \*Bindings\) [A-Z][A-Za-z0-9_]+' "$BINDINGS_FILE" \
     | awk '{print $NF}' \
     | grep -vE "^($LIFECYCLE_SKIP)$" \
     | sort -u
