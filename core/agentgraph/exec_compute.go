@@ -1193,9 +1193,19 @@ func (escalateExecutor) Execute(ctx context.Context, env *Env, node *Node, input
 		}
 	}
 
+	// Ground the escalated call the same way every other compute
+	// executor does (wiring-integrity-01PMAG04 WP00). This call fires
+	// *after* something failed — exactly when graphBaseOf's TaskState
+	// block and the accumulated backtrack FailureAnnotations are
+	// populated and most valuable. Sending it bare meant the one path
+	// that most needs to know what was already tried and rejected was
+	// the only path running without that context.
 	resp, err := env.LLM.Generate(ctx, LLMRequest{
 		Model:     a.TargetModel,
 		MaxTokens: 1024,
+		SystemPrompt: composePrompt(
+			resolvePromptTemplate(env, a.Provider, a.TargetModel),
+			graphBaseOf(env), a.SystemPrompt),
 		Messages: []Message{
 			{Role: "user", Content: "Re-do this with higher quality:\n\n" + draft},
 		},

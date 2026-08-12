@@ -132,9 +132,17 @@ func (escalationLadderExecutor) Execute(ctx context.Context, env *Env, node *Nod
 			"rung": "escalate", "already_used": !claimed,
 		})
 		if claimed {
+			// Ground the rung (wiring-integrity-01PMAG04 WP00). The
+			// ladder fires only after a failure, so graphBaseOf's
+			// TaskState + FailureAnnotations block is populated and is
+			// precisely the context this call needs. EscalationLadder
+			// extends the *control* archetype, so there is no per-node
+			// system_prompt attr to compose in — the graph base is the
+			// whole grounding here.
 			resp, err := env.LLM.Generate(ctx, LLMRequest{
-				Model:     a.TargetModel,
-				MaxTokens: 1024,
+				Model:        a.TargetModel,
+				MaxTokens:    1024,
+				SystemPrompt: composePrompt(resolvePromptTemplate(env, "", a.TargetModel), graphBaseOf(env)),
 				Messages: []Message{
 					{Role: "user", Content: "Re-do this with higher quality:\n\n" + draft},
 				},
@@ -176,10 +184,16 @@ func (escalationLadderExecutor) Execute(ctx context.Context, env *Env, node *Nod
 		}
 		prompt := "The previous approach failed and repeated retry/escalation did not resolve it:\n\n" +
 			draft + "\n\nProduce a revised numbered-step plan that explicitly avoids the rejected approach."
+		// Ground the replan rung (wiring-integrity-01PMAG04 WP00). The
+		// prompt tells the model to "avoid the rejected approach" — the
+		// record of what *was* rejected lives in graphBaseOf's
+		// FailureAnnotations block, so without this the instruction
+		// referenced context the model could not see.
 		resp, err := env.LLM.Generate(ctx, LLMRequest{
-			Model:     plannerModel,
-			MaxTokens: 1024,
-			Messages:  []Message{{Role: "user", Content: prompt}},
+			Model:        plannerModel,
+			MaxTokens:    1024,
+			SystemPrompt: composePrompt(resolvePromptTemplate(env, "", plannerModel), graphBaseOf(env)),
+			Messages:     []Message{{Role: "user", Content: prompt}},
 		})
 		if err != nil {
 			return res, fmt.Errorf("escalation_ladder: node %q: replan: %w", node.ID, err)
