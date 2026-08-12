@@ -556,7 +556,11 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	llmAdapter := NewLLMProviderAdapter(r.cfg.Registry, profileID, modelOverride, toolCatalog, imageCapturer).
 		WithSessionID(sessionID).
 		WithEnvContext(r.cfg.Clock, r.cfg.WorkspaceDir, r.cfg.WorkspaceNote).
-		WithCustomInstructions(r.cfg.CustomInstructions)
+		WithCustomInstructions(r.cfg.CustomInstructions).
+		// autonomy-knobs-live-01PMAG02 WP06: recapStyle was resolved
+		// through the three-layer chain and read by nothing. Resolved per
+		// Generate so a Settings edit lands on the next turn.
+		WithRecapStyle(func() autonomy.RecapMode { return r.autonomyKnobs().RecapStyle })
 	toolAdapter := newKernelToolAdapter(r.cfg.Pool, r.cfg.Perms, sessionID)
 	if r.cfg.AutonomyKnobs != nil {
 		toolAdapter.withAutonomy(r.cfg.AutonomyKnobs)

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/llm/fallback"
 	"github.com/kameas-ai/kenaz-harness/core/llm/retry"
@@ -95,6 +96,11 @@ type LLMProviderAdapter struct {
 	// next turn (system-prompt-layers WP04). nil / empty appends no user
 	// layer.
 	customInstructions func() string
+
+	// recapStyle returns the resolved autonomy recapStyle knob, or is nil
+	// when no autonomy provider is wired (test / boot paths).
+	// (autonomy-knobs-live-01PMAG02 WP06)
+	recapStyle func() autonomy.RecapMode
 }
 
 // NewLLMProviderAdapter constructs an adapter pinned to a specific
@@ -165,6 +171,41 @@ func (a *LLMProviderAdapter) buildEnvBlock() string {
 		}
 	}
 	return buildEnvContext(in)
+}
+
+// WithRecapStyle pins the autonomy recapStyle resolver onto the adapter
+// (autonomy-knobs-live-01PMAG02 WP06). Evaluated once per Generate so a
+// Settings edit takes effect on the next turn.
+//
+// recapStyle was one of the resolved-but-unread autonomy knobs: it was
+// computed through the three-layer inheritance chain, given a source
+// trace, rendered in the Settings panel, and consumed by nothing.
+func (a *LLMProviderAdapter) WithRecapStyle(fn func() autonomy.RecapMode) *LLMProviderAdapter {
+	a.recapStyle = fn
+	return a
+}
+
+// buildRecapBlock renders the end-of-turn recap instruction for the
+// active recapStyle, or "" when unset.
+//
+// RecapNone is deliberately NOT "" -- "say nothing extra" is a real
+// instruction and differs from having no opinion. Only a nil resolver or
+// an unrecognised mode yields no layer, which is what keeps a harness
+// with no autonomy provider byte-identical to pre-01PMAG02.
+func (a *LLMProviderAdapter) buildRecapBlock() string {
+	if a == nil || a.recapStyle == nil {
+		return ""
+	}
+	switch a.recapStyle() {
+	case autonomy.RecapNone:
+		return "When you finish a multi-step task, state the result only. Do not summarise the steps you took."
+	case autonomy.RecapBrief:
+		return "When you finish a multi-step task, close with a one-or-two sentence recap of what you did."
+	case autonomy.RecapFull:
+		return "When you finish a multi-step task, close with a structured recap: what you did, what you found, and anything you could not complete."
+	default:
+		return ""
+	}
 }
 
 // WithCustomInstructions pins the user chat custom-instructions resolver
@@ -319,7 +360,9 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 		// composeSystemPrompt's default renderer reproduces today's
 		// plain join byte-for-byte, so this is a deliberate, documented
 		// gap rather than a half-wire.
-		System:   composeSystemPrompt(nil, req.SystemPrompt, a.buildEnvBlock(), a.buildUserInstructionsBlock()),
+		// Recap sits before the user's custom instructions so a user
+		// instruction about verbosity still wins the last word.
+		System:   composeSystemPrompt(nil, req.SystemPrompt, a.buildEnvBlock(), a.buildRecapBlock(), a.buildUserInstructionsBlock()),
 		Messages: llmMsgs,
 		Tools:    a.tools,
 	}
