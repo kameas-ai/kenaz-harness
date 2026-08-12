@@ -86,6 +86,23 @@ type Settings struct {
 	// without restarting the harness.
 	MaxAgentTurns int `json:"maxAgentTurns,omitempty"`
 
+	// ReasoningBudgetTokens is the extended-thinking / reasoning token
+	// budget threaded onto the chat graph's model node on every run
+	// start (wiring-integrity-01PMAG04 WP08).
+	//
+	// The attr, the LLMRequest field, and the GenerationRequest.Reasoning
+	// translation have all existed and been tested since
+	// model-request-path-live-01PMDL01 WP06b — but no shipped graph ever
+	// set the attr, so the whole path was inert. This dial is the missing
+	// last hop.
+	//
+	// Zero means "reasoning disabled", which is the provider default and
+	// reproduces pre-01PMAG04 behaviour byte-for-byte. It is deliberately
+	// NOT defaulted to a non-zero value: enabling reasoning changes the
+	// cost and latency of every turn, so it is a product decision made by
+	// turning this on, not a side effect of wiring it up.
+	ReasoningBudgetTokens int `json:"reasoningBudgetTokens,omitempty"`
+
 	// CompactionAggressiveness controls when and how aggressively the
 	// harness summarises older session history when approaching the
 	// model's context window. One of: "off", "conservative", "balanced",
@@ -702,6 +719,21 @@ func (s Settings) EffectiveMaxAgentTurns() int {
 		return DefaultMaxAgentTurns
 	}
 	return s.MaxAgentTurns
+}
+
+// EffectiveReasoningBudgetTokens returns the extended-thinking budget to
+// thread onto the chat graph's model node, or 0 for "reasoning off".
+//
+// Unlike EffectiveMaxAgentTurns there is no non-zero fallback: zero is a
+// meaningful, intended value (the provider default), and substituting a
+// default here would silently enable reasoning — and its cost — for
+// every existing user on upgrade. A negative persisted value is clamped
+// to 0 rather than passed through to the provider.
+func (s Settings) EffectiveReasoningBudgetTokens() int {
+	if s.ReasoningBudgetTokens <= 0 {
+		return 0
+	}
+	return s.ReasoningBudgetTokens
 }
 
 // EffectiveCompactionAggressiveness returns the locked tier enum the

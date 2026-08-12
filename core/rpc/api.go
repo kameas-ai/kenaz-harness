@@ -55,8 +55,8 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/logstore"
 	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
-	"github.com/kameas-ai/kenaz-harness/core/mcp/connectors"
 	harnessmcp "github.com/kameas-ai/kenaz-harness/core/mcp/builtin/harness"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/connectors"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/dispatch"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
@@ -909,6 +909,7 @@ func (a *API) Sessions_StopCapture(ctx context.Context, sessionID string) error 
 //     "llm:stream-chunk" topic via the broker so the privacy CI
 //     invariant (only emitter.go and stream_broker.go call
 //     runtime.EventsEmit) stays intact.
+//
 // Option customises API construction. Options exist so a caller can vary the
 // chassis WITHOUT changing what every other caller gets: the zero option set
 // reproduces the historical rpc.New(c) behaviour exactly.
@@ -969,7 +970,6 @@ func WithServedConnectors(sup *connectors.Supervisor) Option {
 func WithConnectorTokens(src tools.ConnectorTokenSource) Option {
 	return func(o *options) { o.connectorTokens = src }
 }
-
 
 func New(c *core.Core, opts ...Option) *API {
 	var opt options
@@ -4054,6 +4054,23 @@ func buildChatRunner(
 		s := settings.Settings{MaxAgentTurns: raw}
 		return s.EffectiveMaxAgentTurns()
 	}
+	// wiring-integrity-01PMAG04 WP08: resolve the extended-thinking budget
+	// on every StartStream so a Settings edit lands on the next turn. Reads
+	// through LoadAll rather than a dedicated Load/Save pair — the field
+	// rides the existing Settings JSON, so no store-interface change is
+	// needed. A read error degrades to 0 (reasoning off), never to a
+	// non-zero default: silently enabling reasoning on a storage fault
+	// would charge the user for a feature they never turned on.
+	reasoningBudget := func() int {
+		if settingsImpl == nil || settingsImpl.Store() == nil {
+			return 0
+		}
+		got, err := settingsImpl.Store().LoadAll()
+		if err != nil {
+			return 0
+		}
+		return got.EffectiveReasoningBudgetTokens()
+	}
 	// system-prompt-layers WP04: resolve the user's chat custom
 	// instructions on every StartStream so a Settings edit takes effect on
 	// the next turn without a restart. A read error degrades to no user
@@ -4284,7 +4301,8 @@ func buildChatRunner(
 			g.SystemPrompt = prompts.Compose(nil, prompts.DefaultBaseConstitution(), g.SystemPrompt)
 			return g, nil
 		},
-		MaxTurns: maxTurns,
+		MaxTurns:        maxTurns,
+		ReasoningBudget: reasoningBudget,
 		// system-prompt-layers WP03: surface the sandboxed agent-workspace
 		// path in the environment-context layer of the system prompt. Empty
 		// when DataDir is unset (test path) — the adapter then renders a

@@ -92,6 +92,16 @@ type HistoryWriter = coreag.HistoryWriter
 // current user-tuned cap without a restart.
 type MaxTurnsResolver func() int
 
+// ReasoningBudgetResolver returns the extended-thinking token budget to
+// apply onto the chat graph's model nodes. The chassis wires this to
+// Settings.EffectiveReasoningBudgetTokens so a settings change takes
+// effect on the next user turn without a restart.
+//
+// Zero (the default, and what a nil resolver yields) means "reasoning
+// off" and leaves the graph's own attr untouched — see
+// applyReasoningBudgetDial.
+type ReasoningBudgetResolver func() int
+
 // GraphLoader returns the parsed chat graph spec to drive each run.
 // In production this loads the bundled chat_default.yaml; tests can
 // substitute an arbitrary graph.
@@ -125,6 +135,9 @@ type Config struct {
 	HistoryWriter HistoryWriter
 	GraphLoader   GraphLoader
 	MaxTurns      MaxTurnsResolver
+	// ReasoningBudget resolves the extended-thinking budget per run.
+	// Nil is safe and means "reasoning off" (today's behaviour).
+	ReasoningBudget ReasoningBudgetResolver
 	// ToolDiscoverer publishes the chat-runner-level tool catalog onto
 	// each LLMProviderAdapter so the model sees the live MCP+builtin
 	// tool list. nil disables discovery — the chat path still works,
@@ -446,6 +459,12 @@ func New(cfg Config) (*ChatRunner, error) {
 		// just wants the kernel-driven chat run with a hardcoded 25.
 		cfg.MaxTurns = func() int { return 25 }
 	}
+	if cfg.ReasoningBudget == nil {
+		// Nil resolver = reasoning off. Unlike MaxTurns there is no
+		// "loud-fail" default worth substituting: 0 is the correct,
+		// intended value and matches every pre-01PMAG04 run.
+		cfg.ReasoningBudget = func() int { return 0 }
+	}
 	return &ChatRunner{
 		cfg:        cfg,
 		subs:       map[string]*chatSub{},
@@ -499,6 +518,10 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		maxTurns = 25
 	}
 	applyMaxTurnsDial(&graph, maxTurns)
+	// Extended-thinking budget (wiring-integrity-01PMAG04 WP08). Resolved
+	// per StartStream like maxTurns so a settings change lands on the next
+	// turn. Zero leaves every model node's attr untouched.
+	applyReasoningBudgetDial(&graph, r.cfg.ReasoningBudget())
 
 	// Construct adapters for this run's LLM provider + tool registry.
 	// Tool discovery runs once per StartStream so the model sees the
@@ -1145,6 +1168,34 @@ func applyMaxTurnsDial(g *coreag.Graph, cap int) {
 		}
 		if a, ok := g.Nodes[i].Attrs.(coreag.LoopAttrs); ok {
 			a.MaxIterations = cap
+			g.Nodes[i].Attrs = a
+		}
+	}
+}
+
+// applyReasoningBudgetDial threads the resolved extended-thinking budget
+// onto every model node in the graph (wiring-integrity-01PMAG04 WP08).
+//
+// ModelAttrs.ReasoningBudgetTokens -> LLMRequest.ReasoningBudgetTokens ->
+// GenerationRequest.Reasoning has been plumbed and tested since
+// model-request-path-live-01PMDL01 WP06b, but no shipped graph ever set
+// the attr, so the entire path was dead. This is the missing last hop.
+//
+// budget <= 0 is a no-op: the attr is left exactly as the graph author
+// wrote it (normally unset), so a harness with the dial off produces
+// byte-identical requests to pre-01PMAG04. That "no-op means untouched"
+// property — rather than "no-op means write 0" — is what lets a graph
+// author set the attr explicitly and not have the dial clobber it.
+func applyReasoningBudgetDial(g *coreag.Graph, budget int) {
+	if g == nil || budget <= 0 {
+		return
+	}
+	for i := range g.Nodes {
+		if g.Nodes[i].Kind != coreag.NodeKindModel {
+			continue
+		}
+		if a, ok := g.Nodes[i].Attrs.(coreag.ModelAttrs); ok {
+			a.ReasoningBudgetTokens = budget
 			g.Nodes[i].Attrs = a
 		}
 	}
