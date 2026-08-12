@@ -12,6 +12,7 @@ import (
 	"time"
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/compaction"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/llm/tokenizer"
@@ -593,6 +594,23 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		HistoryWriter: r.cfg.HistoryWriter,
 		StreamSink:    bridge,
 		Ask:           askBus,
+		// Budget: carry the graph's declared per-run caps onto the Env
+		// (autonomy-knobs-live-01PMAG02 WP03).
+		//
+		// Until this line, env.Budget was the zero value on every chat
+		// run -- nothing anywhere in core/ assigned it. Every guard in
+		// kernel.checkBudget is `if env.Budget.X > 0 && ...`, so all of
+		// them short-circuited, and chat_default.yaml's budget block
+		// (max_llm_calls_per_run: 100, max_tool_calls_per_run: 200,
+		// max_tokens_per_run: 200000) was decorative: production chat
+		// had no per-run caps at all. The declared numbers read as a
+		// safety net in review and enforced nothing at runtime.
+		//
+		// DoomLoopThreshold and MaxBacktracksPerRun were unaffected --
+		// both treat zero as "use the package default" rather than
+		// "unlimited" -- which is why the gap survived: the behavioural
+		// guards worked while the volume guards silently did not.
+		Budget: applyTokenCeilingKnob(graph.Budget, r.autonomyKnobs()),
 		// SuppressAutomaticCompaction (compaction-convergence-01PMDL05):
 		// runPreSendCompaction (above, in driveRun's caller) is the
 		// authoritative compactor for chat-driven runs — it already
@@ -1171,6 +1189,38 @@ func applyMaxTurnsDial(g *coreag.Graph, cap int) {
 			g.Nodes[i].Attrs = a
 		}
 	}
+}
+
+// autonomyKnobs resolves the current autonomy dial values, or the zero
+// ResolvedKnobs when no provider is wired (test paths). Callers must
+// treat every zero field as "no override".
+func (r *ChatRunner) autonomyKnobs() autonomy.ResolvedKnobs {
+	if r == nil || r.cfg.AutonomyKnobs == nil {
+		return autonomy.ResolvedKnobs{}
+	}
+	return r.cfg.AutonomyKnobs()
+}
+
+// applyTokenCeilingKnob folds the autonomy tokenCeilingPerTurn dial into
+// the graph's declared budget (autonomy-knobs-live-01PMAG02 WP03).
+//
+// The knob may only LOWER the graph's ceiling, never raise it. A graph's
+// budget block is the author's safety cap; letting a Settings toggle
+// raise it would mean a UI control could silently defeat a limit the
+// graph declared on purpose. Raising the ceiling is a graph edit.
+//
+// Zero on either side means "no opinion": a zero knob leaves the graph
+// value alone, and a zero graph value (no declared cap) lets the knob
+// establish one.
+func applyTokenCeilingKnob(b coreag.Budget, knobs autonomy.ResolvedKnobs) coreag.Budget {
+	ceiling := knobs.TokenCeilingPerTurn
+	if ceiling <= 0 {
+		return b
+	}
+	if b.MaxTokensPerRun <= 0 || ceiling < b.MaxTokensPerRun {
+		b.MaxTokensPerRun = ceiling
+	}
+	return b
 }
 
 // applyReasoningBudgetDial threads the resolved extended-thinking budget
