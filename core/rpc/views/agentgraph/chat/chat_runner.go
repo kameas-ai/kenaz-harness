@@ -12,6 +12,7 @@ import (
 	"time"
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/compaction"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/llm/tokenizer"
@@ -92,6 +93,16 @@ type HistoryWriter = coreag.HistoryWriter
 // current user-tuned cap without a restart.
 type MaxTurnsResolver func() int
 
+// ReasoningBudgetResolver returns the extended-thinking token budget to
+// apply onto the chat graph's model nodes. The chassis wires this to
+// Settings.EffectiveReasoningBudgetTokens so a settings change takes
+// effect on the next user turn without a restart.
+//
+// Zero (the default, and what a nil resolver yields) means "reasoning
+// off" and leaves the graph's own attr untouched — see
+// applyReasoningBudgetDial.
+type ReasoningBudgetResolver func() int
+
 // GraphLoader returns the parsed chat graph spec to drive each run.
 // In production this loads the bundled chat_default.yaml; tests can
 // substitute an arbitrary graph.
@@ -125,6 +136,9 @@ type Config struct {
 	HistoryWriter HistoryWriter
 	GraphLoader   GraphLoader
 	MaxTurns      MaxTurnsResolver
+	// ReasoningBudget resolves the extended-thinking budget per run.
+	// Nil is safe and means "reasoning off" (today's behaviour).
+	ReasoningBudget ReasoningBudgetResolver
 	// ToolDiscoverer publishes the chat-runner-level tool catalog onto
 	// each LLMProviderAdapter so the model sees the live MCP+builtin
 	// tool list. nil disables discovery — the chat path still works,
@@ -446,6 +460,12 @@ func New(cfg Config) (*ChatRunner, error) {
 		// just wants the kernel-driven chat run with a hardcoded 25.
 		cfg.MaxTurns = func() int { return 25 }
 	}
+	if cfg.ReasoningBudget == nil {
+		// Nil resolver = reasoning off. Unlike MaxTurns there is no
+		// "loud-fail" default worth substituting: 0 is the correct,
+		// intended value and matches every pre-01PMAG04 run.
+		cfg.ReasoningBudget = func() int { return 0 }
+	}
 	return &ChatRunner{
 		cfg:        cfg,
 		subs:       map[string]*chatSub{},
@@ -499,6 +519,10 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		maxTurns = 25
 	}
 	applyMaxTurnsDial(&graph, maxTurns)
+	// Extended-thinking budget (wiring-integrity-01PMAG04 WP08). Resolved
+	// per StartStream like maxTurns so a settings change lands on the next
+	// turn. Zero leaves every model node's attr untouched.
+	applyReasoningBudgetDial(&graph, r.cfg.ReasoningBudget())
 
 	// Construct adapters for this run's LLM provider + tool registry.
 	// Tool discovery runs once per StartStream so the model sees the
@@ -532,7 +556,11 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	llmAdapter := NewLLMProviderAdapter(r.cfg.Registry, profileID, modelOverride, toolCatalog, imageCapturer).
 		WithSessionID(sessionID).
 		WithEnvContext(r.cfg.Clock, r.cfg.WorkspaceDir, r.cfg.WorkspaceNote).
-		WithCustomInstructions(r.cfg.CustomInstructions)
+		WithCustomInstructions(r.cfg.CustomInstructions).
+		// autonomy-knobs-live-01PMAG02 WP06: recapStyle was resolved
+		// through the three-layer chain and read by nothing. Resolved per
+		// Generate so a Settings edit lands on the next turn.
+		WithRecapStyle(func() autonomy.RecapMode { return r.autonomyKnobs().RecapStyle })
 	toolAdapter := newKernelToolAdapter(r.cfg.Pool, r.cfg.Perms, sessionID)
 	if r.cfg.AutonomyKnobs != nil {
 		toolAdapter.withAutonomy(r.cfg.AutonomyKnobs)
@@ -570,6 +598,23 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		HistoryWriter: r.cfg.HistoryWriter,
 		StreamSink:    bridge,
 		Ask:           askBus,
+		// Budget: carry the graph's declared per-run caps onto the Env
+		// (autonomy-knobs-live-01PMAG02 WP03).
+		//
+		// Until this line, env.Budget was the zero value on every chat
+		// run -- nothing anywhere in core/ assigned it. Every guard in
+		// kernel.checkBudget is `if env.Budget.X > 0 && ...`, so all of
+		// them short-circuited, and chat_default.yaml's budget block
+		// (max_llm_calls_per_run: 100, max_tool_calls_per_run: 200,
+		// max_tokens_per_run: 200000) was decorative: production chat
+		// had no per-run caps at all. The declared numbers read as a
+		// safety net in review and enforced nothing at runtime.
+		//
+		// DoomLoopThreshold and MaxBacktracksPerRun were unaffected --
+		// both treat zero as "use the package default" rather than
+		// "unlimited" -- which is why the gap survived: the behavioural
+		// guards worked while the volume guards silently did not.
+		Budget: applyTokenCeilingKnob(graph.Budget, r.autonomyKnobs()),
 		// SuppressAutomaticCompaction (compaction-convergence-01PMDL05):
 		// runPreSendCompaction (above, in driveRun's caller) is the
 		// authoritative compactor for chat-driven runs — it already
@@ -1145,6 +1190,66 @@ func applyMaxTurnsDial(g *coreag.Graph, cap int) {
 		}
 		if a, ok := g.Nodes[i].Attrs.(coreag.LoopAttrs); ok {
 			a.MaxIterations = cap
+			g.Nodes[i].Attrs = a
+		}
+	}
+}
+
+// autonomyKnobs resolves the current autonomy dial values, or the zero
+// ResolvedKnobs when no provider is wired (test paths). Callers must
+// treat every zero field as "no override".
+func (r *ChatRunner) autonomyKnobs() autonomy.ResolvedKnobs {
+	if r == nil || r.cfg.AutonomyKnobs == nil {
+		return autonomy.ResolvedKnobs{}
+	}
+	return r.cfg.AutonomyKnobs()
+}
+
+// applyTokenCeilingKnob folds the autonomy tokenCeilingPerTurn dial into
+// the graph's declared budget (autonomy-knobs-live-01PMAG02 WP03).
+//
+// The knob may only LOWER the graph's ceiling, never raise it. A graph's
+// budget block is the author's safety cap; letting a Settings toggle
+// raise it would mean a UI control could silently defeat a limit the
+// graph declared on purpose. Raising the ceiling is a graph edit.
+//
+// Zero on either side means "no opinion": a zero knob leaves the graph
+// value alone, and a zero graph value (no declared cap) lets the knob
+// establish one.
+func applyTokenCeilingKnob(b coreag.Budget, knobs autonomy.ResolvedKnobs) coreag.Budget {
+	ceiling := knobs.TokenCeilingPerTurn
+	if ceiling <= 0 {
+		return b
+	}
+	if b.MaxTokensPerRun <= 0 || ceiling < b.MaxTokensPerRun {
+		b.MaxTokensPerRun = ceiling
+	}
+	return b
+}
+
+// applyReasoningBudgetDial threads the resolved extended-thinking budget
+// onto every model node in the graph (wiring-integrity-01PMAG04 WP08).
+//
+// ModelAttrs.ReasoningBudgetTokens -> LLMRequest.ReasoningBudgetTokens ->
+// GenerationRequest.Reasoning has been plumbed and tested since
+// model-request-path-live-01PMDL01 WP06b, but no shipped graph ever set
+// the attr, so the entire path was dead. This is the missing last hop.
+//
+// budget <= 0 is a no-op: the attr is left exactly as the graph author
+// wrote it (normally unset), so a harness with the dial off produces
+// byte-identical requests to pre-01PMAG04. That "no-op means untouched"
+// property — rather than "no-op means write 0" — is what lets a graph
+// author set the attr explicitly and not have the dial clobber it.
+func applyReasoningBudgetDial(g *coreag.Graph, budget int) {
+	if g == nil || budget <= 0 {
+		return
+	}
+	for i := range g.Nodes {
+		if g.Nodes[i].Kind != coreag.NodeKindModel {
+			continue
+		}
+		if a, ok := g.Nodes[i].Attrs.(coreag.ModelAttrs); ok {
+			a.ReasoningBudgetTokens = budget
 			g.Nodes[i].Attrs = a
 		}
 	}
