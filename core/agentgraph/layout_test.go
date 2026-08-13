@@ -308,3 +308,36 @@ layout:
 		t.Fatalf("stale layout entry did not survive dump/reload: got %+v, want %+v", g2.Layout, g.Layout)
 	}
 }
+
+// Integrator addition (review nit): pin the cloneLayoutMap non-aliasing
+// contract directly at the wire-conversion seam. A round-trip test cannot
+// see this (marshaled bytes are produced before any later mutation, and
+// two parses never share maps — which is why the reviewer's `return m`
+// mutant survived 904 tests: today's call graph makes the wire structs
+// transient, so the clone is future-proofing). This test makes the
+// contract falsifiable anyway by calling the conversions directly.
+func TestLayoutMap_NotAliasedThroughWireConversion(t *testing.T) {
+	src := Graph{
+		SpecVersion: "1",
+		ID:          "alias-pin",
+		Nodes:       []Node{{ID: "n1", Kind: NodeKindTransform, Attrs: TransformAttrs{}}},
+		Entrypoints: []string{"n1"},
+		Layout:      map[string]NodeLayout{"n1": {X: 10, Y: 20}},
+	}
+	w, err := graphToWire(src)
+	if err != nil {
+		t.Fatalf("graphToWire: %v", err)
+	}
+	src.Layout["n1"] = NodeLayout{X: 999, Y: 999}
+	if got := w.Layout["n1"]; got.X != 10 || got.Y != 20 {
+		t.Fatalf("graphToWire aliased the layout map: got %+v, want {10 20}", got)
+	}
+	g2, err2 := wireToGraph(w)
+	if err2 != nil {
+		t.Fatalf("wireToGraph: %v", err2)
+	}
+	w.Layout["n1"] = NodeLayout{X: -5, Y: -5}
+	if got := g2.Layout["n1"]; got.X != 10 || got.Y != 20 {
+		t.Fatalf("wireToGraph aliased the layout map: got %+v, want {10 20}", got)
+	}
+}
