@@ -329,6 +329,21 @@ export function applyOpToDoc(doc: Document, op: SpecOp, ctx: ApplyOpContext = {}
       return '';
     }
 
+    case 'set-attrs': {
+      const nodes = doc.getIn(['nodes']);
+      if (!isSeq(nodes)) return '';
+      for (let i = 0; i < nodes.items.length; i += 1) {
+        if (nodeIdAt(nodes, i) !== op.id) continue;
+        if (Object.keys(op.attrs).length === 0) {
+          doc.deleteIn(['nodes', i, 'attrs']);
+        } else {
+          doc.setIn(['nodes', i, 'attrs'], doc.createNode(op.attrs));
+        }
+        break;
+      }
+      return '';
+    }
+
     case 'connect': {
       const edges = ensureSeq(doc, 'edges');
       const key = edgeKey({

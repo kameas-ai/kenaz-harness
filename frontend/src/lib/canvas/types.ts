@@ -239,6 +239,20 @@ export type SpecOp =
       id?: string;
     }
   | { type: 'delete-node'; id: string }
+  | {
+      /**
+       * Replace a node's typed config. The attribute panel's intent,
+       * and the reason it is in this union rather than editing the text
+       * itself: the panel and the canvas must go through one path into
+       * one buffer, or they are two models again (WP04).
+       *
+       * Maps to `Node.attrs` on agentgraph and to a workflow Step's
+       * flat per-kind fields.
+       */
+      type: 'set-attrs';
+      id: string;
+      attrs: Record<string, unknown>;
+    }
   | { type: 'connect'; edge: CanvasEdgeRequest }
   | { type: 'disconnect'; edgeId: string }
   | {

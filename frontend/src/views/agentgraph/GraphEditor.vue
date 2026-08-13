@@ -14,7 +14,7 @@
  * string-builder. Round-tripping through a real YAML parser is a v2
  * follow-up; for v1, attr edits rewrite the targeted node block.
  */
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
@@ -64,6 +64,18 @@ const editingId = ref('');
 const error = ref<string | null>(null);
 const validation = ref<GraphValidationResult | null>(null);
 const saved = ref(false);
+/**
+ * The buffer as it last came from (or went to) disk. `dirty` is DERIVED
+ * from it rather than being a flag anyone sets.
+ *
+ * ONE dirty state (spec §4): the canvas, the palette, the attribute
+ * panel and the textarea all write the same `yaml` ref, so "has this
+ * been edited" is one comparison against one baseline — there is no
+ * per-pane opinion that can disagree, and no watcher-ordering bug where
+ * a load marks itself dirty because the reset ran before the watcher.
+ */
+const persistedYAML = ref('');
+const dirty = computed(() => yaml.value !== persistedYAML.value);
 
 // Anything that is not a user graph is read-only: bundled library
 // graphs because they ship with the binary, materialized runs because
@@ -93,222 +105,72 @@ const isDegraded = computed(() =>
 );
 const canSave = computed(() => !readOnly.value && !!yaml.value.trim());
 
-// ── lightweight YAML "node block" parser ──────────────────────────────
-
-interface ParsedNode {
-  id: string;
-  kind: string;
-  attrs: Record<string, unknown>;
-  /** char offsets of the entire `- id: …` block within the YAML text. */
-  start: number;
-  end: number;
-}
+// ── the one parse (spec §4: one buffer) ──────────────────────────────
 
 /**
- * Walks the YAML text line by line, looking for the top-level `nodes:`
- * key, then iterates each `  - id: <id>` block under it. Returns the
- * node entries with their character offsets so the editor can rewrite
- * a single block in place. Tolerates quoted ids and inline `attrs:`
- * maps; falls back to leaving the block untouched if the structure is
- * unrecognised.
+ * Last graph the buffer parsed to. A parse failure keeps the previous
+ * value, so a half-typed line does not blank the canvas: it holds its
+ * last good render while the validation pane reports the error (spec
+ * FR-003).
  */
-function parseNodes(text: string): ParsedNode[] {
-  const lines = text.split('\n');
-  // Compute char offsets for line starts.
-  const offsets: number[] = [];
-  let off = 0;
-  for (const l of lines) {
-    offsets.push(off);
-    off += l.length + 1;
-  }
-  const nodesIdx = lines.findIndex((l) => /^nodes\s*:\s*$/.test(l));
-  if (nodesIdx < 0) return [];
-  // Determine sub-indent: first non-blank child line.
-  const nodes: ParsedNode[] = [];
-  let i = nodesIdx + 1;
-  let curStart = -1;
-  let curId = '';
-  let curKind = '';
-  let curAttrs: Record<string, unknown> = {};
-  let inAttrs = false;
-  let attrIndent = 0;
+const lastGoodGraph = ref<ParsedGraph | null>(null);
+const canvasParseError = ref<string | null>(null);
 
-  function flush(endLine: number) {
-    if (curStart >= 0) {
-      nodes.push({
-        id: curId,
-        kind: curKind,
-        attrs: curAttrs,
-        start: curStart,
-        end: offsets[endLine] ?? text.length,
-      });
-    }
-    curStart = -1;
-    curId = '';
-    curKind = '';
-    curAttrs = {};
-    inAttrs = false;
-    attrIndent = 0;
-  }
+/**
+ * Debounce for the re-parse a MANUAL edit triggers. Typing a node id
+ * one character at a time would otherwise re-parse (and, whenever the
+ * id set changes, re-lay-out) on every keystroke. Canvas ops bypass it
+ * — they already hold the mutated Document, so waiting would only make
+ * the canvas lag its own click.
+ */
+const PARSE_DEBOUNCE_MS = 120;
+let parseTimer: ReturnType<typeof setTimeout> | null = null;
 
-  for (; i < lines.length; i++) {
-    const line = lines[i];
-    // Top-level key (no leading space, ends with `:`) ends the nodes block.
-    if (/^[A-Za-z_][\w-]*\s*:/.test(line)) {
-      flush(i);
-      break;
-    }
-    // Skip blank lines.
-    if (line.trim() === '') continue;
-
-    const dashMatch = /^(\s*)-\s+id\s*:\s*"?([^"#\s]+)"?\s*$/.exec(line);
-    if (dashMatch) {
-      flush(i);
-      curStart = offsets[i];
-      curId = dashMatch[2];
-      continue;
-    }
-    // Sub-key inside the current node entry.
-    if (curStart < 0) continue;
-    const kindMatch = /^\s+kind\s*:\s*"?([^"#\s]+)"?\s*$/.exec(line);
-    if (kindMatch) {
-      curKind = kindMatch[1];
-      inAttrs = false;
-      continue;
-    }
-    const attrsHeader = /^(\s+)attrs\s*:\s*$/.exec(line);
-    if (attrsHeader) {
-      inAttrs = true;
-      attrIndent = attrsHeader[1].length + 2;
-      continue;
-    }
-    if (inAttrs) {
-      const m = new RegExp(
-        `^\\s{${attrIndent},}([A-Za-z_][\\w-]*)\\s*:\\s*(.*)$`,
-      ).exec(line);
-      if (m) {
-        const k = m[1];
-        const raw = m[2];
-        curAttrs[k] = parseScalar(raw);
-        continue;
-      }
-      // De-dent ends the attrs block.
-      const indent = (line.match(/^\s*/) ?? [''])[0].length;
-      if (indent < attrIndent) {
-        inAttrs = false;
-      }
-    }
-  }
-  // Flush the last block at end-of-list.
-  if (curStart >= 0) {
-    flush(lines.length);
-  }
-  return nodes;
+function runParse(text: string) {
+  const parsed = parseGraphText(text);
+  canvasParseError.value = parsed.error;
+  // A parse failure keeps the previous graph: the canvas holds its last
+  // good render while the validation pane reports the error, rather
+  // than blanking every time a line is half-typed (spec FR-003).
+  if (parsed.graph) lastGoodGraph.value = parsed.graph;
 }
 
-function parseScalar(raw: string): unknown {
-  const t = raw.trim();
-  if (t === '') return '';
-  if (t === 'true') return true;
-  if (t === 'false') return false;
-  if (t === 'null' || t === '~') return null;
-  if (/^-?\d+$/.test(t)) return parseInt(t, 10);
-  if (/^-?\d+\.\d+$/.test(t)) return parseFloat(t);
-  // Strip surrounding quotes.
-  if (
-    (t.startsWith('"') && t.endsWith('"')) ||
-    (t.startsWith("'") && t.endsWith("'"))
-  ) {
-    return t.slice(1, -1);
+function flushCanvasParse() {
+  if (parseTimer !== null) {
+    clearTimeout(parseTimer);
+    parseTimer = null;
   }
-  // Inline list `[a, b, c]` — best-effort split.
-  if (t.startsWith('[') && t.endsWith(']')) {
-    const inner = t.slice(1, -1).trim();
-    if (inner === '') return [];
-    return inner.split(',').map((s) => parseScalar(s));
-  }
-  return t;
+  runParse(yaml.value);
 }
 
-function serializeAttrs(attrs: Record<string, unknown>, indent: string): string {
-  const keys = Object.keys(attrs);
-  if (keys.length === 0) return '';
-  const lines: string[] = [`${indent}attrs:`];
-  for (const k of keys) {
-    lines.push(`${indent}  ${k}: ${serializeScalar(attrs[k])}`);
-  }
-  return lines.join('\n') + '\n';
-}
+runParse(yaml.value);
 
-function serializeScalar(v: unknown): string {
-  if (v === null) return 'null';
-  if (typeof v === 'boolean') return v ? 'true' : 'false';
-  if (typeof v === 'number') return String(v);
-  if (Array.isArray(v)) {
-    return `[${v.map((x) => serializeScalar(x)).join(', ')}]`;
-  }
-  if (typeof v === 'object') {
-    return JSON.stringify(v);
-  }
-  const s = String(v);
-  // Quote if it looks ambiguous.
-  if (s === '' || /[:#\s]/.test(s)) return JSON.stringify(s);
-  return s;
-}
-
-function rewriteNodeAttrs(
-  text: string,
-  node: ParsedNode,
-  nextAttrs: Record<string, unknown>,
-): string {
-  // The block starts at offset node.start and ends at node.end. We
-  // rebuild the block preserving the leading dash-line and the kind
-  // line, then emit a fresh attrs map.
-  const block = text.slice(node.start, node.end);
-  const blockLines = block.split('\n');
-  // Detect the dash-indent (the `-` on the first line) and child indent.
-  const dashLine = blockLines[0];
-  const dashIndent = (dashLine.match(/^\s*/) ?? [''])[0];
-  const childIndent = `${dashIndent}  `;
-
-  const out: string[] = [];
-  let attrsAdded = false;
-  for (const line of blockLines) {
-    if (/^\s+attrs\s*:\s*$/.test(line)) {
-      if (!attrsAdded) {
-        out.push(serializeAttrs(nextAttrs, childIndent).trimEnd());
-        attrsAdded = true;
-      }
-      // Skip subsequent attr child lines.
-      continue;
-    }
-    // Drop attr child lines if we're past the attrs header.
-    if (
-      attrsAdded &&
-      line.startsWith(`${childIndent}  `) &&
-      /^\s+[A-Za-z_]/.test(line)
-    ) {
-      continue;
-    }
-    out.push(line);
-  }
-  if (!attrsAdded && Object.keys(nextAttrs).length > 0) {
-    out.splice(out.length - 1, 0, serializeAttrs(nextAttrs, childIndent).trimEnd());
-  }
-  const rebuilt = out.join('\n');
-  return text.slice(0, node.start) + rebuilt + text.slice(node.end);
-}
-
-// ── reactive parsed nodes & selection ────────────────────────────────
-
-const parsedNodes = computed<ParsedNode[]>(() => parseNodes(yaml.value));
-const selectedNodeId = ref('');
-const selectedNode = computed<ParsedNode | null>(() => {
-  if (!selectedNodeId.value) return null;
-  return (
-    parsedNodes.value.find((n) => n.id === selectedNodeId.value) ?? null
-  );
+watch(yaml, (text) => {
+  if (parseTimer !== null) clearTimeout(parseTimer);
+  parseTimer = setTimeout(() => {
+    parseTimer = null;
+    runParse(text);
+  }, PARSE_DEBOUNCE_MS);
 });
+
+onBeforeUnmount(() => {
+  if (parseTimer !== null) clearTimeout(parseTimer);
+});
+
+// ── selection ────────────────────────────────────────────────────────
+//
+// WP04 DELETED the editor's hand-rolled regex "node block" parser. It
+// was a second model of the same buffer — it read `nodes:` with line
+// offsets and rewrote attr blocks by string splicing — and a second
+// model is exactly what spec §4 forbids. Everything below reads the ONE
+// parse the canvas reads (`lastGoodGraph`), and the attribute panel
+// writes through the same op path the canvas writes through.
+
+const selectedNodeId = ref('');
+const parsedNodes = computed(() => lastGoodGraph.value?.nodes ?? []);
+const selectedNode = computed(
+  () => parsedNodes.value.find((n) => n.id === selectedNodeId.value) ?? null,
+);
 const selectedKindId = computed<string>(() => selectedNode.value?.kind ?? '');
 
 // useNodeManifest fetches the resolved manifest for the selected kind.
@@ -320,7 +182,7 @@ const graphNodeIds = computed(() => parsedNodes.value.map((n) => n.id));
 function onAttrUpdate(next: Record<string, unknown>) {
   const node = selectedNode.value;
   if (!node) return;
-  yaml.value = rewriteNodeAttrs(yaml.value, node, next);
+  void applyCanvasOp({ type: 'set-attrs', id: node.id, attrs: next });
 }
 
 // ── canvas (visual-graph-authoring-01PMUX01 WP02 render, WP03 author) ─
@@ -330,24 +192,6 @@ function onAttrUpdate(next: Record<string, unknown>) {
 // into `yaml`, so there is one buffer, one dirty state, and one save
 // path — no second in-memory model that can drift (spec §4).
 
-/**
- * Last graph the buffer parsed to. A parse failure keeps the previous
- * value, so a half-typed line does not blank the canvas: it holds its
- * last good render while the validation pane reports the error (spec
- * FR-003).
- */
-const lastGoodGraph = ref<ParsedGraph | null>(null);
-const canvasParseError = ref<string | null>(null);
-
-watch(
-  yaml,
-  (text) => {
-    const parsed = parseGraphText(text);
-    canvasParseError.value = parsed.error;
-    if (parsed.graph) lastGoodGraph.value = parsed.graph;
-  },
-  { immediate: true },
-);
 
 const manifestStore = useManifestStore();
 const canvasKinds = computed(() => (lastGoodGraph.value?.nodes ?? []).map((n) => n.kind));
@@ -375,6 +219,9 @@ async function applyCanvasOp(op: SpecOp) {
     attrsFor: (kind) => defaultAttrsForKind(kindDetails.value[kind]),
   });
   yaml.value = serializeDoc(parsed.doc);
+  // Canvas ops re-render immediately: the debounce exists to spare the
+  // canvas a re-parse per keystroke, not to make it lag its own click.
+  flushCanvasParse();
   if (newID) selectedNodeId.value = newID;
   if (op.type === 'delete-node' && selectedNodeId.value === op.id) {
     selectedNodeId.value = '';
@@ -449,6 +296,7 @@ async function load() {
       yaml.value = spec.yaml;
       scope.value = spec.scope;
       editingId.value = spec.id;
+      markClean();
     } catch (err) {
       error.value = err instanceof Error ? err.message : String(err);
     }
@@ -458,6 +306,7 @@ async function load() {
     yaml.value = newGraphTemplate;
     scope.value = 'user';
     editingId.value = 'my_graph';
+    markClean();
     return;
   }
   try {
@@ -465,6 +314,7 @@ async function load() {
     yaml.value = spec.yaml;
     scope.value = spec.scope;
     editingId.value = spec.id;
+    markClean();
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);
   }
@@ -532,9 +382,21 @@ async function save() {
   try {
     await client.graph.saveGraph(spec);
     saved.value = true;
+    persistedYAML.value = yaml.value;
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);
   }
+}
+
+/**
+ * Resets the dirty flag after a load. `yaml.value = …` fires the watcher
+ * that sets it, so the reset has to happen after the assignment rather
+ * than before.
+ */
+function markClean() {
+  flushCanvasParse();
+  persistedYAML.value = yaml.value;
+  saved.value = false;
 }
 
 function backToList() {
@@ -573,12 +435,19 @@ defineExpose({
   load,
   validate,
   save,
-  parseNodes,
   // WP03: `appendStubNode` is gone — dropping a kind into the TEXT
   // buffer was the pre-canvas authoring path and the canvas replaces
   // it. Palette clicks and canvas drops both emit the same add-node op.
+  // WP04: `parseNodes` is gone too — the editor's second, regex model
+  // of the buffer. One parse now feeds the canvas, the node picker, and
+  // the attribute panel.
   applyCanvasOp,
   persistCanvasLayout,
+  // Test seam: run the pending debounced parse now instead of waiting
+  // out PARSE_DEBOUNCE_MS. The debounce itself is covered by a
+  // fake-timer test rather than being bypassed everywhere.
+  flushCanvasParse,
+  dirty,
 });
 </script>
 
@@ -617,6 +486,12 @@ defineExpose({
           >
             Validate
           </button>
+          <span
+            v-if="!readOnly && dirty"
+            class="self-center font-ui text-[11px] uppercase tracking-[0.18em] text-signal-warn"
+            data-testid="editor-dirty"
+            >Unsaved</span
+          >
           <button
             v-if="!readOnly"
             type="button"

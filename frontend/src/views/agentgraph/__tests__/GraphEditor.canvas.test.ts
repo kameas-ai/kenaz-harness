@@ -144,6 +144,8 @@ interface EditorVM {
   applyCanvasOp: (op: unknown) => void;
   persistCanvasLayout: () => void;
   save: () => Promise<void>;
+  flushCanvasParse: () => void;
+  dirty: boolean;
 }
 
 describe('GraphEditor canvas — one buffer', () => {
@@ -202,6 +204,7 @@ describe('GraphEditor canvas — one buffer', () => {
     await wrapper.get('[data-testid="editor-yaml"]').setValue(
       `${BASE_YAML}  - id: c\n    kind: transform\n    attrs: {}\n`,
     );
+    (wrapper.vm as unknown as EditorVM).flushCanvasParse();
     await flushPromises();
     expect(
       wrapper.get('[data-testid="graph-canvas"]').attributes('data-node-count'),
@@ -214,6 +217,7 @@ describe('GraphEditor canvas — one buffer', () => {
     await wrapper
       .get('[data-testid="editor-yaml"]')
       .setValue('nodes:\n  - id: a\n   kind: broken\n  bad indent here\n');
+    (wrapper.vm as unknown as EditorVM).flushCanvasParse();
     await flushPromises();
     // Still showing the two nodes from before the bad edit…
     expect(
@@ -312,6 +316,72 @@ describe('GraphEditor canvas — one buffer', () => {
     expect(wrapper.find('[data-testid="canvas-edge-rejected"]').text()).toContain(
       'type mismatch',
     );
+  });
+
+  it('debounces the re-parse a manual edit triggers', async () => {
+    vi.useFakeTimers();
+    try {
+      const { wrapper } = mountWith();
+      await vi.runAllTimersAsync();
+      await flushPromises();
+      await wrapper
+        .get('[data-testid="editor-yaml"]')
+        .setValue(`${BASE_YAML}  - id: c\n    kind: transform\n    attrs: {}\n`);
+      await flushPromises();
+      // Still two: the parse has not run yet.
+      expect(
+        wrapper.get('[data-testid="graph-canvas"]').attributes('data-node-count'),
+      ).toBe('2');
+      await vi.advanceTimersByTimeAsync(200);
+      await flushPromises();
+      expect(
+        wrapper.get('[data-testid="graph-canvas"]').attributes('data-node-count'),
+      ).toBe('3');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('tracks one dirty flag across both panes', async () => {
+    const { wrapper, saveGraph } = mountWith();
+    await flushPromises();
+    const vm = wrapper.vm as unknown as EditorVM;
+    expect(vm.dirty).toBe(false);
+    expect(wrapper.find('[data-testid="editor-dirty"]').exists()).toBe(false);
+
+    // A canvas op dirties it…
+    vm.applyCanvasOp({ type: 'add-node', kind: 'transform', position: { x: 0, y: 0 } });
+    await flushPromises();
+    expect(vm.dirty).toBe(true);
+    expect(wrapper.find('[data-testid="editor-dirty"]').exists()).toBe(true);
+
+    // …and the one save path clears it.
+    await vm.save();
+    await flushPromises();
+    expect(saveGraph).toHaveBeenCalled();
+    expect(vm.dirty).toBe(false);
+  });
+
+  it('a textarea edit dirties the same flag a canvas op does', async () => {
+    const { wrapper } = mountWith();
+    await flushPromises();
+    const vm = wrapper.vm as unknown as EditorVM;
+    expect(vm.dirty).toBe(false);
+    await wrapper.get('[data-testid="editor-yaml"]').setValue(`${BASE_YAML}\n`);
+    await flushPromises();
+    expect(vm.dirty).toBe(true);
+  });
+
+  it('routes an attribute-panel edit through the same buffer', async () => {
+    const { wrapper } = mountWith();
+    await flushPromises();
+    const vm = wrapper.vm as unknown as EditorVM;
+    vm.applyCanvasOp({ type: 'set-attrs', id: 'a', attrs: { verbosity: 'verbose' } });
+    await flushPromises();
+    const text = textarea(wrapper).value;
+    expect(text).toContain('verbosity: verbose');
+    expect(text).not.toContain('verbosity: terse');
+    expect(text).toContain('# a comment the canvas must not eat');
   });
 
   it('commits a legal edge into the buffer', async () => {
