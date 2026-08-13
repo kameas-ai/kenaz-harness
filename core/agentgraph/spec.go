@@ -338,6 +338,41 @@ type Graph struct {
 	// the wire types' `MarshalJSON` / `MarshalYAML` helpers (graphToWire
 	// strips it).
 	AliasesSeen []AliasResolution `json:"-" yaml:"-"`
+
+	// Layout is optional canvas-position metadata, keyed by node ID
+	// (visual-graph-authoring-01PMUX01 WP01, spec FR-004 / §4). It is
+	// CHASSIS METADATA ONLY:
+	//
+	//   - Absent (nil/empty) on every authored graph today, so
+	//     LoadYAML→DumpYAML of a layout-free graph is byte-identical —
+	//     pinned by TestRoundTrip_BundledLibraryAndActivityGraphs.
+	//   - Never enters the kernel's promotion/execution path, the
+	//     manifest fingerprint, or `Validate()`'s rules: it carries no
+	//     semantics the kernel or validator need to see, and adding a
+	//     layout block to a graph must not change how it runs (pinned
+	//     by TestLayoutMetadata_DoesNotAffectPromotionTrace).
+	//   - Never emitted by MaterializeRun: a materialized run is a
+	//     projection of what happened, not an authored canvas
+	//     arrangement, so the projected Graph's Layout is always nil
+	//     (pinned by TestMaterializeRun_NeverEmitsLayout).
+	//
+	// Unknown-node-id tolerance: a layout entry whose key does not match
+	// any node.ID in this graph (e.g. because the node was renamed or
+	// deleted by a hand-edit to the YAML) is INTENTIONALLY NOT an error.
+	// Validate() never inspects Layout, so LoadYAML succeeds and the
+	// stale entry round-trips inert — a renamed node must not brick its
+	// graph. The canvas is expected to drop stale entries the next time
+	// it computes a layout and the graph is re-saved from the UI; until
+	// then the entry is harmless dead weight, not a validation failure.
+	Layout map[string]NodeLayout `json:"layout,omitempty" yaml:"layout,omitempty"`
+}
+
+// NodeLayout is one node's canvas position. Coordinates are integers —
+// the canvas rounds on save (tasks.md WP03) — so layout YAML/JSON stays
+// diff-stable across saves that do not move that node.
+type NodeLayout struct {
+	X int `json:"x" yaml:"x"`
+	Y int `json:"y" yaml:"y"`
 }
 
 // findNode returns the node with the given ID, or nil if not found.

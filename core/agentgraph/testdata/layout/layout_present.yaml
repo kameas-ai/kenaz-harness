@@ -1,0 +1,63 @@
+# Fixture for the layout round-trip test (visual-graph-authoring-01PMUX01
+# WP01). A copy of reflect_loop.yaml's topology with a `layout` block
+# added — canvas-position metadata only, keyed by node ID. Integer
+# coordinates, since the canvas rounds on save (tasks.md WP03).
+spec_version: "1"
+id: "layout_present"
+name: "Reflect + Review refinement loop, with layout"
+description: |
+  Same topology as reflect_loop.yaml. Exists to pin that a `layout`
+  block survives LoadYAML -> DumpYAML -> LoadYAML with its integer
+  coordinates intact, and that its presence changes nothing else about
+  the graph.
+entrypoints:
+  - draft
+nodes:
+  - id: draft
+    kind: model
+    title: "Draft v1"
+    attrs:
+      model: "claude-haiku"
+      max_tokens: 2048
+  - id: critique
+    kind: reflect
+    title: "Critique current draft"
+    attrs:
+      severity_threshold: medium
+      include_trace: true
+      max_iterations: 3
+  - id: revise
+    kind: model
+    title: "Revise draft"
+    attrs:
+      model: "claude-haiku"
+      max_tokens: 2048
+  - id: refine_loop
+    kind: loop
+    title: "Bounded reflect+revise loop"
+    attrs:
+      max_iterations: 3
+      condition: "critique.severity > medium"
+      body:
+        - critique
+        - revise
+  - id: final_review
+    kind: review
+    title: "Final reviewer pass"
+    attrs:
+      upstream_node: revise
+      max_iterations: 3
+      on_cap_hit: halt
+edges:
+  - from: { node: draft, port: response }
+    to:   { node: critique, port: draft }
+  - from: { node: critique, port: revision }
+    to:   { node: revise, port: messages }
+  - from: { node: revise, port: response }
+    to:   { node: final_review, port: draft }
+layout:
+  draft: { x: 0, y: 0 }
+  critique: { x: 200, y: 0 }
+  revise: { x: 400, y: 0 }
+  refine_loop: { x: 300, y: 150 }
+  final_review: { x: 600, y: 0 }
