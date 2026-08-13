@@ -21,7 +21,14 @@ import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { GraphSpec, GraphValidationResult } from '@/lib/types';
 import NodePalette from './NodePalette.vue';
 import NodeAttributeEditor from './NodeAttributeEditor.vue';
-import { useNodeManifest } from '@/composables/useNodeManifest';
+import GraphCanvas from '@/components/canvas/GraphCanvas.vue';
+import {
+  useManifestStore,
+  useNodeManifest,
+  useNodeManifests,
+} from '@/composables/useNodeManifest';
+import { buildGraphAdapter } from '@/lib/canvas/graphAdapter';
+import { parseGraphText, type ParsedGraph } from '@/lib/canvas/graphSpec';
 
 const client = useHarnessClient();
 const route = useRoute();
@@ -309,6 +316,52 @@ function onAttrUpdate(next: Record<string, unknown>) {
   yaml.value = rewriteNodeAttrs(yaml.value, node, next);
 }
 
+// ── canvas view (visual-graph-authoring-01PMUX01 WP02) ───────────────
+//
+// WP02 mounts the shared canvas ALONGSIDE the textarea and changes no
+// existing behaviour: the canvas renders the buffer, the textarea still
+// owns every edit. WP03 hangs the authoring handlers off the same
+// adapter; WP04 makes both panes edit the one parsed buffer.
+
+/**
+ * Last graph the buffer parsed to. A parse failure keeps the previous
+ * value, so a half-typed line greys nothing out — the canvas holds its
+ * last good render while the validation pane reports the error (spec
+ * FR-003 / WP04).
+ */
+const lastGoodGraph = ref<ParsedGraph | null>(null);
+const canvasParseError = ref<string | null>(null);
+
+watch(
+  yaml,
+  (text) => {
+    const parsed = parseGraphText(text);
+    canvasParseError.value = parsed.error;
+    if (parsed.graph) lastGoodGraph.value = parsed.graph;
+  },
+  { immediate: true },
+);
+
+const manifestStore = useManifestStore();
+const canvasKinds = computed(() => (lastGoodGraph.value?.nodes ?? []).map((n) => n.kind));
+const { details: kindDetails } = useNodeManifests(canvasKinds);
+
+const canvasAdapter = computed(() =>
+  buildGraphAdapter({
+    graph: lastGoodGraph.value,
+    manifests: manifestStore.manifests.value ?? [],
+    details: kindDetails.value,
+    // WP02 is render-only. WP03 turns this off for user-scoped graphs.
+    readOnly: true,
+    checkEdge: async () => ({ ok: true }),
+    applyOp: () => undefined,
+  }),
+);
+
+function onCanvasSelect(id: string) {
+  selectedNodeId.value = id;
+}
+
 // ── palette drop handling ────────────────────────────────────────────
 
 function onYamlDragOver(ev: DragEvent) {
@@ -560,7 +613,7 @@ defineExpose({ load, validate, save, parseNodes, appendStubNode });
 
       <div
         class="grid gap-3"
-        style="grid-template-columns: 240px minmax(0, 1fr) 360px;"
+        style="grid-template-columns: 240px minmax(0, 1.1fr) minmax(340px, 0.9fr) 360px;"
         data-testid="editor-three-pane"
       >
         <NodePalette
@@ -568,6 +621,26 @@ defineExpose({ load, validate, save, parseNodes, appendStubNode });
           @kind-drag-start="(p) => p"
           @kind-select="onPaletteSelect"
         />
+
+        <div class="flex min-w-0 flex-col gap-2">
+          <div
+            class="flex items-center gap-2 font-ui text-[11px] uppercase tracking-[0.18em] text-ink-muted"
+          >
+            <span>Canvas</span>
+            <span
+              v-if="canvasParseError"
+              class="ml-auto normal-case tracking-normal text-signal-warn"
+              data-testid="canvas-stale"
+              >Showing last valid parse</span
+            >
+          </div>
+          <GraphCanvas
+            data-testid="editor-canvas"
+            :adapter="canvasAdapter"
+            :selected-node-id="selectedNodeId"
+            @select-node="onCanvasSelect"
+          />
+        </div>
 
         <div class="flex flex-col gap-2 min-w-0">
           <div class="flex items-center gap-2">

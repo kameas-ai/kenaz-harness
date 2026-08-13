@@ -218,6 +218,82 @@ export function useNodeManifest(
 
 // ── test helper ──────────────────────────────────────────────────────
 
+// ── many-ids composable ──────────────────────────────────────────────
+
+export interface UseNodeManifestsResult {
+  /** Resolved manifests keyed by kind id. Missing ids are absent. */
+  details: Ref<Record<string, NodeManifestDetail>>;
+  loading: Ref<boolean>;
+}
+
+/**
+ * useNodeManifests — resolves a *set* of kind ids at once
+ * (visual-graph-authoring-01PMUX01 WP02). The canvas needs the port
+ * surface of every kind present in the graph, not just the selected
+ * one, and it re-derives that set on every parse of the YAML buffer —
+ * so this shares the per-client detail cache and only ever fetches an
+ * id it has not seen.
+ */
+export function useNodeManifests(
+  ids: MaybeRef<string[]>,
+): UseNodeManifestsResult {
+  const client = useHarnessClient();
+  const entry = getEntry(client);
+
+  const details = ref<Record<string, NodeManifestDetail>>({});
+  const loading = ref(false);
+
+  async function fetchMissing(targets: string[]): Promise<void> {
+    const wanted = [...new Set(targets.filter(Boolean))].sort();
+    const next: Record<string, NodeManifestDetail> = {};
+    const missing: string[] = [];
+    for (const id of wanted) {
+      const cached = entry.detailCache.get(id);
+      if (cached) next[id] = cached;
+      else missing.push(id);
+    }
+    details.value = next;
+    if (missing.length === 0) return;
+    loading.value = true;
+    await Promise.all(
+      missing.map(async (id) => {
+        try {
+          const existing = entry.detailInflight.get(id);
+          const promise =
+            existing ??
+            (() => {
+              const p = client.nodes.get(id).then((detail) => {
+                entry.detailCache.set(id, detail);
+                return detail;
+              });
+              entry.detailInflight.set(id, p);
+              return p;
+            })();
+          const detail = await promise;
+          entry.detailInflight.delete(id);
+          details.value = { ...details.value, [id]: detail };
+        } catch {
+          // A kind with no manifest is not an error for the canvas —
+          // the adapter falls back to the default port pair so an
+          // unknown kind still renders as a box the user can delete.
+          entry.detailInflight.delete(id);
+        }
+      }),
+    );
+    loading.value = false;
+  }
+
+  watch(
+    () => [...(unref(ids) ?? [])].sort().join(' '),
+    () => {
+      void fetchMissing(unref(ids) ?? []);
+    },
+    { immediate: true },
+  );
+
+  return { details, loading };
+}
+
 /**
  * Test-only — resets every per-client cache entry so each test sees
  * fresh refs. Production code does not import this.
