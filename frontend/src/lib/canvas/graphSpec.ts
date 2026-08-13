@@ -192,9 +192,22 @@ export function parseGraphText(text: string): ParseResult {
   return { graph, doc, error: null };
 }
 
-/** Serialises a Document back into editor text. */
+/**
+ * Serialises a Document back into editor text.
+ *
+ * `lineWidth: 0` disables re-wrapping, and it is a diffability setting
+ * rather than a cosmetic one: `chat_default.yaml` carries multi-line
+ * prose in `description:` and long `system_prompt:` scalars, and the
+ * library's default 80-column wrap would reflow all of it the first
+ * time the author dragged a node.
+ *
+ * Flow-collection padding is left at the library default (`{ a: b }`,
+ * `[ a ]`) because that is what the shipped library YAML already uses —
+ * `graphSpecOps.test.ts` pins that both bundled graphs survive a
+ * parse→serialize round trip byte-for-byte.
+ */
 export function serializeDoc(doc: Document): string {
-  return String(doc);
+  return doc.toString({ lineWidth: 0 });
 }
 
 // ── op application (the canvas path) ──────────────────────────────────

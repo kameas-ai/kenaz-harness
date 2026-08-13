@@ -27,8 +27,15 @@ import {
   useNodeManifest,
   useNodeManifests,
 } from '@/composables/useNodeManifest';
-import { buildGraphAdapter } from '@/lib/canvas/graphAdapter';
-import { parseGraphText, type ParsedGraph } from '@/lib/canvas/graphSpec';
+import { buildGraphAdapter, defaultAttrsForKind } from '@/lib/canvas/graphAdapter';
+import {
+  applyOpToDoc,
+  parseGraphText,
+  pruneStaleLayout,
+  serializeDoc,
+  type ParsedGraph,
+} from '@/lib/canvas/graphSpec';
+import type { SpecOp } from '@/lib/canvas/types';
 
 const client = useHarnessClient();
 const route = useRoute();
@@ -316,18 +323,18 @@ function onAttrUpdate(next: Record<string, unknown>) {
   yaml.value = rewriteNodeAttrs(yaml.value, node, next);
 }
 
-// ── canvas view (visual-graph-authoring-01PMUX01 WP02) ───────────────
+// ── canvas (visual-graph-authoring-01PMUX01 WP02 render, WP03 author) ─
 //
-// WP02 mounts the shared canvas ALONGSIDE the textarea and changes no
-// existing behaviour: the canvas renders the buffer, the textarea still
-// owns every edit. WP03 hangs the authoring handlers off the same
-// adapter; WP04 makes both panes edit the one parsed buffer.
+// The canvas edits the SAME buffer the textarea edits. Every canvas op
+// is applied to the parsed YAML Document and serialised straight back
+// into `yaml`, so there is one buffer, one dirty state, and one save
+// path — no second in-memory model that can drift (spec §4).
 
 /**
  * Last graph the buffer parsed to. A parse failure keeps the previous
- * value, so a half-typed line greys nothing out — the canvas holds its
+ * value, so a half-typed line does not blank the canvas: it holds its
  * last good render while the validation pane reports the error (spec
- * FR-003 / WP04).
+ * FR-003).
  */
 const lastGoodGraph = ref<ParsedGraph | null>(null);
 const canvasParseError = ref<string | null>(null);
@@ -344,17 +351,70 @@ watch(
 
 const manifestStore = useManifestStore();
 const canvasKinds = computed(() => (lastGoodGraph.value?.nodes ?? []).map((n) => n.kind));
-const { details: kindDetails } = useNodeManifests(canvasKinds);
+const { details: kindDetails, ensure: ensureKindDetail } =
+  useNodeManifests(canvasKinds);
+
+const canvasRef = ref<InstanceType<typeof GraphCanvas> | null>(null);
+
+/**
+ * Applies one canvas op to the buffer. The Document API is what keeps
+ * the YAML pane readable: a full parse/stringify round-trip would erase
+ * every comment in the file on the first node drag.
+ */
+async function applyCanvasOp(op: SpecOp) {
+  if (readOnly.value) return;
+  // A kind dropped from the palette is by definition not in the graph
+  // yet, so its manifest was never fetched — and the manifest is where
+  // the node's default attrs come from. Resolve it before writing, or
+  // the new node lands with an empty `attrs: {}` and the author has to
+  // discover every required field by failing validation.
+  if (op.type === 'add-node') await ensureKindDetail(op.kind);
+  const parsed = parseGraphText(yaml.value);
+  if (!parsed.doc) return; // unparseable buffer: the textarea owns the fix
+  const newID = applyOpToDoc(parsed.doc, op, {
+    attrsFor: (kind) => defaultAttrsForKind(kindDetails.value[kind]),
+  });
+  yaml.value = serializeDoc(parsed.doc);
+  if (newID) selectedNodeId.value = newID;
+  if (op.type === 'delete-node' && selectedNodeId.value === op.id) {
+    selectedNodeId.value = '';
+  }
+}
+
+/**
+ * Drag-time edge legality. The graph goes over as JSON — the buffer the
+ * canvas is showing, parsed once — and the verdict comes back from the
+ * same Go rules `Validate()` runs (`Graph_CheckEdge`). One rule source,
+ * so the canvas can never accept an edge the save then refuses.
+ */
+async function checkCanvasEdge(edge: {
+  source: string;
+  sourcePort: string;
+  target: string;
+  targetPort: string;
+}) {
+  const parsed = parseGraphText(yaml.value);
+  if (!parsed.doc) {
+    return { ok: false, reason: parsed.error ?? 'The graph does not parse.' };
+  }
+  try {
+    return await client.graph.checkEdge(JSON.stringify(parsed.doc.toJS()), {
+      from: { node: edge.source, port: edge.sourcePort },
+      to: { node: edge.target, port: edge.targetPort },
+    });
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+}
 
 const canvasAdapter = computed(() =>
   buildGraphAdapter({
     graph: lastGoodGraph.value,
     manifests: manifestStore.manifests.value ?? [],
     details: kindDetails.value,
-    // WP02 is render-only. WP03 turns this off for user-scoped graphs.
-    readOnly: true,
-    checkEdge: async () => ({ ok: true }),
-    applyOp: () => undefined,
+    readOnly: readOnly.value,
+    checkEdge: checkCanvasEdge,
+    applyOp: applyCanvasOp,
   }),
 );
 
@@ -362,48 +422,19 @@ function onCanvasSelect(id: string) {
   selectedNodeId.value = id;
 }
 
-// ── palette drop handling ────────────────────────────────────────────
-
-function onYamlDragOver(ev: DragEvent) {
-  if (ev.dataTransfer && ev.dataTransfer.types.includes('application/x-kenaz-node-kind')) {
-    ev.preventDefault();
-    ev.dataTransfer.dropEffect = 'copy';
-  }
-}
-
-function onYamlDrop(ev: DragEvent) {
-  if (!ev.dataTransfer) return;
-  const kind =
-    ev.dataTransfer.getData('application/x-kenaz-node-kind') ||
-    ev.dataTransfer.getData('text/plain');
-  if (!kind) return;
-  ev.preventDefault();
-  appendStubNode(kind);
-}
+// ── palette ──────────────────────────────────────────────────────────
+//
+// WP03 DELETED the palette's drop-into-the-text-buffer path. Dropping a
+// kind onto the YAML textarea used to append a stub block; the drop
+// target is the canvas now, and a palette CLICK routes through the same
+// op the drop does. That also closes half of the WP12-review N3 hazard
+// in passing: the palette used to mutate `yaml` without consulting
+// `readOnly`, and `onSpecOp` on a read-only adapter is a no-op by
+// construction. (The attribute editor is the other half; WP05 finishes
+// it.)
 
 function onPaletteSelect({ kind }: { kind: string }) {
-  appendStubNode(kind);
-}
-
-function appendStubNode(kind: string) {
-  const existingIds = new Set(parsedNodes.value.map((n) => n.id));
-  let i = 1;
-  let candidate = `${kind}_${i}`;
-  while (existingIds.has(candidate)) {
-    i += 1;
-    candidate = `${kind}_${i}`;
-  }
-  const block = `  - id: ${candidate}\n    kind: ${kind}\n    attrs: {}\n`;
-  if (/nodes:\s*$/m.test(yaml.value)) {
-    // Append to existing nodes list.
-    yaml.value = yaml.value.replace(
-      /(nodes:\s*\n(?:[\s\S]*?)?)(\n*$)/m,
-      (_match, head: string, tail: string) => `${head.trimEnd()}\n${block}${tail}`,
-    );
-  } else {
-    yaml.value = `${yaml.value.replace(/\n*$/, '')}\nnodes:\n${block}`;
-  }
-  selectedNodeId.value = candidate;
+  void applyCanvasOp({ type: 'add-node', kind, position: { x: 0, y: 0 } });
 }
 
 // ── load / validate / save ───────────────────────────────────────────
@@ -448,10 +479,35 @@ async function validate() {
   }
 }
 
+/**
+ * Writes the canvas arrangement into the buffer's `layout:` block.
+ *
+ * Called ONLY from save(). Persisting on every drag would turn each
+ * twitch of the mouse into a YAML diff (plan.md, "Layout churn in
+ * diffs"), so live positions stay in the canvas component until the
+ * author commits. Stale entries — nodes renamed or deleted by a hand
+ * edit — are pruned in the same pass, which is the moment spec.go's
+ * Layout doc comment nominates for it.
+ */
+function persistCanvasLayout() {
+  const canvas = canvasRef.value;
+  if (!canvas) return;
+  const positions = canvas.pendingLayout();
+  const parsed = parseGraphText(yaml.value);
+  if (!parsed.doc) return;
+  if (Object.keys(positions).length > 0) {
+    applyOpToDoc(parsed.doc, { type: 'move-nodes', positions });
+  }
+  pruneStaleLayout(parsed.doc);
+  const next = serializeDoc(parsed.doc);
+  if (next !== yaml.value) yaml.value = next;
+}
+
 async function save() {
   if (readOnly.value) return;
   saved.value = false;
   error.value = null;
+  persistCanvasLayout();
   let v: GraphValidationResult;
   try {
     v = await client.graph.validate(yaml.value);
@@ -513,7 +569,17 @@ watch(parsedNodes, (next) => {
   }
 });
 
-defineExpose({ load, validate, save, parseNodes, appendStubNode });
+defineExpose({
+  load,
+  validate,
+  save,
+  parseNodes,
+  // WP03: `appendStubNode` is gone — dropping a kind into the TEXT
+  // buffer was the pre-canvas authoring path and the canvas replaces
+  // it. Palette clicks and canvas drops both emit the same add-node op.
+  applyCanvasOp,
+  persistCanvasLayout,
+});
 </script>
 
 <template>
@@ -635,7 +701,7 @@ defineExpose({ load, validate, save, parseNodes, appendStubNode });
             >
           </div>
           <GraphCanvas
-            data-testid="editor-canvas"
+            ref="canvasRef"
             :adapter="canvasAdapter"
             :selected-node-id="selectedNodeId"
             @select-node="onCanvasSelect"
@@ -673,8 +739,6 @@ defineExpose({ load, validate, save, parseNodes, appendStubNode });
             aria-label="Graph YAML definition"
             class="h-[480px] w-full rounded-md border border-border-muted bg-surface-0 px-3 py-2 font-mono text-[12px] text-ink"
             data-testid="editor-yaml"
-            @dragover="onYamlDragOver"
-            @drop="onYamlDrop"
           />
 
           <div

@@ -224,6 +224,13 @@ export interface UseNodeManifestsResult {
   /** Resolved manifests keyed by kind id. Missing ids are absent. */
   details: Ref<Record<string, NodeManifestDetail>>;
   loading: Ref<boolean>;
+  /**
+   * Resolves one id that is not in the watched set yet and merges it in.
+   * The canvas needs this when a kind is dropped onto it: the new node's
+   * default attrs come from its manifest, and the manifest was not
+   * fetched because the graph did not contain that kind a moment ago.
+   */
+  ensure: (id: string) => Promise<NodeManifestDetail | undefined>;
 }
 
 /**
@@ -291,7 +298,36 @@ export function useNodeManifests(
     { immediate: true },
   );
 
-  return { details, loading };
+  async function ensure(id: string): Promise<NodeManifestDetail | undefined> {
+    if (!id) return undefined;
+    const cached = entry.detailCache.get(id);
+    if (cached) {
+      if (!details.value[id]) details.value = { ...details.value, [id]: cached };
+      return cached;
+    }
+    try {
+      const existing = entry.detailInflight.get(id);
+      const promise =
+        existing ??
+        (() => {
+          const p = client.nodes.get(id).then((detail) => {
+            entry.detailCache.set(id, detail);
+            return detail;
+          });
+          entry.detailInflight.set(id, p);
+          return p;
+        })();
+      const detail = await promise;
+      entry.detailInflight.delete(id);
+      details.value = { ...details.value, [id]: detail };
+      return detail;
+    } catch {
+      entry.detailInflight.delete(id);
+      return undefined;
+    }
+  }
+
+  return { details, loading, ensure };
 }
 
 /**
