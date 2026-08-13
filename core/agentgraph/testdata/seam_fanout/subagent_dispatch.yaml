@@ -1,7 +1,10 @@
 # Seam fanout fixture for kind=subagent_dispatch
-# Subagent dispatch coordinates with the AskBus for pause/resume; ActivityCatalog for graph lookup.
+# agentgraph-total-convergence-01PMGX01 WP04: `subagent_dispatch` is a
+# builtin-tool node kind (extends the `tool` archetype); it dispatches
+# the kenaz__subagent_dispatch builtin through the ToolRegistry seam,
+# which is what forks the parent session into a child branch.
 kind: subagent_dispatch
 seams:
-  - seam: ActivityCatalog.Resolve
-    required: false
-notes: "subagent_dispatch spawns a child kernel run; ActivityCatalog.Resolve if activityID is set; ErrNotImplemented otherwise"
+  - seam: ToolRegistry.Call
+    required: true
+notes: "subagent_dispatch node dispatches kenaz__subagent_dispatch through ToolRegistry.Call with the profile + prompt attrs as args"

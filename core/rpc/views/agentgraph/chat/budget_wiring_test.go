@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"context"
 	"testing"
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
@@ -85,11 +86,11 @@ func TestApplyTokenCeilingKnob_KnobEstablishesCeilingWhenGraphHasNone(t *testing
 func TestChatRunner_AutonomyKnobsNilSafe(t *testing.T) {
 	t.Parallel()
 	var r *ChatRunner
-	if got := r.autonomyKnobs(); got.TokenCeilingPerTurn != 0 {
+	if got := r.autonomyKnobs(context.Background(), "sess-1"); got.TokenCeilingPerTurn != 0 {
 		t.Errorf("nil receiver: got %+v, want zero knobs", got)
 	}
 	r2 := &ChatRunner{}
-	if got := r2.autonomyKnobs(); got.TokenCeilingPerTurn != 0 {
+	if got := r2.autonomyKnobs(context.Background(), "sess-1"); got.TokenCeilingPerTurn != 0 {
 		t.Errorf("nil provider: got %+v, want zero knobs", got)
 	}
 }

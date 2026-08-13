@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kameas-ai/kenaz-harness/core/compaction"
+	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
 )
 
 func TestValidateModelProfile_ZeroValueIsInert(t *testing.T) {
@@ -34,7 +34,7 @@ func TestValidateModelProfile_WellFormedAccepted(t *testing.T) {
 			MaxToolDescriptionBytes: 2000,
 		},
 		Context: &ContextPolicy{
-			Aggressiveness:        compaction.AggressivenessBalanced,
+			Aggressiveness:        compactionpolicy.AggressivenessBalanced,
 			ContextWindowOverride: 180000,
 		},
 		Retry:           &RetryPolicy{MaxAttempts: 3, BaseMS: 250, MaxMS: 5000, Jitter: "full"},

@@ -1,0 +1,137 @@
+# I10 allowlist — exported Evaluate*/Enforce*/Authorize*/*Gate functions
+# (the naming vocabulary this codebase uses for gate/authorization/
+# enforcement control-flow) with zero non-test call sites under core/.
+# Spec: kitty-specs/agentgraph-total-convergence-01PMGX01/spec.md §1.7, §6 I10.
+#
+# Format: one `<package-import-path>.<Symbol>` per line.
+#
+# ─────────────────────────────────────────────────────────────────────
+# WP17 TRIAGE, 2026-08-13 — all seven seeded entries dispositioned.
+#
+# WP01 seeded seven symbols. The brief named one (EvaluateToolGate);
+# running the discovery heuristic turned up six more real instances of
+# the same defect class. Phase 8 WP17 required a per-symbol verdict —
+# wire, delete, or a dated justification naming the mission that will
+# wire it. No entry survives on "we'll get to it".
+#
+#   EvaluateToolGate                  DELETED (WP02a, ~331 lines)
+#   oauth.AuthorizeDevice             DELETED (WP17)
+#   event.AuthorizeRawReplay          DELETED (WP17)
+#   narrative.SetSettingsGate         WIRED   (WP17)
+#   agentgraph.EnforceManifestDriftPolicy   JUSTIFIED below
+#   bundleartifact.NewModelProfileHandlerWithGate  JUSTIFIED below
+#   credstore.WithCedarGate           JUSTIFIED below
+#
+# The four resolved entries and why they left the list:
+#
+#   core/toolloop.EvaluateToolGate — the full Cedar prompt_on_first_use
+#   gate. Deleted outright by WP02a rather than wired; spec §1.7 is the
+#   decision record.
+#
+#   core/mcp/oauth.AuthorizeDevice — a one-shot RFC 8628 wrapper
+#   (request → onCode → poll). Deleted by WP17 with positive
+#   no-consumer proof: it could not acquire a caller, because the device
+#   grant has a mandatory human step in the middle. Production drives the
+#   two halves as two separate RPCs so the UI can show user_code between
+#   them (core/rpc/views/tools/device_auth.go BeginDeviceAuth /
+#   PollDeviceAuth). Its four tests were rewritten onto the production
+#   two-phase shape rather than deleted, so coverage went UP.
+#
+#   core/event.AuthorizeRawReplay — deleted by WP17 with its partner
+#   IsRawReplayAuthorized and its test. Its doc claimed "the Replayer
+#   rejects ReplayRaw cursors opened without this marker
+#   (ErrPolicyViolation)". There is no Replayer: the interface has zero
+#   implementations repo-wide, ReplayCursor/ReplayOpts have zero
+#   references outside their declarations, and core/event/replay is a
+#   doc.go with no code. See core/event/helpers.go for the full note and
+#   core/event/api.go's ReplayRaw const for what an implementer must
+#   build alongside it.
+#
+#   core/memory/narrative.SetSettingsGate — WIRED, not justified. Its own
+#   doc said "Call this once at harness boot after the settings store is
+#   opened" and nothing did, so narrative.Enabled() never consulted the
+#   dial and always returned its hard-coded false. A user flipping
+#   MemoryNarrativeEnabled in Settings changed nothing — the promoter and
+#   citation detection both stayed off, and only the env var could turn
+#   the feature on. core/rpc/api.go now calls it immediately after
+#   settingsImpl is constructed. This is the one entry where a one-line
+#   production call site was genuinely missing, which is why it is the
+#   one entry that got wired instead of argued about.
+#
+# ─────────────────────────────────────────────────────────────────────
+# REMAINING ENTRIES — each is justified, dated, and names its owner.
+#
+# The two credstore/bundleartifact entries share a root cause worth
+# stating once: BOTH are unwired because their entire PACKAGE is
+# unwired. core/credstore and core/llm/bundleartifact each have zero
+# non-test importers repo-wide and both appear on
+# scripts/ci/allowlists/i7-orphan-packages.txt. Wiring the gate is not
+# the missing step; wiring the package is. Deleting the gate would leave
+# an equally-dead package minus one feature, which is worse than leaving
+# it: I7 is the line that will actually force the resolution, and when
+# it does, the I10 line goes with it. Recorded so the next reader does
+# not mistake these for independent one-line wires.
+
+# github.com/kameas-ai/kenaz-harness/core/agentgraph.EnforceManifestDriftPolicy
+#   JUSTIFIED 2026-08-13 (WP17). Owner: manifest-versioning-01NDFSEX02.
+#
+#   Evaluates ManifestDriftWarnings against the configured dial mode and
+#   returns ErrManifestDrift when mode=block (manifest_drift_dial.go:49).
+#   Not a one-line wire, and NOT a lone unwired function: its producer
+#   CheckManifestDrift (manifest_drift.go:137) also has zero non-test
+#   callers. The pair is a complete subsystem waiting on its input — the
+#   check needs []NodeProvenance rows for the graph being loaded, and no
+#   production path reads provenance at graph-load time today.
+#
+#   Deletion was considered and rejected: the dial ships in
+#   dials.DialConfig.ManifestDriftMode and participates in the real
+#   cascade, and manifest_versions_gen.go bakes the per-kind fingerprints
+#   the check compares against, so this is a half-landed feature with
+#   live codegen behind it, not scaffolding for a flow that never
+#   existed. 01NDFSEX02 WP06's own doc comment records the same gap for
+#   the frontend drift badge.
+#
+#   Whoever wires provenance-at-load deletes this line and the
+#   manifest_drift_dial.go NOTE in the same change.
+github.com/kameas-ai/kenaz-harness/core/agentgraph.EnforceManifestDriftPolicy
+
+# github.com/kameas-ai/kenaz-harness/core/llm/bundleartifact.NewModelProfileHandlerWithGate
+#   JUSTIFIED 2026-08-13 (WP17). Owner: whichever mission gives
+#   core/llm/bundleartifact a non-test importer (tracked as the
+#   `core/llm/bundleartifact` line in i7-orphan-packages.txt).
+#
+#   The gated constructor variant for ModelProfileHandler
+#   (model_profile_handler.go:85). The seed comment framed this as "the
+#   plain NewModelProfileHandler is what's wired in production" — it is
+#   not. NEITHER constructor has a non-test caller, because nothing
+#   imports the package at all. Model-profile bundle handling is not
+#   reachable in a running harness by any path, gated or ungated.
+#
+#   Deleting the *WithGate variant alone would therefore fix nothing and
+#   lose the gating design; it would just make the dead package smaller.
+#   The line clears when the package acquires a real importer — at which
+#   point the live question ("is the gated or ungated constructor the
+#   right default?") becomes answerable instead of moot.
+github.com/kameas-ai/kenaz-harness/core/llm/bundleartifact.NewModelProfileHandlerWithGate
+
+# github.com/kameas-ai/kenaz-harness/core/credstore.WithCedarGate
+#   JUSTIFIED 2026-08-13 (WP17). Owner: whichever mission gives
+#   core/credstore a non-test importer (tracked as the `core/credstore`
+#   line in i7-orphan-packages.txt).
+#
+#   A StoreOption threading a Cedar policy gate + strictMode callback
+#   into the credential store; the gate fires inside Use() before secret
+#   resolution (store.go:141, mission cedar-credential-policy-01KQ8TDE
+#   WP05). Same shape as the bundleartifact entry: core/credstore has
+#   zero non-test importers, so credstore.New has no production call site
+#   for WithCedarGate to be passed to. Its sibling options
+#   (WithPromptRegistry, WithMCPSpawnPolicyWriter, WithAuditSweeper) are
+#   equally uncalled — the heuristic only surfaces this one because only
+#   this one is named like a gate.
+#
+#   This is the entry most likely to be misread as "Cedar gating is
+#   turned off for credentials". It is not turned off; this store is not
+#   turned ON. Live Cedar credential gating runs through
+#   cedar.GateMCPSpawn from makeMCPRecipeBootstrap (core/rpc/api.go),
+#   which does not go through core/credstore.
+github.com/kameas-ai/kenaz-harness/core/credstore.WithCedarGate

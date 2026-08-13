@@ -8,7 +8,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/kameas-ai/kenaz-harness/core/compaction"
+	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
 )
 
 // ValidateModelProfile applies the versioned-model-profile-01PMDL04 WP01
@@ -79,16 +79,16 @@ func validatePromptTemplateRef(profileID string, ref *PromptTemplateRef) error {
 	return nil
 }
 
-// knownAggressiveness enumerates core/compaction's canonical tier
+// knownAggressiveness enumerates core/compactionpolicy's canonical tier
 // constants. Built from the exported constants (not a locally-invented
-// list) so this validator can't drift from compaction.Tier's own set.
-var knownAggressiveness = map[compaction.CompactionAggressiveness]struct{}{
-	"":                                    {}, // unset — session/app default
-	compaction.AggressivenessOff:          {},
-	compaction.AggressivenessConservative: {},
-	compaction.AggressivenessBalanced:     {},
-	compaction.AggressivenessAggressive:   {},
-	compaction.AggressivenessMaximal:      {},
+// list) so this validator can't drift from compactionpolicy.Tier's own set.
+var knownAggressiveness = map[compactionpolicy.CompactionAggressiveness]struct{}{
+	"":                                 {}, // unset — session/app default
+	compactionpolicy.AggressivenessOff: {},
+	compactionpolicy.AggressivenessConservative: {},
+	compactionpolicy.AggressivenessBalanced:     {},
+	compactionpolicy.AggressivenessAggressive:   {},
+	compactionpolicy.AggressivenessMaximal:      {},
 }
 
 func validateContextPolicy(profileID string, c *ContextPolicy) error {

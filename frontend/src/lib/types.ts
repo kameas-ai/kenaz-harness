@@ -1083,28 +1083,40 @@ export interface CostThresholdCrossedPayload {
 export type MarkdownExtensions = 'basic' | 'math' | 'diagrams' | 'all';
 
 /**
- * ConfirmDecision — the four canonical responses to a confirm-each
- * tool-call modal. Matches core/toolloop.ConfirmDecision.
+ * ToolConfirmPending — one parked tool call, received on the
+ * `tool:confirm-pending` broker topic when a `confirm_each` verdict
+ * pauses dispatch. Mirrors core/toolloop.ConfirmRequest 1:1.
+ *
+ * Batching (confirm-each-enforcement-01PMAG05 WP02, owner decision 3):
+ * every call the model emitted in ONE turn shares a `batch_id`, so N
+ * events render as ONE dialog with N rows rather than a modal storm.
+ * Rows resolve independently.
+ *
+ * Redaction contract: `args_summary` is a STRUCTURAL description only —
+ * argument count, names, and JSON kinds ("2 arguments: content (string),
+ * path (string)"). It never carries argument values. Do not render it as
+ * if it were the call's arguments, and do not ask the backend for them:
+ * the whole point of the summary is that the values never cross the RPC
+ * boundary.
+ *
+ * This replaces the pre-mission ConfirmToolRequest, which described a
+ * `llm:tool-confirm-request` topic that nothing published and a
+ * `LLM_ResolveConfirm` binding that resolved nothing.
  */
-export type ConfirmDecision =
-  | 'allow'
-  | 'deny'
-  | 'always_allow'
-  | 'always_deny';
-
-/**
- * ConfirmToolRequest — payload received on `llm:tool-confirm-request`
- * when the toolloop pauses on a confirm-each verdict. Mirrors
- * core/rpc/views/llm.ConfirmRequestPayload.
- */
-export interface ConfirmToolRequest {
-  request_id: string;
+export interface ToolConfirmPending {
+  /** Which session is parked. */
   session_id: string;
-  parent_sub_id: string;
+  /** Unique per parked call; round-tripped back on resolve. */
+  call_id: string;
+  /** Shared by every call parked from the same turn. */
+  batch_id: string;
+  /** Bare MCP server name. */
   server: string;
+  /** Bare tool name. */
   tool: string;
-  tool_use_id: string;
-  args_redacted?: string;
+  /** Structural args description. NEVER argument values. */
+  args_summary: string;
+  /** The permission resolver's reason for the confirm_each verdict. */
   reason?: string;
 }
 
@@ -1454,12 +1466,6 @@ export interface StreamChunk {
   delta: string;
   toolCallDelta?: ToolCall;
   done?: boolean;
-}
-
-export interface StreamClosedPayload {
-  id: string;
-  reason: 'ctx-cancelled' | 'stop-called' | 'backend-error' | 'completed';
-  message?: string;
 }
 
 /** Token / cost estimate surfaced by ChatInput. Placeholder values are OK
@@ -2648,11 +2654,17 @@ export interface GraphInfo {
  * GraphSpec is the editable graph payload. The kernel parses YAML on
  * load + dump so the frontend can drive a textarea / Monaco instance
  * without modelling the typed node-attrs structure.
+ *
+ * `materialized` (agentgraph-total-convergence-01PMGX01 WP12) is a
+ * graph projected from a run's EventLog rather than read from disk —
+ * an executed conversation, in the same shape as an authored graph.
+ * It is read-only for the same reason a log line is: editing a record
+ * of what happened would make it a record of something else.
  */
 export interface GraphSpec {
   id: string;
   name?: string;
-  scope: 'library' | 'user';
+  scope: 'library' | 'user' | 'materialized';
   yaml: string;
 }
 
@@ -2680,6 +2692,14 @@ export type GraphRunState = 'running' | 'paused' | 'completed' | 'failed';
 export interface GraphPendingAsk {
   nodeId: string;
   question: string;
+  /**
+   * One of core/elicitation's seven dialog kinds, or absent for a
+   * free-form ask (01PMGX01 WP06). Every ask that predates that WP —
+   * including the chat graph's turn boundary — leaves this absent.
+   */
+  kind?: QuestionKind;
+  /** The full question (options, bounds, preview) when kind is set. */
+  spec?: ElicitationQuestion;
 }
 
 /** RunStatus is the snapshot the RunView renders. */
@@ -2976,7 +2996,7 @@ export type CompactionAggressiveness =
  * CompactionTierExplain — one row of the tier-explain payload returned
  * by Compaction.GetTierExplain(). Drives the "What does this mean?"
  * disclosure on the Settings panel's compaction-aggressiveness dial.
- * Numerics come from core/compaction.Tier() via the binding so the UI
+ * Numerics come from core/compactionpolicy.Tier() via the binding so the UI
  * can never drift from the engine.
  */
 export interface CompactionTierExplain {
@@ -3519,6 +3539,28 @@ export interface ElicitRequest {
   questions?: WizardQuestion[];
   /** WP06: "blocking" (default) or "deferred". */
   mode?: 'blocking' | 'deferred';
+}
+
+/**
+ * ElicitationQuestion is the canonical question shape shared by the
+ * `ask` graph node, kenaz__ask_user_question and the dialog wire
+ * (01PMGX01 WP06). Mirrors core/elicitation.Question on the Go side.
+ */
+export interface ElicitationQuestion {
+  /** Set only for a question inside a wizard batch. */
+  id?: string;
+  question: string;
+  kind?: QuestionKind;
+  options?: QuestionOption[];
+  placeholder?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  default_value?: unknown;
+  preview?: ElicitPreview;
+  depends_on?: WizardDependsOn;
+  /** A multi-question wizard batch. */
+  questions?: ElicitationQuestion[];
 }
 
 /**

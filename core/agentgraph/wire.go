@@ -23,6 +23,9 @@ type wireGraph struct {
 	Edges         []Edge         `json:"edges,omitempty" yaml:"edges,omitempty"`
 	Budget        Budget         `json:"budget,omitempty" yaml:"budget,omitempty"`
 	DialOverrides map[string]any `json:"dial_overrides,omitempty" yaml:"dial_overrides,omitempty"`
+	// SpecProvenance round-trips the materialization fidelity marker
+	// (WP12 review F2). Empty on every authored graph.
+	SpecProvenance string `json:"spec_provenance,omitempty" yaml:"spec_provenance,omitempty"`
 }
 
 // wireNode mirrors Node but holds Attrs as a free-form map so we can
@@ -36,19 +39,23 @@ type wireNode struct {
 	Outputs       []Port         `json:"outputs,omitempty" yaml:"outputs,omitempty"`
 	Attrs         map[string]any `json:"attrs,omitempty" yaml:"attrs,omitempty"`
 	DialOverrides map[string]any `json:"dial_overrides,omitempty" yaml:"dial_overrides,omitempty"`
+	// Materialized round-trips the materialization record (WP12). Nil on
+	// every authored node, so an authored graph's bytes are unchanged.
+	Materialized *NodeMaterialization `json:"materialized,omitempty" yaml:"materialized,omitempty"`
 }
 
 func graphToWire(g Graph) (wireGraph, error) {
 	out := wireGraph{
-		SpecVersion:   g.SpecVersion,
-		ID:            g.ID,
-		Name:          g.Name,
-		Description:   g.Description,
-		SystemPrompt:  g.SystemPrompt,
-		Entrypoints:   append([]string(nil), g.Entrypoints...),
-		Edges:         append([]Edge(nil), g.Edges...),
-		Budget:        g.Budget,
-		DialOverrides: cloneMap(g.DialOverrides),
+		SpecVersion:    g.SpecVersion,
+		ID:             g.ID,
+		Name:           g.Name,
+		Description:    g.Description,
+		SystemPrompt:   g.SystemPrompt,
+		Entrypoints:    append([]string(nil), g.Entrypoints...),
+		Edges:          append([]Edge(nil), g.Edges...),
+		Budget:         g.Budget,
+		DialOverrides:  cloneMap(g.DialOverrides),
+		SpecProvenance: g.SpecProvenance,
 	}
 	out.Nodes = make([]wireNode, 0, len(g.Nodes))
 	for _, n := range g.Nodes {
@@ -59,6 +66,7 @@ func graphToWire(g Graph) (wireGraph, error) {
 			Inputs:        append([]Port(nil), n.Inputs...),
 			Outputs:       append([]Port(nil), n.Outputs...),
 			DialOverrides: cloneMap(n.DialOverrides),
+			Materialized:  n.Materialized,
 		}
 		if n.Attrs != nil {
 			raw, err := json.Marshal(n.Attrs)
@@ -80,15 +88,16 @@ func graphToWire(g Graph) (wireGraph, error) {
 
 func wireToGraph(w wireGraph) (Graph, error) {
 	g := Graph{
-		SpecVersion:   w.SpecVersion,
-		ID:            w.ID,
-		Name:          w.Name,
-		Description:   w.Description,
-		SystemPrompt:  w.SystemPrompt,
-		Entrypoints:   append([]string(nil), w.Entrypoints...),
-		Edges:         append([]Edge(nil), w.Edges...),
-		Budget:        w.Budget,
-		DialOverrides: cloneMap(w.DialOverrides),
+		SpecVersion:    w.SpecVersion,
+		ID:             w.ID,
+		Name:           w.Name,
+		Description:    w.Description,
+		SystemPrompt:   w.SystemPrompt,
+		Entrypoints:    append([]string(nil), w.Entrypoints...),
+		Edges:          append([]Edge(nil), w.Edges...),
+		Budget:         w.Budget,
+		DialOverrides:  cloneMap(w.DialOverrides),
+		SpecProvenance: w.SpecProvenance,
 	}
 	g.Nodes = make([]Node, 0, len(w.Nodes))
 	// Track aliases observed during this load so the kernel can emit
@@ -119,6 +128,7 @@ func wireToGraph(w wireGraph) (Graph, error) {
 			Inputs:        append([]Port(nil), wn.Inputs...),
 			Outputs:       append([]Port(nil), wn.Outputs...),
 			DialOverrides: cloneMap(wn.DialOverrides),
+			Materialized:  wn.Materialized,
 		}
 		attrs, err := decodeAttrs(wn.Kind, wn.Attrs, wn.ID)
 		if err != nil {

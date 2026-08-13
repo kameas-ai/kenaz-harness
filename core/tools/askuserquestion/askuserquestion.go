@@ -13,13 +13,18 @@
 //   - file       — OS file-picker (returns path)
 //
 // The tool follows the same "kenaz__" prefix + BuiltinTool interface
-// contract as save_artifact and bash. The RPC layer (Elicit view, WP04)
-// holds the dialog-open/resolve machinery; this package owns only the
-// argument parsing, validation, and the blocking call to the RPC bridge.
+// contract as save_artifact and bash.
 //
-// WP04 (synchronous single-question flow) wires the Delegate interface.
-// Until then the stub delegate (or nil Delegate) returns a
-// "tool not yet wired" error so the model can handle it gracefully.
+// # What this package is after 01PMGX01 WP06
+//
+// A shim, and deliberately nothing more. The model-facing name and JSON
+// schema are a frozen contract, so they stay here; everything behind
+// them — the question shape, the validation rules, the pending-ask
+// store, the resolve leg — moved to core/elicitation, which the `ask`
+// graph node rides too (spec §4.3, invariant I5). This file owns the
+// translation from the model's args JSON to elicitation.Question and
+// back from elicitation.Answer to the tool result. It owns no
+// elicitation semantics of its own.
 package askuserquestion
 
 import (
@@ -28,6 +33,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+
+	"github.com/kameas-ai/kenaz-harness/core/elicitation"
 )
 
 // ToolName is the namespaced tool identifier surfaced to the model.
@@ -43,29 +50,22 @@ const ToolDescription = "Pause the current turn and ask the user a structured qu
 	"Returns the user's answer so you can continue the task. " +
 	"Use this instead of asking a question in chat when you need a specific, validated answer."
 
-// QuestionKind is the closed enum of supported question types.
-type QuestionKind string
+// QuestionKind is the closed enum of supported question types. It is an
+// alias for elicitation.Kind: the seven kinds are one enum shared with
+// the `ask` node, not a parallel copy (01PMGX01 WP06).
+type QuestionKind = elicitation.Kind
 
+// The seven model-facing question kinds. Aliases of the canonical
+// constants so existing call sites keep compiling.
 const (
-	KindRadio    QuestionKind = "radio"
-	KindCheckbox QuestionKind = "checkbox"
-	KindText     QuestionKind = "text"
-	KindNumber   QuestionKind = "number"
-	KindSlider   QuestionKind = "slider"
-	KindDate     QuestionKind = "date"
-	KindFile     QuestionKind = "file"
+	KindRadio    = elicitation.KindRadio
+	KindCheckbox = elicitation.KindCheckbox
+	KindText     = elicitation.KindText
+	KindNumber   = elicitation.KindNumber
+	KindSlider   = elicitation.KindSlider
+	KindDate     = elicitation.KindDate
+	KindFile     = elicitation.KindFile
 )
-
-// validKinds is the canonical set for O(1) membership check.
-var validKinds = map[QuestionKind]struct{}{
-	KindRadio:    {},
-	KindCheckbox: {},
-	KindText:     {},
-	KindNumber:   {},
-	KindSlider:   {},
-	KindDate:     {},
-	KindFile:     {},
-}
 
 // inputSchema is the JSON Schema the model receives in the tool catalog.
 // Kept as a constant so InputSchema() is allocation-free.
@@ -162,6 +162,35 @@ type AskArgs struct {
 	Preview      *PreviewSpec     `json:"preview,omitempty"`
 }
 
+// ToQuestion projects the model's args onto the canonical question
+// shape. This is the only place the tool's wire vocabulary meets the
+// harness's.
+func (a AskArgs) ToQuestion() elicitation.Question {
+	q := elicitation.Question{
+		Text:         a.Question,
+		Kind:         a.Kind,
+		Placeholder:  a.Placeholder,
+		Min:          a.Min,
+		Max:          a.Max,
+		Step:         a.Step,
+		DefaultValue: a.DefaultValue,
+	}
+	if len(a.Options) > 0 {
+		q.Options = make([]elicitation.Option, 0, len(a.Options))
+		for _, o := range a.Options {
+			q.Options = append(q.Options, elicitation.Option{Value: o.Value, Label: o.Label})
+		}
+	}
+	if a.Preview != nil {
+		q.Preview = &elicitation.Preview{
+			Kind:     a.Preview.Kind,
+			Content:  a.Preview.Content,
+			Language: a.Preview.Language,
+		}
+	}
+	return q
+}
+
 // AskResult is returned to the model on a successful elicitation.
 type AskResult struct {
 	// Answer holds the user's response. Its concrete JSON type mirrors
@@ -191,13 +220,17 @@ const (
 // package free of Wails / RPC dependencies, which simplifies unit tests.
 //
 // OpenDialog blocks until the user submits or cancels. The returned
-// AskResult.Cancelled flag is true when the user dismissed without
+// Answer.Cancelled flag is true when the user dismissed without
 // answering.
 //
-// WP04 wires the concrete implementation (core/rpc/views/elicit).
-// Until then the tool stub returns errKindNotWired.
+// It speaks elicitation.Question / elicitation.Answer rather than this
+// package's wire types: the concrete implementation
+// (core/rpc/views/elicit) parks the question in the shared
+// elicitation.Registry, which is the same store the `ask` node's durable
+// pause uses (01PMGX01 WP06). A nil Delegate makes every Call return
+// errKindNotWired.
 type Delegate interface {
-	OpenDialog(ctx context.Context, args AskArgs) (AskResult, error)
+	OpenDialog(ctx context.Context, q elicitation.Question) (elicitation.Answer, error)
 }
 
 // Options configures the Tool at construction.
@@ -269,19 +302,13 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 		return marshalErr(errKindInvalidArgs, fmt.Sprintf("parse args: %v", err))
 	}
 
-	// Validate required fields.
-	if args.Question == "" {
-		return marshalErr(errKindInvalidArgs, "question is required")
-	}
-	if _, ok := validKinds[args.Kind]; !ok {
-		return marshalErr(errKindInvalidArgs,
-			fmt.Sprintf("unknown kind %q; must be one of radio, checkbox, text, number, slider, date, file", args.Kind))
-	}
-
-	// radio and checkbox require at least one option.
-	if (args.Kind == KindRadio || args.Kind == KindCheckbox) && len(args.Options) == 0 {
-		return marshalErr(errKindInvalidArgs,
-			fmt.Sprintf("kind=%q requires at least one option", args.Kind))
+	// Validate through the shared elicitation rules. RequireStructured
+	// (rather than plain Validate) is what makes `kind` mandatory here:
+	// the tool's JSON schema declares it required, while a graph-authored
+	// `ask` node may legitimately be free-form.
+	question := args.ToQuestion()
+	if err := question.RequireStructured(); err != nil {
+		return marshalErr(errKindInvalidArgs, err.Error())
 	}
 
 	// Delegate gate.
@@ -294,7 +321,7 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 			"ask_user_question dialog bridge is not wired; call will return once WP04 lands")
 	}
 
-	result, err := t.delegate.OpenDialog(ctx, args)
+	answer, err := t.delegate.OpenDialog(ctx, question)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			// Context cancellation: surface as cancelled result rather
@@ -311,11 +338,28 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 		return marshalErr(errKindDelegate, fmt.Sprintf("dialog error: %v", err))
 	}
 
-	encoded, err := json.Marshal(result)
+	encoded, err := json.Marshal(resultOf(answer))
 	if err != nil {
 		return nil, fmt.Errorf("askuserquestion: marshal result: %w", err)
 	}
 	return encoded, nil
+}
+
+// resultOf projects a resolved elicitation.Answer onto the frozen
+// model-facing result shape. A cancelled or empty answer renders as JSON
+// null so the model always receives a well-typed `answer` field.
+func resultOf(a elicitation.Answer) AskResult {
+	out := AskResult{Cancelled: a.Cancelled, Answer: a.Value}
+	if len(out.Answer) == 0 {
+		if a.Text != "" && !a.Cancelled {
+			if encoded, err := json.Marshal(a.Text); err == nil {
+				out.Answer = encoded
+				return out
+			}
+		}
+		out.Answer = json.RawMessage("null")
+	}
+	return out
 }
 
 // marshalErr returns a JSON-encoded errorResult tool result (no Go error).

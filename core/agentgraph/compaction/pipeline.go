@@ -86,6 +86,46 @@ func (p *Pipeline) RegisterStrategy(c Compactor) {
 	p.mu.Unlock()
 }
 
+// Bind returns a shallow clone of the pipeline with c installed as an
+// additional strategy, for strategies that cannot be registered once
+// at construction because they need per-run identity.
+//
+// StrategySessionRewrite is the motivating case: it rewrites the
+// persisted history of one conversation using one model, so its
+// implementation closes over the run's (session, profile, model)
+// triple. Registering it globally would either race between concurrent
+// chat sessions or force that triple through every strategy's
+// signature.
+//
+// The clone SHARES the resolver, the emitter and the clock — there is
+// still exactly one cascading-config surface and one event log, which
+// is the property that makes this "one pipeline, bound per run" rather
+// than "a second pipeline". Only the strategy table is copied, so a
+// binding cannot leak into another run.
+//
+// A nil c returns the receiver unchanged.
+func (p *Pipeline) Bind(c Compactor) *Pipeline {
+	if p == nil {
+		return nil
+	}
+	if c == nil {
+		return p
+	}
+	p.mu.RLock()
+	clone := &Pipeline{
+		resolver:   p.resolver,
+		emitter:    p.emitter,
+		now:        p.now,
+		strategies: make(map[Strategy]Compactor, len(p.strategies)+1),
+	}
+	for k, v := range p.strategies {
+		clone.strategies[k] = v
+	}
+	p.mu.RUnlock()
+	clone.strategies[c.Strategy()] = c
+	return clone
+}
+
 // Strategies returns the registered strategy names (sorted by the
 // canonical AllStrategies order).
 func (p *Pipeline) Strategies() []Strategy {
@@ -425,6 +465,7 @@ func (p *Pipeline) Compact(ctx context.Context, in agentgraph.CompactionInput) (
 			CurrentTokens: in.CurrentTokens,
 			ContextWindow: in.ContextWindow,
 			Site:          kernelSiteToSite(in.Site),
+			SessionID:     in.SessionID,
 		},
 	})
 	if err != nil {

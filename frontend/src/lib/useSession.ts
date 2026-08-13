@@ -23,14 +23,14 @@ import {
   shallowRef,
   watch,
   type Ref,
-} from 'vue';
-import { useHarnessClient } from './harnessClientContext';
-import { useEventStream } from './useEventStream';
-import { logEvent } from './eventLog';
-import { isServedMode } from './useServedMode';
-import { useConnectionState } from './useConnectionState';
-import { friendly } from './errors';
-import type { ContentBlock, Message, Session } from './types';
+} from "vue";
+import { useHarnessClient } from "./harnessClientContext";
+import { useEventStream } from "./useEventStream";
+import { logEvent } from "./eventLog";
+import { isServedMode } from "./useServedMode";
+import { useConnectionState } from "./useConnectionState";
+import { friendly } from "./errors";
+import type { ContentBlock, Message, Session } from "./types";
 
 /**
  * SessionUsagePayload is the wire shape emitted on `session.usage.updated`
@@ -61,11 +61,37 @@ export interface StreamTruncatedPayload {
   message: string;
 }
 
+/**
+ * OverflowRecoveryPayload mirrors the `chat:overflow-recovery` payload
+ * emitted by ChatRunner.recoverFromOverflow
+ * (core/rpc/views/agentgraph/chat/chat_runner.go). One per recovery
+ * attempt: the provider rejected the request as too long, the runner
+ * compacted the session and re-drove the kernel on a fresh context.
+ *
+ * Arrives in BOTH desktop and served mode — core/serve/wsstream.go
+ * forwards the topic verbatim, so the served surface is not a fake.
+ */
+export interface OverflowRecoveryPayload {
+  sub_id?: string;
+  session_id?: string;
+  /** 1-based recovery attempt within this turn. */
+  attempt?: number;
+  /** The turn's MaxOverflowRecoveries budget. */
+  budget?: number;
+}
+
 export interface UseSessionResult {
   session: Ref<Session | null>;
   messages: Ref<readonly Message[]>;
   loading: Ref<boolean>;
   error: Ref<string | null>;
+  /**
+   * Discriminator for `error` when the backend supplied one on the
+   * stream-closed payload. "session_full" means the conversation
+   * exceeded the model's context window and retrying will not help; the
+   * surface renders different copy and a different CTA. null otherwise.
+   */
+  errorKind: Ref<string | null>;
   /** The current in-flight assistant message, or null. */
   currentlyStreaming: Ref<Message | null>;
   /** Active subscription id from `client.llm.startStream`, or null. */
@@ -105,13 +131,29 @@ export interface UseSessionResult {
    * turn starts or the session changes.
    */
   streamTruncated: Ref<StreamTruncatedPayload | null>;
+  /**
+   * Set when the backend hit a context overflow MID-TURN, compacted the
+   * session, and re-drove the run (`chat:overflow-recovery`). Non-null
+   * means the turn is still coming and the pause on screen has an
+   * explanation.
+   *
+   * Deliberately not the same signal as `errorKind === "session_full"`.
+   * That one arrives on stream-closed and means the turn is over with no
+   * answer; this one is the recovery that keeps it from getting there.
+   * Cleared when a new turn starts or the session changes.
+   */
+  overflowRecovery: Ref<OverflowRecoveryPayload | null>;
   refresh(): Promise<void>;
   /**
    * Append a user message and start the assistant stream. modelOverride
    * (optional) selects a non-default model from the profile's
    * authorised set; the chat surface's switcher pill picks it.
    */
-  send(content: string, profileID: string, modelOverride?: string): Promise<void>;
+  send(
+    content: string,
+    profileID: string,
+    modelOverride?: string,
+  ): Promise<void>;
   /**
    * Multimodal-aware send (multimodal-io WP04). Persists the user
    * turn through Sessions_SendMessageWithBlocks, then opens the
@@ -138,18 +180,27 @@ export function useSession(id: Ref<string>): UseSessionResult {
   const messages = shallowRef<readonly Message[]>([]);
   const loading = ref(false);
   const error = ref<string | null>(null);
+  /**
+   * Discriminator for the current `error`, when the backend supplied one
+   * on the stream-closed payload. "session_full" means the conversation
+   * no longer fits the model's context window and retrying will not
+   * help — the surface renders different copy and a different CTA for
+   * it. null for every ordinary error.
+   */
+  const errorKind = ref<string | null>(null);
   const currentlyStreaming = ref<Message | null>(null);
   const streamSubscriptionId = ref<string | null>(null);
   const streamingTimedOut = ref(false);
-  const draft = ref('');
+  const draft = ref("");
   const showFullHistory = ref(false);
   const sweptCount = ref(0);
   const lastUsage = ref<SessionUsagePayload | null>(null);
   const streamTruncated = ref<StreamTruncatedPayload | null>(null);
+  const overflowRecovery = ref<OverflowRecoveryPayload | null>(null);
 
   let streamTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
   let draftDebounceHandle: ReturnType<typeof setTimeout> | null = null;
-  let lastSavedDraft = '';
+  let lastSavedDraft = "";
 
   // ── served-mode Sessions_Stream wiring (FR-007) ─────────────────────────
   //
@@ -176,7 +227,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
     } catch (err) {
       // Best-effort: the reconnect poller in servedTransport will retry the
       // underlying connection; surfacing this would be noise.
-      logEvent('warn', 'served.session_stream.open_failed', {
+      logEvent("warn", "served.session_stream.open_failed", {
         session_id: sessionID,
         message: err instanceof Error ? err.message : String(err),
       });
@@ -216,7 +267,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
     const fn = fullHistory
       ? sessionsClient.listMessagesAll
       : sessionsClient.listMessagesActive;
-    if (typeof fn === 'function') {
+    if (typeof fn === "function") {
       const res = await fn.call(sessionsClient, sessionId);
       return { messages: res.messages, sweptCount: res.sweptCount };
     }
@@ -229,16 +280,17 @@ export function useSession(id: Ref<string>): UseSessionResult {
       session.value = null;
       messages.value = [];
       sweptCount.value = 0;
-      draft.value = '';
+      draft.value = "";
       return;
     }
     loading.value = true;
     error.value = null;
+    errorKind.value = null;
     try {
       const [s, msgsResult, d] = await Promise.all([
         client.sessions.get(sessionId),
         fetchMessages(sessionId, showFullHistory.value),
-        client.sessions.loadDraft(sessionId).catch(() => ''),
+        client.sessions.loadDraft(sessionId).catch(() => ""),
       ]);
       session.value = s;
       messages.value = msgsResult.messages;
@@ -266,8 +318,8 @@ export function useSession(id: Ref<string>): UseSessionResult {
     sessionId?: string;
     message?: Message;
   };
-  useEventStream<SessionEvent>('sessions:event', (payload) => {
-    if (!payload || payload.kind !== 'message_appended') return;
+  useEventStream<SessionEvent>("sessions:event", (payload) => {
+    if (!payload || payload.kind !== "message_appended") return;
     if (payload.sessionId !== id.value) return;
     const m = payload.message;
     if (!m) return;
@@ -280,7 +332,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
   // LLM turn (backend-context-window-length-01KQ8TD3 WP03). Updates
   // lastUsage so the context-window indicator reads promptTokens
   // without calling GetUsage.
-  useEventStream<SessionUsagePayload>('session.usage.updated', (payload) => {
+  useEventStream<SessionUsagePayload>("session.usage.updated", (payload) => {
     if (!payload) return;
     if (payload.sessionId !== id.value) return;
     lastUsage.value = payload;
@@ -305,11 +357,21 @@ export function useSession(id: Ref<string>): UseSessionResult {
     reason?: string;
     message?: string;
     finish_reason?: string;
+    /**
+     * Discriminates WHY the stream closed, for the cases where `message`
+     * alone leaves the surface guessing. Mirrors
+     * StreamClosedPayload.ErrorKind in
+     * core/rpc/views/agentgraph/chat/stream_bridge.go.
+     *
+     * "session_full" is the only value today. Match on this rather than
+     * on `message` — that field is a human sentence and will be reworded.
+     */
+    error_kind?: string;
   };
 
   // Subscribe to streaming chunks. Splice text deltas into
   // currentlyStreaming; surface errors via error.value.
-  useEventStream<WireChunk>('llm:stream-chunk', (payload) => {
+  useEventStream<WireChunk>("llm:stream-chunk", (payload) => {
     if (!payload || !payload.chunk) return;
     if (payload.session_id && payload.session_id !== id.value) return;
     if (
@@ -322,17 +384,17 @@ export function useSession(id: Ref<string>): UseSessionResult {
     clearStreamTimeout();
     streamingTimedOut.value = false;
     const ev = payload.chunk;
-    const subID = payload.sub_id ?? streamSubscriptionId.value ?? 'sub';
+    const subID = payload.sub_id ?? streamSubscriptionId.value ?? "sub";
     switch (ev.kind) {
-      case 'text': {
-        const delta = ev.text ?? '';
+      case "text": {
+        const delta = ev.text ?? "";
         if (!delta) return;
         const existing = currentlyStreaming.value;
         if (!existing) {
           currentlyStreaming.value = {
             id: `streaming-${subID}`,
             sessionId: id.value,
-            role: 'assistant',
+            role: "assistant",
             content: delta,
             createdAt: new Date().toISOString(),
             streaming: true,
@@ -345,7 +407,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
         }
         return;
       }
-      case 'error': {
+      case "error": {
         // long-turn-resilience WP00: when the stream errors mid-flight,
         // commit any partial assistant content BEFORE surfacing the
         // error so the user's bubble persists with a "Connection lost"
@@ -358,7 +420,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
             const committed: Message = {
               ...partial,
               streaming: false,
-              streamingError: ev.err || 'stream error',
+              streamingError: ev.err || "stream error",
             };
             messages.value = [...messages.value, committed];
           }
@@ -366,7 +428,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
         if (ev.err) error.value = ev.err;
         return;
       }
-      case 'finish': {
+      case "finish": {
         // The terminal "finish" event arrives just before stream-closed;
         // the close handler does the commit so we don't double-append.
         return;
@@ -377,7 +439,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
     }
   });
 
-  useEventStream<WireClosed>('llm:stream-closed', (payload) => {
+  useEventStream<WireClosed>("llm:stream-closed", (payload) => {
     if (!payload) return;
     if (payload.session_id && payload.session_id !== id.value) return;
     if (
@@ -396,23 +458,54 @@ export function useSession(id: Ref<string>): UseSessionResult {
       // path which may have already committed under the same stable id.
       const already = messages.value.some((x) => x.id === finished.id);
       if (!already) {
-        const isCompleted = payload.reason === 'completed';
+        const isCompleted = payload.reason === "completed";
         const committed: Message = isCompleted
           ? { ...finished, streaming: false }
           : {
               ...finished,
               streaming: false,
-              streamingError: payload.reason || 'closed-without-finish',
+              streamingError: payload.reason || "closed-without-finish",
             };
         messages.value = [...messages.value, committed];
       }
     }
     currentlyStreaming.value = null;
     streamSubscriptionId.value = null;
-    if (payload.reason === 'backend-error' && payload.message) {
+    if (payload.reason === "backend-error" && payload.message) {
       error.value = payload.message;
+      // A session that ran out of context is not a failed send: the
+      // user's message IS in the transcript and the model simply never
+      // got to answer. The surface needs to say so and offer the way
+      // out, rather than the generic retry framing every other
+      // backend-error gets.
+      errorKind.value = payload.error_kind ?? null;
     }
   });
+
+  // Mid-turn context-overflow recovery (chat:overflow-recovery,
+  // core/rpc/views/agentgraph/chat/chat_runner.go). The runner hit a
+  // provider context overflow, compacted the session and re-drove the
+  // kernel on a fresh context — the turn is still coming.
+  //
+  // Without this the event had no subscriber at all: the backend emitted
+  // it "so the surface can show the user what happened" and the surface
+  // showed nothing, leaving a multi-second stall during compaction+redrive
+  // indistinguishable from a hang. The terminal session-full report
+  // (errorKind on stream-closed) does not cover this — by the time it
+  // fires, recovery has already failed.
+  useEventStream<OverflowRecoveryPayload>(
+    "chat:overflow-recovery",
+    (payload) => {
+      if (!payload) return;
+      if (payload.session_id && payload.session_id !== id.value) return;
+      overflowRecovery.value = payload;
+      logEvent("info", "chat.overflow_recovery", {
+        session_id: payload.session_id ?? "",
+        attempt: payload.attempt ?? 0,
+        budget: payload.budget ?? 0,
+      });
+    },
+  );
 
   // Served-mode transport backpressure (core/serve/wsstream.go). The
   // server drops frames rather than blocking the harness-wide event bus
@@ -422,14 +515,17 @@ export function useSession(id: Ref<string>): UseSessionResult {
   // Not filtered by session id: the notice is a property of THIS
   // connection, and the server cannot attribute a frame it never
   // delivered to a particular conversation.
-  useEventStream<StreamTruncatedPayload>('served:stream-truncated', (payload) => {
-    if (!payload) return;
-    streamTruncated.value = payload;
-    logEvent('warn', 'served.stream.truncated', {
-      dropped: payload.dropped,
-      reason: payload.reason,
-    });
-  });
+  useEventStream<StreamTruncatedPayload>(
+    "served:stream-truncated",
+    (payload) => {
+      if (!payload) return;
+      streamTruncated.value = payload;
+      logEvent("warn", "served.stream.truncated", {
+        dropped: payload.dropped,
+        reason: payload.reason,
+      });
+    },
+  );
 
   // Auth-resume seam (provider-keychain-rotation-01KQ8TD9 follow-up):
   // RedriveLastTurn on the backend re-issues StartStream with a fresh
@@ -439,7 +535,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
   // events from the resumed stream get filtered out by the stream-chunk
   // sub_id guard and the chat surface stays wedged with a stale banner.
   useEventStream<{ profile_id: string; new_sub_id: string }>(
-    'provider:auth-resumed',
+    "provider:auth-resumed",
     (payload) => {
       if (!payload?.new_sub_id) return;
       streamSubscriptionId.value = payload.new_sub_id;
@@ -449,35 +545,45 @@ export function useSession(id: Ref<string>): UseSessionResult {
       const last = messages.value[messages.value.length - 1];
       if (
         last &&
-        typeof last.streamingError === 'string' &&
-        last.streamingError.includes('auth failure')
+        typeof last.streamingError === "string" &&
+        last.streamingError.includes("auth failure")
       ) {
         const cleaned: Message = { ...last, streamingError: undefined };
         messages.value = [...messages.value.slice(0, -1), cleaned];
       }
-      if (typeof error.value === 'string' && error.value.includes('auth failure')) {
+      if (
+        typeof error.value === "string" &&
+        error.value.includes("auth failure")
+      ) {
         error.value = null;
+        errorKind.value = null;
       }
     },
   );
 
-  async function send(content: string, profileID: string, modelOverride?: string) {
+  async function send(
+    content: string,
+    profileID: string,
+    modelOverride?: string,
+  ) {
     const sid = id.value;
     if (!sid) return;
     error.value = null;
+    errorKind.value = null;
     // A new turn starts a fresh stream, so any truncation notice from the
     // previous one no longer describes what is on screen.
     streamTruncated.value = null;
-    logEvent('info', 'send.requested', {
+    overflowRecovery.value = null;
+    logEvent("info", "send.requested", {
       session_id: sid,
       profile_id: profileID,
-      model_override: modelOverride ?? '',
+      model_override: modelOverride ?? "",
       content_bytes: content.length,
     });
     try {
-      const userMsg = await client.sessions.appendMessage(sid, 'user', content);
+      const userMsg = await client.sessions.appendMessage(sid, "user", content);
       messages.value = [...messages.value, userMsg];
-      logEvent('info', 'send.user_message_appended', {
+      logEvent("info", "send.user_message_appended", {
         session_id: sid,
         message_id: userMsg.id,
       });
@@ -485,14 +591,14 @@ export function useSession(id: Ref<string>): UseSessionResult {
       streamSubscriptionId.value = subId;
       streamingTimedOut.value = false;
       clearStreamTimeout();
-      logEvent('info', 'send.stream_opened', {
+      logEvent("info", "send.stream_opened", {
         session_id: sid,
         sub_id: subId,
       });
       streamTimeoutHandle = setTimeout(() => {
         if (streamSubscriptionId.value === subId && !currentlyStreaming.value) {
           streamingTimedOut.value = true;
-          logEvent('warn', 'send.stream_timed_out', {
+          logEvent("warn", "send.stream_timed_out", {
             session_id: sid,
             sub_id: subId,
             timeout_ms: STREAM_TIMEOUT_MS,
@@ -506,7 +612,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
       // surface never renders an internal error verbatim.
       const msg = friendly(err);
       error.value = msg;
-      logEvent('error', 'send.failed', {
+      logEvent("error", "send.failed", {
         session_id: sid,
         profile_id: profileID,
         message: msg,
@@ -523,20 +629,21 @@ export function useSession(id: Ref<string>): UseSessionResult {
     if (!sid) return;
     if (contentBlocks.length === 0) return;
     error.value = null;
+    errorKind.value = null;
     streamTruncated.value = null;
-    logEvent('info', 'send.requested', {
+    overflowRecovery.value = null;
+    logEvent("info", "send.requested", {
       session_id: sid,
       profile_id: profileID,
-      model_override: modelOverride ?? '',
+      model_override: modelOverride ?? "",
       block_count: contentBlocks.length,
     });
     try {
-      const userMsg = await client.sessions.sendMessageWithBlocks(
-        sid,
-        [...contentBlocks],
-      );
+      const userMsg = await client.sessions.sendMessageWithBlocks(sid, [
+        ...contentBlocks,
+      ]);
       messages.value = [...messages.value, userMsg];
-      logEvent('info', 'send.user_message_appended', {
+      logEvent("info", "send.user_message_appended", {
         session_id: sid,
         message_id: userMsg.id,
       });
@@ -544,14 +651,14 @@ export function useSession(id: Ref<string>): UseSessionResult {
       streamSubscriptionId.value = subId;
       streamingTimedOut.value = false;
       clearStreamTimeout();
-      logEvent('info', 'send.stream_opened', {
+      logEvent("info", "send.stream_opened", {
         session_id: sid,
         sub_id: subId,
       });
       streamTimeoutHandle = setTimeout(() => {
         if (streamSubscriptionId.value === subId && !currentlyStreaming.value) {
           streamingTimedOut.value = true;
-          logEvent('warn', 'send.stream_timed_out', {
+          logEvent("warn", "send.stream_timed_out", {
             session_id: sid,
             sub_id: subId,
             timeout_ms: STREAM_TIMEOUT_MS,
@@ -563,7 +670,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
       // humanise everything else rather than leaking a Go error string.
       const msg = friendly(err);
       error.value = msg;
-      logEvent('error', 'send.failed', {
+      logEvent("error", "send.failed", {
         session_id: sid,
         profile_id: profileID,
         message: msg,
@@ -617,6 +724,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
       streamingTimedOut.value = false;
       lastUsage.value = null;
       streamTruncated.value = null;
+      overflowRecovery.value = null;
       // showFullHistory is per-session UI state — reset on every
       // session reopen so a switch-back never resurrects the previous
       // view (compaction-strategy-ui WP07 plan §2.8).
@@ -639,7 +747,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
   // re-surfaces an in-flight ask (FR-007). No-op in native mode.
   if (served) {
     watch(connection, (state, prev) => {
-      if (state === 'ready' && prev !== 'ready' && id.value) {
+      if (state === "ready" && prev !== "ready" && id.value) {
         void openServedStream(id.value);
       }
     });
@@ -668,6 +776,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
     messages: computed(() => messages.value) as Ref<readonly Message[]>,
     loading,
     error,
+    errorKind,
     currentlyStreaming,
     streamSubscriptionId,
     streamingTimedOut,
@@ -676,6 +785,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
     sweptCount,
     lastUsage,
     streamTruncated,
+    overflowRecovery,
     refresh,
     send,
     sendBlocks,

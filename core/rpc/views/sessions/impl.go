@@ -109,6 +109,9 @@ type managerAPI struct {
 	// session-level + tier-default chain still resolves correctly.
 	// (autonomy-dial-01KR3M2A WP03)
 	autonomyCtx AutonomyContextProvider
+	// deleteHook is the optional per-session teardown hook wired by
+	// WithDeleteHookOpt; runs after a successful delete.
+	deleteHook func(sessionID string)
 	// broker is the optional event publisher wired by WithBrokerOpt.
 	// When non-nil, every session-list mutation emits
 	// TopicSessionListChanged so the LeftRail updates in real-time
@@ -270,6 +273,24 @@ func WithTitleGeneratorOpt(api SessionsAPI, gen TitleGenerator) SessionsAPI {
 func WithBrokerOpt(api SessionsAPI, broker SessionListBroker) SessionsAPI {
 	if m, ok := api.(*managerAPI); ok {
 		m.broker = broker
+	}
+	return api
+}
+
+// WithDeleteHookOpt wires a per-session teardown hook, invoked with the
+// session id after a successful delete (both Delete and
+// DeleteWithOptions funnel through it). The chassis uses it to revoke
+// process-lifetime state scoped to the session — today the confirm-each
+// "allow for this session" grant cache (toolloop.SessionGrantCache.
+// RevokeSession), so a deleted-then-recreated session id cannot inherit
+// the approvals of a session the user threw away
+// (confirm-each-enforcement-01PMAG05 review finding 7; wired by the
+// 2026-08-13 adversarial review). The hook runs after the delete has
+// fully succeeded — a failed delete keeps its grants, since the session
+// still exists.
+func WithDeleteHookOpt(api SessionsAPI, hook func(sessionID string)) SessionsAPI {
+	if m, ok := api.(*managerAPI); ok {
+		m.deleteHook = hook
 	}
 	return api
 }
@@ -487,6 +508,9 @@ func (a *managerAPI) DeleteWithOptions(ctx context.Context, id string, opts Dele
 		}
 	}
 	a.publishListChanged("deleted", id, "")
+	if a.deleteHook != nil {
+		a.deleteHook(id)
+	}
 	return nil
 }
 

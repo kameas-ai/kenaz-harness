@@ -5,6 +5,7 @@ extends: read
 display_name: Memory
 description: "Read/write/upsert against the memory store (FR-053). The `mode` attr drives executor behaviour."
 executor: agentgraph.ExecMemory
+dispatch: graph
 ports:
   inputs:
     - { name: in, type: any }

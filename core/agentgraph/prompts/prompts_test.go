@@ -3,6 +3,7 @@ package prompts
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
@@ -99,5 +100,104 @@ func TestCompose_XMLVariant_DropsEmptyParts(t *testing.T) {
 	want := "<section index=\"1\">\nONLY\n</section>"
 	if got != want {
 		t.Errorf("Compose(Format=xml, sparse) = %q, want %q", got, want)
+	}
+}
+
+// TestCompose_AttentionPlacement_OffByDefault guards WP02's opt-in
+// contract: AttentionPlacement unset (nil tmpl, or a tmpl with the
+// field left false) must not alter output at all — the default/
+// unregistered-format renderers stay byte-identical.
+func TestCompose_AttentionPlacement_OffByDefault(t *testing.T) {
+	t.Parallel()
+	want := "BASE\n\nROLE"
+	if got := Compose(nil, "BASE", "ROLE"); got != want {
+		t.Errorf("Compose(nil) = %q, want %q", got, want)
+	}
+	if got := Compose(&corellm.PromptTemplateRef{}, "BASE", "ROLE"); got != want {
+		t.Errorf("Compose(AttentionPlacement=false) = %q, want %q", got, want)
+	}
+}
+
+// TestCompose_AttentionPlacement_AnchorsFirstPartAtBothEnds asserts the
+// opted-in transform: the first surviving part appears at the start (as
+// always) and again, bounded, at the end of the composed prompt.
+func TestCompose_AttentionPlacement_AnchorsFirstPartAtBothEnds(t *testing.T) {
+	t.Parallel()
+	tmpl := &corellm.PromptTemplateRef{AttentionPlacement: true}
+	got := Compose(tmpl, "CRITICAL", "ROLE")
+	want := "CRITICAL\n\nROLE\n\n[Reminder — see above]\nCRITICAL"
+	if got != want {
+		t.Errorf("Compose(AttentionPlacement=true) = %q, want %q", got, want)
+	}
+	if !strings.HasPrefix(got, "CRITICAL") {
+		t.Errorf("composed output does not lead with the critical part (primacy): %q", got)
+	}
+	if !strings.HasSuffix(got, "CRITICAL") {
+		t.Errorf("composed output does not end with the critical part (recency): %q", got)
+	}
+}
+
+// TestCompose_AttentionPlacement_ComposesWithXMLVariant guards that the
+// attention transform layers on top of a per-family renderer too, not
+// only the default join.
+func TestCompose_AttentionPlacement_ComposesWithXMLVariant(t *testing.T) {
+	t.Parallel()
+	tmpl := &corellm.PromptTemplateRef{Format: "xml", AttentionPlacement: true}
+	got := Compose(tmpl, "CRITICAL", "ROLE")
+	want := "<section index=\"1\">\nCRITICAL\n</section>\n<section index=\"2\">\nROLE\n</section>" +
+		"\n\n[Reminder — see above]\nCRITICAL"
+	if got != want {
+		t.Errorf("Compose(xml, AttentionPlacement=true) = %q, want %q", got, want)
+	}
+}
+
+// TestCompose_AttentionPlacement_TokenCostBounded asserts the spec §4/§5
+// "token cost bounded" requirement: a huge critical part is truncated
+// in the appended reminder rather than duplicated in full.
+func TestCompose_AttentionPlacement_TokenCostBounded(t *testing.T) {
+	t.Parallel()
+	huge := strings.Repeat("word ", 1000) // 5000 chars, well over the cap
+	tmpl := &corellm.PromptTemplateRef{AttentionPlacement: true}
+	got := Compose(tmpl, huge, "ROLE")
+	if len(got) >= len(huge)*2 {
+		t.Fatalf("composed output not bounded: got %d chars from a %d-char critical part", len(got), len(huge))
+	}
+	if !strings.Contains(got, "…") {
+		t.Errorf("expected a truncation marker in the bounded reminder, got %q", got)
+	}
+}
+
+// TestCompose_AttentionPlacement_TruncatesOnRuneBoundary guards against
+// the byte-offset truncation cutting mid-rune when the critical part has
+// no ASCII whitespace within the first attentionPlacementMaxChars bytes
+// (a long CJK/Cyrillic run, a base64 blob, a long URL). Reproduced pre-
+// fix with "A" + strings.Repeat("世", 300): LastIndexAny found no
+// whitespace boundary, fell back to the raw byte offset, and sliced
+// inside a multi-byte UTF-8 sequence, producing invalid UTF-8 in the
+// appended reminder.
+func TestCompose_AttentionPlacement_TruncatesOnRuneBoundary(t *testing.T) {
+	t.Parallel()
+	critical := "A" + strings.Repeat("世", 300) // no whitespace anywhere
+	tmpl := &corellm.PromptTemplateRef{AttentionPlacement: true}
+	got := Compose(tmpl, critical, "ROLE")
+	if !utf8.ValidString(got) {
+		t.Fatalf("Compose output is not valid UTF-8: %q", got)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("Compose output missing truncation marker, got suffix %q", got[len(got)-10:])
+	}
+}
+
+// TestCompose_AttentionPlacement_NoPartsIsNoop guards the edge case of
+// an all-empty/no-parts call with AttentionPlacement set — nothing to
+// anchor, so output stays "".
+func TestCompose_AttentionPlacement_NoPartsIsNoop(t *testing.T) {
+	t.Parallel()
+	tmpl := &corellm.PromptTemplateRef{AttentionPlacement: true}
+	if got := Compose(tmpl); got != "" {
+		t.Errorf("Compose(AttentionPlacement=true, no parts) = %q, want \"\"", got)
+	}
+	if got := Compose(tmpl, "", "  "); got != "" {
+		t.Errorf("Compose(AttentionPlacement=true, all-empty parts) = %q, want \"\"", got)
 	}
 }

@@ -20,7 +20,6 @@ import (
 //   - KindLLMRequest  (fingerprint: fp1)
 //   - KindLLMResponse (linked to fp1, text "Hello there")
 //   - KindMessage     (role assistant, text "Hello there")
-//   - KindStrategyDecision (compaction.tier=balanced)
 //   - KindCaptureStop
 func buildFixtureCapture(t *testing.T, dir, sessionID string) string {
 	t.Helper()
@@ -52,14 +51,6 @@ func buildFixtureCapture(t *testing.T, dir, sessionID string) string {
 	// Message
 	rec.AppendMessage(sessionID, "assistant",
 		[]corellm.ContentBlock{{Type: "text", Text: "Hello there"}})
-
-	// Strategy decision
-	rec.AppendStrategyDecision(sessionID, eval.StrategyEntry{
-		Domain: "compaction",
-		Key:    "compaction.tier",
-		Value:  "balanced",
-		Source: "config",
-	})
 
 	if err := rec.StopCapture(ctx, sessionID); err != nil {
 		t.Fatalf("StopCapture: %v", err)
@@ -199,58 +190,6 @@ func TestFingerprintDiffersOnMsgChange(t *testing.T) {
 	}
 }
 
-// ── Strategy tests ───────────────────────────────────────────────────────────
-
-func TestParseStrategyOverride(t *testing.T) {
-	so, err := eval.ParseStrategyOverride("compaction.tier=aggressive")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if so.Key != "compaction.tier" || so.Value != "aggressive" {
-		t.Errorf("unexpected: %+v", so)
-	}
-}
-
-func TestParseStrategyOverrideInvalid(t *testing.T) {
-	for _, bad := range []string{"", "no-equals", "=value", "key="} {
-		_, err := eval.ParseStrategyOverride(bad)
-		if err == nil {
-			t.Errorf("expected error for %q", bad)
-		}
-	}
-}
-
-func TestApplyStrategyOverrides(t *testing.T) {
-	defaults := eval.DefaultAppliedStrategy()
-	overrides := []eval.StrategyOverride{
-		{Key: "compaction.tier", Value: "aggressive"},
-		{Key: "memory.enabled", Value: "false"},
-	}
-	result, err := eval.ApplyStrategyOverrides(defaults, overrides)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Compaction != "aggressive" {
-		t.Errorf("compaction.tier: want aggressive, got %s", result.Compaction)
-	}
-	if result.MemoryEnabled {
-		t.Error("memory.enabled: want false")
-	}
-	if !result.BranchingAuto {
-		t.Error("branching.auto: want true (unchanged)")
-	}
-}
-
-func TestApplyStrategyOverridesUnknownKey(t *testing.T) {
-	_, err := eval.ApplyStrategyOverrides(eval.DefaultAppliedStrategy(), []eval.StrategyOverride{
-		{Key: "future.dial", Value: "x"},
-	})
-	// Unknown keys must NOT return an error — forward compat.
-	if err != nil {
-		t.Errorf("unexpected error for unknown key: %v", err)
-	}
-}
-
 // ── Replay tests ─────────────────────────────────────────────────────────────
 
 func TestReplayCachedOnly(t *testing.T) {
@@ -302,153 +241,6 @@ func TestReplayNoCaptureFile(t *testing.T) {
 	}
 }
 
-// TestReplayStrategyOverrideRelabelsExistingDecision proves an override
-// targeting a key the capture actually recorded a decision for genuinely
-// changes the replay output: ResolvedStrategy reflects the resolved dial
-// value (not the raw override string echoed back), and the trace's
-// KindStrategyDecision entry is relabeled Source="override".
-func TestReplayStrategyOverrideRelabelsExistingDecision(t *testing.T) {
-	dir := t.TempDir()
-	const sid = "sess-override-existing"
-	buildFixtureCapture(t, dir, sid)
-	captureDir := filepath.Join(dir, "eval-captures")
-	runsDir := filepath.Join(dir, "eval-runs")
-	replayer := eval.NewReplayer(captureDir, runsDir)
-
-	// Without an override: resolved strategy matches the default
-	// (balanced), which is also what the fixture recorded.
-	baseline, err := replayer.Replay(context.Background(), sid, eval.ReplayOptions{
-		CachedOnly: true, RunID: "run-baseline",
-	})
-	if err != nil {
-		t.Fatalf("Replay (baseline): %v", err)
-	}
-	if baseline.ResolvedStrategy.Compaction != "balanced" {
-		t.Errorf("baseline ResolvedStrategy.Compaction = %q, want %q", baseline.ResolvedStrategy.Compaction, "balanced")
-	}
-
-	// With an override: ResolvedStrategy must reflect the resolved
-	// (validated) dial, not just parrot the string back.
-	overridden, err := replayer.Replay(context.Background(), sid, eval.ReplayOptions{
-		CachedOnly: true,
-		RunID:      "run-overridden",
-		StrategyOverrides: []eval.StrategyOverride{
-			{Key: "compaction.tier", Value: "aggressive"},
-		},
-	})
-	if err != nil {
-		t.Fatalf("Replay (overridden): %v", err)
-	}
-	if overridden.ResolvedStrategy.Compaction != "aggressive" {
-		t.Errorf("overridden ResolvedStrategy.Compaction = %q, want %q", overridden.ResolvedStrategy.Compaction, "aggressive")
-	}
-	if overridden.ResolvedStrategy.Compaction == baseline.ResolvedStrategy.Compaction {
-		t.Fatal("override produced the same ResolvedStrategy as no override — the dial had no effect")
-	}
-
-	// The trace itself must carry the effect too: the existing decision
-	// entry is relabeled Source="override" with the new value.
-	var found bool
-	for _, e := range overridden.Entries {
-		if e.Kind != eval.KindStrategyDecision {
-			continue
-		}
-		var se eval.StrategyEntry
-		if err := json.Unmarshal(e.Payload, &se); err != nil {
-			continue
-		}
-		if se.Key == "compaction.tier" {
-			found = true
-			if se.Value != "aggressive" || se.Source != "override" {
-				t.Errorf("relabeled decision = %+v, want value=aggressive source=override", se)
-			}
-		}
-	}
-	if !found {
-		t.Fatal("expected a compaction.tier KindStrategyDecision entry in the overridden trace")
-	}
-}
-
-// TestReplayStrategyOverrideSynthesizesMissingDecision proves that an
-// override targeting a key the capture never recorded a decision for is
-// no longer a silent no-op: it is synthesized into the trace, and it is
-// reflected in ResolvedStrategy.
-func TestReplayStrategyOverrideSynthesizesMissingDecision(t *testing.T) {
-	dir := t.TempDir()
-	const sid = "sess-override-missing"
-	buildFixtureCapture(t, dir, sid) // fixture never records a memory.enabled decision
-	captureDir := filepath.Join(dir, "eval-captures")
-	runsDir := filepath.Join(dir, "eval-runs")
-	replayer := eval.NewReplayer(captureDir, runsDir)
-
-	baseline, err := replayer.Replay(context.Background(), sid, eval.ReplayOptions{
-		CachedOnly: true, RunID: "run-no-override",
-	})
-	if err != nil {
-		t.Fatalf("Replay (baseline): %v", err)
-	}
-
-	overridden, err := replayer.Replay(context.Background(), sid, eval.ReplayOptions{
-		CachedOnly: true,
-		RunID:      "run-with-override",
-		StrategyOverrides: []eval.StrategyOverride{
-			{Key: "memory.enabled", Value: "false"},
-		},
-	})
-	if err != nil {
-		t.Fatalf("Replay (overridden): %v", err)
-	}
-
-	if overridden.ResolvedStrategy.MemoryEnabled {
-		t.Error("ResolvedStrategy.MemoryEnabled = true, want false")
-	}
-	if len(overridden.Entries) != len(baseline.Entries)+1 {
-		t.Fatalf("expected exactly one synthesized entry: baseline=%d overridden=%d",
-			len(baseline.Entries), len(overridden.Entries))
-	}
-
-	var found bool
-	for _, e := range overridden.Entries {
-		if e.Kind != eval.KindStrategyDecision {
-			continue
-		}
-		var se eval.StrategyEntry
-		if err := json.Unmarshal(e.Payload, &se); err != nil {
-			continue
-		}
-		if se.Key == "memory.enabled" {
-			found = true
-			if se.Value != "false" || se.Source != "override" || se.Domain != "memory" {
-				t.Errorf("synthesized decision = %+v, want value=false source=override domain=memory", se)
-			}
-		}
-	}
-	if !found {
-		t.Fatal("expected a synthesized memory.enabled KindStrategyDecision entry — the override must not be a silent no-op")
-	}
-}
-
-// TestReplayStrategyOverrideInvalidValueErrors proves a bogus dial value
-// now fails loudly instead of being silently accepted.
-func TestReplayStrategyOverrideInvalidValueErrors(t *testing.T) {
-	dir := t.TempDir()
-	const sid = "sess-override-invalid"
-	buildFixtureCapture(t, dir, sid)
-	captureDir := filepath.Join(dir, "eval-captures")
-	runsDir := filepath.Join(dir, "eval-runs")
-	replayer := eval.NewReplayer(captureDir, runsDir)
-
-	_, err := replayer.Replay(context.Background(), sid, eval.ReplayOptions{
-		CachedOnly: true,
-		StrategyOverrides: []eval.StrategyOverride{
-			{Key: "compaction.tier", Value: "bogus-tier"},
-		},
-	})
-	if err == nil {
-		t.Fatal("expected an error for an invalid compaction.tier override value")
-	}
-}
-
 // ── Diff tests ───────────────────────────────────────────────────────────────
 
 func TestDiffIdentical(t *testing.T) {
@@ -481,19 +273,20 @@ func TestRunMatrix(t *testing.T) {
 	captureDir := filepath.Join(dir, "eval-captures")
 	runsDir := filepath.Join(dir, "eval-runs")
 
+	// Two cases over the same capture: the matrix's only dimensions are
+	// (SessionID, BaselineSessionID), so this exercises multi-case
+	// iteration and the summary table rather than any per-case dial.
 	cases := []eval.MatrixCase{
 		{
 			SessionID:  sid,
-			Label:      "baseline",
+			Label:      "self-diff",
 			CachedOnly: true,
 		},
 		{
-			SessionID: sid,
-			Label:     "aggressive-compaction",
-			Overrides: []eval.StrategyOverride{
-				{Key: "compaction.tier", Value: "aggressive"},
-			},
-			CachedOnly: true,
+			SessionID:         sid,
+			BaselineSessionID: sid,
+			Label:             "explicit-baseline",
+			CachedOnly:        true,
 		},
 	}
 

@@ -18,6 +18,22 @@ const (
 	EventNodeComplete EventKind = "node_complete"
 	EventNodeError    EventKind = "node_error"
 
+	// EventNodeSkipped records that the kernel resolved a node's
+	// in-degree to zero without a single inbound edge having delivered
+	// a live value, so the node was never dispatched
+	// (agentgraph-total-convergence-01PMGX01 WP02b). This is the
+	// not-taken branch of a conditional: a `decision` marks only its
+	// `true` or `false` port live, and every node reachable solely
+	// through the other port is skipped, transitively, down to the
+	// first reconvergence point that still has a live inbound edge.
+	//
+	// A skipped node produces no outputs, fires no executor, emits no
+	// node_start/node_complete pair, and records no TaskState step. The
+	// payload carries `kind` and the `dead_inputs` count so an audit
+	// consumer can distinguish "the router did not pick this" from
+	// "this never became ready at all" — the latter emits nothing.
+	EventNodeSkipped EventKind = "node_skipped"
+
 	// Compute side-effects.
 	EventLLMCall    EventKind = "llm_call"
 	EventToolCall   EventKind = "tool_call"
@@ -52,11 +68,23 @@ const (
 	// node's `output_target` attr.
 	EventArtifactEmitted EventKind = "artifact_emitted"
 
-	// Filesystem / bash-output state-kind events (FR-057a/b/c). The
-	// `state_action` payload field carries the FR-058b action UID
-	// classification ("Read::file", "Read::bash_output", "Write::file")
-	// so audit consumers can group by surface without re-parsing the
-	// event kind.
+	// Filesystem / bash-output events (FR-057a/b/c). The `state_action`
+	// payload field carries the FR-058b action UID classification
+	// ("Read::file", "Read::bash_output", "Write::file") so audit
+	// consumers can group by surface without re-parsing the event kind.
+	//
+	// EventFileRead / EventFileWrite are emitted by TWO independent
+	// call sites, deliberately (agentgraph-total-convergence-01PMGX01
+	// WP13, doctrine deleted from docs/agent-kernel-graph-node-catalog.md
+	// §4.9): the read_file/write_file State-kind executors
+	// (exec_state.go), and appendFSToolProvenance in tool_invocation.go
+	// for every kenaz__read_file / kenaz__write_file tool call, whether
+	// model-dispatched or node-dispatched. Same EventKind, same payload
+	// shape, from either surface — a graph author's choice between a
+	// State node and the builtin tool no longer changes whether the
+	// operation is remembered. EventBashOutputRead has only the
+	// State-kind emitter: no tool or MCP surface duplicates
+	// read_bash_output's cached-bash-output lookup.
 	EventFileRead       EventKind = "file_read"
 	EventFileWrite      EventKind = "file_write"
 	EventBashOutputRead EventKind = "bash_output_read"
@@ -66,9 +94,26 @@ const (
 	EventKindAliasResolved EventKind = "kind_alias_resolved"
 
 	// Dial / budget.
-	EventDialOverridden EventKind = "dial_overridden"
-	EventCostCapHit     EventKind = "cost_cap_hit"
-	EventBudgetCapHit   EventKind = "budget_cap_hit"
+	//
+	// There was a third constant here, EventDialOverridden
+	// ("dial_overridden"), reserved for a future dial-override audit
+	// event. agentgraph-total-convergence-01PMGX01 WP17 deleted it on
+	// 2026-08-13: zero emitters and zero consumers repo-wide, held open
+	// by a deferral directive that had outlived its plan.
+	//
+	// Wiring it was considered. Dials ARE overridden — applyMaxTurnsDial
+	// and applyReasoningBudgetDial (chat_runner.go) rewrite the graph
+	// spec on every turn — but they run in the CHASSIS, before
+	// Kernel.Run, mutating the spec rather than acting inside a run, so
+	// there is no EventBatch to append to at that point. And nothing
+	// would read it: no audit view, no frontend surface, no dashboard
+	// queries dial_overridden. An event kind with no emitter and no
+	// reader is a promise the EventLog is not keeping.
+	//
+	// Whoever wants dial-override auditing adds the kind back in the
+	// same change as the emit site and the consumer.
+	EventCostCapHit   EventKind = "cost_cap_hit"
+	EventBudgetCapHit EventKind = "budget_cap_hit"
 
 	// EventDoomLoopDetected fires from the tool-dispatch executor when a
 	// (tool name, normalized-arg-hash) pair repeats DoomLoopThreshold+
@@ -86,13 +131,21 @@ const (
 	EventAskAnswered EventKind = "ask_answered"
 
 	// Reflect / review / escalate.
-	EventReflectStarted    EventKind = "reflect_started"
-	EventReflectCompleted  EventKind = "reflect_completed"
-	EventReviewPass        EventKind = "review_pass"
-	EventReviewFail        EventKind = "review_fail"
-	EventReviewUnrecov     EventKind = "review_failed_unrecoverable"
-	EventEscalateTriggered EventKind = "escalate_triggered"
-	EventPlanCreated       EventKind = "plan_created"
+	EventReflectStarted   EventKind = "reflect_started"
+	EventReflectCompleted EventKind = "reflect_completed"
+	EventReviewPass       EventKind = "review_pass"
+	EventReviewFail       EventKind = "review_fail"
+	EventReviewUnrecov    EventKind = "review_failed_unrecoverable"
+	// EventReviewCapProceeded records an exit gate that hit its
+	// iteration cap while env.AskPolicy withheld questions
+	// (agentgraph-total-convergence-01PMGX01 WP11b, autonomy-knobs
+	// finding F7). The run returns the best draft instead of escalating
+	// into a path whose terminal rung asks a human. Emitted ALONGSIDE
+	// EventReviewUnrecov, never instead of it: the verdict was still a
+	// failure and the audit trail must say so.
+	EventReviewCapProceeded EventKind = "review_cap_proceeded"
+	EventEscalateTriggered  EventKind = "escalate_triggered"
+	EventPlanCreated        EventKind = "plan_created"
 
 	// Greedy memory hook journal (FR-027).
 	EventHookFired EventKind = "memory_hook_fired"
@@ -136,19 +189,55 @@ const (
 	// them together.
 	EventLadderRung EventKind = "escalation_ladder_rung"
 
+	// EventRouterChoice fires once per `router` node invocation
+	// (agentgraph-total-convergence-01PMGX01 WP11a; design in
+	// agentic-turn-routing-01PMAG01 §3.1). Payload carries the winning
+	// `choice`, the `mode` it was resolved in (fused|standalone), the
+	// `source` the choice came from (source_node|llm|default), and
+	// `consecutive` — how many times in a row this router has now
+	// picked that same choice, which is what the anti-thrash guard
+	// counts. FR-005: every routing decision is an EventLog record.
+	EventRouterChoice EventKind = "router_choice"
+
+	// EventRouterOverride fires when the router discards the model's
+	// stated choice. Payload carries `reason` ("thrash" when
+	// max_consecutive_same trips, "doom_loop" when the inbound payload
+	// carries a tripped tool_dispatch doom-loop signal), the
+	// `overridden` choice, and the `choice` actually taken.
+	EventRouterOverride EventKind = "router_override"
+
 	// Run lifecycle.
 	EventRunStart    EventKind = "run_start"
 	EventRunComplete EventKind = "run_complete"
 	EventRunPaused   EventKind = "run_paused"
 )
 
-// AllEventKinds is used by the SQL store + validators to whitelist
-// known kinds. Adding a new kind requires bumping migration semantics —
-// the table itself accepts arbitrary strings, but consumers should
-// only see kinds in this list.
+// AllEventKinds returns every EventKind this package declares.
+//
+// SCOPE — read this before relying on it. Nothing outside _test.go
+// consumes this function. It is NOT an enforcement surface:
+//
+//   - The SQL store does not whitelist against it. Migration 0309
+//     defines the agentgraph event table with no CHECK constraint on
+//     the kind column; the table accepts arbitrary strings.
+//   - No validator consults it either.
+//
+// What it actually is: a completeness assertion for this package's own
+// tests. events_test.go TestAllEventKinds_CompleteAndUnique pins that
+// the list has no duplicates and no empty entries, and
+// exec_dispatch_test.go asserts membership for a specific kind so a new
+// event cannot be declared and then silently left out of the list.
+// That is worth keeping — a missing entry is how a kind becomes
+// invisible to anything that later DOES iterate the set — but a caller
+// must not read "consumers only see kinds in this list" as a guarantee
+// the storage layer enforces.
+//
+// (This comment used to claim the list was "used by the SQL store +
+// validators to whitelist known kinds". It never was. Corrected under
+// agentgraph-total-convergence-01PMGX01 invariant I8, 2026-08-13.)
 func AllEventKinds() []EventKind {
 	return []EventKind{
-		EventNodeStart, EventNodeComplete, EventNodeError,
+		EventNodeStart, EventNodeComplete, EventNodeError, EventNodeSkipped,
 		EventLLMCall, EventToolCall, EventToolResult,
 		EventMemoryWrite, EventMemoryRead, EventTraceWrite, EventCheckpoint, EventSessionWrite,
 		EventBranchFork, EventBranchMerge, EventForkRequested, EventMergeRequest,
@@ -156,11 +245,11 @@ func AllEventKinds() []EventKind {
 		EventApprovalPending, EventApprovalResolved,
 		EventArtifactEmitted, EventKindAliasResolved,
 		EventFileRead, EventFileWrite, EventBashOutputRead,
-		EventDialOverridden, EventCostCapHit, EventBudgetCapHit,
+		EventCostCapHit, EventBudgetCapHit,
 		EventDoomLoopDetected,
 		EventAskPending, EventAskAnswered,
 		EventReflectStarted, EventReflectCompleted,
-		EventReviewPass, EventReviewFail, EventReviewUnrecov,
+		EventReviewPass, EventReviewFail, EventReviewUnrecov, EventReviewCapProceeded,
 		EventEscalateTriggered, EventPlanCreated,
 		EventHookFired,
 		EventBacktrackFired,
@@ -168,6 +257,7 @@ func AllEventKinds() []EventKind {
 
 		EventRetryAttempt,
 		EventLadderRung,
+		EventRouterChoice, EventRouterOverride,
 		EventRunStart, EventRunComplete, EventRunPaused,
 	}
 }

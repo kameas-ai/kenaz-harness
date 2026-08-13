@@ -8,11 +8,24 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
 // ReplayOptions controls how a capture replay is driven.
+//
+// There is deliberately no strategy dial here. A replay is a re-render of
+// a recorded session from its cached responses: it never re-executes a
+// tool and never re-invokes a model, and Diff scores only assistant-role
+// KindMessage text, which Replay copies through untouched. A compaction /
+// memory / branching knob could therefore never move a replay's score —
+// it could only change what a trace file *claimed* the strategy was. The
+// override machinery that used to live here did exactly that and nothing
+// more, so it was removed rather than carried as a knob that looks live.
+// Making one real would mean re-issuing each LLMRequestEntry as a
+// corellm.GenerationRequest (which the capture format cannot reconstruct:
+// it records no tools, temperature, token caps, or sampling params),
+// synthesizing the assistant messages Diff compares, and standing up a
+// compaction pipeline inside this package.
 type ReplayOptions struct {
 	// CachedOnly, when true, serves every LLM call from the cached
 	// responses recorded in the capture file identified by request
@@ -23,31 +36,6 @@ type ReplayOptions struct {
 	// LLM API call via Registry. AllowLive is meaningful only when
 	// CachedOnly is false.
 	AllowLive bool
-
-	// StrategyOverrides is the set of key=value strategy dials to apply
-	// during replay, overriding whatever the session's original config
-	// recorded. See ParseStrategyOverride and ApplyStrategyOverrides.
-	//
-	// Overrides are validated and resolved via ApplyStrategyOverrides
-	// (an invalid value makes Replay return an error instead of silently
-	// no-op'ing). The resolved dial values are surfaced on
-	// ReplayResult.ResolvedStrategy and annotated into the replay
-	// trace's KindStrategyDecision entries; an override whose key never
-	// appears as a recorded decision in the original capture gets a
-	// synthesized entry so it is never silently dropped.
-	//
-	// This is the deterministic part of the dial: it governs what the
-	// *recorded trace* says the strategy was, not what an LLM actually
-	// produces. Diff only compares assistant-role KindMessage text (see
-	// diff.go), which Replay never mutates — so an override alone does
-	// not move a MatrixCase's score. A case that wants a genuinely
-	// different (possibly regressing) outcome must pair an override
-	// with a distinct BaselineSessionID (see MatrixCase — this is how
-	// versioned-model-profile-01PMDL04 WP03's model-profile gate gets a
-	// real diff), or wait on AllowLive's live-API path (still unwired —
-	// see the TODO in Replay below) to actually re-run the model under
-	// the overridden strategy.
-	StrategyOverrides []StrategyOverride
 
 	// RunID is the identifier for this run; used to name the output
 	// directory <DataDir>/eval-runs/<RunID>/. If empty, a timestamp is
@@ -100,21 +88,15 @@ type replayEntry struct {
 type ReplayResult struct {
 	RunID       string
 	CaptureFile string
-	// Entries is the ordered sequence of entries replayed (after strategy
-	// override injection). It mirrors the trace.jsonl written to disk.
+	// Entries is the ordered sequence of entries replayed, with each
+	// cached LLM response spliced in after the request that matched it.
+	// It mirrors the trace.jsonl written to disk.
 	Entries []replayEntry
 	// ResponsesServed is the number of LLM responses served from the cache.
 	ResponsesServed int
 	// ResponsesMissed is the number of cache misses (0 when CachedOnly=false
 	// and AllowLive=true, since misses fall through to live APIs).
 	ResponsesMissed int
-	// ResolvedStrategy is the AppliedStrategy computed from
-	// ReplayOptions.StrategyOverrides via ApplyStrategyOverrides. It is
-	// the effect of the override the deterministic part of Replay
-	// actually produces — assert on this (and on the synthesized/
-	// relabeled KindStrategyDecision entries in Entries), not on the raw
-	// StrategyOverrides field that was merely passed in.
-	ResolvedStrategy AppliedStrategy
 }
 
 // Replayer drives a deterministic replay of a capture file.
@@ -158,30 +140,9 @@ func (r *Replayer) Replay(ctx context.Context, sessionID string, opts ReplayOpti
 		runID = fmt.Sprintf("%s-%d", sessionID[:min(8, len(sessionID))], time.Now().UnixMilli())
 	}
 
-	// Resolve + validate the strategy overrides up front. This is the
-	// deterministic part of "wire overrides into execution": a bogus
-	// dial value (e.g. compaction.tier=bogus) now fails loudly instead
-	// of being silently accepted and stamped verbatim into the trace.
-	applied, err := ApplyStrategyOverrides(DefaultAppliedStrategy(), opts.StrategyOverrides)
-	if err != nil {
-		return nil, fmt.Errorf("eval/replay: invalid strategy override: %w", err)
-	}
-	overrideMap := make(map[string]string, len(opts.StrategyOverrides))
-	for _, so := range opts.StrategyOverrides {
-		overrideMap[so.Key] = so.Value
-	}
-	// consumed tracks which override keys were annotated onto a
-	// KindStrategyDecision entry actually present in the capture. Any
-	// override left unconsumed after the walk (the capture never
-	// recorded a decision for that key) is synthesized below — that was
-	// previously a silent no-op: the override existed only on the
-	// ReplayOptions struct and never reached the trace at all.
-	consumed := make(map[string]bool, len(overrideMap))
-
 	result := &ReplayResult{
-		RunID:            runID,
-		CaptureFile:      capturePath,
-		ResolvedStrategy: applied,
+		RunID:       runID,
+		CaptureFile: capturePath,
 	}
 
 	// Walk the capture and reconstruct the replay trace.
@@ -230,34 +191,13 @@ func (r *Replayer) Replay(ctx context.Context, sessionID string, opts ReplayOpti
 					})
 					entry.Payload = missAnnotation
 				}
-				// If AllowLive, the live call would happen here via a
-				// corellm.Registry. This is the one part of "wire
-				// overrides into execution" that remains unwired: the
-				// resolved AppliedStrategy above governs what the trace
-				// records, but re-sending this request to a live model
-				// under that strategy — so the diff could see a
-				// genuinely different assistant message — needs
-				// Registry injection this package does not yet have.
-				// TODO: inject Registry and forward to live API when
-				// opts.AllowLive is true and the session dial allows it.
-			}
-		}
-
-		// Inject strategy override annotations into the trace when the
-		// original entry's domain/key is overridden.
-		if e.Kind == KindStrategyDecision {
-			var orig StrategyEntry
-			if err := json.Unmarshal(e.Payload, &orig); err == nil {
-				if override, ok := overrideMap[orig.Key]; ok {
-					overridden := StrategyEntry{
-						Domain: orig.Domain,
-						Key:    orig.Key,
-						Value:  override,
-						Source: "override",
-					}
-					entry.Payload, _ = json.Marshal(overridden)
-					consumed[orig.Key] = true
-				}
+				// opts.AllowLive has no effect here: re-issuing this
+				// request would require rebuilding a
+				// corellm.GenerationRequest from LLMRequestEntry, which
+				// records only (profile, model, system, messages) — no
+				// tools, temperature, token caps, or sampling params —
+				// and a corellm.Registry this package is not given. A
+				// miss is therefore recorded as a miss and nothing more.
 			}
 		}
 
@@ -266,34 +206,6 @@ func (r *Replayer) Replay(ctx context.Context, sessionID string, opts ReplayOpti
 	})
 	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("eval/replay: walk capture: %w", err)
-	}
-
-	// Synthesize a KindStrategyDecision entry for every override whose
-	// key was never recorded as a decision in the original capture.
-	// Without this, an override targeting a key the captured session
-	// never touched had zero effect on the replay output — the trace
-	// was byte-identical whether the override was passed or not.
-	for _, so := range opts.StrategyOverrides {
-		if consumed[so.Key] {
-			continue
-		}
-		domain := so.Key
-		if idx := strings.IndexByte(so.Key, '.'); idx > 0 {
-			domain = so.Key[:idx]
-		}
-		synthesized := StrategyEntry{
-			Domain: domain,
-			Key:    so.Key,
-			Value:  so.Value,
-			Source: "override",
-		}
-		payload, _ := json.Marshal(synthesized)
-		result.Entries = append(result.Entries, replayEntry{
-			SeqNo:     -1, // synthetic: no corresponding entry in the capture
-			Kind:      KindStrategyDecision,
-			Timestamp: time.Now().UTC(),
-			Payload:   payload,
-		})
 	}
 
 	// Write run output.
@@ -330,28 +242,24 @@ func (r *Replayer) writeRunOutput(runID string, result *ReplayResult, opts Repla
 
 	// Write summary.json
 	type summaryJSON struct {
-		RunID            string             `json:"run_id"`
-		CaptureFile      string             `json:"capture_file"`
-		StartedAt        time.Time          `json:"started_at"`
-		EntryCount       int                `json:"entry_count"`
-		ResponsesServed  int                `json:"responses_served"`
-		ResponsesMissed  int                `json:"responses_missed"`
-		CachedOnly       bool               `json:"cached_only"`
-		AllowLive        bool               `json:"allow_live"`
-		Overrides        []StrategyOverride `json:"overrides,omitempty"`
-		ResolvedStrategy AppliedStrategy    `json:"resolved_strategy"`
+		RunID           string    `json:"run_id"`
+		CaptureFile     string    `json:"capture_file"`
+		StartedAt       time.Time `json:"started_at"`
+		EntryCount      int       `json:"entry_count"`
+		ResponsesServed int       `json:"responses_served"`
+		ResponsesMissed int       `json:"responses_missed"`
+		CachedOnly      bool      `json:"cached_only"`
+		AllowLive       bool      `json:"allow_live"`
 	}
 	summary := summaryJSON{
-		RunID:            result.RunID,
-		CaptureFile:      result.CaptureFile,
-		StartedAt:        time.Now().UTC(),
-		EntryCount:       len(result.Entries),
-		ResponsesServed:  result.ResponsesServed,
-		ResponsesMissed:  result.ResponsesMissed,
-		CachedOnly:       opts.CachedOnly,
-		AllowLive:        opts.AllowLive,
-		Overrides:        opts.StrategyOverrides,
-		ResolvedStrategy: result.ResolvedStrategy,
+		RunID:           result.RunID,
+		CaptureFile:     result.CaptureFile,
+		StartedAt:       time.Now().UTC(),
+		EntryCount:      len(result.Entries),
+		ResponsesServed: result.ResponsesServed,
+		ResponsesMissed: result.ResponsesMissed,
+		CachedOnly:      opts.CachedOnly,
+		AllowLive:       opts.AllowLive,
 	}
 	summaryPath := filepath.Join(runDir, "summary.json")
 	sf, err := os.Create(summaryPath)

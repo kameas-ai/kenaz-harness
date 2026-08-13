@@ -4,14 +4,19 @@ import (
 	"context"
 	"sync"
 	"testing"
+
+	"github.com/kameas-ai/kenaz-harness/core/elicitation"
 )
 
 // PendingCall records one call to AskBus.Pending.
 type PendingCall struct {
-	Ctx      context.Context
-	RunID    string
-	NodeID   string
-	Question string
+	Ctx    context.Context
+	RunID  string
+	NodeID string
+	// Question is the full canonical question the node posed. Asserting
+	// on Question.Text keeps free-form expectations reading the same as
+	// before 01PMGX01 WP06 widened the seam.
+	Question elicitation.Question
 }
 
 // LookupCall records one call to AskBus.LookupAnswer.
@@ -24,17 +29,17 @@ type LookupCall struct {
 // AskBus is a recording fake that satisfies agentgraph.AskBus.
 // Answers can be pre-loaded via SetAnswer so LookupAnswer returns them.
 type AskBus struct {
-	mu       sync.Mutex
-	pending  []PendingCall
-	lookups  []LookupCall
-	answers  map[string]string // key: runID+":"+nodeID
-	PendErr  error
+	mu      sync.Mutex
+	pending []PendingCall
+	lookups []LookupCall
+	answers map[string]elicitation.Answer // key: runID+":"+nodeID
+	PendErr error
 }
 
 func (r *AskBus) key(runID, nodeID string) string { return runID + ":" + nodeID }
 
 // Pending records the call.
-func (r *AskBus) Pending(ctx context.Context, runID, nodeID, question string) error {
+func (r *AskBus) Pending(ctx context.Context, runID, nodeID string, question elicitation.Question) error {
 	r.mu.Lock()
 	r.pending = append(r.pending, PendingCall{Ctx: ctx, RunID: runID, NodeID: nodeID, Question: question})
 	pendErr := r.PendErr
@@ -43,7 +48,7 @@ func (r *AskBus) Pending(ctx context.Context, runID, nodeID, question string) er
 }
 
 // LookupAnswer records the call and returns the pre-loaded answer if any.
-func (r *AskBus) LookupAnswer(ctx context.Context, runID, nodeID string) (string, bool) {
+func (r *AskBus) LookupAnswer(ctx context.Context, runID, nodeID string) (elicitation.Answer, bool) {
 	r.mu.Lock()
 	r.lookups = append(r.lookups, LookupCall{Ctx: ctx, RunID: runID, NodeID: nodeID})
 	ans, ok := r.answers[r.key(runID, nodeID)]
@@ -51,11 +56,16 @@ func (r *AskBus) LookupAnswer(ctx context.Context, runID, nodeID string) (string
 	return ans, ok
 }
 
-// SetAnswer pre-loads an answer for the given (runID, nodeID) pair.
+// SetAnswer pre-loads a free-form answer for the given (runID, nodeID).
 func (r *AskBus) SetAnswer(runID, nodeID, answer string) {
+	r.SetAnswerValue(runID, nodeID, elicitation.TextAnswer(answer))
+}
+
+// SetAnswerValue pre-loads a structured answer.
+func (r *AskBus) SetAnswerValue(runID, nodeID string, answer elicitation.Answer) {
 	r.mu.Lock()
 	if r.answers == nil {
-		r.answers = make(map[string]string)
+		r.answers = make(map[string]elicitation.Answer)
 	}
 	r.answers[r.key(runID, nodeID)] = answer
 	r.mu.Unlock()
@@ -95,7 +105,7 @@ func (r *AskBus) RequirePendingCalledWith(t *testing.T, match func(PendingCall) 
 func (r *AskBus) RequirePendingQuestion(t *testing.T, question string) {
 	t.Helper()
 	r.RequirePendingCalledWith(t, func(c PendingCall) bool {
-		return c.Question == question
+		return c.Question.Text == question
 	}, "question="+question)
 }
 

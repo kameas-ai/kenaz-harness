@@ -5,6 +5,7 @@ extends: read
 display_name: Corpus Read
 description: "Reads from one or more registered corpora (FR-052)."
 executor: agentgraph.ExecCorpusRead
+dispatch: graph
 ports:
   inputs:
     - { name: query, type: any }

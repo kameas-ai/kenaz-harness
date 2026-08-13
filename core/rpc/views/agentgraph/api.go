@@ -13,6 +13,8 @@ package agentgraph
 import (
 	"context"
 	"time"
+
+	"github.com/kameas-ai/kenaz-harness/core/elicitation"
 )
 
 // GraphScope narrows ListGraphs to a layer:
@@ -35,6 +37,13 @@ type GraphInfo struct {
 // GraphSpec is the wire shape carrying the graph YAML across the boundary.
 // The frontend treats YAML as opaque text so the editor can use a Monaco
 // or textarea instance without the harness re-encoding a typed payload.
+//
+// Scope is "library" | "user" | "materialized". The third
+// (agentgraph-total-convergence-01PMGX01 WP12) is a graph projected from
+// a run's EventLog rather than read from disk: it is the executed
+// conversation, and it is read-only for the same reason a log line is —
+// editing a record of what happened would make it a record of something
+// else.
 type GraphSpec struct {
 	ID    string `json:"id"`
 	Name  string `json:"name,omitempty"`
@@ -88,9 +97,23 @@ type RunStatus struct {
 
 // PendingAsk surfaces an AskNode's parked question so the UI can
 // render a resume prompt. Empty Question means there is no pending ask.
+//
+// Kind and Spec are populated only when the paused node asked a
+// structured question (agentgraph-total-convergence-01PMGX01 WP06). A
+// free-form ask — every ask that existed before that WP, including the
+// chat graph's turn boundary — leaves both empty and the wire shape
+// byte-identical to what the RunView already renders.
 type PendingAsk struct {
 	NodeID   string `json:"nodeId"`
 	Question string `json:"question"`
+
+	// Kind is one of core/elicitation's seven dialog kinds, or empty
+	// for a free-form ask.
+	Kind string `json:"kind,omitempty"`
+
+	// Spec carries the full question (options, bounds, preview) so the
+	// UI can render the same controls the dialog does.
+	Spec *elicitation.Question `json:"spec,omitempty"`
 }
 
 // RunTraceEvent is one row of the EventLog tail.
@@ -158,6 +181,19 @@ type API interface {
 	// CancelRun signals a running run to stop. Idempotent on
 	// already-finished runs.
 	CancelRun(ctx context.Context, runID string) error
+
+	// MaterializeRun returns the run as a graph spec: one node per
+	// action the run took, the loop unrolled into per-iteration
+	// instances, and every model-emitted tool call promoted to its own
+	// node (agentgraph-total-convergence-01PMGX01 §4.5, WP12).
+	//
+	// This is the same GraphSpec LoadGraph returns — a materialized
+	// conversation and an authored graph are the same artifact in the
+	// same shape, which is the whole point — carrying Scope
+	// "materialized" so the editor opens it read-only. Chat runs are
+	// materializable too: the chat runner registers its resolved spec
+	// with the manager on every turn.
+	MaterializeRun(ctx context.Context, runID string) (GraphSpec, error)
 }
 
 // nowRFC3339 is the canonical timestamp shape across the wire — kept

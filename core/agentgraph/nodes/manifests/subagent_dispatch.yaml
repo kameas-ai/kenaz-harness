@@ -1,21 +1,14 @@
 schema_version: "1"
-manifest_version: "1.0.0"
+manifest_version: "2.0.0"
 id: subagent_dispatch
-extends: compute
+extends: tool
 display_name: Subagent Dispatch
-description: "Spawns a sub-agent branch from the named profile (branch-subagent-interactive-01KZNP3B). The model calls __subagent_dispatch with a profile id and prompt; the kernel forks the parent session into a child branch configured by the profile."
-executor: agentgraph.ExecBuiltinTool
-ports:
-  inputs:
-    - { name: args, type: any }
-  outputs:
-    - { name: result, type: any }
+description: "Spawns a sub-agent branch from the named profile (branch-subagent-interactive-01KZNP3B). The kernel forks the parent session into a child branch configured by the profile."
+# Integration note (2026-08-12): resolved per nodes review §C Option A —
+# real archetype-derived executor wins over wiring's `dispatch: builtin_tool`
+# declaration; dispatch: graph inherited from _archetype.tool.yaml.
+executor: agentgraph.ExecSubagentDispatch
 attrs:
-  name:
-    type: string
-    required: true
-    description: "Always kenaz__subagent_dispatch."
-    default: kenaz__subagent_dispatch
   profile:
     type: string
     required: true
@@ -35,6 +28,3 @@ attrs:
   description:
     type: string
     description: "Optional human-readable label shown in the BranchSidebar."
-cedar_action: tool.subagent.dispatch
-budget: tool
-budget_consumes: [args]

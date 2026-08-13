@@ -3,6 +3,9 @@ package agentgraph
 import (
 	"context"
 	"fmt"
+
+	"github.com/kameas-ai/kenaz-harness/core/elicitation"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // ---- EscalationLadderNode (autonomy-recovery-runtime-01PMDL03 WP04) ----
@@ -163,7 +166,9 @@ func (escalationLadderExecutor) Execute(ctx context.Context, env *Env, node *Nod
 			env.State.SetOutputs(stateKey, PortValues{"rung": ladderRungReplan, "retry_attempts": retryAttempts})
 			res.Outputs["result"] = []Message{{Role: "assistant", Content: resp.Content}}
 			res.Outputs["rung"] = "escalate"
-			res.Outputs["model_used"] = a.TargetModel
+			// model_used dropped (wiring-integrity-01PMAG04 WP03, docs/wiring-audit.md
+			// item 3c): the value is already carried on EventEscalateTriggered's
+			// target_model field below, and the Outputs port had no reader.
 			_ = res.Events.AppendKind(env.RunID, node.ID, EventEscalateTriggered, map[string]any{
 				"target_model": a.TargetModel,
 				"upstream":     a.UpstreamNode,
@@ -215,6 +220,32 @@ func (escalationLadderExecutor) Execute(ctx context.Context, env *Env, node *Nod
 	}
 
 	if rung == ladderRungAsk {
+		// F7 (agentgraph-total-convergence-01PMGX01 WP11c; autonomy-knobs
+		// review finding). The terminal rung asks a human, and at
+		// askOnAmbiguity proceed/never the user has said they do not
+		// want to be asked — the chat surface already withholds the ask
+		// tool from the model on those settings. A ladder that pauses
+		// the run with a question anyway honours the dial for the model
+		// and ignores it for the runtime, which is the same dial
+		// meaning two things.
+		//
+		// Under Withhold the ladder is EXHAUSTED instead: retry,
+		// escalate and replan have all run, and what is left is a
+		// question the user pre-declined. Recorded as a rung so the
+		// EventLog shows the ladder reached its end rather than
+		// silently stopping one rung short.
+		if env.AskPolicy == AskPolicyWithhold {
+			env.State.SetOutputs(stateKey, PortValues{"rung": ladderRungExhausted, "retry_attempts": retryAttempts})
+			_ = res.Events.AppendKind(env.RunID, node.ID, EventLadderRung, map[string]any{
+				"rung": "ask", "skipped": true, "reason": "ask_withheld",
+			})
+			logging.L().Info("agentgraph.escalation_ladder.ask_withheld",
+				"run_id", env.RunID, "node_id", node.ID,
+				"detail", "askOnAmbiguity withholds questions; the ladder ends at replan rather than pausing the run")
+			res.Outputs["result"] = []Message{{Role: "assistant", Content: draft}}
+			res.Outputs["rung"] = "exhausted"
+			return res, nil
+		}
 		question := a.AskQuestion
 		if question == "" {
 			question = "Automatic recovery (retry, escalate, replan) did not resolve the failure at " +
@@ -222,15 +253,16 @@ func (escalationLadderExecutor) Execute(ctx context.Context, env *Env, node *Nod
 		}
 		if ans, ok := env.Ask.LookupAnswer(ctx, env.RunID, node.ID); ok {
 			env.State.SetOutputs(stateKey, PortValues{"rung": ladderRungExhausted, "retry_attempts": retryAttempts})
-			res.Outputs["result"] = []Message{{Role: "user", Content: ans}}
+			text := ans.String()
+			res.Outputs["result"] = []Message{{Role: "user", Content: text}}
 			res.Outputs["rung"] = "ask"
 			_ = res.Events.AppendKind(env.RunID, node.ID, EventAskAnswered, map[string]any{
-				"answer_len": len(ans),
+				"answer_len": len(text),
 			})
 			_ = res.Events.AppendKind(env.RunID, node.ID, EventLadderRung, map[string]any{"rung": "ask"})
 			return res, nil
 		}
-		if err := env.Ask.Pending(ctx, env.RunID, node.ID, question); err != nil {
+		if err := env.Ask.Pending(ctx, env.RunID, node.ID, elicitation.Question{Text: question}); err != nil {
 			return res, fmt.Errorf("escalation_ladder: node %q: ask pending: %w", node.ID, err)
 		}
 		_ = res.Events.AppendKind(env.RunID, node.ID, EventAskPending, map[string]any{"question": question})

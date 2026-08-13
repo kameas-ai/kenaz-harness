@@ -915,7 +915,7 @@ const autoResumeOnKeyRotation = ref(true);
 // Compaction overhead surface (mission compaction-strategy-ui-01KQ8TDI
 // WP08 / plan §2.11). The backend tags every compaction-driven LLM
 // call with cost.kind = "compaction" and accumulates a running total
-// (see core/compaction/wiring/llm.go OverheadTotals). The frontend
+// (see core/agentgraph/compaction/wiring/llm.go OverheadTotals). The frontend
 // surface here renders a compact "Compaction overhead: $X.XX of $Y.YY
 // total" line on the chat header when the overhead is non-zero so
 // users can see the cost of compaction without opening a dedicated
@@ -924,7 +924,7 @@ const autoResumeOnKeyRotation = ref(true);
 // TODO(compaction-strategy-ui WP08+): wire an RPC method that returns
 // the per-session OverheadTotals shape (Total / Currency / Calls /
 // Indeterminate / InputTokens / OutputTokens — defined in
-// core/compaction/wiring/llm.go). Until the RPC lands the values
+// core/agentgraph/compaction/wiring/llm.go). Until the RPC lands the values
 // stay at zero and the row is hidden by compactionOverheadVisible.
 const compactionOverheadUSD = ref<number>(0);
 const compactionOverheadTotalUSD = ref<number>(0);
@@ -1660,6 +1660,7 @@ async function onShared() {
             :streaming-message="session.currentlyStreaming.value"
             :waiting="isWaitingForFirstChunk"
             :error-message="session.error.value"
+            :error-kind="session.errorKind.value"
             :rememberable="memoryEnabled"
             :saveable="true"
             :project-id="session.session.value?.projectId ?? ''"
@@ -1667,6 +1668,7 @@ async function onShared() {
             :swept-count="session.sweptCount.value"
             :archive-days="compactionArchiveDays"
             :show-token-meter="showPerMessageTokenMeter"
+            @new-session="onNudgeNewSession"
             @remember="onRemember"
             @save-artifact="onSaveArtifactFromMessage"
             @open-artifact="openArtifactPreview"
@@ -1683,6 +1685,22 @@ async function onShared() {
           >
             Branch from turn failed: {{ branchFromTurnError }}
           </div>
+          <!-- Mid-turn context-overflow recovery (01PMGX01 WP17). The
+               conversation outgrew the model's context, so the backend
+               compacted it and re-drove the turn. The reply is still
+               coming; without this the multi-second compaction pause is
+               indistinguishable from a hang. Distinct from the
+               session-full banner, which means the turn is over. -->
+          <div
+            v-if="session.overflowRecovery.value"
+            class="mx-4 mb-2 rounded-sm border border-border-muted bg-surface-1 px-3 py-2 font-ui text-[12px] text-ink-muted"
+            role="status"
+            data-testid="overflow-recovery-notice"
+          >
+            This conversation outgrew the model's context. It was
+            compacted and the turn is being retried.
+          </div>
+
           <!-- Live-stream truncation (served mode only). The server drops
                frames rather than stalling the whole harness when this
                browser cannot keep up; when it does, the transcript above
@@ -1961,7 +1979,12 @@ async function onShared() {
       :open="newSessionDialogOpen"
       @close="onNewSessionDialogClose"
     />
-    <ConfirmToolModal />
+    <!-- Confirm-each tool confirmations. The queue is deliberately
+         cross-session (a background session's tool call must still be
+         answerable), so the modal is told which session is in front in
+         order to LABEL foreign rows rather than to filter them.
+         (confirm-each-enforcement-01PMAG05) -->
+    <ConfirmToolModal :active-session-id="sessionId" />
     <!-- Plan approval modal (p0-wiring-fixes WP01) — renders when the model
          has exited plan_mode and the toolloop is awaiting user approval. -->
     <PlanApprovalModal

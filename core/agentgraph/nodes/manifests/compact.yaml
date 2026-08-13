@@ -5,6 +5,7 @@ extends: compute
 display_name: Compact
 description: "First-class compaction primitive (FR-039). Emits a BranchResult; coordinates with the configurable compaction subsystem."
 executor: agentgraph.ExecCompact
+dispatch: graph
 ports:
   inputs:
     - { name: input, type: messages }
@@ -13,9 +14,9 @@ ports:
 attrs:
   strategy:
     type: enum
-    enum: [summary, drop_oldest, semantic_cluster, custom_subgraph]
+    enum: [summary, drop_oldest, semantic_cluster, custom_subgraph, session_rewrite]
     required: true
-    description: "Compaction strategy discriminator."
+    description: "Compaction strategy discriminator. session_rewrite rewrites the persisted session history (the five-tier chat dial); the others shrink the in-memory slice."
   target_token_budget:
     type: int
     min: 0

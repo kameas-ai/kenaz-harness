@@ -156,7 +156,7 @@ func NewManager(store Store, opts ...ManagerOption) *Manager {
 }
 
 // Store exposes the underlying persistence handle so cross-mission
-// wiring (e.g. core/compaction/wiring) can compose its own adapters
+// wiring (e.g. core/agentgraph/compaction/wiring) can compose its own adapters
 // against the same store the manager already opened. The chat path
 // keeps consuming the manager's higher-level methods; this getter is
 // only for adapters that need the narrower Store interface (and that

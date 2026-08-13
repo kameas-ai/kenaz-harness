@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kameas-ai/kenaz-harness/core/elicitation"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
 	"github.com/kameas-ai/kenaz-harness/core/tools/askuserquestion"
 )
@@ -55,13 +56,13 @@ func TestSubmitAnswer_ResolvesOpenDialog(t *testing.T) {
 		},
 	}
 
-	var result askuserquestion.AskResult
+	var result elicitation.Answer
 	var goErr error
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		result, goErr = api.OpenDialog(context.Background(), args)
+		result, goErr = api.OpenDialog(context.Background(), args.ToQuestion())
 	}()
 
 	// Give OpenDialog time to register the pending entry and emit.
@@ -102,7 +103,7 @@ func TestSubmitAnswer_ResolvesOpenDialog(t *testing.T) {
 		t.Error("expected Cancelled=false")
 	}
 	var answer string
-	if err := json.Unmarshal(result.Answer, &answer); err != nil {
+	if err := json.Unmarshal(result.Value, &answer); err != nil {
 		t.Fatalf("unmarshal answer: %v", err)
 	}
 	if answer != "a" {
@@ -120,11 +121,11 @@ func TestSubmitAnswer_CancelledFlow(t *testing.T) {
 		Kind:     askuserquestion.KindText,
 	}
 
-	var result askuserquestion.AskResult
+	var result elicitation.Answer
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		result, _ = api.OpenDialog(context.Background(), args)
+		result, _ = api.OpenDialog(context.Background(), args.ToQuestion())
 	}()
 
 	time.Sleep(10 * time.Millisecond)
@@ -182,7 +183,7 @@ func TestOpenDialog_ContextCancellation(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := api.OpenDialog(ctx, args)
+		_, err := api.OpenDialog(ctx, args.ToQuestion())
 		done <- err
 	}()
 
@@ -437,5 +438,148 @@ func TestRegisterDeferred_TooManyPending(t *testing.T) {
 	_, err := api.RegisterDeferred(context.Background(), "sess-1", req)
 	if err == nil {
 		t.Error("expected error for too many pending, got nil")
+	}
+}
+
+// ── 01PMGX01 WP06: one pending surface ────────────────────────────────
+
+// The kenaz__ask_user_question tool must resolve through the same
+// registry the view exposes on ListPending. Before WP06 the tool's
+// pending call lived in a map private to the view; a caller holding the
+// ElicitAPI could not see or resolve it by id. This drives the real
+// tool — not the Delegate directly — so the whole model-facing path is
+// covered end to end.
+func TestTool_ResolvesThroughTheSharedPendingSurface(t *testing.T) {
+	em := &fakeEmitter{}
+	api := elicit.New(elicit.Config{Emitter: em})
+	api.SetContext(context.Background())
+
+	tool := askuserquestion.New(askuserquestion.Options{Delegate: api})
+
+	type toolResult struct {
+		raw json.RawMessage
+		err error
+	}
+	done := make(chan toolResult, 1)
+	go func() {
+		raw, err := tool.Call(context.Background(), json.RawMessage(`{
+			"question": "Which environment?",
+			"kind": "radio",
+			"options": [{"value":"prod","label":"Production"}]
+		}`))
+		done <- toolResult{raw, err}
+	}()
+
+	// Poll the *public* pending surface for the tool's ask.
+	var reqID string
+	deadline := time.Now().Add(2 * time.Second)
+	for reqID == "" {
+		if time.Now().After(deadline) {
+			t.Fatal("tool ask never appeared on ListPending")
+		}
+		pending, err := api.ListPending(context.Background())
+		if err != nil {
+			t.Fatalf("ListPending: %v", err)
+		}
+		for _, p := range pending {
+			if p.Question == "Which environment?" {
+				if p.Kind != "radio" {
+					t.Errorf("kind = %q, want radio", p.Kind)
+				}
+				if len(p.Options) != 1 || p.Options[0].Value != "prod" {
+					t.Errorf("options = %+v", p.Options)
+				}
+				reqID = p.RequestID
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	if err := api.SubmitAnswer(context.Background(), reqID, json.RawMessage(`"prod"`), false); err != nil {
+		t.Fatalf("SubmitAnswer: %v", err)
+	}
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("tool.Call: %v", got.err)
+		}
+		var r askuserquestion.AskResult
+		if err := json.Unmarshal(got.raw, &r); err != nil {
+			t.Fatalf("decode tool result: %v", err)
+		}
+		if r.Cancelled {
+			t.Error("Cancelled = true, want false")
+		}
+		if string(r.Answer) != `"prod"` {
+			t.Errorf("answer = %s, want \"prod\"", r.Answer)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("tool.Call did not return after SubmitAnswer")
+	}
+
+	// Resolved asks leave the pending surface.
+	pending, _ := api.ListPending(context.Background())
+	for _, p := range pending {
+		if p.RequestID == reqID {
+			t.Fatal("resolved ask is still listed as pending")
+		}
+	}
+}
+
+// A deferred ask and a blocking dialog live in one store but stay in
+// their own lanes: ListPending is blocking-only, ListDeferred is
+// deferred-only. Pins the mode split that used to be two packages.
+func TestPendingAndDeferredShareOneStoreWithoutBleeding(t *testing.T) {
+	em := &fakeEmitter{}
+	api := elicit.New(elicit.Config{Emitter: em})
+	api.SetContext(context.Background())
+
+	if _, err := api.RegisterDeferred(context.Background(), "sess-1", elicit.ElicitRequest{
+		Question: "Later?",
+		Kind:     "text",
+	}); err != nil {
+		t.Fatalf("RegisterDeferred: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = api.OpenDialog(context.Background(), elicitation.Question{
+			Text: "Now?", Kind: elicitation.KindText,
+		})
+	}()
+	t.Cleanup(func() {
+		pending, _ := api.ListPending(context.Background())
+		for _, p := range pending {
+			_ = api.SubmitAnswer(context.Background(), p.RequestID, nil, true)
+		}
+		<-done
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		pending, _ := api.ListPending(context.Background())
+		if len(pending) == 1 {
+			if pending[0].Question != "Now?" {
+				t.Fatalf("ListPending returned the deferred ask: %+v", pending[0])
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("ListPending = %d entries, want exactly the blocking one", len(pending))
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	deferred, err := api.ListDeferred(context.Background(), "sess-1")
+	if err != nil {
+		t.Fatalf("ListDeferred: %v", err)
+	}
+	if len(deferred) != 1 || deferred[0].Question.Text != "Later?" {
+		t.Fatalf("ListDeferred = %+v, want just the deferred ask", deferred)
+	}
+	if got, _ := api.ListDeferred(context.Background(), "other-session"); len(got) != 0 {
+		t.Fatalf("deferred asks leaked across sessions: %+v", got)
 	}
 }

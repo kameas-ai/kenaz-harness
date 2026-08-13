@@ -18,7 +18,7 @@ func TestLoadBundled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCatalog: %v", err)
 	}
-	want := []string{"ask", "decompose", "plan", "retrieve", "summarize", "validate"}
+	want := []string{"ask", "decompose", "delegate", "plan", "retrieve", "summarize", "validate"}
 	for _, id := range want {
 		if !cat.HasActivity(id) {
 			t.Errorf("missing bundled activity %q", id)

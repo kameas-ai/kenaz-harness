@@ -3,8 +3,9 @@ manifest_version: "1.0.0"
 id: read_bash_output
 extends: read
 display_name: Read Bash Output
-description: "Reads cached stdout/stderr from a prior bash tool run as a context-tracked artifact (FR-057b)."
+description: "Reads cached stdout/stderr from a prior bash tool run as a context-tracked artifact (FR-057b). No tool or MCP surface duplicates this — the cache it reads is kernel-internal."
 executor: agentgraph.ExecReadBashOutput
+dispatch: graph
 ports:
   inputs:
     - { name: query, type: any }

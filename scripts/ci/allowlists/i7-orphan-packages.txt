@@ -1,0 +1,84 @@
+# I7 allowlist — non-test packages under core/ with zero non-test importer
+# and no `main` package of their own (spec §6 I7: "every non-test package
+# has a non-test importer or is an entry point").
+#
+# Computed by: `go list -json ./core/... ./cmd/...` (module-internal
+# `Imports` edges, which are non-test-only by definition) UNION the
+# repo-root main.go's own import block (extracted by grep, since
+# `go list ./...` cannot resolve main.go's `//go:embed all:frontend/dist`
+# on a checkout that has not run a frontend build).
+#
+# This is a coarse, mechanical definition, not an individual verdict on
+# each package's architectural merit. Some entries are almost certainly
+# legitimate test-support libraries that are only ever imported from
+# _test.go files elsewhere (e.g. core/mcp/fixture, core/bundle/kinds/testkind)
+# — which is precisely what I7 is designed to surface, since a package
+# whose only purpose is being imported by tests is easy to mistake for
+# live production code. Others may be genuinely dead, or reachable only
+# behind a build tag the default build does not select (worth checking
+# individually — see core/otel, confirmed by hand during WP01 to be
+# imported only by its own _test.go file today).
+#
+# Each entry is deleted by whichever WP gives the package a real non-test
+# importer, folds it into its caller, or deletes it outright.
+#
+# ─────────────────────────────────────────────────────────────────────
+# CROSS-REFERENCES recorded by 01PMGX01 WP17 (2026-08-13). Three lines
+# below are load-bearing for OTHER allow-lists; do not resolve them
+# without reading the linked entry, and do not resolve the linked entry
+# by itself.
+#
+#   core/credstore
+#   core/llm/bundleartifact
+#     Each is the ROOT CAUSE of an entry in i10-unwired-gates.txt
+#     (credstore.WithCedarGate, bundleartifact.NewModelProfileHandler-
+#     WithGate). Those gates are unwired because the whole package is
+#     unwired — the I10 lines clear when these do. In particular:
+#     credstore's line is NOT "Cedar credential gating is off". Live
+#     gating runs through cedar.GateMCPSpawn from makeMCPRecipeBootstrap
+#     and does not touch core/credstore.
+#
+#   core/event/replay
+#     Contains a doc.go and NO code. It is the unimplemented half of
+#     core/event's Replayer surface: the interface has zero
+#     implementations repo-wide and ReplayCursor/ReplayOpts have zero
+#     references outside their declarations. WP17 deleted the raw-replay
+#     authorization helpers that had shipped ahead of it (see
+#     core/event/helpers.go). Whoever implements Replayer re-adds those
+#     WITH the check that reads them.
+core/acp/demo
+core/acp/transports/http_lan
+core/acp/transports/http_loopback
+core/acp/transports/uds
+core/agentgraph/internal/recorders
+core/asktemplates
+core/branchadvisor
+core/bundle/channels/localpath
+core/bundle/events
+core/bundle/integrity
+core/bundle/kinds/testkind
+core/context
+core/context/bundlekind
+core/context/snapshot
+core/credstore
+core/docs
+core/event/branch
+core/event/replay
+core/event/retention
+core/fswatch
+core/llm/anthropic/smoke
+core/llm/bundleartifact
+core/llm/wirecheck
+core/llm/wirecheck/scrub
+core/mcp/fixture
+core/otel
+core/policy/engine/opa
+core/policy/lower/schema
+core/search
+core/secrets/lint
+core/storage/internal/events
+core/system/resources
+core/tools/monitor
+core/trust/backends/software
+core/trust/internal/fingerprint
+core/workflows/builtin

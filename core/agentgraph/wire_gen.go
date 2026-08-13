@@ -42,10 +42,10 @@ const (
 	NodeKindReflect          NodeKind = "reflect"
 	NodeKindRetry            NodeKind = "retry"
 	NodeKindReview           NodeKind = "review"
+	NodeKindRouter           NodeKind = "router"
 	NodeKindSessionWrite     NodeKind = "session_write"
 	NodeKindSleep            NodeKind = "sleep"
 	NodeKindSubagentDispatch NodeKind = "subagent_dispatch"
-	NodeKindTool             NodeKind = "tool"
 	NodeKindToolDispatch     NodeKind = "tool_dispatch"
 	NodeKindTraceWrite       NodeKind = "trace_write"
 	NodeKindTransform        NodeKind = "transform"
@@ -82,10 +82,10 @@ func AllNodeKinds() []NodeKind {
 		NodeKindReflect,
 		NodeKindRetry,
 		NodeKindReview,
+		NodeKindRouter,
 		NodeKindSessionWrite,
 		NodeKindSleep,
 		NodeKindSubagentDispatch,
-		NodeKindTool,
 		NodeKindToolDispatch,
 		NodeKindTraceWrite,
 		NodeKindTransform,
@@ -150,14 +150,14 @@ func defaultAttrsFor(kind NodeKind) NodeAttrs {
 		return RetryAttrs{}
 	case NodeKindReview:
 		return ReviewAttrs{}
+	case NodeKindRouter:
+		return RouterAttrs{}
 	case NodeKindSessionWrite:
 		return SessionWriteAttrs{}
 	case NodeKindSleep:
 		return SleepAttrs{}
 	case NodeKindSubagentDispatch:
 		return SubagentDispatchAttrs{}
-	case NodeKindTool:
-		return ToolAttrs{}
 	case NodeKindToolDispatch:
 		return ToolDispatchAttrs{}
 	case NodeKindTraceWrite:
@@ -336,6 +336,13 @@ func defaultPortsFor(kind NodeKind) (inputs, outputs []Port) {
 				{Name: "verdict", Type: PortType("any")},
 				{Name: "approved", Type: PortType("any")},
 			}
+	case NodeKindRouter:
+		return []Port{
+				{Name: "in", Type: PortType("any")},
+			}, []Port{
+				{Name: "next", Type: PortType("text")},
+				{Name: "out", Type: PortType("any")},
+			}
 	case NodeKindSessionWrite:
 		return []Port{
 				{Name: "text", Type: PortType("any")},
@@ -355,18 +362,23 @@ func defaultPortsFor(kind NodeKind) (inputs, outputs []Port) {
 			}, []Port{
 				{Name: "result", Type: PortType("any")},
 			}
-	case NodeKindTool:
-		return []Port{
-				{Name: "args", Type: PortType("any")},
-			}, []Port{
-				{Name: "result", Type: PortType("any")},
-			}
 	case NodeKindToolDispatch:
 		return []Port{
 				{Name: "tool_calls", Type: PortType("any"), Required: true},
+				{Name: "response", Type: PortType("messages")},
+				{Name: "assistant", Type: PortType("any")},
+				{Name: "finish_reason", Type: PortType("text")},
 			}, []Port{
 				{Name: "tool_results", Type: PortType("any")},
 				{Name: "messages", Type: PortType("messages")},
+				{Name: "tool_messages", Type: PortType("messages")},
+				{Name: "tool_call_count", Type: PortType("number")},
+				{Name: "assistant", Type: PortType("any")},
+				{Name: "assistant_text", Type: PortType("text")},
+				{Name: "response", Type: PortType("messages")},
+				{Name: "finish_reason", Type: PortType("text")},
+				{Name: "should_replan", Type: PortType("bool")},
+				{Name: "doom_loop_hits", Type: PortType("any")},
 			}
 	case NodeKindTraceWrite:
 		return []Port{
@@ -568,6 +580,12 @@ func decodeAttrs(kind NodeKind, raw map[string]any, nodeID string) (NodeAttrs, e
 			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
 		}
 		return v, nil
+	case NodeKindRouter:
+		var v RouterAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
 	case NodeKindSessionWrite:
 		var v SessionWriteAttrs
 		if err := json.Unmarshal(buf, &v); err != nil {
@@ -582,12 +600,6 @@ func decodeAttrs(kind NodeKind, raw map[string]any, nodeID string) (NodeAttrs, e
 		return v, nil
 	case NodeKindSubagentDispatch:
 		var v SubagentDispatchAttrs
-		if err := json.Unmarshal(buf, &v); err != nil {
-			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
-		}
-		return v, nil
-	case NodeKindTool:
-		var v ToolAttrs
 		if err := json.Unmarshal(buf, &v); err != nil {
 			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
 		}

@@ -72,7 +72,6 @@ import type {
   Hook,
   BuiltinDescriptor,
   DryRunResult,
-  ConfirmDecision,
   Recipe,
   PrimaryAuth,
   RecipeCategory,
@@ -310,7 +309,6 @@ interface WailsBindingsLike {
   LLM_RemoveProvider(id: string): Promise<void>;
   LLM_TestProvider(id: string): Promise<TestResult>;
   LLM_ListModels(kind: string, plaintextApiKey: string): Promise<ModelInfo[]>;
-  LLM_ResolveConfirm(requestID: string, decision: string): Promise<void>;
   LLM_GetAttachmentLimits(
     provider: string,
     model: string,
@@ -664,6 +662,7 @@ interface WailsBindingsLike {
   ): Promise<GraphRunTraceEvent[]>;
   Graph_Resume(runID: string, askResponse: string): Promise<void>;
   Graph_CancelRun(runID: string): Promise<void>;
+  Graph_MaterializeRun(runID: string): Promise<GraphSpec>;
 
   Compaction_GetConfig(
     layer: CompactionLayer,
@@ -787,6 +786,19 @@ interface WailsBindingsLike {
     cancelled: boolean,
   ): Promise<void>;
   Elicit_ListPending(): Promise<import('./types').ElicitRequest[]>;
+
+  // ── Confirm-each (confirm-each-enforcement-01PMAG05 WP02/WP03) ──
+  Confirm_Resolve(
+    sessionID: string,
+    callID: string,
+    approved: boolean,
+    reason: string,
+    rememberSession: boolean,
+  ): Promise<void>;
+  Confirm_ResolveAlways(sessionID: string, callID: string, reason: string): Promise<void>;
+  Confirm_ApproveBatch(batchID: string, rememberSession: boolean): Promise<number>;
+  Confirm_CancelBatch(batchID: string, reason: string): Promise<number>;
+  Confirm_ListPending(sessionID: string): Promise<import('./types').ToolConfirmPending[]>;
   // WP05 multi-step wizard sequencing.
   Elicit_SubmitWizardStep(
     requestID: string,
@@ -1461,15 +1473,6 @@ export interface LLMConnectorClient {
    * model entry in that case.
    */
   listModels(kind: string, plaintextApiKey: string): Promise<ModelInfo[]>;
-  /**
-   * Resolve a pending confirm-each tool-call modal (WP05). The frontend
-   * calls this with the request id surfaced on the
-   * `llm:tool-confirm-request` topic and one of the four canonical
-   * decisions. The toolloop goroutine waiting on the request unblocks
-   * and dispatches / blocks accordingly.
-   */
-  resolveConfirm(requestID: string, decision: ConfirmDecision): Promise<void>;
-
   /**
    * getAttachmentLimits returns the descriptor-driven per-provider attachment
    * capability limits for (provider, model). The chat composer uses these to
@@ -2560,6 +2563,14 @@ export interface GraphClient {
   getRunTrace(runID: string, since: number): Promise<GraphRunTraceEvent[]>;
   resume(runID: string, askResponse: string): Promise<void>;
   cancelRun(runID: string): Promise<void>;
+  /**
+   * materializeRun projects a run — including a chat turn — into a
+   * read-only graph spec: one node per action the run took, the agent
+   * loop unrolled per iteration, and every tool call its own node
+   * (agentgraph-total-convergence-01PMGX01 WP12). The returned spec
+   * carries scope 'materialized', which is what opens it read-only.
+   */
+  materializeRun(runID: string): Promise<GraphSpec>;
 }
 
 /**
@@ -2591,7 +2602,7 @@ export interface CompactionClient {
    * "What does this mean?" disclosure on the
    * compaction-aggressiveness dial in Settings (mission
    * compaction-strategy-ui-01KQ8TDI §2.2 / §2.9). Numerics come from
-   * core/compaction.Tier() so the UI can never drift.
+   * core/compactionpolicy.Tier() so the UI can never drift.
    */
   getTierExplain(): Promise<CompactionTierExplain[]>;
 }
@@ -3035,6 +3046,72 @@ export interface ElicitClient {
 }
 
 /**
+ * ConfirmClient — the return leg of the confirm-each tool pause
+ * (confirm-each-enforcement-01PMAG05 WP02/WP03).
+ *
+ * A `confirm_each` verdict PARKS the tool call server-side with no
+ * deadline (owner decision 1: elapsed time resolves to nothing) and
+ * publishes a ToolConfirmPending on the `tool:confirm-pending` topic.
+ * Every method here is a way that pause ends. If none is called, the run
+ * stays parked — which is why dismissing the dialog must call
+ * cancelBatch rather than simply unmounting it.
+ *
+ * Nothing in this surface moves argument values in either direction.
+ */
+export interface ConfirmClient {
+  /**
+   * Answer one row.
+   *
+   * `approved: false` denies — the parked call returns a tool error the
+   * model can read. `rememberSession` records a per-tool, per-session
+   * grant so the same tool stops asking for the rest of the session; it
+   * is honoured only on an approval and never written to disk.
+   *
+   * Rejects when the row was already answered (double-click, a stale
+   * dialog, a batch cancelled in another window). Treat that as
+   * "someone else got there first", not as a failure to surface.
+   */
+  resolve(
+    sessionID: string,
+    callID: string,
+    approved: boolean,
+    reason: string,
+    rememberSession: boolean,
+  ): Promise<void>;
+
+  /**
+   * Approve one row AND write a DURABLE allow rule for its
+   * (server, tool) — the "always allow" control.
+   *
+   * Deliberately a separate call from `resolve`, matching the modal's
+   * visually-separated control (owner decision 2). The rule survives
+   * restarts and is revoked from Settings → Permissions, not from this
+   * dialog.
+   */
+  resolveAlways(sessionID: string, callID: string, reason: string): Promise<void>;
+
+  /**
+   * Approve every row still parked under `batchID`; resolves with how
+   * many were answered. Backs approve-all. Rows already answered
+   * individually are untouched.
+   */
+  approveBatch(batchID: string, rememberSession: boolean): Promise<number>;
+
+  /**
+   * DENY every row still parked under `batchID`; resolves with how many
+   * were answered. This is the dismissal / window-close path —
+   * dismissal is deny-all, never allow-all (FR-003).
+   */
+  cancelBatch(batchID: string, reason: string): Promise<number>;
+
+  /**
+   * List rows currently parked so the dialog can be rebuilt after a
+   * reload or a dropped connection. Empty `sessionID` returns all.
+   */
+  listPending(sessionID: string): Promise<import('./types').ToolConfirmPending[]>;
+}
+
+/**
  * ConfigClient — feature flag reads.
  * (user-slash-commands-01KQ8TD9 WP09)
  */
@@ -3220,6 +3297,8 @@ export interface HarnessClient {
   contextBootstrap: ContextBootstrapClient;
   /** Elicitation surface for the ask-user-question dialog (WP04). */
   elicit: ElicitClient;
+  /** Confirm-each tool-confirmation surface (confirm-each-enforcement-01PMAG05 WP02). */
+  confirm: ConfirmClient;
   /** Config / feature-flag client (slash-commands WP09). */
   config: ConfigClient;
   /** Model-accessible secrets panel client (model-secret-references-01KW7M5A WP10). */
@@ -3406,8 +3485,6 @@ export function createHarnessClient(): HarnessClient {
       testProvider: (id) => b().LLM_TestProvider(id),
       listModels: (kind, plaintextApiKey) =>
         b().LLM_ListModels(kind, plaintextApiKey),
-      resolveConfirm: (requestID, decision) =>
-        b().LLM_ResolveConfirm(requestID, decision),
       getAttachmentLimits: (provider, model) =>
         b().LLM_GetAttachmentLimits(provider, model),
       testAndRotateKey: (profileID, plaintextApiKey, source) =>
@@ -3761,6 +3838,7 @@ export function createHarnessClient(): HarnessClient {
       getRunTrace: (runID, since) => b().Graph_GetRunTrace(runID, since),
       resume: (runID, askResponse) => b().Graph_Resume(runID, askResponse),
       cancelRun: (runID) => b().Graph_CancelRun(runID),
+      materializeRun: (runID) => b().Graph_MaterializeRun(runID),
     },
     compaction: {
       getConfig: (layer, scopeID) => b().Compaction_GetConfig(layer, scopeID),
@@ -3855,6 +3933,16 @@ export function createHarnessClient(): HarnessClient {
       answerDeferred: (askID, answer) =>
         b().Elicit_AnswerDeferred(askID, answer),
       listPending: () => b().Elicit_ListPending(),
+    },
+    confirm: {
+      resolve: (sessionID, callID, approved, reason, rememberSession) =>
+        b().Confirm_Resolve(sessionID, callID, approved, reason, rememberSession),
+      resolveAlways: (sessionID, callID, reason) =>
+        b().Confirm_ResolveAlways(sessionID, callID, reason),
+      approveBatch: (batchID, rememberSession) =>
+        b().Confirm_ApproveBatch(batchID, rememberSession),
+      cancelBatch: (batchID, reason) => b().Confirm_CancelBatch(batchID, reason),
+      listPending: (sessionID) => b().Confirm_ListPending(sessionID),
     },
     config: {
       getFlags: () => b().Config_GetFlags(),
@@ -4053,6 +4141,16 @@ export const SERVED_STREAM_TOPICS = [
   'tool:permission-pending',
   // Blocking elicitation (kenaz__ask_user_question).
   'elicit:pending',
+  // Confirm-each tool confirmation. Same reasoning as the permission
+  // gates above and then some: the tool call is parked with NO deadline,
+  // so a dropped frame is not a missed notification — it is a turn that
+  // never resumes.
+  'tool:confirm-pending',
+  // Mid-turn context-overflow recovery (01PMGX01 WP17). The backend
+  // compacted the session and re-drove the turn; the reply is still
+  // coming. Dropping this leaves the compaction pause looking like a
+  // hang — the same failure shape as the gates above, minus the block.
+  'chat:overflow-recovery',
 ] as const;
 
 /**
@@ -4195,6 +4293,16 @@ export function createServedHarnessClient(opts?: {
               dispatchServedEvent(event, data);
               return;
             }
+            if (event === 'tool:confirm-pending:snapshot') {
+              // Snapshot is an array of ToolConfirmPending; re-emit each
+              // as an individual 'tool:confirm-pending' event so the
+              // ConfirmToolModal queues them through the one code path.
+              const list = Array.isArray(data) ? data : [];
+              for (const row of list) {
+                dispatchServedEvent('tool:confirm-pending', row);
+              }
+              return;
+            }
             if (event === 'elicit:pending:snapshot') {
               // Snapshot is an array of ElicitRequest; re-emit each as
               // an individual 'elicit:pending' event so the
@@ -4221,6 +4329,42 @@ export function createServedHarnessClient(opts?: {
         }
         return Promise.resolve();
       },
+    },
+
+    confirm: {
+      /**
+       * The confirm-each round trip, wired for served mode.
+       *
+       * This is not optional polish. A served harness parks tool calls
+       * exactly like the desktop one — with no deadline — so a browser
+       * that can SEE `tool:confirm-pending` but cannot answer it turns
+       * every confirm_each tool call into a hung turn.
+       */
+      resolve: (sessionID, callID, approved, reason, rememberSession) =>
+        transport.call<void>('Confirm_Resolve', {
+          sessionId: sessionID,
+          callId: callID,
+          approved,
+          reason,
+          rememberSession,
+        }),
+      resolveAlways: (sessionID, callID, reason) =>
+        transport.call<void>('Confirm_ResolveAlways', {
+          sessionId: sessionID,
+          callId: callID,
+          reason,
+        }),
+      approveBatch: (batchID, rememberSession) =>
+        transport.call<number>('Confirm_ApproveBatch', {
+          batchId: batchID,
+          rememberSession,
+        }),
+      cancelBatch: (batchID, reason) =>
+        transport.call<number>('Confirm_CancelBatch', { batchId: batchID, reason }),
+      listPending: (sessionID) =>
+        transport.call<import('./types').ToolConfirmPending[]>('Confirm_ListPending', {
+          sessionId: sessionID,
+        }),
     },
 
     elicit: {
@@ -4471,7 +4615,6 @@ export function createFakeHarnessClient(
         message: 'fake ok',
       }),
       listModels: async () => [],
-      resolveConfirm: noop,
       getAttachmentLimits: async () => ({
         imageInput: false,
         documentInput: false,
@@ -5156,6 +5299,12 @@ export function createFakeHarnessClient(
       getRunTrace: async () => [],
       resume: noop,
       cancelRun: noop,
+      materializeRun: async (runID) => ({
+        id: `fake__run_${runID}`,
+        name: `Fake run ${runID}`,
+        scope: 'materialized' as const,
+        yaml: '',
+      }),
     },
     compaction: {
       getConfig: async () => ({ sites: {} }),
@@ -5362,6 +5511,17 @@ export function createFakeHarnessClient(
       submitWizardStep: noop,
       registerDeferred: async () => ({ deferred: true, ask_id: '' }),
       answerDeferred: async () => '',
+      listPending: async () => [],
+    },
+    confirm: {
+      // The fake client backs component tests and the no-backend dev
+      // shell. Resolving is a no-op and nothing is ever pending, which
+      // is the honest answer when no harness is attached: there is no
+      // parked tool call to answer.
+      resolve: noop,
+      resolveAlways: noop,
+      approveBatch: async () => 0,
+      cancelBatch: async () => 0,
       listPending: async () => [],
     },
     config: {

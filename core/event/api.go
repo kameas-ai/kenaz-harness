@@ -180,8 +180,16 @@ const (
 	// since the original write.
 	ReplayCurrentVisibility ReplayMode = iota
 	// ReplayRaw exposes the original recorded payload bytes verbatim.
-	// Requires operator authorization in the context; opening a Raw
-	// cursor itself emits an event-log.replay.raw-opened self-event.
+	//
+	// UNIMPLEMENTED, and the whole Replayer surface with it: nothing in
+	// the tree implements Replayer, and core/event/replay is a doc.go
+	// with no code. The design intent is that a Raw cursor requires
+	// operator authorization in the context and that opening one itself
+	// emits an event-log.replay.raw-opened self-event. Whoever builds
+	// the Replayer builds BOTH of those in the same change — 01PMGX01
+	// WP17 deleted the context-marker helpers that shipped ahead of it,
+	// because an authorization primitive with no checker reads as a
+	// guarantee and is not one (see helpers.go for the full note).
 	ReplayRaw
 )
 

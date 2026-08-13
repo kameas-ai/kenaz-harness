@@ -1,0 +1,71 @@
+# I6 allowlist — node kinds reachable ONLY through
+# core/rpc/views/agentgraph/library/toolloop_default.yaml (a read-only
+# editor starting template that nothing runs in production — spec §1.4)
+# and not through the production graph
+# (core/rpc/views/agentgraph/library/chat_default.yaml) or any activity
+# (core/agentgraph/activities/yaml/*.yaml). "Dead in production but alive
+# in a template" — spec §6 I6.
+#
+# `tool` left this list in Phase 2 (`feat(agentgraph): WP02+WP04 —
+# _archetype.tool.yaml + builtin tools as manifest kinds`): the generic
+# `tool` KIND was retired in favour of the `tool` ARCHETYPE, so it is no
+# longer a callable kind at all and toolloop_default.yaml now uses
+# `tool_dispatch` — the one tool-invocation path production actually
+# runs. The two kinds below are template-only for reachability
+# reasons a later phase owns.
+#
+# toolloop_default.yaml's `continue_check` node used to be spelled
+# `kind: branch`. That did NOT resolve to `decision`: lookupAlias
+# (core/agentgraph/aliases.go) never rewrites a name that is itself a
+# callable kind, and `branch` is one (the sub-graph spawn primitive), so
+# the node was silently validating against the wrong manifest and the
+# graph failed Validate(). Phase 2 spells the node `kind: decision`
+# outright.
+#
+# `decision` left this list in Phase 5 (`feat(agentgraph): WP11c — the
+# doom-loop signal reaches a controller`): chat_default.yaml's
+# `replan_check` is a production `decision`, so the kind is no longer
+# reachable only through the template. That node is also the first
+# kernel-visible branch in a shipped graph — the thing Phase 1.5's
+# conditional promotion was built for and, until WP11c, had no
+# production consumer of.
+#
+# Each entry is deleted by whichever WP either (a) makes the kind reachable
+# from chat_default.yaml/an activity, or (b) deletes/regenerates
+# toolloop_default.yaml so it no longer offers the kind at all (spec §4.6
+# "Sweep": "Delete toolloop_default.yaml or regenerate it from the current
+# node set").
+#
+# ─────────────────────────────────────────────────────────────────────
+# WP17, 2026-08-13. The header above said these two are "template-only
+# for reachability reasons a later phase owns". Phase 8 is that later
+# phase, so here are the reasons. Both remain, and both remain for a
+# reason that is about PRODUCTION, not about nobody getting to it.
+#
+# NOTE these lines are not drainable by the kernel-run fixture markers
+# WP17 added for I3. That is deliberate: I6 asks whether a kind is
+# reachable from the PRODUCTION graph versus only from the dead
+# template, and a Go test answers neither question. The marker
+# mechanism feeds the I3 exercised set only.
+#
+#   trace_write (toolloop_default.yaml:77) — redundant in production by
+#     design, not missing from it. The kernel wraps EVERY node fire in a
+#     TraceSink.Span (see TestSeamFanout_TraceWrite_SpanCalled: the
+#     assertion is on the kernel's own wrapping, not on the node's
+#     effect), so chat_default gets full tracing without a trace_write
+#     node in it. An explicit trace_write node is for a graph author who
+#     wants an extra annotated span at a chosen point. This line clears
+#     when toolloop_default.yaml is regenerated or deleted — not by
+#     adding a node to chat_default that would duplicate what the kernel
+#     already does.
+#
+#   parallel (toolloop_default.yaml:48) — no shipped graph fans out. The
+#     only concurrency in a production turn is a model emitting several
+#     tool calls at once, and the tool_dispatch node fans those out
+#     internally across its own worker pool (see core/toolloop/confirm.go
+#     on the ConfirmBus being called from multiple goroutines). That
+#     concurrency never becomes graph topology, so `parallel` has no
+#     production caller. Clears with a graph that genuinely fans out, or
+#     with the template.
+parallel
+trace_write

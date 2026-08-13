@@ -1,18 +1,21 @@
 package agentgraph
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"github.com/kameas-ai/kenaz-harness/core/elicitation"
 
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph/prompts"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/llm/tokenizer"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
-	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 // This file holds the compute-primitive executors (FR-029 .. FR-039):
@@ -74,6 +77,25 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 		}
 	}
 
+	// autonomy-knobs-live-01PMAG02 WP04 fix F2: a preceding body-node
+	// failure that was adapted (continueOnError=adapt, see
+	// adaptNodeErrorPayload in exec_control.go) leaves its untrusted-
+	// error note on a separate "adapted_error" input rather than
+	// inside "messages". Appending it here, AFTER the len(msgs)==0
+	// history-fallback check above, is deliberate: an earlier version
+	// folded the note directly into a synthesized "messages" slice,
+	// which made that slice non-empty and silently suppressed the
+	// history fallback — the model saw exactly one orphan note and
+	// never recovered the transcript. Keeping the note on its own port
+	// means it is additive over whatever msgs ended up being (a real
+	// upstream input or the recovered history), never a substitute
+	// for it.
+	if v, ok := inputs.Get("adapted_error"); ok {
+		if note, ok := v.(string); ok && note != "" {
+			msgs = append(msgs, Message{Role: "user", Content: note})
+		}
+	}
+
 	// Tool allowlist comes from attrs.
 	tools := append([]string(nil), a.ToolAllowlist...)
 
@@ -83,7 +105,16 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 	// compacted messages. Errors from the compactor short-circuit the
 	// LLM call so a misconfigured strategy never silently runs an
 	// over-budget request.
-	if env.Compactor != nil && !env.SuppressAutomaticCompaction {
+	//
+	// The gate is Env.admitAutomaticCompaction: a nil-Compactor Env is
+	// refused outright, and an Env carrying a growth watermark is
+	// refused until the live context has grown past its baseline by the
+	// policy margin. The very first visit latches that baseline and is
+	// therefore always refused — which is exactly the
+	// single-fire guarantee compaction-convergence-01PMDL05 wanted,
+	// now obtained by construction rather than by welding the site shut.
+	liveTokens := estimateTokens(msgs)
+	if env.admitAutomaticCompaction(liveTokens) {
 		ci := CompactionInput{
 			Site:         CompactionSitePreCall,
 			RunID:        env.RunID,
@@ -110,7 +141,7 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 			// DropOldestStrategy.Compact), not an unconditional trim
 			// — see compaction-convergence-01PMDL05 WP02.
 			TargetTokens:  0,
-			CurrentTokens: estimateTokens(msgs),
+			CurrentTokens: liveTokens,
 			// ContextWindow is the denominator for the site's
 			// PreCallThreshold. 0 (unknown model / no catalog) makes the
 			// pipeline skip rather than compact toward a guess.
@@ -126,6 +157,11 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 		}
 		if !co.Skipped && len(co.Messages) > 0 {
 			msgs = co.Messages
+			// A compaction actually landed: re-baseline the watermark so
+			// the next site has to clear the margin from the *new*
+			// starting point. Without this a long turn would compact on
+			// every subsequent model call once it crossed once.
+			env.AutoCompaction.Rearm()
 		}
 	}
 
@@ -213,13 +249,20 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 		}
 	}
 
-	// Pre-LLM hook (WP06 chat-migration). Mirrors the toolloop's
-	// PreSend extension point so the chassis can swap toolloop's
-	// HookRunner for the kernel HookManager without losing the
-	// pre-call surface (memory.retrieve, redaction transforms, ...).
-	// Hooks here are fire-and-record: the FR-027 greedy-memory journal
-	// captures the boundary; provider-side mutation (request rewrite)
-	// stays in toolloop's HookRunner until that path is fully retired.
+	// Pre-LLM hook (WP06 chat-migration). This boundary is what the
+	// pre-kernel chassis loop's PreSend extension point became, so the
+	// pre-call surface (memory.retrieve, redaction transforms, ...)
+	// survived the cutover.
+	//
+	// Hooks here are fire-and-RECORD: the FR-027 greedy-memory journal
+	// captures the boundary but nothing here rewrites the outgoing
+	// request. Provider-side MUTATION lives one layer up, in the LLM
+	// view's HookRunner seam (core/rpc/views/llm/impl.go RunPreSend,
+	// backed by core/hooks.Runner) — that is a real, live split, not a
+	// migration remnant. (The comment here used to say the mutation
+	// path "stays in toolloop's HookRunner until that path is fully
+	// retired"; core/toolloop has no HookRunner and never did after the
+	// cutover. Corrected under 01PMGX01 invariant I8, 2026-08-13.)
 	if env.Hooks != nil {
 		hookBatch := env.Hooks.Fire(ctx, HookPreLLM, "session",
 			"pre-llm — "+node.ID, summarizeMessages(msgs), node.ID)
@@ -311,18 +354,58 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 	return res, nil
 }
 
-// ---- ToolNode ----
+// ---- Builtin tool nodes (the `tool` archetype) ----
+//
+// agentgraph-total-convergence-01PMGX01 WP04 (spec §2.5, §4.2): "tools
+// are nodes". This executor is the successor to the old generic `tool`
+// KIND — same body, one structural change: the tool it invokes is no
+// longer read from a `name` attr the graph author picks, it is fixed by
+// the node's KIND through the archetype's kenaz__<kind> naming
+// contract. That is what makes a kind the unit of accounting and
+// authorisation rather than a label on a call.
+//
+// One instance is registered per callable kind whose inheritance chain
+// includes the `tool` archetype (see builtinToolExecutors in
+// executor.go), so declaring a manifest that extends `tool` is the
+// whole contract for adding a builtin tool node.
 
-type toolExecutor struct{}
+// builtinToolExecutor invokes exactly one builtin tool, named by the
+// kind it is registered for.
+type builtinToolExecutor struct {
+	kind     NodeKind
+	toolName string
+}
 
-func (toolExecutor) Kind() NodeKind { return NodeKindTool }
+func (b builtinToolExecutor) Kind() NodeKind { return b.kind }
 
-func (toolExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
-	res := NewResult()
-	a, ok := node.Attrs.(ToolAttrs)
-	if !ok {
-		return res, fmt.Errorf("tool: node %q has wrong attrs type %T", node.ID, node.Attrs)
+// builtinToolNameFor renders the archetype's naming contract: a
+// tool-archetype kind `sleep` invokes the builtin `kenaz__sleep`.
+func builtinToolNameFor(kind NodeKind) string { return "kenaz__" + string(kind) }
+
+// toolArgsFromAttrs renders a node's typed attrs as the tool-call
+// argument map. The generated *Attrs structs carry `json:"...,omitempty"`
+// tags matching the manifest attr names, so a round-trip through JSON
+// yields exactly the attrs the author set — inherited-but-unset
+// archetype attrs drop out via omitempty rather than being sent to the
+// tool as zero values.
+func toolArgsFromAttrs(attrs NodeAttrs) map[string]any {
+	if attrs == nil {
+		return map[string]any{}
 	}
+	buf, err := json.Marshal(attrs)
+	if err != nil {
+		return map[string]any{}
+	}
+	out := map[string]any{}
+	if err := json.Unmarshal(buf, &out); err != nil {
+		return map[string]any{}
+	}
+	return out
+}
+
+func (b builtinToolExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
+	res := NewResult()
+	a := struct{ Name string }{Name: b.toolName}
 
 	if env.Budget.MaxToolCallsPerRun > 0 && env.Counters != nil &&
 		env.Counters.ToolCallsMade >= env.Budget.MaxToolCallsPerRun {
@@ -338,14 +421,13 @@ func (toolExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 			"err":  "unknown tool",
 			"tool": a.Name,
 		})
-		return res, fmt.Errorf("tool: node %q: unknown tool %q", node.ID, a.Name)
+		return res, fmt.Errorf("%s: node %q: unknown tool %q", b.kind, node.ID, a.Name)
 	}
 
-	args := make(map[string]any, len(a.Args))
-	for k, v := range a.Args {
-		args[k] = v
-	}
-	// Allow the upstream "args" port to override / augment static args.
+	args := toolArgsFromAttrs(node.Attrs)
+	// Allow the upstream "args" port to override / augment the attrs.
+	// Non-map payloads (e.g. an upstream ToolResult threaded in purely
+	// to order two tool nodes) are ignored rather than coerced.
 	if v, ok := inputs.Get("args"); ok {
 		if m, ok := v.(map[string]any); ok {
 			for k, vv := range m {
@@ -354,64 +436,15 @@ func (toolExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 		}
 	}
 
-	_ = res.Events.AppendKind(env.RunID, node.ID, EventToolCall, map[string]any{
-		"tool": a.Name,
-		"args": args,
-	})
-
-	// Greedy memory hook: pre-tool (WP06 chat-migration).
-	if env.Hooks != nil {
-		hookBatch := env.Hooks.Fire(ctx, HookPreTool, "session",
-			"pre-tool — "+a.Name, summarizeArgs(args), node.ID)
-		for _, e := range hookBatch.Events {
-			e.RunID = env.RunID
-			e.NodeID = node.ID
-			res.Events.Append(e)
-		}
-	}
-
-	// v2 lifecycle hooks: pre_tool_use (WP03, hooks-event-surface-expansion).
-	// These may block the dispatch, rewrite args, or inject additional context.
-	argsJSON, _ := json.Marshal(args)
-	if env.LifecycleHooks != nil {
-		merged, err := env.LifecycleHooks.FirePreToolUse(ctx, env.SessionID, a.Name, argsJSON, "", "")
-		if err != nil {
-			logging.L().Warn("agentgraph.tool.pre_tool_use_hook.failed",
-				"run_id", env.RunID, "session_id", env.SessionID,
-				"node_id", node.ID, "tool", a.Name, "err", err.Error())
-		} else {
-			if merged.Blocked {
-				// Hook denied — short-circuit; return a tool error result.
-				logging.L().Warn("agentgraph.tool.hook_denied",
-					"run_id", env.RunID, "session_id", env.SessionID, "node_id", node.ID,
-					"tool", a.Name, "reason", merged.BlockReason)
-				_ = res.Events.AppendKind(env.RunID, node.ID, EventHookDenied, map[string]any{
-					"tool":   a.Name,
-					"reason": merged.BlockReason,
-				})
-				res.Outputs["result"] = ToolResult{
-					Content: "hook_denied: " + merged.BlockReason,
-					IsError: true,
-				}
-				return res, nil
-			}
-			// Apply updated_input: rewrite args if the hook provided new input.
-			if len(merged.UpdatedInput) > 0 {
-				_ = res.Events.AppendKind(env.RunID, node.ID, EventHookInputRewrite, map[string]any{
-					"tool":      a.Name,
-					"original":  string(argsJSON),
-					"rewritten": string(merged.UpdatedInput),
-				})
-				var rewrittenArgs map[string]any
-				if jerr := json.Unmarshal(merged.UpdatedInput, &rewrittenArgs); jerr == nil {
-					args = rewrittenArgs
-				}
-			}
-			// Inject additional_context for next LLM turn.
-			if merged.AdditionalContext != "" && env.PendingContext != nil {
-				_ = env.PendingContext.AppendSystemContext(ctx, env.SessionID, merged.AdditionalContext)
-			}
-		}
+	// The pre-call gate is shared with tool_dispatch — greedy-memory
+	// hook, canonical EventToolCall, v2 pre_tool_use hooks (block /
+	// rewrite args / inject context). See tool_invocation.go.
+	tc := toolCallContext{NodeID: node.ID, NodeKind: b.kind, ToolName: a.Name}
+	args, argsJSON, _, blocked, preEvents := toolPreDispatch(ctx, env, tc, args)
+	res.Events.Events = append(res.Events.Events, preEvents.Events...)
+	if blocked != nil {
+		res.Outputs["result"] = *blocked
+		return res, nil
 	}
 
 	argKeys := make([]string, 0, len(args))
@@ -423,28 +456,20 @@ func (toolExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 		"run_id", env.RunID, "session_id", env.SessionID, "node_id", node.ID,
 		"tool", a.Name, "arg_keys", argKeys)
 	tr, err := env.Tools.Call(ctx, ToolCall{Name: a.Name, Args: args})
-	// Gate: passive tools (e.g. kenaz__sleep) must not consume an
-	// iteration slot (FR-010). toolloop.ShouldCountIteration returns
-	// false for any tool registered as tool.passive in Cedar.
-	if env.Counters != nil && toolloop.ShouldCountIteration(a.Name) {
-		env.Counters.AddTool()
-	}
+	chargeToolIteration(env, a.Name)
 	if err != nil {
 		logging.L().Warn("agentgraph.tool.error",
 			"run_id", env.RunID, "session_id", env.SessionID, "node_id", node.ID,
 			"tool", a.Name, "err", err.Error(),
 			"ctx_err", ctxErrString(ctx),
 			"duration_ms", time.Since(callStart).Milliseconds())
-		// v2 lifecycle hook: post_tool_use_failure.
-		if env.LifecycleHooks != nil {
-			_, _ = env.LifecycleHooks.FirePostToolUse(ctx, env.SessionID, a.Name, argsJSON, nil,
-				true, err.Error(), "", "")
-		}
+		_, failEvents := toolPostDispatch(ctx, env, tc, argsJSON, tr, err, nil)
+		res.Events.Events = append(res.Events.Events, failEvents.Events...)
 		_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
 			"err":  err.Error(),
 			"tool": a.Name,
 		})
-		return res, fmt.Errorf("tool: node %q (%s): %w", node.ID, a.Name, err)
+		return res, fmt.Errorf("%s: node %q (%s): %w", b.kind, node.ID, a.Name, err)
 	}
 	logging.L().Info("agentgraph.tool.result",
 		"run_id", env.RunID, "session_id", env.SessionID, "node_id", node.ID,
@@ -456,7 +481,19 @@ func (toolExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 	// We hand the result content as a single Message so every
 	// strategy sees a uniform input shape; on success we replace
 	// tr.Content with the compacted message's content.
-	if env.Compactor != nil && !env.SuppressAutomaticCompaction && tr.Content != "" {
+	//
+	// WP02 gate: this site sees a single tool result, not the live
+	// transcript, so it cannot latch or evaluate a watermark baseline of
+	// its own — feeding it a result byte count would corrupt the
+	// baseline. It rides the pre_call site's verdict instead
+	// (Env.automaticCompactionCrossed): once the run's context has
+	// genuinely grown past the watermark, the automatic sites are live.
+	//
+	// This is also the one step tool_dispatch does NOT share (see the
+	// "STILL SPLIT, DELIBERATELY" note in tool_invocation.go): Phase 4
+	// WP08 replaces it with a `compact` node rather than duplicating a
+	// per-call compactor into a parallel fan-out.
+	if tr.Content != "" && env.automaticCompactionCrossed() {
 		ci := CompactionInput{
 			Site:          CompactionSitePostTool,
 			RunID:         env.RunID,
@@ -466,13 +503,13 @@ func (toolExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 			Messages:      []Message{{Role: "tool", Name: a.Name, Content: tr.Content}},
 			CurrentTokens: estimateTokens([]Message{{Content: tr.Content}}),
 		}
-		co, err := env.Compactor.Compact(ctx, ci)
-		if err != nil {
+		co, cerr := env.Compactor.Compact(ctx, ci)
+		if cerr != nil {
 			_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
-				"err": err.Error(),
+				"err": cerr.Error(),
 				"at":  "compaction.post_tool",
 			})
-			return res, fmt.Errorf("tool: node %q: post-tool compaction: %w", node.ID, err)
+			return res, fmt.Errorf("%s: node %q: post-tool compaction: %w", b.kind, node.ID, cerr)
 		}
 		if !co.Skipped && len(co.Messages) > 0 {
 			// Concatenate compacted messages' content; the kernel does
@@ -489,39 +526,11 @@ func (toolExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 		}
 	}
 
+	// Shared post-call bookkeeping: EventToolResult + v2 post_tool_use
+	// hooks (output rewrite / additional context).
+	tr, postEvents := toolPostDispatch(ctx, env, tc, argsJSON, tr, nil, nil)
+	res.Events.Events = append(res.Events.Events, postEvents.Events...)
 	res.Outputs["result"] = tr
-	_ = res.Events.AppendKind(env.RunID, node.ID, EventToolResult, map[string]any{
-		"tool":     a.Name,
-		"is_error": tr.IsError,
-		"bytes":    len(tr.Content),
-	})
-
-	// v2 lifecycle hook: post_tool_use.
-	if env.LifecycleHooks != nil {
-		outJSON, _ := json.Marshal(map[string]any{
-			"content":  tr.Content,
-			"is_error": tr.IsError,
-		})
-		merged, herr := env.LifecycleHooks.FirePostToolUse(ctx, env.SessionID, a.Name, argsJSON, outJSON,
-			false, "", "", "")
-		if herr != nil {
-			logging.L().Warn("agentgraph.tool.post_tool_use_hook.failed",
-				"run_id", env.RunID, "session_id", env.SessionID,
-				"node_id", node.ID, "tool", a.Name, "err", herr.Error())
-		} else {
-			// Apply updated_mcp_tool_output (MCP tools only, but we apply
-			// unconditionally — non-MCP tools just never set it).
-			if len(merged.UpdatedMCPOutput) > 0 {
-				var updatedContent string
-				if jerr := json.Unmarshal(merged.UpdatedMCPOutput, &updatedContent); jerr == nil {
-					tr.Content = updatedContent
-				}
-			}
-			if merged.AdditionalContext != "" && env.PendingContext != nil {
-				_ = env.PendingContext.AppendSystemContext(ctx, env.SessionID, merged.AdditionalContext)
-			}
-		}
-	}
 
 	// Greedy memory hook: post-tool.
 	if env.Hooks != nil && tr.Content != "" {
@@ -578,7 +587,7 @@ func summarizeArgs(args map[string]any) string {
 // compaction-convergence-01PMDL05: this used to be its own independent
 // byte-length/4 heuristic (no per-message framing overhead, no rune
 // awareness) — a second, weaker token estimator living alongside
-// core/llm/tokenizer.CountRequestTokens, which core/compaction's
+// core/llm/tokenizer.CountRequestTokens, which core/agentgraph/compaction's
 // pre-send path already used. Two estimators meant the kernel's
 // pre_call/post_tool compaction sites and the pre-send compactor could
 // disagree about how close a conversation is to its context-window
@@ -994,7 +1003,7 @@ func (reviewExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs 
 	resp, err := env.LLM.Generate(ctx, LLMRequest{
 		Model: model, MaxTokens: 256,
 		SystemPrompt: composePrompt(resolvePromptTemplate(env, a.Provider, model), graphBaseOf(env), a.SystemPrompt),
-		Messages:     []Message{{Role: "user", Content: "Review this. Reply PASS or FAIL with one-line reason.\n\n" + draft}},
+		Messages:     []Message{{Role: "user", Content: reviewPrompt(env, draft)}},
 	})
 	if err != nil {
 		return res, fmt.Errorf("review: node %q: %w", node.ID, err)
@@ -1004,12 +1013,10 @@ func (reviewExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs 
 		env.Counters.AddCost(resp.CostUSD)
 	}
 
-	verdict := "fail"
-	if strings.HasPrefix(strings.TrimSpace(strings.ToUpper(resp.Content)), "PASS") {
-		verdict = "pass"
-	}
+	verdict, reason := parseReviewVerdict(resp.Content)
 	res.Outputs["verdict"] = map[string]any{
 		"verdict": verdict,
+		"reason":  reason,
 		"text":    resp.Content,
 		"iter":    iter,
 	}
@@ -1026,13 +1033,39 @@ func (reviewExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs 
 	// Fail path. If we still have iterations left, signal the kernel
 	// to re-fire upstream; otherwise hard-error per on_cap_hit.
 	_ = res.Events.AppendKind(env.RunID, node.ID, EventReviewFail, map[string]any{
-		"iter": iter, "tokens": resp.TokensUsed,
+		"iter": iter, "tokens": resp.TokensUsed, "reason": reason,
 	})
 
 	if iter >= maxIterations {
 		_ = res.Events.AppendKind(env.RunID, node.ID, EventReviewUnrecov, map[string]any{
 			"iter": iter, "cap": maxIterations,
 		})
+		// F7 (autonomy-knobs review finding, landed here in WP11b).
+		// At askOnAmbiguity proceed/never the user has said they do not
+		// want to be interrupted, and the chat surface already withholds
+		// kenaz__ask_user_question from the model's catalogue. An exit
+		// gate that responds to a cap hit by escalating re-opens that
+		// door from a path the user never saw: `escalate` leads to the
+		// ladder, and the ladder's terminal rung asks a human.
+		//
+		// So under Withhold the cap hit RETURNS THE BEST DRAFT. The
+		// verdict is still FAIL, still on the EventLog, still visible —
+		// what changes is that the run ends with the work in hand
+		// rather than with a question. That is the honest reading of
+		// "proceed": proceed.
+		if env.AskPolicy == AskPolicyWithhold {
+			_ = res.Events.AppendKind(env.RunID, node.ID, EventReviewCapProceeded, map[string]any{
+				"iter": iter, "cap": maxIterations,
+				"on_cap_hit": a.OnCapHit,
+				"reason":     reason,
+			})
+			logging.L().Info("agentgraph.review.cap_proceeded",
+				"run_id", env.RunID, "node_id", node.ID,
+				"iter", iter, "cap", maxIterations,
+				"detail", "askOnAmbiguity withholds questions; returning the best draft instead of escalating")
+			res.Outputs["should_retry"] = false
+			return res, nil
+		}
 		switch a.OnCapHit {
 		case "escalate":
 			_ = res.Events.AppendKind(env.RunID, node.ID, EventEscalateTriggered, map[string]any{
@@ -1040,6 +1073,7 @@ func (reviewExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs 
 				"iter":   iter,
 			})
 			res.Outputs["should_retry"] = false
+			// wiring:deferred(no reader found for this specific flag — should_retry=false plus the EventEscalateTriggered event above already carry the cap-hit-escalate signal to the kernel promotion path and EventLog respectively; surfaced by check-output-ports.sh, wiring-integrity-01PMAG04 WP05)
 			res.Outputs["escalated"] = true
 			return res, nil
 		default:
@@ -1050,6 +1084,192 @@ func (reviewExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs 
 	res.Outputs["should_retry"] = true
 	res.Outputs["retry_target"] = a.UpstreamNode
 	return res, nil
+}
+
+// reviewPrompt builds the user-side message for a review call
+// (agentgraph-total-convergence-01PMGX01 WP11b; design in
+// agentic-turn-routing-01PMAG01 §3.4 hardening item 1).
+//
+// WHAT WAS WRONG. The prompt was the fixed string "Review this. Reply
+// PASS or FAIL with one-line reason.\n\n" + draft. A reviewer handed a
+// draft and nothing else is not checking the work against the user's
+// request — it is rating prose in a vacuum, and it will happily PASS a
+// confident, well-written answer to a question nobody asked. That is
+// precisely the "check its work before returning" clause failing open.
+//
+// The goal and the completed-step trail come from TaskState, which is
+// why WP11b also made TaskState always-armed: on a run that never
+// failed — the run an exit gate is most likely to see — the goal was
+// empty by construction (01PMAG01 G5). When TaskState is empty this
+// degrades to the old vacuum prompt rather than erroring, because a
+// review node in a hand-built graph with no history seam is a
+// legitimate configuration.
+//
+// The JSON instruction is the structured-verdict half. There is no
+// provider-level response_format on the LLMRequest seam today, so
+// "structured output" is requested in the prompt and parsed
+// tolerantly; parseReviewVerdict keeps the substring path as the
+// fallback for a provider that ignores the instruction.
+func reviewPrompt(env *Env, draft string) string {
+	var b strings.Builder
+	b.WriteString("You are the exit gate for a task. Decide whether the work below is complete and correct.\n\n")
+
+	if env != nil {
+		if goal := env.TaskState.Goal(); goal != "" {
+			b.WriteString("The user's goal:\n")
+			b.WriteString(goal)
+			b.WriteString("\n\n")
+		}
+		if steps, elided := env.TaskState.CompletedSteps(); len(steps) > 0 {
+			b.WriteString("Steps completed so far")
+			if elided > 0 {
+				fmt.Fprintf(&b, " (+%d earlier steps elided)", elided)
+			}
+			b.WriteString(":\n")
+			for _, s := range steps {
+				b.WriteString("- ")
+				b.WriteString(s)
+				b.WriteString("\n")
+			}
+			b.WriteString("\n")
+		}
+	}
+
+	b.WriteString("The work to review:\n")
+	b.WriteString(draft)
+	b.WriteString("\n\n")
+	b.WriteString(`Reply with a JSON object and nothing else: {"verdict": "pass" | "fail", "reason": "<one line>"}. ` +
+		`Answer "pass" only if the work actually satisfies the goal above; answer "fail" if it is partial, ` +
+		`unverified, or answers a different question.`)
+	return b.String()
+}
+
+// parseReviewVerdict extracts a review verdict from a model reply
+// (01PMAG01 §3.4 hardening item 2).
+//
+// WHAT WAS WRONG. The old rule was
+// strings.HasPrefix(upper(trim(resp)), "PASS"), so any preamble at all
+// — "Sure! PASS", "Verdict: PASS", a leading newline plus a markdown
+// heading — scored a FAIL. A gate that fails on the model being polite
+// burns the retry budget on work that was already correct, and at the
+// cap it either errors the run or escalates. The defect is not
+// cosmetic; it is a gate that is wrong in the safe-looking direction.
+//
+// Three passes, most-structured first:
+//  1. a JSON object carrying {"verdict": ...} (what reviewPrompt asks
+//     for, and what a provider with real structured output returns);
+//  2. a bare `verdict` token scan, for JSON-ish-but-invalid replies;
+//  3. the historical substring rule, widened from HasPrefix to a
+//     word-boundary scan of the first non-empty line.
+//
+// Defaulting to "fail" is deliberate and unchanged: an unreadable
+// verdict must not be read as approval.
+func parseReviewVerdict(text string) (verdict, reason string) {
+	norm := func(s string) string {
+		switch strings.ToLower(strings.TrimSpace(s)) {
+		case "pass", "passed", "approve", "approved":
+			return "pass"
+		case "fail", "failed", "reject", "rejected":
+			return "fail"
+		}
+		return ""
+	}
+
+	// (1) structured object.
+	for _, obj := range jsonObjectCandidates(text) {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(obj), &m); err != nil {
+			continue
+		}
+		raw, ok := m["verdict"].(string)
+		if !ok {
+			continue
+		}
+		if v := norm(raw); v != "" {
+			r, _ := m["reason"].(string)
+			return v, strings.TrimSpace(r)
+		}
+	}
+
+	// (2) bare token scan, reusing the router's tolerant field parser.
+	if picked, ok := parseChoiceField(text, "verdict", map[string]bool{
+		"pass": true, "fail": true, "passed": true, "failed": true,
+		"PASS": true, "FAIL": true,
+	}); ok {
+		if v := norm(picked); v != "" {
+			return v, firstNonEmptyLine(text)
+		}
+	}
+
+	// (3) substring fallback, so a preamble no longer flips the verdict.
+	//
+	// The first non-empty line is preferred over the whole reply,
+	// because that is where a verdict actually goes and a long
+	// explanation below it may mention the other word in passing
+	// ("...otherwise this would fail"). Only when the first line
+	// carries no verdict at all — "## Review" above the answer — does
+	// the scan widen to the whole reply.
+	//
+	// Within each pass, FAIL is checked first: a reply carrying both
+	// words ("this is not a PASS. FAIL: the table is missing") is a
+	// rejection, and a gate that is unsure must not approve.
+	//
+	// containsWord, not Contains, so "PASSAGE" is not a PASS.
+	head := firstNonEmptyLine(text)
+	for _, scope := range []string{head, text} {
+		upper := strings.ToUpper(scope)
+		switch {
+		case containsWord(upper, "FAIL"):
+			return "fail", head
+		case containsWord(upper, "PASS"):
+			return "pass", head
+		}
+	}
+	return "fail", head
+}
+
+// firstNonEmptyLine returns the first line of s with content, trimmed.
+// Rune-safe: it splits on '\n', which can never fall inside a
+// multi-byte rune in valid UTF-8.
+func firstNonEmptyLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		if t := strings.TrimSpace(line); t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
+// containsWord reports whether word appears in s delimited by
+// non-alphanumeric boundaries, so "PASSAGE" does not match "PASS".
+// s and word are expected pre-upper-cased by the caller.
+func containsWord(s, word string) bool {
+	isAlnum := func(r rune) bool {
+		return (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_'
+	}
+	from := 0
+	for {
+		i := strings.Index(s[from:], word)
+		if i < 0 {
+			return false
+		}
+		start := from + i
+		end := start + len(word)
+		beforeOK := start == 0
+		if !beforeOK {
+			r, _ := utf8.DecodeLastRuneInString(s[:start])
+			beforeOK = !isAlnum(r)
+		}
+		afterOK := end == len(s)
+		if !afterOK {
+			r, _ := utf8.DecodeRuneInString(s[end:])
+			afterOK = !isAlnum(r)
+		}
+		if beforeOK && afterOK {
+			return true
+		}
+		from = end
+	}
 }
 
 // ---- PlannerNode (was PlanNode) ----
@@ -1102,6 +1322,7 @@ func (plannerExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs
 	}
 
 	res.Outputs["plan"] = []Message{{Role: "assistant", Content: resp.Content}}
+	// wiring:deferred(capability library — no shipped graph includes a planner node; see docs/wiring-audit.md item 3d)
 	res.Outputs["plan_text"] = resp.Content
 	res.Outputs["verbosity"] = verbosity
 
@@ -1119,6 +1340,49 @@ type askExecutor struct{}
 
 func (askExecutor) Kind() NodeKind { return NodeKindAsk }
 
+// askQuestion builds the canonical question from the node's attrs.
+//
+// The free-form case (no question_kind, no question_spec) produces
+// exactly what the node has always produced: an elicitation.Question
+// carrying only Text. The structured case decodes question_spec through
+// the same shape and the same validator kenaz__ask_user_question uses
+// (01PMGX01 WP06, spec §4.3), so a graph can pose any question the
+// model-facing tool can.
+//
+// question_spec must not redeclare `question` or `kind`: those are the
+// `question` / `question_kind` attrs, and a second spelling of either
+// would be a silent-precedence trap. The decoder rejects them.
+func askQuestion(a AskAttrs) (elicitation.Question, error) {
+	q := elicitation.Question{
+		Text: a.Question,
+		Kind: elicitation.Kind(a.QuestionKind),
+	}
+	if len(a.QuestionSpec) > 0 {
+		raw, err := json.Marshal(a.QuestionSpec)
+		if err != nil {
+			return q, fmt.Errorf("question_spec: encode: %w", err)
+		}
+		var spec elicitation.Question
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&spec); err != nil {
+			return q, fmt.Errorf("question_spec: %w", err)
+		}
+		if spec.Text != "" {
+			return q, errors.New("question_spec: `question` belongs in the question attr, not the spec")
+		}
+		if spec.Kind != elicitation.KindFreeform {
+			return q, errors.New("question_spec: `kind` belongs in the question_kind attr, not the spec")
+		}
+		spec.Text, spec.Kind = q.Text, q.Kind
+		q = spec
+	}
+	if err := q.Validate(); err != nil {
+		return q, err
+	}
+	return q, nil
+}
+
 func (askExecutor) Execute(ctx context.Context, env *Env, node *Node, _ PortValues) (Result, error) {
 	res := NewResult()
 	a, ok := node.Attrs.(AskAttrs)
@@ -1128,14 +1392,15 @@ func (askExecutor) Execute(ctx context.Context, env *Env, node *Node, _ PortValu
 
 	// First check if a prior pause has already collected an answer.
 	if ans, ok := env.Ask.LookupAnswer(ctx, env.RunID, node.ID); ok {
-		res.Outputs["answer"] = ans
+		text := ans.String()
+		res.Outputs["answer"] = ans.Decoded()
 		_ = res.Events.AppendKind(env.RunID, node.ID, EventAskAnswered, map[string]any{
-			"answer_len": len(ans),
+			"answer_len": len(text),
 		})
 		// Hook the user message into greedy memory.
-		if env.Hooks != nil && ans != "" {
+		if env.Hooks != nil && text != "" {
 			b := env.Hooks.Fire(ctx, HookPostUserMessage, "session",
-				"user answer — "+node.ID, ans, node.ID)
+				"user answer — "+node.ID, text, node.ID)
 			for _, e := range b.Events {
 				e.RunID = env.RunID
 				e.NodeID = node.ID
@@ -1145,15 +1410,51 @@ func (askExecutor) Execute(ctx context.Context, env *Env, node *Node, _ PortValu
 		return res, nil
 	}
 
+	// autonomy-knobs-live-01PMAG02 WP02: askOnAmbiguity=never resolves an
+	// unseeded AskNode to its stated default rather than pausing the run
+	// (spec §3.1 bullet 2). DefaultAnswer is only ever populated by
+	// chat_runner.go's applyAskOnAmbiguityDial when the knob is "never";
+	// an empty DefaultAnswer (every other knob value, and every AskNode
+	// outside the chat runner's wiring) preserves today's
+	// pause-on-no-answer behaviour exactly (FR-005).
+	if a.DefaultAnswer != "" {
+		ans := a.DefaultAnswer
+		res.Outputs["answer"] = ans
+		_ = res.Events.AppendKind(env.RunID, node.ID, EventAskAnswered, map[string]any{
+			"answer_len":    len(ans),
+			"auto_resolved": true,
+		})
+		if env.Hooks != nil {
+			b := env.Hooks.Fire(ctx, HookPostUserMessage, "session",
+				"auto-resolved answer — "+node.ID, ans, node.ID)
+			for _, e := range b.Events {
+				e.RunID = env.RunID
+				e.NodeID = node.ID
+				res.Events.Append(e)
+			}
+		}
+		return res, nil
+	}
+
+	question, err := askQuestion(a)
+	if err != nil {
+		return res, fmt.Errorf("ask: node %q: %w", node.ID, err)
+	}
+
 	// No answer yet — record pending and signal pause.
-	if err := env.Ask.Pending(ctx, env.RunID, node.ID, a.Question); err != nil {
+	if err := env.Ask.Pending(ctx, env.RunID, node.ID, question); err != nil {
 		return res, fmt.Errorf("ask: node %q: pending: %w", node.ID, err)
 	}
-	_ = res.Events.AppendKind(env.RunID, node.ID, EventAskPending, map[string]any{
-		"question": a.Question,
-	})
+	// The payload stays exactly `{"question": …}` for a free-form ask so
+	// pinned event goldens do not move; a structured ask additionally
+	// reports the control it asked for.
+	payload := map[string]any{"question": question.Text}
+	if question.Kind != elicitation.KindFreeform {
+		payload["kind"] = string(question.Kind)
+	}
+	_ = res.Events.AppendKind(env.RunID, node.ID, EventAskPending, payload)
 	res.Pause = true
-	res.PauseReason = "ask: " + a.Question
+	res.PauseReason = "ask: " + question.Text
 	return res, nil
 }
 
@@ -1220,7 +1521,9 @@ func (escalateExecutor) Execute(ctx context.Context, env *Env, node *Node, input
 	}
 
 	res.Outputs["result"] = []Message{{Role: "assistant", Content: resp.Content}}
-	res.Outputs["model_used"] = a.TargetModel
+	// model_used dropped (wiring-integrity-01PMAG04 WP03, docs/wiring-audit.md
+	// item 3c): the value is already carried on EventEscalateTriggered's
+	// target_model field below, and the Outputs port had no reader.
 	_ = res.Events.AppendKind(env.RunID, node.ID, EventEscalateTriggered, map[string]any{
 		"target_model": a.TargetModel,
 		"upstream":     a.UpstreamNode,
@@ -1265,22 +1568,58 @@ func (compactExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs
 		}
 	}
 
-	// When no compactor is wired, return the input unchanged + emit a
-	// trace event so authors can spot the no-op.
+	// When no compactor is wired, pass the input through untouched and
+	// record a skip so authors can see the node ran and did nothing.
+	//
+	// This used to be a hard error, which was defensible while no
+	// shipped graph contained a compact node: an author who placed one
+	// deliberately wanted to know it was inert. It stopped being
+	// defensible when agentgraph-total-convergence-01PMGX01 WP08 put a
+	// compact node in chat_default.yaml — the graph every chat turn
+	// runs — because a chassis with no compaction wired (a test
+	// fixture, a boot where the engine failed to construct) would then
+	// fail every chat turn outright rather than simply not compacting.
+	// "No compactor configured" is the absence of a capability, not a
+	// broken graph, and the honest response is a skip.
 	if env.Compactor == nil {
-		_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
-			"err": "no compactor configured",
-			"at":  "compact.execute",
+		_ = res.Events.AppendKind(env.RunID, node.ID, EventCompactionApplied, map[string]any{
+			"strategy":        a.Strategy,
+			"input_messages":  len(msgs),
+			"output_messages": len(msgs),
+			"skipped":         true,
+			"skip_reason":     "no compactor configured",
 		})
 		res.Outputs["result"] = msgs
-		return res, fmt.Errorf("compact: node %q: no compactor configured", node.ID)
+		return res, nil
 	}
 
+	// TargetTokens: the graph author's explicit budget when they set
+	// one, otherwise zero — which the pipeline reads as "derive the
+	// target from the model's context window and the resolved
+	// threshold" (Pipeline.Run).
+	//
+	// It is emphatically NOT a.MaxTokens. That attr is the node's
+	// *output* cap — how many tokens the model may generate — and the
+	// two are unrelated quantities. Conflating them (which the pre-call
+	// site did until compaction-convergence-01PMDL05 WP02 was folded
+	// into this WP) makes a small output cap of 512-4096 look like a
+	// context budget, so nearly every real conversation reads as
+	// wildly over budget the moment a compactor is actually wired.
+	// compaction_target_test.go pins the separation.
 	target := a.TargetTokenBudget
+	liveTokens := estimateTokens(msgs)
 	co, err := env.Compactor.Compact(ctx, CompactionInput{
-		Site:         CompactionSiteManual,
-		Messages:     msgs,
-		TargetTokens: target,
+		Site:      CompactionSiteManual,
+		RunID:     env.RunID,
+		NodeID:    node.ID,
+		SessionID: env.SessionID,
+		ProjectID: env.ProjectID,
+		Messages:  msgs,
+		// The context-window budget this compaction sizes against —
+		// the denominator for every threshold decision downstream.
+		ContextWindow: resolveContextWindow(env, a.Provider, a.Model),
+		CurrentTokens: liveTokens,
+		TargetTokens:  target,
 	})
 	if err != nil {
 		_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{

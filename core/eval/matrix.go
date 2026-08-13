@@ -7,39 +7,30 @@ import (
 	"time"
 )
 
-// MatrixCase is one cell in the RunMatrix: one (capture, strategySet) pair.
+// MatrixCase is one cell in the RunMatrix: one (capture, baseline) pair.
 type MatrixCase struct {
 	// SessionID is the capture session to replay.
 	SessionID string
 	// Label is a human-readable identifier for this case, used in the
-	// summary table. If empty it defaults to "<SessionID>/<strategy hash>".
+	// summary table. If empty it defaults to SessionID.
 	Label string
-	// Overrides are the strategy overrides to apply for this case. See
-	// ReplayOptions.StrategyOverrides: they are validated, resolved, and
-	// annotated into the replay trace, but — since Diff only compares
-	// assistant-role KindMessage text, which Replay never mutates —
-	// Overrides alone will not move this case's score. Pair Overrides
-	// with a distinct BaselineSessionID below for a case that can
-	// actually regress.
-	Overrides []StrategyOverride
 	// CachedOnly mirrors ReplayOptions.CachedOnly; default true for matrix runs.
 	CachedOnly bool
 
 	// BaselineSessionID is the capture session Diff compares the replay
-	// output against. Empty means "diff against SessionID's own capture" —
-	// today's compaction-only behavior, unchanged: replaying a session and
-	// diffing it against itself trivially scores ~1.0 because Replay never
-	// mutates KindMessage payloads, so the compaction-strategy matrix (which
-	// only ever set SessionID) never regresses.
+	// output against. Empty means "diff against SessionID's own capture",
+	// which scores ~1.0 by construction: a replay re-renders the recorded
+	// assistant messages verbatim (see ReplayOptions), so a self-diff has
+	// nothing to disagree with and such a case can never fail on content.
+	// A case set up that way only proves the capture replays at all.
 	//
-	// The model-profile dimension (versioned-model-profile-01PMDL04 WP03)
-	// is the reason this field exists: a candidate ModelProfile version is
-	// exercised as its own capture session (CandidateSessionID in
-	// ModelProfileSuiteCase, threaded through as SessionID here) and diffed
-	// against a *different*, previously-recorded known-good capture
-	// (BaselineSessionID) — genuinely comparing two distinct transcripts
-	// rather than a session against itself, which is what makes the gate
-	// capable of actually failing.
+	// Pointing this at a *different*, previously-recorded known-good
+	// capture is what gives the matrix a real signal: two distinct
+	// transcripts genuinely compared. That is how the model-profile gate
+	// works — a candidate ModelProfile version is exercised as its own
+	// capture session (CandidateSessionID in ModelProfileSuiteCase,
+	// threaded through as SessionID here) and diffed against the
+	// baseline version's session.
 	BaselineSessionID string
 
 	// ModelProfileID / ModelProfileVersion optionally label this case with
@@ -65,7 +56,7 @@ type MatrixResult struct {
 	DurationMs      int64
 }
 
-// RunMatrix runs a replay for each (capture, strategySet) pair and returns a
+// RunMatrix runs a replay for each (capture, baseline) pair and returns a
 // slice of MatrixResult plus a Markdown summary table.
 //
 // captureDir and runsDir are the eval-captures and eval-runs directories
@@ -91,9 +82,8 @@ func RunMatrix(
 		}
 		start := time.Now()
 		opts := ReplayOptions{
-			StrategyOverrides: mc.Overrides,
-			CachedOnly:        mc.CachedOnly,
-			AllowLive:         !mc.CachedOnly,
+			CachedOnly: mc.CachedOnly,
+			AllowLive:  !mc.CachedOnly,
 		}
 		rr, err := replayer.Replay(ctx, mc.SessionID, opts)
 		elapsed := time.Since(start).Milliseconds()
@@ -114,11 +104,10 @@ func RunMatrix(
 		mr.ResponsesMissed = rr.ResponsesMissed
 
 		// Run diff against the baseline capture. Defaults to the replayed
-		// session's own capture (today's compaction-only behavior); the
-		// model-profile dimension (WP03) sets BaselineSessionID to a
-		// distinct known-good session so the diff is a genuine
-		// candidate-vs-baseline comparison rather than a session against
-		// itself.
+		// session's own capture, which is a self-diff and cannot fail on
+		// content; a case that wants a real candidate-vs-baseline
+		// comparison sets BaselineSessionID to a distinct known-good
+		// session (see MatrixCase).
 		baselineSessionID := mc.SessionID
 		if mc.BaselineSessionID != "" {
 			baselineSessionID = mc.BaselineSessionID

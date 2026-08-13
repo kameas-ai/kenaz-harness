@@ -1,0 +1,130 @@
+# I3 allowlist — callable node kinds not exercised end-to-end by any
+# shipped graph (core/rpc/views/agentgraph/library/*.yaml), activity
+# (core/agentgraph/activities/yaml/*.yaml), or kernel-run fixture
+# (a `// convergence:exercised <kind>` marker — see the "Kernel-run
+# fixtures" section of scripts/ci/check-agentgraph-convergence.sh),
+# after kind-alias resolution.
+#
+# Spec: kitty-specs/agentgraph-total-convergence-01PMGX01/spec.md §1.1, §6 I3.
+# Seeded by WP01 from the empirical state of release/v0.60.0.
+#
+# NOTE on drift from spec §1.1's prose list: the spec's 19-kind list
+# includes `decision` and omits `branch`. Empirically that is backwards,
+# though not for the reason WP01 recorded. wire_gen.go's kindAliases does
+# contain `branch -> decision`, but lookupAlias (core/agentgraph/
+# aliases.go) never applies it: it refuses to rewrite any name that is
+# itself a callable kind, and `branch` is one (the sub-graph spawn
+# primitive). So toolloop_default.yaml's old `kind: branch` node was NOT
+# a decision node — it validated against the branch manifest and the
+# graph failed Validate() outright (campaign finding 2). Phase 2 spells
+# that node `kind: decision`, which is what actually puts `decision` in
+# the exercised set and leaves the real `branch` kind unreferenced.
+#
+# `sleep` and `subagent_dispatch` left this list in Phase 2
+# (`feat(agentgraph): WP02+WP04 — _archetype.tool.yaml + builtin tools
+# as manifest kinds`): both are now exercised end-to-end by the shipped
+# `delegate` activity (core/agentgraph/activities/yaml/delegate.yaml),
+# which the promotion golden test executes through a real kernel.
+#
+# EIGHT kinds left this list in Phase 8 (WP17) when the gate learned to
+# count kernel-run fixtures — the third source spec §6 I3 always named
+# ("shipped graph, activity, OR GOLDEN RUN FIXTURE") and the only one
+# the WP01 gate never implemented:
+#
+#   read_file, memory, read_bash_output, checkpoint, join
+#       Already had real NewKernel()+Run() coverage. Marked, not written.
+#   write_file
+#       NEW test (fs_doctrine_convergence_test.go), which the fsdoctrine
+#       review asked for: WP13 shipped a real-kernel fixture for the read
+#       half and left the write half with direct-Execute() tests, so one
+#       doctrine collapse had asymmetric evidence. It is a two-node graph
+#       because write_file takes its bytes from an input PORT, so a
+#       one-node fixture cannot exercise it at all.
+#   corpus_write, attachment
+#       NEW tests (seam_fanout_test.go). corpus_write's only prior test
+#       asserted "does not error" and never checked that the write
+#       reached the backend.
+#
+# That is deliberately NOT a licence to mark anything. See the
+# anti-launder rules in the script header: the marker must name a real
+# kind, sit in a file containing a real kernel, and still be needed
+# (a marker for a kind shipped YAML already covers is STALE and fails).
+# The rules are grep-level and the script says so; the marker is a
+# reviewed assertion with a mechanical floor under it, which is why each
+# one below sits on the specific test that runs the kind rather than at
+# the top of a file.
+#
+# `router` was added to this file by WP11a and DELETED BY WP11b, the
+# commit that put `kind: router` in chat_default.yaml. It was the one
+# deliberate addition in the campaign and it lasted exactly one commit,
+# which is the shape a split should have: the kind landed reviewable on
+# its own, then the graph that exercises it landed reviewable on its
+# own. Recorded here because the next person tempted to add a line
+# should know the bar it cleared.
+#
+# ─────────────────────────────────────────────────────────────────────
+# THE SEVEN THAT REMAIN. Each carries a reason (WP17 requirement:
+# a line that stays must say why it stays). They fall into three groups.
+#
+# GROUP 1 — BLOCKED ON AN UNWIRED SEAM. Not "nobody got round to it":
+# these kinds cannot be exercised end-to-end because the thing they
+# call does not exist in a running harness.
+#
+#   branch — the sub-graph spawn primitive. Requires a BranchSeam.
+#     There is none: applyEnvDefaults installs nilBranchSeam (every call
+#     returns ErrNoBranchSeam), and core/rpc/builtins_wiring.go declares
+#     `var subagentSeam agentgraph.BranchSeam // nil — seam not yet
+#     wired`, logging `subagent_dispatch_skipped` at boot. A fixture
+#     would be asserting on ErrNoBranchSeam, which is coverage of the
+#     stub, not of the kind.
+#   merge — the other half of the same pair; merges branch results and
+#     needs the same seam. kernel_promotion_golden_test.go's
+#     keepRealKinds comment already records this: branch and merge are
+#     deliberately stubbed there because "their production executors are
+#     themselves stubs that need fork/merge seams to do anything, so
+#     running them for real only injects seam errors".
+#   Both lines clear in the change that wires the branch session
+#     manager. Do not clear them with a fixture against the nil seam.
+branch
+merge
+
+# GROUP 2 — REAL EXECUTOR, NO CALLER. These would run if a graph asked
+# for them; nothing asks.
+#
+#   activity — the node that resolves an activity from the catalog and
+#     embeds its sub-graph. Note the asymmetry that makes this easy to
+#     misread: the shipped ACTIVITIES are exercised (delegate.yaml runs
+#     through the promotion golden test), but they run as graphs in
+#     their own right, not via an `activity` NODE. No shipped graph
+#     contains `kind: activity`.
+#   approval — the human approval gate. Distinct from `ask`, which the
+#     chat graph does use: approval blocks on an explicit approve/reject
+#     decision and no shipped graph has an approval step to gate.
+#   artifact — emits an artifact to an output target. Appears in
+#     kernel_liveness_test.go, but ONLY as a scripted-stub node standing
+#     in for "some node downstream of a decision"; livenessKernel
+#     replaces its executor. Marking it from there would be exactly the
+#     laundering the marker rules forbid.
+#   retry — the bounded re-fire wrapper. Listed in the promotion golden
+#     test's keepRealKinds, but neither shipped graph contains a retry
+#     node, so that entry never fires. The escalation ladder performs a
+#     retry RUNG internally (exec_escalation_ladder.go); that is not the
+#     standalone kind.
+activity
+approval
+artifact
+retry
+
+# GROUP 3 — SUBSUMED, PENDING A DECISION.
+#
+#   escalate. The escalation ladder that WP11c wired into chat_default
+#     performs an escalate RUNG internally — it re-runs the failing
+#     draft through a stronger model itself (exec_escalation_ladder.go).
+#     But the standalone `escalate` KIND is a different thing: a node a
+#     graph author wires by hand, and no shipped graph or activity
+#     references one. Draining this line on the strength of the ladder's
+#     rung would be claiming coverage the YAML does not have, which is
+#     the exact bookkeeping this gate exists to prevent. Whoever gives
+#     `escalate` a real exercise — or concludes the ladder subsumes it
+#     and deletes the kind — deletes this line.
+escalate

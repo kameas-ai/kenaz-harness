@@ -46,7 +46,30 @@ type StreamClosedPayload struct {
 	PartialMessageID   string `json:"partial_message_id,omitempty"`
 	PartialFailureKind string `json:"partial_failure_kind,omitempty"`
 	PartialRecoverable bool   `json:"partial_recoverable,omitempty"`
+
+	// ErrorKind discriminates WHY a terminal close happened, for the
+	// cases where `Message` alone leaves the surface guessing.
+	//
+	// Reason is a transport-level verdict ("backend-error"), and the
+	// chat surface had been rendering every one of them under the same
+	// "Send failed" heading. For a session that is out of context that
+	// heading is simply false — the send succeeded, the user's message
+	// is in the transcript, and the model never got to answer. The user
+	// needs to compact or start a new session, not retry.
+	//
+	// "session_full" is the first value. Add a value here rather than
+	// string-matching Message on the frontend: the copy is a sentence
+	// meant for humans and it will be reworded.
+	ErrorKind string `json:"error_kind,omitempty"`
 }
+
+// StreamClosedErrorKindSessionFull marks a terminal close caused by the
+// conversation exceeding the model's context window with no compaction
+// available — the dial is "off" and the session is over cap, the
+// compaction model is too small to summarise the span that would have
+// to go, or the overflow-recovery budget is spent. All three are the
+// same situation for the user and get the same copy.
+const StreamClosedErrorKindSessionFull = "session_full"
 
 // StreamBridge implements agentgraph.StreamSink by translating each
 // kernel-bound StreamEvent into a corellm.StreamEvent and emitting
@@ -198,16 +221,23 @@ func (b *StreamBridge) EmitClosed(reason, message, finishReason string) {
 	b.EmitClosedPartial(reason, message, finishReason, "", "", false)
 }
 
-// EmitClosedPartial is the WP03 superset of EmitClosed that stamps the
-// resume-flow metadata onto the closed payload. Idempotent — once
-// closed, subsequent EmitClosed* calls are silently dropped. When
-// partialMessageID is empty + partialFailureKind is empty, this
-// behaves identically to the legacy EmitClosed (so the wire shape
-// degrades cleanly when no PartialPersister is wired).
-//
-// long-turn-resilience-01KR3PRS WP03.
-func (b *StreamBridge) EmitClosedPartial(reason, message, finishReason,
-	partialMessageID, partialFailureKind string, partialRecoverable bool) {
+// StreamClosed is the full terminal-close description. It exists so new
+// discriminators can be added without another positional parameter on
+// EmitClosedPartial, whose six-argument signature is already at the
+// limit of what a reader can check at a call site.
+type StreamClosed struct {
+	Reason             string
+	Message            string
+	FinishReason       string
+	PartialMessageID   string
+	PartialFailureKind string
+	PartialRecoverable bool
+	ErrorKind          string
+}
+
+// EmitClosedFull emits a terminal close described by c. EmitClosed and
+// EmitClosedPartial delegate here; idempotency is enforced in one place.
+func (b *StreamBridge) EmitClosedFull(c StreamClosed) {
 	if b == nil || b.broker == nil {
 		return
 	}
@@ -221,6 +251,27 @@ func (b *StreamBridge) EmitClosedPartial(reason, message, finishReason,
 	b.broker.Emit("llm:stream-closed", StreamClosedPayload{
 		SubID:              b.subID,
 		SessionID:          b.sessionID,
+		Reason:             c.Reason,
+		Message:            c.Message,
+		FinishReason:       c.FinishReason,
+		PartialMessageID:   c.PartialMessageID,
+		PartialFailureKind: c.PartialFailureKind,
+		PartialRecoverable: c.PartialRecoverable,
+		ErrorKind:          c.ErrorKind,
+	})
+}
+
+// EmitClosedPartial is the WP03 superset of EmitClosed that stamps the
+// resume-flow metadata onto the closed payload. Idempotent — once
+// closed, subsequent EmitClosed* calls are silently dropped. When
+// partialMessageID is empty + partialFailureKind is empty, this
+// behaves identically to the legacy EmitClosed (so the wire shape
+// degrades cleanly when no PartialPersister is wired).
+//
+// long-turn-resilience-01KR3PRS WP03.
+func (b *StreamBridge) EmitClosedPartial(reason, message, finishReason,
+	partialMessageID, partialFailureKind string, partialRecoverable bool) {
+	b.EmitClosedFull(StreamClosed{
 		Reason:             reason,
 		Message:            message,
 		FinishReason:       finishReason,

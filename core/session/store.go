@@ -102,7 +102,7 @@ type Store interface {
 	// ApplyCompaction inserts the synthetic summary row + flips
 	// compacted_into_id / archived_at on every original row in
 	// originalIDs in a single SQLite transaction. The caller (the
-	// compaction engine via core/compaction/wiring) supplies the summary
+	// compaction engine via core/agentgraph/compaction/wiring) supplies the summary
 	// shape; the Store only sequences the writes atomically.
 	//
 	// summary.SessionID is ignored — the sessionID arg is the
@@ -124,7 +124,7 @@ type Store interface {
 	// sweep covered. Summary rows (compacted_into_id IS NULL) are
 	// excluded by the WHERE clause.
 	//
-	// Wraps the SQL the soft-archive sweep (core/compaction/sweep.go)
+	// Wraps the SQL the soft-archive sweep (core/agentgraph/compaction/session_sweep.go)
 	// drives once per scheduler tick; the in-memory implementation
 	// mirrors the semantics so unit tests can exercise the sweep without
 	// a real DB.

@@ -216,15 +216,11 @@ type LLMConnectorAPI interface {
 	// adapter — the UI then falls back to manual model entry.
 	ListModels(ctx context.Context, kind, plaintextApiKey string) ([]ModelInfo, error)
 
-	// ResolveConfirm completes a pending confirm-each tool call. The
-	// frontend modal calls this with one of the four canonical
-	// decisions ("allow", "deny", "always_allow", "always_deny") to
-	// unblock the toolloop goroutine waiting on the request id.
-	// Unknown ids return a not-pending error; unknown decisions
-	// return a validation error. Safe to call when the confirm-each
-	// feature flag is off — the gateway is wired regardless of the
-	// flag, only the toolloop chooses whether to invoke it.
-	ResolveConfirm(ctx context.Context, requestID, decision string) error
+	// ResolveConfirm was removed here. The confirm-each round trip now
+	// lives on its own view (core/rpc/views/confirm) bound to the
+	// toolloop.ConfirmBus the chat runner parks calls on; the LLM
+	// connector has nothing to do with it.
+	// (confirm-each-enforcement-01PMAG05 WP02)
 
 	// UpdateProviderCredential writes a new plaintext API key for
 	// profileID directly to the OS keychain and zeroes the in-memory

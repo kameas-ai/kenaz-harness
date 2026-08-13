@@ -5,9 +5,9 @@ entrypoints:
   - body_node
 nodes:
   - id: body_node
-    kind: tool
+    kind: transform
     attrs:
-      name: example__noop
+      name: noop
   - id: bad_retry
     kind: retry
     attrs:

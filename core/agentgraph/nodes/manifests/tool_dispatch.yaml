@@ -1,16 +1,45 @@
 schema_version: "1"
-manifest_version: "1.0.0"
+manifest_version: "1.1.0"
 id: tool_dispatch
 extends: compute
 display_name: Tool Dispatch
 description: "Dispatches every tool_use record on the input port through the kernel ToolRegistry. Emits tool_results on the output port. Used inside chat LoopNode bodies to close the model→tool→model cycle."
 executor: agentgraph.ExecToolDispatch
+dispatch: graph
 ports:
   inputs:
     - { name: tool_calls, type: any, required: true }
+    # The upstream model turn's outputs. tool_dispatch reads them to
+    # build `messages` and to pass the assistant turn through to an
+    # outside-loop session_write (passthroughAssistant in
+    # exec_dispatch.go). They were undeclared before
+    # agentgraph-total-convergence-01PMGX01 Phase 2.
+    - { name: response, type: messages }
+    - { name: assistant, type: any }
+    - { name: finish_reason, type: text }
   outputs:
+    # manifest_version 1.1.0 reconciles this list with what
+    # exec_dispatch.go actually emits. Every port below is written by
+    # toolDispatchExecutor.Execute; before this bump the manifest
+    # declared only the first two, so `tool_call_count` — the port
+    # chat_default's agent_loop breaks its loop on — was invisible to
+    # the validator and to every tool that reads the node surface.
     - { name: tool_results, type: any }
     - { name: messages, type: messages }
+    - { name: tool_messages, type: messages }
+    - { name: tool_call_count, type: number }
+    # Pass-through of the upstream assistant turn, so a session_write
+    # placed outside the loop can read the terminal turn off the
+    # LoopNode's flattened outputs.
+    - { name: assistant, type: any }
+    - { name: assistant_text, type: text }
+    - { name: response, type: messages }
+    - { name: finish_reason, type: text }
+    # Doom-loop guard signals (autonomy-recovery-runtime-01PMDL03 WP02).
+    # Emitted only when the (tool, normalized-args) repeat threshold
+    # trips; declared so a controller can wire against them.
+    - { name: should_replan, type: bool }
+    - { name: doom_loop_hits, type: any }
 attrs:
   parallel_dispatch:
     type: bool

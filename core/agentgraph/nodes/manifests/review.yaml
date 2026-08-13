@@ -5,6 +5,7 @@ extends: compute
 display_name: Review
 description: "Verdict-driven re-run of an upstream node, bounded by max_iterations (FR-036)."
 executor: agentgraph.ExecReview
+dispatch: graph
 ports:
   inputs:
     - { name: draft, type: any, required: true }

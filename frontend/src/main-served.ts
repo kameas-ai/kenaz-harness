@@ -110,6 +110,18 @@ const router = createRouter({
       component: () => import('@/views/agentgraph/RunView.vue'),
     },
     {
+      // The executed run, rendered as a graph
+      // (agentgraph-total-convergence-01PMGX01 WP12). Reuses the
+      // editor: a materialized conversation and an authored graph are
+      // the same artifact, so they get the same viewer — the spec comes
+      // back with scope 'materialized', which puts the editor in
+      // read-only mode. Chat turns are addressable here too; their run
+      // id is the chat stream's sub id.
+      path: '/agentgraph/run/:runId/graph',
+      name: 'graph-materialized',
+      component: () => import('@/views/agentgraph/GraphEditor.vue'),
+    },
+    {
       path: '/search',
       name: 'search',
       component: () => import('@/views/sessions/SessionsView.vue'),

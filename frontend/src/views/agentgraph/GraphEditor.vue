@@ -39,15 +39,44 @@ nodes:
 `;
 
 const id = computed(() => String(route.params.id ?? ''));
+// Set on the /agentgraph/run/:runId/graph route: this editor instance is
+// showing an EXECUTED run projected back into a graph, not a library
+// file (agentgraph-total-convergence-01PMGX01 WP12).
+const materializedRunId = computed(() => String(route.params.runId ?? ''));
 
 const yaml = ref('');
-const scope = ref<'library' | 'user'>('user');
+const scope = ref<'library' | 'user' | 'materialized'>('user');
 const editingId = ref('');
 const error = ref<string | null>(null);
 const validation = ref<GraphValidationResult | null>(null);
 const saved = ref(false);
 
-const readOnly = computed(() => scope.value === 'library');
+// Anything that is not a user graph is read-only: bundled library
+// graphs because they ship with the binary, materialized runs because
+// they are records of something that already happened.
+const readOnly = computed(() => scope.value !== 'user');
+const isMaterialized = computed(() => scope.value === 'materialized');
+/**
+ * A materialized run whose resolved spec was no longer available is
+ * projected against the library file instead, and the backend stamps
+ * `spec_provenance: library_fallback` on the graph
+ * (agentgraph-total-convergence-01PMGX01 WP12, review F2). The topology
+ * shown may then differ from the topology that ran, so it is badged
+ * rather than served as if it were faithful.
+ */
+/*
+ * LATENT HAZARD, routed to Phase 8 (WP12 review N3): the node palette
+ * and the attribute editor mutate `yaml` directly (appendStubNode /
+ * onPaletteSelect) without consulting `readOnly`. Nothing can be saved
+ * from a read-only buffer — `save()` returns early and no Save control
+ * renders — so the worst case today is a viewer editing a scratch copy
+ * of a materialized run and losing it on navigation. Gating the palette
+ * itself is the real fix and it touches the whole three-pane editor, so
+ * it is not smuggled into this WP.
+ */
+const isDegraded = computed(() =>
+  /^spec_provenance:\s*"?library_fallback"?\s*$/m.test(yaml.value),
+);
 const canSave = computed(() => !readOnly.value && !!yaml.value.trim());
 
 // ── lightweight YAML "node block" parser ──────────────────────────────
@@ -330,6 +359,17 @@ async function load() {
   error.value = null;
   validation.value = null;
   saved.value = false;
+  if (materializedRunId.value) {
+    try {
+      const spec = await client.graph.materializeRun(materializedRunId.value);
+      yaml.value = spec.yaml;
+      scope.value = spec.scope;
+      editingId.value = spec.id;
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : String(err);
+    }
+    return;
+  }
   if (id.value === '__new__') {
     yaml.value = newGraphTemplate;
     scope.value = 'user';
@@ -397,7 +437,7 @@ onMounted(() => {
 });
 
 watch(
-  () => id.value,
+  () => [id.value, materializedRunId.value],
   () => {
     void load();
   },
@@ -428,8 +468,18 @@ defineExpose({ load, validate, save, parseNodes, appendStubNode });
     <CanvasHead
       number="12"
       section="GRAPHS"
-      :title="readOnly ? 'View graph (read-only)' : 'Edit graph'"
-      :subtitle="`Editing ${editingId || 'new graph'}`"
+      :title="
+        isMaterialized
+          ? 'Run as graph (read-only)'
+          : readOnly
+            ? 'View graph (read-only)'
+            : 'Edit graph'
+      "
+      :subtitle="
+        isMaterialized
+          ? `Run ${materializedRunId} — every action the run took, as nodes`
+          : `Editing ${editingId || 'new graph'}`
+      "
     >
       <template #trailing>
         <div class="flex gap-2">
@@ -479,11 +529,33 @@ defineExpose({ load, validate, save, parseNodes, appendStubNode });
       </div>
 
       <div
-        v-if="readOnly"
+        v-if="isMaterialized"
+        class="rounded-md border border-border-muted bg-surface-1 px-3 py-2 font-ui text-[12px] text-ink-muted"
+        data-testid="editor-materialized-banner"
+      >
+        Materialized run — read-only. This graph was projected from the run's
+        event log: one node per action taken, the agent loop unrolled per
+        iteration, and each tool call its own node. Tool arguments are
+        summarised and errors are classified — neither is reproduced. Open the
+        run's trace for the full detail.
+      </div>
+      <div
+        v-else-if="readOnly"
         class="rounded-md border border-border-muted bg-surface-1 px-3 py-2 font-ui text-[12px] text-ink-muted"
         data-testid="editor-readonly-banner"
       >
         Library graph — read-only. Copy + change the id to save your own.
+      </div>
+      <div
+        v-if="isDegraded"
+        class="rounded-md border border-signal-warn bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-warn"
+        data-testid="editor-materialized-degraded"
+        role="status"
+      >
+        Degraded projection — the resolved spec this run executed was no longer
+        available, so it was projected against the library graph instead.
+        Per-run dial overrides and any gate rewrite are unrecoverable: the
+        topology shown may differ from the one that ran.
       </div>
 
       <div

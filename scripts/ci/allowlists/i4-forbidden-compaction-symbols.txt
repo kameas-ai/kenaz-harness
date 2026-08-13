@@ -1,0 +1,23 @@
+# I4 allowlist — forbidden-symbol check for exactly-one-compaction-entry-point
+# (kitty-specs/agentgraph-total-convergence-01PMGX01/spec.md §1.2, §6 I4).
+#
+# EMPTY, AND THAT IS THE POINT. `SuppressAutomaticCompaction` and
+# `runPreSendCompaction` were the two symptoms of the harness shipping
+# two compaction systems: the FR-041 `env.Compactor` pipeline was built,
+# wired, and then switched off in favour of a second, pre-kernel path,
+# and a boolean on the Env existed solely to stop the two firing on the
+# same turn.
+#
+# WP08 deleted both. Compaction is now a `compact` node in
+# chat_default.yaml between history_read and the agent loop, dispatching
+# through the one pipeline, and the five-tier dial is an ordinary
+# strategy behind it (StrategySessionRewrite). There is one entry point,
+# so there is nothing left to allow.
+#
+# Do not add a line here. A symbol appearing in this file again means a
+# second compaction path was reintroduced — including in a comment,
+# since the gate greps non-test .go lines and does not care whether the
+# text is code.
+#
+# Format: one bare symbol per line (grep -w matched against non-test .go
+# files under core/).

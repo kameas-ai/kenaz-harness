@@ -13,6 +13,7 @@ import (
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 // recordingPermResolver captures Resolve calls and returns a scripted verdict.
@@ -71,13 +72,13 @@ func knobsFromTier(t autonomy.Tier) autonomy.ResolvedKnobs {
 func TestKernelToolAdapter_AutonomousSkipsPrompt(t *testing.T) {
 	t.Parallel()
 
-	pool := &staticToolPool{server: "myserver", tool: "my_tool"}
+	pool := &staticToolPool{server: "myserver", tool: "echo"}
 	// Resolver returns "confirm_each" (what would trigger an interactive
 	// prompt under the default posture).
 	perms := &recordingPermResolver{
 		verdict: PermVerdict{
 			Server: "myserver",
-			Tool:   "my_tool",
+			Tool:   "echo",
 			Policy: "confirm_each",
 		},
 	}
@@ -89,15 +90,27 @@ func TestKernelToolAdapter_AutonomousSkipsPrompt(t *testing.T) {
 			knobs.AutoApproveFamilies.Sorted())
 	}
 
-	adapter := newKernelToolAdapter(pool, perms, "sess-auto")
-	adapter.withAutonomy(func() autonomy.ResolvedKnobs { return knobs })
+	// A live bus that records whether the user was asked. Under the
+	// autonomous posture it must never fire.
+	prompted := false
+	var bus *toolloop.ConfirmBus
+	bus = toolloop.NewConfirmBus(func(req toolloop.ConfirmRequest) {
+		prompted = true
+		_ = bus.Resolve(req.SessionID, req.CallID, toolloop.ConfirmDecision{Approved: false})
+	})
 
-	result, err := adapter.Call(context.Background(), makeCall("myserver", "my_tool"))
+	adapter := newKernelToolAdapter(pool, perms, "sess-auto").withConfirm(bus)
+	adapter.withAutonomy(func(context.Context, string) autonomy.ResolvedKnobs { return knobs })
+
+	result, err := adapter.Call(context.Background(), makeCall("myserver", "echo"))
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
 	if result.IsError {
 		t.Fatalf("result.IsError = true; content = %q (want successful call)", result.Content)
+	}
+	if prompted {
+		t.Fatal("autonomous posture prompted the user — AutoApproveFamilies must skip the confirmation")
 	}
 
 	// The resolver was still called (we still check for explicit deny),
@@ -108,20 +121,23 @@ func TestKernelToolAdapter_AutonomousSkipsPrompt(t *testing.T) {
 }
 
 // TestKernelToolAdapter_StrictDoesNotSkipPrompt verifies that when the
-// resolved knobs are from TierStrict (empty AutoApproveFamilies), the
-// adapter does NOT bypass the resolver and the "confirm_each" verdict
-// follows the normal resolver path (both branches run through perms).
+// resolved knobs are from TierStrict (empty AutoApproveFamilies), a
+// "confirm_each" verdict really does prompt.
+//
+// This test used to script an "auto_allow" verdict, so the strict path
+// never exercised confirm_each at all and the two tiers were
+// interchangeable (spec §1.3). It now scripts confirm_each and fails if
+// the prompt is skipped — swapping the tiers between this test and
+// TestKernelToolAdapter_AutonomousSkipsPrompt now breaks both.
 func TestKernelToolAdapter_StrictDoesNotSkipPrompt(t *testing.T) {
 	t.Parallel()
 
-	pool := &staticToolPool{server: "myserver", tool: "my_tool"}
-	// Resolver returns "auto_allow" — strict tier still runs through
-	// the resolver so it will apply any explicit auto-allow grants.
+	pool := &staticToolPool{server: "myserver", tool: "echo"}
 	perms := &recordingPermResolver{
 		verdict: PermVerdict{
 			Server: "myserver",
-			Tool:   "my_tool",
-			Policy: "auto_allow",
+			Tool:   "echo",
+			Policy: "confirm_each",
 		},
 	}
 
@@ -132,15 +148,25 @@ func TestKernelToolAdapter_StrictDoesNotSkipPrompt(t *testing.T) {
 			knobs.AutoApproveFamilies.Sorted())
 	}
 
-	adapter := newKernelToolAdapter(pool, perms, "sess-strict")
-	adapter.withAutonomy(func() autonomy.ResolvedKnobs { return knobs })
+	prompted := false
+	var bus *toolloop.ConfirmBus
+	bus = toolloop.NewConfirmBus(func(req toolloop.ConfirmRequest) {
+		prompted = true
+		_ = bus.Resolve(req.SessionID, req.CallID, toolloop.ConfirmDecision{Approved: true})
+	})
 
-	result, err := adapter.Call(context.Background(), makeCall("myserver", "my_tool"))
+	adapter := newKernelToolAdapter(pool, perms, "sess-strict").withConfirm(bus)
+	adapter.withAutonomy(func(context.Context, string) autonomy.ResolvedKnobs { return knobs })
+
+	result, err := adapter.Call(context.Background(), makeCall("myserver", "echo"))
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
+	if !prompted {
+		t.Fatal("strict posture skipped the confirmation prompt")
+	}
 	if result.IsError {
-		t.Fatalf("result.IsError = true; content = %q", result.Content)
+		t.Fatalf("result.IsError = true after approval; content = %q", result.Content)
 	}
 	// Resolver was consulted (skipPrompt=false path).
 	if len(perms.calls) != 1 {
@@ -170,7 +196,7 @@ func TestKernelToolAdapter_DenyRemainsCedarFloor(t *testing.T) {
 	knobs := knobsFromTier(autonomy.TierAutonomous)
 
 	adapter := newKernelToolAdapter(pool, perms, "sess-auto-deny")
-	adapter.withAutonomy(func() autonomy.ResolvedKnobs { return knobs })
+	adapter.withAutonomy(func(context.Context, string) autonomy.ResolvedKnobs { return knobs })
 
 	result, err := adapter.Call(context.Background(), makeCall("myserver", "dangerous_tool"))
 	if err != nil {

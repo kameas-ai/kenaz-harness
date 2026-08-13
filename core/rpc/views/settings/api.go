@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
-	"github.com/kameas-ai/kenaz-harness/core/compaction"
+	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
 )
 
 // Settings is the persisted UI state shape (plan §5.5). schemaVersion
@@ -117,7 +117,7 @@ type Settings struct {
 	// CompactionModel is the provider+model used for the summarisation
 	// call. Empty == "use the session's active model" (the chained
 	// default the chat runner falls back to when this is unset). The
-	// wire shape mirrors core/compaction.ProviderProfileRef but is
+	// wire shape mirrors core/agentgraph/compaction.ProviderProfileRef but is
 	// declared locally here so settings doesn't take a dependency on
 	// the engine's internal types beyond the policy constants.
 	CompactionModel ProviderProfileRef `json:"compactionModel,omitempty"`
@@ -300,6 +300,31 @@ type Settings struct {
 	// without user intervention on a fresh install. Read via the
 	// MCPAutoRestart() accessor; never read directly.
 	MCPAutoRestartDisabled bool `json:"mcpAutoRestartDisabled,omitempty"`
+
+	// AgenticTurnRouting is the LAUNCH GATE for the routed chat turn
+	// (agentgraph-total-convergence-01PMGX01 WP11b; design in
+	// agentic-turn-routing-01PMAG01 §3.6).
+	//
+	// On: chat_default runs with a `router` node in the agent loop and
+	// a `review` exit gate between the loop and the history writer, and
+	// the kernel arms TaskState on success paths so the gate has a goal
+	// to check against. Off (the default, and the zero value):
+	// agentgraph.GateAgenticTurnRouting strips both nodes back out and
+	// the graph traverses exactly as it did before the rewrite.
+	//
+	// WHY IT DEFAULTS OFF, when nothing else in this campaign does.
+	// chat_default.yaml was rewritten IN PLACE — §3.6's rollout
+	// decision — and an in-place rewrite of the graph every chat turn
+	// runs has no fallback otherwise. This flag is the
+	// revert-without-redeploy lever for that, which is a different
+	// thing from shipping a feature switched off: the work is complete
+	// and both positions are pinned by golden traces. Flip it after a
+	// dev-channel soak.
+	//
+	// Read at graph-load time, per StartStream (core/rpc/api.go's
+	// GraphLoader) — read-at-consumption, not a boot seed, so moving it
+	// takes effect on the next turn rather than the next launch.
+	AgenticTurnRouting bool `json:"agenticTurnRouting,omitempty"`
 
 	// AutoTitleDisabled is the inverted persisted bit for the
 	// session auto-titling feature (p0-wiring-fixes-3TVMG0MX WP05).
@@ -560,7 +585,7 @@ type Settings struct {
 }
 
 // ProviderProfileRef is the wire shape that identifies a provider+model
-// pair. Mirrors core/compaction.ProviderProfileRef exactly — the engine
+// pair. Mirrors core/agentgraph/compaction.ProviderProfileRef exactly — the engine
 // declares its own copy to avoid depending on this view package; if the
 // llm package ever exports a canonical ProviderProfileRef, both copies
 // can be replaced with a type alias.
@@ -738,15 +763,15 @@ func (s Settings) EffectiveReasoningBudgetTokens() int {
 
 // EffectiveCompactionAggressiveness returns the locked tier enum the
 // chat runner / engine consume. Empty / unknown persisted values
-// resolve to the documented default ("balanced" via compaction.Tier's
-// own fallback). Returning compaction.CompactionAggressiveness directly
+// resolve to the documented default ("balanced" via compactionpolicy.Tier's
+// own fallback). Returning compactionpolicy.CompactionAggressiveness directly
 // keeps the call site one type-cast lighter than going through the raw
-// string and lets compaction.Tier's switch handle unknown values.
-func (s Settings) EffectiveCompactionAggressiveness() compaction.CompactionAggressiveness {
+// string and lets compactionpolicy.Tier's switch handle unknown values.
+func (s Settings) EffectiveCompactionAggressiveness() compactionpolicy.CompactionAggressiveness {
 	if s.CompactionAggressiveness == "" {
-		return compaction.AggressivenessBalanced
+		return compactionpolicy.AggressivenessBalanced
 	}
-	return compaction.CompactionAggressiveness(s.CompactionAggressiveness)
+	return compactionpolicy.CompactionAggressiveness(s.CompactionAggressiveness)
 }
 
 // EffectiveCompactionArchiveDays returns the user-tuned retention or

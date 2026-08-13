@@ -5,6 +5,7 @@ extends: write
 display_name: Corpus Write
 description: "Ingests a source path into a registered corpus (FR-054)."
 executor: agentgraph.ExecCorpusWrite
+dispatch: graph
 ports:
   inputs:
     - { name: in, type: any }

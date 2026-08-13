@@ -116,9 +116,8 @@ fi
 # `wails generate module` requires the Wails toolchain (CGO + macOS/Windows
 # SDK for the GUI layer) which is NOT available on the self-hosted kameas-ci-*
 # ARM64 pool. Instead we gate drift via a committed SHA-256 hash of the
-# binding-source files (core/rpc/bindings.go + core/rpc/bindings_*.go).
-# When any of those source files change without a corresponding wailsjs regen
-# the stored hash drifts and CI catches it.
+# binding SURFACE. When it changes without a corresponding wailsjs regen the
+# stored hash drifts and CI catches it.
 #
 # To update the hash (after running `wails generate module` locally and
 # committing the regenerated frontend/wailsjs/ files):
@@ -127,6 +126,50 @@ fi
 #   git commit -m "chore(frontend): update wailsjs binding source hash"
 #
 # (p0-wiring-fixes-3TVMG0MX WP09)
+#
+# NOTE on the 01PMGX01 WP17 baseline bump: the committed hash was
+# recomputed in that commit because the INPUT DEFINITION widened (see
+# below), not because anything was regenerated. frontend/wailsjs/ is
+# byte-identical across that change.
+#
+# ---- WHAT "SURFACE" MEANS, AND WHY IT IS NOT JUST bindings.go ----
+#
+# Until 01PMGX01 WP17 the hash input was ONLY core/rpc/bindings.go (plus any
+# bindings_*.go). That is the method surface — the names and signatures. It is
+# not what `wails generate module` reads.
+#
+# The generator also walks the TYPES those signatures mention and emits one
+# TypeScript class per struct into frontend/wailsjs/go/models.ts (57 namespaces
+# at time of writing). So editing a bound struct in its own package changed
+# models.ts and did NOT change bindings.go — the hash held, CI passed, and the
+# committed models.ts silently went stale. That is exactly how
+# `elicitation.Question` drifted: the struct lives in core/elicitation, nowhere
+# near core/rpc/bindings.go.
+#
+# The hash input is therefore bindings.go + bindings_*.go PLUS the declaration
+# block of every `pkg.Type` named in a Bindings method signature, resolved
+# through bindings.go's own import block. Precision is deliberate: we hash the
+# `type X struct { ... }` BLOCK, not the whole file it lives in, so adding an
+# unexported helper next to a bound type does not flip the hash. A gate that
+# cries wolf gets `--update-wailsjs-hash` run reflexively, which is worse than
+# no gate.
+#
+# LIMITS, stated so nobody mistakes this for completeness:
+#
+#   1. ONE LEVEL DEEP. A struct nested inside a bound type, declared in a
+#      DIFFERENT file, is not followed. In practice nested types usually sit
+#      beside their parent and are picked up by the same block scan, but that
+#      is a tendency, not a guarantee.
+#   2. Text-level, not type-checked. It matches `type <Name> ` at column 0 in
+#      the package directory named by the import alias. A type declared inside
+#      a function, or via a type alias chain, is missed.
+#   3. Only structs reachable from a `func (b *Bindings)` signature line.
+#      Types reached exclusively through an interface's method set are not.
+#
+# The real fix is running the generator in CI, which needs a self-hosted Linux
+# image with the Wails toolchain (tracked in CLAUDE.md's runner-policy notes).
+# Until that exists this is a strictly better approximation than hashing the
+# method list alone, and its blind spots are the three above.
 
 WAILSJS_HASH_FILE="${REPO_ROOT}/scripts/ci/wailsjs-bindings.sha256"
 WAILSJS_SOURCES="${REPO_ROOT}/core/rpc/bindings.go"
@@ -139,6 +182,81 @@ while IFS= read -r f; do
   [[ -f "${f}" ]] && WAILSJS_SOURCES="${WAILSJS_SOURCES} ${f}"
 done < <(LC_ALL=C ls -1 "${REPO_ROOT}"/core/rpc/bindings_*.go 2>/dev/null | LC_ALL=C sort)
 
+# ---- bound-type declaration blocks (see "WHAT SURFACE MEANS" above) ----
+#
+# Driven FROM the committed models.ts, not from bindings.go's imports.
+# models.ts is the generator's own record of every type it emitted:
+#
+#   export namespace elicitation {
+#     export class Question { ... }
+#
+# So for each (namespace, class) pair we locate package directories whose
+# basename is the namespace and extract that package's `type <Class> ...`
+# declaration block. Every type the generator actually emitted is covered,
+# at any nesting depth, without parsing import aliases — which is what
+# matters, since the drift that motivated this
+# (`elicitation.Question`, reached only as a FIELD of a bound type) is
+# invisible to a one-level walk of bindings.go's signatures.
+#
+# Ambiguous basenames (e.g. `mcp` = core/mcp and core/rpc/views/mcp) are
+# resolved by including the block from every matching directory. Slightly
+# over-inclusive, fully deterministic.
+#
+# Everything is LC_ALL=C sorted so the digest is byte-identical on macOS
+# and on the Linux ARM64 CI pool.
+WAILSJS_TYPES_FILE="$(mktemp)"
+trap 'rm -f "${WAILSJS_TYPES_FILE}"' EXIT
+
+WAILSJS_MODELS="${REPO_ROOT}/frontend/wailsjs/go/models.ts"
+
+_wailsjs_collect_types() {
+  [[ -f "${WAILSJS_MODELS}" ]] || return 0
+
+  local pkgindex
+  pkgindex="$(mktemp)"
+  # shellcheck disable=SC2064
+  trap "rm -f '${pkgindex}'" RETURN
+
+  # basename -> directory index over the Go tree (one line per package dir
+  # that contains at least one non-test .go file).
+  while IFS= read -r d; do
+    echo "${d##*/} ${d}"
+  done < <(LC_ALL=C find "${REPO_ROOT}/core" "${REPO_ROOT}/cmd" -type d 2>/dev/null | LC_ALL=C sort) \
+    > "${pkgindex}"
+
+  # (namespace, class) pairs, in models.ts order, normalised and sorted.
+  local ns cls line
+  ns=""
+  while IFS= read -r line; do
+    case "${line}" in
+      "export namespace "*)
+        ns=$(printf '%s' "${line}" | sed -E 's/^export namespace[[:space:]]+([A-Za-z0-9_]+).*/\1/')
+        ;;
+      *"export class "*)
+        [[ -z "${ns}" ]] && continue
+        cls=$(printf '%s' "${line}" | sed -E 's/.*export class[[:space:]]+([A-Za-z0-9_]+).*/\1/')
+        echo "${ns} ${cls}"
+        ;;
+    esac
+  done < "${WAILSJS_MODELS}" | LC_ALL=C sort -u | while read -r ns cls; do
+    [[ -z "${ns}" || -z "${cls}" ]] && continue
+    while IFS= read -r dir; do
+      [[ -d "${dir}" ]] || continue
+      while IFS= read -r gofile; do
+        # The declaration block for `type <cls> ...`: from the header line
+        # to the closing brace at column 0, or the header line alone for a
+        # single-line defined type / alias.
+        awk -v t="${cls}" '
+          index($0, "type " t " ") == 1 { inblock = 1; print; if ($0 !~ /\{[ \t]*$/) inblock = 0; next }
+          inblock { print; if ($0 == "}") inblock = 0 }
+        ' "${gofile}"
+      done < <(LC_ALL=C find "${dir}" -maxdepth 1 -name '*.go' ! -name '*_test.go' 2>/dev/null | LC_ALL=C sort)
+    done < <(awk -v n="${ns}" '$1==n {print $2}' "${pkgindex}" | LC_ALL=C sort)
+  done
+}
+
+_wailsjs_collect_types > "${WAILSJS_TYPES_FILE}"
+
 # Portable SHA-256: self-hosted Linux runners ship `sha256sum`; macOS dev boxes
 # ship `shasum`. Both emit the identical SHA-256 digest, so the committed hash
 # stays valid across platforms. (shasum-only broke CI on the Linux ARM64 pool.)
@@ -149,7 +267,7 @@ else
 fi
 
 if [[ "${1:-}" == "--update-wailsjs-hash" ]]; then
-  COMPUTED=$(cat ${WAILSJS_SOURCES} | _wailsjs_sha)
+  COMPUTED=$(cat ${WAILSJS_SOURCES} "${WAILSJS_TYPES_FILE}" | _wailsjs_sha)
   echo "${COMPUTED}" > "${WAILSJS_HASH_FILE}"
   echo "check-codegen: wailsjs binding source hash updated to ${COMPUTED}"
   echo "check-codegen: OK — generated files match"
@@ -158,15 +276,24 @@ fi
 
 if [[ -f "${WAILSJS_HASH_FILE}" ]]; then
   COMMITTED_HASH=$(cat "${WAILSJS_HASH_FILE}")
-  CURRENT_HASH=$(cat ${WAILSJS_SOURCES} | _wailsjs_sha)
+  CURRENT_HASH=$(cat ${WAILSJS_SOURCES} "${WAILSJS_TYPES_FILE}" | _wailsjs_sha)
   if [[ "${COMMITTED_HASH}" != "${CURRENT_HASH}" ]]; then
     cat >&2 <<EOF
 
 check-codegen: WAILSJS DRIFT DETECTED.
 
-The binding source (core/rpc/bindings.go) has changed since the last
-time the wailsjs files were regenerated. The committed files under
-frontend/wailsjs/go/rpc/Bindings.{js,d.ts} and
+The binding SURFACE has changed since the last time the wailsjs files
+were regenerated. That means either:
+
+  - a Bindings method was added/removed/re-signed
+    (core/rpc/bindings.go, core/rpc/bindings_*.go), or
+  - a BOUND TYPE's declaration changed — any struct that
+    frontend/wailsjs/go/models.ts emits a class for, wherever it lives.
+    The second case is the one that used to slip through: the type can
+    sit far from core/rpc (elicitation.Question is in core/elicitation)
+    and changing it silently staled models.ts.
+
+The committed files under frontend/wailsjs/go/rpc/Bindings.{js,d.ts} and
 frontend/wailsjs/go/models.ts may be stale.
 
 Fix:

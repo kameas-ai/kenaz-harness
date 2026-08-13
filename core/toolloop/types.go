@@ -26,8 +26,8 @@ type MCPPool interface {
 	Call(ctx context.Context, server, tool string, args json.RawMessage) (json.RawMessage, error)
 }
 
-// Tool is the loop-internal projection of mcp.Tool — only the fields
-// the resolver needs. (Pre-cutover it was the loop's projection;
+// Tool is this package's projection of mcp.Tool — only the fields the
+// resolver needs. (Pre-cutover it was the chassis loop's projection;
 // post-cutover the chassis discoverer + chat runner adapter consume
 // the same shape so tool catalog assembly stays uniform.)
 type Tool struct {

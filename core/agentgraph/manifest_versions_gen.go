@@ -48,11 +48,11 @@ const (
 	// AskManifestVersion is the behavior-contract semver for `kind: ask`.
 	// Bump this in the manifest's `manifest_version:` field when any
 	// behavior-affecting field changes (ports, attrs, budget).
-	AskManifestVersion = "1.0.0"
+	AskManifestVersion = "1.1.0"
 
 	// AskManifestFingerprint is the sha256 of the behavior-affecting
 	// subset of `kind: ask` at the time of last codegen.
-	AskManifestFingerprint = "1ab658ef402aa19e09cf14c50b56b23c4fa586c66c89e9688c1aabae6870baf8"
+	AskManifestFingerprint = "3d13a19f761249b1e61257404c8a5aaf4c6809e6965a0f157014b5f78d4ba9bf"
 
 	// AttachmentManifestVersion is the behavior-contract semver for `kind: attachment`.
 	// Bump this in the manifest's `manifest_version:` field when any
@@ -252,6 +252,15 @@ const (
 	// subset of `kind: review` at the time of last codegen.
 	ReviewManifestFingerprint = "732156a7122bfb0053eadb055ec583230f9f2489e7af09de8dedaebfcbac6f59"
 
+	// RouterManifestVersion is the behavior-contract semver for `kind: router`.
+	// Bump this in the manifest's `manifest_version:` field when any
+	// behavior-affecting field changes (ports, attrs, budget).
+	RouterManifestVersion = "1.0.0"
+
+	// RouterManifestFingerprint is the sha256 of the behavior-affecting
+	// subset of `kind: router` at the time of last codegen.
+	RouterManifestFingerprint = "462fa4a2be5939229b51946f854f3fd81ef66dc8599798618f4cfd15edf31608"
+
 	// SessionWriteManifestVersion is the behavior-contract semver for `kind: session_write`.
 	// Bump this in the manifest's `manifest_version:` field when any
 	// behavior-affecting field changes (ports, attrs, budget).
@@ -264,38 +273,29 @@ const (
 	// SleepManifestVersion is the behavior-contract semver for `kind: sleep`.
 	// Bump this in the manifest's `manifest_version:` field when any
 	// behavior-affecting field changes (ports, attrs, budget).
-	SleepManifestVersion = "1.0.0"
+	SleepManifestVersion = "2.0.0"
 
 	// SleepManifestFingerprint is the sha256 of the behavior-affecting
 	// subset of `kind: sleep` at the time of last codegen.
-	SleepManifestFingerprint = "25bdeda8fedd3f09762bd08000e79e7f3ce7779095e0e9bbfdd5a230d4594668"
+	SleepManifestFingerprint = "56aba9b8f556d376c1491faaa32d31874eefd8ca5c00768f45c04d3384e1ed91"
 
 	// SubagentDispatchManifestVersion is the behavior-contract semver for `kind: subagent_dispatch`.
 	// Bump this in the manifest's `manifest_version:` field when any
 	// behavior-affecting field changes (ports, attrs, budget).
-	SubagentDispatchManifestVersion = "1.0.0"
+	SubagentDispatchManifestVersion = "2.0.0"
 
 	// SubagentDispatchManifestFingerprint is the sha256 of the behavior-affecting
 	// subset of `kind: subagent_dispatch` at the time of last codegen.
-	SubagentDispatchManifestFingerprint = "9fe5268825a7e13803c67ae41fed8c8772ab24ff3b77b375afc32dbe905dba54"
-
-	// ToolManifestVersion is the behavior-contract semver for `kind: tool`.
-	// Bump this in the manifest's `manifest_version:` field when any
-	// behavior-affecting field changes (ports, attrs, budget).
-	ToolManifestVersion = "1.0.0"
-
-	// ToolManifestFingerprint is the sha256 of the behavior-affecting
-	// subset of `kind: tool` at the time of last codegen.
-	ToolManifestFingerprint = "6f9afff3678d82e94df4d153ecc89e5013618c3982e1d21cb1345737fc5771a1"
+	SubagentDispatchManifestFingerprint = "ee52dfe0e5f479314874f0005b6a97297dec34af99c1da40cca94103643ba7bc"
 
 	// ToolDispatchManifestVersion is the behavior-contract semver for `kind: tool_dispatch`.
 	// Bump this in the manifest's `manifest_version:` field when any
 	// behavior-affecting field changes (ports, attrs, budget).
-	ToolDispatchManifestVersion = "1.0.0"
+	ToolDispatchManifestVersion = "1.1.0"
 
 	// ToolDispatchManifestFingerprint is the sha256 of the behavior-affecting
 	// subset of `kind: tool_dispatch` at the time of last codegen.
-	ToolDispatchManifestFingerprint = "96f930e3d83024600dea2135bbe86bfb420f93f71ac4444fc9bced20aebaa4a2"
+	ToolDispatchManifestFingerprint = "7eeca588448b0174c213fc95dabcab4af59f5b1f766428c084cfc5ec03a4875a"
 
 	// TraceWriteManifestVersion is the behavior-contract semver for `kind: trace_write`.
 	// Bump this in the manifest's `manifest_version:` field when any
@@ -355,10 +355,10 @@ var allGeneratedManifestVersions = map[string]string{
 	"reflect":           ReflectManifestVersion,
 	"retry":             RetryManifestVersion,
 	"review":            ReviewManifestVersion,
+	"router":            RouterManifestVersion,
 	"session_write":     SessionWriteManifestVersion,
 	"sleep":             SleepManifestVersion,
 	"subagent_dispatch": SubagentDispatchManifestVersion,
-	"tool":              ToolManifestVersion,
 	"tool_dispatch":     ToolDispatchManifestVersion,
 	"trace_write":       TraceWriteManifestVersion,
 	"transform":         TransformManifestVersion,

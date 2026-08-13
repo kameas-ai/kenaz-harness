@@ -16,6 +16,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/llm/fallback"
 	"github.com/kameas-ai/kenaz-harness/core/llm/retry"
 	artview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
+	"github.com/kameas-ai/kenaz-harness/core/wiring/knobcoverage"
 )
 
 // LLMProviderAdapter satisfies the agentgraph.LLMProvider seam by
@@ -101,6 +102,11 @@ type LLMProviderAdapter struct {
 	// when no autonomy provider is wired (test / boot paths).
 	// (autonomy-knobs-live-01PMAG02 WP06)
 	recapStyle func() autonomy.RecapMode
+
+	// askOnAmbiguity returns the resolved autonomy askOnAmbiguity knob,
+	// or is nil when no autonomy provider is wired (test / boot paths).
+	// (autonomy-knobs-live-01PMAG02 WP02)
+	askOnAmbiguity func() autonomy.AskMode
 }
 
 // NewLLMProviderAdapter constructs an adapter pinned to a specific
@@ -185,6 +191,12 @@ func (a *LLMProviderAdapter) WithRecapStyle(fn func() autonomy.RecapMode) *LLMPr
 	return a
 }
 
+// autonomy-knobs-live-01PMAG02 WP07: declare buildRecapBlock as the
+// runtime consumer of recapStyle.
+func init() {
+	knobcoverage.Register[autonomy.ResolvedKnobs]("RecapStyle", "chat.LLMProviderAdapter.buildRecapBlock")
+}
+
 // buildRecapBlock renders the end-of-turn recap instruction for the
 // active recapStyle, or "" when unset.
 //
@@ -203,6 +215,45 @@ func (a *LLMProviderAdapter) buildRecapBlock() string {
 		return "When you finish a multi-step task, close with a one-or-two sentence recap of what you did."
 	case autonomy.RecapFull:
 		return "When you finish a multi-step task, close with a structured recap: what you did, what you found, and anything you could not complete."
+	default:
+		return ""
+	}
+}
+
+// WithAskOnAmbiguity pins the autonomy askOnAmbiguity resolver onto the
+// adapter (autonomy-knobs-live-01PMAG02 WP02). Evaluated once per
+// Generate so a Settings edit takes effect on the next turn.
+func (a *LLMProviderAdapter) WithAskOnAmbiguity(fn func() autonomy.AskMode) *LLMProviderAdapter {
+	a.askOnAmbiguity = fn
+	return a
+}
+
+// buildAskBarBlock renders the bar for using kenaz__ask_user_question
+// at hard/major, or "" otherwise (spec §3.1 bullet 1).
+//
+// At proceed/never the tool is withheld from the catalog entirely (see
+// StartStream's catalog-shaping filter), so a bar statement would be
+// moot — an unreachable tool needs no usage guidance. At "always" the
+// model already sees the tool with no special framing (today's
+// behaviour, preserved for FR-005): asking freely is the point of that
+// setting, so no bar narrows it. Only hard/major need a stated
+// threshold, because those are the settings where the tool is present
+// but its use is meant to be selective.
+func (a *LLMProviderAdapter) buildAskBarBlock() string {
+	if a == nil || a.askOnAmbiguity == nil {
+		return ""
+	}
+	switch a.askOnAmbiguity() {
+	case autonomy.AskHard:
+		return "Only use ask_user_question when a decision is high-stakes or hard to reverse " +
+			"(e.g. destructive actions, irreversible external side effects, or a choice that is " +
+			"expensive to undo). For anything else, proceed on your own judgement and state the " +
+			"assumption you made."
+	case autonomy.AskMajor:
+		return "Only use ask_user_question when the correct answer meaningfully depends on " +
+			"information only the user has, or when the plausible interpretations of the request " +
+			"would lead to substantially different outcomes. For minor ambiguities, proceed on " +
+			"your own judgement and state the assumption you made."
 	default:
 		return ""
 	}
@@ -362,7 +413,7 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 		// gap rather than a half-wire.
 		// Recap sits before the user's custom instructions so a user
 		// instruction about verbosity still wins the last word.
-		System:   composeSystemPrompt(nil, req.SystemPrompt, a.buildEnvBlock(), a.buildRecapBlock(), a.buildUserInstructionsBlock()),
+		System:   composeSystemPrompt(nil, req.SystemPrompt, a.buildEnvBlock(), a.buildRecapBlock(), a.buildAskBarBlock(), a.buildUserInstructionsBlock()),
 		Messages: llmMsgs,
 		Tools:    a.tools,
 	}

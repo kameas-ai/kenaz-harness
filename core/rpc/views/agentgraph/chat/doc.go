@@ -1,6 +1,6 @@
-// Package chat hosts the ChatRunner — the kernel-driven entry point
-// that replaces core/toolloop as the chassis chat path (mission
-// agent-kernel-graph-chat-migration WP03).
+// Package chat hosts the ChatRunner — the ONLY chassis chat path
+// (mission agent-kernel-graph-chat-migration WP03). It replaced the
+// pre-kernel chassis loop; there is no second path and no fallback.
 //
 // Architecture
 //
@@ -36,9 +36,14 @@
 //
 // Status
 //
-// This package is the foundation drop. The StartStream pipeline is
-// scaffolded with the seams it needs but the chassis-side wiring of
-// the LLM impl onto the runner happens in WP04. The toolloop-driven
-// chat path remains the production default until parity tests in WP03
-// + WP06 turn green.
+// Shipped and exclusive. views/llm's StartStream / StopStream hard-error
+// with "llm: chat runner not wired" when a.chatRunner == nil
+// (core/rpc/views/llm/impl.go) — there is no legacy pump to fall back
+// to, because it was deleted. A nil ChatRunner is a chassis-build
+// failure, not a degraded mode.
+//
+// (This comment used to say "the toolloop-driven chat path remains the
+// production default until parity tests in WP03 + WP06 turn green".
+// That stopped being true when the cutover landed; corrected under
+// agentgraph-total-convergence-01PMGX01 invariant I8, 2026-08-13.)
 package chat

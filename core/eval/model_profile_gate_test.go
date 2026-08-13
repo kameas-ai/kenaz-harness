@@ -185,11 +185,13 @@ func TestModelProfileGate_Check_UnknownManifestErrors(t *testing.T) {
 	}
 }
 
-// TestRunMatrix_CompactionOnlyUnaffected re-confirms the pre-WP03 shape of
-// MatrixCase (SessionID + Overrides, no BaselineSessionID) still diffs a
-// session against its own capture and reports success — the
-// compaction-strategy matrix must not regress from this change.
-func TestRunMatrix_CompactionOnlyUnaffected(t *testing.T) {
+// TestRunMatrix_SelfDiffCasesScorePerfect pins the default MatrixCase
+// shape (SessionID only, no BaselineSessionID): the replay is diffed
+// against its own capture, so it scores ~1.0 and the case cannot fail on
+// content. This is the behaviour MatrixCase.BaselineSessionID warns about
+// — a suite that wants a real regression signal must name a distinct
+// baseline session.
+func TestRunMatrix_SelfDiffCasesScorePerfect(t *testing.T) {
 	dir := t.TempDir()
 	sid := "wf-compaction-only"
 	capDir := filepath.Join(dir, "eval-captures")
@@ -197,13 +199,8 @@ func TestRunMatrix_CompactionOnlyUnaffected(t *testing.T) {
 	buildAssistantCapture(t, capDir, sid, "Hello there")
 
 	cases := []eval.MatrixCase{
-		{SessionID: sid, Label: "baseline", CachedOnly: true},
-		{
-			SessionID:  sid,
-			Label:      "aggressive-compaction",
-			Overrides:  []eval.StrategyOverride{{Key: "compaction.tier", Value: "aggressive"}},
-			CachedOnly: true,
-		},
+		{SessionID: sid, Label: "implicit-self-diff", CachedOnly: true},
+		{SessionID: sid, BaselineSessionID: sid, Label: "explicit-self-diff", CachedOnly: true},
 	}
 	results, table, err := eval.RunMatrix(context.Background(), capDir, runsDir, cases, eval.DiffModeBytes)
 	if err != nil {

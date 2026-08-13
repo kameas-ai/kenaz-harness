@@ -1,0 +1,72 @@
+schema_version: "1"
+manifest_version: "1.0.0"
+id: router
+extends: compute
+display_name: Router
+description: "Model-selected next step (FR-001, agentic-turn-routing-01PMAG01 §3.1). The author declares a menu of choices; the model picks one and the kernel fires only the selected successor. `fused` mode (the default) reads the choice out of an upstream model node's own output, so routing costs no additional LLM call."
+executor: agentgraph.ExecRouter
+dispatch: graph
+ports:
+  inputs:
+    # The inbound payload. Not required: a router placed as the last
+    # node of a Loop body receives the previous body node's whole
+    # output bag rather than a single named port.
+    - { name: in, type: any }
+  outputs:
+    # `next` carries the winning choice id. It is the audit surface AND
+    # the value a Loop `condition:` expression reads to decide whether
+    # to keep iterating; routing itself happens through edge liveness
+    # (routerExecutor.LiveOutEdges), not by anyone reading this port.
+    - { name: next, type: text }
+    # The inbound payload, passed through so a router can sit at the
+    # end of a Loop body without truncating the values the loop's
+    # flattened outputs carry to nodes outside it.
+    - { name: out, type: any }
+  # One additional output port per choice id is declared BY THE GRAPH
+  # AUTHOR on the node (`outputs:`), because the port names are the
+  # choice names. The winning choice's port carries the payload; every
+  # other choice port is absent and its edges are skipped.
+attrs:
+  mode:
+    type: enum
+    enum: [fused, standalone]
+    description: >-
+      `fused` (default) reads the choice from an upstream model node's
+      output — no extra LLM call, which is what keeps single-shot chat
+      at exactly one model call. `standalone` makes its own constrained
+      call listing the menu.
+  source_node:
+    type: node_id_ref
+    description: "Fused mode: the model node whose output carries the choice. Required when mode is fused."
+  choices:
+    type: object
+    required: true
+    description: >-
+      The menu, keyed by choice id: `{<id>: {target: <node id>,
+      description: <text shown to the model>}}`. Iterated in sorted-id
+      order everywhere it is rendered or logged, so a run is
+      reproducible regardless of YAML/map ordering.
+  default_choice:
+    type: string
+    required: true
+    description: "Choice id taken when the model's pick is missing, unparseable, or unknown, and when the anti-thrash guard trips. Must be a key of `choices`."
+  choice_field:
+    type: string
+    description: "Fused mode: the field name carrying the choice in the source node's structured output. Defaults to `next_choice`."
+  max_consecutive_same:
+    type: int
+    min: 0
+    description: "Anti-thrash guard: after this many consecutive identical choices the router forces `default_choice` and emits a router_override event. 0 disables the guard."
+  replan_choice:
+    type: string
+    description: "Choice id forced when the inbound payload carries a tripped doom-loop signal (`should_replan`). Empty leaves the doom-loop signal unconsumed by this node. Must be a key of `choices` when set."
+  fallback_to_standalone:
+    type: bool
+    description: >-
+      Fused mode only. When the source node produced no parsable choice
+      — the shape a provider without structured-output support
+      produces — make a standalone call instead of taking
+      `default_choice`. Costs an LLM call on that turn; off by default
+      so the cheap path stays cheap.
+budget: llm
+budget_consumes: [tokens, llm_calls, cost_usd]

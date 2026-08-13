@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
+	"unicode/utf8"
 )
 
 // task_state_wiring_test.go exercises the production call sites added in
@@ -16,7 +18,10 @@ import (
 //
 // The single hard requirement threaded through every test here: a run
 // that never fails or backtracks must compose a byte-identical system
-// prompt to pre-WP05 behavior (TestKernel_ZeroFailureRunComposesByteIdenticalPrompt).
+// prompt to pre-WP05 behavior (TestKernel_ZeroFailureRunComposesByteIdenticalPrompt)
+// — at the DEFAULT arming policy. WP11b added a second policy
+// (Env.TaskStateArming = TaskStateArmAlways) for the verified-exit
+// path, pinned by its own block at the bottom of this file.
 // Every other test below deliberately drives a failure or backtrack
 // first, then asserts population — proving the gate (kernel.go's
 // recoveryArmed flag) opens exactly when it should and never before.
@@ -42,6 +47,30 @@ var _ error = (*fakePolicyDenial)(nil)
 // AddTaskCompletedStep / AddTaskForbidden, so renderTaskState keeps
 // returning "" and the composed SystemPrompt is byte-identical to
 // pre-WP05 behavior (composePrompt(graph base, node role) only).
+//
+// THE INVARIANT BECAME CONDITIONAL IN WP11b — read this before
+// "fixing" a failure here (agentgraph-total-convergence-01PMGX01;
+// design in agentic-turn-routing-01PMAG01 §3.5).
+//
+// §3.5 called for retiring this test outright, on the grounds that
+// FR-002 needs a goal on every run: a run that succeeded all the way to
+// an exit gate has by construction never armed recovery, so the gate
+// would be checking the answer against nothing (01PMAG01 G5).
+//
+// It was NOT retired, because the trade turned out to be avoidable.
+// Arming is now a policy on Env (TaskStateArming), so the guarantee
+// this test pins survives intact at the DEFAULT — every Kernel.Run
+// caller that has not opted in, which is all of them except the chat
+// surface with the routing flag on. What §3.5 asked to retire was an
+// UNCONDITIONAL invariant; what remains is the same invariant scoped to
+// the policy it was always really about.
+//
+// The other side of the trade is pinned, deliberately, right next to
+// this one: TestKernel_ArmAlwaysPopulatesGoalAndStepsOnACleanRun
+// asserts that a clean run under TaskStateArmAlways DOES get a goal and
+// a step trail, and that they reach the composed prompt. If you are
+// here because that test and this one look contradictory — they are the
+// two positions of one switch, and both are load-bearing.
 func TestKernel_ZeroFailureRunComposesByteIdenticalPrompt(t *testing.T) {
 	t.Parallel()
 	llm := &stubLLM{responses: []LLMResponse{{Content: "ok", FinishReason: "stop"}}}
@@ -322,5 +351,225 @@ func TestKernel_AutoPopulatedTaskStateSurvivesRebuildState(t *testing.T) {
 				break
 			}
 		}
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// TaskStateArmAlways (agentgraph-total-convergence-01PMGX01 WP11b;
+// design in agentic-turn-routing-01PMAG01 §3.5).
+//
+// A run that succeeded all the way to an exit gate has, by
+// construction, never armed recovery — so under the failure-only rule
+// the gate would be checking the answer against an empty goal
+// (01PMAG01 G5). These tests pin the second policy, and pin that the
+// FIRST one is untouched.
+// ─────────────────────────────────────────────────────────────────────
+
+// countingHistory is a race-safe HistoryReader that records how many
+// full reads it served. The double-read regression WP05 fixed is the
+// specific thing this guards.
+type countingHistory struct {
+	mu    sync.Mutex
+	reads int
+	msgs  []Message
+}
+
+func (h *countingHistory) History(_ context.Context, _ string, _ int) ([]Message, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.reads++
+	out := make([]Message, len(h.msgs))
+	copy(out, h.msgs)
+	return out, nil
+}
+
+func (h *countingHistory) readCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.reads
+}
+
+// TestKernel_ArmAlwaysPopulatesGoalAndStepsOnACleanRun is the headline
+// WP11b behaviour: no failure, no backtrack, and TaskState is populated
+// anyway — which is the only way a completion check has anything to
+// check against.
+func TestKernel_ArmAlwaysPopulatesGoalAndStepsOnACleanRun(t *testing.T) {
+	t.Parallel()
+	hist := &countingHistory{msgs: []Message{{Role: "user", Content: "Summarise the Q3 report"}}}
+	llm := &stubLLM{responses: []LLMResponse{{Content: "ok", FinishReason: "stop"}}}
+	g := &Graph{
+		SpecVersion: SpecVersion, ID: "arm-always", SystemPrompt: "BASE",
+		Entrypoints: []string{"history_in"},
+		Nodes: []Node{
+			{ID: "history_in", Kind: NodeKindHistoryRead, Attrs: HistoryReadAttrs{N: 0}},
+			{ID: "model", Kind: NodeKindModel, Attrs: ModelAttrs{Model: "x", SystemPrompt: "ROLE"}},
+		},
+		Edges: []Edge{
+			{From: EndpointRef{Node: "history_in", Port: "messages"}, To: EndpointRef{Node: "model", Port: "messages"}},
+		},
+	}
+	k := NewKernel()
+	env := &Env{
+		RunID: "arm-always-run", SessionID: "s", Graph: g, LLM: llm, History: hist,
+		TaskStateArming: TaskStateArmAlways,
+	}
+	applyEnvDefaults(env)
+	if err := k.Run(context.Background(), env); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if got := env.TaskState.Goal(); got != "Summarise the Q3 report" {
+		t.Errorf("Goal() = %q, want the first user turn — a clean run must record its goal", got)
+	}
+	steps, _ := env.TaskState.CompletedSteps()
+	if len(steps) == 0 {
+		t.Error("CompletedSteps() empty on a clean run; the exit gate has no trail to check against")
+	}
+	// And it reaches the composed prompt, which is the point of
+	// recording it at all.
+	req, ok := llm.lastRequest()
+	if !ok {
+		t.Fatal("no LLM request captured")
+	}
+	if !strings.Contains(req.SystemPrompt, "Summarise the Q3 report") {
+		t.Errorf("goal did not reach the composed system prompt:\n%s", req.SystemPrompt)
+	}
+}
+
+// TestKernel_ArmAlwaysIssuesNoExtraHistoryRead is the §3.5 "keep the
+// lazy half" requirement. firstUserTurnGoal issues an unbounded
+// History(..., 0), and a chat graph's history_in node already performs
+// the identical read every turn — arming eagerly would double it, and
+// the cost grows with conversation length.
+func TestKernel_ArmAlwaysIssuesNoExtraHistoryRead(t *testing.T) {
+	t.Parallel()
+	hist := &countingHistory{msgs: []Message{{Role: "user", Content: "do the thing"}}}
+	g := &Graph{
+		SpecVersion: SpecVersion, ID: "arm-always-reads",
+		Entrypoints: []string{"history_in"},
+		Nodes: []Node{
+			{ID: "history_in", Kind: NodeKindHistoryRead, Attrs: HistoryReadAttrs{N: 0}},
+		},
+	}
+	env := &Env{
+		RunID: "arm-reads-run", SessionID: "s", Graph: g, History: hist,
+		TaskStateArming: TaskStateArmAlways,
+	}
+	applyEnvDefaults(env)
+	if err := NewKernel().Run(context.Background(), env); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := hist.readCount(); got != 1 {
+		t.Errorf("History reads = %d, want exactly 1 — the goal must come off history_in's own output, not a second read", got)
+	}
+	if got := env.TaskState.Goal(); got != "do the thing" {
+		t.Errorf("Goal() = %q, want it derived from the already-loaded history", got)
+	}
+}
+
+// TestKernel_ArmAlwaysWithoutHistoryNodeFallsBackToOneRead covers the
+// other branch: a graph with no history_read node has nothing to
+// piggyback on, so one read of its own is correct — nothing else was
+// going to issue it.
+//
+// convergence:exercised checkpoint
+//
+// The graph under test is a single production checkpoint node driven by
+// NewKernel().Run — the checkpointExecutor is real, not scripted. The
+// test's own subject is the history-read arming policy; the checkpoint
+// is the neutral node it uses to observe it, which is exactly what
+// makes it honest evidence that the kind executes end to end.
+func TestKernel_ArmAlwaysWithoutHistoryNodeFallsBackToOneRead(t *testing.T) {
+	t.Parallel()
+	hist := &countingHistory{msgs: []Message{{Role: "user", Content: "ship it"}}}
+	g := &Graph{
+		SpecVersion: SpecVersion, ID: "arm-always-nohist",
+		Entrypoints: []string{"mark"},
+		Nodes:       []Node{{ID: "mark", Kind: NodeKindCheckpoint, Attrs: CheckpointAttrs{Label: "x"}}},
+	}
+	env := &Env{
+		RunID: "arm-nohist-run", SessionID: "s", Graph: g, History: hist,
+		TaskStateArming: TaskStateArmAlways,
+	}
+	applyEnvDefaults(env)
+	if err := NewKernel().Run(context.Background(), env); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := hist.readCount(); got != 1 {
+		t.Errorf("History reads = %d, want exactly 1", got)
+	}
+	if got := env.TaskState.Goal(); got != "ship it" {
+		t.Errorf("Goal() = %q, want %q", got, "ship it")
+	}
+}
+
+// TestKernel_ArmOnFailureIsUnchanged is the other half of the trade.
+// The byte-identical-prompt invariant was not retired, it was made
+// CONDITIONAL: it still holds at the default policy, which is every
+// Kernel.Run caller that has not opted in. This test asserts that on
+// the same graph the always-armed tests use, so the two policies are
+// compared like for like rather than across different fixtures.
+func TestKernel_ArmOnFailureIsUnchanged(t *testing.T) {
+	t.Parallel()
+	hist := &countingHistory{msgs: []Message{{Role: "user", Content: "Summarise the Q3 report"}}}
+	llm := &stubLLM{responses: []LLMResponse{{Content: "ok", FinishReason: "stop"}}}
+	g := &Graph{
+		SpecVersion: SpecVersion, ID: "arm-default", SystemPrompt: "BASE",
+		Entrypoints: []string{"history_in"},
+		Nodes: []Node{
+			{ID: "history_in", Kind: NodeKindHistoryRead, Attrs: HistoryReadAttrs{N: 0}},
+			{ID: "model", Kind: NodeKindModel, Attrs: ModelAttrs{Model: "x", SystemPrompt: "ROLE"}},
+		},
+		Edges: []Edge{
+			{From: EndpointRef{Node: "history_in", Port: "messages"}, To: EndpointRef{Node: "model", Port: "messages"}},
+		},
+	}
+	env := &Env{RunID: "arm-default-run", SessionID: "s", Graph: g, LLM: llm, History: hist}
+	applyEnvDefaults(env)
+	if err := NewKernel().Run(context.Background(), env); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := env.TaskState.Goal(); got != "" {
+		t.Errorf("Goal() = %q, want empty at the default arming policy", got)
+	}
+	if steps, _ := env.TaskState.CompletedSteps(); len(steps) != 0 {
+		t.Errorf("CompletedSteps() = %v, want none at the default arming policy", steps)
+	}
+	req, _ := llm.lastRequest()
+	if req.SystemPrompt != "BASE\n\nROLE" {
+		t.Errorf("SystemPrompt = %q, want byte-identical %q", req.SystemPrompt, "BASE\n\nROLE")
+	}
+}
+
+// TestGoalFromMessages covers the derivation helper directly, including
+// the rune-safety of its cap: a goal cut mid-rune would put invalid
+// UTF-8 into every system prompt for the rest of the run.
+func TestGoalFromMessages(t *testing.T) {
+	t.Parallel()
+	if got := goalFromMessages([]Message{
+		{Role: "system", Content: "ignore me"},
+		{Role: "user", Content: "  the goal  "},
+		{Role: "user", Content: "later turn"},
+	}); got != "the goal" {
+		t.Errorf("goalFromMessages = %q, want the first user turn trimmed", got)
+	}
+	// []any is the shape a YAML/JSON round-trip of a port value takes.
+	if got := goalFromMessages([]any{Message{Role: "user", Content: "via any"}}); got != "via any" {
+		t.Errorf("goalFromMessages([]any) = %q, want %q", got, "via any")
+	}
+	if got := goalFromMessages("not messages"); got != "" {
+		t.Errorf("goalFromMessages(non-messages) = %q, want empty", got)
+	}
+	if got := goalFromMessages(nil); got != "" {
+		t.Errorf("goalFromMessages(nil) = %q, want empty", got)
+	}
+	// Multi-byte truncation stays on rune boundaries.
+	long := strings.Repeat("日", maxTaskGoalRunes+50)
+	got := goalFromMessages([]Message{{Role: "user", Content: long}})
+	if !utf8.ValidString(got) {
+		t.Errorf("truncated goal is not valid UTF-8: %q", got)
+	}
+	if r := []rune(got); len(r) != maxTaskGoalRunes+1 { // +1 for the ellipsis
+		t.Errorf("truncated goal is %d runes, want %d", len(r), maxTaskGoalRunes+1)
 	}
 }

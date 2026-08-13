@@ -1,25 +1,27 @@
 schema_version: "1"
-manifest_version: "1.0.0"
+manifest_version: "2.0.0"
 id: sleep
-extends: compute
+extends: tool
 display_name: Sleep
 description: "Yield for N seconds without consuming a KnobMaxIterations slot (FR-010). Used inside __monitor watch patterns where the model must wait between polls."
-executor: agentgraph.ExecBuiltinTool
-ports:
-  inputs:
-    - { name: args, type: any }
-  outputs:
-    - { name: result, type: any }
+# Integration note (2026-08-12): feature/wiring declared this kind
+# `dispatch: builtin_tool` (no graph executor) while feature/nodes gave it
+# a real archetype-derived executor. Resolved per the nodes review §C
+# Option A: the executor exists, so dispatch is `graph` (inherited from
+# _archetype.tool.yaml); `tool_name:` dropped (the kenaz__<kind> naming
+# contract derives it). DispatchBuiltinTool remains for future
+# runtime-materialized kinds.
+executor: agentgraph.ExecSleep
 attrs:
-  name:
-    type: string
-    required: true
-    description: "Always kenaz__sleep."
-    default: kenaz__sleep
   seconds:
     type: int
-    description: "Duration to sleep. Clamped to [1, 600]."
+    min: 1
+    max: 600
+    description: "Duration to sleep. Clamped to [1, 600] by the tool itself."
     default: 5
-cedar_action: tool.passive
+# Passive tool: a sleep must not burn an iteration slot (FR-010). The
+# override here is the declarative half of that contract; the runtime
+# half is core/toolloop's passive-tool set, which the shared builtin-tool
+# executor consults through ShouldCountIteration on every dispatch.
 budget: none
 budget_consumes: []

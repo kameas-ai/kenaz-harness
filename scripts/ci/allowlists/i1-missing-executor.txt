@@ -1,0 +1,21 @@
+# I1 allowlist — NodeKind values in AllNodeKinds() with no registered
+# executor in core/agentgraph's newExecutorRegistry() (executor.go).
+# Spec: kitty-specs/agentgraph-total-convergence-01PMGX01/spec.md §1.1, §6 I1.
+# Enforced by core/agentgraph/convergence_gates_test.go
+# TestConvergenceI1_EveryKindHasRegisteredExecutor.
+#
+# EMPTY — drained by Phase 2 (WP02 folded into WP04,
+# `feat(agentgraph): WP02+WP04 — _archetype.tool.yaml + builtin tools as
+# manifest kinds`). `sleep` and `subagent_dispatch` were the only two
+# entries: both were palette-reachable kinds with no executor, so a
+# graph containing either passed validation and crashed at run time.
+# They are now the first two instances of the `tool` archetype and get
+# their executors from builtinToolExecutors(), which walks the resolved
+# manifest catalog rather than a hand-maintained list.
+#
+# With the list empty, TestConvergenceI1 additionally enforces the
+# spec's literal form of the invariant:
+#   len(AllNodeKinds()) == registry.Len()
+# Adding a manifest without an executor now fails CI immediately.
+#
+# Format: one NodeKind value (the manifest `id:`) per line.

@@ -122,10 +122,22 @@ func NewSyncer(c *Client) *Syncer {
 
 // RegisterCategory wires a collector + applier for a sync category.
 // Must be called before Start.
+//
+// Categories not among AllSyncCategories() (i.e. kinds registered through
+// the SyncKind registry — synckind.go) get their CategoryState lazily
+// created here, so a new kind works end-to-end (SetEnabled / Push / Pull /
+// Status / the poll loop) without editing AllSyncCategories(). This is the
+// genericity fix fleet-generic-sync-framework-01NSYNC02 WP01 makes: the
+// five built-in categories are pre-created by NewSyncer and behave exactly
+// as before; anything registered afterward — built-in or not — now works
+// the same way.
 func (s *Syncer) RegisterCategory(cat SyncCategory, cfg CategoryConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.configs[cat] = cfg
+	if _, ok := s.categories[cat]; !ok {
+		s.categories[cat] = &CategoryState{}
+	}
 }
 
 // SetEnabled toggles sync on/off for a category. When toggled on, an
@@ -450,7 +462,13 @@ func (s *Syncer) pollLoop(ctx context.Context) {
 		case <-s.stopCh:
 			return
 		case <-ticker.C:
-			for _, cat := range AllSyncCategories() {
+			// Poll every *registered* category, not just the five built-ins
+			// (AllSyncCategories()) — this is what lets a SyncKind-registered
+			// category (e.g. slash_commands, WP05) join the background
+			// poll loop without a hand-edited list. Behavior for the five
+			// built-ins is unchanged: they are always registered by
+			// registerSyncCategories before StartPolling is called.
+			for _, cat := range s.RegisteredCategories() {
 				if !s.IsEnabled(cat) {
 					continue
 				}

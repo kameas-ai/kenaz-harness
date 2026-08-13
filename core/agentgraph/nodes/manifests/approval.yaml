@@ -5,6 +5,7 @@ extends: control
 display_name: Approval
 description: "Binary HITL gate (FR-048). Persists a `pending_approval` event mirroring `pending_ask`."
 executor: agentgraph.ExecApproval
+dispatch: graph
 ports:
   inputs:
     - { name: in, type: any }

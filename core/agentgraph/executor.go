@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -107,6 +108,54 @@ type Executor interface {
 	Execute(ctx context.Context, env *Env, node *Node, inputs PortValues) (Result, error)
 }
 
+// EdgeRouter is the OPTIONAL half of the Executor contract: an executor
+// implements it when the node kind it runs performs conditional
+// execution, i.e. when completing the node must promote some of its
+// out-edges and skip the rest (agentgraph-total-convergence-01PMGX01
+// WP11a; design in agentic-turn-routing-01PMAG01 §3.2).
+//
+// This is the single seam for conditional promotion. The kernel's
+// promotion worklist asks the completing node's executor for a
+// predicate and treats a non-implementer — which is every kind except
+// `decision` and `router`, plus every WithExecutor test override — as
+// "all out-edges live", which is byte-for-byte today's traversal for
+// every graph the repo ships.
+//
+// WHY AN INTERFACE RATHER THAN A `Result` FIELD. Two reasons, both
+// load-bearing:
+//
+//  1. Liveness has to be re-derivable AFTER THE FACT. The kernel's
+//     backtrack refire recompute rebuilds `liveIn` for the rewound set
+//     from each predecessor's *recorded outputs*; the Result those
+//     outputs came from was discarded when the node completed. Passing
+//     (node, recorded outputs) here makes the same answer available at
+//     both times, from state that survives.
+//  2. Liveness is not always expressible as a set of live PORTS. WP02c
+//     made `decision`'s next_true / next_false the primary routing
+//     authority, so a graph may legally hang both successors off one
+//     audit port and be routed by destination node — see
+//     TestKernel_DecisionRoutesOnNextAttrsNotJustPorts. A predicate
+//     over the whole Edge covers that; a []string of port names cannot.
+//
+// And why an interface rather than the kind switch WP02b shipped in
+// kernel.go: the executor registry accepts registrations at run time
+// (ExecutorRegistry.Register), so a kind the binary never heard of at
+// compile time can still be dispatched. Such a kind can never add a
+// case to a switch in the kernel, which would have made conditional
+// routing permanently unavailable to exactly the extension path WP03
+// built.
+//
+// Implementations MUST be pure with respect to (nd, outs): the kernel
+// may call LiveOutEdges more than once for the same completion, and
+// calls it from goroutines, so it must not mutate shared state.
+type EdgeRouter interface {
+	// LiveOutEdges returns a predicate reporting whether one out-edge
+	// of nd delivered a live value, given the outputs nd recorded.
+	// Returning nil means "every out-edge is live" — the same
+	// unconditional promotion a non-implementer gets.
+	LiveOutEdges(nd *Node, outs PortValues) func(Edge) bool
+}
+
 // Env is the execution environment passed to every Executor. It is the
 // narrowest possible surface — packages outside `agentgraph` would not
 // be able to fake all of it, so we keep field-level dependency
@@ -157,6 +206,19 @@ type Env struct {
 	// read_bash_output. Nil installs a stub that always returns
 	// ErrNoBashOutput.
 	BashOutput BashOutputStore
+
+	// ToolResultCap bounds the bytes a single tool result may contribute
+	// to the context, applied at dispatch before the result becomes a
+	// Message (turn-context-runway-01PMAG03 WP01). The zero value
+	// selects the package defaults (DefaultToolResultMaxBytes etc.); a
+	// negative MaxBytes disables the cap.
+	ToolResultCap ToolResultCap
+
+	// ToolOutputArchive persists the full payload of a truncated tool
+	// result so the elision marker can name a handle the model can
+	// re-read. Nil keeps the truncation (bounding the context is the
+	// point) but the marker says the bytes were not retained.
+	ToolOutputArchive ToolOutputArchive
 	// Policy is the kernel-side filesystem/state gate. Nil installs
 	// the AllowAll fallback (every check passes).
 	Policy PolicyGate
@@ -220,33 +282,22 @@ type Env struct {
 	// disables compaction; the rest of the pipeline runs unchanged.
 	Compactor Compactor
 
-	// SuppressAutomaticCompaction disables the kernel's own
-	// pre_call/post_tool automatic compaction sites (exec_compute.go)
-	// for this Env even when Compactor is non-nil and the resolved
-	// SiteConfig says "enabled" (compaction-convergence-01PMDL05).
+	// AutoCompaction is the growth watermark that gates the kernel's
+	// automatic pre_call/post_tool compaction sites
+	// (turn-context-runway-01PMAG03 WP02). It latches the run's live
+	// token count on its first observation and admits an automatic site
+	// only once the live count has grown past that baseline by the
+	// policy margin — so the first pre-call site is a no-op by
+	// construction (the double-fire compaction-convergence-01PMDL05
+	// found) while a site fifteen iterations later, after the turn has
+	// actually accumulated context, is free to fire.
 	//
-	// Two compaction systems coexist in this codebase: the chat
-	// surface's pre-send compactor (core/rpc/views/agentgraph/chat,
-	// operates on persisted session history with the 5-tier
-	// aggressiveness dial before ChatRunner ever calls kernel.Run) and
-	// this package's FR-041 automatic sites (fire *during* kernel.Run,
-	// driven by the cascading CompactionConfig resolver). Both can be
-	// wired to the same underlying Compactor. If both fire on the same
-	// turn a conversation is compacted twice — silently doubling
-	// however aggressive the configured strategy is, and burning a
-	// second real compaction call for no benefit.
-	//
-	// The chat surface is authoritative for chat-driven runs (it has
-	// the persisted-history view and the tokenizer-accurate trigger
-	// math the automatic sites don't); it sets this true on every Env
-	// it constructs. A graph author invoking the kernel directly for a
-	// non-chat run (batch pipeline, eval harness, a bespoke graph with
-	// no pre-send compactor in front of it) leaves this false and gets
-	// the automatic sites as documented. NodeKindCompact (the manual
-	// "compact" node any graph author can place explicitly) is
-	// intentionally NOT gated by this flag — an explicit node is never
-	// a double-fire risk since it only runs when the graph reaches it.
-	SuppressAutomaticCompaction bool
+	// nil == no watermark == every automatic site is ungated, which is
+	// the correct reading for a graph-authored run with no pre-send
+	// compactor in front of it. The chat surface arms one on every Env
+	// it builds; that is what replaced the unconditional suppression
+	// boolean this Env used to carry.
+	AutoCompaction *CompactionWatermark
 
 	// Branch is the BranchSeam for ForkNode/MergeNode. nil installs the
 	// nilBranchSeam stub which errors with ErrNoBranchSeam — the
@@ -296,6 +347,8 @@ type Env struct {
 
 	// MergeSuggester powers the kernel's "merge?" toast. nil disables
 	// the suggestion stream.
+	//
+	// wiring:deferred(needs a merge-suggestion RPC + frontend toast; the heuristic is implemented and tested but no production wiring site constructs one — see docs/wiring-audit.md item 6)
 	MergeSuggester *MergeSuggester
 
 	// ToolSchemas maps tool name → JSON-Schema bytes for the tools the
@@ -323,12 +376,146 @@ type Env struct {
 	// nil means all tools are treated as read-only (parallel by default).
 	MutatingTools map[string]bool
 
+	// NodeErrorPolicy governs how a Loop body node's failure is
+	// handled (autonomy-knobs-live-01PMAG02 WP04, continueOnError).
+	// The zero value (NodeErrorPolicyStop) is today's behaviour: the
+	// error propagates immediately and terminates the run. Chat
+	// wiring translates the resolved continueOnError autonomy knob
+	// into this field at Env-construction time so core/agentgraph
+	// itself stays autonomy-agnostic — any caller of Kernel.Run, not
+	// just the chat path, can set it. See loopExecutor.Execute
+	// (exec_control.go) for where this is consulted; ErrPaused and
+	// ErrBudgetExceeded stay terminal under every policy.
+	NodeErrorPolicy NodeErrorPolicy
+
+	// TaskStateArming governs WHEN the kernel commits the run's goal
+	// and completed-step trail to TaskState
+	// (agentgraph-total-convergence-01PMGX01 WP11b; design in
+	// agentic-turn-routing-01PMAG01 §3.5).
+	//
+	// The zero value is today's behaviour and stays the default for
+	// every Kernel.Run caller: TaskState arms only once the run has hit
+	// a node error or an honored backtrack, so a run that never fails
+	// composes a byte-identical system prompt.
+	//
+	// TaskStateArmAlways is what a verified exit needs. `review` checks
+	// the draft against the run's GOAL, and a run that succeeded all
+	// the way to the exit gate has by definition never armed recovery —
+	// so under the old rule the gate would be checking the answer
+	// against nothing (01PMAG01 G5). This field is the seam that keeps
+	// core/agentgraph autonomy- and settings-agnostic while letting the
+	// chat surface tie the change to its launch gate: the routed
+	// topology and always-armed TaskState flip together, so one
+	// settings flag reverts both.
+	TaskStateArming TaskStateArming
+
+	// AskPolicy governs whether a kernel-side verification or recovery
+	// step may turn a failure into a QUESTION for the user
+	// (agentgraph-total-convergence-01PMGX01 WP11b, closing the
+	// autonomy-knobs review's finding F7).
+	//
+	// The zero value is today's behaviour. AskPolicyWithhold is what
+	// the chat surface sets when the resolved askOnAmbiguity knob is
+	// `proceed` or `never` — the two modes that already withhold
+	// kenaz__ask_user_question from the model's catalogue entirely
+	// (chat.withholdsAskTool). Without this, those two modes had a hole
+	// the size of the whole recovery path: the model could not ask, but
+	// an exit-gate FAIL at its iteration cap, or an escalation ladder
+	// reaching its final rung, would surface a question anyway — the
+	// user having explicitly asked not to be interrupted, and the
+	// question arriving from a code path they never saw. Under
+	// Withhold, a FAIL re-enters the loop while budget remains and
+	// otherwise returns the best draft.
+	//
+	// Same shape as NodeErrorPolicy: an autonomy-agnostic enum, so
+	// core/agentgraph never imports the autonomy domain and any
+	// Kernel.Run caller can set it.
+	AskPolicy AskPolicy
+
 	// registry is the executor lookup table the control executors
 	// (Loop, Retry, Parallel) use to dispatch into peer nodes. The
 	// kernel sets this on entry to Run(); leaving it nil falls back
 	// to a fresh package-default registry.
-	registry *executorRegistry
+	registry *ExecutorRegistry
 }
+
+// NodeErrorPolicy is the generic (autonomy-agnostic) enum
+// core/agentgraph exposes for the continueOnError knob
+// (autonomy-knobs-live-01PMAG02 WP04). Defined here rather than
+// imported from core/autonomy so this package has no dependency on
+// the autonomy domain — the chat surface (core/rpc/views/agentgraph/
+// chat) is the only place that translates autonomy.ErrorMode into
+// this type.
+type NodeErrorPolicy string
+
+const (
+	// NodeErrorPolicyStop is the zero value and today's behaviour: the
+	// first non-pause, non-budget body-node error terminates the run.
+	NodeErrorPolicyStop NodeErrorPolicy = ""
+	// NodeErrorPolicyRetryOnce re-fires the failed body node once,
+	// with the same inputs, before falling back to Stop semantics.
+	//
+	// "Once" is per (loop-iteration, body-node) firing, not once for
+	// the node's whole lifetime in this Loop: the retry attempt is not
+	// tracked across iterations, so a body node that keeps failing on
+	// every iteration gets one extra attempt on EACH iteration —
+	// worst case 2×MaxIterations total executions of that node across
+	// the run, not MaxIterations+1. The failed first attempt's error is
+	// not discarded: loopExecutor appends an EventNodeError
+	// (retried=true) for it before firing the retry, so the audit trail
+	// shows both the original failure and (if the retry also fails) the
+	// error that actually propagates.
+	NodeErrorPolicyRetryOnce NodeErrorPolicy = "retry-once"
+	// NodeErrorPolicyAdapt converts the body-node error into a message
+	// folded into the loop's current payload and continues iterating,
+	// letting the model route around the failure. ErrPaused,
+	// ErrBudgetExceeded, and ctx cancellation/deadline stay terminal
+	// regardless — see isTerminalNodeError in exec_control.go.
+	NodeErrorPolicyAdapt NodeErrorPolicy = "adapt"
+)
+
+// TaskStateArming is the generic (autonomy- and settings-agnostic) enum
+// core/agentgraph exposes for WHEN a run commits its goal and
+// completed-step trail to TaskState. See Env.TaskStateArming.
+type TaskStateArming string
+
+const (
+	// TaskStateArmOnFailure is the zero value and today's behaviour:
+	// nothing is committed to TaskState until the run hits a node error
+	// or an honored backtrack. A run that never fails therefore
+	// composes a byte-identical system prompt, which is the invariant
+	// TestKernel_ZeroFailureRunComposesByteIdenticalPrompt pins.
+	TaskStateArmOnFailure TaskStateArming = ""
+	// TaskStateArmAlways commits the goal as soon as it is derivable
+	// and every meaningful node completion as it happens, on success
+	// paths as well as failure ones. This is what makes a completion
+	// check possible: without it, a run that succeeded has no recorded
+	// goal for the exit gate to check the answer against (01PMAG01 G5).
+	//
+	// The goal is still derived LAZILY where the run already loads the
+	// history: a graph carrying a `history_read` node (every chat
+	// graph) arms off that node's own output rather than issuing a
+	// second unbounded History(..., 0) read. Only a graph with no
+	// history_read pays a read of its own, and in that case nothing
+	// else was going to read it.
+	TaskStateArmAlways TaskStateArming = "always"
+)
+
+// AskPolicy is the generic (autonomy-agnostic) enum core/agentgraph
+// exposes for "may this run interrupt the user with a question?".
+// See Env.AskPolicy.
+type AskPolicy string
+
+const (
+	// AskPolicyAllow is the zero value and today's behaviour: a
+	// verification or recovery step may escalate into a question.
+	AskPolicyAllow AskPolicy = ""
+	// AskPolicyWithhold forbids it. Verification still runs and still
+	// rewinds; what it may not do is convert a verdict into a prompt
+	// for the user. Callers set this when the user has said, through
+	// whatever dial they own, that they do not want to be asked.
+	AskPolicyWithhold AskPolicy = "withhold"
+)
 
 // RunCounters track in-run budget consumption. Updated by executors
 // (LLMNode bumps token + call counts; ToolNode bumps tool calls; etc.)
@@ -568,64 +755,241 @@ func (s *RunState) ReleaseOnce(key string) {
 }
 
 // ---- registry ----
+//
+// agentgraph-total-convergence-01PMGX01 WP03 (spec §4.2).
+//
+// Executor dispatch used to be a hardcoded table built once inside
+// newExecutorRegistry() and never touched again. That table was the
+// blocker for the mission's "tools are nodes" goal: builtin tools are
+// compile-time known and can be code-generated into it, but **MCP tool
+// schemas arrive over stdio after process start** and therefore cannot
+// be build-time manifests. The resolution the spec mandates is a
+// shared, runtime-extensible registry rather than a second dispatch
+// mechanism living alongside the first.
+//
+// So the table is now the *seed* of an ExecutorRegistry that accepts
+// registrations at any time:
+//
+//   - build-time / static kinds feed it at construction, via
+//     builtinExecutors();
+//   - runtime discovery feeds it through Kernel.Executors().Register(),
+//     which is safe to call while the kernel is running (every lookup
+//     takes an RLock).
+//
+// Registration is duplicate-rejecting on purpose: two executors
+// claiming one NodeKind is exactly the "parallel implementations of the
+// same concept" failure this mission exists to eliminate, and silently
+// letting the second win is how it stays invisible. Deliberate
+// replacement — the WithExecutor test/override seam — goes through the
+// explicitly-named Replace instead, so an override reads as an override
+// at the call site.
+//
+// NOTE for a future WP: materializing MCP-discovered tools as node
+// kinds also needs a manifest/attrs path (ResolvedManifests + a decoder
+// for the kind's attrs). This WP builds the executor half of that seam
+// only; it does not implement MCP discovery.
 
-// executorRegistry is the kind→Executor map. Executor instances are
-// stateless; the kernel uses a single shared registry for the whole
-// process.
-type executorRegistry struct {
+// ErrExecutorRegistered is returned by ExecutorRegistry.Register when a
+// kind already has an executor. Callers that mean to replace an
+// existing binding must say so via Replace.
+var ErrExecutorRegistered = errors.New("agentgraph: executor already registered for kind")
+
+// ExecutorRegistry is the kind→Executor map. Executor instances are
+// stateless; one registry is shared by a kernel and every nested
+// dispatch inside its run (the kernel pins it onto Env.registry).
+//
+// All methods are safe for concurrent use: the kernel fires nodes from
+// bare goroutines, so a runtime Register racing an in-flight run must
+// not corrupt the map.
+type ExecutorRegistry struct {
+	mu     sync.RWMutex
 	byKind map[NodeKind]Executor
 }
 
-// newExecutorRegistry constructs the default registry with one
-// implementation per kind. Tests can override via WithExecutor.
-func newExecutorRegistry() *executorRegistry {
-	r := &executorRegistry{byKind: make(map[NodeKind]Executor, 32)}
-	// Compute (FR-029..FR-039).
-	r.register(&modelExecutor{})
-	r.register(&toolExecutor{})
-	r.register(&toolDispatchExecutor{})
-	r.register(&transformExecutor{})
-	r.register(&activityExecutor{})
-	r.register(&reflectExecutor{})
-	r.register(&reviewExecutor{})
-	r.register(&plannerExecutor{})
-	r.register(&askExecutor{})
-	r.register(&escalateExecutor{})
-	r.register(&compactExecutor{})
+// NewExecutorRegistry returns an empty registry. Callers that want the
+// shipped static kinds should use the kernel (NewKernel seeds one) or
+// seed it themselves from builtinExecutors().
+func NewExecutorRegistry() *ExecutorRegistry {
+	return &ExecutorRegistry{byKind: make(map[NodeKind]Executor, 40)}
+}
 
-	// Control (FR-040..FR-048).
-	r.register(&decisionExecutor{})
-	r.register(&parallelExecutor{})
-	r.register(&joinExecutor{})
-	r.register(&loopExecutor{})
-	r.register(&retryExecutor{})
-	r.register(&branchExecutor{})
-	r.register(&mergeExecutor{})
-	r.register(&approvalExecutor{})
-	r.register(&escalationLadderExecutor{})
+// builtinExecutors returns the build-time executor set: one instance
+// per statically-declared (manifest-backed) node kind. This is the list
+// codegen would emit if/when the manifest `executor:` field becomes
+// generated dispatch; until then it is hand-maintained and pinned by
+// the I1 convergence gate (convergence_gates_test.go), which fails when
+// a manifest kind has no entry here.
+func builtinExecutors() []Executor {
+	out := []Executor{
+		// Compute (FR-029..FR-039).
+		&modelExecutor{},
+		&toolDispatchExecutor{},
+		&transformExecutor{},
+		&activityExecutor{},
+		&reflectExecutor{},
+		&reviewExecutor{},
+		&plannerExecutor{},
+		&routerExecutor{},
+		&askExecutor{},
+		&escalateExecutor{},
+		&compactExecutor{},
 
-	// State (FR-051..FR-058).
-	r.register(&memoryExecutor{})
-	r.register(&corpusReadExecutor{})
-	r.register(&corpusWriteExecutor{})
-	r.register(&attachmentExecutor{})
-	r.register(&historyReadExecutor{})
-	r.register(&traceWriteExecutor{})
-	r.register(&checkpointExecutor{})
-	r.register(&artifactExecutor{})
-	r.register(&readFileExecutor{})
-	r.register(&readBashOutputExecutor{})
-	r.register(&writeFileExecutor{})
-	r.register(&sessionWriteExecutor{})
+		// Control (FR-040..FR-048).
+		&decisionExecutor{},
+		&parallelExecutor{},
+		&joinExecutor{},
+		&loopExecutor{},
+		&retryExecutor{},
+		&branchExecutor{},
+		&mergeExecutor{},
+		&approvalExecutor{},
+		&escalationLadderExecutor{},
+
+		// State (FR-051..FR-058).
+		&memoryExecutor{},
+		&corpusReadExecutor{},
+		&corpusWriteExecutor{},
+		&attachmentExecutor{},
+		&historyReadExecutor{},
+		&traceWriteExecutor{},
+		&checkpointExecutor{},
+		&artifactExecutor{},
+		&readFileExecutor{},
+		&readBashOutputExecutor{},
+		&writeFileExecutor{},
+		&sessionWriteExecutor{},
+	}
+
+	// Builtin tool kinds (the `tool` archetype). Derived from the
+	// resolved manifest catalog rather than hand-listed: WP04's contract
+	// is that declaring a manifest with `extends: tool` is all it takes
+	// to get a node kind with a working executor. A hand-maintained
+	// second list here is exactly the drift the I1/I2 gates exist to
+	// catch, so there isn't one.
+	return append(out, builtinToolExecutors()...)
+}
+
+// ToolArchetypeID is the manifest ID of the shared builtin-tool
+// archetype (_archetype.tool.yaml). A callable kind whose inheritance
+// chain contains it is a tool node.
+const ToolArchetypeID = "tool"
+
+// builtinToolExecutors returns one builtinToolExecutor per callable
+// kind that extends the `tool` archetype, sorted by kind for
+// deterministic registration order.
+func builtinToolExecutors() []Executor {
+	kinds := make([]NodeKind, 0, 4)
+	for kind, rm := range ResolvedManifests {
+		if rm == nil {
+			continue
+		}
+		for _, ancestor := range rm.Chain {
+			if ancestor == ToolArchetypeID {
+				kinds = append(kinds, kind)
+				break
+			}
+		}
+	}
+	sort.Slice(kinds, func(i, j int) bool { return kinds[i] < kinds[j] })
+	out := make([]Executor, 0, len(kinds))
+	for _, k := range kinds {
+		out = append(out, builtinToolExecutor{kind: k, toolName: builtinToolNameFor(k)})
+	}
+	return out
+}
+
+// newExecutorRegistry constructs a registry seeded with every static
+// kind. A duplicate in builtinExecutors() is a build-time programming
+// error, so it panics rather than returning an error nobody can act on.
+func newExecutorRegistry() *ExecutorRegistry {
+	r := NewExecutorRegistry()
+	for _, e := range builtinExecutors() {
+		r.MustRegister(e)
+	}
 	return r
 }
 
-func (r *executorRegistry) register(e Executor) {
+// Register binds e to its Kind(). It returns ErrExecutorRegistered when
+// the kind already has an executor — the registry never silently
+// replaces a binding. This is the API runtime discovery (MCP tools)
+// calls; it is safe to call while a run is in flight.
+func (r *ExecutorRegistry) Register(e Executor) error {
+	if e == nil {
+		return errors.New("agentgraph: register: nil executor")
+	}
+	k := e.Kind()
+	if k == "" {
+		return errors.New("agentgraph: register: executor reports empty kind")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.byKind[k]; exists {
+		return fmt.Errorf("%w: %q", ErrExecutorRegistered, k)
+	}
+	r.byKind[k] = e
+	return nil
+}
+
+// MustRegister is Register for callers that treat a duplicate as a
+// programming error (the static seed set).
+func (r *ExecutorRegistry) MustRegister(e Executor) {
+	if err := r.Register(e); err != nil {
+		panic(err.Error())
+	}
+}
+
+// Replace binds e to its Kind(), overwriting any existing binding. This
+// is the deliberate-override path behind WithExecutor; production
+// wiring should use Register so a collision surfaces.
+func (r *ExecutorRegistry) Replace(e Executor) {
+	if e == nil || e.Kind() == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.byKind[e.Kind()] = e
 }
 
-func (r *executorRegistry) lookup(k NodeKind) (Executor, error) {
+// Lookup returns the executor bound to k, and whether one exists.
+func (r *ExecutorRegistry) Lookup(k NodeKind) (Executor, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	e, ok := r.byKind[k]
+	return e, ok
+}
+
+// Has reports whether k has a registered executor. This is the query
+// the I1 convergence gate uses.
+func (r *ExecutorRegistry) Has(k NodeKind) bool {
+	_, ok := r.Lookup(k)
+	return ok
+}
+
+// Len returns the number of registered kinds.
+func (r *ExecutorRegistry) Len() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.byKind)
+}
+
+// Kinds returns every registered kind, sorted, for diagnostics and the
+// convergence gates.
+func (r *ExecutorRegistry) Kinds() []NodeKind {
+	r.mu.RLock()
+	out := make([]NodeKind, 0, len(r.byKind))
+	for k := range r.byKind {
+		out = append(out, k)
+	}
+	r.mu.RUnlock()
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// lookup is the kernel-internal accessor that keeps the historical
+// error string ("no executor for kind %q") the kernel surfaces to
+// callers and tests.
+func (r *ExecutorRegistry) lookup(k NodeKind) (Executor, error) {
+	e, ok := r.Lookup(k)
 	if !ok {
 		return nil, fmt.Errorf("agentgraph: no executor for kind %q", k)
 	}

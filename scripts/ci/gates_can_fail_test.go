@@ -178,6 +178,16 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			content: "package rpc\n\nfunc zzGateProbe(p string) { logger.Info(\"saved\", \"Path\", p) }\n",
 		},
 		{
+			name: "agentgraph-convergence/I5-second-ask-store",
+			gate: "check-agentgraph-convergence.sh",
+			// A second store forks by declaring the AskBus read half
+			// somewhere that does not ride core/elicitation. Planted in
+			// an existing package (rather than a new one) so it trips I5
+			// specifically and not I7's orphan-package rule.
+			file:   "core/rpc/views/sessions/impl.go",
+			append: "\ntype zzGateProbeAskStore struct{}\n\nfunc (zzGateProbeAskStore) LookupAnswer(runID, nodeID string) (string, bool) {\n\treturn \"\", false\n}\n",
+		},
+		{
 			name: "slog-privacy/typed-attr-constructor",
 			gate: "check-no-user-content-in-slog.sh",
 			file: "core/rpc/zz_gate_probe.go",

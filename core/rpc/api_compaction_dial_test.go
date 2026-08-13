@@ -7,7 +7,7 @@ package rpc
 // PresetForTier("balanced").
 //
 // Prior to this fix, newGraphManagerWithDeps wired
-// fr041compaction.ProductionDefaults() — always "balanced" — into the
+// compaction.ProductionDefaults() — always "balanced" — into the
 // kernel's compaction resolver regardless of what the user had
 // actually dialed, including "off". That was mostly latent (the
 // automatic SitePreCall/SitePostTool sites are unconditionally
@@ -35,7 +35,7 @@ package rpc
 import (
 	"testing"
 
-	fr041compaction "github.com/kameas-ai/kenaz-harness/core/agentgraph/compaction"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph/compaction"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 )
 
@@ -46,8 +46,8 @@ import (
 // not some zero-value CompactionConfig.
 func TestCompactionGlobalSeed_NilSettings_FallsBackToProductionDefaults(t *testing.T) {
 	got := compactionGlobalSeed(nil)
-	want := fr041compaction.ProductionDefaults()
-	if got.ForSite(fr041compaction.SitePreCall) != want.ForSite(fr041compaction.SitePreCall) {
+	want := compaction.ProductionDefaults()
+	if got.ForSite(compaction.SitePreCall) != want.ForSite(compaction.SitePreCall) {
 		t.Fatalf("compactionGlobalSeed(nil) pre_call diverged from ProductionDefaults()")
 	}
 }
@@ -61,11 +61,11 @@ func TestCompactionGlobalSeed_NilSettings_FallsBackToProductionDefaults(t *testi
 func TestCompactionGlobalSeed_DefaultTier_NoBehaviourChange(t *testing.T) {
 	api := settings.NewAPI(nil) // in-memory store, zero value = defaults
 	got := compactionGlobalSeed(api)
-	want := fr041compaction.PresetForTier("balanced")
-	if got.ForSite(fr041compaction.SitePreCall) != want.ForSite(fr041compaction.SitePreCall) {
+	want := compaction.PresetForTier("balanced")
+	if got.ForSite(compaction.SitePreCall) != want.ForSite(compaction.SitePreCall) {
 		t.Fatalf("default-tier seed pre_call diverged from PresetForTier(\"balanced\")")
 	}
-	if got.ForSite(fr041compaction.SiteManual) != want.ForSite(fr041compaction.SiteManual) {
+	if got.ForSite(compaction.SiteManual) != want.ForSite(compaction.SiteManual) {
 		t.Fatalf("default-tier seed manual site diverged from PresetForTier(\"balanced\")")
 	}
 }
@@ -88,23 +88,35 @@ func TestCompactionGlobalSeed_DerivesFromEveryDialTier(t *testing.T) {
 			}
 
 			got := compactionGlobalSeed(api)
-			want := fr041compaction.PresetForTier(tier)
+			want := compaction.PresetForTier(tier)
 
-			gotPre := got.ForSite(fr041compaction.SitePreCall)
-			wantPre := want.ForSite(fr041compaction.SitePreCall)
+			gotPre := got.ForSite(compaction.SitePreCall)
+			wantPre := want.ForSite(compaction.SitePreCall)
 			if gotPre.PreCallThreshold != wantPre.PreCallThreshold {
 				t.Errorf("tier %q: PreCallThreshold = %v, want %v (PresetForTier(%q), not balanced's 0.80)",
 					tier, gotPre.PreCallThreshold, wantPre.PreCallThreshold, tier)
 			}
-			// Automatic sites stay disabled at every tier — this WP does
-			// NOT flip that switch (a parallel WP owns the tool-pairing
-			// precondition for SitePreCall/SitePostTool).
-			if gotPre.Enabled {
-				t.Errorf("tier %q: SitePreCall.Enabled = true, want false (unchanged by this fix)", tier)
+			// Site posture per tier. Since
+			// agentgraph-total-convergence-01PMGX01 WP08 the automatic
+			// pre_call site is live at every tier except "off" — the
+			// second compaction system that made it unsafe is gone, and
+			// DropOldestStrategy trims in tool_use/tool_result units so
+			// it can no longer strand a tool result. post_tool stays
+			// off because ToolResultCap already bounds tool results
+			// unconditionally at dispatch. See presets.go.
+			if gotPre.Enabled != wantPre.Enabled {
+				t.Errorf("tier %q: SitePreCall.Enabled = %v, want %v", tier, gotPre.Enabled, wantPre.Enabled)
 			}
-			gotPost := got.ForSite(fr041compaction.SitePostTool)
+			if want := tier != "off"; gotPre.Enabled != want {
+				t.Errorf("tier %q: SitePreCall.Enabled = %v, want %v (live everywhere but the off tier)",
+					tier, gotPre.Enabled, want)
+			}
+			gotPost := got.ForSite(compaction.SitePostTool)
 			if gotPost.Enabled {
-				t.Errorf("tier %q: SitePostTool.Enabled = true, want false (unchanged by this fix)", tier)
+				t.Errorf("tier %q: SitePostTool.Enabled = true, want false (ToolResultCap owns tool-result trimming)", tier)
+			}
+			if !got.ForSite(compaction.SiteManual).Enabled {
+				t.Errorf("tier %q: SiteManual.Enabled = false, want true — that site is the dial itself", tier)
 			}
 		})
 	}
@@ -112,7 +124,7 @@ func TestCompactionGlobalSeed_DerivesFromEveryDialTier(t *testing.T) {
 
 // TestCompactionGlobalSeed_Off_MeansOffEndToEnd asserts the "off"
 // tier's specific numerics: PreCallThreshold is 0 (mirrors
-// core/compaction.Tier's ModeNone — no threshold-based trigger), and
+// core/compactionpolicy.Tier's ModeNone — no threshold-based trigger), and
 // (as with every tier) the automatic sites are disabled, so nothing in
 // the FR-041 layer would automatically compact even if a future WP
 // enabled the sites without also checking the tier. Combined with the
@@ -130,14 +142,14 @@ func TestCompactionGlobalSeed_Off_MeansOffEndToEnd(t *testing.T) {
 	}
 
 	cfg := compactionGlobalSeed(api)
-	pre := cfg.ForSite(fr041compaction.SitePreCall)
+	pre := cfg.ForSite(compaction.SitePreCall)
 	if pre.Enabled {
 		t.Fatalf("off tier: SitePreCall.Enabled = true, want false")
 	}
 	if pre.PreCallThreshold != 0 {
 		t.Fatalf("off tier: PreCallThreshold = %v, want 0", pre.PreCallThreshold)
 	}
-	post := cfg.ForSite(fr041compaction.SitePostTool)
+	post := cfg.ForSite(compaction.SitePostTool)
 	if post.Enabled {
 		t.Fatalf("off tier: SitePostTool.Enabled = true, want false")
 	}
@@ -169,28 +181,40 @@ func TestNewGraphManagerWithDeps_ThreadsSettingsIntoPipelineResolver(t *testing.
 	if resolver == nil {
 		t.Fatal("pipeline.Resolver() is nil")
 	}
-	cfg := resolver.Resolve(fr041compaction.ScopeKey{})
-	pre := cfg.ForSite(fr041compaction.SitePreCall)
-	want := fr041compaction.PresetForTier("aggressive").ForSite(fr041compaction.SitePreCall)
+	cfg := resolver.Resolve(compaction.ScopeKey{})
+	pre := cfg.ForSite(compaction.SitePreCall)
+	want := compaction.PresetForTier("aggressive").ForSite(compaction.SitePreCall)
 	if pre.PreCallThreshold != want.PreCallThreshold {
 		t.Fatalf("resolved PreCallThreshold = %v, want %v (aggressive tier) — the pipeline's resolver did not pick up the settings dial",
 			pre.PreCallThreshold, want.PreCallThreshold)
 	}
 }
 
-// TestCompactionGlobalSeed_RuntimeDialChangeNotReflectedAfterConstruction
-// documents, on purpose, the boot-time-seed limitation called out in
-// newGraphManagerWithDeps's construction-site comment: once
-// compactionGlobalSeed has been read into the resolver at
-// construction time, a LATER change to the persisted
-// CompactionAggressiveness value is not retroactively observed by
-// that already-constructed resolver. Re-deriving live would require
-// either re-resolving on every read (the resolver has no settings
-// handle to do that with today) or pushing dial changes into the
-// resolver from Settings.Save — both out of scope for this WP. This
-// test exists so a future change to that boot-time behaviour is a
-// deliberate, reviewed edit here, not a silent regression either way.
-func TestCompactionGlobalSeed_RuntimeDialChangeNotReflectedAfterConstruction(t *testing.T) {
+// TestCompactionGlobalSeed_TracksRuntimeDialChange replaces
+// TestCompactionGlobalSeed_RuntimeDialChangeNotReflectedAfterConstruction,
+// which documented — deliberately, and correctly for its time — that the
+// FR-041 global layer froze whatever the dial said at construction.
+//
+// That limitation was safe to accept while every tier resolved to the
+// same per-site posture: the automatic sites were disabled at all five
+// tiers, so a stale global layer could only mis-set numerics nothing
+// evaluated. agentgraph-total-convergence-01PMGX01 WP08 made the posture
+// tier-dependent — SitePreCall is enabled at every tier except "off" —
+// which converted the limitation into a live defect: a user who moved
+// the dial to "off" mid-session kept getting automatic pre-call
+// compaction until they restarted, while the `compact` node, which reads
+// the dial on every turn, correctly stopped. One control, two answers.
+//
+// The old test's own doc named the fix ("pushing dial changes into the
+// resolver"). liveDialResolver does it by reading the dial where it is
+// consumed, so no write path can bypass it.
+//
+// The assertion deliberately checks Enabled, not just PreCallThreshold.
+// The threshold is what the old test looked at, and on the "off" tier
+// both a live and a stale resolver could agree on a numeric while
+// disagreeing about whether the site fires at all — which is the half
+// that spends the user's tokens.
+func TestCompactionGlobalSeed_TracksRuntimeDialChange(t *testing.T) {
 	api := settings.NewAPI(nil)
 	s, err := api.Store().LoadAll()
 	if err != nil {
@@ -204,18 +228,41 @@ func TestCompactionGlobalSeed_RuntimeDialChangeNotReflectedAfterConstruction(t *
 	_, pipeline := newGraphManagerWithDeps(nil, nil, nil, nil, nil, nil, api)
 	resolver := pipeline.Resolver()
 
-	// Simulate the user flipping the dial at runtime, after construction.
-	s.CompactionAggressiveness = "maximal"
+	// Boot state: balanced, so the automatic pre-call site is live.
+	bootPre := resolver.Resolve(compaction.ScopeKey{}).ForSite(compaction.SitePreCall)
+	if !bootPre.Enabled {
+		t.Fatalf("balanced tier resolved SitePreCall.Enabled = false; the fixture no longer exercises a live site, so the off-tier assertion below would pass vacuously")
+	}
+
+	// The user moves the dial to "off" at runtime, after construction —
+	// through the settings store, which is the one thing every write
+	// path (Settings panel, fleet sync applier) has in common.
+	s.CompactionAggressiveness = "off"
 	if err := api.Store().SaveAll(s); err != nil {
 		t.Fatalf("SaveAll: %v", err)
 	}
 
-	cfg := resolver.Resolve(fr041compaction.ScopeKey{})
-	pre := cfg.ForSite(fr041compaction.SitePreCall)
-	balancedPre := fr041compaction.PresetForTier("balanced").ForSite(fr041compaction.SitePreCall)
-	if pre.PreCallThreshold != balancedPre.PreCallThreshold {
-		t.Fatalf("boot-time-seed limitation changed: resolver reflected the post-construction dial change (got threshold %v); "+
-			"if this now tracks live changes, update this test's name/doc and the construction-site comment in newGraphManagerWithDeps instead of just changing the assertion",
-			pre.PreCallThreshold)
+	pre := resolver.Resolve(compaction.ScopeKey{}).ForSite(compaction.SitePreCall)
+	if pre.Enabled {
+		t.Fatalf("dial moved to \"off\" but the resolver still reports SitePreCall.Enabled = true — automatic compaction is ignoring the user's dial until restart")
+	}
+	offPre := compaction.PresetForTier("off").ForSite(compaction.SitePreCall)
+	if pre.PreCallThreshold != offPre.PreCallThreshold {
+		t.Fatalf("resolved PreCallThreshold = %v, want %v (off tier)", pre.PreCallThreshold, offPre.PreCallThreshold)
+	}
+
+	// And back again: the resolver must track the dial in both
+	// directions, not merely latch the first change it sees.
+	s.CompactionAggressiveness = "aggressive"
+	if err := api.Store().SaveAll(s); err != nil {
+		t.Fatalf("SaveAll: %v", err)
+	}
+	back := resolver.Resolve(compaction.ScopeKey{}).ForSite(compaction.SitePreCall)
+	if !back.Enabled {
+		t.Fatalf("dial moved back to \"aggressive\" but SitePreCall.Enabled is still false")
+	}
+	if want := compaction.PresetForTier("aggressive").ForSite(compaction.SitePreCall).PreCallThreshold; back.PreCallThreshold != want {
+		t.Fatalf("resolved PreCallThreshold = %v, want %v (aggressive tier)", back.PreCallThreshold, want)
 	}
 }
+

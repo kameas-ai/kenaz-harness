@@ -1,10 +1,11 @@
 schema_version: "1"
-manifest_version: "1.0.0"
+manifest_version: "1.1.0"
 id: ask
 extends: compute
 display_name: Ask
-description: "Free-form user-input elicitation (FR-037). No LLM budget consumed."
+description: "User-input elicitation (FR-037). Free-form by default; the full seven-kind dialog surface when question_kind is set. No LLM budget consumed."
 executor: agentgraph.ExecAsk
+dispatch: graph
 ports:
   inputs:
     - { name: context, type: any }
@@ -14,5 +15,16 @@ attrs:
   question:
     type: string
     required: true
-    description: "Prompt rendered to the user."
+    description: "Prompt rendered to the user. Markdown supported."
+  question_kind:
+    type: enum
+    enum: [radio, checkbox, text, number, slider, date, file]
+    description: "agentgraph-total-convergence-01PMGX01 WP06: input control to render, matching kenaz__ask_user_question's seven kinds. Empty (the default) means a free-form text answer — today's behaviour."
+  question_spec:
+    type: object
+    description: "agentgraph-total-convergence-01PMGX01 WP06: the rest of the structured question, decoded by core/elicitation's shared validator. Keys: options ([{value,label}], required for radio/checkbox), placeholder, min, max, step, default_value, preview ({kind,content,language}), questions (a multi-step wizard batch). Declaring `question` or `kind` in here is an error — they are the attrs above."
+  default_answer:
+    type: string
+    required: false
+    description: "autonomy-knobs-live-01PMAG02 WP02: answer used automatically when no answer has been seeded and askOnAmbiguity=never. Empty means no auto-resolution — the node pauses as before."
 budget: none

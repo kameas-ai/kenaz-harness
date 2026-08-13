@@ -28,11 +28,11 @@ type LLMRegistry interface {
 // ProfileResolver maps a (profileID, modelOverride) pair to a concrete
 // registry profile-id and model string. Returning ok=false causes the
 // call to fail with a typed error, matching the compaction wiring
-// pattern (core/compaction/wiring/llm.go::resolveProfile).
+// pattern (core/agentgraph/compaction/wiring/llm.go::resolveProfile).
 type ProfileResolver func(ctx context.Context, profileID, modelOverride string) (resolvedProfileID, resolvedModel string, ok bool)
 
 // OverheadTotals is the running tally of auto-title LLM cost. The
-// struct mirrors core/compaction/wiring.OverheadTotals so the rpc
+// struct mirrors core/agentgraph/compaction/wiring.OverheadTotals so the rpc
 // layer can surface it in the same per-session cost panel.
 type OverheadTotals struct {
 	// Total is the sum of every auto-title call's reducer-derived cost.

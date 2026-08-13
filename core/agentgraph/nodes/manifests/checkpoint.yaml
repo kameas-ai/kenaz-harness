@@ -5,6 +5,7 @@ extends: marker
 display_name: Checkpoint
 description: "Forces a kernel checkpoint at a logical boundary (FR-057)."
 executor: agentgraph.ExecCheckpoint
+dispatch: graph
 ports:
   inputs:
     - { name: in, type: any }

@@ -5,6 +5,7 @@ extends: compute
 display_name: Activity
 description: "Embeds a registered activity sub-graph (FR-034)."
 executor: agentgraph.ExecActivity
+dispatch: graph
 ports:
   inputs:
     - { name: in, type: any }

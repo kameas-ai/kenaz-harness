@@ -83,8 +83,8 @@ func TestYAMLResolver_WithDefaultsSeedsGivenGlobalConfig(t *testing.T) {
 	// seed, not SafeDefaults.
 	cfg := r.Resolve(ScopeKey{})
 	pre := cfg.ForSite(SitePreCall)
-	if pre.Enabled {
-		t.Errorf("pre_call.Enabled = true; expected the conservative-tier preset's disabled pre_call to seed the resolver")
+	if !pre.Enabled {
+		t.Errorf("pre_call.Enabled = false; expected the conservative-tier preset's enabled pre_call to seed the resolver (every tier but \"off\" since agentgraph-total-convergence-01PMGX01 WP08)")
 	}
 	if pre.PreCallThreshold != 0.95 {
 		t.Errorf("pre_call_threshold = %v, want 0.95 (conservative tier)", pre.PreCallThreshold)

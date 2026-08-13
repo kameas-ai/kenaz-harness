@@ -1,7 +1,7 @@
-// Permission resolution for the toolloop. WP02 surface: a small
-// interface plus three concrete resolvers (static config, session
-// overrides, merged) that the loop consults between tool detection
-// and dispatch.
+// Permission resolution — the three-valued verdict at the centre of
+// this package. WP02 surface: a small interface plus three concrete
+// resolvers (static config, session overrides, merged) that the
+// dispatch path consults between tool detection and the call.
 //
 // Match priority (shared by every resolver):
 //
@@ -13,9 +13,13 @@
 //
 // Wildcards are the literal string "*". No glob / regex support — the
 // rule schema is intentionally narrow so the resolver stays predictable
-// and the surface stays auditable. WP05 lands the confirm-each modal
-// flow; for now confirm_each is treated as auto_allow at dispatch time
-// while the resolver still surfaces the verdict for telemetry.
+// and the surface stays auditable.
+//
+// All three verdicts are enforced at dispatch time as of
+// confirm-each-enforcement-01PMAG05 WP01: PolicyConfirmEach parks the
+// call on a ConfirmBus (confirm.go) until the user answers, rather than
+// being quietly treated as auto_allow. PolicyDeny short-circuits before
+// any prompt.
 package toolloop
 
 import (
@@ -37,8 +41,8 @@ const (
 
 // PermissionResolver maps a (sessionID, server, tool) triple to a
 // concrete Resolution. Implementations must be safe for concurrent
-// use — the loop calls Resolve on its hot path, potentially from the
-// future concurrent-dispatch worker pool (WP04).
+// use — Resolve sits on the dispatch hot path and is called from the
+// concurrent tool-dispatch worker pool.
 type PermissionResolver interface {
 	Resolve(ctx context.Context, sessionID, server, tool string) (Resolution, error)
 }
@@ -213,7 +217,7 @@ func (NoopSessionOverrideReader) MCPOverrides(_ context.Context, _ string) ([]MC
 }
 
 // sessionOverrideResolver consults a SessionOverrideReader on every
-// Resolve. The reader's result is not cached: the loop's iteration
+// Resolve. The reader's result is not cached: the per-turn tool-call
 // cadence is low enough that a per-call read is fine, and a per-
 // session cache risks staleness when the user edits overrides between
 // turns.
@@ -329,7 +333,7 @@ func (m *MergedResolver) Resolve(ctx context.Context, sessionID, server, tool st
 	return m.static.Resolve(ctx, sessionID, server, tool)
 }
 
-// allowAllResolver is the loop's default when Config.Permissions is
+// allowAllResolver is the default when Config.Permissions is
 // nil — every (server, tool) returns auto_allow without touching disk
 // or sessions.
 type allowAllResolver struct{}

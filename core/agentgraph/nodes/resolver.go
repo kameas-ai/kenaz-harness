@@ -188,6 +188,14 @@ func mergeOverlay(merged *Manifest, prov Provenance, child *Manifest, layerID st
 		merged.Executor = child.Executor
 		prov["executor"] = layerID
 	}
+	if child.Dispatch != "" {
+		merged.Dispatch = child.Dispatch
+		prov["dispatch"] = layerID
+	}
+	if child.ToolName != "" {
+		merged.ToolName = child.ToolName
+		prov["tool_name"] = layerID
+	}
 	if len(child.Aliases) > 0 {
 		merged.Aliases = append([]string(nil), child.Aliases...)
 		prov["aliases"] = layerID
@@ -257,6 +265,12 @@ func stampSelfProvenance(m *Manifest, prov Provenance, layerID string) {
 	}
 	if m.Executor != "" {
 		prov["executor"] = layerID
+	}
+	if m.Dispatch != "" {
+		prov["dispatch"] = layerID
+	}
+	if m.ToolName != "" {
+		prov["tool_name"] = layerID
 	}
 	if len(m.Aliases) > 0 {
 		prov["aliases"] = layerID

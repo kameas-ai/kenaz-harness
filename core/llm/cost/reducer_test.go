@@ -103,7 +103,7 @@ func TestReducer_NilTableSafe(t *testing.T) {
 }
 
 // TestKindCompaction_Constant pins the WP08 cost-tag constant. The
-// per-session cost view in core/compaction/wiring/llm.go reads this
+// per-session cost view in core/agentgraph/compaction/wiring/llm.go reads this
 // to render "Compaction overhead: $X.XX of $Y.YY total" (FR §2.11);
 // a rename here would silently break the frontend's cost projection.
 func TestKindCompaction_Constant(t *testing.T) {
@@ -116,7 +116,7 @@ func TestKindCompaction_Constant(t *testing.T) {
 // "compaction" calls plus one "chat" call to model the per-session
 // cost panel's break-out behavior. The reducer itself doesn't filter
 // by the tag — that's the OverheadTotals adapter's job in
-// core/compaction/wiring/llm.go — but the reducer must still produce
+// core/agentgraph/compaction/wiring/llm.go — but the reducer must still produce
 // determinate cost for the same (provider, model) regardless of which
 // kind triggered the call. This test pins that contract so a future
 // reducer change accidentally keying on the tag fails loudly.

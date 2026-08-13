@@ -5,6 +5,7 @@ extends: control
 display_name: Join
 description: "Awaits multiple upstream completions and folds them into a single output (FR-044)."
 executor: agentgraph.ExecJoin
+dispatch: graph
 ports:
   inputs:
     - { name: in, type: any }

@@ -76,6 +76,38 @@ jobs:
       - name: codegen idempotent
         run: bash scripts/ci/check-codegen.sh
 
+      - name: node-dispatch guard
+        # Manifest dispatch: <-> newExecutorRegistry(), both directions.
+        # wiring-integrity-01PMAG04 WP04. Ships green against main: every
+        # kind manifest under core/agentgraph/nodes/manifests/ already
+        # declares dispatch: graph|builtin_tool (WP01).
+        run: bash scripts/ci/check-node-dispatch.sh
+
+      - name: output-ports guard
+        # Every agentgraph node Outputs["k"] write is read (Go, a shipped/
+        # tested YAML graph, or the frontend) or carries a
+        # //wiring:deferred directive. wiring-integrity-01PMAG04 WP05 —
+        # see docs/wiring-audit.md's "Re-run methodology" section before
+        # touching this script; a naive Go-only version over-reports 3x.
+        run: bash scripts/ci/check-output-ports.sh
+
+      - name: seam-implementers guard
+        # Every interface in core/agentgraph/seams.go has >=1 non-test
+        # implementer or a //wiring:deferred directive. Uses the Go type
+        # checker (golang.org/x/tools/go/packages), not grep — interface
+        # satisfaction is structural and grep cannot answer it soundly.
+        # wiring-integrity-01PMAG04 WP06.
+        run: bash scripts/ci/check-seam-implementers.sh
+
+      - name: knob-coverage guard
+        # Generalises the resolved-config coverage check any dial system
+        # can opt into: go test ./core/... -run 'TestKnobCoverage' picks
+        # up every TestKnobCoverage* test module-wide, so a new mission
+        # gets enforcement by registering + writing one test, with no
+        # further change to this step. wiring-integrity-01PMAG04 WP07 —
+        # see core/wiring/knobcoverage's package doc for the contract.
+        run: bash scripts/ci/check-knob-coverage.sh
+
       - name: bindings-name guard
         run: bash scripts/ci/check-binding-names.sh
 
@@ -141,6 +173,35 @@ jobs:
         # wired in the serve-mode RPC dispatcher so the gap is visible in CI
         # logs.  Exits 0 (never blocks a PR) until SERVE_DRIFT_GATE=1 is set.
         run: bash scripts/ci/check-serve-dispatch-drift.sh
+
+      - name: agentgraph-convergence guard (I3/I6/I7)
+        # kitty-specs/agentgraph-total-convergence-01PMGX01 WP01. Every
+        # callable node kind must be exercised end-to-end by a shipped
+        # graph/activity (I3), no kind may be reachable ONLY through the
+        # dead-in-production toolloop_default.yaml template (I6), and every
+        # non-test package under core/ must have a non-test importer or be
+        # an entry point (I7). Fails on an unlisted violation OR a stale
+        # allow-list entry — scripts/ci/allowlists/i3-unexercised-kinds.txt,
+        # i6-template-only-kinds.txt, i7-orphan-packages.txt shrink as
+        # follow-up WPs converge each one.
+        run: bash scripts/ci/check-agentgraph-convergence.sh
+
+      - name: no-unwired-gates guard (I10)
+        # kitty-specs/agentgraph-total-convergence-01PMGX01 WP01. Catches
+        # the `EvaluateToolGate`-class defect: an exported gate/enforce/
+        # authorize function with zero non-test call sites — code that
+        # reads as load-bearing but never runs in production.
+        # scripts/ci/allowlists/i10-unwired-gates.txt documents today's
+        # instances.
+        run: bash scripts/ci/check-no-unwired-gates.sh
+
+      - name: no-forbidden-compaction-symbols guard (I4)
+        # kitty-specs/agentgraph-total-convergence-01PMGX01 WP01. Exactly
+        # one compaction entry point: `SuppressAutomaticCompaction` and
+        # `runPreSendCompaction` are grep-forbidden outside
+        # scripts/ci/allowlists/i4-forbidden-compaction-symbols.txt, which
+        # allow-lists both today (spec §4.4/WP08 retires them).
+        run: bash scripts/ci/check-no-forbidden-compaction-symbols.sh
 
       # csp guard runs in test-frontend after `npm run build` produces
       # the real frontend/dist/index.html — there's no point checking

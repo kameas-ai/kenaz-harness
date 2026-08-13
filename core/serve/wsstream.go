@@ -146,6 +146,19 @@ var passthroughTopics = []string{
 
 	// Blocking elicitation (kenaz__ask_user_question).
 	rpc.TopicElicitPending,
+
+	// Mid-turn context-overflow recovery (01PMGX01 WP17). Without this
+	// a served-mode user watching a stalled stream gets no explanation
+	// for the pause while the runner compacts and re-drives; the
+	// terminal session_full report rides llm:stream-closed and is a
+	// different event with a different meaning.
+	rpc.TopicChatOverflowRecovery,
+
+	// Confirm-each tool confirmation (confirm-each-enforcement-01PMAG05
+	// WP02). Same reasoning as the permission gates above: the tool call
+	// is PARKED with no deadline, so a dropped confirm-pending frame is
+	// not a missing notification — it is a turn that never resumes.
+	rpc.TopicToolConfirmPending,
 }
 
 // subscribedTopics is every topic the WS handler subscribes to: the
@@ -260,6 +273,17 @@ func (s *Server) streamSessions(ctx context.Context, ws *websocket.Conn) {
 	// reconstruct dialog state (FR-007).
 	if pending, perr := s.elicitAPI().ListPending(ctx); perr == nil && len(pending) > 0 {
 		if !writeFrame("elicit:pending:snapshot", pending) {
+			return
+		}
+	}
+
+	// Any currently-parked tool confirmations, so a reconnecting frontend
+	// rebuilds the batched modal rather than leaving the run parked
+	// behind a dialog the browser forgot about. Same contract as the
+	// elicitation snapshot above: the pause lives in the harness
+	// process, not in the dialog.
+	if parked, cerr := s.api.Confirm().ListPending(ctx, ""); cerr == nil && len(parked) > 0 {
+		if !writeFrame("tool:confirm-pending:snapshot", parked) {
 			return
 		}
 	}

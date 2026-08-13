@@ -457,7 +457,138 @@ const (
 	// and aggregate counts (connectors, nodes). It NEVER carries extracted node
 	// bodies, titles, source content, or any third-party credential material.
 	KindContextBootstrapRun Kind = "context.bootstrap_run"
+
+	// ── Confirm-each audit kinds (confirm-each-enforcement-01PMAG05 WP05) ──
+
+	// KindToolConfirmDecision fires ONCE for every `confirm_each` verdict
+	// the dispatch path resolves, on every path it can resolve by:
+	// prompted approve, prompted deny, session-grant hit, persisted-grant
+	// hit, autonomy skip-set skip, headless-policy application, and
+	// toggle-off auto-allow. Payload: ToolConfirmDecisionPayload.
+	//
+	// The completeness matters more than the individual records. The
+	// defect this mission repaired was a security control that decided
+	// silently; a decision path with no audit record is the same defect
+	// wearing a different hat, so the WP06 test asserts that every value
+	// of ToolConfirmPath is reachable and emitted.
+	//
+	// Privacy invariant: the payload carries ids, names, the classified
+	// family, the path, and the outcome. It MUST NOT carry tool argument
+	// values, an args summary, prompt bytes, or tool output. The server
+	// and tool NAMES are recorded (they are the subject of the decision);
+	// nothing derived from the arguments is.
+	KindToolConfirmDecision Kind = "tool.confirm_decision"
+
+	// KindToolConfirmGrantWritten fires when the user takes the
+	// visually-separated "always allow" action and a DURABLE allow rule
+	// is written for (server, tool). Payload:
+	// ToolConfirmGrantWrittenPayload.
+	//
+	// Distinct from KindToolConfirmDecision because persisting is a
+	// second, deliberate act with a different blast radius: the decision
+	// record says "this call was approved", this one says "future calls
+	// will not be asked about". Emitted on failure too (Written=false)
+	// so a silent write failure cannot masquerade as a grant.
+	KindToolConfirmGrantWritten Kind = "tool.confirm_grant_written"
 )
+
+// ToolConfirmPath names which branch of the confirm-each dispatch path
+// produced a decision. Values are stable wire strings.
+type ToolConfirmPath string
+
+const (
+	// ToolConfirmPathPrompted — the user was asked and answered.
+	ToolConfirmPathPrompted ToolConfirmPath = "prompted"
+
+	// ToolConfirmPathSessionGrant — a prior "allow for this session"
+	// answer covered this call; no prompt was shown.
+	ToolConfirmPathSessionGrant ToolConfirmPath = "session_grant"
+
+	// ToolConfirmPathPersistedGrant — a durable "always allow" rule
+	// covered this call; no prompt was shown.
+	ToolConfirmPathPersistedGrant ToolConfirmPath = "persisted_grant"
+
+	// ToolConfirmPathSkipSet — the autonomy posture's prompt-skip set
+	// covered the tool's family (autoApproveFamilies, or the
+	// destructiveActionPosture: cedar-only extension). Family names the
+	// classified family so an operator can see WHICH grant applied
+	// rather than only that one did.
+	ToolConfirmPathSkipSet ToolConfirmPath = "skip_set"
+
+	// ToolConfirmPathHeadlessPolicy — no prompt channel existed and the
+	// deployment's confirm_each_headless policy decided.
+	ToolConfirmPathHeadlessPolicy ToolConfirmPath = "headless_policy"
+
+	// ToolConfirmPathToggleOff — Settings.ConfirmEachEnabled() is false,
+	// so the prompt was never offered and the verdict behaved as
+	// auto-allow (FR-006).
+	ToolConfirmPathToggleOff ToolConfirmPath = "toggle_off"
+)
+
+// AllToolConfirmPaths is the canonical list. WP06's coverage test walks
+// it, so a new path added without an audit call site fails the build's
+// intent rather than shipping a silent branch.
+var AllToolConfirmPaths = []ToolConfirmPath{
+	ToolConfirmPathPrompted,
+	ToolConfirmPathSessionGrant,
+	ToolConfirmPathPersistedGrant,
+	ToolConfirmPathSkipSet,
+	ToolConfirmPathHeadlessPolicy,
+	ToolConfirmPathToggleOff,
+}
+
+// ToolConfirmDecisionPayload is the KindToolConfirmDecision payload.
+//
+// Privacy invariant: no argument values, no args summary, no tool
+// output. Reason is the RESOLVER's or the user's short reason string,
+// never a rendering of the call.
+type ToolConfirmDecisionPayload struct {
+	SessionID string `json:"session_id"`
+	CallID    string `json:"call_id,omitempty"`
+	BatchID   string `json:"batch_id,omitempty"`
+
+	// Server and Tool are the bare names the decision was about.
+	Server string `json:"server"`
+	Tool   string `json:"tool"`
+
+	// Family is the classified tool family (toolloop.ClassifyToolFamily).
+	// Always populated — including "unknown", which is the value that
+	// explains why an unclassifiable tool prompted under a permissive
+	// posture.
+	Family string `json:"family"`
+
+	// Path names which branch decided. One of ToolConfirmPath.
+	Path ToolConfirmPath `json:"path"`
+
+	// Approved is the outcome: true when the call dispatched.
+	Approved bool `json:"approved"`
+
+	// RememberSession / Persisted record what the user asked to carry
+	// forward, when the path was "prompted".
+	RememberSession bool `json:"remember_session,omitempty"`
+	Persisted       bool `json:"persisted,omitempty"`
+
+	// Reason is a short classification string ("user denied",
+	// "dismissed", "headless policy: deny", the resolver's reason). Not
+	// free-form user input and never tool arguments.
+	Reason string `json:"reason,omitempty"`
+}
+
+// ToolConfirmGrantWrittenPayload is the KindToolConfirmGrantWritten
+// payload. GrantID is the revocation handle the Settings grants list
+// round-trips (the .cedar filename on the desktop chassis).
+type ToolConfirmGrantWrittenPayload struct {
+	SessionID string `json:"session_id,omitempty"`
+	Server    string `json:"server"`
+	Tool      string `json:"tool"`
+	GrantID   string `json:"grant_id,omitempty"`
+
+	// Written is false when the persist was requested but the write
+	// failed; Error then carries the failure class. The call itself was
+	// still approved — a failed persist must not read as a granted one.
+	Written bool   `json:"written"`
+	Error   string `json:"error,omitempty"`
+}
 
 // Event is the wire shape passed to the event log. The concrete event-log
 // mission accepts a richer envelope; this package speaks only the

@@ -26,6 +26,7 @@ import (
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
+// wiring:deferred(needs versioned-model-profile-01PMDL04 WP02+ for a live ModelProfile lookup; see docs/wiring-audit.md item 5)
 // PromptTemplateSource resolves the prompt-rendering template a
 // (providerKind, modelID) pair's ModelProfile prescribes.
 type PromptTemplateSource interface {

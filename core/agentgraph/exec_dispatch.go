@@ -102,6 +102,25 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 		}
 	}
 
+	// Confirmation batching (confirm-each-enforcement-01PMAG05 WP02).
+	//
+	// One Execute is one turn's worth of model-emitted tool calls, which
+	// is exactly the grouping the batched confirmation modal needs
+	// (owner decision 3: one dialog with N rows, not N dialogs). Stamp a
+	// batch id on the context every dispatched call inherits; any call
+	// that parks for confirmation carries it onto its ConfirmRequest, so
+	// the frontend can render the whole turn as one modal and cancel it
+	// as one unit.
+	//
+	// Stamped here rather than in the chat runner because the runner
+	// cannot see turn boundaries — a single run drives many
+	// LLM→tool_dispatch→LLM cycles, and a run-scoped batch would glue
+	// every turn's confirmations into one ever-growing dialog.
+	//
+	// Costs nothing when confirmation is not in play: the value is a
+	// string on a context that only the confirm path ever reads.
+	ctx = toolloop.WithConfirmBatch(ctx, toolloop.NewConfirmID("batch"))
+
 	maxConcurrent := a.MaxConcurrent
 	if maxConcurrent <= 0 {
 		maxConcurrent = 4
@@ -187,31 +206,38 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 			return
 		}
 
-		// Pre-tool boundary (mirror toolExecutor). Greedy memory hook +
-		// chassis-side mutation extension point.
-		if env.Hooks != nil {
-			hookBatch := env.Hooks.Fire(ctx, HookPreTool, "session",
-				"pre-tool — "+oc.call.Name, summarizeArgs(oc.args), node.ID)
-			for _, e := range hookBatch.Events {
-				if e.RunID == "" {
-					e.RunID = env.RunID
-				}
-				if e.NodeID == "" {
-					e.NodeID = node.ID
-				}
-				oc.events.Append(e)
-			}
+		// Shared pre-call gate (WP05, tool_invocation.go): greedy-memory
+		// hook, canonical EventToolCall, and the v2 pre_tool_use
+		// lifecycle hooks. The lifecycle hooks are NEW on this path —
+		// before agentgraph-total-convergence-01PMGX01 they only ran on
+		// the dead `tool` kind, so a user-configured pre_tool_use hook
+		// could not block, rewrite, or annotate any tool call the
+		// product actually made.
+		tc := toolCallContext{
+			NodeID:   node.ID,
+			NodeKind: NodeKindToolDispatch,
+			CallID:   oc.call.ID,
+			ToolName: oc.call.Name,
 		}
-
-		// Emit the canonical EventToolCall for parity with the static
-		// tool kind so the EventLog projection sees the same shape
-		// regardless of which kind dispatched it.
-		_ = oc.events.AppendKind(env.RunID, node.ID, EventToolCall, map[string]any{
-			"tool":      oc.call.Name,
-			"args":      oc.args,
-			"call_id":   oc.call.ID,
-			"node_kind": "tool_dispatch",
-		})
+		var argsJSON json.RawMessage
+		var blocked *ToolResult
+		var preEvents EventBatch
+		var rewritten bool
+		oc.args, argsJSON, rewritten, blocked, preEvents = toolPreDispatch(ctx, env, tc, oc.args)
+		oc.events.Events = append(oc.events.Events, preEvents.Events...)
+		if blocked != nil {
+			// A hook denied this call. Surface it as a model-readable
+			// is_error result — the sibling calls in this fan-out still
+			// run, exactly as they do for a tool that fails.
+			oc.result = *blocked
+			return
+		}
+		if rewritten {
+			// Keep the post-tool hook payload consistent with what was
+			// actually dispatched. Absent a rewrite oc.rawArgs stays the
+			// model's own argument string, byte-for-byte.
+			oc.rawArgs = string(argsJSON)
+		}
 
 		// WP07 — per-call timeout (FR-007):
 		// Wrap the dispatch context with a deadline when the caller has
@@ -253,12 +279,8 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 			}
 		}
 
-		// Gate: passive tools (e.g. kenaz__sleep) must not consume an
-		// iteration slot (FR-010). toolloop.ShouldCountIteration returns
-		// false for any tool registered as tool.passive in Cedar.
-		if env.Counters != nil && toolloop.ShouldCountIteration(oc.call.Name) {
-			env.Counters.AddTool()
-		}
+		// FR-010 iteration gate, shared with the tool-node path.
+		chargeToolIteration(env, oc.call.Name)
 
 		if callErr != nil {
 			// Wrap deny / dispatch failure into an IsError result so the
@@ -285,13 +307,63 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 				"call_id": oc.call.ID,
 			})
 		}
+		// WP01 (turn-context-runway-01PMAG03): bound the result at the
+		// source. Tool output is the dominant context accumulator in a
+		// long turn and truncation is free where compaction costs an LLM
+		// call, so the cap is applied here — before the result becomes a
+		// Message AND before the post_tool_use hook sees the output —
+		// rather than being cleaned up downstream. Results at or under
+		// the cap pass through byte-for-byte.
+		originalBytes := len(tr.Content)
+		capped, elided, handle, archiveErr := capToolOutput(ctx, env, ToolOutputRef{
+			RunID:  env.RunID,
+			NodeID: node.ID,
+			Tool:   oc.call.Name,
+			CallID: oc.call.ID,
+		}, tr.Content)
+		if elided > 0 {
+			tr.Content = capped
+			logging.L().Info("agentgraph.tool_dispatch.result_truncated",
+				"run_id", env.RunID, "node_id", node.ID,
+				"tool", oc.call.Name, "call_id", oc.call.ID,
+				"bytes_original", originalBytes,
+				"bytes_retained", len(capped),
+				"bytes_elided", elided,
+				"handle", handle,
+			)
+		}
+		if archiveErr != nil {
+			// Non-fatal: the truncation still happened, only the
+			// re-read handle is missing. Surfaced as an event so the
+			// gap is visible in the run trace.
+			logging.L().Warn("agentgraph.tool_dispatch.archive_failed",
+				"run_id", env.RunID, "tool", oc.call.Name,
+				"call_id", oc.call.ID, "err", archiveErr.Error())
+		}
+
+		// Shared post-call bookkeeping: EventToolResult + the v2
+		// post_tool_use / post_tool_use_failure hooks (also new on this
+		// path). The truncation telemetry threads through as extra
+		// payload fields so exactly one EventToolResult is emitted
+		// (integration of runway WP01 + nodes WP04, 2026-08-12).
+		var truncExtra map[string]any
+		if elided > 0 {
+			truncExtra = map[string]any{
+				"truncated":      true,
+				"bytes_original": originalBytes,
+				"bytes_elided":   elided,
+			}
+			if handle != "" {
+				truncExtra["output_handle"] = handle
+			}
+			if archiveErr != nil {
+				truncExtra["archive_err"] = archiveErr.Error()
+			}
+		}
+		var postEvents EventBatch
+		tr, postEvents = toolPostDispatch(ctx, env, tc, argsJSON, tr, callErr, truncExtra)
+		oc.events.Events = append(oc.events.Events, postEvents.Events...)
 		oc.result = tr
-		_ = oc.events.AppendKind(env.RunID, node.ID, EventToolResult, map[string]any{
-			"tool":     oc.call.Name,
-			"call_id":  oc.call.ID,
-			"is_error": tr.IsError,
-			"bytes":    len(tr.Content),
-		})
 
 		// Greedy memory hook (post-tool) + new tool-shaped post hook for
 		// the chassis-side artifact-output capture.
@@ -390,12 +462,26 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 		}
 	}
 
-	// WP02 — surface the doom-loop signal at node level so a future
-	// ladder controller (WP04, not yet built) can force a
-	// replan/escalation regardless of remaining budget. Kept as a plain
-	// output rather than an error: the underlying tool calls still ran
-	// and their real results still flow to the model this turn — only
-	// the *next* turn's routing decision is what should_replan informs.
+	// WP02 — surface the doom-loop signal at node level so a ladder
+	// controller can force a replan/escalation regardless of remaining
+	// budget. Kept as a plain output rather than an error: the
+	// underlying tool calls still ran and their real results still flow
+	// to the model this turn — only the *next* turn's routing decision
+	// is what should_replan informs.
+	//
+	// THE CONSUMER EXISTS NOW (agentgraph-total-convergence-01PMGX01
+	// WP11c; design in agentic-turn-routing-01PMAG01 §3.7). Both ports
+	// carried a deferred-wiring directive from
+	// wiring-integrity-01PMAG04 WP05 until then, because nothing read
+	// either one: events.go called the intended reader "a future ladder
+	// controller" and it was never built, so a model stuck calling the
+	// same failing tool kept calling it until the budget ran out
+	// (01PMAG01 G4). routerExecutor reads both — `should_replan` to
+	// override the model's stated choice with the replan route, and
+	// `doom_loop_hits` for the override's audit payload — and
+	// chat_default routes that choice into an escalation_ladder. The
+	// directives are gone because the ports are read; check-output-
+	// ports.sh is what holds that honest.
 	if len(doomLoopHits) > 0 {
 		res.Outputs["should_replan"] = true
 		res.Outputs["doom_loop_hits"] = doomLoopHits

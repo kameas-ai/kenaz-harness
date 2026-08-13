@@ -129,6 +129,83 @@ func (b BudgetSignature) IsKnown() bool {
 	return false
 }
 
+// DispatchMode discriminates how a callable kind reaches execution at
+// runtime (wiring-integrity-01PMAG04 WP01). It replaces the nominal
+// `executor:` string, which encoded 33 distinct Go-symbol strings
+// (e.g. "agentgraph.ExecModel") that nothing in the loader, resolver,
+// or kernel ever resolved through — the real registry
+// (`newExecutorRegistry()` in core/agentgraph/executor.go) keys off
+// each Executor's Kind() method, a Go value, never off this string. So
+// "executor: agentgraph.ExecBuiltinTool" on `sleep` and
+// "executor: agentgraph.ExecModel" on `model` were textually
+// indistinguishable from a typo, even though one names a kind with no
+// registered Executor on purpose and the other names a kind that must
+// have one. Dispatch makes that distinction load-bearing and checkable
+// (see scripts/ci/check-node-dispatch.sh).
+type DispatchMode string
+
+const (
+	// DispatchGraph means a registered agentgraph.Executor exists for
+	// this kind, keyed by Executor.Kind() in newExecutorRegistry(). A
+	// dispatch: graph kind with no matching registry entry is a load-time
+	// defect, not a deliberate gap.
+	DispatchGraph DispatchMode = "graph"
+	// DispatchBuiltinTool means this kind has no graph Executor by
+	// design — it is reached when the model calls the builtin tool named
+	// by ToolName, dispatched through the tool-call path rather than the
+	// node-executor registry.
+	//
+	// ZERO SHIPPED INSTANCES as of 2026-08-13. sleep and
+	// subagent_dispatch were the two examples; 01PMGX01 Phase 2 gave
+	// both real archetype-derived executors, so both now declare
+	// dispatch: graph and this mode has no members.
+	//
+	// KEPT ANYWAY, deliberately, by 01PMGX01 WP17. The reasoning, since
+	// "a mode with zero instances" is normally exactly what this mission
+	// deletes:
+	//
+	// This is not an unreachable code path. It is the NEGATIVE POLE OF A
+	// DISCRIMINATOR, and a discriminator with one legal value
+	// discriminates nothing. Delete this constant and `dispatch:`
+	// becomes a field every manifest must set to the same value, at
+	// which point check-node-dispatch.sh's "both directions" check
+	// degrades into "every callable kind has an executor" — which is
+	// invariant I1, already enforced by a Go test with an empty
+	// allowlist. So deleting the mode does not remove dead weight; it
+	// removes the ability to SAY that a kind has no executor on purpose,
+	// which is the whole reason wiring-integrity-01PMAG04 WP01 replaced
+	// the unvalidated `executor:` string with this field.
+	//
+	// The branches are exercised, not vestigial: nodes/dispatch_test.go
+	// drives ValidateDispatch through the clean builtin_tool case, the
+	// missing-tool_name case, and the stray-tool_name-on-graph case.
+	//
+	// EXPIRY CONDITION, so this does not become a permanent hedge. If a
+	// later reader still finds zero instances and wants the surface
+	// gone, the honest change is to delete the MODE AND THE FIELD
+	// TOGETHER — every manifest's `dispatch: graph` line,
+	// GraphDispatchKindIDs/BuiltinToolDispatchKindIDs, ValidateDispatch,
+	// dispatch_registry_test.go and check-node-dispatch.sh — and lean on
+	// I1 alone. Deleting only this constant is the one option that is
+	// strictly worse than either keeping or removing the whole thing.
+	DispatchBuiltinTool DispatchMode = "builtin_tool"
+)
+
+// AllDispatchModes returns every recognised DispatchMode.
+func AllDispatchModes() []DispatchMode {
+	return []DispatchMode{DispatchGraph, DispatchBuiltinTool}
+}
+
+// IsKnown reports whether d is a recognised DispatchMode.
+func (d DispatchMode) IsKnown() bool {
+	for _, candidate := range AllDispatchModes() {
+		if candidate == d {
+			return true
+		}
+	}
+	return false
+}
+
 // AttrSpec describes one attribute on a manifest. Exactly one entry per
 // distinct attr name; deep-merge across the inheritance chain is by
 // attr-name key.
@@ -253,9 +330,24 @@ type Manifest struct {
 	// kernel's budget bookkeeper in a later WP.
 	BudgetConsumes []string `yaml:"budget_consumes,omitempty" json:"budget_consumes,omitempty"`
 
-	// Executor is the Go-symbol reference (for callable kinds). Resolved
-	// through the executor registry at startup. Empty at archetype layer.
+	// Executor is a human-readable Go-symbol hint (for callable kinds),
+	// kept for one release cycle as documentation. It is NOT validated
+	// or resolved through anywhere — Dispatch is the load-bearing field
+	// now (wiring-integrity-01PMAG04 WP01). Empty at archetype layer.
 	Executor string `yaml:"executor,omitempty" json:"executor,omitempty"`
+
+	// Dispatch discriminates how this kind reaches execution: "graph"
+	// (a registered agentgraph.Executor exists) or "builtin_tool" (no
+	// Executor; reached via ToolName through the tool-dispatch path).
+	// Required on every callable (non-archetype) kind manifest; empty at
+	// the archetype layer. See DispatchMode's doc comment.
+	Dispatch DispatchMode `yaml:"dispatch,omitempty" json:"dispatch,omitempty"`
+
+	// ToolName is the builtin-tool name (e.g. "kenaz__sleep") this kind
+	// dispatches through when Dispatch == DispatchBuiltinTool. Required
+	// exactly when Dispatch == DispatchBuiltinTool; must be empty
+	// otherwise.
+	ToolName string `yaml:"tool_name,omitempty" json:"tool_name,omitempty"`
 
 	// Aliases is the list of deprecated names that resolve to this kind.
 	// Whole-list replace under inheritance.

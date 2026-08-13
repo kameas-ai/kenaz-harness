@@ -37,6 +37,15 @@ const props = defineProps<{
    */
   errorMessage?: string | null;
   /**
+   * Discriminator for `errorMessage`, mirroring the backend's
+   * StreamClosedPayload.ErrorKind. "session_full" swaps the generic
+   * "Send failed" framing for accurate copy: the send DID succeed — the
+   * user's message is in the transcript above — and what failed is that
+   * the conversation no longer fits the model's context window. Retrying
+   * cannot help, so the banner offers the way out instead.
+   */
+  errorKind?: string | null;
+  /**
    * When true, MessageBubbles render a 📌 button on hover so the user
    * can pin individual messages to long-term memory. Off by default
    * (privacy posture); the parent flips it on when memory is enabled.
@@ -91,6 +100,12 @@ const emit = defineEmits<{
   (e: 'remember', message: Message, scope: MemoryScopeKind): void;
   /** Forwarded from MessageBubble's "Save as artifact" affordance. */
   (e: 'save-artifact', message: Message): void;
+  /**
+   * Emitted from the session-full banner's CTA. The parent opens the
+   * same new-session flow the LongSessionNudge banner uses — one
+   * destination for one problem.
+   */
+  (e: 'new-session'): void;
   /** Forwarded from a message's per-message artifact chip. */
   (e: 'open-artifact', artifact: Artifact): void;
   /**
@@ -310,9 +325,39 @@ defineExpose({ scrollToBottom });
         <span>Thinking…</span>
       </div>
 
+      <!-- Session-full banner. Distinct from the generic error below
+           because "Send failed" is factually wrong here: the send
+           succeeded, the message is in the transcript, and the model
+           never got to answer. Retrying is not the remedy, so this
+           banner offers the same escape the long-session nudge does. -->
+      <div
+        v-if="errorMessage && errorKind === 'session_full'"
+        data-testid="session-full-banner"
+        class="rounded-md border border-accent-hairline bg-surface-1 px-3 py-2 font-ui text-[12px]"
+        role="alert"
+      >
+        <div class="text-[10px] uppercase tracking-[0.18em] text-accent">
+          Session full
+        </div>
+        <p class="mt-1 break-words text-ink">
+          This conversation no longer fits the model's context window, so
+          the assistant could not reply. Your message was saved. Start a
+          new session to keep going, or raise the compaction
+          aggressiveness in Settings.
+        </p>
+        <button
+          type="button"
+          data-testid="session-full-new-session"
+          class="mt-2 px-3 py-1 rounded-md border border-accent bg-surface-2 text-accent font-ui text-[11px] uppercase tracking-[0.18em] hover:bg-surface-3"
+          @click="emit('new-session')"
+        >
+          + New session
+        </button>
+      </div>
+
       <!-- Inline error from useSession.error.value when send fails. -->
       <div
-        v-if="errorMessage"
+        v-else-if="errorMessage"
         class="rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
         role="alert"
       >

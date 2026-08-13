@@ -5,6 +5,7 @@ extends: state
 display_name: Session Write
 description: "Appends one assistant or system message to the session's persisted history. Replaces the toolloop's chassis-side post-LLM persistence path with a typed kind that lives on the chat graph. Distinct from `memory` because session messages and long-term embedded memory are different storage concerns."
 executor: agentgraph.ExecSessionWrite
+dispatch: graph
 ports:
   inputs:
     - { name: text, type: any }

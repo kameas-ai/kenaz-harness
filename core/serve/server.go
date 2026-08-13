@@ -725,6 +725,72 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 	case "Elicit_ListPending":
 		return s.elicitAPI().ListPending(ctx)
 
+	// ── confirm-each (confirm-each-enforcement-01PMAG05 WP02) ────────
+	//
+	// A served harness parks tool calls exactly like the desktop one:
+	// the confirm_each verdict blocks the dispatch goroutine with NO
+	// deadline. Without these five methods the browser could see the
+	// "tool:confirm-pending" frame and have no way to answer it, so
+	// every confirm_each tool call in a workbench would hang forever —
+	// the served equivalent of the bug this mission fixed.
+	//
+	// Privacy: nothing here moves argument values in either direction.
+
+	case "Confirm_Resolve":
+		var p struct {
+			SessionID       string `json:"sessionId"`
+			CallID          string `json:"callId"`
+			Approved        bool   `json:"approved"`
+			Reason          string `json:"reason"`
+			RememberSession bool   `json:"rememberSession"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Confirm_Resolve: bad params: " + err.Error())
+		}
+		return nil, s.api.Confirm().Resolve(ctx, p.SessionID, p.CallID, p.Approved, p.Reason, p.RememberSession)
+
+	case "Confirm_ResolveAlways":
+		var p struct {
+			SessionID string `json:"sessionId"`
+			CallID    string `json:"callId"`
+			Reason    string `json:"reason"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Confirm_ResolveAlways: bad params: " + err.Error())
+		}
+		return nil, s.api.Confirm().ResolveAlways(ctx, p.SessionID, p.CallID, p.Reason)
+
+	case "Confirm_ApproveBatch":
+		var p struct {
+			BatchID         string `json:"batchId"`
+			RememberSession bool   `json:"rememberSession"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Confirm_ApproveBatch: bad params: " + err.Error())
+		}
+		return s.api.Confirm().ApproveBatch(ctx, p.BatchID, p.RememberSession)
+
+	case "Confirm_CancelBatch":
+		var p struct {
+			BatchID string `json:"batchId"`
+			Reason  string `json:"reason"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Confirm_CancelBatch: bad params: " + err.Error())
+		}
+		return s.api.Confirm().CancelBatch(ctx, p.BatchID, p.Reason)
+
+	case "Confirm_ListPending":
+		var p struct {
+			SessionID string `json:"sessionId"`
+		}
+		if len(params) > 0 {
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, errors.New("Confirm_ListPending: bad params: " + err.Error())
+			}
+		}
+		return s.api.Confirm().ListPending(ctx, p.SessionID)
+
 	// ── connectors (spec 091 D11) ────────────────────────────────────
 	//
 	// READ-ONLY. The connector whitelist is host policy: management
