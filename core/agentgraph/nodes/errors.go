@@ -32,4 +32,12 @@ var (
 	// ErrDuplicateID is returned when two shipped manifests declare the
 	// same `id` (filename collision after normalisation).
 	ErrDuplicateID = errors.New("nodes: duplicate manifest id")
+
+	// ErrInvalidDispatch is returned when a kind manifest's `dispatch:`
+	// field is missing, unrecognised, or paired inconsistently with
+	// `tool_name:` (wiring-integrity-01PMAG04 WP01 / FR-002). Every
+	// callable kind manifest must declare dispatch: graph or
+	// dispatch: builtin_tool; builtin_tool additionally requires
+	// tool_name, and graph must NOT set tool_name.
+	ErrInvalidDispatch = errors.New("nodes: invalid dispatch declaration")
 )

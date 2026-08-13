@@ -6,6 +6,7 @@ display_name: Decision
 description: "Predicate router (FR-041). Was named `branch` in v0; kept as alias."
 aliases: [branch]
 executor: agentgraph.ExecDecision
+dispatch: graph
 ports:
   inputs:
     - { name: in, type: any, required: true }

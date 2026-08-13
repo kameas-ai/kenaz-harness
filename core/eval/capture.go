@@ -26,6 +26,13 @@ import (
 )
 
 // EntryKind identifies the payload type of a CaptureEntry.
+//
+// The reader (ReadCapture) is deliberately kind-agnostic: it unmarshals
+// Kind as a plain string and hands every entry to the visitor, and the
+// only consumers that switch on a kind (Replay's response cache, Diff's
+// assistant-message extraction) ignore what they do not recognise. A kind
+// can therefore be retired without breaking older capture files on disk —
+// their records still parse and are simply inert.
 type EntryKind string
 
 const (
@@ -44,10 +51,6 @@ const (
 	// KindLLMResponse records the terminal llm.Response for one turn.
 	// Payload: LLMResponseEntry.
 	KindLLMResponse EntryKind = "llm_response"
-
-	// KindStrategyDecision records a compaction / memory / branching
-	// strategy decision evaluated during the session. Payload: StrategyEntry.
-	KindStrategyDecision EntryKind = "strategy_decision"
 
 	// KindCaptureStart is the first record written when capture begins. It
 	// carries the session id and the harness build version so replays can
@@ -107,18 +110,6 @@ type LLMResponseEntry struct {
 	Usage        corellm.Usage          `json:"usage"`
 	// RequestFingerprint links this response to its LLMRequestEntry.
 	RequestFingerprint string `json:"request_fingerprint"`
-}
-
-// StrategyEntry is the Payload for KindStrategyDecision.
-type StrategyEntry struct {
-	// Domain is the subsystem that made the decision: "compaction" | "memory" | "branching".
-	Domain string `json:"domain"`
-	// Key is the parameter name, e.g. "compaction.tier".
-	Key    string `json:"key"`
-	// Value is the resolved value at decision time.
-	Value  string `json:"value"`
-	// Source describes where the value came from: "default" | "config" | "override".
-	Source string `json:"source,omitempty"`
 }
 
 // CaptureStartEntry is the Payload for KindCaptureStart.
@@ -428,16 +419,6 @@ func (r *Recorder) AppendLLMResponse(sessionID, requestFingerprint string, resp 
 	}
 	payload, _ := json.Marshal(entry)
 	_ = w.Append(KindLLMResponse, payload)
-}
-
-// AppendStrategyDecision appends a KindStrategyDecision entry.
-func (r *Recorder) AppendStrategyDecision(sessionID string, se StrategyEntry) {
-	w := r.writerFor(sessionID)
-	if w == nil {
-		return
-	}
-	payload, _ := json.Marshal(se)
-	_ = w.Append(KindStrategyDecision, payload)
 }
 
 // StopAll closes every active capture writer. Called from harness Shutdown.

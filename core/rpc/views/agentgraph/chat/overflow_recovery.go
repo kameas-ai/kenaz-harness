@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kameas-ai/kenaz-harness/core/compaction"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph/compaction"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 )

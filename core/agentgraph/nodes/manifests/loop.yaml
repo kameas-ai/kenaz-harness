@@ -5,6 +5,7 @@ extends: control
 display_name: Loop
 description: "Bounded iteration over a body of nodes (FR-046)."
 executor: agentgraph.ExecLoop
+dispatch: graph
 ports:
   inputs:
     - { name: in, type: any }

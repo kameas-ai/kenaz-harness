@@ -123,7 +123,7 @@ type ManualResult struct {
 //     graphs available as strategies.
 //   - GetTierExplain() — return the static tier-explain payload that
 //     drives the "What does this mean?" tooltip on the Settings dial.
-//     Sourced from core/compaction.Tier(), so the numerics never drift
+//     Sourced from core/compactionpolicy.Tier(), so the numerics never drift
 //     between the engine and the UI (mission
 //     compaction-strategy-ui-01KQ8TDI §2.2 / §2.9).
 type CompactionAPI interface {
@@ -138,7 +138,7 @@ type CompactionAPI interface {
 // TierExplain is the wire shape for one row of the tier-explain payload
 // the frontend's Settings panel renders in the "What does this mean?"
 // disclosure on the compaction-aggressiveness dial. Mirrors the locked
-// tier numerics from core/compaction.Tier() — the impl wires the two
+// tier numerics from core/compactionpolicy.Tier() — the impl wires the two
 // together so the description, label, and numerics never drift.
 //
 // Mode is the human-facing "none" | "threshold" | "rolling" string,
@@ -166,7 +166,7 @@ type TierExplain struct {
 	SummarizePct float64 `json:"summarizePct"`
 
 	// Mode is the engine path string, one of "none" | "threshold" |
-	// "rolling". Mirrors core/compaction.CompactionMode but as a string
+	// "rolling". Mirrors core/compactionpolicy.CompactionMode but as a string
 	// so the wire format is self-describing.
 	Mode string `json:"mode"`
 }

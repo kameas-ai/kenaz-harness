@@ -6,6 +6,7 @@ display_name: Model
 description: "LLM-powered reasoning/generation node (FR-030)."
 aliases: [llm]
 executor: agentgraph.ExecModel
+dispatch: graph
 ports:
   inputs:
     - { name: messages, type: messages, required: true }

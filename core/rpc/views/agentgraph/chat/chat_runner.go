@@ -12,12 +12,15 @@ import (
 	"time"
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph/compaction"
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
-	"github.com/kameas-ai/kenaz-harness/core/compaction"
+	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
-	"github.com/kameas-ai/kenaz-harness/core/llm/tokenizer"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	artview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
+	"github.com/kameas-ai/kenaz-harness/core/tools/askuserquestion"
+	"github.com/kameas-ai/kenaz-harness/core/wiring/knobcoverage"
 )
 
 // envCompactionDisabled is the env-var sentinel value the harness
@@ -103,10 +106,57 @@ type MaxTurnsResolver func() int
 // applyReasoningBudgetDial.
 type ReasoningBudgetResolver func() int
 
+// DefaultMaxOverflowRecoveriesPerTurn is the number of automatic
+// compact-and-redrive rescues a single turn gets when nothing configures
+// otherwise.
+//
+// It is 1 deliberately: that is exactly what the hardcoded
+// sub.overflowRetried one-shot did, so turn-context-runway-01PMAG03
+// WP03 changes the *shape* of the limit (a budget) without changing the
+// default behaviour of any existing install. spec.md §3.3 proposes 2;
+// raising it is now a one-line resolver change rather than a control-flow
+// rewrite, and belongs with the measurement pass plan.md asks for.
+const DefaultMaxOverflowRecoveriesPerTurn = 1
+
+// MaxOverflowRecoveriesResolver returns the per-turn budget for
+// automatic context-overflow recoveries. Resolved on each terminal
+// evaluation so a change lands without a restart — the same
+// runtime-dial shape as MaxTurnsResolver.
+//
+// nil selects DefaultMaxOverflowRecoveriesPerTurn. plan.md open
+// question 3 proposes promoting this to an autonomy knob so it inherits
+// the layer chain; that is a matter of supplying a different resolver
+// here, with no call-site change.
+type MaxOverflowRecoveriesResolver func() int
+
+// CompactionWatermarkResolver returns the growth-watermark policy to
+// arm on each run's Env (turn-context-runway-01PMAG03 WP02). Resolved
+// per StartStream, so a change lands on the next turn without a
+// restart — the same runtime-dial shape as MaxTurnsResolver.
+//
+// nil (and a zero-value policy) selects the agentgraph package
+// defaults. Widening this to the Settings UI or the autonomy-knob layer
+// chain (plan.md open question 1) is a matter of supplying a different
+// resolver here; no call site changes.
+type CompactionWatermarkResolver func() coreag.CompactionWatermarkPolicy
+
 // GraphLoader returns the parsed chat graph spec to drive each run.
 // In production this loads the bundled chat_default.yaml; tests can
 // substitute an arbitrary graph.
 type GraphLoader func() (coreag.Graph, error)
+
+// RunSpecRecorder publishes the RESOLVED graph a chat turn is about to
+// execute, keyed by run id (agentgraph-total-convergence-01PMGX01 WP12).
+//
+// A chat turn builds its own Env and calls the shared kernel directly,
+// so its events reach the manager's EventLog while its spec does not
+// reach the manager's run registry. Without this seam the run is
+// materializable only via the library file — which is the WRONG spec:
+// the routing gate rewrites the topology and the max-turns dial
+// overrides the loop cap before the run starts, so the file on disk is
+// not what executed. Nil is safe: chat still runs, its turns just
+// cannot be shown as graphs.
+type RunSpecRecorder func(runID string, g coreag.Graph)
 
 // AnswerInjector pushes the latest user message answer into the
 // kernel's AskBus for the supplied (runID, askNodeID). The chassis
@@ -136,9 +186,21 @@ type Config struct {
 	HistoryWriter HistoryWriter
 	GraphLoader   GraphLoader
 	MaxTurns      MaxTurnsResolver
+	// RunSpecRecorder registers each turn's resolved spec so the run can
+	// be materialized as a graph afterwards (WP12). Nil disables it.
+	RunSpecRecorder RunSpecRecorder
 	// ReasoningBudget resolves the extended-thinking budget per run.
 	// Nil is safe and means "reasoning off" (today's behaviour).
 	ReasoningBudget ReasoningBudgetResolver
+	// CompactionWatermark resolves the mid-run compaction trigger policy
+	// per run (turn-context-runway-01PMAG03 WP02). Nil selects the
+	// agentgraph package defaults.
+	CompactionWatermark CompactionWatermarkResolver
+	// MaxOverflowRecoveries resolves the per-turn budget for automatic
+	// context-overflow recoveries (turn-context-runway-01PMAG03 WP03).
+	// Nil selects DefaultMaxOverflowRecoveriesPerTurn, which preserves
+	// the pre-mission one-shot behaviour exactly.
+	MaxOverflowRecoveries MaxOverflowRecoveriesResolver
 	// ToolDiscoverer publishes the chat-runner-level tool catalog onto
 	// each LLMProviderAdapter so the model sees the live MCP+builtin
 	// tool list. nil disables discovery — the chat path still works,
@@ -148,12 +210,25 @@ type Config struct {
 	// constructed Env before kernel.Run; production wiring threads
 	// Memory / Policy / Branch / Hooks-journal seams through it.
 	EnvDefaults func(env *coreag.Env)
-	// Compaction is the optional pre-send compaction hook configuration
-	// (mission compaction-strategy-ui-01KQ8TDI WP08). nil disables the
-	// hook entirely — the chat runner falls through to the kernel run
-	// without checking the token threshold. Production builds wire
-	// this; tests that don't exercise compaction leave it nil.
+	// Compaction bundles the collaborators the five-tier compaction
+	// dial needs (mission compaction-strategy-ui-01KQ8TDI WP08). nil
+	// disables the dial: the `compact` node still runs, resolves to a
+	// strategy with no engine behind it, and passes its input through
+	// untouched. Production builds wire this; tests that don't exercise
+	// compaction leave it nil.
 	Compaction *CompactionDeps
+
+	// CompactionPipeline is the shared FR-041 compaction pipeline the
+	// chassis constructed (core/rpc/api.go). The runner binds this run's
+	// session-rewrite strategy onto it per StartStream and installs the
+	// result as env.Compactor, so the `compact` node in chat_default.yaml
+	// has something to dispatch through.
+	//
+	// nil leaves env.Compactor nil, which makes every compaction node a
+	// documented passthrough — the correct behaviour for a chassis with
+	// no compaction wired, and for the many tests that construct a bare
+	// runner (agentgraph-total-convergence-01PMGX01 WP08).
+	CompactionPipeline *compaction.Pipeline
 
 	// AutoTitle is the optional post-run auto-title trigger configuration
 	// (mission session-auto-titling-01KQ8TDS WP04). nil disables the
@@ -189,9 +264,44 @@ type Config struct {
 	// interactive-prompt path for tool families covered by
 	// AutoApproveFamilies. nil disables posture-aware short-circuiting —
 	// the adapter falls through to the permission resolver on every call
-	// (v0.3.0 baseline behaviour). Production wiring threads this from
-	// the session's resolved autonomy knobs at StartStream time.
+	// (v0.3.0 baseline behaviour).
+	//
+	// KNOWN GAP (confirm-each-enforcement-01PMAG05): the doc line that
+	// used to sit here claimed "production wiring threads this from the
+	// session's resolved autonomy knobs at StartStream time". It does
+	// not — grep `AutonomyKnobs:` outside _test.go and there is no
+	// production call site. Every shipped build therefore leaves this
+	// nil, so the prompt-skip set never suppresses a confirmation and
+	// confirm_each always prompts.
+	//
+	// That is the SAFE direction, and it is why this was left rather
+	// than half-wired: the provider has no session parameter, so the
+	// only thing wireable here without a signature change is the global
+	// autonomy layer, and a global-only resolution would silently
+	// ignore per-project and per-session postures — a knob that lies
+	// about its scope is worse than a knob that is off. Wiring belongs
+	// with autonomy-knobs-live-01PMAG02 WP05, which owns the posture
+	// semantics; the mechanism (WP04) and its tests are complete and
+	// exercised at the adapter seam.
 	AutonomyKnobs AutonomyKnobsProvider
+
+	// Confirm is the confirm-each pause registry
+	// (confirm-each-enforcement-01PMAG05 WP02). It MUST be the same
+	// *toolloop.ConfirmBus instance the confirm RPC view resolves
+	// against — the runner's tool adapter parks calls on it and the
+	// frontend's answers arrive through the view, so two instances mean
+	// answers that land on a registry nothing is waiting on.
+	//
+	// nil means "no prompt channel": a confirm_each verdict falls to
+	// ConfirmDeps.Headless, whose default is deny. Never a silent allow.
+	Confirm *toolloop.ConfirmBus
+
+	// ConfirmDeps carries the rest of the confirm-each decision path:
+	// the Settings toggle (FR-006), the session + persistent grant
+	// layers (WP03), the headless policy (WP05), and the audit emitter
+	// (FR-007). The zero value is the conservative configuration —
+	// always prompt, no grants, deny when headless, silent audit.
+	ConfirmDeps ConfirmDeps
 
 	// Clock is the optional injected time source for the environment-
 	// context layer of the system prompt (system-prompt-layers WP03).
@@ -283,12 +393,12 @@ type UsageHookFunc func(ctx context.Context, sessionID, messageID, providerKind,
 // is responsible for nil-checking before constructing Config.Compaction.
 type CompactionDeps struct {
 	// Engine is the threshold + rolling compaction surface (plan §2.4 / §2.5).
-	Engine compaction.Engine
+	Engine compaction.SessionEngine
 
 	// Aggressiveness returns the current effective tier. Read on every
 	// send so a Settings change (UI dial) takes effect on the next turn
 	// without restarting the harness.
-	Aggressiveness func() compaction.CompactionAggressiveness
+	Aggressiveness func() compactionpolicy.CompactionAggressiveness
 
 	// CompactionModel returns the (provider, model) ref the engine
 	// should use for the summarization call. An ok=false reply means
@@ -307,33 +417,24 @@ type CompactionDeps struct {
 	// budget. Returns ok=false on an unknown model — the runner skips
 	// the threshold check in that case (the provider's own gate will
 	// catch any over-cap span). The compaction.CapabilityLookup
-	// adapter from core/compaction/wiring provides a curated builtin
+	// adapter from core/agentgraph/compaction/wiring provides a curated builtin
 	// table covering the major providers.
 	MaxContextTokens func(model compaction.ProviderProfileRef) (int, bool)
 }
 
-// modelToTokenize is the helper that builds the (system, msgs) input
-// the tokenizer consumes from the chat runner's per-send state. The
-// system prompt is the empty string because the chat runner doesn't
-// know what system prompt the kernel will inject (that's a graph-side
-// concern); the framing overhead the tokenizer adds covers the slot
-// regardless.
-func tokenizeRequest(history []coreag.Message, userMessage string) int {
-	msgs := make([]tokenizer.Message, 0, len(history)+1)
-	for _, m := range history {
-		msgs = append(msgs, tokenizer.Message{Role: m.Role, Content: m.Content})
-	}
-	if userMessage != "" {
-		msgs = append(msgs, tokenizer.Message{Role: "user", Content: userMessage})
-	}
-	return tokenizer.CountRequestTokens("", msgs)
-}
-
-// ToolPool is the narrow MCP-pool surface the runner consumes. Mirrors
-// toolloop.MCPPool so the chassis can pass the existing wrapped pool
-// without an additional adapter step. We re-declare the interface here
-// (rather than aliasing toolloop) so WP07 can drop the toolloop import
-// from this package without a breaking-change to runner construction.
+// ToolPool is the narrow MCP-pool surface the runner consumes. It is
+// structurally identical to toolloop.MCPPool so the chassis can pass
+// the existing wrapped pool without an additional adapter step, but it
+// is declared here rather than aliased.
+//
+// That independence is now permanent, not transitional: this package
+// still imports core/toolloop (for ConfirmBus, SessionGrantCache and
+// the permission verdict) and will keep doing so, because tool-call
+// POLICY lives there. Re-declaring the pool SHAPE keeps runner
+// construction decoupled from that package's wire types. (The comment
+// here used to promise "WP07 can drop the toolloop import from this
+// package"; WP07 landed and the import remains, correctly. Corrected
+// under 01PMGX01 invariant I8, 2026-08-13.)
 type ToolPool interface {
 	Tools(ctx context.Context) ([]ToolEntry, error)
 	Call(ctx context.Context, server, tool string, args []byte) ([]byte, error)
@@ -347,9 +448,16 @@ type ToolEntry struct {
 }
 
 // ToolPermissionResolver is the narrow surface the runner needs to
-// gate tool dispatch. Mirrors toolloop.PermissionResolver. WP06 lifts
-// this into the kernel's PolicyGate seam; for now the runner accepts
-// the resolver shape directly.
+// gate tool dispatch. Structurally identical to
+// toolloop.PermissionResolver; the runner accepts the resolver shape
+// directly and applies the verdict in kernelToolAdapter.Call.
+//
+// (This used to say "WP06 lifts this into the kernel's PolicyGate
+// seam". WP06 landed and did not: env.Policy gates FILE and shell
+// access at the State-kind executors, while the tool-call verdict is
+// applied by the adapter, because a confirm_each verdict has to park
+// on a ConfirmBus that the kernel has no seam for. Corrected under
+// 01PMGX01 invariant I8, 2026-08-13.)
 type ToolPermissionResolver interface {
 	Resolve(ctx context.Context, sessionID, server, tool string) (PermVerdict, error)
 }
@@ -399,8 +507,9 @@ type AuthResumedPayload struct {
 	NewSubID  string `json:"new_sub_id"`
 }
 
-// ChatRunner is the kernel-driven entry point that replaces
-// core/toolloop as the chassis chat path. One runner per process; the
+// ChatRunner is the kernel-driven entry point and the ONLY chassis
+// chat path — it replaced the pre-kernel chassis loop, which was
+// deleted rather than kept as a fallback. One runner per process; the
 // chassis constructs it inside the LLM view's wiring and passes it to
 // the LLM API via the WP04 Config.ChatRunner field.
 //
@@ -426,10 +535,16 @@ type chatSub struct {
 	done          chan struct{}
 	bridge        *StreamBridge
 	finished      atomic.Bool
-	// overflowRetried guards the auto-redrive path (FR-005 / WP05 nit): at
-	// most one automatic overflow-recovery redrive per run. A second overflow
-	// after the first compaction falls through to the normal backend-error path.
-	overflowRetried atomic.Bool
+	// overflowRecoveries counts the automatic overflow-recovery redrives
+	// this run has spent, against the MaxOverflowRecoveriesPerTurn
+	// budget (turn-context-runway-01PMAG03 WP03).
+	//
+	// This replaced an atomic.Bool one-shot. The boolean encoded "at
+	// most one rescue per turn" as a fact about the control flow rather
+	// than as a policy, which made the autonomous-run lifecycle *grow
+	// until overflow → one rescue → grow again → die*. The counter makes
+	// the same default expressible (budget 1) and dial-able upward.
+	overflowRecoveries atomic.Int64
 	// cancelCause records WHY the run's context was cancelled, so the
 	// terminal close can distinguish an explicit user Stop ("stop-called")
 	// from the inbound RPC ctx being cancelled out from under us
@@ -459,6 +574,14 @@ func New(cfg Config) (*ChatRunner, error) {
 		// thread settings through, but don't crash a test path that
 		// just wants the kernel-driven chat run with a hardcoded 25.
 		cfg.MaxTurns = func() int { return 25 }
+	}
+	if cfg.CompactionWatermark == nil {
+		// Nil resolver = package defaults. Unlike MaxTurns there is no
+		// loud-fail default worth substituting: the agentgraph
+		// zero-value policy IS the intended production margin.
+		cfg.CompactionWatermark = func() coreag.CompactionWatermarkPolicy {
+			return coreag.CompactionWatermarkPolicy{}
+		}
 	}
 	if cfg.ReasoningBudget == nil {
 		// Nil resolver = reasoning off. Unlike MaxTurns there is no
@@ -498,15 +621,15 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		}
 	}
 
-	// Pre-send compaction hook (mission compaction-strategy-ui-01KQ8TDI
-	// WP08 / plan §2.3). Runs between user-turn persistence and kernel
-	// run so HistoryReadNode picks up the post-compaction transcript on
-	// the first fire. On Mode==None over cap or model-too-small in
-	// graceful-degrade fallback we return compaction.ErrSessionFull so
-	// the chat surface renders the honest "session full" copy.
-	if cerr := r.runPreSendCompaction(ctx, profileID, sessionID, modelOverride, userMessage); cerr != nil {
-		return "", cerr
-	}
+	// Compaction is no longer a pre-send pass here. It is a `compact`
+	// node in chat_default.yaml, placed between history_read and the
+	// agent loop, dispatching through env.Compactor
+	// (agentgraph-total-convergence-01PMGX01 WP08 / spec §4.4). The
+	// session-full condition therefore reaches the user on the
+	// stream-closed payload rather than as a synchronous StartStream
+	// error — see the compaction.ErrSessionFull case in the kernel-exit
+	// switch below, and the same delivery the overflow-recovery path
+	// has always used.
 
 	// Resolve the chat graph and apply the per-run MaxAgentTurns dial
 	// onto the LoopNode max_iterations.
@@ -514,15 +637,50 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	if err != nil {
 		return "", fmt.Errorf("chat: graph load: %w", err)
 	}
+
+	// autonomy-knobs-live-01PMAG02 fix F8: resolve the autonomy knobs
+	// exactly ONCE per StartStream, with the run's real ctx (not
+	// context.Background()), and thread the resulting value everywhere
+	// below instead of re-invoking r.cfg.AutonomyKnobs. The provider
+	// does real I/O (global/project/session store reads); before this
+	// fix it was invoked from ~6 separate call sites in this function
+	// plus once per Generate (WithRecapStyle/WithAskOnAmbiguity) and
+	// once per tool call (kernelToolAdapter.Call) — dozens of redundant
+	// store reads on a single chatty turn. resolvedKnobs is the zero
+	// ResolvedKnobs{} when no provider is wired, matching every
+	// consumer's existing nil-safe fallback.
+	resolvedKnobs := r.autonomyKnobs(ctx, sessionID)
+
 	maxTurns := r.cfg.MaxTurns()
 	if maxTurns <= 0 {
 		maxTurns = 25
+	}
+	// autonomy-knobs-live-01PMAG02 WP01: the resolved MaxIterations knob
+	// (session → project → global(=Settings) → preset default,
+	// autonomy.Resolve's precedence) is now the single source of truth
+	// for the per-run cap — see spec §1.1 "the maxIterations collision".
+	// cfg.MaxTurns() above stays the legacy Settings-only value and is
+	// also what production wiring feeds into the resolved chain's global
+	// layer (core/rpc/api.go), so a session with no project/session
+	// override resolves to the identical number either way (FR-005).
+	// cfg.MaxTurns() remains the value used when no AutonomyKnobs
+	// provider is wired at all (tests, or a chassis that hasn't migrated).
+	if r.cfg.AutonomyKnobs != nil {
+		if resolved := resolvedKnobs.MaxIterations; resolved > 0 {
+			maxTurns = resolved
+		}
 	}
 	applyMaxTurnsDial(&graph, maxTurns)
 	// Extended-thinking budget (wiring-integrity-01PMAG04 WP08). Resolved
 	// per StartStream like maxTurns so a settings change lands on the next
 	// turn. Zero leaves every model node's attr untouched.
 	applyReasoningBudgetDial(&graph, r.cfg.ReasoningBudget())
+	// autonomy-knobs-live-01PMAG02 WP02: at askOnAmbiguity=never, every
+	// AskNode gets a DefaultAnswer so an unseeded ask resolves instead of
+	// pausing the run (spec §3.1 bullet 2). A nil AutonomyKnobs provider
+	// resolves AskOnAmbiguity to "" (the zero value), which
+	// applyAskOnAmbiguityDial treats as "not never" — no-op, FR-005.
+	applyAskOnAmbiguityDial(&graph, resolvedKnobs.AskOnAmbiguity)
 
 	// Construct adapters for this run's LLM provider + tool registry.
 	// Tool discovery runs once per StartStream so the model sees the
@@ -537,6 +695,16 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 				"session_id", sessionID, "err", derr.Error())
 		} else {
 			toolCatalog = discovered
+			// autonomy-knobs-live-01PMAG02 WP02: at proceed/never, withhold
+			// kenaz__ask_user_question from the catalog entirely so the
+			// model cannot stall the turn on a clarifying question — the
+			// cheapest possible enforcement point (spec §3.1 bullet 1). A
+			// nil AutonomyKnobs provider resolves AskOnAmbiguity to "" (the
+			// zero value), which withholdsAskTool treats as "keep the tool"
+			// — no-op, FR-005.
+			if withholdsAskTool(resolvedKnobs.AskOnAmbiguity) {
+				toolCatalog = filterOutTool(toolCatalog, askuserquestion.ToolName)
+			}
 			names := make([]string, 0, len(toolCatalog))
 			for _, t := range toolCatalog {
 				names = append(names, t.Name)
@@ -558,13 +726,34 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		WithEnvContext(r.cfg.Clock, r.cfg.WorkspaceDir, r.cfg.WorkspaceNote).
 		WithCustomInstructions(r.cfg.CustomInstructions).
 		// autonomy-knobs-live-01PMAG02 WP06: recapStyle was resolved
-		// through the three-layer chain and read by nothing. Resolved per
-		// Generate so a Settings edit lands on the next turn.
-		WithRecapStyle(func() autonomy.RecapMode { return r.autonomyKnobs().RecapStyle })
+		// through the three-layer chain and read by nothing. The closure
+		// captures the already-resolved resolvedKnobs by value (fix F8)
+		// rather than re-invoking r.cfg.AutonomyKnobs — Generate calls
+		// this once per turn iteration, and the knob value cannot change
+		// mid-StartStream anyway.
+		WithRecapStyle(func() autonomy.RecapMode { return resolvedKnobs.RecapStyle }).
+		// autonomy-knobs-live-01PMAG02 WP02: states the bar for using
+		// ask_user_question at hard/major. Empty at every other mode
+		// (see buildAskBarBlock), so FR-005 holds with no AutonomyKnobs
+		// provider wired.
+		WithAskOnAmbiguity(func() autonomy.AskMode { return resolvedKnobs.AskOnAmbiguity })
 	toolAdapter := newKernelToolAdapter(r.cfg.Pool, r.cfg.Perms, sessionID)
 	if r.cfg.AutonomyKnobs != nil {
-		toolAdapter.withAutonomy(r.cfg.AutonomyKnobs)
+		// fix F8: pin the already-resolved value rather than handing the
+		// adapter r.cfg.AutonomyKnobs directly — Call() invokes this once
+		// per tool call, and the raw provider would re-run the full
+		// three-layer store resolution on every one of them. resolvedKnobs
+		// does not change for the rest of this StartStream call, so the
+		// closure can safely capture it.
+		toolAdapter.withAutonomy(func(context.Context, string) autonomy.ResolvedKnobs { return resolvedKnobs })
 	}
+	// confirm-each-enforcement-01PMAG05 WP02: give the adapter a real
+	// prompt channel. Before this the seam existed and had zero
+	// production call sites, so every confirm_each verdict in a shipped
+	// build hit the no-channel branch. Attached unconditionally: a nil
+	// bus is still meaningful (it selects the headless policy) and the
+	// deps bundle's zero value is the safe configuration.
+	toolAdapter.withConfirm(r.cfg.Confirm).withConfirmDeps(r.cfg.ConfirmDeps)
 
 	r.mu.Lock()
 	r.nextID++
@@ -614,26 +803,79 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		// both treat zero as "use the package default" rather than
 		// "unlimited" -- which is why the gap survived: the behavioural
 		// guards worked while the volume guards silently did not.
-		Budget: applyTokenCeilingKnob(graph.Budget, r.autonomyKnobs()),
-		// SuppressAutomaticCompaction (compaction-convergence-01PMDL05):
-		// runPreSendCompaction (above, in driveRun's caller) is the
-		// authoritative compactor for chat-driven runs — it already
-		// ran against the persisted session history before this Env
-		// was built. kernel.Run backfills env.Compactor from the
-		// kernel's shared FR-041 pipeline whenever it's nil at run
-		// start (see kernel.go), so without this flag a Settings-UI
-		// toggle enabling the pre_call/post_tool automatic sites would
-		// fire a *second* compaction on the same turn. Always true
-		// here, independent of the resolved SiteConfig, so chat runs
-		// stay single-fire regardless of what the cascading compaction
-		// config says.
-		SuppressAutomaticCompaction: true,
+		Budget: applyTokenCeilingKnob(graph.Budget, resolvedKnobs),
+		// AutoCompaction is the growth watermark in front of the
+		// kernel's own automatic pre_call site
+		// (turn-context-runway-01PMAG03 WP02).
+		//
+		// It replaced an unconditional suppression boolean this Env used
+		// to set, and it survives the WP08 convergence for a reason that
+		// outlived the boolean's. The `compact` node compacts this
+		// session at the top of the run; without a watermark the first
+		// pre_call visit would immediately compact again, against the
+		// transcript the node just produced — the double-fire
+		// compaction-convergence-01PMDL05 found, relocated rather than
+		// removed.
+		//
+		// The watermark keeps the single-fire guarantee without the
+		// ceiling the boolean imposed: its baseline is latched by the
+		// first pre_call site's own observation, so that site is refused
+		// by construction, while a site fifteen iterations later — once
+		// the turn has genuinely accumulated context past the margin — is
+		// admitted. A turn can now be compacted more than once, which is
+		// what a 25-iteration loop with a 200-call tool budget needs.
+		AutoCompaction: coreag.NewCompactionWatermark(r.compactionWatermarkPolicy()),
+		// NodeErrorPolicy (autonomy-knobs-live-01PMAG02 WP04): translates
+		// the resolved continueOnError autonomy knob into the generic,
+		// autonomy-agnostic enum core/agentgraph's loopExecutor consults.
+		// The zero value (ErrorMode "" from a nil AutonomyKnobs provider)
+		// maps to NodeErrorPolicyStop, today's behaviour (FR-005).
+		NodeErrorPolicy: continueOnErrorPolicy(resolvedKnobs.ContinueOnError),
+		// TaskStateArming (agentgraph-total-convergence-01PMGX01 WP11b):
+		// derived FROM THE GRAPH, not from the settings flag directly.
+		//
+		// The exit gate checks the draft against the run's goal, and a
+		// run that succeeded has by construction never armed recovery —
+		// so a routed graph on failure-only TaskState would be checking
+		// the answer against nothing (01PMAG01 G5). Reading the graph
+		// rather than re-reading the flag is what makes the two
+		// impossible to get out of step: whatever topology this turn
+		// actually got is the topology the policy matches, including in
+		// tests that hand the runner a graph directly and never touch
+		// settings.
+		TaskStateArming: taskStateArmingFor(graph),
+		// AskPolicy (WP11b, autonomy-knobs finding F7): at
+		// askOnAmbiguity proceed/never the ask tool is already withheld
+		// from the model above. Without this, the kernel-side recovery
+		// path re-opened the same door from somewhere the user never
+		// saw — an exit gate hitting its cap escalates, and the
+		// escalation ladder's terminal rung asks a human. Withhold
+		// makes a FAIL re-enter the loop while budget remains and
+		// return the best draft after that.
+		AskPolicy: askPolicyFor(resolvedKnobs.AskOnAmbiguity),
+		// Compactor is the shared FR-041 pipeline with this run's
+		// session-rewrite strategy bound onto it. It is what the
+		// `compact` node in chat_default.yaml dispatches through, and
+		// what the mid-run pre_call site uses once the watermark admits
+		// it. nil when no pipeline was wired, which makes the compact
+		// node a passthrough (agentgraph-total-convergence-01PMGX01
+		// WP08).
+		Compactor: r.bindCompactor(profileID, modelOverride),
 	}
 	if r.cfg.History != nil {
 		env.History = historyAdapterFunc(r.cfg.History.History)
 	}
 	if r.cfg.EnvDefaults != nil {
 		r.cfg.EnvDefaults(env)
+	}
+	// WP12: register the spec this turn will actually execute, so the
+	// turn can be projected back into a graph afterwards. Recorded here
+	// — after the routing gate and the max-turns dial have finished
+	// rewriting `graph` and after env.Graph points at it — because the
+	// materialized graph's attrs must describe the run that happened,
+	// not the file on disk.
+	if r.cfg.RunSpecRecorder != nil {
+		r.cfg.RunSpecRecorder(subID, graph)
 	}
 
 	// Register the per-turn usage hook via HookPostLLM so it fires
@@ -850,6 +1092,9 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	reason := "completed"
 	message := ""
 	finishReason := ""
+	// errorKind discriminates the terminal close beyond `reason` so the
+	// surface can render honest copy — see StreamClosedPayload.ErrorKind.
+	errorKind := ""
 	runTerminatedClean := false // true when kernel finished without error (or ErrPaused)
 
 	if err != nil {
@@ -940,46 +1185,50 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	case errors.Is(err, coreag.ErrBudgetExceeded):
 		reason = "backend-error"
 		message = "agent reached the per-run budget cap"
+	case errors.Is(err, compaction.ErrSessionFull):
+		// The `compact` node decided the user is genuinely out of
+		// context: the dial is "off" and the session is already over
+		// cap, or the compaction model is too small to summarise the
+		// span that would have to go.
+		//
+		// Before agentgraph-total-convergence-01PMGX01 WP08 compaction
+		// ran as a pre-kernel pass, so this surfaced as a synchronous
+		// StartStream error. Now that it is a node, the run has already
+		// started when the condition is detected, and the honest report
+		// travels on the stream-closed payload instead. The copy is
+		// identical, and it is the same channel the overflow-recovery
+		// path has always used for the same message
+		// (recoverFromOverflow's budget-exhausted branch), so the
+		// surface renders one thing for one condition.
+		reason = "backend-error"
+		message = compaction.ErrSessionFull.Error()
+		errorKind = StreamClosedErrorKindSessionFull
 	case err != nil && isContextOverflowError(err):
-		// WP05: reactive context-overflow recovery (FR-005). An overflow that
-		// slips past the capability-table pre-check triggers a compact-and-retry
-		// path instead of a terminal error. We attempt one compaction pass here;
-		// if it succeeds we auto-redrive the run (at most once — guard via
-		// sub.overflowRetried so a second overflow after compaction falls through
-		// to the normal backend-error path). On compaction failure we fall through
-		// to the backend-error path so the user sees the real problem.
-		redrove := false
-		if !sub.overflowRetried.Swap(true) {
-			// First overflow: attempt compaction then re-drive.
-			if recErr := attemptOverflowRecovery(
-				context.Background(), // fresh ctx — run ctx may be cancelled
-				sub.sessionID,
-				sub.profileID,
-				sub.modelOverride,
-				r.cfg.Compaction,
-			); recErr == nil {
-				// Compaction succeeded — re-run the kernel with the same env
-				// and a fresh context so the frontend stream stays open.
-				log.Info("chat.overflow_recovery.auto_redrive",
-					"sub_id", sub.id, "session_id", sub.sessionID)
-				redriveCtx, redriveCancel := context.WithCancel(context.Background())
-				redriveErr := r.cfg.Kernel.Run(redriveCtx, env)
-				redriveCancel()
-				redrove = true
-				if redriveErr == nil {
-					reason = "completed"
-					runTerminatedClean = true
-				} else {
-					log.Info("chat.overflow_recovery.redrive_exit",
-						"sub_id", sub.id, "session_id", sub.sessionID, "err", redriveErr.Error())
-					reason = "backend-error"
-					message = redriveErr.Error()
-				}
-			}
-		}
-		if !redrove {
-			reason = "backend-error"
-			message = err.Error()
+		// Reactive context-overflow recovery (FR-005 / agent-loop-
+		// robustness-parity WP05), budgeted by
+		// turn-context-runway-01PMAG03 WP03.
+		//
+		// An overflow that slips past the capability-table pre-check
+		// triggers a compact-and-retry path instead of a terminal error.
+		// This used to be a hardcoded one-shot (sub.overflowRetried.
+		// Swap(true)): grow until overflow → one rescue → grow again →
+		// die. It is now a counter against a dial-able budget, so the
+		// number of rescues a turn gets is a policy decision rather than
+		// a constant baked into the control flow.
+		//
+		// On compaction failure, or once the budget is spent, we fall
+		// through to the terminal path — with the honest "session full"
+		// copy when the reason we stopped is that the budget ran out,
+		// rather than a generic backend error that tells the user
+		// nothing about why their long turn died.
+		reason, message, runTerminatedClean = r.recoverFromOverflow(log, sub, env, err)
+		// The budget-exhausted branch reports the session-full copy. It
+		// is the same situation for the user as the compact node's own
+		// session-full verdict — the conversation no longer fits and
+		// retrying will not help — so it carries the same discriminator
+		// and the surface renders one thing for one condition.
+		if message == compaction.ErrSessionFull.Error() {
+			errorKind = StreamClosedErrorKindSessionFull
 		}
 	case err != nil && capMissing != nil:
 		reason = "custom_endpoint_missing_capability"
@@ -1083,8 +1332,15 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	if !sub.finished.CompareAndSwap(false, true) {
 		return
 	}
-	sub.bridge.EmitClosedPartial(reason, message, finishReason,
-		partialMessageID, partialFailureKind, partialRecoverable)
+	sub.bridge.EmitClosedFull(StreamClosed{
+		Reason:             reason,
+		Message:            message,
+		FinishReason:       finishReason,
+		PartialMessageID:   partialMessageID,
+		PartialFailureKind: partialFailureKind,
+		PartialRecoverable: partialRecoverable,
+		ErrorKind:          errorKind,
+	})
 	log.Info("chat.run.complete",
 		"sub_id", sub.id,
 		"session_id", sub.sessionID,
@@ -1195,14 +1451,323 @@ func applyMaxTurnsDial(g *coreag.Graph, cap int) {
 	}
 }
 
-// autonomyKnobs resolves the current autonomy dial values, or the zero
-// ResolvedKnobs when no provider is wired (test paths). Callers must
-// treat every zero field as "no override".
-func (r *ChatRunner) autonomyKnobs() autonomy.ResolvedKnobs {
+// autonomyKnobs resolves the current autonomy dial values for the given
+// session, or the zero ResolvedKnobs when no provider is wired (test
+// paths). Callers must treat every zero field as "no override".
+//
+// Session-scoped (autonomy-knobs-live-01PMAG02 WP01): the three-layer
+// chain can only resolve a session's own overrides once the session id
+// is known.
+//
+// Fix F8: takes ctx and does real I/O in production (the provider
+// walks the global/project/session autonomy stores) — StartStream
+// calls this exactly once per run, with the run's real ctx, and
+// threads the resulting value everywhere else instead of calling this
+// method again.
+func (r *ChatRunner) autonomyKnobs(ctx context.Context, sessionID string) autonomy.ResolvedKnobs {
 	if r == nil || r.cfg.AutonomyKnobs == nil {
 		return autonomy.ResolvedKnobs{}
 	}
-	return r.cfg.AutonomyKnobs()
+	return r.cfg.AutonomyKnobs(ctx, sessionID)
+}
+
+// askOnAmbiguityNeverDefaultAnswer is the stated assumption an AskNode
+// resolves to when askOnAmbiguity=never strands it with no seeded
+// answer (autonomy-knobs-live-01PMAG02 WP02; spec Risk table: "the run
+// proceeds with a stated assumption rather than hanging — recap
+// surfaces the assumption").
+const askOnAmbiguityNeverDefaultAnswer = "No user input was available (askOnAmbiguity=never); proceeding on best judgement."
+
+// autonomy-knobs-live-01PMAG02 WP07: declare the consumers co-located
+// in this file so the knob-coverage guard
+// (core/rpc/views/agentgraph/chat/knob_coverage_guard_test.go) sees
+// them registered by the time its test runs.
+//
+// One registration per knob (wiring-integrity-01PMAG04 WP07 migration
+// note): askOnAmbiguity has two call sites in this file
+// (applyAskOnAmbiguityDial and withholdsAskTool) but gets a single
+// combined registration, not two — core/wiring/knobcoverage.Register
+// panics on a second registration for the same (struct, field), so
+// collapsing multi-site knobs into one description here keeps this
+// ready for that swap. See knob_coverage_guard_test.go's doc comment
+// for why the swap hasn't happened on this branch yet.
+func init() {
+	knobcoverage.Register[autonomy.ResolvedKnobs]("MaxIterations", "chat.ChatRunner.StartStream (applyMaxTurnsDial)")
+	knobcoverage.Register[autonomy.ResolvedKnobs]("AskOnAmbiguity", "chat.applyAskOnAmbiguityDial (default_answer) + chat.withholdsAskTool (catalog shaping)")
+	knobcoverage.Register[autonomy.ResolvedKnobs]("ContinueOnError", "chat.continueOnErrorPolicy")
+	knobcoverage.Register[autonomy.ResolvedKnobs]("TokenCeilingPerTurn", "chat.applyTokenCeilingKnob")
+	knobcoverage.RegisterDeferred[autonomy.ResolvedKnobs]("SourceTrace", "resolver bookkeeping, not a tunable knob")
+	knobcoverage.RegisterDeferred[autonomy.ResolvedKnobs]("PostureMode", "resolver bookkeeping, not a tunable knob")
+}
+
+// applyAskOnAmbiguityDial folds the askOnAmbiguity knob onto the chat
+// graph's AskNode(s) (autonomy-knobs-live-01PMAG02 WP02, spec §3.1
+// bullet 2). At AskNever, every AskNode that doesn't already declare a
+// DefaultAnswer gets one, so core/agentgraph's askExecutor resolves an
+// unseeded ask instead of pausing the run with ErrPaused. Every other
+// AskMode (including the zero value, which a nil AutonomyKnobs provider
+// resolves to) leaves AskAttrs untouched — FR-005.
+func applyAskOnAmbiguityDial(g *coreag.Graph, mode autonomy.AskMode) {
+	if mode != autonomy.AskNever {
+		return
+	}
+	for i := range g.Nodes {
+		if g.Nodes[i].Kind != coreag.NodeKindAsk {
+			continue
+		}
+		if a, ok := g.Nodes[i].Attrs.(coreag.AskAttrs); ok && a.DefaultAnswer == "" {
+			a.DefaultAnswer = askOnAmbiguityNeverDefaultAnswer
+			g.Nodes[i].Attrs = a
+		}
+	}
+}
+
+// withholdsAskTool reports whether the resolved askOnAmbiguity mode
+// means kenaz__ask_user_question must not be offered to the model at
+// all (autonomy-knobs-live-01PMAG02 WP02, spec §3.1 bullet 1). Only
+// proceed/never withhold the tool — hard/major keep it available (with
+// buildAskBarBlock's system-prompt bar), and always/"" (the zero value,
+// what a nil AutonomyKnobs provider resolves to) keep today's
+// behaviour of offering it unconditionally.
+func withholdsAskTool(mode autonomy.AskMode) bool {
+	return mode == autonomy.AskProceed || mode == autonomy.AskNever
+}
+
+// filterOutTool returns a new slice with every ToolSpec named name
+// removed, preserving order. A nil/empty input or no match returns the
+// input slice unchanged (no allocation on the common path where the
+// tool isn't in the catalog at all).
+func filterOutTool(tools []corellm.ToolSpec, name string) []corellm.ToolSpec {
+	idx := -1
+	for i, t := range tools {
+		if t.Name == name {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return tools
+	}
+	out := make([]corellm.ToolSpec, 0, len(tools)-1)
+	for _, t := range tools {
+		if t.Name != name {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// taskStateArmingFor selects the kernel's TaskState arming policy from
+// the topology this turn actually got (agentgraph-total-convergence-
+// 01PMGX01 WP11b; design in agentic-turn-routing-01PMAG01 §3.5).
+//
+// It reads the GRAPH rather than the settings flag on purpose. The
+// always-armed policy exists to serve the exit gate, the exit gate
+// arrives with the routed topology, and the routed topology is what
+// GateAgenticTurnRouting produced from the flag — so keying off the
+// graph is keying off the flag, one step later, with no way for the two
+// to disagree. It also does the right thing for a caller that supplies
+// its own graph and never touches settings at all.
+func taskStateArmingFor(g coreag.Graph) coreag.TaskStateArming {
+	if coreag.GraphUsesAgenticTurnRouting(g) {
+		return coreag.TaskStateArmAlways
+	}
+	return coreag.TaskStateArmOnFailure
+}
+
+// askPolicyFor translates the resolved askOnAmbiguity knob into
+// core/agentgraph's autonomy-agnostic AskPolicy enum
+// (agentgraph-total-convergence-01PMGX01 WP11b, autonomy-knobs finding
+// F7). It reuses withholdsAskTool rather than re-listing the modes, so
+// the catalogue-shaping decision and the kernel-side one can never
+// drift apart — the user-visible promise is one thing ("do not ask
+// me"), and it should have one predicate.
+func askPolicyFor(mode autonomy.AskMode) coreag.AskPolicy {
+	if withholdsAskTool(mode) {
+		return coreag.AskPolicyWithhold
+	}
+	return coreag.AskPolicyAllow
+}
+
+// continueOnErrorPolicy translates the resolved autonomy continueOnError
+// knob into core/agentgraph's autonomy-agnostic NodeErrorPolicy enum
+// (autonomy-knobs-live-01PMAG02 WP04). Any value other than
+// autonomy.ErrorRetryOnce / autonomy.ErrorAdapt — including the zero
+// value ErrorMode(""), what a nil AutonomyKnobs provider resolves to —
+// maps to NodeErrorPolicyStop, today's behaviour (FR-005).
+func continueOnErrorPolicy(mode autonomy.ErrorMode) coreag.NodeErrorPolicy {
+	switch mode {
+	case autonomy.ErrorRetryOnce:
+		return coreag.NodeErrorPolicyRetryOnce
+	case autonomy.ErrorAdapt:
+		return coreag.NodeErrorPolicyAdapt
+	default:
+		return coreag.NodeErrorPolicyStop
+	}
+}
+
+// TopicChatOverflowRecovery carries the mid-turn "your conversation got
+// too long, so it was compacted and the turn re-driven" notice
+// (agentgraph-total-convergence-01PMGX01 WP17).
+//
+// Distinct from the TERMINAL session-full report. That one rides
+// llm:stream-closed with error_kind="session_full" and means the turn is
+// over and did not produce an answer. This one means the turn is still
+// coming — it fires while the user is staring at a stalled stream and is
+// the only thing that explains the pause.
+//
+// Emitted once per recovery attempt. Payload: sub_id, session_id,
+// attempt (1-based), budget.
+//
+// NOTE: core/serve/wsstream.go forwards this topic to served-mode
+// browsers and duplicates the literal, because core/serve cannot import
+// this package (core/rpc imports it, so the edge would be a cycle) —
+// the same duplication toolloop.TopicToolConfirmPending carries. Change
+// one, change the other.
+const TopicChatOverflowRecovery = "chat:overflow-recovery"
+
+// maxOverflowRecoveries resolves this run's overflow-recovery budget.
+//
+// A nil runner/resolver falls back to the package default. A NEGATIVE
+// value also falls back to the default rather than reading as
+// "unlimited": an unbounded rescue loop against a session that
+// genuinely cannot fit would burn compaction calls forever.
+//
+// Zero is honoured as-is and means "disabled — no automatic rescues",
+// which is a legitimate configuration (a caller who wants overflows to
+// surface immediately). TestRecoverFromOverflow_ZeroBudgetSurfacesThe
+// RealError pins that a zero budget reports the real overflow rather
+// than the session-full copy.
+func (r *ChatRunner) maxOverflowRecoveries() int {
+	if r == nil || r.cfg.MaxOverflowRecoveries == nil {
+		return DefaultMaxOverflowRecoveriesPerTurn
+	}
+	n := r.cfg.MaxOverflowRecoveries()
+	if n < 0 {
+		return DefaultMaxOverflowRecoveriesPerTurn
+	}
+	return n
+}
+
+// recoverFromOverflow runs the budgeted compact-and-redrive loop for a
+// run that exited with a context-overflow error, and returns the
+// terminal (reason, message, clean) triple for the stream-closed
+// payload.
+//
+// Each iteration spends one unit of the MaxOverflowRecoveriesPerTurn
+// budget, emits TopicChatOverflowRecovery, and re-drives the kernel on a
+// fresh context. That event now has a real subscriber on both surfaces
+// (frontend useSession -> the overflow-recovery notice in SessionsView;
+// served mode via wsstream passthroughTopics), added by 01PMGX01 WP17 —
+// before that it was emitted with this same "so the surface can show the
+// user what happened" comment and nothing listened, so the pause here
+// was indistinguishable from a hang. A redrive
+// that overflows *again* loops for another rescue if the budget allows;
+// today's default budget of 1 makes that a single pass, identical to
+// the pre-WP03 one-shot.
+//
+// Exhausting the budget is reported with compaction.ErrSessionFull's
+// copy — the same honest wording the pre-send path uses when the user
+// is genuinely out of context — instead of the raw provider overflow
+// string, which reads as an opaque backend failure.
+func (r *ChatRunner) recoverFromOverflow(
+	log *slog.Logger,
+	sub *chatSub,
+	env *coreag.Env,
+	overflowErr error,
+) (reason, message string, clean bool) {
+	budget := r.maxOverflowRecoveries()
+	lastErr := overflowErr
+
+	for {
+		used := sub.overflowRecoveries.Load()
+		if int(used) >= budget {
+			// Budget spent (or zero to begin with). If we never got to
+			// try, the honest report is still the overflow itself;
+			// if we did, the user is out of runway.
+			if used == 0 {
+				log.Info("chat.overflow_recovery.disabled",
+					"sub_id", sub.id, "session_id", sub.sessionID, "budget", budget)
+				return "backend-error", lastErr.Error(), false
+			}
+			log.Warn("chat.overflow_recovery.budget_exhausted",
+				"sub_id", sub.id, "session_id", sub.sessionID,
+				"budget", budget, "used", used, "err", lastErr.Error())
+			return "backend-error", compaction.ErrSessionFull.Error(), false
+		}
+
+		if recErr := attemptOverflowRecovery(
+			context.Background(), // fresh ctx — run ctx may be cancelled
+			sub.sessionID,
+			sub.profileID,
+			sub.modelOverride,
+			r.cfg.Compaction,
+		); recErr != nil {
+			// Compaction is not possible (deps unwired, engine error).
+			// Surface the real problem rather than the session-full
+			// copy: the user's session is not necessarily full, our
+			// recovery path is just unavailable.
+			log.Info("chat.overflow_recovery.compact_unavailable",
+				"sub_id", sub.id, "session_id", sub.sessionID, "err", recErr.Error())
+			return "backend-error", lastErr.Error(), false
+		}
+
+		// The recovery just compacted the persisted history, so the
+		// transcript the redrive starts from is a new, smaller starting
+		// point. Re-baseline the watermark against it.
+		//
+		// Without this the redrive carries the pre-overflow baseline —
+		// a baseline latched against a transcript that no longer
+		// exists, and a large one, since we only got here by
+		// overflowing. Every mid-run site would then be measured
+		// against that inflated number and refused, making mid-run
+		// compaction LEAST likely in exactly the run that just proved
+		// it needs it.
+		env.AutoCompaction.Rearm()
+
+		attempt := sub.overflowRecoveries.Add(1)
+		log.Info("chat.overflow_recovery.auto_redrive",
+			"sub_id", sub.id, "session_id", sub.sessionID,
+			"attempt", attempt, "budget", budget)
+		if r.cfg.Broker != nil {
+			r.cfg.Broker.Emit(TopicChatOverflowRecovery, map[string]any{
+				"sub_id":     sub.id,
+				"session_id": sub.sessionID,
+				"attempt":    attempt,
+				"budget":     budget,
+			})
+		}
+
+		redriveCtx, redriveCancel := context.WithCancel(context.Background())
+		redriveErr := r.cfg.Kernel.Run(redriveCtx, env)
+		redriveCancel()
+
+		switch {
+		case redriveErr == nil:
+			return "completed", "", true
+		case isContextOverflowError(redriveErr):
+			// Overflowed again. Loop: another rescue if the budget has
+			// room, otherwise the exhaustion branch above reports
+			// session-full.
+			lastErr = redriveErr
+		default:
+			log.Info("chat.overflow_recovery.redrive_exit",
+				"sub_id", sub.id, "session_id", sub.sessionID, "err", redriveErr.Error())
+			return "backend-error", redriveErr.Error(), false
+		}
+	}
+}
+
+// compactionWatermarkPolicy resolves the mid-run compaction trigger
+// policy for this run (turn-context-runway-01PMAG03 WP02). Resolved per
+// StartStream so the dial is live without a restart; a nil runner or
+// resolver yields the zero-value policy, which the agentgraph package
+// fills with its defaults.
+func (r *ChatRunner) compactionWatermarkPolicy() coreag.CompactionWatermarkPolicy {
+	if r == nil || r.cfg.CompactionWatermark == nil {
+		return coreag.CompactionWatermarkPolicy{}
+	}
+	return r.cfg.CompactionWatermark()
 }
 
 // applyTokenCeilingKnob folds the autonomy tokenCeilingPerTurn dial into
@@ -1253,169 +1818,6 @@ func applyReasoningBudgetDial(g *coreag.Graph, budget int) {
 			g.Nodes[i].Attrs = a
 		}
 	}
-}
-
-// runPreSendCompaction is the pre-send hook from plan §2.3 / WP08.
-// Returns compaction.ErrSessionFull when the user is honestly out of
-// context (off tier + over cap, or maximal-fallback ran out of room);
-// returns nil on every other path including soft failures (we log,
-// don't crash the chat). The userMessage is INCLUDED in the
-// token-count input but is NOT mutated.
-//
-// Concurrency: per-session serialization is the chat runner's
-// invariant (one StartStream goroutine per session at a time); the
-// engine relies on it to keep ListActiveMessages → snap → write race-
-// free. Multi-session traffic runs in parallel safely.
-func (r *ChatRunner) runPreSendCompaction(ctx context.Context, profileID, sessionID, modelOverride, userMessage string) error {
-	deps := r.cfg.Compaction
-	if deps == nil || deps.Engine == nil {
-		// Compaction not wired — fall through to the kernel. This is
-		// the test-fixture path and the boot path on a chassis where
-		// compaction failed to construct.
-		return nil
-	}
-	// HARNESS_COMPACTION=off short-circuits the hook entirely so the
-	// user can A/B test without restarting (WP08 acceptance).
-	if compactionDisabledByEnv() {
-		return nil
-	}
-	if deps.Aggressiveness == nil {
-		// Defensive: a chassis that wired the engine but not the
-		// settings reader can't make a tier decision.
-		return nil
-	}
-
-	tier := compaction.Tier(deps.Aggressiveness())
-
-	// Helper: load the current active history. Re-fetched after
-	// compaction so the kernel run sees the post-compaction transcript.
-	loadHistory := func() []coreag.Message {
-		if r.cfg.History == nil {
-			return nil
-		}
-		msgs, herr := r.cfg.History.History(ctx, sessionID, 0)
-		if herr != nil {
-			logging.L().Warn("chat.compaction.history_load_failed",
-				"session_id", sessionID, "err", herr.Error())
-			return nil
-		}
-		return msgs
-	}
-
-	// Helper: pick the compaction model. Configured ref wins; fallback
-	// is the active chat model (treating profileID as the providerID
-	// and modelOverride as the modelID — the fallback convention also
-	// used by core/compaction/wiring/llm.go's resolveProfile).
-	pickModel := func() compaction.ProviderProfileRef {
-		if deps.CompactionModel != nil {
-			if ref, ok := deps.CompactionModel(); ok && (ref.ProviderID != "" || ref.ModelID != "") {
-				return ref
-			}
-		}
-		return compaction.ProviderProfileRef{ProviderID: profileID, ModelID: modelOverride}
-	}
-
-	switch tier.Mode {
-	case compaction.ModeNone:
-		// Off tier: honest "session full" if we'd exceed cap, otherwise
-		// proceed without compaction.
-		if deps.MaxContextTokens == nil {
-			return nil
-		}
-		history := loadHistory()
-		current := tokenizeRequest(history, userMessage)
-		activeModel := compaction.ProviderProfileRef{ProviderID: profileID, ModelID: modelOverride}
-		if cap, ok := deps.MaxContextTokens(activeModel); ok && cap > 0 && current >= cap {
-			logging.L().Warn("chat.compaction.session_full_off",
-				"session_id", sessionID,
-				"tokens", current, "cap", cap)
-			return compaction.ErrSessionFull
-		}
-		return nil
-
-	case compaction.ModeThreshold:
-		if deps.MaxContextTokens == nil {
-			return nil
-		}
-		history := loadHistory()
-		current := tokenizeRequest(history, userMessage)
-		activeModel := compaction.ProviderProfileRef{ProviderID: profileID, ModelID: modelOverride}
-		cap, ok := deps.MaxContextTokens(activeModel)
-		if !ok || cap <= 0 {
-			// Unknown model cap — skip the trigger check; provider's own
-			// gate handles any over-cap span.
-			return nil
-		}
-		if float64(current)/float64(cap) < tier.TriggerPct {
-			return nil
-		}
-		// Trigger! Run a synchronous Compact pass.
-		_, cerr := deps.Engine.Compact(ctx, sessionID, pickModel(), tier.SummarizePct)
-		if cerr != nil {
-			var tooSmall *compaction.ErrCompactionModelTooSmall
-			if errors.As(cerr, &tooSmall) {
-				// Threshold-mode model-too-small: surface session-full
-				// upward so the UI renders the actionable copy.
-				logging.L().Warn("chat.compaction.threshold_model_too_small",
-					"session_id", sessionID,
-					"needs_tokens", tooSmall.NeedsTokens,
-					"model_max_tokens", tooSmall.ModelMaxTokens)
-				return compaction.ErrSessionFull
-			}
-			// Other errors: log + proceed without compaction. Partial
-			// state is okay because Compact is transactional — either
-			// the summary row exists or the originals stayed untouched.
-			logging.L().Warn("chat.compaction.threshold_failed",
-				"session_id", sessionID, "err", cerr.Error())
-			return nil
-		}
-		// Compact OK. The kernel's HistoryReadNode will pick up the
-		// post-compaction transcript on its first fire — the chat
-		// runner doesn't need to plumb a fresh history into the kernel
-		// run (the kernel always reads through env.History).
-		return nil
-
-	case compaction.ModeRolling:
-		// Maximal tier: roll every turn.
-		recentWindow := 4
-		if deps.RecentWindow != nil {
-			recentWindow = deps.RecentWindow()
-		}
-		_, cerr := deps.Engine.RollingSummarize(ctx, sessionID, pickModel(), recentWindow)
-		if cerr == nil {
-			return nil
-		}
-		var tooSmall *compaction.ErrCompactionModelTooSmall
-		if errors.As(cerr, &tooSmall) {
-			// Graceful degrade per plan §2.5 R2: silently treat this
-			// turn as the aggressive tier. Run a single Compact pass
-			// using the aggressive numerics; the audit emit inside
-			// Engine.RollingSummarize already recorded the failure
-			// breadcrumb so dashboards can see the fallback.
-			logging.L().Warn("chat.compaction.maximal_too_small_fallback_aggressive",
-				"session_id", sessionID,
-				"needs_tokens", tooSmall.NeedsTokens,
-				"model_max_tokens", tooSmall.ModelMaxTokens)
-			fallback := compaction.Tier(compaction.AggressivenessAggressive)
-			_, fcerr := deps.Engine.Compact(ctx, sessionID, pickModel(), fallback.SummarizePct)
-			if fcerr != nil {
-				var fts *compaction.ErrCompactionModelTooSmall
-				if errors.As(fcerr, &fts) {
-					return compaction.ErrSessionFull
-				}
-				logging.L().Warn("chat.compaction.maximal_fallback_failed",
-					"session_id", sessionID, "err", fcerr.Error())
-			}
-			return nil
-		}
-		// Other rolling errors: log + proceed without compaction (R1
-		// of the risk register: provider hiccup shouldn't block chat
-		// when the session isn't yet over cap).
-		logging.L().Warn("chat.compaction.rolling_failed",
-			"session_id", sessionID, "err", cerr.Error())
-		return nil
-	}
-	return nil
 }
 
 // historyAdapterFunc adapts a closure to the agentgraph.HistoryReader

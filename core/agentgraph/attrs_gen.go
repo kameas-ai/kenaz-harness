@@ -165,8 +165,11 @@ func (a ArtifactAttrs) Validate() error {
 
 // AskAttrs is the typed payload for `kind: ask`.
 //
-// Free-form user-input elicitation (FR-037). No LLM budget consumed.
+// User-input elicitation (FR-037). Free-form by default; the full seven-kind dialog surface when question_kind is set. No LLM budget consumed.
 type AskAttrs struct {
+
+	// DefaultAnswer: autonomy-knobs-live-01PMAG02 WP02: answer used automatically when no answer has been seeded and askOnAmbiguity=never. Empty means no auto-resolution — the node pauses as before.
+	DefaultAnswer string `json:"default_answer,omitempty" yaml:"default_answer,omitempty"`
 
 	// MaxTokens: Upper bound on generated tokens; 0 = provider default.
 	MaxTokens int `json:"max_tokens,omitempty" yaml:"max_tokens,omitempty"`
@@ -177,8 +180,14 @@ type AskAttrs struct {
 	// Provider: LLM provider identifier (e.g. anthropic, bedrock).
 	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
 
-	// Question: Prompt rendered to the user.
+	// Question: Prompt rendered to the user. Markdown supported.
 	Question string `json:"question,omitempty" yaml:"question,omitempty"`
+
+	// QuestionKind: agentgraph-total-convergence-01PMGX01 WP06: input control to render, matching kenaz__ask_user_question's seven kinds. Empty (the default) means a free-form text answer — today's behaviour.
+	QuestionKind string `json:"question_kind,omitempty" yaml:"question_kind,omitempty"`
+
+	// QuestionSpec: agentgraph-total-convergence-01PMGX01 WP06: the rest of the structured question, decoded by core/elicitation's shared validator. Keys: options ([{value,label}], required for radio/checkbox), placeholder, min, max, step, default_value, preview ({kind,content,language}), questions (a multi-step wizard batch). Declaring `question` or `kind` in here is an error — they are the attrs above.
+	QuestionSpec map[string]any `json:"question_spec,omitempty" yaml:"question_spec,omitempty"`
 
 	// SystemPrompt: Optional system prompt prepended to the conversation.
 	SystemPrompt string `json:"system_prompt,omitempty" yaml:"system_prompt,omitempty"`
@@ -203,6 +212,18 @@ func (a AskAttrs) Validate() error {
 	}
 	if a.Question == "" {
 		return fmt.Errorf("question: question is required (manifest constraint)")
+	}
+	if a.QuestionKind != "" {
+		valid_QuestionKind := false
+		for _, allowed := range []string{"radio", "checkbox", "text", "number", "slider", "date", "file"} {
+			if a.QuestionKind == allowed {
+				valid_QuestionKind = true
+				break
+			}
+		}
+		if !valid_QuestionKind {
+			return fmt.Errorf("question_kind.enum: got %q, want one of radio | checkbox | text | number | slider | date | file", a.QuestionKind)
+		}
 	}
 	if a.Temperature < 0 {
 		return fmt.Errorf("temperature.min: got %v, want >= %v", a.Temperature, 0)
@@ -332,7 +353,7 @@ type CompactAttrs struct {
 	// Provider: LLM provider identifier (e.g. anthropic, bedrock).
 	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
 
-	// Strategy: Compaction strategy discriminator.
+	// Strategy: Compaction strategy discriminator. session_rewrite rewrites the persisted session history (the five-tier chat dial); the others shrink the in-memory slice.
 	Strategy string `json:"strategy,omitempty" yaml:"strategy,omitempty"`
 
 	// SystemPrompt: Optional system prompt prepended to the conversation.
@@ -364,14 +385,14 @@ func (a CompactAttrs) Validate() error {
 	}
 	if a.Strategy != "" {
 		valid_Strategy := false
-		for _, allowed := range []string{"summary", "drop_oldest", "semantic_cluster", "custom_subgraph"} {
+		for _, allowed := range []string{"summary", "drop_oldest", "semantic_cluster", "custom_subgraph", "session_rewrite"} {
 			if a.Strategy == allowed {
 				valid_Strategy = true
 				break
 			}
 		}
 		if !valid_Strategy {
-			return fmt.Errorf("strategy.enum: got %q, want one of summary | drop_oldest | semantic_cluster | custom_subgraph", a.Strategy)
+			return fmt.Errorf("strategy.enum: got %q, want one of summary | drop_oldest | semantic_cluster | custom_subgraph | session_rewrite", a.Strategy)
 		}
 	}
 	if a.TargetTokenBudget != 0 && float64(a.TargetTokenBudget) < 0 {
@@ -1110,7 +1131,7 @@ func (a PlannerAttrs) Validate() error {
 
 // ReadBashOutputAttrs is the typed payload for `kind: read_bash_output`.
 //
-// Reads cached stdout/stderr from a prior bash tool run as a context-tracked artifact (FR-057b).
+// Reads cached stdout/stderr from a prior bash tool run as a context-tracked artifact (FR-057b). No tool or MCP surface duplicates this — the cache it reads is kernel-internal.
 type ReadBashOutputAttrs struct {
 
 	// BashRunId: Identifier of a prior bash tool run whose output to read.
@@ -1160,7 +1181,7 @@ func (a ReadBashOutputAttrs) Validate() error {
 
 // ReadFileAttrs is the typed payload for `kind: read_file`.
 //
-// Reads a file path into the active context with provenance (FR-057a). Distinct from filesystem-MCP tool reads — see spec §4.9 State-vs-Tool framing.
+// Reads a file path into the active context with provenance (FR-057a). The kenaz__read_file builtin tool reads the same way; both surfaces record path/sha256/mtime provenance to the EventLog (core/agentgraph/tool_invocation.go).
 type ReadFileAttrs struct {
 
 	// AsAttachment: When true, register the content in core/attachments and emit an attachment_ref instead of inline messages.
@@ -1403,6 +1424,92 @@ func (a ReviewAttrs) Validate() error {
 	return nil
 }
 
+// RouterAttrs is the typed payload for `kind: router`.
+//
+// Model-selected next step (FR-001, agentic-turn-routing-01PMAG01 §3.1). The author declares a menu of choices; the model picks one and the kernel fires only the selected successor. `fused` mode (the default) reads the choice out of an upstream model node's own output, so routing costs no additional LLM call.
+type RouterAttrs struct {
+
+	// ChoiceField: Fused mode: the field name carrying the choice in the source node's structured output. Defaults to `next_choice`.
+	ChoiceField string `json:"choice_field,omitempty" yaml:"choice_field,omitempty"`
+
+	// Choices: The menu, keyed by choice id: `{<id>: {target: <node id>, description: <text shown to the model>}}`. Iterated in sorted-id order everywhere it is rendered or logged, so a run is reproducible regardless of YAML/map ordering.
+	Choices map[string]any `json:"choices,omitempty" yaml:"choices,omitempty"`
+
+	// DefaultChoice: Choice id taken when the model's pick is missing, unparseable, or unknown, and when the anti-thrash guard trips. Must be a key of `choices`.
+	DefaultChoice string `json:"default_choice,omitempty" yaml:"default_choice,omitempty"`
+
+	// FallbackToStandalone: Fused mode only. When the source node produced no parsable choice — the shape a provider without structured-output support produces — make a standalone call instead of taking `default_choice`. Costs an LLM call on that turn; off by default so the cheap path stays cheap.
+	FallbackToStandalone bool `json:"fallback_to_standalone,omitempty" yaml:"fallback_to_standalone,omitempty"`
+
+	// MaxConsecutiveSame: Anti-thrash guard: after this many consecutive identical choices the router forces `default_choice` and emits a router_override event. 0 disables the guard.
+	MaxConsecutiveSame int `json:"max_consecutive_same,omitempty" yaml:"max_consecutive_same,omitempty"`
+
+	// MaxTokens: Upper bound on generated tokens; 0 = provider default.
+	MaxTokens int `json:"max_tokens,omitempty" yaml:"max_tokens,omitempty"`
+
+	// Mode: `fused` (default) reads the choice from an upstream model node's output — no extra LLM call, which is what keeps single-shot chat at exactly one model call. `standalone` makes its own constrained call listing the menu.
+	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"`
+
+	// Model: Provider-specific model name.
+	Model string `json:"model,omitempty" yaml:"model,omitempty"`
+
+	// Provider: LLM provider identifier (e.g. anthropic, bedrock).
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
+
+	// ReplanChoice: Choice id forced when the inbound payload carries a tripped doom-loop signal (`should_replan`). Empty leaves the doom-loop signal unconsumed by this node. Must be a key of `choices` when set.
+	ReplanChoice string `json:"replan_choice,omitempty" yaml:"replan_choice,omitempty"`
+
+	// SourceNode: Fused mode: the model node whose output carries the choice. Required when mode is fused.
+	SourceNode string `json:"source_node,omitempty" yaml:"source_node,omitempty"`
+
+	// SystemPrompt: Optional system prompt prepended to the conversation.
+	SystemPrompt string `json:"system_prompt,omitempty" yaml:"system_prompt,omitempty"`
+
+	// Temperature: Sampling temperature.
+	Temperature float64 `json:"temperature,omitempty" yaml:"temperature,omitempty"`
+
+	// ToolAllowlist: Tool IDs this node may call. Empty = allow-all per policy.
+	ToolAllowlist []string `json:"tool_allowlist,omitempty" yaml:"tool_allowlist,omitempty"`
+}
+
+func (RouterAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: router`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`router.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a RouterAttrs) Validate() error {
+	if a.DefaultChoice == "" {
+		return fmt.Errorf("default_choice: default_choice is required (manifest constraint)")
+	}
+	if a.MaxConsecutiveSame != 0 && float64(a.MaxConsecutiveSame) < 0 {
+		return fmt.Errorf("max_consecutive_same.min: got %d, want >= %v", a.MaxConsecutiveSame, 0)
+	}
+	if a.MaxTokens != 0 && float64(a.MaxTokens) < 0 {
+		return fmt.Errorf("max_tokens.min: got %d, want >= %v", a.MaxTokens, 0)
+	}
+	if a.Mode != "" {
+		valid_Mode := false
+		for _, allowed := range []string{"fused", "standalone"} {
+			if a.Mode == allowed {
+				valid_Mode = true
+				break
+			}
+		}
+		if !valid_Mode {
+			return fmt.Errorf("mode.enum: got %q, want one of fused | standalone", a.Mode)
+		}
+	}
+	if a.Temperature < 0 {
+		return fmt.Errorf("temperature.min: got %v, want >= %v", a.Temperature, 0)
+	}
+	if a.Temperature > 2 {
+		return fmt.Errorf("temperature.max: got %v, want <= %v", a.Temperature, 2)
+	}
+	return nil
+}
+
 // SessionWriteAttrs is the typed payload for `kind: session_write`.
 //
 // Appends one assistant or system message to the session's persisted history. Replaces the toolloop's chassis-side post-LLM persistence path with a typed kind that lives on the chat graph. Distinct from `memory` because session messages and long-term embedded memory are different storage concerns.
@@ -1455,13 +1562,10 @@ type SleepAttrs struct {
 	// Model: Provider-specific model name.
 	Model string `json:"model,omitempty" yaml:"model,omitempty"`
 
-	// Name: Always kenaz__sleep.
-	Name string `json:"name,omitempty" yaml:"name,omitempty"`
-
 	// Provider: LLM provider identifier (e.g. anthropic, bedrock).
 	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
 
-	// Seconds: Duration to sleep. Clamped to [1, 600].
+	// Seconds: Duration to sleep. Clamped to [1, 600] by the tool itself.
 	Seconds int `json:"seconds,omitempty" yaml:"seconds,omitempty"`
 
 	// SystemPrompt: Optional system prompt prepended to the conversation.
@@ -1485,8 +1589,11 @@ func (a SleepAttrs) Validate() error {
 	if a.MaxTokens != 0 && float64(a.MaxTokens) < 0 {
 		return fmt.Errorf("max_tokens.min: got %d, want >= %v", a.MaxTokens, 0)
 	}
-	if a.Name == "" {
-		return fmt.Errorf("name: name is required (manifest constraint)")
+	if a.Seconds != 0 && float64(a.Seconds) < 1 {
+		return fmt.Errorf("seconds.min: got %d, want >= %v", a.Seconds, 1)
+	}
+	if float64(a.Seconds) > 600 {
+		return fmt.Errorf("seconds.max: got %d, want <= %v", a.Seconds, 600)
 	}
 	if a.Temperature < 0 {
 		return fmt.Errorf("temperature.min: got %v, want >= %v", a.Temperature, 0)
@@ -1499,7 +1606,7 @@ func (a SleepAttrs) Validate() error {
 
 // SubagentDispatchAttrs is the typed payload for `kind: subagent_dispatch`.
 //
-// Spawns a sub-agent branch from the named profile (branch-subagent-interactive-01KZNP3B). The model calls __subagent_dispatch with a profile id and prompt; the kernel forks the parent session into a child branch configured by the profile.
+// Spawns a sub-agent branch from the named profile (branch-subagent-interactive-01KZNP3B). The kernel forks the parent session into a child branch configured by the profile.
 type SubagentDispatchAttrs struct {
 
 	// Description: Optional human-readable label shown in the BranchSidebar.
@@ -1513,9 +1620,6 @@ type SubagentDispatchAttrs struct {
 
 	// Model: Provider-specific model name.
 	Model string `json:"model,omitempty" yaml:"model,omitempty"`
-
-	// Name: Always kenaz__subagent_dispatch.
-	Name string `json:"name,omitempty" yaml:"name,omitempty"`
 
 	// Profile: ID of the sub-agent profile to use (e.g. explore, code-reviewer).
 	Profile string `json:"profile,omitempty" yaml:"profile,omitempty"`
@@ -1550,67 +1654,11 @@ func (a SubagentDispatchAttrs) Validate() error {
 	if a.MaxTokens != 0 && float64(a.MaxTokens) < 0 {
 		return fmt.Errorf("max_tokens.min: got %d, want >= %v", a.MaxTokens, 0)
 	}
-	if a.Name == "" {
-		return fmt.Errorf("name: name is required (manifest constraint)")
-	}
 	if a.Profile == "" {
 		return fmt.Errorf("profile: profile is required (manifest constraint)")
 	}
 	if a.Prompt == "" {
 		return fmt.Errorf("prompt: prompt is required (manifest constraint)")
-	}
-	if a.Temperature < 0 {
-		return fmt.Errorf("temperature.min: got %v, want >= %v", a.Temperature, 0)
-	}
-	if a.Temperature > 2 {
-		return fmt.Errorf("temperature.max: got %v, want <= %v", a.Temperature, 2)
-	}
-	return nil
-}
-
-// ToolAttrs is the typed payload for `kind: tool`.
-//
-// Invokes a registered tool (FR-032). The on-the-wire kind name is unchanged from v0.
-type ToolAttrs struct {
-
-	// Args: Tool call arguments (object literal).
-	Args map[string]any `json:"args,omitempty" yaml:"args,omitempty"`
-
-	// MaxTokens: Upper bound on generated tokens; 0 = provider default.
-	MaxTokens int `json:"max_tokens,omitempty" yaml:"max_tokens,omitempty"`
-
-	// Model: Provider-specific model name.
-	Model string `json:"model,omitempty" yaml:"model,omitempty"`
-
-	// Name: Canonical <server>__<tool> identifier.
-	Name string `json:"name,omitempty" yaml:"name,omitempty"`
-
-	// Provider: LLM provider identifier (e.g. anthropic, bedrock).
-	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
-
-	// SystemPrompt: Optional system prompt prepended to the conversation.
-	SystemPrompt string `json:"system_prompt,omitempty" yaml:"system_prompt,omitempty"`
-
-	// Temperature: Sampling temperature.
-	Temperature float64 `json:"temperature,omitempty" yaml:"temperature,omitempty"`
-
-	// ToolAllowlist: Tool IDs this node may call. Empty = allow-all per policy.
-	ToolAllowlist []string `json:"tool_allowlist,omitempty" yaml:"tool_allowlist,omitempty"`
-}
-
-func (ToolAttrs) nodeAttrsMarker() {}
-
-// Validate enforces the manifest's declared constraints for `kind: tool`.
-// Generated from the resolved manifest's attrs map; per-rule errors
-// follow the validator's manifest-attribution format
-// (`tool.attrs.<attr>.<rule>: ...`) so callers can grep for the
-// constraint that fired.
-func (a ToolAttrs) Validate() error {
-	if a.MaxTokens != 0 && float64(a.MaxTokens) < 0 {
-		return fmt.Errorf("max_tokens.min: got %d, want >= %v", a.MaxTokens, 0)
-	}
-	if a.Name == "" {
-		return fmt.Errorf("name: name is required (manifest constraint)")
 	}
 	if a.Temperature < 0 {
 		return fmt.Errorf("temperature.min: got %v, want >= %v", a.Temperature, 0)
@@ -1791,7 +1839,7 @@ func (a TransformAttrs) Validate() error {
 
 // WriteFileAttrs is the typed payload for `kind: write_file`.
 //
-// Writes content to a file with policy gating + provenance (FR-057c). Distinct from filesystem-MCP tool writes — see spec §4.9 State-vs-Tool framing.
+// Writes content to a file with policy gating + provenance (FR-057c). The kenaz__write_file builtin tool writes the same way; both surfaces record path/sha256/mtime provenance to the EventLog (core/agentgraph/tool_invocation.go).
 type WriteFileAttrs struct {
 
 	// Content: Port reference to the content payload.

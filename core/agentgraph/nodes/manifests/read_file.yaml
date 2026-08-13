@@ -3,8 +3,9 @@ manifest_version: "1.0.0"
 id: read_file
 extends: read
 display_name: Read File
-description: "Reads a file path into the active context with provenance (FR-057a). Distinct from filesystem-MCP tool reads — see spec §4.9 State-vs-Tool framing."
+description: "Reads a file path into the active context with provenance (FR-057a). The kenaz__read_file builtin tool reads the same way; both surfaces record path/sha256/mtime provenance to the EventLog (core/agentgraph/tool_invocation.go)."
 executor: agentgraph.ExecReadFile
+dispatch: graph
 ports:
   inputs:
     - { name: query, type: any }

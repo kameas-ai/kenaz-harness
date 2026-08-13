@@ -89,7 +89,6 @@ manifest YAML (relative to repo root) and the Go executor symbol.
 | Kind | Manifest | Executor | Description |
 |---|---|---|---|
 | `model` | [`core/agentgraph/nodes/manifests/model.yaml`](../core/agentgraph/nodes/manifests/model.yaml) | `agentgraph.ExecModel` | LLM-powered reasoning / generation. Alias: `llm`. |
-| `tool` | [`tool.yaml`](../core/agentgraph/nodes/manifests/tool.yaml) | `agentgraph.ExecTool` | Tool dispatch via the policy gate. Budget: `tool`. |
 | `transform` | [`transform.yaml`](../core/agentgraph/nodes/manifests/transform.yaml) | `agentgraph.ExecTransform` | Pure-Go transform (concat, json_extract, truncate_tokens, uppercase). Budget: `none`. |
 | `activity` | [`activity.yaml`](../core/agentgraph/nodes/manifests/activity.yaml) | `agentgraph.ExecActivity` | Sub-graph reference. Budget: `inherit`. |
 | `reflect` | [`reflect.yaml`](../core/agentgraph/nodes/manifests/reflect.yaml) | `agentgraph.ExecReflect` | Self-reflection on prior trace. |
@@ -98,6 +97,24 @@ manifest YAML (relative to repo root) and the Go executor symbol.
 | `ask` | [`ask.yaml`](../core/agentgraph/nodes/manifests/ask.yaml) | `agentgraph.ExecAsk` | Free-form user question (pause + resume). Budget: `none`. |
 | `escalate` | [`escalate.yaml`](../core/agentgraph/nodes/manifests/escalate.yaml) | `agentgraph.ExecEscalate` | Escalate to a stronger model with confidence floor. |
 | `compact` | [`compact.yaml`](../core/agentgraph/nodes/manifests/compact.yaml) | `agentgraph.ExecCompact` | First-class compaction primitive (FR-039). Coordinates with `core/agentgraph/compaction/`. |
+
+#### Compute / Tool (archetype `tool`, extends `compute`)
+
+Builtin-tool node kinds. `_archetype.tool.yaml` is the abstract
+contract (`args`/`result` ports, `budget: tool`, the `kenaz__<kind>`
+naming contract that fixes which tool a kind dispatches — see the file
+itself for the full rationale). A callable kind declares only its args
+schema and gets a registered executor for free: `core/agentgraph/
+executor.go`'s `builtinToolExecutors()` derives one `builtinToolExecutor`
+per resolved manifest whose `extends:` chain contains `tool`, so there
+is no second hand-maintained dispatch table to keep in sync. The old
+generic `tool` kind (`name:` attr picking the tool at author time) is
+gone — a kind IS the unit of authorisation and accounting now.
+
+| Kind | Manifest | Executor | Description |
+|---|---|---|---|
+| `sleep` | [`sleep.yaml`](../core/agentgraph/nodes/manifests/sleep.yaml) | `agentgraph.ExecSleep` | Yield N seconds without consuming an iteration slot (FR-010). Budget: `none`. |
+| `subagent_dispatch` | [`subagent_dispatch.yaml`](../core/agentgraph/nodes/manifests/subagent_dispatch.yaml) | `agentgraph.ExecSubagentDispatch` | Spawn a sub-agent branch from a named profile. |
 
 #### Control (archetype `control`)
 
@@ -138,38 +155,40 @@ manifest YAML (relative to repo root) and the Go executor symbol.
 |---|---|---|---|
 | `checkpoint` | [`checkpoint.yaml`](../core/agentgraph/nodes/manifests/checkpoint.yaml) | `agentgraph.ExecCheckpoint` | Kernel-control marker; fires the greedy memory hook. |
 
-### Archetype manifests (6, `callable: false`)
+### Archetype manifests (7, `callable: false`)
 
 `compute`, `control`, `state`, `read` (extends `state`),
-`write` (extends `state`), `marker` (extends `state`).
+`write` (extends `state`), `marker` (extends `state`),
+`tool` (extends `compute`).
 
-## State-vs-Tool framing (§4.9)
+## Filesystem access is one mechanism
 
-Three of the new kinds (`read_file`, `read_bash_output`, `write_file`)
-overlap conceptually with filesystem-MCP tool dispatches. The framing
-rule is:
+`read_file` / `write_file` / `read_bash_output` are State kinds because
+a graph node's job is putting content into the run's *tracked* context:
+provenance recorded to the `EventLog` (`path`, `sha256`, `mtime`),
+greedy-memory hooks firing post-read/write, compaction eligibility.
+`kenaz__read_file` / `kenaz__write_file` (`core/tools/fsbuiltins`) are
+the same filesystem operations reached through the tool-call surface a
+model dispatches on its own initiative, gated by the interactive
+permission flow in `core/tools/fs.Gate` rather than the node-level
+Cedar `Read::"file"` / `Write::"file"` pair (FR-058b) — a real
+difference, kept because retargeting either surface's dispatch would
+silently change which permission UX gates an existing graph.
 
-- **State (Read/Write archetype)** — the operation produces / consumes
-  content the graph wants to **track in context**. Provenance recorded
-  in `EventLog` (`path`, `sha256`, `mtime`, `scope`). Greedy memory
-  hooks fire post-read. Eligible for compaction. Output participates in
-  the context graph as a first-class artifact.
-- **Tool (Compute archetype, `tool` kind)** — the operation is a
-  **one-shot side effect**. Output is ephemeral (tool return),
-  policy-gated via Cedar `Tool::"<server>__<tool>"`, but not retained
-  in context unless the graph author explicitly persists it via a
-  `write` kind downstream.
-
-**Decision rule for graph authors**: if you want the result to *be
-remembered and reasoned about later*, use a State kind. If it's a
-fire-and-forget action whose return value is consumed once and
-discarded, use `tool`.
-
-Cedar policy gating is consistent across both surfaces — filesystem
-accesses go through `Filesystem::"<path>"` regardless of which kind
-initiated them. State kinds add a `Read::"<source>"` /
-`Write::"<target>"` action UID layer for finer-grained gating
-(FR-058b).
+What used to be a doctrine (§4.9, deleted — "pick a kind based on
+whether you want it remembered") is now moot: both surfaces record the
+same provenance. `appendFSToolProvenance` in
+`core/agentgraph/tool_invocation.go` — the single call site every tool
+invocation already passes through, node-dispatched or
+model-dispatched — emits the identical `file_read` / `file_write`
+EventLog record for `kenaz__read_file` / `kenaz__write_file` calls that
+the State-kind executors emit for `read_file` / `write_file` nodes.
+There is no authoring choice left to arbitrate: a graph author places a
+`read_file` node when they're authoring the graph; a model calls
+`kenaz__read_file` when it decides to read something mid-run. Neither
+one is the "remembered" path anymore — both are. `read_bash_output` has
+no competing tool surface at all (the cache it reads is kernel-internal
+to the bash tool), so it was never actually in doctrine's scope.
 
 ## Multi-layer inheritance: the `corpus_read` example
 

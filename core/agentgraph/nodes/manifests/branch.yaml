@@ -6,6 +6,7 @@ display_name: Branch
 description: "Sub-graph spawn primitive (FR-042). Was named `fork` in v0; kept as alias."
 aliases: [fork]
 executor: agentgraph.ExecBranch
+dispatch: graph
 ports:
   inputs:
     - { name: parent, type: any }

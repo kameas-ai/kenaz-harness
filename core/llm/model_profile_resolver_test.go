@@ -3,7 +3,7 @@ package llm
 import (
 	"testing"
 
-	"github.com/kameas-ai/kenaz-harness/core/compaction"
+	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
 )
 
 func TestModelProfileStore_AbsentProfileIsInert(t *testing.T) {
@@ -28,7 +28,7 @@ func TestModelProfileStore_SpecificOverGlobOverDefault(t *testing.T) {
 	if err := s.Load([]ModelProfile{{
 		ID:      "*",
 		Version: version,
-		Context: &ContextPolicy{Aggressiveness: compaction.AggressivenessConservative},
+		Context: &ContextPolicy{Aggressiveness: compactionpolicy.AggressivenessConservative},
 	}}); err != nil {
 		t.Fatalf("load default: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestModelProfileStore_SpecificOverGlobOverDefault(t *testing.T) {
 	if err := s.Load([]ModelProfile{{
 		ID:      "claude-sonnet-*",
 		Version: version,
-		Context: &ContextPolicy{Aggressiveness: compaction.AggressivenessBalanced},
+		Context: &ContextPolicy{Aggressiveness: compactionpolicy.AggressivenessBalanced},
 	}}); err != nil {
 		t.Fatalf("load family glob: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestModelProfileStore_SpecificOverGlobOverDefault(t *testing.T) {
 	if err := s.Load([]ModelProfile{{
 		ID:      "claude-sonnet-4-7-20260420",
 		Version: version,
-		Context: &ContextPolicy{Aggressiveness: compaction.AggressivenessAggressive},
+		Context: &ContextPolicy{Aggressiveness: compactionpolicy.AggressivenessAggressive},
 	}}); err != nil {
 		t.Fatalf("load exact: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestModelProfileStore_SpecificOverGlobOverDefault(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("resolve exact: found=%v err=%v", found, err)
 	}
-	if exact.Context == nil || exact.Context.Aggressiveness != compaction.AggressivenessAggressive {
+	if exact.Context == nil || exact.Context.Aggressiveness != compactionpolicy.AggressivenessAggressive {
 		t.Fatalf("expected exact-entry aggressiveness to win, got %+v", exact.Context)
 	}
 
@@ -65,7 +65,7 @@ func TestModelProfileStore_SpecificOverGlobOverDefault(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("resolve family: found=%v err=%v", found, err)
 	}
-	if family.Context == nil || family.Context.Aggressiveness != compaction.AggressivenessBalanced {
+	if family.Context == nil || family.Context.Aggressiveness != compactionpolicy.AggressivenessBalanced {
 		t.Fatalf("expected family-glob aggressiveness to win over default, got %+v", family.Context)
 	}
 
@@ -75,7 +75,7 @@ func TestModelProfileStore_SpecificOverGlobOverDefault(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("resolve default: found=%v err=%v", found, err)
 	}
-	if other.Context == nil || other.Context.Aggressiveness != compaction.AggressivenessConservative {
+	if other.Context == nil || other.Context.Aggressiveness != compactionpolicy.AggressivenessConservative {
 		t.Fatalf("expected default aggressiveness, got %+v", other.Context)
 	}
 }

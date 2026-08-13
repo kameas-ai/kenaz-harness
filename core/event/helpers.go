@@ -89,19 +89,21 @@ func sessionFromCtx(ctx context.Context) *ULID {
 	return nil
 }
 
-// AuthorizeRawReplay marks the context as authorized to open ReplayRaw
-// cursors. The Replayer rejects ReplayRaw cursors opened without this
-// marker (ErrPolicyViolation). Operators wire this to whatever auth
-// surface they expose; tests can mark contexts directly.
-func AuthorizeRawReplay(ctx context.Context, operator string) context.Context {
-	return context.WithValue(ctx, rawReplayKey{}, operator)
-}
-
-// IsRawReplayAuthorized reports whether ctx carries a raw-replay
-// authorization marker.
-func IsRawReplayAuthorized(ctx context.Context) (string, bool) {
-	v, ok := ctx.Value(rawReplayKey{}).(string)
-	return v, ok && v != ""
-}
-
-type rawReplayKey struct{}
+// The raw-replay authorization pair (AuthorizeRawReplay /
+// IsRawReplayAuthorized, plus its context key) was DELETED here on
+// 2026-08-13 by agentgraph-total-convergence-01PMGX01 WP17.
+//
+// Its doc claimed "the Replayer rejects ReplayRaw cursors opened
+// without this marker (ErrPolicyViolation)". No Replayer rejects
+// anything, because no Replayer exists: the interface is declared in
+// api.go and has zero implementations repo-wide, ReplayCursor and
+// ReplayOpts have zero references outside their own declarations, and
+// core/event/replay contains a doc.go and nothing else. Both helpers
+// had exactly one caller between them — api_test.go, asserting that the
+// setter round-trips to the getter.
+//
+// This is the shape spec §1.7 names: a control-flow function whose doc
+// comment describes an enforcement contract nothing enforces. Whoever
+// implements Replayer re-adds the marker WITH the check that reads it,
+// in the same change — three lines of context plumbing are not the hard
+// part, and shipping them early is how they come to look load-bearing.

@@ -27,8 +27,8 @@ func TestNodeKindEnumeration(t *testing.T) {
 		NodeKindHistoryRead, NodeKindJoin, NodeKindLoop, NodeKindMemory,
 		NodeKindMerge, NodeKindModel, NodeKindParallel, NodeKindPlanner,
 		NodeKindReadBashOutput, NodeKindReadFile, NodeKindReflect, NodeKindRetry,
-		NodeKindReview, NodeKindSessionWrite, NodeKindSleep, NodeKindSubagentDispatch,
-		NodeKindTool, NodeKindToolDispatch, NodeKindTraceWrite, NodeKindTransform, NodeKindWriteFile,
+		NodeKindReview, NodeKindRouter, NodeKindSessionWrite, NodeKindSleep, NodeKindSubagentDispatch,
+		NodeKindToolDispatch, NodeKindTraceWrite, NodeKindTransform, NodeKindWriteFile,
 	}
 	got := AllNodeKinds()
 	// Compare set-equal (order is sorted-by-ID; we accept whatever order
@@ -180,9 +180,9 @@ func TestUnmarshalYAML_NodeAttrsTyped(t *testing.T) {
 				t.Errorf("node %q: attrs not ModelAttrs (got %T)", n.ID, n.Attrs)
 			}
 			sawLLM = true
-		case NodeKindTool:
-			if _, ok := n.Attrs.(ToolAttrs); !ok {
-				t.Errorf("node %q: attrs not ToolAttrs (got %T)", n.ID, n.Attrs)
+		case NodeKindToolDispatch:
+			if _, ok := n.Attrs.(ToolDispatchAttrs); !ok {
+				t.Errorf("node %q: attrs not ToolDispatchAttrs (got %T)", n.ID, n.Attrs)
 			}
 			sawTool = true
 		case NodeKindHistoryRead:
@@ -211,7 +211,7 @@ func TestUnmarshalYAML_NodeAttrsTyped(t *testing.T) {
 		name string
 		ok   bool
 	}{
-		{"loop", sawLoop}, {"model", sawLLM}, {"tool", sawTool},
+		{"loop", sawLoop}, {"model", sawLLM}, {"tool_dispatch", sawTool},
 		{"history_read", sawHistory}, {"trace_write", sawTrace},
 		{"decision", sawDecision}, {"parallel", sawParallel},
 	} {

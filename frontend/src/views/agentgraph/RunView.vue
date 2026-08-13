@@ -88,6 +88,16 @@ function backToList() {
   void router.push({ name: 'graphs' });
 }
 
+/**
+ * openMaterialized navigates to the run rendered AS A GRAPH
+ * (agentgraph-total-convergence-01PMGX01 WP12) — the same trace this
+ * view lists row by row, projected into the node/edge shape an authored
+ * graph has.
+ */
+function openMaterialized() {
+  void router.push({ name: 'graph-materialized', params: { runId: runId.value } });
+}
+
 onMounted(async () => {
   await pollOnce();
   schedulePoll();
@@ -128,13 +138,23 @@ defineExpose({ pollOnce });
       :subtitle="`Run ${runId.slice(0, 16)}…`"
     >
       <template #trailing>
-        <button
-          type="button"
-          class="rounded-sm border border-border-muted px-3 py-1 font-ui text-[12px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2"
-          @click="backToList"
-        >
-          Back
-        </button>
+        <div class="flex gap-2">
+          <button
+            type="button"
+            class="rounded-sm border border-border-muted px-3 py-1 font-ui text-[12px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2"
+            @click="backToList"
+          >
+            Back
+          </button>
+          <button
+            type="button"
+            class="rounded-sm border border-border-muted px-3 py-1 font-ui text-[12px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2"
+            data-testid="run-view-as-graph"
+            @click="openMaterialized"
+          >
+            View as graph
+          </button>
+        </div>
       </template>
     </CanvasHead>
 

@@ -30,9 +30,10 @@ const NAV_ACTIONS: PaletteAction[] = [
   { id: 'nav.memory', label: 'Go to Memory', hint: 'Memory capture settings', perform: () => navigate('#/memory') },
   { id: 'nav.workflows', label: 'Go to Workflows', hint: 'Scheduled workflows', perform: () => navigate('#/workflows') },
   { id: 'nav.artifacts', label: 'Go to Artifacts', hint: 'Saved artifacts & outputs', perform: () => navigate('#/artifacts') },
-  // nav-settings-ia-cleanup WP03: demoted from top-level nav; kept in palette as
-  // an advanced destination so the kernel view stays reachable via Cmd+K.
-  { id: 'nav.agentgraph', label: 'Agent graphs (advanced)', hint: 'Library of compute/control/state graphs the kernel runs — internal surface', perform: () => navigate('#/agentgraph') },
+  // agentgraph-total-convergence-01PMGX01 WP16: back in the left rail as well
+  // (see LeftRail.vue). The palette entry stays — a rail entry and a Cmd+K
+  // action are not redundant, they serve different reach.
+  { id: 'nav.agentgraph', label: 'Go to Agent graphs', hint: 'Graphs the kernel runs, and the materialized graph of each conversation', perform: () => navigate('#/agentgraph') },
   { id: 'nav.audit', label: 'Go to Audit log', hint: 'Session & tool audit trail', perform: () => navigate('#/audit') },
   { id: 'nav.permissions', label: 'Go to Permissions', hint: 'Tool & bash permissions', perform: () => navigate('#/permissions') },
   { id: 'nav.policy', label: 'Go to Security policy', hint: 'Advanced security policy editor', perform: () => navigate('#/policy') },

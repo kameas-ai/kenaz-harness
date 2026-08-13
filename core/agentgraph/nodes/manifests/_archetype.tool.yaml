@@ -1,0 +1,60 @@
+# _archetype.tool.yaml — the shared contract every builtin tool node
+# inherits (agentgraph-total-convergence-01PMGX01 WP04, spec §4.2).
+#
+# This file replaces the old generic `tool` KIND. Under this mission's
+# unified model a tool call is not "one node kind with a name attr" —
+# every tool is its own manifest-declared node kind, and `tool` is the
+# abstract layer they share. `sleep` and `subagent_dispatch` are the
+# first two instances; MCP-discovered tools materialize into the same
+# shape at runtime through the WP03 executor registry.
+#
+# What inheriting this archetype BUYS a kind:
+#
+#   - `args` / `result` ports — the canonical tool-call shape.
+#   - the tool budget signature (`budget: tool`, consuming `tool_calls`),
+#     so kernel budget accounting is declared once rather than per kind.
+#   - a registered executor. core/agentgraph/executor.go walks the
+#     resolved catalog for every kind whose inheritance chain contains
+#     this archetype and registers a builtin-tool executor for it, so
+#     "declare a manifest that extends tool" is the whole contract —
+#     there is no second hand-maintained table to also edit.
+#
+# NAMING CONTRACT (load-bearing, not documentation): the executor
+# derives the tool it invokes as `kenaz__<kind id>`. A kind named
+# `sleep` dispatches `kenaz__sleep`. There is no `name:` attr — a node
+# cannot point itself at a different tool than the one its kind names,
+# which is what makes the kind the unit of authorisation and accounting.
+#
+# ITERATION ACCOUNTING: a tool call normally consumes an iteration slot
+# (toolloop.ShouldCountIteration). Passive tools — `sleep` is the
+# canonical case (FR-010) — must not. A passive kind expresses that by
+# overriding `budget: none` / `budget_consumes: []` here, and the tool
+# itself is registered passive in core/toolloop; the executor honours
+# ShouldCountIteration on every dispatch, so the YAML and the runtime
+# agree by construction.
+#
+# AUTHORISATION, HONESTLY: this archetype deliberately carries NEITHER
+# `cedar_action` NOR `prompt_on_first_use`. Both described machinery
+# with no production call site and were deleted rather than inherited
+# (spec §1.7 / §4.2, WP02a). Tool authorisation today is explicit
+# Cedar `deny` and nothing else. `01PMAG05` owns adding real prompting
+# against this converged model.
+schema_version: "1"
+archetype: tool
+extends: compute
+display_name: Tool
+description: "Abstract layer for builtin tool node kinds: `args`/`result` ports, the tool budget signature, and the kenaz__<kind> naming contract. Not callable — extend it."
+callable: false
+# Integration (2026-08-12): tool kinds have real graph executors (derived
+# from the catalog by builtinToolExecutors), so their dispatch mode is
+# `graph`, inherited here. `dispatch: builtin_tool` currently has zero
+# instances — it remains valid for future runtime-materialized kinds that
+# genuinely lack a compiled executor (Phase 8 decides keep-vs-delete).
+dispatch: graph
+ports:
+  inputs:
+    - { name: args, type: any }
+  outputs:
+    - { name: result, type: any }
+budget: tool
+budget_consumes: [tool_calls]

@@ -5,6 +5,7 @@ extends: control
 display_name: Parallel
 description: "Fan-out to multiple downstream nodes concurrently (FR-043)."
 executor: agentgraph.ExecParallel
+dispatch: graph
 ports:
   inputs:
     - { name: in, type: any }

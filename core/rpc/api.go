@@ -28,14 +28,14 @@ import (
 	acpenvelope "github.com/kameas-ai/kenaz-harness/core/acp/envelope"
 	acppeers "github.com/kameas-ai/kenaz-harness/core/acp/peers"
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
-	fr041compaction "github.com/kameas-ai/kenaz-harness/core/agentgraph/compaction"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph/compaction"
+	compactionwiring "github.com/kameas-ai/kenaz-harness/core/agentgraph/compaction/wiring"
 	corenodes "github.com/kameas-ai/kenaz-harness/core/agentgraph/nodes"
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph/prompts"
 	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
 	coreatt "github.com/kameas-ai/kenaz-harness/core/attachments"
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
-	corecompaction "github.com/kameas-ai/kenaz-harness/core/compaction"
-	compactionwiring "github.com/kameas-ai/kenaz-harness/core/compaction/wiring"
+	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
 	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
 	corecontexts "github.com/kameas-ai/kenaz-harness/core/contexts"
 	coreconv "github.com/kameas-ai/kenaz-harness/core/conversation"
@@ -63,6 +63,7 @@ import (
 	mcphttp "github.com/kameas-ai/kenaz-harness/core/mcp/transport/http"
 	mcpsse "github.com/kameas-ai/kenaz-harness/core/mcp/transport/sse"
 	corememory "github.com/kameas-ai/kenaz-harness/core/memory"
+	"github.com/kameas-ai/kenaz-harness/core/memory/narrative"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/a2a"
 	acpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/acp"
@@ -79,6 +80,7 @@ import (
 	cedarpolicyview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedarpolicy"
 	compactionview "github.com/kameas-ai/kenaz-harness/core/rpc/views/compaction"
 	complianceview "github.com/kameas-ai/kenaz-harness/core/rpc/views/compliance"
+	confirmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/confirm"
 	contextsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contexts"
 	contextsyncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextsync"
 	contextview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextview"
@@ -237,6 +239,14 @@ type HarnessAPI interface {
 	// the kenaz__ask_user_question tool blocks on OpenDialog until
 	// the answer arrives.
 	Elicit() elicitview.ElicitAPI
+
+	// Confirm exposes the confirm-each tool-confirmation surface
+	// (confirm-each-enforcement-01PMAG05 WP02). The frontend's batched
+	// ConfirmToolModal answers parked tool calls through it; the chat
+	// runner's tool adapter is the side that parked them. Both halves
+	// MUST share one toolloop.ConfirmBus instance or answers land on a
+	// registry nothing is waiting on.
+	Confirm() confirmview.ConfirmAPI
 
 	// ScheduledChat exposes the scheduled-chat-runs CRUD + dispatch surface
 	// (mission scheduled-chat-runs-01KX5R8B, v0.10.0). The frontend's
@@ -471,9 +481,16 @@ type API struct {
 
 	// permissionsAPI is the universal interactive-permission RPC
 	// surface (mission cedar-credential-policy-01KQ8TDE, WP02). Backed
-	// by a process-singleton *cedar.Registry shared with the gate
-	// callers in WP03–WP06 (not yet wired). Until then the registry
-	// has no producers and ListPending returns empty.
+	// by the process-singleton *cedar.Registry below, which HAS
+	// producers: cedar.GateMCPSpawn fires through it from
+	// makeMCPRecipeBootstrap, and registerBuiltinTools threads it into
+	// the builtin gate constructors. ListPending returns whatever those
+	// have parked.
+	//
+	// (This comment used to say "the gate callers in WP03–WP06 (not yet
+	// wired). Until then the registry has no producers and ListPending
+	// returns empty." Those WPs landed. Corrected under
+	// agentgraph-total-convergence-01PMGX01 invariant I8, 2026-08-13.)
 	permissionsAPI permissionsview.PermissionsAPI
 
 	// promptRegistry is the process-singleton cedar prompt registry.
@@ -558,6 +575,22 @@ type API struct {
 	// fixture compiles.
 	onboardingAPI onboardingview.OnboardingAPI
 
+	// confirmBus is the confirm-each pause registry
+	// (confirm-each-enforcement-01PMAG05 WP02). ONE instance is shared
+	// between the chat runner's kernelToolAdapter (which parks calls and
+	// blocks on them) and confirmAPI (which resolves them). Constructed
+	// with a publisher that fans ConfirmRequests onto the broker's
+	// "tool:confirm-pending" topic, which is what gives the modal
+	// anything to render.
+	confirmBus *toolloop.ConfirmBus
+
+	// confirmAPI is the resolve leg of the confirm-each round trip.
+	confirmAPI *confirmview.API
+
+	// confirmSessionGrants backs "allow for this session" (WP03).
+	// Process-lifetime, never written to disk.
+	confirmSessionGrants *toolloop.SessionGrantCache
+
 	// elicitAPI is the ask-user-question RPC surface (mission
 	// ask-user-question-interactive-01KZNP3G WP04). Constructed in New
 	// and wired with a concrete Delegate into the askuserquestion tool.
@@ -628,6 +661,11 @@ type API struct {
 	// settingsSyncer is the per-category settings Syncer started by
 	// registerSyncCategories. Held for Shutdown teardown (FR-001).
 	settingsSyncer *corefleet.Syncer
+
+	// syncKindRegistry is the SyncKind registry populated by
+	// registerSyncCategories (fleet-generic-sync-framework-01NSYNC02 WP01).
+	// Held for future use by diagnostics / the Settings → Sync surface (WP06).
+	syncKindRegistry *corefleet.KindRegistry
 
 	// ctxGraphSyncer is the fleet context-graph pull syncer started in New.
 	// Held for Shutdown teardown (FR-011).
@@ -1193,6 +1231,29 @@ func New(c *core.Core, opts ...Option) *API {
 	a.settingsAPI = settingsImpl
 	a.settingsImpl = settingsImpl
 
+	// Wire the Settings-backed MemoryNarrativeEnabled dial into
+	// core/memory/narrative (agentgraph-total-convergence-01PMGX01 WP17,
+	// I10 triage).
+	//
+	// narrative.SetSettingsGate existed with a doc comment reading "Call
+	// this once at harness boot after the settings store is opened" and
+	// zero non-test callers, so Enabled() never consulted the dial and
+	// always fell through to its hard-coded `false` default. The user
+	// could flip MemoryNarrativeEnabled in Settings and nothing changed:
+	// narrative.Enabled() gates the promoter (promoter.go) and citation
+	// detection (citation.go), and both stayed off. Only the
+	// HARNESS_MEMORY_NARRATIVE_LAYER env var could turn the feature on.
+	//
+	// This is the boot point the comment asked for. The closure is read
+	// on every Enabled() call, so a runtime toggle takes effect on the
+	// next turn without a restart. A read error degrades to false, which
+	// matches the pre-wiring behaviour rather than silently enabling a
+	// feature on a failed load.
+	narrative.SetSettingsGate(func() bool {
+		enabled, err := settingsImpl.GetMemoryNarrativeEnabled(context.Background())
+		return err == nil && enabled
+	})
+
 	// FR-008 (agent-loop-robustness-parity WP08): boot health error strings
 	// collected during subsystem init. Passed to SetBootErrors at the end of
 	// api.New so the frontend's BootHealthBanner can display targeted warnings.
@@ -1390,7 +1451,7 @@ func New(c *core.Core, opts ...Option) *API {
 	// falls back to ErrManagerUnavailable so the chassis still boots.
 	a.convMgr = newConversationManager(c)
 	a.corpusMgr = newCorpusManager(c, embedder)
-	var compactionPipeline *fr041compaction.Pipeline
+	var compactionPipeline *compaction.Pipeline
 	a.graphMgr, compactionPipeline = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore, settingsImpl)
 	// Wire the same FR-041 pipeline instance the kernel runs onto the
 	// Settings RPC surface, so edits made through
@@ -1400,8 +1461,15 @@ func New(c *core.Core, opts ...Option) *API {
 	// compaction-convergence-01PMDL05 WP01).
 	a.SetCompactionAPI(compactionview.New(compactionPipeline))
 
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders)
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl})
 	a.llmAPI = stack.api
+	// confirm-each-enforcement-01PMAG05 WP02: the resolve leg. Bound to
+	// the SAME bus the chat runner's tool adapter parks on — a second bus
+	// would accept answers for rows nothing is waiting on, which reads
+	// exactly like the bug this mission fixed.
+	a.confirmBus = stack.confirmBus
+	a.confirmSessionGrants = stack.confirmSessionGrants
+	a.confirmAPI = confirmview.New(confirmview.Config{Bus: stack.confirmBus})
 	a.stdioPool = stack.pool
 	a.dispatchPool = stack.dispatchPool
 	a.builtins = stack.builtins
@@ -1490,6 +1558,17 @@ func New(c *core.Core, opts ...Option) *API {
 	// subscribes and debounces a refresh() call on receipt (v0.5.3 fix).
 	if a.broker != nil {
 		a.sessionsAPI = sessions.WithBrokerOpt(a.sessionsAPI, a.broker)
+	}
+	// Session teardown: revoke the confirm-each "allow for this session"
+	// grants when their session is deleted, so a deleted-then-recreated
+	// session id cannot inherit approvals the user threw away
+	// (confirm-each-enforcement-01PMAG05 review finding 7, wired by the
+	// 2026-08-13 adversarial review).
+	if a.confirmSessionGrants != nil {
+		grants := a.confirmSessionGrants
+		a.sessionsAPI = sessions.WithDeleteHookOpt(a.sessionsAPI, func(sessionID string) {
+			grants.RevokeSession(sessionID)
+		})
 	}
 	// Wire export dependencies (Cedar gate) at boot time so the Cedar
 	// check is ready before the first Export call. The FilePicker is
@@ -2103,7 +2182,14 @@ func New(c *core.Core, opts ...Option) *API {
 			syncStore = a.settingsImpl.Store()
 		}
 		mcpSyncCat := corefleet.NewMCPSyncCategory(nil, nil, nil, syncPending)
-		registerSyncCategories(context.Background(), syncer, syncStore, mcpSyncCat)
+		a.syncKindRegistry = registerSyncCategories(context.Background(), syncer, syncStore, mcpSyncCat)
+
+		// fleet-generic-sync-framework-01NSYNC02 WP05: register slash_commands
+		// as a new user-scoped kind through the same registry — the
+		// genericity proof (one SyncKind + one collector/applier, no
+		// endpoint or Syncer changes). slashStore is constructed earlier in
+		// New() (feature-gated by HARNESS_USER_SLASHCMD) so it may be nil.
+		registerSlashCommandsSyncKind(syncer, a.syncKindRegistry, slashStore)
 
 		// Connect settings mutations to the Syncer's debounced push so a theme
 		// change schedules a push-up (no-op when the category is disabled).
@@ -3499,7 +3585,7 @@ type llmStack struct {
 	// boot when HARNESS_COMPACTION != "off"; nil when compaction is
 	// disabled at boot. The caller is responsible for invoking
 	// Stop() on shutdown so the in-flight sweep returns cleanly.
-	compactionScheduler *corecompaction.Scheduler
+	compactionScheduler *compaction.SweepScheduler
 	// compactionLLM is the LLM-call adapter the compaction engine
 	// dispatches summarization through. Held on the stack so the
 	// rpc layer can expose its OverheadTotals on the per-session
@@ -3531,6 +3617,13 @@ type llmStack struct {
 	// newLLMStack. Held so the workflow engine can wire the SAME catalog
 	// and permission filter as chat (mission 01NWFT01, FR-002).
 	toolDiscoverer corellm.ToolDiscoverer
+	// confirmBus is the confirm-each pause registry constructed with a
+	// broker publisher (confirm-each-enforcement-01PMAG05 WP02). Held on
+	// the stack so api.New can hand the SAME instance to the confirm RPC
+	// view — the adapter parks on it, the view resolves against it.
+	confirmBus *toolloop.ConfirmBus
+	// confirmSessionGrants is the "allow for this session" cache (WP03).
+	confirmSessionGrants *toolloop.SessionGrantCache
 	// dispatchPool is the transport-routing pool that wraps the stdio
 	// pool (and the http/sse sub-pools). It implements both mcp.Pool
 	// and tools.PoolController so the tools view and the core MCP seam
@@ -3567,6 +3660,10 @@ func newLLMStack(
 	// Empty on the desktop path, which is why desktop behaviour is
 	// unchanged by construction.
 	hostProviders []corellm.ProviderProfile,
+	// confirmAudit receives one record per confirm-each decision on
+	// every path (confirm-each-enforcement-01PMAG05 WP05 / FR-007). nil
+	// silences the trail; the decision itself is unaffected.
+	confirmAudit contextaudit.Emitter,
 ) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
@@ -3626,12 +3723,14 @@ func newLLMStack(
 	// materializes a process-wide event.Emitter (core/event.NewEmitter
 	// + redact.Pipeline). Until then audit emission is silenced and
 	// the privacy-CI guard is "no emitter, no leak".
-	// confirm-each modal flow retired alongside core/toolloop in the
-	// chat-migration cutover; v1 alpha relies on Cedar policy gates
-	// to gate dispatch. confirmEachEnabled is preserved on the
-	// chassis settings store so a future re-introduction can read the
-	// same toggle without a settings migration.
-	_ = confirmEachEnabled
+	// confirmEachEnabled is Settings.ConfirmEachEnabled()'s reader. It
+	// spent the whole v1-alpha line as `_ = confirmEachEnabled` under a
+	// comment explaining that the confirm-each modal flow had been
+	// retired — a settings toggle the user could flip that governed
+	// nothing. confirm-each-enforcement-01PMAG05 WP02 gives it its Go
+	// consumer: it rides into the chat runner on chat.ConfirmDeps.Enabled
+	// and decides whether the prompt is offered at all (FR-006).
+	// Threaded down to the confirm wiring below.
 	// Stdio MCP pool — empty at boot. Persisted recipes are spawned
 	// onto this pool from core.Core.Start (so they're up before the
 	// chat surface accepts a turn), and the tools view's
@@ -3805,7 +3904,110 @@ func newLLMStack(
 		chatWorkspaceDir = c.WorkspaceDir()
 		chatWorkspaceNote = c.Workspace().Note()
 	}
-	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatWorkspaceDir, chatWorkspaceNote)
+	// ── confirm-each wiring (confirm-each-enforcement-01PMAG05) ──────
+	//
+	// The pause seam shipped in WP01 with a documented payload contract
+	// and zero production call sites: nothing constructed a bus, so
+	// every confirm_each verdict in a shipped build hit the "no
+	// confirmation channel is attached" branch. This is where it gets a
+	// channel.
+	//
+	// The publisher fans each parked call onto the broker's
+	// "tool:confirm-pending" topic — the same broker the permission
+	// modals and the elicitation dialog already ride, so the served
+	// transport forwards it for free.
+	//
+	// The bus is held on the API so the confirm RPC view resolves
+	// against the SAME registry the tool adapter parks on.
+	confirmPublisher := func(req toolloop.ConfirmRequest) {
+		if broker == nil {
+			return
+		}
+		broker.Publish(toolloop.TopicToolConfirmPending, req)
+	}
+	confirmBus := toolloop.NewConfirmBus(confirmPublisher)
+	confirmSessionGrants := toolloop.NewSessionGrantCache()
+	confirmHeadless, headlessRecognised, headlessRaw := toolloop.HeadlessConfirmPolicyFromEnv()
+	if !headlessRecognised {
+		// Fell back to deny. Say so: an operator who typed "Allow " or
+		// "true" deserves to learn that from a log line rather than from
+		// a run that denies every tool.
+		logging.L().Warn("toolloop.confirm.headless_policy_unrecognised",
+			"env", toolloop.EnvConfirmEachHeadless,
+			"value", headlessRaw,
+			"applied", string(confirmHeadless))
+	}
+	var confirmPersist toolloop.PersistentGrantStore
+	if dataDir != "" {
+		confirmPersist = &cedarToolGrantStore{dataDir: dataDir, engine: bashCedarEngine}
+	}
+	// HeadlessExplicit: a recognised, non-empty env value is the
+	// operator declaring the deployment headless. Without this leg the
+	// headless policy is unreachable in every shipped binary — the bus
+	// below always gets a broker publisher, so HasChannel() is always
+	// true and a served deployment with no UI would park confirm_each
+	// calls forever while HARNESS_CONFIRM_EACH_HEADLESS silently did
+	// nothing (adversarial review 2026-08-13). An unrecognised value
+	// (typo) deliberately does NOT count as a declaration: it keeps
+	// prompt-first behaviour and is already warned about above.
+	headlessExplicit := headlessRecognised && strings.TrimSpace(headlessRaw) != ""
+	confirmDeps := chat.ConfirmDeps{
+		Enabled:          confirmEachEnabled,
+		SessionGrants:    confirmSessionGrants,
+		PersistGrants:    confirmPersist,
+		Headless:         confirmHeadless,
+		HeadlessExplicit: headlessExplicit,
+		Audit:            confirmAudit,
+	}
+
+	// autonomy-knobs-live-01PMAG02 WP01: resolve the three-layer autonomy
+	// chain (global → project → session) per session so every knob the
+	// chat path consumes (WP01 maxIterations, WP03 tokenCeilingPerTurn,
+	// WP05 destructiveActionPosture, WP06 recapStyle) is actually fed by
+	// autonomy.Resolve instead of reading the always-zero-value
+	// ResolvedKnobs{} chat.Config.AutonomyKnobs defaulted to before this
+	// closure existed (chat.Config.AutonomyKnobs was never assigned in
+	// production).
+	//
+	// The global layer's MaxIterations override is seeded from the
+	// legacy Settings.EffectiveMaxAgentTurns dial whenever the autonomy
+	// panel hasn't set one explicitly, so a session with no
+	// project/session override resolves to the identical cap a user saw
+	// before this mission (spec FR-005) while an explicit global-panel
+	// override — or a project/session override, which always wins per
+	// autonomy.Resolve's downstream-first precedence — now actually
+	// takes effect (spec §1.1 "the maxIterations collision").
+	// fix F8: thread the caller's real ctx through every store read
+	// instead of context.Background() — the provider is only ever
+	// invoked once per StartStream now (see chat_runner.go's
+	// resolvedKnobs), so its ctx is meaningful again: a caller
+	// cancellation actually reaches these reads instead of being
+	// silently ignored.
+	autonomyKnobsProvider := func(ctx context.Context, sessionID string) autonomy.ResolvedKnobs {
+		var global, project, session autonomy.Layer
+		if settingsImpl != nil {
+			if g, gerr := settingsImpl.LoadAutonomyProfile(ctx); gerr == nil {
+				global = g
+			}
+		}
+		if c != nil && sessionID != "" {
+			if sm := c.SessionManager(); sm != nil {
+				if s, serr := sm.GetAutonomyProfile(ctx, sessionID); serr == nil {
+					session = s
+				}
+				if pm := c.ProjectManager(); pm != nil {
+					if rec, rerr := sm.Get(ctx, sessionID); rerr == nil &&
+						rec.ProjectID != nil && *rec.ProjectID != "" {
+						if p, perr := pm.GetAutonomyProfile(ctx, *rec.ProjectID); perr == nil {
+							project = p
+						}
+					}
+				}
+			}
+		}
+		return resolveAutonomyKnobsWithSettingsFallback(global, project, session, effectiveMaxAgentTurnsFromSettings(settingsImpl))
+	}
+	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatWorkspaceDir, chatWorkspaceNote, confirmBus, confirmDeps, autonomyKnobsProvider)
 	var capCatalog llm.CapCatalog
 	if cat, err := llmcap.LoadDefault(); err == nil {
 		capCatalog = &capCatalogAdapter{cat: cat}
@@ -3861,6 +4063,9 @@ func newLLMStack(
 		wrappedPool:         wrappedPool,
 		toolDiscoverer:      toolDiscoverer,
 		dispatchPool:        dispatchPool,
+
+		confirmBus:           confirmBus,
+		confirmSessionGrants: confirmSessionGrants,
 	}
 }
 
@@ -3880,7 +4085,7 @@ func buildCompactionWiring(
 	c *core.Core,
 	reg corellm.Registry,
 	settingsImpl *settings.API,
-) (deps *chat.CompactionDeps, sched *corecompaction.Scheduler, llm *compactionwiring.LLMCaller, audit *compactionwiring.AuditEmitter) {
+) (deps *chat.CompactionDeps, sched *compaction.SweepScheduler, llm *compactionwiring.LLMCaller, audit *compactionwiring.AuditEmitter) {
 	if compactionEnvDisabled() {
 		logging.L().Info("compaction.disabled", "reason", "HARNESS_COMPACTION=off")
 		return nil, nil, nil, nil
@@ -3916,7 +4121,7 @@ func buildCompactionWiring(
 		return s.EffectiveCompactionRecentWindow()
 	}
 
-	engine, err := corecompaction.NewEngine(corecompaction.EngineConfig{
+	engine, err := compaction.NewSessionEngine(compaction.SessionEngineConfig{
 		Store:        messageStoreAdapter,
 		LLM:          llmAdapter,
 		Capabilities: caps,
@@ -3942,17 +4147,17 @@ func buildCompactionWiring(
 		if err != nil {
 			return 0, err
 		}
-		if s.EffectiveCompactionAggressiveness() == corecompaction.AggressivenessOff {
+		if s.EffectiveCompactionAggressiveness() == compactionpolicy.AggressivenessOff {
 			// User opted out: sweep is also disabled so a deliberate
 			// "I want full transparency" install never deletes archived
 			// rows out from under the user.
 			return 0, nil
 		}
-		return corecompaction.RunSweep(ctx, sweepStoreAdapter, auditAdapter,
+		return compaction.RunSweep(ctx, sweepStoreAdapter, auditAdapter,
 			s.EffectiveCompactionArchiveDays(), nil)
 	}
-	scheduler := corecompaction.NewScheduler(sweepRunner,
-		corecompaction.WithOnSweep(func(deleted int, err error) {
+	scheduler := compaction.NewSweepScheduler(sweepRunner,
+		compaction.WithOnSweep(func(deleted int, err error) {
 			if err != nil {
 				logging.L().Warn("compaction.sweep.failed", "err", err.Error())
 				return
@@ -3965,34 +4170,34 @@ func buildCompactionWiring(
 
 	deps = &chat.CompactionDeps{
 		Engine: engine,
-		Aggressiveness: func() corecompaction.CompactionAggressiveness {
+		Aggressiveness: func() compactionpolicy.CompactionAggressiveness {
 			if settingsImpl == nil || settingsImpl.Store() == nil {
-				return corecompaction.AggressivenessBalanced
+				return compactionpolicy.AggressivenessBalanced
 			}
 			s, err := settingsImpl.Store().LoadAll()
 			if err != nil {
-				return corecompaction.AggressivenessBalanced
+				return compactionpolicy.AggressivenessBalanced
 			}
 			return s.EffectiveCompactionAggressiveness()
 		},
-		CompactionModel: func() (corecompaction.ProviderProfileRef, bool) {
+		CompactionModel: func() (compaction.ProviderProfileRef, bool) {
 			if settingsImpl == nil || settingsImpl.Store() == nil {
-				return corecompaction.ProviderProfileRef{}, false
+				return compaction.ProviderProfileRef{}, false
 			}
 			s, err := settingsImpl.Store().LoadAll()
 			if err != nil {
-				return corecompaction.ProviderProfileRef{}, false
+				return compaction.ProviderProfileRef{}, false
 			}
 			if s.CompactionModel.IsZero() {
-				return corecompaction.ProviderProfileRef{}, false
+				return compaction.ProviderProfileRef{}, false
 			}
-			return corecompaction.ProviderProfileRef{
+			return compaction.ProviderProfileRef{
 				ProviderID: s.CompactionModel.ProviderID,
 				ModelID:    s.CompactionModel.ModelID,
 			}, true
 		},
 		RecentWindow: recentWindow,
-		MaxContextTokens: func(model corecompaction.ProviderProfileRef) (int, bool) {
+		MaxContextTokens: func(model compaction.ProviderProfileRef) (int, bool) {
 			return caps.MaxContextTokens(model)
 		},
 	}
@@ -4010,6 +4215,94 @@ func compactionEnvDisabled() bool {
 // global mutation. Production reads through os.Getenv directly.
 var osGetenv = func(key string) string {
 	return os.Getenv(key)
+}
+
+// effectiveMaxAgentTurnsFromSettings reads the legacy Settings-driven
+// iteration cap. Shared by buildChatRunner's MaxTurns resolver (the
+// param-less fallback used when no AutonomyKnobsProvider is wired) and
+// newLLMStack's autonomyKnobsProvider closure, which feeds this same
+// value into the autonomy global layer's MaxIterations override
+// (autonomy-knobs-live-01PMAG02 WP01 — see spec §1.1 "the maxIterations
+// collision"). Keeping one implementation means both paths degrade to
+// settings.DefaultMaxAgentTurns identically on a nil store or read
+// error.
+func effectiveMaxAgentTurnsFromSettings(settingsImpl *settings.API) int {
+	if settingsImpl == nil || settingsImpl.Store() == nil {
+		return settings.DefaultMaxAgentTurns
+	}
+	raw, err := settingsImpl.Store().LoadMaxAgentTurns()
+	if err != nil {
+		return settings.DefaultMaxAgentTurns
+	}
+	s := settings.Settings{MaxAgentTurns: raw}
+	return s.EffectiveMaxAgentTurns()
+}
+
+// agenticTurnRoutingEnabledFromSettings resolves the agentic-turn-routing
+// launch flag (agentgraph-total-convergence-01PMGX01 WP11b; design in
+// agentic-turn-routing-01PMAG01 §3.6).
+//
+// Read at the point of CONSUMPTION by both call sites — the chat
+// chassis's GraphLoader (per StartStream) and the Graphs view's Run
+// button (per run) — rather than latched at construction. That is the
+// pattern liveDialResolver established after the compaction boot-seed
+// defect: a flag read once at boot leaves a user who flips it
+// mid-session on the stale topology until they restart, and this flag's
+// entire job is to be a revert lever.
+//
+// EVERY failure mode degrades to FALSE, i.e. the classic topology: no
+// settings API, no store, or a read error. A storage fault must never
+// silently rewrite the graph every chat turn runs, and this is the
+// promise routing_gate.go's fail-closed fallback also keeps.
+func agenticTurnRoutingEnabledFromSettings(settingsImpl *settings.API) bool {
+	if settingsImpl == nil || settingsImpl.Store() == nil {
+		return false
+	}
+	got, err := settingsImpl.Store().LoadAll()
+	if err != nil {
+		logging.L().Warn("chat.agentic_turn_routing.read_failed",
+			"err", err.Error(), "detail", "defaulting to the classic chat topology")
+		return false
+	}
+	return got.AgenticTurnRouting
+}
+
+// resolveAutonomyKnobsWithSettingsFallback folds the legacy
+// Settings.EffectiveMaxAgentTurns dial into the global autonomy layer's
+// MaxIterations override — but only when the global layer doesn't
+// already carry an explicit override for that knob, so an edit made
+// through the autonomy panel's global scope (a more specific control)
+// wins over the legacy numeric Settings field.
+//
+// This is the reconciliation autonomy-knobs-live-01PMAG02 WP01 exists
+// for (spec §1.1 "the maxIterations collision"): before this, the
+// resolved autonomy.ResolvedKnobs.MaxIterations and
+// Settings.EffectiveMaxAgentTurns were two parallel dials and only the
+// latter bound. Feeding the settings value in as a global-layer
+// override (rather than resolving independently) means:
+//
+//   - No project/session override anywhere → autonomy.Resolve's pass-1
+//     override walk (session → project → global) resolves at the
+//     global layer to legacyMaxTurns, identical to the pre-mission
+//     value (FR-005).
+//   - A project or session override for MaxIterations → wins per
+//     autonomy.Resolve's downstream-first precedence, same as any
+//     other knob.
+//   - A global-layer override already present (set via the autonomy
+//     panel, independent of the legacy numeric setting) → left
+//     untouched; the more specific control wins.
+//
+// Pulled out of the autonomyKnobsProvider closure in newLLMStack so it
+// can be unit-tested without a live core.Core / session.Manager /
+// settings store.
+func resolveAutonomyKnobsWithSettingsFallback(global, project, session autonomy.Layer, legacyMaxTurns int) autonomy.ResolvedKnobs {
+	if _, ok := global.Overrides[autonomy.KnobMaxIterations]; !ok {
+		if global.Overrides == nil {
+			global.Overrides = map[autonomy.Knob]any{}
+		}
+		global.Overrides[autonomy.KnobMaxIterations] = legacyMaxTurns
+	}
+	return autonomy.Resolve(global, project, session)
 }
 
 // buildChatRunner constructs the *chat.ChatRunner that replaces
@@ -4038,21 +4331,34 @@ func buildChatRunner(
 	autoTitleGen chat.AutoTitleGenerator,
 	workspaceDir string,
 	workspaceNote string,
+	// confirmBus + confirmDeps are the confirm-each round trip
+	// (confirm-each-enforcement-01PMAG05 WP02). A nil bus selects the
+	// headless policy in confirmDeps rather than a silent allow.
+	confirmBus *toolloop.ConfirmBus,
+	confirmDeps chat.ConfirmDeps,
+	// autonomyKnobsProvider resolves the session's three-layer autonomy
+	// chain per StartStream (autonomy-knobs-live-01PMAG02 WP01). nil
+	// disables every autonomy-knob consumer downstream (token ceiling,
+	// recap style, destructive posture, and the maxIterations dial
+	// below) — the runner falls back to v0.3.0 baseline behaviour, same
+	// as before this knob set existed. Built in newLLMStack, which has
+	// the *core.Core needed to reach the session + project managers.
+	autonomyKnobsProvider chat.AutonomyKnobsProvider,
 ) *chat.ChatRunner {
 	if graphMgr == nil || graphMgr.Kernel() == nil {
 		logging.L().Warn("chat.runner.disabled", "reason", "graph manager unavailable")
 		return nil
 	}
 	maxTurns := func() int {
-		if settingsImpl == nil || settingsImpl.Store() == nil {
-			return settings.DefaultMaxAgentTurns
-		}
-		raw, err := settingsImpl.Store().LoadMaxAgentTurns()
-		if err != nil {
-			return settings.DefaultMaxAgentTurns
-		}
-		s := settings.Settings{MaxAgentTurns: raw}
-		return s.EffectiveMaxAgentTurns()
+		return effectiveMaxAgentTurnsFromSettings(settingsImpl)
+	}
+	// agentgraph-total-convergence-01PMGX01 WP11b: the agentic-turn-
+	// routing launch gate, resolved on every StartStream (the
+	// GraphLoader below calls this). Shares one reader with the Graphs
+	// view's Run button so the two surfaces cannot disagree about the
+	// lever's position — see agenticTurnRoutingEnabledFromSettings.
+	agenticTurnRoutingEnabled := func() bool {
+		return agenticTurnRoutingEnabledFromSettings(settingsImpl)
 	}
 	// wiring-integrity-01PMAG04 WP08: resolve the extended-thinking budget
 	// on every StartStream so a Settings edit lands on the next turn. Reads
@@ -4277,14 +4583,32 @@ func buildChatRunner(
 			Broker: capturedBroker,
 		}
 	}
+	// The chat runner binds its per-run session-rewrite strategy onto
+	// the very pipeline the kernel dispatches its automatic sites
+	// through, so the `compact` node in chat_default.yaml and the
+	// mid-run pre_call site share one cascading-config surface and one
+	// event log (agentgraph-total-convergence-01PMGX01 WP08). A kernel
+	// built without a compactor yields nil here, which makes the node a
+	// documented passthrough.
+	chatCompactionPipeline, _ := graphMgr.Kernel().Compactor().(*compaction.Pipeline)
+
 	runner, err := chat.New(chat.Config{
 		Kernel:        graphMgr.Kernel(),
 		Registry:      reg,
 		Pool:          chatToolPoolAdapter{inner: wrappedPool},
 		Perms:         chatPermsAdapter{inner: perms},
+		Confirm:       confirmBus,
+		ConfirmDeps:   confirmDeps,
 		Broker:        chatBrokerAdapter{broker: broker},
 		History:       historyReader,
 		HistoryWriter: historyWriter,
+		// agentgraph-total-convergence-01PMGX01 WP12: every chat turn
+		// registers the resolved spec it runs, so Graph_MaterializeRun
+		// can project the turn back into a graph. Without this the
+		// materializer would fall back to the library file, which the
+		// routing gate and the max-turns dial have already rewritten by
+		// the time the run starts.
+		RunSpecRecorder: graphMgr.TrackExternalRun,
 		GraphLoader: func() (coreag.Graph, error) {
 			g, err := graphMgr.LoadGraphSpec("chat_default")
 			if err != nil {
@@ -4299,10 +4623,43 @@ func buildChatRunner(
 			// yet, so the per-family-message-shaping-01PMDL06 tmpl
 			// param is nil (default renderer).
 			g.SystemPrompt = prompts.Compose(nil, prompts.DefaultBaseConstitution(), g.SystemPrompt)
+			// The agentic-turn-routing launch gate
+			// (agentgraph-total-convergence-01PMGX01 WP11b; design in
+			// agentic-turn-routing-01PMAG01 §3.6). chat_default.yaml is
+			// authored WITH the routed turn; off — the default — strips
+			// `route` and `exit_gate` back out so the graph traverses
+			// exactly as it did before the rewrite.
+			//
+			// Read HERE, at graph-load time, which is per StartStream:
+			// the read-at-consumption pattern liveDialResolver
+			// established after the boot-seed defect. A flag latched at
+			// construction would leave a user who flips it mid-session
+			// on the old topology until they restart the app — and for
+			// a revert lever, "restart to revert" is most of the value
+			// gone.
+			g = coreag.GateAgenticTurnRouting(g, agenticTurnRoutingEnabled())
 			return g, nil
 		},
 		MaxTurns:        maxTurns,
 		ReasoningBudget: reasoningBudget,
+		// turn-context-runway-01PMAG03 WP02/WP03: the two turn-runway
+		// dials. Both are resolved per StartStream, so whatever backs
+		// them takes effect on the next turn without a restart.
+		//
+		// They read the package defaults today. That is deliberate and
+		// not a wiring gap: the mission's plan.md leaves the *home* of
+		// these knobs open — the watermark margin wants a measurement
+		// pass on real transcripts (open question 1) and the recovery
+		// budget is squarely an autonomy dial in character (open
+		// question 3), so it belongs in the autonomy layer chain rather
+		// than as a bare Settings field. Pointing either at a real
+		// source is a change to these two closures alone.
+		CompactionWatermark: func() coreag.CompactionWatermarkPolicy {
+			return coreag.CompactionWatermarkPolicy{}
+		},
+		MaxOverflowRecoveries: func() int {
+			return chat.DefaultMaxOverflowRecoveriesPerTurn
+		},
 		// system-prompt-layers WP03: surface the sandboxed agent-workspace
 		// path in the environment-context layer of the system prompt. Empty
 		// when DataDir is unset (test path) — the adapter then renders a
@@ -4317,6 +4674,7 @@ func buildChatRunner(
 		EnvDefaults:        envDefaults,
 		ToolDiscoverer:     chatToolDiscovererAdapter{inner: tools},
 		Compaction:         compactionDeps,
+		CompactionPipeline: chatCompactionPipeline,
 		PartialPersister:   partialPersister,
 		UsageHook:          usageHookFn,
 		AutoTitle:          autoTitleDeps,
@@ -4324,6 +4682,12 @@ func buildChatRunner(
 		// sink as the generated-image capturer so StreamGeneratedImage
 		// events land in the artifact store with Source=="model_output".
 		GeneratedImageCapturer: artifactSinkConcrete,
+		// autonomy-knobs-live-01PMAG02 WP01: without this, every
+		// downstream autonomy-knob consumer (tokenCeiling, recapStyle,
+		// destructiveActionPosture, and the maxIterations dial above)
+		// reads r.cfg.AutonomyKnobs == nil and silently no-ops — the
+		// gap this WP closes.
+		AutonomyKnobs: autonomyKnobsProvider,
 	})
 	if err != nil {
 		logging.L().Error("chat.runner.construct_failed", "err", err.Error())
@@ -5020,11 +5384,11 @@ func newGraphManager(c *core.Core) *graphview.Manager {
 // (settings.Settings.EffectiveCompactionAggressiveness — the same
 // resolver buildCompactionWiring's Aggressiveness closure reads for
 // the pre-send path) rather than a hardcoded tier string. This closes
-// the gap where fr041compaction.ProductionDefaults() was wired
+// the gap where compaction.ProductionDefaults() was wired
 // unconditionally regardless of what the user actually dialed
 // (including "off").
 //
-// Falls back to fr041compaction.ProductionDefaults() — PresetForTier
+// Falls back to compaction.ProductionDefaults() — PresetForTier
 // ("balanced"), the documented default tier — when settingsImpl is nil,
 // its store is nil, or the load errors (nil-Core test-harness boot
 // paths, and any store I/O failure at construction time). This
@@ -5033,18 +5397,120 @@ func newGraphManager(c *core.Core) *graphview.Manager {
 // never touched the dial (empty persisted value resolves to
 // "balanced" via EffectiveCompactionAggressiveness itself).
 //
-// This is read ONCE, at kernel/pipeline construction time — see the
-// boot-time-seed discussion at the newGraphManagerWithDeps call site
-// for why a live-updating resolver is deliberately out of scope here.
-func compactionGlobalSeed(settingsImpl *settings.API) fr041compaction.CompactionConfig {
+// This supplies the BOOT seed. Keeping the global layer in step with a
+// dial the user changes afterwards is liveDialResolver's job — see
+// below.
+func compactionGlobalSeed(settingsImpl *settings.API) compaction.CompactionConfig {
 	if settingsImpl == nil || settingsImpl.Store() == nil {
-		return fr041compaction.ProductionDefaults()
+		return compaction.ProductionDefaults()
 	}
 	s, err := settingsImpl.Store().LoadAll()
 	if err != nil {
-		return fr041compaction.ProductionDefaults()
+		return compaction.ProductionDefaults()
 	}
-	return fr041compaction.PresetForTier(string(s.EffectiveCompactionAggressiveness()))
+	return compaction.PresetForTier(string(s.EffectiveCompactionAggressiveness()))
+}
+
+// liveDialResolver keeps the FR-041 global layer in step with the
+// compaction aggressiveness dial.
+//
+// THE BUG IT FIXES. compactionGlobalSeed reads the dial exactly once,
+// when the pipeline is constructed. That was harmless while every dial
+// tier resolved to the same per-site posture — the automatic sites were
+// disabled everywhere, so a stale global layer could only mis-set
+// numerics nothing evaluated. agentgraph-total-convergence-01PMGX01 WP08
+// made the posture tier-dependent: SitePreCall is enabled at every tier
+// except "off". A boot-time seed then means a user who moves the dial to
+// "off" mid-session keeps getting automatic pre-call compaction until
+// they restart the app, while the `compact` node — which reads the dial
+// live on every turn — correctly stops. One control, two answers, and
+// the one that ignores the user is the one that spends their tokens.
+//
+// WHY A RESOLVER WRAPPER AND NOT A SAVE HOOK. The dial reaches the store
+// through more than one path: settings.API.Set (the Settings panel) and
+// the fleet sync applier (core/rpc/sync_categories.go), which writes
+// through SaveAll directly. A hook on one of them silently misses the
+// other, and "we forgot a write path" is the same defect class in a new
+// costume. Reading the dial where it is CONSUMED cannot be bypassed by
+// adding a seventh way to write it.
+//
+// COST. The dial is re-read on each Resolve, and the underlying layer is
+// rewritten only when the tier has actually changed — so the steady
+// state is one settings load per compaction decision (a handful per
+// turn; the chat path already loads settings per send) and zero writes.
+//
+// PRECEDENCE. Writing LayerGlobal means a tier change overwrites an
+// FR-041 global config set through the compaction Settings view. That is
+// last-writer-wins between two controls over one layer, which is what
+// the two already were — the boot seed clobbered the same layer at every
+// launch. The project/session/run/node layers are untouched and still
+// win over both.
+type liveDialResolver struct {
+	// Embedded so Get / Set / Attribution pass straight through: this
+	// type overrides exactly one method and must not become a place
+	// where cascade semantics get re-implemented.
+	compaction.Resolver
+
+	// tier returns the dial's current effective value.
+	tier func() string
+
+	mu   sync.Mutex
+	last string
+}
+
+// Resolve syncs the global layer to the live dial, then delegates.
+func (r *liveDialResolver) Resolve(scope compaction.ScopeKey) compaction.CompactionConfig {
+	r.syncTier()
+	return r.Resolver.Resolve(scope)
+}
+
+// syncTier rewrites the global layer when — and only when — the dial has
+// moved since the last observation. The first call always writes, which
+// is deliberate: it makes the resolver's state a function of the dial
+// rather than of whatever the boot seed happened to catch.
+func (r *liveDialResolver) syncTier() {
+	if r == nil || r.tier == nil {
+		return
+	}
+	t := r.tier()
+	if t == "" {
+		// The dial could not be read. Leave the layer holding whatever
+		// it already has rather than snapping to a tier the user did
+		// not choose — PresetForTier("") resolves to "balanced", which
+		// would silently re-enable automatic compaction for a user who
+		// dialed it off. EffectiveCompactionAggressiveness never
+		// returns empty, so this can only be the read-failure sentinel.
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if t == r.last {
+		return
+	}
+	r.last = t
+	r.Resolver.Set(compaction.LayerGlobal, "", compaction.PresetForTier(t))
+}
+
+// newLiveDialResolver wraps inner so the global layer tracks the dial.
+// Returns inner unchanged when there is no settings store to read (the
+// nil-Core test chassis), which leaves the boot seed in place — the
+// pre-existing behaviour for callers with no dial to track.
+func newLiveDialResolver(inner compaction.Resolver, settingsImpl *settings.API) compaction.Resolver {
+	if inner == nil || settingsImpl == nil || settingsImpl.Store() == nil {
+		return inner
+	}
+	return &liveDialResolver{
+		Resolver: inner,
+		tier: func() string {
+			s, err := settingsImpl.Store().LoadAll()
+			if err != nil {
+				// Empty is the read-failure sentinel; syncTier treats
+				// it as "leave the layer alone".
+				return ""
+			}
+			return string(s.EffectiveCompactionAggressiveness())
+		},
+	}
 }
 
 // newGraphManagerWithDeps wires production seams into the graph
@@ -5071,7 +5537,7 @@ func newGraphManagerWithDeps(
 	embedder corememory.Embedder,
 	bashStore *corebash.Store,
 	settingsImpl *settings.API,
-) (*graphview.Manager, *fr041compaction.Pipeline) {
+) (*graphview.Manager, *compaction.Pipeline) {
 	dataDir := ""
 	if c != nil {
 		dataDir = c.DataDir()
@@ -5099,6 +5565,11 @@ func newGraphManagerWithDeps(
 	if bashStore != nil {
 		deps.BashStore = bashStore
 		deps.BashOutput = graphview.NewBashOutputStoreAdapter(bashStore)
+		// turn-context-runway-01PMAG03 WP01: the same store backs the
+		// truncated-tool-output archive, so the handle named in an
+		// elision marker resolves through the existing read_bash_output
+		// path instead of being a dead reference.
+		deps.ToolOutputArchive = graphview.NewToolOutputArchiveAdapter(bashStore)
 	}
 	// Tier source: lets the Planner/Review/Reflect executors derive a
 	// Verbosity / MaxIterations default from the active model's size
@@ -5147,66 +5618,55 @@ func newGraphManagerWithDeps(
 		agEventLog = coreag.NewMemoryEventLog()
 	}
 
-	// FR-041 compaction pipeline (compaction-convergence-01PMDL05
-	// WP01, dial-reconciliation follow-up): wire WithCompactor into the
-	// production kernel so env.Compactor is non-nil and the Settings
-	// RPC surface (core/rpc/views/compaction) takes effect. The
-	// global-layer seed is derived from the user's ACTUAL effective
-	// compaction aggressiveness (settingsImpl.Store().LoadAll().
-	// EffectiveCompactionAggressiveness() — the same accessor
-	// buildCompactionWiring reads for the pre-send path), NOT a
-	// hardcoded PresetForTier("balanced"). Previously ProductionDefaults()
-	// (== PresetForTier("balanced")) was wired unconditionally, so a
-	// user who dialed the aggressiveness to e.g. "off" or "aggressive"
-	// still got FR-041's PreCallThreshold/manual-site numerics for
-	// "balanced" — latent today because SitePreCall/SitePostTool are
-	// disabled at every tier, but already wrong for SiteManual and a
-	// live trap for whoever enables the automatic sites later.
+	// FR-041 compaction pipeline. This is the ONE compaction pipeline:
+	// the kernel's automatic pre_call site dispatches through it, and so
+	// does the `compact` node chat_default.yaml places between
+	// history_read and the agent loop — the node via a per-run binding
+	// the chat runner adds (Pipeline.Bind), so both reach the same
+	// cascading config and the same event log
+	// (agentgraph-total-convergence-01PMGX01 WP08).
 	//
-	// This is a BOOT-TIME seed, not a live resolver: settingsImpl is
-	// read once here, when the kernel/pipeline are constructed. If the
-	// user changes the aggressiveness dial afterward without
-	// restarting, this global layer keeps reflecting the tier that was
-	// effective at boot. That is an accepted, intentional limitation
-	// for this WP — see
-	// TestCompactionGlobalSeed_RuntimeDialChangeNotReflectedAfterConstruction
-	// in api_compaction_dial_test.go for the reasoning: the FR-041 global layer only
-	// matters for SiteManual (SitePreCall/SitePostTool are unconditionally
-	// disabled either way), the pre-send path (chat_runner.go's
-	// runPreSendCompaction) already re-resolves the dial on every send
-	// via Settings.Store().LoadAll() and remains the authoritative
-	// automatic compactor, and a disk compaction.yaml (loaded by
-	// NewYAMLResolverWithDefaults below) always wins over this seed —
-	// so a user who has explicitly configured the FR-041 layer (e.g.
-	// through the Settings UI's compaction view) is unaffected by a
-	// later dial change either. A future WP that wants a live-updating
-	// FR-041 global layer should push dial changes into the resolver
-	// (compactionPipeline's resolver.Set(LayerGlobal, "", ...)) from
-	// Settings.Save, not re-derive here.
+	// The global layer is seeded from the user's actual effective
+	// aggressiveness dial rather than a hardcoded "balanced", and it is
+	// kept in step with that dial afterwards by liveDialResolver. Both
+	// matter now that WP08 made the per-site posture tier-dependent:
+	// before it, every tier disabled the automatic sites, so a wrong or
+	// stale global layer could only mis-set numerics nothing read.
 	//
-	// SafeDefaults (fr041compaction's own out-of-the-box config) is
-	// still deliberately avoided: it enables pre_call/post_tool, which
-	// would double-compact every conversation on top of the pre-send
-	// dial. See core/agentgraph/compaction/presets.go for the full
-	// rationale and kitty-specs/compaction-convergence-01PMDL05/spec.md
-	// for the original mission contract.
-	compactionResolver, err := fr041compaction.NewYAMLResolverWithDefaults(dataDir, compactionGlobalSeed(settingsImpl))
+	// A disk compaction.yaml (loaded by NewYAMLResolverWithDefaults
+	// below) supplies the layers the dial does not: project, session,
+	// run and node all still win over the global layer. The dial and the
+	// compaction Settings view both write the global layer, and the last
+	// writer wins — see liveDialResolver's precedence note.
+	//
+	// SafeDefaults (this package's own out-of-the-box config) is
+	// deliberately still avoided: it enables post_tool, which would
+	// spend an LLM call re-trimming tool results ToolResultCap has
+	// already bounded at dispatch. See
+	// core/agentgraph/compaction/presets.go for the per-site rationale.
+	compactionResolver, err := compaction.NewYAMLResolverWithDefaults(dataDir, compactionGlobalSeed(settingsImpl))
 	if err != nil {
 		slog.Warn("agentgraph: compaction resolver load error; using in-process defaults",
 			"data_dir", dataDir,
 			"error", err.Error(),
 		)
 	}
-	compactionPipeline := fr041compaction.NewPipeline(
-		fr041compaction.WithResolver(compactionResolver),
-		fr041compaction.WithEmitter(fr041compaction.EventLogEmitter(agEventLog)),
+	compactionPipeline := compaction.NewPipeline(
+		// Wrapped so the global layer tracks the aggressiveness dial
+		// instead of freezing whatever it was at boot — see
+		// liveDialResolver. WP08 made the per-site posture
+		// tier-dependent, which turned a stale global layer from a
+		// harmless mis-numbering into automatic compaction that ignores
+		// a user who dialed it off.
+		compaction.WithResolver(newLiveDialResolver(compactionResolver, settingsImpl)),
+		compaction.WithEmitter(compaction.EventLogEmitter(agEventLog)),
 	)
-	compactionPipeline.RegisterStrategy(fr041compaction.NewDropOldestStrategy())
+	compactionPipeline.RegisterStrategy(compaction.NewDropOldestStrategy())
 	// nil LLM: the summary strategy falls back to its inline heuristic
 	// summarizer. Wiring a real LLM provider here is a follow-up WP —
 	// this WP's scope is making SiteManual reachable at all, not
 	// picking which model does the summarizing.
-	compactionPipeline.RegisterStrategy(fr041compaction.NewSummaryStrategy(nil))
+	compactionPipeline.RegisterStrategy(compaction.NewSummaryStrategy(nil))
 
 	kernel := coreag.NewKernel(
 		coreag.WithEventLog(agEventLog),
@@ -5216,6 +5676,13 @@ func newGraphManagerWithDeps(
 	mgrOpts := []graphview.ManagerOption{
 		graphview.WithDataDir(dataDir),
 		graphview.WithEnvDeps(deps),
+		// The Graphs view's Run button loads chat_default like any
+		// other library graph, so it needs the same launch gate the
+		// chat chassis applies (review finding N5). Same live read: a
+		// closure, consulted per run.
+		graphview.WithAgenticTurnRouting(func() bool {
+			return agenticTurnRoutingEnabledFromSettings(settingsImpl)
+		}),
 		graphview.WithKernel(kernel),
 		graphview.WithEventLog(agEventLog),
 	}
@@ -6022,6 +6489,17 @@ func (a *API) Elicit() elicitview.ElicitAPI {
 	return a.elicitAPI
 }
 
+// Confirm implements HarnessAPI. Returns a bus-less surface when the
+// chat stack was not wired: mutating methods answer ErrBusUnavailable
+// and ListPending answers empty, so the frontend renders "nothing
+// pending" rather than crashing on a nil accessor.
+func (a *API) Confirm() confirmview.ConfirmAPI {
+	if a == nil || a.confirmAPI == nil {
+		return confirmview.New(confirmview.Config{})
+	}
+	return a.confirmAPI
+}
+
 // ScheduledChat implements HarnessAPI. Returns a graceful-empty surface
 // (ErrStoreUnavailable on mutating methods) when the DB is not wired.
 func (a *API) ScheduledChat() scheduledchatview.ScheduledChatAPI {
@@ -6273,6 +6751,86 @@ func (m *memoryStoreListAdapter) List(ctx context.Context) ([]searchview.MemoryC
 		}
 	}
 	return out, nil
+}
+
+// cedarToolGrantStore is the chassis's toolloop.PersistentGrantStore:
+// the durable half of the confirm-each modal's two "remember this"
+// controls (confirm-each-enforcement-01PMAG05 WP03).
+//
+// It writes a Cedar permit snippet under <DataDir>/policy/ rather than
+// inventing a fourth permission store, because the permissions view
+// ALREADY enumerates `<family>_allow_*.cedar` as user-revocable grants
+// and already knows the "tool" family. A grant written here appears in
+// Settings → Permissions the moment it lands, and PermissionsAPI.
+// RevokeGrant deletes it. File existence is the lookup, so revocation is
+// immediate and total — no cache to invalidate, no restart.
+//
+// The engine may be nil (test chassis): the file still lands, which is
+// what makes the grant durable; only the in-process Cedar reload is
+// skipped, and the confirm path does not read through the engine anyway.
+type cedarToolGrantStore struct {
+	dataDir string
+	engine  *cedar.Engine
+}
+
+// HasGrant implements toolloop.PersistentGrantStore.
+func (s *cedarToolGrantStore) HasGrant(server, tool string) bool {
+	if s == nil {
+		return false
+	}
+	return cedar.HasToolAllowGrant(s.dataDir, server, tool)
+}
+
+// WriteGrant implements toolloop.PersistentGrantStore.
+func (s *cedarToolGrantStore) WriteGrant(server, tool string) error {
+	if s == nil {
+		return errors.New("rpc: no persistent tool-grant store")
+	}
+	_, err := cedar.WriteToolAllowGrant(context.Background(), s.dataDir, s.engine, server, tool)
+	return err
+}
+
+// GrantID reports the revocation handle for a (server, tool) grant — the
+// .cedar filename the Settings grants list round-trips to RevokeGrant.
+// Consumed opportunistically by the chat adapter's audit record so an
+// operator reading the trail can revoke without guessing the filename.
+func (s *cedarToolGrantStore) GrantID(server, tool string) string {
+	if s == nil {
+		return ""
+	}
+	name, err := cedar.ToolAllowGrantFilename(server, tool)
+	if err != nil {
+		return ""
+	}
+	return name
+}
+
+// confirmAuditEmitter implements contextaudit.Emitter for the
+// confirm-each decision trail (confirm-each-enforcement-01PMAG05 WP05 /
+// FR-007), forwarding into the rpc/views/audit ring buffer.
+//
+// Privacy: the payload bytes are NOT copied into the ring entry. The
+// entry carries the kind and a byte count, matching lockdownAuditEmitter
+// — the ConfirmDecision payload is already redaction-safe by
+// construction (no argument values), but the ring surface is rendered in
+// the Settings audit panel and there is no reason to widen what it
+// shows beyond what the other emitters show.
+type confirmAuditEmitter struct {
+	impl *audit.API
+}
+
+func (e confirmAuditEmitter) Emit(_ context.Context, ev contextaudit.Event) error {
+	if e.impl == nil {
+		return nil
+	}
+	e.impl.Push(audit.Entry{
+		ID:        fmt.Sprintf("tool-confirm-%d", ev.TS.UnixNano()),
+		Timestamp: ev.TS.UTC().Format(time.RFC3339Nano),
+		Category:  "PERMISSION",
+		Subject:   string(ev.Kind),
+		Trailing:  fmt.Sprintf("payload_bytes=%d", len(ev.Payload)),
+	})
+	return nil
 }
 
 // lockdownAuditEmitter implements contextaudit.Emitter by forwarding to

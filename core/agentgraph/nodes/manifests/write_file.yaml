@@ -3,8 +3,9 @@ manifest_version: "1.0.0"
 id: write_file
 extends: write
 display_name: Write File
-description: "Writes content to a file with policy gating + provenance (FR-057c). Distinct from filesystem-MCP tool writes — see spec §4.9 State-vs-Tool framing."
+description: "Writes content to a file with policy gating + provenance (FR-057c). The kenaz__write_file builtin tool writes the same way; both surfaces record path/sha256/mtime provenance to the EventLog (core/agentgraph/tool_invocation.go)."
 executor: agentgraph.ExecWriteFile
+dispatch: graph
 ports:
   inputs:
     - { name: payload, type: any }

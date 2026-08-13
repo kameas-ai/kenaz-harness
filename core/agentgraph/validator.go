@@ -172,6 +172,8 @@ func Validate(g Graph, opts ...ValidateOption) error {
 	v.checkEntrypoints(g, idx)
 	v.checkDialOverrides(g)
 	v.checkActivityRefs(g)
+	v.checkDecisionRouting(g, idx)
+	v.checkRouterRouting(g, idx)
 	v.checkLoopBodies(g, idx)
 	v.checkReviewBodies(g, idx)
 	v.checkAcyclicityOutsideLoops(g, idx)
@@ -552,6 +554,149 @@ func (v *validator) checkActivityRefs(g Graph) {
 		if !v.cfg.activities.HasActivity(attrs.ActivityId) {
 			v.addf("activity: node %q references unknown activity %q",
 				n.ID, attrs.ActivityId)
+		}
+	}
+}
+
+// checkDecisionRouting makes `decision`'s next_true / next_false attrs
+// mean something (agentgraph-total-convergence-01PMGX01 WP02c; design
+// in agentic-turn-routing-01PMAG01 §3.3).
+//
+// They were declared `required: true` in decision.yaml and then ignored
+// by every consumer in the repo — the kernel routed purely on edges,
+// and since the promotion loop decremented in-degree unconditionally it
+// did not really route at all. WP02b made the kernel consult them
+// (edgeLivenessFor in kernel.go): the attr-named target of the taken
+// verdict is promoted, the other is skipped.
+//
+// That makes them load-bearing, which makes an author typo a silent
+// mis-route. This rule closes that: the two targets must exist, must
+// differ, and must agree with whatever the `true` / `false` port edges
+// say — so the kernel's two routing authorities (attr target, source
+// port) can never disagree in a graph that validates.
+func (v *validator) checkDecisionRouting(g Graph, idx map[string]*Node) {
+	for i := range g.Nodes {
+		n := &g.Nodes[i]
+		if n.Kind != NodeKindDecision {
+			continue
+		}
+		a, ok := n.Attrs.(DecisionAttrs)
+		if !ok {
+			continue
+		}
+		for _, ref := range []struct{ attr, target string }{
+			{"next_true", a.NextTrue},
+			{"next_false", a.NextFalse},
+		} {
+			if ref.target == "" {
+				v.addf("schema: node %q (decision): %s is required — it selects which successor the kernel promotes", n.ID, ref.attr)
+				continue
+			}
+			if _, ok := idx[ref.target]; !ok {
+				v.addf("schema: node %q (decision): %s references unknown node %q", n.ID, ref.attr, ref.target)
+			}
+		}
+		if a.NextTrue != "" && a.NextTrue == a.NextFalse {
+			v.addf("schema: node %q (decision): next_true and next_false both name %q — a decision that routes both verdicts to the same node is not a decision", n.ID, a.NextTrue)
+		}
+		// Port edges must agree with the attrs. Only the canonical
+		// routing ports are checked; edges off `verdict` / `next` /
+		// author-declared extras are audit surfaces, not routes.
+		for _, e := range g.Edges {
+			if e.From.Node != n.ID {
+				continue
+			}
+			var want, attr string
+			switch e.From.Port {
+			case "true":
+				want, attr = a.NextTrue, "next_true"
+			case "false":
+				want, attr = a.NextFalse, "next_false"
+			default:
+				continue
+			}
+			if want != "" && e.To.Node != want {
+				v.addf("schema: node %q (decision): edge from port %q targets %q but %s names %q — the kernel routes on both, so they must agree",
+					n.ID, e.From.Port, e.To.Node, attr, want)
+			}
+		}
+	}
+}
+
+// checkRouterRouting is checkDecisionRouting's counterpart for the
+// `router` kind (agentgraph-total-convergence-01PMGX01 WP11a; design in
+// agentic-turn-routing-01PMAG01 §3.1).
+//
+// The router's `choices` map is load-bearing at run time — the kernel
+// promotes the winning choice's target and skips the others through
+// routerExecutor.LiveOutEdges — so an author typo is a silent
+// mis-route, exactly the failure mode WP02c closed for `decision`.
+// This rule closes it here before the first run rather than after.
+//
+// It deliberately does NOT require an out-edge per choice. A choice
+// whose only effect is "stop looping" (chat_default's `done`) is a
+// legitimate menu entry with no successor of its own; requiring an edge
+// would force authors to invent one.
+func (v *validator) checkRouterRouting(g Graph, idx map[string]*Node) {
+	for i := range g.Nodes {
+		n := &g.Nodes[i]
+		if n.Kind != NodeKindRouter {
+			continue
+		}
+		a, ok := n.Attrs.(RouterAttrs)
+		if !ok {
+			continue
+		}
+		choices := routerChoices(a)
+		if len(choices) == 0 {
+			v.addf("schema: node %q (router): choices is required and must be a non-empty map of {id: {target, description}} — a router with no menu cannot route", n.ID)
+			continue
+		}
+		valid := make(map[string]bool, len(choices))
+		for _, c := range choices {
+			valid[c.ID] = true
+			if c.Target == "" {
+				v.addf("schema: node %q (router): choice %q has no target — the target names the node the kernel promotes when this choice wins", n.ID, c.ID)
+				continue
+			}
+			if _, ok := idx[c.Target]; !ok {
+				v.addf("schema: node %q (router): choice %q targets unknown node %q", n.ID, c.ID, c.Target)
+			}
+		}
+		if a.DefaultChoice == "" {
+			v.addf("schema: node %q (router): default_choice is required — it is what an unparseable or unknown model answer resolves to", n.ID)
+		} else if !valid[a.DefaultChoice] {
+			v.addf("schema: node %q (router): default_choice %q is not one of the declared choices", n.ID, a.DefaultChoice)
+		}
+		if a.ReplanChoice != "" && !valid[a.ReplanChoice] {
+			v.addf("schema: node %q (router): replan_choice %q is not one of the declared choices", n.ID, a.ReplanChoice)
+		}
+		// Fused mode is the default (empty mode == fused), and it has
+		// nothing to read without a source node.
+		if a.Mode == "" || a.Mode == routerModeFused {
+			if a.SourceNode == "" {
+				v.addf("schema: node %q (router): mode %q requires source_node — fused routing reads the choice off that node's output", n.ID, routerModeFused)
+			} else if _, ok := idx[a.SourceNode]; !ok {
+				v.addf("schema: node %q (router): source_node references unknown node %q", n.ID, a.SourceNode)
+			}
+		}
+		// Port edges must agree with the menu, mirroring the decision
+		// rule: an edge leaving a port named for a choice must go where
+		// that choice says it goes.
+		for _, e := range g.Edges {
+			if e.From.Node != n.ID || !valid[e.From.Port] {
+				continue
+			}
+			want := ""
+			for _, c := range choices {
+				if c.ID == e.From.Port {
+					want = c.Target
+				}
+			}
+			if want != "" && e.To.Node != want {
+				v.addf("schema: node %q (router): edge from choice port %q targets %q but the choice names %q — the kernel routes on both, so they must agree",
+					n.ID, e.From.Port, e.To.Node, want)
+			}
 		}
 	}
 }

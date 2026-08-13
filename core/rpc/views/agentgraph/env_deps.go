@@ -56,6 +56,12 @@ type EnvDeps struct {
 	// compaction pipeline can fire as the conversation approaches the
 	// limit. nil ⇒ unknown ⇒ automatic compaction skips.
 	ContextWindows coreag.ContextWindowSource
+
+	// ToolOutputArchive persists the full payload of a tool result the
+	// kernel truncated at dispatch (turn-context-runway-01PMAG03 WP01)
+	// so the elision marker can name a resolvable handle. nil keeps the
+	// truncation and drops the full payload.
+	ToolOutputArchive coreag.ToolOutputArchive
 }
 
 // WithEnvDeps installs production seams onto the Manager. The seams
@@ -68,6 +74,21 @@ type EnvDeps struct {
 func WithEnvDeps(deps EnvDeps) ManagerOption {
 	return func(m *Manager) {
 		m.envDeps = deps
+	}
+}
+
+// WithAgenticTurnRouting supplies the launch-flag resolver the Graphs
+// view's Run button consults before executing chat_default
+// (agentgraph-total-convergence-01PMGX01 WP11b, review finding N5).
+//
+// It is a FUNC, not a bool, for the same reason the chat side reads the
+// dial per StartStream: read-at-consumption means flipping the lever
+// takes effect on the next run rather than the next launch. Not calling
+// this option leaves the flag off, which is the shipped default and the
+// safe reading for a Manager with no settings store behind it.
+func WithAgenticTurnRouting(enabled func() bool) ManagerOption {
+	return func(m *Manager) {
+		m.routingEnabled = enabled
 	}
 }
 
@@ -114,5 +135,36 @@ func (d EnvDeps) applyTo(env *coreag.Env) {
 	}
 	if d.TierSource != nil {
 		env.TierSource = d.TierSource
+	}
+	if d.ToolOutputArchive != nil {
+		env.ToolOutputArchive = d.ToolOutputArchive
+	}
+
+	// Arm the growth watermark for every graph-authored run that did not
+	// bring its own (agentgraph-total-convergence-01PMGX01 WP08 review,
+	// finding F2).
+	//
+	// A nil Env.AutoCompaction means "no watermark, no gate" — every
+	// automatic compaction site fires on its first visit. That was the
+	// correct reading while the FR-041 presets disabled SitePreCall at
+	// every dial tier: an ungated site that is also switched off cannot
+	// fire. WP08 enabled the site at every tier but "off", which turned
+	// the nil default into real behaviour: a workflow, a delegate run or
+	// a user-authored graph would compact at its very first model call,
+	// before the run had accumulated any context to shed, spending a
+	// compaction pass to shrink a transcript that had not grown.
+	//
+	// The chat surface has always armed one (chat_runner.go sets it on
+	// the Env it builds, before this callback runs — hence the nil check
+	// rather than an unconditional assignment). This gives every other
+	// run the same contract: the first observation latches the run's
+	// baseline and is refused by construction, and a later site fires
+	// only once the live context has grown past that baseline by the
+	// policy margin.
+	//
+	// The zero policy selects the package defaults, which is the same
+	// policy chat gets when its own dial leaves the knobs unset.
+	if env.AutoCompaction == nil {
+		env.AutoCompaction = coreag.NewCompactionWatermark(coreag.CompactionWatermarkPolicy{})
 	}
 }

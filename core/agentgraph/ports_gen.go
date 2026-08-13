@@ -975,6 +975,43 @@ func (o ReviewOutputs) ToPortValues() PortValues {
 	return pv
 }
 
+// ---- Router port types ----
+
+// RouterInputs is the typed input port surface for `kind: router`.
+// Use ReadRouterInputs to populate it from a PortValues map.
+type RouterInputs struct {
+	In any
+}
+
+// RouterOutputs is the typed output port surface for `kind: router`.
+// Call ToPortValues to convert back to the wire format.
+type RouterOutputs struct {
+	Next string
+	Out  any
+}
+
+// ReadRouterInputs extracts the typed inputs for `kind: router` from pv.
+// Required ports that are absent in pv return a descriptive error.
+// The function never mutates pv.
+func ReadRouterInputs(pv PortValues) (RouterInputs, error) {
+	var out RouterInputs
+
+	if raw, ok := pv["in"]; ok {
+		out.In = raw
+	}
+	return out, nil
+}
+
+// ToPortValues converts RouterOutputs to the PortValues wire format.
+// Fields with zero values are included; callers can remove unwanted keys
+// after the fact using PortValues.Clone + delete.
+func (o RouterOutputs) ToPortValues() PortValues {
+	pv := make(PortValues, 2)
+	pv["next"] = o.Next
+	pv["out"] = o.Out
+	return pv
+}
+
 // ---- SessionWrite port types ----
 
 // SessionWriteInputs is the typed input port surface for `kind: session_write`.
@@ -1082,54 +1119,30 @@ func (o SubagentDispatchOutputs) ToPortValues() PortValues {
 	return pv
 }
 
-// ---- Tool port types ----
-
-// ToolInputs is the typed input port surface for `kind: tool`.
-// Use ReadToolInputs to populate it from a PortValues map.
-type ToolInputs struct {
-	Args any
-}
-
-// ToolOutputs is the typed output port surface for `kind: tool`.
-// Call ToPortValues to convert back to the wire format.
-type ToolOutputs struct {
-	Result any
-}
-
-// ReadToolInputs extracts the typed inputs for `kind: tool` from pv.
-// Required ports that are absent in pv return a descriptive error.
-// The function never mutates pv.
-func ReadToolInputs(pv PortValues) (ToolInputs, error) {
-	var out ToolInputs
-
-	if raw, ok := pv["args"]; ok {
-		out.Args = raw
-	}
-	return out, nil
-}
-
-// ToPortValues converts ToolOutputs to the PortValues wire format.
-// Fields with zero values are included; callers can remove unwanted keys
-// after the fact using PortValues.Clone + delete.
-func (o ToolOutputs) ToPortValues() PortValues {
-	pv := make(PortValues, 1)
-	pv["result"] = o.Result
-	return pv
-}
-
 // ---- ToolDispatch port types ----
 
 // ToolDispatchInputs is the typed input port surface for `kind: tool_dispatch`.
 // Use ReadToolDispatchInputs to populate it from a PortValues map.
 type ToolDispatchInputs struct {
-	ToolCalls any
+	ToolCalls    any
+	Response     []Message
+	Assistant    any
+	FinishReason string
 }
 
 // ToolDispatchOutputs is the typed output port surface for `kind: tool_dispatch`.
 // Call ToPortValues to convert back to the wire format.
 type ToolDispatchOutputs struct {
-	ToolResults any
-	Messages    []Message
+	ToolResults   any
+	Messages      []Message
+	ToolMessages  []Message
+	ToolCallCount float64
+	Assistant     any
+	AssistantText string
+	Response      []Message
+	FinishReason  string
+	ShouldReplan  bool
+	DoomLoopHits  any
 }
 
 // ReadToolDispatchInputs extracts the typed inputs for `kind: tool_dispatch` from pv.
@@ -1143,6 +1156,29 @@ func ReadToolDispatchInputs(pv PortValues) (ToolDispatchInputs, error) {
 	} else {
 		return out, fmt.Errorf("tool_dispatch: required input port tool_calls is absent")
 	}
+	if raw, ok := pv["response"]; ok {
+		switch v := raw.(type) {
+		case []Message:
+			out.Response = v
+		case nil:
+			// nil is treated as absent
+		default:
+			return out, fmt.Errorf("tool_dispatch: port response: cannot cast %T to []Message", raw)
+		}
+	}
+	if raw, ok := pv["assistant"]; ok {
+		out.Assistant = raw
+	}
+	if raw, ok := pv["finish_reason"]; ok {
+		switch v := raw.(type) {
+		case string:
+			out.FinishReason = v
+		case nil:
+			// nil is treated as absent
+		default:
+			return out, fmt.Errorf("tool_dispatch: port finish_reason: cannot cast %T to string", raw)
+		}
+	}
 	return out, nil
 }
 
@@ -1150,9 +1186,17 @@ func ReadToolDispatchInputs(pv PortValues) (ToolDispatchInputs, error) {
 // Fields with zero values are included; callers can remove unwanted keys
 // after the fact using PortValues.Clone + delete.
 func (o ToolDispatchOutputs) ToPortValues() PortValues {
-	pv := make(PortValues, 2)
+	pv := make(PortValues, 10)
 	pv["tool_results"] = o.ToolResults
 	pv["messages"] = o.Messages
+	pv["tool_messages"] = o.ToolMessages
+	pv["tool_call_count"] = o.ToolCallCount
+	pv["assistant"] = o.Assistant
+	pv["assistant_text"] = o.AssistantText
+	pv["response"] = o.Response
+	pv["finish_reason"] = o.FinishReason
+	pv["should_replan"] = o.ShouldReplan
+	pv["doom_loop_hits"] = o.DoomLoopHits
 	return pv
 }
 

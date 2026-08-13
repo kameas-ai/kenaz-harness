@@ -5,6 +5,7 @@ extends: control
 display_name: Merge
 description: "Folds a sub-graph branch back into the parent (FR-045)."
 executor: agentgraph.ExecMerge
+dispatch: graph
 ports:
   inputs:
     - { name: branch, type: branch_id, required: true }

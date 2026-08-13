@@ -29,6 +29,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/contextview"
 	corpusview "github.com/kameas-ai/kenaz-harness/core/rpc/views/corpus"
 	dialsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/dials"
+	confirmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/confirm"
 	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
 	fleetview "github.com/kameas-ai/kenaz-harness/core/rpc/views/fleet"
 	hooksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/hooks"
@@ -155,6 +156,9 @@ func (f *fakeHarnessAPI) Elicit() elicitview.ElicitAPI {
 		return f.elicitAPI
 	}
 	return elicitview.New(elicitview.Config{})
+}
+func (f *fakeHarnessAPI) Confirm() confirmview.ConfirmAPI {
+	return confirmview.New(confirmview.Config{})
 }
 func (f *fakeHarnessAPI) ScheduledChat() scheduledchatview.ScheduledChatAPI {
 	return scheduledchatview.New(scheduledchatview.Config{})

@@ -80,6 +80,34 @@ const (
 	// Payload shape: fallback.FallbackAttemptedEvent (from core/llm/fallback).
 	// The payload MUST NOT carry prompt or response bytes.
 	TopicLLMFallbackAttempted = "llm:fallback-attempted"
+
+	// TopicToolConfirmPending is the broker topic the chat runner's tool
+	// adapter emits when a `confirm_each` tool call parks awaiting the
+	// user's answer (confirm-each-enforcement-01PMAG05 WP02). The
+	// frontend's batched ConfirmToolModal subscribes here.
+	//
+	// Payload shape: toolloop.ConfirmRequest. N calls from one turn
+	// arrive as N events sharing one batch_id so the frontend renders ONE
+	// dialog with N rows (owner decision 3).
+	//
+	// The payload carries a STRUCTURAL args summary (argument count,
+	// names, JSON kinds) and never raw argument values — see the
+	// redaction contract on toolloop.TopicToolConfirmPending.
+	//
+	// NOTE: the constant value must match toolloop.TopicToolConfirmPending.
+	// Both are "tool:confirm-pending"; this is the process-visible export.
+	TopicToolConfirmPending = "tool:confirm-pending"
+
+	// TopicChatOverflowRecovery is the mid-turn "compacted and re-drove
+	// the turn" notice (01PMGX01 WP17). See the emit site + full
+	// contract on chat.TopicChatOverflowRecovery.
+	//
+	// NOTE: the constant value must match
+	// chat.TopicChatOverflowRecovery. The chat package cannot import
+	// core/rpc (core/rpc imports it), so the literal is duplicated here
+	// as the process-visible export — the same arrangement
+	// TopicToolConfirmPending has with core/toolloop.
+	TopicChatOverflowRecovery = "chat:overflow-recovery"
 )
 
 // SessionUsagePayload is the typed payload emitted on

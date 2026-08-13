@@ -23,7 +23,7 @@ import (
 	"unicode"
 
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
-	"github.com/kameas-ai/kenaz-harness/core/compaction"
+	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
 	"github.com/kameas-ai/kenaz-harness/core/paths"
 )
 
@@ -179,13 +179,13 @@ func validateUpdateFields(in Settings) error {
 // Empty / zero values are valid for every field — they resolve to the
 // documented defaults via the EffectiveCompaction* accessors.
 func validateCompactionFields(in Settings) error {
-	switch compaction.CompactionAggressiveness(in.CompactionAggressiveness) {
+	switch compactionpolicy.CompactionAggressiveness(in.CompactionAggressiveness) {
 	case "",
-		compaction.AggressivenessOff,
-		compaction.AggressivenessConservative,
-		compaction.AggressivenessBalanced,
-		compaction.AggressivenessAggressive,
-		compaction.AggressivenessMaximal:
+		compactionpolicy.AggressivenessOff,
+		compactionpolicy.AggressivenessConservative,
+		compactionpolicy.AggressivenessBalanced,
+		compactionpolicy.AggressivenessAggressive,
+		compactionpolicy.AggressivenessMaximal:
 		// ok
 	default:
 		return ErrInvalidCompactionAggressiveness

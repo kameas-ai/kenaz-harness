@@ -206,10 +206,14 @@ func TestKernel_SkipsLoopBodiesAtTopLevel(t *testing.T) {
 	if err := k.Run(context.Background(), env); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	// step should be a body node — no top-level fire records its
-	// "node_start" with the kernel; it fires inside the loop's
-	// Execute. Both `loop` and `step` produce node_complete events
-	// because the loop forwards body-node events into its own batch.
+	// `step` is a body node: the KERNEL never fires it (buildEdges
+	// hides body nodes from the edge walk), so its lifecycle events
+	// come from the loop's own Execute rather than from the kernel's
+	// top-level fire path. Since WP12 that lifecycle is a full
+	// node_start/node_complete pair carrying `iteration` + `container`
+	// — the sentence that used to sit here said `step` had no
+	// node_start at all, which was true before appendBodyFireStart and
+	// is the exact blind spot the materializer needed closed.
 	var loopComplete bool
 	_ = log.Replay("rl", func(e Event) error {
 		if e.Kind == EventNodeComplete && e.NodeID == "loop" {

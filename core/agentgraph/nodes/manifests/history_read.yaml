@@ -5,6 +5,7 @@ extends: read
 display_name: History Read
 description: "Reads the last-N messages from the conversation history (FR-051)."
 executor: agentgraph.ExecHistoryRead
+dispatch: graph
 ports:
   inputs: []
   outputs:

@@ -133,7 +133,6 @@ func TestDeviceFlow_PendingSlowDownSuccess(t *testing.T) {
 	devAuthSrv := mockDeviceAuthServer(t, rec, 0) // interval=0 → default 5, but we override
 	defer devAuthSrv.Close()
 
-	var capturedCode *DeviceAuthorizationResponse
 	cfg := DeviceConfig{
 		DeviceAuthURL: devAuthSrv.URL,
 		TokenURL:      srv.URL,
@@ -156,16 +155,26 @@ func TestDeviceFlow_PendingSlowDownSuccess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	tok, err := AuthorizeDevice(ctx, cfg, func(dar *DeviceAuthorizationResponse) {
-		capturedCode = dar
-	})
+	// Two-phase, exactly as production drives it: BeginDeviceAuth calls
+	// RequestDeviceAuthorization and returns the display-safe user_code,
+	// then PollDeviceAuth calls PollDeviceToken. See
+	// core/rpc/views/tools/device_auth.go. (These tests used to call a
+	// one-shot AuthorizeDevice wrapper, which 01PMGX01 WP17 deleted as
+	// unwired — no caller can block through the phase where the user has
+	// to read a code off the screen.)
+	capturedCode, err := RequestDeviceAuthorization(ctx, cfg)
 	if err != nil {
-		t.Fatalf("AuthorizeDevice: %v", err)
+		t.Fatalf("RequestDeviceAuthorization: %v", err)
+	}
+	tok, err := PollDeviceToken(ctx, cfg, capturedCode)
+	if err != nil {
+		t.Fatalf("PollDeviceToken: %v", err)
 	}
 
-	// onCode callback should have captured the device auth response.
+	// Phase 1 must have returned the display-safe fields the UI shows
+	// the user between the two calls.
 	if capturedCode == nil {
-		t.Fatal("onCode was not called")
+		t.Fatal("RequestDeviceAuthorization returned no response")
 	}
 	if capturedCode.UserCode != "ABCD-1234" {
 		t.Errorf("user_code = %q, want ABCD-1234", capturedCode.UserCode)
@@ -222,7 +231,11 @@ func TestDeviceFlow_ExpiredToken(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	_, err := AuthorizeDevice(ctx, cfg, nil)
+	dar, err := RequestDeviceAuthorization(ctx, cfg)
+	if err != nil {
+		t.Fatalf("RequestDeviceAuthorization: %v", err)
+	}
+	_, err = PollDeviceToken(ctx, cfg, dar)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -257,7 +270,11 @@ func TestDeviceFlow_AccessDenied(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	_, err := AuthorizeDevice(ctx, cfg, nil)
+	dar, err := RequestDeviceAuthorization(ctx, cfg)
+	if err != nil {
+		t.Fatalf("RequestDeviceAuthorization: %v", err)
+	}
+	_, err = PollDeviceToken(ctx, cfg, dar)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -317,9 +334,13 @@ func TestDeviceFlow_SlowDownIncreasesInterval(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	tok, err := AuthorizeDevice(ctx, cfg, nil)
+	dar, err := RequestDeviceAuthorization(ctx, cfg)
 	if err != nil {
-		t.Fatalf("AuthorizeDevice: %v", err)
+		t.Fatalf("RequestDeviceAuthorization: %v", err)
+	}
+	tok, err := PollDeviceToken(ctx, cfg, dar)
+	if err != nil {
+		t.Fatalf("PollDeviceToken: %v", err)
 	}
 	if tok.AccessToken != "ghu_slow_down_test" {
 		t.Errorf("AccessToken = %q, want ghu_slow_down_test", tok.AccessToken)

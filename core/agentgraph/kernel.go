@@ -59,7 +59,7 @@ func safeExecute(ctx context.Context, ex Executor, env *Env, node *Node, inputs 
 // serialised by `mu`; concurrent Runs against the same Kernel are
 // safe because each call carries its own *Env.
 type Kernel struct {
-	registry    *executorRegistry
+	registry    *ExecutorRegistry
 	log         EventLog
 	maxInFlight int
 	now         func() time.Time
@@ -82,9 +82,11 @@ func WithMaxInFlight(n int) KernelOption {
 }
 
 // WithExecutor overrides the executor for a kind. Used by tests +
-// future spec extensions to plug in custom node-kinds.
+// future spec extensions to plug in custom node-kinds. Override
+// semantics: the binding is replaced unconditionally, unlike
+// Kernel.Executors().Register which refuses to shadow an existing kind.
 func WithExecutor(ex Executor) KernelOption {
-	return func(k *Kernel) { k.registry.byKind[ex.Kind()] = ex }
+	return func(k *Kernel) { k.registry.Replace(ex) }
 }
 
 // WithClock overrides the clock used for timestamps. Used in tests.
@@ -99,6 +101,22 @@ func WithClock(now func() time.Time) KernelOption {
 // compaction (the kernel default).
 func WithCompactor(c Compactor) KernelOption {
 	return func(k *Kernel) { k.compactor = c }
+}
+
+// Compactor returns the Compactor this kernel was built with, or nil.
+//
+// The chat surface needs it to bind its per-run session-rewrite
+// strategy onto the same pipeline the kernel's automatic sites use
+// (agentgraph-total-convergence-01PMGX01 WP08). Handing it back through
+// an accessor — rather than threading the pipeline separately down to
+// the chat runner construction — is what keeps "one pipeline" a fact
+// about the object graph rather than a convention two call sites have
+// to remember.
+func (k *Kernel) Compactor() Compactor {
+	if k == nil {
+		return nil
+	}
+	return k.compactor
 }
 
 // NewKernel constructs a kernel with default executors + memory log.
@@ -117,6 +135,18 @@ func NewKernel(opts ...KernelOption) *Kernel {
 
 // EventLog returns the underlying event log.
 func (k *Kernel) EventLog() EventLog { return k.log }
+
+// Executors returns the kernel's executor registry so callers can add
+// node kinds after construction (agentgraph-total-convergence-01PMGX01
+// WP03, spec §4.2). This is the seam runtime tool discovery uses: MCP
+// tool schemas arrive over stdio after process start, so the kinds they
+// materialize into cannot be part of the build-time set.
+//
+// Registration is safe while a run is in flight — every kernel lookup
+// takes a read lock — but a kind added mid-run only affects nodes fired
+// after the call. Register refuses to shadow an existing kind; use
+// WithExecutor (or Replace) when replacement is the intent.
+func (k *Kernel) Executors() *ExecutorRegistry { return k.registry }
 
 // Run fires the graph in env.Graph against the given env. Returns
 // nil on completion, ErrPaused if an Ask parked the run, or
@@ -228,6 +258,23 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 		inDeg[ep] = 0
 	}
 
+	// liveIn is the conditional-execution counter that sits alongside
+	// inDeg (agentgraph-total-convergence-01PMGX01 WP02b; design in
+	// agentic-turn-routing-01PMAG01 §3.2). inDeg answers "have all my
+	// dependencies reported in?"; liveIn answers "did any of them
+	// actually hand me a value?". Keeping them separate is what lets a
+	// reconvergence point below a branch still reach inDeg == 0 — the
+	// naive fix of not decrementing for the not-taken edge deadlocks
+	// every join in the graph.
+	//
+	// A node whose inDeg closes with liveIn == 0 was reached only
+	// through skipped edges and is skipped itself, transitively.
+	// `skipped` records that so the backtrack recompute can tell a
+	// skipped predecessor (contributes no liveness on rewind) from a
+	// genuinely completed one.
+	liveIn := make(map[string]int, len(idx))
+	skipped := make(map[string]bool, len(idx))
+
 	completed := make(map[string]bool, len(idx))
 
 	// inFlight + generation close a double-dispatch / dropped-dependency
@@ -265,18 +312,61 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 	pause := false
 	pauseReason := ""
 
-	// TaskState population (autonomy-recovery-runtime-01PMDL03 WP05):
-	// Goal / completed-steps / forbidden-actions only start earning
-	// their place in the composed system prompt once this run has
-	// actually hit trouble — a node error or an honored backtrack.
-	// initialGoal is derived unconditionally (cheap: an in-memory/DB
-	// history read already exercised elsewhere on this path) but is
-	// never written to env.TaskState — and therefore never changes a
-	// single byte of any composed prompt — unless armRecovery fires.
-	// A run that never fails or backtracks never calls SetTaskGoal,
-	// AddTaskCompletedStep, or AddTaskForbidden, so its system prompt
-	// stays byte-identical to pre-WP05 behavior (see
-	// TestKernel_ZeroFailureRunComposesByteIdenticalPrompt).
+	// TaskState population (autonomy-recovery-runtime-01PMDL03 WP05,
+	// widened by agentgraph-total-convergence-01PMGX01 WP11b).
+	//
+	// TWO ARMING POLICIES, selected by env.TaskStateArming:
+	//
+	//   - TaskStateArmOnFailure (the zero value, every caller's default)
+	//     is WP05's rule: goal / completed-steps / forbidden-actions
+	//     only earn their place in the composed system prompt once this
+	//     run has actually hit trouble. A run that never fails or
+	//     backtracks never calls SetTaskGoal / AddTaskCompletedStep /
+	//     AddTaskForbidden, so its system prompt stays byte-identical
+	//     (TestKernel_ZeroFailureRunComposesByteIdenticalPrompt).
+	//
+	//   - TaskStateArmAlways is what a verified exit requires. A run
+	//     that succeeded all the way to an exit gate has by construction
+	//     never armed recovery, so under the failure-only rule the gate
+	//     would be checking the answer against an empty goal (01PMAG01
+	//     G5). Here the goal commits as soon as it is derivable and
+	//     every meaningful completion commits as it happens.
+	//
+	// The LAZY-READ half of WP05's optimisation is preserved under both
+	// policies, and it is the reason armTaskGoal takes a supplier rather
+	// than a string. firstUserTurnGoal issues an unbounded
+	// History(..., 0) read, and chat_default.yaml's history_in node
+	// already performs the identical full read every turn — deriving
+	// eagerly at the top of Run meant two full-session reads per turn,
+	// growing with conversation length. So: a graph that carries a
+	// `history_read` node arms off THAT node's own recorded output
+	// (goalFromMessages, at its completion — zero extra reads), and only
+	// a graph without one falls back to firstUserTurnGoal, where nothing
+	// else was going to read the history anyway.
+	armAlways := env.TaskStateArming == TaskStateArmAlways
+	graphReadsHistory := false
+	for i := range env.Graph.Nodes {
+		if env.Graph.Nodes[i].Kind == NodeKindHistoryRead {
+			graphReadsHistory = true
+			break
+		}
+	}
+	goalArmed := false
+	// armTaskGoal commits derive()'s result at most once per run. The
+	// supplier is invoked outside mu — it may be I/O — and the
+	// `already` guard makes that at-most-once.
+	armTaskGoal := func(derive func() string) {
+		mu.Lock()
+		already := goalArmed
+		goalArmed = true
+		mu.Unlock()
+		if already {
+			return
+		}
+		if goal := derive(); goal != "" {
+			_ = k.SetTaskGoal(env, goal)
+		}
+	}
 	recoveryArmed := false
 	armRecovery := func() {
 		mu.Lock()
@@ -286,23 +376,37 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 		if already {
 			return
 		}
-		// Resolve the goal lazily, here rather than at the top of Run.
-		// firstUserTurnGoal issues an unbounded History(..., 0) read,
-		// and chat_default.yaml's history_in node already performs the
-		// identical full read every turn — doing it eagerly meant two
-		// full-session reads per turn, growing with conversation
-		// length, on the common path where recovery never arms and the
-		// result is discarded. Deferring it means only a run that
-		// actually hits trouble pays. The read stays outside mu: it is
-		// I/O, and the `already` guard makes it at-most-once per run.
-		if goal := firstUserTurnGoal(ctx, env); goal != "" {
-			_ = k.SetTaskGoal(env, goal)
-		}
+		// Only a run that actually hits trouble pays this read, and
+		// only when the always-armed policy has not already committed a
+		// goal off a history_read node's output.
+		armTaskGoal(func() string { return firstUserTurnGoal(ctx, env) })
 	}
-	isRecoveryArmed := func() bool {
+	// recordsCompletedSteps reports whether nd's completion should be
+	// appended to the TaskState step trail. Under the always-armed
+	// policy that is every meaningful completion; otherwise it stays
+	// gated behind a real failure, exactly as WP05 shipped it.
+	recordsCompletedSteps := func() bool {
+		if armAlways {
+			return true
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		return recoveryArmed
+	}
+	// armGoalFromNode is the zero-extra-read path: a `history_read` node
+	// just loaded the session, so the goal comes out of ITS output
+	// rather than out of a second History(..., 0) call. Only fires
+	// under the always-armed policy — on the default policy the goal is
+	// still derived lazily inside armRecovery, and only if the run
+	// actually hits trouble.
+	armGoalFromNode := func(nd *Node, outs PortValues) {
+		if !armAlways || nd == nil || nd.Kind != NodeKindHistoryRead {
+			return
+		}
+		armTaskGoal(func() string { return goalFromMessages(outs["messages"]) })
+	}
+	if armAlways && !graphReadsHistory {
+		armTaskGoal(func() string { return firstUserTurnGoal(ctx, env) })
 	}
 
 	var dispatch func(nodeID string, myGen int)
@@ -590,6 +694,13 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 			for _, id := range refireSet {
 				refire[id] = true
 				delete(completed, id)
+				// Clear the skip bit alongside the completed bit
+				// (WP02b). A node skipped on the pre-rewind pass must
+				// be eligible to fire on the fresh one — the branch the
+				// router picks after a backtrack is frequently the one
+				// it did not pick before, and a stale skip bit would
+				// make it permanently unreachable.
+				delete(skipped, id)
 				// Bump the generation of every refire-set member. A
 				// dispatch of one of these nodes that is currently in
 				// flight (the sibling-fan-out case — see the
@@ -602,6 +713,7 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 			}
 			for _, id := range refireSet {
 				n := 0
+				live := 0
 				for _, e := range inEdges[id] {
 					if refire[e.From.Node] {
 						// Edge from another refire-set member: it just
@@ -622,9 +734,20 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 						// correctly contribute 0 (already satisfied,
 						// no need to re-wait).
 						n++
+					} else if !skipped[e.From.Node] &&
+						k.edgeWasLive(idx[e.From.Node], env.State.Outputs(e.From.Node), e) {
+						// Completed, outside the refire set, and it
+						// really did deliver a value along THIS edge:
+						// the dependency is both satisfied (contributes
+						// 0 to inDeg) and live, so it must be re-counted
+						// into liveIn. Without this the rewound node
+						// would close its in-degree with liveIn == 0 and
+						// be skipped instead of re-fired (WP02b).
+						live++
 					}
 				}
 				inDeg[id] = n
+				liveIn[id] = live
 			}
 			backtrackReady = inDeg[bt.TargetNode] <= 0 && !inFlight[bt.TargetNode]
 		}
@@ -645,7 +768,7 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 		// nd.ID is itself part of the refire set (about to re-fire, not
 		// actually done yet). Captured now — a local, goroutine-private
 		// read of the `refire` map — for use after mu.Unlock() below;
-		// AddTaskCompletedStep/isRecoveryArmed take their own locks and
+		// AddTaskCompletedStep/recordsCompletedSteps take their own locks and
 		// must never be called while this dispatch's own mu is held.
 		stepDone := !refire[nd.ID]
 
@@ -653,7 +776,8 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 			pause = true
 			pauseReason = r.PauseReason
 			mu.Unlock()
-			if stepDone && isMeaningfulNodeKind(nd.Kind) && isRecoveryArmed() {
+			armGoalFromNode(nd, r.Outputs)
+			if stepDone && isMeaningfulNodeKind(nd.Kind) && recordsCompletedSteps() {
 				_ = k.AddTaskCompletedStep(env, completedStepSummary(nd))
 			}
 			return
@@ -671,24 +795,81 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 		// node. Its own completion (the stale-generation guard above)
 		// re-checks readiness once the in-flight slot frees up, so the
 		// fresh run still happens exactly once.
+		//
+		// WP02b turns this into a worklist rather than a single pass.
+		// Promotion now asks, per out-edge, whether the source port
+		// delivered a live value (edgeLivenessFor — nil predicate means
+		// "all live", which is every kind except `decision` and is what
+		// makes this byte-identical for existing graphs). in-degree
+		// still decrements unconditionally so reconvergence points stay
+		// reachable; `liveIn` records the live arrivals separately. A
+		// node whose in-degree closes with liveIn == 0 was reached only
+		// through skipped edges, so it is marked completed WITHOUT
+		// being dispatched and pushed back onto the worklist with every
+		// one of its own out-edges dead — that is how skip propagates
+		// transitively to the first reconvergence point that still has
+		// a live inbound edge. The worklist is iterative and bounded by
+		// the graph's edge count (each node enters at most once,
+		// guarded by the completed bit), never recursive.
 		type launch struct {
 			id  string
 			gen int
 		}
+		type promoFrame struct {
+			from string
+			// live is the per-edge liveness predicate for `from`. nil
+			// means every out-edge is live.
+			live func(Edge) bool
+			// dead marks a frame pushed for a node that was itself
+			// skipped: every one of its out-edges is dead regardless of
+			// port.
+			dead bool
+		}
 		var toLaunch []launch
+		type skipRec struct {
+			id         string
+			kind       NodeKind
+			deadInputs int
+		}
+		var skippedNow []skipRec
 		if !refire[nd.ID] {
-			for _, e := range outEdges[nd.ID] {
-				to := e.To.Node
-				if _, hidden := inside[to]; hidden {
-					continue
-				}
-				if completed[to] {
-					continue
-				}
-				inDeg[to]--
-				if inDeg[to] <= 0 && !inFlight[to] {
-					inFlight[to] = true
-					toLaunch = append(toLaunch, launch{id: to, gen: generation[to]})
+			work := []promoFrame{{from: nd.ID, live: k.edgeLivenessFor(nd, r.Outputs)}}
+			for len(work) > 0 {
+				f := work[0]
+				work = work[1:]
+				for _, e := range outEdges[f.from] {
+					to := e.To.Node
+					if _, hidden := inside[to]; hidden {
+						continue
+					}
+					if completed[to] {
+						continue
+					}
+					edgeLive := !f.dead && (f.live == nil || f.live(e))
+					inDeg[to]--
+					if edgeLive {
+						liveIn[to]++
+					}
+					if inDeg[to] > 0 || inFlight[to] {
+						continue
+					}
+					if liveIn[to] > 0 {
+						inFlight[to] = true
+						toLaunch = append(toLaunch, launch{id: to, gen: generation[to]})
+						continue
+					}
+					// Every inbound edge reported in and not one of
+					// them carried a value: this node is on the
+					// not-taken branch. Skip it and propagate.
+					completed[to] = true
+					skipped[to] = true
+					deadInputs := len(inEdges[to])
+					kind := NodeKind("")
+					if n, ok := idx[to]; ok {
+						kind = n.Kind
+					}
+					skippedNow = append(skippedNow, skipRec{id: to, kind: kind, deadInputs: deadInputs})
+					work = append(work, promoFrame{from: to, dead: true})
 				}
 			}
 		}
@@ -698,7 +879,37 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 		}
 		mu.Unlock()
 
-		if stepDone && isMeaningfulNodeKind(nd.Kind) && isRecoveryArmed() {
+		// Commit the skip records outside mu — EventLog.Append is I/O.
+		// A skipped node deliberately gets NO node_start/node_complete
+		// pair: it never executed, and an audit consumer that saw one
+		// would be reading a fiction.
+		if len(skippedNow) > 0 {
+			var skipBatch EventBatch
+			for _, s := range skippedNow {
+				logging.L().Info("agentgraph.node.skipped",
+					"run_id", env.RunID,
+					"session_id", env.SessionID,
+					"node_id", s.id,
+					"kind", string(s.kind),
+					"skipped_by", nd.ID,
+				)
+				_ = skipBatch.AppendKind(env.RunID, s.id, EventNodeSkipped, map[string]any{
+					"kind":        string(s.kind),
+					"skipped_by":  nd.ID,
+					"dead_inputs": s.deadInputs,
+				})
+			}
+			if _, lerr := k.log.Append(skipBatch); lerr != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = fmt.Errorf("agentgraph: kernel: append skip batch: %w", lerr)
+				}
+				mu.Unlock()
+			}
+		}
+
+		armGoalFromNode(nd, r.Outputs)
+		if stepDone && isMeaningfulNodeKind(nd.Kind) && recordsCompletedSteps() {
 			_ = k.AddTaskCompletedStep(env, completedStepSummary(nd))
 		}
 
@@ -742,8 +953,14 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 		return firstErr
 	}
 	var endBatch EventBatch
+	// `completed` carries a bit for skipped nodes too (that bit is what
+	// stops a skipped node being re-promoted), but a skipped node did
+	// not complete — it never ran. Report the two separately rather
+	// than letting `completed_nodes` quietly start counting nodes that
+	// produced nothing (WP02b).
 	_ = endBatch.AppendKind(env.RunID, "", EventRunComplete, map[string]any{
-		"completed_nodes": len(completed),
+		"completed_nodes": len(completed) - len(skipped),
+		"skipped_nodes":   len(skipped),
 	})
 	_, _ = k.log.Append(endBatch)
 	return nil
@@ -814,6 +1031,27 @@ func (k *Kernel) Resume(ctx context.Context, env *Env) error {
 // (confirmed in memEventLog.Append/Replay), since EventAskAnswered is
 // always appended before the "ask" EventLadderRung entry it pairs
 // with.
+//
+// # EventNodeSkipped is deliberately NOT replayed
+//
+// (agentgraph-total-convergence-01PMGX01 routing review, nit 1.) The
+// switch below has no EventNodeSkipped case, and that is a decision,
+// not an oversight. Skip is a DERIVED property of the run, not a
+// durable fact about a node: a node is skipped because the decision
+// upstream of it took the other branch, and the kernel re-derives that
+// on resume by re-firing the decision (whose own inputs are restored)
+// and propagating skip transitively down the not-taken edges — exactly
+// as it did on the first pass. See exec_control.go's decision executor
+// and TestKernel_SkipPropagatesTransitively.
+//
+// Replaying the recorded skips instead would LATCH them. A resume that
+// re-fires the decision with different inputs — the whole point of a
+// resume after an ask is answered or a dial is changed — would find the
+// nodes on the newly-taken branch already marked skipped, and the run
+// would take neither branch. Marking a node "skipped" in RunState from
+// the log is therefore strictly worse than re-deriving it, which is why
+// the event exists for AUDIT (skippedIDs in kernel_liveness_test.go
+// reads it) and not for state reconstruction.
 func (k *Kernel) RebuildState(env *Env) error {
 	if env.State == nil {
 		env.State = NewRunState()
@@ -1007,6 +1245,36 @@ func firstUserTurnGoal(ctx context.Context, env *Env) string {
 	}
 	msgs, err := env.History.History(ctx, env.SessionID, 0)
 	if err != nil {
+		return ""
+	}
+	return goalFromMessages(msgs)
+}
+
+// goalFromMessages is firstUserTurnGoal's derivation half, split out so
+// the always-armed policy can reuse it against a history the run has
+// ALREADY loaded — a `history_read` node's `messages` output — instead
+// of issuing a second unbounded read (01PMAG01 §3.5: "the goal should
+// be derived from the already-loaded history rather than issuing a
+// second full read").
+//
+// Accepts `any` because it reads a port value: the kernel records
+// outputs as PortValues, and a graph is free to hand back []Message or
+// the []any a YAML/JSON round-trip produces.
+//
+// Truncation is rune-based, not byte-based: a goal cut mid-rune would
+// put invalid UTF-8 into every subsequent system prompt.
+func goalFromMessages(v any) string {
+	var msgs []Message
+	switch typed := v.(type) {
+	case []Message:
+		msgs = typed
+	case []any:
+		for _, m := range typed {
+			if mm, ok := m.(Message); ok {
+				msgs = append(msgs, mm)
+			}
+		}
+	default:
 		return ""
 	}
 	for _, m := range msgs {
@@ -1317,6 +1585,152 @@ func (k *Kernel) emitCapHit(env *Env, kind EventKind, reason string, limit, used
 	var b EventBatch
 	_ = b.AppendKind(env.RunID, "", kind, marker)
 	_, _ = k.log.Append(b)
+}
+
+// ---- conditional execution: edge liveness ----
+//
+// agentgraph-total-convergence-01PMGX01 Phase 1.5 (WP02b/WP02c),
+// designed in agentic-turn-routing-01PMAG01 spec §3.2–3.3.
+//
+// Before this, the promotion loop decremented in-degree unconditionally
+// for every out-edge of a completed node. A `decision` node therefore
+// promoted BOTH successors, and the not-taken branch ran with a
+// silently missing input port. `next_true` / `next_false` were
+// validated as required attrs and then ignored; `res.Outputs["next"]`
+// had no reader anywhere in the repo. The engine did not implement
+// conditional execution at all.
+//
+// The fix is a per-out-edge liveness predicate consulted at promotion
+// time, plus a parallel `liveIn` counter alongside `inDeg`. In-degree
+// still decrements unconditionally — that is what keeps a
+// reconvergence point reachable when one of its branches was skipped —
+// while `liveIn` records how many inbound edges actually delivered a
+// value. A node whose in-degree closes with `liveIn == 0` is skipped
+// rather than launched, and the skip propagates through its own
+// out-edges. See the promotion worklist in Run.
+//
+// WHY THE DEFAULT IS "ALL EDGES LIVE" RATHER THAN "THE SOURCE PORT IS
+// PRESENT IN Outputs". A blanket port-presence rule is the obvious
+// generalisation and it is wrong here, provably. chat_default.yaml —
+// the graph every chat turn runs — carries the edge
+//
+//	agent_loop:assistant_text -> assistant_write:assistant_text
+//
+// and `agent_loop` flattens the outputs of the LAST body node, which is
+// `tool_dispatch`. tool_dispatch only emits `assistant_text` when the
+// upstream model produced an `assistant` value that is a Message
+// (passthroughAssistant, exec_dispatch.go) — so on any turn where that
+// does not hold, the port is absent. Under a port-presence rule
+// `assistant_write` would be skipped and the assistant's reply would
+// silently stop being persisted to session history. That is a
+// production data-loss bug introduced in the name of a tidier rule.
+//
+// So liveness is opt-in per node kind: only kinds that actually
+// implement conditional routing get a predicate, and every other kind
+// keeps today's unconditional promotion byte-for-byte. This is exactly
+// 01PMAG01 §3.2's "every other kind: always true (unchanged
+// behaviour)". TestPromotionGolden_BundledGraphsTraverseIdentically
+// pins that guarantee against every graph the repo ships.
+//
+// WHERE THE OPT-IN LIVES (Phase 5 / WP11a, closing the routing
+// reviewer's nit 5). WP02b expressed the opt-in as a `switch nd.Kind`
+// in this file. 01PMAG01 §3.2 had specified an executor-set
+// `Result.LiveOutPorts []string` instead, and the divergence was
+// recorded as a nit rather than fixed because `decision` was the only
+// conditional kind. Phase 5 adds a second one, so the shape has to be
+// settled. It is settled here as an OPTIONAL EXECUTOR INTERFACE
+// (EdgeRouter, executor.go) rather than either of the two candidates,
+// because both candidates are worse in this codebase:
+//
+//   - A kind switch cannot serve a kind the binary does not know
+//     about. WP03 made the executor registry runtime-extensible
+//     (Kernel.Executors().Register) precisely so MCP-discovered and
+//     third-party kinds can join at run time; such a kind can never
+//     add a `case` here, so conditional routing would be permanently
+//     reserved for kinds shipped in-tree. That is a real extensibility
+//     hole, not an aesthetic one.
+//   - `Result.LiveOutPorts []string` cannot express the routing
+//     `decision` already performs. WP02c made next_true / next_false
+//     the PRIMARY routing authority: an out-edge is judged by where it
+//     GOES first and only falls back to the port it leaves from
+//     (TestKernel_DecisionRoutesOnNextAttrsNotJustPorts pins a graph
+//     whose two successors hang off the same audit port, which a port
+//     list cannot distinguish). A port list would also have to be
+//     re-recorded somewhere for the backtrack refire recompute, which
+//     re-derives liveness from a completed node's *recorded outputs*
+//     long after its Result was discarded.
+//
+// EdgeRouter keeps the (node, recorded-outputs) → predicate signature
+// that the refire recompute needs, moves the decision to the executor
+// that owns the semantics, and works for a kind registered at run time.
+// The kernel no longer names a single node kind.
+//
+// SKIP SEMANTICS FOR THE CONTAINER KINDS (01PMAG01 §3.2 requires these
+// be defined explicitly rather than left to fall out):
+//
+//   - `loop` / `retry`: body nodes are hidden from the kernel entirely
+//     (buildEdges drops every edge touching a body member), so a skip
+//     can never reach into a body. Skipping a `loop` node skips the
+//     whole loop — it simply never iterates. Its own out-edges are
+//     unconditional.
+//   - `parallel`: fan-out is intra-executor. parallelExecutor invokes
+//     its `targets` inline via the registry, not through kernel
+//     promotion, so liveness does not apply to them. Skipping a
+//     `parallel` node skips every target with it, which is the correct
+//     containment.
+//   - `join`: the reconvergence case, and the one that matters. A
+//     skipped inbound edge is an ARRIVAL THAT DELIVERS NO VALUE: it
+//     decrements the join's in-degree (so the join can never deadlock
+//     waiting on a branch that will never run) but contributes nothing
+//     to `liveIn`. A join with at least one live inbound edge fires
+//     exactly once; joinExecutor reads each `from` node's recorded
+//     outputs, and a skipped node recorded none, so the skipped branch
+//     contributes an empty entry rather than a phantom value. A join
+//     whose every inbound edge was skipped is itself skipped, and the
+//     skip keeps propagating past it.
+
+// edgeLivenessFor returns the per-out-edge liveness predicate for a
+// node that has just completed, or nil meaning "every out-edge is
+// live". Callers must treat nil as all-live — see the block comment
+// above for why that is the default rather than a port-presence rule.
+// It resolves the completed node's executor and asks it, through the
+// optional EdgeRouter interface, for a predicate. An executor that does
+// not implement EdgeRouter — every kind except `decision` and `router`
+// today, and every test override installed with WithExecutor — yields
+// nil, i.e. unconditional promotion.
+func (k *Kernel) edgeLivenessFor(nd *Node, outs PortValues) func(Edge) bool {
+	if nd == nil || k == nil || k.registry == nil {
+		return nil
+	}
+	ex, err := k.registry.lookup(nd.Kind)
+	if err != nil {
+		// An unregistered kind cannot have completed in the first
+		// place (dispatch does the same lookup and fails the run), so
+		// this is defensive: promote unconditionally rather than
+		// silently killing branches on a lookup we could not perform.
+		return nil
+	}
+	router, ok := ex.(EdgeRouter)
+	if !ok {
+		return nil
+	}
+	return router.LiveOutEdges(nd, outs)
+}
+
+// edgeWasLive re-derives whether one already-satisfied in-edge
+// delivered a live value, from the source node's recorded outputs. Used
+// only by the backtrack refire recompute, which has to rebuild `liveIn`
+// for the rewound set from scratch (01PMAG01 §3.2: "liveIn must be
+// recomputed in the same block and skipped-bits cleared, or a rewound
+// branch inherits stale liveness and never re-fires").
+//
+// This is why EdgeRouter takes (node, recorded outputs) rather than
+// reading a field off Result: by the time a rewind recomputes liveness
+// the producing Result is long gone, and only what the executor wrote
+// to its output ports survives on RunState.
+func (k *Kernel) edgeWasLive(nd *Node, outs PortValues, e Edge) bool {
+	pred := k.edgeLivenessFor(nd, outs)
+	return pred == nil || pred(e)
 }
 
 // ---- helpers ----

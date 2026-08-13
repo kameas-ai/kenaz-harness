@@ -346,6 +346,8 @@ func TestSeamFanout_TraceWrite_SpanCalled(t *testing.T) {
 
 // TestSeamFanout_Memory_WriteCalledWithContent verifies that a memory node
 // calls MemoryStore.Write with content provided via attrs.
+//
+// convergence:exercised memory
 func TestSeamFanout_Memory_WriteCalledWithContent(t *testing.T) {
 	t.Parallel()
 	g := buildOneNodeGraph("mem1", agentgraph.NodeKindMemory, agentgraph.MemoryAttrs{
@@ -361,22 +363,23 @@ func TestSeamFanout_Memory_WriteCalledWithContent(t *testing.T) {
 	rb.Memory.RequireWriteWithScope(t, "session")
 }
 
-// ---- tool kind ----
+// ---- builtin tool kinds ----
 
-// TestSeamFanout_Tool_RegistryCallCalled verifies that a tool node calls
-// ToolRegistry.Call with the configured tool name.
-func TestSeamFanout_Tool_RegistryCallCalled(t *testing.T) {
+// TestSeamFanout_BuiltinTool_RegistryCallCalled verifies that a
+// tool-archetype node calls ToolRegistry.Call with the tool its KIND
+// names (kenaz__<kind>) — the naming contract in
+// core/agentgraph/nodes/manifests/_archetype.tool.yaml.
+func TestSeamFanout_BuiltinTool_RegistryCallCalled(t *testing.T) {
 	t.Parallel()
-	g := buildOneNodeGraph("tool1", agentgraph.NodeKindTool, agentgraph.ToolAttrs{
-		Name: "read_file",
-	})
+	g := buildOneNodeGraph("tool1", agentgraph.NodeKindSubagentDispatch,
+		agentgraph.SubagentDispatchAttrs{Profile: "explore", Prompt: "go"})
 	env, rb := newRecorderEnv(g, "sess-6")
-	rb.Tools.Register("read_file", agentgraph.ToolResult{Content: "file contents"}, nil)
+	rb.Tools.Register("kenaz__subagent_dispatch", agentgraph.ToolResult{Content: "branch spawned"}, nil)
 	k := agentgraph.NewKernel()
 	if err := k.Run(context.Background(), env); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	rb.Tools.RequireCalledWithTool(t, "read_file")
+	rb.Tools.RequireCalledWithTool(t, "kenaz__subagent_dispatch")
 }
 
 // ---- read_file kind ----
@@ -407,6 +410,8 @@ func TestSeamFanout_ReadFile_PolicyGateChecked(t *testing.T) {
 
 // TestSeamFanout_ReadBashOutput_StoreGetCalled verifies that read_bash_output
 // calls BashOutputStore.Get with the configured bash_run_id.
+//
+// convergence:exercised read_bash_output
 func TestSeamFanout_ReadBashOutput_StoreGetCalled(t *testing.T) {
 	t.Parallel()
 	g := buildOneNodeGraph("rbo1", agentgraph.NodeKindReadBashOutput, agentgraph.ReadBashOutputAttrs{
@@ -419,4 +424,68 @@ func TestSeamFanout_ReadBashOutput_StoreGetCalled(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	rb.BashOutput.RequireCalledWithRunID(t, "run-xyz")
+}
+
+// ---- corpus_write kind ----
+
+// TestSeamFanout_CorpusWrite_EnqueueCalled verifies that a corpus_write node
+// reaches CorpusBackend.Enqueue with the configured (corpus_id, source_path)
+// and surfaces the returned job id.
+//
+// Added by agentgraph-total-convergence-01PMGX01 WP17 to drain the
+// `corpus_write` I3 line. The kind previously had only a direct-Execute()
+// unit test (exec_state_test.go TestCorpusWriteExecutor_StubReturnsEmpty)
+// which asserted nothing beyond "does not error" — it did not even check
+// that the write reached the backend.
+//
+// convergence:exercised corpus_write
+func TestSeamFanout_CorpusWrite_EnqueueCalled(t *testing.T) {
+	t.Parallel()
+	g := buildOneNodeGraph("cw1", agentgraph.NodeKindCorpusWrite, agentgraph.CorpusWriteAttrs{
+		CorpusId:   "corpus-a",
+		SourcePath: "/tmp/ingest-me.md",
+	})
+	env, rb := newRecorderEnv(g, "sess-cw")
+	rb.Corpus.NextJobID = "job-42"
+	k := agentgraph.NewKernel()
+	if err := k.Run(context.Background(), env); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	rb.Corpus.RequireEnqueueCalledWith(t, func(c recorders.EnqueueCall) bool {
+		return c.CorpusID == "corpus-a" && c.SourcePath == "/tmp/ingest-me.md"
+	}, "Enqueue(corpus-a, /tmp/ingest-me.md)")
+	if !env.State.Completed("cw1") {
+		t.Fatal("corpus_write node did not complete")
+	}
+}
+
+// ---- attachment kind ----
+
+// TestSeamFanout_Attachment_ResolverCalled verifies that an attachment node
+// reaches AttachmentResolver.Resolve with the configured attachment_id and
+// puts the resolved block on its output port.
+//
+// Added by agentgraph-total-convergence-01PMGX01 WP17 to drain the
+// `attachment` I3 line.
+//
+// convergence:exercised attachment
+func TestSeamFanout_Attachment_ResolverCalled(t *testing.T) {
+	t.Parallel()
+	g := buildOneNodeGraph("at1", agentgraph.NodeKindAttachment, agentgraph.AttachmentAttrs{
+		AttachmentId: "att-7",
+	})
+	env, rb := newRecorderEnv(g, "sess-at")
+	rb.Attachments.Register("att-7", agentgraph.AttachmentBlock{MIME: "image/png", Title: "diagram"})
+	k := agentgraph.NewKernel()
+	if err := k.Run(context.Background(), env); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	rb.Attachments.RequireCalledWith(t, "att-7")
+	block, ok := env.State.Outputs("at1")["block"].(agentgraph.AttachmentBlock)
+	if !ok {
+		t.Fatalf("block output = %T, want agentgraph.AttachmentBlock", env.State.Outputs("at1")["block"])
+	}
+	if block.MIME != "image/png" {
+		t.Errorf("block.MIME = %q, want image/png", block.MIME)
+	}
 }

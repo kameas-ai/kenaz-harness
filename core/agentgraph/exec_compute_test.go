@@ -2,11 +2,14 @@ package agentgraph
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/kameas-ai/kenaz-harness/core/elicitation"
 	"github.com/kameas-ai/kenaz-harness/core/llm/tokenizer"
 )
 
@@ -82,6 +85,33 @@ func (t *stubTools) failWith(name, errMsg string) {
 	}
 	t.failures[name] = errMsg
 	t.mu.Unlock()
+}
+
+// snapshotCalls returns a copy of every recorded ToolCall. Race-safe:
+// tool_dispatch records from its fan-out goroutines.
+func (t *stubTools) snapshotCalls() []ToolCall {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]ToolCall, len(t.calls))
+	copy(out, t.calls)
+	return out
+}
+
+// lastCall returns a snapshot of the most recent recorded ToolCall.
+// Race-safe: Call() may record from a dispatch goroutine.
+func (t *stubTools) lastCall() ToolCall {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.calls) == 0 {
+		return ToolCall{}
+	}
+	c := t.calls[len(t.calls)-1]
+	args := make(map[string]any, len(c.Args))
+	for k, v := range c.Args {
+		args[k] = v
+	}
+	c.Args = args
+	return c
 }
 
 func (t *stubTools) Has(name string) bool {
@@ -324,17 +354,33 @@ func TestLLMExecutor_PropagatesProviderError(t *testing.T) {
 	}
 }
 
-// ---- ToolNode ----
+// ---- Builtin tool nodes (the `tool` archetype) ----
+//
+// These migrated from the generic `tool` kind when
+// agentgraph-total-convergence-01PMGX01 WP04 turned it into the shared
+// archetype. subagent_dispatch is used as the "ordinary, active tool"
+// case (sleep is passive by design — see iter_gate_dispatch_test.go).
 
-func TestToolExecutor_Allowed(t *testing.T) {
+// subagentToolExec builds the executor under test for the
+// subagent_dispatch kind, exactly as builtinToolExecutors() registers it.
+func subagentToolExec() builtinToolExecutor {
+	return builtinToolExecutor{
+		kind:     NodeKindSubagentDispatch,
+		toolName: builtinToolNameFor(NodeKindSubagentDispatch),
+	}
+}
+
+func TestBuiltinToolExecutor_Allowed(t *testing.T) {
 	t.Parallel()
 	tools := newStubTools()
-	tools.allow("greet", "hello", false)
+	tools.allow(builtinToolNameFor(NodeKindSubagentDispatch), "hello", false)
 	mem := newStubMemory()
 	env := &Env{RunID: "r", Tools: tools, Memory: mem}
 	applyEnvDefaults(env)
-	ex := toolExecutor{}
-	node := &Node{ID: "t", Kind: NodeKindTool, Attrs: ToolAttrs{Name: "greet"}}
+	ex := subagentToolExec()
+	node := &Node{ID: "t", Kind: NodeKindSubagentDispatch, Attrs: SubagentDispatchAttrs{
+		Profile: "explore", Prompt: "go",
+	}}
 	r, err := ex.Execute(context.Background(), env, node, PortValues{
 		"args": map[string]any{"who": "world"},
 	})
@@ -354,29 +400,73 @@ func TestToolExecutor_Allowed(t *testing.T) {
 	}
 }
 
-func TestToolExecutor_UnknownTool(t *testing.T) {
+func TestBuiltinToolExecutor_UnknownTool(t *testing.T) {
 	t.Parallel()
 	tools := newStubTools()
 	env := &Env{RunID: "r", Tools: tools}
 	applyEnvDefaults(env)
-	ex := toolExecutor{}
-	node := &Node{ID: "t", Kind: NodeKindTool, Attrs: ToolAttrs{Name: "nope"}}
+	ex := subagentToolExec()
+	node := &Node{ID: "t", Kind: NodeKindSubagentDispatch, Attrs: SubagentDispatchAttrs{
+		Profile: "explore", Prompt: "go",
+	}}
 	if _, err := ex.Execute(context.Background(), env, node, nil); err == nil {
 		t.Fatalf("expected error")
 	}
 }
 
-func TestToolExecutor_DenyError(t *testing.T) {
+func TestBuiltinToolExecutor_DenyError(t *testing.T) {
 	t.Parallel()
 	tools := newStubTools()
-	tools.allow("badtool", "", false)
-	tools.deny("badtool")
+	name := builtinToolNameFor(NodeKindSubagentDispatch)
+	tools.allow(name, "", false)
+	tools.deny(name)
 	env := &Env{RunID: "r", Tools: tools}
 	applyEnvDefaults(env)
-	ex := toolExecutor{}
-	node := &Node{ID: "t", Kind: NodeKindTool, Attrs: ToolAttrs{Name: "badtool"}}
+	ex := subagentToolExec()
+	node := &Node{ID: "t", Kind: NodeKindSubagentDispatch, Attrs: SubagentDispatchAttrs{
+		Profile: "explore", Prompt: "go",
+	}}
 	if _, err := ex.Execute(context.Background(), env, node, nil); err == nil {
 		t.Fatalf("expected denied error")
+	}
+}
+
+// TestBuiltinToolExecutor_ArgsComeFromAttrs pins the archetype contract:
+// the tool name is fixed by the KIND (there is no `name` attr to point a
+// node somewhere else) and the call arguments are the node's typed attrs,
+// with the `args` port layered on top.
+func TestBuiltinToolExecutor_ArgsComeFromAttrs(t *testing.T) {
+	t.Parallel()
+	tools := newStubTools()
+	name := builtinToolNameFor(NodeKindSubagentDispatch)
+	if name != "kenaz__subagent_dispatch" {
+		t.Fatalf("naming contract drift: got %q", name)
+	}
+	tools.allow(name, "ok", false)
+	env := &Env{RunID: "r", Tools: tools}
+	applyEnvDefaults(env)
+	ex := subagentToolExec()
+	node := &Node{ID: "t", Kind: NodeKindSubagentDispatch, Attrs: SubagentDispatchAttrs{
+		Profile: "explore", Prompt: "investigate", RunInBackground: true,
+	}}
+	if _, err := ex.Execute(context.Background(), env, node, PortValues{
+		"args": map[string]any{"prompt": "overridden"},
+	}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	call := tools.lastCall()
+	if call.Name != name {
+		t.Errorf("dispatched tool = %q, want %q", call.Name, name)
+	}
+	if call.Args["profile"] != "explore" {
+		t.Errorf("profile arg = %v, want explore (from attrs)", call.Args["profile"])
+	}
+	if call.Args["prompt"] != "overridden" {
+		t.Errorf("prompt arg = %v, want the args-port override", call.Args["prompt"])
+	}
+	// Inherited-but-unset compute attrs must not leak into the call.
+	if _, ok := call.Args["temperature"]; ok {
+		t.Errorf("unset inherited attr leaked into tool args: %+v", call.Args)
 	}
 }
 
@@ -633,6 +723,284 @@ func TestAskExecutor_ResumesWithAnswer(t *testing.T) {
 	if r.Outputs["answer"] != "because" {
 		t.Errorf("answer = %v", r.Outputs["answer"])
 	}
+}
+
+// autonomy-knobs-live-01PMAG02 WP02: an AskNode with a DefaultAnswer
+// and no seeded answer resolves to the default instead of pausing —
+// the mechanism applyAskOnAmbiguityDial (core/rpc/views/agentgraph/
+// chat) drives when askOnAmbiguity=never.
+func TestAskExecutor_ResolvesDefaultAnswerInsteadOfPausing(t *testing.T) {
+	t.Parallel()
+	bus := NewMemAskBus()
+	env := &Env{RunID: "r", Ask: bus}
+	applyEnvDefaults(env)
+	ex := askExecutor{}
+	node := &Node{ID: "ask", Kind: NodeKindAsk, Attrs: AskAttrs{
+		Question:      "Which environment?",
+		DefaultAnswer: "proceeding with the default environment",
+	}}
+	r, err := ex.Execute(context.Background(), env, node, nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if r.Pause {
+		t.Fatalf("expected no pause: askOnAmbiguity=never's whole point is the run must not hang on an unseeded ask")
+	}
+	if r.Outputs["answer"] != "proceeding with the default environment" {
+		t.Errorf("answer = %v, want the DefaultAnswer", r.Outputs["answer"])
+	}
+	if _, ok := bus.PendingQuestion("r", "ask"); ok {
+		t.Errorf("Pending() must not have been called — the node resolved via DefaultAnswer, not a real pause/resume cycle")
+	}
+}
+
+// FR-005: a seeded answer still wins over DefaultAnswer — the fallback
+// only ever engages when LookupAnswer finds nothing, preserving
+// today's "resume with the real answer" path exactly.
+func TestAskExecutor_SeededAnswerWinsOverDefaultAnswer(t *testing.T) {
+	t.Parallel()
+	bus := NewMemAskBus()
+	bus.Answer("r", "ask", "the real answer")
+	env := &Env{RunID: "r", Ask: bus}
+	applyEnvDefaults(env)
+	ex := askExecutor{}
+	node := &Node{ID: "ask", Kind: NodeKindAsk, Attrs: AskAttrs{
+		Question:      "Why?",
+		DefaultAnswer: "should never be used",
+	}}
+	r, err := ex.Execute(context.Background(), env, node, nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if r.Outputs["answer"] != "the real answer" {
+		t.Errorf("answer = %v, want the seeded answer, not DefaultAnswer", r.Outputs["answer"])
+	}
+}
+
+// FR-005: an empty DefaultAnswer (every AskMode other than "never",
+// and the zero value) reproduces the pre-mission pause behaviour
+// exactly — pinned separately from TestAskExecutor_PausesWhenNoAnswer
+// to make the FR-005 intent explicit at this call site.
+func TestAskExecutor_EmptyDefaultAnswerStillPauses(t *testing.T) {
+	t.Parallel()
+	bus := NewMemAskBus()
+	env := &Env{RunID: "r", Ask: bus}
+	applyEnvDefaults(env)
+	ex := askExecutor{}
+	node := &Node{ID: "ask", Kind: NodeKindAsk, Attrs: AskAttrs{Question: "Why?", DefaultAnswer: ""}}
+	r, err := ex.Execute(context.Background(), env, node, nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !r.Pause {
+		t.Errorf("expected pause with an empty DefaultAnswer")
+	}
+}
+
+// ── 01PMGX01 WP06: the structured question surface ────────────────────
+//
+// The `ask` node absorbs kenaz__ask_user_question's capability: seven
+// kinds, options, bounds, previews (spec §4.3). These tests pin both
+// halves of that — the new surface works, and the free-form surface is
+// bit-for-bit what it was.
+
+func TestAskExecutor_StructuredQuestionReachesTheBus(t *testing.T) {
+	t.Parallel()
+	bus := NewMemAskBus()
+	env := &Env{RunID: "r", Ask: bus}
+	applyEnvDefaults(env)
+	ex := askExecutor{}
+	node := &Node{ID: "ask", Kind: NodeKindAsk, Attrs: AskAttrs{
+		Question:     "Which environment?",
+		QuestionKind: "radio",
+		QuestionSpec: map[string]any{
+			"options": []any{
+				map[string]any{"value": "prod", "label": "Production"},
+				map[string]any{"value": "stage", "label": "Staging"},
+			},
+			"preview": map[string]any{"kind": "code", "content": "deploy()", "language": "go"},
+		},
+	}}
+	r, err := ex.Execute(context.Background(), env, node, nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !r.Pause {
+		t.Fatal("expected pause")
+	}
+
+	entry, ok := bus.Registry().Get(elicitation.NodeAskID("r", "ask"))
+	if !ok {
+		t.Fatal("no entry parked in the shared elicitation registry")
+	}
+	q := entry.Question
+	if q.Kind != elicitation.KindRadio {
+		t.Errorf("kind = %q, want radio", q.Kind)
+	}
+	if len(q.Options) != 2 || q.Options[0].Value != "prod" || q.Options[1].Label != "Staging" {
+		t.Errorf("options = %+v", q.Options)
+	}
+	if q.Preview == nil || q.Preview.Language != "go" {
+		t.Errorf("preview = %+v", q.Preview)
+	}
+
+	// The pending event reports the control for a structured ask.
+	payload := askPendingPayload(t, r)
+	if payload["kind"] != "radio" {
+		t.Errorf("ask_pending payload kind = %v, want radio", payload["kind"])
+	}
+}
+
+// The free-form ask_pending payload must stay exactly {"question": …}.
+// Anything else moves pinned kernel event goldens, and chat_default's
+// turn boundary is a free-form ask.
+func TestAskExecutor_FreeformPendingPayloadUnchanged(t *testing.T) {
+	t.Parallel()
+	bus := NewMemAskBus()
+	env := &Env{RunID: "r", Ask: bus}
+	applyEnvDefaults(env)
+	ex := askExecutor{}
+	node := &Node{ID: "ask", Kind: NodeKindAsk, Attrs: AskAttrs{Question: "Why?"}}
+	r, err := ex.Execute(context.Background(), env, node, nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	payload := askPendingPayload(t, r)
+	want := map[string]any{"question": "Why?"}
+	if !reflect.DeepEqual(payload, want) {
+		t.Fatalf("free-form ask_pending payload drifted:\n got: %v\nwant: %v", payload, want)
+	}
+}
+
+func TestAskExecutor_StructuredAnswerDecodesOntoThePort(t *testing.T) {
+	t.Parallel()
+	bus := NewMemAskBus()
+	id := elicitation.NodeAskID("r", "ask")
+	if _, err := bus.Registry().Register(elicitation.Request{ID: id, RunID: "r", NodeID: "ask"}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if err := bus.Registry().Resolve(id, elicitation.JSONAnswer(json.RawMessage(`["a","c"]`))); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	env := &Env{RunID: "r", Ask: bus}
+	applyEnvDefaults(env)
+	ex := askExecutor{}
+	node := &Node{ID: "ask", Kind: NodeKindAsk, Attrs: AskAttrs{
+		Question:     "Pick some",
+		QuestionKind: "checkbox",
+		QuestionSpec: map[string]any{"options": []any{map[string]any{"value": "a", "label": "A"}}},
+	}}
+	r, err := ex.Execute(context.Background(), env, node, nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if r.Pause {
+		t.Fatal("should not pause: the answer is present")
+	}
+	got, ok := r.Outputs["answer"].([]any)
+	if !ok {
+		t.Fatalf("answer output = %T (%v), want a decoded []any", r.Outputs["answer"], r.Outputs["answer"])
+	}
+	if len(got) != 2 || got[0] != "a" || got[1] != "c" {
+		t.Fatalf("answer = %v, want [a c]", got)
+	}
+}
+
+// A free-form answer must still land on the port as a plain string —
+// the shape every downstream node and every golden expects.
+func TestAskExecutor_FreeformAnswerStaysAString(t *testing.T) {
+	t.Parallel()
+	bus := NewMemAskBus()
+	bus.Answer("r", "ask", "because")
+	env := &Env{RunID: "r", Ask: bus}
+	applyEnvDefaults(env)
+	ex := askExecutor{}
+	node := &Node{ID: "ask", Kind: NodeKindAsk, Attrs: AskAttrs{Question: "Why?"}}
+	r, err := ex.Execute(context.Background(), env, node, nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got, ok := r.Outputs["answer"].(string); !ok || got != "because" {
+		t.Fatalf("answer = %#v, want the string \"because\"", r.Outputs["answer"])
+	}
+}
+
+func TestAskExecutor_InvalidStructuredQuestionErrors(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		attrs   AskAttrs
+		wantSub string
+	}{
+		{
+			name:    "radio without options",
+			attrs:   AskAttrs{Question: "Pick", QuestionKind: "radio"},
+			wantSub: "requires at least one option",
+		},
+		{
+			name: "question redeclared in the spec",
+			attrs: AskAttrs{
+				Question:     "Pick",
+				QuestionKind: "text",
+				QuestionSpec: map[string]any{"question": "a second spelling"},
+			},
+			wantSub: "belongs in the question attr",
+		},
+		{
+			name: "kind redeclared in the spec",
+			attrs: AskAttrs{
+				Question:     "Pick",
+				QuestionKind: "text",
+				QuestionSpec: map[string]any{"kind": "radio"},
+			},
+			wantSub: "belongs in the question_kind attr",
+		},
+		{
+			name: "unknown spec key",
+			attrs: AskAttrs{
+				Question:     "Pick",
+				QuestionKind: "text",
+				QuestionSpec: map[string]any{"palceholder": "typo"},
+			},
+			wantSub: "unknown field",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			bus := NewMemAskBus()
+			env := &Env{RunID: "r", Ask: bus}
+			applyEnvDefaults(env)
+			node := &Node{ID: "ask", Kind: NodeKindAsk, Attrs: tc.attrs}
+			_, err := askExecutor{}.Execute(context.Background(), env, node, nil)
+			if err == nil {
+				t.Fatalf("expected an error containing %q", tc.wantSub)
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Fatalf("err = %v, want it to contain %q", err, tc.wantSub)
+			}
+			if bus.Registry().PendingCount() != 0 {
+				t.Fatal("a rejected question must not park an ask")
+			}
+		})
+	}
+}
+
+// askPendingPayload decodes the single EventAskPending payload in r.
+func askPendingPayload(t *testing.T, r Result) map[string]any {
+	t.Helper()
+	for _, e := range r.Events.Events {
+		if e.Kind != EventAskPending {
+			continue
+		}
+		var out map[string]any
+		if err := json.Unmarshal(e.Payload, &out); err != nil {
+			t.Fatalf("decode ask_pending payload: %v", err)
+		}
+		return out
+	}
+	t.Fatal("no ask_pending event emitted")
+	return nil
 }
 
 // ---- EscalateNode ----

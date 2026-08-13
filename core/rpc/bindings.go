@@ -36,6 +36,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/contextview"
 	corpusview "github.com/kameas-ai/kenaz-harness/core/rpc/views/corpus"
 	dialsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/dials"
+	confirmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/confirm"
 	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
 	fleetview "github.com/kameas-ai/kenaz-harness/core/rpc/views/fleet"
 	hooksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/hooks"
@@ -363,16 +364,14 @@ func (b *Bindings) LLM_ListModels(kind, plaintextApiKey string) ([]llm.ModelInfo
 	return b.api.LLMConnector().ListModels(b.ctx(), kind, plaintextApiKey)
 }
 
-// LLM_ResolveConfirm completes a pending confirm-each tool call
-// (WP05). The frontend modal calls this with the request id surfaced
-// on the `llm:tool-confirm-request` topic and one of the four
-// canonical decisions ("allow" | "deny" | "always_allow" |
-// "always_deny"). The toolloop goroutine waiting on the request id
-// unblocks and continues / blocks accordingly.
-func (b *Bindings) LLM_ResolveConfirm(requestID, decision string) error {
-	defer sentry.WrapBinding("LLM_ResolveConfirm")()
-	return b.api.LLMConnector().ResolveConfirm(b.ctx(), requestID, decision)
-}
+// LLM_ResolveConfirm is GONE. It was the binding for a confirm-each
+// modal that had been retired: nothing published the
+// `llm:tool-confirm-request` topic it documented, and the method behind
+// it returned "confirm-each is retired" on every call. The real
+// confirmation round trip is Confirm_Resolve and its siblings, below
+// (confirm-each-enforcement-01PMAG05 WP02). Two similarly-named
+// bindings, one of which cannot work, is exactly the ambiguity that let
+// this feature look wired for a release cycle.
 
 // LLM_UpdateProviderCredential writes a new plaintext API key for
 // profileID to the OS keychain and zeroes the in-memory buffer before
@@ -2339,6 +2338,15 @@ func (b *Bindings) Graph_CancelRun(runID string) error {
 	return b.api.Graph().CancelRun(b.ctx(), runID)
 }
 
+// Graph_MaterializeRun returns a completed run — including a chat turn —
+// as a read-only graph spec (agentgraph-total-convergence-01PMGX01
+// WP12). No lockdown guard: this reads recorded events, it starts
+// nothing.
+func (b *Bindings) Graph_MaterializeRun(runID string) (graphview.GraphSpec, error) {
+	defer sentry.WrapBinding("Graph_MaterializeRun")()
+	return b.api.Graph().MaterializeRun(b.ctx(), runID)
+}
+
 // ── compaction (agent-kernel-graph; Bundle D WP12/WP13) ───────────────
 
 func (b *Bindings) Compaction_GetConfig(layer compactionview.Layer, scopeID string) (compactionview.Config, error) {
@@ -2366,7 +2374,7 @@ func (b *Bindings) Compaction_ListCustomStrategies() ([]compactionview.CustomStr
 // Settings panel renders in the "What does this mean?" disclosure on
 // the compaction-aggressiveness dial (mission
 // compaction-strategy-ui-01KQ8TDI §2.2 / §2.9). The numerics come from
-// core/compaction.Tier() so the engine and UI never drift.
+// core/compactionpolicy.Tier() so the engine and UI never drift.
 func (b *Bindings) Compaction_GetTierExplain() ([]compactionview.TierExplain, error) {
 	defer sentry.WrapBinding("Compaction_GetTierExplain")()
 	return b.api.Compaction().GetTierExplain(b.ctx())
@@ -2950,6 +2958,77 @@ func (b *Bindings) Elicit_AnswerDeferred(askID string, answer any) (string, erro
 func (b *Bindings) Elicit_ListPending() ([]elicitview.ElicitRequest, error) {
 	defer sentry.WrapBinding("Elicit_ListPending")()
 	return b.api.Elicit().ListPending(b.ctx())
+}
+
+// ── confirm-each (confirm-each-enforcement-01PMAG05, WP02/WP03) ──────
+//
+// The return leg of the tool-confirmation pause. A `confirm_each`
+// verdict parks the tool call and publishes a ConfirmRequest on
+// "tool:confirm-pending"; these five methods are every way the user's
+// answer can come back.
+//
+// Nothing here carries argument VALUES in either direction — the
+// outbound payload is a structural args summary (toolloop.SummarizeArgs)
+// and the inbound direction carries only ids, a boolean, and a short
+// reason string.
+
+// Confirm_Resolve answers one pending row.
+//
+// sessionID + callID identify the row (both arrived on the
+// "tool:confirm-pending" event). approved=false denies: the parked call
+// returns a tool error the model can read. reason is an optional short
+// explanation carried into that error. rememberSession records a
+// per-tool, per-session grant so the same tool does not ask again for
+// the rest of the session — honoured only on an approval, and held in
+// process memory, never written to disk.
+//
+// Returns toolloop.ErrUnknownConfirmation when the row was already
+// answered (double-click, stale dialog, batch cancelled elsewhere).
+func (b *Bindings) Confirm_Resolve(sessionID string, callID string, approved bool, reason string, rememberSession bool) error {
+	defer sentry.WrapBinding("Confirm_Resolve")()
+	return b.api.Confirm().Resolve(b.ctx(), sessionID, callID, approved, reason, rememberSession)
+}
+
+// Confirm_ResolveAlways approves one row AND writes a DURABLE allow rule
+// for its (server, tool) — the modal's visually-separated "always allow"
+// control.
+//
+// A separate binding rather than a flag on Confirm_Resolve because it is
+// a separate act with a different blast radius: the rule survives
+// restarts and is revoked from Settings → Permissions, not from the
+// dialog. Keeping the surfaces distinct means a UI bug in the
+// remember-checkbox wiring cannot silently persist a policy.
+func (b *Bindings) Confirm_ResolveAlways(sessionID string, callID string, reason string) error {
+	defer sentry.WrapBinding("Confirm_ResolveAlways")()
+	return b.api.Confirm().ResolveAlways(b.ctx(), sessionID, callID, reason)
+}
+
+// Confirm_ApproveBatch approves every row still parked under batchID and
+// returns how many it resolved. Backs the modal's approve-all button.
+// Rows the user already answered individually are untouched.
+func (b *Bindings) Confirm_ApproveBatch(batchID string, rememberSession bool) (int, error) {
+	defer sentry.WrapBinding("Confirm_ApproveBatch")()
+	return b.api.Confirm().ApproveBatch(b.ctx(), batchID, rememberSession)
+}
+
+// Confirm_CancelBatch DENIES every row still parked under batchID and
+// returns how many it resolved. This is the dismissal / window-close
+// path: explicit dismissal resolves to deny, never to allow (FR-003).
+//
+// Elapsed time never calls this. An unanswered dialog leaves the run
+// parked until the user comes back — Confirm_ListPending is how the
+// modal is rebuilt after a reload.
+func (b *Bindings) Confirm_CancelBatch(batchID string, reason string) (int, error) {
+	defer sentry.WrapBinding("Confirm_CancelBatch")()
+	return b.api.Confirm().CancelBatch(b.ctx(), batchID, reason)
+}
+
+// Confirm_ListPending returns the rows currently parked so the frontend
+// can re-render a modal that was open before a reload or a dropped
+// connection. Empty sessionID returns every session's rows.
+func (b *Bindings) Confirm_ListPending(sessionID string) ([]confirmview.PendingConfirmation, error) {
+	defer sentry.WrapBinding("Confirm_ListPending")()
+	return b.api.Confirm().ListPending(b.ctx(), sessionID)
 }
 
 // ── secrets (model-secret-references-01KW7M5A, WP10) ─────────────────

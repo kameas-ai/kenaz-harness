@@ -1,0 +1,45 @@
+# delegate.yaml — hand a task to a sub-agent, then yield before polling.
+#
+# agentgraph-total-convergence-01PMGX01 WP04. This is the shipped
+# exercise for the two builtin-tool node kinds (`subagent_dispatch` and
+# `sleep`). Before this mission both were code-generated into
+# AllNodeKinds(), offered in the frontend palette, and had NO registered
+# executor — a graph containing either passed validation and crashed at
+# run time. WP04 gives them real executors over the `tool` archetype;
+# this activity is what makes them reachable from something the product
+# ships rather than from a unit test only (spec §6 I3).
+#
+# The shape is the documented use case for both kinds: dispatch a worker
+# in the background, then yield without burning an iteration slot
+# (FR-010) before the parent looks at the worker's progress.
+spec_version: "1"
+id: "delegate"
+name: "Delegate a task to a sub-agent, then yield before polling"
+description: |
+  Spawns a sub-agent branch from the named profile and returns its
+  handle, then sleeps so the parent turn does not spin while the worker
+  starts. Parent graphs typically override `profile` and `prompt` via
+  dial overrides at the ActivityNode that references this activity.
+
+  The dispatch→settle edge exists to order the two tool calls, not to
+  feed arguments: the builtin-tool executor merges the `args` port only
+  when it carries a map, and `result` carries a ToolResult.
+entrypoints:
+  - dispatch
+nodes:
+  - id: dispatch
+    kind: subagent_dispatch
+    title: "Spawn the worker"
+    attrs:
+      profile: "explore"
+      prompt: "Investigate the delegated task and report back with findings."
+      run_in_background: true
+      description: "Delegated investigation"
+  - id: settle
+    kind: sleep
+    title: "Yield before polling the worker"
+    attrs:
+      seconds: 5
+edges:
+  - from: { node: dispatch, port: result }
+    to:   { node: settle, port: args }

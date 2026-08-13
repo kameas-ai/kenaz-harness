@@ -9,6 +9,6 @@ nodes:
     attrs:
       model: m
   - id: dup
-    kind: tool
+    kind: transform
     attrs:
-      name: srv__t
+      name: noop

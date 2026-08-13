@@ -100,5 +100,13 @@ func (a *Impl) CancelRun(_ context.Context, runID string) error {
 	return a.mgr.cancelRun(runID)
 }
 
+// MaterializeRun implements API.
+func (a *Impl) MaterializeRun(_ context.Context, runID string) (GraphSpec, error) {
+	if a == nil || a.mgr == nil {
+		return GraphSpec{}, ErrManagerUnavailable
+	}
+	return a.mgr.materializeRun(runID)
+}
+
 // Compile-time witness.
 var _ API = (*Impl)(nil)

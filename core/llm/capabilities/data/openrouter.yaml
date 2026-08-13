@@ -57,7 +57,7 @@ tiers:
 models:
   # Claude-via-OpenRouter: vision + documents pass through to Anthropic
   # context_window (compaction-convergence-01PMDL05): matches the old
-  # core/compaction/wiring hardcoded table's
+  # core/agentgraph/compaction/wiring hardcoded table's
   # "openrouter:anthropic/claude-sonnet-4-5" entry (200000). This row
   # previously had no context_window set (defaulted to 0/unknown), which
   # is the gap that forced that wiring package to keep its own duplicate

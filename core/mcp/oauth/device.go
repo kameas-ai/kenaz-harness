@@ -287,25 +287,25 @@ func pollOnce(ctx context.Context, client *http.Client, cfg DeviceConfig, device
 	}, nil
 }
 
-// AuthorizeDevice runs the full RFC 8628 device-authorization grant.
-// It posts to the device-auth endpoint, calls onCode with the
-// DeviceAuthorizationResponse (so the caller can show user_code + link), then
-// polls until done.
+// There is deliberately no one-shot AuthorizeDevice(request → onCode →
+// poll) wrapper here.
+//
+// agentgraph-total-convergence-01PMGX01 WP17 deleted one on 2026-08-13.
+// It had zero non-test callers and could not acquire any: the device
+// grant has a mandatory human step in the middle — the user must read
+// user_code off the screen and enter it at verification_uri — so the
+// two halves have to be separate calls the UI can drive independently.
+// Production splits them across two RPCs, BeginDeviceAuth (which calls
+// RequestDeviceAuthorization and parks the device_code in memory) and
+// PollDeviceAuth (which calls PollDeviceToken), in
+// core/rpc/views/tools/device_auth.go. A blocking wrapper with an
+// onCode callback is the shape you write before you have a UI, and it
+// survived in this file only because its tests kept it compiling.
 //
 // The returned Tokens contain only the bearer token; no refresh token is
 // issued by the GitHub device flow. Store the result via credstore before
 // returning it to any caller — never surface the token in RPC values, frontend
 // state, or logs.
-func AuthorizeDevice(ctx context.Context, cfg DeviceConfig, onCode func(*DeviceAuthorizationResponse)) (*Tokens, error) {
-	dar, err := RequestDeviceAuthorization(ctx, cfg)
-	if err != nil {
-		return nil, err
-	}
-	if onCode != nil {
-		onCode(dar)
-	}
-	return PollDeviceToken(ctx, cfg, dar)
-}
 
 // GitHubDeviceConfig returns a DeviceConfig pre-filled with the GitHub
 // device-flow endpoints and the Kameas GitHub App client_id. Scopes and

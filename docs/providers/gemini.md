@@ -120,7 +120,8 @@ Gemini wire format:
 - **Synthesised tool call IDs** — Gemini assigns no ID on the wire; the harness
   synthesises `call_0`, `call_1`, … positionally. Round-tripping tool call IDs
   across turns requires the caller to track these synthetic IDs.
-- **CachingSpec.Breakpoints** — not supported; the field is ignored.
+- **Prompt caching** — no harness-level caching capability exists (the inert
+  `CachingSpec` type was removed by per-family-message-shaping-01PMDL06 WP03).
 - **Document content blocks** — Gemini's document part is not yet wired;
   document blocks are rejected with an error.
 - **URI media sources** — inline base64 is the only supported image source;

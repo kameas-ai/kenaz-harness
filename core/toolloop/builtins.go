@@ -1,6 +1,9 @@
-// Built-in tools for the toolloop. The toolloop's existing dispatch
-// path (concurrent.go → MCPPool.Call) hits the MCP stdio pool only;
-// in-binary tools (core/tools/websearch, core/tools/bash) used to be
+// Built-in tool registry: the map from a namespaced tool name to a
+// concrete in-binary implementation, which is what makes a permission
+// verdict (perms.go) addressable to something that actually runs.
+//
+// Historically the dispatch path reached the MCP stdio pool only, so
+// in-binary tools (core/tools/websearch, core/tools/bash) were
 // invisible to the model. This file plugs them in:
 //
 //   1. BuiltinTool is the narrow interface every in-binary tool
@@ -19,9 +22,13 @@
 //      "kenaz__" prefix is reserved on the MCP catalog so this
 //      conflict never arises in practice).
 //
-// The BuiltinPool is the chassis-side entry point: wiring code wraps
-// the existing mcpPool and hands the result to the toolloop. The loop
-// itself is unchanged.
+// The BuiltinPool is the chassis-side entry point: wiring code
+// (core/rpc/builtins_wiring.go) wraps the existing mcpPool and hands
+// the result to the kernel's ToolRegistry adapter
+// (core/rpc/views/agentgraph/chat/kernel_tool_adapter.go), which is
+// what the `tool_dispatch` node calls. Nothing in this package
+// iterates; the repetition is the `agent_loop` node in
+// chat_default.yaml.
 package toolloop
 
 import (
@@ -37,8 +44,9 @@ import (
 // already satisfy it; tests can pass a stub.
 //
 // IMPORTANT: implementations MUST be safe for concurrent use. The
-// toolloop fans out dispatches behind a semaphore and a single tool
-// may receive multiple in-flight Call invocations.
+// dispatch path fans a turn's parallel tool calls out behind a
+// semaphore, so a single tool may receive multiple in-flight Call
+// invocations.
 type BuiltinTool interface {
 	Name() string
 	Description() string
@@ -46,8 +54,8 @@ type BuiltinTool interface {
 	Call(ctx context.Context, args json.RawMessage) (json.RawMessage, error)
 }
 
-// BuiltinServerName is the synthetic server name the loop uses for
-// the dispatch path. It MUST NOT clash with any real MCP server name;
+// BuiltinServerName is the synthetic server name the dispatch path
+// uses for in-binary tools. It MUST NOT clash with any real MCP server name;
 // users can't add a server called "kenaz" because the recipe catalog
 // validates server names against an allowlist.
 const BuiltinServerName = "kenaz"
@@ -55,19 +63,19 @@ const BuiltinServerName = "kenaz"
 // toolNameSeparator is the canonical delimiter between server and
 // tool names in the namespaced "<server>__<tool>" form used on the
 // model's tool catalog. Keeping it in this package preserves the
-// builtin-naming round-trip without re-introducing the dispatch loop.
+// builtin-naming round-trip in one place.
 const toolNameSeparator = "__"
 
 // builtinNamePrefix is the namespace prefix the in-binary tools embed
 // in their Name() values (e.g. websearch.Name = "kenaz__web_search").
-// The toolloop's namespaced-name split strips the "kenaz__" prefix
-// before dispatch, so BuiltinPool.Call receives the tool name without
+// The namespaced-name split strips the "kenaz__" prefix before
+// dispatch, so BuiltinPool.Call receives the tool name without
 // the prefix. We restore the prefix when looking up the registry so
 // the BuiltinTool's own Name() comparison works.
 const builtinNamePrefix = "kenaz" + toolNameSeparator
 
 // fullBuiltinName re-attaches the "kenaz__" prefix to a stripped
-// tool name. The toolloop splits "kenaz__bash" into server="kenaz"
+// tool name. Dispatch splits "kenaz__bash" into server="kenaz"
 // + tool="bash"; BuiltinPool.Call needs to find the tool registered
 // under "kenaz__bash". The helper hides the asymmetry from callers.
 func fullBuiltinName(stripped string) string {
@@ -76,8 +84,7 @@ func fullBuiltinName(stripped string) string {
 
 // strippedBuiltinName removes the "kenaz__" prefix when present.
 // Used by BuiltinPool.Tools to publish the un-namespaced tool name in
-// the (server, name) tuple the loop's catalog membership check
-// expects.
+// the (server, name) tuple the catalog membership check expects.
 func strippedBuiltinName(full string) string {
 	if len(full) > len(builtinNamePrefix) && full[:len(builtinNamePrefix)] == builtinNamePrefix {
 		return full[len(builtinNamePrefix):]
@@ -87,7 +94,7 @@ func strippedBuiltinName(full string) string {
 
 // BuiltinRegistry is the concurrent-safe registry of built-in tools.
 // The chassis registers tools at boot (gated by the Settings toggles)
-// and the toolloop / LLM-side discoverer reads them.
+// and the dispatch path / LLM-side discoverer read them.
 type BuiltinRegistry struct {
 	mu    sync.RWMutex
 	tools map[string]BuiltinTool
@@ -259,9 +266,9 @@ type BuiltinLookup interface {
 // directly; otherwise it falls through to the underlying MCP pool.
 //
 // The Server field on a built-in's Tool entry is BuiltinServerName so
-// the toolloop's namespacing path ("server__tool" → split for
-// dispatch) round-trips cleanly. The loop's catalog membership check
-// (catalogContains) sees the built-in alongside MCP tools.
+// the namespacing path ("server__tool" → split for dispatch)
+// round-trips cleanly. The catalog membership check (catalogContains)
+// sees the built-in alongside MCP tools.
 type BuiltinPool struct {
 	inner    MCPPool
 	builtins BuiltinLookup
@@ -281,7 +288,7 @@ func NewBuiltinPool(base MCPPool, registry BuiltinLookup) *BuiltinPool {
 // list — the dispatch path doesn't care about ordering.
 //
 // Each built-in's (Server, Name) is (BuiltinServerName, stripped) —
-// the "kenaz__" prefix is removed so the loop's namespaced-name split
+// the "kenaz__" prefix is removed so the namespaced-name split
 // produces the same stripped name on dispatch. Lookup compensates by
 // re-attaching the prefix.
 func (p *BuiltinPool) Tools(ctx context.Context) ([]Tool, error) {
@@ -315,7 +322,7 @@ func (p *BuiltinPool) Call(ctx context.Context, server, tool string, args json.R
 	if server == BuiltinServerName && p.builtins != nil {
 		// Try the name as-passed, then the prefixed form. Built-ins
 		// register under their full Name() (e.g. "kenaz__bash"); the
-		// loop strips the prefix on dispatch so we look up under both.
+		// dispatch path strips the prefix, so we look up under both.
 		if t, ok := p.builtins.Lookup(tool); ok {
 			return t.Call(ctx, args)
 		}

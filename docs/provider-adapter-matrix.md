@@ -56,7 +56,7 @@
 ## Provider-specific fields (wire-only, no GenerationRequest mapping)
 
 ### Anthropic-specific
-- `cache_control` — attached to message blocks from `CachingSpec.Breakpoints`; no silent drop; gate rejects on non-Anthropic profiles
+- `cache_control` — not wired; the advertised-but-inert `CachingSpec`/`CapPromptCaching` capability was removed outright (per-family-message-shaping-01PMDL06 WP03, owner decision 2026-07-27). No harness mapping produces cache_control blocks today.
 - `system[]` — array of text objects with optional cache_control
 - `top_k` — forwarded from `Params["top_k"]`
 - `metadata.user_id` — not wired; no harness mapping

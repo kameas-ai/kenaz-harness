@@ -66,10 +66,10 @@ const (
 
 	// Chat-pipeline boundaries (chat-migration WP06). pre-llm fires
 	// before the model executor dispatches the LLMRequest; pre-tool
-	// fires before the tool executor calls Tools.Call. They mirror the
-	// toolloop's PreSend / PreToolUse extension points so the chassis
-	// can swap toolloop's HookRunner for kernel HookManager without
-	// losing any hook surface.
+	// fires before the tool executor calls Tools.Call. They are what
+	// the pre-kernel chassis loop's PreSend / PreToolUse extension
+	// points became: the swap onto HookManager is DONE, and no hook
+	// surface was lost across it.
 	HookPreLLM  HookBoundary = "pre-llm"
 	HookPreTool HookBoundary = "pre-tool"
 )

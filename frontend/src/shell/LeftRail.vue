@@ -14,6 +14,7 @@ import {
   Brain,
   GitBranch,
   Globe,
+  Route,
   Trash2,
   X,
   ChevronDown,
@@ -971,9 +972,19 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
         <li><RailEntry :icon="FileText" label="Contexts" to="/contexts" /></li>
         <li><RailEntry :icon="Brain" label="Memory" to="/memory" /></li>
         <li><RailEntry :icon="Archive" label="Artifacts" to="/artifacts" /></li>
-        <!-- nav-settings-ia-cleanup WP03: Agent graphs demoted from top-level nav.
-             The /agentgraph route and GraphsView remain intact and reachable via
-             the command palette (nav.agentgraph action in useCommandPalette.ts). -->
+        <!-- agentgraph-total-convergence-01PMGX01 WP16: Agent graphs RESTORED to
+             top-level nav, reversing nav-settings-ia-cleanup WP03's demotion.
+             WP03 demoted it because the surface had nothing real in it: a
+             library of hand-authored templates and an editor whose palette
+             offered kinds that crashed at run time. Since then every run
+             materializes as a graph (WP12) and the routed topology is the
+             production chat path, so this is now where you go to see what the
+             agent actually did. A substrate nobody can reach is a substrate
+             that rots — 19 of 34 kinds went unexercised while this was
+             palette-only. The nav.agentgraph command-palette action stays. -->
+        <li data-testid="nav-agentgraph">
+          <RailEntry :icon="Route" label="Agent graphs" to="/agentgraph" />
+        </li>
         <!-- nav-settings-ia-cleanup WP04: Audit log demoted from top-level nav.
              Viewer is accessible via Settings → Security → Audit Log. /audit route
              and the command palette entry (nav.audit) remain intact. -->

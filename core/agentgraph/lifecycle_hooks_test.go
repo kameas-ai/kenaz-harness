@@ -3,11 +3,18 @@ package agentgraph
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 )
 
 // fakeLifecycleHookRunner is a test double for LifecycleHookRunner.
+//
+// Mutex-guarded: tool_dispatch fans calls out across goroutines, so the
+// hook runner is written to concurrently while the test body reads it
+// (CLAUDE.md "Race-safe test fakes"). Every test-side read goes through
+// a snapshot helper.
 type fakeLifecycleHookRunner struct {
+	mu               sync.Mutex
 	preToolUseCalls  []fakePreToolUseCall
 	postToolUseCalls []fakePostToolUseCall
 	// preResult is returned from FirePreToolUse.
@@ -32,15 +39,37 @@ type fakePostToolUseCall struct {
 func (f *fakeLifecycleHookRunner) FirePreToolUse(
 	_ context.Context, sessionID, toolName string, inputJSON json.RawMessage, _, _ string,
 ) (LifecycleMergedOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.preToolUseCalls = append(f.preToolUseCalls, fakePreToolUseCall{
 		SessionID: sessionID, ToolName: toolName, InputJSON: inputJSON,
 	})
 	return f.preResult, nil
 }
 
+// snapshotPre returns a copy of the recorded pre_tool_use calls.
+func (f *fakeLifecycleHookRunner) snapshotPre() []fakePreToolUseCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]fakePreToolUseCall, len(f.preToolUseCalls))
+	copy(out, f.preToolUseCalls)
+	return out
+}
+
+// snapshotPost returns a copy of the recorded post_tool_use calls.
+func (f *fakeLifecycleHookRunner) snapshotPost() []fakePostToolUseCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]fakePostToolUseCall, len(f.postToolUseCalls))
+	copy(out, f.postToolUseCalls)
+	return out
+}
+
 func (f *fakeLifecycleHookRunner) FirePostToolUse(
 	_ context.Context, sessionID, toolName string, _, _ json.RawMessage, isFailure bool, errMsg, _, _ string,
 ) (LifecycleMergedOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.postToolUseCalls = append(f.postToolUseCalls, fakePostToolUseCall{
 		SessionID: sessionID, ToolName: toolName, IsFailure: isFailure, ErrMsg: errMsg,
 	})
@@ -81,11 +110,12 @@ func TestLifecycleHookRunner_PreToolUse_Fires(t *testing.T) {
 	if got.Blocked {
 		t.Error("expected not blocked")
 	}
-	if len(fake.preToolUseCalls) != 1 {
-		t.Fatalf("preToolUseCalls len=%d, want 1", len(fake.preToolUseCalls))
+	pre := fake.snapshotPre()
+	if len(pre) != 1 {
+		t.Fatalf("preToolUseCalls len=%d, want 1", len(pre))
 	}
-	if fake.preToolUseCalls[0].ToolName != "bash" {
-		t.Errorf("ToolName=%q, want %q", fake.preToolUseCalls[0].ToolName, "bash")
+	if pre[0].ToolName != "bash" {
+		t.Errorf("ToolName=%q, want %q", pre[0].ToolName, "bash")
 	}
 }
 

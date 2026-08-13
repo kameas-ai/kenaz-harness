@@ -983,7 +983,7 @@ func TestWS_SessionsStream_ElicitPendingSnapshot(t *testing.T) {
 				{Value: "yes", Label: "Yes"},
 				{Value: "no", Label: "No"},
 			},
-		})
+		}.ToQuestion())
 	}()
 
 	// Poll until the ask is registered (OpenDialog registers before it blocks).

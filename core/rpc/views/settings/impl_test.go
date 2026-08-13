@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kameas-ai/kenaz-harness/core/compaction"
+	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
 )
 
 // settingsEqual compares two Settings values with map-aware semantics.
@@ -342,8 +342,8 @@ func TestSaveAll_RejectsOverCapMonthlyCostNotify(t *testing.T) {
 // these accessors so a regression here would silently change behaviour.
 func TestEffectiveCompaction_DefaultsOnEmptySettings(t *testing.T) {
 	var s Settings
-	if got := s.EffectiveCompactionAggressiveness(); got != compaction.AggressivenessBalanced {
-		t.Errorf("default aggressiveness = %q, want %q", got, compaction.AggressivenessBalanced)
+	if got := s.EffectiveCompactionAggressiveness(); got != compactionpolicy.AggressivenessBalanced {
+		t.Errorf("default aggressiveness = %q, want %q", got, compactionpolicy.AggressivenessBalanced)
 	}
 	if got := s.EffectiveCompactionArchiveDays(); got != DefaultCompactionArchiveDays {
 		t.Errorf("default archive days = %d, want %d", got, DefaultCompactionArchiveDays)
@@ -357,12 +357,12 @@ func TestEffectiveCompaction_DefaultsOnEmptySettings(t *testing.T) {
 // that valid tier strings round-trip through Effective into the typed
 // constant the engine consumes.
 func TestEffectiveCompactionAggressiveness_PassesThroughKnownTiers(t *testing.T) {
-	for _, tier := range []compaction.CompactionAggressiveness{
-		compaction.AggressivenessOff,
-		compaction.AggressivenessConservative,
-		compaction.AggressivenessBalanced,
-		compaction.AggressivenessAggressive,
-		compaction.AggressivenessMaximal,
+	for _, tier := range []compactionpolicy.CompactionAggressiveness{
+		compactionpolicy.AggressivenessOff,
+		compactionpolicy.AggressivenessConservative,
+		compactionpolicy.AggressivenessBalanced,
+		compactionpolicy.AggressivenessAggressive,
+		compactionpolicy.AggressivenessMaximal,
 	} {
 		s := Settings{CompactionAggressiveness: string(tier)}
 		if got := s.EffectiveCompactionAggressiveness(); got != tier {
@@ -451,7 +451,7 @@ func TestSaveAll_AcceptsEmptyAggressiveness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAll: %v", err)
 	}
-	if got.EffectiveCompactionAggressiveness() != compaction.AggressivenessBalanced {
+	if got.EffectiveCompactionAggressiveness() != compactionpolicy.AggressivenessBalanced {
 		t.Errorf("after Save(empty): effective tier = %q, want balanced",
 			got.EffectiveCompactionAggressiveness())
 	}
@@ -510,7 +510,7 @@ func TestFileStore_CompactionFields_RoundTrip(t *testing.T) {
 		t.Fatalf("NewFileStore: %v", err)
 	}
 	in := Settings{
-		CompactionAggressiveness: string(compaction.AggressivenessAggressive),
+		CompactionAggressiveness: string(compactionpolicy.AggressivenessAggressive),
 		CompactionModel:          ProviderProfileRef{ProviderID: "anthropic", ModelID: "claude-haiku-3-5"},
 		CompactionArchiveDays:    30,
 		CompactionRecentWindow:   8,

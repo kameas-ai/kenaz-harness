@@ -15,6 +15,7 @@ import {cedarpolicy} from '../models';
 import {cedar} from '../models';
 import {compaction} from '../models';
 import {compliance} from '../models';
+import {toolloop} from '../models';
 import {fleet} from '../models';
 import {contextbootstrap} from '../models';
 import {contextview} from '../models';
@@ -218,6 +219,16 @@ export function Compliance_Status():Promise<compliance.ComplianceStatus>;
 
 export function Config_GetFlags():Promise<Array<rpc.FeatureFlagInfo>>;
 
+export function Confirm_ApproveBatch(arg1:string,arg2:boolean):Promise<number>;
+
+export function Confirm_CancelBatch(arg1:string,arg2:string):Promise<number>;
+
+export function Confirm_ListPending(arg1:string):Promise<Array<toolloop.ConfirmRequest>>;
+
+export function Confirm_Resolve(arg1:string,arg2:string,arg3:boolean,arg4:string,arg5:boolean):Promise<void>;
+
+export function Confirm_ResolveAlways(arg1:string,arg2:string,arg3:string):Promise<void>;
+
 export function ContextBootstrap_Health():Promise<fleet.ContextHealth>;
 
 export function ContextBootstrap_Resume(arg1:string):Promise<rpc.StartBootstrapRunResult>;
@@ -322,6 +333,8 @@ export function Graph_ListGraphs(arg1:string):Promise<Array<agentgraph.GraphInfo
 
 export function Graph_LoadGraph(arg1:string):Promise<agentgraph.GraphSpec>;
 
+export function Graph_MaterializeRun(arg1:string):Promise<agentgraph.GraphSpec>;
+
 export function Graph_Resume(arg1:string,arg2:string):Promise<void>;
 
 export function Graph_SaveGraph(arg1:agentgraph.GraphSpec):Promise<void>;
@@ -383,8 +396,6 @@ export function LLM_RecognizeTemplate(arg1:string):Promise<llm.RecognizeTemplate
 export function LLM_RemoveProvider(arg1:string):Promise<void>;
 
 export function LLM_RescanLocalRuntimes():Promise<Array<llm.LocalRuntimeInfo>>;
-
-export function LLM_ResolveConfirm(arg1:string,arg2:string):Promise<void>;
 
 export function LLM_ResumeAfterKeyRotation(arg1:string):Promise<void>;
 
@@ -686,8 +697,6 @@ export function Settings_GetAutoResumeOnKeyRotation():Promise<boolean>;
 
 export function Settings_GetAutoTitleEnabled():Promise<boolean>;
 
-export function Settings_GetChatCustomInstructions():Promise<string>;
-
 export function Settings_GetAutonomy():Promise<autonomy.Layer>;
 
 export function Settings_GetBash():Promise<boolean>;
@@ -695,6 +704,8 @@ export function Settings_GetBash():Promise<boolean>;
 export function Settings_GetBashAllowlistMigrated():Promise<boolean>;
 
 export function Settings_GetCedarStrictCredentialMode():Promise<boolean>;
+
+export function Settings_GetChatCustomInstructions():Promise<string>;
 
 export function Settings_GetEmbedderConfig():Promise<rpc.EmbedderConfigResult>;
 
@@ -746,8 +757,6 @@ export function Settings_SetAutoResumeOnKeyRotation(arg1:boolean):Promise<void>;
 
 export function Settings_SetAutoTitleEnabled(arg1:boolean):Promise<void>;
 
-export function Settings_SetChatCustomInstructions(arg1:string):Promise<void>;
-
 export function Settings_SetAutonomy(arg1:autonomy.Layer):Promise<void>;
 
 export function Settings_SetBash(arg1:boolean):Promise<void>;
@@ -755,6 +764,8 @@ export function Settings_SetBash(arg1:boolean):Promise<void>;
 export function Settings_SetBashAllowlistMigrated(arg1:boolean):Promise<void>;
 
 export function Settings_SetCedarStrictCredentialMode(arg1:boolean):Promise<void>;
+
+export function Settings_SetChatCustomInstructions(arg1:string):Promise<void>;
 
 export function Settings_SetEmbedderConfig(arg1:string,arg2:string):Promise<void>;
 

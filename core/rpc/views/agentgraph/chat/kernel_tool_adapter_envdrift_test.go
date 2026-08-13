@@ -12,12 +12,22 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 // failingToolPool is a minimal ToolPool whose Call always fails with a
 // scripted error, so tests can exercise the callErr wrapping path in
 // kernelToolAdapter.Call (as opposed to a tool returning a well-formed
 // IsError result, which never reaches that code path).
+//
+// Both cases below script the verdict from toolloop.PolicyAutoAllow
+// rather than a hand-typed string. They used to say Policy: "allow",
+// which is not a policy the resolver can produce — the adapter's switch
+// had no default and fell through to dispatch, so a nonsense verdict
+// behaved exactly like an allow. That hole is closed
+// (confirm-each-enforcement-01PMAG05: unrecognised policy ⇒ deny), which
+// is why these tests had to start naming a real one.
 type failingToolPool struct {
 	server, tool string
 	errMsg       string
@@ -35,7 +45,7 @@ func TestKernelToolAdapter_Call_EnvironmentDriftHintAppended(t *testing.T) {
 	t.Parallel()
 
 	pool := &failingToolPool{server: "myserver", tool: "read_file", errMsg: "open /workspace/gone.txt: no such file or directory"}
-	perms := &recordingPermResolver{verdict: PermVerdict{Server: "myserver", Tool: "read_file", Policy: "allow"}}
+	perms := &recordingPermResolver{verdict: PermVerdict{Server: "myserver", Tool: "read_file", Policy: string(toolloop.PolicyAutoAllow)}}
 
 	adapter := newKernelToolAdapter(pool, perms, "sess-drift")
 	result, err := adapter.Call(context.Background(), makeCall("myserver", "read_file"))
@@ -57,7 +67,7 @@ func TestKernelToolAdapter_Call_UnrelatedErrorNoHint(t *testing.T) {
 	t.Parallel()
 
 	pool := &failingToolPool{server: "myserver", tool: "crashy", errMsg: "panic: index out of range [3] with length 2"}
-	perms := &recordingPermResolver{verdict: PermVerdict{Server: "myserver", Tool: "crashy", Policy: "allow"}}
+	perms := &recordingPermResolver{verdict: PermVerdict{Server: "myserver", Tool: "crashy", Policy: string(toolloop.PolicyAutoAllow)}}
 
 	adapter := newKernelToolAdapter(pool, perms, "sess-nodrift")
 	result, err := adapter.Call(context.Background(), makeCall("myserver", "crashy"))

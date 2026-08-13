@@ -22,6 +22,17 @@
 //     OR dismisses → frontend calls Elicit_SubmitAnswer(requestID, null, true)
 //  5. SubmitAnswer resolves the pending channel → Delegate.OpenDialog returns
 //  6. Tool encodes AskResult → model receives the answer
+//
+// # Storage (01PMGX01 WP06)
+//
+// This view owns no registry of its own. Blocking dialogs, wizard
+// batches and deferred asks were three separate maps here (plus
+// core/asks.DeferredRegistry, a fourth store in its own package); they
+// are now one core/elicitation.Registry — the same store the `ask` graph
+// node's durable pause rides. This package is the *transport adapter*:
+// it converts Registry entries to the frozen ElicitRequest wire shape,
+// emits them on the broker topics above, and converts the frontend's
+// answers back. The RPC surface is unchanged.
 package elicit
 
 import (
@@ -30,16 +41,11 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
-	"github.com/kameas-ai/kenaz-harness/core/asks"
+	"github.com/kameas-ai/kenaz-harness/core/elicitation"
 	"github.com/kameas-ai/kenaz-harness/core/tools/askuserquestion"
 )
-
-// requestIDSeq is a per-process monotonic counter used in newRequestID
-// to ensure uniqueness even when calls happen within the same nanosecond.
-var requestIDSeq uint64
 
 // TopicElicitPending is the Wails event-broker topic the backend emits
 // when a new elicitation request is ready for the frontend to render.
@@ -154,17 +160,14 @@ type DeferredResult struct {
 	AskID    string `json:"ask_id"`
 }
 
-// WizardAnswer is the wire shape returned when a wizard (multi-question batch)
-// completes. Each question id maps to the user's answer JSON.
-type WizardAnswer struct {
-	// Answers maps question_id → answer value (kind-dependent JSON type).
-	Answers map[string]json.RawMessage `json:"answers"`
-	// AnsweredSoFar is populated when Dismissed is true: the partial set
-	// of answers before the user cancelled.
-	AnsweredSoFar map[string]json.RawMessage `json:"answered_so_far,omitempty"`
-	// Dismissed is true when the user cancelled the wizard mid-flow.
-	Dismissed bool `json:"dismissed"`
-}
+// WizardAnswer is the wire shape returned when a wizard (multi-question
+// batch) completes: each question id maps to the user's answer JSON, or
+// AnsweredSoFar carries the partial set when the user cancelled mid-flow.
+//
+// It is an alias of elicitation.BatchAnswer — the completion rule and
+// the encoding live with the question shape (01PMGX01 WP06), not with
+// the transport. The JSON field names are unchanged.
+type WizardAnswer = elicitation.BatchAnswer
 
 // ElicitResponse is the wire shape returned by SubmitAskAnswer and
 // resolved through OpenAskDialog.
@@ -177,22 +180,6 @@ type ElicitResponse struct {
 
 	// Cancelled is true when the user dismissed without answering.
 	Cancelled bool `json:"cancelled"`
-}
-
-// pendingEntry is one in-flight elicitation awaiting user input.
-type pendingEntry struct {
-	ch  chan ElicitResponse
-	req ElicitRequest // stored so ListPending can return it on reconnect
-}
-
-// wizardEntry tracks state for a multi-question wizard in flight.
-type wizardEntry struct {
-	// questions is the full ordered list for this wizard batch.
-	questions []WizardQuestion
-	// answers accumulates answers as each step completes.
-	answers map[string]json.RawMessage
-	// ch is resolved with the final WizardAnswer JSON when complete or dismissed.
-	ch chan ElicitResponse
 }
 
 // ElicitAPI is the view-scoped accessor the Bindings layer consumes.
@@ -223,7 +210,7 @@ type ElicitAPI interface {
 	AnswerDeferred(ctx context.Context, askID string, answer any) (string, error)
 
 	// ListDeferred returns pending deferred asks for a session.
-	ListDeferred(ctx context.Context, sessionID string) ([]asks.DeferredAsk, error)
+	ListDeferred(ctx context.Context, sessionID string) ([]elicitation.Entry, error)
 }
 
 // Emitter is the narrow interface for pushing events to the frontend.
@@ -239,13 +226,15 @@ var ErrUnknownRequest = errors.New("elicit: unknown or already-resolved request 
 
 // API is the concrete ElicitAPI implementation. It also implements
 // askuserquestion.Delegate so the tool can call OpenDialog directly.
+//
+// It holds no pending-ask state: every in-flight ask — blocking dialog,
+// wizard batch, or deferred — lives in the shared elicitation.Registry
+// (01PMGX01 WP06). The mutex guards only the Wails context.
 type API struct {
-	mu      sync.Mutex
-	pending map[string]pendingEntry
-	// wizards tracks multi-question wizard sessions (WP05).
-	wizards map[string]*wizardEntry
-	// deferred is the deferred-ask registry (WP06).
-	deferred *asks.DeferredRegistry
+	mu sync.Mutex
+
+	// registry is the one pending-ask store.
+	registry *elicitation.Registry
 
 	// emitter pushes ElicitRequest payloads to the frontend.
 	emitter Emitter
@@ -257,21 +246,21 @@ type API struct {
 
 // Config holds construction parameters.
 type Config struct {
-	Emitter         Emitter
+	Emitter Emitter
 	// DeferredExpiry sets the TTL for deferred asks. Zero = default (24 h).
-	DeferredExpiry  time.Duration
+	DeferredExpiry time.Duration
 }
 
 // New constructs an API. Emitter may be nil (tests where no frontend is
 // attached); in that case events are dropped but SubmitAnswer still
 // works if the test calls it directly.
 func New(cfg Config) *API {
-	return &API{
-		pending:  make(map[string]pendingEntry),
-		wizards:  make(map[string]*wizardEntry),
-		deferred: asks.NewDeferredRegistry(cfg.DeferredExpiry),
-		emitter:  cfg.Emitter,
-	}
+	a := &API{emitter: cfg.Emitter}
+	a.registry = elicitation.NewRegistry(elicitation.Config{
+		Expiry:  cfg.DeferredExpiry,
+		Publish: a.publish,
+	})
+	return a
 }
 
 // SetContext provides the Wails app context. Must be called from
@@ -282,311 +271,136 @@ func (a *API) SetContext(ctx context.Context) {
 	a.wailsCtx = ctx
 }
 
-// OpenDialog implements askuserquestion.Delegate. It:
-//  1. Generates a unique request ID.
-//  2. Registers a pending channel.
-//  3. Emits TopicElicitPending.
-//  4. Blocks until SubmitAnswer is called or ctx is cancelled.
+// publish is the Registry publisher: it renders a newly-parked ask onto
+// the frontend wire shape and emits it on the matching broker topic.
+// Deferred asks announce on TopicElicitDeferred; everything else on
+// TopicElicitPending. This is the single announce leg — blocking
+// dialogs, wizards and deferred asks all reach the frontend through it.
+func (a *API) publish(e elicitation.Entry) {
+	a.mu.Lock()
+	emitter, wailsCtx := a.emitter, a.wailsCtx
+	a.mu.Unlock()
+	if emitter == nil || wailsCtx == nil {
+		return
+	}
+	topic := TopicElicitPending
+	if e.Mode == elicitation.ModeDeferred {
+		topic = TopicElicitDeferred
+	}
+	emitter.Emit(wailsCtx, topic, requestOf(e))
+}
+
+// OpenDialog implements askuserquestion.Delegate. It parks the question
+// in the registry (which announces it on TopicElicitPending) and blocks
+// until SubmitAnswer resolves it or ctx is cancelled.
 //
 // A 10-minute timeout is applied unconditionally so a hung dialog never
-// blocks the tool loop forever.
-func (a *API) OpenDialog(ctx context.Context, args askuserquestion.AskArgs) (askuserquestion.AskResult, error) {
+// blocks the tool loop forever. The deadline lives here rather than in
+// the registry on purpose: a parked *graph run* must never be timed out
+// (durable-pause contract), so only this in-process caller supplies a
+// clock.
+func (a *API) OpenDialog(ctx context.Context, q elicitation.Question) (elicitation.Answer, error) {
 	const dialogTimeout = 10 * time.Minute
-
-	reqID := newRequestID()
-	ch := make(chan ElicitResponse, 1)
-
-	req := ElicitRequest{
-		RequestID:    reqID,
-		Question:     args.Question,
-		Kind:         string(args.Kind),
-		Options:      args.Options,
-		Placeholder:  args.Placeholder,
-		Min:          args.Min,
-		Max:          args.Max,
-		Step:         args.Step,
-		DefaultValue: args.DefaultValue,
-		Preview:      args.Preview,
-	}
-
-	a.mu.Lock()
-	a.pending[reqID] = pendingEntry{ch: ch, req: req}
-	wailsCtx := a.wailsCtx
-	a.mu.Unlock()
-
-	// Emit after releasing the lock so SubmitAnswer can acquire it
-	// while the event is in flight.
-	if a.emitter != nil && wailsCtx != nil {
-		a.emitter.Emit(wailsCtx, TopicElicitPending, req)
-	}
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, dialogTimeout)
 	defer cancel()
 
-	select {
-	case resp := <-ch:
-		return askuserquestion.AskResult{
-			Answer:    resp.Answer,
-			Cancelled: resp.Cancelled,
-		}, nil
-	case <-timeoutCtx.Done():
-		a.mu.Lock()
-		delete(a.pending, reqID)
-		a.mu.Unlock()
-		return askuserquestion.AskResult{}, timeoutCtx.Err()
-	}
+	return a.registry.Park(timeoutCtx, elicitation.Request{
+		Question: q,
+		Mode:     elicitation.ModeBlocking,
+	})
 }
 
 // SubmitAnswer resolves a pending elicitation. Called by the Bindings
 // layer when the frontend submits Elicit_SubmitAnswer.
 func (a *API) SubmitAnswer(_ context.Context, requestID string, answerJSON json.RawMessage, cancelled bool) error {
-	a.mu.Lock()
-	entry, ok := a.pending[requestID]
-	if ok {
-		delete(a.pending, requestID)
+	var err error
+	if cancelled {
+		// Dismissal is a decline, not an answer: the waiter still wakes
+		// with Cancelled=true, but the entry does not masquerade as
+		// StatusAnswered in the store.
+		err = a.registry.Decline(requestID, "dismissed by user")
+	} else {
+		if len(answerJSON) == 0 {
+			answerJSON = json.RawMessage("null")
+		}
+		err = a.registry.Resolve(requestID, elicitation.JSONAnswer(answerJSON))
 	}
-	a.mu.Unlock()
-
-	if !ok {
+	if errors.Is(err, elicitation.ErrUnknown) {
 		return ErrUnknownRequest
 	}
-
-	resp := ElicitResponse{
-		RequestID: requestID,
-		Answer:    answerJSON,
-		Cancelled: cancelled,
-	}
-	if len(resp.Answer) == 0 {
-		resp.Answer = json.RawMessage("null")
-	}
-
-	// Non-blocking send: if the receiving goroutine already timed out
-	// the channel is buffered (size 1) but the receiver is gone.
-	select {
-	case entry.ch <- resp:
-	default:
-	}
-	return nil
+	return err
 }
 
-// SubmitWizardStep records one question's answer for a multi-step wizard.
-// When all visible questions are answered, it resolves the pending OpenDialog
-// channel. When dismissed is true, it resolves immediately with the partial
-// set of answers so the model receives answered_so_far.
-//
-// The count of "visible" questions is the number of questions in the batch
-// that either have no DependsOn or whose dependency condition is satisfied by
-// the answers collected so far. This is evaluated conservatively: a question
-// with an unsatisfied condition is excluded from the completion check.
+// SubmitWizardStep records one question's answer for a multi-step
+// wizard. When every visible question is answered the parked call
+// resolves with a WizardAnswer; when dismissed is true it resolves
+// immediately with the partial set so the model receives
+// answered_so_far.
 func (a *API) SubmitWizardStep(_ context.Context, requestID string, questionID string, answerJSON json.RawMessage, dismissed bool) error {
-	a.mu.Lock()
-	w, ok := a.wizards[requestID]
-	if !ok {
-		a.mu.Unlock()
+	_, err := a.registry.RecordStep(requestID, questionID, answerJSON, dismissed)
+	if errors.Is(err, elicitation.ErrUnknown) {
 		return ErrUnknownRequest
 	}
-
-	if len(answerJSON) == 0 {
-		answerJSON = json.RawMessage("null")
-	}
-
-	if dismissed {
-		// Return partial answers so model receives answered_so_far.
-		partial := make(map[string]json.RawMessage, len(w.answers))
-		for k, v := range w.answers {
-			partial[k] = v
-		}
-		delete(a.wizards, requestID)
-		ch := w.ch
-		a.mu.Unlock()
-
-		wa := WizardAnswer{Dismissed: true, AnsweredSoFar: partial}
-		encoded, _ := json.Marshal(wa)
-		select {
-		case ch <- ElicitResponse{RequestID: requestID, Answer: encoded}:
-		default:
-		}
-		return nil
-	}
-
-	// Record this answer.
-	w.answers[questionID] = answerJSON
-
-	// Check if all visible questions have been answered.
-	allAnswered := allVisibleAnswered(w.questions, w.answers)
-
-	if allAnswered {
-		answers := make(map[string]json.RawMessage, len(w.answers))
-		for k, v := range w.answers {
-			answers[k] = v
-		}
-		delete(a.wizards, requestID)
-		ch := w.ch
-		a.mu.Unlock()
-
-		wa := WizardAnswer{Answers: answers}
-		encoded, _ := json.Marshal(wa)
-		select {
-		case ch <- ElicitResponse{RequestID: requestID, Answer: encoded}:
-		default:
-		}
-		return nil
-	}
-
-	a.mu.Unlock()
-	return nil
+	return err
 }
 
-// allVisibleAnswered returns true when every question that should be visible
-// (no dependency, or dependency satisfied) has been answered.
-func allVisibleAnswered(questions []WizardQuestion, answers map[string]json.RawMessage) bool {
-	for _, q := range questions {
-		if q.DependsOn != nil {
-			// Check if the dependency is satisfied.
-			priorAnswer, prior := answers[q.DependsOn.QuestionID]
-			if !prior {
-				// Dependency question not yet answered — this question is not
-				// yet visible, skip it.
-				continue
-			}
-			if !dependencyConditionMet(q.DependsOn.Condition, priorAnswer) {
-				// Condition not met — question is hidden, skip it.
-				continue
-			}
-		}
-		// Question is visible — must be answered.
-		if _, ok := answers[q.ID]; !ok {
-			return false
-		}
-	}
-	return true
-}
-
-// dependencyConditionMet evaluates a WizardDependsOn.Condition against the
-// given prior answer JSON. Supports three forms:
-//
-//	"answered"              — any non-null answer satisfies the condition.
-//	{"equals": <value>}     — answer must JSON-equal the value.
-//	{"includes": <value>}   — answer (array) must contain the value.
-func dependencyConditionMet(condition json.RawMessage, priorAnswer json.RawMessage) bool {
-	if len(condition) == 0 {
-		// Treat no condition as "answered".
-		return string(priorAnswer) != "null" && len(priorAnswer) > 0
-	}
-	// Check for string literal "answered".
-	var s string
-	if json.Unmarshal(condition, &s) == nil && s == "answered" {
-		return string(priorAnswer) != "null" && len(priorAnswer) > 0
-	}
-	// Check for {"equals": <value>}.
-	var eq struct {
-		Equals json.RawMessage `json:"equals"`
-	}
-	if json.Unmarshal(condition, &eq) == nil && len(eq.Equals) > 0 {
-		return string(eq.Equals) == string(priorAnswer)
-	}
-	// Check for {"includes": <value>}.
-	var inc struct {
-		Includes json.RawMessage `json:"includes"`
-	}
-	if json.Unmarshal(condition, &inc) == nil && len(inc.Includes) > 0 {
-		var arr []json.RawMessage
-		if json.Unmarshal(priorAnswer, &arr) == nil {
-			target := string(inc.Includes)
-			for _, item := range arr {
-				if string(item) == target {
-					return true
-				}
-			}
-		}
-		return false
-	}
-	return false
-}
-
-// OpenWizard registers a multi-question wizard session and emits the full
-// batch to the frontend via TopicElicitPending. It blocks until all
-// visible questions are answered or the wizard is dismissed.
-//
-// This is called by the tool layer when the model submits more than one
-// question in a batch.
+// OpenWizard parks a multi-question wizard and blocks until all visible
+// questions are answered or the wizard is dismissed. It is called by the
+// tool layer when the model submits more than one question in a batch.
 func (a *API) OpenWizard(ctx context.Context, req ElicitRequest) (WizardAnswer, error) {
 	const dialogTimeout = 10 * time.Minute
-
-	reqID := newRequestID()
-	req.RequestID = reqID
-	ch := make(chan ElicitResponse, 1)
-
-	entry := &wizardEntry{
-		questions: req.Questions,
-		answers:   make(map[string]json.RawMessage),
-		ch:        ch,
-	}
-
-	a.mu.Lock()
-	a.wizards[reqID] = entry
-	wailsCtx := a.wailsCtx
-	a.mu.Unlock()
-
-	if a.emitter != nil && wailsCtx != nil {
-		a.emitter.Emit(wailsCtx, TopicElicitPending, req)
-	}
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, dialogTimeout)
 	defer cancel()
 
-	select {
-	case resp := <-ch:
-		var wa WizardAnswer
-		if err := json.Unmarshal(resp.Answer, &wa); err != nil {
-			return WizardAnswer{}, fmt.Errorf("elicit: decode wizard answer: %w", err)
-		}
-		return wa, nil
-	case <-timeoutCtx.Done():
-		a.mu.Lock()
-		delete(a.wizards, reqID)
-		a.mu.Unlock()
-		return WizardAnswer{}, timeoutCtx.Err()
+	answer, err := a.registry.Park(timeoutCtx, elicitation.Request{
+		Question: questionOf(req),
+		Mode:     elicitation.ModeBlocking,
+	})
+	if err != nil {
+		return WizardAnswer{}, err
 	}
+	var wa WizardAnswer
+	if err := json.Unmarshal(answer.Value, &wa); err != nil {
+		return WizardAnswer{}, fmt.Errorf("elicit: decode wizard answer: %w", err)
+	}
+	return wa, nil
 }
 
-// RegisterDeferred implements ElicitAPI. It registers a new deferred ask
-// in the DeferredRegistry and emits TopicElicitDeferred to notify the
-// frontend chat header. Returns immediately with DeferredResult.
-func (a *API) RegisterDeferred(ctx context.Context, sessionID string, req ElicitRequest) (DeferredResult, error) {
-	askID := newRequestID()
-	req.RequestID = askID
-	req.Mode = "deferred"
-
-	if err := a.deferred.Register(sessionID, askID); err != nil {
+// RegisterDeferred implements ElicitAPI. It registers a deferred ask in
+// the shared registry (which announces it on TopicElicitDeferred) and
+// returns immediately with DeferredResult.
+func (a *API) RegisterDeferred(_ context.Context, sessionID string, req ElicitRequest) (DeferredResult, error) {
+	entry, err := a.registry.Register(elicitation.Request{
+		SessionID: sessionID,
+		Question:  questionOf(req),
+		Mode:      elicitation.ModeDeferred,
+	})
+	if err != nil {
 		return DeferredResult{}, err
 	}
-
-	a.mu.Lock()
-	wailsCtx := a.wailsCtx
-	a.mu.Unlock()
-
-	if a.emitter != nil && wailsCtx != nil {
-		a.emitter.Emit(wailsCtx, TopicElicitDeferred, req)
-	}
-
-	return DeferredResult{Deferred: true, AskID: askID}, nil
+	return DeferredResult{Deferred: true, AskID: entry.ID}, nil
 }
 
 // AnswerDeferred records the user's answer for a pending deferred ask.
 // Emits TopicElicitDeferredAnswered and returns the system_reminder text.
-func (a *API) AnswerDeferred(ctx context.Context, askID string, answer any) (string, error) {
-	if err := a.deferred.Answer(askID, answer); err != nil {
+func (a *API) AnswerDeferred(_ context.Context, askID string, answer any) (string, error) {
+	encoded, err := json.Marshal(answer)
+	if err != nil {
+		return "", fmt.Errorf("elicit: encode deferred answer: %w", err)
+	}
+	if err := a.registry.Resolve(askID, elicitation.JSONAnswer(encoded)); err != nil {
 		return "", err
 	}
-	reminder := asks.SystemReminderText(askID, answer)
+	reminder := elicitation.SystemReminderText(askID, answer)
 
 	a.mu.Lock()
-	wailsCtx := a.wailsCtx
+	emitter, wailsCtx := a.emitter, a.wailsCtx
 	a.mu.Unlock()
 
-	if a.emitter != nil && wailsCtx != nil {
-		a.emitter.Emit(wailsCtx, TopicElicitDeferredAnswered, DeferredAnsweredPayload{
+	if emitter != nil && wailsCtx != nil {
+		emitter.Emit(wailsCtx, TopicElicitDeferredAnswered, DeferredAnsweredPayload{
 			AskID:          askID,
 			SystemReminder: reminder,
 		})
@@ -595,52 +409,139 @@ func (a *API) AnswerDeferred(ctx context.Context, askID string, answer any) (str
 }
 
 // ListDeferred returns pending deferred asks for a session.
-func (a *API) ListDeferred(_ context.Context, sessionID string) ([]asks.DeferredAsk, error) {
-	return a.deferred.ListPending(sessionID), nil
+func (a *API) ListDeferred(_ context.Context, sessionID string) ([]elicitation.Entry, error) {
+	return a.registry.ListPending(elicitation.Filter{
+		SessionID: sessionID,
+		Mode:      elicitation.ModeDeferred,
+	}), nil
 }
 
-// ListPending returns the current in-flight blocking elicitation requests.
-// The frontend calls this on reconnect (FR-007) to re-render any dialog
-// that was open before the connection was lost.
-//
-// Returns a snapshot of all pending asks; callers receive enough information
-// to show "an input is being requested — reconnect to continue" even if the
-// full dialog cannot be reconstructed.
+// ListPending returns the current in-flight blocking elicitation
+// requests. The frontend calls this on reconnect (FR-007) to re-render
+// any dialog that was open before the connection was lost.
 func (a *API) ListPending(_ context.Context) ([]ElicitRequest, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	if len(a.pending) == 0 {
+	entries := a.registry.ListPending(elicitation.Filter{Mode: elicitation.ModeBlocking})
+	if len(entries) == 0 {
 		return nil, nil
 	}
-	out := make([]ElicitRequest, 0, len(a.pending))
-	for _, entry := range a.pending {
-		out = append(out, entry.req)
+	out := make([]ElicitRequest, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, requestOf(e))
 	}
 	return out, nil
 }
 
-// newRequestID generates a time-based hex request ID. The ID is unique
-// within the process lifetime (nanosecond precision + per-process counter
-// is sufficient; this is not a security boundary).
-func newRequestID() string {
-	seq := atomic.AddUint64(&requestIDSeq, 1)
-	t := uint64(time.Now().UnixNano())
-	combined := t ^ (seq << 32)
-	b := make([]byte, 8)
-	for i := range b {
-		b[i] = byte(combined >> (i * 8))
+// ---- wire <-> canonical conversion ----
+//
+// ElicitRequest is the frozen frontend contract (it is a Wails-bound
+// type; see frontend/wailsjs/go/models.ts). elicitation.Question is the
+// canonical shape. These two functions are the whole adapter.
+
+// requestOf renders a registry entry as the frontend wire shape.
+func requestOf(e elicitation.Entry) ElicitRequest {
+	q := e.Question
+	req := ElicitRequest{
+		RequestID:    e.ID,
+		Question:     q.Text,
+		Kind:         string(q.Kind),
+		Placeholder:  q.Placeholder,
+		Min:          q.Min,
+		Max:          q.Max,
+		Step:         q.Step,
+		DefaultValue: q.DefaultValue,
+		Options:      wireOptions(q.Options),
 	}
-	return "elicit-" + hexEncode(b)
+	if q.Preview != nil {
+		req.Preview = &askuserquestion.PreviewSpec{
+			Kind:     q.Preview.Kind,
+			Content:  q.Preview.Content,
+			Language: q.Preview.Language,
+		}
+	}
+	if e.Mode == elicitation.ModeDeferred {
+		req.Mode = string(elicitation.ModeDeferred)
+	}
+	for _, sub := range q.Batch {
+		wq := WizardQuestion{
+			ID:          sub.ID,
+			Question:    sub.Text,
+			Kind:        string(sub.Kind),
+			Options:     wireOptions(sub.Options),
+			Placeholder: sub.Placeholder,
+			Min:         sub.Min,
+			Max:         sub.Max,
+			Step:        sub.Step,
+		}
+		if sub.DependsOn != nil {
+			wq.DependsOn = &WizardDependsOn{
+				QuestionID: sub.DependsOn.QuestionID,
+				Condition:  sub.DependsOn.Condition,
+			}
+		}
+		req.Questions = append(req.Questions, wq)
+	}
+	return req
 }
 
-// hexEncode returns a lowercase hex string for b.
-func hexEncode(b []byte) string {
-	const hx = "0123456789abcdef"
-	out := make([]byte, len(b)*2)
-	for i, v := range b {
-		out[i*2] = hx[v>>4]
-		out[i*2+1] = hx[v&0xf]
+// questionOf parses the frontend wire shape into the canonical question.
+func questionOf(req ElicitRequest) elicitation.Question {
+	q := elicitation.Question{
+		Text:         req.Question,
+		Kind:         elicitation.Kind(req.Kind),
+		Placeholder:  req.Placeholder,
+		Min:          req.Min,
+		Max:          req.Max,
+		Step:         req.Step,
+		DefaultValue: req.DefaultValue,
+		Options:      canonicalOptions(req.Options),
 	}
-	return string(out)
+	if req.Preview != nil {
+		q.Preview = &elicitation.Preview{
+			Kind:     req.Preview.Kind,
+			Content:  req.Preview.Content,
+			Language: req.Preview.Language,
+		}
+	}
+	for _, sub := range req.Questions {
+		sq := elicitation.Question{
+			ID:          sub.ID,
+			Text:        sub.Question,
+			Kind:        elicitation.Kind(sub.Kind),
+			Options:     canonicalOptions(sub.Options),
+			Placeholder: sub.Placeholder,
+			Min:         sub.Min,
+			Max:         sub.Max,
+			Step:        sub.Step,
+		}
+		if sub.DependsOn != nil {
+			sq.DependsOn = &elicitation.Dependency{
+				QuestionID: sub.DependsOn.QuestionID,
+				Condition:  sub.DependsOn.Condition,
+			}
+		}
+		q.Batch = append(q.Batch, sq)
+	}
+	return q
+}
+
+func wireOptions(in []elicitation.Option) []askuserquestion.QuestionOption {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]askuserquestion.QuestionOption, 0, len(in))
+	for _, o := range in {
+		out = append(out, askuserquestion.QuestionOption{Value: o.Value, Label: o.Label})
+	}
+	return out
+}
+
+func canonicalOptions(in []askuserquestion.QuestionOption) []elicitation.Option {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]elicitation.Option, 0, len(in))
+	for _, o := range in {
+		out = append(out, elicitation.Option{Value: o.Value, Label: o.Label})
+	}
+	return out
 }

@@ -6,6 +6,8 @@
 #
 #   history_in (history_read)
 #     ↓
+#   compact_history (compact)
+#     ↓
 #   ask_user (ask)
 #     ↓
 #   agent_loop (loop, max_iterations: 25)
@@ -15,22 +17,81 @@
 #       tool_dispatch (tool_dispatch)
 #         ↓ messages = upstream response + tool result messages;
 #           tool_call_count surfaces "did the model emit tools?"
+#       route (router, fused off assistant_turn)
+#         ↓ next = the step the model asked for
 #     condition (between iterations):
-#       tool_call_count > 0   — keep looping while the model is
-#       still asking for tools; break out as soon as a turn returns
-#       text-only.
+#       next == "continue"
 #     ↓
-#   assistant_write (session_write)
+#   replan_check (decision: next == "replan")   ← the loop's draft
+#        ├──true──▶ recover (escalation_ladder) ──▶ exit_gate
+#        └──false─────────────────────────────────▶ exit_gate
+#
+#   Every path to exit_gate.draft goes THROUGH replan_check, so the
+#   ladder's revised draft is what the gate judges on a recovery pass.
+#
+#   exit_gate (review)   ──PASS──▶ assistant_write (session_write)
+#        │
+#        └──FAIL──▶ backtrack to agent_loop (retry_target)
+#
+# THE DOOM-LOOP SIGNAL FINALLY HAS A CONSUMER (WP11c, §3.7).
+# tool_dispatch has set `should_replan` + `doom_loop_hits` on a detected
+# thrash since autonomy-recovery-runtime-01PMDL03 WP02, and NOTHING READ
+# EITHER — events.go called the intended consumer "a future ladder
+# controller" and it was never built, while escalationLadderExecutor sat
+# fully implemented and wired into zero graphs (01PMAG01 G4). `route`
+# reads the signal and forces the replan route; `replan_check` turns
+# that into kernel-visible branching; `recover` is the ladder.
+#
+# `replan_check` is a real `decision` — the kind whose conditional
+# promotion Phase 1.5 built. Exactly one of its successors fires and the
+# other reports EventNodeSkipped, which is why `recover` costs nothing
+# on the overwhelming majority of turns where no thrash was detected.
+#
+# ────────────────────────────────────────────────────────────────
+# THE ROUTED TURN (agentgraph-total-convergence-01PMGX01 WP11b;
+# design in agentic-turn-routing-01PMAG01 §3.1/§3.4/§3.6)
+#
+# GATED, DEFAULT OFF. `route` and `exit_gate` are stripped back out by
+# agentgraph.GateAgenticTurnRouting when the Settings flag is off, and
+# the flag ships off. Flag off ⇒ this graph traverses EXACTLY as it did
+# before the rewrite; core/agentgraph/testdata/chat_default_classic.yaml
+# is a frozen copy of the pre-rewrite file and the gate is pinned
+# against it node-for-node. This is the one deliberate default-off
+# switch in the campaign: §3.6 specifies it as a LAUNCH GATE (a
+# revert-without-redeploy lever for an in-place rewrite of the graph
+# every chat turn runs), not as a way to ship something unfinished.
+#
+# WHAT IT FIXES. Before it, `agent_loop` exited when tool_call_count
+# hit 0 — "the model stopped calling tools" was the ENTIRE completion
+# criterion (01PMAG01 G1). No comparison against the user's goal, no
+# verification, no chance to notice the work was half-done. A model
+# that stops calling tools early returned a confident partial answer
+# and the turn ended.
+#
+# HOW ROUTING STAYS FREE. `route` runs in `fused` mode off
+# assistant_turn's own output, so the model states its next step in the
+# turn it was already taking — zero additional LLM calls, which is what
+# keeps "hi" at exactly one model call (FR-003/FR-004).
+#
+# WHY THE ROUTER IS A BODY NODE AND NOT A KERNEL-VISIBLE ONE. The
+# kernel hides Loop body nodes (buildEdges drops every edge touching
+# one), so inside a body the router does not route by promoting edges —
+# it routes by setting `next`, which the loop condition reads. That is
+# also why it passes its inbound payload through: the LoopNode flattens
+# the LAST body node's outputs onto its own, so anything `route` drops
+# stops reaching assistant_write. Its edge-liveness seam
+# (routerExecutor.LiveOutEdges) is what a kernel-visible router uses;
+# here the condition is the mechanism.
 #
 # Per-session lifecycle:
 #   - The chassis (core/rpc/views/agentgraph/chat) starts one Kernel.Run
 #     per chat StartStream. The runner pre-seeds the AskBus with the
 #     user's message so ask_user resolves on its first fire.
-#   - The agent_loop body fires assistant_turn, then tool_dispatch;
-#     the loop continues until a turn comes back text-only (no
-#     tool_calls). On exit the LoopNode's tail outputs flow into
-#     assistant_write which persists the assistant turn via the
-#     HistoryWriter seam.
+#   - The agent_loop body fires assistant_turn, then tool_dispatch,
+#     then route; the loop continues while the model asks to continue.
+#     On exit the LoopNode's tail outputs flow into exit_gate, which
+#     checks the draft against the run's goal before assistant_write
+#     persists the assistant turn via the HistoryWriter seam.
 #   - SessionWriteNode fires the kernel HookManager's post-LLM listener
 #     callbacks, including the artifacts code-block detector. The
 #     tool_dispatch node fires HookPostTool listeners (artifact-output
@@ -70,6 +131,12 @@ nodes:
     attrs:
       n: 0
 
+  - id: compact_history
+    kind: compact
+    title: "Compact conversation history"
+    attrs:
+      strategy: session_rewrite
+
   - id: ask_user
     kind: ask
     title: "Wait for user message"
@@ -106,6 +173,44 @@ nodes:
       parallel_dispatch: true
       max_concurrent: 4
 
+  - id: route
+    kind: router
+    title: "Route the next step of the turn"
+    # `next` is what the loop condition reads. `out` carries the
+    # inbound payload; the executor also passes every inbound key
+    # through by name, which is what keeps assistant_text/response/
+    # tool_call_count flowing onto agent_loop's flattened outputs.
+    outputs:
+      - { name: next, type: text }
+      - { name: out, type: any }
+      - { name: continue, type: any }
+      - { name: done, type: any }
+      - { name: replan, type: any }
+    attrs:
+      mode: fused
+      source_node: assistant_turn
+      choices:
+        continue:
+          target: assistant_turn
+          description: "Keep working: call more tools, or think further before answering."
+        done:
+          target: exit_gate
+          description: "The work is complete and ready to be checked and returned."
+        replan:
+          target: recover
+          description: "The current approach is not working; step back and try a different one."
+      default_choice: done
+      # WP11c: the consumer tool_dispatch's doom-loop guard was written
+      # for. When `should_replan` arrives on the inbound payload the
+      # router OVERRIDES whatever the model asked for and takes this
+      # route — a thrashing model's opinion about what to do next is
+      # precisely the unreliable input here.
+      replan_choice: replan
+      # A model that says `continue` five times running without the
+      # turn converging is thrashing; force the exit and let the gate
+      # judge what it has.
+      max_consecutive_same: 5
+
   - id: agent_loop
     kind: loop
     title: "Multi-turn agent loop (model → tools → model)"
@@ -122,12 +227,72 @@ nodes:
       - { name: tool_results, type: any }
       - { name: tool_messages, type: messages }
       - { name: tool_call_count, type: number }
+      # `next` is the router's choice, flattened up from the last body
+      # node so replan_check can branch on it OUTSIDE the loop — the
+      # kernel hides body nodes, so this is how an in-loop routing
+      # decision becomes kernel-visible branching.
+      - { name: next, type: text }
     attrs:
       max_iterations: 25
-      condition: "tool_call_count > 0"
+      # Read by the router-aware loop: `next` is the choice `route`
+      # landed on. `route`'s default_choice is `done`, so an
+      # unparseable or absent model answer EXITS the loop rather than
+      # spinning it — the safe direction, and the reason this condition
+      # cannot livelock on a model that ignores the menu.
+      condition: "next == \"continue\""
       body:
         - assistant_turn
         - tool_dispatch
+        - route
+
+  - id: replan_check
+    kind: decision
+    title: "Did the turn ask to replan?"
+    # `next` is the router's choice, flattened onto agent_loop's outputs
+    # by the LoopNode. `in` is the canonical payload port the manifest
+    # requires; both are wired below.
+    inputs:
+      - { name: in, type: any }
+      - { name: next, type: text }
+    attrs:
+      condition: "next == \"replan\""
+      next_true: recover
+      next_false: exit_gate
+
+  - id: recover
+    kind: escalation_ladder
+    title: "Walk the recovery ladder (retry -> escalate -> replan -> ask)"
+    # The ladder advances ONE rung per fire and rewinds to upstream_node
+    # via the kernel backtrack primitive on its retry rung. Under
+    # askOnAmbiguity proceed/never its terminal ask rung is skipped and
+    # the ladder ends at replan (env.AskPolicy) — the user asked not to
+    # be interrupted, and that has to bind the runtime as well as the
+    # model.
+    attrs:
+      upstream_node: agent_loop
+      target_model: "default"
+      ask_question: "I keep hitting the same failure and automatic recovery has not resolved it. How should I proceed?"
+      max_retries: 1
+
+  - id: exit_gate
+    kind: review
+    title: "Verify the turn against the user's goal before returning"
+    # FAIL emits should_retry/retry_target, which the kernel's
+    # resolveBacktrack already honors — the rewind needs no new kernel
+    # primitive (01PMAG01 §3.4). max_iterations bounds the
+    # FAIL→rewind→re-check cycle; on_cap_hit escalate means a turn that
+    # cannot satisfy its own gate still returns the best draft rather
+    # than erroring the run. Under askOnAmbiguity proceed/never the cap
+    # hit returns the draft WITHOUT escalating (env.AskPolicy), so a
+    # user who asked not to be interrupted never is.
+    inputs:
+      - { name: draft, type: any }
+    attrs:
+      upstream_node: agent_loop
+      max_iterations: 2
+      on_cap_hit: escalate
+      model: "default"
+      system_prompt: "You are the exit gate for an assistant turn. Judge only whether the work satisfies the user's stated goal. Be strict about partial or unverified work; do not reward confident prose."
 
   - id: assistant_write
     kind: session_write
@@ -146,10 +311,38 @@ nodes:
 
 edges:
   - from: { node: history_in, port: messages }
+    to:   { node: compact_history, port: input }
+  - from: { node: compact_history, port: result }
     to:   { node: ask_user, port: context }
   - from: { node: ask_user, port: answer }
     to:   { node: agent_loop, port: in }
+  # The draft reaches the exit gate THROUGH the routed path, never
+  # around it (review finding B1). The loop's assistant_text feeds
+  # replan_check's payload port, and the gate's `draft` is fed by
+  # exactly two mutually-exclusive edges: replan_check's `false` port
+  # (no replan — the decision passes the payload straight through) and
+  # `recover`'s `result` (replan — the ladder's REVISED draft).
+  #
+  # An additional agent_loop:assistant_text -> exit_gate:draft edge used
+  # to sit here and it was a live bug: the kernel builds a node's inputs
+  # by walking its in-edges in DECLARATION ORDER, last writer wins
+  # (kernel.go), and that edge was both last and always present — so it
+  # silently shadowed the ladder's output on every recovery pass. The
+  # escalate and replan rungs made real, costed LLM calls whose result
+  # the gate then never saw, and it judged the ORIGINAL failing draft
+  # instead. Two in-edges, exactly one live per run, is what makes the
+  # order irrelevant.
   - from: { node: agent_loop, port: assistant_text }
+    to:   { node: replan_check, port: in }
+  - from: { node: agent_loop, port: next }
+    to:   { node: replan_check, port: next }
+  - from: { node: replan_check, port: "true" }
+    to:   { node: recover, port: trigger }
+  - from: { node: recover, port: result }
+    to:   { node: exit_gate, port: draft }
+  - from: { node: replan_check, port: "false" }
+    to:   { node: exit_gate, port: draft }
+  - from: { node: exit_gate, port: approved }
     to:   { node: assistant_write, port: assistant_text }
   # The two edges below serve the validator only — they declare
   # connectivity for the required input ports of the body nodes
@@ -163,3 +356,5 @@ edges:
     to:   { node: assistant_turn, port: messages }
   - from: { node: assistant_turn, port: tool_calls }
     to:   { node: tool_dispatch, port: tool_calls }
+  - from: { node: tool_dispatch, port: messages }
+    to:   { node: route, port: in }

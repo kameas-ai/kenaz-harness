@@ -5,6 +5,8 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"github.com/kameas-ai/kenaz-harness/core/elicitation"
 )
 
 // This file defines the narrow interfaces the kernel calls into. Each
@@ -511,58 +513,83 @@ func (noopTrace) Span(ctx context.Context, _ string, _ map[string]any) (context.
 // for the user's answer. The kernel returns control to its caller
 // (Run returns ErrPaused) once Ask is invoked; resumption happens via
 // Resume(runID, answer) on the kernel.
+//
+// The question and answer types are core/elicitation's — the same ones
+// kenaz__ask_user_question and the Wails dialog speak
+// (agentgraph-total-convergence-01PMGX01 WP06, spec §4.3). A graph node
+// can therefore pose any question the model-facing tool can, and every
+// implementation of this seam is an adapter over one
+// elicitation.Registry rather than a private map.
 type AskBus interface {
 	// Pending records that an Ask is waiting. Production wiring pushes
 	// to the chat surface and persists; tests record the question.
-	Pending(ctx context.Context, runID, nodeID, question string) error
+	Pending(ctx context.Context, runID, nodeID string, q elicitation.Question) error
 	// LookupAnswer returns the answer the user provided, with ok=true
 	// when one is available. The Ask executor calls this on its
-	// second fire (after Run resumes). Empty answer + ok=false means
-	// the run is still parked.
-	LookupAnswer(ctx context.Context, runID, nodeID string) (string, bool)
+	// second fire (after Run resumes). ok=false means the run is still
+	// parked.
+	LookupAnswer(ctx context.Context, runID, nodeID string) (elicitation.Answer, bool)
 }
 
-// memAskBus is the in-memory default.
+// memAskBus is the in-memory default: a thin adapter over the shared
+// elicitation.Registry. It holds no ask state of its own, so the
+// pause/resume semantics a test exercises are the production ones.
 type memAskBus struct {
-	mu      sync.Mutex
-	pending map[string]string // (runID, nodeID) -> question
-	answers map[string]string // (runID, nodeID) -> answer
+	registry *elicitation.Registry
 }
 
 // NewMemAskBus returns a process-local AskBus suitable for tests.
 func NewMemAskBus() *memAskBus {
-	return &memAskBus{pending: map[string]string{}, answers: map[string]string{}}
+	return &memAskBus{registry: elicitation.NewRegistry(elicitation.Config{})}
 }
 
+// Registry exposes the backing store so a caller can share it.
+func (b *memAskBus) Registry() *elicitation.Registry { return b.registry }
+
 // Pending records a pending question.
-func (b *memAskBus) Pending(_ context.Context, runID, nodeID, q string) error {
-	b.mu.Lock()
-	b.pending[runID+":"+nodeID] = q
-	b.mu.Unlock()
-	return nil
+func (b *memAskBus) Pending(_ context.Context, runID, nodeID string, q elicitation.Question) error {
+	id := elicitation.NodeAskID(runID, nodeID)
+	if _, ok := b.registry.Get(id); ok {
+		// Already parked (the executor re-fired before an answer
+		// arrived) — nothing to do.
+		return nil
+	}
+	_, err := b.registry.Register(elicitation.Request{
+		ID:       id,
+		RunID:    runID,
+		NodeID:   nodeID,
+		Question: q,
+	})
+	return err
 }
 
 // LookupAnswer reads back any provided answer.
-func (b *memAskBus) LookupAnswer(_ context.Context, runID, nodeID string) (string, bool) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	a, ok := b.answers[runID+":"+nodeID]
-	return a, ok
+func (b *memAskBus) LookupAnswer(_ context.Context, runID, nodeID string) (elicitation.Answer, bool) {
+	return b.registry.Answered(elicitation.NodeAskID(runID, nodeID))
 }
 
-// Answer is a test helper that injects a user answer.
+// Answer is a test helper that injects a user answer. It registers the
+// ask first when the executor has not parked one yet, which is how the
+// chat chassis pre-seeds a turn's user message.
 func (b *memAskBus) Answer(runID, nodeID, ans string) {
-	b.mu.Lock()
-	b.answers[runID+":"+nodeID] = ans
-	b.mu.Unlock()
+	id := elicitation.NodeAskID(runID, nodeID)
+	if _, ok := b.registry.Get(id); !ok {
+		_, _ = b.registry.Register(elicitation.Request{
+			ID:     id,
+			RunID:  runID,
+			NodeID: nodeID,
+		})
+	}
+	_ = b.registry.Resolve(id, elicitation.TextAnswer(ans))
 }
 
 // PendingQuestion is a test helper.
 func (b *memAskBus) PendingQuestion(runID, nodeID string) (string, bool) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	q, ok := b.pending[runID+":"+nodeID]
-	return q, ok
+	e, ok := b.registry.Get(elicitation.NodeAskID(runID, nodeID))
+	if !ok || e.Status != elicitation.StatusPending {
+		return "", false
+	}
+	return e.Question.Text, true
 }
 
 // ---- TransformRegistry ----

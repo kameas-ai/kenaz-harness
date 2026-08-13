@@ -1,0 +1,29 @@
+# I5 allowlist — packages other than core/elicitation that declare
+# elicitation storage (an AskBus read half, a deferral sweep, or a
+# system-reminder renderer) without riding the shared registry.
+#
+# Spec: kitty-specs/agentgraph-total-convergence-01PMGX01/spec.md §1.3,
+# §4.3, §6 I5 — "Exactly one elicitation primitive. core/asks has zero
+# importers or is deleted."
+#
+# This list is EMPTY and must stay empty. WP06
+# (`feat(agentgraph): WP06 — one elicitation primitive`) converged the
+# three surfaces the spec names — the `ask` node,
+# kenaz__ask_user_question, and core/asks.DeferredRegistry — onto
+# core/elicitation and deleted core/asks outright. Any entry appearing
+# here is a second store being reintroduced; fold it in rather than
+# listing it.
+#
+# Format: one import path per line, relative to the module root
+# (e.g. core/somewhere), optionally followed by whitespace and the
+# offending symbol in parentheses.
+#
+# Scope note: core/toolloop's ConfirmBus is deliberately NOT in scope
+# for I5. It parks a *permission decision* about a tool call, not a
+# question put to the user: its payload is (server, tool, args summary)
+# and its answer carries remember-session / persist grants that only a
+# dispatcher can apply. It shares a pause SHAPE with the ask primitive,
+# which is why WP06 copied its broker round-trip style, but folding a
+# permission gate into a question store would merge two contracts that
+# differ in what an answer means. confirm-each-enforcement-01PMAG05
+# owns the permission model.

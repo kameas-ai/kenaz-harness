@@ -259,6 +259,16 @@ func mergeUserOverlay(shipped, user *Manifest) (*Manifest, error) {
 	if user.Executor != "" && user.Executor != shipped.Executor {
 		return nil, fmt.Errorf("%w: executor", ErrForbiddenOverrideField)
 	}
+	// dispatch/tool_name are as load-bearing as executor now
+	// (wiring-integrity-01PMAG04 WP01) — a user override changing how a
+	// shipped kind reaches execution is exactly the kind of drift
+	// FR-021 exists to block.
+	if user.Dispatch != "" && user.Dispatch != shipped.Dispatch {
+		return nil, fmt.Errorf("%w: dispatch", ErrForbiddenOverrideField)
+	}
+	if user.ToolName != "" && user.ToolName != shipped.ToolName {
+		return nil, fmt.Errorf("%w: tool_name", ErrForbiddenOverrideField)
+	}
 	// Per-attr forbidden field: changing an attr's `type:` is also
 	// forbidden (FR-022 / edge case 14).
 	for name, userSpec := range user.Attrs {

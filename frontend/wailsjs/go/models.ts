@@ -151,6 +151,8 @@ export namespace agentgraph {
 	export class PendingAsk {
 	    nodeId: string;
 	    question: string;
+	    kind?: string;
+	    spec?: elicitation.Question;
 	
 	    static createFrom(source: any = {}) {
 	        return new PendingAsk(source);
@@ -160,7 +162,27 @@ export namespace agentgraph {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.nodeId = source["nodeId"];
 	        this.question = source["question"];
+	        this.kind = source["kind"];
+	        this.spec = this.convertValues(source["spec"], elicitation.Question);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class RunStatus {
 	    runId: string;
@@ -2757,6 +2779,107 @@ export namespace elicit {
 		}
 	}
 	
+
+}
+
+export namespace elicitation {
+	
+	export class Dependency {
+	    question_id: string;
+	    condition: number[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Dependency(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.question_id = source["question_id"];
+	        this.condition = source["condition"];
+	    }
+	}
+	export class Option {
+	    value: string;
+	    label: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Option(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.value = source["value"];
+	        this.label = source["label"];
+	    }
+	}
+	export class Preview {
+	    kind: string;
+	    content: string;
+	    language?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Preview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.content = source["content"];
+	        this.language = source["language"];
+	    }
+	}
+	export class Question {
+	    id?: string;
+	    question: string;
+	    kind?: string;
+	    options?: Option[];
+	    placeholder?: string;
+	    min?: number;
+	    max?: number;
+	    step?: number;
+	    default_value?: number[];
+	    preview?: Preview;
+	    depends_on?: Dependency;
+	    questions?: Question[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Question(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.question = source["question"];
+	        this.kind = source["kind"];
+	        this.options = this.convertValues(source["options"], Option);
+	        this.placeholder = source["placeholder"];
+	        this.min = source["min"];
+	        this.max = source["max"];
+	        this.step = source["step"];
+	        this.default_value = source["default_value"];
+	        this.preview = this.convertValues(source["preview"], Preview);
+	        this.depends_on = this.convertValues(source["depends_on"], Dependency);
+	        this.questions = this.convertValues(source["questions"], Question);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 
 }
 
@@ -5463,6 +5586,7 @@ export namespace recipes {
 	export class RecipeAuth {
 	    kind: string;
 	    client_id?: string;
+	    client_secret?: string;
 	    scopes?: string[];
 	    token_env_var?: string;
 	
@@ -5474,6 +5598,7 @@ export namespace recipes {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.kind = source["kind"];
 	        this.client_id = source["client_id"];
+	        this.client_secret = source["client_secret"];
 	        this.scopes = source["scopes"];
 	        this.token_env_var = source["token_env_var"];
 	    }
@@ -5512,6 +5637,7 @@ export namespace recipes {
 	    config_options?: ConfigOption[];
 	    warning?: string;
 	    warning_severity?: string;
+	    aliases?: string[];
 	    recommended_policy_template?: string;
 	    required_capability?: string;
 	    prompt_on_first_use?: string[];
@@ -5544,6 +5670,7 @@ export namespace recipes {
 	        this.config_options = this.convertValues(source["config_options"], ConfigOption);
 	        this.warning = source["warning"];
 	        this.warning_severity = source["warning_severity"];
+	        this.aliases = source["aliases"];
 	        this.recommended_policy_template = source["recommended_policy_template"];
 	        this.required_capability = source["required_capability"];
 	        this.prompt_on_first_use = source["prompt_on_first_use"];
@@ -6718,6 +6845,7 @@ export namespace settings {
 	    webFetchEnabled?: boolean;
 	    saveArtifactDisabled?: boolean;
 	    maxAgentTurns?: number;
+	    reasoningBudgetTokens?: number;
 	    compactionAggressiveness?: string;
 	    compactionModel?: ProviderProfileRef;
 	    compactionArchiveDays?: number;
@@ -6745,6 +6873,7 @@ export namespace settings {
 	    skippedUpdateVersions?: string[];
 	    monthlyCostNotifyUsd?: number;
 	    mcpAutoRestartDisabled?: boolean;
+	    agenticTurnRouting?: boolean;
 	    autoTitleDisabled?: boolean;
 	    fsReadDisabled?: boolean;
 	    fsWriteDisabled?: boolean;
@@ -6776,6 +6905,7 @@ export namespace settings {
 	    hasSeenCrashReportingOnboarding?: boolean;
 	    hasSeenFleetTelemetryOnboarding?: boolean;
 	    firstRunOnboardingCompleted?: boolean;
+	    chatCustomInstructions?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -6799,6 +6929,7 @@ export namespace settings {
 	        this.webFetchEnabled = source["webFetchEnabled"];
 	        this.saveArtifactDisabled = source["saveArtifactDisabled"];
 	        this.maxAgentTurns = source["maxAgentTurns"];
+	        this.reasoningBudgetTokens = source["reasoningBudgetTokens"];
 	        this.compactionAggressiveness = source["compactionAggressiveness"];
 	        this.compactionModel = this.convertValues(source["compactionModel"], ProviderProfileRef);
 	        this.compactionArchiveDays = source["compactionArchiveDays"];
@@ -6826,6 +6957,7 @@ export namespace settings {
 	        this.skippedUpdateVersions = source["skippedUpdateVersions"];
 	        this.monthlyCostNotifyUsd = source["monthlyCostNotifyUsd"];
 	        this.mcpAutoRestartDisabled = source["mcpAutoRestartDisabled"];
+	        this.agenticTurnRouting = source["agenticTurnRouting"];
 	        this.autoTitleDisabled = source["autoTitleDisabled"];
 	        this.fsReadDisabled = source["fsReadDisabled"];
 	        this.fsWriteDisabled = source["fsWriteDisabled"];
@@ -6857,6 +6989,7 @@ export namespace settings {
 	        this.hasSeenCrashReportingOnboarding = source["hasSeenCrashReportingOnboarding"];
 	        this.hasSeenFleetTelemetryOnboarding = source["hasSeenFleetTelemetryOnboarding"];
 	        this.firstRunOnboardingCompleted = source["firstRunOnboardingCompleted"];
+	        this.chatCustomInstructions = source["chatCustomInstructions"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -7295,6 +7428,35 @@ export namespace tasks {
 	        this.startedAt = source["startedAt"];
 	        this.endedAt = source["endedAt"];
 	        this.ageMs = source["ageMs"];
+	    }
+	}
+
+}
+
+export namespace toolloop {
+	
+	export class ConfirmRequest {
+	    session_id: string;
+	    call_id: string;
+	    batch_id: string;
+	    server: string;
+	    tool: string;
+	    args_summary: string;
+	    reason?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ConfirmRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.session_id = source["session_id"];
+	        this.call_id = source["call_id"];
+	        this.batch_id = source["batch_id"];
+	        this.server = source["server"];
+	        this.tool = source["tool"];
+	        this.args_summary = source["args_summary"];
+	        this.reason = source["reason"];
 	    }
 	}
 

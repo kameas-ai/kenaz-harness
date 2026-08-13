@@ -326,6 +326,26 @@ export function Config_GetFlags() {
   return window['go']['rpc']['Bindings']['Config_GetFlags']();
 }
 
+export function Confirm_ApproveBatch(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Confirm_ApproveBatch'](arg1, arg2);
+}
+
+export function Confirm_CancelBatch(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Confirm_CancelBatch'](arg1, arg2);
+}
+
+export function Confirm_ListPending(arg1) {
+  return window['go']['rpc']['Bindings']['Confirm_ListPending'](arg1);
+}
+
+export function Confirm_Resolve(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['rpc']['Bindings']['Confirm_Resolve'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function Confirm_ResolveAlways(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Confirm_ResolveAlways'](arg1, arg2, arg3);
+}
+
 export function ContextBootstrap_Health() {
   return window['go']['rpc']['Bindings']['ContextBootstrap_Health']();
 }
@@ -534,6 +554,10 @@ export function Graph_LoadGraph(arg1) {
   return window['go']['rpc']['Bindings']['Graph_LoadGraph'](arg1);
 }
 
+export function Graph_MaterializeRun(arg1) {
+  return window['go']['rpc']['Bindings']['Graph_MaterializeRun'](arg1);
+}
+
 export function Graph_Resume(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Graph_Resume'](arg1, arg2);
 }
@@ -656,10 +680,6 @@ export function LLM_RemoveProvider(arg1) {
 
 export function LLM_RescanLocalRuntimes() {
   return window['go']['rpc']['Bindings']['LLM_RescanLocalRuntimes']();
-}
-
-export function LLM_ResolveConfirm(arg1, arg2) {
-  return window['go']['rpc']['Bindings']['LLM_ResolveConfirm'](arg1, arg2);
 }
 
 export function LLM_ResumeAfterKeyRotation(arg1) {
@@ -1262,10 +1282,6 @@ export function Settings_GetAutoTitleEnabled() {
   return window['go']['rpc']['Bindings']['Settings_GetAutoTitleEnabled']();
 }
 
-export function Settings_GetChatCustomInstructions() {
-  return window['go']['rpc']['Bindings']['Settings_GetChatCustomInstructions']();
-}
-
 export function Settings_GetAutonomy() {
   return window['go']['rpc']['Bindings']['Settings_GetAutonomy']();
 }
@@ -1280,6 +1296,10 @@ export function Settings_GetBashAllowlistMigrated() {
 
 export function Settings_GetCedarStrictCredentialMode() {
   return window['go']['rpc']['Bindings']['Settings_GetCedarStrictCredentialMode']();
+}
+
+export function Settings_GetChatCustomInstructions() {
+  return window['go']['rpc']['Bindings']['Settings_GetChatCustomInstructions']();
 }
 
 export function Settings_GetEmbedderConfig() {
@@ -1382,10 +1402,6 @@ export function Settings_SetAutoTitleEnabled(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetAutoTitleEnabled'](arg1);
 }
 
-export function Settings_SetChatCustomInstructions(arg1) {
-  return window['go']['rpc']['Bindings']['Settings_SetChatCustomInstructions'](arg1);
-}
-
 export function Settings_SetAutonomy(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetAutonomy'](arg1);
 }
@@ -1400,6 +1416,10 @@ export function Settings_SetBashAllowlistMigrated(arg1) {
 
 export function Settings_SetCedarStrictCredentialMode(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetCedarStrictCredentialMode'](arg1);
+}
+
+export function Settings_SetChatCustomInstructions(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetChatCustomInstructions'](arg1);
 }
 
 export function Settings_SetEmbedderConfig(arg1, arg2) {

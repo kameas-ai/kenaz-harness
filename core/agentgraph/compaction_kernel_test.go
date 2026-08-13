@@ -102,8 +102,8 @@ func TestKernel_FiresPostToolCompactionOnToolNode(t *testing.T) {
 		Nodes: []agentgraph.Node{
 			{
 				ID:    "t1",
-				Kind:  agentgraph.NodeKindTool,
-				Attrs: agentgraph.ToolAttrs{Name: "echo"},
+				Kind:  agentgraph.NodeKindSubagentDispatch,
+				Attrs: agentgraph.SubagentDispatchAttrs{Profile: "explore", Prompt: "go"},
 			},
 		},
 	}
@@ -132,21 +132,49 @@ func TestKernel_FiresPostToolCompactionOnToolNode(t *testing.T) {
 	}
 }
 
-// TestKernel_SuppressAutomaticCompaction_BlocksPreCallSite is the
-// compaction-convergence-01PMDL05 single-fire proof for the pre_call
-// site: with Env.SuppressAutomaticCompaction set, the kernel must not
-// invoke the wired Compactor at all, even though everything else about
-// the run (compactor non-nil, an LLMNode in the graph) is identical to
-// TestKernel_FiresPreCallCompactionOnLLMNode, which asserts the
-// opposite (fires exactly once) when the flag is left at its zero
-// value. This is the mechanism that lets a chat-driven run (whose
-// authoritative compactor is the pre-send path, not this one) share a
-// kernel with graph-authored runs without double-compacting.
-func TestKernel_SuppressAutomaticCompaction_BlocksPreCallSite(t *testing.T) {
+// The two tests below are the compaction-convergence-01PMDL05
+// single-fire proofs, REWRITTEN by
+// agentgraph-total-convergence-01PMGX01 WP08.
+//
+// WHAT THEY PINNED, AND STILL PIN. 01PMDL05 found a real double-fire: a
+// chat turn was compacted by a pre-kernel pass and then compacted again
+// by the kernel's first automatic pre_call site, against the transcript
+// the first pass had just produced — two real compaction calls, twice
+// the aggressiveness the user asked for, for no benefit. The guarantee
+// these tests exist to defend is "an automatic site does not fire
+// against a transcript that was just compacted." That guarantee is
+// unchanged and these tests still enforce it.
+//
+// WHAT CHANGED: THE MECHANISM. The original proofs set
+// a boolean on the Env that welded both automatic sites shut for the
+// whole run. WP08 deleted that field (spec §6 I4 grep-forbids the
+// symbol), because welding the sites shut is also what made a chat turn
+// uncompactable after its first pass: it compacted once and then grew
+// monotonically through up to 25 model turns. The guarantee now comes
+// from Env.AutoCompaction, the growth watermark
+// (turn-context-runway-01PMAG03 WP02): the first observation latches
+// the run's baseline and is refused by construction, and later sites
+// are admitted only once the transcript has genuinely grown past it.
+//
+// So the assertion is the same — zero compaction calls on a run whose
+// context has not grown — and it is now obtained from a policy that
+// permits the later firing the boolean forbade. The contrast partner is
+// still TestKernel_FiresPreCallCompactionOnLLMNode, which leaves
+// AutoCompaction nil (no watermark, no gate: the correct reading for a
+// graph-authored run with nothing compacting in front of it) and
+// asserts exactly one call.
+
+// TestKernel_ArmedWatermark_RefusesFirstPreCallSite is the pre_call
+// single-fire proof. Same graph and compactor as
+// TestKernel_FiresPreCallCompactionOnLLMNode, which asserts one call
+// with no watermark armed; arming one must yield zero, because the
+// first pre_call visit is the observation that establishes the
+// baseline and therefore cannot have grown past it.
+func TestKernel_ArmedWatermark_RefusesFirstPreCallSite(t *testing.T) {
 	compactor := &recordingCompactor{}
 	llm := &fakeLLM{resp: "ok"}
 	graph := &agentgraph.Graph{
-		ID:          "g-suppress-precall",
+		ID:          "g-watermark-precall",
 		SpecVersion: "1",
 		Entrypoints: []string{"llm1"},
 		Nodes: []agentgraph.Node{
@@ -161,56 +189,67 @@ func TestKernel_SuppressAutomaticCompaction_BlocksPreCallSite(t *testing.T) {
 	}
 	k := agentgraph.NewKernel(agentgraph.WithCompactor(compactor))
 	env := &agentgraph.Env{
-		RunID:                       "r-suppress-precall",
-		SessionID:                   "s-suppress-precall",
-		Graph:                       graph,
-		LLM:                         llm,
-		SuppressAutomaticCompaction: true,
+		RunID:     "r-watermark-precall",
+		SessionID: "s-watermark-precall",
+		Graph:     graph,
+		LLM:       llm,
+		// The zero policy selects the package defaults, which is what
+		// the chat surface arms on every run.
+		AutoCompaction: agentgraph.NewCompactionWatermark(agentgraph.CompactionWatermarkPolicy{}),
 	}
 	env.State = agentgraph.NewRunState()
 	if err := k.Run(context.Background(), env); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if len(compactor.calls) != 0 {
-		t.Fatalf("expected 0 compaction calls with SuppressAutomaticCompaction=true, got %d: %+v",
+		t.Fatalf("expected 0 compaction calls on the first pre_call site of a watermarked run, got %d: %+v",
 			len(compactor.calls), compactor.calls)
+	}
+	// The baseline must actually have been latched — a watermark that
+	// refused because it never observed anything would pass the
+	// assertion above for the wrong reason, and would then admit the
+	// next site unconditionally.
+	if _, latched := env.AutoCompaction.Baseline(); !latched {
+		t.Fatalf("pre_call site did not latch the watermark baseline")
 	}
 }
 
-// TestKernel_SuppressAutomaticCompaction_BlocksPostToolSite is the
-// post_tool-site counterpart of the pre_call test above — same graph
-// shape as TestKernel_FiresPostToolCompactionOnToolNode, but with the
-// suppression flag set, asserting zero compaction calls instead of one.
-func TestKernel_SuppressAutomaticCompaction_BlocksPostToolSite(t *testing.T) {
+// TestKernel_ArmedWatermark_RefusesPostToolSiteBeforeCrossing is the
+// post_tool counterpart. The post_tool site sees one tool result rather
+// than the live transcript, so it cannot evaluate a baseline of its own
+// and rides the pre_call site's verdict instead. On a run that has not
+// crossed — including this one, which never reaches a pre_call site at
+// all — that verdict is "no".
+func TestKernel_ArmedWatermark_RefusesPostToolSiteBeforeCrossing(t *testing.T) {
 	compactor := &recordingCompactor{}
 	tools := &fakeTools{result: agentgraph.ToolResult{
-		Content: strings.Repeat("x", 32*1024), // big result — would trigger post_tool if not suppressed
+		Content: strings.Repeat("x", 32*1024), // big result — would trigger post_tool if ungated
 	}}
 	graph := &agentgraph.Graph{
-		ID:          "g-suppress-posttool",
+		ID:          "g-watermark-posttool",
 		SpecVersion: "1",
 		Entrypoints: []string{"t1"},
 		Nodes: []agentgraph.Node{
 			{
 				ID:    "t1",
-				Kind:  agentgraph.NodeKindTool,
-				Attrs: agentgraph.ToolAttrs{Name: "echo"},
+				Kind:  agentgraph.NodeKindSubagentDispatch,
+				Attrs: agentgraph.SubagentDispatchAttrs{Profile: "explore", Prompt: "go"},
 			},
 		},
 	}
 	k := agentgraph.NewKernel(agentgraph.WithCompactor(compactor))
 	env := &agentgraph.Env{
-		RunID:                       "r-suppress-posttool",
-		SessionID:                   "s-suppress-posttool",
-		Graph:                       graph,
-		Tools:                       tools,
-		SuppressAutomaticCompaction: true,
+		RunID:          "r-watermark-posttool",
+		SessionID:      "s-watermark-posttool",
+		Graph:          graph,
+		Tools:          tools,
+		AutoCompaction: agentgraph.NewCompactionWatermark(agentgraph.CompactionWatermarkPolicy{}),
 	}
 	if err := k.Run(context.Background(), env); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if len(compactor.calls) != 0 {
-		t.Fatalf("expected 0 compaction calls with SuppressAutomaticCompaction=true, got %d: %+v",
+		t.Fatalf("expected 0 compaction calls at post_tool on an uncrossed watermarked run, got %d: %+v",
 			len(compactor.calls), compactor.calls)
 	}
 }

@@ -25,8 +25,15 @@ nodes:
     attrs:
       n: 0
   - id: assistant_turn
-    kind: llm
+    kind: model
     title: "Assistant turn (streamed)"
+    # The model executor emits `tool_calls` + `finish_reason` alongside
+    # the manifest's canonical `response`; declaring them here lets the
+    # validator route the tool_dispatch edge and the decision predicate.
+    outputs:
+      - { name: response, type: messages }
+      - { name: tool_calls, type: any }
+      - { name: finish_reason, type: text }
     attrs:
       model: "default"
       stream_to_chat: true
@@ -45,12 +52,13 @@ nodes:
         - tool_call
       max_concurrency: 4
   - id: tool_call
-    kind: tool
-    title: "One tool call"
+    kind: tool_dispatch
+    title: "Dispatch the turn's tool calls"
     attrs:
-      name: "<resolved at run-time>"
+      parallel_dispatch: true
+      max_concurrent: 4
   - id: continue_check
-    kind: branch
+    kind: decision
     title: "Did the model emit more tool_use?"
     attrs:
       condition: "finish_reason == \"tool_use\""
@@ -76,3 +84,10 @@ edges:
     to:   { node: assistant_turn, port: messages }
   - from: { node: assistant_turn, port: response }
     to:   { node: continue_check, port: in }
+  # Declares connectivity for tool_call's required `tool_calls` input.
+  # assistant_turn is a pump_loop body member, so the kernel filters
+  # this edge at run time (buildEdges drops every edge touching a body
+  # node) — the runtime semantics are unchanged and only the validator
+  # consumes it. Same pattern chat_default.yaml documents.
+  - from: { node: assistant_turn, port: tool_calls }
+    to:   { node: tool_call, port: tool_calls }

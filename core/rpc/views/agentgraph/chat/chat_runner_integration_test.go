@@ -32,7 +32,13 @@ import (
 type stubLLM struct {
 	mu        sync.Mutex
 	responses []stubLLMResponse
-	calls     atomic.Int32
+	// requests records what was actually asked, so a test can assert on
+	// the composed prompt and not just the call count. Mutex-guarded
+	// and read only through snapshotRequests — Generate is called from
+	// the kernel's dispatch goroutines (CLAUDE.md "Race-safe test
+	// fakes").
+	requests []coreag.LLMRequest
+	calls    atomic.Int32
 }
 
 type stubLLMResponse struct {
@@ -47,9 +53,18 @@ func (s *stubLLM) push(r stubLLMResponse) {
 	s.responses = append(s.responses, r)
 }
 
-func (s *stubLLM) Generate(ctx context.Context, _ coreag.LLMRequest) (coreag.LLMResponse, error) {
+func (s *stubLLM) snapshotRequests() []coreag.LLMRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]coreag.LLMRequest, len(s.requests))
+	copy(out, s.requests)
+	return out
+}
+
+func (s *stubLLM) Generate(ctx context.Context, req coreag.LLMRequest) (coreag.LLMResponse, error) {
 	s.calls.Add(1)
 	s.mu.Lock()
+	s.requests = append(s.requests, req)
 	if len(s.responses) == 0 {
 		s.mu.Unlock()
 		return coreag.LLMResponse{}, errors.New("stubLLM: out of responses")
@@ -89,6 +104,17 @@ func (s *stubTools) push(r coreag.ToolResult) {
 	s.results = append(s.results, r)
 }
 
+// snapshotCalls is the race-safe read of what was dispatched. Call()
+// runs on the kernel's tool-dispatch goroutines, so the test body must
+// never touch s.calls directly (CLAUDE.md "Race-safe test fakes").
+func (s *stubTools) snapshotCalls() []coreag.ToolCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]coreag.ToolCall, len(s.calls))
+	copy(out, s.calls)
+	return out
+}
+
 func (s *stubTools) Has(name string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -111,12 +137,33 @@ func (s *stubTools) Call(_ context.Context, call coreag.ToolCall) (coreag.ToolRe
 }
 
 // loadProductionChatGraph reads core/rpc/views/agentgraph/library/chat_default.yaml
-// and returns the parsed Graph. The path is resolved from the test's CWD
-// (which is the chat package directory) up two levels into the library
-// directory; failure to locate the bundled file is a hard test failure
-// because the whole point of these integration tests is to verify the
-// production graph topology.
+// and returns the parsed Graph AS PRODUCTION RUNS IT — i.e. with the
+// agentic-turn-routing gate applied at its shipped position, which is
+// off (agentgraph-total-convergence-01PMGX01 WP11b). The path is
+// resolved from the test's CWD (which is the chat package directory) up
+// two levels into the library directory; failure to locate the bundled
+// file is a hard test failure because the whole point of these
+// integration tests is to verify the production graph topology.
+//
+// Applying the gate here rather than reading the raw YAML is the whole
+// point: after WP11b the authored file carries the routed turn and the
+// GraphLoader strips it, so a test that read the file directly would be
+// asserting against a graph no user runs. loadRoutedChatGraph is the
+// other position.
 func loadProductionChatGraph(t *testing.T) coreag.Graph {
+	t.Helper()
+	return coreag.GateAgenticTurnRouting(loadChatGraphYAML(t), false)
+}
+
+// loadRoutedChatGraph is loadProductionChatGraph with the flag ON: the
+// routed turn, with `route` in the agent loop and the `exit_gate`
+// review node between the loop and the writer.
+func loadRoutedChatGraph(t *testing.T) coreag.Graph {
+	t.Helper()
+	return coreag.GateAgenticTurnRouting(loadChatGraphYAML(t), true)
+}
+
+func loadChatGraphYAML(t *testing.T) coreag.Graph {
 	t.Helper()
 	candidates := []string{
 		filepath.Join("..", "library", "chat_default.yaml"),
@@ -712,16 +759,34 @@ func seedSession(mgr *fakeAutoTitleManager, sessionID string) *fakeAutoTitleMana
 	return mgr
 }
 
-// waitForAutoTitleAttempt polls the manager until either AutoTitle or
-// MarkAutoTitleAttempted has been called, or the deadline passes.
-// Returns true when the trigger fired; false on timeout.
-func waitForAutoTitleAttempt(mgr *fakeAutoTitleManager) bool {
+// waitForAutoTitleAttempt polls until the auto-title trigger has both
+// (a) touched the manager — AutoTitle or MarkAutoTitleAttempted — and
+// (b) recorded wantEmissions audit rows. Returns true when both hold;
+// false on timeout. Pass wantEmissions = 0 to wait on the manager only.
+//
+// THE AUDIT LEG IS WHY THIS EXISTS (autonomy-knobs review; fixed by
+// 01PMGX01 WP17). The trigger runs on its own goroutine and, on every
+// path, calls the manager BEFORE emitting the audit row:
+//
+//	deps.Manager.MarkAutoTitleAttempted(ctx, sessionID)   // autotitle.go
+//	deps.Audit.Emit(ctx, session.EventKindSessionAutoTitled, ...)
+//
+// Waiting on the manager alone therefore unblocks the test body in the
+// window BETWEEN those two statements. Every caller that then reads
+// audit.snapshot() and asserts a count was racing the emit — a real
+// flake, not a theoretical one, and one that fails more often under
+// -race (which is what CI runs) because the scheduler interleaves more.
+//
+// Callers must pass the number of emissions the scenario expects, so
+// the wait covers the assertion that follows it rather than an
+// unrelated earlier one.
+func waitForAutoTitleAttempt(mgr *fakeAutoTitleManager, audit *fakeAutoTitleAudit, wantEmissions int) bool {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		mgr.mu.Lock()
 		fired := mgr.autoCalls > 0 || mgr.markCalls > 0
 		mgr.mu.Unlock()
-		if fired {
+		if fired && (audit == nil || len(audit.snapshot()) >= wantEmissions) {
 			return true
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -758,7 +823,7 @@ func TestChatRunnerIntegration_AutoTitle_HappyPath(t *testing.T) {
 		t.Fatalf("Reason = %q, want non-error; msg=%q", closed.Reason, closed.Message)
 	}
 
-	if !waitForAutoTitleAttempt(mgr) {
+	if !waitForAutoTitleAttempt(mgr, audit, 1) {
 		t.Fatalf("auto-title trigger did not fire within 2s")
 	}
 
@@ -855,7 +920,7 @@ func TestChatRunnerIntegration_AutoTitle_GeneratorFailure(t *testing.T) {
 	}
 	_ = waitForClosed(t, broker)
 
-	if !waitForAutoTitleAttempt(mgr) {
+	if !waitForAutoTitleAttempt(mgr, audit, 1) {
 		t.Fatalf("auto-title trigger did not fire within 2s")
 	}
 
@@ -920,7 +985,7 @@ func TestChatRunnerIntegration_AutoTitle_ManualReTrigger(t *testing.T) {
 		t.Fatalf("StartStream #1: %v", err)
 	}
 	_ = waitForClosed(t, broker)
-	if !waitForAutoTitleAttempt(mgr) {
+	if !waitForAutoTitleAttempt(mgr, audit, 1) {
 		t.Fatalf("first auto-title did not fire")
 	}
 	if rec := mgr.snapshot(); rec.Name != "Initial Title" || !rec.AutoTitled {
@@ -936,7 +1001,9 @@ func TestChatRunnerIntegration_AutoTitle_ManualReTrigger(t *testing.T) {
 		t.Fatalf("StartStream #2: %v", err)
 	}
 	_ = waitForClosed(t, broker)
-	if !waitForAutoTitleAttempt(mgr) {
+	// mgr.reset() zeroes the manager counters but NOT the audit
+	// recorder, so the second run's target is the cumulative 2.
+	if !waitForAutoTitleAttempt(mgr, audit, 2) {
 		t.Fatalf("second auto-title did not fire after clear")
 	}
 	rec := mgr.snapshot()

@@ -27,8 +27,9 @@ type ModelProfileSuiteCase struct {
 	// known-good / previously-active ModelProfile version, which the
 	// candidate's replay is diffed against. Empty means "diff the
 	// candidate capture against itself" — i.e. this case can never
-	// regress (mirrors the pre-WP03 MatrixCase default). A suite intended
-	// to actually gate promotions should set this to a distinct session.
+	// regress on content (see MatrixCase.BaselineSessionID). A suite
+	// intended to actually gate promotions must set this to a distinct
+	// session.
 	BaselineSessionID string
 
 	// MinScore is this case's overall-score pass threshold in [0,1]. Zero
@@ -119,14 +120,15 @@ type ModelProfileGateResult struct {
 	Reason string
 }
 
-// GateModelProfilePromotion runs suite's cases through RunMatrix — the same
-// capture -> replay -> diff primitives the compaction-strategy matrix
-// already uses — and reports whether every case cleared its score
-// threshold. It never re-invokes a live model: like the rest of core/eval,
-// this is a deterministic replay/diff over already-recorded captures. The
-// regression signal comes from diffing the candidate session's replay
-// against a *different*, previously-recorded baseline session
-// (MatrixCase.BaselineSessionID) rather than a session against itself.
+// GateModelProfilePromotion runs suite's cases through RunMatrix's
+// capture -> replay -> diff primitives and reports whether every case
+// cleared its score threshold. It never re-invokes a live model: like the
+// rest of core/eval, this is a deterministic replay/diff over
+// already-recorded captures. The entire regression signal therefore comes
+// from diffing the candidate session's replay against a *different*,
+// previously-recorded baseline session (MatrixCase.BaselineSessionID); a
+// case that leaves BaselineSessionID empty diffs a session against itself
+// and cannot refuse a promotion on content.
 func GateModelProfilePromotion(ctx context.Context, captureDir, runsDir string, suite ModelProfileSuite) (*ModelProfileGateResult, error) {
 	cases := make([]MatrixCase, 0, len(suite.Cases))
 	for _, c := range suite.Cases {

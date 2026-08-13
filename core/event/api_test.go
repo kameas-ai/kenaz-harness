@@ -69,17 +69,6 @@ func TestSessionFromContextZero(t *testing.T) {
 	}
 }
 
-func TestRawReplayAuthorizationGate(t *testing.T) {
-	if _, ok := IsRawReplayAuthorized(context.Background()); ok {
-		t.Fatalf("plain context must not be raw-authorized")
-	}
-	ctx := AuthorizeRawReplay(context.Background(), "alec@clearvest.co")
-	op, ok := IsRawReplayAuthorized(ctx)
-	if !ok || op != "alec@clearvest.co" {
-		t.Fatalf("authorized ctx should report operator id, got op=%q ok=%v", op, ok)
-	}
-}
-
 // TestArchivedErrorWraps verifies the wrapping/unwrapping contract.
 func TestArchivedErrorWraps(t *testing.T) {
 	ae := &ArchivedError{SessionID: ULID("01HFXY8B5VJ6T6T7AXJF9JT9F9"), Ref: ArchiveRef{Path: "/tmp/archive"}}

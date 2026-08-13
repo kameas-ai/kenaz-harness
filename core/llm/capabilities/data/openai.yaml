@@ -160,7 +160,7 @@ models:
   # these previously matched no row at all in this catalog (they'd fall
   # through to "gpt-4*" for the 4.1 pair, or to bare provider defaults
   # for o3/o3-mini), so Catalog.ContextWindow returned 8192 or 0 for a
-  # real, shipping model. That gap is what forced core/compaction/wiring's
+  # real, shipping model. That gap is what forced core/agentgraph/compaction/wiring's
   # CapabilityLookup to keep its own hardcoded window table instead of
   # reading this catalog. Only `match` + `context_window` are set here —
   # every other field stays nil/unset so it inherits the provider-level

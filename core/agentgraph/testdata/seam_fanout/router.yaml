@@ -1,0 +1,13 @@
+# Seam fanout fixture for kind=router
+# LLMProvider.Generate is OPTIONAL, and that is the whole point of the
+# kind: in `fused` mode (the default, and what chat_default uses) the
+# router reads the model's choice out of an upstream model node's
+# already-recorded output and makes no call at all. Only `standalone`
+# mode — and the opt-in fallback_to_standalone degrade path — reach the
+# LLM seam. Marking Generate required here would pin the opposite of
+# FR-003/FR-004.
+kind: router
+seams:
+  - seam: LLMProvider.Generate
+    required: false
+notes: "router picks the next step from an authored menu; fused mode reads the choice off the source node's output (zero Generate calls), standalone mode calls LLMProvider.Generate with the menu"

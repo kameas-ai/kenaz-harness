@@ -4,8 +4,8 @@ package agentgraph
 // iteration-gate wiring.
 //
 // These tests verify that the toolloop.ShouldCountIteration gate is correctly
-// consulted by both dispatch executors (toolDispatchExecutor and toolExecutor)
-// before they call env.Counters.AddTool(). The gate function itself is covered
+// consulted by both dispatch executors (toolDispatchExecutor and the
+// builtin-tool node executor) before they call env.Counters.AddTool(). The gate function itself is covered
 // in core/toolloop/loop_test.go; this file only exercises the agentgraph
 // dispatch-path integration.
 //
@@ -26,6 +26,7 @@ func newIterGateTools() *stubTools {
 	t := newStubTools()
 	t.allow(sleep.ToolName, `{"slept_s":1}`, false)
 	t.allow("kenaz__glob", `{"matches":[]}`, false)
+	t.allow(builtinToolNameFor(NodeKindSubagentDispatch), `{"branch_id":"b1"}`, false)
 	return t
 }
 
@@ -89,56 +90,63 @@ func TestToolDispatchExecutor_ActiveTool_IncrementsCounter(t *testing.T) {
 	}
 }
 
-// ---- toolExecutor (static tool node) ----
+// ---- builtin tool nodes (the `tool` archetype) ----
+//
+// The FR-010 iteration contract is what the `sleep` KIND exists to
+// express: agentgraph-total-convergence-01PMGX01 WP04 declares it
+// `budget: none` / `budget_consumes: []` in sleep.yaml, and the runtime
+// half is this gate. Both halves must agree, so both are tested through
+// the executor the manifest actually registers.
 
-// TestToolExecutor_PassiveTool_DoesNotIncrementCounter verifies the same
-// FR-010 invariant through the static toolExecutor path (NodeKindTool).
-func TestToolExecutor_PassiveTool_DoesNotIncrementCounter(t *testing.T) {
+// TestBuiltinToolExecutor_PassiveKind_DoesNotIncrementCounter verifies the
+// FR-010 invariant through the `sleep` node kind.
+func TestBuiltinToolExecutor_PassiveKind_DoesNotIncrementCounter(t *testing.T) {
 	t.Parallel()
 	tools := newIterGateTools()
 	env := &Env{RunID: "r", SessionID: "s", Tools: tools}
 	applyEnvDefaults(env)
 
-	ex := toolExecutor{}
+	ex := builtinToolExecutor{kind: NodeKindSleep, toolName: builtinToolNameFor(NodeKindSleep)}
+	if ex.toolName != sleep.ToolName {
+		t.Fatalf("naming contract drift: kind sleep dispatches %q, want %q", ex.toolName, sleep.ToolName)
+	}
 	node := &Node{
 		ID:    "sleep-node",
-		Kind:  NodeKindTool,
-		Attrs: ToolAttrs{Name: sleep.ToolName},
+		Kind:  NodeKindSleep,
+		Attrs: SleepAttrs{Seconds: 1},
 	}
-	// Use a fast 0-second args payload — the tool is a stub, so the actual
-	// Call() returns immediately without sleeping.
-	if _, err := ex.Execute(context.Background(), env, node, PortValues{
-		"args": map[string]any{"seconds": 1},
-	}); err != nil {
+	// The tool is a stub, so Call() returns immediately without sleeping.
+	if _, err := ex.Execute(context.Background(), env, node, nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 
 	if got := env.Counters.ToolCallsMade; got != 0 {
-		t.Errorf("ToolCallsMade after static kenaz__sleep = %d, want 0 (FR-010)", got)
+		t.Errorf("ToolCallsMade after the sleep node = %d, want 0 (FR-010)", got)
 	}
 }
 
-// TestToolExecutor_ActiveTool_IncrementsCounter verifies the static
-// toolExecutor still increments the counter for non-passive tools.
-func TestToolExecutor_ActiveTool_IncrementsCounter(t *testing.T) {
+// TestBuiltinToolExecutor_ActiveKind_IncrementsCounter verifies a
+// non-passive tool kind still charges the iteration budget.
+func TestBuiltinToolExecutor_ActiveKind_IncrementsCounter(t *testing.T) {
 	t.Parallel()
 	tools := newIterGateTools()
 	env := &Env{RunID: "r", SessionID: "s", Tools: tools}
 	applyEnvDefaults(env)
 
-	ex := toolExecutor{}
-	node := &Node{
-		ID:    "glob-node",
-		Kind:  NodeKindTool,
-		Attrs: ToolAttrs{Name: "kenaz__glob"},
+	ex := builtinToolExecutor{
+		kind:     NodeKindSubagentDispatch,
+		toolName: builtinToolNameFor(NodeKindSubagentDispatch),
 	}
-	if _, err := ex.Execute(context.Background(), env, node, PortValues{
-		"args": map[string]any{"pattern": "*.go"},
-	}); err != nil {
+	node := &Node{
+		ID:    "dispatch-node",
+		Kind:  NodeKindSubagentDispatch,
+		Attrs: SubagentDispatchAttrs{Profile: "explore", Prompt: "go"},
+	}
+	if _, err := ex.Execute(context.Background(), env, node, nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 
 	if got := env.Counters.ToolCallsMade; got != 1 {
-		t.Errorf("ToolCallsMade after static kenaz__glob = %d, want 1", got)
+		t.Errorf("ToolCallsMade after the subagent_dispatch node = %d, want 1", got)
 	}
 }

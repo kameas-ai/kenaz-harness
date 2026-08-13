@@ -276,11 +276,18 @@ type HookRunner interface {
 	RunPostSend(ctx context.Context, ev PostSendHookEvent)
 }
 
-// ChatRunner is the kernel-driven entry point that replaces the
-// toolloop-based StartStream when wired (chat-migration WP04). The
-// LLM impl prefers ChatRunner when both ChatRunner and ToolLoop are
-// configured; the toolloop path remains the default until parity
-// tests in WP06 turn green.
+// ChatRunner is the kernel-driven entry point and the ONLY chat path
+// (chat-migration WP04). There is no alternative implementation to
+// prefer it over: StartStream / StopStream below return
+// "llm: chat runner not wired" when this field is nil, because the
+// pre-kernel pump was deleted rather than kept as a fallback.
+//
+// (This comment used to say "the LLM impl prefers ChatRunner when both
+// ChatRunner and ToolLoop are configured; the toolloop path remains the
+// default until parity tests in WP06 turn green". Both halves were
+// false — there is no ToolLoop field and no default to remain.
+// Corrected under agentgraph-total-convergence-01PMGX01 invariant I8,
+// 2026-08-13.)
 //
 // Defined here as a narrow interface so the impl doesn't import the
 // chat package directly (DIRECTIVE_001 — keeps the import direction
@@ -1234,16 +1241,6 @@ func (a *API) ListModels(ctx context.Context, kind, plaintextApiKey string) ([]M
 		})
 	}
 	return out, nil
-}
-
-// ResolveConfirm is a deprecated stub retained for the LLMConnectorAPI
-// surface compatibility (Wails binding contract). The confirm-each
-// modal flow was deleted alongside core/toolloop in the chat-migration
-// cutover; v1 alpha relies on Cedar policy gates instead. Always
-// returns an error so the frontend modal can render a helpful message
-// when bound — no dispatch path resolves through this method anymore.
-func (a *API) ResolveConfirm(_ context.Context, _, _ string) error {
-	return errors.New("llm: confirm-each is retired; use cedar policies to gate tool dispatch")
 }
 
 // UpdateProviderCredential writes a new plaintext API key for profileID

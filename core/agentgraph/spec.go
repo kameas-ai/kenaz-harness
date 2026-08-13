@@ -3,6 +3,7 @@ package agentgraph
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -101,6 +102,144 @@ type Node struct {
 	// DialOverrides lets a node override a dial value for the duration
 	// of its fire (FR-050). Validated against the known-dials list.
 	DialOverrides map[string]any `json:"dial_overrides,omitempty" yaml:"dial_overrides,omitempty"`
+
+	// Provenance records what this node instance actually DID, and is
+	// set only by the materialization projection (materialize.go,
+	// agentgraph-total-convergence-01PMGX01 WP12). An authored graph
+	// leaves it nil; it is `omitempty` on both wires, so an authored
+	// graph's YAML/JSON is byte-identical whether or not this field
+	// exists.
+	//
+	// This is what makes "a conversation is a graph" a data-model
+	// statement rather than a metaphor: a materialized node is the same
+	// Node type, with the same Kind, validated by the same Validate(),
+	// and carries one extra block saying which run fire produced it.
+	// The validator ignores it entirely — provenance can never make a
+	// graph valid or invalid.
+	Materialized *NodeMaterialization `json:"materialized,omitempty" yaml:"materialized,omitempty"`
+}
+
+// Error classifications a materialized node can carry
+// (agentgraph-total-convergence-01PMGX01 WP12, review finding F1).
+//
+// This vocabulary is CLOSED and that is the security property: the
+// materializer emits one of these constants or nothing, so no byte of
+// an error string — which routinely quotes file paths, URLs, and
+// argument values — can reach a shareable artifact. Adding a class is
+// fine; making one carry a fragment of the input is not.
+const (
+	MaterializedErrorNotFound         = "not_found"
+	MaterializedErrorPermissionDenied = "permission_denied"
+	MaterializedErrorTimeout          = "timeout"
+	MaterializedErrorCancelled        = "cancelled"
+	MaterializedErrorBudgetExceeded   = "budget_exceeded"
+	MaterializedErrorAuthFailed       = "auth_failed"
+	MaterializedErrorRateLimited      = "rate_limited"
+	MaterializedErrorInvalidInput     = "invalid_input"
+	MaterializedErrorUnavailable      = "unavailable"
+	MaterializedErrorNotImplemented   = "not_implemented"
+	MaterializedErrorOther            = "other"
+)
+
+// SpecProvenanceLibraryFallback is the Graph.SpecProvenance value for a
+// materialized run projected against the library file rather than the
+// resolved spec that actually ran.
+const SpecProvenanceLibraryFallback = "library_fallback"
+
+// NodeMaterialization is the executed-fire record attached to a materialized
+// node instance. Every field is derived from the run's EventLog — the
+// same stream `Manager.runTrace` (the trace surface) and
+// `Kernel.RebuildState` (resume) read — so materialization introduces no
+// second event stream and cannot drift from the trace.
+//
+// REDACTION CONTRACT: this struct never carries tool arguments, tool
+// output, or error text.
+//
+//   - `ArgsSummary` is toolloop.SummarizeArgs' structural summary
+//     ("2 arguments: path (string), limit (number)") over rune-capped
+//     key names: it renders key names and JSON kinds, never a value.
+//   - Results are a byte count and an error bit, never content.
+//   - Errors are a CLASSIFICATION drawn from a closed vocabulary
+//     (MaterializedError* below) plus counts and byte totals — never
+//     the error string. Error text is the leakiest field of the three:
+//     producers interpolate raw arguments into it (exec_dispatch.go
+//     quotes the failing tool call, os errors quote the path), so
+//     "bound and neutralize the text" would still ship `/etc/shadow`
+//     or a planted credential into a shareable artifact. Since every
+//     value this struct can emit for an error is one of a fixed set of
+//     constants, no input can traverse it by construction.
+//
+// The EventLog itself does persist raw args and raw error text, which
+// is exactly why the projection classifies rather than copies: a run
+// trace is a local debugging surface, and a materialized graph is a
+// shareable artifact that round-trips to YAML and can be saved into the
+// library. `StartSeq`/`EndSeq` join a node back to the trace rows that
+// hold the full detail, for whoever is entitled to see it.
+type NodeMaterialization struct {
+	// SourceNode is the authored node ID this instance is a fire of.
+	SourceNode string `json:"source_node,omitempty" yaml:"source_node,omitempty"`
+	// Instance is the 1-based ordinal of this fire among all fires of
+	// SourceNode in the run.
+	Instance int `json:"instance,omitempty" yaml:"instance,omitempty"`
+	// Iteration is the 1-based loop iteration the fire happened in, or
+	// 0 for a node that fired outside any Loop/Retry body.
+	Iteration int `json:"iteration,omitempty" yaml:"iteration,omitempty"`
+	// Container is the Loop/Retry node ID whose body this fire belongs
+	// to; empty outside a body.
+	Container string `json:"container,omitempty" yaml:"container,omitempty"`
+	// Status is one of: completed, error, skipped, not_reached,
+	// incomplete. `skipped` is a conditional-branch skip the kernel
+	// recorded (EventNodeSkipped); `not_reached` is a node the run
+	// never visited at all, materialized only because a surviving
+	// node-id reference (a decision's next_false, a router choice
+	// target) points at it.
+	Status string `json:"status,omitempty" yaml:"status,omitempty"`
+	// StartSeq / EndSeq are the EventLog sequence numbers bounding the
+	// fire. They are the join key back into the raw trace.
+	StartSeq int64 `json:"start_seq,omitempty" yaml:"start_seq,omitempty"`
+	EndSeq   int64 `json:"end_seq,omitempty" yaml:"end_seq,omitempty"`
+	// StartedAt / DurationMS are wall-clock, from the event rows.
+	StartedAt  time.Time `json:"started_at,omitempty" yaml:"started_at,omitempty"`
+	DurationMS int64     `json:"duration_ms,omitempty" yaml:"duration_ms,omitempty"`
+	// ErrorClass classifies the errors this fire recorded, as a
+	// comma-joined sorted set of MaterializedError* constants. Never
+	// error text — see the REDACTION CONTRACT above.
+	ErrorClass string `json:"error_class,omitempty" yaml:"error_class,omitempty"`
+	// ErrorCount is how many node_error events the fire recorded. A
+	// parallel tool fan-out can fail several calls at once and every
+	// one of them counts here, not just the first.
+	ErrorCount int `json:"error_count,omitempty" yaml:"error_count,omitempty"`
+	// ErrorBytes is the total length of the error text the fire
+	// produced. A size signal with no content.
+	ErrorBytes int `json:"error_bytes,omitempty" yaml:"error_bytes,omitempty"`
+
+	// ---- per-kind detail, all optional ----
+
+	// Tool / Server / CallID / ArgsSummary describe a single tool call.
+	// Set on a per-call instance materialized out of a tool_dispatch
+	// fan-out, and on a tool-archetype node's own fire.
+	Tool        string `json:"tool,omitempty" yaml:"tool,omitempty"`
+	Server      string `json:"server,omitempty" yaml:"server,omitempty"`
+	CallID      string `json:"call_id,omitempty" yaml:"call_id,omitempty"`
+	ArgsSummary string `json:"args_summary,omitempty" yaml:"args_summary,omitempty"`
+	// ResultBytes / ResultIsError summarise the tool result. Content is
+	// never recorded.
+	ResultBytes   int  `json:"result_bytes,omitempty" yaml:"result_bytes,omitempty"`
+	ResultIsError bool `json:"result_is_error,omitempty" yaml:"result_is_error,omitempty"`
+	// ToolCalls is the number of calls a tool_dispatch fire fanned out.
+	ToolCalls int `json:"tool_calls,omitempty" yaml:"tool_calls,omitempty"`
+
+	// Provider / Model / Tokens / CostUSD / FinishReason describe an
+	// llm_call the fire made.
+	Provider     string  `json:"provider,omitempty" yaml:"provider,omitempty"`
+	Model        string  `json:"model,omitempty" yaml:"model,omitempty"`
+	Tokens       int     `json:"tokens,omitempty" yaml:"tokens,omitempty"`
+	CostUSD      float64 `json:"cost_usd,omitempty" yaml:"cost_usd,omitempty"`
+	FinishReason string  `json:"finish_reason,omitempty" yaml:"finish_reason,omitempty"`
+
+	// Choice / ChoiceSource record a router fire's verdict.
+	Choice       string `json:"choice,omitempty" yaml:"choice,omitempty"`
+	ChoiceSource string `json:"choice_source,omitempty" yaml:"choice_source,omitempty"`
 }
 
 // NodeAttrs is the typed payload union. Each *Attrs type satisfies it
@@ -171,6 +310,22 @@ type Graph struct {
 	Budget       Budget   `json:"budget,omitempty" yaml:"budget,omitempty"`
 	// DialOverrides at graph scope (FR-050).
 	DialOverrides map[string]any `json:"dial_overrides,omitempty" yaml:"dial_overrides,omitempty"`
+
+	// SpecProvenance records HOW the spec behind a materialized graph
+	// was obtained (agentgraph-total-convergence-01PMGX01 WP12, review
+	// finding F2). Empty on authored graphs, and on a materialized run
+	// projected against the exact resolved spec that executed.
+	//
+	// `library_fallback` means the run's resolved spec was no longer
+	// available (evicted from the chat-run registry, or the process
+	// restarted) and the projection fell back to the library file the
+	// run_start event names. The TOPOLOGY is then only as accurate as
+	// the library file: per-run dial overrides and the routing-gate
+	// rewrite are unrecoverable, so a routed run can be projected as a
+	// classic one. Silently serving that as if it were the real thing
+	// is the failure this field exists to prevent — the viewer badges
+	// it and the graph description says so in prose.
+	SpecProvenance string `json:"spec_provenance,omitempty" yaml:"spec_provenance,omitempty"`
 
 	// AliasesSeen records every (old → new) deprecated kind name the
 	// load path rewrote while parsing this graph. Populated by

@@ -68,6 +68,11 @@ function mountWith(opts: MountOpts = {}) {
       getRunTrace,
       resume,
       cancelRun,
+      materializeRun: async (runID: string) => ({
+        id: `g__run_${runID}`,
+        scope: 'materialized' as const,
+        yaml: '',
+      }),
     },
   });
 
@@ -128,6 +133,20 @@ describe('RunView', () => {
     await wrapper.get('[data-testid="run-ask-submit"]').trigger('click');
     await flushPromises();
     expect(resume).toHaveBeenCalledWith('run-1', 'Alice');
+  });
+
+  // agentgraph-total-convergence-01PMGX01 WP12: the run's trace and the
+  // run's graph are two renderings of one recorded stream, so the trace
+  // view is where the graph view is reached from.
+  it('navigates to the materialized graph for the run', async () => {
+    const { wrapper } = mountWith();
+    await flushPromises();
+    pushMock.mockClear();
+    await wrapper.get('[data-testid="run-view-as-graph"]').trigger('click');
+    expect(pushMock).toHaveBeenCalledWith({
+      name: 'graph-materialized',
+      params: { runId: 'run-1' },
+    });
   });
 
   it('exposes a Cancel button while running', async () => {

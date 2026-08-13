@@ -1,64 +1,79 @@
-// Presets map the pre-existing 5-tier compaction dial (core/compaction's
-// CompactionAggressiveness: off/conservative/balanced/aggressive/maximal,
-// invoked from chat_runner.go's runPreSendCompaction) onto FR-041's
-// cascading CompactionConfig, so production kernel wiring can boot the
-// global layer with something that reproduces today's shipped behaviour
-// instead of FR-041's own SafeDefaults.
+// Presets map the five-tier compaction dial (off / conservative /
+// balanced / aggressive / maximal) onto FR-041's cascading
+// CompactionConfig. The dial is the user-facing control; this file is
+// where a tier becomes per-site configuration.
 //
-// SitePreCall and SitePostTool are disabled (Enabled: false)
-// in every tier preset, including "balanced" (ProductionDefaults). The
-// pre-send dial already performs all automatic context-shrinking on
-// persisted session history before the kernel ever runs; enabling the
-// kernel-side pre_call/post_tool sites in addition would double-compact
-// every real conversation the day this ships. The dial's tier is
-// preserved here as PreCallThreshold, which Pipeline.Run DOES now
-// evaluate against the model's ContextWindow — so a future WP that
-// retires the pre-send path can re-enable these sites without losing
-// the user's chosen aggressiveness, and the gate is already correct
-// when it does. See the Enabled comment below for the two hard
-// preconditions (tool-pair-aware trimming, and reconciling the two
-// compaction systems) that must land first.
+// HISTORY, BECAUSE THE POSTURE HERE HAS BEEN WRONG BEFORE.
+// compaction-convergence-01PMDL05 WP01 wired FR-041 into production but
+// set Enabled: false for SitePreCall AND SitePostTool at *every* tier,
+// leaving only SiteManual live. That was a defensible safe landing at
+// the time — the dial was still running as a pre-kernel pass
+// on the chat surface that this package could not see, so
+// enabling a kernel-side site would have compacted the same
+// conversation twice on the same turn. But it also meant the entire
+// automatic surface was configured and unreachable, which is the
+// "wired but default-off" shape agentgraph-total-convergence-01PMGX01
+// exists to eliminate.
 //
-// SiteManual is enabled at every tier (including "off"): it is the
-// explicit user/graph-author "compact now" trigger, a distinct feature
-// from the automatic dial, and today returns a hard error in
-// production because no Compactor is wired at all (see
-// exec_compute.go's compactExecutor). Wiring FR-041 in fixes that as a
-// byproduct.
+// WP08 removes the reason. There is no pre-kernel pass any more: the
+// dial runs as StrategySessionRewrite at SiteManual, reached from the
+// `compact` node that chat_default.yaml places between history_read and
+// the agent loop. With the second system gone, each site's posture can
+// finally be decided on its own merits:
+//
+//   - SiteManual  — ENABLED at every tier, strategy session_rewrite.
+//     This is the dial. "off" is enabled too: the off tier is not
+//     "don't run", it is "don't compact, and say so honestly when the
+//     session is genuinely full", and that decision is made inside the
+//     strategy where the tier semantics live.
+//
+//   - SitePreCall — ENABLED at every tier except "off", strategy
+//     drop_oldest, threshold from the tier. Both preconditions
+//     01PMDL05 recorded for this site are now met:
+//     (1) DropOldestStrategy became tool-pair aware — it trims in
+//     tool_use/tool_result atomic units (dropOldestUnits), so it can no
+//     longer strand a tool_result and trigger a hard provider rejection;
+//     (2) the two compaction systems are reconciled, which is this WP.
+//     A second gate sits in front of this site, but state it precisely,
+//     because an over-claim here is how a site ends up firing where
+//     nobody expected it: the growth watermark refuses the first
+//     pre-call visit of a run and admits later ones only once the live
+//     context has grown past the run's baseline — AND ONLY WHEN THE Env
+//     CARRIES ONE. A nil Env.AutoCompaction means no watermark and no
+//     gate. Both production paths arm one (the chat runner on the Env it
+//     builds, and EnvDeps.applyTo for every graph-authored run), so in
+//     the shipped harness the guarantee holds everywhere. A caller that
+//     constructs a bare Env and wires a Compactor onto it directly gets
+//     an ungated site, which is the documented meaning of nil and not an
+//     oversight — but it is also why this paragraph does not simply say
+//     "refused by construction".
+//
+//   - SitePostTool — DISABLED at every tier, and this one is honest
+//     rather than circular. The work this site was designed to do —
+//     bounding an oversized single tool result — is now done
+//     unconditionally and earlier by ToolResultCap at dispatch
+//     (core/agentgraph/tool_output_cap.go, applied in exec_dispatch.go
+//     before the bytes ever become a Message). Enabling this site would
+//     be a second, config-gated trim of already-capped bytes, and it
+//     would spend an LLM call to do it. If the cap is ever removed this
+//     decision must be revisited; while the cap exists, a per-tier
+//     toggle here would be a control that changes nothing.
 package compaction
 
-// PresetForTier maps a core/compaction dial tier name to an FR-041
-// CompactionConfig. Accepts the same string values as
-// core/compaction.CompactionAggressiveness ("off", "conservative",
-// "balanced", "aggressive", "maximal"); unknown values fall back to
-// "balanced", mirroring core/compaction.Tier's own default behaviour.
+import "github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
+
+// PresetForTier maps a dial tier name to an FR-041 CompactionConfig.
+// Accepts the tier strings the settings surface stores ("off",
+// "conservative", "balanced", "aggressive", "maximal"); unknown values
+// fall back to "balanced", mirroring the tier table's own default.
 func PresetForTier(tier string) CompactionConfig {
 	pre := SiteConfig{
-		// DISABLED by default, deliberately. Automatic compaction
-		// already happens: ChatRunner.runPreSendCompaction fires on
-		// every send (chat_runner.go:482), triggering at 80% of the
-		// model cap on the "balanced" default tier and using the real
-		// tokenizer. Enabling this kernel site as well would compact a
-		// second time, on the slice the pre-send pass just produced,
-		// with a different token estimate and a different context-window
-		// table — strictly worse than either alone.
-		//
-		// Two hard preconditions before this may ever default to true:
-		//  1. DropOldestStrategy must become tool_use/tool_result pair
-		//     aware. It trims front-to-back (out = out[1:]) with zero
-		//     knowledge of ToolCallID, so it can drop a tool_use and
-		//     strand its tool_result — which OpenAI-compat providers
-		//     reject outright (see llm_provider_adapter.go:265-271).
-		//     That is a hard request failure, not a quality regression.
-		//  2. The two systems must be reconciled — either one is
-		//     authoritative, or they share a trigger. Note also that
-		//     ProductionDefaults() is hardcoded to PresetForTier
-		//     ("balanced"), so the user's own aggressiveness dial
-		//     (including "off") does not reach this site at all.
-		//
-		// The threshold machinery below is real and correct; it is what
-		// makes this site safe to enable once the above are addressed.
-		Enabled:               false,
+		// Enabled everywhere except "off". "off" means the user asked
+		// for no automatic compaction at all; honouring that at the
+		// automatic site is the whole point of the tier, and the
+		// session-full path at SiteManual is what tells them when the
+		// choice has consequences.
+		Enabled:               tier != "off",
 		Strategy:              StrategyDropOldest,
 		PreCallThreshold:      preCallThresholdForTier(tier),
 		MaxRecursionDepth:     DefaultMaxRecursionDepth,
@@ -68,6 +83,9 @@ func PresetForTier(tier string) CompactionConfig {
 	pre.MarkAll()
 
 	post := SiteConfig{
+		// See the package comment: ToolResultCap already bounds tool
+		// results unconditionally at dispatch. This is not a deferral —
+		// there is no work left for this site to do.
 		Enabled:               false,
 		Strategy:              StrategyDropOldest,
 		ToolResultMaxBytes:    16 * 1024,
@@ -78,8 +96,13 @@ func PresetForTier(tier string) CompactionConfig {
 	post.MarkAll()
 
 	manual := SiteConfig{
+		// The dial itself. Enabled at every tier including "off" —
+		// the tier's meaning is resolved inside the strategy, which is
+		// the only place that can distinguish "don't compact" from
+		// "don't compact AND the session is over cap, so fail honestly".
 		Enabled:               true,
-		Strategy:              StrategySummary,
+		Strategy:              StrategySessionRewrite,
+		PreCallThreshold:      preCallThresholdForTier(tier),
 		MaxRecursionDepth:     DefaultMaxRecursionDepth,
 		DropOldestKeepRecentN: 2,
 		SemanticClusterCount:  4,
@@ -93,35 +116,68 @@ func PresetForTier(tier string) CompactionConfig {
 	}}
 }
 
-// preCallThresholdForTier mirrors core/compaction.Tier's TriggerPct
-// numerics without importing core/compaction (that package already
-// imports core/agentgraph/... indirectly via other production wiring;
-// keeping this package dependency-free of the dial engine avoids an
-// import cycle risk and keeps the two systems' coupling to this one
-// string-keyed function). The values are duplicated intentionally —
-// see core/compaction/policy.go for the source of truth.
+// rollingPreCallThreshold is the pre-call threshold for the one tier the
+// tier table cannot supply a trigger percentage for.
+//
+// compactionpolicy.Tier reports ModeRolling for "maximal" with a zero
+// TriggerPct, and that zero is meaningful rather than missing: rolling
+// mode runs the session rewrite on *every* turn, so there is no
+// percent-of-cap gate to express. The automatic pre-call site is a
+// different mechanism that still needs a numeric, and 0.50 is the value
+// it has always used — the most aggressive threshold of any tier, which
+// is the right posture underneath a tier whose whole premise is
+// compacting constantly.
+//
+// This constant is NOT a duplicate of anything in the tier table. It is
+// the single numeric the table genuinely does not carry.
+const rollingPreCallThreshold = 0.50
+
+// preCallThresholdForTier is the fraction of the model's context window
+// above which the automatic pre-call site compacts.
+//
+// It reads the tier table (core/compactionpolicy) rather than restating
+// it. Until WP10a this function held a hand-copied second copy of
+// 0.95/0.80/0.60, because the tier table lived in the session
+// compaction package and this package could not import it without a
+// cycle — the session layer's wiring reaches session storage, and this
+// package is consumed by the kernel. WP10a extracted the table to
+// core/compactionpolicy, a leaf with no imports at all, which both
+// packages can depend on. There is now one place the trigger
+// percentages are written down.
+//
+// The mapping from a tier's mode to a pre-call threshold:
+//
+//   - ModeNone ("off") → 0. The user asked for no automatic compaction;
+//     the site is disabled at this tier anyway (see PresetForTier), so
+//     the threshold is moot, but zero is the honest value.
+//   - ModeThreshold (conservative / balanced / aggressive) → the tier's
+//     own TriggerPct, read straight from the table.
+//   - ModeRolling ("maximal") → rollingPreCallThreshold; see above for
+//     why the table has nothing to offer here.
+//
+// Unknown tier strings need no case of their own: compactionpolicy.Tier
+// already falls back to balanced, so they land on 0.80 through the
+// ModeThreshold branch.
 func preCallThresholdForTier(tier string) float64 {
-	switch tier {
-	case "off":
+	params := compactionpolicy.Tier(compactionpolicy.CompactionAggressiveness(tier))
+	switch params.Mode {
+	case compactionpolicy.ModeNone:
 		return 0
-	case "conservative":
-		return 0.95
-	case "aggressive":
-		return 0.60
-	case "maximal":
-		return 0.50
-	case "balanced":
-		return 0.80
+	case compactionpolicy.ModeRolling:
+		return rollingPreCallThreshold
 	default:
-		return 0.80
+		return params.TriggerPct
 	}
 }
 
 // ProductionDefaults is the global-layer CompactionConfig production
-// kernel construction boots with. It reproduces today's default dial
-// tier ("balanced") in FR-041 terms: pre_call/post_tool dormant
-// (the pre-send dial remains authoritative for automatic compaction),
-// manual enabled. See mission compaction-convergence-01PMDL05 WP01.
+// kernel construction boots with: the shipped default dial tier
+// ("balanced") expressed in FR-041 terms.
+//
+// The per-session tier the user actually chose reaches the pipeline
+// through the session-rewrite strategy the chat surface binds per run,
+// which reads the live settings value on every turn. This global layer
+// is the floor for runs that have no chat session behind them.
 func ProductionDefaults() CompactionConfig {
 	return PresetForTier("balanced")
 }

@@ -5,6 +5,7 @@ extends: write
 display_name: Artifact
 description: "Terminal output node (FR-058). Replaces ad-hoc end-of-graph dumps."
 executor: agentgraph.ExecArtifact
+dispatch: graph
 ports:
   inputs:
     - { name: in, type: any }

@@ -6,6 +6,7 @@ display_name: Planner
 description: "Decomposes a task into a plan before downstream execution (FR-031)."
 aliases: [plan]
 executor: agentgraph.ExecPlanner
+dispatch: graph
 ports:
   inputs:
     - { name: task, type: text, required: true }

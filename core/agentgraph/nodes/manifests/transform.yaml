@@ -5,6 +5,7 @@ extends: compute
 display_name: Transform
 description: "Pure data transformation; no model/tool budget consumption (FR-033)."
 executor: agentgraph.ExecTransform
+dispatch: graph
 ports:
   inputs:
     - { name: in, type: any, required: true }

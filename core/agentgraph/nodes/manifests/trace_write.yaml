@@ -5,6 +5,7 @@ extends: write
 display_name: Trace Write
 description: "Emits a structured trace event into the EventLog (FR-056)."
 executor: agentgraph.ExecTraceWrite
+dispatch: graph
 ports:
   inputs:
     - { name: in, type: any }

@@ -1,3 +1,10 @@
+# WIRED (agentgraph-total-convergence-01PMGX01 WP11c). This kind was
+# fully implemented and referenced by ZERO graphs from
+# autonomy-recovery-runtime-01PMDL03 WP04 until Phase 5 — the header
+# here used to carry a deferred-wiring directive pointing at
+# agentic-turn-routing-01PMAG01's open question 2. chat_default.yaml's
+# `recover` node is the answer: the router's replan choice routes into
+# it when tool_dispatch's doom-loop guard trips.
 schema_version: "1"
 manifest_version: "1.0.0"
 id: escalation_ladder
@@ -5,6 +12,7 @@ extends: control
 display_name: Escalation Ladder
 description: "Runtime-orchestrated recovery: on repeated failure walks retry (same model) -> escalate (stronger model) -> replan -> ask (human) automatically, instead of requiring a graph author to hand-wire the progression node-by-node (autonomy-recovery-runtime-01PMDL03 WP04)."
 executor: agentgraph.ExecEscalationLadder
+dispatch: graph
 ports:
   inputs:
     - { name: trigger, type: any }

@@ -22,7 +22,11 @@ func TestCatalogGetListArchetypes(t *testing.T) {
 	if !sort.StringsAreSorted(ids) {
 		t.Errorf("IDs not sorted: %v", ids)
 	}
-	wantArchetypes := []string{"compute", "control", "state", "read", "write", "marker"}
+	// `tool` joined the archetype layer in
+	// agentgraph-total-convergence-01PMGX01 WP04: the old generic `tool`
+	// KIND became _archetype.tool.yaml, the shared contract every
+	// builtin tool node extends.
+	wantArchetypes := []string{"compute", "control", "state", "read", "write", "marker", "tool"}
 	for _, id := range wantArchetypes {
 		if _, err := cat.Get(id); err != nil {
 			t.Errorf("Get(%q): %v", id, err)
@@ -42,12 +46,12 @@ func TestCatalogGetListArchetypes(t *testing.T) {
 	}
 
 	// Kinds() returns the 34 callable kinds shipped after
-	// autonomy-recovery-runtime-01PMDL03 WP04 added the
-	// `escalation_ladder` control node (was 33 before).
+	// agentgraph-total-convergence-01PMGX01 WP04 retired the generic
+	// `tool` kind in favour of the `tool` archetype (was 34 before).
 	kinds := cat.Kinds()
 	const wantCallable = 34
 	if len(kinds) != wantCallable {
-		t.Errorf("expected %d kinds (WP04+WP05+session_write+tool_dispatch+sleep+subagent_dispatch+escalation_ladder), got %d", wantCallable, len(kinds))
+		t.Errorf("expected %d kinds (WP04+WP05+session_write+tool_dispatch+sleep+subagent_dispatch+escalation_ladder+router, minus the retired generic `tool` kind), got %d", wantCallable, len(kinds))
 	}
 
 	// IsCallable returns false for archetypes and unknown IDs.
@@ -61,12 +65,14 @@ func TestCatalogGetListArchetypes(t *testing.T) {
 	}
 
 	// ListByCategory returns archetypes + every kind whose category
-	// matches. WP04: 1 archetype + 13 callable compute kinds = 14
-	// (10 from WP04 + tool_dispatch from tool-dispatch-node mission +
-	// sleep from builtin-tools-search-and-elicitation-01KZNP3D WP04 +
-	// subagent_dispatch from branch-subagent-interactive-01KZNP3B WP03).
-	if got := cat.ListByCategory(nodes.CategoryCompute); len(got) != 14 {
-		t.Errorf("ListByCategory(compute): got %d, want 14 (1 archetype + 13 kinds)", len(got))
+	// matches. 2 archetypes (compute + tool, which extends it) + 13
+	// callable compute kinds = 15. The count was unchanged across
+	// agentgraph-total-convergence-01PMGX01 WP04 because the generic
+	// `tool` kind became the `tool` archetype (one moved layer, not one
+	// added or removed entry); WP11a adds `router`, a genuinely new
+	// compute kind, taking 12 -> 13.
+	if got := cat.ListByCategory(nodes.CategoryCompute); len(got) != 15 {
+		t.Errorf("ListByCategory(compute): got %d, want 15 (2 archetypes + 13 kinds)", len(got))
 	}
 	// state archetype + read/write/marker archetypes + 12 callable state
 	// kinds (8 from WP04 + read_file/read_bash_output/write_file from

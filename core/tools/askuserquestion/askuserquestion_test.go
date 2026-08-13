@@ -6,17 +6,18 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/kameas-ai/kenaz-harness/core/elicitation"
 	"github.com/kameas-ai/kenaz-harness/core/tools/askuserquestion"
 )
 
 // fakeDelegate implements Delegate for tests.
 type fakeDelegate struct {
-	result askuserquestion.AskResult
+	answer elicitation.Answer
 	err    error
 }
 
-func (f *fakeDelegate) OpenDialog(_ context.Context, _ askuserquestion.AskArgs) (askuserquestion.AskResult, error) {
-	return f.result, f.err
+func (f *fakeDelegate) OpenDialog(_ context.Context, _ elicitation.Question) (elicitation.Answer, error) {
+	return f.answer, f.err
 }
 
 func mustMarshal(v any) json.RawMessage {
@@ -132,9 +133,8 @@ func TestCall_DisabledTool(t *testing.T) {
 }
 
 func TestCall_DelegateSuccess(t *testing.T) {
-	answerJSON := json.RawMessage(`"hello"`)
 	delegate := &fakeDelegate{
-		result: askuserquestion.AskResult{Answer: answerJSON, Cancelled: false},
+		answer: elicitation.JSONAnswer(json.RawMessage(`"hello"`)),
 	}
 	tool := askuserquestion.New(askuserquestion.Options{Delegate: delegate})
 	args := mustMarshal(map[string]any{
@@ -162,9 +162,8 @@ func TestCall_DelegateSuccess(t *testing.T) {
 }
 
 func TestCall_DelegateCancelled(t *testing.T) {
-	answerJSON := json.RawMessage("null")
 	delegate := &fakeDelegate{
-		result: askuserquestion.AskResult{Answer: answerJSON, Cancelled: true},
+		answer: elicitation.Answer{Cancelled: true},
 	}
 	tool := askuserquestion.New(askuserquestion.Options{Delegate: delegate})
 	args := mustMarshal(map[string]any{

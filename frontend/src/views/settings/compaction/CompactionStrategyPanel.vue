@@ -259,7 +259,7 @@ const MOCK_CONTEXT_CAP = 16000;
  * Derived preview: given the effective cascade (tier + strategy), simulate
  * which turns would be compacted on the next pre_call trigger.
  *
- * Rules applied (mirrors core/compaction policy.go):
+ * Rules applied (mirrors core/compactionpolicy):
  *  - off    → nothing compacted
  *  - rolling → all but the last `recentN` are folded (use recentN=2 for preview)
  *  - threshold → if usagePct >= triggerPct, compact oldest `summarizePct` fraction

@@ -7,6 +7,7 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph/internal/recorders"
+	"github.com/kameas-ai/kenaz-harness/core/elicitation"
 )
 
 // ── LLMProvider ───────────────────────────────────────────────────────────────
@@ -319,7 +320,7 @@ func TestTraceSink_RecordsSpan(t *testing.T) {
 
 func TestAskBus_RecordsPending(t *testing.T) {
 	r := &recorders.AskBus{}
-	if err := r.Pending(context.Background(), "run-1", "node-1", "What is 2+2?"); err != nil {
+	if err := r.Pending(context.Background(), "run-1", "node-1", elicitation.Question{Text: "What is 2+2?"}); err != nil {
 		t.Fatalf("Pending: %v", err)
 	}
 	r.RequirePendingQuestion(t, "What is 2+2?")
@@ -332,8 +333,8 @@ func TestAskBus_LookupAnswer(t *testing.T) {
 	if !ok {
 		t.Fatal("LookupAnswer ok=false, want true")
 	}
-	if ans != "4" {
-		t.Errorf("answer = %q, want %q", ans, "4")
+	if ans.Text != "4" {
+		t.Errorf("answer = %q, want %q", ans.Text, "4")
 	}
 	r.RequireLookupCalled(t)
 }

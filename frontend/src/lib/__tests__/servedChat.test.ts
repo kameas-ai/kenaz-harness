@@ -403,4 +403,60 @@ describe('useSession: truncation is visible, never silent', () => {
 
     wrapper.unmount();
   });
+
+  // agentgraph-total-convergence-01PMGX01 WP17. `chat:overflow-recovery`
+  // was emitted by the backend with the comment "so the surface can show
+  // the user what happened" and had NO subscriber anywhere — the multi-
+  // second compact-and-redrive pause was indistinguishable from a hang.
+  // It is also in core/serve/wsstream.go's passthroughTopics, so this
+  // works in served mode too rather than being a desktop-only surface.
+  it('records a chat:overflow-recovery notice so the compaction pause is explained', async () => {
+    const { defineComponent, h, ref } = await import('vue');
+    const { mount } = await import('@vue/test-utils');
+    const { useSession } = await import('@/lib/useSession');
+    const { provideFakeClient } = await import('@/lib/harnessClientContext');
+    const { dispatchServedEvent } = await import('@/lib/useServedEvents');
+
+    let captured: ReturnType<typeof useSession> | null = null;
+    const Comp = defineComponent({
+      setup() {
+        captured = useSession(ref('s1'));
+        return () => h('div');
+      },
+    });
+    const wrapper = mount(Comp, {
+      global: {
+        plugins: [
+          {
+            install(app) {
+              provideFakeClient(app, {});
+            },
+          },
+        ],
+      },
+    });
+    await Promise.resolve();
+
+    expect(captured!.overflowRecovery.value).toBeNull();
+
+    dispatchServedEvent('chat:overflow-recovery', {
+      sub_id: 'sub-1',
+      session_id: 's1',
+      attempt: 1,
+      budget: 1,
+    });
+
+    expect(captured!.overflowRecovery.value?.attempt).toBe(1);
+
+    // Another session's recovery must not surface here.
+    dispatchServedEvent('chat:overflow-recovery', {
+      sub_id: 'sub-9',
+      session_id: 'other-session',
+      attempt: 2,
+      budget: 2,
+    });
+    expect(captured!.overflowRecovery.value?.attempt).toBe(1);
+
+    wrapper.unmount();
+  });
 });

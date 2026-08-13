@@ -72,6 +72,7 @@ func (memoryExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs 
 		if err != nil {
 			return res, fmt.Errorf("memory: node %q write: %w", node.ID, err)
 		}
+		// wiring:deferred(no reader found for the written chunk's id — deduped (below) is the only field a downstream node/YAML condition currently keys off; surfaced by check-output-ports.sh, wiring-integrity-01PMAG04 WP05)
 		res.Outputs["chunk_id"] = id
 		res.Outputs["deduped"] = deduped
 		_ = res.Events.AppendKind(env.RunID, node.ID, EventMemoryWrite, map[string]any{

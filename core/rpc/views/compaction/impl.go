@@ -8,7 +8,7 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	corecompaction "github.com/kameas-ai/kenaz-harness/core/agentgraph/compaction"
-	sessioncompaction "github.com/kameas-ai/kenaz-harness/core/compaction"
+	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
 )
 
 // API is the concrete CompactionAPI.
@@ -117,9 +117,9 @@ func (a *API) TriggerManualCompaction(ctx context.Context, sessionID string, opt
 		customGraph = g
 	}
 	req := corecompaction.CompactRequest{
-		RunID: "manual:" + sessionID,
-		Scope: scope,
-		Site:  corecompaction.SiteManual,
+		RunID:    "manual:" + sessionID,
+		Scope:    scope,
+		Site:     corecompaction.SiteManual,
 		Override: corecompaction.Strategy(opts.Strategy),
 		Opts: corecompaction.CompactOpts{
 			DropOldestKeepRecentN: opts.DropOldestKeepRecentN,
@@ -158,7 +158,7 @@ func (a *API) ListCustomStrategies(ctx context.Context) ([]CustomStrategy, error
 // compaction-aggressiveness dial (mission
 // compaction-strategy-ui-01KQ8TDI §2.2 / §2.9).
 //
-// The numerics come from core/compaction.Tier() so the engine and UI
+// The numerics come from core/compactionpolicy.Tier() so the engine and UI
 // share a single source of truth — the descriptions are static copy
 // from plan §2.2.
 //
@@ -170,43 +170,43 @@ func (a *API) GetTierExplain(_ context.Context) ([]TierExplain, error) {
 	return tierExplainRows(), nil
 }
 
-// tierExplainRows builds the five-row payload from core/compaction.Tier
+// tierExplainRows builds the five-row payload from core/compactionpolicy.Tier
 // + the locked descriptions. Centralised so the binding test and the
 // view test can share a fixture without a separate helper.
 func tierExplainRows() []TierExplain {
 	type row struct {
-		tier        sessioncompaction.CompactionAggressiveness
+		tier        compactionpolicy.CompactionAggressiveness
 		label       string
 		description string
 	}
 	rows := []row{
 		{
-			tier:  sessioncompaction.AggressivenessOff,
+			tier:  compactionpolicy.AggressivenessOff,
 			label: "Off",
 			description: "Never compact. Hitting the context cap will fail honestly with a " +
 				"'session full' error. Recommended only when you want full transparency " +
 				"about hitting the cap.",
 		},
 		{
-			tier:  sessioncompaction.AggressivenessConservative,
+			tier:  compactionpolicy.AggressivenessConservative,
 			label: "Conservative",
 			description: "Compact only when you've used 95% of the context window, summarising " +
 				"the oldest 20% of turns. Preserves the most history.",
 		},
 		{
-			tier:  sessioncompaction.AggressivenessBalanced,
+			tier:  compactionpolicy.AggressivenessBalanced,
 			label: "Balanced (default)",
 			description: "Compact at 80% of the context window, summarising the oldest 30% of " +
 				"turns. The recommended sweet spot for long sessions.",
 		},
 		{
-			tier:  sessioncompaction.AggressivenessAggressive,
+			tier:  compactionpolicy.AggressivenessAggressive,
 			label: "Aggressive",
 			description: "Compact at 60% of the context window, summarising the oldest 40% of " +
 				"turns. Long sessions stay cheap, with more nuance lost to summary.",
 		},
 		{
-			tier:  sessioncompaction.AggressivenessMaximal,
+			tier:  compactionpolicy.AggressivenessMaximal,
 			label: "Maximal",
 			description: "Continuous rolling summary on every turn. Best for 'infinite chat' UX " +
 				"where session length matters more than per-turn fidelity. Pays for an " +
@@ -216,7 +216,7 @@ func tierExplainRows() []TierExplain {
 
 	out := make([]TierExplain, len(rows))
 	for i, r := range rows {
-		params := sessioncompaction.Tier(r.tier)
+		params := compactionpolicy.Tier(r.tier)
 		out[i] = TierExplain{
 			Aggressiveness: string(r.tier),
 			Label:          r.label,
@@ -232,13 +232,13 @@ func tierExplainRows() []TierExplain {
 // modeString renders a CompactionMode integer as the wire-stable string
 // the frontend expects ("none" | "threshold" | "rolling"). Centralised
 // so any future mode addition has a single mapping point.
-func modeString(m sessioncompaction.CompactionMode) string {
+func modeString(m compactionpolicy.CompactionMode) string {
 	switch m {
-	case sessioncompaction.ModeNone:
+	case compactionpolicy.ModeNone:
 		return "none"
-	case sessioncompaction.ModeThreshold:
+	case compactionpolicy.ModeThreshold:
 		return "threshold"
-	case sessioncompaction.ModeRolling:
+	case compactionpolicy.ModeRolling:
 		return "rolling"
 	default:
 		return "none"

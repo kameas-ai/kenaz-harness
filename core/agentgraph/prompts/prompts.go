@@ -10,6 +10,7 @@ import (
 	_ "embed"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
@@ -43,11 +44,15 @@ func DefaultBaseConstitution() string {
 // here alters behaviour for every user on every turn.
 //
 // A non-nil tmpl with a registered Format (e.g. "xml") selects a
-// per-family renderer instead — see variantRenderer. The real
-// per-family template content, ordering, and attention placement
-// (tmpl.AttentionPlacement) are later WPs of this mission (02/04);
-// this WP only wires the mechanism plus one illustrative variant so a
-// profile can prove it takes effect.
+// per-family renderer instead — see variantRenderer. When
+// tmpl.AttentionPlacement is also set, applyAttentionPlacement (WP02)
+// anchors the highest-priority part at both the start and end of the
+// composed prompt — off by default, so an un-profiled or
+// non-opted-in model's output is unaffected. The real per-family
+// template *content* remains later work (a possible WP04 few-shot/
+// prefill mechanism); this package only wires the rendering/placement
+// mechanism plus one illustrative XML variant so a profile can prove
+// it takes effect.
 func Compose(tmpl *corellm.PromptTemplateRef, parts ...string) string {
 	kept := make([]string, 0, len(parts))
 	for _, p := range parts {
@@ -55,12 +60,79 @@ func Compose(tmpl *corellm.PromptTemplateRef, parts ...string) string {
 			kept = append(kept, trimmed)
 		}
 	}
+	var composed string
 	if tmpl != nil {
 		if render := variantRenderer(tmpl.Format); render != nil {
-			return render(kept)
+			composed = render(kept)
+		} else {
+			composed = strings.Join(kept, "\n\n")
+		}
+	} else {
+		composed = strings.Join(kept, "\n\n")
+	}
+	if tmpl != nil && tmpl.AttentionPlacement {
+		composed = applyAttentionPlacement(composed, kept)
+	}
+	return composed
+}
+
+// attentionPlacementMaxChars bounds the token cost of the recency-anchor
+// duplicate applyAttentionPlacement appends. Attention placement should
+// reinforce a short, high-priority directive, not double the whole
+// prompt — an opted-in profile must not silently inflate every call's
+// context by the full first part. ~4 chars/token, so 480 chars is
+// roughly 120 tokens (spec §4/§5: "token cost bounded").
+const attentionPlacementMaxChars = 480
+
+// applyAttentionPlacement is the WP02 primacy/recency transform: it
+// anchors the first surviving part — the highest-priority instruction
+// by construction, since callers order parts most-important-first (see
+// exec_compute.go's composePrompt call sites: graph base, then node
+// role) — at *both* ends of the composed prompt. It is already at the
+// start (primacy) by virtue of being kept[0]; this appends a bounded
+// duplicate at the end (recency), since models attend more to the start
+// and end of a context window than the middle.
+//
+// Off unless tmpl.AttentionPlacement is true (profile opt-in, spec §4:
+// "off by default"). A composed empty string or an empty kept slice is
+// returned unchanged — nothing to anchor.
+func applyAttentionPlacement(composed string, kept []string) string {
+	if composed == "" || len(kept) == 0 || kept[0] == "" {
+		return composed
+	}
+	reminder := truncateForAttention(kept[0], attentionPlacementMaxChars)
+	return composed + "\n\n" + "[Reminder — see above]\n" + reminder
+}
+
+// truncateForAttention bounds s to maxChars bytes, breaking at the last
+// whitespace boundary at or before the limit so the reminder doesn't
+// end mid-word. s shorter than maxChars is returned unchanged.
+//
+// s[:maxChars] can land mid-rune (maxChars is a byte offset, not a rune
+// count) — but that slice is only fed to LastIndexAny as a search
+// haystack, never returned: every byte LastIndexAny can match (space,
+// \n, \t) is single-byte ASCII, so a found index always sits on a rune
+// boundary regardless of how s[:maxChars] itself was cut. The corrupted
+// bytes, if any, live past the found index and are never included in
+// the result.
+//
+// When no whitespace boundary exists in the first maxChars bytes (a
+// long CJK/Cyrillic run, a base64 blob, a long URL), LastIndexAny
+// returns -1 and cut falls back to the raw byte offset maxChars — which
+// itself can land mid-rune. Walk it back to the nearest rune boundary
+// so s[:cut] is never invalid UTF-8.
+func truncateForAttention(s string, maxChars int) string {
+	if len(s) <= maxChars {
+		return s
+	}
+	cut := strings.LastIndexAny(s[:maxChars], " \n\t")
+	if cut <= 0 {
+		cut = maxChars
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
 		}
 	}
-	return strings.Join(kept, "\n\n")
+	return strings.TrimRight(s[:cut], " \n\t") + " …"
 }
 
 // variantRenderer looks up the per-family renderer registered for a
@@ -85,9 +157,9 @@ func variantRenderer(format string) func([]string) string {
 // This is the illustrative XML-tagged variant the spec calls for (e.g.
 // for a profile that opts an Anthropic-family model into it via
 // PromptTemplateRef.Format=="xml"); the real per-family template
-// content is later-WP work (02/04), so the tagging here is
-// intentionally minimal — it exists to prove the variant-selection
-// mechanism, not to be the final XML shaping.
+// content is later work, so the tagging here is intentionally minimal
+// — it exists to prove the variant-selection mechanism, not to be the
+// final XML shaping.
 func renderXMLSections(parts []string) string {
 	sections := make([]string, 0, len(parts))
 	for i, p := range parts {

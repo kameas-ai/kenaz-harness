@@ -1,0 +1,17 @@
+# I2 allowlist — manifest `executor:` fields that do not match the
+# codebase's `agentgraph.Exec` + PascalCase(kind) naming convention
+# (and/or have no registered executor). Spec:
+# kitty-specs/agentgraph-total-convergence-01PMGX01/spec.md §1.1, §6 I2.
+# Enforced by core/agentgraph/convergence_gates_test.go
+# TestConvergenceI2_ManifestExecutorNamesRegisteredSymbol — see that
+# test's doc comment for why this is a naming-convention check rather
+# than a literal Go-symbol-existence check.
+#
+# EMPTY — drained by Phase 2 (`feat(agentgraph): WP02+WP04 —
+# _archetype.tool.yaml + builtin tools as manifest kinds`). Both entries
+# were sleep.yaml and subagent_dispatch.yaml declaring the shared
+# placeholder `agentgraph.ExecBuiltinTool`; they now declare
+# `agentgraph.ExecSleep` / `agentgraph.ExecSubagentDispatch` and both
+# kinds have registered executors.
+#
+# Format: one NodeKind value (the manifest `id:`) per line.

@@ -3,7 +3,7 @@ package llm
 import (
 	"reflect"
 
-	"github.com/kameas-ai/kenaz-harness/core/compaction"
+	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
 )
 
 // ModelProfile is the versioned, hot-swappable *behavioral* artifact for a
@@ -61,7 +61,7 @@ type ModelProfile struct {
 
 	// Context carries the context-window / compaction policy this model
 	// should run under. Aggressiveness reuses
-	// core/compaction.CompactionAggressiveness directly (the tier table's
+	// core/compactionpolicy.CompactionAggressiveness directly (the tier table's
 	// single source of truth) rather than a parallel enum.
 	Context *ContextPolicy `json:"context,omitempty" yaml:"context,omitempty"`
 
@@ -140,11 +140,11 @@ type ToolDialectConfig struct {
 // profile prescribes.
 type ContextPolicy struct {
 	// Aggressiveness selects the compaction tier, reusing
-	// core/compaction.CompactionAggressiveness directly rather than a
+	// core/compactionpolicy.CompactionAggressiveness directly rather than a
 	// parallel enum. Empty means "session/app default" (today's
-	// behavior — compaction.Tier's own fallback to "balanced" applies
+	// behavior — compactionpolicy.Tier's own fallback to "balanced" applies
 	// unchanged when a caller reads this field as unset).
-	Aggressiveness compaction.CompactionAggressiveness `json:"aggressiveness,omitempty" yaml:"aggressiveness,omitempty"`
+	Aggressiveness compactionpolicy.CompactionAggressiveness `json:"aggressiveness,omitempty" yaml:"aggressiveness,omitempty"`
 	// ContextWindowOverride optionally overrides the model's advertised
 	// context window (tokens) for compaction trigger math — e.g. to
 	// reserve headroom below the capability catalog's window. Zero
