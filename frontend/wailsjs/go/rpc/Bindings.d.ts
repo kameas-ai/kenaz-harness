@@ -325,6 +325,8 @@ export function Graph_CancelRun(arg1:string):Promise<void>;
 
 export function Graph_DeleteGraph(arg1:string):Promise<void>;
 
+export function Graph_CheckEdge(arg1:string,arg2:agentgraph.EdgeRef):Promise<agentgraph.EdgeCheckResult>;
+
 export function Graph_GetRunStatus(arg1:string):Promise<agentgraph.RunStatus>;
 
 export function Graph_GetRunTrace(arg1:string,arg2:number):Promise<Array<agentgraph.RunTraceEvent>>;

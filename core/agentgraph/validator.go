@@ -373,34 +373,15 @@ func (v *validator) checkEdges(g Graph, idx map[string]*Node) {
 	}
 	inputsCovered := make(map[sig]struct{})
 	for ei, e := range g.Edges {
-		fromNode, fromOK := idx[e.From.Node]
-		toNode, toOK := idx[e.To.Node]
-		if !fromOK {
-			v.addf("port: edge #%d: from-node %q does not exist", ei, e.From.Node)
+		// The per-edge rules live in edgecheck.go so the drag-time
+		// `CheckEdge` RPC and this save-time pass cannot drift
+		// (visual-graph-authoring-01PMUX01 WP03). `resolved` is false
+		// when an endpoint or port was missing, in which case the edge
+		// covers no input port.
+		issues, resolved := edgePortIssues(idx, fmt.Sprintf("edge #%d", ei), e)
+		v.errs.Issues = append(v.errs.Issues, issues...)
+		if !resolved {
 			continue
-		}
-		if !toOK {
-			v.addf("port: edge #%d: to-node %q does not exist", ei, e.To.Node)
-			continue
-		}
-		_, fromOuts := portSurface(fromNode)
-		toIns, _ := portSurface(toNode)
-		fromPort, fromPortOK := lookupPort(fromOuts, e.From.Port)
-		toPort, toPortOK := lookupPort(toIns, e.To.Port)
-		if !fromPortOK {
-			v.addf("port: edge #%d: node %q has no output port %q", ei, e.From.Node, e.From.Port)
-			continue
-		}
-		if !toPortOK {
-			v.addf("port: edge #%d: node %q has no input port %q", ei, e.To.Node, e.To.Port)
-			continue
-		}
-		if !fromPort.Type.Compatible(toPort.Type) {
-			v.addf("port: edge #%d: type mismatch %s.%s(%s) → %s.%s(%s)",
-				ei,
-				e.From.Node, e.From.Port, fromPort.Type,
-				e.To.Node, e.To.Port, toPort.Type,
-			)
 		}
 		inputsCovered[sig{nodeID: e.To.Node, port: e.To.Port}] = struct{}{}
 	}
@@ -599,26 +580,11 @@ func (v *validator) checkDecisionRouting(g Graph, idx map[string]*Node) {
 		if a.NextTrue != "" && a.NextTrue == a.NextFalse {
 			v.addf("schema: node %q (decision): next_true and next_false both name %q — a decision that routes both verdicts to the same node is not a decision", n.ID, a.NextTrue)
 		}
-		// Port edges must agree with the attrs. Only the canonical
-		// routing ports are checked; edges off `verdict` / `next` /
-		// author-declared extras are audit surfaces, not routes.
+		// Port edges must agree with the attrs. The rule itself lives in
+		// edgecheck.go's decisionEdgeIssues so the drag-time RPC applies
+		// the identical check (WP03).
 		for _, e := range g.Edges {
-			if e.From.Node != n.ID {
-				continue
-			}
-			var want, attr string
-			switch e.From.Port {
-			case "true":
-				want, attr = a.NextTrue, "next_true"
-			case "false":
-				want, attr = a.NextFalse, "next_false"
-			default:
-				continue
-			}
-			if want != "" && e.To.Node != want {
-				v.addf("schema: node %q (decision): edge from port %q targets %q but %s names %q — the kernel routes on both, so they must agree",
-					n.ID, e.From.Port, e.To.Node, attr, want)
-			}
+			v.errs.Issues = append(v.errs.Issues, decisionEdgeIssues(n.ID, a, e)...)
 		}
 	}
 }
@@ -681,22 +647,10 @@ func (v *validator) checkRouterRouting(g Graph, idx map[string]*Node) {
 			}
 		}
 		// Port edges must agree with the menu, mirroring the decision
-		// rule: an edge leaving a port named for a choice must go where
-		// that choice says it goes.
+		// rule. Shared with the drag-time RPC via routerEdgeIssues
+		// (WP03).
 		for _, e := range g.Edges {
-			if e.From.Node != n.ID || !valid[e.From.Port] {
-				continue
-			}
-			want := ""
-			for _, c := range choices {
-				if c.ID == e.From.Port {
-					want = c.Target
-				}
-			}
-			if want != "" && e.To.Node != want {
-				v.addf("schema: node %q (router): edge from choice port %q targets %q but the choice names %q — the kernel routes on both, so they must agree",
-					n.ID, e.From.Port, e.To.Node, want)
-			}
+			v.errs.Issues = append(v.errs.Issues, routerEdgeIssues(n.ID, a, e)...)
 		}
 	}
 }

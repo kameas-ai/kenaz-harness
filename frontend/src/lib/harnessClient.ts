@@ -105,6 +105,8 @@ import type {
   GraphScope,
   GraphSpec,
   GraphValidationResult,
+  GraphEdgeRef,
+  GraphEdgeCheckResult,
   GraphRunStatus,
   GraphRunTraceEvent,
   GraphStartRunRequest,
@@ -654,6 +656,10 @@ interface WailsBindingsLike {
   Graph_SaveGraph(spec: GraphSpec): Promise<void>;
   Graph_DeleteGraph(id: string): Promise<void>;
   Graph_Validate(yaml: string): Promise<GraphValidationResult>;
+  Graph_CheckEdge(
+    graphJSON: string,
+    edge: GraphEdgeRef,
+  ): Promise<GraphEdgeCheckResult>;
   Graph_StartRun(req: GraphStartRunRequest): Promise<GraphStartRunResponse>;
   Graph_GetRunStatus(runID: string): Promise<GraphRunStatus>;
   Graph_GetRunTrace(
@@ -2558,6 +2564,18 @@ export interface GraphClient {
   saveGraph(spec: GraphSpec): Promise<void>;
   deleteGraph(id: string): Promise<void>;
   validate(yaml: string): Promise<GraphValidationResult>;
+  /**
+   * checkEdge asks whether one edge may be drawn, at drag time
+   * (visual-graph-authoring-01PMUX01 WP03, FR-002). `graphJSON` is the
+   * editor buffer the canvas already holds parsed, so the answer is
+   * about exactly what is on screen. `reason` is the validator's own
+   * message — the same rules the save path applies, from the same Go
+   * functions, so the canvas and the save can never disagree.
+   */
+  checkEdge(
+    graphJSON: string,
+    edge: GraphEdgeRef,
+  ): Promise<GraphEdgeCheckResult>;
   startRun(req: GraphStartRunRequest): Promise<GraphStartRunResponse>;
   getRunStatus(runID: string): Promise<GraphRunStatus>;
   getRunTrace(runID: string, since: number): Promise<GraphRunTraceEvent[]>;
@@ -3833,6 +3851,7 @@ export function createHarnessClient(): HarnessClient {
       saveGraph: (spec) => b().Graph_SaveGraph(spec),
       deleteGraph: (id) => b().Graph_DeleteGraph(id),
       validate: (yaml) => b().Graph_Validate(yaml),
+      checkEdge: (graphJSON, edge) => b().Graph_CheckEdge(graphJSON, edge),
       startRun: (req) => b().Graph_StartRun(req),
       getRunStatus: (runID) => b().Graph_GetRunStatus(runID),
       getRunTrace: (runID, since) => b().Graph_GetRunTrace(runID, since),
@@ -5269,6 +5288,7 @@ export function createFakeHarnessClient(
       saveGraph: noop,
       deleteGraph: noop,
       validate: async () => ({ ok: true, issues: [] }),
+      checkEdge: async () => ({ ok: true }),
       startRun: async (req) => ({
         runId: 'fake-run',
         status: {
