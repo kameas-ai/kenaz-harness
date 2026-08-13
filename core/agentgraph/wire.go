@@ -26,6 +26,9 @@ type wireGraph struct {
 	// SpecProvenance round-trips the materialization fidelity marker
 	// (WP12 review F2). Empty on every authored graph.
 	SpecProvenance string `json:"spec_provenance,omitempty" yaml:"spec_provenance,omitempty"`
+	// Layout round-trips the canvas-position metadata (WP01). Chassis
+	// metadata only — see the Graph.Layout doc comment in spec.go.
+	Layout map[string]NodeLayout `json:"layout,omitempty" yaml:"layout,omitempty"`
 }
 
 // wireNode mirrors Node but holds Attrs as a free-form map so we can
@@ -56,6 +59,7 @@ func graphToWire(g Graph) (wireGraph, error) {
 		Budget:         g.Budget,
 		DialOverrides:  cloneMap(g.DialOverrides),
 		SpecProvenance: g.SpecProvenance,
+		Layout:         cloneLayoutMap(g.Layout),
 	}
 	out.Nodes = make([]wireNode, 0, len(g.Nodes))
 	for _, n := range g.Nodes {
@@ -98,6 +102,7 @@ func wireToGraph(w wireGraph) (Graph, error) {
 		Budget:         w.Budget,
 		DialOverrides:  cloneMap(w.DialOverrides),
 		SpecProvenance: w.SpecProvenance,
+		Layout:         cloneLayoutMap(w.Layout),
 	}
 	g.Nodes = make([]Node, 0, len(w.Nodes))
 	// Track aliases observed during this load so the kernel can emit
@@ -145,6 +150,20 @@ func cloneMap(m map[string]any) map[string]any {
 		return nil
 	}
 	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+// cloneLayoutMap defensively copies a Layout map so the wire value and
+// the Graph value never alias the same backing map (same discipline as
+// cloneMap for DialOverrides).
+func cloneLayoutMap(m map[string]NodeLayout) map[string]NodeLayout {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]NodeLayout, len(m))
 	for k, v := range m {
 		out[k] = v
 	}
