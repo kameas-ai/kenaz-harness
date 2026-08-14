@@ -333,6 +333,36 @@ type Settings struct {
 	// AutoTitleEnabled() accessor; never read directly.
 	AutoTitleDisabled bool `json:"autoTitleDisabled,omitempty"`
 
+	// MoveFidelityHistoryDisabled is the inverted persisted bit for
+	// model-visible move fidelity (model-moves-transcript-01PMCH01 WP03,
+	// spec FR-002 + §4).
+	//
+	// WHAT IT CHANGES. With it ON (the default), the history the next
+	// request is built from carries the model's own reasoning chain in
+	// the provider's native shape — assistant tool_use blocks paired with
+	// tool_result messages — instead of the flattened one-message-per-turn
+	// transcript that discards what the model tried, what the tools
+	// returned and why it pivoted. It is a PROVIDER-VISIBLE change: every
+	// subsequent request's message array differs.
+	//
+	// WHY INVERTED. Default ON is the spec's position, and the inverted
+	// bit is this repo's idiom for it (see ConfirmEachDisabled,
+	// AutoTitleDisabled): the zero value — a fresh install with no
+	// settings.json — must mean "on" without writing any state.
+	//
+	// DEFAULT ON APPLIES TO NEW SESSIONS ONLY. This dial is one of two
+	// inputs; the other is sessions.move_history_mode, stamped at session
+	// creation. A session that predates the mission keeps the classic
+	// composition no matter where this sits, so turning the dial on never
+	// changes the shape of a conversation already in flight. Turning it
+	// OFF, however, reverts every session at once and immediately: the
+	// composition reads this at the point of consumption, so it is a live
+	// revert lever rather than a restart-to-revert one.
+	//
+	// Read via the MoveFidelityHistoryEnabled() accessor; never read the
+	// raw bit.
+	MoveFidelityHistoryDisabled bool `json:"moveFidelityHistoryDisabled,omitempty"`
+
 	// ── Builtin filesystem tool dials (builtin-filesystem-tools-01KR3N4P) ──
 
 	// FSReadDisabled is the inverted persisted bit for the read-family
@@ -737,6 +767,19 @@ func (s Settings) EffectiveCodeBlockMinBytes() int {
 // and inverts the persisted bit so callers don't have to think about
 // the storage shape.
 func (s Settings) ConfirmEachEnabled() bool { return !s.ConfirmEachDisabled }
+
+// MoveFidelityHistoryEnabled is the user-facing form of the
+// model-visible move-fidelity dial (model-moves-transcript-01PMCH01
+// WP03). Defaults to true on a fresh install (zero-value
+// MoveFidelityHistoryDisabled) and inverts the persisted bit so callers
+// never have to reason about the storage shape.
+//
+// This is the LIVE half of the gate. It is read at the point of
+// consumption — on every model-visible history composition — so moving
+// it takes effect on the next request rather than the next launch. The
+// durable half is session.Record.MoveHistoryMode; effective fidelity is
+// the AND of the two, resolved fail-closed.
+func (s Settings) MoveFidelityHistoryEnabled() bool { return !s.MoveFidelityHistoryDisabled }
 
 // EffectiveMaxAgentTurns returns the user-tuned cap or the spec
 // default (DefaultMaxAgentTurns) when the persisted value is zero.

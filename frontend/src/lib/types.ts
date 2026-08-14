@@ -764,6 +764,20 @@ export interface Settings {
    */
   confirmEachDisabled?: boolean;
   /**
+   * Model-visible move fidelity (model-moves-transcript-01PMCH01 WP03).
+   * The persisted form is the inverted `moveFidelityHistoryDisabled` bit
+   * so a fresh install (zero value) gets the spec's default-ON behaviour.
+   *
+   * When on, each request carries the model's own reasoning chain — its
+   * intermediate outputs, the tools it called and what they returned — in
+   * the provider's native shape, instead of one flattened message per
+   * turn. This is a provider-visible change, so it applies to sessions
+   * created while it was on; existing conversations keep the shape they
+   * were written with. Turning it OFF reverts every session on the next
+   * message (the backend reads it at request-composition time).
+   */
+  moveFidelityHistoryDisabled?: boolean;
+  /**
    * Chat-graph LoopNode iteration cap (agent-kernel-graph-chat-migration
    * mission). Zero on the wire means "use the spec default"
    * (DefaultMaxAgentTurns = 25). Frontend renders the placeholder

@@ -364,22 +364,30 @@ func (a *LLMProviderAdapter) ActiveModelID() string {
 	return prof.AvailableModels()[0]
 }
 
-// Generate satisfies agentgraph.LLMProvider. Translates the kernel
-// request → corellm.GenerationRequest, opens a stream, fans events
-// into the kernel's StreamSink (pulled from ctx via the kernel-pinned
-// helper), and returns the final response.
-func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest) (coreag.LLMResponse, error) {
-	if a == nil || a.reg == nil {
-		return coreag.LLMResponse{}, errors.New("chat: nil llm registry adapter")
-	}
-
-	// Translate the kernel-side message slice into the wire shape the
-	// registry expects. The kernel's seam type is intentionally narrow
-	// (Role + Content + Name + ToolCalls); we map onto Message{Role,
-	// Content: []ContentBlock} and re-attach assistant tool_use blocks
-	// when the kernel's seam carries any.
-	llmMsgs := make([]corellm.Message, 0, len(req.Messages))
-	for _, m := range req.Messages {
+// KernelMessagesToWire translates the kernel-side message slice into the
+// content-block shape the registry expects, which is the LAST
+// family-agnostic representation before each provider adapter renders
+// its own wire format:
+//
+//	corellm.ContentBlock{Type:"tool_use"}    → Anthropic tool_use block
+//	                                         → OpenAI  tool_calls[] entry
+//	corellm.ContentBlock{Type:"tool_result"} → Anthropic tool_result block
+//	                                         → OpenAI  role:"tool" message
+//
+// The kernel's seam type is intentionally narrow (Role + Content + Name
+// + ToolCalls + ToolCallID + IsError); this maps it onto
+// Message{Role, Content: []ContentBlock} and re-attaches assistant
+// tool_use blocks when the seam carries any.
+//
+// Exported (model-moves-transcript-01PMCH01 WP03) so the model-visible
+// history composition's per-family goldens can assert the real bytes
+// each provider receives instead of a test-local re-implementation of
+// this translation. Generate is its production caller, and there is
+// exactly one of it: this function is a rename of code that already
+// lived inline there, not a second path.
+func KernelMessagesToWire(msgs []coreag.Message) []corellm.Message {
+	out := make([]corellm.Message, 0, len(msgs))
+	for _, m := range msgs {
 		blocks := make([]corellm.ContentBlock, 0, 1+len(m.ToolCalls))
 		// Tool-result message: emit a tool_result block carrying the
 		// tool_use_id so the wire encoder can reach it. Without this
@@ -397,7 +405,7 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 				IsError:   m.IsError,
 			}
 			blocks = append(blocks, corellm.ContentBlock{Type: "tool_result", ToolResult: &tr})
-			llmMsgs = append(llmMsgs, corellm.Message{Role: corellm.Role(m.Role), Content: blocks})
+			out = append(out, corellm.Message{Role: corellm.Role(m.Role), Content: blocks})
 			continue
 		}
 		if m.Content != "" {
@@ -408,8 +416,21 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 			tu := corellm.ToolUse{ID: tc.ID, Name: tc.Name, Input: []byte(tc.Arguments)}
 			blocks = append(blocks, corellm.ContentBlock{Type: "tool_use", ToolUse: &tu})
 		}
-		llmMsgs = append(llmMsgs, corellm.Message{Role: corellm.Role(m.Role), Content: blocks})
+		out = append(out, corellm.Message{Role: corellm.Role(m.Role), Content: blocks})
 	}
+	return out
+}
+
+// Generate satisfies agentgraph.LLMProvider. Translates the kernel
+// request → corellm.GenerationRequest, opens a stream, fans events
+// into the kernel's StreamSink (pulled from ctx via the kernel-pinned
+// helper), and returns the final response.
+func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest) (coreag.LLMResponse, error) {
+	if a == nil || a.reg == nil {
+		return coreag.LLMResponse{}, errors.New("chat: nil llm registry adapter")
+	}
+
+	llmMsgs := KernelMessagesToWire(req.Messages)
 
 	// Layer the dynamic environment context and the user custom
 	// instructions on top of the composed graph-base + node-role system

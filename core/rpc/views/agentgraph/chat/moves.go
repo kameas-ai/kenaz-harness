@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -265,7 +266,44 @@ func (j *turnJournal) RecordToolCall(ctx context.Context, call coreag.ToolCall) 
 		MoveIndex:  idx,
 		TurnSpanID: j.spanID,
 		ToolCalls:  []coreag.ToolCallRequest{{ID: call.ID, Name: call.Name}},
+		// MODEL-LAYER ARGUMENTS (spec §4, WP03). The raw JSON, kept in a
+		// field named for the layer that may see it, travelling beside —
+		// never inside — the display payload above. The provider protocol
+		// cannot reconstruct an assistant tool_use block without it, and
+		// the model authored it in the first place: this is history, not
+		// logs.
+		//
+		// Note the two lines together: Content carries
+		// displayArgsSummary's names-and-types rendering, ModelToolArgs
+		// carries the values. If you are ever tempted to make one of these
+		// serve both, read the contract on session.Message's
+		// ModelLayerToolArgs first — the layers have opposite rules and
+		// neither implements the other.
+		ModelToolArgs: modelLayerArgsJSON(call.ID, call.Args),
 	})
+}
+
+// modelLayerArgsJSON renders one tool call's raw arguments for the MODEL
+// LAYER, keyed by tool-call id.
+//
+// Deliberately named nothing like displayArgsSummary. That function is
+// the DISPLAY layer's and emits argument names and value TYPES; this one
+// emits the values verbatim. The names are unalike on purpose so a
+// future reader searching for "the args helper" finds two and has to
+// choose, rather than finding one and assuming.
+//
+// An empty argument map yields nil, not "{}": a tool invoked with no
+// arguments has nothing for the model layer to carry, and nil keeps the
+// persisted column NULL.
+func modelLayerArgsJSON(callID string, args map[string]any) map[string]string {
+	if callID == "" || len(args) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(args)
+	if err != nil {
+		return nil
+	}
+	return map[string]string{callID: string(b)}
 }
 
 // RecordToolResult persists what a tool returned. Called by

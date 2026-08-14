@@ -390,6 +390,25 @@ function onContextWindowOverrideInput(kind: string, evt: Event) {
 // WP05: auto-title toggle
 const autoTitleEnabled = ref(true);
 
+// model-moves-transcript-01PMCH01 WP03 — model-visible move fidelity.
+//
+// Rides the whole-Settings round-trip (Settings_Get / Settings_Set) rather
+// than a dedicated binding pair: the backend reads the field through
+// LoadAll() at request-composition time, so there is nothing a bespoke
+// getter would add. Inverted on the wire — see Settings.moveFidelityHistoryDisabled.
+const moveFidelityHistoryEnabled = computed(
+  () => !settings.value.moveFidelityHistoryDisabled,
+);
+
+function toggleMoveFidelityHistory() {
+  const nextDisabled = moveFidelityHistoryEnabled.value;
+  settings.value = {
+    ...settings.value,
+    moveFidelityHistoryDisabled: nextDisabled,
+  };
+  debouncedSave(client, settings.value);
+}
+
 // per-message-token-meter-01KR3PQR
 const showPerMessageTokenMeter = ref(false);
 
@@ -1306,6 +1325,31 @@ onMounted(() => {
           When on, the harness asks the model to generate a short title for
           each new session after the first exchange. You can override or
           clear it at any time.
+        </p>
+
+        <!-- model-moves-transcript-01PMCH01 WP03 — model-visible move fidelity. -->
+        <label class="mt-4 flex items-center gap-3 font-ui text-[12px] text-ink">
+          <input
+            type="checkbox"
+            class="accent-accent"
+            :checked="moveFidelityHistoryEnabled"
+            data-testid="move-fidelity-history-toggle"
+            @change="toggleMoveFidelityHistory"
+          />
+          Send the model its own reasoning chain as history
+        </label>
+        <p class="mt-1 text-[11px] text-ink-muted">
+          When on, each request carries the full trajectory of the previous
+          turns — what the model tried, which tools it called, what they
+          returned and why it changed course — in your provider's native
+          format, instead of one flattened message per turn. Multi-turn
+          coherence improves most on tool-heavy sessions; requests get
+          larger. Default: on.
+          <br />
+          Applies to sessions started while it is on. Conversations already
+          in progress keep the shape they were written with, so turning it
+          on never changes a thread mid-stream. Turning it off reverts every
+          session on the next message.
         </p>
       </section>
 

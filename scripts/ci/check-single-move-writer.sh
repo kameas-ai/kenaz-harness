@@ -20,6 +20,15 @@
 #
 # Plus the two ways to mint move metadata without writing an assignment
 # a field-level grep can see (found by adversarial review of WP01):
+# WIDENED 2026-08-14 (model-moves-transcript-01PMCH01 WP03): the MODEL
+# LAYER's raw tool arguments are the same class of thing. They live in
+# session.Message.modelToolArgs / session_messages.model_tool_args, they
+# are minted only by AppendTranscriptEntry, and a second writer for them
+# is worse than a second writer for the display metadata: raw tool
+# arguments written off-seam are a redaction leak, not just a
+# convergence violation. Every clause below therefore covers the fourth
+# field and the third column alongside the original three.
+#
 #   2b. Calling the move-column HELPERS (applyMoveColumns /
 #       moveColumnValues) from somewhere other than the store's row-scan
 #       sites — the assignment stays in moves.go, only the call moves.
@@ -57,7 +66,7 @@ fail=0
 # session.Message. Exporting one (MoveKind MoveKind) removes the
 # declaration this greps for and fails here, loudly, instead of quietly
 # dissolving the cross-package guarantee.
-for field in moveKind moveIndex moveTurnSpanID; do
+for field in moveKind moveIndex moveTurnSpanID modelToolArgs; do
   if ! grep -qE "^[[:space:]]+${field}[[:space:]]+" "$TYPES_FILE"; then
     echo "$GATE FAIL: unexported field '${field}' is not declared in ${TYPES_FILE}." >&2
     echo "$GATE The single-writer rule rests on these three being unexported: that is what" >&2
@@ -83,7 +92,7 @@ done
 # second writer would most plausibly take. Anchoring it to `{` or `,`
 # (rather than bare `moveKind:`) is what keeps prose in a comment —
 # "moveKind: the discriminator" — from reading as code.
-ASSIGN_RE='(\.(moveKind|moveIndex|moveTurnSpanID)[[:space:]]*=[^=])|(^[[:space:]]*(moveKind|moveIndex|moveTurnSpanID):)|([{,][[:space:]]*(moveKind|moveIndex|moveTurnSpanID)[[:space:]]*:)'
+ASSIGN_RE='(\.(moveKind|moveIndex|moveTurnSpanID|modelToolArgs)[[:space:]]*=[^=])|(^[[:space:]]*(moveKind|moveIndex|moveTurnSpanID|modelToolArgs):)|([{,][[:space:]]*(moveKind|moveIndex|moveTurnSpanID|modelToolArgs)[[:space:]]*:)'
 
 offenders=""
 while IFS= read -r f; do
@@ -182,10 +191,10 @@ fi
 # rules out every assignment and every string literal), then a
 # backquoted span that ENDS the line. Go raw strings cannot contain a
 # backtick at all, so no line of a multi-line SQL literal can match it.
-SQL_ALLOWED='^(core/session/store\.go|core/session/migrations_moves\.go|core/session/migrations\.go|core/session/moves\.go)$'
+SQL_ALLOWED='^(core/session/store\.go|core/session/migrations_moves\.go|core/session/migrations_move_fidelity\.go|core/session/migrations\.go|core/session/moves\.go)$'
 SQL_COMMENT_LINE_RE='^[^:]*:[0-9]+:[[:space:]]*//'
 SQL_STRUCT_TAG_LINE_RE='^[^:]*:[0-9]+:[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+[][*A-Za-z0-9_.]+[[:space:]]+`[^`]*`,?[[:space:]]*(//.*)?$'
-sql_offenders=$(grep -rn 'move_index\|turn_span_id' \
+sql_offenders=$(grep -rn 'move_index\|turn_span_id\|model_tool_args' \
   --include='*.go' --include='*.sql' core/ 2>/dev/null |
   grep -v '^[^:]*_test\.go:' |
   grep -vE "$SQL_COMMENT_LINE_RE" |
@@ -198,7 +207,7 @@ sql_offenders=$(grep -rn 'move_index\|turn_span_id' \
 # If the allowlisted store/migration files stop naming the columns, the
 # schema was renamed and this whole clause is greping for a token that
 # no longer exists — a vacuous pass, not a clean tree.
-if ! grep -rqE 'move_index|turn_span_id' \
+if ! grep -rqE 'move_index|turn_span_id|model_tool_args' \
   core/session/store.go core/session/moves.go 2>/dev/null; then
   echo "$GATE FAIL: neither core/session/store.go nor core/session/moves.go names" >&2
   echo "$GATE move_index / turn_span_id. The columns were renamed and this clause is" >&2
