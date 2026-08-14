@@ -260,7 +260,7 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 		}
 
 		startedAt := time.Now()
-		tr, callErr := env.Tools.Call(callCtx, ToolCall{Name: oc.call.Name, Args: oc.args})
+		tr, callErr := env.Tools.Call(callCtx, ToolCall{ID: oc.call.ID, Name: oc.call.Name, Args: oc.args})
 		duration := time.Since(startedAt)
 
 		if isMutating {

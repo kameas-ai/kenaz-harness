@@ -60,6 +60,25 @@ type LLMRequest struct {
 	// means "no node-level override" — the existing direct-registry path
 	// is unchanged.
 	FallbackChainId string
+
+	// StreamToChat carries ModelAttrs.stream_to_chat down to the
+	// provider seam (model-moves-transcript-01PMCH01 WP02).
+	//
+	// The attr has existed since the chat migration and had no reader:
+	// it declared "this node's output IS the chat's assistant turn" and
+	// nothing acted on it. It is the discriminator the chat runner
+	// needs. env.LLM.Generate is called by SEVEN different executors —
+	// the model node, the fused router, the review gate, both rungs of
+	// the escalation ladder, the summarise compaction strategy and the
+	// task-state gate — and only the first of those produces text the
+	// user is reading. Recording every Generate as a transcript move
+	// would persist the exit gate's private verdict as an assistant
+	// message.
+	//
+	// Only modelExecutor sets it, from the node's own attr; every other
+	// call site leaves it false and is therefore invisible to the move
+	// journal.
+	StreamToChat bool
 }
 
 // Message is the narrow chat-message shape the kernel works with.
@@ -124,6 +143,11 @@ const (
 	StreamEventUsage     StreamEventKind = "usage"
 	StreamEventFinish    StreamEventKind = "finish"
 	StreamEventError     StreamEventKind = "error"
+	// StreamEventMoveStart opens a new model move on the stream
+	// (model-moves-transcript-01PMCH01 WP02). See MoveIndex / MoveKind
+	// below for the contract; the chat runner's move journal is the only
+	// emitter and WP04's chat surface is the consumer.
+	StreamEventMoveStart StreamEventKind = "move_start"
 )
 
 // StreamEvent is one delta the chassis-bound LLM provider hands the
@@ -159,6 +183,17 @@ type StreamEvent struct {
 	UsageReasoningTokens int    `json:"usage_reasoning_tokens,omitempty"`
 	Finish               string `json:"finish,omitempty"`
 	ErrMsg               string `json:"err,omitempty"`
+
+	// MoveIndex / MoveKind are populated only on
+	// Kind == StreamEventMoveStart and carry the move the stream is
+	// about to render (model-moves-transcript-01PMCH01 WP02).
+	//
+	// MoveIndex is the 0-based position of the move inside the human
+	// turn — the same number the persisted transcript entry carries in
+	// its move_index column, which is what lets the live view and a
+	// reload be reconciled entry-for-entry.
+	MoveIndex int    `json:"move_index,omitempty"`
+	MoveKind  string `json:"move_kind,omitempty"`
 }
 
 // StreamSink is the kernel-side seam the LLMNode-bound provider feeds
@@ -253,6 +288,17 @@ func (f LLMProviderFunc) Generate(ctx context.Context, req LLMRequest) (LLMRespo
 
 // ToolCall is the agentgraph-side request to dispatch a tool.
 type ToolCall struct {
+	// ID is the model-assigned tool_use id this dispatch answers. It is
+	// what pairs a persisted tool_call transcript entry with its
+	// tool_result (model-moves-transcript-01PMCH01 WP02) — and, one
+	// layer up, what pairs a provider tool_use block with its
+	// tool_result block, the mismatch that produces the classic 400.
+	//
+	// ToolDispatchNode populates it from the model's ToolCallRequest.
+	// The builtin-tool node kinds leave it empty: a graph-authored tool
+	// node is not answering a model request, so there is no id to pair
+	// with and no transcript entry to write.
+	ID   string
 	Name string
 	Args map[string]any
 }
@@ -399,6 +445,22 @@ type HistoryEntry struct {
 	// TurnSpanID is the id of the user message that opened the turn this
 	// entry belongs to. Required when MoveKind is set.
 	TurnSpanID string
+
+	// ToolCalls is the structured tool payload a tool_call / tool_result
+	// entry carries (model-moves-transcript-01PMCH01 WP02). It is what
+	// makes the pairing machine-readable rather than a prose convention:
+	// a tool_result entry names the id of the tool_call it answers.
+	//
+	// WP01 landed session.TranscriptEntry.ToolCalls with no counterpart
+	// here, which is why the field had no production writer and sat in
+	// the in-flight ledger. This is the counterpart.
+	//
+	// DISPLAY-LAYER REDACTION (spec §4): Arguments are deliberately NOT
+	// part of this shape. A tool_call entry's Content carries an ARGS
+	// SUMMARY — key names and value types, never values. The
+	// model-visible layer that needs the raw arguments is WP03's, and it
+	// composes them from the provider history, not from here.
+	ToolCalls []ToolCallRequest
 }
 
 // HistoryWriter is the optional persistence half of the history seam,

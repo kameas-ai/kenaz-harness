@@ -1771,14 +1771,26 @@ func (s *sqlStore) AppendContinuation(ctx context.Context, originalID string, m 
 			}
 			toolCallsJSON = string(b)
 		}
+		// model-moves-transcript-01PMCH01 WP02 (review of WP01): bind the
+		// move columns here too. Before this, a continuation INSERT wrote
+		// nine columns and silently dropped kind/move_index/turn_span_id
+		// while the Message it RETURNED still carried them in memory — so
+		// the row a caller held and the row the database held disagreed,
+		// and only a reload revealed it. Unreachable while every
+		// production write left the move fields zero; WP02 makes the chat
+		// transcript full of non-zero ones, so the gap becomes reachable
+		// the moment a user resumes an interrupted move-bearing turn.
+		kindCol, moveIdxCol, spanCol := moveColumnValues(m)
 		if _, err := tx.Exec(ctx, `
             INSERT INTO session_messages
-                (id, session_id, sequence, role, content, tool_calls, created_at, content_json, continuation_of)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, session_id, sequence, role, content, tool_calls, created_at, content_json, continuation_of,
+                 kind, move_index, turn_span_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
 			m.ID, m.SessionID, m.Sequence, string(m.Role),
 			m.Content, toolCallsJSON, m.CreatedAt.UnixNano(),
-			string(contentJSON), originalID); err != nil {
+			string(contentJSON), originalID,
+			kindCol, moveIdxCol, spanCol); err != nil {
 			return err
 		}
 		out = m
