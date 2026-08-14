@@ -1,0 +1,62 @@
+# I11 allowlist — packages under core/tools/ that declare a `kenaz__*`
+# builtin tool name and are NOT imported by core/rpc/builtins_wiring.go,
+# the single wiring site for the builtin registry.
+#
+# Enforced by scripts/ci/check-builtin-tool-registration.sh. Seeded by the
+# 2026-08-14 unwired sweep (model-moves-transcript-01PMCH01 WP00).
+#
+# Format: one package path per line, relative to the module root.
+#
+# CONTRACT (same as i10-unwired-gates.txt): a line that stays must say
+# why it stays, dated, naming the blocker and the change that will delete
+# it. Lines shrink monotonically. "We'll get to it" is not a reason.
+#
+# ─────────────────────────────────────────────────────────────────────
+
+# core/tools/monitor  (kenaz__monitor)
+#   JUSTIFIED 2026-08-14 (unwired sweep). Owner: whichever mission wires
+#   the background-task PRODUCER — i.e. gives core/tasks.Registry a
+#   non-test writer.
+#
+#   The tool itself is finished: 469 lines, 9 passing tests, drain +
+#   watch modes with regex/exit/timeout termination, output capped at
+#   2000 lines. It structurally satisfies toolloop.BuiltinTool and its
+#   only dependencies are core/tasks (which production already
+#   constructs, core/rpc/api.go:1071) and a session-id extractor that
+#   dispatch already injects. Registering it is roughly six lines.
+#
+#   Those six lines would not make it work. The reason is one layer
+#   below, and it is the finding that decided this entry:
+#
+#     THE BACKGROUND-TASK PRODUCER IS UNWIRED, AND CANNOT WORK AS
+#     WRITTEN. `bash.Options.BackgroundSpawn` / `BackgroundEnd` have zero
+#     non-test assignments repo-wide, so `run_in_background:true`
+#     silently ran synchronously (fixed separately this sweep — the knob
+#     is no longer advertised while the seam is nil). Even with the seam
+#     wired, core/tools/bash/background.go never attaches the process's
+#     stdout/stderr to anything: Registry.StdoutWriter / StderrWriter
+#     exist and have no callers, and `spawnBackground` calls cmd.Start()
+#     BEFORE it has a task id, so the writers cannot be attached
+#     post-hoc without restructuring the function. A registered
+#     kenaz__monitor would therefore return an empty `lines` array
+#     forever, for every task, in both modes.
+#
+#   Deletion was considered and rejected on the WP17 precedent (see
+#   i10-unwired-gates.txt's credstore/bundleartifact entries): deleting
+#   the consumer half of a half-landed subsystem leaves an equally-dead
+#   subsystem minus one tested feature. And this subsystem is genuinely
+#   half-landed rather than never-built — core/tasks ships a SQLite
+#   store, a ring buffer, boot-time orphan recovery
+#   (RecoverOrphansWithPIDCheck, called for real at core/rpc/api.go),
+#   four live RPCs (Tasks_List/Get/Tail/Abort), a mounted Settings →
+#   Tasks panel, a session-close dialog, and a registered
+#   `background_task_complete` hook event. Everything except a writer.
+#
+#   The change that deletes this line: attach Registry.StdoutWriter /
+#   StderrWriter in spawnBackground (which means allocating the task id
+#   before cmd.Start()), pass BackgroundSpawn/BackgroundEnd + the
+#   HookFirer from core/rpc, then register monitor with its predicate
+#   case. At that point kenaz__monitor has something to monitor, and
+#   `core/tools/monitor` leaves i7-orphan-packages.txt in the same
+#   commit.
+core/tools/monitor
