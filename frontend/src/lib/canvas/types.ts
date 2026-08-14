@@ -118,13 +118,6 @@ export interface CanvasPoint {
  */
 export type CanvasCategory = 'compute' | 'control' | 'state' | 'other';
 
-export const CANVAS_CATEGORIES: readonly CanvasCategory[] = [
-  'compute',
-  'control',
-  'state',
-  'other',
-] as const;
-
 /** Normalises an arbitrary catalog category string onto the known set. */
 export function toCanvasCategory(raw: string | undefined | null): CanvasCategory {
   switch (raw) {
@@ -210,16 +203,6 @@ export interface CanvasEdge {
 /** An edge being drawn — no id yet, because it does not exist. */
 export type CanvasEdgeRequest = Omit<CanvasEdge, 'id' | 'kind'>;
 
-/** One palette row. */
-export interface PaletteItem {
-  kind: string;
-  label: string;
-  category: CanvasCategory;
-  description?: string;
-  /** Optional grouping key (agentgraph archetype; workflow family). */
-  group?: string;
-}
-
 /** The answer to "may this edge be drawn?" — `reason` is shown verbatim. */
 export interface EdgeCheckResult {
   ok: boolean;
@@ -273,7 +256,6 @@ export type SpecOp =
 export interface CanvasAdapter {
   nodes: CanvasNode[];
   edges: CanvasEdge[];
-  paletteItems: PaletteItem[];
   /** Asked before an edge is committed. Rejection shows `reason`. */
   onCheckEdge: (edge: CanvasEdgeRequest) => Promise<EdgeCheckResult>;
   /** Applies a user intent to the underlying spec. */

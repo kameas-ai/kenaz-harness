@@ -41,25 +41,32 @@ interface Props {
   /** Other node ids in the same graph (for node_id_ref / port_ref pickers). */
   graphNodeIds?: string[];
   /**
-   * Optional reference data so model_ref / tool_ref / activity_ref
-   * pickers list real values. Tests pass minimal stubs; production
-   * GraphEditor wires these from useHarnessAPI when available.
+   * Reference data for the activity_ref picker.
+   *
+   * There is deliberately NO modelOptions / toolOptions / corpusOptions /
+   * attachmentOptions sibling. Those four props existed until the
+   * 2026-08-14 unwired sweep and no parent ever passed them — their own
+   * doc comment claimed "production GraphEditor wires these from
+   * useHarnessAPI", and it did not. The effect was worse than a missing
+   * feature: `refOptionsFor` returned `[]`, the template still rendered a
+   * `<select>`, and every model_ref / tool_ref / corpus_ref /
+   * attachment_ref attribute was a dropdown whose only entry was "—".
+   * The attribute could not be set AT ALL from the visual editor —
+   * `planner.planner_model` and both `escalation_ladder` model overrides
+   * ship in chat_default.yaml, so this was reachable in the default graph.
+   *
+   * The picker now renders only when a caller supplies real options;
+   * otherwise the attribute falls through to the string input, which can
+   * at least hold `provider:model-id`. Re-add a `*Options` prop when —
+   * and only when — a parent has a live source to fill it from.
    */
-  modelOptions?: Array<{ id: string; label: string }>;
-  toolOptions?: Array<{ id: string; label: string }>;
   activityOptions?: Array<{ id: string; label: string }>;
-  corpusOptions?: Array<{ id: string; label: string }>;
-  attachmentOptions?: Array<{ id: string; label: string }>;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   readOnly: false,
   graphNodeIds: () => [],
-  modelOptions: () => [],
-  toolOptions: () => [],
   activityOptions: () => [],
-  corpusOptions: () => [],
-  attachmentOptions: () => [],
 });
 
 const emit = defineEmits<{
@@ -336,26 +343,21 @@ function archetypeChainLabel(layer: string): string {
   return layer;
 }
 
-function refOptionsFor(
-  type: string,
-): Array<{ id: string; label: string }> | null {
+// refOptionsFor returns the option list for a ref-typed attr, or an
+// empty array when this editor has no source for that ref type. An
+// empty array means "render the string input instead of a dropdown"
+// (see the template's ref-picker branch) — never "render an empty
+// dropdown", which is an unsettable field.
+function refOptionsFor(type: string): Array<{ id: string; label: string }> {
   switch (type) {
-    case 'model_ref':
-      return props.modelOptions;
-    case 'tool_ref':
-      return props.toolOptions;
     case 'activity_ref':
       return props.activityOptions;
-    case 'corpus_ref':
-      return props.corpusOptions;
-    case 'attachment_ref':
-      return props.attachmentOptions;
     case 'node_id_ref':
     case 'port_ref':
     case 'messages_ref':
       return props.graphNodeIds.map((id) => ({ id, label: id }));
     default:
-      return null;
+      return [];
   }
 }
 
@@ -363,17 +365,11 @@ function isJsonType(type: string): boolean {
   return type === 'object' || type === 'map' || type === 'array';
 }
 
-function isRefType(type: string): boolean {
-  return (
-    type === 'model_ref' ||
-    type === 'tool_ref' ||
-    type === 'activity_ref' ||
-    type === 'corpus_ref' ||
-    type === 'attachment_ref' ||
-    type === 'node_id_ref' ||
-    type === 'port_ref' ||
-    type === 'messages_ref'
-  );
+// hasRefOptions gates the dropdown branch in the template. A ref-typed
+// attr with no options renders as a string input rather than a
+// single-entry ("—") select the user cannot pick anything from.
+function hasRefOptions(type: string): boolean {
+  return refOptionsFor(type).length > 0;
 }
 
 defineExpose({ local, partitioned });
@@ -574,7 +570,7 @@ defineExpose({ local, partitioned });
 
           <!-- ref pickers -->
           <select
-            v-else-if="isRefType(attr.type)"
+            v-else-if="hasRefOptions(attr.type)"
             :id="`attr-${attr.name}`"
             :value="(valueOf(attr) as string | undefined) ?? ''"
             class="w-full rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-[12px] text-ink"
@@ -583,7 +579,7 @@ defineExpose({ local, partitioned });
           >
             <option value="">—</option>
             <option
-              v-for="opt in refOptionsFor(attr.type) ?? []"
+              v-for="opt in refOptionsFor(attr.type)"
               :key="opt.id"
               :value="opt.id"
             >

@@ -23,7 +23,6 @@ import {
   type CanvasNodeStatus,
   type CanvasPort,
   type EdgeCheckResult,
-  type PaletteItem,
   type SpecOp,
 } from './types';
 
@@ -267,25 +266,9 @@ export function buildGraphAdapter(input: GraphAdapterInput): CanvasAdapter {
     }
   }
 
-  const paletteItems: PaletteItem[] = input.manifests
-    .filter((m) => m.callable)
-    .map((m) => {
-      const item: PaletteItem = {
-        kind: m.id,
-        label: m.displayName || m.id,
-        category: toCanvasCategory(m.category),
-      };
-      if (m.description) item.description = m.description;
-      const group = m.archetype || m.extends;
-      if (group) item.group = group;
-      return item;
-    })
-    .sort((a, b) => a.kind.localeCompare(b.kind));
-
   return {
     nodes,
     edges,
-    paletteItems,
     onCheckEdge: input.checkEdge,
     // Structural read-only (paper-check note 8): a read-only adapter has
     // no mutation path at all, rather than a handler that checks a flag.
