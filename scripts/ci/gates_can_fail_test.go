@@ -85,6 +85,7 @@ var cwdSensitiveGates = []string{
 	"check-no-user-content-in-slog.sh",
 	"check-serve-dispatch-drift.sh",
 	"check-builtin-tool-registration.sh",
+	"check-single-move-writer.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -198,6 +199,31 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			// DID register.
 			file:    "core/tools/zzgateprobe/tool.go",
 			content: "package zzgateprobe\n\nconst ToolName = \"kenaz__zz_gate_probe\"\n",
+		},
+		{
+			name: "single-move-writer/second-seam-caller",
+			gate: "check-single-move-writer.sh",
+			// The convergence violation the transcript-move seam exists
+			// to prevent: a second production caller of
+			// Manager.AppendTranscriptEntry, i.e. a second path by which
+			// move-kind rows reach session_messages. Two writers means
+			// two definitions of what a move IS, and the pair that
+			// drifts is the one that ships an orphaned tool_use to a
+			// provider (the classic 400).
+			//
+			// Planted in an existing package so it does not also trip
+			// I7's orphan-package rule.
+			file:   "core/rpc/views/sessions/impl.go",
+			append: "\nfunc zzGateProbeSecondMoveWriter(m *session.Manager) {\n\t_, _ = m.AppendTranscriptEntry(nil, \"\", session.TranscriptEntry{})\n}\n",
+		},
+		{
+			name: "single-move-writer/move-field-assigned-outside-the-seam",
+			gate: "check-single-move-writer.sh",
+			// The in-package half the compiler cannot see: session.Message's
+			// move fields are unexported, so only core/session can touch
+			// them — and inside core/session, only moves.go may.
+			file:   "core/session/manager.go",
+			append: "\nfunc zzGateProbeMoveAssign(m *Message) { m.moveKind = MoveKindFinal }\n",
 		},
 		{
 			name: "slog-privacy/typed-attr-constructor",

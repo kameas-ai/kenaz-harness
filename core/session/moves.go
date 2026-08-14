@@ -207,18 +207,18 @@ func (m Message) TurnSpanID() string { return m.moveTurnSpanID }
 // the session_messages INSERT: (kind, move_index, turn_span_id). A
 // classic entry binds NULL/NULL/NULL, which is what every pre-existing
 // row already holds after migration 0333.
-func moveColumnValues(m Message) (kind, moveIndex, turnSpanID any) {
+func moveColumnValues(m Message) (kindCol, indexCol, spanCol any) {
 	if m.moveKind == "" {
 		return nil, nil, nil
 	}
-	kind = string(m.moveKind)
+	kindCol = string(m.moveKind)
 	if m.moveIndex != nil {
-		moveIndex = int64(*m.moveIndex)
+		indexCol = int64(*m.moveIndex)
 	}
 	if m.moveTurnSpanID != "" {
-		turnSpanID = m.moveTurnSpanID
+		spanCol = m.moveTurnSpanID
 	}
-	return kind, moveIndex, turnSpanID
+	return kindCol, indexCol, spanCol
 }
 
 // applyMoveColumns hydrates the move fields from a scanned row. NULL
