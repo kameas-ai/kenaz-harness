@@ -79,17 +79,52 @@ func (is *InterruptState) markedText() string {
 // Returns the persisted assistant message ID (may be empty when the
 // writer is nil). Non-fatal: errors are logged and the run continues
 // to its stop-called terminal path regardless.
+//
+// journal is the turn's move journal
+// (model-moves-transcript-01PMCH01 WP02). When it is recording, both
+// writes go through it so the interrupted segment and each synthetic
+// result take positions in the turn instead of landing as classic rows
+// in the middle of a move-tagged turn. The partial is an
+// `assistant_move`, never a `final`: an interrupted turn produced no
+// answer, and labelling a truncated segment as the answer would make
+// WP05's collapsed view lie about what happened. The journal forwards
+// to the same seam `writer` points at, so a nil/inert journal keeps
+// the pre-mission behaviour exactly.
 func (is *InterruptState) PersistInterrupt(
 	ctx context.Context,
 	sessionID string,
 	writer coreag.HistoryWriter,
+	journal *turnJournal,
 ) (assistantMsgID string) {
 	if writer == nil {
 		return ""
 	}
 
-	// 1. Persist the marked partial text as the assistant row.
 	marked := is.markedText()
+
+	if journal.records() {
+		// 1. The interrupted segment, at the position its first delta
+		//    already announced on the stream.
+		journal.RecordPartial(ctx, marked)
+		// 2. Close every dangling tool_use. Its tool_call entry already
+		//    exists — kernelToolAdapter writes that before dispatch —
+		//    so this backfills the answering half and the pair is whole.
+		for _, tc := range is.DanglingToolCalls {
+			journal.RecordSyntheticToolResult(ctx, tc, danglingToolResultText(tc))
+		}
+		logging.L().Info("chat.interrupt.persist_moves.ok",
+			"session_id", sessionID,
+			"dangling_tools", len(is.DanglingToolCalls),
+			"moves", journal.MoveCount(),
+		)
+		// The move path does not surface a message id: the partial row's
+		// id is not used by any caller (driveRun discards it), and
+		// inventing a second return channel for it would be plumbing
+		// with no reader.
+		return ""
+	}
+
+	// 1. Persist the marked partial text as the assistant row.
 	mid, err := writer.AppendEntry(ctx, sessionID, coreag.HistoryEntry{
 		Role:    "assistant",
 		Content: marked,
@@ -112,13 +147,9 @@ func (is *InterruptState) PersistInterrupt(
 
 	// 2. Backfill synthetic is_error tool_results for every dangling tool_use.
 	for _, tc := range is.DanglingToolCalls {
-		content := fmt.Sprintf(
-			"tool call %q (id=%s) cancelled: interrupted by user",
-			tc.Name, tc.ID,
-		)
 		_, terr := writer.AppendEntry(ctx, sessionID, coreag.HistoryEntry{
 			Role:    "tool",
-			Content: content,
+			Content: danglingToolResultText(tc),
 		})
 		if terr != nil {
 			logging.L().Warn("chat.interrupt.persist_tool_result.failed",
@@ -137,4 +168,14 @@ func (is *InterruptState) PersistInterrupt(
 	}
 
 	return assistantMsgID
+}
+
+// danglingToolResultText is the synthetic is_error body written for a
+// tool_use the interrupt cancelled. One definition so the move path and
+// the classic path cannot drift.
+func danglingToolResultText(tc coreag.ToolCallRequest) string {
+	return fmt.Sprintf(
+		"tool call %q (id=%s) cancelled: interrupted by user",
+		tc.Name, tc.ID,
+	)
 }

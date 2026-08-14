@@ -109,6 +109,13 @@ type LLMProviderAdapter struct {
 	// or is nil when no autonomy provider is wired (test / boot paths).
 	// (autonomy-knobs-live-01PMAG02 WP02)
 	askOnAmbiguity func() autonomy.AskMode
+
+	// moves is the turn's move journal
+	// (model-moves-transcript-01PMCH01 WP02). Non-nil only on the chat
+	// path; the adapter feeds it the two facts only Generate knows —
+	// that a chat-bound segment has started streaming, and what that
+	// segment's finished text was.
+	moves *turnJournal
 }
 
 // NewLLMProviderAdapter constructs an adapter pinned to a specific
@@ -123,6 +130,15 @@ func NewLLMProviderAdapter(reg corellm.Registry, profileID, modelOverride string
 		tools:         tools,
 		capturer:      capturer,
 	}
+}
+
+// WithMoveJournal attaches the turn's move journal
+// (model-moves-transcript-01PMCH01 WP02). Returns the same pointer so
+// callers can chain at construction time. A nil journal leaves the
+// adapter's behaviour byte-identical to the pre-mission path.
+func (a *LLMProviderAdapter) WithMoveJournal(j *turnJournal) *LLMProviderAdapter {
+	a.moves = j
+	return a
 }
 
 // WithSessionID pins the session id onto the adapter so the
@@ -576,8 +592,23 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 	// session_write has produced a stable messageID. Images are not
 	// captured inline here — the messageID isn't available until the
 	// session_write node fires after Generate returns.
+	// model-moves-transcript-01PMCH01 WP02: this request is one move of
+	// the chat transcript only when the model node that issued it said
+	// so. req.StreamToChat carries that node's own attr; the review
+	// gate, the escalation ladder, the fused router and the compaction
+	// strategy all reach this same adapter and none of them is the
+	// user's assistant turn.
+	recordMoves := req.StreamToChat && a.moves.records()
+
 	sink, _ := coreag.StreamSinkFromContext(ctx)
 	for ev := range stream.Events() {
+		// Open the move BEFORE the first token of the segment reaches
+		// the surface — a boundary that arrives after the text cannot
+		// separate it from the previous segment, which is the run-on
+		// paragraph the mission exists to fix.
+		if recordMoves && ev.Kind == corellm.StreamText && ev.Text != "" {
+			a.moves.OpenAssistantSegment()
+		}
 		if ev.Kind == corellm.StreamGeneratedImage && ev.GeneratedImage != nil && a.capturer != nil {
 			gi := ev.GeneratedImage
 			a.pendingImagesMu.Lock()
@@ -629,6 +660,12 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 			})
 		}
 		out.ToolCalls = calls
+	}
+	// One model fire = one move. Park its text; the journal decides
+	// whether it becomes an assistant_move or, if nothing follows it,
+	// the turn's `final` (model-moves-transcript-01PMCH01 WP02).
+	if recordMoves {
+		a.moves.RecordAssistantMove(ctx, out.Content)
 	}
 	return out, nil
 }

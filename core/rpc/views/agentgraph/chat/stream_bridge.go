@@ -292,6 +292,20 @@ func translateAGStreamEvent(ev coreag.StreamEvent) corellm.StreamEvent {
 		Finish: ev.Finish,
 		Err:    ev.ErrMsg,
 	}
+	// A move boundary carries the tool identity in MoveBoundary, not in
+	// the tool-use accumulator: it announces a chip, it is not a chip.
+	// Routing it through out.Tool would make every existing tool-render
+	// path fire twice per call (model-moves-transcript-01PMCH01 WP02).
+	if ev.Kind == coreag.StreamEventMoveStart {
+		out.Kind = corellm.StreamMoveStart
+		out.Move = &corellm.MoveBoundary{
+			Index:      ev.MoveIndex,
+			Kind:       ev.MoveKind,
+			ToolName:   ev.ToolName,
+			ToolCallID: ev.ToolID,
+		}
+		return out
+	}
 	if ev.ToolName != "" || ev.ToolID != "" || ev.ToolArgs != "" {
 		out.Tool = &corellm.ToolUse{
 			ID:    ev.ToolID,

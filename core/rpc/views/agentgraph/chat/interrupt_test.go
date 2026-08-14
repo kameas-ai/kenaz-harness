@@ -87,7 +87,7 @@ func TestPersistInterrupt_APIValid(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	mid := is.PersistInterrupt(ctx, "sess-001", writer)
+	mid := is.PersistInterrupt(ctx, "sess-001", writer, nil)
 	if mid == "" {
 		t.Error("PersistInterrupt returned empty messageID for assistant row")
 	}
@@ -121,7 +121,7 @@ func TestPersistInterrupt_APIValid(t *testing.T) {
 // does not panic (FR-001 defensive path).
 func TestPersistInterrupt_NilWriter(t *testing.T) {
 	is := &InterruptState{PartialText: "some text"}
-	mid := is.PersistInterrupt(context.Background(), "sess-001", nil)
+	mid := is.PersistInterrupt(context.Background(), "sess-001", nil, nil)
 	if mid != "" {
 		t.Errorf("expected empty messageID with nil writer, got %q", mid)
 	}

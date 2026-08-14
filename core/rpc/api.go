@@ -4392,6 +4392,15 @@ func buildChatRunner(
 	}
 	historyReader := chatSessionMessageReader{inner: historyAdapter}
 	historyWriter := &llmHistoryWriter{inner: historyAdapter}
+	// model-moves-transcript-01PMCH01 WP02: the turn-span lookup for
+	// StartStream's empty-userMessage paths (keychain redrive; the
+	// multimodal send, where the frontend already landed the user row).
+	// nil manager leaves it nil, which makes those turns write classic
+	// entries — see chat.TurnSpanReader.
+	var turnSpanReader chat.TurnSpanReader
+	if historyAdapter != nil && historyAdapter.mgr != nil {
+		turnSpanReader = chatTurnSpanReader{mgr: historyAdapter.mgr}
+	}
 	baseEnvDefaults := graphMgr.EnvDefaults()
 	// Compose the manager's seam defaults with chat-migration WP-D
 	// post-LLM hook wiring: pre-construct the kernel HookManager so we
@@ -4601,6 +4610,7 @@ func buildChatRunner(
 		Broker:        chatBrokerAdapter{broker: broker},
 		History:       historyReader,
 		HistoryWriter: historyWriter,
+		TurnSpan:      turnSpanReader,
 		// agentgraph-total-convergence-01PMGX01 WP12: every chat turn
 		// registers the resolved spec it runs, so Graph_MaterializeRun
 		// can project the turn back into a graph. Without this the
@@ -4819,6 +4829,35 @@ func (r chatSessionMessageReader) History(ctx context.Context, sessionID string,
 		})
 	}
 	return out, nil
+}
+
+// chatTurnSpanReader is the production binding of chat.TurnSpanReader
+// (model-moves-transcript-01PMCH01 WP02). It answers "which user
+// message opened the turn currently in flight" by walking the session's
+// messages backwards to the last one with role=user.
+//
+// It reads the manager directly rather than reusing
+// sessionHistoryReader because that adapter projects onto
+// llm.SessionMessage, which drops the row id — the one field this
+// lookup exists to return.
+type chatTurnSpanReader struct {
+	mgr *session.Manager
+}
+
+func (r chatTurnSpanReader) LatestUserMessageID(ctx context.Context, sessionID string) (string, error) {
+	if r.mgr == nil {
+		return "", nil
+	}
+	msgs, err := r.mgr.ListMessages(ctx, sessionID)
+	if err != nil {
+		return "", err
+	}
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == session.RoleUser {
+			return msgs[i].ID, nil
+		}
+	}
+	return "", nil
 }
 
 // chatBrokerAdapter wraps *StreamBroker so the chat package's narrow
@@ -6047,6 +6086,7 @@ func (w *llmHistoryWriter) AppendEntry(ctx context.Context, sessionID string,
 		Kind:       session.MoveKind(entry.MoveKind),
 		MoveIndex:  entry.MoveIndex,
 		TurnSpanID: entry.TurnSpanID,
+		ToolCalls:  moveToolCalls(entry.ToolCalls),
 	})
 	if err != nil {
 		return "", err
@@ -6063,6 +6103,27 @@ func (w *llmHistoryWriter) AppendEntry(ctx context.Context, sessionID string,
 		}
 	}
 	return stored.ID, nil
+}
+
+// moveToolCalls projects the seam's tool payload onto the store's
+// session.ToolCall shape (model-moves-transcript-01PMCH01 WP02).
+//
+// DISPLAY-LAYER REDACTION (spec §4). session.ToolCall.Arguments is
+// deliberately left nil: the raw argument map is exactly what a
+// tool_call entry must not carry into the display layer. The entry's
+// Content already holds the args SUMMARY the chat runner built
+// (displayArgsSummary). The model-visible layer that legitimately needs
+// raw arguments is WP03's and it composes them from the provider
+// history — do not "fix" this by filling Arguments in here.
+func moveToolCalls(calls []coreag.ToolCallRequest) []session.ToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	out := make([]session.ToolCall, 0, len(calls))
+	for _, c := range calls {
+		out = append(out, session.ToolCall{ID: c.ID, Name: c.Name})
+	}
+	return out
 }
 
 // SystemPromptFor implements llm.SessionContextReader by reading the
