@@ -247,6 +247,22 @@ describe('GraphEditor canvas — one buffer', () => {
     expect(textarea(wrapper).value).toBe(before);
   });
 
+  it('the attribute editor cannot mutate a read-only buffer either', async () => {
+    // The other half of WP12 review N3. Attr edits used to rewrite the
+    // text by string-splicing without consulting readOnly; they go
+    // through the same op path the canvas does now.
+    const { wrapper } = mountWith({ scope: 'materialized' });
+    await flushPromises();
+    const before = textarea(wrapper).value;
+    (wrapper.vm as unknown as EditorVM).applyCanvasOp({
+      type: 'set-attrs',
+      id: 'a',
+      attrs: { verbosity: 'verbose' },
+    });
+    await flushPromises();
+    expect(textarea(wrapper).value).toBe(before);
+  });
+
   it('renders the canvas read-only for a library graph', async () => {
     const { wrapper } = mountWith({ scope: 'library' });
     await flushPromises();
@@ -282,6 +298,46 @@ describe('GraphEditor canvas — one buffer', () => {
     const savedYAML = saveGraph.mock.calls[0][0].yaml;
     expect(savedYAML).toContain('a:');
     expect(savedYAML).not.toContain('ghost');
+  });
+
+  it('a save with zero drags writes NO layout block at all', async () => {
+    // The assertion the first version of this suite never made, and the
+    // bug it hid: `pendingLayout` counted "no authored layout" as
+    // "moved", so the FIRST save of an untouched layout-free graph
+    // injected a full auto-layout block — pinning the graph forever
+    // (no more reflow when nodes are added) and breaking spec §4's
+    // "authored graphs without layout stay byte-identical" for anyone
+    // who opens a library graph, copies it, and saves.
+    const { wrapper, saveGraph } = mountWith();
+    await flushPromises();
+    expect(textarea(wrapper).value).not.toContain('layout:');
+    await (wrapper.vm as unknown as EditorVM).save();
+    await flushPromises();
+    expect(saveGraph).toHaveBeenCalled();
+    expect(saveGraph.mock.calls[0][0].yaml).not.toContain('layout:');
+    expect(textarea(wrapper).value).not.toContain('layout:');
+  });
+
+  it('a save after one drag writes only that node', async () => {
+    const { wrapper, saveGraph } = mountWith();
+    await flushPromises();
+    const canvas = wrapper.findComponent({ name: 'GraphCanvas' });
+    (
+      canvas.vm as unknown as {
+        onNodeDragStop: (p: {
+          nodes: Array<{ id: string; position: { x: number; y: number } }>;
+        }) => void;
+      }
+    ).onNodeDragStop({ nodes: [{ id: 'b', position: { x: 17, y: 29 } }] });
+    await flushPromises();
+    await (wrapper.vm as unknown as EditorVM).save();
+    await flushPromises();
+    const savedYAML = saveGraph.mock.calls[0][0].yaml;
+    expect(savedYAML).toContain('layout:');
+    expect(savedYAML).toMatch(/b:\s*\n?\s*x: 17/);
+    // Node `a` was never dragged, so it stays on auto-layout and out of
+    // the file — only the deliberate placement is persisted.
+    expect(savedYAML).not.toMatch(/^\s+a:$/m);
   });
 
   it('refuses an illegal edge with the validator message', async () => {

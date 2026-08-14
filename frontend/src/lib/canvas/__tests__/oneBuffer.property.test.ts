@@ -27,7 +27,7 @@
 import { describe, expect, it } from 'vitest';
 import { parse as yamlParse, stringify as yamlStringify } from 'yaml';
 
-import { allocateNodeId, applyOpToDoc, parseGraphText, serializeDoc } from '../graphSpec';
+import { applyOpToDoc, parseGraphText, serializeDoc } from '../graphSpec';
 import type { SpecOp } from '../types';
 
 import { DIAMOND_YAML, libraryGraphYAML } from '../__fixtures__/graphFixtures';
@@ -35,6 +35,25 @@ import { DIAMOND_YAML, libraryGraphYAML } from '../__fixtures__/graphFixtures';
 // ── the reference implementation (test-side oracle) ───────────────────
 
 type Plain = Record<string, unknown>;
+
+/**
+ * The oracle's OWN id allocator.
+ *
+ * It deliberately does not import production's `allocateNodeId`. Sharing
+ * it would have carved a hole in the property exactly where ids are
+ * decided — the two implementations would agree on `model_3` because
+ * they were the same function, not because both were right — and id
+ * allocation is precisely the rule an op-application bug would get
+ * wrong (colliding with a node the surgical path failed to see). Two
+ * independent statements of the same rule is the whole design of this
+ * file; this is the last place to make an exception.
+ */
+function oracleAllocateID(kind: string, taken: string[]): string {
+  for (let i = 1; ; i += 1) {
+    const candidate = `${kind}_${i}`;
+    if (!taken.includes(candidate)) return candidate;
+  }
+}
 
 function refApply(doc: Plain, op: SpecOp): Plain {
   const g: Plain = structuredClone(doc);
@@ -45,7 +64,7 @@ function refApply(doc: Plain, op: SpecOp): Plain {
   switch (op.type) {
     case 'add-node': {
       const taken = nodes.map((n) => String(n.id));
-      const id = op.id && !taken.includes(op.id) ? op.id : allocateNodeId(op.kind, taken);
+      const id = op.id && !taken.includes(op.id) ? op.id : oracleAllocateID(op.kind, taken);
       nodes.push({ id, kind: op.kind, attrs: {} });
       layout[id] = { x: Math.round(op.position.x), y: Math.round(op.position.y) };
       g.nodes = nodes;
@@ -292,7 +311,7 @@ function randomOps(rand: () => number, text: string, count: number): SpecOp[] {
           kind,
           position: { x: rand() * 400 - 200, y: rand() * 400 - 200 },
         });
-        ids.push(allocateNodeId(kind, ids));
+        ids.push(oracleAllocateID(kind, ids));
         break;
       }
       case 1:

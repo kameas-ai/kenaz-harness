@@ -91,14 +91,17 @@ const isMaterialized = computed(() => scope.value === 'materialized');
  * rather than served as if it were faithful.
  */
 /*
- * LATENT HAZARD, routed to Phase 8 (WP12 review N3): the node palette
- * and the attribute editor mutate `yaml` directly (appendStubNode /
- * onPaletteSelect) without consulting `readOnly`. Nothing can be saved
- * from a read-only buffer — `save()` returns early and no Save control
- * renders — so the worst case today is a viewer editing a scratch copy
- * of a materialized run and losing it on navigation. Gating the palette
- * itself is the real fix and it touches the whole three-pane editor, so
- * it is not smuggled into this WP.
+ * WP12 review N3 (palette + attribute editor mutating a read-only
+ * buffer): CLOSED for both halves by visual-graph-authoring-01PMUX01.
+ *
+ * The palette's direct `yaml` mutation (`appendStubNode`) is gone — a
+ * palette click emits the same add-node op a canvas drop does (WP03).
+ * The attribute editor's string-splicing rewrite is gone too — attr
+ * edits emit a set-attrs op (WP04). Both go through `applyCanvasOp`,
+ * which returns early when `readOnly`, so there is no mutation path to
+ * guard rather than a guard someone can forget. Pinned by
+ * GraphEditor.canvas.test.ts, "the palette cannot mutate a read-only
+ * buffer".
  */
 const isDegraded = computed(() =>
   /^spec_provenance:\s*"?library_fallback"?\s*$/m.test(yaml.value),

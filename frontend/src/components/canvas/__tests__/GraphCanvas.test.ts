@@ -87,10 +87,54 @@ describe('GraphCanvas', () => {
       'right',
       'start',
     ]);
-    // Auto-layout positions are not "moves" — a save that only viewed
-    // the graph must not write a layout block.
-    expect(vm.movedNodeIds().length).toBe(5);
-    expect(Object.keys(vm.pendingLayout())).toHaveLength(5);
+    // AUTO-LAYOUT POSITIONS ARE NOT MOVES. The fixture carries no
+    // `layout:` block, so every node sits where dagre put it — and a
+    // save that only VIEWED the graph must write no layout at all.
+    // Reporting them as moved would freeze the auto-layout into the
+    // spec on first save and stop it ever reflowing again (spec §4:
+    // "absent = auto-layout"; library copies must stay byte-identical).
+    expect(vm.movedNodeIds()).toEqual([]);
+    expect(vm.pendingLayout()).toEqual({});
+  });
+
+  it('reports only the node the user actually dragged', () => {
+    const w = mount(GraphCanvas, {
+      props: { adapter: adapterFor(DIAMOND_YAML, false), fitViewOnInit: false },
+    });
+    const vm = w.vm as unknown as {
+      movedNodeIds: () => string[];
+      pendingLayout: () => Record<string, unknown>;
+      onNodeDragStop: (p: {
+        nodes: Array<{ id: string; position: { x: number; y: number } }>;
+      }) => void;
+    };
+    vm.onNodeDragStop({ nodes: [{ id: 'gate', position: { x: 40, y: 50 } }] });
+    expect(vm.movedNodeIds()).toEqual(['gate']);
+    expect(vm.pendingLayout()).toEqual({ gate: { x: 40, y: 50 } });
+  });
+
+  it('stops reporting a node dragged back onto its authored position', () => {
+    const w = mount(GraphCanvas, {
+      props: {
+        adapter: adapterFor(
+          `${DIAMOND_YAML}layout:\n  gate: { x: 3, y: 4 }\n`,
+          false,
+        ),
+        fitViewOnInit: false,
+      },
+    });
+    const vm = w.vm as unknown as {
+      movedNodeIds: () => string[];
+      pendingLayout: () => Record<string, unknown>;
+      onNodeDragStop: (p: {
+        nodes: Array<{ id: string; position: { x: number; y: number } }>;
+      }) => void;
+    };
+    vm.onNodeDragStop({ nodes: [{ id: 'gate', position: { x: 90, y: 90 } }] });
+    expect(vm.movedNodeIds()).toEqual(['gate']);
+    vm.onNodeDragStop({ nodes: [{ id: 'gate', position: { x: 3, y: 4 } }] });
+    expect(vm.movedNodeIds()).toEqual([]);
+    expect(vm.pendingLayout()).toEqual({});
   });
 
   it('keeps authored layout coordinates and reports them unmoved', () => {
