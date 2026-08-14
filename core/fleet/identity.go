@@ -218,14 +218,28 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 	}
 
 	if resp.StatusCode == http.StatusUnauthorized {
-		logging.L().Info("fleet.enroll.401_refreshing")
-		// Attempt token refresh.
-		newTS, refreshErr := RefreshTokenSet(ctx, c.profile, ts.RefreshToken)
-		if refreshErr != nil {
-			return Identity{}, ErrTokenExpired
-		}
-		if saveErr := SaveTokens(newTS); saveErr != nil {
-			return Identity{}, saveErr
+		var newTS TokenSet
+		if _, ok := externalTokens(); ok {
+			// Renewal is externally owned (host auth broker); re-read the
+			// source once and retry. An unchanged token means the session
+			// is dead host-side — same contract as http.go's doRefresh.
+			logging.L().Info("fleet.enroll.401_rereading_brokered_token")
+			reloaded, reloadErr := LoadTokens()
+			if reloadErr != nil || reloaded.AccessToken == ts.AccessToken {
+				return Identity{}, ErrTokenExpired
+			}
+			newTS = reloaded
+		} else {
+			logging.L().Info("fleet.enroll.401_refreshing")
+			// Attempt token refresh.
+			refreshed, refreshErr := RefreshTokenSet(ctx, c.profile, ts.RefreshToken)
+			if refreshErr != nil {
+				return Identity{}, ErrTokenExpired
+			}
+			if saveErr := SaveTokens(refreshed); saveErr != nil {
+				return Identity{}, saveErr
+			}
+			newTS = refreshed
 		}
 		// Retry with new token.
 		req2, _ := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(bodyBytes))

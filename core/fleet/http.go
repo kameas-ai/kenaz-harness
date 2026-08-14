@@ -147,6 +147,21 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 			c.emitSessionExpired("re-authentication required after refresh failure")
 			return nil, ErrTokenExpired
 		}
+		if _, ok := externalTokens(); ok {
+			// Renewal is externally owned (host auth broker): there is no
+			// refresh token on this side of the boundary. Re-read the source
+			// once — the broker may have renewed since this request started —
+			// and retry with the newer token; an unchanged token means the
+			// server is rejecting a token the broker still considers live,
+			// so the session is dead host-side.
+			reloaded, reloadErr := LoadTokens()
+			if reloadErr != nil || reloaded.AccessToken == ts.AccessToken {
+				c.emitSessionExpired("brokered access token rejected by fleet")
+				return nil, ErrTokenExpired
+			}
+			ts = reloaded
+			continue
+		}
 		newTS, refreshErr := RefreshTokenSet(ctx, c.profile, ts.RefreshToken)
 		if refreshErr != nil {
 			c.emitSessionExpired("refresh token exchange failed: " + refreshErr.Error())
