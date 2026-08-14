@@ -1,8 +1,11 @@
 package rpc
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
+	"github.com/kameas-ai/kenaz-harness/core"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 	corebash "github.com/kameas-ai/kenaz-harness/core/tools/bash"
@@ -108,5 +111,71 @@ func TestSubagentDispatchNotRegisteredWhenSeamNil(t *testing.T) {
 		if name == coresubagent.ToolName {
 			t.Errorf("kenaz__subagent_dispatch is registered even though BranchSeam is nil (FR-007)")
 		}
+	}
+}
+
+// TestBuiltinEnabledPredicate_AllRegisteredToolsHaveExplicitCase is the
+// tripwire for FR-006. It boots a REAL HarnessAPI the exact way production
+// does (rpc.New(c) — the same call main.go makes) so every builtin tool
+// that registerBuiltinTools / registerFSRequestTool / registerFSBuiltinTools
+// / registerReadContextFileTool wire in gets a chance to register, then
+// pushes every name the registry actually holds through
+// builtinEnabledPredicate.
+//
+// A tool name with no explicit `case` in builtinEnabledPredicate falls
+// through to the fail-closed default branch, which logs
+// "rpc.builtins.predicate.unknown_tool" — this test fails if that log line
+// ever fires for a registered tool, so a newly-registered tool with a
+// forgotten predicate case can't silently regress into being denied from
+// every catalog. This is exactly how kenaz__ask_user_question broke: it
+// was registered unconditionally in registerBuiltinTools but had no case
+// in builtinEnabledPredicate, so it was denied (with a WARN) on every
+// tool listing / dispatch.
+func TestBuiltinEnabledPredicate_AllRegisteredToolsHaveExplicitCase(t *testing.T) {
+	c, err := core.New(core.Options{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("core.New: %v", err)
+	}
+	api := New(c)
+
+	registry := api.Builtins()
+	if registry == nil {
+		t.Fatal("builtins registry is nil — construction broke")
+	}
+	names := registry.Names()
+	if len(names) == 0 {
+		t.Fatal("builtin registry is empty — construction broke")
+	}
+
+	pred := builtinEnabledPredicate(api.settingsImpl)
+
+	logs := captureLog(t, func() {
+		for _, name := range names {
+			pred(name)
+		}
+	})
+
+	var unhandled []string
+	for _, line := range strings.Split(strings.TrimSpace(logs), "\n") {
+		if line == "" {
+			continue
+		}
+		var rec struct {
+			Msg  string `json:"msg"`
+			Tool string `json:"tool"`
+		}
+		if jsonErr := json.Unmarshal([]byte(line), &rec); jsonErr != nil {
+			continue
+		}
+		if rec.Msg == "rpc.builtins.predicate.unknown_tool" {
+			unhandled = append(unhandled, rec.Tool)
+		}
+	}
+	if len(unhandled) > 0 {
+		t.Errorf("builtinEnabledPredicate has no explicit case for registered tool(s) %v — "+
+			"every name registered by registerBuiltinTools/registerFSRequestTool/"+
+			"registerFSBuiltinTools/registerReadContextFileTool must have a case in "+
+			"builtinEnabledPredicate (FR-006); registered tool names were: %v",
+			unhandled, names)
 	}
 }
