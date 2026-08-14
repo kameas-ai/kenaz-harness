@@ -234,6 +234,12 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 		StopSequences:         append([]string(nil), a.StopSequences...),
 		ReasoningBudgetTokens: reasoningBudgetPtr,
 		FallbackChainId:       a.FallbackChainId,
+		// model-moves-transcript-01PMCH01 WP02: the node's own
+		// stream_to_chat attr, forwarded so the chassis provider seam can
+		// tell the chat's assistant turn apart from the six other
+		// executors that also call env.LLM.Generate. This is the attr's
+		// first reader.
+		StreamToChat: a.StreamToChat,
 	}
 
 	if env.Counters != nil {

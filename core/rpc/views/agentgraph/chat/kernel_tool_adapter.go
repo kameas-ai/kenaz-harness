@@ -59,6 +59,11 @@ type kernelToolAdapter struct {
 	sessionID string
 	catalog   []ToolEntry
 
+	// moves is the turn's move journal
+	// (model-moves-transcript-01PMCH01 WP02). Non-nil on the chat path;
+	// nil (or inert) leaves Call byte-identical to the pre-mission path.
+	moves *turnJournal
+
 	// autonomy is the optional knobs provider for autonomy-dial WP04.
 	// When non-nil the adapter reads AutoApproveFamilies before each
 	// tool call to determine whether the permission-resolver prompt path
@@ -128,6 +133,15 @@ func newKernelToolAdapter(pool ToolPool, perms ToolPermissionResolver, sessionID
 		perms:     perms,
 		sessionID: sessionID,
 	}
+}
+
+// withMoves attaches the turn's move journal so each dispatch lands a
+// tool_call / tool_result pair in the transcript
+// (model-moves-transcript-01PMCH01 WP02). Returns the same pointer so
+// callers can chain at construction time.
+func (a *kernelToolAdapter) withMoves(j *turnJournal) *kernelToolAdapter {
+	a.moves = j
+	return a
 }
 
 // withAutonomy attaches an AutonomyKnobsProvider to the adapter.
@@ -237,10 +251,44 @@ func (a *kernelToolAdapter) Has(name string) bool {
 	return false
 }
 
-// Call dispatches through the pool, consulting the permission
-// resolver first. Returns IsError=true on deny / pool failure so the
-// kernel surfaces the failure to the model without crashing the run.
+// Call dispatches one tool and records the pair of transcript moves it
+// produces (model-moves-transcript-01PMCH01 WP02).
+//
+// The tool_call entry is written BEFORE dispatch, not after: a tool the
+// user stops mid-flight, or one that never returns, must still leave the
+// request in the transcript — otherwise the interrupt path's synthetic
+// is_error result would be an orphan, and an orphaned tool_result is the
+// classic provider 400 the moment WP03 feeds these entries back as
+// history.
+//
+// A call that never reaches dispatch (unknown tool, permission resolve
+// error) records nothing: the model asked, the harness refused before
+// asking anything on its behalf, and the kernel surfaces that error up
+// the run.
 func (a *kernelToolAdapter) Call(ctx context.Context, call coreag.ToolCall) (coreag.ToolResult, error) {
+	if !a.moves.records() {
+		return a.dispatch(ctx, call)
+	}
+	a.moves.RecordToolCall(ctx, call)
+	res, err := a.dispatch(ctx, call)
+	if err != nil {
+		// The dispatch itself failed rather than the tool returning an
+		// error result. Close the pair anyway so the tool_call is not
+		// left dangling.
+		a.moves.RecordToolResult(ctx, call, coreag.ToolResult{
+			Content: err.Error(),
+			IsError: true,
+		})
+		return res, err
+	}
+	a.moves.RecordToolResult(ctx, call, res)
+	return res, nil
+}
+
+// dispatch is Call's body: permission resolution followed by the pool
+// invocation. Returns IsError=true on deny / pool failure so the kernel
+// surfaces the failure to the model without crashing the run.
+func (a *kernelToolAdapter) dispatch(ctx context.Context, call coreag.ToolCall) (coreag.ToolResult, error) {
 	if a == nil || a.pool == nil {
 		logging.L().Error("chat.tool_adapter.nil_pool", "tool", call.Name)
 		return coreag.ToolResult{}, errors.New("chat: nil tool pool adapter")

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 	"github.com/kameas-ai/kenaz-harness/core/storage"
 	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
@@ -433,5 +434,159 @@ func TestMigration0333_ColumnsExistAndDefaultNull(t *testing.T) {
 	}
 	if nonNull != 0 {
 		t.Errorf("legacy row picked up %d non-NULL move column(s); migration must not backfill", nonNull)
+	}
+}
+
+// TestAppendContinuation_CarriesMoveColumns closes the gap the WP01
+// review found: sqlStore.AppendContinuation's INSERT named nine columns
+// and omitted kind / move_index / turn_span_id, so a continuation row
+// dropped its move identity in the database while the Message it
+// RETURNED still carried it in memory. The caller and the store
+// disagreed and only a reload told you which one was lying.
+//
+// It was unreachable while every production write left the move fields
+// zero. WP02 fills a chat turn with non-zero ones, so the first user who
+// resumes an interrupted move-bearing turn reaches it.
+//
+// The input Message here is one READ BACK from the store, which is the
+// only way a caller outside core/session can hold move metadata at all
+// (the fields are unexported) and exactly the shape the eventual
+// Sessions_ResumeMessage continuation path will use.
+//
+// Mutation check (kills this test): drop the three columns from the
+// AppendContinuation INSERT again → the reloaded continuation reads
+// back with an empty MoveKind.
+func TestAppendContinuation_CarriesMoveColumns(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mgr, sid := newMovesSQLManager(t)
+
+	turn, err := mgr.AppendTranscriptEntry(ctx, sid, session.TranscriptEntry{
+		Role: session.RoleUser, Content: "do the thing",
+	})
+	if err != nil {
+		t.Fatalf("user turn: %v", err)
+	}
+	original, err := mgr.AppendTranscriptEntry(ctx, sid, session.TranscriptEntry{
+		Role: session.RoleAssistant, Content: "partial…",
+		Kind: session.MoveKindAssistantMove, MoveIndex: 2, TurnSpanID: turn.ID,
+	})
+	if err != nil {
+		t.Fatalf("partial move: %v", err)
+	}
+
+	// Read it back so the continuation is built from a Message that
+	// actually carries the (unexported) move fields.
+	msgs, err := mgr.ListMessages(ctx, sid)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	var source session.Message
+	for _, m := range msgs {
+		if m.ID == original.ID {
+			source = m
+		}
+	}
+	if source.MoveKind() != session.MoveKindAssistantMove {
+		t.Fatalf("precondition: source move kind = %q", source.MoveKind())
+	}
+	source.ID = ""
+	source.Content = "partial… and the rest"
+
+	cont, err := mgr.AppendContinuation(ctx, sid, original.ID, source)
+	if err != nil {
+		t.Fatalf("AppendContinuation: %v", err)
+	}
+	if cont.MoveKind() != session.MoveKindAssistantMove {
+		t.Errorf("returned continuation MoveKind = %q, want assistant_move", cont.MoveKind())
+	}
+
+	// The DURABLE row is the point: reload and check the columns landed.
+	reloaded, err := mgr.ListMessages(ctx, sid)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	var got session.Message
+	for _, m := range reloaded {
+		if m.ID == cont.ID {
+			got = m
+		}
+	}
+	if got.ID == "" {
+		t.Fatalf("continuation row %q not found on reload", cont.ID)
+	}
+	if got.MoveKind() != session.MoveKindAssistantMove {
+		t.Errorf("reloaded MoveKind = %q, want assistant_move — the INSERT dropped it", got.MoveKind())
+	}
+	if got.MoveIndex() == nil || *got.MoveIndex() != 2 {
+		t.Errorf("reloaded MoveIndex = %v, want 2", got.MoveIndex())
+	}
+	if got.TurnSpanID() != turn.ID {
+		t.Errorf("reloaded TurnSpanID = %q, want %q", got.TurnSpanID(), turn.ID)
+	}
+}
+
+// TestAppendTranscriptEntry_CarriesContentBlocks closes the other WP01
+// review finding: TranscriptEntry had no ContentBlocks, so the seam
+// could express strictly LESS than Manager.AppendMessage. An author who
+// needed a multimodal entry had to use AppendMessage — which cannot
+// stamp move metadata — and the move silently became a classic entry
+// with neither the compiler nor check-single-move-writer.sh objecting.
+//
+// With ContentBlocks on the seam there is no longer a shape that forces
+// an author off it, and the compiler still forbids minting move
+// metadata anywhere else, so the degradation is not merely discouraged
+// — it is unreachable.
+//
+// Mutation check (kills this test): drop `ContentBlocks: e.ContentBlocks`
+// from the Message literal in AppendTranscriptEntry → the reloaded entry
+// carries the synthesized single text block instead of the two authored
+// ones.
+func TestAppendTranscriptEntry_CarriesContentBlocks(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mgr, sid := newMovesSQLManager(t)
+
+	turn, err := mgr.AppendTranscriptEntry(ctx, sid, session.TranscriptEntry{
+		Role: session.RoleUser, Content: "look at this",
+	})
+	if err != nil {
+		t.Fatalf("user turn: %v", err)
+	}
+	stored, err := mgr.AppendTranscriptEntry(ctx, sid, session.TranscriptEntry{
+		Role: session.RoleAssistant,
+		ContentBlocks: []llm.ContentBlock{
+			{Type: "text", Text: "here is the chart"},
+			{Type: "image", Source: &llm.MediaSource{Kind: "base64", MediaType: "image/png", Data: "iVBOR"}},
+		},
+		Kind: session.MoveKindFinal, MoveIndex: 1, TurnSpanID: turn.ID,
+	})
+	if err != nil {
+		t.Fatalf("multimodal move: %v", err)
+	}
+
+	msgs, err := mgr.ListMessages(ctx, sid)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	var got session.Message
+	for _, m := range msgs {
+		if m.ID == stored.ID {
+			got = m
+		}
+	}
+	if len(got.ContentBlocks) != 2 {
+		t.Fatalf("reloaded ContentBlocks = %d, want 2: %+v", len(got.ContentBlocks), got.ContentBlocks)
+	}
+	if got.ContentBlocks[1].Type != "image" {
+		t.Errorf("second block type = %q, want image", got.ContentBlocks[1].Type)
+	}
+	// And the move metadata survived alongside it — the whole point is
+	// that ONE entry can carry both.
+	if got.MoveKind() != session.MoveKindFinal {
+		t.Errorf("MoveKind = %q, want final", got.MoveKind())
+	}
+	if got.TurnSpanID() != turn.ID {
+		t.Errorf("TurnSpanID = %q, want %q", got.TurnSpanID(), turn.ID)
 	}
 }

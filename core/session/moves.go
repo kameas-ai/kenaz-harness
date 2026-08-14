@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // ---------------------------------------------------------------------------
@@ -110,6 +112,22 @@ type TranscriptEntry struct {
 	// ToolCalls carries the structured tool payload for tool_call /
 	// tool_result entries.
 	ToolCalls []ToolCall
+	// ContentBlocks is the polymorphic multimodal body (the
+	// content_json column added by multimodal-io WP02). Empty means
+	// "text only" and the store synthesizes the canonical single text
+	// block from Content, exactly as it does for every other writer.
+	//
+	// WHY IT IS HERE (model-moves-transcript-01PMCH01 WP02, review of
+	// WP01): without it this seam could express strictly LESS than
+	// Manager.AppendMessage, and the only way to persist a multimodal
+	// entry was the AppendMessage path — which cannot stamp move
+	// metadata, so a move routed through it degraded to a classic entry
+	// with neither the compiler nor check-single-move-writer.sh
+	// objecting. The degradation was silent because the author had no
+	// expressive alternative. Now there is one, and the compiler still
+	// forbids minting move metadata anywhere else, so the only remaining
+	// use of AppendMessage is what it has always been: classic entries.
+	ContentBlocks []llm.ContentBlock
 
 	// Kind is the move classification. Empty means "classic entry".
 	Kind MoveKind
@@ -163,9 +181,10 @@ func (m *Manager) AppendTranscriptEntry(ctx context.Context, sessionID string,
 		return Message{}, err
 	}
 	msg := Message{
-		Role:      e.Role,
-		Content:   e.Content,
-		ToolCalls: e.ToolCalls,
+		Role:          e.Role,
+		Content:       e.Content,
+		ToolCalls:     e.ToolCalls,
+		ContentBlocks: e.ContentBlocks,
 	}
 	if e.isMove() {
 		idx := e.MoveIndex

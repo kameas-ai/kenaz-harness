@@ -255,6 +255,27 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			content: "package session\n\nconst zzGateProbeSQL = \"UPDATE session_messages SET move_index = ?, turn_span_id = ?\"\n",
 		},
 		{
+			name: "single-move-writer/sql-with-a-json-tag-in-a-trailing-comment",
+			gate: "check-single-move-writer.sh",
+			// Clause 2c skips struct-tag lines so the stream event's
+			// json:"move_index" tag can mirror the column. The first cut
+			// of that skip matched `.*json:"` ANYWHERE on the line, which
+			// meant a trailing comment naming the tag switched the clause
+			// off for a line of real SQL. The skip is now shape-anchored;
+			// this pins that it stays so.
+			file:    "core/rpc/zz_gate_probe.go",
+			content: "package rpc\n\nconst zzGateProbeSQL = \"UPDATE session_messages SET move_index = 1\" // mirrors json:\"move_index\"\n",
+		},
+		{
+			name: "single-move-writer/sql-with-a-json-tag-in-an-sql-comment",
+			gate: "check-single-move-writer.sh",
+			// The same bypass without needing a Go comment at all: `--`
+			// is SQL's comment marker, so this is one valid statement in
+			// a raw string that the substring skip waved through.
+			file:    "core/rpc/zz_gate_probe.go",
+			content: "package rpc\n\nconst zzGateProbeSQL = `\nUPDATE session_messages SET turn_span_id = ? -- json:\"turn_span_id\"\n`\n",
+		},
+		{
 			name: "slog-privacy/typed-attr-constructor",
 			gate: "check-no-user-content-in-slog.sh",
 			file: "core/rpc/zz_gate_probe.go",
