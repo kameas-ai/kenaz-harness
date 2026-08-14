@@ -77,6 +77,19 @@ async function pollOnce() {
       events.value = [...events.value, ...tail];
       // New events ⇒ the projection can have changed. No new events ⇒
       // it provably cannot, so the graph is left alone.
+      //
+      // COALESCING: this is awaited, and `schedulePoll` only arms the next
+      // timeout after `pollOnce` resolves, so a slow projection delays the
+      // next poll rather than overlapping with itself. That is the
+      // intended trade — a busy run re-projects at whatever rate the
+      // projection can sustain instead of queueing work it cannot finish,
+      // and the trace tail catches up in one larger batch on the next tick
+      // (`since` is the last seq seen, so nothing is skipped).
+      //
+      // It also means the 500 ms POLL_MS is a floor, not a period. If that
+      // ever needs to become a true period, the fix is to drop a projection
+      // that is already in flight — not to fire this without awaiting,
+      // which would let two refreshes race and settle in arrival order.
       await refreshGraph();
     }
   } catch (err) {

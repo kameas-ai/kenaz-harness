@@ -16,10 +16,13 @@ import { fileURLToPath } from 'node:url';
 import {
   EDITABLE_STEP_FIELDS,
   LOSSY_KINDS,
+  UNREPRESENTED_FIELDS_BY_KIND,
+  WIRE_STEP_FIELDS,
   WORKFLOW_STEP_KINDS,
   applyOpToWorkflow,
   buildWorkflowAdapter,
   checkWorkflowEdge,
+  droppedFieldsIn,
   edgesOf,
   freeStepName,
   lossyKindsIn,
@@ -417,12 +420,20 @@ describe('parity with the Go source', () => {
   });
 
   /*
+   * A CANARY, not a parity proof — and the distinction matters enough to
+   * state, because the name it used to have ("mirrors the reference
+   * rules") claimed something it does not do.
+   *
    * The edge rules are reimplemented in TypeScript because workflows has
    * no per-edge check RPC (agentgraph has `Graph_CheckEdge` precisely so
-   * ITS rules are never forked). That is a genuine second rule source,
-   * so this pins that the Go side still says what the copy assumes.
+   * ITS rules are never forked). Nothing here executes the Go rules or
+   * compares verdicts; it asserts that three named substrings still
+   * appear in `schema.go` / `loader.go`. That catches the rules being
+   * DELETED or RENAMED out from under the copy — the realistic drift —
+   * and catches nothing about their behaviour changing while the names
+   * hold. Real parity needs the RPC.
    */
-  it('mirrors the reference rules the Go validator enforces', () => {
+  it('canary: the Go rules this copy mirrors are still named there', () => {
     const schema = readFileSync(resolve(REPO_ROOT, 'core/workflows/schema.go'), 'utf8');
     expect(schema).toContain('inputs_from unknown step');
     expect(schema).toContain('inputs_from itself');
@@ -431,30 +442,95 @@ describe('parity with the Go source', () => {
   });
 
   /*
-   * The lossy-kind list is a claim about `unprojectWorkflow`. If someone
-   * widens the wire Step, this test is where the list must shrink.
+   * The lossy map is a claim about `unprojectWorkflow`, and it is the
+   * claim the first cut of this WP got WRONG: it listed only kinds whose
+   * REQUIRED config was missing, which implied the other five were safe.
+   * They were not — `model_turn` loses profile/model/tools, `shell` loses
+   * env/cwd/timeout, `http_request` loses headers/body.
+   *
+   * So this pins the map from BOTH sides against the two Go structs:
+   * every unrepresented field must really exist on the Go Step and must
+   * really be absent from the wire Step, and no Go field may go
+   * unaccounted for. Widen the wire and this fails until the map shrinks
+   * — which is the point.
    */
-  it('names only kinds the wire Step cannot carry', () => {
-    const api = readFileSync(
-      resolve(REPO_ROOT, 'core/rpc/views/workflows/api.go'),
-      'utf8',
-    );
-    const stepBlock = api.slice(api.indexOf('type Step struct'));
-    const wireFields = stepBlock.slice(0, stepBlock.indexOf('}')).toLowerCase();
-    // Every kind with an editable field must have that field on the wire.
-    for (const [kind, fields] of Object.entries(EDITABLE_STEP_FIELDS)) {
-      expect(LOSSY_KINDS).not.toContain(kind);
-      for (const f of fields) expect(wireFields).toContain(f.toLowerCase());
-    }
-    // And nothing is both editable and declared lossy.
-    expect(
-      LOSSY_KINDS.filter((k) => k in EDITABLE_STEP_FIELDS),
-    ).toEqual([]);
+  function goStepJSONTags(path: string): string[] {
+    const src = readFileSync(resolve(REPO_ROOT, path), 'utf8');
+    const start = src.indexOf('type Step struct');
+    expect(start).toBeGreaterThan(-1);
+    const block = src.slice(start, src.indexOf('\n}', start));
+    return [...block.matchAll(/json:"([A-Za-z]+)[,"]/g)].map((m) => m[1]);
+  }
+
+  it('carries exactly the fields the wire Step declares', () => {
+    const wire = goStepJSONTags('core/rpc/views/workflows/api.go');
+    expect([...WIRE_STEP_FIELDS].sort()).toEqual([...wire].sort());
   });
 
-  it('reports the lossy kinds present in a workflow', () => {
-    expect(lossyKindsIn(CHAIN)).toEqual(['transform', 'write_artifact']);
-    expect(lossyKindsIn(wf([{ name: 'a', kind: 'shell' }]))).toEqual([]);
+  it('accounts for every field on the Go Step, as wire-carried or dropped', () => {
+    const goFields = new Set(goStepJSONTags('core/workflows/types.go'));
+    expect(goFields.size).toBeGreaterThan(30);
+    const accounted = new Set<string>(WIRE_STEP_FIELDS);
+    for (const fields of Object.values(UNREPRESENTED_FIELDS_BY_KIND)) {
+      for (const f of fields) accounted.add(f);
+    }
+    // A new Go field that nobody classified is a silent new data loss.
+    expect([...goFields].filter((f) => !accounted.has(f)).sort()).toEqual([]);
+  });
+
+  it('never calls a wire-carried field unrepresented', () => {
+    const wire = new Set(WIRE_STEP_FIELDS);
+    for (const [kind, fields] of Object.entries(UNREPRESENTED_FIELDS_BY_KIND)) {
+      for (const f of fields) {
+        expect({ kind, field: f, onWire: wire.has(f) }).toEqual({
+          kind,
+          field: f,
+          onWire: false,
+        });
+      }
+    }
+  });
+
+  it('only offers editable fields the wire can carry', () => {
+    const wire = new Set(WIRE_STEP_FIELDS);
+    for (const fields of Object.values(EDITABLE_STEP_FIELDS)) {
+      for (const f of fields) expect(wire.has(f)).toBe(true);
+    }
+  });
+
+  /*
+   * Every kind is lossy. That is not a list worth reading, which is why
+   * the banner leads with the surviving fields instead — but the SET is
+   * still pinned, so a wire widening that makes a kind whole shows up
+   * here as a deliberate edit rather than passing unnoticed.
+   */
+  it('reports every step kind as lossy, because every one of them is', () => {
+    expect(LOSSY_KINDS).toEqual([...WORKFLOW_STEP_KINDS.map((k) => k.kind)].sort());
+    expect(lossyKindsIn(CHAIN)).toEqual([
+      'http_request',
+      'transform',
+      'write_artifact',
+    ]);
+    expect(lossyKindsIn(wf([{ name: 'a', kind: 'shell' }]))).toEqual(['shell']);
     expect(lossyKindsIn(null)).toEqual([]);
+  });
+
+  it('names the specific fields a workflow stands to lose', () => {
+    expect(droppedFieldsIn(wf([{ name: 'a', kind: 'shell' }]))).toEqual([
+      'cwd',
+      'env',
+      'timeoutMs',
+    ]);
+    // The union across kinds, deduplicated: tool_call and shell share
+    // env/cwd/timeoutMs and must not be reported twice.
+    expect(
+      droppedFieldsIn(
+        wf([
+          { name: 'a', kind: 'shell' },
+          { name: 'b', kind: 'tool_call' },
+        ]),
+      ),
+    ).toEqual(['cwd', 'env', 'timeoutMs', 'toolArgs', 'toolName']);
+    expect(droppedFieldsIn(null)).toEqual([]);
   });
 });

@@ -32,9 +32,11 @@ import { stringify } from 'yaml';
 import GraphCanvas from '@/components/canvas/GraphCanvas.vue';
 import {
   EDITABLE_STEP_FIELDS,
+  WIRE_STEP_FIELDS,
   WORKFLOW_STEP_KINDS,
   applyOpToWorkflow,
   buildWorkflowAdapter,
+  droppedFieldsIn,
   lossyKindsIn,
 } from '@/lib/canvas/workflowAdapter';
 import type { SpecOp } from '@/lib/canvas/types';
@@ -198,8 +200,14 @@ function onPaletteClick(kind: string) {
  * That predates this WP and the old editor inherited it in silence. It
  * is not fixed here — widening the wire to the full ~45-field Step is
  * its own change — but it is no longer silent.
+ *
+ * The banner states what SURVIVES rather than what is lost. Every step
+ * kind loses something (see `UNREPRESENTED_FIELDS_BY_KIND`), so a list
+ * of lossy kinds would be a list of all of them and would read as
+ * noise; the nine surviving fields are short, exact, and checkable.
  */
 const lossyKinds = computed(() => lossyKindsIn(draft.value));
+const droppedFields = computed(() => droppedFieldsIn(draft.value));
 
 // ── YAML preview ─────────────────────────────────────────────────────
 
@@ -291,9 +299,11 @@ defineExpose({ applyOp, adapter, draft, selectedName });
       data-testid="wge-lossy-warning"
       role="status"
     >
-      Saving from this editor rebuilds the workflow from the fields it can carry.
-      These step kinds have configuration it cannot — {{ lossyKinds.join(', ') }} —
-      so edit those steps in the YAML editor to avoid losing it.
+      Saving from this editor rebuilds the workflow from the only fields it can
+      carry — <span data-testid="wge-lossy-survivors">{{ WIRE_STEP_FIELDS.join(', ') }}</span>.
+      Anything else is dropped; in this workflow that means
+      <span data-testid="wge-lossy-dropped">{{ droppedFields.join(', ') }}</span>.
+      Use the YAML editor for those.
     </div>
 
     <!-- Three-column editor body -->

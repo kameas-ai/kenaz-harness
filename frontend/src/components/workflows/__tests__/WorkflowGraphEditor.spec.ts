@@ -21,6 +21,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import WorkflowGraphEditor from '@/components/workflows/WorkflowGraphEditor.vue';
+import { WIRE_STEP_FIELDS } from '@/lib/canvas/workflowAdapter';
 import type { WorkflowsWorkflow } from '@/lib/workflowsClient';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -245,16 +246,30 @@ describe('WorkflowGraphEditor — save + validation', () => {
    * the editor it replaces inherited it in SILENCE — the fix here is
    * that it is now stated, not that it is gone.
    */
-  it('warns about step kinds whose config the save path cannot carry', () => {
+  it('states the fields that survive a save, not the kinds that do not', () => {
     const wrapper = mountEditor({ workflow: FAKE_WF });
-    const warning = wrapper.get('[data-testid="wge-lossy-warning"]');
-    expect(warning.text()).toContain('transform');
-    expect(warning.text()).toContain('write_artifact');
-    // http_request round-trips, so it must not be named.
-    expect(warning.text()).not.toContain('http_request');
+    const survivors = wrapper.get('[data-testid="wge-lossy-survivors"]').text();
+    // Exactly the wire Step's fields — the whole vocabulary a structured
+    // save can rebuild from.
+    for (const f of WIRE_STEP_FIELDS) expect(survivors).toContain(f);
+    expect(survivors).not.toContain('template');
   });
 
-  it('does not warn when every kind round-trips', () => {
+  it('names the specific fields this workflow stands to lose', () => {
+    const wrapper = mountEditor({ workflow: FAKE_WF });
+    const dropped = wrapper.get('[data-testid="wge-lossy-dropped"]').text();
+    expect(dropped).toContain('template'); // transform
+    expect(dropped).toContain('content'); // write_artifact
+    expect(dropped).toContain('headers'); // http_request — lossy too
+  });
+
+  /*
+   * The first cut of the warning listed only kinds whose REQUIRED config
+   * was missing, so a shell-only workflow showed no banner at all —
+   * while quietly dropping env, cwd and timeout_ms. Every kind is lossy;
+   * the banner is unconditional for that reason.
+   */
+  it('warns even for a workflow of only "simple" kinds', () => {
     const wrapper = mountEditor({
       workflow: {
         id: 'w',
@@ -263,7 +278,18 @@ describe('WorkflowGraphEditor — save + validation', () => {
         steps: [{ name: 'a', kind: 'shell', cmd: 'ls' }],
       },
     });
-    expect(wrapper.find('[data-testid="wge-lossy-warning"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="wge-lossy-dropped"]').text()).toContain('cwd');
+  });
+
+  it('does not warn on an empty draft or in readonly mode', () => {
+    expect(mountEditor().find('[data-testid="wge-lossy-warning"]').exists()).toBe(
+      false,
+    );
+    expect(
+      mountEditor({ workflow: FAKE_WF, readonly: true })
+        .find('[data-testid="wge-lossy-warning"]')
+        .exists(),
+    ).toBe(false);
   });
 
   it('previews YAML including the dependency edges', async () => {

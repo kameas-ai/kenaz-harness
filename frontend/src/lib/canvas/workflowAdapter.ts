@@ -178,9 +178,28 @@ export const WORKFLOW_STEP_KINDS: readonly StepKindSpec[] = [
 const KIND_SPECS = new Map(WORKFLOW_STEP_KINDS.map((k) => [k.kind, k]));
 
 /**
- * Per-kind fields the wire `Step` carries, and therefore the only ones
- * the attribute panel may offer. See `LOSSY_KINDS` for the other half of
- * this fact.
+ * EVERY field the wire `Step` carries
+ * (`core/rpc/views/workflows/api.go`). This is the whole vocabulary a
+ * structured save can reconstruct a workflow from — `unprojectWorkflow`
+ * copies these and nothing else, so anything absent here is destroyed
+ * by any save that goes through `Workflows_Save({workflow})`.
+ */
+export const WIRE_STEP_FIELDS: readonly string[] = [
+  'name',
+  'kind',
+  'inputsFrom',
+  'userPrompt',
+  'cmd',
+  'args',
+  'method',
+  'url',
+  'mode',
+] as const;
+
+/**
+ * Per-kind fields the wire carries, and therefore the only ones the
+ * attribute panel may offer. A control for a field outside this set
+ * would take input and discard it.
  */
 export const EDITABLE_STEP_FIELDS: Readonly<Record<string, readonly string[]>> = {
   model_turn: ['userPrompt'],
@@ -191,27 +210,54 @@ export const EDITABLE_STEP_FIELDS: Readonly<Record<string, readonly string[]>> =
 };
 
 /**
- * Kinds whose REQUIRED configuration the wire `Step` does not carry, so
- * a structured save reconstructs them without it and `Validate` will
- * reject — or, worse, accept a step that no longer does what it did.
+ * Per-kind fields the Go `workflows.Step` HAS and the wire does NOT
+ * (`core/workflows/types.go`, json tags). Every entry is a field a
+ * structured save silently drops.
  *
- * This list exists to be SHOWN. The lossy projection predates this WP
- * (`core/rpc/views/workflows/impl.go`'s `unprojectWorkflow` has always
- * copied a handful of fields), and the pre-canvas editor inherited it
- * silently. Widening the wire to the full ~45-field `Step` is the real
- * fix and is out of this WP's scope; making the loss visible is not.
+ * The first cut of this list held only kinds whose REQUIRED config was
+ * missing, which made it look like the other five kinds were safe. They
+ * are not: a `model_turn` loses its tools, profile and model; a `shell`
+ * loses env, cwd and timeout; an `http_request` loses headers and body.
+ * The correct statement is not "these kinds are lossy" — it is "these
+ * NINE fields survive and nothing else does", which is why the banner
+ * now leads with the surviving set.
+ *
+ * The lossiness predates this mission (`unprojectWorkflow` has always
+ * copied a handful of fields) and the pre-canvas editor inherited it in
+ * silence. Widening the wire to the full ~45-field `Step` is the real
+ * fix and is out of scope here; making the loss visible is not.
+ * `workflowAdapter.test.ts` pins this map against both the Go struct and
+ * the wire struct, so widening the wire forces a conscious shrink.
  */
-export const LOSSY_KINDS: readonly string[] = [
-  'aggregate',
-  'conditional',
-  'mcp_call',
-  'notify',
-  'read_artifact',
-  'tool_call',
-  'transform',
-  'wait_until',
-  'write_artifact',
-] as const;
+export const UNREPRESENTED_FIELDS_BY_KIND: Readonly<
+  Record<string, readonly string[]>
+> = {
+  aggregate: ['strategy', 'separator'],
+  conditional: ['if', 'thenStep', 'elseStep'],
+  http_request: ['headers', 'body'],
+  mcp_call: ['server', 'toolName', 'toolArgs'],
+  model_turn: ['allowTools', 'tools', 'maxToolIterations', 'profile', 'model'],
+  notify: ['notifyTitle', 'notifyBody', 'surface'],
+  read_artifact: ['artifactIdRef'],
+  shell: ['env', 'cwd', 'timeoutMs'],
+  tool_call: ['toolName', 'toolArgs', 'env', 'cwd', 'timeoutMs'],
+  transform: ['template'],
+  wait_until: ['until', 'duration', 'condition'],
+  web_fetch: ['userAgent', 'minIntervalMs'],
+  web_scrape: ['extractors', 'extractWithModel', 'extractPrompt'],
+  write_artifact: ['title', 'content', 'contentRef', 'mimeType'],
+};
+
+/**
+ * Kinds a structured save cannot round-trip. Derived rather than
+ * hand-listed so it cannot drift from the map above — which is exactly
+ * how the first cut came to omit five kinds that were lossy all along.
+ */
+export const LOSSY_KINDS: readonly string[] = Object.keys(
+  UNREPRESENTED_FIELDS_BY_KIND,
+)
+  .filter((k) => UNREPRESENTED_FIELDS_BY_KIND[k].length > 0)
+  .sort();
 
 /** Kinds in this workflow whose config a structured save would drop. */
 export function lossyKindsIn(wf: WorkflowsWorkflow | null): string[] {
@@ -221,6 +267,21 @@ export function lossyKindsIn(wf: WorkflowsWorkflow | null): string[] {
     if (LOSSY_KINDS.includes(s.kind)) present.add(s.kind);
   }
   return [...present].sort();
+}
+
+/**
+ * The specific fields this workflow's steps stand to lose. Naming the
+ * fields beats naming the kinds: with every kind lossy, a kind list is
+ * noise, while "this workflow's `model_turn` will lose `profile`" is
+ * something the author can act on.
+ */
+export function droppedFieldsIn(wf: WorkflowsWorkflow | null): string[] {
+  if (!wf) return [];
+  const out = new Set<string>();
+  for (const s of wf.steps) {
+    for (const f of UNREPRESENTED_FIELDS_BY_KIND[s.kind] ?? []) out.add(f);
+  }
+  return [...out].sort();
 }
 
 // ── dependency graph helpers ──────────────────────────────────────────
