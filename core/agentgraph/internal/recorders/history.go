@@ -15,18 +15,23 @@ type HistoryCall struct {
 	N         int
 }
 
-// AppendCall records one call to HistoryWriter.AppendMessage.
+// AppendCall records one call to HistoryWriter.AppendEntry.
 type AppendCall struct {
 	Ctx       context.Context
 	SessionID string
 	Role      string
 	Content   string
+	// Entry is the full seam payload, including the move metadata
+	// (model-moves-transcript-01PMCH01 WP01). Role/Content above are
+	// kept as a convenience mirror of Entry.Role / Entry.Content so the
+	// existing assertions read the same.
+	Entry agentgraph.HistoryEntry
 }
 
 // HistoryReader is a recording fake that satisfies agentgraph.HistoryReader.
 type HistoryReader struct {
-	mu      sync.Mutex
-	calls   []HistoryCall
+	mu    sync.Mutex
+	calls []HistoryCall
 	// Result is returned on every History call.
 	Result []agentgraph.Message
 	// Err is returned on every History call.
@@ -101,18 +106,23 @@ func (r *HistoryReader) Reset() {
 
 // HistoryWriter is a recording fake that satisfies agentgraph.HistoryWriter.
 type HistoryWriter struct {
-	mu      sync.Mutex
-	calls   []AppendCall
-	// NextID is returned as the message ID on each AppendMessage call.
+	mu    sync.Mutex
+	calls []AppendCall
+	// NextID is returned as the message ID on each AppendEntry call.
 	NextID string
-	// Err is returned on every AppendMessage call.
+	// Err is returned on every AppendEntry call.
 	Err error
 }
 
-// AppendMessage records the call and returns the configured ID.
-func (r *HistoryWriter) AppendMessage(ctx context.Context, sessionID, role, content string) (string, error) {
+// AppendEntry records the call and returns the configured ID.
+func (r *HistoryWriter) AppendEntry(ctx context.Context, sessionID string,
+	entry agentgraph.HistoryEntry) (string, error) {
 	r.mu.Lock()
-	r.calls = append(r.calls, AppendCall{Ctx: ctx, SessionID: sessionID, Role: role, Content: content})
+	r.calls = append(r.calls, AppendCall{
+		Ctx: ctx, SessionID: sessionID,
+		Role: entry.Role, Content: entry.Content,
+		Entry: entry,
+	})
 	nextID := r.NextID
 	err := r.Err
 	r.mu.Unlock()
@@ -125,7 +135,7 @@ func (r *HistoryWriter) AppendMessage(ctx context.Context, sessionID, role, cont
 	return nextID, nil
 }
 
-// Calls returns a snapshot of all recorded AppendMessage calls.
+// Calls returns a snapshot of all recorded AppendEntry calls.
 func (r *HistoryWriter) Calls() []AppendCall {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -134,24 +144,24 @@ func (r *HistoryWriter) Calls() []AppendCall {
 	return out
 }
 
-// CallCount returns the number of AppendMessage calls recorded.
+// CallCount returns the number of AppendEntry calls recorded.
 func (r *HistoryWriter) CallCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.calls)
 }
 
-// RequireCalledOnce asserts exactly one AppendMessage call was recorded.
+// RequireCalledOnce asserts exactly one AppendEntry call was recorded.
 func (r *HistoryWriter) RequireCalledOnce(t *testing.T) AppendCall {
 	t.Helper()
 	calls := r.Calls()
 	if len(calls) != 1 {
-		t.Fatalf("HistoryWriter.AppendMessage: want 1 call, got %d", len(calls))
+		t.Fatalf("HistoryWriter.AppendEntry: want 1 call, got %d", len(calls))
 	}
 	return calls[0]
 }
 
-// RequireCalledWith asserts at least one AppendMessage call matches the
+// RequireCalledWith asserts at least one AppendEntry call matches the
 // given matcher.
 func (r *HistoryWriter) RequireCalledWith(t *testing.T, match func(AppendCall) bool, desc string) {
 	t.Helper()
@@ -160,10 +170,10 @@ func (r *HistoryWriter) RequireCalledWith(t *testing.T, match func(AppendCall) b
 			return
 		}
 	}
-	t.Fatalf("HistoryWriter.AppendMessage: no call found matching %q", desc)
+	t.Fatalf("HistoryWriter.AppendEntry: no call found matching %q", desc)
 }
 
-// RequireCalledWithRole asserts at least one AppendMessage call used the
+// RequireCalledWithRole asserts at least one AppendEntry call used the
 // given role.
 func (r *HistoryWriter) RequireCalledWithRole(t *testing.T, role string) {
 	t.Helper()
@@ -172,11 +182,11 @@ func (r *HistoryWriter) RequireCalledWithRole(t *testing.T, role string) {
 	}, "role="+role)
 }
 
-// RequireNotCalled asserts AppendMessage was never invoked.
+// RequireNotCalled asserts AppendEntry was never invoked.
 func (r *HistoryWriter) RequireNotCalled(t *testing.T) {
 	t.Helper()
 	if n := r.CallCount(); n != 0 {
-		t.Errorf("HistoryWriter.AppendMessage: want 0 calls, got %d", n)
+		t.Errorf("HistoryWriter.AppendEntry: want 0 calls, got %d", n)
 	}
 }
 

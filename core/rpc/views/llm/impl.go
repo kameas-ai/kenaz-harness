@@ -215,20 +215,6 @@ type AttachmentsResolver interface {
 	ListResolved(ctx context.Context, sessionID string) ([]ResolvedAttachment, error)
 }
 
-// SessionMessageWriter persists the assistant turn at stream
-// completion so navigating away and back reloads the full
-// conversation. Without this, assistant deltas live only in the JS
-// currentlyStreaming buffer and disappear on session switch.
-//
-// The messageID return is used by post-finalize hooks (e.g. the
-// artifacts code-block detector) to anchor SourceRef.MessageID to the
-// freshly persisted row. An empty id is acceptable when the writer
-// has no stable id to surface; downstream hooks treat the field as
-// metadata only.
-type SessionMessageWriter interface {
-	AppendMessage(ctx context.Context, sessionID, role, content string) (messageID string, err error)
-}
-
 // ArtifactSink runs the artifacts code-block detector against a
 // freshly persisted assistant message. nil-safe — the LLM impl
 // short-circuits when no sink is wired so chat-only test paths and
@@ -354,7 +340,6 @@ type API struct {
 	keychain  KeychainWriter
 	prober    ProviderProber
 	history   SessionMessageReader
-	historyW  SessionMessageWriter
 	hooks     HookRunner
 	artifacts ArtifactSink
 	// credPeeker, when non-nil, is called by ListProviders to populate
@@ -443,9 +428,6 @@ type Config struct {
 	// nil disables history threading; the connector will be called with
 	// a single fixed user message (test-friendly default).
 	History SessionMessageReader
-	// HistoryWriter persists the assistant turn at stream completion
-	// so navigating away and back reloads the full conversation.
-	HistoryWriter SessionMessageWriter
 	// Hooks, when non-nil, fires pre_send before the message list is
 	// shipped upstream and post_send after the assistant stream closes.
 	// The runner threads any mutated message slice from pre_send hooks
@@ -535,7 +517,6 @@ func New(cfg Config) *API {
 		keychain:        cfg.Keychain,
 		prober:          cfg.Prober,
 		history:         cfg.History,
-		historyW:        cfg.HistoryWriter,
 		hooks:           cfg.Hooks,
 		attachments:     cfg.Attachments,
 		chatRunner:      cfg.ChatRunner,
@@ -937,8 +918,8 @@ func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverri
 	// Pull the latest user message — the chat surface posts the user
 	// turn via Sessions_AppendMessage immediately before calling
 	// StartStream, so the trailing user row is the new turn. The
-	// runner re-appends it via HistoryWriter so the kernel run sees
-	// consistent history.
+	// runner re-appends it through the HistoryWriter seam so the kernel
+	// run sees consistent history.
 	var userMessage string
 	if a.history != nil && sessionID != "" {
 		if stored, herr := a.history.ListMessages(ctx, sessionID); herr == nil {

@@ -90,7 +90,10 @@ func (is *InterruptState) PersistInterrupt(
 
 	// 1. Persist the marked partial text as the assistant row.
 	marked := is.markedText()
-	mid, err := writer.AppendMessage(ctx, sessionID, "assistant", marked)
+	mid, err := writer.AppendEntry(ctx, sessionID, coreag.HistoryEntry{
+		Role:    "assistant",
+		Content: marked,
+	})
 	if err != nil {
 		logging.L().Warn("chat.interrupt.persist_assistant.failed",
 			"session_id", sessionID,
@@ -113,7 +116,10 @@ func (is *InterruptState) PersistInterrupt(
 			"tool call %q (id=%s) cancelled: interrupted by user",
 			tc.Name, tc.ID,
 		)
-		_, terr := writer.AppendMessage(ctx, sessionID, "tool", content)
+		_, terr := writer.AppendEntry(ctx, sessionID, coreag.HistoryEntry{
+			Role:    "tool",
+			Content: content,
+		})
 		if terr != nil {
 			logging.L().Warn("chat.interrupt.persist_tool_result.failed",
 				"session_id", sessionID,

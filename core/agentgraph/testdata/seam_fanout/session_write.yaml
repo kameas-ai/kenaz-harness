@@ -1,7 +1,7 @@
 # Seam fanout fixture for kind=session_write
-# HistoryWriter.AppendMessage is called to persist the message.
+# HistoryWriter.AppendEntry is called to persist the message.
 kind: session_write
 seams:
-  - seam: HistoryWriter.AppendMessage
+  - seam: HistoryWriter.AppendEntry
     required: true
-notes: "session_write calls HistoryWriter.AppendMessage with role and content from ports"
+notes: "session_write calls HistoryWriter.AppendEntry with role and content from ports (move metadata stays zero until WP02)"

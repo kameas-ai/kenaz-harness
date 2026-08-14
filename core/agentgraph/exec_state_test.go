@@ -187,8 +187,8 @@ func TestSessionWriteExecutor_AppendsAssistantMessage(t *testing.T) {
 	env := &Env{
 		RunID:     "r",
 		SessionID: "s1",
-		HistoryWriter: HistoryWriterFunc(func(_ context.Context, sid, role, body string) (string, error) {
-			calls = append(calls, struct{ sid, role, body string }{sid, role, body})
+		HistoryWriter: HistoryWriterFunc(func(_ context.Context, sid string, e HistoryEntry) (string, error) {
+			calls = append(calls, struct{ sid, role, body string }{sid, e.Role, e.Content})
 			return "msg-42", nil
 		}),
 	}
@@ -220,9 +220,9 @@ func TestSessionWriteExecutor_FallsBackToMessageSlice(t *testing.T) {
 	env := &Env{
 		RunID:     "r",
 		SessionID: "s1",
-		HistoryWriter: HistoryWriterFunc(func(_ context.Context, _, _, body string) (string, error) {
-			if body != "the answer" {
-				return "", errors.New("wrong body: " + body)
+		HistoryWriter: HistoryWriterFunc(func(_ context.Context, _ string, e HistoryEntry) (string, error) {
+			if e.Content != "the answer" {
+				return "", errors.New("wrong body: " + e.Content)
 			}
 			return "msg-1", nil
 		}),
@@ -247,7 +247,7 @@ func TestSessionWriteExecutor_NoSessionIsNoOp(t *testing.T) {
 	t.Parallel()
 	env := &Env{
 		RunID: "r",
-		HistoryWriter: HistoryWriterFunc(func(_ context.Context, _, _, _ string) (string, error) {
+		HistoryWriter: HistoryWriterFunc(func(_ context.Context, _ string, _ HistoryEntry) (string, error) {
 			t.Fatalf("HistoryWriter should not be called when SessionID is empty")
 			return "", nil
 		}),

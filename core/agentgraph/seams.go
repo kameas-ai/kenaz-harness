@@ -366,26 +366,64 @@ func (f HistoryReaderFunc) History(ctx context.Context, sessionID string, n int)
 	return f(ctx, sessionID, n)
 }
 
-// HistoryWriter is the optional persistence half of the history seam,
-// consumed by the SessionWriteNode kind. Production wiring binds this
-// to core/session.Manager.AppendMessage; tests can pass a fake.
+// HistoryEntry is what crosses the history-write seam: one transcript
+// entry, classic or move.
 //
-// AppendMessage assigns the message ID and persistence side-effects;
-// the returned id is surfaced on the SessionWriteNode `message_id`
-// output port so downstream nodes (artifact backlinks, branch markers)
-// can reference the freshly persisted row.
+// Role/Content are the classic pair. The three move fields carry the
+// model-moves metadata (model-moves-transcript-01PMCH01 WP01) down to
+// core/session.Manager.AppendTranscriptEntry, which is the only writer
+// that can stamp it onto a durable row.
+//
+// The seam takes a struct rather than four strings on purpose: with a
+// second AppendMove method, or an optional-upgrade interface, an
+// implementation could satisfy the seam while quietly dropping move
+// metadata on the floor. One method, one shape — an implementer either
+// carries the whole entry or does not compile.
+//
+// A zero MoveKind means a classic entry, byte-identical downstream to
+// everything written before the mission.
+type HistoryEntry struct {
+	// Role is the speaker: "user" | "assistant" | "system" | "tool".
+	Role string
+	// Content is the entry's text.
+	Content string
+
+	// MoveKind is one of core/session.MoveKinds() — "assistant_move" |
+	// "tool_call" | "tool_result" | "final" — or empty for a classic
+	// entry. The writer validates the vocabulary; agentgraph carries it
+	// as a string so this package keeps no dependency on core/session.
+	MoveKind string
+	// MoveIndex is the 0-based position of this entry inside its human
+	// turn. Carries no meaning when MoveKind is empty.
+	MoveIndex int
+	// TurnSpanID is the id of the user message that opened the turn this
+	// entry belongs to. Required when MoveKind is set.
+	TurnSpanID string
+}
+
+// HistoryWriter is the optional persistence half of the history seam,
+// consumed by the SessionWriteNode kind and by the chat runner.
+// Production wiring binds it to
+// core/session.Manager.AppendTranscriptEntry; tests can pass a fake.
+//
+// This is the ONE writer for chat transcript entries (spec §4 of
+// model-moves-transcript-01PMCH01: "no second history-writing path").
+// AppendEntry assigns the message ID and persistence side-effects; the
+// returned id is surfaced on the SessionWriteNode `message_id` output
+// port so downstream nodes (artifact backlinks, branch markers) can
+// reference the freshly persisted row.
 type HistoryWriter interface {
-	AppendMessage(ctx context.Context, sessionID, role, content string) (messageID string, err error)
+	AppendEntry(ctx context.Context, sessionID string, entry HistoryEntry) (messageID string, err error)
 }
 
 // HistoryWriterFunc adapts a function value to the HistoryWriter
 // interface. Useful for tests that want to record append calls without
 // declaring a struct.
-type HistoryWriterFunc func(ctx context.Context, sessionID, role, content string) (string, error)
+type HistoryWriterFunc func(ctx context.Context, sessionID string, entry HistoryEntry) (string, error)
 
-// AppendMessage satisfies HistoryWriter.
-func (f HistoryWriterFunc) AppendMessage(ctx context.Context, sessionID, role, content string) (string, error) {
-	return f(ctx, sessionID, role, content)
+// AppendEntry satisfies HistoryWriter.
+func (f HistoryWriterFunc) AppendEntry(ctx context.Context, sessionID string, entry HistoryEntry) (string, error) {
+	return f(ctx, sessionID, entry)
 }
 
 // nilHistoryWriter is the default no-op writer installed when env
@@ -394,8 +432,8 @@ func (f HistoryWriterFunc) AppendMessage(ctx context.Context, sessionID, role, c
 // than silently no-opping.
 type nilHistoryWriter struct{}
 
-// AppendMessage satisfies HistoryWriter; always errors.
-func (nilHistoryWriter) AppendMessage(_ context.Context, _, _, _ string) (string, error) {
+// AppendEntry satisfies HistoryWriter; always errors.
+func (nilHistoryWriter) AppendEntry(_ context.Context, _ string, _ HistoryEntry) (string, error) {
 	return "", ErrNoHistoryWriter
 }
 
