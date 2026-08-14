@@ -76,9 +76,13 @@ Each has a persisted field and (usually) a Wails binding, and changes
 nothing. Grouped by why:
 
 *No implementation at all:*
-`PermissionMode` (`EffectivePermissionMode()` has zero callers; the
-documented "every call prompts" / "all non-dangerous permitted" semantics
-are unimplemented), `MCPAutoRestartDisabled` (the stdio supervisor calls
+`PermissionMode` (the documented "every call prompts" / "all non-dangerous
+permitted" semantics are unimplemented — `EffectivePermissionMode()`'s only
+non-test callers are the two store accessors `FileStore.LoadPermissionMode`
+/ `memoryStore.LoadPermissionMode`, whose only caller in turn is the
+`Settings_GetPermissionMode` binding, so the value round-trips to
+`PermissionDialsPanel.vue` and nothing ever branches on it),
+`MCPAutoRestartDisabled` (the stdio supervisor calls
 `attemptRestart()` unconditionally; nothing in `core/mcp` reads any settings
 gate), `SkippedUpdateVersions` (the doc claims the updater filters these
 out; no filter exists), `LocalRuntimeRAMOverrideGB`
