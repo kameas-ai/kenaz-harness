@@ -426,6 +426,27 @@ func runServeMode(listenAddr string) {
 		"broker_addr", authCfg.BrokerAddr,
 	)
 
+	// Fleet credential carryover: when the host injected broker config (we
+	// are inside a workbench — no metadisk means no KENAZ_AUTH_* vars), the
+	// broker session becomes the process-wide fleet token source. The guest
+	// has no OS keychain for the default store to read, and renewal is owned
+	// host-side; no refresh token ever crosses the boundary. Guarded on
+	// BrokerAddr so a desktop `--serve` run keeps keychain-backed sign-in.
+	if authCfg.BrokerAddr != "" {
+		fleet.SetExternalTokenSource(authSession.AccessToken)
+		if authSession.State() == authbroker.StateSignedIn {
+			// One-shot enroll → activates the fleet OTLP pipeline. On
+			// desktop FleetSignIn does this post-login; served mode has no
+			// sign-in affordance, so the signed-in seed is the trigger.
+			// Best-effort: failure means telemetry stays off, nothing else.
+			go func() {
+				if _, err := api.Settings().FleetRefreshIdentity(ctx); err != nil {
+					serveLog.Info("harness.serve: fleet enroll skipped", "reason", err.Error())
+				}
+			}()
+		}
+	}
+
 	token := os.Getenv(serve.EnvToken)
 	addr := listenAddr
 	if addr == "" {

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/zalando/go-keyring"
@@ -30,10 +31,50 @@ func keyExpiresAt() string    { return "fleet:" + paths.KeychainNamespace() + ":
 // keychain. Callers should treat this as "not signed in".
 var ErrTokensNotFound = errors.New("fleet: tokens not found in keychain")
 
+// externalTokenSource, when installed, replaces the OS keychain as the
+// source of the current access token. The served (in-VM) harness installs
+// the host auth-broker session here: the headless guest has no Secret
+// Service for go-keyring to talk to, and token renewal is owned host-side
+// by the broker — the refresh token never crosses the host→VM boundary.
+//
+// The source returns the current access token, or "" when the host is
+// signed out. LoadTokens wraps it in an access-only TokenSet (no refresh
+// token, zero expiry — expiry pacing is the broker's renewal loop, not
+// ours), which the client treats as a live session whose 401s mean
+// "re-read the source", never "run the OAuth refresh flow" (see the
+// externalTokens guards in http.go / identity.go). SaveTokens and
+// ClearTokens become no-ops while a source is installed.
+var (
+	externalTokenMu     sync.RWMutex
+	externalTokenSource func() string
+)
+
+// SetExternalTokenSource installs fn as the process-wide access-token
+// source, displacing the OS keychain. Pass nil to restore keychain-backed
+// behavior. Called once at served startup, before any fleet call; the
+// source itself must be safe for concurrent use.
+func SetExternalTokenSource(fn func() string) {
+	externalTokenMu.Lock()
+	defer externalTokenMu.Unlock()
+	externalTokenSource = fn
+}
+
+// externalTokens returns the installed source, if any.
+func externalTokens() (func() string, bool) {
+	externalTokenMu.RLock()
+	defer externalTokenMu.RUnlock()
+	return externalTokenSource, externalTokenSource != nil
+}
+
 // SaveTokens persists a TokenSet to the OS keychain. The access token,
 // refresh token, and expiry are stored separately so they can be
 // individually rotated.
 func SaveTokens(ts TokenSet) error {
+	if _, ok := externalTokens(); ok {
+		// Renewal is externally owned and there is no keychain where an
+		// external source runs; nothing to persist.
+		return nil
+	}
 	if err := keyring.Set(keyringService, keyAccessToken(), ts.AccessToken); err != nil {
 		return fmt.Errorf("fleet: save access token: %w", err)
 	}
@@ -50,6 +91,13 @@ func SaveTokens(ts TokenSet) error {
 // LoadTokens reads the TokenSet from the OS keychain. Returns
 // ErrTokensNotFound when no tokens have been stored.
 func LoadTokens() (TokenSet, error) {
+	if src, ok := externalTokens(); ok {
+		tok := src()
+		if tok == "" {
+			return TokenSet{}, ErrTokensNotFound
+		}
+		return TokenSet{AccessToken: tok}, nil
+	}
 	accessToken, err := keyring.Get(keyringService, keyAccessToken())
 	if err != nil {
 		return TokenSet{}, ErrTokensNotFound
@@ -83,6 +131,10 @@ func LoadTokens() (TokenSet, error) {
 // access token is the gate; a token that failed to delete is unusable anyway
 // because Sign-In refuses to load an incomplete set).
 func ClearTokens() error {
+	if _, ok := externalTokens(); ok {
+		// Nothing persisted locally; sign-out is the host's transition.
+		return nil
+	}
 	var errs []string
 	for _, key := range []string{keyAccessToken(), keyRefreshToken(), keyExpiresAt()} {
 		if err := keyring.Delete(keyringService, key); err != nil {
