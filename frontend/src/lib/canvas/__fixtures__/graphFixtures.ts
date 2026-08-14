@@ -60,6 +60,97 @@ edges:
     to: { node: join, port: in }
 `;
 
+/**
+ * A materialized run, as `Graph_MaterializeRun` projects one
+ * (visual-graph-authoring-01PMUX01 WP05).
+ *
+ * The shape is what makes it useful rather than the size: it carries
+ * one node of EVERY status the materializer can emit — `completed`,
+ * `error`, `skipped`, `not_reached`, `incomplete` — plus the `@N`
+ * iteration-instance ids the unroller produces, plus `start_seq` on each
+ * so the trace click-through has a real join key to follow. Statuses the
+ * overlay claims to render but that no fixture exercises are statuses
+ * nobody has actually seen render.
+ *
+ * `spec_provenance` is deliberately ABSENT here: the degraded case gets
+ * its own fixture below so the healthy path pins the badge's absence.
+ */
+export const MATERIALIZED_RUN_YAML = `spec_version: "1"
+id: chat_default__run_r1
+name: Default chat graph — run r1
+entrypoints: [history_in@1]
+nodes:
+  - id: history_in@1
+    kind: session_read
+    attrs: {}
+    materialized:
+      source_node: history_in
+      instance: 1
+      status: completed
+      start_seq: 2
+      end_seq: 3
+  - id: assistant_turn@1
+    kind: model
+    attrs: {}
+    materialized:
+      source_node: assistant_turn
+      instance: 1
+      iteration: 1
+      status: completed
+      start_seq: 4
+      end_seq: 9
+  - id: assistant_turn@2
+    kind: model
+    attrs: {}
+    materialized:
+      source_node: assistant_turn
+      instance: 2
+      iteration: 2
+      status: incomplete
+      start_seq: 10
+  - id: tool_leg@1
+    kind: transform
+    attrs: {}
+    materialized:
+      source_node: tool_leg
+      instance: 1
+      status: error
+      start_seq: 6
+      end_seq: 7
+  - id: skipped_leg@1
+    kind: transform
+    attrs: {}
+    materialized:
+      source_node: skipped_leg
+      instance: 1
+      status: skipped
+      start_seq: 8
+  - id: never_ran
+    kind: transform
+    attrs: {}
+    materialized:
+      source_node: never_ran
+      status: not_reached
+edges:
+  - from: { node: history_in@1, port: out }
+    to: { node: assistant_turn@1, port: in }
+  - from: { node: assistant_turn@1, port: out }
+    to: { node: tool_leg@1, port: in }
+  - from: { node: assistant_turn@1, port: out }
+    to: { node: skipped_leg@1, port: in }
+  - from: { node: assistant_turn@1, port: out }
+    to: { node: assistant_turn@2, port: in }
+`;
+
+/**
+ * The same run, projected against the library file because the resolved
+ * spec it executed had been evicted. The ONLY difference is the
+ * `spec_provenance` marker — which is the point: the badge has to come
+ * from that one scalar and not from anything about the topology.
+ */
+export const MATERIALIZED_DEGRADED_YAML =
+  MATERIALIZED_RUN_YAML + 'spec_provenance: library_fallback\n';
+
 /** A synthetic N-node chain-with-fanout used for the scale check. */
 export function syntheticGraphYAML(n: number): string {
   const lines: string[] = [

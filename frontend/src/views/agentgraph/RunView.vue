@@ -5,13 +5,47 @@
  *
  *   - the lifecycle state pill
  *   - per-counter readouts (LLM tokens / calls / tools / cost)
+ *   - the Airflow-style GRAPH of the run, per-node status, clickable
+ *     through to the trace rows (visual-graph-authoring-01PMUX01 WP05)
  *   - the trace tail (last N events) with kind + node-id badges
  *   - paused-state UI: reads PendingAsk and exposes a resume input
+ *
+ * ── WHERE THE LIVE NODE STATES COME FROM ──────────────────────────────
+ *
+ * `Graph_GetRunStatus` carries NO node-level information — it is a
+ * counter snapshot (`nodesComplete`, tokens, calls, cost) plus the
+ * lifecycle state. So the overlay is NOT fed from the status poll, and
+ * no new polling RPC was invented for it either.
+ *
+ * It is fed from `Graph_MaterializeRun`, which projects the run's
+ * EventLog into a graph and is explicitly documented as working on "a
+ * finished (or in-flight) run" (core/rpc/views/agentgraph/manager.go).
+ * Re-projecting an in-flight run yields the topology so far with each
+ * node's status derived from the very same event stream the trace list
+ * below is rendering — one source, so the graph and the trace can never
+ * disagree about what happened.
+ *
+ * The projection is refreshed when the trace poll actually returns new
+ * events, not on a timer of its own: no new events means nothing in the
+ * projection can have changed.
+ *
+ * The one translation is `incomplete` → `running`: a fire whose log has
+ * no matching complete is a crash on a finished run and an
+ * executing node on a live one. `materializationStatuses(…, {live})`
+ * owns that mapping.
  */
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
+import GraphCanvas from '@/components/canvas/GraphCanvas.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
+import { useManifestStore } from '@/composables/useNodeManifest';
+import {
+  buildGraphAdapter,
+  materializationStatuses,
+  SPEC_PROVENANCE_LIBRARY_FALLBACK,
+} from '@/lib/canvas/graphAdapter';
+import { parseGraphText, type ParsedGraph } from '@/lib/canvas/graphSpec';
 import type { GraphRunStatus, GraphRunTraceEvent } from '@/lib/types';
 
 const client = useHarnessClient();
@@ -41,9 +75,125 @@ async function pollOnce() {
     const tail = await client.graph.getRunTrace(id, since);
     if (tail.length > 0) {
       events.value = [...events.value, ...tail];
+      // New events ⇒ the projection can have changed. No new events ⇒
+      // it provably cannot, so the graph is left alone.
+      await refreshGraph();
     }
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);
+  }
+}
+
+// ── the run, as a graph (WP05) ───────────────────────────────────────
+
+const runGraph = ref<ParsedGraph | null>(null);
+/**
+ * Why the graph gets its own error ref instead of sharing `error`: a run
+ * whose resolved spec was evicted cannot be projected at all, and that
+ * must not blank the trace list — the trace is the surface that still
+ * works. The graph pane says why it is empty; everything else carries on.
+ */
+const graphError = ref<string | null>(null);
+
+const manifestStore = useManifestStore();
+
+/** True while the run can still produce events. */
+const live = computed(
+  () => status.value?.state === 'running' || status.value?.state === 'paused',
+);
+
+async function refreshGraph() {
+  const id = runId.value;
+  if (!id) return;
+  try {
+    const spec = await client.graph.materializeRun(id);
+    const parsed = parseGraphText(spec.yaml);
+    if (parsed.graph) {
+      runGraph.value = parsed.graph;
+      graphError.value = null;
+    } else {
+      graphError.value = parsed.error ?? 'The projected run does not parse.';
+    }
+  } catch (err) {
+    graphError.value = err instanceof Error ? err.message : String(err);
+  }
+}
+
+const runStatuses = computed(() =>
+  materializationStatuses(runGraph.value, { live: live.value }),
+);
+
+/**
+ * The run canvas is read-only, and structurally so: `buildGraphAdapter`
+ * replaces `onSpecOp` with a no-op when `readOnly` is set, and
+ * `GraphCanvas` registers no drop / connect / drag / delete handler at
+ * all. A record of something that already happened has no edit path to
+ * guard — which is what closes the WP12-review N3 hazard on this surface
+ * rather than inheriting it.
+ */
+const runAdapter = computed(() =>
+  buildGraphAdapter({
+    graph: runGraph.value,
+    manifests: manifestStore.manifests.value ?? [],
+    readOnly: true,
+    checkEdge: async () => ({ ok: false, reason: 'This run is read-only.' }),
+    applyOp: () => undefined,
+    statuses: runStatuses.value,
+  }),
+);
+
+const isDegraded = computed(
+  () => runGraph.value?.specProvenance === SPEC_PROVENANCE_LIBRARY_FALLBACK,
+);
+const canvasNotice = computed(() =>
+  isDegraded.value
+    ? 'Degraded projection — the resolved spec this run executed was evicted, so this topology may differ from the one that ran.'
+    : '',
+);
+
+// ── click-through: node → its trace rows ─────────────────────────────
+
+const selectedNodeId = ref('');
+/** The trace row a node click jumped to; highlighted in the list. */
+const focusedSeq = ref<number | null>(null);
+/** Template ref on the trace `<ul>`, for the scroll-to. */
+const traceList = ref<HTMLElement | null>(null);
+
+function onCanvasSelect(id: string) {
+  selectedNodeId.value = id;
+}
+
+/**
+ * Jumps the trace list to the rows this node produced.
+ *
+ * `startSeq` is the materialization's join key back into the EventLog,
+ * and the trace list below is keyed by that same `seq` — so the jump is
+ * a lookup, not a heuristic. The one bit of slack: the polled tail may
+ * not contain the exact seq (a run's very first rows can be pruned, and
+ * some seqs belong to events the list does not render), so the target is
+ * the FIRST row at or after `startSeq`, which is the row that opens the
+ * node's span.
+ */
+function onNodeStatusClick(payload: { detail?: Record<string, unknown> }) {
+  const raw = payload.detail?.startSeq;
+  const startSeq = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isFinite(startSeq)) return;
+  const target = events.value.find((ev) => ev.seq >= startSeq);
+  if (!target) return;
+  focusedSeq.value = target.seq;
+  void scrollToFocused();
+}
+
+async function scrollToFocused() {
+  await nextTick();
+  const seq = focusedSeq.value;
+  if (seq === null || !traceList.value) return;
+  const row = traceList.value.querySelector(`[data-testid="trace-event-${seq}"]`);
+  // happy-dom has no layout, so scrollIntoView is absent there. The
+  // highlight is the part that is actually asserted; the scroll is a
+  // convenience that degrades to nothing.
+  if (row && typeof (row as HTMLElement).scrollIntoView === 'function') {
+    (row as HTMLElement).scrollIntoView({ block: 'center' });
   }
 }
 
@@ -100,6 +250,10 @@ function openMaterialized() {
 
 onMounted(async () => {
   await pollOnce();
+  // The first projection is unconditional: a run that finished before
+  // this view opened returns its whole trace in one tail, and a run with
+  // no events at all still has a topology worth drawing.
+  await refreshGraph();
   schedulePoll();
 });
 
@@ -126,7 +280,7 @@ const stateClass = computed(() => {
   return 'border-border-muted text-ink-dim';
 });
 
-defineExpose({ pollOnce });
+defineExpose({ pollOnce, refreshGraph, onNodeStatusClick, focusedSeq });
 </script>
 
 <template>
@@ -241,12 +395,47 @@ defineExpose({ pollOnce });
 
       <div class="rounded-md border border-border-muted bg-surface-1">
         <div
+          class="flex items-center gap-2 border-b border-border-muted px-4 py-2 font-ui text-[11px] uppercase tracking-[0.18em] text-ink-muted"
+        >
+          <span>Graph</span>
+          <span
+            v-if="live"
+            class="normal-case tracking-normal text-accent"
+            data-testid="run-graph-live"
+            >live</span
+          >
+          <span class="ml-auto normal-case tracking-normal text-ink-muted">
+            Click a node to jump to its trace rows
+          </span>
+        </div>
+        <div class="p-2">
+          <div
+            v-if="graphError"
+            class="rounded-sm border border-border-muted bg-surface-0 px-3 py-2 font-ui text-[12px] text-ink-muted"
+            data-testid="run-graph-error"
+          >
+            This run cannot be drawn as a graph: {{ graphError }}
+          </div>
+          <GraphCanvas
+            v-else
+            :adapter="runAdapter"
+            :selected-node-id="selectedNodeId"
+            :notice="canvasNotice"
+            @select-node="onCanvasSelect"
+            @node-status-click="onNodeStatusClick"
+          />
+        </div>
+      </div>
+
+      <div class="rounded-md border border-border-muted bg-surface-1">
+        <div
           class="border-b border-border-muted px-4 py-2 font-ui text-[11px] uppercase tracking-[0.18em] text-ink-dim"
         >
           Trace tail
         </div>
         <ul
           v-if="events.length > 0"
+          ref="traceList"
           class="max-h-[320px] overflow-y-auto"
           data-testid="run-trace"
         >
@@ -254,7 +443,9 @@ defineExpose({ pollOnce });
             v-for="ev in events"
             :key="ev.seq"
             class="border-b border-border-muted px-4 py-2 font-ui text-[12px] text-ink-muted last:border-b-0"
+            :class="ev.seq === focusedSeq ? 'bg-surface-2 ring-1 ring-accent' : ''"
             :data-testid="`trace-event-${ev.seq}`"
+            :data-focused="ev.seq === focusedSeq ? 'true' : 'false'"
           >
             <span class="font-mono text-[10px] text-ink-dim">#{{ ev.seq }}</span>
             <span class="ml-2 rounded-sm border border-border-muted px-1 py-0 text-[10px] uppercase tracking-[0.18em] text-ink-dim">

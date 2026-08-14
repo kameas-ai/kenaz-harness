@@ -39,12 +39,27 @@ const props = withDefaults(
     selectedNodeId?: string;
     /** Test seam: skip the fit-view animation frame under happy-dom. */
     fitViewOnInit?: boolean;
+    /**
+     * A caveat about what is being drawn, badged over the canvas
+     * (WP05: the degraded-projection warning). Empty renders nothing.
+     */
+    notice?: string;
   }>(),
-  { selectedNodeId: '', fitViewOnInit: true },
+  { selectedNodeId: '', fitViewOnInit: true, notice: '' },
 );
 
 const emit = defineEmits<{
   (e: 'select-node', id: string): void;
+  /**
+   * A node carrying a run overlay was clicked (WP05). `detail` is the
+   * adapter's own `statusDetail` — for agentgraph that is the
+   * materialization's `startSeq`, which is the join key back into the
+   * trace. The canvas has no idea what a trace is; it forwards.
+   */
+  (
+    e: 'node-status-click',
+    payload: { id: string; status: string; detail?: Record<string, unknown> },
+  ): void;
 }>();
 
 /**
@@ -208,6 +223,14 @@ const { zoomIn, zoomOut, fitView, screenToFlowCoordinate } = useVueFlow();
 function onNodeClick(payload: { node: { id: string } }): void {
   selectedEdgeId.value = '';
   emit('select-node', payload.node.id);
+  const overlaid = props.adapter.nodes.find((n) => n.id === payload.node.id);
+  if (overlaid?.status) {
+    emit('node-status-click', {
+      id: overlaid.id,
+      status: overlaid.status,
+      ...(overlaid.statusDetail ? { detail: overlaid.statusDetail } : {}),
+    });
+  }
 }
 
 function onPaneClick(): void {
@@ -384,6 +407,15 @@ defineExpose({
       data-testid="canvas-empty"
     >
       {{ writable ? 'Drag a kind from the palette to start.' : 'No nodes to draw yet.' }}
+    </div>
+
+    <div
+      v-if="notice"
+      class="absolute inset-x-2 top-2 z-20 rounded-sm border border-signal-warn bg-surface-1 px-2 py-1 font-ui text-[11px] text-signal-warn"
+      data-testid="canvas-notice"
+      role="status"
+    >
+      {{ notice }}
     </div>
 
     <div
