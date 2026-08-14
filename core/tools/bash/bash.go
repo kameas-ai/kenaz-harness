@@ -84,13 +84,37 @@ const description = "Execute a shell command via `bash -lc` as the user's own ac
 // inputSchema is the JSON Schema describing kenaz__bash's argument
 // shape (FR-010). Inlined as a constant so InputSchema() can return
 // the same json.RawMessage every call without re-serialising.
+//
+// This is the FOREGROUND schema: it deliberately omits
+// `run_in_background` and its companion `description`. Call() ignores
+// `run_in_background` unless Options.BackgroundSpawn is wired
+// (see the guard in Call), and advertising a knob that silently
+// degrades to synchronous execution is worse than not advertising it —
+// the model believes it has a task_id it can poll and it does not.
+// Same doctrine as the subagent_dispatch registration guard in
+// core/rpc/builtins_wiring.go (crash-recovery-tool-gating-0XQTC4RK
+// FR-007): do not put a capability in the model's catalog until the
+// seam behind it is live.
 const inputSchema = `{
   "type": "object",
   "properties": {
     "command": {"type": "string"},
     "working_dir": {"type": "string", "description": "Optional cwd for this invocation. Defaults to the harness agent-workspace; you can also pass any absolute path the user's account can reach."},
+    "timeout_seconds": {"type": "integer", "default": 30, "maximum": 300}
+  },
+  "required": ["command"]
+}`
+
+// inputSchemaBackground is the schema returned when Options.BackgroundSpawn
+// is wired — i.e. when `run_in_background:true` genuinely spawns a task
+// the model can look up by id.
+const inputSchemaBackground = `{
+  "type": "object",
+  "properties": {
+    "command": {"type": "string"},
+    "working_dir": {"type": "string", "description": "Optional cwd for this invocation. Defaults to the harness agent-workspace; you can also pass any absolute path the user's account can reach."},
     "timeout_seconds": {"type": "integer", "default": 30, "maximum": 300},
-    "run_in_background": {"type": "boolean", "default": false, "description": "When true, spawn the command asynchronously and return immediately with a task_id. Use __monitor to observe output or wait for completion."},
+    "run_in_background": {"type": "boolean", "default": false, "description": "When true, spawn the command asynchronously and return immediately with a task_id."},
     "description": {"type": "string", "description": "Human-readable label for the background task (shown in the Tasks panel). Only used when run_in_background=true."}
   },
   "required": ["command"]
@@ -216,7 +240,15 @@ func (t *Tool) Description() string { return description }
 // InputSchema returns the JSON Schema for the tool's arguments.
 // The returned bytes are owned by the caller; mutating them would
 // corrupt subsequent calls.
+//
+// The `run_in_background` knob is advertised only when the background
+// seam is wired. Without it, Call() runs the command synchronously no
+// matter what the model asks for, so advertising the knob would hand
+// the model a task_id contract the harness cannot honour.
 func (t *Tool) InputSchema() json.RawMessage {
+	if t.backgroundSpawn != nil {
+		return json.RawMessage(inputSchemaBackground)
+	}
 	return json.RawMessage(inputSchema)
 }
 
