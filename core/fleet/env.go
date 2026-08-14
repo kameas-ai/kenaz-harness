@@ -75,14 +75,17 @@ var DefaultOIDCScopes = []string{
 // because LLE serves both dev and stage fleet deployments per
 // kenaz-fleet/deploy/helm/values-lle.yaml.
 //
-// Drop in the actual TF output values (terragrunt run-all output -raw
-// kameas_native_client_id from aws/terraform/live/shared-services/
-// zitadel-lle-apps in sigil-infra) once SSO creds are available; until
-// then sign-in against LLE returns ErrProfileNotConfigured (fails soft —
-// the OSS-first contract guarantees the harness still runs without it).
+// The LLE values are baked in as source defaults (matching the kenaz
+// Makefile's KENAZ_LLE_* defaults) so every build path — release.yml,
+// the kenaz-workbench Nix bake, and local `wails dev` — produces a
+// Configured() profile without per-pipeline ldflags plumbing. Refresh
+// from kameas-infra aws/terraform/live/dev/zitadel-apps:
+//   terragrunt output -raw kameas_native_client_id
+//   terragrunt output -raw kameas_api_client_id
+// ldflags -X can still override for a release line pinned elsewhere.
 var (
-	lleNativeClientID = "" // -ldflags -X kameas-harness/core/fleet.lleNativeClientID=<sigil-infra TF output>
-	lleAPIAudience    = "" // -ldflags -X kameas-harness/core/fleet.lleAPIAudience=<sigil-infra TF output>
+	lleNativeClientID = "373053669924582106"
+	lleAPIAudience    = "373053669958071002"
 )
 
 var (

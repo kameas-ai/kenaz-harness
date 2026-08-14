@@ -102,6 +102,23 @@ func TestResolveProfile_NoPerFieldOverrides(t *testing.T) {
 	}
 }
 
+// TestResolveProfile_LLEConfigured guards against the release defect where
+// every shipped build carried empty LLE client IDs (the ldflags were never
+// plumbed in any pipeline), so Configured() was false everywhere and the
+// OTLP pipeline was never constructed. The LLE-backed profiles must be
+// configured out of the box, with no build-time injection required.
+func TestResolveProfile_LLEConfigured(t *testing.T) {
+	for _, env := range []string{EnvLocal, EnvDev, EnvStage} {
+		t.Run(env, func(t *testing.T) {
+			t.Setenv("KENAZ_HARNESS_ENV", env)
+			p := ResolveProfile()
+			if !p.Configured() {
+				t.Errorf("%s profile not Configured(): NativeClientID=%q APIAudience=%q — the fleet emitter cannot start", env, p.NativeClientID, p.APIAudience)
+			}
+		})
+	}
+}
+
 func TestEnvProfile_Configured(t *testing.T) {
 	empty := EnvProfile{}
 	if empty.Configured() {
