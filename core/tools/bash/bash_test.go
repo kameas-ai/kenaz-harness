@@ -676,7 +676,7 @@ func TestCedarGateNotApplicablePromptAllowAlwaysDangerousDemoted(t *testing.T) {
 		o.CedarEngine = eng
 		o.PromptRegistry = fr.reg
 		o.DataDir = dataDir
-		o.PermissionCacheDangerousOps = false
+		o.PermissionCacheDangerousOps = func() bool { return false }
 	})
 	// Use "rm" as command but echo-substitute via allowlist to avoid
 	// actually removing anything — the gate fires before LookPath.

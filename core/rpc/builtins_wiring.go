@@ -120,6 +120,13 @@ func registerBuiltinTools(
 		CedarEngine:    cedarEngine,
 		PromptRegistry: promptRegistry,
 		DataDir:        dataDir,
+		// Unwired sweep 2026-08-14: this was never passed, so the
+		// Settings dial was permanently false in every shipped build
+		// while BashPermissionModal.vue kept offering "Allow always"
+		// for dangerous commands. The user granted it, the backend
+		// demoted it to AllowOnce, and the next identical command
+		// re-prompted with no explanation.
+		PermissionCacheDangerousOps: dangerousOpsCacheLookup(store),
 	})
 	registry.Register(bashTool)
 	workspaceSource := "none"
@@ -338,6 +345,26 @@ func webFetchEnabledLookup(store settings.SettingsStore) func() bool {
 		if err != nil {
 			logging.L().Warn("rpc.builtins.web_fetch_enabled_lookup.read_failed", "err", err.Error())
 			// Default-off: soft-fail to disabled so the network tool stays off.
+			return false
+		}
+		return v
+	}
+}
+
+// dangerousOpsCacheLookup returns the closure the bash tool consults at
+// gate time to decide whether an AllowAlways grant on a dangerous-tier
+// command may be persisted as a .cedar snippet. nil store, or a read
+// error, collapses to false — the same fail-closed posture the demotion
+// path has always had. Read live rather than at construction because the
+// dial is user-toggleable and the permission modal renders from it.
+func dangerousOpsCacheLookup(store settings.SettingsStore) func() bool {
+	if store == nil {
+		return func() bool { return false }
+	}
+	return func() bool {
+		v, err := store.LoadPermissionCacheDangerousOps()
+		if err != nil {
+			logging.L().Warn("rpc.builtins.permission_cache_dangerous_ops_lookup.read_failed", "err", err.Error())
 			return false
 		}
 		return v

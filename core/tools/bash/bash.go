@@ -144,10 +144,16 @@ const (
 // prompt → decision. DataDir is required when writing AllowAlways
 // policy snippets; if empty, AllowAlways is treated as AllowOnce.
 //
-// PermissionCacheDangerousOps, when true, allows AllowAlways policy
-// files to be persisted even for commands classified as dangerous-tier.
-// Default false: AllowAlways on dangerous commands is demoted to
-// AllowOnce with an audit annotation.
+// PermissionCacheDangerousOps is consulted at gate time; when it
+// returns true, AllowAlways policy files are persisted even for commands
+// classified as dangerous-tier. nil (or false) demotes AllowAlways on a
+// dangerous command to AllowOnce with an audit annotation.
+//
+// It is a FUNCTION, not a bool, because the Settings dial behind it can
+// be toggled while the harness runs and the frontend already shows or
+// hides the "Allow always" affordance from the live value. Reading it
+// once at construction made the dial a lie: the button appeared and the
+// backend demoted the grant anyway (unwired sweep, 2026-08-14).
 //
 // TaskRegistry is the optional background task registry. When non-nil,
 // run_in_background:true spawns the command asynchronously, registers
@@ -163,7 +169,7 @@ type Options struct {
 	CedarEngine                *cedar.Engine
 	PromptRegistry             *cedar.Registry
 	DataDir                    string
-	PermissionCacheDangerousOps bool
+	PermissionCacheDangerousOps func() bool
 	// BackgroundSpawn is called when run_in_background:true to register
 	// the newly-spawned process in the task registry. nil means
 	// background mode silently falls back to synchronous execution.
@@ -202,7 +208,7 @@ type Tool struct {
 	cedarEngine                *cedar.Engine
 	promptRegistry             *cedar.Registry
 	dataDir                    string
-	permissionCacheDangerousOps bool
+	permissionCacheDangerousOps func() bool
 	backgroundSpawn            BackgroundSpawnFunc
 	backgroundEnd              BackgroundEndFunc
 	sessionIDFromCtx           func(ctx context.Context) string
@@ -229,6 +235,16 @@ func New(opts Options) *Tool {
 		backgroundEnd:              opts.BackgroundEnd,
 		sessionIDFromCtx:           opts.SessionIDFromCtx,
 	}
+}
+
+// dangerousOpsCacheAllowed reports whether an AllowAlways decision on a
+// dangerous-tier command may be persisted as a policy snippet. nil lookup
+// means "no" — the safe default, and the one New(Options{}) gets.
+func (t *Tool) dangerousOpsCacheAllowed() bool {
+	if t.permissionCacheDangerousOps == nil {
+		return false
+	}
+	return t.permissionCacheDangerousOps()
 }
 
 // Name returns the namespaced tool identifier (always "kenaz__bash").
@@ -537,7 +553,7 @@ func (t *Tool) cedarGate(ctx context.Context, argv []string, workingDir string) 
 			return true, nil
 
 		case cedar.DecisionAllowAlways:
-			if isDangerous && !t.permissionCacheDangerousOps {
+			if isDangerous && !t.dangerousOpsCacheAllowed() {
 				// Demote to AllowOnce; emit audit annotation.
 				// The entry is already resolved by RequestInteractive so
 				// we cannot call Resolve again. Log the demotion scope
