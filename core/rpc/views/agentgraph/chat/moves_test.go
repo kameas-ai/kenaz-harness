@@ -724,7 +724,15 @@ func TestMoves_InterruptKeepsPartialAndClosesDanglingPairs(t *testing.T) {
 	j.OpenAssistantSegment()
 	dangling := coreag.ToolCallRequest{ID: "tu-2", Name: "fs__write"}
 	j.RecordToolCall(ctx, coreag.ToolCall{ID: dangling.ID, Name: dangling.Name})
-	is := &InterruptState{PartialText: "Now I'll write", DanglingToolCalls: []coreag.ToolCallRequest{dangling}}
+	// SegmentText is what the move path persists — the in-flight move's
+	// own text, not the turn's whole accumulation. Here they coincide
+	// because the fixture is hand-built; the production divergence is
+	// pinned by TestMoves_InterruptPersistsOnlyTheInFlightSegment.
+	is := &InterruptState{
+		PartialText:       "Now I'll write",
+		SegmentText:       "Now I'll write",
+		DanglingToolCalls: []coreag.ToolCallRequest{dangling},
+	}
 	is.PersistInterrupt(ctx, "sess-1", w, j)
 	j.Finish(ctx)
 
@@ -777,6 +785,116 @@ func TestMoves_InterruptKeepsPartialAndClosesDanglingPairs(t *testing.T) {
 	if marks != len(got) {
 		t.Errorf("boundaries=%d persisted=%d on the interrupt path", marks, len(got))
 	}
+}
+
+// TestMoves_InterruptPersistsOnlyTheInFlightSegment is the regression
+// for the duplication the adversarial review of WP02 found.
+//
+// StreamBridge.PartialState() accumulates the WHOLE turn's deltas —
+// correct before moves existed, when the interrupt path wrote exactly
+// one assistant row. With moves, every completed segment is already its
+// own persisted row, so handing that accumulation to RecordPartial
+// wrote the earlier segments' words a SECOND time: the run-on paragraph
+// re-persisted, and (once WP03 lands) the model re-reading its own text
+// twice.
+//
+// This drives the REAL StreamBridge rather than a hand-built
+// InterruptState, because the hand-built fixture is exactly what hid
+// the bug.
+//
+// MUTATION EVIDENCE (run and confirmed to fail):
+//   - PersistInterrupt using is.markedText() instead of
+//     is.markedSegment() -> the preamble is persisted twice and the
+//     occurrence assertion fails.
+//   - dropping the StreamEventMoveStart case from StreamBridge.Emit ->
+//     segmentStart never advances, PartialSegment returns the whole
+//     accumulation, same failure.
+//   - dropping the held-prefix absorb from RecordPartial -> the
+//     stopped-after-the-fire sub-case persists the segment twice.
+func TestMoves_InterruptPersistsOnlyTheInFlightSegment(t *testing.T) {
+	t.Parallel()
+
+	// countOccurrences totals how many persisted move entries contain s.
+	countOccurrences := func(entries []coreag.HistoryEntry, s string) int {
+		n := 0
+		for _, e := range entries {
+			n += strings.Count(e.Content, s)
+		}
+		return n
+	}
+
+	const preamble = "I'll read the file"
+	const inflight = "Now I'll write"
+
+	t.Run("stopped mid-stream", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		w := &recordingHistoryWriter{}
+		bridge := NewStreamBridge(&recordingBroker{}, "sub-1", "sess-1")
+		j := newTurnJournal(w, bridge.Emit, "sess-1", "span-1")
+
+		// Fire 1: a preamble, then a tool.
+		j.OpenAssistantSegment()
+		bridge.Emit(coreag.StreamEvent{Kind: coreag.StreamEventText, Text: preamble})
+		j.RecordAssistantMove(ctx, preamble)
+		call := coreag.ToolCall{ID: "tu-1", Name: "fs__read"}
+		j.RecordToolCall(ctx, call)
+		j.RecordToolResult(ctx, call, coreag.ToolResult{Content: "contents"})
+
+		// Fire 2 starts streaming; the user hits Stop.
+		j.OpenAssistantSegment()
+		bridge.Emit(coreag.StreamEvent{Kind: coreag.StreamEventText, Text: inflight})
+
+		is := NewInterruptState(bridge, nil)
+		if !strings.Contains(is.PartialText, preamble) {
+			t.Fatalf("precondition broken: the bridge is supposed to accumulate the whole turn, got %q", is.PartialText)
+		}
+		is.PersistInterrupt(ctx, "sess-1", w, j)
+		j.Finish(ctx)
+
+		got := moveEntries(w)
+		if n := countOccurrences(got, preamble); n != 1 {
+			t.Errorf("fire 1's text appears %d times across the turn's moves, want exactly 1: %s",
+				n, describeMoves(got))
+		}
+		if n := countOccurrences(got, inflight); n != 1 {
+			t.Errorf("the interrupted segment appears %d times, want exactly 1: %s",
+				n, describeMoves(got))
+		}
+	})
+
+	t.Run("stopped after the fire completed", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		w := &recordingHistoryWriter{}
+		bridge := NewStreamBridge(&recordingBroker{}, "sub-1", "sess-1")
+		j := newTurnJournal(w, bridge.Emit, "sess-1", "span-1")
+
+		// A single fire that finished streaming — its text is parked,
+		// waiting to learn whether session_write claims it — and the
+		// stop lands in that window.
+		j.OpenAssistantSegment()
+		bridge.Emit(coreag.StreamEvent{Kind: coreag.StreamEventText, Text: inflight})
+		j.RecordAssistantMove(ctx, inflight)
+
+		is := NewInterruptState(bridge, nil)
+		is.PersistInterrupt(ctx, "sess-1", w, j)
+		j.Finish(ctx)
+
+		got := moveEntries(w)
+		if len(got) != 1 {
+			t.Fatalf("persisted %d moves for one interrupted fire, want 1: %s", len(got), describeMoves(got))
+		}
+		if n := countOccurrences(got, inflight); n != 1 {
+			t.Errorf("the parked segment appears %d times, want exactly 1: %s", n, describeMoves(got))
+		}
+		if got[0].MoveIndex != 0 {
+			t.Errorf("partial MoveIndex = %d, want 0 (the position already announced)", got[0].MoveIndex)
+		}
+		if got[0].MoveKind != moveKindAssistantMove {
+			t.Errorf("partial kind = %q, want %q", got[0].MoveKind, moveKindAssistantMove)
+		}
+	})
 }
 
 // TestMoves_InertWithoutTurnSpan pins the degenerate case: with no user
@@ -849,6 +967,50 @@ func TestMoves_RevisedAnswerKeepsBothTheDraftAndTheFinal(t *testing.T) {
 	}
 }
 
+// TestMoves_WhitespaceOnlyDifferenceIsNotARevision is the other side of
+// that boundary (adversarial review of WP02). The absorb test is byte
+// equality of the parked draft and the answer session_write returns; a
+// graph that trims on its way to the write node — or a provider whose
+// final Response drops a trailing newline the deltas carried — would
+// make EVERY turn persist its answer twice, as a near-identical
+// assistant_move followed by a final. A user cannot tell that pair from
+// a bug, and WP03 would feed the model its own answer twice.
+//
+// MUTATION EVIDENCE (run and confirmed to fail): drop the TrimSpace
+// from the absorb comparison in AppendEntry -> two moves are persisted
+// and the count assertion fails.
+func TestMoves_WhitespaceOnlyDifferenceIsNotARevision(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	w := &recordingHistoryWriter{}
+	j := newTurnJournal(w, nil, "sess-1", "span-1")
+
+	j.OpenAssistantSegment()
+	j.RecordAssistantMove(ctx, "the answer is 42\n")
+	if _, err := j.AppendEntry(ctx, "sess-1", coreag.HistoryEntry{
+		Role: "assistant", Content: "the answer is 42",
+	}); err != nil {
+		t.Fatalf("AppendEntry: %v", err)
+	}
+	j.Finish(ctx)
+
+	got := moveEntries(w)
+	if len(got) != 1 {
+		t.Fatalf("persisted %d moves for one answer, want 1: %s", len(got), describeMoves(got))
+	}
+	if got[0].MoveKind != moveKindFinal {
+		t.Errorf("kind = %q, want %q", got[0].MoveKind, moveKindFinal)
+	}
+	// The row carries what the turn RETURNED, at the position the
+	// stream already announced for it.
+	if got[0].Content != "the answer is 42" {
+		t.Errorf("content = %q, want the returned answer", got[0].Content)
+	}
+	if got[0].MoveIndex != 0 {
+		t.Errorf("MoveIndex = %d, want 0 (the position the parked draft announced)", got[0].MoveIndex)
+	}
+}
+
 // TestMoves_NonStreamingFireStillAnnouncesItsBoundary pins the
 // unconditional half of the 1:1 rule: a provider that returns the whole
 // body in the final response, streaming nothing, must still produce one
@@ -909,6 +1071,111 @@ func TestMoves_ArgsSummaryNamesTypesOnly(t *testing.T) {
 	for _, tc := range cases {
 		if got := displayArgsSummary(tc.name, tc.args); got != tc.want {
 			t.Errorf("displayArgsSummary(%q, %v) = %q, want %q", tc.name, tc.args, got, tc.want)
+		}
+	}
+}
+
+// TestMoves_ArgsSummaryHidesValuesInEveryShape is the adversarial
+// redaction fixture (spec §4, added by the adversarial review of WP02).
+//
+// The existing pins use flat, obviously-secret-looking arguments. A
+// redaction contract is only worth anything if it holds for the shapes
+// a real leak takes: the value nested two objects deep, the value
+// inside an array, a value long enough that a "safe prefix" would be
+// tempting, invalid UTF-8, and — the one that defeats key-name
+// denylists — a secret under a completely innocuous key.
+//
+// The assertion is deliberately universal rather than per-case: NO
+// substring of any value may appear in the summary, whatever its
+// shape. Only key names and coarse type words are allowed out.
+//
+// MUTATION EVIDENCE (run and confirmed to fail):
+//   - `%s=%v` instead of `%s=<%s>` in displayArgsSummary -> every
+//     nested / array / long / innocuous case leaks and this fails;
+//   - making argTypeName return a length or a prefix for strings
+//     (`fmt.Sprintf("string:%d", len(s))` is the tempting version) ->
+//     the long-value case fails on the leaked length digits.
+func TestMoves_ArgsSummaryHidesValuesInEveryShape(t *testing.T) {
+	t.Parallel()
+
+	const (
+		nested    = "AKIAIOSFODNN7NESTED"
+		inArray   = "ghp_arrayElementSecret000"
+		longValue = "BEGIN-PRIVATE-KEY-" +
+			"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" +
+			"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-END"
+		innocuous = "hunter2-under-a-boring-key"
+	)
+	badBytes := string([]byte{0xff, 0xfe, 0x00, 0x41, 0x42})
+
+	args := map[string]any{
+		// Two objects deep.
+		"config": map[string]any{
+			"auth": map[string]any{"aws_access_key_id": nested},
+		},
+		// Inside an array, inside an object.
+		"headers": []any{
+			map[string]any{"Authorization": "Bearer " + inArray},
+		},
+		// Long enough that a truncating "summary" would still leak.
+		"body": longValue,
+		// Invalid UTF-8 — must not be echoed, mangled or not.
+		"raw": badBytes,
+		// The one a key-name denylist misses entirely.
+		"label": innocuous,
+		// A non-JSON Go value, to pin the default arm of argTypeName.
+		"opaque": struct{ Secret string }{Secret: nested},
+	}
+
+	got := displayArgsSummary("kenaz__write_file", args)
+
+	for _, secret := range []string{nested, inArray, longValue, innocuous, badBytes} {
+		if strings.Contains(got, secret) {
+			t.Errorf("summary leaked a value: %q contains %q", got, secret)
+		}
+	}
+	// Sub-strings too: a truncating implementation leaks a prefix.
+	for _, frag := range []string{"AKIA", "ghp_", "BEGIN-PRIVATE-KEY", "hunter2", "Bearer"} {
+		if strings.Contains(got, frag) {
+			t.Errorf("summary leaked a value fragment %q: %q", frag, got)
+		}
+	}
+	// No length hint either — the long value's size must not be inferable.
+	if strings.ContainsAny(got, "0123456789") {
+		t.Errorf("summary carries digits, which is where a length hint hides: %q", got)
+	}
+	want := "kenaz__write_file(body=<string>, config=<object>, headers=<list>, " +
+		"label=<string>, opaque=<value>, raw=<string>)"
+	if got != want {
+		t.Errorf("summary = %q, want %q", got, want)
+	}
+}
+
+// TestMoves_KindVocabularyMatchesTheStore pins the restated vocabulary
+// (added by the adversarial review of WP02).
+//
+// moves.go restates session.MoveKind's four strings because the chat
+// package cannot import core/session, and its comment says "these four
+// strings must equal it" — which, until this test, nothing enforced.
+// The failure mode of drift is nastier than a compile error: the store
+// validates the kind against session.MoveKinds() and
+// turnJournal.persist logs-and-continues on error, so a rename in
+// core/session would silently stop persisting EVERY move while the run
+// and the stream both looked healthy.
+//
+// The literal list here is the same one
+// core/session.TestMoveKinds_MatchesWireVocabulary asserts from the
+// other side, so a rename cannot land green on either side alone.
+func TestMoves_KindVocabularyMatchesTheStore(t *testing.T) {
+	t.Parallel()
+	got := []string{
+		moveKindAssistantMove, moveKindToolCall, moveKindToolResult, moveKindFinal,
+	}
+	want := []string{"assistant_move", "tool_call", "tool_result", "final"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("move kind %d = %q, want %q — core/session.MoveKinds() is the "+
+				"canonical list and the store rejects anything else", i, got[i], want[i])
 		}
 	}
 }

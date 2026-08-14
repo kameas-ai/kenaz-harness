@@ -95,6 +95,22 @@ type StreamBridge struct {
 	// (long-turn-resilience-01KR3PRS WP03). Reset to "" only when a
 	// new turn opens via NewStreamBridge.
 	partialText []byte
+	// segmentStart is the offset into partialText at which the text of
+	// the CURRENT move begins — every move boundary the journal
+	// announces moves it forward (model-moves-transcript-01PMCH01 WP02,
+	// adversarial review).
+	//
+	// partialText is the whole TURN's accumulation and always has been:
+	// before moves existed the interrupt path wrote exactly one
+	// assistant row, so "everything streamed so far" was the right body
+	// for it. Now every completed segment is already its own persisted
+	// move, so handing the same accumulation to the interrupt path
+	// writes the earlier segments' words a second time — the run-on
+	// paragraph re-persisted, and, once WP03 feeds moves back as
+	// history, the model re-reading its own text twice. PartialSegment
+	// is the un-persisted tail, which is what an interrupted move
+	// actually contains.
+	segmentStart int
 	// hasToolEvent flips true on the first StreamEventTool so the
 	// runner knows tool_use already executed; a continuation prompt
 	// would then double-bill, so the resume button is suppressed and
@@ -137,6 +153,11 @@ func (b *StreamBridge) Emit(ev coreag.StreamEvent) {
 		if ev.Text != "" {
 			b.partialText = append(b.partialText, ev.Text...)
 		}
+	case coreag.StreamEventMoveStart:
+		// Everything accumulated up to here belongs to a move that is
+		// already persisted (or parked for persistence). The next
+		// segment starts at the current end.
+		b.segmentStart = len(b.partialText)
 	case coreag.StreamEventTool:
 		b.hasToolEvent = true
 		// Record the tool call so the interrupt path can backfill
@@ -170,6 +191,30 @@ func (b *StreamBridge) PartialState() (text string, hasTool bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return string(b.partialText), b.hasToolEvent
+}
+
+// PartialSegment returns only the text streamed since the last move
+// boundary — the body of the move that was in flight
+// (model-moves-transcript-01PMCH01 WP02, adversarial review).
+//
+// PartialState's whole-turn accumulation is still the right answer for
+// the classic (move-less) interrupt path, which writes one row for the
+// entire turn. It is the wrong answer once every completed segment is
+// already a persisted move of its own. Safe to call concurrently with
+// Emit.
+func (b *StreamBridge) PartialSegment() string {
+	if b == nil {
+		return ""
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.segmentStart <= 0 {
+		return string(b.partialText)
+	}
+	if b.segmentStart >= len(b.partialText) {
+		return ""
+	}
+	return string(b.partialText[b.segmentStart:])
 }
 
 // SeenToolCalls returns a snapshot of every tool_use the LLM emitted

@@ -332,7 +332,14 @@ func (j *turnJournal) AppendEntry(ctx context.Context, sessionID string,
 
 	j.mu.Lock()
 	idx := -1
-	absorbed := j.heldLive && j.held == entry.Content
+	// Compared after TrimSpace (adversarial review of WP02): a
+	// whitespace-only difference between the parked draft and the
+	// returned answer is not a revision, and treating it as one would
+	// put the same paragraph in the transcript twice — the exact
+	// user-visible duplicate this branch exists to prevent. Byte
+	// equality alone makes that duplicate one stray "\n" away, from any
+	// future graph that trims on its way to session_write.
+	absorbed := j.heldLive && strings.TrimSpace(j.held) == strings.TrimSpace(entry.Content)
 	if absorbed {
 		idx = j.heldIdx
 	} else {
@@ -380,9 +387,21 @@ func (j *turnJournal) RecordPartial(ctx context.Context, text string) {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	j.flushHeld(ctx)
 	idx := j.openIdx
 	j.openIdx = -1
+	if j.heldLive && strings.HasPrefix(text, j.held) {
+		// The stop landed AFTER the fire completed but before the turn's
+		// session_write claimed its text: the parked segment is this
+		// partial's body, only marked. Take its position and drop the
+		// park — flushing it and then writing the marked copy would put
+		// the same words in the transcript twice, which is the
+		// duplicate this mission exists to remove, not create.
+		// (adversarial review of WP02)
+		idx = j.heldIdx
+		j.held, j.heldIdx, j.heldLive = "", 0, false
+	} else {
+		j.flushHeld(ctx)
+	}
 	if idx < 0 {
 		idx = j.allocate(moveKindAssistantMove, "", "")
 	}

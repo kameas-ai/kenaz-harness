@@ -30,6 +30,16 @@ type InterruptState struct {
 	// of interrupt. May be empty when the interrupt fired before any text
 	// was emitted.
 	PartialText string
+	// SegmentText is the text of the move that was in flight — the tail
+	// of PartialText since the last move boundary
+	// (model-moves-transcript-01PMCH01 WP02, adversarial review).
+	//
+	// The move path persists THIS, not PartialText: every earlier
+	// segment of the turn is already its own persisted move, so writing
+	// the whole accumulation again duplicates them in the transcript.
+	// The classic path keeps using PartialText, which is correct there
+	// because it writes exactly one row for the whole turn.
+	SegmentText string
 	// DanglingToolCalls is the set of tool_use calls that have no
 	// matching tool_result at the time of interrupt. The runner generates
 	// a synthetic is_error tool_result for each one.
@@ -48,6 +58,7 @@ func NewInterruptState(bridge *StreamBridge, danglingCalls []coreag.ToolCallRequ
 	text, _ := bridge.PartialState()
 	return &InterruptState{
 		PartialText:       text,
+		SegmentText:       bridge.PartialSegment(),
 		DanglingToolCalls: danglingCalls,
 		InterruptedAt:     time.Now(),
 	}
@@ -55,14 +66,21 @@ func NewInterruptState(bridge *StreamBridge, danglingCalls []coreag.ToolCallRequ
 
 // markedText returns the partial text with the interrupt marker appended.
 // When PartialText is empty, just the marker is returned.
-func (is *InterruptState) markedText() string {
-	if is.PartialText == "" {
+func (is *InterruptState) markedText() string { return markInterrupted(is.PartialText) }
+
+// markedSegment is markedText for the move path: only the in-flight
+// move's own text (model-moves-transcript-01PMCH01 WP02).
+func (is *InterruptState) markedSegment() string { return markInterrupted(is.SegmentText) }
+
+// markInterrupted appends the interrupt marker, idempotently.
+func markInterrupted(text string) string {
+	if text == "" {
 		return interruptedByUserMarker
 	}
-	if strings.HasSuffix(strings.TrimSpace(is.PartialText), interruptedByUserMarker) {
-		return is.PartialText // already marked
+	if strings.HasSuffix(strings.TrimSpace(text), interruptedByUserMarker) {
+		return text // already marked
 	}
-	return is.PartialText + "\n" + interruptedByUserMarker
+	return text + "\n" + interruptedByUserMarker
 }
 
 // PersistInterrupt writes the interrupt state to durable storage through
@@ -104,8 +122,10 @@ func (is *InterruptState) PersistInterrupt(
 
 	if journal.records() {
 		// 1. The interrupted segment, at the position its first delta
-		//    already announced on the stream.
-		journal.RecordPartial(ctx, marked)
+		//    already announced on the stream. SegmentText, not
+		//    PartialText: the turn's earlier segments are already
+		//    persisted moves of their own.
+		journal.RecordPartial(ctx, is.markedSegment())
 		// 2. Close every dangling tool_use. Its tool_call entry already
 		//    exists — kernelToolAdapter writes that before dispatch —
 		//    so this backfills the answering half and the pair is whole.
