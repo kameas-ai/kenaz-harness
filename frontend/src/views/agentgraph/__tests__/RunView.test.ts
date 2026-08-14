@@ -49,6 +49,7 @@ function mountWith(opts: MountOpts = {}) {
       saveGraph: async () => undefined,
       deleteGraph: async () => undefined,
       validate: async () => ({ ok: true, issues: [] }),
+      checkEdge: async () => ({ ok: true }),
       startRun: async (req) => ({
         runId: 'run-1',
         status: {

@@ -1,0 +1,256 @@
+/**
+ * Deterministic auto-layout for the shared canvas
+ * (visual-graph-authoring-01PMUX01 WP02).
+ *
+ * Engine: `@dagrejs/dagre` — dagre's maintained continuation, chosen
+ * over the unmaintained `dagre` 0.8.5 on the npm root because that one
+ * still bundles lodash (31 KB gzipped against 17 KB for the fork, both
+ * measured in this tree) for an identical API.
+ *
+ * plan.md required deciding dagre-vs-elkjs EMPIRICALLY here, against
+ * the routed `chat_default`'s diamond/skip topology, and switching to
+ * elkjs at this point if dagre failed it. It did not: the legibility
+ * assertions in `__tests__/layout.test.ts` — zero node overlaps, every
+ * outer edge pointing down-rank, and the
+ * replan_check → {recover, exit_gate} diamond reconverging in rank
+ * order — pass on the real library file. dagre also lays out
+ * synchronously, which elkjs does not, and this runs on every parse of
+ * the YAML buffer. So dagre stays and elkjs is not a dependency.
+ *
+ * GROUPS ARE LAID OUT IN TWO PASSES, NOT AS DAGRE CLUSTERS. A loop or
+ * retry body is a *membership list* on the container's attrs — the
+ * kernel itself hides body nodes from the outer graph and lets the
+ * container stand for the body (`buildEdges` drops every edge touching
+ * one). The layout mirrors that exactly:
+ *
+ *   pass 1  each group's members are laid out on their own, giving the
+ *           container its intrinsic size;
+ *   pass 2  the outer graph is laid out with members hidden and every
+ *           edge touching a member redirected to its container;
+ *   then    member positions are translated into the container's frame.
+ *
+ * Using dagre's compound-graph support instead would have made the
+ * canvas's nesting model differ from the kernel's, which is the second
+ * nesting model plan.md's "Loop bodies" risk warns against.
+ *
+ * DETERMINISM is a tested property (`layout.test.ts`): every input list
+ * is sorted before it reaches dagre, so two runs over the same graph
+ * produce byte-identical coordinates regardless of the order the spec
+ * happened to list things in.
+ */
+import dagre from '@dagrejs/dagre';
+
+import type { CanvasEdge, CanvasNode, CanvasPoint } from './types';
+
+/** Rendered node box. Kept in sync with GraphCanvas.vue's node CSS. */
+export const NODE_WIDTH = 208;
+export const NODE_HEIGHT = 68;
+
+/** Inner padding of a group frame, and the height of its title bar. */
+export const GROUP_PADDING = 24;
+export const GROUP_HEADER = 30;
+
+export interface LayoutOptions {
+  /** Rank direction. `TB` (top→bottom) matches Airflow's graph view. */
+  rankdir?: 'TB' | 'LR';
+  /** Distance between ranks. */
+  ranksep?: number;
+  /** Distance between nodes in the same rank. */
+  nodesep?: number;
+  nodeWidth?: number;
+  nodeHeight?: number;
+}
+
+const DEFAULTS: Required<LayoutOptions> = {
+  rankdir: 'TB',
+  ranksep: 70,
+  nodesep: 44,
+  nodeWidth: NODE_WIDTH,
+  nodeHeight: NODE_HEIGHT,
+};
+
+/** A node's computed box: top-left corner plus the size it renders at. */
+export interface LayoutBox extends CanvasPoint {
+  width: number;
+  height: number;
+}
+
+export interface LayoutResult {
+  /** Top-left position per node id. */
+  positions: Record<string, CanvasPoint>;
+  /** Full box per node id — group containers carry their framed size. */
+  boxes: Record<string, LayoutBox>;
+}
+
+/**
+ * Runs one dagre pass over a flat node/edge set.
+ *
+ * `sizes` supplies per-node dimensions (group containers are bigger
+ * than leaves). Inputs are sorted so the result never depends on the
+ * order the caller happened to build its arrays in.
+ */
+function dagreLayout(
+  nodeIds: string[],
+  edges: Array<{ source: string; target: string }>,
+  sizes: Record<string, { width: number; height: number }>,
+  opts: Required<LayoutOptions>,
+): Record<string, LayoutBox> {
+  const g = new dagre.graphlib.Graph({ multigraph: true });
+  g.setGraph({
+    rankdir: opts.rankdir,
+    ranksep: opts.ranksep,
+    nodesep: opts.nodesep,
+    marginx: 16,
+    marginy: 16,
+  });
+  g.setDefaultEdgeLabel(() => ({}));
+
+  const ids = [...nodeIds].sort();
+  for (const id of ids) {
+    const size = sizes[id] ?? { width: opts.nodeWidth, height: opts.nodeHeight };
+    g.setNode(id, { width: size.width, height: size.height });
+  }
+
+  const known = new Set(ids);
+  const seen = new Set<string>();
+  const sortedEdges = [...edges]
+    .filter((e) => known.has(e.source) && known.has(e.target) && e.source !== e.target)
+    .map((e) => `${e.source}\u0000${e.target}`)
+    .sort();
+  for (const key of sortedEdges) {
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const [source, target] = key.split('\u0000');
+    g.setEdge(source, target);
+  }
+
+  dagre.layout(g);
+
+  const out: Record<string, LayoutBox> = {};
+  for (const id of ids) {
+    const n = g.node(id) as { x: number; y: number; width: number; height: number } | undefined;
+    const size = sizes[id] ?? { width: opts.nodeWidth, height: opts.nodeHeight };
+    if (!n) {
+      out[id] = { x: 0, y: 0, width: size.width, height: size.height };
+      continue;
+    }
+    // dagre reports centres; the canvas positions by top-left corner.
+    out[id] = {
+      x: Math.round(n.x - n.width / 2),
+      y: Math.round(n.y - n.height / 2),
+      width: size.width,
+      height: size.height,
+    };
+  }
+  return out;
+}
+
+/**
+ * Computes positions for every node. Nodes carrying an authored
+ * `layout` keep it (FR-004: layout coordinates win); the rest are
+ * placed by dagre.
+ *
+ * Mixed graphs — some nodes authored, some not — run the full auto
+ * layout and then override the authored ones, so a partially-authored
+ * graph still renders every node somewhere sensible rather than
+ * stacking the unpositioned ones at the origin.
+ */
+export function autoLayout(
+  nodes: CanvasNode[],
+  edges: CanvasEdge[],
+  options: LayoutOptions = {},
+): LayoutResult {
+  const opts = { ...DEFAULTS, ...options };
+
+  const members = new Map<string, string[]>();
+  const outerIds: string[] = [];
+  for (const n of [...nodes].sort((a, b) => a.id.localeCompare(b.id))) {
+    if (n.group && nodes.some((c) => c.id === n.group)) {
+      const arr = members.get(n.group) ?? [];
+      arr.push(n.id);
+      members.set(n.group, arr);
+    } else {
+      outerIds.push(n.id);
+    }
+  }
+
+  // ── pass 1: inner layouts, which give containers their size ────────
+  const innerBoxes: Record<string, Record<string, LayoutBox>> = {};
+  const sizes: Record<string, { width: number; height: number }> = {};
+  for (const id of outerIds) {
+    sizes[id] = { width: opts.nodeWidth, height: opts.nodeHeight };
+  }
+  for (const containerId of [...members.keys()].sort()) {
+    const memberIds = members.get(containerId) ?? [];
+    const inner = dagreLayout(
+      memberIds,
+      edges
+        .filter((e) => memberIds.includes(e.source) && memberIds.includes(e.target))
+        .map((e) => ({ source: e.source, target: e.target })),
+      Object.fromEntries(
+        memberIds.map((m) => [m, { width: opts.nodeWidth, height: opts.nodeHeight }]),
+      ),
+      opts,
+    );
+    innerBoxes[containerId] = inner;
+    let maxX = 0;
+    let maxY = 0;
+    for (const id of memberIds) {
+      const b = inner[id];
+      maxX = Math.max(maxX, b.x + b.width);
+      maxY = Math.max(maxY, b.y + b.height);
+    }
+    sizes[containerId] = {
+      width: maxX + GROUP_PADDING * 2,
+      height: maxY + GROUP_PADDING * 2 + GROUP_HEADER,
+    };
+  }
+
+  // ── pass 2: the outer graph, with members hidden ───────────────────
+  const containerOf = new Map<string, string>();
+  for (const [containerId, memberIds] of members) {
+    for (const m of memberIds) containerOf.set(m, containerId);
+  }
+  const outerEdges = edges
+    .map((e) => ({
+      source: containerOf.get(e.source) ?? e.source,
+      target: containerOf.get(e.target) ?? e.target,
+    }))
+    .filter((e) => e.source !== e.target);
+
+  const outerBoxes = dagreLayout(outerIds, outerEdges, sizes, opts);
+
+  // ── translate member positions into their container's frame ────────
+  const boxes: Record<string, LayoutBox> = { ...outerBoxes };
+  for (const [containerId, memberIds] of members) {
+    const frame = outerBoxes[containerId];
+    if (!frame) continue;
+    for (const id of memberIds) {
+      const rel = innerBoxes[containerId][id];
+      boxes[id] = {
+        x: frame.x + GROUP_PADDING + rel.x,
+        y: frame.y + GROUP_HEADER + GROUP_PADDING + rel.y,
+        width: rel.width,
+        height: rel.height,
+      };
+    }
+  }
+
+  // ── authored coordinates win (FR-004) ──────────────────────────────
+  for (const n of nodes) {
+    if (!n.layout) continue;
+    const existing = boxes[n.id];
+    boxes[n.id] = {
+      x: n.layout.x,
+      y: n.layout.y,
+      width: existing?.width ?? opts.nodeWidth,
+      height: existing?.height ?? opts.nodeHeight,
+    };
+  }
+
+  const positions: Record<string, CanvasPoint> = {};
+  for (const [id, b] of Object.entries(boxes)) {
+    positions[id] = { x: b.x, y: b.y };
+  }
+  return { positions, boxes };
+}

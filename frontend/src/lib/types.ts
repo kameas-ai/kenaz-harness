@@ -2685,6 +2685,29 @@ export interface GraphValidationResult {
   issues: GraphValidationIssue[];
 }
 
+/**
+ * GraphEdgeEndpoint / GraphEdgeRef / GraphEdgeCheckResult — the wire
+ * shapes for `Graph_CheckEdge`, the drag-time edge-legality check
+ * (visual-graph-authoring-01PMUX01 WP03).
+ *
+ * `reason` is the validator's OWN message, unparaphrased, because the
+ * canvas has to be able to say exactly what the save path would say.
+ */
+export interface GraphEdgeEndpoint {
+  node: string;
+  port: string;
+}
+
+export interface GraphEdgeRef {
+  from: GraphEdgeEndpoint;
+  to: GraphEdgeEndpoint;
+}
+
+export interface GraphEdgeCheckResult {
+  ok: boolean;
+  reason?: string;
+}
+
 /** RunState mirrors the kernel's emitted lifecycle. */
 export type GraphRunState = 'running' | 'paused' | 'completed' | 'failed';
 

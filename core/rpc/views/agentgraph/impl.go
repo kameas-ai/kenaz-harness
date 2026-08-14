@@ -60,6 +60,16 @@ func (a *Impl) Validate(_ context.Context, yaml string) (ValidationResult, error
 	return a.mgr.validateYAML(yaml), nil
 }
 
+// CheckEdge implements API.
+//
+// Deliberately does NOT require the manager: it is a pure function of
+// the buffer the caller sent, and a chassis that booted without a wired
+// kernel should still be able to tell an author their edge is illegal
+// rather than silently accepting every edge.
+func (a *Impl) CheckEdge(_ context.Context, graphJSON string, edge EdgeRef) (EdgeCheckResult, error) {
+	return checkEdge(graphJSON, edge)
+}
+
 // StartRun implements API.
 func (a *Impl) StartRun(_ context.Context, req StartRunRequest) (StartRunResponse, error) {
 	if a == nil || a.mgr == nil {

@@ -550,6 +550,10 @@ export function Graph_ListGraphs(arg1) {
   return window['go']['rpc']['Bindings']['Graph_ListGraphs'](arg1);
 }
 
+export function Graph_CheckEdge(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Graph_CheckEdge'](arg1, arg2);
+}
+
 export function Graph_LoadGraph(arg1) {
   return window['go']['rpc']['Bindings']['Graph_LoadGraph'](arg1);
 }
