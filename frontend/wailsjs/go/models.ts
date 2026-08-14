@@ -6538,7 +6538,7 @@ export namespace sessions {
 	    kind?: string;
 	    moveIndex?: number;
 	    turnSpanId?: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Message(source);
 	    }
