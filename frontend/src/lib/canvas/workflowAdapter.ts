@@ -59,7 +59,6 @@ import {
   type CanvasEdgeRequest,
   type CanvasNode,
   type EdgeCheckResult,
-  type PaletteItem,
   type SpecOp,
 } from './types';
 
@@ -618,17 +617,9 @@ export interface WorkflowAdapterInput {
 
 export function buildWorkflowAdapter(input: WorkflowAdapterInput): CanvasAdapter {
   const wf = input.workflow;
-  const paletteItems: PaletteItem[] = WORKFLOW_STEP_KINDS.map((k) => ({
-    kind: k.kind,
-    label: k.label,
-    category: k.category,
-    description: k.description,
-  }));
-
   return {
     nodes: nodesOf(wf),
     edges: edgesOf(wf),
-    paletteItems,
     onCheckEdge: async (edge) => checkWorkflowEdge(wf, edge),
     // Structural read-only, the same idiom `graphAdapter` uses: the
     // mutation path is REPLACED, not guarded.

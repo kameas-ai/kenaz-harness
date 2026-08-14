@@ -119,6 +119,80 @@ Note: `tag-on-merge` cutting the stable tag immediately means **a `feat:`/`fix:`
 
 ---
 
+## Release ritual: unwired sweep
+
+**Runs first on every release branch, before any feature work.** Owner
+directive: find-and-eliminate unwired code is a ritual, not a campaign. Its
+fixes are small and scattered, so running it ahead of mission merges avoids
+conflicts and means the release builds on a verified-wired base.
+
+*Unwired* = built but not reached: a tool no wiring site imports, a setting
+nothing branches on, an output port with no reader, a prop no parent passes,
+a gate function with no caller. The failure mode is not a missing feature —
+it is a **lie**: a toggle that reports it is on, a schema that promises the
+model a capability, a comment asserting an invariant nothing enforces.
+
+### The five passes
+
+1. **3-pass read detection** for output ports, node attrs and struct fields:
+   Go reads **+** YAML `condition:` / attr-string references in
+   `core/rpc/views/agentgraph/library/*.yaml`, `core/agentgraph/graphs/*.yaml`,
+   `core/agentgraph/activities/yaml/*.yaml` (alias-resolved via `kindAliases`
+   in `wire_gen.go`) **+** frontend reads. A naive Go grep over-reports ~3x.
+2. **Registration-vs-consumption diffs.** Pair every Register/Emit/Publish
+   with a real consumer: builtin tools ↔ `builtinEnabledPredicate` cases,
+   event kinds ↔ emit sites ↔ readers, broker topics ↔ subscribers, Wails
+   bindings ↔ `harnessClient.ts` ↔ an actual `.vue` caller, RPC methods ↔
+   served-mode dispatch. Check **both** directions — the existing tripwire
+   only walks registered→predicate.
+3. **Zero-call-site exported control-flow.** The I10 heuristic
+   (`Evaluate*`/`Enforce*`/`Authorize*`/`Check*`/`Verify*`/`Guard*`/`Permit*`/
+   `*Gate`), widened one notch to exported constructors and `With*` options
+   in code new since the last release —
+   `git diff --stat <last-tag>..HEAD` scopes the fresh surface.
+4. **Dials-to-consumer tracing.** Every Settings field, autonomy knob and
+   graph dial must reach an **observable behaviour**. A read that only
+   copies the value into another struct is not consumption — follow it to a
+   branch. This pass has found four inert toggles across the campaign.
+5. **Frontend placeholders.** Hardcoded zero/empty props and literals with
+   "placeholder" / "TODO" / "until X wires" / "for now" comments; declared
+   props no parent passes; `defineExpose` members only tests reach.
+
+### Rules
+
+- Every find gets **wired, deleted, or dated-justified**. Deleting needs
+  positive no-consumer proof *and* deletion of the tests that were its only
+  readers.
+- A justification names the **blocker** and the **owner** — the change that
+  will delete the line. "We'll get to it" is not a reason.
+- **Gate-extension rule:** if a find represents a class the existing gates
+  cannot see, extend a gate in the same commit, with a planted-violation
+  proof in `scripts/ci/gates_can_fail_test.go`.
+- Allowlists shrink monotonically. Nothing gets added without a date.
+
+### Where the ledger lives
+
+`docs/unwired-ledger.md` — index of the gated findings (which allowlist
+holds what) plus the full text of the **ungated** ones, which have no
+allowlist to live in. Read it first; it is the previous sweep's handoff.
+Per-symbol justifications stay with their gate in
+`scripts/ci/allowlists/`.
+
+### Tooling footguns
+
+- Use `rtk proxy grep` / `rtk proxy git` for anything multi-file or
+  load-bearing — the plain wrappers silently truncate.
+- `gofmt -l` flags ~337 files from local-toolchain drift (Go 1.26 vs
+  go.mod 1.25). Never "fix" a file you did not otherwise touch.
+- `go test` needs `-p 4`; mcp stdio tests time out at default parallelism.
+- Run only `check-*.sh` scripts from `scripts/ci/`; others are not
+  read-only. `check-csp.sh` needs a frontend build and
+  `check-release-integrity.sh` needs `REPO` set.
+- Known flakes: AutoTitle, views/sites keyring, views/update timing,
+  check-oss-first.
+
+---
+
 ## Mission system (kitty-specs/)
 
 Each feature is a *mission* under `kitty-specs/<slug>-<ULID>/`:

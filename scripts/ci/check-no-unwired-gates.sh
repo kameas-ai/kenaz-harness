@@ -13,13 +13,28 @@
 #
 # DISCOVERY HEURISTIC (deliberately narrow, not a general dead-code
 # scanner): a candidate is any EXPORTED free function under core/ whose
-# name starts with Evaluate/Enforce/Authorize, or ends with Gate — the
-# naming vocabulary this codebase already uses for gate/authorization
-# functions (grep the seed set below for examples of each). Broadening
-# this to catch every unreachable exported symbol is a different, much
-# bigger check (dead-code elimination) that does not belong in a 30s CI
-# gate; this one stays scoped to the specific "control-flow role that
-# nothing calls" defect class I10 names.
+# name starts with Evaluate/Enforce/Authorize/Check/Verify/Guard/Permit,
+# or ends with Gate — the naming vocabulary this codebase uses for
+# gate/authorization/enforcement functions. Broadening this to catch
+# every unreachable exported symbol is a different, much bigger check
+# (dead-code elimination) that does not belong in a 30s CI gate; this
+# one stays scoped to the specific "control-flow role that nothing
+# calls" defect class I10 names.
+#
+# VOCABULARY WIDENING, 2026-08-14 (unwired sweep). Check/Verify/Guard/
+# Permit were added because the original four could not see the defect
+# this allowlist was already DOCUMENTING: the entry for
+# EnforceManifestDriftPolicy states that its producer CheckManifestDrift
+# "also has zero non-test callers", and `Check*` was not in the
+# vocabulary, so the gate never flagged it. A gate whose allowlist
+# describes violations its own scanner cannot detect is only half a gate.
+#
+# The widening surfaced eight symbols, all real, all seeded below with a
+# per-symbol verdict from the sweep's triage. The most consequential is
+# cedar.CheckLLMFallback: core/llm/fallback's Runner is constructed on
+# the live chat path with no options, so `checkPolicy` is nil and every
+# fallback hop runs unevaluated, while runner.go's own doc says "fn
+# should call cedar.CheckLLMFallback".
 #
 # For each candidate this script counts REAL non-test call/reference
 # sites: occurrences of `Symbol(` in non-test .go files, minus pure
@@ -85,7 +100,7 @@ import_path_for() {
 # Both alternatives require the symbol to start with an uppercase letter
 # (EXPORTED, per the header's contract) — the *Gate( branch previously
 # matched unexported functions too (e.g. buildCedarGate).
-candidates=$(grep -rnE '^func (Evaluate|Enforce|Authorize)[A-Za-z0-9_]*\(|^func [A-Z][A-Za-z0-9_]*Gate\(' \
+candidates=$(grep -rnE '^func (Evaluate|Enforce|Authorize|Check|Verify|Guard|Permit)[A-Za-z0-9_]*\(|^func [A-Z][A-Za-z0-9_]*Gate\(' \
   --include='*.go' "$SCAN_ROOT" 2>/dev/null | grep -v '_test\.go' || true)
 
 violations=""

@@ -115,9 +115,17 @@ function movedNodeIds(): string[] {
  * written at their current auto-layout coordinates — an absent entry
  * means "auto-layout decides", which is what keeps the diff to the
  * nodes the author actually moved and lets the rest reflow around them.
+ *
+ * Families whose spec has no layout block declare
+ * `adapter.persistsLayout: false` and always get an empty result. Until
+ * the 2026-08-14 unwired sweep that flag was set by both adapters and
+ * READ BY NOTHING: workflowAdapter.ts's "move-nodes never arrives"
+ * comment described an invariant the canvas did not enforce, and held
+ * only because WorkflowGraphEditor happens not to hold a canvas ref.
  */
 function pendingLayout(): Record<string, CanvasPoint> {
   const out: Record<string, CanvasPoint> = {};
+  if (!props.adapter.persistsLayout) return out;
   for (const id of movedNodeIds()) {
     const p = positions.value[id];
     if (!p) continue;

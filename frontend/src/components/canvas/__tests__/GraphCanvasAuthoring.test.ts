@@ -277,4 +277,31 @@ describe('drag to move', () => {
     h.vm.onNodeDragStop({ nodes: [{ id: 'gate', position: { x: 99, y: 99 } }] });
     expect(h.vm.pendingLayout()).toEqual(before);
   });
+
+  // Unwired-sweep pin (2026-08-14). `CanvasAdapter.persistsLayout` was
+  // set by both adapters and read by NOTHING — workflowAdapter.ts's
+  // "move-nodes never arrives" comment described an invariant the canvas
+  // never enforced, and it held only because WorkflowGraphEditor happens
+  // not to hold a ref to the canvas. pendingLayout() now honours the flag,
+  // so a family whose spec has no layout block cannot grow one.
+  it('emits no layout for an adapter that does not persist layout', () => {
+    const parsed = parseGraphText(DIAMOND_YAML);
+    const base = buildGraphAdapter({
+      graph: parsed.graph,
+      manifests: [],
+      readOnly: false,
+      checkEdge: async () => ({ ok: true }),
+      applyOp: () => undefined,
+    });
+    const wrapper = mount(GraphCanvas, {
+      props: {
+        adapter: { ...base, persistsLayout: false },
+        fitViewOnInit: false,
+      },
+    });
+    const vm = wrapper.vm as unknown as Harness['vm'];
+    vm.onNodeDragStop({ nodes: [{ id: 'gate', position: { x: 33.6, y: 71.2 } }] });
+    expect(vm.movedNodeIds()).toContain('gate');
+    expect(vm.pendingLayout()).toEqual({});
+  });
 });

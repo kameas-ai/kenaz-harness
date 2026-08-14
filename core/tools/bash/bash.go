@@ -84,13 +84,37 @@ const description = "Execute a shell command via `bash -lc` as the user's own ac
 // inputSchema is the JSON Schema describing kenaz__bash's argument
 // shape (FR-010). Inlined as a constant so InputSchema() can return
 // the same json.RawMessage every call without re-serialising.
+//
+// This is the FOREGROUND schema: it deliberately omits
+// `run_in_background` and its companion `description`. Call() ignores
+// `run_in_background` unless Options.BackgroundSpawn is wired
+// (see the guard in Call), and advertising a knob that silently
+// degrades to synchronous execution is worse than not advertising it —
+// the model believes it has a task_id it can poll and it does not.
+// Same doctrine as the subagent_dispatch registration guard in
+// core/rpc/builtins_wiring.go (crash-recovery-tool-gating-0XQTC4RK
+// FR-007): do not put a capability in the model's catalog until the
+// seam behind it is live.
 const inputSchema = `{
   "type": "object",
   "properties": {
     "command": {"type": "string"},
     "working_dir": {"type": "string", "description": "Optional cwd for this invocation. Defaults to the harness agent-workspace; you can also pass any absolute path the user's account can reach."},
+    "timeout_seconds": {"type": "integer", "default": 30, "maximum": 300}
+  },
+  "required": ["command"]
+}`
+
+// inputSchemaBackground is the schema returned when Options.BackgroundSpawn
+// is wired — i.e. when `run_in_background:true` genuinely spawns a task
+// the model can look up by id.
+const inputSchemaBackground = `{
+  "type": "object",
+  "properties": {
+    "command": {"type": "string"},
+    "working_dir": {"type": "string", "description": "Optional cwd for this invocation. Defaults to the harness agent-workspace; you can also pass any absolute path the user's account can reach."},
     "timeout_seconds": {"type": "integer", "default": 30, "maximum": 300},
-    "run_in_background": {"type": "boolean", "default": false, "description": "When true, spawn the command asynchronously and return immediately with a task_id. Use __monitor to observe output or wait for completion."},
+    "run_in_background": {"type": "boolean", "default": false, "description": "When true, spawn the command asynchronously and return immediately with a task_id."},
     "description": {"type": "string", "description": "Human-readable label for the background task (shown in the Tasks panel). Only used when run_in_background=true."}
   },
   "required": ["command"]
@@ -120,10 +144,16 @@ const (
 // prompt → decision. DataDir is required when writing AllowAlways
 // policy snippets; if empty, AllowAlways is treated as AllowOnce.
 //
-// PermissionCacheDangerousOps, when true, allows AllowAlways policy
-// files to be persisted even for commands classified as dangerous-tier.
-// Default false: AllowAlways on dangerous commands is demoted to
-// AllowOnce with an audit annotation.
+// PermissionCacheDangerousOps is consulted at gate time; when it
+// returns true, AllowAlways policy files are persisted even for commands
+// classified as dangerous-tier. nil (or false) demotes AllowAlways on a
+// dangerous command to AllowOnce with an audit annotation.
+//
+// It is a FUNCTION, not a bool, because the Settings dial behind it can
+// be toggled while the harness runs and the frontend already shows or
+// hides the "Allow always" affordance from the live value. Reading it
+// once at construction made the dial a lie: the button appeared and the
+// backend demoted the grant anyway (unwired sweep, 2026-08-14).
 //
 // TaskRegistry is the optional background task registry. When non-nil,
 // run_in_background:true spawns the command asynchronously, registers
@@ -139,7 +169,7 @@ type Options struct {
 	CedarEngine                *cedar.Engine
 	PromptRegistry             *cedar.Registry
 	DataDir                    string
-	PermissionCacheDangerousOps bool
+	PermissionCacheDangerousOps func() bool
 	// BackgroundSpawn is called when run_in_background:true to register
 	// the newly-spawned process in the task registry. nil means
 	// background mode silently falls back to synchronous execution.
@@ -178,7 +208,7 @@ type Tool struct {
 	cedarEngine                *cedar.Engine
 	promptRegistry             *cedar.Registry
 	dataDir                    string
-	permissionCacheDangerousOps bool
+	permissionCacheDangerousOps func() bool
 	backgroundSpawn            BackgroundSpawnFunc
 	backgroundEnd              BackgroundEndFunc
 	sessionIDFromCtx           func(ctx context.Context) string
@@ -207,6 +237,16 @@ func New(opts Options) *Tool {
 	}
 }
 
+// dangerousOpsCacheAllowed reports whether an AllowAlways decision on a
+// dangerous-tier command may be persisted as a policy snippet. nil lookup
+// means "no" — the safe default, and the one New(Options{}) gets.
+func (t *Tool) dangerousOpsCacheAllowed() bool {
+	if t.permissionCacheDangerousOps == nil {
+		return false
+	}
+	return t.permissionCacheDangerousOps()
+}
+
 // Name returns the namespaced tool identifier (always "kenaz__bash").
 func (t *Tool) Name() string { return Name }
 
@@ -216,7 +256,15 @@ func (t *Tool) Description() string { return description }
 // InputSchema returns the JSON Schema for the tool's arguments.
 // The returned bytes are owned by the caller; mutating them would
 // corrupt subsequent calls.
+//
+// The `run_in_background` knob is advertised only when the background
+// seam is wired. Without it, Call() runs the command synchronously no
+// matter what the model asks for, so advertising the knob would hand
+// the model a task_id contract the harness cannot honour.
 func (t *Tool) InputSchema() json.RawMessage {
+	if t.backgroundSpawn != nil {
+		return json.RawMessage(inputSchemaBackground)
+	}
 	return json.RawMessage(inputSchema)
 }
 
@@ -505,7 +553,7 @@ func (t *Tool) cedarGate(ctx context.Context, argv []string, workingDir string) 
 			return true, nil
 
 		case cedar.DecisionAllowAlways:
-			if isDangerous && !t.permissionCacheDangerousOps {
+			if isDangerous && !t.dangerousOpsCacheAllowed() {
 				// Demote to AllowOnce; emit audit annotation.
 				// The entry is already resolved by RequestInteractive so
 				// we cannot call Resolve again. Log the demotion scope

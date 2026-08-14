@@ -676,7 +676,7 @@ func TestCedarGateNotApplicablePromptAllowAlwaysDangerousDemoted(t *testing.T) {
 		o.CedarEngine = eng
 		o.PromptRegistry = fr.reg
 		o.DataDir = dataDir
-		o.PermissionCacheDangerousOps = false
+		o.PermissionCacheDangerousOps = func() bool { return false }
 	})
 	// Use "rm" as command but echo-substitute via allowlist to avoid
 	// actually removing anything — the gate fires before LookPath.
@@ -700,6 +700,72 @@ func TestCedarGateNotApplicablePromptAllowAlwaysDangerousDemoted(t *testing.T) {
 	}
 	if snippetWritten {
 		t.Errorf("snippet was written for dangerous command without override; want demotion to AllowOnce (no snippet)")
+	}
+}
+
+// TestCedarGateNotApplicablePromptAllowAlwaysDangerousOverride is the ON
+// half of the dial the unwired sweep (2026-08-14) made live. Its sibling
+// above pins only the OFF path, which the zero value already produced —
+// so with only that test, `dangerousOpsCacheAllowed()` could return
+// constant false and the suite would stay green while the Settings
+// toggle did nothing. That is the exact defect the sweep was closing.
+//
+// With the override ON, an AllowAlways decision on a dangerous-tier
+// command must persist a .cedar snippet rather than being demoted.
+func TestCedarGateNotApplicablePromptAllowAlwaysDangerousOverride(t *testing.T) {
+	if _, err := exec.LookPath("echo"); err != nil {
+		t.Skipf("echo missing: %v", err)
+	}
+	eng := buildNotApplicableEngine(t)
+	fr := newFakeRegistry(t, cedar.DecisionAllowAlways)
+
+	dataDir := t.TempDir()
+	snippetWritten := false
+	origMkdirAll := mkdirAll
+	origWriteFile := writeFile
+	t.Cleanup(func() {
+		mkdirAll = origMkdirAll
+		writeFile = origWriteFile
+	})
+	mkdirAll = func(path string) error { return os.MkdirAll(path, 0o755) }
+	writeFile = func(path string, data []byte) error {
+		snippetWritten = true
+		return os.WriteFile(path, data, 0o644)
+	}
+
+	// Same dangerous command as the demotion test; only the dial differs.
+	tool, _ := newTool(t, func(o *Options) {
+		o.CedarEngine = eng
+		o.PromptRegistry = fr.reg
+		o.DataDir = dataDir
+		o.PermissionCacheDangerousOps = func() bool { return true }
+	})
+	raw, err := tool.Call(context.Background(), mustMarshal(t, callArgs{Command: "rm --version"}))
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	res := unmarshalResult(t, raw)
+	if res.ExitCode == -1 && strings.Contains(res.Stderr, "denied") {
+		t.Errorf("command was blocked by gate; want AllowAlways run; stderr=%q", res.Stderr)
+	}
+	if !snippetWritten {
+		t.Fatal("no policy snippet written for a dangerous AllowAlways with " +
+			"PermissionCacheDangerousOps ON — the Settings dial is inert, which is " +
+			"exactly the state the 2026-08-14 sweep wired it out of")
+	}
+	entries, err := os.ReadDir(filepath.Join(dataDir, cedar.PolicyDir))
+	if err != nil {
+		t.Fatalf("ReadDir policy dir: %v", err)
+	}
+	found := false
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "bash_allow_") && strings.HasSuffix(e.Name(), ".cedar") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("no bash_allow_*.cedar file in %s after a dangerous AllowAlways with the override ON", dataDir)
 	}
 }
 

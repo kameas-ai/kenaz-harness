@@ -83,13 +83,62 @@ describe('NodeAttributeEditor', () => {
       (wrapper.get('[data-testid="attr-input-enabled"]').element as HTMLInputElement).type,
     ).toBe('checkbox');
     expect(wrapper.get('[data-testid="attr-input-mode"]').element.tagName).toBe('SELECT');
-    // model_ref / activity_ref / node_id_ref all render as <select>.
-    expect(wrapper.get('[data-testid="attr-input-pick_model"]').element.tagName).toBe('SELECT');
+    // Ref types render as <select> ONLY when this editor has options for
+    // them: activity_ref from activityOptions, node_id_ref from
+    // graphNodeIds. model_ref has no option source in any parent, so it
+    // renders as a string input — see the pin below.
     expect(wrapper.get('[data-testid="attr-input-activity"]').element.tagName).toBe('SELECT');
     expect(wrapper.get('[data-testid="attr-input-upstream"]').element.tagName).toBe('SELECT');
+    expect(wrapper.get('[data-testid="attr-input-pick_model"]').element.tagName).toBe('INPUT');
     // object → textarea + Format JSON button.
     expect(wrapper.get('[data-testid="attr-input-meta"]').element.tagName).toBe('TEXTAREA');
     expect(wrapper.find('[data-testid="attr-format-meta"]').exists()).toBe(true);
+  });
+
+  // Unwired-sweep pin (2026-08-14). model_ref / tool_ref / corpus_ref /
+  // attachment_ref had `*Options` props that NO parent ever passed, so
+  // the picker rendered a <select> whose only entry was the "—"
+  // placeholder: the attribute was unsettable from the visual editor.
+  // planner.planner_model and both escalation_ladder model overrides ship
+  // in chat_default.yaml, so this was reachable in the default graph.
+  // A ref attr with no option source must degrade to a text input that
+  // can actually hold a value.
+  it('renders ref attrs with no option source as a settable text input', async () => {
+    const manifest: NodeManifestDetail = {
+      summary: { id: 'planner', callable: true },
+      chain: ['planner'],
+      attrs: [
+        { name: 'planner_model', type: 'model_ref' },
+        { name: 'which_tool', type: 'tool_ref' },
+        { name: 'which_corpus', type: 'corpus_ref' },
+        { name: 'which_attachment', type: 'attachment_ref' },
+      ],
+      ports: {},
+      provenance: [],
+    };
+    const wrapper = mountEditor({ manifest, attrs: {}, graphNodeIds: [] });
+
+    for (const name of [
+      'planner_model',
+      'which_tool',
+      'which_corpus',
+      'which_attachment',
+    ]) {
+      const el = wrapper.get(`[data-testid="attr-input-${name}"]`).element;
+      expect(
+        el.tagName,
+        `${name} rendered as <${el.tagName}> — a ref picker with no option source is an unsettable field`,
+      ).toBe('INPUT');
+    }
+
+    await wrapper
+      .get('[data-testid="attr-input-planner_model"]')
+      .setValue('anthropic:claude-sonnet-4');
+    const events = wrapper.emitted('update:attrs');
+    expect(events).toBeTruthy();
+    expect(events![events!.length - 1][0]).toEqual({
+      planner_model: 'anthropic:claude-sonnet-4',
+    });
   });
 
   it('emits update:attrs on string input change', async () => {

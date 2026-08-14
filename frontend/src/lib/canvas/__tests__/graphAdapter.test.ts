@@ -194,20 +194,6 @@ edges:
     expect(byId['right'].status).toBeUndefined();
   });
 
-  it('lists only callable kinds in the palette, sorted', () => {
-    const adapter = build(DIAMOND_YAML);
-    expect(adapter.paletteItems.map((p) => p.kind)).toEqual([
-      'decision',
-      'loop',
-      'model',
-      'plan',
-      'router',
-      'session_write',
-      'transform',
-    ]);
-    expect(adapter.paletteItems.every((p) => p.kind !== 'compute')).toBe(true);
-  });
-
   it('renders an unparseable buffer as an empty canvas, not a crash', () => {
     const adapter = buildGraphAdapter({
       graph: null,
@@ -218,7 +204,6 @@ edges:
     });
     expect(adapter.nodes).toEqual([]);
     expect(adapter.edges).toEqual([]);
-    expect(adapter.paletteItems.length).toBeGreaterThan(0);
   });
 
   it('gives a read-only adapter no mutation path at all', () => {
