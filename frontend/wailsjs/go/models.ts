@@ -108,6 +108,20 @@ export namespace acp {
 
 export namespace agentgraph {
 	
+	export class EdgeCheckResult {
+	    ok: boolean;
+	    reason?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EdgeCheckResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ok = source["ok"];
+	        this.reason = source["reason"];
+	    }
+	}
 	export class EdgeEndpoint {
 	    node: string;
 	    port: string;
@@ -153,20 +167,6 @@ export namespace agentgraph {
 		    }
 		    return a;
 		}
-	}
-	export class EdgeCheckResult {
-	    ok: boolean;
-	    reason?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new EdgeCheckResult(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.ok = source["ok"];
-	        this.reason = source["reason"];
-	    }
 	}
 	export class GraphInfo {
 	    id: string;
@@ -8101,9 +8101,13 @@ export namespace workflows {
 	export class Step {
 	    name: string;
 	    kind: string;
+	    inputsFrom?: string[];
 	    userPrompt?: string;
 	    cmd?: string;
 	    args?: string[];
+	    method?: string;
+	    url?: string;
+	    mode?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Step(source);
@@ -8113,9 +8117,13 @@ export namespace workflows {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
 	        this.kind = source["kind"];
+	        this.inputsFrom = source["inputsFrom"];
 	        this.userPrompt = source["userPrompt"];
 	        this.cmd = source["cmd"];
 	        this.args = source["args"];
+	        this.method = source["method"];
+	        this.url = source["url"];
+	        this.mode = source["mode"];
 	    }
 	}
 	export class Workflow {

@@ -22,6 +22,7 @@ import {
   type WorkflowsSummary,
   type WorkflowsWorkflow,
   type WorkflowsRunResult,
+  type WorkflowsSaveInput,
 } from '@/lib/workflowsClient';
 
 // CanvasHead pulls in design-token CSS. Stub it so the test stays
@@ -292,5 +293,136 @@ describe('WorkflowsView', () => {
     expect(wrapper.find('[data-testid="scheduled-inbox"]').exists()).toBe(true);
     // Library tab content is hidden
     expect(wrapper.find('[data-testid="workflows-catalog"]').exists()).toBe(false);
+  });
+});
+
+/*
+ * The canvas editor's MOUNTED PATH
+ * (visual-graph-authoring-01PMUX01 WP06, FR-006).
+ *
+ * `WorkflowGraphEditor` was rebuilt on the shared canvas and then mounted
+ * by nothing: this view offered the template editor and the YAML editor
+ * only, so "workflows render on the shared canvas" was true of the code
+ * and false of the running app. Component tests could not catch that —
+ * they mount the editor directly, which is exactly the thing the app was
+ * not doing. These tests drive the view.
+ */
+describe('WorkflowsView — the canvas editor is reachable', () => {
+  async function openCanvas() {
+    const wrapper = mount(WorkflowsView, { props: { client: fakeClient() } });
+    await flushPromises();
+    await wrapper.get('[data-testid="workflows-edit-canvas-button"]').trigger('click');
+    await flushPromises();
+    await new Promise((r) => setTimeout(r, 0));
+    await flushPromises();
+    return wrapper;
+  }
+
+  it('mounts the canvas from the detail pane, showing the workflow steps', async () => {
+    const wrapper = await openCanvas();
+    expect(wrapper.find('[data-testid="workflows-editor-slot-canvas"]').exists()).toBe(
+      true,
+    );
+    // The SHARED canvas component, with one node per step.
+    const canvas = wrapper.get('[data-testid="graph-canvas"]');
+    expect(canvas.attributes('data-node-count')).toBe('4');
+    const labels = wrapper
+      .findAll('[data-testid^="canvas-node-"]')
+      .map((w) => w.findAll('span')[0]?.text());
+    expect(labels).toEqual(['plan', 'research', 'implement', 'review']);
+  });
+
+  it('offers a blank canvas from the New menu', async () => {
+    const wrapper = mount(WorkflowsView, { props: { client: fakeClient() } });
+    await flushPromises();
+    await wrapper.get('[data-testid="workflows-new-button"]').trigger('click');
+    await wrapper.get('[data-testid="workflows-new-canvas"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-testid="workflows-editor-slot-canvas"]').exists()).toBe(
+      true,
+    );
+    expect(wrapper.get('[data-testid="graph-canvas"]').attributes('data-node-count')).toBe(
+      '0',
+    );
+  });
+
+  it('toggles between the YAML and canvas panes on one workflow', async () => {
+    const wrapper = await openCanvas();
+    expect(wrapper.find('[data-testid="workflows-editor-pane-toggle"]').exists()).toBe(
+      true,
+    );
+    await wrapper.get('[data-testid="workflows-editor-pane-yaml"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-testid="workflows-editor-slot-yaml"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="workflows-editor-slot-canvas"]').exists()).toBe(
+      false,
+    );
+    await wrapper.get('[data-testid="workflows-editor-pane-canvas"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-testid="workflows-editor-slot-canvas"]').exists()).toBe(
+      true,
+    );
+  });
+
+  /*
+   * The canvas saves through the EXISTING structured save path — the same
+   * `client.save({workflow})` call the pre-canvas editor's emit was always
+   * destined for. A canvas that persisted some other way would be a second
+   * way to write a workflow, which is what this mission is against.
+   */
+  it('saves through the existing structured save path and returns to the catalog', async () => {
+    const saveSpy = vi.fn((_input: WorkflowsSaveInput) =>
+      Promise.resolve({
+        id: 'plan_implement_review',
+        name: 'x',
+        version: 2,
+        hash: 'h',
+        yaml: '',
+        createdAt: '',
+        updatedAt: '',
+      }),
+    );
+    const wrapper = mount(WorkflowsView, {
+      props: { client: fakeClient({ save: saveSpy }) },
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="workflows-edit-canvas-button"]').trigger('click');
+    await flushPromises();
+    await wrapper.get('[data-testid="wge-save"]').trigger('click');
+    await flushPromises();
+
+    expect(saveSpy).toHaveBeenCalledTimes(1);
+    const arg = saveSpy.mock.calls[0][0];
+    expect(arg.yaml).toBeUndefined();
+    expect(arg.workflow?.id).toBe('plan_implement_review');
+    expect(arg.workflow?.steps.map((s) => s.name)).toEqual([
+      'plan',
+      'research',
+      'implement',
+      'review',
+    ]);
+    // Saved ⇒ editor closes and the catalog is back.
+    expect(wrapper.find('[data-testid="workflows-editor-slot-canvas"]').exists()).toBe(
+      false,
+    );
+  });
+
+  it('surfaces a save failure instead of closing the editor', async () => {
+    const wrapper = mount(WorkflowsView, {
+      props: {
+        client: fakeClient({
+          save: () => Promise.reject(new Error('cedar denied shell workflow')),
+        }),
+      },
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="workflows-edit-canvas-button"]').trigger('click');
+    await flushPromises();
+    await wrapper.get('[data-testid="wge-save"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.text()).toContain('cedar denied shell workflow');
+    expect(wrapper.find('[data-testid="workflows-editor-slot-canvas"]').exists()).toBe(
+      true,
+    );
   });
 });

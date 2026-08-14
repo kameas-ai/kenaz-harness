@@ -10,7 +10,7 @@ import type {
   NodeManifestSummary,
 } from '@/lib/types';
 
-import type { ParsedGraph, SpecNode } from './graphSpec';
+import type { ParsedGraph, SpecMaterialization, SpecNode } from './graphSpec';
 import {
   DEFAULT_PORT_IN,
   DEFAULT_PORT_OUT,
@@ -90,6 +90,91 @@ export function defaultAttrsForKind(
   }
   for (const [k, v] of Object.entries(detail.defaults ?? {})) {
     out[k] = v;
+  }
+  return out;
+}
+
+// ── run overlay (WP05) ────────────────────────────────────────────────
+
+/**
+ * `Graph.SpecProvenance` value marking a projection that fell back to
+ * the library file because the resolved spec the run executed had been
+ * evicted (core/agentgraph/spec.go). The topology shown may differ from
+ * the one that ran, which is why it is badged rather than served silently.
+ */
+export const SPEC_PROVENANCE_LIBRARY_FALLBACK = 'library_fallback';
+
+/**
+ * Maps the materializer's status vocabulary onto the canvas enum.
+ *
+ * The two vocabularies deliberately do not match one-for-one: the
+ * materializer describes a RECORD ("completed", "error"), the canvas
+ * describes a CELL on an Airflow-style graph ("complete", "failed"), and
+ * `running` exists only on the canvas because a recorded fire is never
+ * running by the time it is a record.
+ *
+ * `live` is the whole bridge between the two. A node whose fire started
+ * and whose log has no matching complete or error materializes as
+ * `incomplete` — which on a finished run means "the run was cancelled or
+ * crashed mid-node", and on a run that is STILL GOING means "this node is
+ * executing right now". Same record, and the only thing that distinguishes
+ * them is whether the run has ended, so that is the one bit passed in.
+ */
+export function toCanvasStatus(
+  raw: string | undefined,
+  live = false,
+): CanvasNodeStatus | undefined {
+  switch (raw) {
+    case 'completed':
+      return 'complete';
+    case 'error':
+      return 'failed';
+    case 'skipped':
+      return 'skipped';
+    case 'not_reached':
+      return live ? 'pending' : 'not_reached';
+    case 'incomplete':
+      return live ? 'running' : 'incomplete';
+    default:
+      return undefined;
+  }
+}
+
+/** The overlay detail the canvas hands back on a status click. */
+function statusDetail(m: SpecMaterialization): Record<string, unknown> {
+  const detail: Record<string, unknown> = {};
+  if (m.startSeq !== undefined) detail.startSeq = m.startSeq;
+  if (m.endSeq !== undefined) detail.endSeq = m.endSeq;
+  if (m.sourceNode) detail.sourceNode = m.sourceNode;
+  if (m.instance !== undefined) detail.instance = m.instance;
+  if (m.iteration !== undefined) detail.iteration = m.iteration;
+  if (m.container) detail.container = m.container;
+  return detail;
+}
+
+/**
+ * Per-node run overlay read out of a materialized projection.
+ *
+ * This is a pure function of the SAME parse the canvas renders from —
+ * there is no second fetch and no second model of the run. The statuses
+ * ride inside the projected graph's own `materialized:` blocks, so
+ * "what the canvas draws" and "what the overlay says" cannot disagree.
+ */
+export function materializationStatuses(
+  graph: ParsedGraph | null,
+  opts: { live?: boolean } = {},
+): Record<string, NodeStatusOverlay> {
+  const out: Record<string, NodeStatusOverlay> = {};
+  if (!graph) return out;
+  for (const n of graph.nodes) {
+    const m = n.materialized;
+    if (!m) continue;
+    const status = toCanvasStatus(m.status, opts.live === true);
+    if (!status) continue;
+    const overlay: NodeStatusOverlay = { status };
+    const detail = statusDetail(m);
+    if (Object.keys(detail).length > 0) overlay.detail = detail;
+    out[n.id] = overlay;
   }
   return out;
 }

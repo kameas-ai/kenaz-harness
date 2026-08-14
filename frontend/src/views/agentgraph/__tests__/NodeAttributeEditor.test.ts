@@ -18,6 +18,7 @@ function mountEditor(opts: {
   attrs?: Record<string, unknown>;
   manifest: NodeManifestDetail | null;
   graphNodeIds?: string[];
+  readOnly?: boolean;
 }) {
   return mount(NodeAttributeEditor, {
     props: {
@@ -25,6 +26,7 @@ function mountEditor(opts: {
       kindId: opts.kindId ?? 'planner',
       attrs: opts.attrs ?? {},
       manifest: opts.manifest,
+      readOnly: opts.readOnly ?? false,
       graphNodeIds: opts.graphNodeIds ?? [],
       activityOptions: [
         { id: 'plan', label: 'plan' },
@@ -239,5 +241,126 @@ describe('NodeAttributeEditor', () => {
     await ta.setValue('{not valid json');
     await ta.trigger('blur');
     expect(wrapper.find('[data-testid="attr-json-error-meta"]').exists()).toBe(true);
+  });
+});
+
+/*
+ * View-only mode (visual-graph-authoring-01PMUX01 WP05) — the second half
+ * of the WP12-review N3 hazard: an attribute editor that could type into
+ * a record of something that already happened.
+ *
+ * The editor-level test that came with WP05 asserted this against a
+ * manifest with NO attrs, so it was checking for the absence of inputs in
+ * a box that had none either way — flipping `v-if="readOnly"` to `false`
+ * left it passing. Every assertion below runs against a manifest with one
+ * attr of every widget type, so the absence means something.
+ */
+const KITCHEN_SINK: NodeManifestDetail = {
+  summary: { id: 'kitchen_sink', callable: true },
+  chain: ['kitchen_sink'],
+  attrs: [
+    { name: 'name', type: 'string' },
+    { name: 'count', type: 'int', min: 0, max: 10 },
+    { name: 'ratio', type: 'float' },
+    { name: 'enabled', type: 'bool' },
+    { name: 'mode', type: 'enum', enum: ['a', 'b', 'c'] },
+    { name: 'pick_model', type: 'model_ref' },
+    { name: 'activity', type: 'activity_ref' },
+    { name: 'upstream', type: 'node_id_ref' },
+    { name: 'meta', type: 'object' },
+    { name: 'freeform', type: 'wat' },
+  ],
+  ports: {},
+  provenance: [],
+};
+
+const SINK_VALUES = {
+  name: 'hello',
+  count: 3,
+  ratio: 1.5,
+  enabled: true,
+  mode: 'b',
+  pick_model: 'sonnet',
+  activity: 'plan',
+  upstream: 'a',
+  meta: { k: 'v' },
+  freeform: 'other',
+};
+
+describe('NodeAttributeEditor — read-only', () => {
+  const writable = () =>
+    mountEditor({ manifest: KITCHEN_SINK, attrs: SINK_VALUES, graphNodeIds: ['a'] });
+  const readOnly = () =>
+    mountEditor({
+      manifest: KITCHEN_SINK,
+      attrs: SINK_VALUES,
+      graphNodeIds: ['a'],
+      readOnly: true,
+    });
+
+  it('renders a widget per attr when writable — the control group', () => {
+    const w = writable();
+    // Without this the read-only assertions below would pass vacuously.
+    expect(w.findAll('[data-testid^="attr-input-"]').length).toBe(
+      KITCHEN_SINK.attrs!.length,
+    );
+    expect(w.findAll('[data-testid^="attr-value-"]').length).toBe(0);
+  });
+
+  it('renders NO input, select or textarea in read-only mode', () => {
+    const w = readOnly();
+    expect(w.findAll('input').length).toBe(0);
+    expect(w.findAll('select').length).toBe(0);
+    expect(w.findAll('textarea').length).toBe(0);
+    expect(w.findAll('[data-testid^="attr-input-"]').length).toBe(0);
+    // The Format JSON button is a mutation affordance too.
+    expect(w.find('[data-testid="attr-format-meta"]').exists()).toBe(false);
+  });
+
+  it('renders one value row per attr instead', () => {
+    const w = readOnly();
+    expect(w.findAll('[data-testid^="attr-value-"]').length).toBe(
+      KITCHEN_SINK.attrs!.length,
+    );
+    expect(w.get('[data-testid="attr-value-name"]').text()).toBe('hello');
+    expect(w.get('[data-testid="attr-value-count"]').text()).toBe('3');
+    expect(w.get('[data-testid="attr-value-enabled"]').text()).toBe('true');
+    expect(w.get('[data-testid="attr-value-mode"]').text()).toBe('b');
+    expect(w.get('[data-testid="attr-value-meta"]').text()).toBe('{"k":"v"}');
+    // The catch-all widget is covered too.
+    expect(w.get('[data-testid="attr-value-freeform"]').text()).toBe('other');
+  });
+
+  it('shows an em dash rather than a blank for an unset attr', () => {
+    const w = mountEditor({ manifest: KITCHEN_SINK, attrs: {}, readOnly: true });
+    expect(w.get('[data-testid="attr-value-name"]').text()).toBe('—');
+  });
+
+  /*
+   * The point of doing it structurally: there is no element left that
+   * could emit. A `disabled` attribute would leave the handler bound and
+   * one `.trigger('input')` away from writing into the buffer.
+   */
+  it('has no path to emit update:attrs', () => {
+    const w = readOnly();
+    expect(w.emitted('update:attrs')).toBeUndefined();
+    expect(w.findAll('button').length).toBe(0);
+  });
+
+  it('does not nag about required attrs on a record nobody may edit', () => {
+    const manifest: NodeManifestDetail = {
+      ...KITCHEN_SINK,
+      attrs: [{ name: 'needed', type: 'string', required: true }],
+    };
+    expect(
+      mountEditor({ manifest, attrs: {}, readOnly: true })
+        .find('[data-testid="attr-required-needed"]')
+        .exists(),
+    ).toBe(false);
+    expect(
+      mountEditor({ manifest, attrs: {} })
+        .find('[data-testid="attr-required-needed"]')
+        .exists(),
+    ).toBe(true);
   });
 });

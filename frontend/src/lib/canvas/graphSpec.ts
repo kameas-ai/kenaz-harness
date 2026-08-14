@@ -36,6 +36,30 @@ export interface SpecPort {
   required?: boolean;
 }
 
+/**
+ * The `materialized:` block a projected run carries on every node
+ * (core/agentgraph/spec.go `NodeMaterialization`, WP05).
+ *
+ * Only the fields the canvas overlay needs are read. The block also
+ * carries the redacted tool/arg/error detail, which stays where it is:
+ * the overlay renders a status and a seq, and the trace rows — which
+ * `startSeq` joins to — hold everything else.
+ *
+ * An authored graph never has this block (`omitempty` on both wires),
+ * so `materialized` being undefined is the normal case, not a gap.
+ */
+export interface SpecMaterialization {
+  sourceNode?: string;
+  instance?: number;
+  iteration?: number;
+  container?: string;
+  /** completed | error | skipped | not_reached | incomplete. */
+  status?: string;
+  /** EventLog sequence numbers bounding the fire; the trace join key. */
+  startSeq?: number;
+  endSeq?: number;
+}
+
 export interface SpecNode {
   id: string;
   kind: string;
@@ -43,6 +67,8 @@ export interface SpecNode {
   attrs: Record<string, unknown>;
   inputs?: SpecPort[];
   outputs?: SpecPort[];
+  /** Set only on a materialized run's projection (WP05). */
+  materialized?: SpecMaterialization;
 }
 
 export interface SpecEndpoint {
@@ -62,6 +88,12 @@ export interface ParsedGraph {
   nodes: SpecNode[];
   edges: SpecEdge[];
   layout: Record<string, CanvasPoint>;
+  /**
+   * `spec_provenance` on a materialized run — `library_fallback` when
+   * the resolved spec that executed was evicted and the projection fell
+   * back to the library file. Absent on everything else.
+   */
+  specProvenance?: string;
 }
 
 export interface ParseResult {
@@ -97,6 +129,37 @@ function readPorts(v: unknown): SpecPort[] | undefined {
   return out.length > 0 ? out : undefined;
 }
 
+function asInt(v: unknown): number | undefined {
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/**
+ * Reads a node's `materialized:` block. Absent, non-mapping, or empty
+ * blocks all yield undefined — an authored graph must be indistinguishable
+ * from one whose projection carried nothing.
+ */
+function readMaterialization(v: unknown): SpecMaterialization | undefined {
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const m = v as Record<string, unknown>;
+  const out: SpecMaterialization = {};
+  const sourceNode = asString(m.source_node);
+  if (sourceNode) out.sourceNode = sourceNode;
+  const container = asString(m.container);
+  if (container) out.container = container;
+  const status = asString(m.status);
+  if (status) out.status = status;
+  const instance = asInt(m.instance);
+  if (instance !== undefined) out.instance = instance;
+  const iteration = asInt(m.iteration);
+  if (iteration !== undefined) out.iteration = iteration;
+  const startSeq = asInt(m.start_seq);
+  if (startSeq !== undefined) out.startSeq = startSeq;
+  const endSeq = asInt(m.end_seq);
+  if (endSeq !== undefined) out.endSeq = endSeq;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function readEndpoint(v: unknown): SpecEndpoint | null {
   const e = asRecord(v);
   const node = asString(e.node);
@@ -126,6 +189,8 @@ export function graphFromPlain(plain: unknown): ParsedGraph | null {
       if (inputs) node.inputs = inputs;
       const outputs = readPorts(n.outputs);
       if (outputs) node.outputs = outputs;
+      const materialized = readMaterialization(n.materialized);
+      if (materialized) node.materialized = materialized;
       nodes.push(node);
     }
   }
@@ -162,6 +227,8 @@ export function graphFromPlain(plain: unknown): ParsedGraph | null {
   };
   const name = asString(g.name);
   if (name) out.name = name;
+  const provenance = asString(g.spec_provenance);
+  if (provenance) out.specProvenance = provenance;
   return out;
 }
 

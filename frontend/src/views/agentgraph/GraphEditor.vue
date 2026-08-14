@@ -27,7 +27,12 @@ import {
   useNodeManifest,
   useNodeManifests,
 } from '@/composables/useNodeManifest';
-import { buildGraphAdapter, defaultAttrsForKind } from '@/lib/canvas/graphAdapter';
+import {
+  buildGraphAdapter,
+  defaultAttrsForKind,
+  materializationStatuses,
+  SPEC_PROVENANCE_LIBRARY_FALLBACK,
+} from '@/lib/canvas/graphAdapter';
 import {
   applyOpToDoc,
   parseGraphText,
@@ -103,9 +108,6 @@ const isMaterialized = computed(() => scope.value === 'materialized');
  * GraphEditor.canvas.test.ts, "the palette cannot mutate a read-only
  * buffer".
  */
-const isDegraded = computed(() =>
-  /^spec_provenance:\s*"?library_fallback"?\s*$/m.test(yaml.value),
-);
 const canSave = computed(() => !readOnly.value && !!yaml.value.trim());
 
 // ── the one parse (spec §4: one buffer) ──────────────────────────────
@@ -159,6 +161,22 @@ watch(yaml, (text) => {
 onBeforeUnmount(() => {
   if (parseTimer !== null) clearTimeout(parseTimer);
 });
+
+/**
+ * WP05: read the degraded marker off the ONE parse rather than
+ * re-scanning the text with a regex. The old line-anchored,
+ * quote-guessing regex was a second reader of the same buffer, and
+ * `spec_provenance` is a plain scalar the YAML parse already resolves.
+ */
+const isDegraded = computed(
+  () => lastGoodGraph.value?.specProvenance === SPEC_PROVENANCE_LIBRARY_FALLBACK,
+);
+/** The same warning, short enough to badge over the canvas itself. */
+const canvasNotice = computed(() =>
+  isDegraded.value
+    ? 'Degraded projection — this topology may differ from the one that ran.'
+    : '',
+);
 
 // ── selection ────────────────────────────────────────────────────────
 //
@@ -257,6 +275,20 @@ async function checkCanvasEdge(edge: {
   }
 }
 
+/**
+ * The run overlay (WP05). A materialized projection carries its own
+ * per-node `materialized:` blocks, so the statuses come out of the very
+ * buffer the canvas is already rendering — no second fetch, no second
+ * model, nothing that can disagree with the topology beside it.
+ *
+ * `live: false`: this route only ever shows a run that already ran.
+ * RunView owns the live surface, where a still-executing fire renders
+ * as `running` rather than `incomplete`.
+ */
+const canvasStatuses = computed(() =>
+  isMaterialized.value ? materializationStatuses(lastGoodGraph.value) : {},
+);
+
 const canvasAdapter = computed(() =>
   buildGraphAdapter({
     graph: lastGoodGraph.value,
@@ -265,6 +297,7 @@ const canvasAdapter = computed(() =>
     readOnly: readOnly.value,
     checkEdge: checkCanvasEdge,
     applyOp: applyCanvasOp,
+    statuses: canvasStatuses.value,
   }),
 );
 
@@ -582,6 +615,7 @@ defineExpose({
             ref="canvasRef"
             :adapter="canvasAdapter"
             :selected-node-id="selectedNodeId"
+            :notice="canvasNotice"
             @select-node="onCanvasSelect"
           />
         </div>
@@ -655,6 +689,7 @@ defineExpose({
           :kind-id="selectedKindId"
           :attrs="selectedNode?.attrs ?? {}"
           :manifest="selectedManifest"
+          :read-only="readOnly"
           :graph-node-ids="graphNodeIds"
           :activity-options="[
             { id: 'plan', label: 'plan' },

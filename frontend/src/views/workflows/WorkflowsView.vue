@@ -22,6 +22,7 @@ import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import WorkflowEditor from './WorkflowEditor.vue';
 import SimpleTemplateEditor from './SimpleTemplateEditor.vue';
+import WorkflowGraphEditor from '@/components/workflows/WorkflowGraphEditor.vue';
 import CatalogView from './CatalogView.vue';
 import CatalogPreviewDrawer from './CatalogPreviewDrawer.vue';
 import RunsHistoryTab from './RunsHistoryTab.vue';
@@ -181,11 +182,31 @@ function onCatalogInstalled(_workflowId: string) {
 // "Edit" flips us into one of the editor modes. The editors emit
 // `cancel` / `saved` — both routes return us to the catalog and (on
 // save) refresh + jump to the freshly persisted workflow.
-type EditorMode = null | 'yaml-new' | 'yaml-edit' | 'template';
+//
+// The `canvas-*` modes are visual-graph-authoring-01PMUX01 WP06's other
+// half. `WorkflowGraphEditor` was rebuilt on the shared canvas but this
+// view mounted only the template + YAML editors, so FR-006 ("workflows
+// render on the shared canvas") was unreachable from the running app —
+// built, but unwired. These modes are the wiring.
+type EditorMode =
+  | null
+  | 'yaml-new'
+  | 'yaml-edit'
+  | 'template'
+  | 'canvas-new'
+  | 'canvas-edit';
 const editorMode = ref<EditorMode>(null);
 const newMenuOpen = ref(false);
 const editorYaml = ref<string>('');
 const editorTitle = ref<string>('');
+/** The structured workflow the canvas editor edits; null for a new one. */
+const editorWorkflow = ref<WorkflowsWorkflow | null>(null);
+
+/** True in either editor for an EXISTING workflow, where both panes seed
+ * from the same saved record and the YAML/Canvas toggle makes sense. */
+const canToggleEditor = computed(
+  () => editorMode.value === 'yaml-edit' || editorMode.value === 'canvas-edit',
+);
 
 /**
  * yamlFromWorkflow — synthesize a YAML stub from the structured
@@ -273,12 +294,65 @@ function openBlankYamlEditor() {
 function openEditExisting() {
   if (!selected.value) return;
   editorYaml.value = yamlFromWorkflow(selected.value);
+  editorWorkflow.value = selected.value;
   editorTitle.value = `Edit ${selected.value.name}`;
   editorMode.value = 'yaml-edit';
 }
 
+/**
+ * Opens the selected workflow on the SHARED canvas — the same
+ * `GraphCanvas` the agentgraph editor mounts (FR-001/FR-006).
+ *
+ * Both editors seed from the same saved record (`selected`), which is
+ * what makes the toggle between them coherent: flipping panes re-reads
+ * the workflow as last persisted, so the only thing it can cost is
+ * unsaved edits in the pane being left. The toggle says so.
+ */
+function openCanvasEditor() {
+  if (!selected.value) return;
+  editorWorkflow.value = selected.value;
+  editorYaml.value = yamlFromWorkflow(selected.value);
+  editorTitle.value = `Edit ${selected.value.name}`;
+  editorMode.value = 'canvas-edit';
+}
+
+function openBlankCanvasEditor() {
+  editorWorkflow.value = null;
+  editorTitle.value = 'New workflow (canvas)';
+  editorMode.value = 'canvas-new';
+  newMenuOpen.value = false;
+}
+
+/** The YAML/Canvas toggle. Only reachable while editing an existing
+ * workflow — see `canToggleEditor`. */
+function switchEditorPane(pane: 'yaml' | 'canvas') {
+  if (!canToggleEditor.value) return;
+  if (pane === 'yaml') openEditExisting();
+  else openCanvasEditor();
+}
+
 function closeEditor() {
   editorMode.value = null;
+  editorWorkflow.value = null;
+}
+
+/**
+ * The canvas editor's save. It goes through the EXISTING structured save
+ * path — `client.save({ workflow })`, the same call the pre-canvas
+ * editor's emit was always destined for — so the canvas adds a surface,
+ * not a second way to persist a workflow.
+ */
+async function onCanvasSave(wf: WorkflowsWorkflow) {
+  saving.value = true;
+  saveError.value = null;
+  try {
+    const out = await client.save({ workflow: wf });
+    await onEditorSaved(out);
+  } catch (err) {
+    saveError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    saving.value = false;
+  }
 }
 
 async function onEditorSaved(out: WorkflowsSaveOutput) {
@@ -399,6 +473,14 @@ onMounted(loadCatalog);
           >
             From YAML
           </button>
+          <button
+            type="button"
+            class="block w-full text-left px-3 py-2 font-ui text-sm text-ink hover:bg-surface-2"
+            data-testid="workflows-new-canvas"
+            @click="openBlankCanvasEditor"
+          >
+            On the canvas
+          </button>
         </div>
       </div>
 
@@ -413,8 +495,51 @@ onMounted(loadCatalog);
         />
       </div>
 
+      <!--
+        The YAML/Canvas toggle. Both panes edit the same saved workflow
+        and save through the same client, so this picks a VIEW of one
+        artifact rather than opening a different editor — which is why
+        it is a toggle and not two separate entry points.
+      -->
       <div
-        v-else-if="editorMode === 'yaml-new' || editorMode === 'yaml-edit'"
+        v-if="canToggleEditor"
+        class="flex items-center gap-2"
+        data-testid="workflows-editor-pane-toggle"
+      >
+        <button
+          type="button"
+          class="rounded-sm border px-3 py-1 font-ui text-xs"
+          :class="
+            editorMode === 'yaml-edit'
+              ? 'border-accent bg-surface-2 text-accent'
+              : 'border-border-muted bg-surface-1 text-ink-muted hover:bg-surface-2'
+          "
+          data-testid="workflows-editor-pane-yaml"
+          @click="switchEditorPane('yaml')"
+        >
+          YAML
+        </button>
+        <button
+          type="button"
+          class="rounded-sm border px-3 py-1 font-ui text-xs"
+          :class="
+            editorMode === 'canvas-edit'
+              ? 'border-accent bg-surface-2 text-accent'
+              : 'border-border-muted bg-surface-1 text-ink-muted hover:bg-surface-2'
+          "
+          data-testid="workflows-editor-pane-canvas"
+          @click="switchEditorPane('canvas')"
+        >
+          Canvas
+        </button>
+        <span class="font-ui text-[11px] text-ink-muted">
+          Both panes read the workflow as last saved — switching discards
+          unsaved edits in the pane you leave.
+        </span>
+      </div>
+
+      <div
+        v-if="editorMode === 'yaml-new' || editorMode === 'yaml-edit'"
         data-testid="workflows-editor-slot-yaml"
       >
         <WorkflowEditor
@@ -424,6 +549,18 @@ onMounted(loadCatalog);
           @cancel="closeEditor"
           @saved="onEditorSaved"
           @ran="onEditorSaved($event.save)"
+        />
+      </div>
+
+      <div
+        v-else-if="editorMode === 'canvas-new' || editorMode === 'canvas-edit'"
+        data-testid="workflows-editor-slot-canvas"
+      >
+        <h2 class="font-ui text-sm text-ink mb-2">{{ editorTitle }}</h2>
+        <WorkflowGraphEditor
+          :workflow="editorWorkflow"
+          @cancel="closeEditor"
+          @save="onCanvasSave"
         />
       </div>
 
@@ -553,6 +690,14 @@ onMounted(loadCatalog);
               @click="openEditExisting"
             >
               Edit
+            </button>
+            <button
+              type="button"
+              class="rounded-sm border border-border-muted bg-surface-2 px-3 py-1.5 font-ui text-sm text-ink hover:bg-surface-1 disabled:opacity-50"
+              data-testid="workflows-edit-canvas-button"
+              @click="openCanvasEditor"
+            >
+              Edit on canvas
             </button>
             <button
               type="button"
