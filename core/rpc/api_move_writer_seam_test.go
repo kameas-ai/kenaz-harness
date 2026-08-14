@@ -142,3 +142,37 @@ func TestHistoryWriterSeam_RejectsIncoherentMove(t *testing.T) {
 		t.Errorf("rejected move still persisted %d row(s)", len(msgs))
 	}
 }
+
+// TestMoveToolCalls_NeverCarriesRawArguments pins the display-layer
+// half of spec §4's two-layer redaction rule at the seam where it is
+// actually decided (added by the adversarial review of WP02).
+//
+// moveToolCalls projects coreag.ToolCallRequest onto session.ToolCall
+// and deliberately leaves Arguments nil: the persisted tool_call row's
+// Content already holds the args SUMMARY, and session.ToolCall.Arguments
+// is durable, exported and shared. Before this test the invariant was a
+// comment — filling Arguments in was a one-line change no test noticed
+// (verified: the mutation survived the whole suite).
+func TestMoveToolCalls_NeverCarriesRawArguments(t *testing.T) {
+	t.Parallel()
+
+	const secret = "sk-live-DO-NOT-PERSIST"
+	got := moveToolCalls([]coreag.ToolCallRequest{
+		{ID: "tu-1", Name: "fs__write", Arguments: `{"token":"` + secret + `"}`},
+		{ID: "tu-2", Name: "bash", Arguments: `{"cmd":"export TOKEN=` + secret + `"}`},
+	})
+	if len(got) != 2 {
+		t.Fatalf("moveToolCalls returned %d calls, want 2", len(got))
+	}
+	for i, tc := range got {
+		if len(tc.Arguments) != 0 {
+			t.Errorf("call %d carried raw arguments into the display layer: %q", i, tc.Arguments)
+		}
+		if tc.ID == "" || tc.Name == "" {
+			t.Errorf("call %d lost its pairing identity: %+v", i, tc)
+		}
+	}
+	if moveToolCalls(nil) != nil {
+		t.Error("moveToolCalls(nil) should stay nil so a classic entry's wire bytes are unchanged")
+	}
+}
