@@ -206,7 +206,7 @@ func TestFileStore_ConfirmEachRoundTrip(t *testing.T) {
 }
 
 func TestEffectiveMaxAgentTurns_DefaultWhenZero(t *testing.T) {
-	// Zero on the wire ⇒ DefaultMaxAgentTurns (25). Negative is treated
+	// Zero on the wire ⇒ DefaultMaxAgentTurns. Negative is treated
 	// the same way (defensive — the store normalises negatives to zero
 	// on save, but the helper covers the in-memory path too).
 	for _, tc := range []struct {
