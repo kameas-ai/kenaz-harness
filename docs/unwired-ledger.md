@@ -54,29 +54,71 @@ finding, not an exemption.
 
 ### 2026-08-14 · Move metadata reaches the wire ahead of its consumers
 
+*(Updated 2026-08-14 by WP02 — two of WP01's three entries are drained;
+see the Drained section. What remains:)*
+
 `sessions.Message.{Kind,MoveIndex,TurnSpanID}` (core/rpc/views/sessions/api.go)
 and their `frontend/src/lib/types.ts` mirror are populated by
-`messageToView` and read by nothing today. Likewise
-`agentgraph.HistoryEntry.{MoveKind,MoveIndex,TurnSpanID}` is carried
-end-to-end by the seam but every current call site passes it zero.
-
-`session.TranscriptEntry.ToolCalls` is the same class in the other
-direction: the field exists on the seam's input shape and no production
-caller sets it, because `agentgraph.HistoryEntry` has no counterpart yet.
-WP02 adds one (tool calls and results are the entries it persists); until
-then the only writers are the WP01 tests.
+`messageToView` and read by nothing today. WP02 fills the columns behind
+them on every chat turn, so the wire now carries real values — but the
+chat surface still renders one bubble per turn until WP04 reads them.
 
 This is WP01 landing the schema + the single writer seam ahead of the
 code that emits and renders moves, which is the sequencing plan.md fixes
 deliberately (the entry shape is the contract WP02–WP05 build on).
 
-**Consumers:** WP02 (chat runner stamps per-iteration moves), WP03
-(model-visible history gate), WP04 (move bubbles + tool chips), WP05
-(collapse + export). **Owner:** 01PMCH01.
+**Consumers:** WP04 (move bubbles + tool chips), WP05 (collapse +
+export). **Owner:** 01PMCH01.
 
 **Deadline:** these lines are drained when 01PMCH01 ships. If the mission
 is abandoned, the fields and migration 0333 go with it — a nullable
 column nothing writes is the same lie as a toggle nothing reads.
+
+### 2026-08-14 · The stream move-boundary marker has no reader yet (WP02)
+
+`llm.StreamMoveStart` + `llm.MoveBoundary` + `llm.StreamEvent.Move`, and
+their kernel-side mirrors `agentgraph.StreamEventMoveStart` +
+`StreamEvent.{MoveIndex,MoveKind}`, are EMITTED on every chat turn by the
+move journal (`core/rpc/views/agentgraph/chat/moves.go`) and translated
+onto the `llm:stream-chunk` topic by `translateAGStreamEvent`. Nothing on
+the frontend branches on the kind yet, so today the marker is an event
+the chat surface receives and ignores.
+
+That is the WP02/WP04 split plan.md specifies: WP02 defines the contract
+(one boundary per persisted move, same count, same order, same index —
+the doc comment on `llm.MoveBoundary` is the contract text) and WP04
+consumes it to split the run-on paragraph into bubbles. The contract is
+pinned from the producing side today by
+`TestMoves_StreamBoundariesMatchPersistedMoves`, so WP04 inherits a
+guarantee rather than a hope.
+
+**Consumer:** WP04 (live view: move bubbles + tool chips).
+**Owner:** 01PMCH01.
+
+### 2026-08-14 · `session.TranscriptEntry.ContentBlocks` has no production writer (WP02)
+
+Added by WP02 to close a WP01 review finding: without it the transcript
+seam could express strictly LESS than `Manager.AppendMessage`, so an
+author needing a multimodal entry had to leave the seam — and the
+off-seam path cannot stamp move metadata, so the move degraded to a
+classic entry with neither the compiler nor
+`check-single-move-writer.sh` objecting. The field removes the reason to
+leave the seam; the compiler still forbids minting move metadata
+anywhere else, so the degradation is unreachable rather than merely
+discouraged.
+
+Read on every append (`AppendTranscriptEntry` → `canonicalBlocks`) and
+round-tripped by `TestAppendTranscriptEntry_CarriesContentBlocks`, but
+every production caller leaves it empty today: the moves WP02 writes are
+text. It becomes load-bearing the first time a move carries an image.
+
+**Consumers:** WP03 (per-family rendering must not re-flatten a
+multimodal move on its way to the provider), WP05 (export/share
+fidelity). **Owner:** 01PMCH01.
+
+**Deadline:** if 01PMCH01 ships without either consumer setting it, the
+right disposition is to delete the field and record the expressiveness
+hole as an open finding — not to leave it here for a fourth release.
 
 Not on this list, because they are already load-bearing:
 `session.Message.{moveKind,moveIndex,moveTurnSpanID}` +
@@ -226,6 +268,17 @@ its evidence.
 
 ## Drained
 
+- **2026-08-14** (01PMCH01 WP02) — `agentgraph.HistoryEntry.{MoveKind,
+  MoveIndex,TurnSpanID}` (carried end-to-end by the seam while every call
+  site passed it zero) now stamped on every chat turn by the runner's
+  move journal; `session.TranscriptEntry.ToolCalls` now has its
+  production writer — `agentgraph.HistoryEntry` gained the counterpart
+  field WP01 said it lacked, and `llmHistoryWriter.AppendEntry` projects
+  it through `moveToolCalls`. Also drained, though it predates the
+  mission: `ModelAttrs.StreamToChat`, a manifest attr declared since the
+  chat migration with no reader anywhere — it is now the discriminator
+  that tells the chat's assistant turn apart from the six other
+  executors that call `env.LLM.Generate`.
 - **2026-08-14** (01PMCH01 WP01) — `llm.SessionMessageWriter` +
   `llm.Config.HistoryWriter` + `llmImpl.historyW` (an interface declared,
   a field populated at boot from `core/rpc/api.go`, and never read by any

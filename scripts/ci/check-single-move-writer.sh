@@ -156,12 +156,24 @@ fi
 # is blind to it. The column names move_index / turn_span_id are unique
 # to this schema, so naming them outside the store + the migration that
 # creates them is the signal.
+# PRECISION (2026-08-14, model-moves-transcript-01PMCH01 WP02): the scan
+# skips `//` comment lines and struct-tag lines. SQL never lives in
+# either, so nothing this clause exists to catch can hide there — but
+# prose describing the schema, and the `json:"move_index"` tag on the
+# stream-boundary event that mirrors the column for the frontend, both
+# named the columns in Go files and tripped a check about SQL. Narrowing
+# to non-comment, non-tag lines keeps every INSERT/UPDATE/SELECT form
+# caught (the planted probe in scripts/ci/gates_can_fail_test.go is one)
+# while letting the schema be described in the language of the schema.
 SQL_ALLOWED='^(core/session/store\.go|core/session/migrations_moves\.go|core/session/migrations\.go|core/session/moves\.go)$'
-sql_offenders=$(grep -rln 'move_index\|turn_span_id' \
+sql_offenders=$(grep -rn 'move_index\|turn_span_id' \
   --include='*.go' --include='*.sql' core/ 2>/dev/null |
-  grep -v '_test\.go$' |
+  grep -v '^[^:]*_test\.go:' |
+  grep -vE '^[^:]*:[0-9]+:[[:space:]]*//' |
+  grep -vE '^[^:]*:[0-9]+:.*json:"' |
+  cut -d: -f1 |
   grep -vE "$SQL_ALLOWED" |
-  sort || true)
+  sort -u || true)
 
 if [[ -n "$sql_offenders" ]]; then
   echo "$GATE FAIL: the move columns are named outside the store + migration:" >&2
