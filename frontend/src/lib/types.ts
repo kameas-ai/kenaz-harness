@@ -1468,8 +1468,11 @@ export interface StreamChunk {
   done?: boolean;
 }
 
-/** Token / cost estimate surfaced by ChatInput. Placeholder values are OK
- * until the providers mission wires real accounting. */
+/** Token / cost readout surfaced by ChatInput's composer footer. Callers
+ * derive this from the session's live usage snapshot (see
+ * SessionUsagePayload / session.lastUsage in useSession.ts) so the footer
+ * reflects the provider-reported totals from the most recently completed
+ * turn, not a static placeholder. */
 export interface CostEstimate {
   tokens: number;
   usd: number;

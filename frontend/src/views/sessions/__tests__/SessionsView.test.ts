@@ -86,8 +86,9 @@ async function mountWithRoute(
 }
 
 describe('SessionsView (chat-ui)', () => {
+  let fakeRuntime: FakeRuntime;
   beforeEach(() => {
-    installFakeRuntime();
+    fakeRuntime = installFakeRuntime();
     setConnectionState('ready');
   });
   afterEach(() => {
@@ -163,6 +164,76 @@ describe('SessionsView (chat-ui)', () => {
     const textarea = w.find('textarea');
     expect(textarea.exists()).toBe(true);
     expect(textarea.attributes('disabled')).toBeUndefined();
+    w.unmount();
+  });
+
+  // Regression test for the "0 tok · $0.0000" composer-footer bug: the
+  // ChatInput `estimate` prop was hardcoded to `{ tokens: 0, usd: 0 }` in
+  // SessionsView.vue instead of reading the live per-session usage
+  // snapshot, so the footer never reflected the real token/cost totals
+  // the backend was already delivering on `session.usage.updated` (the
+  // same event the context-window meter consumes correctly). Asserts the
+  // footer starts at the zero-state and updates once a usage snapshot
+  // for the active session arrives.
+  it('composer footer reflects live session usage instead of a static zero', async () => {
+    const messages: Message[] = [
+      makeMessage({ id: 'q', role: 'user', content: 'How are you?' }),
+      makeMessage({ id: 'a', role: 'assistant', content: 'I am well.' }),
+    ];
+    const providers: Provider[] = [
+      { id: 'anthropic-p-1', name: 'Anthropic', tier: 'cloud', kind: 'anthropic', model: 'claude' },
+    ];
+    const { w } = await mountWithRoute('#s-1', {
+      sessions: {
+        list: async () => [],
+        get: async (id: string) => ({ id, name: 'Onboarding', createdAt: '', updatedAt: '' }),
+        create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => messages,
+        listMessagesActive: async () => ({ messages, sweptCount: 0 }),
+        listMessagesAll: async () => ({ messages, sweptCount: 0 }),
+        appendMessage: async (id: string, role: string, content: string) =>
+          makeMessage({ id: 'new', sessionId: id, role: role as Message['role'], content }),
+        sendMessageWithBlocks: async () => makeMessage({ id: 'b' }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+        setSystemPrompt: async () => undefined,
+        moveToProject: async () => undefined,
+        getUsage: async () => ({ promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, costSource: 'unknown' as const, messageCount: 0, pricingDataDate: '' }),
+        saveAsArtifact: async () => ({ id: '', sessionId: '', title: '', mimeType: 'text/plain', contentHash: '', byteSize: 0, source: 'user_pin' as const, sourceRef: { messageId: '', offset: 0, length: 0 }, scopeKind: 'session' as const, createdAt: '' }),
+      } as any,
+      llm: {
+        listProviders: async () => providers,
+        startStream: async () => 'sub-llm',
+        stopStream: async () => undefined,
+      } as any,
+    });
+
+    // Before any turn completes, the footer must read the zero-state
+    // (still correct — there's no usage yet).
+    expect(w.text()).toContain('0 tok');
+    expect(w.text()).toContain('$0.0000');
+
+    // Simulate the backend publishing a post-turn usage snapshot on the
+    // SAME broker topic the context-window meter already consumes
+    // (core/rpc/stream_broker.go TopicSessionUsageUpdated).
+    fakeRuntime.emit('session.usage.updated', {
+      sessionId: 's-1',
+      promptTokens: 1234,
+      completionTokens: 567,
+      totalTokens: 1801,
+      costUsd: 0.0456,
+      costSource: 'provider',
+    });
+    await flushPromises();
+
+    expect(w.text()).toContain('1,801 tok');
+    expect(w.text()).toContain('$0.0456');
+    expect(w.text()).not.toContain('0 tok');
     w.unmount();
   });
 
