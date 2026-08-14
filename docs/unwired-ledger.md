@@ -60,6 +60,12 @@ and their `frontend/src/lib/types.ts` mirror are populated by
 `agentgraph.HistoryEntry.{MoveKind,MoveIndex,TurnSpanID}` is carried
 end-to-end by the seam but every current call site passes it zero.
 
+`session.TranscriptEntry.ToolCalls` is the same class in the other
+direction: the field exists on the seam's input shape and no production
+caller sets it, because `agentgraph.HistoryEntry` has no counterpart yet.
+WP02 adds one (tool calls and results are the entries it persists); until
+then the only writers are the WP01 tests.
+
 This is WP01 landing the schema + the single writer seam ahead of the
 code that emits and renders moves, which is the sequencing plan.md fixes
 deliberately (the entry shape is the contract WP02–WP05 build on).
@@ -75,8 +81,12 @@ column nothing writes is the same lie as a toggle nothing reads.
 Not on this list, because they are already load-bearing:
 `session.Message.{moveKind,moveIndex,moveTurnSpanID}` +
 `Manager.AppendTranscriptEntry` (the live chat write path runs through
-them today) and `session.MoveKinds()` (read by the wire + the vocabulary
-test).
+them on every append and every read — `moveColumnValues` binds them and
+`applyMoveColumns` rehydrates them, even though today every production
+write leaves them zero) and `session.MoveKinds()`, whose production
+reader is `MoveKind.known()` — the validation `AppendTranscriptEntry`
+runs on every entry. The wire and the frontend mirror the vocabulary in
+prose and in a TS union; they do not call `MoveKinds()`.
 
 ---
 
