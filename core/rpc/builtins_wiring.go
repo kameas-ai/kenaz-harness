@@ -279,10 +279,25 @@ func registerBuiltinTools(
 	// until the live BranchSeam is wired. The tool will appear in the
 	// catalog (and in the predicate switch) only when Seam is non-nil.
 	//
-	// Seam is nil in the current build; remove this guard when the branch
-	// session manager wires the seam in a future mission.
+	// READ THIS BEFORE "FIXING" THE NIL (unwired sweep, 2026-08-14).
+	// A real BranchSeam already exists and is already wired into the
+	// kernel: core/rpc/api.go's newGraphManagerWithDeps sets
+	// `deps.Branch = graphview.NewBranchSeamAdapter(convMgr, ...)`.
+	// Pointing subagentSeam at it would NOT make this tool work. That
+	// adapter is storage-only by design — its own doc says it "does NOT
+	// spawn a child kernel run by itself… A future v2 will thread a
+	// child run-spawner through this seam — captured as a hook
+	// (RunSpawner) but unwired for v1" — and WaitForChildRun is a
+	// `return nil` no-op. Registering the tool against it would give the
+	// model a dispatcher that forks a session nothing ever executes and
+	// then reports success, which is a worse failure than the tool being
+	// absent.
+	//
+	// The guard comes out when a child RUN SPAWNER exists, not when a
+	// seam does. Same condition clears the `branch` / `merge` lines in
+	// scripts/ci/allowlists/i3-unexercised-kinds.txt.
 	{
-		var subagentSeam agentgraph.BranchSeam // nil — seam not yet wired
+		var subagentSeam agentgraph.BranchSeam // nil — no child-run spawner yet
 		if subagentSeam != nil {
 			var dataDir string
 			if c != nil {
