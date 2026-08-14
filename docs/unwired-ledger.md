@@ -60,8 +60,34 @@ see the Drained section. What remains:)*
 `sessions.Message.{Kind,MoveIndex,TurnSpanID}` (core/rpc/views/sessions/api.go)
 and their `frontend/src/lib/types.ts` mirror are populated by
 `messageToView` and read by nothing today. WP02 fills the columns behind
-them on every chat turn, so the wire now carries real values — but the
-chat surface still renders one bubble per turn until WP04 reads them.
+them on every chat turn, so the wire now carries real values.
+
+**THIS ONE IS NOT INERT — IT IS USER-VISIBLE, AND WRONG UNTIL WP04**
+(corrected 2026-08-14 by the adversarial review of WP02; the sentence
+here previously claimed "the chat surface still renders one bubble per
+turn until WP04 reads them", which is false). `MessageList.vue` renders
+one `MessageBubble` per persisted row with **no filter on role or
+kind** — `visibleMessages` (SessionsView.vue) only concatenates
+transient slash results. A five-iteration tool-using turn that used to
+be 2 rows is now ~13, so on **reload** today's UI shows:
+
+- each `assistant_move` as a full, unlabelled assistant bubble
+  (indistinguishable from the answer, "branch from this turn" included);
+- each `tool_call` / `tool_result` as a bare monospace line with no
+  `whitespace-pre-wrap` — i.e. the **raw, untruncated tool output**
+  flattened into one run-on line in the conversation;
+- `useLongSessionNudge` counting rows/2 as "turns", so the long-session
+  banner trips roughly 3x early.
+
+(Not during the turn: there is no live-append path — `Sessions_StartStream`
+is a stub and nothing publishes `message_appended` — so the new rows
+appear only on reload / refresh / `/clear`.)
+
+**Sequencing constraint, not just a consumer note: 01PMCH01 must not
+reach a release tag between WP02 and WP04.** On this repo's flow a
+`feat:` merge to main cuts a prod tag immediately, so landing WP02
+alone ships a visibly broken transcript. WP02 is safe on the mission
+branch; the release gate is WP04 (+ WP05 collapse).
 
 This is WP01 landing the schema + the single writer seam ahead of the
 code that emits and renders moves, which is the sequencing plan.md fixes
@@ -72,7 +98,9 @@ export). **Owner:** 01PMCH01.
 
 **Deadline:** these lines are drained when 01PMCH01 ships. If the mission
 is abandoned, the fields and migration 0333 go with it — a nullable
-column nothing writes is the same lie as a toggle nothing reads.
+column nothing writes is the same lie as a toggle nothing reads. If the
+mission stalls after WP02, the columns must stop being WRITTEN, not just
+left unread.
 
 ### 2026-08-14 · The stream move-boundary marker has no reader yet (WP02)
 
@@ -103,9 +131,17 @@ author needing a multimodal entry had to leave the seam — and the
 off-seam path cannot stamp move metadata, so the move degraded to a
 classic entry with neither the compiler nor
 `check-single-move-writer.sh` objecting. The field removes the reason to
-leave the seam; the compiler still forbids minting move metadata
-anywhere else, so the degradation is unreachable rather than merely
-discouraged.
+leave the seam.
+
+Precision (adversarial review of WP02): that makes the degradation
+**unmotivated, not unreachable.** `Manager.AppendMessage` is exported and
+still accepts an assistant row — `SendMessageWithBlocks` uses it, legally,
+for the user turn. What the compiler forbids is minting move METADATA off
+the seam; it does not forbid writing a row that should have been a move
+and silently is not. The gate cannot see that class either: clause 3
+counts callers of `AppendTranscriptEntry`, not writers that avoid it.
+The residual guard is that there is no longer any expressiveness reason
+to take the off-seam path.
 
 Read on every append (`AppendTranscriptEntry` → `canonicalBlocks`) and
 round-tripped by `TestAppendTranscriptEntry_CarriesContentBlocks`, but
