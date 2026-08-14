@@ -156,24 +156,56 @@ fi
 # is blind to it. The column names move_index / turn_span_id are unique
 # to this schema, so naming them outside the store + the migration that
 # creates them is the signal.
-# PRECISION (2026-08-14, model-moves-transcript-01PMCH01 WP02): the scan
-# skips `//` comment lines and struct-tag lines. SQL never lives in
-# either, so nothing this clause exists to catch can hide there — but
-# prose describing the schema, and the `json:"move_index"` tag on the
-# stream-boundary event that mirrors the column for the frontend, both
-# named the columns in Go files and tripped a check about SQL. Narrowing
-# to non-comment, non-tag lines keeps every INSERT/UPDATE/SELECT form
-# caught (the planted probe in scripts/ci/gates_can_fail_test.go is one)
-# while letting the schema be described in the language of the schema.
+# PRECISION (2026-08-14, model-moves-transcript-01PMCH01 WP02): two
+# line SHAPES are skipped — a whole-line `//` comment, and a struct
+# FIELD DECLARATION whose backquoted tag ends the line. Both exist
+# because WP02 legitimately names the columns in Go: prose describing
+# the schema (core/llm/llm.go, core/agentgraph/seams.go) and the
+# `json:"move_index"` tag on the stream-boundary event that mirrors the
+# column for the frontend.
+#
+# HOW NARROW, AND WHY THAT MATTERS (adversarial review, 2026-08-14).
+# The first cut of this narrowing skipped any line MATCHING `.*json:"`
+# and that was a bypass, not a precision fix: it also skipped
+#
+#     const q = "UPDATE session_messages SET move_index = 1" // json:"move_index"
+#     `…SET turn_span_id = ? -- json:"turn_span_id"…`   (inside a raw string)
+#
+# — real SQL, waved through because an unrelated substring appeared
+# later on the line. Both are now caught again (probes
+# single-move-writer/sql-with-a-json-tag-in-a-trailing-comment and
+# .../sql-with-a-json-tag-in-an-sql-comment in
+# scripts/ci/gates_can_fail_test.go).
+#
+# The struct-field shape below is what actually cannot hold SQL: an
+# identifier, a type made only of [][*A-Za-z0-9_.] (so no `=`, which
+# rules out every assignment and every string literal), then a
+# backquoted span that ENDS the line. Go raw strings cannot contain a
+# backtick at all, so no line of a multi-line SQL literal can match it.
 SQL_ALLOWED='^(core/session/store\.go|core/session/migrations_moves\.go|core/session/migrations\.go|core/session/moves\.go)$'
+SQL_COMMENT_LINE_RE='^[^:]*:[0-9]+:[[:space:]]*//'
+SQL_STRUCT_TAG_LINE_RE='^[^:]*:[0-9]+:[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+[][*A-Za-z0-9_.]+[[:space:]]+`[^`]*`,?[[:space:]]*(//.*)?$'
 sql_offenders=$(grep -rn 'move_index\|turn_span_id' \
   --include='*.go' --include='*.sql' core/ 2>/dev/null |
   grep -v '^[^:]*_test\.go:' |
-  grep -vE '^[^:]*:[0-9]+:[[:space:]]*//' |
-  grep -vE '^[^:]*:[0-9]+:.*json:"' |
+  grep -vE "$SQL_COMMENT_LINE_RE" |
+  grep -vE "$SQL_STRUCT_TAG_LINE_RE" |
   cut -d: -f1 |
   grep -vE "$SQL_ALLOWED" |
   sort -u || true)
+
+# Sanity: the same "gate that inspected nothing" check clause 2 gets.
+# If the allowlisted store/migration files stop naming the columns, the
+# schema was renamed and this whole clause is greping for a token that
+# no longer exists — a vacuous pass, not a clean tree.
+if ! grep -rqE 'move_index|turn_span_id' \
+  core/session/store.go core/session/moves.go 2>/dev/null; then
+  echo "$GATE FAIL: neither core/session/store.go nor core/session/moves.go names" >&2
+  echo "$GATE move_index / turn_span_id. The columns were renamed and this clause is" >&2
+  echo "$GATE now scanning for a token nothing uses — update the pattern, do not" >&2
+  echo "$GATE mistake zero matches for a clean tree." >&2
+  fail=1
+fi
 
 if [[ -n "$sql_offenders" ]]; then
   echo "$GATE FAIL: the move columns are named outside the store + migration:" >&2
