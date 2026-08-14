@@ -203,4 +203,23 @@ type Message struct {
 	// ActualModel is the model that ultimately served this turn. When empty,
 	// the primary model from the provider profile was used.
 	ActualModel string
+
+	// ---- move metadata (model-moves-transcript-01PMCH01 WP01) ----
+	//
+	// These three are UNEXPORTED BY DESIGN. A human turn can drive many
+	// model iterations; each iteration's output, tool call and tool
+	// result is its own transcript entry, tagged with which turn it
+	// belongs to and where in that turn it sits. Only
+	// Manager.AppendTranscriptEntry may stamp them (moves.go), so the
+	// compiler — not a convention — enforces the single-writer rule from
+	// spec §4 ("no second history-writing path"). Read them through
+	// MoveKind() / MoveIndex() / TurnSpanID().
+	//
+	// A row with moveKind == "" is a classic pre-moves entry and MUST
+	// behave exactly as it did before this mission: the wire projection
+	// omits all three, so old clients and old sessions see the shape
+	// they already understand.
+	moveKind       MoveKind
+	moveIndex      *int
+	moveTurnSpanID string
 }

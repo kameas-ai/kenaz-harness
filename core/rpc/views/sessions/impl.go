@@ -583,6 +583,14 @@ func messageToView(m session.Message) Message {
 	out.CompletionTokens = m.CompletionTokens
 	out.CostUSD = m.CostUSD
 	out.MessageCostSource = m.MessageCostSource
+	// Move metadata (model-moves-transcript-01PMCH01 WP01). Read through
+	// the accessors — the durable fields are unexported precisely so no
+	// code outside core/session can mint them. A classic entry leaves
+	// all three zero, and omitempty then reproduces the pre-mission
+	// bytes exactly.
+	out.Kind = string(m.MoveKind())
+	out.MoveIndex = m.MoveIndex()
+	out.TurnSpanID = m.TurnSpanID()
 	return out
 }
 

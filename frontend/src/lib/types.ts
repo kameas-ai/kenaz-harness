@@ -1256,7 +1256,42 @@ export interface Message {
    */
   actualProvider?: string;
   actualModel?: string;
+
+  /**
+   * Move metadata (model-moves-transcript-01PMCH01 WP01). A single human
+   * turn can drive many model iterations; each iteration's text, each
+   * tool call and each tool result persists as its own transcript entry
+   * tagged with these three fields.
+   *
+   *   - kind       : which sort of move this entry is. Absent on every
+   *                  classic (pre-moves) entry and on every message
+   *                  written before the mission — treat an entry with no
+   *                  `kind` exactly as the UI treated it before, i.e. one
+   *                  assistant bubble per turn.
+   *   - moveIndex  : 0-based, dense position of the entry inside its
+   *                  human turn. Present iff `kind` is.
+   *   - turnSpanId : id of the user message that opened the turn. Every
+   *                  move in one turn shares it, so grouping by it
+   *                  reconstructs the turn's trajectory — that is what
+   *                  the collapse affordance groups on.
+   *
+   * Consumed by the live move-bubble view (WP04) and the collapse UX
+   * (WP05); WP01 lands the wire shape and the single writer seam only.
+   */
+  kind?: MoveKind;
+  moveIndex?: number;
+  turnSpanId?: string;
 }
+
+/**
+ * MoveKind — the transcript-entry classification mirrored from
+ * session.MoveKinds() (core/session/moves.go). Extend both together.
+ *
+ * A `Message` with no `kind` is a classic entry, not a fifth kind: the
+ * Go wire type omits the field entirely (`omitempty`) so pre-moves
+ * sessions and pre-moves clients keep the shape they already have.
+ */
+export type MoveKind = 'assistant_move' | 'tool_call' | 'tool_result' | 'final';
 
 /**
  * ListMessagesResult — wire shape for sessions.listMessagesActive /

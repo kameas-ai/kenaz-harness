@@ -1,0 +1,239 @@
+package session
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+)
+
+// ---------------------------------------------------------------------------
+// The transcript-entry seam (model-moves-transcript-01PMCH01 WP01).
+//
+// THIS FILE IS THE ONLY PLACE IN THE REPOSITORY THAT MAY WRITE MOVE
+// METADATA ONTO A session.Message.
+//
+// Message.moveKind / moveIndex / moveTurnSpanID are unexported, so no
+// package outside core/session can set them at all — that half of the
+// single-writer rule is enforced by the compiler. Inside core/session,
+// scripts/ci/check-single-move-writer.sh enforces the other half: those
+// three identifiers may not be assigned anywhere but here.
+//
+// Spec §4: "One writer: session_write/the chat runner persists moves
+// through the same seam — no second history-writing path (the
+// convergence doctrine binds)."
+// ---------------------------------------------------------------------------
+
+// MoveKind classifies a transcript entry within one human turn.
+//
+// A single human turn can drive up to the agent_loop's iteration ceiling
+// of model fires. Each fire's text is an assistant_move; each tool it
+// invokes is a tool_call paired with a tool_result; the answer the user
+// reads is the final. The empty MoveKind is the classic pre-moves entry:
+// one flattened assistant message per human turn.
+type MoveKind string
+
+const (
+	// MoveKindAssistantMove is one model iteration's text output.
+	MoveKindAssistantMove MoveKind = "assistant_move"
+	// MoveKindToolCall is one tool invocation the model requested. The
+	// DISPLAY layer carries an args summary, never raw argument values
+	// (spec §4, redaction).
+	MoveKindToolCall MoveKind = "tool_call"
+	// MoveKindToolResult is the result returned for a MoveKindToolCall.
+	// Pairs with it by ToolCalls[].ID.
+	MoveKindToolResult MoveKind = "tool_result"
+	// MoveKindFinal is the answer the collapsed view renders — the last
+	// assistant text of the turn.
+	MoveKindFinal MoveKind = "final"
+)
+
+// MoveKinds is the canonical ordered set of move kinds. The wire
+// contract, the frontend union type and the SQL CHECK-free `kind`
+// column all mirror this list; extend all three together.
+func MoveKinds() []MoveKind {
+	return []MoveKind{
+		MoveKindAssistantMove,
+		MoveKindToolCall,
+		MoveKindToolResult,
+		MoveKindFinal,
+	}
+}
+
+// known reports whether k is one of the four move kinds. The empty kind
+// is deliberately NOT known: it means "classic entry", which callers
+// express by leaving TranscriptEntry.Kind zero, not by naming it.
+func (k MoveKind) known() bool {
+	for _, want := range MoveKinds() {
+		if k == want {
+			return true
+		}
+	}
+	return false
+}
+
+// Errors returned by AppendTranscriptEntry when move metadata is
+// incoherent. They are sentinel values so callers (and WP02's runner)
+// can distinguish a contract violation from a storage failure.
+var (
+	// ErrUnknownMoveKind means Kind was non-empty but not one of
+	// MoveKinds(). Persisting it would put a value on the wire that no
+	// reader has a case for.
+	ErrUnknownMoveKind = errors.New("session: unknown move kind")
+	// ErrMoveTurnSpanRequired means a move-kind entry arrived without
+	// the id of the human turn it belongs to. A move with no turn is
+	// unorderable and unrenderable.
+	ErrMoveTurnSpanRequired = errors.New("session: move entry requires a turn span id")
+	// ErrNegativeMoveIndex means MoveIndex was below zero. Position
+	// within a turn is 0-based and dense.
+	ErrNegativeMoveIndex = errors.New("session: move index must be >= 0")
+	// ErrMoveMetadataWithoutKind means MoveIndex/TurnSpanID were set on
+	// an entry with no Kind. Silently dropping them would make the seam
+	// lossy; refusing keeps "no kind == classic entry" true.
+	ErrMoveMetadataWithoutKind = errors.New("session: move metadata requires a move kind")
+)
+
+// TranscriptEntry is the input shape of the single transcript-writing
+// seam. It is what the chat runner and the session_write node hand to
+// the store; Manager.AppendTranscriptEntry turns it into the persisted
+// Message.
+//
+// Leaving Kind empty writes a classic entry — byte-identical on the
+// wire to everything written before this mission. Setting Kind writes a
+// move, and then TurnSpanID is mandatory.
+type TranscriptEntry struct {
+	// Role is the speaker. Moves use RoleAssistant for assistant_move /
+	// final and RoleTool for tool_call / tool_result.
+	Role Role
+	// Content is the entry's text.
+	Content string
+	// ToolCalls carries the structured tool payload for tool_call /
+	// tool_result entries.
+	ToolCalls []ToolCall
+
+	// Kind is the move classification. Empty means "classic entry".
+	Kind MoveKind
+	// MoveIndex is the 0-based position of this entry inside its human
+	// turn. Carries no meaning when Kind is empty.
+	MoveIndex int
+	// TurnSpanID is the id of the user message that opened the turn this
+	// entry belongs to. Every move in one turn shares it — that shared
+	// id IS the turn's span. Required when Kind is set.
+	TurnSpanID string
+}
+
+// isMove reports whether e carries move metadata.
+func (e TranscriptEntry) isMove() bool { return e.Kind != "" }
+
+// validate enforces the move-metadata contract before anything reaches
+// the store.
+func (e TranscriptEntry) validate() error {
+	if !e.isMove() {
+		if e.MoveIndex != 0 || e.TurnSpanID != "" {
+			return fmt.Errorf("%w (index=%d span=%q)",
+				ErrMoveMetadataWithoutKind, e.MoveIndex, e.TurnSpanID)
+		}
+		return nil
+	}
+	if !e.Kind.known() {
+		return fmt.Errorf("%w: %q", ErrUnknownMoveKind, e.Kind)
+	}
+	if e.TurnSpanID == "" {
+		return fmt.Errorf("%w (kind=%q)", ErrMoveTurnSpanRequired, e.Kind)
+	}
+	if e.MoveIndex < 0 {
+		return fmt.Errorf("%w (got %d)", ErrNegativeMoveIndex, e.MoveIndex)
+	}
+	return nil
+}
+
+// AppendTranscriptEntry is THE seam through which every chat transcript
+// entry — classic or move — reaches the session store.
+//
+// It validates the move contract, stamps the move columns onto the
+// durable Message, and delegates to AppendMessage for id/sequence
+// assignment, last-active bookkeeping and the audit emission. Callers
+// outside core/session cannot reach the move fields any other way: they
+// are unexported.
+//
+// model-moves-transcript-01PMCH01 WP01.
+func (m *Manager) AppendTranscriptEntry(ctx context.Context, sessionID string,
+	e TranscriptEntry) (Message, error) {
+	if err := e.validate(); err != nil {
+		return Message{}, err
+	}
+	msg := Message{
+		Role:      e.Role,
+		Content:   e.Content,
+		ToolCalls: e.ToolCalls,
+	}
+	if e.isMove() {
+		idx := e.MoveIndex
+		msg.moveKind = e.Kind
+		msg.moveIndex = &idx
+		msg.moveTurnSpanID = e.TurnSpanID
+	}
+	return m.AppendMessage(ctx, sessionID, msg)
+}
+
+// ---- read accessors ----------------------------------------------------
+
+// MoveKind returns the entry's move classification, or the empty
+// MoveKind for a classic pre-moves entry.
+func (m Message) MoveKind() MoveKind { return m.moveKind }
+
+// MoveIndex returns the entry's 0-based position within its human turn,
+// or nil for a classic entry. The pointer is a copy — mutating it does
+// not touch the Message.
+func (m Message) MoveIndex() *int {
+	if m.moveIndex == nil {
+		return nil
+	}
+	v := *m.moveIndex
+	return &v
+}
+
+// TurnSpanID returns the id of the user message that opened the turn
+// this entry belongs to, or "" for a classic entry.
+func (m Message) TurnSpanID() string { return m.moveTurnSpanID }
+
+// ---- SQL column plumbing -----------------------------------------------
+//
+// The store never touches the move fields directly; it round-trips them
+// through these two helpers so the single-writer grep gate has exactly
+// one file to guard.
+
+// moveColumnValues renders the move fields as the three bind values for
+// the session_messages INSERT: (kind, move_index, turn_span_id). A
+// classic entry binds NULL/NULL/NULL, which is what every pre-existing
+// row already holds after migration 0333.
+func moveColumnValues(m Message) (kind, moveIndex, turnSpanID any) {
+	if m.moveKind == "" {
+		return nil, nil, nil
+	}
+	kind = string(m.moveKind)
+	if m.moveIndex != nil {
+		moveIndex = int64(*m.moveIndex)
+	}
+	if m.moveTurnSpanID != "" {
+		turnSpanID = m.moveTurnSpanID
+	}
+	return kind, moveIndex, turnSpanID
+}
+
+// applyMoveColumns hydrates the move fields from a scanned row. NULL
+// kind leaves the entry classic regardless of what the other two
+// columns hold — the kind is the discriminator.
+func applyMoveColumns(m *Message, kind sql.NullString, moveIndex sql.NullInt64, turnSpanID sql.NullString) {
+	if !kind.Valid || kind.String == "" {
+		return
+	}
+	m.moveKind = MoveKind(kind.String)
+	if moveIndex.Valid {
+		v := int(moveIndex.Int64)
+		m.moveIndex = &v
+	}
+	if turnSpanID.Valid {
+		m.moveTurnSpanID = turnSpanID.String
+	}
+}
