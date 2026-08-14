@@ -84,6 +84,7 @@ var cwdSensitiveGates = []string{
 	"check-no-credential-in-ui.sh",
 	"check-no-user-content-in-slog.sh",
 	"check-serve-dispatch-drift.sh",
+	"check-builtin-tool-registration.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -188,6 +189,17 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			append: "\ntype zzGateProbeAskStore struct{}\n\nfunc (zzGateProbeAskStore) LookupAnswer(runID, nodeID string) (string, bool) {\n\treturn \"\", false\n}\n",
 		},
 		{
+			name: "builtin-tool-registration/unregistered-tool-package",
+			gate: "check-builtin-tool-registration.sh",
+			// The kenaz__monitor class: a package under core/tools/ that
+			// declares a model-facing tool name and that no wiring site
+			// ever imports, so no model can call it. Invisible to the
+			// registered-tools tripwire, which only walks the tools that
+			// DID register.
+			file:    "core/tools/zzgateprobe/tool.go",
+			content: "package zzgateprobe\n\nconst ToolName = \"kenaz__zz_gate_probe\"\n",
+		},
+		{
 			name: "slog-privacy/typed-attr-constructor",
 			gate: "check-no-user-content-in-slog.sh",
 			file: "core/rpc/zz_gate_probe.go",
@@ -235,12 +247,30 @@ func plant(t *testing.T, full, content, appendText string) func() {
 	if _, err := os.Stat(full); err == nil {
 		t.Fatalf("probe file %s already exists; refusing to clobber it", full)
 	}
+	// Some probes live in a package that does not exist yet (the
+	// unregistered-builtin-tool case needs a fresh directory under
+	// core/tools/). Track whether we created it so cleanup can undo it —
+	// git ignores empty directories, but a leftover one confuses the next
+	// run's "refusing to clobber" guard less than a leftover file would.
+	dir := filepath.Dir(full)
+	createdDir := ""
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("creating %s: %v", dir, err)
+		}
+		createdDir = dir
+	}
 	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
 		t.Fatalf("writing %s: %v", full, err)
 	}
 	return func() {
 		if err := os.Remove(full); err != nil {
 			t.Errorf("removing %s: %v — WORKING TREE IS DIRTY", full, err)
+		}
+		if createdDir != "" {
+			if err := os.Remove(createdDir); err != nil {
+				t.Errorf("removing %s: %v — WORKING TREE IS DIRTY", createdDir, err)
+			}
 		}
 	}
 }

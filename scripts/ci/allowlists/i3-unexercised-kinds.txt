@@ -70,21 +70,44 @@
 # these kinds cannot be exercised end-to-end because the thing they
 # call does not exist in a running harness.
 #
-#   branch — the sub-graph spawn primitive. Requires a BranchSeam.
-#     There is none: applyEnvDefaults installs nilBranchSeam (every call
-#     returns ErrNoBranchSeam), and core/rpc/builtins_wiring.go declares
-#     `var subagentSeam agentgraph.BranchSeam // nil — seam not yet
-#     wired`, logging `subagent_dispatch_skipped` at boot. A fixture
-#     would be asserting on ErrNoBranchSeam, which is coverage of the
-#     stub, not of the kind.
-#   merge — the other half of the same pair; merges branch results and
-#     needs the same seam. kernel_promotion_golden_test.go's
+#   branch — the sub-graph spawn primitive. Requires a BranchSeam that
+#     can SPAWN A CHILD RUN. Both lines still stand, but the reason
+#     recorded by WP17 was wrong and is corrected here (unwired sweep,
+#     2026-08-14):
+#
+#       WRONG: "There is none: applyEnvDefaults installs nilBranchSeam
+#       (every call returns ErrNoBranchSeam)."
+#
+#       RIGHT: production installs a REAL seam. core/rpc/api.go's
+#       newGraphManagerWithDeps sets
+#       `deps.Branch = graphview.NewBranchSeamAdapter(convMgr,
+#       sessionManagerOrNil(c))` whenever convMgr is non-nil, and that
+#       adapter genuinely creates the child session, seeds the handoff
+#       prompt, writes CoW message refs and marks the branch merged.
+#       nilBranchSeam is only the applyEnvDefaults fallback for a nil
+#       deps.Branch, which production is not.
+#
+#     What is actually missing is the OTHER half: the adapter's own doc
+#     says "this adapter does NOT spawn a child kernel run by itself…
+#     A future v2 will thread a child run-spawner through this seam —
+#     captured as a hook (RunSpawner) but unwired for v1", and
+#     WaitForChildRun is a `return nil` no-op. So a `branch` node forks a
+#     session that nothing ever executes, and the `merge` node then pulls
+#     a child tail that only ever contains the handoff prompt. A fixture
+#     would assert on an empty merge, which is coverage of the v1 gap,
+#     not of the kind.
+#
+#     The distinction matters because the old wording invited exactly the
+#     wrong fix: "wire the seam" reads as a one-line change, and the seam
+#     is already wired. Do not resolve these lines by pointing
+#     subagent_dispatch at NewBranchSeamAdapter — see the corrected NOTE
+#     in core/rpc/builtins_wiring.go.
+#   merge — the other half of the same pair. kernel_promotion_golden_test.go's
 #     keepRealKinds comment already records this: branch and merge are
 #     deliberately stubbed there because "their production executors are
 #     themselves stubs that need fork/merge seams to do anything, so
 #     running them for real only injects seam errors".
-#   Both lines clear in the change that wires the branch session
-#     manager. Do not clear them with a fixture against the nil seam.
+#   Both lines clear in the change that wires the child RUN SPAWNER.
 branch
 merge
 

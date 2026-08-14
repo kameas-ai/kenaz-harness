@@ -195,6 +195,16 @@ jobs:
         # instances.
         run: bash scripts/ci/check-no-unwired-gates.sh
 
+      - name: builtin-tool-registration guard (I11)
+        # Unwired sweep 2026-08-14 (model-moves-transcript-01PMCH01 WP00).
+        # Catches the `kenaz__monitor`-class defect: a complete, tested
+        # builtin tool that no wiring site ever imports, so no model can
+        # call it. Invisible to the registered-tools tripwire, which only
+        # iterates the tools that DID register.
+        # scripts/ci/allowlists/i11-unregistered-builtin-tools.txt
+        # documents today's single instance.
+        run: bash scripts/ci/check-builtin-tool-registration.sh
+
       - name: no-forbidden-compaction-symbols guard (I4)
         # kitty-specs/agentgraph-total-convergence-01PMGX01 WP01. Exactly
         # one compaction entry point: `SuppressAutomaticCompaction` and

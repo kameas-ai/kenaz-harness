@@ -363,12 +363,6 @@ describe('buildWorkflowAdapter', () => {
     expect(nodesOf(CHAIN).every((n) => n.layout === undefined)).toBe(true);
   });
 
-  it('offers every step kind in the palette', () => {
-    const kinds = build().paletteItems.map((p) => p.kind);
-    expect(kinds).toEqual(WORKFLOW_STEP_KINDS.map((k) => k.kind));
-    expect(kinds).toContain('mcp_call');
-  });
-
   it('answers edge legality locally, with no RPC', async () => {
     await expect(
       build().onCheckEdge({
@@ -395,7 +389,6 @@ describe('buildWorkflowAdapter', () => {
     });
     expect(adapter.nodes).toEqual([]);
     expect(adapter.edges).toEqual([]);
-    expect(adapter.paletteItems.length).toBeGreaterThan(0);
   });
 });
 

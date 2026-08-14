@@ -195,3 +195,56 @@ func TestRunInBackground_NoRegistryFallsBackToSync(t *testing.T) {
 		t.Error("without BackgroundSpawn, run_in_background should be ignored")
 	}
 }
+
+// schemaProperties unmarshals a tool input schema and returns its
+// top-level "properties" object.
+func schemaProperties(t *testing.T, raw json.RawMessage) map[string]any {
+	t.Helper()
+	var schema struct {
+		Properties map[string]any `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("unmarshal input schema: %v", err)
+	}
+	return schema.Properties
+}
+
+// TestInputSchema_OmitsBackgroundKnobWhenSeamUnwired is the unwired-sweep
+// pin (2026-08-14). Production wires bash WITHOUT BackgroundSpawn
+// (core/rpc/builtins_wiring.go), and Call() silently ignores
+// run_in_background in that configuration — so the schema must not offer
+// it. Advertising it hands the model a task_id contract nothing honours:
+// it believes it backgrounded a long command, and the command actually
+// ran to completion inline. Same doctrine as FR-007's
+// subagent_dispatch-not-registered-when-seam-nil guard.
+func TestInputSchema_OmitsBackgroundKnobWhenSeamUnwired(t *testing.T) {
+	tool := bash.New(bash.Options{SandboxRoot: "/tmp"})
+
+	props := schemaProperties(t, tool.InputSchema())
+	for _, key := range []string{"run_in_background", "description"} {
+		if _, ok := props[key]; ok {
+			t.Errorf("input schema advertises %q with no BackgroundSpawn wired; "+
+				"Call() ignores it, so the model is being promised a capability the harness cannot perform", key)
+		}
+	}
+	// The foreground knobs must survive the split.
+	for _, key := range []string{"command", "working_dir", "timeout_seconds"} {
+		if _, ok := props[key]; !ok {
+			t.Errorf("input schema lost %q", key)
+		}
+	}
+}
+
+// TestInputSchema_AdvertisesBackgroundKnobWhenSeamWired is the other
+// half: once the seam IS wired the knob must reappear, so the split is a
+// real conditional and not a permanent deletion.
+func TestInputSchema_AdvertisesBackgroundKnobWhenSeamWired(t *testing.T) {
+	tool := newBackgroundTool(newBgRegistry())
+
+	props := schemaProperties(t, tool.InputSchema())
+	for _, key := range []string{"command", "working_dir", "timeout_seconds", "run_in_background", "description"} {
+		if _, ok := props[key]; !ok {
+			t.Errorf("input schema missing %q with BackgroundSpawn wired", key)
+		}
+	}
+}

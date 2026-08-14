@@ -120,6 +120,13 @@ func registerBuiltinTools(
 		CedarEngine:    cedarEngine,
 		PromptRegistry: promptRegistry,
 		DataDir:        dataDir,
+		// Unwired sweep 2026-08-14: this was never passed, so the
+		// Settings dial was permanently false in every shipped build
+		// while BashPermissionModal.vue kept offering "Allow always"
+		// for dangerous commands. The user granted it, the backend
+		// demoted it to AllowOnce, and the next identical command
+		// re-prompted with no explanation.
+		PermissionCacheDangerousOps: dangerousOpsCacheLookup(store),
 	})
 	registry.Register(bashTool)
 	workspaceSource := "none"
@@ -272,10 +279,25 @@ func registerBuiltinTools(
 	// until the live BranchSeam is wired. The tool will appear in the
 	// catalog (and in the predicate switch) only when Seam is non-nil.
 	//
-	// Seam is nil in the current build; remove this guard when the branch
-	// session manager wires the seam in a future mission.
+	// READ THIS BEFORE "FIXING" THE NIL (unwired sweep, 2026-08-14).
+	// A real BranchSeam already exists and is already wired into the
+	// kernel: core/rpc/api.go's newGraphManagerWithDeps sets
+	// `deps.Branch = graphview.NewBranchSeamAdapter(convMgr, ...)`.
+	// Pointing subagentSeam at it would NOT make this tool work. That
+	// adapter is storage-only by design — its own doc says it "does NOT
+	// spawn a child kernel run by itself… A future v2 will thread a
+	// child run-spawner through this seam — captured as a hook
+	// (RunSpawner) but unwired for v1" — and WaitForChildRun is a
+	// `return nil` no-op. Registering the tool against it would give the
+	// model a dispatcher that forks a session nothing ever executes and
+	// then reports success, which is a worse failure than the tool being
+	// absent.
+	//
+	// The guard comes out when a child RUN SPAWNER exists, not when a
+	// seam does. Same condition clears the `branch` / `merge` lines in
+	// scripts/ci/allowlists/i3-unexercised-kinds.txt.
 	{
-		var subagentSeam agentgraph.BranchSeam // nil — seam not yet wired
+		var subagentSeam agentgraph.BranchSeam // nil — no child-run spawner yet
 		if subagentSeam != nil {
 			var dataDir string
 			if c != nil {
@@ -338,6 +360,26 @@ func webFetchEnabledLookup(store settings.SettingsStore) func() bool {
 		if err != nil {
 			logging.L().Warn("rpc.builtins.web_fetch_enabled_lookup.read_failed", "err", err.Error())
 			// Default-off: soft-fail to disabled so the network tool stays off.
+			return false
+		}
+		return v
+	}
+}
+
+// dangerousOpsCacheLookup returns the closure the bash tool consults at
+// gate time to decide whether an AllowAlways grant on a dangerous-tier
+// command may be persisted as a .cedar snippet. nil store, or a read
+// error, collapses to false — the same fail-closed posture the demotion
+// path has always had. Read live rather than at construction because the
+// dial is user-toggleable and the permission modal renders from it.
+func dangerousOpsCacheLookup(store settings.SettingsStore) func() bool {
+	if store == nil {
+		return func() bool { return false }
+	}
+	return func() bool {
+		v, err := store.LoadPermissionCacheDangerousOps()
+		if err != nil {
+			logging.L().Warn("rpc.builtins.permission_cache_dangerous_ops_lookup.read_failed", "err", err.Error())
 			return false
 		}
 		return v

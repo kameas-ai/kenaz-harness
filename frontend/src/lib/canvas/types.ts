@@ -5,8 +5,15 @@
  * The canvas is a *view*. It owns pixels, pointer events, and nothing
  * else: it never imports a spec type, never mutates a spec, and never
  * knows what YAML is. Everything family-specific arrives through this
- * interface — the node/edge view-model, the palette, the legality
- * check, and the op sink.
+ * interface — the node/edge view-model, the legality check, and the op
+ * sink.
+ *
+ * NOT the palette. `paletteItems` was removed in the 2026-08-14 unwired
+ * sweep: both adapters built one and neither consumer read it. Each
+ * editor owns its own palette (`GraphEditor.vue` → `NodePalette.vue`
+ * from `useNodeManifest`; `WorkflowGraphEditor.vue` → its local
+ * `WORKFLOW_STEP_KINDS` list), and the canvas only receives the dropped
+ * kind over the `application/x-kenaz-node-kind` MIME.
  *
  * ─────────────────────────────────────────────────────────────────────
  * PAPER CHECK against BOTH consumers (plan.md risk: "Two spec families,
@@ -94,9 +101,12 @@
  *     Declared now, populated in WP05. ✔ both
  *
  *  8. READ-ONLY is `readOnly: boolean` and the component uses it
- *     STRUCTURALLY (handlers are not registered, palette is not
- *     rendered) rather than as a disabled attribute — this is what
- *     WP05 needs to close the N3 hazard. ✔ both
+ *     STRUCTURALLY (`applyOp` is absent rather than guarded, drop and
+ *     drag handlers are not registered) rather than as a disabled
+ *     attribute — this is what WP05 needs to close the N3 hazard.
+ *     ✔ both. (The original wording also said "palette is not
+ *     rendered"; the adapter never carried a rendered palette — see
+ *     the header note on the 2026-08-14 `paletteItems` removal.)
  *
  * Nothing in this file imports from `@/lib/types`' graph shapes or from
  * a workflow type. If a future edit needs one, the adapter boundary has
@@ -117,13 +127,6 @@ export interface CanvasPoint {
  * breaking the canvas.
  */
 export type CanvasCategory = 'compute' | 'control' | 'state' | 'other';
-
-export const CANVAS_CATEGORIES: readonly CanvasCategory[] = [
-  'compute',
-  'control',
-  'state',
-  'other',
-] as const;
 
 /** Normalises an arbitrary catalog category string onto the known set. */
 export function toCanvasCategory(raw: string | undefined | null): CanvasCategory {
@@ -210,16 +213,6 @@ export interface CanvasEdge {
 /** An edge being drawn — no id yet, because it does not exist. */
 export type CanvasEdgeRequest = Omit<CanvasEdge, 'id' | 'kind'>;
 
-/** One palette row. */
-export interface PaletteItem {
-  kind: string;
-  label: string;
-  category: CanvasCategory;
-  description?: string;
-  /** Optional grouping key (agentgraph archetype; workflow family). */
-  group?: string;
-}
-
 /** The answer to "may this edge be drawn?" — `reason` is shown verbatim. */
 export interface EdgeCheckResult {
   ok: boolean;
@@ -273,7 +266,6 @@ export type SpecOp =
 export interface CanvasAdapter {
   nodes: CanvasNode[];
   edges: CanvasEdge[];
-  paletteItems: PaletteItem[];
   /** Asked before an edge is committed. Rejection shows `reason`. */
   onCheckEdge: (edge: CanvasEdgeRequest) => Promise<EdgeCheckResult>;
   /** Applies a user intent to the underlying spec. */

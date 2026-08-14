@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -178,4 +179,54 @@ func TestBuiltinEnabledPredicate_AllRegisteredToolsHaveExplicitCase(t *testing.T
 			"builtinEnabledPredicate (FR-006); registered tool names were: %v",
 			unhandled, names)
 	}
+}
+
+// dangerousOpsStore overrides exactly the one accessor under test.
+// Embedding the interface keeps this from drifting as SettingsStore grows.
+type dangerousOpsStore struct {
+	settings.SettingsStore
+	enabled bool
+	err     error
+}
+
+func (s *dangerousOpsStore) LoadPermissionCacheDangerousOps() (bool, error) {
+	return s.enabled, s.err
+}
+
+// TestDangerousOpsCacheLookup is the unwired-sweep pin (2026-08-14) for
+// Settings.PermissionCacheDangerousOps. The dial was persisted, bound,
+// and rendered — BashPermissionModal.vue offers "Allow always" from it —
+// but registerBuiltinTools never passed it to corebash.New, so the tool
+// saw the zero value forever and demoted every dangerous AllowAlways
+// grant back to AllowOnce. The user granted a standing permission and
+// got re-prompted on the next identical command with no explanation.
+//
+// The lookup must also read LIVE: a construction-time snapshot would
+// leave the toggle inert until the next app restart while the modal
+// keeps rendering from the current value.
+func TestDangerousOpsCacheLookup(t *testing.T) {
+	t.Run("nil store fails closed", func(t *testing.T) {
+		if dangerousOpsCacheLookup(nil)() {
+			t.Error("nil store resolved the dangerous-ops cache override to ON")
+		}
+	})
+
+	t.Run("read failure fails closed", func(t *testing.T) {
+		store := &dangerousOpsStore{enabled: true, err: errors.New("simulated read failure")}
+		if dangerousOpsCacheLookup(store)() {
+			t.Error("a settings read failure resolved the dangerous-ops cache override to ON")
+		}
+	})
+
+	t.Run("reads the live value, not a construction-time snapshot", func(t *testing.T) {
+		store := &dangerousOpsStore{enabled: false}
+		lookup := dangerousOpsCacheLookup(store)
+		if lookup() {
+			t.Fatal("lookup returned true while the dial was off")
+		}
+		store.enabled = true
+		if !lookup() {
+			t.Error("lookup did not observe the dial being turned on — it snapshotted at construction, so the Settings toggle stays inert until restart")
+		}
+	})
 }
