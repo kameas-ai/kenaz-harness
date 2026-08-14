@@ -121,9 +121,13 @@ description: |
 entrypoints:
   - history_in
 budget:
-  max_llm_calls_per_run: 100
-  max_tool_calls_per_run: 200
-  max_tokens_per_run: 200000
+  # Raised 100/200/200k -> 5000/10000/20M (owner directive 2026-08-14):
+  # autonomous work must be possible for hours on end. These remain
+  # runaway/cost backstops, not working limits — the doom-loop guard and
+  # the max-agent-turns dial are the behavioural governors.
+  max_llm_calls_per_run: 5000
+  max_tool_calls_per_run: 10000
+  max_tokens_per_run: 20000000
 nodes:
   - id: history_in
     kind: history_read
