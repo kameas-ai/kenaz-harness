@@ -559,8 +559,9 @@ func unprojectWorkflow(w Workflow) corewf.Workflow {
 	}
 	for _, st := range w.Steps {
 		out.Steps = append(out.Steps, corewf.Step{
-			Name: st.Name, Kind: corewf.StepKind(st.Kind),
+			Name: st.Name, Kind: corewf.StepKind(st.Kind), InputsFrom: st.InputsFrom,
 			UserPrompt: st.UserPrompt, Cmd: st.Cmd, Args: st.Args,
+			Method: st.Method, URL: st.URL, Mode: st.Mode,
 		})
 	}
 	return out
@@ -784,8 +785,9 @@ func projectWorkflow(w corewf.Workflow) Workflow {
 	}
 	for _, st := range w.Steps {
 		out.Steps = append(out.Steps, Step{
-			Name: st.Name, Kind: string(st.Kind),
+			Name: st.Name, Kind: string(st.Kind), InputsFrom: st.InputsFrom,
 			UserPrompt: st.UserPrompt, Cmd: st.Cmd, Args: st.Args,
+			Method: st.Method, URL: st.URL, Mode: st.Mode,
 		})
 	}
 	return out

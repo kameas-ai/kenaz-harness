@@ -29,12 +29,29 @@ export interface WorkflowsInput {
   options?: string[];
 }
 
+/**
+ * One step on the wire. Mirrors `workflowsview.Step` — a SUBSET of the
+ * Go `workflows.Step`, which matters because the structured save path
+ * reconstructs a workflow from exactly these fields.
+ *
+ * `inputsFrom` is the DAG: the names of the steps this one depends on.
+ * It is what the shared canvas draws as edges
+ * (visual-graph-authoring-01PMUX01 WP06).
+ */
 export interface WorkflowsStep {
   name: string;
   kind: string;
+  /** Names of the steps that must run before this one. */
+  inputsFrom?: string[];
   userPrompt?: string;
   cmd?: string;
   args?: string[];
+  /** http_request */
+  method?: string;
+  /** http_request / web_fetch / web_scrape */
+  url?: string;
+  /** web_scrape: "" | css | llm */
+  mode?: string;
 }
 
 export interface WorkflowsWorkflow {

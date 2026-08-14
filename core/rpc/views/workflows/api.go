@@ -36,14 +36,33 @@ type Input struct {
 	Options  []string `json:"options,omitempty"`
 }
 
-// Step mirrors core/workflows.Step on the wire (subset; beta needs
-// only the rendered fields).
+// Step mirrors core/workflows.Step on the wire.
+//
+// It is still a SUBSET of corewf.Step, and that is a real constraint
+// rather than a note: `unprojectWorkflow` reconstructs a workflow from
+// exactly these fields, so a per-kind field missing here is a field
+// destroyed by any structured save. The editor surfaces that (it warns
+// on kinds whose config does not round-trip) and the YAML editor
+// remains the lossless path.
+//
+// InputsFrom is the DAG. Without it a workflow's dependency edges are
+// invisible to every caller — which is why the pre-canvas graph editor
+// could only draw declaration order and called it a graph
+// (visual-graph-authoring-01PMUX01 WP06).
+//
+// Method/URL/Mode were already EDITABLE in that editor and already
+// dropped on save, silently. They are carried now so the controls tell
+// the truth.
 type Step struct {
 	Name       string   `json:"name"`
 	Kind       string   `json:"kind"`
+	InputsFrom []string `json:"inputsFrom,omitempty"`
 	UserPrompt string   `json:"userPrompt,omitempty"`
 	Cmd        string   `json:"cmd,omitempty"`
 	Args       []string `json:"args,omitempty"`
+	Method     string   `json:"method,omitempty"`
+	URL        string   `json:"url,omitempty"`
+	Mode       string   `json:"mode,omitempty"`
 }
 
 // Workflow is the full wire shape returned by Get.
