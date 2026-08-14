@@ -205,6 +205,17 @@ jobs:
         # documents today's single instance.
         run: bash scripts/ci/check-builtin-tool-registration.sh
 
+      - name: single-move-writer guard
+        # kitty-specs/model-moves-transcript-01PMCH01 WP01, spec §4:
+        # "One writer: session_write/the chat runner persists moves
+        # through the same seam — no second history-writing path."
+        # session.Message's move fields are unexported so the compiler
+        # holds the cross-package half; this covers the three holes it
+        # cannot see — a second assigner inside core/session, someone
+        # exporting the fields, and the seam having zero or >1
+        # production callers.
+        run: bash scripts/ci/check-single-move-writer.sh
+
       - name: no-forbidden-compaction-symbols guard (I4)
         # kitty-specs/agentgraph-total-convergence-01PMGX01 WP01. Exactly
         # one compaction entry point: `SuppressAutomaticCompaction` and

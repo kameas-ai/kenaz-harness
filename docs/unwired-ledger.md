@@ -31,6 +31,7 @@ date and a named owner. "Still true" is not a reason to leave a stale date.
 | I7 | `check-agentgraph-convergence.sh` | `i7-orphan-packages.txt` | non-test package with no non-test importer |
 | I10 | `check-no-unwired-gates.sh` | `i10-unwired-gates.txt` | exported control-flow function with zero non-test call sites |
 | I11 | `check-builtin-tool-registration.sh` | `i11-unregistered-builtin-tools.txt` | builtin tool package no wiring site imports — **added 2026-08-14** |
+| I12 | `check-single-move-writer.sh` | *(none — no allowlist by design)* | second writer of transcript-move metadata, or a seam with 0 / >1 production callers — **added 2026-08-14** |
 
 Non-allowlist gates that also protect against unwired code:
 `check-output-ports.sh` (output port with no reader),
@@ -41,6 +42,51 @@ Non-allowlist gates that also protect against unwired code:
 `core/rpc/builtins_wiring_test.go` (registered tool ↔ predicate case).
 `scripts/ci/gates_can_fail_test.go` is the meta-gate: it plants a violation
 per gate and asserts the gate rejects it.
+
+---
+
+## In-flight (mission 01PMCH01 — model moves in the transcript)
+
+Fields that exist and are not yet read. Listed here so the next sweep does
+not re-find them as inert plumbing: each names the WP that consumes it and
+the date it was written. A line here that outlives its mission is a
+finding, not an exemption.
+
+### 2026-08-14 · Move metadata reaches the wire ahead of its consumers
+
+`sessions.Message.{Kind,MoveIndex,TurnSpanID}` (core/rpc/views/sessions/api.go)
+and their `frontend/src/lib/types.ts` mirror are populated by
+`messageToView` and read by nothing today. Likewise
+`agentgraph.HistoryEntry.{MoveKind,MoveIndex,TurnSpanID}` is carried
+end-to-end by the seam but every current call site passes it zero.
+
+`session.TranscriptEntry.ToolCalls` is the same class in the other
+direction: the field exists on the seam's input shape and no production
+caller sets it, because `agentgraph.HistoryEntry` has no counterpart yet.
+WP02 adds one (tool calls and results are the entries it persists); until
+then the only writers are the WP01 tests.
+
+This is WP01 landing the schema + the single writer seam ahead of the
+code that emits and renders moves, which is the sequencing plan.md fixes
+deliberately (the entry shape is the contract WP02–WP05 build on).
+
+**Consumers:** WP02 (chat runner stamps per-iteration moves), WP03
+(model-visible history gate), WP04 (move bubbles + tool chips), WP05
+(collapse + export). **Owner:** 01PMCH01.
+
+**Deadline:** these lines are drained when 01PMCH01 ships. If the mission
+is abandoned, the fields and migration 0333 go with it — a nullable
+column nothing writes is the same lie as a toggle nothing reads.
+
+Not on this list, because they are already load-bearing:
+`session.Message.{moveKind,moveIndex,moveTurnSpanID}` +
+`Manager.AppendTranscriptEntry` (the live chat write path runs through
+them on every append and every read — `moveColumnValues` binds them and
+`applyMoveColumns` rehydrates them, even though today every production
+write leaves them zero) and `session.MoveKinds()`, whose production
+reader is `MoveKind.known()` — the validation `AppendTranscriptEntry`
+runs on every entry. The wire and the frontend mirror the vocabulary in
+prose and in a TS union; they do not call `MoveKinds()`.
 
 ---
 
@@ -180,6 +226,14 @@ its evidence.
 
 ## Drained
 
+- **2026-08-14** (01PMCH01 WP01) — `llm.SessionMessageWriter` +
+  `llm.Config.HistoryWriter` + `llmImpl.historyW` (an interface declared,
+  a field populated at boot from `core/rpc/api.go`, and never read by any
+  code path — a seam that reported it persisted the assistant turn and
+  persisted nothing); `(*sessionHistoryReader).AppendMessage` (the
+  toolloop `SessionHistoryRW` shape, whose interface no longer exists in
+  the tree; zero call sites). Both deleted, not gated — they were rival
+  transcript writers on the adapter the one-writer seam wraps.
 - **2026-08-14** — `NodeAttributeEditor`'s four `*Options` props (dead
   props that made every `model_ref`/`tool_ref`/`corpus_ref`/
   `attachment_ref` attribute unsettable); `CanvasAdapter.persistsLayout`

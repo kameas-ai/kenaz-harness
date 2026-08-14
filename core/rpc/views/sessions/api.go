@@ -153,6 +153,27 @@ type Message struct {
 	// "provider" | "derived" | "mixed" | "unknown". Empty on rows
 	// with no usage data.
 	MessageCostSource string `json:"messageCostSource,omitempty"`
+
+	// ---- move metadata (model-moves-transcript-01PMCH01 WP01) ----
+	//
+	// Additive and omitempty by contract (spec §4, "Wire shape
+	// additive"): an entry with no Kind serializes byte-identically to
+	// the pre-mission shape, so old clients and pre-mission sessions see
+	// exactly the messages they already understand.
+	//
+	// Kind is one of session.MoveKinds() — "assistant_move" |
+	// "tool_call" | "tool_result" | "final" — and is the discriminator:
+	// when it is empty the other two are absent too.
+	Kind string `json:"kind,omitempty"`
+	// MoveIndex is the 0-based, dense position of this entry inside its
+	// human turn. A pointer so index 0 survives omitempty — the first
+	// move of every turn would otherwise vanish from the wire.
+	MoveIndex *int `json:"moveIndex,omitempty"`
+	// TurnSpanID is the id of the user message that opened the turn this
+	// entry belongs to. Every move in one turn shares it; that shared id
+	// IS the turn's span, and is what the collapse affordance (WP05)
+	// groups on.
+	TurnSpanID string `json:"turnSpanId,omitempty"`
 }
 
 // ResumeMessageResult is the wire shape returned by Sessions_ResumeMessage.

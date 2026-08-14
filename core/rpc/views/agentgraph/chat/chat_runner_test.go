@@ -149,12 +149,18 @@ type recordingHistoryWriter struct {
 
 type writerCall struct {
 	sessionID, role, content string
+	// entry is the full seam payload so move-metadata assertions
+	// (WP02 onward) have something to read.
+	entry coreag.HistoryEntry
 }
 
-func (w *recordingHistoryWriter) AppendMessage(_ context.Context, sid, role, content string) (string, error) {
+func (w *recordingHistoryWriter) AppendEntry(_ context.Context, sid string,
+	e coreag.HistoryEntry) (string, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.calls = append(w.calls, writerCall{sessionID: sid, role: role, content: content})
+	w.calls = append(w.calls, writerCall{
+		sessionID: sid, role: e.Role, content: e.Content, entry: e,
+	})
 	return "msg-1", nil
 }
 

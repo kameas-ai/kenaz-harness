@@ -6535,6 +6535,9 @@ export namespace sessions {
 	    completionTokens?: number;
 	    costUsd?: number;
 	    messageCostSource?: string;
+	    kind?: string;
+	    moveIndex?: number;
+	    turnSpanId?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Message(source);
@@ -6560,6 +6563,9 @@ export namespace sessions {
 	        this.completionTokens = source["completionTokens"];
 	        this.costUsd = source["costUsd"];
 	        this.messageCostSource = source["messageCostSource"];
+	        this.kind = source["kind"];
+	        this.moveIndex = source["moveIndex"];
+	        this.turnSpanId = source["turnSpanId"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

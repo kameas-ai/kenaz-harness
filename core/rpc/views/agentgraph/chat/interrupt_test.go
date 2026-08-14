@@ -56,10 +56,11 @@ type interruptRow struct {
 	content string
 }
 
-func (r *interruptHistoryWriter) AppendMessage(_ context.Context, _ string, role, content string) (string, error) {
+func (r *interruptHistoryWriter) AppendEntry(_ context.Context, _ string,
+	e coreag.HistoryEntry) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.rows = append(r.rows, interruptRow{role, content})
+	r.rows = append(r.rows, interruptRow{e.Role, e.Content})
 	return "intmsg-" + string(rune('a'+len(r.rows)-1)), nil
 }
 

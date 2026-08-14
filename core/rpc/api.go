@@ -4019,7 +4019,6 @@ func newLLMStack(
 		Keychain:      &keychainWriter{backend: secretsBackend},
 		Prober:        &registryProber{reg: reg, creds: credResolver},
 		History:       historyAdapter,
-		HistoryWriter: &llmHistoryWriter{inner: historyAdapter},
 		Hooks:         hooksRunner,
 		Attachments:   attResolver,
 		ChatRunner:    chatRunner,
@@ -5994,51 +5993,25 @@ func (r *sessionHistoryReader) ListMessages(ctx context.Context, sessionID strin
 	return out, nil
 }
 
-// AppendMessage persists the assistant turn at stream completion so a
-// future ListMessages call rehydrates it. Implements the toolloop's
-// SessionHistoryRW.AppendMessage shape (error-only return).
-// FR-003: fires syncHook after a successful persist so the new event is
-// streamed to fleet for sessions with context-sync enabled.
-func (r *sessionHistoryReader) AppendMessage(ctx context.Context, sessionID, role, content string) error {
-	if r == nil || r.mgr == nil {
-		return nil
-	}
-	stored, err := r.mgr.AppendMessage(ctx, sessionID, session.Message{
-		Role:    session.Role(role),
-		Content: content,
-	})
-	if err != nil {
-		return err
-	}
-	if hook := r.syncHook; hook != nil {
-		payload, merr := json.Marshal(map[string]string{
-			"id":   stored.ID,
-			"role": role,
-		})
-		if merr == nil {
-			hook(ctx, sessionID, 0, payload)
-		}
-	}
-	return nil
-}
-
 // sessionSyncAppendHook is the callback fired by llmHistoryWriter after each
-// successful AppendMessage call. It is set once at boot by the context-sync
+// successful AppendEntry call. It is set once at boot by the context-sync
 // wiring block in New() before any chat session starts; no concurrent-write
 // hazard exists. The hook marshals the message to JSON and ships it to fleet
 // via SessionSyncer.AppendEvent (no-op when sync is not enabled for the
 // session). Privacy invariant: the hook must never log message content.
 type sessionSyncAppendHook func(ctx context.Context, sessionID string, seq uint64, payload []byte)
 
-// llmHistoryWriter wraps sessionHistoryReader to satisfy the LLM
-// view's SessionMessageWriter shape, which returns the persisted
-// message id alongside the error so the post-finalize hooks
-// (artifacts code-block detector) can anchor SourceRef.MessageID to
-// the freshly persisted row.
+// llmHistoryWriter is the production binding of the agentgraph
+// HistoryWriter seam — the ONE writer through which every chat
+// transcript entry reaches the session store
+// (model-moves-transcript-01PMCH01 WP01, spec §4). It wraps
+// sessionHistoryReader and returns the persisted message id alongside
+// the error so the post-finalize hooks (artifacts code-block detector)
+// can anchor SourceRef.MessageID to the freshly persisted row.
 //
 // FR-003 (fleet-context-sync-01NDFSEX15): the fleet streaming hook is
-// stored on inner (sessionHistoryReader.syncHook) so both this writer
-// and any other path that calls inner.AppendMessage fire it.
+// stored on inner (sessionHistoryReader.syncHook) so the hook survives
+// independently of who holds the writer.
 type llmHistoryWriter struct {
 	inner *sessionHistoryReader
 }
@@ -6057,24 +6030,33 @@ func (w *llmHistoryWriter) SystemPromptFor(ctx context.Context, sessionID string
 	return w.inner.SystemPromptFor(ctx, sessionID)
 }
 
-func (w *llmHistoryWriter) AppendMessage(ctx context.Context, sessionID, role, content string) (string, error) {
+// AppendEntry satisfies agentgraph.HistoryWriter. It hands the whole
+// entry — classic or move — to session.Manager.AppendTranscriptEntry,
+// the only function in the repository that can stamp move metadata onto
+// a durable row. There is deliberately no second method here: a
+// classic-only AppendMessage alongside this one would be a path that
+// silently drops move fields.
+func (w *llmHistoryWriter) AppendEntry(ctx context.Context, sessionID string,
+	entry coreag.HistoryEntry) (string, error) {
 	if w == nil || w.inner == nil || w.inner.mgr == nil {
 		return "", nil
 	}
-	stored, err := w.inner.mgr.AppendMessage(ctx, sessionID, session.Message{
-		Role:    session.Role(role),
-		Content: content,
+	stored, err := w.inner.mgr.AppendTranscriptEntry(ctx, sessionID, session.TranscriptEntry{
+		Role:       session.Role(entry.Role),
+		Content:    entry.Content,
+		Kind:       session.MoveKind(entry.MoveKind),
+		MoveIndex:  entry.MoveIndex,
+		TurnSpanID: entry.TurnSpanID,
 	})
 	if err != nil {
 		return "", err
 	}
 	// FR-003: stream event to fleet when session sync is enabled.
-	// The hook is stored on inner (sessionHistoryReader) so the same
-	// hook fires regardless of which writer path is taken.
+	// The hook is stored on inner (sessionHistoryReader).
 	if hook := w.inner.syncHook; hook != nil {
 		payload, merr := json.Marshal(map[string]string{
 			"id":   stored.ID,
-			"role": role,
+			"role": entry.Role,
 		})
 		if merr == nil {
 			hook(ctx, sessionID, 0, payload)

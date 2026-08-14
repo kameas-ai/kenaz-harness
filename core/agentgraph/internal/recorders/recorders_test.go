@@ -207,9 +207,10 @@ func TestHistoryReader_NotCalledAssertion(t *testing.T) {
 
 func TestHistoryWriter_RecordsCall(t *testing.T) {
 	r := &recorders.HistoryWriter{NextID: "msg-99"}
-	id, err := r.AppendMessage(context.Background(), "sess-1", "user", "hello")
+	id, err := r.AppendEntry(context.Background(), "sess-1",
+		agentgraph.HistoryEntry{Role: "user", Content: "hello"})
 	if err != nil {
-		t.Fatalf("AppendMessage: %v", err)
+		t.Fatalf("AppendEntry: %v", err)
 	}
 	if id != "msg-99" {
 		t.Errorf("id = %q, want %q", id, "msg-99")

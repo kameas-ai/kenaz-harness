@@ -1195,14 +1195,21 @@ func (s *sqlStore) AppendMessage(ctx context.Context, m Message) (Message, error
 			}
 			toolCallsJSON = string(b)
 		}
+		// Move metadata (model-moves-transcript-01PMCH01 WP01). All three
+		// bind NULL for a classic entry, which is every row this store
+		// wrote before the mission and every row AppendTranscriptEntry
+		// writes without a Kind.
+		moveKindArg, moveIndexArg, turnSpanArg := moveColumnValues(m)
 		if _, err := tx.Exec(ctx, `
             INSERT INTO session_messages
-                (id, session_id, sequence, role, content, tool_calls, created_at, content_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (id, session_id, sequence, role, content, tool_calls, created_at, content_json,
+                 kind, move_index, turn_span_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
 			m.ID, m.SessionID, m.Sequence, string(m.Role),
 			m.Content, toolCallsJSON, m.CreatedAt.UnixNano(),
-			string(contentJSON)); err != nil {
+			string(contentJSON),
+			moveKindArg, moveIndexArg, turnSpanArg); err != nil {
 			return err
 		}
 		out = m
@@ -1244,7 +1251,8 @@ func (s *sqlStore) listMessages(ctx context.Context, sessionID string, activeOnl
         SELECT id, session_id, sequence, role, content, tool_calls, created_at, content_json,
                compacted_into_id, compacted_at, archived_at,
                streaming_failed_at, streaming_failure_kind, streaming_recoverable, continuation_of,
-               prompt_tokens, completion_tokens, cost_usd, cost_source
+               prompt_tokens, completion_tokens, cost_usd, cost_source,
+               kind, move_index, turn_span_id
         FROM session_messages
         WHERE session_id = ?
     `
@@ -1276,14 +1284,21 @@ func (s *sqlStore) listMessages(ctx context.Context, sessionID string, activeOnl
 			completionTokens     sql.NullInt64
 			costUSD              sql.NullFloat64
 			costSource           sql.NullString
+			moveKindCol          sql.NullString
+			moveIndexCol         sql.NullInt64
+			turnSpanCol          sql.NullString
 		)
 		if err := rows.Scan(&m.ID, &m.SessionID, &m.Sequence, &roleStr,
 			&m.Content, &toolCalls, &createdAt, &contentJSON,
 			&compactedIntoID, &compactedAt, &archivedAt,
 			&streamingFailedAt, &streamingFailureKind, &streamingRecoverable, &continuationOf,
-			&promptTokens, &completionTokens, &costUSD, &costSource); err != nil {
+			&promptTokens, &completionTokens, &costUSD, &costSource,
+			&moveKindCol, &moveIndexCol, &turnSpanCol); err != nil {
 			return nil, err
 		}
+		// model-moves-transcript-01PMCH01 WP01: rehydrate the move
+		// metadata. A NULL kind leaves the entry classic.
+		applyMoveColumns(&m, moveKindCol, moveIndexCol, turnSpanCol)
 		m.Role = Role(roleStr)
 		m.CreatedAt = time.Unix(0, createdAt).UTC()
 		if toolCalls.Valid && toolCalls.String != "" {
@@ -1631,7 +1646,8 @@ func (s *sqlStore) GetMessage(ctx context.Context, sessionID, messageID string) 
 	row := s.db.Reader().QueryRow(ctx, `
         SELECT id, session_id, sequence, role, content, tool_calls, created_at, content_json,
                compacted_into_id, compacted_at, archived_at,
-               streaming_failed_at, streaming_failure_kind, streaming_recoverable, continuation_of
+               streaming_failed_at, streaming_failure_kind, streaming_recoverable, continuation_of,
+               kind, move_index, turn_span_id
         FROM session_messages
         WHERE id = ? AND session_id = ?
     `, messageID, sessionID)
@@ -1648,16 +1664,22 @@ func (s *sqlStore) GetMessage(ctx context.Context, sessionID, messageID string) 
 		streamingFailureKind sql.NullString
 		streamingRecoverable sql.NullInt64
 		continuationOf       sql.NullString
+		moveKindCol          sql.NullString
+		moveIndexCol         sql.NullInt64
+		turnSpanCol          sql.NullString
 	)
 	if err := row.Scan(&m.ID, &m.SessionID, &m.Sequence, &roleStr,
 		&m.Content, &toolCalls, &createdAt, &contentJSON,
 		&compactedIntoID, &compactedAt, &archivedAt,
-		&streamingFailedAt, &streamingFailureKind, &streamingRecoverable, &continuationOf); err != nil {
+		&streamingFailedAt, &streamingFailureKind, &streamingRecoverable, &continuationOf,
+		&moveKindCol, &moveIndexCol, &turnSpanCol); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Message{}, ErrSessionNotFound
 		}
 		return Message{}, err
 	}
+	// model-moves-transcript-01PMCH01 WP01.
+	applyMoveColumns(&m, moveKindCol, moveIndexCol, turnSpanCol)
 	m.Role = Role(roleStr)
 	m.CreatedAt = time.Unix(0, createdAt).UTC()
 	if toolCalls.Valid && toolCalls.String != "" {

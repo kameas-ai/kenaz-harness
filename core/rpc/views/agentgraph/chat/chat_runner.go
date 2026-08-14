@@ -616,7 +616,13 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// Persist the user turn so HistoryReadNode sees it on the first
 	// fire of the kernel run.
 	if r.cfg.HistoryWriter != nil && userMessage != "" {
-		if _, werr := r.cfg.HistoryWriter.AppendMessage(ctx, sessionID, "user", userMessage); werr != nil {
+		// Classic entry: the human turn itself is not a move. WP02
+		// stamps move metadata on the entries the loop emits AFTER this
+		// one, using this row's id as their turn span.
+		if _, werr := r.cfg.HistoryWriter.AppendEntry(ctx, sessionID, coreag.HistoryEntry{
+			Role:    "user",
+			Content: userMessage,
+		}); werr != nil {
 			return "", fmt.Errorf("chat: persist user turn: %w", werr)
 		}
 	}
