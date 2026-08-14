@@ -130,6 +130,24 @@ before `cmd.Start()`, attach the registry writers, pass
 `BackgroundSpawn`/`BackgroundEnd` and the `HookFirer` from `core/rpc`, then
 register `kenaz__monitor` with its predicate case.
 
+### 2026-08-14 · `cedar.CheckLLMFallback` — the LLM fallback chain is ungated
+
+The highest-priority wire on this list. `core/llm/fallback`'s Runner is on
+the live chat path, constructed as `fallback.NewRunner(a.reg,
+&fallback.StoreResolver{})` with no options — so `r.checkPolicy` stays nil
+and every fallback hop issues unevaluated, while `runner.go`'s own doc says
+"WithPolicyCheck wires the Cedar gate. fn should call
+cedar.CheckLLMFallback" and `cedar/types.go` says "the loop calls
+CheckLLMFallback before issuing each hop". Neither happens. The Runner's
+`WithBlockedHook` audit path is unfired for the same reason.
+
+Tracked on `i10-unwired-gates.txt` with seven siblings surfaced by the same
+vocabulary widening — three more WIRE verdicts (`CheckSQLiteVersion`,
+`CheckManifestDrift`), three DELETE verdicts (`cedar.CheckTool`,
+`cedar.CheckModel`, `cedar.CheckRecipeAdd`, `fleet.VerifySignature`) and one
+blocked on I7. Read those entries before touching any of them; each carries
+its evidence.
+
 ### 2026-08-14 · Known gate holes (not yet closed)
 
 - **`check-output-ports.sh` pass 1 is a bare substring count.** Roughly 15

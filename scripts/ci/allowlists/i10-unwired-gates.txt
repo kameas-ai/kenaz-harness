@@ -1,6 +1,9 @@
-# I10 allowlist — exported Evaluate*/Enforce*/Authorize*/*Gate functions
-# (the naming vocabulary this codebase uses for gate/authorization/
-# enforcement control-flow) with zero non-test call sites under core/.
+# I10 allowlist — exported Evaluate*/Enforce*/Authorize*/Check*/Verify*/
+# Guard*/Permit*/*Gate functions (the naming vocabulary this codebase
+# uses for gate/authorization/enforcement control-flow) with zero
+# non-test call sites under core/. Check/Verify/Guard/Permit joined the
+# vocabulary in the 2026-08-14 unwired sweep — see the seeded section at
+# the bottom for what that turned up and why it was overdue.
 # Spec: kitty-specs/agentgraph-total-convergence-01PMGX01/spec.md §1.7, §6 I10.
 #
 # Format: one `<package-import-path>.<Symbol>` per line.
@@ -83,13 +86,35 @@
 #   check needs []NodeProvenance rows for the graph being loaded, and no
 #   production path reads provenance at graph-load time today.
 #
-#   Deletion was considered and rejected: the dial ships in
+#   CORRECTION, 2026-08-14 (unwired sweep). WP17's justification for
+#   keeping this line said: "the dial ships in
 #   dials.DialConfig.ManifestDriftMode and participates in the real
-#   cascade, and manifest_versions_gen.go bakes the per-kind fingerprints
-#   the check compares against, so this is a half-landed feature with
-#   live codegen behind it, not scaffolding for a flow that never
-#   existed. 01NDFSEX02 WP06's own doc comment records the same gap for
-#   the frontend drift badge.
+#   cascade". THE SECOND HALF IS FALSE. dials/cascade.go's applyLayer
+#   has branches for twelve DialConfig fields and none for
+#   ManifestDriftMode, and dials.EffectiveDials has no ManifestDriftMode
+#   field at all — so the value cannot survive Resolve() even in
+#   principle. The dial is declared, persisted by the Dials view's
+#   in-memory store, and then dropped on the floor.
+#
+#   Worse, the surrounding subsystem is itself unwired: core/agentgraph/
+#   dials has exactly ONE non-test importer (core/rpc/views/dials/impl.go)
+#   and dials.Resolve is called from exactly one production site, whose
+#   output feeds only the Dials_GetEffective binding — a UI readout. The
+#   kernel's budget comes from graph.Budget folded with the autonomy
+#   token-ceiling knob (chat_runner.go), never from EffectiveDials.
+#
+#   The line still stays, on the narrower and now-accurate ground that
+#   manifest_versions_gen.go bakes the per-kind fingerprints
+#   CheckManifestDrift compares against, so the codegen half is real. But
+#   the owner mission's job is bigger than "read provenance at load":
+#   ManifestDriftMode has to reach the cascade first. Recorded so the
+#   next reader does not budget a one-line wire for it.
+#
+#   NOTE: CheckManifestDrift, the producer this entry names as also
+#   having zero callers, was INVISIBLE to this gate until the 2026-08-14
+#   vocabulary widening — `Check*` was not in the heuristic. It now has
+#   its own line below. The allowlist was documenting a defect its own
+#   scanner could not detect.
 #
 #   Whoever wires provenance-at-load deletes this line and the
 #   manifest_drift_dial.go NOTE in the same change.
@@ -135,3 +160,118 @@ github.com/kameas-ai/kenaz-harness/core/llm/bundleartifact.NewModelProfileHandle
 #   cedar.GateMCPSpawn from makeMCPRecipeBootstrap (core/rpc/api.go),
 #   which does not go through core/credstore.
 github.com/kameas-ai/kenaz-harness/core/credstore.WithCedarGate
+
+# ─────────────────────────────────────────────────────────────────────
+# SEEDED 2026-08-14 BY THE VOCABULARY WIDENING (unwired sweep,
+# model-moves-transcript-01PMCH01 WP00).
+#
+# Check/Verify/Guard/Permit joined the discovery heuristic this sweep.
+# Eight symbols were invisible to the gate until then — including
+# CheckManifestDrift, which THIS FILE already described as unwired in the
+# EnforceManifestDriftPolicy entry above. Every line below carries the
+# triage verdict, so the next sweep starts with evidence rather than
+# cold. Same contract as the original seed: WP17 dispositioned the first
+# seven, the next sweep disposes of these.
+
+# github.com/kameas-ai/kenaz-harness/core/policy/cedar.CheckLLMFallback
+#   SEEDED 2026-08-14. Verdict: WIRE. The most consequential of the eight
+#   and the only one where a capability is genuinely UNGATED today.
+#
+#   core/llm/fallback's Runner IS on the live chat path —
+#   llm_provider_adapter.go constructs `fallback.NewRunner(a.reg,
+#   &fallback.StoreResolver{})` with NO options, so `r.checkPolicy` stays
+#   nil and every fallback hop issues unevaluated. runner.go's own doc
+#   says "WithPolicyCheck wires the Cedar gate. fn should call
+#   cedar.CheckLLMFallback and return ErrPolicyDenied on deny", and
+#   cedar/types.go's ActionLLMFallback doc says "the loop calls
+#   CheckLLMFallback before issuing each hop". Neither happens.
+#
+#   Not fixed in the sweep commit because it puts a policy evaluation on
+#   the live request path and wants its own default-allow verification —
+#   not because it is hard. One option at the NewRunner call site closes
+#   it, and the Runner's unfired WithBlockedHook audit path lands with
+#   the same wire.
+github.com/kameas-ai/kenaz-harness/core/policy/cedar.CheckLLMFallback
+
+# github.com/kameas-ai/kenaz-harness/core/storage/db.CheckSQLiteVersion
+#   SEEDED 2026-08-14. Verdict: WIRE. Returns ErrSQLiteVersionTooOld
+#   below the 3.51.0 floor, and version.go's own header claims the floor
+#   is "enforced by Open per research D5". Open does no such check — and
+#   nothing could feed this function anyway: the harness never queries
+#   `sqlite_version()` at all. core/storage/storage.go declares a
+#   parallel SQLiteVersionError + ErrSQLiteVersionTooOld that are also
+#   referenced nowhere, and core/storage/eventkinds.go's `db_opened`
+#   audit event declares a `sqlite_version` attr with no producer. Three
+#   halves of one feature, no whole. Fix the stale header comment in the
+#   same change.
+github.com/kameas-ai/kenaz-harness/core/storage/db.CheckSQLiteVersion
+
+# github.com/kameas-ai/kenaz-harness/core/agentgraph.CheckManifestDrift
+#   SEEDED 2026-08-14. Verdict: WIRE, PAIRED. Do not read this entry
+#   alone — it is the producer half of EnforceManifestDriftPolicy above,
+#   which names it, and both clear in the same change. See that entry for
+#   the two blockers (no production path reads NodeProvenance at
+#   graph-load, and ManifestDriftMode never reaches the dials cascade).
+#   Owner: manifest-versioning-01NDFSEX02.
+github.com/kameas-ai/kenaz-harness/core/agentgraph.CheckManifestDrift
+
+# github.com/kameas-ai/kenaz-harness/core/policy/cedar.CheckTool
+#   SEEDED 2026-08-14. Verdict: DELETE (superseded). The generic
+#   "any tool dispatch" gate over ActionToolExec, which itself has zero
+#   production Evaluate sites. Tool dispatch is NOT ungated — production
+#   replaced one coarse gate with per-family ones: ActionRunBashCommand
+#   (core/tools/bash), ActionRead/WriteFilesystem (core/tools/fs),
+#   cedar.CheckNetwork (websearch + webfetch), cedar.GateMCPSpawn
+#   (core/rpc/api.go), cedar.CheckRecipeSpawn (views/tools).
+#   docs/production-wiring.md claims CheckTool is wired into "toolloop's
+#   permission resolver"; core/toolloop/perms.go contains no cedar
+#   reference at all. Correct that doc line in the deleting change.
+github.com/kameas-ai/kenaz-harness/core/policy/cedar.CheckTool
+
+# github.com/kameas-ai/kenaz-harness/core/policy/cedar.CheckModel
+#   SEEDED 2026-08-14. Verdict: DELETE (dead twin). LLMPolicyGuard.Allow
+#   (core/policy/cedar/llmguard.go) performs the identical
+#   Evaluate(UserUID(), ActionModelSelect, ModelUID(...)) and IS
+#   constructed in production (core/rpc/api.go). The only difference is
+#   the return type — the guard returns *llm.ErrPolicyDenied so the
+#   registry pipeline can match it. Model selection is gated;
+#   this function is the copy nobody kept using.
+#   docs/production-wiring.md already names LLMPolicyGuard, not this.
+github.com/kameas-ai/kenaz-harness/core/policy/cedar.CheckModel
+
+# github.com/kameas-ai/kenaz-harness/core/policy/cedar.CheckRecipeAdd
+#   SEEDED 2026-08-14. Verdict: DELETE (flow never built) — the
+#   EvaluateToolGate precedent exactly. Its doc says it gates the
+#   "AddRecipe / EditRecipe RPC"; there is no such RPC. views/tools
+#   exposes List/Install/Uninstall/Forget/Status/Config/Prereqs/PlaceFile
+#   and nothing else, and recipes.UserStore.Save/.Delete have zero
+#   production callers — user recipes arrive as YAML dropped into
+#   <DataDir>/mcp/recipes/ and are read through the read-only
+#   StartWatch/Reload path. The engine's ActionAddRecipe family handling
+#   and policies/mcp-no-npx.cedar's "AddRecipe / InstallRecipe /
+#   EditRecipe" claim shipped ahead of a write path that never landed;
+#   only the Install half is real. Its ActionSpawnRecipe twin IS wired.
+github.com/kameas-ai/kenaz-harness/core/policy/cedar.CheckRecipeAdd
+
+# github.com/kameas-ai/kenaz-harness/core/fleet.VerifySignature
+#   SEEDED 2026-08-14. Verdict: DELETE, unless deliberately kept as
+#   client-library API. The SIGNING half is live — DeviceSigner.Sign runs
+#   from audit_archive.go and catalog.go — but nothing in this repo ever
+#   consumes a signature, and signing.go's own comment explains why:
+#   "Used by tests and the fleet server". The verifier's counterpart is
+#   out-of-repo. Nothing is ungated on this side of the wire; the
+#   question is only whether a function no build target here consumes
+#   belongs in core/fleet.
+github.com/kameas-ai/kenaz-harness/core/fleet.VerifySignature
+
+# github.com/kameas-ai/kenaz-harness/core/bundle/integrity.VerifyManifestSignatures
+#   SEEDED 2026-08-14. Verdict: BLOCKED ON ORPHAN PACKAGE — same shape as
+#   the bundleartifact/credstore entries above. core/bundle/integrity is
+#   on i7-orphan-packages.txt with zero non-test importers; its siblings
+#   HashSHA256/CompareDigests are equally uncalled. Bundle signature
+#   verification IS absent in production (views/bundle copies
+#   Signatures[0].Locator into the lockfile as a presence marker and
+#   explicitly defers verification to "the resolver mission"), but wiring
+#   this one function is not the missing step — wiring the package is.
+#   The line clears with the i7 line.
+github.com/kameas-ai/kenaz-harness/core/bundle/integrity.VerifyManifestSignatures
