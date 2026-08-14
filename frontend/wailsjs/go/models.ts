@@ -108,6 +108,66 @@ export namespace acp {
 
 export namespace agentgraph {
 	
+	export class EdgeCheckResult {
+	    ok: boolean;
+	    reason?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EdgeCheckResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ok = source["ok"];
+	        this.reason = source["reason"];
+	    }
+	}
+	export class EdgeEndpoint {
+	    node: string;
+	    port: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EdgeEndpoint(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.node = source["node"];
+	        this.port = source["port"];
+	    }
+	}
+	export class EdgeRef {
+	    from: EdgeEndpoint;
+	    to: EdgeEndpoint;
+	
+	    static createFrom(source: any = {}) {
+	        return new EdgeRef(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.from = this.convertValues(source["from"], EdgeEndpoint);
+	        this.to = this.convertValues(source["to"], EdgeEndpoint);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class GraphInfo {
 	    id: string;
 	    name?: string;
@@ -8041,9 +8101,13 @@ export namespace workflows {
 	export class Step {
 	    name: string;
 	    kind: string;
+	    inputsFrom?: string[];
 	    userPrompt?: string;
 	    cmd?: string;
 	    args?: string[];
+	    method?: string;
+	    url?: string;
+	    mode?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Step(source);
@@ -8053,9 +8117,13 @@ export namespace workflows {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
 	        this.kind = source["kind"];
+	        this.inputsFrom = source["inputsFrom"];
 	        this.userPrompt = source["userPrompt"];
 	        this.cmd = source["cmd"];
 	        this.args = source["args"];
+	        this.method = source["method"];
+	        this.url = source["url"];
+	        this.mode = source["mode"];
 	    }
 	}
 	export class Workflow {

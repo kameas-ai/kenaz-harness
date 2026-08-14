@@ -13,6 +13,7 @@ import { mount, flushPromises } from '@vue/test-utils';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
 import type { GraphSpec } from '@/lib/types';
+import { MATERIALIZED_RUN_YAML } from '@/lib/canvas/__fixtures__/graphFixtures';
 
 const pushMock = vi.fn();
 vi.mock('vue-router', () => ({
@@ -64,6 +65,7 @@ function mountWith(spec?: Partial<GraphSpec>) {
       saveGraph: async () => undefined,
       deleteGraph: async () => undefined,
       validate: async () => ({ ok: true, issues: [] }),
+      checkEdge: async () => ({ ok: true }),
       startRun: async (req) => ({
         runId: 'r',
         status: {
@@ -167,6 +169,65 @@ describe('GraphEditor — materialized run', () => {
     await flushPromises();
     const banner = wrapper.get('[data-testid="editor-materialized-banner"]');
     expect(banner.text()).toContain('errors are classified');
+  });
+
+  /*
+   * The run overlay on the materialized route
+   * (visual-graph-authoring-01PMUX01 WP05, FR-005). The projection
+   * carries its own per-node `materialized:` blocks, so the statuses
+   * come out of the very buffer the canvas renders — there is no second
+   * fetch that could disagree with the topology beside it.
+   */
+  it('renders per-node run status on the canvas', async () => {
+    const { wrapper } = mountWith({ yaml: MATERIALIZED_RUN_YAML });
+    await flushPromises();
+    const cards = wrapper.findAll('[data-testid^="canvas-node-"]');
+    const statusOf = (id: string) =>
+      cards.find((w) => w.text().includes(id))?.attributes('data-status');
+    expect(statusOf('assistant_turn@1')).toBe('complete');
+    expect(statusOf('assistant_turn@2')).toBe('incomplete');
+    expect(statusOf('tool_leg@1')).toBe('failed');
+    expect(statusOf('skipped_leg@1')).toBe('skipped');
+    expect(statusOf('never_ran')).toBe('not_reached');
+  });
+
+  it('leaves an authored graph unoverlaid', async () => {
+    // The same editor on the library route: no materialized blocks, so
+    // no statuses — an authoring canvas must not sprout run badges.
+    const { wrapper } = mountWith({ yaml: materializedYAML, scope: 'library' });
+    await flushPromises();
+    const badges = wrapper.findAll('[data-testid="canvas-node-status"]');
+    expect(badges.length).toBe(0);
+  });
+
+  it('badges the degraded projection over the canvas too', async () => {
+    const { wrapper } = mountWith({
+      yaml: materializedYAML + 'spec_provenance: library_fallback\n',
+    });
+    await flushPromises();
+    expect(wrapper.get('[data-testid="canvas-notice"]').text()).toContain(
+      'Degraded projection',
+    );
+  });
+
+  /*
+   * WP12-review N3, the last half: the ATTRIBUTE EDITOR on a read-only
+   * buffer. WP04 closed the write path (`applyCanvasOp` returns early
+   * when readOnly), which stopped the damage; this closes the
+   * affordance, which stops the invitation. The assertion is that the
+   * input elements do not EXIST — a disabled input still carries its
+   * change handler and still emits.
+   */
+  it('renders the attribute panel view-only, with no input to type into', async () => {
+    const { wrapper } = mountWith({ yaml: MATERIALIZED_RUN_YAML });
+    await flushPromises();
+    await wrapper.get('[data-testid="editor-node-select"]').setValue('assistant_turn@1');
+    await flushPromises();
+    const panel = wrapper.get('[data-testid="editor-attr-editor"]');
+    expect(panel.findAll('input').length).toBe(0);
+    expect(panel.findAll('textarea').length).toBe(0);
+    expect(panel.findAll('select').length).toBe(0);
+    expect(panel.findAll('[data-testid^="attr-input-"]').length).toBe(0);
   });
 
   it('surfaces a projection failure instead of rendering an empty graph', async () => {

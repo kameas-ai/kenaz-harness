@@ -79,7 +79,7 @@ type Settings struct {
 	// MaxAgentTurns caps the number of LLM ↔ tool round-trips inside
 	// a single chat-graph LoopNode body before the cap-hit pause-not-kill
 	// UX fires (commit c760087). Zero falls back to the spec default
-	// (DefaultMaxAgentTurns = 25 — agreed with the user when migrating
+	// (DefaultMaxAgentTurns — see its doc; raised to 500 when migrating
 	// off core/toolloop's per-call DefaultMaxIter=8). The chassis reads
 	// the effective value via EffectiveMaxAgentTurns on every chat run
 	// start so a settings change takes effect on the next user turn
@@ -623,11 +623,14 @@ const MaxCompactionArchiveDays = 365
 // user-assistant pairs that compaction never touches (plan §2.6).
 const DefaultCompactionRecentWindow = 4
 
-// DefaultMaxAgentTurns is the spec-locked iteration cap for the chat
-// graph's LoopNode body when Settings.MaxAgentTurns is unset (zero).
-// Set to 25 per the agent-kernel-graph-chat-migration mission brief
-// (the user's stated preference replacing toolloop's old 8-call cap).
-const DefaultMaxAgentTurns = 25
+// DefaultMaxAgentTurns is the iteration cap for the chat graph's
+// LoopNode body when Settings.MaxAgentTurns is unset (zero). Raised
+// 25 -> 500 (owner directive 2026-08-14): autonomous work must be
+// possible for hours on end; 25 capped an agentic turn at minutes.
+// The doom-loop guard, the verified-exit gate, and the per-run budget
+// backstops (chat_default.yaml, raised in the same change) remain the
+// behavioural governors.
+const DefaultMaxAgentTurns = 500
 
 // AutoCaptureCodeBlocks reports whether the code-block detector is
 // active. Default true on a fresh install (zero-value Disabled).

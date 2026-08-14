@@ -1468,8 +1468,11 @@ export interface StreamChunk {
   done?: boolean;
 }
 
-/** Token / cost estimate surfaced by ChatInput. Placeholder values are OK
- * until the providers mission wires real accounting. */
+/** Token / cost readout surfaced by ChatInput's composer footer. Callers
+ * derive this from the session's live usage snapshot (see
+ * SessionUsagePayload / session.lastUsage in useSession.ts) so the footer
+ * reflects the provider-reported totals from the most recently completed
+ * turn, not a static placeholder. */
 export interface CostEstimate {
   tokens: number;
   usd: number;
@@ -2683,6 +2686,29 @@ export interface GraphValidationIssue {
 export interface GraphValidationResult {
   ok: boolean;
   issues: GraphValidationIssue[];
+}
+
+/**
+ * GraphEdgeEndpoint / GraphEdgeRef / GraphEdgeCheckResult — the wire
+ * shapes for `Graph_CheckEdge`, the drag-time edge-legality check
+ * (visual-graph-authoring-01PMUX01 WP03).
+ *
+ * `reason` is the validator's OWN message, unparaphrased, because the
+ * canvas has to be able to say exactly what the save path would say.
+ */
+export interface GraphEdgeEndpoint {
+  node: string;
+  port: string;
+}
+
+export interface GraphEdgeRef {
+  from: GraphEdgeEndpoint;
+  to: GraphEdgeEndpoint;
+}
+
+export interface GraphEdgeCheckResult {
+  ok: boolean;
+  reason?: string;
 }
 
 /** RunState mirrors the kernel's emitted lifecycle. */

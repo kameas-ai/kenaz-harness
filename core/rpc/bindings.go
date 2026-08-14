@@ -2309,6 +2309,15 @@ func (b *Bindings) Graph_Validate(yaml string) (graphview.ValidationResult, erro
 	defer sentry.WrapBinding("Graph_Validate")()
 	return b.api.Graph().Validate(b.ctx(), yaml)
 }
+
+// Graph_CheckEdge answers "may this edge be drawn?" for the visual
+// canvas, at drag time (visual-graph-authoring-01PMUX01 WP03). Pure
+// validation over the buffer the caller sends: it reads no state,
+// starts nothing, and needs no lockdown guard.
+func (b *Bindings) Graph_CheckEdge(graphJSON string, edge graphview.EdgeRef) (graphview.EdgeCheckResult, error) {
+	defer sentry.WrapBinding("Graph_CheckEdge")()
+	return b.api.Graph().CheckEdge(b.ctx(), graphJSON, edge)
+}
 func (b *Bindings) Graph_StartRun(req graphview.StartRunRequest) (graphview.StartRunResponse, error) {
 	defer sentry.WrapBinding("Graph_StartRun")()
 	// fleet-emergency-lockdown-01NDFSEX12 WP04: freeze graph execution during lockdown.

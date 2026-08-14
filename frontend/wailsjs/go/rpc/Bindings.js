@@ -534,6 +534,10 @@ export function Graph_CancelRun(arg1) {
   return window['go']['rpc']['Bindings']['Graph_CancelRun'](arg1);
 }
 
+export function Graph_CheckEdge(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Graph_CheckEdge'](arg1, arg2);
+}
+
 export function Graph_DeleteGraph(arg1) {
   return window['go']['rpc']['Bindings']['Graph_DeleteGraph'](arg1);
 }

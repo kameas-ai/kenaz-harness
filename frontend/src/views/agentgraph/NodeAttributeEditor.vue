@@ -26,6 +26,18 @@ interface Props {
   attrs: Record<string, unknown>;
   /** Resolved manifest with provenance. Null when still loading or empty kind. */
   manifest: NodeManifestDetail | null;
+  /**
+   * View-only mode for a buffer nobody may edit — a bundled library
+   * graph, or a materialized run (visual-graph-authoring-01PMUX01 WP05,
+   * closing the WP12-review N3 hazard).
+   *
+   * STRUCTURAL, like the canvas's own `readOnly`: the input elements are
+   * not rendered at all, so no change handler exists to fire and no
+   * `update:attrs` can be emitted. A `disabled` attribute would leave
+   * the emit path intact and one `.trigger('input')` away from writing
+   * into a record of something that already happened.
+   */
+  readOnly?: boolean;
   /** Other node ids in the same graph (for node_id_ref / port_ref pickers). */
   graphNodeIds?: string[];
   /**
@@ -41,6 +53,7 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
+  readOnly: false,
   graphNodeIds: () => [],
   modelOptions: () => [],
   toolOptions: () => [],
@@ -159,6 +172,24 @@ function effectiveDefault(attr: NodeAttrSpec): unknown {
 function valueOf(attr: NodeAttrSpec): unknown {
   if (attr.name in local.value) return local.value[attr.name];
   return effectiveDefault(attr);
+}
+
+/**
+ * The value as read-only text. Scalars render verbatim; objects and
+ * arrays render as compact JSON. An unset attr renders as an em dash
+ * rather than an empty gap, so "no value" is legible as a statement.
+ */
+function displayValue(attr: NodeAttrSpec): string {
+  const raw = valueOf(attr);
+  if (raw === undefined || raw === null || raw === '') return '—';
+  if (typeof raw === 'object') {
+    try {
+      return JSON.stringify(raw);
+    } catch {
+      return '—';
+    }
+  }
+  return String(raw);
 }
 
 function setValue(name: string, v: unknown) {
@@ -472,9 +503,23 @@ defineExpose({ local, partitioned });
             {{ attr.description }}
           </p>
 
+          <!--
+            read-only: the value, and NO input element. See the
+            `readOnly` prop's note — the whole widget chain below is
+            `v-else-if`, so on a read-only surface not one of them is
+            rendered and there is no handler to reach.
+          -->
+          <p
+            v-if="readOnly"
+            class="w-full rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-mono text-[11px] text-ink"
+            :data-testid="`attr-value-${attr.name}`"
+          >
+            {{ displayValue(attr) }}
+          </p>
+
           <!-- string -->
           <input
-            v-if="attr.type === 'string'"
+            v-else-if="attr.type === 'string'"
             :id="`attr-${attr.name}`"
             type="text"
             :value="(valueOf(attr) as string | undefined) ?? ''"
@@ -589,7 +634,7 @@ defineExpose({ local, partitioned });
           />
 
           <p
-            v-if="isRequiredMissing(attr)"
+            v-if="!readOnly && isRequiredMissing(attr)"
             class="font-ui text-[11px] text-signal-danger"
             :data-testid="`attr-required-${attr.name}`"
           >

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ import (
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/llm/fallback"
 	"github.com/kameas-ai/kenaz-harness/core/llm/retry"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 	artview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
 	"github.com/kameas-ai/kenaz-harness/core/wiring/knobcoverage"
 )
@@ -417,6 +419,27 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 		Messages: llmMsgs,
 		Tools:    a.tools,
 	}
+
+	// Per-request tool-catalog visibility: log exactly what's attached to
+	// THIS outbound LLM request, at the point of attachment. This is
+	// distinct from (and fires more often than) chat_runner.go's
+	// "chat.tool_discovery.ok", which logs once per StartStream when the
+	// catalog is discovered — a single StartStream can drive several
+	// Generate() calls (the tool-call loop), and this line answers "what
+	// tools did the model actually see" for each individual request
+	// straight from the log, without cross-referencing discovery output
+	// against loop iteration counts. One line per request, names only
+	// (no argument schemas) to keep it compact.
+	toolNames := make([]string, 0, len(gen.Tools))
+	for _, t := range gen.Tools {
+		toolNames = append(toolNames, t.Name)
+	}
+	sort.Strings(toolNames)
+	logging.L().Info("llm.request.tools",
+		"session_id", a.sessionID,
+		"count", len(toolNames),
+		"tools", toolNames,
+	)
 
 	// Carry the per-node sampling knobs already threaded through the
 	// kernel seam (agentgraph.LLMRequest.MaxTokens/Temperature, populated

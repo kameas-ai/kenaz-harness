@@ -54,6 +54,7 @@ import type {
   Artifact,
   ArtifactScope,
   ArtifactWithBytes,
+  CostEstimate,
   FleetSessionSyncStatus,
   FleetInboxItemView,
   MemoryScopeKind,
@@ -511,6 +512,23 @@ const contextBarTone = computed<'ok' | 'warn' | 'danger'>(() => {
   if (pct >= 85) return 'danger';
   if (pct >= 65) return 'warn';
   return 'ok';
+});
+
+// composerUsageEstimate: the ChatInput footer's token/cost readout
+// ("N tok · $M"). Reads from the SAME session.lastUsage snapshot the
+// context-window meter above already consumes (populated in near-real-time
+// via the `session.usage.updated` broker event after each LLM turn —
+// backend-context-window-length-01KQ8TD3 WP03). Previously this was a
+// hardcoded `{ tokens: 0, usd: 0 }` stub (a documented placeholder that
+// never got wired to real accounting), which is why the footer always
+// read "0 tok · $0.0000" during and after every turn even though the
+// backend usage pipeline (OpenRouter usage SSE frame → LLMProviderAdapter
+// → UsageHook → session.usage.updated) was already delivering real
+// numbers — the same numbers the context meter renders correctly.
+const composerUsageEstimate = computed<CostEstimate>(() => {
+  const usage = session.lastUsage.value;
+  if (!usage) return { tokens: 0, usd: 0 };
+  return { tokens: usage.totalTokens ?? 0, usd: usage.costUsd ?? 0 };
 });
 
 // ── send queue ─────────────────────────────────────────────────────
@@ -1962,7 +1980,7 @@ async function onShared() {
               ? 'No provider configured — go to Providers to add one before sending.'
               : undefined
           "
-          :estimate="{ tokens: 0, usd: 0 }"
+          :estimate="composerUsageEstimate"
           :session-id="sessionId"
           :error-banner="session.error.value"
           :provider-kind="activeProvider?.kind ?? ''"

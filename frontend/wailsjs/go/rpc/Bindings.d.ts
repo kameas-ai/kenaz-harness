@@ -323,6 +323,8 @@ export function Fleet_SetTelemetryConsent(arg1:string):Promise<void>;
 
 export function Graph_CancelRun(arg1:string):Promise<void>;
 
+export function Graph_CheckEdge(arg1:string,arg2:agentgraph.EdgeRef):Promise<agentgraph.EdgeCheckResult>;
+
 export function Graph_DeleteGraph(arg1:string):Promise<void>;
 
 export function Graph_GetRunStatus(arg1:string):Promise<agentgraph.RunStatus>;

@@ -64,6 +64,27 @@ type ValidationResult struct {
 	Issues []ValidationIssue `json:"issues"`
 }
 
+// EdgeEndpoint is one end of a candidate edge: a node id + a port name.
+// Mirrors coreag.EndpointRef in the camelCase wire dialect.
+type EdgeEndpoint struct {
+	Node string `json:"node"`
+	Port string `json:"port"`
+}
+
+// EdgeRef is the candidate edge CheckEdge is asked about.
+type EdgeRef struct {
+	From EdgeEndpoint `json:"from"`
+	To   EdgeEndpoint `json:"to"`
+}
+
+// EdgeCheckResult is CheckEdge's verdict. Reason carries the
+// validator's own message so the canvas shows the author exactly what
+// the save path would say — not a paraphrase.
+type EdgeCheckResult struct {
+	OK     bool   `json:"ok"`
+	Reason string `json:"reason,omitempty"`
+}
+
 // RunState enumerates the kernel-visible run lifecycle states. The
 // values mirror the kernel's emitted EventLog kinds (run_start,
 // run_paused, run_complete, node_error) so the frontend can pattern
@@ -164,6 +185,22 @@ type API interface {
 	// Validate runs the validator without persisting. The frontend
 	// editor uses this for the live error pane.
 	Validate(ctx context.Context, yaml string) (ValidationResult, error)
+
+	// CheckEdge answers "may this edge be drawn?" for the canvas, at
+	// drag time (visual-graph-authoring-01PMUX01 WP03, FR-002).
+	//
+	// It exists so there is exactly ONE source of edge-legality rules.
+	// The alternative — compiling the port table into the frontend from
+	// ports_gen — would have produced a second implementation that
+	// drifts, and the drift presents as "the canvas let me draw it and
+	// the save refused it", which teaches the author to distrust the
+	// canvas. coreag.CheckEdge and coreag.Validate call the same
+	// functions; a parity property over the bundled graphs pins it.
+	//
+	// graphJSON is the editor's current buffer as JSON (the canvas
+	// already holds it parsed, so this needs no second parse of the
+	// YAML text and cannot disagree with what is on screen).
+	CheckEdge(ctx context.Context, graphJSON string, edge EdgeRef) (EdgeCheckResult, error)
 
 	// StartRun launches a new run on the kernel.
 	StartRun(ctx context.Context, req StartRunRequest) (StartRunResponse, error)

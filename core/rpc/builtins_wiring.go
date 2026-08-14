@@ -684,6 +684,34 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 		case corelistsecrets.ToolName:
 			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
+
+		case coreaskuser.ToolName:
+			// ask_user_question (ask-user-question-interactive-01KZNP3G):
+			// always-on. This is the interactive elicitation primitive — the
+			// model's only way to pause a turn and ask the user a structured
+			// question. There is no dedicated Settings toggle for it (unlike
+			// bash/web_fetch/etc. it has no dangerous side effect of its
+			// own, it just prompts), so there is nothing to gate on; the
+			// correct default is always-on. This case was missing, which
+			// meant the tool fell through to the fail-closed default below
+			// and was denied from every tool catalog (observed twice per
+			// request in prod logs as "no explicit predicate case").
+			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
+			return true
+
+		case coresubagent.ToolName:
+			// subagent_dispatch (branch-subagent-interactive-01KZNP3B):
+			// always-on at this coarse Settings-store gate. Registration
+			// itself is already gated behind a non-nil BranchSeam (see
+			// registerBuiltinTools above — the seam is hardcoded nil today,
+			// so this tool is not currently reachable in production), and
+			// per-call authorization is enforced by Cedar's
+			// ActionToolSubagentDispatch action once the seam is wired, not
+			// by a Settings dial. Added proactively so wiring the seam in a
+			// future mission doesn't silently repeat the ask_user_question
+			// regression.
+			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
+			return true
 		}
 		// Fail-closed: an unknown tool name has no explicit predicate case.
 		// Deny the tool and emit a WARN so the developer knows to add a case

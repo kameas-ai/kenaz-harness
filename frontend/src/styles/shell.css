@@ -55,11 +55,15 @@
 
 .shell-titlebar {
   grid-area: titlebar;
-  -webkit-app-region: drag;
+  /* Wails v2 reads the --wails-draggable custom property (default
+     CSSDragProperty) — NOT Electron's -webkit-app-region, which this
+     rule used since the original tokens drop and which WKWebView
+     silently ignores: the window was never draggable. */
+  --wails-draggable: drag;
 }
 
 .shell-titlebar :is(button, a, input, [role='button']) {
-  -webkit-app-region: no-drag;
+  --wails-draggable: no-drag;
 }
 
 .shell-rail {
