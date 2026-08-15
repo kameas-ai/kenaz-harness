@@ -58,9 +58,37 @@ between WP02 and WP04" — because WP02 shipped ~13 rows per turn into a UI
 that rendered every one as an unlabelled assistant bubble, tool output
 included. WP04 is that consumer: the transcript projection
 (`frontend/src/lib/transcript.ts`) reads `kind` / `moveIndex` /
-`turnSpanId` off every row and the move boundary off the stream. The
-mission is releasable from here; WP05's collapse affordance is a
-readability improvement on a correct surface, not a fix for a broken one.
+`turnSpanId` off every row and the move boundary off the stream.
+
+The **transcript** is correct from here — narrower than "the mission is
+releasable", which this section previously claimed. WP04's review found
+three other surfaces that consume move-bearing rows and are wrong, none of
+them the transcript, all owned by WP05/WP06:
+
+- `MessageList.vue:162-170` + `MessageBubble.vue:549-553` count **rows**,
+  not turns, for "Summary of N turns" — the same arithmetic error WP04
+  fixed in `useLongSessionNudge`, 100 lines above the fix. Three
+  move-bearing turns compact to "Summary of 39 turns". Pre-existing (it
+  was already 2x wrong), and correcting it moves two green e2e
+  assertions, so it was deliberately not fixed unilaterally.
+- **Search corpus**: migration 0312's FTS trigger
+  (`core/session/migrations_search_fts.go:47`) fires on every
+  `session_messages` insert with no role filter, so every `tool_result`
+  row's raw output is now full-text indexed. `SearchModal.vue:347-350`
+  offers User/Assistant/System and **no Tool option**;
+  `SearchPalette.vue` has no role filter at all. Cmd-F degrades
+  materially on a move-bearing session.
+- **`Sessions_Export`** (Go, markdown + JSON) walks tool rows with raw
+  output — FR-006 territory.
+
+Also open, and not a projection bug: on the **revised-draft** path the
+exit gate's revised text never streams, so the live view shows the draft
+as the answer while a reload shows the revision. FR-003's "no post-hoc
+mismatch" is not fully true there until the backend delivers the
+revision on the stream.
+
+Whoever mounts `SubagentTab.vue` (dead today) must route through
+`projectTranscript` or it reinherits the 13-bubble regression.
 
 ### 2026-08-14 · `session.TranscriptEntry.ContentBlocks` has no production writer (WP02)
 
