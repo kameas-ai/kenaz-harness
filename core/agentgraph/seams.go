@@ -471,11 +471,28 @@ type HistoryEntry struct {
 	// the in-flight ledger. This is the counterpart.
 	//
 	// DISPLAY-LAYER REDACTION (spec §4): Arguments are deliberately NOT
-	// part of this shape. A tool_call entry's Content carries an ARGS
-	// SUMMARY — key names and value types, never values. The
-	// model-visible layer that needs the raw arguments is WP03's, and it
-	// composes them from the provider history, not from here.
+	// read off this shape. A tool_call entry's Content carries an ARGS
+	// SUMMARY — key names and value types, never values — and the store
+	// binding drops ToolCallRequest.Arguments on the floor rather than
+	// letting it reach session.ToolCall.Arguments, which the display
+	// surface projects.
 	ToolCalls []ToolCallRequest
+
+	// ModelToolArgs is the MODEL LAYER's raw tool arguments for a
+	// tool_call entry: tool-call id → the JSON argument object the model
+	// emitted (model-moves-transcript-01PMCH01 WP03, spec §4).
+	//
+	// It is a SEPARATE FIELD from ToolCalls[].Arguments on purpose. The
+	// two layers have opposite rules about the same bytes — display must
+	// never see values, the provider protocol cannot work without them —
+	// and giving each its own field is what stops a future edit from
+	// "unifying" them and leaking raw arguments into an exportable
+	// transcript row. It lands in session_messages.model_tool_args, which
+	// no display or export projection reads.
+	//
+	// Only meaningful on MoveKind == "tool_call"; the writer rejects it
+	// anywhere else rather than dropping it silently.
+	ModelToolArgs map[string]string
 }
 
 // HistoryWriter is the optional persistence half of the history seam,

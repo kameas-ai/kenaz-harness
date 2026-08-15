@@ -129,6 +129,29 @@ fidelity). **Owner:** 01PMCH01.
 right disposition is to delete the field and record the expressiveness
 hole as an open finding — not to leave it here for a fourth release.
 
+**READ HALF DRAINED 2026-08-14 by WP03. WRITE HALF STILL OPEN.** Be
+precise about which half moved, because the deadline above is written
+against the write half ("without either consumer *setting* it"):
+
+- *Drained.* WP03's named obligation here was "per-family rendering must
+  not re-flatten a multimodal move on its way to the provider", and it is
+  now discharged. The model-visible composition
+  (`core/rpc/model_history.go` → `textMessage`) prefers `ContentBlocks`
+  over the flattened `Content` column and carries the canonical
+  polymorphic body onward to the family renderers. Before WP03 the
+  projection was `Role`+`Content` only — a blocks-bearing row reached the
+  model with whatever text happened to sit beside them, or with nothing.
+  Pinned by `TestModelHistory_ContentBlocksAreNotReflattened`, which
+  fails if the branch is deleted.
+- *Still open.* No production code SETS `TranscriptEntry.ContentBlocks`.
+  The write half needs `coreag.HistoryEntry` to carry blocks too (it does
+  not today), which is the shape a multimodal tool result or a captured
+  generated image would travel in. That is WP05's, and the deadline above
+  stands unchanged against it: if 01PMCH01 ships with no writer, delete
+  the field rather than carry it a fourth release.
+
+**Remaining consumer:** WP05 (export/share fidelity, and the writer).
+
 Not on this list, because they are already load-bearing:
 `session.Message.{moveKind,moveIndex,moveTurnSpanID}` +
 `Manager.AppendTranscriptEntry` (the live chat write path runs through

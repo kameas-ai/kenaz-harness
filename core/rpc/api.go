@@ -4266,6 +4266,34 @@ func agenticTurnRoutingEnabledFromSettings(settingsImpl *settings.API) bool {
 	return got.AgenticTurnRouting
 }
 
+// moveFidelityHistoryEnabledFromSettings reads the LIVE half of the
+// model-visible move-fidelity gate (model-moves-transcript-01PMCH01
+// WP03, spec §4).
+//
+// Same read-at-consumption contract as the routing gate above, and the
+// same fail-closed direction — but note that "fail-closed" here means
+// FALSE even though the dial's DEFAULT is true. That is not a
+// contradiction: the default is what a healthy read of an unset setting
+// returns (MoveFidelityHistoryEnabled inverts the zero value), whereas
+// this fallback is what an UNREADABLE setting returns. Defaulting a
+// storage fault to the provider-visible composition would change every
+// subsequent request's message array because a file was briefly locked.
+//
+// Two callers share this one reader so the composition and the
+// session-stamp cannot disagree about where the lever sits.
+func moveFidelityHistoryEnabledFromSettings(settingsImpl *settings.API) bool {
+	if settingsImpl == nil || settingsImpl.Store() == nil {
+		return false
+	}
+	got, err := settingsImpl.Store().LoadAll()
+	if err != nil {
+		logging.L().Warn("chat.move_fidelity_history.read_failed",
+			"err", err.Error(), "detail", "defaulting to the classic single-message composition")
+		return false
+	}
+	return got.MoveFidelityHistoryEnabled()
+}
+
 // resolveAutonomyKnobsWithSettingsFallback folds the legacy
 // Settings.EffectiveMaxAgentTurns dial into the global autonomy layer's
 // MaxIterations override — but only when the global layer doesn't
@@ -4390,7 +4418,28 @@ func buildChatRunner(
 		}
 		return text
 	}
-	historyReader := chatSessionMessageReader{inner: historyAdapter}
+	// model-moves-transcript-01PMCH01 WP03: the live half of the
+	// move-fidelity gate. Passed as a CLOSURE, not a value, so the
+	// composition reads the dial on every request — read-at-consumption,
+	// per liveDialResolver. A read failure logs and returns false, which
+	// lands on today's composition: silently switching a user INTO a
+	// provider-visible request shape because storage hiccuped is the
+	// wrong failure direction.
+	moveFidelityHistory := func() bool {
+		return moveFidelityHistoryEnabledFromSettings(settingsImpl)
+	}
+	historyReader := chatSessionMessageReader{
+		inner:            historyAdapter,
+		moveFidelityDial: moveFidelityHistory,
+	}
+	// The same reader stamps NEW sessions with the mode they were opened
+	// under, so the durable half of the gate and the live half can never
+	// disagree about where the lever sat. Installed here rather than at
+	// manager construction because core.Core builds the manager lazily and
+	// has no settings dependency.
+	if historyAdapter != nil && historyAdapter.mgr != nil {
+		historyAdapter.mgr.SetMoveFidelityDial(moveFidelityHistory)
+	}
 	historyWriter := &llmHistoryWriter{inner: historyAdapter}
 	// model-moves-transcript-01PMCH01 WP02: the turn-span lookup for
 	// StartStream's empty-userMessage paths (keychain redrive; the
@@ -4803,32 +4852,72 @@ func (a chatToolDiscovererAdapter) Tools(ctx context.Context, sessionID string) 
 	return a.inner.Tools(ctx, sessionID)
 }
 
-// chatSessionMessageReader bridges *sessionHistoryReader (which returns
-// llm.SessionMessage) onto the chat package's narrower SessionMessageReader
-// shape (returns []agentgraph.Message).
+// chatSessionMessageReader is the model-visible history seam: what it
+// returns IS the message array the next request carries (the chat
+// graph's `history_in` node feeds `assistant_turn` directly).
+//
+// model-moves-transcript-01PMCH01 WP03 moved the projection itself into
+// composeModelHistory (core/rpc/model_history.go); this type is the
+// binding that resolves the gate and hands the rows over. It reads the
+// session manager directly rather than through sessionHistoryReader's
+// llm.SessionMessage projection because that projection drops the move
+// metadata and the model-layer tool args — the two things the
+// composition exists to read.
 type chatSessionMessageReader struct {
 	inner *sessionHistoryReader
+
+	// moveFidelityDial reports the CURRENT position of
+	// Settings.MoveFidelityHistory.
+	//
+	// READ-AT-CONSUMPTION, and this field is why: it is a func, not a
+	// bool, so the value cannot be latched when the chassis is built.
+	// History() calls it on EVERY request, so a user who turns the dial
+	// off gets the classic composition on their next message rather than
+	// after a restart — the property liveDialResolver established after
+	// the compaction boot-seed defect, and the property that makes this a
+	// usable revert lever for a provider-visible change.
+	//
+	// nil means "no settings wired" and yields classic: fail-closed.
+	moveFidelityDial func() bool
 }
 
+// History composes the model-visible message array for one request.
 func (r chatSessionMessageReader) History(ctx context.Context, sessionID string, n int) ([]coreag.Message, error) {
-	if r.inner == nil {
+	if r.inner == nil || r.inner.mgr == nil {
 		return nil, nil
 	}
-	stored, err := r.inner.ListMessages(ctx, sessionID)
+	stored, err := r.inner.mgr.ListMessages(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
-	if n > 0 && len(stored) > n {
-		stored = stored[len(stored)-n:]
+	return composeModelHistory(
+		modelHistoryRowsFrom(stored),
+		resolveMoveFidelity(r.moveFidelityHistoryEnabled(), r.sessionMoveMode(ctx, sessionID)),
+		n,
+	), nil
+}
+
+// moveFidelityHistoryEnabled reads the LIVE half of the gate, here, at
+// the point of consumption. A nil dial or a read failure yields false —
+// fail-closed onto today's composition, never onto the
+// provider-visible one.
+func (r chatSessionMessageReader) moveFidelityHistoryEnabled() bool {
+	if r.moveFidelityDial == nil {
+		return false
 	}
-	out := make([]coreag.Message, 0, len(stored))
-	for _, m := range stored {
-		out = append(out, coreag.Message{
-			Role:    m.Role,
-			Content: m.Content,
-		})
+	return r.moveFidelityDial()
+}
+
+// sessionMoveMode reads the DURABLE half of the gate: which mode this
+// session was created under. A lookup failure returns "", which
+// resolveMoveFidelity reads as classic — the same answer a
+// pre-migration session gives, and the safe one.
+func (r chatSessionMessageReader) sessionMoveMode(ctx context.Context, sessionID string) string {
+	rec, err := r.inner.mgr.Get(ctx, sessionID)
+	if err != nil {
+		return ""
 	}
-	return out, nil
+	return rec.MoveHistoryMode
 }
 
 // chatTurnSpanReader is the production binding of chat.TurnSpanReader
@@ -6087,6 +6176,11 @@ func (w *llmHistoryWriter) AppendEntry(ctx context.Context, sessionID string,
 		MoveIndex:  entry.MoveIndex,
 		TurnSpanID: entry.TurnSpanID,
 		ToolCalls:  moveToolCalls(entry.ToolCalls),
+		// MODEL-LAYER ARGUMENTS (WP03). Forwarded verbatim into the
+		// model_tool_args column — a different field, a different column
+		// and a different audience from ToolCalls above, which
+		// moveToolCalls deliberately strips of arguments.
+		ModelToolArgs: entry.ModelToolArgs,
 	})
 	if err != nil {
 		return "", err

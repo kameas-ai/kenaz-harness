@@ -276,6 +276,27 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			content: "package rpc\n\nconst zzGateProbeSQL = `\nUPDATE session_messages SET turn_span_id = ? -- json:\"turn_span_id\"\n`\n",
 		},
 		{
+			name: "single-move-writer/model-layer-args-assigned-outside-the-seam",
+			gate: "check-single-move-writer.sh",
+			// model-moves-transcript-01PMCH01 WP03 widened the gate to the
+			// MODEL LAYER's raw tool arguments. A second writer for those
+			// is worse than one for the display metadata: raw arguments
+			// stamped off-seam skip AppendTranscriptEntry's
+			// tool_call-only validation, so they can land on a row the
+			// display surface renders.
+			file:   "core/session/manager.go",
+			append: "\nfunc zzGateProbeModelArgsMint(m *Message) {\n\tm.modelToolArgs = map[string]string{\"x\": \"y\"}\n}\n",
+		},
+		{
+			name: "single-move-writer/direct-sql-on-the-model-args-column",
+			gate: "check-single-move-writer.sh",
+			// The SQL-level bypass for the same field: an UPDATE naming
+			// model_tool_args reaches the durable row without touching
+			// session.Message at all.
+			file:    "core/session/zz_gate_probe.go",
+			content: "package session\n\nconst zzGateProbeSQL = \"UPDATE session_messages SET model_tool_args = ?\"\n",
+		},
+		{
 			name: "slog-privacy/typed-attr-constructor",
 			gate: "check-no-user-content-in-slog.sh",
 			file: "core/rpc/zz_gate_probe.go",

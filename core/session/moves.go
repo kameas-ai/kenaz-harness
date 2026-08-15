@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -93,6 +94,12 @@ var (
 	// an entry with no Kind. Silently dropping them would make the seam
 	// lossy; refusing keeps "no kind == classic entry" true.
 	ErrMoveMetadataWithoutKind = errors.New("session: move metadata requires a move kind")
+	// ErrModelToolArgsWithoutToolCall means ModelToolArgs was set on an
+	// entry that is not a tool_call. The model layer reconstructs an
+	// assistant tool_use block from exactly one kind of row; arguments
+	// hanging off any other kind have no reader and would be a silent
+	// leak of raw values into a row the display layer renders.
+	ErrModelToolArgsWithoutToolCall = errors.New("session: model tool args require a tool_call move")
 )
 
 // TranscriptEntry is the input shape of the single transcript-writing
@@ -138,6 +145,20 @@ type TranscriptEntry struct {
 	// entry belongs to. Every move in one turn shares it — that shared
 	// id IS the turn's span. Required when Kind is set.
 	TurnSpanID string
+
+	// ModelToolArgs carries the MODEL LAYER's raw tool arguments for a
+	// tool_call entry: tool-call id → the JSON argument object the model
+	// emitted (model-moves-transcript-01PMCH01 WP03).
+	//
+	// Only meaningful on MoveKindToolCall. Setting it on any other kind
+	// is rejected (ErrModelToolArgsWithoutToolCall) rather than silently
+	// dropped — a silent drop is how the model layer would quietly stop
+	// being able to reconstruct a tool_use block, and the symptom would
+	// be a provider 400 three turns later, not a test failure here.
+	//
+	// See modelLayerToolArgs* below for why this is emphatically NOT the
+	// same thing as ToolCalls[].Arguments.
+	ModelToolArgs map[string]string
 }
 
 // isMove reports whether e carries move metadata.
@@ -146,6 +167,9 @@ func (e TranscriptEntry) isMove() bool { return e.Kind != "" }
 // validate enforces the move-metadata contract before anything reaches
 // the store.
 func (e TranscriptEntry) validate() error {
+	if len(e.ModelToolArgs) > 0 && e.Kind != MoveKindToolCall {
+		return fmt.Errorf("%w (kind=%q)", ErrModelToolArgsWithoutToolCall, e.Kind)
+	}
 	if !e.isMove() {
 		if e.MoveIndex != 0 || e.TurnSpanID != "" {
 			return fmt.Errorf("%w (index=%d span=%q)",
@@ -191,6 +215,7 @@ func (m *Manager) AppendTranscriptEntry(ctx context.Context, sessionID string,
 		msg.moveKind = e.Kind
 		msg.moveIndex = &idx
 		msg.moveTurnSpanID = e.TurnSpanID
+		msg.modelToolArgs = cloneModelLayerToolArgs(e.ModelToolArgs)
 	}
 	return m.AppendMessage(ctx, sessionID, msg)
 }
@@ -216,6 +241,53 @@ func (m Message) MoveIndex() *int {
 // this entry belongs to, or "" for a classic entry.
 func (m Message) TurnSpanID() string { return m.moveTurnSpanID }
 
+// ModelLayerToolArgs returns the MODEL LAYER's raw tool arguments for a
+// tool_call move — tool-call id → the JSON argument object the model
+// emitted — or nil for every other row.
+//
+// ────────────────────────────────────────────────────────────────────
+// READ THIS BEFORE USING IT (spec §4, two-layer redaction).
+//
+// There are two layers with two opposite rules about the same bytes,
+// and this is the one that MAY see values:
+//
+//	DISPLAY layer  → chat.displayArgsSummary. Argument NAMES and value
+//	                 TYPES only, never a value. It is what a tool_call
+//	                 row's Content holds, what the user reads, copies,
+//	                 exports and shares. session.ToolCall.Arguments
+//	                 belongs to this layer and is nil forever.
+//
+//	MODEL layer    → this function, consumed by the model-visible
+//	                 history composition. RAW arguments, because the
+//	                 provider protocol cannot express an assistant
+//	                 tool_use block without them and because the model
+//	                 authored them in the first place. This is history,
+//	                 not logs.
+//
+// Neither is a correct implementation of the other. If you are here
+// because a display surface is missing argument values, you want
+// displayArgsSummary and the answer is "by design". If you are here
+// because a provider rejected a request for a malformed tool_use, you
+// are in the right place.
+//
+// The returned map is a copy; mutating it does not touch the Message.
+func (m Message) ModelLayerToolArgs() map[string]string {
+	return cloneModelLayerToolArgs(m.modelToolArgs)
+}
+
+// cloneModelLayerToolArgs copies a model-layer args map, returning nil
+// for an empty input so a classic entry's persisted bytes stay NULL.
+func cloneModelLayerToolArgs(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
 // ---- SQL column plumbing -----------------------------------------------
 //
 // The store never touches the move fields directly; it round-trips them
@@ -226,9 +298,9 @@ func (m Message) TurnSpanID() string { return m.moveTurnSpanID }
 // the session_messages INSERT: (kind, move_index, turn_span_id). A
 // classic entry binds NULL/NULL/NULL, which is what every pre-existing
 // row already holds after migration 0333.
-func moveColumnValues(m Message) (kindCol, indexCol, spanCol any) {
+func moveColumnValues(m Message) (kindCol, indexCol, spanCol, modelArgsCol any) {
 	if m.moveKind == "" {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	kindCol = string(m.moveKind)
 	if m.moveIndex != nil {
@@ -237,13 +309,24 @@ func moveColumnValues(m Message) (kindCol, indexCol, spanCol any) {
 	if m.moveTurnSpanID != "" {
 		spanCol = m.moveTurnSpanID
 	}
-	return kindCol, indexCol, spanCol
+	if len(m.modelToolArgs) > 0 {
+		// Marshal failure binds NULL rather than aborting the write: a
+		// transcript row that loses its model-layer args degrades to a
+		// move the history composition will not expand (the pair-integrity
+		// sweep drops the half it cannot build), which is strictly better
+		// than failing the user's turn over a serialisation edge case.
+		if b, err := json.Marshal(m.modelToolArgs); err == nil {
+			modelArgsCol = string(b)
+		}
+	}
+	return kindCol, indexCol, spanCol, modelArgsCol
 }
 
 // applyMoveColumns hydrates the move fields from a scanned row. NULL
 // kind leaves the entry classic regardless of what the other two
 // columns hold — the kind is the discriminator.
-func applyMoveColumns(m *Message, kind sql.NullString, moveIndex sql.NullInt64, turnSpanID sql.NullString) {
+func applyMoveColumns(m *Message, kind sql.NullString, moveIndex sql.NullInt64,
+	turnSpanID sql.NullString, modelArgs sql.NullString) {
 	if !kind.Valid || kind.String == "" {
 		return
 	}
@@ -254,5 +337,14 @@ func applyMoveColumns(m *Message, kind sql.NullString, moveIndex sql.NullInt64, 
 	}
 	if turnSpanID.Valid {
 		m.moveTurnSpanID = turnSpanID.String
+	}
+	if modelArgs.Valid && modelArgs.String != "" {
+		var decoded map[string]string
+		// A corrupt payload leaves the field nil, which the composition
+		// reads as "this tool_call cannot be expanded" and its pair is
+		// dropped whole. Never a partial tool_use.
+		if err := json.Unmarshal([]byte(modelArgs.String), &decoded); err == nil {
+			m.modelToolArgs = cloneModelLayerToolArgs(decoded)
+		}
 	}
 }

@@ -72,6 +72,24 @@ type Record struct {
 	// map key is the canonical autonomy.Knob name (matches the wire
 	// shape produced by autonomy.Layer.MarshalJSON).
 	AutonomyOverrides map[autonomy.Knob]any `json:"autonomyOverrides,omitempty"`
+
+	// MoveHistoryMode records which model-visible-history mode this
+	// session was CREATED under — "moves" or "classic"
+	// (model-moves-transcript-01PMCH01 WP03, spec §4: "sessions record
+	// which mode wrote them"). Persisted in sessions.move_history_mode
+	// via migration 0334.
+	//
+	// EMPTY IS LOAD-BEARING: it is every session that predates the
+	// migration, and it resolves fail-closed to the classic composition
+	// so an in-flight conversation never changes shape underneath the
+	// model mid-thread. Read it through MoveHistoryModeFromRecord
+	// (moves_fidelity.go), never by comparing the string here — that
+	// function is the single place that decides what the values mean.
+	//
+	// Stamped once at creation and never rewritten: the live dial is a
+	// separate, read-at-consumption input, and this one is the memory of
+	// how the transcript was actually written.
+	MoveHistoryMode string `json:"moveHistoryMode,omitempty"`
 }
 
 // LastUsage is the per-session token-usage snapshot persisted after each
@@ -231,4 +249,19 @@ type Message struct {
 	moveKind       MoveKind
 	moveIndex      *int
 	moveTurnSpanID string
+
+	// modelToolArgs is the MODEL LAYER's copy of a tool_call move's raw
+	// arguments, keyed by tool-call id, each value the JSON the model
+	// emitted (model-moves-transcript-01PMCH01 WP03, spec §4).
+	//
+	// UNEXPORTED for the same reason as the three above, and read
+	// through ModelLayerToolArgs(). It is NOT interchangeable with
+	// ToolCalls[].Arguments, which is the DISPLAY layer's field and
+	// stays nil forever: see the header of migrations_move_fidelity.go
+	// for why the two layers get two homes, and moves.go for the two
+	// deliberately-unalike helper names.
+	//
+	// nil on every classic entry and on every move that is not a
+	// tool_call.
+	modelToolArgs map[string]string
 }

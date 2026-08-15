@@ -6943,6 +6943,7 @@ export namespace settings {
 	    mcpAutoRestartDisabled?: boolean;
 	    agenticTurnRouting?: boolean;
 	    autoTitleDisabled?: boolean;
+	    moveFidelityHistoryDisabled?: boolean;
 	    fsReadDisabled?: boolean;
 	    fsWriteDisabled?: boolean;
 	    todoDisabled?: boolean;
@@ -7027,6 +7028,7 @@ export namespace settings {
 	        this.mcpAutoRestartDisabled = source["mcpAutoRestartDisabled"];
 	        this.agenticTurnRouting = source["agenticTurnRouting"];
 	        this.autoTitleDisabled = source["autoTitleDisabled"];
+	        this.moveFidelityHistoryDisabled = source["moveFidelityHistoryDisabled"];
 	        this.fsReadDisabled = source["fsReadDisabled"];
 	        this.fsWriteDisabled = source["fsWriteDisabled"];
 	        this.todoDisabled = source["todoDisabled"];

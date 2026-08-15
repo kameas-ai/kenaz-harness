@@ -661,3 +661,242 @@ func TestAppendTranscriptEntry_ToolResultErrorSurvivesReload(t *testing.T) {
 		t.Errorf("pairing id = %q, want tu-bad", got.ToolCalls[0].ID)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Model-layer tool arguments (model-moves-transcript-01PMCH01 WP03).
+// ---------------------------------------------------------------------------
+
+// TestAppendTranscriptEntry_SQLRoundTripsModelToolArgs is the schema
+// round-trip for the MODEL LAYER's raw arguments — the half of spec §4's
+// two-layer redaction that legitimately carries values, because the
+// provider protocol cannot reconstruct an assistant tool_use block
+// without them.
+//
+// It must run against SQLITE, not the memory store. The memory store
+// keeps *session.Message values verbatim, so it exercises neither
+// moveColumnValues' JSON encode nor applyMoveColumns' decode — the two
+// places the column can actually be lost. WP03's composition tests use
+// the memory store (they are about projection, not persistence), and a
+// mutation that deleted the model_tool_args bind from the INSERT
+// survived every one of them. This test is what killed it.
+//
+// Mutation checks (each kills this test):
+//   - drop `model_tool_args` from the INSERT column list in
+//     sqlStore.AppendMessage → reloaded args are nil;
+//   - make moveColumnValues skip the marshal (bind nil) → same;
+//   - drop the modelArgs decode from applyMoveColumns → same;
+//   - delete migration0334 from Migrations() → the INSERT fails with
+//     "no such column: model_tool_args".
+func TestAppendTranscriptEntry_SQLRoundTripsModelToolArgs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mgr, sid := newMovesSQLManager(t)
+
+	turn, err := mgr.AppendTranscriptEntry(ctx, sid, session.TranscriptEntry{
+		Role: session.RoleUser, Content: "run the build",
+	})
+	if err != nil {
+		t.Fatalf("append user turn: %v", err)
+	}
+
+	const rawArgs = `{"cmd":"go build ./...","timeout":60}`
+	if _, err := mgr.AppendTranscriptEntry(ctx, sid, session.TranscriptEntry{
+		Role: session.RoleTool, Content: "bash(cmd=<string>, timeout=<number>)",
+		Kind: session.MoveKindToolCall, MoveIndex: 0, TurnSpanID: turn.ID,
+		ToolCalls:     []session.ToolCall{{ID: "tc-1", Name: "bash"}},
+		ModelToolArgs: map[string]string{"tc-1": rawArgs},
+	}); err != nil {
+		t.Fatalf("append tool_call: %v", err)
+	}
+
+	got, err := mgr.ListMessages(ctx, sid)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("ListMessages returned %d rows, want 2", len(got))
+	}
+
+	// The model layer survived the round trip...
+	args := got[1].ModelLayerToolArgs()
+	if len(args) != 1 || args["tc-1"] != rawArgs {
+		t.Fatalf("ModelLayerToolArgs = %#v, want map[tc-1:%s] — the raw arguments did not "+
+			"survive persistence, so the composition cannot rebuild a tool_use block", args, rawArgs)
+	}
+
+	// ...and the DISPLAY layer still holds nothing (spec §4). These two
+	// assertions belong in one test on purpose: they are the two halves
+	// of one contract, and a change that satisfies either by violating
+	// the other is the failure this pins.
+	for _, tc := range got[1].ToolCalls {
+		if len(tc.Arguments) > 0 {
+			t.Errorf("session.ToolCall.Arguments = %#v on a persisted tool_call row — "+
+				"raw arguments reached the display layer's field", tc.Arguments)
+		}
+	}
+
+	// The human turn stays clean.
+	if a := got[0].ModelLayerToolArgs(); a != nil {
+		t.Errorf("classic row carries model-layer args: %#v", a)
+	}
+}
+
+// TestAppendTranscriptEntry_RejectsModelArgsOnNonToolCall pins that the
+// model layer's raw arguments cannot be attached to a kind that has no
+// reader for them. A silent drop would be the lossy-seam failure WP01
+// designed this validation against; a silent ACCEPT would put raw
+// argument values on an assistant_move or final row, which the display
+// surface renders.
+//
+// Mutation: delete the ErrModelToolArgsWithoutToolCall clause from
+// TranscriptEntry.validate → this passes and the row persists.
+func TestAppendTranscriptEntry_RejectsModelArgsOnNonToolCall(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mgr, sid := newMovesSQLManager(t)
+
+	turn, err := mgr.AppendTranscriptEntry(ctx, sid, session.TranscriptEntry{
+		Role: session.RoleUser, Content: "go",
+	})
+	if err != nil {
+		t.Fatalf("append user turn: %v", err)
+	}
+
+	for _, kind := range []session.MoveKind{
+		session.MoveKindAssistantMove,
+		session.MoveKindToolResult,
+		session.MoveKindFinal,
+	} {
+		_, err := mgr.AppendTranscriptEntry(ctx, sid, session.TranscriptEntry{
+			Role: session.RoleAssistant, Content: "text",
+			Kind: kind, MoveIndex: 0, TurnSpanID: turn.ID,
+			ModelToolArgs: map[string]string{"tc-1": `{"secret":"sk-live"}`},
+		})
+		if !errors.Is(err, session.ErrModelToolArgsWithoutToolCall) {
+			t.Errorf("kind %q: err = %v, want ErrModelToolArgsWithoutToolCall", kind, err)
+		}
+	}
+}
+
+// TestGetMessage_SQLRoundTripsModelToolArgs covers the OTHER SQL read
+// path for the model layer's arguments.
+//
+// sqlStore has two row hydrators — listMessages and GetMessage — with
+// separately-written SELECT lists and separately-written Scan calls, and
+// WP03 widened both. Only listMessages was pinned. A mutation that
+// passed a zero sql.NullString to applyMoveColumns inside GetMessage
+// (i.e. GetMessage silently stops hydrating the column) survived the
+// whole suite.
+//
+// Mutation: pass sql.NullString{} for modelToolArgsCol in GetMessage, or
+// drop model_tool_args from its SELECT list → this fails.
+func TestGetMessage_SQLRoundTripsModelToolArgs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mgr, sid := newMovesSQLManager(t)
+
+	turn, err := mgr.AppendTranscriptEntry(ctx, sid, session.TranscriptEntry{
+		Role: session.RoleUser, Content: "run the build",
+	})
+	if err != nil {
+		t.Fatalf("append user turn: %v", err)
+	}
+
+	const rawArgs = `{"cmd":"go build ./..."}`
+	call, err := mgr.AppendTranscriptEntry(ctx, sid, session.TranscriptEntry{
+		Role: session.RoleTool, Content: "bash(cmd=<string>)",
+		Kind: session.MoveKindToolCall, MoveIndex: 0, TurnSpanID: turn.ID,
+		ToolCalls:     []session.ToolCall{{ID: "tc-1", Name: "bash"}},
+		ModelToolArgs: map[string]string{"tc-1": rawArgs},
+	})
+	if err != nil {
+		t.Fatalf("append tool_call: %v", err)
+	}
+
+	got, err := mgr.GetMessage(ctx, sid, call.ID)
+	if err != nil {
+		t.Fatalf("GetMessage: %v", err)
+	}
+	args := got.ModelLayerToolArgs()
+	if len(args) != 1 || args["tc-1"] != rawArgs {
+		t.Fatalf("GetMessage ModelLayerToolArgs = %#v, want map[tc-1:%s] — the second "+
+			"row hydrator does not carry the model layer", args, rawArgs)
+	}
+	// The display layer stays empty on this path too.
+	for _, tc := range got.ToolCalls {
+		if len(tc.Arguments) > 0 {
+			t.Errorf("GetMessage surfaced raw arguments in the DISPLAY field: %#v", tc.Arguments)
+		}
+	}
+}
+
+// TestAppendContinuation_SQLRoundTripsModelToolArgs covers the third SQL
+// WRITE path. sqlStore has three INSERTs into session_messages
+// (AppendMessage, AppendContinuation, and the migration's own), and WP03
+// widened two. Only AppendMessage was pinned; a mutation that bound NULL
+// for model_tool_args in AppendContinuation survived the whole suite.
+//
+// A continuation of a tool_call move is what a resumed/interrupted turn
+// produces, so losing the column here means the resumed turn's tool_use
+// can no longer be rebuilt — the pair-integrity sweep then drops both
+// halves and the model silently forgets it ran the tool.
+//
+// Mutation: bind nil for modelArgsCol in AppendContinuation's INSERT →
+// this fails.
+func TestAppendContinuation_SQLRoundTripsModelToolArgs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mgr, sid := newMovesSQLManager(t)
+
+	turn, err := mgr.AppendTranscriptEntry(ctx, sid, session.TranscriptEntry{
+		Role: session.RoleUser, Content: "go",
+	})
+	if err != nil {
+		t.Fatalf("user turn: %v", err)
+	}
+	const rawArgs = `{"path":"foo.txt"}`
+	original, err := mgr.AppendTranscriptEntry(ctx, sid, session.TranscriptEntry{
+		Role: session.RoleTool, Content: "read(path=<string>)",
+		Kind: session.MoveKindToolCall, MoveIndex: 1, TurnSpanID: turn.ID,
+		ToolCalls:     []session.ToolCall{{ID: "tc-1", Name: "read"}},
+		ModelToolArgs: map[string]string{"tc-1": rawArgs},
+	})
+	if err != nil {
+		t.Fatalf("tool_call move: %v", err)
+	}
+
+	// Build the continuation from the RELOADED row so it carries the
+	// unexported model-layer field the way production does.
+	msgs, err := mgr.ListMessages(ctx, sid)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	var source session.Message
+	for _, m := range msgs {
+		if m.ID == original.ID {
+			source = m
+		}
+	}
+	if len(source.ModelLayerToolArgs()) != 1 {
+		t.Fatalf("precondition: the source row lost its model-layer args")
+	}
+	source.ID = ""
+
+	cont, err := mgr.AppendContinuation(ctx, sid, original.ID, source)
+	if err != nil {
+		t.Fatalf("AppendContinuation: %v", err)
+	}
+
+	// The DURABLE row is the point: reload rather than trusting the
+	// value the call returned.
+	reloaded, err := mgr.GetMessage(ctx, sid, cont.ID)
+	if err != nil {
+		t.Fatalf("GetMessage: %v", err)
+	}
+	args := reloaded.ModelLayerToolArgs()
+	if len(args) != 1 || args["tc-1"] != rawArgs {
+		t.Fatalf("continuation ModelLayerToolArgs = %#v, want map[tc-1:%s] — the "+
+			"continuation INSERT dropped the model layer, so a resumed turn's "+
+			"tool_use can no longer be rebuilt", args, rawArgs)
+	}
+}
