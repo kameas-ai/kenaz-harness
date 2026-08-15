@@ -176,3 +176,30 @@ func TestMoveToolCalls_NeverCarriesRawArguments(t *testing.T) {
 		t.Error("moveToolCalls(nil) should stay nil so a classic entry's wire bytes are unchanged")
 	}
 }
+
+// TestMoveToolCalls_CarriesTheErrorFlag pins the other half of the same
+// projection (model-moves-transcript-01PMCH01 WP04): the failure a
+// tool_result recorded must reach the durable row, or a reloaded chat
+// chip silently downgrades every failed tool to "ok".
+//
+// The pairing identity and the redaction rule are pinned above; this is
+// the third fact the seam carries, and it was the one nothing watched —
+// verified by mutation: dropping `IsError: c.IsError` from moveToolCalls
+// survived the entire suite before this test existed.
+func TestMoveToolCalls_CarriesTheErrorFlag(t *testing.T) {
+	t.Parallel()
+
+	got := moveToolCalls([]coreag.ToolCallRequest{
+		{ID: "tu-ok", Name: "fs__read"},
+		{ID: "tu-bad", Name: "sh__exec", IsError: true},
+	})
+	if len(got) != 2 {
+		t.Fatalf("moveToolCalls returned %d calls, want 2", len(got))
+	}
+	if got[0].IsError {
+		t.Error("a successful call was projected as an error")
+	}
+	if !got[1].IsError {
+		t.Error("a failed call lost its error flag — a reload would render the chip as ok")
+	}
+}

@@ -552,6 +552,23 @@ type MoveBoundary struct {
 	// chip's running→ok/error transition to the right chip.
 	ToolName   string `json:"tool_name,omitempty"`
 	ToolCallID string `json:"tool_call_id,omitempty"`
+	// ArgsSummary is the DISPLAY-LAYER args summary of a "tool_call"
+	// boundary — argument names and value types, never values. It is the
+	// same string the entry persists as its Content, carried on the
+	// boundary so the live chip and the reloaded chip read identically
+	// (model-moves-transcript-01PMCH01 WP04). Raw arguments never travel
+	// this field; the model-visible layer that needs them composes them
+	// from the provider history.
+	ArgsSummary string `json:"args_summary,omitempty"`
+	// IsError reports that a "tool_result" boundary closes its pair with
+	// a failure — the tool returned an error result, or the dispatch
+	// itself failed. It is the live half of the chip's running→ok/error
+	// transition; the reloaded half is session.ToolCall.IsError on the
+	// persisted tool_result row. Meaningless on any other Kind.
+	//
+	// Without it "error" is a chip state nothing can ever reach, and a
+	// chip that reads "ok" for a failed tool is worse than no chip.
+	IsError bool `json:"is_error,omitempty"`
 }
 
 // GeneratedImagePayload carries the payload for a StreamGeneratedImage event.

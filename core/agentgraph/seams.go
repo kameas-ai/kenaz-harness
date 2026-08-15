@@ -111,6 +111,13 @@ type ToolCallRequest struct {
 	ID        string
 	Name      string
 	Arguments string // JSON-encoded args
+	// IsError is set only on the ToolCallRequest a HistoryEntry of kind
+	// "tool_result" carries, where it means "the call this entry answers
+	// failed" (model-moves-transcript-01PMCH01 WP04). It is the durable
+	// half of the chat chip's running→ok/error transition, so a reloaded
+	// session shows the same failure the live view showed. Always false
+	// on a request the model actually issued.
+	IsError bool
 }
 
 // LLMResponse is the narrow result returned to the kernel.
@@ -194,6 +201,14 @@ type StreamEvent struct {
 	// reload be reconciled entry-for-entry.
 	MoveIndex int    `json:"move_index,omitempty"`
 	MoveKind  string `json:"move_kind,omitempty"`
+	// MoveArgsSummary / MoveIsError complete a tool boundary so the chat
+	// surface can render the chip without waiting for the persisted row
+	// (model-moves-transcript-01PMCH01 WP04). MoveArgsSummary is the
+	// DISPLAY-LAYER summary — argument names and value types, never
+	// values, and never the raw ToolArgs above. MoveIsError says the
+	// tool_result boundary closes its pair with a failure.
+	MoveArgsSummary string `json:"move_args_summary,omitempty"`
+	MoveIsError     bool   `json:"move_is_error,omitempty"`
 }
 
 // StreamSink is the kernel-side seam the LLMNode-bound provider feeds

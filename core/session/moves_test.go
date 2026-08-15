@@ -590,3 +590,74 @@ func TestAppendTranscriptEntry_CarriesContentBlocks(t *testing.T) {
 		t.Errorf("TurnSpanID = %q, want %q", got.TurnSpanID(), turn.ID)
 	}
 }
+
+// TestAppendTranscriptEntry_ToolResultErrorSurvivesReload pins the
+// durability of the chat chip's error signal
+// (model-moves-transcript-01PMCH01 WP04).
+//
+// A tool_result move records whether its call failed. That fact reaches
+// the live chat surface on the stream's move boundary, but the surface
+// has to render the same chip after a reload — FR-003's "no post-hoc
+// mismatch between what you watched and what's stored". Since a reload
+// reads the row, the flag has to survive the round trip.
+//
+// It needs no migration: session_messages.tool_calls holds the
+// []session.ToolCall as JSON, so the field rides the existing column and
+// rows written before the mission simply omit it. That is precisely why
+// it needs a test — a `json:"-"` tag would silently sever it with no
+// schema change to notice.
+//
+// Mutation check (kills this test): change session.ToolCall.IsError's
+// tag to `json:"-"` → the reloaded row reports the failed call as
+// successful.
+func TestAppendTranscriptEntry_ToolResultErrorSurvivesReload(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mgr, sid := newMovesSQLManager(t)
+
+	turn, err := mgr.AppendTranscriptEntry(ctx, sid, session.TranscriptEntry{
+		Role: session.RoleUser, Content: "run it",
+	})
+	if err != nil {
+		t.Fatalf("user turn: %v", err)
+	}
+	if _, err := mgr.AppendTranscriptEntry(ctx, sid, session.TranscriptEntry{
+		Role: session.RoleTool, Content: "cmd:string",
+		ToolCalls:  []session.ToolCall{{ID: "tu-bad", Name: "sh__exec"}},
+		Kind:       session.MoveKindToolCall,
+		MoveIndex:  1,
+		TurnSpanID: turn.ID,
+	}); err != nil {
+		t.Fatalf("tool_call move: %v", err)
+	}
+	stored, err := mgr.AppendTranscriptEntry(ctx, sid, session.TranscriptEntry{
+		Role: session.RoleTool, Content: "permission denied",
+		ToolCalls:  []session.ToolCall{{ID: "tu-bad", Name: "sh__exec", IsError: true}},
+		Kind:       session.MoveKindToolResult,
+		MoveIndex:  2,
+		TurnSpanID: turn.ID,
+	})
+	if err != nil {
+		t.Fatalf("tool_result move: %v", err)
+	}
+
+	msgs, err := mgr.ListMessages(ctx, sid)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	var got session.Message
+	for _, m := range msgs {
+		if m.ID == stored.ID {
+			got = m
+		}
+	}
+	if len(got.ToolCalls) != 1 {
+		t.Fatalf("reloaded ToolCalls = %d, want 1: %+v", len(got.ToolCalls), got.ToolCalls)
+	}
+	if !got.ToolCalls[0].IsError {
+		t.Error("the failed call reloaded as a success — a reloaded chip would read ok")
+	}
+	if got.ToolCalls[0].ID != "tu-bad" {
+		t.Errorf("pairing id = %q, want tu-bad", got.ToolCalls[0].ID)
+	}
+}

@@ -117,6 +117,15 @@ type ToolCall struct {
 	// @secret: reference token in the tool arguments. Never carries
 	// plaintext — provenance only (model-secret-references-01KW7M5A WP14).
 	UsedSecrets bool `json:"usedSecrets,omitempty"`
+	// IsError marks a tool_result move whose call failed
+	// (model-moves-transcript-01PMCH01 WP04). It is what makes a reloaded
+	// chat chip show the same failed tool the live view showed, instead
+	// of degrading every resolved call to "ok".
+	//
+	// It needs no migration: session_messages.tool_calls stores this
+	// struct as JSON, so the field round-trips through the existing
+	// column and rows written before the mission simply omit it.
+	IsError bool `json:"isError,omitempty"`
 }
 
 // Message is one row in session_messages. Sequence is monotonically

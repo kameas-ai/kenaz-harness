@@ -78,6 +78,11 @@ type scriptedPool struct {
 	entries []ToolEntry
 	results [][]byte
 	calls   []string
+	// failOn makes a named "server__tool" dispatch fail, so the
+	// tool_result move it produces is an error result
+	// (model-moves-transcript-01PMCH01 WP04 — the chip's running→error
+	// transition needs a failure to transition on).
+	failOn map[string]error
 }
 
 func (p *scriptedPool) Tools(context.Context) ([]ToolEntry, error) {
@@ -92,6 +97,9 @@ func (p *scriptedPool) Call(_ context.Context, server, tool string, _ []byte) ([
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.calls = append(p.calls, server+"__"+tool)
+	if err, bad := p.failOn[server+"__"+tool]; bad {
+		return nil, err
+	}
 	if len(p.results) == 0 {
 		return []byte(`{"ok":true}`), nil
 	}
@@ -1187,4 +1195,140 @@ func describeMoves(es []coreag.HistoryEntry) string {
 		parts = append(parts, fmt.Sprintf("%d:%s", e.MoveIndex, e.MoveKind))
 	}
 	return "[" + strings.Join(parts, " ") + "]"
+}
+
+// ---------------------------------------------------------------------------
+// model-moves-transcript-01PMCH01 WP04 — the chip's two facts.
+//
+// WP02 shipped the boundary with a tool's identity but nothing a chip
+// could render: no args summary (so a live chip and a reloaded chip
+// would disagree the moment the row landed) and no error flag (so
+// "error" was a chip state nothing could ever reach and every failed
+// tool would read as "ok"). These pin both, on the stream AND on the
+// persisted row, because reload parity is the requirement — not just
+// live rendering.
+// ---------------------------------------------------------------------------
+
+// TestMoves_ToolCallBoundaryCarriesTheArgsSummary asserts the live chip
+// shows exactly what the reloaded chip will: the boundary's ArgsSummary
+// equals the tool_call entry's Content, and neither is the raw value.
+//
+// MUTATION EVIDENCE (run and confirmed to fail): drop `argsSummary` from
+// the moveDetail in RecordToolCall -> the boundary carries "" and the
+// equality assertion fails.
+func TestMoves_ToolCallBoundaryCarriesTheArgsSummary(t *testing.T) {
+	t.Parallel()
+	const secret = "sk-live-DO-NOT-STREAM-THIS"
+
+	reg := &scriptedRegistry{}
+	args, err := json.Marshal(map[string]any{"path": "/etc/kenaz.toml", "token": secret})
+	if err != nil {
+		t.Fatalf("marshal args: %v", err)
+	}
+	reg.push(toolTurn("writing", "tu-1", "fs__write", string(args)))
+	reg.push(textTurn("done"))
+
+	pool := &scriptedPool{entries: []ToolEntry{{Server: "fs", Name: "write"}}}
+	runner, broker, writer := buildMoveRunner(t, reg, pool)
+	if _, err := runner.StartStream(context.Background(), "p", "s", "", "write it"); err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	if closed := waitForClosed(t, broker); closed.Reason == "backend-error" {
+		t.Fatalf("run failed: %s", closed.Message)
+	}
+
+	var callMark *corellm.MoveBoundary
+	for i, m := range boundaries(broker) {
+		if m.Kind == moveKindToolCall {
+			callMark = &boundaries(broker)[i]
+			break
+		}
+	}
+	if callMark == nil {
+		t.Fatal("no tool_call boundary on the stream")
+	}
+	if callMark.ArgsSummary == "" {
+		t.Fatal("tool_call boundary carries no args summary — a live chip would show only a name")
+	}
+	if strings.Contains(callMark.ArgsSummary, secret) {
+		t.Fatalf("the boundary streamed a raw argument value: %q", callMark.ArgsSummary)
+	}
+
+	var entry *coreag.HistoryEntry
+	for i, e := range moveEntries(writer) {
+		if e.MoveKind == moveKindToolCall {
+			entry = &moveEntries(writer)[i]
+			break
+		}
+	}
+	if entry == nil {
+		t.Fatal("no tool_call entry persisted")
+	}
+	// The live chip and the reloaded chip read the same string. This is
+	// the whole reason the field exists.
+	if callMark.ArgsSummary != entry.Content {
+		t.Errorf("boundary summary %q != persisted summary %q — live and reload would disagree",
+			callMark.ArgsSummary, entry.Content)
+	}
+}
+
+// TestMoves_FailedToolIsErrorOnBoundaryAndRow asserts a failed tool
+// reaches the chip as an error BOTH live and on reload, and that a
+// successful one does not.
+//
+// MUTATION EVIDENCE (run and confirmed to fail):
+//   - drop `isError` from the moveDetail in RecordToolResult -> the
+//     boundary assertion fails (live chip reads "ok" for a failed tool).
+//   - drop IsError from the ToolCallRequest RecordToolResult persists ->
+//     the persisted assertion fails (a reload downgrades the failure).
+func TestMoves_FailedToolIsErrorOnBoundaryAndRow(t *testing.T) {
+	t.Parallel()
+
+	reg := &scriptedRegistry{}
+	reg.push(toolTurn("reading", "tu-ok", "fs__read", `{"path":"a"}`))
+	reg.push(toolTurn("running", "tu-bad", "sh__exec", `{"cmd":"b"}`))
+	reg.push(textTurn("done"))
+
+	pool := &scriptedPool{
+		entries: []ToolEntry{{Server: "fs", Name: "read"}, {Server: "sh", Name: "exec"}},
+		failOn:  map[string]error{"sh__exec": fmt.Errorf("permission denied")},
+	}
+	runner, broker, writer := buildMoveRunner(t, reg, pool)
+	if _, err := runner.StartStream(context.Background(), "p", "s", "", "go"); err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	waitForClosed(t, broker)
+
+	gotMarks := map[string]bool{}
+	for _, m := range boundaries(broker) {
+		if m.Kind == moveKindToolResult {
+			gotMarks[m.ToolCallID] = m.IsError
+		}
+	}
+	if len(gotMarks) != 2 {
+		t.Fatalf("want 2 tool_result boundaries, got %d: %+v", len(gotMarks), gotMarks)
+	}
+	if gotMarks["tu-ok"] {
+		t.Error("the successful tool's boundary says is_error — the chip would show a false failure")
+	}
+	if !gotMarks["tu-bad"] {
+		t.Error("the failed tool's boundary does not say is_error — the chip would read ok")
+	}
+
+	gotRows := map[string]bool{}
+	for _, e := range moveEntries(writer) {
+		if e.MoveKind != moveKindToolResult || len(e.ToolCalls) == 0 {
+			continue
+		}
+		gotRows[e.ToolCalls[0].ID] = e.ToolCalls[0].IsError
+	}
+	if len(gotRows) != 2 {
+		t.Fatalf("want 2 persisted tool_result rows, got %d: %+v", len(gotRows), gotRows)
+	}
+	if gotRows["tu-ok"] {
+		t.Error("the successful tool persisted is_error")
+	}
+	if !gotRows["tu-bad"] {
+		t.Error("the failed tool did not persist is_error — a reload would downgrade it to ok")
+	}
 }

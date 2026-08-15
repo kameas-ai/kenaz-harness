@@ -92,15 +92,15 @@ function onTokensInput(evt: Event): void {
         Long-session nudge — turn threshold
       </h2>
       <p class="mt-1 font-ui text-[11px] text-ink-muted">
-        Number of user-assistant turn pairs (half the message count) after which the nudge
-        banner appears. Default {{ DEFAULT_NUDGE_TURNS }}. Set to 0 to use the default.
+        Number of human turns after which the nudge banner appears.
+        Default {{ DEFAULT_NUDGE_TURNS }}. Set to 0 to use the default.
       </p>
       <div class="mt-2">
         <input
           type="number"
           :min="MIN_NUDGE_TURNS"
           :value="nudgeTurns"
-          aria-label="Turn-pair threshold for long-session nudge"
+          aria-label="Turn threshold for long-session nudge"
           class="w-28 rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink"
           data-testid="nudge-turns-input"
           @input="onTurnsInput"
@@ -114,7 +114,8 @@ function onTokensInput(evt: Event): void {
           {{ turnsError }}
         </p>
         <p v-else class="mt-1 font-ui text-[11px] text-ink-muted">
-          Pairs, not individual messages. 30 pairs = 60 messages.
+          One turn is one message you send, however many model moves and
+          tool calls answering it produced.
         </p>
       </div>
     </section>

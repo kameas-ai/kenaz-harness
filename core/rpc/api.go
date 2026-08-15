@@ -6121,7 +6121,7 @@ func moveToolCalls(calls []coreag.ToolCallRequest) []session.ToolCall {
 	}
 	out := make([]session.ToolCall, 0, len(calls))
 	for _, c := range calls {
-		out = append(out, session.ToolCall{ID: c.ID, Name: c.Name})
+		out = append(out, session.ToolCall{ID: c.ID, Name: c.Name, IsError: c.IsError})
 	}
 	return out
 }

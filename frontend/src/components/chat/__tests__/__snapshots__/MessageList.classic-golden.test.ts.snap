@@ -1,0 +1,457 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`MessageList — classic (pre-moves) session > renders byte-identically to the pre-WP04 surface 1`] = `
+"<div data-v-f2ca4f16="" class="relative flex flex-col h-full">
+  <div data-v-f2ca4f16="" class="flex-1 overflow-y-auto px-4 py-3 space-y-3" role="log" aria-live="polite" aria-relevant="additions" aria-label="Conversation messages">
+    <!--v-if-->
+    <!-- Swept-count placeholder (compaction-strategy-ui WP07). Renders
+           above the first message when archived rows have been hard-
+           deleted by the soft-archive sweep. SweptCount > 0 only after
+           WP09 wires the per-session counter; until then the path is
+           exercised but never visible. -->
+    <!--v-if-->
+    <div data-v-f2ca4f16="" data-message-id="c-1">
+      <article data-v-f2ca4f16="" class="flex justify-end group relative" role="article" aria-label="USER message">
+        <div class="max-w-[78ch] px-4 py-3 rounded-md font-ui text-sm leading-relaxed bg-surface-3 text-ink border border-border-muted">
+          <header class="font-ui text-[10px] uppercase tracking-[0.18em] mb-1 flex items-center text-ink-subtle"><span>USER</span>
+            <!--v-if-->
+            <!-- Token-meter chip (per-message-token-meter-01KR3PQR).
+             Show only on completed (non-streaming) assistant turns when the
+             toggle is on and the row carries telemetry data. -->
+            <!--v-if-->
+            <!--v-if-->
+            <div class="relative ml-auto"><button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2" aria-label="Remember this message" aria-haspopup="menu" aria-expanded="false" data-testid="remember-message"> 📌 </button>
+              <!--v-if-->
+            </div><button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1" aria-label="Copy message text" data-testid="copy-message-button">copy</button>
+            <div class="relative"><button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1" aria-label="Save as artifact" data-testid="save-artifact-button"> ⎘ </button>
+              <!--v-if-->
+            </div>
+            <!-- "Branch from this turn" button (branching-ux-polish-01KQ8TD7 WP05).
+             Visible on assistant messages with a stable messageId when
+             HARNESS_BRANCHING_POLISH is on. Disabled while streaming. -->
+            <!--v-if-->
+          </header>
+          <!-- Compaction summary indicator (WP07): rendered on the
+           synthetic summary row regardless of toggle state. -->
+          <!--v-if-->
+          <!-- Archived row tag + jump-to-summary chip (WP07). -->
+          <!--v-if-->
+          <!-- tool-call rows: namespaced monospace line each -->
+          <!--v-if--><span data-v-94dd88f1="" class="markdown-block"><!-- Rendered markdown body with injected code-block-wrap containers --><span data-v-94dd88f1="" class="md-body"><p>What does the config do?</p>
+</span><!-- Streaming caret — brass per privacy CI #4 (brass strictly for live state) -->
+          <!--v-if-->
+          <!-- Undo toast (rendered outside v-html so Vue controls it) -->
+          <transition-stub data-v-94dd88f1="" name="undo-fade" appear="false" persisted="false" css="true">
+            <!--v-if-->
+          </transition-stub></span>
+          <!-- Stream-failure sub-line (long-turn-resilience WP00). Surfaced
+           when the SSE stream closed with a non-completed reason and
+           the partial bubble was committed anyway. WP03 will replace
+           this with a Resume button. -->
+          <!--v-if-->
+          <!-- model_output generated-image inline previews
+           (multimodal-io-extended-01KQ8TD2 WP06). Rendered above the chip
+           row so the full thumbnail is visible without opening a modal. -->
+          <!--v-if-->
+          <!--v-if-->
+          <!--
+        Long-turn-resilience-01KR3PRS WP03 — partial-output footer.
+        Renders for assistant rows whose stream dropped before the
+        kernel could land a clean assistant turn. When recoverable, a
+        Resume button surfaces; otherwise a static caption tells the
+        user the turn cannot be resumed (tool_use already ran) and to
+        re-issue the request.
+      -->
+          <!--v-if-->
+        </div>
+      </article>
+    </div>
+    <div data-v-f2ca4f16="" data-message-id="c-2">
+      <article data-v-f2ca4f16="" class="flex justify-start group relative" role="article" aria-label="ASSISTANT message">
+        <div class="max-w-[78ch] px-4 py-3 rounded-md font-ui text-sm leading-relaxed bg-surface-1 text-ink border border-border-muted">
+          <header class="font-ui text-[10px] uppercase tracking-[0.18em] mb-1 flex items-center text-ink-subtle"><span>ASSISTANT</span>
+            <!--v-if-->
+            <!-- Token-meter chip (per-message-token-meter-01KR3PQR).
+             Show only on completed (non-streaming) assistant turns when the
+             toggle is on and the row carries telemetry data. --><span class="relative inline-flex ml-2 normal-case tracking-normal" data-testid="token-meter-chip"><button type="button" class="inline-flex items-center font-mono text-[10px] text-ink-subtle tabular-nums rounded-sm border border-transparent px-1 py-0 hover:border-border-muted hover:text-ink-muted transition-colors" aria-label="Token usage: 120 → 40 = 160 tok · $0.0020" aria-expanded="false" data-testid="token-meter-chip-button">120 → 40 = 160 tok · $0.0020</button><!-- Breakdown popover --><!--v-if--></span>
+            <!--v-if-->
+            <div class="relative ml-auto"><button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2" aria-label="Remember this message" aria-haspopup="menu" aria-expanded="false" data-testid="remember-message"> 📌 </button>
+              <!--v-if-->
+            </div><button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1" aria-label="Copy message text" data-testid="copy-message-button">copy</button>
+            <div class="relative"><button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1" aria-label="Save as artifact" data-testid="save-artifact-button"> ⎘ </button>
+              <!--v-if-->
+            </div>
+            <!-- "Branch from this turn" button (branching-ux-polish-01KQ8TD7 WP05).
+             Visible on assistant messages with a stable messageId when
+             HARNESS_BRANCHING_POLISH is on. Disabled while streaming. --><button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1 disabled:opacity-40 disabled:cursor-not-allowed" title="Branch from this turn" aria-label="Branch from this turn" data-testid="branch-from-turn-button"> ⎇ </button>
+          </header>
+          <!-- Compaction summary indicator (WP07): rendered on the
+           synthetic summary row regardless of toggle state. -->
+          <!--v-if-->
+          <!-- Archived row tag + jump-to-summary chip (WP07). -->
+          <!--v-if-->
+          <!-- tool-call rows: namespaced monospace line each -->
+          <!--v-if--><span data-v-94dd88f1="" class="markdown-block"><!-- Rendered markdown body with injected code-block-wrap containers --><span data-v-94dd88f1="" class="md-body"><p>It selects the provider.</p>
+</span><!-- Streaming caret — brass per privacy CI #4 (brass strictly for live state) -->
+          <!--v-if-->
+          <!-- Undo toast (rendered outside v-html so Vue controls it) -->
+          <transition-stub data-v-94dd88f1="" name="undo-fade" appear="false" persisted="false" css="true">
+            <!--v-if-->
+          </transition-stub></span>
+          <!-- Stream-failure sub-line (long-turn-resilience WP00). Surfaced
+           when the SSE stream closed with a non-completed reason and
+           the partial bubble was committed anyway. WP03 will replace
+           this with a Resume button. -->
+          <!--v-if-->
+          <!-- model_output generated-image inline previews
+           (multimodal-io-extended-01KQ8TD2 WP06). Rendered above the chip
+           row so the full thumbnail is visible without opening a modal. -->
+          <!--v-if-->
+          <!--v-if-->
+          <!--
+        Long-turn-resilience-01KR3PRS WP03 — partial-output footer.
+        Renders for assistant rows whose stream dropped before the
+        kernel could land a clean assistant turn. When recoverable, a
+        Resume button surfaces; otherwise a static caption tells the
+        user the turn cannot be resumed (tool_use already ran) and to
+        re-issue the request.
+      -->
+          <!--v-if-->
+        </div>
+      </article>
+    </div>
+    <div data-v-f2ca4f16="" data-message-id="c-3">
+      <article data-v-f2ca4f16="" class="flex justify-start group relative" role="log" aria-label="TOOL message">
+        <div class="font-mono text-[12px] text-ink-muted px-3 py-1">
+          <!--v-if-->
+          <!-- Compaction summary indicator (WP07): rendered on the
+           synthetic summary row regardless of toggle state. -->
+          <!--v-if-->
+          <!-- Archived row tag + jump-to-summary chip (WP07). -->
+          <!--v-if-->
+          <!-- tool-call rows: namespaced monospace line each -->
+          <ul class="space-y-1 mb-2">
+            <li class="font-mono text-[12px] grid items-baseline gap-3" style="grid-template-columns: 14ch 1fr auto;"><span class="uppercase tracking-[0.12em] text-[11px] text-accent flex items-center gap-1"> tool · read_file <!-- Lock icon: visible when the tool call resolved a @secret: ref
+                 (model-secret-references-01KW7M5A WP14). No tooltip text
+                 carries secret identity — icon only. --><!--v-if--></span><span class="text-ink truncate">path:string</span>
+              <!--v-if-->
+            </li>
+          </ul><span class="font-mono text-[12px] text-ink-muted">read_file → 24 lines</span>
+          <!-- Stream-failure sub-line (long-turn-resilience WP00). Surfaced
+           when the SSE stream closed with a non-completed reason and
+           the partial bubble was committed anyway. WP03 will replace
+           this with a Resume button. -->
+          <!--v-if-->
+          <!-- model_output generated-image inline previews
+           (multimodal-io-extended-01KQ8TD2 WP06). Rendered above the chip
+           row so the full thumbnail is visible without opening a modal. -->
+          <!--v-if-->
+          <!--v-if-->
+          <!--
+        Long-turn-resilience-01KR3PRS WP03 — partial-output footer.
+        Renders for assistant rows whose stream dropped before the
+        kernel could land a clean assistant turn. When recoverable, a
+        Resume button surfaces; otherwise a static caption tells the
+        user the turn cannot be resumed (tool_use already ran) and to
+        re-issue the request.
+      -->
+          <!--v-if-->
+        </div>
+      </article>
+    </div>
+    <div data-v-f2ca4f16="" data-message-id="c-4">
+      <article data-v-f2ca4f16="" class="flex justify-center group relative" role="article" aria-label="SYSTEM message">
+        <div class="max-w-[78ch] px-4 py-3 rounded-md font-ui text-sm leading-relaxed bg-transparent text-ink-muted italic">
+          <header class="font-ui text-[10px] uppercase tracking-[0.18em] mb-1 flex items-center text-ink-subtle"><span>SYSTEM</span>
+            <!--v-if-->
+            <!-- Token-meter chip (per-message-token-meter-01KR3PQR).
+             Show only on completed (non-streaming) assistant turns when the
+             toggle is on and the row carries telemetry data. -->
+            <!--v-if-->
+            <!--v-if-->
+            <div class="relative ml-auto"><button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2" aria-label="Remember this message" aria-haspopup="menu" aria-expanded="false" data-testid="remember-message"> 📌 </button>
+              <!--v-if-->
+            </div><button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1" aria-label="Copy message text" data-testid="copy-message-button">copy</button>
+            <div class="relative"><button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1" aria-label="Save as artifact" data-testid="save-artifact-button"> ⎘ </button>
+              <!--v-if-->
+            </div>
+            <!-- "Branch from this turn" button (branching-ux-polish-01KQ8TD7 WP05).
+             Visible on assistant messages with a stable messageId when
+             HARNESS_BRANCHING_POLISH is on. Disabled while streaming. -->
+            <!--v-if-->
+          </header>
+          <!-- Compaction summary indicator (WP07): rendered on the
+           synthetic summary row regardless of toggle state. -->
+          <!--v-if-->
+          <!-- Archived row tag + jump-to-summary chip (WP07). -->
+          <!--v-if-->
+          <!-- tool-call rows: namespaced monospace line each -->
+          <!--v-if--><span data-v-94dd88f1="" class="markdown-block"><!-- Rendered markdown body with injected code-block-wrap containers --><span data-v-94dd88f1="" class="md-body"><p>Model switched to sonnet.</p>
+</span><!-- Streaming caret — brass per privacy CI #4 (brass strictly for live state) -->
+          <!--v-if-->
+          <!-- Undo toast (rendered outside v-html so Vue controls it) -->
+          <transition-stub data-v-94dd88f1="" name="undo-fade" appear="false" persisted="false" css="true">
+            <!--v-if-->
+          </transition-stub></span>
+          <!-- Stream-failure sub-line (long-turn-resilience WP00). Surfaced
+           when the SSE stream closed with a non-completed reason and
+           the partial bubble was committed anyway. WP03 will replace
+           this with a Resume button. -->
+          <!--v-if-->
+          <!-- model_output generated-image inline previews
+           (multimodal-io-extended-01KQ8TD2 WP06). Rendered above the chip
+           row so the full thumbnail is visible without opening a modal. -->
+          <!--v-if-->
+          <!--v-if-->
+          <!--
+        Long-turn-resilience-01KR3PRS WP03 — partial-output footer.
+        Renders for assistant rows whose stream dropped before the
+        kernel could land a clean assistant turn. When recoverable, a
+        Resume button surfaces; otherwise a static caption tells the
+        user the turn cannot be resumed (tool_use already ran) and to
+        re-issue the request.
+      -->
+          <!--v-if-->
+        </div>
+      </article>
+    </div>
+    <div data-v-f2ca4f16="" data-message-id="c-5">
+      <article data-v-f2ca4f16="" class="flex justify-end group relative" role="article" aria-label="USER message">
+        <div class="max-w-[78ch] px-4 py-3 rounded-md font-ui text-sm leading-relaxed bg-surface-3 text-ink border border-border-muted">
+          <header class="font-ui text-[10px] uppercase tracking-[0.18em] mb-1 flex items-center text-ink-subtle"><span>USER</span>
+            <!--v-if-->
+            <!-- Token-meter chip (per-message-token-meter-01KR3PQR).
+             Show only on completed (non-streaming) assistant turns when the
+             toggle is on and the row carries telemetry data. -->
+            <!--v-if-->
+            <!--v-if-->
+            <div class="relative ml-auto"><button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2" aria-label="Remember this message" aria-haspopup="menu" aria-expanded="false" data-testid="remember-message"> 📌 </button>
+              <!--v-if-->
+            </div><button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1" aria-label="Copy message text" data-testid="copy-message-button">copy</button>
+            <div class="relative"><button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1" aria-label="Save as artifact" data-testid="save-artifact-button"> ⎘ </button>
+              <!--v-if-->
+            </div>
+            <!-- "Branch from this turn" button (branching-ux-polish-01KQ8TD7 WP05).
+             Visible on assistant messages with a stable messageId when
+             HARNESS_BRANCHING_POLISH is on. Disabled while streaming. -->
+            <!--v-if-->
+          </header>
+          <!-- Compaction summary indicator (WP07): rendered on the
+           synthetic summary row regardless of toggle state. -->
+          <!--v-if-->
+          <!-- Archived row tag + jump-to-summary chip (WP07). -->
+          <!--v-if-->
+          <!-- tool-call rows: namespaced monospace line each -->
+          <!--v-if--><span data-v-94dd88f1="" class="markdown-block"><!-- Rendered markdown body with injected code-block-wrap containers --><span data-v-94dd88f1="" class="md-body"><p>And the fallback?</p>
+</span><!-- Streaming caret — brass per privacy CI #4 (brass strictly for live state) -->
+          <!--v-if-->
+          <!-- Undo toast (rendered outside v-html so Vue controls it) -->
+          <transition-stub data-v-94dd88f1="" name="undo-fade" appear="false" persisted="false" css="true">
+            <!--v-if-->
+          </transition-stub></span>
+          <!-- Stream-failure sub-line (long-turn-resilience WP00). Surfaced
+           when the SSE stream closed with a non-completed reason and
+           the partial bubble was committed anyway. WP03 will replace
+           this with a Resume button. -->
+          <!--v-if-->
+          <!-- model_output generated-image inline previews
+           (multimodal-io-extended-01KQ8TD2 WP06). Rendered above the chip
+           row so the full thumbnail is visible without opening a modal. -->
+          <!--v-if-->
+          <!--v-if-->
+          <!--
+        Long-turn-resilience-01KR3PRS WP03 — partial-output footer.
+        Renders for assistant rows whose stream dropped before the
+        kernel could land a clean assistant turn. When recoverable, a
+        Resume button surfaces; otherwise a static caption tells the
+        user the turn cannot be resumed (tool_use already ran) and to
+        re-issue the request.
+      -->
+          <!--v-if-->
+        </div>
+      </article>
+    </div>
+    <div data-v-f2ca4f16="" data-message-id="c-6">
+      <article data-v-f2ca4f16="" class="flex justify-start group relative" role="article" aria-label="ASSISTANT message">
+        <div class="max-w-[78ch] px-4 py-3 rounded-md font-ui text-sm leading-relaxed bg-surface-1 text-ink border border-border-muted">
+          <header class="font-ui text-[10px] uppercase tracking-[0.18em] mb-1 flex items-center text-ink-subtle"><span>ASSISTANT</span>
+            <!--v-if-->
+            <!-- Token-meter chip (per-message-token-meter-01KR3PQR).
+             Show only on completed (non-streaming) assistant turns when the
+             toggle is on and the row carries telemetry data. -->
+            <!--v-if-->
+            <!--v-if-->
+            <div class="relative ml-auto"><button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2" aria-label="Remember this message" aria-haspopup="menu" aria-expanded="false" data-testid="remember-message"> 📌 </button>
+              <!--v-if-->
+            </div><button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1" aria-label="Copy message text" data-testid="copy-message-button">copy</button>
+            <div class="relative"><button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1" aria-label="Save as artifact" data-testid="save-artifact-button"> ⎘ </button>
+              <!--v-if-->
+            </div>
+            <!-- "Branch from this turn" button (branching-ux-polish-01KQ8TD7 WP05).
+             Visible on assistant messages with a stable messageId when
+             HARNESS_BRANCHING_POLISH is on. Disabled while streaming. --><button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1 disabled:opacity-40 disabled:cursor-not-allowed" title="Branch from this turn" aria-label="Branch from this turn" data-testid="branch-from-turn-button"> ⎇ </button>
+          </header>
+          <!-- Compaction summary indicator (WP07): rendered on the
+           synthetic summary row regardless of toggle state. -->
+          <div class="mb-2 flex items-center gap-1.5 font-ui text-[11px] text-ink-muted" data-testid="message-summary-indicator"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-layers-icon h-3.5 w-3.5 text-accent" aria-hidden="true">
+              <path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"></path>
+              <path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"></path>
+              <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"></path>
+            </svg><span> Summary of 1 turn</span></div><!-- Archived row tag + jump-to-summary chip (WP07). -->
+          <!--v-if-->
+          <!-- tool-call rows: namespaced monospace line each -->
+          <!--v-if--><span data-v-94dd88f1="" class="markdown-block"><!-- Rendered markdown body with injected code-block-wrap containers --><span data-v-94dd88f1="" class="md-body"><p>Falls back to the secondary profile.</p>
+</span><!-- Streaming caret — brass per privacy CI #4 (brass strictly for live state) -->
+          <!--v-if-->
+          <!-- Undo toast (rendered outside v-html so Vue controls it) -->
+          <transition-stub data-v-94dd88f1="" name="undo-fade" appear="false" persisted="false" css="true">
+            <!--v-if-->
+          </transition-stub></span>
+          <!-- Stream-failure sub-line (long-turn-resilience WP00). Surfaced
+           when the SSE stream closed with a non-completed reason and
+           the partial bubble was committed anyway. WP03 will replace
+           this with a Resume button. -->
+          <!--v-if-->
+          <!-- model_output generated-image inline previews
+           (multimodal-io-extended-01KQ8TD2 WP06). Rendered above the chip
+           row so the full thumbnail is visible without opening a modal. -->
+          <!--v-if-->
+          <!--v-if-->
+          <!--
+        Long-turn-resilience-01KR3PRS WP03 — partial-output footer.
+        Renders for assistant rows whose stream dropped before the
+        kernel could land a clean assistant turn. When recoverable, a
+        Resume button surfaces; otherwise a static caption tells the
+        user the turn cannot be resumed (tool_use already ran) and to
+        re-issue the request.
+      -->
+          <!--v-if-->
+        </div>
+      </article>
+    </div>
+    <div data-v-f2ca4f16="" data-message-id="c-7">
+      <article data-v-f2ca4f16="" class="flex justify-start group relative" role="article" aria-label="ASSISTANT message">
+        <div class="max-w-[78ch] px-4 py-3 rounded-md font-ui text-sm leading-relaxed bg-surface-1 text-ink border border-border-muted opacity-60 border-l-2 border-l-accent-hairline">
+          <header class="font-ui text-[10px] uppercase tracking-[0.18em] mb-1 flex items-center text-ink-subtle"><span>ASSISTANT</span>
+            <!--v-if-->
+            <!-- Token-meter chip (per-message-token-meter-01KR3PQR).
+             Show only on completed (non-streaming) assistant turns when the
+             toggle is on and the row carries telemetry data. -->
+            <!--v-if-->
+            <!--v-if-->
+            <div class="relative ml-auto"><button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2" aria-label="Remember this message" aria-haspopup="menu" aria-expanded="false" data-testid="remember-message"> 📌 </button>
+              <!--v-if-->
+            </div><button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1" aria-label="Copy message text" data-testid="copy-message-button">copy</button>
+            <div class="relative"><button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1" aria-label="Save as artifact" data-testid="save-artifact-button"> ⎘ </button>
+              <!--v-if-->
+            </div>
+            <!-- "Branch from this turn" button (branching-ux-polish-01KQ8TD7 WP05).
+             Visible on assistant messages with a stable messageId when
+             HARNESS_BRANCHING_POLISH is on. Disabled while streaming. --><button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1 disabled:opacity-40 disabled:cursor-not-allowed" title="Branch from this turn" aria-label="Branch from this turn" data-testid="branch-from-turn-button"> ⎇ </button>
+          </header>
+          <!-- Compaction summary indicator (WP07): rendered on the
+           synthetic summary row regardless of toggle state. -->
+          <!--v-if-->
+          <!-- Archived row tag + jump-to-summary chip (WP07). -->
+          <div class="mb-2 flex items-center gap-1.5 font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle" data-testid="message-archived-tag"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-archive-icon h-3 w-3" aria-hidden="true">
+              <rect width="20" height="5" x="2" y="3" rx="1"></rect>
+              <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"></path>
+              <path d="M10 12h4"></path>
+            </svg><span>archived</span><button type="button" class="ml-2 normal-case tracking-normal text-[11px] text-accent hover:underline" data-testid="message-archived-jump" data-summary-id="c-6"> → summary </button></div><!-- tool-call rows: namespaced monospace line each -->
+          <!--v-if--><span data-v-94dd88f1="" class="markdown-block"><!-- Rendered markdown body with injected code-block-wrap containers --><span data-v-94dd88f1="" class="md-body"><p>An older turn.</p>
+</span><!-- Streaming caret — brass per privacy CI #4 (brass strictly for live state) -->
+          <!--v-if-->
+          <!-- Undo toast (rendered outside v-html so Vue controls it) -->
+          <transition-stub data-v-94dd88f1="" name="undo-fade" appear="false" persisted="false" css="true">
+            <!--v-if-->
+          </transition-stub></span>
+          <!-- Stream-failure sub-line (long-turn-resilience WP00). Surfaced
+           when the SSE stream closed with a non-completed reason and
+           the partial bubble was committed anyway. WP03 will replace
+           this with a Resume button. -->
+          <!--v-if-->
+          <!-- model_output generated-image inline previews
+           (multimodal-io-extended-01KQ8TD2 WP06). Rendered above the chip
+           row so the full thumbnail is visible without opening a modal. -->
+          <!--v-if-->
+          <!--v-if-->
+          <!--
+        Long-turn-resilience-01KR3PRS WP03 — partial-output footer.
+        Renders for assistant rows whose stream dropped before the
+        kernel could land a clean assistant turn. When recoverable, a
+        Resume button surfaces; otherwise a static caption tells the
+        user the turn cannot be resumed (tool_use already ran) and to
+        re-issue the request.
+      -->
+          <!--v-if-->
+        </div>
+      </article>
+    </div>
+    <div data-v-f2ca4f16="" data-message-id="c-8">
+      <article data-v-f2ca4f16="" class="flex justify-start group relative" role="article" aria-label="ASSISTANT message">
+        <div class="max-w-[78ch] px-4 py-3 rounded-md font-ui text-sm leading-relaxed bg-surface-1 text-ink border border-border-muted">
+          <header class="font-ui text-[10px] uppercase tracking-[0.18em] mb-1 flex items-center text-ink-subtle"><span>ASSISTANT</span>
+            <!--v-if-->
+            <!-- Token-meter chip (per-message-token-meter-01KR3PQR).
+             Show only on completed (non-streaming) assistant turns when the
+             toggle is on and the row carries telemetry data. -->
+            <!--v-if-->
+            <!--v-if-->
+            <div class="relative ml-auto"><button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2" aria-label="Remember this message" aria-haspopup="menu" aria-expanded="false" data-testid="remember-message"> 📌 </button>
+              <!--v-if-->
+            </div><button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1" aria-label="Copy message text" data-testid="copy-message-button">copy</button>
+            <div class="relative"><button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1" aria-label="Save as artifact" data-testid="save-artifact-button"> ⎘ </button>
+              <!--v-if-->
+            </div>
+            <!-- "Branch from this turn" button (branching-ux-polish-01KQ8TD7 WP05).
+             Visible on assistant messages with a stable messageId when
+             HARNESS_BRANCHING_POLISH is on. Disabled while streaming. --><button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1 disabled:opacity-40 disabled:cursor-not-allowed" title="Branch from this turn" aria-label="Branch from this turn" data-testid="branch-from-turn-button"> ⎇ </button>
+          </header>
+          <!-- Compaction summary indicator (WP07): rendered on the
+           synthetic summary row regardless of toggle state. -->
+          <!--v-if-->
+          <!-- Archived row tag + jump-to-summary chip (WP07). -->
+          <!--v-if-->
+          <!-- tool-call rows: namespaced monospace line each -->
+          <!--v-if--><span data-v-94dd88f1="" class="markdown-block"><!-- Rendered markdown body with injected code-block-wrap containers --><span data-v-94dd88f1="" class="md-body"><p>Interrupted repl</p>
+</span><!-- Streaming caret — brass per privacy CI #4 (brass strictly for live state) -->
+          <!--v-if-->
+          <!-- Undo toast (rendered outside v-html so Vue controls it) -->
+          <transition-stub data-v-94dd88f1="" name="undo-fade" appear="false" persisted="false" css="true">
+            <!--v-if-->
+          </transition-stub></span>
+          <!-- Stream-failure sub-line (long-turn-resilience WP00). Surfaced
+           when the SSE stream closed with a non-completed reason and
+           the partial bubble was committed anyway. WP03 will replace
+           this with a Resume button. -->
+          <!--v-if-->
+          <!-- model_output generated-image inline previews
+           (multimodal-io-extended-01KQ8TD2 WP06). Rendered above the chip
+           row so the full thumbnail is visible without opening a modal. -->
+          <!--v-if-->
+          <!--v-if-->
+          <!--
+        Long-turn-resilience-01KR3PRS WP03 — partial-output footer.
+        Renders for assistant rows whose stream dropped before the
+        kernel could land a clean assistant turn. When recoverable, a
+        Resume button surfaces; otherwise a static caption tells the
+        user the turn cannot be resumed (tool_use already ran) and to
+        re-issue the request.
+      -->
+          <div class="mt-2 flex items-center gap-2 font-ui text-[11px] text-ink-subtle" data-testid="message-partial-output-footer"><span data-failure-kind="unknown">Connection lost — partial reply preserved.</span><button type="button" class="ml-1 px-1.5 py-0.5 rounded border border-accent/60 text-accent hover:bg-accent/10 normal-case tracking-normal" data-testid="message-partial-resume-button" data-message-id="c-8"> Resume </button></div>
+        </div>
+      </article>
+    </div>
+    <!-- Thinking indicator: visible from the moment send() opens a
+           stream until the first chunk arrives. -->
+    <!--v-if-->
+    <!-- Session-full banner. Distinct from the generic error below
+           because "Send failed" is factually wrong here: the send
+           succeeded, the message is in the transcript, and the model
+           never got to answer. Retrying is not the remedy, so this
+           banner offers the same escape the long-session nudge does. -->
+    <!--v-if-->
+  </div>
+  <!--v-if-->
+</div>"
+`;

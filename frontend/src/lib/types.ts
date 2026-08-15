@@ -990,9 +990,14 @@ export interface Settings {
   // ── Long-session nudge dials (v0.5.6 memory-trust-signals) ──────────
 
   /**
-   * longSessionNudgeTurns — number of user-assistant turn pairs (half
-   * the total message count) after which the inline long-session nudge
-   * banner appears. Default 30. Zero == use default.
+   * longSessionNudgeTurns — number of HUMAN TURNS after which the
+   * inline long-session nudge banner appears. Default 30. Zero == use
+   * default.
+   *
+   * One turn is one user message, however many model moves and tool
+   * entries answering it produced. It used to be described as "half the
+   * message count", which held only while a turn was always two rows;
+   * a move-bearing turn persists ~13 (model-moves-transcript-01PMCH01).
    */
   longSessionNudgeTurns?: number;
 
@@ -1162,6 +1167,15 @@ export interface ToolCall {
    * chat UI.
    */
   usedSecrets?: boolean;
+  /**
+   * Set on the `tool_result` move whose call failed — either the tool
+   * returned an error result or the dispatch itself did
+   * (model-moves-transcript-01PMCH01 WP04). It is the durable half of
+   * the inline tool chip's running→ok/error transition; the live half is
+   * `is_error` on the stream's move boundary. Absent on every classic
+   * row and on every `tool_call`.
+   */
+  isError?: boolean;
 }
 
 export interface Message {

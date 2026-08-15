@@ -96,6 +96,10 @@ type ToolCall struct {
 	// @secret: reference. Never carries plaintext — provenance only
 	// (model-secret-references-01KW7M5A WP14).
 	UsedSecrets bool `json:"usedSecrets,omitempty"`
+	// IsError marks the tool_result move whose call failed, so a
+	// reloaded chat chip renders the same running→error transition the
+	// live stream rendered (model-moves-transcript-01PMCH01 WP04).
+	IsError bool `json:"isError,omitempty"`
 }
 
 // Message is a single chat-message entry. NEVER carries credential fields.
