@@ -26,7 +26,6 @@ import HooksSettingsView from '@/views/settings/HooksSettingsView.vue';
 import WorkflowsSettingsPanel from '@/views/settings/WorkflowsSettingsPanel.vue';
 import ScheduledChatsPanel from '@/views/settings/scheduledchat/ScheduledChatsPanel.vue';
 import ModelAccessibleSecretsPanel from '@/views/settings/ModelAccessibleSecretsPanel.vue';
-import TasksPanel from '@/views/settings/TasksPanel.vue';
 import LLMRoutingPanel from '@/views/settings/LLMRoutingPanel.vue';
 import AuditSettingsPanel from '@/views/settings/AuditSettingsPanel.vue';
 // mission 01NLOGS01 WP05 — Runtime Logs panel
@@ -129,12 +128,9 @@ const showSecretsTab = computed<boolean>(() => {
   return typeof v === 'string' && v === 'secrets';
 });
 
-// background-task-monitor-01KZNP3C WP05 — Tasks sub-tab.
-// Disambiguates via ?tab=tasks. Mount switch is in <template> below.
-const showTasksTab = computed<boolean>(() => {
-  const v = route?.query?.tab;
-  return typeof v === 'string' && v === 'tasks';
-});
+// The Tasks sub-tab (background-task-monitor-01KZNP3C WP05) was removed
+// 2026-08-14. TasksPanel.vue is retained but unmounted — see
+// docs/unwired-ledger.md.
 
 // model-fallback-routing-01NDFSEX04 WP05 — LLM Routing sub-tab.
 // Disambiguates via ?tab=llm-routing. Mount switch is in <template> below.
@@ -205,7 +201,6 @@ const SECTION_HEADS: Record<string, { title: string; subtitle: string }> = {
   slashcmds: { title: 'Slash commands', subtitle: 'Author and manage user slash commands.' },
   workflows: { title: 'Workflows', subtitle: 'Workflow extension and authoring settings.' },
   hooks: { title: 'Hooks', subtitle: 'Lifecycle hooks that fire on chat-pipeline events.' },
-  tasks: { title: 'Tasks', subtitle: 'Background task monitor settings.' },
   scheduledchats: { title: 'Scheduled chats', subtitle: 'Recurring chat runs on a schedule.' },
   secrets: { title: 'Secrets', subtitle: 'Model-accessible secret references.' },
   'llm-routing': { title: 'LLM routing', subtitle: 'Model fallback and routing rules.' },
@@ -1134,15 +1129,6 @@ onMounted(() => {
       data-testid="settings-secrets-pane"
     >
       <ModelAccessibleSecretsPanel />
-    </div>
-
-    <!-- background-task-monitor-01KZNP3C WP05 — Tasks sub-tab. -->
-    <div
-      v-else-if="showTasksTab"
-      class="px-6 py-4"
-      data-testid="settings-tasks-pane"
-    >
-      <TasksPanel />
     </div>
 
     <!-- model-fallback-routing-01NDFSEX04 WP05 — LLM Routing sub-tab. -->

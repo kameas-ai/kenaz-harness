@@ -362,6 +362,32 @@ before `cmd.Start()`, attach the registry writers, pass
 `BackgroundSpawn`/`BackgroundEnd` and the `HookFirer` from `core/rpc`, then
 register `kenaz__monitor` with its predicate case.
 
+**2026-08-14 · Follow-up — the Settings → Tasks *nav entry* is removed.**
+The producer gap above is unchanged, but it was reachable: `SettingsTabs.vue`
+rendered a visible "Tasks" link under the Runtime group, and `SettingsView.vue`
+mounted `TasksPanel` behind `?tab=tasks`. A user could click it and get a
+permanently empty panel — the lie this ritual exists to end. Removed: the
+nav entry + its `CheckSquare` import, the `showTasksTab` computed, the
+`tasks` `SECTION_HEADS` row and the template branch. Pinned by a new spec in
+`SettingsTabsNav.spec.ts` ("does not offer a Tasks entry"); the rail count
+moved 24 → 23.
+
+Producer-absence proof re-confirmed at removal time, both arms:
+`core/tools/bash/Options.BackgroundSpawn` has assignments only in
+`run_in_background_test.go`; the sole `Register` call into a tasks registry
+is `core/tools/subagentdispatch/tool.go:240`, guarded by `opts.Tasks != nil`,
+and that field's only production assignment is `Tasks: nil`
+(`core/rpc/builtins_wiring.go:317`). `tasksview.NewAPI(taskReg)` therefore
+serves an always-empty registry.
+
+**Disposition: parked, not deleted** — `core/tasks`, the four RPCs and
+`TasksPanel.vue` all stay. This is an *escalation*, not a delete: whether
+background execution ships at all is a product call, and deleting the
+consumer half of a wanted feature destroys tested work. Removing the *link*
+is correct under either outcome. If background execution ships, remount the
+panel and restore the nav entry in the same PR that wires the producer.
+**Owner:** unassigned — same owner as the parent entry.
+
 ### 2026-08-14 · `cedar.CheckLLMFallback` — the LLM fallback chain is ungated
 
 The highest-priority wire on this list. `core/llm/fallback`'s Runner is on
