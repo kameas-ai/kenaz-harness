@@ -42,8 +42,15 @@ func TestMigration0312_FTSTableExists(t *testing.T) {
 	}
 }
 
-// TestMigration0312_TriggersExist confirms all three sync triggers are
-// present in sqlite_master after migration 0312 applies.
+// TestMigration0312_TriggersExist confirms the FTS sync triggers are
+// present in sqlite_master after the sessions migrations apply.
+//
+// The set is FOUR, not 0312's three: migration 0335
+// (model-moves-transcript-01PMCH01 WP06) replaces them with role-guarded
+// equivalents and splits the single messages_fts_au into a delete half
+// keyed on old.role and an insert half keyed on new.role. See
+// migrations_search_fts_tool_rows.go for why the split is required
+// rather than cosmetic.
 func TestMigration0312_TriggersExist(t *testing.T) {
 	t.Parallel()
 	db := openDB(t)
@@ -51,7 +58,8 @@ func TestMigration0312_TriggersExist(t *testing.T) {
 
 	for _, trig := range []string{
 		"messages_fts_ai",
-		"messages_fts_au",
+		"messages_fts_au_del",
+		"messages_fts_au_ins",
 		"messages_fts_ad",
 	} {
 		var got string

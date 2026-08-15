@@ -137,58 +137,96 @@ func (s *DropOldestStrategy) Compact(_ context.Context, in ContextSlice, opts Co
 	}, nil
 }
 
-// dropOldestUnits groups a chronologically-ordered message slice into
-// trim-atomic units for DropOldestStrategy. Two shapes of unit exist:
+// dropOldestUnits partitions a chronologically-ordered message slice
+// into trim-atomic units for DropOldestStrategy: contiguous index runs
+// that the front-to-back trim may only take or leave WHOLE, so no cut
+// point can separate a tool_use from its tool_result.
 //
-//   - A single non-tool-pair message (any message that isn't an
-//     assistant tool_use turn or one of its tool_results).
-//   - An assistant message carrying one or more ToolCalls, plus every
-//     immediately-following tool-role message whose ToolCallID answers
-//     one of those calls. Multi-tool-call turns pull in all of their
-//     results as one unit.
+// THE ALGORITHM IS A SPAN PARTITION, NOT A LOOKAHEAD
+// (model-moves-transcript-01PMCH01 WP06).
 //
-// Tool results are only ever attached to the assistant turn that
-// requested them, and only when they appear contiguously right after
-// it — which is how the kernel actually appends tool_use/tool_result
-// pairs (a genuine agentic turn never interleaves an unrelated message
-// between a tool_use and its results). A tool-role message that
-// doesn't get claimed this way is an orphan (defensive: malformed
-// input, a duplicate/mismatched ToolCallID, or a result whose
-// tool_use never made it into this slice) and is dropped outright
-// rather than emitted as a stranded unit of its own — keeping it would
-// reproduce exactly the dangling-tool_result wire hazard this pairing
-// logic exists to prevent.
+// The previous implementation grew a unit by walking forward from an
+// assistant tool_use turn and absorbing tool-role messages while they
+// answered one of ITS calls, stopping at the first message that did not.
+// Its own comment named the assumption: "a genuine agentic turn never
+// interleaves an unrelated message between a tool_use and its results."
+// That is false for the shape the kernel produces most often on a
+// move-bearing session. exec_dispatch runs up to max_concurrent tools in
+// parallel and the journal records each call before dispatch and each
+// result on resolution, so two calls that resolve out of order persist —
+// and therefore compose — as
+//
+//	[use A] [use B] [result B] [result A]
+//
+// The lookahead closed A's unit at [use A] (message 1 is not a tool
+// row), gave B the unit [use B, result B], and reached [result A] with
+// nothing claiming it — the orphan branch then DROPPED IT SILENTLY.
+// repairToolPairs, seeing a call with no surviving result, removed
+// [use A] as well. Pair A vanished from the compacted history at every
+// cut point, including cut points that dropped nothing at all: the
+// grouping deleted it before the trim loop ever ran. That is not the
+// orphan hazard this code was written for, it is worse — an intact pair
+// destroyed by the machinery meant to protect it.
+//
+// So: bind by REACH rather than by adjacency. Every tool id contributes
+// the closed index interval [first mention, last mention], covering both
+// halves however far apart and in whichever order they were stored. The
+// intervals are then merged transitively — the standard partition-labels
+// walk — and each merged run becomes one unit. Interleaved pairs, nested
+// pairs, a pair split by an unrelated row, a result stored before its
+// call, and an id reused across turns all fall out of the same rule
+// instead of needing a case each.
+//
+// A row no interval covers is its own unit, including a tool row whose
+// counterpart is absent from this slice. Such a row is a genuine orphan
+// and repairToolPairs removes it from the OUTPUT — the difference from
+// before is that it is no longer removed from the trim's accounting,
+// where its bytes were being ignored while it still occupied the
+// history.
 func dropOldestUnits(msgs []agentgraph.Message) [][]agentgraph.Message {
-	units := make([][]agentgraph.Message, 0, len(msgs))
-	for i := 0; i < len(msgs); {
-		m := msgs[i]
-		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
-			need := make(map[string]bool, len(m.ToolCalls))
-			for _, tc := range m.ToolCalls {
-				if tc.ID != "" {
-					need[tc.ID] = true
-				}
-			}
-			unit := []agentgraph.Message{m}
-			j := i + 1
-			for j < len(msgs) && len(need) > 0 && msgs[j].Role == "tool" && need[msgs[j].ToolCallID] {
-				unit = append(unit, msgs[j])
-				delete(need, msgs[j].ToolCallID)
-				j++
-			}
-			units = append(units, unit)
-			i = j
-			continue
+	// reach[i] is the furthest index that index i is bound to by a tool
+	// id it participates in. Self-bound by default.
+	reach := make([]int, len(msgs))
+	for i := range msgs {
+		reach[i] = i
+	}
+	first := map[string]int{}
+	last := map[string]int{}
+	note := func(id string, i int) {
+		if id == "" {
+			return
+		}
+		if v, ok := first[id]; !ok || i < v {
+			first[id] = i
+		}
+		if v, ok := last[id]; !ok || i > v {
+			last[id] = i
+		}
+	}
+	for i, m := range msgs {
+		for _, tc := range m.ToolCalls {
+			note(tc.ID, i)
 		}
 		if m.Role == "tool" {
-			// Orphaned tool_result: no preceding assistant turn in
-			// this slice claimed it. Drop silently rather than crash
-			// or surface it alone.
-			i++
-			continue
+			note(m.ToolCallID, i)
 		}
-		units = append(units, []agentgraph.Message{m})
-		i++
+	}
+	for id, lo := range first {
+		if hi := last[id]; hi > reach[lo] {
+			reach[lo] = hi
+		}
+	}
+
+	units := make([][]agentgraph.Message, 0, len(msgs))
+	for i := 0; i < len(msgs); {
+		end := reach[i]
+		for k := i; k <= end; k++ {
+			if reach[k] > end {
+				end = reach[k]
+			}
+		}
+		units = append(units, msgs[i:end+1])
+		i = end + 1
 	}
 	return units
 }

@@ -77,21 +77,35 @@ them the transcript, all owned by WP05/WP06:
   move-bearing turns compact to "Summary of 39 turns". Pre-existing (it
   was already 2x wrong), and correcting it moves two green e2e
   assertions, so it was deliberately not fixed unilaterally.
-- **Search corpus**: migration 0312's FTS trigger
-  (`core/session/migrations_search_fts.go:47`) fires on every
-  `session_messages` insert with no role filter, so every `tool_result`
-  row's raw output is now full-text indexed. `SearchModal.vue:347-350`
-  offers User/Assistant/System and **no Tool option**;
-  `SearchPalette.vue` has no role filter at all. Cmd-F degrades
-  materially on a move-bearing session.
+- ~~**Search corpus**~~ — **DRAINED 2026-08-14 by WP06.** Migration
+  0335 (`core/session/migrations_search_fts_tool_rows.go`) replaces
+  0312's unguarded triggers with role-guarded ones and evicts the tool
+  rows already in the index. See the Drained section for the contract
+  and why "index them and filter in the UI" was rejected. The two
+  search components were left untouched, deliberately: their
+  User/Assistant/System role filter is now exactly the corpus, and
+  adding a Tool option would have been a control that returns nothing.
 - **`Sessions_Export`** (Go, markdown + JSON) walks tool rows with raw
-  output — FR-006 territory.
+  output — FR-006 territory. **Owned by WP05**, in flight beside WP06.
+- **`MessageList.vue` / `MessageBubble.vue` "Summary of N turns"**
+  (the row-vs-turn arithmetic above) — **owned by WP05**, which holds
+  those two files this cycle. WP06 stayed out of them.
+- **`session.TranscriptEntry.ContentBlocks` write half** (its own
+  dated entry below) — **owned by WP05**. WP06 did not touch it; the
+  delete-vs-finish deadline recorded against it stands unchanged.
 
-Also open, and not a projection bug: on the **revised-draft** path the
-exit gate's revised text never streams, so the live view shows the draft
-as the answer while a reload shows the revision. FR-003's "no post-hoc
-mismatch" is not fully true there until the backend delivers the
-revision on the stream.
+If WP05 lands without resolving those three, they are findings against
+the mission, not inherited exemptions — the deadline text on each
+already says so.
+
+**Moved out of the mission's in-flight list, because no WP owns them
+and the mission is closing** — see "Open — ungated findings" for the
+full text of both:
+
+- the revised-draft stream gap (FR-003's "no post-hoc mismatch" is not
+  true on the exit-gate-revision path);
+- `views/search/impl.go` returning soft-archived rows, found by WP06
+  while working next door.
 
 Whoever mounts `SubagentTab.vue` (dead today) must route through
 `projectTranscript` or it reinherits the 13-bubble regression.
@@ -165,6 +179,52 @@ prose and in a TS union; they do not call `MoveKinds()`.
 ---
 
 ## Open — ungated findings
+
+### 2026-08-14 · The exit gate's revised answer never reaches the stream
+
+Inherited from 01PMCH01's in-flight list at mission close; no WP claimed
+it, so it graduates to a standing finding rather than expiring with the
+section.
+
+On the **revised-draft** path the exit gate (or the escalation ladder)
+returns text different from the draft the model streamed. The revision is
+persisted — `turnJournal.AppendEntry` flushes the parked draft as its own
+`assistant_move` and stamps the revision as the turn's `final`, which is
+the honest record — but nothing puts the revised text ON the stream. The
+live view therefore shows the draft as the answer and a reload shows the
+revision.
+
+Spec FR-003 asks for "no post-hoc mismatch between what you watched and
+what's stored", and on this path there is one. The transcript is right
+and the live view is wrong, which is the better of the two failure
+directions but still a lie to the user who was watching.
+
+**Owner:** unassigned. The fix is backend: deliver the gate's revised
+text as a move boundary + delta on the chat stream so the surface can
+replace the draft bubble, rather than only writing it to the store.
+
+### 2026-08-14 · `views/search/impl.go` searches soft-archived rows
+
+Found by 01PMCH01 WP06 while re-guarding the FTS triggers next door; not
+caused by the moves mission and not fixed by it.
+
+There are two message-search implementations and they disagree about
+compacted history. `core/search/search.go` filters `sm.archived_at IS
+NULL` on both of its query shapes. `core/rpc/views/search/impl.go` — the
+one the Wails binding and served mode actually call — filters project,
+session and role, and never archived_at, in either `Search` or the
+`UnifiedSearch` messages adapter.
+
+So a row that compaction soft-archived is gone from the transcript, gone
+from the model's history, and still a search hit that navigates the user
+to a message the session no longer renders. The moves mission makes this
+more visible (compaction now archives many more rows per turn) without
+having introduced it.
+
+**Owner:** unassigned. Two honest exits: add the predicate and accept
+that compacted content stops being findable, or add an explicit
+"include compacted history" filter to the search UI and wire it. Not a
+third: the two implementations should not keep disagreeing silently.
 
 ### 2026-08-14 · Deferred asks have no producer, and wizards have no caller
 
@@ -466,6 +526,45 @@ before acting — frontend code churns between sweeps.
 ---
 
 ## Drained
+
+- **2026-08-14** (01PMCH01 WP06) — the **search corpus**, and with it
+  the last non-WP05 line on the mission's in-flight list. Migration
+  0312's FTS triggers had no role predicate, so every `tool_call` row's
+  synthetic args-summary string and every `tool_result` row's raw output
+  had been full-text indexed since WP02 — BM25 ranking against a corpus
+  that had become mostly machine output, and a cross-session grep over
+  every tool payload the harness ever received. Migration 0335 re-guards
+  all three triggers on `role <> 'tool'` (splitting the update trigger in
+  two, because FTS5's `'delete'` on a never-indexed row corrupts the
+  index) and evicts the rows already ingested — the eviction is the half
+  a trigger-only migration would have missed, and `'rebuild'` is not a
+  substitute for it because rebuild re-reads the content table and would
+  put the tool rows straight back.
+  Contract chosen, and why not the other one: tool output never reached
+  `session_messages` before WP02, so removing it from the index restores
+  the corpus every prior release shipped rather than deleting a
+  capability. Indexing it with a UI opt-out was rejected because the
+  ranking damage happens with the filter OFF, which is the default, and
+  because a `tool_call` row's content is `displayArgsSummary` output —
+  a synthetic display string with no user language in it and no query
+  for which it is the right answer. `SearchModal.vue`'s existing
+  User/Assistant/System filter is now exactly the corpus; no Tool option
+  was added, because it would be a control that can only return nothing.
+  Pinned by `TestMigration0335_EvictsRowsIndexedBeforeIt`, which
+  manufactures a dirty pre-migration index through the migration's own
+  Down and asserts the state is dirty before asserting it is clean.
+- **2026-08-14** (01PMCH01 WP06) — not a ledger line but recorded here
+  because the next sweep needs it: **role no longer identifies a
+  tool_use.** Since WP02 a `tool_call` move persists with
+  `Role = RoleTool`, not `RoleAssistant`. Any consumer that tests
+  `Role == RoleAssistant && len(ToolCalls) > 0` to mean "this row opened
+  a call" is silently wrong on every move-bearing session and will not
+  fail to compile. One such consumer shipped:
+  `compaction/wiring/store.go`'s `toolUseID`, which reported "" for
+  every move-borne call, emptied `snapBoundaryForToolPairs`'s openers
+  map, and turned the whole tool-pair boundary clamp into a no-op on
+  both the threshold and rolling flows. `MoveKind()` is the
+  discriminator.
 
 - **2026-08-14** (01PMCH01 WP04) — `sessions.Message.{Kind,MoveIndex,
   TurnSpanID}` and their `frontend/src/lib/types.ts` mirror (populated by

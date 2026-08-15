@@ -158,7 +158,10 @@ func TestOpen_RegistersSessionMigrations(t *testing.T) {
 	// model-moves-transcript-01PMCH01 WP01.
 	// 0334 (session_messages.model_tool_args + sessions.move_history_mode)
 	// lands with model-moves-transcript-01PMCH01 WP03.
-	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334}
+	// 0335 (FTS triggers re-guarded so role='tool' rows stay out of the
+	// search corpus, + the eviction backfill) lands with
+	// model-moves-transcript-01PMCH01 WP06.
+	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335}
 	if len(versions) != len(want) {
 		t.Fatalf("session migrations applied = %v, want %v", versions, want)
 	}
@@ -218,9 +221,10 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// 1 units (1100, unified-context-artifacts-01NCTXU01) +
 	// 1 unit_sync_state (1101, unified-context-artifacts-01NCTXU01 Phase 2) +
 	// 1 unit_sync_state_baselines (1102, unified-context-artifacts-01NCTXU01 3-way baseline fix) +
-	// 1 conflict-edge (1103, unified-context-artifacts-01NCTXU01 Phase 3 enshrine marker) = 42.
-	if count != 42 {
-		t.Errorf("ledger count = %d, want 42", count)
+	// 1 conflict-edge (1103, unified-context-artifacts-01NCTXU01 Phase 3 enshrine marker) +
+	// 1 search_fts_tool_rows (0335, model-moves-transcript-01PMCH01 WP06) = 43.
+	if count != 43 {
+		t.Errorf("ledger count = %d, want 43", count)
 	}
 }
 

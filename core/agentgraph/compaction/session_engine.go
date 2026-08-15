@@ -372,6 +372,22 @@ func (e *engine) Compact(ctx context.Context, sessionID string, model ProviderPr
 	rw := e.recentWindow()
 	boundary = snapBoundaryForRecentWindow(messages, boundary, rw)
 
+	// Step 4b: re-establish pair integrity, backward
+	// (model-moves-transcript-01PMCH01 WP06).
+	//
+	// Step 3 made the boundary pair-safe and step 4 is free to move it
+	// left again, which can re-split a pair whose opener the widened span
+	// now swallows. Step 3 alone therefore guaranteed nothing whenever
+	// the recent-window clamp actually moved — and on a move-bearing
+	// session, where one human turn contributes a dozen non-user rows,
+	// moving is the common case rather than the edge case.
+	//
+	// The backward direction is what makes this composable: it only ever
+	// shrinks the span, so it cannot undo step 4's guarantee the way step
+	// 4 undoes step 3's. Running the forward clamp here instead would
+	// restart the fight.
+	boundary = snapBoundaryBackForToolPairs(messages, boundary)
+
 	// If the clamps pulled the boundary to zero (or below) the
 	// compaction is a no-op. Emit the documented audit and return
 	// cleanly so the chat runner can fall through to ErrSessionFull
