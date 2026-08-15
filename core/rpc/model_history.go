@@ -48,11 +48,25 @@ import (
 //	                →  openaiwire.BuildRequestBody → tool_calls[] + role:"tool"
 //
 // So this composition's whole job on the model-fidelity side is to
-// populate the three fields of coreag.Message that carry a tool turn —
-// ToolCalls, ToolCallID, IsError — which the pre-WP03 projection left
-// zero. Adding a second, parallel path that emitted provider JSON here
-// would be the convergence violation; filling in the seam the renderers
-// already read is the convergence fix.
+// populate the fields of coreag.Message that carry a tool turn, which
+// the pre-WP03 projection left zero. Adding a second, parallel path
+// that emitted provider JSON here would be the convergence violation;
+// filling in the seam the renderers already read is the convergence
+// fix.
+//
+// TWO OF THE THREE ARE FED, AND THE THIRD IS NOT. ToolCalls and
+// ToolCallID are populated below. coreag.Message.IsError is NOT, and
+// cannot be from here: it would have to arrive from the persisted row,
+// and neither coreag.HistoryEntry nor session.TranscriptEntry carries
+// an error flag for a tool_result — WP02 records the failure only in
+// the result TEXT. The consequence is bounded but real: a failed tool
+// reaches the model without Anthropic's `tool_result.is_error`, so the
+// model infers failure from the text the way it does today rather than
+// from the protocol field. Closing it is a seam change (a flag on
+// HistoryEntry + the column behind it), which is why it is not done
+// here — WP04 is concurrently editing exactly those files for the
+// DISPLAY layer's session.ToolCall.IsError, and the model layer's
+// half belongs on top of that merge, not underneath it.
 //
 // WHAT THIS REPAIRS
 // -----------------
