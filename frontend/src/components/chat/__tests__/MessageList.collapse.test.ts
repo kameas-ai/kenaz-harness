@@ -21,6 +21,21 @@
  *     "expanding a 30-move turn does not dump 30 moves" fails.
  *   - drop the `live` prop wiring in MessageList:
  *     "never collapses the turn that is still streaming" fails.
+ *
+ * ADVERSARIAL-REVIEW ADDITIONS (2026-08-14). Each of these was a
+ * mutation that SURVIVED the tests above:
+ *   - `errorCount` over `visibleSteps` instead of `props.steps`:
+ *     nothing failed, because every fixture above fits inside
+ *     EXPANDED_WINDOW. "surfaces a failure that the expand window hides"
+ *     kills it.
+ *   - revert `:aria-label="digestLabel"` to the bare "Show the model's
+ *     trajectory": nothing failed, because no test read the accessible
+ *     name. "speaks the digest to a screen reader" kills it.
+ *   - drop the `focus-id` prop chain: nothing failed, because
+ *     `MoveTrail` also reads `window.location.hash` on mount — which
+ *     never fires for the hash-only navigation `router.push` performs.
+ *     "opens a folded trail for a deep-link that arrives after mount"
+ *     kills it.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -206,6 +221,61 @@ describe('MessageList — the 30-move wall (WP04 review follow-up)', () => {
       w.findAll('[data-testid="tool-chip"]').length;
     expect(all).toBe(30);
     expect(w.text()).toContain('Step 0: trying something.');
+  });
+
+  it('surfaces a failure that the expand window hides', async () => {
+    // 15 iterations → 30 steps; the fixture fails iteration 1, whose
+    // chip is step index 3. The window is the last 12 (indices 18–29),
+    // so the failing chip is NOT drawn even after expanding. The digest
+    // is the only place that failure can appear, in either state.
+    const w = mount(MessageList, { props: { messages: longTurn('u-1', 15) } });
+    expect(w.find('[data-testid="move-trail-errors"]').text()).toBe('1 failed');
+
+    await w.find('[data-testid="move-trail-toggle"]').trigger('click');
+    expect(w.text()).toContain('Show 18 earlier steps');
+    // The erroring chip really is out of frame…
+    const chipStates = w
+      .findAll('[data-testid="tool-chip"]')
+      .map((c) => c.attributes('data-tool-status'));
+    expect(chipStates).not.toContain('error');
+    // …and the digest still says so.
+    expect(w.find('[data-testid="move-trail-errors"]').text()).toBe('1 failed');
+  });
+
+  it('speaks the digest to a screen reader, not just to the eye', () => {
+    // `aria-label` REPLACES the accessible name. Labelling the toggle
+    // "Show the model's trajectory" made the move count, the tool names
+    // and — the one that matters — the failure count unreachable for
+    // assistive tech, which is the fold hiding failures again, for a
+    // narrower audience.
+    const w = mount(MessageList, { props: { messages: longTurn('u-1', 5) } });
+    const toggle = w.find('[data-testid="move-trail-toggle"]');
+    expect(toggle.element.tagName).toBe('BUTTON');
+    const label = toggle.attributes('aria-label') ?? '';
+    expect(label).toContain('10 moves');
+    expect(label).toContain('read_file');
+    expect(label).toContain('1 failed');
+    expect(toggle.attributes('aria-expanded')).toBe('false');
+  });
+
+  it('opens a folded trail for a deep-link that arrives after mount', async () => {
+    // `SearchModal` navigates with `router.push('/sessions/<id>#<msg>')`.
+    // In history mode that is a `pushState`, which fires neither
+    // `hashchange` nor `popstate` — so a hit in the session already on
+    // screen reaches a trail that is ALREADY MOUNTED. Without the prop
+    // the trail stays folded and the deep-link scrolls to a zero-height
+    // anchor inside the fold.
+    const rows = longTurn('u-1', 5);
+    const w = mount(MessageList, { props: { messages: rows } });
+    expect(w.find('[data-testid="move-trail"]').attributes('data-expanded')).toBe(
+      'false',
+    );
+
+    await w.setProps({ focusMessageId: 'u-1-m2' });
+    expect(w.find('[data-testid="move-trail"]').attributes('data-expanded')).toBe(
+      'true',
+    );
+    expect(w.text()).toContain('Step 2: trying something.');
   });
 
   it('keeps a scroll-to anchor for every folded row', () => {

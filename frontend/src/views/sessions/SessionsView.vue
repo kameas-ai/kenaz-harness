@@ -1021,6 +1021,22 @@ function focusSearchHashTarget(messageId: string) {
   tryFocus();
 }
 
+/**
+ * The message id the current route hash points at, reactive.
+ *
+ * `MoveTrail` needs this handed to it rather than reading
+ * `window.location.hash` itself: `router.push('/sessions/<id>#<msg>')`
+ * is a `history.pushState`, which fires neither `hashchange` nor
+ * `popstate`. A hit in the session already on screen therefore changes
+ * the hash without any window event, and a trail that folded the target
+ * away would stay folded — `focusSearchHashTarget` below would find the
+ * bare anchor, scroll to a zero-height span inside the fold, and the
+ * link would dead-end. Only the router sees that navigation.
+ */
+const searchFocusMessageId = computed(() =>
+  route.hash.startsWith('#') ? decodeURIComponent(route.hash.slice(1)) : '',
+);
+
 watch(
   () => [route.path, route.hash] as const,
   ([_path, hash]) => {
@@ -1679,6 +1695,7 @@ async function onShared() {
         >
           <MessageList
             :messages="visibleMessages"
+            :focus-message-id="searchFocusMessageId"
             :streaming-messages="session.streamingMoves.value"
             :waiting="isWaitingForFirstChunk"
             :error-message="session.error.value"

@@ -83,6 +83,23 @@ const props = defineProps<{
    * The parent knows it because it owns the in-flight buffer.
    */
   live?: boolean;
+  /**
+   * The message id a search deep-link is pointing at, passed down from
+   * the view that owns the router.
+   *
+   * REQUIRED, not belt-and-braces. `SearchModal` navigates with
+   * `router.push('/sessions/<id>#<messageId>')`, which in history mode
+   * is a `history.pushState` — and pushState fires NEITHER `hashchange`
+   * NOR `popstate`. So the window-hash listener below only catches the
+   * case where this component MOUNTS after the navigation (a hit in a
+   * different session). A hit in the session you are already reading
+   * changes the hash without remounting anything, and the trail holding
+   * the target would stay folded: the poller finds the bare anchor,
+   * scrolls to a zero-height span inside a collapsed fold, and the link
+   * dead-ends. That is the WP04-review regression, one navigation shape
+   * over.
+   */
+  focusId?: string | null;
 }>();
 
 /**
@@ -116,9 +133,11 @@ const showEarlier = ref(false);
  * which of twelve moves matched is a dead end dressed as a link. So a
  * trail that contains the target opens itself.
  *
- * Read off `window.location.hash` rather than `useRoute()` on purpose:
- * this component is a leaf that mounts in tests without a router, and
- * the hash IS the contract SessionsView writes.
+ * The `focusId` prop is the primary source — the view that owns the
+ * router is the only thing that observes a pushState hash change. The
+ * `window.location.hash` read below is the fallback for the
+ * mount-after-navigation case and for the leaf-component tests that
+ * mount this without a router.
  */
 const hashTarget = ref('');
 function readHash() {
@@ -136,7 +155,7 @@ onUnmounted(() => {
 });
 
 const holdsHashTarget = computed(() => {
-  const target = hashTarget.value;
+  const target = props.focusId || hashTarget.value;
   if (!target) return false;
   return props.steps.some(
     (s) =>
@@ -208,6 +227,34 @@ const errorCount = computed(
     .length,
 );
 
+/**
+ * The digest, spoken.
+ *
+ * `aria-label` REPLACES a button's accessible name — it does not add to
+ * it. The first version of this component labelled the toggle "Show the
+ * model's trajectory", which meant a screen reader heard exactly that
+ * and never heard the digest: not the move count, not which tools ran,
+ * and — the one that matters — not that two of them failed. The whole
+ * argument for the digest is that "failures must survive the fold"; a
+ * label that hides them from assistive tech makes the digest survive
+ * the fold for sighted users only.
+ *
+ * So the accessible name IS the digest, with the action in front of it.
+ * Commas because a screen reader pauses on them; the visible text can
+ * stay terse.
+ */
+const digestLabel = computed(() => {
+  const parts = [`${props.steps.length} moves`];
+  if (toolDigest.value) parts.push(toolDigest.value);
+  if (errorCount.value > 0) {
+    parts.push(errorCount.value === 1 ? '1 failed' : `${errorCount.value} failed`);
+  }
+  const action = expanded.value
+    ? "Hide the model's trajectory"
+    : "Show the model's trajectory";
+  return `${action}: ${parts.join(', ')}`;
+});
+
 function toggle() {
   manual.value = !expanded.value;
 }
@@ -232,7 +279,7 @@ function toggle() {
       type="button"
       class="flex w-full max-w-[74ch] items-center gap-1.5 rounded-sm px-1 py-0.5 font-ui text-[11px] text-ink-subtle text-left hover:bg-surface-2 hover:text-ink-muted transition-fast"
       :aria-expanded="expanded"
-      :aria-label="expanded ? 'Hide the model\'s trajectory' : 'Show the model\'s trajectory'"
+      :aria-label="digestLabel"
       data-testid="move-trail-toggle"
       @click="toggle"
     >

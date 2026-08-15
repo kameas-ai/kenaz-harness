@@ -45,6 +45,17 @@ const props = defineProps<{
    */
   streamingMessages?: ReadonlyArray<Message>;
   /**
+   * The message id a search deep-link is currently pointing at (the
+   * route hash, without the `#`). Passed straight through to `MoveTrail`
+   * so a hit inside a folded trajectory opens it.
+   *
+   * It has to come from the router-owning view: `router.push` with a
+   * hash is a `history.pushState`, which fires neither `hashchange` nor
+   * `popstate`, so a leaf reading `window.location.hash` never learns
+   * about a hit in the session already on screen.
+   */
+  focusMessageId?: string | null;
+  /**
    * True while a stream is open but no chunks have arrived yet — render
    * a small "thinking…" indicator so the user sees the system is alive.
    */
@@ -323,6 +334,7 @@ defineExpose({ scrollToBottom });
           v-if="item.type === 'trail'"
           :steps="item.steps"
           :live="liveSpanIds.has(item.spanId)"
+          :focus-id="focusMessageId ?? null"
         />
 
         <div v-else :data-message-id="item.message.id">
