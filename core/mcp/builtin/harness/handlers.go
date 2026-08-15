@@ -37,9 +37,6 @@ type Managers struct {
 	SettingsWriter  SettingsWriter
 	ProjectsWriter  ProjectWriter
 	SessionsWriter  SessionCreator
-
-	// Cedar proposal broker (WP07). Nil-safe.
-	CedarProposer CedarProposer
 }
 
 // ---- Read-side interfaces (WP04 stubs) ----
@@ -141,11 +138,6 @@ type ProjectWriter interface {
 // SessionCreator creates a new session with an optional kind tag.
 type SessionCreator interface {
 	CreateSession(ctx context.Context, name, kind string) (SessionSummary, error)
-}
-
-// CedarProposer brokers the propose_cedar_policy confirm-flow (WP07).
-type CedarProposer interface {
-	Propose(ctx context.Context, name, body string) error
 }
 
 // SettingsAllowlist enumerates the keys harness_write_set_setting is
@@ -380,19 +372,3 @@ func (m Managers) handleCreateSession(ctx context.Context, args json.RawMessage)
 	return ToolResult{OK: true, Message: fmt.Sprintf("Created session %q (kind=%s)", sum.Name, sum.Kind), Data: sum}, nil
 }
 
-func (m Managers) handleProposeCedarPolicy(ctx context.Context, args json.RawMessage) (any, error) {
-	if m.CedarProposer == nil {
-		return nil, errNotConfigured
-	}
-	var p struct {
-		Name string `json:"name"`
-		Body string `json:"body"`
-	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return nil, err
-	}
-	if err := m.CedarProposer.Propose(ctx, p.Name, p.Body); err != nil {
-		return nil, err
-	}
-	return ToolResult{OK: true, Message: fmt.Sprintf("Cedar policy %q queued for confirmation", p.Name)}, nil
-}

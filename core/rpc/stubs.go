@@ -10,7 +10,6 @@ import (
 	artifactsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/attachments"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/contextview"
-	dialsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/dials"
 	hooksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/hooks"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
 	memoryview "github.com/kameas-ai/kenaz-harness/core/rpc/views/memory"
@@ -262,23 +261,6 @@ func (s *stubMemory) ResummarizeChunk(_ context.Context, _ string) (memoryview.C
 }
 func (s *stubMemory) GetChunkProvenance(_ context.Context, _ string) (memoryview.ChunkProvenance, error) {
 	return memoryview.ChunkProvenance{}, errNotWired
-}
-
-// ── dials ──────────────────────────────────────────────────────────────
-
-type stubDials struct{}
-
-func (s *stubDials) GetDials(_ context.Context, _ dialsview.ScopeKey) (dialsview.DialConfig, error) {
-	return dialsview.DialConfig{}, nil
-}
-func (s *stubDials) SetDials(_ context.Context, _ dialsview.ScopeKey, _ dialsview.DialConfig) error {
-	return errNotWired
-}
-func (s *stubDials) GetEffective(_ context.Context, _, _, _, _ string) (dialsview.EffectiveDials, error) {
-	return dialsview.EffectiveDials{}, nil
-}
-func (s *stubDials) BumpAndResume(_ context.Context, _ string, _ dialsview.DialDelta) error {
-	return errNotWired
 }
 
 // ── hooks ──────────────────────────────────────────────────────────────

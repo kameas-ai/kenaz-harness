@@ -9,10 +9,13 @@
 //	"warn"  — emit warning and continue running (default).
 //	"block" — refuse to start the run; return ErrManifestDrift.
 //
-// The dial lives in core/agentgraph/dials.DialConfig.ManifestDriftMode
-// and participates in the normal per-graph / per-session / global
-// cascade. This file wires the resolved value to the kernel's pre-run
-// check.
+// The dial has NO store and NO producer today. It previously lived on
+// core/agentgraph/dials.DialConfig.ManifestDriftMode, but that cascade
+// never carried the field (applyLayer had no branch for it and
+// EffectiveDials had no such field), and the whole dials subsystem was
+// deleted on 2026-08-14 as rival infrastructure to core/autonomy. Until
+// the owner mission gives the mode a home — a settings field or a graph
+// attr — EnforceManifestDriftPolicy only ever sees the zero value.
 //
 // NOTE: The frontend drift badge is stubbed for WP06. The badge will
 // surface ManifestDriftWarnings in the graph-editor sidebar; the wiring

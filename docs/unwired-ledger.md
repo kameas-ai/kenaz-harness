@@ -227,65 +227,65 @@ delete, or spec the control RPCs first — a tab whose buttons cannot be
 implemented from the current backend is not "not yet mounted", it is
 unbuilt.
 
-### 2026-08-14 · The dial cascade is an inert subsystem
+### 2026-08-14 · The denial UX gap (opened by deleting `DenialNotice`)
 
-*(Corrected 2026-08-14 by the frontend orphan-deletion sweep — the
-consumer claim below was false: see the two bullets after the summary.)*
+`DenialNotice.vue` + `usePolicyDecisions()` + `_emitDenialForTest` were
+deleted this sweep (see Drained). They were the *intended* surface for
+policy denials and they were completely inert, so deleting them was
+right — but it leaves a real product gap that must not be lost with them.
 
-`core/agentgraph/dials` has exactly one non-test importer
-(`core/rpc/views/dials/impl.go`) and `dials.Resolve` exactly one production
-call site, whose output feeds only `Dials_GetEffective`. All 13
-`DialConfig` fields are **plumbed-only**: they render in a UI readout and
-change no behaviour. The kernel's budget comes from `graph.Budget` folded
-with the autonomy token-ceiling knob (`chat_runner.go`), never from
-`EffectiveDials`.
+**The gap:** the harness has no denial-aware UI at all. `policyAPI` is
+assigned exactly once, at `core/rpc/api.go:1109`, to `&stubPolicy{}`;
+every method returns `errNotWired`. No `policy:event` broker topic exists
+anywhere in the tree — the string appeared only in the deleted
+`usePolicyDecisions` docstring. So when a Cedar policy denies an action,
+the user sees whatever raw error string happens to reach the calling
+surface, with no reason, no policy name, and no remediation affordance.
 
-Two sharp edges inside it:
+This is trust-relevant by the sweep's own rubric ("**trust- or
+compliance-relevant** (consent, permissions, denials, audit)"), which is
+exactly why the fix is a mission and not a re-mount: mounting a component
+fed by a stub that returns `errNotWired` would move the lie from the
+backend to the UI. Wire `policyAPI` to a real implementation and define
+the denial event contract **first**; the component is the cheap half.
 
-- **`Dials_GetEffective` has ZERO live consumers, not one.** The previous
-  entry claimed its output "feeds only `Dials_GetEffective` →
-  `DialsView.vue`" — but `DialsView.vue` has no route in either `main.ts`
-  or `main-served.ts` and no non-test importer anywhere in
-  `frontend/src`; the only file that references it is its own
-  `views/dials/__tests__/DialsView.test.ts`. The subsystem is one notch
-  deader than recorded: the RPC's output reaches a view nothing mounts.
-- `ManifestDriftMode` is doubly dead — `dials/cascade.go`'s `applyLayer`
-  has no branch for it and `EffectiveDials` has no such field, so it cannot
-  survive `Resolve()`. Recorded against the I10 line for
-  `EnforceManifestDriftPolicy`, whose old justification asserted the
-  opposite.
-- `Dials_BumpAndResume` mutates the view's in-memory store and then resumes
-  the run; the bumped cap never reaches `env.Budget`. The previous entry
-  claimed this means "`CapHitToast.vue`'s 'bump and resume' resumes at the
-  original cap" — that is also false as evidence: `CapHitToast.vue` is
-  never mounted (see the CapHitToast entry below), so the described bug is
-  unreachable through the UI. The `Dials_BumpAndResume` no-op itself is
-  still real; it just has no live caller to trigger it.
+**Owner:** unassigned — needs a mission under `kitty-specs/`. The change
+that deletes this entry is the one that gives `policyAPI` a non-stub
+production assignment.
 
-**Owner:** unassigned. Wire the cascade into `env.Budget` or delete the
-subsystem; an RPC that reports numbers nothing enforces, feeding a view
-nothing mounts, is worse than no UI at all.
+### 2026-08-14 · `LocalRuntimesSection` has a branch it can never render
 
-### 2026-08-14 · `CapHitToast.vue` was never mounted
+`LocalRuntimesSection.vue` renders three mutually-exclusive states per
+runtime card. The first one is unreachable in production:
 
-`CapHitToast.vue` has zero production importers — the only file besides
-its own test that names it is `composables/useEventToasts.ts:17`, which
-lists it in a comment as "NOT migrated here (retained as rich-UI
-components because they need input fields or sliders)". That claim is
-false: `git log -S "CapHitToast.vue" -- frontend/src` shows exactly one
-commit, `c760087f` (the commit that created the component), and no commit
-since has ever added an import or a mount site for it. It was never
-"retained" from anywhere — it was never wired in the first place.
+```
+v-if="rt.running && rt.models && rt.models.length > 0"   → "N models available"
+v-else-if="rt.running"                                   → "No models detected (runtime is running)"
+v-else                                                   → "Installed but not running …"
+```
 
-Consequence: the "bump and resume resumes at the original cap" bug
-recorded against `Dials_BumpAndResume` above has no UI path to trigger it
-today. The bug in the Go code may still be real; it is simply unreachable
-until something mounts `CapHitToast.vue` (or another cap-hit surface) and
-wires it to `Dials_BumpAndResume`.
+`LocalRuntimeInfo.Models` (`core/rpc/views/llm/api.go:153`) is **never
+populated on the listing path**: `runtimeInfosToWire`
+(`core/rpc/views/llm/impl_local_runtime.go:181`) — the sole converter,
+called from both listing sites (`:33` and `:126`) — copies `Kind`,
+`Name`, `Running`, `Installed`, `DefaultBaseURL` and `Port`, and never
+sets `Models`. The upstream `localruntime.RuntimeInfo` has no `Models`
+field to copy from in the first place.
 
-**Owner:** unassigned. Either mount `CapHitToast.vue` on the cap-hit event
-and fix the resume-cap bug together, or delete the component and record
-the resume-cap bug as an open Go-side finding.
+So a running runtime **always** falls through to "No models detected
+(runtime is running)", even when the user has models installed. This is
+not an orphan — `LocalRuntimesSection.vue` is a **shipping** surface, so
+this is a live cosmetic lie rather than dead code, which is why it is
+recorded rather than deleted.
+
+Note the neighbouring `runtimeModelsToWire` (`:197`) does populate a
+`Models` field, but on `LocalRuntimeModels` — a different wire type on a
+different RPC. The listing path never calls it.
+
+**Owner:** unassigned. Either populate `Models` in `runtimeInfosToWire`
+(needs a per-runtime model probe at list time) or delete the first branch
+so the card stops implying a state it cannot reach. Do not "fix" it by
+deleting the string alone — the probe is the feature.
 
 ### 2026-08-14 · Settings fields that are stored, bound, and inert
 
@@ -452,38 +452,62 @@ zero-ambiguity items (see the deletion commits on
 that are real but need an owner decision, not a delete — so the next sweep
 inherits this list instead of re-deriving it from scratch.
 
-**P2 — wire candidates** (backend confirmed live; frontend surface exists
-but is unreached or half-wired):
+*(Updated 2026-08-14 by orphan-deletion sweep wave 2. Items resolved by
+deletion moved to Drained. One claim below was **false** and is corrected
+in place — see the Cedar-propose note.)*
 
-- `RecoveryCodeFlow` — backend verified live end-to-end; the frontend
-  surface just needs a mount point.
-- `AgentsView` + `AgentProfileEditor`.
-- `CrashReportingOnboardingModal`.
-- `RunChainView`.
-- `ModelSizeBadge` + `lib/modelFit.ts`.
+**P1 — slated to be finished** (owner decision: these are real features;
+the backend is live and only the UI is missing, or they are the only
+surface for a real capability). Do **not** re-find these as orphans:
 
-**P3 — owner-decision clusters** (each needs a wire-or-delete call from
-the subsystem owner, not a mechanical fix):
-
-- The dials cascade (see the dedicated entry above).
-- **Cedar propose — a four-layer dead subsystem.**
-  `harness_write_propose_cedar_policy` is registered and advertised to the
-  model, but `NewCedarProposer` has zero non-test call sites, so it
-  returns `errNotConfigured` on every call — 100% of the time, not
-  intermittently.
-- The background-task subsystem (see the dedicated entry above).
-- `CedarEditor` vs. `PolicyView`'s inline editor — two policy-editing
-  surfaces, unclear which is canonical.
+- `RecoveryCodeFlow` — backend assigned unconditionally at
+  `core/rpc/api.go:2426`; keychain-only, works offline. Only recovery
+  surface in the product.
+- `ProjectAutonomyPanel` — the project rung is engine-consumed at
+  `core/rpc/api.go:4304`.
+- `HookJournalView` — rows **are** being written to SQL in production;
+  the read path is what is missing.
 - `MCPHealthSettingsPanel` + `BranchAdvisorSettings` — both blocked on
   inert Go knobs (see "Settings fields that are stored, bound, and
-  inert" above).
-- `DenialNotice` / `usePolicyDecisions`.
-- `ProjectAutonomyPanel`.
-- `BranchContextPickModal`.
-- `CompactionSettings`.
-- `HookJournalView`.
-- `lib/rail.ts`.
-- `lib/capability-keys.ts`.
+  inert" above). Wire the consumer first, in the same PR.
+- `CrashReportingOnboardingModal`.
+- `CedarEditor` — retained pending the mission that ports its fleet
+  features into `PolicyView`. It is **not** an orphan to delete, even
+  though `lib/cedar/permissionCatalog.contribution.ts` (deleted this
+  sweep) turned out not to be reachable from it.
+
+**P1b — parked pending a named mission.** Owner wants each of these
+capabilities on the roadmap; the components are kept deliberately. The
+next sweep should skip them, not re-derive them:
+
+- **Delegated sub-agent execution** — `AgentsView.vue`,
+  `AgentProfileEditor.vue`, `SubagentTab.vue`, `SubagentBudgetMeter.vue`.
+  Parked 2026-08-14 pending that mission.
+- **Background execution** — `TaskOutputViewer.vue`,
+  `SessionCloseDialog.vue`, `BackgroundTaskChip.vue`. Parked 2026-08-14
+  pending that mission (see the background-task entry above).
+
+**P3 — remaining owner-decision items:**
+
+- `lib/capability-keys.ts` — do **not** delete the `.ts`: it is
+  generated, invoked by `//go:generate` at `core/fleet/capability_gen.go:13`
+  and enforced by `scripts/ci/check-codegen.sh`, which runs in `pr.yml`.
+  Being wired as a typed import instead.
+
+**CORRECTION 2026-08-14 — the Cedar-propose "advertised to the model"
+claim was FALSE.** The previous revision of this entry said
+`harness_write_propose_cedar_policy` "is registered and advertised to the
+model". It was registered (`core/mcp/builtin/harness/register.go:138`)
+but **never advertised**, because the harness-self MCP server that owns
+it was constructed at `core/rpc/api.go:2604`, logged for its tool count
+at `:2608`, and then never attached to any session pool —
+`harnessServer.Server()` (`core/rpc/harness_wiring.go:290`) had zero
+callers, and the comment at `api.go:2590` conceded the in-process
+transport wiring (WP09) had not landed. So the model never saw the tool
+and `errNotConfigured` fired on exactly zero calls: it was **dead code,
+not a live lie**. The stack was deleted this sweep (see Drained). Recorded
+because the retracted report that raised it asserted the opposite, and the
+difference is the difference between "urgent" and "housekeeping".
 
 **Owner:** unassigned per-item; this entry itself is owned by whoever
 picks up the next unwired sweep. Re-verify each item's importer graph
@@ -493,6 +517,112 @@ before acting — frontend code churns between sweeps.
 
 ## Drained
 
+- **2026-08-14** (orphan-deletion sweep wave 2) — eleven surfaces
+  deleted, each with positive no-consumer proof and a named rubric
+  class. Every premise was re-verified from the tree first: the report
+  that originally nominated these was retracted by its author for
+  fabricated citations, so nothing here rests on it.
+  - **The dials cascade** — `core/agentgraph/dials`,
+    `core/rpc/views/dials`, the four `Dials_*` bindings, the
+    `DialsClient` surface, `DialScope`/`DialConfig`/`DialEffectiveDials`/
+    `DialDelta`, `views/dials/DialsView.vue` and
+    `components/chat/CapHitToast.vue` (+ both tests). Class: **rival
+    infrastructure** — `core/autonomy` is a second cascade of identical
+    shape with three mounted panels. Proof: `coredials.Resolve` had
+    exactly one caller (`views/dials/impl.go:116`, inside the view
+    package it fed); `core/rpc/api.go:1726` constructed the view as
+    `dialsview.New(dialsview.Config{})`, an empty Config, so the resumer
+    and persister were both nil (`BumpAndResume` never resumed,
+    `SetDials` never persisted across restart); `env.Budget`'s only
+    production assignment is `chat_runner.go:899`
+    (`applyTokenCeilingKnob(graph.Budget, resolvedKnobs)`), which never
+    reads `EffectiveDials`; `CapHitToast.vue` had no mount site, and the
+    kernel's `emitCapHit` (`kernel.go:1577`) only appends to the internal
+    EventLog with no broker publish, so it had no possible trigger.
+    `ManifestDriftMode` had no home to begin with — the I10 entry for
+    `EnforceManifestDriftPolicy` was rewritten to say so.
+  - **`views/audit/RunChainView.vue`** — class: **live substitute**
+    (`AuditView.vue` is routed at `/audit` in *both* entry points,
+    `main.ts:41` and `main-served.ts:50`) **plus dead subsystem**
+    (`audit.Entry` and `audit.Filter` carry no session or run id, so a
+    per-run chain view could not filter even if mounted; it would have
+    rendered the global audit ring under a per-session title). Zero
+    references repo-wide, and no test existed — confirmed.
+  - **`views/providers/ModelSizeBadge.vue` + `lib/modelFit.ts`** (+ both
+    tests, + the two cases in `local_runtime_e2e.test.ts` that were
+    `modelFit`'s only other readers). Class: **dead subsystem** — all
+    three inputs unreachable: `Models` is never populated on the listing
+    path (`runtimeInfosToWire`), `core/system/resources` has zero Go
+    importers (its only mention is a *comment* at
+    `views/settings/api.go:1586`), and `EffectiveLocalRuntimeRAMBytes`
+    (`views/settings/api.go:1591`) has zero callers. The component
+    rendered nothing even if mounted — `v-if="displayText"` over empty
+    inputs. The deleted e2e case was itself a small lie: it was titled
+    "ModelSizeBadge integration smoke … the badge is rendered inline"
+    but never mounted the badge, only called `modelFitsInRAM` directly.
+    The live gap this leaves is recorded above as the
+    `LocalRuntimesSection` entry.
+  - **`components/sessions/TraceView.vue`** + its 5-case spec. Class:
+    **dead subsystem** — `session.Message.{ActualProvider,ActualModel}`
+    (`core/session/types.go:229,232`) have zero writers repo-wide *and*
+    are absent from the sessions wire shape, so the data could never
+    cross even if something produced it. `lib/types.ts` declared a
+    frontend-only phantom.
+  - **`components/ui/DenialNotice.vue`** + its test + the ~20 dead lines
+    inside the live file `lib/useHarnessAPI.ts` (`policyDeniedHandlers`,
+    `usePolicyDecisions`, `_emitDenialForTest`, `UsePolicyDecisionsResult`
+    — an orphan-*file* scan would never have surfaced these). Class:
+    **dead subsystem** — `policyAPI` is assigned exactly once, to
+    `&stubPolicy{}` at `core/rpc/api.go:1109`, every method returning
+    `errNotWired`; no `policy:event` topic exists; the handler Set was
+    fed only by `_emitDenialForTest`, which itself had zero callers. The
+    product gap this leaves is recorded above as its own finding.
+  - **`components/chat/BranchContextPickModal.vue`** — class: **live
+    substitute**. The banner's "Branch it off" action is fully wired to
+    `CreateBranchModal` (`ChatInput.vue:243` `handleBannerBranchOff`,
+    bound at `:1206`, rendered at `:1279`); only a stale comment in
+    `BranchSuggestionBanner.vue` still named the dead modal, and it has
+    been corrected to describe what actually happens. Independently, the
+    modal's two headline fields (`contextItems`, `toolGrantMode`) do not
+    exist in Go at all (`core/rpc/views/branches/api.go`) — they
+    unmarshalled into nothing.
+  - **`views/compaction/CompactionSettings.vue`** + its test — class:
+    **live substitute**, nothing more. `views/settings/compaction/
+    CompactionStrategyPanel.vue` is mounted at `SettingsView.vue:1086`
+    and is a strict superset. Note for the record: this is **not** an
+    inert-settings finding — `Compaction_SetConfig` writes into the live
+    pipeline resolver. The ledger never claimed otherwise; do not let a
+    future sweep introduce that framing.
+  - **`lib/rail.ts`** — class: **rival infrastructure**.
+    `registerRailEntry` / `listRailEntries` had zero call sites
+    repo-wide; `LeftRail.vue` inlines its nav via a `RailEntry.vue`
+    component (a different, live thing). The file's own docstring
+    conceded it: "LeftRail currently inlines defaults; this registry is
+    the v1.x extension point."
+  - **`lib/cedar/permissionCatalog.contribution.ts`** + its test —
+    orphaned from everything, including `CedarEditor.vue`. `CedarEditor`
+    itself was **kept** (see P1 above).
+  - **The Cedar propose stack**, dead at all four layers: the tool
+    registration + `ToolProposeCedarPolicy` const
+    (`core/mcp/builtin/harness/register.go`), the `CedarProposer`
+    interface + `Managers.CedarProposer` field +
+    `handleProposeCedarPolicy` (`handlers.go`), the whole
+    `cedar_proposer.go` impl + its test, the RPC layer
+    (`CedarProposeResolver`, `ErrCedarProposeNotWired`,
+    `CedarProposeResolve`, `SetCedarProposeResolver`,
+    `CedarPolicy_ResolvePropose`), and
+    `components/permissions/CedarProposeModal.vue` +
+    `CedarProposalPayload`. Class: **dead subsystem, no producer**.
+    Proof: `NewCedarProposer` had zero non-test call sites, so
+    `Managers.CedarProposer` was always nil and the handler could only
+    return `errNotConfigured`; `SetCedarProposeResolver` had zero
+    callers, so `CedarProposeResolve` could only return
+    `ErrCedarProposeNotWired`; the sole publisher of the
+    `cedar:propose-pending` topic lived inside the deleted
+    `cedar_proposer.go`; and the modal had no mount site. **No live lie
+    existed** — see the correction above; the tool was never advertised
+    to the model. `TestRegisterAll_HappyPath`'s canonical tool count
+    moved 14 → 13.
 - **2026-08-14** (01PMCH01 WP04) — `sessions.Message.{Kind,MoveIndex,
   TurnSpanID}` and their `frontend/src/lib/types.ts` mirror (populated by
   `messageToView` on every row since WP01, read by nothing — and, after

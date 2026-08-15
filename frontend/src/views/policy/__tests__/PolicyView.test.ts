@@ -35,7 +35,6 @@ function makePolicyClient(overrides?: Partial<CedarPolicyClient>): CedarPolicyCl
     recentDecisions: vi.fn().mockResolvedValue([]),
     writeSnippet: vi.fn().mockResolvedValue(undefined),
     revokeSnippet: vi.fn().mockResolvedValue(undefined),
-    resolvePropose: vi.fn().mockResolvedValue(undefined),
     getPolicy: vi.fn().mockResolvedValue(defaultDetail),
     savePolicy: vi.fn().mockResolvedValue({ ok: true } satisfies ParseResult),
     deletePolicy: vi.fn().mockResolvedValue(undefined),

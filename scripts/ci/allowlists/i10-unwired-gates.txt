@@ -89,26 +89,27 @@
 #   CORRECTION, 2026-08-14 (unwired sweep). WP17's justification for
 #   keeping this line said: "the dial ships in
 #   dials.DialConfig.ManifestDriftMode and participates in the real
-#   cascade". THE SECOND HALF IS FALSE. dials/cascade.go's applyLayer
-#   has branches for twelve DialConfig fields and none for
-#   ManifestDriftMode, and dials.EffectiveDials has no ManifestDriftMode
-#   field at all — so the value cannot survive Resolve() even in
-#   principle. The dial is declared, persisted by the Dials view's
-#   in-memory store, and then dropped on the floor.
+#   cascade". THE SECOND HALF WAS FALSE — applyLayer had branches for
+#   twelve DialConfig fields and none for ManifestDriftMode, and
+#   EffectiveDials had no such field, so the value could not survive
+#   Resolve() even in principle.
 #
-#   Worse, the surrounding subsystem is itself unwired: core/agentgraph/
-#   dials has exactly ONE non-test importer (core/rpc/views/dials/impl.go)
-#   and dials.Resolve is called from exactly one production site, whose
-#   output feeds only the Dials_GetEffective binding — a UI readout. The
-#   kernel's budget comes from graph.Budget folded with the autonomy
-#   token-ceiling knob (chat_runner.go), never from EffectiveDials.
+#   SUPERSEDED, 2026-08-14 (orphan-deletion sweep wave 2). The dials
+#   cascade has been DELETED — core/agentgraph/dials and
+#   core/rpc/views/dials are gone, along with the Dials_* bindings and
+#   DialsView.vue. Rubric class: rival infrastructure (core/autonomy is
+#   a second cascade of identical shape with three mounted panels, and
+#   the kernel's budget comes from graph.Budget folded with the autonomy
+#   token-ceiling knob in chat_runner.go, never from EffectiveDials).
 #
-#   The line still stays, on the narrower and now-accurate ground that
+#   So ManifestDriftMode now has NO store and NO producer at all: the
+#   mode string is only ever the zero value at the one call site that
+#   would pass it. The blocker is therefore larger than WP17 recorded —
+#   the owner mission must supply both the provenance rows AND a home
+#   for the dial (settings field or graph attr; there is no cascade to
+#   join any more). The line still stays on the narrower ground that
 #   manifest_versions_gen.go bakes the per-kind fingerprints
-#   CheckManifestDrift compares against, so the codegen half is real. But
-#   the owner mission's job is bigger than "read provenance at load":
-#   ManifestDriftMode has to reach the cascade first. Recorded so the
-#   next reader does not budget a one-line wire for it.
+#   CheckManifestDrift compares against, so the codegen half is real.
 #
 #   NOTE: CheckManifestDrift, the producer this entry names as also
 #   having zero callers, was INVISIBLE to this gate until the 2026-08-14
@@ -211,7 +212,8 @@ github.com/kameas-ai/kenaz-harness/core/storage/db.CheckSQLiteVersion
 #   alone — it is the producer half of EnforceManifestDriftPolicy above,
 #   which names it, and both clear in the same change. See that entry for
 #   the two blockers (no production path reads NodeProvenance at
-#   graph-load, and ManifestDriftMode never reaches the dials cascade).
+#   graph-load, and ManifestDriftMode has no store or producer at all
+#   since the dials cascade was deleted on 2026-08-14).
 #   Owner: manifest-versioning-01NDFSEX02.
 github.com/kameas-ai/kenaz-harness/core/agentgraph.CheckManifestDrift
 

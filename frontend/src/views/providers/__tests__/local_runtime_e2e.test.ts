@@ -92,36 +92,6 @@ describe('local runtime e2e: click "Add Ollama" → populated row', () => {
     expect(wrapper.find('[data-testid="add-runtime-ollama"]').text()).toContain('Added');
   });
 
-  it('shows amber RAM pill when model exceeds 85% of RAM', async () => {
-    // ModelSizeBadge integration smoke: the badge is rendered inline
-    // when the card passes effectiveRamBytes.
-    // This verifies the threshold logic without remounting.
-    const { modelFitsInRAM } = await import('@/lib/modelFit');
-    const modelSize = Math.floor(14.5 * GB);
-    const ram = 16 * GB;
-
-    // Model does not fit.
-    expect(modelFitsInRAM(modelSize, ram)).toBe(false);
-
-    // After override to 32 GB, it fits.
-    expect(modelFitsInRAM(modelSize, 32 * GB)).toBe(true);
-  });
-
-  it('RAM-fit filter flip: grey state changes on settings override change', async () => {
-    const { effectiveLocalRuntimeRAMBytes, modelFitsInRAM } = await import('@/lib/modelFit');
-
-    const modelSize = Math.floor(14.5 * GB);
-    const detected = 16 * GB;
-
-    // With no override: 14.5 GB > 16 * 0.85 = 13.6 → does not fit
-    const noOverride = effectiveLocalRuntimeRAMBytes(0, detected);
-    expect(modelFitsInRAM(modelSize, noOverride)).toBe(false);
-
-    // After override to 20 GB: 14.5 GB < 20 * 0.85 = 17 → fits
-    const withOverride = effectiveLocalRuntimeRAMBytes(20, detected);
-    expect(modelFitsInRAM(modelSize, withOverride)).toBe(true);
-  });
-
   it('feature-flag-off: section absent, RPC returns empty', async () => {
     const client = makeClient({
       listDetectedLocalRuntimes: vi.fn().mockResolvedValue([]),

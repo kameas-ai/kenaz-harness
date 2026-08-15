@@ -21,7 +21,7 @@ func (s *stubProviderWriter) AddProvider(_ context.Context, kind, name, model, _
 func (s *stubProviderWriter) RemoveProvider(_ context.Context, _ string) error { return nil }
 
 // TestRegisterAll_HappyPath asserts the wiring registers the canonical
-// 14 tools and dispatches AddProvider end-to-end.
+// 13 tools and dispatches AddProvider end-to-end.
 func TestRegisterAll_HappyPath(t *testing.T) {
 	t.Parallel()
 	w := &stubProviderWriter{}
@@ -29,8 +29,8 @@ func TestRegisterAll_HappyPath(t *testing.T) {
 		Providers:       stubProviderLister{items: []ProviderSummary{{ID: "p0", Kind: "anthropic"}}},
 		ProvidersWriter: w,
 	})
-	if got := len(srv.Tools()); got != 14 {
-		t.Fatalf("registered tool count = %d, want 14", got)
+	if got := len(srv.Tools()); got != 13 {
+		t.Fatalf("registered tool count = %d, want 13", got)
 	}
 
 	// Drive add_provider via the handler directly.
