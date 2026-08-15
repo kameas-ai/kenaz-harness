@@ -139,6 +139,54 @@ export function countTurns(messages: readonly Message[]): number {
 }
 
 /**
+ * foldedTurnCounts maps each compaction-summary row id to the number of
+ * HUMAN TURNS folded into it — the number the "Summary of N turns"
+ * indicator renders.
+ *
+ * WHY THIS IS NOT `rows.length` (model-moves-transcript-01PMCH01 WP05).
+ *
+ * The indicator used to count archived ROWS. That held only while a turn
+ * was exactly one user row plus one assistant row, and it was already 2x
+ * wrong then: two rows read as "Summary of 2 turns" for what a human
+ * calls one exchange. A move-bearing turn persists ~13 rows, so three
+ * compacted turns rendered as "Summary of 39 turns" — the same
+ * arithmetic error WP04 removed from `useLongSessionNudge` and from
+ * `countTurns` above, surviving 100 lines away in a second consumer.
+ *
+ * A turn's identity is the id of the user message that opened it, which
+ * is exactly what a move row already carries as `turnSpanId`. Classic
+ * rows have no span, so they inherit the turn identity of the most
+ * recent user row — which is why this walks the whole list in order
+ * rather than filtering to the folded rows first. A folded row with no
+ * preceding user row (its opener was archived into an earlier summary)
+ * falls back to its own id and counts as one turn, which is the honest
+ * answer when the opener is gone.
+ */
+export function foldedTurnCounts(
+  messages: readonly Message[],
+): ReadonlyMap<string, number> {
+  const turnsBySummary = new Map<string, Set<string>>();
+  let currentTurnId = '';
+  for (const m of messages) {
+    if (m.role === 'user') currentTurnId = m.id;
+    const into = m.compactedIntoId;
+    if (!into) continue;
+    const turnId = m.turnSpanId || currentTurnId || m.id;
+    let seen = turnsBySummary.get(into);
+    if (!seen) {
+      seen = new Set<string>();
+      turnsBySummary.set(into, seen);
+    }
+    seen.add(turnId);
+  }
+  const counts = new Map<string, number>();
+  for (const [summaryId, seen] of turnsBySummary) {
+    counts.set(summaryId, seen.size);
+  }
+  return counts;
+}
+
+/**
  * projectTranscript turns rows into render items. Pure and total: every
  * input row either becomes an item or is folded into one (a
  * `tool_result` folds into its chip), so nothing is dropped.

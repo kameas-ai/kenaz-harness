@@ -417,7 +417,16 @@ describe('CompactionFlow.e2e (WP09 — plan §4 acceptance smoke)', () => {
 
     const indicator = w.find('[data-testid="message-summary-indicator"]');
     expect(indicator.exists()).toBe(true);
-    expect(indicator.text()).toContain('Summary of 2 turns');
+    // Was "Summary of 2 turns" until model-moves-transcript-01PMCH01
+    // WP05. The fixture folds ONE exchange into the summary — the user
+    // row `m-pre-1` and the assistant row `m-pre-2` answering it — and
+    // the indicator used to count ROWS, so it reported two turns for
+    // one. The count is turns now (see `foldedTurnCounts`), which is
+    // what makes it survive a move-bearing session: WP02 persists ~13
+    // rows per turn, so the old arithmetic reported three compacted
+    // turns as "Summary of 39 turns". The expected value moved because
+    // the fixture never had two turns in it.
+    expect(indicator.text()).toContain('Summary of 1 turn');
 
     w.unmount();
   });

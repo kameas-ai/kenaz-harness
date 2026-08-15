@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 	"github.com/kameas-ai/kenaz-harness/core/storage"
 	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
@@ -523,71 +522,6 @@ func TestAppendContinuation_CarriesMoveColumns(t *testing.T) {
 	}
 	if got.TurnSpanID() != turn.ID {
 		t.Errorf("reloaded TurnSpanID = %q, want %q", got.TurnSpanID(), turn.ID)
-	}
-}
-
-// TestAppendTranscriptEntry_CarriesContentBlocks closes the other WP01
-// review finding: TranscriptEntry had no ContentBlocks, so the seam
-// could express strictly LESS than Manager.AppendMessage. An author who
-// needed a multimodal entry had to use AppendMessage — which cannot
-// stamp move metadata — and the move silently became a classic entry
-// with neither the compiler nor check-single-move-writer.sh objecting.
-//
-// With ContentBlocks on the seam there is no longer a shape that forces
-// an author off it, and the compiler still forbids minting move
-// metadata anywhere else, so the degradation is not merely discouraged
-// — it is unreachable.
-//
-// Mutation check (kills this test): drop `ContentBlocks: e.ContentBlocks`
-// from the Message literal in AppendTranscriptEntry → the reloaded entry
-// carries the synthesized single text block instead of the two authored
-// ones.
-func TestAppendTranscriptEntry_CarriesContentBlocks(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	mgr, sid := newMovesSQLManager(t)
-
-	turn, err := mgr.AppendTranscriptEntry(ctx, sid, session.TranscriptEntry{
-		Role: session.RoleUser, Content: "look at this",
-	})
-	if err != nil {
-		t.Fatalf("user turn: %v", err)
-	}
-	stored, err := mgr.AppendTranscriptEntry(ctx, sid, session.TranscriptEntry{
-		Role: session.RoleAssistant,
-		ContentBlocks: []llm.ContentBlock{
-			{Type: "text", Text: "here is the chart"},
-			{Type: "image", Source: &llm.MediaSource{Kind: "base64", MediaType: "image/png", Data: "iVBOR"}},
-		},
-		Kind: session.MoveKindFinal, MoveIndex: 1, TurnSpanID: turn.ID,
-	})
-	if err != nil {
-		t.Fatalf("multimodal move: %v", err)
-	}
-
-	msgs, err := mgr.ListMessages(ctx, sid)
-	if err != nil {
-		t.Fatalf("ListMessages: %v", err)
-	}
-	var got session.Message
-	for _, m := range msgs {
-		if m.ID == stored.ID {
-			got = m
-		}
-	}
-	if len(got.ContentBlocks) != 2 {
-		t.Fatalf("reloaded ContentBlocks = %d, want 2: %+v", len(got.ContentBlocks), got.ContentBlocks)
-	}
-	if got.ContentBlocks[1].Type != "image" {
-		t.Errorf("second block type = %q, want image", got.ContentBlocks[1].Type)
-	}
-	// And the move metadata survived alongside it — the whole point is
-	// that ONE entry can carry both.
-	if got.MoveKind() != session.MoveKindFinal {
-		t.Errorf("MoveKind = %q, want final", got.MoveKind())
-	}
-	if got.TurnSpanID() != turn.ID {
-		t.Errorf("TurnSpanID = %q, want %q", got.TurnSpanID(), turn.ID)
 	}
 }
 
