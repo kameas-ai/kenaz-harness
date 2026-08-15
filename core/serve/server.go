@@ -725,6 +725,26 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 	case "Elicit_ListPending":
 		return s.elicitAPI().ListPending(ctx)
 
+	// Elicit_SubmitAnswer is the return leg — the only thing that ends the
+	// pause. kenaz__ask_user_question parks the turn on a channel inside
+	// elicitview.OpenDialog; a served frontend that can list the pending
+	// ask but cannot answer it leaves the model stalled until the
+	// ten-minute deadline fires. Listing without answering is the
+	// confirm-each bug in a different costume.
+	//
+	// answer is the answer VALUE (json.RawMessage), matching the desktop
+	// Elicit_SubmitAnswer binding. Nothing here is re-encoded.
+	case "Elicit_SubmitAnswer":
+		var p struct {
+			RequestID string          `json:"requestId"`
+			Answer    json.RawMessage `json:"answer"`
+			Cancelled bool            `json:"cancelled"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Elicit_SubmitAnswer: bad params: " + err.Error())
+		}
+		return nil, s.elicitAPI().SubmitAnswer(ctx, p.RequestID, p.Answer, p.Cancelled)
+
 	// ── confirm-each (confirm-each-enforcement-01PMAG05 WP02) ────────
 	//
 	// A served harness parks tool calls exactly like the desktop one:

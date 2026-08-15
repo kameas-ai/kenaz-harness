@@ -170,6 +170,67 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-08-14 · Deferred asks have no producer, and wizards have no caller
+
+The elicitation surface ships three modes; only one of them is reachable.
+
+**Deferred.** `elicitview.API.{RegisterDeferred,AnswerDeferred,ListDeferred}`
+exist, the `elicit:deferred` / `elicit:deferred:answered` topics exist, and
+`DeferredAskPill.vue` + `DeferredAskPanel.vue` subscribe to them. Nothing
+ever registers a deferred ask: the only entry points are the Wails bindings
+`Elicit_RegisterDeferred` / `Elicit_AnswerDeferred`, which only the frontend
+can call, and no frontend code calls them. It cannot come from the model
+either — `askuserquestion.AskArgs` has no `mode` field, so the tool's own
+schema gives the model no way to ask for deferred delivery. The topic has a
+subscriber shape and no publisher.
+
+The two components were therefore **left unmounted** by the 2026-08-14
+elicitation-mount fix, deliberately. Mounting a subscriber to a topic that
+nothing emits would have made the release ritual's own report ("the deferred
+surface is wired") false.
+
+**Wizard.** `elicitview.API.OpenWizard` has zero non-test callers, and
+nothing constructs an `elicitation.Question` with a non-empty `Batch`. The
+whole downstream chain — `Elicit_SubmitWizardStep`,
+`ElicitClient.submitWizardStep`, `WizardQuestion` / `WizardDependsOn` /
+`WizardAnswer` in `types.ts`, and the `questions[]` branch of the wire shape
+— is reachable only from `api_test.go`. `AskUserQuestion.vue` has no wizard
+renderer, so even a batch that did arrive would render as an unknown kind.
+
+**Owner:** unassigned. Two honest exits: (a) add `mode` + `questions` to the
+tool schema and render the wizard, which is feature work with a spec, or
+(b) delete both legs — deferred and wizard — down to the single blocking
+path that actually runs. Not (c): leaving a half-surface that reads, in a
+code review, like a shipped feature.
+
+### 2026-08-14 · Live tools whose only UI is unmounted (todo, sub-agent)
+
+Found while tracing the elicitation gap; same shape, lower severity — these
+park nothing, so the failure is a missing display rather than a stalled turn.
+
+`kenaz__todo_write` is registered (default-OFF, user opt-in from the Tools
+panel) and writes to `GlobalTodoStore`. `TodoChip.vue` and
+`TodoSidePanel.vue` are its display surface and **no component imports
+either**. A user who turns the toggle on gets the model's task list rendered
+as raw tool-result text, and the chip that was built to summarise it never
+appears. Both components are purely presentational (props in, `open`/`close`
+out), so mounting them needs a parent that owns the todo state — most
+plausibly `MessageBubble`, which is owned by another worktree this cycle.
+
+`SubagentTab.vue` + `SubagentBudgetMeter.vue` are worse off: no importer,
+**and** no backend to import them for. `SubagentBranch.subagentStatus` is
+read by `SubagentTab.vue` alone, and the tab's four control emits
+(`abort` / `steer` / `pause` / `resume`) have no counterpart anywhere in
+`harnessClient.ts` — there is no pause, resume, abort or steer RPC to call.
+`kenaz__subagent_dispatch` itself is live (registered when the BranchSeam is
+non-nil) and its branches do surface in the mounted `BranchSidebar`, so
+nothing is invisible; what is missing is the dedicated live-worker view.
+
+**Owner:** unassigned. Todo: wire (a parent must hold the list). Sub-agent:
+delete, or spec the control RPCs first — a tab whose buttons cannot be
+implemented from the current backend is not "not yet mounted", it is
+unbuilt.
+
 ### 2026-08-14 · The dial cascade is an inert subsystem
 
 `core/agentgraph/dials` has exactly one non-test importer
@@ -304,6 +365,34 @@ its evidence.
 
 ## Drained
 
+- **2026-08-14** — the whole `kenaz__ask_user_question` return leg. Three
+  independent breaks, each of which alone made the tool useless:
+  (1) `core/rpc/api.go` passed `a.elicitAPI` to `newLLMStack` ~500 lines
+  BEFORE it assigned it, so the tool was registered default-on with a nil
+  Delegate and answered every call `"not_wired … will return once WP04
+  lands"` — construction order fixed, pinned by
+  `TestAskUserQuestionDelegateIsWired`;
+  (2) the eleven components under
+  `frontend/src/components/dialogs/AskUserQuestion/` had **never** been
+  imported by anything (`git log -S` over `frontend/src` finds no import,
+  ever) — `AskUserQuestion.vue` is now mounted in `App.vue` beside
+  `ConfirmToolModal`, pinned by `AppElicitationMount.spec.ts`, which mounts
+  `App.vue` rather than the dialog so "the dialog renders" can never again
+  be mistaken for "the user can answer";
+  (3) served mode dispatched `Elicit_ListPending` but not
+  `Elicit_SubmitAnswer`, so a workbench could see the question and not
+  reply — added, pinned by
+  `TestRPC_ElicitSubmitAnswer_ReleasesTheParkedCall`, which asserts the
+  blocked `OpenDialog` returns with the answer rather than that the RPC
+  returned 200.
+  Also fixed en route: the frontend pre-`JSON.stringify`'d the answer into a
+  `json.RawMessage` parameter, double-encoding every value (the model's
+  schema promises `["a","b"]` for a checkbox and would have received the
+  string `"[\"a\",\"b\"]"`), and the question-input subtree was unkeyed, so
+  a second question of the same kind reused the first question's child and
+  submitted a stale answer. Neither had ever run in the app.
+  Still open from the same surface: deferred + wizard modes, and the
+  todo / sub-agent UI — see the ungated findings above.
 - **2026-08-14** (01PMCH01 WP02) — `agentgraph.HistoryEntry.{MoveKind,
   MoveIndex,TurnSpanID}` (carried end-to-end by the seam while every call
   site passed it zero) now stamped on every chat turn by the runner's

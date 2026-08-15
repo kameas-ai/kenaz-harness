@@ -7,6 +7,7 @@ import ToastRoot from '@/components/ui/ToastRoot.vue';
 import OnboardingDialog from '@/views/onboarding/OnboardingDialog.vue';
 import TelemetryOnboardingModal from '@/components/onboarding/TelemetryOnboardingModal.vue';
 import AboutDialog from '@/components/about/AboutDialog.vue';
+import AskUserQuestion from '@/components/dialogs/AskUserQuestion/AskUserQuestion.vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import { setConnectionState } from '@/lib/useConnectionState';
 import { restoreLastRoute, installRouteAuditing } from '@/lib/routing';
@@ -142,6 +143,20 @@ onMounted(async () => {
     v-if="telemetryOnboardingOpen"
     @close="telemetryOnboardingOpen = false"
   />
+  <!-- Elicitation dialog for kenaz__ask_user_question.
+
+       Mounted here, app-wide, because the thing it answers is a BLOCKED
+       GOROUTINE: the tool is default-on and its Delegate is the real
+       elicit bridge, so a model that asks a question parks the turn
+       inside elicitview.OpenDialog for up to ten minutes and only
+       client.elicit.submitAnswer releases it. This component owned that
+       return leg and was never imported by anything, so the pause had no
+       answering surface and every question the model asked ran out the
+       clock. Mounting it at App level (not inside a session view) means a
+       question raised by a background session is still answerable from
+       wherever the user happens to be — the same reasoning that puts
+       ConfirmToolModal outside the chat surface. -->
+  <AskUserQuestion />
   <!-- About dialog — opened by OS menu bar "About" item (menu:about:open event) -->
   <AboutDialog
     :open="aboutStore.isOpen.value"

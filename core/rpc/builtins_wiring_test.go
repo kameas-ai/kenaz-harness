@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
+	coreaskuser "github.com/kameas-ai/kenaz-harness/core/tools/askuserquestion"
 	corebash "github.com/kameas-ai/kenaz-harness/core/tools/bash"
 	coresubagent "github.com/kameas-ai/kenaz-harness/core/tools/subagentdispatch"
 	corewebfetch "github.com/kameas-ai/kenaz-harness/core/tools/webfetch"
@@ -229,4 +231,70 @@ func TestDangerousOpsCacheLookup(t *testing.T) {
 			t.Error("lookup did not observe the dial being turned on — it snapshotted at construction, so the Settings toggle stays inert until restart")
 		}
 	})
+}
+
+// TestAskUserQuestionDelegateIsWired pins that kenaz__ask_user_question is
+// registered in the PRODUCTION wiring path with a real, non-nil Delegate.
+//
+// This is the anti-regression pin for the stale comment that sat above the
+// registration in builtins_wiring.go until 2026-08-14: it asserted "the
+// Delegate is nil until WP04 wires the elicit RPC bridge", long after WP04
+// had landed. Read literally, it said the tool was an inert stub that
+// returned errKindNotWired. In fact the delegate was live, so calling the
+// tool PARKED the turn for ten minutes waiting on a dialog the frontend
+// never mounted.
+//
+// The discriminator is the tool's own two failure shapes. With a nil
+// delegate the tool short-circuits to {"error":"not_wired"} without ever
+// touching the elicit API. With a live delegate it calls OpenDialog, which
+// honours the caller's context — so an already-cancelled context comes back
+// as a well-formed AskResult with cancelled=true. Only a wired delegate can
+// produce the second shape.
+func TestAskUserQuestionDelegateIsWired(t *testing.T) {
+	c, err := core.New(core.Options{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("core.New: %v", err)
+	}
+	api := New(c)
+
+	registry := api.Builtins()
+	if registry == nil {
+		t.Fatal("builtins registry is nil — construction broke")
+	}
+	tool, ok := registry.Lookup(coreaskuser.ToolName)
+	if !ok {
+		t.Fatalf("%s is not registered in the production wiring path", coreaskuser.ToolName)
+	}
+
+	// An already-cancelled context makes the parked OpenDialog return
+	// immediately, so this test never waits on the 10-minute dialog
+	// deadline.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	raw, callErr := tool.Call(ctx, json.RawMessage(`{"question":"Ship it?","kind":"radio","options":[{"value":"y","label":"Yes"},{"value":"n","label":"No"}]}`))
+	if callErr != nil {
+		t.Fatalf("tool.Call returned a hard error: %v", callErr)
+	}
+
+	var errResult struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+	if jsonErr := json.Unmarshal(raw, &errResult); jsonErr == nil && errResult.Error != "" {
+		t.Fatalf("%s reported %q (%s) — its Delegate is nil in the production "+
+			"wiring path, so the model is offered a tool that cannot ask anything",
+			coreaskuser.ToolName, errResult.Error, errResult.Message)
+	}
+
+	var result struct {
+		Answer    json.RawMessage `json:"answer"`
+		Cancelled bool            `json:"cancelled"`
+	}
+	if jsonErr := json.Unmarshal(raw, &result); jsonErr != nil {
+		t.Fatalf("decode AskResult from %s: %v (raw: %s)", coreaskuser.ToolName, jsonErr, raw)
+	}
+	if !result.Cancelled {
+		t.Errorf("expected cancelled=true from a cancelled context; got %s", raw)
+	}
 }

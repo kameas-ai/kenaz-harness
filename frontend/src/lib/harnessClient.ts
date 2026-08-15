@@ -786,9 +786,17 @@ interface WailsBindingsLike {
   ContextBootstrap_Health(): Promise<ContextHealth>;
 
   // ── Elicitation (ask-user-question-interactive-01KZNP3G WP04-WP06) ──
+  //
+  // `answer` is the answer VALUE, not a JSON string of it. The Go
+  // parameter is a json.RawMessage, and Wails fills it by unmarshalling
+  // the argument's JSON text straight into the RawMessage — so whatever
+  // shape is passed here is the shape the model receives. Passing
+  // JSON.stringify(value) therefore double-encodes: a checkbox answer
+  // arrives at the model as the string "[\"a\",\"b\"]" instead of an
+  // array, contradicting the tool's own schema.
   Elicit_SubmitAnswer(
     requestID: string,
-    answerJSON: string | null,
+    answer: unknown,
     cancelled: boolean,
   ): Promise<void>;
   Elicit_ListPending(): Promise<import('./types').ElicitRequest[]>;
@@ -805,11 +813,12 @@ interface WailsBindingsLike {
   Confirm_ApproveBatch(batchID: string, rememberSession: boolean): Promise<number>;
   Confirm_CancelBatch(batchID: string, reason: string): Promise<number>;
   Confirm_ListPending(sessionID: string): Promise<import('./types').ToolConfirmPending[]>;
-  // WP05 multi-step wizard sequencing.
+  // WP05 multi-step wizard sequencing. Same value-not-string contract as
+  // Elicit_SubmitAnswer above.
   Elicit_SubmitWizardStep(
     requestID: string,
     questionID: string,
-    answerJSON: string | null,
+    answer: unknown,
     dismissed: boolean,
   ): Promise<void>;
   // WP06 async / deferred mode.
@@ -3034,17 +3043,27 @@ export interface ElicitClient {
   /**
    * Submit the user's answer (or a cancellation) for a pending elicitation.
    * requestID was received on the "elicit:pending" event topic.
-   * answerJSON is a JSON-encoded answer value, or null when cancelled=true.
+   *
+   * `answer` is the answer VALUE — a string, number, string[], … — not a
+   * JSON-encoded string of it. The transport encodes it once; encoding it
+   * here as well hands the model a quoted blob where its own tool schema
+   * promised an array or a number.
+   *
+   * This call is the ONLY thing that unblocks the parked turn: the
+   * backend's OpenDialog is sitting on a channel with a ten-minute
+   * deadline. Not calling it is not "leaving the dialog open", it is
+   * stalling the model for ten minutes.
    */
-  submitAnswer(requestID: string, answerJSON: string | null, cancelled: boolean): Promise<void>;
+  submitAnswer(requestID: string, answer: unknown, cancelled: boolean): Promise<void>;
 
   /**
    * Submit one step of a multi-question wizard (WP05).
    * requestID identifies the OpenWizard call; questionID is the id of the
-   * question being answered; answerJSON is the JSON-encoded answer value;
-   * dismissed is true when the user cancels the wizard mid-flow.
+   * question being answered; `answer` is the answer value (see
+   * submitAnswer for why it is not pre-stringified); dismissed is true
+   * when the user cancels the wizard mid-flow.
    */
-  submitWizardStep(requestID: string, questionID: string, answerJSON: string | null, dismissed: boolean): Promise<void>;
+  submitWizardStep(requestID: string, questionID: string, answer: unknown, dismissed: boolean): Promise<void>;
 
   /**
    * Register a deferred ask (WP06). Returns immediately with AskID so the
@@ -4396,6 +4415,26 @@ export function createServedHarnessClient(opts?: {
        */
       listPending: () =>
         transport.call<import('./types').ElicitRequest[]>('Elicit_ListPending'),
+
+      /**
+       * submitAnswer — the return leg, and the reason listPending is not
+       * enough on its own.
+       *
+       * A served harness parks kenaz__ask_user_question exactly like the
+       * desktop one: OpenDialog blocks a goroutine for ten minutes.
+       * Shipping the browser the pending ask (over the
+       * elicit:pending:snapshot frame and this listPending call) while
+       * leaving submitAnswer on the rejecting base meant a workbench user
+       * could SEE the question and had no way to answer it. That is the
+       * same shape as the confirm-each gap the Confirm_* served methods
+       * exist to close.
+       */
+      submitAnswer: (requestID, answer, cancelled) =>
+        transport.call<void>('Elicit_SubmitAnswer', {
+          requestId: requestID,
+          answer,
+          cancelled,
+        }),
     },
 
     llm: {
