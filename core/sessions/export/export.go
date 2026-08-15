@@ -26,7 +26,18 @@ const (
 
 // ExportFormatVersion is the stable schema version embedded in both
 // formats. Increment when the schema shape changes in a breaking way.
-const ExportFormatVersion = 1
+//
+// 1 → 2 (model-moves-transcript-01PMCH01 WP05, adversarial review):
+// `tool_calls[].arguments` was REMOVED from the JSON export and the
+// markdown `**Arguments:**` raw-JSON block replaced by a names-and-types
+// summary, because a credential nested in an argument object or an array
+// walked straight past `RedactValue` into the exported file. Most of
+// WP05 is additive — `kind`, `turn_span_id`, `moves`, `trajectory_only`
+// are all `omitempty` and a v1 reader ignores them — but a removal is
+// not additive, and the rule above is the rule. A v1 reader that walked
+// `arguments` now finds nothing there and has no way to tell that from
+// "this call had no arguments"; the version says which world it is in.
+const ExportFormatVersion = 2
 
 // ArtifactSidecar describes an inline attachment the renderer extracted
 // and wants written alongside the main export file.

@@ -135,6 +135,10 @@ const sqlInitSchema = `
 // sessions and projects) as required by the unified-context-artifacts
 // store FR-003 (unified-context-artifacts-01NCTXU01 — see
 // migrations_artifacts_global_scope.go).
+// 0333 adds the nullable kind / move_index / turn_span_id columns to
+// session_messages so a human turn can persist as an ordered list of
+// model moves rather than one flattened assistant message
+// (model-moves-transcript-01PMCH01 WP01 — see migrations_moves.go).
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -199,6 +203,9 @@ func Migrations() []migrations.Migration {
 		migration0330(),
 		migration0331(),
 		migration0332(),
+		migration0333(),
+		migration0334(),
+		migration0335(),
 	}
 }
 

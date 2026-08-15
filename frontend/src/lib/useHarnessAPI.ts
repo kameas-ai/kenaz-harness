@@ -20,7 +20,6 @@ import type {
   Session,
   Project,
   ShellStatus,
-  Denial,
   AuditEntry,
   AuditFilter,
   EventStreamEntry,
@@ -402,30 +401,6 @@ export function useEventLogStream(
       }
     },
   };
-}
-
-/**
- * usePolicyDecisions — entry point for downstream missions to receive
- * `Denial` objects from policy:event and route them to <DenialNotice>.
- */
-export interface UsePolicyDecisionsResult {
-  onDenied(cb: (d: Denial) => void): () => void;
-}
-
-const policyDeniedHandlers = new Set<(d: Denial) => void>();
-
-export function usePolicyDecisions(): UsePolicyDecisionsResult {
-  return {
-    onDenied(cb) {
-      policyDeniedHandlers.add(cb);
-      return () => policyDeniedHandlers.delete(cb);
-    },
-  };
-}
-
-/** Test-only: synthesize a Denial for the registered handlers. */
-export function _emitDenialForTest(d: Denial): void {
-  for (const h of policyDeniedHandlers) h(d);
 }
 
 /**

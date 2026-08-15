@@ -60,6 +60,25 @@ type LLMRequest struct {
 	// means "no node-level override" — the existing direct-registry path
 	// is unchanged.
 	FallbackChainId string
+
+	// StreamToChat carries ModelAttrs.stream_to_chat down to the
+	// provider seam (model-moves-transcript-01PMCH01 WP02).
+	//
+	// The attr has existed since the chat migration and had no reader:
+	// it declared "this node's output IS the chat's assistant turn" and
+	// nothing acted on it. It is the discriminator the chat runner
+	// needs. env.LLM.Generate is called by SEVEN different executors —
+	// the model node, the fused router, the review gate, both rungs of
+	// the escalation ladder, the summarise compaction strategy and the
+	// task-state gate — and only the first of those produces text the
+	// user is reading. Recording every Generate as a transcript move
+	// would persist the exit gate's private verdict as an assistant
+	// message.
+	//
+	// Only modelExecutor sets it, from the node's own attr; every other
+	// call site leaves it false and is therefore invisible to the move
+	// journal.
+	StreamToChat bool
 }
 
 // Message is the narrow chat-message shape the kernel works with.
@@ -92,6 +111,13 @@ type ToolCallRequest struct {
 	ID        string
 	Name      string
 	Arguments string // JSON-encoded args
+	// IsError is set only on the ToolCallRequest a HistoryEntry of kind
+	// "tool_result" carries, where it means "the call this entry answers
+	// failed" (model-moves-transcript-01PMCH01 WP04). It is the durable
+	// half of the chat chip's running→ok/error transition, so a reloaded
+	// session shows the same failure the live view showed. Always false
+	// on a request the model actually issued.
+	IsError bool
 }
 
 // LLMResponse is the narrow result returned to the kernel.
@@ -124,6 +150,11 @@ const (
 	StreamEventUsage     StreamEventKind = "usage"
 	StreamEventFinish    StreamEventKind = "finish"
 	StreamEventError     StreamEventKind = "error"
+	// StreamEventMoveStart opens a new model move on the stream
+	// (model-moves-transcript-01PMCH01 WP02). See MoveIndex / MoveKind
+	// below for the contract; the chat runner's move journal is the only
+	// emitter and WP04's chat surface is the consumer.
+	StreamEventMoveStart StreamEventKind = "move_start"
 )
 
 // StreamEvent is one delta the chassis-bound LLM provider hands the
@@ -159,6 +190,25 @@ type StreamEvent struct {
 	UsageReasoningTokens int    `json:"usage_reasoning_tokens,omitempty"`
 	Finish               string `json:"finish,omitempty"`
 	ErrMsg               string `json:"err,omitempty"`
+
+	// MoveIndex / MoveKind are populated only on
+	// Kind == StreamEventMoveStart and carry the move the stream is
+	// about to render (model-moves-transcript-01PMCH01 WP02).
+	//
+	// MoveIndex is the 0-based position of the move inside the human
+	// turn — the same number the persisted transcript entry carries in
+	// its move_index column, which is what lets the live view and a
+	// reload be reconciled entry-for-entry.
+	MoveIndex int    `json:"move_index,omitempty"`
+	MoveKind  string `json:"move_kind,omitempty"`
+	// MoveArgsSummary / MoveIsError complete a tool boundary so the chat
+	// surface can render the chip without waiting for the persisted row
+	// (model-moves-transcript-01PMCH01 WP04). MoveArgsSummary is the
+	// DISPLAY-LAYER summary — argument names and value types, never
+	// values, and never the raw ToolArgs above. MoveIsError says the
+	// tool_result boundary closes its pair with a failure.
+	MoveArgsSummary string `json:"move_args_summary,omitempty"`
+	MoveIsError     bool   `json:"move_is_error,omitempty"`
 }
 
 // StreamSink is the kernel-side seam the LLMNode-bound provider feeds
@@ -253,6 +303,17 @@ func (f LLMProviderFunc) Generate(ctx context.Context, req LLMRequest) (LLMRespo
 
 // ToolCall is the agentgraph-side request to dispatch a tool.
 type ToolCall struct {
+	// ID is the model-assigned tool_use id this dispatch answers. It is
+	// what pairs a persisted tool_call transcript entry with its
+	// tool_result (model-moves-transcript-01PMCH01 WP02) — and, one
+	// layer up, what pairs a provider tool_use block with its
+	// tool_result block, the mismatch that produces the classic 400.
+	//
+	// ToolDispatchNode populates it from the model's ToolCallRequest.
+	// The builtin-tool node kinds leave it empty: a graph-authored tool
+	// node is not answering a model request, so there is no id to pair
+	// with and no transcript entry to write.
+	ID   string
 	Name string
 	Args map[string]any
 }
@@ -366,26 +427,97 @@ func (f HistoryReaderFunc) History(ctx context.Context, sessionID string, n int)
 	return f(ctx, sessionID, n)
 }
 
-// HistoryWriter is the optional persistence half of the history seam,
-// consumed by the SessionWriteNode kind. Production wiring binds this
-// to core/session.Manager.AppendMessage; tests can pass a fake.
+// HistoryEntry is what crosses the history-write seam: one transcript
+// entry, classic or move.
 //
-// AppendMessage assigns the message ID and persistence side-effects;
-// the returned id is surfaced on the SessionWriteNode `message_id`
-// output port so downstream nodes (artifact backlinks, branch markers)
-// can reference the freshly persisted row.
+// Role/Content are the classic pair. The three move fields carry the
+// model-moves metadata (model-moves-transcript-01PMCH01 WP01) down to
+// core/session.Manager.AppendTranscriptEntry, which is the only writer
+// that can stamp it onto a durable row.
+//
+// The seam takes a struct rather than four strings on purpose: with a
+// second AppendMove method, or an optional-upgrade interface, an
+// implementation could satisfy the seam while quietly dropping move
+// metadata on the floor. One method, one shape — an implementer either
+// carries the whole entry or does not compile.
+//
+// A zero MoveKind means a classic entry, byte-identical downstream to
+// everything written before the mission.
+type HistoryEntry struct {
+	// Role is the speaker: "user" | "assistant" | "system" | "tool".
+	Role string
+	// Content is the entry's text.
+	Content string
+
+	// MoveKind is one of core/session.MoveKinds() — "assistant_move" |
+	// "tool_call" | "tool_result" | "final" — or empty for a classic
+	// entry. The writer validates the vocabulary; agentgraph carries it
+	// as a string so this package keeps no dependency on core/session.
+	MoveKind string
+	// MoveIndex is the 0-based position of this entry inside its human
+	// turn. Carries no meaning when MoveKind is empty.
+	MoveIndex int
+	// TurnSpanID is the id of the user message that opened the turn this
+	// entry belongs to. Required when MoveKind is set.
+	TurnSpanID string
+
+	// ToolCalls is the structured tool payload a tool_call / tool_result
+	// entry carries (model-moves-transcript-01PMCH01 WP02). It is what
+	// makes the pairing machine-readable rather than a prose convention:
+	// a tool_result entry names the id of the tool_call it answers.
+	//
+	// WP01 landed session.TranscriptEntry.ToolCalls with no counterpart
+	// here, which is why the field had no production writer and sat in
+	// the in-flight ledger. This is the counterpart.
+	//
+	// DISPLAY-LAYER REDACTION (spec §4): Arguments are deliberately NOT
+	// read off this shape. A tool_call entry's Content carries an ARGS
+	// SUMMARY — key names and value types, never values — and the store
+	// binding drops ToolCallRequest.Arguments on the floor rather than
+	// letting it reach session.ToolCall.Arguments, which the display
+	// surface projects.
+	ToolCalls []ToolCallRequest
+
+	// ModelToolArgs is the MODEL LAYER's raw tool arguments for a
+	// tool_call entry: tool-call id → the JSON argument object the model
+	// emitted (model-moves-transcript-01PMCH01 WP03, spec §4).
+	//
+	// It is a SEPARATE FIELD from ToolCalls[].Arguments on purpose. The
+	// two layers have opposite rules about the same bytes — display must
+	// never see values, the provider protocol cannot work without them —
+	// and giving each its own field is what stops a future edit from
+	// "unifying" them and leaking raw arguments into an exportable
+	// transcript row. It lands in session_messages.model_tool_args, which
+	// no display or export projection reads.
+	//
+	// Only meaningful on MoveKind == "tool_call"; the writer rejects it
+	// anywhere else rather than dropping it silently.
+	ModelToolArgs map[string]string
+}
+
+// HistoryWriter is the optional persistence half of the history seam,
+// consumed by the SessionWriteNode kind and by the chat runner.
+// Production wiring binds it to
+// core/session.Manager.AppendTranscriptEntry; tests can pass a fake.
+//
+// This is the ONE writer for chat transcript entries (spec §4 of
+// model-moves-transcript-01PMCH01: "no second history-writing path").
+// AppendEntry assigns the message ID and persistence side-effects; the
+// returned id is surfaced on the SessionWriteNode `message_id` output
+// port so downstream nodes (artifact backlinks, branch markers) can
+// reference the freshly persisted row.
 type HistoryWriter interface {
-	AppendMessage(ctx context.Context, sessionID, role, content string) (messageID string, err error)
+	AppendEntry(ctx context.Context, sessionID string, entry HistoryEntry) (messageID string, err error)
 }
 
 // HistoryWriterFunc adapts a function value to the HistoryWriter
 // interface. Useful for tests that want to record append calls without
 // declaring a struct.
-type HistoryWriterFunc func(ctx context.Context, sessionID, role, content string) (string, error)
+type HistoryWriterFunc func(ctx context.Context, sessionID string, entry HistoryEntry) (string, error)
 
-// AppendMessage satisfies HistoryWriter.
-func (f HistoryWriterFunc) AppendMessage(ctx context.Context, sessionID, role, content string) (string, error) {
-	return f(ctx, sessionID, role, content)
+// AppendEntry satisfies HistoryWriter.
+func (f HistoryWriterFunc) AppendEntry(ctx context.Context, sessionID string, entry HistoryEntry) (string, error) {
+	return f(ctx, sessionID, entry)
 }
 
 // nilHistoryWriter is the default no-op writer installed when env
@@ -394,8 +526,8 @@ func (f HistoryWriterFunc) AppendMessage(ctx context.Context, sessionID, role, c
 // than silently no-opping.
 type nilHistoryWriter struct{}
 
-// AppendMessage satisfies HistoryWriter; always errors.
-func (nilHistoryWriter) AppendMessage(_ context.Context, _, _, _ string) (string, error) {
+// AppendEntry satisfies HistoryWriter; always errors.
+func (nilHistoryWriter) AppendEntry(_ context.Context, _ string, _ HistoryEntry) (string, error) {
 	return "", ErrNoHistoryWriter
 }
 

@@ -85,7 +85,6 @@ import (
 	contextsyncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextsync"
 	contextview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextview"
 	corpusview "github.com/kameas-ai/kenaz-harness/core/rpc/views/corpus"
-	dialsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/dials"
 	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
 	fleetview "github.com/kameas-ai/kenaz-harness/core/rpc/views/fleet"
 	hooksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/hooks"
@@ -200,7 +199,6 @@ type HarnessAPI interface {
 	// Resolves modal decisions from the four prompt topics, lists
 	// accumulated grants, and revokes them.
 	Permissions() permissionsview.PermissionsAPI
-	Dials() dialsview.DialsAPI
 	Nodes() nodesview.NodesAPI
 	Search() searchview.SearchAPI
 	// Update is the auto-update view (mission auto-update, v0.4.0 WP03).
@@ -214,11 +212,6 @@ type HarnessAPI interface {
 	// id_mismatch entries. Wired when a real Core (storage.DB) is
 	// available; otherwise returns ErrStorageUnavailable on every call.
 	Storage() storageview.StorageAPI
-	// CedarProposeResolve delivers a user decision (accept | reject)
-	// for a pending cedar-policy proposal surfaced by CedarProposeModal
-	// (harness-self-mcp-onboarding-01KQ8TDU WP07). requestID comes in on
-	// the "cedar:propose-pending" broker topic.
-	CedarProposeResolve(requestID, decision string) error
 
 	// Onboarding exposes the first-run onboarding RPC surface (mission
 	// harness-self-mcp-onboarding-01KQ8TDU WP08). The frontend's
@@ -472,13 +465,6 @@ type API struct {
 	// Read once at boot (custom-openai-compatible-endpoint-01KQ8VN0 WP08).
 	customOpenAIEnabled bool
 
-	// cedarProposeResolver is the in-process resolver for pending
-	// cedar:propose-pending requests (WP07 of
-	// harness-self-mcp-onboarding-01KQ8TDU). Set by the onboarding
-	// flow when it wires a CedarProposerImpl; nil falls back to a
-	// stub that returns ErrCedarProposeNotWired.
-	cedarProposeResolver CedarProposeResolver
-
 	// permissionsAPI is the universal interactive-permission RPC
 	// surface (mission cedar-credential-policy-01KQ8TDE, WP02). Backed
 	// by the process-singleton *cedar.Registry below, which HAS
@@ -498,7 +484,6 @@ type API struct {
 	// gate, etc.) can pass it into their gate constructors without
 	// re-plumbing through api.New.
 	promptRegistry *cedar.Registry
-	dialsAPI       dialsview.DialsAPI
 	searchAPI      searchview.SearchAPI
 	storageAPI     storageview.StorageAPI
 	// memStoreRef is the long-term memory store held for the search adapter
@@ -1461,6 +1446,26 @@ func New(c *core.Core, opts ...Option) *API {
 	// compaction-convergence-01PMDL05 WP01).
 	a.SetCompactionAPI(compactionview.New(compactionPipeline))
 
+	// Elicitation view + ask_user_question tool bridge (mission
+	// ask-user-question-interactive-01KZNP3G WP04). The elicitAPI is
+	// constructed unconditionally so the tool's Delegate is always
+	// available; it just emits no events when wailsCtx is nil (test path).
+	// WailsEmitter is the same authorised EventsEmit wrapper used by the
+	// stream broker — the CI check allows it in this file.
+	//
+	// ORDERING IS LOAD-BEARING, and was wrong until 2026-08-14: this
+	// assignment sat ~500 lines BELOW the newLLMStack call on the next
+	// line, so `a.elicitAPI` was still nil when registerBuiltinTools read
+	// it. kenaz__ask_user_question was therefore registered — default-on,
+	// advertised to the model in every catalog — with a nil Delegate, and
+	// every call the model made came back
+	// "not_wired … will return once WP04 lands" long after WP04 had
+	// landed. Nothing failed loudly; the model simply could never ask the
+	// user anything. Keep this above newLLMStack.
+	a.elicitAPI = elicitview.New(elicitview.Config{
+		Emitter: WailsEmitter{},
+	})
+
 	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl})
 	a.llmAPI = stack.api
 	// confirm-each-enforcement-01PMAG05 WP02: the resolve leg. Bound to
@@ -1699,11 +1704,6 @@ func New(c *core.Core, opts ...Option) *API {
 	// Agent-graph view surface — graph manager already built above so
 	// the chat-migration ChatRunner could share its kernel.
 	a.graphAPI = graphview.New(a.graphMgr)
-
-	// Cascading dials (Bundle E WP17). The view degrades to in-memory-
-	// only when no kernel resumer is wired — the chassis still boots
-	// and BumpAndResume returns ErrNoPause until a kernel binds.
-	a.dialsAPI = dialsview.New(dialsview.Config{})
 
 	// Workflows subsystem (mission workflows-01KQ8TDG, v0.3.0 beta).
 	// Loads embedded builtin/*.yaml at boot; HARNESS_WORKFLOWS=off
@@ -1975,16 +1975,6 @@ func New(c *core.Core, opts ...Option) *API {
 		}
 		a.acpAPI = acpview.NewAPI(acpReg, acpEnv, acpOpts)
 	}
-
-	// Elicitation view + ask_user_question tool bridge (mission
-	// ask-user-question-interactive-01KZNP3G WP04). The elicitAPI is
-	// constructed unconditionally so the tool's Delegate is always
-	// available; it just emits no events when wailsCtx is nil (test path).
-	// WailsEmitter is the same authorised EventsEmit wrapper used by the
-	// stream broker — the CI check allows it in this file.
-	a.elicitAPI = elicitview.New(elicitview.Config{
-		Emitter: WailsEmitter{},
-	})
 
 	// Scheduled-chat-runs view (mission scheduled-chat-runs-01KX5R8B, WP04).
 	// Wired with the SQLiteChatStore when a real DB is available; test
@@ -4019,7 +4009,6 @@ func newLLMStack(
 		Keychain:      &keychainWriter{backend: secretsBackend},
 		Prober:        &registryProber{reg: reg, creds: credResolver},
 		History:       historyAdapter,
-		HistoryWriter: &llmHistoryWriter{inner: historyAdapter},
 		Hooks:         hooksRunner,
 		Attachments:   attResolver,
 		ChatRunner:    chatRunner,
@@ -4267,6 +4256,34 @@ func agenticTurnRoutingEnabledFromSettings(settingsImpl *settings.API) bool {
 	return got.AgenticTurnRouting
 }
 
+// moveFidelityHistoryEnabledFromSettings reads the LIVE half of the
+// model-visible move-fidelity gate (model-moves-transcript-01PMCH01
+// WP03, spec §4).
+//
+// Same read-at-consumption contract as the routing gate above, and the
+// same fail-closed direction — but note that "fail-closed" here means
+// FALSE even though the dial's DEFAULT is true. That is not a
+// contradiction: the default is what a healthy read of an unset setting
+// returns (MoveFidelityHistoryEnabled inverts the zero value), whereas
+// this fallback is what an UNREADABLE setting returns. Defaulting a
+// storage fault to the provider-visible composition would change every
+// subsequent request's message array because a file was briefly locked.
+//
+// Two callers share this one reader so the composition and the
+// session-stamp cannot disagree about where the lever sits.
+func moveFidelityHistoryEnabledFromSettings(settingsImpl *settings.API) bool {
+	if settingsImpl == nil || settingsImpl.Store() == nil {
+		return false
+	}
+	got, err := settingsImpl.Store().LoadAll()
+	if err != nil {
+		logging.L().Warn("chat.move_fidelity_history.read_failed",
+			"err", err.Error(), "detail", "defaulting to the classic single-message composition")
+		return false
+	}
+	return got.MoveFidelityHistoryEnabled()
+}
+
 // resolveAutonomyKnobsWithSettingsFallback folds the legacy
 // Settings.EffectiveMaxAgentTurns dial into the global autonomy layer's
 // MaxIterations override — but only when the global layer doesn't
@@ -4391,8 +4408,38 @@ func buildChatRunner(
 		}
 		return text
 	}
-	historyReader := chatSessionMessageReader{inner: historyAdapter}
+	// model-moves-transcript-01PMCH01 WP03: the live half of the
+	// move-fidelity gate. Passed as a CLOSURE, not a value, so the
+	// composition reads the dial on every request — read-at-consumption,
+	// per liveDialResolver. A read failure logs and returns false, which
+	// lands on today's composition: silently switching a user INTO a
+	// provider-visible request shape because storage hiccuped is the
+	// wrong failure direction.
+	moveFidelityHistory := func() bool {
+		return moveFidelityHistoryEnabledFromSettings(settingsImpl)
+	}
+	historyReader := chatSessionMessageReader{
+		inner:            historyAdapter,
+		moveFidelityDial: moveFidelityHistory,
+	}
+	// The same reader stamps NEW sessions with the mode they were opened
+	// under, so the durable half of the gate and the live half can never
+	// disagree about where the lever sat. Installed here rather than at
+	// manager construction because core.Core builds the manager lazily and
+	// has no settings dependency.
+	if historyAdapter != nil && historyAdapter.mgr != nil {
+		historyAdapter.mgr.SetMoveFidelityDial(moveFidelityHistory)
+	}
 	historyWriter := &llmHistoryWriter{inner: historyAdapter}
+	// model-moves-transcript-01PMCH01 WP02: the turn-span lookup for
+	// StartStream's empty-userMessage paths (keychain redrive; the
+	// multimodal send, where the frontend already landed the user row).
+	// nil manager leaves it nil, which makes those turns write classic
+	// entries — see chat.TurnSpanReader.
+	var turnSpanReader chat.TurnSpanReader
+	if historyAdapter != nil && historyAdapter.mgr != nil {
+		turnSpanReader = chatTurnSpanReader{mgr: historyAdapter.mgr}
+	}
 	baseEnvDefaults := graphMgr.EnvDefaults()
 	// Compose the manager's seam defaults with chat-migration WP-D
 	// post-LLM hook wiring: pre-construct the kernel HookManager so we
@@ -4602,6 +4649,7 @@ func buildChatRunner(
 		Broker:        chatBrokerAdapter{broker: broker},
 		History:       historyReader,
 		HistoryWriter: historyWriter,
+		TurnSpan:      turnSpanReader,
 		// agentgraph-total-convergence-01PMGX01 WP12: every chat turn
 		// registers the resolved spec it runs, so Graph_MaterializeRun
 		// can project the turn back into a graph. Without this the
@@ -4794,32 +4842,101 @@ func (a chatToolDiscovererAdapter) Tools(ctx context.Context, sessionID string) 
 	return a.inner.Tools(ctx, sessionID)
 }
 
-// chatSessionMessageReader bridges *sessionHistoryReader (which returns
-// llm.SessionMessage) onto the chat package's narrower SessionMessageReader
-// shape (returns []agentgraph.Message).
+// chatSessionMessageReader is the model-visible history seam: what it
+// returns IS the message array the next request carries (the chat
+// graph's `history_in` node feeds `assistant_turn` directly).
+//
+// model-moves-transcript-01PMCH01 WP03 moved the projection itself into
+// composeModelHistory (core/rpc/model_history.go); this type is the
+// binding that resolves the gate and hands the rows over. It reads the
+// session manager directly rather than through sessionHistoryReader's
+// llm.SessionMessage projection because that projection drops the move
+// metadata and the model-layer tool args — the two things the
+// composition exists to read.
 type chatSessionMessageReader struct {
 	inner *sessionHistoryReader
+
+	// moveFidelityDial reports the CURRENT position of
+	// Settings.MoveFidelityHistory.
+	//
+	// READ-AT-CONSUMPTION, and this field is why: it is a func, not a
+	// bool, so the value cannot be latched when the chassis is built.
+	// History() calls it on EVERY request, so a user who turns the dial
+	// off gets the classic composition on their next message rather than
+	// after a restart — the property liveDialResolver established after
+	// the compaction boot-seed defect, and the property that makes this a
+	// usable revert lever for a provider-visible change.
+	//
+	// nil means "no settings wired" and yields classic: fail-closed.
+	moveFidelityDial func() bool
 }
 
+// History composes the model-visible message array for one request.
 func (r chatSessionMessageReader) History(ctx context.Context, sessionID string, n int) ([]coreag.Message, error) {
-	if r.inner == nil {
+	if r.inner == nil || r.inner.mgr == nil {
 		return nil, nil
 	}
-	stored, err := r.inner.ListMessages(ctx, sessionID)
+	stored, err := r.inner.mgr.ListMessages(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
-	if n > 0 && len(stored) > n {
-		stored = stored[len(stored)-n:]
+	return composeModelHistory(
+		modelHistoryRowsFrom(stored),
+		resolveMoveFidelity(r.moveFidelityHistoryEnabled(), r.sessionMoveMode(ctx, sessionID)),
+		n,
+	), nil
+}
+
+// moveFidelityHistoryEnabled reads the LIVE half of the gate, here, at
+// the point of consumption. A nil dial or a read failure yields false —
+// fail-closed onto today's composition, never onto the
+// provider-visible one.
+func (r chatSessionMessageReader) moveFidelityHistoryEnabled() bool {
+	if r.moveFidelityDial == nil {
+		return false
 	}
-	out := make([]coreag.Message, 0, len(stored))
-	for _, m := range stored {
-		out = append(out, coreag.Message{
-			Role:    m.Role,
-			Content: m.Content,
-		})
+	return r.moveFidelityDial()
+}
+
+// sessionMoveMode reads the DURABLE half of the gate: which mode this
+// session was created under. A lookup failure returns "", which
+// resolveMoveFidelity reads as classic — the same answer a
+// pre-migration session gives, and the safe one.
+func (r chatSessionMessageReader) sessionMoveMode(ctx context.Context, sessionID string) string {
+	rec, err := r.inner.mgr.Get(ctx, sessionID)
+	if err != nil {
+		return ""
 	}
-	return out, nil
+	return rec.MoveHistoryMode
+}
+
+// chatTurnSpanReader is the production binding of chat.TurnSpanReader
+// (model-moves-transcript-01PMCH01 WP02). It answers "which user
+// message opened the turn currently in flight" by walking the session's
+// messages backwards to the last one with role=user.
+//
+// It reads the manager directly rather than reusing
+// sessionHistoryReader because that adapter projects onto
+// llm.SessionMessage, which drops the row id — the one field this
+// lookup exists to return.
+type chatTurnSpanReader struct {
+	mgr *session.Manager
+}
+
+func (r chatTurnSpanReader) LatestUserMessageID(ctx context.Context, sessionID string) (string, error) {
+	if r.mgr == nil {
+		return "", nil
+	}
+	msgs, err := r.mgr.ListMessages(ctx, sessionID)
+	if err != nil {
+		return "", err
+	}
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == session.RoleUser {
+			return msgs[i].ID, nil
+		}
+	}
+	return "", nil
 }
 
 // chatBrokerAdapter wraps *StreamBroker so the chat package's narrow
@@ -5994,51 +6111,25 @@ func (r *sessionHistoryReader) ListMessages(ctx context.Context, sessionID strin
 	return out, nil
 }
 
-// AppendMessage persists the assistant turn at stream completion so a
-// future ListMessages call rehydrates it. Implements the toolloop's
-// SessionHistoryRW.AppendMessage shape (error-only return).
-// FR-003: fires syncHook after a successful persist so the new event is
-// streamed to fleet for sessions with context-sync enabled.
-func (r *sessionHistoryReader) AppendMessage(ctx context.Context, sessionID, role, content string) error {
-	if r == nil || r.mgr == nil {
-		return nil
-	}
-	stored, err := r.mgr.AppendMessage(ctx, sessionID, session.Message{
-		Role:    session.Role(role),
-		Content: content,
-	})
-	if err != nil {
-		return err
-	}
-	if hook := r.syncHook; hook != nil {
-		payload, merr := json.Marshal(map[string]string{
-			"id":   stored.ID,
-			"role": role,
-		})
-		if merr == nil {
-			hook(ctx, sessionID, 0, payload)
-		}
-	}
-	return nil
-}
-
 // sessionSyncAppendHook is the callback fired by llmHistoryWriter after each
-// successful AppendMessage call. It is set once at boot by the context-sync
+// successful AppendEntry call. It is set once at boot by the context-sync
 // wiring block in New() before any chat session starts; no concurrent-write
 // hazard exists. The hook marshals the message to JSON and ships it to fleet
 // via SessionSyncer.AppendEvent (no-op when sync is not enabled for the
 // session). Privacy invariant: the hook must never log message content.
 type sessionSyncAppendHook func(ctx context.Context, sessionID string, seq uint64, payload []byte)
 
-// llmHistoryWriter wraps sessionHistoryReader to satisfy the LLM
-// view's SessionMessageWriter shape, which returns the persisted
-// message id alongside the error so the post-finalize hooks
-// (artifacts code-block detector) can anchor SourceRef.MessageID to
-// the freshly persisted row.
+// llmHistoryWriter is the production binding of the agentgraph
+// HistoryWriter seam — the ONE writer through which every chat
+// transcript entry reaches the session store
+// (model-moves-transcript-01PMCH01 WP01, spec §4). It wraps
+// sessionHistoryReader and returns the persisted message id alongside
+// the error so the post-finalize hooks (artifacts code-block detector)
+// can anchor SourceRef.MessageID to the freshly persisted row.
 //
 // FR-003 (fleet-context-sync-01NDFSEX15): the fleet streaming hook is
-// stored on inner (sessionHistoryReader.syncHook) so both this writer
-// and any other path that calls inner.AppendMessage fire it.
+// stored on inner (sessionHistoryReader.syncHook) so the hook survives
+// independently of who holds the writer.
 type llmHistoryWriter struct {
 	inner *sessionHistoryReader
 }
@@ -6057,30 +6148,66 @@ func (w *llmHistoryWriter) SystemPromptFor(ctx context.Context, sessionID string
 	return w.inner.SystemPromptFor(ctx, sessionID)
 }
 
-func (w *llmHistoryWriter) AppendMessage(ctx context.Context, sessionID, role, content string) (string, error) {
+// AppendEntry satisfies agentgraph.HistoryWriter. It hands the whole
+// entry — classic or move — to session.Manager.AppendTranscriptEntry,
+// the only function in the repository that can stamp move metadata onto
+// a durable row. There is deliberately no second method here: a
+// classic-only AppendMessage alongside this one would be a path that
+// silently drops move fields.
+func (w *llmHistoryWriter) AppendEntry(ctx context.Context, sessionID string,
+	entry coreag.HistoryEntry) (string, error) {
 	if w == nil || w.inner == nil || w.inner.mgr == nil {
 		return "", nil
 	}
-	stored, err := w.inner.mgr.AppendMessage(ctx, sessionID, session.Message{
-		Role:    session.Role(role),
-		Content: content,
+	stored, err := w.inner.mgr.AppendTranscriptEntry(ctx, sessionID, session.TranscriptEntry{
+		Role:       session.Role(entry.Role),
+		Content:    entry.Content,
+		Kind:       session.MoveKind(entry.MoveKind),
+		MoveIndex:  entry.MoveIndex,
+		TurnSpanID: entry.TurnSpanID,
+		ToolCalls:  moveToolCalls(entry.ToolCalls),
+		// MODEL-LAYER ARGUMENTS (WP03). Forwarded verbatim into the
+		// model_tool_args column — a different field, a different column
+		// and a different audience from ToolCalls above, which
+		// moveToolCalls deliberately strips of arguments.
+		ModelToolArgs: entry.ModelToolArgs,
 	})
 	if err != nil {
 		return "", err
 	}
 	// FR-003: stream event to fleet when session sync is enabled.
-	// The hook is stored on inner (sessionHistoryReader) so the same
-	// hook fires regardless of which writer path is taken.
+	// The hook is stored on inner (sessionHistoryReader).
 	if hook := w.inner.syncHook; hook != nil {
 		payload, merr := json.Marshal(map[string]string{
 			"id":   stored.ID,
-			"role": role,
+			"role": entry.Role,
 		})
 		if merr == nil {
 			hook(ctx, sessionID, 0, payload)
 		}
 	}
 	return stored.ID, nil
+}
+
+// moveToolCalls projects the seam's tool payload onto the store's
+// session.ToolCall shape (model-moves-transcript-01PMCH01 WP02).
+//
+// DISPLAY-LAYER REDACTION (spec §4). session.ToolCall.Arguments is
+// deliberately left nil: the raw argument map is exactly what a
+// tool_call entry must not carry into the display layer. The entry's
+// Content already holds the args SUMMARY the chat runner built
+// (displayArgsSummary). The model-visible layer that legitimately needs
+// raw arguments is WP03's and it composes them from the provider
+// history — do not "fix" this by filling Arguments in here.
+func moveToolCalls(calls []coreag.ToolCallRequest) []session.ToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	out := make([]session.ToolCall, 0, len(calls))
+	for _, c := range calls {
+		out = append(out, session.ToolCall{ID: c.ID, Name: c.Name, IsError: c.IsError})
+	}
+	return out
 }
 
 // SystemPromptFor implements llm.SessionContextReader by reading the
@@ -6433,30 +6560,6 @@ func (a *API) CedarPolicy() cedarpolicyview.CedarPolicyAPI {
 	return a.cedarPolicyAPI
 }
 
-// CedarProposeResolver is the narrow surface the Bindings layer calls to
-// resolve an in-flight cedar:propose-pending request from the frontend
-// CedarProposeModal (harness-self-mcp-onboarding-01KQ8TDU WP07).
-//
-// In production it is satisfied by *harness.CedarProposerImpl.
-// decision is one of: "accept" | "reject".
-type CedarProposeResolver interface {
-	ResolveProposeRequestRaw(id, decision string) error
-}
-
-// ErrCedarProposeNotWired is returned by CedarProposeResolve when no
-// CedarProposerImpl has been wired into the API.
-var ErrCedarProposeNotWired = errors.New("cedar: propose resolver not wired; no onboarding session active")
-
-// CedarProposeResolve delivers a user decision (accept | reject) to the
-// in-flight propose-pending request identified by requestID. The
-// Bindings layer calls this via CedarPolicy_ResolvePropose (WP07).
-func (a *API) CedarProposeResolve(requestID, decision string) error {
-	if a == nil || a.cedarProposeResolver == nil {
-		return ErrCedarProposeNotWired
-	}
-	return a.cedarProposeResolver.ResolveProposeRequestRaw(requestID, decision)
-}
-
 // Onboarding returns the first-run onboarding view surface (mission
 // harness-self-mcp-onboarding-01KQ8TDU WP08). Always non-nil; the
 // zero-config stub returns safe defaults when the chassis has no core.
@@ -6546,15 +6649,6 @@ func (a *API) Planmode_Edit(ctx context.Context, req planmodeview.EditRequest) (
 	return a.planmodeAPI.Edit(ctx, req)
 }
 
-// SetCedarProposeResolver wires a resolver at runtime. Called by the
-// onboarding flow when it creates a CedarProposerImpl (WP07).
-func (a *API) SetCedarProposeResolver(r CedarProposeResolver) {
-	if a == nil {
-		return
-	}
-	a.cedarProposeResolver = r
-}
-
 // Permissions returns the universal interactive-permission view surface
 // (mission cedar-credential-policy-01KQ8TDE, WP02). When the chassis
 // has not wired a registry (test harness path with New(nil)), a stub
@@ -6576,12 +6670,6 @@ func (a *API) Memory() memoryview.MemoryAPI {
 		return &stubMemory{}
 	}
 	return a.memoryAPI
-}
-func (a *API) Dials() dialsview.DialsAPI {
-	if a.dialsAPI == nil {
-		return &stubDials{}
-	}
-	return a.dialsAPI
 }
 func (a *API) Hooks() hooksview.HooksAPI {
 	if a.hooksAPI == nil {

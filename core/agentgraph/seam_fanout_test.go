@@ -295,11 +295,11 @@ func TestSeamFanout_HistoryRead_HistoryReadCalledAndMessagesForwarded(t *testing
 
 // ---- session_write kind ----
 
-// TestSeamFanout_SessionWrite_AppendMessageCalled verifies that session_write
-// calls HistoryWriter.AppendMessage with the correct role.
+// TestSeamFanout_SessionWrite_AppendEntryCalled verifies that session_write
+// calls HistoryWriter.AppendEntry with the correct role.
 // Uses a two-node graph: an "emit_text" transform node supplies the text
 // input via an edge, then session_write writes it to history.
-func TestSeamFanout_SessionWrite_AppendMessageCalled(t *testing.T) {
+func TestSeamFanout_SessionWrite_AppendEntryCalled(t *testing.T) {
 	t.Parallel()
 	// src1.text → sw1.text: emit_text emits port "text" = "response text".
 	g := buildTwoNodeGraph("src1", "sw1", agentgraph.NodeKindSessionWrite,

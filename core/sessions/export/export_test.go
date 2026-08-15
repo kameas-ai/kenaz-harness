@@ -2,6 +2,7 @@ package export
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -73,7 +74,7 @@ func TestRender_Markdown_Golden(t *testing.T) {
 	if !strings.Contains(s, "session_id: sess-test-1") {
 		t.Errorf("Markdown missing session_id:\n%s", s)
 	}
-	if !strings.Contains(s, "export_format_version: 1") {
+	if !strings.Contains(s, fmt.Sprintf("export_format_version: %d", ExportFormatVersion)) {
 		t.Errorf("Markdown missing export_format_version:\n%s", s)
 	}
 	if !strings.Contains(s, "exported_at:") {

@@ -511,7 +511,65 @@ const (
 	// bytes into the artifact store and rewrites the block's ArtifactID.
 	// (multimodal-io-extended-01KQ8TD2 WP01)
 	StreamGeneratedImage StreamEventKind = "generated_image"
+	// StreamMoveStart opens a new model move on the chat stream
+	// (model-moves-transcript-01PMCH01 WP02). No provider adapter emits
+	// it — it is minted by the chat runner's move journal and fanned
+	// onto the existing llm:stream-chunk topic, so the chat surface can
+	// stop concatenating a turn's segments into one run-on paragraph.
+	// The payload is StreamEvent.Move.
+	StreamMoveStart StreamEventKind = "move_start"
 )
+
+// MoveBoundary is the payload of a StreamMoveStart event: the identity
+// of the move whose content follows it on the stream
+// (model-moves-transcript-01PMCH01 WP02).
+//
+// THE CONTRACT (WP02 produces, WP04 consumes):
+//
+//   - Exactly one MoveBoundary is emitted per persisted transcript move
+//     of the turn, in persisted order. Count and order match 1:1; Index
+//     is the same 0-based move_index the persisted row carries, so a
+//     live view and a reload can be reconciled entry-for-entry.
+//   - For a streamed assistant segment the boundary is emitted BEFORE
+//     that segment's first text delta — that is the whole point, since
+//     a boundary that arrives after the tokens cannot separate them.
+//     If a fire produces text without ever streaming a delta (a
+//     non-streaming provider), the boundary is emitted immediately
+//     before the row is persisted instead, so the 1:1 rule holds
+//     unconditionally.
+//   - Kind is a RENDERING HINT, not the persisted kind. A streamed
+//     assistant segment always announces "assistant_move"; the last
+//     segment of a turn is persisted as "final" once the turn ends and
+//     the runner knows which one it was. Consumers reconcile on Index.
+type MoveBoundary struct {
+	// Index is the 0-based position of the move within the human turn.
+	Index int `json:"index"`
+	// Kind is one of session.MoveKinds() — "assistant_move",
+	// "tool_call", "tool_result" — as a rendering hint (see above).
+	Kind string `json:"kind"`
+	// ToolName / ToolCallID identify the tool a "tool_call" /
+	// "tool_result" boundary belongs to, so the chat surface can bind a
+	// chip's running→ok/error transition to the right chip.
+	ToolName   string `json:"tool_name,omitempty"`
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	// ArgsSummary is the DISPLAY-LAYER args summary of a "tool_call"
+	// boundary — argument names and value types, never values. It is the
+	// same string the entry persists as its Content, carried on the
+	// boundary so the live chip and the reloaded chip read identically
+	// (model-moves-transcript-01PMCH01 WP04). Raw arguments never travel
+	// this field; the model-visible layer that needs them composes them
+	// from the provider history.
+	ArgsSummary string `json:"args_summary,omitempty"`
+	// IsError reports that a "tool_result" boundary closes its pair with
+	// a failure — the tool returned an error result, or the dispatch
+	// itself failed. It is the live half of the chip's running→ok/error
+	// transition; the reloaded half is session.ToolCall.IsError on the
+	// persisted tool_result row. Meaningless on any other Kind.
+	//
+	// Without it "error" is a chip state nothing can ever reach, and a
+	// chip that reads "ok" for a failed tool is worse than no chip.
+	IsError bool `json:"is_error,omitempty"`
+}
 
 // GeneratedImagePayload carries the payload for a StreamGeneratedImage event.
 // Exactly one of Data or URL is non-empty; adapters that return inline base64
@@ -548,6 +606,18 @@ type StreamEvent struct {
 	// GeneratedImage is set when Kind==StreamGeneratedImage.
 	// (multimodal-io-extended-01KQ8TD2 WP01)
 	GeneratedImage *GeneratedImagePayload `json:"generated_image,omitempty"`
+	// Move is set when Kind==StreamMoveStart and is nil on every other
+	// event, so a consumer that predates the shape sees an event kind it
+	// does not recognise and ignores it — the additive-wire rule.
+	// (model-moves-transcript-01PMCH01 WP02)
+	//
+	// The wirecheck:"-" tag excludes this field from the adapter
+	// coverage registry, and correctly: no provider emits it. It travels
+	// only the harness-internal chat stream, minted by the chat runner's
+	// move journal after the provider's events have already been
+	// translated. There is nothing for an anthropic/openai/openrouter/
+	// bedrock adapter test to cover.
+	Move *MoveBoundary `json:"move,omitempty" wirecheck:"-"`
 }
 
 // Stream is the streaming response surface (FR-004 / FR-012).

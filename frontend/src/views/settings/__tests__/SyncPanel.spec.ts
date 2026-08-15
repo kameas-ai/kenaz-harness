@@ -1,12 +1,20 @@
 /**
  * SyncPanel.spec.ts — fleet-share-and-sync-01NDFSEX14 WP06
  *
- * Five specs:
+ * Six specs:
  *   1. shows not-signed-in gate when signedIn is false
- *   2. shows pro-gate when capability('settings_sync') is false
- *   3. renders category list with toggles for each category
- *   4. toggle calls client.sync.toggle with correct arguments
- *   5. pending-secrets banner appears when pendingMCPSecrets returns results
+ *   2. shows the sync UI for an entitled user (capability 'context_sync')
+ *   3. shows pro-gate when the entitlement is absent
+ *   4. renders category list with toggles for each category
+ *   5. toggle calls client.sync.toggle with correct arguments
+ *   6. pending-secrets banner appears when pendingMCPSecrets returns results
+ *
+ * The capability fake below is deliberately **key-sensitive**: it grants
+ * only SYNC_CAPABILITY. Before 2026-08-14 this file mocked capability() to
+ * return true unconditionally and asserted only the negative path, so it
+ * stayed green while SyncPanel gated on `settings_sync` — a key that does
+ * not exist in `fleet.AllCapabilities()`. Spec 2 is the positive assertion
+ * whose absence let that ship; it fails if the gate key drifts again.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
@@ -20,9 +28,18 @@ import type { SyncStatusView, PendingMCPSecret } from '@/lib/types';
 // ── featureFlags mock ──────────────────────────────────────────────────────
 // Use a real Vue ref so template auto-unwrapping works correctly.
 const _signedIn = ref(true);
+
+// The wire key SyncPanel must gate on — `fleet.CapContextSync`
+// (core/fleet/capability.go). Kept as a const so the intent is explicit.
+const SYNC_CAPABILITY = 'context_sync';
+
+// Capability keys the fake fleet snapshot has enabled. Mutated per-test;
+// capability() answers from this set, so asking for any other key is false.
+const _enabledCaps = new Set<string>();
+
 vi.mock('@/lib/featureFlags', () => ({
   get signedIn() { return _signedIn; },
-  capability: vi.fn().mockReturnValue(true),
+  capability: vi.fn(),
 }));
 
 // ── vue-router stub (SyncPanel uses useRouter optionally) ─────────────────
@@ -75,7 +92,9 @@ function mountPanel(client = buildClient().client) {
 describe('SyncPanel', () => {
   beforeEach(() => {
     _signedIn.value = true;
-    vi.mocked(capability).mockReturnValue(true);
+    _enabledCaps.clear();
+    _enabledCaps.add(SYNC_CAPABILITY);
+    vi.mocked(capability).mockImplementation((key: string) => _enabledCaps.has(key));
   });
 
   it('1. shows not-signed-in gate when signedIn is false', async () => {
@@ -88,9 +107,26 @@ describe('SyncPanel', () => {
     expect(wrapper.find('[data-testid="sync-category-list"]').exists()).toBe(false);
   });
 
-  it('2. shows pro-gate when capability("settings_sync") returns false', async () => {
+  it('2. shows the sync UI to an entitled user holding "context_sync"', async () => {
+    // Entitled: signed in, and the ONLY capability granted is the real wire
+    // key. If SyncPanel asks for anything else (e.g. the historic
+    // `settings_sync` typo) the fake answers false and the pro-gate renders
+    // instead — which is exactly what this spec fails on.
     _signedIn.value = true;
-    vi.mocked(capability).mockReturnValue(false);
+    _enabledCaps.clear();
+    _enabledCaps.add(SYNC_CAPABILITY);
+    const { client } = buildClient({ statuses: STATUSES });
+    const wrapper = mountPanel(client);
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="sync-pro-gate"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="sync-category-list"]').exists()).toBe(true);
+    expect(vi.mocked(capability)).toHaveBeenCalledWith(SYNC_CAPABILITY);
+  });
+
+  it('3. shows pro-gate when the sync entitlement is absent', async () => {
+    _signedIn.value = true;
+    _enabledCaps.clear(); // signed in, but no capabilities granted
     const { client } = buildClient();
     const wrapper = mountPanel(client);
     await flushPromises();
@@ -99,7 +135,7 @@ describe('SyncPanel', () => {
     expect(wrapper.find('[data-testid="sync-category-list"]').exists()).toBe(false);
   });
 
-  it('3. renders all 5 categories with toggles', async () => {
+  it('4. renders all 5 categories with toggles', async () => {
     const { client } = buildClient({ statuses: STATUSES });
     const wrapper = mountPanel(client);
     await flushPromises();
@@ -118,7 +154,7 @@ describe('SyncPanel', () => {
     }
   });
 
-  it('4. toggle checkbox calls sync.toggle with correct category and enabled state', async () => {
+  it('5. toggle checkbox calls sync.toggle with correct category and enabled state', async () => {
     const { client, toggleFn } = buildClient({ statuses: STATUSES });
     const wrapper = mountPanel(client);
     await flushPromises();
@@ -131,7 +167,7 @@ describe('SyncPanel', () => {
     expect(toggleFn).toHaveBeenCalledWith('model_prefs', true);
   });
 
-  it('5. pending-secrets banner appears when MCP servers need credentials', async () => {
+  it('6. pending-secrets banner appears when MCP servers need credentials', async () => {
     const { client } = buildClient({ pending: [PENDING_SECRET] });
     const wrapper = mountPanel(client);
     await flushPromises();

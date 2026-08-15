@@ -262,10 +262,6 @@ export function CedarPolicy_ReloadPolicies() {
   return window['go']['rpc']['Bindings']['CedarPolicy_ReloadPolicies']();
 }
 
-export function CedarPolicy_ResolvePropose(arg1, arg2) {
-  return window['go']['rpc']['Bindings']['CedarPolicy_ResolvePropose'](arg1, arg2);
-}
-
 export function CedarPolicy_RevokeSnippet(arg1) {
   return window['go']['rpc']['Bindings']['CedarPolicy_RevokeSnippet'](arg1);
 }
@@ -484,22 +480,6 @@ export function Diag_LogClientEvent(arg1, arg2, arg3) {
 
 export function Diag_LogPath() {
   return window['go']['rpc']['Bindings']['Diag_LogPath']();
-}
-
-export function Dials_BumpAndResume(arg1, arg2) {
-  return window['go']['rpc']['Bindings']['Dials_BumpAndResume'](arg1, arg2);
-}
-
-export function Dials_Get(arg1) {
-  return window['go']['rpc']['Bindings']['Dials_Get'](arg1);
-}
-
-export function Dials_GetEffective(arg1, arg2, arg3, arg4) {
-  return window['go']['rpc']['Bindings']['Dials_GetEffective'](arg1, arg2, arg3, arg4);
-}
-
-export function Dials_Set(arg1, arg2) {
-  return window['go']['rpc']['Bindings']['Dials_Set'](arg1, arg2);
 }
 
 export function Elicit_AnswerDeferred(arg1, arg2) {

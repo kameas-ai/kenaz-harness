@@ -26,8 +26,9 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   /**
-   * Fires when the user clicks [Branch it off]. The parent should open
-   * BranchContextPickModal with this suggestion pre-filled.
+   * Fires when the user clicks [Branch it off]. ChatInput handles this
+   * via handleBannerBranchOff, which opens CreateBranchModal with the
+   * suggestion's task hint pre-filled.
    */
   branchOff: [suggestion: BranchSuggestion];
   /**

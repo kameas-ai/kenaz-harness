@@ -170,6 +170,72 @@ model a capability, a comment asserting an invariant nothing enforces.
   proof in `scripts/ci/gates_can_fail_test.go`.
 - Allowlists shrink monotonically. Nothing gets added without a date.
 
+### Disposition: delete vs. finish
+
+"Unwired" is a finding, not a verdict. The sweep's job is to end the
+**lie** — a toggle that reports it is on, a tool advertised to the model
+that always fails, a docstring promising a route that does not exist. It
+is *not* to shrink the tree. A useful half-built feature deleted is a
+product decision made by a linter.
+
+**Delete** when the code has no future, and say which:
+
+- A **live substitute** does the same job (`ScopePicker` →
+  `AttachmentTreePicker`; the toast trio → `useEventToasts`).
+- A **documented product retirement** superseded it (corpora → contexts;
+  the update-dot → the Help menu, per `os-menu-bar-01NDFSEX16` §FR-006).
+- It is **rival infrastructure** — a second implementation of something
+  the app already does one way (`lib/slashcmd.ts`, `lib/useStream.ts`).
+- The **whole subsystem has no producer and no product intent**, and
+  nobody will claim it. Deleting the consumer half of a *wanted* feature
+  is the wrong call — it leaves the gap and destroys the tested work.
+
+**Spec it and finish it** when the feature is real:
+
+- The **backend is live and only the UI is missing** — the cheapest
+  possible win, and the strongest signal someone meant it (e.g.
+  `RecoveryCodeFlow`: RPCs registered, adapter assigned in production,
+  no other recovery surface exists).
+- It is the **only surface for a real capability** — deleting it removes
+  the capability from the product, not just from the tree.
+- It is **trust- or compliance-relevant** (consent, permissions,
+  denials, audit).
+- Its absence makes something else **lie** — a registered tool, a
+  docstring, a settings field with no writer.
+
+Finishing means a mission under `kitty-specs/`, not a drive-by mount.
+Mounting a panel whose Go knob is inert just moves the lie from the
+backend to the UI: wire the consumer first, in the same PR.
+
+**Escalate** when the call is genuinely product, not technical — two
+rival implementations where the weaker one ships, or a feature nobody
+can say is wanted. Record the question; do not resolve it by deleting.
+
+Every disposition names its class. "Deleted — no importers" is not a
+reason; "deleted — `AttachmentTreePicker` is the live substitute" is.
+
+### Two blind spots the file-level scans cannot see
+
+Both were found the hard way in the 2026-08-14 sweep. Neither is covered by
+any gate; both need a human or an agent explicitly looking.
+
+1. **Dead code inside a live file.** Deleting ten orphaned components saved
+   826 bytes of JS — Vite had already tree-shaken every unreferenced `.vue`,
+   so they cost nothing at runtime. The *entire* saving came from dead code
+   living inside `harnessClient.ts`, `types.ts` and `useHarnessAPI.ts` (a
+   composable, its handler `Set`, and a `_emitDenialForTest` with no
+   callers). An orphan-FILE scan will never surface these. Grep for exported
+   symbols with no non-test reader, not just for unreferenced files.
+
+2. **Test fixtures that bypass the layer under test.** Composition fixtures
+   built on `session.NewMemoryStore()` skip SQL encode/decode entirely.
+   Four separate SQL-path mutations survived the full suite that way, two of
+   which would have silently disabled a whole feature for every real user
+   while CI stayed green. **Anything asserting persistence, compaction of
+   persisted history, or an FTS index must drive real sqlite.** The same
+   blind spot hid the WP06 finding that the tool-pair clamp was a no-op on
+   every move-bearing session: every fixture filled the pair markers by hand.
+
 ### Where the ledger lives
 
 `docs/unwired-ledger.md` — index of the gated findings (which allowlist
@@ -182,6 +248,11 @@ Per-symbol justifications stay with their gate in
 
 - Use `rtk proxy grep` / `rtk proxy git` for anything multi-file or
   load-bearing — the plain wrappers silently truncate.
+- **Do not pipe `rtk proxy grep` into another `rtk proxy grep`.** Even the
+  proxied form truncates on a double pipe — this dropped
+  `views/audit/AuditView.vue:16` during the 2026-08-14 frontend
+  orphan-deletion sweep and nearly produced a false orphan verdict for
+  `EventStreamRow.vue`. Pipe into `/usr/bin/grep` instead.
 - `gofmt -l` flags ~337 files from local-toolchain drift (Go 1.26 vs
   go.mod 1.25). Never "fix" a file you did not otherwise touch.
 - `go test` needs `-p 4`; mcp stdio tests time out at default parallelism.

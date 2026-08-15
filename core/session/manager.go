@@ -93,6 +93,25 @@ type Manager struct {
 	idGen IDGen
 	hooks SessionHookRunner // optional; nil disables v2 lifecycle hooks
 
+	// moveFidelityDial reports the CURRENT position of
+	// Settings.MoveFidelityHistory. It is consulted once per session, at
+	// Create, to stamp Record.MoveHistoryMode
+	// (model-moves-transcript-01PMCH01 WP03).
+	//
+	// This is the one place the dial is read at creation rather than at
+	// consumption, and that is the point: the composition reads the dial
+	// live on every request (so turning it off reverts everything
+	// immediately), while THIS read decides only what a brand-new session
+	// is allowed to opt into. A nil dial means "no settings wired" and
+	// yields classic — fail-closed, so a chassis built without settings
+	// never silently opts sessions into the provider-visible shape.
+	//
+	// Guarded because the chassis installs it after construction (the
+	// manager is built lazily by core.Core, which has no settings
+	// dependency) while Create may already be reachable.
+	moveFidelityMu   sync.RWMutex
+	moveFidelityDial func() bool
+
 	posMu sync.Mutex // serialize position assignment on Create
 }
 
@@ -225,6 +244,12 @@ func (m *Manager) createInternal(ctx context.Context, name string, projectID *st
 		LastActiveAt: now,
 		Position:     nextPos,
 		Kind:         kind,
+		// model-moves-transcript-01PMCH01 WP03, spec §4: the session
+		// records which mode wrote it. Stamped once, here, and never
+		// rewritten — that immutability is what stops a mid-thread dial
+		// change from altering the shape of a conversation already in
+		// flight.
+		MoveHistoryMode: string(MoveHistoryModeForNewSession(m.moveFidelityEnabled())),
 	}
 	if projectID != nil {
 		v := *projectID
@@ -648,3 +673,35 @@ func defaultIDGen() (string, error) {
 // ErrEmpty is exported so callers can errors.Is against an empty input
 // without taking a hard dep on the internal sentinel.
 var ErrEmpty = errors.New("session: input cannot be empty")
+
+// SetMoveFidelityDial installs the live Settings.MoveFidelityHistory
+// reader used to stamp new sessions' MoveHistoryMode
+// (model-moves-transcript-01PMCH01 WP03).
+//
+// Called once by the chassis at boot. Unwired — the default, and what
+// every non-chassis construction gets — stamps every new session
+// "classic", which is the fail-closed position: a build with no settings
+// surface must not opt sessions into a provider-visible request shape.
+func (m *Manager) SetMoveFidelityDial(dial func() bool) {
+	if m == nil {
+		return
+	}
+	m.moveFidelityMu.Lock()
+	defer m.moveFidelityMu.Unlock()
+	m.moveFidelityDial = dial
+}
+
+// moveFidelityEnabled reads the move-fidelity dial fail-closed: an
+// unwired dial is "off" (model-moves-transcript-01PMCH01 WP03).
+func (m *Manager) moveFidelityEnabled() bool {
+	if m == nil {
+		return false
+	}
+	m.moveFidelityMu.RLock()
+	dial := m.moveFidelityDial
+	m.moveFidelityMu.RUnlock()
+	if dial == nil {
+		return false
+	}
+	return dial()
+}

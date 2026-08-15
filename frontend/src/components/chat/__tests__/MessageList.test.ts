@@ -36,12 +36,14 @@ describe('MessageList (chat-ui)', () => {
     const w = mount(MessageList, {
       props: {
         messages: [msg({ id: 'a', role: 'user', content: 'q' })],
-        streamingMessage: msg({
-          id: 'live',
-          role: 'assistant',
-          content: 'streaming…',
-          streaming: true,
-        }),
+        streamingMessages: [
+          msg({
+            id: 'live',
+            role: 'assistant',
+            content: 'streaming…',
+            streaming: true,
+          }),
+        ],
       },
     });
     expect(w.findAll('article').length).toBe(2);

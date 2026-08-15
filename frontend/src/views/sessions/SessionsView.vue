@@ -49,6 +49,7 @@ import { useArtifacts, useHarnessClient, useSessions } from '@/lib/useHarnessAPI
 import { useSession } from '@/lib/useSession';
 import { useEventStream } from '@/lib/useEventStream';
 import { useLongSessionNudge } from '@/lib/useLongSessionNudge';
+import { countTurns } from '@/lib/transcript';
 import { usePlanMode } from '@/lib/planmode';
 import type {
   Artifact,
@@ -445,7 +446,7 @@ const isStreaming = computed(
 const isWaitingForFirstChunk = computed(
   () =>
     session.streamSubscriptionId.value !== null &&
-    session.currentlyStreaming.value === null,
+    session.streamingMoves.value.length === 0,
 );
 
 // Per-model context window — sourced from the backend's curated
@@ -1020,6 +1021,22 @@ function focusSearchHashTarget(messageId: string) {
   tryFocus();
 }
 
+/**
+ * The message id the current route hash points at, reactive.
+ *
+ * `MoveTrail` needs this handed to it rather than reading
+ * `window.location.hash` itself: `router.push('/sessions/<id>#<msg>')`
+ * is a `history.pushState`, which fires neither `hashchange` nor
+ * `popstate`. A hit in the session already on screen therefore changes
+ * the hash without any window event, and a trail that folded the target
+ * away would stay folded — `focusSearchHashTarget` below would find the
+ * bare anchor, scroll to a zero-height span inside the fold, and the
+ * link would dead-end. Only the router sees that navigation.
+ */
+const searchFocusMessageId = computed(() =>
+  route.hash.startsWith('#') ? decodeURIComponent(route.hash.slice(1)) : '',
+);
+
 watch(
   () => [route.path, route.hash] as const,
   ([_path, hash]) => {
@@ -1185,7 +1202,7 @@ function formatSize(bytes: number): string {
 // ── Long-session nudge (v0.5.6 memory-trust-signals) ──────────────────────
 //
 // The nudge banner fires when the session crosses either threshold:
-//   - 30 user-assistant turn pairs (60 total messages), OR
+//   - 30 human turns (counted by countTurns — NOT a row count), OR
 //   - 50,000 cumulative prompt tokens
 // Both thresholds are configurable via Settings → Display.
 //
@@ -1195,11 +1212,14 @@ function formatSize(bytes: number): string {
 // Reset the composable when the session changes so crossing thresholds in
 // a previous session doesn't immediately re-trigger the banner.
 
-const _nudgeMessageCount = computed(() => visibleMessages.value.length);
+// One turn is one human message — not one row. See countTurns'
+// docstring for why the row count it replaced was wrong
+// (model-moves-transcript-01PMCH01 WP04).
+const _nudgeTurnCount = computed(() => countTurns(visibleMessages.value));
 const _nudgePromptTokens = computed(() => session.lastUsage.value?.promptTokens ?? 0);
 
 const longSessionNudge = useLongSessionNudge({
-  messageCount: _nudgeMessageCount,
+  turnCount: _nudgeTurnCount,
   promptTokens: _nudgePromptTokens,
 });
 
@@ -1675,7 +1695,8 @@ async function onShared() {
         >
           <MessageList
             :messages="visibleMessages"
-            :streaming-message="session.currentlyStreaming.value"
+            :focus-message-id="searchFocusMessageId"
+            :streaming-messages="session.streamingMoves.value"
             :waiting="isWaitingForFirstChunk"
             :error-message="session.error.value"
             :error-kind="session.errorKind.value"

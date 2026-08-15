@@ -186,9 +186,9 @@ type Store interface {
 type memStore struct {
 	mu        sync.RWMutex
 	records   map[string]Record
-	messages  map[string][]Message   // session_id -> ordered messages
-	seqByID   map[string]int64       // session_id -> next sequence
-	lastUsage map[string]*LastUsage  // session_id -> last usage snapshot
+	messages  map[string][]Message  // session_id -> ordered messages
+	seqByID   map[string]int64      // session_id -> next sequence
+	lastUsage map[string]*LastUsage // session_id -> last usage snapshot
 }
 
 // NewMemoryStore returns an in-memory Store. Useful for tests and as
@@ -794,8 +794,9 @@ func (s *sqlStore) Create(ctx context.Context, r Record) error {
                  position, draft, scroll_position, archived_at,
                  system_prompt, context_kind, project_id,
                  branch_advisor_dismissed,
-                 autonomy_level, autonomy_overrides, kind)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 autonomy_level, autonomy_overrides, kind,
+                 move_history_mode)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
 			r.ID,
 			r.Name,
@@ -813,6 +814,12 @@ func (s *sqlStore) Create(ctx context.Context, r Record) error {
 			autonomyLevel,
 			autonomyOverrides,
 			kindCol,
+			// model-moves-transcript-01PMCH01 WP03. Bound verbatim: the
+			// manager stamps it at Create from the live dial and nothing
+			// rewrites it afterwards. An empty string here would be a
+			// session that forgot how it was written, so the manager makes
+			// the value total rather than defaulting it in SQL.
+			r.MoveHistoryMode,
 		)
 		return err
 	})
@@ -824,7 +831,8 @@ const sqlSelectSession = `
            system_prompt, context_kind, project_id, auto_titled,
            COALESCE(branch_advisor_dismissed, 0),
            autonomy_level, autonomy_overrides,
-           COALESCE(kind, 'chat')
+           COALESCE(kind, 'chat'),
+           move_history_mode
     FROM sessions
 `
 
@@ -1195,14 +1203,21 @@ func (s *sqlStore) AppendMessage(ctx context.Context, m Message) (Message, error
 			}
 			toolCallsJSON = string(b)
 		}
+		// Move metadata (model-moves-transcript-01PMCH01 WP01). All three
+		// bind NULL for a classic entry, which is every row this store
+		// wrote before the mission and every row AppendTranscriptEntry
+		// writes without a Kind.
+		moveKindArg, moveIndexArg, turnSpanArg, modelArgsArg := moveColumnValues(m)
 		if _, err := tx.Exec(ctx, `
             INSERT INTO session_messages
-                (id, session_id, sequence, role, content, tool_calls, created_at, content_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (id, session_id, sequence, role, content, tool_calls, created_at, content_json,
+                 kind, move_index, turn_span_id, model_tool_args)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
 			m.ID, m.SessionID, m.Sequence, string(m.Role),
 			m.Content, toolCallsJSON, m.CreatedAt.UnixNano(),
-			string(contentJSON)); err != nil {
+			string(contentJSON),
+			moveKindArg, moveIndexArg, turnSpanArg, modelArgsArg); err != nil {
 			return err
 		}
 		out = m
@@ -1244,7 +1259,8 @@ func (s *sqlStore) listMessages(ctx context.Context, sessionID string, activeOnl
         SELECT id, session_id, sequence, role, content, tool_calls, created_at, content_json,
                compacted_into_id, compacted_at, archived_at,
                streaming_failed_at, streaming_failure_kind, streaming_recoverable, continuation_of,
-               prompt_tokens, completion_tokens, cost_usd, cost_source
+               prompt_tokens, completion_tokens, cost_usd, cost_source,
+               kind, move_index, turn_span_id, model_tool_args
         FROM session_messages
         WHERE session_id = ?
     `
@@ -1276,14 +1292,23 @@ func (s *sqlStore) listMessages(ctx context.Context, sessionID string, activeOnl
 			completionTokens     sql.NullInt64
 			costUSD              sql.NullFloat64
 			costSource           sql.NullString
+			moveKindCol          sql.NullString
+			moveIndexCol         sql.NullInt64
+			turnSpanCol          sql.NullString
+			modelToolArgsCol     sql.NullString
 		)
 		if err := rows.Scan(&m.ID, &m.SessionID, &m.Sequence, &roleStr,
 			&m.Content, &toolCalls, &createdAt, &contentJSON,
 			&compactedIntoID, &compactedAt, &archivedAt,
 			&streamingFailedAt, &streamingFailureKind, &streamingRecoverable, &continuationOf,
-			&promptTokens, &completionTokens, &costUSD, &costSource); err != nil {
+			&promptTokens, &completionTokens, &costUSD, &costSource,
+			&moveKindCol, &moveIndexCol, &turnSpanCol, &modelToolArgsCol); err != nil {
 			return nil, err
 		}
+		// model-moves-transcript-01PMCH01 WP01 + WP03: rehydrate the move
+		// metadata and the model layer's raw tool args. A NULL kind leaves
+		// the entry classic and leaves both nil.
+		applyMoveColumns(&m, moveKindCol, moveIndexCol, turnSpanCol, modelToolArgsCol)
 		m.Role = Role(roleStr)
 		m.CreatedAt = time.Unix(0, createdAt).UTC()
 		if toolCalls.Valid && toolCalls.String != "" {
@@ -1538,6 +1563,7 @@ func scanRecord(sc interface{ Scan(dest ...any) error }) (Record, error) {
 		autonomyLevel      sql.NullInt64
 		autonomyOverrides  sql.NullString
 		kindCol            string
+		moveHistoryModeCol sql.NullString
 	)
 	if err := sc.Scan(
 		&r.ID, &r.Name,
@@ -1549,8 +1575,18 @@ func scanRecord(sc interface{ Scan(dest ...any) error }) (Record, error) {
 		&advisorDismissed,
 		&autonomyLevel, &autonomyOverrides,
 		&kindCol,
+		&moveHistoryModeCol,
 	); err != nil {
 		return Record{}, err
+	}
+	// model-moves-transcript-01PMCH01 WP03: NULL stays empty, which
+	// MoveHistoryModeFromRecord reads as "created before this mission —
+	// keep the classic composition". Deliberately NOT defaulted here the
+	// way Kind is: defaulting would erase the distinction between "opened
+	// classic" and "predates the column", and only the second one is
+	// allowed to be immune to the dial turning on.
+	if moveHistoryModeCol.Valid {
+		r.MoveHistoryMode = moveHistoryModeCol.String
 	}
 	r.Kind = kindCol
 	if r.Kind == "" {
@@ -1631,7 +1667,8 @@ func (s *sqlStore) GetMessage(ctx context.Context, sessionID, messageID string) 
 	row := s.db.Reader().QueryRow(ctx, `
         SELECT id, session_id, sequence, role, content, tool_calls, created_at, content_json,
                compacted_into_id, compacted_at, archived_at,
-               streaming_failed_at, streaming_failure_kind, streaming_recoverable, continuation_of
+               streaming_failed_at, streaming_failure_kind, streaming_recoverable, continuation_of,
+               kind, move_index, turn_span_id, model_tool_args
         FROM session_messages
         WHERE id = ? AND session_id = ?
     `, messageID, sessionID)
@@ -1648,16 +1685,23 @@ func (s *sqlStore) GetMessage(ctx context.Context, sessionID, messageID string) 
 		streamingFailureKind sql.NullString
 		streamingRecoverable sql.NullInt64
 		continuationOf       sql.NullString
+		moveKindCol          sql.NullString
+		moveIndexCol         sql.NullInt64
+		turnSpanCol          sql.NullString
+		modelToolArgsCol     sql.NullString
 	)
 	if err := row.Scan(&m.ID, &m.SessionID, &m.Sequence, &roleStr,
 		&m.Content, &toolCalls, &createdAt, &contentJSON,
 		&compactedIntoID, &compactedAt, &archivedAt,
-		&streamingFailedAt, &streamingFailureKind, &streamingRecoverable, &continuationOf); err != nil {
+		&streamingFailedAt, &streamingFailureKind, &streamingRecoverable, &continuationOf,
+		&moveKindCol, &moveIndexCol, &turnSpanCol, &modelToolArgsCol); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Message{}, ErrSessionNotFound
 		}
 		return Message{}, err
 	}
+	// model-moves-transcript-01PMCH01 WP01 + WP03.
+	applyMoveColumns(&m, moveKindCol, moveIndexCol, turnSpanCol, modelToolArgsCol)
 	m.Role = Role(roleStr)
 	m.CreatedAt = time.Unix(0, createdAt).UTC()
 	if toolCalls.Valid && toolCalls.String != "" {
@@ -1749,14 +1793,26 @@ func (s *sqlStore) AppendContinuation(ctx context.Context, originalID string, m 
 			}
 			toolCallsJSON = string(b)
 		}
+		// model-moves-transcript-01PMCH01 WP02 (review of WP01): bind the
+		// move columns here too. Before this, a continuation INSERT wrote
+		// nine columns and silently dropped kind/move_index/turn_span_id
+		// while the Message it RETURNED still carried them in memory — so
+		// the row a caller held and the row the database held disagreed,
+		// and only a reload revealed it. Unreachable while every
+		// production write left the move fields zero; WP02 makes the chat
+		// transcript full of non-zero ones, so the gap becomes reachable
+		// the moment a user resumes an interrupted move-bearing turn.
+		kindCol, moveIdxCol, spanCol, modelArgsCol := moveColumnValues(m)
 		if _, err := tx.Exec(ctx, `
             INSERT INTO session_messages
-                (id, session_id, sequence, role, content, tool_calls, created_at, content_json, continuation_of)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, session_id, sequence, role, content, tool_calls, created_at, content_json, continuation_of,
+                 kind, move_index, turn_span_id, model_tool_args)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
 			m.ID, m.SessionID, m.Sequence, string(m.Role),
 			m.Content, toolCallsJSON, m.CreatedAt.UnixNano(),
-			string(contentJSON), originalID); err != nil {
+			string(contentJSON), originalID,
+			kindCol, moveIdxCol, spanCol, modelArgsCol); err != nil {
 			return err
 		}
 		out = m

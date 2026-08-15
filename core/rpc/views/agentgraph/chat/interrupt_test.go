@@ -56,10 +56,11 @@ type interruptRow struct {
 	content string
 }
 
-func (r *interruptHistoryWriter) AppendMessage(_ context.Context, _ string, role, content string) (string, error) {
+func (r *interruptHistoryWriter) AppendEntry(_ context.Context, _ string,
+	e coreag.HistoryEntry) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.rows = append(r.rows, interruptRow{role, content})
+	r.rows = append(r.rows, interruptRow{e.Role, e.Content})
 	return "intmsg-" + string(rune('a'+len(r.rows)-1)), nil
 }
 
@@ -86,7 +87,7 @@ func TestPersistInterrupt_APIValid(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	mid := is.PersistInterrupt(ctx, "sess-001", writer)
+	mid := is.PersistInterrupt(ctx, "sess-001", writer, nil)
 	if mid == "" {
 		t.Error("PersistInterrupt returned empty messageID for assistant row")
 	}
@@ -120,7 +121,7 @@ func TestPersistInterrupt_APIValid(t *testing.T) {
 // does not panic (FR-001 defensive path).
 func TestPersistInterrupt_NilWriter(t *testing.T) {
 	is := &InterruptState{PartialText: "some text"}
-	mid := is.PersistInterrupt(context.Background(), "sess-001", nil)
+	mid := is.PersistInterrupt(context.Background(), "sess-001", nil, nil)
 	if mid != "" {
 		t.Errorf("expected empty messageID with nil writer, got %q", mid)
 	}

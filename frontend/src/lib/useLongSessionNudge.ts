@@ -3,8 +3,19 @@
  * long-session nudge banner (v0.5.6 memory-trust-signals).
  *
  * Threshold logic (OR conditions):
- *   - message count / 2 (user-assistant pairs) >= nudgeTurns
+ *   - turn count >= nudgeTurns
  *   - promptTokens (cumulative) >= nudgeTokens
+ *
+ * A TURN is one human message, and the caller counts them directly.
+ * This used to be `messageCount / 2`, which was a stand-in for the same
+ * thing back when a turn was always exactly one user row plus one
+ * assistant row. Moves (model-moves-transcript-01PMCH01) broke that
+ * assumption: a five-iteration tool-using turn persists ~13 rows, so the
+ * halving counted it as six or seven turns and the banner fired roughly
+ * 3x early — nagging the user to start a new session a third of the way
+ * into a healthy one. Counting the human turns cannot drift with how
+ * many moves the model needs, and on a classic session it yields exactly
+ * the number the old arithmetic did.
  *
  * Per-session dismiss: once the user clicks "Dismiss for this session"
  * the banner stays hidden for the lifetime of the component that mounts
@@ -22,8 +33,12 @@ const DEFAULT_NUDGE_TURNS = 30;
 const DEFAULT_NUDGE_TOKENS = 50_000;
 
 export interface UseLongSessionNudgeOptions {
-  /** Reactive ref of total message count (both user + assistant). */
-  messageCount: Ref<number>;
+  /**
+   * Reactive ref of the number of HUMAN TURNS in the session — not the
+   * row count. One turn is one user message, however many model moves
+   * and tool entries it produced.
+   */
+  turnCount: Ref<number>;
   /** Reactive ref of cumulative prompt tokens for the session. */
   promptTokens: Ref<number>;
 }
@@ -70,8 +85,7 @@ export function useLongSessionNudge(
 
   // Derived: whether the session has crossed either threshold.
   const thresholdCrossed = computed<boolean>(() => {
-    const turns = Math.floor(opts.messageCount.value / 2);
-    if (turns >= nudgeTurns.value) return true;
+    if (opts.turnCount.value >= nudgeTurns.value) return true;
     if (opts.promptTokens.value >= nudgeTokens.value) return true;
     return false;
   });

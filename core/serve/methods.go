@@ -44,6 +44,7 @@ var (
 		"Confirm_ResolveAlways",
 		"Connectors_Status",
 		"Elicit_ListPending",
+		"Elicit_SubmitAnswer",
 		"LLM_ListProviders",
 		"LLM_StartStream",
 		"LLM_StopStream",

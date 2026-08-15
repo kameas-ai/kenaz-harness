@@ -11,20 +11,50 @@
  *     surfaces the message count stays well under the threshold where
  *     window-virtualization pays off. The real virtualizer lands when
  *     long-context replays (>1k messages) become a thing.
+ *
+ * Move rendering (model-moves-transcript-01PMCH01 WP04): rows are no
+ * longer one-bubble-each. `projectTranscript` folds a turn's
+ * intermediate moves + tool chips into a MoveTrail and leaves the
+ * turn's answer as a full MessageBubble; classic (kind-less) rows come
+ * through the projection unchanged. In-flight moves arrive as ordinary
+ * `Message` rows via `streamingMessages` and are concatenated BEFORE the
+ * projection runs, which is what makes the live view and a reload the
+ * same render rather than two renders that agree.
+ *
+ * The render loop below emits a `MoveTrail` for a trail item and the
+ * unchanged `MessageBubble` for everything else — classic rows and turn
+ * answers. It carries no explanatory comments deliberately: Vue renders
+ * template comments as DOM comment nodes, and the classic-session golden
+ * (`MessageList.classic-golden.test.ts`, captured against the pre-WP04
+ * component) is byte-exact.
  */
 
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import MessageBubble from './MessageBubble.vue';
+import MoveTrail from './MoveTrail.vue';
+import { foldedTurnCounts, projectTranscript } from '@/lib/transcript';
 import type { Artifact, MemoryScopeKind, Message } from '@/lib/types';
 
 const props = defineProps<{
   messages: ReadonlyArray<Message>;
   /**
-   * Optional in-flight assistant message. Rendered after `messages` with
-   * `streaming` flag forced on. The chat surface owns the buffer so this
-   * component stays presentational.
+   * In-flight moves of the turn currently streaming, oldest first, each
+   * already shaped as the transcript row it will become. Empty when no
+   * stream is open. The chat surface owns the buffer so this component
+   * stays presentational.
    */
-  streamingMessage?: Message | null;
+  streamingMessages?: ReadonlyArray<Message>;
+  /**
+   * The message id a search deep-link is currently pointing at (the
+   * route hash, without the `#`). Passed straight through to `MoveTrail`
+   * so a hit inside a folded trajectory opens it.
+   *
+   * It has to come from the router-owning view: `router.push` with a
+   * hash is a `history.pushState`, which fires neither `hashchange` nor
+   * `popstate`, so a leaf reading `window.location.hash` never learns
+   * about a hit in the session already on screen.
+   */
+  focusMessageId?: string | null;
   /**
    * True while a stream is open but no chunks have arrived yet — render
    * a small "thinking…" indicator so the user sees the system is alive.
@@ -134,20 +164,31 @@ function artifactsFor(messageId: string): readonly Artifact[] {
 }
 
 /**
- * summaryFoldCounts — for each summary row id, the number of archived
- * messages currently in `messages` that fold into it (i.e. have
- * `compactedIntoId === summaryId`). The "Summary of N turns" indicator
- * pulls from this map. Computed reactively so reload + toggle render
- * stable counts.
+ * summaryFoldCounts — for each summary row id, the number of HUMAN TURNS
+ * folded into it. The "Summary of N turns" indicator pulls from this map.
+ * Computed reactively so reload + toggle render stable counts.
+ *
+ * It counts turns, not rows (model-moves-transcript-01PMCH01 WP05). The
+ * row count was already 2x wrong on a classic session — one exchange is
+ * two rows — and a move-bearing turn persists ~13, so three compacted
+ * turns read as "Summary of 39 turns". See `foldedTurnCounts` for the
+ * turn-identity rule.
  */
-const summaryFoldCounts = computed<ReadonlyMap<string, number>>(() => {
-  const counts = new Map<string, number>();
-  for (const m of props.messages) {
-    const into = m.compactedIntoId;
-    if (!into) continue;
-    counts.set(into, (counts.get(into) ?? 0) + 1);
+const summaryFoldCounts = computed<ReadonlyMap<string, number>>(() =>
+  foldedTurnCounts(props.messages),
+);
+
+/**
+ * Turn spans with in-flight moves. A trail whose span is here belongs to
+ * the turn currently streaming and must not collapse under the user
+ * while they are watching it work (FR-004 / MoveTrail's `live`).
+ */
+const liveSpanIds = computed<ReadonlySet<string>>(() => {
+  const ids = new Set<string>();
+  for (const m of props.streamingMessages ?? []) {
+    if (m.turnSpanId) ids.add(m.turnSpanId);
   }
-  return counts;
+  return ids;
 });
 
 function isSummaryRow(m: Message): boolean {
@@ -182,11 +223,17 @@ const stickToBottom = ref(true);
 const newPillVisible = ref(false);
 
 const allMessages = computed<ReadonlyArray<Message>>(() => {
-  if (props.streamingMessage) {
-    return [...props.messages, props.streamingMessage];
-  }
-  return props.messages;
+  const live = props.streamingMessages ?? [];
+  if (live.length === 0) return props.messages;
+  return [...props.messages, ...live];
 });
+
+/**
+ * The render list. One projection over persisted + in-flight rows —
+ * see the note in `lib/transcript.ts` on why this is deliberately not
+ * two code paths.
+ */
+const transcript = computed(() => projectTranscript(allMessages.value));
 
 function isNearBottom(el: HTMLElement, threshold = 32): boolean {
   return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
@@ -215,26 +262,36 @@ onMounted(() => {
   void nextTick(scrollToBottom);
 });
 
+const isStreaming = computed(() => (props.streamingMessages ?? []).length > 0);
+
+/**
+ * Total in-flight text length — the cheap scalar that changes on every
+ * token, so the auto-scroll watcher fires per delta without deep-watching
+ * the whole move list.
+ */
+const streamingContentLength = computed(() => {
+  let total = 0;
+  for (const m of props.streamingMessages ?? []) total += m.content.length;
+  return total;
+});
+
 watch(
   () => allMessages.value.length,
   async () => {
     await nextTick();
     if (stickToBottom.value) {
       scrollToBottom();
-    } else if (props.streamingMessage) {
+    } else if (isStreaming.value) {
       newPillVisible.value = true;
     }
   },
 );
 
-watch(
-  () => props.streamingMessage?.content,
-  async () => {
-    await nextTick();
-    if (stickToBottom.value) scrollToBottom();
-    else if (props.streamingMessage) newPillVisible.value = true;
-  },
-);
+watch(streamingContentLength, async () => {
+  await nextTick();
+  if (stickToBottom.value) scrollToBottom();
+  else if (isStreaming.value) newPillVisible.value = true;
+});
 
 defineExpose({ scrollToBottom });
 </script>
@@ -272,42 +329,47 @@ defineExpose({ scrollToBottom });
         {{ archivedCopyDays }}-day retention.
       </div>
 
-      <div
-        v-for="m in allMessages"
-        :key="m.id"
-        :data-message-id="m.id"
-      >
-        <MessageBubble
-          :role="m.role"
-          :content="m.content"
-          :streaming="m.streaming === true"
-          :streaming-error="m.streamingError"
-          :tool-calls="m.toolCalls"
-          :content-blocks="m.contentBlocks"
-          :rememberable="rememberable === true && m.streaming !== true"
-          :project-id="projectId"
-          :message-id="m.id"
-          :saveable="saveable === true && m.streaming !== true"
-          :artifacts="artifactsFor(m.id)"
-          :is-summary="isSummaryRow(m)"
-          :summary-folded-count="summaryFoldCounts.get(m.id) ?? 0"
-          :is-archived="isArchivedRow(m)"
-          :archived-from-summary-id="m.compactedIntoId ?? ''"
-          :show-token-meter="showTokenMeter === true"
-          :prompt-tokens="m.promptTokens"
-          :completion-tokens="m.completionTokens"
-          :cost-usd="m.costUsd"
-          :message-cost-source="m.messageCostSource"
-          :streaming-failed-at="m.streamingFailedAt"
-          :streaming-recoverable="m.streamingRecoverable"
-          @remember="(scope) => emit('remember', m, scope)"
-          @save-artifact="() => emit('save-artifact', m)"
-          @open-artifact="(a) => emit('open-artifact', a)"
-          @jump-to-summary="onJumpToSummary"
-          @branch-from-turn="() => emit('branch-from-turn', m)"
-          @resume="(mid) => emit('resume', mid)"
+      <template v-for="item in transcript" :key="item.key">
+        <MoveTrail
+          v-if="item.type === 'trail'"
+          :steps="item.steps"
+          :live="liveSpanIds.has(item.spanId)"
+          :focus-id="focusMessageId ?? null"
         />
-      </div>
+
+        <div v-else :data-message-id="item.message.id">
+          <MessageBubble
+            :role="item.message.role"
+            :content="item.message.content"
+            :streaming="item.message.streaming === true"
+            :streaming-error="item.message.streamingError"
+            :tool-calls="item.message.toolCalls"
+            :content-blocks="item.message.contentBlocks"
+            :rememberable="rememberable === true && item.message.streaming !== true"
+            :project-id="projectId"
+            :message-id="item.message.id"
+            :saveable="saveable === true && item.message.streaming !== true"
+            :artifacts="artifactsFor(item.message.id)"
+            :is-summary="isSummaryRow(item.message)"
+            :summary-folded-count="summaryFoldCounts.get(item.message.id) ?? 0"
+            :is-archived="isArchivedRow(item.message)"
+            :archived-from-summary-id="item.message.compactedIntoId ?? ''"
+            :show-token-meter="showTokenMeter === true"
+            :prompt-tokens="item.message.promptTokens"
+            :completion-tokens="item.message.completionTokens"
+            :cost-usd="item.message.costUsd"
+            :message-cost-source="item.message.messageCostSource"
+            :streaming-failed-at="item.message.streamingFailedAt"
+            :streaming-recoverable="item.message.streamingRecoverable"
+            @remember="(scope) => emit('remember', item.message, scope)"
+            @save-artifact="() => emit('save-artifact', item.message)"
+            @open-artifact="(a) => emit('open-artifact', a)"
+            @jump-to-summary="onJumpToSummary"
+            @branch-from-turn="() => emit('branch-from-turn', item.message)"
+            @resume="(mid) => emit('resume', mid)"
+          />
+        </div>
+      </template>
 
       <!-- Thinking indicator: visible from the moment send() opens a
            stream until the first chunk arrives. -->

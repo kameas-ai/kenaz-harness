@@ -65,10 +65,6 @@ import type {
   MemoryHealthSnapshot,
   MemoryCaptureRateSnapshot,
   MemoryEmbedderEligibility,
-  DialConfig,
-  DialDelta,
-  DialEffectiveDials,
-  DialScopeKey,
   Hook,
   BuiltinDescriptor,
   DryRunResult,
@@ -549,16 +545,6 @@ interface WailsBindingsLike {
   Memory_ResummarizeChunk(chunkID: string): Promise<MemoryChunk>;
   Memory_GetChunkProvenance(chunkID: string): Promise<ChunkProvenance>;
 
-  Dials_Get(key: DialScopeKey): Promise<DialConfig>;
-  Dials_Set(key: DialScopeKey, cfg: DialConfig): Promise<void>;
-  Dials_GetEffective(
-    projectID: string,
-    sessionID: string,
-    graphID: string,
-    runID: string,
-  ): Promise<DialEffectiveDials>;
-  Dials_BumpAndResume(runID: string, delta: DialDelta): Promise<void>;
-
   Hooks_List(): Promise<Hook[]>;
   Hooks_Get(id: string): Promise<Hook>;
   Hooks_Add(input: Hook): Promise<Hook>;
@@ -703,8 +689,6 @@ interface WailsBindingsLike {
   // Cedar policy snippet writer/revoker (WP09).
   CedarPolicy_WriteSnippet(name: string, body: string): Promise<void>;
   CedarPolicy_RevokeSnippet(name: string): Promise<void>;
-  // Cedar propose modal resolution (harness-self-mcp-onboarding WP07).
-  CedarPolicy_ResolvePropose(requestID: string, decision: string): Promise<void>;
   // Cedar policy editor (cedar-policy-editor-ui-01KQ8TD6 WP01).
   CedarPolicy_Get(name: string): Promise<PolicyFileDetail>;
   CedarPolicy_Save(name: string, source: string): Promise<ParseResult>;
@@ -786,9 +770,17 @@ interface WailsBindingsLike {
   ContextBootstrap_Health(): Promise<ContextHealth>;
 
   // ── Elicitation (ask-user-question-interactive-01KZNP3G WP04-WP06) ──
+  //
+  // `answer` is the answer VALUE, not a JSON string of it. The Go
+  // parameter is a json.RawMessage, and Wails fills it by unmarshalling
+  // the argument's JSON text straight into the RawMessage — so whatever
+  // shape is passed here is the shape the model receives. Passing
+  // JSON.stringify(value) therefore double-encodes: a checkbox answer
+  // arrives at the model as the string "[\"a\",\"b\"]" instead of an
+  // array, contradicting the tool's own schema.
   Elicit_SubmitAnswer(
     requestID: string,
-    answerJSON: string | null,
+    answer: unknown,
     cancelled: boolean,
   ): Promise<void>;
   Elicit_ListPending(): Promise<import('./types').ElicitRequest[]>;
@@ -805,11 +797,12 @@ interface WailsBindingsLike {
   Confirm_ApproveBatch(batchID: string, rememberSession: boolean): Promise<number>;
   Confirm_CancelBatch(batchID: string, reason: string): Promise<number>;
   Confirm_ListPending(sessionID: string): Promise<import('./types').ToolConfirmPending[]>;
-  // WP05 multi-step wizard sequencing.
+  // WP05 multi-step wizard sequencing. Same value-not-string contract as
+  // Elicit_SubmitAnswer above.
   Elicit_SubmitWizardStep(
     requestID: string,
     questionID: string,
-    answerJSON: string | null,
+    answer: unknown,
     dismissed: boolean,
   ): Promise<void>;
   // WP06 async / deferred mode.
@@ -2240,23 +2233,6 @@ export interface MemoryClient {
 }
 
 /**
- * DialsClient backs the /dials view + the cap-hit toast (Bundle E
- * WP17). The four methods mirror Dials_Get / Dials_Set /
- * Dials_GetEffective / Dials_BumpAndResume.
- */
-export interface DialsClient {
-  get(key: DialScopeKey): Promise<DialConfig>;
-  set(key: DialScopeKey, cfg: DialConfig): Promise<void>;
-  getEffective(
-    projectID: string,
-    sessionID: string,
-    graphID: string,
-    runID: string,
-  ): Promise<DialEffectiveDials>;
-  bumpAndResume(runID: string, delta: DialDelta): Promise<void>;
-}
-
-/**
  * HooksClient backs the /hooks management view. Hooks are stored in
  * <DataDir>/hooks.json (mode 0600) and dispatched on the chat
  * pre_send / post_send lifecycle. Memory.retrieve / memory.persist
@@ -2714,9 +2690,6 @@ export interface CedarPolicyClient {
 
   writeSnippet(name: string, body: string): Promise<void>;
   revokeSnippet(name: string): Promise<void>;
-  /** Deliver user decision for a pending cedar-propose-pending modal. */
-  resolvePropose(requestID: string, decision: string): Promise<void>;
-
   // ── Editor methods (cedar-policy-editor-ui-01KQ8TD6) ──────────────
   /** Read a policy file's source. Embedded defaults are read-only. */
   getPolicy(name: string): Promise<PolicyFileDetail>;
@@ -3034,17 +3007,27 @@ export interface ElicitClient {
   /**
    * Submit the user's answer (or a cancellation) for a pending elicitation.
    * requestID was received on the "elicit:pending" event topic.
-   * answerJSON is a JSON-encoded answer value, or null when cancelled=true.
+   *
+   * `answer` is the answer VALUE — a string, number, string[], … — not a
+   * JSON-encoded string of it. The transport encodes it once; encoding it
+   * here as well hands the model a quoted blob where its own tool schema
+   * promised an array or a number.
+   *
+   * This call is the ONLY thing that unblocks the parked turn: the
+   * backend's OpenDialog is sitting on a channel with a ten-minute
+   * deadline. Not calling it is not "leaving the dialog open", it is
+   * stalling the model for ten minutes.
    */
-  submitAnswer(requestID: string, answerJSON: string | null, cancelled: boolean): Promise<void>;
+  submitAnswer(requestID: string, answer: unknown, cancelled: boolean): Promise<void>;
 
   /**
    * Submit one step of a multi-question wizard (WP05).
    * requestID identifies the OpenWizard call; questionID is the id of the
-   * question being answered; answerJSON is the JSON-encoded answer value;
-   * dismissed is true when the user cancels the wizard mid-flow.
+   * question being answered; `answer` is the answer value (see
+   * submitAnswer for why it is not pre-stringified); dismissed is true
+   * when the user cancels the wizard mid-flow.
    */
-  submitWizardStep(requestID: string, questionID: string, answerJSON: string | null, dismissed: boolean): Promise<void>;
+  submitWizardStep(requestID: string, questionID: string, answer: unknown, dismissed: boolean): Promise<void>;
 
   /**
    * Register a deferred ask (WP06). Returns immediately with AskID so the
@@ -3305,7 +3288,6 @@ export interface HarnessClient {
   graph: GraphClient;
   compaction: CompactionClient;
   branches: BranchesClient;
-  dials: DialsClient;
   nodes: NodesClient;
   cedarPolicy: CedarPolicyClient;
   search: SearchClient;
@@ -3751,14 +3733,6 @@ export function createHarnessClient(): HarnessClient {
       resummarizeChunk: (chunkID) => b().Memory_ResummarizeChunk(chunkID),
       getChunkProvenance: (chunkID) => b().Memory_GetChunkProvenance(chunkID),
     },
-    dials: {
-      get: (key) => b().Dials_Get(key),
-      set: (key, cfg) => b().Dials_Set(key, cfg),
-      getEffective: (projectID, sessionID, graphID, runID) =>
-        b().Dials_GetEffective(projectID, sessionID, graphID, runID),
-      bumpAndResume: (runID, delta) =>
-        b().Dials_BumpAndResume(runID, delta),
-    },
     hooks: {
       list: () => b().Hooks_List(),
       get: (id) => b().Hooks_Get(id),
@@ -3906,7 +3880,6 @@ export function createHarnessClient(): HarnessClient {
       recentDecisions: (limit) => b().CedarPolicy_RecentDecisions(limit),
       writeSnippet: (name, body) => b().CedarPolicy_WriteSnippet(name, body),
       revokeSnippet: (name) => b().CedarPolicy_RevokeSnippet(name),
-      resolvePropose: (requestID, decision) => b().CedarPolicy_ResolvePropose(requestID, decision),
       // cedar-policy-editor-ui-01KQ8TD6 WP02 editor methods
       getPolicy: (name) => b().CedarPolicy_Get(name),
       savePolicy: (name, source) => b().CedarPolicy_Save(name, source),
@@ -4396,6 +4369,26 @@ export function createServedHarnessClient(opts?: {
        */
       listPending: () =>
         transport.call<import('./types').ElicitRequest[]>('Elicit_ListPending'),
+
+      /**
+       * submitAnswer — the return leg, and the reason listPending is not
+       * enough on its own.
+       *
+       * A served harness parks kenaz__ask_user_question exactly like the
+       * desktop one: OpenDialog blocks a goroutine for ten minutes.
+       * Shipping the browser the pending ask (over the
+       * elicit:pending:snapshot frame and this listPending call) while
+       * leaving submitAnswer on the rejecting base meant a workbench user
+       * could SEE the question and had no way to answer it. That is the
+       * same shape as the confirm-each gap the Confirm_* served methods
+       * exist to close.
+       */
+      submitAnswer: (requestID, answer, cancelled) =>
+        transport.call<void>('Elicit_SubmitAnswer', {
+          requestId: requestID,
+          answer,
+          cancelled,
+        }),
     },
 
     llm: {
@@ -5062,25 +5055,6 @@ export function createFakeHarnessClient(
         createdAt: new Date().toISOString(),
       }),
     },
-    dials: {
-      get: async () => ({}),
-      set: noop,
-      getEffective: async () => ({
-        maxTokensPerRun: { value: 0, from: 'global' },
-        maxWallclockSeconds: { value: 0, from: 'global' },
-        maxLLMCalls: { value: 0, from: 'global' },
-        maxToolCalls: { value: 0, from: 'global' },
-        maxCostUSD: { value: 0, from: 'global' },
-        planVerbosity: { value: 'normal', from: 'global' },
-        askThreshold: { value: 0.4, from: 'global' },
-        reflectFrequency: { value: 1, from: 'global' },
-        compactionAggressiveness: { value: 0.5, from: 'global' },
-        reviewIterationsCap: { value: 3, from: 'global' },
-        memoryHooksEnabled: { value: true, from: 'global' },
-        memoryPruneIntervalSeconds: { value: 86400, from: 'global' },
-      }),
-      bumpAndResume: noop,
-    },
     hooks: {
       list: async () => [],
       get: async (id) => ({
@@ -5466,7 +5440,6 @@ export function createFakeHarnessClient(
       recentDecisions: async (): Promise<PolicyDecision[]> => [],
       writeSnippet: noop,
       revokeSnippet: noop,
-      resolvePropose: noop,
       // cedar-policy-editor-ui-01KQ8TD6 WP02 editor stubs
       getPolicy: async (name: string): Promise<PolicyFileDetail> => ({
         name,

@@ -764,6 +764,20 @@ export interface Settings {
    */
   confirmEachDisabled?: boolean;
   /**
+   * Model-visible move fidelity (model-moves-transcript-01PMCH01 WP03).
+   * The persisted form is the inverted `moveFidelityHistoryDisabled` bit
+   * so a fresh install (zero value) gets the spec's default-ON behaviour.
+   *
+   * When on, each request carries the model's own reasoning chain — its
+   * intermediate outputs, the tools it called and what they returned — in
+   * the provider's native shape, instead of one flattened message per
+   * turn. This is a provider-visible change, so it applies to sessions
+   * created while it was on; existing conversations keep the shape they
+   * were written with. Turning it OFF reverts every session on the next
+   * message (the backend reads it at request-composition time).
+   */
+  moveFidelityHistoryDisabled?: boolean;
+  /**
    * Chat-graph LoopNode iteration cap (agent-kernel-graph-chat-migration
    * mission). Zero on the wire means "use the spec default"
    * (DefaultMaxAgentTurns = 25). Frontend renders the placeholder
@@ -990,9 +1004,14 @@ export interface Settings {
   // ── Long-session nudge dials (v0.5.6 memory-trust-signals) ──────────
 
   /**
-   * longSessionNudgeTurns — number of user-assistant turn pairs (half
-   * the total message count) after which the inline long-session nudge
-   * banner appears. Default 30. Zero == use default.
+   * longSessionNudgeTurns — number of HUMAN TURNS after which the
+   * inline long-session nudge banner appears. Default 30. Zero == use
+   * default.
+   *
+   * One turn is one user message, however many model moves and tool
+   * entries answering it produced. It used to be described as "half the
+   * message count", which held only while a turn was always two rows;
+   * a move-bearing turn persists ~13 (model-moves-transcript-01PMCH01).
    */
   longSessionNudgeTurns?: number;
 
@@ -1162,6 +1181,15 @@ export interface ToolCall {
    * chat UI.
    */
   usedSecrets?: boolean;
+  /**
+   * Set on the `tool_result` move whose call failed — either the tool
+   * returned an error result or the dispatch itself did
+   * (model-moves-transcript-01PMCH01 WP04). It is the durable half of
+   * the inline tool chip's running→ok/error transition; the live half is
+   * `is_error` on the stream's move boundary. Absent on every classic
+   * row and on every `tool_call`.
+   */
+  isError?: boolean;
 }
 
 export interface Message {
@@ -1256,7 +1284,42 @@ export interface Message {
    */
   actualProvider?: string;
   actualModel?: string;
+
+  /**
+   * Move metadata (model-moves-transcript-01PMCH01 WP01). A single human
+   * turn can drive many model iterations; each iteration's text, each
+   * tool call and each tool result persists as its own transcript entry
+   * tagged with these three fields.
+   *
+   *   - kind       : which sort of move this entry is. Absent on every
+   *                  classic (pre-moves) entry and on every message
+   *                  written before the mission — treat an entry with no
+   *                  `kind` exactly as the UI treated it before, i.e. one
+   *                  assistant bubble per turn.
+   *   - moveIndex  : 0-based, dense position of the entry inside its
+   *                  human turn. Present iff `kind` is.
+   *   - turnSpanId : id of the user message that opened the turn. Every
+   *                  move in one turn shares it, so grouping by it
+   *                  reconstructs the turn's trajectory — that is what
+   *                  the collapse affordance groups on.
+   *
+   * Consumed by the live move-bubble view (WP04) and the collapse UX
+   * (WP05); WP01 lands the wire shape and the single writer seam only.
+   */
+  kind?: MoveKind;
+  moveIndex?: number;
+  turnSpanId?: string;
 }
+
+/**
+ * MoveKind — the transcript-entry classification mirrored from
+ * session.MoveKinds() (core/session/moves.go). Extend both together.
+ *
+ * A `Message` with no `kind` is a classic entry, not a fifth kind: the
+ * Go wire type omits the field entirely (`omitempty`) so pre-moves
+ * sessions and pre-moves clients keep the shape they already have.
+ */
+export type MoveKind = 'assistant_move' | 'tool_call' | 'tool_result' | 'final';
 
 /**
  * ListMessagesResult — wire shape for sessions.listMessagesActive /
@@ -1755,95 +1818,6 @@ export interface ChunkProvenance {
   embedderKind?: string;
   embedDimensions?: number;
   createdAt: string; // RFC3339
-}
-
-/**
- * DialScope — the cascading-config layer keys.
- */
-export type DialScope =
-  | 'global'
-  | 'project'
-  | 'session'
-  | 'graph'
-  | 'run';
-
-/**
- * DialScopeKey — addresses one cascading layer.
- */
-export interface DialScopeKey {
-  scope: DialScope;
-  id?: string;
-}
-
-/**
- * DialConfig — the wire shape for one cascading layer's overrides.
- * Each *Set boolean toggles whether the value is an explicit override
- * or "use cascade".
- */
-export interface DialConfig {
-  maxTokensPerRun?: number;
-  maxTokensPerRunSet?: boolean;
-  maxWallclockSeconds?: number;
-  maxWallclockSet?: boolean;
-  maxLLMCalls?: number;
-  maxLLMCallsSet?: boolean;
-  maxToolCalls?: number;
-  maxToolCallsSet?: boolean;
-  maxCostUSD?: number;
-  maxCostUSDSet?: boolean;
-  planVerbosity?: string;
-  planVerbositySet?: boolean;
-  askThreshold?: number;
-  askThresholdSet?: boolean;
-  reflectFrequency?: number;
-  reflectFrequencySet?: boolean;
-  compactionAggressiveness?: number;
-  compactionAggressivenessSet?: boolean;
-  reviewIterationsCap?: number;
-  reviewIterationsCapSet?: boolean;
-  memoryHooksEnabled?: boolean;
-  memoryHooksEnabledSet?: boolean;
-  memoryPruneIntervalSeconds?: number;
-  memoryPruneIntervalSet?: boolean;
-  updatedAt?: string;
-}
-
-/**
- * DialEffectiveField<T> — one resolved field's value plus the layer
- * that contributed it.
- */
-export interface DialEffectiveField<T> {
-  value: T;
-  from: DialScope;
-}
-
-/**
- * DialEffectiveDials — the resolved cascade output.
- */
-export interface DialEffectiveDials {
-  maxTokensPerRun: DialEffectiveField<number>;
-  maxWallclockSeconds: DialEffectiveField<number>;
-  maxLLMCalls: DialEffectiveField<number>;
-  maxToolCalls: DialEffectiveField<number>;
-  maxCostUSD: DialEffectiveField<number>;
-  planVerbosity: DialEffectiveField<string>;
-  askThreshold: DialEffectiveField<number>;
-  reflectFrequency: DialEffectiveField<number>;
-  compactionAggressiveness: DialEffectiveField<number>;
-  reviewIterationsCap: DialEffectiveField<number>;
-  memoryHooksEnabled: DialEffectiveField<boolean>;
-  memoryPruneIntervalSeconds: DialEffectiveField<number>;
-}
-
-/**
- * DialDelta — additive bump used by BumpAndResume.
- */
-export interface DialDelta {
-  addTokensPerRun?: number;
-  addWallclockSeconds?: number;
-  addLLMCalls?: number;
-  addToolCalls?: number;
-  addCostUSD?: number;
 }
 
 /**
@@ -3240,20 +3214,6 @@ export interface PermissionRequest {
   danger_copy?: string;
   // Filesystem-specific
   op?: 'read' | 'write' | 'delete' | 'move' | 'recipe_dir_add';
-}
-
-/**
- * CedarProposalPayload — payload emitted on the `cedar:propose-pending`
- * broker topic when an agent proposes a new Cedar policy snippet.
- * Mirrors core/mcp/builtin/harness.CedarProposalPayload (WP07).
- */
-export interface CedarProposalPayload {
-  request_id: string;
-  name: string;
-  body: string;
-  rationale?: string;
-  issued_at: string;
-  deadline_at: string;
 }
 
 /**

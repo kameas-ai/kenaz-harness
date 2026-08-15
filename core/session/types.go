@@ -72,6 +72,24 @@ type Record struct {
 	// map key is the canonical autonomy.Knob name (matches the wire
 	// shape produced by autonomy.Layer.MarshalJSON).
 	AutonomyOverrides map[autonomy.Knob]any `json:"autonomyOverrides,omitempty"`
+
+	// MoveHistoryMode records which model-visible-history mode this
+	// session was CREATED under — "moves" or "classic"
+	// (model-moves-transcript-01PMCH01 WP03, spec §4: "sessions record
+	// which mode wrote them"). Persisted in sessions.move_history_mode
+	// via migration 0334.
+	//
+	// EMPTY IS LOAD-BEARING: it is every session that predates the
+	// migration, and it resolves fail-closed to the classic composition
+	// so an in-flight conversation never changes shape underneath the
+	// model mid-thread. Read it through MoveHistoryModeFromRecord
+	// (moves_fidelity.go), never by comparing the string here — that
+	// function is the single place that decides what the values mean.
+	//
+	// Stamped once at creation and never rewritten: the live dial is a
+	// separate, read-at-consumption input, and this one is the memory of
+	// how the transcript was actually written.
+	MoveHistoryMode string `json:"moveHistoryMode,omitempty"`
 }
 
 // LastUsage is the per-session token-usage snapshot persisted after each
@@ -117,6 +135,15 @@ type ToolCall struct {
 	// @secret: reference token in the tool arguments. Never carries
 	// plaintext — provenance only (model-secret-references-01KW7M5A WP14).
 	UsedSecrets bool `json:"usedSecrets,omitempty"`
+	// IsError marks a tool_result move whose call failed
+	// (model-moves-transcript-01PMCH01 WP04). It is what makes a reloaded
+	// chat chip show the same failed tool the live view showed, instead
+	// of degrading every resolved call to "ok".
+	//
+	// It needs no migration: session_messages.tool_calls stores this
+	// struct as JSON, so the field round-trips through the existing
+	// column and rows written before the mission simply omit it.
+	IsError bool `json:"isError,omitempty"`
 }
 
 // Message is one row in session_messages. Sequence is monotonically
@@ -203,4 +230,38 @@ type Message struct {
 	// ActualModel is the model that ultimately served this turn. When empty,
 	// the primary model from the provider profile was used.
 	ActualModel string
+
+	// ---- move metadata (model-moves-transcript-01PMCH01 WP01) ----
+	//
+	// These three are UNEXPORTED BY DESIGN. A human turn can drive many
+	// model iterations; each iteration's output, tool call and tool
+	// result is its own transcript entry, tagged with which turn it
+	// belongs to and where in that turn it sits. Only
+	// Manager.AppendTranscriptEntry may stamp them (moves.go), so the
+	// compiler — not a convention — enforces the single-writer rule from
+	// spec §4 ("no second history-writing path"). Read them through
+	// MoveKind() / MoveIndex() / TurnSpanID().
+	//
+	// A row with moveKind == "" is a classic pre-moves entry and MUST
+	// behave exactly as it did before this mission: the wire projection
+	// omits all three, so old clients and old sessions see the shape
+	// they already understand.
+	moveKind       MoveKind
+	moveIndex      *int
+	moveTurnSpanID string
+
+	// modelToolArgs is the MODEL LAYER's copy of a tool_call move's raw
+	// arguments, keyed by tool-call id, each value the JSON the model
+	// emitted (model-moves-transcript-01PMCH01 WP03, spec §4).
+	//
+	// UNEXPORTED for the same reason as the three above, and read
+	// through ModelLayerToolArgs(). It is NOT interchangeable with
+	// ToolCalls[].Arguments, which is the DISPLAY layer's field and
+	// stays nil forever: see the header of migrations_move_fidelity.go
+	// for why the two layers get two homes, and moves.go for the two
+	// deliberately-unalike helper names.
+	//
+	// nil on every classic entry and on every move that is not a
+	// tool_call.
+	modelToolArgs map[string]string
 }

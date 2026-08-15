@@ -2,6 +2,18 @@
 /**
  * AskUserQuestion — rich interactive elicitation dialog.
  *
+ * ## What is parked behind this dialog
+ *
+ * kenaz__ask_user_question is default-on and its Delegate is the real
+ * elicit RPC bridge, so a model that calls it BLOCKS a goroutine inside
+ * `elicitview.API.OpenDialog` for up to ten minutes. This component is
+ * the only thing that can release it. Until 2026-08-14 nothing in the
+ * app imported this file — the dialog existed, was tested in isolation,
+ * and was never mounted — so the pause had no answering surface at all.
+ * It is mounted in App.vue now, next to ConfirmToolModal, for the same
+ * reason that one is: a modal that owns a blocked goroutine must be
+ * reachable from every route, not from one view.
+ *
  * Wire flow (WP04 synchronous single-question):
  *   1. Backend emits "elicit:pending" with an ElicitRequest payload.
  *   2. This component subscribes via useEventStream and queues requests.
@@ -13,6 +25,14 @@
  *      client.elicit.submitAnswer(requestID, null, true).
  *   6. The backend's blocking OpenDialog call returns and the model
  *      receives the AskResult.
+ *
+ * ## Answers cross the wire as VALUES
+ *
+ * `submitAnswer` takes the answer value, not a JSON string of it. The Go
+ * parameter is a json.RawMessage that Wails fills from the argument's own
+ * JSON text, so pre-stringifying double-encodes: the model's schema
+ * promises `["a","b"]` for a checkbox and would receive the string
+ * "[\"a\",\"b\"]" instead.
  *
  * Accessibility:
  *   - role="dialog" + aria-modal="true" + aria-labelledby
@@ -58,12 +78,37 @@ const lastError = ref<string | null>(null);
 // Reset each time the head changes.
 const answer = ref<unknown>(null);
 
-useEventStream<ElicitRequest>('elicit:pending', (payload) => {
+function enqueue(payload: ElicitRequest | null | undefined) {
   if (!payload?.request_id) return;
+  // Deferred asks are fire-and-forget: nothing is blocked on them, and
+  // they have their own non-modal surface. Putting one in a modal queue
+  // would interrupt the user for a question the model already moved past.
+  if (payload.mode === 'deferred') return;
   // Dedup on reconnect — the backend re-emits pending on reconnect.
   if (queue.value.some((q) => q.request_id === payload.request_id)) return;
   queue.value = [...queue.value, payload];
-});
+}
+
+useEventStream<ElicitRequest>('elicit:pending', enqueue);
+
+/**
+ * Rebuild the queue from the server's parked set.
+ *
+ * The pause lives in the harness process, not in this component, so a
+ * reload / hot-reload / WS reconnect that forgets the queue does NOT
+ * un-park anything: the goroutine is still sitting there, and without
+ * this the user would watch a chat that has silently stalled. Failures
+ * are swallowed on purpose — "I could not reach the harness" must not be
+ * rendered as "nothing is pending".
+ */
+async function reconcile() {
+  try {
+    const pending = await client.elicit.listPending();
+    for (const req of pending) enqueue(req);
+  } catch {
+    // Live topic still delivers anything that parks from here on.
+  }
+}
 
 const head = computed<ElicitRequest | null>(() => queue.value[0] ?? null);
 
@@ -77,9 +122,13 @@ function popHead() {
   lastError.value = null;
 }
 
-// Reset answer when the question kind changes.
+// Reset the held answer whenever the head changes. Keyed on request_id,
+// not on kind: two consecutive radio questions share a kind, and the
+// input subtree is re-created per request (see :key in the template), so
+// a kind-only watch would carry question 1's answer into question 2 and
+// submit it unseen.
 watch(
-  () => head.value?.kind,
+  () => head.value?.request_id,
   () => {
     answer.value = null;
   },
@@ -87,37 +136,52 @@ watch(
 
 // ── submit / cancel ────────────────────────────────────────────────────
 
-async function submit() {
-  const req = head.value;
-  if (!req || submitting.value) return;
+/**
+ * True when an error means "that ask is already resolved" rather than
+ * "the call failed" — the request timed out server-side (OpenDialog's
+ * ten-minute deadline), or another window answered it.
+ *
+ * This matters more here than it looks: the dialog is app-global and
+ * modal. Treating a resolved-elsewhere ask as a failure would leave a
+ * full-screen overlay that neither Submit nor Cancel can clear, locking
+ * the user out of the whole app over a question nobody is waiting on.
+ * Matched on the message because the error crosses the Wails / HTTP
+ * boundary as a string in both transports.
+ */
+function isAlreadyResolved(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return msg.includes('unknown or already-resolved');
+}
+
+async function run(fn: () => Promise<void>) {
+  if (submitting.value) return;
   submitting.value = true;
   lastError.value = null;
   try {
-    const answerJSON = answer.value === null
-      ? null
-      : JSON.stringify(answer.value);
-    await client.elicit.submitAnswer(req.request_id, answerJSON, false);
+    await fn();
     popHead();
   } catch (err) {
-    lastError.value = err instanceof Error ? err.message : String(err);
+    if (isAlreadyResolved(err)) {
+      popHead();
+    } else {
+      lastError.value = err instanceof Error ? err.message : String(err);
+    }
   } finally {
     submitting.value = false;
   }
 }
 
+async function submit() {
+  const req = head.value;
+  if (!req) return;
+  // The VALUE, not JSON.stringify(value) — see the header comment.
+  await run(() => client.elicit.submitAnswer(req.request_id, answer.value, false));
+}
+
 async function cancel() {
   const req = head.value;
-  if (!req || submitting.value) return;
-  submitting.value = true;
-  lastError.value = null;
-  try {
-    await client.elicit.submitAnswer(req.request_id, null, true);
-    popHead();
-  } catch (err) {
-    lastError.value = err instanceof Error ? err.message : String(err);
-  } finally {
-    submitting.value = false;
-  }
+  if (!req) return;
+  await run(() => client.elicit.submitAnswer(req.request_id, null, true));
 }
 
 // ── keyboard handling ──────────────────────────────────────────────────
@@ -139,7 +203,10 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
-onMounted(() => document.addEventListener('keydown', onKeydown));
+onMounted(() => {
+  document.addEventListener('keydown', onKeydown);
+  void reconcile();
+});
 onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
 
 // ── focus trap ─────────────────────────────────────────────────────────
@@ -186,7 +253,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', trapFocus));
 
 // ── expose for tests ───────────────────────────────────────────────────
 
-defineExpose({ queue, submit, cancel, answer });
+defineExpose({ queue, submit, cancel, answer, reconcile });
 </script>
 
 <template>
@@ -229,8 +296,13 @@ defineExpose({ queue, submit, cancel, answer });
           {{ head.question }}
         </h2>
 
-        <!-- Question kind input -->
-        <div class="mt-4 flex-1" data-testid="ask-dialog-input">
+        <!-- Question kind input.
+             Keyed on request_id so the input subtree is REBUILT per
+             question. Without the key, two consecutive questions of the
+             same kind reuse one child instance, whose onMounted default
+             emit never re-runs — so question 2 would submit question 1's
+             answer, or null. -->
+        <div :key="head.request_id" class="mt-4 flex-1" data-testid="ask-dialog-input">
           <RadioQuestion
             v-if="head.kind === 'radio'"
             :options="head.options ?? []"

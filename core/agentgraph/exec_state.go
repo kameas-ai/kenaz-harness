@@ -253,7 +253,13 @@ func (sessionWriteExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 	if env.HistoryWriter == nil {
 		return res, ErrNoHistoryWriter
 	}
-	mid, err := env.HistoryWriter.AppendMessage(ctx, env.SessionID, role, text)
+	// The move fields stay zero here: WP01 lands the seam without
+	// changing what session_write writes. WP02 is what starts stamping
+	// per-iteration MoveKind / MoveIndex / TurnSpanID onto this entry.
+	mid, err := env.HistoryWriter.AppendEntry(ctx, env.SessionID, HistoryEntry{
+		Role:    role,
+		Content: text,
+	})
 	if err != nil {
 		_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
 			"err":  err.Error(),
