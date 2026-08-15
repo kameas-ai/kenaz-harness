@@ -238,3 +238,92 @@ func TestMigration0335_IndexSurvivesAnUpdateOfAToolRow(t *testing.T) {
 		t.Errorf("after updating a never-indexed tool row the index holds %d rows, want 2", got)
 	}
 }
+
+// ftsMatch1 counts index hits for a term, for the update-path tests
+// below.
+func ftsMatch1(t *testing.T, db storage.DB, term string) int {
+	t.Helper()
+	return ftsMatchCount(t, db, term)
+}
+
+// TestMigration0335_UpdatingANonToolRowKeepsItIndexed is the test whose
+// absence let a total, silent search-index wipe through review.
+//
+// Every other test on this path updates a role='tool' row, where neither
+// half of the update trigger fires and the assertion is therefore about
+// nothing. The rows that MATTER are the non-tool ones, and they are
+// UPDATEd constantly: core/usage/usage.go writes token counts and cost
+// onto the assistant row of every turn that reports usage,
+// ApplyCompaction flips archived_at, MarkStreamingFailure sets a flag.
+// None of those touch content.
+//
+// WP06's first draft expressed the update path as two separate triggers
+// (messages_fts_au_del + messages_fts_au_ins). SQLite fires multiple
+// triggers on one event in reverse creation order, so the insert ran
+// before the delete and every term the old and new content share netted
+// to zero — a content-preserving UPDATE removed the row from the index
+// outright. No error, no corruption, integrity-check clean. Measured:
+// an assistant message matched its own text before usage was recorded
+// and matched nothing after.
+//
+// Mutation evidence: split sqlTriggerUpdateNoTool back into two triggers
+// and the first sub-assertion fails with "MATCH borrow = 0, want 1".
+func TestMigration0335_UpdatingANonToolRowKeepsItIndexed(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := ftsToolRowsDB(t)
+	store := session.NewSQLStore(session.NewStorageDB(db))
+	mgr := session.NewManager(store)
+
+	rec, err := mgr.Create(ctx, "fts update path")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	msg, err := mgr.AppendMessage(ctx, rec.ID, session.Message{
+		Role: session.RoleAssistant, Content: "zebrafish borrow constellation",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	if got := ftsMatch1(t, db, "borrow"); got != 1 {
+		t.Fatalf("precondition: the assistant row is not indexed (MATCH borrow = %d)", got)
+	}
+
+	// The verbatim shape of usage.RecordTurn's UPDATE: cost columns
+	// only, content untouched.
+	if err := db.WriteTx(ctx, func(tx storage.WriteTx) error {
+		_, e := tx.Exec(ctx,
+			"UPDATE session_messages SET prompt_tokens = 10, completion_tokens = 20 WHERE id = ?",
+			msg.ID)
+		return e
+	}); err != nil {
+		t.Fatalf("usage-shaped UPDATE: %v", err)
+	}
+	if got := ftsMatch1(t, db, "borrow"); got != 1 {
+		t.Errorf("MATCH borrow = %d, want 1. An UPDATE that never touched content "+
+			"evicted the row from the search index — every assistant turn would drop "+
+			"out of Cmd-F as soon as usage was recorded against it.", got)
+	}
+
+	// A real content edit must swap the terms, not cancel the shared one.
+	if err := db.WriteTx(ctx, func(tx storage.WriteTx) error {
+		_, e := tx.Exec(ctx,
+			"UPDATE session_messages SET content = 'zebrafish foxtrot constellation' WHERE id = ?",
+			msg.ID)
+		return e
+	}); err != nil {
+		t.Fatalf("content UPDATE: %v", err)
+	}
+	for _, tc := range []struct {
+		term string
+		want int
+	}{
+		{"zebrafish", 1}, // shared between old and new — must survive
+		{"foxtrot", 1},   // added
+		{"borrow", 0},    // removed
+	} {
+		if got := ftsMatch1(t, db, tc.term); got != tc.want {
+			t.Errorf("after a content UPDATE: MATCH %q = %d, want %d", tc.term, got, tc.want)
+		}
+	}
+}

@@ -88,28 +88,48 @@ const sqlTriggerInsertNoTool = `CREATE TRIGGER IF NOT EXISTS messages_fts_ai
             VALUES (new.rowid, new.content);
     END`
 
-// sqlTriggerUpdateDeleteNoTool is the delete half of the update path.
+// sqlTriggerUpdateNoTool is the AFTER UPDATE trigger.
 //
-// The update trigger is SPLIT in two rather than guarded once, and the
-// split is load-bearing. FTS5's 'delete' command on an external-content
-// table subtracts the supplied terms from the index; issuing it for a
-// row that was never indexed drives the term counts negative and the
-// next MATCH reports the database as malformed. So the delete half must
-// key on old.role and the insert half on new.role, independently. One
-// trigger guarded by either alone corrupts the index the moment a row's
-// role changes — and "role never changes today" is exactly the kind of
-// incidental truth this mission has already been bitten by once.
-const sqlTriggerUpdateDeleteNoTool = `CREATE TRIGGER IF NOT EXISTS messages_fts_au_del
-    AFTER UPDATE ON session_messages WHEN old.role <> 'tool' BEGIN
+// TWO GUARDED STATEMENTS IN ONE BODY, NOT TWO TRIGGERS
+// (review of model-moves-transcript-01PMCH01 WP06).
+//
+// The two halves need INDEPENDENT guards: FTS5's 'delete' command on an
+// external-content table subtracts the supplied terms from the index,
+// and issuing it for a row that was never indexed drives the term counts
+// negative — SQLite then fails the statement outright with "database
+// disk image is malformed". So the delete half must key on old.role and
+// the insert half on new.role. A single WHEN guarded by either alone
+// breaks the moment a row's role changes.
+//
+// WP06's first version got that right and then expressed it as two
+// separate triggers, messages_fts_au_del and messages_fts_au_ins. That
+// is where it went wrong: SQLite documents the firing order of multiple
+// triggers on the same event as UNDEFINED, and in practice fires them in
+// reverse creation order — so au_ins ran first and au_del second, adding
+// the new terms and then subtracting the old ones. Every term the two
+// versions share nets to zero.
+//
+// The result was silent and total. session_messages is UPDATEd on paths
+// that never touch content at all — core/usage/usage.go writes token
+// counts and cost onto the assistant row of every turn that reports
+// usage, ApplyCompaction flips archived_at, MarkStreamingFailure sets a
+// flag — and for those, old.content == new.content, so the whole row's
+// terms cancel and it vanishes from the index. Measured: an assistant
+// message matched its own text before usage was recorded and matched
+// nothing after. No error, no corruption, integrity-check clean; the
+// message simply stopped being findable. The corpus this migration
+// exists to protect was the corpus it deleted.
+//
+// Statements inside ONE trigger body execute in written order, which is
+// the property this needs. The guards move from WHEN onto each statement
+// as `INSERT … SELECT … WHERE`, which is how a trigger body expresses a
+// conditional statement.
+const sqlTriggerUpdateNoTool = `CREATE TRIGGER IF NOT EXISTS messages_fts_au
+    AFTER UPDATE ON session_messages BEGIN
         INSERT INTO messages_fts(messages_fts, rowid, content)
-            VALUES ('delete', old.rowid, old.content);
-    END`
-
-// sqlTriggerUpdateInsertNoTool is the insert half of the update path.
-const sqlTriggerUpdateInsertNoTool = `CREATE TRIGGER IF NOT EXISTS messages_fts_au_ins
-    AFTER UPDATE ON session_messages WHEN new.role <> 'tool' BEGIN
+            SELECT 'delete', old.rowid, old.content WHERE old.role <> 'tool';
         INSERT INTO messages_fts(rowid, content)
-            VALUES (new.rowid, new.content);
+            SELECT new.rowid, new.content WHERE new.role <> 'tool';
     END`
 
 // sqlTriggerDeleteNoTool is the AFTER DELETE trigger, guarded for the
@@ -134,8 +154,7 @@ const sqlBackfillToolRowsIntoFTS = `INSERT INTO messages_fts(rowid, content)
 // sqlSearchFTSToolRowsSchema is the concatenated DDL used as UpSource
 // for hash computation.
 const sqlSearchFTSToolRowsSchema = sqlTriggerInsertNoTool + ";\n" +
-	sqlTriggerUpdateDeleteNoTool + ";\n" +
-	sqlTriggerUpdateInsertNoTool + ";\n" +
+	sqlTriggerUpdateNoTool + ";\n" +
 	sqlTriggerDeleteNoTool + ";\n" +
 	sqlPurgeToolRowsFromFTS + ";\n"
 
@@ -152,8 +171,7 @@ func migration0335() migrations.Migration {
 			stmts := append([]string{}, sqlDropFTSTriggers...)
 			stmts = append(stmts,
 				sqlTriggerInsertNoTool,
-				sqlTriggerUpdateDeleteNoTool,
-				sqlTriggerUpdateInsertNoTool,
+				sqlTriggerUpdateNoTool,
 				sqlTriggerDeleteNoTool,
 				// Purge AFTER the triggers are swapped: the purge is
 				// itself an INSERT into messages_fts and touches no row of
