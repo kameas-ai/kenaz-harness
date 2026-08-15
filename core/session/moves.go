@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-
-	"github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // ---------------------------------------------------------------------------
@@ -102,6 +100,26 @@ var (
 	ErrModelToolArgsWithoutToolCall = errors.New("session: model tool args require a tool_call move")
 )
 
+// NO ContentBlocks FIELD — and that is a known, recorded hole
+// (model-moves-transcript-01PMCH01 WP05, and see docs/unwired-ledger.md).
+//
+// WP02 added one so this seam could express as much as
+// Manager.AppendMessage: without it, an author needing a multimodal
+// entry had to leave the seam, and the off-seam path cannot stamp move
+// metadata, so the move degraded silently to a classic entry. Nothing
+// ever set it. It is gone rather than carried a fourth release because
+// there is no producer to wire it to, not because the hole closed:
+// `agentgraph.ToolResult` is `{Content string; IsError bool}`, so a
+// tool result cannot carry an image, and `agentgraph.HistoryEntry` has
+// no blocks field either. Adding the writer would have meant inventing
+// content for it — moving the lie one layer up rather than ending it.
+//
+// If you are here because you need a multimodal MOVE: restore this
+// field AND add ContentBlocks to agentgraph.HistoryEntry AND give
+// agentgraph.ToolResult a way to carry blocks, in one change. Do not
+// route the move through AppendMessage to get blocks — that is exactly
+// the silent degradation described above, and no gate can see it.
+
 // TranscriptEntry is the input shape of the single transcript-writing
 // seam. It is what the chat runner and the session_write node hand to
 // the store; Manager.AppendTranscriptEntry turns it into the persisted
@@ -119,23 +137,6 @@ type TranscriptEntry struct {
 	// ToolCalls carries the structured tool payload for tool_call /
 	// tool_result entries.
 	ToolCalls []ToolCall
-	// ContentBlocks is the polymorphic multimodal body (the
-	// content_json column added by multimodal-io WP02). Empty means
-	// "text only" and the store synthesizes the canonical single text
-	// block from Content, exactly as it does for every other writer.
-	//
-	// WHY IT IS HERE (model-moves-transcript-01PMCH01 WP02, review of
-	// WP01): without it this seam could express strictly LESS than
-	// Manager.AppendMessage, and the only way to persist a multimodal
-	// entry was the AppendMessage path — which cannot stamp move
-	// metadata, so a move routed through it degraded to a classic entry
-	// with neither the compiler nor check-single-move-writer.sh
-	// objecting. The degradation was silent because the author had no
-	// expressive alternative. Now there is one, and the compiler still
-	// forbids minting move metadata anywhere else, so the only remaining
-	// use of AppendMessage is what it has always been: classic entries.
-	ContentBlocks []llm.ContentBlock
-
 	// Kind is the move classification. Empty means "classic entry".
 	Kind MoveKind
 	// MoveIndex is the 0-based position of this entry inside its human
@@ -205,10 +206,9 @@ func (m *Manager) AppendTranscriptEntry(ctx context.Context, sessionID string,
 		return Message{}, err
 	}
 	msg := Message{
-		Role:          e.Role,
-		Content:       e.Content,
-		ToolCalls:     e.ToolCalls,
-		ContentBlocks: e.ContentBlocks,
+		Role:      e.Role,
+		Content:   e.Content,
+		ToolCalls: e.ToolCalls,
 	}
 	if e.isMove() {
 		idx := e.MoveIndex

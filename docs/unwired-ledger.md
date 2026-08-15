@@ -71,12 +71,20 @@ releasable", which this section previously claimed. WP04's review found
 three other surfaces that consume move-bearing rows and are wrong, none of
 them the transcript, all owned by WP05/WP06:
 
-- `MessageList.vue:162-170` + `MessageBubble.vue:549-553` count **rows**,
-  not turns, for "Summary of N turns" — the same arithmetic error WP04
-  fixed in `useLongSessionNudge`, 100 lines above the fix. Three
-  move-bearing turns compact to "Summary of 39 turns". Pre-existing (it
-  was already 2x wrong), and correcting it moves two green e2e
-  assertions, so it was deliberately not fixed unilaterally.
+- ~~`MessageList.vue:162-170` + `MessageBubble.vue:549-553` count
+  **rows**, not turns, for "Summary of N turns"~~ — **FIXED 2026-08-14
+  by WP05.** `MessageList` now calls `transcript.foldedTurnCounts`,
+  which attributes each folded row to the turn that opened it
+  (`turnSpanId`, or the most recent preceding user row for a classic
+  row) and counts distinct turns. WP05 made the call WP04 declined to
+  make unilaterally: the two green assertions
+  (`CompactionFlow.e2e.spec.ts` "SummaryIndicatorRenders" and
+  `CompactedHistory.spec.ts` "renders the Summary of N turns
+  indicator") moved from "Summary of 2 turns" to "Summary of 1 turn",
+  because both fixtures fold ONE exchange — a user row and the
+  assistant row answering it — and both now carry a comment saying so.
+  Pinned by `lib/__tests__/foldedTurnCounts.test.ts`; reverting to the
+  row count fails four of its five cases.
 - **Search corpus**: migration 0312's FTS trigger
   (`core/session/migrations_search_fts.go:47`) fires on every
   `session_messages` insert with no role filter, so every `tool_result`
@@ -84,8 +92,21 @@ them the transcript, all owned by WP05/WP06:
   offers User/Assistant/System and **no Tool option**;
   `SearchPalette.vue` has no role filter at all. Cmd-F degrades
   materially on a move-bearing session.
-- **`Sessions_Export`** (Go, markdown + JSON) walks tool rows with raw
-  output — FR-006 territory.
+- ~~**`Sessions_Export`** (Go, markdown + JSON) walks tool rows with raw
+  output~~ — **FIXED 2026-08-14 by WP05** (FR-006). The export is now
+  an explicit DISPLAY consumer, contract written at the head of
+  `core/sessions/export/moves.go`: the document is turns (move rows
+  never take a `## Turn N` heading), tool output is capped at
+  `ToolOutputCap` = 4000 runes on a rune boundary, and argument VALUES
+  are never printed in either format — the markdown `**Arguments:**`
+  raw-JSON block and the JSON `tool_calls[].arguments` map are both
+  gone, replaced by a names-and-types summary. That is a structural
+  rule, not a redaction one, because `RedactValue` only walks top-level
+  strings: a secret in a nested argument object or inside an array
+  sailed past it. Nothing in the package can reach
+  `session.Message.ModelLayerToolArgs`. A classic session's export is
+  unchanged in both formats, asserted by
+  `TestExport_ClassicSessionIsUnchangedByMoves`.
 
 Also open, and not a projection bug: on the **revised-draft** path the
 exit gate's revised text never streams, so the live view shows the draft
@@ -96,61 +117,34 @@ revision on the stream.
 Whoever mounts `SubagentTab.vue` (dead today) must route through
 `projectTranscript` or it reinherits the 13-bubble regression.
 
-### 2026-08-14 · `session.TranscriptEntry.ContentBlocks` has no production writer (WP02)
+### 2026-08-14 · `session.TranscriptEntry.ContentBlocks` — DELETED by WP05
 
-Added by WP02 to close a WP01 review finding: without it the transcript
-seam could express strictly LESS than `Manager.AppendMessage`, so an
-author needing a multimodal entry had to leave the seam — and the
-off-seam path cannot stamp move metadata, so the move degraded to a
-classic entry with neither the compiler nor
-`check-single-move-writer.sh` objecting. The field removes the reason to
-leave the seam.
+**Disposition: deleted.** Class: *the whole producer chain has no
+producer.* WP02 added the field so the transcript seam could express as
+much as `Manager.AppendMessage` — without it an author needing a
+multimodal entry had to leave the seam, and the off-seam path cannot
+stamp move metadata, so the move degraded silently to a classic entry
+with neither the compiler nor `check-single-move-writer.sh` objecting.
+WP03 drained the READ half (`core/rpc/model_history.go` prefers
+`session.Message.ContentBlocks` over the flattened column, pinned by
+`TestModelHistory_ContentBlocksAreNotReflattened` — that reads the
+DURABLE field, which stays and is still written by
+`SendMessageWithBlocks`). The WRITE half was WP05's, with a deadline:
+ship a writer or delete the field.
 
-Precision (adversarial review of WP02): that makes the degradation
-**unmotivated, not unreachable.** `Manager.AppendMessage` is exported and
-still accepts an assistant row — `SendMessageWithBlocks` uses it, legally,
-for the user turn. What the compiler forbids is minting move METADATA off
-the seam; it does not forbid writing a row that should have been a move
-and silently is not. The gate cannot see that class either: clause 3
-counts callers of `AppendTranscriptEntry`, not writers that avoid it.
-The residual guard is that there is no longer any expressiveness reason
-to take the off-seam path.
+WP05 deleted it. There is no producer to wire it to and none is one
+change away: `agentgraph.ToolResult` is `{Content string; IsError
+bool}`, so a tool result cannot carry an image, and
+`agentgraph.HistoryEntry` has no blocks field either. Writing the
+writer would have meant synthesising content for it — moving the lie
+one layer up instead of ending it, which "Disposition: delete vs.
+finish" names explicitly. `TestAppendTranscriptEntry_CarriesContentBlocks`,
+the field's only reader, was deleted with it.
 
-Read on every append (`AppendTranscriptEntry` → `canonicalBlocks`) and
-round-tripped by `TestAppendTranscriptEntry_CarriesContentBlocks`, but
-every production caller leaves it empty today: the moves WP02 writes are
-text. It becomes load-bearing the first time a move carries an image.
-
-**Consumers:** WP03 (per-family rendering must not re-flatten a
-multimodal move on its way to the provider), WP05 (export/share
-fidelity). **Owner:** 01PMCH01.
-
-**Deadline:** if 01PMCH01 ships without either consumer setting it, the
-right disposition is to delete the field and record the expressiveness
-hole as an open finding — not to leave it here for a fourth release.
-
-**READ HALF DRAINED 2026-08-14 by WP03. WRITE HALF STILL OPEN.** Be
-precise about which half moved, because the deadline above is written
-against the write half ("without either consumer *setting* it"):
-
-- *Drained.* WP03's named obligation here was "per-family rendering must
-  not re-flatten a multimodal move on its way to the provider", and it is
-  now discharged. The model-visible composition
-  (`core/rpc/model_history.go` → `textMessage`) prefers `ContentBlocks`
-  over the flattened `Content` column and carries the canonical
-  polymorphic body onward to the family renderers. Before WP03 the
-  projection was `Role`+`Content` only — a blocks-bearing row reached the
-  model with whatever text happened to sit beside them, or with nothing.
-  Pinned by `TestModelHistory_ContentBlocksAreNotReflattened`, which
-  fails if the branch is deleted.
-- *Still open.* No production code SETS `TranscriptEntry.ContentBlocks`.
-  The write half needs `coreag.HistoryEntry` to carry blocks too (it does
-  not today), which is the shape a multimodal tool result or a captured
-  generated image would travel in. That is WP05's, and the deadline above
-  stands unchanged against it: if 01PMCH01 ships with no writer, delete
-  the field rather than carry it a fourth release.
-
-**Remaining consumer:** WP05 (export/share fidelity, and the writer).
+**The expressiveness hole this re-opens is recorded below** under
+*Open — ungated findings*, and the reasoning is repeated in a comment
+where the field used to be so an author who needs it finds it there
+rather than rediscovering it.
 
 Not on this list, because they are already load-bearing:
 `session.Message.{moveKind,moveIndex,moveTurnSpanID}` +
@@ -165,6 +159,68 @@ prose and in a TS union; they do not call `MoveKinds()`.
 ---
 
 ## Open — ungated findings
+
+### 2026-08-14 · A move cannot be multimodal (the hole WP05's deletion re-opened)
+
+Recorded as required by the deleted `TranscriptEntry.ContentBlocks`
+entry above. This is an **expressiveness hole**, not unwired code —
+listed here because deleting the field is what makes it invisible, and
+the sweep that finds it next should find this line first.
+
+`Manager.AppendTranscriptEntry` is the only seam that may stamp move
+metadata, and it can now express only a TEXT entry. So an author who
+needs a move carrying an image has exactly two options, and both are
+wrong:
+
+1. `Manager.AppendMessage`, which accepts `ContentBlocks` but cannot
+   stamp `kind` / `move_index` / `turn_span_id`. The move silently
+   degrades to a classic entry. **No gate sees this**:
+   `check-single-move-writer.sh` clause 3 counts CALLERS of
+   `AppendTranscriptEntry`, not writers that avoid it, and the compiler
+   is satisfied because `AppendMessage` is a legitimate API (the user
+   turn uses it, via `SendMessageWithBlocks`).
+2. Flatten the image out of the move, which loses it.
+
+**Nothing needs this today** — the producer chain cannot make a
+multimodal move: `agentgraph.ToolResult` is `{Content string; IsError
+bool}` and `agentgraph.HistoryEntry` carries no blocks. It becomes real
+the first time a tool returns an image, or thinking/vision output is
+captured per-move.
+
+**The change that closes it** (one commit, all three parts, or none):
+give `agentgraph.ToolResult` a blocks field, add `ContentBlocks` to
+`agentgraph.HistoryEntry`, restore `TranscriptEntry.ContentBlocks` and
+its assignment in `AppendTranscriptEntry`. Doing only the last part
+recreates the field with no writer, which is what WP05 deleted.
+
+**Owner:** unassigned — it needs a producer, which is feature work with
+a spec (multimodal tool results). Note in `core/session/moves.go` where
+the field used to be.
+
+### 2026-08-14 · `session.ToolCall.{Arguments,Result}` have no production writer
+
+Found by WP05 while rewriting the export. The only production writer of
+`session.ToolCall` is `core/rpc/api.go:6228`, which sets `{ID, Name,
+IsError}` and nothing else — by design: `Arguments` belongs to the
+DISPLAY layer and the display layer never sees values (see the contract
+on `session.Message.ModelLayerToolArgs`), and a tool result is its own
+`tool_result` row now, not a field hanging off the call.
+
+**Kept, not deleted, and not because "we'll get to it".** These are
+fields of a struct serialised into `session_messages.tool_calls`. Rows
+written before the mission may hold both, and the export is a live
+reader of both: `Arguments` feeds `argsSummaryFromValues` (names and
+types, never values) and `Result` is rendered capped. Deleting them
+would silently drop data from old sessions' exports. They are a
+**read-compat surface with a live reader**, which is a different thing
+from unwired code — logged here so the next sweep does not re-find them
+as an inert pair.
+
+The **gap the gates cannot see** is the one worth writing down: nothing
+prevents a future writer from populating `Arguments` with real values,
+at which point the display layer starts carrying them. The export is
+structurally safe (it never prints a value), but no gate enforces that
+`Arguments` stays empty at the write site.
 
 ### 2026-08-14 · Deferred asks have no producer, and wizards have no caller
 
