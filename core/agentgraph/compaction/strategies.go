@@ -168,11 +168,12 @@ func (s *DropOldestStrategy) Compact(_ context.Context, in ContextSlice, opts Co
 // orphan hazard this code was written for, it is worse — an intact pair
 // destroyed by the machinery meant to protect it.
 //
-// So: bind by REACH rather than by adjacency. Every tool id contributes
-// the closed index interval [first mention, last mention], covering both
-// halves however far apart and in whichever order they were stored. The
-// intervals are then merged transitively — the standard partition-labels
-// walk — and each merged run becomes one unit. Interleaved pairs, nested
+// So: bind by REACH rather than by adjacency. Every matched
+// call/result PAIR contributes the closed index interval between its two
+// halves, covering them however far apart and in whichever order they
+// were stored. The intervals are then merged transitively — the standard
+// partition-labels walk — and each merged run becomes one unit.
+// Interleaved pairs, nested
 // pairs, a pair split by an unrelated row, a result stored before its
 // call, and an id reused across turns all fall out of the same rule
 // instead of needing a case each.
@@ -190,30 +191,59 @@ func dropOldestUnits(msgs []agentgraph.Message) [][]agentgraph.Message {
 	for i := range msgs {
 		reach[i] = i
 	}
-	first := map[string]int{}
-	last := map[string]int{}
-	note := func(id string, i int) {
-		if id == "" {
-			return
+	// bind makes the earlier of the two indices reach the later one.
+	bind := func(a, b int) {
+		lo, hi := a, b
+		if lo > hi {
+			lo, hi = hi, lo
 		}
-		if v, ok := first[id]; !ok || i < v {
-			first[id] = i
-		}
-		if v, ok := last[id]; !ok || i > v {
-			last[id] = i
-		}
-	}
-	for i, m := range msgs {
-		for _, tc := range m.ToolCalls {
-			note(tc.ID, i)
-		}
-		if m.Role == "tool" {
-			note(m.ToolCallID, i)
-		}
-	}
-	for id, lo := range first {
-		if hi := last[id]; hi > reach[lo] {
+		if hi > reach[lo] {
 			reach[lo] = hi
+		}
+	}
+	// THE INTERVAL IS PER PAIR, NOT PER ID (review of WP06).
+	//
+	// Taking [first mention, last mention] of an id looks equivalent and
+	// is not: one id reused in two different turns then reaches from the
+	// first turn to the last, fusing everything between them into a
+	// single trim-atomic unit that the front-to-back loop can only take
+	// or leave whole. Measured on a 12-turn session whose first and last
+	// turns share an id: 48 messages collapsed to 3 units of [1, 46, 1],
+	// so an aggressive target shed ONE message where the same session
+	// with unique ids shed 44. Compaction that cannot reach its target
+	// hands an oversized request to the provider — the failure the
+	// strategy exists to prevent.
+	//
+	// So match chronologically instead: a tool result answers the most
+	// recent call of its id that nothing has answered yet. Interleaved,
+	// nested and far-apart pairs still bind into one unit (that is what
+	// the reach walk below is for); two complete exchanges that merely
+	// share an id no longer do. Repeated ids are real on the
+	// local-runtime lane, where small models number tool calls per
+	// request — see toolPairSpans in session_snap.go for the same rule
+	// on the persisted-history side.
+	open := map[string][]int{}
+	pending := map[string][]int{}
+	for i, m := range msgs {
+		if m.Role == "tool" && m.ToolCallID != "" {
+			id := m.ToolCallID
+			if st := open[id]; len(st) > 0 {
+				bind(st[len(st)-1], i)
+				open[id] = st[:len(st)-1]
+			} else {
+				pending[id] = append(pending[id], i)
+			}
+		}
+		for _, tc := range m.ToolCalls {
+			if tc.ID == "" {
+				continue
+			}
+			if q := pending[tc.ID]; len(q) > 0 {
+				bind(q[0], i)
+				pending[tc.ID] = q[1:]
+				continue
+			}
+			open[tc.ID] = append(open[tc.ID], i)
 		}
 	}
 

@@ -25,40 +25,30 @@ import (
 	"testing"
 )
 
-// refSplits reports whether ANY tool id has an opener strictly before
-// idx and a closer at or after it. Deliberately conservative about a
-// repeated id (any opener, any closer) — that is also the reading the
-// production helper takes, because when one provider id appears twice
-// there is no way to tell from the row alone which closer answers which
-// opener, and keeping the whole run intact is the only safe resolution.
-func refSplits(msgs []SessionMessage, idx int) (string, bool) {
-	opens := map[string][]int{}
-	closes := map[string][]int{}
-	for i, m := range msgs {
-		if m.ToolUseID != "" {
-			opens[m.ToolUseID] = append(opens[m.ToolUseID], i)
-		}
-		if m.ToolResultForID != "" {
-			closes[m.ToolResultForID] = append(closes[m.ToolResultForID], i)
-		}
-	}
-	for id, os := range opens {
-		before := false
-		for _, o := range os {
-			if o < idx {
-				before = true
-			}
-		}
-		if !before {
-			continue
-		}
-		for _, c := range closes[id] {
-			if c >= idx {
-				return id, true
-			}
+// refSplits reports whether the boundary idx falls strictly inside one
+// of the pairs listed in pairs — i.e. lo < idx <= hi.
+//
+// THE ORACLE IS HAND-WRITTEN DATA, NOT A SECOND ALGORITHM.
+//
+// pairs comes from snapWantPairs() below, which spells out by hand,
+// per shape, which opener answers which closer. That is what makes this
+// an independent restatement: a re-derived matching would be the
+// production matcher written twice, and would agree with it for the same
+// wrong reason.
+//
+// The earlier version of this oracle keyed on the id alone — "any opener
+// before idx, any closer at or after it" — and its comment argued that a
+// repeated provider id is irresolvable from the row, so fusing the whole
+// run is the only safe reading. Fusing is not safe; it is a different
+// failure. See toolPairSpans in session_snap.go for the measurement, and
+// TestSnapClamps_RepeatedIDStillMakesProgress below for the pin.
+func refSplits(pairs [][2]int, idx int) ([2]int, bool) {
+	for _, p := range pairs {
+		if p[0] < idx && idx <= p[1] {
+			return p, true
 		}
 	}
-	return "", false
+	return [2]int{}, false
 }
 
 func snapUse(id string) SessionMessage {
@@ -150,18 +140,133 @@ func snapShapes() map[string][]SessionMessage {
 	}
 }
 
+// snapWantPairs states, by hand and per shape, which opener answers
+// which closer — the [lo, hi] index span of every real pair. Shapes whose
+// tool rows are all half-pairs map to no spans at all.
+//
+// This table is the oracle. It is written from reading the shape, not
+// from running the matcher, and TestToolPairSpans_MatchTheHandWrittenTable
+// pins the matcher against it.
+func snapWantPairs() map[string][][2]int {
+	return map[string][][2]int{
+		"sequential pair": {{1, 2}},
+		"interleaved pairs (parallel dispatch, out of order)": {{2, 3}, {1, 4}},
+		"nested pairs (both open before either answers)":      {{1, 3}, {2, 4}},
+		"a pair straddling two unrelated rows":                {{1, 4}},
+		"a pair split by an interleaved second pair":          {{3, 4}, {1, 5}},
+		"a compaction summary landing inside a pair":          {{1, 3}},
+		// The two exchanges are each complete. Nothing spans the gap
+		// between them, so a boundary at 4 splits nothing.
+		"one provider id reused across two turns":         {{1, 2}, {5, 6}},
+		"a result stored before its call":                 {{1, 2}},
+		"an interrupted turn: a call with no result":      nil,
+		"a synthetic result whose call was never written": nil,
+		"three calls, the middle one unanswered":          {{3, 4}, {1, 5}},
+		"back-to-back pairs with no separator":            {{0, 1}, {2, 3}, {4, 5}},
+		"a pair straddling a user row":                    {{0, 2}},
+	}
+}
+
+// TestToolPairSpans_MatchTheHandWrittenTable pins the matcher against the
+// oracle data every other test in this file is judged by. Without it the
+// oracle could drift into agreement with a broken matcher.
+func TestToolPairSpans_MatchTheHandWrittenTable(t *testing.T) {
+	t.Parallel()
+	want := snapWantPairs()
+	for name, msgs := range snapShapes() {
+		got := toolPairSpans(msgs)
+		set := map[[2]int]bool{}
+		for _, s := range got {
+			set[s] = true
+		}
+		w := want[name]
+		if len(got) != len(w) {
+			t.Errorf("%s: toolPairSpans = %v, want %v", name, got, w)
+			continue
+		}
+		for _, s := range w {
+			if !set[s] {
+				t.Errorf("%s: toolPairSpans = %v, missing hand-written pair %v", name, got, s)
+			}
+		}
+	}
+}
+
+// TestSnapClamps_RepeatedIDStillMakesProgress is the regression pin for
+// the over-merge the first WP06 draft introduced.
+//
+// Keying the straddle test on the id alone bound the FIRST mention of a
+// repeated id to the LAST, so on this session — eight turns, first and
+// last sharing an id, which is what a local runtime that numbers its tool
+// calls per request produces — the composed clamps returned boundary 2
+// for EVERY requested cut point at recentWindow=2, and 39 (summarize the
+// newest turn too) at recentWindow=0. Both are "compaction that cannot
+// compact"; neither is safe.
+//
+// The assertion is that the boundary TRACKS the request rather than
+// collapsing to a constant, and does it while still never splitting a
+// pair.
+func TestSnapClamps_RepeatedIDStillMakesProgress(t *testing.T) {
+	t.Parallel()
+	var msgs []SessionMessage
+	var pairs [][2]int
+	for turn := 0; turn < 8; turn++ {
+		id := fmt.Sprintf("t%d", turn)
+		if turn == 0 || turn == 7 {
+			id = "call_0" // the repeated id
+		}
+		msgs = append(msgs, snapRow("user", fmt.Sprintf("u%d", turn)))
+		msgs = append(msgs, snapRow("assistant", fmt.Sprintf("m%d", turn)))
+		use := len(msgs)
+		msgs = append(msgs, snapUse(id))
+		msgs = append(msgs, snapRes(id))
+		pairs = append(pairs, [2]int{use, use + 1})
+		msgs = append(msgs, snapRow("assistant", fmt.Sprintf("f%d", turn)))
+	}
+
+	for _, rw := range []int{0, 2} {
+		distinct := map[int]bool{}
+		for start := 1; start < len(msgs); start++ {
+			b := snapBoundaryForToolPairs(msgs, start)
+			b = snapBoundaryForRecentWindow(msgs, b, rw)
+			b = snapBoundaryBackForToolPairs(msgs, b)
+			distinct[b] = true
+			if p, split := refSplits(pairs, b); split {
+				t.Errorf("rw=%d start=%d → %d: pair %v still straddles", rw, start, b, p)
+			}
+			// A boundary that lands inside a turn's own pair legitimately
+			// moves by one; what must not happen is a repeated id dragging
+			// it across whole turns.
+			if b > start+1 {
+				t.Errorf("rw=%d start=%d → %d: the clamps compacted PAST the request by "+
+					"more than one row; a repeated id must not drag the boundary over "+
+					"turns that are already complete", rw, start, b)
+			}
+		}
+		// 39 achievable boundaries collapsing to one or two values is the
+		// pathology; a healthy clamp reaches a boundary per turn at least.
+		if len(distinct) < 8 {
+			t.Errorf("rw=%d: %d distinct boundaries across %d cut points — the clamps "+
+				"collapsed onto a constant, so this session cannot be compacted at any "+
+				"requested percentage", rw, len(distinct), len(msgs)-1)
+		}
+	}
+}
+
 // TestSnapBoundaryForToolPairs_ExhaustiveOverEveryCutPoint asserts the
 // forward clamp lands on a boundary no pair straddles, from every
 // starting index, on every shape.
 //
-// Mutation evidence: replace straddler's two scans with the pre-WP06
-// test of messages[idx] / messages[idx-1] only, and this fails on
-// "a pair straddling two unrelated rows" (idx=3),
-// "a pair split by an interleaved second pair" (idx=3) and
-// "three calls, the middle one unanswered" (idx=3).
+// Mutation evidence: replace straddler with the pre-WP06 test of
+// messages[idx] / messages[idx-1] only, and this fails at four shapes —
+// "a pair straddling two unrelated rows", "a pair split by an
+// interleaved second pair", "three calls, the middle one unanswered"
+// and "one provider id reused across two turns".
 func TestSnapBoundaryForToolPairs_ExhaustiveOverEveryCutPoint(t *testing.T) {
 	t.Parallel()
+	want := snapWantPairs()
 	for name, msgs := range snapShapes() {
+		pairs := want[name]
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			for idx := 0; idx <= len(msgs); idx++ {
@@ -169,8 +274,8 @@ func TestSnapBoundaryForToolPairs_ExhaustiveOverEveryCutPoint(t *testing.T) {
 				if got < idx {
 					t.Errorf("idx=%d: forward clamp moved BACKWARD to %d", idx, got)
 				}
-				if id, split := refSplits(msgs, got); split {
-					t.Errorf("idx=%d → %d: pair %q still straddles the boundary. "+
+				if id, split := refSplits(pairs, got); split {
+					t.Errorf("idx=%d → %d: pair %v still straddles the boundary. "+
 						"The span archives messages[:%d] and leaves a half-pair on one "+
 						"side of it; the provider rejects the request the surviving half "+
 						"reaches it in.", idx, got, id, got)
@@ -185,7 +290,9 @@ func TestSnapBoundaryForToolPairs_ExhaustiveOverEveryCutPoint(t *testing.T) {
 // after the recent-window clamp has been free to move the boundary left.
 func TestSnapBoundaryBackForToolPairs_ExhaustiveOverEveryCutPoint(t *testing.T) {
 	t.Parallel()
+	want := snapWantPairs()
 	for name, msgs := range snapShapes() {
+		pairs := want[name]
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			for idx := 0; idx <= len(msgs); idx++ {
@@ -194,8 +301,8 @@ func TestSnapBoundaryBackForToolPairs_ExhaustiveOverEveryCutPoint(t *testing.T) 
 					t.Errorf("idx=%d: backward clamp moved FORWARD to %d — it would be "+
 						"able to undo the recent-window guarantee it runs after", idx, got)
 				}
-				if id, split := refSplits(msgs, got); split {
-					t.Errorf("idx=%d → %d: pair %q still straddles the boundary", idx, got, id)
+				if id, split := refSplits(pairs, got); split {
+					t.Errorf("idx=%d → %d: pair %v still straddles the boundary", idx, got, id)
 				}
 			}
 		})
@@ -207,13 +314,20 @@ func TestSnapBoundaryBackForToolPairs_ExhaustiveOverEveryCutPoint(t *testing.T) 
 // the boundary in between, the backward clamp restores pair integrity
 // WITHOUT taking back the recent-window guarantee.
 //
-// Mutation evidence: delete step 4b from engine.Compact and the
-// wiring-level sweep loses its guarantee; run the forward clamp there
-// instead of the backward one and the recent-window assertion below
-// fails.
+// Mutation evidence: replace snapBoundaryBackForToolPairs with the
+// identity function and this fails; run the FORWARD clamp in its place
+// and the recent-window assertion below fails.
+//
+// What it cannot see is whether engine.Compact actually CALLS the third
+// clamp — this composes the helpers by hand. An earlier draft of this
+// comment claimed deleting step 4b from the engine would fail here; it
+// does not, and TestCompact_BackwardClampIsLoadBearing exists because of
+// that gap.
 func TestSnapClampsCompose(t *testing.T) {
 	t.Parallel()
+	want := snapWantPairs()
 	for name, msgs := range snapShapes() {
+		pairs := want[name]
 		for _, rw := range []int{0, 1, 2, 3} {
 			t.Run(fmt.Sprintf("%s/window=%d", name, rw), func(t *testing.T) {
 				t.Parallel()
@@ -223,8 +337,8 @@ func TestSnapClampsCompose(t *testing.T) {
 					afterWindow := b
 					b = snapBoundaryBackForToolPairs(msgs, b)
 
-					if id, split := refSplits(msgs, b); split {
-						t.Errorf("start=%d window=%d: final boundary %d still splits %q",
+					if id, split := refSplits(pairs, b); split {
+						t.Errorf("start=%d window=%d: final boundary %d still splits %v",
 							start, rw, b, id)
 					}
 					if b > afterWindow {

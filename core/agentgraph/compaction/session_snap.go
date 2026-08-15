@@ -56,42 +56,81 @@ func straddler(messages []SessionMessage, idx int) (o, c int, ok bool) {
 	if idx <= 0 || idx >= len(messages) {
 		return 0, 0, false
 	}
-	// openers maps a tool id to the LAST index that opened it, and
-	// closers to the LAST index that closed it. Last-wins matters when a
-	// provider id repeats across turns: pairing the newest opener with
-	// the newest closer keeps the most recent exchange whole, and the
-	// scan below re-runs until no pair straddles, so an older repeat is
-	// caught on a later pass.
-	openers := map[string]int{}
-	closers := map[string]int{}
-	for i, m := range messages {
-		if m.ToolUseID != "" {
-			openers[m.ToolUseID] = i
-		}
-		if m.ToolResultForID != "" {
-			closers[m.ToolResultForID] = i
-		}
-	}
-	// Scan every row on the older side for an opener answered on the
-	// newer side, and every row on the newer side for a closer opened on
-	// the older side. Both directions are needed: with a repeated id the
-	// two maps can disagree about which half is the "same" pair, and
-	// either disagreement is still a split.
-	for i := 0; i < idx; i++ {
-		if id := messages[i].ToolUseID; id != "" {
-			if ci, hit := closers[id]; hit && ci >= idx {
-				return i, ci, true
-			}
-		}
-	}
-	for k := idx; k < len(messages); k++ {
-		if id := messages[k].ToolResultForID; id != "" {
-			if oi, hit := openers[id]; hit && oi < idx {
-				return oi, k, true
-			}
+	for _, s := range toolPairSpans(messages) {
+		if s[0] < idx && idx <= s[1] {
+			return s[0], s[1], true
 		}
 	}
 	return 0, 0, false
+}
+
+// toolPairSpans matches every opener to the ONE closer that answers it
+// and returns the [lo, hi] index span of each matched pair. A row whose
+// counterpart is absent contributes no span — it is already an orphan on
+// the way in and no boundary can make it worse.
+//
+// WHY THE MATCH IS CHRONOLOGICAL AND NOT PER-ID
+// (review of model-moves-transcript-01PMCH01 WP06).
+//
+// WP06's first version of this predicate keyed on the id alone: openers
+// mapped an id to its LAST opening index, closers to its LAST closing
+// index, and any opener-before / closer-after of the same id counted as
+// a straddle. Its comment argued that when one provider id appears twice
+// "there is no way to tell from the row alone which closer answers which
+// opener, and keeping the whole run intact is the only safe resolution."
+//
+// The first half is true and the second does not follow. The transcript
+// is ORDERED — that is the whole premise of a boundary index — so a
+// result answers the most recent call of that id that nothing has
+// answered yet. Reading the id globally instead binds the FIRST mention
+// to the LAST, so one repeated id fuses every turn between them into a
+// single indivisible run, and the two clamps then have nowhere legal to
+// stand. Measured on an 8-turn / 40-row session whose first and last
+// turns share an id: with recentWindow=2 the composed clamps returned
+// boundary 2 for EVERY requested percentage — a session that can no
+// longer be compacted at all — and with recentWindow=0 they returned 39,
+// summarizing the newest turn along with everything else. Neither is a
+// safe resolution; they are the two ways of not compacting.
+//
+// Repeated ids are not hypothetical on this product. Provider-issued
+// ids (toolu_*, call_*) are effectively unique, but the harness ships a
+// local-runtime lane (Ollama / LM Studio / llama.cpp / Jan, via the
+// OpenAI-compatible wire in core/llm/openaiwire) where small models
+// routinely number their tool calls per request, so call_0 in turn one
+// and call_0 in turn nine are different calls with the same id.
+//
+// Chronological matching costs nothing in safety: a genuinely
+// interleaved, nested or far-apart pair still produces one span covering
+// both halves, which is what the clamps need. It only declines to invent
+// a span between two exchanges that were each complete.
+func toolPairSpans(messages []SessionMessage) [][2]int {
+	var spans [][2]int
+	// open[id] is the stack of opener indices for id that nothing has
+	// answered yet — a stack, so the newest unanswered call is matched
+	// first. pending[id] is the queue of closer indices that arrived
+	// before any opener of that id (the result-stored-before-its-call
+	// shape); the oldest is matched first.
+	open := map[string][]int{}
+	pending := map[string][]int{}
+	for i, m := range messages {
+		if id := m.ToolResultForID; id != "" {
+			if st := open[id]; len(st) > 0 {
+				spans = append(spans, [2]int{st[len(st)-1], i})
+				open[id] = st[:len(st)-1]
+			} else {
+				pending[id] = append(pending[id], i)
+			}
+		}
+		if id := m.ToolUseID; id != "" {
+			if q := pending[id]; len(q) > 0 {
+				spans = append(spans, [2]int{q[0], i})
+				pending[id] = q[1:]
+			} else {
+				open[id] = append(open[id], i)
+			}
+		}
+	}
+	return spans
 }
 
 // snapBoundaryForToolPairs pushes idx FORWARD until no tool_use /

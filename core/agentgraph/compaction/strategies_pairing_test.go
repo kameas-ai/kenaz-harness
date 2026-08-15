@@ -50,19 +50,35 @@ func pairText(role, body string) agentgraph.Message {
 	return agentgraph.Message{Role: role, Content: body}
 }
 
+// pairResNamed is pairRes with a distinguishing tool name, for fixtures
+// that reuse one tool id across turns. Without it the two result rows
+// for that id are byte-identical, identity() below cannot tell them
+// apart, and the suffix assertion reports a false middle-deletion the
+// moment the trim is able to cut between the two turns.
+func pairResNamed(id, note string) agentgraph.Message {
+	m := pairRes(id)
+	m.Name = "bash-" + note
+	return m
+}
+
 // identity gives every fixture row a stable key. Tool-call rows have
 // empty Content by construction (their display summary must never reach
-// the model), so the key has to include the call ids.
+// the model), so the key has to include the call ids — and the tool
+// NAME, which is the only thing separating two rows of a reused id.
 func identity(m agentgraph.Message) string {
 	var b strings.Builder
 	b.WriteString(m.Role)
 	b.WriteString("|")
 	b.WriteString(m.Content)
 	b.WriteString("|")
+	b.WriteString(m.Name)
+	b.WriteString("|")
 	b.WriteString(m.ToolCallID)
 	for _, tc := range m.ToolCalls {
 		b.WriteString("|call:")
 		b.WriteString(tc.ID)
+		b.WriteString("/")
+		b.WriteString(tc.Name)
 	}
 	return b.String()
 }
@@ -97,10 +113,10 @@ func pairFixtures() map[string][]agentgraph.Message {
 		},
 		"an id reused across turns": {
 			pairText("user", "first question here"),
-			pairUse("d1", "1"), pairRes("d1"),
+			pairUse("d1", "1"), pairResNamed("d1", "1"),
 			pairText("assistant", "answer one"),
 			pairText("user", "second question here"),
-			pairUse("d1", "2"), pairRes("d1"),
+			pairUse("d1", "2"), pairResNamed("d1", "2"),
 			pairText("assistant", "answer two"),
 		},
 		"one assistant message carrying two calls": {
@@ -277,7 +293,8 @@ func orphanRow(m agentgraph.Message, wasOrphan map[string]bool) bool {
 // trim-atomic unit, so no cut point can take half of it.
 //
 // Mutation: revert dropOldestUnits to the lookahead grouping and the
-// unit count goes to 3 (with [res A] dropped entirely) instead of 1.
+// unit count goes to 2 — [use A] alone and [use B, res B] — with [res A]
+// dropped by the grouping entirely, so the units cover 3 of 4 rows.
 func TestDropOldestUnits_BindsInterleavedPairsIntoOneUnit(t *testing.T) {
 	t.Parallel()
 	msgs := []agentgraph.Message{
