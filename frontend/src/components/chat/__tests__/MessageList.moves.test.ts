@@ -232,3 +232,39 @@ describe('MessageList — live and reloaded render the same trajectory', () => {
     expect(shape(live)).toEqual(shape(reloaded));
   });
 });
+
+describe('MessageList — adversarial review follow-ups (WP04)', () => {
+  /**
+   * The 4000-char cap slices UTF-16 code units. A cap that lands between
+   * the halves of an astral character leaves a lone surrogate and the
+   * browser paints U+FFFD. This repo has shipped the same mid-rune cut
+   * twice in the Go layer; verified present here before the fix by
+   * rendering exactly this fixture and matching the lone-surrogate
+   * pattern below.
+   */
+  it('does not split a multi-byte character at the output cap', async () => {
+    const raw = 'a'.repeat(3999) + '\u{1F600}' + 'tail';
+    const rows = movesTurn().map((m) =>
+      m.id === 'r-2' ? ({ ...m, content: raw } as Message) : m,
+    );
+    const w = mount(MessageList, { props: { messages: rows } });
+    await w.findAll('[data-testid="tool-chip"]')[0].find('button').trigger('click');
+    const text = w.find('[data-testid="tool-chip-output"]').text();
+    const loneSurrogate =
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    expect(text).not.toMatch(loneSurrogate);
+    expect(text).toContain('output truncated');
+  });
+
+  /**
+   * Both halves of a tool pair are searchable rows, and the app-wide
+   * scroll-to target is `[data-message-id]`. The chip renders both, so a
+   * search hit on either one resolves instead of spinning out.
+   */
+  it('exposes a scroll-to anchor for both halves of a folded tool pair', () => {
+    const w = mount(MessageList, { props: { messages: movesTurn() } });
+    for (const id of ['r-1', 'r-2', 'r-4', 'r-5']) {
+      expect(w.find(`[data-message-id="${id}"]`).exists()).toBe(true);
+    }
+  });
+});

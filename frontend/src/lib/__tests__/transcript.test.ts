@@ -384,3 +384,74 @@ describe('countTurns — the long-session nudge input', () => {
     expect(countTurns([row({ id: 'sys', role: 'system', content: 'note' })])).toBe(0);
   });
 });
+
+describe('projectTranscript — adversarial review follow-ups (WP04)', () => {
+  /**
+   * A folded tool_result keeps living in the store and in the FTS index,
+   * so a search hit can deep-link to it. The chip is where it renders,
+   * so the chip has to carry its row id or SessionsView's scroll-to
+   * poller spins for five seconds and gives up silently.
+   */
+  it('a folded tool_result keeps its row id on the chip step', () => {
+    const items = projectTranscript(fiveIterationTurn());
+    const trail = items[1];
+    if (trail.type !== 'trail') throw new Error('expected trail');
+    const tools = trail.steps.filter((s) => s.type === 'tool');
+    expect(tools.map((s) => (s.type === 'tool' ? [s.key, s.resultKey] : []))).toEqual([
+      ['r-1', 'r-2'],
+      ['r-4', 'r-5'],
+    ]);
+  });
+
+  /**
+   * A boundary reaches the surface BEFORE the first token of the segment
+   * it opens, and a turn whose exit gate revised the draft announces a
+   * final segment whose text never streams at all. If an empty row can
+   * take the answer position, the surface renders a blank full-weight
+   * bubble while the text the user is watching demotes into the muted
+   * trail.
+   */
+  it('an empty newest move does not steal the answer slot', () => {
+    const items = projectTranscript([
+      row({ id: 'u-1', role: 'user', content: 'go' }),
+      row({
+        id: 'r-0',
+        kind: 'assistant_move',
+        moveIndex: 0,
+        turnSpanId: SPAN,
+        content: 'the text the user is watching',
+      }),
+      row({ id: 'r-1', kind: 'assistant_move', moveIndex: 1, turnSpanId: SPAN, content: '' }),
+    ]);
+    // The empty row draws nothing at all; the texted one stays the
+    // full-weight answer instead of demoting into a trail behind a
+    // blank bubble.
+    expect(kinds(items)).toEqual(['message', 'message']);
+    const last = items[1];
+    if (last.type !== 'message') throw new Error('expected the texted move as the answer');
+    expect(last.message.content).toBe('the text the user is watching');
+  });
+
+  it('draws nothing for a span whose every move is textless', () => {
+    const items = projectTranscript([
+      row({ id: 'r-0', kind: 'assistant_move', moveIndex: 0, turnSpanId: SPAN, content: '' }),
+      row({ id: 'r-1', kind: 'assistant_move', moveIndex: 1, turnSpanId: SPAN, content: '' }),
+    ]);
+    // Not a headless trail of two empty ordinals, and not a blank
+    // bubble. The same rows commitStreamingMoves drops.
+    expect(items).toEqual([]);
+  });
+
+  it('a textless move does not break the open trail in two', () => {
+    const items = projectTranscript([
+      row({ id: 'r-0', kind: 'assistant_move', moveIndex: 0, turnSpanId: SPAN, content: 'one' }),
+      row({ id: 'r-1', kind: 'assistant_move', moveIndex: 1, turnSpanId: SPAN, content: '' }),
+      row({ id: 'r-2', kind: 'assistant_move', moveIndex: 2, turnSpanId: SPAN, content: 'two' }),
+      row({ id: 'r-3', kind: 'final', moveIndex: 3, turnSpanId: SPAN, content: 'answer' }),
+    ]);
+    expect(kinds(items)).toEqual(['trail', 'message']);
+    const trail = items[0];
+    if (trail.type !== 'trail') throw new Error('expected trail');
+    expect(trail.steps.map((s) => (s.type === 'move' ? s.ordinal : -1))).toEqual([1, 2]);
+  });
+});

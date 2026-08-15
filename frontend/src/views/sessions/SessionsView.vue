@@ -1186,7 +1186,7 @@ function formatSize(bytes: number): string {
 // ── Long-session nudge (v0.5.6 memory-trust-signals) ──────────────────────
 //
 // The nudge banner fires when the session crosses either threshold:
-//   - 30 user-assistant turn pairs (60 total messages), OR
+//   - 30 human turns (counted by countTurns — NOT a row count), OR
 //   - 50,000 cumulative prompt tokens
 // Both thresholds are configurable via Settings → Display.
 //

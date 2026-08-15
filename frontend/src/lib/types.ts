@@ -990,9 +990,14 @@ export interface Settings {
   // ── Long-session nudge dials (v0.5.6 memory-trust-signals) ──────────
 
   /**
-   * longSessionNudgeTurns — number of user-assistant turn pairs (half
-   * the total message count) after which the inline long-session nudge
-   * banner appears. Default 30. Zero == use default.
+   * longSessionNudgeTurns — number of HUMAN TURNS after which the
+   * inline long-session nudge banner appears. Default 30. Zero == use
+   * default.
+   *
+   * One turn is one user message, however many model moves and tool
+   * entries answering it produced. It used to be described as "half the
+   * message count", which held only while a turn was always two rows;
+   * a move-bearing turn persists ~13 (model-moves-transcript-01PMCH01).
    */
   longSessionNudgeTurns?: number;
 

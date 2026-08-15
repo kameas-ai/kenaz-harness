@@ -43,10 +43,30 @@ const expanded = ref(false);
 
 const hasOutput = computed(() => props.chip.output.length > 0);
 
+/**
+ * Cut at OUTPUT_CAP code units, then step back off a lone surrogate.
+ *
+ * `slice` counts UTF-16 code units, so a cap that lands between the two
+ * halves of an astral character (emoji, CJK extension B, most of the
+ * output of a tool that pretty-prints unicode) leaves a lone surrogate
+ * and the browser renders U+FFFD. This repo has shipped that same
+ * mid-rune cut twice before in the Go layer; the JS layer has the same
+ * hazard with a different unit. Stepping back one code unit is enough:
+ * the only way to end on a high surrogate is to have split exactly one
+ * pair.
+ */
+function cutAtRuneBoundary(s: string, cap: number): string {
+  const code = s.charCodeAt(cap - 1);
+  const splitPair = code >= 0xd800 && code <= 0xdbff;
+  return s.slice(0, splitPair ? cap - 1 : cap);
+}
+
 const outputText = computed(() => {
   const raw = props.chip.output;
   if (raw.length <= OUTPUT_CAP) return raw;
-  return `${raw.slice(0, OUTPUT_CAP)}\n…output truncated (${raw.length - OUTPUT_CAP} more characters)`;
+  const head = cutAtRuneBoundary(raw, OUTPUT_CAP);
+  const dropped = raw.length - head.length;
+  return `${head}\n…output truncated (${dropped} more characters)`;
 });
 
 const statusLabel = computed(() => {

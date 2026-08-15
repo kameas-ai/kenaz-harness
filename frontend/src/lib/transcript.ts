@@ -79,6 +79,14 @@ interface MoveStepItem {
 interface ToolStepItem {
   type: 'tool';
   key: string;
+  /**
+   * Row id of the `tool_result` that folded into this chip, when one
+   * has landed. The folded row still exists in the store and is still
+   * full-text indexed, so a search hit can deep-link to it; without its
+   * id on the rendered chip the app-wide `[data-message-id]` scroll-to
+   * target does not exist and the link dead-ends.
+   */
+  resultKey?: string;
   chip: ToolChip;
 }
 
@@ -140,9 +148,25 @@ export function projectTranscript(
 ): TranscriptItem[] {
   // Pass 1 — which move is each turn's answer. Positional, per the
   // header: the highest moveIndex among the span's assistant-ish moves.
+  //
+  // TEXTLESS MOVES RENDER NOTHING, AND SO CANNOT BE THE ANSWER. A
+  // boundary reaches the surface strictly BEFORE the first token of the
+  // segment it opens, so between the two the newest row is a real move
+  // with no text yet; and the `final` boundary of a turn whose exit gate
+  // revised the draft announces a segment whose text never streams at
+  // all. Letting an empty row hold the answer position renders a blank
+  // full-weight bubble while the text the user is watching demotes into
+  // the muted trail — verified by rendering exactly that case.
+  //
+  // `useSession.commitStreamingMoves` already drops empty assistant rows
+  // when the turn lands, so skipping them here is what makes the
+  // streaming render and the committed render the same render, which is
+  // the whole contract of this file. The promotion then happens exactly
+  // once, when the first delta arrives.
   const answerIndexBySpan = new Map<string, number>();
   for (const m of messages) {
     if (m.kind !== 'assistant_move' && m.kind !== 'final') continue;
+    if (m.content.length === 0) continue;
     const span = m.turnSpanId ?? '';
     const idx = m.moveIndex ?? 0;
     const current = answerIndexBySpan.get(span);
@@ -152,7 +176,7 @@ export function projectTranscript(
   }
 
   const items: TranscriptItem[] = [];
-  const chips = new Map<string, ToolChip>();
+  const chips = new Map<string, ToolStepItem>();
   const ordinals = new Map<string, number>();
   let trail: TrailItem | null = null;
 
@@ -191,8 +215,9 @@ export function projectTranscript(
         status: 'running',
         output: '',
       };
-      chips.set(chipKey(spanId, callId), chip);
-      pushStep(spanId, { type: 'tool', key: m.id, chip });
+      const step: ToolStepItem = { type: 'tool', key: m.id, chip };
+      chips.set(chipKey(spanId, callId), step);
+      pushStep(spanId, step);
       continue;
     }
 
@@ -202,8 +227,9 @@ export function projectTranscript(
       const status: ToolChipStatus = call?.isError ? 'error' : 'ok';
       const bound = chips.get(chipKey(spanId, callId));
       if (bound) {
-        bound.status = status;
-        bound.output = m.content ?? '';
+        bound.chip.status = status;
+        bound.chip.output = m.content ?? '';
+        bound.resultKey = m.id;
         // Folded into the chip its call opened — no item of its own.
         continue;
       }
@@ -224,7 +250,10 @@ export function projectTranscript(
       continue;
     }
 
-    // assistant_move | final
+    // assistant_move | final. A textless one has nothing to draw — see
+    // the answer-selection note above; it neither takes an ordinal nor
+    // closes the open trail.
+    if (m.content.length === 0) continue;
     const isAnswer = (m.moveIndex ?? 0) === answerIndexBySpan.get(spanId);
     if (isAnswer) {
       closeTrail();

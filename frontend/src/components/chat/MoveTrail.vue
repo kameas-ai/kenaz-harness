@@ -74,7 +74,18 @@ defineProps<{
         </div>
       </div>
 
-      <div v-else class="max-w-[74ch] pr-2">
+      <!-- `data-message-id` is the app-wide scroll-to target: the
+           search deep-link poller in SessionsView and MessageList's
+           jump-to-summary both querySelector on it. A tool row is a
+           searchable row like any other, so its chip has to answer to
+           its row id or the link spins for 5s and gives up. -->
+      <div v-else class="max-w-[74ch] pr-2" :data-message-id="step.key">
+        <span
+          v-if="step.resultKey"
+          class="block h-0 w-0"
+          :data-message-id="step.resultKey"
+          aria-hidden="true"
+        ></span>
         <ToolChip :chip="step.chip" />
       </div>
     </template>
