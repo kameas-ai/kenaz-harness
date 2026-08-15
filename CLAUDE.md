@@ -214,6 +214,28 @@ can say is wanted. Record the question; do not resolve it by deleting.
 Every disposition names its class. "Deleted — no importers" is not a
 reason; "deleted — `AttachmentTreePicker` is the live substitute" is.
 
+### Two blind spots the file-level scans cannot see
+
+Both were found the hard way in the 2026-08-14 sweep. Neither is covered by
+any gate; both need a human or an agent explicitly looking.
+
+1. **Dead code inside a live file.** Deleting ten orphaned components saved
+   826 bytes of JS — Vite had already tree-shaken every unreferenced `.vue`,
+   so they cost nothing at runtime. The *entire* saving came from dead code
+   living inside `harnessClient.ts`, `types.ts` and `useHarnessAPI.ts` (a
+   composable, its handler `Set`, and a `_emitDenialForTest` with no
+   callers). An orphan-FILE scan will never surface these. Grep for exported
+   symbols with no non-test reader, not just for unreferenced files.
+
+2. **Test fixtures that bypass the layer under test.** Composition fixtures
+   built on `session.NewMemoryStore()` skip SQL encode/decode entirely.
+   Four separate SQL-path mutations survived the full suite that way, two of
+   which would have silently disabled a whole feature for every real user
+   while CI stayed green. **Anything asserting persistence, compaction of
+   persisted history, or an FTS index must drive real sqlite.** The same
+   blind spot hid the WP06 finding that the tool-pair clamp was a no-op on
+   every move-bearing session: every fixture filled the pair markers by hand.
+
 ### Where the ledger lives
 
 `docs/unwired-ledger.md` — index of the gated findings (which allowlist
