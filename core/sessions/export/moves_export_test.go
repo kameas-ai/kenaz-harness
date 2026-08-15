@@ -272,6 +272,18 @@ func TestExport_JSON_PreMoveConsumerSeesFinalsOnly(t *testing.T) {
 	}
 }
 
+// TestExport_ClassicSessionIsUnchangedByMoves pins the HALF of the
+// backward-compatibility claim that is actually true, and its name is
+// scoped to that half on purpose.
+//
+// A classic session with no tool calls exports byte-for-byte as it did
+// before the mission — verified against the base commit, both formats.
+// A classic session WITH tool calls does NOT, and cannot: dropping the
+// raw `arguments` block is the security fix, not a side effect. That
+// deliberate difference is pinned separately by
+// TestExport_ClassicToolCallsLoseTheirRawArguments below, so the two
+// facts cannot be confused for one another, and it is why
+// ExportFormatVersion went to 2.
 func TestExport_ClassicSessionIsUnchangedByMoves(t *testing.T) {
 	t.Parallel()
 	mgr, rec := newSQLManager(t)
@@ -334,6 +346,85 @@ func TestExport_ClassicSessionIsUnchangedByMoves(t *testing.T) {
 	}
 }
 
+// TestExport_ClassicToolCallsLoseTheirRawArguments is the honest other
+// half: WP05 is NOT purely additive for a session that predates it.
+//
+// A classic (move-free) session whose assistant rows carry tool calls
+// exported `**Arguments:**` as a raw JSON dump in markdown and
+// `tool_calls[].arguments` as a raw map in JSON. Both are gone. That is
+// the whole point — `redactMessages` walks only top-level string values,
+// so a secret one level down went into the file — but "the export is
+// unchanged for classic sessions" was too strong a sentence to leave
+// standing, and an untested deliberate break is indistinguishable from
+// an accidental one on the next reading.
+func TestExport_ClassicToolCallsLoseTheirRawArguments(t *testing.T) {
+	t.Parallel()
+	mgr, rec := newSQLManager(t)
+	ctx := context.Background()
+	if _, err := mgr.AppendMessage(ctx, rec.ID, session.Message{
+		Role:    session.RoleAssistant,
+		Content: "ok",
+		ToolCalls: []session.ToolCall{{
+			ID: "tc-1", Name: "read_file",
+			Arguments: map[string]any{"path": "/etc/hosts", "limit": float64(10)},
+			Result:    "127.0.0.1 localhost",
+		}},
+	}); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	msgs, err := mgr.ListMessages(ctx, rec.ID)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+
+	md, _, err := export.Render(export.FormatMarkdown, rec, msgs, exportNow)
+	if err != nil {
+		t.Fatalf("Render markdown: %v", err)
+	}
+	s := string(md)
+	if strings.Contains(s, "/etc/hosts") {
+		t.Errorf("markdown still prints argument VALUES:\n%s", s)
+	}
+	if !strings.Contains(s, "**Arguments (names and types):**") ||
+		!strings.Contains(s, "limit:number path:string") {
+		t.Errorf("markdown lost the names-and-types summary:\n%s", s)
+	}
+	// The result is still printed — it is what the tool said, not what
+	// was passed in — and it is still credential-scanned and capped.
+	if !strings.Contains(s, "127.0.0.1 localhost") {
+		t.Errorf("markdown dropped the tool result:\n%s", s)
+	}
+
+	jb, _, err := export.Render(export.FormatJSON, rec, msgs, exportNow)
+	if err != nil {
+		t.Fatalf("Render json: %v", err)
+	}
+	var raw struct {
+		Meta struct {
+			ExportFormatVersion int `json:"export_format_version"`
+		} `json:"meta"`
+		Messages []struct {
+			ToolCalls []map[string]any `json:"tool_calls"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(jb, &raw); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// The removal is why the schema version moved. A v1 reader walking
+	// `arguments` could not tell "gone" from "no arguments".
+	if raw.Meta.ExportFormatVersion < 2 {
+		t.Errorf("export_format_version = %d, want >= 2 — `arguments` was removed, "+
+			"which is a breaking schema change", raw.Meta.ExportFormatVersion)
+	}
+	tc := raw.Messages[0].ToolCalls[0]
+	if _, present := tc["arguments"]; present {
+		t.Errorf("JSON still carries the raw arguments map: %+v", tc)
+	}
+	if tc["args_summary"] != "limit:number path:string" {
+		t.Errorf("args_summary = %v", tc["args_summary"])
+	}
+}
+
 // ---------------------------------------------------------------------
 // The two-layer redaction rule, adversarially.
 // ---------------------------------------------------------------------
@@ -388,6 +479,59 @@ func TestExport_NeverCarriesRawToolArguments(t *testing.T) {
 			!strings.Contains(s, "headers:object") ||
 			!strings.Contains(s, "token:string") {
 			t.Errorf("%s export lost the args summary:\n%s", format, s)
+		}
+	}
+}
+
+// TestExport_RedactsArgumentNames closes the hole the adversarial review
+// of WP05 found: "argument values never appear" made the export safe
+// against a secret in a nested object or an array, but argument NAMES
+// are printed by design, and `redactMessages` only ever walked argument
+// VALUES. A credential sitting in a key — a header map flattened into
+// arguments is the obvious shape — went into both documents verbatim.
+//
+// Mutation check (kills this test): drop the `RedactValue(k)` call in
+// `argsSummaryFromValues` and print `k` directly.
+func TestExport_RedactsArgumentNames(t *testing.T) {
+	t.Parallel()
+	mgr, rec := newSQLManager(t)
+	ctx := context.Background()
+
+	const keySecret = "sk-ant-api01-KEYKEYKEYKEYKEYKEYKEY99"
+	if _, err := mgr.AppendMessage(ctx, rec.ID, session.Message{
+		Role:    session.RoleAssistant,
+		Content: "calling out",
+		ToolCalls: []session.ToolCall{{
+			ID: "tc-key", Name: "http_post",
+			Arguments: map[string]any{keySecret: 1, "url": "https://example.test"},
+		}},
+	}); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	msgs, err := mgr.ListMessages(ctx, rec.ID)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+
+	for _, format := range []export.Format{export.FormatMarkdown, export.FormatJSON} {
+		b, _, err := export.Render(format, rec, msgs, exportNow)
+		if err != nil {
+			t.Fatalf("Render(%s): %v", format, err)
+		}
+		s := string(b)
+		if strings.Contains(s, keySecret) {
+			t.Errorf("%s export leaked a credential sitting in an argument NAME:\n%s",
+				format, s)
+		}
+		// `encoding/json` HTML-escapes the angle brackets, so the marker
+		// reads `<REDACTED:…>` in the JSON document.
+		want := "<REDACTED:anthropic-key>:number"
+		if format == export.FormatJSON {
+			want = `\u003cREDACTED:anthropic-key\u003e:number`
+		}
+		if !strings.Contains(s, want) {
+			t.Errorf("%s export dropped the redacted name from the summary:\n%s",
+				format, s)
 		}
 	}
 }

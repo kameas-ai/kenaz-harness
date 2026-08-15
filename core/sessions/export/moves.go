@@ -41,10 +41,23 @@ import (
 //     `chat.displayArgsSummary`), and that is what the export prints. For
 //     a pre-mission row that carries a structured `ToolCall.Arguments`
 //     map, `argsSummaryFromValues` renders the same names-and-types shape
-//     rather than the values. Nothing here reads
-//     `session.Message.ModelLayerToolArgs`, which is the MODEL layer's
-//     raw arguments and is not exportable — it is not even reachable from
-//     this package's imports.
+//     rather than the values.
+//
+//     Nothing here calls `session.Message.ModelLayerToolArgs()`, the
+//     MODEL layer's raw arguments. Be precise about what that is worth:
+//     it is a CONVENTION, not a fence. This package imports
+//     `core/session` and the accessor is exported, so the call compiles
+//     from here today — verified, not assumed. What keeps the raw
+//     arguments out of the document is that no line reads them and the
+//     two layers' helpers are named apart so the wrong one cannot be
+//     reached by autocomplete. No gate checks it; a future edit that
+//     added the read would pass CI.
+//
+//     Argument NAMES do appear — that is the whole point of a
+//     names-and-types summary — so they go through `RedactValue` like
+//     any other exported string. A key is a place a credential can sit
+//     (a flattened header map is the obvious shape) and `redactMessages`
+//     only ever walked argument VALUES.
 //
 //   - TOOL OUTPUT IS CAPPED. `capToolOutput` at ToolOutputCap runes, with
 //     an explicit marker. The chat surface caps at the same size
@@ -108,7 +121,14 @@ func argsSummaryFromValues(args map[string]any) string {
 	sort.Strings(keys)
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
-		parts = append(parts, k+":"+valueTypeName(args[k]))
+		// The NAME is printed, so the name is scanned. `redactMessages`
+		// walks argument values and never keys, and an argument map is a
+		// place a credential can end up as a key — a header map flattened
+		// into arguments is the obvious shape. Sorting happens before the
+		// substitution so the document order does not depend on what
+		// matched.
+		name, _ := RedactValue(k)
+		parts = append(parts, name+":"+valueTypeName(args[k]))
 	}
 	return strings.Join(parts, " ")
 }

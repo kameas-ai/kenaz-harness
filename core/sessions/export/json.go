@@ -64,9 +64,10 @@ type jsonMessage struct {
 // jsonMove is one entry of a turn's trajectory.
 //
 // Note what is NOT here: raw argument values. `args_summary` is the
-// display layer's names-and-types rendering, and the model layer's raw
-// arguments (session_messages.model_tool_args) are unreachable from this
-// package. See moves.go for the contract.
+// display layer's names-and-types rendering. The model layer's raw
+// arguments (session_messages.model_tool_args) are simply never read by
+// this package — reachable, but unread, and no gate enforces it. See
+// moves.go for the contract and for why that distinction matters.
 type jsonMove struct {
 	Kind        string `json:"kind"`
 	MoveIndex   int    `json:"move_index"`

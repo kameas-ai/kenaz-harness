@@ -62,7 +62,7 @@ Structure:
 ```
 ---
 session_id: <id>
-export_format_version: 1
+export_format_version: 2
 exported_at: <RFC3339>
 ---
 
@@ -101,7 +101,7 @@ Inline image and document attachments are extracted to a sibling
 ```json
 {
   "meta": {
-    "export_format_version": 1,
+    "export_format_version": 2,
     "exported_at": "2026-05-14T10:00:00Z",
     "session_id": "sess-abc"
   },
