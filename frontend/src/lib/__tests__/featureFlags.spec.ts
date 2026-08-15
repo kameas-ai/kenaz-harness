@@ -3,7 +3,7 @@
  * (fleet-capability-surface-01NDFSEX09 WP12)
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { capability, signedIn, initFeatureFlags } from '../featureFlags';
+import { capability, signedIn, initFeatureFlags, type Capability } from '../featureFlags';
 import type { AppInfo } from '../types';
 
 // Minimal AppInfo factory for tests.
@@ -69,6 +69,20 @@ describe('featureFlags', () => {
 
     it('returns false for an unknown key (no panic)', () => {
       initFeatureFlags(makeInfo({ launcher_updates: true }));
+      // Cast required: the Capability union excludes unknown keys by
+      // construction. This pins the *runtime* fallback for a snapshot
+      // that predates a key rename on the fleet side.
+      expect(capability('not_a_real_capability_xyz' as Capability)).toBe(false);
+    });
+
+    it('rejects a key outside the generated Capability union at compile time', () => {
+      initFeatureFlags(makeInfo({ launcher_updates: true }));
+      // @ts-expect-error — 'not_a_real_capability_xyz' is not a member of
+      // Capability (frontend/src/lib/capability-keys.ts, generated from
+      // fleet.AllCapabilities()). If this line ever STOPS erroring,
+      // ts-expect-error fails the build: capability() has lost its typing
+      // and a typo can silently gate a feature off forever, which is how
+      // SyncPanel shipped with capability('settings_sync').
       expect(capability('not_a_real_capability_xyz')).toBe(false);
     });
 
