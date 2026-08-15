@@ -239,7 +239,12 @@ describe('SessionsView (WP07 compacted history)', () => {
 
     const indicator = w.find('[data-testid="message-summary-indicator"]');
     expect(indicator.exists()).toBe(true);
-    expect(indicator.text()).toContain('Summary of 2 turns');
+    // Was "Summary of 2 turns" until model-moves-transcript-01PMCH01
+    // WP05. The two archived rows in this fixture are one user message
+    // and the assistant message answering it — one turn. The indicator
+    // counted rows, which was already 2x wrong here and became ~13x
+    // wrong on a move-bearing turn. See `foldedTurnCounts`.
+    expect(indicator.text()).toContain('Summary of 1 turn');
 
     w.unmount();
   });

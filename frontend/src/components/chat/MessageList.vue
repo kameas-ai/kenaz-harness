@@ -32,7 +32,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import MessageBubble from './MessageBubble.vue';
 import MoveTrail from './MoveTrail.vue';
-import { projectTranscript } from '@/lib/transcript';
+import { foldedTurnCounts, projectTranscript } from '@/lib/transcript';
 import type { Artifact, MemoryScopeKind, Message } from '@/lib/types';
 
 const props = defineProps<{
@@ -153,20 +153,31 @@ function artifactsFor(messageId: string): readonly Artifact[] {
 }
 
 /**
- * summaryFoldCounts — for each summary row id, the number of archived
- * messages currently in `messages` that fold into it (i.e. have
- * `compactedIntoId === summaryId`). The "Summary of N turns" indicator
- * pulls from this map. Computed reactively so reload + toggle render
- * stable counts.
+ * summaryFoldCounts — for each summary row id, the number of HUMAN TURNS
+ * folded into it. The "Summary of N turns" indicator pulls from this map.
+ * Computed reactively so reload + toggle render stable counts.
+ *
+ * It counts turns, not rows (model-moves-transcript-01PMCH01 WP05). The
+ * row count was already 2x wrong on a classic session — one exchange is
+ * two rows — and a move-bearing turn persists ~13, so three compacted
+ * turns read as "Summary of 39 turns". See `foldedTurnCounts` for the
+ * turn-identity rule.
  */
-const summaryFoldCounts = computed<ReadonlyMap<string, number>>(() => {
-  const counts = new Map<string, number>();
-  for (const m of props.messages) {
-    const into = m.compactedIntoId;
-    if (!into) continue;
-    counts.set(into, (counts.get(into) ?? 0) + 1);
+const summaryFoldCounts = computed<ReadonlyMap<string, number>>(() =>
+  foldedTurnCounts(props.messages),
+);
+
+/**
+ * Turn spans with in-flight moves. A trail whose span is here belongs to
+ * the turn currently streaming and must not collapse under the user
+ * while they are watching it work (FR-004 / MoveTrail's `live`).
+ */
+const liveSpanIds = computed<ReadonlySet<string>>(() => {
+  const ids = new Set<string>();
+  for (const m of props.streamingMessages ?? []) {
+    if (m.turnSpanId) ids.add(m.turnSpanId);
   }
-  return counts;
+  return ids;
 });
 
 function isSummaryRow(m: Message): boolean {
@@ -308,7 +319,11 @@ defineExpose({ scrollToBottom });
       </div>
 
       <template v-for="item in transcript" :key="item.key">
-        <MoveTrail v-if="item.type === 'trail'" :steps="item.steps" />
+        <MoveTrail
+          v-if="item.type === 'trail'"
+          :steps="item.steps"
+          :live="liveSpanIds.has(item.spanId)"
+        />
 
         <div v-else :data-message-id="item.message.id">
           <MessageBubble
