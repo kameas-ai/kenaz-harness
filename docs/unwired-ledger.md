@@ -16,6 +16,12 @@ Two kinds of entry live here:
 An entry earns removal by being wired, deleted, or re-justified with a new
 date and a named owner. "Still true" is not a reason to leave a stale date.
 
+**Not a finding:** `docs/served-mode-boundary.md` documents the six views
+that intentionally render `NotAvailableInServedMode.vue` in served builds.
+Every sweep before 2026-08-14 re-found this as if it were new; it is a
+shipped product boundary, not unwired code. Read that doc before flagging
+`NotAvailableInServedMode` usage again.
+
 ---
 
 ## Gate inventory (the gated half)
@@ -172,27 +178,63 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ### 2026-08-14 · The dial cascade is an inert subsystem
 
+*(Corrected 2026-08-14 by the frontend orphan-deletion sweep — the
+consumer claim below was false: see the two bullets after the summary.)*
+
 `core/agentgraph/dials` has exactly one non-test importer
 (`core/rpc/views/dials/impl.go`) and `dials.Resolve` exactly one production
-call site, whose output feeds only `Dials_GetEffective` → `DialsView.vue`.
-All 13 `DialConfig` fields are **plumbed-only**: they render in a UI readout
-and change no behaviour. The kernel's budget comes from `graph.Budget`
-folded with the autonomy token-ceiling knob (`chat_runner.go`), never from
+call site, whose output feeds only `Dials_GetEffective`. All 13
+`DialConfig` fields are **plumbed-only**: they render in a UI readout and
+change no behaviour. The kernel's budget comes from `graph.Budget` folded
+with the autonomy token-ceiling knob (`chat_runner.go`), never from
 `EffectiveDials`.
 
 Two sharp edges inside it:
 
+- **`Dials_GetEffective` has ZERO live consumers, not one.** The previous
+  entry claimed its output "feeds only `Dials_GetEffective` →
+  `DialsView.vue`" — but `DialsView.vue` has no route in either `main.ts`
+  or `main-served.ts` and no non-test importer anywhere in
+  `frontend/src`; the only file that references it is its own
+  `views/dials/__tests__/DialsView.test.ts`. The subsystem is one notch
+  deader than recorded: the RPC's output reaches a view nothing mounts.
 - `ManifestDriftMode` is doubly dead — `dials/cascade.go`'s `applyLayer`
   has no branch for it and `EffectiveDials` has no such field, so it cannot
   survive `Resolve()`. Recorded against the I10 line for
   `EnforceManifestDriftPolicy`, whose old justification asserted the
   opposite.
 - `Dials_BumpAndResume` mutates the view's in-memory store and then resumes
-  the run; the bumped cap never reaches `env.Budget`, so
-  `CapHitToast.vue`'s "bump and resume" resumes at the original cap.
+  the run; the bumped cap never reaches `env.Budget`. The previous entry
+  claimed this means "`CapHitToast.vue`'s 'bump and resume' resumes at the
+  original cap" — that is also false as evidence: `CapHitToast.vue` is
+  never mounted (see the CapHitToast entry below), so the described bug is
+  unreachable through the UI. The `Dials_BumpAndResume` no-op itself is
+  still real; it just has no live caller to trigger it.
 
 **Owner:** unassigned. Wire the cascade into `env.Budget` or delete the
-subsystem; a UI that reports numbers nothing enforces is worse than no UI.
+subsystem; an RPC that reports numbers nothing enforces, feeding a view
+nothing mounts, is worse than no UI at all.
+
+### 2026-08-14 · `CapHitToast.vue` was never mounted
+
+`CapHitToast.vue` has zero production importers — the only file besides
+its own test that names it is `composables/useEventToasts.ts:17`, which
+lists it in a comment as "NOT migrated here (retained as rich-UI
+components because they need input fields or sliders)". That claim is
+false: `git log -S "CapHitToast.vue" -- frontend/src` shows exactly one
+commit, `c760087f` (the commit that created the component), and no commit
+since has ever added an import or a mount site for it. It was never
+"retained" from anywhere — it was never wired in the first place.
+
+Consequence: the "bump and resume resumes at the original cap" bug
+recorded against `Dials_BumpAndResume` above has no UI path to trigger it
+today. The bug in the Go code may still be real; it is simply unreachable
+until something mounts `CapHitToast.vue` (or another cap-hit surface) and
+wires it to `Dials_BumpAndResume`.
+
+**Owner:** unassigned. Either mount `CapHitToast.vue` on the cap-hit event
+and fix the resume-cap bug together, or delete the component and record
+the resume-cap bug as an open Go-side finding.
 
 ### 2026-08-14 · Settings fields that are stored, bound, and inert
 
@@ -240,6 +282,10 @@ guard test outside the mechanism's own package). The coverage gap is not.
 
 ### 2026-08-14 · The background-task subsystem has no producer
 
+*(Corrected 2026-08-14 by the frontend orphan-deletion sweep — "a
+session-close dialog" below is only half true; see the correction after
+the summary.)*
+
 `core/tasks` ships a SQLite store, ring buffers, boot-time orphan recovery,
 four live RPCs, a mounted Settings → Tasks panel, a session-close dialog and
 a registered `background_task_complete` hook event — and nothing ever calls
@@ -247,6 +293,13 @@ a registered `background_task_complete` hook event — and nothing ever calls
 assignment. `Registry.StdoutWriter` / `StderrWriter` likewise have no
 callers: `spawnBackground` calls `cmd.Start()` before it has a task id, so a
 background task could not capture output even if the seam were passed.
+
+**Correction: only the Tasks panel half is true.** `TasksPanel` IS mounted
+(`SettingsView.vue:29` imports it, `:1126` renders it) — that part of the
+original claim stands. But `components/sessions/SessionCloseDialog.vue`
+has **zero importers** anywhere in `frontend/src` — no route, no parent
+component, no test. It is exactly as unreached as the Go producer side it
+was meant to gate.
 
 Consequences already addressed this sweep: `kenaz__bash` no longer
 advertises `run_in_background` while the seam is nil (commit `fix(tools):
@@ -299,6 +352,65 @@ its evidence.
 - **`Graph_*` / `Workflows_*` RPCs are not routed in served mode.**
   `check-serve-dispatch-drift.sh` is informational (exit 0) unless
   `SERVE_DRIFT_GATE=1`, so the gap accumulates quietly.
+
+### 2026-08-14 · Tooling footgun: `rtk proxy grep` truncates on a double pipe
+
+New manifestation of the known rtk truncation bug (CLAUDE.md's "Tooling
+footguns" documents the plain-wrapper case): **piping one `rtk proxy grep`
+into another `rtk proxy grep` also truncates output**, even though each
+individually is the documented safe form. During this sweep's import-graph
+verification it silently dropped `views/audit/AuditView.vue:16` from a
+piped-proxy search for `EventStreamRow` importers, which nearly produced a
+false orphan verdict — `EventStreamList.vue` (truly dead) would have taken
+`EventStreamRow.vue` and its test down with it had the missing importer
+not been caught by a second, unpiped pass. Correct form: pipe into
+`/usr/bin/grep`, not into a second `rtk proxy` invocation. Mirrored in
+CLAUDE.md's "Tooling footguns" bullet list.
+
+### 2026-08-14 · Frontend orphan backlog (post-deletion-sweep handoff)
+
+The 2026-08-14 frontend orphan-deletion sweep deleted the zero-consumer,
+zero-ambiguity items (see the deletion commits on
+`fix/frontend-orphan-deletions`). What follows is the remainder — findings
+that are real but need an owner decision, not a delete — so the next sweep
+inherits this list instead of re-deriving it from scratch.
+
+**P2 — wire candidates** (backend confirmed live; frontend surface exists
+but is unreached or half-wired):
+
+- `RecoveryCodeFlow` — backend verified live end-to-end; the frontend
+  surface just needs a mount point.
+- `AgentsView` + `AgentProfileEditor`.
+- `CrashReportingOnboardingModal`.
+- `RunChainView`.
+- `ModelSizeBadge` + `lib/modelFit.ts`.
+
+**P3 — owner-decision clusters** (each needs a wire-or-delete call from
+the subsystem owner, not a mechanical fix):
+
+- The dials cascade (see the dedicated entry above).
+- **Cedar propose — a four-layer dead subsystem.**
+  `harness_write_propose_cedar_policy` is registered and advertised to the
+  model, but `NewCedarProposer` has zero non-test call sites, so it
+  returns `errNotConfigured` on every call — 100% of the time, not
+  intermittently.
+- The background-task subsystem (see the dedicated entry above).
+- `CedarEditor` vs. `PolicyView`'s inline editor — two policy-editing
+  surfaces, unclear which is canonical.
+- `MCPHealthSettingsPanel` + `BranchAdvisorSettings` — both blocked on
+  inert Go knobs (see "Settings fields that are stored, bound, and
+  inert" above).
+- `DenialNotice` / `usePolicyDecisions`.
+- `ProjectAutonomyPanel`.
+- `BranchContextPickModal`.
+- `CompactionSettings`.
+- `HookJournalView`.
+- `lib/rail.ts`.
+- `lib/capability-keys.ts`.
+
+**Owner:** unassigned per-item; this entry itself is owned by whoever
+picks up the next unwired sweep. Re-verify each item's importer graph
+before acting — frontend code churns between sweeps.
 
 ---
 

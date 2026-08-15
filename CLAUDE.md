@@ -182,6 +182,11 @@ Per-symbol justifications stay with their gate in
 
 - Use `rtk proxy grep` / `rtk proxy git` for anything multi-file or
   load-bearing — the plain wrappers silently truncate.
+- **Do not pipe `rtk proxy grep` into another `rtk proxy grep`.** Even the
+  proxied form truncates on a double pipe — this dropped
+  `views/audit/AuditView.vue:16` during the 2026-08-14 frontend
+  orphan-deletion sweep and nearly produced a false orphan verdict for
+  `EventStreamRow.vue`. Pipe into `/usr/bin/grep` instead.
 - `gofmt -l` flags ~337 files from local-toolchain drift (Go 1.26 vs
   go.mod 1.25). Never "fix" a file you did not otherwise touch.
 - `go test` needs `-p 4`; mcp stdio tests time out at default parallelism.
