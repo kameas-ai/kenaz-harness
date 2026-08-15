@@ -42,8 +42,14 @@ func TestMigration0312_FTSTableExists(t *testing.T) {
 	}
 }
 
-// TestMigration0312_TriggersExist confirms all three sync triggers are
-// present in sqlite_master after migration 0312 applies.
+// TestMigration0312_TriggersExist confirms the FTS sync triggers are
+// present in sqlite_master after the sessions migrations apply.
+//
+// The names are still 0312's three: migration 0335
+// (model-moves-transcript-01PMCH01 WP06) replaces them with role-guarded
+// equivalents in place. The update trigger keeps ONE body carrying two
+// independently-guarded statements — see migrations_search_fts_tool_rows.go
+// for why two separate triggers is the one shape that cannot work.
 func TestMigration0312_TriggersExist(t *testing.T) {
 	t.Parallel()
 	db := openDB(t)

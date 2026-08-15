@@ -334,11 +334,11 @@ func TestCompact_ToolPairBoundary(t *testing.T) {
 		idx  int
 		want int
 	}{
-		{"before pair", 5, 5},      // boundary at the tool_use itself: pair stays whole on the kept side
-		{"middle of pair", 6, 8},   // boundary between use and result: snap to past the result
-		{"at result", 7, 8},        // boundary at the result row: snap to past the result
-		{"after pair", 8, 8},       // boundary already past the pair: no change
-		{"end of slice", 10, 10},   // boundary at len: no change
+		{"before pair", 5, 5},    // boundary at the tool_use itself: pair stays whole on the kept side
+		{"middle of pair", 6, 8}, // boundary between use and result: snap to past the result
+		{"at result", 7, 8},      // boundary at the result row: snap to past the result
+		{"after pair", 8, 8},     // boundary already past the pair: no change
+		{"end of slice", 10, 10}, // boundary at len: no change
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := snapBoundaryForToolPairs(msgs, tc.idx)
@@ -647,5 +647,71 @@ func TestNewEngine_RequiresDeps(t *testing.T) {
 				t.Fatalf("expected error, got nil")
 			}
 		})
+	}
+}
+
+// TestCompact_BackwardClampIsLoadBearing pins engine.Compact's step 4b —
+// the backward pair clamp that runs AFTER the recent-window clamp.
+//
+// WHY IT NEEDS ITS OWN TEST. Step 4b was shipped with three separate
+// "mutation evidence" comments claiming its deletion would fail a named
+// test. Re-running that mutation on the merged tree failed NOTHING, in
+// any package: the sqlite sweep's percentages never produce a boundary
+// the recent-window clamp then drags back into a pair, and
+// TestSnapClampsCompose composes the helpers by hand and so cannot
+// observe whether the ENGINE calls the third one.
+//
+// The shape below is the one that separates two clamps from three: the
+// recent-window clamp always comes to rest on a user row (it decrements
+// until the user count clears, and the row that clears it is a user
+// row), so the only way it lands inside a pair is if a user row sits
+// inside one. This asserts against the archived set the engine actually
+// wrote, not against a boundary integer.
+//
+// Mutation evidence: delete `boundary = snapBoundaryBackForToolPairs(...)`
+// from Compact and this fails at recentWindow=1.
+func TestCompact_BackwardClampIsLoadBearing(t *testing.T) {
+	t.Parallel()
+	msgs := []SessionMessage{
+		{ID: "m0", Role: "user", Content: "first question", Sequence: 0},
+		{ID: "use-A", Role: "tool", Content: "bash(cmd=<string>)", Sequence: 1, ToolUseID: "A"},
+		{ID: "m2", Role: "user", Content: "an interjection", Sequence: 2},
+		{ID: "res-A", Role: "tool", Content: "the tool output", Sequence: 3, ToolResultForID: "A"},
+		{ID: "m4", Role: "assistant", Content: "the final answer", Sequence: 4},
+	}
+
+	for _, rw := range []int{0, 1, 2, 3} {
+		for pctTenths := 1; pctTenths <= 10; pctTenths++ {
+			pct := float64(pctTenths) / 10
+			store := &fakeStore{messages: msgs}
+			eng, err := NewSessionEngine(SessionEngineConfig{
+				Store:        store,
+				LLM:          &fakeLLM{text: "summary"},
+				Capabilities: fakeCapabilities{max: 1 << 20, ok: true},
+				Tokenizer:    fakeTokenizer{},
+				RecentWindow: func() int { return rw },
+				Now:          func() time.Time { return time.Unix(1_800_000_000, 0).UTC() },
+			})
+			if err != nil {
+				t.Fatalf("NewSessionEngine: %v", err)
+			}
+			if _, err := eng.Compact(context.Background(), "s",
+				ProviderProfileRef{ProviderID: "p", ModelID: "m"}, pct); err != nil {
+				t.Fatalf("rw=%d pct=%.1f: Compact: %v", rw, pct, err)
+			}
+			if len(store.applyCalls) == 0 {
+				continue // no-op compaction; nothing was archived
+			}
+			archived := map[string]bool{}
+			for _, id := range store.applyCalls[0].originalIDs {
+				archived[id] = true
+			}
+			if archived["use-A"] != archived["res-A"] {
+				t.Errorf("rw=%d pct=%.1f: archived use-A=%v res-A=%v — the span boundary "+
+					"cut through an intact tool_use/tool_result pair, leaving the orphan "+
+					"half that step 4b exists to prevent",
+					rw, pct, archived["use-A"], archived["res-A"])
+			}
+		}
 	}
 }

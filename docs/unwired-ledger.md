@@ -51,12 +51,19 @@ per gate and asserts the gate rejects it.
 
 ---
 
-## In-flight (mission 01PMCH01 — model moves in the transcript)
+## Mission 01PMCH01 (model moves in the transcript) — CLOSED 2026-08-14
 
-Fields that exist and are not yet read. Listed here so the next sweep does
-not re-find them as inert plumbing: each names the WP that consumes it and
-the date it was written. A line here that outlives its mission is a
-finding, not an exemption.
+This section was the mission's in-flight list: fields that existed and
+were not yet read, each naming the WP that would consume it and the date
+it was written, so the next sweep would not re-find them as inert
+plumbing. The rule attached to it was that a line outliving its mission
+is a finding, not an exemption.
+
+**All six WPs are merged; nothing is in flight.** Every line that sat
+here is resolved below with its disposition — wired, deleted, or
+graduated to a standing ungated finding. There is no open exemption
+left in this section; it is kept as the mission's record, not as a
+waiver.
 
 **Release gate CLEARED 2026-08-14 by WP04.** This section previously
 carried a sequencing constraint — "01PMCH01 must not reach a release tag
@@ -71,9 +78,11 @@ releasable", which this section previously claimed. WP04's review found
 three other surfaces that consume move-bearing rows and are wrong, none of
 them the transcript, all owned by WP05/WP06:
 
-- ~~`MessageList.vue:162-170` + `MessageBubble.vue:549-553` count
-  **rows**, not turns, for "Summary of N turns"~~ — **FIXED 2026-08-14
-  by WP05.** `MessageList` now calls `transcript.foldedTurnCounts`,
+- ~~`MessageList.vue` + `MessageBubble.vue` count **rows**, not turns,
+  for "Summary of N turns"~~ — **FIXED 2026-08-14 by WP05.**
+  `MessageList` now calls `transcript.foldedTurnCounts`
+  (imported at `MessageList.vue:35`, called at `:178`; the indicator
+  itself renders at `MessageBubble.vue:551`),
   which attributes each folded row to the turn that opened it
   (`turnSpanId`, or the most recent preceding user row for a classic
   row) and counts distinct turns. WP05 made the call WP04 declined to
@@ -83,15 +92,28 @@ them the transcript, all owned by WP05/WP06:
   indicator") moved from "Summary of 2 turns" to "Summary of 1 turn",
   because both fixtures fold ONE exchange — a user row and the
   assistant row answering it — and both now carry a comment saying so.
-  Pinned by `lib/__tests__/foldedTurnCounts.test.ts`; reverting to the
-  row count fails four of its five cases.
-- **Search corpus**: migration 0312's FTS trigger
-  (`core/session/migrations_search_fts.go:47`) fires on every
-  `session_messages` insert with no role filter, so every `tool_result`
-  row's raw output is now full-text indexed. `SearchModal.vue:347-350`
-  offers User/Assistant/System and **no Tool option**;
-  `SearchPalette.vue` has no role filter at all. Cmd-F degrades
-  materially on a move-bearing session.
+  Pinned by `lib/__tests__/foldedTurnCounts.test.ts` (five cases);
+  reverting to the row count fails four of them — every case except
+  "counts an orphaned folded row as its own turn", where one row *is*
+  one turn. WP06 deliberately stayed out of both files this cycle;
+  they were WP05's.
+- ~~**Search corpus**: migration 0312's FTS triggers
+  (`core/session/migrations_search_fts.go:48` and its update/delete
+  siblings) fire on every `session_messages` write with no role filter,
+  so every `tool_result` row's raw output and every `tool_call` row's
+  synthetic args summary was full-text indexed~~ — **DRAINED 2026-08-14
+  by WP06.** Migration 0335
+  (`core/session/migrations_search_fts_tool_rows.go`) replaces 0312's
+  unguarded triggers with role-guarded ones and evicts the tool rows
+  already in the index. See the Drained section for the contract and
+  why "index them and filter in the UI" was rejected. The two search
+  components were left untouched, deliberately: `SearchModal.vue`'s
+  User/Assistant/System role filter (`:347-350`) is now exactly the
+  corpus, and adding a Tool option would have been a control that
+  returns nothing. `SearchPalette.vue` still has no role filter at all,
+  which is unchanged and not a finding. One residual defect that came
+  out of that decision is recorded as its own standing finding below
+  (`?role=` is read from the URL unvalidated).
 - ~~**`Sessions_Export`** (Go, markdown + JSON) walks tool rows with raw
   output~~ — **FIXED 2026-08-14 by WP05** (FR-006). The export is now
   an explicit DISPLAY consumer, contract written at the head of
@@ -136,12 +158,26 @@ them the transcript, all owned by WP05/WP06:
   credential sitting in an argument KEY went into both documents
   verbatim. `argsSummaryFromValues` now runs `RedactValue` over the
   name; pinned by `TestExport_RedactsArgumentNames`.
+- ~~**`session.TranscriptEntry.ContentBlocks` write half**~~ —
+  **DELETED 2026-08-14 by WP05**, which is the other half of the
+  delete-vs-finish deadline this list recorded against it. Its own
+  dated entry is immediately below, and the expressiveness hole the
+  deletion re-opens is a standing ungated finding. WP06 did not touch
+  the field.
 
-Also open, and not a projection bug: on the **revised-draft** path the
-exit gate's revised text never streams, so the live view shows the draft
-as the answer while a reload shows the revision. FR-003's "no post-hoc
-mismatch" is not fully true there until the backend delivers the
-revision on the stream.
+All three of the surfaces WP04's review named are therefore resolved,
+and so is the field: two fixed by WP05, one drained by WP06, one
+deleted by WP05. None of them is an inherited exemption — the deadline
+text each carried has been discharged, not extended.
+
+**Moved out of the mission's list, because no WP owned them and the
+mission has closed** — see "Open — ungated findings" for the full text
+of both:
+
+- the revised-draft stream gap (FR-003's "no post-hoc mismatch" is not
+  true on the exit-gate-revision path);
+- `views/search/impl.go` returning soft-archived rows, found by WP06
+  while working next door.
 
 Whoever mounts `SubagentTab.vue` (dead today) must route through
 `projectTranscript` or it reinherits the 13-bubble regression.
@@ -238,18 +274,23 @@ WP05 reported that fleet share carries moves "by construction" because
 rows. **That claim is false, and the export half of FR-006 is the only
 half that shipped.**
 
-- `core/rpc/views/contextsync/impl.go:151-160` calls
-  `Handoff.ShareSession(ctx, sessionID, recipientUserID, nil)` — a
-  literal `nil` event slice, with a comment deferring the real payload to
-  "the chassis path". There is no chassis-path caller; every other caller
-  of `ShareSession` is a test.
-- `core/fleet/team_handoff.go:112` then POSTs `"events": []`.
+- `core/rpc/views/contextsync/impl.go:151` (`Handoff_Share`) calls
+  `Handoff.ShareSession(ctx, sessionID, recipientUserID, nil)` at `:159`
+  — a literal `nil` event slice, with a comment at `:155-158` deferring
+  the real payload to "the chassis path". There is no chassis-path
+  caller. The only other non-test mention of `ShareSession` outside the
+  fleet package is `core/rpc/context_sync_wiring.go:123-128`, the
+  adapter that forwards this same call; every remaining call site is a
+  test.
+- `core/fleet/team_handoff.go:133` builds `wireEvents` as
+  `make([]wireEvent, 0, len(plainEvents))` and `:151` posts it as
+  `"events"` — so the request body carries a literal `[]`, not `null`.
 - Even if the `nil` were replaced, the fleet event record could not carry
-  moves: `core/rpc/api.go:6198-6206` marshals
+  moves: `core/rpc/api.go:6180-6184` marshals
   `{"id": …, "role": …}` and nothing else, deliberately — the wiring
-  comment at `core/rpc/api.go:2447` states no plaintext content crosses
-  that boundary. `core/fleet/session_sync.go:39-45`'s doc claiming the
-  record is "usually JSON of session.Message" is stale against that
+  comment at `core/rpc/api.go:2426-2428` states no plaintext content
+  crosses that boundary. `core/fleet/session_sync.go:42`'s doc claiming
+  the record is "usually JSON of session.Message" is stale against that
   producer.
 - `scripts/ci/check-fleet-log-export-fence.sh` constrains the OTel/slog
   lane, not this one, so no gate sees the gap either way.
@@ -304,8 +345,10 @@ the field used to be.
 ### 2026-08-14 · `session.ToolCall.{Arguments,Result}` have no production writer
 
 Found by WP05 while rewriting the export. The only production writer of
-`session.ToolCall` is `core/rpc/api.go:6228`, which sets `{ID, Name,
-IsError}` and nothing else — by design: `Arguments` belongs to the
+`session.ToolCall` is `moveToolCalls` (`core/rpc/api.go:6202`, the
+composite literal at `:6208` — the sole non-test `session.ToolCall{`
+in the tree), which sets `{ID, Name, IsError}` and nothing else — by
+design, and the comment at `:6195-6201` says so: `Arguments` belongs to the
 DISPLAY layer and the display layer never sees values (see the contract
 on `session.Message.ModelLayerToolArgs`), and a tool result is its own
 `tool_result` row now, not a field hanging off the call.
@@ -325,6 +368,173 @@ prevents a future writer from populating `Arguments` with real values,
 at which point the display layer starts carrying them. The export is
 structurally safe (it never prints a value), but no gate enforces that
 `Arguments` stays empty at the write site.
+
+### 2026-08-14 · The exit gate's revised answer never reaches the stream
+
+Inherited from 01PMCH01's in-flight list at mission close; no WP claimed
+it, so it graduates to a standing finding rather than expiring with the
+section.
+
+On the **revised-draft** path the exit gate (or the escalation ladder)
+returns text different from the draft the model streamed. The revision is
+persisted — `turnJournal.AppendEntry` flushes the parked draft as its own
+`assistant_move` and stamps the revision as the turn's `final`, which is
+the honest record — but nothing puts the revised text ON the stream. The
+live view therefore shows the draft as the answer and a reload shows the
+revision.
+
+Spec FR-003 asks for "no post-hoc mismatch between what you watched and
+what's stored", and on this path there is one. The transcript is right
+and the live view is wrong, which is the better of the two failure
+directions but still a lie to the user who was watching.
+
+**Owner:** unassigned. The fix is backend: deliver the gate's revised
+text as a move boundary + delta on the chat stream so the surface can
+replace the draft bubble, rather than only writing it to the store.
+
+### 2026-08-14 · `views/search/impl.go` searches soft-archived rows
+
+Found by 01PMCH01 WP06 while re-guarding the FTS triggers next door; not
+caused by the moves mission and not fixed by it.
+
+There are two message-search implementations and they disagree about
+compacted history. `core/search/search.go` filters `sm.archived_at IS
+NULL` on both of its query shapes. `core/rpc/views/search/impl.go` — the
+one the Wails binding and served mode actually call — filters project,
+session and role, and never archived_at, in either `Search` or the
+`UnifiedSearch` messages adapter.
+
+So a row that compaction soft-archived is gone from the transcript, gone
+from the model's history, and still a search hit that navigates the user
+to a message the session no longer renders. The moves mission makes this
+more visible (compaction now archives many more rows per turn) without
+having introduced it.
+
+**Owner:** unassigned. Two honest exits: add the predicate and accept
+that compacted content stops being findable, or add an explicit
+"include compacted history" filter to the search UI and wire it. Not a
+third: the two implementations should not keep disagreeing silently.
+
+### 2026-08-14 · `core/search/search.go` is a dead second search engine
+
+Adjunct to the `archived_at` entry above, found while verifying it.
+`core/search` — `doc.go`, `query.go`, `search.go` and its own test — has
+**zero non-test importers**. The correct `archived_at IS NULL` predicate
+lives only there; the implementation the app actually calls,
+`core/rpc/views/search/impl.go`, lacks it.
+
+So the honest framing of the entry above is not "two implementations
+disagree" but "the correct implementation is dead and the live one is
+missing the predicate". Under this file's own doctrine that is
+**rival infrastructure**, and the disposition is a delete-or-adopt
+decision, not a bug.
+
+**Owner:** unassigned. Whoever resolves the `archived_at` entry should
+resolve this in the same change — adopting `core/search` or deleting it
+are both fine; leaving a dead copy holding the right answer is not.
+
+### 2026-08-14 · `Role == RoleAssistant` is a staleness class, and no gate sees it
+
+This entry merges three findings that are the same finding: the class
+itself (recorded by WP06 against the Drained line below), the one live
+consumer still drifting on it, and the gate that was owed for it and not
+written.
+
+**The class.** Since 01PMCH01 WP02, `Role` no longer identifies what a
+row *is*. A `tool_call` move persists with `Role = RoleTool`, and
+`RoleAssistant` now covers both the turn's `final` answer and every
+interim `assistant_move` narration. So two idioms that were true for
+every release before WP02 are now silently wrong on a move-bearing
+session, and neither fails to compile:
+
+- `Role == RoleAssistant && len(ToolCalls) > 0` to mean "this row
+  opened a tool call" — the defect WP06 fixed in
+  `core/agentgraph/compaction/wiring/store.go`; `toolUseID` (`:131`)
+  and its mirror (`:149`) now switch on `m.MoveKind()` (`:135`, `:155`)
+  instead. See the Drained entry.
+- `Role == RoleAssistant` to mean "an assistant answer".
+
+**The live drift.** `core/rpc/views/branches/impl.go:366` (tail-5 branch
+summary) and `:452` (last-8 turns for `ReintegrationProposal`) still use
+the second idiom, so both now sample the model's thinking-out-loud
+alongside its answers. `impl.go:329-330` (`LastAssistantMsg`) is
+unaffected — the last row of a completed turn is the `final` move. This
+is mild: nothing is mis-paired, no request is malformed, the summaries
+are just noisier than they read. Filtering to
+`MoveKind() == MoveKindFinal || MoveKind() == ""` is the one-line fix.
+
+**The gate that is owed.** The sweep's gate-extension rule says a find
+representing a class the existing gates cannot see must extend a gate in
+the same commit, with a planted-violation proof in
+`scripts/ci/gates_can_fail_test.go`. WP06 found exactly such a class and
+did **not** extend a gate: the merge-base→WP06 diff touches no file under
+`scripts/ci/`. The rule is not satisfied, and the usual excuse — that any
+gate for it would be vacuous or unboundedly noisy — does not hold here.
+The candidate set is small and enumerable: eleven non-test `.go` files
+under `core/` mention both `RoleAssistant` and `ToolCalls`
+(`core/agentgraph/compaction/wiring/store.go`, `core/llm/bedrock/bearer.go`,
+`core/llm/bedrock/bedrock.go`, `core/llm/gemini/wire.go`, `core/llm/llm.go`,
+`core/llm/registry/registry.go`, `core/rpc/api.go`,
+`core/rpc/views/sessions/impl.go`, `core/session/moves.go`,
+`core/session/types.go`, `core/sessions/export/moves.go`), and only three
+non-test files outside that set name `RoleAssistant` at all. A gate that
+requires each `RoleAssistant` test over a `session.Message` to sit beside
+a `MoveKind()` discriminator, or to be listed with a dated justification,
+is constructible against a list that size.
+
+**Owner:** unassigned, for all three parts. The branch-summary filter is
+cheap enough to fold into whatever next touches branch summaries; the
+gate is the part that keeps the class from coming back.
+
+### 2026-08-14 · Migration 0335's tool-row purge is not idempotent
+
+`sqlPurgeToolRowsFromFTS`
+(`core/session/migrations_search_fts_tool_rows.go:155-156`) issues
+FTS5's `'delete'` command for every `role = 'tool'` row in
+`session_messages`, with no guard against having been issued before. By
+the migration's own documented reasoning (`:104-110`), a `'delete'` for
+terms the index does not hold drives the term counts negative and SQLite
+then fails the statement with "database disk image is malformed".
+
+This is latent, not live: migrations run once, keyed by the ledger, and
+0335's `Down` backfills the same rows, so the only supported Down→Up
+cycle is balanced — `TestMigration0335_EvictsRowsIndexedBeforeIt`
+exercises exactly that path. What is unguarded is any future path that
+re-applies `Up` without the matching `Down`: a repair routine, a manual
+re-run, or a second migration that copies this statement. Recorded
+because the statement reads like a plain backfill and is not one.
+
+**Not independently reproduced** — the corruption claim above is the
+migration's own comment plus the shape of the SQL, not a probe this
+sweep ran. Treat it as a hazard to design against, not a measured
+failure.
+
+**Owner:** unassigned. The cheap closure is a guard that makes the purge
+a no-op when the index holds no tool rows, or a comment at the statement
+saying explicitly that it may be applied exactly once.
+
+### 2026-08-14 · `SearchModal` takes `?role=` from the URL unvalidated
+
+`SearchModal.vue:51-63` (`readFromRoute`) copies the `role` query
+parameter straight into `roleFilter` (`:60`) with no membership check,
+and `:118` forwards whatever it holds as `filters.roleFilter`. The
+`<select>` that owns the control offers exactly four values —
+`""`, `user`, `assistant`, `system` (`:347-350`).
+
+Since WP06 took tool rows out of the FTS corpus (see Drained), a
+deep link carrying `?role=tool` puts the modal into a state its own UI
+cannot express and cannot leave by any control: the select renders blank
+because no option matches, and every query returns zero hits forever.
+Before WP06 the same link returned tool rows, so this is a defect the
+corpus change made permanent rather than one it introduced.
+
+The same hole exists for any other unknown value (`?role=banana`), and
+for `project`, `from` and `to`, which are equally unvalidated — but only
+`role` has a closed vocabulary the UI enforces everywhere else, which is
+what makes it a lie rather than an empty result set.
+
+**Owner:** unassigned. One line in `readFromRoute`: drop a `role` that is
+not in the option set, the same way the select would.
 
 ### 2026-08-14 · Deferred asks have no producer, and wizards have no caller
 
@@ -394,8 +604,9 @@ deleted this sweep (see Drained). They were the *intended* surface for
 policy denials and they were completely inert, so deleting them was
 right — but it leaves a real product gap that must not be lost with them.
 
-**The gap:** the harness has no denial-aware UI at all. `policyAPI` is
-assigned exactly once, at `core/rpc/api.go:1109`, to `&stubPolicy{}`;
+**The gap:** the harness has no denial-aware UI at all. `policyAPI`
+(declared at `core/rpc/api.go:423`) is assigned exactly once, at
+`core/rpc/api.go:1094`, to `&stubPolicy{}`;
 every method returns `errNotWired`. No `policy:event` broker topic exists
 anywhere in the tree — the string appeared only in the deleted
 `usePolicyDecisions` docstring. So when a Cedar policy denies an action,
@@ -479,14 +690,20 @@ out; no filter exists), `LocalRuntimeRAMOverrideGB`
 **Owner:** unassigned. The cheapest structural fix is to bring
 `settings.Settings` under `core/wiring/knobcoverage` — see the next entry.
 
-### 2026-08-14 · knob-coverage tracks 9 fields out of ~98
+### 2026-08-14 · knob-coverage tracks one struct out of the several that need it
 
 `core/wiring/knobcoverage` is a general mechanism, and exactly one struct
 uses it: `autonomy.ResolvedKnobs` (9 fields, all genuinely live).
-`settings.Settings` (76 fields) and `dials.DialConfig` (13) are outside it
-entirely — which is why the two entries above were found by hand rather
-than by CI. `RegisterDeferred` is also an unbounded escape hatch: no
-allowlist file, no dates, no monotonic-shrink rule.
+`settings.Settings` — the largest knob surface in the tree, ~78 exported
+fields — is outside it entirely, which is why the entry above was found
+by hand rather than by CI. `RegisterDeferred` is also an unbounded escape
+hatch: no allowlist file, no dates, no monotonic-shrink rule.
+
+*(Updated 2026-08-14: this entry previously counted `dials.DialConfig`'s
+13 fields alongside `settings.Settings`, for "9 out of ~98". The dials
+cascade was deleted by orphan-deletion sweep wave 2 — see Drained — so
+that arm is gone and the ratio is smaller than recorded. The
+`settings.Settings` gap is unchanged and is the whole of it now.)*
 
 The vacuous-pass hole was closed this sweep (the gate now requires a real
 guard test outside the mechanism's own package). The coverage gap is not.
@@ -505,12 +722,17 @@ assignment. `Registry.StdoutWriter` / `StderrWriter` likewise have no
 callers: `spawnBackground` calls `cmd.Start()` before it has a task id, so a
 background task could not capture output even if the seam were passed.
 
-**Correction: only the Tasks panel half is true.** `TasksPanel` IS mounted
-(`SettingsView.vue:29` imports it, `:1126` renders it) — that part of the
-original claim stands. But `components/sessions/SessionCloseDialog.vue`
-has **zero importers** anywhere in `frontend/src` — no route, no parent
-component, no test. It is exactly as unreached as the Go producer side it
-was meant to gate.
+**Correction: the Tasks panel half was true when written, and is no
+longer.** `TasksPanel` was mounted in `SettingsView.vue` behind
+`?tab=tasks` when this entry was first written; the follow-up below
+removed that mount along with the nav entry, so as of 2026-08-14 the
+panel is **retained but unmounted** — the only remaining reference in
+`frontend/src` is the comment at `SettingsView.vue:131-133` and the
+component's own `__tests__/TasksPanel.spec.ts`. Re-verified on the
+merged tree. `components/sessions/SessionCloseDialog.vue` likewise has
+**zero importers** anywhere in `frontend/src` — no route, no parent
+component, no test. Both are now exactly as unreached as the Go producer
+side they were meant to gate.
 
 Consequences already addressed this sweep: `kenaz__bash` no longer
 advertises `run_in_background` while the seam is nil (commit `fix(tools):
@@ -783,6 +1005,71 @@ before acting — frontend code churns between sweeps.
     existed** — see the correction above; the tool was never advertised
     to the model. `TestRegisterAll_HappyPath`'s canonical tool count
     moved 14 → 13.
+- **2026-08-14** (01PMCH01 WP06) — the **search corpus**, and with it
+  the last non-WP05 line on the mission's in-flight list. Migration
+  0312's FTS triggers had no role predicate, so every `tool_call` row's
+  synthetic args-summary string and every `tool_result` row's raw output
+  had been full-text indexed since WP02 — BM25 ranking against a corpus
+  that had become mostly machine output, and a cross-session grep over
+  every tool payload the harness ever received. Migration 0335
+  (`core/session/migrations_search_fts_tool_rows.go`) re-guards all
+  three triggers on `role <> 'tool'` and evicts the rows already
+  ingested — the eviction is the half a trigger-only migration would
+  have missed, and `'rebuild'` is not a substitute for it because
+  rebuild re-reads the content table and would put the tool rows
+  straight back.
+  The update trigger is **one trigger carrying two independently guarded
+  statements** (`:135-141`), not two triggers. WP06's first version used
+  two — `messages_fts_au_del` and `messages_fts_au_ins` — and its
+  adversarial review (commit `44d7649f`) found that shape is the one
+  shape that cannot work: SQLite leaves the firing order of two triggers
+  on one event undefined and in practice fires them in reverse creation
+  order, so the insert ran first and the delete second, and every term
+  the two row versions share netted to zero. Because `session_messages`
+  is UPDATEd on paths that never touch content — `core/usage/usage.go`
+  writing token counts onto the assistant row of every turn that reports
+  usage, `ApplyCompaction` flipping `archived_at`,
+  `MarkStreamingFailure` setting a flag — that silently removed every
+  assistant turn from the index. The two halves genuinely do need
+  independent guards (`old.role` for the delete, `new.role` for the
+  insert), which is why they are expressed as `INSERT … SELECT … WHERE`
+  inside one body: statements in a trigger body run in written order.
+  Pinned by `TestMigration0335_UpdatingANonToolRowKeepsItIndexed`.
+  Contract chosen, and why not the other one: tool OUTPUT never reached
+  `session_messages` before WP02, so removing it from the index restores
+  the corpus every prior release shipped rather than deleting a
+  capability. Narrowly (commit `6a409d27`): `role='tool'` rows are not
+  brand new — since v0.21.7 the interrupt path has written one synthetic
+  "cancelled: interrupted by user" row per cancelled call and 0312
+  indexed those, so the purge does remove rows earlier releases carried.
+  They hold no user language and the sibling assistant row keeps its
+  `[interrupted by user]` marker, so the product judgement is unchanged;
+  the claim is "the corpus that shipped", not "every row that shipped".
+  Indexing tool rows with a UI opt-out was rejected because the ranking
+  damage happens with the filter OFF, which is the default, and because
+  a `tool_call` row's content is `displayArgsSummary` output — a
+  synthetic display string with no user language in it and no query for
+  which it is the right answer. `SearchModal.vue`'s existing
+  User/Assistant/System filter is now exactly the corpus; no Tool option
+  was added, because it would be a control that can only return nothing.
+  (The deep-link consequence of that decision is an open finding above:
+  `?role=tool` is still accepted from the URL.) Pinned by
+  `TestMigration0335_EvictsRowsIndexedBeforeIt`, which manufactures a
+  dirty pre-migration index through the migration's own Down and asserts
+  the state is dirty before asserting it is clean.
+- **2026-08-14** (01PMCH01 WP06) —
+  `core/agentgraph/compaction/wiring/store.go`'s `toolUseID` (`:131`),
+  the one shipped consumer of the `Role == RoleAssistant` idiom for
+  "this row opened a tool call". It reported `""` for every move-borne
+  call, emptied `snapBoundaryForToolPairs`'s openers map, and turned the
+  whole tool-pair boundary clamp into a no-op on both the threshold and
+  rolling flows. It and its mirror (`:149`) now switch on `m.MoveKind()`
+  (`:135`, `:155`). Drained as a defect fix, **not** as a class fix: the
+  idiom is still legal everywhere else in the tree and no gate sees it.
+  The class, the one live surface still drifting on it, and the gate
+  that is owed for it are recorded together above under
+  "`Role == RoleAssistant` is a staleness class".
+
 - **2026-08-14** (01PMCH01 WP04) — `sessions.Message.{Kind,MoveIndex,
   TurnSpanID}` and their `frontend/src/lib/types.ts` mirror (populated by
   `messageToView` on every row since WP01, read by nothing — and, after

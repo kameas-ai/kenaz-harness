@@ -95,27 +95,71 @@ func (a *MessageStore) ApplyCompaction(ctx context.Context, sessionID string, su
 	return a.store.ApplyCompaction(ctx, sessionID, row, originalIDs, archivedAt)
 }
 
-// toolUseID returns the assistant-side tool_use id carried on m, or ""
-// for a non-tool-call message. The current session.Message shape stores
-// every tool_use inside ToolCalls; we lift the first id so the
-// compaction boundary-snap can recognize "this row opened a tool call"
-// without re-parsing content_json.
+// toolUseID returns the tool_use id this row OPENED, or "" when the row
+// is not the open half of a pair.
+//
+// THE MOVE KIND IS THE DISCRIMINATOR, NOT THE ROLE
+// (model-moves-transcript-01PMCH01 WP06).
+//
+// Before the moves mission a tool_use could only ever arrive as an
+// assistant row carrying ToolCalls, so `m.Role == RoleAssistant` was a
+// sufficient test. WP02 changed the vocabulary underneath this function
+// without changing this function: a `tool_call` move persists with
+// Role=RoleTool (see core/session/moves.go — "moves use RoleAssistant
+// for assistant_move / final and RoleTool for tool_call / tool_result").
+//
+// The consequence was not a compile error and not a wrong answer at this
+// call site — it was silence three layers down. Every move-borne
+// tool_call reported ToolUseID="", so snapBoundaryForToolPairs built an
+// EMPTY openers map, so both of its clamp cases were unreachable, so the
+// span boundary was free to fall between a tool_call and its
+// tool_result on both the threshold and the rolling flow. The persisted
+// half-pair then survived until composeModelHistory's sweep dropped the
+// surviving half, which is history loss the user never sees rather than
+// the provider 400 the sweep exists to prevent. FR-005 asks that moves
+// be first-class compaction inputs; a marker function that cannot see
+// them is the whole feature quietly not applying.
+//
+// A tool_call move is EXCLUSIVELY an opener and a tool_result move is
+// EXCLUSIVELY a closer — reporting one row as both (which the old
+// role-only pair of helpers did for every move row, since both are
+// RoleTool with ToolCalls) would make the snap's openers map claim a
+// call answers itself.
+//
+// Multi-call rows report the first id: the snap extends the boundary to
+// cover the whole row either way, so the first id is sufficient.
 func toolUseID(m session.Message) string {
-	if m.Role == session.RoleAssistant && len(m.ToolCalls) > 0 {
-		// The boundary-snap helper treats any non-empty ToolUseID as
-		// "this row is the open half of a pair"; multi-call rows are
-		// rare in chat (usually one tool_use per assistant turn) and
-		// the snap helper extends the boundary to cover the row in
-		// either case, so reporting the first id is sufficient.
+	if len(m.ToolCalls) == 0 {
+		return ""
+	}
+	switch m.MoveKind() {
+	case session.MoveKindToolCall:
+		return m.ToolCalls[0].ID
+	case session.MoveKindToolResult:
+		return ""
+	}
+	// Classic (pre-mission) row: the assistant turn carries the tool_use.
+	if m.Role == session.RoleAssistant {
 		return m.ToolCalls[0].ID
 	}
 	return ""
 }
 
-// toolResultForID returns the tool_use id this tool-result row closes,
-// or "" for a non-tool message.
+// toolResultForID returns the tool_use id this row CLOSED, or "" when
+// the row is not the answering half of a pair. Mirror of toolUseID; read
+// its comment for why the move kind and not the role decides.
 func toolResultForID(m session.Message) string {
-	if m.Role == session.RoleTool && len(m.ToolCalls) > 0 {
+	if len(m.ToolCalls) == 0 {
+		return ""
+	}
+	switch m.MoveKind() {
+	case session.MoveKindToolResult:
+		return m.ToolCalls[0].ID
+	case session.MoveKindToolCall:
+		return ""
+	}
+	// Classic (pre-mission) row.
+	if m.Role == session.RoleTool {
 		return m.ToolCalls[0].ID
 	}
 	return ""

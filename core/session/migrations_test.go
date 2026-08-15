@@ -422,12 +422,13 @@ func TestMigrations_RegisterAndApply(t *testing.T) {
 	// 0330 knobs + 0331 custom_endpoint_capabilities +
 	// 0332 artifacts_global_scope (unified-context-artifacts-01NCTXU01) +
 	// 0333 transcript_moves (model-moves-transcript-01PMCH01 WP01) +
-	// 0334 move_fidelity (model-moves-transcript-01PMCH01 WP03)) =
-	// 37 applied entries (2 chassis bootstrap + 35 sessions migrations).
-	if got := len(db.ledger); got != 37 {
-		t.Fatalf("ledger size = %d, want 37", got)
+	// 0334 move_fidelity (model-moves-transcript-01PMCH01 WP03) +
+	// 0335 search_fts_tool_rows (model-moves-transcript-01PMCH01 WP06)) =
+	// 38 applied entries (2 chassis bootstrap + 36 sessions migrations).
+	if got := len(db.ledger); got != 38 {
+		t.Fatalf("ledger size = %d, want 38", got)
 	}
-	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334}
+	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335}
 
 	for i, want := range wantVersions {
 		if db.ledger[i].Version != want {
