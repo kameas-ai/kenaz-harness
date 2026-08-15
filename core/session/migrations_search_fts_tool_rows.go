@@ -40,10 +40,18 @@ import (
 //     to carry even a tool ARGUMENT's value.
 //
 // SO TOOL ROWS COME OUT OF THE INDEX. Read as a capability question this
-// removes nothing: before WP02 tool output never reached
-// session_messages, so it was never searchable, and this restores the
-// corpus that shipped for every release up to this one. Read as a
-// regression it is the fix. The alternative — index them and let the UI
+// removes almost nothing: tool OUTPUT never reached session_messages
+// before WP02, so it was never searchable, and this restores the corpus
+// that shipped for every release up to this one. Read as a regression it
+// is the fix.
+//
+// "Almost", precisely: role='tool' rows are not brand new. Since v0.21.7
+// the interrupt path has written one synthetic row per cancelled call —
+// `tool call "x" (id=…) cancelled: interrupted by user` — and 0312
+// indexed those. The purge below takes them out too. They carry no user
+// language and the sibling assistant row keeps its `[interrupted by
+// user]` marker, so nothing findable stops being findable; the claim
+// above is "the corpus that shipped", not "every row that shipped". The alternative — index them and let the UI
 // filter — was rejected because it keeps the ranking damage (an excluded
 // role still competes for the LIMIT when the filter is off, and off is
 // the default) and buys a filter for content that has no query.
