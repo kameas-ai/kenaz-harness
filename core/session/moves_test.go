@@ -590,3 +590,119 @@ func TestAppendTranscriptEntry_CarriesContentBlocks(t *testing.T) {
 		t.Errorf("TurnSpanID = %q, want %q", got.TurnSpanID(), turn.ID)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Model-layer tool arguments (model-moves-transcript-01PMCH01 WP03).
+// ---------------------------------------------------------------------------
+
+// TestAppendTranscriptEntry_SQLRoundTripsModelToolArgs is the schema
+// round-trip for the MODEL LAYER's raw arguments — the half of spec §4's
+// two-layer redaction that legitimately carries values, because the
+// provider protocol cannot reconstruct an assistant tool_use block
+// without them.
+//
+// It must run against SQLITE, not the memory store. The memory store
+// keeps *session.Message values verbatim, so it exercises neither
+// moveColumnValues' JSON encode nor applyMoveColumns' decode — the two
+// places the column can actually be lost. WP03's composition tests use
+// the memory store (they are about projection, not persistence), and a
+// mutation that deleted the model_tool_args bind from the INSERT
+// survived every one of them. This test is what killed it.
+//
+// Mutation checks (each kills this test):
+//   - drop `model_tool_args` from the INSERT column list in
+//     sqlStore.AppendMessage → reloaded args are nil;
+//   - make moveColumnValues skip the marshal (bind nil) → same;
+//   - drop the modelArgs decode from applyMoveColumns → same;
+//   - delete migration0334 from Migrations() → the INSERT fails with
+//     "no such column: model_tool_args".
+func TestAppendTranscriptEntry_SQLRoundTripsModelToolArgs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mgr, sid := newMovesSQLManager(t)
+
+	turn, err := mgr.AppendTranscriptEntry(ctx, sid, session.TranscriptEntry{
+		Role: session.RoleUser, Content: "run the build",
+	})
+	if err != nil {
+		t.Fatalf("append user turn: %v", err)
+	}
+
+	const rawArgs = `{"cmd":"go build ./...","timeout":60}`
+	if _, err := mgr.AppendTranscriptEntry(ctx, sid, session.TranscriptEntry{
+		Role: session.RoleTool, Content: "bash(cmd=<string>, timeout=<number>)",
+		Kind: session.MoveKindToolCall, MoveIndex: 0, TurnSpanID: turn.ID,
+		ToolCalls:     []session.ToolCall{{ID: "tc-1", Name: "bash"}},
+		ModelToolArgs: map[string]string{"tc-1": rawArgs},
+	}); err != nil {
+		t.Fatalf("append tool_call: %v", err)
+	}
+
+	got, err := mgr.ListMessages(ctx, sid)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("ListMessages returned %d rows, want 2", len(got))
+	}
+
+	// The model layer survived the round trip...
+	args := got[1].ModelLayerToolArgs()
+	if len(args) != 1 || args["tc-1"] != rawArgs {
+		t.Fatalf("ModelLayerToolArgs = %#v, want map[tc-1:%s] — the raw arguments did not "+
+			"survive persistence, so the composition cannot rebuild a tool_use block", args, rawArgs)
+	}
+
+	// ...and the DISPLAY layer still holds nothing (spec §4). These two
+	// assertions belong in one test on purpose: they are the two halves
+	// of one contract, and a change that satisfies either by violating
+	// the other is the failure this pins.
+	for _, tc := range got[1].ToolCalls {
+		if len(tc.Arguments) > 0 {
+			t.Errorf("session.ToolCall.Arguments = %#v on a persisted tool_call row — "+
+				"raw arguments reached the display layer's field", tc.Arguments)
+		}
+	}
+
+	// The human turn stays clean.
+	if a := got[0].ModelLayerToolArgs(); a != nil {
+		t.Errorf("classic row carries model-layer args: %#v", a)
+	}
+}
+
+// TestAppendTranscriptEntry_RejectsModelArgsOnNonToolCall pins that the
+// model layer's raw arguments cannot be attached to a kind that has no
+// reader for them. A silent drop would be the lossy-seam failure WP01
+// designed this validation against; a silent ACCEPT would put raw
+// argument values on an assistant_move or final row, which the display
+// surface renders.
+//
+// Mutation: delete the ErrModelToolArgsWithoutToolCall clause from
+// TranscriptEntry.validate → this passes and the row persists.
+func TestAppendTranscriptEntry_RejectsModelArgsOnNonToolCall(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mgr, sid := newMovesSQLManager(t)
+
+	turn, err := mgr.AppendTranscriptEntry(ctx, sid, session.TranscriptEntry{
+		Role: session.RoleUser, Content: "go",
+	})
+	if err != nil {
+		t.Fatalf("append user turn: %v", err)
+	}
+
+	for _, kind := range []session.MoveKind{
+		session.MoveKindAssistantMove,
+		session.MoveKindToolResult,
+		session.MoveKindFinal,
+	} {
+		_, err := mgr.AppendTranscriptEntry(ctx, sid, session.TranscriptEntry{
+			Role: session.RoleAssistant, Content: "text",
+			Kind: kind, MoveIndex: 0, TurnSpanID: turn.ID,
+			ModelToolArgs: map[string]string{"tc-1": `{"secret":"sk-live"}`},
+		})
+		if !errors.Is(err, session.ErrModelToolArgsWithoutToolCall) {
+			t.Errorf("kind %q: err = %v, want ErrModelToolArgsWithoutToolCall", kind, err)
+		}
+	}
+}
