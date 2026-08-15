@@ -371,3 +371,47 @@ func seedMoveTurnSQL(t *testing.T, mgr *session.Manager, sid string) {
 		}
 	}
 }
+
+// TestModelHistory_ByteIdentityHoldsAtEveryWindow widens the gate-OFF
+// byte-identity claim across the truncation windows.
+//
+// TestModelHistory_GateOff_MatchesPreMissionOracle pins the claim at
+// n=0 only. n=0 is what the shipped chat graph's history_read passes,
+// but it is NOT the only production caller: agentgraph's
+// exec_control.go calls History with a hardcoded n=10, so the window is
+// live and the golden did not cover it.
+//
+// The window matters here because composeModelHistory deliberately
+// INVERTS the pre-mission order — it projects then truncates, where the
+// old code truncated then projected. For classic rows the projection is
+// 1:1 so the two orders coincide, which is what makes byte identity
+// survive; this test is what proves that rather than assuming it. (The
+// inversion is required: truncating raw rows first would spend the
+// window on move rows that classic fidelity then drops, and would put
+// the pair-integrity sweep before the cut it exists to clean up after.)
+//
+// Mutation: swap composeModelHistory back to truncate-then-project and
+// this still passes (classic rows are 1:1) while
+// TestModelHistory_TruncationNeverOrphansAPair fails — the two tests
+// cover the two halves and neither is redundant.
+func TestModelHistory_ByteIdentityHoldsAtEveryWindow(t *testing.T) {
+	t.Parallel()
+	rows := make([]session.Message, 0, 14)
+	for i := range 14 {
+		role := session.RoleUser
+		if i%2 == 1 {
+			role = session.RoleAssistant
+		}
+		rows = append(rows, session.Message{Role: role, Content: string(rune('a' + i))})
+	}
+	for n := range 17 {
+		want := mustJSON(t, preMissionHistoryProjection(rows, n))
+		for _, fidelity := range []moveFidelity{moveFidelityClassic, moveFidelityMoves} {
+			got := mustJSON(t, composeModelHistory(modelHistoryRowsFrom(rows), fidelity, n))
+			if got != want {
+				t.Fatalf("n=%d fidelity=%v diverges from the pre-mission oracle.\n got: %s\nwant: %s",
+					n, fidelity, got, want)
+			}
+		}
+	}
+}
