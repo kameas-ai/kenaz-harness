@@ -1111,3 +1111,93 @@ func TestStatic_HealthzStillWorks(t *testing.T) {
 		t.Errorf("expected {\"ok\":true}, got %v", body)
 	}
 }
+
+// TestRPC_ElicitSubmitAnswer_ReleasesTheParkedCall is the served-mode half
+// of the ask-user-question return leg.
+//
+// Served mode already shipped the browser the pending ask — over
+// Elicit_ListPending and the elicit:pending:snapshot WS frame — but had no
+// dispatch case for Elicit_SubmitAnswer, so the answer had nowhere to go.
+// A workbench user could read the model's question and could not reply to
+// it; OpenDialog stayed parked until its ten-minute deadline fired. This
+// test asserts the whole loop over real HTTP: park a dialog, POST the
+// answer to /rpc, and require that the BLOCKED CALL RETURNS with that
+// exact answer. Asserting only that the RPC returned 200 would pass even
+// if the handler dropped the answer on the floor.
+func TestRPC_ElicitSubmitAnswer_ReleasesTheParkedCall(t *testing.T) {
+	elicit, _, baseURL, cancel := newTestServerWithElicit(t, "tok")
+	defer cancel()
+
+	type outcome struct {
+		answer    string
+		cancelled bool
+		err       error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		ans, err := elicit.OpenDialog(context.Background(), askuserquestion.AskArgs{
+			Question: "Which database?",
+			Kind:     askuserquestion.KindRadio,
+			Options: []askuserquestion.QuestionOption{
+				{Value: "sqlite", Label: "SQLite"},
+				{Value: "postgres", Label: "Postgres"},
+			},
+		}.ToQuestion())
+		done <- outcome{answer: string(ans.Value), cancelled: ans.Cancelled, err: err}
+	}()
+
+	// OpenDialog registers before it blocks; poll for the request id.
+	var requestID string
+	regDeadline := time.Now().Add(2 * time.Second)
+	for requestID == "" {
+		pending, _ := elicit.ListPending(context.Background())
+		if len(pending) > 0 {
+			requestID = pending[0].RequestID
+			break
+		}
+		if time.Now().After(regDeadline) {
+			t.Fatal("pending ask was not registered in time")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// The answer travels as a VALUE, not as a JSON-encoded string of one:
+	// the parameter is a json.RawMessage and the model receives it
+	// verbatim, so "postgres" must arrive as the JSON string "postgres"
+	// and not as "\"postgres\"".
+	body := `{"method":"Elicit_SubmitAnswer","params":{"requestId":"` + requestID +
+		`","answer":"postgres","cancelled":false}}`
+	resp := authedPost(t, baseURL, "tok", body)
+	defer resp.Body.Close() //nolint:errcheck
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, b)
+	}
+	var envelope struct {
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if envelope.Error != "" {
+		t.Fatalf("Elicit_SubmitAnswer returned an error: %s", envelope.Error)
+	}
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("OpenDialog returned an error: %v", got.err)
+		}
+		if got.cancelled {
+			t.Error("the parked call resolved as cancelled; the answer was lost in transit")
+		}
+		if got.answer != `"postgres"` {
+			t.Errorf("parked call resolved with answer %s, want %q — the served handler "+
+				"re-encoded the answer instead of passing it through", got.answer, `"postgres"`)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("OpenDialog is still parked after Elicit_SubmitAnswer returned 200 — " +
+			"the served frontend can see the question but cannot answer it")
+	}
+}

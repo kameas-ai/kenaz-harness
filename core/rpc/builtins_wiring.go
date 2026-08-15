@@ -200,11 +200,19 @@ func registerBuiltinTools(
 	// ask-user-question-interactive-01KZNP3G, WP01/WP04).
 	//
 	// The tool is default-on (asking the user a question is low-risk).
-	// The Delegate is nil until WP04 wires the elicit RPC bridge; the
-	// tool returns errKindNotWired gracefully in that case.
+	//
+	// WP04 landed: the Delegate below is the REAL elicit RPC bridge, and
+	// calling this tool parks the turn on a channel that only the
+	// frontend's AskUserQuestion dialog can release (10-minute deadline in
+	// elicitview.API.OpenDialog). A stale comment here once claimed the
+	// Delegate was still nil, which made the parked turn read as a benign
+	// "not wired" stub; it was not. TestAskUserQuestionDelegateIsWired
+	// (builtins_wiring_test.go) pins the wiring so the claim cannot rot
+	// back into a lie.
 	//
 	// elicitAPI is nil only in test-fixture paths (New(nil) + no elicitAPI
-	// constructed). In production the API.New() path always constructs it.
+	// constructed); there the tool returns errKindNotWired gracefully.
+	// In production the API.New() path always constructs it.
 	var askDelegate coreaskuser.Delegate
 	if elicitAPI != nil {
 		askDelegate = elicitAPI

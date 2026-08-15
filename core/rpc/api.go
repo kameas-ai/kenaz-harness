@@ -1461,6 +1461,26 @@ func New(c *core.Core, opts ...Option) *API {
 	// compaction-convergence-01PMDL05 WP01).
 	a.SetCompactionAPI(compactionview.New(compactionPipeline))
 
+	// Elicitation view + ask_user_question tool bridge (mission
+	// ask-user-question-interactive-01KZNP3G WP04). The elicitAPI is
+	// constructed unconditionally so the tool's Delegate is always
+	// available; it just emits no events when wailsCtx is nil (test path).
+	// WailsEmitter is the same authorised EventsEmit wrapper used by the
+	// stream broker — the CI check allows it in this file.
+	//
+	// ORDERING IS LOAD-BEARING, and was wrong until 2026-08-14: this
+	// assignment sat ~500 lines BELOW the newLLMStack call on the next
+	// line, so `a.elicitAPI` was still nil when registerBuiltinTools read
+	// it. kenaz__ask_user_question was therefore registered — default-on,
+	// advertised to the model in every catalog — with a nil Delegate, and
+	// every call the model made came back
+	// "not_wired … will return once WP04 lands" long after WP04 had
+	// landed. Nothing failed loudly; the model simply could never ask the
+	// user anything. Keep this above newLLMStack.
+	a.elicitAPI = elicitview.New(elicitview.Config{
+		Emitter: WailsEmitter{},
+	})
+
 	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl})
 	a.llmAPI = stack.api
 	// confirm-each-enforcement-01PMAG05 WP02: the resolve leg. Bound to
@@ -1975,16 +1995,6 @@ func New(c *core.Core, opts ...Option) *API {
 		}
 		a.acpAPI = acpview.NewAPI(acpReg, acpEnv, acpOpts)
 	}
-
-	// Elicitation view + ask_user_question tool bridge (mission
-	// ask-user-question-interactive-01KZNP3G WP04). The elicitAPI is
-	// constructed unconditionally so the tool's Delegate is always
-	// available; it just emits no events when wailsCtx is nil (test path).
-	// WailsEmitter is the same authorised EventsEmit wrapper used by the
-	// stream broker — the CI check allows it in this file.
-	a.elicitAPI = elicitview.New(elicitview.Config{
-		Emitter: WailsEmitter{},
-	})
 
 	// Scheduled-chat-runs view (mission scheduled-chat-runs-01KX5R8B, WP04).
 	// Wired with the SQLiteChatStore when a real DB is available; test
