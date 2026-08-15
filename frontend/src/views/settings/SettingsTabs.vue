@@ -21,7 +21,6 @@ import {
   AlertTriangle,
   Archive,
   CalendarClock,
-  CheckSquare,
   CircleUser,
   Code,
   Command,
@@ -96,7 +95,9 @@ const groups: ReadonlyArray<TabGroup> = [
   {
     label: 'Runtime',
     tabs: [
-      { to: '/settings?tab=tasks', label: 'Tasks', query: 'tasks', icon: CheckSquare },
+      // The 'Tasks' entry was removed 2026-08-14: the background-task
+      // subsystem has no producer, so the panel it linked to was always
+      // empty. See docs/unwired-ledger.md.
       {
         to: '/settings?tab=scheduledchats',
         label: 'Scheduled Chats',

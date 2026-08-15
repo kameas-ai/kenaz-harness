@@ -14,8 +14,13 @@
  *   - Force push / Force pull per category
  *   - Banner: "N MCP servers need credentials" → link to MCP settings
  *
- * Gated: visible only when signedIn && capability('settings_sync')
+ * Gated: visible only when signedIn && capability('context_sync')
  * (FR-101 / fleet-share-and-sync-01NDFSEX14 WP06)
+ *
+ * The gate key is the wire value of `fleet.CapContextSync`
+ * (core/fleet/capability.go). It was `settings_sync` until 2026-08-14 —
+ * a key that never existed on the wire, so the Pro-gate copy below showed
+ * to every signed-in user, entitled or not.
  */
 import { ref, computed, onMounted } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
@@ -168,7 +173,7 @@ function goToMCPTools() {
       Sign in to fleet to enable cross-device settings sync.
       Go to Settings → Account to sign in.
     </div>
-    <div v-else-if="!capability('settings_sync')" class="text-sm text-ink-muted" data-testid="sync-pro-gate">
+    <div v-else-if="!capability('context_sync')" class="text-sm text-ink-muted" data-testid="sync-pro-gate">
       Cross-device sync requires a Pro+ subscription.
     </div>
 

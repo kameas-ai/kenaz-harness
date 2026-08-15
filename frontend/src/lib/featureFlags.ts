@@ -20,6 +20,11 @@
 
 import { computed, ref, type ComputedRef, type Ref } from 'vue';
 import type { AppInfo } from './types';
+import type { Capability } from './capability-keys';
+
+// Re-exported so call sites that need to name the type (tests, helpers that
+// take a key parameter) do not have to reach into the generated module.
+export type { Capability };
 
 // Module-level appInfo ref shared across all callers in the same Vue app.
 // Starts null (not yet fetched) and is updated via initFeatureFlags().
@@ -58,9 +63,15 @@ export const signedIn: ComputedRef<boolean> = computed(() => {
  * Returns false for missing keys, empty maps, signed-out state, or when
  * fleet is disabled. Never throws.
  *
+ * `key` is the generated `Capability` union (capability-keys.ts, emitted
+ * from `fleet.AllCapabilities()` and CI-gated by check-codegen.sh), not
+ * `string`. A key that is not a real wire value is a compile error rather
+ * than a gate that silently answers false forever — which is how
+ * SyncPanel shipped gating on the nonexistent `settings_sync`.
+ *
  * Usage in templates: `v-if="signedIn && capability('launcher_updates')"`
  */
-export function capability(key: string): boolean {
+export function capability(key: Capability): boolean {
   return _appInfo.value?.capabilities?.[key] === true;
 }
 
@@ -71,7 +82,7 @@ export function capability(key: string): boolean {
  */
 export function useFeatureFlags(): {
   signedIn: ComputedRef<boolean>;
-  capability: (key: string) => boolean;
+  capability: (key: Capability) => boolean;
   appInfo: Ref<AppInfo | null>;
 } {
   return { signedIn, capability, appInfo: _appInfo };
