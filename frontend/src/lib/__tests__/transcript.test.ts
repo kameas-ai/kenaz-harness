@@ -387,6 +387,63 @@ describe('countTurns — the long-session nudge input', () => {
 
 describe('projectTranscript — adversarial review follow-ups (WP04)', () => {
   /**
+   * The pre-existing "binds a result to its own call" case only pins the
+   * FORWARD direction (a later call's result must not land on an earlier
+   * chip). Mutation evidence: replacing chipKey's body with
+   * `${spanId}::` — i.e. binding to whichever call was registered last,
+   * ignoring the id entirely — survived the whole suite. It survives
+   * because the fixture never lets the EARLIER call resolve second,
+   * which is the ordering parallel dispatch actually produces half the
+   * time. This is that ordering.
+   */
+  it('an earlier call resolving LAST still binds to its own chip', () => {
+    const items = projectTranscript([
+      row({
+        id: 'c1',
+        role: 'tool',
+        kind: 'tool_call',
+        moveIndex: 0,
+        turnSpanId: SPAN,
+        toolCalls: [{ id: 'c1', name: 'read_file', argsSummary: '' }],
+      }),
+      row({
+        id: 'c2',
+        role: 'tool',
+        kind: 'tool_call',
+        moveIndex: 1,
+        turnSpanId: SPAN,
+        toolCalls: [{ id: 'c2', name: 'bash', argsSummary: '' }],
+      }),
+      // c2 answers first and failed; c1 answers second and succeeded.
+      row({
+        id: 'r2',
+        role: 'tool',
+        kind: 'tool_result',
+        moveIndex: 2,
+        turnSpanId: SPAN,
+        content: 'boom',
+        toolCalls: [{ id: 'c2', name: 'bash', argsSummary: '', isError: true }],
+      }),
+      row({
+        id: 'r1',
+        role: 'tool',
+        kind: 'tool_result',
+        moveIndex: 3,
+        turnSpanId: SPAN,
+        content: 'fine',
+        toolCalls: [{ id: 'c1', name: 'read_file', argsSummary: '' }],
+      }),
+    ]);
+    const trail = items[0];
+    if (trail.type !== 'trail') throw new Error('expected trail');
+    const chips = trail.steps.flatMap((s) => (s.type === 'tool' ? [s.chip] : []));
+    expect(chips.map((c) => [c.callId, c.status, c.output])).toEqual([
+      ['c1', 'ok', 'fine'],
+      ['c2', 'error', 'boom'],
+    ]);
+  });
+
+  /**
    * A folded tool_result keeps living in the store and in the FTS index,
    * so a search hit can deep-link to it. The chip is where it renders,
    * so the chip has to carry its row id or SessionsView's scroll-to
