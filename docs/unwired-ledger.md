@@ -103,10 +103,39 @@ them the transcript, all owned by WP05/WP06:
   gone, replaced by a names-and-types summary. That is a structural
   rule, not a redaction one, because `RedactValue` only walks top-level
   strings: a secret in a nested argument object or inside an array
-  sailed past it. Nothing in the package can reach
-  `session.Message.ModelLayerToolArgs`. A classic session's export is
-  unchanged in both formats, asserted by
-  `TestExport_ClassicSessionIsUnchangedByMoves`.
+  sailed past it (see the standalone finding below — that leak is
+  PRE-EXISTING, not something WP05 introduced).
+
+  Three corrections to WP05's first write-up of this row, from its
+  adversarial review, because each was stated more strongly than the
+  code supports:
+
+  - *"Nothing in the package can reach
+    `session.Message.ModelLayerToolArgs`"* — **false as written.** The
+    package imports `core/session` and the accessor is exported, so the
+    call compiles from here (verified by compiling one). What is true
+    is that no line calls it, the helpers are named apart so the wrong
+    one is not an autocomplete away, and **no gate enforces it** — a
+    future edit that added the read would pass CI. Convention, not
+    fence; the comment in `moves.go` now says so.
+  - *"A classic session's export is unchanged in both formats"* —
+    **true only for a classic session with no tool calls.** Verified
+    byte-for-byte against the base commit for that case. A classic
+    session WITH tool calls changes in both formats, deliberately: that
+    IS the security fix. Now pinned separately by
+    `TestExport_ClassicToolCallsLoseTheirRawArguments` so the
+    deliberate break cannot be misread as an accident.
+  - The removal of `tool_calls[].arguments` is **not additive**, and
+    `ExportFormatVersion` was left at 1 while its own doc comment says
+    to increment on a breaking shape change. Bumped to **2**. The rest
+    of WP05's JSON additions (`kind`, `turn_span_id`, `moves`,
+    `trajectory_only`) genuinely are additive and `omitempty`.
+
+  One hole the review found and closed: argument **names** are printed
+  by design, and `redactMessages` walks only argument VALUES, so a
+  credential sitting in an argument KEY went into both documents
+  verbatim. `argsSummaryFromValues` now runs `RedactValue` over the
+  name; pinned by `TestExport_RedactsArgumentNames`.
 
 Also open, and not a projection bug: on the **revised-draft** path the
 exit gate's revised text never streams, so the live view shows the draft
@@ -159,6 +188,81 @@ prose and in a TS union; they do not call `MoveKinds()`.
 ---
 
 ## Open — ungated findings
+
+### 2026-08-14 · `export.RedactValue` only walks TOP-LEVEL strings (pre-existing)
+
+**This predates the mission.** Recorded plainly rather than left inside a
+WP report, because it is a data-leak finding and a WP report is not where
+those go.
+
+`core/sessions/export/redact.go:127` `redactMessages` is the export's only
+credential scanner. For a tool call it does:
+
+```go
+for k, v := range tc.Arguments {
+    if sv, ok := v.(string); ok { redacted[k] = rv } else { redacted[k] = v }
+}
+```
+
+So a `map[string]any` or a `[]any` argument value is copied through
+UNSCANNED, and argument KEYS are never scanned at all. Before WP05 the
+export then printed those arguments verbatim — `formatToolArgs` as a
+markdown JSON block, `jsonToolCall.Arguments` as a JSON map.
+
+Reproduced against the base commit `8c8b63a9` with a throwaway probe:
+a secret at `arguments.headers.authorization`, one inside
+`arguments.body[1]`, and one used as a map KEY all reached both the
+`.md` and the `.json` file. Only the top-level string matching a
+credential pattern was replaced. Any session exported from a build
+before this fix may contain live credentials on disk.
+
+**Mitigated, not fixed.** WP05's structural rule — the export never
+prints an argument value — removes the reachable path, and
+`argsSummaryFromValues` now scans the NAME too. `RedactValue` itself is
+unchanged and is still a top-level-strings-only scanner; it is also
+still the only thing standing between a credential in a tool RESULT (or
+in message content) and the exported file, and a credential that matches
+no pattern in `builtinMatchers` is not caught anywhere. Verified: a
+credential-shaped secret in `ToolCall.Result` IS redacted; an
+arbitrary-looking secret in the same field is not.
+
+**Owner:** unassigned. The change that closes it is a recursive walk in
+`redactMessages` over `map[string]any` / `[]any` / keys, which is cheap;
+it stayed out of WP05 because WP05's fix was structural and widening a
+credential scanner mid-mission is its own review.
+
+### 2026-08-14 · FR-006's SHARE half is unimplemented (`Handoff_Share` sends nothing)
+
+WP05 reported that fleet share carries moves "by construction" because
+`Handoff_Share` transports EventLog records rather than `session_messages`
+rows. **That claim is false, and the export half of FR-006 is the only
+half that shipped.**
+
+- `core/rpc/views/contextsync/impl.go:151-160` calls
+  `Handoff.ShareSession(ctx, sessionID, recipientUserID, nil)` — a
+  literal `nil` event slice, with a comment deferring the real payload to
+  "the chassis path". There is no chassis-path caller; every other caller
+  of `ShareSession` is a test.
+- `core/fleet/team_handoff.go:112` then POSTs `"events": []`.
+- Even if the `nil` were replaced, the fleet event record could not carry
+  moves: `core/rpc/api.go:6198-6206` marshals
+  `{"id": …, "role": …}` and nothing else, deliberately — the wiring
+  comment at `core/rpc/api.go:2447` states no plaintext content crosses
+  that boundary. `core/fleet/session_sync.go:39-45`'s doc claiming the
+  record is "usually JSON of session.Message" is stale against that
+  producer.
+- `scripts/ci/check-fleet-log-export-fence.sh` constrains the OTel/slog
+  lane, not this one, so no gate sees the gap either way.
+
+So: `Handoff_Share` is a plumbed, contentless surface. Sharing a session
+transmits an encrypted envelope around an empty list — for classic
+sessions as much as move-bearing ones. FR-006's second sentence is not
+satisfied and cannot be satisfied by anything in the mission's diff.
+
+**Owner:** 01PMCH01 spec amendment or a fleet mission. Closing it needs a
+product decision first (what may cross the fleet boundary in plaintext),
+then a payload builder; it is not a WP-sized fix. **Do not** mark FR-006
+done on the strength of the export half.
 
 ### 2026-08-14 · A move cannot be multimodal (the hole WP05's deletion re-opened)
 
