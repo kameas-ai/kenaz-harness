@@ -170,6 +170,50 @@ model a capability, a comment asserting an invariant nothing enforces.
   proof in `scripts/ci/gates_can_fail_test.go`.
 - Allowlists shrink monotonically. Nothing gets added without a date.
 
+### Disposition: delete vs. finish
+
+"Unwired" is a finding, not a verdict. The sweep's job is to end the
+**lie** — a toggle that reports it is on, a tool advertised to the model
+that always fails, a docstring promising a route that does not exist. It
+is *not* to shrink the tree. A useful half-built feature deleted is a
+product decision made by a linter.
+
+**Delete** when the code has no future, and say which:
+
+- A **live substitute** does the same job (`ScopePicker` →
+  `AttachmentTreePicker`; the toast trio → `useEventToasts`).
+- A **documented product retirement** superseded it (corpora → contexts;
+  the update-dot → the Help menu, per `os-menu-bar-01NDFSEX16` §FR-006).
+- It is **rival infrastructure** — a second implementation of something
+  the app already does one way (`lib/slashcmd.ts`, `lib/useStream.ts`).
+- The **whole subsystem has no producer and no product intent**, and
+  nobody will claim it. Deleting the consumer half of a *wanted* feature
+  is the wrong call — it leaves the gap and destroys the tested work.
+
+**Spec it and finish it** when the feature is real:
+
+- The **backend is live and only the UI is missing** — the cheapest
+  possible win, and the strongest signal someone meant it (e.g.
+  `RecoveryCodeFlow`: RPCs registered, adapter assigned in production,
+  no other recovery surface exists).
+- It is the **only surface for a real capability** — deleting it removes
+  the capability from the product, not just from the tree.
+- It is **trust- or compliance-relevant** (consent, permissions,
+  denials, audit).
+- Its absence makes something else **lie** — a registered tool, a
+  docstring, a settings field with no writer.
+
+Finishing means a mission under `kitty-specs/`, not a drive-by mount.
+Mounting a panel whose Go knob is inert just moves the lie from the
+backend to the UI: wire the consumer first, in the same PR.
+
+**Escalate** when the call is genuinely product, not technical — two
+rival implementations where the weaker one ships, or a feature nobody
+can say is wanted. Record the question; do not resolve it by deleting.
+
+Every disposition names its class. "Deleted — no importers" is not a
+reason; "deleted — `AttachmentTreePicker` is the live substitute" is.
+
 ### Where the ledger lives
 
 `docs/unwired-ledger.md` — index of the gated findings (which allowlist
