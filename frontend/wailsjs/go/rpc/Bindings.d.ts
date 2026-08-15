@@ -21,7 +21,6 @@ import {contextbootstrap} from '../models';
 import {contextview} from '../models';
 import {contexts} from '../models';
 import {corpus} from '../models';
-import {dials} from '../models';
 import {elicit} from '../models';
 import {json} from '../models';
 import {agentgraph} from '../models';
@@ -187,8 +186,6 @@ export function CedarPolicy_RecentDecisions(arg1:number):Promise<Array<cedar.Dec
 
 export function CedarPolicy_ReloadPolicies():Promise<void>;
 
-export function CedarPolicy_ResolvePropose(arg1:string,arg2:string):Promise<void>;
-
 export function CedarPolicy_RevokeSnippet(arg1:string):Promise<void>;
 
 export function CedarPolicy_Save(arg1:string,arg2:string):Promise<cedarpolicy.ParseResult>;
@@ -298,14 +295,6 @@ export function Corpus_Retrieve(arg1:string,arg2:corpus.RetrieveRequest):Promise
 export function Diag_LogClientEvent(arg1:string,arg2:string,arg3:Record<string, any>):Promise<void>;
 
 export function Diag_LogPath():Promise<string>;
-
-export function Dials_BumpAndResume(arg1:string,arg2:dials.DialDelta):Promise<void>;
-
-export function Dials_Get(arg1:dials.ScopeKey):Promise<dials.DialConfig>;
-
-export function Dials_GetEffective(arg1:string,arg2:string,arg3:string,arg4:string):Promise<dials.EffectiveDials>;
-
-export function Dials_Set(arg1:dials.ScopeKey,arg2:dials.DialConfig):Promise<void>;
 
 export function Elicit_AnswerDeferred(arg1:string,arg2:any):Promise<string>;
 
