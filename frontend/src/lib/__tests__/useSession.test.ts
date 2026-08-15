@@ -173,7 +173,7 @@ describe('useSession (chat-ui)', () => {
     w.unmount();
   });
 
-  it('splices stream chunks into currentlyStreaming', async () => {
+  it('splices stream chunks into the in-flight move buffer', async () => {
     const { w, session } = mountWithSession({
       sessions: {
         list: async () => [],
@@ -210,8 +210,9 @@ describe('useSession (chat-ui)', () => {
       chunk: { kind: 'text', text: ', world' },
     });
     await nextTick();
-    expect(session.currentlyStreaming.value?.content).toBe('Hello, world');
-    expect(session.currentlyStreaming.value?.streaming).toBe(true);
+    expect(session.streamingMoves.value).toHaveLength(1);
+    expect(session.streamingMoves.value[0].content).toBe('Hello, world');
+    expect(session.streamingMoves.value[0].streaming).toBe(true);
     rt.emit('llm:stream-chunk', {
       sub_id: 'sub-x',
       session_id: 's-1',
@@ -224,7 +225,7 @@ describe('useSession (chat-ui)', () => {
       finish_reason: 'end_turn',
     });
     await nextTick();
-    expect(session.currentlyStreaming.value).toBeNull();
+    expect(session.streamingMoves.value).toHaveLength(0);
     expect(session.streamSubscriptionId.value).toBeNull();
     const last = session.messages.value[session.messages.value.length - 1];
     expect(last.content).toBe('Hello, world!');
@@ -343,7 +344,7 @@ describe('useSession (chat-ui)', () => {
     expect(assistantRows[0].content).toBe('partial reply');
     expect(assistantRows[0].streaming).toBe(false);
     expect(assistantRows[0].streamingError).toBe('transient provider error');
-    expect(session.currentlyStreaming.value).toBeNull();
+    expect(session.streamingMoves.value).toHaveLength(0);
     expect(session.error.value).toBe('transient provider error');
     w.unmount();
   });
@@ -432,7 +433,7 @@ describe('useSession (chat-ui)', () => {
     await nextTick();
     const assistantRows = session.messages.value.filter((m) => m.role === 'assistant');
     expect(assistantRows).toHaveLength(0);
-    expect(session.currentlyStreaming.value).toBeNull();
+    expect(session.streamingMoves.value).toHaveLength(0);
     w.unmount();
   });
 

@@ -133,19 +133,36 @@ func (j *turnJournal) records() bool {
 
 // ---- allocation ---------------------------------------------------------
 
+// moveDetail carries the facts a boundary needs beyond its kind and
+// position. Empty for an assistant segment; a tool boundary fills it so
+// the chat surface can render the chip live, without waiting for the
+// persisted row (model-moves-transcript-01PMCH01 WP04).
+//
+// argsSummary is the DISPLAY-LAYER summary — the same string the
+// tool_call entry persists as its Content. Raw arguments never enter
+// this struct; see RecordToolCall's redaction note.
+type moveDetail struct {
+	toolName    string
+	toolCallID  string
+	argsSummary string
+	isError     bool
+}
+
 // allocate reserves the next move position and announces it on the
 // stream. Caller holds j.mu, which is what keeps boundary order and
 // persisted order identical.
-func (j *turnJournal) allocate(kind, toolName, toolCallID string) int {
+func (j *turnJournal) allocate(kind string, d moveDetail) int {
 	idx := j.nextIndex
 	j.nextIndex++
 	if j.emit != nil {
 		j.emit(coreag.StreamEvent{
-			Kind:      coreag.StreamEventMoveStart,
-			MoveIndex: idx,
-			MoveKind:  kind,
-			ToolName:  toolName,
-			ToolID:    toolCallID,
+			Kind:            coreag.StreamEventMoveStart,
+			MoveIndex:       idx,
+			MoveKind:        kind,
+			ToolName:        d.toolName,
+			ToolID:          d.toolCallID,
+			MoveArgsSummary: d.argsSummary,
+			MoveIsError:     d.isError,
 		})
 	}
 	return idx
@@ -202,7 +219,7 @@ func (j *turnJournal) OpenAssistantSegment() {
 	if j.openIdx >= 0 {
 		return
 	}
-	j.openIdx = j.allocate(moveKindAssistantMove, "", "")
+	j.openIdx = j.allocate(moveKindAssistantMove, moveDetail{})
 }
 
 // RecordAssistantMove parks one completed model fire's text. Called by
@@ -235,7 +252,7 @@ func (j *turnJournal) RecordAssistantMove(ctx context.Context, text string) {
 		// No delta ever arrived (a non-streaming provider, or a provider
 		// that returned the whole body in the final response). Announce
 		// the boundary now so the 1:1 rule holds unconditionally.
-		idx = j.allocate(moveKindAssistantMove, "", "")
+		idx = j.allocate(moveKindAssistantMove, moveDetail{})
 	}
 	j.held, j.heldIdx, j.heldLive = text, idx, true
 }
@@ -257,10 +274,15 @@ func (j *turnJournal) RecordToolCall(ctx context.Context, call coreag.ToolCall) 
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.flushHeld(ctx)
-	idx := j.allocate(moveKindToolCall, call.Name, call.ID)
+	summary := displayArgsSummary(call.Name, call.Args)
+	idx := j.allocate(moveKindToolCall, moveDetail{
+		toolName:    call.Name,
+		toolCallID:  call.ID,
+		argsSummary: summary,
+	})
 	j.persist(ctx, coreag.HistoryEntry{
 		Role:       "tool",
-		Content:    displayArgsSummary(call.Name, call.Args),
+		Content:    summary,
 		MoveKind:   moveKindToolCall,
 		MoveIndex:  idx,
 		TurnSpanID: j.spanID,
@@ -280,14 +302,20 @@ func (j *turnJournal) RecordToolResult(ctx context.Context, call coreag.ToolCall
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.flushHeld(ctx)
-	idx := j.allocate(moveKindToolResult, call.Name, call.ID)
+	idx := j.allocate(moveKindToolResult, moveDetail{
+		toolName:   call.Name,
+		toolCallID: call.ID,
+		isError:    result.IsError,
+	})
 	j.persist(ctx, coreag.HistoryEntry{
 		Role:       "tool",
 		Content:    result.Content,
 		MoveKind:   moveKindToolResult,
 		MoveIndex:  idx,
 		TurnSpanID: j.spanID,
-		ToolCalls:  []coreag.ToolCallRequest{{ID: call.ID, Name: call.Name}},
+		ToolCalls: []coreag.ToolCallRequest{
+			{ID: call.ID, Name: call.Name, IsError: result.IsError},
+		},
 	})
 }
 
@@ -344,7 +372,7 @@ func (j *turnJournal) AppendEntry(ctx context.Context, sessionID string,
 		idx = j.heldIdx
 	} else {
 		j.flushHeld(ctx)
-		idx = j.allocate(moveKindFinal, "", "")
+		idx = j.allocate(moveKindFinal, moveDetail{})
 	}
 	j.mu.Unlock()
 
@@ -403,7 +431,7 @@ func (j *turnJournal) RecordPartial(ctx context.Context, text string) {
 		j.flushHeld(ctx)
 	}
 	if idx < 0 {
-		idx = j.allocate(moveKindAssistantMove, "", "")
+		idx = j.allocate(moveKindAssistantMove, moveDetail{})
 	}
 	j.persist(ctx, coreag.HistoryEntry{
 		Role:       "assistant",
@@ -427,14 +455,23 @@ func (j *turnJournal) RecordSyntheticToolResult(ctx context.Context,
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.flushHeld(ctx)
-	idx := j.allocate(moveKindToolResult, call.Name, call.ID)
+	// isError is unconditionally true here: this path exists only to
+	// close a tool_use the interrupt cancelled, and a cancelled call did
+	// not succeed. The chip must say so on reload exactly as it did live.
+	idx := j.allocate(moveKindToolResult, moveDetail{
+		toolName:   call.Name,
+		toolCallID: call.ID,
+		isError:    true,
+	})
 	j.persist(ctx, coreag.HistoryEntry{
 		Role:       "tool",
 		Content:    content,
 		MoveKind:   moveKindToolResult,
 		MoveIndex:  idx,
 		TurnSpanID: j.spanID,
-		ToolCalls:  []coreag.ToolCallRequest{{ID: call.ID, Name: call.Name}},
+		ToolCalls: []coreag.ToolCallRequest{
+			{ID: call.ID, Name: call.Name, IsError: true},
+		},
 	})
 }
 

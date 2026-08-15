@@ -557,6 +557,7 @@ func messageToView(m session.Message) Message {
 				Name:        tc.Name,
 				ArgsSummary: "",
 				UsedSecrets: tc.UsedSecrets,
+				IsError:     tc.IsError,
 			})
 		}
 	}

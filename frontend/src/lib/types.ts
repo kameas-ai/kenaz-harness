@@ -1162,6 +1162,15 @@ export interface ToolCall {
    * chat UI.
    */
   usedSecrets?: boolean;
+  /**
+   * Set on the `tool_result` move whose call failed — either the tool
+   * returned an error result or the dispatch itself did
+   * (model-moves-transcript-01PMCH01 WP04). It is the durable half of
+   * the inline tool chip's running→ok/error transition; the live half is
+   * `is_error` on the stream's move boundary. Absent on every classic
+   * row and on every `tool_call`.
+   */
+  isError?: boolean;
 }
 
 export interface Message {

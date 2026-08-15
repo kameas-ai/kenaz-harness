@@ -49,6 +49,7 @@ import { useArtifacts, useHarnessClient, useSessions } from '@/lib/useHarnessAPI
 import { useSession } from '@/lib/useSession';
 import { useEventStream } from '@/lib/useEventStream';
 import { useLongSessionNudge } from '@/lib/useLongSessionNudge';
+import { countTurns } from '@/lib/transcript';
 import { usePlanMode } from '@/lib/planmode';
 import type {
   Artifact,
@@ -445,7 +446,7 @@ const isStreaming = computed(
 const isWaitingForFirstChunk = computed(
   () =>
     session.streamSubscriptionId.value !== null &&
-    session.currentlyStreaming.value === null,
+    session.streamingMoves.value.length === 0,
 );
 
 // Per-model context window — sourced from the backend's curated
@@ -1195,11 +1196,14 @@ function formatSize(bytes: number): string {
 // Reset the composable when the session changes so crossing thresholds in
 // a previous session doesn't immediately re-trigger the banner.
 
-const _nudgeMessageCount = computed(() => visibleMessages.value.length);
+// One turn is one human message — not one row. See countTurns'
+// docstring for why the row count it replaced was wrong
+// (model-moves-transcript-01PMCH01 WP04).
+const _nudgeTurnCount = computed(() => countTurns(visibleMessages.value));
 const _nudgePromptTokens = computed(() => session.lastUsage.value?.promptTokens ?? 0);
 
 const longSessionNudge = useLongSessionNudge({
-  messageCount: _nudgeMessageCount,
+  turnCount: _nudgeTurnCount,
   promptTokens: _nudgePromptTokens,
 });
 
@@ -1675,7 +1679,7 @@ async function onShared() {
         >
           <MessageList
             :messages="visibleMessages"
-            :streaming-message="session.currentlyStreaming.value"
+            :streaming-messages="session.streamingMoves.value"
             :waiting="isWaitingForFirstChunk"
             :error-message="session.error.value"
             :error-kind="session.errorKind.value"

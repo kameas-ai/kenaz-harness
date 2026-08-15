@@ -344,10 +344,12 @@ func translateAGStreamEvent(ev coreag.StreamEvent) corellm.StreamEvent {
 	if ev.Kind == coreag.StreamEventMoveStart {
 		out.Kind = corellm.StreamMoveStart
 		out.Move = &corellm.MoveBoundary{
-			Index:      ev.MoveIndex,
-			Kind:       ev.MoveKind,
-			ToolName:   ev.ToolName,
-			ToolCallID: ev.ToolID,
+			Index:       ev.MoveIndex,
+			Kind:        ev.MoveKind,
+			ToolName:    ev.ToolName,
+			ToolCallID:  ev.ToolID,
+			ArgsSummary: ev.MoveArgsSummary,
+			IsError:     ev.MoveIsError,
 		}
 		return out
 	}

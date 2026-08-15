@@ -6502,6 +6502,7 @@ export namespace sessions {
 	    argsSummary: string;
 	    latency?: string;
 	    usedSecrets?: boolean;
+	    isError?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new ToolCall(source);
@@ -6514,6 +6515,7 @@ export namespace sessions {
 	        this.argsSummary = source["argsSummary"];
 	        this.latency = source["latency"];
 	        this.usedSecrets = source["usedSecrets"];
+	        this.isError = source["isError"];
 	    }
 	}
 	export class Message {

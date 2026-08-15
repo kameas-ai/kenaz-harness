@@ -1,8 +1,18 @@
 /**
  * useSession — composable that loads + caches a single session, listens
  * for `sessions:event` updates routed via the message_appended emitter,
- * exposes the message list + an in-flight assistant placeholder, and
- * persists the input draft on a 400ms debounce via `client.sessions.saveDraft`.
+ * exposes the message list + the in-flight turn's moves, and persists
+ * the input draft on a 400ms debounce via `client.sessions.saveDraft`.
+ *
+ * MOVES (model-moves-transcript-01PMCH01 WP04). One human turn drives
+ * many model iterations. The stream announces each with a `move_start`
+ * boundary carrying the same 0-based index the persisted row will carry,
+ * and this composable materialises each as its own in-flight `Message`.
+ * The single buffer that used to accumulate `existing.content + delta`
+ * across a whole turn — and so rendered three distinct model moves as
+ * one run-on paragraph (spec §1) — is gone, not gated: a stream that
+ * announces no boundary still produces exactly one bubble, because that
+ * is what one segment looks like, not because a flag says so.
  *
  * The composable is route-driven: `id` is a Ref so a navigation from
  * `#/sessions#sess-a` to `#/sessions#sess-b` reloads transparently.
@@ -92,8 +102,19 @@ export interface UseSessionResult {
    * surface renders different copy and a different CTA. null otherwise.
    */
   errorKind: Ref<string | null>;
-  /** The current in-flight assistant message, or null. */
-  currentlyStreaming: Ref<Message | null>;
+  /**
+   * The in-flight turn's moves, oldest first — empty when no stream is
+   * open (model-moves-transcript-01PMCH01 WP04).
+   *
+   * Each entry is already shaped as the transcript row it will become:
+   * same `kind`, same `moveIndex`, same `toolCalls`. The chat surface
+   * concatenates them onto the persisted list and runs ONE projection
+   * over the result, so what you watch and what you reload are the same
+   * render (FR-003). A stream that never announces a move boundary —
+   * every pre-mission code path — produces exactly one kind-less entry
+   * here, which is byte-for-byte the old single-buffer behaviour.
+   */
+  streamingMoves: Ref<readonly Message[]>;
   /** Active subscription id from `client.llm.startStream`, or null. */
   streamSubscriptionId: Ref<string | null>;
   /** True if the surface should warn the user a stream never started. */
@@ -188,7 +209,15 @@ export function useSession(id: Ref<string>): UseSessionResult {
    * it. null for every ordinary error.
    */
   const errorKind = ref<string | null>(null);
-  const currentlyStreaming = ref<Message | null>(null);
+  const streamingMoves = shallowRef<readonly Message[]>([]);
+  /**
+   * Position of the assistant move currently receiving text deltas
+   * within `streamingMoves`, or -1 when none is open. A move boundary
+   * closes the open segment; the next boundary opens the next one.
+   * THIS is what replaced the unconditional `existing.content + delta`
+   * concatenation that glued a whole turn into one run-on paragraph.
+   */
+  let openMoveSlot = -1;
   const streamSubscriptionId = ref<string | null>(null);
   const streamingTimedOut = ref(false);
   const draft = ref("");
@@ -341,6 +370,23 @@ export function useSession(id: Ref<string>): UseSessionResult {
   // Wire-shape payload from core/rpc/views/llm.StreamChunkPayload:
   //   { sub_id, session_id, chunk: StreamEvent }
   // where StreamEvent = { kind, text?, tool?, reasoning?, finish?, err? }.
+  /**
+   * WireMoveBoundary mirrors core/llm.MoveBoundary — the payload of a
+   * `move_start` chunk (model-moves-transcript-01PMCH01 WP02/WP04).
+   *
+   * `kind` is a RENDERING HINT, not the persisted kind: a streamed
+   * segment always announces "assistant_move" even when the turn will
+   * persist its last one as "final". Everything downstream therefore
+   * reconciles on `index` — see lib/transcript.ts.
+   */
+  type WireMoveBoundary = {
+    index?: number;
+    kind?: string;
+    tool_name?: string;
+    tool_call_id?: string;
+    args_summary?: string;
+    is_error?: boolean;
+  };
   type WireChunk = {
     sub_id?: string;
     session_id?: string;
@@ -349,6 +395,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
       text?: string;
       finish?: string;
       err?: string;
+      move?: WireMoveBoundary;
     };
   };
   type WireClosed = {
@@ -369,8 +416,150 @@ export function useSession(id: Ref<string>): UseSessionResult {
     error_kind?: string;
   };
 
-  // Subscribe to streaming chunks. Splice text deltas into
-  // currentlyStreaming; surface errors via error.value.
+  /**
+   * The turn span id stamped on in-flight moves. The stream announces a
+   * move's position but not the id of the user message that opened the
+   * turn, so live rows carry a per-stream key instead. It only has to
+   * group this turn's moves together and separate them from every other
+   * turn's — which it does — and a reload replaces these rows with the
+   * server's, carrying the durable span. The projection's output is the
+   * same either way.
+   */
+  function liveSpanID(subID: string): string {
+    return `live:${subID}`;
+  }
+
+  /**
+   * appendMoveBoundary opens the next move of the in-flight turn.
+   *
+   * This is the consumer the WP02 ledger entry named: a boundary
+   * CLOSES the segment currently receiving deltas and starts a new row,
+   * which is what stops a turn's segments gluing into one paragraph.
+   */
+  function appendMoveBoundary(subID: string, mv: WireMoveBoundary) {
+    const index = mv.index ?? 0;
+    const rowID = `streaming-${subID}-${index}`;
+    const common = {
+      id: rowID,
+      sessionId: id.value,
+      createdAt: new Date().toISOString(),
+      moveIndex: index,
+      turnSpanId: liveSpanID(subID),
+    };
+
+    if (mv.kind === "tool_call" || mv.kind === "tool_result") {
+      const isResult = mv.kind === "tool_result";
+      const summary = mv.args_summary ?? "";
+      const row: Message = {
+        ...common,
+        role: "tool",
+        // The tool_call row's content is the args SUMMARY, exactly as
+        // the persisted row carries it. Raw arguments are not on this
+        // wire at all. A tool_result carries its output only on the
+        // persisted row — the stream announces boundaries, it is not a
+        // channel for unbounded tool output.
+        content: isResult ? "" : summary,
+        kind: mv.kind,
+        toolCalls: [
+          {
+            id: mv.tool_call_id ?? "",
+            name: mv.tool_name ?? "",
+            argsSummary: isResult ? "" : summary,
+            ...(isResult ? { isError: mv.is_error === true } : {}),
+          },
+        ],
+      };
+      openMoveSlot = -1;
+      streamingMoves.value = [...streamingMoves.value, row];
+      return;
+    }
+
+    // An assistant segment. Announced BEFORE its first token, per the
+    // MoveBoundary contract, so the bubble exists to receive them.
+    const row: Message = {
+      ...common,
+      role: "assistant",
+      content: "",
+      kind: "assistant_move",
+      streaming: true,
+    };
+    const next = [...streamingMoves.value, row];
+    openMoveSlot = next.length - 1;
+    streamingMoves.value = next;
+  }
+
+  /** appendDelta routes one text delta into the open move. */
+  function appendDelta(subID: string, delta: string) {
+    const rows = streamingMoves.value;
+    if (openMoveSlot >= 0 && openMoveSlot < rows.length) {
+      const target = rows[openMoveSlot];
+      const next = rows.slice();
+      next[openMoveSlot] = { ...target, content: target.content + delta };
+      streamingMoves.value = next;
+      return;
+    }
+    // No segment is open. Fall back to the newest assistant row: a delta
+    // that arrived without its boundary belongs to the most recent
+    // segment, and inventing a move index for it would break the
+    // index-based reconciliation with the persisted rows.
+    for (let i = rows.length - 1; i >= 0; i--) {
+      if (rows[i].role !== "assistant") continue;
+      const next = rows.slice();
+      next[i] = { ...rows[i], content: rows[i].content + delta };
+      openMoveSlot = i;
+      streamingMoves.value = next;
+      return;
+    }
+    // Nothing at all yet: a stream with no move boundaries — every
+    // pre-mission path. One kind-less bubble that grows delta by delta,
+    // which is precisely the behaviour this surface had before WP04 and
+    // renders through the projection's classic branch untouched.
+    const row: Message = {
+      id: `streaming-${subID}`,
+      sessionId: id.value,
+      role: "assistant",
+      content: delta,
+      createdAt: new Date().toISOString(),
+      streaming: true,
+    };
+    openMoveSlot = rows.length;
+    streamingMoves.value = [...rows, row];
+  }
+
+  /**
+   * commitStreamingMoves lands the in-flight moves in `messages` and
+   * clears the buffer. `failure` non-null stamps the partial-output
+   * marker on the LAST move — the only one the drop actually truncated.
+   *
+   * Empty assistant rows are dropped: a boundary whose fire produced
+   * only tool calls opened no visible segment.
+   */
+  function commitStreamingMoves(failure: string | null) {
+    const rows = streamingMoves.value;
+    streamingMoves.value = [];
+    openMoveSlot = -1;
+    if (rows.length === 0) return;
+    const keep = rows.filter(
+      (m) => m.role !== "assistant" || m.content.length > 0,
+    );
+    if (keep.length === 0) return;
+    const existing = new Set(messages.value.map((m) => m.id));
+    const committed: Message[] = [];
+    keep.forEach((m, i) => {
+      if (existing.has(m.id)) return;
+      const last = i === keep.length - 1;
+      committed.push(
+        failure !== null && last
+          ? { ...m, streaming: false, streamingError: failure }
+          : { ...m, streaming: false },
+      );
+    });
+    if (committed.length === 0) return;
+    messages.value = [...messages.value, ...committed];
+  }
+
+  // Subscribe to streaming chunks. Route move boundaries + text deltas
+  // into streamingMoves; surface errors via error.value.
   useEventStream<WireChunk>("llm:stream-chunk", (payload) => {
     if (!payload || !payload.chunk) return;
     if (payload.session_id && payload.session_id !== id.value) return;
@@ -386,25 +575,14 @@ export function useSession(id: Ref<string>): UseSessionResult {
     const ev = payload.chunk;
     const subID = payload.sub_id ?? streamSubscriptionId.value ?? "sub";
     switch (ev.kind) {
+      case "move_start": {
+        appendMoveBoundary(subID, ev.move ?? {});
+        return;
+      }
       case "text": {
         const delta = ev.text ?? "";
         if (!delta) return;
-        const existing = currentlyStreaming.value;
-        if (!existing) {
-          currentlyStreaming.value = {
-            id: `streaming-${subID}`,
-            sessionId: id.value,
-            role: "assistant",
-            content: delta,
-            createdAt: new Date().toISOString(),
-            streaming: true,
-          };
-        } else {
-          currentlyStreaming.value = {
-            ...existing,
-            content: existing.content + delta,
-          };
-        }
+        appendDelta(subID, delta);
         return;
       }
       case "error": {
@@ -413,18 +591,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
         // error so the user's bubble persists with a "Connection lost"
         // sub-line. Dedupe by id — the subsequent stream-closed handler
         // would otherwise re-append the same row.
-        const partial = currentlyStreaming.value;
-        if (partial && partial.content.length > 0) {
-          const already = messages.value.some((x) => x.id === partial.id);
-          if (!already) {
-            const committed: Message = {
-              ...partial,
-              streaming: false,
-              streamingError: ev.err || "stream error",
-            };
-            messages.value = [...messages.value, committed];
-          }
-        }
+        commitStreamingMoves(ev.err || "stream error");
         if (ev.err) error.value = ev.err;
         return;
       }
@@ -450,26 +617,15 @@ export function useSession(id: Ref<string>): UseSessionResult {
       return;
     }
     clearStreamTimeout();
-    const finished = currentlyStreaming.value;
-    if (finished) {
-      // long-turn-resilience WP00: commit the partial buffer regardless
-      // of `reason`. Previously only `completed` would commit; any other
-      // reason silently dropped the bubble. Dedupe against the case-error
-      // path which may have already committed under the same stable id.
-      const already = messages.value.some((x) => x.id === finished.id);
-      if (!already) {
-        const isCompleted = payload.reason === "completed";
-        const committed: Message = isCompleted
-          ? { ...finished, streaming: false }
-          : {
-              ...finished,
-              streaming: false,
-              streamingError: payload.reason || "closed-without-finish",
-            };
-        messages.value = [...messages.value, committed];
-      }
-    }
-    currentlyStreaming.value = null;
+    // long-turn-resilience WP00: commit the partial buffer regardless of
+    // `reason`. Previously only `completed` would commit; any other
+    // reason silently dropped the bubble. Dedupes against the case-error
+    // path, which may already have committed under the same stable ids.
+    commitStreamingMoves(
+      payload.reason === "completed"
+        ? null
+        : payload.reason || "closed-without-finish",
+    );
     streamSubscriptionId.value = null;
     if (payload.reason === "backend-error" && payload.message) {
       error.value = payload.message;
@@ -596,7 +752,10 @@ export function useSession(id: Ref<string>): UseSessionResult {
         sub_id: subId,
       });
       streamTimeoutHandle = setTimeout(() => {
-        if (streamSubscriptionId.value === subId && !currentlyStreaming.value) {
+        if (
+          streamSubscriptionId.value === subId &&
+          streamingMoves.value.length === 0
+        ) {
           streamingTimedOut.value = true;
           logEvent("warn", "send.stream_timed_out", {
             session_id: sid,
@@ -656,7 +815,10 @@ export function useSession(id: Ref<string>): UseSessionResult {
         sub_id: subId,
       });
       streamTimeoutHandle = setTimeout(() => {
-        if (streamSubscriptionId.value === subId && !currentlyStreaming.value) {
+        if (
+          streamSubscriptionId.value === subId &&
+          streamingMoves.value.length === 0
+        ) {
           streamingTimedOut.value = true;
           logEvent("warn", "send.stream_timed_out", {
             session_id: sid,
@@ -688,12 +850,9 @@ export function useSession(id: Ref<string>): UseSessionResult {
     } finally {
       clearStreamTimeout();
       streamSubscriptionId.value = null;
-      const finished = currentlyStreaming.value;
-      if (finished) {
-        const committed: Message = { ...finished, streaming: false };
-        messages.value = [...messages.value, committed];
-      }
-      currentlyStreaming.value = null;
+      // A cancel is a clean stop, not a drop: the moves the user already
+      // watched stay, unmarked.
+      commitStreamingMoves(null);
     }
   }
 
@@ -719,7 +878,8 @@ export function useSession(id: Ref<string>): UseSessionResult {
   watch(
     id,
     (next) => {
-      currentlyStreaming.value = null;
+      streamingMoves.value = [];
+      openMoveSlot = -1;
       streamSubscriptionId.value = null;
       streamingTimedOut.value = false;
       lastUsage.value = null;
@@ -777,7 +937,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
     loading,
     error,
     errorKind,
-    currentlyStreaming,
+    streamingMoves,
     streamSubscriptionId,
     streamingTimedOut,
     draft,
