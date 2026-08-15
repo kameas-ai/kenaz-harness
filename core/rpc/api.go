@@ -85,7 +85,6 @@ import (
 	contextsyncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextsync"
 	contextview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextview"
 	corpusview "github.com/kameas-ai/kenaz-harness/core/rpc/views/corpus"
-	dialsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/dials"
 	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
 	fleetview "github.com/kameas-ai/kenaz-harness/core/rpc/views/fleet"
 	hooksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/hooks"
@@ -200,7 +199,6 @@ type HarnessAPI interface {
 	// Resolves modal decisions from the four prompt topics, lists
 	// accumulated grants, and revokes them.
 	Permissions() permissionsview.PermissionsAPI
-	Dials() dialsview.DialsAPI
 	Nodes() nodesview.NodesAPI
 	Search() searchview.SearchAPI
 	// Update is the auto-update view (mission auto-update, v0.4.0 WP03).
@@ -214,11 +212,6 @@ type HarnessAPI interface {
 	// id_mismatch entries. Wired when a real Core (storage.DB) is
 	// available; otherwise returns ErrStorageUnavailable on every call.
 	Storage() storageview.StorageAPI
-	// CedarProposeResolve delivers a user decision (accept | reject)
-	// for a pending cedar-policy proposal surfaced by CedarProposeModal
-	// (harness-self-mcp-onboarding-01KQ8TDU WP07). requestID comes in on
-	// the "cedar:propose-pending" broker topic.
-	CedarProposeResolve(requestID, decision string) error
 
 	// Onboarding exposes the first-run onboarding RPC surface (mission
 	// harness-self-mcp-onboarding-01KQ8TDU WP08). The frontend's
@@ -472,13 +465,6 @@ type API struct {
 	// Read once at boot (custom-openai-compatible-endpoint-01KQ8VN0 WP08).
 	customOpenAIEnabled bool
 
-	// cedarProposeResolver is the in-process resolver for pending
-	// cedar:propose-pending requests (WP07 of
-	// harness-self-mcp-onboarding-01KQ8TDU). Set by the onboarding
-	// flow when it wires a CedarProposerImpl; nil falls back to a
-	// stub that returns ErrCedarProposeNotWired.
-	cedarProposeResolver CedarProposeResolver
-
 	// permissionsAPI is the universal interactive-permission RPC
 	// surface (mission cedar-credential-policy-01KQ8TDE, WP02). Backed
 	// by the process-singleton *cedar.Registry below, which HAS
@@ -498,7 +484,6 @@ type API struct {
 	// gate, etc.) can pass it into their gate constructors without
 	// re-plumbing through api.New.
 	promptRegistry *cedar.Registry
-	dialsAPI       dialsview.DialsAPI
 	searchAPI      searchview.SearchAPI
 	storageAPI     storageview.StorageAPI
 	// memStoreRef is the long-term memory store held for the search adapter
@@ -1719,11 +1704,6 @@ func New(c *core.Core, opts ...Option) *API {
 	// Agent-graph view surface — graph manager already built above so
 	// the chat-migration ChatRunner could share its kernel.
 	a.graphAPI = graphview.New(a.graphMgr)
-
-	// Cascading dials (Bundle E WP17). The view degrades to in-memory-
-	// only when no kernel resumer is wired — the chassis still boots
-	// and BumpAndResume returns ErrNoPause until a kernel binds.
-	a.dialsAPI = dialsview.New(dialsview.Config{})
 
 	// Workflows subsystem (mission workflows-01KQ8TDG, v0.3.0 beta).
 	// Loads embedded builtin/*.yaml at boot; HARNESS_WORKFLOWS=off
@@ -6580,30 +6560,6 @@ func (a *API) CedarPolicy() cedarpolicyview.CedarPolicyAPI {
 	return a.cedarPolicyAPI
 }
 
-// CedarProposeResolver is the narrow surface the Bindings layer calls to
-// resolve an in-flight cedar:propose-pending request from the frontend
-// CedarProposeModal (harness-self-mcp-onboarding-01KQ8TDU WP07).
-//
-// In production it is satisfied by *harness.CedarProposerImpl.
-// decision is one of: "accept" | "reject".
-type CedarProposeResolver interface {
-	ResolveProposeRequestRaw(id, decision string) error
-}
-
-// ErrCedarProposeNotWired is returned by CedarProposeResolve when no
-// CedarProposerImpl has been wired into the API.
-var ErrCedarProposeNotWired = errors.New("cedar: propose resolver not wired; no onboarding session active")
-
-// CedarProposeResolve delivers a user decision (accept | reject) to the
-// in-flight propose-pending request identified by requestID. The
-// Bindings layer calls this via CedarPolicy_ResolvePropose (WP07).
-func (a *API) CedarProposeResolve(requestID, decision string) error {
-	if a == nil || a.cedarProposeResolver == nil {
-		return ErrCedarProposeNotWired
-	}
-	return a.cedarProposeResolver.ResolveProposeRequestRaw(requestID, decision)
-}
-
 // Onboarding returns the first-run onboarding view surface (mission
 // harness-self-mcp-onboarding-01KQ8TDU WP08). Always non-nil; the
 // zero-config stub returns safe defaults when the chassis has no core.
@@ -6693,15 +6649,6 @@ func (a *API) Planmode_Edit(ctx context.Context, req planmodeview.EditRequest) (
 	return a.planmodeAPI.Edit(ctx, req)
 }
 
-// SetCedarProposeResolver wires a resolver at runtime. Called by the
-// onboarding flow when it creates a CedarProposerImpl (WP07).
-func (a *API) SetCedarProposeResolver(r CedarProposeResolver) {
-	if a == nil {
-		return
-	}
-	a.cedarProposeResolver = r
-}
-
 // Permissions returns the universal interactive-permission view surface
 // (mission cedar-credential-policy-01KQ8TDE, WP02). When the chassis
 // has not wired a registry (test harness path with New(nil)), a stub
@@ -6723,12 +6670,6 @@ func (a *API) Memory() memoryview.MemoryAPI {
 		return &stubMemory{}
 	}
 	return a.memoryAPI
-}
-func (a *API) Dials() dialsview.DialsAPI {
-	if a.dialsAPI == nil {
-		return &stubDials{}
-	}
-	return a.dialsAPI
 }
 func (a *API) Hooks() hooksview.HooksAPI {
 	if a.hooksAPI == nil {

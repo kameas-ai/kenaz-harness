@@ -35,7 +35,6 @@ import (
 	contextsyncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextsync"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/contextview"
 	corpusview "github.com/kameas-ai/kenaz-harness/core/rpc/views/corpus"
-	dialsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/dials"
 	confirmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/confirm"
 	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
 	fleetview "github.com/kameas-ai/kenaz-harness/core/rpc/views/fleet"
@@ -1788,28 +1787,6 @@ func (b *Bindings) Memory_GetChunkProvenance(chunkID string) (memoryview.ChunkPr
 	return b.api.Memory().GetChunkProvenance(b.ctx(), chunkID)
 }
 
-// ── dials (Bundle E WP17) ──────────────────────────────────────────────
-
-func (b *Bindings) Dials_Get(key dialsview.ScopeKey) (dialsview.DialConfig, error) {
-	defer sentry.WrapBinding("Dials_Get")()
-	return b.api.Dials().GetDials(b.ctx(), key)
-}
-
-func (b *Bindings) Dials_Set(key dialsview.ScopeKey, cfg dialsview.DialConfig) error {
-	defer sentry.WrapBinding("Dials_Set")()
-	return b.api.Dials().SetDials(b.ctx(), key, cfg)
-}
-
-func (b *Bindings) Dials_GetEffective(projectID, sessionID, graphID, runID string) (dialsview.EffectiveDials, error) {
-	defer sentry.WrapBinding("Dials_GetEffective")()
-	return b.api.Dials().GetEffective(b.ctx(), projectID, sessionID, graphID, runID)
-}
-
-func (b *Bindings) Dials_BumpAndResume(runID string, delta dialsview.DialDelta) error {
-	defer sentry.WrapBinding("Dials_BumpAndResume")()
-	return b.api.Dials().BumpAndResume(b.ctx(), runID, delta)
-}
-
 // ── projects ───────────────────────────────────────────────────────────
 
 func (b *Bindings) Projects_List() ([]projectsview.Project, error) {
@@ -2640,14 +2617,6 @@ func (b *Bindings) CedarPolicy_WriteSnippet(name string, body string) error {
 func (b *Bindings) CedarPolicy_RevokeSnippet(name string) error {
 	defer sentry.WrapBinding("CedarPolicy_RevokeSnippet")()
 	return b.api.CedarPolicy().RevokePolicySnippet(b.ctx(), name)
-}
-
-// CedarPolicy_ResolvePropose delivers a user decision (accept | reject)
-// for a pending cedar-policy proposal surfaced by the CedarProposeModal.
-// requestID came in on the "cedar:propose-pending" broker topic.
-func (b *Bindings) CedarPolicy_ResolvePropose(requestID string, decision string) error {
-	defer sentry.WrapBinding("CedarPolicy_ResolvePropose")()
-	return b.api.CedarProposeResolve(requestID, decision)
 }
 
 // ── cedarpolicy editor (cedar-policy-editor-ui-01KQ8TD6 WP01) ────────────

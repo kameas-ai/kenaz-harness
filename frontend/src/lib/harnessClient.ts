@@ -65,10 +65,6 @@ import type {
   MemoryHealthSnapshot,
   MemoryCaptureRateSnapshot,
   MemoryEmbedderEligibility,
-  DialConfig,
-  DialDelta,
-  DialEffectiveDials,
-  DialScopeKey,
   Hook,
   BuiltinDescriptor,
   DryRunResult,
@@ -549,16 +545,6 @@ interface WailsBindingsLike {
   Memory_ResummarizeChunk(chunkID: string): Promise<MemoryChunk>;
   Memory_GetChunkProvenance(chunkID: string): Promise<ChunkProvenance>;
 
-  Dials_Get(key: DialScopeKey): Promise<DialConfig>;
-  Dials_Set(key: DialScopeKey, cfg: DialConfig): Promise<void>;
-  Dials_GetEffective(
-    projectID: string,
-    sessionID: string,
-    graphID: string,
-    runID: string,
-  ): Promise<DialEffectiveDials>;
-  Dials_BumpAndResume(runID: string, delta: DialDelta): Promise<void>;
-
   Hooks_List(): Promise<Hook[]>;
   Hooks_Get(id: string): Promise<Hook>;
   Hooks_Add(input: Hook): Promise<Hook>;
@@ -703,8 +689,6 @@ interface WailsBindingsLike {
   // Cedar policy snippet writer/revoker (WP09).
   CedarPolicy_WriteSnippet(name: string, body: string): Promise<void>;
   CedarPolicy_RevokeSnippet(name: string): Promise<void>;
-  // Cedar propose modal resolution (harness-self-mcp-onboarding WP07).
-  CedarPolicy_ResolvePropose(requestID: string, decision: string): Promise<void>;
   // Cedar policy editor (cedar-policy-editor-ui-01KQ8TD6 WP01).
   CedarPolicy_Get(name: string): Promise<PolicyFileDetail>;
   CedarPolicy_Save(name: string, source: string): Promise<ParseResult>;
@@ -2249,23 +2233,6 @@ export interface MemoryClient {
 }
 
 /**
- * DialsClient backs the /dials view + the cap-hit toast (Bundle E
- * WP17). The four methods mirror Dials_Get / Dials_Set /
- * Dials_GetEffective / Dials_BumpAndResume.
- */
-export interface DialsClient {
-  get(key: DialScopeKey): Promise<DialConfig>;
-  set(key: DialScopeKey, cfg: DialConfig): Promise<void>;
-  getEffective(
-    projectID: string,
-    sessionID: string,
-    graphID: string,
-    runID: string,
-  ): Promise<DialEffectiveDials>;
-  bumpAndResume(runID: string, delta: DialDelta): Promise<void>;
-}
-
-/**
  * HooksClient backs the /hooks management view. Hooks are stored in
  * <DataDir>/hooks.json (mode 0600) and dispatched on the chat
  * pre_send / post_send lifecycle. Memory.retrieve / memory.persist
@@ -2723,9 +2690,6 @@ export interface CedarPolicyClient {
 
   writeSnippet(name: string, body: string): Promise<void>;
   revokeSnippet(name: string): Promise<void>;
-  /** Deliver user decision for a pending cedar-propose-pending modal. */
-  resolvePropose(requestID: string, decision: string): Promise<void>;
-
   // ── Editor methods (cedar-policy-editor-ui-01KQ8TD6) ──────────────
   /** Read a policy file's source. Embedded defaults are read-only. */
   getPolicy(name: string): Promise<PolicyFileDetail>;
@@ -3324,7 +3288,6 @@ export interface HarnessClient {
   graph: GraphClient;
   compaction: CompactionClient;
   branches: BranchesClient;
-  dials: DialsClient;
   nodes: NodesClient;
   cedarPolicy: CedarPolicyClient;
   search: SearchClient;
@@ -3770,14 +3733,6 @@ export function createHarnessClient(): HarnessClient {
       resummarizeChunk: (chunkID) => b().Memory_ResummarizeChunk(chunkID),
       getChunkProvenance: (chunkID) => b().Memory_GetChunkProvenance(chunkID),
     },
-    dials: {
-      get: (key) => b().Dials_Get(key),
-      set: (key, cfg) => b().Dials_Set(key, cfg),
-      getEffective: (projectID, sessionID, graphID, runID) =>
-        b().Dials_GetEffective(projectID, sessionID, graphID, runID),
-      bumpAndResume: (runID, delta) =>
-        b().Dials_BumpAndResume(runID, delta),
-    },
     hooks: {
       list: () => b().Hooks_List(),
       get: (id) => b().Hooks_Get(id),
@@ -3925,7 +3880,6 @@ export function createHarnessClient(): HarnessClient {
       recentDecisions: (limit) => b().CedarPolicy_RecentDecisions(limit),
       writeSnippet: (name, body) => b().CedarPolicy_WriteSnippet(name, body),
       revokeSnippet: (name) => b().CedarPolicy_RevokeSnippet(name),
-      resolvePropose: (requestID, decision) => b().CedarPolicy_ResolvePropose(requestID, decision),
       // cedar-policy-editor-ui-01KQ8TD6 WP02 editor methods
       getPolicy: (name) => b().CedarPolicy_Get(name),
       savePolicy: (name, source) => b().CedarPolicy_Save(name, source),
@@ -5101,25 +5055,6 @@ export function createFakeHarnessClient(
         createdAt: new Date().toISOString(),
       }),
     },
-    dials: {
-      get: async () => ({}),
-      set: noop,
-      getEffective: async () => ({
-        maxTokensPerRun: { value: 0, from: 'global' },
-        maxWallclockSeconds: { value: 0, from: 'global' },
-        maxLLMCalls: { value: 0, from: 'global' },
-        maxToolCalls: { value: 0, from: 'global' },
-        maxCostUSD: { value: 0, from: 'global' },
-        planVerbosity: { value: 'normal', from: 'global' },
-        askThreshold: { value: 0.4, from: 'global' },
-        reflectFrequency: { value: 1, from: 'global' },
-        compactionAggressiveness: { value: 0.5, from: 'global' },
-        reviewIterationsCap: { value: 3, from: 'global' },
-        memoryHooksEnabled: { value: true, from: 'global' },
-        memoryPruneIntervalSeconds: { value: 86400, from: 'global' },
-      }),
-      bumpAndResume: noop,
-    },
     hooks: {
       list: async () => [],
       get: async (id) => ({
@@ -5505,7 +5440,6 @@ export function createFakeHarnessClient(
       recentDecisions: async (): Promise<PolicyDecision[]> => [],
       writeSnippet: noop,
       revokeSnippet: noop,
-      resolvePropose: noop,
       // cedar-policy-editor-ui-01KQ8TD6 WP02 editor stubs
       getPolicy: async (name: string): Promise<PolicyFileDetail> => ({
         name,

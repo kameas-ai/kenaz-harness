@@ -1821,95 +1821,6 @@ export interface ChunkProvenance {
 }
 
 /**
- * DialScope — the cascading-config layer keys.
- */
-export type DialScope =
-  | 'global'
-  | 'project'
-  | 'session'
-  | 'graph'
-  | 'run';
-
-/**
- * DialScopeKey — addresses one cascading layer.
- */
-export interface DialScopeKey {
-  scope: DialScope;
-  id?: string;
-}
-
-/**
- * DialConfig — the wire shape for one cascading layer's overrides.
- * Each *Set boolean toggles whether the value is an explicit override
- * or "use cascade".
- */
-export interface DialConfig {
-  maxTokensPerRun?: number;
-  maxTokensPerRunSet?: boolean;
-  maxWallclockSeconds?: number;
-  maxWallclockSet?: boolean;
-  maxLLMCalls?: number;
-  maxLLMCallsSet?: boolean;
-  maxToolCalls?: number;
-  maxToolCallsSet?: boolean;
-  maxCostUSD?: number;
-  maxCostUSDSet?: boolean;
-  planVerbosity?: string;
-  planVerbositySet?: boolean;
-  askThreshold?: number;
-  askThresholdSet?: boolean;
-  reflectFrequency?: number;
-  reflectFrequencySet?: boolean;
-  compactionAggressiveness?: number;
-  compactionAggressivenessSet?: boolean;
-  reviewIterationsCap?: number;
-  reviewIterationsCapSet?: boolean;
-  memoryHooksEnabled?: boolean;
-  memoryHooksEnabledSet?: boolean;
-  memoryPruneIntervalSeconds?: number;
-  memoryPruneIntervalSet?: boolean;
-  updatedAt?: string;
-}
-
-/**
- * DialEffectiveField<T> — one resolved field's value plus the layer
- * that contributed it.
- */
-export interface DialEffectiveField<T> {
-  value: T;
-  from: DialScope;
-}
-
-/**
- * DialEffectiveDials — the resolved cascade output.
- */
-export interface DialEffectiveDials {
-  maxTokensPerRun: DialEffectiveField<number>;
-  maxWallclockSeconds: DialEffectiveField<number>;
-  maxLLMCalls: DialEffectiveField<number>;
-  maxToolCalls: DialEffectiveField<number>;
-  maxCostUSD: DialEffectiveField<number>;
-  planVerbosity: DialEffectiveField<string>;
-  askThreshold: DialEffectiveField<number>;
-  reflectFrequency: DialEffectiveField<number>;
-  compactionAggressiveness: DialEffectiveField<number>;
-  reviewIterationsCap: DialEffectiveField<number>;
-  memoryHooksEnabled: DialEffectiveField<boolean>;
-  memoryPruneIntervalSeconds: DialEffectiveField<number>;
-}
-
-/**
- * DialDelta — additive bump used by BumpAndResume.
- */
-export interface DialDelta {
-  addTokensPerRun?: number;
-  addWallclockSeconds?: number;
-  addLLMCalls?: number;
-  addToolCalls?: number;
-  addCostUSD?: number;
-}
-
-/**
  * Lifecycle-hook event names. Mirrors core/hooks.Event* constants.
  */
 export type HookEvent =
@@ -3303,20 +3214,6 @@ export interface PermissionRequest {
   danger_copy?: string;
   // Filesystem-specific
   op?: 'read' | 'write' | 'delete' | 'move' | 'recipe_dir_add';
-}
-
-/**
- * CedarProposalPayload — payload emitted on the `cedar:propose-pending`
- * broker topic when an agent proposes a new Cedar policy snippet.
- * Mirrors core/mcp/builtin/harness.CedarProposalPayload (WP07).
- */
-export interface CedarProposalPayload {
-  request_id: string;
-  name: string;
-  body: string;
-  rationale?: string;
-  issued_at: string;
-  deadline_at: string;
 }
 
 /**

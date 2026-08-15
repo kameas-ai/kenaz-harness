@@ -14,7 +14,6 @@
  * NOT migrated here (retained as rich-UI components because they need
  * input fields or sliders):
  *   - AuthFailureToast (requires inline API key input)
- *   - CapHitToast (requires bump-amount slider)
  *
  * Call once at a top-level component (e.g. SessionsView or App.vue).
  */

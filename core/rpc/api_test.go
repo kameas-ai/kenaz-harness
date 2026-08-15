@@ -28,7 +28,6 @@ import (
 	contextsyncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextsync"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/contextview"
 	corpusview "github.com/kameas-ai/kenaz-harness/core/rpc/views/corpus"
-	dialsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/dials"
 	confirmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/confirm"
 	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
 	fleetview "github.com/kameas-ai/kenaz-harness/core/rpc/views/fleet"
@@ -93,7 +92,6 @@ type fakeHarnessAPI struct {
 	branchesAPI    branchesview.BranchesAPI
 	cedarPolicyAPI cedarpolicyview.CedarPolicyAPI
 	permissionsAPI permissionsview.PermissionsAPI
-	dialsAPI       dialsview.DialsAPI
 	nodesAPI       nodesview.NodesAPI
 	searchAPI      searchview.SearchAPI
 	updateAPI      updateview.UpdateAPI
@@ -139,12 +137,10 @@ func (f *fakeHarnessAPI) Compaction() compactionview.CompactionAPI    { return f
 func (f *fakeHarnessAPI) Branches() branchesview.BranchesAPI          { return f.branchesAPI }
 func (f *fakeHarnessAPI) CedarPolicy() cedarpolicyview.CedarPolicyAPI { return f.cedarPolicyAPI }
 func (f *fakeHarnessAPI) Permissions() permissionsview.PermissionsAPI { return f.permissionsAPI }
-func (f *fakeHarnessAPI) Dials() dialsview.DialsAPI                   { return f.dialsAPI }
 func (f *fakeHarnessAPI) Nodes() nodesview.NodesAPI                   { return f.nodesAPI }
 func (f *fakeHarnessAPI) Search() searchview.SearchAPI                { return f.searchAPI }
 func (f *fakeHarnessAPI) Update() updateview.UpdateAPI                { return f.updateAPI }
 func (f *fakeHarnessAPI) Storage() storageview.StorageAPI             { return f.storageAPI }
-func (f *fakeHarnessAPI) CedarProposeResolve(_, _ string) error       { return nil }
 func (f *fakeHarnessAPI) Onboarding() onboardingview.OnboardingAPI {
 	return onboardingview.New(onboardingview.Config{})
 }

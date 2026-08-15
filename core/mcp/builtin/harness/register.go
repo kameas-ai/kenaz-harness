@@ -21,7 +21,6 @@ const (
 	ToolInstallMCPRecipe     = "harness_write_install_mcp_recipe"
 	ToolSetSetting           = "harness_write_set_setting"
 	ToolCreateProject        = "harness_write_create_project"
-	ToolProposeCedarPolicy   = "harness_write_propose_cedar_policy"
 	ToolCreateSession        = "harness_write_create_session"
 )
 
@@ -134,15 +133,6 @@ func RegisterAll(srv *Server, m Managers) *Server {
             "description":{"type":"string"}
         }`, "name"),
 		Handler: m.handleCreateProject,
-	})
-	srv.Register(ToolSpec{
-		Name:        ToolProposeCedarPolicy,
-		Description: "Propose a Cedar policy snippet. The user must approve in a confirmation modal before it is written.",
-		InputSchema: schemaObject(`{
-            "name":{"type":"string"},
-            "body":{"type":"string","description":"Full Cedar policy body."}
-        }`, "name", "body"),
-		Handler: m.handleProposeCedarPolicy,
 	})
 	srv.Register(ToolSpec{
 		Name:        ToolCreateSession,
