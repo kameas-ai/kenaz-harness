@@ -194,7 +194,7 @@ function handleClose() {
         <template v-else>
           <p
             v-if="errorMsg"
-            class="mt-3 font-ui text-xs text-signal-err"
+            class="mt-3 font-ui text-xs text-signal-danger"
             data-testid="recovery-error"
             role="alert"
           >
@@ -239,7 +239,7 @@ function handleClose() {
 
         <p
           v-if="errorMsg"
-          class="mt-2 font-ui text-xs text-signal-err"
+          class="mt-2 font-ui text-xs text-signal-danger"
           data-testid="recovery-error"
           role="alert"
         >

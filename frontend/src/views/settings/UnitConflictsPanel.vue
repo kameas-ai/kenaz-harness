@@ -142,7 +142,7 @@ async function submitResolve() {
           Refresh
         </button>
       </div>
-      <p v-if="loadErr" class="text-xs text-signal-error">{{ loadErr }}</p>
+      <p v-if="loadErr" class="text-xs text-signal-danger">{{ loadErr }}</p>
       <p v-if="loading" class="text-xs text-ink-subtle">Loading…</p>
       <p v-else-if="conflicts.length === 0" class="text-xs text-ink-subtle">
         No unresolved conflicts.
@@ -189,7 +189,7 @@ async function submitResolve() {
               class="w-full text-xs font-mono border border-border-muted rounded p-1 bg-surface-1 resize-y"
               placeholder="Resolved content…"
             />
-            <p v-if="resolveErr" class="text-xs text-signal-error">{{ resolveErr }}</p>
+            <p v-if="resolveErr" class="text-xs text-signal-danger">{{ resolveErr }}</p>
             <div class="flex gap-2">
               <button
                 type="button"
@@ -232,7 +232,7 @@ async function submitResolve() {
               class="w-full text-xs border border-border-muted rounded p-1 bg-surface-1"
               placeholder="Reason for enshrinement…"
             />
-            <p v-if="resolveErr" class="text-xs text-signal-error">{{ resolveErr }}</p>
+            <p v-if="resolveErr" class="text-xs text-signal-danger">{{ resolveErr }}</p>
             <div class="flex gap-2">
               <button
                 type="button"

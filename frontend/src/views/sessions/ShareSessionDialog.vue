@@ -194,7 +194,7 @@ async function onShare() {
       <!-- Error -->
       <p
         v-if="errorMsg"
-        class="mt-3 font-ui text-xs text-signal-err"
+        class="mt-3 font-ui text-xs text-signal-danger"
         data-testid="share-error"
         role="alert"
       >

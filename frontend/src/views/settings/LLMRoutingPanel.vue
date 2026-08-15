@@ -165,7 +165,7 @@ onMounted(refresh);
     <!-- list error -->
     <div
       v-if="listError"
-      class="mb-4 rounded border border-signal-error bg-surface-0 px-3 py-2 font-ui text-xs text-signal-error"
+      class="mb-4 rounded border border-signal-danger bg-surface-0 px-3 py-2 font-ui text-xs text-signal-danger"
       data-testid="llm-routing-list-error"
     >
       {{ listError }}
@@ -326,7 +326,7 @@ onMounted(refresh);
             <span class="font-ui text-[10px] uppercase tracking-[0.12em] text-ink-subtle">Hop {{ idx + 1 }}</span>
             <button
               type="button"
-              class="font-ui text-[11px] text-signal-error hover:underline"
+              class="font-ui text-[11px] text-signal-danger hover:underline"
               :data-testid="`llm-routing-entry-remove-${idx}`"
               @click="removeEntry(idx)"
             >
@@ -397,14 +397,14 @@ onMounted(refresh);
       <!-- errors -->
       <div
         v-if="saveError"
-        class="font-ui text-[11px] text-signal-error"
+        class="font-ui text-[11px] text-signal-danger"
         data-testid="llm-routing-save-error"
       >
         {{ saveError }}
       </div>
       <div
         v-if="deleteError"
-        class="font-ui text-[11px] text-signal-error"
+        class="font-ui text-[11px] text-signal-danger"
         data-testid="llm-routing-delete-error"
       >
         {{ deleteError }}
@@ -415,7 +415,7 @@ onMounted(refresh);
         <button
           v-if="editorChain.id && !editorChain.bundled"
           type="button"
-          class="font-ui text-xs text-signal-error hover:underline"
+          class="font-ui text-xs text-signal-danger hover:underline"
           data-testid="llm-routing-editor-delete"
           @click="deleteChain(editorChain.id)"
         >
