@@ -226,6 +226,42 @@ that compacted content stops being findable, or add an explicit
 "include compacted history" filter to the search UI and wire it. Not a
 third: the two implementations should not keep disagreeing silently.
 
+### 2026-08-14 · `core/search/search.go` is a dead second search engine
+
+Adjunct to the `archived_at` entry above, found while verifying it.
+`core/search` — `doc.go`, `query.go`, `search.go` and its own test — has
+**zero non-test importers**. The correct `archived_at IS NULL` predicate
+lives only there; the implementation the app actually calls,
+`core/rpc/views/search/impl.go`, lacks it.
+
+So the honest framing of the entry above is not "two implementations
+disagree" but "the correct implementation is dead and the live one is
+missing the predicate". Under this file's own doctrine that is
+**rival infrastructure**, and the disposition is a delete-or-adopt
+decision, not a bug.
+
+**Owner:** unassigned. Whoever resolves the `archived_at` entry should
+resolve this in the same change — adopting `core/search` or deleting it
+are both fine; leaving a dead copy holding the right answer is not.
+
+### 2026-08-14 · Branch summaries dilute "assistant turn" with move narration
+
+`core/rpc/views/branches/impl.go:366` (tail-5 branch summary) and `:452`
+(last-8 turns for `ReintegrationProposal`) select rows by
+`Role == RoleAssistant` to mean "an assistant answer". Since 01PMCH01
+WP02 that role also carries every interim `assistant_move` narration, so
+both now sample the model's thinking-out-loud alongside its answers.
+`impl.go:329` (`LastAssistantMsg`) is unaffected — the last row of a
+completed turn is the `final` move.
+
+Not the same class as WP06's `toolUseID` defect (nothing is mis-paired,
+no request is malformed) and not a crash; the summaries are just noisier
+than they read. Filtering to `MoveKind() == MoveKindFinal || MoveKind() == ""`
+is the one-line fix.
+
+**Owner:** unassigned. Cheap enough to fold into whatever next touches
+branch summaries.
+
 ### 2026-08-14 · Deferred asks have no producer, and wizards have no caller
 
 The elicitation surface ships three modes; only one of them is reachable.

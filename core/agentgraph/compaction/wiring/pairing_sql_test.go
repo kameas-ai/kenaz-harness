@@ -214,6 +214,17 @@ func orphanIDs(rows []session.Message) map[string]bool {
 			calls[m.ToolCalls[0].ID] = true
 		case session.MoveKindToolResult:
 			results[m.ToolCalls[0].ID] = true
+		default:
+			// A classic (NULL-kind) row still carries a pair, on the
+			// pre-mission vocabulary wiring/store.go deliberately still
+			// supports. Keying on move kind alone made this helper blind
+			// to exactly the rows the classic branch exists for.
+			switch m.Role {
+			case session.RoleAssistant:
+				calls[m.ToolCalls[0].ID] = true
+			case session.RoleTool:
+				results[m.ToolCalls[0].ID] = true
+			}
 		}
 	}
 	out := map[string]bool{}
@@ -270,8 +281,15 @@ func assertCreatedNoOrphan(t *testing.T, label string, before, after []session.M
 //  2. session_snap.go straddler → the old two-index test (messages[idx]
 //     and messages[idx-1] only): turn "two"'s out-of-order pair b1
 //     straddles with an intervening row and is missed.
-//  3. session_engine.go: delete the step-4b backward clamp: the
-//     recent-window clamp re-splits a pair the forward clamp had fixed.
+//
+// It does NOT catch the third WP06 change, and an earlier draft of this
+// comment claimed it did. Deleting the step-4b backward clamp from
+// engine.Compact fails nothing here: the percentages this sweep walks
+// never produce a boundary that the recent-window clamp then drags back
+// into a pair. That mutation is pinned by
+// TestCompact_BackwardClampIsLoadBearing in the compaction package,
+// which drives the engine against the one shape that separates two
+// clamps from three.
 func TestSessionCompaction_NeverOrphansAPair_AtEveryCutPoint(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
