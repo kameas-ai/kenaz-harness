@@ -1,0 +1,21 @@
+# I13 — Cedar gate arguments that resolve to an unconditional permit.
+#
+# Enforced by scripts/ci/check-cedar-gate-arguments.sh. See that file's
+# header for the three clauses and for why check-no-unwired-gates.sh (I10)
+# is structurally unable to see this class: every Gate*/Check* helper HAS
+# call sites; the defect is the argument AT the call.
+#
+# Format: one line per violation, copied verbatim from the gate's output,
+# followed by a `#` comment carrying the DATE, the BLOCKER, and the change
+# that will delete the line. "We'll get to it" is not a reason.
+#
+# Entries shrink monotonically. An entry that is no longer a violation is
+# STALE and fails the gate — deleting the line is the required follow-up
+# when the site is wired.
+#
+# EMPTY, and it must stay that way. The 2026-08-16 sweep wired all six
+# sites this gate was written for (audit findings A1 + A2, plus
+# tools.Config.Gate which the gate itself surfaced). There is no known
+# reason for a production wiring site to hold an AllowAll: buildCedarGate
+# already returns AllowAll for an empty DataDir, so the nil-core test
+# posture needs no literal at the call.

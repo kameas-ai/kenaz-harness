@@ -151,7 +151,21 @@ type Config struct {
 	// CedarMode is the mode context attribute the gate helpers pass to
 	// the policy bundle ("permissive" | "strict"). "" defaults to
 	// "permissive" inside the gate helpers.
+	//
+	// Prefer CedarModeFn in production wiring: a static string is read
+	// once at construction, so flipping the dial would need an app
+	// restart. This field stays for tests that pin one mode.
 	CedarMode string
+	// CedarModeFn resolves the mode context attribute per gate call, so
+	// the strictness dial takes effect without re-creating the API.
+	// When non-nil it wins over CedarMode; when it returns "" the gate
+	// helpers coerce to "permissive".
+	//
+	// This is the producer for the `context.mode` attribute the shipped
+	// Workflow-family bundle branches on. Before it existed the
+	// bundle's strict arm was unreachable: nothing anywhere in the repo
+	// assigned CedarMode outside tests.
+	CedarModeFn func() string
 	// Audit is the append-only event log emitter (workflows-01KQ8TDG
 	// WP11). nil drops every event silently — acceptable in test
 	// harnesses without an emitter wired.
@@ -175,6 +189,19 @@ type API struct {
 	source    map[string]string
 	scheduler wfsched.Scheduler
 	catalog   wfcatalog.Catalog
+}
+
+// cedarMode resolves the `mode` context attribute handed to the
+// Workflow-family policy bundle. CedarModeFn (the live dial) wins over
+// the static CedarMode; "" is left alone so the gate helpers apply
+// their own "permissive" default in one place.
+func (a *API) cedarMode() string {
+	if a.cfg.CedarModeFn != nil {
+		if m := a.cfg.CedarModeFn(); m != "" {
+			return m
+		}
+	}
+	return a.cfg.CedarMode
 }
 
 // New returns a real-engine-backed API. A nil engine returns a
@@ -300,7 +327,7 @@ func (a *API) RunWithOptions(ctx context.Context, req RunRequest) (RunResult, er
 	// interactive prompt; the prompt registry is wired in a follow-up
 	// task — for now we proceed (default-allow with audit) so the
 	// chassis stays usable.
-	if _, gerr := cedar.GateWorkflowRun(ctx, a.cfg.Cedar, w.ID, a.cfg.CedarMode, corewf.CollectStepKinds(w)); gerr != nil {
+	if _, gerr := cedar.GateWorkflowRun(ctx, a.cfg.Cedar, w.ID, a.cedarMode(), corewf.CollectStepKinds(w)); gerr != nil {
 		return RunResult{}, fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
 	}
 
@@ -481,7 +508,7 @@ func (a *API) Save(ctx context.Context, in SaveInput) (SaveOutput, error) {
 		return SaveOutput{}, ErrInvalidSaveInput
 	}
 	// Cedar gate. Strict mode + shell-bearing workflows → deny here.
-	if _, gerr := cedar.GateWorkflowSave(ctx, a.cfg.Cedar, w.ID, a.cfg.CedarMode, corewf.CollectStepKinds(w)); gerr != nil {
+	if _, gerr := cedar.GateWorkflowSave(ctx, a.cfg.Cedar, w.ID, a.cedarMode(), corewf.CollectStepKinds(w)); gerr != nil {
 		return SaveOutput{}, fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
 	}
 	saved, err := a.cfg.Store.Save(ctx, w)

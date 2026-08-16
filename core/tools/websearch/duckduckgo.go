@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"golang.org/x/net/html"
+
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
 // DuckDuckGoEndpoint is the static-HTML endpoint the backend scrapes.
@@ -30,9 +32,16 @@ var ErrRateLimited = errors.New("websearch: rate limited")
 // "result__snippet"). When DDG breaks either selector the fixture test
 // fails loudly, which is the agreed update path (see plan §"Risk
 // register" and the testdata/ddg_html_sample.html fixture).
+// The query request itself is gated: Search calls cedar.CheckNetwork
+// against the endpoint host before issuing it. Gating only the
+// result-page Fetcher (which is what shipped through v0.63.x) left the
+// query leg — the leg that carries the user's search terms off-box —
+// ungated, so a Cedar `forbid network_request` policy naming
+// html.duckduckgo.com did nothing.
 type DuckDuckGoBackend struct {
 	client   *http.Client
 	endpoint string
+	gate     cedar.Gate
 }
 
 // DuckDuckGoOption configures a DuckDuckGoBackend at construction.
@@ -55,6 +64,15 @@ func WithDuckDuckGoEndpoint(endpoint string) DuckDuckGoOption {
 		if endpoint != "" {
 			b.endpoint = endpoint
 		}
+	}
+}
+
+// WithDuckDuckGoGate installs the Cedar network gate consulted before
+// the query request is issued. A nil gate means ungated (the test /
+// nil-core posture) — cedar.CheckNetwork short-circuits to nil.
+func WithDuckDuckGoGate(g cedar.Gate) DuckDuckGoOption {
+	return func(b *DuckDuckGoBackend) {
+		b.gate = g
 	}
 }
 
@@ -84,6 +102,13 @@ func (b *DuckDuckGoBackend) Search(ctx context.Context, query string, opts Searc
 	q := url.Values{}
 	q.Set("q", query)
 	reqURL := b.endpoint + "?" + q.Encode()
+
+	// Cedar network gate on the QUERY leg. This is the request that
+	// carries the user's search terms to the backend, so it is the one
+	// a `forbid network_request` policy most needs to be able to stop.
+	if gerr := checkBackendNetwork(ctx, b.gate, b.endpoint); gerr != nil {
+		return nil, gerr
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
