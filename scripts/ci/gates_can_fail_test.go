@@ -338,6 +338,37 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			content: "package zzgateprobe\n\nimport \"github.com/kameas-ai/kenaz-harness/core/policy/cedar\"\n\ntype Config struct {\n\tCedar cedar.Gate\n}\n",
 		},
 		{
+			name: "cedar-gate-arguments/allowall-as-wrapped-call-argument",
+			gate: "check-cedar-gate-arguments.sh",
+			// gofmt's own output for a call too long for one line puts the
+			// argument on its own line, where there is no '(' to anchor
+			// on. The first cut of this gate anchored on '(' or ':' and
+			// was therefore silenced by formatting the exact call its
+			// header cites as defect A1. Caught by exclusion instead:
+			// AllowAll is a violation unless it is an assignment RHS or a
+			// return.
+			file:    "core/rpc/zz_gate_probe.go",
+			content: "package rpc\n\nvar zzGateProbe = cedar.NewLLMPolicyGuard(\n\tcedar.AllowAll{},\n)\n",
+		},
+		{
+			name: "cedar-gate-arguments/allowall-in-slice-literal",
+			gate: "check-cedar-gate-arguments.sh",
+			// A composite-literal ELEMENT rather than a field value: '{'
+			// precedes it, not '(' or ':'.
+			file:    "core/rpc/zz_gate_probe.go",
+			content: "package rpc\n\nvar zzGateProbe = []cedar.Gate{cedar.AllowAll{}}\n",
+		},
+		{
+			name: "cedar-gate-arguments/config-gate-field-hidden-by-comment",
+			gate: "check-cedar-gate-arguments.sh",
+			// Field discovery used to anchor the type at end-of-line, so a
+			// single trailing comment on the declaration removed the field
+			// from clause 3's view — and adding one is a natural thing to
+			// do while introducing the omission. Same for a struct tag.
+			file:    "core/rpc/views/zzgateprobe/impl.go",
+			content: "package zzgateprobe\n\nimport \"github.com/kameas-ai/kenaz-harness/core/policy/cedar\"\n\ntype Config struct {\n\tCedar cedar.Gate // the policy gate\n}\n",
+		},
+		{
 			name: "slog-privacy/typed-attr-constructor",
 			gate: "check-no-user-content-in-slog.sh",
 			file: "core/rpc/zz_gate_probe.go",

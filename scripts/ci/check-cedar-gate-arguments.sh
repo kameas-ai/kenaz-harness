@@ -116,15 +116,26 @@ violations=""
 # ---------------------------------------------------------------------------
 # Clause 1: cedar.AllowAll{} consumed as an argument or a field value.
 #
-# Matched shapes (AllowAll preceded by '(' or ':' on the same line):
+# Matched shapes:
 #     f(cedar.AllowAll{})            call argument
 #     &T{gate: cedar.AllowAll{}}     composite-literal field value
 #     Field: cedar.AllowAll{},       ditto, multi-line literal
+#     []cedar.Gate{cedar.AllowAll{}} slice/map element
+#     f(                             gofmt's wrapping of a long call —
+#         cedar.AllowAll{},          the argument lands on its own line,
+#     )                              with no '(' to anchor on
 #
-# Deliberately NOT matched:
+# Deliberately NOT matched (the replaceable-placeholder idiom, checked by
+# clause 2 instead):
 #     var g cedar.Gate = cedar.AllowAll{}
 #     g = cedar.AllowAll{}
 #     return cedar.AllowAll{}
+#
+# Implemented by exclusion rather than by an allowlist of preceding
+# characters: any line mentioning cedar.AllowAll{} is a violation UNLESS
+# the mention is an assignment RHS or a return. Anchoring on '(' or ':'
+# was silenced by `gofmt` wrapping the exact call the gate was written
+# for (`cedar.NewLLMPolicyGuard(cedar.AllowAll{})`).
 # ---------------------------------------------------------------------------
 while IFS= read -r hit; do
   [[ -z "$hit" ]] && continue
@@ -133,16 +144,27 @@ while IFS= read -r hit; do
   line="${rest%%:*}"
   violations="${violations}${file}:${line}: AllowAll consumed at the call (clause 1)"$'\n'
 done < <(
-  grep -rnE '[(:][[:space:]]*cedar\.AllowAll\{\}' --include='*.go' "$RPC_ROOT" 2>/dev/null \
-    | grep -v '_test\.go' || true
+  grep -rnE 'cedar\.AllowAll\{\}' --include='*.go' "$RPC_ROOT" 2>/dev/null \
+    | grep -v '_test\.go' \
+    | grep -vE ':[[:space:]]*//' \
+    | grep -vE '(=|return)[[:space:]]*cedar\.AllowAll\{\}[[:space:]]*$' || true
 )
 
 # ---------------------------------------------------------------------------
 # Clause 2: a placeholder variable nobody replaces.
 #
 # For each `var <name> cedar.Gate = cedar.AllowAll{}` (or `<name> :=`),
-# require a later plain assignment to <name> in the same file that is not
-# itself AllowAll. Without one the placeholder IS the final value.
+# require a later plain assignment to <name> in the same file that is
+# neither AllowAll nor nil. Without one the placeholder IS the final
+# value.
+#
+# KNOWN HOLES, deliberately not closed here (a shell gate cannot do
+# reachability or scope analysis; closing them needs a Go AST tool):
+#   - a dead replacement — `if false { g = engine }` — counts.
+#   - a replacement in a DIFFERENT function later in the same file, on a
+#     variable that merely shares the name, counts.
+# Both require someone to write the replacement deliberately, which is a
+# different failure mode from the accidental omissions above.
 # ---------------------------------------------------------------------------
 while IFS= read -r hit; do
   [[ -z "$hit" ]] && continue
@@ -156,10 +178,13 @@ while IFS= read -r hit; do
     name=$(printf '%s' "$text" | sed -nE 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*:=.*/\1/p')
   fi
   [[ -z "$name" ]] && continue
-  # A replacement is `name = <something other than AllowAll>` after this line.
+  # A replacement is `name = <something other than AllowAll or nil>`
+  # after this line. `g = nil` is not a replacement: a nil Gate is the
+  # same unconditional permit AllowAll is.
   if ! awk -v n="$name" -v start="$line" 'NR>start {
         pat = "^[[:space:]]*" n "[[:space:]]*=[^=]"
-        if ($0 ~ pat && $0 !~ /cedar\.AllowAll\{\}/) { found=1; exit }
+        nilpat = "^[[:space:]]*" n "[[:space:]]*=[[:space:]]*nil[[:space:]]*$"
+        if ($0 ~ pat && $0 !~ /cedar\.AllowAll\{\}/ && $0 !~ nilpat) { found=1; exit }
       } END { exit !found }' "$file"; then
     violations="${violations}${file}:${line}: '${name}' initialised to AllowAll and never replaced (clause 2)"$'\n'
   fi
@@ -174,17 +199,33 @@ done < <(
 # For each core/rpc/views/<pkg> declaring `<Field> cedar.Gate` inside a
 # `type Config struct` block, resolve the import alias api.go uses for that
 # package, extract the `<alias>.Config{ … }` literal, and require `<Field>:`
-# inside it.
+# to be assigned a non-nil value inside it.
+#
+# Field discovery strips line comments and struct tags before matching.
+# Anchoring the type at end-of-line meant a single trailing `// comment`
+# on the declaration removed the field from the gate's view entirely —
+# and adding such a comment is a natural thing to do *while* introducing
+# the omission.
+#
+# The assignment scan also strips comments: `// Cedar: tracked in TICKET`
+# left where the assignment used to be otherwise satisfied a bare
+# substring test, and so did a `Cedar:` mention inside an unrelated
+# field's trailing comment.
 # ---------------------------------------------------------------------------
 config_fields=$(
   for f in $(find "$VIEWS_ROOT" -name '*.go' ! -name '*_test.go' | sort); do
     awk -v file="$f" '
       /^type[[:space:]]+Config[[:space:]]+struct[[:space:]]*\{/ { inblock=1; next }
       inblock && /^\}/ { inblock=0; next }
-      inblock && $0 ~ /^[[:space:]]*[A-Z][A-Za-z0-9_]*[[:space:]]+cedar\.Gate[[:space:]]*$/ {
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
-        split($0, parts, /[[:space:]]+/)
-        print file "\t" parts[1]
+      inblock {
+        line = $0
+        sub(/\/\/.*$/, "", line)          # drop a trailing line comment
+        sub(/`[^`]*`/, "", line)          # drop a struct tag
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+        if (line ~ /^[A-Z][A-Za-z0-9_]*[[:space:]]+cedar\.Gate$/) {
+          split(line, parts, /[[:space:]]+/)
+          print file "\t" parts[1]
+        }
       }
     ' "$f"
   done
@@ -217,17 +258,30 @@ while IFS=$'\t' read -r file field; do
   fi
   # Extract every `<alias>.Config{ … }` literal by brace counting and
   # require the field to be assigned in at least one of them.
+  #
+  # `Field: nil` counts as NOT assigned: an explicit nil is the same
+  # unconditional permit as the omission, so clause 3 checks the value,
+  # not merely the presence of the key.
   found=$(awk -v a="${impalias}.Config{" -v fld="${field}:" '
-    index($0, a) > 0 { depth=1; if (index($0, fld) > 0) { print "yes"; exit } ; collecting=1; next }
+    function code(s) { sub(/\/\/.*$/, "", s); return s }
+    function assigned(s,   i, rest) {
+      i = index(s, fld); if (i == 0) return 0
+      rest = substr(s, i + length(fld))
+      gsub(/^[[:space:]]+/, "", rest)
+      if (rest ~ /^nil[[:space:]]*,?[[:space:]]*$/) return 0
+      return 1
+    }
+    { c = code($0) }
+    index(c, a) > 0 { depth=1; if (assigned(c)) { print "yes"; exit } ; collecting=1; next }
     collecting {
       n = gsub(/\{/, "{"); m = gsub(/\}/, "}")
       depth += n - m
-      if (index($0, fld) > 0) { print "yes"; exit }
+      if (assigned(c)) { print "yes"; exit }
       if (depth <= 0) { collecting=0 }
     }
   ' "$API_FILE")
   if [[ "$found" != "yes" ]]; then
-    violations="${violations}${file}: Config.${field} is never assigned in ${API_FILE}'s ${impalias}.Config literal — the zero value is a nil gate, i.e. unconditional permit (clause 3)"$'\n'
+    violations="${violations}${file}: Config.${field} is never assigned a non-nil gate in ${API_FILE}'s ${impalias}.Config literal — the zero value is a nil gate, i.e. unconditional permit (clause 3)"$'\n'
   fi
 done <<< "$config_fields"
 
