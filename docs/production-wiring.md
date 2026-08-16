@@ -90,12 +90,29 @@ so the fallback is one branch in one function rather than a literal at
 each call.
 
 Three sites used to pass `cedar.AllowAll{}` unconditionally under
-comments promising a future swap that was never written, and two view
-`Config`s omitted their `Cedar` field entirely (nil gate ⇒
-`Allow("no engine wired (default-allow)")`). A user could author a
-Cedar policy, watch the editor validate it, save it, see it listed as
-loaded — and none of these five sites consulted it. Fixed 2026-08-16;
-see `docs/dead-code-audit-2026-08-16.md` findings A1 and A2.
+comments promising a future swap that was never written, and three view
+`Config`s omitted their gate field entirely (nil gate ⇒
+`Allow("no engine wired (default-allow)")`) — `workflowsview`,
+`scheduledchatview`, and `tools.Config.Gate`, the last found by
+`check-cedar-gate-arguments.sh` while the other five were being wired.
+A user could author a Cedar policy, watch the editor validate it, save
+it, see it listed as loaded — and none of these six sites consulted it.
+Wired 2026-08-16; see `docs/dead-code-audit-2026-08-16.md` findings A1
+and A2.
+
+**Scope of that fix: policy present at boot.** Each wiring site builds
+its own `cedar.Engine`, and an Engine loads `<DataDir>/policy/` exactly
+once, in `NewEngine` — there is no filesystem watcher, and
+`Engine.Reload` only refreshes the engine it is called on. The policy
+editor calls `Reload` on the separate engine `buildCedarEngineOrNil`
+built for the `cedarpolicy` view. So a policy **saved from the editor
+during a session** is validated, written, listed as loaded, and
+*still not enforced by the live gates until the app restarts*. The
+same split means most gate denials are appended to decision stores the
+audit panel never reads. Both are pre-existing consequences of the
+per-site Engine and are tracked, with the deleting change, in
+`docs/unwired-ledger.md` (2026-08-16 entry). Do not read the table
+below as "the editor's Reload button reaches these".
 
 **Posture on construction failure is fail-OPEN, deliberately.**
 `buildCedarGate` logs a warning and returns `AllowAll` when
@@ -116,6 +133,7 @@ wiring one.
 | Network requests (`kenaz__web_fetch`)            | `cedar.CheckNetwork`    | `core/tools/webfetch` (`Options.Gate`) |
 | Workflow run / save / delete                     | `cedar.GateWorkflow*`   | `core/rpc/api.go` → `workflowsview.Config.Cedar` |
 | Scheduled chat create / delete / execute         | `cedar.GateScheduledChat*` | `core/rpc/api.go` → `scheduledchatview.Config.Cedar` |
+| MCP recipe spawn (`add_recipe` / `spawn_recipe`) | `cedar.CheckRecipeSpawn` | `core/rpc/api.go` (`newToolsAPI`) → `tools.Config.Gate`. The target of the shipped `mcp-no-npx.cedar` template |
 | Filesystem reads/writes (kernel state nodes)     | `cedar.CheckFile{Read,Write}` | `agentgraph.PolicyGate` (`env_deps_policy.go`) |
 | Finer-grained state actions                      | `cedar.CheckState{Read,Write}` | `agentgraph.PolicyGate` |
 
