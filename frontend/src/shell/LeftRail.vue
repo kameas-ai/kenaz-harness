@@ -988,14 +988,20 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
         <!-- nav-settings-ia-cleanup WP04: Audit log demoted from top-level nav.
              Viewer is accessible via Settings → Security → Audit Log. /audit route
              and the command palette entry (nav.audit) remain intact. -->
+        <!-- Sites + Marketplace are desktop-only. Neither route is registered
+             in main-served.ts, and the served RPC allowlist
+             (core/serve/methods.go) carries no Sites_* or Catalog_* method, so
+             in a browser build these entries would navigate into the
+             not-found route at best. See docs/served-mode-boundary.md.
+             (docs/dead-code-audit-2026-08-16.md findings A4 + B4) -->
         <li
-          v-if="signedIn && capability('sites_hosting')"
+          v-if="!served && signedIn && capability('sites_hosting')"
           data-testid="nav-sites"
         >
           <RailEntry :icon="Globe" label="Sites" to="/sites" />
         </li>
         <li
-          v-if="signedIn"
+          v-if="!served && signedIn"
           data-testid="nav-marketplace"
         >
           <RailEntry :icon="Package" label="Marketplace" to="/marketplace" />
