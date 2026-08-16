@@ -133,8 +133,67 @@ func Open(cfg storage.Config) (storage.DB, error) {
 		return nil, err
 	}
 
+	// Post-apply invariant: Apply reported success, so EVERY registered
+	// migration must now have an applied ledger row.
+	//
+	// It exists because the v0.63.0 P0 had no such tripwire. Pending()
+	// selected on a GLOBAL max(applied) across a version space shared by every
+	// mission, so on any database carrying units/1100..1103 the later
+	// sessions/0332..0335 were silently declared already-done. Apply() then
+	// returned nil having applied nothing, Open() succeeded, and the failure
+	// surfaced much later and far away as "no such column: move_history_mode"
+	// the first time the user clicked Start session. The boot-time drift
+	// detector in core/rpc/api.go did notice, in a goroutine, after the UI had
+	// already rendered — it logged a WARN and let the broken app run.
+	//
+	// THE CHECK IS COMPUTED FROM All() + Applied(), NOT FROM Pending().
+	// That is the whole point and it is easy to get wrong: re-asking Pending()
+	// after Apply cannot catch a selection bug, because a selection that wrongly
+	// calls a migration done says so just as confidently the second time. This
+	// check re-derives the answer from the registered set and the raw ledger,
+	// so it is an independent witness. (Verified by mutation: reinstate the
+	// max-based Pending() and this is what fires.)
+	//
+	// A schema the code did not compile against is not a state to continue
+	// from. Refusing to open puts the failure at its cause, with the versions
+	// named, instead of leaving it to whichever query hits the missing column
+	// first.
+	if err := verifyFullyApplied(registry); err != nil {
+		db.closeOnError()
+		return nil, err
+	}
+
 	logging.L().Info("storage.opened", "path", dbPath, "wal", true, "fk", true)
 	return db, nil
+}
+
+// verifyFullyApplied reports an error unless every registered migration has
+// an effective applied row in the ledger. See the call site in Open for why
+// it re-derives the applied set instead of calling Pending().
+//
+// "Effective" matches the ledger's own append-only rule: rows arrive in
+// insertion order and the most recent row for a version wins, so a version
+// that was applied and later rolled back does not count as applied.
+func verifyFullyApplied(registry *migrations.Registry) error {
+	rows, err := registry.Applied()
+	if err != nil {
+		return fmt.Errorf("storage: post-apply ledger read: %w", err)
+	}
+	latest := make(map[int]migrations.LedgerEntry, len(rows))
+	for _, e := range rows {
+		latest[e.Version] = e
+	}
+	var missing []int
+	for _, m := range registry.All() {
+		if e, ok := latest[m.Version]; !ok || e.Action != migrations.LedgerActionApplied {
+			missing = append(missing, m.Version)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w: apply reported success but %d migration(s) have no applied ledger row: %v",
+			storage.ErrMigrationFailed, len(missing), missing)
+	}
+	return nil
 }
 
 // defaultConfig returns a storage.Config with conservative defaults
