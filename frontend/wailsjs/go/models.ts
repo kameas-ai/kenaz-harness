@@ -6693,6 +6693,7 @@ export namespace settings {
 	    bashAllowlistMigrated?: boolean;
 	    permissionsMigrationToastShown?: boolean;
 	    cedarStrictCredentialMode?: boolean;
+	    cedarStrictWorkflowMode?: boolean;
 	    credentialAuditRetentionDays?: number;
 	    branchAdvisorEnabled?: boolean;
 	    branchAdvisorMinConfidence?: number;
@@ -6778,6 +6779,7 @@ export namespace settings {
 	        this.bashAllowlistMigrated = source["bashAllowlistMigrated"];
 	        this.permissionsMigrationToastShown = source["permissionsMigrationToastShown"];
 	        this.cedarStrictCredentialMode = source["cedarStrictCredentialMode"];
+	        this.cedarStrictWorkflowMode = source["cedarStrictWorkflowMode"];
 	        this.credentialAuditRetentionDays = source["credentialAuditRetentionDays"];
 	        this.branchAdvisorEnabled = source["branchAdvisorEnabled"];
 	        this.branchAdvisorMinConfidence = source["branchAdvisorMinConfidence"];

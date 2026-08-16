@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
 // WikipediaEndpoint is the opensearch JSON endpoint the backend hits.
@@ -17,9 +19,14 @@ const WikipediaEndpoint = "https://en.wikipedia.org/w/api.php"
 
 // WikipediaBackend hits Wikipedia's opensearch endpoint and parses the
 // canonical four-array response: [query, [titles], [descriptions], [urls]].
+//
+// Like DuckDuckGoBackend, the query request is Cedar-gated via
+// checkBackendNetwork before it is issued; gating only the result-page
+// Fetcher left this leg open.
 type WikipediaBackend struct {
 	client   *http.Client
 	endpoint string
+	gate     cedar.Gate
 }
 
 // WikipediaOption configures a WikipediaBackend.
@@ -40,6 +47,14 @@ func WithWikipediaEndpoint(endpoint string) WikipediaOption {
 		if endpoint != "" {
 			b.endpoint = endpoint
 		}
+	}
+}
+
+// WithWikipediaGate installs the Cedar network gate consulted before
+// the query request is issued. nil means ungated.
+func WithWikipediaGate(g cedar.Gate) WikipediaOption {
+	return func(b *WikipediaBackend) {
+		b.gate = g
 	}
 }
 
@@ -75,6 +90,11 @@ func (b *WikipediaBackend) Search(ctx context.Context, query string, opts Search
 	q.Set("limit", strconv.Itoa(limit))
 	q.Set("format", "json")
 	reqURL := b.endpoint + "?" + q.Encode()
+
+	// Cedar network gate on the query leg — see checkBackendNetwork.
+	if gerr := checkBackendNetwork(ctx, b.gate, b.endpoint); gerr != nil {
+		return nil, gerr
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {

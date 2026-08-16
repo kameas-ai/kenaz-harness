@@ -86,6 +86,7 @@ var cwdSensitiveGates = []string{
 	"check-serve-dispatch-drift.sh",
 	"check-builtin-tool-registration.sh",
 	"check-single-move-writer.sh",
+	"check-cedar-gate-arguments.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -295,6 +296,77 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			// session.Message at all.
 			file:    "core/session/zz_gate_probe.go",
 			content: "package session\n\nconst zzGateProbeSQL = \"UPDATE session_messages SET model_tool_args = ?\"\n",
+		},
+		{
+			name: "cedar-gate-arguments/allowall-as-call-argument",
+			gate: "check-cedar-gate-arguments.sh",
+			// The A1 shape: a gate handed cedar.AllowAll{} at the point
+			// of construction, so it can never be replaced by a real
+			// engine. Every Gate*/Check* helper still HAS call sites, so
+			// I10 sees nothing wrong — the defect is the argument.
+			file:    "core/rpc/zz_gate_probe.go",
+			content: "package rpc\n\nvar zzGateProbe = cedar.NewLLMPolicyGuard(cedar.AllowAll{})\n",
+		},
+		{
+			name: "cedar-gate-arguments/allowall-as-struct-field",
+			gate: "check-cedar-gate-arguments.sh",
+			// Same defect wearing a composite literal — the exact shape
+			// of the memory-write gate before 2026-08-16.
+			file:    "core/rpc/zz_gate_probe.go",
+			content: "package rpc\n\nvar zzGateProbe = memoryGateAdapter{gate: cedar.AllowAll{}}\n",
+		},
+		{
+			name: "cedar-gate-arguments/placeholder-never-replaced",
+			gate: "check-cedar-gate-arguments.sh",
+			// Clause 1 wearing a variable name. The legitimate idiom
+			// (`var g cedar.Gate = AllowAll{}` THEN `if e != nil { g = e }`)
+			// is deliberately not flagged, so the gate has to check that
+			// the replacement actually exists — otherwise renaming the
+			// literal into a variable silences it.
+			file:    "core/rpc/zz_gate_probe.go",
+			content: "package rpc\n\nfunc zzGateProbe() cedar.Gate {\n\tvar g cedar.Gate = cedar.AllowAll{}\n\treturn g\n}\n",
+		},
+		{
+			name: "cedar-gate-arguments/config-gate-field-omitted",
+			gate: "check-cedar-gate-arguments.sh",
+			// The A2 half, and the reason a string-grep for AllowAll is
+			// not enough: an omitted Config field leaves a nil gate,
+			// which every helper short-circuits to
+			// Allow("no engine wired (default-allow)"). There is no
+			// literal anywhere to find — only the absence of one.
+			file:    "core/rpc/views/zzgateprobe/impl.go",
+			content: "package zzgateprobe\n\nimport \"github.com/kameas-ai/kenaz-harness/core/policy/cedar\"\n\ntype Config struct {\n\tCedar cedar.Gate\n}\n",
+		},
+		{
+			name: "cedar-gate-arguments/allowall-as-wrapped-call-argument",
+			gate: "check-cedar-gate-arguments.sh",
+			// gofmt's own output for a call too long for one line puts the
+			// argument on its own line, where there is no '(' to anchor
+			// on. The first cut of this gate anchored on '(' or ':' and
+			// was therefore silenced by formatting the exact call its
+			// header cites as defect A1. Caught by exclusion instead:
+			// AllowAll is a violation unless it is an assignment RHS or a
+			// return.
+			file:    "core/rpc/zz_gate_probe.go",
+			content: "package rpc\n\nvar zzGateProbe = cedar.NewLLMPolicyGuard(\n\tcedar.AllowAll{},\n)\n",
+		},
+		{
+			name: "cedar-gate-arguments/allowall-in-slice-literal",
+			gate: "check-cedar-gate-arguments.sh",
+			// A composite-literal ELEMENT rather than a field value: '{'
+			// precedes it, not '(' or ':'.
+			file:    "core/rpc/zz_gate_probe.go",
+			content: "package rpc\n\nvar zzGateProbe = []cedar.Gate{cedar.AllowAll{}}\n",
+		},
+		{
+			name: "cedar-gate-arguments/config-gate-field-hidden-by-comment",
+			gate: "check-cedar-gate-arguments.sh",
+			// Field discovery used to anchor the type at end-of-line, so a
+			// single trailing comment on the declaration removed the field
+			// from clause 3's view — and adding one is a natural thing to
+			// do while introducing the omission. Same for a struct tag.
+			file:    "core/rpc/views/zzgateprobe/impl.go",
+			content: "package zzgateprobe\n\nimport \"github.com/kameas-ai/kenaz-harness/core/policy/cedar\"\n\ntype Config struct {\n\tCedar cedar.Gate // the policy gate\n}\n",
 		},
 		{
 			name: "slog-privacy/typed-attr-constructor",

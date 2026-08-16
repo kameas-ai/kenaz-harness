@@ -90,14 +90,18 @@ func registerBuiltinTools(
 		return
 	}
 
-	// websearch: always wireable; the Cedar gate is bound to AllowAll
-	// at boot. A future engine-load path swaps the gate via
-	// NewFetcher's PolicyGate field. The websearch.New constructor
-	// requires Aggregator/Fetcher/Extractor — we use the package's
-	// shipped defaults.
-	if ws := constructWebSearch(); ws != nil {
+	// websearch: always wireable. The Cedar gate is the real engine
+	// when the chassis has one (nil-core / test path falls back to
+	// AllowAll) and covers both the query leg and the page-fetch leg —
+	// see constructWebSearch. The websearch.New constructor requires
+	// Aggregator/Fetcher/Extractor — we use the package's shipped
+	// defaults.
+	if ws := constructWebSearch(cedarEngine); ws != nil {
 		registry.Register(ws)
-		logging.L().Info("rpc.builtins.register", "tool", ws.Name())
+		logging.L().Info("rpc.builtins.register",
+			"tool", ws.Name(),
+			"cedar_gate", cedarEngine != nil,
+		)
 	} else {
 		logging.L().Warn("rpc.builtins.websearch_construct_failed")
 	}
@@ -551,16 +555,31 @@ func registerFSBuiltinTools(
 // component fails to construct (e.g. malformed proxy URL); the
 // chassis silently drops the tool in that case so the chat surface
 // stays usable.
-func constructWebSearch() *corewebsearch.Tool {
+//
+// cedarEngine is the production policy engine (nil on the test-chassis
+// / nil-core path). It is threaded into BOTH legs of the tool:
+//
+//   - the Fetcher, which retrieves each result page, and
+//   - each Backend, which issues the query itself.
+//
+// Both legs matter. Before this was wired the Fetcher took a hardcoded
+// AllowAll and the backends took no gate at all, so a user's
+// `forbid network_request` policy was ignored end to end. Same nil-safe
+// shape as the web_fetch gate above.
+func constructWebSearch(cedarEngine *cedar.Engine) *corewebsearch.Tool {
+	var gate cedar.Gate = cedar.AllowAll{}
+	if cedarEngine != nil {
+		gate = cedarEngine
+	}
 	fetcher, err := corewebsearch.NewFetcher(corewebsearch.FetcherOpts{
-		PolicyGate: cedar.AllowAll{},
+		PolicyGate: gate,
 	})
 	if err != nil {
 		return nil
 	}
 	backends := []corewebsearch.Backend{
-		corewebsearch.NewDuckDuckGoBackend(),
-		corewebsearch.NewWikipediaBackend(),
+		corewebsearch.NewDuckDuckGoBackend(corewebsearch.WithDuckDuckGoGate(gate)),
+		corewebsearch.NewWikipediaBackend(corewebsearch.WithWikipediaGate(gate)),
 	}
 	aggregator := corewebsearch.NewAggregator(backends, nil)
 	extractor := corewebsearch.NewExtractor()

@@ -1293,11 +1293,17 @@ func New(c *core.Core, opts ...Option) *API {
 	// same gob file.
 	memStore := openMemoryStore(c)
 	// Cedar gate-hook wiring (FR-026): wrap every memory.Store.Add with
-	// cedar.CheckMemoryWrite. AllowAll is the boot-stage default; a
-	// future engine-load path swaps in a real Cedar engine without
-	// touching this wiring.
+	// cedar.CheckMemoryWrite, evaluated against the SAME policy bundle
+	// every other gate in this constructor uses. buildCedarGate returns
+	// AllowAll only when there is no DataDir to load policy from (the
+	// nil-core test chassis) — on the desktop path a user's
+	// `forbid memory_write` rule reaches this hook.
+	//
+	// This is the ONLY non-test SetGate call site; there is no later
+	// swap-in path, so whatever is installed here is what enforces for
+	// the process lifetime.
 	if gs, ok := memStore.(corememory.GateSetter); ok && gs != nil {
-		gs.SetGate(&memoryGateAdapter{gate: cedar.AllowAll{}})
+		gs.SetGate(&memoryGateAdapter{gate: buildCedarGate(coreDataDir(c))})
 	}
 	personalForLLM := newPersonalStore(c)
 	embedder := newEmbedder(c, personalForLLM, settingsImpl)
@@ -1796,6 +1802,17 @@ func New(c *core.Core, opts ...Option) *API {
 		// The ctxFn defers ctx resolution to Notify-call time so construction
 		// before OnStartup is safe.
 		wfDeps.Notifier = &wfNotifierAdapter{ctxFn: a.broker.EmitCtx}
+		// Cedar policy gate for workflow run / save / delete. Without
+		// this the workflows surface consulted no policy at all: the
+		// gate helpers short-circuit a nil Gate to
+		// Allow("no engine wired (default-allow)"), so the shipped
+		// Workflow-family bundle — which every engine loads, embedded —
+		// never ran.
+		//
+		// CedarModeFn supplies the `mode` context attribute the bundle
+		// branches on, read per call so flipping the dial takes effect
+		// without an app restart (same shape as credstore's StrictMode
+		// callback).
 		a.workflowsAPI = workflowsview.New(workflowsview.Config{
 			Engine:          corewf.NewEngineWithDeps(wfDeps),
 			Catalog:         catalog,
@@ -1804,6 +1821,8 @@ func New(c *core.Core, opts ...Option) *API {
 			Store:           wfStore,
 			Scheduler:       sched,
 			WorkflowCatalog: wfCatalog,
+			Cedar:           buildCedarGate(coreDataDir(c)),
+			CedarModeFn:     workflowCedarModeFn(settingsImpl),
 		})
 	}
 
@@ -1987,8 +2006,14 @@ func New(c *core.Core, opts ...Option) *API {
 				chatStore = schedulerPkg.NewSQLiteChatStore(db)
 			}
 		}
+		// Cedar policy gate for scheduled-chat create / update / delete
+		// / execute. Omitting it left cfg.Cedar nil, and every
+		// GateScheduledChat* helper short-circuits a nil Gate to
+		// Allow("no engine wired (default-allow)") — so the surface
+		// that runs prompts on a cron consulted no policy at all.
 		a.scheduledChatAPI = scheduledchatview.New(scheduledchatview.Config{
 			Store: chatStore,
+			Cedar: buildCedarGate(coreDataDir(c)),
 		})
 	}
 
@@ -3471,6 +3496,13 @@ func newToolsAPI(c *core.Core, pool tools.PoolController, secretsBackend *secret
 		Forgetter:      &keychainForgetter{backend: secretsBackend},
 		PromptRegistry: promptReg,
 		CedarPolicy:    cedarPolicyAPI,
+		// Cedar gate for recipe spawn (WP10), read at
+		// impl.go's CheckRecipeSpawn call. Omitting it left cfg.Gate
+		// nil, which CheckRecipeSpawn short-circuits to allow — so the
+		// shipped `mcp-no-npx.cedar` template, whose whole purpose is
+		// to forbid spawning npx-based MCP servers, never ran. Found by
+		// check-cedar-gate-arguments.sh while wiring the A1/A2 sites.
+		Gate: buildCedarGate(dataDir),
 		// Served mode only (spec 091 D8): broker-backed OAuth fallback.
 		// nil on the desktop path — behaviour unchanged.
 		ConnectorTokens: connectorTokens,
@@ -3660,14 +3692,17 @@ func newLLMStack(
 	// keys when the user submits AddProvider). Without this sharing,
 	// AddProvider would write into a backend the resolver can't see.
 	secretsBackend := secrets.NewMemoryBackend()
-	// Bundle E bonus — wire the Cedar LLM policy guard into the
-	// registry pipeline. AllowAll is the boot-stage default per
-	// `cedar.AllowAll` doc; production callers swap a real Engine
-	// in once the policy bundle has loaded. The pipeline shape
-	// (profile → CapabilityGate → PolicyGuard → CredentialResolver)
-	// stays unchanged; only the PolicyGuard implementation is now
-	// Cedar-driven.
-	cedarGuard := cedar.NewLLMPolicyGuard(cedar.AllowAll{})
+	// Wire the Cedar LLM policy guard into the registry pipeline with
+	// the real policy engine. The pipeline shape (profile →
+	// CapabilityGate → PolicyGuard → CredentialResolver) is unchanged;
+	// the guard is consulted by registry.go as step 3 on every
+	// generation, and llmguard.Allow evaluates Action::"model_select".
+	//
+	// llmregistry.Options.Policy is the only door — the registry
+	// exposes no policy setter — so this must be the real gate at
+	// construction. buildCedarGate degrades to AllowAll only when there
+	// is no DataDir (nil-core test chassis).
+	cedarGuard := cedar.NewLLMPolicyGuard(buildCedarGate(coreDataDir(c)))
 	reg, err := llmregistry.New(llmregistry.Options{
 		Resolver: credref.New(secretsBackend),
 		Policy:   cedarGuard,
@@ -7109,6 +7144,48 @@ func buildCedarEngineOrNil(dataDir string) *cedar.Engine {
 		return nil
 	}
 	return engine
+}
+
+// workflowCedarModeFn returns the live resolver for the `mode` context
+// attribute the Workflow-family Cedar bundle branches on.
+//
+// This is the producer that bundle's strict arm was missing: the arm is
+// embedded in every engine and forbids saving a shell-bearing workflow,
+// but nothing outside tests ever set the attribute, so it could not
+// fire. Reading the dial per call (rather than snapshotting it at
+// construction) means flipping it applies on the next run/save.
+//
+// A nil settings API yields a nil func, which workflowsview treats as
+// "fall back to Config.CedarMode" — i.e. the permissive default.
+func workflowCedarModeFn(settingsImpl *settings.API) func() string {
+	if settingsImpl == nil {
+		return nil
+	}
+	return func() string {
+		store := settingsImpl.Store()
+		if store == nil {
+			return "permissive"
+		}
+		strict, err := store.LoadCedarStrictWorkflowMode()
+		if err != nil || !strict {
+			// Fail permissive: an unreadable settings file must not
+			// silently fail workflows closed. The Load* implementations
+			// already return the safe default alongside the error.
+			return "permissive"
+		}
+		return "strict"
+	}
+}
+
+// coreDataDir is the nil-safe DataDir accessor the Cedar gate builders
+// take. A nil Core is the test-chassis path (rpc.New(nil)); it has no
+// DataDir, so buildCedarGate degrades to AllowAll and every gate hook
+// short-circuits to allow — the documented test posture.
+func coreDataDir(c *core.Core) string {
+	if c == nil {
+		return ""
+	}
+	return c.DataDir()
 }
 
 // buildCedarGate constructs the production Cedar policy gate. It loads

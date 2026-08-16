@@ -38,6 +38,7 @@ shipped product boundary, not unwired code. Read that doc before flagging
 | I10 | `check-no-unwired-gates.sh` | `i10-unwired-gates.txt` | exported control-flow function with zero non-test call sites |
 | I11 | `check-builtin-tool-registration.sh` | `i11-unregistered-builtin-tools.txt` | builtin tool package no wiring site imports — **added 2026-08-14** |
 | I12 | `check-single-move-writer.sh` | *(none — no allowlist by design)* | second writer of transcript-move metadata, or a seam with 0 / >1 production callers — **added 2026-08-14** |
+| I13 | `check-cedar-gate-arguments.sh` | `i13-cedar-gate-arguments.txt` | a `cedar.Gate` argument or view-`Config` field that resolves to an unconditional permit — **added 2026-08-16, empty** |
 
 Non-allowlist gates that also protect against unwired code:
 `check-output-ports.sh` (output port with no reader),
@@ -788,6 +789,77 @@ vocabulary widening — three more WIRE verdicts (`CheckSQLiteVersion`,
 blocked on I7. Read those entries before touching any of them; each carries
 its evidence.
 
+### 2026-08-16 · The workflow strictness dial has no UI, only a settings key
+
+Closing audit finding A2 needed a producer for the `mode` context attribute
+`default_workflows_policy.cedar` branches on. That bundle is **embedded in
+every engine** (`engine.go`'s `defaultWorkflowsPolicySource`, not a
+user-installed template as the audit's correction paragraph states), and its
+strict arm forbids saving a shell-bearing workflow. Nothing outside tests
+ever set the attribute, so the arm shipped to every user and could not fire.
+
+The producer now exists end to end: `settings.CedarStrictWorkflowMode` →
+`workflowCedarModeFn` → `workflowsview.Config.CedarModeFn` → the gate, read
+live on every run/save. It is settable by editing `cedarStrictWorkflowMode`
+in the harness settings file, and covered by
+`TestCedarWiring_WorkflowStrictMode_IsReachableFromSettings`.
+
+**What is still missing: the UI dial.** This deliberately follows the
+`CedarStrictCredentialMode` precedent (`views/settings/api.go`), whose own
+comment says "the UI dial for this setting is a follow-up; the binding is
+wired now". Here even the Wails binding is deferred — adding one requires
+regenerating `frontend/wailsjs/` with the Wails toolchain plus a
+`wailsjs-bindings.sha256` bump, which is a mission, not a drive-by mount.
+
+- **Blocker:** whether the harness should surface a fail-closed workflow
+  posture at all, and where, is the same product question as
+  `Options.DefaultDeny` (deliberately `false`, `api.go`'s `buildCedarGate`).
+  Both dials should be designed together or not at all.
+- **Owner / deleting change:** a Settings → Workflows panel mission that
+  surfaces both strictness dials, adds
+  `Settings_{Get,Set}CedarStrictWorkflowMode`, and deletes this entry.
+
+Until then the policy file's header says exactly this, and no longer claims
+a "Settings → Workflows panel" that does not exist.
+
+### 2026-08-16 · Each Cedar gate builds its own Engine, so the audit panel sees a fraction of decisions
+
+Surfaced while wiring A1/A2, not fixed here. `buildCedarGate` constructs a
+**fresh** `cedar.Engine` per call — nine call sites reachable from `rpc.New`
+(`grep -c 'buildCedarGate(' core/rpc/api.go` minus the definition), plus four
+more Engines from `buildCedarEngineOrNil` — and each
+Engine owns a private `MemoryDecisionStore`. `views/cedarpolicy`'s
+`RecentDecisions` reads one engine, built separately via
+`buildCedarEngineOrNil`. So the decisions the user can actually review are
+only those from the engine the policy view happens to hold; memory-write,
+model-select, workflow and scheduled-chat denials are recorded into stores
+nothing reads. A `Reload` triggered from the policy editor likewise refreshes
+only that one engine — the other gates keep their boot-time PolicySet until
+the app restarts.
+
+This was pre-existing (four `buildCedarGate` sites before this change) and
+wiring the remaining sites made it worse rather than introducing it. Left
+alone deliberately: sharing one Engine across every gate is the right fix but
+it changes reload semantics for live gates, which deserves its own change
+rather than riding a wiring fix.
+
+**Reproduced 2026-08-16 (review):** boot `rpc.New` over an empty DataDir,
+save `forbid memory_write` through `cedarpolicy.SavePolicy` (the editor's own
+entry point), call `ReloadPolicies`, confirm `ListPolicies` reports the file
+as loaded — then `memStoreRef.Add` still succeeds. So the sentence "a user
+could author a policy … and nothing consulted it" is only fixed for policy
+that exists **before the process starts**. The in-session editor flow still
+tells the user their rule is live when it is not. That is the same lie class
+this sweep exists to end, and it is the reason the entry below is a blocker
+and not a nice-to-have.
+
+- **Blocker:** none technical; needs a deliberate decision that a policy
+  reload should take effect on live gates mid-session.
+- **Owner / deleting change:** hoist a single `a.cedarGate` in `rpc.New`,
+  pass it to all nine sites and to the cedarpolicy view, and delete this
+  entry. Add a regression test for the in-session flow above at the same
+  time — today nothing pins it.
+
 ### 2026-08-14 · Known gate holes (not yet closed)
 
 - **`check-output-ports.sh` pass 1 is a bare substring count.** Roughly 15
@@ -801,6 +873,17 @@ its evidence.
   `core/bundle/channels`, `core/policy/engine`, `core/trust/backends`) —
   the allowlist says 36, the true closure is 42. Fix is a fixpoint
   iteration over live packages only.
+- **I13 clause 2 cannot do reachability or scope analysis.** A *dead*
+  replacement (`if false { g = engine }`) and a replacement to a same-named
+  variable in a **different function** later in the same file both satisfy
+  "the placeholder is replaced". Found by planting them, 2026-08-16; both
+  need a Go AST tool rather than awk, and both require someone to write the
+  replacement deliberately — unlike the omission shapes clause 3 covers,
+  which happen by accident. The five accidental evasions found in the same
+  session (gofmt-wrapped argument, slice-literal element, trailing comment
+  or struct tag on the field declaration, a comment standing in for the
+  assignment, and an explicit `Field: nil`) **were** closed, each with a
+  planted-violation fixture in `gates_can_fail_test.go`.
 - **I10's `has_real_callsite` is package-blind.** `grep "Symbol("` across
   all of `core/` with no package qualification: two same-named functions in
   different packages cover for each other.

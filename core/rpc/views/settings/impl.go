@@ -659,6 +659,32 @@ func (s *FileStore) SaveCedarStrictCredentialMode(enabled bool) error {
 	return s.saveLocked(got)
 }
 
+// LoadCedarStrictWorkflowMode returns the Workflow-family strictness
+// dial. Default false (permissive) — a fresh install runs and saves
+// workflows under the bundle's permissive arm. Errors return the safe
+// default so a corrupt settings file cannot fail workflows closed.
+func (s *FileStore) LoadCedarStrictWorkflowMode() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.CedarStrictWorkflowMode, err
+	}
+	return got.CedarStrictWorkflowMode, nil
+}
+
+// SaveCedarStrictWorkflowMode persists the Workflow-family strictness
+// dial. Takes effect on the next workflow run/save — the gate reads it
+// through CedarModeFn rather than caching it at construction.
+func (s *FileStore) SaveCedarStrictWorkflowMode(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.CedarStrictWorkflowMode = enabled
+	return s.saveLocked(got)
+}
+
 // LoadFSRequestAccessEnabled returns the kenaz__request_filesystem_access
 // built-in opt-in. Default true (on) — zero-value FSRequestAccessDisabled
 // means enabled. Errors return the safe default so the tool keeps working
@@ -1711,6 +1737,19 @@ func (m *memoryStore) SaveCedarStrictCredentialMode(enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data.CedarStrictCredentialMode = enabled
+	return nil
+}
+
+func (m *memoryStore) LoadCedarStrictWorkflowMode() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.CedarStrictWorkflowMode, nil
+}
+
+func (m *memoryStore) SaveCedarStrictWorkflowMode(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.CedarStrictWorkflowMode = enabled
 	return nil
 }
 
