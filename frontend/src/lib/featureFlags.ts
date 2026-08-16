@@ -32,6 +32,7 @@
  */
 
 import { computed, ref, type ComputedRef, type Ref } from 'vue';
+import { isServedMode } from './useServedMode';
 import type { AppInfo } from './types';
 import type { Capability } from './capability-keys';
 
@@ -135,6 +136,25 @@ export async function refreshFeatureFlags(
  * Usage in templates: `v-if="signedIn"`
  */
 export const signedIn: ComputedRef<boolean> = computed(() => {
+  // Served mode has no fleet surface AT ALL. `AppInfo` is in the served
+  // allowlist and answers with the desktop process's real capability map, so
+  // a browser client of a signed-in harness would otherwise read `signedIn`
+  // as true — and every gate below it would open onto an RPC that served mode
+  // refuses. The allowlist in core/serve/methods.go is 33 methods and carries
+  // no Sites_*, Catalog_*, Sync_* or Slashcmd_SkillPublish, so there is no
+  // fleet affordance that could work here and no gate that should open.
+  //
+  // Closed HERE rather than at each call site because the call sites do not
+  // agree on how they are protected, and one of them is not. Sites and
+  // Marketplace are unrouted in served mode AND carry a `!served` rail guard;
+  // WorkflowsView, SettingsView (which owns SyncPanel and SlashCommandsView)
+  // render `NotAvailableInServedMode` over their whole template. BundlesView
+  // does neither: `/bundles` is a served route, it has no boundary panel, and
+  // its "Publish to team" button gates on `signedIn` alone — so wiring the
+  // capability snapshot made it render in a browser, against a
+  // `Catalog_Publish` that served mode refuses. One fence in the helper
+  // covers that and every gate added later. See docs/served-mode-boundary.md.
+  if (isServedMode()) return false;
   const caps = _appInfo.value?.capabilities;
   if (!caps) return false;
   // The map is non-empty → we have a fleet session.
@@ -158,6 +178,9 @@ export const signedIn: ComputedRef<boolean> = computed(() => {
  * Usage in templates: `v-if="signedIn && capability('launcher_updates')"`
  */
 export function capability(key: Capability): boolean {
+  // Same served-mode fence as `signedIn`. Repeated rather than delegated so
+  // that neither helper can be made safe by accident while the other is not.
+  if (isServedMode()) return false;
   return _appInfo.value?.capabilities?.[key] === true;
 }
 

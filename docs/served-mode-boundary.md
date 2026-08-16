@@ -66,6 +66,31 @@ Consequences, all three of which must move together:
 fails if they differ by anything other than the two paths named above, so
 the next route added to one entry point forces a decision about the other.
 
+## The fence that catches the case none of the three mechanisms did
+
+Added 2026-08-16 by the adversarial review of the capability-gate wiring.
+
+Note that the boundary above is enforced three different ways depending on
+the surface — an unrouted path, a `NotAvailableInServedMode` panel, or a
+`!isServedMode()` guard on the affordance itself. That is fine per surface
+and unreliable in aggregate: `BundlesView` had none of them. `/bundles` is a
+served route, the view renders no boundary panel, and its "Publish to team"
+button gates on `signedIn` alone. `AppInfo` IS in the served allowlist and
+answers with the desktop process's real capability map, so the moment the
+capability snapshot was actually wired, a browser client of a signed-in
+harness rendered that button — over a `Catalog_Publish` served mode refuses.
+
+So `lib/featureFlags.ts` now closes `signedIn` and `capability()` outright
+when `isServedMode()` is true. There is no fleet method anywhere in the
+33-entry allowlist, so no fleet gate can legitimately open in served mode,
+and the fence needs no per-surface knowledge. The per-surface mechanisms
+above stay — they are better UX than an invisible control — but they are no
+longer the only thing standing between a served build and a dead RPC.
+
+Pinned by `src/lib/__tests__/featureFlags.servedFence.spec.ts`. When
+`core/serve/methods.go` does gain a fleet surface, this fence is the first
+thing to revisit.
+
 ## Why it looks like unwired code if you don't know this
 
 A naive import-graph or "is this branch ever taken" pass will flag
