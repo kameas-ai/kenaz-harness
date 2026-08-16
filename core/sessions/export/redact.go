@@ -125,11 +125,24 @@ var builtinMatchers = []credMatcher{
 		re:        regexp.MustCompile(`\bsk-ant-[A-Za-z0-9_-]{20,}\b`),
 	},
 	{
-		// Widened to the project / service-account / admin prefixes and to
-		// the `_-` character class OpenAI now issues. Safe as one pattern
-		// only because of the ordering note above.
+		// Widened to the project / service-account / admin prefixes, which
+		// OpenAI issues with `_` and `-` in the body.
+		//
+		// SPLIT FROM THE BARE `sk-` SHAPE BELOW, and that split is the one
+		// core/sentry/redactor.go and core/fleet/telemetry_redactor.go
+		// already make. Folding the two into one pattern applies the
+		// permissive `[A-Za-z0-9_-]` body to the PREFIXLESS case, and `sk-`
+		// followed by twenty kebab-case characters is an ordinary
+		// identifier: `sk-button-primary-large-variant-x` was redacted as a
+		// credential. Recall is unchanged — a prefixed key still matches
+		// here, and a bare OpenAI key is base62 so it still matches below.
 		profileID: "openai-key",
-		re:        regexp.MustCompile(`\bsk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}\b`),
+		re:        regexp.MustCompile(`\bsk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{20,}\b`),
+	},
+	{
+		// The bare `sk-…` shape: base62 body only, matching the siblings.
+		profileID: "openai-key",
+		re:        regexp.MustCompile(`\bsk-[A-Za-z0-9]{20,}\b`),
 	},
 	{
 		profileID: "google-api-key",
@@ -174,7 +187,18 @@ var builtinMatchers = []credMatcher{
 // of every one of them degrading to `secret-named-key`.
 //
 // The `{6,}` floor keeps `secret: none` and `key: id` out of it.
-const secretNamedKeyValue = `["']?\s*[:=]\s*["']?([^"'\s,;&<>}\])]{6,})`
+//
+// The optional SCHEME prefix is why `{"authorization": "Basic Zm9v…"}` is
+// covered. A header value is `<scheme> <credential>`, and a value class
+// that stops at the first space captured `Basic` alone — five characters,
+// under the floor — so the whole matcher failed and the credential went
+// out verbatim. That is the exact shape the `authorization` / `cookie`
+// matchers below were added for, so leaving it uncovered would have made
+// their own docstring false. Only the fixed scheme words are allowed to
+// carry a space; everything else still stops at whitespace, which is what
+// keeps `authorization: Basic auth is required` (no 6-char token after the
+// scheme, and only 5 without it) out of the match.
+const secretNamedKeyValue = `["']?\s*[:=]\s*["']?((?:(?:Bearer|Basic|Token|ApiKey|Digest|Negotiate|SSWS|GenieKey)\s+)?[^"'\s,;&<>}\])]{6,})`
 
 // keyNameMatchers are the catch-all half of the catalog: a credential that
 // matches NO provider shape is still a credential when it sits under a key
