@@ -225,7 +225,16 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
-### 2026-08-14 · `export.RedactValue` only walks TOP-LEVEL strings (pre-existing)
+### 2026-08-14 · `export.RedactValue` only walks TOP-LEVEL strings (pre-existing) — **CLOSED 2026-08-16, see below**
+
+> **Superseded.** The reproduction below stands, but re-verifying it on
+> 146d9e54 found the finding was both narrower and wider than written:
+> narrower because v0.63.0's structural rule really had closed the
+> argument path, wider because four surfaces the scanner never touched
+> at all were still leaking. See
+> "2026-08-16 · what the export scanner covered BEFORE, and what leaked"
+> under **Drained**.
+
 
 **This predates the mission.** Recorded plainly rather than left inside a
 WP report, because it is a data-leak finding and a WP report is not where
@@ -898,6 +907,120 @@ before acting — frontend code churns between sweeps.
 ---
 
 ## Drained
+
+### 2026-08-16 · what the export scanner covered BEFORE, and what leaked
+
+Closes the 2026-08-14 finding above. Recorded in full because
+**exports taken from any build before this change may contain live
+credentials on disk**, and that is a user-facing fact, not a code note.
+
+**What the scanner covered BEFORE (146d9e54).** `redactMessages` walked
+exactly three things per message and nothing else in the export:
+
+1. `Message.Content`
+2. each `ToolCall.Result`
+3. each TOP-LEVEL string in `ToolCall.Arguments` (a `map[string]any` or a
+   `[]any` value was copied through unscanned; keys were never scanned)
+
+Against a catalog of ten patterns: AWS `AKIA` ids, a 40-char AWS secret
+in `key=value` form, JWTs, `Bearer`/`Basic`, PEM private-key blocks,
+`ghp_`-style GitHub tokens, `sk-`, `sk-ant-`, and a
+`(?:password|secret|apikey|api_key|api-key|token)\s*[:=]\s*…` generic.
+
+**What actually leaked**, reproduced on 146d9e54 with a throwaway probe
+that rendered both formats and searched the resulting bytes:
+
+| shape | markdown | json |
+|---|---|---|
+| credential in the session **title** | LEAKED | LEAKED |
+| credential in the **system prompt** | n/a | LEAKED |
+| credential in an attachment's **`original_name`** | n/a | LEAKED |
+| credential in an attachment's **`uri`** (presigned URL) | LEAKED | n/a |
+| credential in the **tool name** | LEAKED | LEAKED |
+| `{"aws_secret_access_key": "wJalr…"}` in a tool **result** | LEAKED | LEAKED |
+| the same key in `key=value` form | redacted | redacted |
+| provider-shaped key in content / result | redacted | redacted |
+| secret nested in an argument object / array / used as a key | redacted | redacted |
+
+Two corrections to the 2026-08-14 entry, both from running the probe
+rather than reading the code:
+
+- **The argument leak it describes is no longer reachable.** v0.63.0
+  (`ExportFormatVersion` 1 → 2) stopped printing argument VALUES, and
+  `argsSummaryFromValues` already scanned the NAMES. The nested/array/key
+  shapes it reproduces against `8c8b63a9` do not reach either file today.
+  The shallow walk was real; its consequence was not.
+- **The session ROW was never scanned at all**, by anything. That is the
+  bigger half of the finding and it is not in the 2026-08-14 entry:
+  `redactMessages` is named for what it walks, and `Render` called
+  nothing else. `Record.Name` reaches the markdown H1, the JSON
+  `session.name`, **and the filename offered to the OS save dialog** via
+  `DefaultFilename`, which the only production caller feeds the raw name.
+
+**What the scanner covers now.** The message walk is recursive over
+nested objects, arrays and map KEYS (bounded at `MaxRedactDepth = 24`,
+cycle-guarded, failing CLOSED at the bound); the session row, attachment
+`original_name` / `uri` / block text, and tool names are scanned; and a
+key that NAMES a secret (`authorization`, `cookie`, `set-cookie`,
+`x-api-key`, `api_key`, `*_token`, `*_secret`, `password`, `passphrase`,
+`private_key`) forces its value to be redacted whether or not the value
+matches a pattern. The catalog gained: the full AWS unique-id prefix set,
+GitHub fine-grained PATs, `sk-proj-`/`sk-svcacct-`/`sk-admin-`, Google
+`AIza`, Slack `xox[abposr]-`, Stripe `sk_live_`/`rk_test_`, and inline
+passwords in connection strings.
+
+The single highest-value change is the smallest: `["']?` before the
+separator. The old key-name matcher required `name<colon>value` with
+nothing between, so `{"password": "hunter2"}` never matched — the key's
+CLOSING QUOTE was in the way. Every structured tool result in this app is
+JSON, so in practice that matcher only ever fired on shell, env-file and
+query-string text.
+
+**Still open, deliberately, each with the reason:**
+
+- **`\b` finds no boundary after `_`.** A credential glued to a prefix
+  with an underscore (`myprefix_sk-ant-…`) is not matched by the
+  provider patterns. Real credentials are preceded by `"`, `=`, `:` or
+  whitespace in every shape observed; widening the boundary costs
+  precision everywhere for a case nobody has produced. Pinned by the
+  fixture comment in `redact_leak_test.go` so the next reader knows it is
+  a decision.
+- **A TRUNCATED PEM block is not matched.** The pattern requires the
+  `-----END … PRIVATE KEY-----` marker, and `capToolOutput` truncates a
+  tool result at 4000 runes. Making the END optional would let the word
+  "BEGIN RSA PRIVATE KEY" in prose redact the rest of the document.
+  Owner: unassigned; the fix is a length-bounded variant, not an
+  open-ended one.
+- **`core/event/redact.defaultMatchers` has NOT been widened.** The
+  export catalog began as a copy of it and has now diverged; that one
+  still has all ten original patterns including the JSON-blind generic.
+  It feeds the audit log's HMAC pipeline, which is a different contract,
+  and widening a live audit pipeline from inside an export fix is the
+  wrong blast radius. Owner: unassigned. **If you are auditing what the
+  event log redacts, do not read the export catalog and assume parity.**
+- **`core/eval/capture.go:137` `redactString` is much weaker than any of
+  the four catalogs** — it handles `sk-` and `Bearer ` and nothing else,
+  no GitHub token, no AWS key, no JWT, no password, no cookie — and it
+  writes LLM messages to disk. Its own comment calls it "defense-in-depth"
+  behind the event log, which is true of the event-log path and not of
+  the capture FILE. Owner: unassigned. Gated behind eval capture being
+  enabled, which is why it is recorded rather than fixed here.
+- **`Handoff_Share` does not run through any scanner.** Unchanged and
+  correct for now: it is E2E-encrypted to a recipient the user picks, and
+  per the 2026-08-14 entry above it currently transmits a literal empty
+  event list. If a payload builder ever lands, redaction is a product
+  decision (what may cross the fleet boundary), not an automatic yes.
+
+**Cost.** Markdown export of a 400-message, ~3.8 MB session, darwin/arm64,
+`-benchtime=20x`: 556 ms/op before → **485 ms/op** now for a transcript
+with no key-name anchor words, **973 ms/op** for one containing all seven.
+The typical case is faster than the code it replaces despite scanning for
+eleven more shapes, because `RedactValue` gained a literal prefilter
+(`credMatcher.anchor`) and a `FindStringIndex` guard that stops
+`ReplaceAllStringFunc` from copying the whole string once per matcher when
+nothing matched. The 20-way case-insensitive alternation the key-name rule
+started as measured 203 ms/MB on its own — twenty times every other
+matcher — which is why it is seven anchored matchers instead of one.
 
 - **2026-08-14** (orphan-deletion sweep wave 2) — eleven surfaces
   deleted, each with positive no-consumer proof and a named rubric

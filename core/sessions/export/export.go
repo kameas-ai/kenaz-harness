@@ -50,8 +50,14 @@ type ArtifactSidecar struct {
 }
 
 // Render serialises session + msgs into the chosen format.
-// It applies RedactValue to every string field in every message before
-// serialising so credential bytes never reach the output file.
+// It applies RedactValue to every string field the renderers can reach —
+// in the messages AND in the session row — before serialising, so
+// credential bytes never reach the output file.
+//
+// The session row is scanned here rather than by the caller because the
+// caller cannot: `redactMessages` is named for what it walks, and until
+// 2026-08-16 nothing at all scanned `sess.Name` or `sess.SystemPrompt`,
+// both of which the renderers print.
 //
 // Returns: (mainContent, sidecars, error). sidecars is non-empty only
 // when format == FormatMarkdown and messages carry attached file bytes.
@@ -62,8 +68,10 @@ func Render(
 	msgs []session.Message,
 	now time.Time,
 ) ([]byte, []ArtifactSidecar, error) {
-	// Redact every string field in every message copy.
+	// Redact every string field in every message copy, and in the
+	// session row the renderers print alongside them.
 	redacted := redactMessages(msgs)
+	sess = redactRecord(sess)
 
 	switch format {
 	case FormatMarkdown:
@@ -84,9 +92,16 @@ func Render(
 }
 
 // DefaultFilename returns the suggested filename for the export file.
-// Title is sanitised for filesystem safety (spaces → hyphens, special
-// chars stripped). date is formatted YYYY-MM-DD.
+// Title is scanned for credentials and then sanitised for filesystem
+// safety (spaces → hyphens, special chars stripped). date is formatted
+// YYYY-MM-DD.
+//
+// The scan is not belt-and-braces: the only caller passes the raw
+// `session.Record.Name`, so before 2026-08-16 a key pasted into a session
+// title was proposed to the OS save dialog as the FILENAME — the one
+// piece of an export that survives being opened in a screenshot.
 func DefaultFilename(title string, format Format, date time.Time) string {
+	title, _ = RedactValue(title)
 	slug := sanitiseTitle(title)
 	if slug == "" {
 		slug = "session"
