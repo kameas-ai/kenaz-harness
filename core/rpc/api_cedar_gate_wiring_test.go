@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -44,6 +45,7 @@ import (
 // boots with only the embedded default bundle.
 func cedarWiringAPI(t *testing.T, policySrc string) *API {
 	t.Helper()
+	sandboxUserConfigDir(t)
 	dataDir := t.TempDir()
 	if policySrc != "" {
 		polDir := filepath.Join(dataDir, cedar.PolicyDir)
@@ -58,7 +60,77 @@ func cedarWiringAPI(t *testing.T, policySrc string) *API {
 	if err != nil {
 		t.Fatalf("core.New: %v", err)
 	}
-	return New(c)
+	api := New(c)
+	assertSettingsStoreIsSandboxed(t, api)
+	return api
+}
+
+// sandboxUserDir is the per-test redirect target for os.UserConfigDir.
+//
+// WHY THIS EXISTS. rpc.New's settings store is
+// settings.NewFileStoreFromEnv() — os.UserConfigDir(), NOT the DataDir
+// this harness hands core.New. Without the redirect
+// TestCedarWiring_WorkflowStrictMode_IsReachableFromSettings writes
+// `cedarStrictWorkflowMode: true` into the DEVELOPER'S REAL
+// ~/Library/Application Support/kenaz-harness/settings.json, and its
+// t.Fatal on the first assertion skips the line that flips it back. Two
+// consequences, both observed:
+//
+//  1. `go test ./core/rpc/` leaves the installed harness in strict
+//     workflow mode — every subsequent shell-bearing workflow save is
+//     denied, in the real app, forever.
+//  2. The leaked `true` then fails
+//     TestCedarWiring_WorkflowSave_DefaultPolicyStillPermits on the NEXT
+//     run of the unmodified tree — the over-blocking guard becomes
+//     history-dependent, which is exactly the assertion that must not be.
+//
+// os.UserConfigDir reads $HOME/Library/Application Support (darwin),
+// %AppData% (windows), $XDG_CONFIG_HOME or $HOME/.config (unix), so all
+// three are redirected.
+func sandboxUserDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, ".config"))
+	t.Setenv("AppData", filepath.Join(dir, "AppData"))
+	return dir
+}
+
+func sandboxUserConfigDir(t *testing.T) {
+	t.Helper()
+	dir := sandboxUserDir(t)
+	got, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatalf("os.UserConfigDir after redirect: %v", err)
+	}
+	if !strings.HasPrefix(got, dir) {
+		t.Fatalf("os.UserConfigDir() = %q, not under the sandbox %q — the redirect no longer works "+
+			"and these tests would write the real user settings file", got, dir)
+	}
+}
+
+// assertSettingsStoreIsSandboxed makes the redirect non-vacuous: if
+// rpc.New ever stops routing settings through os.UserConfigDir (or the
+// redirect silently stops applying) the tests must fail loudly rather
+// than quietly resume mutating real user state.
+func assertSettingsStoreIsSandboxed(t *testing.T, api *API) {
+	t.Helper()
+	if api.settingsImpl == nil {
+		return
+	}
+	store := api.settingsImpl.Store()
+	if store == nil {
+		return
+	}
+	p, ok := store.(interface{ Path() string })
+	if !ok {
+		t.Fatalf("settings store %T exposes no Path(); cannot prove it is sandboxed", store)
+	}
+	home := os.Getenv("HOME")
+	if home == "" || !strings.HasPrefix(p.Path(), home) {
+		t.Fatalf("settings store path %q is outside the test sandbox %q — this test would write real user settings",
+			p.Path(), home)
+	}
 }
 
 func forbidPolicy(action string) string {
@@ -405,6 +477,95 @@ func llmRegistryOverDataDir(t *testing.T, dataDir string) corellm.Registry {
 		t.Fatal("newLLMStack produced no registry — construction changed")
 	}
 	return stack.reg
+}
+
+// ---------------------------------------------------------------------------
+// Site 6 — recipe spawn (tools.Config.Gate)
+// ---------------------------------------------------------------------------
+
+// The sixth site is the one no behavioural test covered: deleting
+// `Gate: buildCedarGate(dataDir)` from newToolsAPI left the whole
+// ./core/rpc/... tree green, so only check-cedar-gate-arguments.sh
+// clause 3 stood between the field and silent removal.
+//
+// This drives the flow the shipped template documents in its own header
+// ("Copy this file to <DataDir>/policy/"): install mcp-no-npx.cedar,
+// then ask the tools surface to install the one shipped npx-based
+// recipe, and require the refusal.
+func TestCedarWiring_RecipeSpawn_ShippedNoNpxTemplateIsEnforced(t *testing.T) {
+	if _, err := exec.LookPath("npx"); err != nil {
+		t.Skip("npx is not installed; InstallRecipe's prereq check fires before the Cedar gate")
+	}
+	src, err := cedar.PoliciesFS.ReadFile("policies/mcp-no-npx.cedar")
+	if err != nil {
+		t.Fatalf("read shipped template: %v", err)
+	}
+	api := cedarWiringAPI(t, string(src))
+
+	_, err = api.Tools().InstallRecipe(context.Background(), "filesystem", nil, nil)
+	if err == nil {
+		t.Fatal("the npx-based `filesystem` recipe installed under mcp-no-npx.cedar — tools.Config.Gate is nil or cannot deny")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "cedar") {
+		t.Fatalf("err = %v; want the Cedar gate refusal, not an unrelated failure", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Over-blocking matrix: a default install permits every gated action
+// ---------------------------------------------------------------------------
+
+// The surface-level "DefaultPolicyStillPermits" tests above cover four
+// of the newly-wired actions. This pins the whole set at the gate the
+// production builder returns, including the two with no surface test
+// (network_request, recipe spawn) and the delete/execute verbs.
+//
+// Every entry here worked before the gates were wired — precisely
+// because nothing was wired. If any starts denying, this change has
+// taken a capability away from users on a default install.
+func TestCedarWiring_DefaultInstall_PermitsEveryGatedAction(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	g := buildCedarGate(dir)
+	if _, degraded := g.(cedar.AllowAll); degraded {
+		t.Fatal("buildCedarGate degraded to AllowAll for a real DataDir — every assertion below would be vacuous")
+	}
+	ctx := context.Background()
+
+	if err := cedar.CheckMemoryWrite(ctx, g, "global"); err != nil {
+		t.Errorf("memory_write denied on a default install: %v", err)
+	}
+	for _, host := range []string{"html.duckduckgo.com", "en.wikipedia.org"} {
+		if err := cedar.CheckNetwork(ctx, g, host); err != nil {
+			t.Errorf("network_request(%s) denied on a default install: %v", host, err)
+		}
+	}
+	if err := cedar.CheckRecipeSpawn(ctx, g, "filesystem", "npx", "stdio"); err != nil {
+		t.Errorf("recipe spawn(npx) denied on a default install: %v — mcp-no-npx.cedar must stay opt-in", err)
+	}
+	// "" is the mode a Config with neither CedarMode nor CedarModeFn
+	// produces; the helpers must coerce it to the permissive arm.
+	for _, mode := range []string{"permissive", ""} {
+		if d, err := cedar.GateWorkflowSave(ctx, g, "wf-1", mode, "model_turn,shell"); err != nil || d.Outcome == cedar.Deny {
+			t.Errorf("workflow.save(shell, mode=%q): outcome=%v err=%v; want permit", mode, d.Outcome, err)
+		}
+		if d, err := cedar.GateWorkflowRun(ctx, g, "wf-1", mode, "model_turn,shell"); err != nil || d.Outcome == cedar.Deny {
+			t.Errorf("workflow.run(shell, mode=%q): outcome=%v err=%v; want permit", mode, d.Outcome, err)
+		}
+	}
+	if d, err := cedar.GateWorkflowDelete(ctx, g, "wf-1"); err != nil || d.Outcome == cedar.Deny {
+		t.Errorf("workflow.delete: outcome=%v err=%v; want permit", d.Outcome, err)
+	}
+	for name, call := range map[string]func() (cedar.Decision, error){
+		"scheduled_run.create":  func() (cedar.Decision, error) { return cedar.GateScheduledChatCreate(ctx, g, "sc-1") },
+		"scheduled_run.delete":  func() (cedar.Decision, error) { return cedar.GateScheduledChatDelete(ctx, g, "sc-1") },
+		"scheduled_run.execute": func() (cedar.Decision, error) { return cedar.GateScheduledChatExecute(ctx, g, "sc-1") },
+	} {
+		d, err := call()
+		if err != nil || d.Outcome == cedar.Deny {
+			t.Errorf("%s: outcome=%v err=%v; want permit", name, d.Outcome, err)
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
