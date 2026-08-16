@@ -34,12 +34,17 @@ onBeforeUnmount(() => {
 const filter = ref('');
 const inputEl = ref<HTMLInputElement | null>(null);
 
+// `visible` is the capability/served-mode gate (see useCommandPalette.ts).
+// Applied before the text filter so a gated-off destination can never be
+// reached by typing its name.
+const available = computed(() =>
+  palette.actions.value.filter((a) => (a.visible ? a.visible() : true)),
+);
+
 const filtered = computed(() => {
   const q = filter.value.toLowerCase();
-  if (!q) return palette.actions.value;
-  return palette.actions.value.filter((a) =>
-    a.label.toLowerCase().includes(q),
-  );
+  if (!q) return available.value;
+  return available.value.filter((a) => a.label.toLowerCase().includes(q));
 });
 
 watch(palette.isOpen, (open) => {
@@ -50,7 +55,7 @@ watch(palette.isOpen, (open) => {
 });
 
 async function run(id: string) {
-  const a = palette.actions.value.find((x) => x.id === id);
+  const a = available.value.find((x) => x.id === id);
   if (!a) return;
   await a.perform();
   palette.close();

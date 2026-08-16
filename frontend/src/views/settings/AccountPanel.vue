@@ -15,6 +15,7 @@
  */
 import { computed, onMounted, ref } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
+import { refreshFeatureFlags } from '@/lib/featureFlags';
 import type { FleetIdentity, FleetProfileInfo } from '@/lib/types';
 
 const client = useHarnessClient();
@@ -95,6 +96,12 @@ async function signIn() {
   }
   try {
     identity.value = await client.settings.fleetSignIn();
+    // Sign-in mutates fleet state long after boot, when main.ts's
+    // bootFeatureFlags has already run against a signed-out snapshot. Without
+    // this the user stays fully gated — no Sites nav, no Publish-to-team, and
+    // Settings → Sync still telling them to sign in — until they restart.
+    // (docs/dead-code-audit-2026-08-16.md finding A4, part 2)
+    await refreshFeatureFlags(client);
   } catch (e: any) {
     error.value = humanizeFleetError(e?.message ?? String(e ?? ''));
     identity.value = false;
@@ -167,6 +174,13 @@ async function signOut() {
   } catch (e: any) {
     error.value = e?.message ?? 'Sign-out failed.';
   } finally {
+    // Outside the try on purpose: FleetSignOut stops the capability poller
+    // and clears tokens *before* it reports a partial keychain failure, so the
+    // session is gone whether or not the RPC resolved cleanly. Leaving the
+    // capability snapshot behind would keep Publish-to-team and the Sites nav
+    // on screen for a signed-out user — the fail-OPEN direction, and the one
+    // that matters. refreshFeatureFlags never throws.
+    await refreshFeatureFlags(client);
     loading.value = false;
   }
 }
@@ -176,6 +190,9 @@ async function refreshIdentity() {
   error.value = '';
   try {
     identity.value = await client.settings.fleetRefreshIdentity();
+    // Re-enrolment is where a tier change lands (roles/tier come back from the
+    // enroll endpoint), and tier is what the capability set is derived from.
+    await refreshFeatureFlags(client);
   } catch (e: any) {
     error.value = e?.message ?? 'Refresh failed.';
   } finally {

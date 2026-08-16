@@ -8,11 +8,24 @@
  */
 
 import { ref, onMounted, onBeforeUnmount, type Ref } from 'vue';
+import { signedIn, capability } from '@/lib/featureFlags';
+import { isServedMode } from '@/lib/useServedMode';
 
 export interface PaletteAction {
   id: string;
   label: string;
   hint?: string;
+  /**
+   * Optional gate. When present, CommandPalette.vue hides the action — and
+   * refuses to run it — unless this returns true. Evaluated on every render,
+   * so it may read reactive state (e.g. the fleet capability snapshot).
+   *
+   * Most actions omit it: their destinations are always available. It exists
+   * for the fleet surfaces, whose rail entries are capability-gated; a palette
+   * entry that ignored the gate would be a second, ungated door to a screen
+   * the user is not entitled to.
+   */
+  visible?(): boolean;
   perform(): void | Promise<void>;
 }
 
@@ -37,6 +50,26 @@ const NAV_ACTIONS: PaletteAction[] = [
   { id: 'nav.audit', label: 'Go to Audit log', hint: 'Session & tool audit trail', perform: () => navigate('#/audit') },
   { id: 'nav.permissions', label: 'Go to Permissions', hint: 'Tool & bash permissions', perform: () => navigate('#/permissions') },
   { id: 'nav.policy', label: 'Go to Security policy', hint: 'Advanced security policy editor', perform: () => navigate('#/policy') },
+  // Fleet surfaces. Both routes exist only in the desktop bundle
+  // (docs/served-mode-boundary.md) and both are entitlement-gated, so these
+  // carry the same predicate as their LeftRail entries. Before
+  // docs/dead-code-audit-2026-08-16.md finding A4 was fixed the gate was
+  // permanently false and these two views had no reachable entry point at all
+  // — no rail item, no palette action, no router.push anywhere in the tree.
+  {
+    id: 'nav.sites',
+    label: 'Go to Sites',
+    hint: 'Fleet-hosted static sites',
+    visible: () => !isServedMode() && signedIn.value && capability('sites_hosting'),
+    perform: () => navigate('#/sites'),
+  },
+  {
+    id: 'nav.marketplace',
+    label: 'Go to Marketplace',
+    hint: 'Team catalog of shared bundles, workflows & skills',
+    visible: () => !isServedMode() && signedIn.value,
+    perform: () => navigate('#/marketplace'),
+  },
 ];
 
 const SETTINGS_ACTIONS: PaletteAction[] = [
