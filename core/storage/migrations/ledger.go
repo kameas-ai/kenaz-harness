@@ -122,6 +122,32 @@ func (r *Registry) Applied() ([]LedgerEntry, error) {
 	return out, nil
 }
 
+// latestLedgerRows collapses the append-only ledger to the most recent row
+// per version. Applied() returns rows in rowid (insertion) order, so the
+// last write for a version wins — the single rule Pending, VerifyLedger,
+// Rollback and DetectDrift all share. Duplicate rows for one version are
+// therefore harmless by construction.
+func latestLedgerRows(rows []LedgerEntry) map[int]LedgerEntry {
+	latest := make(map[int]LedgerEntry, len(rows))
+	for _, e := range rows {
+		latest[e.Version] = e
+	}
+	return latest
+}
+
+// effectiveAppliedVersions returns the set of versions whose most recent
+// ledger row is action=applied. A rolled-back version is absent from the
+// set, which is what makes it pending again.
+func effectiveAppliedVersions(rows []LedgerEntry) map[int]struct{} {
+	out := make(map[int]struct{}, len(rows))
+	for v, e := range latestLedgerRows(rows) {
+		if e.Action == LedgerActionApplied {
+			out[v] = struct{}{}
+		}
+	}
+	return out
+}
+
 // appendLedger writes a ledger row. Caller is inside a write tx.
 func appendLedger(ctx context.Context, tx WriteTx, e LedgerEntry) error {
 	var rbFrom any

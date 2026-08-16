@@ -14,13 +14,29 @@ import (
 //     migration's canonical ContentHash. Mismatch -> ErrLedgerHashMismatch.
 //   - Every applied row must reference a registered migration. Missing
 //     -> ErrSchemaGap (with a "unknown ledger entry" message).
-//   - The applied versions must be a contiguous prefix of registered
-//     migrations starting at min(applied). Gaps in [min,max] ->
-//     ErrSchemaGap.
+//   - PER OWNING MISSION, the applied versions must be a contiguous prefix
+//     of that mission's registered migrations. A registered migration below
+//     its own mission's highest applied version but absent from the ledger
+//     -> ErrSchemaGap.
+//
+// WHY PER-MISSION AND NOT GLOBAL [min,max]. The original rule required every
+// registered migration between min(applied) and max(applied) to be applied,
+// across all missions at once. The version space is shared (CanonicalBlocks)
+// and missions do NOT land in block order: units/1100..1103 shipped before
+// sessions/0332..0335 was written. On any database carrying the units rows,
+// max(applied)=1103, so a freshly-added and entirely legitimate sessions/0332
+// sits inside [min,max] unapplied — the global rule calls that a schema gap
+// on every healthy install, which is the same shared-version-space blindness
+// that broke Pending (registry.go).
+//
+// A migration is only ever ordered against its own mission's migrations, so
+// that is the only axis on which "a migration was skipped" is meaningful.
+// Within a mission the check is exactly as strong as before: sessions/0334
+// applied while sessions/0333 is missing is still ErrSchemaGap.
 //
 // Rollback rows are tolerated and used to compute the "current" applied
 // set: a rolled-back version is no longer "applied" for the purposes of
-// the contiguous-prefix check.
+// the contiguity check.
 func (r *Registry) VerifyLedger(ctx context.Context) error {
 	rows, err := r.Applied()
 	if err != nil {
@@ -29,10 +45,7 @@ func (r *Registry) VerifyLedger(ctx context.Context) error {
 	// Compute the effective applied set: a version is applied if its
 	// most recent row is action=applied; rolled_back if the most recent
 	// is rolled_back.
-	latest := map[int]LedgerEntry{}
-	for _, e := range rows {
-		latest[e.Version] = e // rows are insertion-order, last wins
-	}
+	latest := latestLedgerRows(rows)
 
 	for v, e := range latest {
 		if e.Action != LedgerActionApplied {
@@ -49,37 +62,34 @@ func (r *Registry) VerifyLedger(ctx context.Context) error {
 		}
 	}
 
-	// Gap check on effective applied set.
-	versions := make([]int, 0, len(latest))
-	for v, e := range latest {
-		if e.Action == LedgerActionApplied {
-			versions = append(versions, v)
-		}
-	}
-	if len(versions) == 0 {
+	// Per-mission contiguity check on the effective applied set.
+	applied := effectiveAppliedVersions(rows)
+	if len(applied) == 0 {
 		return nil
 	}
-	sort.Ints(versions)
-	min := versions[0]
-	max := versions[len(versions)-1]
-	// We expect all registered migrations between min and max to be
-	// present in the applied set. Otherwise, a migration was created
-	// out of order or a row is missing.
-	all := r.All()
+	// Highest applied version per owning mission, attributed via the
+	// REGISTERED migration (authoritative) rather than the ledger row's
+	// owning_mission text, so a drifted row cannot re-file a version under
+	// the wrong mission and hide a gap.
+	all := r.All() // ascending by version
+	highWater := map[string]int{}
 	for _, m := range all {
-		if m.Version < min || m.Version > max {
+		if _, ok := applied[m.Version]; !ok {
 			continue
 		}
-		found := false
-		for _, v := range versions {
-			if v == m.Version {
-				found = true
-				break
-			}
+		if m.Version > highWater[m.OwningMission] {
+			highWater[m.OwningMission] = m.Version
 		}
-		if !found {
-			return fmt.Errorf("%w: registered migration v%d (%s) not present in ledger between [%d,%d]",
-				ErrSchemaGap, m.Version, m.ID, min, max)
+	}
+	for _, m := range all {
+		if _, ok := applied[m.Version]; ok {
+			continue
+		}
+		// Unapplied ABOVE its mission's high-water mark is the normal
+		// pending state; unapplied BELOW it means a migration was skipped.
+		if m.Version < highWater[m.OwningMission] {
+			return fmt.Errorf("%w: registered migration v%d (%s) is not applied, but %s/%d above it is",
+				ErrSchemaGap, m.Version, m.ID, m.OwningMission, highWater[m.OwningMission])
 		}
 	}
 	return nil
@@ -149,10 +159,7 @@ func (r *Registry) Rollback(ctx context.Context, toVersion int) error {
 		return err
 	}
 	// Build effective applied set: most recent row per version.
-	latest := map[int]LedgerEntry{}
-	for _, e := range rows {
-		latest[e.Version] = e
-	}
+	latest := latestLedgerRows(rows)
 	type todo struct {
 		mig    Migration
 		ledger LedgerEntry
