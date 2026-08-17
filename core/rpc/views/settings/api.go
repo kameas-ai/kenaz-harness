@@ -174,6 +174,21 @@ type Settings struct {
 	// Settings_SetCedarStrictCredentialMode bindings today.
 	CedarStrictCredentialMode bool `json:"cedarStrictCredentialMode,omitempty"`
 
+	// CedarStrictWorkflowMode selects the `mode` context attribute the
+	// Workflow-family Cedar bundle branches on: false (default) sends
+	// "permissive", true sends "strict".
+	//
+	// Strict is what makes `default_workflows_policy.cedar`'s
+	// shell-step forbid rule fire on save. That bundle is embedded in
+	// every engine, so before this field existed it shipped to every
+	// user with an arm nothing could reach.
+	//
+	// No UI dial yet — the Settings → Workflows panel is a tracked
+	// follow-up (docs/unwired-ledger.md, 2026-08-16). Settable today by
+	// editing `cedarStrictWorkflowMode` in the harness settings file,
+	// and read live on every workflow run/save.
+	CedarStrictWorkflowMode bool `json:"cedarStrictWorkflowMode,omitempty"`
+
 	// CredentialAuditRetentionDays controls how long
 	// KindCredentialAccessed audit rows are retained before the daily
 	// sweep deletes them (credential-store-01KQ8TDD WP07). Zero (default)
@@ -1097,6 +1112,22 @@ type SettingsStore interface {
 	// takes effect on the next Use call without re-creating the store.
 	LoadCedarStrictCredentialMode() (bool, error)
 	SaveCedarStrictCredentialMode(enabled bool) error
+
+	// LoadCedarStrictWorkflowMode / SaveCedarStrictWorkflowMode expose
+	// the Workflow-family strictness dial. Default false (permissive).
+	//
+	// This is the producer for the `mode` context attribute the shipped
+	// `default_workflows_policy.cedar` bundle branches on. Its strict
+	// arm forbids saving a workflow that carries a `shell` step; until
+	// this dial existed nothing in the repo set the attribute outside
+	// tests, so that arm shipped embedded in every engine and could
+	// never fire.
+	//
+	// Read per gate call through workflowsview.Config.CedarModeFn, so a
+	// change takes effect on the next run/save without an app restart —
+	// the same shape as the credential dial above.
+	LoadCedarStrictWorkflowMode() (bool, error)
+	SaveCedarStrictWorkflowMode(enabled bool) error
 
 	// LoadFSRequestAccessEnabled / SaveFSRequestAccessEnabled expose
 	// the kenaz__request_filesystem_access built-in opt-in. Default

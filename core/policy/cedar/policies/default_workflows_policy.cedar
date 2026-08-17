@@ -9,9 +9,14 @@
 //
 // Context attrs (workflow.run / workflow.save):
 //   `mode`        (string) — "permissive" | "strict". Defaults to
-//                            "permissive"; the chassis sets "strict"
-//                            when the user has opted in to fail-closed
-//                            via the Settings → Workflows panel.
+//                            "permissive". The chassis sends "strict"
+//                            when `cedarStrictWorkflowMode` is true in
+//                            the harness settings file, read live on
+//                            every run/save via
+//                            workflowsview.Config.CedarModeFn.
+//                            There is no Settings-panel dial for it
+//                            yet — that is a tracked follow-up
+//                            (docs/unwired-ledger.md, 2026-08-16).
 //   `step_kinds`  (string) — comma-joined sorted list of step kinds in
 //                            the workflow (e.g. "model_turn,shell").
 //                            Used by `like` rules below to spot

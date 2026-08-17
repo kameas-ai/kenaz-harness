@@ -95,6 +95,23 @@ func (f *migFakeDB) Query(ctx context.Context, query string, args ...any) (migra
 	if strings.HasPrefix(q, "select count(*) from pragma_table_info(") {
 		return &migCountRows{n: 0}, nil
 	}
+	// Migration 0332 probes for artifact_versions before parking its rows
+	// across the artifacts rebuild. The fake DOES track table names, so
+	// answer from that map rather than guessing — see
+	// TestMigration0332_PreservesArtifactVersionRows in
+	// core/storage/sqlite for the real-sqlite half of this behaviour.
+	if strings.HasPrefix(q, "select count(*) from sqlite_master where type='table' and name=?") {
+		n := 0
+		if len(args) == 1 {
+			name, _ := args[0].(string)
+			f.mu.Lock()
+			if f.tables[name] {
+				n = 1
+			}
+			f.mu.Unlock()
+		}
+		return &migCountRows{n: n}, nil
+	}
 	return nil, fmt.Errorf("migFakeDB: unsupported query: %q", query)
 }
 
@@ -117,6 +134,17 @@ func (t *migFakeTx) Exec(ctx context.Context, query string, args ...any) (migrat
 		return migResult{}, nil
 	case strings.HasPrefix(q, "create table if not exists "):
 		name := extractName(q, "create table if not exists ")
+		t.db.mu.Lock()
+		t.db.tables[name] = true
+		t.db.mu.Unlock()
+		return migResult{}, nil
+	case strings.HasPrefix(q, "create table ") && strings.Contains(q, " as select "):
+		// CREATE TABLE <name> AS SELECT … — migration 0332's scratch copy
+		// of artifact_versions. Name-only registration; the fake has no
+		// row store, so the copy itself is a no-op here. The row-level
+		// contract is pinned on real sqlite by
+		// TestMigration0332_PreservesArtifactVersionRows.
+		name := extractName(q, "create table ")
 		t.db.mu.Lock()
 		t.db.tables[name] = true
 		t.db.mu.Unlock()

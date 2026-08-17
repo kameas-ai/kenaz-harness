@@ -5,8 +5,13 @@
  *   - Is absent when sites_hosting capability is missing (default)
  *   - Is present when signedIn AND capability('sites_hosting') is true
  *
- * Uses initFeatureFlags() to set the appInfo state before each test,
- * matching how the real app populates the capability snapshot.
+ * Uses initFeatureFlags() to set the appInfo state before each test. That
+ * makes this an arithmetic test of the gate, NOT proof that anything opens it:
+ * until 2026-08-16 no production code called initFeatureFlags at all, so this
+ * file was green while the Sites nav item was invisible to every user. The
+ * caller is pinned separately by `src/__tests__/entrypoint.featureFlags.test.ts`
+ * (docs/dead-code-audit-2026-08-16.md finding A4). Served-mode gating is in
+ * `LeftRail.served-fleet-nav.test.ts`.
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';

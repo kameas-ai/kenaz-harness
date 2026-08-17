@@ -80,18 +80,79 @@ turn, and a tool-call against that name dispatches to
 ## Cedar gate-hook fire sites
 
 `core/policy/cedar.Gate` is the small interface gate-hook callers
-import. The chassis ships with `cedar.AllowAll{}` as the boot-stage
-default; production wiring swaps in a real `Engine` once a policy
-bundle has loaded.
+import. There is **no deferred swap-in path**: whatever gate a wiring
+site passes at construction is what enforces for the process lifetime.
+Every production site therefore passes `buildCedarGate(c.DataDir())`
+(or the `*cedar.Engine` itself) directly. `cedar.AllowAll{}` appears
+only where there is no `DataDir` to load policy from — the nil-core
+test chassis — and `buildCedarGate` returns it for an empty `dataDir`
+so the fallback is one branch in one function rather than a literal at
+each call.
+
+Three sites used to pass `cedar.AllowAll{}` unconditionally under
+comments promising a future swap that was never written, and three view
+`Config`s omitted their gate field entirely (nil gate ⇒
+`Allow("no engine wired (default-allow)")`) — `workflowsview`,
+`scheduledchatview`, and `tools.Config.Gate`, the last found by
+`check-cedar-gate-arguments.sh` while the other five were being wired.
+A user could author a Cedar policy, watch the editor validate it, save
+it, see it listed as loaded — and none of these six sites consulted it.
+Wired 2026-08-16; see `docs/dead-code-audit-2026-08-16.md` findings A1
+and A2.
+
+**Scope of that fix: policy present at boot.** Each wiring site builds
+its own `cedar.Engine`, and an Engine loads `<DataDir>/policy/` exactly
+once, in `NewEngine` — there is no filesystem watcher, and
+`Engine.Reload` only refreshes the engine it is called on. The policy
+editor calls `Reload` on the separate engine `buildCedarEngineOrNil`
+built for the `cedarpolicy` view. So a policy **saved from the editor
+during a session** is validated, written, listed as loaded, and
+*still not enforced by the live gates until the app restarts*. The
+same split means most gate denials are appended to decision stores the
+audit panel never reads. Both are pre-existing consequences of the
+per-site Engine and are tracked, with the deleting change, in
+`docs/unwired-ledger.md` (2026-08-16 entry). Do not read the table
+below as "the editor's Reload button reaches these".
+
+**Posture on construction failure is fail-OPEN, deliberately.**
+`buildCedarGate` logs a warning and returns `AllowAll` when
+`cedar.NewEngine` errors, and `Engine.Reload` keeps the prior
+`PolicySet` when a file fails to parse, so a typo in a user policy
+cannot brick the app. `Options.DefaultDeny` is `false` for the same
+reason — an unmatched action is `NotApplicable`, which every gate hook
+treats as allow. Flipping that default is a product decision, not a
+wiring one.
 
 | Site                                             | Helper                  | Wired in              |
 | ------------------------------------------------ | ----------------------- | --------------------- |
-| LLM model selection (registry pipeline)          | `cedar.LLMPolicyGuard`  | `core/rpc/api.go` (newLLMStack) |
+| LLM model selection (registry pipeline)          | `cedar.LLMPolicyGuard`  | `core/rpc/api.go` (`newLLMStack`, `llmregistry.Options.Policy` — the registry has no setter, so this is the only door) |
 | Tool dispatch (MCP + built-in)                   | `cedar.CheckTool`       | toolloop's permission resolver (perms layer) |
-| Memory writes                                    | `cedar.CheckMemoryWrite` | `core/rpc/api.go` (`memoryGateAdapter` → `memory.Store.SetGate`) |
-| Network requests (websearch fetch)               | `cedar.CheckNetwork`    | `core/tools/websearch.Fetcher` (`PolicyGate` opt) |
+| Memory writes                                    | `cedar.CheckMemoryWrite` | `core/rpc/api.go` (`memoryGateAdapter` → `memory.Store.SetGate`; the only non-test `SetGate` call) |
+| Network requests (websearch page fetch)          | `cedar.CheckNetwork`    | `core/tools/websearch.Fetcher` (`PolicyGate` opt) |
+| Network requests (websearch **query**)           | `cedar.CheckNetwork`    | `core/tools/websearch.{DuckDuckGo,Wikipedia}Backend` (`With*Gate` opt). Gating only the Fetcher left the leg carrying the user's search terms off-box ungated |
+| Network requests (`kenaz__web_fetch`)            | `cedar.CheckNetwork`    | `core/tools/webfetch` (`Options.Gate`) |
+| Workflow run / save / delete                     | `cedar.GateWorkflow*`   | `core/rpc/api.go` → `workflowsview.Config.Cedar` |
+| Scheduled chat create / delete / execute         | `cedar.GateScheduledChat*` | `core/rpc/api.go` → `scheduledchatview.Config.Cedar` |
+| MCP recipe spawn (`add_recipe` / `spawn_recipe`) | `cedar.CheckRecipeSpawn` | `core/rpc/api.go` (`newToolsAPI`) → `tools.Config.Gate`. The target of the shipped `mcp-no-npx.cedar` template |
 | Filesystem reads/writes (kernel state nodes)     | `cedar.CheckFile{Read,Write}` | `agentgraph.PolicyGate` (`env_deps_policy.go`) |
 | Finer-grained state actions                      | `cedar.CheckState{Read,Write}` | `agentgraph.PolicyGate` |
+
+`scripts/ci/check-cedar-gate-arguments.sh` is the gate that keeps this
+table honest: it fails when a `cedar.Gate`-typed constructor argument
+or view `Config` field is passed `AllowAll` unconditionally, or omitted,
+at a production wiring site.
+
+### The `mode` context attribute
+
+`default_workflows_policy.cedar` branches on a `mode` context attr
+(`"permissive"` | `"strict"`). Its producer is
+`workflowsview.Config.CedarModeFn`, wired in `core/rpc/api.go` to the
+`cedarStrictWorkflowMode` settings field and read live on every
+run/save. Before 2026-08-16 there was no producer at all, so the
+bundle's strict arm — which forbids saving a shell-bearing workflow —
+shipped embedded in every engine and could never fire. There is still
+no Settings-panel dial for it; that is tracked in
+`docs/unwired-ledger.md`.
 
 ## Memory hook journal
 

@@ -128,25 +128,52 @@ func (r *Registry) Lookup(version int) (Migration, bool) {
 	return m, ok
 }
 
-// Pending returns the migrations whose version is greater than the
-// highest version present in the ledger, in ascending order.
+// Pending returns every registered migration that has no effective
+// applied row in the ledger, in ascending version order.
+//
+// SELECTION IS SET MEMBERSHIP, NOT A HIGH-WATER MARK. This distinction is
+// the whole point of the function and it is load-bearing, so it is worth
+// stating why.
+//
+// The version space is SHARED across missions (see CanonicalBlocks): the
+// sessions block is 300-399, user-slash-commands is 1000-1099, units is
+// 1100-1199. Missions do not land in block order — units/1100..1103 landed
+// in June 2026, sessions/0332..0335 landed after it. A max-based rule
+// ("apply everything above max(applied)") reads maxApplied=1103 on any
+// database that already carries the units rows and concludes that every
+// sessions migration numbered 332+ is already done. They are never applied,
+// on any upgraded install, ever. That shipped as v0.63.0 and made "Start
+// session" fail with `no such column: move_history_mode`.
+//
+// Set membership has none of that coupling: a migration is pending iff the
+// ledger has no applied row for its version, whatever else is in the ledger.
+//
+// Behaviour on the awkward ledger shapes:
+//
+//   - ROLLED-BACK entries. A version whose most recent row is
+//     action=rolled_back is not applied, so it becomes pending again. That
+//     matches Rollback's own "most recent row wins" rule.
+//   - DUPLICATE rows for one version. Applied() returns rows in rowid
+//     (insertion) order and the last write for a version wins, so a
+//     rolled_back-then-reapplied version reads as applied.
+//   - UNKNOWN entries — ledger rows for versions with no registered
+//     migration (a mission whose code was removed). They are simply not
+//     consulted: the selection walks the REGISTERED set and asks the ledger
+//     about each one. An unknown row can never crash or skew it.
+//     (VerifyLedger is the surface that reports those; see runner.go.)
 func (r *Registry) Pending() ([]Migration, error) {
-	applied, err := r.Applied()
+	rows, err := r.Applied()
 	if err != nil {
 		return nil, err
 	}
-	maxApplied := 0
-	for _, e := range applied {
-		if e.Action == LedgerActionApplied && e.Version > maxApplied {
-			maxApplied = e.Version
-		}
-	}
-	all := r.All()
-	out := make([]Migration, 0)
+	applied := effectiveAppliedVersions(rows)
+	all := r.All() // already ascending by version
+	out := make([]Migration, 0, len(all))
 	for _, m := range all {
-		if m.Version > maxApplied {
-			out = append(out, m)
+		if _, done := applied[m.Version]; done {
+			continue
 		}
+		out = append(out, m)
 	}
 	return out, nil
 }
