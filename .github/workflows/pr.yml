@@ -271,6 +271,23 @@ jobs:
         # under -race (accept-sequence ordering in the fake sock).
         run: go test ./core/... ./cmd/harness-vm/... -race -count=1 -short
 
+      - name: gate meta-tests
+        # scripts/ci/gates_can_fail_test.go plants a violation per CI gate
+        # and asserts the gate rejects it — the regression test for gates
+        # that pass because they inspected nothing. It was never in any
+        # job's package list, so every planted-violation proof added since
+        # (I11 unregistered-builtin-tools, I12 single-move-writer, I13
+        # cedar-gate-arguments, the check-knob-coverage vacuous-pass fix)
+        # was verified only on a developer's machine. A gate could go
+        # vacuous and CI would stay green — the exact failure this file
+        # exists to prevent.
+        #
+        # Not merged into the step above: these tests shell out to the
+        # check scripts and mutate a scratch tree, so they must not run
+        # concurrently with the -race suite (a build racing a mutation
+        # poisons the Go build cache under the clean content hash).
+        run: go test ./scripts/... -count=1
+
   wire-golden-locked:
     name: Wire golden tests (locked tier)
     # Locked-tier wire-shape regression gate (integration-test-harness-01KQ8TD1 WP05).
