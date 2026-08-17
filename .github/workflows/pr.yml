@@ -129,6 +129,23 @@ jobs:
       - name: no-user-content-in-slog guard
         run: bash scripts/ci/check-no-user-content-in-slog.sh
 
+      - name: cedar gate-argument guard (I13)
+        # Added by v0.63.1 to stop the six Cedar gate sites being re-pinned
+        # to AllowAll{} or a nil engine — the defect that let a user author
+        # a policy the editor validated, saved and listed as loaded while
+        # nothing enforced it. The gate shipped; no workflow ever invoked
+        # it, so the regression it exists to prevent was uncaught.
+        run: bash scripts/ci/check-cedar-gate-arguments.sh
+
+      - name: no-cred-bytes-in-rpc guard
+        # Credential hygiene. CLAUDE.md lists this under "Local dev
+        # commands" as though it were enforced; it was running only when a
+        # developer remembered to.
+        run: bash scripts/ci/check-no-cred-bytes-in-rpc.sh
+
+      - name: manifest version-bump guard
+        run: bash scripts/ci/check-manifest-version-bump.sh
+
       - name: fleet log-export fence guard
         # The harness must not ship its raw slog stream to Fleet. Verifies the
         # compiled kind ceiling + its anti-drift gate exist, the wire-level
