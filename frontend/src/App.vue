@@ -38,6 +38,18 @@ const onboardingOpen = ref(false);
 // (fleet-otel-archival-01NDFSEX11 WP06)
 const telemetryOnboardingOpen = ref(false);
 
+// Resolved fleet subscription tier for TelemetryOnboardingModal's
+// entitlement gate (A10 / consent-surfaces-truth-01PMTR01 WP02).
+//
+// null = "unresolved" — capabilities haven't been fetched yet, or the
+//   fetch rejected. The modal must treat this as fail-ungated (no gate,
+//   no badge): degrading toward FleetTelemetryPanel's sibling behaviour
+//   (which enforces nothing), not toward "no tier" (which would show a
+//   false "Requires Pro+" claim to a user we simply couldn't identify).
+// '' = "resolved absent" — fleetCapabilities() answered and the account
+//   genuinely has no tier. This DOES gate.
+const accountTier = ref<'pro' | 'team' | 'enterprise' | '' | null>(null);
+
 // About dialog — opened by the OS menu bar "About" item.
 // (os-menu-bar-01NDFSEX16 WP05)
 const aboutStore = useAboutDialogStore();
@@ -126,6 +138,23 @@ onMounted(async () => {
   } catch {
     // Best-effort: if the RPC fails, skip the modal.
   }
+  // Resolve the account tier for the telemetry modal's entitlement gate
+  // (A10 / consent-surfaces-truth-01PMTR01 WP02). Runs independently of
+  // the open/closed decision above so the tier is populated (or
+  // explicitly left unresolved) by the time the user reaches the
+  // gated radios, whether the modal was already open or opens later.
+  try {
+    const caps = await client.settings.fleetCapabilities();
+    const known = new Set(['pro', 'team', 'enterprise', '']);
+    accountTier.value = known.has(caps.tier)
+      ? (caps.tier as 'pro' | 'team' | 'enterprise' | '')
+      : '';
+  } catch {
+    // Fail-ungated (spec §5): leave accountTier at its null "unresolved"
+    // default rather than falling through to '' — a rejected capability
+    // fetch must not render "Requires Pro+" to a user we couldn't
+    // identify.
+  }
 });
 </script>
 
@@ -141,6 +170,7 @@ onMounted(async () => {
   <!-- Fleet telemetry onboarding modal (fleet-otel-archival-01NDFSEX11 WP06) -->
   <TelemetryOnboardingModal
     v-if="telemetryOnboardingOpen"
+    :account-tier="accountTier"
     @close="telemetryOnboardingOpen = false"
   />
   <!-- Elicitation dialog for kenaz__ask_user_question.

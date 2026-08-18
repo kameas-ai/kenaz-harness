@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -1134,7 +1135,7 @@ func New(c *core.Core, opts ...Option) *API {
 			// stays included so future modal features (e.g. arg-list
 			// preview, working-dir display) can read it without a
 			// second backend trip.
-			a.broker.emitter.Emit(a.broker.EmitCtx(), topic, flattenPendingRequest(payload))
+			a.broker.emitter.Emit(a.broker.EmitCtx(), topic, FlattenPendingRequest(payload))
 		}),
 	))
 
@@ -6895,6 +6896,32 @@ func (a *API) Search() searchview.SearchAPI {
 					if a.auditImpl != nil {
 						cfg.AuditLister = &auditRingAdapter{api: a.auditImpl}
 					}
+					// Enable dial (A3) — live-read closure over the Settings
+					// store, not a boot snapshot: workflowCedarModeFn (:7160)
+					// is the in-repo pattern for "a toggle read once at boot
+					// is the same defect one layer down." Fail-open per the
+					// consumer's own contract (impl.go:286) — a settings-read
+					// failure must not silently disable search.
+					cfg.Enabled = func() bool {
+						if a.settingsAPI == nil {
+							return true
+						}
+						s, err := a.settingsAPI.Get(context.Background())
+						if err != nil {
+							return true
+						}
+						return s.SearchEnabled()
+					}
+					// Audit emitter (A3) — bridges the search view's narrow
+					// AuditEmitter seam to the process audit ring via
+					// searchAuditEmitter (:7008-ish, modelled on
+					// acpAuditBridge). No process-wide emitter existed before
+					// this WP — see the tools view's Audit: nil TODO (:3494).
+					// Fail-silent when the ring isn't wired, matching the
+					// consumer's own contract (impl.go:303).
+					if a.auditImpl != nil {
+						cfg.Audit = &searchAuditEmitter{impl: a.auditImpl}
+					}
 					a.searchAPI = searchview.NewManagerAPIWithConfig(rawDB, cfg)
 					return a.searchAPI
 				}
@@ -7073,6 +7100,49 @@ func (e *acpAuditBridge) Emit(_ context.Context, ev contextaudit.Event) error {
 		Trailing:  fmt.Sprintf("payload_bytes=%d", len(ev.Payload)),
 	})
 	return nil
+}
+
+// searchAuditEmitter implements searchview.AuditEmitter (A3) by
+// forwarding to the rpc/views/audit.API ring buffer via Push — the
+// process-wide audit emitter the search view's Config.Audit seam was
+// wired for but never received (consent-surfaces-truth-01PMTR01 WP01).
+// Modelled on acpAuditBridge above.
+//
+// Entry has no map-valued field, so attrs is rendered into Trailing as
+// a deterministic (sorted-key) "k=v k=v" string — mirroring the
+// payload_type=%T convention the other bridges in this file use for
+// carrying structured metadata through the flat Entry shape. The search
+// view's own privacy contract (impl.go:22-27) guarantees the raw query
+// string is never a key in attrs, so it can never end up in Trailing
+// either — this bridge does not re-implement that contract, only
+// forwards whatever the caller already redacted.
+type searchAuditEmitter struct {
+	impl *audit.API
+}
+
+func (e *searchAuditEmitter) Emit(_ context.Context, kind string, attrs map[string]any) {
+	if e == nil || e.impl == nil {
+		return
+	}
+	keys := make([]string, 0, len(attrs))
+	for k := range attrs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for i, k := range keys {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		fmt.Fprintf(&b, "%s=%v", k, attrs[k])
+	}
+	e.impl.Push(audit.Entry{
+		ID:        fmt.Sprintf("search-%d", time.Now().UnixNano()),
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Category:  "SEARCH",
+		Subject:   kind,
+		Trailing:  b.String(),
+	})
 }
 
 // contextSyncAuditBridge implements contextaudit.Emitter for the
@@ -7308,10 +7378,18 @@ func buildJournalWriter(c *core.Core) coreag.JournalWriter {
 	return coreag.NewSQLJournalWriter(rawDB)
 }
 
-// flatPermissionRequest mirrors frontend `PermissionRequest` (see
+// FlatPermissionRequest mirrors frontend `PermissionRequest` (see
 // frontend/src/lib/types.ts). Built per-emit so the modal binds
 // directly without walking the typed surface.
-type flatPermissionRequest struct {
+//
+// Exported (consent-surfaces-truth-01PMTR01 WP03) so both transports
+// that answer *_ListPending — the Wails-bound
+// Bindings.Permissions_ListPending and core/serve's
+// "Permissions_ListPending" dispatch case — return the exact same wire
+// shape the live `<family>:permission-pending` topic already carries.
+// FR-005 forbids a second projection: this is the only one, in either
+// direction (live push AND rehydration pull).
+type FlatPermissionRequest struct {
 	RequestID       string              `json:"request_id"`
 	SessionID       string              `json:"session_id,omitempty"`
 	Family          string              `json:"family"`
@@ -7326,7 +7404,7 @@ type flatPermissionRequest struct {
 	DeadlineAt      string              `json:"deadline_at"`
 }
 
-// flattenPendingRequest projects cedar.PendingRequest into the flat
+// FlattenPendingRequest projects cedar.PendingRequest into the flat
 // shape the frontend permission modals bind to. Each family fills
 // resource_display from its surface fields:
 //   - bash: full argv joined (e.g. "aws --version") — what the user
@@ -7334,14 +7412,14 @@ type flatPermissionRequest struct {
 //   - fs: canonical path + op (e.g. "read /Users/alice/code/main.go").
 //   - cred: provider_id + purpose (e.g. "openai · stream").
 //   - tool: server_name__tool_name (e.g. "filesystem__read_file").
-func flattenPendingRequest(p cedar.PendingRequest) flatPermissionRequest {
+func FlattenPendingRequest(p cedar.PendingRequest) FlatPermissionRequest {
 	// Project through cedar.PendingRequest.Project() — the SINGLE
 	// projection function. The :7881 approval bridge
 	// (cmd/harness-vm/approvals.go) calls the same one, so the served
 	// modal and the host-brokered wire can never drift in what they
 	// call the same approval_id.
 	proj := p.Project()
-	return flatPermissionRequest{
+	return FlatPermissionRequest{
 		RequestID:       p.RequestID,
 		SessionID:       p.Surface.SessionID,
 		Family:          string(p.Family),

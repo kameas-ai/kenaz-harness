@@ -111,6 +111,14 @@ jobs:
       - name: bindings-name guard
         run: bash scripts/ci/check-binding-names.sh
 
+      - name: listpending-coverage guard
+        # consent-surfaces-truth-01PMTR01 WP03. Every `<Family>_ListPending`
+        # binding must have a reader in harnessClient.ts. Permissions_ListPending
+        # existed end to end on the Go side with zero frontend callers, so a
+        # permission prompt lost across a reload never came back — the turn hung
+        # until the registry's 5-minute timeout fail-closed denied it.
+        run: bash scripts/ci/check-listpending-coverage.sh
+
       - name: emitter-isolation guard
         run: bash scripts/ci/check-emitter-isolation.sh
 

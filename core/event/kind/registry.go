@@ -60,12 +60,6 @@ const (
 	KindMCPRecipeAdded   Kind = "mcp.recipe.added"
 	KindMCPRecipeRemoved Kind = "mcp.recipe.removed"
 	KindMCPRecipeTested  Kind = "mcp.recipe.tested"
-	// KindShortcutOverridden is emitted on every successful keyboard
-	// shortcut binding write (set or reset). Payload JSON:
-	//   {"shortcut_id":"chat.send","default_binding":"Cmd+Enter","new_binding":"Cmd+Shift+Enter"}
-	// Reset emits new_binding: "".
-	// (keyboard-shortcuts-settings-01KQ8TDR plan §2.9)
-	KindShortcutOverridden Kind = "settings.shortcut.overridden"
 
 	// Harness-self MCP audit kinds (mission harness-self-mcp-onboarding-01KQ8TDU
 	// WP10). Emitted by the in-process harness-self server on every tool
@@ -130,7 +124,6 @@ var builtIn = []Kind{
 	KindToolPermission,
 	// MCP recipe lifecycle (WP07 + WP10).
 	KindMCPRecipeAdded, KindMCPRecipeRemoved, KindMCPRecipeTested,
-	KindShortcutOverridden,
 	// Harness-self MCP audit (harness-self-mcp-onboarding-01KQ8TDU WP10).
 	KindHarnessSelfToolCalled, KindHarnessSelfPolicyProposed,
 	KindHarnessSelfPolicyWritten, KindHarnessSelfPolicyRejected,

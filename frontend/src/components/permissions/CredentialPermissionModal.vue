@@ -8,12 +8,18 @@
  * radio (credentials use "manual_export" as the dangerous tier,
  * handled server-side as default-deny; the prompt only fires for
  * mcp_spawn which is not dangerous).
+ *
+ * Reconciles against Permissions_ListPending on mount (WP03) — a
+ * reload does not un-park the goroutine backing a cred prompt, only
+ * the frontend's memory of it. See usePermissionReconcile's doc
+ * comment for the full contract.
  */
 
-import { computed, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import BasePermissionModal from './BasePermissionModal.vue';
 import { useEventStream } from '@/lib/useEventStream';
 import { useHarnessClient } from '@/lib/harnessClientContext';
+import { usePermissionReconcile } from '@/lib/usePermissionReconcile';
 import type { PermissionRequest } from '@/lib/types';
 
 const MAX_QUEUE = 5;
@@ -25,6 +31,11 @@ const cacheDangerousOps = ref(false);
 void client.settings.getPermissionCacheDangerousOps().then((v) => {
   cacheDangerousOps.value = v;
 }).catch(() => {});
+
+const reconcile = usePermissionReconcile(client, 'cred', queue, MAX_QUEUE);
+onMounted(() => {
+  void reconcile();
+});
 
 useEventStream<PermissionRequest>('cred:permission-pending', (payload) => {
   if (!payload || !payload.request_id) return;
@@ -47,7 +58,7 @@ function onResolved(requestID: string) {
   queue.value = queue.value.filter((q) => q.request_id !== requestID);
 }
 
-defineExpose({ queue });
+defineExpose({ queue, reconcile });
 </script>
 
 <template>

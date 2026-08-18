@@ -12,12 +12,18 @@
  *
  * Dangerous-path ops (system paths) disable "Allow always" unless
  * Settings.PermissionCacheDangerousOps is true.
+ *
+ * Reconciles against Permissions_ListPending on mount (WP03) — a
+ * reload does not un-park the goroutine backing an fs prompt, only
+ * the frontend's memory of it. See usePermissionReconcile's doc
+ * comment for the full contract.
  */
 
-import { computed, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import BasePermissionModal from './BasePermissionModal.vue';
 import { useEventStream } from '@/lib/useEventStream';
 import { useHarnessClient } from '@/lib/harnessClientContext';
+import { usePermissionReconcile } from '@/lib/usePermissionReconcile';
 import type { PermissionRequest } from '@/lib/types';
 
 const MAX_QUEUE = 5;
@@ -31,6 +37,11 @@ const grantScope = ref<'exact' | 'directory'>('exact');
 void client.settings.getPermissionCacheDangerousOps().then((v) => {
   cacheDangerousOps.value = v;
 }).catch(() => {});
+
+const reconcile = usePermissionReconcile(client, 'fs', queue, MAX_QUEUE);
+onMounted(() => {
+  void reconcile();
+});
 
 useEventStream<PermissionRequest>('fs:permission-pending', (payload) => {
   if (!payload || !payload.request_id) return;
@@ -56,7 +67,7 @@ function onResolved(requestID: string) {
   grantScope.value = 'exact';
 }
 
-defineExpose({ queue });
+defineExpose({ queue, reconcile });
 </script>
 
 <template>

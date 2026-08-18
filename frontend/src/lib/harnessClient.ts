@@ -135,6 +135,7 @@ import type {
   MCPTranslationReport,
   MCPImportWrotePath,
   PermissionGrant,
+  PermissionRequest,
   PermissionMode,
   SessionUsage,
   DriftReport,
@@ -462,12 +463,6 @@ interface WailsBindingsLike {
   // was never declared on this interface — type-safety hole until v0.8.x.
   Settings_GetMCPAutoRestart(): Promise<boolean>;
   Settings_SetMCPAutoRestart(enabled: boolean): Promise<void>;
-  /** Returns the full keyboard shortcut overrides map. */
-  Settings_GetShortcuts(): Promise<Record<string, string>>;
-  /** Persist a single shortcut override. Empty binding clears the override. */
-  Settings_SetShortcut(id: string, binding: string): Promise<void>;
-  /** Atomically replace the full shortcut overrides map. */
-  Settings_SetShortcuts(m: Record<string, string>): Promise<void>;
   Settings_GetAutoTitleEnabled(): Promise<boolean>;
   Settings_SetAutoTitleEnabled(enabled: boolean): Promise<void>;
   /** Read the user's chat custom-instructions text (default empty). */
@@ -736,6 +731,8 @@ interface WailsBindingsLike {
   Permissions_ListGrants(family: string): Promise<PermissionGrant[]>;
   Permissions_RevokeGrant(id: string): Promise<void>;
   Permissions_Resolve(requestID: string, decision: string): Promise<void>;
+  // consent-surfaces-truth-01PMTR01 WP03 — rehydration on reload.
+  Permissions_ListPending(): Promise<PermissionRequest[]>;
   // WP06 — reintegration propose + commit.
   Branches_ProposeReintegrationSummary(
     branchSessionID: string,
@@ -2140,21 +2137,18 @@ export interface PermissionsClient {
    */
   resolve(requestID: string, decision: string): Promise<void>;
   /**
-   * Read the full keyboard shortcut overrides map. Empty map means all
-   * shortcuts use registry defaults.
-   * (keyboard-shortcuts-settings-01KQ8TDR plan §2.7)
+   * List every in-flight pending permission prompt across all four
+   * families, already flattened through the harness's single
+   * projection (rpc.FlattenPendingRequest) — byte-identical to what the
+   * live `<family>:permission-pending` topic pushes. Each family's
+   * modal calls this on mount and filters by `family` client-side
+   * (consent-surfaces-truth-01PMTR01 WP03 / dead-code-audit A11): a
+   * prompt issued before a reload, hot-reload, or WS reconnect is
+   * otherwise lost to the frontend even though the goroutine backing it
+   * is still parked server-side, and the turn hangs until the
+   * registry's 5-minute timeout fail-closed denies it.
    */
-  getShortcuts(): Promise<Record<string, string>>;
-  /**
-   * Persist a single shortcut override. An empty binding value clears
-   * the override (resets to registry default).
-   */
-  setShortcut(id: string, binding: string): Promise<void>;
-  /**
-   * Atomically replace the full shortcut overrides map. Used for
-   * reset-all and batch-save flows.
-   */
-  setShortcuts(m: Record<string, string>): Promise<void>;
+  listPending(): Promise<PermissionRequest[]>;
 }
 
 /**
@@ -3703,9 +3697,7 @@ export function createHarnessClient(): HarnessClient {
       revokeGrant: (id) => b().Permissions_RevokeGrant(id),
       resolve: (requestID, decision) =>
         b().Permissions_Resolve(requestID, decision),
-      getShortcuts: () => b().Settings_GetShortcuts(),
-      setShortcut: (id, binding) => b().Settings_SetShortcut(id, binding),
-      setShortcuts: (m) => b().Settings_SetShortcuts(m),
+      listPending: () => b().Permissions_ListPending(),
     },
     memory: {
       listChunks: (filter) => b().Memory_ListChunks(filter ?? {}),
@@ -4455,12 +4447,21 @@ export function createServedHarnessClient(opts?: {
        *
        * listGrants / revokeGrant stay unported — grant management is a
        * settings surface, not part of completing a turn.
+       *
+       * listPending IS ported (WP03): a served frontend that reconnects
+       * needs the same reconciliation Elicit_ListPending /
+       * Confirm_ListPending already provide for their families — a
+       * prompt lost across a WS reconnect is otherwise a hung turn with
+       * no way back, the served-mode instance of the exact defect this
+       * WP fixes on desktop.
        */
       resolve: (requestID: string, decision: string) =>
         transport.call<void>('Permissions_Resolve', {
           requestId: requestID,
           decision,
         }),
+      listPending: () =>
+        transport.call<PermissionRequest[]>('Permissions_ListPending'),
     },
   };
 }
@@ -4962,9 +4963,7 @@ export function createFakeHarnessClient(
       listGrants: async () => [],
       revokeGrant: noop,
       resolve: noop,
-      getShortcuts: async () => ({}),
-      setShortcut: noop,
-      setShortcuts: noop,
+      listPending: async () => [],
     },
     memory: {
       listChunks: async () => [],

@@ -1242,6 +1242,28 @@ export namespace cedar {
 	        this.dangerous = source["dangerous"];
 	    }
 	}
+	export class PolicyFile {
+	    name: string;
+	    path: string;
+	    bytes: number;
+	    embedded: boolean;
+	    parse_ok: boolean;
+	    parse_err?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PolicyFile(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.path = source["path"];
+	        this.bytes = source["bytes"];
+	        this.embedded = source["embedded"];
+	        this.parse_ok = source["parse_ok"];
+	        this.parse_err = source["parse_err"];
+	    }
+	}
 	export class ToolPromptSurface {
 	    tool_name: string;
 	    server_name?: string;
@@ -1298,69 +1320,6 @@ export namespace cedar {
 		    return a;
 		}
 	}
-	export class PendingRequest {
-	    request_id: string;
-	    family: string;
-	    surface: PromptSurface;
-	    // Go type: time
-	    issued_at: any;
-	    // Go type: time
-	    deadline_at: any;
-	
-	    static createFrom(source: any = {}) {
-	        return new PendingRequest(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.request_id = source["request_id"];
-	        this.family = source["family"];
-	        this.surface = this.convertValues(source["surface"], PromptSurface);
-	        this.issued_at = this.convertValues(source["issued_at"], null);
-	        this.deadline_at = this.convertValues(source["deadline_at"], null);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class PolicyFile {
-	    name: string;
-	    path: string;
-	    bytes: number;
-	    embedded: boolean;
-	    parse_ok: boolean;
-	    parse_err?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new PolicyFile(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.path = source["path"];
-	        this.bytes = source["bytes"];
-	        this.embedded = source["embedded"];
-	        this.parse_ok = source["parse_ok"];
-	        this.parse_err = source["parse_err"];
-	    }
-	}
-	
 
 }
 
@@ -5758,6 +5717,58 @@ export namespace rpc {
 	        this.description = source["description"];
 	        this.envVar = source["envVar"];
 	    }
+	}
+	export class FlatPermissionRequest {
+	    request_id: string;
+	    session_id?: string;
+	    family: string;
+	    resource_display: string;
+	    resource_uid?: string;
+	    reason?: string;
+	    dangerous_tier?: boolean;
+	    danger_copy?: string;
+	    op?: string;
+	    surface: cedar.PromptSurface;
+	    issued_at: string;
+	    deadline_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FlatPermissionRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.request_id = source["request_id"];
+	        this.session_id = source["session_id"];
+	        this.family = source["family"];
+	        this.resource_display = source["resource_display"];
+	        this.resource_uid = source["resource_uid"];
+	        this.reason = source["reason"];
+	        this.dangerous_tier = source["dangerous_tier"];
+	        this.danger_copy = source["danger_copy"];
+	        this.op = source["op"];
+	        this.surface = this.convertValues(source["surface"], cedar.PromptSurface);
+	        this.issued_at = source["issued_at"];
+	        this.deadline_at = source["deadline_at"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class ShellReadFileResult {
 	    dataBase64: string;
