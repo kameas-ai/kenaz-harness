@@ -490,7 +490,11 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 		},
 		{
 			name: "onboarding-starter-tools/unregistered-tool-name",
-			gate: "check-onboarding-starter-tools.sh",
+			// The planted tool name itself — printed only in the gate's
+			// unregistered-names listing, so a gate that fails for any
+			// other reason (or crashes) does not satisfy this proof.
+			wantOutput: "harness_nonexistent_tool",
+			gate:       "check-onboarding-starter-tools.sh",
 			// The code.md:23 class (first-run-onboarding-01PMOB01 WP04): a
 			// shipped starter prompt naming a harness_* tool register.go
 			// does not register — the exact shape that let
@@ -503,7 +507,11 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 		},
 		{
 			name: "broker-topic-consumers/unconsumed-topic-const",
-			gate: "check-broker-topic-consumers.sh",
+			// The planted const's own violation line — the gate prints
+			// `ident = "value" (file:line) has no frontend subscriber…`
+			// only when it actually derived and rejected this topic.
+			wantOutput: `TopicNobodyReads = "nobody:reads-this"`,
+			gate:       "check-broker-topic-consumers.sh",
 			// self-update-repair-01PMUP01 WP06, spec §6: the planted-violation
 			// proof the spec names by its exact variable name. A Topic* const
 			// with no frontend subscriber, no Go subscriber, no
@@ -515,7 +523,11 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 		},
 		{
 			name: "listpending-coverage/no-client-reader",
-			gate: "check-listpending-coverage.sh",
+			// The planted binding's own failure line ("<fam>_ListPending
+			// has no reader in …") — exit-code-only would also pass for
+			// a gate that dies parsing bindings.go.
+			wantOutput: "ZzGateProbe_ListPending has no reader",
+			gate:       "check-listpending-coverage.sh",
 			// The A11 shape exactly: a *_ListPending binding whose body
 			// compiles and whose doc comment (if any) reads correctly, with
 			// zero callers anywhere in harnessClient.ts. This is precisely
@@ -536,8 +548,13 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			// this branch's own last commit instead, which already
 			// contains the unmutated file, so this exercises the SAME
 			// git-diff codepath the CI gate uses, not a mock of it.
-			name:       "upgrade-snapshots-locked/byte-mutation",
-			wantOutput: "upgrade-snapshots-locked",
+			name: "upgrade-snapshots-locked/byte-mutation",
+			// The mutated file's own violation line, not the gate's
+			// "[upgrade-snapshots-locked]" label — the label prefixes
+			// EVERY failure this gate can emit, including "BASE_REF does
+			// not resolve", so matching it would still pass for a gate
+			// that can no longer find its comparison base at all.
+			wantOutput: "v0.63.0/dump.sql differs from its merge-base",
 			gate:       "check-upgrade-snapshots-locked.sh",
 			file:       "core/storage/sqlite/testdata/upgrade/v0.63.0/dump.sql",
 			append:     "-- zzGateProbe: this byte must not be here\n",
@@ -547,8 +564,13 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			// upgrade-path-coverage-01PMUG01 WP03 (I14). A migration
 			// whose Up() runs DROP TABLE with no populated-table test
 			// referencing its ID and no allowlist entry must fail.
-			name:       "destructive-migration-coverage/uncovered-drop-table",
-			wantOutput: "destructive-migration-coverage",
+			name: "destructive-migration-coverage/uncovered-drop-table",
+			// The planted migration's own ID, not the gate's
+			// "[destructive-migration-coverage]" label — the label also
+			// prefixes "checkdestructivemigrations failed to build", so
+			// matching it would let a compile-broken checker satisfy
+			// this proof.
+			wantOutput: "storage/97-zz-gate-probe",
 			gate:       "check-destructive-migration-coverage.sh",
 			file:       "core/rpc/views/zzgateprobe/migration_probe.go",
 			content: "package zzgateprobe\n\n" +
