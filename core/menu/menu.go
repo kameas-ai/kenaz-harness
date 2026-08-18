@@ -139,7 +139,9 @@ func buildHelpMenu(state MenuState, h *Handlers) *wailsmenu.MenuItem {
 	sub.AddSeparator()
 
 	updateLabel := UpdateMenuLabel(state.UpdateState)
-	updateItem := sub.AddText(updateLabel, nil, h.onCheckUpdates)
+	// self-update-repair-01PMUP01 FR-008: dispatch on the state the label
+	// was computed from, not always CheckNow — see onUpdateAction.
+	updateItem := sub.AddText(updateLabel, nil, h.onUpdateAction(state.UpdateState))
 	if state.UpdateState == UpdateDownloading {
 		updateItem.Disable()
 	}

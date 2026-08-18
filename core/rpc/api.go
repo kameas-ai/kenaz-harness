@@ -7503,6 +7503,35 @@ func (a *API) UpdateStartCheck(ctx context.Context) {
 	}
 }
 
+// UpdateStartDownload begins (or retries) the staged-artifact download via
+// the Manager if wired. Used by the native Help → "Install Update" /
+// "Retry Update" menu handlers (self-update-repair-01PMUP01 WP05) — the
+// menu dispatches this fire-and-forget the same way the Settings panel's
+// installLatest does its first step; the resulting UpdateDownloading /
+// UpdateStaged / UpdateFailed menu state comes from the WP03 broker
+// subscriber, not from this call's return value. Safe to call with a nil
+// updateAPI.
+func (a *API) UpdateStartDownload(ctx context.Context) {
+	if a == nil || a.updateAPI == nil {
+		return
+	}
+	if err := a.updateAPI.StartDownload(ctx); err != nil {
+		logging.L().Warn("menu.update.start_download_failed", "err", err.Error())
+	}
+}
+
+// UpdateApply installs the most recently staged download via the Manager
+// if wired. Used by the native Help → "Install & Restart" menu handler.
+// Safe to call with a nil updateAPI.
+func (a *API) UpdateApply(ctx context.Context) {
+	if a == nil || a.updateAPI == nil {
+		return
+	}
+	if err := a.updateAPI.Apply(ctx); err != nil {
+		logging.L().Warn("menu.update.apply_failed", "err", err.Error())
+	}
+}
+
 // ── fleet-audit-archival-01NDFSEX13 boot helpers ─────────────────────────────
 
 // auditTailBuffer is a thread-safe TailReader that receives TailEvent values

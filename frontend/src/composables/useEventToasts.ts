@@ -158,7 +158,13 @@ export function useEventToasts() {
       if (!ver || toastedVersions.has(ver)) return;
       toastedVersions.add(ver);
       updateStore.markToasted(ver);
-      push(`Kenaz ${ver} is available — click ⬆ to install.`, {
+      // The rail up-arrow affordance (UpdateIndicator/UpdateMenu/UpdateToast)
+      // was retired by os-menu-bar-01NDFSEX16 §FR-006/§FR-020/§FR-021 — the
+      // update signal moved to Help → Check for Updates. This toast used
+      // to point at the deleted glyph (self-update-repair-01PMUP01 §1.3);
+      // it now names the control that actually exists (and, per WP05,
+      // actually does what its label says — §1.4).
+      push(`Kenaz ${ver} is available — open Help → Check for Updates to install.`, {
         level: 'info',
         durationMs: 5000,
       });

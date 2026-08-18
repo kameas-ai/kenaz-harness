@@ -175,10 +175,17 @@ func main() {
 	api := rpc.New(c)
 
 	// os-menu-bar-01NDFSEX16 WP03: build the initial native application menu.
-	// Handlers wire the broker (topic publish) + updater (CheckNow adapter).
+	// Handlers wire the broker (topic publish) + updater (CheckNow /
+	// StartDownload / Apply adapter — widened in self-update-repair
+	// -01PMUP01 WP05 so the Help item dispatches on all five
+	// UpdateMenuState values instead of always re-checking).
 	menuHandlers := coremenus.NewHandlers(
 		api.Broker(),
-		coremenus.UpdateCheckerFunc(func(ctx context.Context) { api.UpdateStartCheck(ctx) }),
+		coremenus.UpdateControllerFuncs{
+			CheckNowFunc:      func(ctx context.Context) { api.UpdateStartCheck(ctx) },
+			StartDownloadFunc: func(ctx context.Context) { api.UpdateStartDownload(ctx) },
+			ApplyFunc:         func(ctx context.Context) { api.UpdateApply(ctx) },
+		},
 		nil, // ContextProvider is set in OnStartup via SetMenuCtxProv (below)
 	)
 	// Derive initial state before first paint: theme from settings store,
@@ -555,4 +562,3 @@ func initSentryFromSettings(api *rpc.Bindings) {
 		}
 	}
 }
-

@@ -22,6 +22,63 @@ type UpdateChecker interface {
 	CheckNow(ctx context.Context)
 }
 
+// UpdateDownloader is the OPTIONAL capability the Help → "Install Update" /
+// "Retry Update" states need (self-update-repair-01PMUP01 WP05). Deliberately
+// separate from UpdateChecker rather than folded in, so an UpdateChecker
+// implementation that only supports CheckNow (e.g. a bare UpdateCheckerFunc
+// closure, or handlers_test.go's fakeUpdater) remains a valid value —
+// onUpdateAction type-asserts for it and falls back to CheckNow when absent.
+type UpdateDownloader interface {
+	// StartDownload begins (or retries) the staged-artifact download.
+	StartDownload(ctx context.Context)
+}
+
+// UpdateApplier is the OPTIONAL capability the Help → "Install & Restart"
+// state needs. See UpdateDownloader for why this is a separate,
+// type-asserted interface rather than a UpdateChecker method.
+type UpdateApplier interface {
+	// Apply installs the most recently staged download and restarts.
+	Apply(ctx context.Context)
+}
+
+// ConfirmDialog is the yes/no confirmation surface the staged-restart
+// action uses before calling Apply (spec §7 escalation default: a menu
+// misclick on "Install & Restart" must not discard in-flight work without
+// a confirmation step; the Settings-panel Install button keeps its
+// existing one-click behaviour — this only gates the menu path).
+//
+// This MUST be an injectable interface rather than a direct
+// wailsruntime.MessageDialog call inline in the handler: MessageDialog's
+// getFrontend(ctx) calls log.Fatalf (→ os.Exit) when ctx carries no live
+// Wails frontend, which would kill the test binary the instant a test
+// exercised the staged-dispatch path with any non-production
+// ContextProvider. Production gets wailsConfirmDialog{} (NewHandlers'
+// default); tests inject a fake via SetConfirmDialog.
+type ConfirmDialog interface {
+	// Confirm shows a blocking yes/no prompt and reports whether the
+	// user chose to proceed.
+	Confirm(ctx context.Context, title, message string) bool
+}
+
+// wailsConfirmDialog is the production ConfirmDialog backed by Wails'
+// native MessageDialog.
+type wailsConfirmDialog struct{}
+
+func (wailsConfirmDialog) Confirm(ctx context.Context, title, message string) bool {
+	choice, err := runtime.MessageDialog(ctx, runtime.MessageDialogOptions{
+		Type:          runtime.QuestionDialog,
+		Title:         title,
+		Message:       message,
+		Buttons:       []string{"Install & Restart", "Cancel"},
+		DefaultButton: "Cancel",
+		CancelButton:  "Cancel",
+	})
+	if err != nil {
+		return false
+	}
+	return choice == "Install & Restart"
+}
+
 // ContextProvider supplies the Wails app context to handler methods that need
 // to call runtime.BrowserOpenURL or other context-bound Wails APIs.
 type ContextProvider interface {
@@ -72,17 +129,30 @@ type Handlers struct {
 	broker  Broker
 	updater UpdateChecker
 	ctxProv ContextProvider
+	confirm ConfirmDialog
 }
 
 // NewHandlers constructs a Handlers value. All parameters are optional — nil
 // values produce no-op behaviour so the menu can be built before all
-// subsystems are wired (e.g. during tests).
+// subsystems are wired (e.g. during tests). confirm defaults to the
+// production wailsruntime-backed ConfirmDialog; override with
+// SetConfirmDialog in tests before exercising the staged-restart path.
 func NewHandlers(broker Broker, updater UpdateChecker, ctxProv ContextProvider) *Handlers {
 	return &Handlers{
 		broker:  broker,
 		updater: updater,
 		ctxProv: ctxProv,
+		confirm: wailsConfirmDialog{},
 	}
+}
+
+// SetConfirmDialog overrides the confirm-dialog surface used by the staged
+// Help → "Install & Restart" handler. Production code never needs to call
+// this (NewHandlers' default is the real Wails dialog); tests inject a
+// fake before exercising onUpdateAction(UpdateStaged) — see ConfirmDialog's
+// doc comment for why calling the real one in a test would os.Exit.
+func (h *Handlers) SetConfirmDialog(c ConfirmDialog) {
+	h.confirm = c
 }
 
 // SetCtxProv wires the ContextProvider after construction. Called from
@@ -133,9 +203,60 @@ func (h *Handlers) onThemeSystem(_ *wailsmenu.CallbackData) {
 	h.publish(TopicMenuThemeSet, ThemeSetPayload{Mode: "system"})
 }
 
-// onCheckUpdates triggers an immediate update check.
+// onCheckUpdates triggers an immediate update check. Bound to the Help
+// item when its label was computed from UpdateIdle (self-update-repair
+// -01PMUP01 WP05 — see onUpdateAction for the other four states).
 func (h *Handlers) onCheckUpdates(_ *wailsmenu.CallbackData) {
 	if h.updater != nil {
+		h.updater.CheckNow(h.appCtx())
+	}
+}
+
+// onUpdateAction returns the Wails callback for the Help → "Check for
+// Updates…" item, DISPATCHING ON THE STATE ITS LABEL WAS COMPUTED FROM
+// (self-update-repair-01PMUP01 FR-008) — before this, the handler always
+// called CheckNow regardless of label, so a user reading "Install Update"
+// and clicking it got a silent re-check instead (spec §1.4: "the
+// retirement target is itself a liar").
+//
+//	UpdateIdle        → CheckNow (StartCheck)
+//	UpdateAvailable   → StartDownload (start the install)
+//	UpdateDownloading → no-op (menu.go already disables this item)
+//	UpdateStaged      → confirm, then Apply (install + restart)
+//	UpdateFailed      → StartDownload (retry)
+//
+// UpdateDownloader/UpdateApplier are OPTIONAL capabilities on h.updater
+// (type-asserted); an updater that only implements UpdateChecker falls
+// back to CheckNow for every state rather than silently no-op'ing, so a
+// misconfigured wiring still does *something* observable.
+func (h *Handlers) onUpdateAction(state UpdateMenuState) func(_ *wailsmenu.CallbackData) {
+	return func(_ *wailsmenu.CallbackData) {
+		if h.updater == nil {
+			return
+		}
+		switch state {
+		case UpdateAvailable, UpdateFailed:
+			if d, ok := h.updater.(UpdateDownloader); ok {
+				d.StartDownload(h.appCtx())
+				return
+			}
+		case UpdateStaged:
+			if a, ok := h.updater.(UpdateApplier); ok {
+				ctx := h.appCtx()
+				if h.confirm != nil && h.confirm.Confirm(ctx,
+					"Install & Restart",
+					"Kenaz will install the update and restart now. Any unsaved "+
+						"in-flight work in an active session may be interrupted. Continue?",
+				) {
+					a.Apply(ctx)
+				}
+				return
+			}
+		case UpdateDownloading:
+			// menu.go disables the item in this state; defensive no-op if
+			// a click still lands (e.g. a race during rebuild).
+			return
+		}
 		h.updater.CheckNow(h.appCtx())
 	}
 }
