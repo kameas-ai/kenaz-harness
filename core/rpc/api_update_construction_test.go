@@ -15,19 +15,51 @@ import (
 	"bytes"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/kameas-ai/kenaz-harness/core"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
+// syncBuffer wraps bytes.Buffer with a mutex so it is safe as an
+// io.Writer target for a slog.Handler invoked from more than one
+// goroutine at once — e.g. stdio.Pool.Open's errgroup-based concurrent
+// per-spec spawns (mcp-connector-lifecycle-01PMMC01 WP01: found by
+// go test -race flaking on TestMCPUserSource_BootstrapAndToolsListAgree,
+// which drives a real c.Start(ctx) recipe bootstrap through captureLog).
+// slog's own commonHandler already serialises Handle() calls through its
+// own mutex, but that guards the Handler, not this buffer directly — two
+// concurrently-constructed Handler values derived from the same parent
+// (WithAttrs/WithGroup child handlers, which the bootstrap's per-recipe
+// logging produces) can still race on the underlying io.Writer without
+// this. Per CLAUDE.md's "Race-safe test fakes": anything written from a
+// goroutine and read by the test body needs a mutex + snapshot helper.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // captureLog replaces the process-global logger with a buffer-backed
 // handler for the duration of f, then restores whatever was there before.
-// Returns all JSON-line output produced during f.
+// Returns all JSON-line output produced during f. Safe for f to log from
+// background goroutines (see syncBuffer).
 func captureLog(t *testing.T, f func()) string {
 	t.Helper()
-	var buf bytes.Buffer
-	h := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	buf := &syncBuffer{}
+	h := slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})
 	logging.Replace(h)
 	t.Cleanup(func() {
 		// Re-init to the default file handler on teardown.
