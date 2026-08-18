@@ -258,6 +258,16 @@ jobs:
         # invalidates it as ground truth for the upgrade-path job.
         run: bash scripts/ci/check-upgrade-snapshots-locked.sh
 
+      - name: destructive-migration-coverage guard (I14)
+        # upgrade-path-coverage-01PMUG01 WP03, spec §FR-2. A migration
+        # is dormant until an upgrade path reaches it; repairing
+        # selection is what aims dormant migrations at real rows for
+        # the first time. Every migration whose Up() runs DROP TABLE /
+        # DROP INDEX / DROP TRIGGER / DROP COLUMN / ALTER TABLE RENAME
+        # / a non-scratch DELETE FROM must have a populated-table test
+        # or a dated scripts/ci/allowlists/i14-destructive-migration-coverage.txt entry.
+        run: bash scripts/ci/check-destructive-migration-coverage.sh
+
       # csp guard runs in test-frontend after `npm run build` produces
       # the real frontend/dist/index.html — there's no point checking
       # the CSP of a stub.

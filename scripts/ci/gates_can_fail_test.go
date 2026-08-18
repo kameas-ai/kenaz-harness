@@ -116,6 +116,7 @@ var cwdSensitiveGates = []string{
 	"check-single-move-writer.sh",
 	"check-cedar-gate-arguments.sh",
 	"check-upgrade-snapshots-locked.sh",
+	"check-destructive-migration-coverage.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -421,6 +422,31 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			file:   "core/storage/sqlite/testdata/upgrade/v0.63.0/dump.sql",
 			append: "-- zzGateProbe: this byte must not be here\n",
 			env:    map[string]string{"UPGRADE_SNAPSHOTS_BASE_REF": "HEAD"},
+		},
+		{
+			// upgrade-path-coverage-01PMUG01 WP03 (I14). A migration
+			// whose Up() runs DROP TABLE with no populated-table test
+			// referencing its ID and no allowlist entry must fail.
+			name: "destructive-migration-coverage/uncovered-drop-table",
+			gate: "check-destructive-migration-coverage.sh",
+			file: "core/rpc/views/zzgateprobe/migration_probe.go",
+			content: "package zzgateprobe\n\n" +
+				"import (\n" +
+				"\t\"context\"\n\n" +
+				"\t\"github.com/kameas-ai/kenaz-harness/core/storage/migrations\"\n" +
+				")\n\n" +
+				"func zzGateProbeMigration() migrations.Migration {\n" +
+				"\treturn migrations.Migration{\n" +
+				"\t\tID:            \"storage/97-zz-gate-probe\",\n" +
+				"\t\tVersion:       97,\n" +
+				"\t\tOwningMission: \"storage\",\n" +
+				"\t\tUpSource:      \"DROP " + "TABLE zz_gate_probe_table\",\n" +
+				"\t\tUp: func(ctx context.Context, tx migrations.WriteTx) error {\n" +
+				"\t\t\t_, err := tx.Exec(ctx, \"DROP " + "TABLE zz_gate_probe_table\")\n" +
+				"\t\t\treturn err\n" +
+				"\t\t},\n" +
+				"\t}\n" +
+				"}\n",
 		},
 	}
 

@@ -11,7 +11,9 @@ import (
 )
 
 // TestMigration0332_PreservesArtifactVersionRows pins the row-level contract
-// of the artifacts rebuild in migration 0332.
+// of the artifacts rebuild in migration sessions/0332-artifacts-global-scope
+// (I14's populated-table-coverage requirement, spec.md FR-2 —
+// upgrade-path-coverage-01PMUG01 WP03).
 //
 // THE HAZARD. 0332 changes the scope_kind CHECK, which SQLite cannot do with
 // ALTER TABLE, so it uses the create/copy/drop/rename recipe. artifact_versions

@@ -1,0 +1,29 @@
+# I14 allowlist — migrations whose Up() executes a destructive SQL
+# statement (DROP TABLE, DROP INDEX, DROP TRIGGER, DROP COLUMN,
+# ALTER TABLE ... RENAME, or DELETE FROM outside a scratch/backup
+# table) and have NEITHER a populated-table test referencing their ID
+# string NOR been deleted from the registry.
+#
+# Enforced by scripts/ci/check-destructive-migration-coverage.sh
+# (scripts/ci/cmd/checkdestructivemigrations). Seeded by
+# upgrade-path-coverage-01PMUG01 WP03 (2026-08-18): the mission that
+# proved the max-based Pending() selection bug aimed several dormant
+# destructive migrations at populated tables for the first time (spec
+# §1.3) and required populated-table coverage for every one found.
+#
+# CONTRACT (same as every allowlist in this directory): a line that
+# stays must say why it stays, dated, naming the blocker and the
+# change that will delete it. Lines shrink monotonically. "We'll get
+# to it" is not a reason.
+#
+# Format: one migration ID per line ("sessions/0327-source-model-output"),
+# preceded by a dated justification comment.
+#
+# ─────────────────────────────────────────────────────────────────────
+#
+# (empty — every destructive migration surveyed at WP03 has a
+# populated-table test: 0304, 0327, 0332, 0335, units/1103. Do not add
+# a line here without a populated-table test attempt first — see
+# migration_0304_test.go / migration_0327_test.go /
+# artifacts_rebuild_test.go / migration_0335_test.go /
+# core/units/migration_1103_test.go for the house pattern.)
