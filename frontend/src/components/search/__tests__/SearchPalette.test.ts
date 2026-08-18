@@ -2,7 +2,7 @@
  * SearchPalette.test.ts — unit tests for the floating search palette.
  *
  * Covers all quality-gate scenarios:
- *   - palette opens via ⌘K global shortcut
+ *   - palette opens via the composable's open()/toggle() contract
  *   - palette opens via icon click (search-palette-trigger)
  *   - Esc dismisses
  *   - click-outside (backdrop) dismisses
@@ -14,8 +14,11 @@
  * Architecture notes:
  *   - useSearchPalette() is a module-level singleton ref. Each test resets
  *     it to closed via searchPalette.close() in beforeEach.
- *   - Shell.vue owns the ⌘K keydown listener; we test the composable toggle
- *     directly and also simulate keydown on window for the global shortcut.
+ *   - No component binds a keyboard shortcut to this palette. Shell.vue's
+ *     ⌘K listener was removed in engineer-truth-pass-01PMTP01 WP01 (⌘K is
+ *     the command palette's); production opens this one through App.vue's
+ *     `menu:search:open` subscription, fed by the OS menu's View → Search
+ *     (⌘F). These cases drive the composable's open/toggle contract.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
@@ -147,11 +150,14 @@ describe('SearchPalette', () => {
     wrapper.unmount();
   });
 
-  it('opens via ⌘K window keydown', async () => {
+  it('opens when the menu:search:open route calls open()', async () => {
     const { wrapper } = await mountPalette();
 
-    // Simulate the global ⌘K keydown (as Shell.vue would handle it).
-    // We call toggle() directly to replicate Shell.vue's handler behavior.
+    // Drives the composable directly. Shell.vue's ⌘K handler was removed in
+    // engineer-truth-pass-01PMTP01 WP01 (⌘K belongs to the command palette);
+    // production reaches open() through App.vue's `menu:search:open`
+    // subscription instead. This case therefore covers the open() contract,
+    // not a key binding.
     useSearchPalette().toggle();
     await nextTick();
 

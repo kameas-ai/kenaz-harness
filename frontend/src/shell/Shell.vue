@@ -37,7 +37,8 @@ import { matchesEvent } from '@/lib/shortcuts/platform';
  * useCommandPalette.ts's own `window` keydown listener (engineer-truth-pass-
  * 01PMTP01 WP01). Before that fix this file also toggled the search palette
  * on ⌘K, so one keypress opened both the command palette and the search
- * palette on top of each other.
+ * palette on top of each other. This now matches the OS menu accelerators
+ * (core/menu/menu.go: View → Command Palette = ⌘K, View → Search = ⌘F).
  */
 const connection = useConnectionState();
 const isStarting = computed(() => connection.value === 'connecting');
@@ -133,9 +134,11 @@ function onGlobalKeydown(e: KeyboardEvent) {
   // Until WP01 of engineer-truth-pass-01PMTP01, this handler also toggled
   // the search palette on ⌘K, so both palettes opened on one keypress and
   // painted on top of each other (equal z-50, CommandPalette later in the
-  // DOM). The search palette is still reachable — via the Titlebar/UserMenu
-  // entry and the `menu:search:open` OS-menu action (see App.vue) — it just
-  // no longer shares ⌘K.
+  // DOM). The search palette is still reachable: the OS menu bar's
+  // View → Search item (⌘F, core/menu/menu.go) publishes `menu:search:open`,
+  // which App.vue turns into searchPalette.open(). That is its ONLY entry
+  // point today — UserMenu.vue's Search row moved to the native menu in
+  // v0.20.0, so there is no Titlebar/UserMenu affordance to name.
 
   if (isEditable) return;
 
@@ -257,9 +260,10 @@ onBeforeUnmount(() => {
   </div>
 
   <!-- Search palette — floating overlay (v0.5.6, search-palette-relocation).
-       Opened from the Titlebar/UserMenu entry and the `menu:search:open` OS
-       menu action (App.vue), not by ⌘K (engineer-truth-pass-01PMTP01 WP01:
-       ⌘K now belongs solely to the command palette, see useCommandPalette.ts).
+       Opened ONLY by the `menu:search:open` OS-menu action (View → Search,
+       ⌘F — see App.vue and core/menu/menu.go), not by ⌘K
+       (engineer-truth-pass-01PMTP01 WP01: ⌘K now belongs solely to the
+       command palette, see useCommandPalette.ts).
        Rendered as a portal sibling so it sits above all z-index layers.
        Future: unified-search-01KX5R8C will expand to cross-entity results. -->
   <SearchPalette />
