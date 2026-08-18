@@ -987,6 +987,58 @@ difference is the difference between "urgent" and "housekeeping".
 picks up the next unwired sweep. Re-verify each item's importer graph
 before acting — frontend code churns between sweeps.
 
+**AMENDMENT 2026-08-18 (`mcp-connector-lifecycle-01PMMC01` WP01) — this
+entry no longer names no owner and no mission.** The harness-self MCP
+server (B10 in `docs/dead-code-audit-2026-08-16.md`, this section's
+subject) is no longer parked as "housekeeping": the owner ruled
+**attach** on 2026-08-18. See
+`kitty-specs/mcp-connector-lifecycle-01PMMC01/research/b10-harness-self-decision.md`
+for the decision record. Execution (the session-scoped tool-visibility
+seam, the fourth dispatch-pool arm, installing `EmbeddedCedar`, making
+`IsHarnessSelfMCPDisabled` real, emitting-or-deleting the dead event
+kinds, and the Cedar-gating that makes attaching safe rather than merely
+attached) is **deferred to a dedicated follow-on mission**, not executed
+in `mcp-connector-lifecycle-01PMMC01` (that mission's own WP07 is
+explicitly out of scope for the attach — see its spec). **Owner of the
+attach execution:** the mission owner who dispatches the follow-on
+mission; unassigned as of this entry. **Blocker:** the visibility seam
+and `EmbeddedCedar` wiring do not exist yet (spec §6 option A cost items
+2 and 3) — attaching without them would hand every session write access
+to provider credentials and settings, which is why this is not a
+same-commit fix.
+
+Two small pieces of this finding were resolved immediately, regardless
+of the attach mission's timeline, because they were unambiguous under
+every branch (attach, retire, or park):
+
+- The three never-emitted `KindHarnessSelfPolicy{Proposed,Written,Rejected}`
+  event kinds are **deleted** (`core/event/kind/registry.go`) —
+  `harness_write_propose_cedar_policy`, the tool that would have emitted
+  them, was itself deleted by the 2026-08-14 sweep, so no emit site for
+  any of the three ever existed under any name. Positive no-consumer
+  proof: `grep -rn "KindHarnessSelfPolicy" --include='*.go' .` (pre-
+  deletion) found exactly one reader, `integration_test.go`'s
+  `TestIntegration_AuditKindsRegistered`, which asserted only
+  `kind.IsRegistered` (the string is a registry-map key) — not that
+  anything emits it. That test's docstring also claimed (falsely) that
+  the kinds "fire on the propose/accept round-trip"; corrected in the
+  same commit. `KindHarnessSelfToolCalled` — which `audit.go`'s
+  `WithAudit` genuinely emits on every harness-self tool dispatch —
+  survives.
+- Escalation #3 from the audit ("do the dead kinds have waiting
+  consumers — an audit view filter, a fleet exporter?") is answered: no.
+  `grep -rn "KindHarnessSelfPolicy"` across the frontend and
+  `core/rpc/views/audit` found no filter, no exporter, no reader of any
+  kind besides the one test above.
+
+`IsHarnessSelfMCPDisabled` (`core/rpc/onboarding_wiring.go:153-155`,
+hardcoded `false`) is **left as-is** and assigned to the attach mission
+rather than fixed here: the dial only means something once there is a
+live server to disable, and building its settings-store persistence now
+would front-run the attach mission's own design of what scope the dial
+applies at (global vs. per-project) — see spec §6 option A cost item 5,
+which already scopes this to the attach execution.
+
 ### 2026-08-18 · Custom-recipe authoring (A5) is flagged off, dated interim state
 
 `mcp-connector-lifecycle-01PMMC01` WP02 closed the A5 lie (a row Edit button
