@@ -177,7 +177,15 @@ async function onInstallAvailable() {
   installing.value = true;
   errorMessage.value = null;
   try {
-    await updater.installLatest(v);
+    // The poll loop inside installLatest hands us every Update_Status
+    // snapshot it reads (DC-8: still ONE waiter — we do not poll here,
+    // we just render what that waiter already read). This is what makes
+    // the WP03 broker subscriptions a true accelerator: with every
+    // subscription detached the bar still advances, at 2/s instead of
+    // ~10/s, and still lands on its terminal 'failed' render.
+    await updater.installLatest(v, (s) => {
+      status.value = s;
+    });
   } catch (err) {
     errorMessage.value = err instanceof Error ? err.message : String(err);
   } finally {
@@ -463,7 +471,18 @@ async function onUnskip(version: string) {
             >Downloading… {{ downloadPercent }}%</template
           >
           <template v-else-if="isDownloading">Downloading…</template>
-          <template v-else>Staged — installing…</template>
+          <!-- 'installing' is true iff THIS session's installLatest
+               waiter is running. A reload mid-download destroys that
+               waiter while the Go-side download keeps going, so the
+               panel can land on 'staged' with nobody about to apply it:
+               claiming "installing…" there would name an activity that
+               is not happening. Say what is actually true and point at
+               the control that finishes the job. -->
+          <template v-else-if="installing">Staged — installing…</template>
+          <template v-else
+            >Update downloaded — click Install to finish, or use the Help
+            menu's “Install &amp; Restart”.</template
+          >
         </p>
       </div>
     </div>

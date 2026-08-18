@@ -79,8 +79,21 @@ export interface UpdateClient {
    *
    * The version arg is informational; the backend installs whatever the
    * current channel manifest advertises.
+   *
+   * `onStatus` is invoked with every snapshot the poll loop reads. It is
+   * what keeps DC-1 honest for the RENDERED surface, not just for the
+   * terminal outcome: the panel's progress bar advances from these
+   * snapshots at the poll cadence with zero broker events present, so
+   * the three `update:download-*` subscriptions really are an
+   * accelerator (10/s instead of 2/s) rather than the bar's only source
+   * of movement. It does NOT open a second poll loop — installLatest
+   * remains the one waiter (DC-8); the panel just sees what that waiter
+   * already read.
    */
-  installLatest(version: string): Promise<void>;
+  installLatest(
+    version: string,
+    onStatus?: (status: UpdateStatus) => void,
+  ): Promise<void>;
   /** Persist a "skip this version" choice; backend won't re-prompt. */
   skipVersion(version: string): Promise<void>;
   /** Read the user's skipped-versions list. */
@@ -125,9 +138,18 @@ function bridge(): BridgeShape {
 /** DC-3: Status is a cheap in-memory RLock read (no network, no disk) —
  *  a 500ms poll is free; do not add caching or debouncing. */
 const DEFAULT_POLL_INTERVAL_MS = 500;
-/** spec §4.1 Bounds: a generous ceiling so a wedged pump cannot spin
+/** spec §4.1 Bounds: a generous ceiling so a WEDGED pump cannot spin
  *  installLatest's promise forever. On expiry we reject naming the
- *  observed state rather than resolving silently. */
+ *  observed state rather than resolving silently.
+ *
+ *  This is a NO-PROGRESS window, not a total-runtime cap. The spec said
+ *  "30 min"; read as total runtime it kills a download that is merely
+ *  slow — a 150MB asset on a ~110KB/s link (hotel wifi, tethering) is
+ *  healthy, progressing, and dead at the ceiling. Worse, there is no
+ *  resume path (spec §3 non-goals), so the retry restarts from zero and
+ *  hits the same wall: that user can never update, which is the exact
+ *  outcome this mission exists to prevent. Wedged is what the bound is
+ *  for, and wedged means the observed status stops changing. */
 const DEFAULT_POLL_TIMEOUT_MS = 30 * 60 * 1000;
 
 /** Test seam for the installLatest poll cadence/ceiling — production
@@ -153,7 +175,10 @@ export function createUpdateClient(
     startCheck: () => bridge().Update_StartCheck(),
     startDownload: () => bridge().Update_StartDownload(),
     apply: () => bridge().Update_Apply(),
-    installLatest: async (_version: string) => {
+    installLatest: async (
+      _version: string,
+      onStatus?: (status: UpdateStatus) => void,
+    ) => {
       // DC-1: poll Update_Status to a terminal state; the broker events
       // (WP03) are an accelerator for the repaint rate only — this
       // function must resolve/reject correctly with every subscription
@@ -170,9 +195,24 @@ export function createUpdateClient(
       // catch and keep polling.
       await bridge().Update_StartDownload();
 
-      const deadline = Date.now() + pollTimeoutMs;
+      // The deadline is refreshed every time the observed status CHANGES
+      // (state, percent, or error). A progressing download therefore
+      // never expires; a pump that stops moving for pollTimeoutMs does.
+      let deadline = Date.now() + pollTimeoutMs;
+      let lastSeen = '';
       for (;;) {
         const s = await bridge().Update_Status();
+        const seen = `${s.downloadState}|${s.downloadProgress ?? ''}|${s.downloadError ?? ''}`;
+        if (seen !== lastSeen) {
+          lastSeen = seen;
+          deadline = Date.now() + pollTimeoutMs;
+        }
+        // Hand every polled snapshot to the caller BEFORE acting on it,
+        // so the panel repaints 'downloading'/'staged'/'failed' (and the
+        // percent) from the poll alone. Deleting every useEventStream
+        // subscription must change frame rate, never what the user sees
+        // (spec §4.1's stated invariant).
+        onStatus?.(s);
         if (s.downloadState === 'staged') {
           await bridge().Update_Apply();
           return;
@@ -184,7 +224,7 @@ export function createUpdateClient(
         }
         if (Date.now() >= deadline) {
           throw new Error(
-            `Update install timed out after ${Math.round(pollTimeoutMs / 60000)} minutes ` +
+            `Update install stalled: no progress for ${Math.round(pollTimeoutMs / 60000)} minutes ` +
               `(last observed downloadState: "${s.downloadState}").`,
           );
         }

@@ -199,7 +199,7 @@ describe('UpdatesPanel — status block', () => {
     expect(panel.text()).toContain('v0.3.4');
     await wrapper.find('[data-testid="updates-install"]').trigger('click');
     await flushPromises();
-    expect(installLatest).toHaveBeenCalledWith('v0.3.4');
+    expect(installLatest).toHaveBeenCalledWith('v0.3.4', expect.any(Function));
   });
 });
 
@@ -348,7 +348,7 @@ describe('UpdatesPanel — WP03 download-event accelerator wiring', () => {
     await flushPromises();
     await wrapper.find('[data-testid="updates-install"]').trigger('click');
     await flushPromises();
-    expect(installLatest).toHaveBeenCalledWith('v0.3.4');
+    expect(installLatest).toHaveBeenCalledWith('v0.3.4', expect.any(Function));
   });
 });
 
@@ -386,6 +386,82 @@ describe('UpdatesPanel — WP04 download progress surface', () => {
     } finally {
       uninstallFakeRuntime();
     }
+  });
+
+  // ACCELERATOR-ONLY, PROVED ON THE RENDERED SURFACE (spec §4.1 DC-1).
+  // The sibling test above advances the bar with a broker event. This one
+  // advances it with NO event bridge installed at all — the panel gets its
+  // snapshots from installLatest's poll callback. Without that callback the
+  // bar freezes at whatever the mount-time Status said and never moves
+  // again, which makes the three useEventStream subscriptions the bar's
+  // only source of movement — i.e. deleting them would change an outcome,
+  // not a frame rate, which is exactly what DC-1 forbids.
+  // Mutation: drop the `onStatus` argument at the installLatest call site
+  // in UpdatesPanel.vue (or stop invoking it in updateClient.ts) → fails.
+  it('advances the bar from installLatest poll snapshots with no event bridge (DC-1 accelerator-only)', async () => {
+    uninstallFakeRuntime(); // no window.runtime: every subscription detached
+    const snapshots: UpdateStatus[] = [
+      {
+        currentVersion: 'v0.3.3',
+        available: true,
+        availableVersion: 'v0.3.4',
+        channel: 'stable',
+        downloadState: 'downloading',
+        downloadProgress: 17,
+      },
+      {
+        currentVersion: 'v0.3.3',
+        available: true,
+        availableVersion: 'v0.3.4',
+        channel: 'stable',
+        downloadState: 'downloading',
+        downloadProgress: 63,
+      },
+    ];
+    let push: ((s: UpdateStatus) => void) | undefined;
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const { wrapper } = mountPanel({
+      status: { available: true, availableVersion: 'v0.3.4' },
+      updaterOverrides: {
+        installLatest: async (
+          _v: string,
+          onStatus?: (s: UpdateStatus) => void,
+        ) => {
+          push = onStatus;
+          await gate;
+        },
+      },
+    });
+    await flushPromises();
+    // Nothing downloading yet — no bar.
+    expect(wrapper.find('[data-testid="updates-progress"]').exists()).toBe(
+      false,
+    );
+
+    await wrapper.find('[data-testid="updates-install"]').trigger('click');
+    await flushPromises();
+    expect(push).toBeTypeOf('function');
+
+    push!(snapshots[0]);
+    await flushPromises();
+    const first = wrapper
+      .find('[data-testid="updates-progress"]')
+      .attributes('aria-valuenow');
+    expect(first).toBe('17');
+
+    push!(snapshots[1]);
+    await flushPromises();
+    const second = wrapper
+      .find('[data-testid="updates-progress"]')
+      .attributes('aria-valuenow');
+    expect(second).toBe('63');
+    expect(second).not.toBe(first);
+
+    release!();
+    await flushPromises();
   });
 
   // DC-2 pin: 17 must render as 17%, never 1700% (the old lying
@@ -439,6 +515,27 @@ describe('UpdatesPanel — WP04 download progress surface', () => {
     expect(
       wrapper.find('[data-testid="updates-progress"]').attributes('aria-valuenow'),
     ).toBe('42');
+  });
+
+  // A reload mid-download destroys installLatest's poll loop while the
+  // Go-side download keeps running, so the panel can rehydrate straight
+  // into 'staged' with no waiter behind it. The copy must not claim an
+  // install is under way — it must point at the control that finishes.
+  // Mutation: restore the unconditional "Staged — installing…" → fails.
+  it('does not claim "installing" for a staged status with no waiter (post-reload)', async () => {
+    const { wrapper } = mountPanel({
+      status: {
+        available: true,
+        availableVersion: 'v0.3.4',
+        downloadState: 'staged',
+        downloadProgress: 100,
+      },
+    });
+    await flushPromises();
+    const label = wrapper.find('[data-testid="updates-progress-label"]');
+    expect(label.exists()).toBe(true);
+    expect(label.text()).not.toContain('installing…');
+    expect(label.text()).toContain('Install');
   });
 
   it('renders the failure reason from Status alone (no thrown exception in this session)', async () => {

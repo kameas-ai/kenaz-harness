@@ -187,6 +187,34 @@ describe('installLatest (WP02 — polls to a terminal state)', () => {
     expect(b.Update_Status).toHaveBeenCalledTimes(4);
   });
 
+  // The client half of the accelerator-only proof (spec §4.1 DC-1): every
+  // polled snapshot is handed to the caller, so the panel's progress bar
+  // can advance at the poll cadence with zero broker events. Mutation:
+  // delete the `onStatus?.(s)` call → fails.
+  it('reports every polled status snapshot to onStatus, in order', async () => {
+    const b = installFakeBindings();
+    b.Update_Status
+      .mockResolvedValueOnce(baseStatus({ downloadState: 'downloading', downloadProgress: 17 }))
+      .mockResolvedValueOnce(baseStatus({ downloadState: 'downloading', downloadProgress: 63 }))
+      .mockResolvedValueOnce(baseStatus({ downloadState: 'staged', downloadProgress: 100 }));
+    const client = createUpdateClient({ pollIntervalMs: 500 });
+
+    const seen: Array<[string, number | undefined]> = [];
+    const p = client.installLatest('0.4.1', (s) => {
+      seen.push([s.downloadState, s.downloadProgress]);
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(500);
+    await p;
+
+    expect(seen).toEqual([
+      ['downloading', 17],
+      ['downloading', 63],
+      ['staged', 100],
+    ]);
+  });
+
   it("rejects with the status's downloadError string on a 'failed' terminal state", async () => {
     const b = installFakeBindings();
     b.Update_Status.mockResolvedValueOnce(
@@ -199,6 +227,44 @@ describe('installLatest (WP02 — polls to a terminal state)', () => {
     await vi.advanceTimersByTimeAsync(0);
     await assertion;
     expect(b.Update_Apply).not.toHaveBeenCalled();
+  });
+
+  // The ceiling is a NO-PROGRESS window, not a total-runtime cap: a slow
+  // but advancing download must not be killed at the bound. Here the
+  // percent moves once per poll, so the run outlasts the 2s ceiling many
+  // times over and still succeeds.
+  // Mutation: compute `deadline` once before the loop (a total-runtime
+  // cap) → this test fails with a "stalled" rejection.
+  it('does not expire a slow-but-progressing download at the ceiling', async () => {
+    const b = installFakeBindings();
+    for (let pct = 1; pct <= 20; pct++) {
+      b.Update_Status.mockResolvedValueOnce(
+        baseStatus({ downloadState: 'downloading', downloadProgress: pct }),
+      );
+    }
+    b.Update_Status.mockResolvedValueOnce(baseStatus({ downloadState: 'staged' }));
+    const client = createUpdateClient({
+      pollIntervalMs: 500,
+      pollTimeoutMs: 2000, // far shorter than the 21 polls x 500ms run
+    });
+
+    const p = client.installLatest('0.4.1');
+    let outcome = 'pending';
+    p.then(
+      () => {
+        outcome = 'resolved';
+      },
+      (e) => {
+        outcome = `rejected: ${(e as Error).message}`;
+      },
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    for (let i = 0; i < 21; i++) {
+      await vi.advanceTimersByTimeAsync(500);
+    }
+    await p;
+    expect(outcome).toBe('resolved');
+    expect(b.Update_Apply).toHaveBeenCalledTimes(1);
   });
 
   it('propagates ErrDownloadInFlight from startDownload unchanged, without polling', async () => {
@@ -219,7 +285,7 @@ describe('installLatest (WP02 — polls to a terminal state)', () => {
   // → this test hangs (or times out per vitest's own test timeout)
   // instead of rejecting, because a wedged pump that never leaves
   // 'downloading' would poll forever.
-  it('rejects naming the observed state once the poll ceiling expires', async () => {
+  it('rejects naming the observed state once the no-progress ceiling expires', async () => {
     const b = installFakeBindings();
     b.Update_Status.mockResolvedValue(
       baseStatus({ downloadState: 'downloading', downloadProgress: 3 }),
@@ -237,7 +303,7 @@ describe('installLatest (WP02 — polls to a terminal state)', () => {
 
     // Advance well past the 2s ceiling.
     await vi.advanceTimersByTimeAsync(5000);
-    await expect(p).rejects.toThrow(/timed out/i);
+    await expect(p).rejects.toThrow(/stalled/i);
     expect(rejection).toBeInstanceOf(Error);
     expect((rejection as Error).message).toMatch(/downloading/);
     expect(b.Update_Apply).not.toHaveBeenCalled();
