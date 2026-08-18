@@ -12,13 +12,22 @@
  * reachable unconditionally; the WP02 interim flag that used to gate
  * both is retired in the same commit as this wiring.
  *
- * Test Connection stays gated on a persisted id: `MCP_TestRecipe`
- * (`harnessClient.ts:1612` → `core/rpc/bindings.go:497`) is keyed by a
- * recipe id already on disk, so an unsaved draft has nothing to test
- * against yet. Save first, then use the row's own Test/Edit affordances
- * (out of this tab) to verify connectivity — extending this form with a
- * persist-then-test or inline-spec test path is left to a future WP; the
- * spec deliberately does not choose between the two.
+ * Test Connection is keyed on a persisted id: `MCP_TestRecipe`
+ * (`harnessClient.ts` → `core/rpc/bindings.go`) resolves the recipe
+ * through the catalog, so it can only test an id that is already on
+ * disk. Both of this tab's entry doors are handled:
+ *
+ *   - Edit an installed recipe (the row Edit button — the primary way
+ *     users reach this tab) pre-fills `initialRecipe`, whose id IS
+ *     persisted. Test Connection performs the real round-trip.
+ *   - Author a brand-new recipe: nothing is on disk until save()
+ *     returns, so the button reports that and asks the user to save
+ *     first. After a successful save the id is persisted and Test
+ *     works without leaving the form.
+ *
+ * Extending `MCP_TestRecipe` to accept an inline spec (so a never-saved
+ * draft could be tested) is a separate change the spec deliberately
+ * leaves open.
  */
 import { ref, computed, watch } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
@@ -66,6 +75,10 @@ const testError = ref<string | null>(null);
 const testing = ref(false);
 const saveError = ref<string | null>(null);
 const saving = ref(false);
+// The id currently known to exist on disk — set from initialRecipe in edit
+// mode and again after a successful save. Declared here (above the
+// initialRecipe watch, which runs immediately) so the watch can assign it.
+const persistedID = ref<string | null>(null);
 
 // ── shadow warning ─────────────────────────────────────────────────────
 const shadowWarning = computed(() => {
@@ -81,6 +94,9 @@ watch(
   () => props.initialRecipe,
   (recipe) => {
     if (!recipe) return;
+    // Edit mode: the recipe is already on disk, so its id is testable
+    // through MCP_TestRecipe from the first render.
+    persistedID.value = recipe.id;
     id.value = recipe.id;
     displayName.value = recipe.displayName;
     description.value = recipe.description;
@@ -128,21 +144,49 @@ const canSave = computed(
 );
 
 // ── test connection ────────────────────────────────────────────────────
-// MCP_TestRecipe (harnessClient.ts:1612 -> bindings.go:497) is live, but it
-// is keyed by a persisted recipe id — this form has no id until save()
-// persists one, and save() is itself stubbed until WP06. So there is
-// nothing to `await` here yet: no try/catch, because nothing can throw. Do
-// not reintroduce a catch this function structurally cannot reach — wire a
-// real `await client.mcp.testRecipe(...)` call here in the same commit that
-// gives this form a persisted id to test (WP06), and remove this comment.
+// MCP_TestRecipe is keyed by a persisted recipe id, so Test Connection can
+// only run once the id the form currently holds exists on disk. That is
+// true on the Edit-an-installed-recipe path from the very first render
+// (initialRecipe's id is persisted by definition), and becomes true on the
+// author-a-new-recipe path the moment save() succeeds.
+//
+// When it is not yet true the button stays clickable on purpose: the
+// message it produces is an actionable precondition ("save first"), not a
+// "not implemented" dead end, and a silently-disabled button would hide
+// the reason. Renaming the id in edit mode also drops canTest — testing
+// the old on-disk recipe under a name the form no longer holds would
+// report success for something the user is not looking at.
+const canTest = computed(
+  () => persistedID.value !== null && id.value.trim() === persistedID.value,
+);
+
 async function testConnection() {
   if (testing.value) return;
-  testing.value = true;
   testResult.value = null;
-  testError.value =
-    'Test Connection is unavailable for an unsaved draft: MCP_TestRecipe ' +
-    'requires a persisted recipe id, and saving is not yet implemented.';
-  testing.value = false;
+  testError.value = null;
+  if (!canTest.value) {
+    testError.value =
+      'Test Connection needs a persisted recipe id: MCP_TestRecipe resolves ' +
+      'the recipe through the catalog. Save this recipe first, then test it.';
+    return;
+  }
+  testing.value = true;
+  try {
+    const res = await client.mcp.testRecipe(persistedID.value as string, {}, {});
+    if (res.ok) {
+      const name = res.server_info?.name || persistedID.value;
+      const tools = res.tool_count >= 0 ? `${res.tool_count} tool(s)` : 'no tools advertised';
+      testResult.value = `Connected to ${name} — ${tools} in ${res.duration_ms} ms.`;
+    } else {
+      testError.value = [res.error || 'Connection test failed.', res.stderr_tail]
+        .filter(Boolean)
+        .join('\n');
+    }
+  } catch (e) {
+    testError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    testing.value = false;
+  }
 }
 
 // ── build wire payload ───────────────────────────────────────────────
@@ -194,7 +238,11 @@ async function save() {
   saving.value = true;
   saveError.value = null;
   try {
-    await client.mcp.saveCustomRecipe(buildRecipePayload());
+    const payload = buildRecipePayload();
+    await client.mcp.saveCustomRecipe(payload);
+    // The id is on disk now, so Test Connection becomes live without
+    // leaving the form.
+    persistedID.value = payload.id;
     emit('saved');
   } catch (e) {
     saveError.value = e instanceof Error ? e.message : String(e);

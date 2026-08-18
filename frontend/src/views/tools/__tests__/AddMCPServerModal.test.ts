@@ -590,13 +590,12 @@ describe('CustomRecipeTab — form validation', () => {
     expect(testBtn.attributes('disabled')).toBeDefined();
   });
 
-  it('Test Connection reports the persisted-id constraint, not a canned success string', async () => {
-    // Regression for the WP02 fix: testConnection() used to assign a canned
-    // "not yet available" string with no `await` inside its try, so its
-    // catch was structurally unreachable. It now reports the real
-    // constraint (MCP_TestRecipe needs a persisted recipe id) as an error,
-    // and the stale "WP10" wording is gone from the file.
-    const w = mountCustomTab();
+  it('Test Connection on an UNSAVED draft asks the user to save, and calls nothing', async () => {
+    // The draft path has no id on disk, so MCP_TestRecipe has nothing to
+    // resolve. Assert on the recorded call (not just the rendered string):
+    // the client must not be touched at all.
+    const testRecipe = vi.fn();
+    const w = mountCustomTab({}, { mcp: { testRecipe } as any });
     await w.find('[data-testid="custom-id-input"]').setValue('my-server');
     await w.find('[data-testid="custom-display-name-input"]').setValue('My Server');
     await w.find('[data-testid="custom-command-input"]').setValue('npx');
@@ -604,10 +603,108 @@ describe('CustomRecipeTab — form validation', () => {
     await w.find('[data-testid="custom-test-btn"]').trigger('click');
     await flushPromises();
 
+    expect(testRecipe).not.toHaveBeenCalled();
     expect(w.find('[data-testid="custom-test-result"]').exists()).toBe(false);
     expect(w.find('[data-testid="custom-test-error"]').text()).toContain(
-      'persisted recipe id',
+      'Save this recipe first',
     );
+  });
+
+  it('Test Connection on the EDIT path issues a real MCP_TestRecipe call and renders the result', async () => {
+    // AC-002: this is the flow a user actually takes — the row Edit button
+    // lands here with initialRecipe set, and that id IS persisted. Before
+    // this fix testConnection() short-circuited to an "unavailable for an
+    // unsaved draft" error on every path including this one, so the button
+    // could never succeed in any flow.
+    //
+    // Mutation: make testConnection() unconditionally assign testError
+    // without consulting canTest (its pre-fix shape). This assertion must
+    // fail — testRecipe's call count stays 0.
+    const testRecipe = vi.fn(async () => ({
+      ok: true,
+      server_info: { name: 'My Existing Server', version: '1.0' },
+      capabilities: { tools: { listChanged: false } },
+      tool_count: 3,
+      resource_count: -1,
+      prompt_count: -1,
+      duration_ms: 42,
+    }));
+    const recipe = makeRecipe('my-existing', {
+      displayName: 'My Existing Server',
+      argsTemplate: ['npx', '-y', 'thing'],
+    });
+    const w = mountCustomTab(
+      { initialRecipe: recipe },
+      { mcp: { testRecipe } as any },
+    );
+    await flushPromises();
+
+    await w.find('[data-testid="custom-test-btn"]').trigger('click');
+    await flushPromises();
+
+    expect(testRecipe).toHaveBeenCalledTimes(1);
+    expect(testRecipe).toHaveBeenCalledWith('my-existing', {}, {});
+    expect(w.find('[data-testid="custom-test-error"]').exists()).toBe(false);
+    expect(w.find('[data-testid="custom-test-result"]').text()).toContain(
+      '3 tool(s)',
+    );
+  });
+
+  it('Test Connection surfaces a failed round-trip as an error, not a success string', async () => {
+    const testRecipe = vi.fn(async () => ({
+      ok: false,
+      server_info: { name: '', version: '' },
+      capabilities: {},
+      tool_count: -1,
+      resource_count: -1,
+      prompt_count: -1,
+      duration_ms: 12,
+      error: 'exec: "npx": executable file not found',
+    }));
+    const recipe = makeRecipe('my-existing', {
+      displayName: 'My Existing Server',
+      argsTemplate: ['npx'],
+    });
+    const w = mountCustomTab(
+      { initialRecipe: recipe },
+      { mcp: { testRecipe } as any },
+    );
+    await flushPromises();
+
+    await w.find('[data-testid="custom-test-btn"]').trigger('click');
+    await flushPromises();
+
+    expect(w.find('[data-testid="custom-test-result"]').exists()).toBe(false);
+    expect(w.find('[data-testid="custom-test-error"]').text()).toContain(
+      'executable file not found',
+    );
+  });
+
+  it('Test Connection becomes live after a successful save, without leaving the form', async () => {
+    const testRecipe = vi.fn(async () => ({
+      ok: true,
+      server_info: { name: 'My Server', version: '1.0' },
+      capabilities: {},
+      tool_count: 1,
+      resource_count: -1,
+      prompt_count: -1,
+      duration_ms: 7,
+    }));
+    const saveCustomRecipe = vi.fn(async (req: any) => ({ id: req.id }));
+    const w = mountCustomTab({}, { mcp: { saveCustomRecipe, testRecipe } as any });
+    await w.find('[data-testid="custom-id-input"]').setValue('my-server');
+    await w.find('[data-testid="custom-display-name-input"]').setValue('My Server');
+    await w.find('[data-testid="custom-command-input"]').setValue('npx');
+    await flushPromises();
+
+    await w.find('[data-testid="custom-save-btn"]').trigger('click');
+    await flushPromises();
+
+    await w.find('[data-testid="custom-test-btn"]').trigger('click');
+    await flushPromises();
+
+    expect(testRecipe).toHaveBeenCalledWith('my-server', {}, {});
+    expect(w.find('[data-testid="custom-test-result"]').text()).toContain('1 tool(s)');
   });
 
   it('cancel button emits cancel', async () => {
