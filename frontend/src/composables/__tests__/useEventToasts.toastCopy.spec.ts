@@ -33,21 +33,32 @@ describe('useEventToasts — update-available toast copy (AC-7)', () => {
     expect(src).not.toContain('⬆');
   });
 
-  it("names the control that replaced it — 'Help' + 'Check for Updates'", () => {
-    // The replacement target: core/menu/state.go's
-    // UpdateMenuLabel(UpdateIdle) === "Check for Updates…" living under
-    // the "Help" submenu (core/menu/menu.go's buildHelpMenu →
-    // wailsmenu.SubMenu("Help", sub)). This test locks the TS copy to
-    // those two literal strings; a rename on either side without
-    // updating this file's expectation is the failure mode this test
-    // exists to catch — see also core/menu/state_test.go's
-    // TestUpdateTopicState_MatchesProductionTopics for the analogous
-    // Go-side topic lock.
+  it("names the control that replaced it — 'Help' + 'Install Update'", () => {
+    // The replacement target: the Help submenu's update item
+    // (core/menu/menu.go's buildHelpMenu → wailsmenu.SubMenu("Help",
+    // sub)), labelled by core/menu/state.go's UpdateMenuLabel.
+    //
+    // 'Install Update', i.e. UpdateMenuLabel(UpdateAvailable) — NOT
+    // UpdateMenuLabel(UpdateIdle) === 'Check for Updates…'. The label is
+    // state-dependent and this toast only ever fires on
+    // `update:available`, which is the same broker frame main.go's
+    // subscriber turns into UpdateAvailable + a menu rebuild. Locking
+    // the copy to the idle label pointed the user at a string the menu
+    // does not show at the one moment they are reading it — the §1.3
+    // "names a control that does not exist" defect, one label over.
+    //
+    // A rename on either side without updating this file's expectation
+    // is the failure mode this test exists to catch — see also
+    // core/menu/state_test.go's TestUpdateTopicState_MatchesProductionTopics
+    // for the analogous Go-side topic lock.
     const src = readSource();
     const match = src.match(/push\(`Kenaz \$\{ver\} is available[^`]*`/);
     expect(match, 'update-available toast push() call not found').not.toBeNull();
     const toastTemplate = match![0];
     expect(toastTemplate).toContain('Help');
-    expect(toastTemplate).toContain('Check for Updates');
+    expect(toastTemplate).toContain('Install Update');
+    // And must NOT name the idle-state label, which is wrong for the
+    // state this toast fires in.
+    expect(toastTemplate).not.toContain('Check for Updates');
   });
 });
