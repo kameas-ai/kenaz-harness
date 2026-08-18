@@ -90,6 +90,9 @@ const groups: ReadonlyArray<TabGroup> = [
       { to: '/settings?tab=slashcmds', label: 'Slash Commands', query: 'slashcmds', icon: Command },
       { to: '/settings?tab=workflows', label: 'Workflows', query: 'workflows', icon: GitBranch },
       { to: '/settings?tab=hooks', label: 'Hooks', query: 'hooks', icon: Webhook },
+      // engineer-truth-pass-01PMTP01 WP03 (finding B2b) — the panel existed
+      // and had zero mount sites; this is the real click path FR-004 requires.
+      { to: '/settings?tab=branch-advisor', label: 'Branch Advisor', query: 'branch-advisor', icon: GitBranch },
     ],
   },
   {

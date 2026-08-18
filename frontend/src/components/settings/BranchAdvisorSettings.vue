@@ -3,13 +3,23 @@
  * BranchAdvisorSettings — Settings sub-section for the branch advisor
  * (branch-as-subagent-recommendation-01KQ8TDJ WP08, FR-009/FR-010).
  *
+ * Mounted at SettingsView.vue's ?tab=branch-advisor pane, linked from
+ * SettingsTabs.vue's Authoring group (engineer-truth-pass-01PMTP01
+ * WP03, finding B2b). Before WP03 this component had zero mount
+ * sites — its only non-test reference was this docstring — even
+ * though every field it edits round-trips through a real Settings
+ * struct; WP02 in the same PR made the Go-side knobs actually read.
+ *
  * Three controls:
  *   1. Toggle  — "Suggest spawning subagents" (BranchAdvisorEnabled)
  *   2. Slider  — "Suggestion confidence threshold" (BranchAdvisorMinConfidence)
  *   3. Number  — "Reintegration summary max tokens" (BranchReintegrationMaxTokens)
  *
  * All persists via debouncedSave. Number-input clamping is client-side;
- * the server also clamps via EffectiveBranchReintegrationMaxTokens.
+ * the server also clamps via EffectiveBranchReintegrationMaxTokens
+ * (verified true as of WP02 — that accessor now has a real caller,
+ * ProposeReintegrationSummary) and rejects out-of-range Save calls via
+ * validateBranchFields (WP03).
  */
 import { onMounted, ref } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';

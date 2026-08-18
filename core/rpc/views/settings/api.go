@@ -216,7 +216,9 @@ type Settings struct {
 
 	// BranchAdvisorMinConfidence is the heuristic-score threshold below
 	// which the banner does not mount. Default 0.85 (locked Q29.1).
-	// Range [0, 1]; Save rejects values outside this range.
+	// Range [0, 1]; Save rejects values outside this range — enforced by
+	// validateBranchFields (impl.go), added in engineer-truth-pass-
+	// 01PMTP01 WP03 (this sentence had no enforcement behind it before).
 	BranchAdvisorMinConfidence float64 `json:"branchAdvisorMinConfidence,omitempty"`
 
 	// BranchAdvisorUseLLM enables the optional LLM-backed detector
@@ -236,7 +238,9 @@ type Settings struct {
 	// falls back to the default via EffectiveBranchReintegrationMaxTokens,
 	// which ProposeReintegrationSummary calls (engineer-truth-pass-
 	// 01PMTP01 WP02; before WP02 this field had no reader and the cap
-	// was a hardcoded 2000 regardless of what was persisted here).
+	// was a hardcoded 2000 regardless of what was persisted here). Save
+	// rejects non-zero values outside [min, max] — validateBranchFields
+	// (impl.go), added in WP03.
 	BranchReintegrationMaxTokens int `json:"branchReintegrationMaxTokens,omitempty"`
 
 	// BranchAdvisorDefaultModel is the (provider, model) used for
