@@ -113,7 +113,37 @@ func NewService(cfg Config) (Service, error) {
 		// the banner again. Log and continue.
 		logging.L().Warn("update.skip.load_failed", "err", err.Error())
 	}
+	s.sweepOrphanPartFiles()
 	return s, nil
+}
+
+// sweepOrphanPartFiles removes orphaned "*.part" files left behind by an
+// interrupted downloadPump (process killed mid-download; every terminal
+// path except sha-mismatch and rename-failure leaves the ".part" behind —
+// see spec self-update-repair-01PMUP01 §1.5). Runs once at service
+// construction (FR-006): a relaunch after a kill-mid-download must report
+// idle with no stale artifact, and must not accumulate garbage across
+// launches.
+//
+// Matches "*.part" ONLY. The staging directory also holds the completed,
+// verified, not-yet-applied artifact (e.g. "kenaz-harness-1.2.3.app.new" /
+// ".exe.new" — see defaultStagedName) which must survive a sweep; widening
+// this glob to "*" would delete a completed download and turn a cosmetic
+// orphan into a broken install (plan.md Risks).
+func (s *service) sweepOrphanPartFiles() {
+	stagingDir := filepath.Join(s.cfg.DataDir, "update", "staging")
+	matches, err := filepath.Glob(filepath.Join(stagingDir, "*.part"))
+	if err != nil {
+		logging.L().Warn("update.sweep.glob_failed", "err", err.Error())
+		return
+	}
+	for _, m := range matches {
+		if err := os.Remove(m); err != nil && !errors.Is(err, os.ErrNotExist) {
+			logging.L().Warn("update.sweep.remove_failed", "path", m, "err", err.Error())
+			continue
+		}
+		logging.L().Info("update.sweep.removed_orphan", "path", m)
+	}
 }
 
 func (s *service) Check(ctx context.Context) (Info, error) {

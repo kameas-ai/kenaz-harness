@@ -19,12 +19,15 @@
 //     Testing this is the only way to know; every gate in this directory
 //     "looked correct" while being incapable of failing.
 //
-// NOTE — THIS TEST DOES NOT RUN IN CI YET. pr.yml's test-go step scopes to
-// `./core/... ./cmd/harness-vm/...`, which excludes ./scripts/... along with
-// the root package, cmd/kenaz-updater and cmd/mcpsubcmd — 18 test functions
-// that never execute. Add `./scripts/...` (at minimum) to that step. It is a
-// one-line change, deliberately not made here because #279 is concurrently
-// editing .github/workflows/pr.yml.
+// THIS TEST NOW RUNS IN CI. Fixed in #293 (fix(ci): run the gate meta-tests,
+// which have never run in CI) — pr.yml's test-go job gained a dedicated
+// `go test ./scripts/... -count=1` step. Previously this whole file's test
+// functions, including its own planted-violation proofs, never executed —
+// exactly the "gate whose clean verdict is indistinguishable from did not
+// look" class this file exists to catch, applied to itself. Verified
+// 2026-08-18 (self-update-repair-01PMUP01 WP06): `go test ./scripts/...
+// -count=1` from the repo root runs this file's tests, including the new
+// broker-topic-consumers.sh proof below.
 
 package ci_test
 
@@ -87,6 +90,7 @@ var cwdSensitiveGates = []string{
 	"check-builtin-tool-registration.sh",
 	"check-single-move-writer.sh",
 	"check-cedar-gate-arguments.sh",
+	"check-broker-topic-consumers.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -387,6 +391,18 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			// actually scans.
 			file:   "core/mcp/builtin/harness/onboarding/chat.md",
 			append: "\n\nCall `harness_nonexistent_tool` to finish up.\n",
+		},
+		{
+			name: "broker-topic-consumers/unconsumed-topic-const",
+			gate: "check-broker-topic-consumers.sh",
+			// self-update-repair-01PMUP01 WP06, spec §6: the planted-violation
+			// proof the spec names by its exact variable name. A Topic* const
+			// with no frontend subscriber, no Go subscriber, no
+			// passthroughTopics entry, and no allowlist line — nobody
+			// annotates it, so the gate's derived input set must catch it
+			// on its own, not because someone declared it a violation.
+			file:    "core/rpc/zz_gate_probe.go",
+			content: "package rpc\n\nconst TopicNobodyReads = \"nobody:reads-this\"\n",
 		},
 	}
 

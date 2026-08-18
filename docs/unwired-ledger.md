@@ -39,6 +39,7 @@ shipped product boundary, not unwired code. Read that doc before flagging
 | I11 | `check-builtin-tool-registration.sh` | `i11-unregistered-builtin-tools.txt` | builtin tool package no wiring site imports — **added 2026-08-14** |
 | I12 | `check-single-move-writer.sh` | *(none — no allowlist by design)* | second writer of transcript-move metadata, or a seam with 0 / >1 production callers — **added 2026-08-14** |
 | I13 | `check-cedar-gate-arguments.sh` | `i13-cedar-gate-arguments.txt` | a `cedar.Gate` argument or view-`Config` field that resolves to an unconditional permit — **added 2026-08-16, empty** |
+| I14 | `check-broker-topic-consumers.sh` | `i14-unconsumed-broker-topics.txt` | A const under `core/**` whose **identifier contains `Topic`** and whose value is a broker topic, with no frontend subscriber, no Go subscriber, and no `passthroughTopics` entry — **added 2026-08-18; one entry (`mcp:progress`)**. Multi-pass (Go + frontend), same discipline as `check-output-ports.sh`. Wired into `pr.yml`. See "Declined gate" below for why this shipped instead of the gate `docs/dead-code-audit-2026-08-16.md` §5 originally asked for, and the allowlist header for why "contains" rather than "starts with" is the whole gate. |
 
 Non-allowlist gates that also protect against unwired code:
 `check-output-ports.sh` (output port with no reader),
@@ -49,6 +50,47 @@ Non-allowlist gates that also protect against unwired code:
 `core/rpc/builtins_wiring_test.go` (registered tool ↔ predicate case).
 `scripts/ci/gates_can_fail_test.go` is the meta-gate: it plants a violation
 per gate and asserts the gate rejects it.
+
+### Declined gate — 2026-08-18 · "An RPC's async contract vs. its caller's await sequence" — NOT BUILDABLE
+
+`docs/dead-code-audit-2026-08-16.md` §5 owed a gate for the class that
+produced finding A7 (`frontend/src/lib/updateClient.ts`'s `installLatest`
+racing `Update_Apply` against a fire-and-forget `Update_StartDownload` —
+lost by construction, not by timing; see the self-update-repair-01PMUP01
+spec §1.1 for the full mechanics). `self-update-repair-01PMUP01` closes
+this row as **not buildable**, for three reasons (spec §6):
+
+1. **The contract is not in the type.** `StartDownload(ctx) error` and
+   `Apply(ctx) error` have identical signatures — nothing distinguishes
+   "done when it returns" from "spawned a goroutine and returns
+   immediately". A gate would need a hand-written annotation of which
+   methods complete asynchronously, and a method whose author forgot to
+   annotate it produces a **pass** — precisely the "gate whose clean
+   verdict is indistinguishable from did not look" class
+   `scripts/ci/gates_can_fail_test.go` exists to prevent.
+2. **The dependency is semantic.** Even given the annotation, "`Apply`
+   requires `StartDownload`'s completion" is not derivable from either
+   side — it would have to be declared too, at which point the gate
+   checks one hand-written claim against another and asserts nothing
+   about the actual code.
+3. **The syntactic form is trivially evaded.** A matcher for
+   `await A(); await B();` is defeated by `const p = A(); await p; await
+   B();`, by a helper function, by `.then`, or by `Promise.all` — it
+   would catch the literal historical text and nothing else, creating
+   false confidence that the class is covered.
+
+**Replacement:** WP02's regression test
+(`frontend/src/components/updates/__tests__/updateClient.spec.ts`,
+`installLatest (WP02 — polls to a terminal state) > does not call Apply,
+and does not settle, while downloading is outstanding`) pins the one call
+site that mattered. It is a pin, not a gate — it protects `installLatest`
+specifically, not the class. The class this row was really pointing at
+(registration without a real consumer) is what I14
+(`check-broker-topic-consumers.sh`, above) covers instead: it would have
+caught A8 (the topics `installLatest`'s fix needed accelerator events
+from) in the same audit, plus B9/B16/B17 — four registration-vs-
+consumption misses, one gate, none of them requiring an await-sequence
+annotation.
 
 ---
 

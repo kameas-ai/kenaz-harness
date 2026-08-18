@@ -19,6 +19,7 @@ import {
   type UpdateClient,
   type UpdateStatus,
 } from '@/lib/updateClient';
+import * as updateDownloadEvents from '@/lib/updateDownloadEvents';
 import type { Settings } from '@/lib/types';
 
 function makeSettings(overrides: Partial<Settings> = {}): Settings {
@@ -81,6 +82,37 @@ function buildClient(initial: Settings) {
     set,
     get,
   };
+}
+
+interface FakeRuntime {
+  EventsOn: (topic: string, cb: (payload: unknown) => void) => () => void;
+  emit: (topic: string, payload: unknown) => void;
+}
+
+function installFakeRuntime(): FakeRuntime {
+  const handlers = new Map<string, Set<(payload: unknown) => void>>();
+  const rt: FakeRuntime = {
+    EventsOn: (topic, cb) => {
+      let s = handlers.get(topic);
+      if (!s) {
+        s = new Set();
+        handlers.set(topic, s);
+      }
+      s.add(cb);
+      return () => s!.delete(cb);
+    },
+    emit: (topic, payload) => {
+      const s = handlers.get(topic);
+      if (!s) return;
+      for (const cb of s) cb(payload);
+    },
+  };
+  (window as unknown as { runtime: FakeRuntime }).runtime = rt;
+  return rt;
+}
+
+function uninstallFakeRuntime() {
+  delete (window as unknown as { runtime?: unknown }).runtime;
 }
 
 function mountPanel(opts: {
@@ -167,7 +199,7 @@ describe('UpdatesPanel — status block', () => {
     expect(panel.text()).toContain('v0.3.4');
     await wrapper.find('[data-testid="updates-install"]').trigger('click');
     await flushPromises();
-    expect(installLatest).toHaveBeenCalledWith('v0.3.4');
+    expect(installLatest).toHaveBeenCalledWith('v0.3.4', expect.any(Function));
   });
 });
 
@@ -239,5 +271,283 @@ describe('UpdatesPanel — skipped versions', () => {
       .trigger('click');
     await flushPromises();
     expect(unskipVersion).toHaveBeenCalledWith('v0.3.4');
+  });
+});
+
+/**
+ * WP03 accelerator wiring (self-update-repair-01PMUP01). The panel's
+ * three useEventStream subscriptions must route each broker frame
+ * through the matching applyDownload*Event pure function (tested in
+ * isolation in lib/__tests__/updateDownloadEvents.spec.ts) — this is the
+ * integration point between the Wails event bridge and that logic.
+ *
+ * Mutation: no-op one of the three UpdatesPanel.vue handlers (e.g.
+ * `useEventStream('update:download-progress', () => {})`) → the
+ * matching assertion below fails because the apply* spy is never
+ * called for that topic.
+ */
+describe('UpdatesPanel — WP03 download-event accelerator wiring', () => {
+  it('routes update:download-progress through applyDownloadProgressEvent', async () => {
+    const rt = installFakeRuntime();
+    const progressSpy = vi.spyOn(updateDownloadEvents, 'applyDownloadProgressEvent');
+    try {
+      mountPanel();
+      await flushPromises();
+      const payload = { bytes: 40, total: 100, percent: 40 };
+      rt.emit('update:download-progress', payload);
+      expect(progressSpy).toHaveBeenCalledWith(expect.anything(), payload);
+    } finally {
+      progressSpy.mockRestore();
+      uninstallFakeRuntime();
+    }
+  });
+
+  it('routes update:download-complete through applyDownloadCompleteEvent', async () => {
+    const rt = installFakeRuntime();
+    const completeSpy = vi.spyOn(updateDownloadEvents, 'applyDownloadCompleteEvent');
+    try {
+      mountPanel();
+      await flushPromises();
+      const payload = { targetVersion: '0.4.1' };
+      rt.emit('update:download-complete', payload);
+      expect(completeSpy).toHaveBeenCalledWith(expect.anything(), payload);
+    } finally {
+      completeSpy.mockRestore();
+      uninstallFakeRuntime();
+    }
+  });
+
+  it('routes update:download-failed through applyDownloadFailedEvent', async () => {
+    const rt = installFakeRuntime();
+    const failedSpy = vi.spyOn(updateDownloadEvents, 'applyDownloadFailedEvent');
+    try {
+      mountPanel();
+      await flushPromises();
+      const payload = { err: 'sha256 mismatch' };
+      rt.emit('update:download-failed', payload);
+      expect(failedSpy).toHaveBeenCalledWith(expect.anything(), payload);
+    } finally {
+      failedSpy.mockRestore();
+      uninstallFakeRuntime();
+    }
+  });
+
+  // Correctness-neutrality (DC-1's stated invariant, spec §4.1): with
+  // NO runtime/event bridge installed at all (no window.runtime — the
+  // three useEventStream subscriptions silently fail to attach, exactly
+  // like "every subscription detached"), installLatest must still work
+  // via the WP02 poll alone. This is the mutation tasks.md names for
+  // WP03: "make installLatest await an event → fails" — installLatest
+  // (updateClient.ts) never references window.runtime at all, so this
+  // passing with zero event plumbing present is the proof.
+  it('installLatest still works with no event bridge installed (poll alone)', async () => {
+    uninstallFakeRuntime(); // ensure no window.runtime this test
+    const { wrapper, installLatest } = mountPanel({
+      status: { available: true, availableVersion: 'v0.3.4' },
+    });
+    await flushPromises();
+    await wrapper.find('[data-testid="updates-install"]').trigger('click');
+    await flushPromises();
+    expect(installLatest).toHaveBeenCalledWith('v0.3.4', expect.any(Function));
+  });
+});
+
+/**
+ * WP04 — the progress surface (self-update-repair-01PMUP01, the A8 user
+ * sentence). "A topic has a subscriber" is not the acceptance bar
+ * (CLAUDE.md blind spot #1) — these assert the RENDERED value changes,
+ * not merely that the progressbar element exists.
+ */
+describe('UpdatesPanel — WP04 download progress surface', () => {
+  it('renders two distinct, increasing aria-valuenow values as progress advances', async () => {
+    const rt = installFakeRuntime();
+    try {
+      const { wrapper } = mountPanel({
+        status: {
+          available: true,
+          availableVersion: 'v0.3.4',
+          downloadState: 'downloading',
+          downloadProgress: 17,
+        },
+      });
+      await flushPromises();
+      const bar = wrapper.find('[data-testid="updates-progress"]');
+      expect(bar.exists()).toBe(true);
+      const first = bar.attributes('aria-valuenow');
+      expect(first).toBe('17');
+
+      rt.emit('update:download-progress', { bytes: 63, total: 100, percent: 63 });
+      await flushPromises();
+      const second = wrapper
+        .find('[data-testid="updates-progress"]')
+        .attributes('aria-valuenow');
+      expect(second).toBe('63');
+      expect(second).not.toBe(first);
+    } finally {
+      uninstallFakeRuntime();
+    }
+  });
+
+  // ACCELERATOR-ONLY, PROVED ON THE RENDERED SURFACE (spec §4.1 DC-1).
+  // The sibling test above advances the bar with a broker event. This one
+  // advances it with NO event bridge installed at all — the panel gets its
+  // snapshots from installLatest's poll callback. Without that callback the
+  // bar freezes at whatever the mount-time Status said and never moves
+  // again, which makes the three useEventStream subscriptions the bar's
+  // only source of movement — i.e. deleting them would change an outcome,
+  // not a frame rate, which is exactly what DC-1 forbids.
+  // Mutation: drop the `onStatus` argument at the installLatest call site
+  // in UpdatesPanel.vue (or stop invoking it in updateClient.ts) → fails.
+  it('advances the bar from installLatest poll snapshots with no event bridge (DC-1 accelerator-only)', async () => {
+    uninstallFakeRuntime(); // no window.runtime: every subscription detached
+    const snapshots: UpdateStatus[] = [
+      {
+        currentVersion: 'v0.3.3',
+        available: true,
+        availableVersion: 'v0.3.4',
+        channel: 'stable',
+        downloadState: 'downloading',
+        downloadProgress: 17,
+      },
+      {
+        currentVersion: 'v0.3.3',
+        available: true,
+        availableVersion: 'v0.3.4',
+        channel: 'stable',
+        downloadState: 'downloading',
+        downloadProgress: 63,
+      },
+    ];
+    let push: ((s: UpdateStatus) => void) | undefined;
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const { wrapper } = mountPanel({
+      status: { available: true, availableVersion: 'v0.3.4' },
+      updaterOverrides: {
+        installLatest: async (
+          _v: string,
+          onStatus?: (s: UpdateStatus) => void,
+        ) => {
+          push = onStatus;
+          await gate;
+        },
+      },
+    });
+    await flushPromises();
+    // Nothing downloading yet — no bar.
+    expect(wrapper.find('[data-testid="updates-progress"]').exists()).toBe(
+      false,
+    );
+
+    await wrapper.find('[data-testid="updates-install"]').trigger('click');
+    await flushPromises();
+    expect(push).toBeTypeOf('function');
+
+    push!(snapshots[0]);
+    await flushPromises();
+    const first = wrapper
+      .find('[data-testid="updates-progress"]')
+      .attributes('aria-valuenow');
+    expect(first).toBe('17');
+
+    push!(snapshots[1]);
+    await flushPromises();
+    const second = wrapper
+      .find('[data-testid="updates-progress"]')
+      .attributes('aria-valuenow');
+    expect(second).toBe('63');
+    expect(second).not.toBe(first);
+
+    release!();
+    await flushPromises();
+  });
+
+  // DC-2 pin: 17 must render as 17%, never 1700% (the old lying
+  // docstring said downloadProgress was 0..1, which would tempt a
+  // `progress * 100 + '%'` renderer).
+  it('renders a 17 percent value as "17%", not 1700%', async () => {
+    const { wrapper } = mountPanel({
+      status: {
+        available: true,
+        availableVersion: 'v0.3.4',
+        downloadState: 'downloading',
+        downloadProgress: 17,
+      },
+    });
+    await flushPromises();
+    const bar = wrapper.find('[data-testid="updates-progress"]');
+    expect(bar.attributes('style')).toContain('width: 17%');
+    expect(bar.attributes('style')).not.toContain('1700%');
+    expect(
+      wrapper.find('[data-testid="updates-progress-label"]').text(),
+    ).toContain('17%');
+  });
+
+  it('renders the indeterminate variant when downloading with progress 0 (no Content-Length)', async () => {
+    const { wrapper } = mountPanel({
+      status: {
+        available: true,
+        availableVersion: 'v0.3.4',
+        downloadState: 'downloading',
+        downloadProgress: 0,
+      },
+    });
+    await flushPromises();
+    const bar = wrapper.find('[data-testid="updates-progress"]');
+    expect(bar.exists()).toBe(true);
+    expect(bar.attributes('data-indeterminate')).toBe('true');
+    expect(bar.attributes('aria-valuenow')).toBeUndefined();
+  });
+
+  it('rehydrates a 42% download on mount from Status alone, with zero events replayed (AC-5)', async () => {
+    uninstallFakeRuntime(); // no window.runtime — nothing CAN replay
+    const { wrapper } = mountPanel({
+      status: {
+        available: true,
+        availableVersion: 'v0.3.4',
+        downloadState: 'downloading',
+        downloadProgress: 42,
+      },
+    });
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="updates-progress"]').attributes('aria-valuenow'),
+    ).toBe('42');
+  });
+
+  // A reload mid-download destroys installLatest's poll loop while the
+  // Go-side download keeps running, so the panel can rehydrate straight
+  // into 'staged' with no waiter behind it. The copy must not claim an
+  // install is under way — it must point at the control that finishes.
+  // Mutation: restore the unconditional "Staged — installing…" → fails.
+  it('does not claim "installing" for a staged status with no waiter (post-reload)', async () => {
+    const { wrapper } = mountPanel({
+      status: {
+        available: true,
+        availableVersion: 'v0.3.4',
+        downloadState: 'staged',
+        downloadProgress: 100,
+      },
+    });
+    await flushPromises();
+    const label = wrapper.find('[data-testid="updates-progress-label"]');
+    expect(label.exists()).toBe(true);
+    expect(label.text()).not.toContain('installing…');
+    expect(label.text()).toContain('Install');
+  });
+
+  it('renders the failure reason from Status alone (no thrown exception in this session)', async () => {
+    const { wrapper } = mountPanel({
+      status: {
+        downloadState: 'failed',
+        downloadError: 'sha256 mismatch: got abc want def',
+      },
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="updates-error"]').text()).toContain(
+      'sha256 mismatch: got abc want def',
+    );
   });
 });

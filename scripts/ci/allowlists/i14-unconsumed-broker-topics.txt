@@ -1,0 +1,50 @@
+# I14 allowlist — Topic* broker-topic consts (core/**) with no frontend
+# subscriber, no Go subscriber, and no passthroughTopics entry.
+# Spec: kitty-specs/self-update-repair-01PMUP01/spec.md §6.
+# Enforced by scripts/ci/check-broker-topic-consumers.sh.
+#
+# NOT EMPTY at introduction (2026-08-18, self-update-repair-01PMUP01
+# WP06 + review). The first cut of this file WAS empty, on the strength
+# of a gate report saying "35/35 consumed". That report was wrong: the
+# discovery pass anchored the identifier at "Topic", so four real
+# broker-topic consts named <Something>Topic were never looked at —
+# AvailableTopic, ThresholdEventTopic, ProgressTopic, progressTopic.
+# Broadening the pattern to "identifier CONTAINS Topic" raised the set
+# to 39 and turned up one genuine unconsumed topic, recorded below. The
+# lesson is worth keeping next to the list: an empty allowlist is a
+# claim about the discovery pass first and the tree second.
+#
+# Format: one double-quoted topic VALUE (not the Go identifier) per
+# line, preceded by a comment giving the date, the const's
+# <package-import-path>.<Identifier>, and the reason it has no
+# consumer yet (owner + blocker, not "we'll get to it" — see CLAUDE.md
+# § "Release ritual: unwired sweep" / "Rules").
+#
+# Example:
+#   # JUSTIFIED 2026-08-18. github.com/kameas-ai/kenaz-harness/core/rpc.TopicExample —
+#   # backend-only signal with no planned UI; owner: <mission-slug>.
+#   "example:topic"
+
+# JUSTIFIED 2026-08-18 (self-update-repair-01PMUP01 WP06 review).
+# github.com/kameas-ai/kenaz-harness/core/mcp/transport.ProgressTopic —
+# MCP notifications/progress frames, fanned out by
+# transport.ProgressForwarder (progress.go:153). Published into a LIVE
+# broker in production: core/rpc/api.go:3777 wires
+# `Broker: &poolEventPublisher{broker: broker}` into the transport
+# pool, and newServerInstance gives every stdio server a forwarder over
+# it (stdio/server.go:337). Nothing subscribes — no useEventStream /
+# EventsOn / onServedEvent on "mcp:progress" in frontend/src, no Go
+# subscriber, not in passthroughTopics. This is the SAME defect shape
+# as A8 (the finding that motivated this gate): a real emit into a real
+# void, with the payload's own doc comment ("useful for the chat UI to
+# associate progress with the in-flight tools/call envelope") naming a
+# consumer that was never built.
+#
+# Allowlisted rather than wired because a long-running-MCP-tool progress
+# surface in the chat transcript is a UI mission, not a line of wiring,
+# and inventing one inside a self-update repair would be scope creep of
+# exactly the kind this repo's unwired-ledger discipline exists to stop.
+# Owner: the next MCP-lifecycle or chat-transcript mission —
+# mcp-connector-lifecycle-01PMMC01 is the closest slot. Whoever builds
+# the surface deletes this line in the same change.
+"mcp:progress"

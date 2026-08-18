@@ -686,3 +686,70 @@ func TestDefaultStagedName(t *testing.T) {
 		t.Errorf("empty version = %q", got)
 	}
 }
+
+// ── WP01: orphan .part sweep (self-update-repair-01PMUP01, FR-006) ───────
+
+// TestNewService_SweepsOrphanPartFiles pins "orphan sweep removes *.part".
+// Mutation: delete the sweepOrphanPartFiles() call in NewService → fails
+// (the planted .part file survives construction).
+func TestNewService_SweepsOrphanPartFiles(t *testing.T) {
+	dataDir := t.TempDir()
+	stagingDir := filepath.Join(dataDir, "update", "staging")
+	if err := os.MkdirAll(stagingDir, 0o755); err != nil {
+		t.Fatalf("mkdir staging: %v", err)
+	}
+	orphan := filepath.Join(stagingDir, "kenaz-harness-v9.9.9.app.new.part")
+	if err := os.WriteFile(orphan, []byte("partial"), 0o644); err != nil {
+		t.Fatalf("write orphan: %v", err)
+	}
+
+	if _, err := NewService(Config{CurrentVersion: "v0.1.0", DataDir: dataDir}); err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	if _, err := os.Stat(orphan); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("orphan .part file still exists after NewService: err=%v", err)
+	}
+}
+
+// TestNewService_SweepSparesStagedArtifact pins the negative case: a
+// completed, verified, not-yet-applied staged artifact living in the same
+// directory must survive the sweep. Mutation: widen the glob from "*.part"
+// to "*" → fails (the staged artifact would be deleted alongside the
+// orphan, turning a cosmetic leftover into a broken install — plan.md
+// Risks).
+func TestNewService_SweepSparesStagedArtifact(t *testing.T) {
+	dataDir := t.TempDir()
+	stagingDir := filepath.Join(dataDir, "update", "staging")
+	if err := os.MkdirAll(stagingDir, 0o755); err != nil {
+		t.Fatalf("mkdir staging: %v", err)
+	}
+	orphan := filepath.Join(stagingDir, "kenaz-harness-v9.9.8.app.new.part")
+	staged := filepath.Join(stagingDir, "kenaz-harness-v9.9.9.app.new")
+	if err := os.WriteFile(orphan, []byte("partial"), 0o644); err != nil {
+		t.Fatalf("write orphan: %v", err)
+	}
+	if err := os.WriteFile(staged, []byte("complete-and-verified"), 0o644); err != nil {
+		t.Fatalf("write staged: %v", err)
+	}
+
+	if _, err := NewService(Config{CurrentVersion: "v0.1.0", DataDir: dataDir}); err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	if _, err := os.Stat(orphan); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("orphan .part file still exists: err=%v", err)
+	}
+	if _, err := os.Stat(staged); err != nil {
+		t.Errorf("staged artifact was swept (should survive): err=%v", err)
+	}
+}
+
+// TestNewService_SweepNoStagingDir pins that a fresh install (no staging
+// dir yet) does not error at construction.
+func TestNewService_SweepNoStagingDir(t *testing.T) {
+	dataDir := t.TempDir()
+	if _, err := NewService(Config{CurrentVersion: "v0.1.0", DataDir: dataDir}); err != nil {
+		t.Fatalf("NewService on fresh DataDir: %v", err)
+	}
+}

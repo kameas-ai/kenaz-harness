@@ -51,6 +51,49 @@ func (u *fakeUpdater) count() int {
 	return u.calls
 }
 
+// fakeUpdateController implements UpdateChecker + UpdateDownloader +
+// UpdateApplier so onUpdateAction's per-state dispatch (self-update-repair
+// -01PMUP01 WP05) is exercised against a value that satisfies all three
+// optional capabilities, distinguishing which one was actually called.
+type fakeUpdateController struct {
+	mu                 sync.Mutex
+	checkNowCalls      int
+	startDownloadCalls int
+	applyCalls         int
+}
+
+func (u *fakeUpdateController) CheckNow(_ context.Context) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.checkNowCalls++
+}
+
+func (u *fakeUpdateController) StartDownload(_ context.Context) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.startDownloadCalls++
+}
+
+func (u *fakeUpdateController) Apply(_ context.Context) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.applyCalls++
+}
+
+func (u *fakeUpdateController) snapshot() (checkNow, startDownload, apply int) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.checkNowCalls, u.startDownloadCalls, u.applyCalls
+}
+
+// alwaysConfirm / neverConfirm — fake ConfirmDialogs. Using a fake here
+// (rather than the production wailsConfirmDialog{}) is load-bearing, not
+// a convenience: a real MessageDialog call against a non-Wails ctx calls
+// log.Fatalf (os.Exit) — see ConfirmDialog's doc comment.
+type stubConfirm struct{ answer bool }
+
+func (s stubConfirm) Confirm(_ context.Context, _, _ string) bool { return s.answer }
+
 // noop returns a nil CallbackData — handlers must not dereference it.
 func noop() *wailsmenu.CallbackData { return nil }
 
@@ -206,5 +249,115 @@ func TestHandlers_NilCtxProv_Documentation_NoopSafe(t *testing.T) {
 	ctx := h.appCtx()
 	if ctx == nil {
 		t.Error("appCtx() returned nil; expected context.Background()")
+	}
+}
+
+// ── WP05: onUpdateAction dispatches on the state its label was computed
+// from (FR-008), not always CheckNow. self-update-repair-01PMUP01.
+
+func TestOnUpdateAction_Idle_CallsCheckNow(t *testing.T) {
+	u := &fakeUpdateController{}
+	h := NewHandlers(nil, u, nil)
+	h.onUpdateAction(UpdateIdle)(noop())
+	checkNow, startDownload, apply := u.snapshot()
+	if checkNow != 1 || startDownload != 0 || apply != 0 {
+		t.Errorf("idle: checkNow=%d startDownload=%d apply=%d, want 1/0/0", checkNow, startDownload, apply)
+	}
+}
+
+func TestOnUpdateAction_Available_CallsStartDownload(t *testing.T) {
+	u := &fakeUpdateController{}
+	h := NewHandlers(nil, u, nil)
+	h.onUpdateAction(UpdateAvailable)(noop())
+	checkNow, startDownload, apply := u.snapshot()
+	if checkNow != 0 || startDownload != 1 || apply != 0 {
+		t.Errorf("available: checkNow=%d startDownload=%d apply=%d, want 0/1/0", checkNow, startDownload, apply)
+	}
+}
+
+func TestOnUpdateAction_Downloading_IsNoop(t *testing.T) {
+	u := &fakeUpdateController{}
+	h := NewHandlers(nil, u, nil)
+	h.onUpdateAction(UpdateDownloading)(noop())
+	checkNow, startDownload, apply := u.snapshot()
+	if checkNow != 0 || startDownload != 0 || apply != 0 {
+		t.Errorf("downloading: checkNow=%d startDownload=%d apply=%d, want 0/0/0 (item is disabled)", checkNow, startDownload, apply)
+	}
+}
+
+// TestOnUpdateAction_Staged_CallsApply is the AC-8 dispatch pin: the
+// staged handler must call Apply, not CheckNow. Mutation: restore the
+// unconditional CheckNow (i.e. delete the switch and always call
+// h.updater.CheckNow) → this test fails (checkNow=1, apply=0).
+func TestOnUpdateAction_Staged_ConfirmedCallsApply(t *testing.T) {
+	u := &fakeUpdateController{}
+	h := NewHandlers(nil, u, nil)
+	h.SetConfirmDialog(stubConfirm{answer: true})
+	h.onUpdateAction(UpdateStaged)(noop())
+	checkNow, startDownload, apply := u.snapshot()
+	if apply != 1 {
+		t.Errorf("staged (confirmed): apply=%d, want 1", apply)
+	}
+	if checkNow != 0 || startDownload != 0 {
+		t.Errorf("staged (confirmed): checkNow=%d startDownload=%d, want 0/0", checkNow, startDownload)
+	}
+}
+
+// TestOnUpdateAction_Staged_DeclinedDoesNotApply pins the confirm-gate
+// itself (spec §7 escalation): a "Cancel" answer must not call Apply.
+func TestOnUpdateAction_Staged_DeclinedDoesNotApply(t *testing.T) {
+	u := &fakeUpdateController{}
+	h := NewHandlers(nil, u, nil)
+	h.SetConfirmDialog(stubConfirm{answer: false})
+	h.onUpdateAction(UpdateStaged)(noop())
+	checkNow, startDownload, apply := u.snapshot()
+	if apply != 0 {
+		t.Errorf("staged (declined): apply=%d, want 0 (confirm declined)", apply)
+	}
+	if checkNow != 0 || startDownload != 0 {
+		t.Errorf("staged (declined): checkNow=%d startDownload=%d, want 0/0", checkNow, startDownload)
+	}
+}
+
+// TestOnUpdateAction_Staged_NilConfirmDoesNotApply: a Handlers value
+// constructed without going through NewHandlers (confirm left nil) must
+// default to NOT applying — never silently install without asking.
+func TestOnUpdateAction_Staged_NilConfirmDoesNotApply(t *testing.T) {
+	u := &fakeUpdateController{}
+	h := &Handlers{updater: u} // bypass NewHandlers — confirm is nil
+	h.onUpdateAction(UpdateStaged)(noop())
+	_, _, apply := u.snapshot()
+	if apply != 0 {
+		t.Errorf("nil confirm: apply=%d, want 0 (fail-safe default)", apply)
+	}
+}
+
+func TestOnUpdateAction_Failed_CallsStartDownload(t *testing.T) {
+	u := &fakeUpdateController{}
+	h := NewHandlers(nil, u, nil)
+	h.onUpdateAction(UpdateFailed)(noop())
+	checkNow, startDownload, apply := u.snapshot()
+	if checkNow != 0 || startDownload != 1 || apply != 0 {
+		t.Errorf("failed: checkNow=%d startDownload=%d apply=%d, want 0/1/0 (retry)", checkNow, startDownload, apply)
+	}
+}
+
+// TestOnUpdateAction_CapabilityAbsent_FallsBackToCheckNow: an updater
+// that only implements UpdateChecker (e.g. the pre-WP05
+// UpdateCheckerFunc shape) still does something observable for every
+// state rather than silently no-op'ing.
+func TestOnUpdateAction_CapabilityAbsent_FallsBackToCheckNow(t *testing.T) {
+	u := &fakeUpdater{}
+	h := NewHandlers(nil, u, nil)
+	h.onUpdateAction(UpdateAvailable)(noop())
+	if u.count() != 1 {
+		t.Errorf("capability-absent fallback: CheckNow calls = %d, want 1", u.count())
+	}
+}
+
+func TestHandlers_NilUpdater_OnUpdateAction_NoopSafe(t *testing.T) {
+	h := NewHandlers(nil, nil, nil)
+	for _, s := range []UpdateMenuState{UpdateIdle, UpdateAvailable, UpdateDownloading, UpdateStaged, UpdateFailed} {
+		h.onUpdateAction(s)(noop()) // must not panic
 	}
 }

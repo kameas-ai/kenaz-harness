@@ -29,6 +29,15 @@
 import { computed, onMounted, ref } from 'vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import { createUpdateClient, type UpdateStatus } from '@/lib/updateClient';
+import { useEventStream } from '@/lib/useEventStream';
+import {
+  applyDownloadProgressEvent,
+  applyDownloadCompleteEvent,
+  applyDownloadFailedEvent,
+  type UpdateDownloadProgressPayload,
+  type UpdateStagedPayload,
+  type UpdateDownloadFailedPayload,
+} from '@/lib/updateDownloadEvents';
 import type { Settings } from '@/lib/types';
 
 const client = useHarnessClient();
@@ -92,6 +101,29 @@ onMounted(() => {
   void refreshAll();
 });
 
+/* ── Download-progress accelerator (WP03, DC-1/DC-8) ──────────────────
+ * installLatest (updateClient.ts) is the ONLY waiter — it decides
+ * completion by polling Update_Status, never by these events. This
+ * subscription exists purely so the panel repaints faster than the next
+ * poll tick; if every one of these three useEventStream calls were
+ * deleted, installLatest would still resolve/reject correctly (DC-1) —
+ * the panel would just look a little steppier while downloading. */
+useEventStream<UpdateDownloadProgressPayload>(
+  'update:download-progress',
+  (payload) => {
+    status.value = applyDownloadProgressEvent(status.value, payload);
+  },
+);
+useEventStream<UpdateStagedPayload>('update:download-complete', (payload) => {
+  status.value = applyDownloadCompleteEvent(status.value, payload);
+});
+useEventStream<UpdateDownloadFailedPayload>(
+  'update:download-failed',
+  (payload) => {
+    status.value = applyDownloadFailedEvent(status.value, payload);
+  },
+);
+
 /* ── Status block ──────────────────────────────────────────────────── */
 
 /** Friendly relative-time renderer for "Last checked" — matches the
@@ -145,13 +177,56 @@ async function onInstallAvailable() {
   installing.value = true;
   errorMessage.value = null;
   try {
-    await updater.installLatest(v);
+    // The poll loop inside installLatest hands us every Update_Status
+    // snapshot it reads (DC-8: still ONE waiter — we do not poll here,
+    // we just render what that waiter already read). This is what makes
+    // the WP03 broker subscriptions a true accelerator: with every
+    // subscription detached the bar still advances, at 2/s instead of
+    // ~10/s, and still lands on its terminal 'failed' render.
+    await updater.installLatest(v, (s) => {
+      status.value = s;
+    });
   } catch (err) {
     errorMessage.value = err instanceof Error ? err.message : String(err);
   } finally {
     installing.value = false;
   }
 }
+
+/* ── Download progress surface (WP04 — the A8 user sentence) ─────────
+ * Pure function of `status` — the last Update_Status snapshot (from the
+ * initial poll, a re-check, or the WP03 accelerator event merge). No
+ * second poll loop here (DC-8): installLatest is the only waiter. This
+ * is why AC-5 (reload mid-download rehydrates from Status alone, no
+ * events) falls out for free — these are the same computed reads the
+ * first onMounted status load already populates. */
+
+/** 0-100 integer percent (DC-2 — never a 0..1 fraction). */
+const downloadPercent = computed(() => status.value?.downloadProgress ?? 0);
+const isDownloading = computed(
+  () => status.value?.downloadState === 'downloading',
+);
+/** No Content-Length from the server (impl.go percent() returns 0 for
+ *  total<=0) renders an indeterminate bar rather than a fake "0%". */
+const isIndeterminateDownload = computed(
+  () => isDownloading.value && downloadPercent.value <= 0,
+);
+const isStaged = computed(() => status.value?.downloadState === 'staged');
+const isFailed = computed(() => status.value?.downloadState === 'failed');
+/** FR-004: readable from Status alone, not only from a thrown
+ *  installLatest rejection — so a fresh mount/reload after a failure
+ *  (with no click in this session) still shows the reason. */
+const downloadFailureReason = computed(() =>
+  isFailed.value
+    ? (status.value?.downloadError ?? 'Update download failed.')
+    : null,
+);
+/** The top alert banner shows whichever failure reason is known: an
+ *  exception thrown by this session's own action, or (FR-004/FR-005) a
+ *  failure reason read back from Status on mount/reload. */
+const bannerMessage = computed(
+  () => errorMessage.value ?? downloadFailureReason.value,
+);
 
 /* ── Preferences (auto-check toggle, channel, interval) ────────────── */
 
@@ -265,12 +340,12 @@ async function onUnskip(version: string) {
     </p>
 
     <div
-      v-if="errorMessage"
+      v-if="bannerMessage"
       class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
       role="alert"
       data-testid="updates-error"
     >
-      {{ errorMessage }}
+      {{ bannerMessage }}
     </div>
 
     <!-- ── Status block ────────────────────────────────────────────── -->
@@ -345,6 +420,70 @@ async function onUnskip(version: string) {
         >
           {{ installing ? 'Installing…' : 'Install' }}
         </button>
+      </div>
+
+      <!-- Download progress (WP04). Renders purely from `status` — no
+           second poll loop (DC-8). Independent of the available-panel
+           `v-if` above so a rehydrated 'downloading'/'staged' status
+           always renders even if `available` itself is stale. -->
+      <div
+        v-if="isDownloading || isStaged"
+        class="mt-3"
+        data-testid="updates-progress-region"
+      >
+        <div
+          class="h-1.5 w-full overflow-hidden rounded-full bg-surface-2"
+        >
+          <div
+            v-if="isDownloading && !isIndeterminateDownload"
+            class="h-full rounded-full bg-accent transition-[width]"
+            role="progressbar"
+            data-testid="updates-progress"
+            :aria-valuenow="downloadPercent"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            :style="{ width: downloadPercent + '%' }"
+          ></div>
+          <div
+            v-else-if="isDownloading"
+            class="h-full w-1/3 animate-pulse rounded-full bg-accent"
+            role="progressbar"
+            data-testid="updates-progress"
+            data-indeterminate="true"
+            aria-valuemin="0"
+            aria-valuemax="100"
+          ></div>
+          <div
+            v-else
+            class="h-full w-full rounded-full bg-accent"
+            role="progressbar"
+            data-testid="updates-progress"
+            aria-valuenow="100"
+            aria-valuemin="0"
+            aria-valuemax="100"
+          ></div>
+        </div>
+        <p
+          class="mt-1 font-ui text-[11px] text-ink-muted"
+          data-testid="updates-progress-label"
+        >
+          <template v-if="isDownloading && !isIndeterminateDownload"
+            >Downloading… {{ downloadPercent }}%</template
+          >
+          <template v-else-if="isDownloading">Downloading…</template>
+          <!-- 'installing' is true iff THIS session's installLatest
+               waiter is running. A reload mid-download destroys that
+               waiter while the Go-side download keeps going, so the
+               panel can land on 'staged' with nobody about to apply it:
+               claiming "installing…" there would name an activity that
+               is not happening. Say what is actually true and point at
+               the control that finishes the job. -->
+          <template v-else-if="installing">Staged — installing…</template>
+          <template v-else
+            >Update downloaded — click Install to finish, or use the Help
+            menu's “Install &amp; Restart”.</template
+          >
+        </p>
       </div>
     </div>
 

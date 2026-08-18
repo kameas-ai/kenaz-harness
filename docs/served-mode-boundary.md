@@ -66,6 +66,44 @@ Consequences, all three of which must move together:
 fails if they differ by anything other than the two paths named above, so
 the next route added to one entry point forces a decision about the other.
 
+## Self-update: desktop-only
+
+Settled 2026-08-18 by `self-update-repair-01PMUP01` §5, following the
+`/sites` + `/marketplace` precedent above rather than leaving it as drift
+for the next sweep to re-find. **The three `update:download-*` broker
+topics are deliberately absent from `passthroughTopics`
+(`core/serve/wsstream.go`)** — this is a decision, not a gap.
+
+Three independent mechanical facts, all re-verified against this tree:
+
+1. **The RPCs are not served.** `git grep -n "Update_" -- core/serve/`
+   returns nothing. The served surface is the explicit allowlist in
+   `core/serve/methods.go`; it carries no `Update_*` method. A served
+   client cannot call `Update_StartDownload`, `Update_Apply`, or even
+   `Update_Status`.
+2. **The only surface is already served-blocked at a higher level.**
+   `UpdatesPanel.vue` mounts inside `views/settings/SettingsView.vue` —
+   one of the six views in the list above that already renders
+   `NotAvailableInServedMode` in served mode. There is no route to
+   reach the panel in a served build in the first place.
+3. **The semantics are actively wrong for served mode, not merely
+   unimplemented.** `core/update/service.go`'s `ApplyAndRestart` swaps
+   the **server process's own binary** and restarts **that process**. A
+   browser client triggering it would restart the host out from under
+   every other connected user of that served instance. Forwarding
+   progress frames to a client that can neither start nor apply a
+   download would be a chrome over a dead backend — the same
+   anti-pattern the `/sites` + `/marketplace` section above names — and
+   wiring the RPCs so that button could be *clicked* would additionally
+   be a capability that must not exist server-side at all, not just one
+   that's missing.
+
+If `core/serve/methods.go` ever gains a genuinely served-safe update
+surface (e.g. "notify connected clients a new server build shipped" with
+no client-triggerable apply), that is a new capability with its own
+review — not a reason to add the existing desktop topics to
+`passthroughTopics`.
+
 ## The fence that catches the case none of the three mechanisms did
 
 Added 2026-08-16 by the adversarial review of the capability-gate wiring.

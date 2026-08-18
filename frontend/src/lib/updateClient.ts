@@ -19,7 +19,11 @@
  *   availableVersion: semver of the offered upgrade (only set when available)
  *   channel       : 'stable' | 'beta' | 'dev' | 'prerelease'
  *   downloadState : staged-download lifecycle
- *   downloadProgress: 0..1, only meaningful while downloading
+ *   downloadProgress: 0-100 integer percent, only meaningful while
+ *     downloading (DC-2 — NOT a 0..1 fraction; a naive
+ *     `width: progress * 100 + '%'` renders 10000%)
+ *   downloadError : reason the most recent download failed, only set
+ *     while downloadState === 'failed'; survives a reload (FR-004/FR-005)
  *   notes         : short markdown blurb pulled from the release manifest
  *   releaseUrl    : GitHub Releases URL for the offered version
  *   skippedByUser : true iff the user already chose Skip on this version
@@ -32,7 +36,13 @@ export interface UpdateStatus {
   availableVersion?: string;
   channel: string;
   downloadState: 'idle' | 'downloading' | 'staged' | 'failed';
+  /** 0-100 integer percent (DC-2) — never a 0..1 fraction. */
   downloadProgress?: number;
+  /** Reason the most recent download failed. Only meaningful while
+   *  downloadState === 'failed'; readable from a fresh status() call
+   *  after a reload, not only from the one-shot 'update:download-failed'
+   *  broker frame (FR-004/FR-005). */
+  downloadError?: string;
   notes?: string;
   releaseUrl?: string;
   skippedByUser?: boolean;
@@ -56,11 +66,34 @@ export interface UpdateClient {
   apply(): Promise<void>;
   /**
    * Convenience shim used by the Settings → Updates "Install" button.
-   * Triggers a download (if not already staged) then applies. The
-   * version arg is informational; the backend installs whatever the
+   *
+   * Mechanism (self-update-repair-01PMUP01 DC-1): starts the download,
+   * then POLLS Update_Status until downloadState leaves 'downloading' —
+   * it does NOT race a bare `await StartDownload(); await Apply();`
+   * (StartDownload is fire-and-forget; Apply would see hasStaged=false
+   * on every call, 100% of the time — the race is lost by construction,
+   * not by timing). Resolves only after Apply() succeeds against a
+   * confirmed 'staged' status; rejects with the failure reason on
+   * 'failed', or after a 30-minute ceiling with a message naming the
+   * last observed state (never resolves silently on timeout).
+   *
+   * The version arg is informational; the backend installs whatever the
    * current channel manifest advertises.
+   *
+   * `onStatus` is invoked with every snapshot the poll loop reads. It is
+   * what keeps DC-1 honest for the RENDERED surface, not just for the
+   * terminal outcome: the panel's progress bar advances from these
+   * snapshots at the poll cadence with zero broker events present, so
+   * the three `update:download-*` subscriptions really are an
+   * accelerator (10/s instead of 2/s) rather than the bar's only source
+   * of movement. It does NOT open a second poll loop — installLatest
+   * remains the one waiter (DC-8); the panel just sees what that waiter
+   * already read.
    */
-  installLatest(version: string): Promise<void>;
+  installLatest(
+    version: string,
+    onStatus?: (status: UpdateStatus) => void,
+  ): Promise<void>;
   /** Persist a "skip this version" choice; backend won't re-prompt. */
   skipVersion(version: string): Promise<void>;
   /** Read the user's skipped-versions list. */
@@ -102,19 +135,101 @@ function bridge(): BridgeShape {
   return b as BridgeShape;
 }
 
-export function createUpdateClient(): UpdateClient {
+/** DC-3: Status is a cheap in-memory RLock read (no network, no disk) —
+ *  a 500ms poll is free; do not add caching or debouncing. */
+const DEFAULT_POLL_INTERVAL_MS = 500;
+/** spec §4.1 Bounds: a generous ceiling so a WEDGED pump cannot spin
+ *  installLatest's promise forever. On expiry we reject naming the
+ *  observed state rather than resolving silently.
+ *
+ *  This is a NO-PROGRESS window, not a total-runtime cap. The spec said
+ *  "30 min"; read as total runtime it kills a download that is merely
+ *  slow — a 150MB asset on a ~110KB/s link (hotel wifi, tethering) is
+ *  healthy, progressing, and dead at the ceiling. Worse, there is no
+ *  resume path (spec §3 non-goals), so the retry restarts from zero and
+ *  hits the same wall: that user can never update, which is the exact
+ *  outcome this mission exists to prevent. Wedged is what the bound is
+ *  for, and wedged means the observed status stops changing. */
+const DEFAULT_POLL_TIMEOUT_MS = 30 * 60 * 1000;
+
+/** Test seam for the installLatest poll cadence/ceiling — production
+ *  callers never pass these; vitest overrides them so AC-2/the
+ *  30-minute-bound test don't need real wall-clock time. */
+export interface UpdateClientOptions {
+  pollIntervalMs?: number;
+  pollTimeoutMs?: number;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function createUpdateClient(
+  opts: UpdateClientOptions = {},
+): UpdateClient {
+  const pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  const pollTimeoutMs = opts.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS;
+
   return {
     status: () => bridge().Update_Status(),
     startCheck: () => bridge().Update_StartCheck(),
     startDownload: () => bridge().Update_StartDownload(),
     apply: () => bridge().Update_Apply(),
-    installLatest: async (_version: string) => {
-      // The Settings panel's "Install" button is a one-shot: kick off
-      // the download then apply when ready. The version arg is
-      // informational; the backend installs the current manifest's
-      // advertised version.
+    installLatest: async (
+      _version: string,
+      onStatus?: (status: UpdateStatus) => void,
+    ) => {
+      // DC-1: poll Update_Status to a terminal state; the broker events
+      // (WP03) are an accelerator for the repaint rate only — this
+      // function must resolve/reject correctly with every subscription
+      // detached. No broker event is read here, deliberately (WP02 must
+      // not gate any transition on an event arriving).
+      //
+      // StartDownload is fire-and-forget: it clears hasStaged and
+      // returns immediately after spawning the download pump. A bare
+      // `await StartDownload(); await Apply();` therefore raced Apply
+      // against a download that had not started, and lost 100% of the
+      // time (self-update-repair-01PMUP01 §1.1). Errors from
+      // StartDownload — including ErrDownloadInFlight when a previous
+      // download is still running — propagate unchanged; we do not
+      // catch and keep polling.
       await bridge().Update_StartDownload();
-      await bridge().Update_Apply();
+
+      // The deadline is refreshed every time the observed status CHANGES
+      // (state, percent, or error). A progressing download therefore
+      // never expires; a pump that stops moving for pollTimeoutMs does.
+      let deadline = Date.now() + pollTimeoutMs;
+      let lastSeen = '';
+      for (;;) {
+        const s = await bridge().Update_Status();
+        const seen = `${s.downloadState}|${s.downloadProgress ?? ''}|${s.downloadError ?? ''}`;
+        if (seen !== lastSeen) {
+          lastSeen = seen;
+          deadline = Date.now() + pollTimeoutMs;
+        }
+        // Hand every polled snapshot to the caller BEFORE acting on it,
+        // so the panel repaints 'downloading'/'staged'/'failed' (and the
+        // percent) from the poll alone. Deleting every useEventStream
+        // subscription must change frame rate, never what the user sees
+        // (spec §4.1's stated invariant).
+        onStatus?.(s);
+        if (s.downloadState === 'staged') {
+          await bridge().Update_Apply();
+          return;
+        }
+        if (s.downloadState === 'failed') {
+          throw new Error(
+            s.downloadError || 'Update download failed with no reason given.',
+          );
+        }
+        if (Date.now() >= deadline) {
+          throw new Error(
+            `Update install stalled: no progress for ${Math.round(pollTimeoutMs / 60000)} minutes ` +
+              `(last observed downloadState: "${s.downloadState}").`,
+          );
+        }
+        await delay(pollIntervalMs);
+      }
     },
     skipVersion: (version) => bridge().Update_SkipVersion(version),
     listSkippedVersions: () => bridge().Update_ListSkippedVersions(),

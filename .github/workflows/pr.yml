@@ -233,6 +233,16 @@ jobs:
         # by design (C-007).
         run: bash scripts/ci/check-onboarding-starter-tools.sh
 
+      - name: broker-topic-consumers guard (I14)
+        # kitty-specs/self-update-repair-01PMUP01 WP06, spec §6. Catches
+        # the A8-class defect: a broker topic const published into a live
+        # broker with no subscriber in any language — a real emit into a
+        # real void. The mission shipped the script but never added this
+        # step, so the gate could not fail a PR; added in review.
+        # scripts/ci/allowlists/i14-unconsumed-broker-topics.txt
+        # documents today's single instance (mcp:progress).
+        run: bash scripts/ci/check-broker-topic-consumers.sh
+
       - name: single-move-writer guard
         # kitty-specs/model-moves-transcript-01PMCH01 WP01, spec §4:
         # "One writer: session_write/the chat runner persists moves
