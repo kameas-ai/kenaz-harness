@@ -546,6 +546,17 @@ type API struct {
 	updateSvc coreupdate.Service
 	// updatePollCancel cancels the BackgroundPoll goroutine on chassis
 	// shutdown / context replacement.
+	//
+	// updatePollMu guards updatePollCancel. It is the one field the boot
+	// drift-detection review (docs/unwired-ledger.md, FR-3g,
+	// upgrade-path-coverage-01PMUG01 WP04) found genuinely unsynchronised:
+	// SetContext can run on repeated Wails re-init and Shutdown can run
+	// from main.go's OnShutdown callback, and nothing serialised a read
+	// of updatePollCancel in one against a write in the other. The
+	// storageAPI/auditImpl reads the same review looked at first are
+	// TOCTOU-shaped but not actually racy — both are assigned exactly
+	// once, inside New(), which happens-before every SetContext call.
+	updatePollMu     sync.Mutex
 	updatePollCancel context.CancelFunc
 
 	// harnessServer is the in-process harness-self MCP server (WP04/WP05).
@@ -773,39 +784,14 @@ func (a *API) SetContext(ctx context.Context) {
 	// Boot-time migration drift detection (v0.5.1 migration-doctor).
 	// Run in a goroutine so the SetContext critical path (which must
 	// complete before the UI renders) is not delayed by the ledger read.
-	// Emits KindMigrationDriftDetected into the audit log when N > 0
-	// drifts are found so operators can correlate the incident via the
-	// audit trail even before they open Settings → Health.
+	// See runMigrationDriftCheck for what it does and why (upgrade-path-
+	// coverage-01PMUG01 WP04 truth-up of this comment: the drift entries
+	// land in the audit view's 1024-entry in-memory ring buffer
+	// (core/rpc/views/audit/impl.go Push), which drops oldest-first when
+	// full — NOT a durable log. It correlates an incident for as long as
+	// the process has been up and the ring hasn't wrapped, nothing more).
 	if a.storageAPI != nil {
-		driftCtx := ctx
-		go func() {
-			report, driftErr := a.storageAPI.GetMigrationDriftReport(driftCtx)
-			if driftErr != nil {
-				logging.L().Warn("migration.drift.detect.failed", "err", driftErr.Error())
-				return
-			}
-			n := len(report.Drifts)
-			if n == 0 {
-				return
-			}
-			versions := make([]int, 0, n)
-			for _, d := range report.Drifts {
-				versions = append(versions, d.Version)
-			}
-			logging.L().Warn("migration.drift.detected",
-				"count", n,
-				"versions", fmt.Sprint(versions),
-			)
-			if a.auditImpl != nil {
-				a.auditImpl.Push(audit.Entry{
-					ID:        fmt.Sprintf("migration-drift-%d", len(versions)),
-					Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
-					Category:  "STORAGE",
-					Subject:   string(kindpkg.KindMigrationDriftDetected),
-					Trailing:  fmt.Sprintf("count=%d", n),
-				})
-			}
-		}()
+		go a.runMigrationDriftCheck(ctx)
 	}
 
 	// Start the auto-update background poller on the Wails-supplied
@@ -815,11 +801,13 @@ func (a *API) SetContext(ctx context.Context) {
 	// repeated SetContext calls (test harness re-init) don't pile up
 	// goroutines.
 	if a.updateSvc != nil {
+		a.updatePollMu.Lock()
 		if a.updatePollCancel != nil {
 			a.updatePollCancel()
 		}
 		pollCtx, cancel := context.WithCancel(ctx)
 		a.updatePollCancel = cancel
+		a.updatePollMu.Unlock()
 		go func() {
 			if err := a.updateSvc.BackgroundPoll(pollCtx, 6*time.Hour, "stable"); err != nil &&
 				!errors.Is(err, context.Canceled) {
@@ -844,6 +832,112 @@ func (a *API) SetContext(ctx context.Context) {
 	}
 }
 
+// runMigrationDriftCheck reads the boot-time migration drift report and
+// reacts to it (v0.5.1 migration-doctor; truth-up in
+// upgrade-path-coverage-01PMUG01 WP04). Called from SetContext in its own
+// goroutine so the ledger read never delays the critical path that must
+// complete before the UI renders.
+//
+// Severity drives everything here — before this WP the caller only looked
+// at len(report.Drifts), so a database sitting in its ordinary
+// about-to-be-applied state (code_only, severity "info") was
+// indistinguishable from ledger corruption (id_mismatch, severity
+// "error"):
+//
+//   - code_only-only drift is the normal pending state ahead of a boot
+//     that will apply it (and since v0.63.1, Open refuses to start rather
+//     than run with any of it left unapplied — see verifyFullyApplied).
+//     No WARN, no audit row, no broker publish: it is not an incident.
+//   - Any id_mismatch (error) or ledger_only (warning) entry IS
+//     noteworthy — it means the ledger disagrees with the registered
+//     migration set in a way Open's own checks don't catch. WARN-logs and
+//     pushes one audit row summarising the report.
+//   - id_mismatch specifically also gets a broker publish on
+//     TopicMigrationDriftDetected (FR-3c) so the frontend can surface a
+//     persistent toast at boot, without requiring the user to know
+//     Settings → Health exists. ledger_only does NOT publish — it is the
+//     normal shape of a downgrade or a removed migration (see FR-3's
+//     explicit non-goal against making drift fatal at Open), and pushing
+//     a toast for it would just move the false alarm from the
+//     code_only-suggestion lie this WP is fixing into a new one.
+//
+// A failure to even read the report (driftErr) is logged and now also
+// audited, but stays non-fatal: this must never block or fail boot — the
+// drift report is advisory, and Open (not this goroutine) is the only
+// place a bad schema refuses to start.
+//
+// Extracted out of the goroutine literal (it used to be one) so tests can
+// call it synchronously against a fake storageAPI / auditImpl / broker
+// instead of racing a real goroutine to observe its side effects.
+func (a *API) runMigrationDriftCheck(ctx context.Context) {
+	if a.storageAPI == nil {
+		return
+	}
+	report, driftErr := a.storageAPI.GetMigrationDriftReport(ctx)
+	if driftErr != nil {
+		logging.L().Warn("migration.drift.detect.failed", "err", driftErr.Error())
+		if a.auditImpl != nil {
+			a.auditImpl.Push(audit.Entry{
+				ID:        fmt.Sprintf("migration-drift-detect-failed-%d", time.Now().UnixNano()),
+				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				Category:  "STORAGE",
+				Subject:   string(kindpkg.KindMigrationDriftDetected),
+				Trailing:  fmt.Sprintf("detect_failed=true err=%s", driftErr.Error()),
+			})
+		}
+		return
+	}
+	n := len(report.Drifts)
+	if n == 0 {
+		return
+	}
+
+	versions := make([]int, 0, n)
+	hasError := false
+	hasWarning := false
+	for _, d := range report.Drifts {
+		versions = append(versions, d.Version)
+		switch d.Severity {
+		case "error":
+			hasError = true
+		case "warning":
+			hasWarning = true
+		}
+	}
+
+	// code_only-only (info-only) drift is the normal pending state; it
+	// produces neither a WARN nor an audit row. Collapsing this branch
+	// back to "any drift at all" is exactly the v0.5.1 bug this WP fixes
+	// — see TestRunMigrationDriftCheck_CodeOnlyIsSilent's mutation proof.
+	if hasError || hasWarning {
+		logging.L().Warn("migration.drift.detected",
+			"count", n,
+			"versions", fmt.Sprint(versions),
+			"has_error", hasError,
+		)
+		if a.auditImpl != nil {
+			a.auditImpl.Push(audit.Entry{
+				ID:        fmt.Sprintf("migration-drift-%d", time.Now().UnixNano()),
+				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				Category:  "STORAGE",
+				Subject:   string(kindpkg.KindMigrationDriftDetected),
+				Trailing:  fmt.Sprintf("count=%d has_error=%t", n, hasError),
+			})
+		}
+	}
+
+	// FR-3c: surface severity:"error" drift at boot without requiring the
+	// user to navigate to Settings → Health. Never fires for ledger_only
+	// or code_only.
+	if hasError && a.broker != nil {
+		a.broker.Publish(TopicMigrationDriftDetected, MigrationDriftDetectedPayload{
+			DriftCount: n,
+			Versions:   versions,
+			HasError:   hasError,
+		})
+	}
+}
+
 // Shutdown cancels the auto-update background poller and stops the
 // workflow cron scheduler. main.go calls this from OnShutdown so all
 // background goroutines exit cleanly. Safe to call when no poller is
@@ -852,10 +946,12 @@ func (a *API) Shutdown() {
 	if a == nil {
 		return
 	}
+	a.updatePollMu.Lock()
 	if a.updatePollCancel != nil {
 		a.updatePollCancel()
 		a.updatePollCancel = nil
 	}
+	a.updatePollMu.Unlock()
 	if a.wfScheduler != nil {
 		a.wfScheduler.Stop()
 	}

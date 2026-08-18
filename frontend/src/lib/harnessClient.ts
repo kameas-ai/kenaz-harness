@@ -4143,6 +4143,11 @@ export const SERVED_STREAM_TOPICS = [
   // coming. Dropping this leaves the compaction pause looking like a
   // hang — the same failure shape as the gates above, minus the block.
   'chat:overflow-recovery',
+  // Boot-time migration drift, severity:"error" only
+  // (upgrade-path-coverage-01PMUG01 WP04, FR-3c). useEventToasts.ts
+  // surfaces a persistent toast so a served workbench user with a
+  // corrupted ledger isn't left with no signal at all.
+  'storage.migration.drift-detected',
 ] as const;
 
 /**

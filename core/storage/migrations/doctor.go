@@ -69,6 +69,28 @@ type DriftEntry struct {
 	Suggestion string
 }
 
+// DriftSource is the minimal registry surface DetectDrift needs: the
+// applied-ledger read and the registered-migration set. *Registry
+// satisfies this directly.
+//
+// It exists so a second caller can feed DetectDrift a registry it doesn't
+// own without going through *Registry's boot-time construction path. The
+// RPC storage view (core/rpc/views/storage) is that caller: it only has
+// access to storage.MigrationRegistry (a parallel interface with parallel
+// types, translated at the sqlite adapter boundary — see
+// core/storage/sqlite/adapters.go), so it adapts that into a DriftSource
+// wrapping storage.Migration/storage.LedgerEntry values converted to
+// migrations.Migration/migrations.LedgerEntry, rather than constructing a
+// *Registry. This keeps drift classification in exactly one place
+// (upgrade-path-coverage-01PMUG01 WP04, FR-3f): before this change,
+// core/rpc/views/storage/impl.go carried an independent, untested
+// reimplementation of the switch below, and a severity/suggestion change
+// here changed nothing a user saw.
+type DriftSource interface {
+	Applied() ([]LedgerEntry, error)
+	All() []Migration
+}
+
 // DetectDrift reads the current ledger via registry.Applied() and the
 // registered migrations via registry.All(), then returns every discrepancy.
 // It never modifies the database.
@@ -77,7 +99,7 @@ type DriftEntry struct {
 // excluded from the id_mismatch check (they rolled back cleanly). A
 // rolled-back version with no corresponding registered migration is also
 // excluded from ledger_only to avoid noise.
-func DetectDrift(registry *Registry) (DriftReport, error) {
+func DetectDrift(registry DriftSource) (DriftReport, error) {
 	// Read all ledger entries (returns full history; insertion-order).
 	entries, err := registry.Applied()
 	if err != nil {
@@ -169,7 +191,9 @@ func DetectDrift(registry *Registry) (DriftReport, error) {
 				Severity:   "info",
 				Suggestion: fmt.Sprintf(
 					"Migration v%d (id=%q) is registered but not yet applied. "+
-						"It will be applied automatically on the next chassis boot.",
+						"This is the normal pending state ahead of the next boot: since "+
+						"v0.63.1, Open refuses to start rather than run against a schema "+
+						"a registered migration was never applied to.",
 					v, reg.ID,
 				),
 			})

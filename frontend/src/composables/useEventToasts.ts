@@ -19,11 +19,16 @@
  */
 
 import { onMounted, onBeforeUnmount, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import { push, dismiss } from '@/composables/useToastQueue';
 import { useEventStream } from '@/lib/useEventStream';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import { useUpdateStore } from '@/components/updates/useUpdateStore';
-import type { CostThresholdCrossedPayload, RetryAfterRotationFailedPayload } from '@/lib/types';
+import type {
+  CostThresholdCrossedPayload,
+  MigrationDriftDetectedPayload,
+  RetryAfterRotationFailedPayload,
+} from '@/lib/types';
 
 interface MergeSuggestionPayload {
   branchId: string;
@@ -60,10 +65,15 @@ const mergeToastIds = new Map<string, number>();
 const retryToastIds = new Map<string, number>();
 // Update toast is session-scoped (one per discovered version).
 const toastedVersions = new Set<string>();
+// Migration-drift toast fires at most once per mount — the backend only
+// publishes once per boot anyway, but a served-mode reconnect could
+// theoretically redeliver, and one persistent toast is enough.
+let driftToastShown = false;
 
 export function useEventToasts() {
   const client = useHarnessClient();
   const updateStore = useUpdateStore();
+  const router = useRouter();
 
   // ── CostThresholdCrossed ────────────────────────────────────────────
   useEventStream<CostThresholdCrossedPayload>('cost.threshold.crossed', (payload) => {
@@ -166,6 +176,38 @@ export function useEventToasts() {
     { immediate: true },
   );
 
+  // ── MigrationDriftDetected (upgrade-path-coverage-01PMUG01 WP04,
+  //    FR-3c) ───────────────────────────────────────────────────────────
+  // severity:"error" (id_mismatch) migration-ledger drift used to be
+  // visible ONLY at /settings?tab=health, a query-param-gated tab a user
+  // has no reason to know exists. The backend only ever publishes this
+  // topic when hasError is true (code_only / ledger_only-only drift never
+  // reaches it), but the handler re-checks anyway — trust the payload's
+  // own field, not "this topic fired", the same discipline the backend
+  // publish site uses.
+  useEventStream<MigrationDriftDetectedPayload>(
+    'storage.migration.drift-detected',
+    (payload) => {
+      if (!payload?.hasError || driftToastShown) return;
+      driftToastShown = true;
+      push(
+        'Migration ledger drift detected — the database may be inconsistent. Review before continuing.',
+        {
+          level: 'error',
+          durationMs: 0, // Persistent until the user acts.
+          actions: [
+            {
+              label: 'Review',
+              perform: async () => {
+                await router.push('/settings?tab=health');
+              },
+            },
+          ],
+        },
+      );
+    },
+  );
+
   // ── MigrationToast ──────────────────────────────────────────────────
   onMounted(async () => {
     try {
@@ -203,4 +245,16 @@ export function useEventToasts() {
     retryToastIds.clear();
     retryDetailShown.clear();
   });
+}
+
+/**
+ * Test-only reset for the migration-drift toast's session-scoped dedup
+ * flag. Mirrors `_resetToastQueue` in useToastQueue.ts. Not called from
+ * onBeforeUnmount (unlike the per-mount maps above) because the flag is
+ * intentionally session-scoped, not per-mount — the backend only
+ * publishes once per boot, so one persistent toast for the whole session
+ * is correct product behaviour, not a bug to clean up.
+ */
+export function _resetMigrationDriftToastState() {
+  driftToastShown = false;
 }

@@ -1092,6 +1092,23 @@ export interface CostThresholdCrossedPayload {
 }
 
 /**
+ * MigrationDriftDetectedPayload — the event published on the
+ * `storage.migration.drift-detected` broker topic when the boot-time
+ * migration drift check finds severity:"error" (id_mismatch) drift
+ * (upgrade-path-coverage-01PMUG01 WP04, FR-3c). Mirrors
+ * core/rpc.MigrationDriftDetectedPayload exactly. Only ever published
+ * when hasError is true — code_only / ledger_only-only drift never
+ * reaches this topic — but the field travels with the payload so a
+ * handler's own guard reads the same source of truth rather than
+ * trusting "this topic fired" alone.
+ */
+export interface MigrationDriftDetectedPayload {
+  driftCount: number;
+  versions: number[];
+  hasError: boolean;
+}
+
+/**
  * MarkdownExtensions — controls which rendering features are active in
  * MarkdownBlock. Matches the four-stop dial in SettingsView.
  *   'basic'    — GFM only; KaTeX and Mermaid disabled.
