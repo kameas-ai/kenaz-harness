@@ -44,6 +44,40 @@ func UpdateMenuLabel(s UpdateMenuState) string {
 	}
 }
 
+// updateTopicState maps the self-update broker topics this package's
+// Help-menu subscriber reacts to onto the UpdateMenuState each drives
+// (self-update-repair-01PMUP01 WP03). Deliberately literal strings, not
+// imported constants from core/rpc/views/update: this package stays
+// wiring-agnostic of core/rpc by design (see adapters.go — main.go wires
+// closures rather than handing this package the full rpc surface). The
+// values MUST match updateview.TopicDownload{Progress,Complete,Failed}
+// and the update:available topic published by core/update.Service; drift
+// between the two is exactly what scripts/ci/check-broker-topic-consumers.sh
+// (WP06) and TestUpdateTopicState_MatchesProductionTopics guard against.
+var updateTopicState = map[string]UpdateMenuState{
+	"update:available":         UpdateAvailable,
+	"update:download-progress": UpdateDownloading,
+	"update:download-complete": UpdateStaged,
+	"update:download-failed":   UpdateFailed,
+}
+
+// UpdateTopicState maps a self-update broker topic literal to the
+// UpdateMenuState it drives. ok is false for topics this package does
+// not react to (the caller should leave the current state unchanged).
+//
+// This is "the subscriber" in the sense AC-8 means it: main.go's
+// wailsruntime.EventsOn callbacks call this exact function rather than
+// re-deriving the mapping inline, so a Go test exercising
+// UpdateTopicState against the real topic strings a production
+// update.Manager publishes IS exercising the subscriber logic — not
+// hand-setting MenuState.UpdateState. The only part a Go test cannot
+// reach is the wailsruntime.EventsOn Wails-IPC round-trip itself (same
+// limit the pre-existing update:available wiring already had).
+func UpdateTopicState(topic string) (state UpdateMenuState, ok bool) {
+	s, known := updateTopicState[topic]
+	return s, known
+}
+
 // SessionRef is a minimal session pointer for the File → Open Recent submenu.
 type SessionRef struct {
 	ID    string

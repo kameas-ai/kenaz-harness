@@ -19,6 +19,7 @@ import {
   type UpdateClient,
   type UpdateStatus,
 } from '@/lib/updateClient';
+import * as updateDownloadEvents from '@/lib/updateDownloadEvents';
 import type { Settings } from '@/lib/types';
 
 function makeSettings(overrides: Partial<Settings> = {}): Settings {
@@ -81,6 +82,37 @@ function buildClient(initial: Settings) {
     set,
     get,
   };
+}
+
+interface FakeRuntime {
+  EventsOn: (topic: string, cb: (payload: unknown) => void) => () => void;
+  emit: (topic: string, payload: unknown) => void;
+}
+
+function installFakeRuntime(): FakeRuntime {
+  const handlers = new Map<string, Set<(payload: unknown) => void>>();
+  const rt: FakeRuntime = {
+    EventsOn: (topic, cb) => {
+      let s = handlers.get(topic);
+      if (!s) {
+        s = new Set();
+        handlers.set(topic, s);
+      }
+      s.add(cb);
+      return () => s!.delete(cb);
+    },
+    emit: (topic, payload) => {
+      const s = handlers.get(topic);
+      if (!s) return;
+      for (const cb of s) cb(payload);
+    },
+  };
+  (window as unknown as { runtime: FakeRuntime }).runtime = rt;
+  return rt;
+}
+
+function uninstallFakeRuntime() {
+  delete (window as unknown as { runtime?: unknown }).runtime;
 }
 
 function mountPanel(opts: {
@@ -239,5 +271,83 @@ describe('UpdatesPanel — skipped versions', () => {
       .trigger('click');
     await flushPromises();
     expect(unskipVersion).toHaveBeenCalledWith('v0.3.4');
+  });
+});
+
+/**
+ * WP03 accelerator wiring (self-update-repair-01PMUP01). The panel's
+ * three useEventStream subscriptions must route each broker frame
+ * through the matching applyDownload*Event pure function (tested in
+ * isolation in lib/__tests__/updateDownloadEvents.spec.ts) — this is the
+ * integration point between the Wails event bridge and that logic.
+ *
+ * Mutation: no-op one of the three UpdatesPanel.vue handlers (e.g.
+ * `useEventStream('update:download-progress', () => {})`) → the
+ * matching assertion below fails because the apply* spy is never
+ * called for that topic.
+ */
+describe('UpdatesPanel — WP03 download-event accelerator wiring', () => {
+  it('routes update:download-progress through applyDownloadProgressEvent', async () => {
+    const rt = installFakeRuntime();
+    const progressSpy = vi.spyOn(updateDownloadEvents, 'applyDownloadProgressEvent');
+    try {
+      mountPanel();
+      await flushPromises();
+      const payload = { bytes: 40, total: 100, percent: 40 };
+      rt.emit('update:download-progress', payload);
+      expect(progressSpy).toHaveBeenCalledWith(expect.anything(), payload);
+    } finally {
+      progressSpy.mockRestore();
+      uninstallFakeRuntime();
+    }
+  });
+
+  it('routes update:download-complete through applyDownloadCompleteEvent', async () => {
+    const rt = installFakeRuntime();
+    const completeSpy = vi.spyOn(updateDownloadEvents, 'applyDownloadCompleteEvent');
+    try {
+      mountPanel();
+      await flushPromises();
+      const payload = { targetVersion: '0.4.1' };
+      rt.emit('update:download-complete', payload);
+      expect(completeSpy).toHaveBeenCalledWith(expect.anything(), payload);
+    } finally {
+      completeSpy.mockRestore();
+      uninstallFakeRuntime();
+    }
+  });
+
+  it('routes update:download-failed through applyDownloadFailedEvent', async () => {
+    const rt = installFakeRuntime();
+    const failedSpy = vi.spyOn(updateDownloadEvents, 'applyDownloadFailedEvent');
+    try {
+      mountPanel();
+      await flushPromises();
+      const payload = { err: 'sha256 mismatch' };
+      rt.emit('update:download-failed', payload);
+      expect(failedSpy).toHaveBeenCalledWith(expect.anything(), payload);
+    } finally {
+      failedSpy.mockRestore();
+      uninstallFakeRuntime();
+    }
+  });
+
+  // Correctness-neutrality (DC-1's stated invariant, spec §4.1): with
+  // NO runtime/event bridge installed at all (no window.runtime — the
+  // three useEventStream subscriptions silently fail to attach, exactly
+  // like "every subscription detached"), installLatest must still work
+  // via the WP02 poll alone. This is the mutation tasks.md names for
+  // WP03: "make installLatest await an event → fails" — installLatest
+  // (updateClient.ts) never references window.runtime at all, so this
+  // passing with zero event plumbing present is the proof.
+  it('installLatest still works with no event bridge installed (poll alone)', async () => {
+    uninstallFakeRuntime(); // ensure no window.runtime this test
+    const { wrapper, installLatest } = mountPanel({
+      status: { available: true, availableVersion: 'v0.3.4' },
+    });
+    await flushPromises();
+    await wrapper.find('[data-testid="updates-install"]').trigger('click');
+    await flushPromises();
+    expect(installLatest).toHaveBeenCalledWith('v0.3.4');
   });
 });

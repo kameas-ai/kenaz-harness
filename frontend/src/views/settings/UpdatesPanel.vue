@@ -29,6 +29,15 @@
 import { computed, onMounted, ref } from 'vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import { createUpdateClient, type UpdateStatus } from '@/lib/updateClient';
+import { useEventStream } from '@/lib/useEventStream';
+import {
+  applyDownloadProgressEvent,
+  applyDownloadCompleteEvent,
+  applyDownloadFailedEvent,
+  type UpdateDownloadProgressPayload,
+  type UpdateStagedPayload,
+  type UpdateDownloadFailedPayload,
+} from '@/lib/updateDownloadEvents';
 import type { Settings } from '@/lib/types';
 
 const client = useHarnessClient();
@@ -91,6 +100,29 @@ async function refreshAll() {
 onMounted(() => {
   void refreshAll();
 });
+
+/* ── Download-progress accelerator (WP03, DC-1/DC-8) ──────────────────
+ * installLatest (updateClient.ts) is the ONLY waiter — it decides
+ * completion by polling Update_Status, never by these events. This
+ * subscription exists purely so the panel repaints faster than the next
+ * poll tick; if every one of these three useEventStream calls were
+ * deleted, installLatest would still resolve/reject correctly (DC-1) —
+ * the panel would just look a little steppier while downloading. */
+useEventStream<UpdateDownloadProgressPayload>(
+  'update:download-progress',
+  (payload) => {
+    status.value = applyDownloadProgressEvent(status.value, payload);
+  },
+);
+useEventStream<UpdateStagedPayload>('update:download-complete', (payload) => {
+  status.value = applyDownloadCompleteEvent(status.value, payload);
+});
+useEventStream<UpdateDownloadFailedPayload>(
+  'update:download-failed',
+  (payload) => {
+    status.value = applyDownloadFailedEvent(status.value, payload);
+  },
+);
 
 /* ── Status block ──────────────────────────────────────────────────── */
 
