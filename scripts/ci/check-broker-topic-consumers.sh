@@ -63,10 +63,12 @@ if [[ "${1:-}" == "--report" ]]; then
   REPORT_MODE=1
 fi
 
-# --- Discover every `<Ident> = "<value>"` const whose identifier starts
-# with "Topic" (case-sensitive Topic, or lowercase topic for unexported
-# consts like core/serve/wsstream.go's topicLLMStreamChunk), anywhere
-# under core/**, excluding tests. One line per const: "<file>:<line>:<ident>:<value>".
+# --- Discover every `<Ident> = "<value>"` const whose identifier
+# CONTAINS "Topic" (case-sensitive Topic, or lowercase topic for
+# unexported consts like core/serve/wsstream.go's topicLLMStreamChunk),
+# anywhere under core/**, excluding tests. One line per const:
+# "<file>:<line>:<ident>:<value>".
+#
 # Matches BOTH Go single-const-declaration shapes: the block form
 # (`Ident = "value"` inside a `const ( ... )` group — most of this
 # codebase's topics) and the single-line form with the `const` keyword
@@ -75,11 +77,26 @@ fi
 # is exactly what let the first cut of this script's own planted-
 # violation proof (TopicNobodyReads, written as `const TopicNobodyReads
 # = "..."`) sail through undetected.
+#
+# CONTAINS, not STARTS-WITH — and that distinction is the whole gate.
+# The first cut anchored the identifier at "Topic", which made FOUR real
+# broker-topic consts invisible to the discovery pass: AvailableTopic
+# (core/update/api.go — the very const the paragraph above cites as the
+# reason the `const` shape was added; the script claimed to cover a const
+# it could not see), ThresholdEventTopic (core/usage/threshold.go),
+# ProgressTopic (core/mcp/transport/progress.go) and progressTopic
+# (core/rpc/views/sites/impl.go). One of those four, mcp:progress, is
+# GENUINELY UNCONSUMED — so the "empty allowlist, 35/35 consumed" claim
+# this gate shipped with was false, and false in the gate's own blind
+# spot rather than in its matching. A discovery pass keyed on a naming
+# convention is only "derived, not declared" for the code that happens to
+# follow the convention; anything a topic const cannot be named must not
+# be the difference between checked and unchecked.
 mapfile -t DEFS < <(
-  grep -rnE '^[[:space:]]*(const[[:space:]]+)?[Tt]opic[A-Za-z0-9_]*[[:space:]]*=[[:space:]]*"[^"]+"' \
+  grep -rnE '^[[:space:]]*(const[[:space:]]+)?[A-Za-z0-9_]*[Tt]opic[A-Za-z0-9_]*[[:space:]]*=[[:space:]]*"[^"]+"' \
     core --include='*.go' 2>/dev/null \
     | grep -v '_test\.go' \
-    | sed -E 's/^([^:]+):([0-9]+):[[:space:]]*(const[[:space:]]+)?([Tt]opic[A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*"([^"]+)".*/\1:\2:\4:\5/'
+    | sed -E 's/^([^:]+):([0-9]+):[[:space:]]*(const[[:space:]]+)?([A-Za-z0-9_]*[Tt]opic[A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*"([^"]+)".*/\1:\2:\4:\5/'
 )
 
 if [[ ${#DEFS[@]} -eq 0 ]]; then
@@ -148,9 +165,18 @@ for def in "${DEFS[@]}"; do
   value="${rest#*:}"
   checked=$((checked + 1))
 
-  # --- allowlist: a dated "<value>" line anywhere in the allowlist file.
+  # --- allowlist: a dated "<value>" DATA line in the allowlist file.
+  # Comment lines are stripped first, deliberately. Matching the raw file
+  # would mean any prose mentioning a quoted topic — including the
+  # header's own `#   "example:topic"` illustration, or a justification
+  # paragraph that quotes a NEIGHBOURING topic while explaining this one
+  # — silently allowlists it. That is the same "a mention is not a
+  # consumer" laundering the frontend pass already guards against by
+  # excluding __tests__; the escape hatch has to be as literal as the
+  # thing it excuses.
   allow_hit=0
-  if [[ -f "$ALLOWLIST" ]] && grep -qF "\"${value}\"" "$ALLOWLIST" 2>/dev/null; then
+  if [[ -f "$ALLOWLIST" ]] && grep -v '^[[:space:]]*#' "$ALLOWLIST" 2>/dev/null \
+      | grep -qF "\"${value}\""; then
     allow_hit=1
   fi
 
