@@ -1135,7 +1135,7 @@ func New(c *core.Core, opts ...Option) *API {
 			// stays included so future modal features (e.g. arg-list
 			// preview, working-dir display) can read it without a
 			// second backend trip.
-			a.broker.emitter.Emit(a.broker.EmitCtx(), topic, flattenPendingRequest(payload))
+			a.broker.emitter.Emit(a.broker.EmitCtx(), topic, FlattenPendingRequest(payload))
 		}),
 	))
 
@@ -7326,10 +7326,18 @@ func buildJournalWriter(c *core.Core) coreag.JournalWriter {
 	return coreag.NewSQLJournalWriter(rawDB)
 }
 
-// flatPermissionRequest mirrors frontend `PermissionRequest` (see
+// FlatPermissionRequest mirrors frontend `PermissionRequest` (see
 // frontend/src/lib/types.ts). Built per-emit so the modal binds
 // directly without walking the typed surface.
-type flatPermissionRequest struct {
+//
+// Exported (consent-surfaces-truth-01PMTR01 WP03) so both transports
+// that answer *_ListPending — the Wails-bound
+// Bindings.Permissions_ListPending and core/serve's
+// "Permissions_ListPending" dispatch case — return the exact same wire
+// shape the live `<family>:permission-pending` topic already carries.
+// FR-005 forbids a second projection: this is the only one, in either
+// direction (live push AND rehydration pull).
+type FlatPermissionRequest struct {
 	RequestID       string              `json:"request_id"`
 	SessionID       string              `json:"session_id,omitempty"`
 	Family          string              `json:"family"`
@@ -7344,7 +7352,7 @@ type flatPermissionRequest struct {
 	DeadlineAt      string              `json:"deadline_at"`
 }
 
-// flattenPendingRequest projects cedar.PendingRequest into the flat
+// FlattenPendingRequest projects cedar.PendingRequest into the flat
 // shape the frontend permission modals bind to. Each family fills
 // resource_display from its surface fields:
 //   - bash: full argv joined (e.g. "aws --version") — what the user
@@ -7352,14 +7360,14 @@ type flatPermissionRequest struct {
 //   - fs: canonical path + op (e.g. "read /Users/alice/code/main.go").
 //   - cred: provider_id + purpose (e.g. "openai · stream").
 //   - tool: server_name__tool_name (e.g. "filesystem__read_file").
-func flattenPendingRequest(p cedar.PendingRequest) flatPermissionRequest {
+func FlattenPendingRequest(p cedar.PendingRequest) FlatPermissionRequest {
 	// Project through cedar.PendingRequest.Project() — the SINGLE
 	// projection function. The :7881 approval bridge
 	// (cmd/harness-vm/approvals.go) calls the same one, so the served
 	// modal and the host-brokered wire can never drift in what they
 	// call the same approval_id.
 	proj := p.Project()
-	return flatPermissionRequest{
+	return FlatPermissionRequest{
 		RequestID:       p.RequestID,
 		SessionID:       p.Surface.SessionID,
 		Family:          string(p.Family),

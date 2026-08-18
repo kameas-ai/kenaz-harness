@@ -502,7 +502,7 @@ export function Onboarding_Step(arg1:onboarding.StepRequest):Promise<onboarding.
 
 export function Permissions_ListGrants(arg1:string):Promise<Array<permissions.Grant>>;
 
-export function Permissions_ListPending():Promise<Array<cedar.PendingRequest>>;
+export function Permissions_ListPending():Promise<Array<rpc.FlatPermissionRequest>>;
 
 export function Permissions_Resolve(arg1:string,arg2:string):Promise<void>;
 

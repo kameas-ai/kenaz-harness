@@ -775,12 +775,26 @@ func (b *Bindings) Permissions_RevokeGrant(grantID string) error {
 	return b.api.Permissions().RevokeGrant(b.ctx(), grantID)
 }
 
-// Permissions_ListPending returns in-flight pending prompts. The
-// frontend uses this to reconcile its modal queue on app start / after
-// a hot reload.
-func (b *Bindings) Permissions_ListPending() ([]permissionsview.PendingRequest, error) {
+// Permissions_ListPending returns in-flight pending prompts, flattened
+// through FlattenPendingRequest — the SAME projection the live
+// `<family>:permission-pending` topic uses (FR-005: one projection
+// function). The four permission modals call this on mount to
+// reconcile their queue against the server's parked set after an app
+// start / hot reload / WS reconnect (consent-surfaces-truth-01PMTR01
+// WP03 / dead-code-audit finding A11 — this binding had zero callers
+// until this WP, so a prompt lost across a reload never returned: the
+// turn hung until the registry's 5-minute timeout fail-closed denied it).
+func (b *Bindings) Permissions_ListPending() ([]FlatPermissionRequest, error) {
 	defer sentry.WrapBinding("Permissions_ListPending")()
-	return b.api.Permissions().ListPending(b.ctx())
+	pending, err := b.api.Permissions().ListPending(b.ctx())
+	if err != nil {
+		return nil, err
+	}
+	out := make([]FlatPermissionRequest, 0, len(pending))
+	for _, p := range pending {
+		out = append(out, FlattenPendingRequest(p))
+	}
+	return out, nil
 }
 
 // ── audit ──────────────────────────────────────────────────────────────

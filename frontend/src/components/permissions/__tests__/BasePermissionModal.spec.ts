@@ -33,6 +33,7 @@ function mountModal(request: PermissionRequest | null, resolveImpl = vi.fn(async
       resolve: resolveImpl,
       listGrants: async () => [],
       revokeGrant: async () => undefined,
+      listPending: async () => [],
       getShortcuts: async () => ({}),
       setShortcut: async () => undefined,
       setShortcuts: async () => undefined,

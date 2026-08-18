@@ -48,6 +48,7 @@ var (
 		"LLM_ListProviders",
 		"LLM_StartStream",
 		"LLM_StopStream",
+		"Permissions_ListPending",
 		"Permissions_Resolve",
 		"Projects_List",
 		"Serve_ListMethods",

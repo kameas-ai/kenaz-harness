@@ -87,6 +87,7 @@ var cwdSensitiveGates = []string{
 	"check-builtin-tool-registration.sh",
 	"check-single-move-writer.sh",
 	"check-cedar-gate-arguments.sh",
+	"check-listpending-coverage.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -374,6 +375,18 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			file: "core/rpc/zz_gate_probe.go",
 			// slog.String(...) is how a multi-line log call spells its keys.
 			content: "package rpc\n\nvar zzGateProbe = slog.String(\"Prompt\", p)\n",
+		},
+		{
+			name: "listpending-coverage/no-client-reader",
+			gate: "check-listpending-coverage.sh",
+			// The A11 shape exactly: a *_ListPending binding whose body
+			// compiles and whose doc comment (if any) reads correctly, with
+			// zero callers anywhere in harnessClient.ts. This is precisely
+			// what let Permissions_ListPending sit dead for as long as it
+			// did — the method LOOKED wired because it existed end to end
+			// on the Go side.
+			file:   "core/rpc/bindings.go",
+			append: "\nfunc (b *Bindings) ZzGateProbe_ListPending() ([]FlatPermissionRequest, error) {\n\treturn nil, nil\n}\n",
 		},
 	}
 

@@ -14,7 +14,7 @@ import (
 // the same approval differently on two surfaces the same operator is looking
 // at.
 //
-// This test pins flatPermissionRequest to cedar.PendingRequest.Project(). If
+// This test pins FlatPermissionRequest to cedar.PendingRequest.Project(). If
 // someone reintroduces a private flattening switch in core/rpc, this fails.
 func TestFlattenPendingRequest_ProjectsFromCedar(t *testing.T) {
 	t.Parallel()
@@ -50,7 +50,7 @@ func TestFlattenPendingRequest_ProjectsFromCedar(t *testing.T) {
 				IssuedAt:   issued,
 				DeadlineAt: issued.Add(5 * time.Minute),
 			}
-			flat := flattenPendingRequest(p)
+			flat := FlattenPendingRequest(p)
 			proj := p.Project()
 
 			if flat.ResourceDisplay != proj.ResourceDisplay {

@@ -1133,8 +1133,11 @@ func (r *Registry) TransientGrantCount() int {
 }
 
 // ListPending returns a snapshot of all in-flight pending requests.
-// Used by the permissions view's `ListGrants` call so the frontend's
-// modal queue can reconcile after a reload.
+// Used by the permissions view's `ListPending` call (not `ListGrants` —
+// that method covers persisted Allow-always grants, a different
+// concept) so the frontend's four permission modals can reconcile their
+// queue against the server's parked set after a reload
+// (consent-surfaces-truth-01PMTR01 WP03).
 func (r *Registry) ListPending() []PendingRequest {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
