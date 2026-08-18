@@ -2,6 +2,7 @@ package onboarding
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -14,10 +15,21 @@ type stubFirstRun struct{ first bool }
 
 func (s stubFirstRun) IsFirstRun(_ context.Context) (bool, error) { return s.first, nil }
 
-type stubCompletion struct{ done bool }
+type stubCompletion struct {
+	done bool
+	// calls counts MarkOnboardingCompleted invocations. WP03's regression
+	// test asserts on this directly (not just the boolean) so a bug that
+	// calls MarkOnboardingCompleted twice, or calls-then-untoggles, cannot
+	// hide behind a coarse boolean check.
+	calls int
+}
 
-func (s *stubCompletion) MarkOnboardingCompleted(_ context.Context) error { s.done = true; return nil }
-func (s *stubCompletion) IsCompleted(_ context.Context) (bool, error)     { return s.done, nil }
+func (s *stubCompletion) MarkOnboardingCompleted(_ context.Context) error {
+	s.done = true
+	s.calls++
+	return nil
+}
+func (s *stubCompletion) IsCompleted(_ context.Context) (bool, error) { return s.done, nil }
 
 type stubStarter struct{ id string }
 
@@ -447,6 +459,86 @@ func TestAPI_Begin_DeepLinkHintWinsOverFleetState(t *testing.T) {
 	hint, _ := api.GetHandoffHint(ctx)
 	if hint.Source != "deep_link" || hint.EmailHint != "user@example.com" {
 		t.Errorf("deep-link hint was overwritten by fleet state: %+v", hint)
+	}
+}
+
+// ── WP03: completion honesty (first-run-onboarding-01PMOB01) ─────────────────
+
+// failingStarter simulates a SessionStarter whose underlying delivery step
+// (session created, but the system-prompt write failed) surfaces as an
+// error from StartOnboardingSession — the C-003 contract WP02's adapter
+// implements: a delivery failure returns a non-nil error rather than
+// growing the interface.
+type failingStarter struct{ err error }
+
+func (f *failingStarter) StartOnboardingSession(_ context.Context, _ harnessmcp.Starter) (string, error) {
+	return "", f.err
+}
+
+// firstRunFollowsCompletion is a FirstRunChecker test double that ties
+// "is this a first run" to the SAME Completion fake RestartPhase2 consults,
+// rather than to production's independent provider-count signal
+// (onboardingFirstRunAdapter in core/rpc/onboarding_wiring.go). AC-005's
+// actual claim is "a user who hits a delivery failure is offered onboarding
+// again" — i.e. that firstRun tracks completion, not provider count — so
+// this double reproduces the causal link the acceptance criterion cares
+// about instead of the unrelated production heuristic. Without this, a
+// State() call driven by an independent stub would report firstRun=true
+// regardless of whether MarkOnboardingCompleted incorrectly fired, and the
+// WP03 mutation (reordering MarkOnboardingCompleted above the error check)
+// would not be caught by assertion (c).
+type firstRunFollowsCompletion struct{ completion *stubCompletion }
+
+func (f firstRunFollowsCompletion) IsFirstRun(ctx context.Context) (bool, error) {
+	done, err := f.completion.IsCompleted(ctx)
+	return !done, err
+}
+
+// TestRestartPhase2DeliveryFailureIsRetryable is WP03's load-bearing test
+// (FR-005 / AC-005). A delivery failure must (a) surface as an error from
+// RestartPhase2, (b) NOT call MarkOnboardingCompleted, and (c) leave the
+// user offered onboarding again on a subsequent State() call.
+//
+// Mutation: move the `a.cfg.Completion.MarkOnboardingCompleted(ctx)` call in
+// RestartPhase2 (impl.go) above the `if err != nil` guard. This test must
+// fail on assertions (b) and (c) — see the mutation-honesty note in this
+// file's package doc / the mission report for the recorded proof.
+func TestRestartPhase2DeliveryFailureIsRetryable(t *testing.T) {
+	t.Parallel()
+	completion := &stubCompletion{}
+	api := New(Config{
+		FirstRun:       firstRunFollowsCompletion{completion: completion},
+		Completion:     completion,
+		SessionStarter: &failingStarter{err: errors.New("deliver starter system prompt: boom")},
+	})
+
+	ctx := context.Background()
+	resp, err := api.RestartPhase2(ctx, RestartPhase2Request{StarterID: "code"})
+
+	// (a) RestartPhase2 returns an error.
+	if err == nil {
+		t.Fatalf("RestartPhase2 returned nil error on delivery failure; resp=%+v", resp)
+	}
+
+	// (b) MarkOnboardingCompleted was NOT called.
+	if completion.calls != 0 {
+		t.Errorf("MarkOnboardingCompleted call count = %d, want 0", completion.calls)
+	}
+	if completion.done {
+		t.Errorf("Completion.done = true after a failed delivery, want false")
+	}
+
+	// (c) a subsequent State() call still reports firstRun: true — the user
+	// is offered onboarding again.
+	st, err := api.State(ctx)
+	if err != nil {
+		t.Fatalf("State: %v", err)
+	}
+	if !st.FirstRun {
+		t.Errorf("State().FirstRun = false after a failed delivery, want true (user must be offered onboarding again)")
+	}
+	if st.Completed {
+		t.Errorf("State().Completed = true after a failed delivery, want false")
 	}
 }
 

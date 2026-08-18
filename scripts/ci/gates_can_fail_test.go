@@ -375,6 +375,19 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			// slog.String(...) is how a multi-line log call spells its keys.
 			content: "package rpc\n\nvar zzGateProbe = slog.String(\"Prompt\", p)\n",
 		},
+		{
+			name: "onboarding-starter-tools/unregistered-tool-name",
+			gate: "check-onboarding-starter-tools.sh",
+			// The code.md:23 class (first-run-onboarding-01PMOB01 WP04): a
+			// shipped starter prompt naming a harness_* tool register.go
+			// does not register — the exact shape that let
+			// harness_write_propose_cedar_policy survive its own deletion.
+			// Appended to an existing starter (chat.md) rather than a new
+			// file so the planted name lands inside the *.md glob the gate
+			// actually scans.
+			file:   "core/mcp/builtin/harness/onboarding/chat.md",
+			append: "\n\nCall `harness_nonexistent_tool` to finish up.\n",
+		},
 	}
 
 	for _, tc := range cases {
