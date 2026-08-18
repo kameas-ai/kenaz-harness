@@ -24,6 +24,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +32,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core"
 	auditview "github.com/kameas-ai/kenaz-harness/core/rpc/views/audit"
 	searchview "github.com/kameas-ai/kenaz-harness/core/rpc/views/search"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 )
 
@@ -176,43 +178,80 @@ func TestSearchWiring_ToggleGatesLiveOnSameInstance(t *testing.T) {
 	}
 }
 
+// erroringSettings wraps a real settings.SettingsAPI and fails only
+// Get — the one call cfg.Enabled's closure makes. Embedding the
+// interface keeps the other ~40 methods intact without a hand-written
+// fake that would rot on every interface addition.
+type erroringSettings struct {
+	settings.SettingsAPI
+}
+
+func (erroringSettings) Get(context.Context) (settings.Settings, error) {
+	return settings.Settings{}, errors.New("settings store unavailable")
+}
+
 // TestSearchWiring_SettingsReadFailureFailsOpen pins the fail-open
-// contract from spec §5: a nil settingsAPI (the pre-boot / test-chassis
-// posture, matching workflowCedarModeFn's `settingsImpl == nil` branch)
-// must not silently disable search.
+// contract from spec §5: an *unreadable* settings store must not
+// silently disable search. Both fail-open branches of cfg.Enabled's
+// closure are driven directly, because cfg.Enabled re-reads
+// a.settingsAPI on every call — so swapping the field after Search()
+// has memoized a.searchAPI still reaches the closure.
 //
-// Mutation: change the nil-settingsAPI branch in api.go's Search() to
+// This replaces an earlier version of this test that booted a default
+// store and asserted hits were returned. That assertion was vacuous:
+// a freshly booted store has SearchDisabled=false, so it exercised the
+// ordinary enabled path, not either fail-open branch — and neither of
+// the mutations named below killed it. Per tasks.md, "an assertion
+// whose named mutation still passes is not evidence."
 //
-//	return false
+// Mutation: change the `a.settingsAPI == nil` branch in api.go's
 //
-// → this test's assertion (hits present) fails.
+//	Search() to `return false` → the nil sub-test fails.
+//
+// Mutation: change the `err != nil` branch to `return false`
+//
+//	→ the erroring sub-test fails.
 func TestSearchWiring_SettingsReadFailureFailsOpen(t *testing.T) {
 	ctx := context.Background()
-	// rpc.New(nil) is the documented nil-Core test posture (see
-	// coreDataDir's doc comment) — a.core is nil so Search() falls
-	// through to the stubSearch{} nil-safe fallback, which always
-	// returns empty results. That path doesn't exercise cfg.Enabled at
-	// all, so it isn't useful for THIS assertion. Instead, boot a real
-	// Core (so the SQL-backed searchAPI gets constructed and cfg.Enabled
-	// gets wired) but never populate a.settingsAPI's dial to a
-	// disabling state — Settings.Get on a freshly booted store returns
-	// the zero-value Settings{}, whose SearchEnabled() is true by
-	// construction (SearchDisabled defaults false). That already proves
-	// the "no data yet" fail-open path end to end without needing to
-	// fake out settingsAPI itself.
 	api := searchWiringAPI(t)
 	const token = "faylopentoken"
 	seedSearchableMessage(t, api, "s-wire-2", token)
 
 	sa := api.Search()
-	hits, err := sa.Search(ctx, token, searchview.SearchFilters{})
-	if err != nil {
-		t.Fatalf("Search: %v", err)
+	real := api.settingsAPI
+
+	// Baseline: the wiring works at all before we break the store.
+	if hits, err := sa.Search(ctx, token, searchview.SearchFilters{}); err != nil || len(hits) != 1 {
+		t.Fatalf("baseline Search: got %d hits, err %v — want 1 hit, nil", len(hits), err)
 	}
-	if len(hits) != 1 {
-		t.Fatalf("Search on a freshly booted (unconfigured) settings store: got %d hits, want 1 "+
-			"— a settings read that hasn't been explicitly disabled must fail open, not closed", len(hits))
-	}
+
+	t.Run("nil settings store fails open", func(t *testing.T) {
+		api.settingsAPI = nil
+		t.Cleanup(func() { api.settingsAPI = real })
+
+		hits, err := sa.Search(ctx, token, searchview.SearchFilters{})
+		if err != nil {
+			t.Fatalf("Search: %v", err)
+		}
+		if len(hits) != 1 {
+			t.Fatalf("nil settings store: got %d hits, want 1 — an unwired settings store must "+
+				"fail OPEN, not silently disable search", len(hits))
+		}
+	})
+
+	t.Run("erroring settings store fails open", func(t *testing.T) {
+		api.settingsAPI = erroringSettings{real}
+		t.Cleanup(func() { api.settingsAPI = real })
+
+		hits, err := sa.Search(ctx, token, searchview.SearchFilters{})
+		if err != nil {
+			t.Fatalf("Search: %v", err)
+		}
+		if len(hits) != 1 {
+			t.Fatalf("erroring settings store: got %d hits, want 1 — a settings-read FAILURE must "+
+				"fail OPEN, not silently disable search (spec §5)", len(hits))
+		}
+	})
 }
 
 // TestSearchWiring_AuditTrailEmitsQueryHashNotRawQuery is FR-002's
@@ -264,5 +303,111 @@ func TestSearchWiring_AuditTrailEmitsQueryHashNotRawQuery(t *testing.T) {
 	if strings.Contains(found.Trailing, token) {
 		t.Errorf("audit entry Trailing = %q, leaks the raw query token %q — privacy contract violated",
 			found.Trailing, token)
+	}
+}
+
+// TestSearchWiring_AuditNeverLeaksAdversarialQuery hardens FR-002's
+// privacy contract against queries designed to defeat it, asserted on
+// the PERSISTED audit row (Audit().ListEntries) rather than on the
+// intermediate attrs map — the attrs map is the search view's own
+// tested contract; what this WP added is the bridge that renders it
+// into audit.Entry.Trailing, and a bridge is where a leak would be
+// introduced.
+//
+// The three shapes that matter for a privacy control:
+//   - credential-shaped: the query itself is the secret.
+//   - unicode / multibyte: a naive byte-wise redactor mangles or misses.
+//   - very long: a truncating renderer could spill a prefix.
+//
+// Also pins that query_hash is TRUNCATED (16 hex chars, not the full
+// 64-char sha256) — the on-screen copy promises "a truncated
+// query_hash", and an untruncated digest of a low-entropy query is
+// itself reversible by dictionary attack.
+//
+// Mutation: add `"query": query` to the attrs map at
+//
+//	views/search/impl.go:306 → every sub-test fails.
+//
+// Mutation: return the full digest from queryHash (drop the [:16])
+//
+//	→ the truncation assertion fails.
+func TestSearchWiring_AuditNeverLeaksAdversarialQuery(t *testing.T) {
+	ctx := context.Background()
+	api := searchWiringAPI(t)
+	seedSearchableMessage(t, api, "s-wire-adv", "advtoken")
+	sa := api.Search()
+
+	cases := []struct {
+		name  string
+		query string
+		frags []string
+	}{
+		{
+			name:  "credential shaped",
+			query: "AKIAIOSFODNN7EXAMPLE sk-proj-abc123secret ghp_deadbeefcafe",
+			frags: []string{"AKIAIOSFODNN7EXAMPLE", "sk-proj-abc123secret", "ghp_deadbeefcafe"},
+		},
+		{
+			name:  "unicode multibyte",
+			query: "пароль 密码 🔐 école",
+			frags: []string{"пароль", "密码", "🔐", "école"},
+		},
+		{
+			name:  "very long",
+			query: strings.Repeat("SUPERSECRETPAYLOAD", 4000),
+			frags: []string{"SUPERSECRETPAYLOAD"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := sa.Search(ctx, tc.query, searchview.SearchFilters{ProjectID: "p", Limit: 3}); err != nil {
+				t.Fatalf("Search: %v", err)
+			}
+			if _, err := sa.UnifiedSearch(ctx, tc.query, searchview.SearchFilters{Limit: 3}); err != nil {
+				t.Fatalf("UnifiedSearch: %v", err)
+			}
+
+			entries, err := api.Audit().ListEntries(ctx, auditview.Filter{Limit: 500})
+			if err != nil {
+				t.Fatalf("Audit().ListEntries: %v", err)
+			}
+			rows := 0
+			for _, e := range entries {
+				if e.Subject != searchview.KindSearchExecuted {
+					continue
+				}
+				rows++
+				// Every persisted field, not just Trailing — a leak that
+				// landed in ID or Subject would be just as bad.
+				blob := e.ID + "|" + e.Timestamp + "|" + e.Category + "|" + e.Subject + "|" + e.Trailing
+				if strings.Contains(blob, tc.query) {
+					t.Errorf("persisted audit row carries the raw query: %q", blob)
+				}
+				for _, frag := range tc.frags {
+					if strings.Contains(blob, frag) {
+						t.Errorf("persisted audit row leaks query fragment %q: %q", frag, blob)
+					}
+				}
+				if !strings.Contains(e.Trailing, "query_hash=") {
+					t.Errorf("persisted audit row has no query_hash: %q", e.Trailing)
+				}
+				for _, kv := range strings.Fields(e.Trailing) {
+					h, ok := strings.CutPrefix(kv, "query_hash=")
+					if !ok {
+						continue
+					}
+					if len(h) != 16 {
+						t.Errorf("query_hash is %d chars (%q) — the copy promises a TRUNCATED hash; "+
+							"a full sha256 of a low-entropy query is reversible by dictionary attack",
+							len(h), h)
+					}
+				}
+			}
+			if rows == 0 {
+				t.Fatalf("no %q rows persisted — the audit trail did not fire at all",
+					searchview.KindSearchExecuted)
+			}
+		})
 	}
 }
