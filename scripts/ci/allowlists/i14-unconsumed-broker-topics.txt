@@ -1,0 +1,20 @@
+# I14 allowlist — Topic* broker-topic consts (core/**) with no frontend
+# subscriber, no Go subscriber, and no passthroughTopics entry.
+# Spec: kitty-specs/self-update-repair-01PMUP01/spec.md §6.
+# Enforced by scripts/ci/check-broker-topic-consumers.sh.
+#
+# EMPTY at introduction (2026-08-18, self-update-repair-01PMUP01 WP06).
+# Every Topic* const in the tree at introduction time had a real
+# consumer; the gate's own report (`bash scripts/ci/check-broker-topic-consumers.sh --report`)
+# confirmed zero DEAD entries before this file was seeded empty.
+#
+# Format: one double-quoted topic VALUE (not the Go identifier) per
+# line, preceded by a comment giving the date, the const's
+# <package-import-path>.<Identifier>, and the reason it has no
+# consumer yet (owner + blocker, not "we'll get to it" — see CLAUDE.md
+# § "Release ritual: unwired sweep" / "Rules").
+#
+# Example:
+#   # JUSTIFIED 2026-08-18. github.com/kameas-ai/kenaz-harness/core/rpc.TopicExample —
+#   # backend-only signal with no planned UI; owner: <mission-slug>.
+#   "example:topic"
