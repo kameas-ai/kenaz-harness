@@ -9,6 +9,7 @@ import {
   type HarnessClient,
 } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
+import { CustomRecipeAuthoringKey } from '@/lib/customRecipeAuthoring';
 import type {
   Recipe,
   RecipeListing,
@@ -60,12 +61,25 @@ function makeListing(recipe: Recipe, overrides: Partial<RecipeListing> = {}): Re
   };
 }
 
-function mountModal(props: Record<string, unknown>, client?: Partial<HarnessClient>) {
+// The existing "tabs" suite below exercises the Custom tab's reachability —
+// real coverage for the day WP06 flips CUSTOM_RECIPE_AUTHORING_ENABLED to
+// `true`. It mounts with the flag explicitly ON via the same injection key
+// KenazToolsPanel reads (CustomRecipeAuthoringKey), rather than relying on
+// the module's off-by-default production value. The WP02 gate itself
+// (flag OFF, the shipped default) has its own describe block below.
+function mountModal(
+  props: Record<string, unknown>,
+  client?: Partial<HarnessClient>,
+  customRecipeAuthoringEnabled = true,
+) {
   const fakeClient = createFakeHarnessClient(client);
   return mount(AddMCPServerModal, {
     props: { open: true, ...props },
     global: {
-      provide: { [HarnessClientKey as symbol]: fakeClient },
+      provide: {
+        [HarnessClientKey as symbol]: fakeClient,
+        [CustomRecipeAuthoringKey as symbol]: customRecipeAuthoringEnabled,
+      },
     },
   });
 }
@@ -159,6 +173,64 @@ describe('AddMCPServerModal — tabs', () => {
       global: { provide: { [HarnessClientKey as symbol]: fakeClient } },
     });
     expect(w.find('[data-testid="add-mcp-modal"]').exists()).toBe(false);
+  });
+});
+
+// ── AddMCPServerModal — custom recipe authoring gate (WP02, FR-001) ────
+//
+// AC-001: with the flag off, no `custom` tab renders at all — not just
+// "not the active tab". C-001: this is the same CustomRecipeAuthoringKey
+// KenazToolsPanel.test.ts flips for the row Edit button; one flag, two
+// doors.
+
+describe('AddMCPServerModal — custom recipe authoring gate (WP02, FR-001)', () => {
+  it('flag OFF (shipped default, no provider): no custom tab button renders, and editRecipe lands on Registry', async () => {
+    const fakeClient = createFakeHarnessClient();
+    const w = mount(AddMCPServerModal, {
+      props: { open: true, editRecipe: makeRecipe('my-recipe') },
+      global: {
+        // No CustomRecipeAuthoringKey provided — this is the real production
+        // shape (main.ts never provides it), which resolves to the module's
+        // CUSTOM_RECIPE_AUTHORING_ENABLED default (false).
+        provide: { [HarnessClientKey as symbol]: fakeClient },
+      },
+    });
+    await flushPromises();
+
+    expect(w.find('[data-testid="add-mcp-tab-custom"]').exists()).toBe(false);
+    expect(w.find('[data-testid="custom-recipe-tab"]').exists()).toBe(false);
+    // editRecipe no longer forces a landing on a tab that does not exist.
+    expect(w.find('[data-testid="registry-tab"]').exists()).toBe(true);
+  });
+
+  it('flag ON: the custom tab button renders and editRecipe lands on it', async () => {
+    const w = mountModal({ editRecipe: makeRecipe('my-recipe') }, undefined, true);
+    await flushPromises();
+
+    expect(w.find('[data-testid="add-mcp-tab-custom"]').exists()).toBe(true);
+    expect(w.find('[data-testid="custom-recipe-tab"]').exists()).toBe(true);
+  });
+
+  // Mutation: restore `props.editRecipe ? 'custom' : 'registry'` as the
+  // activeTab initializer (i.e. drop the `&& customRecipeAuthoringEnabled`
+  // clause). This assertion must fail, because editRecipe would then set
+  // activeTab to 'custom' while the tab bar (correctly, still gated) omits
+  // the custom button — landing the user on a blank content pane with no
+  // active tab highlighted, which is what C-001 exists to prevent.
+  it('flag OFF with editRecipe: activeTab does not resolve to a tab that is not offered', async () => {
+    const fakeClient = createFakeHarnessClient();
+    const w = mount(AddMCPServerModal, {
+      props: { open: true, editRecipe: makeRecipe('my-recipe') },
+      global: {
+        provide: { [HarnessClientKey as symbol]: fakeClient },
+      },
+    });
+    await flushPromises();
+
+    // Exactly one tab is marked selected, and it is Registry.
+    const registryTabBtn = w.find('[data-testid="add-mcp-tab-registry"]');
+    expect(registryTabBtn.attributes('aria-selected')).toBe('true');
+    expect(w.find('[data-testid="registry-tab"]').exists()).toBe(true);
   });
 });
 
@@ -562,7 +634,12 @@ describe('CustomRecipeTab — form validation', () => {
     expect(testBtn.attributes('disabled')).toBeDefined();
   });
 
-  it('Test Connection shows WP10 gap message', async () => {
+  it('Test Connection reports the persisted-id constraint, not a canned success string', async () => {
+    // Regression for the WP02 fix: testConnection() used to assign a canned
+    // "not yet available" string with no `await` inside its try, so its
+    // catch was structurally unreachable. It now reports the real
+    // constraint (MCP_TestRecipe needs a persisted recipe id) as an error,
+    // and the stale "WP10" wording is gone from the file.
     const w = mountCustomTab();
     await w.find('[data-testid="custom-id-input"]').setValue('my-server');
     await w.find('[data-testid="custom-display-name-input"]').setValue('My Server');
@@ -571,7 +648,10 @@ describe('CustomRecipeTab — form validation', () => {
     await w.find('[data-testid="custom-test-btn"]').trigger('click');
     await flushPromises();
 
-    expect(w.find('[data-testid="custom-test-result"]').text()).toContain('WP10');
+    expect(w.find('[data-testid="custom-test-result"]').exists()).toBe(false);
+    expect(w.find('[data-testid="custom-test-error"]').text()).toContain(
+      'persisted recipe id',
+    );
   });
 
   it('cancel button emits cancel', async () => {

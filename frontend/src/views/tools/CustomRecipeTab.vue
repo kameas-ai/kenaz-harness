@@ -2,20 +2,25 @@
 /**
  * CustomRecipeTab — form-based recipe author for stdio / http / sse transports.
  *
- * BACKEND GAP: `client.mcp.saveCustomRecipe` does not exist in WP01–WP08.
- * The save action is stubbed as a UI-only placeholder. When WP10 lands a
- * saveCustomRecipe RPC, wire it here by calling:
+ * BACKEND GAP: `client.mcp.saveCustomRecipe` does not exist yet. The save
+ * action is stubbed and always throws. This tab (and the row Edit button
+ * that lands on it — see `KenazToolsPanel.vue`) is reachable only when
+ * `useCustomRecipeAuthoringEnabled()` (frontend/src/lib/customRecipeAuthoring.ts)
+ * is true, which it is not by default; see that module for the retirement
+ * condition. When `MCP_SaveCustomRecipe` lands
+ * (`mcp-connector-lifecycle-01PMMC01` WP06), wire it here by calling:
  *
  *   await client.mcp.saveCustomRecipe(buildRecipePayload())
  *
- * Test Connection calls `client.mcp.importClaudeDesktopConfig` with a
- * synthetic single-entry mcpServers JSON constructed from the form values,
- * then shows the dry-run result inline (tool count / stderr).
+ * and retire the flag in the same commit.
  *
- * NOTE: `testRecipe` RPC does not exist on MCPClient. The "Test Connection"
- * button currently uses importClaudeDesktopConfig dry_run as a proxy to
- * validate form structure. A proper testRecipe RPC would stream stderr and
- * return MCPTestResult — that is deferred to WP10.
+ * CORRECTION: `testRecipe` is not missing — `harnessClient.ts:1612` declares
+ * it and live-wires it to `MCP_TestRecipe` (`core/rpc/bindings.go:497`). The
+ * real constraint is narrower: `MCP_TestRecipe(recipeID, env, config)` is
+ * keyed by a persisted recipe id, so it cannot test an unsaved draft — and
+ * this form has no id to give it until `save()` (above) actually persists
+ * one. Test Connection is therefore also gated behind the flag until WP06
+ * gives it something to call.
  */
 import { ref, computed, watch } from 'vue';
 import type { Recipe } from '@/lib/types';
@@ -122,24 +127,21 @@ const canSave = computed(
 );
 
 // ── test connection ────────────────────────────────────────────────────
+// MCP_TestRecipe (harnessClient.ts:1612 -> bindings.go:497) is live, but it
+// is keyed by a persisted recipe id — this form has no id until save()
+// persists one, and save() is itself stubbed until WP06. So there is
+// nothing to `await` here yet: no try/catch, because nothing can throw. Do
+// not reintroduce a catch this function structurally cannot reach — wire a
+// real `await client.mcp.testRecipe(...)` call here in the same commit that
+// gives this form a persisted id to test (WP06), and remove this comment.
 async function testConnection() {
   if (testing.value) return;
   testing.value = true;
   testResult.value = null;
-  testError.value = null;
-  try {
-    // BACKEND GAP: testRecipe RPC not available. Using importClaudeDesktopConfig
-    // dry_run as a proxy to validate the form structure. A proper testRecipe
-    // RPC with MCPTestResult (server name, tool count, stderr tail) is
-    // deferred to WP10.
-    testResult.value =
-      'Test Connection: backend testRecipe RPC not yet available (WP10). ' +
-      'Form validation passed. Actual server connectivity test will be wired in WP10.';
-  } catch (e) {
-    testError.value = e instanceof Error ? e.message : String(e);
-  } finally {
-    testing.value = false;
-  }
+  testError.value =
+    'Test Connection is unavailable for an unsaved draft: MCP_TestRecipe ' +
+    'requires a persisted recipe id, and saving is not yet implemented.';
+  testing.value = false;
 }
 
 // ── save ───────────────────────────────────────────────────────────────

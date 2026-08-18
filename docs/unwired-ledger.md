@@ -987,6 +987,35 @@ difference is the difference between "urgent" and "housekeeping".
 picks up the next unwired sweep. Re-verify each item's importer graph
 before acting — frontend code churns between sweeps.
 
+### 2026-08-18 · Custom-recipe authoring (A5) is flagged off, dated interim state
+
+`mcp-connector-lifecycle-01PMMC01` WP02 closed the A5 lie (a row Edit button
+and a Custom-recipe tab that both opened a form whose Save unconditionally
+threw) by gating both doors behind one flag —
+`CUSTOM_RECIPE_AUTHORING_ENABLED` in
+`frontend/src/lib/customRecipeAuthoring.ts`, read by both
+`KenazToolsPanel.vue`'s per-row Edit button and
+`AddMCPServerModal.vue`'s Custom tab (same injected
+`CustomRecipeAuthoringKey`, so the two doors cannot drift apart). The flag
+ships **`false`** — there is still no `MCP_SaveCustomRecipe` RPC for the
+form to call.
+
+This is not a permanent default-off per CLAUDE.md's flag rule: it is a
+dated interim state with a named retirement condition.
+
+- **Blocker:** `MCP_SaveCustomRecipe` does not exist. Landing it — view
+  method → `core/rpc/bindings.go` → `harnessClient.ts` wiring, persisting
+  through the already-implemented `recipes.UserStore.Save`
+  (`core/mcp/recipes/user.go:487`) — is `mcp-connector-lifecycle-01PMMC01`
+  WP06, which is conditional on WP01's B10 decision record and was **not**
+  in this dispatch's scope (WP02/WP03/WP04/WP05 only).
+- **Retirement:** flip `CUSTOM_RECIPE_AUTHORING_ENABLED` to `true` (or
+  delete it and the `v-if`s that read it, if the Custom tab is redesigned
+  away instead) in the same commit that lands WP06. See
+  `kitty-specs/mcp-connector-lifecycle-01PMMC01/spec.md` FR-006 / AC-007.
+- **Owner:** whoever picks up WP06 — unassigned as of this entry; escalate
+  to the mission owner if WP06 has not been dispatched by the next sweep.
+
 ---
 
 ## Drained

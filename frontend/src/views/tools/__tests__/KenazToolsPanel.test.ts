@@ -8,6 +8,7 @@ import {
   type HarnessClient,
 } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
+import { CustomRecipeAuthoringKey } from '@/lib/customRecipeAuthoring';
 import type {
   Recipe,
   RecipeListing,
@@ -147,10 +148,19 @@ const Stub = defineComponent({
   },
 });
 
-async function mountPanel(setup: MountResult) {
+async function mountPanel(
+  setup: MountResult,
+  customRecipeAuthoringEnabled?: boolean,
+) {
+  const provide: Record<symbol, unknown> = {
+    [HarnessClientKey as symbol]: setup.client,
+  };
+  if (customRecipeAuthoringEnabled !== undefined) {
+    provide[CustomRecipeAuthoringKey as symbol] = customRecipeAuthoringEnabled;
+  }
   return mount(KenazToolsPanel, {
     global: {
-      provide: { [HarnessClientKey as symbol]: setup.client },
+      provide,
       plugins: [setup.router],
       stubs: {
         RecipeKeyPromptModal: Stub,
@@ -663,6 +673,75 @@ describe('KenazToolsPanel — recipes section', () => {
     // Opening the modal does not call install — install only fires
     // when the modal commits.
     expect(setup.spies.install).not.toHaveBeenCalled();
+  });
+});
+
+// ── mcp-connector-lifecycle-01PMMC01 WP02 (FR-001, AC-001) ──────────────
+//
+// The per-row Edit button is the second, more prominent door onto
+// CustomRecipeTab's broken save() — hiding the Custom tab in
+// AddMCPServerModal alone is not enough. Both doors read the same
+// CustomRecipeAuthoringKey (see frontend/src/lib/customRecipeAuthoring.ts
+// and AddMCPServerModal.test.ts's mirror of this describe block).
+
+describe('KenazToolsPanel — custom recipe authoring gate (WP02, FR-001)', () => {
+  function oneEnabledRecipe() {
+    return [
+      makeListing(makeRecipe('brave-search'), {
+        enabled: true,
+        keysPresent: true,
+        status: makeStatus('brave-search', {
+          enabled: true,
+          state: 'running',
+          keysPresent: true,
+        }),
+      }),
+    ];
+  }
+
+  // Mutation: revert the `v-if="customRecipeAuthoringEnabled"` on the Edit
+  // button only (leave AddMCPServerModal's tab gated). This assertion must
+  // fail — if it still passes with only the tab gated, the test is
+  // asserting the tab, not the button, which is exactly the blind spot
+  // C-001 / CLAUDE.md's "mounted surface can still be dead" warns about.
+  it('flag OFF (shipped default, no provider): no element matches [data-testid^="recipe-edit-btn-"]', async () => {
+    const setup = makeClient(oneEnabledRecipe());
+    const w = await mountPanel(setup);
+    await flushPromises();
+
+    expect(
+      w.findAll('[data-testid^="recipe-edit-btn-"]').length,
+    ).toBe(0);
+    // The Delete button (a different, ungated door) still renders — proof
+    // this is a targeted gate on Edit, not an accidental hiding of the
+    // whole row-actions block.
+    expect(
+      w.find('[data-testid="recipe-delete-btn-brave-search"]').exists(),
+    ).toBe(true);
+  });
+
+  it('flag ON: the row Edit button renders', async () => {
+    const setup = makeClient(oneEnabledRecipe());
+    const w = await mountPanel(setup, true);
+    await flushPromises();
+
+    expect(
+      w.findAll('[data-testid^="recipe-edit-btn-"]').length,
+    ).toBeGreaterThan(0);
+    expect(
+      w.find('[data-testid="recipe-edit-btn-brave-search"]').exists(),
+    ).toBe(true);
+  });
+
+  it('flag ON: clicking Edit opens AddMCPServerModal on the recipe (the door still functions when the flag is on)', async () => {
+    const setup = makeClient(oneEnabledRecipe());
+    const w = await mountPanel(setup, true);
+    await flushPromises();
+
+    await w.find('[data-testid="recipe-edit-btn-brave-search"]').trigger('click');
+    await flushPromises();
+
+    expect(w.find('[data-testid="add-mcp-modal"]').exists()).toBe(true);
   });
 });
 

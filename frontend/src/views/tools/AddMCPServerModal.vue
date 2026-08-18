@@ -14,10 +14,11 @@
  * The modal uses the same no-radix-vue, fixed-overlay shape as
  * RecipeKeyPromptModal.vue (the existing modal primitive in this project).
  */
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import RegistryTab from './RegistryTab.vue';
 import PasteConfigTab from './PasteConfigTab.vue';
 import CustomRecipeTab from './CustomRecipeTab.vue';
+import { useCustomRecipeAuthoringEnabled } from '@/lib/customRecipeAuthoring';
 import type { Recipe } from '@/lib/types';
 
 type TabId = 'registry' | 'paste' | 'custom';
@@ -41,14 +42,30 @@ const emit = defineEmits<{
   (e: 'installed'): void;
 }>();
 
-// Start on the Custom tab if we're editing a recipe.
-const activeTab = ref<TabId>(props.editRecipe ? 'custom' : 'registry');
+// WP02 stop-gap (mcp-connector-lifecycle-01PMMC01, FR-001): the Custom tab's
+// save() has no backend yet (MCP_SaveCustomRecipe does not exist). Gated
+// behind the same flag KenazToolsPanel reads for its per-row Edit button —
+// see frontend/src/lib/customRecipeAuthoring.ts for the retirement condition
+// (WP06). C-001: one flag, two doors — do not fork this into a second v-if.
+const customRecipeAuthoringEnabled = useCustomRecipeAuthoringEnabled();
 
-const tabs: { id: TabId; label: string }[] = [
-  { id: 'registry', label: 'Registry' },
-  { id: 'paste', label: 'Paste config' },
-  { id: 'custom', label: 'Custom recipe' },
-];
+// Start on the Custom tab if we're editing a recipe — but only when the
+// Custom tab is actually reachable; otherwise editing a recipe would land on
+// a tab bar with no active tab selected.
+const activeTab = ref<TabId>(
+  props.editRecipe && customRecipeAuthoringEnabled ? 'custom' : 'registry',
+);
+
+const tabs = computed<{ id: TabId; label: string }[]>(() => {
+  const base: { id: TabId; label: string }[] = [
+    { id: 'registry', label: 'Registry' },
+    { id: 'paste', label: 'Paste config' },
+  ];
+  if (customRecipeAuthoringEnabled) {
+    base.push({ id: 'custom', label: 'Custom recipe' });
+  }
+  return base;
+});
 
 function close() {
   emit('close');
@@ -145,7 +162,7 @@ function onKeydown(event: KeyboardEvent) {
           @imported="onImported"
         />
         <CustomRecipeTab
-          v-else-if="activeTab === 'custom'"
+          v-else-if="activeTab === 'custom' && customRecipeAuthoringEnabled"
           :initial-recipe="editRecipe"
           :existing-ids="existingIds"
           @saved="onInstalled"

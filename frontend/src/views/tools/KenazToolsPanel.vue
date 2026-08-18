@@ -18,6 +18,7 @@ import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { useToolsRecipes, useShell } from '@/lib/useHarnessAPI';
 import { ChevronDown, ChevronRight, FolderOpen } from '@/shell/icons';
 import { categoryIconFor } from '@/lib/recipeCategories';
+import { useCustomRecipeAuthoringEnabled } from '@/lib/customRecipeAuthoring';
 import RecipeKeyPromptModal from './RecipeKeyPromptModal.vue';
 import AddMCPServerModal from './AddMCPServerModal.vue';
 import HealthPill from './HealthPill.vue';
@@ -31,6 +32,13 @@ import type {
 
 const client = useHarnessClient();
 const router = useRouter();
+
+// WP02 stop-gap (mcp-connector-lifecycle-01PMMC01, FR-001): the per-row Edit
+// button lands on CustomRecipeTab's Custom tab, whose save() has no backend
+// yet. Gated behind the same flag AddMCPServerModal reads for its Custom
+// tab — see frontend/src/lib/customRecipeAuthoring.ts for the retirement
+// condition (WP06).
+const customRecipeAuthoringEnabled = useCustomRecipeAuthoringEnabled();
 
 // ── Memory tool (unchanged) ────────────────────────────────────────────
 const memoryEnabled = ref(false);
@@ -1246,6 +1254,7 @@ watch(
             <!-- Edit + Delete row actions -->
             <div class="mt-2 flex items-center gap-2">
               <button
+                v-if="customRecipeAuthoringEnabled"
                 type="button"
                 class="rounded-sm border border-border-muted px-2 py-0.5 font-ui text-[10px] uppercase tracking-[0.14em] text-ink-dim hover:text-ink hover:bg-surface-2"
                 :data-testid="`recipe-edit-btn-${listing.recipe.id}`"
