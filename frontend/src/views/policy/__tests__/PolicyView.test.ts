@@ -10,7 +10,7 @@ import { mount, flushPromises } from '@vue/test-utils';
 import PolicyView from '../PolicyView.vue';
 import type { HarnessClient, CedarPolicyClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
-import type { PolicyFile, PolicyFileDetail, ParseResult, AppInfo } from '@/lib/types';
+import type { PolicyFile, PolicyFileDetail, ParseResult, AppInfo, PolicyDecision } from '@/lib/types';
 
 // ── helpers ────────────────────────────────────────────────────────────
 
@@ -273,6 +273,141 @@ describe('PolicyView (cedar-policy-editor-ui-01KQ8TD6 WP02)', () => {
       const { wrapper } = await mountView(undefined, { policyEditorEnabled: false });
       expect(wrapper.find('[data-testid="policy-editor-disabled"]').exists()).toBe(true);
       expect(wrapper.find('[data-testid="policy-file-list"]').exists()).toBe(false);
+    });
+  });
+
+  // ── decisions panel (consent-surfaces-truth-01PMTR01 WP06) ───────────
+  //
+  // Reachability note: PolicyView IS the routed page (main.ts maps
+  // /policy -> PolicyView.vue, and SettingsTabs already links to it) —
+  // there is no separate parent that must bind a prop for this panel to
+  // appear, unlike the TelemetryOnboardingModal shape blind spot #1
+  // warns about. Mounting PolicyView directly here is mounting the same
+  // component the router mounts; what these tests must not do is fake
+  // reachability by asserting against some OTHER, unmounted component.
+
+  function makeDecision(overrides: Partial<PolicyDecision> = {}): PolicyDecision {
+    return {
+      outcome: 'deny',
+      action: 'memory_write',
+      principal: 'User::"local"',
+      resource: 'Memory::"global"',
+      matched_policy: 'zz_forbid.cedar#0#0',
+      reason: 'forbid policy matched',
+      evaluated_at: '2026-08-18T10:00:00Z',
+      ...overrides,
+    };
+  }
+
+  describe('decisions panel', () => {
+    it('does not fetch decisions until the tab is opened (pull-based, no push)', async () => {
+      const { policyClient } = await mountView();
+      expect(policyClient.recentDecisions).not.toHaveBeenCalled();
+    });
+
+    it('fetches and renders decisions when the Decisions tab is opened', async () => {
+      const decisions = [
+        makeDecision({ outcome: 'deny', action: 'memory_write' }),
+        makeDecision({ outcome: 'allow', action: 'workflow.save', matched_policy: undefined }),
+      ];
+      const { wrapper, policyClient } = await mountView({
+        recentDecisions: vi.fn().mockResolvedValue(decisions),
+      });
+
+      await wrapper.find('[data-testid="policy-tab-decisions"]').trigger('click');
+      await flushPromises();
+
+      expect(policyClient.recentDecisions).toHaveBeenCalledWith(100);
+      const list = wrapper.find('[data-testid="policy-decision-list"]');
+      expect(list.exists()).toBe(true);
+      expect(list.text()).toContain('memory_write');
+      expect(list.text()).toContain('workflow.save');
+      // Assert the OUTCOME renders as the word, not a raw enum number —
+      // this is the exact defect found while wiring this panel: Outcome
+      // had no MarshalJSON, so RecentDecisions crossed the RPC boundary
+      // as a bare 0/1/2 and every string-typed frontend consumer (this
+      // one is the first) would have silently rendered digits instead
+      // of "deny"/"allow".
+      expect(list.text()).toContain('deny');
+      expect(list.text()).toContain('allow');
+      // The outcome PILL specifically must render the word, not the raw
+      // enum ordinal it would be without Outcome.MarshalJSON.
+      const outcomePills = wrapper.findAll('.policy-view__outcome');
+      expect(outcomePills.length).toBe(2);
+      for (const pill of outcomePills) {
+        expect(pill.text().trim()).toMatch(/^(allow|deny|not_applicable|unknown)$/);
+      }
+    });
+
+    it('renders a deny row with the deny outcome class so a denial is visually distinct', async () => {
+      const { wrapper } = await mountView({
+        recentDecisions: vi.fn().mockResolvedValue([makeDecision({ outcome: 'deny' })]),
+      });
+      await wrapper.find('[data-testid="policy-tab-decisions"]').trigger('click');
+      await flushPromises();
+      const row = wrapper.find('[data-testid="policy-decision-row-0"]');
+      expect(row.find('.policy-view__outcome--deny').exists()).toBe(true);
+    });
+
+    it('shows the deciding policy and reason for a denial (FR-007: a denial says why)', async () => {
+      const { wrapper } = await mountView({
+        recentDecisions: vi.fn().mockResolvedValue([
+          makeDecision({
+            outcome: 'deny',
+            action: 'bash.run',
+            matched_policy: 'zz_forbid_bash.cedar#0#0',
+            reason: 'forbid policy matched',
+          }),
+        ]),
+      });
+      await wrapper.find('[data-testid="policy-tab-decisions"]').trigger('click');
+      await flushPromises();
+      const row = wrapper.find('[data-testid="policy-decision-row-0"]');
+      expect(row.text()).toContain('zz_forbid_bash.cedar#0#0');
+      expect(row.text()).toContain('forbid policy matched');
+    });
+
+    it('shows an empty state when there are no decisions yet', async () => {
+      const { wrapper } = await mountView({ recentDecisions: vi.fn().mockResolvedValue([]) });
+      await wrapper.find('[data-testid="policy-tab-decisions"]').trigger('click');
+      await flushPromises();
+      expect(wrapper.find('[data-testid="policy-decisions-empty"]').exists()).toBe(true);
+    });
+
+    it('surfaces a fetch error without crashing', async () => {
+      const { wrapper } = await mountView({
+        recentDecisions: vi.fn().mockRejectedValue(new Error('boom')),
+      });
+      await wrapper.find('[data-testid="policy-tab-decisions"]').trigger('click');
+      await flushPromises();
+      expect(wrapper.text()).toContain('boom');
+    });
+
+    it('Refresh re-fetches on demand (pull, not push)', async () => {
+      const { wrapper, policyClient } = await mountView({
+        recentDecisions: vi.fn().mockResolvedValue([]),
+      });
+      await wrapper.find('[data-testid="policy-tab-decisions"]').trigger('click');
+      await flushPromises();
+      expect(policyClient.recentDecisions).toHaveBeenCalledTimes(1);
+
+      await wrapper.find('[data-testid="policy-decisions-refresh"]').trigger('click');
+      await flushPromises();
+      expect(policyClient.recentDecisions).toHaveBeenCalledTimes(2);
+    });
+
+    it('switching back to Files hides the decisions panel and shows the editor layout', async () => {
+      const { wrapper } = await mountView({
+        recentDecisions: vi.fn().mockResolvedValue([makeDecision()]),
+      });
+      await wrapper.find('[data-testid="policy-tab-decisions"]').trigger('click');
+      await flushPromises();
+      expect(wrapper.find('[data-testid="policy-decisions-panel"]').exists()).toBe(true);
+
+      await wrapper.find('[data-testid="policy-tab-editor"]').trigger('click');
+      await flushPromises();
+      expect(wrapper.find('[data-testid="policy-decisions-panel"]').exists()).toBe(false);
+      expect(wrapper.find('[data-testid="policy-file-list"]').exists()).toBe(true);
     });
   });
 });
