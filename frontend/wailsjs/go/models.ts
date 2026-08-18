@@ -4004,6 +4004,32 @@ export namespace mcp {
 		}
 	}
 	
+	export class SaveCustomRecipeRequest {
+	    id: string;
+	    display_name: string;
+	    description: string;
+	    transport?: string;
+	    command?: string[];
+	    url?: string;
+	    headers_template?: Record<string, string>;
+	    post_url?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SaveCustomRecipeRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.display_name = source["display_name"];
+	        this.description = source["description"];
+	        this.transport = source["transport"];
+	        this.command = source["command"];
+	        this.url = source["url"];
+	        this.headers_template = source["headers_template"];
+	        this.post_url = source["post_url"];
+	    }
+	}
 	export class Server {
 	    id: string;
 	    name: string;

@@ -394,6 +394,28 @@ export interface MCPImportWrotePath {
   json_path: string;
 }
 
+// ── MCP custom-recipe authoring (mission mcp-connector-lifecycle-01PMMC01,
+// WP06) ──────────────────────────────────────────────────────────────
+//
+// Wire shape for `MCP_SaveCustomRecipe`. Field names follow the Go JSON
+// tags (snake_case) verbatim — mirrors mcp.SaveCustomRecipeRequest.
+// Deliberately NOT a reuse of `Recipe` (the Tools-list wire shape): that
+// type has no command/url/transport fields, since the Tools list never
+// needed to round-trip them.
+
+export interface MCPSaveCustomRecipeRequest {
+  id: string;
+  display_name: string;
+  description?: string;
+  /** "stdio" | "http" | "sse". Empty/omitted defaults to "stdio". */
+  transport?: string;
+  /** Full argv for a stdio recipe (binary + args). */
+  command?: string[];
+  url?: string;
+  headers_template?: Record<string, string>;
+  post_url?: string;
+}
+
 export interface MCPImportResponse {
   report: MCPTranslationReport;
   wrote_paths?: MCPImportWrotePath[];

@@ -1039,34 +1039,27 @@ would front-run the attach mission's own design of what scope the dial
 applies at (global vs. per-project) — see spec §6 option A cost item 5,
 which already scopes this to the attach execution.
 
-### 2026-08-18 · Custom-recipe authoring (A5) is flagged off, dated interim state
+### 2026-08-18 · Custom-recipe authoring (A5) flagged off, then CLOSED same day by WP06
 
 `mcp-connector-lifecycle-01PMMC01` WP02 closed the A5 lie (a row Edit button
 and a Custom-recipe tab that both opened a form whose Save unconditionally
-threw) by gating both doors behind one flag —
-`CUSTOM_RECIPE_AUTHORING_ENABLED` in
-`frontend/src/lib/customRecipeAuthoring.ts`, read by both
-`KenazToolsPanel.vue`'s per-row Edit button and
-`AddMCPServerModal.vue`'s Custom tab (same injected
-`CustomRecipeAuthoringKey`, so the two doors cannot drift apart). The flag
-ships **`false`** — there is still no `MCP_SaveCustomRecipe` RPC for the
-form to call.
+threw) by gating both doors behind one interim flag,
+`CUSTOM_RECIPE_AUTHORING_ENABLED` (`frontend/src/lib/customRecipeAuthoring.ts`),
+shipped `false` with a named retirement condition: land `MCP_SaveCustomRecipe`
+and retire the flag in the same commit.
 
-This is not a permanent default-off per CLAUDE.md's flag rule: it is a
-dated interim state with a named retirement condition.
-
-- **Blocker:** `MCP_SaveCustomRecipe` does not exist. Landing it — view
-  method → `core/rpc/bindings.go` → `harnessClient.ts` wiring, persisting
-  through the already-implemented `recipes.UserStore.Save`
-  (`core/mcp/recipes/user.go:487`) — is `mcp-connector-lifecycle-01PMMC01`
-  WP06, which is conditional on WP01's B10 decision record and was **not**
-  in this dispatch's scope (WP02/WP03/WP04/WP05 only).
-- **Retirement:** flip `CUSTOM_RECIPE_AUTHORING_ENABLED` to `true` (or
-  delete it and the `v-if`s that read it, if the Custom tab is redesigned
-  away instead) in the same commit that lands WP06. See
-  `kitty-specs/mcp-connector-lifecycle-01PMMC01/spec.md` FR-006 / AC-007.
-- **Owner:** whoever picks up WP06 — unassigned as of this entry; escalate
-  to the mission owner if WP06 has not been dispatched by the next sweep.
+**CLOSED 2026-08-18, same mission, WP06.** The owner unblocked WP06
+mid-dispatch (originally conditional on the B10 decision, which landed via
+WP01 the same day). `MCP_SaveCustomRecipe` is live end-to-end (view method
+`core/rpc/views/mcp/custom_recipe.go` → `core/rpc/bindings.go` →
+`harnessClient.ts` → `CustomRecipeTab.vue`'s `save()`), persisting through
+the already-implemented `recipes.UserStore.Save`. The flag was **deleted
+outright** (`frontend/src/lib/customRecipeAuthoring.ts` removed, both
+`v-if`s reverted to unconditional) rather than left flipped to `true` —
+per the flag's own retirement note, "a flag left permanently true is a new
+dead knob." `KenazToolsPanel.vue`'s row Edit button and
+`AddMCPServerModal.vue`'s Custom tab are unconditionally reachable again,
+now backed by a real save path.
 
 ### 2026-08-18 · `recipes.UserStore.StartWatch` deleted — a live substitute made it redundant
 

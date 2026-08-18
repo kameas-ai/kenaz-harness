@@ -5,6 +5,7 @@ import (
 	"context"
 
 	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 )
 
 // Server is reference-only metadata about a configured MCP server.
@@ -59,4 +60,10 @@ type MCPAPI interface {
 	// subscription is torn down via StopStream with the returned id.
 	// (mcp-server-health-ui WP02)
 	SubscribeHealthChanges(ctx context.Context) (subscriptionID string, err error)
+	// SaveCustomRecipe persists a user-authored recipe (the Custom tab in
+	// AddMCPServerModal) through the configured RecipeSaver
+	// (mcp-connector-lifecycle-01PMMC01 WP06). Returns the saved Recipe
+	// (Source stamped "user") or ErrRecipeSaverNotConfigured when no
+	// saver is wired.
+	SaveCustomRecipe(ctx context.Context, req SaveCustomRecipeRequest) (recipes.Recipe, error)
 }

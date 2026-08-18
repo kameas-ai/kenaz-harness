@@ -730,6 +730,10 @@ export function MCP_ListServers() {
   return window['go']['rpc']['Bindings']['MCP_ListServers']();
 }
 
+export function MCP_SaveCustomRecipe(arg1) {
+  return window['go']['rpc']['Bindings']['MCP_SaveCustomRecipe'](arg1);
+}
+
 export function MCP_StartStream(arg1) {
   return window['go']['rpc']['Bindings']['MCP_StartStream'](arg1);
 }

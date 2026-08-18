@@ -9,7 +9,6 @@ import {
   type HarnessClient,
 } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
-import { CustomRecipeAuthoringKey } from '@/lib/customRecipeAuthoring';
 import type {
   Recipe,
   RecipeListing,
@@ -61,25 +60,12 @@ function makeListing(recipe: Recipe, overrides: Partial<RecipeListing> = {}): Re
   };
 }
 
-// The existing "tabs" suite below exercises the Custom tab's reachability —
-// real coverage for the day WP06 flips CUSTOM_RECIPE_AUTHORING_ENABLED to
-// `true`. It mounts with the flag explicitly ON via the same injection key
-// KenazToolsPanel reads (CustomRecipeAuthoringKey), rather than relying on
-// the module's off-by-default production value. The WP02 gate itself
-// (flag OFF, the shipped default) has its own describe block below.
-function mountModal(
-  props: Record<string, unknown>,
-  client?: Partial<HarnessClient>,
-  customRecipeAuthoringEnabled = true,
-) {
+function mountModal(props: Record<string, unknown>, client?: Partial<HarnessClient>) {
   const fakeClient = createFakeHarnessClient(client);
   return mount(AddMCPServerModal, {
     props: { open: true, ...props },
     global: {
-      provide: {
-        [HarnessClientKey as symbol]: fakeClient,
-        [CustomRecipeAuthoringKey as symbol]: customRecipeAuthoringEnabled,
-      },
+      provide: { [HarnessClientKey as symbol]: fakeClient },
     },
   });
 }
@@ -173,64 +159,6 @@ describe('AddMCPServerModal — tabs', () => {
       global: { provide: { [HarnessClientKey as symbol]: fakeClient } },
     });
     expect(w.find('[data-testid="add-mcp-modal"]').exists()).toBe(false);
-  });
-});
-
-// ── AddMCPServerModal — custom recipe authoring gate (WP02, FR-001) ────
-//
-// AC-001: with the flag off, no `custom` tab renders at all — not just
-// "not the active tab". C-001: this is the same CustomRecipeAuthoringKey
-// KenazToolsPanel.test.ts flips for the row Edit button; one flag, two
-// doors.
-
-describe('AddMCPServerModal — custom recipe authoring gate (WP02, FR-001)', () => {
-  it('flag OFF (shipped default, no provider): no custom tab button renders, and editRecipe lands on Registry', async () => {
-    const fakeClient = createFakeHarnessClient();
-    const w = mount(AddMCPServerModal, {
-      props: { open: true, editRecipe: makeRecipe('my-recipe') },
-      global: {
-        // No CustomRecipeAuthoringKey provided — this is the real production
-        // shape (main.ts never provides it), which resolves to the module's
-        // CUSTOM_RECIPE_AUTHORING_ENABLED default (false).
-        provide: { [HarnessClientKey as symbol]: fakeClient },
-      },
-    });
-    await flushPromises();
-
-    expect(w.find('[data-testid="add-mcp-tab-custom"]').exists()).toBe(false);
-    expect(w.find('[data-testid="custom-recipe-tab"]').exists()).toBe(false);
-    // editRecipe no longer forces a landing on a tab that does not exist.
-    expect(w.find('[data-testid="registry-tab"]').exists()).toBe(true);
-  });
-
-  it('flag ON: the custom tab button renders and editRecipe lands on it', async () => {
-    const w = mountModal({ editRecipe: makeRecipe('my-recipe') }, undefined, true);
-    await flushPromises();
-
-    expect(w.find('[data-testid="add-mcp-tab-custom"]').exists()).toBe(true);
-    expect(w.find('[data-testid="custom-recipe-tab"]').exists()).toBe(true);
-  });
-
-  // Mutation: restore `props.editRecipe ? 'custom' : 'registry'` as the
-  // activeTab initializer (i.e. drop the `&& customRecipeAuthoringEnabled`
-  // clause). This assertion must fail, because editRecipe would then set
-  // activeTab to 'custom' while the tab bar (correctly, still gated) omits
-  // the custom button — landing the user on a blank content pane with no
-  // active tab highlighted, which is what C-001 exists to prevent.
-  it('flag OFF with editRecipe: activeTab does not resolve to a tab that is not offered', async () => {
-    const fakeClient = createFakeHarnessClient();
-    const w = mount(AddMCPServerModal, {
-      props: { open: true, editRecipe: makeRecipe('my-recipe') },
-      global: {
-        provide: { [HarnessClientKey as symbol]: fakeClient },
-      },
-    });
-    await flushPromises();
-
-    // Exactly one tab is marked selected, and it is Registry.
-    const registryTabBtn = w.find('[data-testid="add-mcp-tab-registry"]');
-    expect(registryTabBtn.attributes('aria-selected')).toBe('true');
-    expect(w.find('[data-testid="registry-tab"]').exists()).toBe(true);
   });
 });
 
@@ -579,8 +507,38 @@ describe('CustomRecipeTab — form validation', () => {
     expect(w.find('[data-testid="custom-shadow-warning"]').exists()).toBe(false);
   });
 
-  it('Save shows WP10 stub error (backend gap)', async () => {
-    const w = mountCustomTab();
+  it('Save calls client.mcp.saveCustomRecipe with the assembled payload and emits saved', async () => {
+    // Mutation: restore the WP02-era `throw new Error(...)` stub in
+    // save(). This assertion must fail — the throw never reaches
+    // saveCustomRecipe, and the mock's call count stays 0.
+    const saveCustomRecipe = vi.fn(async (req: any) => ({ id: req.id }));
+    const w = mountCustomTab({}, { mcp: { saveCustomRecipe } as any });
+    await w.find('[data-testid="custom-id-input"]').setValue('my-server');
+    await w.find('[data-testid="custom-display-name-input"]').setValue('My Server');
+    await w.find('[data-testid="custom-command-input"]').setValue('npx');
+    await w.find('[data-testid="custom-args-input"]').setValue('-y foo');
+    await flushPromises();
+
+    await w.find('[data-testid="custom-save-btn"]').trigger('click');
+    await flushPromises();
+
+    expect(saveCustomRecipe).toHaveBeenCalledTimes(1);
+    expect(saveCustomRecipe).toHaveBeenCalledWith({
+      id: 'my-server',
+      display_name: 'My Server',
+      description: undefined,
+      transport: 'stdio',
+      command: ['npx', '-y', 'foo'],
+    });
+    expect(w.emitted('saved')).toBeTruthy();
+    expect(w.find('[data-testid="custom-save-error"]').exists()).toBe(false);
+  });
+
+  it('Save surfaces a backend rejection as custom-save-error', async () => {
+    const saveCustomRecipe = vi.fn(async () => {
+      throw new Error('mcp: SaveCustomRecipe: recipe already exists');
+    });
+    const w = mountCustomTab({}, { mcp: { saveCustomRecipe } as any });
     await w.find('[data-testid="custom-id-input"]').setValue('my-server');
     await w.find('[data-testid="custom-display-name-input"]').setValue('My Server');
     await w.find('[data-testid="custom-command-input"]').setValue('npx');
@@ -589,7 +547,10 @@ describe('CustomRecipeTab — form validation', () => {
     await w.find('[data-testid="custom-save-btn"]').trigger('click');
     await flushPromises();
 
-    expect(w.find('[data-testid="custom-save-error"]').text()).toContain('WP10');
+    expect(w.find('[data-testid="custom-save-error"]').text()).toContain(
+      'recipe already exists',
+    );
+    expect(w.emitted('saved')).toBeFalsy();
   });
 
   it('shows http URL field when transport is http', async () => {
@@ -606,11 +567,6 @@ describe('CustomRecipeTab — form validation', () => {
     await sseRadio.setValue(true);
     await w.vm.$nextTick();
     expect(w.find('[data-testid="custom-post-url-input"]').exists()).toBe(true);
-  });
-
-  it('shows WP10 stub notice in the UI', async () => {
-    const w = mountCustomTab();
-    expect(w.find('[data-testid="custom-save-stub-notice"]').exists()).toBe(true);
   });
 
   it('pre-fills form when initialRecipe is provided', async () => {

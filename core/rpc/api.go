@@ -1205,7 +1205,7 @@ func New(c *core.Core, opts ...Option) *API {
 		func() []recipes.Recipe { return recipes.Registry().List() },
 		mcpUserRecipeSource(a.mcpUserStore),
 	)
-	a.mcpAPI = mcp.NewAPI(mcp.WithSubscriber(a.broker), mcp.WithCatalog(mergedCat))
+	a.mcpAPI = mcp.NewAPI(mcp.WithSubscriber(a.broker), mcp.WithCatalog(mergedCat), mcp.WithRecipeSaver(a.mcpUserStore))
 	// MCP clipboard-import surface (mission mcp-server-install-01KQ8TDP,
 	// WP08). Wired only when we have a real Core (= a real DataDir);
 	// rpc.New(nil) test harness leaves it nil and the binding returns

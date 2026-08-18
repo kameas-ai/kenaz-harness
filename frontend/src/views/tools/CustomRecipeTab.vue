@@ -2,28 +2,29 @@
 /**
  * CustomRecipeTab — form-based recipe author for stdio / http / sse transports.
  *
- * BACKEND GAP: `client.mcp.saveCustomRecipe` does not exist yet. The save
- * action is stubbed and always throws. This tab (and the row Edit button
- * that lands on it — see `KenazToolsPanel.vue`) is reachable only when
- * `useCustomRecipeAuthoringEnabled()` (frontend/src/lib/customRecipeAuthoring.ts)
- * is true, which it is not by default; see that module for the retirement
- * condition. When `MCP_SaveCustomRecipe` lands
- * (`mcp-connector-lifecycle-01PMMC01` WP06), wire it here by calling:
+ * save() persists through `MCP_SaveCustomRecipe`
+ * (`mcp-connector-lifecycle-01PMMC01` WP06), which validates the
+ * assembled recipe against the same rules every shipped recipe must
+ * satisfy and writes it to `<DataDir>/mcp/recipes/<id>.yaml` via
+ * `recipes.UserStore.Save`. The saved recipe is visible in the Tools
+ * list in the same process, without a restart (WP03's freshness
+ * contract) — this tab and the row Edit button that lands on it are
+ * reachable unconditionally; the WP02 interim flag that used to gate
+ * both is retired in the same commit as this wiring.
  *
- *   await client.mcp.saveCustomRecipe(buildRecipePayload())
- *
- * and retire the flag in the same commit.
- *
- * CORRECTION: `testRecipe` is not missing — `harnessClient.ts:1612` declares
- * it and live-wires it to `MCP_TestRecipe` (`core/rpc/bindings.go:497`). The
- * real constraint is narrower: `MCP_TestRecipe(recipeID, env, config)` is
- * keyed by a persisted recipe id, so it cannot test an unsaved draft — and
- * this form has no id to give it until `save()` (above) actually persists
- * one. Test Connection is therefore also gated behind the flag until WP06
- * gives it something to call.
+ * Test Connection stays gated on a persisted id: `MCP_TestRecipe`
+ * (`harnessClient.ts:1612` → `core/rpc/bindings.go:497`) is keyed by a
+ * recipe id already on disk, so an unsaved draft has nothing to test
+ * against yet. Save first, then use the row's own Test/Edit affordances
+ * (out of this tab) to verify connectivity — extending this form with a
+ * persist-then-test or inline-spec test path is left to a future WP; the
+ * spec deliberately does not choose between the two.
  */
 import { ref, computed, watch } from 'vue';
-import type { Recipe } from '@/lib/types';
+import { useHarnessClient } from '@/lib/useHarnessAPI';
+import type { Recipe, MCPSaveCustomRecipeRequest } from '@/lib/types';
+
+const client = useHarnessClient();
 
 type Transport = 'stdio' | 'http' | 'sse';
 
@@ -144,6 +145,48 @@ async function testConnection() {
   testing.value = false;
 }
 
+// ── build wire payload ───────────────────────────────────────────────
+// Throws (caught by save()) on malformed headers JSON rather than
+// silently dropping it — a swallowed parse error would save a recipe
+// missing headers the user typed in.
+function buildRecipePayload(): MCPSaveCustomRecipeRequest {
+  const payload: MCPSaveCustomRecipeRequest = {
+    id: id.value.trim(),
+    display_name: displayName.value.trim(),
+    description: description.value.trim() || undefined,
+    transport: transport.value,
+  };
+  if (transport.value === 'stdio') {
+    payload.command = [
+      command.value.trim(),
+      ...args.value.trim().split(/\s+/).filter(Boolean),
+    ];
+    return payload;
+  }
+  payload.url = url.value.trim();
+  const headersRaw = headersTemplate.value.trim();
+  if (headersRaw) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(headersRaw);
+    } catch {
+      throw new Error('Headers must be valid JSON.');
+    }
+    if (
+      !parsed ||
+      typeof parsed !== 'object' ||
+      Array.isArray(parsed)
+    ) {
+      throw new Error('Headers must be a JSON object.');
+    }
+    payload.headers_template = parsed as Record<string, string>;
+  }
+  if (transport.value === 'sse') {
+    payload.post_url = postUrl.value.trim();
+  }
+  return payload;
+}
+
 // ── save ───────────────────────────────────────────────────────────────
 async function save() {
   if (!canSave.value) return;
@@ -151,13 +194,8 @@ async function save() {
   saving.value = true;
   saveError.value = null;
   try {
-    // BACKEND GAP: client.mcp.saveCustomRecipe does not exist yet (WP10).
-    // When WP10 lands, replace this stub with:
-    //   await client.mcp.saveCustomRecipe({ id: id.value, displayName: ..., ... });
-    //   emit('saved');
-    throw new Error(
-      'Custom recipe save is not yet implemented. The backend saveCustomRecipe RPC will land in WP10.',
-    );
+    await client.mcp.saveCustomRecipe(buildRecipePayload());
+    emit('saved');
   } catch (e) {
     saveError.value = e instanceof Error ? e.message : String(e);
   } finally {
@@ -405,17 +443,6 @@ async function save() {
       >
         {{ testError }}
       </div>
-    </div>
-
-    <!-- WP10 coming-soon notice for save -->
-    <div
-      class="rounded-sm border border-border-muted bg-surface-0 px-3 py-2 font-ui text-[11px] text-ink-muted"
-      data-testid="custom-save-stub-notice"
-    >
-      Custom recipe save is coming in WP10. The backend
-      <code class="font-mono">saveCustomRecipe</code> RPC is not yet available.
-      Fill in the form above to preview the configuration; saving will be
-      enabled once WP10 lands.
     </div>
 
     <!-- Save + cancel actions -->
