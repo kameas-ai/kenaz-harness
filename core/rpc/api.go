@@ -6154,15 +6154,26 @@ func newGraphManagerWithDeps(
 	// Agent-graph event log: persist run events to SQLite (migration
 	// 0309) when the storage layer exposes a *sql.DB. Without this
 	// the manager defaults to NewMemoryEventLog and `agent_graph_events`
-	// stays empty across runs — RecentDecisions and the run-trace
-	// replay surfaces would have nothing to show. Best-effort: when
-	// the handle isn't available the manager falls back to memory.
+	// stays empty across runs — the frontend's run-trace replay
+	// (RunView.vue, via Graph_GetRunTrace) would have nothing to show.
+	// Best-effort: when the handle isn't available the manager falls
+	// back to memory.
 	//
 	// Built here (rather than left to Manager's own internal default)
 	// because the kernel we construct below also needs it: the kernel
 	// and the Manager must share one EventLog instance so a compaction
 	// pipeline's compaction_fired events land in the same trace the
-	// frontend's run-trace replay reads from RecentDecisions.
+	// frontend's run-trace replay reads.
+	//
+	// This is UNRELATED to cedar.Engine.RecentDecisions (the policy
+	// audit ring) despite the similar wording an earlier revision of
+	// this comment used — that ring is backed by the Cedar engine's own
+	// DecisionStore (consent-surfaces-truth-01PMTR01 WP05's shared
+	// a.cedarEngine), not by agent_graph_events, and its frontend
+	// consumer is the WP06 denial panel over CedarPolicy_RecentDecisions,
+	// not this run-trace surface. Corrected under WP06 (FR-009): the
+	// prior wording conflated the two and implied RunView.vue reads
+	// "RecentDecisions", which it does not.
 	var agEventLog coreag.EventLog
 	if c != nil {
 		agEventLog = buildAgentGraphEventLog(c)

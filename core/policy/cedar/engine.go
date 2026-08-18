@@ -429,8 +429,16 @@ func (e *Engine) Evaluate(
 }
 
 // PolicyDeniedError is the typed error returned by gate-hook helpers
-// when Evaluate produces a Deny outcome. The frontend pattern-matches
-// on this type so it can render a structured denial notice.
+// when Evaluate produces a Deny outcome. Go callers pattern-match on it
+// via IsPolicyDenied / errors.As (below) — this type never crosses the
+// RPC boundary itself, so "the frontend pattern-matches on this type"
+// was never true; a stale claim corrected under
+// consent-surfaces-truth-01PMTR01 WP06 (FR-009), which also names the
+// component that comment used to cite (<DenialNotice>, deleted by the
+// 2026-08-14 orphan-component sweep). The Decision this error wraps
+// IS separately recorded in the engine's DecisionStore and reaches the
+// frontend through CedarPolicy_RecentDecisions — see the policy-panel
+// denial list (WP06) for the actual render path.
 type PolicyDeniedError struct {
 	// Decision is the full audit record explaining the denial.
 	Decision Decision

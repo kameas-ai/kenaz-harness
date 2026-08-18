@@ -40,6 +40,7 @@ shipped product boundary, not unwired code. Read that doc before flagging
 | I12 | `check-single-move-writer.sh` | *(none — no allowlist by design)* | second writer of transcript-move metadata, or a seam with 0 / >1 production callers — **added 2026-08-14** |
 | I13 | `check-cedar-gate-arguments.sh` | `i13-cedar-gate-arguments.txt` | a `cedar.Gate` argument or view-`Config` field that resolves to an unconditional permit — **added 2026-08-16, empty** |
 | I14 | `check-broker-topic-consumers.sh` | `i14-unconsumed-broker-topics.txt` | A const under `core/**` whose **identifier contains `Topic`** and whose value is a broker topic, with no frontend subscriber, no Go subscriber, and no `passthroughTopics` entry — **added 2026-08-18; one entry (`mcp:progress`)**. Multi-pass (Go + frontend), same discipline as `check-output-ports.sh`. Wired into `pr.yml`. See "Declined gate" below for why this shipped instead of the gate `docs/dead-code-audit-2026-08-16.md` §5 originally asked for, and the allowlist header for why "contains" rather than "starts with" is the whole gate. |
+| I15 | `check-cedar-engine-singleton.sh` | *(none — no allowlist by design)* | more than one Cedar engine construction (`buildCedarGate`/`buildCedarEngineOrNil` call, or a direct `cedar.NewEngine` call) reachable from `rpc.New` — **added 2026-08-18 (consent-surfaces-truth-01PMTR01 WP05)**. I13 checks the *argument* at a call site; it has no vocabulary for *instance count*, which is why thirteen independent engine constructions (nine `buildCedarGate` + four `buildCedarEngineOrNil`) all passed it clean before the WP05 hoist. Wired into `pr.yml`. |
 
 Non-allowlist gates that also protect against unwired code:
 `check-output-ports.sh` (output port with no reader),
@@ -675,6 +676,42 @@ the denial event contract **first**; the component is the cheap half.
 **Owner:** unassigned — needs a mission under `kitty-specs/`. The change
 that deletes this entry is the one that gives `policyAPI` a non-stub
 production assignment.
+
+**2026-08-18 amendment (consent-surfaces-truth-01PMTR01 WP05/WP06) — this
+entry over-scoped the gap.** The paragraph above is still correct about
+`policyAPI` / `policy:event`: neither exists, and this entry's PUSH-based
+scope (a broker topic a denial publishes to, live, the moment it happens)
+is still unwired and still needs the mission described above if that is
+the product's chosen shape.
+
+What the entry did not know: a **separate, already-wired, non-stub PULL
+feed** reaches the client boundary and did not need `policyAPI` at all —
+`CedarPolicy_RecentDecisions` → `cedarpolicy.API.RecentDecisions` →
+`cedar.Engine.RecentDecisions` (backed by the engine's own
+`DecisionStore`), consumed by `harnessClient.ts`'s
+`cedarPolicy.recentDecisions(limit)`. Before WP05 this path was *worse*
+than unwired-but-simple: the cedarpolicy view held a **private**
+`*cedar.Engine` that no gate ever called `Evaluate` on (nine gate sites
+and four engine-consumer sites each built their own independent engine —
+see `check-cedar-engine-singleton.sh`, I15), so `RecentDecisions` was
+structurally always empty regardless of what UI sat on top of it. Mounting
+a panel over it then would have been the exact lie this ledger's rubric
+warns about ("mounting a panel whose Go knob is inert just moves the lie
+from the backend to the UI").
+
+WP05 hoisted every gate site to one shared `*cedar.Engine`, so the ring
+`RecentDecisions` reads is now fed by real `Evaluate` calls from every one
+of those sites. WP06 built the cheapest possible consumer on top of that:
+a pull-based panel (`frontend/src/views/policy/PolicyView.vue`'s
+"Decisions" tab, reachable at the existing `/policy` route) that fetches
+on open and on a manual Refresh — **no push topic, no `policy:event`
+contract, `policyAPI` still returns `errNotWired`.** A denial the user
+just caused shows up the next time they open or refresh the tab; a denial
+that happens with nobody looking is not surfaced proactively. That
+distinction — pull vs. push — is the entire remaining scope of this entry.
+If the product wants live, push-driven denial toasts, that is still the
+mission this entry originally called for; it did not need to gate the
+cheap pull-based win, and should not have been read as blocking it.
 
 ### 2026-08-14 · `LocalRuntimesSection` has a branch it can never render
 
