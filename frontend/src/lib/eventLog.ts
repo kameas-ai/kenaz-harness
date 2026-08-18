@@ -1,22 +1,22 @@
 /**
  * eventLog — client-side error reporter routed through RPC. FR-018.
- * Surfaces from <ErrorBoundary> push captured errors here; downstream
- * mission `event-log-01KQ1A3M` consumes via Reader.
- *
- * Also forwards every report to the backend's Diag_LogClientEvent
- * binding so it lands in ~/.kenaz/harness.log alongside the Go-side
- * stream events. That gives a single chronological trail when
+ * Surfaces from <ErrorBoundary> push captured errors here (verified:
+ * ErrorBoundary.vue:39 calls reportError) and every report forwards to
+ * the backend's Diag_LogClientEvent binding, landing in
+ * ~/.kenaz/harness.log alongside the fourteen logEvent call sites in
+ * lib/useSession.ts and main-served.ts:176,183,193. That backend log is
+ * the canonical, durable artifact — a single chronological trail when
  * debugging the send path end-to-end.
+ *
+ * Before engineer-truth-pass-01PMTP01 WP04 (finding B9a) this module
+ * also kept a 100-entry in-memory ring (`buffer`) with two readers,
+ * recentErrors() and clearErrors() — both write-only in practice: zero
+ * non-test references tree-wide. The docstring here used to claim a
+ * downstream mission ("event-log-01KQ1A3M") consumed the buffer via a
+ * Reader; that mission shipped (kitty-specs/_archive/) and never built
+ * one. Both functions and the buffer were deleted; nothing was reading
+ * them, so there were no tests to delete alongside them.
  */
-
-interface ReportedError {
-  message: string;
-  stack?: string;
-  componentName?: string;
-  ts: string;
-}
-
-const buffer: ReportedError[] = [];
 
 interface DiagBindings {
   Diag_LogClientEvent?: (
@@ -41,19 +41,11 @@ function backendLog(
 
 export function reportError(err: unknown, componentName?: string): void {
   const e = err instanceof Error ? err : new Error(String(err));
-  // Mirror to console for dev visibility; the in-memory buffer is the
-  // canonical artifact that persists across the session.
+  // Mirror to console for dev visibility; ~/.kenaz/harness.log (via
+  // backendLog below) is the canonical artifact that persists across
+  // the session — see the module docstring.
   // eslint-disable-next-line no-console
   console.error('[ErrorBoundary]', componentName ?? '<surface>', e.message, e.stack);
-  const entry: ReportedError = {
-    message: e.message,
-    stack: e.stack,
-    componentName,
-    ts: new Date().toISOString(),
-  };
-  buffer.push(entry);
-  // Cap the buffer so a runaway loop doesn't OOM.
-  if (buffer.length > 100) buffer.shift();
   backendLog('error', 'error_boundary', {
     component: componentName ?? '<surface>',
     message: e.message,
@@ -68,12 +60,4 @@ export function logEvent(
   attrs: Record<string, unknown> = {},
 ): void {
   backendLog(level, message, attrs);
-}
-
-export function recentErrors(): readonly ReportedError[] {
-  return buffer;
-}
-
-export function clearErrors(): void {
-  buffer.length = 0;
 }

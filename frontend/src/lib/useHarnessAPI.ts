@@ -22,10 +22,6 @@ import type {
   ShellStatus,
   AuditEntry,
   AuditFilter,
-  EventStreamEntry,
-  MemoryChunk,
-  MemoryListFilter,
-  MemoryScopeKind,
   RecipeListing,
   RecipeState,
   RecipeStatus,
@@ -290,34 +286,22 @@ export function useProjects(): UseProjectsResult {
   };
 }
 
-/**
- * useChatStream — typed subscription for sessions:event topic.
- */
+// UseStreamResult is the shape every typed live-stream composable in this
+// module returns. useEventLogStream (below) is the real implementation —
+// engineer-truth-pass-01PMTP01 WP04 (finding B7) deleted the other one,
+// useChatStream: a permanent stub (events always [], stop() a no-op) with
+// zero non-test references tree-wide — `git grep -n useChatStream --
+// frontend/src` matched only its own definition. Its doc comment claimed
+// "downstream consumers" that never existed; the real streaming
+// implementation shipped as lib/useSession.ts + lib/useEventStream.ts
+// under different names. Zero test readers — nothing to delete alongside
+// it.
 export interface UseStreamResult<T> {
   events: Ref<readonly T[]>;
   paused: Ref<boolean>;
   pause(): void;
   resume(): void;
   stop(): Promise<void>;
-}
-
-export function useChatStream(_sessionId: Ref<string>): UseStreamResult<EventStreamEntry> {
-  // The full streaming implementation arrives with WP12's useStream
-  // composable + WP11's streamBroker. This stub keeps the shape stable
-  // for downstream consumers.
-  const events = ref<readonly EventStreamEntry[]>([]);
-  const paused = ref(false);
-  return {
-    events,
-    paused,
-    pause: () => {
-      paused.value = true;
-    },
-    resume: () => {
-      paused.value = false;
-    },
-    stop: async () => undefined,
-  };
 }
 
 /**
@@ -403,107 +387,20 @@ export function useEventLogStream(
   };
 }
 
-/**
- * useMemory — reactive long-term-memory list + scope-aware mutations.
- *
- * The composable owns the active scope filter and re-fetches the chunk
- * list whenever it changes. Components that drive the /memory view can
- * consume `chunks` directly; the chat surface uses `remember` /
- * `promoteScope` for one-shot mutations.
- */
-export type MemoryFilterPill = 'all' | MemoryScopeKind;
-
-export interface UseMemoryResult {
-  chunks: Ref<readonly MemoryChunk[]>;
-  loading: Ref<boolean>;
-  error: Ref<string | null>;
-  filter: Ref<MemoryFilterPill>;
-  refresh(): Promise<void>;
-  setFilter(pill: MemoryFilterPill): Promise<void>;
-  remember(
-    sessionID: string,
-    messageID: string,
-    scope?: MemoryScopeKind,
-  ): Promise<string>;
-  promoteScope(
-    chunkID: string,
-    newScopeKind: MemoryScopeKind,
-    newScopeID: string,
-  ): Promise<string>;
-  forget(id: string): Promise<void>;
-}
-
-export function useMemory(): UseMemoryResult {
-  const client = useHarnessClient();
-  const chunks = shallowRef<readonly MemoryChunk[]>([]);
-  const loading = ref(false);
-  const error = ref<string | null>(null);
-  const filter = ref<MemoryFilterPill>('all');
-
-  function buildFilter(pill: MemoryFilterPill): MemoryListFilter {
-    if (pill === 'all') return {};
-    return { scopeKind: pill };
-  }
-
-  async function refresh() {
-    loading.value = true;
-    error.value = null;
-    try {
-      chunks.value = await client.memory.listChunks(buildFilter(filter.value));
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
-      chunks.value = [];
-    } finally {
-      loading.value = false;
-    }
-  }
-
-  async function setFilter(pill: MemoryFilterPill) {
-    if (filter.value === pill) return;
-    filter.value = pill;
-    await refresh();
-  }
-
-  async function remember(
-    sessionID: string,
-    messageID: string,
-    scope?: MemoryScopeKind,
-  ) {
-    const id = await client.memory.rememberMessage(sessionID, messageID, scope);
-    return id;
-  }
-
-  async function promoteScope(
-    chunkID: string,
-    newScopeKind: MemoryScopeKind,
-    newScopeID: string,
-  ) {
-    const id = await client.memory.promoteScope(
-      chunkID,
-      newScopeKind,
-      newScopeID,
-    );
-    await refresh();
-    return id;
-  }
-
-  async function forget(id: string) {
-    await client.memory.forget(id);
-    await refresh();
-  }
-
-  return {
-    chunks,
-    loading,
-    error,
-    filter,
-    refresh,
-    setFilter,
-    remember,
-    promoteScope,
-    forget,
-  };
-}
+// useMemory / UseMemoryResult / MemoryFilterPill were deleted here
+// (engineer-truth-pass-01PMTP01 WP04, finding B8) — a fully-implemented
+// composable (chunks list + remember/promoteScope/forget mutations) with
+// zero consumers. `views/memory/MemoryView.vue` never imported it; it
+// calls `client.memory.*` directly at 13 distinct methods (listChunks,
+// forget, pin, prunePreview, runPruneNow, promoteScope,
+// narrativeFailedCount, narrativeFailedList, retryFailedNarrative,
+// markImportant, getChunkProvenance, lastRetrieval, embeddingProbe) —
+// a strict superset of the 5 useMemory wrapped, and documents calling the
+// client directly as intent. The one method useMemory wrapped that
+// MemoryView doesn't call, rememberMessage, is called directly at
+// views/sessions/SessionsView.vue:1053 — it stays on the client. Live
+// substitute: views/memory/MemoryView.vue. Zero test readers — nothing
+// to delete alongside it.
 
 // ── MCP recipes (Tools panel) ─────────────────────────────────────────
 
