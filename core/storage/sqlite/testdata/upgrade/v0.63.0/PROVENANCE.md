@@ -67,8 +67,9 @@ Structural comparison performed (schema only, no row content):
 | `session_messages` columns | `id, session_id, sequence, role, content, tool_calls, created_at, content_json, compacted_into_id, compacted_at, archived_at, prompt_tokens, completion_tokens, cost_usd, cost_source, streaming_failed_at, streaming_failure_kind, streaming_recoverable, continuation_of, knobs_override` — **no `kind`, `move_index`, `turn_span_id`, `model_tool_args`** | identical column set (`PRAGMA table_info` on the rewound schema) | ✅ |
 | `sessions` columns | no `move_history_mode` | no `move_history_mode` | ✅ |
 | `artifacts.source` CHECK | includes `'model_output'` (0327 applied) | includes `'model_output'` (0327 applied — genesis is built from HEAD, which registers 0327) | ✅ |
-| `artifacts.scope_kind` CHECK | **no `'global'`** (0332 not applied) | no `'global'` | ✅ |
-| Table count | 40 | 40 (post-rewind; matches the backup's table count exactly) | ✅ |
+| `artifacts.scope_kind` CHECK | **no `'global'`** (0332 not applied) | **HAS `'global'`** | ❌ — see *Known incompleteness* below |
+| Table set | 39 tables | 35 in the dump + the 4 `messages_fts_*` shadow tables the dump excludes by design (`upgradesnap.isFTSShadow`) = 39; the NAMES match exactly, `comm -3` empty both ways | ✅ |
+| FTS triggers (`messages_fts_ai/au/ad`) | pre-0335 bodies (no `role <> 'tool'` guard) | **post-0335 bodies** (`WHEN new.role <> 'tool'`) | ❌ — see *Known incompleteness* below |
 
 The comparison was read-only, against a local copy
 (`/private/tmp/.../scratchpad/backupcheck/data.db`, deleted after use), via
@@ -77,9 +78,31 @@ The comparison was read-only, against a local copy
 queries. No write ever touched `~/.kenaz/harness/dev/` or the backup file
 itself.
 
+## Known incompleteness of the rewind (recorded at review, not fixed)
+
+**The rewind is column-and-ledger only.** `scripts/ci/upgrade-snapshot/generator_main.go`
+`rewindStatements` deletes the `sessions` ledger rows `>= 332` and drops the five columns
+migrations 0333/0334 add. It does **not** reverse the two migrations in that range whose
+effect is not a column:
+
+| Migration | Its effect | Reversed by the rewind? | Consequence |
+|---|---|---|---|
+| `sessions/0332-artifacts-global-scope` | rebuilds `artifacts`, adding `'global'` to the `scope_kind` CHECK | **no** | the snapshot starts with the POST-0332 CHECK while its ledger says 0332 is unapplied. 0332 still runs at `Open` and its create/copy/**drop**/rename still fires against the two populated `artifact_versions` rows — so the cascade canary IS exercised — but the *starting* constraint text is not the one a real v0.63.0 install had. |
+| `sessions/0335-search-fts-exclude-tool-rows` | replaces the three `messages_fts_*` triggers with `role <> 'tool'`-guarded versions and purges existing `role='tool'` rows from the FTS index | **no** | the snapshot carries the post-0335 triggers, so `Materialize` rebuilds the FTS index through them and no `role='tool'` row ever enters it. 0335's `DROP TRIGGER`/`CREATE TRIGGER` pair is then a net no-op and **its purge has nothing to purge**. Compounding this, `seed.sql` contains no `role='tool'` message at all, and `messages_fts` is a virtual table which `upgradesnap.ListDataTables` excludes from `SnapshotAll` — so no digest, row-count or idempotence assertion in `upgrade_path_test.go` observes the FTS index either way. |
+
+Neither gap weakens the mission's headline falsifiability criterion, which turns on 0333's and
+0334's columns and was performed and observed. Both were verified against the backup above and
+are recorded here rather than silently left in the ✅ column.
+
+**If you extend the chain**: reversing 0332 in the rewind needs the same
+scratch-table save/restore discipline 0332 and 0327 use, or the rewind itself will
+cascade-delete `artifact_versions` (spec §1.3) and quietly destroy the canary this fixture
+exists to carry.
+
 **Verdict**: this is not a hand-built belief about what a broken install
-looked like. It reproduces a real one's structure exactly, confirmed against
-ground truth. The only thing NOT carried into the committed snapshot is the
+looked like. Its ledger and its `session_messages` / `sessions` column sets
+reproduce a real one exactly, confirmed against ground truth; the two
+non-column differences are enumerated above rather than claimed away. The only thing NOT carried into the committed snapshot is the
 real install's actual row content (per spec §3's hard rule) — the seed
 corpus (`seed.sql`) is synthetic and fills that role instead.
 

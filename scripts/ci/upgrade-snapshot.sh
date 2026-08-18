@@ -62,8 +62,13 @@ if [[ -z "$TAG" ]]; then
 fi
 
 OUT_DIR="$TESTDATA_DIR/$TAG"
-mkdir -p "$OUT_DIR"
 OUT_FILE="$OUT_DIR/dump.sql"
+# NOTE: OUT_DIR is created only once the request is known to be
+# serviceable. Creating it up front left a stray, empty
+# testdata/upgrade/<tag>/ behind on every failure — and an empty
+# directory there is not inert: TestUpgradePath enumerates
+# testdata/upgrade/* and would have picked up a bogus tag the moment
+# anything wrote a dump.sql into it.
 
 build_generator() {
   local src_dir="$1" out_bin="$2"
@@ -79,6 +84,7 @@ if [[ "$TAG" == "$GENESIS_TAG" ]]; then
   WORK="$(mktemp -d)"
   trap 'rm -rf "$WORK"' EXIT
   build_generator "$REPO_ROOT" "$WORK/gen"
+  mkdir -p "$OUT_DIR"
   "$WORK/gen" -mode=genesis -seed "$SEED_FILE" -out "$OUT_FILE"
   echo "[upgrade-snapshot] wrote $OUT_FILE"
   exit 0
@@ -86,6 +92,14 @@ fi
 
 # Replay mode: find the immediately-previous committed snapshot by
 # semver order among the directories already under testdata/upgrade/.
+# TAG=HEAD means "the current tree, which is by definition newer than
+# every committed snapshot", so every candidate qualifies and the
+# highest one wins. This case MUST be handled separately: `sort -V`
+# orders the literal string "HEAD" BELOW "v0.63.1" (H < v), so the
+# generic comparison below rejected every candidate and left PREV_TAG
+# empty — which made the documented `upgrade-snapshot.sh HEAD` preview
+# path (docs/upgrade-snapshots.md) unreachable, failing with "no
+# committed snapshot older than HEAD". Found in review, 2026-08-18.
 PREV_TAG=""
 for d in "$TESTDATA_DIR"/v*/; do
   [[ -d "$d" ]] || continue
@@ -94,12 +108,15 @@ for d in "$TESTDATA_DIR"/v*/; do
   if [[ "$name" == "$TAG" ]]; then
     continue
   fi
-  # Numeric semver compare via sort -V; keep the highest tag that is
-  # still less than TAG.
-  if [[ "$(printf '%s\n%s\n' "$name" "$TAG" | sort -V | tail -1)" == "$TAG" ]]; then
-    if [[ -z "$PREV_TAG" ]] || [[ "$(printf '%s\n%s\n' "$PREV_TAG" "$name" | sort -V | tail -1)" == "$name" ]]; then
-      PREV_TAG="$name"
+  if [[ "$TAG" != "HEAD" ]]; then
+    # Numeric semver compare via sort -V; keep the highest tag that is
+    # still less than TAG.
+    if [[ "$(printf '%s\n%s\n' "$name" "$TAG" | sort -V | tail -1)" != "$TAG" ]]; then
+      continue
     fi
+  fi
+  if [[ -z "$PREV_TAG" ]] || [[ "$(printf '%s\n%s\n' "$PREV_TAG" "$name" | sort -V | tail -1)" == "$name" ]]; then
+    PREV_TAG="$name"
   fi
 done
 
@@ -115,6 +132,7 @@ if [[ "$TAG" == "HEAD" ]]; then
   WORK="$(mktemp -d)"
   trap 'rm -rf "$WORK"' EXIT
   build_generator "$REPO_ROOT" "$WORK/gen"
+  mkdir -p "$OUT_DIR"
   "$WORK/gen" -mode=replay -prev "$PREV_DUMP" -out "$OUT_FILE"
   echo "[upgrade-snapshot] wrote $OUT_FILE (HEAD, not a committed tag)"
   exit 0
@@ -132,6 +150,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
+mkdir -p "$OUT_DIR"
 git -C "$REPO_ROOT" worktree add --detach "$WORKTREE" "$TAG" >&2
 mkdir -p "$WORKTREE/frontend/dist"
 touch "$WORKTREE/frontend/dist/.gitkeep"

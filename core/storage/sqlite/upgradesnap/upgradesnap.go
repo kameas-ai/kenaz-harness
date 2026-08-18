@@ -492,6 +492,16 @@ func SortedSnapshotTags(tags []string) []string {
 	return out
 }
 
+// IsSnapshotTag reports whether name is a well-formed "vX.Y.Z" snapshot
+// directory name. scripts/ci/upgrade-snapshot.sh also accepts the literal
+// "HEAD" to preview an unreleased tree, and that output is a scratch
+// artefact — the table-driven upgrade-path test uses this to refuse to
+// treat a leftover preview directory as a real chain entry.
+func IsSnapshotTag(name string) bool {
+	_, ok := parseSemver(name)
+	return ok
+}
+
 // semverLess compares "vX.Y.Z" tags numerically. Falls back to a
 // lexical compare for anything that doesn't parse (defensive; every
 // directory under testdata/upgrade/ is expected to be a plain vX.Y.Z
