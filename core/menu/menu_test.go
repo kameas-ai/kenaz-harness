@@ -301,3 +301,67 @@ func TestBuild_NoFleetItems(t *testing.T) {
 	}
 	checkItems(m.Items)
 }
+
+// helpUpdateItem walks a built menu and returns the Help submenu's
+// update item (the one whose label UpdateMenuLabel produced), or nil.
+func helpUpdateItem(m *wailsmenu.Menu, state MenuState) *wailsmenu.MenuItem {
+	want := UpdateMenuLabel(state.UpdateState)
+	for _, top := range m.Items {
+		if top.Label != "Help" || top.SubMenu == nil {
+			continue
+		}
+		for _, hi := range top.SubMenu.Items {
+			if hi.Label == want {
+				return hi
+			}
+		}
+	}
+	return nil
+}
+
+// TestBuild_HelpUpdateItem_ClickDispatchesOnItsOwnLabel is the FR-008
+// pin AT THE BINDING SITE. handlers_test.go exercises onUpdateAction
+// directly, which leaves menu.go's one-line `sub.AddText(updateLabel,
+// nil, h.onUpdateAction(state.UpdateState))` completely untested — and
+// tasks.md's named WP05 mutation ("restore the unconditional CheckNow")
+// is most naturally applied exactly there. Reverting that argument to
+// `h.onCheckUpdates` reinstates the original bug with every
+// handlers_test.go assertion still green; this test is what fails.
+//
+// It also pins the property the label makes a promise about: the
+// callback bound to an item is derived from the SAME state snapshot the
+// label was, so a stale menu dispatches the stale label's action rather
+// than a different, possibly destructive one.
+func TestBuild_HelpUpdateItem_ClickDispatchesOnItsOwnLabel(t *testing.T) {
+	cases := []struct {
+		state                              UpdateMenuState
+		wantCheck, wantDownload, wantApply int
+	}{
+		{UpdateIdle, 1, 0, 0},
+		{UpdateAvailable, 0, 1, 0},
+		{UpdateDownloading, 0, 0, 0},
+		{UpdateStaged, 0, 0, 1},
+		{UpdateFailed, 0, 1, 0},
+	}
+	for _, tc := range cases {
+		t.Run(UpdateMenuLabel(tc.state), func(t *testing.T) {
+			u := &fakeUpdateController{}
+			h := NewHandlers(nil, u, nil)
+			h.SetConfirmDialog(stubConfirm{answer: true})
+			state := MenuState{ThemeMode: ThemeSystem, UpdateState: tc.state}
+			item := helpUpdateItem(Build(state, h), state)
+			if item == nil {
+				t.Fatalf("no Help item labelled %q", UpdateMenuLabel(tc.state))
+			}
+			if item.Click == nil {
+				t.Fatal("Help update item has no Click callback")
+			}
+			item.Click(nil)
+			check, download, apply := u.snapshot()
+			if check != tc.wantCheck || download != tc.wantDownload || apply != tc.wantApply {
+				t.Errorf("%q: checkNow=%d startDownload=%d apply=%d, want %d/%d/%d",
+					UpdateMenuLabel(tc.state), check, download, apply, tc.wantCheck, tc.wantDownload, tc.wantApply)
+			}
+		})
+	}
+}
