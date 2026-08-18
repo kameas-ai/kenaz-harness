@@ -77,6 +77,20 @@ core/policy/lower/schema
 core/search
 core/secrets/lint
 core/storage/internal/events
+core/storage/sqlite/upgradesnap
+#     Added 2026-08-18 (upgrade-path-coverage-01PMUG01 WP01, review
+#     follow-up). Test-support library for the per-tag upgrade snapshot
+#     chain: Dump/Materialize/SnapshotAll are called from
+#     core/storage/sqlite/upgrade_path_test.go and from the package's own
+#     tests. It is NOT dead, and it is deliberately not imported by
+#     scripts/ci/upgrade-snapshot/generator_main.go even though that
+#     generator does the same normalisation: the generator is COPIED INTO
+#     A WORKTREE AT AN OLD TAG and built there (scripts/ci/upgrade-
+#     snapshot.sh), where this package does not exist, so it must stay
+#     self-contained. The duplication is the price of replaying tags that
+#     predate the mechanism, and upgradesnap_test.go is the tested copy.
+#     Owner: release owner. Clears if the chain is ever rebootstrapped
+#     from a tag that already contains the generator.
 core/system/resources
 core/tools/monitor
 core/trust/backends/software
