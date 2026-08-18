@@ -351,3 +351,106 @@ describe('UpdatesPanel — WP03 download-event accelerator wiring', () => {
     expect(installLatest).toHaveBeenCalledWith('v0.3.4');
   });
 });
+
+/**
+ * WP04 — the progress surface (self-update-repair-01PMUP01, the A8 user
+ * sentence). "A topic has a subscriber" is not the acceptance bar
+ * (CLAUDE.md blind spot #1) — these assert the RENDERED value changes,
+ * not merely that the progressbar element exists.
+ */
+describe('UpdatesPanel — WP04 download progress surface', () => {
+  it('renders two distinct, increasing aria-valuenow values as progress advances', async () => {
+    const rt = installFakeRuntime();
+    try {
+      const { wrapper } = mountPanel({
+        status: {
+          available: true,
+          availableVersion: 'v0.3.4',
+          downloadState: 'downloading',
+          downloadProgress: 17,
+        },
+      });
+      await flushPromises();
+      const bar = wrapper.find('[data-testid="updates-progress"]');
+      expect(bar.exists()).toBe(true);
+      const first = bar.attributes('aria-valuenow');
+      expect(first).toBe('17');
+
+      rt.emit('update:download-progress', { bytes: 63, total: 100, percent: 63 });
+      await flushPromises();
+      const second = wrapper
+        .find('[data-testid="updates-progress"]')
+        .attributes('aria-valuenow');
+      expect(second).toBe('63');
+      expect(second).not.toBe(first);
+    } finally {
+      uninstallFakeRuntime();
+    }
+  });
+
+  // DC-2 pin: 17 must render as 17%, never 1700% (the old lying
+  // docstring said downloadProgress was 0..1, which would tempt a
+  // `progress * 100 + '%'` renderer).
+  it('renders a 17 percent value as "17%", not 1700%', async () => {
+    const { wrapper } = mountPanel({
+      status: {
+        available: true,
+        availableVersion: 'v0.3.4',
+        downloadState: 'downloading',
+        downloadProgress: 17,
+      },
+    });
+    await flushPromises();
+    const bar = wrapper.find('[data-testid="updates-progress"]');
+    expect(bar.attributes('style')).toContain('width: 17%');
+    expect(bar.attributes('style')).not.toContain('1700%');
+    expect(
+      wrapper.find('[data-testid="updates-progress-label"]').text(),
+    ).toContain('17%');
+  });
+
+  it('renders the indeterminate variant when downloading with progress 0 (no Content-Length)', async () => {
+    const { wrapper } = mountPanel({
+      status: {
+        available: true,
+        availableVersion: 'v0.3.4',
+        downloadState: 'downloading',
+        downloadProgress: 0,
+      },
+    });
+    await flushPromises();
+    const bar = wrapper.find('[data-testid="updates-progress"]');
+    expect(bar.exists()).toBe(true);
+    expect(bar.attributes('data-indeterminate')).toBe('true');
+    expect(bar.attributes('aria-valuenow')).toBeUndefined();
+  });
+
+  it('rehydrates a 42% download on mount from Status alone, with zero events replayed (AC-5)', async () => {
+    uninstallFakeRuntime(); // no window.runtime — nothing CAN replay
+    const { wrapper } = mountPanel({
+      status: {
+        available: true,
+        availableVersion: 'v0.3.4',
+        downloadState: 'downloading',
+        downloadProgress: 42,
+      },
+    });
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="updates-progress"]').attributes('aria-valuenow'),
+    ).toBe('42');
+  });
+
+  it('renders the failure reason from Status alone (no thrown exception in this session)', async () => {
+    const { wrapper } = mountPanel({
+      status: {
+        downloadState: 'failed',
+        downloadError: 'sha256 mismatch: got abc want def',
+      },
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="updates-error"]').text()).toContain(
+      'sha256 mismatch: got abc want def',
+    );
+  });
+});
