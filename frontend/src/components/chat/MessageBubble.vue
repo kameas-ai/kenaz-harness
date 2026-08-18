@@ -109,9 +109,16 @@ const props = defineProps<{
    * a "Resume" button surfaces and emits `resume`. The parent wires
    * the resume click to client.sessions.resumeMessage.
    *
-   * streamingFailureKind is a hint the parent can use to tailor copy
-   * ("transient" → "Network blip"; "auth" → "Re-authenticate";
-   * everything else falls back to the generic "Connection lost").
+   * streamingFailureKind tailors the copy (see partialOutputCopy):
+   * when not recoverable, "Connection lost mid-tool-call — please
+   * re-send your request."; when recoverable, `'auth'` gets
+   * "Connection lost — partial reply preserved (auth issue)."
+   * and every other kind (including `'transient'`) gets the generic
+   * "Connection lost — partial reply preserved." MessageList.vue binds
+   * this prop from item.message.streamingFailureKind (engineer-truth-
+   * pass-01PMTP01 WP06 — that binding didn't exist before this WP, so
+   * the prop was always undefined here regardless of what the backend
+   * classified).
    */
   streamingFailedAt?: string;
   streamingFailureKind?: string;
@@ -408,18 +415,18 @@ const isPartialOutputBubble = computed(() => {
 // partialOutputCopy: tailored failure copy by classification kind.
 // Recoverable rows get the "preserved" framing; non-recoverable rows
 // (tool_use already ran) get the "re-issue your request" framing.
+// 'auth' is the only kind with distinct copy; 'transient' previously
+// had its own case here but it was byte-identical to the default arm
+// (engineer-truth-pass-01PMTP01 WP06, finding B14) — collapsed rather
+// than inventing new copy for a kind nothing currently distinguishes.
 const partialOutputCopy = computed(() => {
   if (!props.streamingRecoverable) {
     return 'Connection lost mid-tool-call — please re-send your request.';
   }
-  switch (props.streamingFailureKind) {
-    case 'auth':
-      return 'Connection lost — partial reply preserved (auth issue).';
-    case 'transient':
-      return 'Connection lost — partial reply preserved.';
-    default:
-      return 'Connection lost — partial reply preserved.';
+  if (props.streamingFailureKind === 'auth') {
+    return 'Connection lost — partial reply preserved (auth issue).';
   }
+  return 'Connection lost — partial reply preserved.';
 });
 
 function onResumeClick() {
