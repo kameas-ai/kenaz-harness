@@ -279,8 +279,10 @@ type Projection struct {
 }
 
 // Project flattens the request's tagged-union surface. It is the single
-// projection function; core/rpc's flatPermissionRequest and the :7881
-// approval bridge both call it.
+// projection function; core/rpc's FlattenPendingRequest (which builds
+// FlatPermissionRequest — exported by consent-surfaces-truth-01PMTR01
+// WP03 so core/serve's dispatch shares it) and the :7881 approval
+// bridge both call it.
 func (p PendingRequest) Project() Projection {
 	var out Projection
 	s := p.Surface
