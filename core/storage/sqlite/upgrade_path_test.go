@@ -78,6 +78,14 @@ func TestUpgradePath(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(root, e.Name(), "dump.sql")); err != nil {
 			continue // e.g. a tag directory recorded as unreplayable, no dump.sql
 		}
+		// Only vX.Y.Z directories are snapshots. scripts/ci/upgrade-
+		// snapshot.sh also accepts the literal "HEAD" to preview an
+		// unreleased tree (docs/upgrade-snapshots.md); that output is a
+		// scratch artefact and must never silently become a chain entry
+		// just because someone forgot to delete it.
+		if !upgradesnap.IsSnapshotTag(e.Name()) {
+			continue
+		}
 		tags = append(tags, e.Name())
 	}
 	sort.Strings(tags)
@@ -116,6 +124,14 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	if err != nil {
 		t.Fatalf("pre-Open snapshot: %v", err)
 	}
+	// UpSource immutability (spec §4 / §6.3). The snapshot's frozen
+	// content_hash values are what a PREVIOUS release wrote; they must
+	// still equal HEAD's registered hashes. Nothing in production
+	// enforces this — migrations.VerifyLedger, which returns
+	// ErrLedgerHashMismatch, has no production caller — so the
+	// snapshot chain is where the constraint becomes decidable. See
+	// assertLedgerHashesUnchanged for the full reasoning.
+	assertLedgerHashesUnchanged(t, ctx, raw, tag)
 	if err := raw.Close(); err != nil {
 		t.Fatalf("close raw after materialise: %v", err)
 	}

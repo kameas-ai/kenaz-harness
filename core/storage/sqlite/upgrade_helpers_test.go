@@ -27,6 +27,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -77,5 +79,111 @@ func rewindLateSessionsSchema(t *testing.T, ctx context.Context, raw *sql.DB) {
 		if _, err := raw.ExecContext(ctx, stmt); err != nil {
 			t.Fatalf("rewind %q: %v", stmt, err)
 		}
+	}
+}
+
+// referenceLedgerHashes returns version -> content_hash as HEAD's
+// registry computes it, by opening a fresh, empty database through the
+// production path and reading the rows Apply() wrote. Every hash is
+// HashSQL(m.UpSource) (see migrations.Register).
+//
+// WHY THIS EXISTS (upgrade-path-coverage-01PMUG01 review follow-up).
+// spec.md §4 states UpSource is a released migration's content hash and
+// "must never change", and §6.3 claims the mutation "edit UpSource
+// instead of the executed statements -> every snapshot fails with
+// ErrLedgerHashMismatch, which is the gate doing its job".
+//
+// That claim was FALSE when the mission landed. migrations.VerifyLedger
+// -- the function that returns ErrLedgerHashMismatch -- has no
+// production caller anywhere in the tree (Open calls EnsureLedger,
+// Apply and verifyFullyApplied, not VerifyLedger), so editing a shipped
+// migration's SQL changed nothing observable: the mutation was
+// performed during review and every snapshot still passed. Nothing in
+// the repo enforced the constraint the 0327 fix was carefully written
+// to respect.
+//
+// assertLedgerHashesUnchanged closes that hole where the constraint is
+// actually decidable: a committed snapshot carries the FROZEN hashes a
+// previous release wrote, so comparing them against HEAD's registered
+// hashes detects any edit to an already-shipped UpSource.
+func referenceLedgerHashes(t *testing.T) map[int]string {
+	t.Helper()
+	ctx := context.Background()
+	db, err := storagesqlite.Open(newConfig(t.TempDir()))
+	if err != nil {
+		t.Fatalf("reference Open (fresh, empty): %v", err)
+	}
+	defer func() { _ = db.Close(ctx) }()
+
+	rows, err := db.Reader().Query(ctx, "SELECT version, content_hash FROM harness_migrations WHERE action='applied'")
+	if err != nil {
+		t.Fatalf("read reference ledger: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[int]string{}
+	for rows.Next() {
+		var v int
+		var h string
+		if err := rows.Scan(&v, &h); err != nil {
+			t.Fatalf("scan reference ledger: %v", err)
+		}
+		out[v] = h
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("reference ledger rows: %v", err)
+	}
+	if len(out) == 0 {
+		t.Fatal("reference ledger is empty — a fresh Open applied nothing")
+	}
+	return out
+}
+
+// assertLedgerHashesUnchanged compares the frozen content_hash values a
+// committed snapshot carries against HEAD's registered hashes, for
+// every version the snapshot's ledger already has applied. A mismatch
+// means a SHIPPED migration's UpSource was edited (spec §4): every
+// existing user's ledger row would disagree with the new registered
+// hash. The 0327 repair is the worked example of the right way to
+// change a shipped migration's BEHAVIOUR without touching its SQL text.
+func assertLedgerHashesUnchanged(t *testing.T, ctx context.Context, raw *sql.DB, tag string) {
+	t.Helper()
+	want := referenceLedgerHashes(t)
+
+	rows, err := raw.QueryContext(ctx,
+		"SELECT version, id, content_hash FROM harness_migrations WHERE action='applied' ORDER BY version")
+	if err != nil {
+		t.Fatalf("read snapshot ledger: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var checked int
+	for rows.Next() {
+		var v int
+		var id, got string
+		if err := rows.Scan(&v, &id, &got); err != nil {
+			t.Fatalf("scan snapshot ledger: %v", err)
+		}
+		expect, ok := want[v]
+		if !ok {
+			// A version in the snapshot with no registered migration at
+			// HEAD is a REMOVED migration, not an edited one. VerifyLedger
+			// would call that ErrSchemaGap; it is out of this assertion's
+			// scope and is not decidable as "someone edited UpSource".
+			continue
+		}
+		checked++
+		if got != expect {
+			t.Errorf("snapshot %s: migration %d (%s) content_hash %s, but HEAD registers %s.\n\n"+
+				"A SHIPPED migration's UpSource was edited. UpSource is the content hash "+
+				"(migrations.Register / HashSQL); every install that already ran this migration "+
+				"has the OLD hash in its ledger (spec.md §4). Change the executed statement list "+
+				"and leave UpSource alone — see core/session/migrations_source_model_output.go "+
+				"(0327) for the worked example.", tag, v, id, got, expect)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("snapshot ledger rows: %v", err)
+	}
+	if checked == 0 {
+		t.Errorf("snapshot %s: no ledger row was hash-checked — the assertion is vacuous", tag)
 	}
 }
