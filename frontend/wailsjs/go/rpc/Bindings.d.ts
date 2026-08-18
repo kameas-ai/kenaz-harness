@@ -29,6 +29,7 @@ import {hooks} from '../models';
 import {llm} from '../models';
 import {logstore} from '../models';
 import {mcp} from '../models';
+import {recipes} from '../models';
 import {memory} from '../models';
 import {nodes} from '../models';
 import {onboarding} from '../models';
@@ -419,6 +420,8 @@ export function MCP_HealthSnapshot():Promise<Record<string, mcp.HealthEntry>>;
 export function MCP_ImportClaudeDesktopConfig(arg1:mcp.ImportRequest):Promise<mcp.ImportResponse>;
 
 export function MCP_ListServers():Promise<Array<mcp.Server>>;
+
+export function MCP_SaveCustomRecipe(arg1:mcp.SaveCustomRecipeRequest):Promise<recipes.Recipe>;
 
 export function MCP_StartStream(arg1:string):Promise<string>;
 

@@ -134,6 +134,7 @@ import type {
   MCPImportStatus,
   MCPTranslationReport,
   MCPImportWrotePath,
+  MCPSaveCustomRecipeRequest,
   PermissionGrant,
   PermissionRequest,
   PermissionMode,
@@ -349,6 +350,9 @@ interface WailsBindingsLike {
   MCP_ImportClaudeDesktopConfig(
     req: MCPImportRequest,
   ): Promise<MCPImportResponse>;
+  MCP_SaveCustomRecipe(
+    req: MCPSaveCustomRecipeRequest,
+  ): Promise<{ id: string }>;
 
   A2A_ListCards(): Promise<A2ACard[]>;
   A2A_StartStream(): Promise<string>;
@@ -1624,6 +1628,15 @@ export interface MCPClient {
   importClaudeDesktopConfig(
     req: MCPImportRequest,
   ): Promise<MCPImportResponse>;
+  /**
+   * saveCustomRecipe — persist a user-authored recipe from the Custom tab
+   * (mission mcp-connector-lifecycle-01PMMC01, WP06). Throws on
+   * validation failure (empty command for a stdio recipe, missing URL
+   * for http/sse, etc.) — the same rule every shipped recipe satisfies.
+   * The resolved value's `id` echoes the saved id; callers that need the
+   * full saved recipe should re-fetch via Tools_ListRecipes.
+   */
+  saveCustomRecipe(req: MCPSaveCustomRecipeRequest): Promise<{ id: string }>;
 }
 
 export type {
@@ -1634,6 +1647,7 @@ export type {
   MCPImportStatus,
   MCPTranslationReport,
   MCPImportWrotePath,
+  MCPSaveCustomRecipeRequest,
   AttachmentLimitsView,
 };
 
@@ -3506,6 +3520,7 @@ export function createHarnessClient(): HarnessClient {
       testRecipe: (recipeID, env = {}, config = {}) =>
         b().MCP_TestRecipe(recipeID, env, config),
       importClaudeDesktopConfig: (req) => b().MCP_ImportClaudeDesktopConfig(req),
+      saveCustomRecipe: (req) => b().MCP_SaveCustomRecipe(req),
     },
     a2a: {
       listCards: () => b().A2A_ListCards(),
@@ -4698,6 +4713,7 @@ export function createFakeHarnessClient(
         stderr_tail: '',
         duration_ms: 1,
       }),
+      saveCustomRecipe: async (req) => ({ id: req.id }),
     },
     a2a: {
       listCards: async () => [],

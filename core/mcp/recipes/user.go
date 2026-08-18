@@ -5,12 +5,17 @@
 // each file with `gopkg.in/yaml.v3`, runs Recipe.Validate, and exposes
 // the resulting slice through a copy-on-write Recipes() accessor.
 //
-// fsnotify-driven reload: callers wire StartWatch with a context;
-// filesystem events under both directories debounce into a single
-// Reload (~250ms after quiescence). Reload swaps an internal
-// atomic.Pointer; concurrent readers always see a fully-formed
-// snapshot. The watcher cleans up cleanly on Close — no goroutine
-// leaks.
+// Freshness: there is no background watcher. mcp-connector-lifecycle-
+// 01PMMC01 WP04 deleted the fsnotify-driven StartWatch/watchLoop/Close
+// path after WP03 made every production consumer of this store
+// (core/rpc/api.go's mcpUserRecipeSource, core/mcp/connectors's
+// CatalogWithUserRecipes) call Load() fresh on every catalog
+// build — so an externally-written file is already visible on the very
+// next Tools_ListRecipes / import-collision check / recipe-bootstrap
+// call, with no cache for a watcher to invalidate. See
+// docs/unwired-ledger.md's 2026-08-18 entry for the full justification
+// and core/rpc/views/mcp/import.go's docstring for what "picked up"
+// means in each mode today.
 //
 // Boot ergonomics: a missing <DataDir>/mcp/recipes/ directory is NOT
 // an error — it returns an empty catalog so fresh installs Just Work.
@@ -18,12 +23,10 @@
 // still load. This keeps the boot path resilient.
 //
 // Spec mapping: WP05 of mission mcp-server-install-01KQ8TDP. See
-// FR-001 (loader), FR-002 (yaml shape mirrors shipped.json),
-// NFR-002 (recipe-file save → catalog refresh < 1s).
+// FR-001 (loader), FR-002 (yaml shape mirrors shipped.json).
 package recipes
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,11 +35,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
-	"time"
 
-	"github.com/fsnotify/fsnotify"
 	"gopkg.in/yaml.v3"
 )
 
@@ -44,45 +44,30 @@ import (
 // User-authored recipes live at the top level; clipboard imports land
 // in _imports/.
 const (
-	userRecipesSubdir   = "mcp/recipes"
-	importsSubdir       = "_imports"
-	defaultDebounceTime = 250 * time.Millisecond
+	userRecipesSubdir = "mcp/recipes"
+	importsSubdir     = "_imports"
 )
 
 // UserStore loads user-authored YAML recipes from
 // <DataDir>/mcp/recipes/. It is safe for concurrent reads via the
-// Recipes() accessor; mutating operations (Reload, StartWatch's
-// internal goroutine) serialise through an internal mutex.
+// Recipes() accessor.
 //
 // Construction: callers supply DataDir and an optional Logger
-// (slog.Default() is used when nil). The watcher and debounce timer
-// are created lazily on StartWatch.
+// (slog.Default() is used when nil).
 type UserStore struct {
 	// DataDir is the harness data directory. The loader resolves
 	// <DataDir>/mcp/recipes/ at every Load/Reload — DataDir is treated
 	// as immutable post-construction.
 	DataDir string
-	// Logger receives parse-skip + watcher-event diagnostics. nil →
-	// slog.Default().
+	// Logger receives parse-skip diagnostics. nil → slog.Default().
 	Logger *slog.Logger
-	// debounce is the fsnotify event debounce window. Zero → 250ms.
-	// Test-only knob; production callers leave it zero.
-	debounce time.Duration
 
-	// snapshot points at the most recent successful load. Reads use
-	// Load() once at startup; subsequent reads come through the atomic
-	// pointer so the watcher goroutine can swap snapshots without
-	// blocking readers. Stored value is *[]Recipe (a slice header
-	// snapshot — never aliased to the live slice).
+	// snapshot points at the most recent successful load. Reads come
+	// through the atomic pointer so a concurrent Reload (from Save or
+	// Delete) can swap snapshots without blocking readers. Stored value
+	// is *[]Recipe (a slice header snapshot — never aliased to the live
+	// slice).
 	snapshot atomic.Pointer[[]Recipe]
-
-	// mu guards reload sequencing and watcher lifecycle. It does NOT
-	// guard snapshot reads — those go through the atomic pointer.
-	mu       sync.Mutex
-	watcher  *fsnotify.Watcher
-	watchCtx context.Context
-	cancel   context.CancelFunc
-	doneCh   chan struct{} // closed when watcher goroutine exits
 }
 
 // NewUserStore returns a fresh UserStore rooted at dataDir. It does
@@ -153,8 +138,8 @@ func (s *UserStore) Load() ([]Recipe, error) {
 	return s.Recipes(), nil
 }
 
-// Reload re-runs Load and is the entry point used by the fsnotify
-// watcher goroutine. Errors from Load (only DataDir-empty, in
+// Reload re-runs Load and is called by Save/Delete to refresh the
+// snapshot after a write. Errors from Load (only DataDir-empty, in
 // practice) are logged at error level — the previous snapshot stays
 // in place so readers don't see an empty catalog on a transient
 // failure.
@@ -275,182 +260,6 @@ func coerceYAMLMaps(v any) any {
 	}
 }
 
-// StartWatch begins an fsnotify-driven reload loop. Filesystem events
-// under <DataDir>/mcp/recipes/ debounce into a single Reload call
-// after quiescence (default 250ms). The loop terminates when ctx is
-// done OR Close is invoked, whichever comes first.
-//
-// StartWatch is idempotent for the same UserStore: calling it twice
-// without an intervening Close returns ErrAlreadyWatching. The
-// watcher creates the recipes directory if missing — fsnotify needs
-// an existing path to watch, and the boot-ergonomics contract is
-// "fresh installs work", so creating the dir here keeps the watcher
-// reliable on first run.
-//
-// onChange is an optional callback invoked AFTER each successful
-// reload (post-debounce). It runs on the watcher goroutine — keep it
-// fast and non-blocking. nil disables the callback.
-func (s *UserStore) StartWatch(ctx context.Context, onChange func()) error {
-	if s == nil {
-		return errors.New("recipes: UserStore.StartWatch: nil receiver")
-	}
-	if s.DataDir == "" {
-		return errors.New("recipes: UserStore.StartWatch: DataDir is empty")
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.watcher != nil {
-		return ErrAlreadyWatching
-	}
-
-	root := filepath.Join(s.DataDir, userRecipesSubdir)
-	imports := filepath.Join(root, importsSubdir)
-
-	// fsnotify needs the dirs to exist to watch them. Create both
-	// idempotently — boot ergonomics.
-	if err := os.MkdirAll(imports, 0o700); err != nil {
-		return fmt.Errorf("recipes: mkdir watch root: %w", err)
-	}
-
-	w, err := fsnotify.NewWatcher()
-	if err != nil {
-		return fmt.Errorf("recipes: fsnotify new: %w", err)
-	}
-	if err := w.Add(root); err != nil {
-		_ = w.Close()
-		return fmt.Errorf("recipes: fsnotify add %s: %w", root, err)
-	}
-	if err := w.Add(imports); err != nil {
-		_ = w.Close()
-		return fmt.Errorf("recipes: fsnotify add %s: %w", imports, err)
-	}
-
-	debounce := s.debounce
-	if debounce <= 0 {
-		debounce = defaultDebounceTime
-	}
-
-	watchCtx, cancel := context.WithCancel(ctx)
-	s.watcher = w
-	s.watchCtx = watchCtx
-	s.cancel = cancel
-	s.doneCh = make(chan struct{})
-
-	go s.watchLoop(watchCtx, w, debounce, onChange, s.doneCh)
-	return nil
-}
-
-// watchLoop is the fsnotify event consumer. It debounces clusters of
-// events into a single Reload by resetting a timer each time an event
-// arrives; when the timer fires (debounce window elapsed without a
-// new event), it runs Reload and invokes onChange.
-//
-// The function exits cleanly when ctx.Done fires OR the watcher's
-// Events channel closes. It always closes done before returning so
-// Close() can wait for goroutine drain.
-func (s *UserStore) watchLoop(
-	ctx context.Context,
-	w *fsnotify.Watcher,
-	debounce time.Duration,
-	onChange func(),
-	done chan struct{},
-) {
-	defer close(done)
-	// Pre-arm the timer in stopped state. We Reset on each event so
-	// only the trailing event in a cluster (e.g. editor save → write
-	// then chmod then rename) actually triggers a reload.
-	timer := time.NewTimer(debounce)
-	if !timer.Stop() {
-		<-timer.C
-	}
-	defer timer.Stop()
-	pending := false
-	logger := s.logger()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case ev, ok := <-w.Events:
-			if !ok {
-				return
-			}
-			// Filter out spurious chmod-only events; we only care about
-			// writes / creates / renames / removes.
-			if ev.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Remove|fsnotify.Rename) == 0 {
-				continue
-			}
-			// Only react to yaml files (and to dir-level events the
-			// fsnotify library surfaces with empty .Name when watched
-			// dir itself changes — those have a name like the dir). We
-			// accept events whose Name is the watched dir or whose
-			// basename matches the yaml suffix.
-			base := filepath.Base(ev.Name)
-			if base != "" && !isYAMLName(base) && filepath.Ext(base) != "" {
-				// Has an extension that isn't yaml — ignore.
-				continue
-			}
-			if !timer.Stop() && pending {
-				// Drain channel without blocking — Stop returned false
-				// because the timer had already fired but we had not
-				// consumed it yet.
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			timer.Reset(debounce)
-			pending = true
-		case err, ok := <-w.Errors:
-			if !ok {
-				return
-			}
-			logger.Warn("recipes: fsnotify error", slog.String("err", err.Error()))
-		case <-timer.C:
-			pending = false
-			s.Reload()
-			if onChange != nil {
-				onChange()
-			}
-		}
-	}
-}
-
-// Close tears down any in-flight watcher and waits for the watch
-// goroutine to drain. It is idempotent: a second call is a noop.
-//
-// Close MUST be invoked when StartWatch was used; otherwise the
-// fsnotify watcher and its goroutine leak. Tests in this repo
-// run with -race and a leak-checker, so a missed Close is a hard
-// failure.
-func (s *UserStore) Close() error {
-	if s == nil {
-		return nil
-	}
-	s.mu.Lock()
-	w := s.watcher
-	cancel := s.cancel
-	done := s.doneCh
-	s.watcher = nil
-	s.cancel = nil
-	s.watchCtx = nil
-	s.doneCh = nil
-	s.mu.Unlock()
-
-	if cancel != nil {
-		cancel()
-	}
-	var firstErr error
-	if w != nil {
-		if err := w.Close(); err != nil {
-			firstErr = fmt.Errorf("recipes: watcher close: %w", err)
-		}
-	}
-	if done != nil {
-		<-done
-	}
-	return firstErr
-}
-
 // logger returns the configured slog logger, defaulting to
 // slog.Default when none was supplied at construction.
 func (s *UserStore) logger() *slog.Logger {
@@ -469,11 +278,6 @@ func isYAMLName(name string) bool {
 	lower := strings.ToLower(name)
 	return strings.HasSuffix(lower, ".yaml") || strings.HasSuffix(lower, ".yml")
 }
-
-// ErrAlreadyWatching is returned by StartWatch when the store is
-// already watching. Callers usually treat this as a programming
-// error.
-var ErrAlreadyWatching = errors.New("recipes: UserStore: already watching")
 
 // Save writes a user recipe to <DataDir>/mcp/recipes/<id>.yaml,
 // creating the directory if missing. The Recipe.Source field is
@@ -570,6 +374,6 @@ func encodeUserRecipeYAML(r Recipe) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	header := "# User recipe — managed by the harness Add MCP Server flow.\n# Edit freely — your changes survive a reload via fsnotify.\n"
+	header := "# User recipe — managed by the harness Add MCP Server flow.\n# Edit freely — the harness picks up changes the next time it reads this catalog.\n"
 	return append([]byte(header), out...), nil
 }

@@ -1,12 +1,9 @@
 package recipes_test
 
 import (
-	"context"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 )
@@ -287,103 +284,6 @@ sampling_policy: {allowed: false, default: false}
 	store.Reload()
 	if got := len(store.Recipes()); got != 2 {
 		t.Errorf("after reload len = %d, want 2", got)
-	}
-}
-
-func TestUserStoreStartWatchReloadsWithin1Second(t *testing.T) {
-	// NFR-002: file save → catalog refresh within 1s.
-	dir := t.TempDir()
-	root := filepath.Join(dir, "mcp", "recipes")
-	if err := os.MkdirAll(root, 0o700); err != nil {
-		t.Fatal(err)
-	}
-
-	store := recipes.NewUserStore(dir, nil)
-	if _, err := store.Load(); err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if len(store.Recipes()) != 0 {
-		t.Fatalf("pre-watch len = %d, want 0", len(store.Recipes()))
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	var changes atomic.Int32
-	changed := make(chan struct{}, 16)
-	if err := store.StartWatch(ctx, func() {
-		changes.Add(1)
-		select {
-		case changed <- struct{}{}:
-		default:
-		}
-	}); err != nil {
-		t.Fatalf("StartWatch: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-
-	writeUserRecipe(t, root, "added.yaml", validUserYAML)
-
-	select {
-	case <-changed:
-	case <-time.After(2 * time.Second):
-		t.Fatal("watcher did not fire reload within 2s of file write")
-	}
-
-	// Verify catalog now has the new recipe.
-	if got := len(store.Recipes()); got != 1 {
-		t.Errorf("post-watch len = %d, want 1", got)
-	}
-
-	// Sanity: the underlying NFR is < 1s; we allow 2s headroom in CI.
-	// If we got here in < 1s the assert is implicit (the timer above
-	// would have kicked in otherwise).
-}
-
-func TestUserStoreStartWatchAlreadyWatchingErr(t *testing.T) {
-	dir := t.TempDir()
-	store := recipes.NewUserStore(dir, nil)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if err := store.StartWatch(ctx, nil); err != nil {
-		t.Fatalf("StartWatch: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	if err := store.StartWatch(ctx, nil); err == nil {
-		t.Fatal("second StartWatch = nil, want ErrAlreadyWatching")
-	}
-}
-
-func TestUserStoreCloseIdempotent(t *testing.T) {
-	dir := t.TempDir()
-	store := recipes.NewUserStore(dir, nil)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if err := store.StartWatch(ctx, nil); err != nil {
-		t.Fatalf("StartWatch: %v", err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatalf("first Close: %v", err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatalf("second Close (idempotent): %v", err)
-	}
-}
-
-func TestUserStoreCloseAfterContextCancel(t *testing.T) {
-	// Cancelling the watch context should drain the goroutine; Close
-	// should still work cleanly afterwards.
-	dir := t.TempDir()
-	store := recipes.NewUserStore(dir, nil)
-	ctx, cancel := context.WithCancel(context.Background())
-	if err := store.StartWatch(ctx, nil); err != nil {
-		t.Fatalf("StartWatch: %v", err)
-	}
-	cancel()
-	// Give the goroutine a beat to observe ctx.Done.
-	time.Sleep(50 * time.Millisecond)
-	if err := store.Close(); err != nil {
-		t.Fatalf("Close after cancel: %v", err)
 	}
 }
 

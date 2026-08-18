@@ -61,24 +61,24 @@ const (
 	KindMCPRecipeRemoved Kind = "mcp.recipe.removed"
 	KindMCPRecipeTested  Kind = "mcp.recipe.tested"
 
-	// Harness-self MCP audit kinds (mission harness-self-mcp-onboarding-01KQ8TDU
+	// Harness-self MCP audit kind (mission harness-self-mcp-onboarding-01KQ8TDU
 	// WP10). Emitted by the in-process harness-self server on every tool
 	// dispatch; payload values respect the per-tool Redact list (api_key
 	// values are removed before emission).
 	//
-	//   KindHarnessSelfToolCalled        — every harness_read_*/harness_write_*
-	//                                      tool call. Payload:
-	//                                      {tool_name, success, duration_ms}.
-	//   KindHarnessSelfPolicyProposed    — propose_cedar_policy received a
-	//                                      proposal; payload {name}.
-	//   KindHarnessSelfPolicyWritten     — user approved the proposal; payload
-	//                                      {name, body_size}.
-	//   KindHarnessSelfPolicyRejected    — user rejected (or timed out) the
-	//                                      proposal; payload {name, reason}.
-	KindHarnessSelfToolCalled     Kind = "harness-self.tool.called"
-	KindHarnessSelfPolicyProposed Kind = "harness-self.policy.proposed"
-	KindHarnessSelfPolicyWritten  Kind = "harness-self.policy.written"
-	KindHarnessSelfPolicyRejected Kind = "harness-self.policy.rejected"
+	//   KindHarnessSelfToolCalled — every harness_read_*/harness_write_*
+	//                               tool call. Payload:
+	//                               {tool_name, success, duration_ms}.
+	//
+	// KindHarnessSelfPolicyProposed/Written/Rejected were deleted by
+	// mcp-connector-lifecycle-01PMMC01 WP01: they described a Cedar-policy
+	// propose/accept/reject round-trip through
+	// harness_write_propose_cedar_policy, a tool that was itself deleted
+	// by the 2026-08-14 sweep — no emit site for any of the three ever
+	// existed. See docs/unwired-ledger.md's harness-self entry and
+	// kitty-specs/mcp-connector-lifecycle-01PMMC01/research/
+	// b10-harness-self-decision.md.
+	KindHarnessSelfToolCalled Kind = "harness-self.tool.called"
 
 	// KindMigrationDriftDetected is emitted once per chassis boot when the
 	// migration drift detector finds one or more discrepancies between the
@@ -125,8 +125,7 @@ var builtIn = []Kind{
 	// MCP recipe lifecycle (WP07 + WP10).
 	KindMCPRecipeAdded, KindMCPRecipeRemoved, KindMCPRecipeTested,
 	// Harness-self MCP audit (harness-self-mcp-onboarding-01KQ8TDU WP10).
-	KindHarnessSelfToolCalled, KindHarnessSelfPolicyProposed,
-	KindHarnessSelfPolicyWritten, KindHarnessSelfPolicyRejected,
+	KindHarnessSelfToolCalled,
 	// Migration drift detector (v0.5.1 migration-doctor).
 	KindMigrationDriftDetected,
 	// Model-side secret reference audit (model-secret-references-01KW7M5A WP03).

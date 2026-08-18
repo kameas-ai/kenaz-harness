@@ -666,6 +666,50 @@ describe('KenazToolsPanel — recipes section', () => {
   });
 });
 
+// ── mcp-connector-lifecycle-01PMMC01 WP06 ────────────────────────────────
+//
+// WP02's CustomRecipeAuthoringKey gate is retired now that
+// MCP_SaveCustomRecipe is real (see docs/unwired-ledger.md's 2026-08-18
+// "CLOSED" entry). The row Edit button is unconditionally reachable
+// again, same as before WP02, now backed by a working save path.
+
+describe('KenazToolsPanel — row Edit button (custom-recipe authoring, post-WP06)', () => {
+  function oneEnabledRecipe() {
+    return [
+      makeListing(makeRecipe('brave-search'), {
+        enabled: true,
+        keysPresent: true,
+        status: makeStatus('brave-search', {
+          enabled: true,
+          state: 'running',
+          keysPresent: true,
+        }),
+      }),
+    ];
+  }
+
+  it('renders unconditionally for an enabled recipe row', async () => {
+    const setup = makeClient(oneEnabledRecipe());
+    const w = await mountPanel(setup);
+    await flushPromises();
+
+    expect(
+      w.find('[data-testid="recipe-edit-btn-brave-search"]').exists(),
+    ).toBe(true);
+  });
+
+  it('clicking Edit opens AddMCPServerModal on the recipe', async () => {
+    const setup = makeClient(oneEnabledRecipe());
+    const w = await mountPanel(setup);
+    await flushPromises();
+
+    await w.find('[data-testid="recipe-edit-btn-brave-search"]').trigger('click');
+    await flushPromises();
+
+    expect(w.find('[data-testid="add-mcp-modal"]').exists()).toBe(true);
+  });
+});
+
 // ── builtin-filesystem-tools-01KR3N4P WP06 — FS toggle UI ──────────────
 
 describe('KenazToolsPanel — builtin filesystem tools toggles', () => {

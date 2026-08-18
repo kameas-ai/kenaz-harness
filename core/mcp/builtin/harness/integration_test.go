@@ -10,12 +10,23 @@ package harness_test
 //
 //  1. At least one KindHarnessSelfToolCalled audit event fired per tool
 //     call dispatched through the server.
-//  2. KindHarnessSelfPolicyProposed + KindHarnessSelfPolicyWritten fire
-//     on the propose/accept round-trip.
-//  3. session.Kind transitions from "onboarding" → "chat" after EventFinish.
+//  2. session.Kind transitions from "onboarding" → "chat" after EventFinish.
 //
 // The test uses stubs for all external dependencies (LLM tester, settings,
 // session store, cedar engine) so it runs without any real services.
+//
+// CORRECTION (mcp-connector-lifecycle-01PMMC01 WP01): this docstring
+// previously claimed "KindHarnessSelfPolicyProposed + Written fire on the
+// propose/accept round-trip" as item 2. That was false — the only
+// assertion touching those kinds anywhere in this file was
+// TestIntegration_AuditKindsRegistered below, which checks
+// kind.IsRegistered (the constant exists in the registry map), not that
+// anything ever emits it. No emit site for any Policy* kind ever existed;
+// harness_write_propose_cedar_policy, the tool that would have triggered
+// one, was itself deleted by the 2026-08-14 sweep. The three Policy*
+// kinds are deleted (see core/event/kind/registry.go); only
+// KindHarnessSelfToolCalled — which audit.go's WithAudit genuinely
+// emits — survives.
 
 import (
 	"context"
@@ -245,18 +256,15 @@ func TestIntegration_PhaseOneHandoff(t *testing.T) {
 	}
 }
 
-// TestIntegration_AuditKindsRegistered verifies that all KindHarnessSelf*
-// constants declared in the kind registry are actually registered at runtime.
+// TestIntegration_AuditKindsRegistered verifies that the KindHarnessSelf*
+// constant declared in the kind registry is actually registered at
+// runtime. Only KindHarnessSelfToolCalled remains — the three Policy*
+// kinds this test used to also check were deleted (WP01, see the file
+// docstring above); this test's own IsRegistered check was never
+// evidence they were emitted, only that the string existed in a map.
 func TestIntegration_AuditKindsRegistered(t *testing.T) {
 	t.Parallel()
-	for _, k := range []kind.Kind{
-		kind.KindHarnessSelfToolCalled,
-		kind.KindHarnessSelfPolicyProposed,
-		kind.KindHarnessSelfPolicyWritten,
-		kind.KindHarnessSelfPolicyRejected,
-	} {
-		if !kind.IsRegistered(k) {
-			t.Errorf("kind %q is not registered in the kind registry", k)
-		}
+	if !kind.IsRegistered(kind.KindHarnessSelfToolCalled) {
+		t.Errorf("kind %q is not registered in the kind registry", kind.KindHarnessSelfToolCalled)
 	}
 }

@@ -2,23 +2,38 @@
 /**
  * CustomRecipeTab — form-based recipe author for stdio / http / sse transports.
  *
- * BACKEND GAP: `client.mcp.saveCustomRecipe` does not exist in WP01–WP08.
- * The save action is stubbed as a UI-only placeholder. When WP10 lands a
- * saveCustomRecipe RPC, wire it here by calling:
+ * save() persists through `MCP_SaveCustomRecipe`
+ * (`mcp-connector-lifecycle-01PMMC01` WP06), which validates the
+ * assembled recipe against the same rules every shipped recipe must
+ * satisfy and writes it to `<DataDir>/mcp/recipes/<id>.yaml` via
+ * `recipes.UserStore.Save`. The saved recipe is visible in the Tools
+ * list in the same process, without a restart (WP03's freshness
+ * contract) — this tab and the row Edit button that lands on it are
+ * reachable unconditionally; the WP02 interim flag that used to gate
+ * both is retired in the same commit as this wiring.
  *
- *   await client.mcp.saveCustomRecipe(buildRecipePayload())
+ * Test Connection is keyed on a persisted id: `MCP_TestRecipe`
+ * (`harnessClient.ts` → `core/rpc/bindings.go`) resolves the recipe
+ * through the catalog, so it can only test an id that is already on
+ * disk. Both of this tab's entry doors are handled:
  *
- * Test Connection calls `client.mcp.importClaudeDesktopConfig` with a
- * synthetic single-entry mcpServers JSON constructed from the form values,
- * then shows the dry-run result inline (tool count / stderr).
+ *   - Edit an installed recipe (the row Edit button — the primary way
+ *     users reach this tab) pre-fills `initialRecipe`, whose id IS
+ *     persisted. Test Connection performs the real round-trip.
+ *   - Author a brand-new recipe: nothing is on disk until save()
+ *     returns, so the button reports that and asks the user to save
+ *     first. After a successful save the id is persisted and Test
+ *     works without leaving the form.
  *
- * NOTE: `testRecipe` RPC does not exist on MCPClient. The "Test Connection"
- * button currently uses importClaudeDesktopConfig dry_run as a proxy to
- * validate form structure. A proper testRecipe RPC would stream stderr and
- * return MCPTestResult — that is deferred to WP10.
+ * Extending `MCP_TestRecipe` to accept an inline spec (so a never-saved
+ * draft could be tested) is a separate change the spec deliberately
+ * leaves open.
  */
 import { ref, computed, watch } from 'vue';
-import type { Recipe } from '@/lib/types';
+import { useHarnessClient } from '@/lib/useHarnessAPI';
+import type { Recipe, MCPSaveCustomRecipeRequest } from '@/lib/types';
+
+const client = useHarnessClient();
 
 type Transport = 'stdio' | 'http' | 'sse';
 
@@ -60,6 +75,10 @@ const testError = ref<string | null>(null);
 const testing = ref(false);
 const saveError = ref<string | null>(null);
 const saving = ref(false);
+// The id currently known to exist on disk — set from initialRecipe in edit
+// mode and again after a successful save. Declared here (above the
+// initialRecipe watch, which runs immediately) so the watch can assign it.
+const persistedID = ref<string | null>(null);
 
 // ── shadow warning ─────────────────────────────────────────────────────
 const shadowWarning = computed(() => {
@@ -75,6 +94,9 @@ watch(
   () => props.initialRecipe,
   (recipe) => {
     if (!recipe) return;
+    // Edit mode: the recipe is already on disk, so its id is testable
+    // through MCP_TestRecipe from the first render.
+    persistedID.value = recipe.id;
     id.value = recipe.id;
     displayName.value = recipe.displayName;
     description.value = recipe.description;
@@ -122,24 +144,91 @@ const canSave = computed(
 );
 
 // ── test connection ────────────────────────────────────────────────────
+// MCP_TestRecipe is keyed by a persisted recipe id, so Test Connection can
+// only run once the id the form currently holds exists on disk. That is
+// true on the Edit-an-installed-recipe path from the very first render
+// (initialRecipe's id is persisted by definition), and becomes true on the
+// author-a-new-recipe path the moment save() succeeds.
+//
+// When it is not yet true the button stays clickable on purpose: the
+// message it produces is an actionable precondition ("save first"), not a
+// "not implemented" dead end, and a silently-disabled button would hide
+// the reason. Renaming the id in edit mode also drops canTest — testing
+// the old on-disk recipe under a name the form no longer holds would
+// report success for something the user is not looking at.
+const canTest = computed(
+  () => persistedID.value !== null && id.value.trim() === persistedID.value,
+);
+
 async function testConnection() {
   if (testing.value) return;
-  testing.value = true;
   testResult.value = null;
   testError.value = null;
+  if (!canTest.value) {
+    testError.value =
+      'Test Connection needs a persisted recipe id: MCP_TestRecipe resolves ' +
+      'the recipe through the catalog. Save this recipe first, then test it.';
+    return;
+  }
+  testing.value = true;
   try {
-    // BACKEND GAP: testRecipe RPC not available. Using importClaudeDesktopConfig
-    // dry_run as a proxy to validate the form structure. A proper testRecipe
-    // RPC with MCPTestResult (server name, tool count, stderr tail) is
-    // deferred to WP10.
-    testResult.value =
-      'Test Connection: backend testRecipe RPC not yet available (WP10). ' +
-      'Form validation passed. Actual server connectivity test will be wired in WP10.';
+    const res = await client.mcp.testRecipe(persistedID.value as string, {}, {});
+    if (res.ok) {
+      const name = res.server_info?.name || persistedID.value;
+      const tools = res.tool_count >= 0 ? `${res.tool_count} tool(s)` : 'no tools advertised';
+      testResult.value = `Connected to ${name} — ${tools} in ${res.duration_ms} ms.`;
+    } else {
+      testError.value = [res.error || 'Connection test failed.', res.stderr_tail]
+        .filter(Boolean)
+        .join('\n');
+    }
   } catch (e) {
     testError.value = e instanceof Error ? e.message : String(e);
   } finally {
     testing.value = false;
   }
+}
+
+// ── build wire payload ───────────────────────────────────────────────
+// Throws (caught by save()) on malformed headers JSON rather than
+// silently dropping it — a swallowed parse error would save a recipe
+// missing headers the user typed in.
+function buildRecipePayload(): MCPSaveCustomRecipeRequest {
+  const payload: MCPSaveCustomRecipeRequest = {
+    id: id.value.trim(),
+    display_name: displayName.value.trim(),
+    description: description.value.trim() || undefined,
+    transport: transport.value,
+  };
+  if (transport.value === 'stdio') {
+    payload.command = [
+      command.value.trim(),
+      ...args.value.trim().split(/\s+/).filter(Boolean),
+    ];
+    return payload;
+  }
+  payload.url = url.value.trim();
+  const headersRaw = headersTemplate.value.trim();
+  if (headersRaw) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(headersRaw);
+    } catch {
+      throw new Error('Headers must be valid JSON.');
+    }
+    if (
+      !parsed ||
+      typeof parsed !== 'object' ||
+      Array.isArray(parsed)
+    ) {
+      throw new Error('Headers must be a JSON object.');
+    }
+    payload.headers_template = parsed as Record<string, string>;
+  }
+  if (transport.value === 'sse') {
+    payload.post_url = postUrl.value.trim();
+  }
+  return payload;
 }
 
 // ── save ───────────────────────────────────────────────────────────────
@@ -149,13 +238,12 @@ async function save() {
   saving.value = true;
   saveError.value = null;
   try {
-    // BACKEND GAP: client.mcp.saveCustomRecipe does not exist yet (WP10).
-    // When WP10 lands, replace this stub with:
-    //   await client.mcp.saveCustomRecipe({ id: id.value, displayName: ..., ... });
-    //   emit('saved');
-    throw new Error(
-      'Custom recipe save is not yet implemented. The backend saveCustomRecipe RPC will land in WP10.',
-    );
+    const payload = buildRecipePayload();
+    await client.mcp.saveCustomRecipe(payload);
+    // The id is on disk now, so Test Connection becomes live without
+    // leaving the form.
+    persistedID.value = payload.id;
+    emit('saved');
   } catch (e) {
     saveError.value = e instanceof Error ? e.message : String(e);
   } finally {
@@ -403,17 +491,6 @@ async function save() {
       >
         {{ testError }}
       </div>
-    </div>
-
-    <!-- WP10 coming-soon notice for save -->
-    <div
-      class="rounded-sm border border-border-muted bg-surface-0 px-3 py-2 font-ui text-[11px] text-ink-muted"
-      data-testid="custom-save-stub-notice"
-    >
-      Custom recipe save is coming in WP10. The backend
-      <code class="font-mono">saveCustomRecipe</code> RPC is not yet available.
-      Fill in the form above to preview the configuration; saving will be
-      enabled once WP10 lands.
     </div>
 
     <!-- Save + cancel actions -->

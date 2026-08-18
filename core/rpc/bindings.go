@@ -16,6 +16,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/llm/gemini" // model-lit-allow: import path into core/llm/** itself, not a literal
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/middleware"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/a2a"
@@ -514,6 +515,19 @@ func (b *Bindings) MCP_ImportClaudeDesktopConfig(req mcp.ImportRequest) (mcp.Imp
 		return mcp.ImportResponse{}, mcp.ErrImportNotConfigured
 	}
 	return importer.ImportClaudeDesktopConfig(b.ctx(), req)
+}
+
+// MCP_SaveCustomRecipe persists a user-authored recipe from the Custom
+// tab of the Add-MCP-Server modal (mission mcp-connector-lifecycle-
+// 01PMMC01, WP06). Validates the recipe (recipes.Recipe.Validate — the
+// same rule every shipped recipe satisfies) and writes it through
+// recipes.UserStore.Save. The saved recipe is visible to
+// Tools_ListRecipes in the same process, without a restart, the instant
+// this call returns (WP03's mcpUserRecipeSource reloads on every
+// merged-catalog build).
+func (b *Bindings) MCP_SaveCustomRecipe(req mcp.SaveCustomRecipeRequest) (recipes.Recipe, error) {
+	defer sentry.WrapBinding("MCP_SaveCustomRecipe")()
+	return b.api.MCP().SaveCustomRecipe(b.ctx(), req)
 }
 
 // MCP_HealthSnapshot returns the current health status for every installed

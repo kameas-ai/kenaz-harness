@@ -413,6 +413,16 @@ type API struct {
 	// merged catalog + data-dir are available; nil otherwise (the
 	// binding returns ErrImportNotConfigured).
 	mcpImportAPI *mcp.ImportAPI
+	// mcpUserStore backs every merged-recipe-catalog consumer's user
+	// source (mcp-connector-lifecycle-01PMMC01 WP03/FR-003): the chassis
+	// catalog (mcpAPI), the import collision reader, the boot-time
+	// recipe bootstrap, and the Tools view's live catalog all read
+	// through mcpUserRecipeSource(a.mcpUserStore) so an import written by
+	// this process is visible to all four in the same process, without a
+	// restart. nil when c == nil or DataDir is empty (test-harness path)
+	// — mcpUserRecipeSource degrades to a nil source in that case, which
+	// recipes.MergedCatalog treats as "contributes zero recipes".
+	mcpUserStore *recipes.UserStore
 	a2aAPI       a2a.A2AAPI
 	workflowAPI  workflow.WorkflowAPI
 	workflowsAPI workflowsview.WorkflowsAPI
@@ -1175,21 +1185,47 @@ func New(c *core.Core, opts ...Option) *API {
 			)
 		}
 	}
+	// mcp-connector-lifecycle-01PMMC01 WP03/FR-003: construct the user
+	// recipe store once, before the merged catalog, so every consumer
+	// below shares one on-disk view instead of each independently
+	// re-discovering DataDir. nil when there is no real DataDir (test
+	// harness) — mcpUserRecipeSource(nil) below returns a nil source,
+	// matching the pre-WP03 behaviour for that path exactly.
+	if c != nil && c.DataDir() != "" {
+		a.mcpUserStore = recipes.NewUserStore(c.DataDir(), logging.L())
+	}
 	// Build the merged catalog once so both TestRecipe and the import
-	// surface share the same shipped + registry + user view.
+	// surface share the same shipped + registry + user view. The user
+	// source reloads UserStore from disk on every Recipes()/Get() call
+	// (mcpUserRecipeSource), matching CatalogWithUserRecipes's per-
+	// snapshot freshness contract (C-004) — so a paste-config import
+	// written moments ago by this same process is visible here without
+	// a restart.
 	mergedCat := recipes.NewMergedCatalog(
 		func() []recipes.Recipe { return recipes.Shipped().List() },
 		func() []recipes.Recipe { return recipes.Registry().List() },
-		nil, // user source wired by WP10 boot sequence
+		mcpUserRecipeSource(a.mcpUserStore),
 	)
-	a.mcpAPI = mcp.NewAPI(mcp.WithSubscriber(a.broker), mcp.WithCatalog(mergedCat))
+	mcpOpts := []mcp.Option{mcp.WithSubscriber(a.broker), mcp.WithCatalog(mergedCat)}
+	// Only install the saver when there is a real store behind it. Passing
+	// a nil *recipes.UserStore straight into WithRecipeSaver would wrap it
+	// in a non-nil RecipeSaver interface value holding a nil pointer, so
+	// SaveCustomRecipe's `saver == nil` guard would not fire and
+	// ErrRecipeSaverNotConfigured — the sentinel its docstring promises,
+	// and which callers match with errors.Is — could never be returned.
+	// The call would instead fall through to (*UserStore)(nil).Save and
+	// surface an internal "nil receiver" string.
+	if a.mcpUserStore != nil {
+		mcpOpts = append(mcpOpts, mcp.WithRecipeSaver(a.mcpUserStore))
+	}
+	a.mcpAPI = mcp.NewAPI(mcpOpts...)
 	// MCP clipboard-import surface (mission mcp-server-install-01KQ8TDP,
 	// WP08). Wired only when we have a real Core (= a real DataDir);
 	// rpc.New(nil) test harness leaves it nil and the binding returns
 	// ErrImportNotConfigured.
 	if c != nil && c.DataDir() != "" {
 		a.mcpImportAPI = mcp.NewImportAPI(mcp.ImportConfig{
-			Catalog: importCatalogReader{},
+			Catalog: importCatalogReader{userSource: mcpUserRecipeSource(a.mcpUserStore)},
 			DataDir: c.DataDir,
 		})
 	}
@@ -1616,7 +1652,7 @@ func New(c *core.Core, opts ...Option) *API {
 			// re-opens stdio recipes (it uses pool.Open(stdioSpecs)); remote
 			// recipes are re-opened through the tools view's InstallRecipe
 			// which already uses the dispatch pool's OpenOne.
-			c.SetMCPRecipeBootstrap(makeMCPRecipeBootstrap(c, a.stdioPool, stack.secrets, a.promptRegistry, buildCedarEngineOrNil(c.DataDir())))
+			c.SetMCPRecipeBootstrap(makeMCPRecipeBootstrap(c, a.stdioPool, stack.secrets, a.promptRegistry, buildCedarEngineOrNil(c.DataDir()), mcpUserRecipeSource(a.mcpUserStore)))
 		}
 	}
 	// Late-wire the health pool onto the mcp view (constructed before the
@@ -1630,7 +1666,7 @@ func New(c *core.Core, opts ...Option) *API {
 	// Pass the dispatch pool as the tools-view PoolController so
 	// InstallRecipe/UninstallRecipe route http/sse recipes to the right
 	// transport sub-pool.
-	a.toolsAPI = newToolsAPI(c, a.dispatchPool, stack.secrets, a.promptRegistry, a.cedarPolicyAPI, opt.connectorTokens)
+	a.toolsAPI = newToolsAPI(c, a.dispatchPool, stack.secrets, a.promptRegistry, a.cedarPolicyAPI, opt.connectorTokens, mcpUserRecipeSource(a.mcpUserStore))
 	// Register the fsrequest built-in after toolsAPI is wired so the
 	// tool's delegate can be the real (non-stub) implementation. The
 	// tool is registered unconditionally; the EnabledFilter gates
@@ -3359,16 +3395,45 @@ func (r *sessionProjectReader) ProjectID(ctx context.Context, sessionID string) 
 	return &v, nil
 }
 
-// importCatalogReader satisfies mcp.MergedCatalogReader by snapshotting
-// the same shipped+registry merge mergedRecipeCatalog produces. The
-// import RPC uses it to drive collision detection: an entry whose id
-// already exists in the merged catalog is flagged
-// `collision_warning`. WP10 will swap this for a live MergedCatalog
-// pointer once the user-source hot-reload is wired into rpc boot.
-type importCatalogReader struct{}
+// mcpUserRecipeSource returns a recipes.SourceFn that reloads store from
+// disk on every call and then hands back its snapshot — the same
+// per-snapshot freshness contract core/mcp/connectors/catalog.go's
+// CatalogWithUserRecipes uses in served mode (C-004). nil store (no real
+// DataDir — the rpc.New(nil) test harness path) yields a nil source,
+// which recipes.MergedCatalog treats as "contributes zero recipes" and
+// never panics on.
+//
+// This is the single choke point mcp-connector-lifecycle-01PMMC01 WP03
+// threads through every mergedRecipeCatalog() consumer plus the chassis
+// merged catalog (api.go's mergedCat) — see CLAUDE.md C-003: partial
+// wiring across those sites would leave the Tools list, the import
+// collision check, and the boot bootstrap disagreeing about what "the
+// catalog" contains.
+func mcpUserRecipeSource(store *recipes.UserStore) func() []recipes.Recipe {
+	if store == nil {
+		return nil
+	}
+	return func() []recipes.Recipe {
+		if _, err := store.Load(); err != nil {
+			logging.L().Warn("rpc.mcp_user_recipes.load_failed", "err", err.Error())
+		}
+		return store.Recipes()
+	}
+}
 
-func (importCatalogReader) Recipes() []recipes.Recipe {
-	cat := mergedRecipeCatalog()
+// importCatalogReader satisfies mcp.MergedCatalogReader by snapshotting
+// the same shipped+registry+user merge mergedRecipeCatalog produces. The
+// import RPC uses it to drive collision detection: an entry whose id
+// already exists in the merged catalog is flagged `collision_warning`.
+// userSource is mcpUserRecipeSource(a.mcpUserStore) — reloaded fresh on
+// every call, so importing the same id twice in the same process sees
+// the first import on the second dry-run (FR-005/AC-005).
+type importCatalogReader struct {
+	userSource func() []recipes.Recipe
+}
+
+func (r importCatalogReader) Recipes() []recipes.Recipe {
+	cat := mergedRecipeCatalog(r.userSource)
 	if cat == nil {
 		return nil
 	}
@@ -3376,26 +3441,48 @@ func (importCatalogReader) Recipes() []recipes.Recipe {
 }
 
 // mergedRecipeCatalog returns a snapshot *recipes.Catalog containing
-// the shipped + curated-registry recipes merged in source-tagged
-// order. WP06 introduces the curated registry; the boot path
-// previously consulted only Shipped(), which meant a user who had
-// enabled e.g. the registry "github" recipe wouldn't find it on
-// startup.
+// the shipped + curated-registry + user recipes merged in source-tagged
+// order. userSource is mcpUserRecipeSource(a.mcpUserStore) in every
+// production call site (nil in the rpc.New(nil) test harness path,
+// where it contributes zero recipes exactly as before WP03).
 //
 // The merge happens through the WP05 *recipes.MergedCatalog so the
 // id-keyed precedence rules (user > registry > shipped) stay
-// centralised; a future hot-reloading user source can plug in via
-// MergedCatalog.SetUserSource without re-touching this helper.
+// centralised.
 //
 // Callers receive a fresh *recipes.Catalog whose Recipes slice they
-// may mutate freely (copy-on-write semantics from MergedCatalog).
-func mergedRecipeCatalog() *recipes.Catalog {
+// may mutate freely (copy-on-write semantics from MergedCatalog). Note
+// that snapshotting into a *recipes.Catalog here is itself a one-shot
+// read — callers that need per-request freshness (the Tools view; see
+// mcpLiveCatalog below) must call mergedRecipeCatalog fresh on every
+// request rather than caching its return value.
+func mergedRecipeCatalog(userSource func() []recipes.Recipe) *recipes.Catalog {
 	mc := recipes.NewMergedCatalog(
 		func() []recipes.Recipe { return recipes.Shipped().List() },
 		func() []recipes.Recipe { return recipes.Registry().List() },
-		nil,
+		userSource,
 	)
 	return &recipes.Catalog{Version: 1, Recipes: mc.Recipes()}
+}
+
+// mcpLiveCatalog implements tools.CatalogReader by rebuilding the merged
+// shipped + registry + user catalog (via mergedRecipeCatalog) on every
+// List/Get call, rather than snapshotting once. This is what makes
+// Tools_ListRecipes see a paste-config import written moments ago,
+// without a process restart (FR-003/AC-003): tools.Config.Catalog is
+// set once at newToolsAPI construction time, so if it held a plain
+// *recipes.Catalog snapshot instead, no import performed after boot
+// would ever become visible short of restarting the app.
+type mcpLiveCatalog struct {
+	userSource func() []recipes.Recipe
+}
+
+func (c mcpLiveCatalog) List() []recipes.Recipe {
+	return mergedRecipeCatalog(c.userSource).List()
+}
+
+func (c mcpLiveCatalog) Get(id string) (recipes.Recipe, bool) {
+	return mergedRecipeCatalog(c.userSource).Get(id)
 }
 
 // makeMCPRecipeBootstrap returns a closure suitable for
@@ -3416,7 +3503,7 @@ func mergedRecipeCatalog() *recipes.Catalog {
 // cedarEngine may be nil. When non-nil, an AllowAlways decision writes
 // a persistent .cedar snippet so the grant survives restarts
 // (cedar-credential-policy follow-up: AllowAlways mcp_spawn).
-func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secrets.MemoryBackend, promptRegistry *cedar.Registry, cedarEngine *cedar.Engine) func(context.Context) error {
+func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secrets.MemoryBackend, promptRegistry *cedar.Registry, cedarEngine *cedar.Engine, userSource func() []recipes.Recipe) func(context.Context) error {
 	if c == nil || pool == nil || secretsBackend == nil {
 		return nil
 	}
@@ -3430,11 +3517,9 @@ func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secr
 			return fmt.Errorf("rpc: load enabled recipes: %w", err)
 		}
 		// Bootstrap consults the merged catalog so a user who has
-		// enabled e.g. the curated-registry "github" recipe finds the
-		// entry on boot. WP06 wires shipped + registry; WP05 already
-		// provided the merge surface and WP10 will plug in the user
-		// source.
-		catalog := mergedRecipeCatalog()
+		// enabled e.g. the curated-registry "github" recipe, or a
+		// custom/imported user recipe, finds the entry on boot.
+		catalog := mergedRecipeCatalog(userSource)
 		entries := enabled.List()
 		specs := make([]coremcp.ServerSpec, 0, len(entries))
 		for _, entry := range entries {
@@ -3499,7 +3584,7 @@ func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secr
 // Returns the stub when c is nil — the test harness path constructs
 // rpc.New(nil) and we keep the chassis bootable without crashing on
 // the catalog access.
-func newToolsAPI(c *core.Core, pool tools.PoolController, secretsBackend *secrets.MemoryBackend, promptReg *cedar.Registry, cedarPolicyAPI cedarpolicyview.CedarPolicyAPI, connectorTokens tools.ConnectorTokenSource) tools.ToolsAPI {
+func newToolsAPI(c *core.Core, pool tools.PoolController, secretsBackend *secrets.MemoryBackend, promptReg *cedar.Registry, cedarPolicyAPI cedarpolicyview.CedarPolicyAPI, connectorTokens tools.ConnectorTokenSource, userSource func() []recipes.Recipe) tools.ToolsAPI {
 	if c == nil {
 		return &stubTools{}
 	}
@@ -3510,7 +3595,11 @@ func newToolsAPI(c *core.Core, pool tools.PoolController, secretsBackend *secret
 		enabled = &recipes.EnabledRecipes{}
 	}
 	cfg := tools.Config{
-		Catalog:        mergedRecipeCatalog(),
+		// mcpLiveCatalog (not a bare mergedRecipeCatalog(userSource)
+		// snapshot) — see its doc comment: Tools_ListRecipes must see an
+		// import performed after this constructor ran, in the same
+		// process (FR-003/AC-003).
+		Catalog:        mcpLiveCatalog{userSource: userSource},
 		Enabled:        enabled,
 		Pool:           pool,
 		Secrets:        secretsBackend,

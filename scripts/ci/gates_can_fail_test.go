@@ -207,6 +207,18 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			content: "package zzgateprobe\n\nconst ToolName = \"kenaz__zz_gate_probe\"\n",
 		},
 		{
+			name: "builtin-tool-registration/mcp-builtin-unregistered-tool-package",
+			gate: "check-builtin-tool-registration.sh",
+			// FR-008/AC-009 (mcp-connector-lifecycle-01PMMC01 WP05): before
+			// this WP, TOOLS_ROOT pinned the scan to core/tools/, so
+			// core/mcp/builtin/ was invisible to I11 — the exact blind
+			// spot the harness-self MCP server (core/mcp/builtin/harness)
+			// sat in. Plants a sibling package under core/mcp/builtin/
+			// that no production file imports.
+			file:    "core/mcp/builtin/zzgateprobe/tool.go",
+			content: "package zzgateprobe\n\nconst ToolName = \"zz_gate_probe\"\n",
+		},
+		{
 			name: "single-move-writer/second-seam-caller",
 			gate: "check-single-move-writer.sh",
 			// The convergence violation the transcript-move seam exists

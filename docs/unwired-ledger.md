@@ -1047,6 +1047,117 @@ difference is the difference between "urgent" and "housekeeping".
 picks up the next unwired sweep. Re-verify each item's importer graph
 before acting — frontend code churns between sweeps.
 
+**AMENDMENT 2026-08-18 (`mcp-connector-lifecycle-01PMMC01` WP01) — this
+entry no longer names no owner and no mission.** The harness-self MCP
+server (B10 in `docs/dead-code-audit-2026-08-16.md`, this section's
+subject) is no longer parked as "housekeeping": the owner ruled
+**attach** on 2026-08-18. See
+`kitty-specs/mcp-connector-lifecycle-01PMMC01/research/b10-harness-self-decision.md`
+for the decision record. Execution (the session-scoped tool-visibility
+seam, the fourth dispatch-pool arm, installing `EmbeddedCedar`, making
+`IsHarnessSelfMCPDisabled` real, emitting-or-deleting the dead event
+kinds, and the Cedar-gating that makes attaching safe rather than merely
+attached) is **deferred to a dedicated follow-on mission**, not executed
+in `mcp-connector-lifecycle-01PMMC01` (that mission's own WP07 is
+explicitly out of scope for the attach — see its spec). **Owner of the
+attach execution:** the mission owner who dispatches the follow-on
+mission; unassigned as of this entry. **Blocker:** the visibility seam
+and `EmbeddedCedar` wiring do not exist yet (spec §6 option A cost items
+2 and 3) — attaching without them would hand every session write access
+to provider credentials and settings, which is why this is not a
+same-commit fix.
+
+Two small pieces of this finding were resolved immediately, regardless
+of the attach mission's timeline, because they were unambiguous under
+every branch (attach, retire, or park):
+
+- The three never-emitted `KindHarnessSelfPolicy{Proposed,Written,Rejected}`
+  event kinds are **deleted** (`core/event/kind/registry.go`) —
+  `harness_write_propose_cedar_policy`, the tool that would have emitted
+  them, was itself deleted by the 2026-08-14 sweep, so no emit site for
+  any of the three ever existed under any name. Positive no-consumer
+  proof: `grep -rn "KindHarnessSelfPolicy" --include='*.go' .` (pre-
+  deletion) found exactly one reader, `integration_test.go`'s
+  `TestIntegration_AuditKindsRegistered`, which asserted only
+  `kind.IsRegistered` (the string is a registry-map key) — not that
+  anything emits it. That test's docstring also claimed (falsely) that
+  the kinds "fire on the propose/accept round-trip"; corrected in the
+  same commit. `KindHarnessSelfToolCalled` — which `audit.go`'s
+  `WithAudit` genuinely emits on every harness-self tool dispatch —
+  survives.
+- Escalation #3 from the audit ("do the dead kinds have waiting
+  consumers — an audit view filter, a fleet exporter?") is answered: no.
+  `grep -rn "KindHarnessSelfPolicy"` across the frontend and
+  `core/rpc/views/audit` found no filter, no exporter, no reader of any
+  kind besides the one test above.
+
+`IsHarnessSelfMCPDisabled` (`core/rpc/onboarding_wiring.go:153-155`,
+hardcoded `false`) is **left as-is** and assigned to the attach mission
+rather than fixed here: the dial only means something once there is a
+live server to disable, and building its settings-store persistence now
+would front-run the attach mission's own design of what scope the dial
+applies at (global vs. per-project) — see spec §6 option A cost item 5,
+which already scopes this to the attach execution.
+
+### 2026-08-18 · Custom-recipe authoring (A5) flagged off, then CLOSED same day by WP06
+
+`mcp-connector-lifecycle-01PMMC01` WP02 closed the A5 lie (a row Edit button
+and a Custom-recipe tab that both opened a form whose Save unconditionally
+threw) by gating both doors behind one interim flag,
+`CUSTOM_RECIPE_AUTHORING_ENABLED` (`frontend/src/lib/customRecipeAuthoring.ts`),
+shipped `false` with a named retirement condition: land `MCP_SaveCustomRecipe`
+and retire the flag in the same commit.
+
+**CLOSED 2026-08-18, same mission, WP06.** The owner unblocked WP06
+mid-dispatch (originally conditional on the B10 decision, which landed via
+WP01 the same day). `MCP_SaveCustomRecipe` is live end-to-end (view method
+`core/rpc/views/mcp/custom_recipe.go` → `core/rpc/bindings.go` →
+`harnessClient.ts` → `CustomRecipeTab.vue`'s `save()`), persisting through
+the already-implemented `recipes.UserStore.Save`. The flag was **deleted
+outright** (`frontend/src/lib/customRecipeAuthoring.ts` removed, both
+`v-if`s reverted to unconditional) rather than left flipped to `true` —
+per the flag's own retirement note, "a flag left permanently true is a new
+dead knob." `KenazToolsPanel.vue`'s row Edit button and
+`AddMCPServerModal.vue`'s Custom tab are unconditionally reachable again,
+now backed by a real save path.
+
+### 2026-08-18 · `recipes.UserStore.StartWatch` deleted — a live substitute made it redundant
+
+`mcp-connector-lifecycle-01PMMC01` WP04 deleted `UserStore.StartWatch`,
+`watchLoop`, the watcher arm of `Close`, and `ErrAlreadyWatching`
+(`core/mcp/recipes/user.go`), plus their four `user_test.go` regression
+tests — the method's only readers.
+
+This is **not** the "no producer and no product intent" delete class:
+the producer (paste-config import) is real and shipping. The
+justification is the **live-substitute** class instead —
+`mcp-connector-lifecycle-01PMMC01` WP03, landed in the same mission
+immediately before this WP, wired every merged-recipe-catalog consumer
+(`core/rpc/api.go`'s chassis catalog, the import-collision reader, the
+boot-time recipe bootstrap, and `tools.Config.Catalog` — what
+`Tools_ListRecipes` reads) to reload `UserStore` from disk on **every
+call**, matching `core/mcp/connectors.CatalogWithUserRecipes`'s existing
+served-mode contract. Once every consumer already re-reads live, there is
+no cached state left for `StartWatch`'s debounced `onChange` callback to
+invalidate — wiring it would have started a real fsnotify goroutine (with
+its own idempotency and shutdown-lifecycle burden — `(*rpc.API).Shutdown`
+turned out to have the same never-called gap `docs/dead-code-audit-2026-
+08-16.md` found elsewhere) that pushed updates nothing was polling off
+of.
+
+**Positive no-consumer proof:** `grep -rn 'UserStore.Close\|\.StartWatch(' core/ --include=*.go`
+(pre-deletion) showed the only callers of both were the four deleted
+tests; no production code called either.
+
+**Blocker/owner:** none — this is a closed, dated justification, not a
+parked item. If a future need for a genuine background push (e.g. an
+external process editing recipe files that this process must react to
+mid-request rather than on its next catalog read) resurfaces, re-derive
+the watcher fresh against whatever the freshness contract looks like at
+that time rather than restoring this deleted code verbatim — the
+`onChange`-to-cache-invalidation shape assumed a cache that no longer
+exists.
+
 ---
 
 ## Drained
