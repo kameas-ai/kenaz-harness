@@ -3,10 +3,16 @@
  * SettingsTabs — vertical sub-nav rail for the Settings hub.
  *
  * Rendered (via SettingsShell) on the left of SettingsView, ProvidersView,
- * BundlesView, HooksView, PermissionsView, and PolicyView so users land in a
- * coherent "settings" surface no matter which route they enter through.
- * Routes stay individually addressable for deep-linking (/providers, /policy,
+ * BundlesView, PermissionsView, and PolicyView so users land in a coherent
+ * "settings" surface no matter which route they enter through. Routes stay
+ * individually addressable for deep-linking (/providers, /policy,
  * /permissions/*, and the /settings?tab=… query-param panels).
+ * (HooksView dropped from this list — deleted in engineer-truth-pass-
+ * 01PMTP01 WP05, finding B13b: a routed-but-unlinked rival of
+ * HooksSettingsView, reached below via the /settings?tab=hooks entry.
+ * This comment was accurate when the audit flagged it — HooksView really
+ * did render SettingsShell — it went stale only as a consequence of this
+ * deletion, not before it.)
  *
  * Layout: a vertical, grouped, icon'd rail mirroring the app's LeftRail /
  * RailEntry vocabulary (icon + label, grouped under uppercase small-caps

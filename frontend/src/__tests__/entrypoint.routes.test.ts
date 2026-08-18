@@ -103,4 +103,32 @@ describe('entry-point route tables', () => {
     expect(paths(desktop)).toContain('/sites');
     expect(paths(desktop)).toContain('/marketplace');
   });
+
+  // engineer-truth-pass-01PMTP01 WP05 (finding B13a, B13b): /search and
+  // /hooks were both routed with no reachable entry point — /search had
+  // no router.beforeEach guard anywhere in the tree despite a comment
+  // claiming one, and /hooks (HooksView.vue) duplicated the reachable
+  // HooksSettingsView (mounted at /settings?tab=hooks) with zero in-app
+  // links. Both registrations were deleted from main.ts and
+  // main-served.ts; this pins that neither path resolves to anything
+  // special anymore — the shared catch-all handles both.
+  it('/search and /hooks resolve to not-found in both bundles (B13a, B13b)', () => {
+    expect(paths(desktop)).not.toContain('/search');
+    expect(paths(desktop)).not.toContain('/hooks');
+    expect(paths(served)).not.toContain('/search');
+    expect(paths(served)).not.toContain('/hooks');
+  });
+
+  it.each(['desktop', 'served'] as const)(
+    '#/search and #/hooks resolve to the not-found route (%s)',
+    async (which) => {
+      const routes = which === 'desktop' ? desktop : served;
+      const router = createRouter({ history: createMemoryHistory(), routes });
+      for (const path of ['/search', '/hooks']) {
+        await router.push(path);
+        await router.isReady();
+        expect(router.currentRoute.value.name, `${which} ${path}`).toBe('not-found');
+      }
+    },
+  );
 });
