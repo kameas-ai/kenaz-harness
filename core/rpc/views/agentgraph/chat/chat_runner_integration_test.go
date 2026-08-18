@@ -1248,3 +1248,112 @@ func TestChatRunnerIntegration_KeyRotation_RedriveDedupe(t *testing.T) {
 		t.Errorf("second RedriveLastTurn: expected error (no paused turn), got nil")
 	}
 }
+
+// waitForRetryAfterRotationFailed polls the broker for a
+// "provider:retry-after-rotation-failed" payload up to 2s; returns the
+// payload (or fails the test).
+func waitForRetryAfterRotationFailed(t *testing.T, broker *recordingBroker) RetryAfterRotationFailedPayload {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, e := range broker.snapshot() {
+			if e.topic == "provider:retry-after-rotation-failed" {
+				return e.payload.(RetryAfterRotationFailedPayload)
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("did not see provider:retry-after-rotation-failed within 2s; events = %+v", broker.snapshot())
+	return RetryAfterRotationFailedPayload{}
+}
+
+// TestChatRunnerIntegration_KeyRotation_RedriveStartStreamFails_EmitsRetryAfterRotationFailed
+// pins finding B17 (engineer-truth-pass-01PMTP01 WP08): the user rotated
+// their key, RedriveLastTurn's own StartStream call fails for a reason
+// OTHER than another auth rejection (here: the graph fails to load on
+// the second attempt), and the broker must emit
+// "provider:retry-after-rotation-failed" so the frontend toast
+// (useEventToasts.ts) can tell the user the retry itself failed —
+// before this WP the error was returned bare and the user saw nothing.
+func TestChatRunnerIntegration_KeyRotation_RedriveStartStreamFails_EmitsRetryAfterRotationFailed(t *testing.T) {
+	t.Setenv(envKeychainRotationVar, "on")
+
+	llm := &stubLLM{}
+	authErr := &corellm.ErrProviderAuthFailed{
+		Provider:  "anthropic",
+		ProfileID: "prof-4",
+		ModelID:   "claude-3-5-haiku",
+		Reason:    "invalid api key",
+		Cause:     &corellm.ErrAuth{Status: 401, Message: "invalid api key"},
+	}
+	llm.push(stubLLMResponse{err: authErr})
+
+	graph := loadProductionChatGraph(t)
+	broker := &recordingBroker{}
+	writer := &recordingHistoryWriter{}
+
+	// graphLoadCalls counts GraphLoader invocations so the SECOND call
+	// (the redrive's StartStream) fails while the first (the original
+	// StartStream) succeeds. This is a synchronous StartStream error
+	// site (chat_runner.go ~:702-705), reached before any kernel run
+	// starts — a realistic stand-in for "the retry itself could not
+	// even begin."
+	var graphLoadCalls atomic.Int64
+	runner, err := New(Config{
+		Kernel:        coreag.NewKernel(),
+		Registry:      stubRegistry{},
+		Broker:        broker,
+		HistoryWriter: writer,
+		History:       staticHistoryReader{msgs: []coreag.Message{{Role: "user", Content: "hello"}}},
+		GraphLoader: func() (coreag.Graph, error) {
+			if graphLoadCalls.Add(1) == 2 {
+				return coreag.Graph{}, errors.New("graph store unavailable")
+			}
+			return graph, nil
+		},
+		MaxTurns: func() int { return 25 },
+		EnvDefaults: func(env *coreag.Env) {
+			env.LLM = llm
+			env.Tools = newStubTools()
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_, err = runner.StartStream(context.Background(), "prof-4", "session-4", "", "hello")
+	if err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	waitForAuthFailed(t, broker)
+
+	// The redrive's own StartStream fails (graph load error injected
+	// above). RedriveLastTurn must still return that error to its
+	// caller...
+	_, err = runner.RedriveLastTurn(context.Background(), "prof-4")
+	if err == nil {
+		t.Fatalf("RedriveLastTurn: expected error from failing GraphLoader, got nil")
+	}
+
+	// ...but the failure must also reach the user: the broker must carry
+	// provider:retry-after-rotation-failed with the paused turn's
+	// identifying fields and the underlying error message.
+	payload := waitForRetryAfterRotationFailed(t, broker)
+	if payload.ProfileID != "prof-4" {
+		t.Errorf("RetryAfterRotationFailedPayload.ProfileID = %q, want prof-4", payload.ProfileID)
+	}
+	if payload.SessionID != "session-4" {
+		t.Errorf("RetryAfterRotationFailedPayload.SessionID = %q, want session-4", payload.SessionID)
+	}
+	if payload.ErrorMessage == "" {
+		t.Errorf("RetryAfterRotationFailedPayload.ErrorMessage is empty, want the StartStream error")
+	}
+
+	// provider:auth-resumed must NOT have fired — the redrive did not
+	// succeed, so there is nothing to "resume".
+	for _, e := range broker.snapshot() {
+		if e.topic == "provider:auth-resumed" {
+			t.Errorf("unexpected provider:auth-resumed after a failed redrive: %+v", e)
+		}
+	}
+}

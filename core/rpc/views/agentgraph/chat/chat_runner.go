@@ -524,13 +524,30 @@ type AuthFailedPayload struct {
 // AuthResumedPayload is the broker payload emitted on the
 // "provider:auth-resumed" topic after a successful key rotation when
 // RedriveLastTurn has re-driven the paused turn. Subscribers (chat
-// surface useSession; AuthFailureToast / RetryAfterRotateToast queues)
-// use this signal to clear any stale auth-failure UI state so the user
-// is not left looking at a "paused for key rotation" banner over a
-// turn that is once again live.
+// surface useSession; the generic toast queue's retry-after-rotation
+// subscription in useEventToasts.ts) use this signal to clear any
+// stale auth-failure UI state so the user is not left looking at a
+// "paused for key rotation" banner over a turn that is once again
+// live.
 type AuthResumedPayload struct {
 	ProfileID string `json:"profile_id"`
 	NewSubID  string `json:"new_sub_id"`
+}
+
+// RetryAfterRotationFailedPayload is the broker payload emitted on the
+// "provider:retry-after-rotation-failed" topic when RedriveLastTurn's
+// StartStream call itself errors — the user rotated their key, the
+// paused turn was re-driven, and the retry failed for a reason other
+// than another auth rejection (a rejected retry re-enters the
+// *ErrProviderAuthFailed branch above and gets its own "provider:
+// auth-failed" event + a fresh paused turn instead). Mirrors
+// frontend/src/lib/types.ts's RetryAfterRotationFailedPayload.
+// (provider-keychain-rotation-01KQ8TD9 WP05)
+type RetryAfterRotationFailedPayload struct {
+	SubID        string `json:"sub_id"`
+	SessionID    string `json:"session_id"`
+	ProfileID    string `json:"profile_id"`
+	ErrorMessage string `json:"error_message"`
 }
 
 // ChatRunner is the kernel-driven entry point and the ONLY chassis
@@ -1129,13 +1146,26 @@ func (r *ChatRunner) RedriveLastTurn(ctx context.Context, profileID string) (new
 	// in StartStream checks `userMessage != ""`).
 	newSubID, err = r.StartStream(ctx, pt.profileID, pt.sessionID, pt.modelOverride, "")
 	if err != nil {
+		// The user rotated their key expecting the retry to work; a bare
+		// error return here told them nothing (B17, engineer-truth-pass
+		// WP08). Emit so the generic toast queue's retry-after-rotation
+		// subscription (useEventToasts.ts) can surface it.
+		if r.cfg.Broker != nil {
+			r.cfg.Broker.Emit("provider:retry-after-rotation-failed", RetryAfterRotationFailedPayload{
+				SubID:        pt.subID,
+				SessionID:    pt.sessionID,
+				ProfileID:    pt.profileID,
+				ErrorMessage: err.Error(),
+			})
+		}
 		return "", err
 	}
 	// Notify subscribers (chat surface, toast queues) that the paused turn
 	// has been resumed so any stale auth-failure UI state is cleared. The
-	// AuthFailureToast and RetryAfterRotateToast both subscribe to this
-	// topic and pop their head entry on receipt; useSession clears its
-	// streamingError when the profile matches.
+	// AuthFailureToast component and the generic toast queue's
+	// retry-after-rotation subscription (useEventToasts.ts) both subscribe
+	// to this topic and clear/dismiss their pending entry on receipt;
+	// useSession clears its streamingError when the profile matches.
 	if r.cfg.Broker != nil {
 		r.cfg.Broker.Emit("provider:auth-resumed", AuthResumedPayload{
 			ProfileID: pt.profileID,
