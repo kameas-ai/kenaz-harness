@@ -30,12 +30,31 @@
 #    boot-time construction (`a.cedarEngine = buildCedarEngineOrNil(...)`
 #    in rpc.New); every other gate site must consult the shared engine
 #    (a.cedarEngine / a.cedarGate()) instead of building its own.
-# 2. cedar.NewEngine( — the actual constructor these two builders wrap —
-#    must appear in non-test core/rpc/**/*.go EXACTLY twice: once inside
+# 2. `.NewEngine(` — the actual constructor these two builders wrap —
+#    must appear in non-test core/**/*.go EXACTLY twice: once inside
 #    buildCedarGate's body, once inside buildCedarEngineOrNil's. A third
 #    occurrence anywhere is a second engine built by hand, bypassing the
 #    singleton builders entirely — invisible to check 1, which only
 #    watches the two named builder functions.
+#
+#    Two deliberate widenings over the first cut of this gate, each
+#    verified by planting the evading construction and watching the
+#    narrow form exit 0 (see the three cedar-engine-singleton cases in
+#    scripts/ci/gates_can_fail_test.go):
+#      - The pattern is `\.NewEngine\(`, NOT `cedar\.NewEngine\(`.
+#        Aliasing the cedar import is an idiom this repo already uses
+#        (`cedarpolicy "…/core/policy/cedar"` at
+#        core/rpc/contextbootstrap_wiring.go:41 and
+#        core/rpc/views/settings/fleet.go:15), so anchoring on the
+#        default package name let `cedarpolicy.NewEngine(...)` walk
+#        straight past. No other package under core/ exposes a
+#        NewEngine, so the broader pattern has no false positives today
+#        and would name any that appeared.
+#      - The scan root is core/, NOT core/rpc/. The promise is ONE
+#        engine per PROCESS; an engine constructed in any other package
+#        breaks it just as completely, and a gate that only looks where
+#        the defect happened to live last time is a gate that catches
+#        the defect once.
 #
 # Usage: bash scripts/ci/check-cedar-engine-singleton.sh (from anywhere).
 
@@ -46,9 +65,12 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/ci-gate.sh"
 GATE="[cedar-engine-singleton]"
 API_FILE="core/rpc/api.go"
 RPC_ROOT="core/rpc"
+# Check 2 is process-wide, not rpc-wide — see the header.
+CORE_ROOT="core"
 
 ci_require_file "$API_FILE" "$GATE"
 ci_require_dir "$RPC_ROOT" "$GATE"
+ci_require_dir "$CORE_ROOT" "$GATE"
 
 # ---------------------------------------------------------------------------
 # Vacuous-pass guard: the two builder functions must still exist under
@@ -110,11 +132,13 @@ if [[ "$count" -gt 1 ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Check 2: cedar.NewEngine( appears exactly twice — once in each
-# builder's body. A third occurrence anywhere under core/rpc is a
-# hand-built engine bypassing the singleton entirely.
+# Check 2: `.NewEngine(` appears exactly twice — once in each builder's
+# body. A third occurrence anywhere under core/ is a hand-built engine
+# bypassing the singleton entirely. Package-qualifier-agnostic and
+# process-wide on purpose; see the header for the two evasions that
+# motivated each widening.
 # ---------------------------------------------------------------------------
-newengine_hits=$(grep -rnE 'cedar\.NewEngine\(' --include='*.go' "$RPC_ROOT" 2>/dev/null | grep -v '_test\.go' || true)
+newengine_hits=$(grep -rnE '\.NewEngine\(' --include='*.go' "$CORE_ROOT" 2>/dev/null | grep -v '_test\.go' || true)
 newengine_hits=$(printf '%s\n' "$newengine_hits" | grep -v '^$' || true)
 ne_count=0
 if [[ -n "$newengine_hits" ]]; then
@@ -123,7 +147,7 @@ fi
 
 if [[ "$ne_count" -ne 2 ]]; then
   echo "" >&2
-  echo "${GATE} FAIL: cedar.NewEngine( appears ${ne_count} time(s) in non-test ${RPC_ROOT}" >&2
+  echo "${GATE} FAIL: .NewEngine( appears ${ne_count} time(s) in non-test ${CORE_ROOT}" >&2
   echo "${GATE} code — want exactly 2 (buildCedarGate's body + buildCedarEngineOrNil's" >&2
   echo "${GATE} body):" >&2
   printf '%s\n' "$newengine_hits" | sed 's/^/    /' >&2
@@ -140,4 +164,4 @@ if [[ "$fail" -ne 0 ]]; then
   exit 1
 fi
 
-echo "${GATE} clean — exactly one Cedar engine construction (${count} call site) is reachable from rpc.New; cedar.NewEngine has no other production caller under ${RPC_ROOT}."
+echo "${GATE} clean — exactly one Cedar engine construction (${count} call site) is reachable from rpc.New; .NewEngine has no other production caller under ${CORE_ROOT}."

@@ -429,6 +429,13 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			// AllowAll argument.
 			file:    "core/rpc/zz_gate_probe.go",
 			content: "package rpc\n\nvar zzGateProbeSecondEngine = buildCedarGate(\"/tmp/zz-gate-probe\")\n",
+			// A non-zero exit alone would also be satisfied by a gate that
+			// is permanently broken — the exact weak form the runner's
+			// comment below warns about, and which this campaign has
+			// already shipped once (check-tests-are-hermetic.sh). Pin the
+			// message check 1 produces so the proof is about THIS
+			// violation.
+			wantOutput: "call sites construct a Cedar engine independently",
 		},
 		{
 			name: "cedar-engine-singleton/direct-newengine-bypass",
@@ -441,6 +448,38 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			content: "package rpc\n\n" +
 				"import \"github.com/kameas-ai/kenaz-harness/core/policy/cedar\"\n\n" +
 				"var zzGateProbeDirectEngine, _ = cedar.NewEngine(cedar.Options{})\n",
+			// Must be check 2's message specifically: check 1 still sees
+			// exactly one builder call here, so a failure mentioning call
+			// sites would mean the gate fired for the wrong reason.
+			wantOutput: "NewEngine( appears 3 time(s)",
+		},
+		{
+			name: "cedar-engine-singleton/aliased-import-newengine-bypass",
+			gate: "check-cedar-engine-singleton.sh",
+			// The alias hole: `cedarpolicy "…/core/policy/cedar"` is an
+			// idiom this repo already uses (core/rpc/contextbootstrap_
+			// wiring.go:41, core/rpc/views/settings/fleet.go:15), so a
+			// second engine can be constructed under any local name. A
+			// gate anchored on the literal `cedar.NewEngine(` is blind to
+			// it — verified by planting this exact file and watching the
+			// pre-fix gate exit 0.
+			file: "core/rpc/zz_gate_probe.go",
+			content: "package rpc\n\n" +
+				"import cedarpolicy \"github.com/kameas-ai/kenaz-harness/core/policy/cedar\"\n\n" +
+				"var zzGateProbeAliasEngine, _ = cedarpolicy.NewEngine(cedarpolicy.Options{})\n",
+			wantOutput: "NewEngine( appears 3 time(s)",
+		},
+		{
+			name: "cedar-engine-singleton/engine-built-outside-core-rpc",
+			gate: "check-cedar-engine-singleton.sh",
+			// The scope hole: the singleton promise is process-wide, but a
+			// gate scanning only core/rpc cannot see a second engine built
+			// in any other package under core/. Verified the same way.
+			file: "core/policy/zzgateprobe/probe.go",
+			content: "package zzgateprobe\n\n" +
+				"import \"github.com/kameas-ai/kenaz-harness/core/policy/cedar\"\n\n" +
+				"var ZzGateProbeEngine, _ = cedar.NewEngine(cedar.Options{})\n",
+			wantOutput: "NewEngine( appears 3 time(s)",
 		},
 		{
 			name: "slog-privacy/typed-attr-constructor",
