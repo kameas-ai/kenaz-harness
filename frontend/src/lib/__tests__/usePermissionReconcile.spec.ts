@@ -59,6 +59,49 @@ describe('usePermissionReconcile', () => {
     expect(queue.value).toHaveLength(0);
   });
 
+  // Mutation: scope the staleness diff to the whole queue again (drop the
+  // `atFetch` snapshot, i.e. `queue.value.filter((r) => live.has(...))`)
+  // → this test fails, because the mid-flight arrival is absent from the
+  // server snapshot and would be filtered out.
+  //
+  // Why this matters: the dropped row is a request that is STILL PARKED
+  // server-side. Losing it from the queue means the prompt is never
+  // rendered, the goroutine never un-parks, and the turn hangs until the
+  // registry's 5-minute PromptTimeout fail-closed denies it — the exact
+  // failure A11 is about, reintroduced inside reconcile's own await.
+  it('keeps a row that arrives on the live topic DURING listPending()', async () => {
+    const client = createFakeHarnessClient();
+    const queue = ref<PermissionRequest[]>([]);
+    vi.spyOn(client.permissions, 'listPending').mockImplementation(async () => {
+      // Simulates the modal's useEventStream handler firing while the
+      // reconcile RPC is in flight. The server's snapshot (returned
+      // below) predates this arrival and therefore cannot contain it.
+      queue.value = [...queue.value, req({ request_id: 'arrived-mid-fetch' })];
+      return [];
+    });
+    const reconcile = usePermissionReconcile(client, 'bash', queue, 5);
+
+    await reconcile();
+
+    expect(queue.value.map((r) => r.request_id)).toEqual(['arrived-mid-fetch']);
+  });
+
+  // The stale-drop must still work for rows that WERE queued at fetch
+  // time — the fix above narrows the diff, it does not disable it.
+  it('still drops a row queued at fetch time that the server has resolved', async () => {
+    const client = createFakeHarnessClient();
+    const queue = ref<PermissionRequest[]>([req({ request_id: 'resolved-elsewhere' })]);
+    vi.spyOn(client.permissions, 'listPending').mockImplementation(async () => {
+      queue.value = [...queue.value, req({ request_id: 'arrived-mid-fetch' })];
+      return [];
+    });
+    const reconcile = usePermissionReconcile(client, 'bash', queue, 5);
+
+    await reconcile();
+
+    expect(queue.value.map((r) => r.request_id)).toEqual(['arrived-mid-fetch']);
+  });
+
   it('de-dupes: a row already in the queue is not duplicated', async () => {
     const client = createFakeHarnessClient();
     vi.spyOn(client.permissions, 'listPending').mockResolvedValue([req()]);

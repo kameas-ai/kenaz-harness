@@ -22,7 +22,9 @@
  *     not reach the harness" must never render as "nothing is pending".
  *   - a DIFF, not a union: rows the server no longer has (resolved from
  *     another window, or by a decision that raced this one) are dropped,
- *     not just added to.
+ *     not just added to. The diff is scoped to rows queued at fetch time:
+ *     a request that parks DURING the round trip is absent from the
+ *     server snapshot through no fault of its own and must survive.
  *   - de-duped by request_id.
  *   - respects the caller's MAX_QUEUE: a family already at capacity
  *     auto-denies any pending row a fetch would otherwise add, mirroring
@@ -51,6 +53,17 @@ export function usePermissionReconcile(
   maxQueue: number,
 ): () => Promise<void> {
   return async function reconcile(): Promise<void> {
+    // Snapshot the queue's ids BEFORE the await. The staleness diff below
+    // may only judge rows that were already queued when the fetch was
+    // issued — a row the live `<family>:permission-pending` topic delivers
+    // WHILE listPending() is in flight cannot be in the snapshot we are
+    // about to receive (it parked after the server answered), so treating
+    // its absence as "the server resolved it" drops a genuinely-parked
+    // request. The goroutine stays parked, the turn hangs, and the
+    // registry's 5-minute timeout fail-closed denies it — which is
+    // precisely the bug this composable exists to prevent, reintroduced in
+    // a one-round-trip window at mount.
+    const atFetch = new Set(queue.value.map((r) => r.request_id));
     let pending: PermissionRequest[];
     try {
       pending = await client.permissions.listPending();
@@ -66,9 +79,12 @@ export function usePermissionReconcile(
     const live = new Set(mine.map((r) => r.request_id));
 
     // Drop stale rows: resolved elsewhere while this modal was gone.
-    const stale = queue.value.some((r) => !live.has(r.request_id));
-    if (stale) {
-      queue.value = queue.value.filter((r) => live.has(r.request_id));
+    // Scoped to rows present at fetch time (see `atFetch` above) so a
+    // mid-flight live arrival is never mistaken for a resolved row.
+    const isStale = (r: PermissionRequest) =>
+      atFetch.has(r.request_id) && !live.has(r.request_id);
+    if (queue.value.some(isStale)) {
+      queue.value = queue.value.filter((r) => !isStale(r));
     }
 
     // Add rows the server has that this queue does not, respecting
