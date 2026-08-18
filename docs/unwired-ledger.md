@@ -1128,7 +1128,7 @@ every branch (attach, retire, or park):
   `core/rpc/views/audit` found no filter, no exporter, no reader of any
   kind besides the one test above.
 
-`IsHarnessSelfMCPDisabled` (`core/rpc/onboarding_wiring.go:153-155`,
+`IsHarnessSelfMCPDisabled` (`core/rpc/onboarding_wiring.go:194-196`,
 hardcoded `false`) is **left as-is** and assigned to the attach mission
 rather than fixed here: the dial only means something once there is a
 live server to disable, and building its settings-store persistence now
@@ -1278,7 +1278,7 @@ mission's fix — recorded per its spec §8 for visibility):
   `*migrations.Registry`), with no caller. `core/event/log` carries six
   embedded `.sql` files the migration framework never sees.
 - Of the 14 blocks declared in `core/storage/migrations/blocks.go`'s
-  `CanonicalBlocks`, 9 have zero registered migrations: `event-log`,
+  `CanonicalBlocks`, 10 have zero registered migrations: `event-log`,
   `secrets-keychain`, `scheduler`, `mcp`, `a2a`, `signed-cards-trust`,
   `bundle`, `shared-context-distribution`, `memory-rag`, `app-layer` (block
   reservations made ahead of the feature landing, some now orphaned).

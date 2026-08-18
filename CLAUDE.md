@@ -217,8 +217,12 @@ reason; "deleted — `AttachmentTreePicker` is the live substitute" is.
 ### Three blind spots the file-level scans cannot see
 
 The first two were found the hard way in the 2026-08-14 sweep; the third by the
-v0.63.0 P0 (see item 3 for the dates). None is covered by any gate; all three
-need a human or an agent explicitly looking.
+v0.63.0 P0 (see item 3 for the dates). The first two are covered by no gate at
+all; for the third, `check-destructive-migration-coverage.sh`,
+`check-upgrade-snapshots-locked.sh` and the `upgrade-path` CI job now cover
+destructive migrations and mutation of committed snapshots — but the *absence*
+of a new snapshot for a new tag is still ungated (see item 3), so all three
+still need a human or an agent explicitly looking.
 
 1. **Dead code inside a live file.** Deleting ten orphaned components saved
    826 bytes of JS — Vite had already tree-shaken every unreferenced `.vue`,
