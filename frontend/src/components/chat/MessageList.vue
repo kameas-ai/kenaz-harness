@@ -361,6 +361,7 @@ defineExpose({ scrollToBottom });
             :message-cost-source="item.message.messageCostSource"
             :streaming-failed-at="item.message.streamingFailedAt"
             :streaming-recoverable="item.message.streamingRecoverable"
+            :streaming-failure-kind="item.message.streamingFailureKind"
             @remember="(scope) => emit('remember', item.message, scope)"
             @save-artifact="() => emit('save-artifact', item.message)"
             @open-artifact="(a) => emit('open-artifact', a)"

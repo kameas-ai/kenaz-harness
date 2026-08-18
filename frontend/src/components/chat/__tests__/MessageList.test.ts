@@ -50,6 +50,32 @@ describe('MessageList (chat-ui)', () => {
     expect(w.text()).toContain('streaming…');
   });
 
+  // engineer-truth-pass-01PMTP01 WP06 (finding B14): MessageList never
+  // passed :streaming-failure-kind to MessageBubble even though the
+  // value was already on the message object it holds — the two sibling
+  // props (streaming-failed-at, streaming-recoverable) were bound, this
+  // one was not, so MessageBubble's auth-specific copy was unreachable
+  // through the real render path.
+  it('binds streaming-failure-kind through to the bubble (auth copy)', () => {
+    const w = mount(MessageList, {
+      props: {
+        messages: [
+          msg({
+            id: 'a',
+            role: 'assistant',
+            content: 'partial reply',
+            streamingFailedAt: '2026-04-25T00:00:00Z',
+            streamingRecoverable: true,
+            streamingFailureKind: 'auth',
+          }),
+        ],
+      },
+    });
+    expect(w.find('[data-failure-kind="auth"]').exists()).toBe(true);
+    expect(w.text()).toContain('(auth issue)');
+    expect(w.find('[data-failure-kind="unknown"]').exists()).toBe(false);
+  });
+
   it('exposes a scrollToBottom imperative handle', () => {
     const w = mount(MessageList, {
       props: { messages: [msg({})] },

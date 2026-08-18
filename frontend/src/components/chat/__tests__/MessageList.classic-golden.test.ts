@@ -18,6 +18,14 @@
  * metadata, a summary row, an archived row and a partial-output row —
  * because "renders the same" is only meaningful if the fixture exercises
  * the branches.
+ *
+ * The invariant is scoped to WP04's move-projection markup shape, not a
+ * blanket freeze on the snapshot forever: engineer-truth-pass-01PMTP01
+ * WP06 (finding B14) wired MessageList's missing `:streaming-failure-
+ * kind` binding, which legitimately changed the partial-output row's
+ * `data-failure-kind` from the always-"unknown" fallback to the
+ * fixture's real `'transient'` value — updated in the committed
+ * snapshot, not a regression of this test's own concern.
  */
 
 import { describe, it, expect } from 'vitest';

@@ -40,6 +40,20 @@ type BranchSeam interface {
 
 	// MarkMerged flips the branch row's status to merged.
 	MarkMerged(ctx context.Context, branchID string) error
+
+	// ActiveBranchForChildSession reports whether sessionID is the
+	// live child session of a branch that is still active — not yet
+	// merged, abandoned, or mid-merge. ok is false for parent sessions
+	// and for branches past that lifecycle point.
+	//
+	// Consumed by the chat runner's post-run merge-suggestion trigger
+	// (engineer-truth-pass-01PMTP01 WP08, finding B16): a branch's
+	// child session is chatted through the ordinary ChatRunner path,
+	// so "the child run completed" is observable there as an ordinary
+	// clean StartStream exit. This lookup is how that completion hook
+	// tells an interactive branch turn apart from a turn on any other
+	// session, without agentgraph importing core/conversation.
+	ActiveBranchForChildSession(ctx context.Context, sessionID string) (branchID string, ok bool)
 }
 
 // ForkRequest is the input to BranchSeam.Fork. The agentgraph layer
@@ -89,6 +103,9 @@ func (nilBranchSeam) AppendToParent(_ context.Context, _, _, _ string) (string, 
 func (nilBranchSeam) MarkMerged(_ context.Context, _ string) error {
 	return ErrNoBranchSeam
 }
+func (nilBranchSeam) ActiveBranchForChildSession(_ context.Context, _ string) (string, bool) {
+	return "", false
+}
 
 // FakeBranchSeam is an in-memory BranchSeam suitable for tests. It
 // records every Fork / Merge call; tests assert on the recorded
@@ -108,6 +125,10 @@ type FakeBranchSeam struct {
 	// CompleteAfter is used by WaitForChildRun. When non-zero the seam
 	// blocks for that duration; tests use a small duration.
 	CompleteAfter time.Duration
+	// ChildToBranch maps a child session id to its branch id, populated
+	// by Fork. Backs ActiveBranchForChildSession — a branch id is
+	// "active" here as long as it hasn't also been recorded in Merged.
+	ChildToBranch map[string]string
 }
 
 // FakeAppend is one recorded AppendToParent call.
@@ -122,6 +143,7 @@ func NewFakeBranchSeam() *FakeBranchSeam {
 	return &FakeBranchSeam{
 		ChildSessionPrefix: "child-",
 		ChildTails:         map[string][]Message{},
+		ChildToBranch:      map[string]string{},
 	}
 }
 
@@ -133,6 +155,10 @@ func (f *FakeBranchSeam) Fork(_ context.Context, req ForkRequest) (BranchHandle,
 	idx := len(f.Forks)
 	branchID := "br-fake-" + nopadInt(idx)
 	childID := f.ChildSessionPrefix + nopadInt(idx)
+	if f.ChildToBranch == nil {
+		f.ChildToBranch = map[string]string{}
+	}
+	f.ChildToBranch[childID] = branchID
 	return BranchHandle{BranchID: branchID, ChildSessionID: childID}, nil
 }
 
@@ -175,6 +201,24 @@ func (f *FakeBranchSeam) MarkMerged(_ context.Context, branchID string) error {
 	defer f.mu.Unlock()
 	f.Merged = append(f.Merged, branchID)
 	return nil
+}
+
+// ActiveBranchForChildSession looks up the branch id recorded for
+// sessionID at Fork time and reports it as active unless that branch
+// id has since appeared in Merged.
+func (f *FakeBranchSeam) ActiveBranchForChildSession(_ context.Context, sessionID string) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	branchID, ok := f.ChildToBranch[sessionID]
+	if !ok {
+		return "", false
+	}
+	for _, merged := range f.Merged {
+		if merged == branchID {
+			return "", false
+		}
+	}
+	return branchID, true
 }
 
 // nopadInt formats an int without strconv import (small util to avoid

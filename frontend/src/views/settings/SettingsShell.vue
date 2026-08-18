@@ -6,10 +6,14 @@
  * Right: a scrolling column holding the CanvasHead breadcrumb/title and the
  * page content (default slot). The rail stays put while the content scrolls.
  *
- * Host views (SettingsView, ProvidersView, BundlesView, HooksView,
- * PermissionsView, PolicyView) wrap their content in this shell instead of
- * stacking CanvasHead + SettingsTabs + content themselves, so the settings
- * surface reads consistently no matter which route the user enters through.
+ * Host views (SettingsView, ProvidersView, BundlesView, PermissionsView,
+ * PolicyView) wrap their content in this shell instead of stacking
+ * CanvasHead + SettingsTabs + content themselves, so the settings surface
+ * reads consistently no matter which route the user enters through.
+ * (HooksView used to be in this list — deleted in engineer-truth-pass-
+ * 01PMTP01 WP05, finding B13b: it was a routed-but-unlinked rival of
+ * HooksSettingsView, which SettingsView already hosts via SettingsShell
+ * without needing its own top-level route.)
  *
  * Content padding/max-width is intentionally NOT imposed here — slotted
  * content keeps its own wrapper (panels vary between max-w-3xl, max-w-5xl,

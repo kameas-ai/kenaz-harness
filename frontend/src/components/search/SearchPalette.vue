@@ -14,8 +14,14 @@ import { useSearchPalette } from '@/lib/useSearchPalette';
  *          Filter chips above the results list let the user toggle corpora.
  *
  * Opens via:
- *   - ⌘K / Ctrl+K global shortcut (registered in Shell.vue)
- *   - Search icon in Titlebar
+ *   - the OS menu bar's View → Search item (⌘F), which publishes
+ *     `menu:search:open`; App.vue subscribes and calls open().
+ *
+ * That is the only entry point. It used to also open on a ⌘K listener in
+ * Shell.vue — removed in engineer-truth-pass-01PMTP01 WP01 because ⌘K was
+ * simultaneously toggling the command palette — and the "Search icon in
+ * Titlebar" this comment claimed has not existed since v0.20.0, when
+ * UserMenu.vue's non-account rows moved to the native menu bar.
  *
  * Keyboard nav:
  *   ↑/↓ — move selection

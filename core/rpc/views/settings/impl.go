@@ -113,6 +113,9 @@ func (s *FileStore) SaveAll(in Settings) error {
 	if err := validateUpdateFields(in); err != nil {
 		return err
 	}
+	if err := validateBranchFields(in); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.saveLocked(in)
@@ -153,6 +156,36 @@ var ErrInvalidUpdateCheckInterval = fmt.Errorf(
 	"settings: invalid updateCheckIntervalSec — must be 0 (default) or in [%d, %d]",
 	MinUpdateCheckIntervalSec, MaxUpdateCheckIntervalSec,
 )
+
+// ErrInvalidBranchAdvisorMinConfidence is returned when the persisted
+// confidence threshold falls outside [0, 1] (engineer-truth-pass-
+// 01PMTP01 WP03, finding B2 / FR-005). Before this WP the docstring at
+// api.go claimed "Save rejects values outside this range" but SaveAll
+// ran no validator that touched BranchAdvisor* or BranchReintegration*
+// fields at all.
+var ErrInvalidBranchAdvisorMinConfidence = errors.New("settings: invalid branchAdvisorMinConfidence — must be in [0, 1]")
+
+// ErrInvalidBranchReintegrationMaxTokens is returned when the persisted
+// token budget is neither 0 (default) nor in
+// [MinBranchReintegrationMaxTokens, MaxBranchReintegrationMaxTokens].
+var ErrInvalidBranchReintegrationMaxTokens = fmt.Errorf(
+	"settings: invalid branchReintegrationMaxTokens — must be 0 (default) or in [%d, %d]",
+	MinBranchReintegrationMaxTokens, MaxBranchReintegrationMaxTokens,
+)
+
+// validateBranchFields enforces the branch-advisor dial constraints at
+// SAVE time (engineer-truth-pass-01PMTP01 WP03, finding B2 / FR-005).
+// Zero is valid for BranchReintegrationMaxTokens — it resolves to
+// DefaultBranchReintegrationMaxTokens via the Effective accessor.
+func validateBranchFields(in Settings) error {
+	if c := in.BranchAdvisorMinConfidence; c != 0 && (c < 0 || c > 1) {
+		return ErrInvalidBranchAdvisorMinConfidence
+	}
+	if t := in.BranchReintegrationMaxTokens; t != 0 && (t < MinBranchReintegrationMaxTokens || t > MaxBranchReintegrationMaxTokens) {
+		return ErrInvalidBranchReintegrationMaxTokens
+	}
+	return nil
+}
 
 // validateUpdateFields enforces the WP05 update-dial constraints at
 // SAVE time. Empty string / zero are valid (they resolve to defaults

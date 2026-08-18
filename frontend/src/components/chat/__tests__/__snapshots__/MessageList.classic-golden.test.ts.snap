@@ -438,7 +438,7 @@ exports[`MessageList — classic (pre-moves) session > renders byte-identically 
         user the turn cannot be resumed (tool_use already ran) and to
         re-issue the request.
       -->
-          <div class="mt-2 flex items-center gap-2 font-ui text-[11px] text-ink-subtle" data-testid="message-partial-output-footer"><span data-failure-kind="unknown">Connection lost — partial reply preserved.</span><button type="button" class="ml-1 px-1.5 py-0.5 rounded border border-accent/60 text-accent hover:bg-accent/10 normal-case tracking-normal" data-testid="message-partial-resume-button" data-message-id="c-8"> Resume </button></div>
+          <div class="mt-2 flex items-center gap-2 font-ui text-[11px] text-ink-subtle" data-testid="message-partial-output-footer"><span data-failure-kind="transient">Connection lost — partial reply preserved.</span><button type="button" class="ml-1 px-1.5 py-0.5 rounded border border-accent/60 text-accent hover:bg-accent/10 normal-case tracking-normal" data-testid="message-partial-resume-button" data-message-id="c-8"> Resume </button></div>
         </div>
       </article>
     </div>

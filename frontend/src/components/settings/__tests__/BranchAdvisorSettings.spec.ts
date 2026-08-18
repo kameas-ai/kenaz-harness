@@ -7,6 +7,14 @@
  *   3. Slider clamping: values outside [0.5, 0.99] are clamped before save.
  *   4. Number input clamping: values outside [500, 16000] show an error, no save.
  *   5. Debounced save is called for valid inputs.
+ *
+ * This mounts the component directly, which is why it stayed green while
+ * the panel had zero real mount sites (engineer-truth-pass-01PMTP01 WP03,
+ * finding B2b — CLAUDE.md's "a mounted surface can still be dead" blind
+ * spot). It still earns its keep for the component's own input-handling
+ * logic; reachability from the real Settings surface is covered
+ * separately, through the parent, by
+ * views/settings/__tests__/SettingsView.branchAdvisor.spec.ts.
  */
 import { describe, it, expect, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';

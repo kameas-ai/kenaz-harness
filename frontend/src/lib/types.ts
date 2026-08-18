@@ -2305,9 +2305,12 @@ export interface RecipeListing {
 /**
  * SlashCommandInfo — one row returned by `Slash_List`. Drives the
  * autocomplete dropdown the chat composer renders when the input
- * starts with a `/`. ComingSoon flags v1 stubs (memorize, recall,
- * forget, branch); the dropdown renders them with a
- * "(coming soon)" tag. isUser flags user-defined commands so the
+ * starts with a `/`. ComingSoon flags stub commands; the dropdown
+ * renders them with a "(coming soon)" tag. All four commands that
+ * originally shipped as v1 stubs — memorize, recall, forget, branch —
+ * are real implementations today and carry comingSoon: false (Go-side
+ * pinned by TestAPI_List_SortedAndNoneComingSoon; engineer-truth-pass-
+ * 01PMTP01 WP07). isUser flags user-defined commands so the
  * autocomplete renders a "user" chip.
  */
 export interface SlashCommandInfo {

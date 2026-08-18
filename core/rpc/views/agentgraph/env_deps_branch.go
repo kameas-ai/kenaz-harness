@@ -153,5 +153,28 @@ func (a *BranchSeamAdapter) MarkMerged(ctx context.Context, branchID string) err
 	return a.conversations.MarkMerged(ctx, branchID)
 }
 
+// ActiveBranchForChildSession reports the branch whose child session is
+// sessionID, when that branch is still BranchStatusActive. A session
+// with no owning branch (a parent session, or any other ordinary
+// session), or a branch already merging/merged/abandoned, reports ok
+// false — the chat runner's merge-suggestion trigger
+// (engineer-truth-pass-01PMTP01 WP08) uses this to skip every session
+// that isn't a live branch child before it evaluates the heuristic.
+func (a *BranchSeamAdapter) ActiveBranchForChildSession(ctx context.Context, sessionID string) (string, bool) {
+	if !a.available() || sessionID == "" {
+		return "", false
+	}
+	branches, err := a.conversations.ListByChild(ctx, sessionID)
+	if err != nil {
+		return "", false
+	}
+	for _, br := range branches {
+		if br.Status == coreconv.BranchStatusActive {
+			return br.ID, true
+		}
+	}
+	return "", false
+}
+
 // Compile-time witness.
 var _ coreag.BranchSeam = (*BranchSeamAdapter)(nil)

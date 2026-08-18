@@ -5158,14 +5158,25 @@ export function createFakeHarnessClient(
       exec: async () => ({ stdout: '', stderr: '', exitCode: 0, truncated: false }),
     },
     slash: {
+      // All seven are live commands (core/slashcmd's three "real" v1
+      // commands plus the four that originally shipped as stubs — see
+      // core/rpc/views/slashcmd/api.go's CommandInfo docstring). Before
+      // engineer-truth-pass-01PMTP01 WP07 (finding B18, the carved-out
+      // data exception — this is data, not a comment), the last four
+      // carried comingSoon: true and "(coming soon)" descriptions,
+      // contradicting the live Go registry and the Go test that pins it
+      // (TestAPI_List_SortedAndNoneComingSoon). Anyone developing
+      // against the fake client saw four false "(coming soon)" badges.
+      // Descriptions mirror the real Description() text in
+      // core/slashcmd/cmd_memory.go and cmd_branch.go.
       list: async () => [
         { name: 'help', description: 'List available slash commands.', comingSoon: false },
         { name: 'clear', description: 'Insert a divider in the current chat (history preserved).', comingSoon: false },
         { name: 'model', description: 'Switch the active model — e.g. /model gpt-4o', comingSoon: false },
-        { name: 'memorize', description: 'Pin text to long-term memory (coming soon).', comingSoon: true },
-        { name: 'recall', description: 'Recall memory chunks matching a query (coming soon).', comingSoon: true },
-        { name: 'forget', description: 'Forget a memory chunk by id (coming soon).', comingSoon: true },
-        { name: 'branch', description: 'Branch the conversation onto a smaller or larger model (coming soon).', comingSoon: true },
+        { name: 'memorize', description: 'Pin text to long-term memory — e.g. /memorize prefer rg over grep', comingSoon: false },
+        { name: 'recall', description: 'Recall memory chunks matching a query — e.g. /recall vim shortcuts', comingSoon: false },
+        { name: 'forget', description: 'Forget a memory chunk by id — e.g. /forget mem-abc123', comingSoon: false },
+        { name: 'branch', description: 'Branch the conversation onto a smaller or larger model — /branch lists candidates; /branch <model-id> forks', comingSoon: false },
       ],
       execute: async (_sessionID, raw) => ({
         text: `fake slash result for ${raw}`,

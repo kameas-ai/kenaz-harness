@@ -345,10 +345,23 @@ type Env struct {
 	// behaviour, unchanged, until a concrete adapter is wired.
 	PromptTemplates PromptTemplateSource
 
-	// MergeSuggester powers the kernel's "merge?" toast. nil disables
-	// the suggestion stream.
+	// MergeSuggester powers the kernel's "merge?" toast
+	// (branches:merge-suggested, consumed by useEventToasts.ts's
+	// "Merge now" action). nil disables the suggestion stream — the
+	// default for hand-built Envs and any Kernel.Run caller besides
+	// the production chat wiring.
 	//
-	// wiring:deferred(needs a merge-suggestion RPC + frontend toast; the heuristic is implemented and tested but no production wiring site constructs one — see docs/wiring-audit.md item 6)
+	// Assigned by core/rpc/views/agentgraph.EnvDeps.MergeSuggester
+	// (constructed at core/rpc/api.go's newGraphManagerWithDeps
+	// alongside the Branch seam) and evaluated after a chat run
+	// completes cleanly, not from inside this package: a branch's
+	// child session is chatted through the ordinary ChatRunner path,
+	// so "the child run finished" is an observable driveRun exit, not
+	// a kernel-internal event. See ChatRunner.fireMergeSuggestion
+	// (core/rpc/views/agentgraph/chat/merge_suggestion.go), gated on
+	// BranchSeam.ActiveBranchForChildSession so it only fires for a
+	// still-active branch's child session
+	// (engineer-truth-pass-01PMTP01 WP08, finding B16).
 	MergeSuggester *MergeSuggester
 
 	// ToolSchemas maps tool name → JSON-Schema bytes for the tools the

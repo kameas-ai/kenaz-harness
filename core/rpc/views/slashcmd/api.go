@@ -15,9 +15,14 @@ import (
 )
 
 // CommandInfo is the wire shape returned by List for the autocomplete
-// dropdown. ComingSoon flags stub commands (the ones whose real
-// implementation lives in the agent-kernel-graph mission); the
-// frontend renders them with a "(coming soon)" tag.
+// dropdown. ComingSoon flags stub commands — see core/slashcmd's
+// stubCommand and its dated keep-decision (cmd_stubs_test.go,
+// engineer-truth-pass-01PMTP01 WP07) — and the frontend renders them
+// with a "(coming soon)" tag. No command is a stub today: all default
+// commands, including the four (/memorize, /recall, /forget, /branch)
+// that originally shipped as stubs pointing at the now-archived
+// agent-kernel-graph mission, return ComingSoon() == false — pinned by
+// TestAPI_List_SortedAndNoneComingSoon (impl_test.go).
 type CommandInfo struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`

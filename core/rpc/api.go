@@ -1706,6 +1706,25 @@ func New(c *core.Core, opts ...Option) *API {
 		// Broker enables LeftRail real-time updates on branch creation
 		// (branch creates a new child session row): v0.5.3 fix.
 		Broker: a.broker,
+		// Settings gives ProposeReintegrationSummary the persisted
+		// BranchReintegrationMaxTokens instead of a hardcoded 2000
+		// (engineer-truth-pass-01PMTP01 WP02, finding B2).
+		// settingsStore is nil-safe (New(nil) test-harness path, or a
+		// user-config-dir resolution failure); LoadAll's error is
+		// swallowed into the zero Settings, which
+		// EffectiveBranchReintegrationMaxTokens already treats as
+		// "use the default" — same behaviour the hardcoded constant
+		// gave every caller before this WP.
+		Settings: func() settings.Settings {
+			if settingsStore == nil {
+				return settings.Settings{}
+			}
+			s, err := settingsStore.LoadAll()
+			if err != nil {
+				return settings.Settings{}
+			}
+			return s
+		},
 	})
 
 	// Agent-graph view surface — graph manager already built above so
@@ -5750,6 +5769,15 @@ func newGraphManagerWithDeps(
 	deps := graphview.EnvDeps{}
 	if convMgr != nil {
 		deps.Branch = graphview.NewBranchSeamAdapter(convMgr, sessionManagerOrNil(c))
+		// engineer-truth-pass-01PMTP01 WP08 (finding B16): the merge-
+		// suggestion heuristic is only meaningful once a real
+		// BranchSeam is wired — without one, ActiveBranchForChildSession
+		// never reports a live branch child, so there's nothing for the
+		// suggester to evaluate. Gating it here (rather than
+		// unconditionally) keeps that pairing explicit at the wiring
+		// site instead of relying on the chat runner's nil-Branch guard
+		// alone.
+		deps.MergeSuggester = coreag.NewMergeSuggester()
 	}
 	if corpusMgr != nil {
 		deps.Corpus = graphview.NewCorpusBackendAdapter(corpusMgr)

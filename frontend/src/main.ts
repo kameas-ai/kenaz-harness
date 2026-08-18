@@ -60,11 +60,6 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/memory/MemoryView.vue'),
   },
   {
-    path: '/hooks',
-    name: 'hooks',
-    component: () => import('@/views/hooks/HooksView.vue'),
-  },
-  {
     path: '/workflows',
     name: 'workflows',
     component: () => import('@/views/workflows/WorkflowsView.vue'),
@@ -115,15 +110,6 @@ export const routes: RouteRecordRaw[] = [
     path: '/agentgraph/run/:runId/graph',
     name: 'graph-materialized',
     component: () => import('@/views/agentgraph/GraphEditor.vue'),
-  },
-  {
-    // /search opens the sessions view with the search modal overlay.
-    // The modal is rendered by Shell.vue and triggered by the
-    // route-change guard below; this route makes the sidebar link work
-    // and keeps the URL bookmarkable.
-    path: '/search',
-    name: 'search',
-    component: () => import('@/views/sessions/SessionsView.vue'),
   },
   {
     // cedar-policy-editor-ui-01KQ8TD6 WP02 — Policy editor.

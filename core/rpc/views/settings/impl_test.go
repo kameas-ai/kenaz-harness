@@ -335,6 +335,55 @@ func TestSaveAll_RejectsOverCapMonthlyCostNotify(t *testing.T) {
 	}
 }
 
+// TestSaveAll_RejectsInvalidBranchAdvisorMinConfidence covers the
+// engineer-truth-pass-01PMTP01 WP03 (finding B2 / FR-005) SaveAll
+// validation for BranchAdvisorMinConfidence. Before this WP, SaveAll ran
+// no validator touching this field at all, despite the field's own
+// docstring claiming "Save rejects values outside this range".
+func TestSaveAll_RejectsInvalidBranchAdvisorMinConfidence(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	if err := store.SaveAll(Settings{BranchAdvisorMinConfidence: 1.5}); !errors.Is(err, ErrInvalidBranchAdvisorMinConfidence) {
+		t.Errorf("SaveAll(1.5) err = %v, want ErrInvalidBranchAdvisorMinConfidence", err)
+	}
+	if err := store.SaveAll(Settings{BranchAdvisorMinConfidence: -0.1}); !errors.Is(err, ErrInvalidBranchAdvisorMinConfidence) {
+		t.Errorf("SaveAll(-0.1) err = %v, want ErrInvalidBranchAdvisorMinConfidence", err)
+	}
+	// In-range and the zero-value ("unset") sentinel both pass.
+	if err := store.SaveAll(Settings{BranchAdvisorMinConfidence: 0.9}); err != nil {
+		t.Errorf("SaveAll(0.9) err = %v, want nil", err)
+	}
+	if err := store.SaveAll(Settings{}); err != nil {
+		t.Errorf("SaveAll(zero-value) err = %v, want nil", err)
+	}
+}
+
+// TestSaveAll_RejectsInvalidBranchReintegrationMaxTokens covers the
+// companion bound for BranchReintegrationMaxTokens.
+func TestSaveAll_RejectsInvalidBranchReintegrationMaxTokens(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	if err := store.SaveAll(Settings{BranchReintegrationMaxTokens: MinBranchReintegrationMaxTokens - 1}); !errors.Is(err, ErrInvalidBranchReintegrationMaxTokens) {
+		t.Errorf("SaveAll(min-1) err = %v, want ErrInvalidBranchReintegrationMaxTokens", err)
+	}
+	if err := store.SaveAll(Settings{BranchReintegrationMaxTokens: MaxBranchReintegrationMaxTokens + 1}); !errors.Is(err, ErrInvalidBranchReintegrationMaxTokens) {
+		t.Errorf("SaveAll(max+1) err = %v, want ErrInvalidBranchReintegrationMaxTokens", err)
+	}
+	// 0 (default sentinel) and an in-range value both pass.
+	if err := store.SaveAll(Settings{}); err != nil {
+		t.Errorf("SaveAll(zero-value) err = %v, want nil", err)
+	}
+	if err := store.SaveAll(Settings{BranchReintegrationMaxTokens: 4000}); err != nil {
+		t.Errorf("SaveAll(4000) err = %v, want nil", err)
+	}
+}
+
 // TestEffectiveCompaction_DefaultsOnEmptySettings verifies the
 // documented defaults the chat runner reads on a fresh install:
 // balanced tier, 90-day retention, 4-pair recent window. The defaults

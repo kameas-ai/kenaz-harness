@@ -202,14 +202,23 @@ type Settings struct {
 	CredentialAuditRetentionDays int `json:"credentialAuditRetentionDays,omitempty"`
 	// ── Branch Advisor dials (branch-as-subagent-recommendation WP08) ──
 
-	// BranchAdvisorEnabled is the master on/off for the branch advisor
-	// (FR-010). When false the banner never mounts, regardless of
-	// confidence score. Default false.
+	// BranchAdvisorEnabled is the master on/off for the branch advisor.
+	// When false — the default — the banner never mounts, regardless of
+	// confidence score (ChatInput.vue's runAdvisorDetector gates on this
+	// before the confidence check; engineer-truth-pass-01PMTP01 WP02).
+	//
+	// Not FR-010: the owning mission
+	// (kitty-specs/_archive/branch-as-subagent-recommendation-01KQ8TDJ)
+	// never specified a master switch — its FR-010 is the confidence
+	// threshold, i.e. BranchAdvisorMinConfidence below. This field was
+	// added to the struct without an owning WP; there is no FR to cite.
 	BranchAdvisorEnabled bool `json:"branchAdvisorEnabled,omitempty"`
 
 	// BranchAdvisorMinConfidence is the heuristic-score threshold below
 	// which the banner does not mount. Default 0.85 (locked Q29.1).
-	// Range [0, 1]; Save rejects values outside this range.
+	// Range [0, 1]; Save rejects values outside this range — enforced by
+	// validateBranchFields (impl.go), added in engineer-truth-pass-
+	// 01PMTP01 WP03 (this sentence had no enforcement behind it before).
 	BranchAdvisorMinConfidence float64 `json:"branchAdvisorMinConfidence,omitempty"`
 
 	// BranchAdvisorUseLLM enables the optional LLM-backed detector
@@ -221,9 +230,17 @@ type Settings struct {
 	// by default. Reserved field; no implementation in v1.
 	BranchAutoMode bool `json:"branchAutoMode,omitempty"`
 
-	// BranchReintegrationMaxTokens caps the summary length the
-	// reintegration model is instructed to produce (FR-008a). Default
-	// 2000, min 500, max 16000. Zero falls back to the default.
+	// BranchReintegrationMaxTokens caps the length of the reintegration
+	// summary (FR-008a). v1's ProposeReintegrationSummary is rule-based
+	// (branches/impl.go: it concatenates and rune-truncates the last
+	// ≤8 assistant turns; Model is reported as "rule_based") — no model
+	// is instructed anything. Default 2000, min 500, max 16000. Zero
+	// falls back to the default via EffectiveBranchReintegrationMaxTokens,
+	// which ProposeReintegrationSummary calls (engineer-truth-pass-
+	// 01PMTP01 WP02; before WP02 this field had no reader and the cap
+	// was a hardcoded 2000 regardless of what was persisted here). Save
+	// rejects non-zero values outside [min, max] — validateBranchFields
+	// (impl.go), added in WP03.
 	BranchReintegrationMaxTokens int `json:"branchReintegrationMaxTokens,omitempty"`
 
 	// BranchAdvisorDefaultModel is the (provider, model) used for
