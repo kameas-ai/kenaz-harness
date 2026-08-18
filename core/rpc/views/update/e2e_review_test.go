@@ -106,30 +106,53 @@ func (s *realSwapFakeRestart) Restart(_ context.Context, p string) error {
 	return nil
 }
 
-// TestAC10_PreFixDoubleAwaitAlwaysFails pins spec §1.1's premise: the
-// pre-fix `await StartDownload(); await Apply();` sequence is lost by
-// CONSTRUCTION, not by timing — StartDownload clears hasStaged on the
-// calling goroutine before it returns, so no goroutine schedule rescues
-// Apply. Run 50 times to make "not by timing" an assertion rather than
-// a claim.
+// TestAC10_PreFixDoubleAwaitIsUnreliable pins spec §1.1's premise: the
+// pre-fix `await StartDownload(); await Apply();` sequence does not
+// reliably install. StartDownload clears hasStaged and returns as soon
+// as it has spawned the pump, so Apply races a background goroutine it
+// never waits for.
 //
-// Mutation: make StartDownload block until the pump finishes (i.e.
-// remove the reason installLatest polls) → this test fails, which is
-// the point: whoever does that must consciously retire the poll loop
-// rather than leave it as cargo.
-func TestAC10_PreFixDoubleAwaitAlwaysFails(t *testing.T) {
-	for i := 0; i < 50; i++ {
+// This test originally asserted the sequence fails on ALL 50 iterations
+// — "lost by construction, not by timing". CI falsified that: on a
+// Linux runner, iteration 30 finished the download before Apply ran and
+// Apply SUCCEEDED. The spec had recorded this as an open question
+// ("could StartDownload ever complete first — tiny asset, warm mirror?
+// my conclusion is static, I did not execute it"). The answer is yes.
+//
+// The premise that survives is the one that justifies the poll loop, and
+// it is the worse of the two: the sequence is a coin flip weighted by
+// asset size and network speed. A user on a fast link with a small delta
+// might see it work; the same user on a slow link never would. That is
+// harder to diagnose than a deterministic failure, not easier.
+//
+// So the assertion is unreliability, not failure: at least one iteration
+// must lose the race. Mutation: make StartDownload block until the pump
+// finishes (i.e. remove the reason installLatest polls) → every
+// iteration stages, none fails, and this test fails — which is the
+// point: whoever does that must consciously retire the poll loop rather
+// than leave it as cargo.
+func TestAC10_PreFixDoubleAwaitIsUnreliable(t *testing.T) {
+	const iterations = 50
+	staged := 0
+	for i := 0; i < iterations; i++ {
 		mgr, _, _ := reviewRig(t, &ac1FakeSwapper{})
 		ctx := context.Background()
 		if err := mgr.StartDownload(ctx); err != nil {
 			t.Fatalf("iteration %d: StartDownload: %v", i, err)
 		}
 		// The exact pre-fix call sequence, with no poll in between.
-		err := mgr.Apply(ctx)
-		if !errors.Is(err, ErrNothingStaged) {
-			t.Fatalf("iteration %d: Apply after bare StartDownload = %v, want ErrNothingStaged", i, err)
+		if err := mgr.Apply(ctx); err == nil {
+			staged++
+		} else if !errors.Is(err, ErrNothingStaged) {
+			t.Fatalf("iteration %d: Apply after bare StartDownload = %v, want ErrNothingStaged or nil", i, err)
 		}
 	}
+	if staged == iterations {
+		t.Fatalf("all %d iterations staged before Apply — the unfixed double-await never lost its race, "+
+			"so nothing here justifies installLatest's poll loop", iterations)
+	}
+	t.Logf("unfixed double-await: %d/%d iterations raced ahead of Apply and staged; %d lost the race",
+		staged, iterations, iterations-staged)
 }
 
 // TestReview_FullInstall_RealSwap drives the whole fixed path with the

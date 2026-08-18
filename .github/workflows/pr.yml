@@ -29,6 +29,16 @@ jobs:
     runs-on: [self-hosted, Linux, ARM64, ci-medium]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          # check-upgrade-snapshots-locked.sh runs `git merge-base HEAD
+          # origin/main`. A shallow checkout cannot answer that: at depth
+          # 1 the two histories share no commit and the gate fails with
+          # "found no common ancestor" — which is exactly what happened
+          # on PR #294, the first time this gate ever ran in CI. Fetching
+          # origin/main at depth 1 (the previous attempt, below) resolves
+          # the REF but not the ancestry, so it did not help. merge-base
+          # needs real history.
+          fetch-depth: 0
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -39,15 +49,9 @@ jobs:
           # Modules carry over naturally; no caching needed.
           cache: false
 
-      - name: fetch origin/main + tags (upgrade-snapshots-locked needs history)
-        # actions/checkout defaults to fetch-depth 1 (just the PR ref), so
-        # origin/main does not resolve without this. check-upgrade-
-        # snapshots-locked.sh diffs against it to decide whether a
-        # snapshot directory is already "shipped" (spec §4), and reads
-        # the release-tag list to bound which directories are "locked".
-        run: |
-          git fetch --no-tags --depth=1 origin main:refs/remotes/origin/main
-          git fetch --tags --depth=1 origin
+      - name: fetch tags (upgrade-snapshots-locked bounds "locked" by release tag)
+        # fetch-depth: 0 above brings full history but not tags.
+        run: git fetch --tags origin
 
       - name: go mod download
         run: go mod download
