@@ -1474,6 +1474,25 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		go r.fireAutoTitle(sub.sessionID, sub.profileID, sub.modelOverride)
 	}
 
+	// Post-run merge-suggestion trigger (engineer-truth-pass-01PMTP01
+	// WP08, finding B16). Fires asynchronously, same shape as the
+	// auto-title trigger above. Conditions:
+	//   (1) the run reached a genuine terminal state — reason=="completed"
+	//       AND finishReason != "paused" excludes the ErrPaused branch
+	//       above, which also sets reason="completed" for an Ask-node
+	//       mid-turn park; that is not "the child run finished" in the
+	//       sense the suggester's RunComplete heuristic means.
+	//   (2) env.MergeSuggester is wired (production: always, once a
+	//       BranchSeam is configured — see core/rpc/api.go).
+	//   (3) env.Branch reports sessionID as a still-active branch's
+	//       child session; fireMergeSuggestion no-ops for every other
+	//       session (the overwhelming majority of chat turns).
+	if runTerminatedClean && reason == "completed" && finishReason != "paused" &&
+		env.MergeSuggester != nil && env.Branch != nil {
+		lastText, _ := sub.bridge.PartialState()
+		go r.fireMergeSuggestion(sub.sessionID, env.Branch, env.MergeSuggester, lastText)
+	}
+
 	if !sub.finished.CompareAndSwap(false, true) {
 		return
 	}

@@ -1,5 +1,5 @@
 /**
- * useEventToasts.spec.ts — engineer-truth-pass-01PMTP01 WP08 (B17).
+ * useEventToasts.spec.ts — engineer-truth-pass-01PMTP01 WP08 (B16, B17).
  *
  * Mounts a host component that calls `useEventToasts()` ALONGSIDE the
  * real `ToastRoot.vue` (the component that actually renders toasts to
@@ -8,16 +8,16 @@
  * state. CLAUDE.md's release-ritual doctrine calls this out explicitly:
  * "a mounted surface can still be dead — proving the field is non-nil
  * is not proving the toast appears." This file is the "toast actually
- * fires end-to-end" proof for finding B17:
+ * fires end-to-end" proof for both findings:
  *
- *   provider:retry-after-rotation-failed → a toast telling the user
- *   their post-rotation retry failed, deduped per profile, and cleared
- *   by provider:auth-resumed (the clearer that exists solely to
- *   dismiss this toast).
+ *   B16 — branches:merge-suggested → a toast with a working "Merge now"
+ *         button that calls client.branches.merge(branchId).
+ *   B17 — provider:retry-after-rotation-failed → a toast telling the
+ *         user their post-rotation retry failed, deduped per profile,
+ *         and cleared by provider:auth-resumed (the clearer that exists
+ *         solely to dismiss this toast).
  *
  * Before this WP, useEventToasts.ts had zero test coverage at all.
- * (A companion B16 finding — branches:merge-suggested — lands its own
- * "Merge now" coverage in a follow-up commit against this same file.)
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { defineComponent, h } from 'vue';
@@ -81,7 +81,7 @@ const Host = defineComponent({
   },
 });
 
-describe('useEventToasts — end-to-end (broker event -> rendered toast -> action)', () => {
+describe('useEventToasts — B16/B17 end-to-end (broker event -> rendered toast -> action)', () => {
   let rt: FakeRuntime;
   let client: ReturnType<typeof createFakeHarnessClient>;
   let wrapper: VueWrapper | undefined;
@@ -109,6 +109,46 @@ describe('useEventToasts — end-to-end (broker event -> rendered toast -> actio
     });
     return wrapper;
   }
+
+  it('B16: branches:merge-suggested renders a toast whose "Merge now" button calls client.branches.merge', async () => {
+    const w = mountHost();
+    await flushPromises();
+
+    rt.emit('branches:merge-suggested', {
+      branchId: 'br-1',
+      reason: 'terminal_state_token',
+      detail: 'contains a terminal-state marker',
+    });
+    await flushPromises();
+
+    const text = w.text();
+    expect(text).toContain('Branch reply looks terminal');
+    expect(text).toContain('contains a terminal-state marker');
+
+    const mergeButton = w.find('button.toast-action');
+    expect(mergeButton.exists()).toBe(true);
+    expect(mergeButton.text()).toBe('Merge now');
+
+    await mergeButton.trigger('click');
+    await flushPromises();
+
+    expect(client.branches.merge).toHaveBeenCalledOnce();
+    expect(client.branches.merge).toHaveBeenCalledWith('br-1');
+    // dismissAfter defaults true — the toast is gone after the click.
+    expect(w.find('.toast').exists()).toBe(false);
+  });
+
+  it('B16: a second suggestion for the same branch is deduped (no second toast)', async () => {
+    const w = mountHost();
+    await flushPromises();
+
+    rt.emit('branches:merge-suggested', { branchId: 'br-2', reason: 'idle_timeout' });
+    await flushPromises();
+    rt.emit('branches:merge-suggested', { branchId: 'br-2', reason: 'idle_timeout' });
+    await flushPromises();
+
+    expect(w.findAll('.toast').length).toBe(1);
+  });
 
   it('B17: provider:retry-after-rotation-failed renders a toast telling the user the retry failed', async () => {
     const w = mountHost();

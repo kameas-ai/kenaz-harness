@@ -14,6 +14,7 @@ import (
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
+	graphview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 	autotitle "github.com/kameas-ai/kenaz-harness/core/sessions/autotitle"
 )
@@ -1355,5 +1356,192 @@ func TestChatRunnerIntegration_KeyRotation_RedriveStartStreamFails_EmitsRetryAft
 		if e.topic == "provider:auth-resumed" {
 			t.Errorf("unexpected provider:auth-resumed after a failed redrive: %+v", e)
 		}
+	}
+}
+
+// ── B16 (engineer-truth-pass-01PMTP01 WP08) ─────────────────────────────
+//
+// waitForMergeSuggested polls the broker for a "branches:merge-suggested"
+// payload up to 2s; returns the payload (or fails the test).
+func waitForMergeSuggested(t *testing.T, broker *recordingBroker) MergeSuggestionPayload {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, e := range broker.snapshot() {
+			if e.topic == "branches:merge-suggested" {
+				return e.payload.(MergeSuggestionPayload)
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("did not see branches:merge-suggested within 2s; events = %+v", broker.snapshot())
+	return MergeSuggestionPayload{}
+}
+
+// hasMergeSuggested reports whether the broker recorded a
+// branches:merge-suggested event at all (used by the negative case,
+// which must NOT see one within its poll window).
+func hasMergeSuggested(broker *recordingBroker) bool {
+	for _, e := range broker.snapshot() {
+		if e.topic == "branches:merge-suggested" {
+			return true
+		}
+	}
+	return false
+}
+
+// buildBranchAwareRunner wires a ChatRunner whose EnvDefaults chain runs
+// through the REAL production seam — graphview.Manager.EnvDefaults(),
+// built from a graphview.EnvDeps carrying seam (as Branch) and
+// suggester (as MergeSuggester) — exactly the path core/rpc/api.go's
+// newGraphManagerWithDeps wires in production. This is deliberate: a
+// test that set env.Branch / env.MergeSuggester directly from the
+// runner's own EnvDefaults callback would still pass if the WP08
+// assignment inside EnvDeps.applyTo (env_deps.go) were deleted — it
+// would prove nothing about the production wiring. Routing through
+// graphview.Manager.EnvDefaults() means dropping either the
+// `deps.MergeSuggester = coreag.NewMergeSuggester()` line at the
+// api.go call site's shape, or the `env.MergeSuggester = d.MergeSuggester`
+// line in EnvDeps.applyTo, breaks this test.
+func buildBranchAwareRunner(
+	t *testing.T,
+	llm *stubLLM,
+	seam coreag.BranchSeam,
+	suggester *coreag.MergeSuggester,
+	graphHistory []coreag.Message,
+) (*ChatRunner, *recordingBroker) {
+	t.Helper()
+	graph := loadProductionChatGraph(t)
+	broker := &recordingBroker{}
+
+	deps := graphview.EnvDeps{
+		Branch:         seam,
+		MergeSuggester: suggester,
+	}
+	mgr, err := graphview.NewManager(
+		graphview.WithDataDir(t.TempDir()),
+		graphview.WithEnvDeps(deps),
+	)
+	if err != nil {
+		t.Fatalf("graphview.NewManager: %v", err)
+	}
+	baseEnvDefaults := mgr.EnvDefaults()
+
+	runner, err := New(Config{
+		Kernel:        coreag.NewKernel(),
+		Registry:      stubRegistry{},
+		Broker:        broker,
+		HistoryWriter: &recordingHistoryWriter{},
+		History:       staticHistoryReader{msgs: graphHistory},
+		GraphLoader:   func() (coreag.Graph, error) { return graph, nil },
+		MaxTurns:      func() int { return 25 },
+		EnvDefaults: func(env *coreag.Env) {
+			// baseEnvDefaults runs FIRST — mirrors core/rpc/api.go's
+			// envDefaults composition (baseEnvDefaults(env) precedes the
+			// stub overrides), so the production assignment path is
+			// exercised before the test's LLM/Tools stubs are applied.
+			if baseEnvDefaults != nil {
+				baseEnvDefaults(env)
+			}
+			env.LLM = llm
+			env.Tools = newStubTools()
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return runner, broker
+}
+
+// TestChatRunnerIntegration_MergeSuggestion_ActiveBranchChild_FiresOnTerminalToken
+// pins finding B16 end-to-end: a chat turn on an active branch's child
+// session that completes cleanly causes the kernel Env's MergeSuggester
+// (assigned through the real EnvDeps.applyTo path, not hand-set in the
+// test) to fire, and the chat runner emits branches:merge-suggested so
+// the frontend toast (useEventToasts.ts, "Merge now") has something to
+// subscribe to. RunComplete outranks the terminal-token / idle-timeout
+// heuristics in MergeSuggester.Inspect's priority order (see
+// branch_merge_suggester.go), and every clean driveRun exit that isn't
+// an Ask-pause genuinely means "the child run finished" — so
+// child_run_complete, not terminal_state_token, is the reason a real
+// completed turn reports; the assistant's reply text is still exercised
+// here (a terminal-token phrase) because a future caller that supplies
+// RunComplete:false for an in-progress child would need the token match
+// to carry the suggestion instead.
+func TestChatRunnerIntegration_MergeSuggestion_ActiveBranchChild_FiresOnTerminalToken(t *testing.T) {
+	llm := &stubLLM{}
+	llm.push(stubLLMResponse{
+		stream: []coreag.StreamEvent{
+			{Kind: coreag.StreamEventText, Text: "Investigated the failure. Done."},
+		},
+		resp: coreag.LLMResponse{
+			Content:      "Investigated the failure. Done.",
+			FinishReason: "stop",
+		},
+	})
+
+	seam := coreag.NewFakeBranchSeam()
+	seam.ChildToBranch["child-session-1"] = "br-merge-1"
+	suggester := coreag.NewMergeSuggester()
+
+	runner, broker := buildBranchAwareRunner(t, llm, seam, suggester, []coreag.Message{
+		{Role: "user", Content: "please check on this"},
+	})
+
+	_, err := runner.StartStream(context.Background(), "profile-1", "child-session-1", "", "please check on this")
+	if err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	_ = waitForClosed(t, broker)
+
+	payload := waitForMergeSuggested(t, broker)
+	if payload.BranchID != "br-merge-1" {
+		t.Errorf("MergeSuggestionPayload.BranchID = %q, want br-merge-1", payload.BranchID)
+	}
+	if payload.Reason != "child_run_complete" {
+		t.Errorf("MergeSuggestionPayload.Reason = %q, want child_run_complete", payload.Reason)
+	}
+}
+
+// TestChatRunnerIntegration_MergeSuggestion_OrdinarySession_NeverFires is
+// the negative half: a chat turn on a session that is NOT a branch
+// child (the overwhelming majority of chat turns) must never emit
+// branches:merge-suggested, even though the same terminal-token text
+// and the same wired MergeSuggester are present. This is the
+// ActiveBranchForChildSession gate earning its keep — without it,
+// every ordinary session ending in "Done." would spuriously suggest a
+// merge.
+func TestChatRunnerIntegration_MergeSuggestion_OrdinarySession_NeverFires(t *testing.T) {
+	llm := &stubLLM{}
+	llm.push(stubLLMResponse{
+		stream: []coreag.StreamEvent{
+			{Kind: coreag.StreamEventText, Text: "All set. Done."},
+		},
+		resp: coreag.LLMResponse{
+			Content:      "All set. Done.",
+			FinishReason: "stop",
+		},
+	})
+
+	// Same seam as the positive test, but this session id was never
+	// registered via Fork/ChildToBranch — an ordinary top-level session.
+	seam := coreag.NewFakeBranchSeam()
+	suggester := coreag.NewMergeSuggester()
+
+	runner, broker := buildBranchAwareRunner(t, llm, seam, suggester, []coreag.Message{
+		{Role: "user", Content: "wrap this up"},
+	})
+
+	_, err := runner.StartStream(context.Background(), "profile-1", "ordinary-session-1", "", "wrap this up")
+	if err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	_ = waitForClosed(t, broker)
+
+	// Give the async trigger a moment to have fired if it were going to
+	// (it runs in its own goroutine off driveRun).
+	time.Sleep(100 * time.Millisecond)
+	if hasMergeSuggested(broker) {
+		t.Errorf("unexpected branches:merge-suggested on a non-branch session: %+v", broker.snapshot())
 	}
 }

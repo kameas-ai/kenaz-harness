@@ -62,6 +62,13 @@ type EnvDeps struct {
 	// so the elision marker can name a resolvable handle. nil keeps the
 	// truncation and drops the full payload.
 	ToolOutputArchive coreag.ToolOutputArchive
+
+	// MergeSuggester evaluates the "does this branch look ready to
+	// merge?" heuristic (engineer-truth-pass-01PMTP01 WP08, finding
+	// B16). nil disables the branches:merge-suggested broker topic
+	// entirely — the chat runner's post-run trigger no-ops without it,
+	// same as every other unset EnvDeps seam.
+	MergeSuggester *coreag.MergeSuggester
 }
 
 // WithEnvDeps installs production seams onto the Manager. The seams
@@ -138,6 +145,9 @@ func (d EnvDeps) applyTo(env *coreag.Env) {
 	}
 	if d.ToolOutputArchive != nil {
 		env.ToolOutputArchive = d.ToolOutputArchive
+	}
+	if d.MergeSuggester != nil {
+		env.MergeSuggester = d.MergeSuggester
 	}
 
 	// Arm the growth watermark for every graph-authored run that did not

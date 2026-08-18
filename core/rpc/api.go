@@ -5716,6 +5716,15 @@ func newGraphManagerWithDeps(
 	deps := graphview.EnvDeps{}
 	if convMgr != nil {
 		deps.Branch = graphview.NewBranchSeamAdapter(convMgr, sessionManagerOrNil(c))
+		// engineer-truth-pass-01PMTP01 WP08 (finding B16): the merge-
+		// suggestion heuristic is only meaningful once a real
+		// BranchSeam is wired — without one, ActiveBranchForChildSession
+		// never reports a live branch child, so there's nothing for the
+		// suggester to evaluate. Gating it here (rather than
+		// unconditionally) keeps that pairing explicit at the wiring
+		// site instead of relying on the chat runner's nil-Branch guard
+		// alone.
+		deps.MergeSuggester = coreag.NewMergeSuggester()
 	}
 	if corpusMgr != nil {
 		deps.Corpus = graphview.NewCorpusBackendAdapter(corpusMgr)

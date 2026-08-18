@@ -199,3 +199,38 @@ func TestEnvDeps_AppliedToEnv(t *testing.T) {
 		t.Fatal("nil manager")
 	}
 }
+
+// TestEnvDeps_MergeSuggesterAppliedToEnv exercises the WP08 (finding
+// B16) assignment specifically: EnvDeps.MergeSuggester must reach
+// env.MergeSuggester through Manager.EnvDefaults(), the same closure
+// core/rpc/api.go threads onto the chat runner's Config.EnvDefaults.
+//
+// This is a narrower field-presence check, not a substitute for the
+// chat package's end-to-end test (a completed branch-child turn
+// actually emitting branches:merge-suggested) — see
+// TestChatRunnerIntegration_MergeSuggestion_ActiveBranchChild_FiresOnTerminalToken
+// in core/rpc/views/agentgraph/chat, which is the one that proves the
+// toast can actually fire, not just that a field got set.
+func TestEnvDeps_MergeSuggesterAppliedToEnv(t *testing.T) {
+	t.Parallel()
+	suggester := coreag.NewMergeSuggester()
+	deps := graphview.EnvDeps{
+		MergeSuggester: suggester,
+	}
+	mgr, err := graphview.NewManager(
+		graphview.WithDataDir(t.TempDir()),
+		graphview.WithEnvDeps(deps),
+	)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	envDefaults := mgr.EnvDefaults()
+	if envDefaults == nil {
+		t.Fatal("EnvDefaults() returned nil closure")
+	}
+	env := &coreag.Env{}
+	envDefaults(env)
+	if env.MergeSuggester != suggester {
+		t.Errorf("env.MergeSuggester = %p, want %p (the EnvDeps-supplied suggester)", env.MergeSuggester, suggester)
+	}
+}
