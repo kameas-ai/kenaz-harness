@@ -21,6 +21,16 @@
 // importing the same id twice in one process reports a collision on the
 // second attempt rather than silently overwriting. dryRun=true is a
 // pure-read operation; dryRun=false is the only path that touches disk.
+//
+// Freshness has no background component (WP04 deleted
+// UserStore.StartWatch and its debounced reload loop — see
+// docs/unwired-ledger.md's 2026-08-18 entry): the per-call reload above
+// is the entire mechanism. An id written by a DIFFERENT process (served
+// mode's connectors.CatalogWithUserRecipes reloads its own UserStore per
+// supervisor snapshot, independently) becomes visible to THIS process on
+// its next catalog read, the same way one this process wrote itself
+// does — there was nothing a background reload loop could add once every
+// consumer already reloads on every call.
 package mcp
 
 import (

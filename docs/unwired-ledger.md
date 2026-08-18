@@ -1016,6 +1016,43 @@ dated interim state with a named retirement condition.
 - **Owner:** whoever picks up WP06 — unassigned as of this entry; escalate
   to the mission owner if WP06 has not been dispatched by the next sweep.
 
+### 2026-08-18 · `recipes.UserStore.StartWatch` deleted — a live substitute made it redundant
+
+`mcp-connector-lifecycle-01PMMC01` WP04 deleted `UserStore.StartWatch`,
+`watchLoop`, the watcher arm of `Close`, and `ErrAlreadyWatching`
+(`core/mcp/recipes/user.go`), plus their four `user_test.go` regression
+tests — the method's only readers.
+
+This is **not** the "no producer and no product intent" delete class:
+the producer (paste-config import) is real and shipping. The
+justification is the **live-substitute** class instead —
+`mcp-connector-lifecycle-01PMMC01` WP03, landed in the same mission
+immediately before this WP, wired every merged-recipe-catalog consumer
+(`core/rpc/api.go`'s chassis catalog, the import-collision reader, the
+boot-time recipe bootstrap, and `tools.Config.Catalog` — what
+`Tools_ListRecipes` reads) to reload `UserStore` from disk on **every
+call**, matching `core/mcp/connectors.CatalogWithUserRecipes`'s existing
+served-mode contract. Once every consumer already re-reads live, there is
+no cached state left for `StartWatch`'s debounced `onChange` callback to
+invalidate — wiring it would have started a real fsnotify goroutine (with
+its own idempotency and shutdown-lifecycle burden — `(*rpc.API).Shutdown`
+turned out to have the same never-called gap `docs/dead-code-audit-2026-
+08-16.md` found elsewhere) that pushed updates nothing was polling off
+of.
+
+**Positive no-consumer proof:** `grep -rn 'UserStore.Close\|\.StartWatch(' core/ --include=*.go`
+(pre-deletion) showed the only callers of both were the four deleted
+tests; no production code called either.
+
+**Blocker/owner:** none — this is a closed, dated justification, not a
+parked item. If a future need for a genuine background push (e.g. an
+external process editing recipe files that this process must react to
+mid-request rather than on its next catalog read) resurfaces, re-derive
+the watcher fresh against whatever the freshness contract looks like at
+that time rather than restoring this deleted code verbatim — the
+`onChange`-to-cache-invalidation shape assumed a cache that no longer
+exists.
+
 ---
 
 ## Drained
