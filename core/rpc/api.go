@@ -1705,6 +1705,25 @@ func New(c *core.Core, opts ...Option) *API {
 		// Broker enables LeftRail real-time updates on branch creation
 		// (branch creates a new child session row): v0.5.3 fix.
 		Broker: a.broker,
+		// Settings gives ProposeReintegrationSummary the persisted
+		// BranchReintegrationMaxTokens instead of a hardcoded 2000
+		// (engineer-truth-pass-01PMTP01 WP02, finding B2).
+		// settingsStore is nil-safe (New(nil) test-harness path, or a
+		// user-config-dir resolution failure); LoadAll's error is
+		// swallowed into the zero Settings, which
+		// EffectiveBranchReintegrationMaxTokens already treats as
+		// "use the default" — same behaviour the hardcoded constant
+		// gave every caller before this WP.
+		Settings: func() settings.Settings {
+			if settingsStore == nil {
+				return settings.Settings{}
+			}
+			s, err := settingsStore.LoadAll()
+			if err != nil {
+				return settings.Settings{}
+			}
+			return s
+		},
 	})
 
 	// Agent-graph view surface — graph manager already built above so

@@ -90,6 +90,15 @@ describe('BranchSuggestionBanner (unit)', () => {
 
 // ── ChatInput + advisor integration tests ────────────────────────────
 
+// This suite exercises the detector/banner behaviour (debounce, dismiss,
+// streaming suppression) once the advisor is switched on — the master
+// switch itself (engineer-truth-pass-01PMTP01 WP02, finding B2) is
+// covered separately in ChatInput.branchAdvisor.spec.ts, including the
+// off-by-default case these tests deliberately don't re-test. Before
+// WP02 the switch had no reader at all, so these tests passed with the
+// banner permanently on regardless of Settings.branchAdvisorEnabled;
+// seeding it explicitly here keeps that intent true now that the gate
+// is real.
 function mountInput(
   props: Record<string, unknown> = {},
   seed: Partial<HarnessClient> = {},
@@ -100,7 +109,20 @@ function mountInput(
       plugins: [
         {
           install(app) {
-            provideFakeClient(app, seed);
+            provideFakeClient(app, {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              settings: {
+                get: async () => ({
+                  schemaVersion: 1,
+                  lastRoute: '/sessions',
+                  theme: 'system',
+                  accent: 'default',
+                  windowSize: { width: 1280, height: 800 },
+                  branchAdvisorEnabled: true,
+                }),
+              } as any,
+              ...seed,
+            });
           },
         },
       ],

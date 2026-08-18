@@ -14,6 +14,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/context/audit"
 	"github.com/kameas-ai/kenaz-harness/core/conversation"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 )
 
@@ -56,6 +57,17 @@ type Config struct {
 	// child session row) emits a "branch_created" event so the LeftRail
 	// refreshes in real-time (v0.5.3 fix).
 	Broker BranchListBroker
+	// Settings resolves the current persisted Settings snapshot. Read by
+	// ProposeReintegrationSummary for BranchReintegrationMaxTokens
+	// (engineer-truth-pass-01PMTP01 WP02, finding B2). nil is a valid
+	// value — ProposeReintegrationSummary falls back to
+	// settings.DefaultBranchReintegrationMaxTokens when Settings is nil,
+	// matching the pre-WP02 hardcoded default so the New(nil) test-
+	// harness path keeps working unchanged. The wiring site
+	// (core/rpc/api.go) is responsible for swallowing load errors into
+	// the zero value, which EffectiveBranchReintegrationMaxTokens
+	// already treats as "use the default".
+	Settings func() settings.Settings
 }
 
 // API is the concrete BranchesAPI implementation.
@@ -470,9 +482,17 @@ func (a *API) ProposeReintegrationSummary(ctx context.Context, branchSessionID s
 	}
 	summary := b.String()
 
-	// Rough truncation: 4 runes ≈ 1 token; cap at DefaultBranchReintegrationMaxTokens.
+	// Rough truncation: 4 runes ≈ 1 token; cap at the persisted
+	// BranchReintegrationMaxTokens (engineer-truth-pass-01PMTP01 WP02,
+	// finding B2 — this used to hardcode 2000 regardless of what the
+	// user had saved; EffectiveBranchReintegrationMaxTokens's zero-
+	// fallback already resolves to the same 2000 default, so an unset
+	// or nil-Settings caller sees no behaviour change).
 	const runesPerToken = 4
-	const maxTokens = 2000
+	maxTokens := settings.DefaultBranchReintegrationMaxTokens
+	if a.cfg.Settings != nil {
+		maxTokens = a.cfg.Settings().EffectiveBranchReintegrationMaxTokens()
+	}
 	maxRunes := maxTokens * runesPerToken
 	if utf8.RuneCountInString(summary) > maxRunes {
 		runes := []rune(summary)
