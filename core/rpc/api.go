@@ -2694,6 +2694,11 @@ func New(c *core.Core, opts ...Option) *API {
 		if c != nil {
 			sessionStarter.sessionMgr = c.SessionManager()
 			sessionStarter.dataDir = dataDir
+			// FR-004/C-004: deliver through the attachments-aware sessions
+			// view, not session.Manager directly. a.sessionsAPI is fully
+			// constructed and wrapped (attachments, title-gen, broker, ...)
+			// by this point in New() — see newSessionsAPI above.
+			sessionStarter.systemPrompt = a.sessionsAPI
 		}
 
 		// Resolve fleet client for onboarding seams. May be nil (OSS build)
@@ -3853,6 +3858,18 @@ func newLLMStack(
 			reader: &sessionProjectReader{mgr: c.SessionManager()},
 		}
 	}
+	// chatAttResolver is the same bridge, shaped for the chat package's
+	// own AttachmentsResolver (first-run-onboarding-01PMOB01 WP02) —
+	// core/rpc/views/agentgraph/chat does not import core/rpc/views/llm,
+	// so it gets its own narrow adapter over the identical attMgr/reader
+	// pair rather than reusing attResolver's type.
+	var chatAttResolver chat.AttachmentsResolver
+	if attMgr != nil {
+		chatAttResolver = &chatAttachmentsResolverAdapter{
+			mgr:    attMgr,
+			reader: &sessionProjectReader{mgr: c.SessionManager()},
+		}
+	}
 	// Tool discovery wiring — the discoverer projects the same MCP
 	// pool the toolloop dispatches against onto each GenerationRequest's
 	// Tools field, namespaced as "<server>__<tool>" so the toolloop can
@@ -4032,7 +4049,7 @@ func newLLMStack(
 		}
 		return resolveAutonomyKnobsWithSettingsFallback(global, project, session, effectiveMaxAgentTurnsFromSettings(settingsImpl))
 	}
-	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatWorkspaceDir, chatWorkspaceNote, confirmBus, confirmDeps, autonomyKnobsProvider)
+	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, chatAttResolver, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatWorkspaceDir, chatWorkspaceNote, confirmBus, confirmDeps, autonomyKnobsProvider)
 	var capCatalog llm.CapCatalog
 	if cat, err := llmcap.LoadDefault(); err == nil {
 		capCatalog = &capCatalogAdapter{cat: cat}
@@ -4376,6 +4393,11 @@ func buildChatRunner(
 	settingsImpl *settings.API,
 	graphMgr *graphview.Manager,
 	tools corellm.ToolDiscoverer,
+	// attachments resolves session-scoped system attachments onto every
+	// LLMProviderAdapter (first-run-onboarding-01PMOB01 WP02) — the read
+	// half of SetSystemPrompt's attachments-aware write. nil (attMgr
+	// unavailable) disables the layer.
+	attachments chat.AttachmentsResolver,
 	artifactSinkConcrete *artifactsview.Sink,
 	compactionDeps *chat.CompactionDeps,
 	usageMgr usage.Manager,
@@ -4756,6 +4778,7 @@ func buildChatRunner(
 		CustomInstructions: customInstructions,
 		EnvDefaults:        envDefaults,
 		ToolDiscoverer:     chatToolDiscovererAdapter{inner: tools},
+		Attachments:        attachments,
 		Compaction:         compactionDeps,
 		CompactionPipeline: chatCompactionPipeline,
 		PartialPersister:   partialPersister,
@@ -5095,6 +5118,35 @@ func (a *attachmentsResolverAdapter) ListResolved(ctx context.Context, sessionID
 	out := make([]llm.ResolvedAttachment, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, llm.ResolvedAttachment{
+			Content: r.Content,
+			Kind:    r.Kind,
+		})
+	}
+	return out, nil
+}
+
+// chatAttachmentsResolverAdapter bridges core/attachments.Manager into the
+// chat package's AttachmentsResolver shape (first-run-onboarding-01PMOB01
+// WP02) so core/rpc/views/agentgraph/chat never imports core/attachments
+// directly. Structurally identical to attachmentsResolverAdapter above —
+// kept as a separate type because the two packages declare distinct
+// ResolvedAttachment types (chat does not import views/llm).
+type chatAttachmentsResolverAdapter struct {
+	mgr    *coreatt.Manager
+	reader coreatt.SessionProjectReader
+}
+
+func (a *chatAttachmentsResolverAdapter) ListResolved(ctx context.Context, sessionID string) ([]chat.ResolvedAttachment, error) {
+	if a == nil || a.mgr == nil {
+		return nil, nil
+	}
+	rows, err := a.mgr.ListResolved(ctx, a.reader, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]chat.ResolvedAttachment, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, chat.ResolvedAttachment{
 			Content: r.Content,
 			Kind:    r.Kind,
 		})

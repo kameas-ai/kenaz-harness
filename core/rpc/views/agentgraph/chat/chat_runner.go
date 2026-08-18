@@ -232,6 +232,16 @@ type Config struct {
 	// tool list. nil disables discovery — the chat path still works,
 	// but the model is never told about any tools.
 	ToolDiscoverer ToolCatalogDiscoverer
+	// Attachments resolves the session's system-kind attachments onto
+	// each LLMProviderAdapter (first-run-onboarding-01PMOB01 WP02). nil
+	// disables the layer — pre-existing behaviour for every session
+	// before this field existed. This is the read half of the
+	// attachments-aware SetSystemPrompt seam
+	// (core/rpc/views/sessions/impl.go:722): without it, a session's
+	// persisted starting context (onboarding's starter prompt, or an
+	// ordinary session's attached context via NewSessionDialog.vue) is
+	// stored correctly but never reaches the model.
+	Attachments AttachmentsResolver
 	// EnvDefaults is an optional callback the runner invokes on the
 	// constructed Env before kernel.Run; production wiring threads
 	// Memory / Policy / Branch / Hooks-journal seams through it.
@@ -789,6 +799,7 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	}
 	llmAdapter := NewLLMProviderAdapter(r.cfg.Registry, profileID, modelOverride, toolCatalog, imageCapturer).
 		WithSessionID(sessionID).
+		WithAttachments(r.cfg.Attachments).
 		WithEnvContext(r.cfg.Clock, r.cfg.WorkspaceDir, r.cfg.WorkspaceNote).
 		WithCustomInstructions(r.cfg.CustomInstructions).
 		// autonomy-knobs-live-01PMAG02 WP06: recapStyle was resolved
