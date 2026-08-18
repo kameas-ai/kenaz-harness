@@ -466,3 +466,99 @@ func TestStatus_ParallelReadsDuringDownload(t *testing.T) {
 		t.Errorf("final DownloadState = %q, want staged", out.DownloadState)
 	}
 }
+
+// ── WP01: DownloadError wire-through + orphan-sweep guard ────────────────
+//
+// self-update-repair-01PMUP01. These tests pin the mutations named in
+// tasks.md WP01:
+//   - Status stops copying downloadErr → TestStatus_ReportsDownloadError fails.
+//   - StartDownload drops the downloadErr clear → TestStartDownload_ClearsPreviousFailureReason fails.
+// The orphan-sweep mutations (delete the sweep / widen the glob) are pinned
+// in core/update/service_test.go since sweepOrphanPartFiles lives there.
+
+func TestStatus_ReportsDownloadError(t *testing.T) {
+	ch := make(chan coreupdate.DownloadProgress, 1)
+	svc := &fakeService{
+		checkInfo: coreupdate.Info{
+			AvailableVersion: "v0.4.1", Available: true,
+			DownloadURL: "https://example/asset", Sha256: "abc",
+		},
+		downloadCh: ch,
+	}
+	m := New(Config{Service: svc})
+	_ = m.StartCheck(context.Background())
+	if err := m.StartDownload(context.Background()); err != nil {
+		t.Fatalf("StartDownload: %v", err)
+	}
+	ch <- coreupdate.DownloadProgress{Done: true, Err: errors.New("network reset")}
+	close(ch)
+
+	deadline := time.Now().Add(2 * time.Second)
+	var out StatusOutput
+	for time.Now().Before(deadline) {
+		out, _ = m.Status(context.Background())
+		if out.DownloadState == stateFailed {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if out.DownloadState != stateFailed {
+		t.Fatalf("DownloadState = %q, want failed", out.DownloadState)
+	}
+	if out.DownloadError != "network reset" {
+		t.Errorf("DownloadError = %q, want %q", out.DownloadError, "network reset")
+	}
+}
+
+// TestStartDownload_ClearsPreviousFailureReason pins FR-004/FR-005's
+// "the reason survives a reload" claim against a stale-error regression:
+// a NEW StartDownload attempt must clear the PREVIOUS attempt's
+// DownloadError so a fresh download-in-progress read never shows a stale
+// failure string from a prior, unrelated attempt.
+func TestStartDownload_ClearsPreviousFailureReason(t *testing.T) {
+	ch1 := make(chan coreupdate.DownloadProgress, 1)
+	svc := &fakeService{
+		checkInfo: coreupdate.Info{
+			AvailableVersion: "v0.4.1", Available: true,
+			DownloadURL: "https://example/asset", Sha256: "abc",
+		},
+		downloadCh: ch1,
+	}
+	m := New(Config{Service: svc})
+	_ = m.StartCheck(context.Background())
+	if err := m.StartDownload(context.Background()); err != nil {
+		t.Fatalf("StartDownload #1: %v", err)
+	}
+	ch1 <- coreupdate.DownloadProgress{Done: true, Err: errors.New("first attempt failed")}
+	close(ch1)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		out, _ := m.Status(context.Background())
+		if out.DownloadState == stateFailed {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	failedOut, _ := m.Status(context.Background())
+	if failedOut.DownloadError == "" {
+		t.Fatalf("setup: first attempt did not record a DownloadError")
+	}
+
+	// Second attempt: a fresh channel, no tick sent yet. StartDownload
+	// must clear the stale error immediately (synchronously, before the
+	// goroutine even runs) so a Status read taken right after StartDownload
+	// returns never sees the first attempt's reason.
+	ch2 := make(chan coreupdate.DownloadProgress, 1)
+	svc.mu.Lock()
+	svc.downloadCh = ch2
+	svc.mu.Unlock()
+	if err := m.StartDownload(context.Background()); err != nil {
+		t.Fatalf("StartDownload #2: %v", err)
+	}
+	mid, _ := m.Status(context.Background())
+	if mid.DownloadError != "" {
+		t.Errorf("DownloadError after second StartDownload = %q, want empty (stale reason survived)", mid.DownloadError)
+	}
+	close(ch2)
+}

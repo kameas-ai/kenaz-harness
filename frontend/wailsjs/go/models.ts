@@ -7629,6 +7629,7 @@ export namespace update {
 	    channel: string;
 	    downloadState: string;
 	    downloadProgress?: number;
+	    downloadError?: string;
 	    notes?: string;
 	    releaseUrl?: string;
 	    skippedByUser: boolean;
@@ -7646,6 +7647,7 @@ export namespace update {
 	        this.channel = source["channel"];
 	        this.downloadState = source["downloadState"];
 	        this.downloadProgress = source["downloadProgress"];
+	        this.downloadError = source["downloadError"];
 	        this.notes = source["notes"];
 	        this.releaseUrl = source["releaseUrl"];
 	        this.skippedByUser = source["skippedByUser"];

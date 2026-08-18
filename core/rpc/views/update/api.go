@@ -34,6 +34,12 @@ type StatusOutput struct {
 	// DownloadProgress is the most recent percent (0-100) reported by
 	// the download pump. 0 when DownloadState is not "downloading".
 	DownloadProgress int `json:"downloadProgress,omitempty"`
+	// DownloadError is the reason the most recent download attempt
+	// failed — set by markFailed alongside DownloadState=="failed",
+	// carrying the same string TopicDownloadFailed publishes. Cleared
+	// by the next StartDownload. Never the manifest version (DC-7:
+	// only the error message goes on the wire).
+	DownloadError string `json:"downloadError,omitempty"`
 	// Notes is the manifest-supplied release-notes blurb (or URL).
 	// Opaque to this package; not logged.
 	Notes string `json:"notes,omitempty"`

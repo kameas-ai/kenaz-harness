@@ -19,7 +19,11 @@
  *   availableVersion: semver of the offered upgrade (only set when available)
  *   channel       : 'stable' | 'beta' | 'dev' | 'prerelease'
  *   downloadState : staged-download lifecycle
- *   downloadProgress: 0..1, only meaningful while downloading
+ *   downloadProgress: 0-100 integer percent, only meaningful while
+ *     downloading (DC-2 — NOT a 0..1 fraction; a naive
+ *     `width: progress * 100 + '%'` renders 10000%)
+ *   downloadError : reason the most recent download failed, only set
+ *     while downloadState === 'failed'; survives a reload (FR-004/FR-005)
  *   notes         : short markdown blurb pulled from the release manifest
  *   releaseUrl    : GitHub Releases URL for the offered version
  *   skippedByUser : true iff the user already chose Skip on this version
@@ -32,7 +36,13 @@ export interface UpdateStatus {
   availableVersion?: string;
   channel: string;
   downloadState: 'idle' | 'downloading' | 'staged' | 'failed';
+  /** 0-100 integer percent (DC-2) — never a 0..1 fraction. */
   downloadProgress?: number;
+  /** Reason the most recent download failed. Only meaningful while
+   *  downloadState === 'failed'; readable from a fresh status() call
+   *  after a reload, not only from the one-shot 'update:download-failed'
+   *  broker frame (FR-004/FR-005). */
+  downloadError?: string;
   notes?: string;
   releaseUrl?: string;
   skippedByUser?: boolean;
