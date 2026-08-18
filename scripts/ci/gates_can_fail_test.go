@@ -126,7 +126,14 @@ var cwdSensitiveGates = []string{
 // test for the class. A gate invoked from a foreign cwd must reach the same
 // conclusion it reaches from the repo root — never a vacuous pass.
 func TestGates_VerdictIsIndependentOfWorkingDirectory(t *testing.T) {
-	t.Parallel()
+	// NOT t.Parallel(). TestGates_PlantedViolationFires mutates the REAL
+	// repo tree (it writes and removes probe files under root), and this
+	// test reads that tree twice — once from the root, once from a foreign
+	// cwd — expecting both reads to see the same thing. Running the two in
+	// parallel meant the two reads could straddle a plant: PR #294 failed
+	// in CI with the root run reporting clean and the foreign run failing
+	// on a topic whose subscriber exists (DeferredAskPill.vue). The gate
+	// was innocent; the harness was racing itself.
 	root := repoRoot(t)
 
 	for _, gate := range cwdSensitiveGates {
@@ -719,7 +726,9 @@ func plant(t *testing.T, full, content, appendText string) func() {
 // Node stack trace swallowed by `continue-on-error: true`. From frontend/ it
 // worked. Same script, two answers, and CI only ever saw the broken one.
 func TestCSSTokensGate_SameVerdictFromAnyCWD(t *testing.T) {
-	t.Parallel()
+	// NOT t.Parallel() — same reason as
+	// TestGates_VerdictIsIndependentOfWorkingDirectory: it reads a tree
+	// that TestGates_PlantedViolationFires mutates.
 	root := repoRoot(t)
 	script := filepath.Join(root, "scripts", "ci", "check-css-tokens.mjs")
 
