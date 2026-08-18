@@ -29,6 +29,16 @@ jobs:
     runs-on: [self-hosted, Linux, ARM64, ci-medium]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          # check-upgrade-snapshots-locked.sh runs `git merge-base HEAD
+          # origin/main`. A shallow checkout cannot answer that: at depth
+          # 1 the two histories share no commit and the gate fails with
+          # "found no common ancestor" — which is exactly what happened
+          # on PR #294, the first time this gate ever ran in CI. Fetching
+          # origin/main at depth 1 (the previous attempt, below) resolves
+          # the REF but not the ancestry, so it did not help. merge-base
+          # needs real history.
+          fetch-depth: 0
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -38,6 +48,10 @@ jobs:
           # collides with existing files ("Cannot open: File exists").
           # Modules carry over naturally; no caching needed.
           cache: false
+
+      - name: fetch tags (upgrade-snapshots-locked bounds "locked" by release tag)
+        # fetch-depth: 0 above brings full history but not tags.
+        run: git fetch --tags origin
 
       - name: go mod download
         run: go mod download
@@ -111,6 +125,14 @@ jobs:
       - name: bindings-name guard
         run: bash scripts/ci/check-binding-names.sh
 
+      - name: listpending-coverage guard
+        # consent-surfaces-truth-01PMTR01 WP03. Every `<Family>_ListPending`
+        # binding must have a reader in harnessClient.ts. Permissions_ListPending
+        # existed end to end on the Go side with zero frontend callers, so a
+        # permission prompt lost across a reload never came back — the turn hung
+        # until the registry's 5-minute timeout fail-closed denied it.
+        run: bash scripts/ci/check-listpending-coverage.sh
+
       - name: emitter-isolation guard
         run: bash scripts/ci/check-emitter-isolation.sh
 
@@ -136,6 +158,17 @@ jobs:
         # nothing enforced it. The gate shipped; no workflow ever invoked
         # it, so the regression it exists to prevent was uncaught.
         run: bash scripts/ci/check-cedar-gate-arguments.sh
+
+      - name: cedar engine singleton guard (I15)
+        # Added by WP05 of consent-surfaces-truth-01PMTR01 (the hoist to
+        # one shared *cedar.Engine per process). I13 checks the ARGUMENT
+        # at a call site; it has no vocabulary for "N separate engines
+        # exist where the product promises one" — which is why thirteen
+        # independent buildCedarGate/buildCedarEngineOrNil constructions
+        # passed it clean pre-hoist. Fails if a future change re-pins any
+        # gate site back to its own construction call, silently breaking
+        # SavePolicy + ReloadPolicies' reach to that gate.
+        run: bash scripts/ci/check-cedar-engine-singleton.sh
 
       - name: no-cred-bytes-in-rpc guard
         # Credential hygiene. CLAUDE.md lists this under "Local dev
@@ -222,6 +255,27 @@ jobs:
         # documents today's single instance.
         run: bash scripts/ci/check-builtin-tool-registration.sh
 
+      - name: onboarding-starter-tools guard (FR-007)
+        # first-run-onboarding-01PMOB01 WP04. Catches the code.md:23-class
+        # defect: a shipped onboarding starter prompt naming a harness_*
+        # tool register.go does not register (e.g. deleted by a later
+        # sweep). No allowlist — a starter prompt either names a real tool
+        # or it doesn't ship. Covers only the SHIPPED starters under
+        # core/mcp/builtin/harness/onboarding/*.md; user-authored
+        # <DataDir>/onboarding/prompts/*.md overrides are out of CI's reach
+        # by design (C-007).
+        run: bash scripts/ci/check-onboarding-starter-tools.sh
+
+      - name: broker-topic-consumers guard (I14)
+        # kitty-specs/self-update-repair-01PMUP01 WP06, spec §6. Catches
+        # the A8-class defect: a broker topic const published into a live
+        # broker with no subscriber in any language — a real emit into a
+        # real void. The mission shipped the script but never added this
+        # step, so the gate could not fail a PR; added in review.
+        # scripts/ci/allowlists/i14-unconsumed-broker-topics.txt
+        # documents today's single instance (mcp:progress).
+        run: bash scripts/ci/check-broker-topic-consumers.sh
+
       - name: single-move-writer guard
         # kitty-specs/model-moves-transcript-01PMCH01 WP01, spec §4:
         # "One writer: session_write/the chat runner persists moves
@@ -240,6 +294,35 @@ jobs:
         # scripts/ci/allowlists/i4-forbidden-compaction-symbols.txt, which
         # allow-lists both today (spec §4.4/WP08 retires them).
         run: bash scripts/ci/check-no-forbidden-compaction-symbols.sh
+
+      - name: upgrade-snapshots-locked guard
+        # upgrade-path-coverage-01PMUG01 WP02, spec §4/§6.2. Snapshot
+        # directories under core/storage/sqlite/testdata/upgrade/ for an
+        # already-released tag are immutable — a "fix" that edits one
+        # invalidates it as ground truth for the upgrade-path job.
+        run: bash scripts/ci/check-upgrade-snapshots-locked.sh
+
+      - name: destructive-migration-coverage guard (I14)
+        # upgrade-path-coverage-01PMUG01 WP03, spec §FR-2. A migration
+        # is dormant until an upgrade path reaches it; repairing
+        # selection is what aims dormant migrations at real rows for
+        # the first time. Every migration whose Up() runs DROP TABLE /
+        # DROP INDEX / DROP TRIGGER / DROP COLUMN / ALTER TABLE RENAME
+        # / a non-scratch DELETE FROM must have a populated-table test
+        # or a dated scripts/ci/allowlists/i14-destructive-migration-coverage.txt entry.
+        run: bash scripts/ci/check-destructive-migration-coverage.sh
+
+      - name: tests-are-hermetic guard (FR-4b)
+        # upgrade-path-coverage-01PMUG01 WP05, spec §FR-4b. rpc.New's
+        # settings store resolves settings.NewFileStoreFromEnv() ->
+        # os.UserConfigDir() unless overridden (WithSettingsStore) — a
+        # test that forgets the override writes into whatever HOME
+        # resolves to for the process running it. This is a RUNTIME
+        # check because "a test wrote outside its own t.TempDir()" is
+        # not decidable by grep: it runs the scoped suite with HOME /
+        # XDG_CONFIG_HOME / AppData pointed at a seeded sentinel
+        # directory and fails on any change to that tree.
+        run: bash scripts/ci/check-tests-are-hermetic.sh
 
       # csp guard runs in test-frontend after `npm run build` produces
       # the real frontend/dist/index.html — there's no point checking
@@ -332,6 +415,37 @@ jobs:
         env:
           CGO_ENABLED: "1"
         run: go test ./core/llm/... ./core/rpc/views/agentgraph/chat/... -run WireGolden -count=1 -short -race
+
+  upgrade-path:
+    name: Upgrade-path coverage
+    # upgrade-path-coverage-01PMUG01 WP02. Materialises every committed
+    # snapshot under core/storage/sqlite/testdata/upgrade/<tag>/dump.sql
+    # (a database a PREVIOUS release produced) and drives it through the
+    # production storagesqlite.Open path at HEAD — the class of coverage
+    # the v0.63.0 P0 proved the rest of the suite structurally cannot
+    # provide (spec.md §1.2: every other test starts from an empty
+    # database, where the max-based-selection defect cannot occur).
+    runs-on: [self-hosted, Linux, ARM64, ci-medium]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: go mod download
+        run: go mod download
+
+      - name: ensure frontend/dist exists for embed
+        run: |
+          mkdir -p frontend/dist
+          touch frontend/dist/.gitkeep
+
+      - name: upgrade-path test
+        env:
+          CGO_ENABLED: "1"
+        run: go test ./core/storage/sqlite/... -run TestUpgradePath -count=1 -short -race -v
 
   test-frontend:
     name: Frontend tests + typecheck

@@ -1,11 +1,23 @@
 <script setup lang="ts">
 /**
  * PolicyView — Cedar policy bundle editor + decision audit panel.
- * (cedar-policy-editor-ui-01KQ8TD6 WP02)
+ * (cedar-policy-editor-ui-01KQ8TD6 WP02; decisions panel added by
+ * consent-surfaces-truth-01PMTR01 WP06)
  *
- * Two-pane layout:
- *   Left:  file list with "New" button + metadata
- *   Right: editor pane with Save / Delete / Validate status
+ * Two sub-views (data-testid="policy-tab-editor" / "policy-tab-decisions"),
+ * both reachable at the existing /policy route (SettingsTabs' "Policy" nav
+ * entry — unchanged by WP06):
+ *
+ *   Files (default):
+ *     Left:  file list with "New" button + metadata
+ *     Right: editor pane with Save / Delete / Validate status
+ *
+ *   Decisions:
+ *     A PULL-based list over CedarPolicy_RecentDecisions — the user opens
+ *     the tab or clicks Refresh; there is no push topic (spec §4 non-goal).
+ *     Meaningful only once WP05's engine hoist landed: before it, this
+ *     view's own engine never had Evaluate called on it, so the ring was
+ *     structurally always empty regardless of what this component did.
  *
  * Validation is debounced 500ms via ValidatePolicy (parse-only, no disk I/O).
  * Errors render inline with line/column. Default policies are read-only.
@@ -17,7 +29,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import SettingsTabs from '@/views/settings/SettingsTabs.vue';
-import type { PolicyFileDetail, ParseError } from '@/lib/types';
+import type { PolicyFileDetail, ParseError, PolicyDecision } from '@/lib/types';
 
 const client = useHarnessClient();
 
@@ -55,6 +67,25 @@ const newNameError = ref<string | null>(null);
 const toast = ref<string | null>(null);
 /** Whether the policy editor UI is enabled (feature flag). */
 const editorEnabled = ref(true);
+
+// ── decisions panel (consent-surfaces-truth-01PMTR01 WP06) ─────────────
+// Pull-based: no push topic, no policy:event contract (spec §4 non-goal).
+// The user opens the tab or clicks Refresh; nothing streams in on its
+// own. Reachable at the same /policy route SettingsTabs already routes
+// to — see the module doc above.
+type PolicyTab = 'editor' | 'decisions';
+/** Which sub-view of the (already app-shell-reachable) /policy page is showing. */
+const activeTab = ref<PolicyTab>('editor');
+/** Recent gate decisions, newest first (server-ordered; see engine.RecentDecisions). */
+const decisions = ref<PolicyDecision[]>([]);
+/** True while a decisions fetch is in flight. */
+const decisionsLoading = ref(false);
+/** Error from the last decisions fetch. */
+const decisionsError = ref<string | null>(null);
+/** True once the decisions tab has been opened at least once (lazy load). */
+const decisionsLoaded = ref(false);
+/** How many rows to request from RecentDecisions. */
+const DECISIONS_LIMIT = 100;
 
 // ── debounce handle ───────────────────────────────────────────────────
 let validateTimer: ReturnType<typeof setTimeout> | null = null;
@@ -102,6 +133,36 @@ async function loadFileList() {
     listError.value = err instanceof Error ? err.message : String(err);
   } finally {
     listLoading.value = false;
+  }
+}
+
+// ── decisions panel ───────────────────────────────────────────────────
+
+/**
+ * loadDecisions pulls the current RecentDecisions ring — a live gate's
+ * denial (memory write, workflow save, bash, tools, recipe spawn, …)
+ * shows up here because WP05 shares one *cedar.Engine across every gate
+ * site AND the policy view, so the ring this reads is fed by real
+ * Evaluate calls, not a private engine nobody ever evaluated against.
+ */
+async function loadDecisions() {
+  decisionsLoading.value = true;
+  decisionsError.value = null;
+  try {
+    decisions.value = await client.cedarPolicy.recentDecisions(DECISIONS_LIMIT);
+  } catch (err) {
+    decisionsError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    decisionsLoading.value = false;
+    decisionsLoaded.value = true;
+  }
+}
+
+/** Switch the visible sub-view; lazy-loads decisions on first visit. */
+function selectTab(tab: PolicyTab) {
+  activeTab.value = tab;
+  if (tab === 'decisions' && !decisionsLoaded.value) {
+    void loadDecisions();
   }
 }
 
@@ -274,6 +335,20 @@ watch(editorSource, (val) => {
     triggerDebouncedValidate(val);
   }
 });
+
+/** CSS modifier class for a decision's outcome pill. */
+function outcomeClass(outcome: PolicyDecision['outcome']): string {
+  switch (outcome) {
+    case 'deny':
+      return 'policy-view__outcome--deny';
+    case 'allow':
+      return 'policy-view__outcome--allow';
+    case 'not_applicable':
+      return 'policy-view__outcome--na';
+    default:
+      return 'policy-view__outcome--unknown';
+  }
+}
 </script>
 
 <template>
@@ -331,9 +406,89 @@ watch(editorSource, (val) => {
           Edit security policies under <code>&lt;DataDir&gt;/policy/</code>.
           Embedded defaults are read-only. Changes take effect on the next tool call.
         </p>
+        <nav class="policy-view__subnav" aria-label="Policy sections" data-testid="policy-subnav">
+          <button
+            type="button"
+            class="policy-view__subtab"
+            :class="{ 'policy-view__subtab--active': activeTab === 'editor' }"
+            data-testid="policy-tab-editor"
+            @click="selectTab('editor')"
+          >
+            Files
+          </button>
+          <button
+            type="button"
+            class="policy-view__subtab"
+            :class="{ 'policy-view__subtab--active': activeTab === 'decisions' }"
+            data-testid="policy-tab-decisions"
+            @click="selectTab('decisions')"
+          >
+            Decisions
+          </button>
+        </nav>
       </header>
 
-      <div class="policy-view__layout">
+      <!-- ── Decisions panel: a denial says why (FR-007) ─────────────── -->
+      <section
+        v-if="activeTab === 'decisions'"
+        class="policy-view__decisions"
+        data-testid="policy-decisions-panel"
+      >
+        <div class="policy-view__decisions-head">
+          <p class="policy-view__sub">
+            Recent policy decisions across every gate (memory, tools, workflows,
+            bash, recipe spawn, model selection, scheduled chat, session export,
+            ACP), newest first.
+          </p>
+          <button
+            type="button"
+            class="policy-view__btn policy-view__btn--sm"
+            data-testid="policy-decisions-refresh"
+            :disabled="decisionsLoading"
+            @click="loadDecisions"
+          >
+            {{ decisionsLoading ? 'Refreshing…' : '↺ Refresh' }}
+          </button>
+        </div>
+
+        <div v-if="decisionsLoading && !decisionsLoaded" class="policy-view__empty">
+          Loading…
+        </div>
+        <div v-else-if="decisionsError" class="policy-view__err-msg" role="alert">
+          {{ decisionsError }}
+        </div>
+        <div
+          v-else-if="decisions.length === 0"
+          class="policy-view__empty"
+          data-testid="policy-decisions-empty"
+        >
+          No decisions recorded yet. Trigger a gated action (a memory write, a
+          bash command, a tool call) to see it here.
+        </div>
+        <ul v-else class="policy-view__decision-list" data-testid="policy-decision-list">
+          <li
+            v-for="(d, idx) in decisions"
+            :key="`${d.action}-${d.evaluated_at}-${idx}`"
+            class="policy-view__decision-row"
+            :data-testid="`policy-decision-row-${idx}`"
+          >
+            <span class="policy-view__outcome" :class="outcomeClass(d.outcome)">
+              {{ d.outcome }}
+            </span>
+            <span class="policy-view__decision-main">
+              <span class="policy-view__decision-action">{{ d.action }}</span>
+              <span v-if="d.resource" class="policy-view__decision-resource">{{ d.resource }}</span>
+            </span>
+            <span v-if="d.matched_policy" class="policy-view__decision-policy">
+              {{ d.matched_policy }}
+            </span>
+            <span v-if="d.reason" class="policy-view__decision-reason">{{ d.reason }}</span>
+            <span class="policy-view__decision-time">{{ d.evaluated_at }}</span>
+          </li>
+        </ul>
+      </section>
+
+      <div v-if="activeTab === 'editor'" class="policy-view__layout">
         <!-- ── Left: file list ─────────────────────────────────────── -->
         <aside class="policy-view__sidebar">
           <div class="policy-view__sidebar-head">
@@ -941,5 +1096,143 @@ watch(editorSource, (val) => {
 
 .policy-view__btn--danger:hover:not(:disabled) {
   background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+/* ── Sub-nav (Files / Decisions) ── */
+.policy-view__subnav {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.policy-view__subtab {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.25rem 0.75rem;
+  background: var(--surface-2);
+  color: var(--ink-muted);
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-family: var(--font-ui);
+}
+
+.policy-view__subtab:hover {
+  color: var(--ink);
+}
+
+.policy-view__subtab--active {
+  background: var(--surface-3);
+  color: var(--ink);
+  border-color: var(--accent);
+}
+
+/* ── Decisions panel (WP06) ── */
+.policy-view__decisions {
+  padding: 0 1.5rem 1.5rem;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.policy-view__decisions-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.policy-view__decision-list {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.policy-view__decision-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    'outcome main policy'
+    'reason reason reason'
+    'time time time';
+  gap: 0.125rem 0.75rem;
+  align-items: baseline;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8125rem;
+  background: var(--surface-1);
+}
+
+.policy-view__outcome {
+  grid-area: outcome;
+  text-transform: uppercase;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 0.0625rem 0.375rem;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  height: fit-content;
+}
+
+.policy-view__outcome--deny {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+.policy-view__outcome--allow {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+}
+
+.policy-view__outcome--na,
+.policy-view__outcome--unknown {
+  color: var(--ink-muted);
+  background: var(--surface-2);
+}
+
+.policy-view__decision-main {
+  grid-area: main;
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.policy-view__decision-action {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.policy-view__decision-resource {
+  font-family: var(--font-mono);
+  color: var(--ink-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.policy-view__decision-policy {
+  grid-area: policy;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+.policy-view__decision-reason {
+  grid-area: reason;
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+}
+
+.policy-view__decision-time {
+  grid-area: time;
+  color: var(--ink-muted);
+  font-size: 0.6875rem;
 }
 </style>

@@ -7,7 +7,8 @@
  * test id, and the full item set is present.
  */
 import { describe, it, expect } from 'vitest';
-import { mount } from '@vue/test-utils';
+import { mount, flushPromises } from '@vue/test-utils';
+import { createMemoryHistory, createRouter } from 'vue-router';
 import SettingsTabs from '@/views/settings/SettingsTabs.vue';
 
 // vue-router returns undefined outside a router context — SettingsTabs
@@ -29,11 +30,12 @@ describe('SettingsTabs — vertical nav rail', () => {
   it('renders every nav item with an icon and a test id', () => {
     const wrapper = mount(SettingsTabs);
     const items = wrapper.findAll('[data-testid^="settings-tab-"]');
-    // 5 (App) + 4 (Authoring) + 1 (Runtime) + 6 (Integrations: Providers/Bundles/Secrets/LLMRouting/Peers/Sync)
-    // + 6 (Security: Permissions/Policy/Audit Settings/Audit Log/Compliance/Logs) + 1 (Privacy) = 23
+    // 5 (App) + 5 (Authoring) + 1 (Runtime) + 6 (Integrations: Providers/Bundles/Secrets/LLMRouting/Peers/Sync)
+    // + 6 (Security: Permissions/Policy/Audit Settings/Audit Log/Compliance/Logs) + 1 (Privacy) = 24
     // mission 01NLOGS01 WP05: +1 for the "Logs" runtime-log viewer in Security.
     // 2026-08-14: -1 — the "Tasks" entry was removed (see next spec).
-    expect(items).toHaveLength(23);
+    // engineer-truth-pass-01PMTP01 WP03: +1 — Branch Advisor sub-tab in Authoring.
+    expect(items).toHaveLength(24);
     for (const item of items) {
       // lucide-vue-next renders an <svg>; every row should carry one.
       expect(item.find('svg').exists()).toBe(true);
@@ -51,6 +53,32 @@ describe('SettingsTabs — vertical nav rail', () => {
     const wrapper = mount(SettingsTabs);
     expect(wrapper.find('[data-testid="settings-tab-tasks"]').exists()).toBe(false);
     expect(wrapper.html()).not.toContain('tab=tasks');
+  });
+
+  // consent-surfaces-truth-01PMTR01 WP06 (FR-007). The denial panel is a
+  // sub-tab of PolicyView, so its reachability is exactly as good as this
+  // nav entry plus the /policy route (pinned in
+  // src/__tests__/entrypoint.routes.test.ts). Losing this link would leave
+  // the panel mounted-but-dead — the defect the acceptance criterion
+  // names, one level above the component's own spec.
+  it('keeps the Policy entry, and clicking it navigates to /policy', async () => {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'home', component: { render: () => null } },
+        { path: '/policy', name: 'policy', component: { render: () => null } },
+      ],
+    });
+    await router.push('/');
+    await router.isReady();
+
+    const wrapper = mount(SettingsTabs, { global: { plugins: [router] } });
+    const policy = wrapper.find('[data-testid="settings-tab-policy"]');
+    expect(policy.exists(), 'the Policy nav entry must exist').toBe(true);
+
+    await policy.trigger('click');
+    await flushPromises();
+    expect(router.currentRoute.value.path).toBe('/policy');
   });
 
   it('keeps the addressable tabs (General, Providers, Permissions, Audit Settings, Audit Log)', () => {

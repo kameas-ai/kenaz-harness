@@ -394,6 +394,28 @@ export interface MCPImportWrotePath {
   json_path: string;
 }
 
+// ── MCP custom-recipe authoring (mission mcp-connector-lifecycle-01PMMC01,
+// WP06) ──────────────────────────────────────────────────────────────
+//
+// Wire shape for `MCP_SaveCustomRecipe`. Field names follow the Go JSON
+// tags (snake_case) verbatim — mirrors mcp.SaveCustomRecipeRequest.
+// Deliberately NOT a reuse of `Recipe` (the Tools-list wire shape): that
+// type has no command/url/transport fields, since the Tools list never
+// needed to round-trip them.
+
+export interface MCPSaveCustomRecipeRequest {
+  id: string;
+  display_name: string;
+  description?: string;
+  /** "stdio" | "http" | "sse". Empty/omitted defaults to "stdio". */
+  transport?: string;
+  /** Full argv for a stdio recipe (binary + args). */
+  command?: string[];
+  url?: string;
+  headers_template?: Record<string, string>;
+  post_url?: string;
+}
+
 export interface MCPImportResponse {
   report: MCPTranslationReport;
   wrote_paths?: MCPImportWrotePath[];
@@ -1089,6 +1111,23 @@ export interface CostThresholdCrossedPayload {
   yearMonth: string;
   /** RFC-3339 timestamp string the firing was recorded at. */
   firedAt: string;
+}
+
+/**
+ * MigrationDriftDetectedPayload — the event published on the
+ * `storage.migration.drift-detected` broker topic when the boot-time
+ * migration drift check finds severity:"error" (id_mismatch) drift
+ * (upgrade-path-coverage-01PMUG01 WP04, FR-3c). Mirrors
+ * core/rpc.MigrationDriftDetectedPayload exactly. Only ever published
+ * when hasError is true — code_only / ledger_only-only drift never
+ * reaches this topic — but the field travels with the payload so a
+ * handler's own guard reads the same source of truth rather than
+ * trusting "this topic fired" alone.
+ */
+export interface MigrationDriftDetectedPayload {
+  driftCount: number;
+  versions: number[];
+  hasError: boolean;
 }
 
 /**
@@ -2305,9 +2344,12 @@ export interface RecipeListing {
 /**
  * SlashCommandInfo — one row returned by `Slash_List`. Drives the
  * autocomplete dropdown the chat composer renders when the input
- * starts with a `/`. ComingSoon flags v1 stubs (memorize, recall,
- * forget, branch); the dropdown renders them with a
- * "(coming soon)" tag. isUser flags user-defined commands so the
+ * starts with a `/`. ComingSoon flags stub commands; the dropdown
+ * renders them with a "(coming soon)" tag. All four commands that
+ * originally shipped as v1 stubs — memorize, recall, forget, branch —
+ * are real implementations today and carry comingSoon: false (Go-side
+ * pinned by TestAPI_List_SortedAndNoneComingSoon; engineer-truth-pass-
+ * 01PMTP01 WP07). isUser flags user-defined commands so the
  * autocomplete renders a "user" chip.
  */
 export interface SlashCommandInfo {

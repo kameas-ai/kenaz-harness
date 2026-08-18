@@ -16,6 +16,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/llm/gemini" // model-lit-allow: import path into core/llm/** itself, not a literal
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/middleware"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/a2a"
@@ -516,6 +517,19 @@ func (b *Bindings) MCP_ImportClaudeDesktopConfig(req mcp.ImportRequest) (mcp.Imp
 	return importer.ImportClaudeDesktopConfig(b.ctx(), req)
 }
 
+// MCP_SaveCustomRecipe persists a user-authored recipe from the Custom
+// tab of the Add-MCP-Server modal (mission mcp-connector-lifecycle-
+// 01PMMC01, WP06). Validates the recipe (recipes.Recipe.Validate — the
+// same rule every shipped recipe satisfies) and writes it through
+// recipes.UserStore.Save. The saved recipe is visible to
+// Tools_ListRecipes in the same process, without a restart, the instant
+// this call returns (WP03's mcpUserRecipeSource reloads on every
+// merged-catalog build).
+func (b *Bindings) MCP_SaveCustomRecipe(req mcp.SaveCustomRecipeRequest) (recipes.Recipe, error) {
+	defer sentry.WrapBinding("MCP_SaveCustomRecipe")()
+	return b.api.MCP().SaveCustomRecipe(b.ctx(), req)
+}
+
 // MCP_HealthSnapshot returns the current health status for every installed
 // MCP recipe as a map of recipe-id → HealthEntry.
 // (mcp-server-health-ui-01KQ8TD6 WP01)
@@ -775,12 +789,26 @@ func (b *Bindings) Permissions_RevokeGrant(grantID string) error {
 	return b.api.Permissions().RevokeGrant(b.ctx(), grantID)
 }
 
-// Permissions_ListPending returns in-flight pending prompts. The
-// frontend uses this to reconcile its modal queue on app start / after
-// a hot reload.
-func (b *Bindings) Permissions_ListPending() ([]permissionsview.PendingRequest, error) {
+// Permissions_ListPending returns in-flight pending prompts, flattened
+// through FlattenPendingRequest — the SAME projection the live
+// `<family>:permission-pending` topic uses (FR-005: one projection
+// function). The four permission modals call this on mount to
+// reconcile their queue against the server's parked set after an app
+// start / hot reload / WS reconnect (consent-surfaces-truth-01PMTR01
+// WP03 / dead-code-audit finding A11 — this binding had zero callers
+// until this WP, so a prompt lost across a reload never returned: the
+// turn hung until the registry's 5-minute timeout fail-closed denied it).
+func (b *Bindings) Permissions_ListPending() ([]FlatPermissionRequest, error) {
 	defer sentry.WrapBinding("Permissions_ListPending")()
-	return b.api.Permissions().ListPending(b.ctx())
+	pending, err := b.api.Permissions().ListPending(b.ctx())
+	if err != nil {
+		return nil, err
+	}
+	out := make([]FlatPermissionRequest, 0, len(pending))
+	for _, p := range pending {
+		out = append(out, FlattenPendingRequest(p))
+	}
+	return out, nil
 }
 
 // ── audit ──────────────────────────────────────────────────────────────
@@ -1231,7 +1259,22 @@ func (b *Bindings) Settings_GetShortcuts() (map[string]string, error) {
 
 // Settings_SetShortcut persists a single shortcut override. An empty
 // binding value clears the override for that id (resets to registry
-// default). Emits KindShortcutOverridden audit event on success.
+// default).
+//
+// Rival door (consent-surfaces-truth-01PMTR01 WP04 / dead-code-audit
+// B6): the live save path is KeyboardShortcuts.vue's full-settings
+// round trip (client.settings.get/.set); this binding had zero
+// frontend callers — the same "a binding with no client reader" shape
+// WP03's check-listpending-coverage.sh gates for *_ListPending
+// bindings specifically, applied here to a different binding family.
+// The frontend-side callers (PermissionsClient.getShortcuts/
+// setShortcut/setShortcuts, their Wails adapters, and their fakes)
+// were deleted in this WP; this Go binding is held rather than deleted
+// because an out-of-repo caller (fleet control plane, Remote Control,
+// or any external WS client dispatching by string) cannot be ruled out
+// from inside this repo (spec §7). This docstring no longer claims an
+// audit emit — it never happened; see KindShortcutOverridden's
+// deletion in the same commit.
 func (b *Bindings) Settings_SetShortcut(id, binding string) error {
 	defer sentry.WrapBinding("Settings_SetShortcut")()
 	if b.storeFn == nil {
@@ -1262,8 +1305,12 @@ func (b *Bindings) Settings_SetShortcut(id, binding string) error {
 }
 
 // Settings_SetShortcuts atomically replaces the full keyboard shortcut
-// overrides map. Used by the settings panel's reset-all and batch-save
-// flows. Emits one KindShortcutOverridden audit event per changed entry.
+// overrides map.
+//
+// Unreached rival door — see Settings_SetShortcut's doc comment above
+// for the full account. No audit event is emitted; the claim that one
+// was has been removed along with KindShortcutOverridden
+// (consent-surfaces-truth-01PMTR01 WP04).
 func (b *Bindings) Settings_SetShortcuts(m map[string]string) error {
 	defer sentry.WrapBinding("Settings_SetShortcuts")()
 	if b.storeFn == nil {

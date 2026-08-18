@@ -14,6 +14,7 @@ import (
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
+	graphview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 	autotitle "github.com/kameas-ai/kenaz-harness/core/sessions/autotitle"
 )
@@ -1246,5 +1247,347 @@ func TestChatRunnerIntegration_KeyRotation_RedriveDedupe(t *testing.T) {
 	_, err = runner.RedriveLastTurn(context.Background(), "prof-3")
 	if err == nil {
 		t.Errorf("second RedriveLastTurn: expected error (no paused turn), got nil")
+	}
+}
+
+// waitForRetryAfterRotationFailed polls the broker for a
+// "provider:retry-after-rotation-failed" payload up to 2s; returns the
+// payload (or fails the test).
+func waitForRetryAfterRotationFailed(t *testing.T, broker *recordingBroker) RetryAfterRotationFailedPayload {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, e := range broker.snapshot() {
+			if e.topic == "provider:retry-after-rotation-failed" {
+				return e.payload.(RetryAfterRotationFailedPayload)
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("did not see provider:retry-after-rotation-failed within 2s; events = %+v", broker.snapshot())
+	return RetryAfterRotationFailedPayload{}
+}
+
+// TestChatRunnerIntegration_KeyRotation_RedriveStartStreamFails_EmitsRetryAfterRotationFailed
+// pins finding B17 (engineer-truth-pass-01PMTP01 WP08): the user rotated
+// their key, RedriveLastTurn's own StartStream call fails for a reason
+// OTHER than another auth rejection (here: the graph fails to load on
+// the second attempt), and the broker must emit
+// "provider:retry-after-rotation-failed" so the frontend toast
+// (useEventToasts.ts) can tell the user the retry itself failed —
+// before this WP the error was returned bare and the user saw nothing.
+func TestChatRunnerIntegration_KeyRotation_RedriveStartStreamFails_EmitsRetryAfterRotationFailed(t *testing.T) {
+	t.Setenv(envKeychainRotationVar, "on")
+
+	llm := &stubLLM{}
+	authErr := &corellm.ErrProviderAuthFailed{
+		Provider:  "anthropic",
+		ProfileID: "prof-4",
+		ModelID:   "claude-3-5-haiku",
+		Reason:    "invalid api key",
+		Cause:     &corellm.ErrAuth{Status: 401, Message: "invalid api key"},
+	}
+	llm.push(stubLLMResponse{err: authErr})
+
+	graph := loadProductionChatGraph(t)
+	broker := &recordingBroker{}
+	writer := &recordingHistoryWriter{}
+
+	// graphLoadCalls counts GraphLoader invocations so the SECOND call
+	// (the redrive's StartStream) fails while the first (the original
+	// StartStream) succeeds. This is a synchronous StartStream error
+	// site (chat_runner.go ~:702-705), reached before any kernel run
+	// starts — a realistic stand-in for "the retry itself could not
+	// even begin."
+	var graphLoadCalls atomic.Int64
+	runner, err := New(Config{
+		Kernel:        coreag.NewKernel(),
+		Registry:      stubRegistry{},
+		Broker:        broker,
+		HistoryWriter: writer,
+		History:       staticHistoryReader{msgs: []coreag.Message{{Role: "user", Content: "hello"}}},
+		GraphLoader: func() (coreag.Graph, error) {
+			if graphLoadCalls.Add(1) == 2 {
+				return coreag.Graph{}, errors.New("graph store unavailable")
+			}
+			return graph, nil
+		},
+		MaxTurns: func() int { return 25 },
+		EnvDefaults: func(env *coreag.Env) {
+			env.LLM = llm
+			env.Tools = newStubTools()
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_, err = runner.StartStream(context.Background(), "prof-4", "session-4", "", "hello")
+	if err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	waitForAuthFailed(t, broker)
+
+	// The redrive's own StartStream fails (graph load error injected
+	// above). RedriveLastTurn must still return that error to its
+	// caller...
+	_, err = runner.RedriveLastTurn(context.Background(), "prof-4")
+	if err == nil {
+		t.Fatalf("RedriveLastTurn: expected error from failing GraphLoader, got nil")
+	}
+
+	// ...but the failure must also reach the user: the broker must carry
+	// provider:retry-after-rotation-failed with the paused turn's
+	// identifying fields and the underlying error message.
+	payload := waitForRetryAfterRotationFailed(t, broker)
+	if payload.ProfileID != "prof-4" {
+		t.Errorf("RetryAfterRotationFailedPayload.ProfileID = %q, want prof-4", payload.ProfileID)
+	}
+	if payload.SessionID != "session-4" {
+		t.Errorf("RetryAfterRotationFailedPayload.SessionID = %q, want session-4", payload.SessionID)
+	}
+	if payload.ErrorMessage == "" {
+		t.Errorf("RetryAfterRotationFailedPayload.ErrorMessage is empty, want the StartStream error")
+	}
+
+	// provider:auth-resumed must NOT have fired — the redrive did not
+	// succeed, so there is nothing to "resume".
+	for _, e := range broker.snapshot() {
+		if e.topic == "provider:auth-resumed" {
+			t.Errorf("unexpected provider:auth-resumed after a failed redrive: %+v", e)
+		}
+	}
+}
+
+// ── B16 (engineer-truth-pass-01PMTP01 WP08) ─────────────────────────────
+//
+// waitForMergeSuggested polls the broker for a "branches:merge-suggested"
+// payload up to 2s; returns the payload (or fails the test).
+func waitForMergeSuggested(t *testing.T, broker *recordingBroker) MergeSuggestionPayload {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, e := range broker.snapshot() {
+			if e.topic == "branches:merge-suggested" {
+				return e.payload.(MergeSuggestionPayload)
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("did not see branches:merge-suggested within 2s; events = %+v", broker.snapshot())
+	return MergeSuggestionPayload{}
+}
+
+// hasMergeSuggested reports whether the broker recorded a
+// branches:merge-suggested event at all (used by the negative case,
+// which must NOT see one within its poll window).
+func hasMergeSuggested(broker *recordingBroker) bool {
+	for _, e := range broker.snapshot() {
+		if e.topic == "branches:merge-suggested" {
+			return true
+		}
+	}
+	return false
+}
+
+// buildBranchAwareRunner wires a ChatRunner whose EnvDefaults chain runs
+// through the REAL production seam — graphview.Manager.EnvDefaults(),
+// built from a graphview.EnvDeps carrying seam (as Branch) and
+// suggester (as MergeSuggester) — exactly the path core/rpc/api.go's
+// newGraphManagerWithDeps wires in production. This is deliberate: a
+// test that set env.Branch / env.MergeSuggester directly from the
+// runner's own EnvDefaults callback would still pass if the WP08
+// assignment inside EnvDeps.applyTo (env_deps.go) were deleted — it
+// would prove nothing about the production wiring. Routing through
+// graphview.Manager.EnvDefaults() means dropping either the
+// `deps.MergeSuggester = coreag.NewMergeSuggester()` line at the
+// api.go call site's shape, or the `env.MergeSuggester = d.MergeSuggester`
+// line in EnvDeps.applyTo, breaks this test.
+func buildBranchAwareRunner(
+	t *testing.T,
+	llm *stubLLM,
+	seam coreag.BranchSeam,
+	suggester *coreag.MergeSuggester,
+	graphHistory []coreag.Message,
+) (*ChatRunner, *recordingBroker) {
+	t.Helper()
+	graph := loadProductionChatGraph(t)
+	broker := &recordingBroker{}
+
+	deps := graphview.EnvDeps{
+		Branch:         seam,
+		MergeSuggester: suggester,
+	}
+	mgr, err := graphview.NewManager(
+		graphview.WithDataDir(t.TempDir()),
+		graphview.WithEnvDeps(deps),
+	)
+	if err != nil {
+		t.Fatalf("graphview.NewManager: %v", err)
+	}
+	baseEnvDefaults := mgr.EnvDefaults()
+
+	runner, err := New(Config{
+		Kernel:        coreag.NewKernel(),
+		Registry:      stubRegistry{},
+		Broker:        broker,
+		HistoryWriter: &recordingHistoryWriter{},
+		History:       staticHistoryReader{msgs: graphHistory},
+		GraphLoader:   func() (coreag.Graph, error) { return graph, nil },
+		MaxTurns:      func() int { return 25 },
+		EnvDefaults: func(env *coreag.Env) {
+			// baseEnvDefaults runs FIRST — mirrors core/rpc/api.go's
+			// envDefaults composition (baseEnvDefaults(env) precedes the
+			// stub overrides), so the production assignment path is
+			// exercised before the test's LLM/Tools stubs are applied.
+			if baseEnvDefaults != nil {
+				baseEnvDefaults(env)
+			}
+			env.LLM = llm
+			env.Tools = newStubTools()
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return runner, broker
+}
+
+// TestChatRunnerIntegration_MergeSuggestion_ActiveBranchChild_FiresOnTerminalToken
+// pins finding B16 end-to-end: a chat turn on an active branch's child
+// session that completes cleanly AND whose reply reads like a conclusion
+// causes the kernel Env's MergeSuggester (assigned through the real
+// EnvDeps.applyTo path, not hand-set in the test) to fire, and the chat
+// runner emits branches:merge-suggested so the frontend toast
+// (useEventToasts.ts, "Merge now") has something to subscribe to.
+//
+// The reason is terminal_state_token, not child_run_complete:
+// fireMergeSuggestion passes RunComplete:false because there is no
+// background child kernel run in this architecture to have reached a
+// terminal state (BranchSeamAdapter.WaitForChildRun is a no-op). See the
+// comment on the Inspect call in merge_suggestion.go — passing true
+// there would fire on every branch turn under copy that is not true, and
+// would leave the terminal-token and idle rules unreachable.
+func TestChatRunnerIntegration_MergeSuggestion_ActiveBranchChild_FiresOnTerminalToken(t *testing.T) {
+	llm := &stubLLM{}
+	llm.push(stubLLMResponse{
+		stream: []coreag.StreamEvent{
+			{Kind: coreag.StreamEventText, Text: "Investigated the failure. Done."},
+		},
+		resp: coreag.LLMResponse{
+			Content:      "Investigated the failure. Done.",
+			FinishReason: "stop",
+		},
+	})
+
+	seam := coreag.NewFakeBranchSeam()
+	seam.ChildToBranch["child-session-1"] = "br-merge-1"
+	suggester := coreag.NewMergeSuggester()
+
+	runner, broker := buildBranchAwareRunner(t, llm, seam, suggester, []coreag.Message{
+		{Role: "user", Content: "please check on this"},
+	})
+
+	_, err := runner.StartStream(context.Background(), "profile-1", "child-session-1", "", "please check on this")
+	if err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	_ = waitForClosed(t, broker)
+
+	payload := waitForMergeSuggested(t, broker)
+	if payload.BranchID != "br-merge-1" {
+		t.Errorf("MergeSuggestionPayload.BranchID = %q, want br-merge-1", payload.BranchID)
+	}
+	if payload.Reason != "terminal_state_token" {
+		t.Errorf("MergeSuggestionPayload.Reason = %q, want terminal_state_token", payload.Reason)
+	}
+}
+
+// TestChatRunnerIntegration_MergeSuggestion_ActiveBranchChild_NoTerminalToken_NeverFires
+// is the third case the original WP08 test set could not express, because
+// fireMergeSuggestion passed RunComplete:true and so fired on every clean
+// branch-child turn regardless of content: an active branch child whose
+// reply is an ordinary mid-investigation update must NOT suggest a merge.
+// Without this the suggester's heuristic is decorative — the emit would
+// be a function of "is this a branch child?" alone, and a branch would be
+// told it looks finished on its very first reply.
+// (engineer-truth-pass-01PMTP01 WP08 review.)
+func TestChatRunnerIntegration_MergeSuggestion_ActiveBranchChild_NoTerminalToken_NeverFires(t *testing.T) {
+	llm := &stubLLM{}
+	llm.push(stubLLMResponse{
+		stream: []coreag.StreamEvent{
+			{Kind: coreag.StreamEventText, Text: "Still digging through the stack traces; I will keep going."},
+		},
+		resp: coreag.LLMResponse{
+			Content:      "Still digging through the stack traces; I will keep going.",
+			FinishReason: "stop",
+		},
+	})
+
+	// Same active-branch-child wiring as the positive test — only the
+	// assistant's reply text differs, so a failure here is about the
+	// heuristic and not about the gate.
+	seam := coreag.NewFakeBranchSeam()
+	seam.ChildToBranch["child-session-2"] = "br-merge-2"
+	suggester := coreag.NewMergeSuggester()
+
+	runner, broker := buildBranchAwareRunner(t, llm, seam, suggester, []coreag.Message{
+		{Role: "user", Content: "any progress?"},
+	})
+
+	_, err := runner.StartStream(context.Background(), "profile-1", "child-session-2", "", "any progress?")
+	if err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	_ = waitForClosed(t, broker)
+
+	// Give the async trigger the same grace the ordinary-session negative
+	// case gets before concluding it did not fire.
+	time.Sleep(100 * time.Millisecond)
+	if hasMergeSuggested(broker) {
+		t.Errorf("unexpected branches:merge-suggested for a non-terminal branch-child reply: %+v", broker.snapshot())
+	}
+}
+
+// TestChatRunnerIntegration_MergeSuggestion_OrdinarySession_NeverFires is
+// the negative half: a chat turn on a session that is NOT a branch
+// child (the overwhelming majority of chat turns) must never emit
+// branches:merge-suggested, even though the same terminal-token text
+// and the same wired MergeSuggester are present. This is the
+// ActiveBranchForChildSession gate earning its keep — without it,
+// every ordinary session ending in "Done." would spuriously suggest a
+// merge.
+func TestChatRunnerIntegration_MergeSuggestion_OrdinarySession_NeverFires(t *testing.T) {
+	llm := &stubLLM{}
+	llm.push(stubLLMResponse{
+		stream: []coreag.StreamEvent{
+			{Kind: coreag.StreamEventText, Text: "All set. Done."},
+		},
+		resp: coreag.LLMResponse{
+			Content:      "All set. Done.",
+			FinishReason: "stop",
+		},
+	})
+
+	// Same seam as the positive test, but this session id was never
+	// registered via Fork/ChildToBranch — an ordinary top-level session.
+	seam := coreag.NewFakeBranchSeam()
+	suggester := coreag.NewMergeSuggester()
+
+	runner, broker := buildBranchAwareRunner(t, llm, seam, suggester, []coreag.Message{
+		{Role: "user", Content: "wrap this up"},
+	})
+
+	_, err := runner.StartStream(context.Background(), "profile-1", "ordinary-session-1", "", "wrap this up")
+	if err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	_ = waitForClosed(t, broker)
+
+	// Give the async trigger a moment to have fired if it were going to
+	// (it runs in its own goroutine off driveRun).
+	time.Sleep(100 * time.Millisecond)
+	if hasMergeSuggested(broker) {
+		t.Errorf("unexpected branches:merge-suggested on a non-branch session: %+v", broker.snapshot())
 	}
 }

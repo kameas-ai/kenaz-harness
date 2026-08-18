@@ -97,11 +97,25 @@ func sanitizeSnippetID(raw string) string {
 	return string(out) + ".cedar"
 }
 
+// CatalogReader is the read seam ListRecipes/InstallRecipe/etc. use to
+// resolve a recipe id. *recipes.Catalog satisfies it directly (a static
+// snapshot — every test in this package that builds one continues to
+// compile unchanged), and so does any live provider that rebuilds the
+// merged shipped+registry+user view on every call — which is exactly
+// what the desktop boot wiring needs for mcp-connector-lifecycle-01PMMC01
+// WP03/FR-003: ListRecipes must see a just-written import without a
+// process restart, and a `*recipes.Catalog` value snapshotted once at
+// boot can never do that. See core/rpc/api.go's mcpLiveCatalog.
+type CatalogReader interface {
+	List() []recipes.Recipe
+	Get(id string) (recipes.Recipe, bool)
+}
+
 // Config bundles the dependencies the API constructor needs. Every
 // field except Catalog and Enabled is nil-tolerant — tests that only
 // exercise the catalog walk can leave the rest unset.
 type Config struct {
-	Catalog   *recipes.Catalog
+	Catalog   CatalogReader
 	Enabled   *recipes.EnabledRecipes
 	Pool      PoolController
 	Secrets   secrets.Backend

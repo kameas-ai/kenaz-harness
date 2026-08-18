@@ -103,4 +103,53 @@ describe('entry-point route tables', () => {
     expect(paths(desktop)).toContain('/sites');
     expect(paths(desktop)).toContain('/marketplace');
   });
+
+  // engineer-truth-pass-01PMTP01 WP05 (finding B13a, B13b): /search and
+  // /hooks were both routed with no reachable entry point — /search had
+  // no router.beforeEach guard anywhere in the tree despite a comment
+  // claiming one, and /hooks (HooksView.vue) duplicated the reachable
+  // HooksSettingsView (mounted at /settings?tab=hooks) with zero in-app
+  // links. Both registrations were deleted from main.ts and
+  // main-served.ts; this pins that neither path resolves to anything
+  // special anymore — the shared catch-all handles both.
+  it('/search and /hooks resolve to not-found in both bundles (B13a, B13b)', () => {
+    expect(paths(desktop)).not.toContain('/search');
+    expect(paths(desktop)).not.toContain('/hooks');
+    expect(paths(served)).not.toContain('/search');
+    expect(paths(served)).not.toContain('/hooks');
+  });
+
+  // consent-surfaces-truth-01PMTR01 WP06 (FR-007): the denial panel's
+  // acceptance says "reachable from the app shell (route or nav entry,
+  // not just a component that exists)". PolicyView's own spec mounts the
+  // component directly, which cannot see a route registration being
+  // dropped — blind spot #1 one level up. This is the route half of the
+  // chain; SettingsTabsNav.spec.ts pins the nav-entry half.
+  it.each(['desktop', 'served'] as const)(
+    '/policy is routed, so the denial panel is reachable (%s)',
+    async (which) => {
+      const routes = which === 'desktop' ? desktop : served;
+      const router = createRouter({ history: createMemoryHistory(), routes });
+      await router.push('/policy');
+      await router.isReady();
+      expect(router.currentRoute.value.name, `${which} /policy`).toBe('policy');
+      expect(
+        router.currentRoute.value.matched.length,
+        `${which} /policy must match a real record, not the catch-all`,
+      ).toBeGreaterThan(0);
+    },
+  );
+
+  it.each(['desktop', 'served'] as const)(
+    '#/search and #/hooks resolve to the not-found route (%s)',
+    async (which) => {
+      const routes = which === 'desktop' ? desktop : served;
+      const router = createRouter({ history: createMemoryHistory(), routes });
+      for (const path of ['/search', '/hooks']) {
+        await router.push(path);
+        await router.isReady();
+        expect(router.currentRoute.value.name, `${which} ${path}`).toBe('not-found');
+      }
+    },
+  );
 });

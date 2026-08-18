@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -412,6 +413,16 @@ type API struct {
 	// merged catalog + data-dir are available; nil otherwise (the
 	// binding returns ErrImportNotConfigured).
 	mcpImportAPI *mcp.ImportAPI
+	// mcpUserStore backs every merged-recipe-catalog consumer's user
+	// source (mcp-connector-lifecycle-01PMMC01 WP03/FR-003): the chassis
+	// catalog (mcpAPI), the import collision reader, the boot-time
+	// recipe bootstrap, and the Tools view's live catalog all read
+	// through mcpUserRecipeSource(a.mcpUserStore) so an import written by
+	// this process is visible to all four in the same process, without a
+	// restart. nil when c == nil or DataDir is empty (test-harness path)
+	// — mcpUserRecipeSource degrades to a nil source in that case, which
+	// recipes.MergedCatalog treats as "contributes zero recipes".
+	mcpUserStore *recipes.UserStore
 	a2aAPI       a2a.A2AAPI
 	workflowAPI  workflow.WorkflowAPI
 	workflowsAPI workflowsview.WorkflowsAPI
@@ -484,8 +495,32 @@ type API struct {
 	// gate, etc.) can pass it into their gate constructors without
 	// re-plumbing through api.New.
 	promptRegistry *cedar.Registry
-	searchAPI      searchview.SearchAPI
-	storageAPI     storageview.StorageAPI
+
+	// cedarEngine is the process-singleton Cedar policy engine (WP05
+	// hoist, consent-surfaces-truth-01PMTR01 — "Recorded, not fixed" in
+	// the v0.63.1 release commit). Constructed exactly once in New from
+	// coreDataDir(c); nil when there is no DataDir (the nil-core test
+	// chassis) or construction failed at boot (logged, same fail-open
+	// contract buildCedarGate always had).
+	//
+	// Before this field existed, every one of the thirteen gate call
+	// sites below (memory write, workflows, scheduled chat, session
+	// export, the LLM model_select guard, the bash/fs/tool/recipe-spawn
+	// gates, the agentgraph policy adapter, ACP send/receive, MCP recipe
+	// spawn, and the cedarpolicy view itself) called
+	// buildCedarGate/buildCedarEngineOrNil INDEPENDENTLY — thirteen
+	// distinct *cedar.Engine instances, each with its own private
+	// atomic PolicySet. SavePolicy + ReloadPolicies (called by the
+	// cedarpolicy view's editor RPCs) only ever reloaded ONE of them,
+	// so a policy a user authored, saved, and watched ListPolicies
+	// report as "loaded" reached none of the other twelve gates without
+	// a process restart. Every site below now reads THIS instance
+	// (directly, or through the nil-safe cedarGate() accessor) instead
+	// — see check-cedar-engine-singleton.sh (I15), which fails when a
+	// second construction site reappears.
+	cedarEngine *cedar.Engine
+	searchAPI   searchview.SearchAPI
+	storageAPI  storageview.StorageAPI
 	// memStoreRef is the long-term memory store held for the search adapter
 	// (unified-search-01KX5R8C WP03). The main memory path (memoryAPI) is
 	// already wired; this ref lets the search lazy-init access it without
@@ -546,6 +581,17 @@ type API struct {
 	updateSvc coreupdate.Service
 	// updatePollCancel cancels the BackgroundPoll goroutine on chassis
 	// shutdown / context replacement.
+	//
+	// updatePollMu guards updatePollCancel. It is the one field the boot
+	// drift-detection review (docs/unwired-ledger.md, FR-3g,
+	// upgrade-path-coverage-01PMUG01 WP04) found genuinely unsynchronised:
+	// SetContext can run on repeated Wails re-init and Shutdown can run
+	// from main.go's OnShutdown callback, and nothing serialised a read
+	// of updatePollCancel in one against a write in the other. The
+	// storageAPI/auditImpl reads the same review looked at first are
+	// TOCTOU-shaped but not actually racy — both are assigned exactly
+	// once, inside New(), which happens-before every SetContext call.
+	updatePollMu     sync.Mutex
 	updatePollCancel context.CancelFunc
 
 	// harnessServer is the in-process harness-self MCP server (WP04/WP05).
@@ -773,39 +819,14 @@ func (a *API) SetContext(ctx context.Context) {
 	// Boot-time migration drift detection (v0.5.1 migration-doctor).
 	// Run in a goroutine so the SetContext critical path (which must
 	// complete before the UI renders) is not delayed by the ledger read.
-	// Emits KindMigrationDriftDetected into the audit log when N > 0
-	// drifts are found so operators can correlate the incident via the
-	// audit trail even before they open Settings → Health.
+	// See runMigrationDriftCheck for what it does and why (upgrade-path-
+	// coverage-01PMUG01 WP04 truth-up of this comment: the drift entries
+	// land in the audit view's 1024-entry in-memory ring buffer
+	// (core/rpc/views/audit/impl.go Push), which drops oldest-first when
+	// full — NOT a durable log. It correlates an incident for as long as
+	// the process has been up and the ring hasn't wrapped, nothing more).
 	if a.storageAPI != nil {
-		driftCtx := ctx
-		go func() {
-			report, driftErr := a.storageAPI.GetMigrationDriftReport(driftCtx)
-			if driftErr != nil {
-				logging.L().Warn("migration.drift.detect.failed", "err", driftErr.Error())
-				return
-			}
-			n := len(report.Drifts)
-			if n == 0 {
-				return
-			}
-			versions := make([]int, 0, n)
-			for _, d := range report.Drifts {
-				versions = append(versions, d.Version)
-			}
-			logging.L().Warn("migration.drift.detected",
-				"count", n,
-				"versions", fmt.Sprint(versions),
-			)
-			if a.auditImpl != nil {
-				a.auditImpl.Push(audit.Entry{
-					ID:        fmt.Sprintf("migration-drift-%d", len(versions)),
-					Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
-					Category:  "STORAGE",
-					Subject:   string(kindpkg.KindMigrationDriftDetected),
-					Trailing:  fmt.Sprintf("count=%d", n),
-				})
-			}
-		}()
+		go a.runMigrationDriftCheck(ctx)
 	}
 
 	// Start the auto-update background poller on the Wails-supplied
@@ -815,11 +836,13 @@ func (a *API) SetContext(ctx context.Context) {
 	// repeated SetContext calls (test harness re-init) don't pile up
 	// goroutines.
 	if a.updateSvc != nil {
+		a.updatePollMu.Lock()
 		if a.updatePollCancel != nil {
 			a.updatePollCancel()
 		}
 		pollCtx, cancel := context.WithCancel(ctx)
 		a.updatePollCancel = cancel
+		a.updatePollMu.Unlock()
 		go func() {
 			if err := a.updateSvc.BackgroundPoll(pollCtx, 6*time.Hour, "stable"); err != nil &&
 				!errors.Is(err, context.Canceled) {
@@ -844,6 +867,130 @@ func (a *API) SetContext(ctx context.Context) {
 	}
 }
 
+// runMigrationDriftCheck reads the boot-time migration drift report and
+// reacts to it (v0.5.1 migration-doctor; truth-up in
+// upgrade-path-coverage-01PMUG01 WP04). Called from SetContext in its own
+// goroutine so the ledger read never delays the critical path that must
+// complete before the UI renders.
+//
+// Severity drives everything here — before this WP the caller only looked
+// at len(report.Drifts), so a database sitting in its ordinary
+// about-to-be-applied state (code_only, severity "info") was
+// indistinguishable from ledger corruption (id_mismatch, severity
+// "error"):
+//
+//   - code_only-only drift is the normal pending state ahead of a boot
+//     that will apply it (and since v0.63.1, Open refuses to start rather
+//     than run with any of it left unapplied — see verifyFullyApplied).
+//     No WARN, no audit row, no broker publish: it is not an incident.
+//
+//   - Any id_mismatch (error) or ledger_only (warning) entry IS
+//     noteworthy — it means the ledger disagrees with the registered
+//     migration set in a way Open's own checks don't catch. WARN-logs and
+//     pushes one audit row summarising the report.
+//
+//   - id_mismatch specifically also gets a broker publish on
+//     TopicMigrationDriftDetected (FR-3c), so that a subscriber does not
+//     have to know Settings → Health exists to learn about it.
+//
+//     KNOWN GAP, recorded in review 2026-08-18 rather than overclaimed:
+//     this publish is FIRE-AND-FORGET AND IS ALMOST CERTAINLY DROPPED
+//     TODAY. It is spawned from SetContext (i.e. at OnStartup), and
+//     EventBus.Publish (core/rpc/bus.go) iterates the CURRENT subscriber
+//     list — with none registered the frame is discarded and not even
+//     counted. On desktop the only caller of useEventToasts() is
+//     frontend/src/views/sessions/SessionsView.vue, which mounts long
+//     after OnStartup; in served mode no WebSocket client exists at
+//     OnStartup at all. The wiring, the topic, the served-mode parity
+//     and the payload are all correct and tested — what is missing is
+//     late-join delivery (a replay buffer, or an RPC pull when the toast
+//     composable mounts). Until that lands, treat Settings → Health as
+//     the surface that actually reaches a user, and do not cite this
+//     branch as evidence that boot-time drift is visible.
+//
+//     ledger_only does NOT publish — it is the
+//     normal shape of a downgrade or a removed migration (see FR-3's
+//     explicit non-goal against making drift fatal at Open), and pushing
+//     a toast for it would just move the false alarm from the
+//     code_only-suggestion lie this WP is fixing into a new one.
+//
+// A failure to even read the report (driftErr) is logged and now also
+// audited, but stays non-fatal: this must never block or fail boot — the
+// drift report is advisory, and Open (not this goroutine) is the only
+// place a bad schema refuses to start.
+//
+// Extracted out of the goroutine literal (it used to be one) so tests can
+// call it synchronously against a fake storageAPI / auditImpl / broker
+// instead of racing a real goroutine to observe its side effects.
+func (a *API) runMigrationDriftCheck(ctx context.Context) {
+	if a.storageAPI == nil {
+		return
+	}
+	report, driftErr := a.storageAPI.GetMigrationDriftReport(ctx)
+	if driftErr != nil {
+		logging.L().Warn("migration.drift.detect.failed", "err", driftErr.Error())
+		if a.auditImpl != nil {
+			a.auditImpl.Push(audit.Entry{
+				ID:        fmt.Sprintf("migration-drift-detect-failed-%d", time.Now().UnixNano()),
+				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				Category:  "STORAGE",
+				Subject:   string(kindpkg.KindMigrationDriftDetected),
+				Trailing:  fmt.Sprintf("detect_failed=true err=%s", driftErr.Error()),
+			})
+		}
+		return
+	}
+	n := len(report.Drifts)
+	if n == 0 {
+		return
+	}
+
+	versions := make([]int, 0, n)
+	hasError := false
+	hasWarning := false
+	for _, d := range report.Drifts {
+		versions = append(versions, d.Version)
+		switch d.Severity {
+		case "error":
+			hasError = true
+		case "warning":
+			hasWarning = true
+		}
+	}
+
+	// code_only-only (info-only) drift is the normal pending state; it
+	// produces neither a WARN nor an audit row. Collapsing this branch
+	// back to "any drift at all" is exactly the v0.5.1 bug this WP fixes
+	// — see TestRunMigrationDriftCheck_CodeOnlyIsSilent's mutation proof.
+	if hasError || hasWarning {
+		logging.L().Warn("migration.drift.detected",
+			"count", n,
+			"versions", fmt.Sprint(versions),
+			"has_error", hasError,
+		)
+		if a.auditImpl != nil {
+			a.auditImpl.Push(audit.Entry{
+				ID:        fmt.Sprintf("migration-drift-%d", time.Now().UnixNano()),
+				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				Category:  "STORAGE",
+				Subject:   string(kindpkg.KindMigrationDriftDetected),
+				Trailing:  fmt.Sprintf("count=%d has_error=%t", n, hasError),
+			})
+		}
+	}
+
+	// FR-3c: surface severity:"error" drift at boot without requiring the
+	// user to navigate to Settings → Health. Never fires for ledger_only
+	// or code_only.
+	if hasError && a.broker != nil {
+		a.broker.Publish(TopicMigrationDriftDetected, MigrationDriftDetectedPayload{
+			DriftCount: n,
+			Versions:   versions,
+			HasError:   hasError,
+		})
+	}
+}
+
 // Shutdown cancels the auto-update background poller and stops the
 // workflow cron scheduler. main.go calls this from OnShutdown so all
 // background goroutines exit cleanly. Safe to call when no poller is
@@ -852,10 +999,12 @@ func (a *API) Shutdown() {
 	if a == nil {
 		return
 	}
+	a.updatePollMu.Lock()
 	if a.updatePollCancel != nil {
 		a.updatePollCancel()
 		a.updatePollCancel = nil
 	}
+	a.updatePollMu.Unlock()
 	if a.wfScheduler != nil {
 		a.wfScheduler.Stop()
 	}
@@ -951,6 +1100,10 @@ type options struct {
 	// connectorTokens is the broker-backed token source for OAuth
 	// connectors. See WithConnectorTokens.
 	connectorTokens tools.ConnectorTokenSource
+
+	// settingsStore overrides the settings store New would otherwise
+	// build via settings.NewFileStoreFromEnv(). See WithSettingsStore.
+	settingsStore settings.SettingsStore
 }
 
 // WithHostProviders seeds provider profiles that the surrounding control
@@ -992,6 +1145,23 @@ func WithServedConnectors(sup *connectors.Supervisor) Option {
 // never passes this option.
 func WithConnectorTokens(src tools.ConnectorTokenSource) Option {
 	return func(o *options) { o.connectorTokens = src }
+}
+
+// WithSettingsStore injects the settings.SettingsStore New wires into
+// settings.NewAPI, bypassing settings.NewFileStoreFromEnv() (which
+// resolves os.UserConfigDir() — the DEVELOPER'S REAL config directory —
+// and, on the way there, MigrateLegacyConfigDir()'s one-shot
+// sync.Once-guarded os.Rename).
+//
+// Production never passes this option, so the zero-option-set default
+// (NewFileStoreFromEnv) is unchanged (upgrade-path-coverage-01PMUG01
+// FR-4a). Tests use it to swap in a hermetic store — e.g.
+// settings.NewFileStore(t.TempDir()) — instead of redirecting the
+// process HOME/XDG_CONFIG_HOME/AppData environment. Without either,
+// even New(nil) opens and can write to the real settings.json on
+// whatever machine runs the test binary.
+func WithSettingsStore(store settings.SettingsStore) Option {
+	return func(o *options) { o.settingsStore = store }
 }
 
 func New(c *core.Core, opts ...Option) *API {
@@ -1134,18 +1304,31 @@ func New(c *core.Core, opts ...Option) *API {
 			// stays included so future modal features (e.g. arg-list
 			// preview, working-dir display) can read it without a
 			// second backend trip.
-			a.broker.emitter.Emit(a.broker.EmitCtx(), topic, flattenPendingRequest(payload))
+			a.broker.emitter.Emit(a.broker.EmitCtx(), topic, FlattenPendingRequest(payload))
 		}),
 	))
 
+	// Cedar policy engine — process-singleton (WP05 hoist,
+	// consent-surfaces-truth-01PMTR01). Constructed exactly ONCE, here,
+	// before any gate site below can ask for one. Every gate site in
+	// this constructor (and the free functions it calls: newToolsAPI,
+	// newLLMStack, newGraphManagerWithDeps, makeMCPRecipeBootstrap) now
+	// reads a.cedarEngine (or the nil-safe a.cedarGate() accessor)
+	// instead of independently calling buildCedarGate /
+	// buildCedarEngineOrNil — that independence is exactly what left an
+	// in-session policy edit unable to reach twelve of the thirteen
+	// gates it should have. See the field's doc comment on the API
+	// struct and check-cedar-engine-singleton.sh (I15).
+	a.cedarEngine = buildCedarEngineOrNil(coreDataDir(c))
+
 	// Wire the Cedar gate for BulkPurge (F-001 security fix). The gate is
 	// built from the same DataDir as every other Cedar gate in the chassis.
-	// When DataDir is empty (e.g. test mode) buildCedarGate returns AllowAll
+	// When DataDir is empty (e.g. test mode) a.cedarGate() returns AllowAll
 	// which is overridden by CheckAuditBulkPurge's fail-closed NotApplicable
 	// handling — a nil gate passed to WithGate means "ungated" (test posture).
 	var auditGate cedar.Gate
 	if c != nil && c.DataDir() != "" {
-		auditGate = buildCedarGate(c.DataDir())
+		auditGate = a.cedarGate()
 	}
 	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker), audit.WithGate(auditGate))
 	a.auditAPI = a.auditImpl
@@ -1174,21 +1357,47 @@ func New(c *core.Core, opts ...Option) *API {
 			)
 		}
 	}
+	// mcp-connector-lifecycle-01PMMC01 WP03/FR-003: construct the user
+	// recipe store once, before the merged catalog, so every consumer
+	// below shares one on-disk view instead of each independently
+	// re-discovering DataDir. nil when there is no real DataDir (test
+	// harness) — mcpUserRecipeSource(nil) below returns a nil source,
+	// matching the pre-WP03 behaviour for that path exactly.
+	if c != nil && c.DataDir() != "" {
+		a.mcpUserStore = recipes.NewUserStore(c.DataDir(), logging.L())
+	}
 	// Build the merged catalog once so both TestRecipe and the import
-	// surface share the same shipped + registry + user view.
+	// surface share the same shipped + registry + user view. The user
+	// source reloads UserStore from disk on every Recipes()/Get() call
+	// (mcpUserRecipeSource), matching CatalogWithUserRecipes's per-
+	// snapshot freshness contract (C-004) — so a paste-config import
+	// written moments ago by this same process is visible here without
+	// a restart.
 	mergedCat := recipes.NewMergedCatalog(
 		func() []recipes.Recipe { return recipes.Shipped().List() },
 		func() []recipes.Recipe { return recipes.Registry().List() },
-		nil, // user source wired by WP10 boot sequence
+		mcpUserRecipeSource(a.mcpUserStore),
 	)
-	a.mcpAPI = mcp.NewAPI(mcp.WithSubscriber(a.broker), mcp.WithCatalog(mergedCat))
+	mcpOpts := []mcp.Option{mcp.WithSubscriber(a.broker), mcp.WithCatalog(mergedCat)}
+	// Only install the saver when there is a real store behind it. Passing
+	// a nil *recipes.UserStore straight into WithRecipeSaver would wrap it
+	// in a non-nil RecipeSaver interface value holding a nil pointer, so
+	// SaveCustomRecipe's `saver == nil` guard would not fire and
+	// ErrRecipeSaverNotConfigured — the sentinel its docstring promises,
+	// and which callers match with errors.Is — could never be returned.
+	// The call would instead fall through to (*UserStore)(nil).Save and
+	// surface an internal "nil receiver" string.
+	if a.mcpUserStore != nil {
+		mcpOpts = append(mcpOpts, mcp.WithRecipeSaver(a.mcpUserStore))
+	}
+	a.mcpAPI = mcp.NewAPI(mcpOpts...)
 	// MCP clipboard-import surface (mission mcp-server-install-01KQ8TDP,
 	// WP08). Wired only when we have a real Core (= a real DataDir);
 	// rpc.New(nil) test harness leaves it nil and the binding returns
 	// ErrImportNotConfigured.
 	if c != nil && c.DataDir() != "" {
 		a.mcpImportAPI = mcp.NewImportAPI(mcp.ImportConfig{
-			Catalog: importCatalogReader{},
+			Catalog: importCatalogReader{userSource: mcpUserRecipeSource(a.mcpUserStore)},
 			DataDir: c.DataDir,
 		})
 	}
@@ -1208,8 +1417,17 @@ func New(c *core.Core, opts ...Option) *API {
 
 	// Settings: file-backed when we have a user config dir; in-memory
 	// fallback for the test harness path so New(nil) keeps working.
+	//
+	// opt.settingsStore (WithSettingsStore) takes priority when set —
+	// this is NOT gated on c being non-nil, matching the pre-existing
+	// NewFileStoreFromEnv branch below, which also runs unconditionally
+	// of c. That symmetry is why New(nil) alone was never a safe way to
+	// avoid touching the developer's real config file (FR-4a); only an
+	// explicit override is.
 	var settingsStore settings.SettingsStore
-	if fs, err := settings.NewFileStoreFromEnv(); err == nil {
+	if opt.settingsStore != nil {
+		settingsStore = opt.settingsStore
+	} else if fs, err := settings.NewFileStoreFromEnv(); err == nil {
 		settingsStore = fs
 	}
 	settingsImpl := settings.NewAPI(settingsStore)
@@ -1303,7 +1521,7 @@ func New(c *core.Core, opts ...Option) *API {
 	// swap-in path, so whatever is installed here is what enforces for
 	// the process lifetime.
 	if gs, ok := memStore.(corememory.GateSetter); ok && gs != nil {
-		gs.SetGate(&memoryGateAdapter{gate: buildCedarGate(coreDataDir(c))})
+		gs.SetGate(&memoryGateAdapter{gate: a.cedarGate()})
 	}
 	personalForLLM := newPersonalStore(c)
 	embedder := newEmbedder(c, personalForLLM, settingsImpl)
@@ -1443,7 +1661,7 @@ func New(c *core.Core, opts ...Option) *API {
 	a.convMgr = newConversationManager(c)
 	a.corpusMgr = newCorpusManager(c, embedder)
 	var compactionPipeline *compaction.Pipeline
-	a.graphMgr, compactionPipeline = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore, settingsImpl)
+	a.graphMgr, compactionPipeline = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore, settingsImpl, a.cedarEngine)
 	// Wire the same FR-041 pipeline instance the kernel runs onto the
 	// Settings RPC surface, so edits made through
 	// core/rpc/views/compaction reach the live kernel path instead of
@@ -1472,7 +1690,7 @@ func New(c *core.Core, opts ...Option) *API {
 		Emitter: WailsEmitter{},
 	})
 
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl})
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, a.cedarEngine)
 	a.llmAPI = stack.api
 	// confirm-each-enforcement-01PMAG05 WP02: the resolve leg. Bound to
 	// the SAME bus the chat runner's tool adapter parks on — a second bus
@@ -1591,7 +1809,7 @@ func New(c *core.Core, opts ...Option) *API {
 	// branches which also pass nil today); tracked for follow-up
 	// (session-export-01NDFSEX05 WP02).
 	if c != nil {
-		a.sessionsAPI = sessions.WithExportOpts(a.sessionsAPI, buildCedarGate(c.DataDir()), nil, nil)
+		a.sessionsAPI = sessions.WithExportOpts(a.sessionsAPI, a.cedarGate(), nil, nil)
 	}
 	if c != nil && a.dispatchPool != nil {
 		// Wire the dispatch pool (all transports) onto Core.MCP so the
@@ -1615,7 +1833,7 @@ func New(c *core.Core, opts ...Option) *API {
 			// re-opens stdio recipes (it uses pool.Open(stdioSpecs)); remote
 			// recipes are re-opened through the tools view's InstallRecipe
 			// which already uses the dispatch pool's OpenOne.
-			c.SetMCPRecipeBootstrap(makeMCPRecipeBootstrap(c, a.stdioPool, stack.secrets, a.promptRegistry, buildCedarEngineOrNil(c.DataDir())))
+			c.SetMCPRecipeBootstrap(makeMCPRecipeBootstrap(c, a.stdioPool, stack.secrets, a.promptRegistry, a.cedarEngine, mcpUserRecipeSource(a.mcpUserStore)))
 		}
 	}
 	// Late-wire the health pool onto the mcp view (constructed before the
@@ -1629,7 +1847,7 @@ func New(c *core.Core, opts ...Option) *API {
 	// Pass the dispatch pool as the tools-view PoolController so
 	// InstallRecipe/UninstallRecipe route http/sse recipes to the right
 	// transport sub-pool.
-	a.toolsAPI = newToolsAPI(c, a.dispatchPool, stack.secrets, a.promptRegistry, a.cedarPolicyAPI, opt.connectorTokens)
+	a.toolsAPI = newToolsAPI(c, a.dispatchPool, stack.secrets, a.promptRegistry, a.cedarPolicyAPI, opt.connectorTokens, mcpUserRecipeSource(a.mcpUserStore), a.cedarGate())
 	// Register the fsrequest built-in after toolsAPI is wired so the
 	// tool's delegate can be the real (non-stub) implementation. The
 	// tool is registered unconditionally; the EnabledFilter gates
@@ -1705,6 +1923,25 @@ func New(c *core.Core, opts ...Option) *API {
 		// Broker enables LeftRail real-time updates on branch creation
 		// (branch creates a new child session row): v0.5.3 fix.
 		Broker: a.broker,
+		// Settings gives ProposeReintegrationSummary the persisted
+		// BranchReintegrationMaxTokens instead of a hardcoded 2000
+		// (engineer-truth-pass-01PMTP01 WP02, finding B2).
+		// settingsStore is nil-safe (New(nil) test-harness path, or a
+		// user-config-dir resolution failure); LoadAll's error is
+		// swallowed into the zero Settings, which
+		// EffectiveBranchReintegrationMaxTokens already treats as
+		// "use the default" — same behaviour the hardcoded constant
+		// gave every caller before this WP.
+		Settings: func() settings.Settings {
+			if settingsStore == nil {
+				return settings.Settings{}
+			}
+			s, err := settingsStore.LoadAll()
+			if err != nil {
+				return settings.Settings{}
+			}
+			return s
+		},
 	})
 
 	// Agent-graph view surface — graph manager already built above so
@@ -1821,7 +2058,7 @@ func New(c *core.Core, opts ...Option) *API {
 			Store:           wfStore,
 			Scheduler:       sched,
 			WorkflowCatalog: wfCatalog,
-			Cedar:           buildCedarGate(coreDataDir(c)),
+			Cedar:           a.cedarGate(),
 			CedarModeFn:     workflowCedarModeFn(settingsImpl),
 		})
 	}
@@ -1916,19 +2153,30 @@ func New(c *core.Core, opts ...Option) *API {
 	}
 
 	// CedarPolicy view (mission cedar-credential-policy-01KQ8TDE, WP02 + WP09).
-	// Constructs a process-singleton *cedar.Engine so the policy-panel
-	// RPC surface can list loaded policy files, surface recent decisions,
-	// and (WP09) write/revoke `<family>_allow_*.cedar` snippets with an
-	// engine reload after each mutation. nil Core / empty DataDir falls
-	// back to NewAPIWithDataDir(nil, "") which serves empty slices and
-	// rejects snippet writes with a typed error.
+	// Reads the SAME a.cedarEngine every other gate site consults (WP05
+	// hoist) so the policy-panel RPC surface's ListPolicies / Reload /
+	// RecentDecisions operate on the instance that actually gates
+	// memory writes, workflows, bash, tools, etc. — not a private
+	// engine of its own.
+	//
+	// Before the hoist this block called buildCedarEngineOrNil AGAIN,
+	// producing a second, independent *cedar.Engine that no gate ever
+	// called Evaluate on. That is precisely why RecentDecisions was
+	// structurally always empty (spec's §1.1 finding): e.decisions.Append
+	// only fires inside Engine.Evaluate, and nothing ever evaluated
+	// against the view's private copy. Sharing a.cedarEngine here is
+	// what makes WP06's denial panel show real decisions.
+	//
+	// nil Core / empty DataDir leaves a.cedarEngine nil, and this block
+	// falls back to NewAPIWithDataDir(nil, "") exactly as before, which
+	// serves empty slices and rejects snippet writes with a typed error.
 	{
 		var cedarDataDir string
 		if c != nil {
 			cedarDataDir = c.DataDir()
 		}
 		var cedarEng cedarpolicyview.Engine
-		if eng := buildCedarEngineOrNil(cedarDataDir); eng != nil {
+		if eng := a.cedarEngine; eng != nil {
 			if e2, ok := any(eng).(cedarpolicyview.Engine); ok {
 				cedarEng = e2
 			}
@@ -1985,11 +2233,13 @@ func New(c *core.Core, opts ...Option) *API {
 			// Audit emitter — bridge the audit API ring buffer.
 			Audit: &acpAuditBridge{impl: a.auditImpl},
 		}
-		// Wire the Cedar engine so the acp_send and acp_receive gates
-		// actually enforce policy. buildCedarEngineOrNil returns nil on
-		// construction failure (logged as a warning); the API tolerates
-		// nil and falls back to permissive (default-allow posture).
-		if eng := buildCedarEngineOrNil(c.DataDir()); eng != nil {
+		// Wire the shared Cedar engine (WP05 hoist) so the acp_send and
+		// acp_receive gates actually enforce policy — and so a policy
+		// reload reaches them like every other gate. a.cedarEngine is
+		// nil on construction failure (logged as a warning at boot); the
+		// API tolerates nil and falls back to permissive (default-allow
+		// posture).
+		if eng := a.cedarEngine; eng != nil {
 			acpOpts.Cedar = acpview.NewEngineAdapter(eng)
 		}
 		a.acpAPI = acpview.NewAPI(acpReg, acpEnv, acpOpts)
@@ -2013,7 +2263,7 @@ func New(c *core.Core, opts ...Option) *API {
 		// that runs prompts on a cron consulted no policy at all.
 		a.scheduledChatAPI = scheduledchatview.New(scheduledchatview.Config{
 			Store: chatStore,
-			Cedar: buildCedarGate(coreDataDir(c)),
+			Cedar: a.cedarGate(),
 		})
 	}
 
@@ -2647,9 +2897,10 @@ func New(c *core.Core, opts ...Option) *API {
 		}
 		var cbGate cedar.Gate
 		if a.promptRegistry != nil {
-			// Reuse the same Cedar gate the rest of the RPC layer uses.
+			// Reuse the same shared Cedar gate every other site uses (WP05
+			// hoist) — not a freshly-built one.
 			if c != nil && c.DataDir() != "" {
-				cbGate = buildCedarGate(c.DataDir())
+				cbGate = a.cedarGate()
 			}
 		}
 		if cbImpl := newContextBootstrapAPI(contextBootstrapDeps{
@@ -2694,6 +2945,11 @@ func New(c *core.Core, opts ...Option) *API {
 		if c != nil {
 			sessionStarter.sessionMgr = c.SessionManager()
 			sessionStarter.dataDir = dataDir
+			// FR-004/C-004: deliver through the attachments-aware sessions
+			// view, not session.Manager directly. a.sessionsAPI is fully
+			// constructed and wrapped (attachments, title-gen, broker, ...)
+			// by this point in New() — see newSessionsAPI above.
+			sessionStarter.systemPrompt = a.sessionsAPI
 		}
 
 		// Resolve fleet client for onboarding seams. May be nil (OSS build)
@@ -3334,16 +3590,45 @@ func (r *sessionProjectReader) ProjectID(ctx context.Context, sessionID string) 
 	return &v, nil
 }
 
-// importCatalogReader satisfies mcp.MergedCatalogReader by snapshotting
-// the same shipped+registry merge mergedRecipeCatalog produces. The
-// import RPC uses it to drive collision detection: an entry whose id
-// already exists in the merged catalog is flagged
-// `collision_warning`. WP10 will swap this for a live MergedCatalog
-// pointer once the user-source hot-reload is wired into rpc boot.
-type importCatalogReader struct{}
+// mcpUserRecipeSource returns a recipes.SourceFn that reloads store from
+// disk on every call and then hands back its snapshot — the same
+// per-snapshot freshness contract core/mcp/connectors/catalog.go's
+// CatalogWithUserRecipes uses in served mode (C-004). nil store (no real
+// DataDir — the rpc.New(nil) test harness path) yields a nil source,
+// which recipes.MergedCatalog treats as "contributes zero recipes" and
+// never panics on.
+//
+// This is the single choke point mcp-connector-lifecycle-01PMMC01 WP03
+// threads through every mergedRecipeCatalog() consumer plus the chassis
+// merged catalog (api.go's mergedCat) — see CLAUDE.md C-003: partial
+// wiring across those sites would leave the Tools list, the import
+// collision check, and the boot bootstrap disagreeing about what "the
+// catalog" contains.
+func mcpUserRecipeSource(store *recipes.UserStore) func() []recipes.Recipe {
+	if store == nil {
+		return nil
+	}
+	return func() []recipes.Recipe {
+		if _, err := store.Load(); err != nil {
+			logging.L().Warn("rpc.mcp_user_recipes.load_failed", "err", err.Error())
+		}
+		return store.Recipes()
+	}
+}
 
-func (importCatalogReader) Recipes() []recipes.Recipe {
-	cat := mergedRecipeCatalog()
+// importCatalogReader satisfies mcp.MergedCatalogReader by snapshotting
+// the same shipped+registry+user merge mergedRecipeCatalog produces. The
+// import RPC uses it to drive collision detection: an entry whose id
+// already exists in the merged catalog is flagged `collision_warning`.
+// userSource is mcpUserRecipeSource(a.mcpUserStore) — reloaded fresh on
+// every call, so importing the same id twice in the same process sees
+// the first import on the second dry-run (FR-005/AC-005).
+type importCatalogReader struct {
+	userSource func() []recipes.Recipe
+}
+
+func (r importCatalogReader) Recipes() []recipes.Recipe {
+	cat := mergedRecipeCatalog(r.userSource)
 	if cat == nil {
 		return nil
 	}
@@ -3351,26 +3636,48 @@ func (importCatalogReader) Recipes() []recipes.Recipe {
 }
 
 // mergedRecipeCatalog returns a snapshot *recipes.Catalog containing
-// the shipped + curated-registry recipes merged in source-tagged
-// order. WP06 introduces the curated registry; the boot path
-// previously consulted only Shipped(), which meant a user who had
-// enabled e.g. the registry "github" recipe wouldn't find it on
-// startup.
+// the shipped + curated-registry + user recipes merged in source-tagged
+// order. userSource is mcpUserRecipeSource(a.mcpUserStore) in every
+// production call site (nil in the rpc.New(nil) test harness path,
+// where it contributes zero recipes exactly as before WP03).
 //
 // The merge happens through the WP05 *recipes.MergedCatalog so the
 // id-keyed precedence rules (user > registry > shipped) stay
-// centralised; a future hot-reloading user source can plug in via
-// MergedCatalog.SetUserSource without re-touching this helper.
+// centralised.
 //
 // Callers receive a fresh *recipes.Catalog whose Recipes slice they
-// may mutate freely (copy-on-write semantics from MergedCatalog).
-func mergedRecipeCatalog() *recipes.Catalog {
+// may mutate freely (copy-on-write semantics from MergedCatalog). Note
+// that snapshotting into a *recipes.Catalog here is itself a one-shot
+// read — callers that need per-request freshness (the Tools view; see
+// mcpLiveCatalog below) must call mergedRecipeCatalog fresh on every
+// request rather than caching its return value.
+func mergedRecipeCatalog(userSource func() []recipes.Recipe) *recipes.Catalog {
 	mc := recipes.NewMergedCatalog(
 		func() []recipes.Recipe { return recipes.Shipped().List() },
 		func() []recipes.Recipe { return recipes.Registry().List() },
-		nil,
+		userSource,
 	)
 	return &recipes.Catalog{Version: 1, Recipes: mc.Recipes()}
+}
+
+// mcpLiveCatalog implements tools.CatalogReader by rebuilding the merged
+// shipped + registry + user catalog (via mergedRecipeCatalog) on every
+// List/Get call, rather than snapshotting once. This is what makes
+// Tools_ListRecipes see a paste-config import written moments ago,
+// without a process restart (FR-003/AC-003): tools.Config.Catalog is
+// set once at newToolsAPI construction time, so if it held a plain
+// *recipes.Catalog snapshot instead, no import performed after boot
+// would ever become visible short of restarting the app.
+type mcpLiveCatalog struct {
+	userSource func() []recipes.Recipe
+}
+
+func (c mcpLiveCatalog) List() []recipes.Recipe {
+	return mergedRecipeCatalog(c.userSource).List()
+}
+
+func (c mcpLiveCatalog) Get(id string) (recipes.Recipe, bool) {
+	return mergedRecipeCatalog(c.userSource).Get(id)
 }
 
 // makeMCPRecipeBootstrap returns a closure suitable for
@@ -3391,7 +3698,7 @@ func mergedRecipeCatalog() *recipes.Catalog {
 // cedarEngine may be nil. When non-nil, an AllowAlways decision writes
 // a persistent .cedar snippet so the grant survives restarts
 // (cedar-credential-policy follow-up: AllowAlways mcp_spawn).
-func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secrets.MemoryBackend, promptRegistry *cedar.Registry, cedarEngine *cedar.Engine) func(context.Context) error {
+func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secrets.MemoryBackend, promptRegistry *cedar.Registry, cedarEngine *cedar.Engine, userSource func() []recipes.Recipe) func(context.Context) error {
 	if c == nil || pool == nil || secretsBackend == nil {
 		return nil
 	}
@@ -3405,11 +3712,9 @@ func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secr
 			return fmt.Errorf("rpc: load enabled recipes: %w", err)
 		}
 		// Bootstrap consults the merged catalog so a user who has
-		// enabled e.g. the curated-registry "github" recipe finds the
-		// entry on boot. WP06 wires shipped + registry; WP05 already
-		// provided the merge surface and WP10 will plug in the user
-		// source.
-		catalog := mergedRecipeCatalog()
+		// enabled e.g. the curated-registry "github" recipe, or a
+		// custom/imported user recipe, finds the entry on boot.
+		catalog := mergedRecipeCatalog(userSource)
 		entries := enabled.List()
 		specs := make([]coremcp.ServerSpec, 0, len(entries))
 		for _, entry := range entries {
@@ -3474,7 +3779,13 @@ func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secr
 // Returns the stub when c is nil — the test harness path constructs
 // rpc.New(nil) and we keep the chassis bootable without crashing on
 // the catalog access.
-func newToolsAPI(c *core.Core, pool tools.PoolController, secretsBackend *secrets.MemoryBackend, promptReg *cedar.Registry, cedarPolicyAPI cedarpolicyview.CedarPolicyAPI, connectorTokens tools.ConnectorTokenSource) tools.ToolsAPI {
+//
+// cedarGate is the process-shared Cedar gate (WP05 hoist,
+// consent-surfaces-truth-01PMTR01) — a.cedarGate() at this function's
+// only call site — rather than a freshly-built engine of this
+// function's own, so a policy save + reload reaches recipe-spawn like
+// every other gate.
+func newToolsAPI(c *core.Core, pool tools.PoolController, secretsBackend *secrets.MemoryBackend, promptReg *cedar.Registry, cedarPolicyAPI cedarpolicyview.CedarPolicyAPI, connectorTokens tools.ConnectorTokenSource, userSource func() []recipes.Recipe, cedarGate cedar.Gate) tools.ToolsAPI {
 	if c == nil {
 		return &stubTools{}
 	}
@@ -3485,7 +3796,11 @@ func newToolsAPI(c *core.Core, pool tools.PoolController, secretsBackend *secret
 		enabled = &recipes.EnabledRecipes{}
 	}
 	cfg := tools.Config{
-		Catalog:        mergedRecipeCatalog(),
+		// mcpLiveCatalog (not a bare mergedRecipeCatalog(userSource)
+		// snapshot) — see its doc comment: Tools_ListRecipes must see an
+		// import performed after this constructor ran, in the same
+		// process (FR-003/AC-003).
+		Catalog:        mcpLiveCatalog{userSource: userSource},
 		Enabled:        enabled,
 		Pool:           pool,
 		Secrets:        secretsBackend,
@@ -3502,7 +3817,9 @@ func newToolsAPI(c *core.Core, pool tools.PoolController, secretsBackend *secret
 		// shipped `mcp-no-npx.cedar` template, whose whole purpose is
 		// to forbid spawning npx-based MCP servers, never ran. Found by
 		// check-cedar-gate-arguments.sh while wiring the A1/A2 sites.
-		Gate: buildCedarGate(dataDir),
+		// cedarGate is the process-shared engine (WP05 hoist) passed in
+		// by the caller, not a private one built here.
+		Gate: cedarGate,
 		// Served mode only (spec 091 D8): broker-backed OAuth fallback.
 		// nil on the desktop path — behaviour unchanged.
 		ConnectorTokens: connectorTokens,
@@ -3686,6 +4003,18 @@ func newLLMStack(
 	// every path (confirm-each-enforcement-01PMAG05 WP05 / FR-007). nil
 	// silences the trail; the decision itself is unaffected.
 	confirmAudit contextaudit.Emitter,
+	// cedarEngine is the process-shared Cedar engine (WP05 hoist,
+	// consent-surfaces-truth-01PMTR01) — a.cedarEngine at this
+	// function's production call site in New(). newLLMStack is the only
+	// door to llmregistry.Options.Policy (the registry exposes no
+	// setter) AND the source of bashCedarEngine for the builtin bash/fs
+	// tool registrations below, so both consumers now read the SAME
+	// instance every other gate site does, instead of each building its
+	// own. nil is the documented degrade-to-AllowAll / degrade-to-
+	// legacy-allowlist path (empty DataDir, the nil-core test chassis,
+	// or a boot-time construction failure already logged by
+	// buildCedarEngineOrNil).
+	cedarEngine *cedar.Engine,
 ) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
@@ -3700,9 +4029,15 @@ func newLLMStack(
 	//
 	// llmregistry.Options.Policy is the only door — the registry
 	// exposes no policy setter — so this must be the real gate at
-	// construction. buildCedarGate degrades to AllowAll only when there
-	// is no DataDir (nil-core test chassis).
-	cedarGuard := cedar.NewLLMPolicyGuard(buildCedarGate(coreDataDir(c)))
+	// construction. cedarEngine degrades to AllowAll only when there is
+	// no DataDir (nil-core test chassis) or construction failed — same
+	// contract buildCedarGate always had, now sourced from the shared
+	// instance instead of a private one (WP05 hoist).
+	var cedarLLMGate cedar.Gate = cedar.AllowAll{}
+	if cedarEngine != nil {
+		cedarLLMGate = cedarEngine
+	}
+	cedarGuard := cedar.NewLLMPolicyGuard(cedarLLMGate)
 	reg, err := llmregistry.New(llmregistry.Options{
 		Resolver: credref.New(secretsBackend),
 		Policy:   cedarGuard,
@@ -3807,17 +4142,16 @@ func newLLMStack(
 	if settingsImpl != nil {
 		settingsStore = settingsImpl.Store()
 	}
-	// Cedar engine for the bash gate (WP03). Built per-stack so the
-	// bash tool's Cedar gate is wired at construction time. The prompt
-	// registry is the process-singleton constructed in api.New() (with
-	// a broker dispatcher) and threaded in here so every gate emits on
-	// the same topics the permissions view reads from. Both are nil-
-	// tolerant: when nil the bash tool falls back to the legacy
-	// allowlist gate so the test harness path (New(nil)) keeps working.
-	var bashCedarEngine *cedar.Engine
-	if dataDir != "" {
-		bashCedarEngine = buildCedarEngineOrNil(dataDir)
-	}
+	// Cedar engine for the bash gate (WP03), now the process-shared
+	// instance (WP05 hoist) rather than one built fresh per-stack — a
+	// policy save + reload must reach the bash gate exactly like every
+	// other one. The prompt registry is the process-singleton
+	// constructed in api.New() (with a broker dispatcher) and threaded
+	// in here so every gate emits on the same topics the permissions
+	// view reads from. Both are nil-tolerant: when nil the bash tool
+	// falls back to the legacy allowlist gate so the test harness path
+	// (New(nil)) keeps working.
+	bashCedarEngine := cedarEngine
 	// A default resolution budget of DefaultBudget (50) per locator per session.
 	// A nil exposureIdx safely skips list_secrets registration.
 	var secretsBudget *credstoreRefs.Budget
@@ -3849,6 +4183,18 @@ func newLLMStack(
 	var attResolver llm.AttachmentsResolver
 	if attMgr != nil {
 		attResolver = &attachmentsResolverAdapter{
+			mgr:    attMgr,
+			reader: &sessionProjectReader{mgr: c.SessionManager()},
+		}
+	}
+	// chatAttResolver is the same bridge, shaped for the chat package's
+	// own AttachmentsResolver (first-run-onboarding-01PMOB01 WP02) —
+	// core/rpc/views/agentgraph/chat does not import core/rpc/views/llm,
+	// so it gets its own narrow adapter over the identical attMgr/reader
+	// pair rather than reusing attResolver's type.
+	var chatAttResolver chat.AttachmentsResolver
+	if attMgr != nil {
+		chatAttResolver = &chatAttachmentsResolverAdapter{
 			mgr:    attMgr,
 			reader: &sessionProjectReader{mgr: c.SessionManager()},
 		}
@@ -4032,7 +4378,7 @@ func newLLMStack(
 		}
 		return resolveAutonomyKnobsWithSettingsFallback(global, project, session, effectiveMaxAgentTurnsFromSettings(settingsImpl))
 	}
-	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatWorkspaceDir, chatWorkspaceNote, confirmBus, confirmDeps, autonomyKnobsProvider)
+	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, chatAttResolver, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatWorkspaceDir, chatWorkspaceNote, confirmBus, confirmDeps, autonomyKnobsProvider)
 	var capCatalog llm.CapCatalog
 	if cat, err := llmcap.LoadDefault(); err == nil {
 		capCatalog = &capCatalogAdapter{cat: cat}
@@ -4376,6 +4722,11 @@ func buildChatRunner(
 	settingsImpl *settings.API,
 	graphMgr *graphview.Manager,
 	tools corellm.ToolDiscoverer,
+	// attachments resolves session-scoped system attachments onto every
+	// LLMProviderAdapter (first-run-onboarding-01PMOB01 WP02) — the read
+	// half of SetSystemPrompt's attachments-aware write. nil (attMgr
+	// unavailable) disables the layer.
+	attachments chat.AttachmentsResolver,
 	artifactSinkConcrete *artifactsview.Sink,
 	compactionDeps *chat.CompactionDeps,
 	usageMgr usage.Manager,
@@ -4756,6 +5107,7 @@ func buildChatRunner(
 		CustomInstructions: customInstructions,
 		EnvDefaults:        envDefaults,
 		ToolDiscoverer:     chatToolDiscovererAdapter{inner: tools},
+		Attachments:        attachments,
 		Compaction:         compactionDeps,
 		CompactionPipeline: chatCompactionPipeline,
 		PartialPersister:   partialPersister,
@@ -5095,6 +5447,35 @@ func (a *attachmentsResolverAdapter) ListResolved(ctx context.Context, sessionID
 	out := make([]llm.ResolvedAttachment, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, llm.ResolvedAttachment{
+			Content: r.Content,
+			Kind:    r.Kind,
+		})
+	}
+	return out, nil
+}
+
+// chatAttachmentsResolverAdapter bridges core/attachments.Manager into the
+// chat package's AttachmentsResolver shape (first-run-onboarding-01PMOB01
+// WP02) so core/rpc/views/agentgraph/chat never imports core/attachments
+// directly. Structurally identical to attachmentsResolverAdapter above —
+// kept as a separate type because the two packages declare distinct
+// ResolvedAttachment types (chat does not import views/llm).
+type chatAttachmentsResolverAdapter struct {
+	mgr    *coreatt.Manager
+	reader coreatt.SessionProjectReader
+}
+
+func (a *chatAttachmentsResolverAdapter) ListResolved(ctx context.Context, sessionID string) ([]chat.ResolvedAttachment, error) {
+	if a == nil || a.mgr == nil {
+		return nil, nil
+	}
+	rows, err := a.mgr.ListResolved(ctx, a.reader, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]chat.ResolvedAttachment, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, chat.ResolvedAttachment{
 			Content: r.Content,
 			Kind:    r.Kind,
 		})
@@ -5527,7 +5908,7 @@ func newCorpusManager(c *core.Core, embedder corememory.Embedder) *corecorpus.Ma
 // library and runs in-memory graphs; user-graph persistence is the
 // only feature lost when DataDir is empty.
 func newGraphManager(c *core.Core) *graphview.Manager {
-	mgr, _ := newGraphManagerWithDeps(c, nil, nil, nil, nil, nil, nil)
+	mgr, _ := newGraphManagerWithDeps(c, nil, nil, nil, nil, nil, nil, nil)
 	return mgr
 }
 
@@ -5689,6 +6070,12 @@ func newGraphManagerWithDeps(
 	embedder corememory.Embedder,
 	bashStore *corebash.Store,
 	settingsImpl *settings.API,
+	// cedarEngine is the process-shared Cedar engine (WP05 hoist,
+	// consent-surfaces-truth-01PMTR01) — a.cedarEngine at the
+	// production call site in New(). nil degrades to AllowAll exactly
+	// as buildCedarGate("") always did (empty DataDir, the nil-core
+	// test chassis, or a logged boot-time construction failure).
+	cedarEngine *cedar.Engine,
 ) (*graphview.Manager, *compaction.Pipeline) {
 	dataDir := ""
 	if c != nil {
@@ -5697,6 +6084,15 @@ func newGraphManagerWithDeps(
 	deps := graphview.EnvDeps{}
 	if convMgr != nil {
 		deps.Branch = graphview.NewBranchSeamAdapter(convMgr, sessionManagerOrNil(c))
+		// engineer-truth-pass-01PMTP01 WP08 (finding B16): the merge-
+		// suggestion heuristic is only meaningful once a real
+		// BranchSeam is wired — without one, ActiveBranchForChildSession
+		// never reports a live branch child, so there's nothing for the
+		// suggester to evaluate. Gating it here (rather than
+		// unconditionally) keeps that pairing explicit at the wiring
+		// site instead of relying on the chat runner's nil-Branch guard
+		// alone.
+		deps.MergeSuggester = coreag.NewMergeSuggester()
 	}
 	if corpusMgr != nil {
 		deps.Corpus = graphview.NewCorpusBackendAdapter(corpusMgr)
@@ -5704,16 +6100,21 @@ func newGraphManagerWithDeps(
 	if memStore != nil {
 		deps.Memory = graphview.NewMemoryStoreAdapter(memStore, embedder)
 	}
-	// Cedar policy gate: build a real *cedar.Engine when a DataDir is
-	// available so user-supplied policies in <DataDir>/policy/*.cedar
-	// take effect immediately. The Engine ships an embedded default
-	// policy bundle that permits the five gate categories with logging
-	// — so an empty <DataDir>/policy/ still gives the harness's
+	// Cedar policy gate: the process-shared engine (WP05 hoist) when one
+	// was constructed, so user-supplied policies in <DataDir>/policy/*.cedar
+	// take effect immediately AND a later SavePolicy + Reload reaches
+	// this gate like every other one. The Engine ships an embedded
+	// default policy bundle that permits the five gate categories with
+	// logging — so an empty <DataDir>/policy/ still gives the harness's
 	// "default-allow with audit" stance, not a fail-closed posture.
-	// Falls back to AllowAll when the engine cannot be constructed
-	// (e.g. nil Core, nil DataDir, or a corrupt policy file) so the
-	// chassis still boots; the user sees the failure in the audit log.
-	deps.Policy = graphview.NewPolicyGateAdapter(buildCedarGate(dataDir))
+	// Falls back to AllowAll when no engine was constructed (e.g. nil
+	// Core, nil DataDir, or a corrupt policy file) so the chassis still
+	// boots; the user sees the failure in the audit log.
+	var graphCedarGate cedar.Gate = cedar.AllowAll{}
+	if cedarEngine != nil {
+		graphCedarGate = cedarEngine
+	}
+	deps.Policy = graphview.NewPolicyGateAdapter(graphCedarGate)
 	if bashStore != nil {
 		deps.BashStore = bashStore
 		deps.BashOutput = graphview.NewBashOutputStoreAdapter(bashStore)
@@ -5753,15 +6154,26 @@ func newGraphManagerWithDeps(
 	// Agent-graph event log: persist run events to SQLite (migration
 	// 0309) when the storage layer exposes a *sql.DB. Without this
 	// the manager defaults to NewMemoryEventLog and `agent_graph_events`
-	// stays empty across runs — RecentDecisions and the run-trace
-	// replay surfaces would have nothing to show. Best-effort: when
-	// the handle isn't available the manager falls back to memory.
+	// stays empty across runs — the frontend's run-trace replay
+	// (RunView.vue, via Graph_GetRunTrace) would have nothing to show.
+	// Best-effort: when the handle isn't available the manager falls
+	// back to memory.
 	//
 	// Built here (rather than left to Manager's own internal default)
 	// because the kernel we construct below also needs it: the kernel
 	// and the Manager must share one EventLog instance so a compaction
 	// pipeline's compaction_fired events land in the same trace the
-	// frontend's run-trace replay reads from RecentDecisions.
+	// frontend's run-trace replay reads.
+	//
+	// This is UNRELATED to cedar.Engine.RecentDecisions (the policy
+	// audit ring) despite the similar wording an earlier revision of
+	// this comment used — that ring is backed by the Cedar engine's own
+	// DecisionStore (consent-surfaces-truth-01PMTR01 WP05's shared
+	// a.cedarEngine), not by agent_graph_events, and its frontend
+	// consumer is the WP06 denial panel over CedarPolicy_RecentDecisions,
+	// not this run-trace surface. Corrected under WP06 (FR-009): the
+	// prior wording conflated the two and implied RunView.vue reads
+	// "RecentDecisions", which it does not.
 	var agEventLog coreag.EventLog
 	if c != nil {
 		agEventLog = buildAgentGraphEventLog(c)
@@ -6843,6 +7255,32 @@ func (a *API) Search() searchview.SearchAPI {
 					if a.auditImpl != nil {
 						cfg.AuditLister = &auditRingAdapter{api: a.auditImpl}
 					}
+					// Enable dial (A3) — live-read closure over the Settings
+					// store, not a boot snapshot: workflowCedarModeFn (:7160)
+					// is the in-repo pattern for "a toggle read once at boot
+					// is the same defect one layer down." Fail-open per the
+					// consumer's own contract (impl.go:286) — a settings-read
+					// failure must not silently disable search.
+					cfg.Enabled = func() bool {
+						if a.settingsAPI == nil {
+							return true
+						}
+						s, err := a.settingsAPI.Get(context.Background())
+						if err != nil {
+							return true
+						}
+						return s.SearchEnabled()
+					}
+					// Audit emitter (A3) — bridges the search view's narrow
+					// AuditEmitter seam to the process audit ring via
+					// searchAuditEmitter (:7008-ish, modelled on
+					// acpAuditBridge). No process-wide emitter existed before
+					// this WP — see the tools view's Audit: nil TODO (:3494).
+					// Fail-silent when the ring isn't wired, matching the
+					// consumer's own contract (impl.go:303).
+					if a.auditImpl != nil {
+						cfg.Audit = &searchAuditEmitter{impl: a.auditImpl}
+					}
 					a.searchAPI = searchview.NewManagerAPIWithConfig(rawDB, cfg)
 					return a.searchAPI
 				}
@@ -7023,6 +7461,49 @@ func (e *acpAuditBridge) Emit(_ context.Context, ev contextaudit.Event) error {
 	return nil
 }
 
+// searchAuditEmitter implements searchview.AuditEmitter (A3) by
+// forwarding to the rpc/views/audit.API ring buffer via Push — the
+// process-wide audit emitter the search view's Config.Audit seam was
+// wired for but never received (consent-surfaces-truth-01PMTR01 WP01).
+// Modelled on acpAuditBridge above.
+//
+// Entry has no map-valued field, so attrs is rendered into Trailing as
+// a deterministic (sorted-key) "k=v k=v" string — mirroring the
+// payload_type=%T convention the other bridges in this file use for
+// carrying structured metadata through the flat Entry shape. The search
+// view's own privacy contract (impl.go:22-27) guarantees the raw query
+// string is never a key in attrs, so it can never end up in Trailing
+// either — this bridge does not re-implement that contract, only
+// forwards whatever the caller already redacted.
+type searchAuditEmitter struct {
+	impl *audit.API
+}
+
+func (e *searchAuditEmitter) Emit(_ context.Context, kind string, attrs map[string]any) {
+	if e == nil || e.impl == nil {
+		return
+	}
+	keys := make([]string, 0, len(attrs))
+	for k := range attrs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for i, k := range keys {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		fmt.Fprintf(&b, "%s=%v", k, attrs[k])
+	}
+	e.impl.Push(audit.Entry{
+		ID:        fmt.Sprintf("search-%d", time.Now().UnixNano()),
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Category:  "SEARCH",
+		Subject:   kind,
+		Trailing:  b.String(),
+	})
+}
+
 // contextSyncAuditBridge implements contextaudit.Emitter for the
 // fleet-context-sync surfaces (SessionSyncer, ProjectSyncer, HandoffHandler).
 // Routes fleet.*_sync and fleet.session_shared_* events to the in-process
@@ -7121,13 +7602,36 @@ func (a *API) StreamBroker() *StreamBroker { return a.broker }
 // context.  The desktop Wails path is unaffected.
 func (a *API) EventBus() *EventBus { return a.eventBus }
 
-// buildCedarEngineOrNil constructs a *cedar.Engine for callers that
-// need the concrete Engine type — the cedarpolicy view (ListPolicies /
-// Reload / RecentDecisions / WritePolicySnippet) and the bash gate
-// (WP03+). Returns nil when dataDir is empty so callers can degrade
-// gracefully rather than booting a disk-walk engine with nowhere to
-// walk. Mirrors buildCedarGate's options but returns *Engine instead
-// of the Gate interface.
+// cedarGate returns a.cedarEngine as a cedar.Gate, falling back to
+// cedar.AllowAll{} when no engine was constructed (empty DataDir, the
+// nil-core test chassis, or a construction failure logged at boot).
+// This is the nil-safe read side of the WP05 hoist (see the
+// cedarEngine field's doc comment on API): every gate site that used
+// to call buildCedarGate(dataDir) directly now calls a.cedarGate()
+// instead, so they all consult the SAME instance a policy-editor
+// SavePolicy + ReloadPolicies mutates. The fail-open contract is
+// unchanged from buildCedarGate's — this function does not alter
+// DefaultDeny or any allow/deny semantics, only which object answers.
+func (a *API) cedarGate() cedar.Gate {
+	if a == nil || a.cedarEngine == nil {
+		return cedar.AllowAll{}
+	}
+	return a.cedarEngine
+}
+
+// buildCedarEngineOrNil constructs a *cedar.Engine. In production it
+// has exactly ONE caller — the WP05 hoist site in New(), which stores
+// the result on a.cedarEngine — enforced by
+// check-cedar-engine-singleton.sh (I15). Tests call it directly to
+// exercise its own fail-open contract in isolation, and the two
+// remaining free-function call sites that cannot see `a` (newLLMStack,
+// newGraphManagerWithDeps — see their doc comments) receive the
+// already-built engine as a parameter rather than calling this again.
+//
+// Returns nil when dataDir is empty so callers can degrade gracefully
+// rather than booting a disk-walk engine with nowhere to walk. Mirrors
+// buildCedarGate's options but returns *Engine instead of the Gate
+// interface.
 func buildCedarEngineOrNil(dataDir string) *cedar.Engine {
 	if dataDir == "" {
 		return nil
@@ -7256,10 +7760,18 @@ func buildJournalWriter(c *core.Core) coreag.JournalWriter {
 	return coreag.NewSQLJournalWriter(rawDB)
 }
 
-// flatPermissionRequest mirrors frontend `PermissionRequest` (see
+// FlatPermissionRequest mirrors frontend `PermissionRequest` (see
 // frontend/src/lib/types.ts). Built per-emit so the modal binds
 // directly without walking the typed surface.
-type flatPermissionRequest struct {
+//
+// Exported (consent-surfaces-truth-01PMTR01 WP03) so both transports
+// that answer *_ListPending — the Wails-bound
+// Bindings.Permissions_ListPending and core/serve's
+// "Permissions_ListPending" dispatch case — return the exact same wire
+// shape the live `<family>:permission-pending` topic already carries.
+// FR-005 forbids a second projection: this is the only one, in either
+// direction (live push AND rehydration pull).
+type FlatPermissionRequest struct {
 	RequestID       string              `json:"request_id"`
 	SessionID       string              `json:"session_id,omitempty"`
 	Family          string              `json:"family"`
@@ -7274,7 +7786,7 @@ type flatPermissionRequest struct {
 	DeadlineAt      string              `json:"deadline_at"`
 }
 
-// flattenPendingRequest projects cedar.PendingRequest into the flat
+// FlattenPendingRequest projects cedar.PendingRequest into the flat
 // shape the frontend permission modals bind to. Each family fills
 // resource_display from its surface fields:
 //   - bash: full argv joined (e.g. "aws --version") — what the user
@@ -7282,14 +7794,14 @@ type flatPermissionRequest struct {
 //   - fs: canonical path + op (e.g. "read /Users/alice/code/main.go").
 //   - cred: provider_id + purpose (e.g. "openai · stream").
 //   - tool: server_name__tool_name (e.g. "filesystem__read_file").
-func flattenPendingRequest(p cedar.PendingRequest) flatPermissionRequest {
+func FlattenPendingRequest(p cedar.PendingRequest) FlatPermissionRequest {
 	// Project through cedar.PendingRequest.Project() — the SINGLE
 	// projection function. The :7881 approval bridge
 	// (cmd/harness-vm/approvals.go) calls the same one, so the served
 	// modal and the host-brokered wire can never drift in what they
 	// call the same approval_id.
 	proj := p.Project()
-	return flatPermissionRequest{
+	return FlatPermissionRequest{
 		RequestID:       p.RequestID,
 		SessionID:       p.Surface.SessionID,
 		Family:          string(p.Family),
@@ -7500,6 +8012,35 @@ func (a *API) UpdateStartCheck(ctx context.Context) {
 	}
 	if err := a.updateAPI.StartCheck(ctx); err != nil {
 		logging.L().Warn("menu.update.check_failed", "err", err.Error())
+	}
+}
+
+// UpdateStartDownload begins (or retries) the staged-artifact download via
+// the Manager if wired. Used by the native Help → "Install Update" /
+// "Retry Update" menu handlers (self-update-repair-01PMUP01 WP05) — the
+// menu dispatches this fire-and-forget the same way the Settings panel's
+// installLatest does its first step; the resulting UpdateDownloading /
+// UpdateStaged / UpdateFailed menu state comes from the WP03 broker
+// subscriber, not from this call's return value. Safe to call with a nil
+// updateAPI.
+func (a *API) UpdateStartDownload(ctx context.Context) {
+	if a == nil || a.updateAPI == nil {
+		return
+	}
+	if err := a.updateAPI.StartDownload(ctx); err != nil {
+		logging.L().Warn("menu.update.start_download_failed", "err", err.Error())
+	}
+}
+
+// UpdateApply installs the most recently staged download via the Manager
+// if wired. Used by the native Help → "Install & Restart" menu handler.
+// Safe to call with a nil updateAPI.
+func (a *API) UpdateApply(ctx context.Context) {
+	if a == nil || a.updateAPI == nil {
+		return
+	}
+	if err := a.updateAPI.Apply(ctx); err != nil {
+		logging.L().Warn("menu.update.apply_failed", "err", err.Error())
 	}
 }
 

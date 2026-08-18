@@ -12,10 +12,14 @@
 //   - /model <id> — return metadata so the frontend can apply the new
 //     (provider, model) tuple to the SessionsView's local active state.
 //
-// Stub commands register so /help advertises the full surface today;
-// their handlers return a friendly "coming soon" message that points
-// at the agent-kernel-graph mission. Stubs in v1: /memorize, /recall,
-// /forget, /branch.
+// stubCommand (cmd_stubs.go) is a kept building block for commands
+// registered before their real implementation lands. It is not
+// currently used: /memorize, /recall, /forget and /branch — the four
+// v1 commands that originally shipped as stubs pointing at the
+// agent-kernel-graph mission — are all real today. That mission is
+// archived (kitty-specs/_archive/agent-kernel-graph-01KQ6391); see the
+// dated keep-decision in cmd_stubs_test.go for why the type still
+// exists (engineer-truth-pass-01PMTP01 WP07).
 //
 // DIRECTIVE_001: this package consumes core/session via narrow
 // interfaces (SessionAppender, ProviderLister) so the slashcmd
@@ -53,14 +57,26 @@ const (
 	MetaKeyOwningMission = "owningMission"
 )
 
-// owningMissionAgentKernelGraph is the spec slug the stub commands
-// point at. Hard-coded so a typo can't drift the reference.
-const owningMissionAgentKernelGraph = "agent-kernel-graph-01KQ6391"
+// owningMissionUnassigned is the placeholder MetaKeyOwningMission value
+// a stub command carries until a real command is registered against
+// stubCommand. Previously named owningMissionAgentKernelGraph and
+// hard-coded to that mission's slug — but the memory pipeline shipped
+// and agent-kernel-graph-01KQ6391 archived two releases ago
+// (engineer-truth-pass-01PMTP01 WP07, finding B18). No command uses
+// stubCommand today, so there is no real mission to name; a future
+// caller registering a genuine stub should set its own
+// MetaKeyOwningMission rather than rely on a shared constant that may
+// name the wrong mission for its command.
+const owningMissionUnassigned = "unassigned"
 
-// comingSoonTemplate is the canned body every stub command returns.
-// %s is the bare command name (without the leading slash) so the
-// rendered bubble starts with the command the user typed.
-const comingSoonTemplate = "/%s: memory pipeline lands with the agent-kernel-graph mission — this command is registered but not yet wired."
+// comingSoonTemplate is the canned body a stub command returns. %s is
+// the bare command name (without the leading slash) so the rendered
+// bubble starts with the command the user typed. Mission-agnostic —
+// it used to name the (now-archived) agent-kernel-graph mission by
+// name and claim the "memory pipeline" specifically, which would have
+// rendered a sentence about a closed mission to any future command
+// registered against the kept stubCommand building block.
+const comingSoonTemplate = "/%s: registered but not yet wired."
 
 // ErrUnknownCommand is returned by Registry.Execute when the parsed
 // name has no registered command. The user-visible message is fixed
@@ -380,7 +396,7 @@ func comingSoonResult(name string) Result {
 		Kind: ResultKindInfo,
 		Text: fmt.Sprintf(comingSoonTemplate, name),
 		Metadata: map[string]any{
-			MetaKeyOwningMission: owningMissionAgentKernelGraph,
+			MetaKeyOwningMission: owningMissionUnassigned,
 		},
 	}
 }

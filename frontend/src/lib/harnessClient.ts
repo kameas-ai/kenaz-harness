@@ -134,7 +134,9 @@ import type {
   MCPImportStatus,
   MCPTranslationReport,
   MCPImportWrotePath,
+  MCPSaveCustomRecipeRequest,
   PermissionGrant,
+  PermissionRequest,
   PermissionMode,
   SessionUsage,
   DriftReport,
@@ -348,6 +350,9 @@ interface WailsBindingsLike {
   MCP_ImportClaudeDesktopConfig(
     req: MCPImportRequest,
   ): Promise<MCPImportResponse>;
+  MCP_SaveCustomRecipe(
+    req: MCPSaveCustomRecipeRequest,
+  ): Promise<{ id: string }>;
 
   A2A_ListCards(): Promise<A2ACard[]>;
   A2A_StartStream(): Promise<string>;
@@ -462,12 +467,6 @@ interface WailsBindingsLike {
   // was never declared on this interface — type-safety hole until v0.8.x.
   Settings_GetMCPAutoRestart(): Promise<boolean>;
   Settings_SetMCPAutoRestart(enabled: boolean): Promise<void>;
-  /** Returns the full keyboard shortcut overrides map. */
-  Settings_GetShortcuts(): Promise<Record<string, string>>;
-  /** Persist a single shortcut override. Empty binding clears the override. */
-  Settings_SetShortcut(id: string, binding: string): Promise<void>;
-  /** Atomically replace the full shortcut overrides map. */
-  Settings_SetShortcuts(m: Record<string, string>): Promise<void>;
   Settings_GetAutoTitleEnabled(): Promise<boolean>;
   Settings_SetAutoTitleEnabled(enabled: boolean): Promise<void>;
   /** Read the user's chat custom-instructions text (default empty). */
@@ -736,6 +735,8 @@ interface WailsBindingsLike {
   Permissions_ListGrants(family: string): Promise<PermissionGrant[]>;
   Permissions_RevokeGrant(id: string): Promise<void>;
   Permissions_Resolve(requestID: string, decision: string): Promise<void>;
+  // consent-surfaces-truth-01PMTR01 WP03 — rehydration on reload.
+  Permissions_ListPending(): Promise<PermissionRequest[]>;
   // WP06 — reintegration propose + commit.
   Branches_ProposeReintegrationSummary(
     branchSessionID: string,
@@ -1627,6 +1628,15 @@ export interface MCPClient {
   importClaudeDesktopConfig(
     req: MCPImportRequest,
   ): Promise<MCPImportResponse>;
+  /**
+   * saveCustomRecipe — persist a user-authored recipe from the Custom tab
+   * (mission mcp-connector-lifecycle-01PMMC01, WP06). Throws on
+   * validation failure (empty command for a stdio recipe, missing URL
+   * for http/sse, etc.) — the same rule every shipped recipe satisfies.
+   * The resolved value's `id` echoes the saved id; callers that need the
+   * full saved recipe should re-fetch via Tools_ListRecipes.
+   */
+  saveCustomRecipe(req: MCPSaveCustomRecipeRequest): Promise<{ id: string }>;
 }
 
 export type {
@@ -1637,6 +1647,7 @@ export type {
   MCPImportStatus,
   MCPTranslationReport,
   MCPImportWrotePath,
+  MCPSaveCustomRecipeRequest,
   AttachmentLimitsView,
 };
 
@@ -2140,21 +2151,18 @@ export interface PermissionsClient {
    */
   resolve(requestID: string, decision: string): Promise<void>;
   /**
-   * Read the full keyboard shortcut overrides map. Empty map means all
-   * shortcuts use registry defaults.
-   * (keyboard-shortcuts-settings-01KQ8TDR plan §2.7)
+   * List every in-flight pending permission prompt across all four
+   * families, already flattened through the harness's single
+   * projection (rpc.FlattenPendingRequest) — byte-identical to what the
+   * live `<family>:permission-pending` topic pushes. Each family's
+   * modal calls this on mount and filters by `family` client-side
+   * (consent-surfaces-truth-01PMTR01 WP03 / dead-code-audit A11): a
+   * prompt issued before a reload, hot-reload, or WS reconnect is
+   * otherwise lost to the frontend even though the goroutine backing it
+   * is still parked server-side, and the turn hangs until the
+   * registry's 5-minute timeout fail-closed denies it.
    */
-  getShortcuts(): Promise<Record<string, string>>;
-  /**
-   * Persist a single shortcut override. An empty binding value clears
-   * the override (resets to registry default).
-   */
-  setShortcut(id: string, binding: string): Promise<void>;
-  /**
-   * Atomically replace the full shortcut overrides map. Used for
-   * reset-all and batch-save flows.
-   */
-  setShortcuts(m: Record<string, string>): Promise<void>;
+  listPending(): Promise<PermissionRequest[]>;
 }
 
 /**
@@ -3512,6 +3520,7 @@ export function createHarnessClient(): HarnessClient {
       testRecipe: (recipeID, env = {}, config = {}) =>
         b().MCP_TestRecipe(recipeID, env, config),
       importClaudeDesktopConfig: (req) => b().MCP_ImportClaudeDesktopConfig(req),
+      saveCustomRecipe: (req) => b().MCP_SaveCustomRecipe(req),
     },
     a2a: {
       listCards: () => b().A2A_ListCards(),
@@ -3703,9 +3712,7 @@ export function createHarnessClient(): HarnessClient {
       revokeGrant: (id) => b().Permissions_RevokeGrant(id),
       resolve: (requestID, decision) =>
         b().Permissions_Resolve(requestID, decision),
-      getShortcuts: () => b().Settings_GetShortcuts(),
-      setShortcut: (id, binding) => b().Settings_SetShortcut(id, binding),
-      setShortcuts: (m) => b().Settings_SetShortcuts(m),
+      listPending: () => b().Permissions_ListPending(),
     },
     memory: {
       listChunks: (filter) => b().Memory_ListChunks(filter ?? {}),
@@ -4143,6 +4150,11 @@ export const SERVED_STREAM_TOPICS = [
   // coming. Dropping this leaves the compaction pause looking like a
   // hang — the same failure shape as the gates above, minus the block.
   'chat:overflow-recovery',
+  // Boot-time migration drift, severity:"error" only
+  // (upgrade-path-coverage-01PMUG01 WP04, FR-3c). useEventToasts.ts
+  // surfaces a persistent toast so a served workbench user with a
+  // corrupted ledger isn't left with no signal at all.
+  'storage.migration.drift-detected',
 ] as const;
 
 /**
@@ -4455,12 +4467,21 @@ export function createServedHarnessClient(opts?: {
        *
        * listGrants / revokeGrant stay unported — grant management is a
        * settings surface, not part of completing a turn.
+       *
+       * listPending IS ported (WP03): a served frontend that reconnects
+       * needs the same reconciliation Elicit_ListPending /
+       * Confirm_ListPending already provide for their families — a
+       * prompt lost across a WS reconnect is otherwise a hung turn with
+       * no way back, the served-mode instance of the exact defect this
+       * WP fixes on desktop.
        */
       resolve: (requestID: string, decision: string) =>
         transport.call<void>('Permissions_Resolve', {
           requestId: requestID,
           decision,
         }),
+      listPending: () =>
+        transport.call<PermissionRequest[]>('Permissions_ListPending'),
     },
   };
 }
@@ -4697,6 +4718,7 @@ export function createFakeHarnessClient(
         stderr_tail: '',
         duration_ms: 1,
       }),
+      saveCustomRecipe: async (req) => ({ id: req.id }),
     },
     a2a: {
       listCards: async () => [],
@@ -4962,9 +4984,7 @@ export function createFakeHarnessClient(
       listGrants: async () => [],
       revokeGrant: noop,
       resolve: noop,
-      getShortcuts: async () => ({}),
-      setShortcut: noop,
-      setShortcuts: noop,
+      listPending: async () => [],
     },
     memory: {
       listChunks: async () => [],
@@ -5159,14 +5179,25 @@ export function createFakeHarnessClient(
       exec: async () => ({ stdout: '', stderr: '', exitCode: 0, truncated: false }),
     },
     slash: {
+      // All seven are live commands (core/slashcmd's three "real" v1
+      // commands plus the four that originally shipped as stubs — see
+      // core/rpc/views/slashcmd/api.go's CommandInfo docstring). Before
+      // engineer-truth-pass-01PMTP01 WP07 (finding B18, the carved-out
+      // data exception — this is data, not a comment), the last four
+      // carried comingSoon: true and "(coming soon)" descriptions,
+      // contradicting the live Go registry and the Go test that pins it
+      // (TestAPI_List_SortedAndNoneComingSoon). Anyone developing
+      // against the fake client saw four false "(coming soon)" badges.
+      // Descriptions mirror the real Description() text in
+      // core/slashcmd/cmd_memory.go and cmd_branch.go.
       list: async () => [
         { name: 'help', description: 'List available slash commands.', comingSoon: false },
         { name: 'clear', description: 'Insert a divider in the current chat (history preserved).', comingSoon: false },
         { name: 'model', description: 'Switch the active model — e.g. /model gpt-4o', comingSoon: false },
-        { name: 'memorize', description: 'Pin text to long-term memory (coming soon).', comingSoon: true },
-        { name: 'recall', description: 'Recall memory chunks matching a query (coming soon).', comingSoon: true },
-        { name: 'forget', description: 'Forget a memory chunk by id (coming soon).', comingSoon: true },
-        { name: 'branch', description: 'Branch the conversation onto a smaller or larger model (coming soon).', comingSoon: true },
+        { name: 'memorize', description: 'Pin text to long-term memory — e.g. /memorize prefer rg over grep', comingSoon: false },
+        { name: 'recall', description: 'Recall memory chunks matching a query — e.g. /recall vim shortcuts', comingSoon: false },
+        { name: 'forget', description: 'Forget a memory chunk by id — e.g. /forget mem-abc123', comingSoon: false },
+        { name: 'branch', description: 'Branch the conversation onto a smaller or larger model — /branch lists candidates; /branch <model-id> forks', comingSoon: false },
       ],
       execute: async (_sessionID, raw) => ({
         text: `fake slash result for ${raw}`,

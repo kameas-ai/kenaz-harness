@@ -27,6 +27,7 @@ package rpc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
@@ -113,11 +114,32 @@ func (onboardingAccountStepAdapter) IsAccountStepAvailable(_ context.Context) (b
 
 // ---- SessionStarter adapter --------------------------------------------------
 
+// systemPromptDeliverer is the narrow surface StartOnboardingSession needs to
+// persist a starter's system prompt through the canonical, attachments-aware
+// path (FR-004). sessions.SessionsAPI's SetSystemPrompt method
+// (core/rpc/views/sessions/impl.go:722) satisfies this — production wires
+// a.sessionsAPI here (core/rpc/api.go), NOT session.Manager.SetSystemPrompt
+// directly. The manager method writes only the legacy session.system_prompt
+// column, which core/rpc/views/llm/impl.go's composition path skips whenever
+// an attachments store is wired — i.e. always in production (spec §1.2,
+// design constraint C-001). Calling the manager here would be a green test
+// and a dead feature.
+type systemPromptDeliverer interface {
+	SetSystemPrompt(ctx context.Context, id, content, kind string) error
+}
+
 // onboardingSessionStarterAdapter implements onboardingview.SessionStarter.
-// It spawns a kind=onboarding session with the chosen starter's system prompt.
+// It spawns a kind=onboarding session and, when the chosen starter carries a
+// non-empty SystemPrompt, delivers it through systemPrompt (the
+// attachments-aware sessions view) as a position-0 inline session-scope
+// attachment — the same seam SetSystemPrompt uses for an ordinary session's
+// starting context (frontend/src/shell/NewSessionDialog.vue). A delivery
+// failure returns a non-nil error so RestartPhase2 does not mark onboarding
+// complete for a session nobody actually configured (FR-005).
 type onboardingSessionStarterAdapter struct {
-	sessionMgr *session.Manager
-	dataDir    string
+	sessionMgr   *session.Manager
+	systemPrompt systemPromptDeliverer
+	dataDir      string
 }
 
 func (a onboardingSessionStarterAdapter) StartOnboardingSession(
@@ -139,6 +161,25 @@ func (a onboardingSessionStarterAdapter) StartOnboardingSession(
 	)
 	if err != nil {
 		return "", err
+	}
+	// Skip the call when the starter carries no prompt — do not persist an
+	// empty attachment (tasks.md WP02: TestEmptyStarterPromptWritesNothing).
+	if starter.SystemPrompt == "" {
+		return rec.ID, nil
+	}
+	if a.systemPrompt == nil {
+		return "", fmt.Errorf("onboarding: system prompt delivery not wired (nil chassis)")
+	}
+	if err := a.systemPrompt.SetSystemPrompt(ctx, rec.ID, starter.SystemPrompt, "system"); err != nil {
+		// WP03 decision (FR-005): the session created above is left in
+		// place, not deleted. Deletion would add a second failure surface
+		// (Delete can itself fail) for a low-stakes cleanup — the orphan
+		// is an empty, unremarkable session the user can delete by hand,
+		// and it is never silent: this error propagates to RestartPhase2,
+		// which (views/onboarding/impl.go) returns it before marking
+		// onboarding complete, so the caller sees the failure and the
+		// dialog stays offered. See spec C-003.
+		return "", fmt.Errorf("onboarding: deliver starter system prompt: %w", err)
 	}
 	return rec.ID, nil
 }

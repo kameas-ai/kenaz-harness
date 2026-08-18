@@ -13,10 +13,24 @@
 //     report (with updated WrotePath fields).
 //
 // The collision check feeds off MergedCatalog.Get so the warning rows
-// reflect the live catalog (shipped + registry + user). dryRun=true is
-// a pure-read operation; dryRun=false is the only path that touches
-// disk. UserStore.Reload (or the fsnotify watcher) picks up the new
-// _imports/<id>.yaml on the next event tick, completing the round-trip.
+// reflect the live catalog (shipped + registry + user) — including an
+// entry this same process imported a moment ago:
+// mcp-connector-lifecycle-01PMMC01 WP03 wires the boot chassis's
+// importCatalogReader through mcpUserRecipeSource(a.mcpUserStore)
+// (core/rpc/api.go), which reloads UserStore from disk on every call, so
+// importing the same id twice in one process reports a collision on the
+// second attempt rather than silently overwriting. dryRun=true is a
+// pure-read operation; dryRun=false is the only path that touches disk.
+//
+// Freshness has no background component (WP04 deleted
+// UserStore.StartWatch and its debounced reload loop — see
+// docs/unwired-ledger.md's 2026-08-18 entry): the per-call reload above
+// is the entire mechanism. An id written by a DIFFERENT process (served
+// mode's connectors.CatalogWithUserRecipes reloads its own UserStore per
+// supervisor snapshot, independently) becomes visible to THIS process on
+// its next catalog read, the same way one this process wrote itself
+// does — there was nothing a background reload loop could add once every
+// consumer already reloads on every call.
 package mcp
 
 import (

@@ -31,7 +31,15 @@ func TestBootWiresNarrativeSettingsGate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("core.New: %v", err)
 	}
-	api := New(c)
+	// WithSettingsStore(newTestStore(t)) (upgrade-path-coverage-01PMUG01
+	// FR-4a): this test flips SetMemoryNarrativeEnabled twice below, and
+	// a t.Fatal between the flip-to-true and the flip-back would leave
+	// the write unreverted. Without an injected store that write landed
+	// in the developer's real settings.json via
+	// settings.NewFileStoreFromEnv() -> os.UserConfigDir(); the
+	// t.TempDir()-backed store here makes it land in a directory this
+	// test process owns and go test deletes on exit.
+	api := New(c, WithSettingsStore(newTestStore(t)))
 	if api == nil {
 		t.Fatal("rpc.New returned nil")
 	}

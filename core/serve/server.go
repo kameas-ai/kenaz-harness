@@ -893,6 +893,25 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 		}
 		return nil, s.api.Permissions().Resolve(ctx, p.RequestID, permissionsview.Decision(p.Decision))
 
+	// Permissions_ListPending mirrors Elicit_ListPending / Confirm_ListPending
+	// above: a served frontend that reconnects (or a workbench browser tab
+	// that reloads) needs to rebuild its permission-modal queue from the
+	// server's parked set, not just wait for the next live
+	// `<family>:permission-pending` push. Flattened through the SAME
+	// rpc.FlattenPendingRequest the live topic and the desktop
+	// Permissions_ListPending binding both use (FR-005: one projection
+	// function, so this payload is byte-identical to the live one).
+	case "Permissions_ListPending":
+		pending, err := s.api.Permissions().ListPending(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]rpc.FlatPermissionRequest, 0, len(pending))
+		for _, p := range pending {
+			out = append(out, rpc.FlattenPendingRequest(p))
+		}
+		return out, nil
+
 	default:
 		// FR-005: no fake success — the caller gets a clear error, never
 		// silent fake data.

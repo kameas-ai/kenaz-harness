@@ -116,6 +116,36 @@ type LLMProviderAdapter struct {
 	// that a chat-bound segment has started streaming, and what that
 	// segment's finished text was.
 	moves *turnJournal
+
+	// attachments resolves the session's system-kind attachments
+	// (first-run-onboarding-01PMOB01 WP02). nil disables the layer
+	// entirely — the pre-existing behaviour for every chat session before
+	// this field existed. This is the read half of the seam
+	// core/rpc/views/sessions/impl.go's SetSystemPrompt writes: before
+	// this, nothing in the agentgraph chat path ever called
+	// attachments.Manager.ListResolved, so a session-scoped starting
+	// context (onboarding's or an ordinary session's, via
+	// NewSessionDialog.vue) was persisted correctly but never reached the
+	// model. See buildAttachmentsBlock.
+	attachments AttachmentsResolver
+}
+
+// ResolvedAttachment is the narrow shape buildAttachmentsBlock consumes.
+// Defined here (mirroring core/rpc/views/llm.ResolvedAttachment) so the
+// chat package does not need to import core/attachments directly; the
+// chassis (core/rpc/api.go) bridges the concrete attachments.Manager into
+// this shape.
+type ResolvedAttachment struct {
+	Content string
+	Kind    string
+}
+
+// AttachmentsResolver returns the resolved (global+project+session)
+// attachment list for a session, in declared injection order. nil means
+// "attachments not wired" — buildAttachmentsBlock renders no layer, which
+// is byte-identical to every chat turn before this field existed.
+type AttachmentsResolver interface {
+	ListResolved(ctx context.Context, sessionID string) ([]ResolvedAttachment, error)
 }
 
 // NewLLMProviderAdapter constructs an adapter pinned to a specific
@@ -162,6 +192,48 @@ func (a *LLMProviderAdapter) WithEnvContext(now func() time.Time, workspaceDir, 
 	a.workspaceDir = workspaceDir
 	a.workspaceNote = workspaceNote
 	return a
+}
+
+// WithAttachments pins the session-attachments resolver onto the adapter
+// (first-run-onboarding-01PMOB01 WP02). nil disables the layer.
+func (a *LLMProviderAdapter) WithAttachments(resolver AttachmentsResolver) *LLMProviderAdapter {
+	a.attachments = resolver
+	return a
+}
+
+// buildAttachmentsBlock resolves the session's system-kind attachments and
+// joins their content in declared (global, project, session) order, or
+// returns "" when nothing is wired / nothing resolves / the resolver
+// errors. A resolver error degrades to no layer rather than failing the
+// turn — the same fail-open posture buildEnvBlock uses for a workspace
+// listing error, and consistent with every other layer here being
+// best-effort. Errors are logged so a persistent failure is diagnosable.
+//
+// This is the read half of FR-004: core/rpc/views/sessions/impl.go's
+// SetSystemPrompt (the canonical, attachments-aware seam) writes a
+// position-0 inline session-scope attachment; this method is what makes
+// that write reach the model on the session's next turn.
+func (a *LLMProviderAdapter) buildAttachmentsBlock(ctx context.Context) string {
+	if a == nil || a.attachments == nil {
+		return ""
+	}
+	resolved, err := a.attachments.ListResolved(ctx, a.sessionID)
+	if err != nil {
+		logging.L().Warn("chat.attachments.resolve_failed",
+			"session_id", a.sessionID, "err", err.Error())
+		return ""
+	}
+	var parts []string
+	for _, att := range resolved {
+		if att.Kind != "system" || att.Content == "" {
+			continue
+		}
+		parts = append(parts, att.Content)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // envClockNow reads the injected clock, defaulting to the wall clock.
@@ -432,14 +504,20 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 
 	llmMsgs := KernelMessagesToWire(req.Messages)
 
-	// Layer the dynamic environment context and the user custom
-	// instructions on top of the composed graph-base + node-role system
-	// prompt (WP01/WP02 populate req.SystemPrompt). Only the seam has the
-	// harness runtime context (platform, clock, workspace, live tool
-	// catalog) and the user settings, so the layering happens here rather
-	// than graph-side. Order: base → environment → user instructions, so
-	// the user's standing preferences come last. (system-prompt-layers
-	// WP03/WP04)
+	// Layer the session's resolved attachments, the dynamic environment
+	// context, and the user custom instructions on top of the composed
+	// graph-base + node-role system prompt (WP01/WP02 populate
+	// req.SystemPrompt). Only the seam has the harness runtime context
+	// (platform, clock, workspace, live tool catalog), the session's
+	// resolved attachments, and the user settings, so the layering
+	// happens here rather than graph-side. Order: base → attachments →
+	// environment → user instructions, so the user's standing preferences
+	// come last and a session's starting context (onboarding's starter
+	// prompt, or an ordinary session's attached context) sits right after
+	// the graph's generic role framing — establishing who the assistant
+	// is for THIS session before the dynamic environment facts and
+	// behavioural bars. (system-prompt-layers WP03/WP04;
+	// first-run-onboarding-01PMOB01 WP02 added the attachments layer)
 	gen := corellm.GenerationRequest{
 		ProfileID: a.profileID,
 		Model:     a.modelOverride,
@@ -452,7 +530,7 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 		// gap rather than a half-wire.
 		// Recap sits before the user's custom instructions so a user
 		// instruction about verbosity still wins the last word.
-		System:   composeSystemPrompt(nil, req.SystemPrompt, a.buildEnvBlock(), a.buildRecapBlock(), a.buildAskBarBlock(), a.buildUserInstructionsBlock()),
+		System:   composeSystemPrompt(nil, req.SystemPrompt, a.buildAttachmentsBlock(ctx), a.buildEnvBlock(), a.buildRecapBlock(), a.buildAskBarBlock(), a.buildUserInstructionsBlock()),
 		Messages: llmMsgs,
 		Tools:    a.tools,
 	}

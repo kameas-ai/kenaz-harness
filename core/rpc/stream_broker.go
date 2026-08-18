@@ -108,7 +108,43 @@ const (
 	// as the process-visible export — the same arrangement
 	// TopicToolConfirmPending has with core/toolloop.
 	TopicChatOverflowRecovery = "chat:overflow-recovery"
+
+	// TopicMigrationDriftDetected is published once per chassis boot when
+	// the migration drift check finds severity:"error" (id_mismatch)
+	// drift (upgrade-path-coverage-01PMUG01 WP04, FR-3c). Before this,
+	// severity:"error" drift was visible only inside the
+	// MigrationDriftPanel at /settings?tab=health, which a user has no
+	// reason to know exists; this topic lets useEventToasts.ts surface a
+	// persistent toast at boot instead. NOT published for ledger_only or
+	// code_only-only drift — code_only is the normal pending state the
+	// panel already suppresses by default, and adding a boot toast for it
+	// would make the toast itself the false alarm this WP is fixing.
+	//
+	// The value matches kindpkg.KindMigrationDriftDetected
+	// (core/event/kind/registry.go) so the audit trail and the live
+	// toast key on the same string; kept as its own literal here rather
+	// than importing core/event/kind, matching every other Topic*
+	// constant in this file being a plain string.
+	//
+	// Must be added to passthroughTopics (core/serve/wsstream.go) and
+	// SERVED_STREAM_TOPICS (frontend/src/lib/harnessClient.ts) for served
+	// mode to forward it — see wsstream_topics_parity_test.go.
+	TopicMigrationDriftDetected = "storage.migration.drift-detected"
 )
+
+// MigrationDriftDetectedPayload is the typed payload published on
+// TopicMigrationDriftDetected. Mirrors
+// frontend/src/lib/types.ts MigrationDriftDetectedPayload.
+type MigrationDriftDetectedPayload struct {
+	DriftCount int   `json:"driftCount"`
+	Versions   []int `json:"versions"`
+	// HasError is true iff at least one entry has severity "error"
+	// (id_mismatch). This topic is only ever published when HasError is
+	// true, but the field travels with the payload so the frontend
+	// handler's own guard reads the same source of truth as the
+	// publish-site guard, rather than trusting "this topic fired" alone.
+	HasError bool `json:"hasError"`
+}
 
 // SessionUsagePayload is the typed payload emitted on
 // TopicSessionUsageUpdated after each completed LLM turn

@@ -6,9 +6,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/conversation"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 )
 
@@ -321,6 +323,84 @@ func TestAPI_ProposeReintegrationSummary_EmptyBranch(t *testing.T) {
 	}
 	if prop.ProposedSummary != "" {
 		t.Errorf("ProposedSummary = %q, want empty for no-assistant-turns case", prop.ProposedSummary)
+	}
+}
+
+// TestAPI_ProposeReintegrationSummary_RespectsPersistedMaxTokens pins
+// FR-003 (engineer-truth-pass-01PMTP01 WP02, finding B2): before WP02,
+// impl.go hardcoded `const maxTokens = 2000` and Settings.
+// BranchReintegrationMaxTokens / EffectiveBranchReintegrationMaxTokens
+// had zero callers, so a persisted non-default value was silently
+// ignored. This drives a real 500-token budget through Config.Settings
+// and asserts the truncation actually uses it.
+func TestAPI_ProposeReintegrationSummary_RespectsPersistedMaxTokens(t *testing.T) {
+	t.Parallel()
+	sessStore := session.NewMemoryStore()
+	sessMgr := session.NewManager(sessStore,
+		session.WithClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }),
+	)
+	convStore := conversation.NewMemoryStore()
+	convMgr := conversation.NewManager(convStore, sessMgr,
+		conversation.WithClock(func() time.Time { return time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC) }),
+	)
+	api := New(Config{
+		Conversations: convMgr,
+		Sessions:      sessMgr,
+		Settings: func() settings.Settings {
+			return settings.Settings{BranchReintegrationMaxTokens: 500}
+		},
+	})
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, _ := api.CreateBranch(ctx, CreateBranchOptions{
+		ParentSessionID: parent.ID, Title: "side",
+	})
+	// 3000 runes of assistant content — comfortably past the 500-token
+	// (2000-rune) budget, so a real clamp is exercised either way.
+	long := strings.Repeat("a", 3000)
+	_, _ = sessMgr.AppendMessage(ctx, br.ChildSessionID, session.Message{Role: session.RoleAssistant, Content: long})
+
+	prop, err := api.ProposeReintegrationSummary(ctx, br.ChildSessionID)
+	if err != nil {
+		t.Fatalf("ProposeReintegrationSummary: %v", err)
+	}
+	const wantRunes = 500 * 4 // runesPerToken (impl.go) * persisted 500-token budget
+	if got := utf8.RuneCountInString(prop.ProposedSummary); got != wantRunes {
+		t.Errorf("summary runes = %d, want %d (persisted BranchReintegrationMaxTokens=500 ignored)", got, wantRunes)
+	}
+	if prop.TokenCount != 500 {
+		t.Errorf("TokenCount = %d, want 500", prop.TokenCount)
+	}
+}
+
+// TestAPI_ProposeReintegrationSummary_UnsetSettingsUsesDefault pins the
+// second half of FR-003: a nil Config.Settings (or one that returns the
+// zero Settings) must still fall back to
+// settings.DefaultBranchReintegrationMaxTokens (2000), the same value
+// the pre-WP02 hardcoded constant produced — so callers that never set
+// the field see no behaviour change.
+func TestAPI_ProposeReintegrationSummary_UnsetSettingsUsesDefault(t *testing.T) {
+	t.Parallel()
+	// api has no Config.Settings at all (newTestStack's Config leaves it nil).
+	api, sessMgr, _ := newTestStack(t)
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, _ := api.CreateBranch(ctx, CreateBranchOptions{
+		ParentSessionID: parent.ID, Title: "side",
+	})
+	long := strings.Repeat("b", 9000)
+	_, _ = sessMgr.AppendMessage(ctx, br.ChildSessionID, session.Message{Role: session.RoleAssistant, Content: long})
+
+	prop, err := api.ProposeReintegrationSummary(ctx, br.ChildSessionID)
+	if err != nil {
+		t.Fatalf("ProposeReintegrationSummary: %v", err)
+	}
+	const wantRunes = settings.DefaultBranchReintegrationMaxTokens * 4 // 8000
+	if got := utf8.RuneCountInString(prop.ProposedSummary); got != wantRunes {
+		t.Errorf("summary runes = %d, want %d (default budget)", got, wantRunes)
+	}
+	if prop.TokenCount != settings.DefaultBranchReintegrationMaxTokens {
+		t.Errorf("TokenCount = %d, want %d", prop.TokenCount, settings.DefaultBranchReintegrationMaxTokens)
 	}
 }
 

@@ -71,6 +71,13 @@ type Manager struct {
 	hasStaged      bool
 	lastCheckedAt  int64
 	downloadActive bool
+	// downloadErr carries the reason the most recent download attempt
+	// failed (set by markFailed, cleared by StartDownload). Mirrored
+	// out via StatusOutput.DownloadError so a fresh Status call after
+	// a reload can still explain a "failed" state (FR-004/FR-005) —
+	// the one-shot TopicDownloadFailed broker frame is not the only
+	// source of the reason.
+	downloadErr string
 }
 
 // Config bundles the Manager's dependencies.
@@ -113,6 +120,13 @@ func (m *Manager) Status(_ context.Context) (StatusOutput, error) {
 	if m.state == stateDownloading {
 		out.DownloadProgress = m.progressPct
 	}
+	// DownloadError is copied unconditionally (not gated on
+	// state==stateFailed the way DownloadProgress is gated on
+	// stateDownloading): StartDownload clears it up front (below), so a
+	// non-failed state always reads back "" on its own — gating here
+	// would just mask a regression that stops clearing it, which is
+	// exactly the WP01 mutation this field exists to catch.
+	out.DownloadError = m.downloadErr
 	if m.hasInfo {
 		out.Available = m.info.Available && !m.info.SkippedByUser
 		out.AvailableVersion = m.info.AvailableVersion
@@ -175,6 +189,7 @@ func (m *Manager) StartDownload(ctx context.Context) error {
 	m.progressTotal = 0
 	m.progressPct = 0
 	m.hasStaged = false
+	m.downloadErr = ""
 	m.mu.Unlock()
 
 	progress, staged, err := m.svc.Download(ctx, info)
@@ -238,6 +253,7 @@ func (m *Manager) markFailed(err error) {
 	m.progressPct = 0
 	m.downloadActive = false
 	m.hasStaged = false
+	m.downloadErr = err.Error()
 	m.mu.Unlock()
 	m.publish(TopicDownloadFailed, DownloadFailedPayload{Err: err.Error()})
 	logging.L().Warn("update.view.download.failed", "err", err.Error())

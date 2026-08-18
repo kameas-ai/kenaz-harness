@@ -214,10 +214,15 @@ can say is wanted. Record the question; do not resolve it by deleting.
 Every disposition names its class. "Deleted — no importers" is not a
 reason; "deleted — `AttachmentTreePicker` is the live substitute" is.
 
-### Two blind spots the file-level scans cannot see
+### Three blind spots the file-level scans cannot see
 
-Both were found the hard way in the 2026-08-14 sweep. Neither is covered by
-any gate; both need a human or an agent explicitly looking.
+The first two were found the hard way in the 2026-08-14 sweep; the third by the
+v0.63.0 P0 (see item 3 for the dates). The first two are covered by no gate at
+all; for the third, `check-destructive-migration-coverage.sh`,
+`check-upgrade-snapshots-locked.sh` and the `upgrade-path` CI job now cover
+destructive migrations and mutation of committed snapshots — but the *absence*
+of a new snapshot for a new tag is still ungated (see item 3), so all three
+still need a human or an agent explicitly looking.
 
 1. **Dead code inside a live file.** Deleting ten orphaned components saved
    826 bytes of JS — Vite had already tree-shaken every unreferenced `.vue`,
@@ -235,6 +240,36 @@ any gate; both need a human or an agent explicitly looking.
    persisted history, or an FTS index must drive real sqlite.** The same
    blind spot hid the WP06 finding that the tool-pair clamp was a no-op on
    every move-bearing session: every fixture filled the pair markers by hand.
+
+3. **Every test starts from an empty database, so upgrade-path defects are
+   structurally invisible.** Found in `upgrade-path-coverage-01PMUG01`
+   (2026-08-18), prompted by the v0.63.0 P0: it made every upgraded install
+   unable to list, open or create a session, and the full pre-existing suite
+   passed with the bug present — reverting all four production files left it
+   at exit 0. On a fresh database the migration high-water mark starts at 0
+   and everything applies in one ascending pass, so the defect *cannot
+   occur* under test. Blind spot #2 above says persistence assertions must
+   drive real sqlite; that is necessary and **not sufficient** — a real
+   sqlite database that starts empty is still blind to every defect that
+   only exists on the path from a previously-shipped schema to this one.
+   Anything asserting migration selection, schema evolution, or a
+   destructive migration must start from a database a **previous release**
+   produced (`core/storage/sqlite/testdata/upgrade/`), not from `Open` on an
+   empty directory. Corollary: **a migration that has never run against
+   populated tables has never been tested**, and repairing migration
+   *selection* is what aims dormant migrations at real rows for the first
+   time — the repair is itself a risk surface (this is what turned migration
+   `sessions/0332-artifacts-global-scope` into a live cascade hazard the
+   instant the v0.63.1 fix shipped, and is why `sessions/0327-...` had
+   already silently emptied `artifact_versions` on every install that hit it
+   before that block existed — see `docs/unwired-ledger.md`).
+
+   **Release-ritual corollary**: cutting a release includes running
+   `bash scripts/ci/upgrade-snapshot.sh <new-tag>` and committing the
+   resulting `core/storage/sqlite/testdata/upgrade/<new-tag>/` directory. A
+   release without a snapshot leaves the next release with no previous state
+   to test against — the `upgrade-path` CI job keeps passing, it just stops
+   covering anything new, silently.
 
 ### Where the ledger lives
 

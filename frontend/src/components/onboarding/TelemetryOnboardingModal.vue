@@ -21,16 +21,20 @@
  *
  * Subscription-gating seam:
  *   The `accountTier` prop carries the fleet subscription tier
- *   ('pro' | 'team' | 'enterprise' | ''). Callers (App.vue) should pass
- *   the tier resolved from client.settings.fleetCapabilities().tier.
- *   Until that plumbing is in place, omit the prop and the modal safely
- *   falls back to disabling both gated options (most-restrictive default).
+ *   ('pro' | 'team' | 'enterprise' | ''). Wired from App.vue via
+ *   client.settings.fleetCapabilities().tier (consent-surfaces-truth
+ *   -01PMTR01 WP02).
  *
- * TODO(fleet-entitlement): wire App.vue to pass accountTier once the
- *   fleet capabilities poller is available at modal-open time. The seam
- *   is the prop below; no further changes to this component are needed.
+ *   `null` (the default) means "unresolved" — the capabilities fetch
+ *   hasn't completed, or it rejected. Unresolved is deliberately
+ *   distinct from '' ("resolved: no tier"): an unresolved tier is
+ *   fail-ungated (no gate, no badge), matching FleetTelemetryPanel's
+ *   sibling behaviour, which enforces nothing at all. Rendering
+ *   "Requires Pro+" for an account we simply couldn't identify would be
+ *   a new false claim, not a smaller one.
  *
- * (fleet-otel-archival-01NDFSEX11 WP06; bug-fix 01NBUG05)
+ * (fleet-otel-archival-01NDFSEX11 WP06; bug-fix 01NBUG05;
+ *  consent-surfaces-truth-01PMTR01 WP02)
  */
 import { computed, ref } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
@@ -41,10 +45,19 @@ const props = withDefaults(
     /**
      * Fleet subscription tier for the current account.
      * Pass client.settings.fleetCapabilities().tier here.
-     * Omitting (or passing '') means the user is signed-out / free tier —
-     * gated options are disabled.
+     *
+     * '' (resolved, no tier) gates both options and shows the "Requires
+     * …" badges. An explicit null (App.vue's "unresolved" ref state —
+     * not yet fetched, or the fetch rejected) is fail-ungated: neither
+     * option is disabled and no badge renders.
+     *
+     * The default below applies only when the prop is omitted entirely
+     * (no caller wired it) and stays the most-restrictive value ''
+     * deliberately — App.vue always binds an explicit value (starting
+     * at null), so this default is a defensive fallback for a caller
+     * that doesn't wire the prop at all, not the "unresolved" state.
      */
-    accountTier?: 'pro' | 'team' | 'enterprise' | '';
+    accountTier?: 'pro' | 'team' | 'enterprise' | '' | null;
   }>(),
   {
     accountTier: '',
@@ -69,12 +82,16 @@ const TIER_RANK: Record<string, number> = {
   enterprise: 3,
 };
 
-const aggregateAllowed = computed(
-  () => TIER_RANK[props.accountTier ?? ''] >= TIER_RANK['pro'],
-);
-const fullAllowed = computed(
-  () => TIER_RANK[props.accountTier ?? ''] >= TIER_RANK['team'],
-);
+// Unresolved (null/undefined) is fail-ungated: no gate, no badge. Only
+// a RESOLVED tier ('' | 'pro' | 'team' | 'enterprise') is ranked.
+const aggregateAllowed = computed(() => {
+  if (props.accountTier == null) return true;
+  return TIER_RANK[props.accountTier] >= TIER_RANK['pro'];
+});
+const fullAllowed = computed(() => {
+  if (props.accountTier == null) return true;
+  return TIER_RANK[props.accountTier] >= TIER_RANK['team'];
+});
 
 /**
  * Whether the current selection is committable.

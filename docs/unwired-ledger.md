@@ -39,6 +39,8 @@ shipped product boundary, not unwired code. Read that doc before flagging
 | I11 | `check-builtin-tool-registration.sh` | `i11-unregistered-builtin-tools.txt` | builtin tool package no wiring site imports — **added 2026-08-14** |
 | I12 | `check-single-move-writer.sh` | *(none — no allowlist by design)* | second writer of transcript-move metadata, or a seam with 0 / >1 production callers — **added 2026-08-14** |
 | I13 | `check-cedar-gate-arguments.sh` | `i13-cedar-gate-arguments.txt` | a `cedar.Gate` argument or view-`Config` field that resolves to an unconditional permit — **added 2026-08-16, empty** |
+| I14 | `check-broker-topic-consumers.sh` | `i14-unconsumed-broker-topics.txt` | A const under `core/**` whose **identifier contains `Topic`** and whose value is a broker topic, with no frontend subscriber, no Go subscriber, and no `passthroughTopics` entry — **added 2026-08-18; one entry (`mcp:progress`)**. Multi-pass (Go + frontend), same discipline as `check-output-ports.sh`. Wired into `pr.yml`. See "Declined gate" below for why this shipped instead of the gate `docs/dead-code-audit-2026-08-16.md` §5 originally asked for, and the allowlist header for why "contains" rather than "starts with" is the whole gate. |
+| I15 | `check-cedar-engine-singleton.sh` | *(none — no allowlist by design)* | more than one Cedar engine construction (`buildCedarGate`/`buildCedarEngineOrNil` call, or a direct `cedar.NewEngine` call) reachable from `rpc.New` — **added 2026-08-18 (consent-surfaces-truth-01PMTR01 WP05)**. I13 checks the *argument* at a call site; it has no vocabulary for *instance count*, which is why thirteen independent engine constructions (nine `buildCedarGate` + four `buildCedarEngineOrNil`) all passed it clean before the WP05 hoist. Wired into `pr.yml`. |
 
 Non-allowlist gates that also protect against unwired code:
 `check-output-ports.sh` (output port with no reader),
@@ -49,6 +51,47 @@ Non-allowlist gates that also protect against unwired code:
 `core/rpc/builtins_wiring_test.go` (registered tool ↔ predicate case).
 `scripts/ci/gates_can_fail_test.go` is the meta-gate: it plants a violation
 per gate and asserts the gate rejects it.
+
+### Declined gate — 2026-08-18 · "An RPC's async contract vs. its caller's await sequence" — NOT BUILDABLE
+
+`docs/dead-code-audit-2026-08-16.md` §5 owed a gate for the class that
+produced finding A7 (`frontend/src/lib/updateClient.ts`'s `installLatest`
+racing `Update_Apply` against a fire-and-forget `Update_StartDownload` —
+lost by construction, not by timing; see the self-update-repair-01PMUP01
+spec §1.1 for the full mechanics). `self-update-repair-01PMUP01` closes
+this row as **not buildable**, for three reasons (spec §6):
+
+1. **The contract is not in the type.** `StartDownload(ctx) error` and
+   `Apply(ctx) error` have identical signatures — nothing distinguishes
+   "done when it returns" from "spawned a goroutine and returns
+   immediately". A gate would need a hand-written annotation of which
+   methods complete asynchronously, and a method whose author forgot to
+   annotate it produces a **pass** — precisely the "gate whose clean
+   verdict is indistinguishable from did not look" class
+   `scripts/ci/gates_can_fail_test.go` exists to prevent.
+2. **The dependency is semantic.** Even given the annotation, "`Apply`
+   requires `StartDownload`'s completion" is not derivable from either
+   side — it would have to be declared too, at which point the gate
+   checks one hand-written claim against another and asserts nothing
+   about the actual code.
+3. **The syntactic form is trivially evaded.** A matcher for
+   `await A(); await B();` is defeated by `const p = A(); await p; await
+   B();`, by a helper function, by `.then`, or by `Promise.all` — it
+   would catch the literal historical text and nothing else, creating
+   false confidence that the class is covered.
+
+**Replacement:** WP02's regression test
+(`frontend/src/components/updates/__tests__/updateClient.spec.ts`,
+`installLatest (WP02 — polls to a terminal state) > does not call Apply,
+and does not settle, while downloading is outstanding`) pins the one call
+site that mattered. It is a pin, not a gate — it protects `installLatest`
+specifically, not the class. The class this row was really pointing at
+(registration without a real consumer) is what I14
+(`check-broker-topic-consumers.sh`, above) covers instead: it would have
+caught A8 (the topics `installLatest`'s fix needed accelerator events
+from) in the same audit, plus B9/B16/B17 — four registration-vs-
+consumption misses, one gate, none of them requiring an await-sequence
+annotation.
 
 ---
 
@@ -634,6 +677,42 @@ the denial event contract **first**; the component is the cheap half.
 that deletes this entry is the one that gives `policyAPI` a non-stub
 production assignment.
 
+**2026-08-18 amendment (consent-surfaces-truth-01PMTR01 WP05/WP06) — this
+entry over-scoped the gap.** The paragraph above is still correct about
+`policyAPI` / `policy:event`: neither exists, and this entry's PUSH-based
+scope (a broker topic a denial publishes to, live, the moment it happens)
+is still unwired and still needs the mission described above if that is
+the product's chosen shape.
+
+What the entry did not know: a **separate, already-wired, non-stub PULL
+feed** reaches the client boundary and did not need `policyAPI` at all —
+`CedarPolicy_RecentDecisions` → `cedarpolicy.API.RecentDecisions` →
+`cedar.Engine.RecentDecisions` (backed by the engine's own
+`DecisionStore`), consumed by `harnessClient.ts`'s
+`cedarPolicy.recentDecisions(limit)`. Before WP05 this path was *worse*
+than unwired-but-simple: the cedarpolicy view held a **private**
+`*cedar.Engine` that no gate ever called `Evaluate` on (nine gate sites
+and four engine-consumer sites each built their own independent engine —
+see `check-cedar-engine-singleton.sh`, I15), so `RecentDecisions` was
+structurally always empty regardless of what UI sat on top of it. Mounting
+a panel over it then would have been the exact lie this ledger's rubric
+warns about ("mounting a panel whose Go knob is inert just moves the lie
+from the backend to the UI").
+
+WP05 hoisted every gate site to one shared `*cedar.Engine`, so the ring
+`RecentDecisions` reads is now fed by real `Evaluate` calls from every one
+of those sites. WP06 built the cheapest possible consumer on top of that:
+a pull-based panel (`frontend/src/views/policy/PolicyView.vue`'s
+"Decisions" tab, reachable at the existing `/policy` route) that fetches
+on open and on a manual Refresh — **no push topic, no `policy:event`
+contract, `policyAPI` still returns `errNotWired`.** A denial the user
+just caused shows up the next time they open or refresh the tab; a denial
+that happens with nobody looking is not surfaced proactively. That
+distinction — pull vs. push — is the entire remaining scope of this entry.
+If the product wants live, push-driven denial toasts, that is still the
+mission this entry originally called for; it did not need to gate the
+cheap pull-based win, and should not have been read as blocking it.
+
 ### 2026-08-14 · `LocalRuntimesSection` has a branch it can never render
 
 `LocalRuntimesSection.vue` renders three mutually-exclusive states per
@@ -941,9 +1020,27 @@ surface for a real capability). Do **not** re-find these as orphans:
   `core/rpc/api.go:4304`.
 - `HookJournalView` — rows **are** being written to SQL in production;
   the read path is what is missing.
-- `MCPHealthSettingsPanel` + `BranchAdvisorSettings` — both blocked on
-  inert Go knobs (see "Settings fields that are stored, bound, and
-  inert" above). Wire the consumer first, in the same PR.
+- `MCPHealthSettingsPanel` — blocked on an inert Go knob (see "Settings
+  fields that are stored, bound, and inert" above). Wire the consumer
+  first, in the same PR.
+- ~~`BranchAdvisorSettings`~~ — **drained 2026-08-18** by
+  engineer-truth-pass-01PMTP01 WP02/WP03. This entry previously pointed
+  at "Settings fields that are stored, bound, and inert" above, but
+  that section only ever named `BranchAdvisorUseLLM` and
+  `BranchAutoMode` (both correctly self-documented as reserved) — it
+  never named the two fields that actually blocked the mount,
+  `BranchAdvisorEnabled` and `BranchReintegrationMaxTokens` (verified:
+  `BranchAdvisorEnabled` had zero occurrences anywhere in this ledger).
+  Anyone following the old pointer would have wired the wrong two
+  fields, mounted the panel, and shipped an inert toggle. WP02 gave
+  `BranchAdvisorEnabled` a reader (`ChatInput.vue`'s
+  `runAdvisorDetector`) and `BranchReintegrationMaxTokens` a caller
+  (`ProposeReintegrationSummary` via `EffectiveBranchReintegration-
+  MaxTokens`); WP03 mounted `BranchAdvisorSettings.vue` at
+  `SettingsView.vue`'s `?tab=branch-advisor` pane, linked from
+  `SettingsTabs.vue`. `BranchAdvisorUseLLM` / `BranchAutoMode` remain
+  correctly reserved and stay in the "stored, bound, and inert" list
+  above — they were never this entry's blocker.
 - `CrashReportingOnboardingModal`.
 - `CedarEditor` — retained pending the mission that ports its fleet
   features into `PolicyView`. It is **not** an orphan to delete, even
@@ -986,6 +1083,253 @@ difference is the difference between "urgent" and "housekeeping".
 **Owner:** unassigned per-item; this entry itself is owned by whoever
 picks up the next unwired sweep. Re-verify each item's importer graph
 before acting — frontend code churns between sweeps.
+
+**AMENDMENT 2026-08-18 (`mcp-connector-lifecycle-01PMMC01` WP01) — this
+entry no longer names no owner and no mission.** The harness-self MCP
+server (B10 in `docs/dead-code-audit-2026-08-16.md`, this section's
+subject) is no longer parked as "housekeeping": the owner ruled
+**attach** on 2026-08-18. See
+`kitty-specs/mcp-connector-lifecycle-01PMMC01/research/b10-harness-self-decision.md`
+for the decision record. Execution (the session-scoped tool-visibility
+seam, the fourth dispatch-pool arm, installing `EmbeddedCedar`, making
+`IsHarnessSelfMCPDisabled` real, emitting-or-deleting the dead event
+kinds, and the Cedar-gating that makes attaching safe rather than merely
+attached) is **deferred to a dedicated follow-on mission**, not executed
+in `mcp-connector-lifecycle-01PMMC01` (that mission's own WP07 is
+explicitly out of scope for the attach — see its spec). **Owner of the
+attach execution:** the mission owner who dispatches the follow-on
+mission; unassigned as of this entry. **Blocker:** the visibility seam
+and `EmbeddedCedar` wiring do not exist yet (spec §6 option A cost items
+2 and 3) — attaching without them would hand every session write access
+to provider credentials and settings, which is why this is not a
+same-commit fix.
+
+Two small pieces of this finding were resolved immediately, regardless
+of the attach mission's timeline, because they were unambiguous under
+every branch (attach, retire, or park):
+
+- The three never-emitted `KindHarnessSelfPolicy{Proposed,Written,Rejected}`
+  event kinds are **deleted** (`core/event/kind/registry.go`) —
+  `harness_write_propose_cedar_policy`, the tool that would have emitted
+  them, was itself deleted by the 2026-08-14 sweep, so no emit site for
+  any of the three ever existed under any name. Positive no-consumer
+  proof: `grep -rn "KindHarnessSelfPolicy" --include='*.go' .` (pre-
+  deletion) found exactly one reader, `integration_test.go`'s
+  `TestIntegration_AuditKindsRegistered`, which asserted only
+  `kind.IsRegistered` (the string is a registry-map key) — not that
+  anything emits it. That test's docstring also claimed (falsely) that
+  the kinds "fire on the propose/accept round-trip"; corrected in the
+  same commit. `KindHarnessSelfToolCalled` — which `audit.go`'s
+  `WithAudit` genuinely emits on every harness-self tool dispatch —
+  survives.
+- Escalation #3 from the audit ("do the dead kinds have waiting
+  consumers — an audit view filter, a fleet exporter?") is answered: no.
+  `grep -rn "KindHarnessSelfPolicy"` across the frontend and
+  `core/rpc/views/audit` found no filter, no exporter, no reader of any
+  kind besides the one test above.
+
+`IsHarnessSelfMCPDisabled` (`core/rpc/onboarding_wiring.go:194-196`,
+hardcoded `false`) is **left as-is** and assigned to the attach mission
+rather than fixed here: the dial only means something once there is a
+live server to disable, and building its settings-store persistence now
+would front-run the attach mission's own design of what scope the dial
+applies at (global vs. per-project) — see spec §6 option A cost item 5,
+which already scopes this to the attach execution.
+
+### 2026-08-18 · Custom-recipe authoring (A5) flagged off, then CLOSED same day by WP06
+
+`mcp-connector-lifecycle-01PMMC01` WP02 closed the A5 lie (a row Edit button
+and a Custom-recipe tab that both opened a form whose Save unconditionally
+threw) by gating both doors behind one interim flag,
+`CUSTOM_RECIPE_AUTHORING_ENABLED` (`frontend/src/lib/customRecipeAuthoring.ts`),
+shipped `false` with a named retirement condition: land `MCP_SaveCustomRecipe`
+and retire the flag in the same commit.
+
+**CLOSED 2026-08-18, same mission, WP06.** The owner unblocked WP06
+mid-dispatch (originally conditional on the B10 decision, which landed via
+WP01 the same day). `MCP_SaveCustomRecipe` is live end-to-end (view method
+`core/rpc/views/mcp/custom_recipe.go` → `core/rpc/bindings.go` →
+`harnessClient.ts` → `CustomRecipeTab.vue`'s `save()`), persisting through
+the already-implemented `recipes.UserStore.Save`. The flag was **deleted
+outright** (`frontend/src/lib/customRecipeAuthoring.ts` removed, both
+`v-if`s reverted to unconditional) rather than left flipped to `true` —
+per the flag's own retirement note, "a flag left permanently true is a new
+dead knob." `KenazToolsPanel.vue`'s row Edit button and
+`AddMCPServerModal.vue`'s Custom tab are unconditionally reachable again,
+now backed by a real save path.
+
+### 2026-08-18 · `recipes.UserStore.StartWatch` deleted — a live substitute made it redundant
+
+`mcp-connector-lifecycle-01PMMC01` WP04 deleted `UserStore.StartWatch`,
+`watchLoop`, the watcher arm of `Close`, and `ErrAlreadyWatching`
+(`core/mcp/recipes/user.go`), plus their four `user_test.go` regression
+tests — the method's only readers.
+
+This is **not** the "no producer and no product intent" delete class:
+the producer (paste-config import) is real and shipping. The
+justification is the **live-substitute** class instead —
+`mcp-connector-lifecycle-01PMMC01` WP03, landed in the same mission
+immediately before this WP, wired every merged-recipe-catalog consumer
+(`core/rpc/api.go`'s chassis catalog, the import-collision reader, the
+boot-time recipe bootstrap, and `tools.Config.Catalog` — what
+`Tools_ListRecipes` reads) to reload `UserStore` from disk on **every
+call**, matching `core/mcp/connectors.CatalogWithUserRecipes`'s existing
+served-mode contract. Once every consumer already re-reads live, there is
+no cached state left for `StartWatch`'s debounced `onChange` callback to
+invalidate — wiring it would have started a real fsnotify goroutine (with
+its own idempotency and shutdown-lifecycle burden — `(*rpc.API).Shutdown`
+turned out to have the same never-called gap `docs/dead-code-audit-2026-
+08-16.md` found elsewhere) that pushed updates nothing was polling off
+of.
+
+**Positive no-consumer proof:** `grep -rn 'UserStore.Close\|\.StartWatch(' core/ --include=*.go`
+(pre-deletion) showed the only callers of both were the four deleted
+tests; no production code called either.
+
+**Blocker/owner:** none — this is a closed, dated justification, not a
+parked item. If a future need for a genuine background push (e.g. an
+external process editing recipe files that this process must react to
+mid-request rather than on its next catalog read) resurfaces, re-derive
+the watcher fresh against whatever the freshness contract looks like at
+that time rather than restoring this deleted code verbatim — the
+`onChange`-to-cache-invalidation shape assumed a cache that no longer
+exists.
+
+---
+
+### 2026-08-18 · `sessions/0327-source-model-output` already destroyed data, and it is unrecoverable
+
+Found and fixed forward (not recovered) in `upgrade-path-coverage-01PMUG01`
+WP03. `sessions/0327-source-model-output`
+(`core/session/migrations_source_model_output.go`) carried the identical
+`DROP TABLE artifacts` + `RENAME` recipe as
+`sessions/0332-artifacts-global-scope`, with **no scratch-table
+protection**, at version 327 — above 324, which is the migration that
+creates `artifact_versions` with `artifact_id ... ON DELETE CASCADE`. The
+production DSN always sets `_pragma=foreign_keys(1)`, so `DROP TABLE
+artifacts` cascade-deletes every `artifact_versions` row.
+
+Unlike 0332 (invisible to the runner on every upgraded install until the
+v0.63.1 `Pending()` selection fix, so it never actually ran on populated
+tables before this mission), **0327 shipped before the units block
+existed**, when the max-based selection bug had no cross-block condition to
+trigger it — it ran, cascade and all, on **every install that had
+`artifact_versions` rows at the moment it upgraded through 327.**
+
+- **Historical (unfixable):** any `artifact_versions` rows an install had
+  before it first upgraded through 327 are gone. There is no backup and no
+  recovery path. Recorded here so nobody rediscovers it as new.
+- **Live forward risk (fixed):** any database whose ledger still stops at
+  <=326 had 0327 pending, and the v0.63.1 selection repair reaches it
+  again. WP03 applied 0332's exact scratch-table pattern; `UpSource` is
+  untouched (it is the migration's content hash). See
+  `core/storage/sqlite/migration_0327_test.go` — written first, watched
+  fail (`artifact_versions = 0 after the 0327 rebuild, want 2`), then fixed.
+
+### 2026-08-18 · `UpSource` edits are not caught at boot — `migrations.Registry.VerifyLedger` has zero non-test callers
+
+Found while proving WP03's "editing `UpSource` fails every snapshot"
+mutation criterion (`upgrade-path-coverage-01PMUG01` spec.md §4). Spec's
+design-constraints section states that an edited `UpSource` "fails every
+snapshot at once" via `ErrLedgerHashMismatch`. **Performed the mutation to
+check:** edited `sqlSourceModelOutputUp`'s CHECK-constraint value order (a
+real content change, not just whitespace — `HashSQL` canonicalises
+whitespace) and reran `TestUpgradePath`. It still passed.
+
+`migrations.Registry.VerifyLedger` (`core/storage/migrations/runner.go`) is
+the function that compares a ledger row's stored `content_hash` against the
+registered migration's computed hash and returns `ErrLedgerHashMismatch` on
+mismatch — exactly the check the spec's claim depends on. **It has zero
+non-test callers anywhere in the module** (`grep -rn "VerifyLedger(" --include="*.go" core | grep -v _test.go` returns only its own definition).
+`storagesqlite.Open` calls `EnsureLedger` → `Apply` →
+`verifyFullyApplied` (a *different*, similarly-named function that only
+checks whether an applied ledger row exists per registered migration — it
+does not compare `content_hash` at all) and never calls `VerifyLedger`.
+Set-membership `Pending()` also does not consult `content_hash` — an
+already-applied migration whose `UpSource` was edited after the fact is
+simply skipped, hash mismatch and all, with no error anywhere in the boot
+path.
+
+**Why this was not fixed in WP03 by wiring `VerifyLedger` into `Open`:**
+`VerifyLedger`'s per-mission contiguity check (`ErrSchemaGap`) is the same
+mechanism that would flag a `ledger_only` entry — an applied ledger row
+with no matching registered migration, the normal state of a downgrade or a
+removed mission. Wiring it into `Open` would make a healthy downgrade
+refuse to boot, which is the exact behaviour spec's FR-3 explicitly
+rejects ("Making drift fatal at `Open` — explicitly rejected", see this
+mission's WP04). A narrower fix — call only the hash-comparison half of
+`VerifyLedger`'s logic, skip the contiguity half — is plausible but was not
+attempted in WP03; it changes `Open`'s error surface and needs its own
+review, which is why this is recorded rather than silently patched. Owner:
+whoever picks up migration-ledger integrity next; the fix shape to
+evaluate is a hash-only variant of `VerifyLedger` callable from `Open`
+without also enforcing schema-gap contiguity.
+
+### 2026-08-18 · Migrations that can never run: `memory-rag`, `event-log`, `tasks`
+
+Surveyed while grounding `upgrade-path-coverage-01PMUG01` (not that
+mission's fix — recorded per its spec §8 for visibility):
+
+- `core/memory/narrative/migrations.go` defines migrations 821 and 822.
+  `narrative.RegisterMigrations` has no caller anywhere in the module —
+  these two migrations can never run, on any install, ever.
+- `core/event/log/register.go` and `core/tasks/store_sql.go` each declare a
+  `RegisterMigrations` function against a *stub* registry interface (not
+  `*migrations.Registry`), with no caller. `core/event/log` carries six
+  embedded `.sql` files the migration framework never sees.
+- Of the 14 blocks declared in `core/storage/migrations/blocks.go`'s
+  `CanonicalBlocks`, 10 have zero registered migrations: `event-log`,
+  `secrets-keychain`, `scheduler`, `mcp`, `a2a`, `signed-cards-trust`,
+  `bundle`, `shared-context-distribution`, `memory-rag`, `app-layer` (block
+  reservations made ahead of the feature landing, some now orphaned).
+
+Not itself a bug — a reserved-but-unused block is inert, not lying — but
+recorded because dormancy at this scale is exactly the shape that let the
+v0.63.0 P0 hide: nothing exercises these migrations at all, so nothing
+would notice if `RegisterMigrations` were ever wired up against a populated
+table without the same care WP03 gave 0327/0332.
+
+### 2026-08-18 · The boot drift goroutine's unsynchronised reads are TOCTOU-shaped, not racy — `a.updatePollCancel` is the real unsynchronised write pair
+
+Found while implementing `upgrade-path-coverage-01PMUG01` WP04 (FR-3g).
+Spec §2 FR-3g flagged `core/rpc/api.go`'s boot-time migration-drift
+goroutine (spawned from `SetContext`) for reading `a.storageAPI` (once at
+the nil-guard on the caller's goroutine, again inside the spawned
+goroutine after `runMigrationDriftCheck` was extracted) and `a.auditImpl`
+with no mutex.
+
+**Precise finding, stated carefully so it isn't over-claimed:** this is
+TOCTOU-shaped — a check on one goroutine and a use on another — but it is
+**not a race `-race` will ever catch**, because both fields are written
+exactly once, inside `New()` (`core/rpc/api.go`, around the `storageAPI:
+storageview.NewAPI(db, dataDir)` and `a.auditImpl = audit.NewAPI(...)`
+assignments), before the `*API` value is ever handed to a caller.
+`SetContext` — the only place that spawns goroutines reading these fields
+— never writes either one. `main.go` calls `api.SetContext(ctx)` on an
+`api` returned from a prior `rpc.New(...)` call in the same function body,
+at both its call sites (`main.go` around lines 241 and 405/416). `New()`
+happens-before `SetContext` at both, by ordinary single-goroutine sequencing
+within `main()` — there is no second goroutine that could write
+`storageAPI`/`auditImpl` concurrently with the drift goroutine's read.
+
+**The actual unsynchronised write pair in this file is
+`a.updatePollCancel`**, written in `SetContext` (guarding a prior poller
+before replacing it, then storing the new `context.CancelFunc`) and again
+in `Shutdown` (cancelling and nilling it). Unlike `storageAPI`/`auditImpl`,
+both of *these* writes happen after construction, from call sites that
+main.go does not guarantee run on the same goroutine relative to each
+other (`OnShutdown` is a Wails-invoked callback, not necessarily
+sequenced against a concurrent `SetContext` re-init in the test harness
+path that calls it more than once). **Fixed in the same WP**: added
+`updatePollMu sync.Mutex` guarding every read and write of
+`updatePollCancel` in both `SetContext` and `Shutdown`. Cheap — two lock/
+unlock pairs around code that was already there — so there was no reason
+to leave it recorded-but-unfixed the way FR-3g's spec text allowed for.
+
+Point of this entry: do not re-flag `a.storageAPI` / `a.auditImpl` in a
+future sweep as racy without also re-deriving this happens-before
+argument — the fields were never the live risk, `a.updatePollCancel` was
+and now is guarded.
 
 ---
 

@@ -1,6 +1,8 @@
 package cedar
 
 import (
+	"encoding/json"
+	"fmt"
 	"strings"
 	"unicode"
 
@@ -420,6 +422,42 @@ func (o Outcome) String() string {
 	default:
 		return "unknown"
 	}
+}
+
+// MarshalJSON renders Outcome as its String() form ("allow" / "deny" /
+// "not_applicable") rather than the bare int the iota otherwise encodes
+// to. This is the doc comment above's "Frontends pattern-match on this
+// value" made true: RecentDecisions crosses the RPC boundary as JSON,
+// and every frontend consumer (frontend/src/lib/types.ts's
+// PolicyDecision.outcome, consumed by the WP06 denial panel) declares a
+// STRING union, not a number — before this method existed the wire
+// value was a plain 0/1/2 and every such consumer would have silently
+// mismatched (found while wiring consent-surfaces-truth-01PMTR01 WP06,
+// the first real frontend reader of this field).
+func (o Outcome) MarshalJSON() ([]byte, error) {
+	return json.Marshal(o.String())
+}
+
+// UnmarshalJSON is the inverse of MarshalJSON — accepts the string form.
+// Kept alongside MarshalJSON so Outcome round-trips through JSON in
+// either direction (tests, and any future consumer that decodes a
+// Decision back into Go).
+func (o *Outcome) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	switch s {
+	case "allow":
+		*o = Allow
+	case "deny":
+		*o = Deny
+	case "not_applicable":
+		*o = NotApplicable
+	default:
+		return fmt.Errorf("cedar: unknown Outcome %q", s)
+	}
+	return nil
 }
 
 // ToolUID builds a Cedar EntityUID for a tool reference, using the

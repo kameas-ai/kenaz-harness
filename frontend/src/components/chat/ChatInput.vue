@@ -163,8 +163,17 @@ const createBranchTaskHint = ref('');
 
 let advisorDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let advisorThreshold = ADVISOR_DEFAULT_THRESHOLD;
+// Master on/off (Settings.BranchAdvisorEnabled). Documented default is
+// `false` (core/rpc/views/settings/api.go), so the banner stays off
+// until settings.get() resolves and the field is hydrated — matches the
+// engine-side omitempty contract where an absent field means false.
+// (engineer-truth-pass-01PMTP01 WP02, finding B2: this gate did not
+// exist before WP02, so the field had no reader and the banner always
+// showed regardless of the switch.)
+let advisorEnabled = false;
 
-// Load session dismiss flag from sessionStorage on mount; also load threshold.
+// Load session dismiss flag from sessionStorage on mount; also load
+// threshold + the master on/off switch.
 onMounted(async () => {
   const sid = props.sessionId ?? '';
   if (sid) {
@@ -176,8 +185,9 @@ onMounted(async () => {
     if (typeof settings.branchAdvisorMinConfidence === 'number') {
       advisorThreshold = settings.branchAdvisorMinConfidence;
     }
+    advisorEnabled = settings.branchAdvisorEnabled ?? false;
   } catch {
-    // best-effort — keep the default
+    // best-effort — keep the defaults
   }
 });
 
@@ -193,6 +203,12 @@ function runAdvisorDetector(text: string) {
   }
   advisorDebounceTimer = setTimeout(() => {
     advisorDebounceTimer = null;
+    // Master switch (FR-002): with it false — the documented default —
+    // the banner never mounts, regardless of confidence score.
+    if (!advisorEnabled) {
+      activeSuggestion.value = null;
+      return;
+    }
     // Don't show when streaming or session-dismissed.
     if (props.streaming || sessionAdvisorDismissed.value) return;
     // Run heuristic.

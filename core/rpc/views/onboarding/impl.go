@@ -359,6 +359,13 @@ func (a *API) RestartPhase2(ctx context.Context, req RestartPhase2Request) (Rest
 	}
 	id, err := a.cfg.SessionStarter.StartOnboardingSession(ctx, chosen)
 	if err != nil {
+		// FR-005 (first-run-onboarding-01PMOB01 WP03): a delivery failure
+		// (the SessionStarter's system-prompt delivery, not just session
+		// creation) must return here, before MarkOnboardingCompleted. This
+		// is the one guard that makes onboarding honest about a partial
+		// failure — do not reorder it below the completion mark, and see
+		// TestRestartPhase2DeliveryFailureIsRetryable for the regression
+		// test that pins this ordering.
 		return RestartPhase2Response{}, err
 	}
 	if a.cfg.Completion != nil {

@@ -41,6 +41,7 @@ import CompliancePanel from '@/views/settings/CompliancePanel.vue';
 // nav-settings-ia-cleanup WP02 — Crash Reporting panel (PRIVACY group)
 import CrashReportingPanel from '@/views/settings/CrashReportingPanel.vue';
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
+import BranchAdvisorSettings from '@/components/settings/BranchAdvisorSettings.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
 import { runAsyncAction } from '@/composables/useAsyncAction';
@@ -186,6 +187,18 @@ const showComplianceTab = computed<boolean>(() => {
 const showCrashReportingTab = computed<boolean>(() => {
   const v = route?.query?.tab;
   return typeof v === 'string' && v === 'crash-reporting';
+});
+
+// engineer-truth-pass-01PMTP01 WP03 (finding B2b) — Branch Advisor sub-tab.
+// Disambiguates via ?tab=branch-advisor. Mount switch is in <template>
+// below. Before this WP, BranchAdvisorSettings.vue had zero mount sites —
+// its only non-test reference was its own docstring — and its Go-side
+// knobs were inert (WP02 wires them in the same PR as this mount, per
+// CLAUDE.md: "Mounting a panel whose Go knob is inert just moves the lie
+// from the backend to the UI").
+const showBranchAdvisorTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'branch-advisor';
 });
 
 // CanvasHead title/subtitle per active query-param sub-tab. The settings
@@ -1213,6 +1226,15 @@ onMounted(() => {
       data-testid="settings-crash-reporting-pane"
     >
       <CrashReportingPanel />
+    </div>
+
+    <!-- engineer-truth-pass-01PMTP01 WP03 (finding B2b) — Branch Advisor sub-tab. -->
+    <div
+      v-else-if="showBranchAdvisorTab"
+      class="px-6 py-4 max-w-3xl"
+      data-testid="settings-branch-advisor-pane"
+    >
+      <BranchAdvisorSettings />
     </div>
 
     <div

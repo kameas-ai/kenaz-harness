@@ -199,3 +199,129 @@ func TestEnvDeps_AppliedToEnv(t *testing.T) {
 		t.Fatal("nil manager")
 	}
 }
+
+// TestEnvDeps_MergeSuggesterAppliedToEnv exercises the WP08 (finding
+// B16) assignment specifically: EnvDeps.MergeSuggester must reach
+// env.MergeSuggester through Manager.EnvDefaults(), the same closure
+// core/rpc/api.go threads onto the chat runner's Config.EnvDefaults.
+//
+// This is a narrower field-presence check, not a substitute for the
+// chat package's end-to-end test (a completed branch-child turn
+// actually emitting branches:merge-suggested) — see
+// TestChatRunnerIntegration_MergeSuggestion_ActiveBranchChild_FiresOnTerminalToken
+// in core/rpc/views/agentgraph/chat, which is the one that proves the
+// toast can actually fire, not just that a field got set.
+func TestEnvDeps_MergeSuggesterAppliedToEnv(t *testing.T) {
+	t.Parallel()
+	suggester := coreag.NewMergeSuggester()
+	deps := graphview.EnvDeps{
+		MergeSuggester: suggester,
+	}
+	mgr, err := graphview.NewManager(
+		graphview.WithDataDir(t.TempDir()),
+		graphview.WithEnvDeps(deps),
+	)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	envDefaults := mgr.EnvDefaults()
+	if envDefaults == nil {
+		t.Fatal("EnvDefaults() returned nil closure")
+	}
+	env := &coreag.Env{}
+	envDefaults(env)
+	if env.MergeSuggester != suggester {
+		t.Errorf("env.MergeSuggester = %p, want %p (the EnvDeps-supplied suggester)", env.MergeSuggester, suggester)
+	}
+}
+
+// TestEnvDeps_BranchSeamAdapter_ActiveBranchForChildSession covers the
+// PRODUCTION implementation of the seam method WP08 added
+// (engineer-truth-pass-01PMTP01, finding B16). WP08's own coverage ran
+// entirely through coreag.FakeBranchSeam, so gutting
+// BranchSeamAdapter.ActiveBranchForChildSession to `return "", false`
+// left the whole ./core/... suite green — the ListByChild lookup and the
+// BranchStatusActive filter that decide whether a real user ever sees the
+// merge toast had no test at all. This pins all four documented answers
+// against a real conversation.Manager:
+//
+//	parent session          -> false (not a child of anything)
+//	live branch child       -> (branchID, true)
+//	child of a merging      -> false (past the "still active" point)
+//	child of a merged branch-> false
+func TestEnvDeps_BranchSeamAdapter_ActiveBranchForChildSession(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	sessStore := session.NewMemoryStore()
+	sessMgr := session.NewManager(sessStore)
+	brStore := conversation.NewMemoryStore()
+	brMgr := conversation.NewManager(brStore, sessMgr)
+
+	parent, err := sessMgr.Create(ctx, "parent")
+	if err != nil {
+		t.Fatalf("create parent: %v", err)
+	}
+
+	adapter := graphview.NewBranchSeamAdapter(brMgr, sessMgr)
+	handle, err := adapter.Fork(ctx, coreag.ForkRequest{
+		ParentSessionID: parent.ID,
+		Title:           "active-branch-lookup",
+	})
+	if err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+	if handle.ChildSessionID == "" {
+		t.Fatal("handle.ChildSessionID is empty")
+	}
+
+	// The live child session resolves to its branch.
+	got, ok := adapter.ActiveBranchForChildSession(ctx, handle.ChildSessionID)
+	if !ok {
+		t.Fatalf("ActiveBranchForChildSession(child) ok = false, want true")
+	}
+	if got != handle.BranchID {
+		t.Errorf("ActiveBranchForChildSession(child) = %q, want %q", got, handle.BranchID)
+	}
+
+	// The PARENT session is not a branch child — this is the gate that
+	// keeps the merge toast off the overwhelming majority of chat turns.
+	if _, ok := adapter.ActiveBranchForChildSession(ctx, parent.ID); ok {
+		t.Error("ActiveBranchForChildSession(parent) ok = true, want false")
+	}
+
+	// An unknown session id, and the empty string, both report false.
+	if _, ok := adapter.ActiveBranchForChildSession(ctx, "no-such-session"); ok {
+		t.Error("ActiveBranchForChildSession(unknown) ok = true, want false")
+	}
+	if _, ok := adapter.ActiveBranchForChildSession(ctx, ""); ok {
+		t.Error("ActiveBranchForChildSession(\"\") ok = true, want false")
+	}
+
+	// Mid-merge is past the "still active" point the docstring claims.
+	if err := brMgr.MarkMerging(ctx, handle.BranchID); err != nil {
+		t.Fatalf("MarkMerging: %v", err)
+	}
+	if _, ok := adapter.ActiveBranchForChildSession(ctx, handle.ChildSessionID); ok {
+		t.Error("ActiveBranchForChildSession(merging child) ok = true, want false")
+	}
+
+	// ...and so is merged.
+	if err := brMgr.MarkMerged(ctx, handle.BranchID); err != nil {
+		t.Fatalf("MarkMerged: %v", err)
+	}
+	if _, ok := adapter.ActiveBranchForChildSession(ctx, handle.ChildSessionID); ok {
+		t.Error("ActiveBranchForChildSession(merged child) ok = true, want false")
+	}
+}
+
+// TestEnvDeps_BranchSeamAdapter_ActiveBranchForChildSession_NilManagers
+// pins the nil-manager degradation: the New(nil) harness path must report
+// "not a branch child" rather than panic.
+func TestEnvDeps_BranchSeamAdapter_ActiveBranchForChildSession_NilManagers(t *testing.T) {
+	t.Parallel()
+	adapter := graphview.NewBranchSeamAdapter(nil, nil)
+	if _, ok := adapter.ActiveBranchForChildSession(context.Background(), "s1"); ok {
+		t.Error("ActiveBranchForChildSession on a nil-manager adapter ok = true, want false")
+	}
+}

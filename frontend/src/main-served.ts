@@ -67,11 +67,6 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/memory/MemoryView.vue'),
   },
   {
-    path: '/hooks',
-    name: 'hooks',
-    component: () => import('@/views/hooks/HooksView.vue'),
-  },
-  {
     path: '/workflows',
     name: 'workflows',
     component: () => import('@/views/workflows/WorkflowsView.vue'),
@@ -122,11 +117,6 @@ export const routes: RouteRecordRaw[] = [
     path: '/agentgraph/run/:runId/graph',
     name: 'graph-materialized',
     component: () => import('@/views/agentgraph/GraphEditor.vue'),
-  },
-  {
-    path: '/search',
-    name: 'search',
-    component: () => import('@/views/sessions/SessionsView.vue'),
   },
   {
     path: '/policy',

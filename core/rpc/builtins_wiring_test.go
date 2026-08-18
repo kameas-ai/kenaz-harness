@@ -139,7 +139,11 @@ func TestBuiltinEnabledPredicate_AllRegisteredToolsHaveExplicitCase(t *testing.T
 	if err != nil {
 		t.Fatalf("core.New: %v", err)
 	}
-	api := New(c)
+	// WithSettingsStore(newTestStore(t)) (upgrade-path-coverage-01PMUG01
+	// FR-4a): otherwise rpc.New builds its settings store via
+	// settings.NewFileStoreFromEnv() and opens the developer's real
+	// settings.json.
+	api := New(c, WithSettingsStore(newTestStore(t)))
 
 	registry := api.Builtins()
 	if registry == nil {
@@ -255,7 +259,11 @@ func TestAskUserQuestionDelegateIsWired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("core.New: %v", err)
 	}
-	api := New(c)
+	// WithSettingsStore(newTestStore(t)) (upgrade-path-coverage-01PMUG01
+	// FR-4a): otherwise rpc.New builds its settings store via
+	// settings.NewFileStoreFromEnv() and opens the developer's real
+	// settings.json.
+	api := New(c, WithSettingsStore(newTestStore(t)))
 
 	registry := api.Builtins()
 	if registry == nil {

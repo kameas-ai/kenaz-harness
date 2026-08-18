@@ -19,12 +19,13 @@
 //     Testing this is the only way to know; every gate in this directory
 //     "looked correct" while being incapable of failing.
 //
-// NOTE — THIS TEST DOES NOT RUN IN CI YET. pr.yml's test-go step scopes to
-// `./core/... ./cmd/harness-vm/...`, which excludes ./scripts/... along with
-// the root package, cmd/kenaz-updater and cmd/mcpsubcmd — 18 test functions
-// that never execute. Add `./scripts/...` (at minimum) to that step. It is a
-// one-line change, deliberately not made here because #279 is concurrently
-// editing .github/workflows/pr.yml.
+// THIS TEST RUNS IN CI as its own "gate meta-tests" step in pr.yml's
+// test-go job (`go test ./scripts/... -count=1`), separated from the
+// `-race` suite deliberately: these tests shell out to mutate a scratch
+// tree, and running them concurrently with `-race` poisons the Go
+// build cache (sources hashed mid-edit — see CLAUDE.md's "Cross-cutting
+// risks" note and spec.md §7 for upgrade-path-coverage-01PMUG01, which
+// hit this directly while writing its own planted-violation cases).
 
 package ci_test
 
@@ -65,6 +66,33 @@ func runGate(t *testing.T, script, workdir string) (int, string) {
 	return -1, ""
 }
 
+// runGateEnv is runGate with extra environment variables layered on top
+// of the current process's environment. nil/empty env behaves exactly
+// like runGate.
+func runGateEnv(t *testing.T, script, workdir string, env map[string]string) (int, string) {
+	t.Helper()
+	if len(env) == 0 {
+		return runGate(t, script, workdir)
+	}
+	scriptPath := filepath.Join(repoRoot(t), "scripts", "ci", script)
+	cmd := exec.Command("bash", scriptPath)
+	cmd.Dir = workdir
+	cmd.Env = os.Environ()
+	for k, v := range env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return 0, string(out)
+	}
+	var exitErr *exec.ExitError
+	if ok := asExitError(err, &exitErr); ok {
+		return exitErr.ExitCode(), string(out)
+	}
+	t.Fatalf("running %s: %v (output: %s)", script, err, out)
+	return -1, ""
+}
+
 func asExitError(err error, target **exec.ExitError) bool {
 	e, ok := err.(*exec.ExitError)
 	if ok {
@@ -87,13 +115,25 @@ var cwdSensitiveGates = []string{
 	"check-builtin-tool-registration.sh",
 	"check-single-move-writer.sh",
 	"check-cedar-gate-arguments.sh",
+	"check-cedar-engine-singleton.sh",
+	"check-broker-topic-consumers.sh",
+	"check-listpending-coverage.sh",
+	"check-upgrade-snapshots-locked.sh",
+	"check-destructive-migration-coverage.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
 // test for the class. A gate invoked from a foreign cwd must reach the same
 // conclusion it reaches from the repo root — never a vacuous pass.
 func TestGates_VerdictIsIndependentOfWorkingDirectory(t *testing.T) {
-	t.Parallel()
+	// NOT t.Parallel(). TestGates_PlantedViolationFires mutates the REAL
+	// repo tree (it writes and removes probe files under root), and this
+	// test reads that tree twice — once from the root, once from a foreign
+	// cwd — expecting both reads to see the same thing. Running the two in
+	// parallel meant the two reads could straddle a plant: PR #294 failed
+	// in CI with the root run reporting clean and the foreign run failing
+	// on a topic whose subscriber exists (DeferredAskPill.vue). The gate
+	// was innocent; the harness was racing itself.
 	root := repoRoot(t)
 
 	for _, gate := range cwdSensitiveGates {
@@ -123,11 +163,13 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 	root := repoRoot(t)
 
 	cases := []struct {
-		name    string
-		gate    string
-		file    string // repo-relative path to create, or "" to append
-		append  string // when file already exists, append this instead
-		content string
+		name       string
+		gate       string
+		file       string // repo-relative path to create, or "" to append
+		append     string // when file already exists, append this instead
+		content    string
+		env        map[string]string // extra env vars for this case's runGate call, if any
+		wantOutput string            // optional: substring the failure output must contain
 	}{
 		{
 			name:    "binding-names/double-underscore",
@@ -200,6 +242,18 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			// DID register.
 			file:    "core/tools/zzgateprobe/tool.go",
 			content: "package zzgateprobe\n\nconst ToolName = \"kenaz__zz_gate_probe\"\n",
+		},
+		{
+			name: "builtin-tool-registration/mcp-builtin-unregistered-tool-package",
+			gate: "check-builtin-tool-registration.sh",
+			// FR-008/AC-009 (mcp-connector-lifecycle-01PMMC01 WP05): before
+			// this WP, TOOLS_ROOT pinned the scan to core/tools/, so
+			// core/mcp/builtin/ was invisible to I11 — the exact blind
+			// spot the harness-self MCP server (core/mcp/builtin/harness)
+			// sat in. Plants a sibling package under core/mcp/builtin/
+			// that no production file imports.
+			file:    "core/mcp/builtin/zzgateprobe/tool.go",
+			content: "package zzgateprobe\n\nconst ToolName = \"zz_gate_probe\"\n",
 		},
 		{
 			name: "single-move-writer/second-seam-caller",
@@ -369,11 +423,220 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			content: "package zzgateprobe\n\nimport \"github.com/kameas-ai/kenaz-harness/core/policy/cedar\"\n\ntype Config struct {\n\tCedar cedar.Gate // the policy gate\n}\n",
 		},
 		{
+			name: "cedar-engine-singleton/second-call-site",
+			gate: "check-cedar-engine-singleton.sh",
+			// The WP05 defect exactly (consent-surfaces-truth-01PMTR01): a
+			// second buildCedarGate/buildCedarEngineOrNil call site outside
+			// the one construction call in rpc.New produces a SECOND,
+			// independent *cedar.Engine with its own private PolicySet —
+			// invisible to check-cedar-gate-arguments.sh (I13), which
+			// checks the ARGUMENT at a call (is it AllowAll{}/nil?), not
+			// the instance count. Thirteen such sites passed I13 clean
+			// pre-hoist because every one of them passed a real, non-
+			// AllowAll argument.
+			file:    "core/rpc/zz_gate_probe.go",
+			content: "package rpc\n\nvar zzGateProbeSecondEngine = buildCedarGate(\"/tmp/zz-gate-probe\")\n",
+			// A non-zero exit alone would also be satisfied by a gate that
+			// is permanently broken — the exact weak form the runner's
+			// comment below warns about, and which this campaign has
+			// already shipped once (check-tests-are-hermetic.sh). Pin the
+			// message check 1 produces so the proof is about THIS
+			// violation.
+			wantOutput: "call sites construct a Cedar engine independently",
+		},
+		{
+			name: "cedar-engine-singleton/direct-newengine-bypass",
+			gate: "check-cedar-engine-singleton.sh",
+			// The escape hatch check 1 alone cannot see: a hand-built
+			// cedar.NewEngine(...) call that never goes through
+			// buildCedarGate/buildCedarEngineOrNil at all, so counting
+			// calls to those two names would miss it.
+			file: "core/rpc/zz_gate_probe.go",
+			content: "package rpc\n\n" +
+				"import \"github.com/kameas-ai/kenaz-harness/core/policy/cedar\"\n\n" +
+				"var zzGateProbeDirectEngine, _ = cedar.NewEngine(cedar.Options{})\n",
+			// Must be check 2's message specifically: check 1 still sees
+			// exactly one builder call here, so a failure mentioning call
+			// sites would mean the gate fired for the wrong reason.
+			wantOutput: "NewEngine( appears 3 time(s)",
+		},
+		{
+			name: "cedar-engine-singleton/aliased-import-newengine-bypass",
+			gate: "check-cedar-engine-singleton.sh",
+			// The alias hole: `cedarpolicy "…/core/policy/cedar"` is an
+			// idiom this repo already uses (core/rpc/contextbootstrap_
+			// wiring.go:41, core/rpc/views/settings/fleet.go:15), so a
+			// second engine can be constructed under any local name. A
+			// gate anchored on the literal `cedar.NewEngine(` is blind to
+			// it — verified by planting this exact file and watching the
+			// pre-fix gate exit 0.
+			file: "core/rpc/zz_gate_probe.go",
+			content: "package rpc\n\n" +
+				"import cedarpolicy \"github.com/kameas-ai/kenaz-harness/core/policy/cedar\"\n\n" +
+				"var zzGateProbeAliasEngine, _ = cedarpolicy.NewEngine(cedarpolicy.Options{})\n",
+			wantOutput: "NewEngine( appears 3 time(s)",
+		},
+		{
+			name: "cedar-engine-singleton/engine-built-outside-core-rpc",
+			gate: "check-cedar-engine-singleton.sh",
+			// The scope hole: the singleton promise is process-wide, but a
+			// gate scanning only core/rpc cannot see a second engine built
+			// in any other package under core/. Verified the same way.
+			file: "core/policy/zzgateprobe/probe.go",
+			content: "package zzgateprobe\n\n" +
+				"import \"github.com/kameas-ai/kenaz-harness/core/policy/cedar\"\n\n" +
+				"var ZzGateProbeEngine, _ = cedar.NewEngine(cedar.Options{})\n",
+			wantOutput: "NewEngine( appears 3 time(s)",
+		},
+		{
 			name: "slog-privacy/typed-attr-constructor",
 			gate: "check-no-user-content-in-slog.sh",
 			file: "core/rpc/zz_gate_probe.go",
 			// slog.String(...) is how a multi-line log call spells its keys.
 			content: "package rpc\n\nvar zzGateProbe = slog.String(\"Prompt\", p)\n",
+		},
+		{
+			name: "onboarding-starter-tools/unregistered-tool-name",
+			// The planted tool name itself — printed only in the gate's
+			// unregistered-names listing, so a gate that fails for any
+			// other reason (or crashes) does not satisfy this proof.
+			wantOutput: "harness_nonexistent_tool",
+			gate:       "check-onboarding-starter-tools.sh",
+			// The code.md:23 class (first-run-onboarding-01PMOB01 WP04): a
+			// shipped starter prompt naming a harness_* tool register.go
+			// does not register — the exact shape that let
+			// harness_write_propose_cedar_policy survive its own deletion.
+			// Appended to an existing starter (chat.md) rather than a new
+			// file so the planted name lands inside the *.md glob the gate
+			// actually scans.
+			file:   "core/mcp/builtin/harness/onboarding/chat.md",
+			append: "\n\nCall `harness_nonexistent_tool` to finish up.\n",
+		},
+		{
+			name: "broker-topic-consumers/unconsumed-topic-const",
+			// The planted const's own violation line — the gate prints
+			// `ident = "value" (file:line) has no frontend subscriber…`
+			// only when it actually derived and rejected this topic.
+			wantOutput: `TopicNobodyReads = "nobody:reads-this"`,
+			gate:       "check-broker-topic-consumers.sh",
+			// self-update-repair-01PMUP01 WP06, spec §6: the planted-violation
+			// proof the spec names by its exact variable name. A Topic* const
+			// with no frontend subscriber, no Go subscriber, no
+			// passthroughTopics entry, and no allowlist line — nobody
+			// annotates it, so the gate's derived input set must catch it
+			// on its own, not because someone declared it a violation.
+			file:    "core/rpc/zz_gate_probe.go",
+			content: "package rpc\n\nconst TopicNobodyReads = \"nobody:reads-this\"\n",
+		},
+		{
+			name: "listpending-coverage/no-client-reader",
+			// The planted binding's own failure line ("<fam>_ListPending
+			// has no reader in …") — exit-code-only would also pass for
+			// a gate that dies parsing bindings.go.
+			wantOutput: "ZzGateProbe_ListPending has no reader",
+			gate:       "check-listpending-coverage.sh",
+			// The A11 shape exactly: a *_ListPending binding whose body
+			// compiles and whose doc comment (if any) reads correctly, with
+			// zero callers anywhere in harnessClient.ts. This is precisely
+			// what let Permissions_ListPending sit dead for as long as it
+			// did — the method LOOKED wired because it existed end to end
+			// on the Go side.
+			file:   "core/rpc/bindings.go",
+			append: "\nfunc (b *Bindings) ZzGateProbe_ListPending() ([]FlatPermissionRequest, error) {\n\treturn nil, nil\n}\n",
+		},
+		{
+			// upgrade-path-coverage-01PMUG01 WP02. Byte-mutate an already
+			// COMMITTED snapshot file (core/storage/sqlite/testdata/
+			// upgrade/v0.63.0/dump.sql — committed in this mission's own
+			// WP01 commit, so it is present at HEAD by the time this test
+			// runs) and confirm the gate rejects the mismatch. The gate's
+			// real comparison base in CI is origin/main (see the script's
+			// header) — UPGRADE_SNAPSHOTS_BASE_REF=HEAD here points it at
+			// this branch's own last commit instead, which already
+			// contains the unmutated file, so this exercises the SAME
+			// git-diff codepath the CI gate uses, not a mock of it.
+			name: "upgrade-snapshots-locked/byte-mutation",
+			// The mutated file's own violation line, not the gate's
+			// "[upgrade-snapshots-locked]" label — the label prefixes
+			// EVERY failure this gate can emit, including "BASE_REF does
+			// not resolve", so matching it would still pass for a gate
+			// that can no longer find its comparison base at all.
+			wantOutput: "v0.63.0/dump.sql differs from its merge-base",
+			gate:       "check-upgrade-snapshots-locked.sh",
+			file:       "core/storage/sqlite/testdata/upgrade/v0.63.0/dump.sql",
+			append:     "-- zzGateProbe: this byte must not be here\n",
+			env:        map[string]string{"UPGRADE_SNAPSHOTS_BASE_REF": "HEAD"},
+		},
+		{
+			// upgrade-path-coverage-01PMUG01 WP03 (I14). A migration
+			// whose Up() runs DROP TABLE with no populated-table test
+			// referencing its ID and no allowlist entry must fail.
+			name: "destructive-migration-coverage/uncovered-drop-table",
+			// The planted migration's own ID, not the gate's
+			// "[destructive-migration-coverage]" label — the label also
+			// prefixes "checkdestructivemigrations failed to build", so
+			// matching it would let a compile-broken checker satisfy
+			// this proof.
+			wantOutput: "storage/97-zz-gate-probe",
+			gate:       "check-destructive-migration-coverage.sh",
+			file:       "core/rpc/views/zzgateprobe/migration_probe.go",
+			content: "package zzgateprobe\n\n" +
+				"import (\n" +
+				"\t\"context\"\n\n" +
+				"\t\"github.com/kameas-ai/kenaz-harness/core/storage/migrations\"\n" +
+				")\n\n" +
+				"func zzGateProbeMigration() migrations.Migration {\n" +
+				"\treturn migrations.Migration{\n" +
+				"\t\tID:            \"storage/97-zz-gate-probe\",\n" +
+				"\t\tVersion:       97,\n" +
+				"\t\tOwningMission: \"storage\",\n" +
+				"\t\tUpSource:      \"DROP " + "TABLE zz_gate_probe_table\",\n" +
+				"\t\tUp: func(ctx context.Context, tx migrations.WriteTx) error {\n" +
+				"\t\t\t_, err := tx.Exec(ctx, \"DROP " + "TABLE zz_gate_probe_table\")\n" +
+				"\t\t\treturn err\n" +
+				"\t\t},\n" +
+				"\t}\n" +
+				"}\n",
+		},
+		{
+			// upgrade-path-coverage-01PMUG01 WP05 (FR-4b). Replants the
+			// exact shape core/rpc/api_narrative_gate_boot_test.go had
+			// before its fix: rpc.New(c) with no WithSettingsStore
+			// override, so the settings store resolves through
+			// settings.NewFileStoreFromEnv() -> os.UserConfigDir() (the
+			// gate's sentinel HOME while this test runs; the developer's
+			// real config dir on an unguarded run) and then a real write
+			// (SetMemoryNarrativeEnabled) lands in it. This is a NEW
+			// probe file rather than an edit to the real (now-fixed)
+			// test file, matching the house convention elsewhere in this
+			// table (zz_gate_probe.go) of planting the violation
+			// alongside the real code rather than mutating it in place.
+			name: "tests-are-hermetic/unsandboxed-settings-write",
+			// Deliberately the PLANTED write's own path, not the gate's
+			// generic header. The header appears for any sentinel change
+			// at all — including the .kenaz/harness.log write that made
+			// this gate fail unconditionally before it was carved out —
+			// so matching on it would still pass for a gate that is
+			// simply broken. settings.json is written only by the probe.
+			wantOutput: "kenaz-harness/settings.json",
+			gate:       "check-tests-are-hermetic.sh",
+			file:       "core/rpc/zz_gate_probe_unsandboxed_settings_test.go",
+			content: "package rpc\n\n" +
+				"import (\n" +
+				"\t\"context\"\n" +
+				"\t\"testing\"\n\n" +
+				"\t\"github.com/kameas-ai/kenaz-harness/core\"\n" +
+				")\n\n" +
+				"func TestZzGateProbeUnsandboxedSettingsWrite(t *testing.T) {\n" +
+				"\tc, err := core.New(core.Options{DataDir: t.TempDir()})\n" +
+				"\tif err != nil {\n" +
+				"\t\tt.Fatalf(\"core.New: %v\", err)\n" +
+				"\t}\n" +
+				"\tapi := New(c)\n" +
+				"\tif err := api.Settings().SetMemoryNarrativeEnabled(context.Background(), true); err != nil {\n" +
+				"\t\tt.Fatalf(\"SetMemoryNarrativeEnabled: %v\", err)\n" +
+				"\t}\n" +
+				"}\n",
 		},
 	}
 
@@ -385,10 +648,23 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			cleanup := plant(t, full, tc.content, tc.append)
 			defer cleanup()
 
-			code, out := runGate(t, tc.gate, root)
+			code, out := runGateEnv(t, tc.gate, root, tc.env)
 			if code == 0 {
 				t.Fatalf("%s exited 0 with a planted violation in %s — the gate cannot fail.\noutput:\n%s",
 					tc.gate, tc.file, out)
+			}
+			// A non-zero exit alone is a weak proof: a gate that is
+			// BROKEN (fails on every run, planted violation or not)
+			// satisfies it. check-tests-are-hermetic.sh shipped in
+			// exactly that state and this table passed anyway
+			// (upgrade-path-coverage-01PMUG01 WP05 review, 2026-08-18).
+			// Where a case names the message the gate is supposed to
+			// produce, require it, so the proof is about THIS violation
+			// rather than about the gate exiting non-zero for any reason.
+			if tc.wantOutput != "" && !strings.Contains(out, tc.wantOutput) {
+				t.Fatalf("%s failed with a planted violation in %s, but its output does not mention %q — "+
+					"it may be failing for an unrelated reason.\noutput:\n%s",
+					tc.gate, tc.file, tc.wantOutput, out)
 			}
 		})
 	}
@@ -450,7 +726,9 @@ func plant(t *testing.T, full, content, appendText string) func() {
 // Node stack trace swallowed by `continue-on-error: true`. From frontend/ it
 // worked. Same script, two answers, and CI only ever saw the broken one.
 func TestCSSTokensGate_SameVerdictFromAnyCWD(t *testing.T) {
-	t.Parallel()
+	// NOT t.Parallel() — same reason as
+	// TestGates_VerdictIsIndependentOfWorkingDirectory: it reads a tree
+	// that TestGates_PlantedViolationFires mutates.
 	root := repoRoot(t)
 	script := filepath.Join(root, "scripts", "ci", "check-css-tokens.mjs")
 

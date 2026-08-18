@@ -59,6 +59,10 @@ type API struct {
 	healthPool  HealthPool
 	healthSubs  map[string]chan any
 	subs        map[string]chan any
+	// recipeSaver backs SaveCustomRecipe (custom_recipe.go). nil unless
+	// WithRecipeSaver is passed — SaveCustomRecipe returns
+	// ErrRecipeSaverNotConfigured in that case.
+	recipeSaver RecipeSaver
 }
 
 // Option configures NewAPI.

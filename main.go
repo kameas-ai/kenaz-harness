@@ -25,6 +25,7 @@ import (
 	coremenus "github.com/kameas-ai/kenaz-harness/core/menu"
 	"github.com/kameas-ai/kenaz-harness/core/paths"
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
+	updateview "github.com/kameas-ai/kenaz-harness/core/rpc/views/update"
 	coresentry "github.com/kameas-ai/kenaz-harness/core/sentry"
 	"github.com/kameas-ai/kenaz-harness/core/serve"
 	"github.com/kameas-ai/kenaz-harness/core/serve/authbroker"
@@ -174,10 +175,17 @@ func main() {
 	api := rpc.New(c)
 
 	// os-menu-bar-01NDFSEX16 WP03: build the initial native application menu.
-	// Handlers wire the broker (topic publish) + updater (CheckNow adapter).
+	// Handlers wire the broker (topic publish) + updater (CheckNow /
+	// StartDownload / Apply adapter — widened in self-update-repair
+	// -01PMUP01 WP05 so the Help item dispatches on all five
+	// UpdateMenuState values instead of always re-checking).
 	menuHandlers := coremenus.NewHandlers(
 		api.Broker(),
-		coremenus.UpdateCheckerFunc(func(ctx context.Context) { api.UpdateStartCheck(ctx) }),
+		coremenus.UpdateControllerFuncs{
+			CheckNowFunc:      func(ctx context.Context) { api.UpdateStartCheck(ctx) },
+			StartDownloadFunc: func(ctx context.Context) { api.UpdateStartDownload(ctx) },
+			ApplyFunc:         func(ctx context.Context) { api.UpdateApply(ctx) },
+		},
 		nil, // ContextProvider is set in OnStartup via SetMenuCtxProv (below)
 	)
 	// Derive initial state before first paint: theme from settings store,
@@ -269,13 +277,36 @@ func main() {
 				menuMu.Unlock()
 				scheduleRebuild()
 			})
-			// update:available — relabel Help → Check for Updates.
-			wailsruntime.EventsOn(ctx, "update:available", func(_ ...interface{}) {
-				menuMu.Lock()
-				menuState.UpdateState = coremenus.UpdateAvailable
-				menuMu.Unlock()
-				scheduleRebuild()
-			})
+			// update:available + update:download-{progress,complete,failed}
+			// — relabel Help → Check for Updates. self-update-repair-01PMUP01
+			// WP03: the three download topics are new; update:available was
+			// pre-existing. All four route through coremenus.UpdateTopicState
+			// (the pure, independently-tested topic→state mapping — "the
+			// subscriber" per AC-8) so this closure is thin IPC plumbing, not
+			// where the state logic lives.
+			//
+			// ACCELERATOR ONLY (spec §4.1 DC-1): the frontend's installLatest
+			// correctness never depends on these — it polls Update_Status to
+			// a terminal state on its own (WP02). This is the Go-side
+			// consumer that makes UpdateDownloading / UpdateStaged /
+			// UpdateFailed reachable in production (spec §1.4) — before this,
+			// only UpdateAvailable ever had a writer, so three of the five
+			// UpdateMenuLabel values were dead code with a live-looking label
+			// function. WP05 makes the resulting labels dispatch correctly.
+			onUpdateTopic := func(topic string) func(...interface{}) {
+				return func(_ ...interface{}) {
+					if state, ok := coremenus.UpdateTopicState(topic); ok {
+						menuMu.Lock()
+						menuState.UpdateState = state
+						menuMu.Unlock()
+						scheduleRebuild()
+					}
+				}
+			}
+			wailsruntime.EventsOn(ctx, "update:available", onUpdateTopic("update:available"))
+			wailsruntime.EventsOn(ctx, updateview.TopicDownloadProgress, onUpdateTopic(updateview.TopicDownloadProgress))
+			wailsruntime.EventsOn(ctx, updateview.TopicDownloadComplete, onUpdateTopic(updateview.TopicDownloadComplete))
+			wailsruntime.EventsOn(ctx, updateview.TopicDownloadFailed, onUpdateTopic(updateview.TopicDownloadFailed))
 			// session.list_changed — repopulate File → Open Recent (max 10).
 			// Broker topic rpc.TopicSessionListChanged = "session.list_changed".
 			wailsruntime.EventsOn(ctx, rpc.TopicSessionListChanged, func(_ ...interface{}) {
@@ -531,4 +562,3 @@ func initSentryFromSettings(api *rpc.Bindings) {
 		}
 	}
 }
-
