@@ -463,12 +463,6 @@ interface WailsBindingsLike {
   // was never declared on this interface — type-safety hole until v0.8.x.
   Settings_GetMCPAutoRestart(): Promise<boolean>;
   Settings_SetMCPAutoRestart(enabled: boolean): Promise<void>;
-  /** Returns the full keyboard shortcut overrides map. */
-  Settings_GetShortcuts(): Promise<Record<string, string>>;
-  /** Persist a single shortcut override. Empty binding clears the override. */
-  Settings_SetShortcut(id: string, binding: string): Promise<void>;
-  /** Atomically replace the full shortcut overrides map. */
-  Settings_SetShortcuts(m: Record<string, string>): Promise<void>;
   Settings_GetAutoTitleEnabled(): Promise<boolean>;
   Settings_SetAutoTitleEnabled(enabled: boolean): Promise<void>;
   /** Read the user's chat custom-instructions text (default empty). */
@@ -2155,22 +2149,6 @@ export interface PermissionsClient {
    * registry's 5-minute timeout fail-closed denies it.
    */
   listPending(): Promise<PermissionRequest[]>;
-  /**
-   * Read the full keyboard shortcut overrides map. Empty map means all
-   * shortcuts use registry defaults.
-   * (keyboard-shortcuts-settings-01KQ8TDR plan §2.7)
-   */
-  getShortcuts(): Promise<Record<string, string>>;
-  /**
-   * Persist a single shortcut override. An empty binding value clears
-   * the override (resets to registry default).
-   */
-  setShortcut(id: string, binding: string): Promise<void>;
-  /**
-   * Atomically replace the full shortcut overrides map. Used for
-   * reset-all and batch-save flows.
-   */
-  setShortcuts(m: Record<string, string>): Promise<void>;
 }
 
 /**
@@ -3720,9 +3698,6 @@ export function createHarnessClient(): HarnessClient {
       resolve: (requestID, decision) =>
         b().Permissions_Resolve(requestID, decision),
       listPending: () => b().Permissions_ListPending(),
-      getShortcuts: () => b().Settings_GetShortcuts(),
-      setShortcut: (id, binding) => b().Settings_SetShortcut(id, binding),
-      setShortcuts: (m) => b().Settings_SetShortcuts(m),
     },
     memory: {
       listChunks: (filter) => b().Memory_ListChunks(filter ?? {}),
@@ -4989,9 +4964,6 @@ export function createFakeHarnessClient(
       revokeGrant: noop,
       resolve: noop,
       listPending: async () => [],
-      getShortcuts: async () => ({}),
-      setShortcut: noop,
-      setShortcuts: noop,
     },
     memory: {
       listChunks: async () => [],

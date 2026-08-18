@@ -1245,7 +1245,22 @@ func (b *Bindings) Settings_GetShortcuts() (map[string]string, error) {
 
 // Settings_SetShortcut persists a single shortcut override. An empty
 // binding value clears the override for that id (resets to registry
-// default). Emits KindShortcutOverridden audit event on success.
+// default).
+//
+// Rival door (consent-surfaces-truth-01PMTR01 WP04 / dead-code-audit
+// B6): the live save path is KeyboardShortcuts.vue's full-settings
+// round trip (client.settings.get/.set); this binding had zero
+// frontend callers — the same "a binding with no client reader" shape
+// WP03's check-listpending-coverage.sh gates for *_ListPending
+// bindings specifically, applied here to a different binding family.
+// The frontend-side callers (PermissionsClient.getShortcuts/
+// setShortcut/setShortcuts, their Wails adapters, and their fakes)
+// were deleted in this WP; this Go binding is held rather than deleted
+// because an out-of-repo caller (fleet control plane, Remote Control,
+// or any external WS client dispatching by string) cannot be ruled out
+// from inside this repo (spec §7). This docstring no longer claims an
+// audit emit — it never happened; see KindShortcutOverridden's
+// deletion in the same commit.
 func (b *Bindings) Settings_SetShortcut(id, binding string) error {
 	defer sentry.WrapBinding("Settings_SetShortcut")()
 	if b.storeFn == nil {
@@ -1276,8 +1291,12 @@ func (b *Bindings) Settings_SetShortcut(id, binding string) error {
 }
 
 // Settings_SetShortcuts atomically replaces the full keyboard shortcut
-// overrides map. Used by the settings panel's reset-all and batch-save
-// flows. Emits one KindShortcutOverridden audit event per changed entry.
+// overrides map.
+//
+// Unreached rival door — see Settings_SetShortcut's doc comment above
+// for the full account. No audit event is emitted; the claim that one
+// was has been removed along with KindShortcutOverridden
+// (consent-surfaces-truth-01PMTR01 WP04).
 func (b *Bindings) Settings_SetShortcuts(m map[string]string) error {
 	defer sentry.WrapBinding("Settings_SetShortcuts")()
 	if b.storeFn == nil {
