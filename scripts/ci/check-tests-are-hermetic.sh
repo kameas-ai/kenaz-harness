@@ -88,7 +88,29 @@ snapshot() {
   # CLAUDE.md's release-ritual doctrine calls a lie in the other
   # direction. It is the toolchain's own bookkeeping, not
   # kenaz-harness state, so it is out of this gate's concern.
-  find "$SENTINEL" -type f -not -path '*/go/telemetry/*' -print0 | LC_ALL=C sort -z | while IFS= read -r -d '' f; do
+  # .kenaz/harness.log is core/logging's process-lifetime log file:
+  # logging.L() opens $HOME/.kenaz/harness.log on first use
+  # (core/logging/logger.go initLogger) and there is no env override —
+  # only the package-level configuredDir, set by logging.Configure.
+  # core/rpc/testmain_test.go calls Configure for package core/rpc; the
+  # ~50 core/rpc/views/* packages and core/llm/personal / core/paths do
+  # not, so one of them opens it on every run of this gate.
+  #
+  # EXCLUDED AS A DELIBERATE CARVE-OUT, not because it is harmless.
+  # Under the sentinel HOME the write lands inside the sentinel rather
+  # than on the real machine, so its presence here is evidence the
+  # redirect worked; but the same code writes the developer's real
+  # ~/.kenaz/harness.log on an ORDINARY `go test ./core/...`, and this
+  # gate does not and will not catch that. The real fix is a TestMain
+  # calling logging.Configure(t.TempDir()) in each scoped package, or an
+  # env override in core/logging. Until then this gate polices
+  # CONFIG-FILE writes (settings.json, providers.json,
+  # MigrateLegacyConfigDir's rename) and explicitly not the logger.
+  #
+  # Without this line the gate fails on EVERY run — it was wired into
+  # pr.yml in that state (WP05), which would have turned lint-go red on
+  # every PR. Found by running it, 2026-08-18.
+  find "$SENTINEL" -type f -not -path '*/go/telemetry/*' -not -path '*/.kenaz/harness.log' -print0 | LC_ALL=C sort -z | while IFS= read -r -d '' f; do
     if command -v sha256sum >/dev/null 2>&1; then
       h=$(sha256sum "$f" | awk '{print $1}')
     else

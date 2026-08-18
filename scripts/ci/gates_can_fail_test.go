@@ -153,12 +153,13 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 	root := repoRoot(t)
 
 	cases := []struct {
-		name    string
-		gate    string
-		file    string // repo-relative path to create, or "" to append
-		append  string // when file already exists, append this instead
-		content string
-		env     map[string]string // extra env vars for this case's runGate call, if any
+		name       string
+		gate       string
+		file       string // repo-relative path to create, or "" to append
+		append     string // when file already exists, append this instead
+		content    string
+		env        map[string]string // extra env vars for this case's runGate call, if any
+		wantOutput string            // optional: substring the failure output must contain
 	}{
 		{
 			name:    "binding-names/double-underscore",
@@ -417,19 +418,21 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			// this branch's own last commit instead, which already
 			// contains the unmutated file, so this exercises the SAME
 			// git-diff codepath the CI gate uses, not a mock of it.
-			name:   "upgrade-snapshots-locked/byte-mutation",
-			gate:   "check-upgrade-snapshots-locked.sh",
-			file:   "core/storage/sqlite/testdata/upgrade/v0.63.0/dump.sql",
-			append: "-- zzGateProbe: this byte must not be here\n",
-			env:    map[string]string{"UPGRADE_SNAPSHOTS_BASE_REF": "HEAD"},
+			name:       "upgrade-snapshots-locked/byte-mutation",
+			wantOutput: "upgrade-snapshots-locked",
+			gate:       "check-upgrade-snapshots-locked.sh",
+			file:       "core/storage/sqlite/testdata/upgrade/v0.63.0/dump.sql",
+			append:     "-- zzGateProbe: this byte must not be here\n",
+			env:        map[string]string{"UPGRADE_SNAPSHOTS_BASE_REF": "HEAD"},
 		},
 		{
 			// upgrade-path-coverage-01PMUG01 WP03 (I14). A migration
 			// whose Up() runs DROP TABLE with no populated-table test
 			// referencing its ID and no allowlist entry must fail.
-			name: "destructive-migration-coverage/uncovered-drop-table",
-			gate: "check-destructive-migration-coverage.sh",
-			file: "core/rpc/views/zzgateprobe/migration_probe.go",
+			name:       "destructive-migration-coverage/uncovered-drop-table",
+			wantOutput: "destructive-migration-coverage",
+			gate:       "check-destructive-migration-coverage.sh",
+			file:       "core/rpc/views/zzgateprobe/migration_probe.go",
 			content: "package zzgateprobe\n\n" +
 				"import (\n" +
 				"\t\"context\"\n\n" +
@@ -462,8 +465,15 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			// table (zz_gate_probe.go) of planting the violation
 			// alongside the real code rather than mutating it in place.
 			name: "tests-are-hermetic/unsandboxed-settings-write",
-			gate: "check-tests-are-hermetic.sh",
-			file: "core/rpc/zz_gate_probe_unsandboxed_settings_test.go",
+			// Deliberately the PLANTED write's own path, not the gate's
+			// generic header. The header appears for any sentinel change
+			// at all — including the .kenaz/harness.log write that made
+			// this gate fail unconditionally before it was carved out —
+			// so matching on it would still pass for a gate that is
+			// simply broken. settings.json is written only by the probe.
+			wantOutput: "kenaz-harness/settings.json",
+			gate:       "check-tests-are-hermetic.sh",
+			file:       "core/rpc/zz_gate_probe_unsandboxed_settings_test.go",
 			content: "package rpc\n\n" +
 				"import (\n" +
 				"\t\"context\"\n" +
@@ -495,6 +505,19 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			if code == 0 {
 				t.Fatalf("%s exited 0 with a planted violation in %s — the gate cannot fail.\noutput:\n%s",
 					tc.gate, tc.file, out)
+			}
+			// A non-zero exit alone is a weak proof: a gate that is
+			// BROKEN (fails on every run, planted violation or not)
+			// satisfies it. check-tests-are-hermetic.sh shipped in
+			// exactly that state and this table passed anyway
+			// (upgrade-path-coverage-01PMUG01 WP05 review, 2026-08-18).
+			// Where a case names the message the gate is supposed to
+			// produce, require it, so the proof is about THIS violation
+			// rather than about the gate exiting non-zero for any reason.
+			if tc.wantOutput != "" && !strings.Contains(out, tc.wantOutput) {
+				t.Fatalf("%s failed with a planted violation in %s, but its output does not mention %q — "+
+					"it may be failing for an unrelated reason.\noutput:\n%s",
+					tc.gate, tc.file, tc.wantOutput, out)
 			}
 		})
 	}
