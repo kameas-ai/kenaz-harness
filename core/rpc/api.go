@@ -848,14 +848,32 @@ func (a *API) SetContext(ctx context.Context) {
 //     that will apply it (and since v0.63.1, Open refuses to start rather
 //     than run with any of it left unapplied — see verifyFullyApplied).
 //     No WARN, no audit row, no broker publish: it is not an incident.
+//
 //   - Any id_mismatch (error) or ledger_only (warning) entry IS
 //     noteworthy — it means the ledger disagrees with the registered
 //     migration set in a way Open's own checks don't catch. WARN-logs and
 //     pushes one audit row summarising the report.
+//
 //   - id_mismatch specifically also gets a broker publish on
-//     TopicMigrationDriftDetected (FR-3c) so the frontend can surface a
-//     persistent toast at boot, without requiring the user to know
-//     Settings → Health exists. ledger_only does NOT publish — it is the
+//     TopicMigrationDriftDetected (FR-3c), so that a subscriber does not
+//     have to know Settings → Health exists to learn about it.
+//
+//     KNOWN GAP, recorded in review 2026-08-18 rather than overclaimed:
+//     this publish is FIRE-AND-FORGET AND IS ALMOST CERTAINLY DROPPED
+//     TODAY. It is spawned from SetContext (i.e. at OnStartup), and
+//     EventBus.Publish (core/rpc/bus.go) iterates the CURRENT subscriber
+//     list — with none registered the frame is discarded and not even
+//     counted. On desktop the only caller of useEventToasts() is
+//     frontend/src/views/sessions/SessionsView.vue, which mounts long
+//     after OnStartup; in served mode no WebSocket client exists at
+//     OnStartup at all. The wiring, the topic, the served-mode parity
+//     and the payload are all correct and tested — what is missing is
+//     late-join delivery (a replay buffer, or an RPC pull when the toast
+//     composable mounts). Until that lands, treat Settings → Health as
+//     the surface that actually reaches a user, and do not cite this
+//     branch as evidence that boot-time drift is visible.
+//
+//     ledger_only does NOT publish — it is the
 //     normal shape of a downgrade or a removed migration (see FR-3's
 //     explicit non-goal against making drift fatal at Open), and pushing
 //     a toast for it would just move the false alarm from the

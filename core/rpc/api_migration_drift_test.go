@@ -39,6 +39,17 @@ func driftEntry(version int, kind, severity string) storageview.DriftEntry {
 // Before this WP the boot handler counted len(report.Drifts) with no
 // severity read at all, so this exact report would have pushed a WARN +
 // audit entry indistinguishable from real ledger corruption.
+//
+// THIS is the FR-3b mutation proof. It drives the production
+// runMigrationDriftCheck and observes the real audit surface, so
+// collapsing the severity branch back to `len(report.Drifts) > 0` makes
+// it fail. A sibling named ..._MutationProof used to sit below it and
+// claimed the same thing while never calling production code at all —
+// it re-declared the severity switch over local variables and asserted
+// `len(drifts) > 0`, so it passed for any implementation, including a
+// fully reverted one. Deleted 2026-08-18 in review: a test that lies
+// about what it proves is worse than no test, because it spends the
+// reviewer's trust.
 func TestRunMigrationDriftCheck_CodeOnlyIsSilent(t *testing.T) {
 	auditImpl := audit.NewAPI()
 	storageAPI := &fakeDriftStorageAPI{report: storageview.DriftReport{
@@ -57,38 +68,6 @@ func TestRunMigrationDriftCheck_CodeOnlyIsSilent(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("code_only-only drift must push no audit row; got %d: %+v", len(entries), entries)
-	}
-}
-
-// TestRunMigrationDriftCheck_CodeOnlyIsSilent_MutationProof performs the
-// FR-3b mutation named in the spec: collapse the severity branch back to
-// "any drift at all" (the pre-WP04 behaviour) and confirm the code_only-
-// only case starts pushing an audit row, i.e. this test would have failed
-// against the old code. It does not call runMigrationDriftCheck — it
-// exercises the same branch condition inline so the proof doesn't require
-// temporarily hand-editing production source mid-test-run.
-func TestRunMigrationDriftCheck_CodeOnlyIsSilent_MutationProof(t *testing.T) {
-	drifts := []storageview.DriftEntry{
-		driftEntry(3, "code_only", "info"),
-		driftEntry(4, "code_only", "info"),
-	}
-	hasError, hasWarning := false, false
-	for _, d := range drifts {
-		switch d.Severity {
-		case "error":
-			hasError = true
-		case "warning":
-			hasWarning = true
-		}
-	}
-	// Current (fixed) behaviour: neither flag set for code_only-only.
-	if hasError || hasWarning {
-		t.Fatalf("fixture is supposed to be code_only-only; got hasError=%v hasWarning=%v", hasError, hasWarning)
-	}
-	// The mutation named in FR-3b: collapse the branch to "any drift".
-	mutatedWouldFire := len(drifts) > 0
-	if !mutatedWouldFire {
-		t.Fatal("mutation sanity check failed: collapsed branch should fire for any non-empty report")
 	}
 }
 

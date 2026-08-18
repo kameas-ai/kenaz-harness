@@ -214,10 +214,11 @@ can say is wanted. Record the question; do not resolve it by deleting.
 Every disposition names its class. "Deleted — no importers" is not a
 reason; "deleted — `AttachmentTreePicker` is the live substitute" is.
 
-### Two blind spots the file-level scans cannot see
+### Three blind spots the file-level scans cannot see
 
-Both were found the hard way in the 2026-08-14 sweep. Neither is covered by
-any gate; both need a human or an agent explicitly looking.
+The first two were found the hard way in the 2026-08-14 sweep; the third by the
+v0.63.0 P0 (see item 3 for the dates). None is covered by any gate; all three
+need a human or an agent explicitly looking.
 
 1. **Dead code inside a live file.** Deleting ten orphaned components saved
    826 bytes of JS — Vite had already tree-shaken every unreferenced `.vue`,

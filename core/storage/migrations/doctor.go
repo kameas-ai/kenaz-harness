@@ -53,8 +53,13 @@ type DriftEntry struct {
 	//                    the registry has no registered migration. Typically a
 	//                    rolled-back migration whose code was removed.
 	//   "code_only"    — the registry has a migration at this version, but
-	//                    the ledger has no applied row. Normal pending state;
-	//                    the runner will apply it on next boot.
+	//                    the ledger has no applied row. The normal pending
+	//                    state ahead of the next boot. NOT "the runner will
+	//                    apply it on next boot": since v0.63.1 Open runs
+	//                    verifyFullyApplied and REFUSES TO START if a
+	//                    registered migration still has no applied row after
+	//                    Apply. The Suggestion field below says so; this
+	//                    comment used to contradict it (fixed 2026-08-18).
 	Kind string
 
 	// Severity:

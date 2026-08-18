@@ -17,7 +17,8 @@ on the path from a previously-shipped schema to this one.
   migrations left them) of the database that tag's code produces when it
   replays the previous tag's snapshot. `<tag>/PROVENANCE.md` next to it
   records how it was built and, for the genesis, how it was cross-checked
-  against a real upgraded install.
+  against a real upgraded install — **hand-written**; the generator does
+  not produce it (see *Cutting a release* below).
 - `core/storage/sqlite/upgrade_path_test.go` — table-driven over every
   directory under `testdata/upgrade/`. Adding a snapshot adds a test case
   with no code change.
@@ -38,14 +39,41 @@ bash scripts/ci/upgrade-snapshot.sh v<X.Y.Z>
 
 This replays the previous committed snapshot through a real `git worktree
 add` checkout of the new tag's code — not a same-tree simulation — and
-writes `core/storage/sqlite/testdata/upgrade/v<X.Y.Z>/dump.sql`. Review the
-diff (`git diff testdata/upgrade/<prev>/dump.sql testdata/upgrade/v<X.Y.Z>/dump.sql`
-is the release's schema review — nobody had that before this mission),
-commit it, and it becomes locked once the release ships.
+writes `core/storage/sqlite/testdata/upgrade/v<X.Y.Z>/dump.sql`.
+
+Then review the diff. **Use `--no-index`:**
+
+```bash
+git diff --no-index \
+  core/storage/sqlite/testdata/upgrade/<prev>/dump.sql \
+  core/storage/sqlite/testdata/upgrade/v<X.Y.Z>/dump.sql
+```
+
+That diff *is* the release's schema review — nobody had that before this
+mission. Without `--no-index`, git reads two tracked paths as *pathspecs*
+and diffs the worktree against the index, which for a freshly committed
+snapshot is empty: the command exits 0 and prints nothing, which is the
+worst possible failure mode for a review step.
+
+An empty diff is a legitimate outcome — a release with no schema change
+produces a byte-identical dump (`v0.63.2` is exactly that: identical to
+`v0.63.1`). Commit it anyway; the chain reaching the latest release tag is
+what makes "the previous release's database still opens" a true statement
+rather than a statement about some older release.
+
+**Then hand-write `<tag>/PROVENANCE.md`.** The generator writes only
+`dump.sql`. Copy the shape of `v0.63.1/PROVENANCE.md`: which tag, which
+snapshot it was replayed from, which migrations that tag newly applied,
+and anything you had to work around. A snapshot directory without a
+PROVENANCE.md is an unexplained fixture, and the next person to see a diff
+in it has nothing to check it against.
 
 Requires the new tag to already exist (`git tag` it, or run against `HEAD`
 first with `bash scripts/ci/upgrade-snapshot.sh HEAD` to preview before
-tagging — that output is NOT committed automatically).
+tagging). **Delete `testdata/upgrade/HEAD/` when you are done with it** —
+`upgrade_path_test.go` skips any directory that is not a `vX.Y.Z` name
+(`upgradesnap.IsSnapshotTag`), so a leftover preview cannot silently become
+a chain entry, but it should not be committed either.
 
 ## Why a migration needs a populated-table test, separately
 
@@ -68,6 +96,12 @@ FK into it), reopen, assert content survives.
   (`core/storage/sqlite/upgradesnap`) are meant to be deterministic; a
   divergence means either the generator changed (review it) or the
   committed snapshot was hand-edited (don't do that — regenerate instead).
+- **Snapshot growth.** Roughly 42 KB of `dump.sql` per release. Spec §10
+  escalation 4 proposes "keep the current minor plus the last three minors,
+  prune older ones in a dated commit" — **this has not been ratified**, and
+  until it is, the directory grows without bound. Note that a release with
+  no schema change contributes a byte-identical duplicate, which is the
+  cheapest possible candidate for pruning first.
 - **Building at an old tag fails** — a fresh worktree needs
   `mkdir -p frontend/dist && touch frontend/dist/.gitkeep` before any `go
   build`/`go test` (the binary embeds `frontend/dist`); the script does
