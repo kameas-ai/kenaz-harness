@@ -119,6 +119,27 @@ describe('entry-point route tables', () => {
     expect(paths(served)).not.toContain('/hooks');
   });
 
+  // consent-surfaces-truth-01PMTR01 WP06 (FR-007): the denial panel's
+  // acceptance says "reachable from the app shell (route or nav entry,
+  // not just a component that exists)". PolicyView's own spec mounts the
+  // component directly, which cannot see a route registration being
+  // dropped — blind spot #1 one level up. This is the route half of the
+  // chain; SettingsTabsNav.spec.ts pins the nav-entry half.
+  it.each(['desktop', 'served'] as const)(
+    '/policy is routed, so the denial panel is reachable (%s)',
+    async (which) => {
+      const routes = which === 'desktop' ? desktop : served;
+      const router = createRouter({ history: createMemoryHistory(), routes });
+      await router.push('/policy');
+      await router.isReady();
+      expect(router.currentRoute.value.name, `${which} /policy`).toBe('policy');
+      expect(
+        router.currentRoute.value.matched.length,
+        `${which} /policy must match a real record, not the catch-all`,
+      ).toBeGreaterThan(0);
+    },
+  );
+
   it.each(['desktop', 'served'] as const)(
     '#/search and #/hooks resolve to the not-found route (%s)',
     async (which) => {
