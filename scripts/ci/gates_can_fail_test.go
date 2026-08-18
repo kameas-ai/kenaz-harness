@@ -448,6 +448,39 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				"\t}\n" +
 				"}\n",
 		},
+		{
+			// upgrade-path-coverage-01PMUG01 WP05 (FR-4b). Replants the
+			// exact shape core/rpc/api_narrative_gate_boot_test.go had
+			// before its fix: rpc.New(c) with no WithSettingsStore
+			// override, so the settings store resolves through
+			// settings.NewFileStoreFromEnv() -> os.UserConfigDir() (the
+			// gate's sentinel HOME while this test runs; the developer's
+			// real config dir on an unguarded run) and then a real write
+			// (SetMemoryNarrativeEnabled) lands in it. This is a NEW
+			// probe file rather than an edit to the real (now-fixed)
+			// test file, matching the house convention elsewhere in this
+			// table (zz_gate_probe.go) of planting the violation
+			// alongside the real code rather than mutating it in place.
+			name: "tests-are-hermetic/unsandboxed-settings-write",
+			gate: "check-tests-are-hermetic.sh",
+			file: "core/rpc/zz_gate_probe_unsandboxed_settings_test.go",
+			content: "package rpc\n\n" +
+				"import (\n" +
+				"\t\"context\"\n" +
+				"\t\"testing\"\n\n" +
+				"\t\"github.com/kameas-ai/kenaz-harness/core\"\n" +
+				")\n\n" +
+				"func TestZzGateProbeUnsandboxedSettingsWrite(t *testing.T) {\n" +
+				"\tc, err := core.New(core.Options{DataDir: t.TempDir()})\n" +
+				"\tif err != nil {\n" +
+				"\t\tt.Fatalf(\"core.New: %v\", err)\n" +
+				"\t}\n" +
+				"\tapi := New(c)\n" +
+				"\tif err := api.Settings().SetMemoryNarrativeEnabled(context.Background(), true); err != nil {\n" +
+				"\t\tt.Fatalf(\"SetMemoryNarrativeEnabled: %v\", err)\n" +
+				"\t}\n" +
+				"}\n",
+		},
 	}
 
 	for _, tc := range cases {

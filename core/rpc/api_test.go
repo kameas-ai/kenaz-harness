@@ -201,7 +201,10 @@ var _ HarnessAPI = (*API)(nil)
 // TestViewAccessorStability asserts plan §4.2: each HarnessAPI.<View>()
 // call returns the same Go pointer for the lifetime of the API value.
 func TestViewAccessorStability(t *testing.T) {
-	api := New(nil)
+	// WithSettingsStore(newTestStore(t)) (upgrade-path-coverage-01PMUG01
+	// FR-4a): New(nil) still builds a real settings store via
+	// settings.NewFileStoreFromEnv() unless overridden.
+	api := New(nil, WithSettingsStore(newTestStore(t)))
 
 	if api.Sessions() != api.Sessions() {
 		t.Errorf("Sessions() returned different pointers across calls")
@@ -289,7 +292,9 @@ func TestSlashWorkflowsGatewayInterface(t *testing.T) {
 // TestShellStatusBaseline asserts the chassis returns a quiet baseline
 // status — non-empty TrustTier, ready connection, privacy flags on.
 func TestShellStatusBaseline(t *testing.T) {
-	api := New(nil)
+	// WithSettingsStore(newTestStore(t)) (upgrade-path-coverage-01PMUG01
+	// FR-4a): see TestViewAccessorStability above.
+	api := New(nil, WithSettingsStore(newTestStore(t)))
 	status, err := api.ShellStatus(context.Background())
 	if err != nil {
 		t.Fatalf("ShellStatus: %v", err)

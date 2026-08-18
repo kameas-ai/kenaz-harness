@@ -268,6 +268,18 @@ jobs:
         # or a dated scripts/ci/allowlists/i14-destructive-migration-coverage.txt entry.
         run: bash scripts/ci/check-destructive-migration-coverage.sh
 
+      - name: tests-are-hermetic guard (FR-4b)
+        # upgrade-path-coverage-01PMUG01 WP05, spec §FR-4b. rpc.New's
+        # settings store resolves settings.NewFileStoreFromEnv() ->
+        # os.UserConfigDir() unless overridden (WithSettingsStore) — a
+        # test that forgets the override writes into whatever HOME
+        # resolves to for the process running it. This is a RUNTIME
+        # check because "a test wrote outside its own t.TempDir()" is
+        # not decidable by grep: it runs the scoped suite with HOME /
+        # XDG_CONFIG_HOME / AppData pointed at a seeded sentinel
+        # directory and fails on any change to that tree.
+        run: bash scripts/ci/check-tests-are-hermetic.sh
+
       # csp guard runs in test-frontend after `npm run build` produces
       # the real frontend/dist/index.html — there's no point checking
       # the CSP of a stub.

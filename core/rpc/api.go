@@ -1047,6 +1047,10 @@ type options struct {
 	// connectorTokens is the broker-backed token source for OAuth
 	// connectors. See WithConnectorTokens.
 	connectorTokens tools.ConnectorTokenSource
+
+	// settingsStore overrides the settings store New would otherwise
+	// build via settings.NewFileStoreFromEnv(). See WithSettingsStore.
+	settingsStore settings.SettingsStore
 }
 
 // WithHostProviders seeds provider profiles that the surrounding control
@@ -1088,6 +1092,23 @@ func WithServedConnectors(sup *connectors.Supervisor) Option {
 // never passes this option.
 func WithConnectorTokens(src tools.ConnectorTokenSource) Option {
 	return func(o *options) { o.connectorTokens = src }
+}
+
+// WithSettingsStore injects the settings.SettingsStore New wires into
+// settings.NewAPI, bypassing settings.NewFileStoreFromEnv() (which
+// resolves os.UserConfigDir() — the DEVELOPER'S REAL config directory —
+// and, on the way there, MigrateLegacyConfigDir()'s one-shot
+// sync.Once-guarded os.Rename).
+//
+// Production never passes this option, so the zero-option-set default
+// (NewFileStoreFromEnv) is unchanged (upgrade-path-coverage-01PMUG01
+// FR-4a). Tests use it to swap in a hermetic store — e.g.
+// settings.NewFileStore(t.TempDir()) — instead of redirecting the
+// process HOME/XDG_CONFIG_HOME/AppData environment. Without either,
+// even New(nil) opens and can write to the real settings.json on
+// whatever machine runs the test binary.
+func WithSettingsStore(store settings.SettingsStore) Option {
+	return func(o *options) { o.settingsStore = store }
 }
 
 func New(c *core.Core, opts ...Option) *API {
@@ -1304,8 +1325,17 @@ func New(c *core.Core, opts ...Option) *API {
 
 	// Settings: file-backed when we have a user config dir; in-memory
 	// fallback for the test harness path so New(nil) keeps working.
+	//
+	// opt.settingsStore (WithSettingsStore) takes priority when set —
+	// this is NOT gated on c being non-nil, matching the pre-existing
+	// NewFileStoreFromEnv branch below, which also runs unconditionally
+	// of c. That symmetry is why New(nil) alone was never a safe way to
+	// avoid touching the developer's real config file (FR-4a); only an
+	// explicit override is.
 	var settingsStore settings.SettingsStore
-	if fs, err := settings.NewFileStoreFromEnv(); err == nil {
+	if opt.settingsStore != nil {
+		settingsStore = opt.settingsStore
+	} else if fs, err := settings.NewFileStoreFromEnv(); err == nil {
 		settingsStore = fs
 	}
 	settingsImpl := settings.NewAPI(settingsStore)
