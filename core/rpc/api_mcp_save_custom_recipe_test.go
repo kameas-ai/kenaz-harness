@@ -13,6 +13,7 @@ package rpc
 // spawns.
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -205,4 +206,36 @@ func buildFakeServerForSaveCustomRecipeTest(t *testing.T) string {
 		t.Fatalf("build fake server: %v", err)
 	}
 	return exe
+}
+
+// TestSaveCustomRecipeWithoutStoreReturnsSentinel pins the sentinel
+// SaveCustomRecipe's docstring promises for the no-DataDir boot (the
+// rpc.New(nil) test-harness path). It is a typed-nil regression guard:
+// wiring the option as
+//
+//	mcp.NewAPI(..., mcp.WithRecipeSaver(a.mcpUserStore))
+//
+// unconditionally hands NewAPI a non-nil RecipeSaver interface value
+// holding a nil *recipes.UserStore whenever there is no DataDir, so the
+// `saver == nil` guard never fires and ErrRecipeSaverNotConfigured
+// becomes unreachable — a declared-but-never-returned error, the exact
+// unwired class mcp-connector-lifecycle-01PMMC01 exists to end.
+//
+// Mutation: drop the `if a.mcpUserStore != nil` guard around the
+// WithRecipeSaver append in New(). errors.Is must stop matching and this
+// test must fail.
+func TestSaveCustomRecipeWithoutStoreReturnsSentinel(t *testing.T) {
+	api := New(nil)
+	_, err := api.MCP().SaveCustomRecipe(context.Background(), mcpview.SaveCustomRecipeRequest{
+		ID:          "wp06-no-store",
+		DisplayName: "No Store",
+		Transport:   "stdio",
+		Command:     []string{"some-binary"},
+	})
+	if err == nil {
+		t.Fatal("SaveCustomRecipe with no user store = nil error, want ErrRecipeSaverNotConfigured")
+	}
+	if !errors.Is(err, mcpview.ErrRecipeSaverNotConfigured) {
+		t.Errorf("err = %v, want it to match ErrRecipeSaverNotConfigured", err)
+	}
 }

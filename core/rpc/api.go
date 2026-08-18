@@ -1205,7 +1205,19 @@ func New(c *core.Core, opts ...Option) *API {
 		func() []recipes.Recipe { return recipes.Registry().List() },
 		mcpUserRecipeSource(a.mcpUserStore),
 	)
-	a.mcpAPI = mcp.NewAPI(mcp.WithSubscriber(a.broker), mcp.WithCatalog(mergedCat), mcp.WithRecipeSaver(a.mcpUserStore))
+	mcpOpts := []mcp.Option{mcp.WithSubscriber(a.broker), mcp.WithCatalog(mergedCat)}
+	// Only install the saver when there is a real store behind it. Passing
+	// a nil *recipes.UserStore straight into WithRecipeSaver would wrap it
+	// in a non-nil RecipeSaver interface value holding a nil pointer, so
+	// SaveCustomRecipe's `saver == nil` guard would not fire and
+	// ErrRecipeSaverNotConfigured — the sentinel its docstring promises,
+	// and which callers match with errors.Is — could never be returned.
+	// The call would instead fall through to (*UserStore)(nil).Save and
+	// surface an internal "nil receiver" string.
+	if a.mcpUserStore != nil {
+		mcpOpts = append(mcpOpts, mcp.WithRecipeSaver(a.mcpUserStore))
+	}
+	a.mcpAPI = mcp.NewAPI(mcpOpts...)
 	// MCP clipboard-import surface (mission mcp-server-install-01KQ8TDP,
 	// WP08). Wired only when we have a real Core (= a real DataDir);
 	// rpc.New(nil) test harness leaves it nil and the binding returns
