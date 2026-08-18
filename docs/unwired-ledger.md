@@ -941,9 +941,27 @@ surface for a real capability). Do **not** re-find these as orphans:
   `core/rpc/api.go:4304`.
 - `HookJournalView` — rows **are** being written to SQL in production;
   the read path is what is missing.
-- `MCPHealthSettingsPanel` + `BranchAdvisorSettings` — both blocked on
-  inert Go knobs (see "Settings fields that are stored, bound, and
-  inert" above). Wire the consumer first, in the same PR.
+- `MCPHealthSettingsPanel` — blocked on an inert Go knob (see "Settings
+  fields that are stored, bound, and inert" above). Wire the consumer
+  first, in the same PR.
+- ~~`BranchAdvisorSettings`~~ — **drained 2026-08-18** by
+  engineer-truth-pass-01PMTP01 WP02/WP03. This entry previously pointed
+  at "Settings fields that are stored, bound, and inert" above, but
+  that section only ever named `BranchAdvisorUseLLM` and
+  `BranchAutoMode` (both correctly self-documented as reserved) — it
+  never named the two fields that actually blocked the mount,
+  `BranchAdvisorEnabled` and `BranchReintegrationMaxTokens` (verified:
+  `BranchAdvisorEnabled` had zero occurrences anywhere in this ledger).
+  Anyone following the old pointer would have wired the wrong two
+  fields, mounted the panel, and shipped an inert toggle. WP02 gave
+  `BranchAdvisorEnabled` a reader (`ChatInput.vue`'s
+  `runAdvisorDetector`) and `BranchReintegrationMaxTokens` a caller
+  (`ProposeReintegrationSummary` via `EffectiveBranchReintegration-
+  MaxTokens`); WP03 mounted `BranchAdvisorSettings.vue` at
+  `SettingsView.vue`'s `?tab=branch-advisor` pane, linked from
+  `SettingsTabs.vue`. `BranchAdvisorUseLLM` / `BranchAutoMode` remain
+  correctly reserved and stay in the "stored, bound, and inert" list
+  above — they were never this entry's blocker.
 - `CrashReportingOnboardingModal`.
 - `CedarEditor` — retained pending the mission that ports its fleet
   features into `PolicyView`. It is **not** an orphan to delete, even
