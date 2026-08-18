@@ -15,7 +15,6 @@ import CheatSheetModal from '@/components/shortcuts/CheatSheetModal.vue';
 import { useConnectionState } from '@/lib/useConnectionState';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { matchesEvent } from '@/lib/shortcuts/platform';
-import { useSearchPalette } from '@/lib/useSearchPalette';
 
 /**
  * Shell — the persistent app-level layout (plan §2.1).
@@ -33,7 +32,12 @@ import { useSearchPalette } from '@/lib/useSearchPalette';
  * browser / chat composer shortcut is not stolen.
  * Also registers the global `?` / Cmd-/ shortcut for the keyboard
  * cheat-sheet overlay (keyboard-shortcuts-settings-01KQ8TDR plan §2.6).
- * Mirrors the Cmd-F pattern in useCommandPalette.
+ *
+ * ⌘K is deliberately NOT bound here — it is owned solely by
+ * useCommandPalette.ts's own `window` keydown listener (engineer-truth-pass-
+ * 01PMTP01 WP01). Before that fix this file also toggled the search palette
+ * on ⌘K, so one keypress opened both the command palette and the search
+ * palette on top of each other.
  */
 const connection = useConnectionState();
 const isStarting = computed(() => connection.value === 'connecting');
@@ -43,7 +47,6 @@ const searchOpen = ref(false);
 const client = useHarnessClient();
 const cheatSheetOpen = ref(false);
 const shortcutOverrides = ref<Record<string, string>>({});
-const searchPalette = useSearchPalette();
 
 // ── Resizable left rail ───────────────────────────────────────────────
 // Width is user-dragged and persisted to localStorage (pure UI chrome, no
@@ -125,15 +128,14 @@ function onGlobalKeydown(e: KeyboardEvent) {
     tag === 'TEXTAREA' ||
     (target?.isContentEditable ?? false);
 
-  // ⌘K / Ctrl+K → toggle search palette.
-  // Fire even when an input is focused if the palette is already open
-  // (so the user can dismiss with ⌘K from inside the palette input).
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-    if (isEditable && !searchPalette.isOpen.value) return;
-    e.preventDefault();
-    searchPalette.toggle();
-    return;
-  }
+  // ⌘K is NOT handled here. It belongs solely to useCommandPalette.ts's own
+  // `window` keydown listener (installed when CommandPalette.vue mounts).
+  // Until WP01 of engineer-truth-pass-01PMTP01, this handler also toggled
+  // the search palette on ⌘K, so both palettes opened on one keypress and
+  // painted on top of each other (equal z-50, CommandPalette later in the
+  // DOM). The search palette is still reachable — via the Titlebar/UserMenu
+  // entry and the `menu:search:open` OS-menu action (see App.vue) — it just
+  // no longer shares ⌘K.
 
   if (isEditable) return;
 
@@ -254,12 +256,16 @@ onBeforeUnmount(() => {
     </main>
   </div>
 
-  <!-- Search palette — floating ⌘K overlay (v0.5.6, search-palette-relocation).
+  <!-- Search palette — floating overlay (v0.5.6, search-palette-relocation).
+       Opened from the Titlebar/UserMenu entry and the `menu:search:open` OS
+       menu action (App.vue), not by ⌘K (engineer-truth-pass-01PMTP01 WP01:
+       ⌘K now belongs solely to the command palette, see useCommandPalette.ts).
        Rendered as a portal sibling so it sits above all z-index layers.
        Future: unified-search-01KX5R8C will expand to cross-entity results. -->
   <SearchPalette />
   <!-- Search modal — legacy Cmd-F full-page surface. Kept as the advanced
-       search entry point; the ⌘K palette is the primary entry point. -->
+       search entry point; ⌘K opens the command palette (CommandPalette.vue),
+       not this. -->
   <SearchModal v-if="searchOpen" @close="searchOpen = false" />
   <!-- Global overlays -->
   <CheatSheetModal
