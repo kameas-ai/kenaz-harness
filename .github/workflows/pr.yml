@@ -155,6 +155,17 @@ jobs:
         # it, so the regression it exists to prevent was uncaught.
         run: bash scripts/ci/check-cedar-gate-arguments.sh
 
+      - name: cedar engine singleton guard (I15)
+        # Added by WP05 of consent-surfaces-truth-01PMTR01 (the hoist to
+        # one shared *cedar.Engine per process). I13 checks the ARGUMENT
+        # at a call site; it has no vocabulary for "N separate engines
+        # exist where the product promises one" — which is why thirteen
+        # independent buildCedarGate/buildCedarEngineOrNil constructions
+        # passed it clean pre-hoist. Fails if a future change re-pins any
+        # gate site back to its own construction call, silently breaking
+        # SavePolicy + ReloadPolicies' reach to that gate.
+        run: bash scripts/ci/check-cedar-engine-singleton.sh
+
       - name: no-cred-bytes-in-rpc guard
         # Credential hygiene. CLAUDE.md lists this under "Local dev
         # commands" as though it were enforced; it was running only when a

@@ -462,17 +462,27 @@ func zzProbeProfile() corellm.ProviderProfile {
 
 // llmRegistryOverDataDir boots the production LLM stack over dataDir and
 // returns the registry it built. Every dependency other than the Core is
-// nil-tolerant; the point of the call is that the Cedar guard is
-// constructed inside newLLMStack exactly as it is at boot.
+// nil-tolerant; the point of the call is that the Cedar guard sees a real
+// engine over dataDir exactly as it does at boot.
+//
+// Pre-WP05, newLLMStack built this engine ITSELF via
+// buildCedarGate(coreDataDir(c)). WP05 hoisted engine construction to a
+// single call in rpc.New (a.cedarEngine), so newLLMStack now takes the
+// engine as a parameter instead of constructing its own — this helper
+// constructs the equivalent engine (identical cedar.Options; see
+// buildCedarEngineOrNil / buildCedarGate) and passes it explicitly,
+// reproducing the exact production wiring without going through the full
+// rpc.New boot sequence.
 func llmRegistryOverDataDir(t *testing.T, dataDir string) corellm.Registry {
 	t.Helper()
 	c, err := core.New(core.Options{DataDir: dataDir})
 	if err != nil {
 		t.Fatalf("core.New: %v", err)
 	}
+	cedarEngine := buildCedarEngineOrNil(dataDir)
 	stack := newLLMStack(c, NewStreamBroker(NewMultiEmitter()), newPersonalStore(c),
 		nil, nil, func() bool { return false }, nil, nil, nil, nil, nil, nil, nil,
-		nil, nil, nil, nil, nil, nil, nil, nil)
+		nil, nil, nil, nil, nil, nil, nil, nil, cedarEngine)
 	if stack.reg == nil {
 		t.Fatal("newLLMStack produced no registry — construction changed")
 	}

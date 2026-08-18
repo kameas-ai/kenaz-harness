@@ -495,8 +495,32 @@ type API struct {
 	// gate, etc.) can pass it into their gate constructors without
 	// re-plumbing through api.New.
 	promptRegistry *cedar.Registry
-	searchAPI      searchview.SearchAPI
-	storageAPI     storageview.StorageAPI
+
+	// cedarEngine is the process-singleton Cedar policy engine (WP05
+	// hoist, consent-surfaces-truth-01PMTR01 — "Recorded, not fixed" in
+	// the v0.63.1 release commit). Constructed exactly once in New from
+	// coreDataDir(c); nil when there is no DataDir (the nil-core test
+	// chassis) or construction failed at boot (logged, same fail-open
+	// contract buildCedarGate always had).
+	//
+	// Before this field existed, every one of the thirteen gate call
+	// sites below (memory write, workflows, scheduled chat, session
+	// export, the LLM model_select guard, the bash/fs/tool/recipe-spawn
+	// gates, the agentgraph policy adapter, ACP send/receive, MCP recipe
+	// spawn, and the cedarpolicy view itself) called
+	// buildCedarGate/buildCedarEngineOrNil INDEPENDENTLY — thirteen
+	// distinct *cedar.Engine instances, each with its own private
+	// atomic PolicySet. SavePolicy + ReloadPolicies (called by the
+	// cedarpolicy view's editor RPCs) only ever reloaded ONE of them,
+	// so a policy a user authored, saved, and watched ListPolicies
+	// report as "loaded" reached none of the other twelve gates without
+	// a process restart. Every site below now reads THIS instance
+	// (directly, or through the nil-safe cedarGate() accessor) instead
+	// — see check-cedar-engine-singleton.sh (I15), which fails when a
+	// second construction site reappears.
+	cedarEngine *cedar.Engine
+	searchAPI   searchview.SearchAPI
+	storageAPI  storageview.StorageAPI
 	// memStoreRef is the long-term memory store held for the search adapter
 	// (unified-search-01KX5R8C WP03). The main memory path (memoryAPI) is
 	// already wired; this ref lets the search lazy-init access it without
@@ -1284,14 +1308,27 @@ func New(c *core.Core, opts ...Option) *API {
 		}),
 	))
 
+	// Cedar policy engine — process-singleton (WP05 hoist,
+	// consent-surfaces-truth-01PMTR01). Constructed exactly ONCE, here,
+	// before any gate site below can ask for one. Every gate site in
+	// this constructor (and the free functions it calls: newToolsAPI,
+	// newLLMStack, newGraphManagerWithDeps, makeMCPRecipeBootstrap) now
+	// reads a.cedarEngine (or the nil-safe a.cedarGate() accessor)
+	// instead of independently calling buildCedarGate /
+	// buildCedarEngineOrNil — that independence is exactly what left an
+	// in-session policy edit unable to reach twelve of the thirteen
+	// gates it should have. See the field's doc comment on the API
+	// struct and check-cedar-engine-singleton.sh (I15).
+	a.cedarEngine = buildCedarEngineOrNil(coreDataDir(c))
+
 	// Wire the Cedar gate for BulkPurge (F-001 security fix). The gate is
 	// built from the same DataDir as every other Cedar gate in the chassis.
-	// When DataDir is empty (e.g. test mode) buildCedarGate returns AllowAll
+	// When DataDir is empty (e.g. test mode) a.cedarGate() returns AllowAll
 	// which is overridden by CheckAuditBulkPurge's fail-closed NotApplicable
 	// handling — a nil gate passed to WithGate means "ungated" (test posture).
 	var auditGate cedar.Gate
 	if c != nil && c.DataDir() != "" {
-		auditGate = buildCedarGate(c.DataDir())
+		auditGate = a.cedarGate()
 	}
 	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker), audit.WithGate(auditGate))
 	a.auditAPI = a.auditImpl
@@ -1484,7 +1521,7 @@ func New(c *core.Core, opts ...Option) *API {
 	// swap-in path, so whatever is installed here is what enforces for
 	// the process lifetime.
 	if gs, ok := memStore.(corememory.GateSetter); ok && gs != nil {
-		gs.SetGate(&memoryGateAdapter{gate: buildCedarGate(coreDataDir(c))})
+		gs.SetGate(&memoryGateAdapter{gate: a.cedarGate()})
 	}
 	personalForLLM := newPersonalStore(c)
 	embedder := newEmbedder(c, personalForLLM, settingsImpl)
@@ -1624,7 +1661,7 @@ func New(c *core.Core, opts ...Option) *API {
 	a.convMgr = newConversationManager(c)
 	a.corpusMgr = newCorpusManager(c, embedder)
 	var compactionPipeline *compaction.Pipeline
-	a.graphMgr, compactionPipeline = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore, settingsImpl)
+	a.graphMgr, compactionPipeline = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore, settingsImpl, a.cedarEngine)
 	// Wire the same FR-041 pipeline instance the kernel runs onto the
 	// Settings RPC surface, so edits made through
 	// core/rpc/views/compaction reach the live kernel path instead of
@@ -1653,7 +1690,7 @@ func New(c *core.Core, opts ...Option) *API {
 		Emitter: WailsEmitter{},
 	})
 
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl})
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, a.cedarEngine)
 	a.llmAPI = stack.api
 	// confirm-each-enforcement-01PMAG05 WP02: the resolve leg. Bound to
 	// the SAME bus the chat runner's tool adapter parks on — a second bus
@@ -1772,7 +1809,7 @@ func New(c *core.Core, opts ...Option) *API {
 	// branches which also pass nil today); tracked for follow-up
 	// (session-export-01NDFSEX05 WP02).
 	if c != nil {
-		a.sessionsAPI = sessions.WithExportOpts(a.sessionsAPI, buildCedarGate(c.DataDir()), nil, nil)
+		a.sessionsAPI = sessions.WithExportOpts(a.sessionsAPI, a.cedarGate(), nil, nil)
 	}
 	if c != nil && a.dispatchPool != nil {
 		// Wire the dispatch pool (all transports) onto Core.MCP so the
@@ -1796,7 +1833,7 @@ func New(c *core.Core, opts ...Option) *API {
 			// re-opens stdio recipes (it uses pool.Open(stdioSpecs)); remote
 			// recipes are re-opened through the tools view's InstallRecipe
 			// which already uses the dispatch pool's OpenOne.
-			c.SetMCPRecipeBootstrap(makeMCPRecipeBootstrap(c, a.stdioPool, stack.secrets, a.promptRegistry, buildCedarEngineOrNil(c.DataDir()), mcpUserRecipeSource(a.mcpUserStore)))
+			c.SetMCPRecipeBootstrap(makeMCPRecipeBootstrap(c, a.stdioPool, stack.secrets, a.promptRegistry, a.cedarEngine, mcpUserRecipeSource(a.mcpUserStore)))
 		}
 	}
 	// Late-wire the health pool onto the mcp view (constructed before the
@@ -1810,7 +1847,7 @@ func New(c *core.Core, opts ...Option) *API {
 	// Pass the dispatch pool as the tools-view PoolController so
 	// InstallRecipe/UninstallRecipe route http/sse recipes to the right
 	// transport sub-pool.
-	a.toolsAPI = newToolsAPI(c, a.dispatchPool, stack.secrets, a.promptRegistry, a.cedarPolicyAPI, opt.connectorTokens, mcpUserRecipeSource(a.mcpUserStore))
+	a.toolsAPI = newToolsAPI(c, a.dispatchPool, stack.secrets, a.promptRegistry, a.cedarPolicyAPI, opt.connectorTokens, mcpUserRecipeSource(a.mcpUserStore), a.cedarGate())
 	// Register the fsrequest built-in after toolsAPI is wired so the
 	// tool's delegate can be the real (non-stub) implementation. The
 	// tool is registered unconditionally; the EnabledFilter gates
@@ -2021,7 +2058,7 @@ func New(c *core.Core, opts ...Option) *API {
 			Store:           wfStore,
 			Scheduler:       sched,
 			WorkflowCatalog: wfCatalog,
-			Cedar:           buildCedarGate(coreDataDir(c)),
+			Cedar:           a.cedarGate(),
 			CedarModeFn:     workflowCedarModeFn(settingsImpl),
 		})
 	}
@@ -2116,19 +2153,30 @@ func New(c *core.Core, opts ...Option) *API {
 	}
 
 	// CedarPolicy view (mission cedar-credential-policy-01KQ8TDE, WP02 + WP09).
-	// Constructs a process-singleton *cedar.Engine so the policy-panel
-	// RPC surface can list loaded policy files, surface recent decisions,
-	// and (WP09) write/revoke `<family>_allow_*.cedar` snippets with an
-	// engine reload after each mutation. nil Core / empty DataDir falls
-	// back to NewAPIWithDataDir(nil, "") which serves empty slices and
-	// rejects snippet writes with a typed error.
+	// Reads the SAME a.cedarEngine every other gate site consults (WP05
+	// hoist) so the policy-panel RPC surface's ListPolicies / Reload /
+	// RecentDecisions operate on the instance that actually gates
+	// memory writes, workflows, bash, tools, etc. — not a private
+	// engine of its own.
+	//
+	// Before the hoist this block called buildCedarEngineOrNil AGAIN,
+	// producing a second, independent *cedar.Engine that no gate ever
+	// called Evaluate on. That is precisely why RecentDecisions was
+	// structurally always empty (spec's §1.1 finding): e.decisions.Append
+	// only fires inside Engine.Evaluate, and nothing ever evaluated
+	// against the view's private copy. Sharing a.cedarEngine here is
+	// what makes WP06's denial panel show real decisions.
+	//
+	// nil Core / empty DataDir leaves a.cedarEngine nil, and this block
+	// falls back to NewAPIWithDataDir(nil, "") exactly as before, which
+	// serves empty slices and rejects snippet writes with a typed error.
 	{
 		var cedarDataDir string
 		if c != nil {
 			cedarDataDir = c.DataDir()
 		}
 		var cedarEng cedarpolicyview.Engine
-		if eng := buildCedarEngineOrNil(cedarDataDir); eng != nil {
+		if eng := a.cedarEngine; eng != nil {
 			if e2, ok := any(eng).(cedarpolicyview.Engine); ok {
 				cedarEng = e2
 			}
@@ -2185,11 +2233,13 @@ func New(c *core.Core, opts ...Option) *API {
 			// Audit emitter — bridge the audit API ring buffer.
 			Audit: &acpAuditBridge{impl: a.auditImpl},
 		}
-		// Wire the Cedar engine so the acp_send and acp_receive gates
-		// actually enforce policy. buildCedarEngineOrNil returns nil on
-		// construction failure (logged as a warning); the API tolerates
-		// nil and falls back to permissive (default-allow posture).
-		if eng := buildCedarEngineOrNil(c.DataDir()); eng != nil {
+		// Wire the shared Cedar engine (WP05 hoist) so the acp_send and
+		// acp_receive gates actually enforce policy — and so a policy
+		// reload reaches them like every other gate. a.cedarEngine is
+		// nil on construction failure (logged as a warning at boot); the
+		// API tolerates nil and falls back to permissive (default-allow
+		// posture).
+		if eng := a.cedarEngine; eng != nil {
 			acpOpts.Cedar = acpview.NewEngineAdapter(eng)
 		}
 		a.acpAPI = acpview.NewAPI(acpReg, acpEnv, acpOpts)
@@ -2213,7 +2263,7 @@ func New(c *core.Core, opts ...Option) *API {
 		// that runs prompts on a cron consulted no policy at all.
 		a.scheduledChatAPI = scheduledchatview.New(scheduledchatview.Config{
 			Store: chatStore,
-			Cedar: buildCedarGate(coreDataDir(c)),
+			Cedar: a.cedarGate(),
 		})
 	}
 
@@ -2847,9 +2897,10 @@ func New(c *core.Core, opts ...Option) *API {
 		}
 		var cbGate cedar.Gate
 		if a.promptRegistry != nil {
-			// Reuse the same Cedar gate the rest of the RPC layer uses.
+			// Reuse the same shared Cedar gate every other site uses (WP05
+			// hoist) — not a freshly-built one.
 			if c != nil && c.DataDir() != "" {
-				cbGate = buildCedarGate(c.DataDir())
+				cbGate = a.cedarGate()
 			}
 		}
 		if cbImpl := newContextBootstrapAPI(contextBootstrapDeps{
@@ -3728,7 +3779,13 @@ func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secr
 // Returns the stub when c is nil — the test harness path constructs
 // rpc.New(nil) and we keep the chassis bootable without crashing on
 // the catalog access.
-func newToolsAPI(c *core.Core, pool tools.PoolController, secretsBackend *secrets.MemoryBackend, promptReg *cedar.Registry, cedarPolicyAPI cedarpolicyview.CedarPolicyAPI, connectorTokens tools.ConnectorTokenSource, userSource func() []recipes.Recipe) tools.ToolsAPI {
+//
+// cedarGate is the process-shared Cedar gate (WP05 hoist,
+// consent-surfaces-truth-01PMTR01) — a.cedarGate() at this function's
+// only call site — rather than a freshly-built engine of this
+// function's own, so a policy save + reload reaches recipe-spawn like
+// every other gate.
+func newToolsAPI(c *core.Core, pool tools.PoolController, secretsBackend *secrets.MemoryBackend, promptReg *cedar.Registry, cedarPolicyAPI cedarpolicyview.CedarPolicyAPI, connectorTokens tools.ConnectorTokenSource, userSource func() []recipes.Recipe, cedarGate cedar.Gate) tools.ToolsAPI {
 	if c == nil {
 		return &stubTools{}
 	}
@@ -3760,7 +3817,9 @@ func newToolsAPI(c *core.Core, pool tools.PoolController, secretsBackend *secret
 		// shipped `mcp-no-npx.cedar` template, whose whole purpose is
 		// to forbid spawning npx-based MCP servers, never ran. Found by
 		// check-cedar-gate-arguments.sh while wiring the A1/A2 sites.
-		Gate: buildCedarGate(dataDir),
+		// cedarGate is the process-shared engine (WP05 hoist) passed in
+		// by the caller, not a private one built here.
+		Gate: cedarGate,
 		// Served mode only (spec 091 D8): broker-backed OAuth fallback.
 		// nil on the desktop path — behaviour unchanged.
 		ConnectorTokens: connectorTokens,
@@ -3944,6 +4003,18 @@ func newLLMStack(
 	// every path (confirm-each-enforcement-01PMAG05 WP05 / FR-007). nil
 	// silences the trail; the decision itself is unaffected.
 	confirmAudit contextaudit.Emitter,
+	// cedarEngine is the process-shared Cedar engine (WP05 hoist,
+	// consent-surfaces-truth-01PMTR01) — a.cedarEngine at this
+	// function's production call site in New(). newLLMStack is the only
+	// door to llmregistry.Options.Policy (the registry exposes no
+	// setter) AND the source of bashCedarEngine for the builtin bash/fs
+	// tool registrations below, so both consumers now read the SAME
+	// instance every other gate site does, instead of each building its
+	// own. nil is the documented degrade-to-AllowAll / degrade-to-
+	// legacy-allowlist path (empty DataDir, the nil-core test chassis,
+	// or a boot-time construction failure already logged by
+	// buildCedarEngineOrNil).
+	cedarEngine *cedar.Engine,
 ) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
@@ -3958,9 +4029,15 @@ func newLLMStack(
 	//
 	// llmregistry.Options.Policy is the only door — the registry
 	// exposes no policy setter — so this must be the real gate at
-	// construction. buildCedarGate degrades to AllowAll only when there
-	// is no DataDir (nil-core test chassis).
-	cedarGuard := cedar.NewLLMPolicyGuard(buildCedarGate(coreDataDir(c)))
+	// construction. cedarEngine degrades to AllowAll only when there is
+	// no DataDir (nil-core test chassis) or construction failed — same
+	// contract buildCedarGate always had, now sourced from the shared
+	// instance instead of a private one (WP05 hoist).
+	var cedarLLMGate cedar.Gate = cedar.AllowAll{}
+	if cedarEngine != nil {
+		cedarLLMGate = cedarEngine
+	}
+	cedarGuard := cedar.NewLLMPolicyGuard(cedarLLMGate)
 	reg, err := llmregistry.New(llmregistry.Options{
 		Resolver: credref.New(secretsBackend),
 		Policy:   cedarGuard,
@@ -4065,17 +4142,16 @@ func newLLMStack(
 	if settingsImpl != nil {
 		settingsStore = settingsImpl.Store()
 	}
-	// Cedar engine for the bash gate (WP03). Built per-stack so the
-	// bash tool's Cedar gate is wired at construction time. The prompt
-	// registry is the process-singleton constructed in api.New() (with
-	// a broker dispatcher) and threaded in here so every gate emits on
-	// the same topics the permissions view reads from. Both are nil-
-	// tolerant: when nil the bash tool falls back to the legacy
-	// allowlist gate so the test harness path (New(nil)) keeps working.
-	var bashCedarEngine *cedar.Engine
-	if dataDir != "" {
-		bashCedarEngine = buildCedarEngineOrNil(dataDir)
-	}
+	// Cedar engine for the bash gate (WP03), now the process-shared
+	// instance (WP05 hoist) rather than one built fresh per-stack — a
+	// policy save + reload must reach the bash gate exactly like every
+	// other one. The prompt registry is the process-singleton
+	// constructed in api.New() (with a broker dispatcher) and threaded
+	// in here so every gate emits on the same topics the permissions
+	// view reads from. Both are nil-tolerant: when nil the bash tool
+	// falls back to the legacy allowlist gate so the test harness path
+	// (New(nil)) keeps working.
+	bashCedarEngine := cedarEngine
 	// A default resolution budget of DefaultBudget (50) per locator per session.
 	// A nil exposureIdx safely skips list_secrets registration.
 	var secretsBudget *credstoreRefs.Budget
@@ -5832,7 +5908,7 @@ func newCorpusManager(c *core.Core, embedder corememory.Embedder) *corecorpus.Ma
 // library and runs in-memory graphs; user-graph persistence is the
 // only feature lost when DataDir is empty.
 func newGraphManager(c *core.Core) *graphview.Manager {
-	mgr, _ := newGraphManagerWithDeps(c, nil, nil, nil, nil, nil, nil)
+	mgr, _ := newGraphManagerWithDeps(c, nil, nil, nil, nil, nil, nil, nil)
 	return mgr
 }
 
@@ -5994,6 +6070,12 @@ func newGraphManagerWithDeps(
 	embedder corememory.Embedder,
 	bashStore *corebash.Store,
 	settingsImpl *settings.API,
+	// cedarEngine is the process-shared Cedar engine (WP05 hoist,
+	// consent-surfaces-truth-01PMTR01) — a.cedarEngine at the
+	// production call site in New(). nil degrades to AllowAll exactly
+	// as buildCedarGate("") always did (empty DataDir, the nil-core
+	// test chassis, or a logged boot-time construction failure).
+	cedarEngine *cedar.Engine,
 ) (*graphview.Manager, *compaction.Pipeline) {
 	dataDir := ""
 	if c != nil {
@@ -6018,16 +6100,21 @@ func newGraphManagerWithDeps(
 	if memStore != nil {
 		deps.Memory = graphview.NewMemoryStoreAdapter(memStore, embedder)
 	}
-	// Cedar policy gate: build a real *cedar.Engine when a DataDir is
-	// available so user-supplied policies in <DataDir>/policy/*.cedar
-	// take effect immediately. The Engine ships an embedded default
-	// policy bundle that permits the five gate categories with logging
-	// — so an empty <DataDir>/policy/ still gives the harness's
+	// Cedar policy gate: the process-shared engine (WP05 hoist) when one
+	// was constructed, so user-supplied policies in <DataDir>/policy/*.cedar
+	// take effect immediately AND a later SavePolicy + Reload reaches
+	// this gate like every other one. The Engine ships an embedded
+	// default policy bundle that permits the five gate categories with
+	// logging — so an empty <DataDir>/policy/ still gives the harness's
 	// "default-allow with audit" stance, not a fail-closed posture.
-	// Falls back to AllowAll when the engine cannot be constructed
-	// (e.g. nil Core, nil DataDir, or a corrupt policy file) so the
-	// chassis still boots; the user sees the failure in the audit log.
-	deps.Policy = graphview.NewPolicyGateAdapter(buildCedarGate(dataDir))
+	// Falls back to AllowAll when no engine was constructed (e.g. nil
+	// Core, nil DataDir, or a corrupt policy file) so the chassis still
+	// boots; the user sees the failure in the audit log.
+	var graphCedarGate cedar.Gate = cedar.AllowAll{}
+	if cedarEngine != nil {
+		graphCedarGate = cedarEngine
+	}
+	deps.Policy = graphview.NewPolicyGateAdapter(graphCedarGate)
 	if bashStore != nil {
 		deps.BashStore = bashStore
 		deps.BashOutput = graphview.NewBashOutputStoreAdapter(bashStore)
@@ -7504,13 +7591,36 @@ func (a *API) StreamBroker() *StreamBroker { return a.broker }
 // context.  The desktop Wails path is unaffected.
 func (a *API) EventBus() *EventBus { return a.eventBus }
 
-// buildCedarEngineOrNil constructs a *cedar.Engine for callers that
-// need the concrete Engine type — the cedarpolicy view (ListPolicies /
-// Reload / RecentDecisions / WritePolicySnippet) and the bash gate
-// (WP03+). Returns nil when dataDir is empty so callers can degrade
-// gracefully rather than booting a disk-walk engine with nowhere to
-// walk. Mirrors buildCedarGate's options but returns *Engine instead
-// of the Gate interface.
+// cedarGate returns a.cedarEngine as a cedar.Gate, falling back to
+// cedar.AllowAll{} when no engine was constructed (empty DataDir, the
+// nil-core test chassis, or a construction failure logged at boot).
+// This is the nil-safe read side of the WP05 hoist (see the
+// cedarEngine field's doc comment on API): every gate site that used
+// to call buildCedarGate(dataDir) directly now calls a.cedarGate()
+// instead, so they all consult the SAME instance a policy-editor
+// SavePolicy + ReloadPolicies mutates. The fail-open contract is
+// unchanged from buildCedarGate's — this function does not alter
+// DefaultDeny or any allow/deny semantics, only which object answers.
+func (a *API) cedarGate() cedar.Gate {
+	if a == nil || a.cedarEngine == nil {
+		return cedar.AllowAll{}
+	}
+	return a.cedarEngine
+}
+
+// buildCedarEngineOrNil constructs a *cedar.Engine. In production it
+// has exactly ONE caller — the WP05 hoist site in New(), which stores
+// the result on a.cedarEngine — enforced by
+// check-cedar-engine-singleton.sh (I15). Tests call it directly to
+// exercise its own fail-open contract in isolation, and the two
+// remaining free-function call sites that cannot see `a` (newLLMStack,
+// newGraphManagerWithDeps — see their doc comments) receive the
+// already-built engine as a parameter rather than calling this again.
+//
+// Returns nil when dataDir is empty so callers can degrade gracefully
+// rather than booting a disk-walk engine with nowhere to walk. Mirrors
+// buildCedarGate's options but returns *Engine instead of the Gate
+// interface.
 func buildCedarEngineOrNil(dataDir string) *cedar.Engine {
 	if dataDir == "" {
 		return nil
