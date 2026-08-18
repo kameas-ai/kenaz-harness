@@ -3,8 +3,64 @@ package harness
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 )
+
+// harnessToolNamePattern matches any harness_* identifier token that could
+// appear in a starter prompt's markdown body. Mirrors AC-003's
+// `grep -o 'harness_[a-z_]*'` contract.
+var harnessToolNamePattern = regexp.MustCompile(`harness_[a-z_]+`)
+
+// registeredHarnessToolNames returns the live registered tool-name set by
+// actually calling RegisterAll — not a hand-written list in the test, which
+// is exactly the drift that let code.md:23 survive the
+// harness_write_propose_cedar_policy deletion (first-run-onboarding-01PMOB01
+// spec §"Prompt truth pass"). A zero-value Managers{} is fine: RegisterAll
+// only wires handler funcs, it never invokes them.
+func registeredHarnessToolNames(t *testing.T) map[string]bool {
+	t.Helper()
+	srv := RegisterAll(NewServer(), Managers{})
+	out := make(map[string]bool)
+	for _, spec := range srv.Tools() {
+		out[spec.Name] = true
+	}
+	return out
+}
+
+// TestStarterPromptsNameOnlyRegisteredTools is WP01's load-bearing test
+// (FR-001 / AC-003): every harness_* identifier extracted from a shipped
+// starter's markdown body must resolve to a tool RegisterAll actually
+// registered. It is a table test over the full shipped starter set so a
+// future starter addition is covered automatically.
+//
+// Mutation: re-add `harness_write_propose_cedar_policy` to code.md (the
+// tool the 2026-08-14 sweep deleted from register.go). This test must fail.
+func TestStarterPromptsNameOnlyRegisteredTools(t *testing.T) {
+	t.Parallel()
+	registered := registeredHarnessToolNames(t)
+
+	starters, err := LoadStarters("")
+	if err != nil {
+		t.Fatalf("LoadStarters: %v", err)
+	}
+	if len(starters) == 0 {
+		t.Fatal("LoadStarters(\"\") returned no starters — nothing to check")
+	}
+
+	for _, s := range starters {
+		s := s
+		t.Run(s.ID, func(t *testing.T) {
+			t.Parallel()
+			names := harnessToolNamePattern.FindAllString(s.SystemPrompt, -1)
+			for _, name := range names {
+				if !registered[name] {
+					t.Errorf("starter %q names %q, which is not in register.go's registered tool set", s.ID, name)
+				}
+			}
+		})
+	}
+}
 
 // TestLoadStarters_Embedded asserts the five canonical starters ship.
 func TestLoadStarters_Embedded(t *testing.T) {
