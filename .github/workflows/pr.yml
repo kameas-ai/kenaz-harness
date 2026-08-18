@@ -39,6 +39,16 @@ jobs:
           # Modules carry over naturally; no caching needed.
           cache: false
 
+      - name: fetch origin/main + tags (upgrade-snapshots-locked needs history)
+        # actions/checkout defaults to fetch-depth 1 (just the PR ref), so
+        # origin/main does not resolve without this. check-upgrade-
+        # snapshots-locked.sh diffs against it to decide whether a
+        # snapshot directory is already "shipped" (spec §4), and reads
+        # the release-tag list to bound which directories are "locked".
+        run: |
+          git fetch --no-tags --depth=1 origin main:refs/remotes/origin/main
+          git fetch --tags --depth=1 origin
+
       - name: go mod download
         run: go mod download
 
@@ -241,6 +251,13 @@ jobs:
         # allow-lists both today (spec §4.4/WP08 retires them).
         run: bash scripts/ci/check-no-forbidden-compaction-symbols.sh
 
+      - name: upgrade-snapshots-locked guard
+        # upgrade-path-coverage-01PMUG01 WP02, spec §4/§6.2. Snapshot
+        # directories under core/storage/sqlite/testdata/upgrade/ for an
+        # already-released tag are immutable — a "fix" that edits one
+        # invalidates it as ground truth for the upgrade-path job.
+        run: bash scripts/ci/check-upgrade-snapshots-locked.sh
+
       # csp guard runs in test-frontend after `npm run build` produces
       # the real frontend/dist/index.html — there's no point checking
       # the CSP of a stub.
@@ -332,6 +349,37 @@ jobs:
         env:
           CGO_ENABLED: "1"
         run: go test ./core/llm/... ./core/rpc/views/agentgraph/chat/... -run WireGolden -count=1 -short -race
+
+  upgrade-path:
+    name: Upgrade-path coverage
+    # upgrade-path-coverage-01PMUG01 WP02. Materialises every committed
+    # snapshot under core/storage/sqlite/testdata/upgrade/<tag>/dump.sql
+    # (a database a PREVIOUS release produced) and drives it through the
+    # production storagesqlite.Open path at HEAD — the class of coverage
+    # the v0.63.0 P0 proved the rest of the suite structurally cannot
+    # provide (spec.md §1.2: every other test starts from an empty
+    # database, where the max-based-selection defect cannot occur).
+    runs-on: [self-hosted, Linux, ARM64, ci-medium]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: go mod download
+        run: go mod download
+
+      - name: ensure frontend/dist exists for embed
+        run: |
+          mkdir -p frontend/dist
+          touch frontend/dist/.gitkeep
+
+      - name: upgrade-path test
+        env:
+          CGO_ENABLED: "1"
+        run: go test ./core/storage/sqlite/... -run TestUpgradePath -count=1 -short -race -v
 
   test-frontend:
     name: Frontend tests + typecheck

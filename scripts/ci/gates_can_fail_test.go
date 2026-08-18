@@ -19,12 +19,13 @@
 //     Testing this is the only way to know; every gate in this directory
 //     "looked correct" while being incapable of failing.
 //
-// NOTE — THIS TEST DOES NOT RUN IN CI YET. pr.yml's test-go step scopes to
-// `./core/... ./cmd/harness-vm/...`, which excludes ./scripts/... along with
-// the root package, cmd/kenaz-updater and cmd/mcpsubcmd — 18 test functions
-// that never execute. Add `./scripts/...` (at minimum) to that step. It is a
-// one-line change, deliberately not made here because #279 is concurrently
-// editing .github/workflows/pr.yml.
+// THIS TEST RUNS IN CI as its own "gate meta-tests" step in pr.yml's
+// test-go job (`go test ./scripts/... -count=1`), separated from the
+// `-race` suite deliberately: these tests shell out to mutate a scratch
+// tree, and running them concurrently with `-race` poisons the Go
+// build cache (sources hashed mid-edit — see CLAUDE.md's "Cross-cutting
+// risks" note and spec.md §7 for upgrade-path-coverage-01PMUG01, which
+// hit this directly while writing its own planted-violation cases).
 
 package ci_test
 
@@ -65,6 +66,33 @@ func runGate(t *testing.T, script, workdir string) (int, string) {
 	return -1, ""
 }
 
+// runGateEnv is runGate with extra environment variables layered on top
+// of the current process's environment. nil/empty env behaves exactly
+// like runGate.
+func runGateEnv(t *testing.T, script, workdir string, env map[string]string) (int, string) {
+	t.Helper()
+	if len(env) == 0 {
+		return runGate(t, script, workdir)
+	}
+	scriptPath := filepath.Join(repoRoot(t), "scripts", "ci", script)
+	cmd := exec.Command("bash", scriptPath)
+	cmd.Dir = workdir
+	cmd.Env = os.Environ()
+	for k, v := range env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return 0, string(out)
+	}
+	var exitErr *exec.ExitError
+	if ok := asExitError(err, &exitErr); ok {
+		return exitErr.ExitCode(), string(out)
+	}
+	t.Fatalf("running %s: %v (output: %s)", script, err, out)
+	return -1, ""
+}
+
 func asExitError(err error, target **exec.ExitError) bool {
 	e, ok := err.(*exec.ExitError)
 	if ok {
@@ -87,6 +115,7 @@ var cwdSensitiveGates = []string{
 	"check-builtin-tool-registration.sh",
 	"check-single-move-writer.sh",
 	"check-cedar-gate-arguments.sh",
+	"check-upgrade-snapshots-locked.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -128,6 +157,7 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 		file    string // repo-relative path to create, or "" to append
 		append  string // when file already exists, append this instead
 		content string
+		env     map[string]string // extra env vars for this case's runGate call, if any
 	}{
 		{
 			name:    "binding-names/double-underscore",
@@ -375,6 +405,23 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			// slog.String(...) is how a multi-line log call spells its keys.
 			content: "package rpc\n\nvar zzGateProbe = slog.String(\"Prompt\", p)\n",
 		},
+		{
+			// upgrade-path-coverage-01PMUG01 WP02. Byte-mutate an already
+			// COMMITTED snapshot file (core/storage/sqlite/testdata/
+			// upgrade/v0.63.0/dump.sql — committed in this mission's own
+			// WP01 commit, so it is present at HEAD by the time this test
+			// runs) and confirm the gate rejects the mismatch. The gate's
+			// real comparison base in CI is origin/main (see the script's
+			// header) — UPGRADE_SNAPSHOTS_BASE_REF=HEAD here points it at
+			// this branch's own last commit instead, which already
+			// contains the unmutated file, so this exercises the SAME
+			// git-diff codepath the CI gate uses, not a mock of it.
+			name:   "upgrade-snapshots-locked/byte-mutation",
+			gate:   "check-upgrade-snapshots-locked.sh",
+			file:   "core/storage/sqlite/testdata/upgrade/v0.63.0/dump.sql",
+			append: "-- zzGateProbe: this byte must not be here\n",
+			env:    map[string]string{"UPGRADE_SNAPSHOTS_BASE_REF": "HEAD"},
+		},
 	}
 
 	for _, tc := range cases {
@@ -385,7 +432,7 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			cleanup := plant(t, full, tc.content, tc.append)
 			defer cleanup()
 
-			code, out := runGate(t, tc.gate, root)
+			code, out := runGateEnv(t, tc.gate, root, tc.env)
 			if code == 0 {
 				t.Fatalf("%s exited 0 with a planted violation in %s — the gate cannot fail.\noutput:\n%s",
 					tc.gate, tc.file, out)
