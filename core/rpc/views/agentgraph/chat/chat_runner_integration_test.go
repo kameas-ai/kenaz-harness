@@ -1455,19 +1455,19 @@ func buildBranchAwareRunner(
 
 // TestChatRunnerIntegration_MergeSuggestion_ActiveBranchChild_FiresOnTerminalToken
 // pins finding B16 end-to-end: a chat turn on an active branch's child
-// session that completes cleanly causes the kernel Env's MergeSuggester
-// (assigned through the real EnvDeps.applyTo path, not hand-set in the
-// test) to fire, and the chat runner emits branches:merge-suggested so
-// the frontend toast (useEventToasts.ts, "Merge now") has something to
-// subscribe to. RunComplete outranks the terminal-token / idle-timeout
-// heuristics in MergeSuggester.Inspect's priority order (see
-// branch_merge_suggester.go), and every clean driveRun exit that isn't
-// an Ask-pause genuinely means "the child run finished" — so
-// child_run_complete, not terminal_state_token, is the reason a real
-// completed turn reports; the assistant's reply text is still exercised
-// here (a terminal-token phrase) because a future caller that supplies
-// RunComplete:false for an in-progress child would need the token match
-// to carry the suggestion instead.
+// session that completes cleanly AND whose reply reads like a conclusion
+// causes the kernel Env's MergeSuggester (assigned through the real
+// EnvDeps.applyTo path, not hand-set in the test) to fire, and the chat
+// runner emits branches:merge-suggested so the frontend toast
+// (useEventToasts.ts, "Merge now") has something to subscribe to.
+//
+// The reason is terminal_state_token, not child_run_complete:
+// fireMergeSuggestion passes RunComplete:false because there is no
+// background child kernel run in this architecture to have reached a
+// terminal state (BranchSeamAdapter.WaitForChildRun is a no-op). See the
+// comment on the Inspect call in merge_suggestion.go — passing true
+// there would fire on every branch turn under copy that is not true, and
+// would leave the terminal-token and idle rules unreachable.
 func TestChatRunnerIntegration_MergeSuggestion_ActiveBranchChild_FiresOnTerminalToken(t *testing.T) {
 	llm := &stubLLM{}
 	llm.push(stubLLMResponse{
@@ -1498,8 +1498,54 @@ func TestChatRunnerIntegration_MergeSuggestion_ActiveBranchChild_FiresOnTerminal
 	if payload.BranchID != "br-merge-1" {
 		t.Errorf("MergeSuggestionPayload.BranchID = %q, want br-merge-1", payload.BranchID)
 	}
-	if payload.Reason != "child_run_complete" {
-		t.Errorf("MergeSuggestionPayload.Reason = %q, want child_run_complete", payload.Reason)
+	if payload.Reason != "terminal_state_token" {
+		t.Errorf("MergeSuggestionPayload.Reason = %q, want terminal_state_token", payload.Reason)
+	}
+}
+
+// TestChatRunnerIntegration_MergeSuggestion_ActiveBranchChild_NoTerminalToken_NeverFires
+// is the third case the original WP08 test set could not express, because
+// fireMergeSuggestion passed RunComplete:true and so fired on every clean
+// branch-child turn regardless of content: an active branch child whose
+// reply is an ordinary mid-investigation update must NOT suggest a merge.
+// Without this the suggester's heuristic is decorative — the emit would
+// be a function of "is this a branch child?" alone, and a branch would be
+// told it looks finished on its very first reply.
+// (engineer-truth-pass-01PMTP01 WP08 review.)
+func TestChatRunnerIntegration_MergeSuggestion_ActiveBranchChild_NoTerminalToken_NeverFires(t *testing.T) {
+	llm := &stubLLM{}
+	llm.push(stubLLMResponse{
+		stream: []coreag.StreamEvent{
+			{Kind: coreag.StreamEventText, Text: "Still digging through the stack traces; I will keep going."},
+		},
+		resp: coreag.LLMResponse{
+			Content:      "Still digging through the stack traces; I will keep going.",
+			FinishReason: "stop",
+		},
+	})
+
+	// Same active-branch-child wiring as the positive test — only the
+	// assistant's reply text differs, so a failure here is about the
+	// heuristic and not about the gate.
+	seam := coreag.NewFakeBranchSeam()
+	seam.ChildToBranch["child-session-2"] = "br-merge-2"
+	suggester := coreag.NewMergeSuggester()
+
+	runner, broker := buildBranchAwareRunner(t, llm, seam, suggester, []coreag.Message{
+		{Role: "user", Content: "any progress?"},
+	})
+
+	_, err := runner.StartStream(context.Background(), "profile-1", "child-session-2", "", "any progress?")
+	if err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	_ = waitForClosed(t, broker)
+
+	// Give the async trigger the same grace the ordinary-session negative
+	// case gets before concluding it did not fire.
+	time.Sleep(100 * time.Millisecond)
+	if hasMergeSuggested(broker) {
+		t.Errorf("unexpected branches:merge-suggested for a non-terminal branch-child reply: %+v", broker.snapshot())
 	}
 }
 

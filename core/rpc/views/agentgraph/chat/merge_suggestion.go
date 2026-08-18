@@ -65,11 +65,31 @@ func (r *ChatRunner) fireMergeSuggestion(sessionID string, branchSeam coreag.Bra
 		return
 	}
 
+	// RunComplete is deliberately FALSE here. It means "the child kernel
+	// run reached a terminal state (run_complete event)" — and in this
+	// architecture there is no background child kernel run to reach one:
+	// BranchSeamAdapter.WaitForChildRun is a documented no-op and the
+	// branch's child session is chatted one interactive turn at a time.
+	// Passing true would short-circuit MergeSuggester.Inspect's first
+	// arm unconditionally (see branch_merge_suggester.go), which has two
+	// consequences: every clean turn on a branch child emits, including
+	// the branch's very first reply, under the copy "Branch run finished
+	// — Child run reached a terminal state." (false); and the suggester's
+	// terminal-token and idle-timeout rules become unreachable from the
+	// only production caller — i.e. the wiring would leave two thirds of
+	// the heuristic dead, which is the exact defect class this mission
+	// exists to remove. Leaving it false lets the terminal-token rule
+	// decide, so the toast fires when the child's reply actually reads
+	// like a conclusion. (engineer-truth-pass-01PMTP01 WP08 review.)
 	suggestion := suggester.Inspect(coreag.ChildRunStatus{
 		BranchID:         branchID,
 		LastAssistantMsg: lastAssistantMsg,
 		LastActivityAt:   time.Now().UTC(),
-		RunComplete:      true,
+		RunComplete:      false,
+		// The turn just ended, so nothing is in flight. LastActivityAt is
+		// "now", so the idle rule cannot fire on this path; it stays
+		// reachable for a future caller that inspects a parked child.
+		HasInflightNodes: false,
 	})
 	if suggestion.Reason == "" {
 		log.Debug("chat.merge_suggestion.no_fire", "session_id", sessionID, "branch_id", branchID)
