@@ -33,7 +33,10 @@ func TestContextGraphSyncer_AuditEmitterWired(t *testing.T) {
 		t.Fatalf("core.New: %v", err)
 	}
 
-	api := New(c)
+	// WithSettingsStore(newTestStore(t)) (upgrade-path-coverage-01PMUG01
+	// FR-4a): without it this boots against the developer's real
+	// settings.json via settings.NewFileStoreFromEnv().
+	api := New(c, WithSettingsStore(newTestStore(t)))
 
 	if api.ctxGraphSyncer == nil {
 		t.Fatal("ctxGraphSyncer is nil — ContextGraphSyncer was not wired; check the contextsAPI type-assertion gate in api.go")

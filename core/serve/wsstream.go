@@ -159,6 +159,13 @@ var passthroughTopics = []string{
 	// is PARKED with no deadline, so a dropped confirm-pending frame is
 	// not a missing notification — it is a turn that never resumes.
 	rpc.TopicToolConfirmPending,
+
+	// Boot-time migration drift, severity:"error" only
+	// (upgrade-path-coverage-01PMUG01 WP04, FR-3c). Without this a served
+	// workbench user with a corrupted ledger gets no signal at all —
+	// the desktop build's toast is the only surface, and served mode has
+	// no other path to Settings → Health either.
+	rpc.TopicMigrationDriftDetected,
 }
 
 // subscribedTopics is every topic the WS handler subscribes to: the

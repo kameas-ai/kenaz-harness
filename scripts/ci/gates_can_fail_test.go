@@ -19,15 +19,13 @@
 //     Testing this is the only way to know; every gate in this directory
 //     "looked correct" while being incapable of failing.
 //
-// THIS TEST NOW RUNS IN CI. Fixed in #293 (fix(ci): run the gate meta-tests,
-// which have never run in CI) — pr.yml's test-go job gained a dedicated
-// `go test ./scripts/... -count=1` step. Previously this whole file's test
-// functions, including its own planted-violation proofs, never executed —
-// exactly the "gate whose clean verdict is indistinguishable from did not
-// look" class this file exists to catch, applied to itself. Verified
-// 2026-08-18 (self-update-repair-01PMUP01 WP06): `go test ./scripts/...
-// -count=1` from the repo root runs this file's tests, including the new
-// broker-topic-consumers.sh proof below.
+// THIS TEST RUNS IN CI as its own "gate meta-tests" step in pr.yml's
+// test-go job (`go test ./scripts/... -count=1`), separated from the
+// `-race` suite deliberately: these tests shell out to mutate a scratch
+// tree, and running them concurrently with `-race` poisons the Go
+// build cache (sources hashed mid-edit — see CLAUDE.md's "Cross-cutting
+// risks" note and spec.md §7 for upgrade-path-coverage-01PMUG01, which
+// hit this directly while writing its own planted-violation cases).
 
 package ci_test
 
@@ -68,6 +66,33 @@ func runGate(t *testing.T, script, workdir string) (int, string) {
 	return -1, ""
 }
 
+// runGateEnv is runGate with extra environment variables layered on top
+// of the current process's environment. nil/empty env behaves exactly
+// like runGate.
+func runGateEnv(t *testing.T, script, workdir string, env map[string]string) (int, string) {
+	t.Helper()
+	if len(env) == 0 {
+		return runGate(t, script, workdir)
+	}
+	scriptPath := filepath.Join(repoRoot(t), "scripts", "ci", script)
+	cmd := exec.Command("bash", scriptPath)
+	cmd.Dir = workdir
+	cmd.Env = os.Environ()
+	for k, v := range env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return 0, string(out)
+	}
+	var exitErr *exec.ExitError
+	if ok := asExitError(err, &exitErr); ok {
+		return exitErr.ExitCode(), string(out)
+	}
+	t.Fatalf("running %s: %v (output: %s)", script, err, out)
+	return -1, ""
+}
+
 func asExitError(err error, target **exec.ExitError) bool {
 	e, ok := err.(*exec.ExitError)
 	if ok {
@@ -92,6 +117,8 @@ var cwdSensitiveGates = []string{
 	"check-cedar-gate-arguments.sh",
 	"check-broker-topic-consumers.sh",
 	"check-listpending-coverage.sh",
+	"check-upgrade-snapshots-locked.sh",
+	"check-destructive-migration-coverage.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -128,11 +155,13 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 	root := repoRoot(t)
 
 	cases := []struct {
-		name    string
-		gate    string
-		file    string // repo-relative path to create, or "" to append
-		append  string // when file already exists, append this instead
-		content string
+		name       string
+		gate       string
+		file       string // repo-relative path to create, or "" to append
+		append     string // when file already exists, append this instead
+		content    string
+		env        map[string]string // extra env vars for this case's runGate call, if any
+		wantOutput string            // optional: substring the failure output must contain
 	}{
 		{
 			name:    "binding-names/double-underscore",
@@ -429,6 +458,90 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			file:   "core/rpc/bindings.go",
 			append: "\nfunc (b *Bindings) ZzGateProbe_ListPending() ([]FlatPermissionRequest, error) {\n\treturn nil, nil\n}\n",
 		},
+		{
+			// upgrade-path-coverage-01PMUG01 WP02. Byte-mutate an already
+			// COMMITTED snapshot file (core/storage/sqlite/testdata/
+			// upgrade/v0.63.0/dump.sql — committed in this mission's own
+			// WP01 commit, so it is present at HEAD by the time this test
+			// runs) and confirm the gate rejects the mismatch. The gate's
+			// real comparison base in CI is origin/main (see the script's
+			// header) — UPGRADE_SNAPSHOTS_BASE_REF=HEAD here points it at
+			// this branch's own last commit instead, which already
+			// contains the unmutated file, so this exercises the SAME
+			// git-diff codepath the CI gate uses, not a mock of it.
+			name:       "upgrade-snapshots-locked/byte-mutation",
+			wantOutput: "upgrade-snapshots-locked",
+			gate:       "check-upgrade-snapshots-locked.sh",
+			file:       "core/storage/sqlite/testdata/upgrade/v0.63.0/dump.sql",
+			append:     "-- zzGateProbe: this byte must not be here\n",
+			env:        map[string]string{"UPGRADE_SNAPSHOTS_BASE_REF": "HEAD"},
+		},
+		{
+			// upgrade-path-coverage-01PMUG01 WP03 (I14). A migration
+			// whose Up() runs DROP TABLE with no populated-table test
+			// referencing its ID and no allowlist entry must fail.
+			name:       "destructive-migration-coverage/uncovered-drop-table",
+			wantOutput: "destructive-migration-coverage",
+			gate:       "check-destructive-migration-coverage.sh",
+			file:       "core/rpc/views/zzgateprobe/migration_probe.go",
+			content: "package zzgateprobe\n\n" +
+				"import (\n" +
+				"\t\"context\"\n\n" +
+				"\t\"github.com/kameas-ai/kenaz-harness/core/storage/migrations\"\n" +
+				")\n\n" +
+				"func zzGateProbeMigration() migrations.Migration {\n" +
+				"\treturn migrations.Migration{\n" +
+				"\t\tID:            \"storage/97-zz-gate-probe\",\n" +
+				"\t\tVersion:       97,\n" +
+				"\t\tOwningMission: \"storage\",\n" +
+				"\t\tUpSource:      \"DROP " + "TABLE zz_gate_probe_table\",\n" +
+				"\t\tUp: func(ctx context.Context, tx migrations.WriteTx) error {\n" +
+				"\t\t\t_, err := tx.Exec(ctx, \"DROP " + "TABLE zz_gate_probe_table\")\n" +
+				"\t\t\treturn err\n" +
+				"\t\t},\n" +
+				"\t}\n" +
+				"}\n",
+		},
+		{
+			// upgrade-path-coverage-01PMUG01 WP05 (FR-4b). Replants the
+			// exact shape core/rpc/api_narrative_gate_boot_test.go had
+			// before its fix: rpc.New(c) with no WithSettingsStore
+			// override, so the settings store resolves through
+			// settings.NewFileStoreFromEnv() -> os.UserConfigDir() (the
+			// gate's sentinel HOME while this test runs; the developer's
+			// real config dir on an unguarded run) and then a real write
+			// (SetMemoryNarrativeEnabled) lands in it. This is a NEW
+			// probe file rather than an edit to the real (now-fixed)
+			// test file, matching the house convention elsewhere in this
+			// table (zz_gate_probe.go) of planting the violation
+			// alongside the real code rather than mutating it in place.
+			name: "tests-are-hermetic/unsandboxed-settings-write",
+			// Deliberately the PLANTED write's own path, not the gate's
+			// generic header. The header appears for any sentinel change
+			// at all — including the .kenaz/harness.log write that made
+			// this gate fail unconditionally before it was carved out —
+			// so matching on it would still pass for a gate that is
+			// simply broken. settings.json is written only by the probe.
+			wantOutput: "kenaz-harness/settings.json",
+			gate:       "check-tests-are-hermetic.sh",
+			file:       "core/rpc/zz_gate_probe_unsandboxed_settings_test.go",
+			content: "package rpc\n\n" +
+				"import (\n" +
+				"\t\"context\"\n" +
+				"\t\"testing\"\n\n" +
+				"\t\"github.com/kameas-ai/kenaz-harness/core\"\n" +
+				")\n\n" +
+				"func TestZzGateProbeUnsandboxedSettingsWrite(t *testing.T) {\n" +
+				"\tc, err := core.New(core.Options{DataDir: t.TempDir()})\n" +
+				"\tif err != nil {\n" +
+				"\t\tt.Fatalf(\"core.New: %v\", err)\n" +
+				"\t}\n" +
+				"\tapi := New(c)\n" +
+				"\tif err := api.Settings().SetMemoryNarrativeEnabled(context.Background(), true); err != nil {\n" +
+				"\t\tt.Fatalf(\"SetMemoryNarrativeEnabled: %v\", err)\n" +
+				"\t}\n" +
+				"}\n",
+		},
 	}
 
 	for _, tc := range cases {
@@ -439,10 +552,23 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			cleanup := plant(t, full, tc.content, tc.append)
 			defer cleanup()
 
-			code, out := runGate(t, tc.gate, root)
+			code, out := runGateEnv(t, tc.gate, root, tc.env)
 			if code == 0 {
 				t.Fatalf("%s exited 0 with a planted violation in %s — the gate cannot fail.\noutput:\n%s",
 					tc.gate, tc.file, out)
+			}
+			// A non-zero exit alone is a weak proof: a gate that is
+			// BROKEN (fails on every run, planted violation or not)
+			// satisfies it. check-tests-are-hermetic.sh shipped in
+			// exactly that state and this table passed anyway
+			// (upgrade-path-coverage-01PMUG01 WP05 review, 2026-08-18).
+			// Where a case names the message the gate is supposed to
+			// produce, require it, so the proof is about THIS violation
+			// rather than about the gate exiting non-zero for any reason.
+			if tc.wantOutput != "" && !strings.Contains(out, tc.wantOutput) {
+				t.Fatalf("%s failed with a planted violation in %s, but its output does not mention %q — "+
+					"it may be failing for an unrelated reason.\noutput:\n%s",
+					tc.gate, tc.file, tc.wantOutput, out)
 			}
 		})
 	}

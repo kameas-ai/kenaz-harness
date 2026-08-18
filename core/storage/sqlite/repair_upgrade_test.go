@@ -2,9 +2,6 @@ package sqlite_test
 
 import (
 	"context"
-	"database/sql"
-	"net/url"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -146,26 +143,6 @@ func TestOpen_RepairsDatabaseMissingLateSessionsMigrations(t *testing.T) {
 	}
 }
 
-// openRaw opens the data.db written by Open directly, so a test can rewind
-// the schema behind the harness's back.
-func openRaw(t *testing.T, dir string) *sql.DB {
-	t.Helper()
-	dsn := "file:" + url.PathEscape(filepath.Join(dir, "data.db")) +
-		"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)"
-	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		t.Fatalf("open raw: %v", err)
-	}
-	db.SetMaxOpenConns(1)
-	return db
-}
-
-func columnExists(t *testing.T, db *sql.DB, table, column string) bool {
-	t.Helper()
-	var n int
-	if err := db.QueryRowContext(context.Background(),
-		"SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?", table, column).Scan(&n); err != nil {
-		t.Fatalf("pragma_table_info(%s): %v", table, err)
-	}
-	return n > 0
-}
+// openRaw / columnExists moved to upgrade_helpers_test.go (shared
+// across this package's upgrade-path tests — see that file's doc
+// comment for why they are not defined here).

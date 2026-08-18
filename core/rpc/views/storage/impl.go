@@ -40,108 +40,94 @@ func NewAPI(db corestorage.DB, dataDir string) *API {
 
 // GetMigrationDriftReport reads the ledger and registered migrations, compares
 // them, and returns every discrepancy.
+//
+// This delegates classification to migrations.DetectDrift instead of
+// carrying a second copy of the Kind/Severity/Suggestion switch. Before
+// upgrade-path-coverage-01PMUG01 WP04 this method WAS that second copy —
+// the live path, reached via Storage_GetMigrationDriftReport, while
+// migrations.DetectDrift (core/storage/migrations/doctor.go) had zero
+// non-test callers but carried the only test coverage (doctor_test.go).
+// Now there is exactly one implementation: a change to its severity table
+// changes what both the RPC surface and doctor_test.go see.
+//
+// driftSourceAdapter bridges the type gap: a.db.Migrations() returns
+// storage.MigrationRegistry (storage.Migration / storage.LedgerEntry),
+// while DetectDrift wants migrations.Migration / migrations.LedgerEntry —
+// a parallel type family that core/storage/sqlite/adapters.go translates
+// the other direction for the sqlite package. There is no exported path
+// from storage.MigrationRegistry back to the concrete *migrations.Registry
+// (the sqlite adapter's underlying registry field is unexported), so this
+// method re-does that translation at the RPC-view boundary instead.
 func (a *API) GetMigrationDriftReport(_ context.Context) (DriftReport, error) {
 	if a.db == nil {
 		return DriftReport{}, ErrStorageUnavailable
 	}
-	reg := a.db.Migrations()
-
-	// Read all ledger entries.
-	entries, err := reg.Applied()
+	report, err := migrations.DetectDrift(driftSourceAdapter{reg: a.db.Migrations()})
 	if err != nil {
-		return DriftReport{}, fmt.Errorf("storage: drift: read ledger: %w", err)
+		return DriftReport{}, fmt.Errorf("storage: drift: %w", err)
 	}
+	return fromMigrationsDriftReport(report), nil
+}
 
-	// Build the effective applied set: last write per version wins.
-	type ledgerSummary struct {
-		id     string
-		action corestorage.LedgerAction
+// driftSourceAdapter satisfies migrations.DriftSource by translating
+// storage.MigrationRegistry's wire-family types into the migrations
+// package's parallel types.
+type driftSourceAdapter struct {
+	reg corestorage.MigrationRegistry
+}
+
+func (d driftSourceAdapter) Applied() ([]migrations.LedgerEntry, error) {
+	rows, err := d.reg.Applied()
+	if err != nil {
+		return nil, err
 	}
-	ledger := map[int]ledgerSummary{}
-	for _, e := range entries {
-		ledger[e.Version] = ledgerSummary{id: e.ID, action: e.Action}
+	out := make([]migrations.LedgerEntry, 0, len(rows))
+	for _, e := range rows {
+		out = append(out, migrations.LedgerEntry{
+			Version:               e.Version,
+			ID:                    e.ID,
+			AppliedAt:             e.AppliedAt,
+			ContentHash:           e.ContentHash,
+			OwningMission:         e.OwningMission,
+			Action:                migrations.LedgerAction(e.Action),
+			RolledBackFromVersion: e.RolledBackFromVersion,
+		})
 	}
+	return out, nil
+}
 
-	// Read registered migrations.
-	registered := map[int]corestorage.Migration{}
-	for _, m := range reg.All() {
-		registered[m.Version] = m
+func (d driftSourceAdapter) All() []migrations.Migration {
+	migs := d.reg.All()
+	out := make([]migrations.Migration, 0, len(migs))
+	for _, m := range migs {
+		out = append(out, migrations.Migration{
+			ID:            m.ID,
+			Version:       m.Version,
+			OwningMission: m.OwningMission,
+			UpSource:      m.UpSource,
+			ContentHash:   m.ContentHash,
+		})
 	}
+	return out
+}
 
-	// Build the union of all known versions.
-	seen := map[int]struct{}{}
-	for v := range ledger {
-		seen[v] = struct{}{}
+// fromMigrationsDriftReport translates migrations.DriftReport into the
+// RPC view's own JSON-tagged wire type (api.go's DriftReport/DriftEntry).
+// The wire types are unchanged by this WP — frontend/wailsjs consumes
+// them — only the classification that populates them moved.
+func fromMigrationsDriftReport(r migrations.DriftReport) DriftReport {
+	out := DriftReport{Drifts: make([]DriftEntry, 0, len(r.Drifts))}
+	for _, d := range r.Drifts {
+		out.Drifts = append(out.Drifts, DriftEntry{
+			Version:    d.Version,
+			LedgerID:   d.LedgerID,
+			ExpectedID: d.ExpectedID,
+			Kind:       d.Kind,
+			Severity:   d.Severity,
+			Suggestion: d.Suggestion,
+		})
 	}
-	for v := range registered {
-		seen[v] = struct{}{}
-	}
-
-	var drifts []DriftEntry
-
-	for v := range seen {
-		led, inLedger := ledger[v]
-		reg, inRegistry := registered[v]
-
-		switch {
-		case inLedger && inRegistry:
-			if led.action != corestorage.LedgerActionApplied {
-				continue
-			}
-			if led.id != reg.ID {
-				drifts = append(drifts, DriftEntry{
-					Version:    v,
-					LedgerID:   led.id,
-					ExpectedID: reg.ID,
-					Kind:       "id_mismatch",
-					Severity:   "error",
-					Suggestion: fmt.Sprintf(
-						"Ledger row v%d has id=%q but the registered migration expects %q. "+
-							"Use 'Apply automatic fix' to rename the ledger row (a backup is created first).",
-						v, led.id, reg.ID,
-					),
-				})
-			}
-
-		case inLedger && !inRegistry:
-			// Rolled-back rows with no matching code are safe to skip.
-			if led.action == corestorage.LedgerActionRolledBack {
-				continue
-			}
-			drifts = append(drifts, DriftEntry{
-				Version:    v,
-				LedgerID:   led.id,
-				ExpectedID: "",
-				Kind:       "ledger_only",
-				Severity:   "warning",
-				Suggestion: fmt.Sprintf(
-					"Ledger has an applied entry for v%d (id=%q) but no matching migration is registered. "+
-						"This usually means a rolled-back migration whose code was removed. "+
-						"Inspect the ledger and remove the row manually if this is expected.",
-					v, led.id,
-				),
-			})
-
-		case !inLedger && inRegistry:
-			drifts = append(drifts, DriftEntry{
-				Version:    v,
-				LedgerID:   "",
-				ExpectedID: reg.ID,
-				Kind:       "code_only",
-				Severity:   "info",
-				Suggestion: fmt.Sprintf(
-					"Migration v%d (id=%q) is registered but not yet applied. "+
-						"It will be applied automatically on the next chassis boot.",
-					v, reg.ID,
-				),
-			})
-		}
-	}
-
-	// Sort ascending by version.
-	sortDrifts(drifts)
-
-	return DriftReport{Drifts: drifts}, nil
+	return out
 }
 
 // ApplyDriftFix repairs an id_mismatch drift entry for the given version.
@@ -236,13 +222,4 @@ func (a *API) backupDB() error {
 		return fmt.Errorf("copy: %w", err)
 	}
 	return out.Sync()
-}
-
-// sortDrifts sorts the slice in-place by Version ascending.
-func sortDrifts(d []DriftEntry) {
-	for i := 1; i < len(d); i++ {
-		for j := i; j > 0 && d[j].Version < d[j-1].Version; j-- {
-			d[j], d[j-1] = d[j-1], d[j]
-		}
-	}
 }

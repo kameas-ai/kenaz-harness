@@ -1160,6 +1160,142 @@ exists.
 
 ---
 
+### 2026-08-18 · `sessions/0327-source-model-output` already destroyed data, and it is unrecoverable
+
+Found and fixed forward (not recovered) in `upgrade-path-coverage-01PMUG01`
+WP03. `sessions/0327-source-model-output`
+(`core/session/migrations_source_model_output.go`) carried the identical
+`DROP TABLE artifacts` + `RENAME` recipe as
+`sessions/0332-artifacts-global-scope`, with **no scratch-table
+protection**, at version 327 — above 324, which is the migration that
+creates `artifact_versions` with `artifact_id ... ON DELETE CASCADE`. The
+production DSN always sets `_pragma=foreign_keys(1)`, so `DROP TABLE
+artifacts` cascade-deletes every `artifact_versions` row.
+
+Unlike 0332 (invisible to the runner on every upgraded install until the
+v0.63.1 `Pending()` selection fix, so it never actually ran on populated
+tables before this mission), **0327 shipped before the units block
+existed**, when the max-based selection bug had no cross-block condition to
+trigger it — it ran, cascade and all, on **every install that had
+`artifact_versions` rows at the moment it upgraded through 327.**
+
+- **Historical (unfixable):** any `artifact_versions` rows an install had
+  before it first upgraded through 327 are gone. There is no backup and no
+  recovery path. Recorded here so nobody rediscovers it as new.
+- **Live forward risk (fixed):** any database whose ledger still stops at
+  <=326 had 0327 pending, and the v0.63.1 selection repair reaches it
+  again. WP03 applied 0332's exact scratch-table pattern; `UpSource` is
+  untouched (it is the migration's content hash). See
+  `core/storage/sqlite/migration_0327_test.go` — written first, watched
+  fail (`artifact_versions = 0 after the 0327 rebuild, want 2`), then fixed.
+
+### 2026-08-18 · `UpSource` edits are not caught at boot — `migrations.Registry.VerifyLedger` has zero non-test callers
+
+Found while proving WP03's "editing `UpSource` fails every snapshot"
+mutation criterion (`upgrade-path-coverage-01PMUG01` spec.md §4). Spec's
+design-constraints section states that an edited `UpSource` "fails every
+snapshot at once" via `ErrLedgerHashMismatch`. **Performed the mutation to
+check:** edited `sqlSourceModelOutputUp`'s CHECK-constraint value order (a
+real content change, not just whitespace — `HashSQL` canonicalises
+whitespace) and reran `TestUpgradePath`. It still passed.
+
+`migrations.Registry.VerifyLedger` (`core/storage/migrations/runner.go`) is
+the function that compares a ledger row's stored `content_hash` against the
+registered migration's computed hash and returns `ErrLedgerHashMismatch` on
+mismatch — exactly the check the spec's claim depends on. **It has zero
+non-test callers anywhere in the module** (`grep -rn "VerifyLedger(" --include="*.go" core | grep -v _test.go` returns only its own definition).
+`storagesqlite.Open` calls `EnsureLedger` → `Apply` →
+`verifyFullyApplied` (a *different*, similarly-named function that only
+checks whether an applied ledger row exists per registered migration — it
+does not compare `content_hash` at all) and never calls `VerifyLedger`.
+Set-membership `Pending()` also does not consult `content_hash` — an
+already-applied migration whose `UpSource` was edited after the fact is
+simply skipped, hash mismatch and all, with no error anywhere in the boot
+path.
+
+**Why this was not fixed in WP03 by wiring `VerifyLedger` into `Open`:**
+`VerifyLedger`'s per-mission contiguity check (`ErrSchemaGap`) is the same
+mechanism that would flag a `ledger_only` entry — an applied ledger row
+with no matching registered migration, the normal state of a downgrade or a
+removed mission. Wiring it into `Open` would make a healthy downgrade
+refuse to boot, which is the exact behaviour spec's FR-3 explicitly
+rejects ("Making drift fatal at `Open` — explicitly rejected", see this
+mission's WP04). A narrower fix — call only the hash-comparison half of
+`VerifyLedger`'s logic, skip the contiguity half — is plausible but was not
+attempted in WP03; it changes `Open`'s error surface and needs its own
+review, which is why this is recorded rather than silently patched. Owner:
+whoever picks up migration-ledger integrity next; the fix shape to
+evaluate is a hash-only variant of `VerifyLedger` callable from `Open`
+without also enforcing schema-gap contiguity.
+
+### 2026-08-18 · Migrations that can never run: `memory-rag`, `event-log`, `tasks`
+
+Surveyed while grounding `upgrade-path-coverage-01PMUG01` (not that
+mission's fix — recorded per its spec §8 for visibility):
+
+- `core/memory/narrative/migrations.go` defines migrations 821 and 822.
+  `narrative.RegisterMigrations` has no caller anywhere in the module —
+  these two migrations can never run, on any install, ever.
+- `core/event/log/register.go` and `core/tasks/store_sql.go` each declare a
+  `RegisterMigrations` function against a *stub* registry interface (not
+  `*migrations.Registry`), with no caller. `core/event/log` carries six
+  embedded `.sql` files the migration framework never sees.
+- Of the 14 blocks declared in `core/storage/migrations/blocks.go`'s
+  `CanonicalBlocks`, 9 have zero registered migrations: `event-log`,
+  `secrets-keychain`, `scheduler`, `mcp`, `a2a`, `signed-cards-trust`,
+  `bundle`, `shared-context-distribution`, `memory-rag`, `app-layer` (block
+  reservations made ahead of the feature landing, some now orphaned).
+
+Not itself a bug — a reserved-but-unused block is inert, not lying — but
+recorded because dormancy at this scale is exactly the shape that let the
+v0.63.0 P0 hide: nothing exercises these migrations at all, so nothing
+would notice if `RegisterMigrations` were ever wired up against a populated
+table without the same care WP03 gave 0327/0332.
+
+### 2026-08-18 · The boot drift goroutine's unsynchronised reads are TOCTOU-shaped, not racy — `a.updatePollCancel` is the real unsynchronised write pair
+
+Found while implementing `upgrade-path-coverage-01PMUG01` WP04 (FR-3g).
+Spec §2 FR-3g flagged `core/rpc/api.go`'s boot-time migration-drift
+goroutine (spawned from `SetContext`) for reading `a.storageAPI` (once at
+the nil-guard on the caller's goroutine, again inside the spawned
+goroutine after `runMigrationDriftCheck` was extracted) and `a.auditImpl`
+with no mutex.
+
+**Precise finding, stated carefully so it isn't over-claimed:** this is
+TOCTOU-shaped — a check on one goroutine and a use on another — but it is
+**not a race `-race` will ever catch**, because both fields are written
+exactly once, inside `New()` (`core/rpc/api.go`, around the `storageAPI:
+storageview.NewAPI(db, dataDir)` and `a.auditImpl = audit.NewAPI(...)`
+assignments), before the `*API` value is ever handed to a caller.
+`SetContext` — the only place that spawns goroutines reading these fields
+— never writes either one. `main.go` calls `api.SetContext(ctx)` on an
+`api` returned from a prior `rpc.New(...)` call in the same function body,
+at both its call sites (`main.go` around lines 241 and 405/416). `New()`
+happens-before `SetContext` at both, by ordinary single-goroutine sequencing
+within `main()` — there is no second goroutine that could write
+`storageAPI`/`auditImpl` concurrently with the drift goroutine's read.
+
+**The actual unsynchronised write pair in this file is
+`a.updatePollCancel`**, written in `SetContext` (guarding a prior poller
+before replacing it, then storing the new `context.CancelFunc`) and again
+in `Shutdown` (cancelling and nilling it). Unlike `storageAPI`/`auditImpl`,
+both of *these* writes happen after construction, from call sites that
+main.go does not guarantee run on the same goroutine relative to each
+other (`OnShutdown` is a Wails-invoked callback, not necessarily
+sequenced against a concurrent `SetContext` re-init in the test harness
+path that calls it more than once). **Fixed in the same WP**: added
+`updatePollMu sync.Mutex` guarding every read and write of
+`updatePollCancel` in both `SetContext` and `Shutdown`. Cheap — two lock/
+unlock pairs around code that was already there — so there was no reason
+to leave it recorded-but-unfixed the way FR-3g's spec text allowed for.
+
+Point of this entry: do not re-flag `a.storageAPI` / `a.auditImpl` in a
+future sweep as racy without also re-deriving this happens-before
+argument — the fields were never the live risk, `a.updatePollCancel` was
+and now is guarded.
+
+---
+
 ## Drained
 
 ### 2026-08-16 · what the export scanner covered BEFORE, and what leaked

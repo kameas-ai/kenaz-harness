@@ -80,12 +80,24 @@ const (
 	// b10-harness-self-decision.md.
 	KindHarnessSelfToolCalled Kind = "harness-self.tool.called"
 
-	// KindMigrationDriftDetected is emitted once per chassis boot when the
-	// migration drift detector finds one or more discrepancies between the
+	// KindMigrationDriftDetected is emitted at most once per chassis boot
+	// when the migration drift detector finds a discrepancy between the
 	// harness_migrations ledger and the registered migration set (v0.5.1
-	// migration-doctor). Payload: {drift_count int, versions []int}.
-	// Severity: "warning" when any id_mismatch or ledger_only entries exist;
-	// "info" when only code_only (pending) entries are present.
+	// migration-doctor) that a user needs to know about.
+	//
+	// EMITTED ONLY FOR id_mismatch / ledger_only. A report containing
+	// nothing but code_only (ordinary pending) entries emits NOTHING —
+	// see runMigrationDriftCheck in core/rpc/api.go, which branches on
+	// severity rather than on len(report.Drifts).
+	//
+	// This comment previously specified a `{drift_count int, versions
+	// []int}` payload and an "info" severity for the code_only-only case.
+	// Neither was ever implemented, and the code_only-only case is now
+	// deliberately silent rather than informational, so the contract is
+	// restated here to match what the code does (corrected 2026-08-18,
+	// upgrade-path-coverage-01PMUG01 FR-3b review). drift_count and the
+	// version list travel on the rpc.MigrationDriftDetectedPayload the
+	// broker publishes, not on audit.Entry, which has no payload field.
 	KindMigrationDriftDetected Kind = "storage.migration.drift-detected"
 
 	// KindKnobUnsupported is emitted when a RequestKnobs field is rejected

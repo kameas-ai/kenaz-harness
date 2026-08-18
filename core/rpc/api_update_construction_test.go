@@ -86,7 +86,11 @@ func TestUpdateConstruction_PositiveCase(t *testing.T) {
 	}
 
 	logs := captureLog(t, func() {
-		api := New(c)
+		// WithSettingsStore(newTestStore(t)) (upgrade-path-coverage-01PMUG01
+		// FR-4a): without it, rpc.New builds its settings store via
+		// settings.NewFileStoreFromEnv(), which opens the developer's
+		// real settings.json.
+		api := New(c, WithSettingsStore(newTestStore(t)))
 		if api.updateSvc == nil {
 			t.Error("updateSvc is nil — update service was not wired; check BuildVersion/DataDir gate in api.go")
 		}
@@ -117,7 +121,9 @@ func TestUpdateConstruction_NegativeCase_EmptyBuildVersion(t *testing.T) {
 	}
 
 	logs := captureLog(t, func() {
-		api := New(c)
+		// WithSettingsStore(newTestStore(t)) — see
+		// TestUpdateConstruction_PositiveCase above.
+		api := New(c, WithSettingsStore(newTestStore(t)))
 		if api.updateSvc != nil {
 			t.Error("updateSvc should be nil when BuildVersion is empty")
 		}
@@ -138,7 +144,9 @@ func TestUpdateConstruction_NegativeCase_EmptyBuildVersion(t *testing.T) {
 // (test-chassis path) also emits "update.service.skipped" with core_nil=true.
 func TestUpdateConstruction_NegativeCase_NilCore(t *testing.T) {
 	logs := captureLog(t, func() {
-		api := New(nil)
+		// WithSettingsStore(newTestStore(t)) — see
+		// TestUpdateConstruction_PositiveCase above.
+		api := New(nil, WithSettingsStore(newTestStore(t)))
 		if api.updateSvc != nil {
 			t.Error("updateSvc should be nil for nil-core chassis")
 		}
