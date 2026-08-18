@@ -66,8 +66,18 @@ export interface UpdateClient {
   apply(): Promise<void>;
   /**
    * Convenience shim used by the Settings → Updates "Install" button.
-   * Triggers a download (if not already staged) then applies. The
-   * version arg is informational; the backend installs whatever the
+   *
+   * Mechanism (self-update-repair-01PMUP01 DC-1): starts the download,
+   * then POLLS Update_Status until downloadState leaves 'downloading' —
+   * it does NOT race a bare `await StartDownload(); await Apply();`
+   * (StartDownload is fire-and-forget; Apply would see hasStaged=false
+   * on every call, 100% of the time — the race is lost by construction,
+   * not by timing). Resolves only after Apply() succeeds against a
+   * confirmed 'staged' status; rejects with the failure reason on
+   * 'failed', or after a 30-minute ceiling with a message naming the
+   * last observed state (never resolves silently on timeout).
+   *
+   * The version arg is informational; the backend installs whatever the
    * current channel manifest advertises.
    */
   installLatest(version: string): Promise<void>;
@@ -112,19 +122,74 @@ function bridge(): BridgeShape {
   return b as BridgeShape;
 }
 
-export function createUpdateClient(): UpdateClient {
+/** DC-3: Status is a cheap in-memory RLock read (no network, no disk) —
+ *  a 500ms poll is free; do not add caching or debouncing. */
+const DEFAULT_POLL_INTERVAL_MS = 500;
+/** spec §4.1 Bounds: a generous ceiling so a wedged pump cannot spin
+ *  installLatest's promise forever. On expiry we reject naming the
+ *  observed state rather than resolving silently. */
+const DEFAULT_POLL_TIMEOUT_MS = 30 * 60 * 1000;
+
+/** Test seam for the installLatest poll cadence/ceiling — production
+ *  callers never pass these; vitest overrides them so AC-2/the
+ *  30-minute-bound test don't need real wall-clock time. */
+export interface UpdateClientOptions {
+  pollIntervalMs?: number;
+  pollTimeoutMs?: number;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function createUpdateClient(
+  opts: UpdateClientOptions = {},
+): UpdateClient {
+  const pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  const pollTimeoutMs = opts.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS;
+
   return {
     status: () => bridge().Update_Status(),
     startCheck: () => bridge().Update_StartCheck(),
     startDownload: () => bridge().Update_StartDownload(),
     apply: () => bridge().Update_Apply(),
     installLatest: async (_version: string) => {
-      // The Settings panel's "Install" button is a one-shot: kick off
-      // the download then apply when ready. The version arg is
-      // informational; the backend installs the current manifest's
-      // advertised version.
+      // DC-1: poll Update_Status to a terminal state; the broker events
+      // (WP03) are an accelerator for the repaint rate only — this
+      // function must resolve/reject correctly with every subscription
+      // detached. No broker event is read here, deliberately (WP02 must
+      // not gate any transition on an event arriving).
+      //
+      // StartDownload is fire-and-forget: it clears hasStaged and
+      // returns immediately after spawning the download pump. A bare
+      // `await StartDownload(); await Apply();` therefore raced Apply
+      // against a download that had not started, and lost 100% of the
+      // time (self-update-repair-01PMUP01 §1.1). Errors from
+      // StartDownload — including ErrDownloadInFlight when a previous
+      // download is still running — propagate unchanged; we do not
+      // catch and keep polling.
       await bridge().Update_StartDownload();
-      await bridge().Update_Apply();
+
+      const deadline = Date.now() + pollTimeoutMs;
+      for (;;) {
+        const s = await bridge().Update_Status();
+        if (s.downloadState === 'staged') {
+          await bridge().Update_Apply();
+          return;
+        }
+        if (s.downloadState === 'failed') {
+          throw new Error(
+            s.downloadError || 'Update download failed with no reason given.',
+          );
+        }
+        if (Date.now() >= deadline) {
+          throw new Error(
+            `Update install timed out after ${Math.round(pollTimeoutMs / 60000)} minutes ` +
+              `(last observed downloadState: "${s.downloadState}").`,
+          );
+        }
+        await delay(pollIntervalMs);
+      }
     },
     skipVersion: (version) => bridge().Update_SkipVersion(version),
     listSkippedVersions: () => bridge().Update_ListSkippedVersions(),
