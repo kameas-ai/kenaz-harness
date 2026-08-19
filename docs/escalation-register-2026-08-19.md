@@ -2436,3 +2436,677 @@ treats as authoritative — the audit and this register. A ruling is a decision
 about *what to do*; it is not evidence about *what the code is*. Every mission's
 WP01 re-derives, and that requirement is why these were caught before an
 implementer budgeted work against them.
+
+---
+
+# Part 8 — Second sitting (ownerless parks converted per F-1)
+
+Owner ruling **F-1** (2026-08-19) converted every ownerless parked justification
+into an escalation: *"Nothing parks by default."* This part is the second
+sitting F-1 called for.
+
+**Nothing here is resolved by this document.** Same method as the 42: index the
+rows, resolve by reference wherever an existing ruling already answers one,
+collapse the remainder by theme, and attach evidence plus a recommended default
+to each. The owner rules.
+
+---
+
+## Tally
+
+| | Count |
+|---|---|
+| `**Owner:** unassigned` rows in `docs/unwired-ledger.md` (F-1's sixteen) | **16** |
+| Ownerless row in `docs/dead-code-audit-2026-08-18.md` | 1 |
+| **Additional ownerless parks F-1's count missed** (see §8.3-P2) | **+4** |
+| **Total ownerless parks in scope** | **21** |
+| — resolved by reference to an existing ruling | **5** (+2 partial) |
+| — closed on verification (not open at all) | **1** |
+| — requiring a new decision | **16 instances** |
+| **Distinct new decisions (G-1…G-9)** | **9** |
+
+Collapse on the new-decision side is **1.8×** — materially lower than the first
+sitting's 2.8×, and that is expected rather than a shortfall. The register's
+~117 raw items were drawn from eight specs and three audits that describe the
+same defects repeatedly; the ledger's rows are deduplicated by construction, so
+there is far less redundancy to collapse. The real leverage here is *inside*
+rows: **G-4 is one row covering twelve settings fields** and **G-5 is one row
+covering six components**.
+
+**Ordered by instances unblocked:** G-1 (3), G-2 (3), G-3 (4, three of which
+F-1's count missed), then six single-row decisions. **The three that unblock
+the most work** are G-1, G-2 and G-4 — G-4 by field count rather than row count.
+
+---
+
+## §8.0 — Index of all 21 ownerless parks
+
+Rows are identified by their **dated ledger heading**, which is stable, with the
+line number **as it stood before this change** in parentheses. Applying the
+pointer edits shifted every line below the first one — which is exactly the
+drift §8.3-P3 documents, so it is named here rather than reproduced.
+
+| # | Ledger entry (heading · pre-edit line) | Subsystem | Current justification (gist) | Disposition |
+|---|---|---|---|---|
+| 1 | `2026-08-14 · export.RedactValue only walks TOP-LEVEL strings` (`:318`) | `export.RedactValue` recursive walk | "the change that closes it is a recursive walk in `redactMessages`" | **CLOSED on verification** → §8.3-P1, pointer in G-3 |
+| 2 | `2026-08-14 · A move cannot be multimodal` (`:394`) | multimodal move expressiveness hole | "needs a producer, which is feature work with a spec" | **G-2** |
+| 3 | `2026-08-14 · The exit gate's revised answer never reaches the stream` (`:444`) | exit gate's revised answer never streams | "the fix is backend: deliver the gate's revised text" | **G-2** |
+| 4 | `2026-08-14 · views/search/impl.go searches soft-archived rows` (`:466`) | `views/search` searches soft-archived rows | "two honest exits: add the predicate … or an explicit filter" | **G-1** |
+| 5 | `2026-08-14 · core/search/search.go is a dead second search engine` (`:485`) | `core/search` is a dead second engine | "adopting `core/search` or deleting it are both fine" | **G-1** |
+| 6 | `2026-08-14 · Role == RoleAssistant is a staleness class` (`:538`) | `RoleAssistant` staleness class + the owed gate | "unassigned, for all three parts" | **G-2** |
+| 7 | `2026-08-14 · Migration 0335's tool-row purge is not idempotent` (`:565`) | migration 0335's non-idempotent FTS purge | "the cheap closure is a guard" | **G-8** |
+| 8 | `2026-08-14 · SearchModal takes ?role= from the URL unvalidated` (`:589`) | `SearchModal` `?role=` unvalidated | "one line in `readFromRoute`" | **G-1** (rider) |
+| 9 | `2026-08-14 · Deferred asks have no producer, and wizards have no caller` (`:619`) | deferred asks + wizards | "two honest exits: (a) add `mode` + `questions` … or (b) delete both legs" | **RESOLVED → A-12** |
+| 10 | `2026-08-14 · Live tools whose only UI is unmounted (todo, sub-agent)` (`:648`) | todo + sub-agent unmounted UI | "Todo: wire … Sub-agent: delete, or spec the control RPCs first" | **RESOLVED → A-13** |
+| 11 | `2026-08-14 · The denial UX gap` (`:676`) | the denial UX gap (`policyAPI` stub) | "needs a mission under `kitty-specs/`" | **G-6** |
+| 12 | `2026-08-14 · LocalRuntimesSection has a branch it can never render` (`:745`) | `LocalRuntimeInfo.Models` never populated | "either populate `Models` … or delete the first branch" | **G-7** |
+| 13 | `2026-08-14 · Settings fields that are stored, bound, and inert` (`:779`) | settings fields stored, bound, inert | "the cheapest structural fix is to bring `settings.Settings` under knobcoverage" | **PARTIAL → A-4** (6 narrative knobs) + **G-4** (6 remaining) |
+| 14 | `2026-08-14 · The background-task subsystem has no producer` (`:831`) | background-task subsystem has no producer | "the fix is one restructuring" | **RESOLVED → A-13** (+ A-7) |
+| 15 | same entry, follow-up (`:860`) | background-task follow-up | "same owner as the parent entry" | **RESOLVED → A-13** |
+| 16 | `2026-08-14 · Frontend orphan backlog` (`:1083`) | frontend orphan backlog | "unassigned per-item; owned by whoever picks up the next sweep" | **PARTIAL → A-13** (P1b) + **G-5** (P1) |
+| 17 | `docs/dead-code-audit-2026-08-18.md:758` | compaction-overhead header row | "labelled 'justify' with `OWNER: unassigned`" | **RESOLVED → X-7** |
+| 18 | `2026-08-18 amendment (mcp-connector-lifecycle-01PMMC01 WP01)` (`:1101`) | harness-self attach execution owner | "unassigned as of this entry" (blocker IS named) | **G-9** — *missed by F-1's count* |
+| 19 | `2026-08-16 · what the export scanner covered BEFORE` (`:1419`) | truncated-PEM redaction gap | "the fix is a length-bounded variant" | **G-3** — *missed by F-1's count* |
+| 20 | same entry (`:1426`) | `core/event/redact.defaultMatchers` not widened | "the wrong blast radius" | **G-3** — *missed by F-1's count* |
+| 21 | same entry (`:1433`) | `core/eval/capture.go` `redactString` | "gated behind eval capture being enabled" | **G-3** — *missed by F-1's count* |
+
+---
+
+## §8.1 — Resolved by reference (no owner time required)
+
+These cost the owner nothing. Each row is already answered by a 2026-08-19
+ruling; the ledger edits in this change point each one at its ruling.
+
+### R-1 · `:619` deferred asks + wizards → **A-12**
+
+A-12 ruled **BUILD BOTH LEGS** and names this exact row as its instance
+(*"Instance. `docs/unwired-ledger.md:592-623`"*). Add `mode` to
+`askuserquestion.AskArgs`, wire `OpenWizard`'s missing call site, mount
+`DeferredAskPill.vue` + `DeferredAskPanel.vue`. The row's option (b) — "delete
+both legs" — is additionally foreclosed by **A-0**'s delete-lane freeze.
+
+### R-2 · `:648` todo + sub-agent unmounted UI → **A-13**
+
+A-13 ruled **BUILD THE CONTROL RPCs + the background-task producer**, names
+this exact row as its instance (`docs/unwired-ledger.md:625-651`), and
+deliberately **reverses this row's own recommended default** ("Sub-agent:
+delete"). A-13 also splits the row the way the row itself did: *"the sibling
+`todo` case is the opposite call: wire it."*
+
+⚠️ Carry **Part 7's correction** into any work here: A-13's stated premise that
+`kenaz__subagent_dispatch` is "already live" is **false**. Re-verified
+2026-08-19 — `core/rpc/builtins_wiring.go:312-313` reads
+`var subagentSeam agentgraph.BranchSeam // nil — no child-run spawner yet`
+followed by `if subagentSeam != nil`, so the registration inside is statically
+unreachable. Ruling unchanged; size and risk go up.
+
+### R-3 · `:831` the background-task subsystem has no producer → **A-13** (+ **A-7**)
+
+A-13 requires the background-task producer explicitly, because **A-7** ruled
+that all eight fire-less hook events get producers and three of them —
+`subagent_start`, `background_task_complete`, `worktree_create` — cannot be
+built without this seam. Re-verified 2026-08-19: `builtins_wiring.go:321` still
+reads `Tasks:   nil,` and `core/tools/bash/Options.BackgroundSpawn` still has
+assignments only in `run_in_background_test.go`.
+
+### R-4 · `:860` background-task follow-up → **A-13**
+
+The row's own text is *"same owner as the parent entry"*, so it follows R-3.
+Its instruction stands under A-13: *"If background execution ships, remount the
+panel and restore the nav entry in the same PR that wires the producer."*
+
+### R-5 · `docs/dead-code-audit-2026-08-18.md:758` compaction overhead → **X-7**
+
+X-7 ruled **ONE FINDING, WIRE IT**, owner alec, and states the fix explicitly:
+*"`:758` carried `OWNER: unassigned`, which fails the ritual's rule outright.
+It now has an owner and a disposition."* Verified 2026-08-19:
+`frontend/src/views/sessions/SessionsView.vue:948` still reads
+`const compactionOverheadUSD = ref<number>(0);` with no other writer.
+
+### R-6 (partial) · `:779` the six narrative tuning knobs → **A-4**
+
+`SummarizerProfileID`, `NarrativePromotionWeights`, `NarrativePromotionThreshold`,
+`NarrativeRetrievalWeight`, `NarrativePromoterParallelism` and
+`NarrativePreludeTopN` are retired with the subsystem under **A-4**
+(documented product retirement). Verified 2026-08-19 that all six are
+memory-narrative-scoped: `core/memory/narrative/synthetic.go:37` names
+`Settings.SummarizerProfileID`; `core/memory/narrative/prelude.go:28` names
+`NarrativePreludeTopN`. The row's remaining six fields are **G-4**.
+
+### R-7 (partial) · `:1083`'s P1b bullets → **A-13**
+
+The P1b block parks two capabilities *"pending a named mission"*: **delegated
+sub-agent execution** (`AgentsView.vue`, `AgentProfileEditor.vue`,
+`SubagentTab.vue`, `SubagentBudgetMeter.vue`) and **background execution**
+(`TaskOutputViewer.vue`, `SessionCloseDialog.vue`, `BackgroundTaskChip.vue`).
+A-13 is that named mission for both. The P3 item (`lib/capability-keys.ts`) is
+not ownerless — it carries a live disposition (*"Being wired as a typed
+import"*). The remaining **P1** list is **G-5**.
+
+---
+
+## §8.2 — New decisions
+
+---
+
+### G-1 — Which search implementation is the product's, and does compacted history stay findable?
+
+**Instances.** `docs/unwired-ledger.md:448-470` (`views/search` searches
+soft-archived rows); `:471-487` (`core/search` is a dead second engine);
+`:569-590` (`SearchModal` `?role=` unvalidated — a rider on the same surface,
+included because it has no owner, not because it is a product question).
+
+**Question.** Does the live search surface stop returning compaction-archived
+rows — and is `core/search` adopted as the single engine or parked with a
+blocker?
+
+**Evidence.**
+- `core/search/search.go:98` and `:110` — `AND sm.archived_at IS NULL` on both
+  query shapes.
+- `core/rpc/views/search/impl.go` — `grep -c archived_at` returns **0**. This is
+  the implementation the Wails binding and served mode call.
+- `core/search/search_test.go:9` is the **only** importer of `core/search`
+  anywhere in the tree.
+- `frontend/src/components/search/SearchModal.vue:60` —
+  `roleFilter.value = get('role');` — no membership check; `:118` forwards it;
+  the `<select>` at `:347-350` offers exactly `""`, `user`, `assistant`,
+  `system`.
+
+**Status quo.** A row that compaction soft-archived is gone from the transcript
+and gone from the model's history, and is still a search hit that navigates the
+user to a message the session no longer renders. Separately, a deep link
+carrying `?role=tool` puts the modal in a state its own control cannot express
+and cannot leave — the select renders blank and every query returns zero hits.
+
+**Recommended default.** **Add the predicate to the live implementation and add
+an explicit "include compacted history" filter**, so the capability is not
+silently removed along with the defect. Then either **adopt `core/search` as
+the single engine** or `justify(blocker, owner, date)` — under **A-0** it cannot
+be deleted this campaign, even though the ledger correctly classes it as *rival
+infrastructure*, which is one of the rubric's four delete classes. Ship the
+`readFromRoute` membership check as a rider in the same change.
+
+**Blast radius.** Adding the predicate alone makes compacted content
+unfindable, which users will notice — hence the paired filter. Leaving it
+navigates users to invisible messages. Adopting `core/search` swaps the engine
+behind a live binding and a served method.
+
+**Reversibility.** Reversible. Note the ledger forbids the third path: *"the two
+implementations should not keep disagreeing silently."*
+
+---
+
+### G-2 — Who owns the three transcript-truth findings a closed mission left behind?
+
+**Instances.** `docs/unwired-ledger.md:425-446` (the exit gate's revised answer
+never reaches the stream); `:489-540` (`Role == RoleAssistant` is a staleness
+class, and no gate sees it); `:361-396` (a move cannot be multimodal). All three
+are 01PMCH01 residue — the mission CLOSED 2026-08-14 and no WP claimed them.
+
+**Question.** For each of the three: wire it, or park it with a named blocker
+and owner — and does the gate CLAUDE.md's gate-extension rule already required
+get written this release?
+
+**Evidence.**
+- `core/rpc/views/agentgraph/chat/moves.go:409` —
+  `absorbed := j.heldLive && strings.TrimSpace(j.held) == strings.TrimSpace(entry.Content)`.
+  The non-absorbed (revised) branch calls `j.allocate(moveKindFinal, moveDetail{})`
+  at `:413`, and `allocate` (`:154-169`) emits only
+  `Kind: coreag.StreamEventMoveStart` — **a boundary carrying no text.** So the
+  revised answer is persisted and never streamed.
+- `core/rpc/views/branches/impl.go:378` (tail-5 branch summary) and `:464`
+  (last-≤8 turns for `ReintegrationProposal`) — both still `if m.Role ==
+  session.RoleAssistant {`, so both sample the model's thinking-out-loud
+  alongside its answers.
+- `core/agentgraph/seams.go:322-325` — `type ToolResult struct { Content string;
+  IsError bool }`, with no blocks field; `agentgraph.HistoryEntry` likewise.
+- The owed gate: `:520-523` records that the merge-base→WP06 diff *"touches no
+  file under `scripts/ci/`"*, so CLAUDE.md's gate-extension rule is **not
+  satisfied** for a class WP06 itself identified.
+
+**Status quo.** A user watches a draft stream, the exit gate revises it, and the
+live view keeps showing the draft while a reload shows the revision — the
+transcript is right and the surface is wrong. Branch summaries and reintegration
+proposals quote interim narration as if it were answers. Multimodal moves are
+inexpressible, but nothing needs them today.
+
+**Recommended default.** **Wire the first two; write the owed gate; park the
+third.** Specifically: (a) deliver the revised text as a move boundary **plus
+deltas** so the surface can replace the draft bubble — the boundary already
+fires, only the text is missing; (b) the one-line filter to
+`MoveKind() == MoveKindFinal || MoveKind() == ""` at both branch sites; (c) the
+gate, with a planted-violation proof in `scripts/ci/gates_can_fail_test.go`, per
+the rule — the ledger already proves the candidate set is small and enumerable
+(eleven non-test files); (d) `justify(blocker: "no multimodal tool-result
+producer exists — `agentgraph.ToolResult` carries no blocks", owner: <name>,
+date: 2026-08-19)` for the multimodal hole, since **A-0** forecloses deleting it
+and it is the rubric's no-producer case.
+
+**Blast radius.** (a) touches the chat stream contract on a path that fires only
+when the gate revises. (b) is one line each and makes summaries quieter. (c) is
+CI-only. (d) is a documentation line.
+
+**Reversibility.** All reversible. Note (b)'s cited lines in the ledger
+(`:366`, `:452`) have **drifted** — see §8.3-P3.
+
+---
+
+### G-3 — Four redaction catalogs have diverged, and the weakest one writes to disk
+
+**Instances.** `docs/unwired-ledger.md:1419` (truncated PEM not matched);
+`:1426` (`core/event/redact.defaultMatchers` not widened); `:1433`
+(`core/eval/capture.go` `redactString`); plus `:318`, which is **not open** —
+see §8.3-P1 — and whose ledger row should be closed with a pointer rather than
+escalated.
+
+**Question.** Who owns keeping the four redaction catalogs from diverging, and
+does the eval-capture writer get brought up to the export catalog's standard
+before eval capture is ever enabled by default?
+
+**Evidence.**
+- `core/eval/capture.go:137` — `func redactString(s string) string {`, whose own
+  doc comment lists its entire coverage: *"sk-ant-…, sk-…, Bearer …"* plus the
+  `env:` locator format. No GitHub token, no AWS key, no JWT, no password, no
+  cookie. The ledger's framing at `:1433`: *"it writes LLM messages to disk"*,
+  and its own comment calls it *"defense-in-depth"* behind the event log —
+  *"which is true of the event-log path and not of the capture FILE."*
+- `docs/unwired-ledger.md:1426` — `core/event/redact.defaultMatchers`
+  *"still has all ten original patterns including the JSON-blind generic"*, and
+  it feeds the audit log's HMAC pipeline.
+- `:1419` — the PEM pattern requires the `-----END … PRIVATE KEY-----` marker
+  while `capToolOutput` truncates at 4000 runes.
+
+**Status quo.** The export catalog was widened substantially (recursive walk,
+key-name anchoring, eleven new shapes). The other three were not, deliberately
+and with stated reasons — but with **no owner on any of them**, so the
+divergence has no closing date. The eval-capture one writes model messages to a
+file with a two-pattern scanner.
+
+**Recommended default.** **One owner for all four catalogs, and a deadline on
+the eval-capture one specifically.** The other two parks are well-reasoned and
+should become compliant `justify(blocker, owner, date)` lines rather than work:
+`:1426`'s blocker is *"widening a live audit pipeline from inside an export fix
+is the wrong blast radius"* — a real blocker that only lacks a name; `:1419`'s
+is precision loss. `core/eval/capture.go` is different in kind: it is the only
+one whose failure mode is a credential at rest on the user's disk, and *"gated
+behind eval capture being enabled"* is a mitigation, not a blocker. Under the
+rubric this is **trust-relevant**, which is the class that does not get parked
+without an explicit ruling.
+
+**Blast radius.** Widening `capture.go` to reuse the export catalog is small and
+local. Widening `core/event/redact` is not — it changes what a live HMAC audit
+pipeline emits, which is why it should stay parked with a name on it.
+
+**Reversibility.** The code changes are reversible. **A credential already
+written to a capture file is not.**
+
+---
+
+### G-4 — Does `settings.Settings` come under `knobcoverage`, and what happens to the six remaining inert fields?
+
+**Instances.** `docs/unwired-ledger.md:750-781` (settings fields that are
+stored, bound and inert). Unblocks `:782-798` (knob-coverage tracks one struct
+out of the several that need it) in the same answer. Six of the row's fields are
+already resolved by **A-4** — see R-6.
+
+**Question.** Does the largest knob surface in the tree (~78 exported fields)
+come under `core/wiring/knobcoverage`, and for each remaining inert field: wire
+a consumer, or justify with a blocker and an owner?
+
+**Evidence** — each re-verified 2026-08-19:
+- `EffectivePermissionMode()` (`core/rpc/views/settings/api.go:887`) has exactly
+  three callers, all store accessors: `impl.go:558`, `:560`, `:1714`. Nothing
+  branches on the value.
+- `MCPAutoRestart()` (`api.go:967`) has no reader anywhere in `core/mcp`;
+  `core/mcp/transport/stdio/supervisor.go:56` calls `s.attemptRestart()`
+  unconditionally. The field's own comment at `api.go:333` concedes it:
+  *"MCPAutoRestart() accessor; never read directly."*
+- `EffectiveLocalRuntimeRAMBytes` (`api.go:1639`) has **zero** callers.
+- `SkippedUpdateVersions` (`api.go:317`) — load/save only.
+- `CedarStrictCredentialMode`, `CredentialAuditRetentionDays` — consumers live
+  in `core/credstore`, an I7 orphan (`core/credstore/prune.go:64` describes the
+  wiring that does not exist: *"Wire a func() int that returns
+  Settings.CredentialAuditRetentionDays."*).
+
+**Status quo.** A user turns MCP auto-restart **off** and the supervisor
+restarts anyway. A user picks a permission posture and nothing branches on it. A
+user sets a local-runtime RAM override and nothing reads it. Each round-trips
+through a binding to the panel, so each reports itself as applied.
+
+**Recommended default.** **Bring `settings.Settings` under `knobcoverage`** —
+the structural fix the row itself names, and the reason this class was found by
+hand rather than by CI. Then rule each remaining field wire-or-justify. Two
+sequencing notes:
+- **`PermissionMode` should be ruled together with X-2 and B-4, not separately.**
+  Its documented semantics — *"every call prompts"* / *"all non-dangerous
+  permitted"* — is the per-call tool authorization **X-2** already ruled
+  **wire** (via `01PMZ202` WP11) and the interactive prompt **B-4** already
+  ruled **wire**. Ruling it here independently is how one question gets two
+  answers, which is the shape Part 0 exists to catch.
+- **`MCPAutoRestartDisabled` gates G-5's `MCPHealthSettingsPanel`.** Wire the
+  knob before mounting the panel, in the same PR, per CLAUDE.md.
+
+**Blast radius.** Registering ~78 fields with `knobcoverage` will surface more
+inert fields immediately — budget for a second, larger list rather than treating
+it as a one-commit fix. `RegisterDeferred` is also an unbounded escape hatch
+today (no allowlist file, no dates, no monotonic-shrink rule); closing that is
+part of the same change or the mechanism launders the next gap.
+
+**Reversibility.** Reversible. Not doing it means the next sweep re-derives this
+row by hand, which is exactly how it was produced.
+
+---
+
+### G-5 — The frontend P1 mount backlog: six components the ledger already says are wanted
+
+**Instance.** `docs/unwired-ledger.md:1000-1085` (the P1 block; P1b resolves to
+A-13 per R-7, and the P3 item is not ownerless).
+
+**Question.** Which of `RecoveryCodeFlow`, `ProjectAutonomyPanel`,
+`HookJournalView`, `MCPHealthSettingsPanel`, `CrashReportingOnboardingModal` and
+`CedarEditor` get mounted this release, and in what order relative to their
+backends?
+
+**Evidence** — importer graph re-verified 2026-08-19; **all six still have zero
+non-test, non-self-referential importers** under `frontend/src`.
+- `RecoveryCodeFlow` — backend assignment is **unconditional**:
+  `core/rpc/api.go:2695` `Recovery: &recoveryBackendAdapter{},` inside the bare
+  `{` block opened at `core/rpc/api.go:2405` (not an `if`). ⚠️ The ledger cites
+  `api.go:2426` — **stale**, see §8.3-P3.
+- `ProjectAutonomyPanel` — the project rung **is** engine-consumed:
+  `core/rpc/api.go:4370-4373` reads `pm.GetAutonomyProfile(ctx, *rec.ProjectID)`
+  into the `project` layer, fed to
+  `resolveAutonomyKnobsWithSettingsFallback(...)` → `autonomy.Resolve` at
+  `api.go:4703`. Bindings exist at `core/rpc/bindings.go:2758` / `:2764`.
+  ⚠️ The ledger cites `api.go:4304` — **stale**, see §8.3-P3.
+- `MCPHealthSettingsPanel` — the ledger's own note holds: *"blocked on an inert
+  Go knob … Wire the consumer first, in the same PR."* That knob is
+  `MCPAutoRestartDisabled` in **G-4**.
+
+**Status quo.** Six built, tested components ship in the bundle and no route or
+parent reaches any of them. `RecoveryCodeFlow` is the notable one — CLAUDE.md
+names it as the canonical "backend is live and only the UI is missing" case and
+it is *"the only recovery surface in the product"*.
+
+**Recommended default.** **Mount the ones whose backends are verified live, and
+hold the two that are not.** Mount now: `RecoveryCodeFlow`,
+`ProjectAutonomyPanel`, `CrashReportingOnboardingModal`. Hold
+`HookJournalView` until its read path exists (rows are written to SQL; the read
+path is what is missing). **Do not mount `MCPHealthSettingsPanel` until G-4
+wires `MCPAutoRestartDisabled`** — mounting it first moves the lie from the
+backend to the UI, which the ritual names explicitly. Hold `CedarEditor` for the
+mission that ports its fleet features into `PolicyView`.
+
+**Blast radius.** Each mount is additive and small. The risk is entirely in
+mounting the wrong one — which the row's own drifted citations nearly caused
+once before (the `BranchAdvisorSettings` correction recorded at `:1024-1042`:
+following the old pointer *"would have wired the wrong two fields, mounted the
+panel, and shipped an inert toggle"*).
+
+**Reversibility.** Reversible.
+
+---
+
+### G-6 — Denial UX: is the pull panel the product's answer, or does a push feed ship?
+
+**Instance.** `docs/unwired-ledger.md:653-714`.
+
+**Question.** Is `PolicyView`'s pull-based Decisions tab the shipped answer for
+policy denials, or does the product want live, push-driven denial surfacing —
+and does `policyAPI` get a real backend or a dated justification?
+
+**Evidence.**
+- `core/rpc/api.go:434` declares `policyAPI policy.PolicyAPI`; its **only**
+  assignment is `core/rpc/api.go:1264` — `policyAPI:      &stubPolicy{},`. Every
+  method returns `errNotWired`. Served at `api.go:6996`.
+- `frontend/src/views/policy/PolicyView.vue:72` — *"Pull-based: no push topic,
+  no policy:event contract (spec §4 non-goal)."* That comment is the **only**
+  occurrence of `policy:event` in the entire tree.
+- The row's 2026-08-18 amendment records what actually shipped: WP05 hoisted
+  every gate site to one shared `*cedar.Engine`, and WP06 built the pull panel
+  on `CedarPolicy_RecentDecisions`.
+
+**Status quo.** A denial the user just caused appears the next time they open or
+refresh `/policy`. A denial that happens with nobody looking is never surfaced
+proactively. That pull-vs-push distinction is the entire remaining scope.
+
+**Recommended default.** **Rule the pull panel sufficient for now and park the
+push feed with a dated blocker — but resolve `policyAPI` with X-1, not
+separately.** `policyAPI` is a **fifth stub RPC domain that X-1 did not
+enumerate** (X-1 covers `a2aAPI`, `workflowAPI`, `trustAPI`, `contextAPI`). It
+is the same lie in the same shape, and under **A-0** it is not deletable this
+campaign, so the honest outcome is the same dated justification the other four
+get. Answering it inside X-1's set costs nothing extra and stops a sixth sweep
+re-finding it alone.
+
+**Blast radius.** Push = a broker topic contract, a publisher at every gate
+site, and a toast surface. Pull-only = the current behaviour, stated plainly.
+Trust-relevant per the rubric (*consent, permissions, denials, audit*), which is
+why it needs an explicit ruling rather than silence.
+
+**Reversibility.** Reversible.
+
+---
+
+### G-7 — `LocalRuntimeInfo.Models`: probe at list time, or drop the branch?
+
+**Instance.** `docs/unwired-ledger.md:716-748`.
+
+**Question.** Does the local-runtimes card learn which models a running runtime
+has, or does the branch that claims to show them come out?
+
+**Evidence.** `core/rpc/views/llm/impl_local_runtime.go:181-194` —
+`runtimeInfosToWire`, the sole converter for both listing sites, copies `Kind`,
+`Name`, `Running`, `Installed`, `DefaultBaseURL` and `Port`, and **never sets
+`Models`**. The neighbouring `runtimeModelsToWire` (`:197`) does populate a
+`Models` field, but on a different wire type reached by a different RPC.
+
+**Status quo.** A running local runtime with models installed **always** renders
+*"No models detected (runtime is running)"*. `LocalRuntimesSection.vue` is a
+shipping surface, so this is a live cosmetic lie, not dead code.
+
+**Recommended default.** **Populate `Models` with a per-runtime probe at list
+time, and scope it with A-5/D-2 rather than as a standalone fix.** **D-2** ruled
+`CapabilityHints` **probe-driven** and **A-5** ruled the provider-capability
+cache **wire it as the probe vehicle** — this is the same probe against the same
+class of endpoint, and building a second one would be the rival-infrastructure
+shape this campaign keeps finding. The ledger's warning holds: *"Do not 'fix' it
+by deleting the string alone — the probe is the feature."*
+
+**Blast radius.** A probe at list time costs a round-trip per installed runtime
+on a settings-panel render. Deleting the branch removes the affordance
+permanently and leaves `LocalRuntimeInfo.Models` with no writer *and* no reader.
+
+**Reversibility.** Reversible.
+
+---
+
+### G-8 — Migration 0335's FTS purge: add the guard, or document it as once-only?
+
+**Instance.** `docs/unwired-ledger.md:542-567`.
+
+**Question.** Does the tool-row FTS purge become idempotent, or does it get an
+explicit "may be applied exactly once" contract at the statement?
+
+**Evidence.** `core/session/migrations_search_fts_tool_rows.go:155-156` —
+```
+const sqlPurgeToolRowsFromFTS = `INSERT INTO messages_fts(messages_fts, rowid, content)
+    SELECT 'delete', rowid, content FROM session_messages WHERE role = 'tool'`
+```
+issued unguarded at `:190`. By the migration's own documented reasoning
+(`:104-110`), a `'delete'` for terms the index does not hold drives term counts
+negative and SQLite then fails with *"database disk image is malformed"*.
+
+**Status quo.** Latent, not live. Migrations run once by ledger key and 0335's
+`Down` backfills the same rows, so the supported Down→Up cycle is balanced. What
+is unguarded is any future path that re-applies `Up` without the matching
+`Down`: a repair routine, a manual re-run, or a second migration that copies the
+statement — and it reads like a plain backfill, which is why it will be copied.
+
+**Recommended default.** **Add the guard.** This sits squarely in CLAUDE.md's
+blind spot #3 — *"a migration that has never run against populated tables has
+never been tested"* — and the ledger already records what that class costs:
+`sessions/0327-source-model-output` *"already destroyed data, and it is
+unrecoverable"*, and repairing migration **selection** is what turned
+`sessions/0332-artifacts-global-scope` into a live cascade hazard. A guard that
+makes the purge a no-op when the index holds no tool rows is cheap; a corrupted
+FTS index on a user's database is not.
+
+**Honesty note carried from the row:** the corruption claim is *"not
+independently reproduced"* — it is the migration's own comment plus the shape of
+the SQL. Treat it as a hazard to design against, not a measured failure.
+
+**Reversibility.** The guard is reversible. **The corruption is not.**
+
+---
+
+### G-9 — Name the owner for the harness-self attach follow-on mission
+
+**Instance.** `docs/unwired-ledger.md:1086-1138` (the 2026-08-18
+`mcp-connector-lifecycle-01PMMC01` WP01 amendment). **Missed by F-1's count** —
+see §8.3-P2.
+
+**Question.** Who dispatches the harness-self attach follow-on mission, and by
+when?
+
+**Evidence.** `docs/unwired-ledger.md:1099-1104` — *"**Owner of the attach
+execution:** the mission owner who dispatches the follow-on mission; unassigned
+as of this entry. **Blocker:** the visibility seam and `EmbeddedCedar` wiring do
+not exist yet."*
+
+**Status quo.** The product decision is **already made** — the owner ruled
+**attach** on 2026-08-18, recorded at
+`kitty-specs/mcp-connector-lifecycle-01PMMC01/research/b10-harness-self-decision.md`.
+The blocker is named and real. What is missing is a person and a date.
+
+**Recommended default.** **Name alec and date it. No capability question is
+open.** This is the cheapest of the nine and the purest instance of what F-1
+actually forbids: a row that names a blocker but not a person, which the ritual
+says *"is not a justification, it is unexplained code with a label on it."*
+Note the blocker is load-bearing and must survive the assignment: attaching
+before the visibility seam and `EmbeddedCedar` land *"would hand every session
+write access to provider credentials and settings"*.
+
+**Reversibility.** Fully reversible — it is a name and a date.
+
+---
+
+## §8.3 — Premise findings
+
+Four things this sitting found by verifying rather than trusting. Per the
+standing lesson in Part 7: *a ruling is a decision about what to do; it is not
+evidence about what the code is.* The same now applies to ledger rows.
+
+### P1 — `:318` is not open. Its stated closing change is already implemented.
+
+The row reads *"**Owner:** unassigned. The change that closes it is a recursive
+walk in `redactMessages` over `map[string]any` / `[]any` / keys."* That walk
+**exists**: `core/sessions/export/redact.go:528-534` calls
+`RedactValue(k)` on every argument key and `redactStructured(v, 1,
+secretNamingKeyRe.MatchString(k), …)` on every value, bounded by
+`MaxRedactDepth = 24` (`:297`) and cycle-guarded (`:409`). The entry's own
+heading already says *"**CLOSED 2026-08-16, see below**"* and the Drained entry
+below it documents the widened scanner in detail.
+
+So one of F-1's sixteen needs **no decision at all** — the `**Owner:**
+unassigned` line is residue inside an entry that was superseded and never had
+its footer trimmed. **Disposition: close the row with a pointer to the Drained
+entry.** This is *not* a delete under A-0; it is a record correction, the same
+class as X-3's instruction to *"correct the ledger's DRAINED claim … so the
+record does not outlive the code."*
+
+### P2 — F-1's count of sixteen anchored on the bold form and missed four more.
+
+`grep '\*\*Owner:\*\* unassigned'` returns exactly 16 — which is where the
+figure came from. But the ledger holds **four more ownerless parks in other
+phrasings**:
+
+| Line | Form | Now |
+|---|---|---|
+| `:1101` | `…mission; unassigned as of this entry.` | **G-9** |
+| `:1419` | `Owner: unassigned;` (unbolded, list item) | **G-3** |
+| `:1426` | `Owner: unassigned.` (unbolded, list item) | **G-3** |
+| `:1433` | `Owner: unassigned.` (unbolded, list item) | **G-3** |
+
+The true total is **20 in the ledger, 21 including the audit**. The three
+unbolded ones are all redaction parks, and one of them
+(`core/eval/capture.go:137`) writes model messages to disk behind a two-pattern
+scanner — so the phrasing accident hid the single highest-severity item in the
+set. **A mechanical sweep must match on `[Oo]wner:.*unassigned`, not on the bold
+form.** Recommend this as the gate-extension obligation for this finding class,
+per CLAUDE.md's rule.
+
+### P3 — Two rows' load-bearing citations have drifted. Both claims still hold.
+
+Anyone acting on the cited lines would have wired the wrong thing — the exact
+failure the ledger's own `BranchAdvisorSettings` correction records.
+
+| Row | Cited | Actually | Claim |
+|---|---|---|---|
+| `:1013` (`RecoveryCodeFlow`) | `core/rpc/api.go:2426` | `:2695` (`Recovery: &recoveryBackendAdapter{},`), inside the **bare** block opened at `:2405` | **holds** — unconditional |
+| `:1015` (`ProjectAutonomyPanel`) | `core/rpc/api.go:4304` | `:4370-4373` → `:4703` `autonomy.Resolve` | **holds** — engine-consumed |
+| `:508-510` (branch drift) | `branches/impl.go:366`, `:452` | `:378`, `:464` | **holds** — both still `Role == RoleAssistant` |
+
+`core/rpc/api.go:2426` today is `a.catalogAPI = catalogview.NewAPI(nil, nil,
+"")` and `:4304` is a headless-confirm log line. Neither is related to its
+citing row. **Recommend the ledger stop citing bare line numbers for `api.go`**,
+which is ~7,000 lines and churns every release; cite the symbol.
+
+### P4 — Confirms Part 7 rather than adding to it.
+
+`:648` and `:831` both rest on the sub-agent seam. Re-verified 2026-08-19 at
+`core/rpc/builtins_wiring.go:312-313`: `var subagentSeam agentgraph.BranchSeam
+// nil — no child-run spawner yet` followed immediately by `if subagentSeam !=
+nil`. This **confirms Part 7's A-13 correction** (`kenaz__subagent_dispatch` is
+NOT live) independently. No new finding; recorded so R-2 and R-3 carry the
+corrected size estimate rather than the ruling's original one.
+
+---
+
+## Appendix C — Verification ledger (Part 8)
+
+**Method.** Every row was located mechanically
+(`grep -n '[Oo]wner:.*unassigned' docs/unwired-ledger.md
+docs/dead-code-audit-2026-08-18.md docs/dead-code-audit-2026-08-16.md
+scripts/ci/allowlists/`), not from a supplied list — which is how the four
+unbolded parks in §8.3-P2 were found. `.claude/worktrees/` and `.worktrees/`
+were excluded from every search. All work on branch `release/v0.59.0`.
+
+**Code citations re-read before being written here** (`sed -n '<line>p'` or a
+surrounding-range read, per citation):
+
+| Claim | Location | Result |
+|---|---|---|
+| export walk is recursive + key-scanning | `core/sessions/export/redact.go:297,409,514-537` | ✅ matched |
+| `views/search` lacks the predicate | `core/rpc/views/search/impl.go` (`grep -c archived_at` → 0) | ✅ matched |
+| `core/search` has the predicate | `core/search/search.go:98,110` | ✅ matched |
+| `core/search` has one importer, its own test | `core/search/search_test.go:9` | ✅ matched |
+| `?role=` unvalidated; four options | `SearchModal.vue:60,118,347-350` | ✅ matched |
+| revised final allocates a new move | `chat/moves.go:409,413` | ✅ matched |
+| `allocate` emits a boundary only | `chat/moves.go:154-169` | ✅ matched |
+| branch drift sites | `branches/impl.go:378,464` | ⚠️ ledger cites `:366`,`:452` — drifted, claim holds |
+| `ToolResult` has no blocks | `core/agentgraph/seams.go:322-325` | ✅ matched |
+| FTS purge unguarded | `core/session/migrations_search_fts_tool_rows.go:155-156,190` | ✅ matched |
+| `Models` never set on the listing path | `core/rpc/views/llm/impl_local_runtime.go:181-194` | ✅ matched |
+| `EffectivePermissionMode` has 3 store-only callers | `settings/api.go:887`; `impl.go:558,560,1714` | ✅ matched |
+| `MCPAutoRestart()` unread by `core/mcp` | `settings/api.go:333,967`; `stdio/supervisor.go:56` | ✅ matched |
+| `EffectiveLocalRuntimeRAMBytes` zero callers | `settings/api.go:1639` | ✅ matched |
+| `policyAPI` sole assignment is the stub | `core/rpc/api.go:434,1264,6996` | ✅ matched |
+| `policy:event` exists only in a comment | `PolicyView.vue:72` | ✅ matched |
+| `Recovery` adapter assignment is unconditional | `core/rpc/api.go:2405,2695` | ⚠️ ledger cites `:2426` — drifted, claim holds |
+| project rung is engine-consumed | `core/rpc/api.go:4370-4373,4703`; `bindings.go:2758,2764` | ⚠️ ledger cites `:4304` — drifted, claim holds |
+| six P1 components still unmounted | `frontend/src` importer graph, all six | ✅ matched |
+| `subagentSeam` nil; `Tasks: nil` | `core/rpc/builtins_wiring.go:312-313,321` | ✅ matched |
+| `BackgroundSpawn` test-only | `core/tools/bash/run_in_background_test.go:67` | ✅ matched |
+| compaction-overhead ref has no writer | `SessionsView.vue:948` | ✅ matched |
+| narrative knobs are narrative-scoped | `core/memory/narrative/synthetic.go:37`, `prelude.go:28` | ✅ matched |
+| `redactString` covers three shapes | `core/eval/capture.go:133-142` | ✅ matched |
+| register C-2's own citation (spot-check) | `core/rpc/api.go:2653` | ✅ matched exactly |
+
+**Twenty-five checks; twenty-two matched exactly, three found line drift with
+the underlying claim intact** — all three recorded in §8.3-P3 rather than
+silently corrected.
+
+**Not done.** No escalation was resolved. No code, test, spec, allowlist or
+audit document was modified. No test was run and nothing was compiled. The only
+files written are this Part 8 and the pointer edits in `docs/unwired-ledger.md`.
