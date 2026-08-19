@@ -77,10 +77,11 @@ const (
 	// by the 2026-08-14 sweep — no emit site for any of the three ever
 	// existed. See docs/unwired-ledger.md's harness-self entry and
 	// kitty-specs/harness-self-attach-01PMHS01/research/attach-decision.md
-	// (mcp-connector-lifecycle-01PMMC01, the mission this comment used to
-	// point at, is archived and has no research/ directory at all; the
-	// b10-harness-self-decision.md it named does not exist there — the
-	// ruling it recorded is reproduced in the file cited above).
+	// — NOTE that path is gitignored and local-only, so the tracked
+	// ledger entry above is the authoritative reference for anyone
+	// reading from a clone. (The mission this comment previously named,
+	// mcp-connector-lifecycle-01PMMC01, is archived and has no research/
+	// directory; the file it cited never existed.)
 	KindHarnessSelfToolCalled Kind = "harness-self.tool.called"
 
 	// KindMigrationDriftDetected is emitted at most once per chassis boot
