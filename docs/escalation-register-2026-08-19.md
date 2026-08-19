@@ -2591,6 +2591,17 @@ import"*). The remaining **P1** list is **G-5**.
 
 ### G-1 — Which search implementation is the product's, and does compacted history stay findable?
 
+> ## ✅ RULED 2026-08-19 — owner: alec. **Recommended default accepted.**
+>
+> Add the archived-row predicate to the LIVE implementation **and** an explicit
+> "include compacted history" filter, so the capability is not silently removed
+> along with the defect. Ship the `readFromRoute` membership check as a rider.
+>
+> `core/search` is **not deleted** — A-0's freeze applies even though the ledger
+> correctly classes it as rival infrastructure, which is one of the rubric's four
+> delete classes. Either adopt it as the single engine or
+> `justify(blocker, owner: alec, date: 2026-08-19)`.
+
 **Instances.** `docs/unwired-ledger.md:448-470` (`views/search` searches
 soft-archived rows); `:471-487` (`core/search` is a dead second engine);
 `:569-590` (`SearchModal` `?role=` unvalidated — a rider on the same surface,
@@ -2637,6 +2648,17 @@ implementations should not keep disagreeing silently."*
 ---
 
 ### G-2 — Who owns the three transcript-truth findings a closed mission left behind?
+
+> ## ✅ RULED 2026-08-19 — owner: alec. **Wire two, gate one, park one.**
+>
+> (a) Deliver the exit gate's revised text as a move boundary **plus deltas** —
+> the boundary already fires, only the text is missing. (b) The one-line filter
+> to `MoveKind() == MoveKindFinal || MoveKind() == ""` at both branch sites.
+> (c) The owed gate, with a planted-violation proof in
+> `scripts/ci/gates_can_fail_test.go` — the candidate set is small and
+> enumerable (eleven non-test files). (d) **Park** the multimodal move:
+> `justify(blocker: "no multimodal tool-result producer exists —
+> agentgraph.ToolResult carries no blocks", owner: alec, date: 2026-08-19)`.
 
 **Instances.** `docs/unwired-ledger.md:425-446` (the exit gate's revised answer
 never reaches the stream); `:489-540` (`Role == RoleAssistant` is a staleness
@@ -2693,6 +2715,26 @@ CI-only. (d) is a documentation line.
 
 ### G-3 — Four redaction catalogs have diverged, and the weakest one writes to disk
 
+> ## ✅ RULED 2026-08-19 — owner: alec. **ONE OWNER, ONE SHARED CATALOG.**
+>
+> The widened export catalog (recursive walk, key scanning, `MaxRedactDepth`)
+> becomes the single source; the Sentry Go, Sentry TS and eval-capture catalogs
+> **consume it rather than copying it**.
+>
+> ### The urgent instance
+> `core/eval/capture.go:137` `redactString` handles `sk-` and `Bearer ` and
+> nothing else — while its own doc comment claims it also redacts the `env:`
+> credential-locator format, and there is **no code for that**. It writes full
+> LLM `Messages` to `<DataDir>/eval-captures/<session_id>.jsonl`. AWS keys,
+> GitHub tokens, JWTs, database URLs and email addresses reach disk in
+> plaintext. **Fix the doc-comment lie in the same commit as the behaviour** —
+> a reader trusting that comment is the failure mode.
+>
+> **Gate owed:** a new redaction catalog must CONSUME the shared one, not copy
+> it. Needs a planted-violation proof. Without it a fifth catalog appears and
+> the next sweep finds this again — this is the third incomplete redactor the
+> campaign has found (export, fixed v0.63.1; Sentry, both languages; this one).
+
 **Instances.** `docs/unwired-ledger.md:1419` (truncated PEM not matched);
 `:1426` (`core/event/redact.defaultMatchers` not widened); `:1433`
 (`core/eval/capture.go` `redactString`); plus `:318`, which is **not open** —
@@ -2743,6 +2785,26 @@ written to a capture file is not.**
 ---
 
 ### G-4 — Does `settings.Settings` come under `knobcoverage`, and what happens to the six remaining inert fields?
+
+> ## ✅ RULED 2026-08-19 — owner: alec. **BRING `settings.Settings` UNDER `knobcoverage`.**
+>
+> The mechanism is already generic (`knobcoverage.Register[T any]`), so this is
+> **one registration site plus a guard test**, not a script change — ~78/79
+> exported fields tracked.
+>
+> **Honest coverage:** it reaches 5 of the 8 known settings findings.
+> `controls-and-readouts-01PMZ808` named the three it structurally cannot —
+> `SchemaVersion` registers clean while its defect survives,
+> `MaxGeneratedImageBytes` has a consumer, and `SD-06`/`SD-07` are interface
+> **methods**, out of reflection's reach. Wire or narrow those three directly.
+>
+> **Ships the missing planted proof in the same WP.** `pr.yml:374-383` lists
+> *"the check-knob-coverage vacuous-pass fix"* among the proofs;
+> `grep -c 'knob' scripts/ci/gates_can_fail_test.go` returns **0**. See task #48.
+>
+> **Constraints:** `Uncovered[T]` panics on an untracked type, `Register` panics
+> on duplicates, the site must live under `./core/...`, and must not be in the
+> mechanism's own package.
 
 **Instances.** `docs/unwired-ledger.md:750-781` (settings fields that are
 stored, bound and inert). Unblocks `:782-798` (knob-coverage tracks one struct
@@ -2849,6 +2911,19 @@ panel, and shipped an inert toggle"*).
 
 ### G-6 — Denial UX: is the pull panel the product's answer, or does a push feed ship?
 
+> ## ✅ RULED 2026-08-19 — owner: alec. **Pull panel sufficient; push feed parked; `policyAPI` folded into X-1.**
+>
+> `PolicyView`'s Decisions tab is the shipped answer for now.
+> `justify(blocker: "no push path exists — the `policy:event` topic is emitted
+> nowhere and subscribed nowhere", owner: alec, date: 2026-08-19)`.
+>
+> **`policyAPI` is a FIFTH stub RPC domain X-1 did not enumerate** (X-1 covers
+> `a2aAPI`, `workflowAPI`, `trustAPI`, `contextAPI`); sole assignment
+> `&stubPolicy{}` at `core/rpc/api.go:1264`. Same lie, same shape, and under A-0
+> not deletable — so it takes the **same dated justification** as the other
+> four, inside X-1's set. Answering it there costs nothing and stops a sixth
+> sweep re-finding it alone.
+
 **Instance.** `docs/unwired-ledger.md:653-714`.
 
 **Question.** Is `PolicyView`'s pull-based Decisions tab the shipped answer for
@@ -2890,6 +2965,18 @@ why it needs an explicit ruling rather than silence.
 
 ### G-7 — `LocalRuntimeInfo.Models`: probe at list time, or drop the branch?
 
+> ## ✅ RULED 2026-08-19 — owner: alec. **Probe at list time — scoped with A-5/D-2, not standalone.**
+>
+> D-2 ruled `CapabilityHints` probe-driven and A-5 ruled the provider-capability
+> cache is the probe vehicle. **This is the same probe against the same class of
+> endpoint**; building a second one is the rival-infrastructure shape this
+> campaign keeps finding. Scope it into `model-settings-reach-the-model-01PMZ101`
+> WP14 rather than as a separate fix.
+>
+> The ledger's warning holds and is now a ruling: *"Do not 'fix' it by deleting
+> the string alone — the probe is the feature."* Today a running local runtime
+> with models installed **always** renders "No models detected".
+
 **Instance.** `docs/unwired-ledger.md:716-748`.
 
 **Question.** Does the local-runtimes card learn which models a running runtime
@@ -2922,6 +3009,23 @@ permanently and leaves `LocalRuntimeInfo.Models` with no writer *and* no reader.
 ---
 
 ### G-8 — Migration 0335's FTS purge: add the guard, or document it as once-only?
+
+> ## ✅ RULED 2026-08-19 — owner: alec. **ADD THE GUARD.**
+>
+> Make the purge a no-op when the index holds no tool rows. Latent today —
+> migrations run once by ledger key — but this sits squarely in CLAUDE.md blind
+> spot #3: *"a migration that has never run against populated tables has never
+> been tested."*
+>
+> The ledger records what this class costs: `sessions/0327-source-model-output`
+> *"already destroyed data, and it is unrecoverable"*, and repairing migration
+> **selection** is what turned `sessions/0332-artifacts-global-scope` into a
+> live cascade hazard the instant the v0.63.1 fix shipped. **A guard is cheap; a
+> corrupted FTS index on a user's database is not.**
+>
+> Pairs with `audit-that-tells-the-truth-01PMZA10` UNIT-8, which found by
+> EXECUTION that a purge against an external-content FTS table leaves it
+> permanently unreadable, not merely stale.
 
 **Instance.** `docs/unwired-ledger.md:542-567`.
 
@@ -2961,6 +3065,18 @@ the SQL. Treat it as a hazard to design against, not a measured failure.
 ---
 
 ### G-9 — Name the owner for the harness-self attach follow-on mission
+
+> ## ✅ RULED 2026-08-19 — owner: alec. **Owner: alec. Dated 2026-08-19.**
+>
+> No capability question is open — the attach ruling was already made. This was
+> the purest instance of what F-1 forbids: a row naming a blocker but not a
+> person, which the ritual calls *"not a justification, it is unexplained code
+> with a label on it."*
+>
+> ⚠️ **The blocker survives the assignment and is load-bearing.** Attaching
+> before the visibility seam and `EmbeddedCedar` land *"would hand every session
+> write access to provider credentials and settings."* Naming an owner does not
+> unblock the work; it names who decides when it unblocks.
 
 **Instance.** `docs/unwired-ledger.md:1086-1138` (the 2026-08-18
 `mcp-connector-lifecycle-01PMMC01` WP01 amendment). **Missed by F-1's count** —
