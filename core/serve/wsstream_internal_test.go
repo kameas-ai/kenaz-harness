@@ -75,7 +75,10 @@ func (pipeAddr) String() string  { return "pipe" }
 
 // newPipedStream runs s.streamSessions over an in-memory pipe and returns the
 // client end of the WebSocket, already past the initial sessions:snapshot.
-func newPipedStream(t *testing.T, s *Server) *websocket.Conn {
+// sessionID is the session this pipe connection subscribes to — every test
+// publishing an event through it must stamp the matching SessionID on the
+// payload, or WP01's frameFor session-scoping will (correctly) drop it.
+func newPipedStream(t *testing.T, s *Server, sessionID string) *websocket.Conn {
 	t.Helper()
 
 	serverEnd, clientEnd := net.Pipe()
@@ -87,7 +90,7 @@ func newPipedStream(t *testing.T, s *Server) *websocket.Conn {
 
 	httpSrv := &http.Server{
 		Handler: websocket.Handler(func(ws *websocket.Conn) {
-			s.streamSessions(ctx, ws)
+			s.streamSessions(ctx, ws, sessionID)
 		}),
 	}
 	served := make(chan struct{})
@@ -151,14 +154,16 @@ func newPipeServer(t *testing.T, queueCap int) (*rpc.API, *Server) {
 // dropped before the client reads its first byte, on any platform.
 func TestStreamSessions_StalledPipeClientIsToldItWasTruncated(t *testing.T) {
 	const queueCap = 2
+	const sessionID = "sess-pipe"
 	api, s := newPipeServer(t, queueCap)
-	ws := newPipedStream(t, s)
+	ws := newPipedStream(t, s, sessionID)
 
 	burst := busBufferSize + queueCap + 1 + 64 // + margin, all in-memory
 	for i := range burst {
 		api.EventBus().Publish(topicLLMStreamChunk, llmview.StreamChunkPayload{
-			SubID: "sub-pipe",
-			Chunk: corellm.StreamEvent{Kind: corellm.StreamText, Text: "tok"},
+			SubID:     "sub-pipe",
+			SessionID: sessionID,
+			Chunk:     corellm.StreamEvent{Kind: corellm.StreamText, Text: "tok"},
 		})
 		_ = i
 	}
@@ -210,8 +215,9 @@ func TestStreamSessions_StalledPipeClientIsToldItWasTruncated(t *testing.T) {
 // than probabilistic — every published event is delivered, in order, with no
 // notice at all.
 func TestStreamSessions_LockstepPipeClientIsNeverTruncated(t *testing.T) {
+	const sessionID = "sess-pipe"
 	api, s := newPipeServer(t, defaultStreamQueueCap)
-	ws := newPipedStream(t, s)
+	ws := newPipedStream(t, s, sessionID)
 
 	const want = 200
 	done := make(chan struct{})
@@ -219,8 +225,9 @@ func TestStreamSessions_LockstepPipeClientIsNeverTruncated(t *testing.T) {
 		defer close(done)
 		for range want {
 			api.EventBus().Publish(topicLLMStreamChunk, llmview.StreamChunkPayload{
-				SubID: "sub-lockstep",
-				Chunk: corellm.StreamEvent{Kind: corellm.StreamText, Text: "tok"},
+				SubID:     "sub-lockstep",
+				SessionID: sessionID,
+				Chunk:     corellm.StreamEvent{Kind: corellm.StreamText, Text: "tok"},
 			})
 		}
 	}()
@@ -246,13 +253,15 @@ func TestStreamSessions_LockstepPipeClientIsNeverTruncated(t *testing.T) {
 // writer's deadline and the closed connection tear the handler down instead
 // of pinning a goroutine and a queue forever.
 func TestStreamSessions_PipeClientHangupTearsDownCleanly(t *testing.T) {
+	const sessionID = "sess-pipe"
 	api, s := newPipeServer(t, 2)
-	ws := newPipedStream(t, s)
+	ws := newPipedStream(t, s, sessionID)
 
 	for range 64 {
 		api.EventBus().Publish(topicLLMStreamChunk, llmview.StreamChunkPayload{
-			SubID: "sub-hangup",
-			Chunk: corellm.StreamEvent{Kind: corellm.StreamText, Text: "tok"},
+			SubID:     "sub-hangup",
+			SessionID: sessionID,
+			Chunk:     corellm.StreamEvent{Kind: corellm.StreamText, Text: "tok"},
 		})
 	}
 	if err := ws.Close(); err != nil {

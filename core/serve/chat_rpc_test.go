@@ -129,8 +129,15 @@ func rpcCallErr(t *testing.T, baseURL, method string, params any, out any) strin
 // dialChatWS opens the Sessions_Stream WebSocket and consumes the
 // mandatory initial snapshot so the caller starts from a clean frame
 // boundary.
-func dialChatWS(t *testing.T, baseURL string) *websocket.Conn {
+// sessionID is the session this connection subscribes to (WP01, AC-703:
+// params.id is required). Every session-bearing frame a test wants this
+// connection to receive must carry a matching session id — see wsstream.go
+// frameFor.
+func dialChatWS(t *testing.T, baseURL string, sessionID string) *websocket.Conn {
 	t.Helper()
+	if sessionID == "" {
+		t.Fatal("dialChatWS: sessionID is required (Sessions_Stream now refuses an empty params.id)")
+	}
 	wsURL := "ws" + strings.TrimPrefix(baseURL, "http") + "/ws"
 	cfg, err := websocket.NewConfig(wsURL, "http://localhost")
 	if err != nil {
@@ -143,7 +150,7 @@ func dialChatWS(t *testing.T, baseURL string) *websocket.Conn {
 	}
 	if err := websocket.JSON.Send(ws, map[string]any{
 		"method": "Sessions_Stream",
-		"params": map[string]any{},
+		"params": map[string]any{"id": sessionID},
 	}); err != nil {
 		t.Fatalf("ws send: %v", err)
 	}
@@ -248,7 +255,7 @@ func TestServedChat_CreateSendStreamStop(t *testing.T) {
 	}
 
 	// 3. Watch assistant tokens arrive over the WebSocket.
-	ws := dialChatWS(t, baseURL)
+	ws := dialChatWS(t, baseURL, created.ID)
 	defer ws.Close() //nolint:errcheck
 
 	const subID = "sub-42"
@@ -330,7 +337,7 @@ func TestServedChat_StartStreamDrivesTheRealChatRunner(t *testing.T) {
 		"id": created.ID, "role": "user", "content": "hello",
 	}, nil)
 
-	ws := dialChatWS(t, baseURL)
+	ws := dialChatWS(t, baseURL, created.ID)
 	defer ws.Close() //nolint:errcheck
 
 	var subID string
@@ -417,7 +424,7 @@ func TestServedChat_SecretsNeverCrossTheWire(t *testing.T) {
 	}
 
 	// And the WS path.
-	ws := dialChatWS(t, baseURL)
+	ws := dialChatWS(t, baseURL, created.ID)
 	defer ws.Close() //nolint:errcheck
 
 	go func() {
@@ -452,12 +459,22 @@ func TestServedChat_ForwardsInteractiveGateTopics(t *testing.T) {
 			api, baseURL, cancel := newChatHarness(t)
 			defer cancel()
 
-			ws := dialChatWS(t, baseURL)
+			const sessionID = "sess-gate-test"
+			ws := dialChatWS(t, baseURL, sessionID)
 			defer ws.Close() //nolint:errcheck
 
 			go func() {
 				time.Sleep(30 * time.Millisecond)
-				api.EventBus().Publish(topic, map[string]any{"marker": topic})
+				// Both key spellings: WP01's frameFor probes both
+				// "session_id" and "sessionId" (see wsstream.go
+				// sessionIDOf) since real producers use either one
+				// depending on the payload type. A bare marker map with
+				// neither key would now be dropped (D-705, fail closed).
+				api.EventBus().Publish(topic, map[string]any{
+					"marker":     topic,
+					"session_id": sessionID,
+					"sessionId":  sessionID,
+				})
 			}()
 
 			f := readUntil(t, ws, topic, 5*time.Second)
@@ -491,13 +508,15 @@ func TestServedChat_SnapshotImpliesSubscribed(t *testing.T) {
 	api, baseURL, cancel := newChatHarness(t)
 	defer cancel()
 
-	ws := dialChatWS(t, baseURL)
+	const sessionID = "sess-snapshot-test"
+	ws := dialChatWS(t, baseURL, sessionID)
 	defer ws.Close() //nolint:errcheck
 
 	// No pause here on purpose — the whole point is that none is needed.
 	api.EventBus().Publish("llm:stream-chunk", llmview.StreamChunkPayload{
-		SubID: "sub-first",
-		Chunk: corellm.StreamEvent{Kind: corellm.StreamText, Text: "first-token"},
+		SubID:     "sub-first",
+		SessionID: sessionID,
+		Chunk:     corellm.StreamEvent{Kind: corellm.StreamText, Text: "first-token"},
 	})
 
 	f := readUntil(t, ws, "llm:stream-chunk", 10*time.Second)
@@ -525,7 +544,8 @@ func TestServedChat_SlowConsumerIsToldItWasTruncated(t *testing.T) {
 	api, baseURL, cancel := newChatHarness(t, serve.WithStreamQueueCap(4))
 	defer cancel()
 
-	ws := dialChatWS(t, baseURL)
+	const sessionID = "sess-truncated-test"
+	ws := dialChatWS(t, baseURL, sessionID)
 	defer ws.Close() //nolint:errcheck
 
 	// Big payloads so the socket + kernel buffers fill quickly and the
@@ -574,8 +594,9 @@ func TestServedChat_SlowConsumerIsToldItWasTruncated(t *testing.T) {
 	// The client is NOT reading during this loop — that is the stall.
 	for i := range burst {
 		api.EventBus().Publish("llm:stream-chunk", llmview.StreamChunkPayload{
-			SubID: fmt.Sprintf("sub-%d", i),
-			Chunk: corellm.StreamEvent{Kind: corellm.StreamText, Text: fat},
+			SubID:     fmt.Sprintf("sub-%d", i),
+			SessionID: sessionID,
+			Chunk:     corellm.StreamEvent{Kind: corellm.StreamText, Text: fat},
 		})
 	}
 
@@ -649,7 +670,8 @@ func TestServedChat_HealthyConsumerIsNeverTruncated(t *testing.T) {
 	api, baseURL, cancel := newChatHarness(t)
 	defer cancel()
 
-	ws := dialChatWS(t, baseURL)
+	const sessionID = "sess-healthy-test"
+	ws := dialChatWS(t, baseURL, sessionID)
 	defer ws.Close() //nolint:errcheck
 
 	const want = 300
@@ -657,8 +679,9 @@ func TestServedChat_HealthyConsumerIsNeverTruncated(t *testing.T) {
 		time.Sleep(30 * time.Millisecond)
 		for i := range want {
 			api.EventBus().Publish("llm:stream-chunk", llmview.StreamChunkPayload{
-				SubID: "sub",
-				Chunk: corellm.StreamEvent{Kind: corellm.StreamText, Text: fmt.Sprintf("%d,", i)},
+				SubID:     "sub",
+				SessionID: sessionID,
+				Chunk:     corellm.StreamEvent{Kind: corellm.StreamText, Text: fmt.Sprintf("%d,", i)},
 			})
 		}
 	}()
@@ -706,9 +729,17 @@ func TestServedChat_SlowConsumerNeverStallsTheBus(t *testing.T) {
 	api, baseURL, cancel := newChatHarness(t, serve.WithStreamQueueCap(4))
 	defer cancel()
 
-	stalled := dialChatWS(t, baseURL)
+	// Both connections subscribe to the SAME session on purpose: the
+	// property under test is that one connection's queue backing up
+	// cannot stall rpc.EventBus.Publish for a second, healthy
+	// subscriber to the same traffic. Session-scoping (WP01) makes each
+	// connection's subscription and queue independent, but the burst
+	// below must still reach BOTH connections' pumps for the stalled
+	// one to actually experience the backpressure this test forces.
+	const sessionID = "sess-stall-test"
+	stalled := dialChatWS(t, baseURL, sessionID)
 	defer stalled.Close() //nolint:errcheck
-	healthy := dialChatWS(t, baseURL)
+	healthy := dialChatWS(t, baseURL, sessionID)
 	defer healthy.Close() //nolint:errcheck
 
 	// The healthy client drains continuously — that is what makes it
@@ -739,8 +770,9 @@ func TestServedChat_SlowConsumerNeverStallsTheBus(t *testing.T) {
 		defer close(published)
 		for range 200 {
 			api.EventBus().Publish("llm:stream-chunk", llmview.StreamChunkPayload{
-				SubID: "wedge",
-				Chunk: corellm.StreamEvent{Kind: corellm.StreamText, Text: fat},
+				SubID:     "wedge",
+				SessionID: sessionID,
+				Chunk:     corellm.StreamEvent{Kind: corellm.StreamText, Text: fat},
 			})
 		}
 	}()
@@ -764,8 +796,9 @@ func TestServedChat_SlowConsumerNeverStallsTheBus(t *testing.T) {
 		defer tick.Stop()
 		for {
 			api.EventBus().Publish("llm:stream-closed", llmview.StreamClosedPayload{
-				SubID:  "wedge",
-				Reason: "completed",
+				SubID:     "wedge",
+				SessionID: sessionID,
+				Reason:    "completed",
 			})
 			select {
 			case <-stopSentinel:

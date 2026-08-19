@@ -21,6 +21,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/serve"
 	"github.com/kameas-ai/kenaz-harness/core/serve/authbroker"
 	"github.com/kameas-ai/kenaz-harness/core/tools/askuserquestion"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 // minimalStaticFS returns a minimal in-memory FS that mimics the dist-served
@@ -316,7 +317,7 @@ func TestWS_SessionsStream(t *testing.T) {
 	// Request the sessions stream.
 	if err := websocket.JSON.Send(ws, map[string]any{
 		"method": "Sessions_Stream",
-		"params": map[string]any{},
+		"params": map[string]any{"id": "sess-test"},
 	}); err != nil {
 		t.Fatalf("ws send: %v", err)
 	}
@@ -437,7 +438,7 @@ func TestWS_SessionsStream_PushDirect(t *testing.T) {
 	// Start the sessions stream.
 	if err := websocket.JSON.Send(ws, map[string]any{
 		"method": "Sessions_Stream",
-		"params": map[string]any{},
+		"params": map[string]any{"id": "sess-test"},
 	}); err != nil {
 		t.Fatalf("ws send: %v", err)
 	}
@@ -530,7 +531,7 @@ func TestWS_SubprotocolAuth(t *testing.T) {
 	// connection is fully functional, not just HTTP 101.
 	if err := websocket.JSON.Send(ws, map[string]any{
 		"method": "Sessions_Stream",
-		"params": map[string]any{},
+		"params": map[string]any{"id": "sess-test"},
 	}); err != nil {
 		t.Fatalf("ws send: %v", err)
 	}
@@ -970,13 +971,19 @@ func TestWS_SessionsStream_ElicitPendingSnapshot(t *testing.T) {
 	elicit, _, baseURL, cancel := newTestServerWithElicit(t, "tok")
 	defer cancel()
 
+	// The WS connection below subscribes to this session; the ask must
+	// carry the same one (WP01, AC-704's elicit sibling) or the scoped
+	// ListPendingForSession call the snapshot now uses will not surface
+	// it — see OpenDialog's SessionIDFromContext(ctx) comment.
+	const sessionID = "sess-elicit-test"
+
 	// Register a pending elicitation. OpenDialog blocks until answered /
 	// timed out, so run it in a goroutine; it registers the pending entry
 	// synchronously before blocking on the response channel.
 	askDone := make(chan struct{})
 	go func() {
 		defer close(askDone)
-		_, _ = elicit.OpenDialog(context.Background(), askuserquestion.AskArgs{
+		_, _ = elicit.OpenDialog(toolloop.WithSessionID(context.Background(), sessionID), askuserquestion.AskArgs{
 			Question: "Proceed with deploy?",
 			Kind:     askuserquestion.KindRadio,
 			Options: []askuserquestion.QuestionOption{
@@ -1016,7 +1023,7 @@ func TestWS_SessionsStream_ElicitPendingSnapshot(t *testing.T) {
 
 	if err := websocket.JSON.Send(ws, map[string]any{
 		"method": "Sessions_Stream",
-		"params": map[string]any{},
+		"params": map[string]any{"id": sessionID},
 	}); err != nil {
 		t.Fatalf("ws send: %v", err)
 	}

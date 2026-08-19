@@ -7602,6 +7602,19 @@ func (a *API) StreamBroker() *StreamBroker { return a.broker }
 // context.  The desktop Wails path is unaffected.
 func (a *API) EventBus() *EventBus { return a.eventBus }
 
+// ConfirmBus returns the confirm-each pause registry Confirm()'s
+// ConfirmAPI reads from — the SAME registry the tool adapter parks a
+// confirm_each verdict on. Test-support only, mirroring EventBus()
+// above: ConfirmAPI's own interface (Resolve/ResolveAlways/ApproveBatch/
+// CancelBatch/ListPending) has no way to PARK a call, only to answer
+// one, so a test proving core/serve's WS reconnect snapshot reaches the
+// real, session-scoped Confirm().ListPending (served-mode-is-a-real-
+// mode-01PMZ707 WP01, AC-704) needs a way to register a real pending
+// entry against the exact bus that view reads from — the production
+// call site (core/rpc/api.go's confirmPublisher wiring) is a private
+// constructor-local closure, not reachable otherwise.
+func (a *API) ConfirmBus() *toolloop.ConfirmBus { return a.confirmBus }
+
 // cedarGate returns a.cedarEngine as a cedar.Gate, falling back to
 // cedar.AllowAll{} when no engine was constructed (empty DataDir, the
 // nil-core test chassis, or a construction failure logged at boot).
