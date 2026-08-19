@@ -102,13 +102,18 @@ var (
 	stageFleetURL = "https://stage.fleet.kameas.ai"
 
 	// Prod: dedicated prod Zitadel (separate instance from LLE per
-	// sigil-infra docs/architecture.md). Empty until the prod stack
-	// ships. With KENAZ_HARNESS_ENV=prod (or unset) before provisioning,
-	// Configured() returns false and sign-in returns ErrProfileNotConfigured.
-	prodIssuer         = "" // -ldflags
-	prodNativeClientID = "" // -ldflags
-	prodAPIAudience    = "" // -ldflags
-	prodFleetURL       = "" // -ldflags (likely "https://fleet.kameas.ai")
+	// sigil-infra docs/architecture.md). Baked in as source defaults for
+	// the same reason as the LLE values above — every build path (release
+	// binaries, the kenaz-workbench Nix bake, local dev) must produce a
+	// Configured() prod profile without per-pipeline ldflags plumbing.
+	// These match the KENAZ_PROD_* values the kenaz launcher bakes into
+	// its own prod builds (kenaz v1.34.0+); refresh from kameas-infra
+	// aws/terraform/live/prod/zitadel-apps if the prod apps are recreated.
+	// ldflags -X can still override for a release line pinned elsewhere.
+	prodIssuer         = "https://prod-bq6woq.us1.zitadel.cloud"
+	prodNativeClientID = "374862563197880707"
+	prodAPIAudience    = "374862563130765514"
+	prodFleetURL       = "https://fleet.kameas.ai"
 )
 
 // ResolveProfile reads KENAZ_HARNESS_ENV and returns the corresponding
