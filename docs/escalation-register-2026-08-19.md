@@ -2861,6 +2861,40 @@ row by hand, which is exactly how it was produced.
 
 ### G-5 — The frontend P1 mount backlog: six components the ledger already says are wanted
 
+> ## ✅ RULED 2026-08-19 — owner: alec. **All six mount. Two rulings knowingly accept a tradeoff; both are recorded as decisions, not oversights.**
+>
+> | Component | Ruling | Basis |
+> |---|---|---|
+> | `RecoveryCodeFlow` | **MOUNT** | Backend live — `ContextSync_GenerateRecoveryCode` (`bindings.go:3570`), real `Impl` assigned at `api.go:2691`, not the stub. **The only device-recovery surface in the product.** |
+> | `ProjectAutonomyPanel` | **MOUNT** | ✅ **Verified 2026-08-19 at the owner's instruction.** The project-scoped path exists — `Projects_GetAutonomy(projectID)` / `Projects_SetAutonomy(projectID, layer)` (`bindings.go:2758`,`:2764`) — and the panel calls exactly those, reading the global only for comparison. The mis-scoping concern was unfounded. |
+> | `CrashReportingOnboardingModal` | **MOUNT + honest copy** | The Go half genuinely works (`main.go:553` → `coresentry.Init` when tier ≠ Off). The **browser half can never transmit**: production CSP is `connect-src 'none'` in both `csp.go:22` and `csp_serve.go:14`. Copy must say what is actually reported — crashes from the harness process — and must not promise browser errors the CSP forbids. FE-1 decides that half separately. |
+> | `HookJournalView` | **WIRE + MOUNT together** | Rows are written to SQL; only the read path is missing (`memoryview.Config{}` omits `Journal`, so `impl.go:342` short-circuits on `a.journal == nil`). One config field plus the mount, as a unit. **Do not mount without the wire** — an empty journal reads as "no hooks ran", which is nearly true for the wrong reason (task #46: 1 of 18 events fires). Wiring it makes hook firing observable, which is how #46 would have been caught. |
+> | `MCPHealthSettingsPanel` | **MOUNT, toggle included** ⚠️ | See tradeoff below. |
+> | `CedarEditor` | **MOUNT now, port later** ⚠️ | See tradeoff below. |
+>
+> ### ⚠️ Tradeoff 1 — the inert toggle ships knowingly
+>
+> `MCPAutoRestartDisabled` has **no reader anywhere in `core/mcp`** (G-4). Until
+> G-4's wire lands, a user can switch auto-restart off, see it read as off, and
+> have the supervisor restart regardless. That is the exact class this campaign
+> exists to remove, and the alternative offered — mount the panel, disable the
+> toggle — was declined.
+>
+> **Bounding condition, not a re-litigation:** G-4's `MCPAutoRestartDisabled`
+> wire must land in the **same release** as this mount, not a later one. The
+> decision accepts a window; it does not accept an open-ended one.
+>
+> ### ⚠️ Tradeoff 2 — two policy surfaces ship together
+>
+> `PolicyView` already ships and now carries a live Decisions tab (G-6).
+> Mounting `CedarEditor` alongside it means two policy-editing surfaces with
+> unclear precedence — the rubric's *rival infrastructure* shape.
+>
+> **Bounding condition:** declare **which surface is canonical in the release
+> notes and in both UIs** at mount time. The harm flagged was that a later port
+> strands whoever learned the losing surface; naming the winner up front costs
+> nothing and removes it. The port mission still owns consolidation.
+
 **Instance.** `docs/unwired-ledger.md:1000-1085` (the P1 block; P1b resolves to
 A-13 per R-7, and the P3 item is not ownerless).
 
