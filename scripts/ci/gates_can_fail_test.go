@@ -136,9 +136,20 @@ func TestGates_VerdictIsIndependentOfWorkingDirectory(t *testing.T) {
 	// was innocent; the harness was racing itself.
 	root := repoRoot(t)
 
+	// NOT t.Parallel() on the SUBTESTS either, and that is the half the
+	// PR #294 fix missed. Dropping it from the parent alone is not enough:
+	// a parallel subtest pauses and resumes only after the parent function
+	// RETURNS, so these subtests were still in flight when the next
+	// top-level test — TestGates_PlantedViolationFires — began writing
+	// probe files into the real tree. The same symptom recurred on
+	// release/v0.65.0 (run 32279405838): root clean, foreign cwd failing on
+	// menu:cmd-palette:open, whose subscriber is right there at
+	// frontend/src/App.vue:74. The gate was innocent again.
+	//
+	// These subtests are cheap (two gate invocations each) and there is no
+	// reason to overlap them with a test that mutates the tree they read.
 	for _, gate := range cwdSensitiveGates {
 		t.Run(gate, func(t *testing.T) {
-			t.Parallel()
 			foreign := t.TempDir()
 
 			rootCode, rootOut := runGate(t, gate, root)

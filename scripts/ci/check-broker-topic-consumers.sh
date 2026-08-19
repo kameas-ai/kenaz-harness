@@ -114,21 +114,35 @@ fi
 # line under this repo's formatting (see lib/useSession.ts's
 # TopicStreamTruncated subscription, or this mission's own
 # UpdatesPanel.vue).
-FRONTEND_WINDOW=""
-if [[ -d frontend/src ]]; then
-  mapfile -t FRONTEND_FILES < <(
-    find frontend/src -type f \( -name '*.ts' -o -name '*.vue' \) \
-      ! -path '*__tests__*' ! -name '*.spec.ts' ! -name '*.test.ts'
-  )
-  if [[ ${#FRONTEND_FILES[@]} -gt 0 ]]; then
-    # `(<[^>]*>)?` — useEventStream is generic (`useEventStream<Payload>(`);
-    # without allowing an optional type-param between the name and the
-    # open paren, EVERY typed call site in this codebase is invisible to
-    # this pass. Confirmed the hard way: this exact gap was a false-DEAD
-    # on UpdatesPanel.vue's own three subscriptions before it was fixed.
-    FRONTEND_WINDOW=$(grep -A3 -E '(useEventStream|EventsOn|onServedEvent)(<[^>]*>)?\(' "${FRONTEND_FILES[@]}" 2>/dev/null || true)
-  fi
+# `ci_require_dir`, not `[[ -d … ]]`. The old guard SKIPPED pass 1 when
+# frontend/src was unreachable and carried on to a verdict — so a topic whose
+# only subscriber is a .vue file was reported dead, confidently and with a
+# file:line. That is how run 32279405838 accused menu:cmd-palette:open, whose
+# subscriber sits at frontend/src/App.vue:74. The underlying cause there was a
+# harness race (fixed in gates_can_fail_test.go), but the silent skip is what
+# converted it into a false finding instead of a legible error. A gate that
+# cannot see its inputs must say so, per lib/ci-gate.sh's own doctrine: an
+# absent scan root is never "clean".
+ci_require_dir "frontend/src" "$GATE" \
+  "Pass 1 (frontend subscribers) cannot run without it, and a frontend-only subscriber would be reported dead."
+
+mapfile -t FRONTEND_FILES < <(
+  find frontend/src -type f \( -name '*.ts' -o -name '*.vue' \) \
+    ! -path '*__tests__*' ! -name '*.spec.ts' ! -name '*.test.ts'
+)
+if [[ ${#FRONTEND_FILES[@]} -eq 0 ]]; then
+  echo "$GATE FAIL: frontend/src has no production .ts/.vue files to scan." >&2
+  echo "$GATE Pass 1 would find no subscriber for ANY topic, so every" >&2
+  echo "$GATE frontend-only-consumed topic would be reported dead." >&2
+  exit 1
 fi
+
+# `(<[^>]*>)?` — useEventStream is generic (`useEventStream<Payload>(`);
+# without allowing an optional type-param between the name and the
+# open paren, EVERY typed call site in this codebase is invisible to
+# this pass. Confirmed the hard way: this exact gap was a false-DEAD
+# on UpdatesPanel.vue's own three subscriptions before it was fixed.
+FRONTEND_WINDOW=$(grep -A3 -E '(useEventStream|EventsOn|onServedEvent)(<[^>]*>)?\(' "${FRONTEND_FILES[@]}" 2>/dev/null || true)
 
 # --- Precompute pass 2 (Go): same idea, over every non-test *.go file
 # in the repo (main.go at the root is the primary Go consumer of this
