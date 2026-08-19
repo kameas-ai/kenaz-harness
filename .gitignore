@@ -61,3 +61,10 @@ docs/*-internal.md
 
 # macOS finder junk
 .DS_Store
+
+# Root-level build artifacts from `go build ./cmd/<x>` (agents and humans both
+# produce these; a 53MB harness-vm binary was nearly committed 2026-08-19).
+/harness-vm
+/harness-served
+/kenaz-updater
+/mcpsubcmd
