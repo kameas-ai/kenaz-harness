@@ -2517,6 +2517,7 @@ export namespace elicit {
 	}
 	export class ElicitRequest {
 	    request_id: string;
+	    session_id?: string;
 	    question: string;
 	    kind: string;
 	    options?: askuserquestion.QuestionOption[];
@@ -2536,6 +2537,7 @@ export namespace elicit {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.request_id = source["request_id"];
+	        this.session_id = source["session_id"];
 	        this.question = source["question"];
 	        this.kind = source["kind"];
 	        this.options = this.convertValues(source["options"], askuserquestion.QuestionOption);
