@@ -45,6 +45,7 @@ import (
 	"strings"
 
 	llm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/cost"
 	"github.com/kameas-ai/kenaz-harness/core/llm/credref"
 	"github.com/kameas-ai/kenaz-harness/core/llm/envprovider"
 	"github.com/kameas-ai/kenaz-harness/core/llm/registry"
@@ -125,7 +126,16 @@ var defaultAgentModels = envprovider.DefaultModels
 // resolveAgentExecutor picks the executor for this process from the
 // environment. It never fails the process: an unresolvable real mode returns
 // a failingExecutor so every dispatched task errors with the named cause.
-func resolveAgentExecutor(log *slog.Logger) agentExecutor {
+//
+// guard is the process's Cedar-backed policy gate (readService.policyGuard,
+// mission vm-execution-surface-truth-01PMZD14 HV-03/UNIT-1). It is threaded
+// through to newLLMExecutor so a real-mode model call is evaluated by the
+// SAME engine every other in-process gate site consults, instead of the
+// registry's llm.AllowAllGuard{} default (which can never refuse). A nil
+// guard here degrades to that same default — callers that have no chassis
+// pass cedar.NewLLMPolicyGuard(nil), which also permits everything, so the
+// degrade path is identical either way.
+func resolveAgentExecutor(log *slog.Logger, guard llm.PolicyGuard) agentExecutor {
 	switch mode := os.Getenv(agentExecEnv); mode {
 	case "stub":
 		log.Warn("kenaz-harness-vm: agent execution STUB (KENAZ_AGENT_EXEC=stub) — echo graph, offline CI only")
@@ -140,7 +150,7 @@ func resolveAgentExecutor(log *slog.Logger) agentExecutor {
 		return failingExecutor{err: &agentConfigError{inner: err}}
 	}
 
-	exec, err := newLLMExecutor()
+	exec, err := newLLMExecutor(guard, log)
 	if err != nil {
 		log.Error("kenaz-harness-vm: agent execution UNAVAILABLE — tasks will error", "err", err)
 		return failingExecutor{err: &agentConfigError{inner: err}}
@@ -148,6 +158,24 @@ func resolveAgentExecutor(log *slog.Logger) agentExecutor {
 	log.Info("kenaz-harness-vm: agent execution REAL",
 		"provider", exec.kind, "model", exec.model, "cred_env", exec.credEnv)
 	return exec
+}
+
+// resolveCostReducer loads the embedded starter cost table via
+// cost.LoadDefault. This absorbs
+// model-settings-reach-the-model-01PMZ101 WP05's harness-vm prescription
+// (Z101 tasks.md:361-364): WP01's observation of the registry.Options
+// literal at the v0.66.0 merge base found no Cost: field present, meaning
+// Z101 WP05's harness-vm half had not landed here. Per that mission's own
+// rule, a missing/errored cost table logs and returns nil so the caller
+// continues with Cost unset — pricing is a reporting concern, never a boot
+// gate.
+func resolveCostReducer(log *slog.Logger) registry.CostReducer {
+	tab, err := cost.LoadDefault()
+	if err != nil {
+		log.Warn("kenaz-harness-vm: agent execution cost table unavailable — continuing with Cost unset", "err", err)
+		return nil
+	}
+	return cost.New(tab)
 }
 
 // llmExecutor drives the agent step through the core/llm registry pipeline
@@ -165,7 +193,21 @@ type llmExecutor struct {
 // newLLMExecutor resolves a provider/model/credential from the environment
 // and builds a registry around it. Errors are named and actionable — they are
 // what real-mode tasks fail with when the VM has no usable grant.
-func newLLMExecutor() (*llmExecutor, error) {
+//
+// guard becomes registry.Options.Policy (mission
+// vm-execution-surface-truth-01PMZD14 HV-03/UNIT-1 — see resolveAgentExecutor's
+// doc comment). Do NOT construct a cedar.Engine in this package: it would be a
+// second, un-reloadable engine alongside the one core/rpc/api.go already owns
+// (checked by scripts/ci/check-cedar-engine-singleton.sh). The guard must
+// come from the caller's existing chassis engine.
+//
+// cost.LoadDefault absorption: at the time this WP landed, the literal below
+// set no Cost field (verified — WP01's observation record), meaning
+// model-settings-reach-the-model-01PMZ101 WP05's harness-vm half had not
+// landed. Per that mission's own prescription (Z101 tasks.md:361-364), a
+// missing/errored cost table logs and continues with Cost unset rather than
+// failing boot — pricing is a reporting concern, not a gate.
+func newLLMExecutor(guard llm.PolicyGuard, log *slog.Logger) (*llmExecutor, error) {
 	res, err := envprovider.Resolve(os.Getenv, agentEnvOptions)
 	if err != nil {
 		return nil, err
@@ -173,8 +215,14 @@ func newLLMExecutor() (*llmExecutor, error) {
 
 	// A private registry with the env-backed secrets resolver: credential
 	// BYTES are read per-request from the named env var and zeroized after
-	// each call; they never persist on this struct.
-	reg, err := registry.New(registry.Options{Resolver: credref.New(secrets.NewMemoryBackend())})
+	// each call; they never persist on this struct. Policy is the process's
+	// real Cedar gate (see doc comment above) — nil-safe on the caller's side,
+	// never AllowAllGuard{} by omission.
+	reg, err := registry.New(registry.Options{
+		Resolver: credref.New(secrets.NewMemoryBackend()),
+		Policy:   guard,
+		Cost:     resolveCostReducer(log),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("agent_exec_registry: %w", err)
 	}

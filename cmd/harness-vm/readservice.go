@@ -28,6 +28,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kameas-ai/kenaz-harness/core"
+	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
@@ -108,6 +109,31 @@ func (s *readService) promptRegistry() *cedar.Registry {
 		return nil
 	}
 	return full.PromptRegistry()
+}
+
+// policyGuard returns an llm.PolicyGuard backed by the chassis's
+// process-singleton Cedar gate (rpc.API.CedarGate) — the SAME engine
+// every other in-process gate site consults, not a private one.
+//
+// Mission vm-execution-surface-truth-01PMZD14 HV-03/UNIT-1: prior to this,
+// cmd/harness-vm's LLM registry construction left registry.Options.Policy
+// unset, which registry.New silently substitutes with
+// llm.AllowAllGuard{} — a guard that can never refuse. This is the
+// chassis's read side for that field, nil-safe on the same
+// s == nil || s.api == nil shape as promptRegistry.
+//
+// Returns a guard wrapping a nil Gate (permits everything) when the
+// chassis never bootstrapped or holds no Cedar engine — cedarGate()'s
+// existing fail-open contract, unchanged.
+func (s *readService) policyGuard() corellm.PolicyGuard {
+	if s == nil || s.api == nil {
+		return cedar.NewLLMPolicyGuard(nil)
+	}
+	full, ok := s.api.(*rpc.API)
+	if !ok {
+		return cedar.NewLLMPolicyGuard(nil)
+	}
+	return cedar.NewLLMPolicyGuard(full.CedarGate())
 }
 
 // isReadKind reports whether kind names a Phase G read RPC. handleConn uses it

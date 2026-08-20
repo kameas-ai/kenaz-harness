@@ -8283,6 +8283,23 @@ func (a *API) cedarGate() cedar.Gate {
 	return a.cedarEngine
 }
 
+// CedarGate exposes the process-singleton Cedar gate so an out-of-band
+// execution surface can consult the SAME engine every in-process gate
+// site consults, rather than standing up a second one.
+// cmd/harness-vm's newLLMExecutor is the caller (mission
+// vm-execution-surface-truth-01PMZD14, HV-03/UNIT-1): the workbench's
+// model-call path previously left registry.Options.Policy unset, which
+// silently substitutes llm.AllowAllGuard{} — strictly weaker than the
+// trusted host's cedarGuard-backed path at this file's LLMConnector
+// construction site. This accessor closes that gap without a second
+// engine.
+//
+// Inherits cedarGate()'s nil-safety: cedar.AllowAll{} when no engine was
+// constructed.
+func (a *API) CedarGate() cedar.Gate {
+	return a.cedarGate()
+}
+
 // buildCedarEngineOrNil constructs a *cedar.Engine. In production it
 // has exactly ONE caller — the WP05 hoist site in New(), which stores
 // the result on a.cedarEngine — enforced by
