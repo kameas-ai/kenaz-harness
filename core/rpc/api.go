@@ -1916,6 +1916,29 @@ func New(c *core.Core, opts ...Option) *API {
 			a.sessionsAPI = sessions.WithResumeStarter(a.sessionsAPI, starter)
 		}
 	}
+	// controls-and-readouts-that-tell-the-truth-01PMZ808 WP04 (FR-004):
+	// wire the branch-cascade delete implementation
+	// (conversation.Manager.DeleteChildrenOf, previously test-only)
+	// behind the Settings.DeleteBranchesWithParent gate. a.convMgr was
+	// just constructed above; settingsImpl.Store() may be nil in
+	// reduced test chassis, in which case the gate always reads false
+	// (the safe default) rather than panicking.
+	if a.convMgr != nil {
+		a.sessionsAPI = sessions.WithDeleteChildrenOf(
+			a.sessionsAPI,
+			a.convMgr.DeleteChildrenOf,
+			func() bool {
+				if settingsImpl == nil || settingsImpl.Store() == nil {
+					return false
+				}
+				all, err := settingsImpl.Store().LoadAll()
+				if err != nil {
+					return false
+				}
+				return all.DeleteBranchesWithParent
+			},
+		)
+	}
 	// autonomy-dial-01KR3M2A WP03: wire the AutonomyContextProvider so
 	// Sessions_ResolveAutonomy folds global → project → session layers
 	// using the live settings store + project manager. Tolerates a nil

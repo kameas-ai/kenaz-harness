@@ -243,9 +243,19 @@ type Settings struct {
 	// (impl.go), added in WP03.
 	BranchReintegrationMaxTokens int `json:"branchReintegrationMaxTokens,omitempty"`
 
-	// BranchAdvisorDefaultModel is the (provider, model) used for
-	// newly spawned subagent branches. Defaults to CompactionModel when
-	// empty, which itself defaults to the session's active model.
+	// BranchAdvisorDefaultModel is the (provider, model) intended for
+	// newly spawned subagent branches.
+	//
+	// NARROWED 2026-08-20 (controls-and-readouts-that-tell-the-truth-
+	// 01PMZ808 WP05, FR-005): this field has neither a reader nor a
+	// writer anywhere in production, and EffectiveBranchAdvisorDefaultModel
+	// below has zero callers. It is not yet consumed — do not read
+	// "defaults to CompactionModel" as live behaviour. Spec R-6: the
+	// chain's second link, core/rpc/views/branches/impl.go's
+	// parentModel, is a stub that discards both its parameters and
+	// returns ("", ""), so wiring this field alone would produce a dial
+	// that appears to work and silently resolves to nothing — worse
+	// than the current honest inertness. See docs/unwired-ledger.md.
 	BranchAdvisorDefaultModel ProviderProfileRef `json:"branchAdvisorDefaultModel,omitempty"`
 	// KeyboardShortcuts holds user-overridden shortcut bindings keyed by
 	// stable shortcut id (e.g. "chat.send" → "Cmd+Shift+Enter"). An

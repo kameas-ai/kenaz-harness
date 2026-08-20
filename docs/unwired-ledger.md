@@ -1564,6 +1564,27 @@ one-line wire.
   the in-app override and narrows `registry.ts:5-6`'s claim to say so
   explicitly (also deletes this entry, the other direction).
 
+### 2026-08-20 · `branchAdvisorDefaultModel` — narrowed, chain's second link is a stub
+
+`controls-and-readouts-that-tell-the-truth-01PMZ808` WP05 (FR-005, SD-10).
+`core/rpc/views/settings/api.go`'s field doc promised the field "Defaults to
+CompactionModel when empty, which itself defaults to the session's active
+model." The field has neither a reader nor a writer anywhere in production,
+and `EffectiveBranchAdvisorDefaultModel` has zero callers. Per spec R-6 this
+mission does **not** wire it: the chain's second link,
+`core/rpc/views/branches/impl.go`'s `parentModel`, is a stub that discards
+both its parameters and returns `("", "")` — wiring link one over a broken
+link two would produce a dial that appears to work and silently resolves to
+nothing, which is worse than the current honest inertness.
+
+- **Blocker:** `parentModel` needs `Settings.CompactionModel` wired, which is
+  owned by `model-settings-reach-the-model-01PMZ101`, not this mission.
+- **Owner / deleting change:** whoever lands `01PMZ101`'s `CompactionModel`
+  wiring should re-open `parentModel` and, once it resolves a real model,
+  wire `branchAdvisorDefaultModel` and delete this entry. This ruling
+  re-affirms (does not overturn) `docs/dead-code-audit-2026-08-16.md:330`'s
+  "wire, and wire before mounting" — nothing is being mounted here.
+
 ## Drained
 
 ### 2026-08-19 · CLOSED — the missing-upgrade-snapshot hole is now gated

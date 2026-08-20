@@ -948,8 +948,12 @@ export interface Settings {
   branchReintegrationMaxTokens?: number;
 
   /**
-   * Provider+model used for newly spawned subagent branches. Defaults to
-   * compactionModel, which itself defaults to the session's active model.
+   * Provider+model intended for newly spawned subagent branches.
+   *
+   * NARROWED 2026-08-20 (controls-and-readouts-that-tell-the-truth-
+   * 01PMZ808 WP05): not yet consumed anywhere — no reader, no writer,
+   * no UI. See core/rpc/views/settings/api.go's field doc and
+   * docs/unwired-ledger.md for why it is not wired.
    */
   branchAdvisorDefaultModel?: ProviderProfileRef;
   /**
