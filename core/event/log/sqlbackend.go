@@ -21,13 +21,17 @@ import (
 	"strings"
 	"time"
 
-	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/storage"
 )
 
-// SQLBackend implements Backend, SweepableBackend and (via SelectBefore)
-// corefleet.AuditRetentionBackend against the harness's unified
-// database. Safe for concurrent use — storage.DB already serialises
+// SQLBackend implements Backend and SweepableBackend against the
+// harness's unified database.
+//
+// It deliberately does NOT import core/fleet. check-no-fleet-imports.sh
+// permits only core/rpc/views/settings/ to do that, and this package is
+// storage, not fleet transport. SelectBefore therefore returns this
+// package's own RetentionRow; when the retention sweeper is finally
+// wired (it is not — see below), the boundary package converts. Safe for concurrent use — storage.DB already serialises
 // writes (core/storage/sqlite/sqlite.go:89, SetMaxOpenConns(1)).
 type SQLBackend struct {
 	db storage.DB
@@ -42,10 +46,19 @@ func NewSQLBackend(db storage.DB) *SQLBackend {
 }
 
 var (
-	_ Backend                         = (*SQLBackend)(nil)
-	_ SweepableBackend                = (*SQLBackend)(nil)
-	_ corefleet.AuditRetentionBackend = (*SQLBackend)(nil)
+	_ Backend          = (*SQLBackend)(nil)
+	_ SweepableBackend = (*SQLBackend)(nil)
 )
+
+// RetentionRow carries the fields a retention sweep needs to decide
+// whether to delete a row. It mirrors core/fleet.AuditRetentionRow field
+// for field, on purpose: the duplication is the layering boundary. A
+// two-field struct copied at the seam is cheaper than a storage package
+// that imports fleet transport.
+type RetentionRow struct {
+	EventID   string
+	EmittedAt time.Time
+}
 
 const sqlSelectEventColumns = `event_id, session_id, emitter_id, kind, emitted_at,
 	payload, payload_hash, prev_hash, redaction_summary, schema_version`
@@ -391,11 +404,17 @@ func (b *SQLBackend) DeleteRows(ctx context.Context, eventIDs []string) error {
 	})
 }
 
-// SelectBefore implements corefleet.AuditRetentionBackend — a shim
-// UNIT-7 needs and which is NOT on Backend (spec R-6: SelectBefore's
-// shape differs from SelectByTimeRange's; AuditRetentionBackend is not
-// satisfiable by any single-purpose Backend method as-is).
-func (b *SQLBackend) SelectBefore(ctx context.Context, cutoff time.Time, limit int) ([]corefleet.AuditRetentionRow, error) {
+// SelectBefore returns rows older than cutoff — the query a retention
+// sweep needs. Its shape differs from SelectByTimeRange's, so it is not
+// on Backend (spec R-6).
+//
+// NOT WIRED, and saying so rather than implying otherwise: core/rpc/api.go
+// constructs NewAuditRetentionSweeper with Backend unset, so SweepOnce
+// returns 0 rows and this method has no production caller. Connecting it
+// is UNIT-6/UNIT-7's job, and that work must add an adapter in
+// core/rpc/views/settings/ (the only package permitted to import fleet)
+// converting []RetentionRow -> []fleet.AuditRetentionRow.
+func (b *SQLBackend) SelectBefore(ctx context.Context, cutoff time.Time, limit int) ([]RetentionRow, error) {
 	q := "SELECT event_id, emitted_at FROM events WHERE emitted_at < ? ORDER BY event_id ASC"
 	args := []any{cutoff.UnixMilli()}
 	if limit > 0 {
@@ -407,14 +426,14 @@ func (b *SQLBackend) SelectBefore(ctx context.Context, cutoff time.Time, limit i
 		return nil, fmt.Errorf("log: SelectBefore: %w", err)
 	}
 	defer rows.Close()
-	var out []corefleet.AuditRetentionRow
+	var out []RetentionRow
 	for rows.Next() {
 		var id string
 		var ms int64
 		if err := rows.Scan(&id, &ms); err != nil {
 			return nil, fmt.Errorf("log: SelectBefore: scan: %w", err)
 		}
-		out = append(out, corefleet.AuditRetentionRow{EventID: id, EmittedAt: time.UnixMilli(ms).UTC()})
+		out = append(out, RetentionRow{EventID: id, EmittedAt: time.UnixMilli(ms).UTC()})
 	}
 	return out, rows.Err()
 }
