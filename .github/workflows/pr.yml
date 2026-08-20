@@ -366,6 +366,17 @@ jobs:
         # invalidates it as ground truth for the upgrade-path job.
         run: bash scripts/ci/check-upgrade-snapshots-locked.sh
 
+      - name: graph-write-paths guard
+        # model-authored-graphs-01PMGA01 UNIT-8. UNIT-2 stopped the manager
+        # persisting graphs the validator rejects; UNIT-4 made graph writes
+        # ask Cedar. Both live inside Manager.saveGraph and neither survives
+        # a second writer — an os.WriteFile against the library bypasses the
+        # validator AND the consent gate while every existing test keeps
+        # passing, because they all drive saveGraph. Planted-violation proof:
+        # scripts/ci/gates_can_fail_test.go
+        # "graph-write-paths/second-writer-bypasses-validation".
+        run: bash scripts/ci/check-graph-write-paths.sh
+
       - name: upgrade-snapshot-present guard
         # The ABSENCE half of the snapshot contract. The lock gate above
         # catches MODIFICATION of a committed snapshot and structurally
