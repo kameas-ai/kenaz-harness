@@ -23,6 +23,12 @@ var ErrNotFound = errors.New("scheduledchat: not found")
 // ErrCedarDenied is returned when a cedar gate explicitly denies an operation.
 var ErrCedarDenied = errors.New("scheduledchat: denied by cedar policy")
 
+// ErrDispatcherUnavailable is returned when RunNow is called with no
+// Dispatcher wired. A nil dispatcher is a configuration error, not a
+// no-op: no history row is appended, so nothing records a fabricated
+// "completed" outcome for a run that did not happen (FR-002).
+var ErrDispatcherUnavailable = errors.New("scheduledchat: dispatcher unavailable")
+
 // ErrInvalidInput is returned when a required field is missing.
 var ErrInvalidInput = errors.New("scheduledchat: invalid input")
 
@@ -32,9 +38,11 @@ type Config struct {
 	// Update / Delete / RunNow to return ErrStoreUnavailable; List
 	// returns an empty slice.
 	Store scheduler.ScheduledChatStore
-	// Dispatcher fires actual chat runs. nil causes RunNow to return a
-	// no-op summary (noop dispatcher). Cron-triggered dispatch is wired
-	// at the scheduler level; this field is only for RunNow.
+	// Dispatcher fires actual chat runs. nil causes RunNow to return
+	// ErrDispatcherUnavailable and append no history row — a run that did
+	// not happen must not be recorded as one that did (FR-002). As of
+	// WP04/WP05, this field is also assigned into the chat-run cron
+	// engine so scheduled (not just RunNow) firings share one dispatcher.
 	Dispatcher scheduler.ChatRunDispatcher
 	// Cedar is the policy gate. nil short-circuits to allow (default-allow).
 	Cedar cedar.Gate
@@ -199,7 +207,7 @@ func (a *API) RunNow(ctx context.Context, id string) (RunSummary, error) {
 
 	d := a.cfg.Dispatcher
 	if d == nil {
-		d = scheduler.NoopChatRunDispatcher{}
+		return RunSummary{}, ErrDispatcherUnavailable
 	}
 
 	job := scheduler.Job{

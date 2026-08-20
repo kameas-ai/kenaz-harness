@@ -7,9 +7,29 @@ import (
 	"testing"
 	"time"
 
+	cedargo "github.com/cedar-policy/cedar-go"
+
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/scheduledchat"
 	"github.com/kameas-ai/kenaz-harness/core/scheduler"
 )
+
+// denyAllGate is a cedar.Gate stub that denies every evaluation. Used to
+// prove a Cedar denial stays ErrCedarDenied and is not shadowed by the
+// dispatcher-unavailable check.
+type denyAllGate struct{}
+
+func (denyAllGate) Evaluate(_ context.Context, principal cedargo.EntityUID, action string, resource cedargo.EntityUID, _ map[cedargo.String]cedargo.Value) cedar.Decision {
+	return cedar.Decision{
+		Outcome:   cedar.Deny,
+		Action:    action,
+		Principal: principal.String(),
+		Resource:  resource.String(),
+		Reason:    "denyAllGate: test stub",
+	}
+}
+
+var _ cedar.Gate = denyAllGate{}
 
 // ── fake store ────────────────────────────────────────────────────────────
 
@@ -104,6 +124,39 @@ func (f *fakeStore) History(_ context.Context, chatRunID string, limit int) ([]s
 }
 
 var _ scheduler.ScheduledChatStore = (*fakeStore)(nil)
+
+// ── fake dispatcher ──────────────────────────────────────────────────────
+//
+// A real (non-noop) stand-in: it actually reports a "completed" outcome
+// because a run genuinely happened in the test's telling, not because a
+// nil-dispatcher fallback fabricated one. See WP02 — no production or test
+// path may substitute a fabricated "completed" for a missing dispatcher.
+
+type fakeDispatcher struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (f *fakeDispatcher) DispatchChatRun(_ context.Context, job scheduler.Job, now time.Time) (scheduler.ChatRunHistoryRecord, error) {
+	f.mu.Lock()
+	f.calls++
+	f.mu.Unlock()
+	ended := now
+	chatRunID := ""
+	if job.ChatRun != nil {
+		chatRunID = job.ChatRun.ID
+	}
+	return scheduler.ChatRunHistoryRecord{
+		ChatRunID:     chatRunID,
+		SessionID:     "sess-fake",
+		Status:        "completed",
+		StartedAt:     now,
+		EndedAt:       &ended,
+		OutputSnippet: "fake dispatch ok",
+	}, nil
+}
+
+var _ scheduler.ChatRunDispatcher = (*fakeDispatcher)(nil)
 
 // ── tests ─────────────────────────────────────────────────────────────────
 
@@ -215,9 +268,10 @@ func TestSetEnabled(t *testing.T) {
 
 func TestRunNow(t *testing.T) {
 	store := newFakeStore()
+	disp := &fakeDispatcher{}
 	api := scheduledchat.New(scheduledchat.Config{
 		Store:      store,
-		Dispatcher: scheduler.NoopChatRunDispatcher{},
+		Dispatcher: disp,
 	})
 
 	entry, _ := api.Create(context.Background(), scheduledchat.CreateInput{
@@ -245,6 +299,63 @@ func TestRunNow(t *testing.T) {
 	}
 	if len(history) != 1 {
 		t.Errorf("history len=%d, want 1", len(history))
+	}
+}
+
+// TestRunNowNilDispatcher is AC-002: a nil Dispatcher must return an error
+// and append no history row — not a fabricated "completed" outcome.
+// Mutation: restore the `d == nil` fallback to NoopChatRunDispatcher (or
+// equivalent). This test must fail against that mutation.
+func TestRunNowNilDispatcher(t *testing.T) {
+	store := newFakeStore()
+	api := scheduledchat.New(scheduledchat.Config{
+		Store: store,
+		// Dispatcher intentionally left nil.
+	})
+
+	entry, _ := api.Create(context.Background(), scheduledchat.CreateInput{
+		Name:           "No dispatcher wired",
+		PromptTemplate: "Hello {{date}}",
+		Cron:           "0 9 * * *",
+		Enabled:        true,
+	})
+
+	_, err := api.RunNow(context.Background(), entry.ID)
+	if !errors.Is(err, scheduledchat.ErrDispatcherUnavailable) {
+		t.Fatalf("RunNow with nil Dispatcher: want ErrDispatcherUnavailable, got %v", err)
+	}
+
+	history, herr := api.History(context.Background(), entry.ID, 10)
+	if herr != nil {
+		t.Fatalf("History: %v", herr)
+	}
+	if len(history) != 0 {
+		t.Errorf("history len=%d, want 0 (no row for a run that did not happen)", len(history))
+	}
+}
+
+// TestRunNowCedarDenialStaysCedarDenial ensures a denying Cedar gate is
+// still reported as ErrCedarDenied, not shadowed by the dispatcher check —
+// a denial must stay a denial, distinguishable from "no dispatcher wired".
+func TestRunNowCedarDenialStaysCedarDenial(t *testing.T) {
+	store := newFakeStore()
+	api := scheduledchat.New(scheduledchat.Config{
+		Store:      store,
+		Dispatcher: &fakeDispatcher{},
+		Cedar:      denyAllGate{},
+	})
+
+	// Create goes through the same gate, so seed the row directly through
+	// the store instead of via api.Create.
+	if err := store.Create(context.Background(), scheduler.ChatRunRecord{
+		ID: "seeded", Cron: "0 9 * * *", Enabled: true,
+	}); err != nil {
+		t.Fatalf("seed store.Create: %v", err)
+	}
+
+	_, err := api.RunNow(context.Background(), "seeded")
+	if !errors.Is(err, scheduledchat.ErrCedarDenied) {
+		t.Fatalf("RunNow under a denying gate: want ErrCedarDenied, got %v", err)
 	}
 }
 

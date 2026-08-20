@@ -70,27 +70,8 @@ func ParseOutputSink(raw string) (kind, path string, err error) {
 	return "none", "", fmt.Errorf("scheduler: unrecognised output_sink %q", raw)
 }
 
-// NoopChatRunDispatcher is a no-op ChatRunDispatcher used when the real
-// LLM / session stack is not wired (e.g. test fixtures that only exercise
-// the scheduler plumbing).
-type NoopChatRunDispatcher struct{}
-
-// DispatchChatRun implements ChatRunDispatcher. Returns a "completed"
-// history record with an empty output snippet and no session ID.
-func (NoopChatRunDispatcher) DispatchChatRun(_ context.Context, job Job, now time.Time) (ChatRunHistoryRecord, error) {
-	ended := now
-	chatRunID := ""
-	if job.ChatRun != nil {
-		chatRunID = job.ChatRun.ID
-	}
-	return ChatRunHistoryRecord{
-		ChatRunID:     chatRunID,
-		SessionID:     "",
-		Status:        "completed",
-		StartedAt:     now,
-		EndedAt:       &ended,
-		OutputSnippet: "[noop dispatcher]",
-	}, nil
-}
-
-var _ ChatRunDispatcher = NoopChatRunDispatcher{}
+// NoopChatRunDispatcher does not exist. A nil ChatRunDispatcher is a
+// configuration error, not a fallback: no production or test caller may
+// fabricate a "completed" outcome for a run that did not happen (FR-002).
+// See core/rpc/views/scheduledchat/impl.go RunNow, which returns
+// ErrDispatcherUnavailable instead.
