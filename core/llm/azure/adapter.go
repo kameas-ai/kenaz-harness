@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -18,7 +17,7 @@ import (
 	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
 	"github.com/kameas-ai/kenaz-harness/core/llm/httpx"
-	"github.com/kameas-ai/kenaz-harness/core/llm/structured"
+	"github.com/kameas-ai/kenaz-harness/core/llm/openaiwire"
 )
 
 // Kind is the canonical provider kind for the Azure OpenAI adapter.
@@ -368,93 +367,41 @@ func extractErrorMessage(body []byte) string {
 }
 
 // buildRequestBody constructs the JSON body for the Azure Chat Completions
-// API. The shape is identical to OpenAI's Chat Completions body.
+// API. The wire shape is identical to OpenAI's Chat Completions body, so
+// the body itself is built by the shared openaiwire encoder
+// (model-settings-reach-the-model-01PMZ101 WP03) — azure keeps only its
+// own URL / deployment / api-version / auth layer (buildChatURL,
+// DeploymentRegistry, setAPIKeyHeader). This is also what makes the
+// tool_use/tool_result round trip work: the private encoder this used to
+// call (buildContent) erased every tool block, dropping tool_calls and
+// tool_call_id entirely (spec FR-002).
 func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]byte, error) {
-	out := map[string]any{
-		"model":          prof.Model,
-		"stream":         true,
-		"stream_options": map[string]any{"include_usage": true},
+	model := prof.Model
+	if req.Model != "" {
+		model = req.Model
 	}
-
-	// Apply optional sampling knobs.
-	for _, key := range []string{"temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty", "seed", "parallel_tool_calls"} {
-		if v, ok := req.Params[key]; ok {
-			out[key] = v
-		} else if v, ok := prof.Defaults[key]; ok {
-			out[key] = v
-		}
+	body, err := openaiwire.BuildRequestBody(req, model, prof.Defaults)
+	if err != nil {
+		return nil, err
 	}
-
-	// StopSequences (model-request-path-live-01PMDL01 WP05): typed field
-	// on GenerationRequest maps onto the OpenAI-compatible `stop` param.
-	if len(req.StopSequences) > 0 {
-		out["stop"] = req.StopSequences
-	}
-
-	// Apply reasoning_effort for o1/o3 models (WP07).
-	if req.Reasoning != nil && req.Reasoning.Enabled {
-		// Map BudgetTokens to reasoning_effort: high/medium/low.
-		// Azure supports reasoning_effort directly on o1/o3 models.
-		out["reasoning_effort"] = mapReasoningEffort(req.Reasoning.BudgetTokens)
-	}
-
-	// Apply ResponseFormat.
-	if req.ResponseFormat != nil {
-		if err := applyResponseFormat(req.ResponseFormat, out, prof.Model); err != nil {
-			return nil, err
-		}
-	}
-
-	// Apply JSONMode (legacy path).
-	if req.JSONMode != nil && req.JSONMode.Enabled && req.ResponseFormat == nil {
-		if err := applyJSONMode(req.JSONMode, out); err != nil {
-			return nil, err
-		}
-	}
-
-	msgs := make([]map[string]any, 0, len(req.Messages)+1)
-	if req.System != "" {
-		msgs = append(msgs, map[string]any{"role": "system", "content": req.System})
-	}
-	for _, m := range req.Messages {
-		role := string(m.Role)
-		if role == "" {
-			role = string(llm.RoleUser)
-		}
-		msgs = append(msgs, map[string]any{
-			"role":    role,
-			"content": buildContent(m.Content),
-		})
-	}
-	out["messages"] = msgs
-
-	if len(req.Tools) > 0 {
-		tools := make([]map[string]any, 0, len(req.Tools))
-		for _, t := range req.Tools {
-			fn := map[string]any{
-				"name":        t.Name,
-				"description": t.Description,
-			}
-			if len(t.InputSchema) > 0 {
-				var schema any
-				if err := json.Unmarshal(t.InputSchema, &schema); err != nil {
-					return nil, fmt.Errorf("azure-openai: tool %q parameters: %w", t.Name, err)
-				}
-				fn["parameters"] = schema
-			} else {
-				fn["parameters"] = map[string]any{"type": "object"}
-			}
-			tools = append(tools, map[string]any{"type": "function", "function": fn})
-		}
-		out["tools"] = tools
-	}
-
-	return json.Marshal(out)
+	return json.Marshal(body)
 }
 
 // mapReasoningEffort maps BudgetTokens to a reasoning_effort string.
 // Low (<4000), medium (4000-14999), high (15000+), defaulting to high
 // when BudgetTokens is 0 (unset).
+//
+// UNUSED by production code as of this commit (WP03): buildRequestBody
+// above now delegates to openaiwire.BuildRequestBody, which does not yet
+// map req.Reasoning to reasoning_effort — see body.go:76, which reads
+// only Knobs.Reasoning. That is a real regression (spec D-14): deleting
+// this call without a replacement would silently turn off Azure o1/o3
+// reasoning with no way to turn it back on, since llm.Request.Knobs has
+// no production writer. WP08, landing next in this same unit, moves this
+// function into openaiwire and wires it to req.Reasoning there — kept
+// here only until that commit so the unit's own tests (this WP's AC-002)
+// aren't gated on a change that isn't this WP's job. Do not add new
+// callers; WP08 deletes this function.
 func mapReasoningEffort(budgetTokens int) string {
 	switch {
 	case budgetTokens == 0 || budgetTokens >= 15000:
@@ -464,134 +411,6 @@ func mapReasoningEffort(budgetTokens int) string {
 	default:
 		return "low"
 	}
-}
-
-// applyResponseFormat translates ResponseFormat into the Azure/OpenAI wire shape.
-func applyResponseFormat(rf *llm.ResponseFormat, out map[string]any, model string) error {
-	switch rf.Mode {
-	case "json":
-		out["response_format"] = map[string]any{"type": "json_object"}
-	case "json_schema":
-		schema := rf.Schema
-		if len(schema) > 0 {
-			injected, err := structured.InjectAdditionalProperties(schema)
-			if err == nil {
-				schema = injected
-			}
-		}
-		var schemaVal any
-		if len(schema) > 0 {
-			if err := json.Unmarshal(schema, &schemaVal); err != nil {
-				return fmt.Errorf("azure-openai: response_format schema parse: %w", err)
-			}
-		}
-		out["response_format"] = map[string]any{
-			"type": "json_schema",
-			"json_schema": map[string]any{
-				"name":   "response",
-				"schema": schemaVal,
-				"strict": true,
-			},
-		}
-	case "grammar":
-		return &llm.ErrUnsupportedFormat{Provider: Kind, Model: model, Mode: rf.Mode}
-	}
-	return nil
-}
-
-// applyJSONMode translates JSONModeSpec into the wire shape.
-func applyJSONMode(jm *llm.JSONModeSpec, out map[string]any) error {
-	if jm == nil || !jm.Enabled {
-		return nil
-	}
-	if len(jm.Schema) == 0 {
-		out["response_format"] = map[string]any{"type": "json_object"}
-		return nil
-	}
-	schema := jm.Schema
-	injected, err := structured.InjectAdditionalProperties(schema)
-	if err == nil {
-		schema = injected
-	}
-	var schemaVal any
-	if err := json.Unmarshal(schema, &schemaVal); err != nil {
-		return fmt.Errorf("azure-openai: json_mode schema parse: %w", err)
-	}
-	name := jm.Name
-	if name == "" {
-		name = "response"
-	}
-	out["response_format"] = map[string]any{
-		"type": "json_schema",
-		"json_schema": map[string]any{
-			"name":   name,
-			"schema": schemaVal,
-			"strict": jm.Strict,
-		},
-	}
-	return nil
-}
-
-// buildContent emits the JSON value for a message's `content` field.
-// For pure text messages returns a string; for image-bearing messages
-// returns the array-of-parts shape.
-func buildContent(parts []llm.ContentBlock) any {
-	hasImage := false
-	for _, p := range parts {
-		if p.Type == "image" {
-			hasImage = true
-			break
-		}
-	}
-	if !hasImage {
-		return flattenText(parts)
-	}
-	out := make([]map[string]any, 0, len(parts))
-	for _, p := range parts {
-		switch p.Type {
-		case "", "text":
-			if p.Text != "" {
-				out = append(out, map[string]any{"type": "text", "text": p.Text})
-			}
-		case "image":
-			if p.Source == nil {
-				continue
-			}
-			var url string
-			if p.Source.Kind == "uri" && p.Source.URI != "" {
-				url = p.Source.URI
-			} else {
-				url = "data:" + p.Source.MediaType + ";base64," + p.Source.Data
-			}
-			out = append(out, map[string]any{
-				"type":      "image_url",
-				"image_url": map[string]any{"url": url},
-			})
-		}
-	}
-	return out
-}
-
-func flattenText(parts []llm.ContentBlock) string {
-	var b strings.Builder
-	for _, p := range parts {
-		if p.Type != "" && p.Type != "text" {
-			if p.Text != "" {
-				if b.Len() > 0 {
-					b.WriteByte('\n')
-				}
-				b.WriteString(p.Text)
-			}
-			continue
-		}
-		if p.Text != "" {
-			if b.Len() > 0 {
-				b.WriteByte('\n')
-			}
-			b.WriteString(p.Text)
-		}
-	}
-	return b.String()
 }
 
 // ─────────────────── azureChatStream ────────────────────────────────────────

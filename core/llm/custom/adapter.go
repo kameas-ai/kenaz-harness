@@ -25,6 +25,7 @@ import (
 	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
 	"github.com/kameas-ai/kenaz-harness/core/llm/httpx"
+	"github.com/kameas-ai/kenaz-harness/core/llm/openaiwire"
 )
 
 // Kind is the canonical provider kind for all custom OpenAI-compatible
@@ -271,74 +272,23 @@ func resolveAuthScheme(prof llm.ProviderProfile, tmpl *Template) (AuthScheme, st
 	return AuthSchemeBearer, ""
 }
 
-// buildRequestBody constructs the Chat Completions JSON body.
+// buildRequestBody constructs the Chat Completions JSON body via the
+// shared openaiwire encoder (model-settings-reach-the-model-01PMZ101
+// WP03) — custom-openai speaks the same OpenAI-compatible wire format as
+// openai/openrouter/azure. The adapter's own private encoder
+// (flattenContent) used to drop every tool_use/tool_result block
+// entirely, which meant a tool-bearing turn had no way to report a tool
+// result back to the model (spec FR-002).
 func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]byte, error) {
-	out := map[string]any{
-		"model":          prof.Model,
-		"stream":         true,
-		"stream_options": map[string]any{"include_usage": true},
+	model := prof.Model
+	if req.Model != "" {
+		model = req.Model
 	}
-
-	for _, key := range []string{"temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty"} {
-		if v, ok := req.Params[key]; ok {
-			out[key] = v
-		} else if v, ok := prof.Defaults[key]; ok {
-			out[key] = v
-		}
+	body, err := openaiwire.BuildRequestBody(req, model, prof.Defaults)
+	if err != nil {
+		return nil, err
 	}
-
-	msgs := make([]map[string]any, 0, len(req.Messages)+1)
-	if req.System != "" {
-		msgs = append(msgs, map[string]any{"role": "system", "content": req.System})
-	}
-	for _, m := range req.Messages {
-		role := string(m.Role)
-		if role == "" {
-			role = string(llm.RoleUser)
-		}
-		msgs = append(msgs, map[string]any{
-			"role":    role,
-			"content": flattenContent(m.Content),
-		})
-	}
-	out["messages"] = msgs
-
-	if len(req.Tools) > 0 {
-		tools := make([]map[string]any, 0, len(req.Tools))
-		for _, t := range req.Tools {
-			fn := map[string]any{
-				"name":        t.Name,
-				"description": t.Description,
-			}
-			if len(t.InputSchema) > 0 {
-				var schema any
-				if err := json.Unmarshal(t.InputSchema, &schema); err != nil {
-					return nil, fmt.Errorf("custom-openai: tool %q parameters: %w", t.Name, err)
-				}
-				fn["parameters"] = schema
-			} else {
-				fn["parameters"] = map[string]any{"type": "object"}
-			}
-			tools = append(tools, map[string]any{"type": "function", "function": fn})
-		}
-		out["tools"] = tools
-	}
-
-	return json.Marshal(out)
-}
-
-// flattenContent concatenates text blocks from a message.
-func flattenContent(parts []llm.ContentBlock) string {
-	var b strings.Builder
-	for _, p := range parts {
-		if p.Text != "" {
-			if b.Len() > 0 {
-				b.WriteByte('\n')
-			}
-			b.WriteString(p.Text)
-		}
-	}
-	return b.String()
+	return json.Marshal(body)
 }
 
 // classifyStatus maps HTTP error status codes to the connector taxonomy.
