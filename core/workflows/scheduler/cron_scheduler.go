@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"sync"
 	"time"
 
@@ -43,9 +44,9 @@ const historyLimit = 100
 
 // scheduleState is the per-workflow in-memory state.
 type scheduleState struct {
-	entry  cron.EntryID
-	cron   string
-	tz     string
+	entry   cron.EntryID
+	cron    string
+	tz      string
 	enabled bool
 }
 
@@ -279,7 +280,18 @@ func (s *CronScheduler) Tick(_ time.Time) {}
 func (s *CronScheduler) fire(workflowID string, scheduled bool) {
 	go func() {
 		ctx := context.Background()
-		_, _ = s.fireSync(ctx, workflowID, scheduled)
+		// The error is the ONLY signal on this path. A cron tick has no
+		// caller to return to, and a nil-dispatcher tick deliberately
+		// writes no History entry and does not advance last_fired_at --
+		// so without this line the tick is completely silent. Ruling B-6
+		// asks this fix to "convert a silent lie into a VISIBLE gap";
+		// dropping the error would convert it into a silent one instead.
+		if _, err := s.fireSync(ctx, workflowID, scheduled); err != nil {
+			logging.L().Warn("wf.scheduler.fire_failed",
+				"workflow_id", workflowID,
+				"scheduled", scheduled,
+				"err", err.Error())
+		}
 	}()
 }
 
