@@ -166,6 +166,21 @@ DNS / dial / read errors all classify uniformly.
    transparently falls back to the stable manifest with a warn log
    (`update.manifest.prerelease_missing`). `Check` returns the stable
    `Info` to the caller.
+   **Reachability, updated by `controls-and-readouts-that-tell-the-
+   truth-01PMZ808` WP08 (FR-010):** before that mission, `channel` was
+   hardcoded to `"stable"` at every production call site
+   (`Service.Check` at `service.go:150`, and the poller's `BackgroundPoll(pollCtx,
+   6*time.Hour, "stable")` in `core/rpc/api.go`), so this AC was
+   test-only coverage — no live path could ever request the prerelease
+   manifest, let alone hit its 404 fallback. WP07 (same mission)
+   threads `Settings.UpdateChannel` into `BackgroundPoll`, and
+   `BackgroundPoll` calls `checkChannel(ctx, channel)` directly — so a
+   user who sets the update channel to "prerelease" now drives this
+   fallback for real, on the periodic poller. **`Service.Check` (the
+   manual "Check now" RPC path) is still hardcoded to `"stable"` and
+   was out of WP07's scope (it only threads the poller's dials)** — the
+   fallback is live-reachable via the background poller only, not via
+   the manual check.
 7. **No emitter, no leak** — `Audit: nil` in the Config disables every
    audit emission silently. The Service keeps running; existing test
    suites remain green.

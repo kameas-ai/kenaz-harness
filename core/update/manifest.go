@@ -40,6 +40,14 @@ type manifestAsset struct {
 // These point at the release CDN (downloads.kameas.ai), which is where
 // release.yml publishes the per-product manifest. The stage CNAME backs
 // the prerelease (release-candidate) channel.
+//
+// frontend/src/components/updates/useUpdateStore.ts's MANIFEST_URL
+// constant (the Layer-3 direct-fetch fallback) must equal
+// stableManifestURL exactly (controls-and-readouts-that-tell-the-truth-
+// 01PMZ808 WP08, AC-018) — it pointed at the wrong host AND path for the
+// life of that fallback layer until WP08. Pinned on the TS side by
+// useUpdateStore.fallback.spec.ts's "MANIFEST_URL (AC-018)" describe
+// block; pinned here by TestStableManifestURL_MatchesFrontendConstant.
 const (
 	stableManifestURL     = "https://downloads.kameas.ai/kenaz-harness/manifest.json"
 	prereleaseManifestURL = "https://stage-downloads.kameas.ai/kenaz-harness/manifest.json"

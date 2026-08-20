@@ -215,6 +215,16 @@ type HarnessAPI interface {
 	// surface that surfaces ErrServiceUnavailable on every state-mutating
 	// method.
 	Update() updateview.UpdateAPI
+
+	// ReconfigureUpdatePoll (re-)launches the auto-update background
+	// poller against the current AutoCheckUpdates / UpdateChannel /
+	// UpdateCheckInterval settings, cancelling any prior poller first.
+	// controls-and-readouts-that-tell-the-truth-01PMZ808 WP07: called
+	// from SetContext at boot and from Bindings.Settings_Set so a live
+	// settings save takes effect without an app restart — BackgroundPoll
+	// reads its interval/channel once at loop start and cannot pick up a
+	// changed dial any other way. No-op when there is no update service.
+	ReconfigureUpdatePoll(ctx context.Context)
 	// Storage exposes the storage-health RPC surface (v0.5.1
 	// migration-doctor). Surfaces drift between the live ledger and the
 	// registered migration set; provides an automated repair for
@@ -882,27 +892,13 @@ func (a *API) SetContext(ctx context.Context) {
 		go a.runMigrationDriftCheck(ctx)
 	}
 
-	// Start the auto-update background poller on the Wails-supplied
-	// app context. The 6h interval matches the WP01 spec; channel is
-	// "stable" — switching to "prerelease" requires a separate UI
-	// path that hasn't shipped yet. Cancel any prior poller so
-	// repeated SetContext calls (test harness re-init) don't pile up
-	// goroutines.
-	if a.updateSvc != nil {
-		a.updatePollMu.Lock()
-		if a.updatePollCancel != nil {
-			a.updatePollCancel()
-		}
-		pollCtx, cancel := context.WithCancel(ctx)
-		a.updatePollCancel = cancel
-		a.updatePollMu.Unlock()
-		go func() {
-			if err := a.updateSvc.BackgroundPoll(pollCtx, 6*time.Hour, "stable"); err != nil &&
-				!errors.Is(err, context.Canceled) {
-				logging.L().Warn("update.poll.exit", "err", err.Error())
-			}
-		}()
-	}
+	// Start (or refuse to start) the auto-update background poller on the
+	// Wails-supplied app context. See ReconfigureUpdatePoll for the gate
+	// on AutoCheckUpdates and the channel/interval dials
+	// (controls-and-readouts-that-tell-the-truth-01PMZ808 WP07 — this used
+	// to hardcode 6h/"stable" unconditionally, ignoring AutoCheckUpdates
+	// entirely).
+	a.ReconfigureUpdatePoll(ctx)
 
 	// Start fleet audit archiver + retention sweeper background loops
 	// (fleet-audit-archival-01NDFSEX13). Constructed in New only when
@@ -918,6 +914,71 @@ func (a *API) SetContext(ctx context.Context) {
 		a.auditSweeper.Start(ctx)
 		logging.L().Info("fleet.audit_sweeper.started")
 	}
+}
+
+// ReconfigureUpdatePoll (re-)launches the auto-update background poller
+// against the CURRENT persisted dials, cancelling any prior poller
+// first. Called from SetContext (app boot / Wails re-init) and from
+// Bindings.Settings_Set (a live settings save while the app is
+// running) — BackgroundPoll takes interval and channel by value, read
+// once at loop start (core/update/service.go), so a running poller
+// cannot pick up a changed dial on its own; the only way to apply a new
+// interval or channel is cancel-and-relaunch.
+//
+// controls-and-readouts-that-tell-the-truth-01PMZ808 WP07 (FR-008):
+// this used to be an unconditional `if a.updateSvc != nil { ... 6h ...
+// "stable" ... }` inside SetContext — AutoCheckUpdates was read nowhere
+// on this path, and the interval/channel were hardcoded despite three
+// settings-store accessors (LoadAutoCheckUpdates / LoadUpdateChannel /
+// LoadUpdateCheckInterval) existing with zero non-test callers outside
+// core/rpc/views/settings.
+//
+// No-op when there is no update service (nil-service chassis path) or
+// no settings store to read the dials from.
+func (a *API) ReconfigureUpdatePoll(ctx context.Context) {
+	if a.updateSvc == nil {
+		return
+	}
+
+	// Defaults mirror the pre-WP07 hardcoded values so a chassis with no
+	// settings store (some test constructions) keeps its prior always-on
+	// stable/6h behaviour rather than silently going dark.
+	enabled := true
+	interval := 6 * time.Hour
+	channel := settings.UpdateChannelStable
+	if a.settingsImpl != nil {
+		if store := a.settingsImpl.Store(); store != nil {
+			if v, err := store.LoadAutoCheckUpdates(); err == nil {
+				enabled = v
+			}
+			if v, err := store.LoadUpdateCheckInterval(); err == nil && v > 0 {
+				interval = v
+			}
+			if v, err := store.LoadUpdateChannel(); err == nil && v != "" {
+				channel = v
+			}
+		}
+	}
+
+	a.updatePollMu.Lock()
+	if a.updatePollCancel != nil {
+		a.updatePollCancel()
+		a.updatePollCancel = nil
+	}
+	if !enabled {
+		a.updatePollMu.Unlock()
+		logging.L().Info("update.poll.disabled_by_settings")
+		return
+	}
+	pollCtx, cancel := context.WithCancel(ctx)
+	a.updatePollCancel = cancel
+	a.updatePollMu.Unlock()
+	go func() {
+		if err := a.updateSvc.BackgroundPoll(pollCtx, interval, channel); err != nil &&
+			!errors.Is(err, context.Canceled) {
+			logging.L().Warn("update.poll.exit", "err", err.Error())
+		}
+	}()
 }
 
 // runMigrationDriftCheck reads the boot-time migration drift report and

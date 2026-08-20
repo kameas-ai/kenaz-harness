@@ -143,6 +143,7 @@ func (f *fakeHarnessAPI) Permissions() permissionsview.PermissionsAPI { return f
 func (f *fakeHarnessAPI) Nodes() nodesview.NodesAPI                   { return f.nodesAPI }
 func (f *fakeHarnessAPI) Search() searchview.SearchAPI                { return f.searchAPI }
 func (f *fakeHarnessAPI) Update() updateview.UpdateAPI                { return f.updateAPI }
+func (f *fakeHarnessAPI) ReconfigureUpdatePoll(_ context.Context)     {}
 func (f *fakeHarnessAPI) Storage() storageview.StorageAPI             { return f.storageAPI }
 func (f *fakeHarnessAPI) Onboarding() onboardingview.OnboardingAPI {
 	return onboardingview.New(onboardingview.Config{})

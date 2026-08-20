@@ -32,9 +32,22 @@ import { createUpdateClient } from '@/lib/updateClient';
 const SKIP_LS_KEY = 'kenaz_update_skipped_version';
 const FIRST_SEEN_LS_KEY = 'kenaz_update_first_seen_version';
 
-/** Layer 3: public manifest URL — fetched directly from the frontend
- *  as a fallback when the backend update service is broken/skipped. */
-export const MANIFEST_URL = 'https://docs.kameas.ai/downloads/manifest.json';
+/**
+ * Layer 3: public manifest URL — fetched directly from the frontend as a
+ * fallback when the backend update service is broken/skipped.
+ *
+ * controls-and-readouts-that-tell-the-truth-01PMZ808 WP08 (FR-009): this
+ * pointed at `docs.kameas.ai/downloads/manifest.json` — wrong host AND
+ * wrong path. The real manifest is published to
+ * `downloads.kameas.ai/kenaz-harness/manifest.json` by release.yml (see
+ * core/update/manifest.go's stableManifestURL, and
+ * .github/workflows/release.yml's `s3://${BUCKET}/kenaz-harness/
+ * manifest.json` publish target). Every 24h fetch against the old URL
+ * 404'd and the safety net this layer exists to provide — "guards
+ * against future regressions where the backend update service silently
+ * breaks again" — had itself been silently broken since it shipped.
+ */
+export const MANIFEST_URL = 'https://downloads.kameas.ai/kenaz-harness/manifest.json';
 /** Layer 3: poll interval for the direct manifest check (24h). */
 const MANIFEST_POLL_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
@@ -50,6 +63,16 @@ interface StoreState {
   toastedVersion: Ref<string | null>;
   /** Set true after ensureBoot wires the broker subscription. */
   booted: Ref<boolean>;
+  /**
+   * Layer 3 (WP08, AC-019): non-null when the most recent manifest fetch
+   * failed (non-2xx status or a thrown error, e.g. network/DNS/CORS).
+   * Cleared on the next successful fetch. Previously the catch in
+   * fetchManifestVersion swallowed every failure silently, so this
+   * layer's whole reason for existing — being a *visible* safety net
+   * when the backend update service breaks — could itself break and
+   * nothing would ever say so.
+   */
+  manifestFetchError: Ref<string | null>;
 }
 
 let _client: UpdateClient = createUpdateClient();
@@ -57,6 +80,7 @@ const state: StoreState = {
   status: ref<UpdateStatus | null>(null),
   toastedVersion: ref<string | null>(null),
   booted: ref(false),
+  manifestFetchError: ref<string | null>(null),
 };
 
 let unsubBroker: (() => void) | null = null;
@@ -73,7 +97,12 @@ let _manifestPollTimer: ReturnType<typeof setTimeout> | null = null;
 export async function fetchManifestVersion(): Promise<string | null> {
   try {
     const res = await window.fetch(MANIFEST_URL);
-    if (!res.ok) return null;
+    if (!res.ok) {
+      state.manifestFetchError.value = `manifest fetch failed: HTTP ${res.status}`;
+      // eslint-disable-next-line no-console
+      console.warn('[update] manifest fallback fetch failed', state.manifestFetchError.value);
+      return null;
+    }
     const data = (await res.json()) as unknown;
     if (
       data !== null &&
@@ -81,10 +110,15 @@ export async function fetchManifestVersion(): Promise<string | null> {
       'version' in data &&
       typeof (data as Manifest).version === 'string'
     ) {
+      state.manifestFetchError.value = null;
       return (data as Manifest).version;
     }
+    state.manifestFetchError.value = 'manifest fetch failed: unexpected response shape';
     return null;
-  } catch {
+  } catch (e: unknown) {
+    state.manifestFetchError.value = `manifest fetch failed: ${e instanceof Error ? e.message : String(e)}`;
+    // eslint-disable-next-line no-console
+    console.warn('[update] manifest fallback fetch threw', state.manifestFetchError.value);
     return null;
   }
 }
@@ -208,6 +242,13 @@ export interface UpdateStore {
   download(): Promise<void>;
   /** Apply (Mac/Linux: install + restart; Windows: stage). */
   apply(): Promise<void>;
+  /**
+   * Layer 3 (WP08, AC-019): non-null message when the most recent direct
+   * manifest fetch (the 24h fallback poll) failed. Health/diagnostics
+   * surfaces can render this so a broken safety net is visible instead
+   * of silently doing nothing for the life of the process.
+   */
+  manifestFetchError: Ref<string | null>;
 }
 
 export function useUpdateStore(): UpdateStore {
@@ -308,6 +349,7 @@ export function useUpdateStore(): UpdateStore {
     refresh,
     download,
     apply,
+    manifestFetchError: state.manifestFetchError,
   };
 }
 
@@ -321,6 +363,7 @@ export function __resetUpdateStoreForTests(opts?: {
   state.status.value = null;
   state.toastedVersion.value = null;
   state.booted.value = false;
+  state.manifestFetchError.value = null;
   if (unsubBroker) {
     unsubBroker();
     unsubBroker = null;
