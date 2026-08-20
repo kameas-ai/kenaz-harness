@@ -374,7 +374,10 @@ func extractErrorMessage(body []byte) string {
 // DeploymentRegistry, setAPIKeyHeader). This is also what makes the
 // tool_use/tool_result round trip work: the private encoder this used to
 // call (buildContent) erased every tool block, dropping tool_calls and
-// tool_call_id entirely (spec FR-002).
+// tool_call_id entirely (spec FR-002). reasoning_effort for o1/o3 models
+// (previously mapped here by mapReasoningEffort) is now applied inside
+// openaiwire.BuildRequestBody itself (WP08, spec D-14) — moved, not
+// duplicated, so this adapter no longer needs its own copy.
 func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]byte, error) {
 	model := prof.Model
 	if req.Model != "" {
@@ -385,32 +388,6 @@ func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]by
 		return nil, err
 	}
 	return json.Marshal(body)
-}
-
-// mapReasoningEffort maps BudgetTokens to a reasoning_effort string.
-// Low (<4000), medium (4000-14999), high (15000+), defaulting to high
-// when BudgetTokens is 0 (unset).
-//
-// UNUSED by production code as of this commit (WP03): buildRequestBody
-// above now delegates to openaiwire.BuildRequestBody, which does not yet
-// map req.Reasoning to reasoning_effort — see body.go:76, which reads
-// only Knobs.Reasoning. That is a real regression (spec D-14): deleting
-// this call without a replacement would silently turn off Azure o1/o3
-// reasoning with no way to turn it back on, since llm.Request.Knobs has
-// no production writer. WP08, landing next in this same unit, moves this
-// function into openaiwire and wires it to req.Reasoning there — kept
-// here only until that commit so the unit's own tests (this WP's AC-002)
-// aren't gated on a change that isn't this WP's job. Do not add new
-// callers; WP08 deletes this function.
-func mapReasoningEffort(budgetTokens int) string {
-	switch {
-	case budgetTokens == 0 || budgetTokens >= 15000:
-		return "high"
-	case budgetTokens >= 4000:
-		return "medium"
-	default:
-		return "low"
-	}
 }
 
 // ─────────────────── azureChatStream ────────────────────────────────────────
