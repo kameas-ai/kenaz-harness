@@ -350,9 +350,41 @@ type ResponseFormat struct {
 	StrictValidation bool `json:"strict_validation,omitempty"`
 }
 
-// StructuredOutputAdapter is the optional interface adapters implement when
-// they support ResponseFormat natively. Adapters that do not implement this
-// interface fall through to the prompt-engineering + post-hoc validation path.
+// StructuredOutputAdapter is a compile-time marker interface adapters may
+// implement to document that they carry an ApplyResponseFormat method with
+// this signature. It has NO dispatcher: nothing in the registry, or
+// anywhere else in the tree, type-asserts a ProviderAdapter against this
+// interface (structured-output-is-reachable-01PMZE14 spec §1.4/§14 R-1,
+// §D-4 — verified by grep: ten occurrences of "StructuredOutputAdapter",
+// all declaration, compile-time assertions, or doc comments).
+//
+// This corrects an earlier version of this doc comment that claimed
+// non-implementors "fall through to the prompt-engineering + post-hoc
+// validation path" — no such fallback selection exists. Each of the four
+// current implementors (anthropic, openai, openrouter, bedrock) calls its
+// own ApplyResponseFormat from its own request builder directly; the
+// registry never asks whether an adapter implements this interface. Two of
+// the four exported methods are additionally near-dead in production: the
+// openai/openrouter methods are reached only when
+// HARNESS_LLM_USE_OPENAIWIRE is explicitly off (default on — production
+// runs openaiwire's unexported duplicate instead), and bedrock's is
+// "accepted to satisfy the interface but is always ignored"
+// (core/llm/bedrock/bedrock.go — see its own comment at the call site).
+//
+// Adding a fifth `var _ StructuredOutputAdapter = (*Adapter)(nil)`
+// assertion to a new adapter (e.g. gemini) would add zero behaviour and
+// is explicitly NOT done by structured-output-is-reachable-01PMZE14 — a
+// dispatcher-less interface with a fifth assertion is the same lie this
+// mission exists to end, wearing a new adapter's name. If ApplyResponseFormat
+// is ever given a real caller (a registry-level type assertion routing
+// non-implementors to an actual prompt-engineering fallback — the shape
+// this doc comment used to promise), that dispatcher must be written
+// against bedrock's deliberately-ignoring implementation with a test, or
+// it will silently treat "format applied" as true for a call that did
+// nothing. Filed, not built: blocker is the dispatcher itself; no owner
+// assigned as of this comment (escalation E-002, structured-output-is-
+// reachable-01PMZE14 spec §11 — the mission's default, chosen over
+// building the dispatcher, is exactly this narrowing).
 //
 // ApplyResponseFormat mutates wireBody in place to add provider-specific
 // structured-output fields. It must return ErrUnsupportedFormat when the
