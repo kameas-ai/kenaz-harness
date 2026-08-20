@@ -2,6 +2,7 @@ package agentgraph
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -124,8 +125,10 @@ nodes:
 }
 
 // TestIntegration_ApprovalKindEndToEnd: an `approval` node fires,
-// emits both the pending and resolved events, and the kernel completes
-// the run.
+// emits the pending event and an honest auto-passed event (no approval
+// seam is wired yet — see TestIntegration_ApprovalKindDoesNotFabricateHumanDecision
+// for why this is NOT approval_resolved), and the kernel completes the
+// run.
 func TestIntegration_ApprovalKindEndToEnd(t *testing.T) {
 	t.Parallel()
 	src := `spec_version: "1"
@@ -155,8 +158,88 @@ nodes:
 	if !hasEventKind(events, EventApprovalPending) {
 		t.Errorf("expected approval_pending event; got kinds: %v", kindsOf(events))
 	}
-	if !hasEventKind(events, EventApprovalResolved) {
-		t.Errorf("expected approval_resolved event; got kinds: %v", kindsOf(events))
+	if !hasEventKind(events, EventApprovalAutoPassed) {
+		t.Errorf("expected approval_auto_passed event; got kinds: %v", kindsOf(events))
+	}
+}
+
+// TestIntegration_ApprovalKindDoesNotFabricateHumanDecision is AC-02
+// (trust-surfaces-that-fire-01PMZ202 WP02, Class F "manufactured
+// success"): the v1 `approval` node has no approval UI/seam wired yet
+// (approval-node-01PMZC12 owns building one — tasks.md WP02, ruling
+// A-8), so it auto-passes every run. That is fine — deleting the
+// pass-through breaks every existing graph with an approval node — but
+// the event trace must never assert that a HUMAN made that call. This
+// pins the removal of the fabricated EventApprovalResolved{"approved":
+// true} append: reverting it (restoring the old payload) must fail this
+// test.
+func TestIntegration_ApprovalKindDoesNotFabricateHumanDecision(t *testing.T) {
+	t.Parallel()
+	// auto_approve_window_seconds: 0 and a positive window must behave
+	// identically — both auto-pass, neither claims a human approved.
+	// Without this the WP would be satisfiable by special-casing zero.
+	for _, window := range []int{0, 30} {
+		window := window
+		t.Run(fmt.Sprintf("window=%d", window), func(t *testing.T) {
+			t.Parallel()
+			src := fmt.Sprintf(`spec_version: "1"
+id: approval_honesty
+entrypoints: [a]
+nodes:
+  - id: a
+    kind: approval
+    attrs:
+      approver_role: user
+      prompt: "Are you sure?"
+      auto_approve_window_seconds: %d
+`, window)
+			g, err := LoadYAML([]byte(src))
+			if err != nil {
+				t.Fatalf("LoadYAML: %v", err)
+			}
+			if err := Validate(g); err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			log := NewMemoryEventLog()
+			k := NewKernel(WithEventLog(log))
+			env := &Env{RunID: fmt.Sprintf("run-approval-honesty-%d", window), Graph: &g}
+			if err := k.Run(context.Background(), env); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			events := readEvents(t, log, env.RunID)
+
+			// No event of kind approval_resolved may appear at all — that
+			// kind is reserved for a real human resolution once
+			// approval-node-01PMZC12 wires one.
+			if hasEventKind(events, EventApprovalResolved) {
+				t.Errorf("window=%d: found approval_resolved event — this asserts a human made a decision nobody made; got kinds: %v", window, kindsOf(events))
+			}
+
+			// Belt-and-suspenders: no event of ANY kind may carry
+			// payload {"approved": true} — that is the specific
+			// fabrication this WP removes, and a future edit to this
+			// executor must not reintroduce it under a different kind
+			// name.
+			for _, e := range events {
+				if len(e.Payload) == 0 {
+					continue
+				}
+				var payload map[string]any
+				if err := json.Unmarshal(e.Payload, &payload); err != nil {
+					continue
+				}
+				if approved, ok := payload["approved"]; ok && approved == true {
+					t.Errorf("window=%d: event kind %q payload asserts approved=true — no human approved anything; payload=%s", window, e.Kind, e.Payload)
+				}
+			}
+
+			// The honest replacement event must be present: the node DID
+			// auto-pass (that's real behaviour worth recording), it just
+			// must not claim a human resolved it.
+			if !hasEventKind(events, EventApprovalAutoPassed) {
+				t.Errorf("window=%d: expected an approval_auto_passed event recording the honest auto-pass; got kinds: %v", window, kindsOf(events))
+			}
+		})
 	}
 }
 

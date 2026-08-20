@@ -1489,17 +1489,17 @@ func summarizeTail(ctx context.Context, env *Env, tail []Message, mode string) s
 
 // ---- ApprovalNode (NEW, FR-048) ----
 
-// approvalExecutor implements ExecApproval — a binary HITL gate that
-// pauses the run until the user clicks Approve or Reject in the
-// harness UI. Persists a `pending_approval` event mirroring
-// `pending_ask`. Auto-approve is governed by
-// `auto_approve_window_seconds` (0 = never auto-approve).
-//
-// Like ask, the v1 implementation surfaces a synchronous "pending"
-// event and returns a sentinel that the kernel should wire to a UI
-// modal in WP06. For now the executor short-circuits with `Approved:
-// true` so happy-path tests round-trip — production paths will replace
-// this with a true halt-and-resume seam.
+// approvalExecutor implements ExecApproval — intended as a binary HITL
+// gate that pauses the run until the user clicks Approve or Reject in
+// the harness UI. No such UI/seam exists yet (approval-node-01PMZC12
+// owns building one — an authoring-time capability, not a gate on
+// unattended execution, per ruling B-3). Until it lands, the executor
+// auto-passes every run so graphs containing an approval node still
+// complete, and records that auto-pass HONESTLY — see
+// EventApprovalAutoPassed. It does NOT emit EventApprovalResolved:
+// that kind is reserved for a real human decision, and a prior version
+// of this code fabricated one (trust-surfaces-that-fire-01PMZ202 WP02,
+// Class F "manufactured success" — docs/dead-code-audit-2026-08-18.md).
 type approvalExecutor struct{}
 
 func (approvalExecutor) Kind() NodeKind { return NodeKindApproval }
@@ -1522,19 +1522,28 @@ func (approvalExecutor) Execute(_ context.Context, env *Env, node *Node, inputs 
 
 	// Surface a pending_approval event so the UI can render the modal.
 	_ = res.Events.AppendKind(env.RunID, node.ID, EventApprovalPending, map[string]any{
-		"prompt":                     prompt,
-		"approver_role":              approverRole,
-		"policy_label":               a.PolicyLabel,
+		"prompt":                      prompt,
+		"approver_role":               approverRole,
+		"policy_label":                a.PolicyLabel,
 		"auto_approve_window_seconds": a.AutoApproveWindowSeconds,
 	})
 
-	// v1 behaviour: auto-approve to keep happy-path tests green; the
-	// real halt-and-resume seam lands when the harness UI surface for
-	// approvals ships (WP06+).
+	// v1 behaviour: pass the input through unconditionally — deleting
+	// the pass-through would break every existing graph containing an
+	// approval node — but record it HONESTLY. No human approved
+	// anything: no approval UI/seam is wired yet (approval-node-01PMZC12
+	// owns building one), so this always auto-passes regardless of
+	// AutoApproveWindowSeconds, including when it is 0 ("never
+	// auto-approve" per the manifest — that dial is not evaluated here
+	// and must not be special-cased to look like it is). Do NOT append
+	// EventApprovalResolved here: that kind asserts a real human
+	// decision and doing so from this path was the fabrication WP02 of
+	// trust-surfaces-that-fire-01PMZ202 removed (Class F, "manufactured
+	// success").
 	res.Outputs["approved"] = inputs["in"]
-	_ = res.Events.AppendKind(env.RunID, node.ID, EventApprovalResolved, map[string]any{
-		"approved": true,
-		"auto":     a.AutoApproveWindowSeconds > 0,
+	_ = res.Events.AppendKind(env.RunID, node.ID, EventApprovalAutoPassed, map[string]any{
+		"reason":                      "no approval seam wired",
+		"auto_approve_window_seconds": a.AutoApproveWindowSeconds,
 	})
 	return res, nil
 }
