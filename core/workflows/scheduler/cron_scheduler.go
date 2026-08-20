@@ -28,6 +28,16 @@ var ErrInvalidCronExpr = errors.New("scheduler: invalid cron expression")
 // name that time.LoadLocation does not recognise.
 var ErrInvalidTimezone = errors.New("scheduler: invalid timezone")
 
+// ErrNoDispatcherWired is returned by fireSync (via RunNow and the cron
+// fire path) when no Dispatcher has been configured. Until a production
+// wfsched.Dispatcher exists (workflows-agentic mission's UNIT-2), this is
+// the only production state: Config.Dispatcher has no non-test caller.
+// A run in this state never happened — no engine was invoked, no run ID
+// was produced — so it is recorded as a failure and does not advance
+// last_fired_at/last_run_id, and does not appear in History (unlike a run
+// that reached a real Dispatcher and failed there).
+var ErrNoDispatcherWired = errors.New("no workflow dispatcher wired")
+
 // historyLimit caps the in-memory history ring-buffer per workflow.
 const historyLimit = 100
 
@@ -57,8 +67,17 @@ type Config struct {
 	// Store persists schedules across chassis restarts. nil is allowed
 	// in tests; schedules are lost on process exit.
 	Store Storage
-	// Dispatcher fires actual workflow runs. nil is allowed in tests;
-	// RunNow and tick-triggered runs return a no-op stub summary.
+	// Dispatcher fires actual workflow runs. As of this writing nil is
+	// NOT a supported "test-only" state — it is the only production
+	// state, because no production wfsched.Dispatcher is constructed
+	// anywhere in the chassis (see core/rpc/api.go's sole `wfsched.New`
+	// call site). RunNow and tick-triggered runs on a nil Dispatcher do
+	// NOT return a stub "completed" summary: they fail loudly with
+	// ErrNoDispatcherWired, and do not advance the persisted
+	// last_fired_at/last_run_id. Until a real Dispatcher is wired
+	// (workflows-agentic mission's UNIT-2), every enabled schedule
+	// reports failure — that is intentional honesty, not a regression
+	// to be worked around here.
 	Dispatcher Dispatcher
 }
 
@@ -265,8 +284,28 @@ func (s *CronScheduler) fire(workflowID string, scheduled bool) {
 }
 
 // fireSync dispatches a run and records the summary. Blocks until done.
+//
+// If no Dispatcher is wired, this is a configuration error, not an
+// attempted-and-failed run: no engine was invoked and no run ID was
+// produced. It is reported as a failure to the caller, but — unlike a
+// run that reached a real Dispatcher and failed there — it is NOT
+// appended to History and does NOT advance the durable
+// last_fired_at/last_run_id (cron_scheduler.go's whole reason for
+// existing is that those two facts must stay honest).
 func (s *CronScheduler) fireSync(ctx context.Context, workflowID string, scheduled bool) (RunSummary, error) {
 	startedAt := time.Now().UTC()
+
+	if s.dispatcher == nil {
+		return RunSummary{
+			WorkflowID: workflowID,
+			Status:     "failed",
+			StartedAt:  startedAt,
+			EndedAt:    time.Now().UTC(),
+			Err:        ErrNoDispatcherWired.Error(),
+			Scheduled:  scheduled,
+		}, ErrNoDispatcherWired
+	}
+
 	summary := RunSummary{
 		RunID:      newRunID(),
 		WorkflowID: workflowID,
@@ -275,16 +314,7 @@ func (s *CronScheduler) fireSync(ctx context.Context, workflowID string, schedul
 		Scheduled:  scheduled,
 	}
 
-	var (
-		runID string
-		err   error
-	)
-	if s.dispatcher != nil {
-		runID, err = s.dispatcher.Dispatch(ctx, workflowID, scheduled)
-	} else {
-		// No dispatcher wired (test path): synthesise a run ID.
-		runID = summary.RunID
-	}
+	runID, err := s.dispatcher.Dispatch(ctx, workflowID, scheduled)
 
 	endedAt := time.Now().UTC()
 	if err != nil {
@@ -307,7 +337,11 @@ func (s *CronScheduler) fireSync(ctx context.Context, workflowID string, schedul
 	s.history[workflowID] = h
 	s.mu.Unlock()
 
-	if scheduled && s.store != nil && summary.Status == "completed" {
+	// Guarded on s.dispatcher != nil as well as summary.Status ==
+	// "completed" — deliberately redundant with the early return above.
+	// A later refactor of the status assignment above must not be able
+	// to silently re-arm this durable write for the nil-dispatcher case.
+	if scheduled && s.dispatcher != nil && s.store != nil && summary.Status == "completed" {
 		_ = s.store.SetLastFired(ctx, workflowID, summary.RunID, startedAt)
 	}
 	return summary, err
