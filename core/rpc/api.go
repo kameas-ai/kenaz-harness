@@ -113,6 +113,7 @@ import (
 	tasksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/tasks"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/tools"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/trust"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/trustanchor"
 	updateview "github.com/kameas-ai/kenaz-harness/core/rpc/views/update"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/workflow"
 	workflowsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/workflows"
@@ -129,6 +130,7 @@ import (
 	corebash "github.com/kameas-ai/kenaz-harness/core/tools/bash"
 	coreplanmode "github.com/kameas-ai/kenaz-harness/core/tools/planmode"
 	coreskill "github.com/kameas-ai/kenaz-harness/core/tools/skill"
+	coretrust "github.com/kameas-ai/kenaz-harness/core/trust"
 	"github.com/kameas-ai/kenaz-harness/core/units"
 	coreupdate "github.com/kameas-ai/kenaz-harness/core/update"
 	"github.com/kameas-ai/kenaz-harness/core/usage"
@@ -167,6 +169,11 @@ type HarnessAPI interface {
 	Workflows() workflowsview.WorkflowsAPI
 	Sessions() sessions.SessionsAPI
 	Trust() trust.TrustAPI
+	// TrustAnchors is the writer for core/trust's persisted AnchorStore
+	// (bundle-download-and-verify-01PMZ909 UNIT-3) — distinct from
+	// Trust() above, which is an unrelated secret-reference surface
+	// that claimed the shorter name first.
+	TrustAnchors() trustanchor.TrustAnchorAPI
 	Context() contextview.ContextAPI
 	Contexts() contextsview.ContextsAPI
 	Bundle() bundle.BundleAPI
@@ -422,18 +429,24 @@ type API struct {
 	// restart. nil when c == nil or DataDir is empty (test-harness path)
 	// — mcpUserRecipeSource degrades to a nil source in that case, which
 	// recipes.MergedCatalog treats as "contributes zero recipes".
-	mcpUserStore *recipes.UserStore
-	a2aAPI       a2a.A2AAPI
-	workflowAPI  workflow.WorkflowAPI
-	workflowsAPI workflowsview.WorkflowsAPI
-	sessionsAPI  sessions.SessionsAPI
-	trustAPI     trust.TrustAPI
-	contextAPI   contextview.ContextAPI
-	contextsAPI  contextsview.ContextsAPI
-	bundleAPI    bundle.BundleAPI
-	policyAPI    policy.PolicyAPI
-	auditImpl    *audit.API
-	auditAPI     audit.AuditAPI
+	mcpUserStore   *recipes.UserStore
+	a2aAPI         a2a.A2AAPI
+	workflowAPI    workflow.WorkflowAPI
+	workflowsAPI   workflowsview.WorkflowsAPI
+	sessionsAPI    sessions.SessionsAPI
+	trustAPI       trust.TrustAPI
+	trustAnchorAPI trustanchor.TrustAnchorAPI
+	// trustEngine is the core/trust.TrustEngine backing trustAnchorAPI
+	// AND the bundle-install verifier (UNIT-4). Persisted (SQLite) when
+	// c has a DataDir; in-memory otherwise (test-harness path) — same
+	// convention as the bundle wiring at api.go's NewAPI body.
+	trustEngine coretrust.TrustEngine
+	contextAPI  contextview.ContextAPI
+	contextsAPI contextsview.ContextsAPI
+	bundleAPI   bundle.BundleAPI
+	policyAPI   policy.PolicyAPI
+	auditImpl   *audit.API
+	auditAPI    audit.AuditAPI
 	// logStore + logsAPI back the Settings → Logs panel (mission 01NLOGS01 WP01/WP04).
 	logStore       *logstore.Store
 	logsAPI        logsview.LogsAPI
@@ -1880,6 +1893,45 @@ func New(c *core.Core, opts ...Option) *API {
 		})
 	} else {
 		a.hooksAPI = hooksview.New(hooksview.Config{})
+	}
+
+	// Trust anchors (bundle-download-and-verify-01PMZ909 UNIT-3, spec
+	// §1.7 F-1). A durable AnchorStore when the chassis exposes a real
+	// *sql.DB (same structural-interface dance buildJournalWriter /
+	// buildAgentGraphEventLog use so storage.DB doesn't need to grow a
+	// public method); otherwise the engine falls back to its v1.0
+	// in-memory default (trust.Config{}.Anchors nil-default in
+	// engine.go), matching the bundle wiring's own convention below.
+	// Before this, an anchor installed before a relaunch was
+	// unobservable on the next boot — confirmed by execution in
+	// research/corrections.md.
+	var anchorStore coretrust.AnchorStore
+	if c != nil {
+		if store := c.Storage(); store != nil {
+			type sqlHandle interface{ SQL() *sql.DB }
+			if h, ok := store.(sqlHandle); ok {
+				if rawDB := h.SQL(); rawDB != nil {
+					if s, sErr := coretrust.NewSQLiteAnchorStore(rawDB); sErr == nil {
+						anchorStore = s
+					} else {
+						slog.Warn("trust anchor store construction failed; falling back to in-memory", "err", sErr)
+					}
+				}
+			}
+		}
+	}
+	if trustEngine, tErr := coretrust.NewEngineWithEmitter(coretrust.Config{Anchors: anchorStore}, nil, coretrust.NewMemoryEmitter()); tErr != nil {
+		// NewEngineWithEmitter only errors on a nil dispatcher combined
+		// with a sign attempt; verify-only construction (dispatcher=nil
+		// here, matching NewEngine's own contract) does not fail in
+		// practice. Degrade to a nil engine rather than aborting API
+		// construction: TrustAnchors() and the UNIT-4 bundle-install
+		// verifier path both tolerate a nil engine (empty list / skip
+		// verification under SigningOptional).
+		slog.Warn("trust engine construction failed", "err", tErr)
+	} else {
+		a.trustEngine = trustEngine
+		a.trustAnchorAPI = trustanchor.New(trustEngine)
 	}
 
 	// Wire the bundle reader against the core data dir. nil core (test
@@ -6983,8 +7035,14 @@ func (a *API) Workflows() workflowsview.WorkflowsAPI {
 	}
 	return a.workflowsAPI
 }
-func (a *API) Sessions() sessions.SessionsAPI  { return a.sessionsAPI }
-func (a *API) Trust() trust.TrustAPI           { return a.trustAPI }
+func (a *API) Sessions() sessions.SessionsAPI { return a.sessionsAPI }
+func (a *API) Trust() trust.TrustAPI          { return a.trustAPI }
+func (a *API) TrustAnchors() trustanchor.TrustAnchorAPI {
+	if a == nil || a.trustAnchorAPI == nil {
+		return trustanchor.New(nil)
+	}
+	return a.trustAnchorAPI
+}
 func (a *API) Context() contextview.ContextAPI { return a.contextAPI }
 func (a *API) Contexts() contextsview.ContextsAPI {
 	if a.contextsAPI == nil {

@@ -40,6 +40,8 @@ import type {
   AttachmentScopeKind,
   ModuleAttachment,
   Bundle,
+  TrustAnchor,
+  InstallTrustAnchorRequest,
   ContentBlock,
   Denial,
   AuditEntry,
@@ -364,6 +366,8 @@ interface WailsBindingsLike {
 
   Trust_ListSecretReferences(): Promise<SecretReference[]>;
   Trust_GetSecretReference(id: string): Promise<SecretReference>;
+  Trust_ListAnchors(): Promise<TrustAnchor[]>;
+  Trust_InstallAnchor(req: InstallTrustAnchorRequest): Promise<TrustAnchor>;
 
   Context_List(): Promise<ContextEntry[]>;
   Context_StartStream(): Promise<string>;
@@ -1666,6 +1670,16 @@ export interface WorkflowClient {
 export interface TrustClient {
   listSecretReferences(): Promise<SecretReference[]>;
   getSecretReference(id: string): Promise<SecretReference>;
+}
+
+/**
+ * TrustAnchorsClient — writer for core/trust's persisted AnchorStore
+ * (bundle-download-and-verify-01PMZ909 UNIT-3). Distinct from
+ * TrustClient above, which is an unrelated secret-reference surface.
+ */
+export interface TrustAnchorsClient {
+  list(): Promise<TrustAnchor[]>;
+  install(req: InstallTrustAnchorRequest): Promise<TrustAnchor>;
 }
 
 export interface ContextClient {
@@ -3274,6 +3288,7 @@ export interface HarnessClient {
   a2a: A2AClient;
   workflow: WorkflowClient;
   trust: TrustClient;
+  trustAnchors: TrustAnchorsClient;
   context: ContextClient;
   contexts: ContextsClient;
   attachments: AttachmentsClient;
@@ -3535,6 +3550,10 @@ export function createHarnessClient(): HarnessClient {
     trust: {
       listSecretReferences: () => b().Trust_ListSecretReferences(),
       getSecretReference: (id) => b().Trust_GetSecretReference(id),
+    },
+    trustAnchors: {
+      list: () => b().Trust_ListAnchors(),
+      install: (req) => b().Trust_InstallAnchor(req),
     },
     context: {
       list: () => b().Context_List(),
@@ -4737,6 +4756,22 @@ export function createFakeHarnessClient(
         label: id,
         source: 'fake',
         createdAt: '',
+      }),
+    },
+    trustAnchors: {
+      list: async () => [],
+      install: async (req) => ({
+        anchorId: req.anchorId,
+        kind: req.kind ?? 'raw_public_key',
+        peerId: req.peerId,
+        algorithm: req.algorithm ?? 'ed25519',
+        publicKey: {
+          algorithm: req.algorithm ?? 'ed25519',
+          keyB64: req.keyB64,
+          fingerprint: 'fake',
+        },
+        installedAt: new Date().toISOString(),
+        removed: false,
       }),
     },
     context: {

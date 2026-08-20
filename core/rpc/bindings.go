@@ -32,11 +32,11 @@ import (
 	cedarpolicyview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedarpolicy"
 	compactionview "github.com/kameas-ai/kenaz-harness/core/rpc/views/compaction"
 	complianceview "github.com/kameas-ai/kenaz-harness/core/rpc/views/compliance"
+	confirmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/confirm"
 	contextsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contexts"
 	contextsyncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextsync"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/contextview"
 	corpusview "github.com/kameas-ai/kenaz-harness/core/rpc/views/corpus"
-	confirmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/confirm"
 	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
 	fleetview "github.com/kameas-ai/kenaz-harness/core/rpc/views/fleet"
 	hooksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/hooks"
@@ -64,6 +64,7 @@ import (
 	tasksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/tasks"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/tools"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/trust"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/trustanchor"
 	updateview "github.com/kameas-ai/kenaz-harness/core/rpc/views/update"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/workflow"
 	workflowsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/workflows"
@@ -719,6 +720,17 @@ func (b *Bindings) Bundle_Install(req bundle.InstallRequest) (bundle.Bundle, err
 func (b *Bindings) Bundle_Remove(id string) error {
 	defer sentry.WrapBinding("Bundle_Remove")()
 	return b.api.Bundle().Remove(b.ctx(), id)
+}
+
+// ── trust anchors (bundle-download-and-verify-01PMZ909 UNIT-3) ──────────
+
+func (b *Bindings) Trust_ListAnchors() ([]trustanchor.Anchor, error) {
+	defer sentry.WrapBinding("Trust_ListAnchors")()
+	return b.api.TrustAnchors().ListAnchors(b.ctx())
+}
+func (b *Bindings) Trust_InstallAnchor(req trustanchor.InstallAnchorRequest) (trustanchor.Anchor, error) {
+	defer sentry.WrapBinding("Trust_InstallAnchor")()
+	return b.api.TrustAnchors().InstallAnchor(b.ctx(), req)
 }
 
 // ── policy ─────────────────────────────────────────────────────────────

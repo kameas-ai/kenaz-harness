@@ -1690,6 +1690,14 @@ export function Trust_GetSecretReference(arg1) {
   return window['go']['rpc']['Bindings']['Trust_GetSecretReference'](arg1);
 }
 
+export function Trust_InstallAnchor(arg1) {
+  return window['go']['rpc']['Bindings']['Trust_InstallAnchor'](arg1);
+}
+
+export function Trust_ListAnchors() {
+  return window['go']['rpc']['Bindings']['Trust_ListAnchors']();
+}
+
 export function Trust_ListSecretReferences() {
   return window['go']['rpc']['Bindings']['Trust_ListSecretReferences']();
 }
