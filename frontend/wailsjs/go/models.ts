@@ -1068,100 +1068,15 @@ export namespace bundle {
 	export class InstallRequest {
 	    kind: string;
 	    path: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new InstallRequest(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.kind = source["kind"];
 	        this.path = source["path"];
-	    }
-	}
-
-}
-
-export namespace trustanchor {
-
-	export class PublicKey {
-	    algorithm: string;
-	    keyB64: string;
-	    fingerprint: string;
-
-	    static createFrom(source: any = {}) {
-	        return new PublicKey(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.algorithm = source["algorithm"];
-	        this.keyB64 = source["keyB64"];
-	        this.fingerprint = source["fingerprint"];
-	    }
-	}
-	export class Anchor {
-	    anchorId: string;
-	    kind: string;
-	    peerId?: string;
-	    orgId?: string;
-	    algorithm: string;
-	    publicKey: PublicKey;
-	    installedAt: string;
-	    removed: boolean;
-
-	    static createFrom(source: any = {}) {
-	        return new Anchor(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.anchorId = source["anchorId"];
-	        this.kind = source["kind"];
-	        this.peerId = source["peerId"];
-	        this.orgId = source["orgId"];
-	        this.algorithm = source["algorithm"];
-	        this.publicKey = this.convertValues(source["publicKey"], PublicKey);
-	        this.installedAt = source["installedAt"];
-	        this.removed = source["removed"];
-	    }
-
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class InstallAnchorRequest {
-	    anchorId: string;
-	    kind: string;
-	    peerId?: string;
-	    algorithm: string;
-	    keyB64: string;
-
-	    static createFrom(source: any = {}) {
-	        return new InstallAnchorRequest(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.anchorId = source["anchorId"];
-	        this.kind = source["kind"];
-	        this.peerId = source["peerId"];
-	        this.algorithm = source["algorithm"];
-	        this.keyB64 = source["keyB64"];
 	    }
 	}
 
@@ -6869,7 +6784,7 @@ export namespace settings {
 	    firstRunOnboardingCompleted?: boolean;
 	    chatCustomInstructions?: string;
 	    bundleSigningPolicy?: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
 	    }
@@ -7739,6 +7654,91 @@ export namespace trust {
 	        this.label = source["label"];
 	        this.source = source["source"];
 	        this.createdAt = source["createdAt"];
+	    }
+	}
+
+}
+
+export namespace trustanchor {
+	
+	export class PublicKey {
+	    algorithm: string;
+	    keyB64: string;
+	    fingerprint: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PublicKey(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.algorithm = source["algorithm"];
+	        this.keyB64 = source["keyB64"];
+	        this.fingerprint = source["fingerprint"];
+	    }
+	}
+	export class Anchor {
+	    anchorId: string;
+	    kind: string;
+	    peerId?: string;
+	    orgId?: string;
+	    algorithm: string;
+	    publicKey: PublicKey;
+	    installedAt: string;
+	    removed: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Anchor(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.anchorId = source["anchorId"];
+	        this.kind = source["kind"];
+	        this.peerId = source["peerId"];
+	        this.orgId = source["orgId"];
+	        this.algorithm = source["algorithm"];
+	        this.publicKey = this.convertValues(source["publicKey"], PublicKey);
+	        this.installedAt = source["installedAt"];
+	        this.removed = source["removed"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class InstallAnchorRequest {
+	    anchorId: string;
+	    kind: string;
+	    peerId?: string;
+	    algorithm: string;
+	    keyB64: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new InstallAnchorRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.anchorId = source["anchorId"];
+	        this.kind = source["kind"];
+	        this.peerId = source["peerId"];
+	        this.algorithm = source["algorithm"];
+	        this.keyB64 = source["keyB64"];
 	    }
 	}
 
