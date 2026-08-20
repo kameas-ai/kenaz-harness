@@ -540,3 +540,68 @@ func TestResolveCostReducerLoadsEmbeddedTable(t *testing.T) {
 		t.Fatal("expected a non-nil CostReducer from the embedded starter cost table")
 	}
 }
+
+// TestRealModePolicyDenialOverWire is AC-002 in its literal, stated shape:
+// "Assert on the wire frame and on the audit sink's exitCode — not on the
+// ledger phase." (The ledger phase stays task.complete on every terminal
+// branch by design, blocked on audit-that-tells-the-truth-01PMZA10's own
+// out-of-repo-consumer escalation — spec.md §0.2 — so a test asserting the
+// ledger here would be asserting somebody else's escalation, not this one.)
+//
+// Drives resolveAgentExecutor -> newLLMExecutor (the production
+// construction path) with a REAL registry — the default anthropic adapter
+// registry.New wires in, not a fake — proving Policy denies before any
+// network dial. No live network call happens: PolicyGuard.Allow (registry
+// pipeline step 3) runs before CredentialResolver/adapter dispatch (steps
+// 4/6), so a deny short-circuits the run before the adapter is ever reached.
+func TestRealModePolicyDenialOverWire(t *testing.T) {
+	clearAgentEnv(t)
+	t.Setenv("ANTHROPIC_API_KEY", "test-key-bytes")
+
+	guard := cedar.NewLLMPolicyGuard(denyModelSelectEngine(t))
+	exec := resolveAgentExecutor(newTestLogger(), guard)
+	if _, ok := exec.(*llmExecutor); !ok {
+		t.Fatalf("expected real-mode resolution to a *llmExecutor (env is fully resolvable); got %T", exec)
+	}
+
+	sock := newFakeAuditSock(t)
+	defer sock.close()
+	audit := newTCPAuditSink(sock.addr())
+
+	ln, addr := startTestServerFull(t, "", exec, audit, nil)
+	defer ln.Close()
+
+	conn := dialAndAuth(t, addr, "")
+	defer conn.Close()
+	msgs, mu, stop := readMessages(t, conn)
+	defer stop()
+
+	sendMsg(t, conn, map[string]any{"kind": "task.start", "task_id": "t-denied", "prompt": "do work"})
+	errMsg := waitForKind(t, msgs, mu, "task.error", 3*time.Second)
+
+	// --- The wire frame. ---
+	if errMsg["code"] != "graph_run_failed" {
+		t.Fatalf("unexpected error code: %v", errMsg["code"])
+	}
+	mt, _ := errMsg["message_truncated"].(string)
+	if !strings.Contains(mt, "policy denied") {
+		t.Fatalf("error must name the policy denial (llm.ErrPolicyDenied's message); got %q", mt)
+	}
+	mu.Lock()
+	if findKind(*msgs, "task.complete") != nil {
+		t.Fatalf("task must not complete under a policy denial")
+	}
+	mu.Unlock()
+
+	// --- The audit sink's exitCode (NOT the ledger phase). ---
+	recs := sock.waitForCount(t, 2, 3*time.Second) // task.start + terminal
+	var sawNonZeroTerminal bool
+	for _, r := range recs {
+		if r.Kind == auditKindTaskComplete && r.TaskID == "t-denied" && r.ExitCode != 0 {
+			sawNonZeroTerminal = true
+		}
+	}
+	if !sawNonZeroTerminal {
+		t.Fatalf("expected a non-zero exit_code terminal audit record for the policy-denied task; got %v", recs)
+	}
+}
