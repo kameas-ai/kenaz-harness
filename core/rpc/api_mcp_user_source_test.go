@@ -53,6 +53,11 @@ func TestMCPUserSource_ImportThenListRecipesSeesIt(t *testing.T) {
 		t.Fatalf("core.New: %v", err)
 	}
 	api := New(c)
+	// rpc.New starts background workers, among them the fleet ConfigPoller,
+	// which calls keyring.Get() for the life of the test BINARY and races
+	// keyring.MockInit()'s write to go-keyring's package global. Shutdown
+	// is nil-safe and idempotent.
+	t.Cleanup(api.Shutdown)
 
 	ctx := context.Background()
 	imp := api.MCPImport()
@@ -103,6 +108,11 @@ func TestMCPUserSource_ImportCollisionSeesPriorImport(t *testing.T) {
 		t.Fatalf("core.New: %v", err)
 	}
 	api := New(c)
+	// rpc.New starts background workers, among them the fleet ConfigPoller,
+	// which calls keyring.Get() for the life of the test BINARY and races
+	// keyring.MockInit()'s write to go-keyring's package global. Shutdown
+	// is nil-safe and idempotent.
+	t.Cleanup(api.Shutdown)
 	ctx := context.Background()
 	imp := api.MCPImport()
 	if imp == nil {
@@ -180,6 +190,11 @@ func TestMCPUserSource_BootstrapAndToolsListAgree(t *testing.T) {
 		t.Fatalf("core.New: %v", err)
 	}
 	api := New(c)
+	// rpc.New starts background workers, among them the fleet ConfigPoller,
+	// which calls keyring.Get() for the life of the test BINARY and races
+	// keyring.MockInit()'s write to go-keyring's package global. Shutdown
+	// is nil-safe and idempotent.
+	t.Cleanup(api.Shutdown)
 	ctx := context.Background()
 
 	const recipeID = "wp03-bootstrap-agree"

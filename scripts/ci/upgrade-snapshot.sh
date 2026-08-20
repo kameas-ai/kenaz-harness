@@ -155,16 +155,37 @@ git -C "$REPO_ROOT" worktree add --detach "$WORKTREE" "$TAG" >&2
 mkdir -p "$WORKTREE/frontend/dist"
 touch "$WORKTREE/frontend/dist/.gitkeep"
 
-if [[ ! -f "$WORKTREE/$GENERATOR_SRC" ]]; then
-  # Old tags don't contain the generator — inject today's copy. It is
-  # self-contained by design (see the file's own header) precisely so
-  # this works.
-  mkdir -p "$WORKTREE/_upgrade_snapshot_gen"
-  cp "$REPO_ROOT/$GENERATOR_SRC" "$WORKTREE/_upgrade_snapshot_gen/main.go"
-  GEN_PKG="./_upgrade_snapshot_gen/"
-else
-  GEN_PKG="./scripts/ci/upgrade-snapshot/"
-fi
+# ALWAYS use HEAD's generator, never the tag's.
+#
+# The separation that matters: the tag supplies the DATABASE STATE (its
+# migrations run against the previous snapshot), HEAD supplies the DUMP
+# FORMAT. Building the tag's own generator freezes that tag's tooling bugs
+# into a file every FUTURE release is tested against, and it cannot be
+# fixed retroactively because the tag is immutable.
+#
+# Not hypothetical. The generator carried a hardcoded
+# `ftsVirtualTableNames = {"messages_fts"}`, so when
+# audit-that-tells-the-truth-01PMZA10 added `events_fts` in v0.65.0 the
+# four `events_fts_*` FTS5 shadow tables were dumped as ordinary tables.
+# Replaying that dump failed outright:
+#
+#   materialize schema "CREATE VIRTUAL TABLE events_fts USING fts5(":
+#   fts5: error creating shadow table events_fts_data: table
+#   'events_fts_data' already exists
+#
+# CREATE VIRTUAL TABLE recreates its own shadow tables, so a dump that
+# also contains them cannot be replayed. v0.65.0's first snapshot was
+# unmaterialisable and TestUpgradePath/v0.65.0 failed on it — with the
+# tag's generator, that file could never have been repaired.
+#
+# The generator is self-contained by design (see its header) precisely so
+# it can be injected into any tag's worktree. It duplicates the dump logic
+# from core/storage/sqlite/upgradesnap rather than importing it, because
+# that package does not exist at older tags — so BOTH copies must carry
+# this fix, and nothing compares their source.
+mkdir -p "$WORKTREE/_upgrade_snapshot_gen"
+cp "$REPO_ROOT/$GENERATOR_SRC" "$WORKTREE/_upgrade_snapshot_gen/main.go"
+GEN_PKG="./_upgrade_snapshot_gen/"
 
 GEN_BIN="$WORKTREE/_gen_bin"
 ( cd "$WORKTREE" && go build -o "$GEN_BIN" "$GEN_PKG" )

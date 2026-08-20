@@ -140,7 +140,7 @@ func TestCedarSessionKindResolver_ChatReadNotDenied(t *testing.T) {
 //
 // This test covers TWO of tasks.md's three named sub-cases
 // (sessionID == "" and an unknown session id), not three. The third —
-// "a session with kind ''" — is UNREACHABLE through session.Manager's
+// "a session with kind ”" — is UNREACHABLE through session.Manager's
 // real sqlite store, and this is worth stating loudly rather than
 // silently dropping: core/session/store.go's sqlStore.Create defaults
 // an empty Kind to SessionKindChat at INSERT time (store.go ~line 788),

@@ -24,8 +24,8 @@ type wp10FakeEmbedder struct {
 	dims  int
 }
 
-func (f *wp10FakeEmbedder) Kind() string       { return "fake" }
-func (f *wp10FakeEmbedder) Dimensions() int    { return f.dims }
+func (f *wp10FakeEmbedder) Kind() string    { return "fake" }
+func (f *wp10FakeEmbedder) Dimensions() int { return f.dims }
 func (f *wp10FakeEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, error) {
 	if f.delay > 0 {
 		time.Sleep(f.delay)

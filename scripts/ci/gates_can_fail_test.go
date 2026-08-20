@@ -123,6 +123,7 @@ var cwdSensitiveGates = []string{
 	"check-destructive-migration-coverage.sh",
 	"check-tool-containment-unconditional.sh",
 	"check-upgrade-snapshot-present.sh",
+	"check-graph-write-paths.sh",
 	"check-entrypoint-coverage.sh",
 	"check-installer-payload.sh",
 }
@@ -820,6 +821,50 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				"CSP_CHECK_DIST_HTML": "scripts/ci/testdata/zz_gate_probe_csp/index.html",
 				"CSP_CHECK_MODE":      "desktop",
 			},
+		},
+		{
+			// model-authored-graphs-01PMGA01 UNIT-8. UNIT-2 stopped the
+			// manager persisting graphs the validator rejects and UNIT-4
+			// made graph writes ask Cedar — both inside Manager.saveGraph.
+			// Neither survives a SECOND writer: an os.WriteFile against the
+			// library bypasses the validator AND the consent gate, and every
+			// existing test still passes because they all drive saveGraph.
+			// That is what this gate exists for, and this plants exactly it.
+			name: "graph-write-paths/second-writer-bypasses-validation",
+			// The probe's own file, not the gate's "[graph-write-paths]"
+			// label — the label also prefixes "no production .go files" and
+			// "saveGraph not found", so matching it would let a gate that
+			// is simply pointed at the wrong package satisfy this proof.
+			wantOutput: "zz_gate_probe.go",
+			gate:       "check-graph-write-paths.sh",
+			file:       "core/rpc/views/agentgraph/zz_gate_probe.go",
+			content: "package agentgraph\n\n" +
+				"import \"os\"\n\n" +
+				"func zzGateProbeSecondWriter(path string, b []byte) error {\n" +
+				"\treturn os." + "WriteFile(path, b, 0o644)\n" +
+				"}\n",
+		},
+		{
+			// THE CLASS CI COULD NOT SEE. An independent review of PR #300
+			// broke v1 of this gate against the real production file: move
+			// the write OUT of saveGraph into an unvalidated sibling method
+			// and v1 reported OK — the package still held exactly one
+			// mutator, and its bare line-number comparison still "passed".
+			// The gate reported clean for precisely the bypass its own
+			// docstring warns about.
+			//
+			// The case above only ever planted an ADDITIVE second writer in
+			// a NEW file, so this table could not see the hole either. This
+			// plants a sibling method in manager.go ITSELF — same file,
+			// outside saveGraph's line range — which is the shape a real
+			// refactor produces.
+			name:       "graph-write-paths/write-moved-out-of-savegraph",
+			wantOutput: "outside Manager.saveGraph",
+			gate:       "check-graph-write-paths.sh",
+			file:       "core/rpc/views/agentgraph/manager.go",
+			append: "\n\nfunc (m *Manager) zzGateProbeBypassPersist(path string, b []byte) error {\n" +
+				"\treturn os." + "WriteFile(path, b, 0o644)\n" +
+				"}\n",
 		},
 	}
 

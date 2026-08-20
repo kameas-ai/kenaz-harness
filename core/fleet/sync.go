@@ -68,12 +68,12 @@ type CategoryState struct {
 // SyncStatus is the read-only view of a category's sync state,
 // returned by Syncer.Status.
 type SyncStatus struct {
-	Category     SyncCategory `json:"category"`
-	Enabled      bool         `json:"enabled"`
-	LastPushAt   time.Time    `json:"last_push_at,omitempty"`
-	LastPullAt   time.Time    `json:"last_pull_at,omitempty"`
-	LastError    string       `json:"last_error,omitempty"`
-	LWWTS        int64        `json:"lww_ts"`
+	Category   SyncCategory `json:"category"`
+	Enabled    bool         `json:"enabled"`
+	LastPushAt time.Time    `json:"last_push_at,omitempty"`
+	LastPullAt time.Time    `json:"last_pull_at,omitempty"`
+	LastError  string       `json:"last_error,omitempty"`
+	LWWTS      int64        `json:"lww_ts"`
 }
 
 // CategoryCollector is called by the Syncer to gather the current local state
@@ -99,10 +99,16 @@ type Syncer struct {
 	categories map[SyncCategory]*CategoryState
 	configs    map[SyncCategory]CategoryConfig
 	// debounce channels — one per category; closed when a push is triggered.
-	debounceMu  sync.Mutex
-	debounce    map[SyncCategory]chan struct{}
-	stopCh      chan struct{}
-	once        sync.Once
+	debounceMu sync.Mutex
+	debounce   map[SyncCategory]chan struct{}
+	stopCh     chan struct{}
+	once       sync.Once
+	// stopOnce guards close(stopCh). Stop is reachable from more than one
+	// teardown path (rpc.API.Shutdown, and any caller that stops the syncer
+	// directly), and a bare close() panics on the second call with
+	// "close of closed channel" — taking the whole process down during
+	// shutdown, which is the worst possible moment for it.
+	stopOnce sync.Once
 }
 
 // NewSyncer constructs a Syncer backed by the given fleet Client.
@@ -400,8 +406,16 @@ func (s *Syncer) StartPolling(ctx context.Context) {
 }
 
 // Stop signals the debounce goroutines and poll loop to exit.
+//
+// Idempotent. It was not: a second call panicked with "close of closed
+// channel" inside rpc.API.Shutdown (api.go:1153). Found on 2026-08-20 when
+// two teardown paths both reached Shutdown in a test — but nothing about
+// the defect is test-only. Shutdown is a teardown path, and a panic there
+// takes the process down at the moment it is least recoverable.
 func (s *Syncer) Stop() {
-	close(s.stopCh)
+	s.stopOnce.Do(func() {
+		close(s.stopCh)
+	})
 }
 
 // CollectCategory invokes the registered collector for the given category and

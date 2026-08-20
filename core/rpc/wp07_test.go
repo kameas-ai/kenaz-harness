@@ -139,7 +139,7 @@ func TestWP07_AC017_LiveSettingsSaveCancelsAndRelaunches(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	bindings.SetContext(ctx) // captures b.appCtx, used by Settings_Set below
+	bindings.SetContext(ctx)       // captures b.appCtx, used by Settings_Set below
 	api.ReconfigureUpdatePoll(ctx) // boot-time launch, mirrors SetContext
 
 	waitForCalls(t, fake, 1)

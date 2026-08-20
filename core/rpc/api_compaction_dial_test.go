@@ -265,4 +265,3 @@ func TestCompactionGlobalSeed_TracksRuntimeDialChange(t *testing.T) {
 		t.Fatalf("resolved PreCallThreshold = %v, want %v (aggressive tier)", back.PreCallThreshold, want)
 	}
 }
-

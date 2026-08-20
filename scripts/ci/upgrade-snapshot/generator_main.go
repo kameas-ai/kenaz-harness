@@ -233,10 +233,32 @@ const (
 	fixedTimestamp = "1970-01-01T00:00:00Z"
 )
 
-var ftsVirtualTableNames = map[string]bool{"messages_fts": true}
+// virtualTableNames derives the virtual-table set from the schema rather
+// than a hand-maintained list. It used to be
+// `var ftsVirtualTableNames = map[string]bool{"messages_fts": true}`,
+// which rotted the moment audit-that-tells-the-truth-01PMZA10 added
+// events_fts in v0.65.0: the four events_fts_* shadow tables were dumped
+// as ordinary tables, and replaying that dump failed with
+// "fts5: error creating shadow table events_fts_data: already exists",
+// because CREATE VIRTUAL TABLE recreates its own shadow tables.
+//
+// Keep this in step with core/storage/sqlite/upgradesnap — the two copies
+// are duplicated deliberately (that package does not exist at old tags),
+// and NOTHING compares their source. TestDumpMaterializeRoundTrip only
+// round-trips upgradesnap's own copy, so a divergence here is invisible
+// until a snapshot cannot be replayed.
+func virtualTableNames(objs []schemaObj) map[string]bool {
+	out := map[string]bool{}
+	for _, o := range objs {
+		if o.typ == "table" && o.isVirtualTable() {
+			out[o.name] = true
+		}
+	}
+	return out
+}
 
-func isFTSShadow(name string) bool {
-	for v := range ftsVirtualTableNames {
+func isFTSShadowIn(name string, virtuals map[string]bool) bool {
+	for v := range virtuals {
 		if name != v && strings.HasPrefix(name, v+"_") {
 			return true
 		}
@@ -281,8 +303,9 @@ func dumpDB(ctx context.Context, db *sql.DB) (string, error) {
 	b.WriteString("-- DO NOT HAND-EDIT. Regenerate with scripts/ci/upgrade-snapshot.sh.\n\n")
 
 	b.WriteString("-- === SCHEMA (sorted by type, name) ===\n\n")
+	virtuals := virtualTableNames(objs)
 	for _, o := range objs {
-		if o.typ == "table" && isFTSShadow(o.name) {
+		if o.typ == "table" && isFTSShadowIn(o.name, virtuals) {
 			continue
 		}
 		stmt := strings.TrimSpace(o.sql)
@@ -295,7 +318,7 @@ func dumpDB(ctx context.Context, db *sql.DB) (string, error) {
 
 	b.WriteString("-- === DATA (sorted by table name, rows sorted by primary key) ===\n\n")
 	for _, o := range objs {
-		if o.typ != "table" || o.isVirtualTable() || isFTSShadow(o.name) || o.name == "sqlite_sequence" {
+		if o.typ != "table" || o.isVirtualTable() || isFTSShadowIn(o.name, virtuals) || o.name == "sqlite_sequence" {
 			continue
 		}
 		stmts, err := dumpTable(ctx, db, o.name)
@@ -418,7 +441,7 @@ func literal(v any) string {
 	}
 }
 
-func quoteStr(s string) string  { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+func quoteStr(s string) string   { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
 func quoteIdent(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
 func quoteIdents(ss []string) []string {
 	out := make([]string, len(ss))

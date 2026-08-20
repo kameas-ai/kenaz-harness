@@ -56,6 +56,11 @@ func TestPermissionsListPending_RehydratesLiveShapeAndResolveCompletesTheTurn(t 
 		t.Fatalf("core.New: %v", err)
 	}
 	api := New(c)
+	// rpc.New starts background workers, among them the fleet ConfigPoller,
+	// which calls keyring.Get() for the life of the test BINARY and races
+	// keyring.MockInit()'s write to go-keyring's package global. Shutdown
+	// is nil-safe and idempotent.
+	t.Cleanup(api.Shutdown)
 	assertSettingsStoreIsSandboxed(t, api)
 	bnd := NewBindings(api)
 

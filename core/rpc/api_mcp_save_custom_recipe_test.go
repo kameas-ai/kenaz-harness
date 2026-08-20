@@ -56,6 +56,11 @@ func TestSaveCustomRecipeRoundTrip(t *testing.T) {
 		t.Fatalf("core.New: %v", err)
 	}
 	api := New(c)
+	// rpc.New starts background workers, among them the fleet ConfigPoller,
+	// which calls keyring.Get() for the life of the test BINARY and races
+	// keyring.MockInit()'s write to go-keyring's package global. Shutdown
+	// is nil-safe and idempotent.
+	t.Cleanup(api.Shutdown)
 	ctx := context.Background()
 
 	saved, err := api.MCP().SaveCustomRecipe(ctx, mcpview.SaveCustomRecipeRequest{
@@ -106,6 +111,11 @@ func TestSaveCustomRecipeValidatesBeforePersisting(t *testing.T) {
 		t.Fatalf("core.New: %v", err)
 	}
 	api := New(c)
+	// rpc.New starts background workers, among them the fleet ConfigPoller,
+	// which calls keyring.Get() for the life of the test BINARY and races
+	// keyring.MockInit()'s write to go-keyring's package global. Shutdown
+	// is nil-safe and idempotent.
+	t.Cleanup(api.Shutdown)
 	ctx := context.Background()
 
 	_, err = api.MCP().SaveCustomRecipe(ctx, mcpview.SaveCustomRecipeRequest{
@@ -144,6 +154,11 @@ func TestSavedCustomRecipeSpawns(t *testing.T) {
 		t.Fatalf("core.New: %v", err)
 	}
 	api := New(c)
+	// rpc.New starts background workers, among them the fleet ConfigPoller,
+	// which calls keyring.Get() for the life of the test BINARY and races
+	// keyring.MockInit()'s write to go-keyring's package global. Shutdown
+	// is nil-safe and idempotent.
+	t.Cleanup(api.Shutdown)
 	ctx := context.Background()
 
 	const id = "wp06-spawns"

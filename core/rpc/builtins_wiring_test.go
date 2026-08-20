@@ -96,18 +96,18 @@ func TestSubagentDispatchNotRegisteredWhenSeamNil(t *testing.T) {
 	// Call registerBuiltinTools with nil core and nil settings — the seam
 	// will be nil, so the subagent dispatch tool must not appear.
 	registerBuiltinTools(
-		nil,      // core
+		nil, // core
 		registry,
-		nil,      // bashStore
-		nil,      // artifactsMgr
-		nil,      // store
-		nil,      // cedarEngine
-		nil,      // promptRegistry
-		nil,      // elicitAPI
-		nil,      // slashDispatch
-		nil,      // exposureIdx
-		nil,      // budget
-		nil,      // posture
+		nil, // bashStore
+		nil, // artifactsMgr
+		nil, // store
+		nil, // cedarEngine
+		nil, // promptRegistry
+		nil, // elicitAPI
+		nil, // slashDispatch
+		nil, // exposureIdx
+		nil, // budget
+		nil, // posture
 	)
 
 	for _, name := range registry.Names() {
