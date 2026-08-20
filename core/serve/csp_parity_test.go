@@ -79,6 +79,39 @@ func concatQuotedLiterals(block string) string {
 	return sb.String()
 }
 
+// extractGoConstConcat reads a Go `const <name> = "..." + "..." + "..."`
+// declaration (each segment on its own line, all but the last ending in
+// ` +`) and returns the concatenated string content. Unlike TS/JS, Go
+// source has no explicit statement-terminating `;` to search for
+// (automatic semicolon insertion at newlines) — extractConstBlock's
+// approach does not apply here, which is why this is a separate function
+// rather than a shared one.
+func extractGoConstConcat(t *testing.T, src, name string) string {
+	t.Helper()
+	marker := "const " + name + " = "
+	start := strings.Index(src, marker)
+	if start == -1 {
+		t.Fatalf("could not find %q in csp_serve.go", marker)
+	}
+	rest := src[start+len(marker):]
+
+	lineRe := regexp.MustCompile(`^"((?:[^"\\]|\\.)*)"\s*\+?\s*$`)
+	var sb strings.Builder
+	for _, line := range strings.Split(rest, "\n") {
+		trimmed := strings.TrimSpace(line)
+		m := lineRe.FindStringSubmatch(trimmed)
+		if m == nil {
+			break
+		}
+		sb.WriteString(m[1])
+		if !strings.HasSuffix(trimmed, "+") {
+			// Last segment — no trailing `+` continuation.
+			break
+		}
+	}
+	return sb.String()
+}
+
 func TestServedCSP_MatchesViteConfig(t *testing.T) {
 	// core/serve/csp_parity_test.go -> ../../frontend/vite.config.ts
 	viteConfigPath := filepath.Join("..", "..", "frontend", "vite.config.ts")
@@ -108,5 +141,35 @@ func TestServedCSP_MatchesViteConfig(t *testing.T) {
 			"vite.config.ts SERVED_CSP (reconstructed):\n  %s\n\n"+
 			"server.go servedCSP:\n  %s",
 			served, servedCSP)
+	}
+
+	// The THIRD definition — core/rpc/csp_serve.go's productionCSP, the
+	// Wails-free CSP middleware compiled only under -tags serve
+	// (entry-points-and-crash-reporting-01PMZD13 UNIT-8). Read and parsed
+	// as plain TEXT rather than imported, deliberately: importing
+	// core/rpc from here (even from an external test package) would only
+	// compile that file's contents under -tags serve, and no CI step runs
+	// `go test -tags serve` — only `go build -tags serve` (UNIT-1's
+	// serve-tag build step). A test gated the same way would never
+	// actually execute in CI, which is the exact "gate that cannot fail"
+	// class this campaign exists to end. Reading the source as text, the
+	// same trick already used for vite.config.ts above, lets this
+	// assertion run in the ordinary `go test ./core/...` step with no
+	// new CI step and no build tag.
+	cspServePath := filepath.Join("..", "rpc", "csp_serve.go")
+	cspServeData, err := os.ReadFile(cspServePath) //nolint:gosec // fixed repo-relative path, not user input
+	if err != nil {
+		t.Fatalf("reading %s: %v", cspServePath, err)
+	}
+	productionCSP := extractGoConstConcat(t, string(cspServeData), "productionCSP")
+	if productionCSP == "" {
+		t.Fatalf("extracted empty productionCSP from csp_serve.go — parser is broken, not the source file")
+	}
+	if productionCSP != servedCSP {
+		t.Fatalf("core/rpc/csp_serve.go's productionCSP has drifted from core/serve/server.go's servedCSP.\n"+
+			"Both are the served-mode CSP policy — keep them identical.\n\n"+
+			"csp_serve.go productionCSP:\n  %s\n\n"+
+			"server.go servedCSP:\n  %s",
+			productionCSP, servedCSP)
 	}
 }

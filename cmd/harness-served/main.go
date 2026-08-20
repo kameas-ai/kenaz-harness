@@ -35,12 +35,14 @@ import (
 	"context"
 	"embed"
 	"flag"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/kameas-ai/kenaz-harness/cmd/mcpsubcmd"
 	"github.com/kameas-ai/kenaz-harness/core"
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
@@ -68,12 +70,41 @@ var servedAssets embed.FS
 var Version = "dev"
 
 func main() {
+	// Early dispatch: `harness-served mcp <server>` routes to the stdio MCP
+	// server BEFORE flag.Parse, core init, or SQLite — mirroring main.go's
+	// (:68-69) `if len(os.Args) >= 2 && os.Args[1] == "mcp"` exactly (the
+	// decision itself lives in dispatch.go's mcpDispatchArgs so it can be
+	// unit-tested without the `serve` build tag — see that file's header).
+	// entry-points-and-crash-reporting-01PMZD13 UNIT-8. Before this, this
+	// binary had NO os.Args dispatch at all: `mcp sites` fell through
+	// flag.Parse (which discards non-flag args into flag.Args()) straight
+	// into opening paths.DataDir() and binding the served HTTP port — a
+	// second SQLite handle on a live data directory before the port bind
+	// failed. No user could reach this path in production (this binary is
+	// built by no release workflow and did not compile before UNIT-1), but
+	// the mechanism was real and would have fired the instant it shipped.
+	if isMCP, mcpArgs := mcpDispatchArgs(os.Args); isMCP {
+		mcpsubcmd.Dispatch(context.Background(), mcpArgs)
+		return // unreachable — Dispatch calls os.Exit on completion
+	}
+
 	// --serve is accepted and ignored for CLI compatibility with the root
 	// binary's --serve flag. This binary is ALWAYS in serve mode.
 	_ = flag.Bool("serve", false, "accepted for arg compatibility; always true in this binary")
 	listenAddr := flag.String("listen", "",
 		"address to listen on (default 0.0.0.0:7880 or HARNESS_SERVE_LISTEN env)")
 	flag.Parse()
+
+	// UNIT-8: an unrecognised non-flag argument is now a hard error instead
+	// of a silent boot. flag.Parse leaves everything after the last known
+	// flag in flag.Args() with no complaint — that discard-and-continue was
+	// the mechanism behind the whole finding above; `mcp` is handled first,
+	// but any OTHER stray positional argument would have hit the same
+	// silent-boot path.
+	if flag.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "harness-served: unrecognised argument(s): %v\n", flag.Args())
+		os.Exit(2)
+	}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
@@ -99,6 +130,16 @@ func main() {
 	// malformed all leave block-all standing. Mirrors main.go's
 	// runServeMode — both served entry points must agree (Spec 078
 	// precedent).
+	//
+	// "Both served entry points" is a claim this comment could not back
+	// until entry-points-and-crash-reporting-01PMZD13 UNIT-1 (2026-08-20):
+	// this binary was built by no workflow and did not compile before
+	// then, so there was exactly one OBSERVABLE served entry point
+	// (main.go's --serve) and one that existed only as source. Whether
+	// cmd/harness-served ships at all, or main.go's --serve remains the
+	// one served entry point, is E-002 (research/escalations.md) — UNIT-8
+	// makes this binary honest regardless of that answer; it does not
+	// resolve it.
 	mcpProv := connectors.ProvisionFromEnv(os.Getenv, log)
 	// The supervisor spawns whitelisted connectors at core start (it
 	// replaces the persisted-enabled recipe bootstrap via
@@ -154,7 +195,9 @@ func main() {
 	// Seed the provider the Kenaz control plane granted this workbench
 	// (Spec 078). Mirrors main.go's runServeMode — both served entry points
 	// must agree, or which binary the image happens to bake would change
-	// whether the workbench boots configured.
+	// whether the workbench boots configured. Same E-002 caveat as the
+	// comment above: "both served entry points" describes source-level
+	// intent, not a claim that this binary ships today.
 	api := rpc.New(c,
 		rpc.WithHostProviders(serve.HostProviders(os.Getenv, log)),
 		rpc.WithServedConnectors(connSup),
