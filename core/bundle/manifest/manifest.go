@@ -108,6 +108,25 @@ func (m *Manifest) CanonicalBytes() []byte {
 	return buf.bytes()
 }
 
+// SigningPayload returns the canonical bytes that ARE the signed
+// content: CanonicalBytes() computed as if m.Signatures were empty.
+//
+// Both the signer (test fixtures per plan §4 non-goal on
+// TrustEngine.Sign) and the verifier (core/bundle/integrity/signature.go)
+// MUST call this — never CanonicalBytes() — for any signature-related
+// use. CanonicalBytes() serializes every entry of m.Signatures
+// (sig[i].kind/locator/algorithm/key_id, see writeCanonical below),
+// which includes the very locator that names where the signature bytes
+// themselves will be written. Signing over the full canonical bytes
+// would make the payload depend on a locator that cannot be known until
+// after signing — a self-reference that cannot converge. Excluding
+// Signatures from the signed payload removes that coupling entirely.
+func (m *Manifest) SigningPayload() []byte {
+	clone := *m
+	clone.Signatures = nil
+	return clone.CanonicalBytes()
+}
+
 // byteBuffer is a tiny io.Writer-like target. Avoids pulling bytes.Buffer
 // just to keep the dependency footprint of this file at a glance.
 type byteBuffer struct {

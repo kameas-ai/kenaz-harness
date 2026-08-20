@@ -621,6 +621,39 @@ export interface BundleArtifact {
   contentHash: string;
 }
 
+// Trust anchor management (bundle-download-and-verify-01PMZ909 UNIT-3)
+// — the writer for core/trust's persisted AnchorStore. Distinct from
+// SecretReference (core/rpc/views/trust's unrelated "secrets"
+// surface), which happened to claim the name "trust" first.
+
+export interface TrustAnchorPublicKey {
+  algorithm: string;
+  keyB64: string;
+  fingerprint: string;
+}
+
+export interface TrustAnchor {
+  anchorId: string;
+  /** "raw_public_key" | "org_identifier" | "pinned_peer" */
+  kind: string;
+  peerId?: string;
+  orgId?: string;
+  algorithm: string;
+  publicKey: TrustAnchorPublicKey;
+  installedAt: string;
+  removed: boolean;
+}
+
+export interface InstallTrustAnchorRequest {
+  anchorId: string;
+  /** "raw_public_key" | "pinned_peer"; defaults to raw_public_key. */
+  kind?: string;
+  peerId?: string;
+  /** defaults to "ed25519" */
+  algorithm?: string;
+  keyB64: string;
+}
+
 export interface Denial {
   policyId: string;
   clauseId: string;
@@ -1088,6 +1121,12 @@ export interface Settings {
    * (fleet-otel-archival-01NDFSEX11 WP06)
    */
   hasSeenFleetTelemetryOnboarding?: boolean;
+  /**
+   * Signature-verification policy for `bundle install`
+   * (bundle-download-and-verify-01PMZ909 UNIT-4, spec D-2). One of
+   * "optional" (default, empty==optional), "required", "forbidden".
+   */
+  bundleSigningPolicy?: string;
 }
 
 /**

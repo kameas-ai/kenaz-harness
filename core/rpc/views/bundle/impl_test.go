@@ -73,6 +73,7 @@ version = "0.2.0"
 source = "https://example.com/alpha"
 content_hash = "sha256:` + sha64("alpha") + `"
 signature_ref = "sigstore://abc"
+verified = true
 `)
 	api := NewAPI(WithReader(stubReader{data: tom}))
 	got, err := api.List(context.Background())
@@ -93,6 +94,42 @@ signature_ref = "sigstore://abc"
 	}
 	if got[0].Source == "" {
 		t.Errorf("source channel should be exposed in list payloads")
+	}
+}
+
+// TestList_SignatureRefWithoutVerified_IsNotSigned is UNIT-4's G-2: a
+// lockfile row can carry a non-empty signature_ref (a locator
+// reference) with no recorded verification result — every row a
+// v0.64.0-and-earlier release ever wrote has exactly this shape,
+// because the "verified" key did not exist yet (AC-008). Rendering it
+// as "signed" from ref presence alone is the FR-006 defect UNIT-4
+// closes.
+//
+// Mutation: restore `if lb.SignatureRef != "" { tier = "signed" }` in
+// lockedToBundle — this test must go red.
+func TestList_SignatureRefWithoutVerified_IsNotSigned(t *testing.T) {
+	tom := []byte(`schema_version = 1
+
+[[bundle]]
+name = "legacy"
+version = "1.0.0"
+source = "local_path:/tmp/legacy"
+content_hash = "sha256:` + sha64("legacy") + `"
+signature_ref = "kenaz.yaml.sig"
+`)
+	api := NewAPI(WithReader(stubReader{data: tom}))
+	got, err := api.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 bundle, got %d", len(got))
+	}
+	if got[0].Tier == "signed" {
+		t.Errorf("tier=%q for a row with signature_ref but no verified=true — should not be \"signed\"", got[0].Tier)
+	}
+	if got[0].Signature == "" {
+		t.Errorf("the signature ref itself should still be exposed for display, even though it doesn't grant the tier")
 	}
 }
 
