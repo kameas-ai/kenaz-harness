@@ -55,7 +55,6 @@ core/asktemplates
 core/branchadvisor
 core/bundle/channels/localpath
 core/bundle/events
-core/bundle/integrity
 core/bundle/kinds/testkind
 core/context
 core/context/bundlekind
@@ -94,5 +93,4 @@ core/storage/sqlite/upgradesnap
 core/system/resources
 core/tools/monitor
 core/trust/backends/software
-core/trust/internal/fingerprint
 core/workflows/builtin

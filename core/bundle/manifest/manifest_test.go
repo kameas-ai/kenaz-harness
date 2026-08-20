@@ -174,3 +174,55 @@ func TestSchemaEmbedded(t *testing.T) {
 		t.Errorf("schema does not look like kenaz schema")
 	}
 }
+
+// TestSigningPayloadExcludesSignatures is UNIT-1/UNIT-2's D-3 pin: the
+// signed payload is CanonicalBytes() with Signatures treated as empty,
+// so a signature's own locator (which the signer doesn't know yet at
+// signing time) can never be part of what was signed.
+func TestSigningPayloadExcludesSignatures(t *testing.T) {
+	m, err := manifest.Parse([]byte(validYAML))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(m.Signatures) == 0 {
+		t.Fatal("fixture must carry at least one signature for this test to mean anything")
+	}
+
+	// 1. SigningPayload() must equal CanonicalBytes() computed on a
+	// clone with Signatures cleared.
+	clone := *m
+	clone.Signatures = nil
+	want := clone.CanonicalBytes()
+	got := m.SigningPayload()
+	if string(got) != string(want) {
+		t.Fatalf("SigningPayload() != CanonicalBytes() with Signatures cleared:\n got=%q\nwant=%q", got, want)
+	}
+
+	// 2. SigningPayload() must differ from CanonicalBytes() on the
+	// unmodified manifest (proving Signatures really does change
+	// CanonicalBytes() — otherwise check 1 would pass vacuously).
+	if string(m.SigningPayload()) == string(m.CanonicalBytes()) {
+		t.Fatalf("SigningPayload() == CanonicalBytes(): fixture's Signatures entry has no effect on the canonical form")
+	}
+
+	// 3. Changing (or adding) a signature's locator must NOT change
+	// SigningPayload() — this is the whole point (research/signed-payload.md):
+	// the signer can choose the locator after signing without the
+	// payload having depended on it.
+	before := m.SigningPayload()
+	m.Signatures = append(m.Signatures, manifest.SignatureRef{
+		Kind:      "ed25519_detached",
+		Locator:   "kenaz.yaml.sig",
+		Algorithm: "ed25519",
+		KeyID:     "deadbeef",
+	})
+	after := m.SigningPayload()
+	if string(before) != string(after) {
+		t.Fatalf("SigningPayload() changed after appending a signature ref:\n before=%q\n after=%q", before, after)
+	}
+	// Sanity: CanonicalBytes() DOES change (Signatures is part of it),
+	// confirming the append above was a real, observable mutation.
+	if string(m.CanonicalBytes()) == string(before) {
+		t.Fatalf("appending a signature had no effect on CanonicalBytes(); test fixture is broken")
+	}
+}

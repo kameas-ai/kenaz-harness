@@ -870,3 +870,51 @@ func TestAPI_StoreAccessor(t *testing.T) {
 		t.Errorf("Store and API should share state; got %q", got.LastRoute)
 	}
 }
+
+// TestEffectiveBundleSigningPolicy_DefaultsToOptional is UNIT-4's D-2
+// pin: an empty or unrecognized BundleSigningPolicy value — the zero
+// value on every fresh install, and what a hand-edited or older
+// settings.json would carry — must resolve to "optional", never
+// "required". Flipping the default at upgrade would silently turn off
+// installs for every user with an unsigned local bundle.
+func TestEffectiveBundleSigningPolicy_DefaultsToOptional(t *testing.T) {
+	for _, v := range []string{"", "garbage", "REQUIRED"} {
+		s := Settings{BundleSigningPolicy: v}
+		if got := s.EffectiveBundleSigningPolicy(); got != "optional" {
+			t.Errorf("BundleSigningPolicy=%q: EffectiveBundleSigningPolicy()=%q, want optional", v, got)
+		}
+	}
+}
+
+func TestEffectiveBundleSigningPolicy_PassesThroughKnownValues(t *testing.T) {
+	for _, v := range []string{"required", "forbidden"} {
+		s := Settings{BundleSigningPolicy: v}
+		if got := s.EffectiveBundleSigningPolicy(); got != v {
+			t.Errorf("BundleSigningPolicy=%q: EffectiveBundleSigningPolicy()=%q, want %q", v, got, v)
+		}
+	}
+}
+
+// TestBundleSigningPolicy_RoundTripsThroughSettingsGetSet confirms the
+// field rides the general Settings_Get/Set round trip (settings.Get /
+// Set → store.LoadAll / SaveAll) with no dedicated store method needed
+// — the same "no plumbing" pattern reasoningBudgetTokens and several
+// other single-field dials use.
+func TestBundleSigningPolicy_RoundTripsThroughSettingsGetSet(t *testing.T) {
+	api := NewAPI(nil)
+	s, err := api.Get(context.Background())
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	s.BundleSigningPolicy = "required"
+	if err := api.Set(context.Background(), s); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	got, err := api.Get(context.Background())
+	if err != nil {
+		t.Fatalf("Get after Set: %v", err)
+	}
+	if got.BundleSigningPolicy != "required" {
+		t.Errorf("BundleSigningPolicy after round trip = %q, want required", got.BundleSigningPolicy)
+	}
+}

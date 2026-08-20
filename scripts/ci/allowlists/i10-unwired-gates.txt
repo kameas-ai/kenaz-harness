@@ -265,15 +265,3 @@ github.com/kameas-ai/kenaz-harness/core/policy/cedar.CheckRecipeAdd
 #   question is only whether a function no build target here consumes
 #   belongs in core/fleet.
 github.com/kameas-ai/kenaz-harness/core/fleet.VerifySignature
-
-# github.com/kameas-ai/kenaz-harness/core/bundle/integrity.VerifyManifestSignatures
-#   SEEDED 2026-08-14. Verdict: BLOCKED ON ORPHAN PACKAGE — same shape as
-#   the bundleartifact/credstore entries above. core/bundle/integrity is
-#   on i7-orphan-packages.txt with zero non-test importers; its siblings
-#   HashSHA256/CompareDigests are equally uncalled. Bundle signature
-#   verification IS absent in production (views/bundle copies
-#   Signatures[0].Locator into the lockfile as a presence marker and
-#   explicitly defers verification to "the resolver mission"), but wiring
-#   this one function is not the missing step — wiring the package is.
-#   The line clears with the i7 line.
-github.com/kameas-ai/kenaz-harness/core/bundle/integrity.VerifyManifestSignatures

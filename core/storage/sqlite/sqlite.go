@@ -22,6 +22,7 @@ import (
 	storagedb "github.com/kameas-ai/kenaz-harness/core/storage/db"
 	"github.com/kameas-ai/kenaz-harness/core/storage/internal/lockfile"
 	"github.com/kameas-ai/kenaz-harness/core/storage/migrations"
+	coretrust "github.com/kameas-ai/kenaz-harness/core/trust"
 	"github.com/kameas-ai/kenaz-harness/core/units"
 
 	_ "modernc.org/sqlite"
@@ -121,6 +122,10 @@ func Open(cfg storage.Config) (storage.DB, error) {
 	if err := units.RegisterMigrations(registry); err != nil {
 		db.closeOnError()
 		return nil, fmt.Errorf("storage: register units migrations: %w", err)
+	}
+	if err := coretrust.RegisterMigrations(registry); err != nil {
+		db.closeOnError()
+		return nil, fmt.Errorf("storage: register trust migrations: %w", err)
 	}
 	db.registry = registry
 

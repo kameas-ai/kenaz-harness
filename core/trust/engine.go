@@ -49,7 +49,15 @@ func NewEngineWithEmitter(cfg Config, dispatcher BackendDispatcher, emitter Emit
 	if chain.Max == 0 {
 		chain = DefaultChainDepthPolicy()
 	}
-	store := newMemAnchorStore()
+	// UNIT-3: cfg.Anchors is the persistence seam (spec §1.7 F-1). A
+	// nil Config.Anchors keeps the v1.0 in-memory default; a caller
+	// that constructed a real store (typically NewSQLiteAnchorStore
+	// against the harness's data.db) gets an engine whose anchors
+	// survive across NewEngineWithEmitter calls — including a relaunch.
+	store := cfg.Anchors
+	if store == nil {
+		store = newMemAnchorStore()
+	}
 	e := &engine{
 		algo:        algo.New(),
 		anchors:     store,
