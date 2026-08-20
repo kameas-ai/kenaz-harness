@@ -268,6 +268,20 @@ jobs:
         # documents today's single instance.
         run: bash scripts/ci/check-builtin-tool-registration.sh
 
+      - name: hook-event-fire-sites guard (I17, G-2)
+        # trust-surfaces-that-fire-01PMZ202 WP08 (UNIT-7). Catches the
+        # event-picker-that-lies defect: before this WP, the hook editor
+        # offered 18 events; UNIT-1 established empirically that at most
+        # one (pre_send) actually reaches a production Fire/FireAsync/
+        # Run<X> call. Three legs: (a) every FIRING_HOOK_EVENTS entry has
+        # a real, non-test fire site; (b) FIRING_HOOK_EVENTS ⊆
+        # ALL_HOOK_EVENTS ⊆ core/hooks.AllEvents; (c) every AllEvents
+        # entry not in FIRING_HOOK_EVENTS has a dated, owner-named row in
+        # scripts/ci/allowlists/i17-eventless-hook-events.txt. Leg (c) is
+        # what makes the allowlist shrink monotonically as WP09-WP21 land
+        # their producers.
+        run: bash scripts/ci/check-hook-event-fire-sites.sh
+
       - name: onboarding-starter-tools guard (FR-007)
         # first-run-onboarding-01PMOB01 WP04. Catches the code.md:23-class
         # defect: a shipped onboarding starter prompt naming a harness_*
