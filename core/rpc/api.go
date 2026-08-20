@@ -1321,6 +1321,33 @@ func New(c *core.Core, opts ...Option) *API {
 	// struct and check-cedar-engine-singleton.sh (I15).
 	a.cedarEngine = buildCedarEngineOrNil(coreDataDir(c))
 
+	// harness-self-attach-01PMHS01 UNIT-2: install the three shipped
+	// harness-self Cedar policies (harness_read_default.cedar,
+	// harness_write_onboarding.cedar, harness_write_forbid.cedar —
+	// harnessmcp.EmbeddedCedar) into the SAME singleton engine every
+	// other ActionUse* gate above reads. Engine.LoadHarnessSnippets has
+	// existed and been unit-tested since WP06 of
+	// harness-self-mcp-onboarding-01KQ8TDU, but nothing called it at
+	// boot: every ActionUseTool evaluation for a harness-self tool was
+	// NotApplicable, which this engine's DefaultDeny=false posture maps
+	// to Allow — the write-tool forbid floor was compiled into the
+	// binary but never reached the live engine. A silent skip here is
+	// indistinguishable from "installed and permissive" to every
+	// existing listing test, so failures are logged loud (Error, not
+	// Warn) rather than swallowed, and the install is asserted against
+	// the exact expected count rather than just "no error".
+	if a.cedarEngine != nil {
+		if snippets, err := harnessmcp.CedarSnippets(); err != nil {
+			logging.L().Error("cedar.harness_snippets_read_failed", "err", err.Error())
+		} else if err := a.cedarEngine.LoadHarnessSnippets(snippets); err != nil {
+			logging.L().Error("cedar.harness_snippets_load_failed", "err", err.Error())
+		} else if n := len(snippets); n != 3 {
+			logging.L().Error("cedar.harness_snippets_count_unexpected", "count", n, "want", 3)
+		} else {
+			logging.L().Info("cedar.harness_snippets_installed", "count", n)
+		}
+	}
+
 	// Wire the Cedar gate for BulkPurge (F-001 security fix). The gate is
 	// built from the same DataDir as every other Cedar gate in the chassis.
 	// When DataDir is empty (e.g. test mode) a.cedarGate() returns AllowAll
