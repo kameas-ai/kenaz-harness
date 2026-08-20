@@ -278,6 +278,37 @@ const (
 	//     UID: ContextBootstrap::"run". Default-allow for the local user;
 	//     operators can forbid to disable the bootstrap engine entirely.
 	ActionContextBootstrapRun = "context.bootstrap.run"
+
+	// ── Graph-authoring action family ───────────────────────────────────
+	// Introduced by mission model-authored-graphs-01PMGA01 (UNIT-3). A
+	// graph-authoring tool is a code-execution primitive, not another
+	// config write (spec §4): a graph composes 34 callable node kinds —
+	// write_file, tool_dispatch (whatever the tool registry holds),
+	// subagent_dispatch, loop/retry/router — so it earns its own action
+	// family rather than riding the generic harness-write permit.
+	//
+	//   ActionGraphAuthor — gates Manager.saveGraph (persisting a draft).
+	//     Resource UID: Graph::"<graph-id>". Context carries
+	//     authoring_enabled (the FR-006 consent dial, string "true"/
+	//     "false"), session_kind, node_kinds (sorted, comma-joined,
+	//     de-duplicated kind set — the FR-008 escalation surface), and
+	//     node_count. Shipped default: forbid unless authoring_enabled ==
+	//     "true"; forbid outright when node_kinds contains "write_file",
+	//     regardless of the consent dial.
+	//   ActionGraphRun — gates Manager.startRun for a graph carrying the
+	//     model-authored marker. Resource UID: Graph::"<graph-id>".
+	//     Context carries spec_provenance, session_kind, initiator.
+	//     Shipped default: forbid when spec_provenance == "model_authored"
+	//     — the human-review interlock (FR-007/FR-010); a human clears the
+	//     marker by saving from the editor.
+	//
+	// Deliberately no ActionGraphDelete: no surface deletes a graph on a
+	// model's behalf (spec §3), and register A-0 (2026-08-19, "no
+	// deletion lands") freezes the delete lane — an action constant with
+	// no gate call would have to be wired or justified with an owner and
+	// a date, so the symbol is not created at all.
+	ActionGraphAuthor = "graph.author"
+	ActionGraphRun    = "graph.run"
 )
 
 // Entity-type names mirror spec §4.10's recommended mapping:
@@ -385,6 +416,11 @@ const (
 	// context-bootstrap-harness-integration (WP05). Resource UIDs take the
 	// shape ContextBootstrap::"run" (a singleton — one bootstrap engine).
 	EntityTypeContextBootstrap = "ContextBootstrap"
+
+	// EntityTypeGraph is the Cedar entity type for agent-graph resources.
+	// Introduced by mission model-authored-graphs-01PMGA01 (UNIT-3).
+	// Resource UIDs take the shape Graph::"<graph-id>".
+	EntityTypeGraph = "Graph"
 
 	// PrincipalLocal is the canonical EntityUID id for the single
 	// local user. The harness is single-user / privacy-first
@@ -649,6 +685,20 @@ func WorkflowUID(id string) cedar.EntityUID {
 		safeID = invalidUIDID
 	}
 	return cedar.NewEntityUID(EntityTypeWorkflow, cedar.String(safeID))
+}
+
+// GraphUID builds a Cedar EntityUID for the Graph family introduced by
+// mission model-authored-graphs-01PMGA01 (UNIT-3). id is the graph's
+// canonical identifier (e.g. "my_graph", "chat_default"). Malformed ids
+// (empty / control characters / leading "..") are replaced with the
+// literal "invalid" so the resulting UID type-matches in `resource is
+// Graph` clauses but never satisfies any real permit.
+func GraphUID(id string) cedar.EntityUID {
+	safeID := id
+	if !validateFamilyID(id) {
+		safeID = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeGraph, cedar.String(safeID))
 }
 
 // MCPRecipeUID builds a Cedar EntityUID for the MCPRecipe family
