@@ -2033,8 +2033,8 @@ onMounted(() => {
             <span class="font-mono text-[12px] text-ink" data-testid="max-branch-depth-value">{{ maxVisibleBranchDepth }}</span>
           </div>
           <p class="font-ui text-[11px] text-ink-dim">
-            Sessions nested deeper than this number show a "+N more depths" affordance.
-            Range 1–32; default 5.
+            Sessions nested deeper than this number stop indenting further in the
+            sidebar. Range 1–32; default 5.
           </p>
           <input
             type="range"

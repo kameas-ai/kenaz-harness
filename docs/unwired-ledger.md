@@ -1506,6 +1506,34 @@ or a planted-violation proof in `scripts/ci/gates_can_fail_test.go` that
 mutates a committed binding file and asserts the gate fails. It currently
 would not. **Owner: unassigned. Not fixed here — recorded only.**
 
+### 2026-08-20 · `maxVisibleBranchDepth`'s depth-overflow affordance — narrowed, not built
+
+`controls-and-readouts-that-tell-the-truth-01PMZ808` WP02 (FR-002, SD-03 part
+two). Three surfaces — `SettingsView.vue`'s help text,
+`core/rpc/views/settings/api.go`'s field doc, and
+`frontend/src/lib/types.ts`'s field doc — all promised that sessions nested
+past the configured depth cap are hidden behind a click-to-expand
+depth-overflow control. No such control exists: `LeftRail.vue` →
+`SessionTreeRow.vue`'s `indentPx` only clamps how far a row indents; every
+row still renders regardless of depth.
+
+WP01 (same commit) wires `maxVisibleBranchDepth` from settings into
+`LeftRail.vue` for the first time — the dial did nothing at all before this.
+Landing WP01 without also correcting the three claims would have made the
+dial *reachable* while still describing a hiding/expand behaviour it does
+not have, which is the class this mission exists to end (spec D-1: "wiring
+the value while the help text still describes a hiding behaviour moves the
+lie, it does not end it").
+
+- **Blocker:** building the affordance (hide rows past the cap, render a
+  clickable depth-overflow control that reveals one more level) is a product
+  call — register `E-002` — not a technical one; nobody has asked for it and
+  no design exists for what the control should look like.
+- **Owner / deleting change:** alec. Deletes when either a mission builds the
+  affordance and re-widens the three docs, or the product decides depth
+  clamping alone is the intended behaviour and this entry is closed as
+  "decided, not deferred."
+
 ## Drained
 
 ### 2026-08-19 · CLOSED — the missing-upgrade-snapshot hole is now gated

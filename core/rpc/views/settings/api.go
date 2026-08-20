@@ -447,7 +447,16 @@ type Settings struct {
 	// doesn't sprawl on first load. The user can expand individually;
 	// their choices are persisted in localStorage under
 	// harness.sidebar.branchCollapsed.v1.
-	AutoCollapseBranchesInSidebar bool `json:"autoCollapseBranchesInSidebar,omitempty"`
+	//
+	// *bool, not bool (controls-and-readouts-that-tell-the-truth-01PMZ808
+	// WP03): the JSON zero-value of bool is false, but the spec default is
+	// true, so a plain `bool` + `omitempty` cannot distinguish "explicitly
+	// set false" from "never set" — both marshal to an absent key, and a
+	// v0.64.0-and-earlier settings.json (which never wrote this key) loads
+	// as false rather than the documented true. A pointer only omits on
+	// nil, so an explicit false round-trips and an absent key stays
+	// distinguishable. See EffectiveAutoCollapseBranchesInSidebar below.
+	AutoCollapseBranchesInSidebar *bool `json:"autoCollapseBranchesInSidebar,omitempty"`
 
 	// DeleteBranchesWithParent controls cascade-delete behaviour when a
 	// parent session is deleted. When false (default / safe), child
@@ -457,11 +466,17 @@ type Settings struct {
 	// removes all descendant sessions before cascading the branch rows.
 	DeleteBranchesWithParent bool `json:"deleteBranchesWithParent,omitempty"`
 
-	// MaxVisibleBranchDepth caps the number of nesting levels shown in
-	// the sidebar branch tree. Default 5. Sessions deeper than this cap
-	// are replaced by a "+N more depths" affordance that expands one
-	// level at a time on click. Zero falls back to the default via
-	// EffectiveMaxVisibleBranchDepth.
+	// MaxVisibleBranchDepth clamps sidebar indentation to this many
+	// levels — deeper branch rows stop indenting further but still
+	// render; nothing hides them. Default 5. Zero falls back to the
+	// default via EffectiveMaxVisibleBranchDepth.
+	//
+	// NARROWED 2026-08-20 (controls-and-readouts-that-tell-the-truth-
+	// 01PMZ808 WP02): this field previously claimed a depth-overflow
+	// expand-on-click affordance that does not exist anywhere in the
+	// app — SettingsView.vue, this doc, and frontend/src/lib/types.ts
+	// all made the same claim. See docs/unwired-ledger.md for the dated
+	// justification and E-002 (the product call on whether to build it).
 	MaxVisibleBranchDepth int `json:"maxVisibleBranchDepth,omitempty"`
 
 	// ── Embedder configuration (v0.5.2 universal-embedder fix) ──────────────
@@ -1023,8 +1038,7 @@ func (s Settings) EditFileArtifactSyncEnabled() bool { return !s.EditFileArtifac
 // ── Branching UX constants + accessors (branching-ux-polish-01KQ8TD7 WP06) ──
 
 // DefaultMaxVisibleBranchDepth is the spec-locked depth cap for sidebar
-// branch tree rendering. Sessions nested deeper than this value are
-// replaced by a "+N more depths" affordance. Default 5.
+// branch tree indentation clamping. Default 5.
 const DefaultMaxVisibleBranchDepth = 5
 
 // DefaultAutoCollapseBranchesInSidebar is the spec-locked default for
@@ -1042,23 +1056,17 @@ func (s Settings) EffectiveMaxVisibleBranchDepth() int {
 }
 
 // EffectiveAutoCollapseBranchesInSidebar returns the user's collapse
-// preference. Because the JSON zero-value of bool is false, and the
-// spec default is true, we can't use omitempty storage — this field is
-// stored explicitly so round-trips are faithful. The accessor reads the
-// stored value directly and callers that need the default-on behaviour
-// call this rather than reading the field directly.
-//
-// Note: this method CANNOT rely on zero-value == default because bool
-// zero-value is false but default is true. The field is stored as
-// omitempty which means a fresh file gives false here. To match the
-// "default true" spec intent without a migrations, we check whether
-// the parent Settings carries a deliberate override via
-// AutoCollapseBranchesInSidebar. Since we can't tell "stored false"
-// from "not stored" with omitempty, we document that the frontend
-// should treat absence as true — backed by the Wails bindings that
-// always include the field after first Set.
+// preference, or DefaultAutoCollapseBranchesInSidebar when nothing has
+// ever been persisted (nil pointer — a fresh install, or a settings.json
+// written before controls-and-readouts-that-tell-the-truth-01PMZ808
+// WP03, which never wrote this key). AutoCollapseBranchesInSidebar is a
+// *bool precisely so this distinction is representable: a stored false
+// is honoured as false, and only true absence falls back to the default.
 func (s Settings) EffectiveAutoCollapseBranchesInSidebar() bool {
-	return s.AutoCollapseBranchesInSidebar
+	if s.AutoCollapseBranchesInSidebar == nil {
+		return DefaultAutoCollapseBranchesInSidebar
+	}
+	return *s.AutoCollapseBranchesInSidebar
 }
 
 // WindowSize mirrors the charter's WindowSize type.

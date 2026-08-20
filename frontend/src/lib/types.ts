@@ -1038,7 +1038,9 @@ export interface Settings {
    * autoCollapseBranchesInSidebar: when true (default), every parent
    * session that has branch children starts collapsed in the left rail
    * so the sidebar doesn't sprawl on first load. Users can expand
-   * individually; their choices persist in localStorage.
+   * individually; their choices persist in localStorage. Consumed by
+   * LeftRail.vue's onMounted seed (controls-and-readouts-that-tell-the-
+   * truth-01PMZ808 WP03).
    */
   autoCollapseBranchesInSidebar?: boolean;
 
@@ -1050,9 +1052,14 @@ export interface Settings {
   deleteBranchesWithParent?: boolean;
 
   /**
-   * maxVisibleBranchDepth: caps the number of nesting levels shown in
-   * the sidebar branch tree. Default 5. Sessions deeper than the cap
-   * are replaced by a "+N more depths" affordance.
+   * maxVisibleBranchDepth: clamps sidebar indentation to this many
+   * levels — deeper branch rows stop indenting further but still
+   * render (LeftRail.vue → SessionTreeRow's indentPx). Default 5.
+   *
+   * NARROWED 2026-08-20 (controls-and-readouts-that-tell-the-truth-
+   * 01PMZ808 WP02): this dial does not hide rows past the cap and does
+   * not render a depth-overflow expand affordance — no such affordance
+   * exists anywhere in the app. See docs/unwired-ledger.md.
    */
   maxVisibleBranchDepth?: number;
 

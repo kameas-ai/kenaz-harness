@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "lastRoute": "/sessions/abc123",
+  "theme": "dark",
+  "accent": "default",
+  "windowSize": { "width": 1280, "height": 800 },
+  "crashReportingTier": "anonymous",
+  "monthlyCostNotifyUSD": 25,
+  "deleteBranchesWithParent": false,
+  "maxVisibleBranchDepth": 5
+}
