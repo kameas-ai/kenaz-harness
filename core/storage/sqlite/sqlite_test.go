@@ -226,9 +226,16 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// 1 conflict-edge (1103, unified-context-artifacts-01NCTXU01 Phase 3 enshrine marker) +
 	// 1 search_fts_tool_rows (0335, model-moves-transcript-01PMCH01 WP06) +
 	// 1 stream_checkpoints (0336, chat-turn-integrity-01PMZ606 WP02) +
-	// 1 trust_anchors_init (bundle/700, bundle-download-and-verify-01PMZ909 UNIT-3) = 45.
-	if count != 45 {
-		t.Errorf("ledger count = %d, want 45", count)
+	// 1 trust_anchors_init (bundle/700, bundle-download-and-verify-01PMZ909 UNIT-3) +
+	// 6 event-log/0100-0105 (audit-that-tells-the-truth-01PMZA10 UNIT-2:
+	//   events, event_chain_heads, redaction_rules, retention_config,
+	//   schema_version, saved_audit_queries) = 51.
+	//
+	// ZA10's branch asserted 49: it was cut from a base whose count was 43,
+	// before 0336 and bundle/700 landed, so 43+6. The merged tree has all
+	// three sources, hence 51.
+	if count != 51 {
+		t.Errorf("ledger count = %d, want 51", count)
 	}
 }
 

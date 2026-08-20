@@ -721,6 +721,15 @@ export interface AuditSettings {
   strategy: string;
   /** Retention window in days. Only used for non-keep_forever strategies. */
   window_days: number;
+  /**
+   * Whether something actually deletes rows per `strategy` — as opposed
+   * to `strategy` being a setting nobody reads. False until
+   * audit-that-tells-the-truth-01PMZA10 UNIT-8 lands a real sweep.
+   * AuditSettingsPanel.vue renders its retention copy from this field,
+   * never from a hardcoded string (spec D-8) — UNIT-8 flips the
+   * underlying fact server-side with zero further edit here.
+   */
+  retention_enforced: boolean;
 }
 
 /**

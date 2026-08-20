@@ -46,6 +46,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/eval"
 	"github.com/kameas-ai/kenaz-harness/core/event"
 	kindpkg "github.com/kameas-ai/kenaz-harness/core/event/kind"
+	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/hooks"
@@ -1529,7 +1530,19 @@ func New(c *core.Core, opts ...Option) *API {
 	if c != nil && c.DataDir() != "" {
 		auditGate = a.cedarGate()
 	}
-	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker), audit.WithGate(auditGate))
+	// Durable event-log store (audit-that-tells-the-truth-01PMZA10
+	// UNIT-4 — "the honesty threshold": before this, the Audit view was
+	// an in-memory ring that did not survive a relaunch). Wired only
+	// when a real storage.DB is available — the same `db` variable
+	// usage.New/units.NewManager above condition on — so the test
+	// chassis (db == nil) stays ring-only, honestly. UNIT-2 registered
+	// event-log's migrations into this same db's registry (sqlite.go),
+	// so by the time db is non-nil here its schema is already applied.
+	var auditStore *eventlog.Store
+	if db != nil {
+		auditStore = eventlog.NewStore(eventlog.NewSQLBackend(db))
+	}
+	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker), audit.WithGate(auditGate), audit.WithStore(auditStore))
 	a.auditAPI = a.auditImpl
 
 	// mission 01NLOGS01 WP01: construct the bounded in-memory log store and
@@ -1632,6 +1645,12 @@ func New(c *core.Core, opts ...Option) *API {
 	settingsImpl := settings.NewAPI(settingsStore)
 	a.settingsAPI = settingsImpl
 	a.settingsImpl = settingsImpl
+	// AuditSettings.RetentionEnforced (audit-that-tells-the-truth-01PMZA10
+	// UNIT-4, spec D-8): false until UNIT-8 lands a real sweep. This is
+	// the wiring site that makes the value honest — GetAuditSettings
+	// itself never hardcodes it. UNIT-8 changes this one call to report
+	// whatever actually schedules and runs the sweep; no frontend edit.
+	settingsImpl.SetAuditRetentionEnforced(false)
 
 	// Wire the Settings-backed MemoryNarrativeEnabled dial into
 	// core/memory/narrative (agentgraph-total-convergence-01PMGX01 WP17,

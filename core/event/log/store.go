@@ -97,6 +97,70 @@ func (s *Store) Append(ctx context.Context, row Row, expectedHead [32]byte) erro
 	return s.backend.AppendRow(ctx, row, expectedHead)
 }
 
+// appendComputedMaxAttempts bounds AppendComputed's optimistic-
+// concurrency retry loop. Found necessary, not theoretical: every
+// existing Push call site (core/rpc/api.go's eight bridge types) has no
+// SessionID, so every Push-sourced row shares ONE chain ("" — see
+// rowFromEntry in core/rpc/views/audit/impl.go), and under concurrent
+// pushes that chain is genuinely contended. Observed directly under
+// -race with 20 concurrent Push calls: WITHOUT this retry loop, up to
+// 15/20 (75%) lost their write to ErrChainHeadMismatch and were
+// silently dropped per Push's D-5 contract — correct per that contract,
+// but "most concurrent audit rows silently vanish under load" is not
+// an acceptable property for the mission this unit exists to build.
+//
+// 8 was the first bound tried and was NOT enough — a 20-goroutine run
+// under -race still exhausted it for 1/20 pushes (core/rpc/views/audit's
+// TestPush_ConcurrentGoroutinesWithStore, which asserts exact parity
+// between what was pushed and what persisted). Each attempt is one
+// local SQLite transaction against a single-connection database with a
+// 5s busy_timeout (sqlite.go) — cheap — so a generous bound costs
+// little in the pathological case and buys real headroom for the
+// common one.
+const appendComputedMaxAttempts = 64
+
+// AppendComputed inserts row, computing PrevHash from the session's
+// current chain head and PayloadHash from PrevHash+Kind+EmittedAt+Payload
+// (chain.go's canonicalSerialize formula — the same one VerifyChain
+// recomputes later) instead of requiring the caller to track chain
+// state itself. Any PrevHash/PayloadHash already set on row are
+// IGNORED and overwritten.
+//
+// Retries up to appendComputedMaxAttempts times on ErrChainHeadMismatch
+// — a concurrent writer to the same session raced ahead between this
+// call's head read and its append; re-reading the (now current) head
+// and retrying is the standard resolution for optimistic concurrency,
+// and is cheap here (one local SQLite transaction per attempt, no
+// network round trip). Any other error returns immediately.
+//
+// This is the write path core/rpc/views/audit.API.Push uses once a
+// Store is configured (audit-that-tells-the-truth-01PMZA10 UNIT-4) —
+// callers there (core/rpc/api.go's eight bridge types) have no session
+// context and no notion of a hash chain; they supply an EventID, Kind,
+// EmittedAt and a payload, and this method does the rest.
+func (s *Store) AppendComputed(ctx context.Context, row Row) error {
+	var lastErr error
+	for attempt := 0; attempt < appendComputedMaxAttempts; attempt++ {
+		prevHash, _, _, err := s.backend.HeadFor(ctx, row.SessionID)
+		if err != nil {
+			return fmt.Errorf("log: AppendComputed: HeadFor: %w", err)
+		}
+		candidate := row
+		candidate.PrevHash = prevHash
+		candidate.PayloadHash = recomputeHash(candidate)
+		err = s.backend.AppendRow(ctx, candidate, prevHash)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, ErrChainHeadMismatch) {
+			return err
+		}
+		lastErr = err
+	}
+	return fmt.Errorf("log: AppendComputed: exhausted %d attempts under chain-head contention: %w",
+		appendComputedMaxAttempts, lastErr)
+}
+
 // Get is the primary-key point read.
 func (s *Store) Get(ctx context.Context, eventID string) (Row, error) {
 	return s.backend.GetRow(ctx, eventID)

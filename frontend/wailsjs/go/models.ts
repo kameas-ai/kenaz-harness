@@ -6552,6 +6552,7 @@ export namespace settings {
 	export class AuditSettings {
 	    strategy?: string;
 	    window_days?: number;
+	    retention_enforced: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new AuditSettings(source);
@@ -6561,6 +6562,7 @@ export namespace settings {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.strategy = source["strategy"];
 	        this.window_days = source["window_days"];
+	        this.retention_enforced = source["retention_enforced"];
 	    }
 	}
 	export class CapabilitiesView {

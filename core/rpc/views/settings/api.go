@@ -1589,6 +1589,18 @@ type AuditSettings struct {
 	// WindowDays is the retention window in days. Only meaningful when
 	// Strategy is not keep_forever.
 	WindowDays int `json:"window_days,omitempty"`
+	// RetentionEnforced reports whether SOMETHING actually deletes rows
+	// per the strategy above — as opposed to Strategy just being a
+	// setting nobody reads. False until audit-that-tells-the-truth-
+	// 01PMZA10 UNIT-8 lands a real sweep; UNIT-4 wires this field itself
+	// (derived from the settings API's construction-time wiring, via
+	// SetAuditRetentionEnforced — never a literal inside GetAuditSettings)
+	// so AuditSettingsPanel.vue can render fact-driven copy starting
+	// here, with zero further frontend edit once UNIT-8 flips the
+	// underlying fact (spec D-8). Named to match fleet-enforcement-
+	// truth-01PMZ505's ComplianceStatus.RetentionEnforced so the audit
+	// and compliance panels read the same vocabulary once both land.
+	RetentionEnforced bool `json:"retention_enforced"`
 }
 
 // ── Long-session nudge constants + accessors (v0.5.6) ───────────────────────
