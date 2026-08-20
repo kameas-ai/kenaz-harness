@@ -1331,6 +1331,64 @@ future sweep as racy without also re-deriving this happens-before
 argument — the fields were never the live risk, `a.updatePollCancel` was
 and now is guarded.
 
+### 2026-08-19 (model-scheduled-jobs-01PMSJ01 WP03) · `scheduler.Scheduler`, `scheduler.Store`, `Job.OnMissed`, `Job.MissedPolicy` — justified, not implemented, not deleted
+
+`core/scheduler/scheduler.go` declares `Scheduler` (`Start/Stop/Upsert/
+Delete/Get/List/RunNow/ReconcileMissed`, keyed on the generic `Job` type)
+and `Store` (`Upsert/Delete/Get/List`, also `Job`-keyed) with **zero
+implementations anywhere in the tree** (spec.md §1.2 for this mission).
+`Job.OnMissed` / `Job.MissedPolicy` (`core/scheduler/job.go:46-62`) have no
+reader.
+
+Per spec.md §8 D-2, as amended by owner ruling A-0 (the delete lane is
+frozen): WP03 was to implement `scheduler.Scheduler` "if the engine can
+honestly satisfy it, minus `ReconcileMissed`" or else justify each symbol
+here instead of deleting it. **It cannot be honestly satisfied**, and this
+entry is that justification, named per-symbol:
+
+- **`scheduler.Store`** is `Job`-keyed generic persistence. The only
+  concrete persistence for chat-run schedules is `ScheduledChatStore`
+  (`core/scheduler/chat_store.go`), which is `ChatRunRecord`-keyed and has
+  no `on_missed` column in `scheduled_chat_runs` at all — there is no
+  honest `Store` implementation to write without inventing a second,
+  parallel persistence path for the same rows.
+- **`scheduler.Scheduler`** is the `Store`-backed engine surface built on
+  top of the above. WP03 built `ChatCronEngine`
+  (`core/scheduler/chat_cron_engine.go`) instead — a purpose-built engine
+  keyed directly on `ScheduledChatStore` / `ChatRunRecord.ID`, exposing
+  `Sync`/`Unregister`/`Start`/`Stop`/`SetDispatcher`/`Registered`/`Started`.
+  It is wired into production (`core/rpc/api.go`: constructed when a DB is
+  available, `Start`ed from `SetContext`, `Stop`ped from `Shutdown`,
+  reacting to `scheduledchat.API`'s Create/Update/Delete/SetEnabled via the
+  `Registrar` interface) and has full unit + wiring test coverage
+  (`core/scheduler/chat_cron_engine_test.go`,
+  `core/rpc/api_chat_cron_engine_test.go`). It does not implement
+  `scheduler.Scheduler`'s literal Go interface, but it closes the same gap
+  that interface's zero implementations left open (spec.md §1.2).
+- **`Job.OnMissed` / `Job.MissedPolicy`** describe a reconcile-on-resume
+  policy for missed fires. `ChatCronEngine` has no missed-fire tracking —
+  a schedule that was disabled while the process was down and re-enabled
+  later simply resumes ticking from `Sync`'s next call, with no attempt to
+  "catch up" a skipped fire. This is the same posture the workflow-side
+  `CronScheduler` already ships (`core/workflows/scheduler/cron_scheduler.go`
+  has no `ReconcileMissed` caller either).
+
+**Blocker:** a generic `Job`/`Store`-based scheduler abstraction that
+actually fits both the legacy session-kind jobs and the chat-run kind
+without a schema rework of `scheduled_chat_runs` to carry `on_missed`.
+**Owner:** the wave lead for a future missed-fire / reconciliation mission
+(none scheduled as of this date — this mission's WP08 adds one-shot
+`trigger_kind`/`run_at` schedules but does not add reconciliation).
+**Date:** 2026-08-19.
+
+Do not re-delete these four symbols on a future "no callers" grep without
+re-reading this entry — `Job` and `Scheduler`/`Store` are still declared
+because `JobKindSession` / `JobKindChatRun` and `ChatRunSpec` live on
+`Job`, which `ChatCronEngine.fireSync` constructs and passes to
+`ChatRunDispatcher.DispatchChatRun`. Only the `Scheduler`/`Store`
+interfaces and the `OnMissed`/`MissedPolicy` fields are the unimplemented
+part; `Job` itself is very much wired.
+
 ---
 
 ## Drained
