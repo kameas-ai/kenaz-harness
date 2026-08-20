@@ -37,11 +37,17 @@ func (a *Impl) LoadGraph(_ context.Context, id string) (GraphSpec, error) {
 }
 
 // SaveGraph implements API.
-func (a *Impl) SaveGraph(_ context.Context, spec GraphSpec) error {
+//
+// initiator is "user" for the desktop editor's Wails-bound save path
+// (bindings.go's Graph_SaveGraph hardcodes this) and "model" for a
+// future authoring tool (harness-self-attach-01PMHS01-gated,
+// model-authored-graphs-01PMGA01 UNIT-7 — not built by UNIT-4). See
+// Manager.saveGraph's doc comment for what the distinction gates.
+func (a *Impl) SaveGraph(ctx context.Context, spec GraphSpec, initiator string) error {
 	if a == nil || a.mgr == nil {
 		return ErrManagerUnavailable
 	}
-	return a.mgr.saveGraph(spec)
+	return a.mgr.saveGraph(ctx, spec, initiator)
 }
 
 // DeleteGraph implements API.
@@ -71,11 +77,11 @@ func (a *Impl) CheckEdge(_ context.Context, graphJSON string, edge EdgeRef) (Edg
 }
 
 // StartRun implements API.
-func (a *Impl) StartRun(_ context.Context, req StartRunRequest) (StartRunResponse, error) {
+func (a *Impl) StartRun(ctx context.Context, req StartRunRequest) (StartRunResponse, error) {
 	if a == nil || a.mgr == nil {
 		return StartRunResponse{}, ErrManagerUnavailable
 	}
-	return a.mgr.startRun(req)
+	return a.mgr.startRun(ctx, req)
 }
 
 // GetRunStatus implements API.

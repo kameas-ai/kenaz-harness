@@ -718,6 +718,32 @@ func (s *FileStore) SaveCedarStrictWorkflowMode(enabled bool) error {
 	return s.saveLocked(got)
 }
 
+// LoadGraphAuthoringEnabled returns the model-authored-agent-graphs
+// consent dial. Default false — a corrupt or missing settings file
+// returns the safe (denied) default so an unreadable settings.json
+// cannot silently grant graph-authoring.
+func (s *FileStore) LoadGraphAuthoringEnabled() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.GraphAuthoringEnabled, err
+	}
+	return got.GraphAuthoringEnabled, nil
+}
+
+// SaveGraphAuthoringEnabled persists the model-authored-agent-graphs
+// consent dial. Takes effect on the next graph.author evaluation — the
+// gate reads it live rather than caching it at Manager construction.
+func (s *FileStore) SaveGraphAuthoringEnabled(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.GraphAuthoringEnabled = enabled
+	return s.saveLocked(got)
+}
+
 // LoadFSRequestAccessEnabled returns the kenaz__request_filesystem_access
 // built-in opt-in. Default true (on) — zero-value FSRequestAccessDisabled
 // means enabled. Errors return the safe default so the tool keeps working
@@ -1783,6 +1809,19 @@ func (m *memoryStore) SaveCedarStrictWorkflowMode(enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data.CedarStrictWorkflowMode = enabled
+	return nil
+}
+
+func (m *memoryStore) LoadGraphAuthoringEnabled() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.GraphAuthoringEnabled, nil
+}
+
+func (m *memoryStore) SaveGraphAuthoringEnabled(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.GraphAuthoringEnabled = enabled
 	return nil
 }
 

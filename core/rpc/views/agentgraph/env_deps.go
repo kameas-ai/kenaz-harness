@@ -2,6 +2,7 @@ package agentgraph
 
 import (
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	corebash "github.com/kameas-ai/kenaz-harness/core/tools/bash"
 )
 
@@ -97,6 +98,30 @@ func WithAgenticTurnRouting(enabled func() bool) ManagerOption {
 	return func(m *Manager) {
 		m.routingEnabled = enabled
 	}
+}
+
+// WithGraphCedarGate supplies the graph.author / graph.run policy gate
+// (model-authored-graphs-01PMGA01 UNIT-4). Not calling this option
+// leaves cedarGate nil, which GateGraphAuthor/GateGraphRun's own
+// nil-gate contract maps to default-allow — the correct behaviour for
+// a library caller (tests), the wrong one for production. Production
+// wiring (core/rpc/api.go's newGraphManagerWithDeps) must pass the same
+// process-shared engine deps.Policy already uses; I13 clause 4
+// (check-cedar-gate-arguments.sh, UNIT-8(b)) is the CI gate that keeps
+// that argument from silently going missing.
+func WithGraphCedarGate(g cedar.Gate) ManagerOption {
+	return func(m *Manager) { m.cedarGate = g }
+}
+
+// WithAuthoringEnabled supplies the FR-006 consent-dial resolver read
+// live on every graph.author evaluation. Same read-at-consumption shape
+// as WithAgenticTurnRouting above, for the same reason: a toggle in
+// Settings must take effect on the next draft attempt without an app
+// restart. Not calling this option leaves authoringEnabled nil, which
+// saveGraph treats as OFF — the shipped default and the fail-closed
+// reading for a Manager with no settings store behind it.
+func WithAuthoringEnabled(enabled func() bool) ManagerOption {
+	return func(m *Manager) { m.authoringEnabled = enabled }
 }
 
 // applyEnvDeps mutates env in-place, threading every non-nil seam from

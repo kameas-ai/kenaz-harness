@@ -4875,6 +4875,26 @@ func agenticTurnRoutingEnabledFromSettings(settingsImpl *settings.API) bool {
 	return got.AgenticTurnRouting
 }
 
+// graphAuthoringEnabledFromSettings reads the FR-006 consent dial
+// (model-authored-graphs-01PMGA01 UNIT-4) live from the settings store,
+// consulted on every graph.author evaluation via
+// graphview.WithAuthoringEnabled above. A nil settingsImpl/Store, or a
+// LoadGraphAuthoringEnabled error, reads as false — the fail-closed
+// direction FR-006 requires ("absent reads as off"): an unreadable
+// settings file must not silently grant graph-authoring.
+func graphAuthoringEnabledFromSettings(settingsImpl *settings.API) bool {
+	if settingsImpl == nil || settingsImpl.Store() == nil {
+		return false
+	}
+	enabled, err := settingsImpl.Store().LoadGraphAuthoringEnabled()
+	if err != nil {
+		logging.L().Warn("graph.authoring_enabled.read_failed",
+			"err", err.Error(), "detail", "defaulting to disabled")
+		return false
+	}
+	return enabled
+}
+
 // moveFidelityHistoryEnabledFromSettings reads the LIVE half of the
 // model-visible move-fidelity gate (model-moves-transcript-01PMCH01
 // WP03, spec §4).
@@ -6504,6 +6524,24 @@ func newGraphManagerWithDeps(
 		}),
 		graphview.WithKernel(kernel),
 		graphview.WithEventLog(agEventLog),
+		// model-authored-graphs-01PMGA01 UNIT-4: the same engine
+		// deps.Policy already uses above (graphCedarGate — AllowAll{}
+		// until a real cedarEngine is constructed, reassigned when one
+		// is), so graph.author/graph.run evaluations reach a
+		// SavePolicy + Reload-reachable engine like every other gate in
+		// this constructor. check-cedar-gate-arguments.sh clause 4
+		// (UNIT-8(b)) is the CI gate that keeps this argument from
+		// silently going missing — the agentgraph Manager has no
+		// Config struct for clause 3 to discover (C-010).
+		graphview.WithGraphCedarGate(graphCedarGate),
+		// FR-006's consent dial: read live from the settings store on
+		// every graph.author evaluation so a toggle in Settings takes
+		// effect on the next draft attempt without an app restart. A
+		// nil/errored store reads as off (LoadGraphAuthoringEnabled's
+		// documented safe default).
+		graphview.WithAuthoringEnabled(func() bool {
+			return graphAuthoringEnabledFromSettings(settingsImpl)
+		}),
 	}
 
 	mgr, err := graphview.NewManager(mgrOpts...)

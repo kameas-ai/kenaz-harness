@@ -50,7 +50,7 @@ func TestSaveGraph_RejectsInvalid_NoFileWritten(t *testing.T) {
 	id := "invalid_draft"
 	yaml := sprintfInvalid(id)
 
-	err = a.SaveGraph(ctx, graphview.GraphSpec{ID: id, YAML: yaml})
+	err = a.SaveGraph(ctx, graphview.GraphSpec{ID: id, YAML: yaml}, "user")
 	if err == nil {
 		t.Fatal("SaveGraph accepted an invalid graph")
 	}
@@ -110,7 +110,7 @@ func TestSaveGraph_RejectsInvalid_DirectAPICall(t *testing.T) {
 	ctx := context.Background()
 
 	id := "invalid_direct"
-	if err := a.SaveGraph(ctx, graphview.GraphSpec{ID: id, YAML: sprintfInvalid(id)}); err == nil {
+	if err := a.SaveGraph(ctx, graphview.GraphSpec{ID: id, YAML: sprintfInvalid(id)}, "user"); err == nil {
 		t.Fatal("direct SaveGraph call accepted an invalid graph")
 	}
 }
@@ -200,7 +200,7 @@ func TestValidGraph_StillSavesListsLoadsRuns(t *testing.T) {
 
 	id := "valid_still_works"
 	yaml := validGraphYAML(id)
-	if err := a.SaveGraph(ctx, graphview.GraphSpec{ID: id, YAML: yaml}); err != nil {
+	if err := a.SaveGraph(ctx, graphview.GraphSpec{ID: id, YAML: yaml}, "user"); err != nil {
 		t.Fatalf("SaveGraph(valid): %v", err)
 	}
 	rows, err := a.ListGraphs(ctx, "user")

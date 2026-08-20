@@ -215,7 +215,14 @@ type API interface {
 	// SaveGraph persists a user graph to <DataDir>/agent_graph/library.
 	// Library-scoped graphs are read-only; saving a library id returns
 	// an error.
-	SaveGraph(ctx context.Context, spec GraphSpec) error
+	//
+	// initiator is "user" | "model" (model-authored-graphs-01PMGA01
+	// UNIT-4). It scopes the graph.author Cedar gate: a "user" save
+	// (the desktop editor's path) is never gated by the FR-006 consent
+	// dial or the write_file escalation control — those exist to
+	// restrict what a MODEL may author, not what a human editing on the
+	// canvas may save (AC-012).
+	SaveGraph(ctx context.Context, spec GraphSpec, initiator string) error
 
 	// DeleteGraph removes a user graph (idempotent).
 	DeleteGraph(ctx context.Context, id string) error

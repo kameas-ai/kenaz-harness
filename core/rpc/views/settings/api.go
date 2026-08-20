@@ -189,6 +189,19 @@ type Settings struct {
 	// and read live on every workflow run/save.
 	CedarStrictWorkflowMode bool `json:"cedarStrictWorkflowMode,omitempty"`
 
+	// GraphAuthoringEnabled is the model-authored-agent-graphs consent
+	// dial (model-authored-graphs-01PMGA01 UNIT-4, FR-006). Default
+	// false: a fresh install — and any install upgraded from a build
+	// that predates this field, since JSON decode leaves an absent bool
+	// key at Go's zero value — denies graph.author until the user opts
+	// in from Settings. Read live (not cached) on every graph.author
+	// evaluation, carried into the Cedar context as
+	// context.authoring_enabled, so flipping it takes effect on the
+	// next draft attempt without an app restart. Deliberately NOT
+	// exposed through harness.SettingsAllowlist — see the Store
+	// interface doc comment on LoadGraphAuthoringEnabled for why.
+	GraphAuthoringEnabled bool `json:"graphAuthoringEnabled,omitempty"`
+
 	// CredentialAuditRetentionDays controls how long
 	// KindCredentialAccessed audit rows are retained before the daily
 	// sweep deletes them (credential-store-01KQ8TDD WP07). Zero (default)
@@ -1330,6 +1343,24 @@ type SettingsStore interface {
 	// full Settings round-trip via FirstRunOnboardingCompleted.
 	LoadFirstRunOnboardingCompleted() (bool, error)
 	SaveFirstRunOnboardingCompleted(completed bool) error
+
+	// LoadGraphAuthoringEnabled / SaveGraphAuthoringEnabled expose the
+	// model-authored-agent-graphs consent dial
+	// (model-authored-graphs-01PMGA01 UNIT-4, FR-006). Default false —
+	// on a fresh install, and on any install upgraded from a build that
+	// predates this field (settings.json simply lacks the key, and JSON
+	// decode leaves a bool field at its Go zero value), graph.author is
+	// denied until the user opts in from Settings. Read live on every
+	// graph.author evaluation via GraphAuthoringEnabledFn so a toggle
+	// takes effect on the next draft attempt without an app restart —
+	// same shape as LoadCedarStrictWorkflowMode above. Deliberately NOT
+	// added to harness.SettingsAllowlist: a session that could flip its
+	// own authoring permission via harness_write_set_setting would have
+	// no permission gate at all (same reasoning
+	// harness-self-attach-01PMHS01 reached independently for
+	// HarnessSelfMCPDisabled).
+	LoadGraphAuthoringEnabled() (bool, error)
+	SaveGraphAuthoringEnabled(enabled bool) error
 }
 
 // SettingsAPI is the view-scoped accessor exposed via HarnessAPI.
