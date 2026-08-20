@@ -196,6 +196,13 @@ type Core struct {
 	// sessionManagerMu guards sessionManager lazy construction.
 	sessionManagerMu sync.Mutex
 	sessionManager   *session.Manager
+	// sessionHookRunner, when set via SetSessionHookRunner before the
+	// first SessionManager() call, is threaded into session.NewManager
+	// via session.WithSessionHookRunner so the v2 session lifecycle
+	// hooks (session_start, setup, cwd_changed) fire
+	// (trust-surfaces-that-fire-01PMZ202 WP10 / UNIT-9). nil (the
+	// zero value) preserves the pre-WP10 behaviour: no v2 session hooks.
+	sessionHookRunner session.SessionHookRunner
 
 	// projectManagerMu guards projectManager lazy construction.
 	projectManagerMu sync.Mutex
@@ -519,8 +526,37 @@ func (c *Core) SessionManager() *session.Manager {
 		return c.sessionManager
 	}
 	store := c.openSessionStore()
-	c.sessionManager = session.NewManager(store)
+	var opts []session.ManagerOption
+	if c.sessionHookRunner != nil {
+		opts = append(opts, session.WithSessionHookRunner(c.sessionHookRunner))
+	}
+	c.sessionManager = session.NewManager(store, opts...)
 	return c.sessionManager
+}
+
+// SetSessionHookRunner installs the v2 session lifecycle hook runner
+// (session_start, setup, cwd_changed) that SessionManager() threads into
+// session.NewManager on first construction
+// (trust-surfaces-that-fire-01PMZ202 WP10 / UNIT-9). Takes the
+// session.SessionHookRunner interface rather than a concrete
+// *hooks.Runner-backed type so core/core.go never imports core/hooks —
+// the production adapter (*hooks.SessionRunnerAdapter) is constructed by
+// the caller (core/rpc) and passed in as an interface value.
+//
+// MUST be called before the first SessionManager() call — the manager
+// caches its instance on first construction and ManagerOptions only
+// apply there. A call after the manager already exists is a no-op
+// (logged) rather than silently discarding the runner or rebuilding a
+// second Manager instance, which would fork the session cache.
+func (c *Core) SetSessionHookRunner(h session.SessionHookRunner) {
+	c.sessionManagerMu.Lock()
+	defer c.sessionManagerMu.Unlock()
+	if c.sessionManager != nil {
+		logging.L().Warn("core.session_hook_runner.too_late",
+			"reason", "SessionManager() already constructed the manager; SetSessionHookRunner has no effect")
+		return
+	}
+	c.sessionHookRunner = h
 }
 
 // ProjectManager returns the projects facade, lazily constructed on
