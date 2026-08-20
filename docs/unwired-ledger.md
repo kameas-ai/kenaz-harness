@@ -1654,6 +1654,41 @@ nothing, which is worse than the current honest inertness.
   re-affirms (does not overturn) `docs/dead-code-audit-2026-08-16.md:330`'s
   "wire, and wire before mounting" — nothing is being mounted here.
 
+### 2026-08-20 · Two pairs of missions share a migration block
+
+`core/storage/migrations/blocks.go` reserves a numeric range per owning
+mission so two missions cannot collide. Two pairs share one anyway:
+
+```
+"a2a":                         {Min: 600, Max: 699}
+"signed-cards-trust":          {Min: 600, Max: 699}
+"bundle":                      {Min: 700, Max: 799}
+"shared-context-distribution": {Min: 700, Max: 799}
+```
+
+Found by the independent review of PR #299 and verified here. Pre-existing —
+`git diff main...release/v0.65.0 -- core/storage/migrations/blocks.go` is
+empty, so v0.65.0 neither caused nor touched it.
+
+**Severity: latent, and loud rather than silent.** `Registry.Register`
+returns `ErrVersionCollision` when a version is already registered, so a
+real clash cannot corrupt a ledger — it fails at registration. But
+registration happens inside `storagesqlite.Open`, so the failure mode is
+**an install that will not start**, which is the exact shape of the v0.63.0
+P0. It is one allocation away: `bundle/700` is already taken by
+`trust_anchors_init` (bundle-download-and-verify-01PMZ909 UNIT-3), so the
+first `shared-context-distribution` migration that picks 700 turns every
+boot into a hard failure.
+
+The block table's whole purpose is to make allocation decidable without
+cross-mission coordination, and for these four missions it does not.
+
+**Owed:** either give each mission a distinct block, or — if the pairing is
+deliberate because the missions are two halves of one subsystem — say so in
+a comment naming which mission owns which half of the range, so the next
+allocator does not have to guess. Nothing currently records the intent.
+**Owner: unassigned.**
+
 ## Drained
 
 ### 2026-08-19 · CLOSED — the missing-upgrade-snapshot hole is now gated
