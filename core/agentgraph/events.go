@@ -62,14 +62,25 @@ const (
 	// Approve / Reject in the harness UI.
 	//
 	// EventApprovalResolved is reserved for a REAL human decision — a
-	// click on Approve/Reject once approval-node-01PMZC12 wires that
-	// UI seam. Until then the v1 approvalExecutor auto-passes every
-	// run (no seam exists to ask anyone) and records that honestly as
-	// EventApprovalAutoPassed instead: trust-surfaces-that-fire-01PMZ202
-	// WP02 removed a prior EventApprovalResolved{"approved": true}
-	// append that fabricated a human decision nobody made (Class F,
-	// "manufactured success", docs/dead-code-audit-2026-08-18.md).
-	// Do not append EventApprovalResolved from the auto-pass path.
+	// click on Approve/Reject once approval-node-01PMZC12 UNIT-3/UNIT-4
+	// wire the resolve verb and the port write. approval-node-01PMZC12
+	// UNIT-2 made the executor park (res.Pause) instead of deciding on
+	// the human's behalf, so nothing emits EventApprovalResolved today
+	// — trust-surfaces-that-fire-01PMZ202 WP02 first removed a prior
+	// EventApprovalResolved{"approved": true} append that fabricated a
+	// human decision nobody made (Class F, "manufactured success",
+	// docs/dead-code-audit-2026-08-18.md), replacing it with the
+	// honest-auto-pass EventApprovalAutoPassed; UNIT-2 then removed the
+	// auto-pass path itself. Do not append EventApprovalResolved from
+	// anywhere but a real resolved verdict.
+	//
+	// EventApprovalAutoPassed has no emit site as of UNIT-2 — the
+	// always-auto-pass behaviour it recorded is gone. It stays declared
+	// (not deleted) because UNIT-5 [P1 · inert dials] is the very next
+	// unit in this mission and reuses this kind: a positive
+	// auto_approve_window_seconds is a real, bounded, honestly-recorded
+	// auto-pass, distinct from the always-auto-pass v1 behaviour this
+	// removed. Blocker: UNIT-5. Owner: alec.
 	EventApprovalPending    EventKind = "approval_pending"
 	EventApprovalResolved   EventKind = "approval_resolved"
 	EventApprovalAutoPassed EventKind = "approval_auto_passed"
