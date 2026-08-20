@@ -1508,6 +1508,55 @@ would not. **Owner: unassigned. Not fixed here — recorded only.**
 
 ## Drained
 
+### 2026-08-19 · CLOSED — the missing-upgrade-snapshot hole is now gated
+
+Three consecutive releases shipped without their snapshot, and each one's
+PROVENANCE.md named the missing gate and then left it missing:
+
+- **v0.63.2** — *"the lock gate catches modification but nothing catches
+  absence."*
+- **v0.64.0** — *"This is now twice. A convention that depends on a human
+  remembering it at release time has failed on two consecutive releases."*
+  This was the release whose PR title claims *"CI can finally see an
+  upgrade."*
+- **v0.64.1** — found open while writing this entry: latest tag `v0.64.1`,
+  latest snapshot `v0.64.0`.
+
+Writing the diagnosis into a document that is only read while performing the
+ritual that keeps being skipped is not a fix. The gate now exists:
+
+- `scripts/ci/check-upgrade-snapshot-present.sh` — fails when
+  `max(testdata/upgrade/v*)` is behind `max(git tag v*)`. Stable tags only;
+  `-rc` tags are soak builds and owe no snapshot. With **no** tags reachable
+  it FAILS rather than passing, matching the lock gate's rule that a gate
+  which cannot look at anything is not clean.
+- Wired into `pr.yml` beside the lock gate, whose tag-fetch step is now
+  load-bearing for both.
+- Planted-violation proof:
+  `upgrade-snapshot-present/chain-behind-newest-tag`. Verified falsifiable in
+  **both** directions — against a neutered gate (`exit 0`) it fails with *"the
+  gate cannot fail"*, and against a gate that exits non-zero for an unrelated
+  reason it fails the `wantOutput` check. That second direction matters here:
+  `check-tests-are-hermetic.sh` once shipped permanently broken and this
+  table passed anyway.
+- `v0.64.1`'s snapshot was backfilled in the same change, so the chain is
+  current. Its `dump.sql` is byte-identical to `v0.64.0`'s — correct, since
+  that release registered no migration.
+
+**A harness limitation was removed to make this possible.**
+`TestGates_PlantedViolationFires` called `plant()` unconditionally, so it
+could only express violations you create by *adding a file*. An absence gate's
+violation cannot be planted that way — you create it by moving the tag
+forward, not by writing anything. The runner now allows a case with no `file`,
+and requires such a case to name a `wantOutput` so the proof stays about the
+specific violation rather than about a non-zero exit. Any future
+absence-shaped gate can now be proven the same way.
+
+Note the ledger entry dated 2026-08-19 above — `check-codegen.sh` attesting
+binding *source* rather than emitted bindings — is the same vacuous-pass
+class and remains **open**.
+
+
 ### 2026-08-16 · what the export scanner covered BEFORE, and what leaked
 
 Closes the 2026-08-14 finding above. Recorded in full because

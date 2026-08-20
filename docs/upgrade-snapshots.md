@@ -28,10 +28,16 @@ on the path from a previously-shipped schema to this one.
 
 ## Cutting a release: add a snapshot
 
-**Every release must add one.** The lock gate catches *modification*;
-nothing catches *absence* — skipping this step leaves the `upgrade-path`
-job passing while it silently stops covering anything the new release
-changed.
+**Every release must add one**, and CI now enforces it.
+`check-upgrade-snapshots-locked.sh` catches *modification* of a committed
+snapshot; `check-upgrade-snapshot-present.sh` catches *absence*, failing
+when the newest snapshot is older than the newest stable `vX.Y.Z` tag.
+
+Before that gate existed, skipping this step left the `upgrade-path` job
+passing while it silently stopped covering anything the new release changed
+— which is exactly what happened on `v0.63.2`, `v0.64.0` and `v0.64.1`. Each
+of those releases' PROVENANCE.md files correctly named the missing gate and
+stopped there.
 
 ```bash
 bash scripts/ci/upgrade-snapshot.sh v<X.Y.Z>
