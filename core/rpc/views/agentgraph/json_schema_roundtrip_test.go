@@ -1,6 +1,7 @@
 package agentgraph
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -43,7 +44,12 @@ nodes:
         required:
           - verdict
 `
-	if err := m.saveGraph(GraphSpec{ID: "json_schema_roundtrip", YAML: graphYAML}); err != nil {
+	// initiator "user", not "model": this test is about YAML round-trip
+	// fidelity through saveGraph -> file -> loadGraph, not about the
+	// model-authoring consent gate GA01 UNIT-4 added to this signature.
+	// "model" would be DENIED on a fresh profile (AC-004), failing the
+	// test for a reason that has nothing to do with json_schema.
+	if err := m.saveGraph(context.Background(), GraphSpec{ID: "json_schema_roundtrip", YAML: graphYAML}, "user"); err != nil {
 		t.Fatalf("saveGraph: %v", err)
 	}
 

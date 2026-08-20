@@ -69,14 +69,22 @@ func TestGate_AzureOpenAI_And_CustomOpenAI_ResolveRealCapabilities(t *testing.T)
 func TestCatalog_AliasTable_DoesNotChangeExistingProviders(t *testing.T) {
 	c := mustCatalog(t)
 	cases := []struct {
-		provider, model                                string
+		provider, model                                 string
 		toolCalling, grammar, structured, reasoning, ok bool // ok = image accepted
 	}{
 		{"anthropic", "claude-sonnet-4-5", true, false, true, true, true},
 		{"openai", "gpt-4o", true, false, true, false, true},
 		{"openrouter", "openai/gpt-4o", true, false, true, false, true},
 		{"bedrock", "anthropic.claude-3-5-sonnet-20241022-v2:0", true, false, true, false, true},
-		{"gemini", "gemini-2.5-pro", true, false, false, true, true},
+		// structured=true since structured-output-is-reachable-01PMZE14
+		// WP04/WP05: gemini's adapter now sets GenerationConfig.ResponseSchema
+		// (core/llm/gemini/wire.go:379,398), so the capability row saying
+		// "true" is the row telling the truth about the adapter. This is NOT
+		// the alias table changing a provider — the property this test
+		// guards — it is a deliberate capability gain landed by another
+		// mission, verified here against the adapter rather than taken on
+		// report.
+		{"gemini", "gemini-2.5-pro", true, false, true, true, true},
 	}
 	imageReq := llm.GenerationRequest{
 		Messages: []llm.Message{{
