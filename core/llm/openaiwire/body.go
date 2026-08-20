@@ -66,6 +66,7 @@ func BuildRequestBody(req llm.GenerationRequest, model string, profileDefaults m
 	}
 
 	// Apply Knobs (highest precedence).
+	reasoningEffortFromKnobs := false
 	if k := req.Knobs; k != nil {
 		for key, val := range KnobsToParams(k) {
 			out[key] = val
@@ -75,7 +76,29 @@ func BuildRequestBody(req llm.GenerationRequest, model string, profileDefaults m
 		}
 		if k.Reasoning != nil && k.Reasoning.OpenAIEffort != "" {
 			out["reasoning_effort"] = k.Reasoning.OpenAIEffort
+			reasoningEffortFromKnobs = true
 		}
+	}
+
+	// req.Reasoning (typed field, model-request-path-live-01PMDL01 WP05)
+	// maps to reasoning_effort when Knobs did not already set it (D-4:
+	// Knobs keep precedence). Before this, only Knobs.Reasoning.OpenAIEffort
+	// reached the wire here — but the only writer of Knobs.Reasoning is
+	// /effort (core/slashcmd/cmd_effort.go:61), which spec.md §1.6(a)
+	// records as broken, and req.Reasoning is what
+	// llm_provider_adapter.go:635 actually sets from the live
+	// ReasoningControl UI. Without this branch, the OpenAI, OpenRouter and
+	// custom-openai request paths silently dropped the user's reasoning
+	// budget (model-settings-reach-the-model-01PMZ101 WP08, spec FR-007).
+	//
+	// mapReasoningEffort is reused, not reimplemented — moved here from
+	// azure/adapter.go (model-settings-reach-the-model-01PMZ101 WP03+WP08,
+	// spec D-14): azure previously mapped req.Reasoning to reasoning_effort
+	// itself, and WP03 routing azure through this shared encoder would have
+	// silently turned that off with no way back on (llm.Request.Knobs has
+	// no production writer) had this branch not moved with it.
+	if !reasoningEffortFromKnobs && req.Reasoning != nil && req.Reasoning.Enabled {
+		out["reasoning_effort"] = mapReasoningEffort(req.Reasoning.BudgetTokens)
 	}
 
 	// ResponseFormat / JSONMode (ResponseFormat takes precedence).
@@ -169,6 +192,22 @@ func BuildRequestBody(req llm.GenerationRequest, model string, profileDefaults m
 	}
 
 	return out, nil
+}
+
+// mapReasoningEffort maps a token budget to a discrete reasoning_effort
+// string: low (<4000), medium (4000-14999), high (15000+), defaulting to
+// high when budgetTokens is 0 (unset). Moved from azure/adapter.go
+// (model-settings-reach-the-model-01PMZ101 WP08, spec D-14) — do not
+// write a second copy for another OpenAI-wire adapter; call this one.
+func mapReasoningEffort(budgetTokens int) string {
+	switch {
+	case budgetTokens == 0 || budgetTokens >= 15000:
+		return "high"
+	case budgetTokens >= 4000:
+		return "medium"
+	default:
+		return "low"
+	}
 }
 
 // BuildOpenAIContent emits the JSON value for a message's `content`
