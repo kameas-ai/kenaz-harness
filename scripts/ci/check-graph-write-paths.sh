@@ -1,40 +1,44 @@
 #!/usr/bin/env bash
-# check-graph-write-paths.sh — a graph reaches disk only through a
-# validated, Cedar-gated path.
+# check-graph-write-paths.sh — a graph reaches disk only through the one
+# validated, Cedar-gated writer.
 #
-# WHAT THIS PROTECTS, AND WHY A TEST WAS NOT ENOUGH:
+# WHAT THIS PROTECTS:
 # model-authored-graphs-01PMGA01 UNIT-2 stopped the manager persisting
-# graphs the validator rejects, and UNIT-4 made graph writes ask Cedar
-# (THE SEAM: "No commit may make a graph-writing verb reachable from a
-# model until AC-004 passes"). Both fixes live inside Manager.saveGraph.
+# graphs the validator rejects; UNIT-4 (THE SEAM) made graph writes ask
+# Cedar. Both fixes live INSIDE Manager.saveGraph. Neither survives a
+# write that happens anywhere else, and every existing test still passes
+# when one appears, because they all drive saveGraph.
 #
-# Neither survives a SECOND writer. Anyone adding an os.WriteFile against
-# the library directory — a repair path, an importer, a migration, a
-# "just this once" fixup — silently bypasses BOTH the validator and the
-# consent gate, and every existing test still passes because they all
-# drive saveGraph. That is the class UNIT-8 owes a gate for, and it is
-# the same shape as check-single-move-writer.sh: one seam, enforced.
+# THE RULE: every filesystem-mutating call in the package must sit
+# INSIDE Manager.saveGraph, and saveGraph must validate before the first
+# of them. Anything else needs a dated allowlist entry.
 #
-# THE RULE (two legs):
+# ---- WHY THE FIRST VERSION OF THIS GATE WAS WRONG ----
 #
-#   A. Within core/rpc/views/agentgraph/, production code may contain at
-#      most ONE filesystem-mutating call against the user library. The
-#      permitted site is Manager.saveGraph.
-#   B. saveGraph must call the validator BEFORE it writes. A write that
-#      precedes validation persists exactly what UNIT-2 forbade.
+# v1 counted mutators package-wide and compared bare line numbers. An
+# independent review broke it against the REAL production file: move the
+# write out of saveGraph into an unvalidated sibling method, and the
+# count stays at one while the line comparison still "passes" — the gate
+# reported OK for exactly the bypass its own docstring warns about. Its
+# planted-violation proof only ever added a SECOND writer, so CI's
+# gate-testing meta-suite could not see the hole either.
 #
-# Deletion is deliberately NOT covered: deleteGraph removes a file, it
-# cannot persist an invalid graph, and it has its own bundled-id guard.
+# v1 also over-matched: an unrelated `os.Create` elsewhere in the package,
+# or an inline trailing comment merely NAMING a mutator, failed the build.
+# A gate that fails on innocent code gets deleted by the next person.
+#
+# Both are fixed here: containment is checked structurally (is the call
+# inside saveGraph's line range in the file that declares it), and
+# anything legitimately outside is justifiable rather than fatal.
 #
 # Usage: bash scripts/ci/check-graph-write-paths.sh
 #
-# GRAPH_WRITE_PATHS_PKG overrides the scanned package. It is NOT a
-# suppression knob — it cannot make a real violation pass — it only
-# points the scan at a directory, so gates_can_fail_test.go can plant a
-# probe without mutating the real package.
+# GRAPH_WRITE_PATHS_PKG overrides the scanned package. NOT a suppression
+# knob — it cannot make a real violation pass; it only points the scan at
+# a directory so gates_can_fail_test.go can plant probes.
 #
-# Exit codes: 0 clean; 1 a second writer, or a write before validation,
-# or the scan root is unreadable (never a silent pass).
+# Exit codes: 0 clean; 1 a mutator outside saveGraph without an allowlist
+# entry, a write before validation, or an unreadable/absent scan root.
 
 set -euo pipefail
 
@@ -42,82 +46,109 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/ci-gate.sh"
 
 GATE="[graph-write-paths]"
 PKG="${GRAPH_WRITE_PATHS_PKG:-core/rpc/views/agentgraph}"
+ALLOWLIST="scripts/ci/allowlists/graph-write-paths-outside-savegraph.txt"
 
 ci_require_dir "$PKG" "$GATE" \
-  "Both legs scan it; with no scan root this gate cannot see a second writer."
+  "Both legs scan it; with no scan root this gate cannot see a bypass."
 
 mapfile -t GO_FILES < <(find "$PKG" -maxdepth 1 -name '*.go' -type f ! -name '*_test.go' | sort)
 if [[ ${#GO_FILES[@]} -eq 0 ]]; then
   echo "${GATE} FAIL: no production .go files under ${PKG}/." >&2
-  echo "${GATE} Leg A would find zero writers and report clean — a vacuous pass." >&2
+  echo "${GATE} The scan would find zero writers and report clean — a vacuous pass." >&2
   exit 1
 fi
 
-# ---- Leg A: exactly one filesystem-mutating call -----------------------
-# Comment lines are excluded: two comments in this package deliberately
-# NAME os.WriteFile while warning about the bypass, and a gate that
-# counts its own warning as a violation trains people to delete the
-# warning.
-MUTATORS='os\.WriteFile|os\.Create|os\.OpenFile|ioutil\.WriteFile'
-# -H, not -n alone: grep omits the filename when given exactly ONE file,
-# which shifts every colon-separated field and made leg B parse the line
-# CONTENT as a line number. The real package has many files so it worked
-# by accident; a single-file package would have broken it silently.
-writes=$(grep -HnE "(${MUTATORS})\(" "${GO_FILES[@]}" 2>/dev/null \
-  | grep -vE '^[^:]*:[0-9]+:[[:space:]]*//' || true)
+MUTATORS='os\.WriteFile|os\.Create|os\.OpenFile|os\.Rename|ioutil\.WriteFile'
 
-write_count=$(printf '%s' "$writes" | grep -c . || true)
+# Locate saveGraph: which file declares it, and its line range. The range
+# ends at the next column-0 "}" — gofmt guarantees that shape, and every
+# file here is gofmt-clean.
+SAVE_FILE=""; SAVE_START=0; SAVE_END=0
+for f in "${GO_FILES[@]}"; do
+  read -r s e < <(awk '/^func \(m \*Manager\) saveGraph\(/{st=NR} st&&/^}$/{print st, NR; exit}' "$f") || true
+  if [[ -n "${s:-}" && "${s:-0}" -gt 0 ]]; then SAVE_FILE="$f"; SAVE_START="$s"; SAVE_END="$e"; break; fi
+done
 
-if [[ "$write_count" -gt 1 ]]; then
-  echo "${GATE} FAIL: ${write_count} filesystem-mutating call(s) in ${PKG}/; exactly 1 is allowed." >&2
-  printf '%s\n' "$writes" | sed 's/^/  /' >&2
-  echo "${GATE}" >&2
-  echo "${GATE} The permitted writer is Manager.saveGraph, which validates (UNIT-2)" >&2
-  echo "${GATE} and asks Cedar (UNIT-4) first. A second writer bypasses BOTH, and" >&2
-  echo "${GATE} every existing test still passes because they all drive saveGraph." >&2
-  echo "${GATE} Route the new call through saveGraph instead of opening a second path." >&2
+if [[ -z "$SAVE_FILE" ]]; then
+  echo "${GATE} FAIL: Manager.saveGraph not found in ${PKG}/." >&2
+  echo "${GATE} The seam moved. This gate is now watching the wrong package," >&2
+  echo "${GATE} which would otherwise read as 'clean' forever." >&2
   exit 1
 fi
 
-if [[ "$write_count" -eq 0 ]]; then
-  echo "${GATE} FAIL: no filesystem-mutating call found in ${PKG}/." >&2
-  echo "${GATE} saveGraph is supposed to contain exactly one. Zero means the seam" >&2
-  echo "${GATE} moved and this gate is now watching the wrong package — which would" >&2
-  echo "${GATE} otherwise read as 'clean' forever." >&2
+# Strip trailing comments BEFORE matching, so a line that merely NAMES a
+# mutator inside a comment is not a call. v1 only skipped comment-only
+# lines and failed on `x := 1 // never add os.WriteFile here`.
+violations=0
+inside_count=0
+first_write_line=0
+
+for f in "${GO_FILES[@]}"; do
+  while IFS= read -r entry; do
+    ln="${entry%%:*}"
+    [[ -z "$ln" ]] && continue
+    if [[ "$f" == "$SAVE_FILE" ]] && (( ln >= SAVE_START && ln <= SAVE_END )); then
+      inside_count=$((inside_count + 1))
+      if (( first_write_line == 0 || ln < first_write_line )); then first_write_line=$ln; fi
+      continue
+    fi
+    # Outside saveGraph. Allowlisted?
+    if [[ -f "$ALLOWLIST" ]] && grep -qF "$(basename "$f"):$ln" "$ALLOWLIST" 2>/dev/null; then
+      continue
+    fi
+    if (( violations == 0 )); then
+      echo "${GATE} FAIL: filesystem-mutating call outside Manager.saveGraph." >&2
+    fi
+    echo "${GATE}   $f:$ln" >&2
+    violations=$((violations + 1))
+  done < <(
+    sed 's://.*::' "$f" | grep -nE "(${MUTATORS})\(" || true
+  )
+done
+
+if (( violations > 0 )); then
+  cat >&2 <<MSG
+${GATE}
+${GATE} saveGraph validates (UNIT-2) and asks Cedar (UNIT-4) before it
+${GATE} persists. A write reached from anywhere else skips BOTH, and every
+${GATE} existing test still passes, because they all drive saveGraph.
+${GATE}
+${GATE} Route the write through saveGraph. If it genuinely does not touch
+${GATE} the graph library, add "<file>:<line>" to
+${GATE}   ${ALLOWLIST}
+${GATE} with a dated justification naming the blocker and the owner.
+MSG
   exit 1
 fi
 
-# ---- Leg B: validation precedes the write ------------------------------
-MANAGER="${PKG}/manager.go"
-if [[ -f "$MANAGER" ]]; then
-  save_start=$(grep -n 'func (m \*Manager) saveGraph(' "$MANAGER" | head -1 | cut -d: -f1 || true)
-  if [[ -z "$save_start" ]]; then
-    echo "${GATE} FAIL: Manager.saveGraph not found in ${MANAGER}." >&2
-    echo "${GATE} Leg B cannot check ordering against a function that is not there." >&2
-    exit 1
-  fi
-  write_line=$(printf '%s' "$writes" | head -1 | awk -F: '{print $2}')
-  # LoadYAML is the kernel parse+validate saveGraph runs before persisting.
-  validate_line=$(awk -v s="$save_start" 'NR>=s && /coreag\.LoadYAML\(/ {print NR; exit}' "$MANAGER" || true)
-  if [[ -z "$validate_line" ]]; then
-    echo "${GATE} FAIL: saveGraph does not call coreag.LoadYAML before persisting." >&2
-    echo "${GATE} UNIT-2's rule is that no graph the validator rejects reaches disk." >&2
-    exit 1
-  fi
-  # Numeric-safe under `set -u`: a non-numeric or empty capture must not
-  # crash the gate into an ambiguous exit — it is a scan failure, and a
-  # gate that cannot compute its own comparison says so.
-  if ! [[ "${write_line:-}" =~ ^[0-9]+$ ]] || ! [[ "${validate_line:-}" =~ ^[0-9]+$ ]]; then
-    echo "${GATE} FAIL: could not resolve line numbers (write='${write_line:-}' validate='${validate_line:-}')." >&2
-    echo "${GATE} Refusing to report clean from a comparison that did not run." >&2
-    exit 1
-  fi
-  if (( validate_line > write_line )); then
-    echo "${GATE} FAIL: saveGraph writes at line ${write_line} but validates at ${validate_line}." >&2
-    echo "${GATE} Validation must PRECEDE the write, or an invalid graph is already" >&2
-    echo "${GATE} on disk by the time it is rejected." >&2
-    exit 1
-  fi
+if (( inside_count == 0 )); then
+  echo "${GATE} FAIL: saveGraph contains no filesystem-mutating call." >&2
+  echo "${GATE} It is supposed to be the one writer. Zero means the write moved" >&2
+  echo "${GATE} out — the exact bypass this gate exists to catch — or the seam" >&2
+  echo "${GATE} was refactored and this check is now watching nothing." >&2
+  exit 1
 fi
 
-echo "${GATE} OK — one validated writer in ${PKG}/ (Manager.saveGraph), validation precedes the write."
+# Validation must precede the FIRST write inside saveGraph.
+validate_line=$(awk -v s="$SAVE_START" -v e="$SAVE_END" \
+  'NR>=s && NR<=e && /coreag\.LoadYAML\(/ {print NR; exit}' "$SAVE_FILE" || true)
+
+if [[ -z "$validate_line" ]]; then
+  echo "${GATE} FAIL: saveGraph does not call coreag.LoadYAML." >&2
+  echo "${GATE} UNIT-2's rule is that no graph the validator rejects reaches disk." >&2
+  exit 1
+fi
+
+if ! [[ "$validate_line" =~ ^[0-9]+$ ]]; then
+  echo "${GATE} FAIL: could not resolve the validation line; refusing to report clean." >&2
+  exit 1
+fi
+
+if (( validate_line > first_write_line )); then
+  echo "${GATE} FAIL: saveGraph writes at line ${first_write_line} but validates at ${validate_line}." >&2
+  echo "${GATE} Validation must PRECEDE the write, or an invalid graph is already" >&2
+  echo "${GATE} on disk by the time it is rejected." >&2
+  exit 1
+fi
+
+echo "${GATE} OK — ${inside_count} mutating call(s), all inside Manager.saveGraph (${SAVE_FILE}:${SAVE_START}-${SAVE_END}), validation at ${validate_line} precedes the first write at ${first_write_line}."

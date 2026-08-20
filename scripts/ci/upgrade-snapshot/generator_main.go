@@ -303,8 +303,9 @@ func dumpDB(ctx context.Context, db *sql.DB) (string, error) {
 	b.WriteString("-- DO NOT HAND-EDIT. Regenerate with scripts/ci/upgrade-snapshot.sh.\n\n")
 
 	b.WriteString("-- === SCHEMA (sorted by type, name) ===\n\n")
+	virtuals := virtualTableNames(objs)
 	for _, o := range objs {
-		if o.typ == "table" && isFTSShadowIn(o.name, virtualTableNames(objs)) {
+		if o.typ == "table" && isFTSShadowIn(o.name, virtuals) {
 			continue
 		}
 		stmt := strings.TrimSpace(o.sql)
@@ -317,7 +318,7 @@ func dumpDB(ctx context.Context, db *sql.DB) (string, error) {
 
 	b.WriteString("-- === DATA (sorted by table name, rows sorted by primary key) ===\n\n")
 	for _, o := range objs {
-		if o.typ != "table" || o.isVirtualTable() || isFTSShadowIn(o.name, virtualTableNames(objs)) || o.name == "sqlite_sequence" {
+		if o.typ != "table" || o.isVirtualTable() || isFTSShadowIn(o.name, virtuals) || o.name == "sqlite_sequence" {
 			continue
 		}
 		stmts, err := dumpTable(ctx, db, o.name)

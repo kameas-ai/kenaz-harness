@@ -844,6 +844,28 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				"\treturn os." + "WriteFile(path, b, 0o644)\n" +
 				"}\n",
 		},
+		{
+			// THE CLASS CI COULD NOT SEE. An independent review of PR #300
+			// broke v1 of this gate against the real production file: move
+			// the write OUT of saveGraph into an unvalidated sibling method
+			// and v1 reported OK — the package still held exactly one
+			// mutator, and its bare line-number comparison still "passed".
+			// The gate reported clean for precisely the bypass its own
+			// docstring warns about.
+			//
+			// The case above only ever planted an ADDITIVE second writer in
+			// a NEW file, so this table could not see the hole either. This
+			// plants a sibling method in manager.go ITSELF — same file,
+			// outside saveGraph's line range — which is the shape a real
+			// refactor produces.
+			name:       "graph-write-paths/write-moved-out-of-savegraph",
+			wantOutput: "outside Manager.saveGraph",
+			gate:       "check-graph-write-paths.sh",
+			file:       "core/rpc/views/agentgraph/manager.go",
+			append: "\n\nfunc (m *Manager) zzGateProbeBypassPersist(path string, b []byte) error {\n" +
+				"\treturn os." + "WriteFile(path, b, 0o644)\n" +
+				"}\n",
+		},
 	}
 
 	for _, tc := range cases {

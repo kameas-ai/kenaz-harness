@@ -1,0 +1,14 @@
+# Filesystem-mutating calls in core/rpc/views/agentgraph/ that legitimately
+# sit OUTSIDE Manager.saveGraph.
+#
+# Format: <basename>:<line>   — one per line, with a dated justification
+# naming the blocker and the owner, per CLAUDE.md's allowlist rule.
+#
+# EMPTY ON PURPOSE. saveGraph is the only writer today, and the gate
+# (scripts/ci/check-graph-write-paths.sh) enforces that. This file exists
+# so a legitimate unrelated write — a support-bundle dump, a cache file —
+# is a justification rather than a reason to delete the gate. An
+# independent review of PR #300 found that v1 of the gate failed on
+# exactly that innocent case, which is how gates get removed.
+#
+# Allowlists shrink monotonically. Nothing gets added without a date.
