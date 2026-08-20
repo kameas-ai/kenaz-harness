@@ -18,6 +18,7 @@ import (
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	artview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
+	"github.com/kameas-ai/kenaz-harness/core/runposture"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 	"github.com/kameas-ai/kenaz-harness/core/tools/askuserquestion"
 	"github.com/kameas-ai/kenaz-harness/core/wiring/knobcoverage"
@@ -790,6 +791,27 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// consumer's existing nil-safe fallback.
 	resolvedKnobs := r.autonomyKnobs(ctx, sessionID)
 
+	// model-scheduled-jobs-01PMSJ01 WP05: the per-run unattended posture
+	// (spec.md §5.4 / FR-003). Read from the INBOUND ctx — the caller
+	// (LiveChatRunDispatcher) marks it via runposture.Unattended before
+	// calling StartStream — because streamCtx below is deliberately
+	// re-derived from context.Background() so the run survives the
+	// inbound RPC call returning (spec.md §2 leg 1), which would
+	// otherwise silently drop the marker. It is re-applied onto
+	// streamCtx a few lines down, once streamCtx exists.
+	unattended := runposture.IsUnattended(ctx)
+	if unattended {
+		// H-2: an unattended run must never wait on a human to resolve
+		// ambiguity. Force AskNever regardless of the session's/project's/
+		// global autonomy dial — a scheduled run has no user sitting at
+		// the app to answer, whatever the interactive default is. Reuses
+		// the two enforcement points that already work for AskNever:
+		// applyAskOnAmbiguityDial below seeds AskNodes with a
+		// DefaultAnswer, and withholdsAskTool (a few lines further)
+		// removes kenaz__ask_user_question from the catalog.
+		resolvedKnobs.AskOnAmbiguity = autonomy.AskNever
+	}
+
 	maxTurns := r.cfg.MaxTurns()
 	if maxTurns <= 0 {
 		maxTurns = 25
@@ -930,6 +952,13 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// the cause, so the terminal path can tell a focus-loss abort apart
 	// from an explicit Stop.
 	streamCtx, cancel := context.WithCancel(context.Background())
+	if unattended {
+		// Re-apply the marker read from the inbound ctx above — streamCtx
+		// derives from Background(), so the marker would otherwise be
+		// lost right here. This is what kernelToolAdapter.resolveConfirmEach
+		// (H-1) and cedar.Registry.RequestInteractive (H-3) read.
+		streamCtx = runposture.Unattended(streamCtx)
+	}
 
 	// Pre-seed the AskBus with the user's message so the chat graph's
 	// `ask_user` AskNode resolves on its first fire. The chat graph is

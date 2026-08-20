@@ -701,6 +701,14 @@ type API struct {
 	// a real Core with a DB is available; nil DB path returns ErrStoreUnavailable.
 	scheduledChatAPI scheduledchatview.ScheduledChatAPI
 
+	// chatCronEngine is the cron engine that arms scheduled_chat_runs rows
+	// (mission model-scheduled-jobs-01PMSJ01 WP03). Started on SetContext,
+	// stopped on Shutdown, alongside wfScheduler. nil when there is no DB.
+	// Its Dispatcher is left unassigned until WP05's unattended-posture
+	// commit (plan.md Rule 2: a dispatcher must not be armed against an
+	// engine that can park a run on a human forever).
+	chatCronEngine *schedulerPkg.ChatCronEngine
+
 	// agentsAPI is the sub-agent profile registry RPC surface
 	// (branch-subagent-interactive-01KZNP3B WP01). Backed by core/agents
 	// loaded from <DataDir>/agents/*.yaml + bundled profiles.
@@ -848,6 +856,15 @@ func (a *API) SetContext(ctx context.Context) {
 	// the correct lifetime for background goroutines. Idempotent.
 	if a.wfScheduler != nil {
 		a.wfScheduler.Start()
+	}
+	// Start the chat-run cron scheduler (model-scheduled-jobs-01PMSJ01
+	// WP03). An engine that is never Start()ed would pass every unit
+	// test — this is the AC-003 "first half" wiring, and it is what makes
+	// a zero-schedule build byte-identical at boot either way (FR-008):
+	// Start on an engine with no registered entries starts a cron loop
+	// that never fires.
+	if a.chatCronEngine != nil {
+		a.chatCronEngine.Start()
 	}
 
 	// Bootstrap lockdown state before any user-facing surface mounts so
@@ -1045,9 +1062,9 @@ func (a *API) runMigrationDriftCheck(ctx context.Context) {
 }
 
 // Shutdown cancels the auto-update background poller and stops the
-// workflow cron scheduler. main.go calls this from OnShutdown so all
-// background goroutines exit cleanly. Safe to call when no poller is
-// running.
+// workflow cron scheduler and the chat-run cron scheduler. main.go calls
+// this from OnShutdown so all background goroutines exit cleanly. Safe to
+// call when no poller is running.
 func (a *API) Shutdown() {
 	if a == nil {
 		return
@@ -1060,6 +1077,9 @@ func (a *API) Shutdown() {
 	a.updatePollMu.Unlock()
 	if a.wfScheduler != nil {
 		a.wfScheduler.Stop()
+	}
+	if a.chatCronEngine != nil {
+		a.chatCronEngine.Stop()
 	}
 	// Flush any active eval captures so partial files get a KindCaptureStop
 	// record even on clean shutdown.
@@ -2445,10 +2465,12 @@ func New(c *core.Core, opts ...Option) *API {
 		a.acpAPI = acpview.NewAPI(acpReg, acpEnv, acpOpts)
 	}
 
-	// Scheduled-chat-runs view (mission scheduled-chat-runs-01KX5R8B, WP04).
-	// Wired with the SQLiteChatStore when a real DB is available; test
-	// chassis path (c == nil or no storage) silently leaves the store nil
-	// which causes the accessor to return a graceful-empty surface.
+	// Scheduled-chat-runs view (mission scheduled-chat-runs-01KX5R8B, WP04;
+	// cron engine added by model-scheduled-jobs-01PMSJ01 WP03; dispatcher
+	// armed by WP05). Wired with the SQLiteChatStore when a real DB is
+	// available; test chassis path (c == nil or no storage) silently
+	// leaves the store nil which causes the accessor to return a
+	// graceful-empty surface.
 	{
 		var chatStore schedulerPkg.ScheduledChatStore
 		if c != nil {
@@ -2456,14 +2478,81 @@ func New(c *core.Core, opts ...Option) *API {
 				chatStore = schedulerPkg.NewSQLiteChatStore(db)
 			}
 		}
+		// Chat-run cron engine (model-scheduled-jobs-01PMSJ01 WP03): the
+		// ticking counterpart to wfScheduler above, for scheduled_chat_runs
+		// instead of workflow_schedules.
+		//
+		// chatEngine is assigned through a local interface variable, not
+		// directly from a.chatCronEngine, so a nil *ChatCronEngine never
+		// becomes a non-nil scheduledchatview.Registrar (the classic Go
+		// typed-nil-interface trap) when construction fails.
+		var chatEngine scheduledchatview.Registrar
+		var chatCronEngine *schedulerPkg.ChatCronEngine
+		if chatStore != nil {
+			eng, err := schedulerPkg.NewChatCronEngine(context.Background(), schedulerPkg.ChatCronEngineConfig{
+				Store: chatStore,
+			})
+			if err != nil {
+				logging.L().Warn("scheduler.chat_cron.init_failed", "err", err.Error())
+			} else {
+				a.chatCronEngine = eng
+				chatEngine = eng
+				chatCronEngine = eng
+				logging.L().Info("scheduler.chat_cron.init_ok")
+			}
+		}
+		// The real ChatRunDispatcher (model-scheduled-jobs-01PMSJ01 WP04)
+		// and its assignment into both the RunNow path
+		// (scheduledchatview.Config.Dispatcher) and the cron engine
+		// (SetDispatcher), together with the WP05 unattended posture
+		// LiveChatRunDispatcher marks on every dispatch's ctx
+		// (runposture.Unattended — read by kernelToolAdapter.
+		// resolveConfirmEach and cedar.Registry.RequestInteractive).
+		// Per plan.md Rule 2 this assignment happens in the SAME commit
+		// as that posture, never before it: a dispatcher armed without
+		// the posture can park a scheduled run on a human forever
+		// (spec.md §2 H-1/H-2/H-3). a.sessionsAPI and a.llmAPI are both
+		// fully wired by this point in New() (every With* wrap above has
+		// already run).
+		var chatDispatcher schedulerPkg.ChatRunDispatcher
+		if chatStore != nil && a.sessionsAPI != nil && a.llmAPI != nil {
+			capturedPersonalStore := personalForLLM
+			live := NewChatRunDispatcher(ChatRunDispatcherDeps{
+				Store:    chatStore,
+				Sessions: a.sessionsAPI,
+				LLM:      a.llmAPI,
+				Bus:      a.eventBus,
+				// Lazy, mirroring wfDeps.DefaultProfileFunc (line ~2046
+				// above): first personal-provider profile wins, re-read
+				// on every dispatch so a profile added after boot is
+				// picked up without a restart.
+				DefaultProfile: func() string {
+					if capturedPersonalStore == nil {
+						return ""
+					}
+					profs, err := capturedPersonalStore.List()
+					if err != nil || len(profs) == 0 {
+						return ""
+					}
+					return profs[0].ID
+				},
+			})
+			chatDispatcher = live
+			if chatCronEngine != nil {
+				chatCronEngine.SetDispatcher(live)
+			}
+			logging.L().Info("scheduler.chat_dispatch.armed")
+		}
 		// Cedar policy gate for scheduled-chat create / update / delete
 		// / execute. Omitting it left cfg.Cedar nil, and every
 		// GateScheduledChat* helper short-circuits a nil Gate to
 		// Allow("no engine wired (default-allow)") — so the surface
 		// that runs prompts on a cron consulted no policy at all.
 		a.scheduledChatAPI = scheduledchatview.New(scheduledchatview.Config{
-			Store: chatStore,
-			Cedar: a.cedarGate(),
+			Store:      chatStore,
+			Engine:     chatEngine,
+			Dispatcher: chatDispatcher,
+			Cedar:      a.cedarGate(),
 		})
 	}
 

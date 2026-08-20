@@ -142,7 +142,32 @@ fi
 # open paren, EVERY typed call site in this codebase is invisible to
 # this pass. Confirmed the hard way: this exact gap was a false-DEAD
 # on UpdatesPanel.vue's own three subscriptions before it was fixed.
-FRONTEND_WINDOW=$(grep -A3 -E '(useEventStream|EventsOn|onServedEvent)(<[^>]*>)?\(' "${FRONTEND_FILES[@]}" 2>/dev/null || true)
+#
+# Exit-code discipline (here and in the Go pass below): grep exit 1
+# means "no matches" — a legitimate empty window. Anything >=2 means
+# the scan itself failed (unreadable file, killed mid-walk), and a
+# window built from a PARTIAL scan silently declares every subscriber
+# past the failure point dead. That is exactly the flake
+# TestGates_VerdictIsIndependentOfWorkingDirectory kept catching on
+# main/#294/#295: a random innocent topic — clustered by directory —
+# reported unconsumed on one invocation and consumed on the next.
+# A failed scan must be a loud gate error, never a verdict.
+#
+# MERGE NOTE (2026-08-20): two independent hardenings of this same gate
+# landed in parallel and are BOTH kept here. The release branch replaced
+# the silent `[[ -d frontend/src ]]` skip with ci_require_dir (absent
+# scan root); #296 added the grep exit-code discipline (partial scan).
+# They cover different failure modes and neither subsumes the other.
+# The pre-merge HEAD form of this line ended `2>/dev/null || true`,
+# which swallowed precisely the rc>=2 case the discipline exists to
+# catch — that swallow is deliberately NOT carried forward.
+FRONTEND_WINDOW=$(grep -A3 -E '(useEventStream|EventsOn|onServedEvent)(<[^>]*>)?\(' "${FRONTEND_FILES[@]}") || {
+  rc=$?
+  if [[ $rc -ge 2 ]]; then
+    echo "${GATE} ERROR: frontend subscriber scan failed (grep exit ${rc}) — refusing to judge topics against a partial window." >&2
+    exit 1
+  fi
+}
 
 # --- Precompute pass 2 (Go): same idea, over every non-test *.go file
 # in the repo (main.go at the root is the primary Go consumer of this
@@ -157,7 +182,15 @@ mapfile -t GO_FILES < <(
 )
 GO_WINDOW=""
 if [[ ${#GO_FILES[@]} -gt 0 ]]; then
-  GO_WINDOW=$(grep -A3 -E '(EventsOn\(|\.Subscribe\()' "${GO_FILES[@]}" 2>/dev/null || true)
+  # Same exit-code discipline as the frontend pass: 1 = no matches
+  # (fine), ≥2 = failed scan = loud error, never a partial window.
+  GO_WINDOW=$(grep -A3 -E '(EventsOn\(|\.Subscribe\()' "${GO_FILES[@]}") || {
+    rc=$?
+    if [[ $rc -ge 2 ]]; then
+      echo "${GATE} ERROR: Go subscriber scan failed (grep exit ${rc}) — refusing to judge topics against a partial window." >&2
+      exit 1
+    fi
+  }
 fi
 
 # --- Precompute pass 3 (passthroughTopics, served mode): the body of
@@ -166,6 +199,27 @@ PASSTHROUGH_BLOCK=""
 if [[ -f "$PASSTHROUGH_FILE" ]]; then
   PASSTHROUGH_BLOCK=$(awk '/var passthroughTopics = \[\]string\{/{flag=1} flag{print} /^\}/{if(flag)exit}' "$PASSTHROUGH_FILE")
 fi
+
+# --- Precompute pass 4 (allowlist): comment-stripped DATA lines, read
+# once. (Same rationale as the per-topic passes below going in-process.)
+ALLOWLIST_DATA=""
+if [[ -f "$ALLOWLIST" ]]; then
+  ALLOWLIST_DATA=$(grep -v '^[[:space:]]*#' "$ALLOWLIST") || {
+    rc=$?
+    if [[ $rc -ge 2 ]]; then
+      echo "${GATE} ERROR: allowlist read failed (grep exit ${rc})." >&2
+      exit 1
+    fi
+  }
+fi
+
+# --- Per-topic checks are IN-PROCESS bash matches ([[ == *…* ]] /
+# [[ =~ ]]) against the precomputed windows, not printf|grep pipelines.
+# The pipeline form spawned ~4 subprocesses per topic (~160 per run,
+# × 16 gates running in parallel under the cwd-independence meta-test);
+# any spawn or pipe failure under CI load reads as "no match" and flips
+# a live topic to DEAD. An in-process substring check cannot fail — it
+# can only be wrong, which is what the planted-violation proof pins.
 
 fail=0
 checked=0
@@ -189,25 +243,26 @@ for def in "${DEFS[@]}"; do
   # excluding __tests__; the escape hatch has to be as literal as the
   # thing it excuses.
   allow_hit=0
-  if [[ -f "$ALLOWLIST" ]] && grep -v '^[[:space:]]*#' "$ALLOWLIST" 2>/dev/null \
-      | grep -qF "\"${value}\""; then
+  if [[ -n "$ALLOWLIST_DATA" && "$ALLOWLIST_DATA" == *"\"${value}\""* ]]; then
     allow_hit=1
   fi
 
   # --- pass 1: frontend subscriber. The literal (single- or
   # double-quoted) appears within the precomputed subscribe-call window.
   frontend_hit=0
-  if [[ -n "$FRONTEND_WINDOW" ]] && { printf '%s\n' "$FRONTEND_WINDOW" | grep -qF "\"${value}\"" \
-      || printf '%s\n' "$FRONTEND_WINDOW" | grep -qF "'${value}'"; }; then
+  if [[ "$FRONTEND_WINDOW" == *"\"${value}\""* || "$FRONTEND_WINDOW" == *"'${value}'"* ]]; then
     frontend_hit=1
   fi
 
   # --- pass 2: Go subscriber. Either the literal string, or the const's
-  # own identifier (qualified or bare), appears within the precomputed
-  # EventsOn(/.Subscribe( call window.
+  # own identifier (qualified or bare) followed by a non-identifier
+  # character, appears within the precomputed EventsOn(/.Subscribe( call
+  # window. ([^A-Za-z0-9_]|$) replaces the old grep \> word boundary —
+  # bash =~ uses the platform's POSIX ERE, where \> is a non-portable
+  # GNU extension.
   go_hit=0
-  if [[ -n "$GO_WINDOW" ]] && { printf '%s\n' "$GO_WINDOW" | grep -qE "['\"]${value}['\"]" \
-      || printf '%s\n' "$GO_WINDOW" | grep -qE "[.]?${ident}\>"; }; then
+  if [[ "$GO_WINDOW" == *"\"${value}\""* || "$GO_WINDOW" == *"'${value}'"* \
+      || "$GO_WINDOW" =~ ${ident}([^A-Za-z0-9_]|$) ]]; then
     go_hit=1
   fi
 
@@ -218,7 +273,7 @@ for def in "${DEFS[@]}"; do
   # topics that legitimately use it (llm:stream-chunk, permission-pending,
   # etc), not to launder self-update's desktop-only topics through.
   passthrough_hit=0
-  if [[ -n "$PASSTHROUGH_BLOCK" ]] && printf '%s\n' "$PASSTHROUGH_BLOCK" | grep -qE "[.]?${ident}\>"; then
+  if [[ -n "$PASSTHROUGH_BLOCK" ]] && [[ "$PASSTHROUGH_BLOCK" =~ ${ident}([^A-Za-z0-9_]|$) ]]; then
     passthrough_hit=1
   fi
 

@@ -36,6 +36,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/kameas-ai/kenaz-harness/core/runposture"
 )
 
 // Default timing + capacity constants. Spec §4.2 FR-011 + tasks.md WP02.
@@ -826,6 +828,21 @@ func (r *Registry) RequestInteractive(
 	fam := surface.Family()
 	if fam == "" {
 		return Resolution{Decision: DecisionDeny, Reason: "invalid surface"}, ErrInvalidSurface
+	}
+
+	// model-scheduled-jobs-01PMSJ01 WP05 — the unattended-run posture
+	// (spec.md §2 H-3). An unattended run has nobody on the other end of
+	// an interactive prompt; without this check, a bash or credential
+	// prompt would enqueue, wait the full 5-minute PromptTimeout, and
+	// only then deny (core/policy/cedar/prompt.go's own PromptTimeout
+	// constant) — a scheduled run silently stalling for five minutes and
+	// leaving nothing actionable behind. Deny immediately instead, and
+	// win over every other posture: an unattended run must not read as
+	// "autonomous tier, therefore auto-allow" just because the two
+	// conditions happen to coincide — B-3's fail-safe direction is that
+	// a resolution failure or an absent human is never a permit.
+	if runposture.IsUnattended(ctx) {
+		return Resolution{Decision: DecisionDeny, Reason: "unattended run — no interactive prompt channel"}, nil
 	}
 
 	// WP05 — autonomy posture fast paths.

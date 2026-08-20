@@ -119,6 +119,26 @@ func TestResolveProfile_LLEConfigured(t *testing.T) {
 	}
 }
 
+// TestResolveProfile_ProdConfigured is the prod twin of the LLE guard
+// above: prod builds ship through the same pipelines that never plumbed
+// ldflags, so the prod profile must also be configured from source
+// defaults. KENAZ_HARNESS_ENV unset (the in-VM default before kenaz#164
+// carryover, and the safe fallback) must yield a Configured() profile.
+func TestResolveProfile_ProdConfigured(t *testing.T) {
+	for _, env := range []string{EnvProd, ""} {
+		t.Run("env="+env, func(t *testing.T) {
+			t.Setenv("KENAZ_HARNESS_ENV", env)
+			p := ResolveProfile()
+			if !p.Configured() {
+				t.Errorf("prod profile not Configured(): NativeClientID=%q APIAudience=%q — the fleet emitter cannot start", p.NativeClientID, p.APIAudience)
+			}
+			if p.APIAudience == "" {
+				t.Error("prod APIAudience is empty — token exchange for the fleet API would fail")
+			}
+		})
+	}
+}
+
 func TestEnvProfile_Configured(t *testing.T) {
 	empty := EnvProfile{}
 	if empty.Configured() {

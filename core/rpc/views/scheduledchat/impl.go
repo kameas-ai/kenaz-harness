@@ -23,6 +23,12 @@ var ErrNotFound = errors.New("scheduledchat: not found")
 // ErrCedarDenied is returned when a cedar gate explicitly denies an operation.
 var ErrCedarDenied = errors.New("scheduledchat: denied by cedar policy")
 
+// ErrDispatcherUnavailable is returned when RunNow is called with no
+// Dispatcher wired. A nil dispatcher is a configuration error, not a
+// no-op: no history row is appended, so nothing records a fabricated
+// "completed" outcome for a run that did not happen (FR-002).
+var ErrDispatcherUnavailable = errors.New("scheduledchat: dispatcher unavailable")
+
 // ErrInvalidInput is returned when a required field is missing.
 var ErrInvalidInput = errors.New("scheduledchat: invalid input")
 
@@ -32,10 +38,18 @@ type Config struct {
 	// Update / Delete / RunNow to return ErrStoreUnavailable; List
 	// returns an empty slice.
 	Store scheduler.ScheduledChatStore
-	// Dispatcher fires actual chat runs. nil causes RunNow to return a
-	// no-op summary (noop dispatcher). Cron-triggered dispatch is wired
-	// at the scheduler level; this field is only for RunNow.
+	// Dispatcher fires actual chat runs. nil causes RunNow to return
+	// ErrDispatcherUnavailable and append no history row — a run that did
+	// not happen must not be recorded as one that did (FR-002). As of
+	// WP04/WP05, this field is also assigned into the chat-run cron
+	// engine so scheduled (not just RunNow) firings share one dispatcher.
 	Dispatcher scheduler.ChatRunDispatcher
+	// Engine is the chat-run cron engine (core/scheduler.ChatCronEngine in
+	// production). nil leaves scheduled_chat_runs rows persisted but never
+	// armed on a ticking engine until the next process restart's boot
+	// reload — Create / Update / Delete / SetEnabled become
+	// store-only operations. Mission model-scheduled-jobs-01PMSJ01 WP03.
+	Engine Registrar
 	// Cedar is the policy gate. nil short-circuits to allow (default-allow).
 	Cedar cedar.Gate
 }
@@ -86,6 +100,7 @@ func (a *API) Create(ctx context.Context, in CreateInput) (ChatRunEntry, error) 
 	if err := a.cfg.Store.Create(ctx, rec); err != nil {
 		return ChatRunEntry{}, fmt.Errorf("scheduledchat: create: %w", err)
 	}
+	a.syncEngine(ctx, id)
 	return chatRunEntryFromRecord(rec), nil
 }
 
@@ -133,6 +148,7 @@ func (a *API) Update(ctx context.Context, in UpdateInput) (ChatRunEntry, error) 
 	if err != nil {
 		return ChatRunEntry{}, fmt.Errorf("scheduledchat: get after update: %w", err)
 	}
+	a.syncEngine(ctx, in.ID)
 	return chatRunEntryFromRecord(updated), nil
 }
 
@@ -144,7 +160,16 @@ func (a *API) Delete(ctx context.Context, id string) error {
 	if _, gerr := cedar.GateScheduledChatDelete(ctx, a.cfg.Cedar, id); gerr != nil {
 		return fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
 	}
-	return a.cfg.Store.Delete(ctx, id)
+	if err := a.cfg.Store.Delete(ctx, id); err != nil {
+		return err
+	}
+	if a.cfg.Engine != nil {
+		if err := a.cfg.Engine.Unregister(ctx, id); err != nil {
+			slog.WarnContext(ctx, "scheduledchat: cron unregister failed after delete",
+				"chat_run_id", id, "error", err.Error())
+		}
+	}
+	return nil
 }
 
 // List implements ScheduledChatAPI.
@@ -199,7 +224,7 @@ func (a *API) RunNow(ctx context.Context, id string) (RunSummary, error) {
 
 	d := a.cfg.Dispatcher
 	if d == nil {
-		d = scheduler.NoopChatRunDispatcher{}
+		return RunSummary{}, ErrDispatcherUnavailable
 	}
 
 	job := scheduler.Job{
@@ -265,7 +290,26 @@ func (a *API) SetEnabled(ctx context.Context, id string, enabled bool) error {
 		}
 		return fmt.Errorf("scheduledchat: set-enabled: %w", err)
 	}
+	a.syncEngine(ctx, id)
 	return nil
+}
+
+// syncEngine re-arms or disarms id's cron entry against the row currently
+// in the store. A nil Engine (test chassis, or no DB) is a no-op — the
+// row is still persisted; it will not fire until the next process
+// restart's boot reload picks it up. A Sync error is logged, not
+// propagated: the store write already succeeded, and a malformed cron
+// expression must not roll back an otherwise-valid Create/Update/
+// SetEnabled (it is surfaced via this log line, and the row can be fixed
+// with another Update).
+func (a *API) syncEngine(ctx context.Context, id string) {
+	if a.cfg.Engine == nil {
+		return
+	}
+	if err := a.cfg.Engine.Sync(ctx, id); err != nil {
+		slog.WarnContext(ctx, "scheduledchat: cron sync failed",
+			"chat_run_id", id, "error", err.Error())
+	}
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────
