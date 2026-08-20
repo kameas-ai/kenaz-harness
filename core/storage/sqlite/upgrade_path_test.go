@@ -57,6 +57,17 @@ var expectedChangedTables = map[string][]string{
 		// sessions/0334-move-fidelity-columns adds sessions.move_history_mode.
 		"sessions",
 	},
+	"v0.65.0": {
+		// event-log/0106-events-fts-sync (audit-that-tells-the-truth-
+		// 01PMZA10 UNIT-8) UPDATEs the single retention_config row,
+		// correcting event-log/0103's shipped seed
+		// ('{"kind":"keep_all"}', not a valid RetentionStrategy value)
+		// to '{"kind":"keep_forever"}'. A deliberate DATA change, not a
+		// shape change — TestReadRetentionPolicy_AfterMigration106_ReadsTheFixedSeed
+		// (core/event/log/retention_config_test.go) asserts the
+		// corrected value is actually readable afterwards.
+		"retention_config",
+	},
 }
 
 // fixedProbeTime is used for the item-4 session INSERT probe so the

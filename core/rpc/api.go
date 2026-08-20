@@ -831,6 +831,15 @@ type API struct {
 	// fleet archiver's TailReader. Populated by ObserveTailEvent
 	// which is called from AuditObserver when auditArchiver is wired.
 	auditTailBuf *auditTailBuffer
+
+	// localAuditRetentionScheduler is the LOCAL audit-retention sweep
+	// background loop (audit-that-tells-the-truth-01PMZA10 UNIT-8).
+	// Unlike auditSweeper above (the fleet ACK sweeper — constructed
+	// ONLY when a fleet client is present and non-nop), this is
+	// constructed and started on EVERY install with a real DataDir,
+	// unconditionally (spec D-7: "local retention is not fleet-gated").
+	// Held for Start (in SetContext) and Stop (in Shutdown).
+	localAuditRetentionScheduler *eventlog.LocalRetentionScheduler
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
@@ -931,6 +940,13 @@ func (a *API) SetContext(ctx context.Context) {
 	if a.auditSweeper != nil {
 		a.auditSweeper.Start(ctx)
 		logging.L().Info("fleet.audit_sweeper.started")
+	}
+	// audit-that-tells-the-truth-01PMZA10 UNIT-8: the local retention
+	// sweeper, unconditionally on every install with a real backend —
+	// no fleet-client gate (spec D-7), unlike auditSweeper above.
+	if a.localAuditRetentionScheduler != nil {
+		a.localAuditRetentionScheduler.Start(ctx)
+		logging.L().Info("event_log.local_retention_scheduler.started")
 	}
 }
 
@@ -1172,6 +1188,10 @@ func (a *API) Shutdown() {
 	}
 	if a.auditSweeper != nil {
 		a.auditSweeper.Stop()
+	}
+	// audit-that-tells-the-truth-01PMZA10 UNIT-8.
+	if a.localAuditRetentionScheduler != nil {
+		a.localAuditRetentionScheduler.Stop()
 	}
 }
 
@@ -1539,11 +1559,24 @@ func New(c *core.Core, opts ...Option) *API {
 	// event-log's migrations into this same db's registry (sqlite.go),
 	// so by the time db is non-nil here its schema is already applied.
 	var auditStore *eventlog.Store
+	var auditBackend *eventlog.SQLBackend
 	if db != nil {
-		auditStore = eventlog.NewStore(eventlog.NewSQLBackend(db))
+		auditBackend = eventlog.NewSQLBackend(db)
+		auditStore = eventlog.NewStore(auditBackend)
 	}
 	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker), audit.WithGate(auditGate), audit.WithStore(auditStore))
 	a.auditAPI = a.auditImpl
+
+	// Local audit-retention sweeper (audit-that-tells-the-truth-01PMZA10
+	// UNIT-8). Constructed unconditionally whenever a real backend
+	// exists — spec D-7, "local retention is not fleet-gated": this is
+	// deliberately NOT inside the fleet-client-present branch below that
+	// gates auditArchiver/auditSweeper. Started in SetContext, stopped
+	// in Shutdown, same lifecycle pattern as every other background
+	// loop in this file.
+	if auditBackend != nil {
+		a.localAuditRetentionScheduler = eventlog.NewLocalRetentionScheduler(auditBackend, db, dataDir)
+	}
 
 	// mission 01NLOGS01 WP01: construct the bounded in-memory log store and
 	// TEE the current active slog handler through it. We use logging.Handler()
@@ -1648,9 +1681,19 @@ func New(c *core.Core, opts ...Option) *API {
 	// AuditSettings.RetentionEnforced (audit-that-tells-the-truth-01PMZA10
 	// UNIT-4, spec D-8): false until UNIT-8 lands a real sweep. This is
 	// the wiring site that makes the value honest — GetAuditSettings
-	// itself never hardcodes it. UNIT-8 changes this one call to report
-	// whatever actually schedules and runs the sweep; no frontend edit.
-	settingsImpl.SetAuditRetentionEnforced(false)
+	// itself never hardcodes it. UNIT-8 is this exact call: it now
+	// reports true whenever localAuditRetentionScheduler was actually
+	// constructed (a real backend exists) — matching AC-006/D-8 exactly,
+	// with zero frontend edit.
+	settingsImpl.SetAuditRetentionEnforced(a.localAuditRetentionScheduler != nil)
+	if auditBackend != nil {
+		// UNIT-8, spec §5.6 item 3: retention_config, not the settings
+		// blob, is now the persisted policy's real home. Wiring this
+		// makes Settings_{Get,Set}AuditSettings and
+		// localAuditRetentionScheduler read/write the exact same row —
+		// AC-013's "the dial reaches the deleter".
+		settingsImpl.SetAuditRetentionDB(db)
+	}
 
 	// Wire the Settings-backed MemoryNarrativeEnabled dial into
 	// core/memory/narrative (agentgraph-total-convergence-01PMGX01 WP17,

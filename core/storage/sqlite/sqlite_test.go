@@ -229,13 +229,17 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// 1 trust_anchors_init (bundle/700, bundle-download-and-verify-01PMZ909 UNIT-3) +
 	// 6 event-log/0100-0105 (audit-that-tells-the-truth-01PMZA10 UNIT-2:
 	//   events, event_chain_heads, redaction_rules, retention_config,
-	//   schema_version, saved_audit_queries) = 51.
+	//   schema_version, saved_audit_queries) +
+	// 1 event-log/0106-events-fts-sync (audit-that-tells-the-truth-
+	//   01PMZA10 UNIT-8: events_fts AFTER UPDATE/DELETE sync triggers,
+	//   plus the one-time retention_config seed correction) = 52.
 	//
 	// ZA10's branch asserted 49: it was cut from a base whose count was 43,
-	// before 0336 and bundle/700 landed, so 43+6. The merged tree has all
-	// three sources, hence 51.
-	if count != 51 {
-		t.Errorf("ledger count = %d, want 51", count)
+	// before 0336 and bundle/700 landed, so 43+6. The merged tree had all
+	// three sources at 51 (v0.65.0); UNIT-8 adds one more migration on
+	// top, hence 52.
+	if count != 52 {
+		t.Errorf("ledger count = %d, want 52", count)
 	}
 }
 
