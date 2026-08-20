@@ -30,6 +30,7 @@
 package ci_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -122,6 +123,8 @@ var cwdSensitiveGates = []string{
 	"check-destructive-migration-coverage.sh",
 	"check-tool-containment-unconditional.sh",
 	"check-upgrade-snapshot-present.sh",
+	"check-entrypoint-coverage.sh",
+	"check-installer-payload.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -741,38 +744,109 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				"\t}\n" +
 				"}\n",
 		},
+		{
+			// entry-points-and-crash-reporting-01PMZD13 UNIT-2. A built,
+			// signed, zipped .exe with no installer payload line
+			// reproduces the kenaz-updater.exe defect: shipped in the zip,
+			// silently absent from the NSIS installer.
+			name:       "installer-payload/unlisted-build-target",
+			wantOutput: "zzgateprobe.exe",
+			gate:       "check-installer-payload.sh",
+			file:       ".github/workflows/release.yml",
+			append:     "\n      # zzGateProbe: -o \"build/bin/zzgateprobe.exe\"\n",
+		},
+		{
+			// entry-points-and-crash-reporting-01PMZD13 UNIT-1. Deviates
+			// from the mission's spec §5 gate table, which prescribes a
+			// PLAIN `package main` file with no build tag as the planted
+			// violation. That content is NOT a sound violation: `./cmd/...`
+			// (added to pr.yml by this same unit) prefix-covers any bare
+			// `cmd/<name>`, so a tagless probe is genuinely, correctly
+			// covered and the gate must NOT fail on it — confirmed by
+			// running exactly that probe first, which left the gate green.
+			// The real defect class this gate exists to catch (spec §1.1)
+			// is a build-TAG-gated entry point — cmd/harness-served's own
+			// `serve` tag — that no pr.yml step passes -tags for, which a
+			// same-build-tag probe reproduces soundly: `zzgateprobe` is
+			// gated behind a tag no pr.yml step ever requests, so it is
+			// genuinely uncovered under real Go build-constraint semantics.
+			name:       "entrypoint-coverage/tagged-package-with-no-covering-step",
+			wantOutput: "cmd/zzgateprobe",
+			gate:       "check-entrypoint-coverage.sh",
+			file:       "cmd/zzgateprobe/main.go",
+			content:    "//go:build zzgateprobe\n\npackage main\n\nfunc main() {}\n",
+		},
+		{
+			// entry-points-and-crash-reporting-01PMZD13 UNIT-4.
+			// check-seam-implementers.sh's FIRST EVER planted-violation
+			// proof (spec §5). ZzGateProbeUnsatisfiableSeam's method takes
+			// a brand-new unexported param type defined nowhere else in
+			// the tree, so no real type — production or test — can
+			// possibly implement it. The gate must name the interface,
+			// not just exit non-zero.
+			name:       "seam-implementers/unsatisfiable-interface",
+			wantOutput: "ZzGateProbeUnsatisfiableSeam",
+			gate:       "check-seam-implementers.sh",
+			file:       "core/agentgraph/seams.go",
+			append: "\n" +
+				"// zzGateProbeUniqueParam and ZzGateProbeUnsatisfiableSeam are planted by\n" +
+				"// gates_can_fail_test.go's check-seam-implementers.sh proof and removed\n" +
+				"// after the test runs.\n" +
+				"type zzGateProbeUniqueParam struct{}\n\n" +
+				"type ZzGateProbeUnsatisfiableSeam interface {\n" +
+				"\tZzGateProbeMethod(zzGateProbeUniqueParam) error\n" +
+				"}\n",
+		},
+		{
+			// entry-points-and-crash-reporting-01PMZD13 UNIT-5.
+			// check-csp.sh's FIRST EVER planted-violation proof (spec §5).
+			// This gate reads a BUILT artifact (frontend/dist/index.html),
+			// which the test harness does not produce, so the case plants
+			// a throwaway fixture HTML file with a weakened CSP and points
+			// the gate at it via CSP_CHECK_DIST_HTML / CSP_CHECK_MODE —
+			// env overrides added in this same unit, mirroring the
+			// UPGRADE_SNAPSHOTS_BASE_REF precedent, so the SAME comparison
+			// the gate runs against a real build runs here too.
+			name:       "csp/unsafe-eval-in-script-src",
+			wantOutput: "script-src contains unsafe-eval",
+			gate:       "check-csp.sh",
+			file:       "scripts/ci/testdata/zz_gate_probe_csp/index.html",
+			content: "<!doctype html>\n<html><head>\n" +
+				"<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; " +
+				"connect-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; " +
+				"img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'none'; " +
+				"frame-ancestors 'none'; object-src 'none'\">\n</head><body></body></html>\n",
+			env: map[string]string{
+				"CSP_CHECK_DIST_HTML": "scripts/ci/testdata/zz_gate_probe_csp/index.html",
+				"CSP_CHECK_MODE":      "desktop",
+			},
+		},
 	}
 
 	for _, tc := range cases {
 		tc := tc
 		// Not parallel: these mutate the working tree.
 		t.Run(tc.name, func(t *testing.T) {
-			// A case with no `file` plants nothing in the tree. That is
-			// not a weaker proof — it is the only shape an ABSENCE gate
-			// can take. check-upgrade-snapshot-present.sh fails when the
-			// snapshot chain is BEHIND the newest release tag, and you
-			// cannot create that condition by adding a file; you create
-			// it by moving the tag forward, which is what that case's
-			// env override does. Every such case must still name a
-			// wantOutput, so the proof stays about the specific
-			// violation rather than about a non-zero exit.
-			violation := tc.file
+			var cleanup func()
 			if tc.file != "" {
 				full := filepath.Join(root, tc.file)
-				cleanup := plant(t, full, tc.content, tc.append)
+				cleanup = plant(t, full, tc.content, tc.append)
 				defer cleanup()
-			} else {
-				if tc.wantOutput == "" {
-					t.Fatalf("case %q plants no file and names no wantOutput — "+
-						"a non-zero exit alone would be satisfied by a permanently broken gate.", tc.name)
-				}
-				violation = "the environment (" + tc.name + ")"
+			}
+
+			violationDesc := tc.file
+			if violationDesc == "" {
+				// An ABSENCE-shaped violation (e.g. a missing snapshot
+				// directory) has no file to name — describe it by env
+				// instead so the failure message still says what was
+				// actually varied.
+				violationDesc = fmt.Sprintf("env %v", tc.env)
 			}
 
 			code, out := runGateEnv(t, tc.gate, root, tc.env)
 			if code == 0 {
-				t.Fatalf("%s exited 0 with a planted violation in %s — the gate cannot fail.\noutput:\n%s",
-					tc.gate, violation, out)
+				t.Fatalf("%s exited 0 with a planted violation (%s) — the gate cannot fail.\noutput:\n%s",
+					tc.gate, violationDesc, out)
 			}
 			// A non-zero exit alone is a weak proof: a gate that is
 			// BROKEN (fails on every run, planted violation or not)
@@ -783,9 +857,9 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			// produce, require it, so the proof is about THIS violation
 			// rather than about the gate exiting non-zero for any reason.
 			if tc.wantOutput != "" && !strings.Contains(out, tc.wantOutput) {
-				t.Fatalf("%s failed with a planted violation in %s, but its output does not mention %q — "+
+				t.Fatalf("%s failed with a planted violation (%s), but its output does not mention %q — "+
 					"it may be failing for an unrelated reason.\noutput:\n%s",
-					tc.gate, violation, tc.wantOutput, out)
+					tc.gate, violationDesc, tc.wantOutput, out)
 			}
 		})
 	}

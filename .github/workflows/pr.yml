@@ -68,7 +68,12 @@ jobs:
           touch frontend/dist/.gitkeep
 
       - name: go vet
-        run: go vet ./core/...
+        # Scoped to ./core/... ./cmd/... . rather than ./core/... alone —
+        # entry-points-and-crash-reporting-01PMZD13 UNIT-1. Three of the
+        # four cmd/ packages (kenaz-updater, mcpsubcmd, harness-served) and
+        # the module root were vetted by nothing; only cmd/harness-vm was
+        # covered, via the test-go job's ./cmd/harness-vm/... pattern below.
+        run: go vet ./core/... ./cmd/... .
 
       - name: golangci-lint
         # v8 supports golangci-lint v2.x, which is built with go1.25 and can
@@ -89,6 +94,35 @@ jobs:
           args: --timeout=5m
           working-directory: .
           only-new-issues: true
+
+      - name: ensure cmd/harness-served embed target exists
+        # cmd/harness-served/main.go uses //go:embed all:frontend/dist-served,
+        # resolved PACKAGE-relative (unlike the root's frontend/dist, which is
+        # module-relative) — see the file's own build comment. Nothing in
+        # pr.yml or release.yml ever built the serve tag before this
+        # (entry-points-and-crash-reporting-01PMZD13 UNIT-1), so it has never
+        # been proven to compile in CI. A .gitkeep-only directory satisfies
+        # the `all:` embed pattern (confirmed by running it, not assumed).
+        run: |
+          mkdir -p cmd/harness-served/frontend/dist-served
+          touch cmd/harness-served/frontend/dist-served/.gitkeep
+
+      - name: go build (serve tag)
+        # Proves cmd/harness-served, core/rpc/wf_adapters_notifier_serve.go,
+        # core/rpc/bindings_wails_serve.go, core/rpc/emitter_serve.go,
+        # core/rpc/views/shell/impl_new_serve.go and core/rpc/csp_serve.go
+        # all still compile. Before this step existed, `-tags serve` appeared
+        # in no workflow and this whole build tag was silently uncompiled.
+        run: go build -tags serve ./...
+
+      - name: entrypoint-coverage guard
+        # entry-points-and-crash-reporting-01PMZD13 UNIT-1. Every main
+        # package under cmd/, plus the module root, must be covered by a
+        # pr.yml Go vet/test pattern above — the recurrence prevention for
+        # this mission: cmd/kenaz-updater and cmd/mcpsubcmd had 573 lines of
+        # passing tests CI never ran, and this build-serve step above had no
+        # workflow line at all until this unit.
+        run: bash scripts/ci/check-entrypoint-coverage.sh
 
       - name: codegen idempotent
         run: bash scripts/ci/check-codegen.sh
@@ -411,7 +445,18 @@ jobs:
         # audit/privacy + auth tests; ./core/... alone never exercised them
         # (Phase A follow-up B1). The audit lifecycle test is deterministic
         # under -race (accept-sequence ordering in the fake sock).
-        run: go test ./core/... ./cmd/harness-vm/... -race -count=1 -short
+        #
+        # Widened from ./cmd/harness-vm/... to ./cmd/... . —
+        # entry-points-and-crash-reporting-01PMZD13 UNIT-1. cmd/kenaz-updater
+        # and cmd/mcpsubcmd carried 573 lines of passing tests CI never ran
+        # (16 tests, verified green locally before this change). The module
+        # root (`.`) carries main_test.go's TestCSPMiddlewareSetsStrictHeaders
+        # — privacy CI invariant #1 on the Wails asset-server middleware
+        # itself, distinct from check-csp.sh's check of the built HTML — and
+        # was covered by nothing until now. cmd/harness-served has no test
+        # files and no effect on this pattern (it also requires -tags serve,
+        # exercised separately by the lint-go job's serve-tag build step).
+        run: go test ./core/... ./cmd/... . -race -count=1 -short
 
       - name: gate meta-tests
         # scripts/ci/gates_can_fail_test.go plants a violation per CI gate
@@ -539,9 +584,20 @@ jobs:
       - name: build frontend (served, for bundle-size guard)
         run: npm run build:served
 
-      - name: csp guard
+      - name: csp guard (desktop)
         working-directory: ${{ github.workspace }}
-        run: bash scripts/ci/check-csp.sh
+        run: bash scripts/ci/check-csp.sh frontend/dist/index.html desktop
+
+      # entry-points-and-crash-reporting-01PMZD13 UNIT-5. Before this, the
+      # served-mode SPA (built two steps above) was never CSP-checked at
+      # all — this gate only ever inspected the desktop bundle. Filename
+      # is served.html, not index.html (frontend/vite.config.ts's outDir/
+      # input for BUILD_TARGET=served, confirmed by release.yml:879's own
+      # `test -f dist-served/served.html`) and the expected connect-src is
+      # 'self', not 'none' — the served browser must reach /rpc and /ws.
+      - name: csp guard (served)
+        working-directory: ${{ github.workspace }}
+        run: bash scripts/ci/check-csp.sh frontend/dist-served/served.html served
 
       # Non-blocking, and deliberately so — but NOT because the number is
       # unknown. As measured by this job on this runner pool against main at

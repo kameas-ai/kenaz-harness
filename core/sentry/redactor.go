@@ -3,6 +3,7 @@ package sentry
 import (
 	"fmt"
 	"os"
+	"reflect"
 	"regexp"
 	"strings"
 )
@@ -117,24 +118,151 @@ func ShouldDropSlogKey(key string) bool {
 	return strings.HasPrefix(key, "private.")
 }
 
-// RedactMap applies RedactString to all string values in m, dropping keys
-// that match ShouldDropSlogKey. Non-string values are passed through as-is.
-// The original map is not modified; a new map is returned.
+// MaxRedactDepth bounds the recursive walk in redactValue, mirroring
+// core/sessions/export/redact.go's MaxRedactDepth precedent (the export
+// redactor v0.63.1 fixed for the same reason). A crash-report payload
+// (event.Extra, a context map, frame.Vars) is data this app produced;
+// nothing legitimate nests this deep, and an unbounded walk over a
+// pathological or adversarial payload is a stack blowup in a function
+// whose entire job is to run on content about to leave the process. At
+// the bound the value is replaced with a marker rather than passed
+// through unexamined — a redactor that gives up must fail CLOSED.
+const MaxRedactDepth = 24
+
+// redactValue recursively redacts an arbitrary value: strings go through
+// RedactStringDeep, maps and slices recurse (dropping ShouldDropSlogKey
+// keys at EVERY level, not just the top), pointers/interfaces are
+// dereferenced, depth is bounded, cycles are guarded per-path (seen is
+// cleared on return from a subtree, so a legitimately repeated SIBLING
+// value is not mistaken for a cycle), and the walk fails CLOSED at the
+// depth bound. Every other leaf (numbers, etc.) is formatted and scanned
+// like a string, because that is what any consumer of the crash report
+// will eventually see rendered — matching
+// core/sessions/export/redact.go's redactStructured, whose SHAPE this
+// reuses (not its rule set: that function's "a key can NAME a secret"
+// forcing behaviour is specific to free-form tool-call arguments and
+// does not apply to a slog-attribute-shaped crash context).
+func redactValue(v any, depth int, seen map[uintptr]struct{}) any {
+	if v == nil {
+		return nil
+	}
+	if depth > MaxRedactDepth {
+		return "[REDACTED:depth-limit]"
+	}
+
+	switch tv := v.(type) {
+	case string:
+		return RedactStringDeep(tv)
+	case bool:
+		return tv
+	case map[string]any:
+		if len(tv) > 0 {
+			p := reflect.ValueOf(tv).Pointer()
+			if _, cycle := seen[p]; cycle {
+				return "[REDACTED:cycle]"
+			}
+			seen[p] = struct{}{}
+			defer delete(seen, p)
+		}
+		out := make(map[string]any, len(tv))
+		for k, val := range tv {
+			if ShouldDropSlogKey(k) {
+				continue
+			}
+			out[k] = redactValue(val, depth+1, seen)
+		}
+		return out
+	case []any:
+		if len(tv) > 0 {
+			p := reflect.ValueOf(tv).Pointer()
+			if _, cycle := seen[p]; cycle {
+				return "[REDACTED:cycle]"
+			}
+			seen[p] = struct{}{}
+			defer delete(seen, p)
+		}
+		out := make([]any, len(tv))
+		for i, val := range tv {
+			out[i] = redactValue(val, depth+1, seen)
+		}
+		return out
+	}
+
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Pointer, reflect.Interface:
+		if rv.IsNil() {
+			return nil
+		}
+		if rv.Kind() == reflect.Pointer {
+			if _, cycle := seen[rv.Pointer()]; cycle {
+				return "[REDACTED:cycle]"
+			}
+			seen[rv.Pointer()] = struct{}{}
+			defer delete(seen, rv.Pointer())
+		}
+		return redactValue(rv.Elem().Interface(), depth+1, seen)
+
+	case reflect.Map:
+		if _, cycle := seen[rv.Pointer()]; cycle {
+			return "[REDACTED:cycle]"
+		}
+		seen[rv.Pointer()] = struct{}{}
+		defer delete(seen, rv.Pointer())
+		out := make(map[string]any, rv.Len())
+		iter := rv.MapRange()
+		for iter.Next() {
+			k := fmt.Sprintf("%v", iter.Key().Interface())
+			if ShouldDropSlogKey(k) {
+				continue
+			}
+			out[k] = redactValue(iter.Value().Interface(), depth+1, seen)
+		}
+		return out
+
+	case reflect.Slice, reflect.Array:
+		if rv.Kind() == reflect.Slice {
+			if rv.IsNil() {
+				return nil
+			}
+			if _, cycle := seen[rv.Pointer()]; cycle {
+				return "[REDACTED:cycle]"
+			}
+			seen[rv.Pointer()] = struct{}{}
+			defer delete(seen, rv.Pointer())
+		}
+		out := make([]any, rv.Len())
+		for i := 0; i < rv.Len(); i++ {
+			out[i] = redactValue(rv.Index(i).Interface(), depth+1, seen)
+		}
+		return out
+	}
+
+	// Every other leaf: a number, a json.Number, a time, a Stringer.
+	// Format it and scan the text; if nothing matched, return the
+	// original value unchanged so its Go type is preserved.
+	text := fmt.Sprintf("%v", v)
+	if redacted := RedactString(text); redacted != text {
+		return redacted
+	}
+	return v
+}
+
+// RedactMap applies redaction recursively to every value in m — nested
+// maps and slices included, at every depth, not just the top level — and
+// drops keys that match ShouldDropSlogKey at every level too. The
+// original map is not modified; a new map is returned.
 func RedactMap(m map[string]any) map[string]any {
 	if len(m) == 0 {
 		return m
 	}
 	out := make(map[string]any, len(m))
+	seen := map[uintptr]struct{}{}
 	for k, v := range m {
 		if ShouldDropSlogKey(k) {
 			continue
 		}
-		switch val := v.(type) {
-		case string:
-			out[k] = RedactStringDeep(val)
-		default:
-			out[k] = v
-		}
+		out[k] = redactValue(v, 1, seen)
 	}
 	return out
 }

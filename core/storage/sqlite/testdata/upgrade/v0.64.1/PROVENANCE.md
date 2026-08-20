@@ -82,3 +82,24 @@ See the commit for the `TestUpgradePath/v0.64.1` output. The subtest must
 appear as its own `RUN` line and open a real database — a green suite is not
 evidence that a new snapshot is covered, which is the whole reason this
 chain exists.
+
+## Independent corroboration (2026-08-20)
+
+`entry-points-and-crash-reporting-01PMZD13` UNIT-3 generated this snapshot
+**independently**, in a separate worktree, unaware this one existed (it had
+been told the guard was already landed and correctly declined to trust an
+unverifiable citation — `docs/` is gitignored and absent from worktrees).
+
+Its `dump.sql` is **byte-identical** to this one (`cmp` exit 0 at merge).
+Two separate `upgrade-snapshot.sh v0.64.1` runs, from different base
+commits, producing the same bytes is the strongest available evidence that
+the replay is deterministic and that this file records the real v0.64.1
+schema rather than an artefact of one machine's state.
+
+That mission also implemented the absence check by extending
+`check-upgrade-snapshots-locked.sh`. The standalone
+`check-upgrade-snapshot-present.sh` was kept instead — one gate, one rule,
+matching the repo's convention, and because the lock gate's own header
+states it "structurally cannot see absence", which folding absence into it
+would falsify. ZD13's duplicate was dropped at merge; nothing else from
+that mission was.

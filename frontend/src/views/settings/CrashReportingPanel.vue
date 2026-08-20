@@ -7,7 +7,7 @@
  *
  * (sentry-error-monitoring-01KX5R8G WP05)
  */
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 
 const client = useHarnessClient();
@@ -102,6 +102,43 @@ async function testDsn() {
     testingDsn.value = false;
   }
 }
+
+// entry-points-and-crash-reporting-01PMZD13 UNIT-7, AC-17. The Test button
+// above issues client.sentry.testDsn(), which resolves to
+// core/sentry/test_dsn.go's client.Head(ingestURL) — plain Go, no browser,
+// no CSP. Its green result previously rendered as the unqualified string
+// "DSN reachable", which a user reasonably reads as "crash reports from
+// this app will reach Sentry" — untrue for the RENDERER half whenever the
+// active page CSP's connect-src does not allow the DSN's origin (desktop
+// production: always 'none'; served mode: 'self', which also excludes an
+// external Sentry ingest host). This computes that second, independent
+// answer by reading the page's own <meta http-equiv="Content-Security-
+// Policy"> and evaluating connect-src against the DSN's origin — the same
+// decision the browser itself makes — so the sentence flips on its own if
+// the CSP is ever relaxed to allow it (E-001), with no code change here.
+function browserCanTransmitUnderCurrentCSP(dsn: string): boolean {
+  const meta = document.querySelector('meta[http-equiv="Content-Security-Policy"]');
+  const csp = meta?.getAttribute('content') ?? '';
+  const match = csp.match(/connect-src\s+([^;]+)/);
+  if (!match) return true; // no connect-src directive found at all — nothing to block on
+  const connectSrc = match[1].trim();
+  if (connectSrc === "'none'") return false;
+  if (connectSrc === "'self'") {
+    try {
+      return new URL(dsn).origin === window.location.origin;
+    } catch {
+      return false; // unparsable DSN — cannot confirm same-origin, report blocked
+    }
+  }
+  return true; // connect-src names other hosts too — assume the DSN's is among them
+}
+
+const browserTransmitStatus = computed(() => {
+  if (!sentryDsn.value) return null;
+  return browserCanTransmitUnderCurrentCSP(sentryDsn.value)
+    ? 'Browser: this page\'s CSP allows reaching the DSN origin.'
+    : "Browser: this page's CSP blocks the renderer from reaching Sentry — only the Go crash reporter (tested above) can transmit.";
+});
 </script>
 
 <template>
@@ -198,7 +235,10 @@ async function testDsn() {
         </button>
       </div>
       <p v-if="testDsnResult" class="text-xs" :class="testDsnResult.ok ? 'text-signal-ok' : 'text-signal-danger'">
-        {{ testDsnResult.ok ? 'DSN reachable' : `DSN error: ${testDsnResult.error}` }}
+        {{ testDsnResult.ok ? 'Go crash reporter: DSN reachable' : `Go crash reporter: DSN error: ${testDsnResult.error}` }}
+      </p>
+      <p v-if="testDsnResult && browserTransmitStatus" class="text-xs text-ink-muted">
+        {{ browserTransmitStatus }}
       </p>
     </div>
 

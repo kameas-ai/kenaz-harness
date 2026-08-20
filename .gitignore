@@ -4,6 +4,11 @@ frontend/dist/*
 !frontend/dist/.gitkeep
 frontend/dist-served/*
 !frontend/dist-served/.gitkeep
+# cmd/harness-served's //go:embed all:frontend/dist-served is package-
+# relative — CI stages a .gitkeep-only stub here so `go build -tags serve`
+# can typecheck the embed without a real served-mode build.
+# entry-points-and-crash-reporting-01PMZD13 UNIT-1.
+cmd/harness-served/frontend/
 .idea/
 kitty-specs/
 .worktrees/
