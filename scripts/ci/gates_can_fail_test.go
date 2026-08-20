@@ -709,6 +709,30 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				"\tZzGateProbeMethod(zzGateProbeUniqueParam) error\n" +
 				"}\n",
 		},
+		{
+			// entry-points-and-crash-reporting-01PMZD13 UNIT-5.
+			// check-csp.sh's FIRST EVER planted-violation proof (spec §5).
+			// This gate reads a BUILT artifact (frontend/dist/index.html),
+			// which the test harness does not produce, so the case plants
+			// a throwaway fixture HTML file with a weakened CSP and points
+			// the gate at it via CSP_CHECK_DIST_HTML / CSP_CHECK_MODE —
+			// env overrides added in this same unit, mirroring the
+			// UPGRADE_SNAPSHOTS_BASE_REF precedent, so the SAME comparison
+			// the gate runs against a real build runs here too.
+			name:       "csp/unsafe-eval-in-script-src",
+			wantOutput: "script-src contains unsafe-eval",
+			gate:       "check-csp.sh",
+			file:       "scripts/ci/testdata/zz_gate_probe_csp/index.html",
+			content: "<!doctype html>\n<html><head>\n" +
+				"<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; " +
+				"connect-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; " +
+				"img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'none'; " +
+				"frame-ancestors 'none'; object-src 'none'\">\n</head><body></body></html>\n",
+			env: map[string]string{
+				"CSP_CHECK_DIST_HTML": "scripts/ci/testdata/zz_gate_probe_csp/index.html",
+				"CSP_CHECK_MODE":      "desktop",
+			},
+		},
 	}
 
 	for _, tc := range cases {

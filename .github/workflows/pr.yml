@@ -542,9 +542,20 @@ jobs:
       - name: build frontend (served, for bundle-size guard)
         run: npm run build:served
 
-      - name: csp guard
+      - name: csp guard (desktop)
         working-directory: ${{ github.workspace }}
-        run: bash scripts/ci/check-csp.sh
+        run: bash scripts/ci/check-csp.sh frontend/dist/index.html desktop
+
+      # entry-points-and-crash-reporting-01PMZD13 UNIT-5. Before this, the
+      # served-mode SPA (built two steps above) was never CSP-checked at
+      # all — this gate only ever inspected the desktop bundle. Filename
+      # is served.html, not index.html (frontend/vite.config.ts's outDir/
+      # input for BUILD_TARGET=served, confirmed by release.yml:879's own
+      # `test -f dist-served/served.html`) and the expected connect-src is
+      # 'self', not 'none' — the served browser must reach /rpc and /ws.
+      - name: csp guard (served)
+        working-directory: ${{ github.workspace }}
+        run: bash scripts/ci/check-csp.sh frontend/dist-served/served.html served
 
       # Non-blocking, and deliberately so — but NOT because the number is
       # unknown. As measured by this job on this runner pool against main at
