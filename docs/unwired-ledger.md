@@ -1654,6 +1654,123 @@ nothing, which is worse than the current honest inertness.
   re-affirms (does not overturn) `docs/dead-code-audit-2026-08-16.md:330`'s
   "wire, and wire before mounting" — nothing is being mounted here.
 
+### 2026-08-20 (vm-execution-surface-truth-01PMZD14 WP03) · the nil-optional-dependency gate does not exist yet — G-2 ships nothing
+
+R-3 in this mission's spec. HV-03 (`cmd/harness-vm/agentexec.go`'s
+`registry.Options` literal left `Policy` unset, silently substituting
+`llm.AllowAllGuard{}`) is the **sixth** confirmed instance of the
+nil-optional-dependency class in this campaign, which makes a gate the
+obvious recurrence prevention. Three other v0.65.0-era missions
+(`model-scheduled-jobs-01PMSJ01` UNIT-9/WP11, `model-settings-reach-the-model-01PMZ101`
+UNIT-11/G-2, and a Z505 mission's G-1) were each independently designing that
+gate. **Verified at this mission's dispatch (`ls scripts/ci/ | grep -iE
+'nil|optional|dep'` → no matches):** none of the three had landed on this
+merge base. Building a fourth gate here — after three other missions already
+proposed one for the same class — would be rival infrastructure for a class
+this repo already knows it wants exactly one instrument for.
+
+This WP therefore ships only G-1 (widening `check-cedar-engine-singleton.sh`'s
+Check 2 scan root to `core/`+`cmd/`, closing the specific evasion HV-03's own
+fix could have taken) and does not build the nil-optional-dependency gate.
+
+- **Blocker:** none of the three claimant missions (SJ01 UNIT-9/WP11, Z101
+  G-2, a Z505 mission's G-1) had landed a nil-optional-dependency gate as of
+  this mission's dispatch (2026-08-20).
+- **Owner / deleting change:** whichever of the three lands its gate first
+  should extend its package scan to cover `./cmd/...` (HV-03's own class is
+  the concrete instance to plant as that gate's `cmd/`-scoped
+  planted-violation proof) and delete this entry. Until then, HV-03's fix
+  (WP02, same mission) is verified only by this mission's own
+  `TestNewLLMExecutorPolicyGuardCanDeny`/`...AllowsWhenNotApplicable` tests,
+  not by a standing gate that would catch a *future* nil-optional-dependency
+  regression on this exact field.
+
+### 2026-08-20 (vm-execution-surface-truth-01PMZD14) · UNIT-2 cut this run — the approval capability grant still overclaims (HV-01, HV-02, HV-05, HV-08)
+
+This mission's floor (UNIT-0 + UNIT-1 + UNIT-PI) landed; UNIT-2 through
+UNIT-6 were cut for scope in the run that produced UNIT-1, per the mission's
+own cut-order rule (`tasks.md` "Cut order", item 5: *"If UNIT-2 is cut,
+UNIT-0's record must say so explicitly ... an undated known lie is what this
+ritual exists to end"*). Recording that explicitly here, since UNIT-2's own
+WP05 was the unit that would have filed the dated justifications for
+`approvalGateFrom` and `runStatus` directly.
+
+Current state, unchanged by this run: `cmd/harness-vm/main.go` grants the
+`approval` capability whenever `readservice.go`'s `promptRegistry()` is
+non-nil — which is true on every boot where the read-service bootstrap
+succeeded, since `core/rpc/api.go`'s `rpc.New` assigns the prompt registry
+unconditionally. **No gate site in this process can raise an approval**:
+`approvalGateFrom` (`cmd/harness-vm/approvalgate.go`) and
+`approvalBridge.runStatus()` (same file) each have zero non-test callers
+(verified by this mission's WP01 observation, re-confirmed identical to the
+spec's own RAN ledger). `contracts/vm-rpc.md:474-477` still asserts, in the
+present tense, a call site that does not exist and contradicts itself three
+lines later.
+
+- **Blocker (HV-01 / `approvalGateFrom`):** no `cedar.PromptSurface` variant
+  exists for a model call — `core/policy/cedar/prompt.go`'s `PromptSurface`
+  is a closed four-variant union (`Bash`/`FS`/`Cred`/`Tool`) enforced by
+  `Family()`. Adding a fifth variant is a product feature (a new host modal,
+  a wire payload change) with a product owner, not a wiring fix
+  (`vm-execution-surface-truth-01PMZD14/spec.md` R-2).
+- **Blocker (HV-05 / `runStatus`):** the wire has no status field and
+  `contracts/vm-rpc.md:436-438` explicitly forbids adding one (*"Run status
+  is DERIVED, not a wire field"*); the named future consumer is the deferred
+  `agent_feed.*` push stream (`contracts/vm-rpc.md:482-483`).
+- **Blocker (HV-02, the grant itself / HV-08, the contract's stale smoke
+  probe):** a genuine product call — whether the `approval` capability
+  should be granted at all when nothing in the process can raise one (escalation
+  E-002 in the mission spec) — was not answered before this run's scope cut.
+  The spec's default disposition is (c): make the grant self-describing
+  ("this process is listening") rather than narrowing it to never-granted.
+- **Owner / deleting change:** land `vm-execution-surface-truth-01PMZD14`
+  UNIT-2 (WP04 + WP05, `contracts/vm-rpc.md`'s two corrections plus
+  `main.go:145-155`'s comment and the approval-grant self-description),
+  which deletes this entry and files HV-01/HV-05's dated justifications
+  directly. Owner: alecfeeman. Filed 2026-08-20 by the same mission's WP01
+  scope-cut record.
+
+### 2026-08-20 (vm-execution-surface-truth-01PMZD14) · UNIT-4 cut this run — `cmd/harness-vm` boots `core.New → Start → rpc.New`, the reverse of both shipped entry points (HV-N1)
+
+Cut per the mission's own cut-order rule (`tasks.md` item 2: *"If UNIT-4 is
+cut, HV-N1 gets a dated entry ... blocker: arming two never-run bootstraps
+needs a soak this release has no room for"*).
+
+`cmd/harness-vm/readservice.go`'s `newReadService` calls `core.New` → then
+`c.Start(ctx)` → then `rpc.New(c)`. **Both shipped entry points invert
+that order**: `main.go` and `cmd/harness-served/main.go` both call
+`core.New → rpc.New → Start`. The order matters because `rpc.New` is what
+installs `Core`'s Start hooks (`c.SetMCPRecipeBootstrap(...)` in
+`core/rpc/api.go`'s `New`); `Core.Start` invokes them. In
+`cmd/harness-vm`, both hook fields are still nil when `Start` runs, so
+**neither hook ever fires**: the MCP recipe spawn bootstrap (also the only
+boot-time Cedar gate site in this process — a second, independent reason the
+UNIT-2 finding above is a lie even on its boot-time path) and the first-boot
+bash-allowlist migration both silently never run in this process.
+
+This is a persistence-adjacent finding, not a cosmetic one: reordering arms
+a bootstrap (`BashAllowlistMigrated`) that writes persisted state and has
+**never run in this process against any database** — `cmd/harness-vm`'s
+`readservice.go` opens the harness's real data directory
+(`HARNESS_READ_DATADIR` or `paths.DataDir()`), not a scratch one.
+
+- **Blocker:** arming two never-run bootstraps in the same process that opens
+  the user's real data directory needs its own soak — a populated-table test
+  booting from a committed `core/storage/sqlite/testdata/upgrade/` snapshot,
+  per `CLAUDE.md` blind spot #3's corollary — which this run's floor-only
+  scope had no room for. (Separately and pre-existing: this tree's newest
+  committed snapshot is `v0.64.1` while the newest release tag is `v0.65.0` —
+  `scripts/ci/check-upgrade-snapshot-present.sh` reports this red already,
+  independent of this mission. See `AC-PI-1`'s notes in this mission's report
+  — WP07 would need that gap closed, or would need to boot from `v0.64.1`
+  and say so, before its own AC-PI-1 falsification is meaningful.)
+- **Owner / deleting change:** land `vm-execution-surface-truth-01PMZD14`
+  UNIT-4 (WP07 reorders `core.New → rpc.New → Start` to match the two
+  shipped entry points, with `AC-013`/`AC-014`'s hook-fires / degrades-clean
+  proofs and `AC-PI-1`'s populated-table boot; WP08 adds the
+  `KENAZ_HARNESS_WORKSPACE` read the same six lines are missing). Owner:
+  alecfeeman. Filed 2026-08-20 by the same mission's WP01 scope-cut record.
+
 ## Drained
 
 ### 2026-08-19 · CLOSED — the missing-upgrade-snapshot hole is now gated
