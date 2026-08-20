@@ -120,6 +120,7 @@ var cwdSensitiveGates = []string{
 	"check-listpending-coverage.sh",
 	"check-upgrade-snapshots-locked.sh",
 	"check-destructive-migration-coverage.sh",
+	"check-entrypoint-coverage.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -637,6 +638,27 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				"\t\tt.Fatalf(\"SetMemoryNarrativeEnabled: %v\", err)\n" +
 				"\t}\n" +
 				"}\n",
+		},
+		{
+			// entry-points-and-crash-reporting-01PMZD13 UNIT-1. Deviates
+			// from the mission's spec §5 gate table, which prescribes a
+			// PLAIN `package main` file with no build tag as the planted
+			// violation. That content is NOT a sound violation: `./cmd/...`
+			// (added to pr.yml by this same unit) prefix-covers any bare
+			// `cmd/<name>`, so a tagless probe is genuinely, correctly
+			// covered and the gate must NOT fail on it — confirmed by
+			// running exactly that probe first, which left the gate green.
+			// The real defect class this gate exists to catch (spec §1.1)
+			// is a build-TAG-gated entry point — cmd/harness-served's own
+			// `serve` tag — that no pr.yml step passes -tags for, which a
+			// same-build-tag probe reproduces soundly: `zzgateprobe` is
+			// gated behind a tag no pr.yml step ever requests, so it is
+			// genuinely uncovered under real Go build-constraint semantics.
+			name:       "entrypoint-coverage/tagged-package-with-no-covering-step",
+			wantOutput: "cmd/zzgateprobe",
+			gate:       "check-entrypoint-coverage.sh",
+			file:       "cmd/zzgateprobe/main.go",
+			content:    "//go:build zzgateprobe\n\npackage main\n\nfunc main() {}\n",
 		},
 	}
 
