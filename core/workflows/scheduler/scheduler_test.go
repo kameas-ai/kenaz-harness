@@ -242,6 +242,41 @@ func TestRunNow_DispatchError(t *testing.T) {
 	}
 }
 
+// TestRunNow_NilDispatcher_ReturnsErrorAndNoHistoryEntry is AC-002 (UNIT-1,
+// FR-001): the human-clicked Run Now path with no dispatcher wired must
+// not manufacture a "completed" run, and — because no dispatch was even
+// attempted (this is a configuration error, not an attempted-and-failed
+// run) — must not appear in History either. Contrast with
+// TestRunNow_DispatchError above, where a real Dispatcher was reached and
+// failed there: that IS recorded, because a run was genuinely attempted.
+func TestRunNow_NilDispatcher_ReturnsErrorAndNoHistoryEntry(t *testing.T) {
+	t.Parallel()
+	s := newSched(t, newFakeStorage(), nil)
+	ctx := context.Background()
+
+	sum, err := s.RunNow(ctx, "wf-no-dispatcher")
+	if err == nil {
+		t.Fatal("RunNow with nil dispatcher: expected error, got nil")
+	}
+	if !errors.Is(err, scheduler.ErrNoDispatcherWired) {
+		t.Errorf("RunNow error = %v, want ErrNoDispatcherWired", err)
+	}
+	if sum.Status == "completed" {
+		t.Errorf("Status = %q, must not be completed", sum.Status)
+	}
+	if sum.Err == "" {
+		t.Error("summary.Err is empty; must name the missing dispatcher")
+	}
+
+	history, err := s.History(ctx, "wf-no-dispatcher", 10)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(history) != 0 {
+		t.Errorf("History = %d entries, want 0 (config error, not an attempted run)", len(history))
+	}
+}
+
 // TestInvalidCronExpr verifies that an unparseable cron string returns
 // ErrInvalidCronExpr.
 func TestInvalidCronExpr(t *testing.T) {
