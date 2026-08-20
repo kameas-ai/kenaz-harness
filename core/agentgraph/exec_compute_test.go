@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"reflect"
 	"strings"
 	"sync"
@@ -1276,6 +1277,98 @@ func TestModelExecutor_ComposesFailureAnnotationsIntoGraphBase(t *testing.T) {
 	role := strings.Index(req.SystemPrompt, "ROLE")
 	if !(base < annIdx && annIdx < role) {
 		t.Errorf("expected BASE < annotation < ROLE ordering in %q", req.SystemPrompt)
+	}
+}
+
+// TestModelExecutor_JsonSchemaReachesLLMRequest is
+// structured-output-is-reachable-01PMZE14 WP02's AC-001 half at the
+// seam boundary: before this fix, ModelAttrs.JsonSchema (authored,
+// persisted, decoded — spec §1.2) was marshalled nowhere and
+// LLMRequest.ResponseSchema stayed permanently empty regardless of what
+// a graph author typed into the model node's json_schema attr. Asserts
+// the marshalled bytes reach the seam field exactly, and that omitting
+// the attr produces no override (matching every other zero-means-unset
+// field on this seam).
+func TestModelExecutor_JsonSchemaReachesLLMRequest(t *testing.T) {
+	t.Parallel()
+	llmFake := &stubLLM{responses: []LLMResponse{{Content: "ok", FinishReason: "stop"}}}
+	g := &Graph{ID: "g"}
+	env := &Env{RunID: "r", SessionID: "s", Graph: g, LLM: llmFake}
+	applyEnvDefaults(env)
+	ex := modelExecutor{}
+	schema := map[string]any{"type": "object", "properties": map[string]any{"verdict": map[string]any{"type": "string"}}}
+	node := &Node{ID: "n", Kind: NodeKindModel, Attrs: ModelAttrs{Model: "x", JsonSchema: schema}}
+	if _, err := ex.Execute(context.Background(), env, node, nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	req, ok := llmFake.lastRequest()
+	if !ok {
+		t.Fatalf("no LLM request captured")
+	}
+	if len(req.ResponseSchema) == 0 {
+		t.Fatalf("ResponseSchema is empty; the authored json_schema attr did not reach the seam")
+	}
+	var got map[string]any
+	if err := json.Unmarshal(req.ResponseSchema, &got); err != nil {
+		t.Fatalf("ResponseSchema is not valid JSON: %v", err)
+	}
+	if !reflect.DeepEqual(got, schema) {
+		t.Errorf("ResponseSchema = %#v, want %#v", got, schema)
+	}
+}
+
+// TestModelExecutor_NoJsonSchemaYieldsNoOverride mirrors the seam's
+// zero-means-unset convention: a node that authors no json_schema must
+// not force an empty-but-non-nil ResponseSchema onto the request.
+func TestModelExecutor_NoJsonSchemaYieldsNoOverride(t *testing.T) {
+	t.Parallel()
+	llmFake := &stubLLM{responses: []LLMResponse{{Content: "ok", FinishReason: "stop"}}}
+	g := &Graph{ID: "g"}
+	env := &Env{RunID: "r", SessionID: "s", Graph: g, LLM: llmFake}
+	applyEnvDefaults(env)
+	ex := modelExecutor{}
+	node := &Node{ID: "n", Kind: NodeKindModel, Attrs: ModelAttrs{Model: "x"}}
+	if _, err := ex.Execute(context.Background(), env, node, nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	req, ok := llmFake.lastRequest()
+	if !ok {
+		t.Fatalf("no LLM request captured")
+	}
+	if len(req.ResponseSchema) != 0 {
+		t.Errorf("ResponseSchema = %q, want empty (no json_schema authored)", req.ResponseSchema)
+	}
+}
+
+// TestModelExecutor_MalformedJsonSchemaIsNodeError asserts WP02's
+// explicit obligation: ModelAttrs.Validate() does not check JsonSchema
+// (attrs_gen.go's generated validator has no rule for an object-typed
+// attr), so the executor's marshal is the first place a malformed
+// authored schema can be caught. A marshal failure must surface as a
+// node error naming the node id, not a silently dropped constraint.
+func TestModelExecutor_MalformedJsonSchemaIsNodeError(t *testing.T) {
+	t.Parallel()
+	llmFake := &stubLLM{responses: []LLMResponse{{Content: "ok", FinishReason: "stop"}}}
+	g := &Graph{ID: "g"}
+	env := &Env{RunID: "r", SessionID: "s", Graph: g, LLM: llmFake}
+	applyEnvDefaults(env)
+	ex := modelExecutor{}
+	// math.NaN() is a legal Go map value but is not valid JSON —
+	// json.Marshal fails on it, exercising the error path a decoded
+	// YAML `.nan` scalar could reach in production.
+	node := &Node{ID: "bad-node", Kind: NodeKindModel, Attrs: ModelAttrs{
+		Model:      "x",
+		JsonSchema: map[string]any{"bad": math.NaN()},
+	}}
+	_, err := ex.Execute(context.Background(), env, node, nil)
+	if err == nil {
+		t.Fatal("expected a node error for an unmarshalable json_schema, got nil")
+	}
+	if !strings.Contains(err.Error(), "bad-node") {
+		t.Errorf("error must name the node id: %v", err)
+	}
+	if llmFake.callCount() != 0 {
+		t.Errorf("LLM must not be called when the schema fails to marshal, calls=%d", llmFake.callCount())
 	}
 }
 

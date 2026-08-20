@@ -696,6 +696,51 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			gate:       "check-upgrade-snapshot-present.sh",
 			env:        map[string]string{"UPGRADE_SNAPSHOT_PRESENT_MAX_TAG": "v99.0.0"},
 		},
+		{
+			// structured-output-is-reachable-01PMZE14 WP03 (spec §7 G-1):
+			// the class is a codegen'd manifest attr, declared and
+			// authored, with no reader — ModelAttrs.JsonSchema (spec
+			// §1.2) and ModelAttrs.StreamToChat (docs/unwired-
+			// ledger.md:1674) are two real instances of it, both found
+			// by hand because no gate saw node attrs at all before this
+			// WP. Rather than editing the real ModelAttrs registration
+			// (which check-knob-coverage.sh's own case-table convention
+			// avoids — see the tests-are-hermetic case above), this
+			// plants a new probe struct with one field registered and
+			// one left untouched: the exact shape "someone adds a field
+			// and forgets the registration" produces. AC-013/AC-014's
+			// falsification (removing the real JsonSchema registration
+			// and confirming TestKnobCoverage_ModelAttrs goes red) was
+			// performed by hand against the real struct during WP02/
+			// WP03 development; this case is the CI-enforced,
+			// repeatable proof that the general mechanism — the one any
+			// future mission's ModelAttrs-shaped struct rides — can
+			// fail.
+			name:       "knob-coverage/unregistered-field",
+			wantOutput: "Unregistered",
+			gate:       "check-knob-coverage.sh",
+			file:       "core/agentgraph/zz_gate_probe_knob_coverage_test.go",
+			content: "package agentgraph\n\n" +
+				"import (\n" +
+				"\t\"testing\"\n\n" +
+				"\t\"github.com/kameas-ai/kenaz-harness/core/wiring/knobcoverage\"\n" +
+				")\n\n" +
+				"// zzGateProbeAttrs mirrors ModelAttrs' shape for gate-probe purposes:\n" +
+				"// a struct with one field registered and one left untouched, the exact\n" +
+				"// class ModelAttrs.JsonSchema was before WP02/WP03.\n" +
+				"type zzGateProbeAttrs struct {\n" +
+				"\tRegistered   string\n" +
+				"\tUnregistered string\n" +
+				"}\n\n" +
+				"func init() {\n" +
+				"\tknobcoverage.Register[zzGateProbeAttrs](\"Registered\", \"gate-probe: deliberately leaves Unregistered untouched\")\n" +
+				"}\n\n" +
+				"func TestKnobCoverage_ZZGateProbe(t *testing.T) {\n" +
+				"\tif got := knobcoverage.Uncovered[zzGateProbeAttrs](); len(got) != 0 {\n" +
+				"\t\tt.Fatalf(\"gate-probe: uncovered fields %v (expected — this is the planted violation)\", got)\n" +
+				"\t}\n" +
+				"}\n",
+		},
 	}
 
 	for _, tc := range cases {

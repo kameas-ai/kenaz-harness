@@ -217,6 +217,23 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 		v := a.ReasoningBudgetTokens
 		reasoningBudgetPtr = &v
 	}
+	// ResponseSchema (structured-output-is-reachable-01PMZE14 WP02): the
+	// node's authored json_schema attr, marshalled once here rather than
+	// once per adapter. ModelAttrs.Validate() does not check JsonSchema
+	// (it declares no manifest constraints on an `object`-typed attr), so
+	// this is the first place a malformed authored schema can be caught —
+	// a marshal failure is a node error, not a silent drop.
+	var responseSchema json.RawMessage
+	if len(a.JsonSchema) > 0 {
+		b, err := json.Marshal(a.JsonSchema)
+		if err != nil {
+			_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
+				"err": fmt.Sprintf("json_schema attr is not valid JSON: %v", err),
+			})
+			return res, fmt.Errorf("model: node %q: json_schema attr is not valid JSON: %w", node.ID, err)
+		}
+		responseSchema = b
+	}
 	req := LLMRequest{
 		Provider:              a.Provider,
 		Model:                 a.Model,
@@ -233,6 +250,7 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 		ParallelToolCalls:     parallelToolCallsPtr,
 		StopSequences:         append([]string(nil), a.StopSequences...),
 		ReasoningBudgetTokens: reasoningBudgetPtr,
+		ResponseSchema:        responseSchema,
 		FallbackChainId:       a.FallbackChainId,
 		// model-moves-transcript-01PMCH01 WP02: the node's own
 		// stream_to_chat attr, forwarded so the chassis provider seam can

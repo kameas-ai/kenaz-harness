@@ -117,6 +117,18 @@ func collectTestFunctions(t *testing.T) map[string]struct{} {
 		filepath.Join(llmDir, "openai"),
 		filepath.Join(llmDir, "openrouter"),
 		filepath.Join(llmDir, "bedrock"),
+		// gemini (structured-output-is-reachable-01PMZE14 WP05): NOT
+		// added to inScopeAdapters above — that would require a
+		// per-field wire-shape coverage decision for gemini across
+		// every GenerationRequest/Response/StreamEvent field, a full
+		// adapter-parity audit outside this mission's structured-output
+		// scope. This directory is scanned only so the two new gemini
+		// entries this WP adds to coverage_registry.yaml (ResponseFormat,
+		// JSONMode) can have their cited test functions verified to
+		// exist by the loop below, same as every other entry's tests:
+		// list. See coverage_registry.yaml's gemini rows for the
+		// explanation of why they're scoped this narrowly.
+		filepath.Join(llmDir, "gemini"),
 	}
 
 	fns := make(map[string]struct{})

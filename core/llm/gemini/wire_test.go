@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	llm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
 )
 
 // loadGolden reads a JSON fixture from testdata/wire/<name>.
@@ -263,5 +264,203 @@ func TestReasoningDisabled(t *testing.T) {
 	}
 	if gr.GenerationConfig != nil && gr.GenerationConfig.ThinkingConfig != nil {
 		t.Errorf("unexpected thinkingConfig: %+v", gr.GenerationConfig.ThinkingConfig)
+	}
+}
+
+// TestResponseFormat_JSONSchema_CarriesMimeTypeAndSchema is
+// structured-output-is-reachable-01PMZE14 WP04's AC-004: before this
+// fix, gemini/wire.go read req.JSONMode only and had no field at all
+// for a schema (geminiGenConfig had eight fields, none a schema —
+// spec §1.3/§5.2). Asserts Mode:"json_schema" produces BOTH the MIME
+// type and the schema on the wire — asserting only responseMimeType
+// would pass with today's (pre-fix) behaviour and the schema still
+// dropped, which is exactly what this AC must not tolerate.
+func TestResponseFormat_JSONSchema_CarriesMimeTypeAndSchema(t *testing.T) {
+	t.Parallel()
+	schema := json.RawMessage(`{"type":"object","properties":{"verdict":{"type":"string"}}}`)
+	req := llm.GenerationRequest{
+		Messages:       []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+		ResponseFormat: &llm.ResponseFormat{Mode: "json_schema", Schema: schema},
+	}
+	gr, err := ToGeminiRequest(req, llm.ProviderProfile{Model: "gemini-2.5-pro"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gr.GenerationConfig == nil {
+		t.Fatal("expected generationConfig")
+	}
+	if gr.GenerationConfig.ResponseMimeType != "application/json" {
+		t.Errorf("responseMimeType = %q, want application/json", gr.GenerationConfig.ResponseMimeType)
+	}
+	if len(gr.GenerationConfig.ResponseSchema) == 0 {
+		t.Fatal("responseSchema is empty; the schema constraint did not reach the wire")
+	}
+	var got map[string]any
+	if err := json.Unmarshal(gr.GenerationConfig.ResponseSchema, &got); err != nil {
+		t.Fatalf("responseSchema is not valid JSON: %v", err)
+	}
+}
+
+// TestResponseFormat_Json_MimeTypeOnlyNoSchema asserts Mode:"json"
+// carries only the MIME type — matching every other adapter's
+// unconstrained-JSON-mode behaviour.
+func TestResponseFormat_Json_MimeTypeOnlyNoSchema(t *testing.T) {
+	t.Parallel()
+	req := llm.GenerationRequest{
+		Messages:       []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+		ResponseFormat: &llm.ResponseFormat{Mode: "json"},
+	}
+	gr, err := ToGeminiRequest(req, llm.ProviderProfile{Model: "gemini-2.5-pro"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gr.GenerationConfig == nil || gr.GenerationConfig.ResponseMimeType != "application/json" {
+		t.Fatalf("expected responseMimeType=application/json, got %+v", gr.GenerationConfig)
+	}
+	if len(gr.GenerationConfig.ResponseSchema) != 0 {
+		t.Errorf("responseSchema = %s, want empty for Mode=json", gr.GenerationConfig.ResponseSchema)
+	}
+}
+
+// TestResponseFormat_Grammar_ReturnsTypedError is AC-005: grammar mode
+// must return *llm.ErrUnsupportedFormat, matching
+// azure/adapter.go:496-497's shape. A nil/generic error would let an
+// unconstrained request reach Gemini and be repaired into looking
+// correct (registry.go:533's repair-once loop).
+func TestResponseFormat_Grammar_ReturnsTypedError(t *testing.T) {
+	t.Parallel()
+	req := llm.GenerationRequest{
+		Messages:       []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+		ResponseFormat: &llm.ResponseFormat{Mode: "grammar", Grammar: []byte("root ::= \"x\"")},
+	}
+	_, err := ToGeminiRequest(req, llm.ProviderProfile{Model: "gemini-2.5-pro"})
+	if err == nil {
+		t.Fatal("expected an error for grammar mode, got nil")
+	}
+	var uf *llm.ErrUnsupportedFormat
+	if !errors.As(err, &uf) {
+		t.Fatalf("expected *llm.ErrUnsupportedFormat, got %T: %v", err, err)
+	}
+	if uf.Provider != Kind || uf.Model != "gemini-2.5-pro" || uf.Mode != "grammar" {
+		t.Errorf("ErrUnsupportedFormat = %+v, want Provider=%q Model=gemini-2.5-pro Mode=grammar", uf, Kind)
+	}
+}
+
+// TestJSONModeSpec_Schema_NoLongerDiscarded is the other half of AC-004:
+// before this fix, req.JSONMode.Schema was read nowhere — only
+// JSONMode.Enabled gated the MIME type. spec §1.3's table: "gemini |
+// partial — sets responseMimeType... and discards JSONModeSpec.Schema."
+func TestJSONModeSpec_Schema_NoLongerDiscarded(t *testing.T) {
+	t.Parallel()
+	schema := json.RawMessage(`{"type":"object","properties":{"x":{"type":"string"}}}`)
+	req := llm.GenerationRequest{
+		Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+		JSONMode: &llm.JSONModeSpec{Enabled: true, Schema: schema},
+	}
+	gr, err := ToGeminiRequest(req, llm.ProviderProfile{Model: "gemini-2.5-pro"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(gr.GenerationConfig.ResponseSchema) == 0 {
+		t.Fatal("JSONModeSpec.Schema was discarded — responseSchema is empty")
+	}
+}
+
+// TestResponseFormat_RejectedKeyword_ProducesTypedError asserts a
+// schema carrying a keyword Gemini's dialect does not support fails
+// with a typed error naming the keyword, rather than silently dropping
+// to responseMimeType alone (spec §5.2's explicit prohibition — that
+// would be "the same lie in a new costume" via the repair-once loop).
+func TestResponseFormat_RejectedKeyword_ProducesTypedError(t *testing.T) {
+	t.Parallel()
+	schema := json.RawMessage(`{"type":"object","additionalProperties":false}`)
+	req := llm.GenerationRequest{
+		Messages:       []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+		ResponseFormat: &llm.ResponseFormat{Mode: "json_schema", Schema: schema},
+	}
+	_, err := ToGeminiRequest(req, llm.ProviderProfile{Model: "gemini-2.5-pro"})
+	if err == nil {
+		t.Fatal("expected an error for a schema carrying additionalProperties, got nil")
+	}
+	var kw *ErrUnsupportedSchemaKeyword
+	if !errors.As(err, &kw) {
+		t.Fatalf("expected *ErrUnsupportedSchemaKeyword, got %T: %v", err, err)
+	}
+	if kw.Keyword != "additionalProperties" {
+		t.Errorf("Keyword = %q, want additionalProperties", kw.Keyword)
+	}
+}
+
+// TestStructuredOutputRow_MatchesAdapterBehavior is WP05's AC-006/D-2:
+// FR-002 (the adapter arm) and FR-003 (the capability rows) are one
+// unit and must agree. Loaded through the REAL production capability
+// data (capabilities.LoadDefault(), not a hand-rolled fixture) so a
+// gemini.yaml edit that drifts from the adapter is caught here, not
+// discovered by a user. For every gemini model: a structured_output:
+// true row must both (a) pass Gate.Check for a json_schema request and
+// (b) have the adapter actually emit responseSchema on the wire; a
+// false row must have Gate.Check refuse the same request before the
+// adapter is ever reached.
+func TestStructuredOutputRow_MatchesAdapterBehavior(t *testing.T) {
+	t.Parallel()
+	cat, err := capabilities.LoadDefault()
+	if err != nil {
+		t.Fatalf("capabilities.LoadDefault: %v", err)
+	}
+	gate := capabilities.NewGate(cat)
+	schema := json.RawMessage(`{"type":"object","properties":{"verdict":{"type":"string"}}}`)
+
+	models := []string{
+		"gemini-2.5-pro", "gemini-2.5-flash",
+		"gemini-2.0-flash", "gemini-2.0-pro",
+		"gemini-1.5-pro", "gemini-1.5-flash",
+		"gemini-1.0-pro",
+	}
+	for _, model := range models {
+		t.Run(model, func(t *testing.T) {
+			prof := llm.ProviderProfile{Kind: Kind, Model: model}
+			req := llm.GenerationRequest{
+				Messages:       []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+				ResponseFormat: &llm.ResponseFormat{Mode: "json_schema", Schema: schema},
+			}
+			desc, gateErr := gate.Check(req, prof)
+			rowSaysTrue := desc.Has(llm.CapStructuredOutput)
+
+			gr, wireErr := ToGeminiRequest(req, prof)
+
+			if rowSaysTrue {
+				if gateErr != nil {
+					t.Fatalf("row says structured_output:true but Gate.Check refused: %v — coverage_registry.yaml and gemini.yaml disagree", gateErr)
+				}
+				if wireErr != nil {
+					t.Fatalf("row says structured_output:true but the adapter failed to translate the schema: %v", wireErr)
+				}
+				if gr.GenerationConfig == nil || len(gr.GenerationConfig.ResponseSchema) == 0 {
+					t.Fatalf("row says structured_output:true but the adapter did not emit responseSchema on the wire — the row and the adapter disagree, coverage_registry.yaml's live defect class (spec §1.8)")
+				}
+			} else {
+				var ce *llm.ErrCapabilityUnsupported
+				if !errors.As(gateErr, &ce) {
+					t.Fatalf("row says structured_output:false but Gate.Check did not refuse (got %v) — a request would reach the wire unconstrained and the repair-once loop would paper over it", gateErr)
+				}
+			}
+		})
+	}
+}
+
+// TestResponseFormat_RejectedKeyword_Nested asserts the keyword scan is
+// recursive, not top-level-only — the class of bug a shallow check
+// would miss (a $ref nested under "properties").
+func TestResponseFormat_RejectedKeyword_Nested(t *testing.T) {
+	t.Parallel()
+	schema := json.RawMessage(`{"type":"object","properties":{"nested":{"$ref":"#/defs/thing"}}}`)
+	req := llm.GenerationRequest{
+		Messages:       []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+		ResponseFormat: &llm.ResponseFormat{Mode: "json_schema", Schema: schema},
+	}
+	_, err := ToGeminiRequest(req, llm.ProviderProfile{Model: "gemini-2.5-pro"})
+	var kw *ErrUnsupportedSchemaKeyword
+	if !errors.As(err, &kw) || kw.Keyword != "$ref" {
+		t.Fatalf("expected *ErrUnsupportedSchemaKeyword{Keyword:\"$ref\"}, got %v", err)
 	}
 }

@@ -2,6 +2,7 @@ package agentgraph
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"time"
@@ -52,6 +53,17 @@ type LLMRequest struct {
 	// off unless the profile/provider default enables it," matching the
 	// rest of this knob surface's zero-means-unset convention.
 	ReasoningBudgetTokens *int
+
+	// ResponseSchema carries the model node's json_schema attr
+	// (structured-output-is-reachable-01PMZE14 WP02) through to
+	// GenerationRequest.ResponseFormat. Empty/nil means "no override; the
+	// call is free-form text," matching this seam's other zero-means-unset
+	// fields. json.RawMessage rather than map[string]any because
+	// llm.ResponseFormat.Schema is already json.RawMessage and
+	// structured.InjectAdditionalProperties consumes bytes — the marshal
+	// from the authored map happens once, at the executor, not once per
+	// adapter.
+	ResponseSchema json.RawMessage
 
 	// FallbackChainId carries the model/escalate node's fallback_chain_id
 	// attr (model-request-path-live-01PMDL01 WP07) through to the

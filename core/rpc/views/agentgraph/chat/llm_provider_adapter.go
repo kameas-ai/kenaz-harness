@@ -638,6 +638,18 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 		}
 	}
 
+	// ResponseSchema -> GenerationRequest.ResponseFormat
+	// (structured-output-is-reachable-01PMZE14 WP02). Typed field, not
+	// gen.Params — ResponseFormat has its own capability gating
+	// (llm.go RequestedCapabilities) and must stay typed, mirroring how
+	// StopSequences/Reasoning are handled above rather than folded into
+	// Params. The capability refusal this enables (ErrCapabilityUnsupported
+	// when the resolved model's row says false) is the correct behaviour,
+	// not something to suppress here.
+	if len(req.ResponseSchema) > 0 {
+		gen.ResponseFormat = &corellm.ResponseFormat{Mode: "json_schema", Schema: req.ResponseSchema}
+	}
+
 	// WP02 (long-turn-resilience) / WP02 (model-request-path-live-
 	// 01PMDL01): wrap the stream open with classified retry-with-backoff,
 	// driven by the resolved profile's retry.Policy rather than a

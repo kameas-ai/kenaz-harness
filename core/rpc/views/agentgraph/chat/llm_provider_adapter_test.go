@@ -2,9 +2,12 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
+	"sync"
 	"testing"
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // TestGenerate_CarriesMaxTokensAndTemperature is WP01 of
@@ -226,4 +229,137 @@ func TestGenerate_ToolMessage_CarriesIsError(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestGenerate_CarriesResponseSchema is
+// structured-output-is-reachable-01PMZE14 WP02's AC-001 half at the
+// adapter-translation boundary: before this fix, LLMRequest.ResponseSchema
+// (the seam field WP02 added) was read nowhere in Generate(), so
+// GenerationRequest.ResponseFormat stayed permanently nil regardless of
+// what the seam carried. Typed field, not Params — mirrors how
+// StopSequences/Reasoning are handled rather than folded into the
+// untyped Params map.
+func TestGenerate_CarriesResponseSchema(t *testing.T) {
+	schema := json.RawMessage(`{"type":"object","properties":{"verdict":{"type":"string"}}}`)
+	req := coreag.LLMRequest{SystemPrompt: "base", ResponseSchema: schema}
+
+	reg := &capturingRegistry{}
+	adapter := NewLLMProviderAdapter(reg, "profile-1", "openai/gpt-4o", nil, nil)
+
+	if _, err := adapter.Generate(context.Background(), req); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	gen := reg.snapshot()
+	if gen.ResponseFormat == nil {
+		t.Fatalf("ResponseFormat is nil; ResponseSchema did not reach GenerationRequest")
+	}
+	if gen.ResponseFormat.Mode != "json_schema" {
+		t.Errorf("ResponseFormat.Mode = %q, want %q", gen.ResponseFormat.Mode, "json_schema")
+	}
+	if string(gen.ResponseFormat.Schema) != string(schema) {
+		t.Errorf("ResponseFormat.Schema = %s, want %s", gen.ResponseFormat.Schema, schema)
+	}
+}
+
+// TestGenerate_NoResponseSchemaYieldsNoResponseFormat mirrors the seam's
+// zero-means-unset convention for the new field.
+func TestGenerate_NoResponseSchemaYieldsNoResponseFormat(t *testing.T) {
+	reg := &capturingRegistry{}
+	adapter := NewLLMProviderAdapter(reg, "profile-1", "openai/gpt-4o", nil, nil)
+
+	if _, err := adapter.Generate(context.Background(), coreag.LLMRequest{SystemPrompt: "base"}); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if gen := reg.snapshot(); gen.ResponseFormat != nil {
+		t.Errorf("ResponseFormat = %#v, want nil", gen.ResponseFormat)
+	}
+}
+
+// schemaAwareRegistry is a corellm.Registry fake that behaves like a
+// real structured-output-capable provider would: it returns
+// schema-conformant JSON when the wire request carries a ResponseFormat,
+// and non-conformant prose otherwise. Unlike capturingRegistry (which
+// always returns a fixed canned response regardless of the request),
+// this is the "fake adapter that returns schema-violating prose unless
+// the wire body carries the schema" AC-001 calls for
+// (structured-output-is-reachable-01PMZE14 spec §9) — proving the
+// constraint reaches the wire by observing its effect on the RESPONSE,
+// not by asserting a field was set.
+type schemaAwareRegistry struct {
+	mu      sync.Mutex
+	lastReq corellm.GenerationRequest
+}
+
+func (r *schemaAwareRegistry) RegisterAdapter(_ corellm.ProviderAdapter)      {}
+func (r *schemaAwareRegistry) LoadProfiles(_ []corellm.ProviderProfile) error { return nil }
+func (r *schemaAwareRegistry) Evict(_ string) error                           { return nil }
+func (r *schemaAwareRegistry) Profile(_ string) (corellm.ProviderProfile, error) {
+	return corellm.ProviderProfile{}, nil
+}
+func (r *schemaAwareRegistry) PreflightAll(_ context.Context) []corellm.PreflightResult { return nil }
+func (r *schemaAwareRegistry) Stream(_ context.Context, req corellm.GenerationRequest) (corellm.Stream, error) {
+	r.mu.Lock()
+	r.lastReq = req
+	r.mu.Unlock()
+	text := `Sure! Here's my answer: pass`
+	if req.ResponseFormat != nil && req.ResponseFormat.Mode == "json_schema" && len(req.ResponseFormat.Schema) > 0 {
+		text = `{"verdict":"pass"}`
+	}
+	return &schemaAwareStream{content: text}, nil
+}
+
+type schemaAwareStream struct{ content string }
+
+func (s *schemaAwareStream) Events() <-chan corellm.StreamEvent {
+	ch := make(chan corellm.StreamEvent)
+	close(ch)
+	return ch
+}
+func (s *schemaAwareStream) Cancel() error { return nil }
+func (s *schemaAwareStream) Final() (corellm.Response, error) {
+	return corellm.Response{
+		Content:      []corellm.ContentBlock{{Type: "text", Text: s.content}},
+		FinishReason: "stop",
+	}, nil
+}
+
+// TestGenerate_ResponseSchemaConstrainsTheResponse is AC-001's
+// falsification test proper: it does NOT assert a field was set (the
+// spec explicitly forbids that — "the whole point of this AC is that a
+// field being set is what the tree already looks like today"). It
+// asserts the RESPONSE: against a fake that only emits schema-conformant
+// JSON when the wire body carries the constraint, the resulting
+// LLMResponse.Content parses as valid JSON precisely when
+// LLMRequest.ResponseSchema was populated. This goes red if the
+// translation edit (Generate()'s ResponseFormat assignment) is reverted,
+// independent of TestGenerate_CarriesResponseSchema above.
+func TestGenerate_ResponseSchemaConstrainsTheResponse(t *testing.T) {
+	schema := json.RawMessage(`{"type":"object","properties":{"verdict":{"type":"string"}}}`)
+
+	t.Run("schema present -> conformant JSON response", func(t *testing.T) {
+		reg := &schemaAwareRegistry{}
+		adapter := NewLLMProviderAdapter(reg, "profile-1", "openai/gpt-4o", nil, nil)
+		resp, err := adapter.Generate(context.Background(), coreag.LLMRequest{SystemPrompt: "base", ResponseSchema: schema})
+		if err != nil {
+			t.Fatalf("Generate: %v", err)
+		}
+		var out map[string]any
+		if err := json.Unmarshal([]byte(resp.Content), &out); err != nil {
+			t.Fatalf("response %q did not parse as JSON: %v", resp.Content, err)
+		}
+	})
+
+	t.Run("schema absent -> non-conformant prose (today's behaviour, unchanged)", func(t *testing.T) {
+		reg := &schemaAwareRegistry{}
+		adapter := NewLLMProviderAdapter(reg, "profile-1", "openai/gpt-4o", nil, nil)
+		resp, err := adapter.Generate(context.Background(), coreag.LLMRequest{SystemPrompt: "base"})
+		if err != nil {
+			t.Fatalf("Generate: %v", err)
+		}
+		var out map[string]any
+		if err := json.Unmarshal([]byte(resp.Content), &out); err == nil {
+			t.Fatalf("expected non-JSON prose when no schema was authored, got parseable JSON: %q", resp.Content)
+		}
+	})
 }
