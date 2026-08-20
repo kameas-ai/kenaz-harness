@@ -294,6 +294,23 @@ type Config struct {
 	// surface.
 	PartialPersister PartialPersister
 
+	// StreamCheckpoints is the mid-run durability seam
+	// (chat-turn-integrity-01PMZ606 WP02/WP03) that replaced the old
+	// "periodic flush calls PartialPersister" shape — the P0 this
+	// mission fixed: a healthy multi-tick turn used to write up to six
+	// copies of its own answer into session_messages, each flagged as a
+	// streaming failure (spec.md §1.1). runPeriodicFlush upserts a
+	// stream_checkpoints row roughly once per tick instead; driveRun
+	// deletes it on both the clean-close and error-close terminal
+	// paths, so only a crash leaves it behind (the FR-002 window).
+	//
+	// nil disables the periodic flush entirely (the guard at its call
+	// site mirrors PartialPersister's nil check above) — production
+	// wiring always sets this (core/rpc/api.go), so a nil value here in
+	// a non-test build means the seam was never wired, not that the
+	// feature is intentionally off (correction C-1, spec.md §1.7).
+	StreamCheckpoints StreamCheckpointStore
+
 	// AutonomyKnobs is the optional autonomy-dial knobs provider
 	// (autonomy-dial WP04). When non-nil, the kernel tool adapter reads
 	// the resolved knobs before each tool call and bypasses the
@@ -403,6 +420,35 @@ type PartialPersisterFunc func(ctx context.Context, sessionID, partialText, kind
 // PersistPartial satisfies PartialPersister.
 func (f PartialPersisterFunc) PersistPartial(ctx context.Context, sessionID, partialText, kind string, recoverable bool) (string, error) {
 	return f(ctx, sessionID, partialText, kind, recoverable)
+}
+
+// StreamCheckpointWriter is the mid-run durability seam runPeriodicFlush
+// drives (chat-turn-integrity-01PMZ606 WP02/WP03). UpsertStreamCheckpoint
+// is called roughly once per flush tick; the (sessionID, subID) pair is
+// a composite key at the store, so repeated calls overwrite the same
+// row instead of appending — a multi-tick turn leaves exactly one row
+// per subscription. This is deliberately NOT the PartialPersister seam:
+// a checkpoint never becomes a session_messages row on its own.
+//
+// The production implementation is *session.Manager — its
+// UpsertStreamCheckpoint method matches this signature exactly, so
+// wiring passes the manager directly with no adapter closure needed
+// (core/rpc/api.go).
+type StreamCheckpointWriter interface {
+	UpsertStreamCheckpoint(ctx context.Context, sessionID, subID, text string, hasTool bool) error
+}
+
+// StreamCheckpointStore extends StreamCheckpointWriter with the delete
+// operation driveRun uses on both of its terminal paths: the
+// clean-close deferred block deletes unconditionally, and the
+// error-close branch deletes right after PersistPartial lands the one
+// partial session_messages row, so recovery keeps exactly one source
+// of truth. ChatRunnerConfig.StreamCheckpoints is declared at this
+// wider interface; runPeriodicFlush itself only needs the narrower
+// StreamCheckpointWriter view of the same value.
+type StreamCheckpointStore interface {
+	StreamCheckpointWriter
+	DeleteStreamCheckpoint(ctx context.Context, sessionID, subID string) error
 }
 
 // UsageHookFunc is the callback signature for per-turn usage capture.
@@ -900,6 +946,20 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		Graph:     &graph,
 		LLM:       llmAdapter,
 		Tools:     toolAdapter,
+		// ToolSchemas (trust-surfaces-that-fire-01PMZ202 WP09 / UNIT-8):
+		// the same toolCatalog just handed to NewLLMProviderAdapter,
+		// projected onto a name -> JSON-Schema map so exec_dispatch.go's
+		// validateToolArgs can check a model-supplied tool call's
+		// arguments before dispatch. Was declared, documented ("Populated
+		// by the LLMProviderAdapter at StartStream time from the
+		// discovered ToolSpec slice") and read at exec_dispatch.go:195-196
+		// since agent-loop-robustness-parity WP06, but nothing ever wrote
+		// it — schemaJSON was always nil, so only the parses-as-object
+		// check ever ran. toolCatalog is per-run (StartStream-scoped), so
+		// this cannot live in the process-level envDefaults closure the
+		// way LifecycleHooks does; it has to be set here, where the
+		// discovered catalog is in scope.
+		ToolSchemas: toolSchemasFromSpecs(toolCatalog),
 		// The journal IS the history writer for this run: it forwards
 		// every entry to r.cfg.HistoryWriter (the one seam) and stamps
 		// the graph's assistant_write row as the turn's `final`, at the
@@ -1208,18 +1268,52 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 				sub.bridge.EmitClosed("backend-error", "internal error", "")
 			}
 		}
+		// chat-turn-integrity-01PMZ606 WP03: the clean-close clear.
+		// Runs on every driveRun exit except an actual process crash —
+		// which is exactly right: by the time this defer fires, either
+		// the turn ended cleanly (reason=="completed"/"stop-called" —
+		// nothing left to recover), or it ended with a backend-error
+		// (the block below already persisted the one partial
+		// session_messages row and deleted the checkpoint itself, so
+		// this is a no-op re-delete), or it hit one of the early-return
+		// terminal states (auth-failure-paused, panic) that don't use
+		// the checkpoint table for recovery either way.
+		// DeleteStreamCheckpoint is idempotent — deleting an
+		// already-absent or never-created row is not an error — so an
+		// unconditional call here is safe regardless of which path was
+		// taken. `reason` is declared later in this function and is out
+		// of lexical scope for this defer, which is why this is
+		// unconditional rather than branching on it.
+		if r.cfg.StreamCheckpoints != nil {
+			delCtx, delCancel := context.WithTimeout(context.Background(), persistPartialTimeout)
+			if derr := r.cfg.StreamCheckpoints.DeleteStreamCheckpoint(delCtx, sub.sessionID, sub.id); derr != nil {
+				log.Warn("chat.stream_checkpoint.delete_failed",
+					"sub_id", sub.id, "session_id", sub.sessionID, "err", derr.Error())
+			}
+			delCancel()
+		}
 		r.mu.Lock()
 		delete(r.subs, sub.id)
 		r.mu.Unlock()
 		close(sub.done)
 	}()
 
-	// WP02 — periodic partial flush: start a background goroutine that
-	// periodically persists accumulated streamed text during the run.
-	// This closes the crash-loss window (FR-002). The goroutine exits
-	// automatically when the run's context is cancelled.
-	if r.cfg.PartialPersister != nil {
-		go runPeriodicFlush(ctx, sub.sessionID, sub.bridge, r.cfg.PartialPersister, 0)
+	// chat-turn-integrity-01PMZ606 WP02/WP03: start a background
+	// goroutine that periodically upserts a stream_checkpoints row with
+	// the accumulated streamed text during the run. This closes the
+	// crash-loss window (FR-002) without writing into session_messages
+	// on every tick — the P0 this mission fixed (spec.md §1.1): a
+	// healthy multi-tick turn used to write up to six copies of its own
+	// answer into the transcript, each flagged as a streaming failure.
+	// The goroutine exits automatically when the run's context is
+	// cancelled.
+	//
+	// The nil guard mirrors PartialPersister's: production wiring
+	// always sets StreamCheckpoints (core/rpc/api.go), so nil here
+	// outside a test fixture means the seam was never wired, not that
+	// periodic durability is an intentionally-disabled feature.
+	if r.cfg.StreamCheckpoints != nil {
+		go runPeriodicFlush(ctx, sub.sessionID, sub.id, sub.bridge, r.cfg.StreamCheckpoints, 0)
 	}
 
 	// model-moves-transcript-01PMCH01 WP02: whatever else happens, the
@@ -1468,6 +1562,23 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 					"recoverable", partialRecoverable,
 					"bytes", len(partialText),
 				)
+				// chat-turn-integrity-01PMZ606 WP03: the error-close
+				// promotion. The partial row above is now the durable
+				// record of this turn's progress — delete the checkpoint
+				// so recovery has exactly one source of truth. If this
+				// delete fails, the outer defer's unconditional
+				// DeleteStreamCheckpoint retries it before driveRun
+				// returns. Only reached on a SUCCESSFUL PersistPartial —
+				// on failure the checkpoint is the only surviving copy
+				// of the partial text and must not be deleted here.
+				if r.cfg.StreamCheckpoints != nil {
+					delCtx, delCancel := context.WithTimeout(context.Background(), persistPartialTimeout)
+					if derr := r.cfg.StreamCheckpoints.DeleteStreamCheckpoint(delCtx, sub.sessionID, sub.id); derr != nil {
+						logging.L().Warn("chat.stream_checkpoint.delete_failed",
+							"sub_id", sub.id, "session_id", sub.sessionID, "err", derr.Error())
+					}
+					delCancel()
+				}
 			}
 		}
 	}
@@ -1728,6 +1839,32 @@ func filterOutTool(tools []corellm.ToolSpec, name string) []corellm.ToolSpec {
 		if t.Name != name {
 			out = append(out, t)
 		}
+	}
+	return out
+}
+
+// toolSchemasFromSpecs projects a discovered ToolSpec slice onto the
+// name -> JSON-Schema-bytes map env.ToolSchemas expects
+// (trust-surfaces-that-fire-01PMZ202 WP09 / UNIT-8). A spec with an
+// empty InputSchema contributes no entry — exec_dispatch.go's
+// validateToolArgs already treats a missing key as "no schema, skip
+// validation", identical to today's always-nil behaviour for that one
+// tool, so omitting it here changes nothing observable. A nil/empty
+// input returns nil, matching env.ToolSchemas' existing "nil disables
+// validation" contract (executor.go's doc on the field).
+func toolSchemasFromSpecs(specs []corellm.ToolSpec) map[string][]byte {
+	if len(specs) == 0 {
+		return nil
+	}
+	out := make(map[string][]byte, len(specs))
+	for _, s := range specs {
+		if len(s.InputSchema) == 0 {
+			continue
+		}
+		out[s.Name] = []byte(s.InputSchema)
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

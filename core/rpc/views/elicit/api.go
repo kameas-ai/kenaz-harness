@@ -45,6 +45,7 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core/elicitation"
 	"github.com/kameas-ai/kenaz-harness/core/tools/askuserquestion"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 // TopicElicitPending is the Wails event-broker topic the backend emits
@@ -76,6 +77,16 @@ type ElicitRequest struct {
 	// frontend round-trips it back in SubmitAskAnswer so the pending
 	// channel can be resolved correctly.
 	RequestID string `json:"request_id"`
+
+	// SessionID identifies the session this ask belongs to
+	// (served-mode-is-a-real-mode-01PMZ707 WP01). Mirrors
+	// elicitation.Entry.SessionID. Populated so core/serve's WS fan-out
+	// can scope "elicit:pending" to the connection's subscribed
+	// session instead of broadcasting every session's blocking asks to
+	// every served client. Empty for the rare case where the ask was
+	// parked with no session in context — core/serve fails that case
+	// closed (does not forward) rather than guessing.
+	SessionID string `json:"session_id,omitempty"`
 
 	// Question is the markdown-formatted question text.
 	Question string `json:"question"`
@@ -199,6 +210,13 @@ type ElicitAPI interface {
 	// reconcile its queue on reconnect / hot reload.
 	ListPending(ctx context.Context) ([]ElicitRequest, error)
 
+	// ListPendingForSession is ListPending narrowed to one session
+	// (served-mode-is-a-real-mode-01PMZ707 WP01). core/serve's WS
+	// reconnect snapshot calls this instead of ListPending so a served
+	// client only rebuilds dialog state for the session its stream is
+	// subscribed to.
+	ListPendingForSession(ctx context.Context, sessionID string) ([]ElicitRequest, error)
+
 	// RegisterDeferred registers a deferred ask and emits TopicElicitDeferred.
 	// Returns a DeferredResult{Deferred:true, AskID:…} for the model.
 	// Returns error when the session has too many concurrent pending asks.
@@ -302,12 +320,25 @@ func (a *API) publish(e elicitation.Entry) {
 func (a *API) OpenDialog(ctx context.Context, q elicitation.Question) (elicitation.Answer, error) {
 	const dialogTimeout = 10 * time.Minute
 
+	// SessionID rides the context: the toolloop dispatcher wraps ctx with
+	// toolloop.WithSessionID before calling into the built-in tool pool
+	// (core/rpc/views/agentgraph/chat/kernel_tool_adapter.go), and
+	// kenaz__ask_user_question's Call forwards that same ctx straight
+	// through to Delegate.OpenDialog. Reading it back here is what lets
+	// core/serve's WS fan-out scope "elicit:pending" to one session
+	// (served-mode-is-a-real-mode-01PMZ707 WP01) — without this the
+	// registry entry (and therefore the wire ElicitRequest) would carry
+	// an empty SessionID for every model-invoked ask, and the served
+	// fan-out would fail closed on the one path that matters most.
+	sessionID := toolloop.SessionIDFromContext(ctx)
+
 	timeoutCtx, cancel := context.WithTimeout(ctx, dialogTimeout)
 	defer cancel()
 
 	return a.registry.Park(timeoutCtx, elicitation.Request{
-		Question: q,
-		Mode:     elicitation.ModeBlocking,
+		SessionID: sessionID,
+		Question:  q,
+		Mode:      elicitation.ModeBlocking,
 	})
 }
 
@@ -351,12 +382,16 @@ func (a *API) SubmitWizardStep(_ context.Context, requestID string, questionID s
 func (a *API) OpenWizard(ctx context.Context, req ElicitRequest) (WizardAnswer, error) {
 	const dialogTimeout = 10 * time.Minute
 
+	// See OpenDialog's comment: SessionID rides the context the same way.
+	sessionID := toolloop.SessionIDFromContext(ctx)
+
 	timeoutCtx, cancel := context.WithTimeout(ctx, dialogTimeout)
 	defer cancel()
 
 	answer, err := a.registry.Park(timeoutCtx, elicitation.Request{
-		Question: questionOf(req),
-		Mode:     elicitation.ModeBlocking,
+		SessionID: sessionID,
+		Question:  questionOf(req),
+		Mode:      elicitation.ModeBlocking,
 	})
 	if err != nil {
 		return WizardAnswer{}, err
@@ -431,6 +466,27 @@ func (a *API) ListPending(_ context.Context) ([]ElicitRequest, error) {
 	return out, nil
 }
 
+// ListPendingForSession is ListPending narrowed to one session
+// (served-mode-is-a-real-mode-01PMZ707 WP01). core/serve's WS handler
+// calls this for the reconnect snapshot instead of ListPending so a
+// served client only rebuilds dialog state for the session its stream
+// is subscribed to — the sibling of the elicitation.Filter{SessionID:
+// …} pattern ListDeferred already uses above.
+func (a *API) ListPendingForSession(_ context.Context, sessionID string) ([]ElicitRequest, error) {
+	entries := a.registry.ListPending(elicitation.Filter{
+		SessionID: sessionID,
+		Mode:      elicitation.ModeBlocking,
+	})
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	out := make([]ElicitRequest, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, requestOf(e))
+	}
+	return out, nil
+}
+
 // ---- wire <-> canonical conversion ----
 //
 // ElicitRequest is the frozen frontend contract (it is a Wails-bound
@@ -442,6 +498,7 @@ func requestOf(e elicitation.Entry) ElicitRequest {
 	q := e.Question
 	req := ElicitRequest{
 		RequestID:    e.ID,
+		SessionID:    e.SessionID,
 		Question:     q.Text,
 		Kind:         string(q.Kind),
 		Placeholder:  q.Placeholder,

@@ -93,10 +93,21 @@ func (v *EngineVerifier) Verify(ctx context.Context, req VerifyRequest) (VerifyR
 
 	env := Envelope{
 		Payload:   req.Payload,
-		Signature: nil, // engine reads sig math from algo registry; bundle adapter only carries refs.
+		Signature: req.SignatureBytes,
 		Algorithm: alg,
 		KeyID:     req.Signature.KeyID,
-		IssuedAt:  time.Now().UTC(),
+		// IssuedAt is intentionally the zero value, not time.Now(). A
+		// detached ed25519 signature (the only algorithm with working
+		// verification math today — see spec F-2) carries no issuance
+		// timestamp on the wire: neither trust.SignatureRef nor
+		// manifest.SignatureRef has a time field. Stamping time.Now()
+		// here would make the clock-skew gate (verify.go step 6)
+		// unconditionally pass while claiming to have checked
+		// something real — a silent lie. ClockSkewPolicy.Within treats
+		// a zero IssuedAt as "skip this gate" (policy.go), so leaving
+		// it zero is the honest way to say "this signature kind is
+		// timeless" rather than faking a check that never happens.
+		IssuedAt: time.Time{},
 	}
 
 	res, vErr := v.engine.Verify(ctx, req.Payload, env, VerifyOptions{})

@@ -120,6 +120,8 @@ var cwdSensitiveGates = []string{
 	"check-listpending-coverage.sh",
 	"check-upgrade-snapshots-locked.sh",
 	"check-destructive-migration-coverage.sh",
+	"check-tool-containment-unconditional.sh",
+	"check-upgrade-snapshot-present.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -136,9 +138,20 @@ func TestGates_VerdictIsIndependentOfWorkingDirectory(t *testing.T) {
 	// was innocent; the harness was racing itself.
 	root := repoRoot(t)
 
+	// NOT t.Parallel() on the SUBTESTS either, and that is the half the
+	// PR #294 fix missed. Dropping it from the parent alone is not enough:
+	// a parallel subtest pauses and resumes only after the parent function
+	// RETURNS, so these subtests were still in flight when the next
+	// top-level test — TestGates_PlantedViolationFires — began writing
+	// probe files into the real tree. The same symptom recurred on
+	// release/v0.65.0 (run 32279405838): root clean, foreign cwd failing on
+	// menu:cmd-palette:open, whose subscriber is right there at
+	// frontend/src/App.vue:74. The gate was innocent again.
+	//
+	// These subtests are cheap (two gate invocations each) and there is no
+	// reason to overlap them with a test that mutates the tree they read.
 	for _, gate := range cwdSensitiveGates {
 		t.Run(gate, func(t *testing.T) {
-			t.Parallel()
 			foreign := t.TempDir()
 
 			rootCode, rootOut := runGate(t, gate, root)
@@ -638,20 +651,83 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				"\t}\n" +
 				"}\n",
 		},
+		{
+			// trust-surfaces-that-fire-01PMZ202 WP08 (UNIT-7), G-2 leg c: an
+			// AllEvents entry with no firer AND no allowlist row — the
+			// planted-violation shape the WP's own spec names ("an
+			// AllEvents entry with no firer and no allowlist row"). A new
+			// event is added to core/hooks.AllEvents via an
+			// `AllEvents = append(AllEvents, ...)` reassignment (legal Go —
+			// AllEvents is a package-level var, and this is not a second
+			// `var AllEvents = []string{...}` declaration) so the plant can
+			// land as a pure end-of-file append, the only shape the shared
+			// plant() helper supports for an existing file. The gate's
+			// leg-c parser is deliberately not limited to the hand-written
+			// literal block for exactly this reason.
+			name:       "hook-event-fire-sites/allevents-entry-no-firer-no-allowlist-row",
+			gate:       "check-hook-event-fire-sites.sh",
+			wantOutput: "zz_gate_probe_event",
+			file:       "core/hooks/hooks.go",
+			append: "\n\nconst EventZzGateProbe = \"zz_gate_probe_event\"\n\n" +
+				"func zzGateProbeAppendsAnEventlessEvent() {\n" +
+				"\tAllEvents = append(AllEvents, EventZzGateProbe)\n" +
+				"}\n",
+		},
+		{
+			// The absence gate. Unlike every other case in this table,
+			// the violation cannot be planted as a file: the defect is a
+			// snapshot directory that does NOT exist for a tag that DOES.
+			// Adding a file cannot create that; advancing the tag can.
+			//
+			// UPGRADE_SNAPSHOT_PRESENT_MAX_TAG=v99.0.0 stands in for "a
+			// release was just tagged and nobody ran upgrade-snapshot.sh"
+			// — the exact situation that shipped on v0.63.2, v0.64.0 and
+			// v0.64.1. It is not a suppression knob and cannot make a
+			// real violation pass; it only chooses which tag counts as
+			// newest, so the gate's real comparison runs against the real
+			// committed snapshot directories.
+			name: "upgrade-snapshot-present/chain-behind-newest-tag",
+			// The gate's specific diagnosis, not its "[upgrade-snapshot-
+			// present]" label — the label also prefixes "no stable release
+			// tag is reachable" and "no snapshot directories", so matching
+			// it would let a gate that cannot see tags at all satisfy this
+			// proof.
+			wantOutput: "chain is behind the newest release tag",
+			gate:       "check-upgrade-snapshot-present.sh",
+			env:        map[string]string{"UPGRADE_SNAPSHOT_PRESENT_MAX_TAG": "v99.0.0"},
+		},
 	}
 
 	for _, tc := range cases {
 		tc := tc
 		// Not parallel: these mutate the working tree.
 		t.Run(tc.name, func(t *testing.T) {
-			full := filepath.Join(root, tc.file)
-			cleanup := plant(t, full, tc.content, tc.append)
-			defer cleanup()
+			// A case with no `file` plants nothing in the tree. That is
+			// not a weaker proof — it is the only shape an ABSENCE gate
+			// can take. check-upgrade-snapshot-present.sh fails when the
+			// snapshot chain is BEHIND the newest release tag, and you
+			// cannot create that condition by adding a file; you create
+			// it by moving the tag forward, which is what that case's
+			// env override does. Every such case must still name a
+			// wantOutput, so the proof stays about the specific
+			// violation rather than about a non-zero exit.
+			violation := tc.file
+			if tc.file != "" {
+				full := filepath.Join(root, tc.file)
+				cleanup := plant(t, full, tc.content, tc.append)
+				defer cleanup()
+			} else {
+				if tc.wantOutput == "" {
+					t.Fatalf("case %q plants no file and names no wantOutput — "+
+						"a non-zero exit alone would be satisfied by a permanently broken gate.", tc.name)
+				}
+				violation = "the environment (" + tc.name + ")"
+			}
 
 			code, out := runGateEnv(t, tc.gate, root, tc.env)
 			if code == 0 {
 				t.Fatalf("%s exited 0 with a planted violation in %s — the gate cannot fail.\noutput:\n%s",
-					tc.gate, tc.file, out)
+					tc.gate, violation, out)
 			}
 			// A non-zero exit alone is a weak proof: a gate that is
 			// BROKEN (fails on every run, planted violation or not)
@@ -664,7 +740,7 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			if tc.wantOutput != "" && !strings.Contains(out, tc.wantOutput) {
 				t.Fatalf("%s failed with a planted violation in %s, but its output does not mention %q — "+
 					"it may be failing for an unrelated reason.\noutput:\n%s",
-					tc.gate, tc.file, tc.wantOutput, out)
+					tc.gate, violation, tc.wantOutput, out)
 			}
 		})
 	}
@@ -717,6 +793,62 @@ func plant(t *testing.T, full, content, appendText string) func() {
 				t.Errorf("removing %s: %v — WORKING TREE IS DIRTY", createdDir, err)
 			}
 		}
+	}
+}
+
+// TestToolContainmentUnconditionalGate_PlantedConditionalWrapperFails is
+// the planted-violation proof for
+// check-tool-containment-unconditional.sh (AC-015,
+// harness-self-attach-01PMHS01 UNIT-4). The shared plant() helper above
+// only supports appending to, or creating, a file — this gate's defect
+// class is specifically about an EXISTING line's indentation (nesting
+// the merged-resolver construction back inside a conditional), which
+// append cannot express, so this test does its own
+// read-mutate-restore cycle on core/rpc/api.go directly rather than
+// going through the cases table.
+func TestToolContainmentUnconditionalGate_PlantedConditionalWrapperFails(t *testing.T) {
+	root := repoRoot(t)
+	apiPath := filepath.Join(root, "core", "rpc", "api.go")
+
+	orig, err := os.ReadFile(apiPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", apiPath, err)
+	}
+
+	const target = "\tperms := toolloop.NewMergedResolver(staticPerms, sessionArm)\n"
+	if !strings.Contains(string(orig), target) {
+		t.Fatalf("expected line not found in api.go — the UNIT-4 wire may have moved; "+
+			"update this test and the gate together:\n%q", target)
+	}
+
+	// Reproduce the pre-UNIT-4 shape: the construction nested one level
+	// deeper inside a conditional. Still assigns via `perms := ...` — the
+	// gate must catch the INDENTATION change (nesting), not merely a
+	// renamed variable.
+	mutated := "\tif c != nil && c.DataDir() != \"\" {\n" +
+		"\t\tperms := toolloop.NewMergedResolver(staticPerms, sessionArm)\n" +
+		"\t\t_ = perms\n" +
+		"\t}\n" +
+		"\tvar perms toolloop.PermissionResolver\n"
+	newContent := strings.Replace(string(orig), target, mutated, 1)
+
+	if err := os.WriteFile(apiPath, []byte(newContent), 0o644); err != nil {
+		t.Fatalf("writing mutated api.go: %v", err)
+	}
+	defer func() {
+		if err := os.WriteFile(apiPath, orig, 0o644); err != nil {
+			t.Errorf("restoring api.go: %v — WORKING TREE IS DIRTY", err)
+		}
+	}()
+
+	code, out := runGate(t, "check-tool-containment-unconditional.sh", root)
+	if code == 0 {
+		t.Fatalf("check-tool-containment-unconditional.sh exited 0 with the merged resolver "+
+			"nested back inside a conditional — the gate cannot fail.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "conditional-assignment shape") {
+		t.Fatalf("gate failed, but its output does not mention the expected defect class "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
 	}
 }
 

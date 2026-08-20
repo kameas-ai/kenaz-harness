@@ -107,6 +107,22 @@ type LastUsage struct {
 	CostSource       string  `json:"costSource"`
 }
 
+// StreamCheckpoint is a durable mid-run snapshot of one active stream
+// subscription's accumulated text (chat-turn-integrity-01PMZ606 WP02).
+// One row lives per (SessionID, SubID) — UpsertStreamCheckpoint
+// overwrites in place, so a multi-tick turn leaves exactly one row per
+// subscription, never one per tick. This is deliberately NOT a
+// session_messages row: a mid-run checkpoint is not a transcript
+// entry, it becomes one only if the turn dies (see migration
+// sessions/0336-stream-checkpoints).
+type StreamCheckpoint struct {
+	SessionID string
+	SubID     string
+	Text      string
+	HasTool   bool
+	UpdatedAt time.Time
+}
+
 // ContextKind values for Record.ContextKind. Validated at the manager
 // boundary so callers cannot persist unknown values.
 const (

@@ -46,7 +46,7 @@ describe('SettingsTabs — vertical nav rail', () => {
     // core/tasks.Registry never receives a row in production: the only
     // Register call is subagentdispatch/tool.go, guarded by opts.Tasks,
     // whose sole production assignment is `Tasks: nil`
-    // (core/rpc/builtins_wiring.go:317); and bash.Options.BackgroundSpawn
+    // (core/rpc/builtins_wiring.go:321); and bash.Options.BackgroundSpawn
     // has no non-test assignment. The panel behind this link was therefore
     // permanently empty. TasksPanel.vue is parked, not deleted — the
     // product decision on background execution is still open.

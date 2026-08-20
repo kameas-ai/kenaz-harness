@@ -12,6 +12,7 @@ import HooksPanel from '@/components/settings/HooksPanel.vue';
 import HookEditor from '@/components/settings/HookEditor.vue';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
+import { FIRING_HOOK_EVENTS } from '@/lib/hooks';
 import type { Hook, BuiltinDescriptor, DryRunResult } from '@/lib/types';
 
 // ── fixtures ────────────────────────────────────────────────────────────
@@ -202,16 +203,31 @@ describe('HookEditor', () => {
       expect(wrapper.text()).toContain('ADD HOOK');
     });
 
-    it('shows all 18 events in the event picker', () => {
+    // AC-08a (trust-surfaces-that-fire-01PMZ202 WP08 / UNIT-7), extended
+    // by WP09/UNIT-8 and WP10/UNIT-9 as producer WPs grew
+    // FIRING_HOOK_EVENTS: the picker renders exactly one <option> per
+    // FIRING_HOOK_EVENTS entry (asserted against the real exported const,
+    // not a hardcoded count, so this test tracks the array rather than
+    // needing a manual bump on every future producer WP), a fresh
+    // (create-mode) draft's event is 'pre_send' — still the first entry
+    // and already in the firing set — and there is no inert badge.
+    it('shows one <option> per FIRING_HOOK_EVENTS entry in the event picker', () => {
       const wrapper = mountEditor(null);
       const options = wrapper.find('[data-testid="hook-editor-event"]').findAll('option');
-      expect(options.length).toBe(18);
+      expect(options.length).toBe(FIRING_HOOK_EVENTS.length);
+      expect(options.map((o) => o.element.value)).toEqual([...FIRING_HOOK_EVENTS]);
+      expect(options[0].element.value).toBe('pre_send');
+      expect(wrapper.find('[data-testid="hook-editor-event-inert-badge"]').exists()).toBe(false);
     });
 
-    it('shows all 3 kinds in the kind picker', () => {
+    // A-6: 'mcp' is dropped from the kind picker (stub-only backend), but
+    // a saved kind=mcp hook must still load — core/hooks.KindMCP and its
+    // dispatcher paths are untouched (Go-side, not exercised here).
+    it('shows exactly 2 kinds in the kind picker (mcp dropped)', () => {
       const wrapper = mountEditor(null);
       const options = wrapper.find('[data-testid="hook-editor-kind"]').findAll('option');
-      expect(options.length).toBe(3);
+      expect(options.length).toBe(2);
+      expect(options.map((o) => o.element.value)).toEqual(['builtin', 'shell']);
     });
   });
 
@@ -264,10 +280,61 @@ describe('HookEditor', () => {
       expect(wrapper.find('[data-testid="hook-editor-builtin"]').exists()).toBe(true);
     });
 
-    it('shows mcp tool field for mcp kind', async () => {
-      const wrapper = mountEditor(null);
-      await wrapper.find('[data-testid="hook-editor-kind"]').setValue('mcp');
-      expect(wrapper.find('[data-testid="hook-editor-mcp-tool"]').exists()).toBe(true);
+    // A-6: 'mcp' is not offered as a NEW selection (the field is gone from
+    // the editor), but a hook saved with kind=mcp before this WP must
+    // still load and still re-save without losing its mcpTool value —
+    // core/hooks.KindMCP and the four dispatcher error paths in Go are
+    // untouched. There is no MCP-tool input to edit any more, so this
+    // proves the value survives a round-trip through the editor rather
+    // than that it can be authored fresh.
+    it('preserves a saved kind=mcp hook through edit and save (A-6)', async () => {
+      const mcpHook: Hook = {
+        ...FAKE_HOOK,
+        id: 'hk-mcp-legacy',
+        kind: 'mcp',
+        mcpTool: 'server_name::tool_name',
+        command: undefined,
+      };
+      const wrapper = mountEditor(mcpHook);
+      expect(wrapper.find('[data-testid="hook-editor-mcp-tool"]').exists()).toBe(false);
+      await wrapper.find('[data-testid="hook-editor-save"]').trigger('click');
+      expect(wrapper.emitted('save')).toBeTruthy();
+      const saved = (wrapper.emitted('save') as Hook[][])[0][0];
+      expect(saved.kind).toBe('mcp');
+      expect(saved.mcpTool).toBe('server_name::tool_name');
+    });
+  });
+
+  // AC-08b (WP08 / UNIT-7): a hook saved against an event outside
+  // FIRING_HOOK_EVENTS before this change still loads, still validates,
+  // and renders with the inert badge naming the mission that will light
+  // it — instead of the picker silently hiding the gap.
+  describe('firing-events honesty floor (AC-08b)', () => {
+    it('renders the inert badge for a saved hook whose event does not fire yet', () => {
+      const legacyHook: Hook = { ...FAKE_HOOK, event: 'post_send' };
+      const wrapper = mountEditor(legacyHook);
+      const badge = wrapper.find('[data-testid="hook-editor-event-inert-badge"]');
+      expect(badge.exists()).toBe(true);
+      expect(badge.text()).toContain('trust-surfaces-that-fire-01PMZ202');
+
+      // The select still shows the real event name selected — not blank —
+      // via the dynamically-injected current-value <option>.
+      const select = wrapper.find('[data-testid="hook-editor-event"]');
+      expect((select.element as HTMLSelectElement).value).toBe('post_send');
+    });
+
+    it('does not render the inert badge for a saved hook whose event fires', () => {
+      const wrapper = mountEditor(FAKE_HOOK); // event: 'pre_send'
+      expect(wrapper.find('[data-testid="hook-editor-event-inert-badge"]').exists()).toBe(false);
+    });
+
+    it('still emits save for a hook whose event does not fire yet (server-side validation is unaffected)', async () => {
+      const legacyHook: Hook = { ...FAKE_HOOK, event: 'post_send' };
+      const wrapper = mountEditor(legacyHook);
+      await wrapper.find('[data-testid="hook-editor-save"]').trigger('click');
+      expect(wrapper.emitted('save')).toBeTruthy();
+      const saved = (wrapper.emitted('save') as Hook[][])[0][0];
+      expect(saved.event).toBe('post_send');
     });
   });
 

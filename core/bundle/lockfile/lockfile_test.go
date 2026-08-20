@@ -153,3 +153,81 @@ func TestContentHashStable(t *testing.T) {
 		t.Errorf("hash unstable: %s vs %s", h1, h2)
 	}
 }
+
+// TestVerifiedFieldRoundTrips is UNIT-4's G-2 foundation: Verified must
+// survive a Write/Read round trip, and — the more important half — a
+// v0.64.0-shaped row with a non-empty signature_ref but NO verified key
+// (every row a pre-UNIT-4 release ever wrote) must parse with
+// Verified==false. The trust tier must never be derived from
+// SignatureRef's mere presence.
+func TestVerifiedFieldRoundTrips(t *testing.T) {
+	lf := sample()
+	lf.Bundles[0].Verified = true
+	b, err := lockfile.Write(lf)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if !strings.Contains(string(b), "verified = true") {
+		t.Fatalf("Write output missing 'verified = true':\n%s", b)
+	}
+	got, err := lockfile.Read(b)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	var found bool
+	for _, lb := range got.Bundles {
+		if lb.Name == lf.Bundles[0].Name {
+			found = true
+			if !lb.Verified {
+				t.Errorf("Verified did not survive round trip")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("bundle not found after round trip")
+	}
+}
+
+// TestLegacyRowWithSignatureRefButNoVerifiedKey_ParsesUnverified is the
+// exact v0.64.0 lockfile shape (AC-008): signature_ref present,
+// "verified" key absent because it did not exist yet. Must parse with
+// Verified==false — this is what makes UNIT-4's tier fix observable on
+// an upgrade.
+func TestLegacyRowWithSignatureRefButNoVerifiedKey_ParsesUnverified(t *testing.T) {
+	doc := `schema_version = 1
+
+[[bundle]]
+name = "legacy-bundle"
+version = "1.0.0"
+source = "local_path:/tmp/legacy"
+content_hash = "sha256:aaaa"
+signature_ref = "kenaz.yaml.sig"
+
+[universal]
+`
+	lf, err := lockfile.Read([]byte(doc))
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if len(lf.Bundles) != 1 {
+		t.Fatalf("bundles=%d, want 1", len(lf.Bundles))
+	}
+	lb := lf.Bundles[0]
+	if lb.SignatureRef == "" {
+		t.Fatal("fixture must carry a non-empty signature_ref")
+	}
+	if lb.Verified {
+		t.Fatal("Verified=true for a legacy row with no 'verified' key — should default false")
+	}
+}
+
+func TestVerifiedFalse_OmittedFromOutput(t *testing.T) {
+	lf := sample() // Verified is false (zero value) on every bundle
+	b, err := lockfile.Write(lf)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if strings.Contains(string(b), "verified") {
+		t.Errorf("Write emitted a 'verified' key for an unverified bundle (omitempty violated):\n%s", b)
+	}
+}

@@ -75,6 +75,17 @@ type Config struct {
 	ClockSkew ClockSkewPolicy
 	// ChainDepth bounds the maximum allowed envelope chain length.
 	ChainDepth ChainDepthPolicy
+	// Anchors is the persistence seam for the engine's AnchorStore
+	// (bundle-download-and-verify-01PMZ909 UNIT-3, spec §1.7 F-1). Nil
+	// (the zero value) defaults to an in-memory store scoped to this
+	// engine instance — the v1.0 behaviour every existing caller and
+	// test already gets. Production callers with a real data
+	// directory pass [NewSQLiteAnchorStore] so an installed anchor
+	// survives a relaunch; the test-harness path (no DataDir) is left
+	// on the in-memory default. There is deliberately no package-level
+	// setter — the store is a construction-time dependency, not
+	// process-global state.
+	Anchors AnchorStore
 }
 
 // NewEngine constructs a verify-only [TrustEngine] with an in-memory

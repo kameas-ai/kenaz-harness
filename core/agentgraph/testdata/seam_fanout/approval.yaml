@@ -1,7 +1,11 @@
 # Seam fanout fixture for kind=approval
-# No seam calls on first fire (returns ErrPaused); AskBus on resumed fire.
+# approval-node-01PMZC12 UNIT-2: the pending decision is registered on
+# AskBus.Pending on the SAME (first, pausing) fire, mirroring `ask`;
+# the run then parks via ErrPaused. UNIT-3 has not landed a resolve
+# verb yet, so there is no resumed-fire lookup today — every fire
+# registers-and-parks again.
 kind: approval
 seams:
   - seam: AskBus.Pending
-    required: false
-notes: "approval node parks the run on first fire (ErrPaused); no seam calls beyond state"
+    required: true
+notes: "approval node registers the pending decision on AskBus.Pending, then parks the run (ErrPaused), on its first fire; no resolve verb exists yet (UNIT-3), so it re-parks on any subsequent fire"

@@ -943,10 +943,22 @@ type wsRequest struct {
 // handleWS handles a WebSocket connection for streaming subscriptions.
 // Protocol:
 //
-//	client → {"method": "Sessions_Stream", "params": {}}
+//	client → {"method": "Sessions_Stream", "params": {"id": "sess-abc"}}
 //	server → {"event": "sessions:snapshot", "data": [...]}  (initial)
 //	server → {"event": "sessions:update", "data": {...}}    (on change)
 //	server → {"event": "closed"}                            (on close)
+//
+// params.id is REQUIRED (served-mode-is-a-real-mode-01PMZ707 WP01,
+// AC-703): it is the session this connection subscribes to, and it
+// scopes every session-bearing frame streamSessions forwards. An
+// absent or empty id is a hard refusal, not a fall-back to an
+// unscoped, all-sessions stream — the fall-back was the cross-session
+// authorization leak this WP closes (a served client could otherwise
+// receive, and resolve, every other session's parked confirmations,
+// blocking elicitations and permission prompts). No frontend change is
+// needed: frontend/src/lib/harnessClient.ts already sends
+// params:{id}, and frontend/src/lib/useSession.ts opens exactly one
+// stream per active session.
 func (s *Server) handleWS(ws *websocket.Conn) {
 	defer ws.Close() //nolint:errcheck
 
@@ -962,7 +974,20 @@ func (s *Server) handleWS(ws *websocket.Conn) {
 
 	switch req.Method {
 	case "Sessions_Stream":
-		s.streamSessions(ctx, ws)
+		var p struct {
+			ID string `json:"id"`
+		}
+		if len(req.Params) > 0 {
+			if err := json.Unmarshal(req.Params, &p); err != nil {
+				_ = websocket.JSON.Send(ws, wsFrame{Error: "Sessions_Stream: bad params: " + err.Error()})
+				return
+			}
+		}
+		if p.ID == "" {
+			_ = websocket.JSON.Send(ws, wsFrame{Error: "Sessions_Stream: params.id is required"})
+			return
+		}
+		s.streamSessions(ctx, ws, p.ID)
 	default:
 		_ = websocket.JSON.Send(ws, wsFrame{Error: "unknown stream method: " + req.Method})
 	}

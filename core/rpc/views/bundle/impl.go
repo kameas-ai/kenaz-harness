@@ -17,8 +17,10 @@ import (
 	"sync"
 
 	"github.com/kameas-ai/kenaz-harness/core/bundle/cache"
+	"github.com/kameas-ai/kenaz-harness/core/bundle/integrity"
 	"github.com/kameas-ai/kenaz-harness/core/bundle/lockfile"
 	"github.com/kameas-ai/kenaz-harness/core/bundle/manifest"
+	"github.com/kameas-ai/kenaz-harness/core/trust"
 )
 
 // Reader is the minimal interface this impl needs — backed in
@@ -47,6 +49,16 @@ type API struct {
 	reader Reader
 	writer Writer
 	cas    CASLike
+
+	// verifier, anchorsFunc and signingPolicyFunc are UNIT-4's
+	// signature-verification seam (bundle-download-and-verify-01PMZ909,
+	// spec §2). All three are optional; a nil verifier makes
+	// VerifyManifestSignatures skip verification under any policy but
+	// SigningRequired — matching pre-UNIT-4 behaviour for callers that
+	// haven't wired a trust engine.
+	verifier          trust.Verifier
+	anchorsFunc       func(ctx context.Context) ([]trust.Anchor, error)
+	signingPolicyFunc func() integrity.SigningPolicy
 }
 
 // Option configures NewAPI.
@@ -65,6 +77,31 @@ func WithWriter(w Writer) Option {
 // WithCAS injects the bundle cache (cache.CAS satisfies CASLike).
 func WithCAS(c CASLike) Option {
 	return func(a *API) { a.cas = c }
+}
+
+// WithVerifier injects the trust.Verifier Install consults before
+// writing a lockfile row (UNIT-4). A nil verifier (the zero value)
+// means Install never verifies — VerifyManifestSignatures treats a nil
+// verifier the same as "no signature checking configured", refusing
+// only under SigningRequired.
+func WithVerifier(v trust.Verifier) Option {
+	return func(a *API) { a.verifier = v }
+}
+
+// WithAnchorsFunc injects a per-call anchor lookup (typically
+// engine.ListAnchors, so a newly-installed anchor is visible on the
+// very next Install without reconstructing the API).
+func WithAnchorsFunc(f func(ctx context.Context) ([]trust.Anchor, error)) Option {
+	return func(a *API) { a.anchorsFunc = f }
+}
+
+// WithSigningPolicyFunc injects a per-call signing-policy resolver
+// (typically reading settings.Settings.EffectiveBundleSigningPolicy on
+// every call so a Settings change takes effect on the next install
+// without restarting). Defaults to SigningOptional when nil or when
+// the function itself is nil.
+func WithSigningPolicyFunc(f func() integrity.SigningPolicy) Option {
+	return func(a *API) { a.signingPolicyFunc = f }
 }
 
 // NewAPI constructs the bundle view-scoped API.
@@ -194,12 +231,18 @@ func (a *API) Get(_ context.Context, id string) (Bundle, error) {
 }
 
 // lockedToBundle maps a lockfile.LockedBundle into the public Bundle
-// shape. Tier currently encodes the source channel + signature
-// presence; once the resolver mission ships richer trust metadata
-// this mapping moves to a typed function in core/bundle.
+// shape. Tier currently encodes the source channel + a REAL recorded
+// verification result; once the resolver mission ships richer trust
+// metadata this mapping moves to a typed function in core/bundle.
+//
+// UNIT-4 (spec FR-006, G-2): tier is derived from lb.Verified — set
+// only by a positive VerifyManifestSignatures result at install time —
+// never from lb.SignatureRef's mere presence. A pre-UNIT-4 lockfile row
+// can carry a non-empty SignatureRef with Verified defaulting false
+// (the field didn't exist yet), and must NOT render as "signed".
 func lockedToBundle(lb lockfile.LockedBundle, cas CASLike, includeArtifacts bool) Bundle {
 	tier := "channel"
-	if lb.SignatureRef != "" {
+	if lb.Verified {
 		tier = "signed"
 	}
 	if cas != nil && lb.ContentHash != "" && !cas.Has(lb.ContentHash) {
@@ -237,7 +280,7 @@ func lockedToBundle(lb lockfile.LockedBundle, cas CASLike, includeArtifacts bool
 // the resolver mission ships the byte-fetch pipeline; this beta surface
 // surfaces "uncached" tier annotations on the resulting list rows so
 // the operator knows the bundle is registered but not yet materialized.
-func (a *API) Install(_ context.Context, req InstallRequest) (Bundle, error) {
+func (a *API) Install(ctx context.Context, req InstallRequest) (Bundle, error) {
 	if a.reader == nil || a.writer == nil {
 		return Bundle{}, fmt.Errorf("bundle: install requires a writable lockfile")
 	}
@@ -263,6 +306,27 @@ func (a *API) Install(_ context.Context, req InstallRequest) (Bundle, error) {
 		return Bundle{}, fmt.Errorf("bundle: validate manifest: %w", err)
 	}
 
+	// UNIT-4 (spec §2): verify signatures BEFORE the lockfile lock and
+	// before any write, so a refused install leaves no lockfile row and
+	// no partial state — "rollback on refusal" falls out of ordering
+	// rather than needing an explicit undo. VerifyManifestSignatures had
+	// zero callers before this; this is the first one.
+	policy := integrity.SigningOptional
+	if a.signingPolicyFunc != nil {
+		policy = a.signingPolicyFunc()
+	}
+	var anchors []trust.Anchor
+	if a.anchorsFunc != nil {
+		anchors, err = a.anchorsFunc(ctx)
+		if err != nil {
+			return Bundle{}, fmt.Errorf("bundle: load trust anchors: %w", err)
+		}
+	}
+	verified, err := integrity.VerifyManifestSignatures(ctx, m, a.verifier, anchors, policy, integrity.FileResolver(req.Path))
+	if err != nil {
+		return Bundle{}, fmt.Errorf("bundle: verify signatures: %w", err)
+	}
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -280,6 +344,11 @@ func (a *API) Install(_ context.Context, req InstallRequest) (Bundle, error) {
 		Version:     m.Version,
 		Source:      "local_path:" + req.Path,
 		ContentHash: m.ContentHash(),
+		// Verified is the real, positive verification result from
+		// above — never derived from SignatureRef's mere presence
+		// (G-2). false for an unsigned bundle under SigningOptional,
+		// exactly as before UNIT-4.
+		Verified: verified,
 	}
 	for _, ad := range m.Artifacts {
 		lb.Artifacts = append(lb.Artifacts, lockfile.LockedArtifact{
