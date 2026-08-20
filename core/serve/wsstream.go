@@ -134,6 +134,22 @@ var passthroughTopics = []string{
 
 	// Per-turn accounting the chat surface renders inline.
 	rpc.TopicSessionUsageUpdated,
+	// rpc.TopicCostThresholdCrossed stays SUBSCRIBED (it must, or
+	// TestPassthroughTopics_MatchServedStreamTopicsTS fails against the
+	// frontend's SERVED_STREAM_TOPICS) but never DELIVERED: its payload
+	// (usage.ThresholdCrossedPayload) is a calendar-month account
+	// aggregate with no SessionID field at all, unlike every other
+	// entry in this list. frameFor's sessionIDOf probe therefore always
+	// returns ok=false for it, and D-705 ("a topic whose payload
+	// carries no session is not forwarded until it does — fail closed")
+	// drops it for every connection rather than guessing it is safe to
+	// broadcast the way TopicMigrationDriftDetected deliberately is
+	// (processWideTopics, below — that exemption is earned by an
+	// explicit product decision this topic does not have). Net effect:
+	// the cost-threshold toast does not fire in served mode until a
+	// follow-up gives this payload a session, or a product decision
+	// adds it to processWideTopics. Recorded, not resolved, per E-701's
+	// pattern — see WP01's commit message and report.
 	rpc.TopicCostThresholdCrossed,
 
 	// Interactive gates. Without these a tool call inside a workbench
@@ -228,8 +244,11 @@ func (s *Server) streamQueueCap() int {
 // returns, so no event published after that frame arrives can be silently
 // lost. Callers and tests may rely on that ordering.
 //
-// The caller is the Sessions_Stream WS method handler.
-func (s *Server) streamSessions(ctx context.Context, ws *websocket.Conn) {
+// The caller is the Sessions_Stream WS method handler, which has already
+// rejected an absent/empty sessionID (AC-703) — every session-bearing
+// frame this function forwards or snapshots is scoped to sessionID
+// (served-mode-is-a-real-mode-01PMZ707 WP01).
+func (s *Server) streamSessions(ctx context.Context, ws *websocket.Conn, sessionID string) {
 	// writeFrame sends a frame under a deadline and reports whether the
 	// connection is still usable.
 	writeFrame := func(event string, data any) bool {
@@ -276,20 +295,31 @@ func (s *Server) streamSessions(ctx context.Context, ws *websocket.Conn) {
 		return
 	}
 
-	// Any currently-pending elicitation asks, so a reconnecting frontend can
-	// reconstruct dialog state (FR-007).
-	if pending, perr := s.elicitAPI().ListPending(ctx); perr == nil && len(pending) > 0 {
+	// Any currently-pending elicitation asks FOR THIS SESSION, so a
+	// reconnecting frontend can reconstruct dialog state (FR-007).
+	// Scoped (WP01, AC-704's sibling): the unscoped ListPending() is
+	// still what the Wails-bound Elicit_ListPending RPC calls for
+	// desktop's single-process, all-sessions-visible behaviour — this
+	// is a different call, for the served WS reconnect snapshot only.
+	if pending, perr := s.elicitAPI().ListPendingForSession(ctx, sessionID); perr == nil && len(pending) > 0 {
 		if !writeFrame("elicit:pending:snapshot", pending) {
 			return
 		}
 	}
 
-	// Any currently-parked tool confirmations, so a reconnecting frontend
-	// rebuilds the batched modal rather than leaving the run parked
-	// behind a dialog the browser forgot about. Same contract as the
-	// elicitation snapshot above: the pause lives in the harness
-	// process, not in the dialog.
-	if parked, cerr := s.api.Confirm().ListPending(ctx, ""); cerr == nil && len(parked) > 0 {
+	// Any currently-parked tool confirmations FOR THIS SESSION, so a
+	// reconnecting frontend rebuilds the batched modal rather than
+	// leaving the run parked behind a dialog the browser forgot about.
+	// Same contract as the elicitation snapshot above: the pause lives
+	// in the harness process, not in the dialog.
+	//
+	// Scoped (WP01, AC-704): "" was the all-sessions branch
+	// (core/rpc/views/confirm/api.go ListPending) — passing it here
+	// was half of the leak this WP closes. The served frontend's own
+	// explicit Confirm_ListPending('') RPC call (ConfirmToolModal.vue)
+	// is untouched and stays cross-session on purpose; this is only
+	// the automatic WS-reconnect snapshot.
+	if parked, cerr := s.api.Confirm().ListPending(ctx, sessionID); cerr == nil && len(parked) > 0 {
 		if !writeFrame("tool:confirm-pending:snapshot", parked) {
 			return
 		}
@@ -300,7 +330,7 @@ func (s *Server) streamSessions(ctx context.Context, ws *websocket.Conn) {
 		out:  make(chan outFrame, s.streamQueueCap()),
 		done: make(chan struct{}),
 	}
-	go s.runPump(ctx, pump)
+	go s.runPump(ctx, pump, sessionID)
 
 	// Drain incoming messages so a client ping or disconnect reaches us
 	// promptly. Recover panics (FR-003).
@@ -356,7 +386,7 @@ func (s *Server) streamSessions(ctx context.Context, ws *websocket.Conn) {
 // runPump is the sole reader of the bus subscription. It transforms each
 // event into a client frame and hands it to the bounded queue without
 // ever blocking on the socket.
-func (s *Server) runPump(ctx context.Context, p *streamPump) {
+func (s *Server) runPump(ctx context.Context, p *streamPump, sessionID string) {
 	defer close(p.done)
 	defer recoverWS("serve.server.ws_pump.panic")
 
@@ -368,7 +398,7 @@ func (s *Server) runPump(ctx context.Context, p *streamPump) {
 			if !ok {
 				return // bus closed (server shutting down)
 			}
-			f, forward := s.frameFor(ctx, ev)
+			f, forward := s.frameFor(ctx, ev, sessionID)
 			if !forward {
 				continue
 			}
@@ -377,14 +407,80 @@ func (s *Server) runPump(ctx context.Context, p *streamPump) {
 	}
 }
 
-// frameFor maps a bus event to the frame the browser receives.
+// processWideTopics are the bus topics frameFor forwards to every
+// connected client regardless of which session it subscribed to,
+// because the event genuinely has no per-session owner — not because
+// nobody got around to adding one.
+//
+// TopicMigrationDriftDetected: a boot-time storage-health signal for
+// the whole process (upgrade-path-coverage-01PMUG01 WP04); there is no
+// session to scope it to. Anything added here must be justified the
+// same way SD-14's disposition required for the filter itself: this is
+// an intentional exemption from D-705, not a shortcut around it.
+var processWideTopics = map[string]bool{
+	rpc.TopicMigrationDriftDetected: true,
+}
+
+// sessionIDOf extracts the session id from a bus event payload without
+// importing every producer package's concrete type: payloads already
+// cross the wire as JSON (outFrame.data, below), so re-marshalling here
+// to probe one field costs nothing this file does not already pay at
+// the socket write, and it keeps frameFor correct for any future
+// session-bearing payload without a matching type-assertion branch.
+//
+// Session id fields use two json-tag spellings across existing
+// producers (session_id: toolloop.ConfirmRequest, FlatPermissionRequest,
+// StreamChunkPayload, StreamClosedPayload, FallbackAttemptedEvent,
+// elicit.ElicitRequest, the chat:overflow-recovery map; sessionId:
+// SessionUsagePayload) — both are probed. ok is false when neither key
+// is present or both are empty, which is the D-705 "fails closed" case:
+// a payload with no session id is indistinguishable here from one that
+// forgot to carry it, and forwarding it anyway on the assumption "it's
+// probably fine" is exactly the leak this WP closes.
+func sessionIDOf(payload any) (id string, ok bool) {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", false
+	}
+	var probe struct {
+		Snake string `json:"session_id"`
+		Camel string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return "", false
+	}
+	if probe.Snake != "" {
+		return probe.Snake, true
+	}
+	if probe.Camel != "" {
+		return probe.Camel, true
+	}
+	return "", false
+}
+
+// frameFor maps a bus event to the frame the browser receives, scoped to
+// sessionID — the session this connection's Sessions_Stream subscribed
+// to (served-mode-is-a-real-mode-01PMZ707 WP01).
 //
 // Most topics are forwarded verbatim so the served frontend consumes the
 // exact payload shape the desktop build consumes. TopicSessionListChanged
 // is the one transformation: the client wants a consistent list, not a
 // bare delta, so the current list is re-read here (in the pump, off the
-// socket-write path) and shipped alongside the change metadata.
-func (s *Server) frameFor(ctx context.Context, ev rpc.BusEvent) (outFrame, bool) {
+// socket-write path) and shipped alongside the change metadata. The
+// session list itself is not scoped to one session (it is the sidebar's
+// full list, same as the desktop build shows), so it is forwarded like
+// the processWideTopics below.
+//
+// Every other topic is forwarded only when its payload's session id
+// matches sessionID. This is the fix for the cross-session
+// authorization leak (SD-14, now live rather than the dead
+// `if !forward { continue }` the 2026-08-18 dead-code audit found
+// unreachable at dead-code-audit-2026-08-18.md:1572): before this, every
+// served WS client received every session's tool:confirm-pending,
+// elicit:pending, *:permission-pending and llm:stream-chunk frames — and
+// could resolve confirmations and elicitations it never should have
+// seen.
+func (s *Server) frameFor(ctx context.Context, ev rpc.BusEvent, sessionID string) (outFrame, bool) {
 	if ev.Topic == rpc.TopicSessionListChanged {
 		updated, err := s.api.Sessions().List(ctx)
 		if err != nil {
@@ -394,6 +490,12 @@ func (s *Server) frameFor(ctx context.Context, ev rpc.BusEvent) (outFrame, bool)
 			"sessions": updated,
 			"change":   ev.Payload,
 		}}, true
+	}
+	if !processWideTopics[ev.Topic] {
+		payloadSessionID, ok := sessionIDOf(ev.Payload)
+		if !ok || payloadSessionID != sessionID {
+			return outFrame{}, false
+		}
 	}
 	return outFrame{event: ev.Topic, data: ev.Payload}, true
 }

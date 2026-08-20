@@ -3554,6 +3554,13 @@ export interface ElicitPreview {
  */
 export interface ElicitRequest {
   request_id: string;
+  /**
+   * The session this ask belongs to (served-mode-is-a-real-mode-01PMZ707
+   * WP01). Populated so core/serve's WS fan-out can scope "elicit:pending"
+   * to the connection's subscribed session. Empty on desktop paths that
+   * never scope by session.
+   */
+  session_id?: string;
   question: string;
   kind: QuestionKind;
   options?: QuestionOption[];
