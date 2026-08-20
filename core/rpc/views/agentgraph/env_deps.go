@@ -69,6 +69,16 @@ type EnvDeps struct {
 	// entirely — the chat runner's post-run trigger no-ops without it,
 	// same as every other unset EnvDeps seam.
 	MergeSuggester *coreag.MergeSuggester
+
+	// LifecycleHooks fires the v2 pre_tool_use / post_tool_use /
+	// post_tool_use_failure hooks at the tool-dispatch boundary
+	// (trust-surfaces-that-fire-01PMZ202 WP09 / UNIT-8). nil leaves
+	// env.LifecycleHooks unset, so tool_invocation.go's nil-guards
+	// short-circuit and no v2 lifecycle hook ever fires — this was the
+	// production default before WP09: the seam existed and read from
+	// three call sites, but core/hooks.LifecycleRunnerAdapter, the only
+	// implementation, was never constructed.
+	LifecycleHooks coreag.LifecycleHookRunner
 }
 
 // WithEnvDeps installs production seams onto the Manager. The seams
@@ -148,6 +158,9 @@ func (d EnvDeps) applyTo(env *coreag.Env) {
 	}
 	if d.MergeSuggester != nil {
 		env.MergeSuggester = d.MergeSuggester
+	}
+	if d.LifecycleHooks != nil {
+		env.LifecycleHooks = d.LifecycleHooks
 	}
 
 	// Arm the growth watermark for every graph-authored run that did not

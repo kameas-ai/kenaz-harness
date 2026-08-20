@@ -19,22 +19,22 @@
 # Seeded 2026-08-19, WP08 landing FIRING_HOOK_EVENTS = ['pre_send']. All 19
 # remaining core/hooks.AllEvents entries are listed below.
 
-# ---- WP09 (UNIT-8): the three tool-loop events, landed alongside the
-# LifecycleHooks Env injection (agentgraph.Env.LifecycleHooks) in the same
-# commit as the fire path (spec.md §14.3, tasks.md WP09/UNIT-8). ----
-pre_tool_use justify(blocker: "hooks.LifecycleRunnerAdapter has zero production call sites — agentgraph.Env.LifecycleHooks is never assigned by envDefaults; WP09 wires the Env injection and grows FIRING_HOOK_EVENTS in the same commit", owner: alec, date: 2026-08-19)
-post_tool_use justify(blocker: "same as pre_tool_use — agentgraph.Env.LifecycleHooks unwired; WP09", owner: alec, date: 2026-08-19)
-post_tool_use_failure justify(blocker: "same as pre_tool_use — agentgraph.Env.LifecycleHooks unwired; WP09", owner: alec, date: 2026-08-19)
+# ---- WP09 (UNIT-8) LANDED 2026-08-19: pre_tool_use, post_tool_use and
+# post_tool_use_failure moved into FIRING_HOOK_EVENTS in the same commit
+# that populated agentgraph.Env.LifecycleHooks (env_deps.go's applyTo +
+# newGraphManagerWithDeps threading a.hookRunner) — rows removed. ----
 
-# ---- WP10 (UNIT-9): the five permission/session events. Per §4.2's
-# binding warning, permission_request must not enter FIRING_HOOK_EVENTS
-# before PermissionRunnerAdapter is actually constructed and its deny
-# semantics are asserted — landed together with the fire path. ----
-permission_request justify(blocker: "cedar.PermissionHookRunner has no production implementer — PermissionRunnerAdapter is never constructed at core/rpc/api.go:1296's cedar.NewRegistry call; WP10. Per spec §4.2: a permission_request hook that fires but whose deny is not honoured is worse than one that does not fire, so this must not be added before the adapter (and its MergeOutputs deny semantics) land", owner: alec, date: 2026-08-19)
-permission_denied justify(blocker: "same seam as permission_request — PermissionRunnerAdapter unwired; WP10", owner: alec, date: 2026-08-19)
-session_start justify(blocker: "session.SessionHookRunner has no production implementer — SessionRunnerAdapter is never constructed; core/session/manager.go's optional hooks field stays nil; WP10", owner: alec, date: 2026-08-19)
-setup justify(blocker: "same seam as session_start — SessionRunnerAdapter unwired; WP10", owner: alec, date: 2026-08-19)
-cwd_changed justify(blocker: "same seam as session_start — SessionRunnerAdapter unwired; WP10", owner: alec, date: 2026-08-19)
+# ---- WP10 (UNIT-9) LANDED 2026-08-20 (PARTIAL): permission_request,
+# permission_denied and session_start moved into FIRING_HOOK_EVENTS in the
+# same commit that constructed cedar.PermissionRunnerAdapter (backfilled
+# onto a.promptRegistry's cedar.WithPermissionHookRunner option) and
+# session.SessionRunnerAdapter (core.Core.SetSessionHookRunner, called
+# before the first SessionManager() construction) — those three rows
+# removed. setup and cwd_changed stay below: SessionRunnerAdapter is live,
+# but the SEPARATE gap below (Manager.FireSetup / .FireCwdChanged have no
+# caller) is not something this WP's scope covers wiring a caller for. ----
+setup justify(blocker: "session.Manager.FireSetup (core/session/manager.go:330) is an exported wrapper with a real hooks.SessionRunnerAdapter behind it as of WP10, but has ZERO production callers — nothing in core/rpc calls sessionMgr.FireSetup(...). The doc comment says callers should invoke it 'once, just before the first LLM turn of the session'; the natural site is chat_runner.go's StartStream on first-turn detection, which does not exist yet and needs its own change (a session-scoped first-turn signal, distinct from AutoTitle's post-hoc auto_titled flag). Follow-up WP, not WP10 — adding this to FIRING_HOOK_EVENTS now would be a picker entry that claims to fire and does not.", owner: alec, date: 2026-08-20)
+cwd_changed justify(blocker: "session.Manager.FireCwdChanged (core/session/manager.go:339) is an exported wrapper with a real hooks.SessionRunnerAdapter behind it as of WP10, but has ZERO production callers, and there is no existing per-session cwd tracking anywhere in core/session or core/rpc to detect a change from (core.Core.WorkspaceDir() is process-global, not per-session). Wiring a real caller means inventing a new tracked concept, which is out of WP10's scope as a hook-adapter wiring task. Follow-up WP, not WP10.", owner: alec, date: 2026-08-20)
 
 # ---- WP11 (UNIT-10): elicitation, both legs or neither (R-08). ----
 elicitation justify(blocker: "RunElicitation has no call site — core/rpc/views/elicit/api.go OpenDialog never calls it, and elicit.API/elicit.Config carry no hooks.Runner field yet; WP11 wires both elicitation legs in one commit (a request-leg hook with no answer-leg hook is a half-surface)", owner: alec, date: 2026-08-19)

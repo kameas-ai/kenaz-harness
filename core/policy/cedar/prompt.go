@@ -903,6 +903,9 @@ func (r *Registry) RequestInteractive(
 		ev := r.resolvedEvent(entry.request, DecisionDeny, SourceOverflow)
 		ev.Latency = 0
 		r.notifyResolved(ev)
+		if r.permHooks != nil {
+			r.permHooks.FirePermissionDenied(ctx, surface.SessionID, string(fam), surface.resourceKey(), "queue overflow")
+		}
 		return Resolution{Decision: DecisionDeny, Reason: "queue overflow"}, nil
 	}
 	r.pending[id] = entry
@@ -1093,10 +1096,28 @@ func (r *Registry) cancel(requestID, reason string) (won bool) {
 // fire delivers the resolution to the pending entry's channel exactly
 // once and stops the timer. Subsequent fire / cancel calls on the same
 // entry are no-ops.
+//
+// v2 lifecycle hook: permission_denied (trust-surfaces-that-fire-
+// 01PMZ202 WP10 / UNIT-9). fire() is the one choke point both
+// ResolveFrom (a user's explicit Deny) and timeoutFire (the 5-minute
+// timeout) funnel through, so wiring it here — rather than at each
+// caller — covers both without duplicating the guard. FireAsync is
+// fire-and-forget and does not block resolveCh delivery.
+// cancel() (ctx cancellation) deliberately does NOT fire this hook: the
+// caller bailed, Cedar never rendered a decision, so there is nothing
+// to report as "denied".
 func (r *Registry) fire(entry *pendingEntry, res Resolution, source ResolutionSource) {
 	entry.resolved.Do(func() {
 		if entry.timer != nil {
 			entry.timer.Stop()
+		}
+		if res.Decision == DecisionDeny && r.permHooks != nil {
+			r.permHooks.FirePermissionDenied(context.Background(),
+				entry.request.Surface.SessionID,
+				string(entry.request.Family),
+				entry.request.Surface.resourceKey(),
+				res.Reason,
+			)
 		}
 		r.notifyResolved(r.resolvedEvent(entry.request, res.Decision, source))
 		select {

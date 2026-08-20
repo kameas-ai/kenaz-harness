@@ -523,6 +523,24 @@ type API struct {
 	// binary).
 	hookRunner *hooks.Runner
 
+	// permissionHookAdapter is the *hooks.PermissionRunnerAdapter passed
+	// into a.promptRegistry's cedar.WithPermissionHookRunner option
+	// (trust-surfaces-that-fire-01PMZ202 WP10 / UNIT-9). Retained here
+	// because of an ordering hazard: a.promptRegistry is built early
+	// (right after a.broker), but a.hookRunner does not exist until
+	// newHooksStack runs, ~300 lines later. Rather than reorder either
+	// construction or give the adapter a func()*hooks.Runner late-bound
+	// accessor (both solve a problem that does not exist — R-07's fix
+	// for the LifecycleHooks seam already established construction ORDER
+	// is fine), the adapter is constructed here with Runner left nil and
+	// passed into cedar.NewRegistry by pointer; once a.hookRunner is set
+	// below, permissionHookAdapter.Runner is backfilled in place. Cedar
+	// only ever reads through the pointer (FirePermissionRequest /
+	// FirePermissionDenied both have pointer receivers), so the registry
+	// sees the live Runner from the first real request onward without a
+	// second hooks.Runner ever being constructed.
+	permissionHookAdapter *hooks.PermissionRunnerAdapter
+
 	// cedarEngine is the process-singleton Cedar policy engine (WP05
 	// hoist, consent-surfaces-truth-01PMTR01 — "Recorded, not fixed" in
 	// the v0.63.1 release commit). Constructed exactly once in New from
@@ -1328,6 +1346,13 @@ func New(c *core.Core, opts ...Option) *API {
 	// context Wails accepts for EventsEmit. Without this dispatcher
 	// the registry enqueues but never notifies the frontend, so the
 	// permission modal never renders and the gate hangs until timeout.
+	// permissionHookAdapter's Runner is nil until a.hookRunner is set
+	// below (see the field doc) — WithPermissionHookRunner still installs
+	// it now so the registry's r.permHooks nil-check is satisfied from
+	// construction, and FirePermissionRequest / FirePermissionDenied's
+	// own nil-Runner guards make an early interactive prompt (before
+	// hookRunner is backfilled) a safe no-op rather than a panic.
+	a.permissionHookAdapter = &hooks.PermissionRunnerAdapter{}
 	a.promptRegistry = cedar.NewRegistry(cedar.WithDispatcher(
 		cedar.PromptDispatcherFunc(func(_ context.Context, topic string, payload cedar.PendingRequest) {
 			if a.broker == nil {
@@ -1341,7 +1366,7 @@ func New(c *core.Core, opts ...Option) *API {
 			// second backend trip.
 			a.broker.emitter.Emit(a.broker.EmitCtx(), topic, FlattenPendingRequest(payload))
 		}),
-	))
+	), cedar.WithPermissionHookRunner(a.permissionHookAdapter))
 
 	// Cedar policy engine — process-singleton (WP05 hoist,
 	// consent-surfaces-truth-01PMTR01). Constructed exactly ONCE, here,
@@ -1639,9 +1664,31 @@ func New(c *core.Core, opts ...Option) *API {
 	hooksRunner, hookRegistry, hookBuiltins, hookRunnerImpl := newHooksStack(c, retriever, memStore, embedder)
 	// WP06 / UNIT-5: hold the concrete *hooks.Runner on the stack (see the
 	// a.hookRunner field doc) so future WPs can construct the three hook
-	// adapters without re-plumbing through api.New. No consumer reads this
-	// field yet — this WP is pure plumbing with no behaviour change.
+	// adapters without re-plumbing through api.New.
 	a.hookRunner = hookRunnerImpl
+	// WP10 / UNIT-9: backfill the Runner field on the adapter already
+	// installed into a.promptRegistry (see permissionHookAdapter's field
+	// doc for why this is a backfill rather than a constructor arg — the
+	// registry is built ~300 lines above this point, before hookRunnerImpl
+	// exists). cedar.Registry reads r.permHooks through the interface,
+	// which reads through this pointer, so every RequestInteractive call
+	// from here on sees a live Runner even though the registry itself was
+	// never reconstructed.
+	if a.permissionHookAdapter != nil {
+		a.permissionHookAdapter.Runner = a.hookRunner
+	}
+	// WP10 / UNIT-9: install the v2 session lifecycle hook runner
+	// (session_start, setup, cwd_changed) before anything can call
+	// c.SessionManager() for the first time — SessionManager() is lazily
+	// constructed and caches its instance, so SetSessionHookRunner is a
+	// no-op once that first call has happened. The first SessionManager()
+	// call in this file is below (buildResumeStarter's guard), so this is
+	// safely early. core.Core never imports core/hooks (see
+	// SetSessionHookRunner's doc) — the adapter is built here, in core/rpc,
+	// and passed in as the session.SessionHookRunner interface.
+	if c != nil && a.hookRunner != nil {
+		c.SetSessionHookRunner(&hooks.SessionRunnerAdapter{Runner: a.hookRunner})
+	}
 	// Register skill-catalog pre_send hook so the model sees the
 	// model-invokable commands at send time (model-invoked-skills-catalog-01KZNP3E WP03).
 	if hookBuiltins != nil && slashStore != nil {
@@ -1728,7 +1775,7 @@ func New(c *core.Core, opts ...Option) *API {
 	a.convMgr = newConversationManager(c)
 	a.corpusMgr = newCorpusManager(c, embedder)
 	var compactionPipeline *compaction.Pipeline
-	a.graphMgr, compactionPipeline = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore, settingsImpl, a.cedarEngine)
+	a.graphMgr, compactionPipeline = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore, settingsImpl, a.cedarEngine, a.hookRunner)
 	// Wire the same FR-041 pipeline instance the kernel runs onto the
 	// Settings RPC surface, so edits made through
 	// core/rpc/views/compaction reach the live kernel path instead of
@@ -6132,7 +6179,7 @@ func newCorpusManager(c *core.Core, embedder corememory.Embedder) *corecorpus.Ma
 // library and runs in-memory graphs; user-graph persistence is the
 // only feature lost when DataDir is empty.
 func newGraphManager(c *core.Core) *graphview.Manager {
-	mgr, _ := newGraphManagerWithDeps(c, nil, nil, nil, nil, nil, nil, nil)
+	mgr, _ := newGraphManagerWithDeps(c, nil, nil, nil, nil, nil, nil, nil, nil)
 	return mgr
 }
 
@@ -6300,12 +6347,28 @@ func newGraphManagerWithDeps(
 	// as buildCedarGate("") always did (empty DataDir, the nil-core
 	// test chassis, or a logged boot-time construction failure).
 	cedarEngine *cedar.Engine,
+	// hookRunner is the process-singleton *hooks.Runner — a.hookRunner
+	// at the production call site in New(), populated by newHooksStack
+	// (WP06 / UNIT-5). nil degrades to no lifecycle hooks firing at the
+	// tool-dispatch boundary, exactly as production behaved before WP09
+	// / UNIT-8 (trust-surfaces-that-fire-01PMZ202): the seam existed and
+	// was read from three call sites, but nothing ever constructed the
+	// one implementation.
+	hookRunner *hooks.Runner,
 ) (*graphview.Manager, *compaction.Pipeline) {
 	dataDir := ""
 	if c != nil {
 		dataDir = c.DataDir()
 	}
 	deps := graphview.EnvDeps{}
+	if hookRunner != nil {
+		// WP09 / UNIT-8: both production Env literals (chat_runner.go
+		// and manager.go) inherit EnvDeps via applyTo, so this single
+		// assignment reaches every kernel run — chat and library-graph
+		// alike — with the real pre_tool_use / post_tool_use /
+		// post_tool_use_failure fire path.
+		deps.LifecycleHooks = &hooks.LifecycleRunnerAdapter{Runner: hookRunner}
+	}
 	if convMgr != nil {
 		deps.Branch = graphview.NewBranchSeamAdapter(convMgr, sessionManagerOrNil(c))
 		// engineer-truth-pass-01PMTP01 WP08 (finding B16): the merge-

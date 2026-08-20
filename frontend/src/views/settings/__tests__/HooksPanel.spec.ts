@@ -12,6 +12,7 @@ import HooksPanel from '@/components/settings/HooksPanel.vue';
 import HookEditor from '@/components/settings/HookEditor.vue';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
+import { FIRING_HOOK_EVENTS } from '@/lib/hooks';
 import type { Hook, BuiltinDescriptor, DryRunResult } from '@/lib/types';
 
 // ── fixtures ────────────────────────────────────────────────────────────
@@ -202,14 +203,19 @@ describe('HookEditor', () => {
       expect(wrapper.text()).toContain('ADD HOOK');
     });
 
-    // AC-08a (trust-surfaces-that-fire-01PMZ202 WP08 / UNIT-7): with
-    // FIRING_HOOK_EVENTS = ['pre_send'], a fresh (create-mode) draft's
-    // event is 'pre_send' — already in the firing set — so the picker
-    // renders exactly one <option> and shows no inert badge.
-    it('shows exactly 1 event in the event picker (FIRING_HOOK_EVENTS)', () => {
+    // AC-08a (trust-surfaces-that-fire-01PMZ202 WP08 / UNIT-7), extended
+    // by WP09/UNIT-8 and WP10/UNIT-9 as producer WPs grew
+    // FIRING_HOOK_EVENTS: the picker renders exactly one <option> per
+    // FIRING_HOOK_EVENTS entry (asserted against the real exported const,
+    // not a hardcoded count, so this test tracks the array rather than
+    // needing a manual bump on every future producer WP), a fresh
+    // (create-mode) draft's event is 'pre_send' — still the first entry
+    // and already in the firing set — and there is no inert badge.
+    it('shows one <option> per FIRING_HOOK_EVENTS entry in the event picker', () => {
       const wrapper = mountEditor(null);
       const options = wrapper.find('[data-testid="hook-editor-event"]').findAll('option');
-      expect(options.length).toBe(1);
+      expect(options.length).toBe(FIRING_HOOK_EVENTS.length);
+      expect(options.map((o) => o.element.value)).toEqual([...FIRING_HOOK_EVENTS]);
       expect(options[0].element.value).toBe('pre_send');
       expect(wrapper.find('[data-testid="hook-editor-event-inert-badge"]').exists()).toBe(false);
     });

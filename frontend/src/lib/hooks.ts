@@ -114,8 +114,48 @@ export type HookEventName = (typeof ALL_HOOK_EVENTS)[number];
  * enforces both directions: every entry here must have a real fire site,
  * and every AllEvents entry NOT here must have a dated, owner-named
  * justification in scripts/ci/allowlists/i17-eventless-hook-events.txt.
+ *
+ * Grown 2026-08-19 (trust-surfaces-that-fire-01PMZ202 WP09 / UNIT-8) by
+ * the three v2 tool-loop events: pre_tool_use, post_tool_use,
+ * post_tool_use_failure. Landed in the same commit as
+ * agentgraph.Env.LifecycleHooks actually being populated
+ * (core/rpc/views/agentgraph/env_deps.go + core/rpc/api.go's
+ * newGraphManagerWithDeps) — before that commit, the fire sites in
+ * core/agentgraph/tool_invocation.go always saw env.LifecycleHooks == nil
+ * and no-opped.
+ *
+ * Grown again 2026-08-20 (WP10 / UNIT-9) by three of the five permission/
+ * session events: permission_request, permission_denied, session_start.
+ * Landed in the SAME commit as cedar.PermissionRunnerAdapter /
+ * session.SessionRunnerAdapter actually being constructed
+ * (core/rpc/api.go's a.promptRegistry + c.SetSessionHookRunner) —
+ * spec.md §4.2 is explicit that this ordering is a safety property, not
+ * a style preference: "A permission_request hook that fires but whose
+ * deny is not honoured is worse than one that does not fire." Before
+ * this commit, cedar.WithPermissionHookRunner and
+ * session.WithSessionHookRunner had zero non-test call sites, so a saved
+ * permission_request hook returning deny was silently ignored — worse
+ * than not firing, because it looked live.
+ *
+ * `setup` and `cwd_changed` are NOT added here despite sharing
+ * SessionRunnerAdapter with session_start: session.Manager.FireSetup and
+ * .FireCwdChanged (core/session/manager.go) are exported wrapper methods
+ * with ZERO production callers anywhere in the tree — session_start
+ * fires unconditionally from inside Manager.Create, but nothing ever
+ * calls FireSetup or FireCwdChanged. Adding them here before a real
+ * caller exists would be the exact lie this mission exists to close:
+ * a picker entry that claims to fire and does not.
+ * See scripts/ci/allowlists/i17-eventless-hook-events.txt.
  */
-export const FIRING_HOOK_EVENTS = ['pre_send'] as const;
+export const FIRING_HOOK_EVENTS = [
+  'pre_send',
+  'pre_tool_use',
+  'post_tool_use',
+  'post_tool_use_failure',
+  'permission_request',
+  'permission_denied',
+  'session_start',
+] as const;
 
 /**
  * EVENT_FAMILY maps each event to a display category for the UI grouping.
