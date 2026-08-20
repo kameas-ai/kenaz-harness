@@ -42,6 +42,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/kameas-ai/kenaz-harness/cmd/harness-served/dispatch"
 	"github.com/kameas-ai/kenaz-harness/cmd/mcpsubcmd"
 	"github.com/kameas-ai/kenaz-harness/core"
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
@@ -73,8 +74,10 @@ func main() {
 	// Early dispatch: `harness-served mcp <server>` routes to the stdio MCP
 	// server BEFORE flag.Parse, core init, or SQLite — mirroring main.go's
 	// (:68-69) `if len(os.Args) >= 2 && os.Args[1] == "mcp"` exactly (the
-	// decision itself lives in dispatch.go's mcpDispatchArgs so it can be
-	// unit-tested without the `serve` build tag — see that file's header).
+	// decision itself lives in the dispatch package's MCPArgs so it can be
+	// unit-tested without the `serve` build tag — see that package's
+	// header for why it is a separate library package, not a file dropped
+	// directly into this one).
 	// entry-points-and-crash-reporting-01PMZD13 UNIT-8. Before this, this
 	// binary had NO os.Args dispatch at all: `mcp sites` fell through
 	// flag.Parse (which discards non-flag args into flag.Args()) straight
@@ -83,7 +86,7 @@ func main() {
 	// failed. No user could reach this path in production (this binary is
 	// built by no release workflow and did not compile before UNIT-1), but
 	// the mechanism was real and would have fired the instant it shipped.
-	if isMCP, mcpArgs := mcpDispatchArgs(os.Args); isMCP {
+	if isMCP, mcpArgs := dispatch.MCPArgs(os.Args); isMCP {
 		mcpsubcmd.Dispatch(context.Background(), mcpArgs)
 		return // unreachable — Dispatch calls os.Exit on completion
 	}

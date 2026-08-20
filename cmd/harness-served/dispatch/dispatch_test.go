@@ -1,4 +1,4 @@
-package main
+package dispatch
 
 import (
 	"reflect"
@@ -60,12 +60,12 @@ func TestMCPDispatchArgs(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			gotIsMCP, gotArgs := mcpDispatchArgs(tc.args)
+			gotIsMCP, gotArgs := MCPArgs(tc.args)
 			if gotIsMCP != tc.wantIsMCP {
-				t.Fatalf("mcpDispatchArgs(%v) isMCP = %v, want %v", tc.args, gotIsMCP, tc.wantIsMCP)
+				t.Fatalf("MCPArgs(%v) isMCP = %v, want %v", tc.args, gotIsMCP, tc.wantIsMCP)
 			}
 			if tc.wantIsMCP && !reflect.DeepEqual(gotArgs, tc.wantMCPArg) {
-				t.Fatalf("mcpDispatchArgs(%v) mcpArgs = %v, want %v", tc.args, gotArgs, tc.wantMCPArg)
+				t.Fatalf("MCPArgs(%v) mcpArgs = %v, want %v", tc.args, gotArgs, tc.wantMCPArg)
 			}
 		})
 	}
