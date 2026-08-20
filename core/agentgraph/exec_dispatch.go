@@ -206,6 +206,28 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 			return
 		}
 
+		// Cedar tool policy gate (trust-surfaces-that-fire-01PMZ202
+		// WP17, UNIT-15). Consults BOTH the coarse Action::"use_tool"
+		// family every shipped tool policy actually names and the
+		// finer-grained tool_exec sibling — see PolicyGateAdapter.CheckTool.
+		// A deny surfaces as a model-visible is_error result (matching
+		// the hook-block shape immediately below) rather than failing the
+		// whole node, so sibling calls in this fan-out still run. nil
+		// env.Policy is the AllowAll boot-stage default.
+		if env.Policy != nil {
+			if err := env.Policy.CheckTool(ctx, oc.call.Name); err != nil {
+				oc.result = ToolResult{Content: "tool denied by policy: " + err.Error(), IsError: true}
+				oc.err = err
+				_ = oc.events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
+					"err":     err.Error(),
+					"tool":    oc.call.Name,
+					"call_id": oc.call.ID,
+					"reason":  "policy_denied",
+				})
+				return
+			}
+		}
+
 		// Shared pre-call gate (WP05, tool_invocation.go): greedy-memory
 		// hook, canonical EventToolCall, and the v2 pre_tool_use
 		// lifecycle hooks. The lifecycle hooks are NEW on this path —

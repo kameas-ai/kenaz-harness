@@ -3,6 +3,7 @@ package agentgraph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -249,6 +250,89 @@ func TestToolDispatchExecutor_ToolErrorBecomesIsError(t *testing.T) {
 	toolMsgs := res.Outputs["tool_messages"].([]Message)
 	if len(toolMsgs) != 1 || !toolMsgs[0].IsError {
 		t.Errorf("expected tool message IsError=true; got %+v", toolMsgs)
+	}
+}
+
+// denyNamedToolPolicy is a PolicyGate test fake that denies CheckTool
+// only for one specific fully-qualified tool name, allowing every
+// other check. Used to prove the fan-out keeps dispatching siblings of
+// a denied call, which a policy gate that denies unconditionally
+// cannot distinguish from "the whole node stopped."
+type denyNamedToolPolicy struct {
+	denied string
+	err    error
+}
+
+func (p denyNamedToolPolicy) CheckFileRead(_ context.Context, _ string) error   { return nil }
+func (p denyNamedToolPolicy) CheckFileWrite(_ context.Context, _ string) error  { return nil }
+func (p denyNamedToolPolicy) CheckStateRead(_ context.Context, _ string) error  { return nil }
+func (p denyNamedToolPolicy) CheckStateWrite(_ context.Context, _ string) error { return nil }
+func (p denyNamedToolPolicy) CheckTool(_ context.Context, toolName string) error {
+	if toolName == p.denied {
+		return p.err
+	}
+	return nil
+}
+
+// TestToolDispatchExecutor_PolicyDenyBlocksCall is UNIT-15's dispatch-
+// boundary half (trust-surfaces-that-fire-01PMZ202 WP17): a Cedar
+// policy deny surfaced through env.Policy.CheckTool becomes a
+// model-visible is_error result — matching the pre-existing hook-block
+// shape — and does NOT fail the whole node: a sibling call in the same
+// fan-out still dispatches and succeeds.
+// Mutation: comment out the env.Policy.CheckTool call in
+// exec_dispatch.go. Must fail (the denied tool actually runs).
+func TestToolDispatchExecutor_PolicyDenyBlocksCall(t *testing.T) {
+	t.Parallel()
+	tools := newStubTools()
+	tools.allow("kenaz__ok", "ok-result", false)
+	tools.allow("x__y", "should-never-run", false)
+
+	env := &Env{
+		Tools: tools,
+		State: NewRunState(),
+		Policy: denyNamedToolPolicy{
+			denied: "x__y",
+			err:    errors.New(`forbid: Action::"use_tool" on Tool::"x__y"`),
+		},
+	}
+	applyEnvDefaults(env)
+	node := &Node{
+		ID:    "td",
+		Kind:  NodeKindToolDispatch,
+		Attrs: ToolDispatchAttrs{},
+	}
+	calls := []ToolCallRequest{
+		{ID: "1", Name: "x__y", Arguments: `{}`},
+		{ID: "2", Name: "kenaz__ok", Arguments: `{}`},
+	}
+	res, err := toolDispatchExecutor{}.Execute(context.Background(), env, node,
+		PortValues{"tool_calls": calls})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	results := res.Outputs["tool_results"].([]ToolResult)
+	if len(results) != 2 {
+		t.Fatalf("len(results) = %d, want 2", len(results))
+	}
+	if !results[0].IsError {
+		t.Errorf("denied call: expected IsError=true, got %+v", results[0])
+	}
+	if !strings.Contains(results[0].Content, "denied") {
+		t.Errorf("denied call: expected denial content, got %q", results[0].Content)
+	}
+	if results[1].IsError || results[1].Content != "ok-result" {
+		t.Errorf("sibling call: expected the fan-out to still run, got %+v", results[1])
+	}
+
+	// The denied tool's underlying implementation must never actually
+	// have been invoked — the deny short-circuits before dispatch.
+	tools.mu.Lock()
+	defer tools.mu.Unlock()
+	for _, c := range tools.calls {
+		if c.Name == "x__y" {
+			t.Errorf("denied tool x__y was dispatched to the underlying registry")
+		}
 	}
 }
 

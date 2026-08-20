@@ -307,6 +307,71 @@ forbid (
 	}
 }
 
+// TestEngine_GateHooks_UseTool is UNIT-15's AC-11: a user-authored
+// `forbid` over `Action::"use_tool"` — the shape the shipped policy
+// editor produces, per default_tool_policy.cedar's own doc comment —
+// actually prevents the named tool from dispatching. Evaluating the
+// policy directly (rather than driving it through CheckUseTool, the
+// helper the dispatch boundary calls) would be vacuous.
+func TestEngine_GateHooks_UseTool(t *testing.T) {
+	t.Parallel()
+	const src = `
+forbid (
+    principal == User::"local",
+    action == Action::"use_tool",
+    resource == Tool::"x__y"
+);
+`
+	e, err := NewEngine(Options{LoadFromDisk: false, IncludeEmbedded: true})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	combined := append([]byte{}, defaultPolicySource...)
+	combined = append(combined, '\n')
+	combined = append(combined, []byte(src)...)
+	if err := e.SetPolicyText("combined.cedar", combined); err != nil {
+		t.Fatalf("SetPolicyText: %v", err)
+	}
+
+	err = CheckUseTool(context.Background(), e, "x", "y")
+	if err == nil {
+		t.Fatal("CheckUseTool x__y should deny")
+	}
+	if !IsPolicyDenied(err) {
+		t.Fatalf("CheckUseTool deny should be PolicyDeniedError, got %T", err)
+	}
+}
+
+// TestEngine_GateHooks_UseTool_NoMatchingPolicyAllows is AC-11b, the
+// P0 tripwire: with no matching policy, every currently-working tool
+// still works. default_tool_policy.cedar only permits use_tool for
+// server_name=="kenaz"; an MCP-server tool with no install-time grant
+// resolves NotApplicable, which enforce() maps to allow (Rule 6) —
+// mutating that mapping to deny-by-default must fail this test.
+func TestEngine_GateHooks_UseTool_NoMatchingPolicyAllows(t *testing.T) {
+	t.Parallel()
+	e, err := NewEngine(Options{LoadFromDisk: false, IncludeEmbedded: true})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	// A first-party kenaz tool: matches the embedded permit rule.
+	if err := CheckUseTool(context.Background(), e, "kenaz", "bash"); err != nil {
+		t.Fatalf("CheckUseTool kenaz__bash should allow, got %v", err)
+	}
+	// An MCP-server tool with no grant at all: NotApplicable, not Deny.
+	if err := CheckUseTool(context.Background(), e, "some_mcp_server", "some_tool"); err != nil {
+		t.Fatalf("CheckUseTool with no matching policy should allow (NotApplicable), got %v", err)
+	}
+
+	// AllowAll / nil-gate fallbacks never error.
+	if err := CheckUseTool(context.Background(), AllowAll{}, "any", "thing"); err != nil {
+		t.Fatalf("AllowAll.CheckUseTool returned err: %v", err)
+	}
+	if err := CheckUseTool(context.Background(), nil, "any", "thing"); err != nil {
+		t.Fatalf("nil gate CheckUseTool returned err: %v", err)
+	}
+}
+
 // TestEngine_GateNilGate is defensive: nil gate is a valid wiring
 // state during boot before the engine is constructed; helpers must
 // silently allow.
