@@ -293,6 +293,23 @@ Per-symbol justifications stay with their gate in
 
 ### Tooling footguns
 
+- **`wails generate module` OPENS A REAL DATABASE.** It executes `main.go`'s
+  binding-introspection path, so with no `HOME` / `KENAZ_HARNESS_ENV`
+  override it resolves the *live* profile directory and runs pending
+  migrations against it. On 2026-08-20 a campaign sub-agent regenerating
+  bindings applied six `event-log/0100–0105` migrations to
+  `~/.kenaz/harness/prod/data.db` — a real profile with 15 sessions.
+  Nothing was destroyed (the set is additive), but the IDs were recorded
+  as `applied` from *uncommitted* code, and since the runner keys on ID
+  and `VerifyLedger` has zero non-test callers, the shipped versions
+  would have been skipped silently on that install forever.
+  **Always run it with an overridden profile:**
+  ```bash
+  HOME=$(mktemp -d) KENAZ_HARNESS_ENV=test PATH=$HOME/go/bin:$PATH wails generate module
+  ```
+  It also needs `frontend/dist/index.html` to exist (stub it, delete
+  after) and introduces a spurious `frontend/wailsjs/runtime/` file-mode
+  diff (`100644`→`100755`) that must be reverted, not committed.
 - Use `rtk proxy grep` / `rtk proxy git` for anything multi-file or
   load-bearing — the plain wrappers silently truncate.
 - **Do not pipe `rtk proxy grep` into another `rtk proxy grep`.** Even the
