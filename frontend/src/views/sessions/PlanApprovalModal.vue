@@ -22,6 +22,9 @@
  */
 
 import { ref, computed } from 'vue';
+import { useHarnessClient } from '@/lib/harnessClientContext';
+
+const harnessClient = useHarnessClient();
 
 const props = defineProps<{
   /** The session this plan belongs to. */
@@ -53,7 +56,7 @@ async function doApprove() {
   submitting.value = true;
   lastError.value = null;
   try {
-    await window.go?.rpc?.Bindings?.Planmode_Approve({
+    await harnessClient.Planmode_Approve({
       session_id: props.sessionId,
       plan_id: props.planId,
     });
@@ -71,7 +74,7 @@ async function doDiscard() {
   submitting.value = true;
   lastError.value = null;
   try {
-    await window.go?.rpc?.Bindings?.Planmode_Discard({
+    await harnessClient.Planmode_Discard({
       session_id: props.sessionId,
       plan_id: props.planId,
     });
@@ -89,7 +92,7 @@ async function doSaveEdit() {
   submitting.value = true;
   lastError.value = null;
   try {
-    await window.go?.rpc?.Bindings?.Planmode_Edit({
+    await harnessClient.Planmode_Edit({
       session_id: props.sessionId,
       plan_id: props.planId,
       edited_plan: editedText.value,

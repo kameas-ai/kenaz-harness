@@ -1,64 +1,51 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import PlanApprovalModal from '@/views/sessions/PlanApprovalModal.vue';
-
-// ── Wails window.go stub ───────────────────────────────────────────────────
-
-interface FakeHarnessAPI {
-  Planmode_Approve: ReturnType<typeof vi.fn>;
-  Planmode_Discard: ReturnType<typeof vi.fn>;
-  Planmode_Edit: ReturnType<typeof vi.fn>;
-}
-
-function installFakeGo(overrides: Partial<FakeHarnessAPI> = {}): FakeHarnessAPI {
-  const api: FakeHarnessAPI = {
-    Planmode_Approve: vi.fn().mockResolvedValue({ approved: true, session_id: 'sess', plan_id: 'plan-001' }),
-    Planmode_Discard: vi.fn().mockResolvedValue({ approved: false, reason: 'discarded', session_id: 'sess', plan_id: 'plan-001' }),
-    Planmode_Edit: vi.fn().mockResolvedValue({ approved: true, session_id: 'sess', plan_id: 'plan-001' }),
-    ...overrides,
-  };
-  (window as unknown as { go: { rpc: { Bindings: FakeHarnessAPI } } }).go = {
-    rpc: { Bindings: api },
-  };
-  return api;
-}
-
-function uninstallFakeGo() {
-  delete (window as unknown as { go?: unknown }).go;
-}
+import { createFakeHarnessClient, createUnsupportedServedClient, type HarnessClient } from '@/lib/harnessClient';
+import { HarnessClientKey } from '@/lib/harnessClientContext';
 
 // ── Mount helper ───────────────────────────────────────────────────────────
+//
+// trust-surfaces-that-fire-01PMZ202 WP21 / UNIT-19 (AC-15b): the modal now
+// routes every RPC through harnessClient (installed via Vue provide/inject)
+// instead of the optional-chained `window.go?.rpc?.Bindings?.X` probe that
+// silently resolved `undefined` — and therefore `await`ed cleanly, and
+// therefore emitted 'approved' — whenever `window.go` was absent (the
+// served-mode default). Tests provide a fake client the same way the rest
+// of the suite does (see ShareSessionDialog.spec.ts).
 
 function mountModal(
+  client: HarnessClient,
   props: { sessionId: string; planId: string; plan: string } = {
     sessionId: 'sess-1',
     planId: 'plan-001',
     plan: '# My Plan\n\nStep 1: do something.',
   },
 ) {
-  return mount(PlanApprovalModal, { props });
+  return mount(PlanApprovalModal, {
+    props,
+    global: { provide: { [HarnessClientKey as symbol]: client } },
+  });
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 describe('PlanApprovalModal', () => {
-  beforeEach(() => {
-    installFakeGo();
-  });
-
   afterEach(() => {
-    uninstallFakeGo();
+    vi.restoreAllMocks();
   });
 
   it('renders the modal with plan text', () => {
-    const w = mountModal();
+    const client = createFakeHarnessClient();
+    const w = mountModal(client);
     expect(w.find('[data-testid="plan-approval-modal"]').exists()).toBe(true);
     expect(w.find('[data-testid="plan-approval-modal-plan-text"]').text()).toContain('Step 1: do something.');
     w.unmount();
   });
 
   it('has aria role="dialog" and aria-modal="true"', () => {
-    const w = mountModal();
+    const client = createFakeHarnessClient();
+    const w = mountModal(client);
     const modal = w.find('[data-testid="plan-approval-modal"]');
     expect(modal.attributes('role')).toBe('dialog');
     expect(modal.attributes('aria-modal')).toBe('true');
@@ -66,13 +53,14 @@ describe('PlanApprovalModal', () => {
   });
 
   it('calls Planmode_Approve and emits approved on Approve click', async () => {
-    const api = installFakeGo();
-    const w = mountModal();
+    const approve = vi.fn().mockResolvedValue({ approved: true, session_id: 'sess-1', plan_id: 'plan-001' });
+    const client = createFakeHarnessClient({ Planmode_Approve: approve });
+    const w = mountModal(client);
 
     await w.find('[data-testid="plan-approval-modal-approve"]').trigger('click');
     await flushPromises();
 
-    expect(api.Planmode_Approve).toHaveBeenCalledWith({
+    expect(approve).toHaveBeenCalledWith({
       session_id: 'sess-1',
       plan_id: 'plan-001',
     });
@@ -82,13 +70,14 @@ describe('PlanApprovalModal', () => {
   });
 
   it('calls Planmode_Discard and emits discarded on Discard click', async () => {
-    const api = installFakeGo();
-    const w = mountModal();
+    const discard = vi.fn().mockResolvedValue({ approved: false, reason: 'discarded', session_id: 'sess-1', plan_id: 'plan-001' });
+    const client = createFakeHarnessClient({ Planmode_Discard: discard });
+    const w = mountModal(client);
 
     await w.find('[data-testid="plan-approval-modal-discard"]').trigger('click');
     await flushPromises();
 
-    expect(api.Planmode_Discard).toHaveBeenCalledWith({
+    expect(discard).toHaveBeenCalledWith({
       session_id: 'sess-1',
       plan_id: 'plan-001',
     });
@@ -98,7 +87,8 @@ describe('PlanApprovalModal', () => {
   });
 
   it('shows textarea after Edit click and hides it after Cancel edit', async () => {
-    const w = mountModal();
+    const client = createFakeHarnessClient();
+    const w = mountModal(client);
 
     // Initially no editor
     expect(w.find('[data-testid="plan-approval-modal-editor"]').exists()).toBe(false);
@@ -120,8 +110,9 @@ describe('PlanApprovalModal', () => {
   });
 
   it('calls Planmode_Edit with edited text and emits edited on Save & approve', async () => {
-    const api = installFakeGo();
-    const w = mountModal();
+    const edit = vi.fn().mockResolvedValue({ approved: true, session_id: 'sess-1', plan_id: 'plan-001' });
+    const client = createFakeHarnessClient({ Planmode_Edit: edit });
+    const w = mountModal(client);
 
     // Enter edit mode
     await w.find('[data-testid="plan-approval-modal-edit"]').trigger('click');
@@ -133,7 +124,7 @@ describe('PlanApprovalModal', () => {
     await w.find('[data-testid="plan-approval-modal-save-edit"]').trigger('click');
     await flushPromises();
 
-    expect(api.Planmode_Edit).toHaveBeenCalledWith({
+    expect(edit).toHaveBeenCalledWith({
       session_id: 'sess-1',
       plan_id: 'plan-001',
       edited_plan: '# Edited Plan\n\nNew content.',
@@ -144,7 +135,8 @@ describe('PlanApprovalModal', () => {
   });
 
   it('Save & approve button is disabled when edited text is empty', async () => {
-    const w = mountModal();
+    const client = createFakeHarnessClient();
+    const w = mountModal(client);
 
     await w.find('[data-testid="plan-approval-modal-edit"]').trigger('click');
     await flushPromises();
@@ -158,10 +150,10 @@ describe('PlanApprovalModal', () => {
   });
 
   it('shows error notice and emits error when Approve RPC fails', async () => {
-    installFakeGo({
+    const client = createFakeHarnessClient({
       Planmode_Approve: vi.fn().mockRejectedValue(new Error('server unavailable')),
     });
-    const w = mountModal();
+    const w = mountModal(client);
 
     await w.find('[data-testid="plan-approval-modal-approve"]').trigger('click');
     await flushPromises();
@@ -173,10 +165,10 @@ describe('PlanApprovalModal', () => {
   });
 
   it('shows error notice and emits error when Discard RPC fails', async () => {
-    installFakeGo({
+    const client = createFakeHarnessClient({
       Planmode_Discard: vi.fn().mockRejectedValue(new Error('discard failed')),
     });
-    const w = mountModal();
+    const w = mountModal(client);
 
     await w.find('[data-testid="plan-approval-modal-discard"]').trigger('click');
     await flushPromises();
@@ -187,7 +179,8 @@ describe('PlanApprovalModal', () => {
   });
 
   it('does not dismiss on overlay click (non-dismissive spec FR-010)', async () => {
-    const w = mountModal();
+    const client = createFakeHarnessClient();
+    const w = mountModal(client);
     // Trigger click on the outer dialog container (the overlay)
     await w.find('[data-testid="plan-approval-modal"]').trigger('click');
     await flushPromises();
@@ -202,10 +195,10 @@ describe('PlanApprovalModal', () => {
     // Make Approve hang forever so we can inspect the interim disabled state
     let resolveApprove!: () => void;
     const approvePromise = new Promise<void>((res) => { resolveApprove = res; });
-    installFakeGo({
+    const client = createFakeHarnessClient({
       Planmode_Approve: vi.fn().mockReturnValue(approvePromise),
     });
-    const w = mountModal();
+    const w = mountModal(client);
 
     await w.find('[data-testid="plan-approval-modal-approve"]').trigger('click');
     // Do NOT flush — submitting should be true now
@@ -219,6 +212,59 @@ describe('PlanApprovalModal', () => {
     // Resolve and clean up
     resolveApprove();
     await flushPromises();
+    w.unmount();
+  });
+
+  // ── AC-15b: served mode raises instead of silently resolving ───────────
+  //
+  // Before this WP, the modal called `window.go?.rpc?.Bindings?.Planmode_
+  // Approve(...)` directly. In served mode `window.go` is undefined, so the
+  // optional-chained expression evaluated to `undefined`; `await undefined`
+  // resolves immediately, the try/catch never sees an error, and
+  // emit('approved') fired — the UI reported the plan approved when no RPC
+  // was ever sent. createUnsupportedServedClient() is the exact client
+  // shape a served-mode browser session gets for any RPC core/serve does
+  // not expose (see harnessClient.ts) — Planmode_Approve/_Discard/_Edit are
+  // not in that wired subset, so every call rejects with
+  // ServedUnsupportedError.
+  it('AC-15b: served-mode client rejects Approve — does not emit approved, emits error', async () => {
+    const client = createUnsupportedServedClient();
+    const w = mountModal(client);
+
+    await w.find('[data-testid="plan-approval-modal-approve"]').trigger('click');
+    await flushPromises();
+
+    expect(w.emitted('approved')).toBeFalsy();
+    expect(w.emitted('error')).toBeTruthy();
+    expect(w.find('[data-testid="plan-approval-modal-error"]').exists()).toBe(true);
+    w.unmount();
+  });
+
+  it('AC-15b: served-mode client rejects Discard — does not emit discarded, emits error', async () => {
+    const client = createUnsupportedServedClient();
+    const w = mountModal(client);
+
+    await w.find('[data-testid="plan-approval-modal-discard"]').trigger('click');
+    await flushPromises();
+
+    expect(w.emitted('discarded')).toBeFalsy();
+    expect(w.emitted('error')).toBeTruthy();
+    w.unmount();
+  });
+
+  it('AC-15b: served-mode client rejects Edit — does not emit edited, emits error', async () => {
+    const client = createUnsupportedServedClient();
+    const w = mountModal(client);
+
+    await w.find('[data-testid="plan-approval-modal-edit"]').trigger('click');
+    await flushPromises();
+    const textarea = w.find<HTMLTextAreaElement>('[data-testid="plan-approval-modal-editor"]');
+    await textarea.setValue('# Edited Plan\n\nNew content.');
+    await w.find('[data-testid="plan-approval-modal-save-edit"]').trigger('click');
+    await flushPromises();
+
+    expect(w.emitted('edited')).toBeFalsy();
+    expect(w.emitted('error')).toBeTruthy();
     w.unmount();
   });
 });
