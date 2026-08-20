@@ -549,10 +549,35 @@ func initSentryFromSettings(api *rpc.Bindings) {
 		logging.L().Warn("sentry.settings.read_error", "err", err.Error())
 		return
 	}
-	tier := coresentry.ResolveTier(s.CrashReportingTier, false /* fleet login state TBD */)
+	// controls-and-readouts-that-tell-the-truth-01PMZ808 WP12 (FR-016):
+	// this was hardcoded `false`, so ResolveTier permanently downgraded
+	// TierIdentified to TierAnonymous for every user, even one genuinely
+	// signed into fleet — Settings_FleetSignedIn (arity 0) is exactly
+	// what ResolveTier's second parameter wants. A read error (fleet
+	// disabled, no client) is treated as "not signed in" (the safe,
+	// anonymous-leaning default).
+	fleetSignedIn, fsErr := api.Settings_FleetSignedIn()
+	if fsErr != nil {
+		fleetSignedIn = false
+	}
+	tier := coresentry.ResolveTier(s.CrashReportingTier, fleetSignedIn)
 	if initErr := coresentry.Init(tier, s.SentryDSN, Version, ""); initErr != nil {
 		logging.L().Warn("sentry.init.error", "err", initErr.Error())
 	}
+	// controls-and-readouts-that-tell-the-truth-01PMZ808 WP12 (FR-018):
+	// local_report.go's own doc claimed "SetHarnessVersion is called
+	// from main.go" — grep -c SetHarnessVersion main.go was 0. The
+	// UPLOADED release tag was already correct (Init above passes
+	// Version as the SDK's Release field); only the LOCAL report's
+	// embedded harness_version field lied, always reading "dev".
+	coresentry.SetHarnessVersion(Version)
+	// Both ends of FR-016: threading the real fleetSignedIn value above
+	// only fixes WHICH tier gets selected; core/sentry/client.go itself
+	// only branched on TierOff before SetUser existed, so
+	// TierAnonymous and TierIdentified were observably identical events
+	// on the wire. Tag (or explicitly clear) the scope-wide user now
+	// that both ends exist.
+	coresentry.SetUser(tier == coresentry.TierIdentified)
 	// wire-up point 2: chain the SlogHandler when tier != Off so ERROR-level
 	// slog lines are captured as redacted breadcrumbs.
 	if tier != coresentry.TierOff {

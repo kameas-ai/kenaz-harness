@@ -81,8 +81,8 @@ running binary path.
 |---|---|
 | **macOS** | Atomic `.app` bundle rename + fork-exec. Works while the binary is running because the rename is on the bundle directory, not the running Mach-O image. The OS closes file descriptors against the renamed path; the new binary starts with a fresh image. Tarball install assumed for non-bundle distributions. |
 | **Linux** | Same atomic rename + fork-exec pattern. Tarball / AppImage install assumed; desktop-entry remains stable across versions. |
-| **Windows (Install & Restart)** | The Service spawns `kenaz-updater.exe` (bundled next to the main binary in the release zip) with `--parent-pid`, `--staged`, `--target`, `--sha256`, plus repeated `--launch-args` carrying the original argv. The harness then `os.Exit(0)`s. The helper waits up to 30s for the parent PID via `WaitForSingleObject`, re-verifies the staged sha256, atomically renames it over the running .exe path (which is now unlocked), and `exec.Cmd.Start`s the new binary. Total UX: identical to Mac/Linux — user clicks "Install & Restart", app exits, new version comes back up. |
-| **Windows (deferred-swap fallback)** | If the helper is missing (hand-curated install stripped it) or `cmd.Start` fails (AV quarantine, disk error), the Service falls back to writing `<DataDir>/update/pending.json` (struct: `target_path`, `staged_path`, `sha256`, `target_version`, `platform`) and exiting. The bootswap shim picks it up on next launch, re-verifies the sha256, renames into place, deletes the marker, and re-execs. The user has to relaunch by hand in this fallback; the helper-spawn path is the production default. |
+| **Windows (Install & Restart)** | The Service spawns `kenaz-updater.exe` (bundled next to the main binary in **both** Windows distribution channels as of `entry-points-and-crash-reporting-01PMZD13` UNIT-2, 2026-08-19 — the release zip via release.yml's build step, and the NSIS installer via `build/windows/installer/project.nsi`'s `File` line) with `--parent-pid`, `--staged`, `--target`, `--sha256`, plus repeated `--launch-args` carrying the original argv. The harness then `os.Exit(0)`s. The helper waits up to 30s for the parent PID via `WaitForSingleObject`, re-verifies the staged sha256, atomically renames it over the running .exe path (which is now unlocked), and `exec.Cmd.Start`s the new binary. Total UX: identical to Mac/Linux — user clicks "Install & Restart", app exits, new version comes back up — for both channels as of this date. Before UNIT-2, the NSIS-installed channel silently lacked the helper and always fell to the row below, so "Install & Restart" quit without restarting on that channel; the update was not lost (the fallback still applied it at the next manual launch). |
+| **Windows (deferred-swap fallback)** | If the helper is missing (hand-curated or third-party repackaged install stripped it) or `cmd.Start` fails (AV quarantine, disk error), the Service falls back to writing `<DataDir>/update/pending.json` (struct: `target_path`, `staged_path`, `sha256`, `target_version`, `platform`) and exiting. The bootswap shim picks it up on next launch, re-verifies the sha256, renames into place, deletes the marker, and re-execs. The user has to relaunch by hand in this fallback; the helper-spawn path is the production default for both channels. |
 
 ## UX
 
@@ -166,6 +166,21 @@ DNS / dial / read errors all classify uniformly.
    transparently falls back to the stable manifest with a warn log
    (`update.manifest.prerelease_missing`). `Check` returns the stable
    `Info` to the caller.
+   **Reachability, updated by `controls-and-readouts-that-tell-the-
+   truth-01PMZ808` WP08 (FR-010):** before that mission, `channel` was
+   hardcoded to `"stable"` at every production call site
+   (`Service.Check` at `service.go:150`, and the poller's `BackgroundPoll(pollCtx,
+   6*time.Hour, "stable")` in `core/rpc/api.go`), so this AC was
+   test-only coverage — no live path could ever request the prerelease
+   manifest, let alone hit its 404 fallback. WP07 (same mission)
+   threads `Settings.UpdateChannel` into `BackgroundPoll`, and
+   `BackgroundPoll` calls `checkChannel(ctx, channel)` directly — so a
+   user who sets the update channel to "prerelease" now drives this
+   fallback for real, on the periodic poller. **`Service.Check` (the
+   manual "Check now" RPC path) is still hardcoded to `"stable"` and
+   was out of WP07's scope (it only threads the poller's dials)** — the
+   fallback is live-reachable via the background poller only, not via
+   the manual check.
 7. **No emitter, no leak** — `Audit: nil` in the Config disables every
    audit emission silently. The Service keeps running; existing test
    suites remain green.

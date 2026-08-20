@@ -33,6 +33,7 @@ async function refresh() {
 }
 
 async function runGraph(g: GraphInfo) {
+  if (g.invalid) return;
   runError.value = null;
   try {
     const resp = await client.graph.startRun({ graphId: g.id });
@@ -144,6 +145,14 @@ defineExpose({ refresh });
                 >
                   {{ g.scope }}
                 </span>
+                <span
+                  v-if="g.invalid"
+                  class="rounded-sm border border-signal-danger px-2 py-0 font-ui text-[10px] uppercase tracking-[0.18em] text-signal-danger"
+                  :data-testid="`graph-invalid-${g.id}`"
+                  :title="g.invalidReason"
+                >
+                  invalid
+                </span>
               </div>
               <div
                 v-if="g.description"
@@ -151,12 +160,21 @@ defineExpose({ refresh });
               >
                 {{ g.description }}
               </div>
+              <div
+                v-if="g.invalid"
+                class="mt-1 font-ui text-[11px] text-signal-danger"
+                :data-testid="`graph-invalid-reason-${g.id}`"
+              >
+                {{ g.invalidReason || 'This graph does not pass validation and cannot run.' }}
+              </div>
             </div>
             <div class="flex shrink-0 items-center gap-2">
               <button
                 type="button"
-                class="rounded-sm border border-accent px-2 py-1 font-ui text-[11px] uppercase tracking-[0.18em] text-accent hover:bg-surface-2"
+                class="rounded-sm border border-accent px-2 py-1 font-ui text-[11px] uppercase tracking-[0.18em] text-accent hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-40"
                 :data-testid="`graph-run-${g.id}`"
+                :disabled="g.invalid"
+                :title="g.invalid ? (g.invalidReason || 'Invalid graph') : undefined"
                 @click="runGraph(g)"
               >
                 Run

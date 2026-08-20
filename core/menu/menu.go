@@ -89,7 +89,17 @@ func buildFileMenu(state MenuState, h *Handlers) *wailsmenu.MenuItem {
 
 // buildEditMenu builds the Edit top-level menu.
 // EditMenuRole delegates to the OS-native edit menu on macOS.
-// On Windows/Linux we provide explicit Undo/Redo/Cut/Copy/Paste/SelectAll/Find.
+// On Windows/Linux we provide explicit Undo/Redo/Cut/Copy/Paste/SelectAll.
+//
+// controls-and-readouts-that-tell-the-truth-01PMZ808 WP09 (FR-012,
+// AC-023): this used to also register "Find" at Ctrl+F, calling the same
+// h.onFind as buildViewMenu's "Search" item below — two menu
+// registrations for the identical accelerator and handler on
+// Windows/Linux. View → "Search" is the one Shell.vue's own comment
+// documents as the frontend's entry point
+// (menu:search:open -> App.vue -> searchPalette.open()), so it is the
+// one kept; the Edit menu's duplicate is removed rather than the
+// documented one.
 func buildEditMenu(h *Handlers) *wailsmenu.MenuItem {
 	if runtime.GOOS == "darwin" {
 		return wailsmenu.EditMenu()
@@ -103,8 +113,9 @@ func buildEditMenu(h *Handlers) *wailsmenu.MenuItem {
 	sub.AddText("Copy", keys.CmdOrCtrl("c"), nil)
 	sub.AddText("Paste", keys.CmdOrCtrl("v"), nil)
 	sub.AddText("Select All", keys.CmdOrCtrl("a"), nil)
-	sub.AddSeparator()
-	sub.AddText("Find", keys.CmdOrCtrl("f"), h.onFind)
+	// "Find" (Ctrl+F -> h.onFind) removed here — see the WP09 doc comment
+	// above buildEditMenu. View -> "Search" (buildViewMenu) is the one
+	// live registration for this accelerator on Windows/Linux.
 	return wailsmenu.SubMenu("Edit", sub)
 }
 

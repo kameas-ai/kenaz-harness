@@ -36,6 +36,7 @@ import (
 	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
 	coreatt "github.com/kameas-ai/kenaz-harness/core/attachments"
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
+	bundleintegrity "github.com/kameas-ai/kenaz-harness/core/bundle/integrity"
 	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
 	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
 	corecontexts "github.com/kameas-ai/kenaz-harness/core/contexts"
@@ -45,6 +46,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/eval"
 	"github.com/kameas-ai/kenaz-harness/core/event"
 	kindpkg "github.com/kameas-ai/kenaz-harness/core/event/kind"
+	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/hooks"
@@ -113,6 +115,7 @@ import (
 	tasksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/tasks"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/tools"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/trust"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/trustanchor"
 	updateview "github.com/kameas-ai/kenaz-harness/core/rpc/views/update"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/workflow"
 	workflowsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/workflows"
@@ -129,6 +132,7 @@ import (
 	corebash "github.com/kameas-ai/kenaz-harness/core/tools/bash"
 	coreplanmode "github.com/kameas-ai/kenaz-harness/core/tools/planmode"
 	coreskill "github.com/kameas-ai/kenaz-harness/core/tools/skill"
+	coretrust "github.com/kameas-ai/kenaz-harness/core/trust"
 	"github.com/kameas-ai/kenaz-harness/core/units"
 	coreupdate "github.com/kameas-ai/kenaz-harness/core/update"
 	"github.com/kameas-ai/kenaz-harness/core/usage"
@@ -167,6 +171,11 @@ type HarnessAPI interface {
 	Workflows() workflowsview.WorkflowsAPI
 	Sessions() sessions.SessionsAPI
 	Trust() trust.TrustAPI
+	// TrustAnchors is the writer for core/trust's persisted AnchorStore
+	// (bundle-download-and-verify-01PMZ909 UNIT-3) — distinct from
+	// Trust() above, which is an unrelated secret-reference surface
+	// that claimed the shorter name first.
+	TrustAnchors() trustanchor.TrustAnchorAPI
 	Context() contextview.ContextAPI
 	Contexts() contextsview.ContextsAPI
 	Bundle() bundle.BundleAPI
@@ -207,6 +216,16 @@ type HarnessAPI interface {
 	// surface that surfaces ErrServiceUnavailable on every state-mutating
 	// method.
 	Update() updateview.UpdateAPI
+
+	// ReconfigureUpdatePoll (re-)launches the auto-update background
+	// poller against the current AutoCheckUpdates / UpdateChannel /
+	// UpdateCheckInterval settings, cancelling any prior poller first.
+	// controls-and-readouts-that-tell-the-truth-01PMZ808 WP07: called
+	// from SetContext at boot and from Bindings.Settings_Set so a live
+	// settings save takes effect without an app restart — BackgroundPoll
+	// reads its interval/channel once at loop start and cannot pick up a
+	// changed dial any other way. No-op when there is no update service.
+	ReconfigureUpdatePoll(ctx context.Context)
 	// Storage exposes the storage-health RPC surface (v0.5.1
 	// migration-doctor). Surfaces drift between the live ledger and the
 	// registered migration set; provides an automated repair for
@@ -422,18 +441,24 @@ type API struct {
 	// restart. nil when c == nil or DataDir is empty (test-harness path)
 	// — mcpUserRecipeSource degrades to a nil source in that case, which
 	// recipes.MergedCatalog treats as "contributes zero recipes".
-	mcpUserStore *recipes.UserStore
-	a2aAPI       a2a.A2AAPI
-	workflowAPI  workflow.WorkflowAPI
-	workflowsAPI workflowsview.WorkflowsAPI
-	sessionsAPI  sessions.SessionsAPI
-	trustAPI     trust.TrustAPI
-	contextAPI   contextview.ContextAPI
-	contextsAPI  contextsview.ContextsAPI
-	bundleAPI    bundle.BundleAPI
-	policyAPI    policy.PolicyAPI
-	auditImpl    *audit.API
-	auditAPI     audit.AuditAPI
+	mcpUserStore   *recipes.UserStore
+	a2aAPI         a2a.A2AAPI
+	workflowAPI    workflow.WorkflowAPI
+	workflowsAPI   workflowsview.WorkflowsAPI
+	sessionsAPI    sessions.SessionsAPI
+	trustAPI       trust.TrustAPI
+	trustAnchorAPI trustanchor.TrustAnchorAPI
+	// trustEngine is the core/trust.TrustEngine backing trustAnchorAPI
+	// AND the bundle-install verifier (UNIT-4). Persisted (SQLite) when
+	// c has a DataDir; in-memory otherwise (test-harness path) — same
+	// convention as the bundle wiring at api.go's NewAPI body.
+	trustEngine coretrust.TrustEngine
+	contextAPI  contextview.ContextAPI
+	contextsAPI contextsview.ContextsAPI
+	bundleAPI   bundle.BundleAPI
+	policyAPI   policy.PolicyAPI
+	auditImpl   *audit.API
+	auditAPI    audit.AuditAPI
 	// logStore + logsAPI back the Settings → Logs panel (mission 01NLOGS01 WP01/WP04).
 	logStore       *logstore.Store
 	logsAPI        logsview.LogsAPI
@@ -495,6 +520,37 @@ type API struct {
 	// gate, etc.) can pass it into their gate constructors without
 	// re-plumbing through api.New.
 	promptRegistry *cedar.Registry
+
+	// hookRunner is the process-singleton *hooks.Runner returned by
+	// newHooksStack (nil when memStore is nil — see newHooksStack's guard
+	// clause). Held on the stack, same pattern as promptRegistry above, so
+	// future WPs can construct hooks.LifecycleRunnerAdapter,
+	// hooks.PermissionRunnerAdapter and hooks.SessionRunnerAdapter — all of
+	// which require the concrete *hooks.Runner, not the llm.HookRunner
+	// interface — without re-plumbing through api.New
+	// (trust-surfaces-that-fire-01PMZ202 WP06 / UNIT-5, R-07: before this,
+	// the *hooks.Runner was trapped inside the unexported
+	// hooksRunnerAdapter.r field and unconstructible anywhere in the
+	// binary).
+	hookRunner *hooks.Runner
+
+	// permissionHookAdapter is the *hooks.PermissionRunnerAdapter passed
+	// into a.promptRegistry's cedar.WithPermissionHookRunner option
+	// (trust-surfaces-that-fire-01PMZ202 WP10 / UNIT-9). Retained here
+	// because of an ordering hazard: a.promptRegistry is built early
+	// (right after a.broker), but a.hookRunner does not exist until
+	// newHooksStack runs, ~300 lines later. Rather than reorder either
+	// construction or give the adapter a func()*hooks.Runner late-bound
+	// accessor (both solve a problem that does not exist — R-07's fix
+	// for the LifecycleHooks seam already established construction ORDER
+	// is fine), the adapter is constructed here with Runner left nil and
+	// passed into cedar.NewRegistry by pointer; once a.hookRunner is set
+	// below, permissionHookAdapter.Runner is backfilled in place. Cedar
+	// only ever reads through the pointer (FirePermissionRequest /
+	// FirePermissionDenied both have pointer receivers), so the registry
+	// sees the live Runner from the first real request onward without a
+	// second hooks.Runner ever being constructed.
+	permissionHookAdapter *hooks.PermissionRunnerAdapter
 
 	// cedarEngine is the process-singleton Cedar policy engine (WP05
 	// hoist, consent-surfaces-truth-01PMTR01 — "Recorded, not fixed" in
@@ -600,6 +656,14 @@ type API struct {
 	// without re-constructing.
 	harnessServer *harnessServer
 
+	// toolPermsResolver is the merged permission resolver (static arm +
+	// the harness-self-attach-01PMHS01 UNIT-4 Cedar session-kind arm)
+	// newLLMStack constructs and hands back via llmStack.perms. Held so
+	// tests can drive the ACTUAL production wire directly rather than
+	// reconstructing an equivalent resolver by hand. Never nil once New
+	// has run — see newLLMStack's UNIT-4 wiring comment for why.
+	toolPermsResolver toolloop.PermissionResolver
+
 	// onboardingAPI is the first-run onboarding view (WP08). Wired in
 	// New when a real Core is available; falls back to a zero-config
 	// stub that returns sensible defaults so the chassis-only test
@@ -647,6 +711,14 @@ type API struct {
 	// (mission scheduled-chat-runs-01KX5R8B, WP04). Wired in New when
 	// a real Core with a DB is available; nil DB path returns ErrStoreUnavailable.
 	scheduledChatAPI scheduledchatview.ScheduledChatAPI
+
+	// chatCronEngine is the cron engine that arms scheduled_chat_runs rows
+	// (mission model-scheduled-jobs-01PMSJ01 WP03). Started on SetContext,
+	// stopped on Shutdown, alongside wfScheduler. nil when there is no DB.
+	// Its Dispatcher is left unassigned until WP05's unattended-posture
+	// commit (plan.md Rule 2: a dispatcher must not be armed against an
+	// engine that can park a run on a human forever).
+	chatCronEngine *schedulerPkg.ChatCronEngine
 
 	// agentsAPI is the sub-agent profile registry RPC surface
 	// (branch-subagent-interactive-01KZNP3B WP01). Backed by core/agents
@@ -796,6 +868,15 @@ func (a *API) SetContext(ctx context.Context) {
 	if a.wfScheduler != nil {
 		a.wfScheduler.Start()
 	}
+	// Start the chat-run cron scheduler (model-scheduled-jobs-01PMSJ01
+	// WP03). An engine that is never Start()ed would pass every unit
+	// test — this is the AC-003 "first half" wiring, and it is what makes
+	// a zero-schedule build byte-identical at boot either way (FR-008):
+	// Start on an engine with no registered entries starts a cron loop
+	// that never fires.
+	if a.chatCronEngine != nil {
+		a.chatCronEngine.Start()
+	}
 
 	// Bootstrap lockdown state before any user-facing surface mounts so
 	// the harness boots into locked state when fleet says so. Runs in a
@@ -829,27 +910,13 @@ func (a *API) SetContext(ctx context.Context) {
 		go a.runMigrationDriftCheck(ctx)
 	}
 
-	// Start the auto-update background poller on the Wails-supplied
-	// app context. The 6h interval matches the WP01 spec; channel is
-	// "stable" — switching to "prerelease" requires a separate UI
-	// path that hasn't shipped yet. Cancel any prior poller so
-	// repeated SetContext calls (test harness re-init) don't pile up
-	// goroutines.
-	if a.updateSvc != nil {
-		a.updatePollMu.Lock()
-		if a.updatePollCancel != nil {
-			a.updatePollCancel()
-		}
-		pollCtx, cancel := context.WithCancel(ctx)
-		a.updatePollCancel = cancel
-		a.updatePollMu.Unlock()
-		go func() {
-			if err := a.updateSvc.BackgroundPoll(pollCtx, 6*time.Hour, "stable"); err != nil &&
-				!errors.Is(err, context.Canceled) {
-				logging.L().Warn("update.poll.exit", "err", err.Error())
-			}
-		}()
-	}
+	// Start (or refuse to start) the auto-update background poller on the
+	// Wails-supplied app context. See ReconfigureUpdatePoll for the gate
+	// on AutoCheckUpdates and the channel/interval dials
+	// (controls-and-readouts-that-tell-the-truth-01PMZ808 WP07 — this used
+	// to hardcode 6h/"stable" unconditionally, ignoring AutoCheckUpdates
+	// entirely).
+	a.ReconfigureUpdatePoll(ctx)
 
 	// Start fleet audit archiver + retention sweeper background loops
 	// (fleet-audit-archival-01NDFSEX13). Constructed in New only when
@@ -865,6 +932,71 @@ func (a *API) SetContext(ctx context.Context) {
 		a.auditSweeper.Start(ctx)
 		logging.L().Info("fleet.audit_sweeper.started")
 	}
+}
+
+// ReconfigureUpdatePoll (re-)launches the auto-update background poller
+// against the CURRENT persisted dials, cancelling any prior poller
+// first. Called from SetContext (app boot / Wails re-init) and from
+// Bindings.Settings_Set (a live settings save while the app is
+// running) — BackgroundPoll takes interval and channel by value, read
+// once at loop start (core/update/service.go), so a running poller
+// cannot pick up a changed dial on its own; the only way to apply a new
+// interval or channel is cancel-and-relaunch.
+//
+// controls-and-readouts-that-tell-the-truth-01PMZ808 WP07 (FR-008):
+// this used to be an unconditional `if a.updateSvc != nil { ... 6h ...
+// "stable" ... }` inside SetContext — AutoCheckUpdates was read nowhere
+// on this path, and the interval/channel were hardcoded despite three
+// settings-store accessors (LoadAutoCheckUpdates / LoadUpdateChannel /
+// LoadUpdateCheckInterval) existing with zero non-test callers outside
+// core/rpc/views/settings.
+//
+// No-op when there is no update service (nil-service chassis path) or
+// no settings store to read the dials from.
+func (a *API) ReconfigureUpdatePoll(ctx context.Context) {
+	if a.updateSvc == nil {
+		return
+	}
+
+	// Defaults mirror the pre-WP07 hardcoded values so a chassis with no
+	// settings store (some test constructions) keeps its prior always-on
+	// stable/6h behaviour rather than silently going dark.
+	enabled := true
+	interval := 6 * time.Hour
+	channel := settings.UpdateChannelStable
+	if a.settingsImpl != nil {
+		if store := a.settingsImpl.Store(); store != nil {
+			if v, err := store.LoadAutoCheckUpdates(); err == nil {
+				enabled = v
+			}
+			if v, err := store.LoadUpdateCheckInterval(); err == nil && v > 0 {
+				interval = v
+			}
+			if v, err := store.LoadUpdateChannel(); err == nil && v != "" {
+				channel = v
+			}
+		}
+	}
+
+	a.updatePollMu.Lock()
+	if a.updatePollCancel != nil {
+		a.updatePollCancel()
+		a.updatePollCancel = nil
+	}
+	if !enabled {
+		a.updatePollMu.Unlock()
+		logging.L().Info("update.poll.disabled_by_settings")
+		return
+	}
+	pollCtx, cancel := context.WithCancel(ctx)
+	a.updatePollCancel = cancel
+	a.updatePollMu.Unlock()
+	go func() {
+		if err := a.updateSvc.BackgroundPoll(pollCtx, interval, channel); err != nil &&
+			!errors.Is(err, context.Canceled) {
+			logging.L().Warn("update.poll.exit", "err", err.Error())
+		}
+	}()
 }
 
 // runMigrationDriftCheck reads the boot-time migration drift report and
@@ -992,9 +1124,9 @@ func (a *API) runMigrationDriftCheck(ctx context.Context) {
 }
 
 // Shutdown cancels the auto-update background poller and stops the
-// workflow cron scheduler. main.go calls this from OnShutdown so all
-// background goroutines exit cleanly. Safe to call when no poller is
-// running.
+// workflow cron scheduler and the chat-run cron scheduler. main.go calls
+// this from OnShutdown so all background goroutines exit cleanly. Safe to
+// call when no poller is running.
 func (a *API) Shutdown() {
 	if a == nil {
 		return
@@ -1007,6 +1139,9 @@ func (a *API) Shutdown() {
 	a.updatePollMu.Unlock()
 	if a.wfScheduler != nil {
 		a.wfScheduler.Stop()
+	}
+	if a.chatCronEngine != nil {
+		a.chatCronEngine.Stop()
 	}
 	// Flush any active eval captures so partial files get a KindCaptureStop
 	// record even on clean shutdown.
@@ -1293,6 +1428,13 @@ func New(c *core.Core, opts ...Option) *API {
 	// context Wails accepts for EventsEmit. Without this dispatcher
 	// the registry enqueues but never notifies the frontend, so the
 	// permission modal never renders and the gate hangs until timeout.
+	// permissionHookAdapter's Runner is nil until a.hookRunner is set
+	// below (see the field doc) — WithPermissionHookRunner still installs
+	// it now so the registry's r.permHooks nil-check is satisfied from
+	// construction, and FirePermissionRequest / FirePermissionDenied's
+	// own nil-Runner guards make an early interactive prompt (before
+	// hookRunner is backfilled) a safe no-op rather than a panic.
+	a.permissionHookAdapter = &hooks.PermissionRunnerAdapter{}
 	a.promptRegistry = cedar.NewRegistry(cedar.WithDispatcher(
 		cedar.PromptDispatcherFunc(func(_ context.Context, topic string, payload cedar.PendingRequest) {
 			if a.broker == nil {
@@ -1306,7 +1448,7 @@ func New(c *core.Core, opts ...Option) *API {
 			// second backend trip.
 			a.broker.emitter.Emit(a.broker.EmitCtx(), topic, FlattenPendingRequest(payload))
 		}),
-	))
+	), cedar.WithPermissionHookRunner(a.permissionHookAdapter))
 
 	// Cedar policy engine — process-singleton (WP05 hoist,
 	// consent-surfaces-truth-01PMTR01). Constructed exactly ONCE, here,
@@ -1321,6 +1463,64 @@ func New(c *core.Core, opts ...Option) *API {
 	// struct and check-cedar-engine-singleton.sh (I15).
 	a.cedarEngine = buildCedarEngineOrNil(coreDataDir(c))
 
+	// harness-self-attach-01PMHS01 UNIT-2: install the three shipped
+	// harness-self Cedar policies (harness_read_default.cedar,
+	// harness_write_onboarding.cedar, harness_write_forbid.cedar —
+	// harnessmcp.EmbeddedCedar) into the SAME singleton engine every
+	// other ActionUse* gate above reads. Engine.LoadHarnessSnippets has
+	// existed and been unit-tested since WP06 of
+	// harness-self-mcp-onboarding-01KQ8TDU, but nothing called it at
+	// boot: every ActionUseTool evaluation for a harness-self tool was
+	// NotApplicable, which this engine's DefaultDeny=false posture maps
+	// to Allow — the write-tool forbid floor was compiled into the
+	// binary but never reached the live engine. A silent skip here is
+	// indistinguishable from "installed and permissive" to every
+	// existing listing test, so failures are logged loud (Error, not
+	// Warn) rather than swallowed, and the install is asserted against
+	// the exact expected count rather than just "no error".
+	if a.cedarEngine != nil {
+		if snippets, err := harnessmcp.CedarSnippets(); err != nil {
+			logging.L().Error("cedar.harness_snippets_read_failed", "err", err.Error())
+		} else if err := a.cedarEngine.LoadHarnessSnippets(snippets); err != nil {
+			logging.L().Error("cedar.harness_snippets_load_failed", "err", err.Error())
+		} else if n := len(snippets); n != 3 {
+			logging.L().Error("cedar.harness_snippets_count_unexpected", "count", n, "want", 3)
+		} else {
+			logging.L().Info("cedar.harness_snippets_installed", "count", n)
+		}
+	}
+
+	// model-authored-graphs-01PMGA01 UNIT-3: install the four shipped
+	// graph-authoring Cedar policies (graph_author_forbid.cedar,
+	// graph_author_permit.cedar, graph_author_no_write_file.cedar,
+	// graph_run_unreviewed_forbid.cedar — graphview.EmbeddedCedar) into
+	// the SAME singleton engine every other ActionUse*/graph.* gate
+	// reads. Shares the harness-self install mechanism above rather than
+	// building a second one (spec §9 / tasks.md UNIT-3: "whichever lands
+	// first owns the helper, the other adds its embed.FS to it" —
+	// LoadHarnessSnippets is already a general "add named policy
+	// sources" primitive, see core/fleet/cedar_apply.go's
+	// CedarBundleApplier). Until UNIT-4 lands the callers
+	// (GateGraphAuthor/GateGraphRun), nothing evaluates these policies —
+	// installing them here first means UNIT-4's gate tests fail loudly
+	// against a missing call site rather than passing vacuously against
+	// a missing install (plan.md's ordering rationale for WP03 before
+	// WP04). A silent skip here is indistinguishable from "installed and
+	// permissive" to every existing listing test, so failures are logged
+	// loud (Error, not Warn) and the install is asserted against the
+	// exact expected count.
+	if a.cedarEngine != nil {
+		if snippets, err := graphview.CedarSnippets(); err != nil {
+			logging.L().Error("cedar.graph_snippets_read_failed", "err", err.Error())
+		} else if err := a.cedarEngine.LoadHarnessSnippets(snippets); err != nil {
+			logging.L().Error("cedar.graph_snippets_load_failed", "err", err.Error())
+		} else if n := len(snippets); n != 4 {
+			logging.L().Error("cedar.graph_snippets_count_unexpected", "count", n, "want", 4)
+		} else {
+			logging.L().Info("cedar.graph_snippets_installed", "count", n)
+		}
+	}
+
 	// Wire the Cedar gate for BulkPurge (F-001 security fix). The gate is
 	// built from the same DataDir as every other Cedar gate in the chassis.
 	// When DataDir is empty (e.g. test mode) a.cedarGate() returns AllowAll
@@ -1330,7 +1530,19 @@ func New(c *core.Core, opts ...Option) *API {
 	if c != nil && c.DataDir() != "" {
 		auditGate = a.cedarGate()
 	}
-	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker), audit.WithGate(auditGate))
+	// Durable event-log store (audit-that-tells-the-truth-01PMZA10
+	// UNIT-4 — "the honesty threshold": before this, the Audit view was
+	// an in-memory ring that did not survive a relaunch). Wired only
+	// when a real storage.DB is available — the same `db` variable
+	// usage.New/units.NewManager above condition on — so the test
+	// chassis (db == nil) stays ring-only, honestly. UNIT-2 registered
+	// event-log's migrations into this same db's registry (sqlite.go),
+	// so by the time db is non-nil here its schema is already applied.
+	var auditStore *eventlog.Store
+	if db != nil {
+		auditStore = eventlog.NewStore(eventlog.NewSQLBackend(db))
+	}
+	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker), audit.WithGate(auditGate), audit.WithStore(auditStore))
 	a.auditAPI = a.auditImpl
 
 	// mission 01NLOGS01 WP01: construct the bounded in-memory log store and
@@ -1433,6 +1645,12 @@ func New(c *core.Core, opts ...Option) *API {
 	settingsImpl := settings.NewAPI(settingsStore)
 	a.settingsAPI = settingsImpl
 	a.settingsImpl = settingsImpl
+	// AuditSettings.RetentionEnforced (audit-that-tells-the-truth-01PMZA10
+	// UNIT-4, spec D-8): false until UNIT-8 lands a real sweep. This is
+	// the wiring site that makes the value honest — GetAuditSettings
+	// itself never hardcodes it. UNIT-8 changes this one call to report
+	// whatever actually schedules and runs the sweep; no frontend edit.
+	settingsImpl.SetAuditRetentionEnforced(false)
 
 	// Wire the Settings-backed MemoryNarrativeEnabled dial into
 	// core/memory/narrative (agentgraph-total-convergence-01PMGX01 WP17,
@@ -1524,7 +1742,30 @@ func New(c *core.Core, opts ...Option) *API {
 		gs.SetGate(&memoryGateAdapter{gate: a.cedarGate()})
 	}
 	personalForLLM := newPersonalStore(c)
+	// controls-and-readouts-that-tell-the-truth-01PMZ808 WP10 (FR-014):
+	// decorate the single embedder so every Embed() call — regardless of
+	// which downstream consumer triggers it (the retriever, the hooks
+	// stack, or Memory_TestEmbedder above) — records into
+	// corememory.GlobalCaptureTracker(). Before this, RecordEmbedCall /
+	// RecordEmbedError had zero production callers, so lastEmbedDuration
+	// stayed 0 and embedErrors stayed empty forever, and the 'slow' /
+	// 'error' arms of MemoryCaptureRatePill.vue were unreachable — the
+	// pill could only ever render "Memory capturing OK".
+	//
+	// Do NOT wrap corememory.NoopEmbedder{} (no provider configured):
+	// three downstream consumers — slashMemoryGateway (below),
+	// newCorpusManager, and TestEmbedder's own pre-check — type-assert
+	// their held corememory.Embedder against corememory.NoopEmbedder to
+	// short-circuit before calling Embed. A decorator wrapping a Noop
+	// would change the CONCRETE type, so that assertion would never
+	// match again — newCorpusManager specifically branches on it to
+	// decide whether to pass a non-nil corpusEmb at all, which is a
+	// real behavioural difference, not just a slower path to the same
+	// answer.
 	embedder := newEmbedder(c, personalForLLM, settingsImpl)
+	if _, isNoop := embedder.(corememory.NoopEmbedder); !isNoop {
+		embedder = &embedderCaptureDecorator{inner: embedder}
+	}
 	memoryEnabled := func() bool {
 		if settingsImpl == nil || settingsImpl.Store() == nil {
 			return false
@@ -1574,7 +1815,34 @@ func New(c *core.Core, opts ...Option) *API {
 	a.secretsAPI = secretsview.NewAPI(a.exposureIdx)
 	logging.L().Info("rpc.boot.exposure_index_created")
 
-	hooksRunner, hookRegistry, hookBuiltins := newHooksStack(c, retriever, memStore, embedder)
+	hooksRunner, hookRegistry, hookBuiltins, hookRunnerImpl := newHooksStack(c, retriever, memStore, embedder)
+	// WP06 / UNIT-5: hold the concrete *hooks.Runner on the stack (see the
+	// a.hookRunner field doc) so future WPs can construct the three hook
+	// adapters without re-plumbing through api.New.
+	a.hookRunner = hookRunnerImpl
+	// WP10 / UNIT-9: backfill the Runner field on the adapter already
+	// installed into a.promptRegistry (see permissionHookAdapter's field
+	// doc for why this is a backfill rather than a constructor arg — the
+	// registry is built ~300 lines above this point, before hookRunnerImpl
+	// exists). cedar.Registry reads r.permHooks through the interface,
+	// which reads through this pointer, so every RequestInteractive call
+	// from here on sees a live Runner even though the registry itself was
+	// never reconstructed.
+	if a.permissionHookAdapter != nil {
+		a.permissionHookAdapter.Runner = a.hookRunner
+	}
+	// WP10 / UNIT-9: install the v2 session lifecycle hook runner
+	// (session_start, setup, cwd_changed) before anything can call
+	// c.SessionManager() for the first time — SessionManager() is lazily
+	// constructed and caches its instance, so SetSessionHookRunner is a
+	// no-op once that first call has happened. The first SessionManager()
+	// call in this file is below (buildResumeStarter's guard), so this is
+	// safely early. core.Core never imports core/hooks (see
+	// SetSessionHookRunner's doc) — the adapter is built here, in core/rpc,
+	// and passed in as the session.SessionHookRunner interface.
+	if c != nil && a.hookRunner != nil {
+		c.SetSessionHookRunner(&hooks.SessionRunnerAdapter{Runner: a.hookRunner})
+	}
 	// Register skill-catalog pre_send hook so the model sees the
 	// model-invokable commands at send time (model-invoked-skills-catalog-01KZNP3E WP03).
 	if hookBuiltins != nil && slashStore != nil {
@@ -1661,7 +1929,7 @@ func New(c *core.Core, opts ...Option) *API {
 	a.convMgr = newConversationManager(c)
 	a.corpusMgr = newCorpusManager(c, embedder)
 	var compactionPipeline *compaction.Pipeline
-	a.graphMgr, compactionPipeline = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore, settingsImpl, a.cedarEngine)
+	a.graphMgr, compactionPipeline = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore, settingsImpl, a.cedarEngine, a.hookRunner)
 	// Wire the same FR-041 pipeline instance the kernel runs onto the
 	// Settings RPC surface, so edits made through
 	// core/rpc/views/compaction reach the live kernel path instead of
@@ -1702,6 +1970,11 @@ func New(c *core.Core, opts ...Option) *API {
 	a.stdioPool = stack.pool
 	a.dispatchPool = stack.dispatchPool
 	a.builtins = stack.builtins
+	// harness-self-attach-01PMHS01 UNIT-4: hold the merged resolver
+	// newLLMStack constructed so tests can exercise the actual
+	// production wire (see harness_session_kind_resolver_wiring_test.go)
+	// instead of reconstructing an equivalent by hand.
+	a.toolPermsResolver = stack.perms
 	// long-turn-resilience-01KR3PRS WP03: now that both the chat
 	// runner and the session manager are constructed, wire the
 	// ResumeStarter onto the existing sessionsAPI so
@@ -1712,6 +1985,29 @@ func New(c *core.Core, opts ...Option) *API {
 		if starter != nil {
 			a.sessionsAPI = sessions.WithResumeStarter(a.sessionsAPI, starter)
 		}
+	}
+	// controls-and-readouts-that-tell-the-truth-01PMZ808 WP04 (FR-004):
+	// wire the branch-cascade delete implementation
+	// (conversation.Manager.DeleteChildrenOf, previously test-only)
+	// behind the Settings.DeleteBranchesWithParent gate. a.convMgr was
+	// just constructed above; settingsImpl.Store() may be nil in
+	// reduced test chassis, in which case the gate always reads false
+	// (the safe default) rather than panicking.
+	if a.convMgr != nil {
+		a.sessionsAPI = sessions.WithDeleteChildrenOf(
+			a.sessionsAPI,
+			a.convMgr.DeleteChildrenOf,
+			func() bool {
+				if settingsImpl == nil || settingsImpl.Store() == nil {
+					return false
+				}
+				all, err := settingsImpl.Store().LoadAll()
+				if err != nil {
+					return false
+				}
+				return all.DeleteBranchesWithParent
+			},
+		)
 	}
 	// autonomy-dial-01KR3M2A WP03: wire the AutonomyContextProvider so
 	// Sessions_ResolveAutonomy folds global → project → session layers
@@ -1882,6 +2178,45 @@ func New(c *core.Core, opts ...Option) *API {
 		a.hooksAPI = hooksview.New(hooksview.Config{})
 	}
 
+	// Trust anchors (bundle-download-and-verify-01PMZ909 UNIT-3, spec
+	// §1.7 F-1). A durable AnchorStore when the chassis exposes a real
+	// *sql.DB (same structural-interface dance buildJournalWriter /
+	// buildAgentGraphEventLog use so storage.DB doesn't need to grow a
+	// public method); otherwise the engine falls back to its v1.0
+	// in-memory default (trust.Config{}.Anchors nil-default in
+	// engine.go), matching the bundle wiring's own convention below.
+	// Before this, an anchor installed before a relaunch was
+	// unobservable on the next boot — confirmed by execution in
+	// research/corrections.md.
+	var anchorStore coretrust.AnchorStore
+	if c != nil {
+		if store := c.Storage(); store != nil {
+			type sqlHandle interface{ SQL() *sql.DB }
+			if h, ok := store.(sqlHandle); ok {
+				if rawDB := h.SQL(); rawDB != nil {
+					if s, sErr := coretrust.NewSQLiteAnchorStore(rawDB); sErr == nil {
+						anchorStore = s
+					} else {
+						slog.Warn("trust anchor store construction failed; falling back to in-memory", "err", sErr)
+					}
+				}
+			}
+		}
+	}
+	if trustEngine, tErr := coretrust.NewEngineWithEmitter(coretrust.Config{Anchors: anchorStore}, nil, coretrust.NewMemoryEmitter()); tErr != nil {
+		// NewEngineWithEmitter only errors on a nil dispatcher combined
+		// with a sign attempt; verify-only construction (dispatcher=nil
+		// here, matching NewEngine's own contract) does not fail in
+		// practice. Degrade to a nil engine rather than aborting API
+		// construction: TrustAnchors() and the UNIT-4 bundle-install
+		// verifier path both tolerate a nil engine (empty list / skip
+		// verification under SigningOptional).
+		slog.Warn("trust engine construction failed", "err", tErr)
+	} else {
+		a.trustEngine = trustEngine
+		a.trustAnchorAPI = trustanchor.New(trustEngine)
+	}
+
 	// Wire the bundle reader against the core data dir. nil core (test
 	// harness path) leaves the impl with a nil reader — List returns an
 	// empty slice and Get returns "not found", which is the contract the
@@ -1896,6 +2231,48 @@ func New(c *core.Core, opts ...Option) *API {
 			bundleOpts = append(bundleOpts, bundle.WithCAS(bundle.CASFromCache(cas)))
 		}
 	}
+	// UNIT-4 (bundle-download-and-verify-01PMZ909, spec §2): wire the
+	// verifier + anchor lookup so Install actually calls
+	// VerifyManifestSignatures — before this it had zero callers.
+	// a.trustEngine was constructed above (nil on construction failure,
+	// which degrades to "no verifier configured", matching pre-UNIT-4
+	// behaviour rather than aborting API construction).
+	if a.trustEngine != nil {
+		if verifier, vErr := coretrust.NewEngineVerifier(a.trustEngine); vErr == nil {
+			bundleOpts = append(bundleOpts, bundle.WithVerifier(verifier))
+		} else {
+			slog.Warn("bundle signature verifier construction failed", "err", vErr)
+		}
+		trustEngineForBundle := a.trustEngine
+		bundleOpts = append(bundleOpts, bundle.WithAnchorsFunc(func(ctx context.Context) ([]coretrust.Anchor, error) {
+			return trustEngineForBundle.ListAnchors(ctx)
+		}))
+	}
+	// The signing policy is a Settings dial, not a hardcoded constant
+	// (spec D-2) — read fresh on every Install call via LoadAll, the
+	// same "no dedicated store method needed" pattern reasoningBudget
+	// above uses, so a Settings edit takes effect on the very next
+	// install without a restart. Falls back to SigningOptional (the
+	// safe default per Settings.EffectiveBundleSigningPolicy) whenever
+	// settingsImpl or its store is unavailable.
+	settingsForBundlePolicy := settingsImpl
+	bundleOpts = append(bundleOpts, bundle.WithSigningPolicyFunc(func() bundleintegrity.SigningPolicy {
+		if settingsForBundlePolicy == nil || settingsForBundlePolicy.Store() == nil {
+			return bundleintegrity.SigningOptional
+		}
+		got, sErr := settingsForBundlePolicy.Store().LoadAll()
+		if sErr != nil {
+			return bundleintegrity.SigningOptional
+		}
+		switch got.EffectiveBundleSigningPolicy() {
+		case "required":
+			return bundleintegrity.SigningRequired
+		case "forbidden":
+			return bundleintegrity.SigningForbidden
+		default:
+			return bundleintegrity.SigningOptional
+		}
+	}))
 	a.bundleAPI = bundle.NewAPI(bundleOpts...)
 
 	// Corpora subsystem (mission agent-kernel-graph; Bundle C). Wired
@@ -2245,10 +2622,12 @@ func New(c *core.Core, opts ...Option) *API {
 		a.acpAPI = acpview.NewAPI(acpReg, acpEnv, acpOpts)
 	}
 
-	// Scheduled-chat-runs view (mission scheduled-chat-runs-01KX5R8B, WP04).
-	// Wired with the SQLiteChatStore when a real DB is available; test
-	// chassis path (c == nil or no storage) silently leaves the store nil
-	// which causes the accessor to return a graceful-empty surface.
+	// Scheduled-chat-runs view (mission scheduled-chat-runs-01KX5R8B, WP04;
+	// cron engine added by model-scheduled-jobs-01PMSJ01 WP03; dispatcher
+	// armed by WP05). Wired with the SQLiteChatStore when a real DB is
+	// available; test chassis path (c == nil or no storage) silently
+	// leaves the store nil which causes the accessor to return a
+	// graceful-empty surface.
 	{
 		var chatStore schedulerPkg.ScheduledChatStore
 		if c != nil {
@@ -2256,14 +2635,81 @@ func New(c *core.Core, opts ...Option) *API {
 				chatStore = schedulerPkg.NewSQLiteChatStore(db)
 			}
 		}
+		// Chat-run cron engine (model-scheduled-jobs-01PMSJ01 WP03): the
+		// ticking counterpart to wfScheduler above, for scheduled_chat_runs
+		// instead of workflow_schedules.
+		//
+		// chatEngine is assigned through a local interface variable, not
+		// directly from a.chatCronEngine, so a nil *ChatCronEngine never
+		// becomes a non-nil scheduledchatview.Registrar (the classic Go
+		// typed-nil-interface trap) when construction fails.
+		var chatEngine scheduledchatview.Registrar
+		var chatCronEngine *schedulerPkg.ChatCronEngine
+		if chatStore != nil {
+			eng, err := schedulerPkg.NewChatCronEngine(context.Background(), schedulerPkg.ChatCronEngineConfig{
+				Store: chatStore,
+			})
+			if err != nil {
+				logging.L().Warn("scheduler.chat_cron.init_failed", "err", err.Error())
+			} else {
+				a.chatCronEngine = eng
+				chatEngine = eng
+				chatCronEngine = eng
+				logging.L().Info("scheduler.chat_cron.init_ok")
+			}
+		}
+		// The real ChatRunDispatcher (model-scheduled-jobs-01PMSJ01 WP04)
+		// and its assignment into both the RunNow path
+		// (scheduledchatview.Config.Dispatcher) and the cron engine
+		// (SetDispatcher), together with the WP05 unattended posture
+		// LiveChatRunDispatcher marks on every dispatch's ctx
+		// (runposture.Unattended — read by kernelToolAdapter.
+		// resolveConfirmEach and cedar.Registry.RequestInteractive).
+		// Per plan.md Rule 2 this assignment happens in the SAME commit
+		// as that posture, never before it: a dispatcher armed without
+		// the posture can park a scheduled run on a human forever
+		// (spec.md §2 H-1/H-2/H-3). a.sessionsAPI and a.llmAPI are both
+		// fully wired by this point in New() (every With* wrap above has
+		// already run).
+		var chatDispatcher schedulerPkg.ChatRunDispatcher
+		if chatStore != nil && a.sessionsAPI != nil && a.llmAPI != nil {
+			capturedPersonalStore := personalForLLM
+			live := NewChatRunDispatcher(ChatRunDispatcherDeps{
+				Store:    chatStore,
+				Sessions: a.sessionsAPI,
+				LLM:      a.llmAPI,
+				Bus:      a.eventBus,
+				// Lazy, mirroring wfDeps.DefaultProfileFunc (line ~2046
+				// above): first personal-provider profile wins, re-read
+				// on every dispatch so a profile added after boot is
+				// picked up without a restart.
+				DefaultProfile: func() string {
+					if capturedPersonalStore == nil {
+						return ""
+					}
+					profs, err := capturedPersonalStore.List()
+					if err != nil || len(profs) == 0 {
+						return ""
+					}
+					return profs[0].ID
+				},
+			})
+			chatDispatcher = live
+			if chatCronEngine != nil {
+				chatCronEngine.SetDispatcher(live)
+			}
+			logging.L().Info("scheduler.chat_dispatch.armed")
+		}
 		// Cedar policy gate for scheduled-chat create / update / delete
 		// / execute. Omitting it left cfg.Cedar nil, and every
 		// GateScheduledChat* helper short-circuits a nil Gate to
 		// Allow("no engine wired (default-allow)") — so the surface
 		// that runs prompts on a cron consulted no policy at all.
 		a.scheduledChatAPI = scheduledchatview.New(scheduledchatview.Config{
-			Store: chatStore,
-			Cedar: a.cedarGate(),
+			Store:      chatStore,
+			Engine:     chatEngine,
+			Dispatcher: chatDispatcher,
+			Cedar:      a.cedarGate(),
 		})
 	}
 
@@ -3969,6 +4415,16 @@ type llmStack struct {
 	// can route http/sse recipes to the right transport without knowing
 	// the transport ahead of time.
 	dispatchPool *dispatch.Pool
+	// perms is the merged permission resolver (static arm + the
+	// harness-self-attach-01PMHS01 UNIT-4 Cedar session-kind arm)
+	// constructed during newLLMStack. Held so tests can exercise the
+	// EXACT production wire directly (see
+	// harness_session_kind_resolver_wiring_test.go) rather than
+	// reconstructing an equivalent resolver by hand, which would prove
+	// nothing about the actual wiring in New(). toolDiscoverer and
+	// wfToolDiscovererAdapter both close over this same value — see
+	// AC-006/AC-007's "one resolver reaches both consumers" note.
+	perms toolloop.PermissionResolver
 }
 
 func newLLMStack(
@@ -4058,20 +4514,63 @@ func newLLMStack(
 	// WP02 — wire the global static resolver against
 	// <DataDir>/mcp_servers.json. A missing file soft-fails to
 	// auto_allow (the file is opt-in); a malformed file logs a
-	// warning and the resolver is left nil so the loop's built-in
-	// auto_allow default applies. Per-session overrides (C2) are
-	// composed on top of this when the session manager grows the
-	// MCPOverrides reader.
-	var perms toolloop.PermissionResolver
+	// warning and the resolver is left nil, which NewMergedResolver
+	// below treats as auto_allow for the static arm specifically
+	// (perms.go:291-293) — safe ONLY because the session arm
+	// constructed unconditionally below still enforces containment on
+	// its own. Per-session overrides (C2) are composed on top of this
+	// when the session manager grows the MCPOverrides reader.
+	var staticPerms toolloop.PermissionResolver
 	if c != nil && c.DataDir() != "" {
-		staticPerms, permErr := toolloop.NewStaticResolverFromDataDir(c.DataDir())
+		sp, permErr := toolloop.NewStaticResolverFromDataDir(c.DataDir())
 		if permErr != nil {
 			logging.L().Warn("toolloop.permissions.static_load_failed",
 				"data_dir", c.DataDir(), "err", permErr.Error())
 		} else {
-			perms = staticPerms
+			staticPerms = sp
 		}
 	}
+
+	// harness-self-attach-01PMHS01 UNIT-4 — THE CONTAINMENT. Owner
+	// ruling B-2 assigns per-run tool containment to this wire; B-3
+	// removes the human review moment for model-created schedules,
+	// making this the ONLY boundary between a model-chosen prompt
+	// running unattended and the full tool catalogue (spec.md §6.1).
+	// The register's bar: "must be correct, not merely present."
+	//
+	// The previous code built `perms` only inside
+	// `if c != nil && c.DataDir() != ""` — an empty DataDir, or the
+	// permErr branch just above, left `perms` nil. A nil perms is not
+	// a restrictive resolver, it is NO resolver:
+	// discoverer_adapter.go's `if d.perms != nil` guard lists
+	// everything, and chatPermsAdapter.Resolve returns "auto_allow"
+	// when its inner resolver is nil. Every existing and proposed
+	// listing test passed in that state; AC-015 pins it shut.
+	//
+	// The session arm is built UNCONDITIONALLY, below, before either
+	// branch above runs — it does not depend on DataDir, only on a
+	// session store and the shared Cedar engine. A static-load failure
+	// (the permErr branch above) still yields
+	// NewMergedResolver(nil, sessionArm), never a bare nil perms.
+	var sessionMgr *session.Manager
+	if c != nil {
+		sessionMgr = c.SessionManager()
+	}
+	// newCedarSessionKindResolver never returns nil and never errors —
+	// it degrades its OWN Resolve to deny-all (not auto_allow) when it
+	// cannot actually evaluate anything (no session store, no Cedar
+	// engine: buildCedarEngineOrNil returns nil for an empty DataDir or
+	// a construction failure). That is rule 3 of this unit made
+	// concrete: "if the session arm itself cannot be constructed... fail
+	// the boot loudly or install a deny-all session arm. Never fall
+	// back to the static resolver alone, and never to nil." An inert
+	// (auto_allow, no-match) degrade here would let a nil/failed static
+	// arm's own auto_allow default govern everything — reproducing the
+	// exact "could not determine the allowlist" hole B-3 says must not
+	// run, just one level down. See harness_session_kind_resolver.go's
+	// Resolve for where this posture is implemented.
+	sessionArm := newCedarSessionKindResolver(sessionMgr, cedarEngine)
+	perms := toolloop.NewMergedResolver(staticPerms, sessionArm)
 	// WP03 — pre/post-tool-use hooks and audit emission. core/hooks
 	// only exposes pre_send / post_send for chat-pipeline events;
 	// there is no pre_tool_use / post_tool_use surface there yet, so
@@ -4433,6 +4932,7 @@ func newLLMStack(
 		wrappedPool:         wrappedPool,
 		toolDiscoverer:      toolDiscoverer,
 		dispatchPool:        dispatchPool,
+		perms:               perms,
 
 		confirmBus:           confirmBus,
 		confirmSessionGrants: confirmSessionGrants,
@@ -4635,6 +5135,26 @@ func agenticTurnRoutingEnabledFromSettings(settingsImpl *settings.API) bool {
 		return false
 	}
 	return got.AgenticTurnRouting
+}
+
+// graphAuthoringEnabledFromSettings reads the FR-006 consent dial
+// (model-authored-graphs-01PMGA01 UNIT-4) live from the settings store,
+// consulted on every graph.author evaluation via
+// graphview.WithAuthoringEnabled above. A nil settingsImpl/Store, or a
+// LoadGraphAuthoringEnabled error, reads as false — the fail-closed
+// direction FR-006 requires ("absent reads as off"): an unreadable
+// settings file must not silently grant graph-authoring.
+func graphAuthoringEnabledFromSettings(settingsImpl *settings.API) bool {
+	if settingsImpl == nil || settingsImpl.Store() == nil {
+		return false
+	}
+	enabled, err := settingsImpl.Store().LoadGraphAuthoringEnabled()
+	if err != nil {
+		logging.L().Warn("graph.authoring_enabled.read_failed",
+			"err", err.Error(), "detail", "defaulting to disabled")
+		return false
+	}
+	return enabled
 }
 
 // moveFidelityHistoryEnabledFromSettings reads the LIVE half of the
@@ -4910,6 +5430,22 @@ func buildChatRunner(
 		})
 	}
 
+	// chat-turn-integrity-01PMZ606 WP03: StreamCheckpoints wires the
+	// periodic-flush durability seam to session.Manager directly —
+	// Manager.UpsertStreamCheckpoint/DeleteStreamCheckpoint satisfy
+	// chat.StreamCheckpointStore's method set exactly, so no adapter
+	// closure is needed here (unlike partialPersister above, which
+	// combines two Manager calls into one). This replaced the P0: a
+	// healthy multi-tick turn used to write up to six copies of its own
+	// answer into session_messages via partialPersister above, each
+	// flagged as a streaming failure (spec.md §1.1). The periodic flush
+	// now upserts a stream_checkpoints row instead; driveRun deletes it
+	// on both the clean-close and error-close terminal paths.
+	var streamCheckpoints chat.StreamCheckpointStore
+	if historyAdapter != nil && historyAdapter.mgr != nil {
+		streamCheckpoints = historyAdapter.mgr
+	}
+
 	// Usage hook (token-cost-telemetry-01KQ8TD7 WP02 + backend-context-
 	// window-length-01KQ8TD3 WP02 + WP03). The closure fires from
 	// HookPostLLM (after session_write persists the assistant message, so
@@ -5111,6 +5647,7 @@ func buildChatRunner(
 		Compaction:         compactionDeps,
 		CompactionPipeline: chatCompactionPipeline,
 		PartialPersister:   partialPersister,
+		StreamCheckpoints:  streamCheckpoints,
 		UsageHook:          usageHookFn,
 		AutoTitle:          autoTitleDeps,
 		// multimodal-io-extended-01KQ8TD2 WP02: wire the concrete artifact
@@ -5908,7 +6445,7 @@ func newCorpusManager(c *core.Core, embedder corememory.Embedder) *corecorpus.Ma
 // library and runs in-memory graphs; user-graph persistence is the
 // only feature lost when DataDir is empty.
 func newGraphManager(c *core.Core) *graphview.Manager {
-	mgr, _ := newGraphManagerWithDeps(c, nil, nil, nil, nil, nil, nil, nil)
+	mgr, _ := newGraphManagerWithDeps(c, nil, nil, nil, nil, nil, nil, nil, nil)
 	return mgr
 }
 
@@ -6076,12 +6613,28 @@ func newGraphManagerWithDeps(
 	// as buildCedarGate("") always did (empty DataDir, the nil-core
 	// test chassis, or a logged boot-time construction failure).
 	cedarEngine *cedar.Engine,
+	// hookRunner is the process-singleton *hooks.Runner — a.hookRunner
+	// at the production call site in New(), populated by newHooksStack
+	// (WP06 / UNIT-5). nil degrades to no lifecycle hooks firing at the
+	// tool-dispatch boundary, exactly as production behaved before WP09
+	// / UNIT-8 (trust-surfaces-that-fire-01PMZ202): the seam existed and
+	// was read from three call sites, but nothing ever constructed the
+	// one implementation.
+	hookRunner *hooks.Runner,
 ) (*graphview.Manager, *compaction.Pipeline) {
 	dataDir := ""
 	if c != nil {
 		dataDir = c.DataDir()
 	}
 	deps := graphview.EnvDeps{}
+	if hookRunner != nil {
+		// WP09 / UNIT-8: both production Env literals (chat_runner.go
+		// and manager.go) inherit EnvDeps via applyTo, so this single
+		// assignment reaches every kernel run — chat and library-graph
+		// alike — with the real pre_tool_use / post_tool_use /
+		// post_tool_use_failure fire path.
+		deps.LifecycleHooks = &hooks.LifecycleRunnerAdapter{Runner: hookRunner}
+	}
 	if convMgr != nil {
 		deps.Branch = graphview.NewBranchSeamAdapter(convMgr, sessionManagerOrNil(c))
 		// engineer-truth-pass-01PMTP01 WP08 (finding B16): the merge-
@@ -6249,6 +6802,24 @@ func newGraphManagerWithDeps(
 		}),
 		graphview.WithKernel(kernel),
 		graphview.WithEventLog(agEventLog),
+		// model-authored-graphs-01PMGA01 UNIT-4: the same engine
+		// deps.Policy already uses above (graphCedarGate — AllowAll{}
+		// until a real cedarEngine is constructed, reassigned when one
+		// is), so graph.author/graph.run evaluations reach a
+		// SavePolicy + Reload-reachable engine like every other gate in
+		// this constructor. check-cedar-gate-arguments.sh clause 4
+		// (UNIT-8(b)) is the CI gate that keeps this argument from
+		// silently going missing — the agentgraph Manager has no
+		// Config struct for clause 3 to discover (C-010).
+		graphview.WithGraphCedarGate(graphCedarGate),
+		// FR-006's consent dial: read live from the settings store on
+		// every graph.author evaluation so a toggle in Settings takes
+		// effect on the next draft attempt without an app restart. A
+		// nil/errored store reads as off (LoadGraphAuthoringEnabled's
+		// documented safe default).
+		graphview.WithAuthoringEnabled(func() bool {
+			return graphAuthoringEnabledFromSettings(settingsImpl)
+		}),
 	}
 
 	mgr, err := graphview.NewManager(mgrOpts...)
@@ -6318,6 +6889,63 @@ func startNodesWatcher(c *core.Core, mgr *nodesview.Manager) *corenodes.Watcher 
 	return w
 }
 
+// embedderCaptureDecorator wraps the single embedder constructed in New
+// so every Embed() call — from whichever consumer triggers it — records
+// its latency and any error into corememory.GlobalCaptureTracker(), the
+// package-level singleton core/memory/store.go already calls from the
+// write half (controls-and-readouts-that-tell-the-truth-01PMZ808 WP10,
+// FR-014). Implements all three methods of corememory.Embedder (Kind,
+// Dimensions, Embed) — corpusEmbedderAdapter below is the nearest
+// precedent but only implements two, so it is a pattern, not a
+// drop-in.
+//
+// Only ever wraps a REAL embedder — see the isNoop check at the
+// construction site in New. Three downstream consumers
+// (slashMemoryGateway, newCorpusManager) type-assert their held
+// corememory.Embedder against corememory.NoopEmbedder to short-circuit
+// before calling Embed; wrapping a Noop would change the CONCRETE type
+// and break those checks (newCorpusManager specifically branches on the
+// result to decide whether to pass a non-nil corpusEmb at all). Since
+// this decorator only ever holds a real embedder, none of those
+// assertions' outcomes change — they already evaluated false against a
+// real embedder before this decorator existed.
+//
+// Known residue (spec §1.6): only two threading edges (the boot-time
+// retriever + hooks-stack assignment here, and Memory_TestEmbedder's
+// direct a.embedder field) were verified end to end. If a consumer
+// elsewhere constructs its OWN embedder rather than receiving this one,
+// that path stays uninstrumented — not found or fixed in this WP.
+type embedderCaptureDecorator struct {
+	inner corememory.Embedder
+}
+
+func (d *embedderCaptureDecorator) Kind() string {
+	if d == nil || d.inner == nil {
+		return ""
+	}
+	return d.inner.Kind()
+}
+
+func (d *embedderCaptureDecorator) Dimensions() int {
+	if d == nil || d.inner == nil {
+		return 0
+	}
+	return d.inner.Dimensions()
+}
+
+func (d *embedderCaptureDecorator) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+	if d == nil || d.inner == nil {
+		return nil, corememory.ErrEmbedderUnavailable
+	}
+	start := time.Now()
+	vecs, err := d.inner.Embed(ctx, texts)
+	corememory.GlobalCaptureTracker().RecordEmbedCall(time.Since(start))
+	if err != nil {
+		corememory.GlobalCaptureTracker().RecordEmbedError(time.Now())
+	}
+	return vecs, err
+}
+
 // corpusEmbedderAdapter bridges core/memory.Embedder onto the narrower
 // corpus.Embedder seam. The two interfaces share the Embed signature;
 // keeping them disjoint avoids a corpus -> memory import edge.
@@ -6356,14 +6984,20 @@ func (a *corpusEmbedderAdapter) Embed(ctx context.Context, texts []string) ([][]
 // Starter memory hooks are NOT auto-installed on boot; the settings
 // "long-term memory" toggle owns that lifecycle so a fresh install
 // stays quiet until the user opts in.
+// newHooksStack also returns the concrete *hooks.Runner (fourth value) so
+// that hooks.LifecycleRunnerAdapter, hooks.PermissionRunnerAdapter and
+// hooks.SessionRunnerAdapter — all of which require a *hooks.Runner, not the
+// llm.HookRunner interface — can be constructed by callers. Before this,
+// the *hooks.Runner was trapped inside the unexported hooksRunnerAdapter.r
+// field and unreachable anywhere else in the binary (WP06 / UNIT-5, R-07).
 func newHooksStack(
 	c *core.Core,
 	retriever *corememory.Retriever,
 	memStore corememory.Store,
 	embedder corememory.Embedder,
-) (llm.HookRunner, *hooks.Registry, *hooks.BuiltinRegistry) {
+) (llm.HookRunner, *hooks.Registry, *hooks.BuiltinRegistry, *hooks.Runner) {
 	if memStore == nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	dataDir := ""
 	if c != nil {
@@ -6371,7 +7005,7 @@ func newHooksStack(
 	}
 	registry, err := hooks.NewRegistry(dataDir)
 	if err != nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	builtins := hooks.NewBuiltinRegistry()
 	hooks.RegisterMemoryBuiltins(builtins, hooks.MemoryDeps{
@@ -6383,7 +7017,7 @@ func newHooksStack(
 		Registry: registry,
 		Builtins: builtins,
 	})
-	return &hooksRunnerAdapter{r: runner}, registry, builtins
+	return &hooksRunnerAdapter{r: runner}, registry, builtins, runner
 }
 
 // hooksBuiltinDescriber adapts *hooks.BuiltinRegistry to the
@@ -6417,7 +7051,18 @@ func (a *retrieverAdapter) RetrieveScoped(ctx context.Context, query, sessionID,
 	if a == nil || a.r == nil {
 		return nil, nil
 	}
-	return a.r.RetrieveScoped(ctx, query, sessionID, projectID, k)
+	// controls-and-readouts-that-tell-the-truth-01PMZ808 WP11 (FR-015):
+	// sessionID was already threaded into the SCOPE filter (buildScopeUnion
+	// inside RetrieveScoped) but never into r.sessionID, the field
+	// WithSessionID sets and retrieve()'s history-push guard
+	// (`if r.sessionID != ""`) reads. Calling the base *Retriever's
+	// RetrieveScoped directly meant that guard never fired on this path,
+	// so GlobalRetrievalHistory stayed empty and
+	// core/rpc/views/memory/impl.go's Memory_LastRetrieval always
+	// returned an empty report. WithSessionID returns a shallow copy
+	// (retriever.go), so this allocates one small struct per call rather
+	// than mutating shared state.
+	return a.r.WithSessionID(sessionID).RetrieveScoped(ctx, query, sessionID, projectID, k)
 }
 
 // hooksRunnerAdapter bridges hooks.Runner to llm.HookRunner. The
@@ -6983,8 +7628,14 @@ func (a *API) Workflows() workflowsview.WorkflowsAPI {
 	}
 	return a.workflowsAPI
 }
-func (a *API) Sessions() sessions.SessionsAPI  { return a.sessionsAPI }
-func (a *API) Trust() trust.TrustAPI           { return a.trustAPI }
+func (a *API) Sessions() sessions.SessionsAPI { return a.sessionsAPI }
+func (a *API) Trust() trust.TrustAPI          { return a.trustAPI }
+func (a *API) TrustAnchors() trustanchor.TrustAnchorAPI {
+	if a == nil || a.trustAnchorAPI == nil {
+		return trustanchor.New(nil)
+	}
+	return a.trustAnchorAPI
+}
 func (a *API) Context() contextview.ContextAPI { return a.contextAPI }
 func (a *API) Contexts() contextsview.ContextsAPI {
 	if a.contextsAPI == nil {
@@ -7601,6 +8252,19 @@ func (a *API) StreamBroker() *StreamBroker { return a.broker }
 // to receive real-time push notifications without the Wails runtime
 // context.  The desktop Wails path is unaffected.
 func (a *API) EventBus() *EventBus { return a.eventBus }
+
+// ConfirmBus returns the confirm-each pause registry Confirm()'s
+// ConfirmAPI reads from — the SAME registry the tool adapter parks a
+// confirm_each verdict on. Test-support only, mirroring EventBus()
+// above: ConfirmAPI's own interface (Resolve/ResolveAlways/ApproveBatch/
+// CancelBatch/ListPending) has no way to PARK a call, only to answer
+// one, so a test proving core/serve's WS reconnect snapshot reaches the
+// real, session-scoped Confirm().ListPending (served-mode-is-a-real-
+// mode-01PMZ707 WP01, AC-704) needs a way to register a real pending
+// entry against the exact bus that view reads from — the production
+// call site (core/rpc/api.go's confirmPublisher wiring) is a private
+// constructor-local closure, not reachable otherwise.
+func (a *API) ConfirmBus() *toolloop.ConfirmBus { return a.confirmBus }
 
 // cedarGate returns a.cedarEngine as a cedar.Gate, falling back to
 // cedar.AllowAll{} when no engine was constructed (empty DataDir, the

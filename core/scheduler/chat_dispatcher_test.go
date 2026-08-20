@@ -1,8 +1,6 @@
 package scheduler_test
 
 import (
-	"context"
-	"strings"
 	"testing"
 	"time"
 
@@ -85,37 +83,6 @@ func TestParseOutputSink(t *testing.T) {
 				t.Errorf("ParseOutputSink(%q) path=%q, want %q", tc.raw, path, tc.wantPath)
 			}
 		})
-	}
-}
-
-func TestNoopChatRunDispatcher(t *testing.T) {
-	d := scheduler.NoopChatRunDispatcher{}
-	now := time.Now()
-	job := scheduler.Job{
-		Kind: scheduler.JobKindChatRun,
-		ChatRun: &scheduler.ChatRunSpec{
-			ID:             "cr-001",
-			PromptTemplate: "Hello {{date}}",
-			OutputSink:     "banner",
-		},
-		Trigger: scheduler.Trigger{Cron: "0 9 * * *"},
-	}
-
-	rec, err := d.DispatchChatRun(context.Background(), job, now)
-	if err != nil {
-		t.Fatalf("DispatchChatRun returned error: %v", err)
-	}
-	if rec.Status != "completed" {
-		t.Errorf("status=%q, want completed", rec.Status)
-	}
-	if rec.ChatRunID != "cr-001" {
-		t.Errorf("chatRunID=%q, want cr-001", rec.ChatRunID)
-	}
-	if !strings.Contains(rec.OutputSnippet, "noop") {
-		t.Errorf("output_snippet=%q, expected to contain 'noop'", rec.OutputSnippet)
-	}
-	if rec.EndedAt == nil {
-		t.Error("EndedAt should be set by noop dispatcher")
 	}
 }
 

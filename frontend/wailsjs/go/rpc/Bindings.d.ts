@@ -53,6 +53,7 @@ import {tasks} from '../models';
 import {tools} from '../models';
 import {transport} from '../models';
 import {trust} from '../models';
+import {trustanchor} from '../models';
 import {update} from '../models';
 import {workflow} from '../models';
 import {workflows} from '../models';
@@ -900,6 +901,10 @@ export function Tools_SignInRecipe(arg1:string):Promise<transport.RecipeStatus>;
 export function Tools_UninstallRecipe(arg1:string):Promise<void>;
 
 export function Trust_GetSecretReference(arg1:string):Promise<trust.SecretReference>;
+
+export function Trust_InstallAnchor(arg1:trustanchor.InstallAnchorRequest):Promise<trustanchor.Anchor>;
+
+export function Trust_ListAnchors():Promise<Array<trustanchor.Anchor>>;
 
 export function Trust_ListSecretReferences():Promise<Array<trust.SecretReference>>;
 

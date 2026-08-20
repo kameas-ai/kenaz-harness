@@ -2,6 +2,7 @@ package gemini
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	llm "github.com/kameas-ai/kenaz-harness/core/llm"
@@ -72,7 +73,12 @@ type geminiGenConfig struct {
 	StopSequences    []string        `json:"stopSequences,omitempty"`
 	CandidateCount   *int            `json:"candidateCount,omitempty"`
 	ResponseMimeType string          `json:"responseMimeType,omitempty"`
-	ThinkingConfig   *geminiThinking `json:"thinkingConfig,omitempty"`
+	// ResponseSchema carries a structured-output constraint
+	// (structured-output-is-reachable-01PMZE14 WP04). Gemini's schema
+	// dialect is an OpenAPI 3.0 Schema Object subset, not JSON Schema —
+	// see translateSchemaForGemini and geminiUnsupportedSchemaKeywords.
+	ResponseSchema json.RawMessage `json:"responseSchema,omitempty"`
+	ThinkingConfig *geminiThinking `json:"thinkingConfig,omitempty"`
 }
 
 // geminiThinking enables Gemini 2.5 extended-thinking mode.
@@ -143,7 +149,10 @@ func ToGeminiRequest(req llm.GenerationRequest, prof llm.ProviderProfile) (*gemi
 	}
 
 	// Generation config.
-	gc := buildGenerationConfig(req, prof)
+	gc, err := buildGenerationConfig(req, prof)
+	if err != nil {
+		return nil, err
+	}
 	if gc != nil {
 		gr.GenerationConfig = gc
 	}
@@ -285,7 +294,7 @@ func wrapFunctionResponse(name string, payload json.RawMessage) (geminiPart, err
 }
 
 // buildGenerationConfig translates request params into geminiGenConfig.
-func buildGenerationConfig(req llm.GenerationRequest, prof llm.ProviderProfile) *geminiGenConfig {
+func buildGenerationConfig(req llm.GenerationRequest, prof llm.ProviderProfile) (*geminiGenConfig, error) {
 	gc := &geminiGenConfig{}
 	hasAny := false
 
@@ -349,10 +358,45 @@ func buildGenerationConfig(req llm.GenerationRequest, prof llm.ProviderProfile) 
 		hasAny = true
 	}
 
-	// JSON mode → responseMimeType
-	if req.JSONMode != nil && req.JSONMode.Enabled {
+	// ResponseFormat (structured-output-is-reachable-01PMZE14 WP04) takes
+	// precedence over JSONMode, matching every other adapter's arm
+	// (openaiwire/body.go:81 "ResponseFormat takes precedence";
+	// azure/adapter.go:409's `&& req.ResponseFormat == nil`).
+	switch {
+	case req.ResponseFormat != nil:
+		switch req.ResponseFormat.Mode {
+		case "json":
+			gc.ResponseMimeType = "application/json"
+			hasAny = true
+		case "json_schema":
+			gc.ResponseMimeType = "application/json"
+			hasAny = true
+			if len(req.ResponseFormat.Schema) > 0 {
+				translated, err := translateSchemaForGemini(req.ResponseFormat.Schema)
+				if err != nil {
+					return nil, err
+				}
+				gc.ResponseSchema = translated
+			}
+		case "grammar":
+			return nil, &llm.ErrUnsupportedFormat{Provider: Kind, Model: prof.Model, Mode: req.ResponseFormat.Mode}
+		}
+	case req.JSONMode != nil && req.JSONMode.Enabled:
+		// JSON mode → responseMimeType. Before WP04, JSONModeSpec.Schema
+		// was silently discarded here — spec §1.3's trailing paragraph:
+		// "Mode:'json' requests no capability at all... on gemini and
+		// custom it produces an unconstrained wire call" that the
+		// registry's repair-once loop then papers over, making it look
+		// like it worked.
 		gc.ResponseMimeType = "application/json"
 		hasAny = true
+		if len(req.JSONMode.Schema) > 0 {
+			translated, err := translateSchemaForGemini(req.JSONMode.Schema)
+			if err != nil {
+				return nil, err
+			}
+			gc.ResponseSchema = translated
+		}
 	}
 
 	// Reasoning (thinkingConfig) for Gemini 2.5 models.
@@ -366,9 +410,107 @@ func buildGenerationConfig(req llm.GenerationRequest, prof llm.ProviderProfile) 
 	}
 
 	if !hasAny {
-		return nil
+		return nil, nil
 	}
-	return gc
+	return gc, nil
+}
+
+// geminiUnsupportedSchemaKeywords are the JSON-Schema keywords Gemini's
+// responseSchema field — an OpenAPI 3.0 Schema Object subset, not JSON
+// Schema — does not accept (structured-output-is-reachable-01PMZE14
+// WP04, spec §5.2/§14 R-5).
+//
+// Source: Google's published Gemini API structured-output documentation
+// (ai.google.dev/gemini-api/docs/structured-output), which states the
+// schema is "a subset of the OpenAPI 3.0 Schema object" and excludes
+// JSON-Schema-only combinators/refs. NOT independently re-verified
+// against a live API call in this sandbox (no network access) — spec
+// §13.3 flags this exact gap explicitly and requires an implementer to
+// re-check it before shipping. Notably, "additionalProperties" is
+// excluded deliberately: unlike azure/openai (which require
+// structured.InjectAdditionalProperties to inject
+// "additionalProperties": false for OpenAI's strict mode), Gemini's
+// schema dialect does not have this keyword at all, so this adapter
+// does NOT call InjectAdditionalProperties — doing so would inject a
+// keyword Gemini rejects.
+var geminiUnsupportedSchemaKeywords = []string{
+	"$ref", "$defs", "definitions",
+	"oneOf", "allOf", "anyOf", "not",
+	"if", "then", "else",
+	"patternProperties", "additionalProperties", "unevaluatedProperties",
+	"const",
+	"dependentSchemas", "dependentRequired",
+	"contentEncoding", "contentMediaType",
+}
+
+// ErrUnsupportedSchemaKeyword is returned when an authored json_schema
+// uses a keyword Gemini's responseSchema dialect cannot represent. What
+// must NOT happen (spec §5.2) is a silent drop to responseMimeType
+// alone — the registry's repair-once loop (registry.go:533) would then
+// make an unconstrained call look successful, which is the same lie in
+// a new costume.
+type ErrUnsupportedSchemaKeyword struct {
+	Keyword string
+	Path    string
+}
+
+func (e *ErrUnsupportedSchemaKeyword) Error() string {
+	if e.Path != "" {
+		return "gemini: schema keyword " + e.Keyword + " (at " + e.Path + ") is not supported by Gemini's responseSchema dialect (OpenAPI 3.0 Schema subset)"
+	}
+	return "gemini: schema keyword " + e.Keyword + " is not supported by Gemini's responseSchema dialect (OpenAPI 3.0 Schema subset)"
+}
+
+// translateSchemaForGemini validates that schema uses only keywords
+// Gemini's responseSchema dialect supports, recursively (the unsupported
+// keywords can appear nested under "properties"/"items"/array-of-schema
+// fields, not just at the top level). Returns the schema unchanged when
+// it translates cleanly — no injection is performed, unlike azure/openai
+// — or a typed *ErrUnsupportedSchemaKeyword naming the offending keyword
+// and its path when it does not.
+func translateSchemaForGemini(schema json.RawMessage) (json.RawMessage, error) {
+	var doc any
+	if err := json.Unmarshal(schema, &doc); err != nil {
+		// Not parseable JSON at all; let the caller's own JSON handling
+		// surface this — nothing keyword-specific to report.
+		return schema, nil
+	}
+	if err := checkGeminiSchemaKeywords(doc, ""); err != nil {
+		return nil, err
+	}
+	return schema, nil
+}
+
+func checkGeminiSchemaKeywords(node any, path string) error {
+	switch v := node.(type) {
+	case map[string]any:
+		for _, kw := range geminiUnsupportedSchemaKeywords {
+			if _, ok := v[kw]; ok {
+				p := path
+				if p == "" {
+					p = "$"
+				}
+				return &ErrUnsupportedSchemaKeyword{Keyword: kw, Path: p}
+			}
+		}
+		for k, child := range v {
+			childPath := path + "." + k
+			if path == "" {
+				childPath = k
+			}
+			if err := checkGeminiSchemaKeywords(child, childPath); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for i, child := range v {
+			childPath := fmt.Sprintf("%s[%d]", path, i)
+			if err := checkGeminiSchemaKeywords(child, childPath); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // ─── Translation: Gemini → llm ───────────────────────────────────────────────

@@ -32,11 +32,11 @@ import (
 	cedarpolicyview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedarpolicy"
 	compactionview "github.com/kameas-ai/kenaz-harness/core/rpc/views/compaction"
 	complianceview "github.com/kameas-ai/kenaz-harness/core/rpc/views/compliance"
+	confirmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/confirm"
 	contextsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contexts"
 	contextsyncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextsync"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/contextview"
 	corpusview "github.com/kameas-ai/kenaz-harness/core/rpc/views/corpus"
-	confirmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/confirm"
 	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
 	fleetview "github.com/kameas-ai/kenaz-harness/core/rpc/views/fleet"
 	hooksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/hooks"
@@ -64,6 +64,7 @@ import (
 	tasksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/tasks"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/tools"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/trust"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/trustanchor"
 	updateview "github.com/kameas-ai/kenaz-harness/core/rpc/views/update"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/workflow"
 	workflowsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/workflows"
@@ -721,6 +722,17 @@ func (b *Bindings) Bundle_Remove(id string) error {
 	return b.api.Bundle().Remove(b.ctx(), id)
 }
 
+// ── trust anchors (bundle-download-and-verify-01PMZ909 UNIT-3) ──────────
+
+func (b *Bindings) Trust_ListAnchors() ([]trustanchor.Anchor, error) {
+	defer sentry.WrapBinding("Trust_ListAnchors")()
+	return b.api.TrustAnchors().ListAnchors(b.ctx())
+}
+func (b *Bindings) Trust_InstallAnchor(req trustanchor.InstallAnchorRequest) (trustanchor.Anchor, error) {
+	defer sentry.WrapBinding("Trust_InstallAnchor")()
+	return b.api.TrustAnchors().InstallAnchor(b.ctx(), req)
+}
+
 // ── policy ─────────────────────────────────────────────────────────────
 
 func (b *Bindings) Policy_Explain(input map[string]any) (policy.Denial, error) {
@@ -876,7 +888,14 @@ func (b *Bindings) Settings_Get() (settings.Settings, error) {
 }
 func (b *Bindings) Settings_Set(s settings.Settings) error {
 	defer sentry.WrapBinding("Settings_Set")()
-	return b.api.Settings().Set(b.ctx(), s)
+	if err := b.api.Settings().Set(b.ctx(), s); err != nil {
+		return err
+	}
+	// controls-and-readouts-that-tell-the-truth-01PMZ808 WP07 (AC-017): a
+	// live settings save must be able to change the running poller's
+	// interval/channel or stop it entirely without an app restart.
+	b.api.ReconfigureUpdatePoll(b.ctx())
+	return nil
 }
 
 // Settings_GetMemory exposes the long-term-memory opt-in independently
@@ -2323,7 +2342,13 @@ func (b *Bindings) Graph_LoadGraph(id string) (graphview.GraphSpec, error) {
 }
 func (b *Bindings) Graph_SaveGraph(spec graphview.GraphSpec) error {
 	defer sentry.WrapBinding("Graph_SaveGraph")()
-	return b.api.Graph().SaveGraph(b.ctx(), spec)
+	// initiator is hardcoded "user" — this is the desktop editor's
+	// Wails-bound save path, the only initiator that exists on this
+	// binding today. model-authored-graphs-01PMGA01 UNIT-4: a "user"
+	// save is never gated by the FR-006 consent dial, so this call's
+	// behaviour is byte-for-byte unchanged from before the gate existed
+	// (AC-012).
+	return b.api.Graph().SaveGraph(b.ctx(), spec, "user")
 }
 func (b *Bindings) Graph_DeleteGraph(id string) error {
 	defer sentry.WrapBinding("Graph_DeleteGraph")()

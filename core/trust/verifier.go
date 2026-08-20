@@ -20,9 +20,20 @@ type Verifier interface {
 
 // VerifyRequest is the input to Verifier.Verify.
 type VerifyRequest struct {
-	Payload   []byte
+	Payload []byte
+	// Signature carries the reference metadata (kind/locator/algorithm/
+	// key id) — never the signature bytes themselves. See SignatureBytes.
 	Signature SignatureRef
-	Anchors   []Anchor
+	// SignatureBytes carries the raw detached-signature bytes the
+	// caller resolved from Signature.Locator. core/trust never resolves
+	// a locator itself (verifier.go's own doc: "intentionally narrow" —
+	// core/trust stays ignorant of what a Locator string means); the
+	// caller (e.g. core/bundle/integrity, which knows a Locator is a
+	// bundle-relative file path) reads the bytes and hands them here.
+	// Additive field: zero-value callers behave exactly as before
+	// (an empty envelope signature, which fails shape validation).
+	SignatureBytes []byte
+	Anchors        []Anchor
 }
 
 // VerifyResult reports the outcome of a Verifier.Verify call. OK=true on

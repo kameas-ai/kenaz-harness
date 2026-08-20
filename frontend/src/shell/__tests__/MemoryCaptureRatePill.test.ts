@@ -94,6 +94,24 @@ describe('MemoryCaptureRatePill (§2.7)', () => {
     expect(dot.classes()).toContain('bg-signal-warn');
   });
 
+  // controls-and-readouts-that-tell-the-truth-01PMZ808 WP10, AC-026: the
+  // dot-color assertion above already existed; this pins the tooltip
+  // STRING specifically, since before WP10 the decorator that drives
+  // 'slow'/'error' health had zero production callers, so this string
+  // (and the 'error' one below it) could never actually render — only
+  // 'Memory capturing OK' ever could.
+  it('AC-026: tooltip reads "Embedder is slow (last call > 5s)" on "slow" health', async () => {
+    const { w } = await mountPill({ chunksPerMinute: 2, embedderHealth: 'slow' });
+    const button = w.find('button');
+    expect(button.attributes('title')).toBe('Embedder is slow (last call > 5s)');
+  });
+
+  it('AC-026 companion: tooltip reads the error count on "error" health', async () => {
+    const { w } = await mountPill({ chunksPerMinute: 0, recentErrorCount: 4, embedderHealth: 'error' });
+    const button = w.find('button');
+    expect(button.attributes('title')).toBe('Embedder errors: 4 in last 5 min');
+  });
+
   it('dot is red on "error" health', async () => {
     const { w } = await mountPill({ chunksPerMinute: 0, recentErrorCount: 4, embedderHealth: 'error' });
     const dot = w.find('.rounded-full');

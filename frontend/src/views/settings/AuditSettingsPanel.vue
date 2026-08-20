@@ -9,6 +9,25 @@
  *
  * Writes are committed on form submit so that partial edits do not
  * produce intermediate saves. A success banner confirms persistence.
+ *
+ * Fact-driven copy (audit-that-tells-the-truth-01PMZA10 UNIT-4, spec
+ * D-8 / §5.4 item 7 / E-001 resolution). `retentionEnforced` comes from
+ * the server (AuditSettings.retention_enforced) — never a literal here.
+ * It is false until UNIT-8 lands a real sweep; when it flips, this file
+ * needs NO further edit (that is the whole point of D-8).
+ *
+ * `keep_forever`'s description is unconditionally true regardless of
+ * `retentionEnforced`: choosing keep_forever means nothing sweeps, by
+ * definition, whether or not a sweep subsystem exists elsewhere. The
+ * OTHER two strategies' descriptions — and the header's second
+ * sentence — describe an ACTIVE sweep (delete, or archive-then-delete)
+ * that literally cannot happen without one, so both are gated on the
+ * fact. This is a deliberate, small correction to the previous draft's
+ * "`:66` and `:68` both become unconditionally true" framing: `:68`
+ * (archive_after_window) asserts the same active-deletion behaviour
+ * `:67` does and cannot be unconditionally true for the same reason —
+ * see the mission's own D-6 ("no manufactured success, anywhere...
+ * where a path cannot do the work, it says so").
  */
 import { onMounted, ref, computed } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
@@ -23,6 +42,7 @@ const error = ref<string | null>(null);
 
 const strategy = ref<AuditSettings['strategy']>('keep_forever');
 const windowDays = ref(90);
+const retentionEnforced = ref(false);
 
 const showWindow = computed(() => strategy.value !== 'keep_forever');
 
@@ -31,6 +51,7 @@ onMounted(async () => {
     const s = await client.settings.getAuditSettings();
     strategy.value = s.strategy;
     windowDays.value = s.window_days;
+    retentionEnforced.value = s.retention_enforced;
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
   } finally {
@@ -46,6 +67,7 @@ async function save() {
     await client.settings.setAuditSettings({
       strategy: strategy.value,
       window_days: windowDays.value,
+      retention_enforced: retentionEnforced.value,
     });
     saved.value = true;
     setTimeout(() => { saved.value = false; }, 3000);
@@ -62,11 +84,25 @@ const strategyLabels: Record<AuditSettings['strategy'], string> = {
   archive_after_window: 'Archive then delete after window',
 };
 
-const strategyDescriptions: Record<AuditSettings['strategy'], string> = {
+// strategyDescriptions is a computed, not a literal Record: two of its
+// three entries depend on retentionEnforced. keep_forever's entry never
+// changes — see the script-block comment above for why that one alone
+// is safe to state unconditionally.
+const strategyDescriptions = computed<Record<AuditSettings['strategy'], string>>(() => ({
   keep_forever: 'Audit events are never deleted from the database.',
-  delete_after_window: 'Events older than the retention window are permanently deleted during the nightly sweep.',
-  archive_after_window: 'Events older than the window are written to a JSONL archive file then removed from the database.',
-};
+  delete_after_window: retentionEnforced.value
+    ? 'Events older than the retention window are permanently deleted during the retention sweep.'
+    : 'Retention enforcement is not yet available in this build — no events are deleted today, regardless of this setting. Once enabled, events older than the window will be deleted automatically.',
+  archive_after_window: retentionEnforced.value
+    ? 'Events older than the window are written to a JSONL archive file then removed from the database.'
+    : 'Retention enforcement is not yet available in this build — no events are archived or deleted today, regardless of this setting. Once enabled, events older than the window will be archived to a JSONL file, then removed from the database.',
+}));
+
+const headerSubtitle = computed(() =>
+  retentionEnforced.value
+    ? 'Configure how long audit events are kept in the database. The retention sweep runs regularly.'
+    : 'Configure how long audit events are kept in the database. Retention enforcement is not yet active in this build — audit events are kept regardless of the strategy selected below.'
+);
 </script>
 
 <template>
@@ -74,9 +110,8 @@ const strategyDescriptions: Record<AuditSettings['strategy'], string> = {
     <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
       Audit Log Retention
     </h2>
-    <p class="mt-1 font-ui text-[11px] text-ink-dim">
-      Configure how long audit events are kept in the database.
-      The retention sweep runs nightly.
+    <p class="mt-1 font-ui text-[11px] text-ink-dim" data-testid="audit-settings-subtitle">
+      {{ headerSubtitle }}
     </p>
 
     <div v-if="loading" class="mt-4 font-ui text-[12px] text-ink-muted" data-testid="audit-settings-loading">

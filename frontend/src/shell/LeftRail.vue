@@ -21,7 +21,7 @@ import {
   ChevronRight,
   Folder,
 } from './icons';
-import { useSessions, useProjects } from '@/lib/useHarnessAPI';
+import { useSessions, useProjects, useHarnessClient } from '@/lib/useHarnessAPI';
 import { signedIn, capability } from '@/lib/featureFlags';
 import { isServedMode } from '@/lib/useServedMode';
 import { useConnectionState } from '@/lib/useConnectionState';
@@ -157,11 +157,20 @@ const BRANCHING_POLISH_ENABLED: boolean = (() => {
   return true;
 })();
 
+/**
+ * hadStoredBranchCollapsed — true iff localStorage held a branch-collapse
+ * entry (possibly empty) at mount time. Distinguishes "the user has never
+ * touched a collapse toggle" (WP03 may auto-seed) from "the user's chosen
+ * set happens to be empty" (WP03 must not overwrite that choice).
+ */
+let hadStoredBranchCollapsed = false;
+
 /** Branch-collapse state — keyed by parent session id. */
 const branchCollapsed = ref<Set<string>>((() => {
   try {
     const raw = localStorage.getItem('harness.sidebar.branchCollapsed.v1');
     if (raw) {
+      hadStoredBranchCollapsed = true;
       const arr: string[] = JSON.parse(raw);
       if (Array.isArray(arr)) return new Set(arr);
     }
@@ -216,8 +225,15 @@ function hasChildren(sessionId: string): boolean {
   return (sessionsByParent.value.get(sessionId)?.length ?? 0) > 0;
 }
 
-/** Max visible branch depth — read from settings if available. */
+/**
+ * Max visible branch depth. Seeded from settings in onMounted below
+ * (controls-and-readouts-that-tell-the-truth-01PMZ808 WP01) — the
+ * hardcoded 5 here is only the pre-settings-load fallback for the first
+ * paint, matching LegendBar.vue's client.settings.get() pattern one
+ * directory over.
+ */
 const maxBranchDepth = ref<number>(5);
+const client = useHarnessClient();
 
 // WP09: Listen for the palette's 'New Session' action dispatched via
 // kenaz:open-new-session CustomEvent from useCommandPalette.
@@ -225,10 +241,41 @@ function onOpenNewSessionEvent() {
   newSession();
 }
 
-onMounted(() => {
-  refreshSessions();
+onMounted(async () => {
+  await refreshSessions();
   refreshProjects();
   window.addEventListener('kenaz:open-new-session', onOpenNewSessionEvent);
+
+  // controls-and-readouts-that-tell-the-truth-01PMZ808 WP01 + WP03.
+  // client.settings.get() returns a Promise; it cannot be read in the
+  // ref initialiser above (synchronous), so both dials are seeded here.
+  try {
+    const s = await client.settings.get();
+    if (typeof s.maxVisibleBranchDepth === 'number' && s.maxVisibleBranchDepth > 0) {
+      maxBranchDepth.value = s.maxVisibleBranchDepth;
+    }
+    // s.autoCollapseBranchesInSidebar is optional-boolean over the wire;
+    // `?? true` mirrors the same fallback SettingsView.vue's toggle
+    // already uses and matches the backend's EffectiveAutoCollapseBranches-
+    // InSidebar() default. Only seed when the user has never touched a
+    // collapse toggle in this browser profile — a real (even empty)
+    // stored choice always wins.
+    const autoCollapse = s.autoCollapseBranchesInSidebar ?? true;
+    if (autoCollapse && !hadStoredBranchCollapsed) {
+      const parentsWithChildren = new Set<string>();
+      for (const [parentId, children] of sessionsByParent.value) {
+        if (parentId !== '__root__' && children.length > 0) {
+          parentsWithChildren.add(parentId);
+        }
+      }
+      if (parentsWithChildren.size > 0) {
+        branchCollapsed.value = parentsWithChildren;
+      }
+    }
+  } catch {
+    // Settings unavailable — both dials keep their pre-seed fallbacks
+    // (maxBranchDepth=5, branchCollapsed from localStorage/empty).
+  }
 });
 
 onBeforeUnmount(() => {

@@ -3,27 +3,46 @@
 // `audit:event`.
 //
 // The concrete reader integration (libSQL or in-memory) is provided
-// from the call site at construction; tests substitute a fake. Until
-// core.Core ships a wired Reader/Verifier the impl operates against
-// an in-memory ring buffer fed by Emitter observers — sufficient for
-// the v1 audit view (newest-first, filterable, live-updating).
+// from the call site at construction; tests substitute a fake. Until a
+// Store is configured (WithStore) the impl operates against an
+// in-memory ring buffer fed by Emitter observers only — sufficient for
+// the test chassis and for read paths, but the ring is not durable.
 //
-// Privacy CI invariant #2: redaction happens on the event-log side
-// before Append returns; Entry payloads exposed here are already
-// redacted. This impl never re-renders a raw payload.
+// Redaction (E-004, audit-that-tells-the-truth-01PMZA10 UNIT-4): this
+// package does NOT redact anything itself, on either the ring or the
+// store-backed path. Every Push call site (core/rpc/api.go's eight
+// bridge types — confirmedAuditEmitter, lockdownAuditEmitter, etc.)
+// already constructs its Entry from ONLY pre-redacted fields: a kind
+// string, a category label, and a Trailing string that is at most a
+// byte count or a Go %T type name — never raw payload content, per
+// each bridge's own privacy comment. Push (and, when a Store is
+// configured, the write-through to it) persists EXACTLY that
+// already-redacted Entry projection and nothing more — see
+// rowFromEntry/entryFromRow below, the one place the Entry<->log.Row
+// conversion happens in each direction. There used to be a comment
+// here claiming "redaction happens on the event-log side before
+// Append returns" — false with core/event.NewEmitter unbuilt (nothing
+// on this path ever called Append), and now doubly moot: nothing
+// downstream of Entry construction needs to redact, because nothing
+// downstream of Entry construction ever sees anything Entry didn't
+// already carry.
 package audit
 
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/kameas-ai/kenaz-harness/core/event"
 	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
+	"github.com/kameas-ai/kenaz-harness/core/event"
 	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
@@ -42,8 +61,8 @@ type Subscriber interface {
 // Safe for concurrent use.
 type API struct {
 	mu           sync.RWMutex
-	entries      []Entry            // newest-last; bounded by maxBuffer.
-	maxBuffer    int                // cap for the in-memory ring.
+	entries      []Entry             // newest-last; bounded by maxBuffer.
+	maxBuffer    int                 // cap for the in-memory ring.
 	subs         map[string]chan any // subscription id -> typed channel
 	broker       Subscriber
 	savedQueries map[string]eventlog.SavedQuery // id -> query
@@ -51,6 +70,7 @@ type API struct {
 	sweepable    eventlog.SweepableBackend      // optional; used by BulkPurge
 	emitter      contextaudit.Emitter           // optional; used by BulkPurge audit emit
 	gate         cedar.Gate                     // optional; gates BulkPurge via ActionAuditBulkPurge
+	store        *eventlog.Store                // optional; write-through + read-path backing (UNIT-4)
 }
 
 // Option configures NewAPI.
@@ -110,6 +130,24 @@ func WithGate(g cedar.Gate) Option {
 	return func(a *API) { a.gate = g }
 }
 
+// WithStore injects a durable event-log Store. Optional — nil leaves
+// the impl operating against the in-memory ring only (the pre-UNIT-4
+// posture, and still what the test chassis uses by default). When set:
+//   - Push writes through to the store in addition to the ring (the
+//     ring stays; it is the live-stream fan-out buffer, not a cache).
+//   - Filter, ListEntries and VerifyEntry read the store instead of
+//     the ring, so results survive a relaunch.
+//
+// This is "the honesty threshold" (audit-that-tells-the-truth-01PMZA10
+// UNIT-4, spec §5.4): before it, "the audit log" was an in-memory ring
+// that lied about being a log. After it, calling NewAPI without
+// WithStore is still valid (tests, and any future served-mode chassis
+// with no DataDir) — it is just honestly ring-only, and G-1 (UNIT-10)
+// makes it mechanical that nothing may claim otherwise.
+func WithStore(s *eventlog.Store) Option {
+	return func(a *API) { a.store = s }
+}
+
 // NewAPI constructs the audit view-scoped API.
 func NewAPI(opts ...Option) *API {
 	a := &API{
@@ -124,9 +162,22 @@ func NewAPI(opts ...Option) *API {
 	return a
 }
 
-// Push appends an entry to the ring buffer and fans out to every
-// active subscription. Drops on a full subscriber channel — slow
-// subscribers must not back up the audit pipeline.
+// Push appends an entry to the ring buffer, fans out to every active
+// subscription, and — when a Store is configured (WithStore) — writes
+// through to it so the entry survives a relaunch (UNIT-4, "the honesty
+// threshold").
+//
+// A store write failure NEVER fails the caller (spec D-5): Push has no
+// error return and ten production call sites depend on that signature
+// never changing (spec R-5 — core/rpc/api.go:933, 972, 7387, 7410,
+// 7432, 7454, 7498, 7521, 8113 and
+// core/rpc/contextbootstrap_wiring.go:545). A write failure is logged
+// and Push returns as if nothing happened; the ring and the live
+// stream are unaffected either way — an audit write failure must never
+// fail the action being audited (FR-011).
+//
+// Drops on a full subscriber channel — slow subscribers must not back
+// up the audit pipeline.
 func (a *API) Push(entry Entry) {
 	a.mu.Lock()
 	a.entries = append(a.entries, entry)
@@ -139,6 +190,7 @@ func (a *API) Push(entry Entry) {
 	for _, ch := range a.subs {
 		subs = append(subs, ch)
 	}
+	store := a.store
 	a.mu.Unlock()
 	for _, ch := range subs {
 		select {
@@ -148,6 +200,88 @@ func (a *API) Push(entry Entry) {
 			// the audit live-stream — the canonical store is the
 			// event log itself.
 		}
+	}
+	if store == nil {
+		return
+	}
+	// Push has no context parameter (spec R-5's ten call sites are all
+	// synchronous, context-free callbacks). context.Background() is
+	// correct here: the write is fire-and-forget by design (D-5), not
+	// tied to any caller's request lifecycle.
+	if err := store.AppendComputed(context.Background(), rowFromEntry(entry)); err != nil {
+		logging.L().Warn("audit.push.store_write_failed",
+			"entry_id", entry.ID,
+			"kind", entry.Subject,
+			"err", err.Error(),
+		)
+	}
+}
+
+// auditPersistedPayload is the exact wire shape of what gets persisted
+// for a Push-sourced row: the already-redacted Entry projection and
+// nothing else (see the package doc comment's E-004 note). It exists
+// so rowFromEntry/entryFromRow have a stable, symmetric encoding rather
+// than ad hoc string concatenation.
+type auditPersistedPayload struct {
+	Category string `json:"category"`
+	Subject  string `json:"subject"`
+	Trailing string `json:"trailing,omitempty"`
+}
+
+// rowFromEntry converts an Entry into a log.Row shaped for
+// Store.AppendComputed — the ENTRY -> ROW half of the one conversion
+// this package performs in each direction (entryFromRow, below, is the
+// other half). PrevHash/PayloadHash are left zero; AppendComputed fills
+// them in from the session's chain head. SessionID and EmitterID are
+// left empty: Entry carries neither field today (every existing Push
+// call site already lacks that context — see the package doc comment),
+// so this is not a new loss introduced by persisting, only an honest
+// recording of one that already existed in the ring.
+func rowFromEntry(entry Entry) eventlog.Row {
+	ts, err := time.Parse(time.RFC3339Nano, entry.Timestamp)
+	if err != nil {
+		ts = time.Now().UTC()
+	}
+	payload, _ := json.Marshal(auditPersistedPayload{
+		Category: entry.Category,
+		Subject:  entry.Subject,
+		Trailing: entry.Trailing,
+	})
+	return eventlog.Row{
+		EventID:   entry.ID,
+		Kind:      entry.Subject,
+		EmittedAt: ts,
+		Payload:   payload,
+		// Not "n/a" — this states what happened: nothing was redacted
+		// here because there was nothing left to redact (see the
+		// package doc comment).
+		RedactionSummary: "pre-redacted at call site; no additional redaction applied",
+		SchemaVersion:    1,
+	}
+}
+
+// entryFromRow converts a log.Row back into an Entry — the ROW ->
+// ENTRY half of the conversion. Falls back to row.Kind / a
+// category derived from it when the row predates this encoding or the
+// payload otherwise fails to decode (defensive; every row this package
+// writes itself always decodes cleanly).
+func entryFromRow(row eventlog.Row) Entry {
+	var decoded auditPersistedPayload
+	_ = json.Unmarshal(row.Payload, &decoded)
+	subject := decoded.Subject
+	if subject == "" {
+		subject = row.Kind
+	}
+	category := decoded.Category
+	if category == "" {
+		category = categoryForKind(event.Kind(row.Kind))
+	}
+	return Entry{
+		ID:        row.EventID,
+		Timestamp: row.EmittedAt.UTC().Format(time.RFC3339Nano),
+		Category:  category,
+		Subject:   subject,
+		Trailing:  decoded.Trailing,
 	}
 }
 
@@ -204,50 +338,83 @@ func categoryForKind(k event.Kind) string {
 		return "CLIPBOARD"
 	case strings.HasPrefix(s, "network."), strings.HasPrefix(s, "net."):
 		return "NETWORK"
-	case strings.HasPrefix(s, "keystroke.") , strings.HasPrefix(s, "input."):
+	case strings.HasPrefix(s, "keystroke."), strings.HasPrefix(s, "input."):
 		return "KEYSTROKE"
 	}
 	return "STORAGE"
 }
 
-// Filter applies a rich FilterQuery to the in-memory ring buffer and
-// returns matching entries. The full SQL implementation will delegate
-// to eventlog.FilterQuery.ApplyToMemoryBackend once the libSQL adapter
-// lands; until then we filter the entry ring directly.
-func (a *API) Filter(_ context.Context, q eventlog.FilterQuery) ([]Entry, error) {
+// matchesFilterQuery is the ONE place Filter's matching semantics are
+// implemented — shared by the ring path and the store path so they
+// cannot silently diverge (spec §5.4 item 4: "a silent change in
+// filter meaning is a defect nobody notices for a release").
+func matchesFilterQuery(e Entry, q eventlog.FilterQuery) bool {
+	// Verbose filter.
+	if !q.Verbose && strings.HasPrefix(e.Subject, "verbose.") {
+		return false
+	}
+	// Kind filter via Subject (Entry.Subject == kind string).
+	if len(q.Kinds) > 0 {
+		matched := false
+		for _, k := range q.Kinds {
+			if e.Subject == k {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	// Free-text filter on Subject.
+	if q.FreeText != "" {
+		if !strings.Contains(strings.ToLower(e.Subject), strings.ToLower(q.FreeText)) {
+			return false
+		}
+	}
+	return true
+}
+
+// Filter applies a rich FilterQuery and returns matching entries,
+// newest first. Reads the store when one is configured (WithStore);
+// falls back to the in-memory ring otherwise (the test-harness path).
+func (a *API) Filter(ctx context.Context, q eventlog.FilterQuery) ([]Entry, error) {
 	a.mu.RLock()
-	defer a.mu.RUnlock()
+	store := a.store
+	a.mu.RUnlock()
 
 	limit := q.Limit
 	if limit <= 0 {
 		limit = 1000
 	}
 
+	if store != nil {
+		rows, err := store.ByTimeRange(ctx, time.Time{}, time.Time{}, "", 0, false)
+		if err != nil {
+			return nil, fmt.Errorf("audit: Filter: %w", err)
+		}
+		sortRowsNewestFirst(rows)
+		out := make([]Entry, 0, len(rows))
+		for _, r := range rows {
+			e := entryFromRow(r)
+			if !matchesFilterQuery(e, q) {
+				continue
+			}
+			out = append(out, e)
+			if len(out) >= limit {
+				break
+			}
+		}
+		return out, nil
+	}
+
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	out := make([]Entry, 0, len(a.entries))
 	for i := len(a.entries) - 1; i >= 0; i-- {
 		e := a.entries[i]
-		// Verbose filter.
-		if !q.Verbose && strings.HasPrefix(e.Subject, "verbose.") {
+		if !matchesFilterQuery(e, q) {
 			continue
-		}
-		// Kind filter via Subject (Entry.Subject == kind string).
-		if len(q.Kinds) > 0 {
-			matched := false
-			for _, k := range q.Kinds {
-				if e.Subject == k {
-					matched = true
-					break
-				}
-			}
-			if !matched {
-				continue
-			}
-		}
-		// Free-text filter on Subject.
-		if q.FreeText != "" {
-			if !strings.Contains(strings.ToLower(e.Subject), strings.ToLower(q.FreeText)) {
-				continue
-			}
 		}
 		out = append(out, e)
 		if len(out) >= limit {
@@ -255,6 +422,23 @@ func (a *API) Filter(_ context.Context, q eventlog.FilterQuery) ([]Entry, error)
 		}
 	}
 	return out, nil
+}
+
+// sortRowsNewestFirst orders rows by EmittedAt descending, breaking
+// ties on EventID descending for determinism. Deliberately NOT an
+// event_id-lexicographic sort: Push-sourced EventIDs carry a
+// caller-specific prefix ("tool-confirm-", "fleet-lockdown-", "acp-",
+// …) before a Unix-nanosecond suffix, so comparing EventIDs across
+// different bridge types does not recover chronological order — only
+// EmittedAt does. This is what makes the store path behave like the
+// ring, which iterates in true push/insertion order.
+func sortRowsNewestFirst(rows []eventlog.Row) {
+	sort.Slice(rows, func(i, j int) bool {
+		if !rows[i].EmittedAt.Equal(rows[j].EmittedAt) {
+			return rows[i].EmittedAt.After(rows[j].EmittedAt)
+		}
+		return rows[i].EventID > rows[j].EventID
+	})
 }
 
 // ListSavedQueries returns all persisted saved queries (in-memory store).
@@ -359,55 +543,94 @@ func (a *API) BulkPurge(ctx context.Context, eventIDs []string) error {
 	return nil
 }
 
-// ListEntries returns the buffered entries matching filter, newest
-// first. limit==0 returns the full ring (capped at maxBuffer).
-func (a *API) ListEntries(_ context.Context, filter Filter) ([]Entry, error) {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
+// listEntriesFilter bundles ListEntries' parsed filter state so the
+// ring path and the store path share one matching function.
+type listEntriesFilter struct {
+	wantCat  map[string]struct{}
+	since    time.Time
+	until    time.Time
+	hasSince bool
+	hasUntil bool
+}
 
-	var (
-		since time.Time
-		until time.Time
-		hasSince bool
-		hasUntil bool
-	)
+func parseListEntriesFilter(filter Filter) listEntriesFilter {
+	f := listEntriesFilter{wantCat: make(map[string]struct{}, len(filter.Categories))}
+	for _, c := range filter.Categories {
+		if c != "" {
+			f.wantCat[strings.ToUpper(c)] = struct{}{}
+		}
+	}
 	if filter.Since != "" {
-		t, err := time.Parse(time.RFC3339Nano, filter.Since)
-		if err == nil {
-			since, hasSince = t, true
+		if t, err := time.Parse(time.RFC3339Nano, filter.Since); err == nil {
+			f.since, f.hasSince = t, true
 		}
 	}
 	if filter.Until != "" {
-		t, err := time.Parse(time.RFC3339Nano, filter.Until)
-		if err == nil {
-			until, hasUntil = t, true
+		if t, err := time.Parse(time.RFC3339Nano, filter.Until); err == nil {
+			f.until, f.hasUntil = t, true
 		}
 	}
-	wantCat := make(map[string]struct{}, len(filter.Categories))
-	for _, c := range filter.Categories {
-		if c != "" {
-			wantCat[strings.ToUpper(c)] = struct{}{}
+	return f
+}
+
+func (f listEntriesFilter) matches(e Entry) bool {
+	if len(f.wantCat) > 0 {
+		if _, ok := f.wantCat[strings.ToUpper(e.Category)]; !ok {
+			return false
 		}
+	}
+	if f.hasSince || f.hasUntil {
+		t, err := time.Parse(time.RFC3339Nano, e.Timestamp)
+		if err == nil {
+			if f.hasSince && t.Before(f.since) {
+				return false
+			}
+			if f.hasUntil && t.After(f.until) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// ListEntries returns entries matching filter, newest first. Reads the
+// store when one is configured (WithStore); falls back to the
+// in-memory ring otherwise, where limit==0 returns the full ring
+// (capped at maxBuffer).
+func (a *API) ListEntries(ctx context.Context, filter Filter) ([]Entry, error) {
+	a.mu.RLock()
+	store := a.store
+	a.mu.RUnlock()
+
+	f := parseListEntriesFilter(filter)
+
+	if store != nil {
+		rows, err := store.ByTimeRange(ctx, time.Time{}, time.Time{}, "", 0, false)
+		if err != nil {
+			return nil, fmt.Errorf("audit: ListEntries: %w", err)
+		}
+		sortRowsNewestFirst(rows)
+		out := make([]Entry, 0, len(rows))
+		for _, r := range rows {
+			e := entryFromRow(r)
+			if !f.matches(e) {
+				continue
+			}
+			out = append(out, e)
+			if filter.Limit > 0 && len(out) >= filter.Limit {
+				break
+			}
+		}
+		return out, nil
 	}
 
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	out := make([]Entry, 0, len(a.entries))
 	for i := len(a.entries) - 1; i >= 0; i-- {
 		e := a.entries[i]
-		if len(wantCat) > 0 {
-			if _, ok := wantCat[strings.ToUpper(e.Category)]; !ok {
-				continue
-			}
-		}
-		if hasSince || hasUntil {
-			t, err := time.Parse(time.RFC3339Nano, e.Timestamp)
-			if err == nil {
-				if hasSince && t.Before(since) {
-					continue
-				}
-				if hasUntil && t.After(until) {
-					continue
-				}
-			}
+		if !f.matches(e) {
+			continue
 		}
 		out = append(out, e)
 		if filter.Limit > 0 && len(out) >= filter.Limit {
@@ -441,13 +664,29 @@ func (a *API) VerifyChain(_ context.Context, fromID, toID string) (VerifyChainRe
 	}, nil
 }
 
-// VerifyEntry returns true if the entry id is present in the buffer.
-// The full chain-walking Verifier (event.Verifier) wires in once the
-// libSQL backend lands; until then membership in the buffer is the
-// most we can authoritatively report from the rpc layer.
-func (a *API) VerifyEntry(_ context.Context, id string) (bool, error) {
+// VerifyEntry returns true if the entry id is present — in the store
+// when one is configured (WithStore), otherwise in the in-memory ring.
+// This is membership only; VerifyChain (UNIT-7) is the chain-walking
+// tamper-evidence surface. The doc here used to say the ring was "the
+// most we can authoritatively report" — true when it was the only
+// thing there was; the store is more authoritative once it exists,
+// since ring membership degrades every time the ring evicts an entry
+// (bounded at maxBuffer) while the store does not.
+func (a *API) VerifyEntry(ctx context.Context, id string) (bool, error) {
 	if id == "" {
 		return false, nil
+	}
+	a.mu.RLock()
+	store := a.store
+	a.mu.RUnlock()
+	if store != nil {
+		if _, err := store.Get(ctx, id); err != nil {
+			if errors.Is(err, eventlog.ErrNotFound) {
+				return false, nil
+			}
+			return false, fmt.Errorf("audit: VerifyEntry: %w", err)
+		}
+		return true, nil
 	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()

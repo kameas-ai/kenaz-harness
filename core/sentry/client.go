@@ -27,6 +27,18 @@ type Client interface {
 	// Flush blocks until all buffered events are transmitted or timeout
 	// elapses. Should be called before process exit.
 	Flush(timeout time.Duration)
+
+	// SetUser tags (or clears) the scope-wide Sentry user identity.
+	// controls-and-readouts-that-tell-the-truth-01PMZ808 WP12 (FR-016):
+	// TierIdentified's own doc says it "attaches the user's fleet
+	// identity as a Sentry user tag", but before this method existed
+	// there was no SetUser call anywhere in core/sentry — TierAnonymous
+	// and TierIdentified were observably identical at the client level.
+	// identified=false clears any previously-set user (a session that
+	// signs out of fleet mid-run must stop tagging events). No PII
+	// beyond the boolean-derived tag itself — SendDefaultPII stays
+	// false; this does not thread email/display name.
+	SetUser(identified bool)
 }
 
 // processClient is the process-wide singleton.
@@ -85,6 +97,11 @@ func Flush(timeout time.Duration) {
 	C().Flush(timeout)
 }
 
+// SetUser is a convenience shim on the process-wide client.
+func SetUser(identified bool) {
+	C().SetUser(identified)
+}
+
 // ── nopClient ────────────────────────────────────────────────────────────────
 
 type nopClient struct{}
@@ -94,6 +111,7 @@ func (nopClient) CaptureException(_ error, _ map[string]any) {}
 func (nopClient) CaptureMessage(_ string, _ string, _ map[string]any) {}
 func (nopClient) AddBreadcrumb(b Breadcrumb)             { globalBreadcrumbs.Add(b) }
 func (nopClient) Flush(_ time.Duration)                  {}
+func (nopClient) SetUser(_ bool)                        {}
 
 // ── liveClient ───────────────────────────────────────────────────────────────
 

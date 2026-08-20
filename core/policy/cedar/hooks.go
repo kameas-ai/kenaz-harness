@@ -586,6 +586,91 @@ func GateWorkflowDelete(ctx context.Context, g Gate, workflowID string) (Decisio
 	return d, enforce(d)
 }
 
+// GateGraphAuthor is the gate-hook helper for persisting a graph via
+// Manager.saveGraph (mission model-authored-graphs-01PMGA01, UNIT-4).
+// Shaped exactly like GateWorkflowSave: nil gate ⇒ Allow
+// (default-allow, the correct library contract — production callers
+// must pass a real gate; see check-cedar-gate-arguments.sh clause 4);
+// otherwise evaluates the engine against Graph::"<graphID>" and
+// Action::"graph.author" and maps the Decision through enforce.
+//
+//   - authoringEnabled is the FR-006 consent dial, already resolved by
+//     the caller — absent / unreadable / unparseable must be coerced to
+//     false BEFORE this call; this helper only stringifies what it is
+//     given.
+//   - sessionKind is carried for future policy authoring; the shipped
+//     bundle does not branch on it.
+//   - nodeKinds is the sorted, comma-joined, de-duplicated set of
+//     `kind:` values in the drafted graph (FR-008's escalation
+//     surface; mirrors corewf.CollectStepKinds's shape).
+//
+// Returns nil on Allow / NotApplicable, *PolicyDeniedError on Deny.
+func GateGraphAuthor(ctx context.Context, g Gate, graphID string, authoringEnabled bool, sessionKind, nodeKinds string, nodeCount int) (Decision, error) {
+	if g == nil {
+		return Decision{
+			Outcome:  Allow,
+			Action:   ActionGraphAuthor,
+			Resource: GraphUID(graphID).String(),
+			Reason:   "no engine wired (default-allow)",
+		}, nil
+	}
+	enabledStr := "false"
+	if authoringEnabled {
+		enabledStr = "true"
+	}
+	d := g.Evaluate(
+		ctx,
+		UserUID(),
+		ActionGraphAuthor,
+		GraphUID(graphID),
+		map[cedar.String]cedar.Value{
+			cedar.String("authoring_enabled"): cedar.String(enabledStr),
+			cedar.String("session_kind"):      cedar.String(sessionKind),
+			cedar.String("node_kinds"):        cedar.String(nodeKinds),
+			cedar.String("node_count"):        cedar.Long(int64(nodeCount)),
+		},
+	)
+	return d, enforce(d)
+}
+
+// GateGraphRun is the gate-hook helper for starting a run via
+// Manager.startRun (UNIT-4). Same nil-gate default-allow contract as
+// GateGraphAuthor.
+//
+//   - specProvenance is the graph's Graph.SpecProvenance field, read
+//     as-is (empty / "library_fallback" / "model_authored"). The
+//     shipped graph_run_unreviewed_forbid.cedar denies when this is
+//     "model_authored" — the FR-007 human-review interlock.
+//   - initiator distinguishes who asked for the run. Every production
+//     initiator today is "user" (the Graphs view's Run button); FR-007
+//     declares no run tool, so "model" is not reachable in this
+//     mission. Carried for symmetry with GateGraphAuthor and for a
+//     future caller.
+//
+// Returns nil on Allow / NotApplicable, *PolicyDeniedError on Deny.
+func GateGraphRun(ctx context.Context, g Gate, graphID, specProvenance, sessionKind, initiator string) (Decision, error) {
+	if g == nil {
+		return Decision{
+			Outcome:  Allow,
+			Action:   ActionGraphRun,
+			Resource: GraphUID(graphID).String(),
+			Reason:   "no engine wired (default-allow)",
+		}, nil
+	}
+	d := g.Evaluate(
+		ctx,
+		UserUID(),
+		ActionGraphRun,
+		GraphUID(graphID),
+		map[cedar.String]cedar.Value{
+			cedar.String("spec_provenance"): cedar.String(specProvenance),
+			cedar.String("session_kind"):    cedar.String(sessionKind),
+			cedar.String("initiator"):       cedar.String(initiator),
+		},
+	)
+	return d, enforce(d)
+}
+
 // GateScheduledChatCreate is the gate-hook helper for scheduled chat run
 // create and update operations (mission scheduled-chat-runs-01KX5R8B, WP03).
 // Returns nil on Allow / NotApplicable; *PolicyDeniedError on Deny.

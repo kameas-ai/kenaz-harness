@@ -208,13 +208,78 @@ func checkDirectiveAbove(lines []string, declLine int) (bool, string) {
 	return true, strings.TrimSpace(m[1])
 }
 
+// candidatePkgPrefix + candidatePkgExact bound candidate collection to the
+// module this guard's own failure message claims to check ("no non-test
+// type in ./core/... implements this interface", main.go:115/main.go
+// wantErr string). Fixes Vacuity B (spec entry-points-and-crash-reporting-
+// 01PMZD13 §1.4.1): packages.Load's Mode includes NeedDeps alongside
+// NeedSyntax, so packages.Visit's whole-import-graph walk populates Syntax
+// for every dependency too — stdlib included. Instrumented and RUN before
+// this fix landed: 10,032 candidate named types across 910 distinct
+// packages, of which 673 packages sit outside github.com/kameas-ai/
+// kenaz-harness/core/ entirely. For the seams this guard checks (Reader,
+// Writer, PolicyGate — one and two-method interfaces), that width is not a
+// marginal widening, it is the difference between a gate and a tautology:
+// almost any small interface is structurally satisfied by SOMETHING in the
+// standard library or a third-party dependency.
+const (
+	candidatePkgPrefix = "github.com/kameas-ai/kenaz-harness/core/"
+	// The bare root package (core/core.go) — "./core/..." in Go's own
+	// package-pattern semantics includes package "core" itself, not only
+	// its subdirectories, so the prefix check above alone would wrongly
+	// exclude it.
+	candidatePkgExact = "github.com/kameas-ai/kenaz-harness/core"
+)
+
+// isTestDoublePackage reports whether a package is production code in name
+// only — Vacuity A (spec §1.4.1). core/agentgraph/internal/recorders/ is
+// nine non-_test.go files, one per seam, each importing "testing" in
+// production position (compactor.go:6) and imported by nothing but
+// _test.go files elsewhere. collectCandidateTypes previously only
+// excluded _test.go FILES, not test-double PACKAGES, so recorders' fakes
+// counted as real implementers of the seams they exist to fake.
+//
+// The durable rule is "a production package has no business importing
+// testing", checked by scanning every non-_test.go file's imports — not a
+// path allowlist, so it generalises to the next recorders-shaped package
+// without an edit. Belt and braces: also exclude .../internal/recorders
+// by path explicitly, since the import-scan rule is the one this comment
+// calls load-bearing and a path check is cheap insurance if a future
+// recorders-shaped package ever stops importing "testing" directly (e.g.
+// via a re-exported helper).
+func isTestDoublePackage(p *packages.Package) bool {
+	if strings.Contains(p.PkgPath, "/internal/recorders") {
+		return true
+	}
+	for _, file := range p.Syntax {
+		pos := p.Fset.Position(file.Pos())
+		if strings.HasSuffix(pos.Filename, "_test.go") {
+			continue
+		}
+		for _, imp := range file.Imports {
+			path := strings.Trim(imp.Path.Value, `"`)
+			if path == "testing" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // collectCandidateTypes returns every named type declared in a non-
-// _test.go file across every loaded package. types.Implements is
-// checked against each (and its pointer) at the call site.
+// _test.go file, in a non-test-double package, under
+// github.com/kameas-ai/kenaz-harness/core/. types.Implements is checked
+// against each (and its pointer) at the call site.
 func collectCandidateTypes(pkgs []*packages.Package) []*types.Named {
 	var out []*types.Named
 	seen := map[*types.Named]bool{}
 	packages.Visit(pkgs, func(p *packages.Package) bool { return true }, func(p *packages.Package) {
+		if !strings.HasPrefix(p.PkgPath, candidatePkgPrefix) && p.PkgPath != candidatePkgExact {
+			return
+		}
+		if isTestDoublePackage(p) {
+			return
+		}
 		fset := p.Fset
 		for _, file := range p.Syntax {
 			pos := fset.Position(file.Pos())

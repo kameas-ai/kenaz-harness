@@ -218,11 +218,14 @@ reason; "deleted — `AttachmentTreePicker` is the live substitute" is.
 
 The first two were found the hard way in the 2026-08-14 sweep; the third by the
 v0.63.0 P0 (see item 3 for the dates). The first two are covered by no gate at
-all; for the third, `check-destructive-migration-coverage.sh`,
-`check-upgrade-snapshots-locked.sh` and the `upgrade-path` CI job now cover
-destructive migrations and mutation of committed snapshots — but the *absence*
-of a new snapshot for a new tag is still ungated (see item 3), so all three
-still need a human or an agent explicitly looking.
+all and still need a human or an agent explicitly looking. The third is now
+fully gated: `check-destructive-migration-coverage.sh` and
+`check-upgrade-snapshots-locked.sh` cover destructive migrations and
+*mutation* of committed snapshots, the `upgrade-path` CI job boots every
+committed snapshot under HEAD, and as of 2026-08-19
+`check-upgrade-snapshot-present.sh` closes the last hole by failing when the
+snapshot chain falls behind the newest release tag — the *absence* case, which
+had shipped unnoticed on three consecutive releases.
 
 1. **Dead code inside a live file.** Deleting ten orphaned components saved
    826 bytes of JS — Vite had already tree-shaken every unreferenced `.vue`,
@@ -266,10 +269,19 @@ still need a human or an agent explicitly looking.
 
    **Release-ritual corollary**: cutting a release includes running
    `bash scripts/ci/upgrade-snapshot.sh <new-tag>` and committing the
-   resulting `core/storage/sqlite/testdata/upgrade/<new-tag>/` directory. A
-   release without a snapshot leaves the next release with no previous state
-   to test against — the `upgrade-path` CI job keeps passing, it just stops
-   covering anything new, silently.
+   resulting `core/storage/sqlite/testdata/upgrade/<new-tag>/` directory,
+   **with a hand-written `PROVENANCE.md`** — the script writes only
+   `dump.sql`. A release without a snapshot leaves the next release with no
+   previous state to test against; the `upgrade-path` CI job keeps passing,
+   it just stops covering anything new.
+
+   This is no longer only a convention. `check-upgrade-snapshot-present.sh`
+   (wired into `pr.yml`, planted-violation proof
+   `upgrade-snapshot-present/chain-behind-newest-tag`) fails the build when
+   `max(testdata/upgrade/v*)` is behind `max(git tag v*)`. It was written
+   against the live violation open at the time — `v0.64.1` tagged, `v0.64.0`
+   the newest snapshot — after the convention alone had failed on three
+   consecutive releases, each of which documented the gap and left it open.
 
 ### Where the ledger lives
 
@@ -281,6 +293,23 @@ Per-symbol justifications stay with their gate in
 
 ### Tooling footguns
 
+- **`wails generate module` OPENS A REAL DATABASE.** It executes `main.go`'s
+  binding-introspection path, so with no `HOME` / `KENAZ_HARNESS_ENV`
+  override it resolves the *live* profile directory and runs pending
+  migrations against it. On 2026-08-20 a campaign sub-agent regenerating
+  bindings applied six `event-log/0100–0105` migrations to
+  `~/.kenaz/harness/prod/data.db` — a real profile with 15 sessions.
+  Nothing was destroyed (the set is additive), but the IDs were recorded
+  as `applied` from *uncommitted* code, and since the runner keys on ID
+  and `VerifyLedger` has zero non-test callers, the shipped versions
+  would have been skipped silently on that install forever.
+  **Always run it with an overridden profile:**
+  ```bash
+  HOME=$(mktemp -d) KENAZ_HARNESS_ENV=test PATH=$HOME/go/bin:$PATH wails generate module
+  ```
+  It also needs `frontend/dist/index.html` to exist (stub it, delete
+  after) and introduces a spurious `frontend/wailsjs/runtime/` file-mode
+  diff (`100644`→`100755`) that must be reverted, not committed.
 - Use `rtk proxy grep` / `rtk proxy git` for anything multi-file or
   load-bearing — the plain wrappers silently truncate.
 - **Do not pipe `rtk proxy grep` into another `rtk proxy grep`.** Even the

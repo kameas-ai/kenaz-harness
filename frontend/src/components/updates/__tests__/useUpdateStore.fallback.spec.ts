@@ -51,6 +51,21 @@ afterEach(() => {
 // semverGt
 // ---------------------------------------------------------------------------
 
+// controls-and-readouts-that-tell-the-truth-01PMZ808 WP08, AC-018:
+// MANIFEST_URL must match core/update/manifest.go's stableManifestURL
+// exactly — host AND path. Spec's stated ideal is "asserted by a test
+// that reads both rather than by two literals"; a single vitest process
+// cannot read a Go source constant, so this is a same-value literal
+// cross-checked by the mirrored comment in both files rather than a true
+// shared-source assertion — see useUpdateStore.ts's MANIFEST_URL doc
+// comment and core/update/manifest.go's stableManifestURL doc comment,
+// each pointing at the other. Recorded as a residue, not oversold.
+describe('MANIFEST_URL (AC-018)', () => {
+  it('matches the canonical downloads.kameas.ai host and /kenaz-harness/manifest.json path', () => {
+    expect(MANIFEST_URL).toBe('https://downloads.kameas.ai/kenaz-harness/manifest.json');
+  });
+});
+
 describe('semverGt', () => {
   it('returns true when candidate has higher patch', () => {
     expect(semverGt('0.4.4', '0.4.3')).toBe(true);
@@ -93,6 +108,36 @@ describe('fetchManifestVersion', () => {
     makeFetchSpy('0.4.4', false /* ok=false */);
     const v = await fetchManifestVersion();
     expect(v).toBeNull();
+  });
+
+  // controls-and-readouts-that-tell-the-truth-01PMZ808 WP08, AC-019: a
+  // non-200 used to be swallowed silently — the whole point of this
+  // layer is to be a VISIBLE safety net when the backend update service
+  // breaks, and a safety net that fails silently isn't one.
+  it('AC-019: surfaces a non-200 via manifestFetchError instead of swallowing it', async () => {
+    const store = useUpdateStore();
+    expect(store.manifestFetchError.value).toBeNull();
+    makeFetchSpy('0.4.4', false /* ok=false, status 503 */);
+    await fetchManifestVersion();
+    expect(store.manifestFetchError.value).not.toBeNull();
+    expect(store.manifestFetchError.value).toContain('503');
+  });
+
+  it('AC-019: surfaces a thrown fetch error via manifestFetchError', async () => {
+    const store = useUpdateStore();
+    vi.spyOn(global, 'fetch').mockRejectedValueOnce(new Error('network error'));
+    await fetchManifestVersion();
+    expect(store.manifestFetchError.value).toContain('network error');
+  });
+
+  it('AC-019: clears manifestFetchError on the next successful fetch', async () => {
+    const store = useUpdateStore();
+    makeFetchSpy('0.4.4', false);
+    await fetchManifestVersion();
+    expect(store.manifestFetchError.value).not.toBeNull();
+    makeFetchSpy('0.4.5', true);
+    await fetchManifestVersion();
+    expect(store.manifestFetchError.value).toBeNull();
   });
 
   it('returns null when the manifest has no version field', async () => {

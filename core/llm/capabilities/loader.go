@@ -147,6 +147,33 @@ type Catalog struct {
 	specs map[string]*providerSpec
 }
 
+// providerAlias maps a provider kind with no YAML of its own onto the
+// catalog entry it should resolve against (model-settings-reach-the-
+// model-01PMZ101 WP02, spec D-1). Azure OpenAI's Chat Completions wire
+// shape is identical to OpenAI's — the adapter already queries
+// "openai" for its own Capabilities() shim
+// (core/llm/azure/adapter.go:116) — so the catalog borrows the same
+// descriptor instead of falling into the unknown-provider branch,
+// which previously left azure-openai unable to advertise tool_calling
+// at all (the P0: every tool-bearing request refused before any wire
+// call).
+//
+// Applied in all three lookup entry points (Describe, DescribeRich,
+// AttachmentLimits) — aliasing only one reproduces a half-fix, e.g.
+// tools would pass while every image attachment kept refusing.
+var providerAlias = map[string]string{
+	"azure-openai": "openai",
+}
+
+// resolveProvider returns the catalog key to look up for provider,
+// following providerAlias when provider has no dedicated YAML.
+func resolveProvider(provider string) string {
+	if alias, ok := providerAlias[provider]; ok {
+		return alias
+	}
+	return provider
+}
+
 // LoadDefault loads the embedded YAML data shipped with the connector.
 func LoadDefault() (*Catalog, error) {
 	return Load(dataFS, "data")
@@ -194,7 +221,7 @@ func (c *Catalog) Describe(provider, model string) llm.CapabilityDescriptor {
 		Supported: map[llm.Capability]bool{},
 		Notes:     map[llm.Capability]string{},
 	}
-	spec, ok := c.specs[provider]
+	spec, ok := c.specs[resolveProvider(provider)]
 	if !ok {
 		// Unknown provider entirely: streaming-only safe baseline so
 		// that a brand-new adapter still has a usable default.
@@ -267,7 +294,7 @@ func (c *Catalog) DescribeRich(provider, model string) llm.ProviderCapabilities 
 		Provider: provider,
 		Model:    model,
 	}
-	spec, ok := c.specs[provider]
+	spec, ok := c.specs[resolveProvider(provider)]
 	if !ok {
 		// Unknown provider: streaming-only safe baseline.
 		caps.Streaming = true
@@ -508,7 +535,7 @@ func (c *Catalog) AttachmentLimits(provider, model string) AttachmentDescriptor 
 		ImageInputMimeTypes:    []string{"image/png", "image/jpeg", "image/gif", "image/webp"},
 		DocumentInputMimeTypes: []string{"application/pdf"},
 	}
-	spec, ok := c.specs[provider]
+	spec, ok := c.specs[resolveProvider(provider)]
 	if !ok {
 		return out
 	}

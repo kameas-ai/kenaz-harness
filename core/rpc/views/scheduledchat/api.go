@@ -65,6 +65,21 @@ type UpdateInput struct {
 	Enabled        bool   `json:"enabled"`
 }
 
+// Registrar is the cron-arming seam into a chat-run cron engine (mission
+// model-scheduled-jobs-01PMSJ01, WP03). The concrete implementation is
+// core/scheduler.ChatCronEngine; this interface exists so the view package
+// does not import the engine's concrete type, and so tests can inject a
+// stub without booting robfig/cron.
+type Registrar interface {
+	// Sync re-reads the row for id from the store and arms or disarms the
+	// cron entry to match its current Enabled / Cron / Timezone fields.
+	// Called after Create, Update and SetEnabled.
+	Sync(ctx context.Context, id string) error
+	// Unregister disarms the cron entry for id. Called after Delete, when
+	// the row Sync would read no longer exists.
+	Unregister(ctx context.Context, id string) error
+}
+
 // ScheduledChatAPI is the view-scoped accessor.
 //
 // A nil store is allowed — methods return ErrStoreUnavailable so the

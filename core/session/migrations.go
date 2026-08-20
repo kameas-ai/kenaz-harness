@@ -139,6 +139,13 @@ const sqlInitSchema = `
 // session_messages so a human turn can persist as an ordered list of
 // model moves rather than one flattened assistant message
 // (model-moves-transcript-01PMCH01 WP01 — see migrations_moves.go).
+// 0336 adds the stream_checkpoints table that relocates the periodic-
+// flush durability seam out of session_messages, closing the P0 where
+// a healthy turn wrote up to six copies of its own answer into the
+// transcript (chat-turn-integrity-01PMZ606 WP02 — see
+// migrations_stream_checkpoints.go). 0337 is reserved for the same
+// mission's repair migration (WP05); 0338-0340 belong to
+// model-scheduled-jobs-01PMSJ01 — see docs/v0.65.0-merge-order.md §4.
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -206,6 +213,7 @@ func Migrations() []migrations.Migration {
 		migration0333(),
 		migration0334(),
 		migration0335(),
+		migration0336(),
 	}
 }
 

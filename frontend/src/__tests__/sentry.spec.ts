@@ -99,6 +99,122 @@ describe('sentry-redactor', () => {
     expect(shouldDropKey('private.token')).toBe(true);
     expect(shouldDropKey('public.token')).toBe(false);
   });
+
+  // ── UNIT-6 (entry-points-and-crash-reporting-01PMZD13): pattern-inventory
+  // drift closed. Before this unit, the Go redactor (core/sentry/redactor.go)
+  // had 13 [REDACTED:…] patterns and this file had 10 — this header claimed
+  // to mirror the Go set and did not. ──────────────────────────────────────
+
+  it('redacts Gemini API keys', () => {
+    const got = redactString('key=AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ0123456');
+    expect(got).not.toContain('AIzaSy');
+    expect(got).toContain('[REDACTED:apikey]');
+  });
+
+  it('redacts Azure api-key header values', () => {
+    const got = redactString('api-key: abcdef1234567890abcdef1234567890');
+    expect(got).not.toContain('abcdef1234567890abcdef1234567890');
+    expect(got).toContain('[REDACTED:apikey]');
+  });
+
+  it('redacts Sentry DSN tokens', () => {
+    const got = redactString(
+      'dsn=https://abcdef1234567890abcdef1234567890@o123456.ingest.sentry.io/789'
+    );
+    expect(got).not.toContain('abcdef1234567890abcdef1234567890');
+    expect(got).toContain('[REDACTED:sentry-dsn]');
+  });
+
+  // ── UNIT-6: home-dir normalisation. Before this unit, the module header
+  // claimed "Home-dir paths (~/ normalisation — best-effort in JS)" but
+  // redactString implemented no such thing at all — a claim with no code
+  // behind it. ─────────────────────────────────────────────────────────────
+
+  it('normalises macOS home-dir paths', () => {
+    const got = redactString('reading /Users/alice/.kenaz/harness.log');
+    expect(got).not.toContain('/Users/alice');
+    expect(got).toContain('~/.kenaz/harness.log');
+  });
+
+  it('normalises Linux home-dir paths', () => {
+    const got = redactString('reading /home/bob/.config/kenaz/settings.json');
+    expect(got).not.toContain('/home/bob');
+  });
+
+  it('normalises Windows home-dir paths', () => {
+    const got = redactString('reading C:\\Users\\carol\\AppData\\kenaz');
+    expect(got).not.toContain('C:\\Users\\carol');
+  });
+
+  // ── UNIT-6: deep recursion falsifiability corpus — the SAME shape and
+  // secret values as core/sentry/redactor_test.go's
+  // TestRedactMap_DeepFixtureCorpus (three levels deep, all pattern classes,
+  // an array of secrets, a nested private. key). Both suites must assert the
+  // same redacted output; reverting either redactor's recursion must turn
+  // its own suite red — verified for the Go side by reverting RedactMap to
+  // its pre-UNIT-6 shallow form and observing this fixture's five assertions
+  // fail, then restoring it. ──────────────────────────────────────────────
+
+  function deepFixtureCorpus(): Record<string, unknown> {
+    return {
+      secret_ref: '@secret:foo/bar-1',
+      anthropic_key: 'sk-ant-' + 'a'.repeat(25),
+      openai_proj_key: 'sk-proj-' + 'b'.repeat(25),
+      openai_key: 'sk-' + 'c'.repeat(25),
+      gemini_key: 'AIzaSy' + 'D'.repeat(33),
+      azure_key: 'api-key: ' + 'e'.repeat(32),
+      bearer: 'Bearer ' + 'f'.repeat(25),
+      jwt: 'eyJ' + 'g'.repeat(10) + '.' + 'h'.repeat(10) + '.' + 'i'.repeat(5),
+      aws_key_id: 'AKIA' + 'J'.repeat(16),
+      aws_secret: 'aws_secret_access_key=' + 'k'.repeat(40),
+      sentry_dsn: 'https://' + '1'.repeat(32) + '@sentry.example.com/123',
+      email: 'person@example.com',
+      phone: '555-123-4567',
+      nested: {
+        level2_secret: 'sk-ant-' + 'm'.repeat(25),
+        'private.token': 'should-be-dropped-entirely',
+        level3: {
+          deep_secret: 'AKIA' + 'N'.repeat(16),
+        },
+      },
+      secret_array: ['sk-proj-' + 'p'.repeat(25), 'sk-ant-' + 'q'.repeat(25)],
+    };
+  }
+
+  it('redacts a three-level-nested corpus of every pattern, an array, and a nested private key', () => {
+    const out = redactObject(deepFixtureCorpus());
+
+    const topLevelChecks: Record<string, string> = {
+      secret_ref: '[REDACTED:secret-ref]',
+      anthropic_key: '[REDACTED:anthropic-key]',
+      openai_proj_key: '[REDACTED:openai-key]',
+      openai_key: '[REDACTED:openai-key]',
+      gemini_key: '[REDACTED:apikey]',
+      azure_key: '[REDACTED:apikey]',
+      bearer: '[REDACTED:bearer-token]',
+      jwt: '[REDACTED:jwt-token]',
+      aws_key_id: '[REDACTED:aws-key-id]',
+      aws_secret: '[REDACTED:aws-secret-key]',
+      sentry_dsn: '[REDACTED:sentry-dsn]',
+      email: '[REDACTED:contact]',
+      phone: '[REDACTED:contact]',
+    };
+    for (const [key, marker] of Object.entries(topLevelChecks)) {
+      expect(out[key]).toContain(marker);
+    }
+
+    const nested = out['nested'] as Record<string, unknown>;
+    expect(nested).not.toHaveProperty('private.token');
+    expect(nested['level2_secret']).toContain('[REDACTED:anthropic-key]');
+    const level3 = nested['level3'] as Record<string, unknown>;
+    expect(level3['deep_secret']).toContain('[REDACTED:aws-key-id]');
+
+    const arr = out['secret_array'] as string[];
+    expect(arr).toHaveLength(2);
+    for (const s of arr) {
+      expect(s).toContain('[REDACTED:');
+    }
+  });
 });
 
 // ── lazy-load guard ────────────────────────────────────────────────────────

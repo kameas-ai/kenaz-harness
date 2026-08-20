@@ -60,8 +60,30 @@ const (
 	// Approval flow (FR-048). Mirrors the ask_pending / ask_answered
 	// pair; runs pause at `approval_pending` until the user clicks
 	// Approve / Reject in the harness UI.
-	EventApprovalPending  EventKind = "approval_pending"
-	EventApprovalResolved EventKind = "approval_resolved"
+	//
+	// EventApprovalResolved is reserved for a REAL human decision — a
+	// click on Approve/Reject once approval-node-01PMZC12 UNIT-3/UNIT-4
+	// wire the resolve verb and the port write. approval-node-01PMZC12
+	// UNIT-2 made the executor park (res.Pause) instead of deciding on
+	// the human's behalf, so nothing emits EventApprovalResolved today
+	// — trust-surfaces-that-fire-01PMZ202 WP02 first removed a prior
+	// EventApprovalResolved{"approved": true} append that fabricated a
+	// human decision nobody made (Class F, "manufactured success",
+	// docs/dead-code-audit-2026-08-18.md), replacing it with the
+	// honest-auto-pass EventApprovalAutoPassed; UNIT-2 then removed the
+	// auto-pass path itself. Do not append EventApprovalResolved from
+	// anywhere but a real resolved verdict.
+	//
+	// EventApprovalAutoPassed has no emit site as of UNIT-2 — the
+	// always-auto-pass behaviour it recorded is gone. It stays declared
+	// (not deleted) because UNIT-5 [P1 · inert dials] is the very next
+	// unit in this mission and reuses this kind: a positive
+	// auto_approve_window_seconds is a real, bounded, honestly-recorded
+	// auto-pass, distinct from the always-auto-pass v1 behaviour this
+	// removed. Blocker: UNIT-5. Owner: alec.
+	EventApprovalPending    EventKind = "approval_pending"
+	EventApprovalResolved   EventKind = "approval_resolved"
+	EventApprovalAutoPassed EventKind = "approval_auto_passed"
 
 	// Artifact emission (FR-058). Terminal output; the harness UI
 	// surfaces these as session messages or files depending on the
@@ -242,7 +264,7 @@ func AllEventKinds() []EventKind {
 		EventMemoryWrite, EventMemoryRead, EventTraceWrite, EventCheckpoint, EventSessionWrite,
 		EventBranchFork, EventBranchMerge, EventForkRequested, EventMergeRequest,
 		EventCompactionFired, EventCompactionApplied,
-		EventApprovalPending, EventApprovalResolved,
+		EventApprovalPending, EventApprovalResolved, EventApprovalAutoPassed,
 		EventArtifactEmitted, EventKindAliasResolved,
 		EventFileRead, EventFileWrite, EventBashOutputRead,
 		EventCostCapHit, EventBudgetCapHit,

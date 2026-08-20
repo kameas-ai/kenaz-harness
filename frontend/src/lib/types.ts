@@ -621,6 +621,39 @@ export interface BundleArtifact {
   contentHash: string;
 }
 
+// Trust anchor management (bundle-download-and-verify-01PMZ909 UNIT-3)
+// — the writer for core/trust's persisted AnchorStore. Distinct from
+// SecretReference (core/rpc/views/trust's unrelated "secrets"
+// surface), which happened to claim the name "trust" first.
+
+export interface TrustAnchorPublicKey {
+  algorithm: string;
+  keyB64: string;
+  fingerprint: string;
+}
+
+export interface TrustAnchor {
+  anchorId: string;
+  /** "raw_public_key" | "org_identifier" | "pinned_peer" */
+  kind: string;
+  peerId?: string;
+  orgId?: string;
+  algorithm: string;
+  publicKey: TrustAnchorPublicKey;
+  installedAt: string;
+  removed: boolean;
+}
+
+export interface InstallTrustAnchorRequest {
+  anchorId: string;
+  /** "raw_public_key" | "pinned_peer"; defaults to raw_public_key. */
+  kind?: string;
+  peerId?: string;
+  /** defaults to "ed25519" */
+  algorithm?: string;
+  keyB64: string;
+}
+
 export interface Denial {
   policyId: string;
   clauseId: string;
@@ -688,6 +721,15 @@ export interface AuditSettings {
   strategy: string;
   /** Retention window in days. Only used for non-keep_forever strategies. */
   window_days: number;
+  /**
+   * Whether something actually deletes rows per `strategy` — as opposed
+   * to `strategy` being a setting nobody reads. False until
+   * audit-that-tells-the-truth-01PMZA10 UNIT-8 lands a real sweep.
+   * AuditSettingsPanel.vue renders its retention copy from this field,
+   * never from a hardcoded string (spec D-8) — UNIT-8 flips the
+   * underlying fact server-side with zero further edit here.
+   */
+  retention_enforced: boolean;
 }
 
 /**
@@ -915,8 +957,12 @@ export interface Settings {
   branchReintegrationMaxTokens?: number;
 
   /**
-   * Provider+model used for newly spawned subagent branches. Defaults to
-   * compactionModel, which itself defaults to the session's active model.
+   * Provider+model intended for newly spawned subagent branches.
+   *
+   * NARROWED 2026-08-20 (controls-and-readouts-that-tell-the-truth-
+   * 01PMZ808 WP05): not yet consumed anywhere — no reader, no writer,
+   * no UI. See core/rpc/views/settings/api.go's field doc and
+   * docs/unwired-ledger.md for why it is not wired.
    */
   branchAdvisorDefaultModel?: ProviderProfileRef;
   /**
@@ -1005,7 +1051,9 @@ export interface Settings {
    * autoCollapseBranchesInSidebar: when true (default), every parent
    * session that has branch children starts collapsed in the left rail
    * so the sidebar doesn't sprawl on first load. Users can expand
-   * individually; their choices persist in localStorage.
+   * individually; their choices persist in localStorage. Consumed by
+   * LeftRail.vue's onMounted seed (controls-and-readouts-that-tell-the-
+   * truth-01PMZ808 WP03).
    */
   autoCollapseBranchesInSidebar?: boolean;
 
@@ -1017,9 +1065,14 @@ export interface Settings {
   deleteBranchesWithParent?: boolean;
 
   /**
-   * maxVisibleBranchDepth: caps the number of nesting levels shown in
-   * the sidebar branch tree. Default 5. Sessions deeper than the cap
-   * are replaced by a "+N more depths" affordance.
+   * maxVisibleBranchDepth: clamps sidebar indentation to this many
+   * levels — deeper branch rows stop indenting further but still
+   * render (LeftRail.vue → SessionTreeRow's indentPx). Default 5.
+   *
+   * NARROWED 2026-08-20 (controls-and-readouts-that-tell-the-truth-
+   * 01PMZ808 WP02): this dial does not hide rows past the cap and does
+   * not render a depth-overflow expand affordance — no such affordance
+   * exists anywhere in the app. See docs/unwired-ledger.md.
    */
   maxVisibleBranchDepth?: number;
 
@@ -1088,6 +1141,12 @@ export interface Settings {
    * (fleet-otel-archival-01NDFSEX11 WP06)
    */
   hasSeenFleetTelemetryOnboarding?: boolean;
+  /**
+   * Signature-verification policy for `bundle install`
+   * (bundle-download-and-verify-01PMZ909 UNIT-4, spec D-2). One of
+   * "optional" (default, empty==optional), "required", "forbidden".
+   */
+  bundleSigningPolicy?: string;
 }
 
 /**
@@ -2667,6 +2726,17 @@ export interface GraphInfo {
   scope: 'library' | 'user';
   source?: string;
   updatedAt?: string;
+  /**
+   * True when this user-library entry parses but fails the kernel
+   * validator (model-authored-graphs-01PMGA01 UNIT-2, FR-004) — the
+   * defence for a graph written straight to
+   * `<DataDir>/agent_graph/library/` outside SaveGraph (spec §1.2's
+   * back door). The row still lists — nothing is deleted or
+   * quarantined — but the UI must not offer Run.
+   */
+  invalid?: boolean;
+  /** Short human-readable reason when invalid is true. */
+  invalidReason?: string;
 }
 
 /**
@@ -3554,6 +3624,13 @@ export interface ElicitPreview {
  */
 export interface ElicitRequest {
   request_id: string;
+  /**
+   * The session this ask belongs to (served-mode-is-a-real-mode-01PMZ707
+   * WP01). Populated so core/serve's WS fan-out can scope "elicit:pending"
+   * to the connection's subscribed session. Empty on desktop paths that
+   * never scope by session.
+   */
+  session_id?: string;
   question: string;
   kind: QuestionKind;
   options?: QuestionOption[];

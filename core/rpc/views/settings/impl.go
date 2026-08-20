@@ -718,6 +718,32 @@ func (s *FileStore) SaveCedarStrictWorkflowMode(enabled bool) error {
 	return s.saveLocked(got)
 }
 
+// LoadGraphAuthoringEnabled returns the model-authored-agent-graphs
+// consent dial. Default false — a corrupt or missing settings file
+// returns the safe (denied) default so an unreadable settings.json
+// cannot silently grant graph-authoring.
+func (s *FileStore) LoadGraphAuthoringEnabled() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.GraphAuthoringEnabled, err
+	}
+	return got.GraphAuthoringEnabled, nil
+}
+
+// SaveGraphAuthoringEnabled persists the model-authored-agent-graphs
+// consent dial. Takes effect on the next graph.author evaluation — the
+// gate reads it live rather than caching it at Manager construction.
+func (s *FileStore) SaveGraphAuthoringEnabled(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.GraphAuthoringEnabled = enabled
+	return s.saveLocked(got)
+}
+
 // LoadFSRequestAccessEnabled returns the kenaz__request_filesystem_access
 // built-in opt-in. Default true (on) — zero-value FSRequestAccessDisabled
 // means enabled. Errors return the safe default so the tool keeps working
@@ -1330,11 +1356,14 @@ func defaultSettings() Settings {
 		Accent:        "default",
 		WindowSize:    WindowSize{Width: 1280, Height: 800},
 		// Branching UX dials (branching-ux-polish-01KQ8TD7 WP06).
-		// AutoCollapseBranchesInSidebar defaults to true (spec default).
+		// AutoCollapseBranchesInSidebar is left nil here (not
+		// &DefaultAutoCollapseBranchesInSidebar) — a fresh install and an
+		// upgraded pre-WP03 install must be indistinguishable, and both
+		// resolve to true via EffectiveAutoCollapseBranchesInSidebar's nil
+		// check (controls-and-readouts-that-tell-the-truth-01PMZ808 WP03).
 		// DeleteBranchesWithParent defaults to false (safe: orphan, not cascade).
 		// MaxVisibleBranchDepth defaults to 5 (spec default).
-		AutoCollapseBranchesInSidebar: DefaultAutoCollapseBranchesInSidebar,
-		MaxVisibleBranchDepth:         DefaultMaxVisibleBranchDepth,
+		MaxVisibleBranchDepth: DefaultMaxVisibleBranchDepth,
 	}
 }
 
@@ -1355,6 +1384,14 @@ type API struct {
 	// fleet Syncer can schedule a debounced push. nil when fleet sync is not
 	// wired; the call is a no-op in that case.
 	syncNotify func(category string)
+
+	// auditRetentionEnforced backs AuditSettings.RetentionEnforced
+	// (audit-that-tells-the-truth-01PMZA10 UNIT-4). Set via
+	// SetAuditRetentionEnforced at chassis-boot wiring time — NEVER a
+	// literal inside GetAuditSettings — so the value genuinely comes
+	// from the wiring and UNIT-8 can flip it to a live check with a
+	// one-line change at the wiring site and zero frontend edit.
+	auditRetentionEnforced bool
 }
 
 // SetSyncNotifier wires the fleet-sync mutation hook. The rpc layer connects
@@ -1362,6 +1399,16 @@ type API struct {
 // debounced push-up. Safe to leave unset (fleet disabled / OSS build).
 func (a *API) SetSyncNotifier(fn func(category string)) {
 	a.syncNotify = fn
+}
+
+// SetAuditRetentionEnforced wires whether the audit retention policy is
+// actually enforced by a real sweep, backing
+// AuditSettings.RetentionEnforced. Defaults to false (the honest
+// pre-UNIT-8 state — nothing sweeps yet); core/rpc/api.go calls this at
+// construction. UNIT-8 (audit-that-tells-the-truth-01PMZA10) is the
+// commit that starts passing true once a real sweep exists.
+func (a *API) SetAuditRetentionEnforced(enforced bool) {
+	a.auditRetentionEnforced = enforced
 }
 
 // notifySync invokes the sync mutation hook for the given category when one
@@ -1539,9 +1586,11 @@ func (a *API) GetAuditSettings(_ context.Context) (AuditSettings, error) {
 	a.auditSettingsMu.Lock()
 	defer a.auditSettingsMu.Unlock()
 	if a.auditSettings.Strategy == "" {
-		return AuditSettings{Strategy: "keep_forever", WindowDays: 90}, nil
+		return AuditSettings{Strategy: "keep_forever", WindowDays: 90, RetentionEnforced: a.auditRetentionEnforced}, nil
 	}
-	return a.auditSettings, nil
+	out := a.auditSettings
+	out.RetentionEnforced = a.auditRetentionEnforced
+	return out, nil
 }
 
 // SetAuditSettings persists the audit retention policy.
@@ -1783,6 +1832,19 @@ func (m *memoryStore) SaveCedarStrictWorkflowMode(enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data.CedarStrictWorkflowMode = enabled
+	return nil
+}
+
+func (m *memoryStore) LoadGraphAuthoringEnabled() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.GraphAuthoringEnabled, nil
+}
+
+func (m *memoryStore) SaveGraphAuthoringEnabled(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.GraphAuthoringEnabled = enabled
 	return nil
 }
 

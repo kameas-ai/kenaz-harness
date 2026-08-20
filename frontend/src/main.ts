@@ -10,8 +10,10 @@ import { bootFeatureFlags } from '@/lib/featureFlags';
 import { logEvent } from '@/lib/eventLog';
 import type { SentryTier } from '@/sentry';
 
-// Placeholder routes — primary surfaces (sessions/tools/bundles/providers/audit/settings)
-// land in downstream missions consuming this chassis.
+// Desktop route table — 20 wired routes as of entry-points-and-crash-
+// reporting-01PMZD13 UNIT-7 (the "Placeholder routes … land in downstream
+// missions" comment this replaced was stale; every surface listed below
+// is a real, mounted route, not a stub).
 //
 // Exported so `__tests__/entrypoint.routes.test.ts` can diff this table against
 // main-served.ts's. The two drifted silently for a long time — served mode had
@@ -209,16 +211,28 @@ void (async () => {
     const tier = (settings.crashReportingTier ?? 'off') as SentryTier;
     if (tier !== 'off' && settings.sentryDsn) {
       const { initSentry } = await import('@/sentry');
-      await initSentry({
+      const ok = await initSentry({
         tier,
         dsn: settings.sentryDsn,
         release: info.build ?? undefined,
         gitsha: info.commit ?? undefined,
         app,
       });
+      // entry-points-and-crash-reporting-01PMZD13 UNIT-7: the return
+      // value was previously discarded entirely (`await initSentry(...)`
+      // with no assignment) — a false `initSentry` had no way to leave a
+      // trace anywhere. `ok` still does not block app mount either way;
+      // it only becomes visible.
+      if (!ok) {
+        logEvent('warn', 'sentry.init_returned_false', { tier });
+      }
     }
-  } catch {
-    // Sentry init failure must never block app mount.
+  } catch (err) {
+    // Sentry init failure must never block app mount — but it must not
+    // vanish silently either. Previously this catch was empty.
+    logEvent('warn', 'sentry.init_threw', {
+      message: err instanceof Error ? err.message : String(err),
+    });
   }
 })();
 

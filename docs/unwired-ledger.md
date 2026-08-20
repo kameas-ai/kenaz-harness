@@ -50,7 +50,18 @@ Non-allowlist gates that also protect against unwired code:
 (desktop `passthroughTopics` ↔ `SERVED_STREAM_TOPICS`),
 `core/rpc/builtins_wiring_test.go` (registered tool ↔ predicate case).
 `scripts/ci/gates_can_fail_test.go` is the meta-gate: it plants a violation
-per gate and asserts the gate rejects it.
+per gate and asserts the gate rejects it — for the gates it covers. As of
+`entry-points-and-crash-reporting-01PMZD13` (2026-08-20): **22 of 36**
+`scripts/ci/check-*.sh` scripts have a planted-violation proof (up from 18
+of 34 at that mission's start — it added `check-entrypoint-coverage.sh` and
+`check-installer-payload.sh`, both new, and gave `check-seam-implementers.sh`
+and `check-csp.sh` each their first-ever proof). The remaining fourteen do
+not (RAN: `comm -23` between the script directory listing and the test
+table's `gate:` fields — one more than the spec's own count of "thirteen",
+which did not name `check-no-model-family-literals.sh`); see that
+mission's spec §1.4 and its `research/escalations.md` E-004 for the
+corrected list and for why "per gate" overstated the
+coverage this sentence used to claim unconditionally.
 
 ### Declined gate — 2026-08-18 · "An RPC's async contract vs. its caller's await sequence" — NOT BUILDABLE
 
@@ -315,10 +326,16 @@ no pattern in `builtinMatchers` is not caught anywhere. Verified: a
 credential-shaped secret in `ToolCall.Result` IS redacted; an
 arbitrary-looking secret in the same field is not.
 
-**Owner:** unassigned. The change that closes it is a recursive walk in
-`redactMessages` over `map[string]any` / `[]any` / keys, which is cheap;
-it stayed out of WP05 because WP05's fix was structural and widening a
-credential scanner mid-mission is its own review.
+**Owner:** **CLOSED 2026-08-19 — the change this row names is implemented.**
+See Part 8 §8.3-P1 of `docs/escalation-register-2026-08-19.md`:
+`core/sessions/export/redact.go:528-534` now scans argument KEYS via
+`RedactValue(k)` and walks values via `redactStructured(v, 1, …)`, bounded by
+`MaxRedactDepth = 24` (`:297`) and cycle-guarded (`:409`). This is a record
+correction, not a delete (A-0). What remains open is enumerated with reasons in
+the Drained entry below, and those parks are escalated as **G-3**.
+*(Original: the closing change is a recursive walk in `redactMessages` over
+`map[string]any` / `[]any` / keys; it stayed out of WP05 because WP05's fix was
+structural and widening a credential scanner mid-mission is its own review.)*
 
 ### 2026-08-14 · FR-006's SHARE half is unimplemented (`Handoff_Share` sends nothing)
 
@@ -391,9 +408,13 @@ give `agentgraph.ToolResult` a blocks field, add `ContentBlocks` to
 its assignment in `AppendTranscriptEntry`. Doing only the last part
 recreates the field with no writer, which is what WP05 deleted.
 
-**Owner:** unassigned — it needs a producer, which is feature work with
-a spec (multimodal tool results). Note in `core/session/moves.go` where
-the field used to be.
+**Owner:** **escalated 2026-08-19 as G-2** (`docs/escalation-register-2026-08-19.md`
+Part 8), per ruling F-1 — nothing parks by default. It needs a producer, which
+is feature work with a spec (multimodal tool results); re-verified 2026-08-19
+that `core/agentgraph/seams.go:322-325` still carries no blocks field. G-2's
+recommended default is `justify(blocker, owner, date)` rather than a delete,
+since A-0 freezes the delete lane. Note in `core/session/moves.go` where the
+field used to be.
 
 ### 2026-08-14 · `session.ToolCall.{Arguments,Result}` have no production writer
 
@@ -441,9 +462,14 @@ what's stored", and on this path there is one. The transcript is right
 and the live view is wrong, which is the better of the two failure
 directions but still a lie to the user who was watching.
 
-**Owner:** unassigned. The fix is backend: deliver the gate's revised
+**Owner:** **escalated 2026-08-19 as G-2** (`docs/escalation-register-2026-08-19.md`
+Part 8), per ruling F-1. The fix is backend: deliver the gate's revised
 text as a move boundary + delta on the chat stream so the surface can
 replace the draft bubble, rather than only writing it to the store.
+Re-verified 2026-08-19 and narrowed: the boundary **already fires** —
+`core/rpc/views/agentgraph/chat/moves.go:413` allocates a fresh position on the
+revised path and `allocate` (`:154-169`) emits `StreamEventMoveStart` — so only
+the text deltas are missing.
 
 ### 2026-08-14 · `views/search/impl.go` searches soft-archived rows
 
@@ -463,10 +489,14 @@ to a message the session no longer renders. The moves mission makes this
 more visible (compaction now archives many more rows per turn) without
 having introduced it.
 
-**Owner:** unassigned. Two honest exits: add the predicate and accept
+**Owner:** **escalated 2026-08-19 as G-1** (`docs/escalation-register-2026-08-19.md`
+Part 8), per ruling F-1. Two honest exits: add the predicate and accept
 that compacted content stops being findable, or add an explicit
 "include compacted history" filter to the search UI and wire it. Not a
 third: the two implementations should not keep disagreeing silently.
+G-1's recommended default is **both** — the predicate plus the filter — so the
+capability is not removed along with the defect. Re-verified 2026-08-19:
+`core/rpc/views/search/impl.go` still has zero occurrences of `archived_at`.
 
 ### 2026-08-14 · `core/search/search.go` is a dead second search engine
 
@@ -482,9 +512,13 @@ missing the predicate". Under this file's own doctrine that is
 **rival infrastructure**, and the disposition is a delete-or-adopt
 decision, not a bug.
 
-**Owner:** unassigned. Whoever resolves the `archived_at` entry should
-resolve this in the same change — adopting `core/search` or deleting it
-are both fine; leaving a dead copy holding the right answer is not.
+**Owner:** **escalated 2026-08-19 as G-1** (`docs/escalation-register-2026-08-19.md`
+Part 8), per ruling F-1 — same decision as the `archived_at` entry above, as
+this row asked. Adopting `core/search` or deleting it were both fine when this
+was written; **A-0 (2026-08-19) freezes the delete lane**, so the two live
+options are now *adopt* or `justify(blocker, owner, date)`. Leaving a dead copy
+holding the right answer is still not one of them. Re-verified 2026-08-19:
+`core/search/search_test.go:9` is the only importer in the tree.
 
 ### 2026-08-14 · `Role == RoleAssistant` is a staleness class, and no gate sees it
 
@@ -535,9 +569,15 @@ requires each `RoleAssistant` test over a `session.Message` to sit beside
 a `MoveKind()` discriminator, or to be listed with a dated justification,
 is constructible against a list that size.
 
-**Owner:** unassigned, for all three parts. The branch-summary filter is
+**Owner:** **escalated 2026-08-19 as G-2** (`docs/escalation-register-2026-08-19.md`
+Part 8), per ruling F-1 — for all three parts. The branch-summary filter is
 cheap enough to fold into whatever next touches branch summaries; the
-gate is the part that keeps the class from coming back.
+gate is the part that keeps the class from coming back, and G-2 treats the
+unwritten gate as an **unsatisfied instance of CLAUDE.md's gate-extension
+rule**, not as optional polish. **Citation drift corrected 2026-08-19:** the two
+live drift sites are `core/rpc/views/branches/impl.go:378` and `:464`, not
+`:366`/`:452` as written above; `LastAssistantMsg` is now at `:341`. Claims
+unchanged.
 
 ### 2026-08-14 · Migration 0335's tool-row purge is not idempotent
 
@@ -562,9 +602,13 @@ migration's own comment plus the shape of the SQL, not a probe this
 sweep ran. Treat it as a hazard to design against, not a measured
 failure.
 
-**Owner:** unassigned. The cheap closure is a guard that makes the purge
+**Owner:** **escalated 2026-08-19 as G-8** (`docs/escalation-register-2026-08-19.md`
+Part 8), per ruling F-1. The cheap closure is a guard that makes the purge
 a no-op when the index holds no tool rows, or a comment at the statement
-saying explicitly that it may be applied exactly once.
+saying explicitly that it may be applied exactly once. G-8 recommends the
+guard, on CLAUDE.md blind-spot-#3 grounds — a migration that has never run
+against populated tables has never been tested, and this ledger already records
+what that class cost on `sessions/0327-source-model-output`.
 
 ### 2026-08-14 · `SearchModal` takes `?role=` from the URL unvalidated
 
@@ -586,8 +630,11 @@ for `project`, `from` and `to`, which are equally unvalidated — but only
 `role` has a closed vocabulary the UI enforces everywhere else, which is
 what makes it a lie rather than an empty result set.
 
-**Owner:** unassigned. One line in `readFromRoute`: drop a `role` that is
-not in the option set, the same way the select would.
+**Owner:** **escalated 2026-08-19 as G-1** (`docs/escalation-register-2026-08-19.md`
+Part 8), per ruling F-1 — carried as a rider on the search decision, because it
+shares a surface and an owner, not because it is a product question. One line in
+`readFromRoute`: drop a `role` that is not in the option set, the same way the
+select would.
 
 ### 2026-08-14 · Deferred asks have no producer, and wizards have no caller
 
@@ -616,11 +663,17 @@ whole downstream chain — `Elicit_SubmitWizardStep`,
 — is reachable only from `api_test.go`. `AskUserQuestion.vue` has no wizard
 renderer, so even a batch that did arrive would render as an unknown kind.
 
-**Owner:** unassigned. Two honest exits: (a) add `mode` + `questions` to the
-tool schema and render the wizard, which is feature work with a spec, or
-(b) delete both legs — deferred and wizard — down to the single blocking
-path that actually runs. Not (c): leaving a half-surface that reads, in a
-code review, like a shipped feature.
+**Owner:** **alec — RULED 2026-08-19 by A-12** (`docs/escalation-register-2026-08-19.md`
+Part 1), which names this entry as its instance. **BUILD BOTH LEGS:** add the
+`mode` field to `askuserquestion.AskArgs`, wire `OpenWizard`'s missing call
+site, and mount `DeferredAskPill.vue` + `DeferredAskPanel.vue`. A-12's stated
+reason is that the scheduling rulings (B-1, B-3) require a place for an
+unattended run to put a question. Exit (b) below is additionally foreclosed by
+**A-0**'s delete-lane freeze.
+*(Original framing: two honest exits — (a) add `mode` + `questions` to the tool
+schema and render the wizard, or (b) delete both legs down to the single
+blocking path that actually runs. Not (c): leaving a half-surface that reads, in
+a code review, like a shipped feature.)*
 
 ### 2026-08-14 · Live tools whose only UI is unmounted (todo, sub-agent)
 
@@ -645,10 +698,23 @@ read by `SubagentTab.vue` alone, and the tab's four control emits
 non-nil) and its branches do surface in the mounted `BranchSidebar`, so
 nothing is invisible; what is missing is the dedicated live-worker view.
 
-**Owner:** unassigned. Todo: wire (a parent must hold the list). Sub-agent:
-delete, or spec the control RPCs first — a tab whose buttons cannot be
-implemented from the current backend is not "not yet mounted", it is
-unbuilt.
+**Owner:** **alec — RULED 2026-08-19 by A-13** (`docs/escalation-register-2026-08-19.md`
+Part 1), which names this entry as its instance and **deliberately reverses this
+row's own recommendation**. Todo: **wire** (a parent must hold the list) —
+unchanged. Sub-agent: **build**, not delete — spec `abort`/`steer`/`pause`/
+`resume`, give the background-task subsystem a real producer, and mount
+`SubagentTab.vue` + `SubagentBudgetMeter.vue`. A-13 claimed the subsystem
+because **A-7** ruled that `subagent_start`, `background_task_complete` and
+`worktree_create` all get producers, and none can be built without this seam.
+
+⚠️ **Carry Part 7's correction.** A-13's stated premise that
+`kenaz__subagent_dispatch` is "already live" is FALSE, and this row's own text
+above repeats it. Re-verified 2026-08-19:
+`core/rpc/builtins_wiring.go:312-313` reads
+`var subagentSeam agentgraph.BranchSeam // nil — no child-run spawner yet`
+followed by `if subagentSeam != nil`, so the registration inside is statically
+unreachable. The ruling stands; the mission must first build the child-run
+spawner, and size and risk go up accordingly.
 
 ### 2026-08-14 · The denial UX gap (opened by deleting `DenialNotice`)
 
@@ -673,9 +739,17 @@ fed by a stub that returns `errNotWired` would move the lie from the
 backend to the UI. Wire `policyAPI` to a real implementation and define
 the denial event contract **first**; the component is the cheap half.
 
-**Owner:** unassigned — needs a mission under `kitty-specs/`. The change
-that deletes this entry is the one that gives `policyAPI` a non-stub
-production assignment.
+**Owner:** **escalated 2026-08-19 as G-6** (`docs/escalation-register-2026-08-19.md`
+Part 8), per ruling F-1 — needs a mission under `kitty-specs/` if the push
+shape is wanted. The change that deletes this entry is the one that gives
+`policyAPI` a non-stub production assignment. G-6 additionally records that
+**`policyAPI` is a fifth stub RPC domain X-1 did not enumerate** (X-1 covers
+`a2aAPI`, `workflowAPI`, `trustAPI`, `contextAPI`), and recommends resolving it
+inside X-1's dated-justification set rather than alone. Re-verified 2026-08-19:
+`core/rpc/api.go:1264` is still the sole assignment (`&stubPolicy{}`), and
+`policy:event` occurs exactly once in the tree — in
+`frontend/src/views/policy/PolicyView.vue:72`, a comment saying it does not
+exist.
 
 **2026-08-18 amendment (consent-surfaces-truth-01PMTR01 WP05/WP06) — this
 entry over-scoped the gap.** The paragraph above is still correct about
@@ -742,10 +816,14 @@ Note the neighbouring `runtimeModelsToWire` (`:197`) does populate a
 `Models` field, but on `LocalRuntimeModels` — a different wire type on a
 different RPC. The listing path never calls it.
 
-**Owner:** unassigned. Either populate `Models` in `runtimeInfosToWire`
+**Owner:** **escalated 2026-08-19 as G-7** (`docs/escalation-register-2026-08-19.md`
+Part 8), per ruling F-1. Either populate `Models` in `runtimeInfosToWire`
 (needs a per-runtime model probe at list time) or delete the first branch
 so the card stops implying a state it cannot reach. Do not "fix" it by
-deleting the string alone — the probe is the feature.
+deleting the string alone — the probe is the feature. G-7 recommends the probe
+and asks that it be **scoped with A-5/D-2**, which already ruled a probe-driven
+capability path for the same class of endpoint — building a second probe would
+be the rival-infrastructure shape this ritual keeps finding.
 
 ### 2026-08-14 · Settings fields that are stored, bound, and inert
 
@@ -776,8 +854,26 @@ out; no filter exists), `LocalRuntimeRAMOverrideGB`
 *Self-documented as reserved (fine, listed for completeness):*
 `KeyboardShortcutsPreset`, `BranchAdvisorUseLLM`, `BranchAutoMode`.
 
-**Owner:** unassigned. The cheapest structural fix is to bring
-`settings.Settings` under `core/wiring/knobcoverage` — see the next entry.
+**Owner:** **split 2026-08-19.**
+
+- The six **narrative tuning knobs** (`SummarizerProfileID`,
+  `NarrativePromotionWeights`, `NarrativePromotionThreshold`,
+  `NarrativeRetrievalWeight`, `NarrativePromoterParallelism`,
+  `NarrativePreludeTopN`) are **alec — RULED by A-4** (documented product
+  retirement of the memory-narrative subsystem). They are removed with it, not
+  wired. Verified 2026-08-19 that all six are `core/memory/narrative`-scoped.
+- Everything else in this entry is **escalated as G-4**
+  (`docs/escalation-register-2026-08-19.md` Part 8), per ruling F-1.
+
+The cheapest structural fix is still to bring `settings.Settings` under
+`core/wiring/knobcoverage` — see the next entry — and that is G-4's recommended
+default. Two sequencing constraints G-4 records: **`PermissionMode` must be
+ruled together with X-2 and B-4**, since its documented "every call prompts"
+semantics *is* the per-call tool authorization those two already ruled wire; and
+**`MCPAutoRestartDisabled` must get a reader before `MCPHealthSettingsPanel` is
+mounted** (see the frontend orphan backlog below). Inertness re-verified
+2026-08-19 for `EffectivePermissionMode`, `MCPAutoRestart()`,
+`EffectiveLocalRuntimeRAMBytes`.
 
 ### 2026-08-14 · knob-coverage tracks one struct out of the several that need it
 
@@ -828,10 +924,17 @@ advertises `run_in_background` while the seam is nil (commit `fix(tools):
 stop advertising bash background mode…`), and `kenaz__monitor` is now
 tracked by I11 rather than buried in the I7 bulk list.
 
-**Owner:** unassigned. The fix is one restructuring — allocate the task id
-before `cmd.Start()`, attach the registry writers, pass
-`BackgroundSpawn`/`BackgroundEnd` and the `HookFirer` from `core/rpc`, then
-register `kenaz__monitor` with its predicate case.
+**Owner:** **alec — RULED 2026-08-19 by A-13**, with **A-7** as the reason
+(`docs/escalation-register-2026-08-19.md` Part 1). The background-task producer
+is **built**, not parked: A-7 ruled that all eight fire-less hook events get
+producers, and `background_task_complete`, `subagent_start` and
+`worktree_create` cannot be built without this seam. The fix is one
+restructuring — allocate the task id before `cmd.Start()`, attach the registry
+writers, pass `BackgroundSpawn`/`BackgroundEnd` and the `HookFirer` from
+`core/rpc`, then register `kenaz__monitor` with its predicate case.
+Re-verified 2026-08-19: `core/rpc/builtins_wiring.go:321` still reads
+`Tasks:   nil,`, and `Options.BackgroundSpawn` still has assignments only in
+`run_in_background_test.go`.
 
 **2026-08-14 · Follow-up — the Settings → Tasks *nav entry* is removed.**
 The producer gap above is unchanged, but it was reachable: `SettingsTabs.vue`
@@ -848,7 +951,7 @@ Producer-absence proof re-confirmed at removal time, both arms:
 `run_in_background_test.go`; the sole `Register` call into a tasks registry
 is `core/tools/subagentdispatch/tool.go:240`, guarded by `opts.Tasks != nil`,
 and that field's only production assignment is `Tasks: nil`
-(`core/rpc/builtins_wiring.go:317`). `tasksview.NewAPI(taskReg)` therefore
+(`core/rpc/builtins_wiring.go:321`). `tasksview.NewAPI(taskReg)` therefore
 serves an always-empty registry.
 
 **Disposition: parked, not deleted** — `core/tasks`, the four RPCs and
@@ -857,7 +960,10 @@ background execution ships at all is a product call, and deleting the
 consumer half of a wanted feature destroys tested work. Removing the *link*
 is correct under either outcome. If background execution ships, remount the
 panel and restore the nav entry in the same PR that wires the producer.
-**Owner:** unassigned — same owner as the parent entry.
+**Owner:** **alec — RULED 2026-08-19 by A-13**, same as the parent entry. Under
+that ruling background execution ships, so this row's conditional applies:
+remount the panel and restore the nav entry in the same PR that wires the
+producer.
 
 ### 2026-08-14 · `cedar.CheckLLMFallback` — the LLM fallback chain is ungated
 
@@ -1080,29 +1186,73 @@ not a live lie**. The stack was deleted this sweep (see Drained). Recorded
 because the retracted report that raised it asserted the opposite, and the
 difference is the difference between "urgent" and "housekeeping".
 
-**Owner:** unassigned per-item; this entry itself is owned by whoever
-picks up the next unwired sweep. Re-verify each item's importer graph
-before acting — frontend code churns between sweeps.
+**Owner:** **split 2026-08-19.**
+
+- The **P1b** block above (delegated sub-agent execution; background execution)
+  is **alec — RULED by A-13**, which is the "named mission" it was parked
+  pending.
+- The **P1** list above is **escalated as G-5**
+  (`docs/escalation-register-2026-08-19.md` Part 8), per ruling F-1. G-5's
+  recommended default: mount `RecoveryCodeFlow`, `ProjectAutonomyPanel` and
+  `CrashReportingOnboardingModal` now; hold `HookJournalView` until its read
+  path exists; **do not mount `MCPHealthSettingsPanel` until G-4 wires
+  `MCPAutoRestartDisabled`**; hold `CedarEditor` for the `PolicyView` port.
+- The **P3** item (`lib/capability-keys.ts`) is not ownerless — it carries a
+  live disposition ("Being wired as a typed import").
+
+Re-verify each item's importer graph before acting — frontend code churns
+between sweeps. Verified 2026-08-19: all six P1 components still have zero
+non-test, non-self importers.
+
+⚠️ **CITATION DRIFT CORRECTED 2026-08-19 (Part 8 §8.3-P3).** Two of this
+entry's load-bearing line numbers are stale, and following them would wire the
+wrong thing — the same failure the `BranchAdvisorSettings` correction above
+records. `RecoveryCodeFlow`'s backend is assigned at **`core/rpc/api.go:2695`**
+(`Recovery: &recoveryBackendAdapter{},`), inside the *bare* block opened at
+`:2405`, so "unconditional" holds — `api.go:2426` is now the catalog view. The
+project rung is engine-consumed at **`core/rpc/api.go:4370-4373`** →
+`autonomy.Resolve` (`:4703`), not at `:4304`, which is now a headless-confirm
+log line. Both underlying claims hold. **Cite the symbol, not the line, for
+`api.go`** — it is ~7,000 lines and churns every release.
 
 **AMENDMENT 2026-08-18 (`mcp-connector-lifecycle-01PMMC01` WP01) — this
 entry no longer names no owner and no mission.** The harness-self MCP
 server (B10 in `docs/dead-code-audit-2026-08-16.md`, this section's
 subject) is no longer parked as "housekeeping": the owner ruled
 **attach** on 2026-08-18. See
-`kitty-specs/mcp-connector-lifecycle-01PMMC01/research/b10-harness-self-decision.md`
-for the decision record. Execution (the session-scoped tool-visibility
-seam, the fourth dispatch-pool arm, installing `EmbeddedCedar`, making
+`kitty-specs/harness-self-attach-01PMHS01/research/attach-decision.md`
+for the decision record (the original pointer,
+`kitty-specs/mcp-connector-lifecycle-01PMMC01/research/b10-harness-self-decision.md`,
+is dangling — that mission is archived and has no `research/` directory
+at all; the ruling it held is reproduced in the file cited above).
+Execution (the session-scoped tool-visibility seam, the fourth
+dispatch-pool arm, installing `EmbeddedCedar`, making
 `IsHarnessSelfMCPDisabled` real, emitting-or-deleting the dead event
 kinds, and the Cedar-gating that makes attaching safe rather than merely
-attached) is **deferred to a dedicated follow-on mission**, not executed
-in `mcp-connector-lifecycle-01PMMC01` (that mission's own WP07 is
-explicitly out of scope for the attach — see its spec). **Owner of the
-attach execution:** the mission owner who dispatches the follow-on
-mission; unassigned as of this entry. **Blocker:** the visibility seam
-and `EmbeddedCedar` wiring do not exist yet (spec §6 option A cost items
-2 and 3) — attaching without them would hand every session write access
-to provider credentials and settings, which is why this is not a
-same-commit fix.
+attached) is now **assigned to the dedicated follow-on mission**,
+`harness-self-attach-01PMHS01`, and not executed in
+`mcp-connector-lifecycle-01PMMC01` (that mission's own WP07 is
+explicitly out of scope for the attach — see its spec).
+
+**AMENDMENT 2026-08-19 (`harness-self-attach-01PMHS01` UNIT-1) — owner
+named.** `docs/escalation-register-2026-08-19.md` Part 8 **G-9 was RULED**
+(not merely escalated): *"✅ RULED 2026-08-19 — owner: alec. Owner: alec.
+Dated 2026-08-19."* **Owner of the attach execution: alec, dated
+2026-08-19, executing as `harness-self-attach-01PMHS01`.** No capability
+question remains open — the attach decision was made 2026-08-18; G-9 only
+named who dispatches the follow-on mission, and it is now dispatched.
+This row was previously missed by F-1's count of sixteen because it
+anchored on the bold `**Owner:** unassigned` form rather than this row's
+prose — see Part 8 §8.3-P2. **The blocker is load-bearing and survives
+the owner assignment** (G-9's own ruling text: *"Naming an owner does not
+unblock the work; it names who decides when it unblocks"*): the
+session-scoped visibility seam and `EmbeddedCedar` wiring do not exist on
+`main` as of this amendment — they are `harness-self-attach-01PMHS01`
+UNIT-2/UNIT-3/UNIT-4, not yet landed. Attaching before they land would
+hand every session write access to provider credentials and settings,
+which is why the mission's own sequencing rule (see its `tasks.md`) is
+non-negotiable: no commit may make `harnessServer.Server()` reachable
+from a session until AC-002 passes.
 
 Two small pieces of this finding were resolved immediately, regardless
 of the attach mission's timeline, because they were unambiguous under
@@ -1331,9 +1481,229 @@ future sweep as racy without also re-deriving this happens-before
 argument — the fields were never the live risk, `a.updatePollCancel` was
 and now is guarded.
 
+### 2026-08-19 (model-scheduled-jobs-01PMSJ01 WP03) · `scheduler.Scheduler`, `scheduler.Store`, `Job.OnMissed`, `Job.MissedPolicy` — justified, not implemented, not deleted
+
+`core/scheduler/scheduler.go` declares `Scheduler` (`Start/Stop/Upsert/
+Delete/Get/List/RunNow/ReconcileMissed`, keyed on the generic `Job` type)
+and `Store` (`Upsert/Delete/Get/List`, also `Job`-keyed) with **zero
+implementations anywhere in the tree** (spec.md §1.2 for this mission).
+`Job.OnMissed` / `Job.MissedPolicy` (`core/scheduler/job.go:46-62`) have no
+reader.
+
+Per spec.md §8 D-2, as amended by owner ruling A-0 (the delete lane is
+frozen): WP03 was to implement `scheduler.Scheduler` "if the engine can
+honestly satisfy it, minus `ReconcileMissed`" or else justify each symbol
+here instead of deleting it. **It cannot be honestly satisfied**, and this
+entry is that justification, named per-symbol:
+
+- **`scheduler.Store`** is `Job`-keyed generic persistence. The only
+  concrete persistence for chat-run schedules is `ScheduledChatStore`
+  (`core/scheduler/chat_store.go`), which is `ChatRunRecord`-keyed and has
+  no `on_missed` column in `scheduled_chat_runs` at all — there is no
+  honest `Store` implementation to write without inventing a second,
+  parallel persistence path for the same rows.
+- **`scheduler.Scheduler`** is the `Store`-backed engine surface built on
+  top of the above. WP03 built `ChatCronEngine`
+  (`core/scheduler/chat_cron_engine.go`) instead — a purpose-built engine
+  keyed directly on `ScheduledChatStore` / `ChatRunRecord.ID`, exposing
+  `Sync`/`Unregister`/`Start`/`Stop`/`SetDispatcher`/`Registered`/`Started`.
+  It is wired into production (`core/rpc/api.go`: constructed when a DB is
+  available, `Start`ed from `SetContext`, `Stop`ped from `Shutdown`,
+  reacting to `scheduledchat.API`'s Create/Update/Delete/SetEnabled via the
+  `Registrar` interface) and has full unit + wiring test coverage
+  (`core/scheduler/chat_cron_engine_test.go`,
+  `core/rpc/api_chat_cron_engine_test.go`). It does not implement
+  `scheduler.Scheduler`'s literal Go interface, but it closes the same gap
+  that interface's zero implementations left open (spec.md §1.2).
+- **`Job.OnMissed` / `Job.MissedPolicy`** describe a reconcile-on-resume
+  policy for missed fires. `ChatCronEngine` has no missed-fire tracking —
+  a schedule that was disabled while the process was down and re-enabled
+  later simply resumes ticking from `Sync`'s next call, with no attempt to
+  "catch up" a skipped fire. This is the same posture the workflow-side
+  `CronScheduler` already ships (`core/workflows/scheduler/cron_scheduler.go`
+  has no `ReconcileMissed` caller either).
+
+**Blocker:** a generic `Job`/`Store`-based scheduler abstraction that
+actually fits both the legacy session-kind jobs and the chat-run kind
+without a schema rework of `scheduled_chat_runs` to carry `on_missed`.
+**Owner:** the wave lead for a future missed-fire / reconciliation mission
+(none scheduled as of this date — this mission's WP08 adds one-shot
+`trigger_kind`/`run_at` schedules but does not add reconciliation).
+**Date:** 2026-08-19.
+
+Do not re-delete these four symbols on a future "no callers" grep without
+re-reading this entry — `Job` and `Scheduler`/`Store` are still declared
+because `JobKindSession` / `JobKindChatRun` and `ChatRunSpec` live on
+`Job`, which `ChatCronEngine.fireSync` constructs and passes to
+`ChatRunDispatcher.DispatchChatRun`. Only the `Scheduler`/`Store`
+interfaces and the `OnMissed`/`MissedPolicy` fields are the unimplemented
+part; `Job` itself is very much wired.
+
 ---
 
+### 2026-08-19 · `check-codegen.sh` attests the binding *source*, not the emitted bindings
+
+Found while verifying a sub-agent's work on `release/01PMZ909-bundle-verify`.
+The agent hand-wrote `frontend/wailsjs/go/models.ts` because it believed no
+Wails toolchain was available, then ran
+`check-codegen.sh --update-wailsjs-hash`. The gate went green.
+
+The toolchain **was** available (`$HOME/go/bin/wails`). Running
+`wails generate module` produced a file differing from the hand-mirror in 88
+lines: the `trustanchor` namespace block was byte-identical (84 lines) but
+placed near line 1085 instead of 7662, plus trailing-whitespace drift. A
+sorted-line compare of the two files is empty, so this particular instance
+was harmless — TypeScript does not care where a namespace sits in the module.
+
+The gate hole is the point, not this instance. `check-codegen.sh` hashes the
+Go **binding source** and compares it against a committed hash that any
+author can restamp with `--update-wailsjs-hash`. So a green result asserts
+*"the bindings were stamped for this source"*, never *"the bindings are what
+Wails would emit."* Both the hand-mirror and the regenerated file pass it.
+Nothing in CI regenerates the bindings and diffs the result, which means any
+hand-edit of `frontend/wailsjs/**` — including a semantically wrong one —
+passes as long as the hash is restamped.
+
+This is the vacuous-pass shape: the gate cannot fail for the defect class a
+reader assumes it covers. It belongs with the gate-falsifiability finding
+(19 of 34 gates have a planted-violation proof; this one has none that
+exercises output drift).
+
+**Owed:** either regenerate-and-diff in CI (needs the Wails toolchain on the
+runner — the same missing-toolchain constraint that produced the hand-mirror),
+or a planted-violation proof in `scripts/ci/gates_can_fail_test.go` that
+mutates a committed binding file and asserts the gate fails. It currently
+would not. **Owner: unassigned. Not fixed here — recorded only.**
+
+### 2026-08-20 · `maxVisibleBranchDepth`'s depth-overflow affordance — narrowed, not built
+
+`controls-and-readouts-that-tell-the-truth-01PMZ808` WP02 (FR-002, SD-03 part
+two). Three surfaces — `SettingsView.vue`'s help text,
+`core/rpc/views/settings/api.go`'s field doc, and
+`frontend/src/lib/types.ts`'s field doc — all promised that sessions nested
+past the configured depth cap are hidden behind a click-to-expand
+depth-overflow control. No such control exists: `LeftRail.vue` →
+`SessionTreeRow.vue`'s `indentPx` only clamps how far a row indents; every
+row still renders regardless of depth.
+
+WP01 (same commit) wires `maxVisibleBranchDepth` from settings into
+`LeftRail.vue` for the first time — the dial did nothing at all before this.
+Landing WP01 without also correcting the three claims would have made the
+dial *reachable* while still describing a hiding/expand behaviour it does
+not have, which is the class this mission exists to end (spec D-1: "wiring
+the value while the help text still describes a hiding behaviour moves the
+lie, it does not end it").
+
+- **Blocker:** building the affordance (hide rows past the cap, render a
+  clickable depth-overflow control that reveals one more level) is a product
+  call — register `E-002` — not a technical one; nobody has asked for it and
+  no design exists for what the control should look like.
+- **Owner / deleting change:** alec. Deletes when either a mission builds the
+  affordance and re-widens the three docs, or the product decides depth
+  clamping alone is the intended behaviour and this entry is closed as
+  "decided, not deferred."
+
+### 2026-08-20 · `registry.ts`'s "components never hard-code binding strings" claim — narrowed for the native menu only
+
+`controls-and-readouts-that-tell-the-truth-01PMZ808` WP09 (FR-011,
+register `E-003`). `Shell.vue`'s two global bindings (search, cheat sheet)
+and `useCommandPalette.ts`'s ⌘K now resolve through
+`shortcuts/registry.ts`'s `resolveBinding` against the persisted
+`keyboardShortcuts` overrides — landed in this commit. The native OS menu
+accelerators (`core/menu/menu.go`'s `keys.CmdOrCtrl(...)` literals for
+Command Palette / Search / etc.) still do not: `core/menu/state.go`'s
+`MenuState` carries no shortcut field, and no topic fires a menu rebuild
+on a shortcut save.
+
+Spec R-15 confirms the *mechanism* exists — `rebuildMenuLocked` calls
+`wailsruntime.MenuSetApplicationMenu` at runtime, debounced and already
+fired from three live subscriptions — the *payload* does not. Wiring it
+requires: a shortcut field on `MenuState`, a broker topic (or reuse of an
+existing one) firing on `Settings_Set` when `keyboardShortcuts` changes,
+and `menu.go`'s `keys.CmdOrCtrl(...)` calls becoming dynamic per-binding
+lookups instead of literals — a real, if small, feature, not a
+one-line wire.
+
+- **Blocker:** whether native-menu rebinding ships in this mission's scope
+  at all is a product call (register `E-003`), not a technical one — no
+  owner decision was available this session.
+- **Owner / deleting change:** whoever answers `E-003` either lands the
+  MenuState + topic + dynamic-accelerator wiring (deletes this entry), or
+  decides native-menu accelerators are intentionally fixed regardless of
+  the in-app override and narrows `registry.ts:5-6`'s claim to say so
+  explicitly (also deletes this entry, the other direction).
+
+### 2026-08-20 · `branchAdvisorDefaultModel` — narrowed, chain's second link is a stub
+
+`controls-and-readouts-that-tell-the-truth-01PMZ808` WP05 (FR-005, SD-10).
+`core/rpc/views/settings/api.go`'s field doc promised the field "Defaults to
+CompactionModel when empty, which itself defaults to the session's active
+model." The field has neither a reader nor a writer anywhere in production,
+and `EffectiveBranchAdvisorDefaultModel` has zero callers. Per spec R-6 this
+mission does **not** wire it: the chain's second link,
+`core/rpc/views/branches/impl.go`'s `parentModel`, is a stub that discards
+both its parameters and returns `("", "")` — wiring link one over a broken
+link two would produce a dial that appears to work and silently resolves to
+nothing, which is worse than the current honest inertness.
+
+- **Blocker:** `parentModel` needs `Settings.CompactionModel` wired, which is
+  owned by `model-settings-reach-the-model-01PMZ101`, not this mission.
+- **Owner / deleting change:** whoever lands `01PMZ101`'s `CompactionModel`
+  wiring should re-open `parentModel` and, once it resolves a real model,
+  wire `branchAdvisorDefaultModel` and delete this entry. This ruling
+  re-affirms (does not overturn) `docs/dead-code-audit-2026-08-16.md:330`'s
+  "wire, and wire before mounting" — nothing is being mounted here.
+
 ## Drained
+
+### 2026-08-19 · CLOSED — the missing-upgrade-snapshot hole is now gated
+
+Three consecutive releases shipped without their snapshot, and each one's
+PROVENANCE.md named the missing gate and then left it missing:
+
+- **v0.63.2** — *"the lock gate catches modification but nothing catches
+  absence."*
+- **v0.64.0** — *"This is now twice. A convention that depends on a human
+  remembering it at release time has failed on two consecutive releases."*
+  This was the release whose PR title claims *"CI can finally see an
+  upgrade."*
+- **v0.64.1** — found open while writing this entry: latest tag `v0.64.1`,
+  latest snapshot `v0.64.0`.
+
+Writing the diagnosis into a document that is only read while performing the
+ritual that keeps being skipped is not a fix. The gate now exists:
+
+- `scripts/ci/check-upgrade-snapshot-present.sh` — fails when
+  `max(testdata/upgrade/v*)` is behind `max(git tag v*)`. Stable tags only;
+  `-rc` tags are soak builds and owe no snapshot. With **no** tags reachable
+  it FAILS rather than passing, matching the lock gate's rule that a gate
+  which cannot look at anything is not clean.
+- Wired into `pr.yml` beside the lock gate, whose tag-fetch step is now
+  load-bearing for both.
+- Planted-violation proof:
+  `upgrade-snapshot-present/chain-behind-newest-tag`. Verified falsifiable in
+  **both** directions — against a neutered gate (`exit 0`) it fails with *"the
+  gate cannot fail"*, and against a gate that exits non-zero for an unrelated
+  reason it fails the `wantOutput` check. That second direction matters here:
+  `check-tests-are-hermetic.sh` once shipped permanently broken and this
+  table passed anyway.
+- `v0.64.1`'s snapshot was backfilled in the same change, so the chain is
+  current. Its `dump.sql` is byte-identical to `v0.64.0`'s — correct, since
+  that release registered no migration.
+
+**A harness limitation was removed to make this possible.**
+`TestGates_PlantedViolationFires` called `plant()` unconditionally, so it
+could only express violations you create by *adding a file*. An absence gate's
+violation cannot be planted that way — you create it by moving the tag
+forward, not by writing anything. The runner now allows a case with no `file`,
+and requires such a case to name a `wantOutput` so the proof stays about the
+specific violation rather than about a non-zero exit. Any future
+absence-shaped gate can now be proven the same way.
+
+Note the ledger entry dated 2026-08-19 above — `check-codegen.sh` attesting
+binding *source* rather than emitted bindings — is the same vacuous-pass
+class and remains **open**.
+
 
 ### 2026-08-16 · what the export scanner covered BEFORE, and what leaked
 
@@ -1416,22 +1786,36 @@ query-string text.
   `-----END … PRIVATE KEY-----` marker, and `capToolOutput` truncates a
   tool result at 4000 runes. Making the END optional would let the word
   "BEGIN RSA PRIVATE KEY" in prose redact the rest of the document.
-  Owner: unassigned; the fix is a length-bounded variant, not an
-  open-ended one.
+  Owner: **escalated 2026-08-19 as G-3** (`docs/escalation-register-2026-08-19.md`
+  Part 8), per ruling F-1. The fix is a length-bounded variant, not an
+  open-ended one. **Missed by F-1's count of sixteen** — this row uses the
+  unbolded `Owner:` form; see Part 8 §8.3-P2.
 - **`core/event/redact.defaultMatchers` has NOT been widened.** The
   export catalog began as a copy of it and has now diverged; that one
   still has all ten original patterns including the JSON-blind generic.
   It feeds the audit log's HMAC pipeline, which is a different contract,
   and widening a live audit pipeline from inside an export fix is the
-  wrong blast radius. Owner: unassigned. **If you are auditing what the
+  wrong blast radius. Owner: **escalated 2026-08-19 as G-3**
+  (`docs/escalation-register-2026-08-19.md` Part 8), per ruling F-1 — G-3's
+  recommended default for this one is a compliant
+  `justify(blocker, owner, date)` rather than work, since the blast-radius
+  reason above is a real blocker that only lacks a name. **Missed by F-1's
+  count of sixteen** — unbolded form; see Part 8 §8.3-P2.
+  **If you are auditing what the
   event log redacts, do not read the export catalog and assume parity.**
 - **`core/eval/capture.go:137` `redactString` is much weaker than any of
   the four catalogs** — it handles `sk-` and `Bearer ` and nothing else,
   no GitHub token, no AWS key, no JWT, no password, no cookie — and it
   writes LLM messages to disk. Its own comment calls it "defense-in-depth"
   behind the event log, which is true of the event-log path and not of
-  the capture FILE. Owner: unassigned. Gated behind eval capture being
-  enabled, which is why it is recorded rather than fixed here.
+  the capture FILE. Owner: **escalated 2026-08-19 as G-3**
+  (`docs/escalation-register-2026-08-19.md` Part 8), per ruling F-1 — and G-3
+  singles this one out: it is the only redaction park whose failure mode is a
+  credential at rest on the user's disk, so "gated behind eval capture being
+  enabled" is a mitigation, not a blocker, and the rubric's *trust-relevant*
+  class does not park without an explicit ruling. **Missed by F-1's count of
+  sixteen** — unbolded form; see Part 8 §8.3-P2, which notes the phrasing
+  accident hid the highest-severity item in the set.
 - **`Handoff_Share` does not run through any scanner.** Unchanged and
   correct for now: it is E2E-encrypted to a recipient the user picks, and
   per the 2026-08-14 entry above it currently transmits a literal empty

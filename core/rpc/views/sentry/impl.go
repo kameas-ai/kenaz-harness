@@ -2,6 +2,9 @@ package sentry
 
 import (
 	"context"
+	"path/filepath"
+	"strings"
+	"time"
 
 	coresentry "github.com/kameas-ai/kenaz-harness/core/sentry"
 )
@@ -32,11 +35,26 @@ func (s *Impl) GetLastFive(_ context.Context) ([]CachedEntry, error) {
 }
 
 // GenerateLocalReport builds a redacted JSON crash report.
+//
+// controls-and-readouts-that-tell-the-truth-01PMZ808 WP12 (FR-017):
+// coresentry.AppendToCache had exactly one hit repo-wide (its own
+// declaration) — the reader chain (CrashReportingPanel.vue ->
+// Sentry_GetLastFive -> GetLastFive) was complete, so the panel showed
+// "Recent crash events (last 0)" forever regardless of how many local
+// reports had actually been generated. This is the crash path
+// AppendToCache's own doc names as the intended caller.
 func (s *Impl) GenerateLocalReport(ctx context.Context) (LocalReportResult, error) {
 	path, n, err := coresentry.GenerateLocalReport(ctx, s.DataDir)
 	if err != nil {
 		return LocalReportResult{}, err
 	}
+	id := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	coresentry.AppendToCache(s.DataDir, coresentry.CacheEntry{
+		ID:         id,
+		CapturedAt: time.Now().UTC(),
+		Kind:       "local_report",
+		Summary:    "Local crash report generated",
+	})
 	return LocalReportResult{Path: path, ByteCount: n}, nil
 }
 

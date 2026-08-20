@@ -48,8 +48,13 @@ Recorded so the shape stays recognisable:
   when the `gh` API call failed and returned zero tags.
 
 `scripts/ci/gates_can_fail_test.go` is the regression test for this class. It
-does not run in CI yet — pr.yml's test-go step scopes to
-`./core/... ./cmd/harness-vm/...`, which excludes `./scripts/...`.
+runs in CI as the "gate meta-tests" step in pr.yml's test-go job
+(`go test ./scripts/... -count=1`, `pr.yml:389`), separated from the `-race`
+suite because it shells out to mutate a scratch tree. (This sentence was
+stale until entry-points-and-crash-reporting-01PMZD13 UNIT-1: the meta-tests
+step was added in v0.63.2, but this doc still described the pre-v0.63.2
+state. pr.yml's test-go step now scopes to `./core/... ./cmd/... .`, not
+`./core/... ./cmd/harness-vm/...` — see UNIT-1 for why.)
 
 ## #1 — Strict CSP (no CDNs, no outbound traffic)
 

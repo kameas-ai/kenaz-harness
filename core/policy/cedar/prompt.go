@@ -36,6 +36,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/kameas-ai/kenaz-harness/core/runposture"
 )
 
 // Default timing + capacity constants. Spec §4.2 FR-011 + tasks.md WP02.
@@ -828,6 +830,21 @@ func (r *Registry) RequestInteractive(
 		return Resolution{Decision: DecisionDeny, Reason: "invalid surface"}, ErrInvalidSurface
 	}
 
+	// model-scheduled-jobs-01PMSJ01 WP05 — the unattended-run posture
+	// (spec.md §2 H-3). An unattended run has nobody on the other end of
+	// an interactive prompt; without this check, a bash or credential
+	// prompt would enqueue, wait the full 5-minute PromptTimeout, and
+	// only then deny (core/policy/cedar/prompt.go's own PromptTimeout
+	// constant) — a scheduled run silently stalling for five minutes and
+	// leaving nothing actionable behind. Deny immediately instead, and
+	// win over every other posture: an unattended run must not read as
+	// "autonomous tier, therefore auto-allow" just because the two
+	// conditions happen to coincide — B-3's fail-safe direction is that
+	// a resolution failure or an absent human is never a permit.
+	if runposture.IsUnattended(ctx) {
+		return Resolution{Decision: DecisionDeny, Reason: "unattended run — no interactive prompt channel"}, nil
+	}
+
 	// WP05 — autonomy posture fast paths.
 	//
 	// PostureAutoAllow: the resolved tier (autonomous/bold) permits the
@@ -903,6 +920,9 @@ func (r *Registry) RequestInteractive(
 		ev := r.resolvedEvent(entry.request, DecisionDeny, SourceOverflow)
 		ev.Latency = 0
 		r.notifyResolved(ev)
+		if r.permHooks != nil {
+			r.permHooks.FirePermissionDenied(ctx, surface.SessionID, string(fam), surface.resourceKey(), "queue overflow")
+		}
 		return Resolution{Decision: DecisionDeny, Reason: "queue overflow"}, nil
 	}
 	r.pending[id] = entry
@@ -1093,10 +1113,28 @@ func (r *Registry) cancel(requestID, reason string) (won bool) {
 // fire delivers the resolution to the pending entry's channel exactly
 // once and stops the timer. Subsequent fire / cancel calls on the same
 // entry are no-ops.
+//
+// v2 lifecycle hook: permission_denied (trust-surfaces-that-fire-
+// 01PMZ202 WP10 / UNIT-9). fire() is the one choke point both
+// ResolveFrom (a user's explicit Deny) and timeoutFire (the 5-minute
+// timeout) funnel through, so wiring it here — rather than at each
+// caller — covers both without duplicating the guard. FireAsync is
+// fire-and-forget and does not block resolveCh delivery.
+// cancel() (ctx cancellation) deliberately does NOT fire this hook: the
+// caller bailed, Cedar never rendered a decision, so there is nothing
+// to report as "denied".
 func (r *Registry) fire(entry *pendingEntry, res Resolution, source ResolutionSource) {
 	entry.resolved.Do(func() {
 		if entry.timer != nil {
 			entry.timer.Stop()
+		}
+		if res.Decision == DecisionDeny && r.permHooks != nil {
+			r.permHooks.FirePermissionDenied(context.Background(),
+				entry.request.Surface.SessionID,
+				string(entry.request.Family),
+				entry.request.Surface.resourceKey(),
+				res.Reason,
+			)
 		}
 		r.notifyResolved(r.resolvedEvent(entry.request, res.Decision, source))
 		select {

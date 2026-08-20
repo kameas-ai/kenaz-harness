@@ -76,8 +76,12 @@ const (
 	// harness_write_propose_cedar_policy, a tool that was itself deleted
 	// by the 2026-08-14 sweep — no emit site for any of the three ever
 	// existed. See docs/unwired-ledger.md's harness-self entry and
-	// kitty-specs/mcp-connector-lifecycle-01PMMC01/research/
-	// b10-harness-self-decision.md.
+	// kitty-specs/harness-self-attach-01PMHS01/research/attach-decision.md
+	// — NOTE that path is gitignored and local-only, so the tracked
+	// ledger entry above is the authoritative reference for anyone
+	// reading from a clone. (The mission this comment previously named,
+	// mcp-connector-lifecycle-01PMMC01, is archived and has no research/
+	// directory; the file it cited never existed.)
 	KindHarnessSelfToolCalled Kind = "harness-self.tool.called"
 
 	// KindMigrationDriftDetected is emitted at most once per chassis boot

@@ -11,6 +11,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/context/audit"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/runposture"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 	"github.com/kameas-ai/kenaz-harness/core/wiring/knobcoverage"
 )
@@ -544,19 +545,36 @@ func (a *kernelToolAdapter) resolveConfirmEach(
 		return coreag.ToolResult{}, true, nil
 	}
 
-	// 5. Headless (WP05, owner decision 4). Two ways in: no prompt
-	//    channel is attached, or the operator explicitly declared the
-	//    deployment headless. Auto-allowing was the old silent
-	//    behaviour; it is now reachable only as an explicit, audited
-	//    operator choice, and the default is deny.
-	if a.headlessExplicit || a.confirm == nil || !a.confirm.HasChannel() {
+	// 5. Headless (WP05, owner decision 4). Three ways in: no prompt
+	//    channel is attached, the operator explicitly declared the
+	//    deployment headless, or this specific run is unattended
+	//    (model-scheduled-jobs-01PMSJ01 WP05, spec.md §5.4 H-1). Auto-
+	//    allowing was the old silent behaviour; it is now reachable only
+	//    as an explicit, audited operator choice, and the default is
+	//    deny.
+	unattended := runposture.IsUnattended(ctx)
+	if unattended || a.headlessExplicit || a.confirm == nil || !a.confirm.HasChannel() {
 		policy := a.headless
+		if unattended {
+			// A per-run unattended posture always denies, regardless of
+			// the DEPLOYMENT's configured headless-allow policy.
+			// HeadlessAllow answers "does this whole deployment have a
+			// human anywhere" (a served, no-UI install); it must not
+			// silently permit one SCHEDULED run inside an otherwise-
+			// interactive desktop build just because the two conditions
+			// happen to route through the same rung. Spec.md §5.4 is
+			// explicit: "confirm_each resolves at rung 5 with
+			// toolloop.HeadlessDeny" — unconditionally, for this class.
+			policy = toolloop.HeadlessDeny
+		}
 		if policy != toolloop.HeadlessAllow {
 			policy = toolloop.HeadlessDeny
 		}
 		approved := policy == toolloop.HeadlessAllow
 		policyReason := "no confirmation channel is attached; headless policy: " + string(policy)
-		if a.headlessExplicit {
+		if unattended {
+			policyReason = "unattended run (scheduled dispatch): confirm_each denies by construction"
+		} else if a.headlessExplicit {
 			policyReason = "deployment declared headless by operator; headless policy: " + string(policy)
 		}
 		a.auditConfirm(ctx, audit.ToolConfirmDecisionPayload{

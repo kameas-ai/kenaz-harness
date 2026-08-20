@@ -186,6 +186,81 @@ func TestRegistry_StreamCapabilityRejection(t *testing.T) {
 	}
 }
 
+// TestRegistry_StreamCapabilityRejection_ResponseFormat is
+// structured-output-is-reachable-01PMZE14 WP02's AC-003: a request that
+// opts into ResponseFormat{Mode:"json_schema"} against a model whose
+// capability row does not advertise structured_output must be refused
+// by the gate — attributably, naming provider/model/capability — before
+// any wire call, exactly like the pre-existing vision-attachment
+// rejection above. The gate mechanism itself is not new (spec §2:
+// "Capability gate for CapStructuredOutput / CapGrammar — WIRED"); this
+// pins that the new agentgraph->chat seam's ResponseFormat assignment
+// (WP02) reaches it correctly for the mode this mission adds.
+func TestRegistry_StreamCapabilityRejection_ResponseFormat(t *testing.T) {
+	fsys := fstest.MapFS{
+		"data/nostruct.yaml": &fstest.MapFile{Data: []byte(`
+provider: nostruct
+models:
+  - match: "no-struct-model*"
+    streaming: true
+    structured_output: false
+`)},
+	}
+	cat, err := capabilities.Load(fsys, "data")
+	if err != nil {
+		t.Fatalf("capabilities.Load: %v", err)
+	}
+	sink := &events.MemorySink{}
+	emit := events.New(sink)
+	emit.SetClock(func() time.Time { return time.Unix(0, 0) })
+	r, err := New(Options{Emitter: emit, Catalog: cat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.RegisterAdapter(&fakeAdapter{kind: "nostruct"})
+	prof := llm.ProviderProfile{ID: "p", Kind: "nostruct", Model: "no-struct-model-1",
+		Cred: llm.CredentialReference{Kind: "env", Locator: "K"}}
+	if err := r.LoadProfiles([]llm.ProviderProfile{prof}); err != nil {
+		t.Fatal(err)
+	}
+	req := llm.GenerationRequest{
+		ProfileID:      "p",
+		ResponseFormat: &llm.ResponseFormat{Mode: "json_schema", Schema: []byte(`{"type":"object"}`)},
+	}
+	_, err = r.Stream(context.Background(), req)
+	var ce *llm.ErrCapabilityUnsupported
+	if !errors.As(err, &ce) {
+		t.Fatalf("expected capability rejection, got %v", err)
+	}
+	if ce.Provider != "nostruct" || ce.Model != "no-struct-model-1" {
+		t.Errorf("error must name provider/model: %#v", ce)
+	}
+	found := false
+	for _, c := range ce.Capabilities {
+		if c == llm.CapStructuredOutput {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected CapStructuredOutput in missing capabilities, got %#v", ce.Capabilities)
+	}
+	var sawRej, sawReq bool
+	for _, k := range sink.Kinds() {
+		if k == events.KindCapabilityRejected {
+			sawRej = true
+		}
+		if k == events.KindRequestSubmitted {
+			sawReq = true
+		}
+	}
+	if !sawRej {
+		t.Fatal("expected capability_rejected event")
+	}
+	if sawReq {
+		t.Fatal("must not emit request_submitted on capability rejection — refused before any wire call")
+	}
+}
+
 // TestRegistry_StreamRejectsEmptyToolCallID verifies the adapter-agnostic
 // pre-send guard: a request whose tool_use carries an empty id is rejected
 // before any wire call, so a provider never sees an empty tool_call_id (which

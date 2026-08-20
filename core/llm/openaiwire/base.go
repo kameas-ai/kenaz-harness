@@ -71,13 +71,26 @@ func (b *Base) WithHTTPClient(c *http.Client) *Base {
 
 // KnobsToParams extracts the RequestKnobs fields that map directly to
 // the standard OpenAI Params map keys (temperature, top_p, max_tokens,
-// presence_penalty, frequency_penalty, seed). Adapters merge the
+// presence_penalty, frequency_penalty, seed, stop). Adapters merge the
 // returned map into their body builder BEFORE applying Params from the
 // profile defaults so that Knobs always takes precedence.
 //
 // Knobs that require special wire handling (reasoning_effort,
-// parallel_tool_calls, response_format) are NOT included here;
-// body.go applies them explicitly.
+// parallel_tool_calls) are NOT included here; body.go applies them
+// explicitly.
+//
+// response_format is NOT applied from Knobs at all, by either
+// function — this corrects a docstring that previously (falsely)
+// grouped it with reasoning_effort/parallel_tool_calls as "applied
+// explicitly" by body.go (structured-output-is-reachable-01PMZE14
+// spec §1.5/FR-005). body.go's response-format block reads
+// req.ResponseFormat / req.JSONMode directly; RequestKnobs.
+// ResponseFormatMode and .JSONMode (capabilities.go) have zero
+// readers anywhere in the tree. Wiring them as an override layer above
+// req.ResponseFormat is deferred — see this package's knobcoverage
+// registration (knob_coverage.go) for the blocker/owner/date, per
+// CLAUDE.md's unwired-sweep rule that a justification names the change
+// that will delete the line rather than "we'll get to it."
 func KnobsToParams(k *llm.RequestKnobs) map[string]any {
 	if k == nil {
 		return nil

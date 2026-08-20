@@ -10,6 +10,8 @@
 import { ref, onMounted, onBeforeUnmount, type Ref } from 'vue';
 import { signedIn, capability } from '@/lib/featureFlags';
 import { isServedMode } from '@/lib/useServedMode';
+import { resolveBinding } from '@/lib/shortcuts/registry';
+import { matchesEvent } from '@/lib/shortcuts/platform';
 
 export interface PaletteAction {
   id: string;
@@ -116,9 +118,24 @@ interface UseCommandPaletteResult {
 
 let installed = false;
 
+// controls-and-readouts-that-tell-the-truth-01PMZ808 WP09 (FR-011, AC-022):
+// onKey is module-level (installed once outside any component instance),
+// so a Shell.vue setup-local shortcutOverrides ref is unreachable from
+// here, and there is no settings store/composable anywhere else in the
+// frontend to read from directly. Shell.vue pushes the resolved
+// overrides into this module-level holder via setCommandPaletteOverrides
+// once settings load; onKey resolves through the registry against it
+// instead of a hard-coded 'k' literal.
+let overrides: Record<string, string> = {};
+
+/** Called by Shell.vue once client.settings.get() resolves. */
+export function setCommandPaletteOverrides(next: Record<string, string>): void {
+  overrides = next;
+}
+
 function onKey(e: KeyboardEvent) {
-  const isPaletteShortcut =
-    (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k';
+  const binding = resolveBinding('nav.command-palette', overrides);
+  const isPaletteShortcut = !!binding && matchesEvent(binding, e);
   if (isPaletteShortcut) {
     e.preventDefault();
     open.value = !open.value;

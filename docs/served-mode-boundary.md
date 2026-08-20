@@ -104,6 +104,42 @@ no client-triggerable apply), that is a new capability with its own
 review — not a reason to add the existing desktop topics to
 `passthroughTopics`.
 
+## Crash reporting: desktop-only, and a correction to a mission finding
+
+`entry-points-and-crash-reporting-01PMZD13`'s spec (finding N-2) read
+`SettingsView.vue:1224`'s `v-else-if="showCrashReportingTab"` in isolation
+and concluded it mounts `CrashReportingPanel` with no `!servedMode` guard,
+citing `servedMode` being available at `:64` and used "elsewhere in the
+file" without being applied there. **Re-verified against this tree and
+found stale, in the same shape as the Self-update section above**:
+
+1. **The RPCs are still not served.** `grep -c Sentry core/serve/methods.go`
+   → 0. `Sentry_TestDSN`, `Sentry_GetLastFive` and
+   `Sentry_GenerateLocalReport` are all unknown methods to a served client.
+2. **The only surface is already served-blocked at a higher level, and
+   was before this mission started.** `SettingsView.vue`'s own template
+   root is `<NotAvailableInServedMode v-if="servedMode" .../>` /
+   `<SettingsShell v-else>…</SettingsShell>` (`:1057-1063`), and
+   `CrashReportingPanel`'s mount point (`:1224-1229`) is nested inside
+   `SettingsShell`'s slot content, closing at `:2176` — well after it.
+   `SettingsView.vue` is already the first view named in this doc's list
+   above. A per-tab `!servedMode` guard at `:1224` would be dead weight:
+   the tab is unreachable in served mode by construction, the moment
+   `SettingsShell` itself is.
+3. **No client-triggerable-only-on-the-server semantics issue here**
+   (unlike Self-update's restart-the-host-process concern) — this is
+   simply a desktop-only settings surface, same as `ArtifactsView` /
+   `ToolsView` / `ContextsView` / `MemoryView` / `WorkflowsView` above.
+
+**No code change was needed for N-2's guard half.** UNIT-7's real fixes
+here are the two things that were genuinely wrong regardless of served
+mode: the Test button's result string claimed a single unqualified
+verdict for a check that only ever exercises the Go process
+(`core/sentry/test_dsn.go`'s `client.Head`, which has no CSP), and now
+names the process it tested plus a second, separately computed line for
+whether the *renderer* SDK could transmit under the active page CSP —
+see `CrashReportingPanel.vue`'s `browserCanTransmitUnderCurrentCSP`.
+
 ## The fence that catches the case none of the three mechanisms did
 
 Added 2026-08-16 by the adversarial review of the capability-gate wiring.

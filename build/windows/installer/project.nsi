@@ -88,6 +88,22 @@ Section
 
     !insertmacro wails.files
 
+    # kenaz-updater.exe — the self-update helper. release.yml builds and
+    # signs it into build/bin/ before this NSIS step runs (arch-matched to
+    # the runner building this installer), but wails.files only copies
+    # ${PRODUCT_EXECUTABLE} (see wails_tools.nsh:103,109) — it does not
+    # pick this up. Without it, core/update/swap_windows.go finds no
+    # helper beside the running exe, falls back to deferredSwap, and
+    # "Install & Restart" quits without restarting (the update itself is
+    # not lost — the bootswap shim applies it at the next manual launch).
+    # entry-points-and-crash-reporting-01PMZD13 UNIT-2.
+    #
+    # amd64-only today: release.yml restricts the NSIS build to
+    # windows/amd64 and cross-compiles the helper to match the matrix arch,
+    # so this always picks up an amd64 helper. If an arm64 installer is
+    # added later, this line must be revisited (arch-matched helper path).
+    File "..\..\bin\kenaz-updater.exe"
+
     CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
     CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
 
@@ -101,6 +117,8 @@ Section "uninstall"
     !insertmacro wails.setShellContext
 
     RMDir /r "$AppData\${PRODUCT_EXECUTABLE}" # Remove the WebView2 DataPath
+
+    Delete "$INSTDIR\kenaz-updater.exe"
 
     RMDir /r $INSTDIR
 

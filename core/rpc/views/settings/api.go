@@ -189,6 +189,19 @@ type Settings struct {
 	// and read live on every workflow run/save.
 	CedarStrictWorkflowMode bool `json:"cedarStrictWorkflowMode,omitempty"`
 
+	// GraphAuthoringEnabled is the model-authored-agent-graphs consent
+	// dial (model-authored-graphs-01PMGA01 UNIT-4, FR-006). Default
+	// false: a fresh install — and any install upgraded from a build
+	// that predates this field, since JSON decode leaves an absent bool
+	// key at Go's zero value — denies graph.author until the user opts
+	// in from Settings. Read live (not cached) on every graph.author
+	// evaluation, carried into the Cedar context as
+	// context.authoring_enabled, so flipping it takes effect on the
+	// next draft attempt without an app restart. Deliberately NOT
+	// exposed through harness.SettingsAllowlist — see the Store
+	// interface doc comment on LoadGraphAuthoringEnabled for why.
+	GraphAuthoringEnabled bool `json:"graphAuthoringEnabled,omitempty"`
+
 	// CredentialAuditRetentionDays controls how long
 	// KindCredentialAccessed audit rows are retained before the daily
 	// sweep deletes them (credential-store-01KQ8TDD WP07). Zero (default)
@@ -243,9 +256,19 @@ type Settings struct {
 	// (impl.go), added in WP03.
 	BranchReintegrationMaxTokens int `json:"branchReintegrationMaxTokens,omitempty"`
 
-	// BranchAdvisorDefaultModel is the (provider, model) used for
-	// newly spawned subagent branches. Defaults to CompactionModel when
-	// empty, which itself defaults to the session's active model.
+	// BranchAdvisorDefaultModel is the (provider, model) intended for
+	// newly spawned subagent branches.
+	//
+	// NARROWED 2026-08-20 (controls-and-readouts-that-tell-the-truth-
+	// 01PMZ808 WP05, FR-005): this field has neither a reader nor a
+	// writer anywhere in production, and EffectiveBranchAdvisorDefaultModel
+	// below has zero callers. It is not yet consumed — do not read
+	// "defaults to CompactionModel" as live behaviour. Spec R-6: the
+	// chain's second link, core/rpc/views/branches/impl.go's
+	// parentModel, is a stub that discards both its parameters and
+	// returns ("", ""), so wiring this field alone would produce a dial
+	// that appears to work and silently resolves to nothing — worse
+	// than the current honest inertness. See docs/unwired-ledger.md.
 	BranchAdvisorDefaultModel ProviderProfileRef `json:"branchAdvisorDefaultModel,omitempty"`
 	// KeyboardShortcuts holds user-overridden shortcut bindings keyed by
 	// stable shortcut id (e.g. "chat.send" → "Cmd+Shift+Enter"). An
@@ -447,7 +470,16 @@ type Settings struct {
 	// doesn't sprawl on first load. The user can expand individually;
 	// their choices are persisted in localStorage under
 	// harness.sidebar.branchCollapsed.v1.
-	AutoCollapseBranchesInSidebar bool `json:"autoCollapseBranchesInSidebar,omitempty"`
+	//
+	// *bool, not bool (controls-and-readouts-that-tell-the-truth-01PMZ808
+	// WP03): the JSON zero-value of bool is false, but the spec default is
+	// true, so a plain `bool` + `omitempty` cannot distinguish "explicitly
+	// set false" from "never set" — both marshal to an absent key, and a
+	// v0.64.0-and-earlier settings.json (which never wrote this key) loads
+	// as false rather than the documented true. A pointer only omits on
+	// nil, so an explicit false round-trips and an absent key stays
+	// distinguishable. See EffectiveAutoCollapseBranchesInSidebar below.
+	AutoCollapseBranchesInSidebar *bool `json:"autoCollapseBranchesInSidebar,omitempty"`
 
 	// DeleteBranchesWithParent controls cascade-delete behaviour when a
 	// parent session is deleted. When false (default / safe), child
@@ -457,11 +489,17 @@ type Settings struct {
 	// removes all descendant sessions before cascading the branch rows.
 	DeleteBranchesWithParent bool `json:"deleteBranchesWithParent,omitempty"`
 
-	// MaxVisibleBranchDepth caps the number of nesting levels shown in
-	// the sidebar branch tree. Default 5. Sessions deeper than this cap
-	// are replaced by a "+N more depths" affordance that expands one
-	// level at a time on click. Zero falls back to the default via
-	// EffectiveMaxVisibleBranchDepth.
+	// MaxVisibleBranchDepth clamps sidebar indentation to this many
+	// levels — deeper branch rows stop indenting further but still
+	// render; nothing hides them. Default 5. Zero falls back to the
+	// default via EffectiveMaxVisibleBranchDepth.
+	//
+	// NARROWED 2026-08-20 (controls-and-readouts-that-tell-the-truth-
+	// 01PMZ808 WP02): this field previously claimed a depth-overflow
+	// expand-on-click affordance that does not exist anywhere in the
+	// app — SettingsView.vue, this doc, and frontend/src/lib/types.ts
+	// all made the same claim. See docs/unwired-ledger.md for the dated
+	// justification and E-002 (the product call on whether to build it).
 	MaxVisibleBranchDepth int `json:"maxVisibleBranchDepth,omitempty"`
 
 	// ── Embedder configuration (v0.5.2 universal-embedder fix) ──────────────
@@ -644,6 +682,30 @@ type Settings struct {
 	// LoadChatCustomInstructions so an edit takes effect on the next turn
 	// without a restart.
 	ChatCustomInstructions string `json:"chatCustomInstructions,omitempty"`
+
+	// BundleSigningPolicy controls signature-verification behaviour for
+	// `harness bundle install` (bundle-download-and-verify-01PMZ909
+	// UNIT-4, spec D-2). One of: "optional" (default, empty==optional —
+	// verify when present, ignore absence), "required" (refuse any
+	// unsigned bundle), "forbidden" (refuse any signed bundle). Default
+	// is deliberately "optional": flipping the default to "required" at
+	// upgrade would turn off a working feature for every user with an
+	// unsigned local bundle. See EffectiveBundleSigningPolicy.
+	BundleSigningPolicy string `json:"bundleSigningPolicy,omitempty"`
+}
+
+// EffectiveBundleSigningPolicy normalizes BundleSigningPolicy to one of
+// the three canonical values, defaulting an empty or unrecognized
+// string to "optional" — the safe default per spec D-2's own reasoning
+// (a hand-edited or older settings file must never silently upgrade to
+// "required").
+func (s Settings) EffectiveBundleSigningPolicy() string {
+	switch s.BundleSigningPolicy {
+	case "required", "forbidden":
+		return s.BundleSigningPolicy
+	default:
+		return "optional"
+	}
 }
 
 // ProviderProfileRef is the wire shape that identifies a provider+model
@@ -999,8 +1061,7 @@ func (s Settings) EditFileArtifactSyncEnabled() bool { return !s.EditFileArtifac
 // ── Branching UX constants + accessors (branching-ux-polish-01KQ8TD7 WP06) ──
 
 // DefaultMaxVisibleBranchDepth is the spec-locked depth cap for sidebar
-// branch tree rendering. Sessions nested deeper than this value are
-// replaced by a "+N more depths" affordance. Default 5.
+// branch tree indentation clamping. Default 5.
 const DefaultMaxVisibleBranchDepth = 5
 
 // DefaultAutoCollapseBranchesInSidebar is the spec-locked default for
@@ -1018,23 +1079,17 @@ func (s Settings) EffectiveMaxVisibleBranchDepth() int {
 }
 
 // EffectiveAutoCollapseBranchesInSidebar returns the user's collapse
-// preference. Because the JSON zero-value of bool is false, and the
-// spec default is true, we can't use omitempty storage — this field is
-// stored explicitly so round-trips are faithful. The accessor reads the
-// stored value directly and callers that need the default-on behaviour
-// call this rather than reading the field directly.
-//
-// Note: this method CANNOT rely on zero-value == default because bool
-// zero-value is false but default is true. The field is stored as
-// omitempty which means a fresh file gives false here. To match the
-// "default true" spec intent without a migrations, we check whether
-// the parent Settings carries a deliberate override via
-// AutoCollapseBranchesInSidebar. Since we can't tell "stored false"
-// from "not stored" with omitempty, we document that the frontend
-// should treat absence as true — backed by the Wails bindings that
-// always include the field after first Set.
+// preference, or DefaultAutoCollapseBranchesInSidebar when nothing has
+// ever been persisted (nil pointer — a fresh install, or a settings.json
+// written before controls-and-readouts-that-tell-the-truth-01PMZ808
+// WP03, which never wrote this key). AutoCollapseBranchesInSidebar is a
+// *bool precisely so this distinction is representable: a stored false
+// is honoured as false, and only true absence falls back to the default.
 func (s Settings) EffectiveAutoCollapseBranchesInSidebar() bool {
-	return s.AutoCollapseBranchesInSidebar
+	if s.AutoCollapseBranchesInSidebar == nil {
+		return DefaultAutoCollapseBranchesInSidebar
+	}
+	return *s.AutoCollapseBranchesInSidebar
 }
 
 // WindowSize mirrors the charter's WindowSize type.
@@ -1306,6 +1361,24 @@ type SettingsStore interface {
 	// full Settings round-trip via FirstRunOnboardingCompleted.
 	LoadFirstRunOnboardingCompleted() (bool, error)
 	SaveFirstRunOnboardingCompleted(completed bool) error
+
+	// LoadGraphAuthoringEnabled / SaveGraphAuthoringEnabled expose the
+	// model-authored-agent-graphs consent dial
+	// (model-authored-graphs-01PMGA01 UNIT-4, FR-006). Default false —
+	// on a fresh install, and on any install upgraded from a build that
+	// predates this field (settings.json simply lacks the key, and JSON
+	// decode leaves a bool field at its Go zero value), graph.author is
+	// denied until the user opts in from Settings. Read live on every
+	// graph.author evaluation via GraphAuthoringEnabledFn so a toggle
+	// takes effect on the next draft attempt without an app restart —
+	// same shape as LoadCedarStrictWorkflowMode above. Deliberately NOT
+	// added to harness.SettingsAllowlist: a session that could flip its
+	// own authoring permission via harness_write_set_setting would have
+	// no permission gate at all (same reasoning
+	// harness-self-attach-01PMHS01 reached independently for
+	// HarnessSelfMCPDisabled).
+	LoadGraphAuthoringEnabled() (bool, error)
+	SaveGraphAuthoringEnabled(enabled bool) error
 }
 
 // SettingsAPI is the view-scoped accessor exposed via HarnessAPI.
@@ -1516,6 +1589,18 @@ type AuditSettings struct {
 	// WindowDays is the retention window in days. Only meaningful when
 	// Strategy is not keep_forever.
 	WindowDays int `json:"window_days,omitempty"`
+	// RetentionEnforced reports whether SOMETHING actually deletes rows
+	// per the strategy above — as opposed to Strategy just being a
+	// setting nobody reads. False until audit-that-tells-the-truth-
+	// 01PMZA10 UNIT-8 lands a real sweep; UNIT-4 wires this field itself
+	// (derived from the settings API's construction-time wiring, via
+	// SetAuditRetentionEnforced — never a literal inside GetAuditSettings)
+	// so AuditSettingsPanel.vue can render fact-driven copy starting
+	// here, with zero further frontend edit once UNIT-8 flips the
+	// underlying fact (spec D-8). Named to match fleet-enforcement-
+	// truth-01PMZ505's ComplianceStatus.RetentionEnforced so the audit
+	// and compliance panels read the same vocabulary once both land.
+	RetentionEnforced bool `json:"retention_enforced"`
 }
 
 // ── Long-session nudge constants + accessors (v0.5.6) ───────────────────────

@@ -214,6 +214,54 @@ func TestBuildRequestBody_ToolsRoundTrip(t *testing.T) {
 	}
 }
 
+// TestBuildRequestBody_ReasoningWithoutKnobs is AC-007
+// (model-settings-reach-the-model-01PMZ101 WP08, spec FR-007): a request
+// with Reasoning{Enabled:true, BudgetTokens:8192} and NO Knobs must
+// produce a body containing reasoning_effort. Before WP08, body.go's
+// reasoning_effort branch read only Knobs.Reasoning.OpenAIEffort — the
+// only writer of Knobs.Reasoning is /effort (broken twice over per
+// spec.md §1.6(a)), so the request-side ReasoningControl budget set at
+// llm_provider_adapter.go:635 never reached the wire for OpenAI,
+// OpenRouter or custom-openai.
+func TestBuildRequestBody_ReasoningWithoutKnobs(t *testing.T) {
+	req := llm.GenerationRequest{
+		ProfileID: "test",
+		Messages:  []llm.Message{llm.NewTextMessage(llm.RoleUser, "solve it")},
+		Reasoning: &llm.ReasoningSpec{Enabled: true, BudgetTokens: 8192},
+	}
+	body, err := openaiwire.BuildRequestBody(req, "o1", nil)
+	if err != nil {
+		t.Fatalf("BuildRequestBody: %v", err)
+	}
+	got, ok := body["reasoning_effort"]
+	if !ok {
+		t.Fatal("body missing reasoning_effort")
+	}
+	if got != "medium" { // 8192 falls in the [4000,15000) medium band
+		t.Errorf("reasoning_effort = %v, want medium", got)
+	}
+}
+
+// TestBuildRequestBody_ReasoningKnobsPrecedence asserts D-4: when both
+// req.Reasoning and Knobs.Reasoning.OpenAIEffort are set, Knobs win.
+func TestBuildRequestBody_ReasoningKnobsPrecedence(t *testing.T) {
+	req := llm.GenerationRequest{
+		ProfileID: "test",
+		Messages:  []llm.Message{llm.NewTextMessage(llm.RoleUser, "solve it")},
+		Reasoning: &llm.ReasoningSpec{Enabled: true, BudgetTokens: 8192}, // would map to "medium"
+		Knobs: &llm.RequestKnobs{
+			Reasoning: &llm.ReasoningConfig{OpenAIEffort: "minimal"},
+		},
+	}
+	body, err := openaiwire.BuildRequestBody(req, "o1", nil)
+	if err != nil {
+		t.Fatalf("BuildRequestBody: %v", err)
+	}
+	if got := body["reasoning_effort"]; got != "minimal" {
+		t.Errorf("reasoning_effort = %v, want minimal (Knobs must win over Reasoning)", got)
+	}
+}
+
 // TestParseFrame_ValidFrame verifies SSE frame parsing.
 func TestParseFrame_ValidFrame(t *testing.T) {
 	raw := []byte(`{"choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}],"usage":null}`)

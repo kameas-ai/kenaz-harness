@@ -96,6 +96,24 @@ func (c *liveClient) Flush(timeout time.Duration) {
 	gosentry.Flush(timeout)
 }
 
+// SetUser tags (identified=true) or clears (identified=false) the
+// scope-wide Sentry user identity. controls-and-readouts-that-tell-the-
+// truth-01PMZ808 WP12 (FR-016). Deliberately does not thread real PII
+// (email, fleet user id) — SendDefaultPII stays false; ID is a fixed
+// non-identifying marker distinguishing "an identified-tier, fleet-
+// signed-in user" from "anonymous" in the Sentry UI, which is what
+// TierIdentified's own doc promises ("attaches the user's fleet
+// identity as a Sentry user tag") without over-collecting.
+func (c *liveClient) SetUser(identified bool) {
+	gosentry.ConfigureScope(func(scope *gosentry.Scope) {
+		if identified {
+			scope.SetUser(gosentry.User{ID: "fleet-identified"})
+		} else {
+			scope.SetUser(gosentry.User{})
+		}
+	})
+}
+
 // addBreadcrumbsToScope injects our ring-buffer breadcrumbs into the scope.
 // The SDK already collects its own, but we re-add ours so breadcrumbs
 // collected via the global RingBuffer (e.g. from the slog handler before

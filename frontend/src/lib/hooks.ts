@@ -89,6 +89,75 @@ export const ALL_HOOK_EVENTS = [
 export type HookEventName = (typeof ALL_HOOK_EVENTS)[number];
 
 /**
+ * FIRING_HOOK_EVENTS is the declared subset of ALL_HOOK_EVENTS whose
+ * events actually reach a production Fire/FireAsync/Run<X> call today.
+ * This is the single source of truth for the event picker's `<option>`
+ * list (HookEditor.vue renders this, not ALL_HOOK_EVENTS).
+ *
+ * ALL_HOOK_EVENTS and core/hooks.AllEvents are NOT edited to shrink —
+ * `isKnownEvent` (core/hooks/hooks.go:267-274) still accepts every event
+ * name, so a hook already saved against an event not listed here still
+ * loads, still validates server-side, and still renders (with an inert
+ * badge — see HookEditor.vue). This list only narrows what the picker
+ * *offers* for new hooks.
+ *
+ * Seeded 2026-08-19 (trust-surfaces-that-fire-01PMZ202 WP08 / UNIT-7)
+ * with the truthful set derived empirically by WP01: of the 18 events
+ * ALL_HOOK_EVENTS listed, exactly one — pre_send — has a real production
+ * call site (core/rpc/views/llm/impl.go:638, `a.hooks.RunPreSend(...)`).
+ * post_send looked like a second one (a complete adapter chain, a live
+ * builtin) but has zero call sites outside test files — see F31 in
+ * research/execution-ledger.md. NOT ['pre_send', 'post_send'].
+ *
+ * Every producer WP appends its event(s) here in the same commit as its
+ * fire site (WP09-WP21). scripts/ci/check-hook-event-fire-sites.sh (G-2)
+ * enforces both directions: every entry here must have a real fire site,
+ * and every AllEvents entry NOT here must have a dated, owner-named
+ * justification in scripts/ci/allowlists/i17-eventless-hook-events.txt.
+ *
+ * Grown 2026-08-19 (trust-surfaces-that-fire-01PMZ202 WP09 / UNIT-8) by
+ * the three v2 tool-loop events: pre_tool_use, post_tool_use,
+ * post_tool_use_failure. Landed in the same commit as
+ * agentgraph.Env.LifecycleHooks actually being populated
+ * (core/rpc/views/agentgraph/env_deps.go + core/rpc/api.go's
+ * newGraphManagerWithDeps) — before that commit, the fire sites in
+ * core/agentgraph/tool_invocation.go always saw env.LifecycleHooks == nil
+ * and no-opped.
+ *
+ * Grown again 2026-08-20 (WP10 / UNIT-9) by three of the five permission/
+ * session events: permission_request, permission_denied, session_start.
+ * Landed in the SAME commit as cedar.PermissionRunnerAdapter /
+ * session.SessionRunnerAdapter actually being constructed
+ * (core/rpc/api.go's a.promptRegistry + c.SetSessionHookRunner) —
+ * spec.md §4.2 is explicit that this ordering is a safety property, not
+ * a style preference: "A permission_request hook that fires but whose
+ * deny is not honoured is worse than one that does not fire." Before
+ * this commit, cedar.WithPermissionHookRunner and
+ * session.WithSessionHookRunner had zero non-test call sites, so a saved
+ * permission_request hook returning deny was silently ignored — worse
+ * than not firing, because it looked live.
+ *
+ * `setup` and `cwd_changed` are NOT added here despite sharing
+ * SessionRunnerAdapter with session_start: session.Manager.FireSetup and
+ * .FireCwdChanged (core/session/manager.go) are exported wrapper methods
+ * with ZERO production callers anywhere in the tree — session_start
+ * fires unconditionally from inside Manager.Create, but nothing ever
+ * calls FireSetup or FireCwdChanged. Adding them here before a real
+ * caller exists would be the exact lie this mission exists to close:
+ * a picker entry that claims to fire and does not.
+ * See scripts/ci/allowlists/i17-eventless-hook-events.txt.
+ */
+export const FIRING_HOOK_EVENTS = [
+  'pre_send',
+  'pre_tool_use',
+  'post_tool_use',
+  'post_tool_use_failure',
+  'permission_request',
+  'permission_denied',
+  'session_start',
+] as const;
+
+/**
  * EVENT_FAMILY maps each event to a display category for the UI grouping.
  */
 export const EVENT_FAMILY: Record<HookEventName, string> = {
@@ -113,10 +182,16 @@ export const EVENT_FAMILY: Record<HookEventName, string> = {
 };
 
 /**
- * HOOK_KINDS is the exhaustive list of hook kinds for the kind picker.
- * Mirrors core/hooks.Kind* constants.
+ * HOOK_KINDS is the list of hook kinds offered by the kind picker.
+ *
+ * 'mcp' is intentionally NOT here (trust-surfaces-that-fire-01PMZ202 WP08 /
+ * UNIT-7, A-6): the MCP hook kind is stub-only in the backend today. A
+ * saved kind=mcp hook must still load and dispatch through Go's
+ * hooks.KindMCP — that machinery is untouched — this only stops the
+ * picker from offering a kind that would be a no-op stub if a user chose
+ * it new. core/hooks.Kind* constants (including KindMCP) are unchanged.
  */
-export const HOOK_KINDS = ['builtin', 'shell', 'mcp'] as const;
+export const HOOK_KINDS = ['builtin', 'shell'] as const;
 export type HookKindName = (typeof HOOK_KINDS)[number];
 
 /**

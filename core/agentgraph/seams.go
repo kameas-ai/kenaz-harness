@@ -2,6 +2,7 @@ package agentgraph
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"time"
@@ -52,6 +53,17 @@ type LLMRequest struct {
 	// off unless the profile/provider default enables it," matching the
 	// rest of this knob surface's zero-means-unset convention.
 	ReasoningBudgetTokens *int
+
+	// ResponseSchema carries the model node's json_schema attr
+	// (structured-output-is-reachable-01PMZE14 WP02) through to
+	// GenerationRequest.ResponseFormat. Empty/nil means "no override; the
+	// call is free-form text," matching this seam's other zero-means-unset
+	// fields. json.RawMessage rather than map[string]any because
+	// llm.ResponseFormat.Schema is already json.RawMessage and
+	// structured.InjectAdditionalProperties consumes bytes — the marshal
+	// from the authored map happens once, at the executor, not once per
+	// adapter.
+	ResponseSchema json.RawMessage
 
 	// FallbackChainId carries the model/escalate node's fallback_chain_id
 	// attr (model-request-path-live-01PMDL01 WP07) through to the
@@ -547,6 +559,14 @@ type AttachmentResolver interface {
 // `as_attachment` attr is set. Implementations register a new
 // attachment in `core/attachments` and return its ID. Implementations
 // that don't support registration should return ErrNotImplemented.
+//
+// Found unimplemented by entry-points-and-crash-reporting-01PMZD13
+// UNIT-4's checkseams fix: no production Env construction ever sets
+// exec_state.go's env.AttachmentRegistry, so this branch has always been
+// a no-op outside tests — the only prior "implementer" was
+// core/agentgraph/internal/recorders' test double, which checkseams
+// counted as real before this fix excluded test-double packages.
+// wiring:deferred(no production Env ever sets AttachmentRegistry; core/attachments.Manager.AddMedia is the nearest candidate producer but needs scope-binding context — scopeKind/scopeID — the read_file/AttachmentNode call site does not carry, so wiring it is a design decision (what scope does content registered via as_attachment bind to?), not a mechanical wire; owner: unassigned, entry-points-and-crash-reporting-01PMZD13 UNIT-4)
 type AttachmentRegistrar interface {
 	Register(ctx context.Context, block AttachmentBlock) (attachmentID string, err error)
 }

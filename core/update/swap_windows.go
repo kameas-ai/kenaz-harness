@@ -64,9 +64,19 @@ var windowsSpawner helperSpawner = realHelperSpawner{}
 // renames the file into place, and launches the new binary.
 //
 // Falls back to the deferred-pending-marker path if:
-//   - kenaz-updater.exe isn't bundled next to the running exe
-//     (defensive — production always ships the helper, but a hand-
-//     curated install may have stripped it).
+//   - kenaz-updater.exe isn't bundled next to the running exe. Both real
+//     Windows distribution channels ship it as of
+//     entry-points-and-crash-reporting-01PMZD13 UNIT-2: the zip archive
+//     (via release.yml's "build kenaz-updater (windows only)" step) and
+//     the NSIS installer (via build/windows/installer/project.nsi's
+//     `File "..\..\bin\kenaz-updater.exe"` line). Before UNIT-2, only the
+//     zip did — an installer install fell through to this branch on every
+//     "Install & Restart" click, and the button quit the app without
+//     restarting it (the update itself was not lost: the bootswap shim
+//     below still applied it at the next manual launch). This branch is
+//     now a genuine defensive fallback — a hand-curated or third-party
+//     repackaged install that stripped the helper — not the production
+//     default for either channel.
 //   - The helper spawn itself fails (rare; usually means the helper
 //     binary is corrupted or AV blocked execution).
 //

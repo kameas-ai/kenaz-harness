@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 	"github.com/kameas-ai/kenaz-harness/core/slashcmd"
@@ -22,6 +23,7 @@ import (
 	storagedb "github.com/kameas-ai/kenaz-harness/core/storage/db"
 	"github.com/kameas-ai/kenaz-harness/core/storage/internal/lockfile"
 	"github.com/kameas-ai/kenaz-harness/core/storage/migrations"
+	coretrust "github.com/kameas-ai/kenaz-harness/core/trust"
 	"github.com/kameas-ai/kenaz-harness/core/units"
 
 	_ "modernc.org/sqlite"
@@ -108,8 +110,9 @@ func Open(cfg storage.Config) (storage.DB, error) {
 		}
 	}
 	// v1 owns session-table migrations directly. When other missions
-	// (event-log, secrets-keychain, scheduler, …) move into the unified
-	// DB they will register here too — separate missions, not this one.
+	// (secrets-keychain, scheduler, …) move into the unified DB they
+	// will register here too — separate missions, not this one.
+	// event-log moved in below (audit-that-tells-the-truth-01PMZA10).
 	if err := session.RegisterMigrations(registry); err != nil {
 		db.closeOnError()
 		return nil, fmt.Errorf("storage: register session migrations: %w", err)
@@ -121,6 +124,22 @@ func Open(cfg storage.Config) (storage.DB, error) {
 	if err := units.RegisterMigrations(registry); err != nil {
 		db.closeOnError()
 		return nil, fmt.Errorf("storage: register units migrations: %w", err)
+	}
+	if err := coretrust.RegisterMigrations(registry); err != nil {
+		db.closeOnError()
+		return nil, fmt.Errorf("storage: register trust migrations: %w", err)
+	}
+	// event-log: audit-that-tells-the-truth-01PMZA10 UNIT-2. The
+	// migrations land inert here — nothing constructs an
+	// eventlog.SQLBackend against this registry yet (that is UNIT-3),
+	// and nothing writes through it (UNIT-4). Registering them now is
+	// still correct: it is what makes them apply on every install from
+	// this point forward, INCLUDING upgraded installs whose ledger
+	// high-water mark already sits well above the 100-199 block these
+	// occupy (spec §1.3) — see core/storage/sqlite/upgrade_path_test.go.
+	if err := eventlog.RegisterMigrations(registry); err != nil {
+		db.closeOnError()
+		return nil, fmt.Errorf("storage: register event-log migrations: %w", err)
 	}
 	db.registry = registry
 

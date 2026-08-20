@@ -49,8 +49,11 @@ jobs:
           # Modules carry over naturally; no caching needed.
           cache: false
 
-      - name: fetch tags (upgrade-snapshots-locked bounds "locked" by release tag)
+      - name: fetch tags (both upgrade-snapshot gates compare against release tags)
         # fetch-depth: 0 above brings full history but not tags.
+        # check-upgrade-snapshots-locked.sh bounds "locked" by release tag;
+        # check-upgrade-snapshot-present.sh FAILS outright with no tags,
+        # rather than passing vacuously, so this step is load-bearing.
         run: git fetch --tags origin
 
       - name: go mod download
@@ -65,7 +68,12 @@ jobs:
           touch frontend/dist/.gitkeep
 
       - name: go vet
-        run: go vet ./core/...
+        # Scoped to ./core/... ./cmd/... . rather than ./core/... alone —
+        # entry-points-and-crash-reporting-01PMZD13 UNIT-1. Three of the
+        # four cmd/ packages (kenaz-updater, mcpsubcmd, harness-served) and
+        # the module root were vetted by nothing; only cmd/harness-vm was
+        # covered, via the test-go job's ./cmd/harness-vm/... pattern below.
+        run: go vet ./core/... ./cmd/... .
 
       - name: golangci-lint
         # v8 supports golangci-lint v2.x, which is built with go1.25 and can
@@ -86,6 +94,35 @@ jobs:
           args: --timeout=5m
           working-directory: .
           only-new-issues: true
+
+      - name: ensure cmd/harness-served embed target exists
+        # cmd/harness-served/main.go uses //go:embed all:frontend/dist-served,
+        # resolved PACKAGE-relative (unlike the root's frontend/dist, which is
+        # module-relative) — see the file's own build comment. Nothing in
+        # pr.yml or release.yml ever built the serve tag before this
+        # (entry-points-and-crash-reporting-01PMZD13 UNIT-1), so it has never
+        # been proven to compile in CI. A .gitkeep-only directory satisfies
+        # the `all:` embed pattern (confirmed by running it, not assumed).
+        run: |
+          mkdir -p cmd/harness-served/frontend/dist-served
+          touch cmd/harness-served/frontend/dist-served/.gitkeep
+
+      - name: go build (serve tag)
+        # Proves cmd/harness-served, core/rpc/wf_adapters_notifier_serve.go,
+        # core/rpc/bindings_wails_serve.go, core/rpc/emitter_serve.go,
+        # core/rpc/views/shell/impl_new_serve.go and core/rpc/csp_serve.go
+        # all still compile. Before this step existed, `-tags serve` appeared
+        # in no workflow and this whole build tag was silently uncompiled.
+        run: go build -tags serve ./...
+
+      - name: entrypoint-coverage guard
+        # entry-points-and-crash-reporting-01PMZD13 UNIT-1. Every main
+        # package under cmd/, plus the module root, must be covered by a
+        # pr.yml Go vet/test pattern above — the recurrence prevention for
+        # this mission: cmd/kenaz-updater and cmd/mcpsubcmd had 573 lines of
+        # passing tests CI never ran, and this build-serve step above had no
+        # workflow line at all until this unit.
+        run: bash scripts/ci/check-entrypoint-coverage.sh
 
       - name: codegen idempotent
         run: bash scripts/ci/check-codegen.sh
@@ -176,6 +213,19 @@ jobs:
         # developer remembered to.
         run: bash scripts/ci/check-no-cred-bytes-in-rpc.sh
 
+      - name: tool containment unconditional guard (AC-015)
+        # harness-self-attach-01PMHS01 UNIT-4: the merged permission
+        # resolver (static arm + Cedar session-kind arm) is the ONLY
+        # boundary for model-initiated unattended tool execution (owner
+        # rulings B-2/B-3). Before UNIT-4, `perms` was built only inside
+        # an `if c != nil && c.DataDir() != ""` block, so an empty
+        # DataDir or a static-config load error left it nil — and nil is
+        # indistinguishable from "no resolver" to every consumer. A naive
+        # existence grep for the call would pass even if a future edit
+        # re-wrapped it in that same conditional; this gate checks the
+        # call is a top-level (unconditional) statement instead.
+        run: bash scripts/ci/check-tool-containment-unconditional.sh
+
       - name: manifest version-bump guard
         run: bash scripts/ci/check-manifest-version-bump.sh
 
@@ -255,6 +305,20 @@ jobs:
         # documents today's single instance.
         run: bash scripts/ci/check-builtin-tool-registration.sh
 
+      - name: hook-event-fire-sites guard (I17, G-2)
+        # trust-surfaces-that-fire-01PMZ202 WP08 (UNIT-7). Catches the
+        # event-picker-that-lies defect: before this WP, the hook editor
+        # offered 18 events; UNIT-1 established empirically that at most
+        # one (pre_send) actually reaches a production Fire/FireAsync/
+        # Run<X> call. Three legs: (a) every FIRING_HOOK_EVENTS entry has
+        # a real, non-test fire site; (b) FIRING_HOOK_EVENTS ⊆
+        # ALL_HOOK_EVENTS ⊆ core/hooks.AllEvents; (c) every AllEvents
+        # entry not in FIRING_HOOK_EVENTS has a dated, owner-named row in
+        # scripts/ci/allowlists/i17-eventless-hook-events.txt. Leg (c) is
+        # what makes the allowlist shrink monotonically as WP09-WP21 land
+        # their producers.
+        run: bash scripts/ci/check-hook-event-fire-sites.sh
+
       - name: onboarding-starter-tools guard (FR-007)
         # first-run-onboarding-01PMOB01 WP04. Catches the code.md:23-class
         # defect: a shipped onboarding starter prompt naming a harness_*
@@ -301,6 +365,18 @@ jobs:
         # already-released tag are immutable — a "fix" that edits one
         # invalidates it as ground truth for the upgrade-path job.
         run: bash scripts/ci/check-upgrade-snapshots-locked.sh
+
+      - name: upgrade-snapshot-present guard
+        # The ABSENCE half of the snapshot contract. The lock gate above
+        # catches MODIFICATION of a committed snapshot and structurally
+        # cannot see a MISSING one, so nothing failed when a release
+        # shipped without adding its snapshot — which happened on three
+        # consecutive releases (v0.63.2, v0.64.0, v0.64.1). The
+        # upgrade-path job keeps passing in that state; it just silently
+        # stops covering anything newer. Planted-violation proof:
+        # scripts/ci/gates_can_fail_test.go
+        # "upgrade-snapshot-present/chain-behind-newest-tag".
+        run: bash scripts/ci/check-upgrade-snapshot-present.sh
 
       - name: destructive-migration-coverage guard (I14)
         # upgrade-path-coverage-01PMUG01 WP03, spec §FR-2. A migration
@@ -369,7 +445,18 @@ jobs:
         # audit/privacy + auth tests; ./core/... alone never exercised them
         # (Phase A follow-up B1). The audit lifecycle test is deterministic
         # under -race (accept-sequence ordering in the fake sock).
-        run: go test ./core/... ./cmd/harness-vm/... -race -count=1 -short
+        #
+        # Widened from ./cmd/harness-vm/... to ./cmd/... . —
+        # entry-points-and-crash-reporting-01PMZD13 UNIT-1. cmd/kenaz-updater
+        # and cmd/mcpsubcmd carried 573 lines of passing tests CI never ran
+        # (16 tests, verified green locally before this change). The module
+        # root (`.`) carries main_test.go's TestCSPMiddlewareSetsStrictHeaders
+        # — privacy CI invariant #1 on the Wails asset-server middleware
+        # itself, distinct from check-csp.sh's check of the built HTML — and
+        # was covered by nothing until now. cmd/harness-served has no test
+        # files and no effect on this pattern (it also requires -tags serve,
+        # exercised separately by the lint-go job's serve-tag build step).
+        run: go test ./core/... ./cmd/... . -race -count=1 -short
 
       - name: gate meta-tests
         # scripts/ci/gates_can_fail_test.go plants a violation per CI gate
@@ -497,9 +584,20 @@ jobs:
       - name: build frontend (served, for bundle-size guard)
         run: npm run build:served
 
-      - name: csp guard
+      - name: csp guard (desktop)
         working-directory: ${{ github.workspace }}
-        run: bash scripts/ci/check-csp.sh
+        run: bash scripts/ci/check-csp.sh frontend/dist/index.html desktop
+
+      # entry-points-and-crash-reporting-01PMZD13 UNIT-5. Before this, the
+      # served-mode SPA (built two steps above) was never CSP-checked at
+      # all — this gate only ever inspected the desktop bundle. Filename
+      # is served.html, not index.html (frontend/vite.config.ts's outDir/
+      # input for BUILD_TARGET=served, confirmed by release.yml:879's own
+      # `test -f dist-served/served.html`) and the expected connect-src is
+      # 'self', not 'none' — the served browser must reach /rpc and /ws.
+      - name: csp guard (served)
+        working-directory: ${{ github.workspace }}
+        run: bash scripts/ci/check-csp.sh frontend/dist-served/served.html served
 
       # Non-blocking, and deliberately so — but NOT because the number is
       # unknown. As measured by this job on this runner pool against main at

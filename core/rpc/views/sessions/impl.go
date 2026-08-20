@@ -112,6 +112,18 @@ type managerAPI struct {
 	// deleteHook is the optional per-session teardown hook wired by
 	// WithDeleteHookOpt; runs after a successful delete.
 	deleteHook func(sessionID string)
+	// deleteChildrenOf and deleteBranchesWithParent implement FR-004
+	// (controls-and-readouts-that-tell-the-truth-01PMZ808 WP04):
+	// Settings.DeleteBranchesWithParent had no Go reader anywhere, and
+	// its implementation, conversation.Manager.DeleteChildrenOf, had
+	// only test callers. Wired via WithDeleteChildrenOf. core/rpc/views/
+	// sessions deliberately does not import core/conversation (spec
+	// R-5), so this is a closure seam, not a direct type reference.
+	// Both nil is the safe default (orphan, not cascade) — see the
+	// DeleteWithOptions funnel for the class-A guard when
+	// deleteBranchesWithParent() is true but deleteChildrenOf is nil.
+	deleteChildrenOf         func(ctx context.Context, parentSessionID string) error
+	deleteBranchesWithParent func() bool
 	// broker is the optional event publisher wired by WithBrokerOpt.
 	// When non-nil, every session-list mutation emits
 	// TopicSessionListChanged so the LeftRail updates in real-time
@@ -183,6 +195,19 @@ func (f ResumeStarterFunc) StartResume(ctx context.Context, sessionID, originalM
 func WithResumeStarter(api SessionsAPI, starter ResumeStarter) SessionsAPI {
 	if m, ok := api.(*managerAPI); ok {
 		m.resumeStarter = starter
+	}
+	return api
+}
+
+// WithDeleteChildrenOf wires the branch-cascade delete implementation
+// and its settings gate into the SessionsAPI
+// (controls-and-readouts-that-tell-the-truth-01PMZ808 WP04, FR-004).
+// deleteFn is called from the single delete funnel (DeleteWithOptions)
+// before the parent row is removed, when enabledFn reports true.
+func WithDeleteChildrenOf(api SessionsAPI, deleteFn func(ctx context.Context, parentSessionID string) error, enabledFn func() bool) SessionsAPI {
+	if m, ok := api.(*managerAPI); ok {
+		m.deleteChildrenOf = deleteFn
+		m.deleteBranchesWithParent = enabledFn
 	}
 	return api
 }
@@ -452,6 +477,27 @@ func (a *managerAPI) DeleteWithOptions(ctx context.Context, id string, opts Dele
 			if _, err := a.artStore.Delete(ctx, art.ID); err != nil {
 				return fmt.Errorf("rpc/sessions: delete artifact %s: %w", art.ID, err)
 			}
+		}
+	}
+
+	// 5b. Branch-delete cascade (WP04, FR-004): when
+	// Settings.DeleteBranchesWithParent is on, recursively delete every
+	// descendant branch session before the parent row goes — otherwise
+	// child sessions become orphans (ON DELETE CASCADE only removes the
+	// branch-relationship row, not the child session itself). Runs
+	// before step 6 so the funnel both Delete and DeleteWithOptions
+	// share this behaviour (Delete calls DeleteWithOptions with the
+	// zero-value DeleteOptions above).
+	if a.deleteBranchesWithParent != nil && a.deleteBranchesWithParent() {
+		if a.deleteChildrenOf == nil {
+			// Class-A guard: a setting that claims cascade-delete is on
+			// must not silently no-op when the implementation was never
+			// wired — that reproduces the exact defect class this
+			// mission exists to end. Fail loudly instead.
+			return fmt.Errorf("rpc/sessions: DeleteBranchesWithParent is enabled but no DeleteChildrenOf implementation is wired")
+		}
+		if err := a.deleteChildrenOf(ctx, id); err != nil {
+			return fmt.Errorf("rpc/sessions: cascade-delete branch children of %s: %w", id, err)
 		}
 	}
 
