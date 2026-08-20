@@ -209,6 +209,115 @@ func TestFilter_StoreAndRingAgree(t *testing.T) {
 	}
 }
 
+// TestVerifyChain_NoStore_NeverReportsVerifiedTrue is AC-014 / G-2's
+// headline assertion: with no store configured, VerifyChain must NOT
+// report Verified: true. Before UNIT-7, impl.go's VerifyChain returned
+// `VerifyChainResult{Verified: true, RowsChecked: checked}` — a
+// literal, computed from a loop that only COUNTED ring entries in the
+// id range and never touched a hash. This is the mutation G-2 names:
+// restoring that literal must turn this test red.
+//
+// NOT a dedicated Available flag (see VerifyChainResult's doc comment,
+// api.go, for why) — RowsChecked: 0 is the no-store signal at the
+// current wire shape.
+func TestVerifyChain_NoStore_NeverReportsVerifiedTrue(t *testing.T) {
+	api := NewAPI() // no WithStore — the ring-only, pre-UNIT-4 posture.
+	res, err := api.VerifyChain(context.Background(), "", "")
+	if err != nil {
+		t.Fatalf("VerifyChain: %v", err)
+	}
+	if res.Verified {
+		t.Error("Verified = true with no store configured — this is EXACTLY the manufactured-success defect " +
+			"(spec D-6 / Rule 7 / G-2): a tamper-evidence surface must never report a verification it did not perform")
+	}
+	if res.RowsChecked != 0 {
+		t.Errorf("RowsChecked = %d with no store configured, want 0", res.RowsChecked)
+	}
+}
+
+// TestVerifyChain_WithStore_Verified drives real entries through the
+// production Push path (real sqlite), then VerifyChain must report
+// Verified: true — a genuine chain walk, not a literal.
+func TestVerifyChain_WithStore_Verified(t *testing.T) {
+	ctx := context.Background()
+	_, store := openStoreAt(t, t.TempDir())
+	api := NewAPI(WithStore(store))
+
+	var lastID string
+	for i := 0; i < 5; i++ {
+		e := Entry{
+			ID:        fmt.Sprintf("chain-ok-%02d", i),
+			Timestamp: time.Now().UTC().Add(time.Duration(i) * time.Second).Format(time.RFC3339Nano),
+			Category:  "LLM",
+			Subject:   "llm.request.started",
+		}
+		api.Push(e)
+		lastID = e.ID
+	}
+
+	res, err := api.VerifyChain(ctx, "chain-ok-00", lastID)
+	if err != nil {
+		t.Fatalf("VerifyChain: %v", err)
+	}
+	if !res.Verified {
+		t.Errorf("Verified = false for an untampered chain, want true (BrokenAtID=%q)", res.BrokenAtID)
+	}
+	if res.RowsChecked != 5 {
+		t.Errorf("RowsChecked = %d, want 5", res.RowsChecked)
+	}
+	if res.BrokenAtID != "" {
+		t.Errorf("BrokenAtID = %q on a verified chain, want empty", res.BrokenAtID)
+	}
+}
+
+// TestVerifyChain_WithStore_TamperedRow_Identified is G-2's other half:
+// a store holding a deliberately broken prev_hash link must report
+// Verified: false AND identify the break, not just fail silently or
+// report success.
+func TestVerifyChain_WithStore_TamperedRow_Identified(t *testing.T) {
+	ctx := context.Background()
+	db, store := openStoreAt(t, t.TempDir())
+	defer func() { _ = db.Close(ctx) }()
+	api := NewAPI(WithStore(store))
+
+	e := Entry{
+		ID:        "chain-tamper-01",
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Category:  "LLM",
+		Subject:   "llm.request.started",
+	}
+	api.Push(e)
+
+	// Tamper: overwrite the persisted row's payload_hash directly
+	// against the database, bypassing audit.API and eventlog.Store
+	// entirely — exactly what a real tamper attempt would do, and
+	// exactly what VerifyChain exists to detect (it recomputes the
+	// hash from the stored payload/prev_hash/kind/emitted_at and
+	// compares against the stored payload_hash — see chain.go).
+	if err := db.WriteTx(ctx, func(tx storage.WriteTx) error {
+		_, err := tx.Exec(ctx, "UPDATE events SET payload_hash = ? WHERE event_id = ?",
+			[]byte{0xDE, 0xAD, 0xBE, 0xEF}, e.ID)
+		return err
+	}); err != nil {
+		t.Fatalf("tamper UPDATE: %v", err)
+	}
+
+	res, err := api.VerifyChain(ctx, "", "")
+	if err != nil {
+		t.Fatalf("VerifyChain: %v", err)
+	}
+	if res.Verified {
+		t.Error("Verified = true for a tampered chain, want false")
+	}
+	if res.RowsChecked == 0 {
+		t.Error("RowsChecked = 0 for a store holding one row — a real check must have examined it " +
+			"(distinguishes this from the no-store case, which also reports Verified: false)")
+	}
+	if res.BrokenAtID == "" {
+		t.Error("BrokenAtID is empty for a tampered chain — the break must be identified, not just detected")
+	}
+}
+
 // TestPush_ConcurrentGoroutinesWithStore exercises -race: entries
 // pushed from streaming goroutines while a Store is configured (Push's
 // doc comment on the write-through calls this out explicitly).

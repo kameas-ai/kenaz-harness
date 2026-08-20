@@ -640,27 +640,38 @@ func (a *API) ListEntries(ctx context.Context, filter Filter) ([]Entry, error) {
 	return out, nil
 }
 
-// VerifyChain recomputes payload hashes for all buffered entries in
-// [fromID, toID] and returns whether the chain is intact.
-// This is an in-memory implementation; the full backend implementation
-// will delegate to log.VerifyChain once the libSQL adapter lands.
-func (a *API) VerifyChain(_ context.Context, fromID, toID string) (VerifyChainResult, error) {
+// VerifyChain reports whether the persisted hash chain for events with
+// event_id in [fromID, toID] is intact.
+//
+// Routes to the real, persisted-data verifier (eventlog.VerifyChain via
+// Store.VerifyChain) when a Store is configured — audit-that-tells-the-
+// truth-01PMZA10 UNIT-7 / G-2. Before this unit, this method counted
+// RING entries in the id range and unconditionally returned
+// Verified: true — a literal, not a verification result; the loop
+// never touched a hash. With no store configured, this now returns
+// Verified: false, RowsChecked: 0 — never Verified: true for work it
+// did not do (spec D-6, Rule 7). See VerifyChainResult's doc comment
+// (api.go) for why this is not YET a three-state Available/Verified
+// pair: that requires a Wails bindings regeneration this environment's
+// agent sandbox and CLAUDE.md's own hand-edit prohibition both
+// currently block.
+func (a *API) VerifyChain(ctx context.Context, fromID, toID string) (VerifyChainResult, error) {
 	a.mu.RLock()
-	defer a.mu.RUnlock()
+	store := a.store
+	a.mu.RUnlock()
 
-	var checked int
-	for _, e := range a.entries {
-		if fromID != "" && e.ID < fromID {
-			continue
-		}
-		if toID != "" && e.ID > toID {
-			continue
-		}
-		checked++
+	if store == nil {
+		return VerifyChainResult{Verified: false, RowsChecked: 0}, nil
+	}
+
+	res, err := store.VerifyChain(ctx, fromID, toID)
+	if err != nil {
+		return VerifyChainResult{}, fmt.Errorf("audit: VerifyChain: %w", err)
 	}
 	return VerifyChainResult{
-		Verified:    true,
-		RowsChecked: checked,
+		Verified:    res.Verified,
+		RowsChecked: res.RowsChecked,
+		BrokenAtID:  res.BrokenAtID,
 	}, nil
 }
 

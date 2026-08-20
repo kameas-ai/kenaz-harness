@@ -3271,10 +3271,24 @@ func New(c *core.Core, opts ...Option) *API {
 			})
 			a.auditArchiver = archiver
 
-			// AuditRetentionSweeper: runs hourly, deletes ACK'd + aged rows.
-			// Backend is nil here (event-log backend not yet fully wired);
-			// SweepOnce returns 0 rows when backend is nil (safe no-op).
+			// AuditRetentionSweeper: runs hourly, deletes ACK'd + aged
+			// rows. Backend is now the event-log SQL backend, adapted
+			// through settings.NewFleetAuditRetentionBackend (the
+			// fleet-boundary conversion — core/event/log must not
+			// import core/fleet, check-no-fleet-imports.sh) —
+			// audit-that-tells-the-truth-01PMZA10 UNIT-7, AC-015. The
+			// no-op path this comment used to describe ("Backend is nil
+			// here... SweepOnce returns 0 rows when backend is nil") is
+			// unreachable in production wiring as of this unit: it can
+			// still occur with auditBackend == nil (dataDir set without
+			// a real storage.DB — not a production configuration, but a
+			// defensive fallback rather than a panic).
+			var fleetRetentionBackend corefleet.AuditRetentionBackend
+			if auditBackend != nil {
+				fleetRetentionBackend = settings.NewFleetAuditRetentionBackend(auditBackend, dataDir)
+			}
 			sweeper := corefleet.NewAuditRetentionSweeper(corefleet.AuditRetentionConfig{
+				Backend: fleetRetentionBackend,
 				Cursor:  archiver.CurrentCursor,
 				Emitter: &auditArchiverEmitter{impl: a.auditImpl},
 			})
