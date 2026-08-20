@@ -32,6 +32,21 @@ func (denyAllGate) Evaluate(_ context.Context, principal cedargo.EntityUID, acti
 var _ cedar.Gate = denyAllGate{}
 
 // ── fake store ────────────────────────────────────────────────────────────
+//
+// WP-PI (persistence integrity, mission model-scheduled-jobs-01PMSJ01):
+// this in-memory fake is deliberately NOT backed by real sqlite. Every
+// test in this file that uses it (including WP02's TestRunNowNilDispatcher
+// and TestRunNowCedarDenialStaysCedarDenial) asserts scheduledchat.API's
+// own control flow — dispatcher-nil handling, gate-check ordering, error
+// mapping — not SQL encode/decode fidelity or schema behaviour. The real
+// persistence layer (scheduler.SQLiteChatStore, core/scheduler/
+// chat_store.go) is a separate, thin pass-through with no business logic
+// of its own to hide a defect in; core/scheduler/chat_cron_engine_test.go
+// and core/rpc/chat_run_dispatcher_test.go are what drive it against real
+// sqlite for this mission's WP03/WP04 dispatch-and-persist paths. Per
+// CLAUDE.md blind spot #2: this comment exists so a future audit does not
+// have to re-derive that this fixture's scope is legitimate before
+// re-litigating it.
 
 type fakeStore struct {
 	mu      sync.Mutex
