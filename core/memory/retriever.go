@@ -43,8 +43,15 @@ func NewRetriever(store Store, embedder Embedder, enabledFn func() bool, thresho
 
 // WithSessionID returns a copy of the Retriever that records retrieval
 // decisions into GlobalRetrievalHistory under the given session ID.
-// The production path calls this when wiring the kernel per-session;
-// the bare constructor omits it for backwards compatibility.
+//
+// NARROWED 2026-08-20 (controls-and-readouts-that-tell-the-truth-
+// 01PMZ808 WP11, FR-015): only the RetrieveScoped hook path calls this
+// (core/rpc/api.go's retrieverAdapter.RetrieveScoped) — the sibling
+// Retrieve path (retrieverAdapter.Retrieve) has no sessionID parameter
+// to thread and does not call WithSessionID, so a retrieval driven
+// through that path is not recorded into GlobalRetrievalHistory. The
+// bare constructor still omits it for backwards compatibility /
+// standalone (non-hooks) callers.
 func (r *Retriever) WithSessionID(sessionID string) *Retriever {
 	if r == nil {
 		return nil

@@ -561,15 +561,15 @@ async function testEmbedder() {
   embedderTestStatus.value = 'testing';
   embedderTestError.value = null;
   try {
-    // Use Memory_Pin as a lightweight probe: pin a synthetic chunk and
-    // immediately unpin it.  If the embedder is unavailable the backend
-    // returns an error containing "embedder unavailable".
-    // We don't have a dedicated TestEmbedder RPC yet; the Memory_RememberMessage
-    // path exercises the full embed→store pipeline.
-    // For now we simply call GetEmbedderConfig and treat the round-trip
-    // succeeding as a connectivity check; a dedicated endpoint can be
-    // added in a follow-up.
-    await client.settings.getEmbedderConfig();
+    // controls-and-readouts-that-tell-the-truth-01PMZ808 WP10 (FR-013):
+    // this used to call client.settings.getEmbedderConfig() — a settings-
+    // file read — and treat any successful round-trip as "the embedder is
+    // reachable," which is true even when the embedder is completely
+    // unconfigured or the configured host is unreachable. The dedicated
+    // RPC this comment used to say didn't exist already did:
+    // Memory_TestEmbedder makes a real Embed(["hello world"]) call and
+    // rejects a NoopEmbedder / unreachable host / empty vector.
+    await client.memory.testEmbedder();
     embedderTestStatus.value = 'ok';
   } catch (e: unknown) {
     embedderTestStatus.value = 'error';

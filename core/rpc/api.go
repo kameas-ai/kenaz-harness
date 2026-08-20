@@ -1672,7 +1672,30 @@ func New(c *core.Core, opts ...Option) *API {
 		gs.SetGate(&memoryGateAdapter{gate: a.cedarGate()})
 	}
 	personalForLLM := newPersonalStore(c)
+	// controls-and-readouts-that-tell-the-truth-01PMZ808 WP10 (FR-014):
+	// decorate the single embedder so every Embed() call — regardless of
+	// which downstream consumer triggers it (the retriever, the hooks
+	// stack, or Memory_TestEmbedder above) — records into
+	// corememory.GlobalCaptureTracker(). Before this, RecordEmbedCall /
+	// RecordEmbedError had zero production callers, so lastEmbedDuration
+	// stayed 0 and embedErrors stayed empty forever, and the 'slow' /
+	// 'error' arms of MemoryCaptureRatePill.vue were unreachable — the
+	// pill could only ever render "Memory capturing OK".
+	//
+	// Do NOT wrap corememory.NoopEmbedder{} (no provider configured):
+	// three downstream consumers — slashMemoryGateway (below),
+	// newCorpusManager, and TestEmbedder's own pre-check — type-assert
+	// their held corememory.Embedder against corememory.NoopEmbedder to
+	// short-circuit before calling Embed. A decorator wrapping a Noop
+	// would change the CONCRETE type, so that assertion would never
+	// match again — newCorpusManager specifically branches on it to
+	// decide whether to pass a non-nil corpusEmb at all, which is a
+	// real behavioural difference, not just a slower path to the same
+	// answer.
 	embedder := newEmbedder(c, personalForLLM, settingsImpl)
+	if _, isNoop := embedder.(corememory.NoopEmbedder); !isNoop {
+		embedder = &embedderCaptureDecorator{inner: embedder}
+	}
 	memoryEnabled := func() bool {
 		if settingsImpl == nil || settingsImpl.Store() == nil {
 			return false
@@ -6666,6 +6689,63 @@ func startNodesWatcher(c *core.Core, mgr *nodesview.Manager) *corenodes.Watcher 
 	return w
 }
 
+// embedderCaptureDecorator wraps the single embedder constructed in New
+// so every Embed() call — from whichever consumer triggers it — records
+// its latency and any error into corememory.GlobalCaptureTracker(), the
+// package-level singleton core/memory/store.go already calls from the
+// write half (controls-and-readouts-that-tell-the-truth-01PMZ808 WP10,
+// FR-014). Implements all three methods of corememory.Embedder (Kind,
+// Dimensions, Embed) — corpusEmbedderAdapter below is the nearest
+// precedent but only implements two, so it is a pattern, not a
+// drop-in.
+//
+// Only ever wraps a REAL embedder — see the isNoop check at the
+// construction site in New. Three downstream consumers
+// (slashMemoryGateway, newCorpusManager) type-assert their held
+// corememory.Embedder against corememory.NoopEmbedder to short-circuit
+// before calling Embed; wrapping a Noop would change the CONCRETE type
+// and break those checks (newCorpusManager specifically branches on the
+// result to decide whether to pass a non-nil corpusEmb at all). Since
+// this decorator only ever holds a real embedder, none of those
+// assertions' outcomes change — they already evaluated false against a
+// real embedder before this decorator existed.
+//
+// Known residue (spec §1.6): only two threading edges (the boot-time
+// retriever + hooks-stack assignment here, and Memory_TestEmbedder's
+// direct a.embedder field) were verified end to end. If a consumer
+// elsewhere constructs its OWN embedder rather than receiving this one,
+// that path stays uninstrumented — not found or fixed in this WP.
+type embedderCaptureDecorator struct {
+	inner corememory.Embedder
+}
+
+func (d *embedderCaptureDecorator) Kind() string {
+	if d == nil || d.inner == nil {
+		return ""
+	}
+	return d.inner.Kind()
+}
+
+func (d *embedderCaptureDecorator) Dimensions() int {
+	if d == nil || d.inner == nil {
+		return 0
+	}
+	return d.inner.Dimensions()
+}
+
+func (d *embedderCaptureDecorator) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+	if d == nil || d.inner == nil {
+		return nil, corememory.ErrEmbedderUnavailable
+	}
+	start := time.Now()
+	vecs, err := d.inner.Embed(ctx, texts)
+	corememory.GlobalCaptureTracker().RecordEmbedCall(time.Since(start))
+	if err != nil {
+		corememory.GlobalCaptureTracker().RecordEmbedError(time.Now())
+	}
+	return vecs, err
+}
+
 // corpusEmbedderAdapter bridges core/memory.Embedder onto the narrower
 // corpus.Embedder seam. The two interfaces share the Embed signature;
 // keeping them disjoint avoids a corpus -> memory import edge.
@@ -6771,7 +6851,18 @@ func (a *retrieverAdapter) RetrieveScoped(ctx context.Context, query, sessionID,
 	if a == nil || a.r == nil {
 		return nil, nil
 	}
-	return a.r.RetrieveScoped(ctx, query, sessionID, projectID, k)
+	// controls-and-readouts-that-tell-the-truth-01PMZ808 WP11 (FR-015):
+	// sessionID was already threaded into the SCOPE filter (buildScopeUnion
+	// inside RetrieveScoped) but never into r.sessionID, the field
+	// WithSessionID sets and retrieve()'s history-push guard
+	// (`if r.sessionID != ""`) reads. Calling the base *Retriever's
+	// RetrieveScoped directly meant that guard never fired on this path,
+	// so GlobalRetrievalHistory stayed empty and
+	// core/rpc/views/memory/impl.go's Memory_LastRetrieval always
+	// returned an empty report. WithSessionID returns a shallow copy
+	// (retriever.go), so this allocates one small struct per call rather
+	// than mutating shared state.
+	return a.r.WithSessionID(sessionID).RetrieveScoped(ctx, query, sessionID, projectID, k)
 }
 
 // hooksRunnerAdapter bridges hooks.Runner to llm.HookRunner. The

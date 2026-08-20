@@ -1,9 +1,14 @@
-// wp00-falsify.spec.ts — controls-and-readouts-that-tell-the-truth-01PMZ808
-// UNIT-0 / WP00. Observes (does not predict) claim 3 from tasks.md. Claim 1
-// (SettingsView.vue useRouter() after await) is superseded by
-// SettingsView.wp14.spec.ts, which asserts the fixed behaviour — this file
-// is trimmed accordingly. Deleted entirely once WP10 lands its own
-// embedder-test coverage.
+/**
+ * SettingsView.wp10.spec.ts —
+ * controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-6 / WP10.
+ *
+ * AC-024: with the embedder pointed at an unreachable host,
+ * embedderTestStatus is NOT 'ok' and the error surfaces. Supersedes
+ * wp00-falsify.spec.ts's "claim 3" observation test, which pinned the
+ * pre-fix buggy answer (embedderTestStatus reported 'ok' from a
+ * settings-file read alone, with no embedder contact at all) — deleted
+ * in this commit.
+ */
 import { describe, it, expect, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import SettingsView from '@/views/settings/SettingsView.vue';
@@ -50,23 +55,17 @@ function provide(clientOverrides: any = {}, attachmentRows: Attachment[] = []) {
       reorder: async () => undefined,
       refresh: async () => attachmentRows[0] ?? ({} as Attachment),
     } as any,
-    onboarding: {
-      state: async () => ({ harnessSelfMCPDisabled: false }),
-      restartPhase2: async () => ({ sessionId: 'sess-wp00-observed' }),
-      ...clientOverrides.onboarding,
+    memory: {
+      testEmbedder: vi.fn().mockRejectedValue(new Error('memory: embedder unavailable')),
+      ...clientOverrides.memory,
     } as any,
   });
   return { client };
 }
 
-describe('WP00 claim 3 — SettingsView.vue "Test embedder" never contacts an embedder', () => {
-  it('OBSERVES: embedderTestStatus reports "ok" from a settings-file read alone, with no embedder call in the fake client at all', async () => {
-    const getEmbedderConfigSpy = vi.fn().mockResolvedValue({
-      provider: 'openai',
-      model: 'text-embedding-3-small',
-      baseURL: 'http://unreachable.invalid:1',
-    });
-    const { client } = provide({ settings: { getEmbedderConfig: getEmbedderConfigSpy } });
+describe('AC-024 — Test embedder surfaces a real failure against an unreachable host', () => {
+  it('embedderTestStatus becomes "error" (not "ok") and the error message surfaces', async () => {
+    const { client } = provide();
     const w = mount(SettingsView, {
       global: { provide: { [HarnessClientKey as symbol]: client } },
     });
@@ -77,13 +76,23 @@ describe('WP00 claim 3 — SettingsView.vue "Test embedder" never contacts an em
     await btn.trigger('click');
     await flushPromises();
 
-    // eslint-disable-next-line no-console
-    console.log('OBSERVED getEmbedderConfig call count:', getEmbedderConfigSpy.mock.calls.length);
-    console.log(
-      'OBSERVED status pill:',
-      w.find('[data-testid="embedder-test-ok"]').exists() ? 'ok' : 'not-ok',
-    );
-    expect(getEmbedderConfigSpy).toHaveBeenCalled();
+    expect(client.memory.testEmbedder).toHaveBeenCalled();
+    expect(w.find('[data-testid="embedder-test-ok"]').exists()).toBe(false);
+    const errorEl = w.find('[data-testid="embedder-test-error"]');
+    expect(errorEl.exists()).toBe(true);
+    expect(errorEl.text()).toContain('embedder unavailable');
+  });
+
+  it('a resolving testEmbedder() call reports "ok"', async () => {
+    const { client } = provide({ memory: { testEmbedder: vi.fn().mockResolvedValue(1536) } });
+    const w = mount(SettingsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+
+    await w.find('[data-testid="embedder-test-button"]').trigger('click');
+    await flushPromises();
+
     expect(w.find('[data-testid="embedder-test-ok"]').exists()).toBe(true);
   });
 });
