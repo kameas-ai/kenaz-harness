@@ -1,0 +1,77 @@
+provider: custom-openai
+# model-settings-reach-the-model-01PMZ101 WP02: this file is the other half
+# of the P0 fix (the azure-openai half is the alias table in loader.go).
+# Before this file existed, capabilities.Load found no entry for
+# "custom-openai" and Catalog.Describe fell into the unknown-provider
+# branch, which sets only streaming + usage_reporting — every tool-bearing
+# request was refused before any wire call (spec §1.1).
+#
+# custom-openai profiles point at an arbitrary OpenAI-compatible endpoint —
+# core/llm/localruntime/templates_local.go:16 states "Kind is always
+# custom-openai for local runtimes", covering Ollama, LM Studio, Jan and
+# GPT4All (core/rpc/views/llm/impl_local_runtime.go:88). This file is a
+# genuinely honest baseline for that whole class, not a copy of
+# ollama.yaml's defaults: block — ollama.yaml:4 sets tool_calling: false
+# (correct for bare Ollama's own capability probe path), and copying that
+# shape here would re-cause the exact P0 this file exists to fix.
+defaults:
+  streaming: true
+  tool_calling: true
+  vision: false
+  documents: false
+  # json_mode: the shared openaiwire encoder (core/llm/openaiwire/body.go)
+  # that WP03 routes this adapter through CAN build a json_schema /
+  # json_object response_format when asked — but this catalog cannot know
+  # whether the specific self-hosted endpoint behind an arbitrary
+  # custom-openai profile actually honours it, so the conservative default
+  # stays false. Per-endpoint upgrade is CapabilityHints (E-004), not this
+  # file (WP02 §3: "do not try to make images conditional per endpoint
+  # here" — the same reasoning applies to structured output).
+  json_mode: false
+  reasoning: false
+  cancellation: true
+  usage_reporting: true
+  # Structured-output capability defaults (structured-output-and-grammar-01KX5R8A FR-002).
+  # Same reasoning as json_mode above: the encoder supports the wire shape,
+  # the specific endpoint's actual support is unknown, so false stays honest.
+  structured_output: false
+  # Grammar/GBNF is a llama.cpp-server-specific extension, not part of the
+  # generic OpenAI Chat Completions surface this adapter speaks — unlike
+  # ollama.yaml (which is Ollama's own dedicated adapter), custom-openai
+  # cannot assume the endpoint is llama.cpp.
+  grammar: false
+  regex_grammar: false
+  # Image output capability default (multimodal-io-extended-01KQ8TD2 WP05).
+  image_output: false
+  # Extended knob capabilities (provider-implementation-uniformity-01KQ8V4F WP06).
+  # These map onto standard OpenAI Chat Completions body keys that
+  # openaiwire.BuildRequestBody applies uniformly (WP03); an arbitrary
+  # OpenAI-compatible server is likely, but not guaranteed, to honour them.
+  parallel_tool_calls: true
+  seed: true
+  logprobs: false
+  top_k: false
+  top_p: true
+  frequency_penalty: true
+  presence_penalty: true
+  batch: false
+  response_format: false
+  reasoning_style: ""
+  # Attachment limits (multimodal-io-01KQ8TDF FR-006). Image input is off
+  # by default (WP02 §2): a local llama build behind an arbitrary endpoint
+  # usually cannot take images, and per-endpoint correction is out of
+  # scope for this file (E-004 / WP11's CapabilityHints).
+  image_input: false
+  document_input: false
+  max_image_bytes: 10485760          # 10 MiB (conservative local default)
+  max_document_bytes: 0
+  max_image_count_per_message: 0
+  max_image_pixels: 0
+  max_document_pages: 0
+  image_input_mime_types: [image/png, image/jpeg, image/gif, image/webp]
+  document_input_mime_types: []
+  # Size-tier default (versioned-model-profile-01PMDL04 WP04): custom
+  # endpoints have no predictable model-name family to glob against, so
+  # every model resolves to the provider-level default.
+  tier: medium
+models: []
