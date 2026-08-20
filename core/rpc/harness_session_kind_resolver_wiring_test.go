@@ -98,6 +98,28 @@ func bootAPIWithCore(t *testing.T, dataDir, mcpServersJSON string) (*core.Core, 
 	}
 	api := New(c)
 	assertSettingsStoreIsSandboxed(t, api)
+	// rpc.New starts background workers — among them the fleet
+	// ConfigPoller (settings.API.SetFleetClient -> fleet.ConfigPoller.Start).
+	// Without this cleanup the poller outlives the test and keeps calling
+	// fleet.LoadTokens -> keyring.Get() for the rest of the test BINARY's
+	// life, racing every later test that writes go-keyring's package-level
+	// mock global via keyring.MockInit().
+	//
+	// That is not hypothetical: it reddened a full-suite
+	// `-race -short -p 4` run on 2026-08-20 as
+	//
+	//   --- FAIL: TestKeychainDelete_NotFoundIsSilent
+	//       testing.go:1712: race detected during execution of test
+	//
+	// with the detector naming keyring.MockInit (keychain_test.go:22) as
+	// the write and this helper's leaked poller as the read. The failure
+	// surfaces in whichever test happens to call MockInit, which is why it
+	// looks like an unrelated keychain flake and why it never reproduces in
+	// isolation — the racing goroutine belongs to a different test.
+	//
+	// API.Shutdown is nil-safe and idempotent, and stops the poller via
+	// settingsImpl.StopFleetBackground.
+	t.Cleanup(api.Shutdown)
 	return c, api
 }
 
