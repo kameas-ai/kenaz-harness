@@ -1639,8 +1639,7 @@ func New(c *core.Core, opts ...Option) *API {
 	hooksRunner, hookRegistry, hookBuiltins, hookRunnerImpl := newHooksStack(c, retriever, memStore, embedder)
 	// WP06 / UNIT-5: hold the concrete *hooks.Runner on the stack (see the
 	// a.hookRunner field doc) so future WPs can construct the three hook
-	// adapters without re-plumbing through api.New. No consumer reads this
-	// field yet — this WP is pure plumbing with no behaviour change.
+	// adapters without re-plumbing through api.New.
 	a.hookRunner = hookRunnerImpl
 	// Register skill-catalog pre_send hook so the model sees the
 	// model-invokable commands at send time (model-invoked-skills-catalog-01KZNP3E WP03).
@@ -1728,7 +1727,7 @@ func New(c *core.Core, opts ...Option) *API {
 	a.convMgr = newConversationManager(c)
 	a.corpusMgr = newCorpusManager(c, embedder)
 	var compactionPipeline *compaction.Pipeline
-	a.graphMgr, compactionPipeline = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore, settingsImpl, a.cedarEngine)
+	a.graphMgr, compactionPipeline = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore, settingsImpl, a.cedarEngine, a.hookRunner)
 	// Wire the same FR-041 pipeline instance the kernel runs onto the
 	// Settings RPC surface, so edits made through
 	// core/rpc/views/compaction reach the live kernel path instead of
@@ -6132,7 +6131,7 @@ func newCorpusManager(c *core.Core, embedder corememory.Embedder) *corecorpus.Ma
 // library and runs in-memory graphs; user-graph persistence is the
 // only feature lost when DataDir is empty.
 func newGraphManager(c *core.Core) *graphview.Manager {
-	mgr, _ := newGraphManagerWithDeps(c, nil, nil, nil, nil, nil, nil, nil)
+	mgr, _ := newGraphManagerWithDeps(c, nil, nil, nil, nil, nil, nil, nil, nil)
 	return mgr
 }
 
@@ -6300,12 +6299,28 @@ func newGraphManagerWithDeps(
 	// as buildCedarGate("") always did (empty DataDir, the nil-core
 	// test chassis, or a logged boot-time construction failure).
 	cedarEngine *cedar.Engine,
+	// hookRunner is the process-singleton *hooks.Runner — a.hookRunner
+	// at the production call site in New(), populated by newHooksStack
+	// (WP06 / UNIT-5). nil degrades to no lifecycle hooks firing at the
+	// tool-dispatch boundary, exactly as production behaved before WP09
+	// / UNIT-8 (trust-surfaces-that-fire-01PMZ202): the seam existed and
+	// was read from three call sites, but nothing ever constructed the
+	// one implementation.
+	hookRunner *hooks.Runner,
 ) (*graphview.Manager, *compaction.Pipeline) {
 	dataDir := ""
 	if c != nil {
 		dataDir = c.DataDir()
 	}
 	deps := graphview.EnvDeps{}
+	if hookRunner != nil {
+		// WP09 / UNIT-8: both production Env literals (chat_runner.go
+		// and manager.go) inherit EnvDeps via applyTo, so this single
+		// assignment reaches every kernel run — chat and library-graph
+		// alike — with the real pre_tool_use / post_tool_use /
+		// post_tool_use_failure fire path.
+		deps.LifecycleHooks = &hooks.LifecycleRunnerAdapter{Runner: hookRunner}
+	}
 	if convMgr != nil {
 		deps.Branch = graphview.NewBranchSeamAdapter(convMgr, sessionManagerOrNil(c))
 		// engineer-truth-pass-01PMTP01 WP08 (finding B16): the merge-

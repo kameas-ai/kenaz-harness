@@ -114,8 +114,23 @@ export type HookEventName = (typeof ALL_HOOK_EVENTS)[number];
  * enforces both directions: every entry here must have a real fire site,
  * and every AllEvents entry NOT here must have a dated, owner-named
  * justification in scripts/ci/allowlists/i17-eventless-hook-events.txt.
+ *
+ * Grown 2026-08-19 (trust-surfaces-that-fire-01PMZ202 WP09 / UNIT-8) by
+ * the three v2 tool-loop events: pre_tool_use, post_tool_use,
+ * post_tool_use_failure. Landed in the same commit as
+ * agentgraph.Env.LifecycleHooks actually being populated
+ * (core/rpc/views/agentgraph/env_deps.go + core/rpc/api.go's
+ * newGraphManagerWithDeps) — before that commit, the fire sites in
+ * core/agentgraph/tool_invocation.go always saw env.LifecycleHooks == nil
+ * and no-opped.
+ *
  */
-export const FIRING_HOOK_EVENTS = ['pre_send'] as const;
+export const FIRING_HOOK_EVENTS = [
+  'pre_send',
+  'pre_tool_use',
+  'post_tool_use',
+  'post_tool_use_failure',
+] as const;
 
 /**
  * EVENT_FAMILY maps each event to a display category for the UI grouping.

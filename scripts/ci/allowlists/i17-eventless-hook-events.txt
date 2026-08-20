@@ -19,12 +19,10 @@
 # Seeded 2026-08-19, WP08 landing FIRING_HOOK_EVENTS = ['pre_send']. All 19
 # remaining core/hooks.AllEvents entries are listed below.
 
-# ---- WP09 (UNIT-8): the three tool-loop events, landed alongside the
-# LifecycleHooks Env injection (agentgraph.Env.LifecycleHooks) in the same
-# commit as the fire path (spec.md §14.3, tasks.md WP09/UNIT-8). ----
-pre_tool_use justify(blocker: "hooks.LifecycleRunnerAdapter has zero production call sites — agentgraph.Env.LifecycleHooks is never assigned by envDefaults; WP09 wires the Env injection and grows FIRING_HOOK_EVENTS in the same commit", owner: alec, date: 2026-08-19)
-post_tool_use justify(blocker: "same as pre_tool_use — agentgraph.Env.LifecycleHooks unwired; WP09", owner: alec, date: 2026-08-19)
-post_tool_use_failure justify(blocker: "same as pre_tool_use — agentgraph.Env.LifecycleHooks unwired; WP09", owner: alec, date: 2026-08-19)
+# ---- WP09 (UNIT-8) LANDED 2026-08-19: pre_tool_use, post_tool_use and
+# post_tool_use_failure moved into FIRING_HOOK_EVENTS in the same commit
+# that populated agentgraph.Env.LifecycleHooks (env_deps.go's applyTo +
+# newGraphManagerWithDeps threading a.hookRunner) — rows removed. ----
 
 # ---- WP10 (UNIT-9): the five permission/session events. Per §4.2's
 # binding warning, permission_request must not enter FIRING_HOOK_EVENTS

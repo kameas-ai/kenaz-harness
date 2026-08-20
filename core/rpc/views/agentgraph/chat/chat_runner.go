@@ -946,6 +946,20 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		Graph:     &graph,
 		LLM:       llmAdapter,
 		Tools:     toolAdapter,
+		// ToolSchemas (trust-surfaces-that-fire-01PMZ202 WP09 / UNIT-8):
+		// the same toolCatalog just handed to NewLLMProviderAdapter,
+		// projected onto a name -> JSON-Schema map so exec_dispatch.go's
+		// validateToolArgs can check a model-supplied tool call's
+		// arguments before dispatch. Was declared, documented ("Populated
+		// by the LLMProviderAdapter at StartStream time from the
+		// discovered ToolSpec slice") and read at exec_dispatch.go:195-196
+		// since agent-loop-robustness-parity WP06, but nothing ever wrote
+		// it — schemaJSON was always nil, so only the parses-as-object
+		// check ever ran. toolCatalog is per-run (StartStream-scoped), so
+		// this cannot live in the process-level envDefaults closure the
+		// way LifecycleHooks does; it has to be set here, where the
+		// discovered catalog is in scope.
+		ToolSchemas: toolSchemasFromSpecs(toolCatalog),
 		// The journal IS the history writer for this run: it forwards
 		// every entry to r.cfg.HistoryWriter (the one seam) and stamps
 		// the graph's assistant_write row as the turn's `final`, at the
@@ -1825,6 +1839,32 @@ func filterOutTool(tools []corellm.ToolSpec, name string) []corellm.ToolSpec {
 		if t.Name != name {
 			out = append(out, t)
 		}
+	}
+	return out
+}
+
+// toolSchemasFromSpecs projects a discovered ToolSpec slice onto the
+// name -> JSON-Schema-bytes map env.ToolSchemas expects
+// (trust-surfaces-that-fire-01PMZ202 WP09 / UNIT-8). A spec with an
+// empty InputSchema contributes no entry — exec_dispatch.go's
+// validateToolArgs already treats a missing key as "no schema, skip
+// validation", identical to today's always-nil behaviour for that one
+// tool, so omitting it here changes nothing observable. A nil/empty
+// input returns nil, matching env.ToolSchemas' existing "nil disables
+// validation" contract (executor.go's doc on the field).
+func toolSchemasFromSpecs(specs []corellm.ToolSpec) map[string][]byte {
+	if len(specs) == 0 {
+		return nil
+	}
+	out := make(map[string][]byte, len(specs))
+	for _, s := range specs {
+		if len(s.InputSchema) == 0 {
+			continue
+		}
+		out[s.Name] = []byte(s.InputSchema)
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
