@@ -1831,6 +1831,14 @@ func New(c *core.Core, opts ...Option) *API {
 	if c != nil && c.Storage() != nil && c.DataDir() != "" && coreslashcmd.UserSlashcmdEnabled() {
 		slashStore = coreslashcmd.NewStore(c.Storage(), c.DataDir())
 		slashDispatch = coreslashcmd.NewDispatch(slashStore, nil)
+		// audit-that-tells-the-truth-01PMZA10 UNIT-5: dispatch.go:113's
+		// KindSlashCommandExecuted emit site (and its argument-redaction
+		// path, core/slashcmd/audit.go) has been unreachable since it
+		// was written — the nil above was the only value ever passed.
+		// a.auditImpl already exists (constructed above). Shape 1
+		// (contextaudit.Emitter) — acpAuditBridge already is this
+		// shape; reused rather than a new bridge type.
+		slashDispatch.WithAuditEmitter(&acpAuditBridge{impl: a.auditImpl})
 
 		// Install bundled skill templates on first launch (idempotent).
 		// Best-effort: a failure here never prevents the chassis from booting.
@@ -2148,7 +2156,13 @@ func New(c *core.Core, opts ...Option) *API {
 	// branches which also pass nil today); tracked for follow-up
 	// (session-export-01NDFSEX05 WP02).
 	if c != nil {
-		a.sessionsAPI = sessions.WithExportOpts(a.sessionsAPI, a.cedarGate(), nil, nil)
+		// audit-that-tells-the-truth-01PMZA10 UNIT-5 (spec R-1, D-9): this
+	// site was owned by NOBODY before this mission — it appears in no
+	// mission's tasks.md — and its emitter param 4 was nil, so
+	// views/sessions/impl.go:1054's KindSessionExport ("fires on every
+	// successful Sessions_Export call", audit.go:205) has never fired.
+	// Shape 1 (contextaudit.Emitter).
+	a.sessionsAPI = sessions.WithExportOpts(a.sessionsAPI, a.cedarGate(), nil, &acpAuditBridge{impl: a.auditImpl})
 	}
 	if c != nil && a.dispatchPool != nil {
 		// Wire the dispatch pool (all transports) onto Core.MCP so the
@@ -2186,7 +2200,15 @@ func New(c *core.Core, opts ...Option) *API {
 	// Pass the dispatch pool as the tools-view PoolController so
 	// InstallRecipe/UninstallRecipe route http/sse recipes to the right
 	// transport sub-pool.
-	a.toolsAPI = newToolsAPI(c, a.dispatchPool, stack.secrets, a.promptRegistry, a.cedarPolicyAPI, opt.connectorTokens, mcpUserRecipeSource(a.mcpUserStore), a.cedarGate())
+	// audit-that-tells-the-truth-01PMZA10 UNIT-5: &searchAuditEmitter{impl: a.auditImpl}
+	// is Shape 3 (toolsview.AuditEmitter) — copied from the search
+	// view's own bridge, which already forwards this exact shape.
+	// Before this, tools.Config.Audit was `nil, // TODO(audit-wired):
+	// reuse process-wide event.Emitter once it's available` — that
+	// precondition was already met at a.auditImpl's construction above
+	// when the TODO was written. views/tools/impl.go:401,649,669,
+	// device_auth.go:179, oauth.go:109,132,179 have never fired.
+	a.toolsAPI = newToolsAPI(c, a.dispatchPool, stack.secrets, a.promptRegistry, a.cedarPolicyAPI, opt.connectorTokens, mcpUserRecipeSource(a.mcpUserStore), a.cedarGate(), &searchAuditEmitter{impl: a.auditImpl})
 	// Register the fsrequest built-in after toolsAPI is wired so the
 	// tool's delegate can be the real (non-stub) implementation. The
 	// tool is registered unconditionally; the EnabledFilter gates
@@ -2340,6 +2362,11 @@ func New(c *core.Core, opts ...Option) *API {
 		Conversations: a.convMgr,
 		Sessions:      sessionManagerOrNil(c),
 		Recommender:   newBranchRecommender(recommenderCat),
+		// audit-that-tells-the-truth-01PMZA10 UNIT-5: this field was
+		// never set, so branches/impl.go's KindBranchAdvisorAccepted /
+		// KindBranchCreated emit sites (:159, :236, :560, :584) have
+		// never fired. Shape 1 (contextaudit.Emitter).
+		Audit: &acpAuditBridge{impl: a.auditImpl},
 		// Broker enables LeftRail real-time updates on branch creation
 		// (branch creates a new child session row): v0.5.3 fix.
 		Broker: a.broker,
@@ -2459,6 +2486,12 @@ func New(c *core.Core, opts ...Option) *API {
 		// The ctxFn defers ctx resolution to Notify-call time so construction
 		// before OnStartup is safe.
 		wfDeps.Notifier = &wfNotifierAdapter{ctxFn: a.broker.EmitCtx}
+		// audit-that-tells-the-truth-01PMZA10 UNIT-5: KindWorkflowNetworkFetch
+		// (core/context/audit/audit.go:108) had zero emit sites in the
+		// tree. Shape 1 (contextaudit.Emitter) — a SEPARATE field from
+		// wfDeps.Audit above (that one is corewf's own narrow,
+		// notify-only AuditEmitter, out of scope here per spec R-3).
+		wfDeps.NetworkAudit = &acpAuditBridge{impl: a.auditImpl}
 		// Cedar policy gate for workflow run / save / delete. Without
 		// this the workflows surface consulted no policy at all: the
 		// gate helpers short-circuit a nil Gate to
@@ -2480,6 +2513,11 @@ func New(c *core.Core, opts ...Option) *API {
 			WorkflowCatalog: wfCatalog,
 			Cedar:           a.cedarGate(),
 			CedarModeFn:     workflowCedarModeFn(settingsImpl),
+			// audit-that-tells-the-truth-01PMZA10 UNIT-5: this field
+			// was never set, so workflows/impl.go's six emit sites
+			// (:443, :444, :473, :474, :522, :563) have never fired.
+			// Shape 1 (contextaudit.Emitter).
+			Audit: &acpAuditBridge{impl: a.auditImpl},
 		})
 	}
 
@@ -2540,6 +2578,12 @@ func New(c *core.Core, opts ...Option) *API {
 			CurrentVersion: c.BuildVersion(),
 			DataDir:        c.DataDir(),
 			Publisher:      brokerPublisher{broker: a.broker},
+			// audit-that-tells-the-truth-01PMZA10 UNIT-5: this field
+			// was never set ("today the chassis runs with Audit=nil"
+			// per the field's own doc comment) — core/update/audit.go's
+			// six emit sites have never fired. Shape 1
+			// (contextaudit.Emitter).
+			Audit: &acpAuditBridge{impl: a.auditImpl},
 		})
 		if err != nil {
 			logging.L().Warn("update.service.init_failed", "err", err.Error())
@@ -2606,7 +2650,12 @@ func New(c *core.Core, opts ...Option) *API {
 		editorEnv := os.Getenv("HARNESS_POLICY_EDITOR_UI")
 		policyEditorEnabled := editorEnv != "0" && editorEnv != "false"
 		a.policyEditorEnabled = policyEditorEnabled
-		a.cedarPolicyAPI = cedarpolicyview.NewAPIWithOptions(cedarEng, cedarDataDir, nil, policyEditorEnabled)
+		// audit-that-tells-the-truth-01PMZA10 UNIT-5 (spec R-1, D-9):
+		// this site was owned by NOBODY before this mission — param 3
+		// was nil, so views/cedarpolicy/impl.go's three policy.* emit
+		// sites (:283, :315, :372) have never fired. Shape 1
+		// (contextaudit.Emitter).
+		a.cedarPolicyAPI = cedarpolicyview.NewAPIWithOptions(cedarEng, cedarDataDir, &acpAuditBridge{impl: a.auditImpl}, policyEditorEnabled)
 
 		// Read HARNESS_KEYCHAIN_ROTATION once at boot. Default = on ("").
 		// Set to "off", "0", or "false" to disable the rotation UI.
@@ -4288,7 +4337,7 @@ func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secr
 // only call site — rather than a freshly-built engine of this
 // function's own, so a policy save + reload reaches recipe-spawn like
 // every other gate.
-func newToolsAPI(c *core.Core, pool tools.PoolController, secretsBackend *secrets.MemoryBackend, promptReg *cedar.Registry, cedarPolicyAPI cedarpolicyview.CedarPolicyAPI, connectorTokens tools.ConnectorTokenSource, userSource func() []recipes.Recipe, cedarGate cedar.Gate) tools.ToolsAPI {
+func newToolsAPI(c *core.Core, pool tools.PoolController, secretsBackend *secrets.MemoryBackend, promptReg *cedar.Registry, cedarPolicyAPI cedarpolicyview.CedarPolicyAPI, connectorTokens tools.ConnectorTokenSource, userSource func() []recipes.Recipe, cedarGate cedar.Gate, auditEmitter tools.AuditEmitter) tools.ToolsAPI {
 	if c == nil {
 		return &stubTools{}
 	}
@@ -4309,7 +4358,7 @@ func newToolsAPI(c *core.Core, pool tools.PoolController, secretsBackend *secret
 		Secrets:        secretsBackend,
 		DataDir:        dataDir,
 		WorkspaceDir:   c.WorkspaceDir(),
-		Audit:          nil, // TODO(audit-wired): reuse process-wide event.Emitter once it's available
+		Audit:          auditEmitter,
 		Keychain:       &keychainWriter{backend: secretsBackend},
 		Forgetter:      &keychainForgetter{backend: secretsBackend},
 		PromptRegistry: promptReg,
