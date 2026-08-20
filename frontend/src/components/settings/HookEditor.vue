@@ -16,7 +16,7 @@
  */
 import { ref, computed, watch } from 'vue';
 import Button from '@/components/ui/Button.vue';
-import { ALL_HOOK_EVENTS, HOOK_KINDS } from '@/lib/hooks';
+import { FIRING_HOOK_EVENTS, HOOK_KINDS } from '@/lib/hooks';
 import type { Hook, BuiltinDescriptor } from '@/lib/types';
 
 const props = defineProps<{
@@ -58,6 +58,20 @@ watch(
 
 const isCreate = computed(() => !props.hook);
 
+// ── firing-events honesty floor (trust-surfaces-that-fire-01PMZ202 WP08 /
+// UNIT-7) ─────────────────────────────────────────────────────────────
+//
+// FIRING_HOOK_EVENTS is the only source for the event picker's <option>
+// list. A hook saved before this change (or edited outside the UI) may
+// still carry an event that isn't in that set — ALL_HOOK_EVENTS and
+// core/hooks.AllEvents are untouched, so it still loads and still
+// validates server-side. `isFiringEvent` drives an inert badge so the
+// user is told, in the editor, that the hook they saved does not run
+// yet, instead of silently hiding the gap.
+const isFiringEvent = computed(() =>
+  (FIRING_HOOK_EVENTS as readonly string[]).includes(draft.value.event),
+);
+
 // ── validation ─────────────────────────────────────────────────────────
 
 const validationError = ref<string | null>(null);
@@ -67,7 +81,6 @@ function validate(h: Hook): string | null {
   if (!h.name.trim()) return 'Name is required.';
   if (h.kind === 'shell' && !h.command?.trim()) return 'Command is required for shell hooks.';
   if (h.kind === 'builtin' && !h.builtin?.trim()) return 'Builtin ID is required for builtin hooks.';
-  if (h.kind === 'mcp' && !h.mcpTool?.trim()) return 'MCP tool name is required for MCP hooks.';
   return null;
 }
 
@@ -162,8 +175,27 @@ function handleDryRun(): void {
           class="text-sm px-2 py-1.5 rounded-sm border border-border bg-surface-1 text-ink focus:outline-none focus:border-accent"
           data-testid="hook-editor-event"
         >
-          <option v-for="ev in ALL_HOOK_EVENTS" :key="ev" :value="ev">{{ ev }}</option>
+          <option v-for="ev in FIRING_HOOK_EVENTS" :key="ev" :value="ev">{{ ev }}</option>
+          <!--
+            A hook saved before this WP (or against an event this
+            release hasn't wired a producer for yet) keeps its real
+            event name selected here, even though it isn't offered to
+            new hooks. Without this option the native <select> would
+            show nothing selected, which reads as data loss rather than
+            "not firing yet".
+          -->
+          <option v-if="!isFiringEvent" :value="draft.event">{{ draft.event }}</option>
         </select>
+        <p
+          v-if="!isFiringEvent"
+          class="font-ui text-[10px] text-signal-warning"
+          data-testid="hook-editor-event-inert-badge"
+        >
+          Not firing yet — this event has no production trigger in this
+          release. trust-surfaces-that-fire-01PMZ202 lands the remaining
+          producers; the hook is saved and will start running once it
+          does.
+        </p>
       </label>
 
       <!-- Kind picker -->
@@ -214,17 +246,6 @@ function handleDryRun(): void {
           Receives <code class="font-mono">{"input": &lt;event payload&gt;}</code> on stdin.
           Write <code class="font-mono">{"decision":"approve"}</code> (or any HookOutput) on stdout.
         </p>
-      </label>
-
-      <!-- kind=mcp: tool name -->
-      <label v-if="draft.kind === 'mcp'" class="grid gap-1">
-        <span class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-subtle">MCP tool</span>
-        <input
-          v-model="draft.mcpTool"
-          class="text-sm px-2 py-1.5 rounded-sm border border-border bg-surface-1 text-ink focus:outline-none focus:border-accent"
-          data-testid="hook-editor-mcp-tool"
-          placeholder="server_name::tool_name"
-        />
       </label>
 
       <!-- Per-hook timeout (typed wire field as of v0.8.x). -->

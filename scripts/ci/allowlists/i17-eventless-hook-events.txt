@@ -1,0 +1,66 @@
+# I17 allowlist — core/hooks.AllEvents entries with no entry in
+# frontend/src/lib/hooks.ts's FIRING_HOOK_EVENTS
+# (kitty-specs/trust-surfaces-that-fire-01PMZ202 WP08 / UNIT-7, G-2 leg c).
+#
+# Enforced by scripts/ci/check-hook-event-fire-sites.sh. Every event in
+# core/hooks.AllEvents that is not in FIRING_HOOK_EVENTS must have a row
+# here naming the blocker and the owner — "we'll get to it" is not a
+# justification (CLAUDE.md § Release ritual: unwired sweep).
+#
+# Format: <event_name> justify(blocker: "...", owner: <name>, date: <date>)
+#
+# Allow-lists shrink monotonically (spec §14.3 point 4/5): every producer
+# WP appends its event(s) to FIRING_HOOK_EVENTS in the same commit as its
+# fire site, and deletes the corresponding row(s) below in that same
+# commit. Two rows (subagent_start, worktree_create) and one row
+# (background_task_complete) are NOT removable by any WP in this mission —
+# see their entries.
+#
+# Seeded 2026-08-19, WP08 landing FIRING_HOOK_EVENTS = ['pre_send']. All 19
+# remaining core/hooks.AllEvents entries are listed below.
+
+# ---- WP09 (UNIT-8): the three tool-loop events, landed alongside the
+# LifecycleHooks Env injection (agentgraph.Env.LifecycleHooks) in the same
+# commit as the fire path (spec.md §14.3, tasks.md WP09/UNIT-8). ----
+pre_tool_use justify(blocker: "hooks.LifecycleRunnerAdapter has zero production call sites — agentgraph.Env.LifecycleHooks is never assigned by envDefaults; WP09 wires the Env injection and grows FIRING_HOOK_EVENTS in the same commit", owner: alec, date: 2026-08-19)
+post_tool_use justify(blocker: "same as pre_tool_use — agentgraph.Env.LifecycleHooks unwired; WP09", owner: alec, date: 2026-08-19)
+post_tool_use_failure justify(blocker: "same as pre_tool_use — agentgraph.Env.LifecycleHooks unwired; WP09", owner: alec, date: 2026-08-19)
+
+# ---- WP10 (UNIT-9): the five permission/session events. Per §4.2's
+# binding warning, permission_request must not enter FIRING_HOOK_EVENTS
+# before PermissionRunnerAdapter is actually constructed and its deny
+# semantics are asserted — landed together with the fire path. ----
+permission_request justify(blocker: "cedar.PermissionHookRunner has no production implementer — PermissionRunnerAdapter is never constructed at core/rpc/api.go:1296's cedar.NewRegistry call; WP10. Per spec §4.2: a permission_request hook that fires but whose deny is not honoured is worse than one that does not fire, so this must not be added before the adapter (and its MergeOutputs deny semantics) land", owner: alec, date: 2026-08-19)
+permission_denied justify(blocker: "same seam as permission_request — PermissionRunnerAdapter unwired; WP10", owner: alec, date: 2026-08-19)
+session_start justify(blocker: "session.SessionHookRunner has no production implementer — SessionRunnerAdapter is never constructed; core/session/manager.go's optional hooks field stays nil; WP10", owner: alec, date: 2026-08-19)
+setup justify(blocker: "same seam as session_start — SessionRunnerAdapter unwired; WP10", owner: alec, date: 2026-08-19)
+cwd_changed justify(blocker: "same seam as session_start — SessionRunnerAdapter unwired; WP10", owner: alec, date: 2026-08-19)
+
+# ---- WP11 (UNIT-10): elicitation, both legs or neither (R-08). ----
+elicitation justify(blocker: "RunElicitation has no call site — core/rpc/views/elicit/api.go OpenDialog never calls it, and elicit.API/elicit.Config carry no hooks.Runner field yet; WP11 wires both elicitation legs in one commit (a request-leg hook with no answer-leg hook is a half-surface)", owner: alec, date: 2026-08-19)
+elicitation_result justify(blocker: "RunElicitationResult has no call site — core/rpc/views/elicit/api.go SubmitAnswer never calls it; WP11, same commit as elicitation (both legs or neither)", owner: alec, date: 2026-08-19)
+
+# ---- WP12 (UNIT-11): the five buildable v1/v2 producers, including
+# post_send (F31 — the novel finding: a complete adapter chain, a live
+# memory.persist builtin, and zero call sites outside test files). ----
+post_send justify(blocker: "RunPostSend has zero call sites outside core/hooks/runner_test.go — core/rpc/views/llm/impl.go's buildMessages calls RunPreSend only (impl.go:638); memory.persist (core/hooks/memory_builtins.go:191) has therefore never run in a shipped build (F31); WP12", owner: alec, date: 2026-08-19)
+user_prompt_submit justify(blocker: "payload struct exists (core/hooks/fire.go:66) but no Run*/Fire* call site; seat is adjacent to the live RunPreSend at core/rpc/views/llm/impl.go:556 buildMessages; WP12", owner: alec, date: 2026-08-19)
+notification justify(blocker: "payload struct exists (core/hooks/fire.go:141) but no Run*/Fire* call site; seat is core/rpc/wf_adapters_notifier.go:29 wfNotifierAdapter.Notify; WP12", owner: alec, date: 2026-08-19)
+pre_save_session justify(blocker: "no payload struct, no Run*/Fire* method, no fire site at all; seat is core/session/manager.go:474 AppendMessage; WP12 builds all three", owner: alec, date: 2026-08-19)
+post_assistant_turn_complete justify(blocker: "no payload struct, no Run*/Fire* method, no fire site at all; seat is core/rpc/views/llm/impl.go:892 StartStream completion leg; WP12 builds all three", owner: alec, date: 2026-08-19)
+
+# ---- WP13 (UNIT-12): file_changed. ----
+file_changed justify(blocker: "the sole firer (core/fswatch/watcher.go:210) is correct but core/fswatch has zero non-test importers — it fires from dead code and never runs in a real binary (scripts/ci/allowlists/i7-orphan-packages.txt:68); WP13 gives the watcher a production owner and removes the i7 entry in the same commit", owner: alec, date: 2026-08-19)
+
+# ---- WP14 (UNIT-13): background_task_complete. The injection lands in
+# WP14, but the PRODUCER stays blocked on A-13's sub-agent mission — this
+# row is not removable by anything in THIS mission. See spec.md §14.2. ----
+background_task_complete justify(blocker: "no production caller of tasks.Registry.Register; the only call site (core/tools/subagentdispatch/tool.go:240) sits inside the block C-19 proves is statically dead (core/rpc/builtins_wiring.go:311-330's `if subagentSeam != nil` never executes) — A-13's sub-agent mission owns the producer, not this mission", owner: alec, date: 2026-08-19)
+
+# ---- WP15 (UNIT-13): the subagent_start mislabel is fixed (a live
+# pre_tool_use dispatch stops being mislabelled as subagent_start), but
+# WP15 explicitly does NOT change which event fires — that is A-13's
+# producer work. worktree_create has no subsystem at all. Neither row is
+# removable by this mission. ----
+subagent_start justify(blocker: "no production subagent start path; kenaz__subagent_dispatch is never registered (builtins_wiring.go:311-330 is statically dead)", owner: alec, date: 2026-08-19)
+worktree_create justify(blocker: "no worktree lifecycle subsystem exists in core/ or cmd/; A-13 does not cover it — raised as E-009", owner: alec, date: 2026-08-19)

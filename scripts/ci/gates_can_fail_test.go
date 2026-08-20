@@ -649,6 +649,28 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				"\t}\n" +
 				"}\n",
 		},
+		{
+			// trust-surfaces-that-fire-01PMZ202 WP08 (UNIT-7), G-2 leg c: an
+			// AllEvents entry with no firer AND no allowlist row — the
+			// planted-violation shape the WP's own spec names ("an
+			// AllEvents entry with no firer and no allowlist row"). A new
+			// event is added to core/hooks.AllEvents via an
+			// `AllEvents = append(AllEvents, ...)` reassignment (legal Go —
+			// AllEvents is a package-level var, and this is not a second
+			// `var AllEvents = []string{...}` declaration) so the plant can
+			// land as a pure end-of-file append, the only shape the shared
+			// plant() helper supports for an existing file. The gate's
+			// leg-c parser is deliberately not limited to the hand-written
+			// literal block for exactly this reason.
+			name:       "hook-event-fire-sites/allevents-entry-no-firer-no-allowlist-row",
+			gate:       "check-hook-event-fire-sites.sh",
+			wantOutput: "zz_gate_probe_event",
+			file:       "core/hooks/hooks.go",
+			append: "\n\nconst EventZzGateProbe = \"zz_gate_probe_event\"\n\n" +
+				"func zzGateProbeAppendsAnEventlessEvent() {\n" +
+				"\tAllEvents = append(AllEvents, EventZzGateProbe)\n" +
+				"}\n",
+		},
 	}
 
 	for _, tc := range cases {
