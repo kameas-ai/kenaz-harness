@@ -1472,6 +1472,40 @@ and now is guarded.
 
 ---
 
+### 2026-08-19 · `check-codegen.sh` attests the binding *source*, not the emitted bindings
+
+Found while verifying a sub-agent's work on `release/01PMZ909-bundle-verify`.
+The agent hand-wrote `frontend/wailsjs/go/models.ts` because it believed no
+Wails toolchain was available, then ran
+`check-codegen.sh --update-wailsjs-hash`. The gate went green.
+
+The toolchain **was** available (`$HOME/go/bin/wails`). Running
+`wails generate module` produced a file differing from the hand-mirror in 88
+lines: the `trustanchor` namespace block was byte-identical (84 lines) but
+placed near line 1085 instead of 7662, plus trailing-whitespace drift. A
+sorted-line compare of the two files is empty, so this particular instance
+was harmless — TypeScript does not care where a namespace sits in the module.
+
+The gate hole is the point, not this instance. `check-codegen.sh` hashes the
+Go **binding source** and compares it against a committed hash that any
+author can restamp with `--update-wailsjs-hash`. So a green result asserts
+*"the bindings were stamped for this source"*, never *"the bindings are what
+Wails would emit."* Both the hand-mirror and the regenerated file pass it.
+Nothing in CI regenerates the bindings and diffs the result, which means any
+hand-edit of `frontend/wailsjs/**` — including a semantically wrong one —
+passes as long as the hash is restamped.
+
+This is the vacuous-pass shape: the gate cannot fail for the defect class a
+reader assumes it covers. It belongs with the gate-falsifiability finding
+(19 of 34 gates have a planted-violation proof; this one has none that
+exercises output drift).
+
+**Owed:** either regenerate-and-diff in CI (needs the Wails toolchain on the
+runner — the same missing-toolchain constraint that produced the hand-mirror),
+or a planted-violation proof in `scripts/ci/gates_can_fail_test.go` that
+mutates a committed binding file and asserts the gate fails. It currently
+would not. **Owner: unassigned. Not fixed here — recorded only.**
+
 ## Drained
 
 ### 2026-08-16 · what the export scanner covered BEFORE, and what leaked
