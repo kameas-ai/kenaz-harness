@@ -60,12 +60,39 @@ const (
 // schema section (so Materialize recreates it) but never in the data
 // section: repopulating session_messages replays the AFTER INSERT
 // triggers, which repopulate the FTS index as a side effect.
-var ftsVirtualTables = map[string]bool{
-	"messages_fts": true,
+// virtualTableNames derives the set of virtual tables from the schema
+// itself rather than a hand-maintained list.
+//
+// It used to be `var ftsVirtualTables = map[string]bool{"messages_fts": true}`.
+// That list was guaranteed to rot, and did: audit-that-tells-the-truth-01PMZA10
+// added `events_fts` in v0.65.0, nothing updated the map, so the four
+// `events_fts_*` shadow tables were dumped as if they were ordinary tables.
+// Replaying that dump then failed —
+//
+//	materialize schema "CREATE VIRTUAL TABLE events_fts USING fts5(":
+//	fts5: error creating shadow table events_fts_data: table
+//	'events_fts_data' already exists
+//
+// — because CREATE VIRTUAL TABLE recreates the shadow tables that the
+// replay had just created by hand. The first snapshot to contain an FTS
+// table other than messages_fts was unmaterialisable, which would have
+// silently cost the next release its upgrade coverage.
+func virtualTableNames(objs []schemaObject) map[string]bool {
+	out := map[string]bool{}
+	for _, o := range objs {
+		if o.typ == "table" && o.isVirtualTable() {
+			out[o.name] = true
+		}
+	}
+	return out
 }
 
-func isFTSShadow(name string) bool {
-	for v := range ftsVirtualTables {
+// isFTSShadow reports whether name is a shadow table owned by one of the
+// given virtual tables. SQLite recreates these automatically from the
+// CREATE VIRTUAL TABLE statement, so they must appear in neither the
+// schema nor the data section of a snapshot.
+func isFTSShadow(name string, virtuals map[string]bool) bool {
+	for v := range virtuals {
 		if name != v && strings.HasPrefix(name, v+"_") {
 			return true
 		}
@@ -97,9 +124,11 @@ func Dump(ctx context.Context, db *sql.DB) (string, error) {
 	b.WriteString("-- content_hash is verbatim (load-bearing, see VerifyLedger).\n")
 	b.WriteString("-- DO NOT HAND-EDIT. Regenerate with scripts/ci/upgrade-snapshot.sh.\n\n")
 
+	virtuals := virtualTableNames(objs)
+
 	b.WriteString("-- === SCHEMA (sorted by type, name) ===\n\n")
 	for _, o := range objs {
-		if o.typ == "table" && isFTSShadow(o.name) {
+		if o.typ == "table" && isFTSShadow(o.name, virtuals) {
 			continue
 		}
 		stmt := strings.TrimSpace(o.sql)
@@ -112,7 +141,7 @@ func Dump(ctx context.Context, db *sql.DB) (string, error) {
 
 	b.WriteString("-- === DATA (sorted by table name, rows sorted by primary key) ===\n\n")
 	for _, o := range objs {
-		if o.typ != "table" || o.isVirtualTable() || isFTSShadow(o.name) {
+		if o.typ != "table" || o.isVirtualTable() || isFTSShadow(o.name, virtuals) {
 			continue
 		}
 		if o.name == "sqlite_sequence" {
@@ -439,9 +468,10 @@ func ListDataTables(ctx context.Context, db *sql.DB) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	virtuals := virtualTableNames(objs)
 	var out []string
 	for _, o := range objs {
-		if o.typ != "table" || o.isVirtualTable() || isFTSShadow(o.name) || o.name == "sqlite_sequence" {
+		if o.typ != "table" || o.isVirtualTable() || isFTSShadow(o.name, virtuals) || o.name == "sqlite_sequence" {
 			continue
 		}
 		out = append(out, o.name)
