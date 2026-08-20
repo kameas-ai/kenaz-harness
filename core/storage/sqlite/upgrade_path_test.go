@@ -340,6 +340,17 @@ func assertSurfaceReads(t *testing.T, ctx context.Context, db storage.DB) {
 	if n := count("fts search", `SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'kameas'`); n < 1 {
 		t.Errorf("FTS search for 'kameas' = %d hits, want >= 1 (seed-msg-1's content)", n)
 	}
+
+	// chat-turn-integrity-01PMZ606 WP02 (AC-004, partial): migration
+	// sessions/0336 must have created stream_checkpoints on every
+	// snapshot in the chain, including v0.64.0 (which predates it). The
+	// table is empty here — nothing in this mission's WPs writes a row
+	// during Open — so this asserts the table EXISTS and is queryable,
+	// not any row content; the write path is covered by AC-001/AC-002
+	// in core/rpc/views/agentgraph/chat.
+	if n := count("stream_checkpoints", "SELECT COUNT(*) FROM stream_checkpoints"); n != 0 {
+		t.Errorf("stream_checkpoints row count = %d, want 0 (migration 0336 creates an empty table; nothing writes to it during Open)", n)
+	}
 }
 
 // assertPragmaClean asserts the two secondary integrity pragmas spec

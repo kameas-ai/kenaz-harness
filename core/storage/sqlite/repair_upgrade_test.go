@@ -28,7 +28,8 @@ import (
 // This test builds that exact database — a real, fully-migrated data.db
 // rewound so the late sessions migrations are unapplied while the
 // high-numbered units rows stay in the ledger — reopens it through the
-// production Open path, and requires the four migrations to land and a
+// production Open path, and requires the (now five, since
+// chat-turn-integrity-01PMZ606 WP02 added 0336) migrations to land and a
 // session INSERT to succeed.
 //
 // Verified equivalently against a copy of the live dev database
@@ -88,7 +89,8 @@ func TestOpen_RepairsDatabaseMissingLateSessionsMigrations(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = repaired.Close(context.Background()) })
 
-	// 4. The four missing migrations must be applied.
+	// 4. The five missing migrations must be applied (332-336; 0336 added
+	//    by chat-turn-integrity-01PMZ606 WP02).
 	rows, err := repaired.Reader().Query(ctx,
 		"SELECT version FROM harness_migrations WHERE owning_mission='sessions' AND version >= 332 AND action='applied' ORDER BY version")
 	if err != nil {
@@ -103,7 +105,7 @@ func TestOpen_RepairsDatabaseMissingLateSessionsMigrations(t *testing.T) {
 		got = append(got, v)
 	}
 	rows.Close()
-	want := []int{332, 333, 334, 335}
+	want := []int{332, 333, 334, 335, 336}
 	if len(got) != len(want) {
 		t.Fatalf("re-applied sessions migrations = %v, want %v", got, want)
 	}

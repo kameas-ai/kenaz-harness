@@ -178,28 +178,61 @@ type Store interface {
 	// has completed yet (column is NULL).
 	// Returns ErrSessionNotFound when the session does not exist.
 	GetLastUsage(ctx context.Context, id string) (LastUsage, error)
+
+	// UpsertStreamCheckpoint durably persists (or overwrites) the
+	// mid-run checkpoint for one (sessionID, subID) stream subscription
+	// (chat-turn-integrity-01PMZ606 WP02/WP03). Called by the periodic
+	// flush loop roughly once per tick; the composite primary key means
+	// this is an upsert, not an append — a multi-tick turn leaves
+	// exactly one row per subscription. NOT a session_messages write;
+	// see migration sessions/0336-stream-checkpoints for why the
+	// checkpoint lives in its own table.
+	UpsertStreamCheckpoint(ctx context.Context, sessionID, subID, text string, hasTool bool, now time.Time) error
+
+	// GetStreamCheckpoint loads the current checkpoint for
+	// (sessionID, subID), if any. The second return is false (with a
+	// nil error) when no checkpoint exists — that is the normal state
+	// before the first tick and after a clean or error close deletes
+	// the row, not an error condition.
+	GetStreamCheckpoint(ctx context.Context, sessionID, subID string) (StreamCheckpoint, bool, error)
+
+	// DeleteStreamCheckpoint removes the checkpoint row for
+	// (sessionID, subID), if any. Idempotent: deleting an
+	// already-absent checkpoint is not an error, so both the
+	// clean-close and error-close call sites can call it
+	// unconditionally.
+	DeleteStreamCheckpoint(ctx context.Context, sessionID, subID string) error
 }
 
 // memStore is the in-memory Store implementation. Backed by maps
 // guarded by a single RWMutex; appropriate for test scale and as the
 // boot fallback before the SQL store is wired.
 type memStore struct {
-	mu        sync.RWMutex
-	records   map[string]Record
-	messages  map[string][]Message  // session_id -> ordered messages
-	seqByID   map[string]int64      // session_id -> next sequence
-	lastUsage map[string]*LastUsage // session_id -> last usage snapshot
+	mu          sync.RWMutex
+	records     map[string]Record
+	messages    map[string][]Message         // session_id -> ordered messages
+	seqByID     map[string]int64             // session_id -> next sequence
+	lastUsage   map[string]*LastUsage        // session_id -> last usage snapshot
+	checkpoints map[string]*StreamCheckpoint // "sessionID\x00subID" -> checkpoint
 }
 
 // NewMemoryStore returns an in-memory Store. Useful for tests and as
 // the manager's default before storage-foundations wires a real DB.
 func NewMemoryStore() Store {
 	return &memStore{
-		records:   map[string]Record{},
-		messages:  map[string][]Message{},
-		seqByID:   map[string]int64{},
-		lastUsage: map[string]*LastUsage{},
+		records:     map[string]Record{},
+		messages:    map[string][]Message{},
+		seqByID:     map[string]int64{},
+		lastUsage:   map[string]*LastUsage{},
+		checkpoints: map[string]*StreamCheckpoint{},
 	}
+}
+
+// checkpointKey builds the memStore composite-key for a
+// (sessionID, subID) checkpoint. NUL is not a legal character in
+// either id (both are ULID/UUID-shaped), so it cannot collide.
+func checkpointKey(sessionID, subID string) string {
+	return sessionID + "\x00" + subID
 }
 
 func (s *memStore) Create(_ context.Context, r Record) error {
@@ -425,6 +458,36 @@ func (s *memStore) GetLastUsage(_ context.Context, id string) (LastUsage, error)
 		return *u, nil
 	}
 	return LastUsage{}, nil
+}
+
+func (s *memStore) UpsertStreamCheckpoint(_ context.Context, sessionID, subID, text string, hasTool bool, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.checkpoints[checkpointKey(sessionID, subID)] = &StreamCheckpoint{
+		SessionID: sessionID,
+		SubID:     subID,
+		Text:      text,
+		HasTool:   hasTool,
+		UpdatedAt: now,
+	}
+	return nil
+}
+
+func (s *memStore) GetStreamCheckpoint(_ context.Context, sessionID, subID string) (StreamCheckpoint, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cp, ok := s.checkpoints[checkpointKey(sessionID, subID)]
+	if !ok {
+		return StreamCheckpoint{}, false, nil
+	}
+	return *cp, true, nil
+}
+
+func (s *memStore) DeleteStreamCheckpoint(_ context.Context, sessionID, subID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.checkpoints, checkpointKey(sessionID, subID))
+	return nil
 }
 
 func (s *memStore) Reorder(_ context.Context, ids []string, now time.Time) error {
@@ -1072,6 +1135,74 @@ func (s *sqlStore) GetLastUsage(ctx context.Context, id string) (LastUsage, erro
 		return LastUsage{}, nil
 	}
 	return unmarshalLastUsage(*raw)
+}
+
+// UpsertStreamCheckpoint durably persists (or overwrites) the mid-run
+// checkpoint for one (sessionID, subID) stream subscription
+// (chat-turn-integrity-01PMZ606 WP02/WP03, migration
+// sessions/0336-stream-checkpoints). The composite primary key makes
+// this an UPSERT, not an INSERT: a multi-tick turn leaves exactly one
+// row per subscription, which is the write-amplification fix this
+// mission exists for.
+func (s *sqlStore) UpsertStreamCheckpoint(ctx context.Context, sessionID, subID, text string, hasTool bool, now time.Time) error {
+	hasToolArg := 0
+	if hasTool {
+		hasToolArg = 1
+	}
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		_, err := tx.Exec(ctx, `
+            INSERT INTO stream_checkpoints (session_id, sub_id, text, has_tool, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT (session_id, sub_id) DO UPDATE SET
+                text = excluded.text,
+                has_tool = excluded.has_tool,
+                updated_at = excluded.updated_at
+        `, sessionID, subID, text, hasToolArg, now.UnixNano())
+		return err
+	})
+}
+
+// GetStreamCheckpoint loads the current checkpoint for
+// (sessionID, subID). The second return is false (with a nil error)
+// when no checkpoint row exists.
+func (s *sqlStore) GetStreamCheckpoint(ctx context.Context, sessionID, subID string) (StreamCheckpoint, bool, error) {
+	row := s.db.Reader().QueryRow(ctx, `
+        SELECT text, has_tool, updated_at
+        FROM stream_checkpoints
+        WHERE session_id = ? AND sub_id = ?
+    `, sessionID, subID)
+	var (
+		text       string
+		hasToolArg int
+		updatedNS  int64
+	)
+	if err := row.Scan(&text, &hasToolArg, &updatedNS); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return StreamCheckpoint{}, false, nil
+		}
+		return StreamCheckpoint{}, false, err
+	}
+	return StreamCheckpoint{
+		SessionID: sessionID,
+		SubID:     subID,
+		Text:      text,
+		HasTool:   hasToolArg != 0,
+		UpdatedAt: time.Unix(0, updatedNS),
+	}, true, nil
+}
+
+// DeleteStreamCheckpoint removes the checkpoint row for
+// (sessionID, subID), if any. Idempotent — deleting an already-absent
+// checkpoint is not an error, unlike most of this store's other
+// deletes, because "no checkpoint" is the steady state between ticks
+// and after a clean/error close.
+func (s *sqlStore) DeleteStreamCheckpoint(ctx context.Context, sessionID, subID string) error {
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		_, err := tx.Exec(ctx,
+			"DELETE FROM stream_checkpoints WHERE session_id = ? AND sub_id = ?",
+			sessionID, subID)
+		return err
+	})
 }
 
 func (s *sqlStore) Reorder(ctx context.Context, ids []string, now time.Time) error {
