@@ -600,6 +600,14 @@ type API struct {
 	// without re-constructing.
 	harnessServer *harnessServer
 
+	// toolPermsResolver is the merged permission resolver (static arm +
+	// the harness-self-attach-01PMHS01 UNIT-4 Cedar session-kind arm)
+	// newLLMStack constructs and hands back via llmStack.perms. Held so
+	// tests can drive the ACTUAL production wire directly rather than
+	// reconstructing an equivalent resolver by hand. Never nil once New
+	// has run — see newLLMStack's UNIT-4 wiring comment for why.
+	toolPermsResolver toolloop.PermissionResolver
+
 	// onboardingAPI is the first-run onboarding view (WP08). Wired in
 	// New when a real Core is available; falls back to a zero-config
 	// stub that returns sensible defaults so the chassis-only test
@@ -1321,6 +1329,33 @@ func New(c *core.Core, opts ...Option) *API {
 	// struct and check-cedar-engine-singleton.sh (I15).
 	a.cedarEngine = buildCedarEngineOrNil(coreDataDir(c))
 
+	// harness-self-attach-01PMHS01 UNIT-2: install the three shipped
+	// harness-self Cedar policies (harness_read_default.cedar,
+	// harness_write_onboarding.cedar, harness_write_forbid.cedar —
+	// harnessmcp.EmbeddedCedar) into the SAME singleton engine every
+	// other ActionUse* gate above reads. Engine.LoadHarnessSnippets has
+	// existed and been unit-tested since WP06 of
+	// harness-self-mcp-onboarding-01KQ8TDU, but nothing called it at
+	// boot: every ActionUseTool evaluation for a harness-self tool was
+	// NotApplicable, which this engine's DefaultDeny=false posture maps
+	// to Allow — the write-tool forbid floor was compiled into the
+	// binary but never reached the live engine. A silent skip here is
+	// indistinguishable from "installed and permissive" to every
+	// existing listing test, so failures are logged loud (Error, not
+	// Warn) rather than swallowed, and the install is asserted against
+	// the exact expected count rather than just "no error".
+	if a.cedarEngine != nil {
+		if snippets, err := harnessmcp.CedarSnippets(); err != nil {
+			logging.L().Error("cedar.harness_snippets_read_failed", "err", err.Error())
+		} else if err := a.cedarEngine.LoadHarnessSnippets(snippets); err != nil {
+			logging.L().Error("cedar.harness_snippets_load_failed", "err", err.Error())
+		} else if n := len(snippets); n != 3 {
+			logging.L().Error("cedar.harness_snippets_count_unexpected", "count", n, "want", 3)
+		} else {
+			logging.L().Info("cedar.harness_snippets_installed", "count", n)
+		}
+	}
+
 	// Wire the Cedar gate for BulkPurge (F-001 security fix). The gate is
 	// built from the same DataDir as every other Cedar gate in the chassis.
 	// When DataDir is empty (e.g. test mode) a.cedarGate() returns AllowAll
@@ -1702,6 +1737,11 @@ func New(c *core.Core, opts ...Option) *API {
 	a.stdioPool = stack.pool
 	a.dispatchPool = stack.dispatchPool
 	a.builtins = stack.builtins
+	// harness-self-attach-01PMHS01 UNIT-4: hold the merged resolver
+	// newLLMStack constructed so tests can exercise the actual
+	// production wire (see harness_session_kind_resolver_wiring_test.go)
+	// instead of reconstructing an equivalent by hand.
+	a.toolPermsResolver = stack.perms
 	// long-turn-resilience-01KR3PRS WP03: now that both the chat
 	// runner and the session manager are constructed, wire the
 	// ResumeStarter onto the existing sessionsAPI so
@@ -3969,6 +4009,16 @@ type llmStack struct {
 	// can route http/sse recipes to the right transport without knowing
 	// the transport ahead of time.
 	dispatchPool *dispatch.Pool
+	// perms is the merged permission resolver (static arm + the
+	// harness-self-attach-01PMHS01 UNIT-4 Cedar session-kind arm)
+	// constructed during newLLMStack. Held so tests can exercise the
+	// EXACT production wire directly (see
+	// harness_session_kind_resolver_wiring_test.go) rather than
+	// reconstructing an equivalent resolver by hand, which would prove
+	// nothing about the actual wiring in New(). toolDiscoverer and
+	// wfToolDiscovererAdapter both close over this same value — see
+	// AC-006/AC-007's "one resolver reaches both consumers" note.
+	perms toolloop.PermissionResolver
 }
 
 func newLLMStack(
@@ -4058,20 +4108,63 @@ func newLLMStack(
 	// WP02 — wire the global static resolver against
 	// <DataDir>/mcp_servers.json. A missing file soft-fails to
 	// auto_allow (the file is opt-in); a malformed file logs a
-	// warning and the resolver is left nil so the loop's built-in
-	// auto_allow default applies. Per-session overrides (C2) are
-	// composed on top of this when the session manager grows the
-	// MCPOverrides reader.
-	var perms toolloop.PermissionResolver
+	// warning and the resolver is left nil, which NewMergedResolver
+	// below treats as auto_allow for the static arm specifically
+	// (perms.go:291-293) — safe ONLY because the session arm
+	// constructed unconditionally below still enforces containment on
+	// its own. Per-session overrides (C2) are composed on top of this
+	// when the session manager grows the MCPOverrides reader.
+	var staticPerms toolloop.PermissionResolver
 	if c != nil && c.DataDir() != "" {
-		staticPerms, permErr := toolloop.NewStaticResolverFromDataDir(c.DataDir())
+		sp, permErr := toolloop.NewStaticResolverFromDataDir(c.DataDir())
 		if permErr != nil {
 			logging.L().Warn("toolloop.permissions.static_load_failed",
 				"data_dir", c.DataDir(), "err", permErr.Error())
 		} else {
-			perms = staticPerms
+			staticPerms = sp
 		}
 	}
+
+	// harness-self-attach-01PMHS01 UNIT-4 — THE CONTAINMENT. Owner
+	// ruling B-2 assigns per-run tool containment to this wire; B-3
+	// removes the human review moment for model-created schedules,
+	// making this the ONLY boundary between a model-chosen prompt
+	// running unattended and the full tool catalogue (spec.md §6.1).
+	// The register's bar: "must be correct, not merely present."
+	//
+	// The previous code built `perms` only inside
+	// `if c != nil && c.DataDir() != ""` — an empty DataDir, or the
+	// permErr branch just above, left `perms` nil. A nil perms is not
+	// a restrictive resolver, it is NO resolver:
+	// discoverer_adapter.go's `if d.perms != nil` guard lists
+	// everything, and chatPermsAdapter.Resolve returns "auto_allow"
+	// when its inner resolver is nil. Every existing and proposed
+	// listing test passed in that state; AC-015 pins it shut.
+	//
+	// The session arm is built UNCONDITIONALLY, below, before either
+	// branch above runs — it does not depend on DataDir, only on a
+	// session store and the shared Cedar engine. A static-load failure
+	// (the permErr branch above) still yields
+	// NewMergedResolver(nil, sessionArm), never a bare nil perms.
+	var sessionMgr *session.Manager
+	if c != nil {
+		sessionMgr = c.SessionManager()
+	}
+	// newCedarSessionKindResolver never returns nil and never errors —
+	// it degrades its OWN Resolve to deny-all (not auto_allow) when it
+	// cannot actually evaluate anything (no session store, no Cedar
+	// engine: buildCedarEngineOrNil returns nil for an empty DataDir or
+	// a construction failure). That is rule 3 of this unit made
+	// concrete: "if the session arm itself cannot be constructed... fail
+	// the boot loudly or install a deny-all session arm. Never fall
+	// back to the static resolver alone, and never to nil." An inert
+	// (auto_allow, no-match) degrade here would let a nil/failed static
+	// arm's own auto_allow default govern everything — reproducing the
+	// exact "could not determine the allowlist" hole B-3 says must not
+	// run, just one level down. See harness_session_kind_resolver.go's
+	// Resolve for where this posture is implemented.
+	sessionArm := newCedarSessionKindResolver(sessionMgr, cedarEngine)
+	perms := toolloop.NewMergedResolver(staticPerms, sessionArm)
 	// WP03 — pre/post-tool-use hooks and audit emission. core/hooks
 	// only exposes pre_send / post_send for chat-pipeline events;
 	// there is no pre_tool_use / post_tool_use surface there yet, so
@@ -4433,6 +4526,7 @@ func newLLMStack(
 		wrappedPool:         wrappedPool,
 		toolDiscoverer:      toolDiscoverer,
 		dispatchPool:        dispatchPool,
+		perms:               perms,
 
 		confirmBus:           confirmBus,
 		confirmSessionGrants: confirmSessionGrants,

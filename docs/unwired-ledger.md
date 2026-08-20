@@ -1209,25 +1209,39 @@ entry no longer names no owner and no mission.** The harness-self MCP
 server (B10 in `docs/dead-code-audit-2026-08-16.md`, this section's
 subject) is no longer parked as "housekeeping": the owner ruled
 **attach** on 2026-08-18. See
-`kitty-specs/mcp-connector-lifecycle-01PMMC01/research/b10-harness-self-decision.md`
-for the decision record. Execution (the session-scoped tool-visibility
-seam, the fourth dispatch-pool arm, installing `EmbeddedCedar`, making
+`kitty-specs/harness-self-attach-01PMHS01/research/attach-decision.md`
+for the decision record (the original pointer,
+`kitty-specs/mcp-connector-lifecycle-01PMMC01/research/b10-harness-self-decision.md`,
+is dangling — that mission is archived and has no `research/` directory
+at all; the ruling it held is reproduced in the file cited above).
+Execution (the session-scoped tool-visibility seam, the fourth
+dispatch-pool arm, installing `EmbeddedCedar`, making
 `IsHarnessSelfMCPDisabled` real, emitting-or-deleting the dead event
 kinds, and the Cedar-gating that makes attaching safe rather than merely
-attached) is **deferred to a dedicated follow-on mission**, not executed
-in `mcp-connector-lifecycle-01PMMC01` (that mission's own WP07 is
-explicitly out of scope for the attach — see its spec). **Owner of the
-attach execution:** **escalated 2026-08-19 as G-9**
-(`docs/escalation-register-2026-08-19.md` Part 8), per ruling F-1 — this row
-names a real blocker but no person, which is exactly what F-1 forbids. G-9's
-recommended default is to name alec and date it: the product decision (attach)
-was already ruled 2026-08-18, so no capability question is open. **This row was
-missed by F-1's count of sixteen**, which anchored on the bold
-`**Owner:** unassigned` form — see Part 8 §8.3-P2. **Blocker:** the visibility seam
-and `EmbeddedCedar` wiring do not exist yet (spec §6 option A cost items
-2 and 3) — attaching without them would hand every session write access
-to provider credentials and settings, which is why this is not a
-same-commit fix.
+attached) is now **assigned to the dedicated follow-on mission**,
+`harness-self-attach-01PMHS01`, and not executed in
+`mcp-connector-lifecycle-01PMMC01` (that mission's own WP07 is
+explicitly out of scope for the attach — see its spec).
+
+**AMENDMENT 2026-08-19 (`harness-self-attach-01PMHS01` UNIT-1) — owner
+named.** `docs/escalation-register-2026-08-19.md` Part 8 **G-9 was RULED**
+(not merely escalated): *"✅ RULED 2026-08-19 — owner: alec. Owner: alec.
+Dated 2026-08-19."* **Owner of the attach execution: alec, dated
+2026-08-19, executing as `harness-self-attach-01PMHS01`.** No capability
+question remains open — the attach decision was made 2026-08-18; G-9 only
+named who dispatches the follow-on mission, and it is now dispatched.
+This row was previously missed by F-1's count of sixteen because it
+anchored on the bold `**Owner:** unassigned` form rather than this row's
+prose — see Part 8 §8.3-P2. **The blocker is load-bearing and survives
+the owner assignment** (G-9's own ruling text: *"Naming an owner does not
+unblock the work; it names who decides when it unblocks"*): the
+session-scoped visibility seam and `EmbeddedCedar` wiring do not exist on
+`main` as of this amendment — they are `harness-self-attach-01PMHS01`
+UNIT-2/UNIT-3/UNIT-4, not yet landed. Attaching before they land would
+hand every session write access to provider credentials and settings,
+which is why the mission's own sequencing rule (see its `tasks.md`) is
+non-negotiable: no commit may make `harnessServer.Server()` reachable
+from a session until AC-002 passes.
 
 Two small pieces of this finding were resolved immediately, regardless
 of the attach mission's timeline, because they were unambiguous under

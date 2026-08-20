@@ -79,7 +79,18 @@ func (d *mcpToolDiscoverer) Tools(ctx context.Context, sessionID string) ([]core
 		for _, t := range raw {
 			if d.perms != nil {
 				res, perr := d.perms.Resolve(ctx, sessionID, t.Server, t.Name)
-				if perr == nil && res.Policy == toolloop.PolicyDeny {
+				// harness-self-attach-01PMHS01 UNIT-4, AC-017: a
+				// resolver error used to leave the tool listed
+				// (perr == nil was required to even consider denying).
+				// AC-016's dispatch-time floor (kernel_tool_adapter.go's
+				// default: arm) still refuses the CALL when the
+				// resolver errors, so this was never a reachability
+				// hole — but it was a visibility lie: the model would
+				// see a tool advertised that any subsequent call to it
+				// was guaranteed to refuse. Omit on error too, so
+				// visibility matches reachability (FR-005) even on the
+				// error path, not just the happy path.
+				if perr != nil || res.Policy == toolloop.PolicyDeny {
 					continue
 				}
 			}

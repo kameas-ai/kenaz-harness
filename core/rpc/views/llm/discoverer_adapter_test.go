@@ -150,10 +150,23 @@ func TestMCPToolDiscoverer_NilResolverNoFiltering(t *testing.T) {
 	}
 }
 
-func TestMCPToolDiscoverer_ResolverErrorDoesNotBlock(t *testing.T) {
-	// The adapter treats a resolver error as "not denied" so a flaky
-	// resolver does not silently strip every tool from the model's
-	// catalog. The dispatch-time gate still enforces the verdict.
+// TestMCPToolDiscoverer_ResolverErrorOmitsTool is
+// harness-self-attach-01PMHS01 UNIT-4's AC-017.
+//
+// Superseded behaviour, changed deliberately by this unit: a resolver
+// error used to leave the tool listed ("not denied" — see git history
+// for the prior version of this test). The dispatch-time gate
+// (kernel_tool_adapter.go's default: arm, AC-016) always refused the
+// CALL when the resolver errored, so this was never a reachability
+// hole — but it was a visibility lie: the model would see a tool
+// advertised whose next call was guaranteed to refuse, burning a turn.
+// Now the resolver's error branch is decided, not defaulted: omit on
+// error, so visibility matches reachability (FR-005) on the error path
+// too, not just the happy path.
+//
+// Mutation: revert to `if perr == nil && res.Policy == PolicyDeny`. Must
+// fail.
+func TestMCPToolDiscoverer_ResolverErrorOmitsTool(t *testing.T) {
 	pool := &stubPool{tools: []mcp.Tool{
 		{Server: "fs", Name: "read", InputSchema: json.RawMessage(`{}`)},
 	}}
@@ -163,8 +176,8 @@ func TestMCPToolDiscoverer_ResolverErrorDoesNotBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Tools: %v", err)
 	}
-	if len(got) != 1 {
-		t.Fatalf("expected 1 tool, got %d", len(got))
+	if len(got) != 0 {
+		t.Fatalf("expected 0 tools (resolver error must omit, not list), got %d: %+v", len(got), got)
 	}
 }
 

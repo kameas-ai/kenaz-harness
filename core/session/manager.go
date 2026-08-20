@@ -113,6 +113,42 @@ type Manager struct {
 	moveFidelityDial func() bool
 
 	posMu sync.Mutex // serialize position assignment on Create
+
+	// kindObservers are notified synchronously, from SetKind, after the
+	// Kind column is persisted and the audit event is emitted.
+	//
+	// harness-self-attach-01PMHS01 UNIT-3: the Cedar-backed session-kind
+	// PermissionResolver caches session.Record.Kind per session id — its
+	// hot-path contract (CLAUDE.md § "Race-safe test fakes" aside) is
+	// "no SQL read per tool call". A cache with no invalidation path
+	// would leave write-tool access live after the onboarding FSM's
+	// `SetKind(ctx, id, "chat")` transition (C-010) until process
+	// restart, which is exactly the stale-permission window B-3 says
+	// this containment must not have. Observers are called for EVERY
+	// SetKind, regardless of caller (the onboarding FSM's two call
+	// sites in core/onboarding/fsm.go are unmodified by this — they
+	// already call SetKind; this just makes that call synchronously
+	// reach anything that cached the old value).
+	kindObserversMu sync.Mutex
+	kindObservers   []KindTransitionObserver
+}
+
+// KindTransitionObserver is notified when SetKind changes a session's
+// Kind. See Manager.AddKindTransitionObserver.
+type KindTransitionObserver func(sessionID, newKind string)
+
+// AddKindTransitionObserver registers fn to be called synchronously
+// every time SetKind persists a new Kind for any session. Registration
+// is append-only and safe for concurrent use; intended to be called
+// once at boot (or once per test fixture), not per-request. A nil fn
+// is ignored.
+func (m *Manager) AddKindTransitionObserver(fn KindTransitionObserver) {
+	if m == nil || fn == nil {
+		return
+	}
+	m.kindObserversMu.Lock()
+	m.kindObservers = append(m.kindObservers, fn)
+	m.kindObserversMu.Unlock()
 }
 
 // ManagerOption configures a Manager at construction time.
@@ -360,6 +396,12 @@ func (m *Manager) SetKind(ctx context.Context, id, kind string) error {
 		"session_id": id,
 		"kind":       kind,
 	})
+	m.kindObserversMu.Lock()
+	observers := append([]KindTransitionObserver(nil), m.kindObservers...)
+	m.kindObserversMu.Unlock()
+	for _, obs := range observers {
+		obs(id, kind)
+	}
 	return nil
 }
 
