@@ -5004,6 +5004,22 @@ func buildChatRunner(
 		})
 	}
 
+	// chat-turn-integrity-01PMZ606 WP03: StreamCheckpoints wires the
+	// periodic-flush durability seam to session.Manager directly —
+	// Manager.UpsertStreamCheckpoint/DeleteStreamCheckpoint satisfy
+	// chat.StreamCheckpointStore's method set exactly, so no adapter
+	// closure is needed here (unlike partialPersister above, which
+	// combines two Manager calls into one). This replaced the P0: a
+	// healthy multi-tick turn used to write up to six copies of its own
+	// answer into session_messages via partialPersister above, each
+	// flagged as a streaming failure (spec.md §1.1). The periodic flush
+	// now upserts a stream_checkpoints row instead; driveRun deletes it
+	// on both the clean-close and error-close terminal paths.
+	var streamCheckpoints chat.StreamCheckpointStore
+	if historyAdapter != nil && historyAdapter.mgr != nil {
+		streamCheckpoints = historyAdapter.mgr
+	}
+
 	// Usage hook (token-cost-telemetry-01KQ8TD7 WP02 + backend-context-
 	// window-length-01KQ8TD3 WP02 + WP03). The closure fires from
 	// HookPostLLM (after session_write persists the assistant message, so
@@ -5205,6 +5221,7 @@ func buildChatRunner(
 		Compaction:         compactionDeps,
 		CompactionPipeline: chatCompactionPipeline,
 		PartialPersister:   partialPersister,
+		StreamCheckpoints:  streamCheckpoints,
 		UsageHook:          usageHookFn,
 		AutoTitle:          autoTitleDeps,
 		// multimodal-io-extended-01KQ8TD2 WP02: wire the concrete artifact
