@@ -1355,6 +1355,14 @@ type API struct {
 	// fleet Syncer can schedule a debounced push. nil when fleet sync is not
 	// wired; the call is a no-op in that case.
 	syncNotify func(category string)
+
+	// auditRetentionEnforced backs AuditSettings.RetentionEnforced
+	// (audit-that-tells-the-truth-01PMZA10 UNIT-4). Set via
+	// SetAuditRetentionEnforced at chassis-boot wiring time — NEVER a
+	// literal inside GetAuditSettings — so the value genuinely comes
+	// from the wiring and UNIT-8 can flip it to a live check with a
+	// one-line change at the wiring site and zero frontend edit.
+	auditRetentionEnforced bool
 }
 
 // SetSyncNotifier wires the fleet-sync mutation hook. The rpc layer connects
@@ -1362,6 +1370,16 @@ type API struct {
 // debounced push-up. Safe to leave unset (fleet disabled / OSS build).
 func (a *API) SetSyncNotifier(fn func(category string)) {
 	a.syncNotify = fn
+}
+
+// SetAuditRetentionEnforced wires whether the audit retention policy is
+// actually enforced by a real sweep, backing
+// AuditSettings.RetentionEnforced. Defaults to false (the honest
+// pre-UNIT-8 state — nothing sweeps yet); core/rpc/api.go calls this at
+// construction. UNIT-8 (audit-that-tells-the-truth-01PMZA10) is the
+// commit that starts passing true once a real sweep exists.
+func (a *API) SetAuditRetentionEnforced(enforced bool) {
+	a.auditRetentionEnforced = enforced
 }
 
 // notifySync invokes the sync mutation hook for the given category when one
@@ -1539,9 +1557,11 @@ func (a *API) GetAuditSettings(_ context.Context) (AuditSettings, error) {
 	a.auditSettingsMu.Lock()
 	defer a.auditSettingsMu.Unlock()
 	if a.auditSettings.Strategy == "" {
-		return AuditSettings{Strategy: "keep_forever", WindowDays: 90}, nil
+		return AuditSettings{Strategy: "keep_forever", WindowDays: 90, RetentionEnforced: a.auditRetentionEnforced}, nil
 	}
-	return a.auditSettings, nil
+	out := a.auditSettings
+	out.RetentionEnforced = a.auditRetentionEnforced
+	return out, nil
 }
 
 // SetAuditSettings persists the audit retention policy.

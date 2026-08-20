@@ -115,6 +115,68 @@ func TestMemoryBackend_AllSessions(t *testing.T) {
 	}
 }
 
+// flakyBackend wraps a Backend, returning ErrChainHeadMismatch from
+// AppendRow for the first `failures` calls before delegating — a
+// deterministic stand-in for the real contention
+// TestPush_ConcurrentGoroutinesWithStore (core/rpc/views/audit) hit
+// under -race: without AppendComputed's retry loop, up to 75% of 20
+// concurrent pushes to the same "" chain were silently dropped.
+type flakyBackend struct {
+	Backend
+	failures int
+	calls    int
+}
+
+func (f *flakyBackend) AppendRow(ctx context.Context, row Row, expectedHead [32]byte) error {
+	f.calls++
+	if f.calls <= f.failures {
+		return ErrChainHeadMismatch
+	}
+	return f.Backend.AppendRow(ctx, row, expectedHead)
+}
+
+func TestStore_AppendComputed_RetriesOnChainHeadMismatch(t *testing.T) {
+	mem := NewMemoryBackend()
+	flaky := &flakyBackend{Backend: mem, failures: 3}
+	s := NewStore(flaky)
+	ctx := context.Background()
+
+	row := Row{EventID: "retry-1", Kind: "k", EmittedAt: time.UnixMilli(1), Payload: []byte("p")}
+	if err := s.AppendComputed(ctx, row); err != nil {
+		t.Fatalf("AppendComputed: %v", err)
+	}
+	if flaky.calls != 4 {
+		t.Errorf("AppendRow calls = %d, want 4 (3 failures + 1 success)", flaky.calls)
+	}
+	got, err := mem.GetRow(ctx, "retry-1")
+	if err != nil {
+		t.Fatalf("GetRow: %v", err)
+	}
+	if string(got.Payload) != "p" {
+		t.Errorf("payload = %q, want %q", got.Payload, "p")
+	}
+}
+
+// TestStore_AppendComputed_ExhaustsRetries is the falsifiability check
+// for the retry loop: without it (or with an unbounded loop that never
+// gives up), this test would hang or silently swallow the mismatch.
+// It must return the wrapped ErrChainHeadMismatch, not nil and not a
+// different error.
+func TestStore_AppendComputed_ExhaustsRetries(t *testing.T) {
+	mem := NewMemoryBackend()
+	flaky := &flakyBackend{Backend: mem, failures: appendComputedMaxAttempts + 5}
+	s := NewStore(flaky)
+
+	row := Row{EventID: "retry-2", Kind: "k", EmittedAt: time.UnixMilli(1), Payload: []byte("p")}
+	err := s.AppendComputed(context.Background(), row)
+	if !errors.Is(err, ErrChainHeadMismatch) {
+		t.Fatalf("AppendComputed after exhausting retries: got err=%v, want wrapped ErrChainHeadMismatch", err)
+	}
+	if flaky.calls != appendComputedMaxAttempts {
+		t.Errorf("AppendRow calls = %d, want exactly %d (the bound)", flaky.calls, appendComputedMaxAttempts)
+	}
+}
+
 func TestStoreCtor(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {

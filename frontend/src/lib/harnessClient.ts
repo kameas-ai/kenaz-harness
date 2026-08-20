@@ -4940,8 +4940,11 @@ export function createFakeHarnessClient(
       setAutoTitleEnabled: noop,
       getChatCustomInstructions: async () => '',
       setChatCustomInstructions: noop,
-      // audit-log-enhancement-01KX5R8F WP07
-      getAuditSettings: async () => ({ strategy: 'keep_forever', window_days: 90 }),
+      // audit-log-enhancement-01KX5R8F WP07; retention_enforced added by
+      // audit-that-tells-the-truth-01PMZA10 UNIT-4 (spec D-8) — the fake
+      // reports false, matching the honest pre-UNIT-8 default the real
+      // backend wires (core/rpc/api.go's SetAuditRetentionEnforced(false)).
+      getAuditSettings: async () => ({ strategy: 'keep_forever', window_days: 90, retention_enforced: false }),
       setAuditSettings: noop,
       // fleet-auth-foundation-01NDFSEX08 WP05
       fleetSignIn: async () => ({
