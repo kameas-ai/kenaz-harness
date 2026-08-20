@@ -121,6 +121,7 @@ var cwdSensitiveGates = []string{
 	"check-upgrade-snapshots-locked.sh",
 	"check-destructive-migration-coverage.sh",
 	"check-entrypoint-coverage.sh",
+	"check-installer-payload.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -638,6 +639,17 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				"\t\tt.Fatalf(\"SetMemoryNarrativeEnabled: %v\", err)\n" +
 				"\t}\n" +
 				"}\n",
+		},
+		{
+			// entry-points-and-crash-reporting-01PMZD13 UNIT-2. A built,
+			// signed, zipped .exe with no installer payload line
+			// reproduces the kenaz-updater.exe defect: shipped in the zip,
+			// silently absent from the NSIS installer.
+			name:       "installer-payload/unlisted-build-target",
+			wantOutput: "zzgateprobe.exe",
+			gate:       "check-installer-payload.sh",
+			file:       ".github/workflows/release.yml",
+			append:     "\n      # zzGateProbe: -o \"build/bin/zzgateprobe.exe\"\n",
 		},
 		{
 			// entry-points-and-crash-reporting-01PMZD13 UNIT-1. Deviates
