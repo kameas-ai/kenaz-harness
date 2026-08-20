@@ -250,6 +250,15 @@ callers=$(grep -rln 'AppendTranscriptEntry(' \
   grep -v '_test\.go$' |
   grep -v '^core/session/' |
   grep -v '^\(vendor\|node_modules\|frontend\)/' |
+  # .claude/worktrees/ holds sub-agent worktrees — full copies of the
+  # repo sharing this .git. Scanning them counts each copy's api.go as
+  # an extra AppendTranscriptEntry caller, so this gate FAILED on any
+  # developer machine with an agent worktree checked out while the
+  # tree itself was clean. A gate that reports a violation that is not
+  # there is as broken as one that misses a real one. (The scan
+  # deliberately starts at '.' rather than core/ so callers OUTSIDE
+  # core/ are still caught — that intent is preserved.)
+  grep -v '^\.claude/' |
   sort || true)
 caller_count=$(printf '%s' "$callers" | grep -c . || true)
 
