@@ -121,6 +121,7 @@ var cwdSensitiveGates = []string{
 	"check-upgrade-snapshots-locked.sh",
 	"check-destructive-migration-coverage.sh",
 	"check-tool-containment-unconditional.sh",
+	"check-upgrade-snapshot-present.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -672,20 +673,61 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				"\tAllEvents = append(AllEvents, EventZzGateProbe)\n" +
 				"}\n",
 		},
+		{
+			// The absence gate. Unlike every other case in this table,
+			// the violation cannot be planted as a file: the defect is a
+			// snapshot directory that does NOT exist for a tag that DOES.
+			// Adding a file cannot create that; advancing the tag can.
+			//
+			// UPGRADE_SNAPSHOT_PRESENT_MAX_TAG=v99.0.0 stands in for "a
+			// release was just tagged and nobody ran upgrade-snapshot.sh"
+			// — the exact situation that shipped on v0.63.2, v0.64.0 and
+			// v0.64.1. It is not a suppression knob and cannot make a
+			// real violation pass; it only chooses which tag counts as
+			// newest, so the gate's real comparison runs against the real
+			// committed snapshot directories.
+			name: "upgrade-snapshot-present/chain-behind-newest-tag",
+			// The gate's specific diagnosis, not its "[upgrade-snapshot-
+			// present]" label — the label also prefixes "no stable release
+			// tag is reachable" and "no snapshot directories", so matching
+			// it would let a gate that cannot see tags at all satisfy this
+			// proof.
+			wantOutput: "chain is behind the newest release tag",
+			gate:       "check-upgrade-snapshot-present.sh",
+			env:        map[string]string{"UPGRADE_SNAPSHOT_PRESENT_MAX_TAG": "v99.0.0"},
+		},
 	}
 
 	for _, tc := range cases {
 		tc := tc
 		// Not parallel: these mutate the working tree.
 		t.Run(tc.name, func(t *testing.T) {
-			full := filepath.Join(root, tc.file)
-			cleanup := plant(t, full, tc.content, tc.append)
-			defer cleanup()
+			// A case with no `file` plants nothing in the tree. That is
+			// not a weaker proof — it is the only shape an ABSENCE gate
+			// can take. check-upgrade-snapshot-present.sh fails when the
+			// snapshot chain is BEHIND the newest release tag, and you
+			// cannot create that condition by adding a file; you create
+			// it by moving the tag forward, which is what that case's
+			// env override does. Every such case must still name a
+			// wantOutput, so the proof stays about the specific
+			// violation rather than about a non-zero exit.
+			violation := tc.file
+			if tc.file != "" {
+				full := filepath.Join(root, tc.file)
+				cleanup := plant(t, full, tc.content, tc.append)
+				defer cleanup()
+			} else {
+				if tc.wantOutput == "" {
+					t.Fatalf("case %q plants no file and names no wantOutput — "+
+						"a non-zero exit alone would be satisfied by a permanently broken gate.", tc.name)
+				}
+				violation = "the environment (" + tc.name + ")"
+			}
 
 			code, out := runGateEnv(t, tc.gate, root, tc.env)
 			if code == 0 {
 				t.Fatalf("%s exited 0 with a planted violation in %s — the gate cannot fail.\noutput:\n%s",
-					tc.gate, tc.file, out)
+					tc.gate, violation, out)
 			}
 			// A non-zero exit alone is a weak proof: a gate that is
 			// BROKEN (fails on every run, planted violation or not)
@@ -698,7 +740,7 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			if tc.wantOutput != "" && !strings.Contains(out, tc.wantOutput) {
 				t.Fatalf("%s failed with a planted violation in %s, but its output does not mention %q — "+
 					"it may be failing for an unrelated reason.\noutput:\n%s",
-					tc.gate, tc.file, tc.wantOutput, out)
+					tc.gate, violation, tc.wantOutput, out)
 			}
 		})
 	}

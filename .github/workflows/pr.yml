@@ -49,8 +49,11 @@ jobs:
           # Modules carry over naturally; no caching needed.
           cache: false
 
-      - name: fetch tags (upgrade-snapshots-locked bounds "locked" by release tag)
+      - name: fetch tags (both upgrade-snapshot gates compare against release tags)
         # fetch-depth: 0 above brings full history but not tags.
+        # check-upgrade-snapshots-locked.sh bounds "locked" by release tag;
+        # check-upgrade-snapshot-present.sh FAILS outright with no tags,
+        # rather than passing vacuously, so this step is load-bearing.
         run: git fetch --tags origin
 
       - name: go mod download
@@ -328,6 +331,18 @@ jobs:
         # already-released tag are immutable — a "fix" that edits one
         # invalidates it as ground truth for the upgrade-path job.
         run: bash scripts/ci/check-upgrade-snapshots-locked.sh
+
+      - name: upgrade-snapshot-present guard
+        # The ABSENCE half of the snapshot contract. The lock gate above
+        # catches MODIFICATION of a committed snapshot and structurally
+        # cannot see a MISSING one, so nothing failed when a release
+        # shipped without adding its snapshot — which happened on three
+        # consecutive releases (v0.63.2, v0.64.0, v0.64.1). The
+        # upgrade-path job keeps passing in that state; it just silently
+        # stops covering anything newer. Planted-violation proof:
+        # scripts/ci/gates_can_fail_test.go
+        # "upgrade-snapshot-present/chain-behind-newest-tag".
+        run: bash scripts/ci/check-upgrade-snapshot-present.sh
 
       - name: destructive-migration-coverage guard (I14)
         # upgrade-path-coverage-01PMUG01 WP03, spec §FR-2. A migration
