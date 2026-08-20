@@ -75,8 +75,8 @@ type fakeMCPPool struct {
 }
 
 func (f *fakeMCPPool) Open(_ context.Context, _ []coremcp.ServerSpec) error { return nil }
-func (f *fakeMCPPool) Close(_ context.Context) error                         { return nil }
-func (f *fakeMCPPool) Tools(_ context.Context) ([]coremcp.Tool, error)       { return nil, nil }
+func (f *fakeMCPPool) Close(_ context.Context) error                        { return nil }
+func (f *fakeMCPPool) Tools(_ context.Context) ([]coremcp.Tool, error)      { return nil, nil }
 func (f *fakeMCPPool) Call(_ context.Context, server, tool string, args json.RawMessage) (json.RawMessage, error) {
 	f.capturedServer = server
 	f.capturedTool = tool
