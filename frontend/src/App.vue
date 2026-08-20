@@ -11,6 +11,7 @@ import AskUserQuestion from '@/components/dialogs/AskUserQuestion/AskUserQuestio
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import { setConnectionState } from '@/lib/useConnectionState';
 import { restoreLastRoute, installRouteAuditing } from '@/lib/routing';
+import { logEvent } from '@/lib/eventLog';
 import {
   MD_EXTENSIONS_KEY,
   markdownExtensionsRef,
@@ -108,15 +109,32 @@ onMounted(async () => {
   try {
     await client.shellStatus();
     setConnectionState('ready');
-  } catch {
+  } catch (err) {
+    // entry-points-and-crash-reporting-01PMZD13 UNIT-9: a boot failure that
+    // reports nothing is a crash report that never happens. Fallback
+    // behaviour is unchanged (still sets 'lost') — this only makes the
+    // failure visible.
+    logEvent('warn', 'app.boot.shell_status_failed', {
+      message: err instanceof Error ? err.message : String(err),
+    });
     setConnectionState('lost');
   }
-  // Hydrate markdown extensions from persisted settings.
+  // Hydrate markdown extensions + the fleet-telemetry-onboarding flag from
+  // persisted settings. UNIT-9: hoisted to ONE client.settings.get() call —
+  // previously fetched twice, twenty lines apart, for two unrelated fields,
+  // while main.ts's boot comment boasts "exactly one AppInfo RPC" a few
+  // lines away from the RPC this duplicated.
+  let settingsSnapshot: Awaited<ReturnType<typeof client.settings.get>> | null = null;
   try {
-    const s = await client.settings.get();
-    if (s.markdownExtensions) markdownExtensionsRef.value = s.markdownExtensions;
-  } catch {
-    // Keep default 'all' on error.
+    settingsSnapshot = await client.settings.get();
+    if (settingsSnapshot.markdownExtensions) {
+      markdownExtensionsRef.value = settingsSnapshot.markdownExtensions;
+    }
+  } catch (err) {
+    // Keep default 'all' on error — unchanged fallback, now logged.
+    logEvent('warn', 'app.boot.settings_get_failed', {
+      message: err instanceof Error ? err.message : String(err),
+    });
   }
   await restoreLastRoute(router, client);
   installRouteAuditing(router, client);
@@ -127,16 +145,26 @@ onMounted(async () => {
   try {
     const state = await client.onboarding.state();
     if (state.firstRun) onboardingOpen.value = true;
-  } catch {
-    // Best-effort: if the RPC fails, skip onboarding.
+  } catch (err) {
+    // Best-effort: if the RPC fails, skip onboarding — unchanged fallback,
+    // now logged. A persistently failing onboarding.state() previously
+    // suppressed the first-run dialog forever with no signal anywhere.
+    logEvent('warn', 'app.boot.onboarding_state_failed', {
+      message: err instanceof Error ? err.message : String(err),
+    });
   }
   // Fleet telemetry onboarding modal — shown once when not yet seen.
   // (fleet-otel-archival-01NDFSEX11 WP06)
-  try {
-    const s = await client.settings.get();
-    if (!s.hasSeenFleetTelemetryOnboarding) telemetryOnboardingOpen.value = true;
-  } catch {
-    // Best-effort: if the RPC fails, skip the modal.
+  if (settingsSnapshot) {
+    if (!settingsSnapshot.hasSeenFleetTelemetryOnboarding) {
+      telemetryOnboardingOpen.value = true;
+    }
+  } else {
+    // settingsSnapshot is only null when the hoisted fetch above already
+    // failed and logged app.boot.settings_get_failed — best-effort: skip
+    // the modal rather than re-fetching (which would just fail again on
+    // the same underlying condition).
+    logEvent('warn', 'app.boot.telemetry_onboarding_skipped_no_settings', {});
   }
   // Resolve the account tier for the telemetry modal's entitlement gate
   // (A10 / consent-surfaces-truth-01PMTR01 WP02). Runs independently of
