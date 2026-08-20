@@ -5,9 +5,32 @@
  * When tier == Off the chunk is never fetched, keeping the entry bundle clean.
  *
  * Privacy invariants enforced here:
- *  - autoSessionTracking: false (no session replay)
  *  - sendDefaultPii: false (no PII auto-collection)
- *  - beforeSend: JS redactor runs on every event before transmission
+ *  - beforeSend: the JS redactor (./sentry-redactor) runs on every event
+ *    the SDK builds, unconditionally, before beforeSend returns it to the
+ *    SDK's own transport. It is real and it is exercised — see
+ *    sentry-redactor.ts and __tests__/sentry.spec.ts.
+ *  - No session tracking is configured. `autoSessionTracking` was removed
+ *    from @sentry/vue's Options type by the SDK's own v10 major
+ *    (verified: adding it back fails `vue-tsc --noEmit` with "does not
+ *    exist in type"). This module previously claimed it was set to
+ *    `false` here; nothing in the Sentry.init call below has ever set it,
+ *    on any SDK version this repo has shipped — entry-points-and-crash-
+ *    reporting-01PMZD13 UNIT-7.
+ *
+ * WHAT "BEFORE TRANSMISSION" DOES NOT MEAN ON DESKTOP (entry-points-and-
+ * crash-reporting-01PMZD13 §1.6 C-4, E-001): the desktop production CSP
+ * (frontend/vite.config.ts's PROD_CSP) is `connect-src 'none'`. This SDK
+ * uses its default fetch/XHR transport (no `transport`/`tunnel` override
+ * below), so on desktop `beforeSend` redacts an event the browser then
+ * CANNOT SEND — the redaction is real, the transmission never happens.
+ * initSentry still returns `true` in that case (init succeeded; sending
+ * later fails silently, which is the SDK's own behaviour under a blocking
+ * CSP, not something this module detects or reports). Whether the
+ * renderer should be allowed to reach Sentry's ingest host at all is
+ * E-001, an open escalation — see research/escalations.md. Served mode
+ * has no Sentry block in main-served.ts at all (N-1), which is also part
+ * of E-001 and not a separate decision.
  *
  * wire-up point 4 for sentry (sentry-error-monitoring-01KX5R8G WP04):
  *   frontend/src/main.ts calls initSentry() after reading appInfo().

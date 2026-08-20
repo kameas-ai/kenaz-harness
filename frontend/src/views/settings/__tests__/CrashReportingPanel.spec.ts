@@ -4,7 +4,7 @@
  * Unit tests for the Privacy → Crash Reporting settings panel.
  * (sentry-error-monitoring-01KX5R8G WP05)
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import CrashReportingPanel from '@/views/settings/CrashReportingPanel.vue';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
@@ -103,7 +103,7 @@ describe('CrashReportingPanel', () => {
     expect(wrapper.text()).toContain('/tmp/crash.json');
   });
 
-  it('tests DSN reachability and shows success result', async () => {
+  it('tests DSN reachability and shows success result naming the Go process', async () => {
     const { wrapper, testDsnFn } = setup({
       tier: 'anonymous',
       sentryDsn: 'https://key@sentry.example.com/123',
@@ -116,7 +116,67 @@ describe('CrashReportingPanel', () => {
     await flushPromises();
 
     expect(testDsnFn).toHaveBeenCalledWith('https://key@sentry.example.com/123');
-    expect(wrapper.text()).toContain('DSN reachable');
+    // entry-points-and-crash-reporting-01PMZD13 UNIT-7, AC-17: the string
+    // must name the process it actually tested — the Go crash reporter,
+    // not an unqualified "reachable" that a user could read as covering
+    // the renderer too.
+    expect(wrapper.text()).toContain('Go crash reporter: DSN reachable');
+  });
+
+  // ── UNIT-7, AC-17: the browser-transmit line is SEPARATELY computed from
+  // the Go DSN test, and its verdict is driven by the page's own CSP meta
+  // tag — not a hardcoded string — so it "flips on its own" if the CSP is
+  // ever relaxed (E-001). Falsifiable form from the mission spec: with
+  // connect-src 'none', the browser line must be negative while the Go
+  // line is positive; today (before this unit) one green string covered
+  // both. ─────────────────────────────────────────────────────────────────
+
+  function setCSPMeta(content: string) {
+    document.head.querySelectorAll('meta[http-equiv="Content-Security-Policy"]').forEach((el) => el.remove());
+    const meta = document.createElement('meta');
+    meta.setAttribute('http-equiv', 'Content-Security-Policy');
+    meta.setAttribute('content', content);
+    document.head.appendChild(meta);
+  }
+
+  afterEach(() => {
+    document.head.querySelectorAll('meta[http-equiv="Content-Security-Policy"]').forEach((el) => el.remove());
+  });
+
+  it('reports the renderer as blocked when connect-src is none (desktop production)', async () => {
+    setCSPMeta("default-src 'none'; connect-src 'none'; script-src 'self'");
+    const { wrapper } = setup({
+      tier: 'anonymous',
+      sentryDsn: 'https://key@sentry.example.com/123',
+    });
+    await flushPromises();
+
+    const testBtn = wrapper.findAll('button').find((b) => b.text().includes('Test'));
+    await testBtn!.trigger('click');
+    await flushPromises();
+
+    // Go line positive, browser line negative — the two lines disagree,
+    // which is the whole point: one green string used to cover both.
+    expect(wrapper.text()).toContain('Go crash reporter: DSN reachable');
+    expect(wrapper.text()).toContain('blocks the renderer from reaching Sentry');
+  });
+
+  it('reports the renderer as allowed when connect-src permits the DSN origin', async () => {
+    setCSPMeta("default-src 'none'; connect-src 'self'; script-src 'self'");
+    const { wrapper } = setup({
+      tier: 'anonymous',
+      // Same-origin as jsdom's default test origin (http://localhost:3000
+      // / http://localhost) so browserCanTransmitUnderCurrentCSP's
+      // 'self' branch evaluates true.
+      sentryDsn: `${window.location.origin}/123`,
+    });
+    await flushPromises();
+
+    const testBtn = wrapper.findAll('button').find((b) => b.text().includes('Test'));
+    await testBtn!.trigger('click');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("CSP allows reaching the DSN origin");
   });
 
   it('shows error when DSN test fails', async () => {
