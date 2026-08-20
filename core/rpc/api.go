@@ -1564,7 +1564,28 @@ func New(c *core.Core, opts ...Option) *API {
 		auditBackend = eventlog.NewSQLBackend(db)
 		auditStore = eventlog.NewStore(auditBackend)
 	}
-	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker), audit.WithGate(auditGate), audit.WithStore(auditStore))
+	// audit-that-tells-the-truth-01PMZA10 UNIT-6 (WP07): WithSweepableBackend
+	// also sets the plain Backend when unset (impl.go's own doc comment on
+	// the option), so this one call feeds BOTH Export (views/audit/impl.go:298,
+	// which returned "audit: Export requires a backend" for every caller
+	// until now — audit export has never worked in a shipped build) and
+	// BulkPurge's actual delete path.
+	auditOpts := []audit.Option{audit.WithSubscriber(a.broker), audit.WithGate(auditGate), audit.WithStore(auditStore)}
+	if auditBackend != nil {
+		// Guard against the classic Go nil-interface trap: passing a nil
+		// *eventlog.SQLBackend through eventlog.SweepableBackend would
+		// produce a NON-nil interface holding a nil pointer, defeating
+		// impl.go's own `if backend == nil` checks and panicking on the
+		// first method call. Only add the option when there is a real
+		// backend to add.
+		auditOpts = append(auditOpts, audit.WithSweepableBackend(auditBackend))
+	}
+	if db != nil {
+		// UNIT-6: saved queries persist in saved_audit_queries
+		// (migration event-log/0105) instead of an in-memory map.
+		auditOpts = append(auditOpts, audit.WithSavedQueryStore(eventlog.NewSavedQueryStore(db)))
+	}
+	a.auditImpl = audit.NewAPI(auditOpts...)
 	a.auditAPI = a.auditImpl
 
 	// Local audit-retention sweeper (audit-that-tells-the-truth-01PMZA10

@@ -11,7 +11,10 @@ function provide(seedEntries: AuditEntry[] = []) {
       listEntries: async () => seedEntries,
       verifyEntry: async () => true,
       verifyChain: async () => ({ verified: true, rows_checked: 0 }),
-      filter: async () => [],
+      // audit-that-tells-the-truth-01PMZA10 UNIT-6 (WP07): AuditView's
+      // seeded/historical fetch now goes through filter() (the complete
+      // backend), not listEntries() — see AuditView.vue's refresh().
+      filter: async () => seedEntries,
       listSavedQueries: async () => [],
       saveQuery: async () => undefined,
       deleteQuery: async () => undefined,

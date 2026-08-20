@@ -23,14 +23,29 @@ import { defaultAuditSince, defaultAuditUntil } from '@/lib/auditDateFilters';
 const client = useHarnessClient();
 
 // ── Filter state ────────────────────────────────────────────────────────
-const selectedCategory = ref<string>('');
+// audit-that-tells-the-truth-01PMZA10 UNIT-6 (WP08): selectedCategories
+// and actorIds are ARRAYS — the whole reason a saved query with two
+// kinds and two actors used to get silently narrowed to one of each on
+// load, then that narrowed (destroyed) version got persisted back on
+// the next Save. selectedCategory (singular) is gone; nothing reads
+// only element [0] anymore.
+const selectedCategories = ref<string[]>([]);
 // WP11 / FR-001: default Since = last-7-days (UTC midnight); Until = ''
 // (open-ended, maps to undefined in the filter → no upper bound, always
 // >= Since). Placeholder text in the template uses neutral "YYYY-MM-DD"
 // rather than a hard-coded past date so new users aren't confused.
 const sinceInput = ref<string>(defaultAuditSince());
 const untilInput = ref<string>(defaultAuditUntil());
+// Comma-separated free text, parsed into actorIds below — a multi-select
+// widget is overkill for a field with no fixed value set (emitter ids
+// are open-ended, unlike Kind/category).
 const actorInput = ref<string>('');
+const actorIds = computed<string[]>(() =>
+  actorInput.value
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0),
+);
 const freeText = ref<string>('');
 const verboseToggle = ref<boolean>(false);
 const selectedSavedQuery = ref<string>('');
@@ -40,8 +55,18 @@ const savedQueries = ref<SavedAuditQuery[]>([]);
 const saveQueryName = ref<string>('');
 const saveQueryError = ref<string>('');
 
+// The narrow AuditFilter — used ONLY for StartStream (the live-tail
+// subscription), whose Go-side Filter wire type is not multi-category
+// (core/rpc/views/audit/api.go's Filter struct). Widening that is a
+// Go wire-type change (bindings regeneration) outside this WP's scope;
+// the live stream stays best-effort single-category ([0]) while the
+// SEEDED/historical fetch below (refresh, via audit.filter()) is fully
+// multi-term. StartStream already unions with the ring/store
+// independently per event, so this narrowing affects only which NEW
+// live events are pre-filtered client-side, not what a saved query
+// persists.
 const filter = computed<AuditFilter>(() => ({
-  categories: selectedCategory.value ? [selectedCategory.value] : undefined,
+  categories: selectedCategories.value.length > 0 ? [selectedCategories.value[0]] : undefined,
   since: sinceInput.value || undefined,
   until: untilInput.value || undefined,
   limit: 500,
@@ -50,8 +75,8 @@ const filter = computed<AuditFilter>(() => ({
 const richFilter = computed<AuditFilterQuery>(() => ({
   since: sinceInput.value || undefined,
   until: untilInput.value || undefined,
-  kinds: selectedCategory.value ? [selectedCategory.value] : undefined,
-  actor_ids: actorInput.value ? [actorInput.value] : undefined,
+  kinds: selectedCategories.value.length > 0 ? selectedCategories.value : undefined,
+  actor_ids: actorIds.value.length > 0 ? actorIds.value : undefined,
   free_text: freeText.value || undefined,
   verbose: verboseToggle.value,
   limit: 500,
@@ -72,10 +97,16 @@ const drawerEntry = ref<AuditEntry | null>(null);
 const exportFormat = ref<'csv' | 'jsonl' | 'pdf'>('jsonl');
 const exportToast = ref<string>('');
 
+// audit-that-tells-the-truth-01PMZA10 UNIT-6 (WP07): the seeded/
+// historical fetch now goes through audit.filter() — the complete,
+// multi-term backend (core/rpc/views/audit/impl.go's Filter method) —
+// instead of the narrow audit.listEntries(), which is single-category
+// only. Before this change audit.filter() had no caller anywhere in
+// the frontend despite being a fully-implemented RPC method.
 async function refresh() {
   loading.value = true;
   try {
-    seeded.value = await client.audit.listEntries(filter.value);
+    seeded.value = await client.audit.filter(richFilter.value);
   } catch {
     seeded.value = [];
   } finally {
@@ -83,7 +114,7 @@ async function refresh() {
   }
 }
 
-watch(filter, () => {
+watch(richFilter, () => {
   void refresh();
 }, { immediate: true });
 
@@ -153,7 +184,7 @@ async function exportAudit() {
 }
 
 function clearFilters() {
-  selectedCategory.value = '';
+  selectedCategories.value = [];
   sinceInput.value = '';
   untilInput.value = '';
   actorInput.value = '';
@@ -176,8 +207,12 @@ async function applySavedQuery(id: string) {
   if (!sq) return;
   sinceInput.value = sq.query.since ?? '';
   untilInput.value = sq.query.until ?? '';
-  selectedCategory.value = sq.query.kinds?.[0] ?? '';
-  actorInput.value = sq.query.actor_ids?.[0] ?? '';
+  // audit-that-tells-the-truth-01PMZA10 UNIT-6 (WP08): full arrays, not
+  // ?.[0] — this was the truncation. kinds/actor_ids used to keep only
+  // the first element on load, then saveCurrentQuery persisted that
+  // narrowed (destroyed) version back on the very next Save.
+  selectedCategories.value = sq.query.kinds ? [...sq.query.kinds] : [];
+  actorInput.value = (sq.query.actor_ids ?? []).join(', ');
   freeText.value = sq.query.free_text ?? '';
   verboseToggle.value = sq.query.verbose ?? false;
 }
@@ -290,14 +325,19 @@ onBeforeUnmount(() => {
     <!-- Rich filter rail -->
     <div class="px-6 py-3 border-b border-border-muted bg-surface-1">
       <div class="flex flex-wrap items-center gap-3 font-ui text-[12px] text-ink-muted">
-        <!-- Kind / Category -->
+        <!-- Kind / Category — multi-select (audit-that-tells-the-truth-
+             01PMZA10 WP08): a saved query can carry more than one kind,
+             and the control that edits it must be able to show and set
+             more than one, or every load→save round trip narrows it. -->
         <label class="flex items-center gap-2">
           <span>Kind</span>
           <select
-            v-model="selectedCategory"
-            class="bg-surface-2 text-ink rounded-sm border border-border px-2 py-1 text-[12px]"
+            v-model="selectedCategories"
+            multiple
+            size="3"
+            :aria-label="selectedCategories.length > 0 ? `Kinds: ${selectedCategories.join(', ')}` : 'All categories'"
+            class="bg-surface-2 text-ink rounded-sm border border-border px-2 py-1 text-[12px] min-w-[8rem]"
           >
-            <option value="">All categories</option>
             <option v-for="c in CATEGORIES" :key="c" :value="c">{{ c }}</option>
           </select>
         </label>
@@ -322,13 +362,16 @@ onBeforeUnmount(() => {
           />
         </label>
 
-        <!-- Actor -->
+        <!-- Actor — comma-separated (audit-that-tells-the-truth-01PMZA10
+             WP08): parsed into actorIds below; a plain text field is
+             enough for an open-ended id set (no fixed value list, unlike
+             Kind above). -->
         <label class="flex items-center gap-2">
           <span>Actor</span>
           <input
             v-model="actorInput"
             type="text"
-            placeholder="emitter-id"
+            placeholder="emitter-id, emitter-id2"
             class="bg-surface-2 text-ink rounded-sm border border-border px-2 py-1 text-[12px] w-36"
           />
         </label>

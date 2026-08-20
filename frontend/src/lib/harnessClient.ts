@@ -1795,6 +1795,17 @@ export interface PolicyClient {
 
 export interface AuditClient {
   listEntries(filter: AuditFilter): Promise<AuditEntry[]>;
+  /**
+   * Membership check ONLY — reports whether an entry id is present in
+   * the store (or the ring, ring-only posture), nothing about tamper-
+   * evidence. core/rpc/views/audit/impl.go's own doc comment on
+   * VerifyEntry says as much in Go ("this is membership only"), but
+   * that concession never reached this client interface — narrowed
+   * here (audit-that-tells-the-truth-01PMZA10 UNIT-6, spec FR-024 /
+   * C2V-26). For chain/tamper verification use verifyChain below,
+   * which is what AuditView.vue's "Verify chain" button actually
+   * calls; verifyEntry has no caller in this codebase.
+   */
   verifyEntry(id: string): Promise<boolean>;
   verifyChain(fromID: string, toID: string): Promise<VerifyChainResult>;
   filter(query: AuditFilterQuery): Promise<AuditEntry[]>;

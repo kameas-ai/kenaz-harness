@@ -71,6 +71,7 @@ type API struct {
 	emitter      contextaudit.Emitter           // optional; used by BulkPurge audit emit
 	gate         cedar.Gate                     // optional; gates BulkPurge via ActionAuditBulkPurge
 	store        *eventlog.Store                // optional; write-through + read-path backing (UNIT-4)
+	savedQueryStore *eventlog.SavedQueryStore   // optional; persisted saved queries (UNIT-6)
 }
 
 // Option configures NewAPI.
@@ -146,6 +147,17 @@ func WithGate(g cedar.Gate) Option {
 // makes it mechanical that nothing may claim otherwise.
 func WithStore(s *eventlog.Store) Option {
 	return func(a *API) { a.store = s }
+}
+
+// WithSavedQueryStore injects a persisted saved-query backing store.
+// Optional — nil leaves ListSavedQueries/SaveQuery/DeleteQuery
+// operating against the in-memory map only (test-chassis path). This
+// is what makes a saved query survive a relaunch
+// (audit-that-tells-the-truth-01PMZA10 UNIT-6, AC-010) — migration
+// event-log/0105 created the saved_audit_queries table, but nothing
+// ever read or wrote it until this option is wired.
+func WithSavedQueryStore(s *eventlog.SavedQueryStore) Option {
+	return func(a *API) { a.savedQueryStore = s }
 }
 
 // NewAPI constructs the audit view-scoped API.
@@ -441,8 +453,21 @@ func sortRowsNewestFirst(rows []eventlog.Row) {
 	})
 }
 
-// ListSavedQueries returns all persisted saved queries (in-memory store).
-func (a *API) ListSavedQueries(_ context.Context) ([]eventlog.SavedQuery, error) {
+// ListSavedQueries returns all persisted saved queries. Reads the
+// SavedQueryStore when one is configured (WithSavedQueryStore),
+// surviving a relaunch; falls back to the in-memory map otherwise
+// (test-chassis path).
+func (a *API) ListSavedQueries(ctx context.Context) ([]eventlog.SavedQuery, error) {
+	a.mu.RLock()
+	sqs := a.savedQueryStore
+	a.mu.RUnlock()
+	if sqs != nil {
+		out, err := sqs.List(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("audit: ListSavedQueries: %w", err)
+		}
+		return out, nil
+	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	out := make([]eventlog.SavedQuery, 0, len(a.savedQueries))
@@ -453,13 +478,25 @@ func (a *API) ListSavedQueries(_ context.Context) ([]eventlog.SavedQuery, error)
 }
 
 // SaveQuery persists a named query. If a query with the same ID already
-// exists it is overwritten.
-func (a *API) SaveQuery(_ context.Context, q eventlog.SavedQuery) error {
+// exists it is overwritten. Writes through to the SavedQueryStore when
+// one is configured — this is what makes AC-010 true: a two-kind query
+// survives a load→save round trip AND a relaunch, not just the current
+// process.
+func (a *API) SaveQuery(ctx context.Context, q eventlog.SavedQuery) error {
 	if q.ID == "" {
 		return fmt.Errorf("audit: SaveQuery requires non-empty ID")
 	}
 	if q.Name == "" {
 		return fmt.Errorf("audit: SaveQuery requires non-empty Name")
+	}
+	a.mu.RLock()
+	sqs := a.savedQueryStore
+	a.mu.RUnlock()
+	if sqs != nil {
+		if err := sqs.Save(ctx, q); err != nil {
+			return fmt.Errorf("audit: SaveQuery: %w", err)
+		}
+		return nil
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -468,7 +505,16 @@ func (a *API) SaveQuery(_ context.Context, q eventlog.SavedQuery) error {
 }
 
 // DeleteQuery removes a saved query by ID. No-op if the ID is unknown.
-func (a *API) DeleteQuery(_ context.Context, id string) error {
+func (a *API) DeleteQuery(ctx context.Context, id string) error {
+	a.mu.RLock()
+	sqs := a.savedQueryStore
+	a.mu.RUnlock()
+	if sqs != nil {
+		if err := sqs.Delete(ctx, id); err != nil {
+			return fmt.Errorf("audit: DeleteQuery: %w", err)
+		}
+		return nil
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	delete(a.savedQueries, id)

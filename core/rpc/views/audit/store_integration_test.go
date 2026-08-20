@@ -12,6 +12,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -336,6 +338,195 @@ func TestVerifyChain_WithStore_TamperedRow_Identified(t *testing.T) {
 // fed the identical Push calls in parallel, since ListEntries reads
 // the store when one is configured) is the reference for "every push
 // happened at all," independent of the store's retry behaviour.
+// TestExport_NoBackend_ErrorsNotEmptyFile is AC-009's second half: with
+// no backend configured, Export must return the error, never a
+// zero-row file — "an export that succeeds while omitting every row is
+// fabricated completeness on a compliance surface."
+func TestExport_NoBackend_ErrorsNotEmptyFile(t *testing.T) {
+	api := NewAPI() // no WithSweepableBackend/WithBackend
+	_, err := api.Export(context.Background(), eventlog.ExportOptions{
+		DataDir: t.TempDir(),
+		Format:  eventlog.ExportFormatJSONL,
+	})
+	if err == nil {
+		t.Fatal("Export with no backend returned nil error, want one")
+	}
+}
+
+// TestExport_WithBackend_WritesRealFileWithRows is AC-009's first
+// half: real sqlite, real rows, Export must produce a file under
+// <DataDir>/audit-exports/ that actually CONTAINS those rows — not
+// just "no error returned".
+func TestExport_WithBackend_WritesRealFileWithRows(t *testing.T) {
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	cfg := storage.Config{DataDir: dataDir, EncryptionStatus: storage.EncryptionStatusDisabledWithDiskEncryption}
+	db, err := storagesqlite.Open(cfg)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close(ctx) }()
+	backend := eventlog.NewSQLBackend(db)
+	store := eventlog.NewStore(backend)
+	api := NewAPI(WithStore(store), WithSweepableBackend(backend))
+
+	entry := Entry{
+		ID:        "export-evt-1",
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Category:  "LLM",
+		Subject:   "llm.request.started",
+		Trailing:  "payload_bytes=7",
+	}
+	api.Push(entry)
+
+	path, err := api.Export(ctx, eventlog.ExportOptions{
+		DataDir: dataDir,
+		Format:  eventlog.ExportFormatJSONL,
+	})
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	if path == "" {
+		t.Fatal("Export returned an empty path with a nil error")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", path, err)
+	}
+	if !strings.Contains(string(data), entry.ID) {
+		t.Errorf("exported file does not contain the pushed entry's id %q:\n%s", entry.ID, data)
+	}
+	if !strings.Contains(string(data), entry.Subject) {
+		t.Errorf("exported file does not contain the pushed entry's subject %q:\n%s", entry.Subject, data)
+	}
+}
+
+// TestSavedQuery_SurvivesRelaunch is AC-010: a saved query with TWO
+// kinds and TWO actors survives a load→save round trip AND a process
+// relaunch — reading through audit.API's real ListSavedQueries/
+// SaveQuery, not eventlog.SavedQueryStore directly (that unit-level
+// proof lives in core/event/log/saved_queries_test.go; this proves the
+// WithSavedQueryStore wiring specifically).
+func TestSavedQuery_SurvivesRelaunch(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	cfg := storage.Config{DataDir: dir, EncryptionStatus: storage.EncryptionStatusDisabledWithDiskEncryption}
+
+	db1, err := storagesqlite.Open(cfg)
+	if err != nil {
+		t.Fatalf("Open (1): %v", err)
+	}
+	sqs1 := eventlog.NewSavedQueryStore(db1)
+	api1 := NewAPI(WithSavedQueryStore(sqs1))
+
+	q := eventlog.SavedQuery{
+		ID:   "sq-relaunch-1",
+		Name: "two kinds two actors",
+		Query: eventlog.FilterQuery{
+			Kinds:    []string{"llm.request.started", "llm.response.completed"},
+			ActorIDs: []string{"actor-x", "actor-y"},
+		},
+	}
+	if err := api1.SaveQuery(ctx, q); err != nil {
+		t.Fatalf("SaveQuery: %v", err)
+	}
+	// Load→save round trip within the SAME process, before the
+	// relaunch — AC-010's "first hop".
+	listed, err := api1.ListSavedQueries(ctx)
+	if err != nil {
+		t.Fatalf("ListSavedQueries: %v", err)
+	}
+	if len(listed) != 1 || len(listed[0].Query.Kinds) != 2 || len(listed[0].Query.ActorIDs) != 2 {
+		t.Fatalf("ListSavedQueries before relaunch = %+v, want 1 query with 2 kinds + 2 actors", listed)
+	}
+	if err := api1.SaveQuery(ctx, listed[0]); err != nil {
+		t.Fatalf("re-SaveQuery: %v", err)
+	}
+	if err := db1.Close(ctx); err != nil {
+		t.Fatalf("close db1: %v", err)
+	}
+
+	// The relaunch — AC-010's "second hop", the one an in-memory map
+	// (a.savedQueries) satisfies wrongly (01PMZ808 AC-040's defect).
+	db2, err := storagesqlite.Open(cfg)
+	if err != nil {
+		t.Fatalf("Open (2): %v", err)
+	}
+	defer func() { _ = db2.Close(ctx) }()
+	sqs2 := eventlog.NewSavedQueryStore(db2)
+	api2 := NewAPI(WithSavedQueryStore(sqs2))
+
+	afterRelaunch, err := api2.ListSavedQueries(ctx)
+	if err != nil {
+		t.Fatalf("ListSavedQueries after relaunch: %v", err)
+	}
+	if len(afterRelaunch) != 1 {
+		t.Fatalf("ListSavedQueries after relaunch = %+v, want 1", afterRelaunch)
+	}
+	got := afterRelaunch[0]
+	if len(got.Query.Kinds) != 2 || got.Query.Kinds[0] != "llm.request.started" || got.Query.Kinds[1] != "llm.response.completed" {
+		t.Errorf("Kinds after relaunch = %v, want both terms", got.Query.Kinds)
+	}
+	if len(got.Query.ActorIDs) != 2 || got.Query.ActorIDs[0] != "actor-x" || got.Query.ActorIDs[1] != "actor-y" {
+		t.Errorf("ActorIDs after relaunch = %v, want both terms", got.Query.ActorIDs)
+	}
+}
+
+// TestBulkPurge_RealBackend_TermUnsearchableNoError is WP07's explicit
+// instruction: "the same for BulkPurge: purged event ids are
+// unsearchable afterwards and the search does not error." Real
+// sqlite — migration 106's FTS triggers apply to ANY delete from
+// events, not just the scheduled sweep's, so BulkPurge benefits
+// automatically; this is the direct proof.
+func TestBulkPurge_RealBackend_TermUnsearchableNoError(t *testing.T) {
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	cfg := storage.Config{DataDir: dataDir, EncryptionStatus: storage.EncryptionStatusDisabledWithDiskEncryption}
+	db, err := storagesqlite.Open(cfg)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close(ctx) }()
+	backend := eventlog.NewSQLBackend(db)
+	store := eventlog.NewStore(backend)
+	api := NewAPI(WithStore(store), WithSweepableBackend(backend))
+
+	if err := store.AppendComputed(ctx, eventlog.Row{
+		EventID: "bulkpurge-evt-1", Kind: "k", EmittedAt: time.Now(),
+		Payload: []byte(`{"term":"ZORKBULKPURGEQ"}`), RedactionSummary: "none",
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	before, err := backend.SearchFTS(ctx, "ZORKBULKPURGEQ", "", nil, 10)
+	if err != nil {
+		t.Fatalf("pre-purge SearchFTS: %v", err)
+	}
+	if len(before) != 1 {
+		t.Fatalf("pre-purge SearchFTS = %d rows, want 1", len(before))
+	}
+
+	if err := api.BulkPurge(ctx, []string{"bulkpurge-evt-1"}); err != nil {
+		t.Fatalf("BulkPurge: %v", err)
+	}
+
+	after, err := backend.SearchFTS(ctx, "ZORKBULKPURGEQ", "", nil, 10)
+	if err != nil {
+		t.Fatalf("post-purge SearchFTS errored (must succeed with zero rows, not error): %v", err)
+	}
+	if len(after) != 0 {
+		t.Errorf("post-purge SearchFTS = %d rows, want 0", len(after))
+	}
+	var rawMatchCount int
+	if qerr := db.Reader().QueryRow(ctx,
+		"SELECT count(*) FROM events_fts WHERE events_fts MATCH ?", "ZORKBULKPURGEQ").Scan(&rawMatchCount); qerr != nil {
+		t.Fatalf("raw events_fts MATCH count: %v", qerr)
+	}
+	if rawMatchCount != 0 {
+		t.Errorf("raw events_fts MATCH count after purge = %d, want 0 (existence-oracle check)", rawMatchCount)
+	}
+}
+
 func TestPush_ConcurrentGoroutinesWithStore(t *testing.T) {
 	_, store := openStoreAt(t, t.TempDir())
 	storeAPI := NewAPI(WithStore(store))
