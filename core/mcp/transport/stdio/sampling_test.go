@@ -17,6 +17,16 @@ import (
 //
 // lastReq is guarded by mu because the reader-loop goroutine drives
 // Stream while the test goroutine inspects the captured request.
+//
+// PUBLICATION ORDER MATTERS. `calls` is bumped only AFTER lastReq is
+// stored and the mutex released, because TestLLMSamplingHandler_
+// ServerInitiated_GateOn polls `calls.Load() > 0` as its signal that
+// the request is ready to inspect. With the increment first, a poller
+// could observe calls==1 while lastReq was still the zero value and
+// read back an empty System prompt. That is not hypothetical: it
+// reddened a full-suite `-race -short -p 4` run on 2026-08-20 with
+// "system prompt = \"\"", while the package passed 5/5 in isolation —
+// the window only opens under whole-suite CPU contention.
 type stubRegistry struct {
 	calls atomic.Int32
 
@@ -39,10 +49,11 @@ func (r *stubRegistry) PreflightAll(_ context.Context) []corellm.PreflightResult
 	return nil
 }
 func (r *stubRegistry) Stream(_ context.Context, req corellm.GenerationRequest) (corellm.Stream, error) {
-	r.calls.Add(1)
 	r.mu.Lock()
 	r.lastReq = req
 	r.mu.Unlock()
+	// After the store, never before — see the type's doc comment.
+	r.calls.Add(1)
 	out := r.out
 	if out == "" {
 		out = "stub-response"
