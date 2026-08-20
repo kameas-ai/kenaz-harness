@@ -376,6 +376,33 @@ func (m *Manager) GetLastUsage(ctx context.Context, id string) (LastUsage, error
 	return m.store.GetLastUsage(ctx, id)
 }
 
+// UpsertStreamCheckpoint persists (or overwrites) the mid-run
+// durability checkpoint for one (sessionID, subID) stream subscription.
+// Called by the chat runner's periodic-flush loop
+// (chat-turn-integrity-01PMZ606 WP02/WP03) — NOT a session_messages
+// write. The signature matches chat.StreamCheckpointWriter exactly so
+// production wiring can pass *Manager directly, no adapter closure
+// needed.
+func (m *Manager) UpsertStreamCheckpoint(ctx context.Context, sessionID, subID, text string, hasTool bool) error {
+	return m.store.UpsertStreamCheckpoint(ctx, sessionID, subID, text, hasTool, m.now())
+}
+
+// GetStreamCheckpoint loads the current checkpoint for
+// (sessionID, subID). The second return is false when no checkpoint
+// exists — the normal state before the first tick and after a clean or
+// error close deletes the row.
+func (m *Manager) GetStreamCheckpoint(ctx context.Context, sessionID, subID string) (StreamCheckpoint, bool, error) {
+	return m.store.GetStreamCheckpoint(ctx, sessionID, subID)
+}
+
+// DeleteStreamCheckpoint removes the checkpoint row for
+// (sessionID, subID), if any. Idempotent. Called on both the
+// clean-close and error-close terminal paths in driveRun so recovery
+// keeps exactly one source of truth.
+func (m *Manager) DeleteStreamCheckpoint(ctx context.Context, sessionID, subID string) error {
+	return m.store.DeleteStreamCheckpoint(ctx, sessionID, subID)
+}
+
 // Rename changes a session's display name.
 func (m *Manager) Rename(ctx context.Context, id, name string) error {
 	name = strings.TrimSpace(name)
