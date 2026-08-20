@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph/nodes"
+	"github.com/kameas-ai/kenaz-harness/core/elicitation"
 )
 
 // integration_test.go — WP08 end-to-end coverage for the
@@ -124,12 +125,19 @@ nodes:
 	}
 }
 
-// TestIntegration_ApprovalKindEndToEnd: an `approval` node fires,
-// emits the pending event and an honest auto-passed event (no approval
-// seam is wired yet — see TestIntegration_ApprovalKindDoesNotFabricateHumanDecision
-// for why this is NOT approval_resolved), and the kernel completes the
-// run.
-func TestIntegration_ApprovalKindEndToEnd(t *testing.T) {
+// TestIntegration_ApprovalKindParksOnFirstFire is AC-01
+// (approval-node-01PMZC12 UNIT-2): an `approval` node fires, emits
+// approval_pending, and parks the run — Run returns ErrPaused, the
+// trace contains run_paused, no approval_resolved event exists, and
+// (the load-bearing assertion) the node's Outputs are empty at the
+// pause. Pausing while pre-writing "approved" would be the same
+// fabrication TestIntegration_ApprovalKindDoesNotFabricateHumanDecision
+// guards against, just with a delay.
+//
+// Mutation (spec.md §9 AC-01): remove `res.Pause = true` from
+// approvalExecutor.Execute. Run then returns nil (no ErrPaused), no
+// run_paused event is recorded, and this test fails.
+func TestIntegration_ApprovalKindParksOnFirstFire(t *testing.T) {
 	t.Parallel()
 	src := `spec_version: "1"
 id: approval_e2e
@@ -151,33 +159,50 @@ nodes:
 	log := NewMemoryEventLog()
 	k := NewKernel(WithEventLog(log))
 	env := &Env{RunID: "run-approval", Graph: &g}
-	if err := k.Run(context.Background(), env); err != nil {
-		t.Fatalf("Run: %v", err)
+	err = k.Run(context.Background(), env)
+	if !errors.Is(err, ErrPaused) {
+		t.Fatalf("Run: got err=%v, want ErrPaused", err)
 	}
+
 	events := readEvents(t, log, env.RunID)
 	if !hasEventKind(events, EventApprovalPending) {
 		t.Errorf("expected approval_pending event; got kinds: %v", kindsOf(events))
 	}
-	if !hasEventKind(events, EventApprovalAutoPassed) {
-		t.Errorf("expected approval_auto_passed event; got kinds: %v", kindsOf(events))
+	if !hasEventKind(events, EventRunPaused) {
+		t.Errorf("expected run_paused event; got kinds: %v", kindsOf(events))
+	}
+	if hasEventKind(events, EventApprovalResolved) {
+		t.Errorf("found approval_resolved event on an unresolved run — nobody decided anything; got kinds: %v", kindsOf(events))
+	}
+
+	// The load-bearing assertion: no output port was written at the
+	// pause. An implementation that pauses *and* pre-writes "approved"
+	// passes the ErrPaused check above and is still the same lie with a
+	// delay.
+	if outs := env.State.Outputs("a"); len(outs) != 0 {
+		t.Errorf("expected no output ports written at pause; got %v", outs)
 	}
 }
 
 // TestIntegration_ApprovalKindDoesNotFabricateHumanDecision is AC-02
 // (trust-surfaces-that-fire-01PMZ202 WP02, Class F "manufactured
-// success"): the v1 `approval` node has no approval UI/seam wired yet
-// (approval-node-01PMZC12 owns building one — tasks.md WP02, ruling
-// A-8), so it auto-passes every run. That is fine — deleting the
-// pass-through breaks every existing graph with an approval node — but
-// the event trace must never assert that a HUMAN made that call. This
-// pins the removal of the fabricated EventApprovalResolved{"approved":
-// true} append: reverting it (restoring the old payload) must fail this
-// test.
+// success") plus approval-node-01PMZC12 UNIT-2: the `approval` node has
+// no resolve verb wired yet (UNIT-3 adds Graph_ResolveApproval), so it
+// parks every run rather than deciding on the human's behalf — for any
+// auto_approve_window_seconds value, since UNIT-2 does not evaluate
+// that dial (UNIT-5's job). The event trace must never assert that a
+// HUMAN made that call, and must never claim an auto-pass that no
+// longer happens. This pins both the original WP02 removal of the
+// fabricated EventApprovalResolved{"approved": true} append (reverting
+// it must fail this test) and UNIT-2's removal of the always-auto-pass
+// path (reintroducing EventApprovalAutoPassed from an unconditional
+// auto-pass must also fail this test).
 func TestIntegration_ApprovalKindDoesNotFabricateHumanDecision(t *testing.T) {
 	t.Parallel()
 	// auto_approve_window_seconds: 0 and a positive window must behave
-	// identically — both auto-pass, neither claims a human approved.
-	// Without this the WP would be satisfiable by special-casing zero.
+	// identically today — both park, neither claims a human approved or
+	// an auto-pass happened. Without this the unit would be satisfiable
+	// by special-casing zero.
 	for _, window := range []int{0, 30} {
 		window := window
 		t.Run(fmt.Sprintf("window=%d", window), func(t *testing.T) {
@@ -203,16 +228,26 @@ nodes:
 			log := NewMemoryEventLog()
 			k := NewKernel(WithEventLog(log))
 			env := &Env{RunID: fmt.Sprintf("run-approval-honesty-%d", window), Graph: &g}
-			if err := k.Run(context.Background(), env); err != nil {
-				t.Fatalf("Run: %v", err)
+			runErr := k.Run(context.Background(), env)
+			if !errors.Is(runErr, ErrPaused) {
+				t.Fatalf("window=%d: Run: got err=%v, want ErrPaused", window, runErr)
 			}
 			events := readEvents(t, log, env.RunID)
 
 			// No event of kind approval_resolved may appear at all — that
 			// kind is reserved for a real human resolution once
-			// approval-node-01PMZC12 wires one.
+			// approval-node-01PMZC12 UNIT-3/UNIT-4 wire one.
 			if hasEventKind(events, EventApprovalResolved) {
 				t.Errorf("window=%d: found approval_resolved event — this asserts a human made a decision nobody made; got kinds: %v", window, kindsOf(events))
+			}
+
+			// approval_auto_passed must not appear either: UNIT-2 removed
+			// the always-auto-pass path this kind used to record. It is
+			// reserved for UNIT-5's bounded auto_approve_window_seconds
+			// behaviour, which is not implemented yet — so it must not
+			// fire from this executor today, for any window value.
+			if hasEventKind(events, EventApprovalAutoPassed) {
+				t.Errorf("window=%d: found approval_auto_passed event — UNIT-2 removed the always-auto-pass path; got kinds: %v", window, kindsOf(events))
 			}
 
 			// Belt-and-suspenders: no event of ANY kind may carry
@@ -233,13 +268,101 @@ nodes:
 				}
 			}
 
-			// The honest replacement event must be present: the node DID
-			// auto-pass (that's real behaviour worth recording), it just
-			// must not claim a human resolved it.
-			if !hasEventKind(events, EventApprovalAutoPassed) {
-				t.Errorf("window=%d: expected an approval_auto_passed event recording the honest auto-pass; got kinds: %v", window, kindsOf(events))
+			// No output port was written — the run is genuinely parked,
+			// not silently completed with a pre-written answer.
+			if outs := env.State.Outputs("a"); len(outs) != 0 {
+				t.Errorf("window=%d: expected no output ports written at pause; got %v", window, outs)
 			}
 		})
+	}
+}
+
+// TestIntegration_ApprovalKindRegistersOnAskBus confirms the pending
+// decision rides the SAME elicitation store the `ask` node uses
+// (spec.md §5.1 — "Reuse AskBus, do not build an ApprovalBus") rather
+// than a second, parallel store (which invariant I5 exists to forbid;
+// scripts/ci/allowlists/i5-elicitation-stores.txt). The verdict is
+// expressed as a two-option elicitation.KindRadio question — E-003's
+// resolution — so a future resolve verb (UNIT-3) has a real answer
+// shape to write into.
+func TestIntegration_ApprovalKindRegistersOnAskBus(t *testing.T) {
+	t.Parallel()
+	src := `spec_version: "1"
+id: approval_askbus
+entrypoints: [a]
+nodes:
+  - id: a
+    kind: approval
+    attrs:
+      approver_role: user
+      prompt: "Ship it?"
+`
+	g, err := LoadYAML([]byte(src))
+	if err != nil {
+		t.Fatalf("LoadYAML: %v", err)
+	}
+	if err := Validate(g); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	bus := NewMemAskBus()
+	log := NewMemoryEventLog()
+	k := NewKernel(WithEventLog(log))
+	env := &Env{RunID: "run-approval-askbus", Graph: &g, Ask: bus}
+	runErr := k.Run(context.Background(), env)
+	if !errors.Is(runErr, ErrPaused) {
+		t.Fatalf("Run: got err=%v, want ErrPaused", runErr)
+	}
+
+	id := elicitation.NodeAskID(env.RunID, "a")
+	entry, ok := bus.Registry().Get(id)
+	if !ok {
+		t.Fatalf("expected a pending elicitation.Question registered on AskBus for id %q; found none", id)
+	}
+	if entry.Question.Kind != elicitation.KindRadio {
+		t.Errorf("expected question kind %q, got %q", elicitation.KindRadio, entry.Question.Kind)
+	}
+	if entry.Question.Text != "Ship it?" {
+		t.Errorf("expected question text %q, got %q", "Ship it?", entry.Question.Text)
+	}
+	gotValues := map[string]bool{}
+	for _, opt := range entry.Question.Options {
+		gotValues[opt.Value] = true
+	}
+	if !gotValues["approved"] || !gotValues["rejected"] {
+		t.Errorf("expected options {approved, rejected}, got %v", entry.Question.Options)
+	}
+}
+
+// TestIntegration_NonApprovalGraphStillCompletes is the AC-01 sibling
+// (spec.md §9): a graph with no approval node must still run to
+// completion. Without this, approvalExecutor.Execute's park would be
+// satisfiable by an implementation that pauses every node kind, not
+// just approval.
+func TestIntegration_NonApprovalGraphStillCompletes(t *testing.T) {
+	t.Parallel()
+	src := `spec_version: "1"
+id: no_approval_e2e
+entrypoints: [art]
+nodes:
+  - id: art
+    kind: artifact
+    attrs:
+      mime_type: "text/plain"
+      output_target: session_message
+      content: "no approval node here"
+`
+	g, err := LoadYAML([]byte(src))
+	if err != nil {
+		t.Fatalf("LoadYAML: %v", err)
+	}
+	if err := Validate(g); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	log := NewMemoryEventLog()
+	k := NewKernel(WithEventLog(log))
+	env := &Env{RunID: "run-no-approval", Graph: &g}
+	if err := k.Run(context.Background(), env); err != nil {
+		t.Fatalf("Run: got err=%v, want nil (graph has no approval node, must not pause)", err)
 	}
 }
 

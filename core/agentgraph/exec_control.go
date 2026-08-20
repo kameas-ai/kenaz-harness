@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kameas-ai/kenaz-harness/core/elicitation"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"golang.org/x/sync/semaphore"
 )
@@ -1489,22 +1490,29 @@ func summarizeTail(ctx context.Context, env *Env, tail []Message, mode string) s
 
 // ---- ApprovalNode (NEW, FR-048) ----
 
-// approvalExecutor implements ExecApproval — intended as a binary HITL
-// gate that pauses the run until the user clicks Approve or Reject in
-// the harness UI. No such UI/seam exists yet (approval-node-01PMZC12
-// owns building one — an authoring-time capability, not a gate on
-// unattended execution, per ruling B-3). Until it lands, the executor
-// auto-passes every run so graphs containing an approval node still
-// complete, and records that auto-pass HONESTLY — see
-// EventApprovalAutoPassed. It does NOT emit EventApprovalResolved:
-// that kind is reserved for a real human decision, and a prior version
-// of this code fabricated one (trust-surfaces-that-fire-01PMZ202 WP02,
-// Class F "manufactured success" — docs/dead-code-audit-2026-08-18.md).
+// approvalExecutor implements ExecApproval — a binary HITL gate that
+// pauses the run until a human resolves it via Approve or Reject.
+// approval-node-01PMZC12 UNIT-2 makes this real: the node registers the
+// pending decision on AskBus (the same seam `ask` uses — see
+// core/agentgraph/seams.go) and parks the run (res.Pause), writing no
+// output port. No resolve verb exists yet (UNIT-3 adds
+// Graph_ResolveApproval; UNIT-4 gives the resolved verdict the
+// `rejected` port to land on), so today every fire parks — that is
+// honest: a run nobody has wired a decision-maker for should hang, not
+// silently auto-pass. It does NOT emit EventApprovalResolved: that kind
+// is reserved for a real human decision, and a prior version of this
+// code fabricated one (trust-surfaces-that-fire-01PMZ202 WP02, Class F
+// "manufactured success" — docs/dead-code-audit-2026-08-18.md).
+//
+// This is an authoring-time capability, not a gate on unattended or
+// model-scheduled execution — per ruling B-3, containment
+// (harness-self-attach-01PMHS01 WP04) is the load-bearing control for
+// that case (approval-node-01PMZC12/research/framing.md).
 type approvalExecutor struct{}
 
 func (approvalExecutor) Kind() NodeKind { return NodeKindApproval }
 
-func (approvalExecutor) Execute(_ context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
+func (approvalExecutor) Execute(ctx context.Context, env *Env, node *Node, _ PortValues) (Result, error) {
 	res := NewResult()
 	a, ok := node.Attrs.(ApprovalAttrs)
 	if !ok {
@@ -1528,23 +1536,29 @@ func (approvalExecutor) Execute(_ context.Context, env *Env, node *Node, inputs 
 		"auto_approve_window_seconds": a.AutoApproveWindowSeconds,
 	})
 
-	// v1 behaviour: pass the input through unconditionally — deleting
-	// the pass-through would break every existing graph containing an
-	// approval node — but record it HONESTLY. No human approved
-	// anything: no approval UI/seam is wired yet (approval-node-01PMZC12
-	// owns building one), so this always auto-passes regardless of
-	// AutoApproveWindowSeconds, including when it is 0 ("never
-	// auto-approve" per the manifest — that dial is not evaluated here
-	// and must not be special-cased to look like it is). Do NOT append
-	// EventApprovalResolved here: that kind asserts a real human
-	// decision and doing so from this path was the fabrication WP02 of
-	// trust-surfaces-that-fire-01PMZ202 removed (Class F, "manufactured
-	// success").
-	res.Outputs["approved"] = inputs["in"]
-	_ = res.Events.AppendKind(env.RunID, node.ID, EventApprovalAutoPassed, map[string]any{
-		"reason":                      "no approval seam wired",
-		"auto_approve_window_seconds": a.AutoApproveWindowSeconds,
-	})
+	// Register the pending decision on the same bus the `ask` node
+	// uses — an approve/reject verdict is a two-option radio question
+	// (elicitation.KindRadio, core/elicitation/question.go:55). Reusing
+	// AskBus keeps this to one elicitation store; a second store would
+	// trip invariant I5 (scripts/ci/allowlists/i5-elicitation-stores.txt).
+	question := elicitation.Question{
+		Text: prompt,
+		Kind: elicitation.KindRadio,
+		Options: []elicitation.Option{
+			{Value: "approved", Label: "Approve"},
+			{Value: "rejected", Label: "Reject"},
+		},
+	}
+	if err := env.Ask.Pending(ctx, env.RunID, node.ID, question); err != nil {
+		return res, fmt.Errorf("approval: node %q: pending: %w", node.ID, err)
+	}
+
+	// Park the run instead of deciding on the human's behalf. Write no
+	// output port — not "approved", not "rejected". A paused run that
+	// pre-writes a port is the same fabrication with a delay
+	// (approval-node-01PMZC12 spec.md §5.1).
+	res.Pause = true
+	res.PauseReason = "approval: " + prompt
 	return res, nil
 }
 
