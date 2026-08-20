@@ -409,6 +409,34 @@ func (m *Manager) saveGraph(ctx context.Context, spec GraphSpec, initiator strin
 			return gerr
 		}
 	}
+	// UNIT-5 (FR-009/FR-010): the model-authored marker. Stamped
+	// server-side for a non-user save, OVERWRITING whatever
+	// spec_provenance the submitted YAML carried — blank, absent, or
+	// even "library_fallback" all become "model_authored". Cleared
+	// (never re-applied) for a user save — that is the human review
+	// FR-010 requires being recorded. Re-serialised through
+	// coreag.DumpYAML rather than string-editing spec.YAML, because
+	// spec.YAML is model-supplied text and the field may not even be
+	// present in it. The common case (an ordinary user save whose
+	// parsed SpecProvenance is already empty) re-serialises nothing and
+	// writes the caller's own bytes unchanged.
+	payload := []byte(spec.YAML)
+	switch {
+	case initiator != "user":
+		g.SpecProvenance = coreag.SpecProvenanceModelAuthored
+		out, derr := coreag.DumpYAML(g)
+		if derr != nil {
+			return fmt.Errorf("agentgraph: re-encode after stamping provenance: %w", derr)
+		}
+		payload = out
+	case g.SpecProvenance != "":
+		g.SpecProvenance = ""
+		out, derr := coreag.DumpYAML(g)
+		if derr != nil {
+			return fmt.Errorf("agentgraph: re-encode after clearing provenance: %w", derr)
+		}
+		payload = out
+	}
 	dir := m.userLibraryDir()
 	if dir == "" {
 		return errors.New("agentgraph: data dir not configured; cannot persist")
@@ -418,7 +446,7 @@ func (m *Manager) saveGraph(ctx context.Context, spec GraphSpec, initiator strin
 	}
 	full := filepath.Join(dir, sanitizeGraphFilename(spec.ID))
 	tmp := full + ".tmp"
-	if err := os.WriteFile(tmp, []byte(spec.YAML), 0o644); err != nil { //nolint:gosec // user data
+	if err := os.WriteFile(tmp, payload, 0o644); err != nil { //nolint:gosec // user data
 		return fmt.Errorf("agentgraph: write: %w", err)
 	}
 	return os.Rename(tmp, full)

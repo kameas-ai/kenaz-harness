@@ -272,6 +272,58 @@ func TestGraphAuthoringGate_AC012_EditorSaveUnaffectedByAuthoringOff(t *testing.
 	assertGraphOnDisk(t, dataDir, id)
 }
 
+// TestGraphAuthoringGate_AC008_UnreviewedModelAuthoredGraphDoesNotRun is
+// AC-008 end-to-end through the REAL shipped Cedar bundle — UNIT-3's
+// graph_run_unreviewed_forbid.cedar, UNIT-4's GateGraphRun wiring at
+// Manager.startRun, and UNIT-5's server-side stamping in
+// Manager.saveGraph, all exercised together rather than any one in
+// isolation (core/rpc/views/agentgraph's own tests use a hand-rolled
+// fake gate for this same property; this is the version that would
+// catch a real policy-text regression too).
+func TestGraphAuthoringGate_AC008_UnreviewedModelAuthoredGraphDoesNotRun(t *testing.T) {
+	api := cedarWiringAPI(t, "")
+	ctx := context.Background()
+
+	store := api.settingsImpl.Store()
+	if err := store.SaveGraphAuthoringEnabled(true); err != nil {
+		t.Fatalf("SaveGraphAuthoringEnabled(true): %v", err)
+	}
+
+	id := "zz_ac008_probe"
+	yaml := graphAuthoringYAML(id)
+	if err := api.Graph().SaveGraph(ctx, graphview.GraphSpec{ID: id, YAML: yaml}, "model"); err != nil {
+		t.Fatalf("model-initiated SaveGraph: %v", err)
+	}
+
+	// Denied by graph.run while unreviewed, and no run entry exists.
+	_, err := api.Graph().StartRun(ctx, graphview.StartRunRequest{GraphID: id})
+	if err == nil {
+		t.Fatal("StartRun succeeded on an unreviewed model-authored graph")
+	}
+	var pderr *cedar.PolicyDeniedError
+	if !errors.As(err, &pderr) {
+		t.Fatalf("err = %v (%T); want *cedar.PolicyDeniedError naming graph_run_unreviewed_forbid.cedar", err, err)
+	}
+	if _, serr := api.Graph().GetRunStatus(ctx, "no-such-run-was-created"); serr == nil {
+		t.Fatal("GetRunStatus for a made-up run id succeeded — StartRun must not have created a run entry")
+	}
+
+	// Human review: load + save through the editor's (user) path, which
+	// clears the marker.
+	loaded, lerr := api.Graph().LoadGraph(ctx, id)
+	if lerr != nil {
+		t.Fatalf("LoadGraph: %v", lerr)
+	}
+	if err := api.Graph().SaveGraph(ctx, graphview.GraphSpec{ID: id, YAML: loaded.YAML}, "user"); err != nil {
+		t.Fatalf("SaveGraph(user, review): %v", err)
+	}
+
+	// The identical StartRun call now proceeds past the gate.
+	if _, err := api.Graph().StartRun(ctx, graphview.StartRunRequest{GraphID: id}); err != nil {
+		t.Fatalf("StartRun after human review still refused: %v", err)
+	}
+}
+
 // TestGraphAuthoringGate_BootPathGateIsNonNil pins plan.md's stated risk
 // directly: "until I13 clause 4 lands, WP04's tests must include a
 // boot-path assertion that the wired gate is not nil, driven through
