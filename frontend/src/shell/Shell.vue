@@ -15,6 +15,8 @@ import CheatSheetModal from '@/components/shortcuts/CheatSheetModal.vue';
 import { useConnectionState } from '@/lib/useConnectionState';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { matchesEvent } from '@/lib/shortcuts/platform';
+import { resolveBinding } from '@/lib/shortcuts/registry';
+import { setCommandPaletteOverrides } from '@/lib/useCommandPalette';
 
 /**
  * Shell — the persistent app-level layout (plan §2.1).
@@ -142,14 +144,21 @@ function onGlobalKeydown(e: KeyboardEvent) {
 
   if (isEditable) return;
 
-  // Cmd-F / Ctrl-F → search modal (legacy full-page surface)
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+  // controls-and-readouts-that-tell-the-truth-01PMZ808 WP09 (FR-011,
+  // AC-021): resolve through the registry + shortcutOverrides instead of
+  // hard-coded literals, so a rebind in Settings → Keyboard Shortcuts
+  // actually changes what fires here — previously shortcutOverrides was
+  // read into the ref purely to feed CheatSheetModal's display, and
+  // rebinding produced a cheat sheet that documented a binding nothing
+  // enforced.
+  const searchBinding = resolveBinding('nav.focus-search', shortcutOverrides.value);
+  if (searchBinding && matchesEvent(searchBinding, e)) {
     e.preventDefault();
     searchOpen.value = true;
     return;
   }
-  // ? → cheat-sheet overlay
-  if (matchesEvent('?', e)) {
+  const cheatSheetBinding = resolveBinding('help.cheat-sheet', shortcutOverrides.value);
+  if (cheatSheetBinding && matchesEvent(cheatSheetBinding, e)) {
     e.preventDefault();
     cheatSheetOpen.value = !cheatSheetOpen.value;
     return;
@@ -167,6 +176,11 @@ onMounted(async () => {
   try {
     const s = await client.settings.get();
     shortcutOverrides.value = s.keyboardShortcuts ?? {};
+    // useCommandPalette.ts's ⌘K listener is module-level (installed once,
+    // outside any component instance — see its own onKey), so a
+    // Shell.vue setup-local ref is unreachable from there. Push the
+    // overrides into that module's own holder instead (WP09, AC-022).
+    setCommandPaletteOverrides(shortcutOverrides.value);
   } catch {
     // best-effort; cheat sheet falls back to defaults
   }

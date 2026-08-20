@@ -13,11 +13,12 @@
  *
  * (docs/dead-code-audit-2026-08-16.md finding A4)
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import CommandPalette from '@/components/ui/CommandPalette.vue';
 import { provideFakeClient } from '@/lib/harnessClientContext';
 import { initFeatureFlags } from '@/lib/featureFlags';
+import { _resetPlatformCache } from '@/lib/shortcuts/platform';
 import type { AppInfo } from '@/lib/types';
 
 function makeAppInfo(caps: Record<string, boolean>): AppInfo {
@@ -48,9 +49,21 @@ async function openPalette() {
 }
 
 describe('CommandPalette — fleet nav actions', () => {
+  beforeEach(() => {
+    // controls-and-readouts-that-tell-the-truth-01PMZ808 WP09: the ⌘K
+    // listener now resolves through the registry + matchesEvent
+    // (platform-aware) instead of an OS-agnostic metaKey check; this
+    // spec's openPalette() simulates a Mac keypress via metaKey, so pin
+    // the detected platform to 'mac' (same convention as
+    // Shell.cmdk.spec.ts / Shell.shortcutRebind.spec.ts).
+    localStorage.setItem('kenaz_shortcut_platform', 'mac');
+    _resetPlatformCache();
+  });
   afterEach(() => {
     key('Escape');
     initFeatureFlags(null);
+    localStorage.removeItem('kenaz_shortcut_platform');
+    _resetPlatformCache();
   });
 
   it('hides both from a signed-out user', async () => {

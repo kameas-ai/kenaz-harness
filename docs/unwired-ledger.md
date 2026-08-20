@@ -1534,6 +1534,36 @@ lie, it does not end it").
   clamping alone is the intended behaviour and this entry is closed as
   "decided, not deferred."
 
+### 2026-08-20 · `registry.ts`'s "components never hard-code binding strings" claim — narrowed for the native menu only
+
+`controls-and-readouts-that-tell-the-truth-01PMZ808` WP09 (FR-011,
+register `E-003`). `Shell.vue`'s two global bindings (search, cheat sheet)
+and `useCommandPalette.ts`'s ⌘K now resolve through
+`shortcuts/registry.ts`'s `resolveBinding` against the persisted
+`keyboardShortcuts` overrides — landed in this commit. The native OS menu
+accelerators (`core/menu/menu.go`'s `keys.CmdOrCtrl(...)` literals for
+Command Palette / Search / etc.) still do not: `core/menu/state.go`'s
+`MenuState` carries no shortcut field, and no topic fires a menu rebuild
+on a shortcut save.
+
+Spec R-15 confirms the *mechanism* exists — `rebuildMenuLocked` calls
+`wailsruntime.MenuSetApplicationMenu` at runtime, debounced and already
+fired from three live subscriptions — the *payload* does not. Wiring it
+requires: a shortcut field on `MenuState`, a broker topic (or reuse of an
+existing one) firing on `Settings_Set` when `keyboardShortcuts` changes,
+and `menu.go`'s `keys.CmdOrCtrl(...)` calls becoming dynamic per-binding
+lookups instead of literals — a real, if small, feature, not a
+one-line wire.
+
+- **Blocker:** whether native-menu rebinding ships in this mission's scope
+  at all is a product call (register `E-003`), not a technical one — no
+  owner decision was available this session.
+- **Owner / deleting change:** whoever answers `E-003` either lands the
+  MenuState + topic + dynamic-accelerator wiring (deletes this entry), or
+  decides native-menu accelerators are intentionally fixed regardless of
+  the in-app override and narrows `registry.ts:5-6`'s claim to say so
+  explicitly (also deletes this entry, the other direction).
+
 ## Drained
 
 ### 2026-08-19 · CLOSED — the missing-upgrade-snapshot hole is now gated
