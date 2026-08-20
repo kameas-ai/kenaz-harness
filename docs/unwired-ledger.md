@@ -940,7 +940,7 @@ Producer-absence proof re-confirmed at removal time, both arms:
 `run_in_background_test.go`; the sole `Register` call into a tasks registry
 is `core/tools/subagentdispatch/tool.go:240`, guarded by `opts.Tasks != nil`,
 and that field's only production assignment is `Tasks: nil`
-(`core/rpc/builtins_wiring.go:317`). `tasksview.NewAPI(taskReg)` therefore
+(`core/rpc/builtins_wiring.go:321`). `tasksview.NewAPI(taskReg)` therefore
 serves an always-empty registry.
 
 **Disposition: parked, not deleted** — `core/tasks`, the four RPCs and
