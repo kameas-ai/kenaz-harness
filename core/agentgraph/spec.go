@@ -146,6 +146,19 @@ const (
 // resolved spec that actually ran.
 const SpecProvenanceLibraryFallback = "library_fallback"
 
+// SpecProvenanceModelAuthored is the Graph.SpecProvenance value for a
+// graph drafted by a model rather than a human
+// (model-authored-graphs-01PMGA01 UNIT-5, FR-009). Stamped server-side
+// by Manager.saveGraph for a non-user-initiated save, OVERWRITING
+// whatever value the submitted YAML carried — a draft that arrives with
+// the field blank, absent, or set to SpecProvenanceLibraryFallback is
+// stamped anyway, so the marker cannot be forged or omitted by the
+// caller. Cleared (never re-applied) the first time a human saves the
+// same graph from the editor (initiator == "user") — that save is the
+// FR-010 human review the shipped graph_run_unreviewed_forbid.cedar
+// policy (UNIT-3) keys on via context.spec_provenance.
+const SpecProvenanceModelAuthored = "model_authored"
+
 // NodeMaterialization is the executed-fire record attached to a materialized
 // node instance. Every field is derived from the run's EventLog — the
 // same stream `Manager.runTrace` (the trace surface) and

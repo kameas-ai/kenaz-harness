@@ -12,6 +12,7 @@ package agentgraph
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/elicitation"
@@ -25,13 +26,24 @@ import (
 type GraphScope = string
 
 // GraphInfo is the wire shape for a single library entry.
+//
+// Invalid / InvalidReason (model-authored-graphs-01PMGA01 UNIT-2, FR-004)
+// surface a user-library file that parses but fails coreag.Validate — the
+// defence for the §1.2 back door (a graph written straight to
+// <DataDir>/agent_graph/library/ with os.WriteFile, bypassing SaveGraph
+// entirely). Such a file is still LISTED — the A-0 delete-lane freeze
+// forbids quarantining or deleting a user's file to satisfy a validator —
+// but it is marked so the frontend can disable Run and startRun refuses
+// it with the validator's own issues rather than a bare wrapped error.
 type GraphInfo struct {
-	ID          string `json:"id"`
-	Name        string `json:"name,omitempty"`
-	Description string `json:"description,omitempty"`
-	Scope       string `json:"scope"` // "library" | "user"
-	Source      string `json:"source,omitempty"`
-	UpdatedAt   string `json:"updatedAt,omitempty"`
+	ID            string `json:"id"`
+	Name          string `json:"name,omitempty"`
+	Description   string `json:"description,omitempty"`
+	Scope         string `json:"scope"` // "library" | "user"
+	Source        string `json:"source,omitempty"`
+	UpdatedAt     string `json:"updatedAt,omitempty"`
+	Invalid       bool   `json:"invalid,omitempty"`
+	InvalidReason string `json:"invalidReason,omitempty"`
 }
 
 // GraphSpec is the wire shape carrying the graph YAML across the boundary.
@@ -62,6 +74,32 @@ type ValidationIssue struct {
 type ValidationResult struct {
 	OK     bool              `json:"ok"`
 	Issues []ValidationIssue `json:"issues"`
+}
+
+// ValidationFailedError is returned by saveGraph and startRun when the
+// kernel validator rejects a graph (model-authored-graphs-01PMGA01
+// UNIT-2, FR-002/FR-003/FR-004). It carries the same per-rule Issues
+// shape ValidationResult / Graph_Validate already returns, so every
+// caller — the editor's direct SaveGraph call, a future authoring tool
+// — gets identical per-rule feedback instead of a single opaque wrapped
+// error string.
+type ValidationFailedError struct {
+	Issues []ValidationIssue
+}
+
+// Error implements error. The message intentionally does not repeat
+// every issue (callers should read Issues for the structured list); it
+// names the count and the first issue so a plain %v log line is still
+// diagnosable.
+func (e *ValidationFailedError) Error() string {
+	if e == nil || len(e.Issues) == 0 {
+		return "agentgraph: validation failed"
+	}
+	first := e.Issues[0]
+	if len(e.Issues) == 1 {
+		return fmt.Sprintf("agentgraph: validation failed: %s: %s", first.Rule, first.Message)
+	}
+	return fmt.Sprintf("agentgraph: validation failed (%d issues), first: %s: %s", len(e.Issues), first.Rule, first.Message)
 }
 
 // EdgeEndpoint is one end of a candidate edge: a node id + a port name.
@@ -177,7 +215,14 @@ type API interface {
 	// SaveGraph persists a user graph to <DataDir>/agent_graph/library.
 	// Library-scoped graphs are read-only; saving a library id returns
 	// an error.
-	SaveGraph(ctx context.Context, spec GraphSpec) error
+	//
+	// initiator is "user" | "model" (model-authored-graphs-01PMGA01
+	// UNIT-4). It scopes the graph.author Cedar gate: a "user" save
+	// (the desktop editor's path) is never gated by the FR-006 consent
+	// dial or the write_file escalation control — those exist to
+	// restrict what a MODEL may author, not what a human editing on the
+	// canvas may save (AC-012).
+	SaveGraph(ctx context.Context, spec GraphSpec, initiator string) error
 
 	// DeleteGraph removes a user graph (idempotent).
 	DeleteGraph(ctx context.Context, id string) error

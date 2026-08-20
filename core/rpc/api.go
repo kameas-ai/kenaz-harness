@@ -1428,6 +1428,37 @@ func New(c *core.Core, opts ...Option) *API {
 		}
 	}
 
+	// model-authored-graphs-01PMGA01 UNIT-3: install the four shipped
+	// graph-authoring Cedar policies (graph_author_forbid.cedar,
+	// graph_author_permit.cedar, graph_author_no_write_file.cedar,
+	// graph_run_unreviewed_forbid.cedar — graphview.EmbeddedCedar) into
+	// the SAME singleton engine every other ActionUse*/graph.* gate
+	// reads. Shares the harness-self install mechanism above rather than
+	// building a second one (spec §9 / tasks.md UNIT-3: "whichever lands
+	// first owns the helper, the other adds its embed.FS to it" —
+	// LoadHarnessSnippets is already a general "add named policy
+	// sources" primitive, see core/fleet/cedar_apply.go's
+	// CedarBundleApplier). Until UNIT-4 lands the callers
+	// (GateGraphAuthor/GateGraphRun), nothing evaluates these policies —
+	// installing them here first means UNIT-4's gate tests fail loudly
+	// against a missing call site rather than passing vacuously against
+	// a missing install (plan.md's ordering rationale for WP03 before
+	// WP04). A silent skip here is indistinguishable from "installed and
+	// permissive" to every existing listing test, so failures are logged
+	// loud (Error, not Warn) and the install is asserted against the
+	// exact expected count.
+	if a.cedarEngine != nil {
+		if snippets, err := graphview.CedarSnippets(); err != nil {
+			logging.L().Error("cedar.graph_snippets_read_failed", "err", err.Error())
+		} else if err := a.cedarEngine.LoadHarnessSnippets(snippets); err != nil {
+			logging.L().Error("cedar.graph_snippets_load_failed", "err", err.Error())
+		} else if n := len(snippets); n != 4 {
+			logging.L().Error("cedar.graph_snippets_count_unexpected", "count", n, "want", 4)
+		} else {
+			logging.L().Info("cedar.graph_snippets_installed", "count", n)
+		}
+	}
+
 	// Wire the Cedar gate for BulkPurge (F-001 security fix). The gate is
 	// built from the same DataDir as every other Cedar gate in the chassis.
 	// When DataDir is empty (e.g. test mode) a.cedarGate() returns AllowAll
@@ -4980,6 +5011,26 @@ func agenticTurnRoutingEnabledFromSettings(settingsImpl *settings.API) bool {
 	return got.AgenticTurnRouting
 }
 
+// graphAuthoringEnabledFromSettings reads the FR-006 consent dial
+// (model-authored-graphs-01PMGA01 UNIT-4) live from the settings store,
+// consulted on every graph.author evaluation via
+// graphview.WithAuthoringEnabled above. A nil settingsImpl/Store, or a
+// LoadGraphAuthoringEnabled error, reads as false — the fail-closed
+// direction FR-006 requires ("absent reads as off"): an unreadable
+// settings file must not silently grant graph-authoring.
+func graphAuthoringEnabledFromSettings(settingsImpl *settings.API) bool {
+	if settingsImpl == nil || settingsImpl.Store() == nil {
+		return false
+	}
+	enabled, err := settingsImpl.Store().LoadGraphAuthoringEnabled()
+	if err != nil {
+		logging.L().Warn("graph.authoring_enabled.read_failed",
+			"err", err.Error(), "detail", "defaulting to disabled")
+		return false
+	}
+	return enabled
+}
+
 // moveFidelityHistoryEnabledFromSettings reads the LIVE half of the
 // model-visible move-fidelity gate (model-moves-transcript-01PMCH01
 // WP03, spec §4).
@@ -6625,6 +6676,24 @@ func newGraphManagerWithDeps(
 		}),
 		graphview.WithKernel(kernel),
 		graphview.WithEventLog(agEventLog),
+		// model-authored-graphs-01PMGA01 UNIT-4: the same engine
+		// deps.Policy already uses above (graphCedarGate — AllowAll{}
+		// until a real cedarEngine is constructed, reassigned when one
+		// is), so graph.author/graph.run evaluations reach a
+		// SavePolicy + Reload-reachable engine like every other gate in
+		// this constructor. check-cedar-gate-arguments.sh clause 4
+		// (UNIT-8(b)) is the CI gate that keeps this argument from
+		// silently going missing — the agentgraph Manager has no
+		// Config struct for clause 3 to discover (C-010).
+		graphview.WithGraphCedarGate(graphCedarGate),
+		// FR-006's consent dial: read live from the settings store on
+		// every graph.author evaluation so a toggle in Settings takes
+		// effect on the next draft attempt without an app restart. A
+		// nil/errored store reads as off (LoadGraphAuthoringEnabled's
+		// documented safe default).
+		graphview.WithAuthoringEnabled(func() bool {
+			return graphAuthoringEnabledFromSettings(settingsImpl)
+		}),
 	}
 
 	mgr, err := graphview.NewManager(mgrOpts...)

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph/activities"
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph/prompts"
 	"github.com/kameas-ai/kenaz-harness/core/elicitation"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
 // Manager owns the kernel, the on-disk graph library, the activity
@@ -43,6 +45,22 @@ type Manager struct {
 	// a Manager constructed without the settings seam (every test
 	// chassis) must not execute the routed topology.
 	routingEnabled func() bool
+
+	// cedarGate is the graph.author / graph.run policy gate
+	// (model-authored-graphs-01PMGA01 UNIT-4). nil means "no engine
+	// wired" — GateGraphAuthor/GateGraphRun's own nil-gate contract is
+	// default-allow (the correct library default; production wiring
+	// must pass a real gate — see check-cedar-gate-arguments.sh clause
+	// 4, UNIT-8(b)).
+	cedarGate cedar.Gate
+
+	// authoringEnabled reports the FR-006 consent dial, read live from
+	// the settings store on every graph.author evaluation so a toggle
+	// takes effect on the next draft attempt without an app restart.
+	// nil means OFF — the shipped default and the fail-closed reading
+	// for a Manager built without the settings seam (every test
+	// chassis), matching routingEnabled's shape above.
+	authoringEnabled func() bool
 
 	// Library: bundled graphs the loader splices in (read-only).
 	bundled map[string]bundledGraph
@@ -284,14 +302,25 @@ func (m *Manager) listLibrary(scope GraphScope) []GraphInfo {
 					if err == nil {
 						updated = st.ModTime().UTC().Format(time.RFC3339Nano)
 					}
-					out = append(out, GraphInfo{
+					info := GraphInfo{
 						ID:          g.ID,
 						Name:        g.Name,
 						Description: g.Description,
 						Scope:       "user",
 						Source:      full,
 						UpdatedAt:   updated,
-					})
+					}
+					// FR-004: a file that parses but fails Validate is the
+					// §1.2 back-door defence — a graph written straight to
+					// disk (os.WriteFile, bypassing saveGraph's FR-003
+					// check entirely) must not present itself as runnable.
+					// A-0 forbids deleting or quarantining it, so it is
+					// still listed, just marked.
+					if verr := coreag.Validate(g, coreag.WithActivityRegistry(m.catalog)); verr != nil {
+						info.Invalid = true
+						info.InvalidReason = summarizeIssues(issuesFromValidateErr(verr))
+					}
+					out = append(out, info)
 				}
 			}
 		}
@@ -329,7 +358,17 @@ func (m *Manager) loadGraph(id string) (GraphSpec, error) {
 // saveGraph persists user-supplied YAML at <DataDir>/agent_graph/library/<id>.yaml.
 // Library ids are reserved; saving over a bundled id is rejected so
 // users can't accidentally shadow the default toolloop graph.
-func (m *Manager) saveGraph(spec GraphSpec) error {
+//
+// initiator distinguishes who is asking: "user" is the desktop editor's
+// Wails-bound save path (Graph_SaveGraph hardcodes this — see
+// bindings.go), anything else (today only "model", once
+// harness-self-attach-01PMHS01 lands the tool) is treated as
+// model-initiated. The graph.author Cedar gate (UNIT-4, FR-005/FR-006)
+// is scoped to non-user-initiated saves ONLY — AC-012 requires the
+// desktop editor keep working with the FR-006 consent dial off and with
+// the shipped write_file forbid in place; that policy governs what a
+// MODEL may author, not what a human editing on the canvas may save.
+func (m *Manager) saveGraph(ctx context.Context, spec GraphSpec, initiator string) error {
 	if spec.ID == "" {
 		return errors.New("agentgraph: id required")
 	}
@@ -349,6 +388,55 @@ func (m *Manager) saveGraph(spec GraphSpec) error {
 	if isBundled {
 		return fmt.Errorf("agentgraph: id %q is a bundled library graph; choose a different id", spec.ID)
 	}
+	// FR-003: the check that used to live only in GraphEditor.vue's
+	// pre-save client-side call to Validate. Every caller of
+	// Graph_SaveGraph — the editor, a future authoring tool, served
+	// mode — now gets it, and it runs BEFORE the write so a rejected
+	// draft leaves nothing on disk (FR-002). The frontend's own
+	// pre-save validate stays; it is now belt-and-braces rather than
+	// the only check — scripts/ci/check-graph-write-paths.sh (UNIT-8)
+	// is the CI gate that keeps this call from being silently reverted.
+	if verr := coreag.Validate(g, coreag.WithActivityRegistry(m.catalog)); verr != nil {
+		return &ValidationFailedError{Issues: issuesFromValidateErr(verr)}
+	}
+	// UNIT-4: graph.author gate — non-user-initiated saves only (see
+	// the initiator doc comment above). authoringEnabled nil ⇒ OFF, the
+	// fail-closed reading for a Manager built without the settings seam
+	// (every test chassis) — matches routingEnabled's shape.
+	if initiator != "user" {
+		enabled := m.authoringEnabled != nil && m.authoringEnabled()
+		if _, gerr := cedar.GateGraphAuthor(ctx, m.cedarGate, spec.ID, enabled, "", collectNodeKinds(g), len(g.Nodes)); gerr != nil {
+			return gerr
+		}
+	}
+	// UNIT-5 (FR-009/FR-010): the model-authored marker. Stamped
+	// server-side for a non-user save, OVERWRITING whatever
+	// spec_provenance the submitted YAML carried — blank, absent, or
+	// even "library_fallback" all become "model_authored". Cleared
+	// (never re-applied) for a user save — that is the human review
+	// FR-010 requires being recorded. Re-serialised through
+	// coreag.DumpYAML rather than string-editing spec.YAML, because
+	// spec.YAML is model-supplied text and the field may not even be
+	// present in it. The common case (an ordinary user save whose
+	// parsed SpecProvenance is already empty) re-serialises nothing and
+	// writes the caller's own bytes unchanged.
+	payload := []byte(spec.YAML)
+	switch {
+	case initiator != "user":
+		g.SpecProvenance = coreag.SpecProvenanceModelAuthored
+		out, derr := coreag.DumpYAML(g)
+		if derr != nil {
+			return fmt.Errorf("agentgraph: re-encode after stamping provenance: %w", derr)
+		}
+		payload = out
+	case g.SpecProvenance != "":
+		g.SpecProvenance = ""
+		out, derr := coreag.DumpYAML(g)
+		if derr != nil {
+			return fmt.Errorf("agentgraph: re-encode after clearing provenance: %w", derr)
+		}
+		payload = out
+	}
 	dir := m.userLibraryDir()
 	if dir == "" {
 		return errors.New("agentgraph: data dir not configured; cannot persist")
@@ -358,7 +446,7 @@ func (m *Manager) saveGraph(spec GraphSpec) error {
 	}
 	full := filepath.Join(dir, sanitizeGraphFilename(spec.ID))
 	tmp := full + ".tmp"
-	if err := os.WriteFile(tmp, []byte(spec.YAML), 0o644); err != nil { //nolint:gosec // user data
+	if err := os.WriteFile(tmp, payload, 0o644); err != nil { //nolint:gosec // user data
 		return fmt.Errorf("agentgraph: write: %w", err)
 	}
 	return os.Rename(tmp, full)
@@ -400,6 +488,15 @@ func (m *Manager) validateYAML(yaml string) ValidationResult {
 	if verr == nil {
 		return ValidationResult{OK: true, Issues: []ValidationIssue{}}
 	}
+	return ValidationResult{OK: false, Issues: issuesFromValidateErr(verr)}
+}
+
+// issuesFromValidateErr converts a coreag.Validate error into the wire
+// ValidationIssue shape (model-authored-graphs-01PMGA01 UNIT-2). Shared
+// by validateYAML, saveGraph, listLibrary and startRun so every caller
+// sees identical per-rule issues for the same underlying failure —
+// FR-002's "the model's feedback loop is the validator" contract.
+func issuesFromValidateErr(verr error) []ValidationIssue {
 	var ve *coreag.ValidationError
 	if errors.As(verr, &ve) {
 		issues := make([]ValidationIssue, 0, len(ve.Issues))
@@ -407,14 +504,53 @@ func (m *Manager) validateYAML(yaml string) ValidationResult {
 			rule, body := splitRule(msg)
 			issues = append(issues, ValidationIssue{Rule: rule, Message: body})
 		}
-		return ValidationResult{OK: false, Issues: issues}
+		return issues
 	}
-	return ValidationResult{OK: false, Issues: []ValidationIssue{{Rule: "validate", Message: verr.Error()}}}
+	return []ValidationIssue{{Rule: "validate", Message: verr.Error()}}
+}
+
+// collectNodeKinds returns the sorted, comma-joined, de-duplicated set
+// of `kind:` values in g — the FR-008 escalation surface passed as
+// context.node_kinds to GateGraphAuthor. Mirrors
+// core/workflows/audit.go's CollectStepKinds exactly (same shape,
+// same reason: GateWorkflowRun/Save's step_kinds context attribute),
+// so a policy author who already knows that convention needs nothing
+// new here.
+func collectNodeKinds(g coreag.Graph) string {
+	if len(g.Nodes) == 0 {
+		return ""
+	}
+	seen := make(map[string]struct{}, len(g.Nodes))
+	var kinds []string
+	for _, n := range g.Nodes {
+		k := string(n.Kind)
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		kinds = append(kinds, k)
+	}
+	sort.Strings(kinds)
+	return strings.Join(kinds, ",")
+}
+
+// summarizeIssues renders a short single-line reason from a validator
+// issue list, for GraphInfo.InvalidReason (FR-004) — a compact
+// human-readable summary, not the full per-rule detail the Validate RPC
+// carries.
+func summarizeIssues(issues []ValidationIssue) string {
+	if len(issues) == 0 {
+		return "invalid"
+	}
+	if len(issues) == 1 {
+		return issues[0].Rule + ": " + issues[0].Message
+	}
+	return fmt.Sprintf("%s: %s (+%d more)", issues[0].Rule, issues[0].Message, len(issues)-1)
 }
 
 // startRun schedules a kernel run for the requested graph. The run
 // executes asynchronously; status + trace are queryable via the API.
-func (m *Manager) startRun(req StartRunRequest) (StartRunResponse, error) {
+func (m *Manager) startRun(ctx context.Context, req StartRunRequest) (StartRunResponse, error) {
 	if req.GraphID == "" {
 		return StartRunResponse{}, errors.New("agentgraph: graphId required")
 	}
@@ -435,8 +571,24 @@ func (m *Manager) startRun(req StartRunRequest) (StartRunResponse, error) {
 	// closed for any Manager built without the settings seam.
 	enabled := m.routingEnabled != nil && m.routingEnabled()
 	g = coreag.GateAgenticTurnRouting(g, enabled)
-	if err := coreag.Validate(g, coreag.WithActivityRegistry(m.catalog)); err != nil {
-		return StartRunResponse{}, fmt.Errorf("agentgraph: validate: %w", err)
+	// FR-004: carry the validator's per-rule issues rather than a bare
+	// wrapped error string, so a graph that reached disk around
+	// saveGraph (the §1.2 back door) refuses to run with an explanation
+	// instead of an opaque "validate: agentgraph: validation failed:\n
+	// - ..." blob.
+	if verr := coreag.Validate(g, coreag.WithActivityRegistry(m.catalog)); verr != nil {
+		return StartRunResponse{}, &ValidationFailedError{Issues: issuesFromValidateErr(verr)}
+	}
+	// UNIT-4: graph.run gate — the FR-007 human-review interlock.
+	// Unlike graph.author this is NOT scoped to a particular initiator:
+	// every production initiator today is "user" (the Graphs view's Run
+	// button), FR-007 declares no run tool, so a "model" initiator does
+	// not reach this call in this mission. Evaluated unconditionally so
+	// the shipped graph_run_unreviewed_forbid.cedar policy (keyed on
+	// g.SpecProvenance, stamped server-side by UNIT-5) has exactly one
+	// enforcement point, with no initiator carve-out to audit later.
+	if _, gerr := cedar.GateGraphRun(ctx, m.cedarGate, req.GraphID, g.SpecProvenance, "", "user"); gerr != nil {
+		return StartRunResponse{}, gerr
 	}
 
 	runID := newRunID()

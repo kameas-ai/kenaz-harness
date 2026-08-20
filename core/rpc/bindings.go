@@ -2335,7 +2335,13 @@ func (b *Bindings) Graph_LoadGraph(id string) (graphview.GraphSpec, error) {
 }
 func (b *Bindings) Graph_SaveGraph(spec graphview.GraphSpec) error {
 	defer sentry.WrapBinding("Graph_SaveGraph")()
-	return b.api.Graph().SaveGraph(b.ctx(), spec)
+	// initiator is hardcoded "user" — this is the desktop editor's
+	// Wails-bound save path, the only initiator that exists on this
+	// binding today. model-authored-graphs-01PMGA01 UNIT-4: a "user"
+	// save is never gated by the FR-006 consent dial, so this call's
+	// behaviour is byte-for-byte unchanged from before the gate existed
+	// (AC-012).
+	return b.api.Graph().SaveGraph(b.ctx(), spec, "user")
 }
 func (b *Bindings) Graph_DeleteGraph(id string) error {
 	defer sentry.WrapBinding("Graph_DeleteGraph")()

@@ -30,7 +30,7 @@ func TestNilManager(t *testing.T) {
 	if _, err := a.ListGraphs(ctx, ""); !errors.Is(err, graphview.ErrManagerUnavailable) {
 		t.Errorf("ListGraphs err = %v", err)
 	}
-	if err := a.SaveGraph(ctx, graphview.GraphSpec{ID: "x"}); !errors.Is(err, graphview.ErrManagerUnavailable) {
+	if err := a.SaveGraph(ctx, graphview.GraphSpec{ID: "x"}, "user"); !errors.Is(err, graphview.ErrManagerUnavailable) {
 		t.Errorf("SaveGraph err = %v", err)
 	}
 	if _, err := a.GetRunStatus(ctx, "r"); !errors.Is(err, graphview.ErrManagerUnavailable) {
@@ -131,7 +131,7 @@ nodes:
     attrs:
       verbosity: terse
 `
-	if err := a.SaveGraph(ctx, graphview.GraphSpec{ID: id, YAML: yaml}); err != nil {
+	if err := a.SaveGraph(ctx, graphview.GraphSpec{ID: id, YAML: yaml}, "user"); err != nil {
 		t.Fatalf("SaveGraph: %v", err)
 	}
 	rows, err := a.ListGraphs(ctx, "user")
@@ -183,7 +183,7 @@ nodes:
     attrs:
       verbosity: terse
 `
-	err := a.SaveGraph(ctx, graphview.GraphSpec{ID: "toolloop_default", YAML: yaml})
+	err := a.SaveGraph(ctx, graphview.GraphSpec{ID: "toolloop_default", YAML: yaml}, "user")
 	if err == nil || !strings.Contains(err.Error(), "bundled") {
 		t.Errorf("expected bundled rejection; got %v", err)
 	}
@@ -247,7 +247,7 @@ nodes:
       params:
         sep: "-"
 `
-	if err := a.SaveGraph(ctx, graphview.GraphSpec{ID: "tiny", YAML: yaml}); err != nil {
+	if err := a.SaveGraph(ctx, graphview.GraphSpec{ID: "tiny", YAML: yaml}, "user"); err != nil {
 		t.Fatalf("SaveGraph: %v", err)
 	}
 	resp, err := a.StartRun(ctx, graphview.StartRunRequest{GraphID: "tiny"})
@@ -314,7 +314,7 @@ nodes:
     attrs:
       question: "What is your name?"
 `
-	if err := a.SaveGraph(ctx, graphview.GraphSpec{ID: "ask_only", YAML: yaml}); err != nil {
+	if err := a.SaveGraph(ctx, graphview.GraphSpec{ID: "ask_only", YAML: yaml}, "user"); err != nil {
 		t.Fatalf("SaveGraph: %v", err)
 	}
 	resp, err := a.StartRun(ctx, graphview.StartRunRequest{GraphID: "ask_only"})
@@ -373,7 +373,7 @@ nodes:
     attrs:
       question: "park here"
 `
-	if err := a.SaveGraph(ctx, graphview.GraphSpec{ID: "ask_cancel", YAML: yaml}); err != nil {
+	if err := a.SaveGraph(ctx, graphview.GraphSpec{ID: "ask_cancel", YAML: yaml}, "user"); err != nil {
 		t.Fatalf("SaveGraph: %v", err)
 	}
 	resp, err := a.StartRun(ctx, graphview.StartRunRequest{GraphID: "ask_cancel"})
