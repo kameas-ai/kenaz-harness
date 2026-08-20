@@ -175,6 +175,8 @@ export namespace agentgraph {
 	    scope: string;
 	    source?: string;
 	    updatedAt?: string;
+	    invalid?: boolean;
+	    invalidReason?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new GraphInfo(source);
@@ -188,6 +190,8 @@ export namespace agentgraph {
 	        this.scope = source["scope"];
 	        this.source = source["source"];
 	        this.updatedAt = source["updatedAt"];
+	        this.invalid = source["invalid"];
+	        this.invalidReason = source["invalidReason"];
 	    }
 	}
 	export class GraphSpec {

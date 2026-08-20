@@ -130,6 +130,35 @@ describe('GraphsView', () => {
     });
   });
 
+  it('marks an invalid graph and disables its Run button (UNIT-2, FR-004)', async () => {
+    const graphs = [
+      makeGraph({ id: 'valid_one', name: 'Valid' }),
+      makeGraph({
+        id: 'bad_one',
+        name: 'Bad',
+        scope: 'user',
+        invalid: true,
+        invalidReason: 'schema: unknown entrypoint "missing"',
+      }),
+    ];
+    const { wrapper, startRun } = mountWith({ graphs });
+    await flushPromises();
+
+    // Invalid marker renders only on the invalid row.
+    expect(wrapper.find('[data-testid="graph-invalid-bad_one"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="graph-invalid-valid_one"]').exists()).toBe(false);
+
+    // Run is disabled for the invalid row and clicking it never calls
+    // startRun — this is honesty, not the security control (AC-008's
+    // backend equivalent is the real gate); the mutation this guards is
+    // "hardcode the disabled condition to false".
+    const runButton = wrapper.get('[data-testid="graph-run-bad_one"]');
+    expect(runButton.attributes('disabled')).toBeDefined();
+    await runButton.trigger('click');
+    await flushPromises();
+    expect(startRun).not.toHaveBeenCalled();
+  });
+
   it('confirms before deleting a user graph and forwards the id', async () => {
     const graphs = [makeGraph({ id: 'user_g', scope: 'user' })];
     const { wrapper, deleteGraph } = mountWith({ graphs });

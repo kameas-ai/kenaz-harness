@@ -284,14 +284,25 @@ func (m *Manager) listLibrary(scope GraphScope) []GraphInfo {
 					if err == nil {
 						updated = st.ModTime().UTC().Format(time.RFC3339Nano)
 					}
-					out = append(out, GraphInfo{
+					info := GraphInfo{
 						ID:          g.ID,
 						Name:        g.Name,
 						Description: g.Description,
 						Scope:       "user",
 						Source:      full,
 						UpdatedAt:   updated,
-					})
+					}
+					// FR-004: a file that parses but fails Validate is the
+					// §1.2 back-door defence — a graph written straight to
+					// disk (os.WriteFile, bypassing saveGraph's FR-003
+					// check entirely) must not present itself as runnable.
+					// A-0 forbids deleting or quarantining it, so it is
+					// still listed, just marked.
+					if verr := coreag.Validate(g, coreag.WithActivityRegistry(m.catalog)); verr != nil {
+						info.Invalid = true
+						info.InvalidReason = summarizeIssues(issuesFromValidateErr(verr))
+					}
+					out = append(out, info)
 				}
 			}
 		}
@@ -349,6 +360,17 @@ func (m *Manager) saveGraph(spec GraphSpec) error {
 	if isBundled {
 		return fmt.Errorf("agentgraph: id %q is a bundled library graph; choose a different id", spec.ID)
 	}
+	// FR-003: the check that used to live only in GraphEditor.vue's
+	// pre-save client-side call to Validate. Every caller of
+	// Graph_SaveGraph — the editor, a future authoring tool, served
+	// mode — now gets it, and it runs BEFORE the write so a rejected
+	// draft leaves nothing on disk (FR-002). The frontend's own
+	// pre-save validate stays; it is now belt-and-braces rather than
+	// the only check — scripts/ci/check-graph-write-paths.sh (UNIT-8)
+	// is the CI gate that keeps this call from being silently reverted.
+	if verr := coreag.Validate(g, coreag.WithActivityRegistry(m.catalog)); verr != nil {
+		return &ValidationFailedError{Issues: issuesFromValidateErr(verr)}
+	}
 	dir := m.userLibraryDir()
 	if dir == "" {
 		return errors.New("agentgraph: data dir not configured; cannot persist")
@@ -400,6 +422,15 @@ func (m *Manager) validateYAML(yaml string) ValidationResult {
 	if verr == nil {
 		return ValidationResult{OK: true, Issues: []ValidationIssue{}}
 	}
+	return ValidationResult{OK: false, Issues: issuesFromValidateErr(verr)}
+}
+
+// issuesFromValidateErr converts a coreag.Validate error into the wire
+// ValidationIssue shape (model-authored-graphs-01PMGA01 UNIT-2). Shared
+// by validateYAML, saveGraph, listLibrary and startRun so every caller
+// sees identical per-rule issues for the same underlying failure —
+// FR-002's "the model's feedback loop is the validator" contract.
+func issuesFromValidateErr(verr error) []ValidationIssue {
 	var ve *coreag.ValidationError
 	if errors.As(verr, &ve) {
 		issues := make([]ValidationIssue, 0, len(ve.Issues))
@@ -407,9 +438,23 @@ func (m *Manager) validateYAML(yaml string) ValidationResult {
 			rule, body := splitRule(msg)
 			issues = append(issues, ValidationIssue{Rule: rule, Message: body})
 		}
-		return ValidationResult{OK: false, Issues: issues}
+		return issues
 	}
-	return ValidationResult{OK: false, Issues: []ValidationIssue{{Rule: "validate", Message: verr.Error()}}}
+	return []ValidationIssue{{Rule: "validate", Message: verr.Error()}}
+}
+
+// summarizeIssues renders a short single-line reason from a validator
+// issue list, for GraphInfo.InvalidReason (FR-004) — a compact
+// human-readable summary, not the full per-rule detail the Validate RPC
+// carries.
+func summarizeIssues(issues []ValidationIssue) string {
+	if len(issues) == 0 {
+		return "invalid"
+	}
+	if len(issues) == 1 {
+		return issues[0].Rule + ": " + issues[0].Message
+	}
+	return fmt.Sprintf("%s: %s (+%d more)", issues[0].Rule, issues[0].Message, len(issues)-1)
 }
 
 // startRun schedules a kernel run for the requested graph. The run
@@ -435,8 +480,13 @@ func (m *Manager) startRun(req StartRunRequest) (StartRunResponse, error) {
 	// closed for any Manager built without the settings seam.
 	enabled := m.routingEnabled != nil && m.routingEnabled()
 	g = coreag.GateAgenticTurnRouting(g, enabled)
-	if err := coreag.Validate(g, coreag.WithActivityRegistry(m.catalog)); err != nil {
-		return StartRunResponse{}, fmt.Errorf("agentgraph: validate: %w", err)
+	// FR-004: carry the validator's per-rule issues rather than a bare
+	// wrapped error string, so a graph that reached disk around
+	// saveGraph (the §1.2 back door) refuses to run with an explanation
+	// instead of an opaque "validate: agentgraph: validation failed:\n
+	// - ..." blob.
+	if verr := coreag.Validate(g, coreag.WithActivityRegistry(m.catalog)); verr != nil {
+		return StartRunResponse{}, &ValidationFailedError{Issues: issuesFromValidateErr(verr)}
 	}
 
 	runID := newRunID()

@@ -2706,6 +2706,17 @@ export interface GraphInfo {
   scope: 'library' | 'user';
   source?: string;
   updatedAt?: string;
+  /**
+   * True when this user-library entry parses but fails the kernel
+   * validator (model-authored-graphs-01PMGA01 UNIT-2, FR-004) — the
+   * defence for a graph written straight to
+   * `<DataDir>/agent_graph/library/` outside SaveGraph (spec §1.2's
+   * back door). The row still lists — nothing is deleted or
+   * quarantined — but the UI must not offer Run.
+   */
+  invalid?: boolean;
+  /** Short human-readable reason when invalid is true. */
+  invalidReason?: string;
 }
 
 /**
