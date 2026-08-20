@@ -60,8 +60,19 @@ const (
 	// Approval flow (FR-048). Mirrors the ask_pending / ask_answered
 	// pair; runs pause at `approval_pending` until the user clicks
 	// Approve / Reject in the harness UI.
-	EventApprovalPending  EventKind = "approval_pending"
-	EventApprovalResolved EventKind = "approval_resolved"
+	//
+	// EventApprovalResolved is reserved for a REAL human decision — a
+	// click on Approve/Reject once approval-node-01PMZC12 wires that
+	// UI seam. Until then the v1 approvalExecutor auto-passes every
+	// run (no seam exists to ask anyone) and records that honestly as
+	// EventApprovalAutoPassed instead: trust-surfaces-that-fire-01PMZ202
+	// WP02 removed a prior EventApprovalResolved{"approved": true}
+	// append that fabricated a human decision nobody made (Class F,
+	// "manufactured success", docs/dead-code-audit-2026-08-18.md).
+	// Do not append EventApprovalResolved from the auto-pass path.
+	EventApprovalPending    EventKind = "approval_pending"
+	EventApprovalResolved   EventKind = "approval_resolved"
+	EventApprovalAutoPassed EventKind = "approval_auto_passed"
 
 	// Artifact emission (FR-058). Terminal output; the harness UI
 	// surfaces these as session messages or files depending on the
@@ -242,7 +253,7 @@ func AllEventKinds() []EventKind {
 		EventMemoryWrite, EventMemoryRead, EventTraceWrite, EventCheckpoint, EventSessionWrite,
 		EventBranchFork, EventBranchMerge, EventForkRequested, EventMergeRequest,
 		EventCompactionFired, EventCompactionApplied,
-		EventApprovalPending, EventApprovalResolved,
+		EventApprovalPending, EventApprovalResolved, EventApprovalAutoPassed,
 		EventArtifactEmitted, EventKindAliasResolved,
 		EventFileRead, EventFileWrite, EventBashOutputRead,
 		EventCostCapHit, EventBudgetCapHit,
