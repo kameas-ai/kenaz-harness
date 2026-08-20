@@ -888,7 +888,14 @@ func (b *Bindings) Settings_Get() (settings.Settings, error) {
 }
 func (b *Bindings) Settings_Set(s settings.Settings) error {
 	defer sentry.WrapBinding("Settings_Set")()
-	return b.api.Settings().Set(b.ctx(), s)
+	if err := b.api.Settings().Set(b.ctx(), s); err != nil {
+		return err
+	}
+	// controls-and-readouts-that-tell-the-truth-01PMZ808 WP07 (AC-017): a
+	// live settings save must be able to change the running poller's
+	// interval/channel or stop it entirely without an app restart.
+	b.api.ReconfigureUpdatePoll(b.ctx())
+	return nil
 }
 
 // Settings_GetMemory exposes the long-term-memory opt-in independently

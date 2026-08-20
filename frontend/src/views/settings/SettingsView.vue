@@ -11,7 +11,7 @@
  * to coalesce rapid toggles into a single disk write.
  */
 import { computed, onMounted, ref } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import SettingsShell from '@/views/settings/SettingsShell.vue';
@@ -68,6 +68,14 @@ const client = useHarnessClient();
 // route. We disambiguate via ?tab=updates so we don't have to touch the
 // router config. The tab's mount switch is at the bottom of <template>.
 const route = useRoute() as ReturnType<typeof useRoute> | undefined;
+// controls-and-readouts-that-tell-the-truth-01PMZ808 WP14: captured here,
+// at synchronous setup scope, not behind a dynamic `await import('vue-
+// router')` — useRouter() calls inject(), which needs a live component
+// instance; after an await there is none, and it throws (SyncPanel.vue's
+// module-top pattern is the precedent; WorkflowRunsSection.vue does the
+// same). goToProviders() and reconfigureWithAssistant() below both used to
+// re-derive their own `router` post-await; both now close over this one.
+const router = useRouter() as ReturnType<typeof useRouter> | undefined;
 const showUpdatesTab = computed<boolean>(() => {
   const v = route?.query?.tab;
   return typeof v === 'string' && v === 'updates';
@@ -499,10 +507,8 @@ function skippedKindLabel(kind: string): string {
 /** Navigate to the Providers page, optionally pre-filling the add-provider
  *  drawer with a specific kind (e.g. "openrouter"). */
 async function goToProviders(addKind?: string) {
-  const { useRouter } = await import('vue-router');
-  const router = useRouter();
   const query = addKind ? { add: addKind } : {};
-  await router.push({ path: '/providers', query });
+  await router?.push({ path: '/providers', query });
 }
 
 /** Eligible provider kinds for embeddings (OpenAI-compatible shape). */
@@ -555,15 +561,15 @@ async function testEmbedder() {
   embedderTestStatus.value = 'testing';
   embedderTestError.value = null;
   try {
-    // Use Memory_Pin as a lightweight probe: pin a synthetic chunk and
-    // immediately unpin it.  If the embedder is unavailable the backend
-    // returns an error containing "embedder unavailable".
-    // We don't have a dedicated TestEmbedder RPC yet; the Memory_RememberMessage
-    // path exercises the full embed→store pipeline.
-    // For now we simply call GetEmbedderConfig and treat the round-trip
-    // succeeding as a connectivity check; a dedicated endpoint can be
-    // added in a follow-up.
-    await client.settings.getEmbedderConfig();
+    // controls-and-readouts-that-tell-the-truth-01PMZ808 WP10 (FR-013):
+    // this used to call client.settings.getEmbedderConfig() — a settings-
+    // file read — and treat any successful round-trip as "the embedder is
+    // reachable," which is true even when the embedder is completely
+    // unconfigured or the configured host is unreachable. The dedicated
+    // RPC this comment used to say didn't exist already did:
+    // Memory_TestEmbedder makes a real Embed(["hello world"]) call and
+    // rejects a NoopEmbedder / unreachable host / empty vector.
+    await client.memory.testEmbedder();
     embedderTestStatus.value = 'ok';
   } catch (e: unknown) {
     embedderTestStatus.value = 'error';
@@ -595,11 +601,7 @@ async function reconfigureWithAssistant() {
     const resp = await client.onboarding.restartPhase2({ starterId: 'chat' });
     if (resp.sessionId) {
       // Navigate to the new onboarding session.
-      // Delay import to avoid making this file depend on vue-router at the
-      // module level (consistent with other views that lazy-navigate).
-      const { useRouter } = await import('vue-router');
-      const router = useRouter();
-      await router.push(`/sessions/${resp.sessionId}`);
+      await router?.push(`/sessions/${resp.sessionId}`);
     }
   } catch (e: unknown) {
     onboardingError.value = e instanceof Error ? e.message : String(e);
@@ -2033,8 +2035,8 @@ onMounted(() => {
             <span class="font-mono text-[12px] text-ink" data-testid="max-branch-depth-value">{{ maxVisibleBranchDepth }}</span>
           </div>
           <p class="font-ui text-[11px] text-ink-dim">
-            Sessions nested deeper than this number show a "+N more depths" affordance.
-            Range 1–32; default 5.
+            Sessions nested deeper than this number stop indenting further in the
+            sidebar. Range 1–32; default 5.
           </p>
           <input
             type="range"

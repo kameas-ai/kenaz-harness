@@ -26,6 +26,7 @@ import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { setConnectionState } from '@/lib/useConnectionState';
 import { useSearchPalette } from '@/lib/useSearchPalette';
 import { useCommandPalette } from '@/lib/useCommandPalette';
+import { _resetPlatformCache } from '@/lib/shortcuts/platform';
 
 function pressCmdK() {
   window.dispatchEvent(
@@ -50,12 +51,22 @@ describe('⌘K owner (B1)', () => {
     useSearchPalette().close();
     const cmd = useCommandPalette();
     if (cmd.isOpen.value) cmd.toggle();
+    // controls-and-readouts-that-tell-the-truth-01PMZ808 WP09: onKey now
+    // resolves through the registry + matchesEvent (platform-aware)
+    // instead of an OS-agnostic `e.metaKey || e.ctrlKey` check, so this
+    // test — which simulates a Mac ⌘K via metaKey — must pin the
+    // detected platform to 'mac' the same way Shell.shortcutRebind.spec.ts
+    // does, or it exercises the Windows/Linux Ctrl+K mapping instead.
+    localStorage.setItem('kenaz_shortcut_platform', 'mac');
+    _resetPlatformCache();
   });
 
   afterEach(() => {
     useSearchPalette().close();
     const cmd = useCommandPalette();
     if (cmd.isOpen.value) cmd.toggle();
+    localStorage.removeItem('kenaz_shortcut_platform');
+    _resetPlatformCache();
   });
 
   function mountShellAndPalette() {

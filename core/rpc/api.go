@@ -215,6 +215,16 @@ type HarnessAPI interface {
 	// surface that surfaces ErrServiceUnavailable on every state-mutating
 	// method.
 	Update() updateview.UpdateAPI
+
+	// ReconfigureUpdatePoll (re-)launches the auto-update background
+	// poller against the current AutoCheckUpdates / UpdateChannel /
+	// UpdateCheckInterval settings, cancelling any prior poller first.
+	// controls-and-readouts-that-tell-the-truth-01PMZ808 WP07: called
+	// from SetContext at boot and from Bindings.Settings_Set so a live
+	// settings save takes effect without an app restart — BackgroundPoll
+	// reads its interval/channel once at loop start and cannot pick up a
+	// changed dial any other way. No-op when there is no update service.
+	ReconfigureUpdatePoll(ctx context.Context)
 	// Storage exposes the storage-health RPC surface (v0.5.1
 	// migration-doctor). Surfaces drift between the live ledger and the
 	// registered migration set; provides an automated repair for
@@ -899,27 +909,13 @@ func (a *API) SetContext(ctx context.Context) {
 		go a.runMigrationDriftCheck(ctx)
 	}
 
-	// Start the auto-update background poller on the Wails-supplied
-	// app context. The 6h interval matches the WP01 spec; channel is
-	// "stable" — switching to "prerelease" requires a separate UI
-	// path that hasn't shipped yet. Cancel any prior poller so
-	// repeated SetContext calls (test harness re-init) don't pile up
-	// goroutines.
-	if a.updateSvc != nil {
-		a.updatePollMu.Lock()
-		if a.updatePollCancel != nil {
-			a.updatePollCancel()
-		}
-		pollCtx, cancel := context.WithCancel(ctx)
-		a.updatePollCancel = cancel
-		a.updatePollMu.Unlock()
-		go func() {
-			if err := a.updateSvc.BackgroundPoll(pollCtx, 6*time.Hour, "stable"); err != nil &&
-				!errors.Is(err, context.Canceled) {
-				logging.L().Warn("update.poll.exit", "err", err.Error())
-			}
-		}()
-	}
+	// Start (or refuse to start) the auto-update background poller on the
+	// Wails-supplied app context. See ReconfigureUpdatePoll for the gate
+	// on AutoCheckUpdates and the channel/interval dials
+	// (controls-and-readouts-that-tell-the-truth-01PMZ808 WP07 — this used
+	// to hardcode 6h/"stable" unconditionally, ignoring AutoCheckUpdates
+	// entirely).
+	a.ReconfigureUpdatePoll(ctx)
 
 	// Start fleet audit archiver + retention sweeper background loops
 	// (fleet-audit-archival-01NDFSEX13). Constructed in New only when
@@ -935,6 +931,71 @@ func (a *API) SetContext(ctx context.Context) {
 		a.auditSweeper.Start(ctx)
 		logging.L().Info("fleet.audit_sweeper.started")
 	}
+}
+
+// ReconfigureUpdatePoll (re-)launches the auto-update background poller
+// against the CURRENT persisted dials, cancelling any prior poller
+// first. Called from SetContext (app boot / Wails re-init) and from
+// Bindings.Settings_Set (a live settings save while the app is
+// running) — BackgroundPoll takes interval and channel by value, read
+// once at loop start (core/update/service.go), so a running poller
+// cannot pick up a changed dial on its own; the only way to apply a new
+// interval or channel is cancel-and-relaunch.
+//
+// controls-and-readouts-that-tell-the-truth-01PMZ808 WP07 (FR-008):
+// this used to be an unconditional `if a.updateSvc != nil { ... 6h ...
+// "stable" ... }` inside SetContext — AutoCheckUpdates was read nowhere
+// on this path, and the interval/channel were hardcoded despite three
+// settings-store accessors (LoadAutoCheckUpdates / LoadUpdateChannel /
+// LoadUpdateCheckInterval) existing with zero non-test callers outside
+// core/rpc/views/settings.
+//
+// No-op when there is no update service (nil-service chassis path) or
+// no settings store to read the dials from.
+func (a *API) ReconfigureUpdatePoll(ctx context.Context) {
+	if a.updateSvc == nil {
+		return
+	}
+
+	// Defaults mirror the pre-WP07 hardcoded values so a chassis with no
+	// settings store (some test constructions) keeps its prior always-on
+	// stable/6h behaviour rather than silently going dark.
+	enabled := true
+	interval := 6 * time.Hour
+	channel := settings.UpdateChannelStable
+	if a.settingsImpl != nil {
+		if store := a.settingsImpl.Store(); store != nil {
+			if v, err := store.LoadAutoCheckUpdates(); err == nil {
+				enabled = v
+			}
+			if v, err := store.LoadUpdateCheckInterval(); err == nil && v > 0 {
+				interval = v
+			}
+			if v, err := store.LoadUpdateChannel(); err == nil && v != "" {
+				channel = v
+			}
+		}
+	}
+
+	a.updatePollMu.Lock()
+	if a.updatePollCancel != nil {
+		a.updatePollCancel()
+		a.updatePollCancel = nil
+	}
+	if !enabled {
+		a.updatePollMu.Unlock()
+		logging.L().Info("update.poll.disabled_by_settings")
+		return
+	}
+	pollCtx, cancel := context.WithCancel(ctx)
+	a.updatePollCancel = cancel
+	a.updatePollMu.Unlock()
+	go func() {
+		if err := a.updateSvc.BackgroundPoll(pollCtx, interval, channel); err != nil &&
+			!errors.Is(err, context.Canceled) {
+			logging.L().Warn("update.poll.exit", "err", err.Error())
+		}
+	}()
 }
 
 // runMigrationDriftCheck reads the boot-time migration drift report and
@@ -1662,7 +1723,30 @@ func New(c *core.Core, opts ...Option) *API {
 		gs.SetGate(&memoryGateAdapter{gate: a.cedarGate()})
 	}
 	personalForLLM := newPersonalStore(c)
+	// controls-and-readouts-that-tell-the-truth-01PMZ808 WP10 (FR-014):
+	// decorate the single embedder so every Embed() call — regardless of
+	// which downstream consumer triggers it (the retriever, the hooks
+	// stack, or Memory_TestEmbedder above) — records into
+	// corememory.GlobalCaptureTracker(). Before this, RecordEmbedCall /
+	// RecordEmbedError had zero production callers, so lastEmbedDuration
+	// stayed 0 and embedErrors stayed empty forever, and the 'slow' /
+	// 'error' arms of MemoryCaptureRatePill.vue were unreachable — the
+	// pill could only ever render "Memory capturing OK".
+	//
+	// Do NOT wrap corememory.NoopEmbedder{} (no provider configured):
+	// three downstream consumers — slashMemoryGateway (below),
+	// newCorpusManager, and TestEmbedder's own pre-check — type-assert
+	// their held corememory.Embedder against corememory.NoopEmbedder to
+	// short-circuit before calling Embed. A decorator wrapping a Noop
+	// would change the CONCRETE type, so that assertion would never
+	// match again — newCorpusManager specifically branches on it to
+	// decide whether to pass a non-nil corpusEmb at all, which is a
+	// real behavioural difference, not just a slower path to the same
+	// answer.
 	embedder := newEmbedder(c, personalForLLM, settingsImpl)
+	if _, isNoop := embedder.(corememory.NoopEmbedder); !isNoop {
+		embedder = &embedderCaptureDecorator{inner: embedder}
+	}
 	memoryEnabled := func() bool {
 		if settingsImpl == nil || settingsImpl.Store() == nil {
 			return false
@@ -1882,6 +1966,29 @@ func New(c *core.Core, opts ...Option) *API {
 		if starter != nil {
 			a.sessionsAPI = sessions.WithResumeStarter(a.sessionsAPI, starter)
 		}
+	}
+	// controls-and-readouts-that-tell-the-truth-01PMZ808 WP04 (FR-004):
+	// wire the branch-cascade delete implementation
+	// (conversation.Manager.DeleteChildrenOf, previously test-only)
+	// behind the Settings.DeleteBranchesWithParent gate. a.convMgr was
+	// just constructed above; settingsImpl.Store() may be nil in
+	// reduced test chassis, in which case the gate always reads false
+	// (the safe default) rather than panicking.
+	if a.convMgr != nil {
+		a.sessionsAPI = sessions.WithDeleteChildrenOf(
+			a.sessionsAPI,
+			a.convMgr.DeleteChildrenOf,
+			func() bool {
+				if settingsImpl == nil || settingsImpl.Store() == nil {
+					return false
+				}
+				all, err := settingsImpl.Store().LoadAll()
+				if err != nil {
+					return false
+				}
+				return all.DeleteBranchesWithParent
+			},
+		)
 	}
 	// autonomy-dial-01KR3M2A WP03: wire the AutonomyContextProvider so
 	// Sessions_ResolveAutonomy folds global → project → session layers
@@ -6763,6 +6870,63 @@ func startNodesWatcher(c *core.Core, mgr *nodesview.Manager) *corenodes.Watcher 
 	return w
 }
 
+// embedderCaptureDecorator wraps the single embedder constructed in New
+// so every Embed() call — from whichever consumer triggers it — records
+// its latency and any error into corememory.GlobalCaptureTracker(), the
+// package-level singleton core/memory/store.go already calls from the
+// write half (controls-and-readouts-that-tell-the-truth-01PMZ808 WP10,
+// FR-014). Implements all three methods of corememory.Embedder (Kind,
+// Dimensions, Embed) — corpusEmbedderAdapter below is the nearest
+// precedent but only implements two, so it is a pattern, not a
+// drop-in.
+//
+// Only ever wraps a REAL embedder — see the isNoop check at the
+// construction site in New. Three downstream consumers
+// (slashMemoryGateway, newCorpusManager) type-assert their held
+// corememory.Embedder against corememory.NoopEmbedder to short-circuit
+// before calling Embed; wrapping a Noop would change the CONCRETE type
+// and break those checks (newCorpusManager specifically branches on the
+// result to decide whether to pass a non-nil corpusEmb at all). Since
+// this decorator only ever holds a real embedder, none of those
+// assertions' outcomes change — they already evaluated false against a
+// real embedder before this decorator existed.
+//
+// Known residue (spec §1.6): only two threading edges (the boot-time
+// retriever + hooks-stack assignment here, and Memory_TestEmbedder's
+// direct a.embedder field) were verified end to end. If a consumer
+// elsewhere constructs its OWN embedder rather than receiving this one,
+// that path stays uninstrumented — not found or fixed in this WP.
+type embedderCaptureDecorator struct {
+	inner corememory.Embedder
+}
+
+func (d *embedderCaptureDecorator) Kind() string {
+	if d == nil || d.inner == nil {
+		return ""
+	}
+	return d.inner.Kind()
+}
+
+func (d *embedderCaptureDecorator) Dimensions() int {
+	if d == nil || d.inner == nil {
+		return 0
+	}
+	return d.inner.Dimensions()
+}
+
+func (d *embedderCaptureDecorator) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+	if d == nil || d.inner == nil {
+		return nil, corememory.ErrEmbedderUnavailable
+	}
+	start := time.Now()
+	vecs, err := d.inner.Embed(ctx, texts)
+	corememory.GlobalCaptureTracker().RecordEmbedCall(time.Since(start))
+	if err != nil {
+		corememory.GlobalCaptureTracker().RecordEmbedError(time.Now())
+	}
+	return vecs, err
+}
+
 // corpusEmbedderAdapter bridges core/memory.Embedder onto the narrower
 // corpus.Embedder seam. The two interfaces share the Embed signature;
 // keeping them disjoint avoids a corpus -> memory import edge.
@@ -6868,7 +7032,18 @@ func (a *retrieverAdapter) RetrieveScoped(ctx context.Context, query, sessionID,
 	if a == nil || a.r == nil {
 		return nil, nil
 	}
-	return a.r.RetrieveScoped(ctx, query, sessionID, projectID, k)
+	// controls-and-readouts-that-tell-the-truth-01PMZ808 WP11 (FR-015):
+	// sessionID was already threaded into the SCOPE filter (buildScopeUnion
+	// inside RetrieveScoped) but never into r.sessionID, the field
+	// WithSessionID sets and retrieve()'s history-push guard
+	// (`if r.sessionID != ""`) reads. Calling the base *Retriever's
+	// RetrieveScoped directly meant that guard never fired on this path,
+	// so GlobalRetrievalHistory stayed empty and
+	// core/rpc/views/memory/impl.go's Memory_LastRetrieval always
+	// returned an empty report. WithSessionID returns a shallow copy
+	// (retriever.go), so this allocates one small struct per call rather
+	// than mutating shared state.
+	return a.r.WithSessionID(sessionID).RetrieveScoped(ctx, query, sessionID, projectID, k)
 }
 
 // hooksRunnerAdapter bridges hooks.Runner to llm.HookRunner. The

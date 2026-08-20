@@ -1564,6 +1564,85 @@ or a planted-violation proof in `scripts/ci/gates_can_fail_test.go` that
 mutates a committed binding file and asserts the gate fails. It currently
 would not. **Owner: unassigned. Not fixed here — recorded only.**
 
+### 2026-08-20 · `maxVisibleBranchDepth`'s depth-overflow affordance — narrowed, not built
+
+`controls-and-readouts-that-tell-the-truth-01PMZ808` WP02 (FR-002, SD-03 part
+two). Three surfaces — `SettingsView.vue`'s help text,
+`core/rpc/views/settings/api.go`'s field doc, and
+`frontend/src/lib/types.ts`'s field doc — all promised that sessions nested
+past the configured depth cap are hidden behind a click-to-expand
+depth-overflow control. No such control exists: `LeftRail.vue` →
+`SessionTreeRow.vue`'s `indentPx` only clamps how far a row indents; every
+row still renders regardless of depth.
+
+WP01 (same commit) wires `maxVisibleBranchDepth` from settings into
+`LeftRail.vue` for the first time — the dial did nothing at all before this.
+Landing WP01 without also correcting the three claims would have made the
+dial *reachable* while still describing a hiding/expand behaviour it does
+not have, which is the class this mission exists to end (spec D-1: "wiring
+the value while the help text still describes a hiding behaviour moves the
+lie, it does not end it").
+
+- **Blocker:** building the affordance (hide rows past the cap, render a
+  clickable depth-overflow control that reveals one more level) is a product
+  call — register `E-002` — not a technical one; nobody has asked for it and
+  no design exists for what the control should look like.
+- **Owner / deleting change:** alec. Deletes when either a mission builds the
+  affordance and re-widens the three docs, or the product decides depth
+  clamping alone is the intended behaviour and this entry is closed as
+  "decided, not deferred."
+
+### 2026-08-20 · `registry.ts`'s "components never hard-code binding strings" claim — narrowed for the native menu only
+
+`controls-and-readouts-that-tell-the-truth-01PMZ808` WP09 (FR-011,
+register `E-003`). `Shell.vue`'s two global bindings (search, cheat sheet)
+and `useCommandPalette.ts`'s ⌘K now resolve through
+`shortcuts/registry.ts`'s `resolveBinding` against the persisted
+`keyboardShortcuts` overrides — landed in this commit. The native OS menu
+accelerators (`core/menu/menu.go`'s `keys.CmdOrCtrl(...)` literals for
+Command Palette / Search / etc.) still do not: `core/menu/state.go`'s
+`MenuState` carries no shortcut field, and no topic fires a menu rebuild
+on a shortcut save.
+
+Spec R-15 confirms the *mechanism* exists — `rebuildMenuLocked` calls
+`wailsruntime.MenuSetApplicationMenu` at runtime, debounced and already
+fired from three live subscriptions — the *payload* does not. Wiring it
+requires: a shortcut field on `MenuState`, a broker topic (or reuse of an
+existing one) firing on `Settings_Set` when `keyboardShortcuts` changes,
+and `menu.go`'s `keys.CmdOrCtrl(...)` calls becoming dynamic per-binding
+lookups instead of literals — a real, if small, feature, not a
+one-line wire.
+
+- **Blocker:** whether native-menu rebinding ships in this mission's scope
+  at all is a product call (register `E-003`), not a technical one — no
+  owner decision was available this session.
+- **Owner / deleting change:** whoever answers `E-003` either lands the
+  MenuState + topic + dynamic-accelerator wiring (deletes this entry), or
+  decides native-menu accelerators are intentionally fixed regardless of
+  the in-app override and narrows `registry.ts:5-6`'s claim to say so
+  explicitly (also deletes this entry, the other direction).
+
+### 2026-08-20 · `branchAdvisorDefaultModel` — narrowed, chain's second link is a stub
+
+`controls-and-readouts-that-tell-the-truth-01PMZ808` WP05 (FR-005, SD-10).
+`core/rpc/views/settings/api.go`'s field doc promised the field "Defaults to
+CompactionModel when empty, which itself defaults to the session's active
+model." The field has neither a reader nor a writer anywhere in production,
+and `EffectiveBranchAdvisorDefaultModel` has zero callers. Per spec R-6 this
+mission does **not** wire it: the chain's second link,
+`core/rpc/views/branches/impl.go`'s `parentModel`, is a stub that discards
+both its parameters and returns `("", "")` — wiring link one over a broken
+link two would produce a dial that appears to work and silently resolves to
+nothing, which is worse than the current honest inertness.
+
+- **Blocker:** `parentModel` needs `Settings.CompactionModel` wired, which is
+  owned by `model-settings-reach-the-model-01PMZ101`, not this mission.
+- **Owner / deleting change:** whoever lands `01PMZ101`'s `CompactionModel`
+  wiring should re-open `parentModel` and, once it resolves a real model,
+  wire `branchAdvisorDefaultModel` and delete this entry. This ruling
+  re-affirms (does not overturn) `docs/dead-code-audit-2026-08-16.md:330`'s
+  "wire, and wire before mounting" — nothing is being mounted here.
+
 ## Drained
 
 ### 2026-08-19 · CLOSED — the missing-upgrade-snapshot hole is now gated
