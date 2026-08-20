@@ -222,9 +222,12 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// 1 unit_sync_state (1101, unified-context-artifacts-01NCTXU01 Phase 2) +
 	// 1 unit_sync_state_baselines (1102, unified-context-artifacts-01NCTXU01 3-way baseline fix) +
 	// 1 conflict-edge (1103, unified-context-artifacts-01NCTXU01 Phase 3 enshrine marker) +
-	// 1 search_fts_tool_rows (0335, model-moves-transcript-01PMCH01 WP06) = 43.
-	if count != 43 {
-		t.Errorf("ledger count = %d, want 43", count)
+	// 1 search_fts_tool_rows (0335, model-moves-transcript-01PMCH01 WP06) = 43
+	// + 6 event-log/0100-0105 (audit-that-tells-the-truth-01PMZA10 UNIT-2:
+	//   events, event_chain_heads, redaction_rules, retention_config,
+	//   schema_version, saved_audit_queries) = 49.
+	if count != 49 {
+		t.Errorf("ledger count = %d, want 49", count)
 	}
 }
 

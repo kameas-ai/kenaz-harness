@@ -193,6 +193,18 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	// ---- item 5: a representative read on every major surface. ----
 	assertSurfaceReads(t, ctx, db)
 
+	// ---- AC-001 (audit-that-tells-the-truth-01PMZA10 UNIT-2): the six
+	// event-log migrations (versions 100-105) actually applied on THIS
+	// upgraded install, not just on a fresh database. Every tag under
+	// testdata/upgrade/ predates event-log's registration, so on every
+	// one of them these six ledger rows are new — this is exactly the
+	// "first migrations to land below an install's high-water mark"
+	// case spec §1.3 calls out, and Pending()==0 above (item 2) already
+	// proves Registry.Pending()'s set-membership selection picked them
+	// up; this asserts the concrete evidence a reviewer would ask for
+	// (the ledger rows exist AND the table they create is queryable). ----
+	assertEventLogMigrated(t, ctx, db)
+
 	// ---- item 6: no seeded row disappeared, except declared changes.
 	// "sessions" always gained exactly the one row from the item-4
 	// probe insert above, on every tag — that is expected regardless
@@ -339,6 +351,54 @@ func assertSurfaceReads(t *testing.T, ctx context.Context, db storage.DB) {
 	// row, so migration 0335's purge must not have removed it).
 	if n := count("fts search", `SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'kameas'`); n < 1 {
 		t.Errorf("FTS search for 'kameas' = %d hits, want >= 1 (seed-msg-1's content)", n)
+	}
+}
+
+// assertEventLogMigrated is AC-001's concrete evidence: the six
+// event-log/010x ledger rows exist with action='applied' after Open on
+// an upgraded install, and the events table migration 0100 creates is
+// actually queryable (not merely "registered" — see the distinction
+// spec §1.3 draws between those two things).
+func assertEventLogMigrated(t *testing.T, ctx context.Context, db storage.DB) {
+	t.Helper()
+	r := db.Reader()
+
+	wantIDs := []string{
+		"event-log/0100-events",
+		"event-log/0101-event-chain-heads",
+		"event-log/0102-redaction-rules",
+		"event-log/0103-retention-config",
+		"event-log/0104-schema-version",
+		"event-log/0105-saved-audit-queries",
+	}
+	for _, id := range wantIDs {
+		var n int
+		err := r.QueryRow(ctx,
+			"SELECT COUNT(*) FROM harness_migrations WHERE id = ? AND action = 'applied' AND owning_mission = 'event-log'",
+			id).Scan(&n)
+		if err != nil {
+			t.Fatalf("query ledger for %s: %v", id, err)
+		}
+		if n != 1 {
+			t.Errorf("harness_migrations row for %s (action=applied, owning_mission=event-log) = %d, want 1", id, n)
+		}
+	}
+
+	// The table 0100 creates, and the schema_version column 0104 adds,
+	// must both be queryable — proves the DDL actually ran, not just
+	// that a ledger row got written for it.
+	var n int
+	if err := r.QueryRow(ctx, "SELECT COUNT(*) FROM events").Scan(&n); err != nil {
+		t.Errorf("events table not queryable after Open: %v", err)
+	}
+	if err := r.QueryRow(ctx, "SELECT COUNT(*) FROM events WHERE schema_version >= 0").Scan(&n); err != nil {
+		t.Errorf("events.schema_version column not queryable after Open (migration 0104 did not apply its ALTER TABLE): %v", err)
+	}
+	if err := r.QueryRow(ctx, "SELECT COUNT(*) FROM retention_config").Scan(&n); err != nil {
+		t.Errorf("retention_config table not queryable after Open: %v", err)
+	}
+	if err := r.QueryRow(ctx, "SELECT COUNT(*) FROM saved_audit_queries").Scan(&n); err != nil {
+		t.Errorf("saved_audit_queries table not queryable after Open: %v", err)
 	}
 }
 
