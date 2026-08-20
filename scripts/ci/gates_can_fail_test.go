@@ -120,6 +120,7 @@ var cwdSensitiveGates = []string{
 	"check-listpending-coverage.sh",
 	"check-upgrade-snapshots-locked.sh",
 	"check-destructive-migration-coverage.sh",
+	"check-tool-containment-unconditional.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -728,6 +729,62 @@ func plant(t *testing.T, full, content, appendText string) func() {
 				t.Errorf("removing %s: %v — WORKING TREE IS DIRTY", createdDir, err)
 			}
 		}
+	}
+}
+
+// TestToolContainmentUnconditionalGate_PlantedConditionalWrapperFails is
+// the planted-violation proof for
+// check-tool-containment-unconditional.sh (AC-015,
+// harness-self-attach-01PMHS01 UNIT-4). The shared plant() helper above
+// only supports appending to, or creating, a file — this gate's defect
+// class is specifically about an EXISTING line's indentation (nesting
+// the merged-resolver construction back inside a conditional), which
+// append cannot express, so this test does its own
+// read-mutate-restore cycle on core/rpc/api.go directly rather than
+// going through the cases table.
+func TestToolContainmentUnconditionalGate_PlantedConditionalWrapperFails(t *testing.T) {
+	root := repoRoot(t)
+	apiPath := filepath.Join(root, "core", "rpc", "api.go")
+
+	orig, err := os.ReadFile(apiPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", apiPath, err)
+	}
+
+	const target = "\tperms := toolloop.NewMergedResolver(staticPerms, sessionArm)\n"
+	if !strings.Contains(string(orig), target) {
+		t.Fatalf("expected line not found in api.go — the UNIT-4 wire may have moved; "+
+			"update this test and the gate together:\n%q", target)
+	}
+
+	// Reproduce the pre-UNIT-4 shape: the construction nested one level
+	// deeper inside a conditional. Still assigns via `perms := ...` — the
+	// gate must catch the INDENTATION change (nesting), not merely a
+	// renamed variable.
+	mutated := "\tif c != nil && c.DataDir() != \"\" {\n" +
+		"\t\tperms := toolloop.NewMergedResolver(staticPerms, sessionArm)\n" +
+		"\t\t_ = perms\n" +
+		"\t}\n" +
+		"\tvar perms toolloop.PermissionResolver\n"
+	newContent := strings.Replace(string(orig), target, mutated, 1)
+
+	if err := os.WriteFile(apiPath, []byte(newContent), 0o644); err != nil {
+		t.Fatalf("writing mutated api.go: %v", err)
+	}
+	defer func() {
+		if err := os.WriteFile(apiPath, orig, 0o644); err != nil {
+			t.Errorf("restoring api.go: %v — WORKING TREE IS DIRTY", err)
+		}
+	}()
+
+	code, out := runGate(t, "check-tool-containment-unconditional.sh", root)
+	if code == 0 {
+		t.Fatalf("check-tool-containment-unconditional.sh exited 0 with the merged resolver "+
+			"nested back inside a conditional — the gate cannot fail.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "conditional-assignment shape") {
+		t.Fatalf("gate failed, but its output does not mention the expected defect class "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
 	}
 }
 

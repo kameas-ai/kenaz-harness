@@ -176,6 +176,19 @@ jobs:
         # developer remembered to.
         run: bash scripts/ci/check-no-cred-bytes-in-rpc.sh
 
+      - name: tool containment unconditional guard (AC-015)
+        # harness-self-attach-01PMHS01 UNIT-4: the merged permission
+        # resolver (static arm + Cedar session-kind arm) is the ONLY
+        # boundary for model-initiated unattended tool execution (owner
+        # rulings B-2/B-3). Before UNIT-4, `perms` was built only inside
+        # an `if c != nil && c.DataDir() != ""` block, so an empty
+        # DataDir or a static-config load error left it nil — and nil is
+        # indistinguishable from "no resolver" to every consumer. A naive
+        # existence grep for the call would pass even if a future edit
+        # re-wrapped it in that same conditional; this gate checks the
+        # call is a top-level (unconditional) statement instead.
+        run: bash scripts/ci/check-tool-containment-unconditional.sh
+
       - name: manifest version-bump guard
         run: bash scripts/ci/check-manifest-version-bump.sh
 

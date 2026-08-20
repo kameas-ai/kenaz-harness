@@ -16,19 +16,21 @@ import (
 // ("onboarding" | "chat" | "").
 //
 // Mission harness-self-attach-01PMHS01, the UNIT-2 -> UNIT-3 -> UNIT-4
-// containment chain. This type is built and unit-tested here (UNIT-3)
-// but has NO production caller until UNIT-4 replaces the bare static
-// resolver at core/rpc/api.go:4065-4074 with
-// toolloop.NewMergedResolver(staticPerms, cedarToolResolver) — see that
-// unit's commit for the go-live. Constructing this type here changes no
-// behaviour: nothing calls Resolve outside its own tests.
+// containment chain. UNIT-3 built and unit-tested this type with NO
+// production caller. UNIT-4 gives it one: core/rpc/api.go's
+// newLLMStack now constructs it unconditionally and merges it via
+// toolloop.NewMergedResolver(staticPerms, sessionArm) — replacing what
+// used to be a bare, sometimes-nil static resolver. See that commit for
+// the go-live and harness_session_kind_resolver_wiring_test.go for the
+// production-wiring-level tests (as opposed to this file's own
+// resolver-level tests in _test.go, added by UNIT-3).
 //
 // Owner ruling B-3 (2026-08-19 escalation register): model-created
 // schedules permit only within a tool allowlist, which removes the
-// human review moment for unattended execution. Once UNIT-4 merges
-// this into the session arm, this resolver — not a UI confirmation —
-// is the only remaining boundary. Two correctness properties matter
-// more than usual as a result:
+// human review moment for unattended execution. Now that UNIT-4 has
+// merged this into the session arm, this resolver — not a UI
+// confirmation — is the only remaining boundary. Three correctness
+// properties matter more than usual as a result:
 //
 //  1. A no-match verdict (nothing in the harness-self bundle applies —
 //     e.g. a non-harness-self tool) MUST report PolicyAutoAllow with an
@@ -53,9 +55,13 @@ import (
 //     only stays falsifiable, if the fed value is the empty string, not
 //     a "chat" substitution that would coincidentally still satisfy the
 //     mutated policy.
+//  3. A nil engine (no Cedar to consult at all — an empty DataDir, or a
+//     boot-time construction failure) must deny, not auto_allow. See
+//     Resolve's nil-engine branch for the full reasoning; this is the
+//     fail-safe AC-015 pins.
 type cedarSessionKindResolver struct {
-	sessions *session.Manager // may be nil (nil-core test chassis); Resolve degrades to auto_allow
-	engine   *cedar.Engine    // may be nil for the same reason
+	sessions *session.Manager // may be nil; Resolve tolerates it (kindFor falls back to "")
+	engine   *cedar.Engine    // may be nil (empty DataDir, or boot failure); Resolve then denies everything — see below
 
 	mu    sync.RWMutex
 	cache map[string]string // sessionID -> last-known Kind; invalidated via session.Manager.AddKindTransitionObserver
@@ -132,11 +138,36 @@ func (r *cedarSessionKindResolver) kindFor(ctx context.Context, sessionID string
 func (r *cedarSessionKindResolver) Resolve(ctx context.Context, sessionID, server, tool string) (toolloop.Resolution, error) {
 	res := toolloop.Resolution{Server: server, Tool: tool, Policy: toolloop.PolicyAutoAllow}
 	if r == nil || r.engine == nil {
-		// No engine to consult (nil-core test chassis, or a
-		// misconfigured boot — UNIT-4 is responsible for making that
-		// second case unreachable in production). auto_allow + empty
-		// Reason is "no match": the static resolver (or its own
-		// nil-static auto_allow default) still governs.
+		// harness-self-attach-01PMHS01 UNIT-4, B-3 rule 3: "if the
+		// session arm itself cannot be constructed... fail the boot
+		// loudly or install a deny-all session arm. Never fall back to
+		// the static resolver alone, and never to nil."
+		//
+		// A nil Cedar engine (api.go's buildCedarEngineOrNil returns nil
+		// for an empty DataDir or a construction failure) means this
+		// arm has NO way to evaluate ANY tool's permission — for ANY
+		// session, not only ones touching harness-self. Reporting
+		// auto_allow here (the pre-UNIT-4 posture) would let the static
+		// arm's own auto_allow default govern everything, reproducing
+		// the exact "could not determine the allowlist" hole this
+		// mission exists to close, one level down. AC-015 pins this
+		// directly: an empty-DataDir boot must still deny a chat
+		// session's harness_write_add_provider.
+		//
+		// This is the one deliberate, documented widening of this
+		// resolver's blast radius past harness-self: with no Cedar
+		// engine, EVERY tool call in EVERY session — interactive chat
+		// included — is denied by this arm until the static resolver's
+		// own rules would have allowed it anyway (a nil static defaults
+		// to auto_allow, so in the common "no DataDir at all" case this
+		// denies literally everything). See the commit body for why
+		// this trade was accepted rather than scoping the deny to
+		// harness-self tools only: a scoped deny would leave "no engine
+		// = unrestricted" open for every OTHER tool this arm was meant
+		// to eventually police, which is precisely the shape of hole
+		// B-3 says must not exist.
+		res.Policy = toolloop.PolicyDeny
+		res.Reason = "containment unavailable: no Cedar engine to evaluate session-kind policy"
 		return res, nil
 	}
 
