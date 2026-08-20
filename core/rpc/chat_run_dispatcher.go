@@ -13,11 +13,13 @@
 // the subscriber channel and drop the terminal event (spec.md §2, "How
 // the dispatcher awaits completion").
 //
-// NOT ARMED HERE. Per plan.md Rule 2, this WP builds the dispatcher type
-// and its tests; the assignment into scheduledchatview.Config.Dispatcher
-// and into the WP03 cron engine happens in WP05, together with the
-// unattended posture. A dispatcher without that posture can park a
-// scheduled run on a human forever (spec.md §2 H-1/H-2/H-3).
+// ARMED as of WP05: every DispatchChatRun call marks its context
+// runposture.Unattended before calling StartStream (spec.md §5.4, FR-003)
+// — a scheduled run is unattended by construction, with no exceptions.
+// That posture is what makes it safe for core/rpc/api.go to assign this
+// dispatcher into scheduledchatview.Config.Dispatcher and into the WP03
+// cron engine (plan.md Rule 2: arming without the posture can park a
+// scheduled run on a human forever — spec.md §2 H-1/H-2/H-3).
 package rpc
 
 import (
@@ -30,6 +32,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph/chat"
 	llmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
 	sessionsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sessions"
+	"github.com/kameas-ai/kenaz-harness/core/runposture"
 	"github.com/kameas-ai/kenaz-harness/core/scheduler"
 )
 
@@ -104,6 +107,13 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 	if d.deps.Bus == nil {
 		return scheduler.ChatRunHistoryRecord{}, errors.New("scheduler: DispatchChatRun: no event bus wired")
 	}
+
+	// WP05, spec.md §5.4 / FR-003: a scheduled run is unattended BY
+	// CONSTRUCTION — there is no "attended scheduled run" concept, so
+	// this is marked unconditionally, not behind a config flag. Every
+	// gate downstream that would otherwise park on a human (confirm_each
+	// rung 5, cedar.Registry.RequestInteractive) reads this off ctx.
+	ctx = runposture.Unattended(ctx)
 
 	log := logging.L()
 	id := job.ChatRun.ID

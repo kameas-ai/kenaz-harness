@@ -151,6 +151,35 @@ func TestChatCronEngine_RegisterAndFire(t *testing.T) {
 	}
 }
 
+// TestChatCronEngine_AcceptsStandard5FieldCron: scheduled_chat_runs.cron
+// is user-facing, standard 5-field cron (no seconds field) — the same
+// format core/rpc/views/scheduledchat.API.Create/Update accept with no
+// validation beyond non-empty, and the same format a user or the
+// frontend cron picker would produce (e.g. "0 9 * * *"). Found by
+// WP05's own arming test logging "invalid chat-run cron expression:
+// expected exactly 6 fields, found 5" for exactly this string — the
+// engine's internal parser is 6-field (seconds-first, so
+// TestChatCronEngine_RegisterAndFire above can fire every second instead
+// of waiting a wall-clock minute), and without normalizeCronFields every
+// real row a user creates would fail to register while Create/Update
+// still reported success — the exact "unwired sweep" defect shape this
+// campaign exists to catch, just in the cron layer instead of the
+// dispatch layer WP02 fixed.
+func TestChatCronEngine_AcceptsStandard5FieldCron(t *testing.T) {
+	store := openTestChatStore(t)
+	mustCreateRow(t, store, "cr-5field", "0 9 * * *", true)
+
+	engine, err := scheduler.NewChatCronEngine(context.Background(), scheduler.ChatCronEngineConfig{
+		Store: store,
+	})
+	if err != nil {
+		t.Fatalf("NewChatCronEngine: %v", err)
+	}
+	if !engine.Registered("cr-5field") {
+		t.Fatal("a standard 5-field cron expression (\"0 9 * * *\") was not registered")
+	}
+}
+
 // TestChatCronEngine_DisabledRowNotRegistered: enabled=0 rows do not
 // register at boot.
 func TestChatCronEngine_DisabledRowNotRegistered(t *testing.T) {

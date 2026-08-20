@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/kameas-ai/kenaz-harness/core/runposture"
 )
 
 // recordingDispatcher captures every Dispatch call for assertion.
@@ -129,6 +131,82 @@ func TestRequestInteractive_TimeoutFiresDeny(t *testing.T) {
 	}
 	if r.PendingCount() != 0 {
 		t.Fatalf("pending count = %d, want 0", r.PendingCount())
+	}
+}
+
+// TestRequestInteractive_UnattendedDeniesImmediately is mission
+// model-scheduled-jobs-01PMSJ01 WP05's H-3: "the cedar prompt registry
+// auto-denies after five minutes and forgets." An unattended run must
+// deny IMMEDIATELY rather than wait out PromptTimeout (here set to an
+// hour, so a test that fell through to the timeout path would hang, not
+// merely take a while — a stronger signal than a shorter timeout would
+// give). The dispatcher must never see an emit: no pending entry, no
+// broker event, nothing to leak.
+func TestRequestInteractive_UnattendedDeniesImmediately(t *testing.T) {
+	t.Parallel()
+	disp := newRecordingDispatcher()
+	r := NewRegistry(WithDispatcher(disp), WithTimeout(time.Hour))
+
+	ctx := runposture.Unattended(context.Background())
+	done := make(chan Resolution, 1)
+	go func() {
+		res, err := r.RequestInteractive(ctx, makeBashSurface("rm -rf /"))
+		if err != nil {
+			t.Errorf("RequestInteractive: %v", err)
+			return
+		}
+		done <- res
+	}()
+
+	select {
+	case res := <-done:
+		if res.Decision != DecisionDeny {
+			t.Fatalf("decision = %q, want %q", res.Decision, DecisionDeny)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("unattended RequestInteractive did not return immediately — it is waiting on PromptTimeout")
+	}
+
+	select {
+	case <-disp.emitted:
+		t.Fatal("dispatcher received an emit for an unattended run — the prompt was raised instead of denied immediately")
+	default:
+	}
+	if r.PendingCount() != 0 {
+		t.Fatalf("pending = %d, want 0 (nothing should have been enqueued)", r.PendingCount())
+	}
+}
+
+// TestRequestInteractive_InteractiveRunUnaffected proves the unattended
+// check is per-call, not a registry-wide latch: a plain ctx on the SAME
+// registry still goes through the normal dispatch/resolve path.
+func TestRequestInteractive_InteractiveRunUnaffected(t *testing.T) {
+	t.Parallel()
+	disp := newRecordingDispatcher()
+	r := NewRegistry(WithDispatcher(disp), WithTimeout(time.Hour))
+
+	done := make(chan Resolution, 1)
+	go func() {
+		res, _ := r.RequestInteractive(context.Background(), makeBashSurface("ls"))
+		done <- res
+	}()
+
+	select {
+	case <-disp.emitted:
+	case <-time.After(time.Second):
+		t.Fatal("dispatcher never received emit for an interactive (non-unattended) request")
+	}
+	id := disp.snapshot()[0].payload.RequestID
+	if err := r.Resolve(id, DecisionAllowOnce); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	select {
+	case res := <-done:
+		if res.Decision != DecisionAllowOnce {
+			t.Fatalf("decision = %q, want %q", res.Decision, DecisionAllowOnce)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RequestInteractive did not return after Resolve")
 	}
 }
 

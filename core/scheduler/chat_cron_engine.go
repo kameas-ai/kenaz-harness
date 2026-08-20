@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -134,16 +135,45 @@ func (e *ChatCronEngine) SetDispatcher(d ChatRunDispatcher) {
 	e.dispatch = d
 }
 
-// buildSpec prepends the CRON_TZ prefix when tz is non-empty, matching
-// core/workflows/scheduler/cron_scheduler.go's buildSpec.
+// buildSpec normalises cronExpr to the 6-field (seconds-first) form this
+// engine's parser accepts, then prepends the CRON_TZ prefix when tz is
+// non-empty (matching core/workflows/scheduler/cron_scheduler.go's
+// buildSpec for the timezone half).
+//
+// scheduled_chat_runs.cron is user-facing, standard 5-field cron —
+// core/rpc/views/scheduledchat.API's Create/Update do not, and must not,
+// require a seconds field; that is the same format
+// core/workflows/scheduler.CronScheduler's own users type. This engine's
+// robfig/cron/v3 instance is configured with a 6-field (cron.Second-
+// inclusive) parser instead of that package's 5-field one so tests can
+// drive real cron ticks at 1-second granularity instead of waiting on a
+// wall-clock minute boundary. normalizeCronFields reconciles the two: a
+// standard 5-field expression gets a synthetic leading "0 " (seconds=0),
+// so both "0 9 * * *" (what a user types) and "* * * * * *" (what an
+// engine-level test writes to fire every second) parse — one register()
+// call site, not a public/test-only fork.
 func buildChatSpec(cronExpr, tz string) (string, error) {
+	spec := normalizeCronFields(cronExpr)
 	if tz == "" || tz == "UTC" {
-		return cronExpr, nil
+		return spec, nil
 	}
 	if _, err := time.LoadLocation(tz); err != nil {
 		return "", fmt.Errorf("%w: %s", ErrChatCronInvalidTimezone, tz)
 	}
-	return "CRON_TZ=" + tz + " " + cronExpr, nil
+	return "CRON_TZ=" + tz + " " + spec, nil
+}
+
+// normalizeCronFields prepends a "0" seconds field to a standard 5-field
+// cron expression (minute hour dom month dow — exactly 4 interior
+// spaces). Already-6-field expressions and descriptors ("@every 1h",
+// "@daily") are returned unchanged: cron.Descriptor-handled strings
+// don't have five space-separated fields to miscount, and an
+// already-6-field expression needs no help.
+func normalizeCronFields(cronExpr string) string {
+	if strings.Count(cronExpr, " ") == 4 {
+		return "0 " + cronExpr
+	}
+	return cronExpr
 }
 
 // register adds or replaces the cron entry for id. Caller must not hold e.mu.
