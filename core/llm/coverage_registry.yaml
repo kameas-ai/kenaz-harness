@@ -144,6 +144,17 @@ entries:
     field: JSONMode
     adapter: bedrock
     tests: [TestBedrockAdapter_JSONMode_JSONModeSerialized]
+  # gemini (structured-output-is-reachable-01PMZE14 WP05): NOT
+  # gated by TestRegistryCompleteness's per-field loop — gemini is not
+  # in inScopeAdapters (see registry_completeness_test.go's adapterDirs
+  # comment). This entry exists so the cited test is verified to exist
+  # (TestNames() checks every entry's tests: regardless of adapter
+  # scope) and so a future widening of inScopeAdapters finds this row
+  # already correct rather than missing.
+  - struct: GenerationRequest
+    field: JSONMode
+    adapter: gemini
+    tests: [TestJSONModeSpec_Schema_NoLongerDiscarded]
 
   # ImageOutput — request-side opt-in for image generation
   # (multimodal-io-extended-01KQ8TD2). Per-adapter wire-shape coverage
@@ -206,7 +217,19 @@ entries:
   - struct: GenerationRequest
     field: ResponseFormat
     adapter: bedrock
-    unsupported: "Bedrock response format is model-native; not wired at generic adapter layer"
+    # structured-output-is-reachable-01PMZE14 WP05: this "unsupported"
+    # reason was FALSE (spec §1.8) — bedrock wires ResponseFormat on
+    # both transports. bedrock.go:227 injects a synthetic
+    # "_structured_output" tool with forced ToolChoice for the SDK
+    # path; bearer.go:936 mirrors it for the REST path. Corrected to
+    # the real test functions.
+    tests: [TestApplyResponseFormatToConverseInput_JSONSchema, TestApplyResponseFormatToConverseBodyJSON_JSONSchema]
+  # gemini (structured-output-is-reachable-01PMZE14 WP05): see the
+  # JSONMode row above for why this is scoped outside inScopeAdapters.
+  - struct: GenerationRequest
+    field: ResponseFormat
+    adapter: gemini
+    tests: [TestResponseFormat_JSONSchema_CarriesMimeTypeAndSchema, TestResponseFormat_Json_MimeTypeOnlyNoSchema, TestResponseFormat_Grammar_ReturnsTypedError]
 
   # Params — provider-specific knobs (temperature, top_p, max_tokens, etc.)
   - struct: GenerationRequest

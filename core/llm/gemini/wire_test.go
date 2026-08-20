@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	llm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
 )
 
 // loadGolden reads a JSON fixture from testdata/wire/<name>.
@@ -387,6 +388,63 @@ func TestResponseFormat_RejectedKeyword_ProducesTypedError(t *testing.T) {
 	}
 	if kw.Keyword != "additionalProperties" {
 		t.Errorf("Keyword = %q, want additionalProperties", kw.Keyword)
+	}
+}
+
+// TestStructuredOutputRow_MatchesAdapterBehavior is WP05's AC-006/D-2:
+// FR-002 (the adapter arm) and FR-003 (the capability rows) are one
+// unit and must agree. Loaded through the REAL production capability
+// data (capabilities.LoadDefault(), not a hand-rolled fixture) so a
+// gemini.yaml edit that drifts from the adapter is caught here, not
+// discovered by a user. For every gemini model: a structured_output:
+// true row must both (a) pass Gate.Check for a json_schema request and
+// (b) have the adapter actually emit responseSchema on the wire; a
+// false row must have Gate.Check refuse the same request before the
+// adapter is ever reached.
+func TestStructuredOutputRow_MatchesAdapterBehavior(t *testing.T) {
+	t.Parallel()
+	cat, err := capabilities.LoadDefault()
+	if err != nil {
+		t.Fatalf("capabilities.LoadDefault: %v", err)
+	}
+	gate := capabilities.NewGate(cat)
+	schema := json.RawMessage(`{"type":"object","properties":{"verdict":{"type":"string"}}}`)
+
+	models := []string{
+		"gemini-2.5-pro", "gemini-2.5-flash",
+		"gemini-2.0-flash", "gemini-2.0-pro",
+		"gemini-1.5-pro", "gemini-1.5-flash",
+		"gemini-1.0-pro",
+	}
+	for _, model := range models {
+		t.Run(model, func(t *testing.T) {
+			prof := llm.ProviderProfile{Kind: Kind, Model: model}
+			req := llm.GenerationRequest{
+				Messages:       []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+				ResponseFormat: &llm.ResponseFormat{Mode: "json_schema", Schema: schema},
+			}
+			desc, gateErr := gate.Check(req, prof)
+			rowSaysTrue := desc.Has(llm.CapStructuredOutput)
+
+			gr, wireErr := ToGeminiRequest(req, prof)
+
+			if rowSaysTrue {
+				if gateErr != nil {
+					t.Fatalf("row says structured_output:true but Gate.Check refused: %v — coverage_registry.yaml and gemini.yaml disagree", gateErr)
+				}
+				if wireErr != nil {
+					t.Fatalf("row says structured_output:true but the adapter failed to translate the schema: %v", wireErr)
+				}
+				if gr.GenerationConfig == nil || len(gr.GenerationConfig.ResponseSchema) == 0 {
+					t.Fatalf("row says structured_output:true but the adapter did not emit responseSchema on the wire — the row and the adapter disagree, coverage_registry.yaml's live defect class (spec §1.8)")
+				}
+			} else {
+				var ce *llm.ErrCapabilityUnsupported
+				if !errors.As(gateErr, &ce) {
+					t.Fatalf("row says structured_output:false but Gate.Check did not refuse (got %v) — a request would reach the wire unconstrained and the repair-once loop would paper over it", gateErr)
+				}
+			}
+		})
 	}
 }
 

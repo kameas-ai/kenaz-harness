@@ -9,7 +9,14 @@ defaults:
   cancellation: true
   usage_reporting: true
   # Cloud providers do not support GBNF grammar constraints.
-  structured_output: false
+  # structured_output: flipped true structured-output-is-reachable-
+  # 01PMZE14 WP05 — the adapter arm now exists (gemini/wire.go WP04):
+  # Mode="json"/"json_schema" reach responseMimeType/responseSchema on
+  # the wire, gated through capabilities.LoadDefault() -> Gate.Check
+  # like every other adapter (spec §5.3, D-2 — this row and the adapter
+  # arm are one unit; see AC-007). 1.0-pro overrides back to false below
+  # (legacy model, no verified support).
+  structured_output: true
   grammar: false
   regex_grammar: false
   # Gemini does not offer an image-generation API via this adapter.
@@ -59,7 +66,7 @@ models:
     reasoning: true
     cancellation: true
     usage_reporting: true
-    structured_output: false
+    structured_output: true
     grammar: false
     regex_grammar: false
     context_window: 1048576
@@ -79,7 +86,7 @@ models:
     reasoning: true
     cancellation: true
     usage_reporting: true
-    structured_output: false
+    structured_output: true
     grammar: false
     regex_grammar: false
     context_window: 1048576
@@ -99,7 +106,7 @@ models:
     reasoning: false
     cancellation: true
     usage_reporting: true
-    structured_output: false
+    structured_output: true
     grammar: false
     regex_grammar: false
     context_window: 1048576
@@ -119,7 +126,7 @@ models:
     reasoning: false
     cancellation: true
     usage_reporting: true
-    structured_output: false
+    structured_output: true
     grammar: false
     regex_grammar: false
     context_window: 1048576
@@ -173,6 +180,11 @@ models:
     reasoning: false
     cancellation: true
     usage_reporting: true
+    # Overrides the (now-true) provider default: 1.0 Pro is deprecated
+    # and its responseSchema support was never verified — structured-
+    # output-is-reachable-01PMZE14 WP05 stays conservative for the one
+    # model this mission cannot check.
+    structured_output: false
     context_window: 32768
     max_output_tokens: 8192
     image_input: false
