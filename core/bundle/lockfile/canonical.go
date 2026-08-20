@@ -28,9 +28,9 @@ func Read(data []byte) (*Lockfile, error) {
 	lines := splitLines(data)
 
 	var (
-		section       string         // "" / "universal" / "bundle" / "bundle.artifact"
-		curBundle     *LockedBundle
-		curBundleIdx  = -1
+		section      string // "" / "universal" / "bundle" / "bundle.artifact"
+		curBundle    *LockedBundle
+		curBundleIdx = -1
 	)
 
 	for i := 0; i < len(lines); i++ {
@@ -119,6 +119,15 @@ func Read(data []byte) (*Lockfile, error) {
 			_ = key
 			_ = val
 		case "bundle":
+			if key == "verified" {
+				b, err := strconv.ParseBool(val)
+				if err != nil {
+					return nil, fmt.Errorf("%w: bundle.verified not a bool (line %d): %q",
+						bundle.ErrLockfileInvalid, i+1, val)
+				}
+				curBundle.Verified = b
+				continue
+			}
 			s, ok := unquoteValue(val)
 			if !ok && key != "dependencies" {
 				return nil, fmt.Errorf("%w: bundle.%s value not parseable (line %d)",
@@ -233,6 +242,9 @@ func writeBundle(b *strings.Builder, lb *LockedBundle) {
 	fmt.Fprintf(b, "content_hash = %s\n", quote(lb.ContentHash))
 	if lb.SignatureRef != "" {
 		fmt.Fprintf(b, "signature_ref = %s\n", quote(lb.SignatureRef))
+	}
+	if lb.Verified {
+		fmt.Fprintf(b, "verified = %t\n", lb.Verified)
 	}
 	if len(lb.Dependencies) > 0 {
 		deps := append([]LockedDep(nil), lb.Dependencies...)

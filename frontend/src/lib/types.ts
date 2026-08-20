@@ -1121,6 +1121,12 @@ export interface Settings {
    * (fleet-otel-archival-01NDFSEX11 WP06)
    */
   hasSeenFleetTelemetryOnboarding?: boolean;
+  /**
+   * Signature-verification policy for `bundle install`
+   * (bundle-download-and-verify-01PMZ909 UNIT-4, spec D-2). One of
+   * "optional" (default, empty==optional), "required", "forbidden".
+   */
+  bundleSigningPolicy?: string;
 }
 
 /**

@@ -644,6 +644,30 @@ type Settings struct {
 	// LoadChatCustomInstructions so an edit takes effect on the next turn
 	// without a restart.
 	ChatCustomInstructions string `json:"chatCustomInstructions,omitempty"`
+
+	// BundleSigningPolicy controls signature-verification behaviour for
+	// `harness bundle install` (bundle-download-and-verify-01PMZ909
+	// UNIT-4, spec D-2). One of: "optional" (default, empty==optional —
+	// verify when present, ignore absence), "required" (refuse any
+	// unsigned bundle), "forbidden" (refuse any signed bundle). Default
+	// is deliberately "optional": flipping the default to "required" at
+	// upgrade would turn off a working feature for every user with an
+	// unsigned local bundle. See EffectiveBundleSigningPolicy.
+	BundleSigningPolicy string `json:"bundleSigningPolicy,omitempty"`
+}
+
+// EffectiveBundleSigningPolicy normalizes BundleSigningPolicy to one of
+// the three canonical values, defaulting an empty or unrecognized
+// string to "optional" — the safe default per spec D-2's own reasoning
+// (a hand-edited or older settings file must never silently upgrade to
+// "required").
+func (s Settings) EffectiveBundleSigningPolicy() string {
+	switch s.BundleSigningPolicy {
+	case "required", "forbidden":
+		return s.BundleSigningPolicy
+	default:
+		return "optional"
+	}
 }
 
 // ProviderProfileRef is the wire shape that identifies a provider+model

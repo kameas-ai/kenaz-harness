@@ -36,6 +36,7 @@ import (
 	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
 	coreatt "github.com/kameas-ai/kenaz-harness/core/attachments"
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
+	bundleintegrity "github.com/kameas-ai/kenaz-harness/core/bundle/integrity"
 	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
 	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
 	corecontexts "github.com/kameas-ai/kenaz-harness/core/contexts"
@@ -1948,6 +1949,48 @@ func New(c *core.Core, opts ...Option) *API {
 			bundleOpts = append(bundleOpts, bundle.WithCAS(bundle.CASFromCache(cas)))
 		}
 	}
+	// UNIT-4 (bundle-download-and-verify-01PMZ909, spec §2): wire the
+	// verifier + anchor lookup so Install actually calls
+	// VerifyManifestSignatures — before this it had zero callers.
+	// a.trustEngine was constructed above (nil on construction failure,
+	// which degrades to "no verifier configured", matching pre-UNIT-4
+	// behaviour rather than aborting API construction).
+	if a.trustEngine != nil {
+		if verifier, vErr := coretrust.NewEngineVerifier(a.trustEngine); vErr == nil {
+			bundleOpts = append(bundleOpts, bundle.WithVerifier(verifier))
+		} else {
+			slog.Warn("bundle signature verifier construction failed", "err", vErr)
+		}
+		trustEngineForBundle := a.trustEngine
+		bundleOpts = append(bundleOpts, bundle.WithAnchorsFunc(func(ctx context.Context) ([]coretrust.Anchor, error) {
+			return trustEngineForBundle.ListAnchors(ctx)
+		}))
+	}
+	// The signing policy is a Settings dial, not a hardcoded constant
+	// (spec D-2) — read fresh on every Install call via LoadAll, the
+	// same "no dedicated store method needed" pattern reasoningBudget
+	// above uses, so a Settings edit takes effect on the very next
+	// install without a restart. Falls back to SigningOptional (the
+	// safe default per Settings.EffectiveBundleSigningPolicy) whenever
+	// settingsImpl or its store is unavailable.
+	settingsForBundlePolicy := settingsImpl
+	bundleOpts = append(bundleOpts, bundle.WithSigningPolicyFunc(func() bundleintegrity.SigningPolicy {
+		if settingsForBundlePolicy == nil || settingsForBundlePolicy.Store() == nil {
+			return bundleintegrity.SigningOptional
+		}
+		got, sErr := settingsForBundlePolicy.Store().LoadAll()
+		if sErr != nil {
+			return bundleintegrity.SigningOptional
+		}
+		switch got.EffectiveBundleSigningPolicy() {
+		case "required":
+			return bundleintegrity.SigningRequired
+		case "forbidden":
+			return bundleintegrity.SigningForbidden
+		default:
+			return bundleintegrity.SigningOptional
+		}
+	}))
 	a.bundleAPI = bundle.NewAPI(bundleOpts...)
 
 	// Corpora subsystem (mission agent-kernel-graph; Bundle C). Wired

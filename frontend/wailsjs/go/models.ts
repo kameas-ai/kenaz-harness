@@ -6868,7 +6868,8 @@ export namespace settings {
 	    hasSeenFleetTelemetryOnboarding?: boolean;
 	    firstRunOnboardingCompleted?: boolean;
 	    chatCustomInstructions?: string;
-	
+	    bundleSigningPolicy?: string;
+
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
 	    }
@@ -6954,6 +6955,7 @@ export namespace settings {
 	        this.hasSeenFleetTelemetryOnboarding = source["hasSeenFleetTelemetryOnboarding"];
 	        this.firstRunOnboardingCompleted = source["firstRunOnboardingCompleted"];
 	        this.chatCustomInstructions = source["chatCustomInstructions"];
+	        this.bundleSigningPolicy = source["bundleSigningPolicy"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

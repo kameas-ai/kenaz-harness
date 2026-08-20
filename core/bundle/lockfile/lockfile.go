@@ -31,11 +31,24 @@ type Lockfile struct {
 
 // LockedBundle pins one bundle by content hash.
 type LockedBundle struct {
-	Name         string           `toml:"name"`
-	Version      string           `toml:"version"`
-	Source       string           `toml:"source"`        // channel-qualified URL
-	ContentHash  string           `toml:"content_hash"`
-	SignatureRef string           `toml:"signature_ref,omitempty"`
+	Name        string `toml:"name"`
+	Version     string `toml:"version"`
+	Source      string `toml:"source"` // channel-qualified URL
+	ContentHash string `toml:"content_hash"`
+	// SignatureRef is a locator reference only — its mere presence is
+	// NOT proof of anything (a v0.64.0-and-earlier row could carry one
+	// from a bundle whose signature was never actually checked). Do not
+	// derive a trust tier from this field; use Verified below, which is
+	// only ever set true by a real, positive VerifyManifestSignatures
+	// result (bundle-download-and-verify-01PMZ909 UNIT-4, spec FR-006).
+	SignatureRef string `toml:"signature_ref,omitempty"`
+	// Verified records whether THIS install actually ran signature
+	// verification and it passed. Absent (false) on every row a
+	// pre-UNIT-4 release wrote, by construction — the zero value is the
+	// honest default for "never verified", which is exactly what a
+	// legacy row is. lockedToBundle derives the "signed" tier from this
+	// field, never from SignatureRef's mere presence (UNIT-4 G-2).
+	Verified     bool             `toml:"verified,omitempty"`
 	Dependencies []LockedDep      `toml:"dependencies,omitempty"`
 	Artifacts    []LockedArtifact `toml:"artifact,omitempty"`
 }
