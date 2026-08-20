@@ -74,8 +74,18 @@ fi
 # Latest release tag: highest vX.Y.Z (no -rc suffix) tag reachable from
 # the base ref, so a checkout of a topic branch still resolves the
 # same "latest shipped" answer a checkout of main would.
+#
+# UPGRADE_SNAPSHOTS_EXPECT_TAG overrides this COMPUTED value — not a
+# separate code path. It exists so gates_can_fail_test.go's planted-
+# violation case can substitute a tag with no snapshot directory and
+# observe the SAME missing-snapshot comparison below fail on it, rather
+# than exercising a parallel branch nothing else runs. Mirrors the
+# UPGRADE_SNAPSHOTS_BASE_REF precedent above.
 LATEST_TAG="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --merged "$MERGE_BASE" 2>/dev/null \
   | grep -Ev -- '-rc' | sort -V | tail -1 || true)"
+if [[ -n "${UPGRADE_SNAPSHOTS_EXPECT_TAG:-}" ]]; then
+  LATEST_TAG="$UPGRADE_SNAPSHOTS_EXPECT_TAG"
+fi
 
 fail=0
 checked=0
@@ -138,6 +148,29 @@ if [[ "$fail" -ne 0 ]]; then
   echo "" >&2
   echo "${GATE} FAIL — see violations above. Regenerating with scripts/ci/upgrade-snapshot.sh" >&2
   echo "${GATE} does not fix this: a locked snapshot that regenerates differently is itself a finding (spec §6.2)." >&2
+  exit 1
+fi
+
+# Missing-snapshot check — entry-points-and-crash-reporting-01PMZD13
+# UNIT-3 (owner task #38). Everything above catches a locked snapshot
+# being EDITED; nothing above can see one being ABSENT, because the lock
+# loop only ever iterates directories that exist ("for dir in
+# $SNAP_ROOT/v*/"). That let the chain fall a full release behind twice in
+# a row (v0.63.2 and v0.64.0 each shipped without their own snapshot ever
+# landing in a commit) with this gate green throughout — a hole nothing
+# else in CI or in TestUpgradePath (core/storage/sqlite/upgrade_path_test.go,
+# which also only iterates directories present under $SNAP_ROOT) could see
+# either.
+#
+# Deliberately does NOT reuse the ":92 exemption" logic above — that
+# exemption is for a snapshot AHEAD of LATEST_TAG (a release branch
+# staging its own snapshot before its tag exists), which must stay legal.
+# This check is the opposite direction: LATEST_TAG itself has no snapshot
+# at all.
+if [[ -n "$LATEST_TAG" ]] && [[ ! -f "${SNAP_ROOT}/${LATEST_TAG}/dump.sql" ]]; then
+  echo "${GATE} FAIL: the latest release tag (${LATEST_TAG}) has no snapshot at ${SNAP_ROOT}/${LATEST_TAG}/dump.sql." >&2
+  echo "${GATE} Every release must commit its own snapshot (bash scripts/ci/upgrade-snapshot.sh ${LATEST_TAG})" >&2
+  echo "${GATE} plus a hand-written PROVENANCE.md — the script writes dump.sql only." >&2
   exit 1
 fi
 

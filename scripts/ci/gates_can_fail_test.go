@@ -30,6 +30,7 @@
 package ci_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -672,20 +673,47 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			file:       "cmd/zzgateprobe/main.go",
 			content:    "//go:build zzgateprobe\n\npackage main\n\nfunc main() {}\n",
 		},
+		{
+			// entry-points-and-crash-reporting-01PMZD13 UNIT-3 (owner task
+			// #38). This violation is an ABSENCE — a snapshot directory that
+			// does not exist — so there is no file to plant. file: "" tells
+			// the loop below to skip plant() entirely; UPGRADE_SNAPSHOTS_EXPECT_TAG
+			// substitutes the gate's OWN computed LATEST_TAG value (see the
+			// script's header) with a tag that has no snapshot directory, so
+			// the SAME comparison the gate runs on every invocation is what
+			// fails here — not a separate mocked branch.
+			name:       "upgrade-snapshots-locked/missing-latest-snapshot",
+			wantOutput: "v99.0.0",
+			gate:       "check-upgrade-snapshots-locked.sh",
+			file:       "",
+			env:        map[string]string{"UPGRADE_SNAPSHOTS_EXPECT_TAG": "v99.0.0"},
+		},
 	}
 
 	for _, tc := range cases {
 		tc := tc
 		// Not parallel: these mutate the working tree.
 		t.Run(tc.name, func(t *testing.T) {
-			full := filepath.Join(root, tc.file)
-			cleanup := plant(t, full, tc.content, tc.append)
-			defer cleanup()
+			var cleanup func()
+			if tc.file != "" {
+				full := filepath.Join(root, tc.file)
+				cleanup = plant(t, full, tc.content, tc.append)
+				defer cleanup()
+			}
+
+			violationDesc := tc.file
+			if violationDesc == "" {
+				// An ABSENCE-shaped violation (e.g. a missing snapshot
+				// directory) has no file to name — describe it by env
+				// instead so the failure message still says what was
+				// actually varied.
+				violationDesc = fmt.Sprintf("env %v", tc.env)
+			}
 
 			code, out := runGateEnv(t, tc.gate, root, tc.env)
 			if code == 0 {
-				t.Fatalf("%s exited 0 with a planted violation in %s — the gate cannot fail.\noutput:\n%s",
-					tc.gate, tc.file, out)
+				t.Fatalf("%s exited 0 with a planted violation (%s) — the gate cannot fail.\noutput:\n%s",
+					tc.gate, violationDesc, out)
 			}
 			// A non-zero exit alone is a weak proof: a gate that is
 			// BROKEN (fails on every run, planted violation or not)
@@ -696,9 +724,9 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			// produce, require it, so the proof is about THIS violation
 			// rather than about the gate exiting non-zero for any reason.
 			if tc.wantOutput != "" && !strings.Contains(out, tc.wantOutput) {
-				t.Fatalf("%s failed with a planted violation in %s, but its output does not mention %q — "+
+				t.Fatalf("%s failed with a planted violation (%s), but its output does not mention %q — "+
 					"it may be failing for an unrelated reason.\noutput:\n%s",
-					tc.gate, tc.file, tc.wantOutput, out)
+					tc.gate, violationDesc, tc.wantOutput, out)
 			}
 		})
 	}
