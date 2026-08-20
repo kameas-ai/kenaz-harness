@@ -688,6 +688,27 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			file:       "",
 			env:        map[string]string{"UPGRADE_SNAPSHOTS_EXPECT_TAG": "v99.0.0"},
 		},
+		{
+			// entry-points-and-crash-reporting-01PMZD13 UNIT-4.
+			// check-seam-implementers.sh's FIRST EVER planted-violation
+			// proof (spec §5). ZzGateProbeUnsatisfiableSeam's method takes
+			// a brand-new unexported param type defined nowhere else in
+			// the tree, so no real type — production or test — can
+			// possibly implement it. The gate must name the interface,
+			// not just exit non-zero.
+			name:       "seam-implementers/unsatisfiable-interface",
+			wantOutput: "ZzGateProbeUnsatisfiableSeam",
+			gate:       "check-seam-implementers.sh",
+			file:       "core/agentgraph/seams.go",
+			append: "\n" +
+				"// zzGateProbeUniqueParam and ZzGateProbeUnsatisfiableSeam are planted by\n" +
+				"// gates_can_fail_test.go's check-seam-implementers.sh proof and removed\n" +
+				"// after the test runs.\n" +
+				"type zzGateProbeUniqueParam struct{}\n\n" +
+				"type ZzGateProbeUnsatisfiableSeam interface {\n" +
+				"\tZzGateProbeMethod(zzGateProbeUniqueParam) error\n" +
+				"}\n",
+		},
 	}
 
 	for _, tc := range cases {

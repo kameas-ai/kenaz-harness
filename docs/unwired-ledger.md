@@ -50,7 +50,14 @@ Non-allowlist gates that also protect against unwired code:
 (desktop `passthroughTopics` ↔ `SERVED_STREAM_TOPICS`),
 `core/rpc/builtins_wiring_test.go` (registered tool ↔ predicate case).
 `scripts/ci/gates_can_fail_test.go` is the meta-gate: it plants a violation
-per gate and asserts the gate rejects it.
+per gate and asserts the gate rejects it — for the gates it covers. As of
+`entry-points-and-crash-reporting-01PMZD13` (2026-08-20): **21 of 36**
+`scripts/ci/check-*.sh` scripts have a planted-violation proof (up from 18
+of 34 at that mission's start — it added `check-entrypoint-coverage.sh` and
+`check-installer-payload.sh`, both new, and gave `check-seam-implementers.sh`
+its first-ever proof). The remaining thirteen do not; see that mission's
+spec §1.4 and E-004 for the list and for why "per gate" overstated the
+coverage this sentence used to claim unconditionally.
 
 ### Declined gate — 2026-08-18 · "An RPC's async contract vs. its caller's await sequence" — NOT BUILDABLE
 
