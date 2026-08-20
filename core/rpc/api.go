@@ -496,6 +496,19 @@ type API struct {
 	// re-plumbing through api.New.
 	promptRegistry *cedar.Registry
 
+	// hookRunner is the process-singleton *hooks.Runner returned by
+	// newHooksStack (nil when memStore is nil — see newHooksStack's guard
+	// clause). Held on the stack, same pattern as promptRegistry above, so
+	// future WPs can construct hooks.LifecycleRunnerAdapter,
+	// hooks.PermissionRunnerAdapter and hooks.SessionRunnerAdapter — all of
+	// which require the concrete *hooks.Runner, not the llm.HookRunner
+	// interface — without re-plumbing through api.New
+	// (trust-surfaces-that-fire-01PMZ202 WP06 / UNIT-5, R-07: before this,
+	// the *hooks.Runner was trapped inside the unexported
+	// hooksRunnerAdapter.r field and unconstructible anywhere in the
+	// binary).
+	hookRunner *hooks.Runner
+
 	// cedarEngine is the process-singleton Cedar policy engine (WP05
 	// hoist, consent-surfaces-truth-01PMTR01 — "Recorded, not fixed" in
 	// the v0.63.1 release commit). Constructed exactly once in New from
@@ -1574,7 +1587,12 @@ func New(c *core.Core, opts ...Option) *API {
 	a.secretsAPI = secretsview.NewAPI(a.exposureIdx)
 	logging.L().Info("rpc.boot.exposure_index_created")
 
-	hooksRunner, hookRegistry, hookBuiltins := newHooksStack(c, retriever, memStore, embedder)
+	hooksRunner, hookRegistry, hookBuiltins, hookRunnerImpl := newHooksStack(c, retriever, memStore, embedder)
+	// WP06 / UNIT-5: hold the concrete *hooks.Runner on the stack (see the
+	// a.hookRunner field doc) so future WPs can construct the three hook
+	// adapters without re-plumbing through api.New. No consumer reads this
+	// field yet — this WP is pure plumbing with no behaviour change.
+	a.hookRunner = hookRunnerImpl
 	// Register skill-catalog pre_send hook so the model sees the
 	// model-invokable commands at send time (model-invoked-skills-catalog-01KZNP3E WP03).
 	if hookBuiltins != nil && slashStore != nil {
@@ -6356,14 +6374,20 @@ func (a *corpusEmbedderAdapter) Embed(ctx context.Context, texts []string) ([][]
 // Starter memory hooks are NOT auto-installed on boot; the settings
 // "long-term memory" toggle owns that lifecycle so a fresh install
 // stays quiet until the user opts in.
+// newHooksStack also returns the concrete *hooks.Runner (fourth value) so
+// that hooks.LifecycleRunnerAdapter, hooks.PermissionRunnerAdapter and
+// hooks.SessionRunnerAdapter — all of which require a *hooks.Runner, not the
+// llm.HookRunner interface — can be constructed by callers. Before this,
+// the *hooks.Runner was trapped inside the unexported hooksRunnerAdapter.r
+// field and unreachable anywhere else in the binary (WP06 / UNIT-5, R-07).
 func newHooksStack(
 	c *core.Core,
 	retriever *corememory.Retriever,
 	memStore corememory.Store,
 	embedder corememory.Embedder,
-) (llm.HookRunner, *hooks.Registry, *hooks.BuiltinRegistry) {
+) (llm.HookRunner, *hooks.Registry, *hooks.BuiltinRegistry, *hooks.Runner) {
 	if memStore == nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	dataDir := ""
 	if c != nil {
@@ -6371,7 +6395,7 @@ func newHooksStack(
 	}
 	registry, err := hooks.NewRegistry(dataDir)
 	if err != nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	builtins := hooks.NewBuiltinRegistry()
 	hooks.RegisterMemoryBuiltins(builtins, hooks.MemoryDeps{
@@ -6383,7 +6407,7 @@ func newHooksStack(
 		Registry: registry,
 		Builtins: builtins,
 	})
-	return &hooksRunnerAdapter{r: runner}, registry, builtins
+	return &hooksRunnerAdapter{r: runner}, registry, builtins, runner
 }
 
 // hooksBuiltinDescriber adapts *hooks.BuiltinRegistry to the
