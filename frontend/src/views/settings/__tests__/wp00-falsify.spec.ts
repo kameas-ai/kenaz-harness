@@ -1,7 +1,9 @@
 // wp00-falsify.spec.ts — controls-and-readouts-that-tell-the-truth-01PMZ808
-// UNIT-0 / WP00. Observes (does not predict) claims 1 and 3 from tasks.md.
-// No production code changes accompany this file (WP00 rule). Deleted once
-// WP14 (claim 1) and WP10 (claim 3) land their own coverage.
+// UNIT-0 / WP00. Observes (does not predict) claim 3 from tasks.md. Claim 1
+// (SettingsView.vue useRouter() after await) is superseded by
+// SettingsView.wp14.spec.ts, which asserts the fixed behaviour — this file
+// is trimmed accordingly. Deleted entirely once WP10 lands its own
+// embedder-test coverage.
 import { describe, it, expect, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import SettingsView from '@/views/settings/SettingsView.vue';
@@ -56,36 +58,6 @@ function provide(clientOverrides: any = {}, attachmentRows: Attachment[] = []) {
   });
   return { client };
 }
-
-describe('WP00 claim 1 — SettingsView.vue reconfigureWithAssistant() useRouter() after await', () => {
-  it('OBSERVES: a resolved restartPhase2 (a SUCCEEDED backend call) is reported to the user as onboardingError, because useRouter() is called after an await with no live component instance', async () => {
-    // No vue-router plugin is installed on this mount, matching the app's
-    // own SettingsView.test.ts pattern (no router mock anywhere in that
-    // file) and matching what happens after `await import('vue-router')`
-    // strips the synchronous setup-scope inject() needs even when a
-    // router IS installed elsewhere in the real app.
-    const { client } = provide();
-    const w = mount(SettingsView, {
-      global: { provide: { [HarnessClientKey as symbol]: client } },
-    });
-    await flushPromises();
-
-    const btn = w.find('[data-testid="reconfigure-with-assistant"]');
-    expect(btn.exists()).toBe(true);
-    await btn.trigger('click');
-    await flushPromises();
-
-    const errorBanner = w.find('[data-testid="onboarding-error"]');
-    // eslint-disable-next-line no-console
-    console.log(
-      'OBSERVED onboardingError banner present:',
-      errorBanner.exists(),
-      errorBanner.exists() ? errorBanner.text() : '(none)',
-    );
-    expect(errorBanner.exists()).toBe(true);
-    expect(errorBanner.text().length).toBeGreaterThan(0);
-  });
-});
 
 describe('WP00 claim 3 — SettingsView.vue "Test embedder" never contacts an embedder', () => {
   it('OBSERVES: embedderTestStatus reports "ok" from a settings-file read alone, with no embedder call in the fake client at all', async () => {

@@ -11,7 +11,7 @@
  * to coalesce rapid toggles into a single disk write.
  */
 import { computed, onMounted, ref } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import SettingsShell from '@/views/settings/SettingsShell.vue';
@@ -68,6 +68,14 @@ const client = useHarnessClient();
 // route. We disambiguate via ?tab=updates so we don't have to touch the
 // router config. The tab's mount switch is at the bottom of <template>.
 const route = useRoute() as ReturnType<typeof useRoute> | undefined;
+// controls-and-readouts-that-tell-the-truth-01PMZ808 WP14: captured here,
+// at synchronous setup scope, not behind a dynamic `await import('vue-
+// router')` — useRouter() calls inject(), which needs a live component
+// instance; after an await there is none, and it throws (SyncPanel.vue's
+// module-top pattern is the precedent; WorkflowRunsSection.vue does the
+// same). goToProviders() and reconfigureWithAssistant() below both used to
+// re-derive their own `router` post-await; both now close over this one.
+const router = useRouter() as ReturnType<typeof useRouter> | undefined;
 const showUpdatesTab = computed<boolean>(() => {
   const v = route?.query?.tab;
   return typeof v === 'string' && v === 'updates';
@@ -499,10 +507,8 @@ function skippedKindLabel(kind: string): string {
 /** Navigate to the Providers page, optionally pre-filling the add-provider
  *  drawer with a specific kind (e.g. "openrouter"). */
 async function goToProviders(addKind?: string) {
-  const { useRouter } = await import('vue-router');
-  const router = useRouter();
   const query = addKind ? { add: addKind } : {};
-  await router.push({ path: '/providers', query });
+  await router?.push({ path: '/providers', query });
 }
 
 /** Eligible provider kinds for embeddings (OpenAI-compatible shape). */
@@ -595,11 +601,7 @@ async function reconfigureWithAssistant() {
     const resp = await client.onboarding.restartPhase2({ starterId: 'chat' });
     if (resp.sessionId) {
       // Navigate to the new onboarding session.
-      // Delay import to avoid making this file depend on vue-router at the
-      // module level (consistent with other views that lazy-navigate).
-      const { useRouter } = await import('vue-router');
-      const router = useRouter();
-      await router.push(`/sessions/${resp.sessionId}`);
+      await router?.push(`/sessions/${resp.sessionId}`);
     }
   } catch (e: unknown) {
     onboardingError.value = e instanceof Error ? e.message : String(e);
