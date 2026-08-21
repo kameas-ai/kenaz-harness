@@ -140,8 +140,15 @@ func (a *API) SetLockdownBroker(sink fleet.BrokerSink) {
 
 // SetCedarEngine wires the Cedar policy engine into the fleet state so that
 // the config poller can apply fleet-distributed policy bundles.
-// Must be called before SetFleetClient to take effect; if called after,
-// the engine is stored and will be used by subsequent bundle applies.
+//
+// Ordering does NOT matter, despite an earlier version of this comment
+// claiming it must be called before SetFleetClient (fleet-enforcement-truth-
+// 01PMZ505 WP03 re-verified this per spec §5.2 / §13 claim 2, and the claim
+// was wrong): SetFleetClient's compositeConfigApplier holds a pointer to
+// the shared fleetState, and ApplyBundle reads a.state.cedarEngine fresh
+// (under a.state.mu) on every apply rather than capturing it at
+// construction time. Call this whenever the engine becomes available; any
+// bundle applied afterward — even the very next poll — sees it.
 func (a *API) SetCedarEngine(engine *cedarpolicy.Engine) {
 	if a.fleet == nil {
 		a.fleet = &fleetState{}
