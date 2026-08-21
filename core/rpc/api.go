@@ -5350,6 +5350,42 @@ func resolveAutonomyKnobsWithSettingsFallback(global, project, session autonomy.
 	return autonomy.Resolve(global, project, session)
 }
 
+// registerManualCompactionStrategies installs the strategies the BASE
+// compaction pipeline was missing so the manual-trigger RPC surface
+// (core/rpc/views/compaction.API.TriggerManualCompaction — the "Compact
+// now" button) stops failing with ErrUnknownStrategy.
+// chat-turn-integrity-01PMZ606 WP07. A nil pipeline is a no-op — the
+// same degraded-install shape newGraphManagerWithDeps already tolerates
+// for drop_oldest/summary.
+//
+// session_rewrite: compaction.PresetForTier sets SiteManual's default
+// Strategy to session_rewrite, and TriggerManualCompaction runs against
+// THIS base pipeline, not the per-run Bind() clone chat_default.yaml's
+// `compact` node uses (bindCompactor, in session_compaction.go).
+// Without this registration, every manual trigger with no explicit
+// strategy override resolved a strategy the base pipeline had never
+// heard of and failed with "unknown strategy: session_rewrite"
+// unconditionally — a plain wiring bug, not a policy choice.
+// profileID/modelOverride are empty inside chat.NewSessionRewriteStrategy
+// on purpose: this registration has no run identity to inherit them
+// from, and Compact's pickModel() already prefers the settings-configured
+// compaction model when one is wired.
+//
+// semantic_cluster: constructible with a nil Embedder — it degrades to
+// an even stride-pick across the transcript rather than erroring
+// (SemanticClusterStrategy.FallbackEnabled defaults true), the same
+// shape as NewSummaryStrategy(nil)'s heuristic fallback. Registering it
+// is what turns the panel's offered option from "always
+// ErrUnknownStrategy" into "actually runs, degraded until an embedder
+// is wired" — no embedder is wired on this path today.
+func registerManualCompactionStrategies(p *compaction.Pipeline, deps *chat.CompactionDeps, history chat.SessionMessageReader) {
+	if p == nil {
+		return
+	}
+	p.RegisterStrategy(chat.NewSessionRewriteStrategy(deps, history))
+	p.RegisterStrategy(compaction.NewSemanticClusterStrategy(nil))
+}
+
 // buildChatRunner constructs the *chat.ChatRunner that replaces
 // core/toolloop as the chassis chat path. Returns nil when the graph
 // manager is unavailable (test path or boot failure) so the LLM view
@@ -5687,6 +5723,7 @@ func buildChatRunner(
 	// built without a compactor yields nil here, which makes the node a
 	// documented passthrough.
 	chatCompactionPipeline, _ := graphMgr.Kernel().Compactor().(*compaction.Pipeline)
+	registerManualCompactionStrategies(chatCompactionPipeline, compactionDeps, historyReader)
 
 	runner, err := chat.New(chat.Config{
 		Kernel:        graphMgr.Kernel(),

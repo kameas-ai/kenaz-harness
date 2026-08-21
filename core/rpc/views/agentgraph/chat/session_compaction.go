@@ -289,6 +289,36 @@ func (r *ChatRunner) newSessionRewriteStrategy(profileID, modelOverride string) 
 	}
 }
 
+// NewSessionRewriteStrategy constructs the session_rewrite compaction
+// strategy for registration on the BASE pipeline — chat-turn-integrity-
+// 01PMZ606 WP07.
+//
+// Before this, the ONLY registration of session_rewrite was the
+// per-run one above (bindCompactor -> newSessionRewriteStrategy ->
+// Pipeline.Bind), scoped to a run identity (profileID, modelOverride)
+// that the manual-trigger RPC surface does not have. But
+// compaction.PresetForTier sets SiteManual's default Strategy to
+// session_rewrite, and core/rpc/views/compaction.API.TriggerManualCompaction
+// runs against the shared BASE pipeline, not a per-run Bind() clone — so
+// every Compaction_TriggerManual call that did not pass an explicit
+// Override resolved a strategy the base pipeline had never heard of, and
+// pipeline.go:239's dispatch returned `unknown strategy: "session_rewrite"`
+// unconditionally. This was not a UI-offered option going stale; it was
+// the default the "Compact now" button reached with nothing selected.
+//
+// profileID and modelOverride are empty here on purpose: this
+// registration has no run to inherit them from. Compact's pickModel()
+// closure already prefers deps.CompactionModel() (the settings-configured
+// compaction model) when one is wired, falling back to
+// (profileID, modelOverride) only as a last resort — so an empty pair
+// here means "no explicit override", not a wrong model. The per-run
+// Bind() registration (bindCompactor) is unaffected: chat_default.yaml's
+// `compact` node still gets its own run's profileID/modelOverride,
+// unchanged.
+func NewSessionRewriteStrategy(deps *CompactionDeps, history SessionMessageReader) compaction.Compactor {
+	return &sessionRewriteStrategy{deps: deps, history: history}
+}
+
 // bindCompactor produces the run's Compactor: the shared FR-041
 // pipeline with this run's session-rewrite strategy bound onto it.
 //

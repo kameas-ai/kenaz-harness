@@ -84,11 +84,23 @@ function setCompactionTier(t: CompactionAggressiveness) {
 // ── per-site strategy config (global layer) ─────────────────────────────
 
 const sites: readonly CompactionSite[] = ['pre_call', 'post_tool', 'manual'];
+// chat-turn-integrity-01PMZ606 WP07: 'custom_subgraph' is deliberately
+// NOT offered here. Picking it used to fail every run with
+// ErrUnknownStrategy — pipeline.go's dispatch has nothing registered
+// under that name because nothing implements the KernelRunner interface
+// it needs (`grep -rn RunGraph core cmd` returns only the interface
+// declaration, its one call site, and two test fakes).
+// justify(blocker: "no production KernelRunner implementation",
+// owner: alec, date: 2026-08-19). The strategy constant, its dispatch
+// arm and its tests are unchanged — per the mission's A-0 ruling this is
+// not a delete, only an unoffered option, so a persisted config that
+// already names 'custom_subgraph' (hand-edited compaction.yaml, or a
+// pre-WP07 save) still renders its picker below rather than silently
+// dropping the value.
 const strategies: readonly CompactionStrategy[] = [
   'summary',
   'drop_oldest',
   'semantic_cluster',
-  'custom_subgraph',
 ];
 
 const globalConfig = ref<CompactionConfig>({ sites: {} });
@@ -314,7 +326,13 @@ function siteLabel(site: CompactionSite): string {
 
 function strategyLabel(s: CompactionStrategy | undefined | ''): string {
   switch (s) {
-    case 'summary': return 'Summary (LLM)';
+    // chat-turn-integrity-01PMZ606 WP07 (Rule 3): the only production
+    // registration of this strategy (core/rpc/api.go) passes a nil LLM,
+    // so every run is heuristicSummary's 80-char-per-message pipe join —
+    // never an LLM call. "Summary (LLM)" over that would be exactly the
+    // lie this mission exists to end. Relabel here, not "(LLM)" restored,
+    // until a WP wires a real summariser (WP08, deferred).
+    case 'summary': return 'Summary';
     case 'drop_oldest': return 'Drop oldest';
     case 'semantic_cluster': return 'Semantic cluster';
     case 'custom_subgraph': return 'Custom subgraph';
@@ -326,7 +344,6 @@ function summaryLengthLabel(s: CompactionStrategy | undefined): string {
   switch (s) {
     case 'drop_oldest': return 'Keep recent N turns';
     case 'semantic_cluster': return 'Cluster count';
-    case 'summary': return 'Summary model';
     default: return '';
   }
 }
@@ -622,23 +639,12 @@ defineExpose({ refresh, saveGlobalConfig });
               />
             </label>
 
-            <!-- Summary model (for summary strategy) -->
-            <label
-              v-if="siteConfig(site).strategy === 'summary'"
-              class="flex flex-col font-ui text-[12px] text-ink-muted"
-            >
-              <span>Summary model (optional)</span>
-              <input
-                type="text"
-                placeholder="Use session's active model"
-                :value="siteConfig(site).summaryModel ?? ''"
-                class="mt-1 rounded-sm border border-border-muted bg-surface-2 px-2 py-1 text-[12px] text-ink"
-                :data-testid="`csp-${site}-summary-model`"
-                @input="updateSiteConfig(site, {
-                  summaryModel: ($event.target as HTMLInputElement).value || undefined,
-                })"
-              />
-            </label>
+            <!-- chat-turn-integrity-01PMZ606 WP07 (Rule 3): the "Summary
+                 model" input that used to render here is gone. It let a
+                 user target a model for a summariser that never made a
+                 model call — the production registration is a nil-LLM
+                 heuristic pipe-join (see strategyLabel's 'summary' case).
+                 Restore it alongside WP08's real adapter, not before. -->
 
             <!-- Custom subgraph picker (for custom_subgraph strategy) -->
             <label

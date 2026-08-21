@@ -5,7 +5,9 @@
  *
  * Coverage:
  *   1. Renders all three sites with strategy pickers.
- *   2. Strategy picker exposes all four built-in strategies + inherit option.
+ *   2. Strategy picker exposes the three offered strategies + inherit option
+ *      (chat-turn-integrity-01PMZ606 WP07: custom_subgraph is no longer
+ *      offered — nothing implements the KernelRunner interface it needs).
  *   3. Tier radio group defaults to balanced; switching tier calls settings.set.
  *   4. Saving global config calls compaction.setConfig with layer='global'.
  *   5. Per-scope override section requires a scope ID before save.
@@ -163,7 +165,7 @@ describe('CompactionStrategyPanel', () => {
     }
   });
 
-  it('strategy picker includes all four built-in strategies and inherit option', async () => {
+  it('strategy picker includes the three offered strategies and inherit option, but not custom_subgraph', async () => {
     const { wrapper } = mountWith();
     await flushPromises();
     const select = wrapper.find('[data-testid="csp-pre_call-strategy"]');
@@ -172,7 +174,10 @@ describe('CompactionStrategyPanel', () => {
     expect(text).toContain('Summary');
     expect(text).toContain('Drop oldest');
     expect(text).toContain('Semantic cluster');
-    expect(text).toContain('Custom subgraph');
+    // chat-turn-integrity-01PMZ606 WP07: custom_subgraph is not offered —
+    // nothing implements the KernelRunner interface it needs, and picking
+    // it used to fail every run with ErrUnknownStrategy.
+    expect(text).not.toContain('Custom subgraph');
   });
 
   it('defaults tier to balanced when settings has no compactionAggressiveness', async () => {
@@ -360,17 +365,23 @@ describe('CompactionStrategyPanel', () => {
     expect((input.element as HTMLInputElement).value).toBe('5');
   });
 
-  it('shows summary model input when strategy is summary', async () => {
+  // chat-turn-integrity-01PMZ606 WP07 (Rule 3): the "Summary model" input
+  // is gone — the only production registration of the summary strategy
+  // (core/rpc/api.go) passes a nil LLM, so it never made a model call
+  // this input could target. "shows summary model input when strategy is
+  // summary" (removed) asserted the input existed; this pins its absence
+  // instead, and that the label reads "Summary", not "Summary (LLM)".
+  it('does not show a summary model input, and labels the strategy honestly', async () => {
     const { wrapper } = mountWith({
       config: {
         sites: {
-          manual: { enabled: true, strategy: 'summary', summaryModel: 'claude-haiku-3-5' },
+          manual: { enabled: true, strategy: 'summary' },
         },
       },
     });
     await flushPromises();
-    const input = wrapper.find('[data-testid="csp-manual-summary-model"]');
-    expect(input.exists()).toBe(true);
-    expect((input.element as HTMLInputElement).value).toBe('claude-haiku-3-5');
+    expect(wrapper.find('[data-testid="csp-manual-summary-model"]').exists()).toBe(false);
+    const select = wrapper.find('[data-testid="csp-pre_call-strategy"]');
+    expect(select.text()).not.toContain('Summary (LLM)');
   });
 });
