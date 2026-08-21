@@ -285,6 +285,93 @@ while IFS=$'\t' read -r file field; do
   fi
 done <<< "$config_fields"
 
+# ---------------------------------------------------------------------------
+# Clause 4: a cedar.Gate wired through a functional option, not a Config
+# struct field.
+#
+# C-010 (model-authored-graphs-01PMGA01 UNIT-8(b)): the agentgraph
+# Manager has no `Config` struct — NewManager takes ...ManagerOption
+# (manager.go:153) — so clause 3's `type Config struct` discovery has
+# nothing to see WithGraphCedarGate with. Reverting that one argument at
+# its api.go wiring site loses the whole graph.author/graph.run
+# property and breaks no listing test, because the nil-gate contract is
+# default-allow (GateGraphAuthor/GateGraphRun's own documented
+# behaviour) — exactly the shape clause 3 exists to catch, just behind
+# a functional option instead of a struct field.
+#
+# For every `func With<Name>(<param> cedar.Gate) …Option` declared
+# under core/rpc/views/** (non-test), require `<alias>.With<Name>(` to
+# appear in api.go with an argument that is textually neither `nil` nor
+# `cedar.AllowAll{}`. A variable name (e.g. `graphCedarGate`, itself
+# reassigned from AllowAll{} to a real engine — see clause 2's
+# placeholder idiom) counts as wired; clauses 1/2 already audit that
+# variable's own assignment history, so clause 4 does not re-walk it.
+#
+# KNOWN HOLE (a shell gate cannot do full parsing): the argument is
+# extracted with `[^()]*`, which assumes the call's own argument
+# contains no nested parentheses. Every gate argument in this codebase
+# today is a bare identifier or a literal (`nil`, `cedar.AllowAll{}`);
+# an argument shaped like `buildSomething(x)` would defeat the
+# extraction. Closing that needs a Go AST tool, same caveat clause 2
+# already carries for a different reason.
+# ---------------------------------------------------------------------------
+with_gate_funcs=$(
+  for f in $(find "$VIEWS_ROOT" -name '*.go' ! -name '*_test.go' | sort); do
+    # `|| true` on EACH file's pipeline, not just the whole loop: with
+    # `set -eo pipefail`, a plain `grep | sed` that matches nothing in
+    # one file exits 1, and pipefail propagates that as the exit status
+    # of the `for` loop's last iteration — which then aborts the
+    # ENTIRE `with_gate_funcs=$(...)` assignment via set -e, discarding
+    # every file found in earlier iterations. This is exactly the
+    # "grep exits 1 on no match" trap clause 1's `|| true` already
+    # guards against at the top level; it applies per-iteration here
+    # because the loop, not just the substitution, is what set -e sees.
+    { grep -nE '^func With[A-Za-z0-9_]+\([a-zA-Z_][a-zA-Z0-9_]*[[:space:]]+cedar\.Gate\)' "$f" \
+      | sed -nE "s#^[0-9]+:func (With[A-Za-z0-9_]+)\(.*#${f}\t\1#p"; } || true
+  done
+)
+
+if [[ -z "$with_gate_funcs" ]]; then
+  echo "${GATE} FAIL: no 'func With<Name>(<param> cedar.Gate) ...Option' found under ${VIEWS_ROOT}." >&2
+  echo "${GATE} Clause 4 has nothing to inspect, which is indistinguishable from" >&2
+  echo "${GATE} passing. Either every such option was renamed/removed, or the grep" >&2
+  echo "${GATE} pattern above needs updating for a new shape." >&2
+  exit 1
+fi
+
+# Comments stripped per-line, then the whole file collapsed to one line
+# so a call site wrapped across multiple physical lines (gofmt's
+# wrapping of a long argument list) is still one contiguous match for
+# the `[^()]*` extraction below.
+api_collapsed=$(sed -E 's#//.*$##' "$API_FILE" | tr '\n' ' ')
+
+while IFS=$'\t' read -r file name; do
+  [[ -z "$file" ]] && continue
+  pkgdir=$(dirname "$file")
+  pkgname=$(basename "$pkgdir")
+  impalias=$(grep -oE "[A-Za-z0-9_]+[[:space:]]+\"github\.com/kameas-ai/kenaz-harness/${pkgdir}\"" "$API_FILE" \
+    | awk '{print $1}' | head -1 || true)
+  if [[ -z "$impalias" ]]; then
+    if grep -qE "\"github\.com/kameas-ai/kenaz-harness/${pkgdir}\"" "$API_FILE"; then
+      impalias="$pkgname"
+    else
+      violations="${violations}${file}: ${name} is a cedar.Gate-typed option but ${API_FILE} does not import ${pkgdir} — nothing constructs it with a gate (clause 4)"$'\n'
+      continue
+    fi
+  fi
+  call=$(printf '%s' "$api_collapsed" | grep -oE "${impalias}\.${name}\([^()]*\)" | head -1 || true)
+  if [[ -z "$call" ]]; then
+    violations="${violations}${file}: ${name} is declared but ${API_FILE} never calls ${impalias}.${name}(...) — the option is never applied, so the field it sets keeps its zero value (clause 4)"$'\n'
+    continue
+  fi
+  arg="${call#*(}"
+  arg="${arg%)}"
+  arg="$(printf '%s' "$arg" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+  if [[ "$arg" == "nil" || "$arg" == "cedar.AllowAll{}" || -z "$arg" ]]; then
+    violations="${violations}${file}: ${name} is called with '${arg}' at ${API_FILE}'s ${impalias}.${name}(...) call site — a nil/AllowAll/empty argument is the same unconditional permit as an omitted Config field (clause 4)"$'\n'
+  fi
+done <<< "$with_gate_funcs"
+
 violations=$(printf '%s' "$violations" | grep -v '^$' | sort -u || true)
 allow=$(load_allowlist "$ALLOW_FILE")
 
