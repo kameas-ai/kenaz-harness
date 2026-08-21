@@ -736,7 +736,7 @@
       "env_keys": [
         {
           "name": "KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID",
-          "display": "Kameas Atlassian OAuth client ID (pre-configured)",
+          "display": "Your Atlassian OAuth client ID (bring your own — Kameas does not provide one)",
           "docs_url": "https://developer.atlassian.com/console/myapps/",
           "required": true
         }
@@ -754,7 +754,8 @@
       "sampling_policy": {
         "allowed": false,
         "default": false
-      }
+      },
+      "warning": "Sign-in requires your own Atlassian OAuth 2.0 (3LO) app — register one at developer.atlassian.com/console/myapps and add its client ID in the connector's setup below. Kameas does not register or host this app for you."
     },
     {
       "id": "zapier",
@@ -1566,7 +1567,7 @@
       "env_keys": [
         {
           "name": "KAMEAS_RINGCENTRAL_OAUTH_CLIENT_ID",
-          "display": "Kameas RingCentral OAuth client ID (pre-configured)",
+          "display": "Your RingCentral OAuth client ID (bring your own — Kameas does not provide one)",
           "docs_url": "https://developers.ringcentral.com/guide/authentication",
           "required": true
         }
@@ -1585,7 +1586,7 @@
         "allowed": false,
         "default": false
       },
-      "warning": "No official RingCentral MCP server was confirmed at plan time — verify URL before shipping. Requires Kameas RingCentral OAuth app registration at developers.ringcentral.com."
+      "warning": "No official RingCentral MCP server was confirmed at plan time — verify URL before shipping. Requires your own RingCentral OAuth app, registered at developers.ringcentral.com; Kameas does not register or host it for you. Add its client ID in the connector's setup below."
     },
     {
       "id": "webex",
@@ -1614,7 +1615,7 @@
       "env_keys": [
         {
           "name": "KAMEAS_WEBEX_OAUTH_CLIENT_ID",
-          "display": "Kameas Webex OAuth client ID (pre-configured)",
+          "display": "Your Webex OAuth client ID (bring your own — Kameas does not provide one)",
           "docs_url": "https://developer.webex.com/docs/integrations",
           "required": true
         }
@@ -1633,7 +1634,7 @@
         "allowed": false,
         "default": false
       },
-      "warning": "No official Webex MCP server was confirmed at plan time — verify URL before shipping. Requires Kameas Webex OAuth integration registration at developer.webex.com."
+      "warning": "No official Webex MCP server was confirmed at plan time — verify URL before shipping. Requires your own Webex OAuth integration, registered at developer.webex.com; Kameas does not register or host it for you. Add its client ID in the connector's setup below."
     },
     {
       "id": "front",
@@ -1660,13 +1661,13 @@
       "env_keys": [
         {
           "name": "KAMEAS_FRONT_OAUTH_CLIENT_ID",
-          "display": "Kameas Front OAuth client ID (pre-configured)",
+          "display": "Your Front OAuth client ID (bring your own — Kameas does not provide one)",
           "docs_url": "https://dev.frontapp.com/docs/mcp-server",
           "required": true
         },
         {
           "name": "KAMEAS_FRONT_OAUTH_CLIENT_SECRET",
-          "display": "Kameas Front OAuth client secret (pre-configured)",
+          "display": "Your Front OAuth client secret (bring your own — from the same app; stored in the OS keychain, never displayed again)",
           "docs_url": "https://dev.frontapp.com/docs/mcp-server",
           "required": true
         }
@@ -1685,7 +1686,7 @@
         "allowed": false,
         "default": false
       },
-      "warning": "Front MCP is in open beta. Enable only 'MCP Server' in your Front developer app — enabling other features causes 403 errors. Requires Kameas Front OAuth app with client ID and secret."
+      "warning": "Front MCP is in open beta. Enable only 'MCP Server' in your Front developer app — enabling other features causes 403 errors. Requires your own Front OAuth app with a client ID and secret — register one at dev.frontapp.com; Kameas does not register or host it for you. Add both in the connector's setup below."
     },
     {
       "id": "discord",
@@ -1713,7 +1714,7 @@
       "env_keys": [
         {
           "name": "KAMEAS_DISCORD_OAUTH_CLIENT_ID",
-          "display": "Kameas Discord OAuth client ID (pre-configured)",
+          "display": "Your Discord OAuth client ID (bring your own — Kameas does not provide one)",
           "docs_url": "https://discord.com/developers/applications",
           "required": true
         }
@@ -1732,7 +1733,7 @@
         "allowed": false,
         "default": false
       },
-      "warning": "No official Discord MCP server was confirmed at plan time — verify URL before shipping. Requires Kameas Discord OAuth app registration at discord.com/developers."
+      "warning": "No official Discord MCP server was confirmed at plan time — verify URL before shipping. Requires your own Discord application, registered at discord.com/developers/applications; Kameas does not register or host it for you. Add its client ID in the connector's setup below."
     },
     {
       "id": "zoom",
@@ -1761,7 +1762,7 @@
       "env_keys": [
         {
           "name": "KAMEAS_ZOOM_OAUTH_CLIENT_ID",
-          "display": "Kameas Zoom OAuth client ID (pre-configured)",
+          "display": "Your Zoom OAuth client ID (bring your own — Kameas does not provide one)",
           "docs_url": "https://marketplace.zoom.us/develop/create",
           "required": true
         }
@@ -1780,7 +1781,7 @@
         "allowed": false,
         "default": false
       },
-      "warning": "No official Zoom MCP server was confirmed at plan time — verify URL before shipping. Requires Kameas Zoom OAuth app registration at marketplace.zoom.us."
+      "warning": "No official Zoom MCP server was confirmed at plan time — verify URL before shipping. Requires your own Zoom OAuth app, registered at marketplace.zoom.us; Kameas does not register or host it for you. Add its client ID in the connector's setup below."
     },
     {
       "id": "twilio",
@@ -2479,7 +2480,7 @@
     {
       "id": "quickbooks",
       "display_name": "QuickBooks Online",
-      "description": "Read accounting data from QuickBooks Online — read-only, no transactions initiated. Requires a Kameas Intuit OAuth app (register at developer.intuit.com).",
+      "description": "Read accounting data from QuickBooks Online — read-only, no transactions initiated. Requires your own Intuit OAuth app (register at developer.intuit.com); Kameas does not register or host it for you.",
       "category": "finance",
       "aliases": [
         "accounting",
@@ -2496,7 +2497,7 @@
       "env_keys": [
         {
           "name": "QUICKBOOKS_CLIENT_ID",
-          "display": "Intuit/QuickBooks OAuth client ID (${KAMEAS_QUICKBOOKS_OAUTH_CLIENT_ID} — from developer.intuit.com)",
+          "display": "Intuit/QuickBooks OAuth client ID (bring your own — from developer.intuit.com)",
           "docs_url": "https://developer.intuit.com/app/developer/qbo/docs/get-started",
           "required": true
         },
@@ -2521,7 +2522,7 @@
         "allowed": false,
         "default": false
       },
-      "warning": "Owner must register a Kameas Intuit app at developer.intuit.com before use. Community MCP package quickbooks-mcp (pinned 0.5.2); QuickBooks Online exposes no read-only accounting scope, so restrict tool use to reads.",
+      "warning": "Owner must register their own Intuit app at developer.intuit.com before use — Kameas does not register or host it. Community MCP package quickbooks-mcp (pinned 0.5.2); QuickBooks Online exposes no read-only accounting scope, so restrict tool use to reads.",
       "warning_severity": "danger"
     },
     {
@@ -2568,7 +2569,7 @@
     {
       "id": "rippling",
       "display_name": "Rippling",
-      "description": "Read employee profiles, org groups, and HR structure from Rippling. Read-only — no payroll-run or admin writes. Requires a Kameas Rippling OAuth app (register at developer.rippling.com).",
+      "description": "Read employee profiles, org groups, and HR structure from Rippling. Read-only — no payroll-run or admin writes. Requires your own Rippling OAuth app (register at developer.rippling.com); Kameas does not register or host it for you.",
       "category": "hr_people",
       "aliases": [
         "hris",
@@ -2585,7 +2586,7 @@
       "env_keys": [
         {
           "name": "RIPPLING_CLIENT_ID",
-          "display": "Rippling OAuth client ID (${KAMEAS_RIPPLING_OAUTH_CLIENT_ID} — from developer.rippling.com)",
+          "display": "Rippling OAuth client ID (bring your own — from developer.rippling.com)",
           "docs_url": "https://developer.rippling.com/docs",
           "required": true
         },
@@ -2610,7 +2611,7 @@
         "allowed": false,
         "default": false
       },
-      "warning": "Owner must register a Kameas Rippling OAuth2 app at developer.rippling.com before use. Note: Rippling supports PKCE S256 but no DCR — a Kameas app is required. Scopes are defined at app-registration time; request minimal read-only scopes (employees, groups, org). Verify best npm MCP package for Rippling at build — 'rippling-mcp-server' is a placeholder. Auth endpoints: authorize=https://app.rippling.com/oauth token=https://api.rippling.com/o/token/. No payroll-run tools."
+      "warning": "Owner must register their own Rippling OAuth2 app at developer.rippling.com before use — Kameas does not register or host it. Note: Rippling supports PKCE S256 but no DCR — an operator-registered app is required. Scopes are defined at app-registration time; request minimal read-only scopes (employees, groups, org). Verify best npm MCP package for Rippling at build — 'rippling-mcp-server' is a placeholder. Auth endpoints: authorize=https://app.rippling.com/oauth token=https://api.rippling.com/o/token/. No payroll-run tools."
     },
     {
       "id": "netsuite",
@@ -3073,7 +3074,7 @@
       "env_keys": [
         {
           "name": "KAMEAS_VERCEL_OAUTH_CLIENT_ID",
-          "display": "Kameas Vercel OAuth client ID (pre-configured)",
+          "display": "Your Vercel OAuth client ID (bring your own — Kameas does not provide one)",
           "docs_url": "https://vercel.com/docs/agent-resources/vercel-mcp",
           "required": true
         }
@@ -3092,7 +3093,7 @@
         "allowed": false,
         "default": false
       },
-      "warning": "Vercel MCP only supports AI clients reviewed and approved by Vercel — DCR registrations from unknown clients may be blocked. A Kameas OAuth app must be registered at https://vercel.com/account/tokens and KAMEAS_VERCEL_OAUTH_CLIENT_ID set before sign-in works."
+      "warning": "Vercel MCP only supports AI clients reviewed and approved by Vercel — DCR registrations from unknown clients may be blocked. Requires your own Vercel OAuth integration — register one at vercel.com and add its client ID in the connector's setup below. Kameas does not register or host it for you."
     },
     {
       "id": "bitbucket",
@@ -3122,7 +3123,7 @@
       "env_keys": [
         {
           "name": "KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID",
-          "display": "Kameas Atlassian OAuth client ID (pre-configured)",
+          "display": "Your Atlassian OAuth client ID (bring your own — Kameas does not provide one)",
           "docs_url": "https://developer.atlassian.com/console/myapps/",
           "required": true
         }
@@ -3141,7 +3142,7 @@
         "allowed": false,
         "default": false
       },
-      "warning": "Requires Bitbucket Cloud account. Uses Atlassian OAuth app — same sign-in as Jira/Confluence connectors. Ensure KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID is configured."
+      "warning": "Requires Bitbucket Cloud account. Uses the same Atlassian OAuth app as the Jira/Confluence connector — bring your own app (register at developer.atlassian.com/console/myapps); Kameas does not register or host it for you. Add its client ID in the connector's setup below."
     },
     {
       "id": "pagerduty",
@@ -3650,7 +3651,7 @@
       "env_keys": [
         {
           "name": "KAMEAS_SMARTSHEET_OAUTH_CLIENT_ID",
-          "display": "Kameas Smartsheet OAuth client ID (pre-configured)",
+          "display": "Your Smartsheet OAuth client ID (bring your own — Kameas does not provide one)",
           "docs_url": "https://developers.smartsheet.com",
           "required": true
         }
@@ -3669,7 +3670,7 @@
         "allowed": false,
         "default": false
       },
-      "warning": "Requires Kameas Smartsheet OAuth app registration at developers.smartsheet.com. Set KAMEAS_SMARTSHEET_OAUTH_CLIENT_ID to activate sign-in."
+      "warning": "Requires your own Smartsheet OAuth app, registered at developers.smartsheet.com; Kameas does not register or host it for you. Add its client ID in the connector's setup below to activate sign-in."
     },
     {
       "id": "wrike",
@@ -3692,7 +3693,7 @@
       "env_keys": [
         {
           "name": "KAMEAS_WRIKE_OAUTH_CLIENT_ID",
-          "display": "Kameas Wrike OAuth client ID (pre-configured)",
+          "display": "Your Wrike OAuth client ID (bring your own — Kameas does not provide one)",
           "docs_url": "https://developers.wrike.com/oauth-20-authorization/",
           "required": true
         },
@@ -3730,7 +3731,7 @@
         "allowed": false,
         "default": false
       },
-      "warning": "Requires Kameas Wrike OAuth app registration at wrike.com/frontend/apps/index.html#/api. Set KAMEAS_WRIKE_OAUTH_CLIENT_ID to activate sign-in. EU customers: set datacenter=eu to use app-eu.wrike.com endpoints."
+      "warning": "Requires your own Wrike OAuth app, registered at wrike.com/frontend/apps/index.html#/api; Kameas does not register or host it for you. Add its client ID in the connector's setup below to activate sign-in. EU customers: set datacenter=eu to use app-eu.wrike.com endpoints."
     },
     {
       "id": "trello",
@@ -4018,7 +4019,7 @@
     {
       "id": "tableau",
       "display_name": "Tableau",
-      "description": "Query Tableau Cloud: browse datasources, workbooks, views, Pulse insights, and site content via Tableau's official remote MCP server. Sign in with Tableau (OAuth PKCE — requires Kameas Connected App registration). Read-only access.",
+      "description": "Query Tableau Cloud: browse datasources, workbooks, views, Pulse insights, and site content via Tableau's official remote MCP server. Sign in with Tableau (OAuth PKCE — requires your own Connected App registration). Read-only access.",
       "category": "data",
       "aliases": [
         "business intelligence",
@@ -4054,7 +4055,7 @@
       "env_keys": [
         {
           "name": "KAMEAS_TABLEAU_OAUTH_CLIENT_ID",
-          "display": "Kameas Tableau OAuth client ID (from Tableau Cloud Connected Apps)",
+          "display": "Your Tableau OAuth client ID (bring your own — from a Connected App you register in Tableau Cloud Admin; Kameas does not provide one)",
           "docs_url": "https://help.tableau.com/current/online/en-us/connected_apps_eas.htm",
           "required": true
         }
@@ -4073,7 +4074,7 @@
         "allowed": false,
         "default": false
       },
-      "warning": "Owner action required: register Kameas Connected App in Tableau Cloud Admin (Connected Apps > Create Connected App). Redirect URI: https://app.kameas.ai/oauth/callback. Set KAMEAS_TABLEAU_OAUTH_CLIENT_ID once registered. Auth server: sso.online.tableau.com (no DCR — PKCE only). Read-only scopes; no write/admin tools."
+      "warning": "Owner action required: register your own Connected App in Tableau Cloud Admin (Connected Apps > Create Connected App); Kameas does not register or host it for you. Redirect URI: http://127.0.0.1:<port>/callback (the harness's local loopback listener — NOT app.kameas.ai). Add the client ID in the connector's setup below once registered. Auth server: sso.online.tableau.com (no DCR — PKCE only). Read-only scopes; no write/admin tools."
     },
     {
       "id": "fivetran",
@@ -4994,7 +4995,7 @@
       "env_keys": [
         {
           "name": "KAMEAS_HUBSPOT_OAUTH_CLIENT_ID",
-          "display": "HubSpot OAuth client ID (Kameas managed)",
+          "display": "Your HubSpot OAuth client ID (bring your own — Kameas does not provide one)",
           "docs_url": "https://developers.hubspot.com/apps",
           "required": true
         }
@@ -5012,7 +5013,8 @@
       "sampling_policy": {
         "allowed": false,
         "default": false
-      }
+      },
+      "warning": "Requires your own HubSpot app — create one at developers.hubspot.com/apps and add its client ID in the connector's setup below. Kameas does not register or host it for you."
     },
     {
       "id": "box",
@@ -5037,7 +5039,7 @@
       "env_keys": [
         {
           "name": "KAMEAS_BOX_OAUTH_CLIENT_ID",
-          "display": "Box OAuth client ID (Kameas managed — from Box Admin Console)",
+          "display": "Your Box OAuth client ID (bring your own — from the Box Developer Console; Kameas does not provide one)",
           "docs_url": "https://developer.box.com/guides/box-mcp/remote/",
           "required": true
         }
@@ -5055,7 +5057,8 @@
       "sampling_policy": {
         "allowed": false,
         "default": false
-      }
+      },
+      "warning": "Requires your own Box app — create one in the Box Developer Console (developer.box.com) and add its client ID in the connector's setup below. Kameas does not register or host it for you."
     },
     {
       "id": "salesforce",
@@ -5078,7 +5081,7 @@
       "env_keys": [
         {
           "name": "KAMEAS_SALESFORCE_OAUTH_CLIENT_ID",
-          "display": "Salesforce OAuth client ID (Kameas External Client App)",
+          "display": "Your Salesforce OAuth client ID (bring your own — from an External Client App you create in Salesforce Setup; Kameas does not provide one)",
           "docs_url": "https://developer.salesforce.com/docs/platform/hosted-mcp-servers/guide",
           "required": true
         }
@@ -5104,7 +5107,8 @@
       "sampling_policy": {
         "allowed": false,
         "default": false
-      }
+      },
+      "warning": "Requires your own Salesforce External Client App — create one in Salesforce Setup (see developer.salesforce.com for the connected/external app guide) and add its client ID in the connector's setup below. Kameas does not register or host it for you."
     },
     {
       "id": "bigcommerce-docs",

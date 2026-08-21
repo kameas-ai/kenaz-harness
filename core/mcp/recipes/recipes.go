@@ -230,8 +230,12 @@ const (
 // PrimaryAuth hint constants for Recipe.PrimaryAuth. The install modal leads
 // with the primary auth method and collapses secondary fields under "Advanced".
 const (
-	// PrimaryAuthOAuth leads with an OAuth "Sign in" browser button.
-	// TODO: requires OAuth app registration before sign-in works end-to-end.
+	// PrimaryAuthOAuth leads with an OAuth "Sign in" browser button. As of
+	// D-3/E-006 (kitty-specs/connector-lifecycle-truth-01PMZ303) this arm's
+	// six recipes have no working sign-in path yet — none is DCR-capable,
+	// PKCE-with-a-client-id, or device-code — and whether they move to one
+	// of those arms is an open product question (E-006), not something
+	// Kameas registers an app to fix.
 	PrimaryAuthOAuth = "oauth"
 	// PrimaryAuthDeviceCode leads with a device-code browser sign-in message
 	// (e.g. Outlook ms-365-mcp-server). Env keys become secondary ("Advanced").
@@ -245,8 +249,12 @@ const (
 	// RFC 7591 Dynamic Client Registration — no pre-registered Kameas app needed.
 	// The DCR engine registers the client dynamically at first use.
 	PrimaryAuthBrowserOAuthDCR = "browser_oauth_dcr"
-	// PrimaryAuthBrowserOAuthPKCE leads with a browser OAuth "Sign in" button using
-	// PKCE with a pre-registered Kameas OAuth app (no DCR support at the auth server).
+	// PrimaryAuthBrowserOAuthPKCE leads with a browser OAuth "Sign in" button
+	// using PKCE against an auth server with no DCR support. The client id
+	// is BRING-YOUR-OWN (ruling D-3, kitty-specs/connector-lifecycle-truth-
+	// 01PMZ303): the operator registers their own OAuth app with the
+	// provider and supplies its client id via the recipe's env-key field.
+	// Kameas does not register, host, or rotate credentials for this app.
 	PrimaryAuthBrowserOAuthPKCE = "browser_oauth_pkce"
 )
 
