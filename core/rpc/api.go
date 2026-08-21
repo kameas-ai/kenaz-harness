@@ -1699,6 +1699,20 @@ func New(c *core.Core, opts ...Option) *API {
 	settingsImpl := settings.NewAPI(settingsStore)
 	a.settingsAPI = settingsImpl
 	a.settingsImpl = settingsImpl
+	// Hand the process-singleton Cedar engine to the fleet config applier
+	// (fleet-enforcement-truth-01PMZ505 WP03, spec §1.1/§5.2). Without
+	// this, compositeConfigApplier.ApplyBundle's cedarEngine read
+	// (core/rpc/views/settings/fleet.go) is always nil, so a
+	// signature-verified cedar_delta bundle is never installed into the
+	// live engine — WP02 now surfaces that as a named apply error instead
+	// of a clean ACK, but this is the wire that removes the error and
+	// makes team Cedar policy actually enforce. a.cedarEngine is the same
+	// singleton assigned above (buildCedarEngineOrNil) and read
+	// elsewhere in this file — check-cedar-engine-singleton.sh fails on a
+	// second construction site, so pass the existing pointer, never build
+	// a new one. May be nil (no dataDir / construction failure);
+	// SetCedarEngine and the applier both handle that.
+	settingsImpl.SetCedarEngine(a.cedarEngine)
 	// AuditSettings.RetentionEnforced (audit-that-tells-the-truth-01PMZA10
 	// UNIT-4, spec D-8): false until UNIT-8 lands a real sweep. This is
 	// the wiring site that makes the value honest — GetAuditSettings

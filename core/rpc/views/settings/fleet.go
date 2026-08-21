@@ -13,6 +13,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 	cedarpolicy "github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	llmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
 	"github.com/kameas-ai/kenaz-harness/core/slashcmd"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -34,10 +35,6 @@ type fleetState struct {
 	// cedarEngine is the Cedar policy engine wired at SetCedarEngine time.
 	// Used by the composite ConfigApplier to apply team policy bundles.
 	cedarEngine *cedarpolicy.Engine
-
-	// fleetModelPrefs is the last-received fleet model preferences.
-	// Protected by mu.
-	fleetModelPrefs *fleet.BundleModelPrefs
 
 	// skillStore + skillRegistry are wired at boot time via SetSkillRefs so the
 	// compositeConfigApplier can call fleet.ApplyMandatedSkills when a bundle
@@ -140,8 +137,15 @@ func (a *API) SetLockdownBroker(sink fleet.BrokerSink) {
 
 // SetCedarEngine wires the Cedar policy engine into the fleet state so that
 // the config poller can apply fleet-distributed policy bundles.
-// Must be called before SetFleetClient to take effect; if called after,
-// the engine is stored and will be used by subsequent bundle applies.
+//
+// Ordering does NOT matter, despite an earlier version of this comment
+// claiming it must be called before SetFleetClient (fleet-enforcement-truth-
+// 01PMZ505 WP03 re-verified this per spec §5.2 / §13 claim 2, and the claim
+// was wrong): SetFleetClient's compositeConfigApplier holds a pointer to
+// the shared fleetState, and ApplyBundle reads a.state.cedarEngine fresh
+// (under a.state.mu) on every apply rather than capturing it at
+// construction time. Call this whenever the engine becomes available; any
+// bundle applied afterward — even the very next poll — sees it.
 func (a *API) SetCedarEngine(engine *cedarpolicy.Engine) {
 	if a.fleet == nil {
 		a.fleet = &fleetState{}
@@ -308,8 +312,12 @@ func (a *API) StopFleetBackground() {
 	a.fleet.poller = nil
 	a.fleet.configPoller = nil
 	a.fleet.lockdownWatcher = nil
-	// Clear in-memory caches that are session-scoped.
-	a.fleet.fleetModelPrefs = nil
+	// Clear in-memory caches that are session-scoped. Fleet model prefs
+	// (fleet-enforcement-truth-01PMZ505 WP04) live in
+	// core/rpc/views/llm's package-level store now, not here — clear
+	// them there too, so a signed-out device does not keep enforcing an
+	// allow-list or default model pushed before sign-out.
+	llmview.ClearFleetModelPrefs()
 	a.fleet.telemetryOptIns = nil
 	pipeline := a.fleet.otlpPipeline
 	a.fleet.mu.Unlock()
@@ -705,7 +713,7 @@ func (a *API) FleetHealth(ctx context.Context) (FleetHealthView, error) {
 // section of the bundle to the appropriate sub-system:
 //   - cedar_delta   → cedarpolicy.Engine.SetTeamBundle
 //   - mcp_allowlist → recipes.ApplyFleetAllowlist
-//   - model_prefs   → stored in fleetState.fleetModelPrefs
+//   - model_prefs   → llmview.ApplyFleetModelPrefs (core/rpc/views/llm)
 //
 // The kameas_ml_weight_urls bundle section is intentionally ignored: the
 // fleet-hosted-LLM / kameas-ml surface was removed
@@ -720,6 +728,15 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 	var errs []error
 
 	// Cedar delta.
+	//
+	// fleet-enforcement-truth-01PMZ505 WP02: a signed bundle carrying a
+	// cedar_delta section that this device cannot apply (no engine wired)
+	// must NOT ack "applied:true" — that is a silently-discarded team
+	// policy, not a no-op (spec §1.1). The else branch is the fix: it
+	// turns a skipped section into a named apply error so
+	// config_pull.go's "len(applyErrs) == 0" success check goes false,
+	// lastAppliedID does not advance, and the bundle is re-attempted on
+	// the next poll instead of being reported as enforced.
 	if len(b.CedarDelta) > 0 {
 		a.state.mu.RLock()
 		engine := a.state.cedarEngine
@@ -728,6 +745,8 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 			if err := fleet.ApplyCedarDelta(ctx, engine, b.CedarDelta); err != nil {
 				errs = append(errs, err)
 			}
+		} else {
+			errs = append(errs, fmt.Errorf("fleet/config: cedar_delta present but no Cedar engine wired (SetCedarEngine never called)"))
 		}
 	}
 
@@ -737,10 +756,17 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 	}
 
 	// Model prefs.
+	//
+	// fleet-enforcement-truth-01PMZ505 WP04: DefaultModel and
+	// ProviderAllowlist now reach real branches —
+	// llmview.ApplyFleetModelPrefs installs them into the package-level
+	// store core/rpc/views/llm.ListProviders (filters the list),
+	// StartStream (blocks an excluded profile) and
+	// profileKindAndModel (seeds DefaultModel, D-3) read. WP02's
+	// stored-and-unread-with-an-error state is gone; this is the real
+	// consumer, mirroring the mcp_allowlist section immediately above.
 	if b.ModelPrefs != nil {
-		a.state.mu.Lock()
-		a.state.fleetModelPrefs = b.ModelPrefs
-		a.state.mu.Unlock()
+		llmview.ApplyFleetModelPrefs(b.ModelPrefs.DefaultModel, b.ModelPrefs.ProviderAllowlist)
 	}
 
 	// Weight URLs (kameas_ml_weight_urls): intentionally ignored — the
@@ -749,6 +775,10 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 	// Mandated skills (fleet-skills-sync-01NDFSEX18 WP05).
 	// FR-012: all section errors are collected and returned so the ACK
 	// carries the full set and the caller can decide not to advance lastAppliedID.
+	//
+	// fleet-enforcement-truth-01PMZ505 WP02: same fix as cedar_delta — a
+	// bundle carrying mandated_skills that this device cannot apply (refs
+	// not wired) must not ack clean.
 	if len(b.MandatedSkills) > 0 {
 		a.state.mu.RLock()
 		skillStore := a.state.skillStore
@@ -760,22 +790,13 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 				logging.L().Warn("fleet.config.mandated_skills.apply_error", "err", se.Error())
 				errs = append(errs, se)
 			}
+		} else {
+			errs = append(errs, fmt.Errorf("fleet/config: mandated_skills present but skill refs not wired (SetSkillRefs never called)"))
 		}
 	}
 
 	// Return all errors (FR-012). An empty slice means full success.
 	return errs
-}
-
-// FleetModelPrefs returns the current fleet-managed model preferences, or nil
-// when no bundle has been applied.
-func (a *API) FleetModelPrefs() *fleet.BundleModelPrefs {
-	if a.fleet == nil {
-		return nil
-	}
-	a.fleet.mu.RLock()
-	defer a.fleet.mu.RUnlock()
-	return a.fleet.fleetModelPrefs
 }
 
 // LockdownStatusView is the wire shape returned by FleetLockdownStatus.
