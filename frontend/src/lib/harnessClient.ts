@@ -407,7 +407,12 @@ interface WailsBindingsLike {
 
   Bundle_List(): Promise<Bundle[]>;
   Bundle_Get(id: string): Promise<Bundle>;
-  Bundle_Install(req: { kind: string; path: string }): Promise<Bundle>;
+  // url is already part of the generated bundle.InstallRequest model
+  // (frontend/wailsjs/go/models.ts — UNIT-6/UNIT-7's http_mirror
+  // channel shipped it), just never reflected in this hand-written
+  // WailsBindingsLike surface until UNIT-8 gave the frontend a second
+  // channel to actually pass it for.
+  Bundle_Install(req: { kind: string; path: string; url?: string }): Promise<Bundle>;
   Bundle_Remove(id: string): Promise<void>;
 
   Policy_Explain(input: Record<string, unknown>): Promise<Denial>;
@@ -1800,7 +1805,13 @@ export interface AttachmentsClient {
 export interface BundleClient {
   list(): Promise<Bundle[]>;
   get(id: string): Promise<Bundle>;
-  install(req: { kind: string; path: string }): Promise<Bundle>;
+  // path is used by the local_path channel; url by every network channel
+  // (UNIT-6's http_mirror today). Exactly one is meaningful per kind —
+  // core/rpc/views/bundle.InstallRequest documents the same split, and
+  // core/bundle/channels.Registry.Open refuses any kind with no
+  // registered factory, so an unsupported kind fails server-side even
+  // if the picker (BundlesView.vue's CHANNEL_KINDS) ever drifts.
+  install(req: { kind: string; path?: string; url?: string }): Promise<Bundle>;
   remove(id: string): Promise<void>;
 }
 
@@ -3677,7 +3688,11 @@ export function createHarnessClient(): HarnessClient {
     bundle: {
       list: () => b().Bundle_List(),
       get: (id) => b().Bundle_Get(id),
-      install: (req) => b().Bundle_Install(req),
+      // bundle.InstallRequest.path is a plain `string` in wailsjs's
+      // generated model (models.ts), not optional, even though the Go
+      // struct leaves it "" for URL-based channels — normalize here
+      // rather than widening the generated type.
+      install: (req) => b().Bundle_Install({ kind: req.kind, path: req.path ?? '', url: req.url }),
       remove: (id) => b().Bundle_Remove(id),
     },
     policy: {

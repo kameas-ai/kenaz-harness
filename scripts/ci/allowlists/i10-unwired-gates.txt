@@ -255,12 +255,25 @@ github.com/kameas-ai/kenaz-harness/core/policy/cedar.CheckModel
 github.com/kameas-ai/kenaz-harness/core/policy/cedar.CheckRecipeAdd
 
 # github.com/kameas-ai/kenaz-harness/core/fleet.VerifySignature
-#   SEEDED 2026-08-14. Verdict: DELETE, unless deliberately kept as
-#   client-library API. The SIGNING half is live — DeviceSigner.Sign runs
-#   from audit_archive.go and catalog.go — but nothing in this repo ever
-#   consumes a signature, and signing.go's own comment explains why:
-#   "Used by tests and the fleet server". The verifier's counterpart is
-#   out-of-repo. Nothing is ungated on this side of the wire; the
-#   question is only whether a function no build target here consumes
-#   belongs in core/fleet.
+#   SEEDED 2026-08-14. UPDATED 2026-08-21 by
+#   bundle-download-and-verify-01PMZ909 UNIT-1/UNIT-9.
+#   Standing verdict SUPERSEDED. Owner ruling A-0 (2026-08-19) freezes
+#   the delete lane for this campaign — no deletion lands on a
+#   zero-caller proof alone. Separately, owner ruling A-1 + escalation
+#   register C-2 (both 2026-08-19) make this function's disposition an
+#   open product question rather than a dead-code question:
+#   bundle-download-and-verify-01PMZ909 builds a real, persisted
+#   AnchorStore (UNIT-3) for core/trust's signature verification. That
+#   AnchorStore is a pubkey source with rotation and revocation already
+#   written against it — exactly what C-2 says is missing for the
+#   fleet catalog/skill install path (core/rpc/api.go's
+#   PubKeyBase64: "" placeholder). core/fleet.VerifySignature remains
+#   the verify-math primitive nearest to that path if it is ever wired
+#   to consume an anchor. It is NOT a duplicate of core/trust's
+#   9-step pipeline (no envelope, no anchor lookup, no revocation, no
+#   audit) and NOT a substitute for it. Kept, unwidened. Clears when
+#   either (a) an owner decides catalog verification stays off
+#   permanently and the function is formally retired with that
+#   justification, or (b) it gets a real caller.
+#   Owner: alec (per A-0/A-1/C-2, 2026-08-19).
 github.com/kameas-ai/kenaz-harness/core/fleet.VerifySignature

@@ -128,6 +128,8 @@ var cwdSensitiveGates = []string{
 	"check-installer-payload.sh",
 	"check-audit-store-before-retention.sh",
 	"check-fts-sync.sh",
+	"check-bundle-verify-ordering.sh",
+	"check-bundle-channel-kinds-sync.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -1187,6 +1189,106 @@ func TestAuditStoreBeforeRetentionGate_PlantedStoreRemovalFails(t *testing.T) {
 			"while a sweep construction site remains — the gate cannot fail.\noutput:\n%s", out)
 	}
 	if !strings.Contains(out, "NewLocalRetentionScheduler(") {
+		t.Fatalf("gate failed, but its output does not mention the expected defect "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+}
+
+// TestBundleVerifyOrderingGate_PlantedNilSignatureFires is the
+// planted-violation proof for check-bundle-verify-ordering.sh (G-1,
+// bundle-download-and-verify-01PMZ909 UNIT-9, spec §2 / §7 G-1). The
+// shared plant() helper's append-or-create mode cannot express this
+// defect class — an EXISTING field literal (`Signature: req.SignatureBytes,`)
+// reverting to the pre-UNIT-2 shape (`Signature: nil,`) while the
+// verify call site in core/rpc/views/bundle/impl.go stays present — so
+// this test does its own read-mutate-restore cycle on
+// core/trust/bundleadapter.go directly, mirroring
+// TestToolContainmentUnconditionalGate_PlantedConditionalWrapperFails
+// and TestAuditStoreBeforeRetentionGate_PlantedStoreRemovalFails above.
+func TestBundleVerifyOrderingGate_PlantedNilSignatureFires(t *testing.T) {
+	root := repoRoot(t)
+	adapterPath := filepath.Join(root, "core", "trust", "bundleadapter.go")
+
+	orig, err := os.ReadFile(adapterPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", adapterPath, err)
+	}
+
+	const target = "Signature: req.SignatureBytes,"
+	if !strings.Contains(string(orig), target) {
+		t.Fatalf("expected line not found in bundleadapter.go — the UNIT-2 wire may have moved; "+
+			"update this test and the gate together:\n%q", target)
+	}
+	// Reproduce the exact pre-UNIT-2 defect (spec §1.5): the envelope's
+	// Signature field reverts to a hardcoded nil while
+	// core/rpc/views/bundle/impl.go still calls VerifyManifestSignatures
+	// — the ordering violation this gate exists to catch.
+	mutated := "Signature: nil,"
+	newContent := strings.Replace(string(orig), target, mutated, 1)
+
+	if err := os.WriteFile(adapterPath, []byte(newContent), 0o644); err != nil {
+		t.Fatalf("writing mutated bundleadapter.go: %v", err)
+	}
+	defer func() {
+		if err := os.WriteFile(adapterPath, orig, 0o644); err != nil {
+			t.Errorf("restoring bundleadapter.go: %v — WORKING TREE IS DIRTY", err)
+		}
+	}()
+
+	code, out := runGate(t, "check-bundle-verify-ordering.sh", root)
+	if code == 0 {
+		t.Fatalf("check-bundle-verify-ordering.sh exited 0 with Signature: nil, restored "+
+			"while the impl.go call site remains — the gate cannot fail.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "Signature: nil,") {
+		t.Fatalf("gate failed, but its output does not mention the expected defect "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+}
+
+// TestBundleChannelKindsSyncGate_PlantedDriftFires is the planted-violation
+// proof for check-bundle-channel-kinds-sync.sh (bundle-download-and-
+// verify-01PMZ909 UNIT-8/UNIT-9). BundlesView.vue's channel picker
+// hardcodes CHANNEL_KINDS rather than querying a
+// Bundle_ListChannelKinds RPC (none exists — adding one needs a
+// frontend/wailsjs/** regen this campaign deliberately does not run);
+// this gate is what keeps that hardcoded list from drifting from the
+// backend's registered channels.Registry factories. Removes the
+// http_mirror entry from CHANNEL_KINDS while
+// core/bundle/channels/http/http.go's `const Kind = "http_mirror"`
+// stays present — the shape "a real channel package a user cannot
+// select from the UI".
+func TestBundleChannelKindsSyncGate_PlantedDriftFires(t *testing.T) {
+	root := repoRoot(t)
+	vuePath := filepath.Join(root, "frontend", "src", "views", "bundles", "BundlesView.vue")
+
+	orig, err := os.ReadFile(vuePath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", vuePath, err)
+	}
+
+	const target = `{ kind: 'http_mirror', label: 'http_mirror — a URL served over HTTP(S)', field: 'url' },`
+	if !strings.Contains(string(orig), target) {
+		t.Fatalf("expected CHANNEL_KINDS entry not found in BundlesView.vue — the UNIT-8 "+
+			"picker may have moved; update this test and the gate together:\n%q", target)
+	}
+	newContent := strings.Replace(string(orig), target, "", 1)
+
+	if err := os.WriteFile(vuePath, []byte(newContent), 0o644); err != nil {
+		t.Fatalf("writing mutated BundlesView.vue: %v", err)
+	}
+	defer func() {
+		if err := os.WriteFile(vuePath, orig, 0o644); err != nil {
+			t.Errorf("restoring BundlesView.vue: %v — WORKING TREE IS DIRTY", err)
+		}
+	}()
+
+	code, out := runGate(t, "check-bundle-channel-kinds-sync.sh", root)
+	if code == 0 {
+		t.Fatalf("check-bundle-channel-kinds-sync.sh exited 0 with http_mirror removed from "+
+			"the frontend picker while the backend package remains — the gate cannot fail.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "http_mirror") {
 		t.Fatalf("gate failed, but its output does not mention the expected defect "+
 			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
 	}
