@@ -1086,8 +1086,21 @@ and not a nice-to-have.
   tool denied. It also silently skips unparseable log lines and never
   asserts that any line parsed.
 - **`Graph_*` / `Workflows_*` RPCs are not routed in served mode.**
-  `check-serve-dispatch-drift.sh` is informational (exit 0) unless
-  `SERVE_DRIFT_GATE=1`, so the gap accumulates quietly.
+  ~~`check-serve-dispatch-drift.sh` is informational (exit 0) unless
+  `SERVE_DRIFT_GATE=1`, so the gap accumulates quietly.~~ **CLOSED
+  2026-08-21 (I15, `served-mode-is-a-real-mode-01PMZ707` WP02).** The gate
+  now defaults to `SERVE_DRIFT_GATE=1` (both directions —
+  bindings-without-a-dispatch-case and dispatch-case-without-a-binding),
+  seeded with `scripts/ci/allowlists/i15-serve-dispatch-{gap,reverse}.txt`
+  (419 forward / 5 reverse entries at promotion). `Graph_*` and
+  `Workflows_*` still have no serve dispatch case — that routing decision
+  is explicitly OUT of this mission's scope (spec.md §2, D-701: routing
+  `Graph_*` would be new capability work, not a parity fix) — but the gap
+  is now a *named, allowlisted, dated* line per method rather than a
+  silent, unenforced one. Per-method reclassification (which of the 419
+  are `unrouted` / `boundary-panelled` / `gated` / `desktop-only-by-nature`
+  vs. genuinely `untriaged`) is WP07 of the same mission, not yet run as of
+  this entry — see the mission's own report for where the cut landed.
 
 ### 2026-08-14 · Tooling footgun: `rtk proxy grep` truncates on a double pipe
 

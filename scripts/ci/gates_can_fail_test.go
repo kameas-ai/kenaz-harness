@@ -967,6 +967,22 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				"\treturn os." + "WriteFile(path, b, 0o644)\n" +
 				"}\n",
 		},
+		{
+			// served-mode-is-a-real-mode-01PMZ707 WP02 (I15, forward
+			// direction), CLAUDE.md's gate-extension rule + spec §5.2
+			// deliverable 4. A new exported Bindings method with no serve
+			// dispatch case and no allowlist entry — the exact shape 419
+			// real desktop bindings were in before this WP, invisible to
+			// every PR because the pre-promotion script exited 0
+			// unconditionally. GATE is the new default (no env override
+			// needed) — this case is also the proof the default itself
+			// gates, not just --gate/SERVE_DRIFT_GATE=1 opted in by hand.
+			name:       "serve-dispatch-drift/forward-unallowlisted-binding",
+			wantOutput: "Zz_Injected",
+			gate:       "check-serve-dispatch-drift.sh",
+			file:       "core/rpc/bindings.go",
+			append:     "\nfunc (bnd *Bindings) Zz_Injected() {}\n",
+		},
 	}
 
 	for _, tc := range cases {
@@ -1173,6 +1189,70 @@ func TestAuditStoreBeforeRetentionGate_PlantedStoreRemovalFails(t *testing.T) {
 	if !strings.Contains(out, "NewLocalRetentionScheduler(") {
 		t.Fatalf("gate failed, but its output does not mention the expected defect "+
 			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+}
+
+// TestServeDispatchDriftGate_PlantedReverseCaseFires is the reverse-direction
+// planted-violation proof for check-serve-dispatch-drift.sh (I15,
+// served-mode-is-a-real-mode-01PMZ707 WP02, spec §5.2 deliverable 4). The
+// shared plant() helper's append mode only supports appending at the END of
+// a file, which for this gate's forward direction is fine (a new top-level
+// func in bindings.go) but would leave server.go with a bare `case` clause
+// outside any switch — syntactically foreign Go, sufficient for THIS gate
+// (a pure grep, not a build) but a needlessly fragile plant when the real
+// switch is one string-replace away. This does its own read-mutate-restore
+// cycle, inserting the planted case INSIDE the dispatch switch, immediately
+// before its `default:` arm, mirroring
+// TestToolContainmentUnconditionalGate_PlantedConditionalWrapperFails and
+// TestAuditStoreBeforeRetentionGate_PlantedStoreRemovalFails above.
+//
+// The case name (Zz_Injected) intentionally matches the forward-direction
+// case's planted binding name in the table above — this test proves the
+// REVERSE direction (a dispatch case with no Bindings method) independently
+// of that one; the two never run with both plants live at once, so there is
+// no real Zz_Injected binding for this case to (correctly) match against.
+func TestServeDispatchDriftGate_PlantedReverseCaseFires(t *testing.T) {
+	root := repoRoot(t)
+	serverPath := filepath.Join(root, "core", "serve", "server.go")
+
+	orig, err := os.ReadFile(serverPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", serverPath, err)
+	}
+
+	const target = "\tdefault:\n\t\t// FR-005: no fake success"
+	if !strings.Contains(string(orig), target) {
+		t.Fatalf("expected dispatch-switch default arm not found — server.go's dispatch switch "+
+			"may have moved; update this test and the gate together:\n%q", target)
+	}
+	// A case with no Bindings method of the same name — the exact shape a
+	// typo'd case string, or an orphaned served-only method whose binding
+	// was since deleted, produces.
+	mutated := "\tcase \"Zz_Injected\":\n\t\treturn nil, nil\n\n" + target
+	newContent := strings.Replace(string(orig), target, mutated, 1)
+
+	if err := os.WriteFile(serverPath, []byte(newContent), 0o644); err != nil {
+		t.Fatalf("writing mutated server.go: %v", err)
+	}
+	defer func() {
+		if err := os.WriteFile(serverPath, orig, 0o644); err != nil {
+			t.Errorf("restoring server.go: %v — WORKING TREE IS DIRTY", err)
+		}
+	}()
+
+	code, out := runGate(t, "check-serve-dispatch-drift.sh", root)
+	if code == 0 {
+		t.Fatalf("check-serve-dispatch-drift.sh exited 0 with a dispatch case (Zz_Injected) that "+
+			"has no matching Bindings method and no reverse-allowlist entry — the gate cannot fail "+
+			"on the reverse direction.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "Zz_Injected") {
+		t.Fatalf("gate failed, but its output does not mention the planted case name "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+	if !strings.Contains(out, "REVERSE") {
+		t.Fatalf("gate failed, but not on the REVERSE-direction check — the forward-direction "+
+			"check may have coincidentally also failed, which would not prove this direction works:\n%s", out)
 	}
 }
 
