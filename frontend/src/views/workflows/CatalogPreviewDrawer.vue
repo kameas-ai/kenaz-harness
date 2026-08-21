@@ -64,10 +64,17 @@ const hasMissingCreds = computed(
   () => (preview.value?.entry.requiresCredentials ?? []).length > 0,
 );
 
-function credStatus(cred: string): 'missing' | 'configured' {
-  const missing = preview.value?.entry.requiresCredentials ?? [];
-  return missing.includes(cred) ? 'missing' : 'configured';
-}
+// automation-actually-runs-01PMZ404 UNIT-10: `requiresCredentials` is
+// ALREADY the server-computed missing set — its Go doc comment
+// (core/workflows/catalog/catalog.go Entry.RequiresCredentials) says
+// "MCP server names ... NOT already in the recipe registry". The old
+// credStatus() checked `missing.includes(cred)` against the very array
+// `cred` was drawn from in the v-for below, which is true for every
+// element by construction — the 'configured' branch was unreachable.
+// There is no wire field carrying a "these ARE configured" list to
+// render a genuine green chip against, so every item in this section is
+// 'missing' by definition; the fix is to stop pretending otherwise
+// rather than to keep a check that can never go the other way.
 
 async function install() {
   if (!props.entry) return;
@@ -176,15 +183,10 @@ function formatCost(usd: number): string {
               <span
                 v-for="cred in preview.entry.requiresCredentials"
                 :key="cred"
-                class="rounded-full px-2 py-0.5 font-ui text-xs"
-                :class="
-                  credStatus(cred) === 'missing'
-                    ? 'bg-signal-danger-soft text-signal-danger'
-                    : 'bg-signal-ok-soft text-signal-ok'
-                "
+                class="rounded-full bg-signal-danger-soft px-2 py-0.5 font-ui text-xs text-signal-danger"
                 :data-testid="`catalog-cred-${cred}`"
               >
-                {{ cred }} — {{ credStatus(cred) === 'missing' ? 'missing' : 'configured' }}
+                {{ cred }} — missing
               </span>
             </div>
           </section>

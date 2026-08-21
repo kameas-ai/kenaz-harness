@@ -11,9 +11,16 @@ import (
 
 // RecipeRegistry is the narrow read-only interface the catalog uses to
 // decide which mcp_call.server references are already configured.
-// Satisfied by *recipes.MergedCatalog and fakes in tests.
+//
+// The production implementation (core/rpc's wfRecipeRegistryAdapter) is
+// backed by recipes.EnabledRecipes — the installed-server list — NOT
+// *recipes.MergedCatalog, which was the wrong registry: MergedCatalog is
+// the full shipped+registry+user catalog (installed or not), so a Has()
+// answering from it would report every cataloged recipe as configured
+// regardless of install state (automation-actually-runs-01PMZ404
+// UNIT-10, spec X-2 / X-8).
 type RecipeRegistry interface {
-	// Has reports whether serverName is a known recipe in the registry.
+	// Has reports whether serverName is an installed (enabled) recipe.
 	Has(serverName string) bool
 }
 
@@ -28,6 +35,19 @@ type Config struct {
 	// RecipeRegistry, when non-nil, is used to detect missing credentials.
 	// Credentials for mcp_call steps that reference a serverName not in
 	// the registry are reported in InstalledRef.MissingCredentials.
+	//
+	// What "missing credentials" actually measures (automation-actually-
+	// runs-01PMZ404 UNIT-10): whether the server is INSTALLED (an
+	// EnabledRecipes entry), not whether its keychain-backed credential
+	// values are still present right now. Install requires every
+	// Required EnvKey to be supplied before the recipe is enabled
+	// (core/rpc/views/tools/impl.go's InstallRecipe), so "installed"
+	// is a true statement about credentials at install time; it does not
+	// catch a credential later revoked or deleted from the keychain
+	// out-of-band. Renaming the wire field to something more precise
+	// (e.g. MissingServers) needs a `wails generate module` bindings
+	// regen this mission's sandbox explicitly may not run — tracked as a
+	// follow-up, not resolved here.
 	RecipeRegistry RecipeRegistry
 }
 

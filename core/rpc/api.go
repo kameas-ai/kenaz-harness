@@ -2513,9 +2513,18 @@ func New(c *core.Core, opts ...Option) *API {
 		// the same Store + Scheduler constructed above so Install can
 		// persist and arm schedules. nil Store / Scheduler degrade
 		// gracefully inside the catalog implementation.
+		//
+		// automation-actually-runs-01PMZ404 UNIT-10: RecipeRegistry was
+		// never assigned, so every mcp_call.server reported as missing
+		// regardless of install state — the catalog preview drawer's
+		// credential chip could only ever render red. wfRecipeRegistryAdapter
+		// re-reads recipes.enabled.json per call (dataDir=="" degrades to
+		// Has()==false, matching the prior always-missing behaviour on the
+		// test-chassis / disabled path).
 		wfCatalog := wfcatalogpkg.New(wfcatalogpkg.Config{
-			Store:     wfStore,
-			Scheduler: sched,
+			Store:          wfStore,
+			Scheduler:      sched,
+			RecipeRegistry: &wfRecipeRegistryAdapter{dataDir: dataDir},
 		})
 		// WP01 (workflows-finalization-01NWFX01): wire a concrete MCPCaller
 		// and LLMStreamer into the workflow engine so mcp_call and model_turn
