@@ -359,7 +359,30 @@ while IFS=$'\t' read -r file name; do
       continue
     fi
   fi
+  # PRESENCE first, ARGUMENT second. These are different questions and
+  # conflating them produced a false positive the day this clause shipped.
+  #
+  # `[^()]*` cannot match an argument that is itself a call. The gate's own
+  # header documents that hole — and bundle-download-and-verify-01PMZ909
+  # walked straight into it hours later with
+  #   bundle.WithGate(a.cedarGate())
+  # which is CORRECTLY wired. The old single-regex form found no match and
+  # reported "declared but never called", i.e. it accused a live Cedar gate
+  # of being absent. A gate that fires on correct code gets deleted, taking
+  # its real coverage with it.
+  #
+  # So: first ask whether the option is called AT ALL (argument shape
+  # irrelevant). Only if it is do we try to read the argument, and a nested
+  # call is treated as "not a literal permit" — which is right, since
+  # `nil` and `cedar.AllowAll{}` are the shapes clause 4 exists to catch and
+  # neither contains parentheses.
+  called=$(printf '%s' "$api_collapsed" | grep -cE "${impalias}\.${name}\(" || true)
   call=$(printf '%s' "$api_collapsed" | grep -oE "${impalias}\.${name}\([^()]*\)" | head -1 || true)
+  if [[ "${called:-0}" -gt 0 && -z "$call" ]]; then
+    # Called with a nested-call argument (e.g. a.cedarGate()). Not a
+    # literal permit; nothing for clause 4 to flag.
+    continue
+  fi
   if [[ -z "$call" ]]; then
     violations="${violations}${file}: ${name} is declared but ${API_FILE} never calls ${impalias}.${name}(...) — the option is never applied, so the field it sets keeps its zero value (clause 4)"$'\n'
     continue
