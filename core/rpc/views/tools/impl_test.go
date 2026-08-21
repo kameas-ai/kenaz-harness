@@ -255,6 +255,142 @@ func testCatalog(id string) *recipes.Catalog {
 	return &recipes.Catalog{Version: 1, Recipes: []recipes.Recipe{testRecipe(id)}}
 }
 
+// fakeAuditEmitter records AuditEmitter.Emit calls in a thread-safe
+// slice. Race-safe per CLAUDE.md's canonical fake pattern: reads only
+// ever go through snapshot().
+type fakeAuditEmitter struct {
+	mu    sync.Mutex
+	calls []auditCall
+}
+
+type auditCall struct {
+	kind  string
+	attrs map[string]any
+}
+
+func (f *fakeAuditEmitter) Emit(_ context.Context, kind string, attrs map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, auditCall{kind: kind, attrs: attrs})
+}
+
+func (f *fakeAuditEmitter) snapshot() []auditCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]auditCall, len(f.calls))
+	copy(out, f.calls)
+	return out
+}
+
+// TestInstallRecipe_EmitsAudit, TestUninstallRecipe_EmitsAudit and
+// TestForgetRecipeKey_EmitsAudit close the coverage gap recorded in
+// docs/unwired-ledger.md's "branch.created is audited on one path and
+// not the other" entry (audit-that-tells-the-truth-01PMZA10 WP06): the
+// original review found that no test in this package ever set
+// Config.Audit, so package tests would pass identically whether or not
+// the three a.emit(...) call sites (impl.go:401,649,669) were actually
+// wired to a real emitter. Unlike core/rpc/views/branches's legacy
+// path, these three sites were already correctly wired — this is
+// closing the evidence gap the ledger flagged, not fixing a functional
+// bug.
+func TestInstallRecipe_EmitsAudit(t *testing.T) {
+	t.Parallel()
+	cat := testCatalog("test-recipe")
+	em := &fakeAuditEmitter{}
+	backend := secrets.NewMemoryBackend()
+	api := New(Config{
+		Catalog:  cat,
+		Enabled:  &recipes.EnabledRecipes{},
+		Pool:     newFakePool(),
+		Secrets:  backend,
+		Keychain: &fixedKeychain{backend: backend},
+		DataDir:  t.TempDir(),
+		Audit:    em,
+	})
+
+	if _, err := api.InstallRecipe(context.Background(), "test-recipe", map[string]string{"TEST_API_KEY": "x"}, nil); err != nil {
+		t.Fatalf("InstallRecipe: %v", err)
+	}
+
+	calls := em.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("audit calls = %v, want exactly 1 mcp.recipe.installed", calls)
+	}
+	if calls[0].kind != "mcp.recipe.installed" {
+		t.Errorf("kind = %q, want %q", calls[0].kind, "mcp.recipe.installed")
+	}
+	if calls[0].attrs["recipe_id"] != "test-recipe" {
+		t.Errorf("attrs[recipe_id] = %v, want %q", calls[0].attrs["recipe_id"], "test-recipe")
+	}
+}
+
+func TestUninstallRecipe_EmitsAudit(t *testing.T) {
+	t.Parallel()
+	cat := testCatalog("test-recipe")
+	em := &fakeAuditEmitter{}
+	backend := secrets.NewMemoryBackend()
+	api := New(Config{
+		Catalog:  cat,
+		Enabled:  &recipes.EnabledRecipes{},
+		Pool:     newFakePool(),
+		Secrets:  backend,
+		Keychain: &fixedKeychain{backend: backend},
+		DataDir:  t.TempDir(),
+		Audit:    em,
+	})
+	if _, err := api.InstallRecipe(context.Background(), "test-recipe", map[string]string{"TEST_API_KEY": "x"}, nil); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	if err := api.UninstallRecipe(context.Background(), "test-recipe"); err != nil {
+		t.Fatalf("Uninstall: %v", err)
+	}
+
+	var uninstallCalls []auditCall
+	for _, c := range em.snapshot() {
+		if c.kind == "mcp.recipe.uninstalled" {
+			uninstallCalls = append(uninstallCalls, c)
+		}
+	}
+	if len(uninstallCalls) != 1 {
+		t.Fatalf("mcp.recipe.uninstalled calls = %v, want exactly 1", uninstallCalls)
+	}
+	if uninstallCalls[0].attrs["recipe_id"] != "test-recipe" {
+		t.Errorf("attrs[recipe_id] = %v, want %q", uninstallCalls[0].attrs["recipe_id"], "test-recipe")
+	}
+}
+
+func TestForgetRecipeKey_EmitsAudit(t *testing.T) {
+	t.Parallel()
+	backend := secrets.NewMemoryBackend()
+	backend.SetEntry(secrets.RefKeychain, recipes.KeychainLocator("brave-search", "BRAVE_API_KEY"), []byte("staged"))
+	em := &fakeAuditEmitter{}
+	api := New(Config{
+		Catalog:   testCatalog("brave-search"),
+		Enabled:   &recipes.EnabledRecipes{},
+		Pool:      newFakePool(),
+		Secrets:   backend,
+		Forgetter: &recordingForgetter{backend: backend},
+		DataDir:   t.TempDir(),
+		Audit:     em,
+	})
+
+	if err := api.ForgetRecipeKey(context.Background(), "brave-search", "BRAVE_API_KEY"); err != nil {
+		t.Fatalf("ForgetRecipeKey: %v", err)
+	}
+
+	calls := em.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("audit calls = %v, want exactly 1 mcp.recipe.key_forgotten", calls)
+	}
+	if calls[0].kind != "mcp.recipe.key_forgotten" {
+		t.Errorf("kind = %q, want %q", calls[0].kind, "mcp.recipe.key_forgotten")
+	}
+	if calls[0].attrs["recipe_id"] != "brave-search" || calls[0].attrs["env_name"] != "BRAVE_API_KEY" {
+		t.Errorf("attrs = %v, want recipe_id=brave-search env_name=BRAVE_API_KEY", calls[0].attrs)
+	}
+}
+
 func TestInstallRecipe_MissingRequiredEnvFails(t *testing.T) {
 	t.Parallel()
 	cat := testCatalog("test-recipe")

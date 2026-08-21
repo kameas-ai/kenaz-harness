@@ -131,14 +131,18 @@ const (
 	KindUpdateSkipped    Kind = "update.skipped"
 	KindUpdateFailed     Kind = "update.failed"
 
-	// KindBranchCreated fires when a branch is created via either the
-	// explicit "Branch from this turn" path or the implicit edit-and-resend
-	// path (branching-ux-polish-01KQ8TD7 WP01). Payload:
-	// BranchCreatedPayload.
+	// KindBranchCreated fires on every branch creation, both the
+	// explicit "Branch from this turn" path and the legacy/implicit
+	// path (branching-ux-polish-01KQ8TD7 WP01; the legacy path's emit
+	// was added by audit-that-tells-the-truth-01PMZA10 WP06 — it
+	// previously emitted nothing). Payload: BranchCreatedPayload.
 	//
 	// CreationPath discriminates:
 	//   "explicit"    — user chose "Branch from this turn" in the menu.
 	//   "edit_resend" — implicit fork from the edit-and-resend flow.
+	//   "unknown"     — caller did not specify (today: the ordinary
+	//                   "+ Fork" button, which sends neither
+	//                   ParentMessageID nor CreationPath).
 	KindBranchCreated Kind = "branch.created"
 
 	// KindSlashCommandRun fires when a user-defined slash command is
@@ -1010,7 +1014,10 @@ type WorkflowNetworkFetchPayload struct {
 // BranchCreatedPayload carries signalling for KindBranchCreated
 // (branching-ux-polish-01KQ8TD7 WP01). Emitted from both creation
 // paths so the audit view can show two distinct events after the
-// manual acceptance smoke.
+// manual acceptance smoke. As of audit-that-tells-the-truth-01PMZA10
+// WP06 the legacy (non-explicit-parent-message) path also emits — it
+// previously emitted nothing, which meant the ordinary "+ Fork" flow
+// produced zero audit trail.
 //
 // Privacy invariant: ParentMessageID is a stable opaque id (no content
 // bytes). Neither session names nor message bodies are included here.
@@ -1018,7 +1025,9 @@ type BranchCreatedPayload struct {
 	ParentSessionID string `json:"parent_session_id"`
 	ParentMessageID string `json:"parent_message_id,omitempty"`
 	BranchSessionID string `json:"branch_session_id"`
-	// CreationPath is "explicit" | "edit_resend".
+	// CreationPath is "explicit" | "edit_resend" | "unknown" — mirrors
+	// conversation.Branch.CreationPath (core/conversation/types.go),
+	// which is where the value actually comes from.
 	CreationPath string `json:"creation_path"`
 }
 

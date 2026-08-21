@@ -2,17 +2,43 @@ package branches
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
 
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/context/audit"
 	"github.com/kameas-ai/kenaz-harness/core/conversation"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 )
+
+// fakeAuditEmitter records audit.Event emissions in a thread-safe slice.
+// Race-safe per CLAUDE.md's canonical fake pattern: reads only ever go
+// through snapshot().
+type fakeAuditEmitter struct {
+	mu     sync.Mutex
+	events []audit.Event
+}
+
+func (f *fakeAuditEmitter) Emit(_ context.Context, e audit.Event) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.events = append(f.events, e)
+	return nil
+}
+
+func (f *fakeAuditEmitter) snapshot() []audit.Event {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]audit.Event, len(f.events))
+	copy(out, f.events)
+	return out
+}
 
 func newTestStack(t *testing.T) (*API, *session.Manager, *conversation.Manager) {
 	t.Helper()
@@ -36,6 +62,162 @@ func newTestStack(t *testing.T) (*API, *session.Manager, *conversation.Manager) 
 		Recommender:   rec,
 	})
 	return api, sessMgr, convMgr
+}
+
+// TestAPI_CreateBranch_LegacyPathEmitsAudit is the falsifying test for
+// audit-that-tells-the-truth-01PMZA10 WP06 / docs/unwired-ledger.md's
+// "branch.created is audited on one path and not the other" finding.
+//
+// The ordinary "+ Fork" button flow (CreateBranchModal.vue) never sets
+// ParentMessageID, which routes CreateBranch through the "legacy" branch
+// below rather than CreateBranchAtMessage. Before this WP's fix, that
+// branch never called audit.MustEmit at all — so the common case produced
+// zero audit trail while only the rare explicit-parent-message path was
+// recorded. Run against the pre-fix code, this test fails with
+// "no branch.created event reached the configured audit emitter; got []",
+// which is the exact failure this test is designed to catch.
+func TestAPI_CreateBranch_LegacyPathEmitsAudit(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, _ := newTestStack(t)
+	em := &fakeAuditEmitter{}
+	api.cfg.Audit = em
+	ctx := context.Background()
+	parent, err := sessMgr.Create(ctx, "trunk")
+	if err != nil {
+		t.Fatalf("create parent: %v", err)
+	}
+
+	br, err := api.CreateBranch(ctx, CreateBranchOptions{
+		ParentSessionID: parent.ID,
+		Title:           "side question",
+	})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+
+	var found *audit.Event
+	for _, e := range em.snapshot() {
+		if e.Kind == audit.KindBranchCreated {
+			ev := e
+			found = &ev
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("no branch.created event reached the configured audit emitter; got %v", em.snapshot())
+	}
+	var payload audit.BranchCreatedPayload
+	if err := json.Unmarshal(found.Payload, &payload); err != nil {
+		t.Fatalf("unmarshal BranchCreatedPayload: %v", err)
+	}
+	if payload.ParentSessionID != parent.ID {
+		t.Errorf("payload.ParentSessionID = %q, want %q", payload.ParentSessionID, parent.ID)
+	}
+	if payload.BranchSessionID != br.ChildSessionID {
+		t.Errorf("payload.BranchSessionID = %q, want %q", payload.BranchSessionID, br.ChildSessionID)
+	}
+	if payload.ParentMessageID != "" {
+		t.Errorf("payload.ParentMessageID = %q, want empty (legacy path has no anchor message)", payload.ParentMessageID)
+	}
+	// The legacy path never set opts.CreationPath, so the manager's own
+	// default ("unknown") is what should reach both storage and the
+	// audit payload — see conversation.Manager.CreateBranch.
+	if payload.CreationPath != "unknown" {
+		t.Errorf("payload.CreationPath = %q, want %q", payload.CreationPath, "unknown")
+	}
+}
+
+// TestAPI_CreateBranch_LegacyPathThreadsCreationPath verifies that a
+// caller-supplied CreationPath (e.g. "edit_resend" from the edit-and-
+// resend flow) actually reaches both the persisted branch row and the
+// audit event, instead of being silently dropped by the legacy path's
+// ForkOptions construction.
+func TestAPI_CreateBranch_LegacyPathThreadsCreationPath(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, _ := newTestStack(t)
+	em := &fakeAuditEmitter{}
+	api.cfg.Audit = em
+	ctx := context.Background()
+	parent, err := sessMgr.Create(ctx, "trunk")
+	if err != nil {
+		t.Fatalf("create parent: %v", err)
+	}
+
+	br, err := api.CreateBranch(ctx, CreateBranchOptions{
+		ParentSessionID: parent.ID,
+		Title:           "resend with edits",
+		CreationPath:    "edit_resend",
+	})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	_ = br
+
+	var found *audit.Event
+	for _, e := range em.snapshot() {
+		if e.Kind == audit.KindBranchCreated {
+			ev := e
+			found = &ev
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("no branch.created event reached the configured audit emitter; got %v", em.snapshot())
+	}
+	var payload audit.BranchCreatedPayload
+	if err := json.Unmarshal(found.Payload, &payload); err != nil {
+		t.Fatalf("unmarshal BranchCreatedPayload: %v", err)
+	}
+	if payload.CreationPath != "edit_resend" {
+		t.Errorf("payload.CreationPath = %q, want %q (caller-supplied value must not be dropped)", payload.CreationPath, "edit_resend")
+	}
+}
+
+// TestAPI_CreateBranch_ExplicitPathStillEmitsAudit pins the existing
+// explicit-fork behaviour (unchanged by this WP) so a future regression
+// on the shared emit call is caught by the same test file as the legacy
+// path fix.
+func TestAPI_CreateBranch_ExplicitPathStillEmitsAudit(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, _ := newTestStack(t)
+	em := &fakeAuditEmitter{}
+	api.cfg.Audit = em
+	ctx := context.Background()
+	parent, err := sessMgr.Create(ctx, "trunk")
+	if err != nil {
+		t.Fatalf("create parent: %v", err)
+	}
+	msg, err := sessMgr.AppendMessage(ctx, parent.ID, session.Message{Role: session.RoleUser, Content: "hi"})
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	if _, err := api.CreateBranch(ctx, CreateBranchOptions{
+		ParentSessionID: parent.ID,
+		ParentMessageID: msg.ID,
+		Title:           "explicit fork",
+	}); err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+
+	var found *audit.Event
+	for _, e := range em.snapshot() {
+		if e.Kind == audit.KindBranchCreated {
+			ev := e
+			found = &ev
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("no branch.created event reached the configured audit emitter; got %v", em.snapshot())
+	}
+	var payload audit.BranchCreatedPayload
+	if err := json.Unmarshal(found.Payload, &payload); err != nil {
+		t.Fatalf("unmarshal BranchCreatedPayload: %v", err)
+	}
+	if payload.CreationPath != "explicit" {
+		t.Errorf("payload.CreationPath = %q, want %q", payload.CreationPath, "explicit")
+	}
 }
 
 func TestAPI_CreateBranch_HappyPath(t *testing.T) {

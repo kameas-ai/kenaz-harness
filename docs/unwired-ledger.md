@@ -1997,6 +1997,41 @@ are carried elsewhere in the same PR. That reasoning is sound and the
 release shipped; the owner gap is fixed here rather than left as a second
 lie about the first.
 
+**RESOLVED 2026-08-21, ZA10 WP06.** `CreateBranch`'s legacy path
+(`core/rpc/views/branches/impl.go`) now calls `audit.MustEmit(...,
+audit.KindBranchCreated, ...)` immediately before `publishBranchCreated`,
+using `br.CreationPath` (which `conversation.Manager.CreateBranch` already
+resolves to `"unknown"` when the caller specifies nothing — the ordinary
+"+ Fork" case today). The legacy path's `ForkOptions` construction was also
+silently dropping `opts.CreationPath`, so a caller-supplied
+`"edit_resend"` never reached storage either; both are now threaded
+through. `TestAPI_CreateBranch_LegacyPathEmitsAudit` and
+`TestAPI_CreateBranch_LegacyPathThreadsCreationPath` were written first and
+confirmed to fail against the pre-fix code with "no branch.created event
+reached the configured audit emitter; got []"; `TestAPI_CreateBranch_
+ExplicitPathStillEmitsAudit` pins the already-correct explicit path so a
+regression on the shared emit call is caught in the same file.
+
+Spy-emitter coverage was also added for `tools` (`TestInstallRecipe_
+EmitsAudit`, `TestUninstallRecipe_EmitsAudit`, `TestForgetRecipeKey_
+EmitsAudit` in `core/rpc/views/tools/impl_test.go`) — unlike `branches`,
+these three `a.emit(...)` call sites (`impl.go:401,649,669`) were already
+correctly wired; this closes the evidence gap without a functional
+change.
+
+`update` needed no fix and no new test: `core/rpc/views/update` (the RPC
+view) has no `Config.Audit` field at all — it wraps an already-constructed
+`coreupdate.Service`, injected in by `core/rpc/api.go`, and does not itself
+own any emit call. The actual audit owner is `core/update/audit.go`'s six
+`audit.MustEmit` sites in the `core/update` package (not
+`core/rpc/views/update`), which already have full spy-emitter coverage via
+`core/update/integration_test.go` (kind-ordering assertions across all six
+`Kind*` values) and a live, non-nil emitter at the production construction
+site (`core/rpc/api.go:2645-2654`, itself a ZA10 UNIT-5 fix, already
+shipped). The ledger's "three packages" framing conflated the RPC-view
+wrapper with its underlying service; once that boundary is drawn, `update`
+was never actually missing coverage.
+
 ## Drained
 
 ### 2026-08-19 · CLOSED — the missing-upgrade-snapshot hole is now gated
