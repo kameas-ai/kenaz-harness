@@ -487,7 +487,7 @@ func llmRegistryOverDataDir(t *testing.T, dataDir string) corellm.Registry {
 	cedarEngine := buildCedarEngineOrNil(dataDir)
 	stack := newLLMStack(c, NewStreamBroker(NewMultiEmitter()), newPersonalStore(c),
 		nil, nil, func() bool { return false }, nil, nil, nil, nil, nil, nil, nil,
-		nil, nil, nil, nil, nil, nil, nil, nil, cedarEngine)
+		nil, nil, nil, nil, nil, nil, nil, nil, cedarEngine, nil)
 	if stack.reg == nil {
 		t.Fatal("newLLMStack produced no registry — construction changed")
 	}

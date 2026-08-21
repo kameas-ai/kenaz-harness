@@ -10,9 +10,18 @@ import (
 	"time"
 )
 
-// spawnBackground executes a bash command asynchronously. It spawns the
-// process, confirms it is alive within 100 ms, registers it in the task
-// registry via t.backgroundSpawn, then returns immediately with
+// spawnBackground executes a bash command asynchronously. It registers
+// the task in the task registry via t.backgroundSpawn BEFORE the process
+// starts (subagent-control-and-background-tasks-01PMZB11 UNIT-3) — the
+// task id has to exist first so the stdout/stderr writers can be
+// attached to cmd.Stdout/cmd.Stderr ahead of cmd.Start(). Registering
+// after Start(), as this function used to, means the writers can never
+// be attached post-hoc and every task's captured output is permanently
+// empty (scripts/ci/allowlists/i11-unregistered-builtin-tools.txt named
+// this exact defect).
+//
+// It spawns the process, confirms it is alive within 100 ms, reports the
+// real PID once known, then returns immediately with
 // {task_id, status:"running"}.
 //
 // The goroutine launched here monitors the process and calls
@@ -23,13 +32,45 @@ func (t *Tool) spawnBackground(ctx context.Context, commandLine, cwd string, tim
 		shell = "/bin/bash"
 	}
 
+	sessionID := ""
+	if t.sessionIDFromCtx != nil {
+		sessionID = t.sessionIDFromCtx(ctx)
+	}
+
+	// Register FIRST, with pid:0 — the id must exist before Start() so
+	// the output writers below can be attached to cmd.Stdout/cmd.Stderr
+	// from the first byte the process writes, not after the fact.
+	taskID, err := t.backgroundSpawn(ctx, sessionID, commandLine, description, 0)
+	if err != nil {
+		return marshalResult(callResult{
+			Stderr:   fmt.Sprintf("bash background: task registration failed: %v", err),
+			ExitCode: -1,
+		})
+	}
+
 	// Spawn without inheriting the parent context's cancellation.
 	// Background tasks live independently of the calling turn's context.
 	cmd := exec.Command(shell, "-l", "-c", commandLine)
 	cmd.Dir = cwd
 
+	// Attach the registry's stdout/stderr writers BEFORE Start() so every
+	// byte the process writes reaches the ring buffer + log file +
+	// __monitor subscribers in real time. A nil BackgroundWriters (no
+	// task registry wired) or a false ok leaves cmd.Stdout/cmd.Stderr
+	// nil, same as before this unit — output is simply discarded, not a
+	// new failure mode.
+	if t.backgroundWriters != nil {
+		if stdout, stderr, ok := t.backgroundWriters(taskID); ok {
+			cmd.Stdout = stdout
+			cmd.Stderr = stderr
+		}
+	}
+
 	// Start the process.
 	if err := cmd.Start(); err != nil {
+		if t.backgroundEnd != nil {
+			t.backgroundEnd(ctx, taskID, -1)
+		}
 		return marshalResult(callResult{
 			Stderr:   fmt.Sprintf("bash background: failed to start: %v", err),
 			ExitCode: -1,
@@ -53,32 +94,21 @@ func (t *Tool) spawnBackground(ctx context.Context, commandLine, cwd string, tim
 	if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
 		// Process already exited within 100 ms (unlikely but handle).
 		exitCode := cmd.ProcessState.ExitCode()
+		if t.backgroundEnd != nil {
+			t.backgroundEnd(ctx, taskID, exitCode)
+		}
 		return marshalResult(callResult{
 			Stderr:   "bash background: process exited immediately",
 			ExitCode: exitCode,
 		})
 	}
 
-	sessionID := ""
-	if t.sessionIDFromCtx != nil {
-		sessionID = t.sessionIDFromCtx(ctx)
-	}
-
 	pid := 0
 	if cmd.Process != nil {
 		pid = cmd.Process.Pid
 	}
-
-	taskID, err := t.backgroundSpawn(ctx, sessionID, commandLine, description, pid)
-	if err != nil {
-		// Registration failed — kill the orphaned process and return error.
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
-		return marshalResult(callResult{
-			Stderr:   fmt.Sprintf("bash background: task registration failed: %v", err),
-			ExitCode: -1,
-		})
+	if t.backgroundSetPID != nil {
+		t.backgroundSetPID(taskID, pid)
 	}
 
 	t.logf("bash.background.spawned",

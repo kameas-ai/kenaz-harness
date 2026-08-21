@@ -170,7 +170,7 @@ func (r *Registry) StdoutWriter(id string) (*lineWriter, bool) {
 		return nil, false
 	}
 	lf, _ := openLogFile(r.logDir, id)
-	return newLineWriter("stdout", e.stdout, lf, e.subs), true
+	return newLineWriter("stdout", e.stdout, lf, func(ln Line) { r.AppendLine(id, ln) }), true
 }
 
 // StderrWriter returns an io.Writer that fans to ring buffer + log file +
@@ -183,7 +183,26 @@ func (r *Registry) StderrWriter(id string) (*lineWriter, bool) {
 		return nil, false
 	}
 	lf, _ := openLogFile(r.logDir, id)
-	return newLineWriter("stderr", e.stderr, lf, e.subs), true
+	return newLineWriter("stderr", e.stderr, lf, func(ln Line) { r.AppendLine(id, ln) }), true
+}
+
+// SetPID records the OS PID for an already-registered task. Used by
+// bash background mode (subagent-control-and-background-tasks-01PMZB11
+// UNIT-3): the task id must exist BEFORE cmd.Start() so the stdout/
+// stderr writers can be attached ahead of time, which means Register is
+// called with PID:0 and the real PID is only known after Start()
+// succeeds. Returns false when the task is unknown (already terminal
+// and evicted, or a bad id) — nil-safe / best-effort, same as the rest
+// of this package's SQL-adjacent writes.
+func (r *Registry) SetPID(id string, pid int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e, ok := r.entries[id]
+	if !ok {
+		return false
+	}
+	e.pid = pid
+	return true
 }
 
 // End marks the task as completed or failed depending on exitCode, sets

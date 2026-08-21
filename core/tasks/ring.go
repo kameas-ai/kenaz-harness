@@ -92,28 +92,35 @@ func (r *ringBuffer) Tail(n int) string {
 }
 
 // lineWriter wraps an underlying ringBuffer and io.Writer (the task log
-// file) while also broadcasting complete lines to a subscriber list.
-// It accumulates bytes into a scratch buffer, flushes complete lines to
-// subscribers, and writes all bytes to the ring and the optional file.
+// file) while also recording complete lines through record — which is
+// Registry.AppendLine bound to this task's id (subagent-control-and-
+// background-tasks-01PMZB11 UNIT-3). Before this unit, Write only
+// broadcast to LIVE subscribers and never called AppendLine, so
+// Registry.Tail — the mechanism BOTH kenaz__monitor's drain mode and
+// its watch-mode final catch-up call read from (core/tools/monitor/
+// tool.go Tail calls at :227/:267/:337) — returned an empty slice for
+// every task regardless of whether output was captured: AppendLine had
+// zero non-test callers repo-wide. record is what closes that gap;
+// AppendLine assigns the offset and broadcasts, so this type no longer
+// needs its own offset counter or a direct subscriber reference.
 //
 // lineWriter is safe for concurrent writes only via the per-task taskStream
 // which serializes all writes.
 type lineWriter struct {
-	mu          sync.Mutex
-	stream      string      // "stdout" or "stderr"
-	ring        *ringBuffer
-	file        io.Writer   // nil-safe
-	scratch     []byte
-	nextOffset  int64
-	subscribers *subscriberSet
+	mu      sync.Mutex
+	stream  string // "stdout" or "stderr"
+	ring    *ringBuffer
+	file    io.Writer // nil-safe
+	scratch []byte
+	record  func(Line) // nil-safe; records + broadcasts (Registry.AppendLine)
 }
 
-func newLineWriter(stream string, ring *ringBuffer, file io.Writer, subs *subscriberSet) *lineWriter {
+func newLineWriter(stream string, ring *ringBuffer, file io.Writer, record func(Line)) *lineWriter {
 	return &lineWriter{
-		stream:      stream,
-		ring:        ring,
-		file:        file,
-		subscribers: subs,
+		stream: stream,
+		ring:   ring,
+		file:   file,
+		record: record,
 	}
 }
 
@@ -126,7 +133,7 @@ func (lw *lineWriter) Write(p []byte) (int, error) {
 	if lw.file != nil {
 		_, _ = lw.file.Write(p)
 	}
-	// Accumulate and broadcast complete lines.
+	// Accumulate and record complete lines.
 	lw.scratch = append(lw.scratch, p...)
 	for {
 		idx := strings.IndexByte(string(lw.scratch), '\n')
@@ -135,13 +142,9 @@ func (lw *lineWriter) Write(p []byte) (int, error) {
 		}
 		text := string(lw.scratch[:idx])
 		lw.scratch = lw.scratch[idx+1:]
-		ln := Line{
-			Stream: lw.stream,
-			Text:   text,
-			Offset: lw.nextOffset,
+		if lw.record != nil {
+			lw.record(Line{Stream: lw.stream, Text: text})
 		}
-		lw.nextOffset++
-		lw.subscribers.broadcast(ln)
 	}
 	return len(p), nil
 }

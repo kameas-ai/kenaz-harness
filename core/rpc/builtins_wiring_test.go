@@ -108,6 +108,7 @@ func TestSubagentDispatchNotRegisteredWhenSeamNil(t *testing.T) {
 		nil, // exposureIdx
 		nil, // budget
 		nil, // posture
+		nil, // taskReg
 	)
 
 	for _, name := range registry.Names() {
