@@ -39,10 +39,31 @@ import (
 type LLMProviderAdapter struct {
 	reg corellm.Registry
 	// profileID overrides what gets sent to the registry. The kernel-
-	// side LLMRequest carries `Provider` + `Model`, but the registry
-	// resolves credentials via a profile id — the runner threads the
-	// active session's profile id through the adapter at construction
-	// time so every dispatch lands on the right credentials.
+	// side LLMRequest carries `Provider` + `Model` — the runner threads
+	// the active session's profile id through the adapter at
+	// construction time so every dispatch lands on the right
+	// credentials, since the registry resolves credentials by profile
+	// id, not by provider kind.
+	//
+	// `Model` reaches the wire: Generate() reads req.Model, falling back
+	// to modelOverride, so a node naming a stronger target_model (the
+	// escalation ladder's TargetModel/PlannerModel) actually escalates
+	// (model-settings-reach-the-model-01PMZ101 WP15 / FR-013).
+	//
+	// `Provider` does NOT reach the wire, and this is a documented gap,
+	// not a silent one (spec D-9 option (b)): honouring a request to
+	// switch provider KIND mid-run means resolving req.Provider to a
+	// *different configured profile* of that kind — a profile lookup
+	// this adapter has no access to (it is constructed with exactly one
+	// profileID) and none of the nine core/agentgraph call sites that
+	// build an LLMRequest today ever set Provider to a value naming a
+	// different provider than the session's active one; every
+	// escalation in the shipped graphs (chat_default.yaml's
+	// escalation_ladder node) only ever asks for a stronger MODEL within
+	// the same provider. Blocker: a per-kind profile resolver reachable
+	// from this adapter. Owner: the next mission that gives a graph node
+	// cross-provider escalation as a product requirement — none does
+	// today.
 	profileID string
 	// modelOverride is the per-request model selection from the chat
 	// surface's model picker. Empty means "use the profile's default
@@ -518,9 +539,26 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 	// is for THIS session before the dynamic environment facts and
 	// behavioural bars. (system-prompt-layers WP03/WP04;
 	// first-run-onboarding-01PMOB01 WP02 added the attachments layer)
+	// req.Model wins over a.modelOverride when the kernel names a model
+	// explicitly (model-settings-reach-the-model-01PMZ101 WP15 / FR-013,
+	// spec D-9). Before this fix Generate() ignored req.Model
+	// unconditionally, so every one of the nine LLMRequest{} construction
+	// sites in core/agentgraph that set a stronger target model —
+	// exec_escalation_ladder.go's escalate rung (a.TargetModel) and
+	// replan rung (a.PlannerModel) chief among them — silently landed on
+	// the session's own model instead. commit 602e3bff ("ground the
+	// escalate + escalation-ladder LLM calls") grounded the PROMPTS for
+	// both rungs; this is what grounds the MODEL. A node naming a
+	// target_model is more specific than the session picker, the same
+	// precedence D-4 already gives /effort's knob over the chat-level
+	// reasoning control.
+	model := a.modelOverride
+	if req.Model != "" {
+		model = req.Model
+	}
 	gen := corellm.GenerationRequest{
 		ProfileID: a.profileID,
-		Model:     a.modelOverride,
+		Model:     model,
 		// tmpl is nil: nothing resolves a live ModelProfile on this
 		// request path yet (versioned-model-profile-01PMDL04 WP02+ is
 		// the (provider, model) -> ModelProfile lookup; per-family-
