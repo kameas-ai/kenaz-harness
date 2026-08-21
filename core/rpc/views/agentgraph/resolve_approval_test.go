@@ -271,7 +271,7 @@ func TestResolveApproval_CedarDenyBlocksResolution(t *testing.T) {
 	audit := &fakeAuditEmitter{}
 	mgr, err := graphview.NewManager(
 		graphview.WithDataDir(t.TempDir()),
-		graphview.WithCedarGate(gate),
+		graphview.WithGraphCedarGate(gate),
 		graphview.WithAuditEmitter(audit),
 	)
 	if err != nil {

@@ -90,7 +90,7 @@
 # CLASS: gated -- the affordance carries !isServedMode() (or, for
 # PermissionDialsPanel's pair, WP05's equivalent explicit-failure-state
 # pattern, noted per-entry). WP04's + WP07's own output.
-# 26 entries in 8 group(s).
+# 27 entries.
 
 # Caller(s) ChatInput.vue carry the WP04 served-mode gate.
 "Attachments_AddMedia"
@@ -155,6 +155,18 @@
 "Slash_Execute"
 
 
+
+# CORRECTED 2026-08-22 (finding B2, independent review of PR #306). This
+# was under CLASS: boundary-panelled with the reason "Caller(s)
+# ChatInput.vue, SettingsView.vue span multiple views, ALL of which are
+# inaccessible in served mode". ChatInput.vue IS the served chat surface
+# and renders no boundary panel, so that reason contradicted its own code.
+#
+# The correct class was already true in this same PR: WP04 gave it the
+# explicit-failure-state treatment at ChatInput.vue:351-370 — catch
+# ServedUnsupportedError, hide the paperclip. Gated, not panelled.
+"Settings_GetMultimodalInput"
+
 # CLASS: boundary-panelled -- the only caller (or callers, ALL of them)
 # is/are inside a view that renders NotAvailableInServedMode. Grown by
 # WP03/WP05's panels; classified here by walking actual caller sites
@@ -164,7 +176,7 @@
 # Sec.1.5's six chat affordances, so this pass does not repeat it.
 # Entries are grouped by their exact caller-file SET below (not just by
 # desktop-binding prefix), so identical reasoning is stated once.
-# 187 entries in 52 group(s).
+# 192 entries.
 
 # Caller(s) PeersPanel.vue only reachable from a view that renders
 # NotAvailableInServedMode.
@@ -461,7 +473,6 @@
 # Caller(s) ChatInput.vue, SettingsView.vue span multiple views, ALL of which
 # are inaccessible in served mode (boundary-panelled and/or unrouted and/or
 # gated) -- no single caller reaches this in a served build via any path.
-"Settings_GetMultimodalInput"
 
 # components/settings/KeyboardShortcuts.vue (nested under SettingsView.vue).
 "Settings_GetShortcuts"
@@ -532,6 +543,27 @@
 "Workflows_ScheduleSet"
 
 
+
+# CORRECTED 2026-08-22 (finding B1, independent review of PR #306). These
+# five were in the "zero TS client callers" group under CLASS: unrouted,
+# on evidence that was false — real callers exist at tasks.ts:37,42,51,56
+# and UnitConflictsPanel.vue:92.
+#
+# Behaviour was never wrong: Tasks_* is reached from TasksPanel.vue /
+# TaskOutputViewer.vue under SettingsView, and Unit_ResolveEnshrine from
+# UnitConflictsPanel.vue, all boundary-panelled. Only the CLASS and its
+# stated evidence were wrong — which matters because a wrong class reads as
+# decided and check-serve-gap-classification.sh validates class syntax, not
+# class truth.
+#
+# Note for a future sweep: BackgroundTaskChip.vue has no mounter at all,
+# so it is not what makes these reachable.
+"Tasks_Abort"
+"Tasks_Get"
+"Tasks_List"
+"Tasks_Tail"
+"Unit_ResolveEnshrine"
+
 # CLASS: unrouted -- either the only caller is in a view main-served.ts
 # does not register (Sites_*, Marketplace-only callers), or -- a
 # necessary widening of this class beyond spec Sec.5.7's literal wording --
@@ -540,7 +572,7 @@
 # no caller to be in ANY view. Each such entry says so explicitly (RAN:
 # zero hits) rather than silently reusing the same sentence as a real
 # unrouted-view finding.
-# 115 entries in 6 group(s).
+# 107 entries.
 
 # RAN: zero TS client callers found anywhere in frontend/src (outside
 # harnessClient.ts's own declaration) in either build. Vacuously unrouted.
@@ -589,9 +621,6 @@
 "Onboarding_AcceptHandoffHint"
 "Onboarding_GetHandoffHint"
 "Onboarding_RecordProgress"
-"Planmode_Approve"
-"Planmode_Discard"
-"Planmode_Edit"
 "Policy_Explain"
 "Policy_StartStream"
 "Policy_StopStream"
@@ -612,12 +641,8 @@
 "Settings_SetFSRequestAccessEnabled"
 "Settings_SetMaxAgentTurns"
 "Sites_Status"
-"Tasks_Abort"
 "Tasks_AbortBySession"
-"Tasks_Get"
-"Tasks_List"
 "Tasks_ListBySession"
-"Tasks_Tail"
 "Tools_BeginDeviceAuth"
 "Tools_CheckRecipePrereqs"
 "Tools_ForgetRecipeKey"
@@ -634,7 +659,6 @@
 "Trust_InstallAnchor"
 "Trust_ListAnchors"
 "Trust_ListSecretReferences"
-"Unit_ResolveEnshrine"
 "Workflow_ListJobs"
 "Workflow_StartStream"
 "Workflow_StopStream"
@@ -689,7 +713,7 @@
 # TRANSPORT superseded by a different served-mode mechanism providing the
 # identical user-facing behaviour (Sessions_StartStream/StopStream vs the
 # Sessions_Stream WebSocket) -- noted per-entry which applies.
-# 13 entries in 5 group(s).
+# 13 entries.
 
 # lib/eventLog.ts calls this exclusively via the raw window.go.rpc.Bindings
 # bridge (bypassing harnessClient.ts's overlay entirely) and explicitly no-ops
@@ -746,7 +770,7 @@
 # genuine escalation. This class must shrink release over release (spec
 # AC-717); the next sweep should re-walk these against the tree it finds,
 # not assume this list still holds.
-# 75 entries in 16 group(s).
+# 78 entries.
 
 # Reachable from the LIVE routed chat surface (MarkdownBlock.vue /
 # CodeBlock.vue's "save as artifact" + artifact-chip flow, and SessionsView.vue
@@ -954,3 +978,28 @@
 "Slashcmd_Get"
 "Slashcmd_Run"
 
+
+# CORRECTED 2026-08-22 (finding B1, independent review of PR #306). These
+# three sat in the "zero TS client callers found anywhere in frontend/src"
+# group under CLASS: unrouted. That claim was FALSE and the entries are not
+# vacuous: PlanApprovalModal.vue:59,77,95 calls all three through
+# useHarnessClient(), the modal is imported at SessionsView.vue:30 and
+# mounted at :2124 under `v-if="pendingPlanId && ..."` with NO served guard,
+# and /sessions/:id? IS served-routed (main-served.ts:30-32) while
+# SessionsView renders NotAvailableInServedMode zero times.
+#
+# So in a served deployment the plan-approval modal really appears and all
+# three buttons reject with ServedUnsupportedError. planmode.ts:127 states
+# the triggering event arrives over the served WS bus, so the modal is
+# reachable by the normal path, not a corner case.
+#
+# This is the exact miss the boundary-panelled header promised this pass
+# would not repeat ("the per-view reasoning the 2026-08-18 closing sweep
+# used is exactly what missed §1.5's six chat affordances"). It repeated it
+# for this modal. Recorded that way rather than quietly reclassified.
+#
+# Same treatment as the other live chat-surface affordances above: needs a
+# port-or-gate call. Dated 2026-08-22. Owner: alec.
+"Planmode_Approve"
+"Planmode_Discard"
+"Planmode_Edit"

@@ -109,9 +109,34 @@ if [[ "${#undated[@]}" -gt 0 ]]; then
   fail=1
 fi
 
+# ---- per-class self-count check ----
+#
+# Each "# CLASS:" section states its own entry count. Nothing verified
+# those until 2026-08-22: the independent review of PR #306 (finding N4)
+# found the boundary-panelled header claiming 187 when the section held
+# 188, and the file total claiming 416 against an actual 417.
+#
+# A stated count that drifts is the same failure as a stale trip-wire
+# comment: the next reader either trusts a wrong number or learns to
+# ignore the number, and both are worse than having none. Cheap to check,
+# so checked.
+while IFS='|' read -r cls stated actual; do
+  [[ -z "$cls" ]] && continue
+  if [[ "$stated" != "$actual" ]]; then
+    echo "${GATE} FAIL: CLASS ${cls} header says ${stated} entries; the section holds ${actual}." >&2
+    fail=1
+  fi
+done < <(awk '
+  /^# CLASS: / { if (cls != "") print cls "|" stated "|" n; cls=$3; sub(/:$/,"",cls); stated=""; n=0; next }
+  cls != "" && /^# [0-9]+ entries\.$/ { stated=$2; next }
+  cls != "" && /^"/ { n++ }
+  END { if (cls != "") print cls "|" stated "|" n }
+' "$ALLOWLIST")
+
 if [[ "$fail" -ne 0 ]]; then
   echo "${GATE} Fix: give the entry a '# CLASS: <name>' header from {${VALID_CLASSES}}," >&2
-  echo "${GATE} and if untriaged, a reason paragraph naming a date and an 'Owner:'." >&2
+  echo "${GATE} a reason paragraph naming a date and an 'Owner:' if untriaged," >&2
+  echo "${GATE} and keep each section's '# N entries.' line equal to its real count." >&2
   exit 1
 fi
 

@@ -157,12 +157,6 @@ func WithClock(now func() time.Time) ManagerOption {
 	return func(m *Manager) { m.nowFn = now }
 }
 
-// WithCedarGate gates Graph_ResolveApproval (approval-node-01PMZC12
-// UNIT-3). nil is equivalent to omitting the option.
-func WithCedarGate(g cedar.Gate) ManagerOption {
-	return func(m *Manager) { m.cedarGate = g }
-}
-
 // WithAuditEmitter records approval resolutions to the Settings audit
 // panel (approval-node-01PMZC12 UNIT-3). nil is equivalent to omitting
 // the option.

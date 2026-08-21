@@ -2218,12 +2218,12 @@ func New(c *core.Core, opts ...Option) *API {
 	// (session-export-01NDFSEX05 WP02).
 	if c != nil {
 		// audit-that-tells-the-truth-01PMZA10 UNIT-5 (spec R-1, D-9): this
-	// site was owned by NOBODY before this mission — it appears in no
-	// mission's tasks.md — and its emitter param 4 was nil, so
-	// views/sessions/impl.go:1054's KindSessionExport ("fires on every
-	// successful Sessions_Export call", audit.go:205) has never fired.
-	// Shape 1 (contextaudit.Emitter).
-	a.sessionsAPI = sessions.WithExportOpts(a.sessionsAPI, a.cedarGate(), nil, &acpAuditBridge{impl: a.auditImpl})
+		// site was owned by NOBODY before this mission — it appears in no
+		// mission's tasks.md — and its emitter param 4 was nil, so
+		// views/sessions/impl.go:1054's KindSessionExport ("fires on every
+		// successful Sessions_Export call", audit.go:205) has never fired.
+		// Shape 1 (contextaudit.Emitter).
+		a.sessionsAPI = sessions.WithExportOpts(a.sessionsAPI, a.cedarGate(), nil, &acpAuditBridge{impl: a.auditImpl})
 	}
 	if c != nil && a.dispatchPool != nil {
 		// Wire the dispatch pool (all transports) onto Core.MCP so the
@@ -2456,8 +2456,16 @@ func New(c *core.Core, opts ...Option) *API {
 		Recommender:   newBranchRecommender(recommenderCat),
 		// audit-that-tells-the-truth-01PMZA10 UNIT-5: this field was
 		// never set, so branches/impl.go's KindBranchAdvisorAccepted /
-		// KindBranchCreated emit sites (:159, :236, :560, :584) have
-		// never fired. Shape 1 (contextaudit.Emitter).
+		// KindBranchCreated emit sites had never fired. ZA10 WP06 then
+		// added the legacy-path emit at impl.go:257 and shifted the
+		// rest; the sites are :159, :241, :257, :580, :604 as of
+		// 2026-08-22. Shape 1 (contextaudit.Emitter).
+		//
+		// Line numbers in a comment go stale the moment anyone inserts
+		// above them — this one already had (finding N5, review of
+		// PR #306). Kept because they are genuinely useful for a reader
+		// tracing the wiring, corrected because a wrong citation is
+		// worse than none.
 		Audit: &acpAuditBridge{impl: a.auditImpl},
 		// Broker enables LeftRail real-time updates on branch creation
 		// (branch creates a new child session row): v0.5.3 fix.
@@ -7203,12 +7211,6 @@ func newGraphManagerWithDeps(
 		graphview.WithAuthoringEnabled(func() bool {
 			return graphAuthoringEnabledFromSettings(settingsImpl)
 		}),
-		// Graph_ResolveApproval's Cedar gate (approval-node-01PMZC12
-		// UNIT-3) reuses the SAME gate the node-executor policy checks
-		// above use — one process-shared engine, not a second private
-		// copy (the exact bug WP05's hoist fixed for every other gate
-		// site).
-		graphview.WithCedarGate(graphCedarGate),
 		graphview.WithAuditEmitter(approvalAuditEmitter{impl: auditImpl}),
 	}
 
