@@ -3,21 +3,25 @@
  * BundlesView — installed bundles list (NN/SECTION pattern).
  *
  * Shows every bundle pinned in kenaz.lock with its source channel,
- * signature status, and artifact count. Expanding a row calls
+ * VERIFICATION state, and artifact count. Expanding a row calls
  * Bundle_Get and renders the per-artifact name/kind/content-hash
  * triples — payload bytes never traverse the rpc surface.
  *
  * Empty state surfaces a doc link the user can follow when they want
  * to install a bundle (resolver mission ships the resolver itself).
  *
- * v0.3.0 beta also exposes a minimal Install form (local_path channel
- * only) and a per-row Remove affordance. Both call straight through to
+ * The install form offers every channel kind the backend has a
+ * REGISTERED FACTORY for (UNIT-8, bundle-download-and-verify-01PMZ909,
+ * spec §5.7 / tasks.md UNIT-8 step 1) — see CHANNEL_KINDS below for why
+ * this list is hand-maintained rather than fetched from a
+ * Bundle_ListChannelKinds RPC, and check-bundle-channel-kinds-sync.sh
+ * for what keeps it honest. Both call straight through to
  * Bundle_Install / Bundle_Remove on the harness.
  */
-import { onMounted, ref } from 'vue';
+import { onMounted, ref, computed } from 'vue';
 import SettingsShell from '@/views/settings/SettingsShell.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
-import type { Bundle } from '@/lib/types';
+import type { Bundle, TrustAnchor } from '@/lib/types';
 // fleet-share-and-sync-01NDFSEX14 WP03 — Publish to team catalog
 import PublishDialog from '@/views/marketplace/PublishDialog.vue';
 import { signedIn } from '@/lib/featureFlags';
@@ -30,10 +34,99 @@ const error = ref<string | null>(null);
 
 const expanded = ref<Record<string, Bundle | undefined>>({});
 
-const installPath = ref('');
+// UNIT-8: the channel picker offers exactly the kinds the backend has a
+// registered channels.Registry factory for — core/bundle/channels/
+// localpath/localpath.go:31 (Kind = "local_path", always registered by
+// bundle.NewDefaultRegistry) and core/bundle/channels/http/http.go:36
+// (Kind = "http_mirror", registered ONLY by core/rpc/api.go's UNIT-7
+// wiring, which is also the only place a Cedar gate exists in front of
+// it — see ActionBundleInstall). There is no RPC that returns this set
+// at runtime: adding one requires regenerating frontend/wailsjs/**,
+// which per this repo's tooling rules only happens via `wails generate
+// module` against an overridden HOME/KENAZ_HARNESS_ENV, a step this
+// change deliberately does not take. check-bundle-channel-kinds-sync.sh
+// (scripts/ci/) greps both this literal list and every core/bundle
+// channel package's `const Kind = "..."` declaration and fails the
+// build the moment they diverge — so an unimplemented (or since-removed)
+// kind can still never survive here, just via a CI gate instead of a
+// live query. Update this array AND run/extend that gate in the same
+// commit that adds or removes a channel package.
+const CHANNEL_KINDS: ReadonlyArray<{ kind: string; label: string; field: 'path' | 'url' }> = [
+  { kind: 'local_path', label: 'local_path — an absolute filesystem path', field: 'path' },
+  { kind: 'http_mirror', label: 'http_mirror — a URL served over HTTP(S)', field: 'url' },
+];
+
+const installKind = ref(CHANNEL_KINDS[0].kind);
+const installLocator = ref('');
 const installBusy = ref(false);
 const installError = ref<string | null>(null);
 const removingId = ref<string | null>(null);
+
+const activeChannel = computed(
+  () => CHANNEL_KINDS.find((c) => c.kind === installKind.value) ?? CHANNEL_KINDS[0],
+);
+
+// UNIT-8: verification state is derived from the SAME field UNIT-4 made
+// honest server-side — Bundle.tier, set from lockfile.LockedBundle.Verified
+// (a real recorded VerifyManifestSignatures result), never from
+// Bundle.signature's mere presence (a locator string an old, pre-UNIT-4
+// lockfile row can carry with Verified defaulting false — AC-008). A row
+// whose signature was verified can ever produce tier "signed" — a
+// "verification failed" state cannot appear in this list at all, because
+// AC-006 refuses the install outright and writes no lockfile row for it.
+function isVerified(b: Bundle): boolean {
+  return b.tier === 'signed' || b.tier.startsWith('signed ');
+}
+
+// ── trust anchors (UNIT-3's writer, UNIT-8's panel) ──────────────────────
+const anchors = ref<readonly TrustAnchor[]>([]);
+const anchorsLoading = ref(false);
+const anchorsError = ref<string | null>(null);
+
+const anchorId = ref('');
+const anchorPeerId = ref('');
+const anchorKeyB64 = ref('');
+const anchorBusy = ref(false);
+const anchorError = ref<string | null>(null);
+
+async function refreshAnchors() {
+  anchorsLoading.value = true;
+  anchorsError.value = null;
+  try {
+    anchors.value = await client.trustAnchors.list();
+  } catch (e) {
+    anchorsError.value = e instanceof Error ? e.message : 'Failed to load trust anchors.';
+    anchors.value = [];
+  } finally {
+    anchorsLoading.value = false;
+  }
+}
+
+async function installAnchor() {
+  anchorError.value = null;
+  const id = anchorId.value.trim();
+  const keyB64 = anchorKeyB64.value.trim();
+  if (!id || !keyB64) {
+    anchorError.value = 'Anchor ID and public key (base64) are required.';
+    return;
+  }
+  anchorBusy.value = true;
+  try {
+    await client.trustAnchors.install({
+      anchorId: id,
+      peerId: anchorPeerId.value.trim() || undefined,
+      keyB64,
+    });
+    anchorId.value = '';
+    anchorPeerId.value = '';
+    anchorKeyB64.value = '';
+    await refreshAnchors();
+  } catch (e) {
+    anchorError.value = e instanceof Error ? e.message : 'Install anchor failed.';
+  } finally {
+    anchorBusy.value = false;
+  }
+}
 
 // ── publish-to-team state (WP03) ─────────────────────────────────────────
 const publishDialogOpen = ref(false);
@@ -86,15 +179,19 @@ async function toggle(id: string) {
 
 async function install() {
   installError.value = null;
-  const path = installPath.value.trim();
-  if (!path) {
-    installError.value = 'Path is required.';
+  const locator = installLocator.value.trim();
+  if (!locator) {
+    installError.value = `${activeChannel.value.field === 'url' ? 'URL' : 'Path'} is required.`;
     return;
   }
   installBusy.value = true;
   try {
-    await client.bundle.install({ kind: 'local_path', path });
-    installPath.value = '';
+    const req =
+      activeChannel.value.field === 'url'
+        ? { kind: installKind.value, url: locator }
+        : { kind: installKind.value, path: locator };
+    await client.bundle.install(req);
+    installLocator.value = '';
     await refresh();
   } catch (e) {
     installError.value = e instanceof Error ? e.message : 'Install failed.';
@@ -118,6 +215,7 @@ async function remove(id: string) {
 
 onMounted(() => {
   void refresh();
+  void refreshAnchors();
 });
 </script>
 
@@ -126,7 +224,7 @@ onMounted(() => {
     number="03"
     section="BUNDLES"
     title="Installed bundles"
-    subtitle="Every bundle pinned in kenaz.lock with its source channel, signature, and artifact count. Bytes live in the local CAS — bundle bytes never leave the device (fleet config-apply ACKs and opted-in telemetry are the only egress when fleet config distribution is active)."
+    subtitle="Every bundle pinned in kenaz.lock with its source channel, verification state, and artifact count. Bytes live in the local CAS — bundle bytes never leave the device (fleet config-apply ACKs and opted-in telemetry are the only egress when fleet config distribution is active)."
   >
     <div v-if="loading" class="px-6 py-4 font-ui text-sm text-ink-muted">
       Loading bundles…
@@ -161,7 +259,7 @@ onMounted(() => {
           <th class="text-left px-4 py-2 font-medium">Name</th>
           <th class="text-left px-4 py-2 font-medium">Version</th>
           <th class="text-left px-4 py-2 font-medium">Source</th>
-          <th class="text-left px-4 py-2 font-medium">Signature</th>
+          <th class="text-left px-4 py-2 font-medium">Verification</th>
           <th class="text-left px-4 py-2 font-medium">Artifacts</th>
           <th class="text-right px-4 py-2 font-medium"></th>
         </tr>
@@ -175,11 +273,21 @@ onMounted(() => {
               {{ b.source || '—' }}
             </td>
             <td class="px-4 py-2">
+              <!--
+                UNIT-8 (spec §5.4/FR-006, G-2 at the frontend layer):
+                derived from Bundle.tier — a REAL recorded
+                VerifyManifestSignatures result (UNIT-4) — never from
+                Bundle.signature's mere presence. A pre-UNIT-4 lockfile
+                row can carry a non-empty signature locator with
+                Verified defaulting false (AC-008); it must render as
+                "Unsigned" here, not "Signed".
+              -->
               <span
                 class="text-[11px] uppercase tracking-[0.12em]"
-                :class="b.signature ? 'text-signal-ok' : 'text-ink-subtle'"
+                :class="isVerified(b) ? 'text-signal-ok' : 'text-ink-subtle'"
+                :data-testid="`bundle-verification-${b.id}`"
               >
-                {{ b.signature ? 'Signed' : 'Unsigned' }}
+                {{ isVerified(b) ? 'Signed' : 'Unsigned' }}
               </span>
             </td>
             <td class="px-4 py-2 text-ink-muted">{{ b.artifactCount }}</td>
@@ -243,27 +351,46 @@ onMounted(() => {
       data-testid="bundle-install-form"
       @submit.prevent="install"
     >
-      <div class="text-ink mb-2">Install a local_path bundle</div>
+      <div class="text-ink mb-2">Install a bundle</div>
       <p class="text-ink-muted mb-3 max-w-prose">
-        Beta scope: point at an absolute filesystem path that contains a
-        <code class="font-mono">kenaz.yaml</code> manifest at its root.
-        The bundle is registered in the lockfile; artifact bytes stay
-        on disk where they already are.
+        Every channel below fetches every declared artifact into the
+        local content-addressed cache and verifies each one against its
+        content hash before the bundle is registered; a mismatch, an
+        unreachable channel, or a rejected signature refuses the install
+        with nothing left behind.
       </p>
+      <div class="flex items-center gap-2 mb-2">
+        <label class="text-ink-muted" for="bundle-install-kind">Channel</label>
+        <select
+          id="bundle-install-kind"
+          v-model="installKind"
+          class="px-2 py-1 font-mono text-[12px] bg-surface-1 text-ink border border-border-muted rounded"
+          :disabled="installBusy"
+          data-testid="bundle-install-kind"
+        >
+          <option v-for="c in CHANNEL_KINDS" :key="c.kind" :value="c.kind">
+            {{ c.label }}
+          </option>
+        </select>
+      </div>
       <div class="flex items-center gap-2">
         <input
-          v-model="installPath"
+          v-model="installLocator"
           type="text"
-          aria-label="Bundle installation path"
-          placeholder="/absolute/path/to/bundle"
+          :aria-label="activeChannel.field === 'url' ? 'Bundle mirror URL' : 'Bundle installation path'"
+          :placeholder="
+            activeChannel.field === 'url'
+              ? 'https://mirror.example.com/bundles/my-bundle'
+              : '/absolute/path/to/bundle'
+          "
           class="flex-1 px-2 py-1 font-mono text-[12px] bg-surface-1 text-ink border border-border-muted rounded"
           :disabled="installBusy"
-          data-testid="bundle-install-path"
+          data-testid="bundle-install-locator"
         />
         <button
           type="submit"
           class="px-3 py-1 text-[11px] bg-accent text-ink hover:bg-accent-muted disabled:opacity-50 rounded"
-          :disabled="installBusy || !installPath.trim()"
+          :disabled="installBusy || !installLocator.trim()"
           data-testid="bundle-install-submit"
         >
           {{ installBusy ? 'Installing…' : 'Install' }}
@@ -278,6 +405,98 @@ onMounted(() => {
         {{ installError }}
       </div>
     </form>
+
+    <!-- UNIT-8: trust anchor management. Without this panel an install
+         refused for "anchor_missing" (UNIT-4) has no user remedy — see
+         core/rpc/views/trustanchor. -->
+    <div class="mt-6 px-6 py-4 border-t border-border-muted font-ui text-[12px]">
+      <div class="text-ink mb-2">Trust anchors</div>
+      <p class="text-ink-muted mb-3 max-w-prose">
+        A signed bundle verifies only against an installed anchor's
+        public key. Anchors persist across restarts.
+      </p>
+      <div v-if="anchorsLoading" class="text-ink-muted">Loading anchors…</div>
+      <div v-else-if="anchorsError" class="text-signal-danger" role="alert">
+        {{ anchorsError }}
+      </div>
+      <div v-else-if="anchors.length === 0" class="text-ink-subtle mb-3">
+        No trust anchors installed.
+      </div>
+      <table v-else class="w-full mb-3" data-testid="anchors-table">
+        <thead class="bg-surface-1 text-ink-muted">
+          <tr>
+            <th class="text-left px-2 py-1 font-medium">Anchor ID</th>
+            <th class="text-left px-2 py-1 font-medium">Kind</th>
+            <th class="text-left px-2 py-1 font-medium">Algorithm</th>
+            <th class="text-left px-2 py-1 font-medium">Fingerprint</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            v-for="a in anchors"
+            :key="a.anchorId"
+            class="border-t border-border-muted"
+            :data-testid="`anchor-row-${a.anchorId}`"
+          >
+            <td class="px-2 py-1 font-mono">{{ a.anchorId }}</td>
+            <td class="px-2 py-1 text-ink-muted">{{ a.kind }}</td>
+            <td class="px-2 py-1 text-ink-muted">{{ a.algorithm }}</td>
+            <td class="px-2 py-1 text-ink-subtle font-mono">
+              {{ a.publicKey.fingerprint.slice(0, 19) }}…
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <form
+        class="flex flex-wrap items-center gap-2"
+        data-testid="anchor-install-form"
+        @submit.prevent="installAnchor"
+      >
+        <input
+          v-model="anchorId"
+          type="text"
+          aria-label="Anchor ID"
+          placeholder="anchor id"
+          class="px-2 py-1 font-mono text-[12px] bg-surface-1 text-ink border border-border-muted rounded"
+          :disabled="anchorBusy"
+          data-testid="anchor-install-id"
+        />
+        <input
+          v-model="anchorPeerId"
+          type="text"
+          aria-label="Peer ID (optional)"
+          placeholder="peer id (optional)"
+          class="px-2 py-1 font-mono text-[12px] bg-surface-1 text-ink border border-border-muted rounded"
+          :disabled="anchorBusy"
+          data-testid="anchor-install-peer"
+        />
+        <input
+          v-model="anchorKeyB64"
+          type="text"
+          aria-label="Public key (base64)"
+          placeholder="public key, base64"
+          class="flex-1 min-w-[16ch] px-2 py-1 font-mono text-[12px] bg-surface-1 text-ink border border-border-muted rounded"
+          :disabled="anchorBusy"
+          data-testid="anchor-install-key"
+        />
+        <button
+          type="submit"
+          class="px-3 py-1 text-[11px] bg-accent text-ink hover:bg-accent-muted disabled:opacity-50 rounded"
+          :disabled="anchorBusy || !anchorId.trim() || !anchorKeyB64.trim()"
+          data-testid="anchor-install-submit"
+        >
+          {{ anchorBusy ? 'Installing…' : 'Install anchor' }}
+        </button>
+      </form>
+      <div
+        v-if="anchorError"
+        class="mt-2 text-[11px] text-signal-danger"
+        role="alert"
+        data-testid="anchor-install-error"
+      >
+        {{ anchorError }}
+      </div>
+    </div>
     <!-- fleet-share-and-sync-01NDFSEX14 WP03 — Publish dialog -->
     <PublishDialog
       :open="publishDialogOpen"
