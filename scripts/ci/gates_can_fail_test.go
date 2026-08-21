@@ -187,6 +187,16 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 		content    string
 		env        map[string]string // extra env vars for this case's runGate call, if any
 		wantOutput string            // optional: substring the failure output must contain
+		// file2/append2/content2: a SECOND plant, applied after the
+		// first and cleaned up before it (LIFO). Some violation classes
+		// span two files by construction — e.g. I13 clause 4 needs both
+		// a `With<Name>(cedar.Gate)` declaration AND a call site in
+		// core/rpc/api.go, and the omitted-argument shape only exists
+		// once both are present. Empty file2 means "one plant only",
+		// leaving every existing case above untouched.
+		file2    string
+		append2  string
+		content2 string
 	}{
 		{
 			name:    "binding-names/double-underscore",
@@ -438,6 +448,51 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			// do while introducing the omission. Same for a struct tag.
 			file:    "core/rpc/views/zzgateprobe/impl.go",
 			content: "package zzgateprobe\n\nimport \"github.com/kameas-ai/kenaz-harness/core/policy/cedar\"\n\ntype Config struct {\n\tCedar cedar.Gate // the policy gate\n}\n",
+		},
+		{
+			// I13 clause 4 (model-authored-graphs-01PMGA01 UNIT-8(b)):
+			// a cedar.Gate wired through a functional option rather than
+			// a Config struct field — the shape clause 3 cannot see
+			// because the agentgraph Manager has no Config struct
+			// (C-010, manager.go:153's NewManager takes ...ManagerOption).
+			// This plants a With<Name>(cedar.Gate) option that api.go
+			// never references at all, mirroring the sibling
+			// config-gate-field-omitted case one level up (a func
+			// instead of a struct field).
+			name:       "cedar-gate-arguments/with-option-never-called",
+			gate:       "check-cedar-gate-arguments.sh",
+			wantOutput: "WithZzGateProbeNeverCalled",
+			file:       "core/rpc/views/zzgateprobe2/impl.go",
+			content: "package zzgateprobe2\n\n" +
+				"import \"github.com/kameas-ai/kenaz-harness/core/policy/cedar\"\n\n" +
+				"type Option func()\n\n" +
+				"func WithZzGateProbeNeverCalled(g cedar.Gate) Option {\n" +
+				"\treturn func() { _ = g }\n" +
+				"}\n",
+		},
+		{
+			// The other clause-4 branch: the option IS called at
+			// api.go's wiring site, but with a literal nil — the exact
+			// mutation tasks.md names ("drop the WithCedarGate(...)
+			// argument from api.go"). This is what reverting
+			// graphview.WithGraphCedarGate(graphCedarGate) to
+			// graphview.WithGraphCedarGate(nil) at api.go:6941 looks
+			// like, without hand-editing the real production wiring
+			// line (a reversible-by-construction two-file plant
+			// instead: file2 declares the option in an EXISTING
+			// imported package/alias — graphview — so the api.go append
+			// is genuinely valid Go, not merely gate-shaped text).
+			name:       "cedar-gate-arguments/with-option-called-with-nil",
+			gate:       "check-cedar-gate-arguments.sh",
+			wantOutput: "core/rpc/api.go",
+			file:       "core/rpc/views/agentgraph/zz_gate_probe_cedar_option.go",
+			content: "package agentgraph\n\n" +
+				"import \"github.com/kameas-ai/kenaz-harness/core/policy/cedar\"\n\n" +
+				"func WithZzGateProbeCalledWithNil(g cedar.Gate) ManagerOption {\n" +
+				"\treturn func(m *Manager) { _ = g }\n" +
+				"}\n",
+			file2:   "core/rpc/api.go",
+			append2: "\n\nvar zzGateProbeCalledWithNil = graphview.WithZzGateProbeCalledWithNil(nil)\n",
 		},
 		{
 			name: "cedar-engine-singleton/second-call-site",
@@ -897,6 +952,11 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				full := filepath.Join(root, tc.file)
 				cleanup = plant(t, full, tc.content, tc.append)
 				defer cleanup()
+			}
+			if tc.file2 != "" {
+				full2 := filepath.Join(root, tc.file2)
+				cleanup2 := plant(t, full2, tc.content2, tc.append2)
+				defer cleanup2()
 			}
 
 			violationDesc := tc.file
