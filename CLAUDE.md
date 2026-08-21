@@ -389,6 +389,43 @@ When merging multiple mission branches, expect simultaneous additions in these f
 - `core/hooks/hooks.go` — `Event*` constants + `AllEvents` slice (the slice is what `isKnownEvent` validates against; new events must be added there too)
 - `core/hooks/runner.go` — `BuiltinRegistry` fields + constructor map initialisers
 
+### Worktree agents cannot read `kitty-specs/` — copy it in
+
+**`kitty-specs/` is in `.gitignore` (line 13).** `git worktree add` does not
+carry ignored files, so a `isolation: "worktree"` sub-agent starts with **no
+spec, no plan, no tasks.md, and no `_templates/`** — including
+`WP-persistence-integrity.md`, which every mission is required to carry.
+
+Found on 2026-08-21, after a six-agent wave had already launched. Five of the
+six had an empty `kitty-specs/`; the finishing agent for
+`audit-that-tells-the-truth-01PMZA10` reported it directly ("could not locate
+spec.md/plan.md/tasks.md anywhere reachable") and worked from live code and
+`docs/unwired-ledger.md` instead. It reached a defensible result, but it was
+reconstructing the contract rather than reading it.
+
+This is worse than an ordinary missing file, because the failure is silent
+and *plausible*: the agent still has the brief, the code, and the ledger, so
+it produces work that looks like mission work. Nothing in the report will say
+"I never saw the spec" unless the agent volunteers it. The dispatch-hygiene
+rule below says to include spec paths — **a path is useless when the file is
+not there.**
+
+Before dispatching, copy the mission in:
+
+```bash
+W=.claude/worktrees/agent-<id>/kitty-specs
+mkdir -p "$W"
+cp -R kitty-specs/<slug>-<ULID> "$W"/
+cp -R kitty-specs/_templates "$W"/
+```
+
+For an already-running agent, copy the directory in and **message it** — tell
+it the files now exist, to re-check completed work against the real spec, and
+to report whether the spec changed its understanding of scope. Do not assume
+work done before the copy matches the contract.
+
+The copies stay ignored inside the worktree, so they never reach a commit.
+
 ### Sub-agent dispatch hygiene
 
 - **Brief like a colleague who just walked in.** Each sub-agent starts cold — include spec paths, repo orientation, contract pointers, build/test commands, and explicit instruction to commit per-WP without pushing.
