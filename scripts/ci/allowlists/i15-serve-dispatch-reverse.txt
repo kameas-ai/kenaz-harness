@@ -1,0 +1,66 @@
+# I15 allowlist — reverse direction: names handled by core/serve/server.go's
+# dispatch or WS switch that have NO exported core/rpc/bindings.go method of
+# the same name. This direction did not exist before
+# served-mode-is-a-real-mode-01PMZ707 WP02 — the pre-promotion script only
+# ever computed bindings \ dispatch, never dispatch \ bindings, so a
+# served-only case with a typo'd or orphaned name could sit in the switch
+# forever with nothing to catch it.
+#
+# Spec: kitty-specs/served-mode-is-a-real-mode-01PMZ707/spec.md §1.4, §5.2.
+# Enforced by scripts/ci/check-serve-dispatch-drift.sh, gate G-701.
+#
+# DISCOVERY PASS: `comm -13` of the same two sets check-serve-dispatch-drift.sh
+# already computes for the forward direction (see i15-serve-dispatch-gap.txt's
+# header) — dispatch-switch case names not present in the exported Bindings
+# method set.
+#
+# RAN 2026-08-21 (served-mode-is-a-real-mode-01PMZ707 WP02): exactly five
+# entries, unchanged in name and count from the spec's own citation at its
+# base revision (55029354 / v0.64.0) even though the forward direction moved
+# (447→449 bindings; two new Bindings methods landed between v0.64.0 and this
+# promotion, neither of them serve-dispatched). All five are legitimate
+# serve-only surface, each justified below rather than deleted, because each
+# is a real method with no desktop-binding counterpart by design.
+#
+# Format: one double-quoted method name per line, each preceded by its
+# justification. Allowlists shrink monotonically; nothing is added without a
+# date. A sixth entry appearing here without a matching Bindings method is
+# either a new deliberately-serve-only surface (add it here, dated, with a
+# reason) or a typo in a `case "..."` string (fix the typo instead).
+
+# JUSTIFIED 2026-08-21 (served-mode-is-a-real-mode-01PMZ707 WP02, carried
+# from spec §1.4 / the script's own pre-promotion comment at its old
+# lines 70-71). Auth_State is a serve-only synthetic method: it answers a
+# question ("is this token still valid") that only exists in served mode's
+# single-shared-bearer-token model (core/serve/server.go:80-81) — desktop
+# has no equivalent binding because desktop has no bearer token to expire.
+"Auth_State"
+
+# JUSTIFIED 2026-08-21 (served-mode-is-a-real-mode-01PMZ707 WP02, D-708 in
+# spec.md §7). Serve_ListMethods is deliberately operator-facing
+# (core/serve/methods.go:18-20) — discovery of the served surface from a
+# running binary, for an operator who may not have a source checkout. It
+# has no desktop counterpart because desktop's binding surface is already
+# fully enumerable from frontend/wailsjs at build time; nothing needs to
+# ask the running process what it can do.
+"Serve_ListMethods"
+
+# JUSTIFIED 2026-08-21 (served-mode-is-a-real-mode-01PMZ707 WP02). Sessions_Stream
+# is the WS-only stream-subscribe verb (core/serve/server.go's handleWS,
+# scoped by session per WP01) — it has no POST /rpc Bindings counterpart
+# because desktop's equivalent live-update path is Wails runtime events
+# (rt.EventsOn), not an RPC method at all. SD-10 in spec.md §1.6 names this
+# same code as the WP01 scoping target; this entry is the drift gate's
+# record that the asymmetry is intentional, not a hole.
+"Sessions_Stream"
+
+# JUSTIFIED 2026-08-21 (served-mode-is-a-real-mode-01PMZ707 WP02, SD-06 in
+# spec.md §1.6 — disposition still open, tracked for WP08). Connectors_List
+# and Connectors_Status are served with no desktop Bindings counterpart
+# because served mode's connector surface (host-brokered access tokens,
+# 0bc31b1b) never had a desktop equivalent to begin with — the projection
+# exists only for a served frontend, and the audit records zero frontend
+# consumers of it either (a WP08 disposition, not a WP02 one: this entry
+# only says the asymmetry is not a naming accident).
+"Connectors_List"
+"Connectors_Status"

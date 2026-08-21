@@ -105,4 +105,14 @@ describe('LeftRail — fleet nav in served mode', () => {
     const w = await mountRail();
     expect(w.text()).toContain('Sessions');
   });
+
+  // served-mode-is-a-real-mode-01PMZ707 WP03 (AC-709). Graph_* has no
+  // serve dispatch case (D-701) — the rail entry would route into
+  // GraphsView.vue's own boundary panel, so it is hidden at the nav layer
+  // too, mirroring Sites/Marketplace above.
+  it('hides Agent graphs — Graph_* has no serve dispatch case', async () => {
+    initFeatureFlags(makeAppInfo({}));
+    const w = await mountRail();
+    expect(w.find('[data-testid=nav-agentgraph]').exists()).toBe(false);
+  });
 });

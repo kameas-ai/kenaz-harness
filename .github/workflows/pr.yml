@@ -268,10 +268,14 @@ jobs:
         # (it runs fully in test-frontend which does npm ci first).
         run: bash scripts/ci/check-oss-first.sh
 
-      - name: serve-dispatch drift report
-        # FR-005: informational check — lists desktop Bindings methods not yet
-        # wired in the serve-mode RPC dispatcher so the gap is visible in CI
-        # logs.  Exits 0 (never blocks a PR) until SERVE_DRIFT_GATE=1 is set.
+      - name: serve-dispatch drift gate (I15)
+        # FR-005 / I15, promoted served-mode-is-a-real-mode-01PMZ707 WP02
+        # (escalation-register E-2): fails when a desktop Bindings method has
+        # no serve-mode dispatch case AND no dated line in
+        # scripts/ci/allowlists/i15-serve-dispatch-{gap,reverse}.txt, in
+        # either direction (bindings-without-a-case, or a dispatch case with
+        # no matching binding). Gates by default now — SERVE_DRIFT_GATE=0
+        # reverts to informational-only.
         run: bash scripts/ci/check-serve-dispatch-drift.sh
 
       - name: agentgraph-convergence guard (I3/I6/I7)
