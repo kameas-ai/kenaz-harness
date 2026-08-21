@@ -63,6 +63,35 @@ mission's spec §1.4 and its `research/escalations.md` E-004 for the
 corrected list and for why "per gate" overstated the
 coverage this sentence used to claim unconditionally.
 
+### The draft tool promises a review path served mode does not have
+
+**Found**: 2026-08-21, by the independent review of PR #304 (finding F3).
+**Owner**: alec. **Ungated** — no existing gate can see a contradiction
+between a tool description and a route's availability.
+
+`harness_write_draft_agent_graph` tells the model the draft stays inert
+*"until a human opens it in the graph editor and saves it."*
+`cmd/harness-served/main.go:204` calls `rpc.New`, so the harness-self server
+is constructed in served mode and the tool is reachable during a served
+chat turn. In the **same PR**, Z707 WP03 boundary-panels `/agentgraph`,
+`/agentgraph/edit/:id` and `/agentgraph/run/:runId` under served mode, and
+all twelve `Graph_*` bindings sit in the forward gap allowlist
+(`scripts/ci/allowlists/i15-serve-dispatch-gap.txt`).
+`NotAvailableInServedMode.vue`'s own copy says the served user "often has
+no desktop harness at all."
+
+So in served mode the model can produce drafts nobody in that deployment
+can open, review or run, while being told a review path exists. Two
+missions landing together, each correct alone, contradicting each other at
+the seam — which is the class of defect only integration finds.
+
+**Owed**: either an `isServedMode()`-aware refusal in the draft handler, or
+a tool description that does not promise the editor. Not fixed in #304
+because the right answer is a product call: served mode may well want graph
+authoring with a different review surface, and silently refusing would
+remove a capability rather than stop a lie.
+
+
 ### Declined gate — 2026-08-18 · "An RPC's async contract vs. its caller's await sequence" — NOT BUILDABLE
 
 `docs/dead-code-audit-2026-08-16.md` §5 owed a gate for the class that
@@ -1115,8 +1144,50 @@ and not a nice-to-have.
   tool denied. It also silently skips unparseable log lines and never
   asserts that any line parsed.
 - **`Graph_*` / `Workflows_*` RPCs are not routed in served mode.**
-  `check-serve-dispatch-drift.sh` is informational (exit 0) unless
-  `SERVE_DRIFT_GATE=1`, so the gap accumulates quietly.
+  ~~`check-serve-dispatch-drift.sh` is informational (exit 0) unless
+  `SERVE_DRIFT_GATE=1`, so the gap accumulates quietly.~~ **CLOSED
+  2026-08-21 (I15, `served-mode-is-a-real-mode-01PMZ707` WP02).** The gate
+  now defaults to `SERVE_DRIFT_GATE=1` (both directions —
+  bindings-without-a-dispatch-case and dispatch-case-without-a-binding),
+  seeded with `scripts/ci/allowlists/i15-serve-dispatch-{gap,reverse}.txt`
+  (419 forward / 5 reverse entries at promotion). `Graph_*` and
+  `Workflows_*` still have no serve dispatch case — that routing decision
+  is explicitly OUT of this mission's scope (spec.md §2, D-701: routing
+  `Graph_*` would be new capability work, not a parity fix) — but the gap
+  is now a *named, allowlisted, dated* line per method rather than a
+  silent, unenforced one. Per-method reclassification (which of the 419
+  are `unrouted` / `boundary-panelled` / `gated` / `desktop-only-by-nature`
+  vs. genuinely `untriaged`) is WP07 of the same mission, not yet run as of
+  this entry — see the mission's own report for where the cut landed.
+
+### 2026-08-21 · An "absorbed" finding that was never actually fixed — `dead-code-audit-2026-08-18.md:1794`'s SD-01/SD-02 (serve) claim
+
+`docs/dead-code-audit-2026-08-18.md:1794`'s mission-assignment table
+credits `trust-surfaces-that-fire-01PMZ202` with absorbing "`SD-01`/`SD-02`
+serve (fabricated permission posture; fabricated empty audit trail)" — the
+same two findings `served-mode-is-a-real-mode-01PMZ707` §8 and plan.md's
+out-of-band check #2 name as a **required pre-check** ("if it has already
+edited `AuditView.vue` or `PermissionDialsPanel.vue`, WP05 shrinks to the
+served-specific half"). **The pre-check found the absorption claim false.**
+`01PMZ202` did touch `AuditView.vue` (v0.66.0, `4d34cf4a`) — but only to
+migrate the seeded fetch from `listEntries()` to the richer `filter()`
+(UNIT-6/WP07's multi-term query work). The catch that turns a rejected
+served-mode call into a fabricated result was untouched in both files, and
+verified still present at HEAD before this WP's fix:
+`AuditView.vue`'s `catch { seeded.value = []; }` and
+`PermissionDialsPanel.vue`'s `catch { permissionMode.value = 'normal'; }`.
+**CLOSED 2026-08-21** by `served-mode-is-a-real-mode-01PMZ707` WP05 — see
+`frontend/src/views/audit/AuditView.vue` (boundary-panelled; all eleven
+`Audit_*` RPCs are unrouted) and
+`frontend/src/components/settings/PermissionDialsPanel.vue` (per-panel fix,
+D-710: the view itself is NOT panelled because `Permissions_ListPending`/
+`_Resolve` genuinely work in served mode — only the dial that cannot read
+its own posture is hidden, replaced with an explicit unavailable state).
+**The lesson, per `feedback_verify_agent_citations`:** a mission-assignment
+table entry is a claim about intent, not a verified fix — the next agent
+that reads "absorbed by X" should still grep the actual file before
+treating a finding as closed, exactly as this mission's own plan.md
+insisted on doing.
 
 ### 2026-08-14 · Tooling footgun: `rtk proxy grep` truncates on a double pipe
 

@@ -26,6 +26,20 @@ const PERMISSION_MODES: ReadonlyArray<{ value: PermissionMode; label: string; no
 const permissionMode = ref<PermissionMode>('normal');
 const permissionCacheDangerousOps = ref(false);
 
+// served-mode-is-a-real-mode-01PMZ707 WP05, spec.md §1.2/§5.5, D-710.
+// Settings_GetPermissionMode is unrouted in served mode, and this panel
+// mounts from a route (/permissions) that IS served and ungated, so the
+// catch below used to fire on every served load — and rendered the dial
+// pre-selected on "normal", a value it never actually read. Per the
+// spec's correction: deleting the catch alone fixes nothing (`normal` was
+// already the ref's default), because the lie was never the fallback
+// value, it was the dial CLAIMING to have read one. permissionModeRead
+// tracks whether the read genuinely succeeded; the template renders the
+// dial only when it did, and an inline unavailable state otherwise — the
+// unavailable case must be visible in the render, not just true in a ref
+// nothing displays.
+const permissionModeRead = ref(false);
+
 /** Inline error state for security-significant write failures. */
 const permissionModeError = ref<string | null>(null);
 const dangerousOpsError = ref<string | null>(null);
@@ -99,8 +113,12 @@ function cancelDangerousToggle() {
 onMounted(async () => {
   try {
     permissionMode.value = (await client.settings.getPermissionMode()) as PermissionMode;
+    permissionModeRead.value = true;
   } catch {
-    permissionMode.value = 'normal';
+    // Do NOT set permissionMode to 'normal' here — that was the fabrication
+    // (spec.md §1.2's correction: the default alone isn't the lie, the
+    // dial rendering AS IF it had read one is). permissionModeRead stays
+    // false; the template shows the unavailable state instead of the strip.
   }
   try {
     permissionCacheDangerousOps.value = await client.settings.getPermissionCacheDangerousOps();
@@ -121,15 +139,25 @@ onMounted(async () => {
       </p>
       <div class="mt-2">
         <RadioStrip
+          v-if="permissionModeRead"
           :model-value="permissionMode"
           :options="PERMISSION_MODES"
           aria-label="Permission mode"
           testid-prefix="permission-mode"
           @update:model-value="requestPermissionMode"
         />
+        <p
+          v-else
+          class="font-ui text-[11px] text-ink-dim"
+          role="status"
+          data-testid="permission-mode-unavailable"
+        >
+          Permission mode could not be read from this workbench. The dial
+          cannot show a posture it has not received.
+        </p>
       </div>
       <p
-        v-if="permissionMode === 'permissive'"
+        v-if="permissionModeRead && permissionMode === 'permissive'"
         class="mt-3 font-ui text-[11px] text-signal-warn"
         data-testid="permissive-active-warning"
       >

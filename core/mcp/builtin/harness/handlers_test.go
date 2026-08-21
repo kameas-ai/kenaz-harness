@@ -21,7 +21,13 @@ func (s *stubProviderWriter) AddProvider(_ context.Context, kind, name, model, _
 func (s *stubProviderWriter) RemoveProvider(_ context.Context, _ string) error { return nil }
 
 // TestRegisterAll_HappyPath asserts the wiring registers the canonical
-// 13 tools and dispatches AddProvider end-to-end.
+// 15 tools (13 from WP04/WP05 + harness_read_materialize_run /
+// harness_write_draft_agent_graph from model-authored-graphs-01PMGA01
+// UNIT-7) and dispatches AddProvider end-to-end. The count is a
+// registration-mechanics regression pin, not a reachability claim —
+// spec.md §11.2 (model-authored-graphs-01PMGA01) is explicit that a
+// tool count proves nothing about whether the server is attached to
+// anything; see core/rpc/harness_self_attach_test.go for that.
 func TestRegisterAll_HappyPath(t *testing.T) {
 	t.Parallel()
 	w := &stubProviderWriter{}
@@ -29,8 +35,8 @@ func TestRegisterAll_HappyPath(t *testing.T) {
 		Providers:       stubProviderLister{items: []ProviderSummary{{ID: "p0", Kind: "anthropic"}}},
 		ProvidersWriter: w,
 	})
-	if got := len(srv.Tools()); got != 13 {
-		t.Fatalf("registered tool count = %d, want 13", got)
+	if got := len(srv.Tools()); got != 15 {
+		t.Fatalf("registered tool count = %d, want 15", got)
 	}
 
 	// Drive add_provider via the handler directly.

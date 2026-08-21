@@ -97,6 +97,36 @@ type ValidationResult struct {
 // caller — the editor's direct SaveGraph call, a future authoring tool
 // — gets identical per-rule feedback instead of a single opaque wrapped
 // error string.
+// GraphExistsError is returned by SaveGraph when a non-user save would
+// land on a path that already holds a file. It exists because the
+// create-only guarantee the graph-authoring tool states to the model —
+// "this tool cannot overwrite or delete a graph" — has to be enforced
+// at the write seam, not by the caller.
+//
+// The check that used to live in graphAuthorAdapter.DraftAgentGraph
+// asked LoadGraph whether the id resolved. That answers a DIFFERENT
+// question: loadGraph returns an error for a file that exists but does
+// not parse, so a user's half-edited work-in-progress read as "does not
+// exist" and was renamed over, with the tool returning OK=true. Found
+// by the independent review of PR #304, which planted a probe and
+// watched a hand-edited file get replaced.
+//
+// Existence is therefore os.Stat on the resolved path — the only
+// question whose answer actually predicts whether the rename destroys
+// something — and it runs AFTER the graph.author gate, so a refusal
+// cannot be used to enumerate the library while the dial is off.
+type GraphExistsError struct {
+	ID string
+}
+
+// Error implements error.
+func (e *GraphExistsError) Error() string {
+	if e == nil {
+		return "agentgraph: id already exists"
+	}
+	return fmt.Sprintf("agentgraph: id %q already exists; this tool is create-only and cannot overwrite it", e.ID)
+}
+
 type ValidationFailedError struct {
 	Issues []ValidationIssue
 }

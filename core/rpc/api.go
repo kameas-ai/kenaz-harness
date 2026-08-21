@@ -3482,6 +3482,13 @@ func New(c *core.Core, opts ...Option) *API {
 			sessionMgr,
 			mergedCat,
 			a.projectsAPI,
+			// model-authored-graphs-01PMGA01 UNIT-7: a.graphAPI is
+			// assigned at "a.graphAPI = graphview.New(a.graphMgr)"
+			// above (graph manager built early so the chat-migration
+			// ChatRunner can share its kernel) — already non-nil by
+			// this point in New(), well before this block.
+			a.graphAPI,
+			a.auditImpl,
 		)
 		srv := harnessmcp.RegisterAll(harnessmcp.NewServer(), hManagers)
 		srv = harnessmcp.WithAudit(srv, &harnessSelfAuditBridge{impl: a.auditImpl})

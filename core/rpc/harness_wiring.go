@@ -13,15 +13,25 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sort"
+	"strings"
+	"time"
 
+	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/event/kind"
 	harness "github.com/kameas-ai/kenaz-harness/core/mcp/builtin/harness"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	graphview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/audit"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
 	projectsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/projects"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/sessions"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/session"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 // ---- WP04 read adapters ----
@@ -302,6 +312,167 @@ func (a projectWriterAdapter) CreateProject(ctx context.Context, name, descripti
 	return p.ID, nil
 }
 
+// graphAuthorAdapter wraps graphview.API and implements both
+// harness.GraphAuthorWriter and harness.GraphMaterializer
+// (model-authored-graphs-01PMGA01 UNIT-7).
+//
+// DraftAgentGraph classifies Manager.saveGraph's error (via
+// graphview.API.SaveGraph(..., initiator="model")) into one of
+// harness.GraphDraftOutcome's three shapes using errors.As on the two
+// concrete error types the manager returns — *graphview.
+// ValidationFailedError (FR-002/FR-003) and *cedar.PolicyDeniedError
+// (FR-005/FR-006/FR-008). This is the ONLY place that type-switch
+// happens: core/mcp/builtin/harness stays free of both
+// core/rpc/views/agentgraph and core/policy/cedar imports (see the
+// doc comment on GraphDraftOutcome).
+//
+// It also emits kind.KindGraphAuthorAttempted (FR-012) on every
+// attempt, permitted or refused, in addition to (not instead of) the
+// generic KindHarnessSelfToolCalled every harness-self tool call
+// already gets from harnessmcp.WithAudit.
+type graphAuthorAdapter struct {
+	api   graphview.API
+	audit *audit.API
+}
+
+var (
+	_ harness.GraphAuthorWriter = (*graphAuthorAdapter)(nil)
+	_ harness.GraphMaterializer = (*graphAuthorAdapter)(nil)
+)
+
+// graphNodeKindsForAudit mirrors graphview's private collectNodeKinds
+// (core/rpc/views/agentgraph/manager.go) — sorted, de-duplicated,
+// comma-joined `kind:` values — so this adapter can report node_kinds/
+// node_count on the audit kind without either exporting a helper out
+// of an already-shipped, gated package (UNIT-2..UNIT-5 landed and
+// tested before this unit existed) or re-parsing through it. The
+// logic is ~10 lines over public coreag.Graph fields; duplicating it
+// here is smaller than the surface-area change either alternative
+// would require.
+func graphNodeKindsForAudit(g coreag.Graph) (kinds string, count int) {
+	if len(g.Nodes) == 0 {
+		return "", 0
+	}
+	seen := make(map[string]struct{}, len(g.Nodes))
+	var ks []string
+	for _, n := range g.Nodes {
+		k := string(n.Kind)
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return strings.Join(ks, ","), len(g.Nodes)
+}
+
+// emitDraftAttempt is the FR-012 emission. Payload is deliberately
+// narrow: session_id, graph_id, node_kinds, node_count, outcome,
+// decision_reason — NEVER the graph YAML, a node attrs value, or a
+// write_file path. AC-011 asserts this by searching the serialised
+// entry for a distinctive string planted in a submitted YAML's attrs
+// and requiring it find nothing.
+func (a *graphAuthorAdapter) emitDraftAttempt(ctx context.Context, graphID, nodeKinds string, nodeCount int, outcome, decisionReason string) {
+	if a == nil || a.audit == nil {
+		return
+	}
+	sessionID := toolloop.SessionIDFromContext(ctx)
+	trailing := fmt.Sprintf(
+		"session_id=%s graph_id=%s node_kinds=%s node_count=%d outcome=%s decision_reason=%s",
+		sessionID, graphID, nodeKinds, nodeCount, outcome, decisionReason,
+	)
+	a.audit.Push(audit.Entry{
+		ID:        fmt.Sprintf("agentgraph-author-%d", time.Now().UnixNano()),
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Category:  "MCP",
+		Subject:   string(kind.KindGraphAuthorAttempted),
+		Trailing:  trailing,
+	})
+}
+
+// DraftAgentGraph implements harness.GraphAuthorWriter.
+func (a *graphAuthorAdapter) DraftAgentGraph(ctx context.Context, id, yaml string) (harness.GraphDraftOutcome, error) {
+	if a == nil || a.api == nil {
+		return harness.GraphDraftOutcome{}, errors.New("agentgraph: manager not configured")
+	}
+
+	// Parsed independently of SaveGraph purely to report node_kinds/
+	// node_count on the audit kind even when SaveGraph itself refuses
+	// before reaching the gate. A parse failure here just means the
+	// audit entry's node_kinds/node_count are empty/zero — SaveGraph's
+	// own parse error is still what's returned to the caller below.
+	var nodeKinds string
+	var nodeCount int
+	if parsed, perr := coreag.LoadYAML([]byte(yaml)); perr == nil {
+		nodeKinds, nodeCount = graphNodeKindsForAudit(parsed)
+	}
+
+	saveErr := a.api.SaveGraph(ctx, graphview.GraphSpec{ID: id, YAML: yaml}, "model")
+
+	if saveErr == nil {
+		a.emitDraftAttempt(ctx, id, nodeKinds, nodeCount, "permitted", "")
+		return harness.GraphDraftOutcome{OK: true, PathHint: "/agentgraph/edit/" + id}, nil
+	}
+
+	var vfe *graphview.ValidationFailedError
+	if errors.As(saveErr, &vfe) {
+		issues := make([]harness.GraphDraftIssue, 0, len(vfe.Issues))
+		for _, iss := range vfe.Issues {
+			issues = append(issues, harness.GraphDraftIssue{Rule: iss.Rule, Message: iss.Message})
+		}
+		a.emitDraftAttempt(ctx, id, nodeKinds, nodeCount, "refused", "validation_failed")
+		return harness.GraphDraftOutcome{OK: false, Issues: issues}, nil
+	}
+
+	// Create-only refusal (E-008). Raised inside saveGraph at the write
+	// seam, after the gate — see GraphExistsError for why it is not a
+	// caller-side LoadGraph probe any more.
+	var gee *graphview.GraphExistsError
+	if errors.As(saveErr, &gee) {
+		a.emitDraftAttempt(ctx, id, nodeKinds, nodeCount, "refused", "id already exists (create-only)")
+		return harness.GraphDraftOutcome{
+			OK:           false,
+			DeniedReason: fmt.Sprintf("id %q already exists; this tool is create-only and cannot overwrite it", id),
+		}, nil
+	}
+
+	var pde *cedar.PolicyDeniedError
+	if errors.As(saveErr, &pde) {
+		a.emitDraftAttempt(ctx, id, nodeKinds, nodeCount, "refused", pde.Decision.Reason)
+		return harness.GraphDraftOutcome{OK: false, DeniedReason: pde.Decision.Reason}, nil
+	}
+
+	// Anything else (empty yaml, yaml id mismatch, data dir not
+	// configured, ...): surface as a generic Go error rather than a
+	// classified outcome; still audited as refused.
+	a.emitDraftAttempt(ctx, id, nodeKinds, nodeCount, "refused", "error")
+	return harness.GraphDraftOutcome{}, saveErr
+}
+
+// MaterializeRun implements harness.GraphMaterializer — a straight
+// passthrough to graphview.API.MaterializeRun (FR-011). No new
+// redaction: materialize.go already reduces arguments to key names,
+// results to byte counts, and errors to a closed constant vocabulary.
+// SpecProvenance is copied verbatim, including a degraded
+// "library_fallback" marker (C-006) — never normalised away.
+func (a *graphAuthorAdapter) MaterializeRun(ctx context.Context, runID string) (harness.GraphMaterializeResult, error) {
+	if a == nil || a.api == nil {
+		return harness.GraphMaterializeResult{}, errors.New("agentgraph: manager not configured")
+	}
+	spec, err := a.api.MaterializeRun(ctx, runID)
+	if err != nil {
+		return harness.GraphMaterializeResult{}, err
+	}
+	return harness.GraphMaterializeResult{
+		ID:             spec.ID,
+		Name:           spec.Name,
+		Scope:          spec.Scope,
+		YAML:           spec.YAML,
+		SpecProvenance: spec.SpecProvenance,
+	}, nil
+}
+
 // harnessServer wraps a harness.Server and exposes its concrete type for
 // the in-process transport (WP09). Held on rpc.API so future WPs can
 // attach the server to the MCP pool without re-constructing it.
@@ -322,6 +493,8 @@ func buildHarnessManagers(
 	sessionMgr *session.Manager,
 	cat *recipes.MergedCatalog,
 	projectsAPI projectsview.ProjectsAPI,
+	graphAPI graphview.API,
+	auditImpl *audit.API,
 ) harness.Managers {
 	m := harness.Managers{}
 
@@ -347,6 +520,17 @@ func buildHarnessManagers(
 		// harness-self-attach-01PMHS01 UNIT-6: previously unwired — see
 		// projectWriterAdapter's doc comment.
 		m.ProjectsWriter = projectWriterAdapter{api: projectsAPI}
+	}
+	if graphAPI != nil {
+		// model-authored-graphs-01PMGA01 UNIT-7. One adapter satisfies
+		// both the write (GraphAuthorWriter) and read (GraphMaterializer)
+		// interfaces — see graphAuthorAdapter's doc comment. auditImpl
+		// may be nil (test chassis without a wired audit sink);
+		// emitDraftAttempt no-ops on a nil audit field rather than
+		// panicking or silently skipping the save/gate/persist path.
+		ga := &graphAuthorAdapter{api: graphAPI, audit: auditImpl}
+		m.GraphAuthor = ga
+		m.GraphMaterializer = ga
 	}
 	// Managers.Status (StatusReporter) and Managers.RecipesWriter
 	// (RecipeWriter) remain unwired: no adapter exists yet for either.

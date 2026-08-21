@@ -76,4 +76,21 @@ describe('ProviderRow', () => {
     expect(test).toBeTruthy();
     expect(test!.attributes('disabled')).toBeDefined();
   });
+
+  // served-mode-is-a-real-mode-01PMZ707 WP03, spec.md §5.3: "verify every
+  // write affordance is actually behind [readOnly]" — confirmed to exist
+  // (ProvidersView.served.test.ts), not confirmed sufficient, until now.
+  // A personal-source provider is the adversarial case: isPersonal would
+  // be true on its own, so this pins that `readOnly` overrides it rather
+  // than Edit/Remove leaking through for exactly the row type that would
+  // otherwise show them.
+  it('readOnly hides Test, Edit and Remove even for a personal-source provider', () => {
+    const wrapper = mount(ProviderRow, {
+      props: { provider: makeProvider({ source: 'personal' }), readOnly: true },
+    });
+    const buttons = wrapper.findAll('button').map((b) => b.text());
+    expect(buttons).not.toContain('Test');
+    expect(buttons.find((t) => t.includes('Edit'))).toBeUndefined();
+    expect(buttons).not.toContain('Remove');
+  });
 });

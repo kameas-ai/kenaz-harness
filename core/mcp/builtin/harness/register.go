@@ -15,6 +15,11 @@ const (
 	ToolGetRecommendations   = "harness_read_get_onboarding_recommendations"
 	ToolListSessions         = "harness_read_list_sessions"
 	ToolListModels           = "harness_read_list_models"
+	// ToolMaterializeRun (model-authored-graphs-01PMGA01 UNIT-7, FR-011)
+	// is a read tool: no Cedar gate, permitted like any other
+	// harness_read_* tool (subject to the pre-existing harness-self
+	// containment default, which does not restrict reads).
+	ToolMaterializeRun = "harness_read_materialize_run"
 
 	ToolAddProvider          = "harness_write_add_provider"
 	ToolRemoveProvider       = "harness_write_remove_provider"
@@ -22,6 +27,15 @@ const (
 	ToolSetSetting           = "harness_write_set_setting"
 	ToolCreateProject        = "harness_write_create_project"
 	ToolCreateSession        = "harness_write_create_session"
+	// ToolDraftAgentGraph (model-authored-graphs-01PMGA01 UNIT-7,
+	// FR-001/FR-005/FR-006) is gated TWICE: the pre-existing
+	// harness_write_forbid.cedar/harness_write_onboarding.cedar pair
+	// (this file's package, WP06) restricts every harness_write_* tool
+	// to kind=onboarding sessions by default, and — independently —
+	// Manager.saveGraph's own graph.author gate (UNIT-4) requires the
+	// FR-006 consent dial before it persists anything, regardless of
+	// session kind. Neither substitutes for the other; see spec.md §4.1.
+	ToolDraftAgentGraph = "harness_write_draft_agent_graph"
 )
 
 // schemaObject is a tiny helper to build a top-level JSON schema object.
@@ -87,6 +101,14 @@ func RegisterAll(srv *Server, m Managers) *Server {
 		InputSchema: schemaObject(`{}`),
 		Handler:     m.handleListModels,
 	})
+	srv.Register(ToolSpec{
+		Name: ToolMaterializeRun,
+		Description: "Read back a run (including a chat turn you just ran) as a graph: node names, tool-call " +
+			"argument KEYS (never values), and outcome shape. Use this to see what a conversation actually did " +
+			"before drafting a reusable graph from it with harness_write_draft_agent_graph.",
+		InputSchema: schemaObject(`{"run_id":{"type":"string"}}`, "run_id"),
+		Handler:     m.handleMaterializeRun,
+	})
 
 	// Write tools.
 	srv.Register(ToolSpec{
@@ -142,6 +164,20 @@ func RegisterAll(srv *Server, m Managers) *Server {
             "kind":{"type":"string","description":"Session kind: chat (default) | onboarding"}
         }`, "name"),
 		Handler: m.handleCreateSession,
+	})
+	srv.Register(ToolSpec{
+		Name: ToolDraftAgentGraph,
+		Description: "Draft a new reusable agent graph from YAML and save it as an UNREVIEWED draft in the " +
+			"user's graph library. The draft will NOT run — no tool, including this one, can start it, and " +
+			"it does not run in parallel or on a schedule — until a human opens it in the graph editor and " +
+			"saves it, which marks it reviewed. Fails with a per-rule issue list if the YAML does not validate; " +
+			"writes nothing on failure. Create-only: an id that already exists is refused — this tool cannot " +
+			"overwrite or delete a graph.",
+		InputSchema: schemaObject(`{
+            "id":{"type":"string"},
+            "yaml":{"type":"string","description":"Agent graph YAML — the same format the graph editor edits and Graph_Validate accepts."}
+        }`, "id", "yaml"),
+		Handler: m.handleDraftAgentGraph,
 	})
 
 	return srv

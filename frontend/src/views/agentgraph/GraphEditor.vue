@@ -18,6 +18,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
+import { useServedMode } from '@/lib/useServedMode';
+import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import type { GraphSpec, GraphValidationResult } from '@/lib/types';
 import NodePalette from './NodePalette.vue';
 import NodeAttributeEditor from './NodeAttributeEditor.vue';
@@ -46,6 +48,12 @@ import type { SpecOp } from '@/lib/canvas/types';
 const client = useHarnessClient();
 const route = useRoute();
 const router = useRouter();
+
+// served-mode-is-a-real-mode-01PMZ707 WP03, spec.md §2/§5.3 (D-701). This
+// component backs BOTH /agentgraph/edit/:id (graph-editor) and
+// /agentgraph/run/:runId/graph (graph-materialized) — one guard covers both
+// served routes.
+const servedMode = useServedMode();
 
 const newGraphTemplate = `spec_version: "1"
 id: my_graph
@@ -504,7 +512,12 @@ defineExpose({
 </script>
 
 <template>
-  <div>
+  <NotAvailableInServedMode
+    v-if="servedMode"
+    feature="Graph editor"
+    reason="Graph authoring, validation and materialized-run viewing run through Graph_* RPCs that are not routed in served mode — porting them would put graph authoring and execution behind the shared workbench token, which the served build's confinement model does not support yet."
+  />
+  <div v-else>
     <CanvasHead
       number="12"
       section="GRAPHS"
