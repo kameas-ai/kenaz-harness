@@ -177,6 +177,7 @@ func Validate(g Graph, opts ...ValidateOption) error {
 	v.checkLoopBodies(g, idx)
 	v.checkReviewBodies(g, idx)
 	v.checkAcyclicityOutsideLoops(g, idx)
+	v.checkApprovalPolicyLabel(g)
 
 	if len(v.errs.Issues) == 0 {
 		return nil
@@ -311,6 +312,31 @@ func (v *validator) checkAttrs(g Graph) {
 		if err := n.Attrs.Validate(); err != nil {
 			v.addf("schema: node %q (%s): %v", n.ID, n.Kind, err)
 		}
+	}
+}
+
+// checkApprovalPolicyLabel refuses `policy_label` at graph load
+// (approval-node-01PMZC12 UNIT-5, FR-008, E-004). Evaluating a Cedar
+// label per approval is a per-call gate — trust-surfaces-that-fire-
+// 01PMZ202 E-005's territory, and 01PMZ202 tasks.md:105-107 explicitly
+// forbids inventing that evaluation here. Until E-004 rules otherwise,
+// an author who sets the attr gets an error naming the blocker rather
+// than a dial the manifest documents but which silently does nothing
+// (spec.md §5.4) — the same class as X-6's parallel_dispatch
+// disposition ("wire, or reject the key at load with an error"). This
+// is cheap only because no shipped graph sets policy_label
+// (spec.md §1.5); re-verified before UNIT-5 landed.
+func (v *validator) checkApprovalPolicyLabel(g Graph) {
+	for i := range g.Nodes {
+		n := &g.Nodes[i]
+		if n.Kind != NodeKindApproval {
+			continue
+		}
+		a, ok := n.Attrs.(ApprovalAttrs)
+		if !ok || a.PolicyLabel == "" {
+			continue
+		}
+		v.addf("schema: node %q (approval): policy_label is not evaluated yet — per-call Cedar evaluation is trust-surfaces-that-fire-01PMZ202 E-005's territory (approval-node-01PMZC12 E-004); remove policy_label until that lands", n.ID)
 	}
 }
 
