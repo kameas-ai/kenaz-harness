@@ -1836,6 +1836,46 @@ does not exist.
 **Owed:** a real source-comparison test, or a single shared implementation
 with a build-tag shim. **Owner: unassigned.**
 
+### 2026-08-20 · `branch.created` is audited on one path and not the other, and the audited path has no test
+
+The adversarial review of `release/v0.66.0` flagged that
+`audit-that-tells-the-truth-01PMZA10` WP06's commit overstated its own
+evidence: it claimed each view's existing package tests "already cover what
+the emit site does once a non-nil emitter reaches it", and for
+`core/rpc/views/branches` and `core/rpc/views/tools` that is false — no test
+in either package ever sets `Config.Audit`, and `audit.MustEmit` is nil-safe,
+so those suites pass whether the field is wired or not.
+
+Verified here, and it is worse than an evidence gap. `core/rpc/views/update`
+has no audit test wiring either (three packages, not two). And when a
+spy-emitter test was actually written against `branches`, it failed:
+
+    no branch.created event reached the configured audit emitter; got []
+
+`CreateBranch` (`core/rpc/views/branches/impl.go:139`) has two paths:
+
+- **explicit fork** (`opts.ParentMessageID != ""`) → delegates to
+  `CreateBranchAtMessage` and emits `KindBranchCreated` (`impl.go:159`).
+- **legacy** (no `ParentMessageID`) → creates the branch and emits
+  **nothing**.
+
+So the audit log records only some branch creations. Whether that is
+intended is a WP06 question — the emit site's own comment says "for explicit
+path", which reads deliberate — but an audit trail that silently covers a
+subset is exactly the class this mission exists to close, and nothing states
+the intent.
+
+Compounding it: **no test in the package passes `ParentMessageID` at all**,
+so the only path that emits has no coverage whatsoever. The explicit path
+needs a real persisted parent message, which the current fixture
+(`newTestStack`) does not build.
+
+**Owed:** decide whether the legacy path should audit; then a spy-emitter
+test on whichever paths are meant to emit, for `branches`, `tools` and
+`update`. The test written during this investigation was removed rather than
+left red or weakened to pass — a green test over the non-emitting path would
+have enshrined the gap. **Owner: unassigned; belongs with ZA10 WP06.**
+
 ## Drained
 
 ### 2026-08-19 · CLOSED — the missing-upgrade-snapshot hole is now gated
