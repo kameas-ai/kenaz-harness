@@ -102,7 +102,7 @@ func TestRecoverFromOverflow_BudgetAllowsSecondRecovery(t *testing.T) {
 	runner, sub, env, llm, engine, broker := overflowFixture(t, 2, 1)
 
 	reason, message, clean := runner.recoverFromOverflow(
-		slog.Default(), sub, env, overflowError())
+		context.Background(), slog.Default(), sub, env, overflowError())
 
 	if reason != "completed" || !clean {
 		t.Fatalf("reason = %q clean = %v, want completed/true (message %q)", reason, clean, message)
@@ -131,7 +131,7 @@ func TestRecoverFromOverflow_ExhaustionReportsSessionFull(t *testing.T) {
 	runner, sub, env, _, engine, broker := overflowFixture(t, 2, 99)
 
 	reason, message, clean := runner.recoverFromOverflow(
-		slog.Default(), sub, env, overflowError())
+		context.Background(), slog.Default(), sub, env, overflowError())
 
 	if clean {
 		t.Fatalf("clean = true after exhausting the recovery budget")
@@ -169,7 +169,7 @@ func TestRecoverFromOverflow_DefaultBudgetIsTodaysOneShot(t *testing.T) {
 	runner.cfg.MaxOverflowRecoveries = nil
 
 	reason, _, clean := runner.recoverFromOverflow(
-		slog.Default(), sub, env, overflowError())
+		context.Background(), slog.Default(), sub, env, overflowError())
 
 	if clean || reason != "backend-error" {
 		t.Fatalf("reason = %q clean = %v, want backend-error/false", reason, clean)
@@ -192,7 +192,7 @@ func TestRecoverFromOverflow_ZeroBudgetSurfacesTheRealError(t *testing.T) {
 	original := overflowError()
 
 	reason, message, clean := runner.recoverFromOverflow(
-		slog.Default(), sub, env, original)
+		context.Background(), slog.Default(), sub, env, original)
 
 	if clean || reason != "backend-error" {
 		t.Fatalf("reason = %q clean = %v, want backend-error/false", reason, clean)
@@ -221,7 +221,7 @@ func TestRecoverFromOverflow_CompactionUnavailableSurfacesTheRealError(t *testin
 	original := overflowError()
 
 	reason, message, clean := runner.recoverFromOverflow(
-		slog.Default(), sub, env, original)
+		context.Background(), slog.Default(), sub, env, original)
 
 	if clean || reason != "backend-error" {
 		t.Fatalf("reason = %q clean = %v, want backend-error/false", reason, clean)
@@ -246,7 +246,7 @@ func TestRecoverFromOverflow_NonOverflowRedriveErrorIsReportedVerbatim(t *testin
 	env.Graph.Entrypoints = []string{"nope"}
 
 	reason, message, clean := runner.recoverFromOverflow(
-		slog.Default(), sub, env, overflowError())
+		context.Background(), slog.Default(), sub, env, overflowError())
 
 	if clean || reason != "backend-error" {
 		t.Fatalf("reason = %q clean = %v, want backend-error/false", reason, clean)
@@ -283,7 +283,7 @@ func TestRecoverFromOverflow_RearmsTheWatermark(t *testing.T) {
 	env.AutoCompaction = watermark
 
 	reason, message, clean := runner.recoverFromOverflow(
-		slog.Default(), sub, env, overflowError())
+		context.Background(), slog.Default(), sub, env, overflowError())
 	if reason != "completed" || !clean {
 		t.Fatalf("reason = %q clean = %v, want completed/true (%q)", reason, clean, message)
 	}

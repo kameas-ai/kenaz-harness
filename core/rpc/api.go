@@ -5421,6 +5421,42 @@ func resolveAutonomyKnobsWithSettingsFallback(global, project, session autonomy.
 	return autonomy.Resolve(global, project, session)
 }
 
+// registerManualCompactionStrategies installs the strategies the BASE
+// compaction pipeline was missing so the manual-trigger RPC surface
+// (core/rpc/views/compaction.API.TriggerManualCompaction — the "Compact
+// now" button) stops failing with ErrUnknownStrategy.
+// chat-turn-integrity-01PMZ606 WP07. A nil pipeline is a no-op — the
+// same degraded-install shape newGraphManagerWithDeps already tolerates
+// for drop_oldest/summary.
+//
+// session_rewrite: compaction.PresetForTier sets SiteManual's default
+// Strategy to session_rewrite, and TriggerManualCompaction runs against
+// THIS base pipeline, not the per-run Bind() clone chat_default.yaml's
+// `compact` node uses (bindCompactor, in session_compaction.go).
+// Without this registration, every manual trigger with no explicit
+// strategy override resolved a strategy the base pipeline had never
+// heard of and failed with "unknown strategy: session_rewrite"
+// unconditionally — a plain wiring bug, not a policy choice.
+// profileID/modelOverride are empty inside chat.NewSessionRewriteStrategy
+// on purpose: this registration has no run identity to inherit them
+// from, and Compact's pickModel() already prefers the settings-configured
+// compaction model when one is wired.
+//
+// semantic_cluster: constructible with a nil Embedder — it degrades to
+// an even stride-pick across the transcript rather than erroring
+// (SemanticClusterStrategy.FallbackEnabled defaults true), the same
+// shape as NewSummaryStrategy(nil)'s heuristic fallback. Registering it
+// is what turns the panel's offered option from "always
+// ErrUnknownStrategy" into "actually runs, degraded until an embedder
+// is wired" — no embedder is wired on this path today.
+func registerManualCompactionStrategies(p *compaction.Pipeline, deps *chat.CompactionDeps, history chat.SessionMessageReader) {
+	if p == nil {
+		return
+	}
+	p.RegisterStrategy(chat.NewSessionRewriteStrategy(deps, history))
+	p.RegisterStrategy(compaction.NewSemanticClusterStrategy(nil))
+}
+
 // buildChatRunner constructs the *chat.ChatRunner that replaces
 // core/toolloop as the chassis chat path. Returns nil when the graph
 // manager is unavailable (test path or boot failure) so the LLM view
@@ -5758,6 +5794,7 @@ func buildChatRunner(
 	// built without a compactor yields nil here, which makes the node a
 	// documented passthrough.
 	chatCompactionPipeline, _ := graphMgr.Kernel().Compactor().(*compaction.Pipeline)
+	registerManualCompactionStrategies(chatCompactionPipeline, compactionDeps, historyReader)
 
 	runner, err := chat.New(chat.Config{
 		Kernel:        graphMgr.Kernel(),
@@ -6733,9 +6770,21 @@ func (r *liveDialResolver) Resolve(scope compaction.ScopeKey) compaction.Compact
 }
 
 // syncTier rewrites the global layer when — and only when — the dial has
-// moved since the last observation. The first call always writes, which
-// is deliberate: it makes the resolver's state a function of the dial
-// rather than of whatever the boot seed happened to catch.
+// moved since the last observation.
+//
+// chat-turn-integrity-01PMZ606 WP06: the first call used to always
+// write, on the theory that it made the resolver's state a function of
+// the dial rather than of whatever the boot seed happened to catch. In
+// practice that theory was the bug: newLiveDialResolver wraps a resolver
+// that has ALREADY loaded the user's persisted compaction.yaml (which
+// may hold hand-tuned fields the compaction Settings view wrote, not
+// merely PresetForTier(tier) verbatim), and the first Resolve() call —
+// triggered by the panel's own GetEffective, or by the first turn of the
+// user's session — clobbered that just-loaded layer wholesale before the
+// user ever saw it. newLiveDialResolver now seeds `last` from the dial's
+// value at construction time, so this first call is a no-op unless the
+// dial has genuinely moved since boot — exactly the same test this
+// function already applies to every later call.
 func (r *liveDialResolver) syncTier() {
 	if r == nil || r.tier == nil {
 		return
@@ -6763,21 +6812,38 @@ func (r *liveDialResolver) syncTier() {
 // Returns inner unchanged when there is no settings store to read (the
 // nil-Core test chassis), which leaves the boot seed in place — the
 // pre-existing behaviour for callers with no dial to track.
+//
+// WP06: `last` is seeded from the dial's value read right here, at
+// construction — the same read compactionGlobalSeed already made to
+// compute inner's boot seed, and (barring a hand-edited settings file
+// between the two reads) the same tier that produced whatever
+// compaction.yaml's global section already holds by the time inner was
+// built. Seeding it means syncTier's first call is a no-op unless the
+// dial has moved since boot, instead of unconditionally overwriting the
+// persisted layer the very first time anything resolves — see syncTier.
 func newLiveDialResolver(inner compaction.Resolver, settingsImpl *settings.API) compaction.Resolver {
 	if inner == nil || settingsImpl == nil || settingsImpl.Store() == nil {
 		return inner
 	}
+	tier := func() string {
+		s, err := settingsImpl.Store().LoadAll()
+		if err != nil {
+			// Empty is the read-failure sentinel; syncTier treats
+			// it as "leave the layer alone".
+			return ""
+		}
+		return string(s.EffectiveCompactionAggressiveness())
+	}
 	return &liveDialResolver{
 		Resolver: inner,
-		tier: func() string {
-			s, err := settingsImpl.Store().LoadAll()
-			if err != nil {
-				// Empty is the read-failure sentinel; syncTier treats
-				// it as "leave the layer alone".
-				return ""
-			}
-			return string(s.EffectiveCompactionAggressiveness())
-		},
+		tier:     tier,
+		// Seed with today's dial value, not the zero value, so the
+		// first syncTier() call is a no-op unless the dial has
+		// genuinely moved since this resolver was constructed. An
+		// unreadable dial (tier() returning "") seeds `last` to ""
+		// too, which is consistent: syncTier already treats "" as
+		// "leave the layer alone" on every subsequent call.
+		last: tier(),
 	}
 }
 
