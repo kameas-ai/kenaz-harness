@@ -161,4 +161,26 @@ describe('GraphEditor', () => {
     expect(wrapper.find('[data-testid="editor-readonly-banner"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="editor-save"]').exists()).toBe(false);
   });
+
+  it('renders the unreviewed-draft banner for a model-authored graph (UNIT-6, AC-009)', async () => {
+    const { wrapper } = mountWith({
+      spec: {
+        id: 'user_g',
+        scope: 'user' as const,
+        yaml: 'spec_version: "1"\nid: user_g\nspec_provenance: model_authored\nentrypoints: [a]\nnodes:\n  - id: a\n    kind: plan\n    attrs:\n      verbosity: terse\n',
+      },
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="editor-unreviewed-banner"]').exists()).toBe(true);
+    // A model-authored graph is scope "user" — still editable and
+    // savable. Saving is the review step (UNIT-5 clears the marker
+    // server-side on a user-initiated save), so Save must stay present.
+    expect(wrapper.find('[data-testid="editor-save"]').exists()).toBe(true);
+  });
+
+  it('does not render the unreviewed-draft banner for an ordinary human-authored graph', async () => {
+    const { wrapper } = mountWith();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="editor-unreviewed-banner"]').exists()).toBe(false);
+  });
 });

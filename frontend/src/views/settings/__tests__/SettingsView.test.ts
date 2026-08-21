@@ -364,3 +364,45 @@ describe('SettingsView — no-eligible-embedder-provider banner', () => {
     expect(w.find('[data-testid="no-embedder-provider-banner"]').exists()).toBe(false);
   });
 });
+
+// ── model-authored-graphs-01PMGA01 UNIT-6: the FR-006 consent dial ──────
+//
+// No dedicated Settings_Get/SetGraphAuthoringEnabled binding exists — the
+// toggle reads and writes through the generic Settings_Get/Settings_Set
+// round trip, exactly like autoCollapseBranchesInSidebar. These tests
+// pin that the control reflects the REAL persisted value (not a local
+// default) and writes through client.settings.set, per AC-009.
+describe('SettingsView — graph authoring consent dial (UNIT-6, AC-009)', () => {
+  it('defaults the toggle off when graphAuthoringEnabled is absent', async () => {
+    const { client } = provide();
+    const w = mount(SettingsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    const toggle = w.get('[data-testid="graph-authoring-enabled-toggle"]');
+    expect(toggle.attributes('aria-checked')).toBe('false');
+  });
+
+  it('reflects a persisted graphAuthoringEnabled=true rather than a local default', async () => {
+    const { client } = provide({ graphAuthoringEnabled: true });
+    const w = mount(SettingsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    const toggle = w.get('[data-testid="graph-authoring-enabled-toggle"]');
+    expect(toggle.attributes('aria-checked')).toBe('true');
+  });
+
+  it('writes graphAuthoringEnabled through client.settings.set on click', async () => {
+    const { client, set } = provide();
+    const w = mount(SettingsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    await w.get('[data-testid="graph-authoring-enabled-toggle"]').trigger('click');
+    await flushPromises();
+    expect(set).toHaveBeenCalledWith(
+      expect.objectContaining({ graphAuthoringEnabled: true }),
+    );
+  });
+});

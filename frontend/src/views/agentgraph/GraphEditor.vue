@@ -32,6 +32,7 @@ import {
   defaultAttrsForKind,
   materializationStatuses,
   SPEC_PROVENANCE_LIBRARY_FALLBACK,
+  SPEC_PROVENANCE_MODEL_AUTHORED,
 } from '@/lib/canvas/graphAdapter';
 import {
   applyOpToDoc,
@@ -171,12 +172,27 @@ onBeforeUnmount(() => {
 const isDegraded = computed(
   () => lastGoodGraph.value?.specProvenance === SPEC_PROVENANCE_LIBRARY_FALLBACK,
 );
-/** The same warning, short enough to badge over the canvas itself. */
-const canvasNotice = computed(() =>
-  isDegraded.value
-    ? 'Degraded projection — this topology may differ from the one that ran.'
-    : '',
+/**
+ * UNIT-6: the canvas is the review step. `spec_provenance:
+ * model_authored` means this graph was drafted by the assistant and no
+ * human has saved over it yet — saveGraph refuses to run it
+ * (graph_run_unreviewed_forbid.cedar, keyed on the same marker UNIT-5
+ * stamps) until a user-initiated save clears the field. Read off the
+ * ONE parse, same as isDegraded, rather than re-scanning the buffer.
+ */
+const isUnreviewed = computed(
+  () => lastGoodGraph.value?.specProvenance === SPEC_PROVENANCE_MODEL_AUTHORED,
 );
+/** The same warning, short enough to badge over the canvas itself. */
+const canvasNotice = computed(() => {
+  if (isDegraded.value) {
+    return 'Degraded projection — this topology may differ from the one that ran.';
+  }
+  if (isUnreviewed.value) {
+    return 'Unreviewed draft — drafted by the assistant, not yet reviewed. Saving marks it reviewed.';
+  }
+  return '';
+});
 
 // ── selection ────────────────────────────────────────────────────────
 //
@@ -586,6 +602,16 @@ defineExpose({
         available, so it was projected against the library graph instead.
         Per-run dial overrides and any gate rewrite are unrecoverable: the
         topology shown may differ from the one that ran.
+      </div>
+      <div
+        v-if="isUnreviewed"
+        class="rounded-md border border-signal-warn bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-warn"
+        data-testid="editor-unreviewed-banner"
+        role="status"
+      >
+        Unreviewed draft — this graph was drafted by the assistant. Nobody has
+        reviewed it yet, and it will not run until someone does: saving it
+        here marks it reviewed and clears this notice.
       </div>
 
       <div
