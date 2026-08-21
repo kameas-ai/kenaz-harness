@@ -1076,6 +1076,7 @@ export namespace bundle {
 	export class InstallRequest {
 	    kind: string;
 	    path: string;
+	    url?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new InstallRequest(source);
@@ -1085,6 +1086,7 @@ export namespace bundle {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.kind = source["kind"];
 	        this.path = source["path"];
+	        this.url = source["url"];
 	    }
 	}
 
