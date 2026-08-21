@@ -490,6 +490,39 @@ const (
 	// will not be asked about". Emitted on failure too (Written=false)
 	// so a silent write failure cannot masquerade as a grant.
 	KindToolConfirmGrantWritten Kind = "tool.confirm_grant_written"
+
+	// ── Bundle install audit kinds
+	// (bundle-download-and-verify-01PMZ909 UNIT-7) ──────────────────
+
+	// KindBundleFetched fires once per successful Bundle_Install, after
+	// every declared artifact has been fetched and hash-verified into
+	// the CAS (UNIT-5) and BEFORE the lockfile row is written — i.e. it
+	// reports a fetch that is about to be committed, not merely
+	// attempted. Payload: BundleFetchedPayload.
+	//
+	// Privacy invariant: name/version/channel/source are metadata the
+	// operator already sees in the /bundles view; artifact bytes,
+	// signature bytes, and any resolved credential are NEVER included.
+	KindBundleFetched Kind = "bundle.fetched"
+
+	// KindBundleSignatureVerified fires when VerifyManifestSignatures
+	// returns a real, positive verification result (UNIT-4's
+	// Verified=true — never on the "no signature present" case, which
+	// is not a verification outcome to report). Payload:
+	// BundleSignatureVerifiedPayload.
+	KindBundleSignatureVerified Kind = "bundle.signature_verified"
+
+	// KindBundleSignatureRejected fires when VerifyManifestSignatures
+	// returns an error — a present-but-invalid signature, or a required
+	// signature that is missing (spec D-2/D-5: this install is refused,
+	// no lockfile row is written). Payload:
+	// BundleSignatureRejectedPayload.
+	//
+	// Privacy invariant: Reason is the typed rejection reason string
+	// (e.g. "signature_invalid", "anchor_missing") — never the
+	// signature bytes, the payload bytes, or a raw error chain that
+	// might embed a filesystem path outside the bundle root.
+	KindBundleSignatureRejected Kind = "bundle.signature_rejected"
 )
 
 // ToolConfirmPath names which branch of the confirm-each dispatch path
@@ -588,6 +621,42 @@ type ToolConfirmGrantWrittenPayload struct {
 	// still approved — a failed persist must not read as a granted one.
 	Written bool   `json:"written"`
 	Error   string `json:"error,omitempty"`
+}
+
+// BundleFetchedPayload is the KindBundleFetched payload
+// (bundle-download-and-verify-01PMZ909 UNIT-7).
+//
+// Privacy invariant: no artifact bytes, no signature bytes, no
+// resolved credential. Source is the channel-qualified locator already
+// surfaced in the /bundles view (e.g. "local_path:/…" or
+// "http_mirror:https://…") — never a value containing embedded auth.
+type BundleFetchedPayload struct {
+	Name          string `json:"name"`
+	Version       string `json:"version"`
+	Channel       string `json:"channel"`
+	Source        string `json:"source"`
+	ArtifactCount int    `json:"artifact_count"`
+}
+
+// BundleSignatureVerifiedPayload is the KindBundleSignatureVerified
+// payload. Fires only on a real, positive verification result — never
+// on the "no signature present" case.
+type BundleSignatureVerifiedPayload struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	// KeyID is the anchor key identifier the signature verified
+	// against — a fingerprint, not key material.
+	KeyID string `json:"key_id,omitempty"`
+}
+
+// BundleSignatureRejectedPayload is the KindBundleSignatureRejected
+// payload. Reason is the typed rejection reason string (e.g.
+// "signature_invalid", "anchor_missing", "signature_required") — never
+// the raw error chain, which could embed a filesystem path.
+type BundleSignatureRejectedPayload struct {
+	Name    string `json:"name"`
+	Version string `json:"version,omitempty"`
+	Reason  string `json:"reason"`
 }
 
 // Event is the wire shape passed to the event log. The concrete event-log

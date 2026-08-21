@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/bundle/cache"
 	"github.com/kameas-ai/kenaz-harness/core/bundle/channels"
@@ -29,6 +30,8 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/bundle/integrity"
 	"github.com/kameas-ai/kenaz-harness/core/bundle/lockfile"
 	"github.com/kameas-ai/kenaz-harness/core/bundle/manifest"
+	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/secrets"
 	"github.com/kameas-ai/kenaz-harness/core/trust"
 )
@@ -94,6 +97,19 @@ type API struct {
 	// (core/bundle/channels/localpath wires the same façade).
 	registry channels.Registry
 	creds    secrets.ResolverAPI
+
+	// gate and audit are UNIT-7's security seam
+	// (bundle-download-and-verify-01PMZ909, spec §1.7 F-3 / §5.6). gate
+	// is consulted BEFORE any channel is opened — nil default-allows
+	// (matching cedar.enforce's own NotApplicable→allow stance), which
+	// is safe here only because the shipped default_bundle_policy.cedar
+	// keeps the evaluation itself from being NotApplicable once a real
+	// Gate IS wired (core/rpc/api.go always wires one in production).
+	// audit is optional; a nil emitter drops every bundle.* event
+	// silently (audit.MustEmit's own contract) — acceptable in test
+	// harnesses without one wired.
+	gate  cedar.Gate
+	audit contextaudit.Emitter
 }
 
 // Option configures NewAPI.
@@ -157,6 +173,24 @@ func WithChannelRegistry(r channels.Registry) Option {
 // secrets.NoopResolver{} — safe for local_path, which never reads Auth.
 func WithSecretsResolver(r secrets.ResolverAPI) Option {
 	return func(a *API) { a.creds = r }
+}
+
+// WithGate injects the Cedar policy gate Install consults, via
+// CheckBundleInstall, before opening any channel (UNIT-7, spec §5.6).
+// nil (the default) default-allows every install — the pre-UNIT-7
+// behaviour, and the correct one for callers/tests that intentionally
+// don't wire policy.
+func WithGate(g cedar.Gate) Option {
+	return func(a *API) { a.gate = g }
+}
+
+// WithAuditEmitter injects the append-only event-log emitter Install
+// writes bundle.fetched / bundle.signature_verified /
+// bundle.signature_rejected records to (UNIT-7). nil (the default)
+// drops every event silently, matching audit.MustEmit's own contract —
+// acceptable in test harnesses without one wired.
+func WithAuditEmitter(e contextaudit.Emitter) Option {
+	return func(a *API) { a.audit = e }
 }
 
 // NewDefaultRegistry returns a channels.Registry with only the
@@ -426,6 +460,22 @@ func (a *API) Install(ctx context.Context, req InstallRequest) (Bundle, error) {
 		}
 	}
 
+	locator := req.Path
+	if locator == "" {
+		locator = req.URL
+	}
+
+	// UNIT-7 (spec §1.7 F-3 / §5.6): gate BEFORE any channel is opened —
+	// Bundle_Install is otherwise a fully ungated remote-fetch primitive
+	// the instant a non-local_path channel is registered in production
+	// (UNIT-6's http_mirror, armed only by UNIT-7's own commit — see
+	// core/rpc/api.go). The resource identity is the caller-supplied
+	// locator, not the bundle name: the manifest that would reveal the
+	// name hasn't been fetched yet.
+	if err := cedar.CheckBundleInstall(ctx, a.gate, req.Kind+":"+locator); err != nil {
+		return Bundle{}, err
+	}
+
 	spec := channels.ChannelSpec{Kind: req.Kind, Path: req.Path, URL: req.URL}
 	ch, err := a.channelRegistry().Open(spec, a.secretsResolver())
 	if err != nil {
@@ -475,7 +525,26 @@ func (a *API) Install(ctx context.Context, req InstallRequest) (Bundle, error) {
 	}
 	verified, err := integrity.VerifyManifestSignatures(ctx, m, a.verifier, anchors, policy, resolve)
 	if err != nil {
+		// UNIT-7: report the rejection BEFORE returning — this is the
+		// refusal path (no lockfile row, no CAS residue for this
+		// artifact loop, which hasn't run yet).
+		contextaudit.MustEmit(ctx, a.audit, contextaudit.KindBundleSignatureRejected, contextaudit.BundleSignatureRejectedPayload{
+			Name:    m.Name,
+			Version: m.Version,
+			Reason:  err.Error(),
+		}, time.Now())
 		return Bundle{}, fmt.Errorf("bundle: verify signatures: %w", err)
+	}
+	if verified {
+		var keyID string
+		if len(m.Signatures) > 0 {
+			keyID = m.Signatures[0].KeyID
+		}
+		contextaudit.MustEmit(ctx, a.audit, contextaudit.KindBundleSignatureVerified, contextaudit.BundleSignatureVerifiedPayload{
+			Name:    m.Name,
+			Version: m.Version,
+			KeyID:   keyID,
+		}, time.Now())
 	}
 
 	// UNIT-5: fetch + hash-verify + store every declared artifact BEFORE
@@ -500,6 +569,16 @@ func (a *API) Install(ctx context.Context, req InstallRequest) (Bundle, error) {
 			return Bundle{}, fmt.Errorf("bundle: artifact %s: %w", ad.Name, err)
 		}
 	}
+	// UNIT-7: the fetch record — every declared artifact is now
+	// hash-verified and in the CAS, about to be committed to the
+	// lockfile below.
+	contextaudit.MustEmit(ctx, a.audit, contextaudit.KindBundleFetched, contextaudit.BundleFetchedPayload{
+		Name:          m.Name,
+		Version:       m.Version,
+		Channel:       req.Kind,
+		Source:        req.Kind + ":" + locator,
+		ArtifactCount: len(m.Artifacts),
+	}, time.Now())
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -513,10 +592,6 @@ func (a *API) Install(ctx context.Context, req InstallRequest) (Bundle, error) {
 		return Bundle{}, fmt.Errorf("bundle: parse lockfile: %w", err)
 	}
 
-	locator := req.Path
-	if locator == "" {
-		locator = req.URL
-	}
 	lb := lockfile.LockedBundle{
 		Name:        m.Name,
 		Version:     m.Version,
