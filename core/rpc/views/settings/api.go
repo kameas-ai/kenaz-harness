@@ -12,8 +12,19 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
 )
 
-// Settings is the persisted UI state shape (plan §5.5). schemaVersion
-// gates migrations; lastRoute drives first-paint route restoration.
+// Settings is the persisted UI state shape (plan §5.5). lastRoute drives
+// first-paint route restoration.
+//
+// SchemaVersion does NOT gate any migration today
+// (controls-and-readouts-that-tell-the-truth-01PMZ808 WP06, FR-007,
+// narrowed 2026-08-19). Three production sites default-backfill it
+// (impl.go:84-85, :308-309, :1580-1581 — `if got.SchemaVersion == 0 { …
+// = 1 }`); nothing compares it against any other value, and there is no
+// migration table or dispatcher. `justify(blocker: "no
+// settings-migration dispatcher; needs the settings.json upgrade
+// fixture WP-PI builds", owner: alec, date: 2026-08-19)`. The field and
+// its About-panel display stay: a number that is always 1 is a fact,
+// not a lie.
 //
 // MemoryEnabled is the explicit opt-in for the cross-session long-term
 // memory feature. Privacy default is OFF: when false the harness never

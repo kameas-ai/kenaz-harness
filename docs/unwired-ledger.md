@@ -280,6 +280,28 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-08-19 · `settings.Settings.SchemaVersion` gates no migration (`SD-13` settings)
+
+`controls-and-readouts-that-tell-the-truth-01PMZ808` WP06 (FR-007). Three
+production reads exist (`core/rpc/views/settings/impl.go:84-85`, `:308-309`,
+`:1580-1581`), and all three are default-backfill only —
+`if got.SchemaVersion == 0 { … = 1 }`. No code compares `SchemaVersion`
+against any other value; there is no migration table and no dispatcher. The
+doc comment at `core/rpc/views/settings/api.go:15` (formerly *"schemaVersion
+gates migrations"*) and `docs/ci-invariants.md`'s #5 invariant (formerly
+future-tense *"when WP13 lands"*) were both narrowed to state this plainly in
+the same commit. The field and its Settings → About display stay — a number
+that is always `1` is a fact, not a lie — and `check-knob-coverage.sh`
+(UNIT-17) will register the field clean, because it *has* three real readers;
+the gate cannot see that the readers never branch on a non-zero value.
+
+**Owner:** alec. **Blocker:** no settings-migration dispatcher exists;
+building one needs the `settings.json` upgrade fixture
+`controls-and-readouts-that-tell-the-truth-01PMZ808` WP-PI adds under
+`core/storage/sqlite/testdata/upgrade/` (there was none before this mission —
+every settings trace in the 2026-08-18 closing sweep ran against the current
+struct shape only). **Date:** 2026-08-19.
+
 ### 2026-08-14 · `export.RedactValue` only walks TOP-LEVEL strings (pre-existing) — **CLOSED 2026-08-16, see below**
 
 > **Superseded.** The reproduction below stands, but re-verifying it on
