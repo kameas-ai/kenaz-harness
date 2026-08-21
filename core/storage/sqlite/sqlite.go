@@ -78,8 +78,20 @@ func Open(cfg storage.Config) (storage.DB, error) {
 		return nil, fmt.Errorf("%w: %v", storage.ErrDBLocked, err)
 	}
 
+	// controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-16 WP21
+	// (FR-030): journal_mode used to be a hardcoded WAL literal, so
+	// Config{WAL:&false} silently still opened in WAL mode. cfg.WAL is
+	// guaranteed non-nil here — applyDefaults (called at the top of
+	// Open) fills it to true when unset. foreign_keys stays
+	// UNCONDITIONALLY 1 regardless of cfg.ForeignKeys — see the
+	// ForeignKeys field doc in core/storage/storage.go for why that is
+	// deliberate, not an oversight.
+	journalMode := "WAL"
+	if !*cfg.WAL {
+		journalMode = "DELETE"
+	}
 	dsn := "file:" + url.PathEscape(dbPath) +
-		"?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
+		"?_pragma=foreign_keys(1)&_pragma=journal_mode(" + journalMode + ")&_pragma=busy_timeout(5000)"
 	rawDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		_ = lockHandle.Release()
@@ -182,7 +194,16 @@ func Open(cfg storage.Config) (storage.DB, error) {
 		return nil, err
 	}
 
-	logging.L().Info("storage.opened", "path", dbPath, "wal", true, "fk", true)
+	// controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-16 WP21:
+	// this log line asserted "wal":true, "fk":true unconditionally,
+	// found while wiring Config.WAL into the DSN above — a readout that
+	// would have kept reporting WAL even for a database this same Open
+	// call just opened WITHOUT it. "wal" now reflects the real journal
+	// mode decision; "fk" is deliberately still the literal true —
+	// foreign_keys is unconditional by design (see D-6 in this WP's
+	// commit), not a dial, so logging it as a variable would itself
+	// misrepresent it as configurable.
+	logging.L().Info("storage.opened", "path", dbPath, "wal", journalMode == "WAL", "fk", true)
 	return db, nil
 }
 
@@ -226,10 +247,16 @@ func defaultConfig(dataDir string) storage.Config {
 	}
 }
 
-// applyDefaults re-uses the unexported Config helpers via a small
-// shim — Config.applyDefaults / Config.validate live next to the type
-// in core/storage/storage.go but are unexported, so we mirror their
-// logic here.
+// applyDefaults is THIS package's copy of the default-filling logic —
+// and the AUTHORITATIVE one. Config.applyDefaults / Config.validate
+// (core/storage/storage.go) are the unexported ORIGINAL this was
+// mirrored from, but Open (above) calls the package-level functions
+// here, not the Config methods — so those methods have zero callers,
+// including tests
+// (controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-16 WP21,
+// re-derived from FR-030, 2026-08-21: the original comment pointed the
+// next editor at the wrong copy to patch). If the two definitions
+// drift, THIS one is what production runs.
 func applyDefaults(cfg storage.Config) storage.Config {
 	if cfg.VectorBackend == "" {
 		cfg.VectorBackend = storage.VectorBackendSQLiteVec

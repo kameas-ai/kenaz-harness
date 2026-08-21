@@ -43,7 +43,27 @@ ports:
 attrs:
   parallel_dispatch:
     type: bool
-    description: "Dispatch all tool_calls concurrently via errgroup; set false for serial dispatch."
+    # NARROWED (controls-and-readouts-that-tell-the-truth-01PMZ808
+    # UNIT-16 WP21, FR-031, register X-6, 2026-08-21). Re-derivation
+    # found the WIRE this finding originally prescribed is unsafe to
+    # ship: exec_dispatch.go's Node.Attrs is re-encoded from the raw
+    # YAML map into this typed struct during loading, and the raw map
+    # (which would carry "key present" information) is discarded — see
+    # core/agentgraph/spec.go's Node.Attrs doc. A plain `bool` with
+    # `omitempty` cannot distinguish "the author wrote false" from "the
+    # author never mentioned this key" after that point; both decode to
+    # Go's zero value. `*bool` would resolve the ambiguity but is
+    # forbidden (spec D-7 — it would trigger the full codegen ritual).
+    # Gating dispatch on this field would therefore silently flip EVERY
+    # tool_dispatch node that omits the key — including future
+    # model-authored or dropped-override graphs this repo does not
+    # control — from parallel to serial, which is the exact class of
+    # silent default-flip regression this mission exists to prevent,
+    # not merely relocated to a new field. `justify(blocker: "no
+    # load-time key-presence check exists to distinguish omitted from
+    # explicit-false; adding one is new validation infrastructure, not
+    # a one-field wire", owner: alec, date: 2026-08-21)`.
+    description: "NOT CONSUMED. max_concurrent: 1 is the only lever that selects serial dispatch (core/agentgraph/exec_dispatch.go); this field is accepted, generated, and documented but exec_dispatch.go never reads it. Every shipped graph sets it to true for readability, but the value is inert either way."
   max_concurrent:
     type: int
     min: 1

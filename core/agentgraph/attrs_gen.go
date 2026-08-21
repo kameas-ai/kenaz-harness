@@ -1683,7 +1683,7 @@ type ToolDispatchAttrs struct {
 	// Model: Provider-specific model name.
 	Model string `json:"model,omitempty" yaml:"model,omitempty"`
 
-	// ParallelDispatch: Dispatch all tool_calls concurrently via errgroup; set false for serial dispatch.
+	// ParallelDispatch: NOT CONSUMED. max_concurrent: 1 is the only lever that selects serial dispatch (core/agentgraph/exec_dispatch.go); this field is accepted, generated, and documented but exec_dispatch.go never reads it. Every shipped graph sets it to true for readability, but the value is inert either way.
 	ParallelDispatch bool `json:"parallel_dispatch,omitempty" yaml:"parallel_dispatch,omitempty"`
 
 	// Provider: LLM provider identifier (e.g. anthropic, bedrock).

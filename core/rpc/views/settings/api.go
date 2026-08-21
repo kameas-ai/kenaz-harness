@@ -1739,8 +1739,17 @@ func (s Settings) EffectiveMaxGeneratedImageBytes() int64 {
 // override is used (converted from GiB to bytes); otherwise `detected`
 // (from core/system/resources.EffectiveRAMBytes()) is returned.
 //
-// This helper is called by the model-fit filter (WP06) and by the
-// frontend settings panel (WP07) to present a consistent effective value.
+// NARROWED (controls-and-readouts-that-tell-the-truth-01PMZ808
+// UNIT-16 WP21, FR-033, 2026-08-21): this used to name "the model-fit
+// filter (WP06)" and "the frontend settings panel (WP07)" as callers —
+// neither exists. Zero non-test callers of this method anywhere in the
+// tree; the raw override itself IS reachable via
+// Settings_{Get,Set}LocalRuntimeRAMOverrideGB (harnessClient.ts), but
+// nothing computes the EFFECTIVE (override-or-detected) value the
+// frontend would need to show "how much RAM will actually be used."
+// See docs/unwired-ledger.md's dated entry for this field —
+// re-dated here, not re-filed, per AC-M4 (claim the field, not the
+// row it shares with several sibling fields).
 // (local-model-runtimes-01KQ8VMZ WP07)
 func (s Settings) EffectiveLocalRuntimeRAMBytes(detected int64) int64 {
 	if s.LocalRuntimeRAMOverrideGB > 0 {

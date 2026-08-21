@@ -863,7 +863,14 @@ non-test callers are the two store accessors `FileStore.LoadPermissionMode`
 `attemptRestart()` unconditionally; nothing in `core/mcp` reads any settings
 gate), `SkippedUpdateVersions` (the doc claims the updater filters these
 out; no filter exists), `LocalRuntimeRAMOverrideGB`
-(`EffectiveLocalRuntimeRAMBytes` has zero callers).
+(`EffectiveLocalRuntimeRAMBytes` has zero callers) —
+**`EffectiveLocalRuntimeRAMBytes` claimed and narrowed** by
+`controls-and-readouts-that-tell-the-truth-01PMZ808` UNIT-16 (WP21,
+FR-033). **Owner: alec. Date: 2026-08-21.** Its doc no longer names a
+WP06 filter or WP07 panel that do not exist. This claims the field
+only, not the row — `LocalRuntimeRAMOverrideGB` the raw setting (as
+opposed to the Effective helper) and every other field in this row
+remain under G-4.
 
 *Consumer lives in an orphan package:* `CedarStrictCredentialMode`,
 `CredentialAuditRetentionDays` (both reach `core/credstore`, an I7 orphan).
