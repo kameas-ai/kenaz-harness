@@ -140,9 +140,15 @@ export const signedIn: ComputedRef<boolean> = computed(() => {
   // allowlist and answers with the desktop process's real capability map, so
   // a browser client of a signed-in harness would otherwise read `signedIn`
   // as true — and every gate below it would open onto an RPC that served mode
-  // refuses. The allowlist in core/serve/methods.go is 33 methods and carries
-  // no Sites_*, Catalog_*, Sync_* or Slashcmd_SkillPublish, so there is no
-  // fleet affordance that could work here and no gate that should open.
+  // refuses. The allowlist in core/serve/methods.go carries no Sites_*,
+  // Catalog_*, Sync_* or Slashcmd_SkillPublish, so there is no fleet
+  // affordance that could work here and no gate that should open. (This
+  // comment used to hardcode the allowlist's size — "33 methods" — which
+  // went stale the first time a method was ported; the SIZE isn't the
+  // invariant that matters, the ABSENCE of any fleet method is, and that's
+  // asserted by core/serve/wp08_served_count_test.go rather than restated
+  // here in a number nothing keeps in sync. See docs/served-mode-boundary.md
+  // for the count as of the last release that touched it.)
   //
   // Closed HERE rather than at each call site because the call sites do not
   // agree on how they are protected, and one of them is not. Sites and

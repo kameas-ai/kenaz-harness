@@ -274,7 +274,10 @@ func main() {
 
 	srv := serve.New(api, addr, token, servedFS, log,
 		serve.WithAuthSession(authSession),
-		serve.WithConnectors(connSup))
+		serve.WithConnectors(connSup),
+		// SD-16 (served-mode-is-a-real-mode-01PMZ707 WP08): both served
+		// entry points must agree — see main.go's identical wiring.
+		serve.WithStreamQueueCap(serve.StreamQueueCapFromEnv(os.Getenv)))
 	if serveErr := srv.Serve(ctx); serveErr != nil && serveErr != context.Canceled {
 		log.Error("harness-served: server error", "err", serveErr)
 		os.Exit(1)

@@ -115,6 +115,15 @@ const (
 type StreamTruncatedPayload struct {
 	Dropped uint64 `json:"dropped"`
 	// Reason is stable, machine-readable copy for the UI to key on.
+	// SD-15 (served-mode-is-a-real-mode-01PMZ707 WP08): this WAS an
+	// unhonoured promise — the field rode the wire with nothing branching
+	// on it. Now consumed by SessionsView.vue's streamTruncatedCopy(),
+	// which looks the value up in a UI-owned copy table (decoupling the
+	// notice's wording from this file's prose) and falls back to Message
+	// for any reason it does not recognise. Only "slow-consumer" is
+	// emitted today (below); adding a second value here needs a matching
+	// entry in that lookup or it silently degrades to Message, which is
+	// intentional, not a bug to "fix" by keeping the two in lockstep.
 	Reason string `json:"reason"`
 	// Message is human-readable guidance. It must stay actionable from
 	// INSIDE a workbench — never "run the desktop app".

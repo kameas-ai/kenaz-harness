@@ -2277,10 +2277,15 @@ type FeatureFlagInfo struct {
 	EnvVar      string `json:"envVar"`
 }
 
-// Config_GetFlags returns the current state of all known feature flags.
-// This RPC is read-only; flags are controlled via environment variables.
-func (b *Bindings) Config_GetFlags() ([]FeatureFlagInfo, error) {
-	defer sentry.WrapBinding("Config_GetFlags")()
+// ComputeFeatureFlags returns the current state of all known feature flags.
+// Side-effect-free: every value is a package-level read of an env-derived
+// flag, never a database or settings-store access.
+//
+// Extracted so core/serve's dispatch switch can serve Config_GetFlags
+// through the SAME projection the desktop Bindings method uses, rather than
+// a second hand-maintained copy of this list drifting out of sync with it
+// (served-mode-is-a-real-mode-01PMZ707 WP04).
+func ComputeFeatureFlags() []FeatureFlagInfo {
 	return []FeatureFlagInfo{
 		{
 			Name:        "user-slash-commands",
@@ -2300,7 +2305,14 @@ func (b *Bindings) Config_GetFlags() ([]FeatureFlagInfo, error) {
 			Description: "Google Gemini adapter (AI Studio API key and Vertex AI service-account / ADC auth). Supports gemini-2.5-pro/flash with streaming, tool calling, vision, and reasoning.", // model-lit-allow: feature-flag description prose, not classification
 			EnvVar:      gemini.EnvFlag,                                                                                                                                                           // model-lit-allow: gemini package symbol, not a model-family literal
 		},
-	}, nil
+	}
+}
+
+// Config_GetFlags returns the current state of all known feature flags.
+// This RPC is read-only; flags are controlled via environment variables.
+func (b *Bindings) Config_GetFlags() ([]FeatureFlagInfo, error) {
+	defer sentry.WrapBinding("Config_GetFlags")()
+	return ComputeFeatureFlags(), nil
 }
 
 // ── corpora (agent-kernel-graph; Bundle C WP10/WP11) ──────────────────

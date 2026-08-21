@@ -104,6 +104,16 @@ const { isActive: planModeActive, pendingPlanId, setActive: setPlanModeActive } 
 
 // Seed initial plan-mode state from the session's autonomy profile so
 // reopened plan_mode sessions show the badge immediately on mount.
+//
+// NG7 (served-mode-is-a-real-mode-01PMZ707 WP04): the line below used to
+// claim "badge defaults to hidden; live events correct it" on a failed
+// read. That escape hatch does not hold — NO producer emits a plan-mode
+// event at all (audit dead-code-audit-2026-08-18.md:1385), so a badge that
+// misses this seed stays hidden for the rest of the session, on desktop
+// too, not just when resolveAutonomy is refused. Sessions_ResolveAutonomy
+// IS ported for served mode (WP04), so this read now succeeds there; the
+// comment is corrected rather than the catch behaviour changed, because
+// there is still no live-event fallback to invoke.
 onMounted(async () => {
   try {
     const resolved = await client.sessions.resolveAutonomy(props.session.id);
@@ -111,7 +121,9 @@ onMounted(async () => {
       setPlanModeActive(true);
     }
   } catch {
-    // Non-critical: badge defaults to hidden; live events correct it.
+    // The badge stays hidden on a failed read. There is no live-event
+    // correction path today (see NG7 above) — this is a real gap, not a
+    // deferred one.
   }
 });
 

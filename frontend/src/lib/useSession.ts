@@ -72,6 +72,35 @@ export interface StreamTruncatedPayload {
 }
 
 /**
+ * STREAM_TRUNCATED_COPY / streamTruncatedCopy — SD-15
+ * (served-mode-is-a-real-mode-01PMZ707 WP08).
+ *
+ * `reason` is a stable, machine-readable key (core/serve/wsstream.go's own
+ * docstring says so) that nothing consumed until this WP: the truncation
+ * notice rendered `.message` — server-composed prose — directly, and
+ * `.reason` rode the wire unread. This is the "give it a consumer" branch
+ * of the disposition, not deletion: keying UI copy off `.reason` decouples
+ * the notice's wording from the server's prose (a copy change on either
+ * side no longer requires touching the other) and degrades gracefully —
+ * any `reason` this table does not recognise falls back to `.message`, so
+ * a future server-side reason this frontend hasn't shipped a translation
+ * for still shows real text instead of going blank.
+ *
+ * Only "slow-consumer" is emitted today (RAN: `grep -n 'Reason:' wsstream.go`
+ * finds exactly one literal). Adding a second server-side value needs a
+ * matching entry here or it silently falls back to `.message` — that
+ * fallback is intentional, not a gap to close by keeping the two in
+ * lockstep.
+ */
+export const STREAM_TRUNCATED_COPY: Record<string, string> = {
+  'slow-consumer':
+    'Part of this reply was dropped because this browser tab could not keep up with the stream. Reopen the conversation to see the full turn.',
+};
+export function streamTruncatedCopy(payload: StreamTruncatedPayload): string {
+  return STREAM_TRUNCATED_COPY[payload.reason] ?? payload.message;
+}
+
+/**
  * OverflowRecoveryPayload mirrors the `chat:overflow-recovery` payload
  * emitted by ChatRunner.recoverFromOverflow
  * (core/rpc/views/agentgraph/chat/chat_runner.go). One per recovery

@@ -36,6 +36,7 @@ var (
 	servedMethods = []string{
 		"AppInfo",
 		"Auth_State",
+		"Config_GetFlags",
 		"Connectors_List",
 		"Confirm_ApproveBatch",
 		"Confirm_CancelBatch",
@@ -65,10 +66,12 @@ var (
 		"Sessions_LoadScrollPosition",
 		"Sessions_MoveToProject",
 		"Sessions_Rename",
+		"Sessions_ResolveAutonomy",
 		"Sessions_SaveDraft",
 		"Sessions_SaveScrollPosition",
 		"Sessions_SendMessageWithBlocks",
 		"Sessions_SetSystemPrompt",
+		"Sessions_SuggestTitle",
 		"ShellStatus",
 	}
 

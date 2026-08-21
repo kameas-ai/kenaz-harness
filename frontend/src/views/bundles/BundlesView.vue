@@ -25,8 +25,23 @@ import type { Bundle, TrustAnchor } from '@/lib/types';
 // fleet-share-and-sync-01NDFSEX14 WP03 — Publish to team catalog
 import PublishDialog from '@/views/marketplace/PublishDialog.vue';
 import { signedIn } from '@/lib/featureFlags';
+import { useServedMode } from '@/lib/useServedMode';
+import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 
 const client = useHarnessClient();
+
+// served-mode-is-a-real-mode-01PMZ707 WP04 (E-705). `signedIn` already
+// hides the "Publish to team" button here (a FLEET-shaped fence,
+// featureFlags.ts), but that left the NON-fleet problem unaddressed: every
+// Bundle_* method this view calls (List/Get/Install/Remove) is unrouted in
+// served mode, so the view's own list/install/remove flows never worked
+// regardless of sign-in state — they already degraded to an honest error
+// string via refresh()'s catch, but a raw ServedUnsupportedError message
+// is not the "actionable from inside a workbench" reason the boundary
+// panel demands, and every other fully-unported view gets the panel
+// treatment (WP03, WP05) rather than a bespoke error banner. Boundary-
+// panelling the whole view is the answer E-705 asked to record.
+const servedMode = useServedMode();
 
 const bundles = ref<readonly Bundle[]>([]);
 const loading = ref(false);
@@ -214,13 +229,20 @@ async function remove(id: string) {
 }
 
 onMounted(() => {
+  if (servedMode.value) return;
   void refresh();
   void refreshAnchors();
 });
 </script>
 
 <template>
+  <NotAvailableInServedMode
+    v-if="servedMode"
+    feature="Bundles"
+    reason="Bundle list, install, and remove all run through Bundle_* RPCs that are not routed in served mode — bundles pin local filesystem paths and a content-addressed store this VM does not share."
+  />
   <SettingsShell
+    v-else
     number="03"
     section="BUNDLES"
     title="Installed bundles"

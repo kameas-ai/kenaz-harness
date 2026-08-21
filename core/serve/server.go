@@ -56,6 +56,7 @@ import (
 	"os"
 	"path"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
@@ -79,7 +80,46 @@ const (
 
 	// EnvToken is the env var holding the bearer token (constant-time compared).
 	EnvToken = "HARNESS_SERVE_TOKEN"
+
+	// EnvStreamQueueCap overrides the per-WebSocket-client frame queue
+	// depth (see [WithStreamQueueCap]). KENAZ_-prefixed rather than
+	// HARNESS_SERVE_-prefixed because this is a workbench-provisioning
+	// concern set by the image, the same class as KENAZ_HARNESS_WORKSPACE
+	// and KENAZ_MCP_ALLOWLIST — not a serve.New-level transport setting
+	// like EnvListenAddr/EnvToken above.
+	//
+	// SD-16 (served-mode-is-a-real-mode-01PMZ707 WP08): WithStreamQueueCap's
+	// docstring named TWO purposes — making the truncation path
+	// deterministic in tests (which sets it directly via the option, no env
+	// needed) and "capping per-client memory in a very constrained
+	// workbench" — but nothing wired the second one to any configuration
+	// surface; both served entry points called serve.New with no
+	// WithStreamQueueCap option at all, so streamQueueCap() always fell to
+	// the default outside a test. This env var IS that surface.
+	EnvStreamQueueCap = "KENAZ_SERVE_STREAM_QUEUE_CAP"
 )
+
+// StreamQueueCapFromEnv reads [EnvStreamQueueCap] via getenv and returns the
+// parsed value, or 0 if the var is absent, empty, non-numeric, or <= 0 —
+// [WithStreamQueueCap]'s own contract is that values <= 0 keep the default,
+// so callers can pass this straight through unconditionally:
+//
+//	serve.WithStreamQueueCap(serve.StreamQueueCapFromEnv(os.Getenv))
+//
+// Shared by both served entry points (main.go, cmd/harness-served/main.go)
+// so they read this one way, not two — "both served entry points must
+// agree" applies to config surfaces as much as to signal handling.
+func StreamQueueCapFromEnv(getenv func(string) string) int {
+	raw := getenv(EnvStreamQueueCap)
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
 
 // tokenPlaceholder is the HTML comment that served.html uses as a slot for
 // the injected bearer-token meta tag.
@@ -731,8 +771,55 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 	case "Projects_List":
 		return s.api.Projects().List(ctx)
 
-	// Auth_State returns the current in-VM auth state for the served frontend.
+	// Sessions_ResolveAutonomy — a read on session state the served build
+	// already owns (folds global → project → session autonomy layers).
+	// Ported per served-mode-is-a-real-mode-01PMZ707 WP04. NOTE: this does
+	// NOT make SessionHeader.vue's plan-mode badge appear — no producer
+	// emits a plan-mode event on desktop either (NG7); porting the read
+	// closes the lie in the seed, not the missing badge.
+	case "Sessions_ResolveAutonomy":
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Sessions_ResolveAutonomy: bad params: " + err.Error())
+		}
+		return s.api.Sessions().ResolveAutonomy(ctx, p.ID)
+
+	// Sessions_SuggestTitle — runs a model call the served build can already
+	// make (LLM_StartStream is served), and the whole "suggest a title"
+	// flow completes inside the VM. Ported per WP04.
+	case "Sessions_SuggestTitle":
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Sessions_SuggestTitle: bad params: " + err.Error())
+		}
+		return s.api.Sessions().SuggestTitle(ctx, p.ID)
+
+	// Config_GetFlags — a side-effect-free read (env-derived flags only, no
+	// settings store or database access) whose absence made every flag read
+	// silently fall back to a hardcoded default. Ported per WP04, through
+	// the SAME rpc.ComputeFeatureFlags() projection the desktop binding
+	// uses so this is not a second hand-maintained flag list.
+	case "Config_GetFlags":
+		return rpc.ComputeFeatureFlags(), nil
+
+	// Auth_State returns the current in-VM auth state.
 	// Privacy: no token bytes are included in the response.
+	//
+	// SD-05 (served-mode-is-a-real-mode-01PMZ707 WP08): the comment here
+	// used to say "for the served frontend", implying a UI consumer that
+	// does not exist — RAN, zero hits for 'Auth_State' anywhere in
+	// harnessClient.ts. Disposition: operator-facing by design, the same
+	// class D-708 already carves out for Serve_ListMethods — served mode
+	// has no sign-in affordance at all (main.go: "served mode has no
+	// sign-in affordance"), so there is no live UI surface this would
+	// feed even if wired, and inventing one is new capability work this
+	// mission does not scope. An operator debugging a workbench's auth
+	// wiring can read this directly (curl / Serve_ListMethods discovery)
+	// without a source checkout.
 	case "Auth_State":
 		state := authbroker.StateAnonymous
 		if s.authSession != nil {
@@ -837,10 +924,23 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 	// READ-ONLY. The connector whitelist is host policy: management
 	// (install / uninstall / import / key entry) stays host-side, so no
 	// write method exists here and none should be added. provisioned:
-	// false lets the UI say "connectors not provisioned" instead of
-	// rendering an empty list as if the operator had granted nothing on
-	// purpose (FR-004's block-all-by-absence is the COMMON legacy case).
-
+	// false distinguishes "connectors not provisioned" from an empty list
+	// as if the operator had granted nothing on purpose (FR-004's
+	// block-all-by-absence is the COMMON legacy case).
+	//
+	// SD-06 (served-mode-is-a-real-mode-01PMZ707 WP08): "the UI" above
+	// was aspirational — RAN, zero hits for 'Connectors_List' or
+	// 'Connectors_Status' anywhere in harnessClient.ts. Disposition:
+	// operator-facing by design, not a gap to close with a new widget.
+	// The only connector UI (ToolsView's connector list) is
+	// boundary-panelled in served mode BY DESIGN — connector
+	// install/uninstall is desktop-only capability, and showing a
+	// read-only health view for a management surface that does not exist
+	// here would invite exactly the "half a flow" confusion server.go's
+	// dispatch docstring warns against. These two stay served, unwired,
+	// for the same operator-debugging reason as Auth_State above: an
+	// operator can verify which whitelisted connectors actually booted in
+	// a given workbench without a source checkout.
 	case "Connectors_List":
 		return s.connectorsList(ctx), nil
 

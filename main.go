@@ -8,7 +8,9 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/wailsapp/wails/v2"
@@ -510,12 +512,55 @@ func runServeMode(listenAddr string) {
 		os.Exit(1)
 	}
 
+	// SD-11 (served-mode-is-a-real-mode-01PMZ707 WP08): this docstring has
+	// claimed "blocks until SIGTERM / SIGINT" since it was written, but
+	// nothing here ever called signal.Notify — the sibling entry point
+	// (cmd/harness-served/main.go) had this wiring and this one did not,
+	// so `defer cancel()` and srv.Shutdown never ran on a real SIGTERM: the
+	// process just died mid-request, dropping in-flight streams. Mirrors
+	// cmd/harness-served/main.go's wiring exactly — "both served entry
+	// points must agree" (this file's own comment above) now holds for
+	// shutdown, not just for boot-time config reads.
+	stopSignalHandler := installServeShutdownSignal(serveLog, "harness.serve", cancel)
+	defer stopSignalHandler()
+
 	srv := serve.New(api, addr, token, servedFS, serveLog,
 		serve.WithAuthSession(authSession),
-		serve.WithConnectors(connSup))
+		serve.WithConnectors(connSup),
+		// SD-16 (WP08): KENAZ_SERVE_STREAM_QUEUE_CAP, the workbench-image
+		// config surface WithStreamQueueCap's "constrained workbench" half
+		// never had. 0 (absent/invalid) keeps serve.defaultStreamQueueCap.
+		serve.WithStreamQueueCap(serve.StreamQueueCapFromEnv(os.Getenv)))
 	if serveErr := srv.Serve(ctx); serveErr != nil && serveErr != context.Canceled {
 		serveLog.Error("harness.serve: server error", "err", serveErr)
 		os.Exit(1)
+	}
+}
+
+// installServeShutdownSignal wires SIGTERM/SIGINT to cancel, the same shape
+// cmd/harness-served/main.go uses inline. Extracted to its own function
+// (SD-11, WP08) so the wiring is unit-testable in isolation: main()'s own
+// call graph is not — it depends on real env vars, a real data dir and an
+// embedded FS — but "does a SIGTERM sent to this process reach cancel()"
+// does not need any of that.
+//
+// Returns a stop func that unregisters the signal channel and releases the
+// background goroutine; callers should defer it.
+func installServeShutdownSignal(log *slog.Logger, label string, cancel context.CancelFunc) (stop func()) {
+	sigC := make(chan os.Signal, 1)
+	signal.Notify(sigC, syscall.SIGTERM, syscall.SIGINT)
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-sigC:
+			log.Info(label + ": shutting down")
+			cancel()
+		case <-done:
+		}
+	}()
+	return func() {
+		close(done)
+		signal.Stop(sigC)
 	}
 }
 
