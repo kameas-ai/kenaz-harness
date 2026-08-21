@@ -2,9 +2,13 @@
 // Open/OpenOne/Call/Tools/Close/CloseOne operations to the correct
 // sub-pool based on ServerSpec.Transport:
 //
-//	""/"stdio"  → stdioPool (typically *stdio.Pool)
-//	"http"      → httpPool  (typically *mcphttp.Pool)
-//	"sse"       → ssePool   (typically *sse.Pool)
+//	""/"stdio"  → stdioPool      (typically *stdio.Pool)
+//	"http"      → httpPool       (typically *mcphttp.Pool)
+//	"sse"       → ssePool        (typically *sse.Pool)
+//	"inprocess" → inprocessPool  (*InProcessSubPool) — Go-native,
+//	              in-process MCP servers registered directly via
+//	              Pool.RegisterInProcess, not spawned from a spec
+//	              (harness-self-attach-01PMHS01 UNIT-5).
 //
 // The Pool type satisfies both the narrow PoolController interface used by
 // the tools view (OpenOne/CloseOne/RecipeStatus/ServerTools) and the wider
@@ -63,14 +67,15 @@ var _ StdioSubPool = (*stdio.Pool)(nil)
 //
 // Pool is safe for concurrent use.
 type Pool struct {
-	stdioPool StdioSubPool
-	httpPool  coremcp.Pool
-	ssePool   coremcp.Pool
+	stdioPool     StdioSubPool
+	httpPool      coremcp.Pool
+	ssePool       coremcp.Pool
+	inprocessPool *InProcessSubPool
 
 	// ownership maps a server id to the transport tag that opened it.
 	// Guarded by mu.
 	mu        sync.RWMutex
-	ownership map[string]string // id → "stdio" | "http" | "sse"
+	ownership map[string]string // id → "stdio" | "http" | "sse" | "inprocess"
 
 	// callObserver, when set, is invoked with (server, tool) on every
 	// Call dispatch. Metadata only — arguments are never passed. Used by
@@ -90,6 +95,11 @@ type Options struct {
 	Stdio StdioSubPool
 	HTTP  *mcphttp.Pool
 	SSE   *sse.Pool
+	// InProcess wires the "inprocess" transport arm (UNIT-5). Nil is
+	// tolerated — the tag then behaves like an unwired transport
+	// (OpenOne/RegisterInProcess return an explicit error), matching
+	// how a nil HTTP/SSE sub-pool already behaves.
+	InProcess *InProcessSubPool
 }
 
 // New returns a Pool wired with the given sub-pools.
@@ -103,6 +113,9 @@ func New(opts Options) *Pool {
 	}
 	if opts.SSE != nil {
 		p.ssePool = opts.SSE
+	}
+	if opts.InProcess != nil {
+		p.inprocessPool = opts.InProcess
 	}
 	return p
 }
@@ -122,6 +135,8 @@ func transportFor(spec coremcp.ServerSpec) string {
 		return "http"
 	case "sse":
 		return "sse"
+	case "inprocess":
+		return "inprocess"
 	default:
 		return spec.Transport
 	}
@@ -139,7 +154,31 @@ func (d *Pool) subPoolFor(tag string) coremcp.Pool {
 		return d.httpPool // may be nil
 	case "sse":
 		return d.ssePool // may be nil
+	case "inprocess":
+		if d.inprocessPool != nil {
+			return d.inprocessPool
+		}
 	}
+	return nil
+}
+
+// RegisterInProcess adds a Go-native, in-process MCP server to the
+// "inprocess" transport arm and records its ownership so Tools/Call
+// route to it exactly like a stdio/http/sse recipe. Unlike Open/
+// OpenOne, there is no ServerSpec to construct a connection from —
+// conn is already live. Returns an error if the inprocess sub-pool
+// was not wired via Options.InProcess, or if name is already
+// registered (ErrInProcessServerExists).
+func (d *Pool) RegisterInProcess(ctx context.Context, name string, conn InProcessConnection) error {
+	if d.inprocessPool == nil {
+		return fmt.Errorf("dispatch: inprocess transport not wired (no InProcessSubPool configured)")
+	}
+	if err := d.inprocessPool.RegisterServer(ctx, name, conn); err != nil {
+		return err
+	}
+	d.mu.Lock()
+	d.ownership[name] = "inprocess"
+	d.mu.Unlock()
 	return nil
 }
 
@@ -301,6 +340,15 @@ func (d *Pool) CloseOne(ctx context.Context, id string) error {
 		if d.stdioPool != nil {
 			return d.stdioPool.CloseOne(ctx, id)
 		}
+	case "inprocess":
+		// Unlike http/sse, the inprocess sub-pool DOES expose a real
+		// per-server CloseOne (InProcessSubPool.CloseOne) — an
+		// in-process connection is cheap to tear down (it just closes
+		// Go channels, no network/process teardown), so there is no
+		// reason to defer it to sub-pool Close like http/sse do.
+		if d.inprocessPool != nil {
+			return d.inprocessPool.CloseOne(ctx, id)
+		}
 	default:
 		// http and sse pools do not yet expose a per-server CloseOne method.
 		// We drop the ownership entry (done above) and return nil; the
@@ -327,10 +375,10 @@ func (d *Pool) RecipeStatus(id string) (stdio.RecipeStatus, bool) {
 		if d.stdioPool != nil {
 			return d.stdioPool.RecipeStatus(id)
 		}
-	case "http", "sse":
+	case "http", "sse", "inprocess":
 		// Synthesised: the ownership entry proves the server was opened
-		// successfully. The http/sse pools provide no richer per-server
-		// status today.
+		// (registered, for inprocess) successfully. None of these three
+		// pools provide a richer per-server status today.
 		return stdio.RecipeStatus{
 			ID:        id,
 			Enabled:   true,
@@ -342,8 +390,11 @@ func (d *Pool) RecipeStatus(id string) (stdio.RecipeStatus, bool) {
 }
 
 // ServerTools returns the cached tool list for a server.
-// Only stdio servers have a per-server tool cache today; http/sse
-// servers return nil (tools are fetched live via Tools()).
+// Only stdio servers have a per-server tool cache today; http/sse/
+// inprocess servers return nil (tools are fetched live via Tools()).
+// This is a deliberate choice, not an oversight: an in-process
+// server's tools/list round-trip is a few Go function calls, cheap
+// enough that a cache buys nothing.
 func (d *Pool) ServerTools(id string) []coremcp.Tool {
 	d.mu.RLock()
 	tag, ok := d.ownership[id]
@@ -367,12 +418,12 @@ func (d *Pool) AllRecipeStatuses() []stdio.RecipeStatus {
 		}
 	}
 
-	// Append synthesised statuses for http/sse owned servers.
+	// Append synthesised statuses for http/sse/inprocess owned servers.
 	d.mu.RLock()
 	type entry struct{ id, tag string }
 	var remote []entry
 	for id, tag := range d.ownership {
-		if tag == "http" || tag == "sse" {
+		if tag == "http" || tag == "sse" || tag == "inprocess" {
 			remote = append(remote, entry{id, tag})
 		}
 	}
@@ -402,6 +453,9 @@ func (d *Pool) activePools() []coremcp.Pool {
 	}
 	if d.ssePool != nil {
 		pools = append(pools, d.ssePool)
+	}
+	if d.inprocessPool != nil {
+		pools = append(pools, d.inprocessPool)
 	}
 	return pools
 }
