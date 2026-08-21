@@ -206,6 +206,11 @@ func (a *API) CreateBranch(ctx context.Context, opts CreateBranchOptions) (Branc
 		SubagentBranch:   isSubagent,
 		RecommendationID: strings.TrimSpace(opts.RecommendationID),
 		AdvisorSignals:   opts.AdvisorSignals,
+		// CreationPath was previously dropped here, so a caller-supplied
+		// value (e.g. "edit_resend") never reached storage — every
+		// legacy-path branch persisted as "unknown" regardless of intent
+		// (audit-that-tells-the-truth-01PMZA10 WP06).
+		CreationPath: opts.CreationPath,
 	})
 	if err != nil {
 		return Branch{}, err
@@ -240,6 +245,21 @@ func (a *API) CreateBranch(ctx context.Context, opts CreateBranchOptions) (Branc
 				RecommendationID: opts.RecommendationID,
 			}, a.now())
 	}
+
+	// Emit KindBranchCreated for the legacy path too (ZA10 WP06). Before
+	// this fix only the explicit-fork path above ever emitted — the
+	// ordinary "+ Fork" click (CreateBranchModal.vue, which never sets
+	// ParentMessageID) produced zero audit trail, even though it is the
+	// common case, not the edge case. br.CreationPath is already
+	// resolved by conversation.Manager.CreateBranch (defaults to
+	// "unknown" when the caller didn't specify one), so it is reused
+	// verbatim rather than re-deriving the default here.
+	audit.MustEmit(ctx, a.cfg.Audit, audit.KindBranchCreated,
+		audit.BranchCreatedPayload{
+			ParentSessionID: opts.ParentSessionID,
+			BranchSessionID: br.ChildSessionID,
+			CreationPath:    br.CreationPath,
+		}, a.now())
 
 	a.publishBranchCreated(br.ChildSessionID)
 	return toWire(br), nil
