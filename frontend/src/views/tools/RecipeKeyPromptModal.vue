@@ -206,6 +206,19 @@ const oauthAuth = computed(() =>
 );
 const signingIn = ref(false);
 
+// Whether this recipe's OAuth client id is still an unresolved "${VAR}"
+// token — i.e. a bring-your-own-OAuth-app recipe (ruling D-3,
+// kitty-specs/connector-lifecycle-truth-01PMZ303 FR-003b): the operator
+// must register their own app with the provider and paste its client id
+// into the env-key field below before sign-in can work. Kameas does not
+// register or host an app for these recipes. The backend substitutes the
+// token once the operator supplies the key (core/rpc/views/tools/oauth.go
+// resolveOAuthClientCredentials) — until then the listing still carries the
+// raw literal, which is what this checks.
+const isByoOAuth = computed(
+  () => !!oauthAuth.value?.clientId && oauthAuth.value.clientId.includes('${'),
+);
+
 async function signIn() {
   if (signingIn.value || !oauthAuth.value) return;
   signingIn.value = true;
@@ -908,14 +921,45 @@ function onKeydown(event: KeyboardEvent) {
           <div class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
             Sign in
           </div>
-          <p class="text-[12px] text-ink-muted leading-snug max-w-prose">
+          <p v-if="!isByoOAuth" class="text-[12px] text-ink-muted leading-snug max-w-prose">
             Sign in with your account in the browser — no token to paste. The
             harness stores the credential securely and refreshes it
             automatically.
           </p>
-          <!-- TODO: OAuth client registration required before this button is live.
-               See OAuth app registration ticket. The UX seam is wired; the
-               button will work once Auth.ClientID is set on the recipe. -->
+          <!-- Bring-your-own OAuth app (ruling D-3, FR-003b): the operator
+               registers their own app with the provider and pastes its
+               client id into the env-key field below (stored in the OS
+               keychain, not an environment variable). Kameas does not
+               register or host this app. -->
+          <p
+            v-else
+            class="text-[12px] text-ink-muted leading-snug max-w-prose"
+            data-testid="recipe-modal-byo-oauth-notice"
+          >
+            This connector needs your own OAuth app —
+            <a
+              v-if="recipe.docsUrl"
+              :href="recipe.docsUrl"
+              target="_blank"
+              rel="noopener"
+              class="underline hover:text-ink"
+              data-testid="recipe-modal-byo-oauth-link"
+              >register one with {{ recipe.displayName }}</a
+            ><span v-else>register one with {{ recipe.displayName }}</span>
+            and add its client ID below. Kameas does not register or host
+            this app for you. Once the client ID is set, sign in with your
+            account in the browser.
+          </p>
+          <!-- TODO: this recipe's Auth.Kind is mcp_oauth, but not every
+               primary_auth arm has a working sign-in path yet — the
+               browser_oauth_dcr arm (dynamic client registration) and the
+               bare oauth arm's four non-Google recipes are still unbuilt as
+               of this commit (kitty-specs/connector-lifecycle-truth-01PMZ303
+               UNIT-3, not yet landed). The button renders enabled
+               regardless of arm; clicking it for those recipes still
+               surfaces oauth.go's "has no OAuth client_id configured"
+               error rather than failing closed in the UI. See spec.md
+               FR-002 / AC-002 for the render-guard fix. -->
           <button
             type="button"
             class="rounded-sm border border-accent-hairline bg-surface-0 px-3 py-1.5 font-ui text-[12px] text-accent hover:bg-accent-glow disabled:opacity-50 disabled:cursor-not-allowed"

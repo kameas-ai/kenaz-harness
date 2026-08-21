@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +43,219 @@ func TestSignInRecipe_NoClientID(t *testing.T) {
 	_, err := api.SignInRecipe(context.Background(), "remote-oauth")
 	if err == nil || !strings.Contains(err.Error(), "client_id") {
 		t.Fatalf("want client_id error, got %v", err)
+	}
+}
+
+// ── UNIT-1: ${VAR} reaches Auth.ClientID / Auth.ClientSecret (spec.md FR-003) ──
+
+// byoOAuthRecipe returns a recipe whose Auth.ClientID (and, if
+// clientSecretKey != "", Auth.ClientSecret) are literal "${VAR}" tokens
+// backed by declared EnvKeys — the shape UNIT-1 exists to substitute.
+// requiredID/requiredSecret exercise D-1's asymmetry: ResolveEnv errors on
+// an unresolvable *required* key but silently skips an unresolvable
+// *optional* one, leaving its token literal.
+func byoOAuthRecipe(id, url, clientIDKey, clientSecretKey string, requiredID, requiredSecret bool) recipes.Recipe {
+	r := recipes.Recipe{
+		ID:        id,
+		Transport: recipes.TransportHTTP,
+		URL:       url,
+		Auth: &recipes.RecipeAuth{
+			Kind:     recipes.AuthKindMCPOAuth,
+			ClientID: "${" + clientIDKey + "}",
+			Scopes:   []string{"repo"},
+		},
+		EnvKeys: []recipes.EnvKey{
+			{Name: clientIDKey, Display: "id", Required: requiredID},
+		},
+	}
+	if clientSecretKey != "" {
+		r.Auth.ClientSecret = "${" + clientSecretKey + "}"
+		r.EnvKeys = append(r.EnvKeys, recipes.EnvKey{Name: clientSecretKey, Display: "secret", Required: requiredSecret})
+	}
+	return r
+}
+
+// entryKey builds the "<kind>|<locator>" key MemoryBackend.SetEntries wants,
+// for the recipe/env-key locator ResolveEnv derives (keychain.go:57).
+func entryKey(recipeID, envName string) string {
+	return secrets.RefKeychain.String() + "|" + recipes.KeychainLocator(recipeID, envName)
+}
+
+// AC-003a: a resolvable ${VAR} client_id substitutes to the resolved value.
+func TestResolveOAuthClientCredentials_SubstitutesClientID(t *testing.T) {
+	t.Parallel()
+	recipe := byoOAuthRecipe("byo", "https://api.example.com/mcp/", "KAMEAS_X_OAUTH_CLIENT_ID", "", true, false)
+	backend := secrets.NewMemoryBackend()
+	backend.SetEntries(map[string][]byte{
+		entryKey("byo", "KAMEAS_X_OAUTH_CLIENT_ID"): []byte("abc123"),
+	})
+	api := New(Config{Secrets: backend})
+
+	clientID, clientSecret, err := api.resolveOAuthClientCredentials(context.Background(), recipe)
+	if err != nil {
+		t.Fatalf("resolveOAuthClientCredentials: %v", err)
+	}
+	if clientID != "abc123" {
+		t.Errorf("clientID = %q, want abc123", clientID)
+	}
+	if clientSecret != "" {
+		t.Errorf("clientSecret = %q, want empty (recipe declares none)", clientSecret)
+	}
+}
+
+// AC-003b: an unresolvable REQUIRED client_id key produces an error naming
+// the env key, and SignInRecipe makes zero HTTP requests to the recipe's
+// server — asserting on the error string alone is how this defect survived
+// the last sweep (spec.md §7 AC-003).
+func TestSignInRecipe_UnresolvedClientIDToken_ZeroRequests(t *testing.T) {
+	t.Parallel()
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	recipe := byoOAuthRecipe("byo", server.URL, "KAMEAS_X_OAUTH_CLIENT_ID", "", true, false)
+	cat := &recipes.Catalog{Version: 1, Recipes: []recipes.Recipe{recipe}}
+	// Empty backend: the required key is declared but never populated.
+	api := New(Config{Catalog: cat, Secrets: secrets.NewMemoryBackend()})
+
+	_, err := api.SignInRecipe(context.Background(), "byo")
+	if err == nil || !strings.Contains(err.Error(), "KAMEAS_X_OAUTH_CLIENT_ID") {
+		t.Fatalf("want error naming KAMEAS_X_OAUTH_CLIENT_ID, got %v", err)
+	}
+	if requests != 0 {
+		t.Errorf("server saw %d requests, want 0 — sign-in must not round-trip on an unresolved client_id", requests)
+	}
+}
+
+// AC-003c (§1.11 N-2): front's real shape — client_id AND client_secret both
+// substitute, and the resolved secret appears in no error string returned
+// to the caller (D-2 — no credential value in a test assertion message
+// either, per spec.md §8 R-8, so this only checks *absence*, never logs the
+// secret itself).
+func TestResolveOAuthClientCredentials_SubstitutesClientIDAndSecret(t *testing.T) {
+	t.Parallel()
+	const secretValue = "s3cr3t-do-not-log" //nolint:gosec // test fixture, not a real credential
+	recipe := byoOAuthRecipe("front-like", "https://api.example.com/mcp/",
+		"KAMEAS_FRONT_OAUTH_CLIENT_ID", "KAMEAS_FRONT_OAUTH_CLIENT_SECRET", true, true)
+	backend := secrets.NewMemoryBackend()
+	backend.SetEntries(map[string][]byte{
+		entryKey("front-like", "KAMEAS_FRONT_OAUTH_CLIENT_ID"):     []byte("front-cid"),
+		entryKey("front-like", "KAMEAS_FRONT_OAUTH_CLIENT_SECRET"): []byte(secretValue),
+	})
+	api := New(Config{Secrets: backend})
+
+	clientID, clientSecret, err := api.resolveOAuthClientCredentials(context.Background(), recipe)
+	if err != nil {
+		t.Fatalf("resolveOAuthClientCredentials: %v", err)
+	}
+	if clientID != "front-cid" {
+		t.Errorf("clientID = %q, want front-cid", clientID)
+	}
+	if clientSecret != secretValue {
+		t.Error("clientSecret did not substitute to the resolved value")
+	}
+
+	// D-2 / §8 R-8: the secret must never appear in an error string. Force
+	// an error on the *secret* leg (client_id resolves fine, client_secret
+	// does not) and confirm the error names only the env key, never a
+	// resolved value — driven entirely against the in-process helper, no
+	// network I/O.
+	failRecipe := byoOAuthRecipe("front-like-2", "https://api.example.com/mcp/",
+		"KAMEAS_FRONT_OAUTH_CLIENT_ID", "KAMEAS_FRONT_OAUTH_CLIENT_SECRET", true, true)
+	failBackend := secrets.NewMemoryBackend()
+	failBackend.SetEntries(map[string][]byte{
+		entryKey("front-like-2", "KAMEAS_FRONT_OAUTH_CLIENT_ID"): []byte("front-cid"),
+		// Secret key deliberately left unset.
+	})
+	api2 := New(Config{Secrets: failBackend})
+	_, _, failErr := api2.resolveOAuthClientCredentials(context.Background(), failRecipe)
+	if failErr == nil {
+		t.Fatal("want an error for the unresolved required secret key")
+	}
+	if !strings.Contains(failErr.Error(), "KAMEAS_FRONT_OAUTH_CLIENT_SECRET") {
+		t.Errorf("error does not name the unresolved secret env key: %v", failErr)
+	}
+	if strings.Contains(failErr.Error(), secretValue) {
+		t.Fatal("resolved client secret leaked into an error string")
+	}
+}
+
+// AC-003d (D-1): the client_id key is marked OPTIONAL and left unresolved.
+// ResolveEnv succeeds (an optional miss is not an error) and returns no
+// entry for it, so the token survives into SubstituteString untouched. The
+// guard must still fire — it must not depend on "required" being true,
+// because a future recipe may declare an optional BYO key.
+func TestResolveOAuthClientCredentials_OptionalUnresolvedTokenStillGuarded(t *testing.T) {
+	t.Parallel()
+	recipe := byoOAuthRecipe("byo-optional", "https://api.example.com/mcp/", "KAMEAS_OPTIONAL_CLIENT_ID", "", false, false)
+	// Empty backend — the optional key resolves to nothing, silently.
+	api := New(Config{Secrets: secrets.NewMemoryBackend()})
+
+	_, _, err := api.resolveOAuthClientCredentials(context.Background(), recipe)
+	if err == nil || !strings.Contains(err.Error(), "KAMEAS_OPTIONAL_CLIENT_ID") {
+		t.Fatalf("want error naming KAMEAS_OPTIONAL_CLIENT_ID even though the key is optional, got %v", err)
+	}
+}
+
+// A recipe with a literal (non-token) client_id — e.g. GitHub's real baked
+// device-flow id — is unaffected by the substitution seam and never touches
+// the secrets backend.
+func TestResolveOAuthClientCredentials_LiteralClientIDPassesThrough(t *testing.T) {
+	t.Parallel()
+	recipe := oauthRecipe("Iv23li6LDja9hM0dAJGV")
+	// Secrets is nil: if the literal path touched ResolveEnv this would
+	// panic/error on the nil backend, which is itself part of the proof.
+	api := New(Config{})
+
+	clientID, clientSecret, err := api.resolveOAuthClientCredentials(context.Background(), recipe)
+	if err != nil {
+		t.Fatalf("resolveOAuthClientCredentials: %v", err)
+	}
+	if clientID != "Iv23li6LDja9hM0dAJGV" {
+		t.Errorf("clientID = %q, want the literal value unchanged", clientID)
+	}
+	if clientSecret != "" {
+		t.Errorf("clientSecret = %q, want empty", clientSecret)
+	}
+}
+
+// Catalog-derived guard (spec.md §8 R-3): every registry recipe whose
+// Auth.ClientID or Auth.ClientSecret carries a "${" token has a matching
+// declared EnvKey — the contract registry_test.go partially pins per-recipe
+// (":659"/":672" etc.); deriving it here means a newly added recipe #15 is
+// covered automatically instead of requiring a hand-maintained list.
+func TestRegistry_OAuthTokensHaveMatchingEnvKeys(t *testing.T) {
+	t.Parallel()
+	for _, r := range recipes.Registry().List() {
+		if r.Auth == nil {
+			continue
+		}
+		for _, field := range []struct {
+			name  string
+			value string
+		}{
+			{"client_id", r.Auth.ClientID},
+			{"client_secret", r.Auth.ClientSecret},
+		} {
+			key, ok := unresolvedToken(field.value)
+			if !ok {
+				continue
+			}
+			found := false
+			for _, ek := range r.EnvKeys {
+				if ek.Name == key {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("recipe %q: auth.%s references %q but no matching env_keys entry declares it",
+					r.ID, field.name, key)
+			}
+		}
 	}
 }
 
