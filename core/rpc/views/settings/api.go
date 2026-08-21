@@ -354,9 +354,13 @@ type Settings struct {
 	// the harness fires escalating notifications at 50 / 80 / 100 /
 	// 150 / 200 % of the dial value (token-cost-telemetry-01KQ8TD7
 	// WP06). Zero (the default) disables the scheduler entirely.
-	// Range [0, MaxMonthlyCostNotifyUSD]; Save rejects negative or
-	// out-of-range values. FR-007c: this is a visibility dial — hard
-	// caps live in the user's provider dashboard.
+	// Range [0, MaxMonthlyCostNotifyUSD]. NARROWED
+	// (controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-14
+	// WP19, FR-029, 2026-08-21): Save does NOT reject a negative value
+	// — both FileStore and memoryStore clamp it to zero — and only
+	// errors above MaxMonthlyCostNotifyUSD. FR-007c: this is a
+	// visibility dial — hard caps live in the user's provider
+	// dashboard.
 	MonthlyCostNotifyUSD float64 `json:"monthlyCostNotifyUsd,omitempty"`
 
 	// MCPAutoRestartDisabled is the inverted persisted bit for the
@@ -1222,9 +1226,15 @@ type SettingsStore interface {
 	// LoadMonthlyCostNotifyUSD / SaveMonthlyCostNotifyUSD expose the
 	// monthly-spend notification threshold dial
 	// (token-cost-telemetry-01KQ8TD7 WP06). Zero disables the
-	// scheduler. Save rejects negative values and values above
-	// MaxMonthlyCostNotifyUSD; the threshold checker reads through
-	// LoadMonthlyCostNotifyUSD on every Manager.Add tail.
+	// scheduler. NARROWED
+	// (controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-14
+	// WP19, FR-029, 2026-08-21): Save normalises a negative value to
+	// zero (does not reject it) and rejects only values above
+	// MaxMonthlyCostNotifyUSD — matching the FileStore/binding docs,
+	// which already said "normalised to zero" correctly. The other
+	// half of this doc is true and unchanged: the threshold checker
+	// reads through LoadMonthlyCostNotifyUSD on every Manager.Add
+	// tail (core/rpc/api.go, core/usage/usage.go).
 	LoadMonthlyCostNotifyUSD() (float64, error)
 	SaveMonthlyCostNotifyUSD(usd float64) error
 

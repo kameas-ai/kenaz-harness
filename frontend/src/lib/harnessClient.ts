@@ -1364,7 +1364,13 @@ export interface SessionsClient {
   clearTitle(id: string): Promise<void>;
 
   // ── autonomy-dial-01KR3M2A WP03 ─────────────────────────────────────
-  /** Read the session's persisted autonomy.Layer override. */
+  /**
+   * Read the session's persisted autonomy.Layer override.
+   * NARROWED (controls-and-readouts-that-tell-the-truth-01PMZ808
+   * UNIT-14 WP19, C2V-31, 2026-08-21): zero `.vue` callers today —
+   * `resolveAutonomy` (below) is the live path (AutonomyChip.vue,
+   * SessionHeader.vue, SessionAutonomyPanel.vue).
+   */
   getAutonomy(id: string): Promise<AutonomyLayer>;
   /** Persist the session's autonomy.Layer override. */
   setAutonomy(id: string, layer: AutonomyLayer): Promise<void>;
@@ -2287,6 +2293,12 @@ export interface MemoryClient {
  */
 export interface HooksClient {
   list(): Promise<Hook[]>;
+  /**
+   * Fetch a single hook by id.
+   * NARROWED (controls-and-readouts-that-tell-the-truth-01PMZ808
+   * UNIT-14 WP19, C2V-27, 2026-08-21): zero `.vue` callers today —
+   * `list()` is the live path HooksSettingsView.vue reads.
+   */
   get(id: string): Promise<Hook>;
   add(input: Hook): Promise<Hook>;
   update(input: Hook): Promise<void>;
@@ -2695,6 +2707,13 @@ export interface BranchesClient {
   create(opts: BranchCreateOptions): Promise<Branch>;
   /** createExplicit creates a branch anchored at a specific message. */
   createExplicit(opts: Pick<BranchCreateOptions, 'parentSessionId' | 'parentMessageId' | 'title'>): Promise<Branch>;
+  /**
+   * Fetch a single branch's status.
+   * NARROWED (controls-and-readouts-that-tell-the-truth-01PMZ808
+   * UNIT-14 WP19, C2V-28, 2026-08-21): zero `.vue` callers today —
+   * `Branch.status` already ships on every `list()` row and
+   * BranchSidebar.vue reads it from there.
+   */
   status(branchID: string): Promise<BranchStatusInfo>;
   merge(branchID: string): Promise<void>;
   abandon(branchID: string): Promise<void>;
@@ -2732,7 +2751,17 @@ export interface CedarPolicyClient {
   /** Return up to limit recent gate decisions, newest first. */
   recentDecisions(limit: number): Promise<PolicyDecision[]>;
 
+  /**
+   * NARROWED (controls-and-readouts-that-tell-the-truth-01PMZ808
+   * UNIT-14 WP19, C2V-29, 2026-08-21): zero `.vue` callers today —
+   * PolicyView.vue uses `savePolicy`/`deletePolicy` below instead.
+   * Client + Wails bindings only; the Go implementation
+   * (`CedarPolicyImpl.WritePolicySnippet`, `core/tools/bash/migrate.go`
+   * and `core/rpc/views/tools/impl.go`) stays — it has real non-test
+   * production callers unrelated to this client method.
+   */
   writeSnippet(name: string, body: string): Promise<void>;
+  /** See writeSnippet's narrowing note above; same disposition. */
   revokeSnippet(name: string): Promise<void>;
   // ── Editor methods (cedar-policy-editor-ui-01KQ8TD6) ──────────────
   /** Read a policy file's source. Embedded defaults are read-only. */
@@ -3023,7 +3052,11 @@ export interface OnboardingClient {
   acceptHandoffHint(hint: HandoffHint): Promise<void>;
   /**
    * Return the most recently stored HandoffHint (WP04).
-   * The account step reads this to pre-fill the email field.
+   * NARROWED (controls-and-readouts-that-tell-the-truth-01PMZ808
+   * UNIT-14 WP19, C2V-22): no account step exists —
+   * OnboardingDialog.vue has no email/account phase — and this method
+   * has zero `.vue` callers. The Go implementation is live and correct;
+   * only the advertised consumer was false.
    */
   getHandoffHint(): Promise<HandoffHint>;
   /**
@@ -3234,7 +3267,15 @@ export interface CatalogClient {
   install(catalogID: string, version: string): Promise<void>;
   /** Remove an installed catalog item. Idempotent. */
   uninstall(kind: string, catalogID: string, version: string): Promise<void>;
-  /** List all catalog items currently installed locally. */
+  /**
+   * List all catalog items currently installed locally.
+   * NARROWED (controls-and-readouts-that-tell-the-truth-01PMZ808
+   * UNIT-14 WP19, C2V-24, 2026-08-21): zero `.vue` callers today —
+   * `list()` rows already carry an `installed` flag
+   * (MarketplaceView.vue reads `item.installed` directly), which is
+   * the live path. The Go implementation is correct and unused, not
+   * broken.
+   */
   installed(): Promise<CatalogItemView[]>;
 }
 
@@ -3270,7 +3311,13 @@ export interface SitesClient {
    * Progress events are emitted on the "sites:deploy:progress" topic while running.
    */
   deploy(rootDir: string): Promise<SiteSummary>;
-  /** Fetch the current status of a single site. */
+  /**
+   * Fetch the current status of a single site.
+   * NARROWED (controls-and-readouts-that-tell-the-truth-01PMZ808
+   * UNIT-14 WP19, C2V-25, 2026-08-21): zero `.vue` callers today —
+   * `SiteSummary.status` already ships on every `list()` row and
+   * SitesView.vue reads it from there.
+   */
   status(site: string): Promise<SiteSummary>;
   /**
    * Fetch the last `tailLines` log lines for a dynamic site.
