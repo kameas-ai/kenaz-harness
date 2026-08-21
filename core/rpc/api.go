@@ -4662,7 +4662,7 @@ func newLLMStack(
 	// in-process filesystem tools. Gated behind per-family settings dials
 	// (FSReadEnabled / FSWriteEnabled) so the Tools panel toggles take effect
 	// on the next chat turn. Uses the same Cedar engine as the bash tool.
-	registerFSBuiltinTools(builtinRegistry, bashCedarEngine, settingsStore)
+	registerFSBuiltinTools(builtinRegistry, bashCedarEngine, settingsStore, promptRegistry, dataDir)
 	// unified-context-artifacts-01NCTXU01: register the read_context_file
 	// built-in so the agent can read on-demand files from attached context
 	// modules. Requires both the contexts library AND an attachment manager;

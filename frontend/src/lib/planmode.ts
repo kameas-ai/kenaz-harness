@@ -14,8 +14,8 @@
  * auto-cleans-up via onUnmounted.
  */
 
-import { ref, onUnmounted } from 'vue';
-import { useHarnessClient } from '@/lib/harnessClientContext';
+import { ref } from 'vue';
+import { useEventStream } from '@/lib/useEventStream';
 
 // ── Event shape ────────────────────────────────────────────────────────────
 
@@ -72,6 +72,10 @@ export interface PlanEditResponse {
 
 // ── Composable ─────────────────────────────────────────────────────────────
 
+/** Outcomes that clear plan_mode posture — approval, discard, or an
+ * edit-then-approve. Any pending plan is resolved on these. */
+const TERMINAL_OUTCOMES = ['approved', 'discarded', 'edited_and_approved'];
+
 /**
  * usePlanMode returns reactive state for the session's plan_mode posture.
  *
@@ -79,7 +83,7 @@ export interface PlanEditResponse {
  * `pendingPlanId` — the artifact ID of the plan awaiting user approval,
  *                   or null when no plan is pending.
  *
- * The composable subscribes to the `plan_mode_changed` Wails event and
+ * The composable subscribes to the `plan_mode_changed` broker event and
  * auto-unsubscribes on component unmount.
  *
  * Usage:
@@ -90,38 +94,45 @@ export function usePlanMode(sessionId: string) {
   const isActive = ref(false);
   const pendingPlanId = ref<string | null>(null);
 
-  const client = useHarnessClient();
-
   function handlePlanModeChanged(payload: PlanModeChangedPayload) {
     if (payload.session_id !== sessionId) return;
 
+    if (TERMINAL_OUTCOMES.includes(payload.outcome)) {
+      // Approve / Discard / Edit-and-approve — posture cleared, any
+      // pending plan is resolved.
+      isActive.value = false;
+      pendingPlanId.value = null;
+      return;
+    }
+
     if (payload.posture === 'plan_mode') {
       isActive.value = true;
+      // A non-terminal payload carrying a plan_id is the "entered
+      // plan_mode with a plan awaiting approval" transition — this is
+      // what makes PlanApprovalModal mount (AC-15a). A payload with no
+      // plan_id yet (just-entered, no plan drafted) leaves the previous
+      // pendingPlanId alone rather than clobbering it with null, so a
+      // late-arriving duplicate "entered" event can't race a
+      // just-set pending id back to null.
+      if (payload.plan_id) {
+        pendingPlanId.value = payload.plan_id;
+      }
     } else {
       isActive.value = false;
       pendingPlanId.value = null;
     }
-
-    if (payload.outcome === '' && payload.posture === 'plan_mode') {
-      // Entered plan_mode — no pending plan yet.
-      isActive.value = true;
-    }
-
-    if (['approved', 'discarded', 'edited_and_approved'].includes(payload.outcome)) {
-      isActive.value = false;
-      pendingPlanId.value = null;
-    }
   }
 
-  // Subscribe via the harness client's event stream if available.
-  let unsubscribe: (() => void) | null = null;
-  if (client && typeof (client as any).subscribeEvent === 'function') {
-    unsubscribe = (client as any).subscribeEvent('plan_mode_changed', handlePlanModeChanged);
-  }
-
-  onUnmounted(() => {
-    if (unsubscribe) unsubscribe();
-  });
+  // Subscribe through the app's real broker/event-stream path (Wails
+  // runtime.EventsOn in desktop, the served WS event bus otherwise) —
+  // see useEventStream.ts. Replaces the permanently-false
+  // `client.subscribeEvent` probe: HarnessClient never declared that
+  // method, so handlePlanModeChanged was never invoked and
+  // pendingPlanId could never become non-null (trust-surfaces-that-
+  // fire-01PMZ202 WP21 / UNIT-19, AC-15a). useEventStream auto-
+  // unsubscribes on unmount (onBeforeUnmount internally) — no extra
+  // cleanup needed here.
+  useEventStream<PlanModeChangedPayload>('plan_mode_changed', handlePlanModeChanged);
 
   /**
    * setPendingPlan should be called when __exit_plan_mode returns

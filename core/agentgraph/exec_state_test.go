@@ -321,6 +321,7 @@ type stubPolicyGate struct {
 	denyFileWrite  error
 	denyStateRead  error
 	denyStateWrite error
+	denyTool       error
 }
 
 func (g stubPolicyGate) CheckFileRead(_ context.Context, _ string) error {
@@ -334,6 +335,9 @@ func (g stubPolicyGate) CheckStateRead(_ context.Context, _ string) error {
 }
 func (g stubPolicyGate) CheckStateWrite(_ context.Context, _ string) error {
 	return g.denyStateWrite
+}
+func (g stubPolicyGate) CheckTool(_ context.Context, _ string) error {
+	return g.denyTool
 }
 
 // stubBashOutput is a tiny BashOutputStore fake.

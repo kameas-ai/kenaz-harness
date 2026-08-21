@@ -61,6 +61,12 @@ func (AllowAll) Evaluate(
 // dispatch call site with this; on Deny, return the PolicyDeniedError
 // to the caller so the frontend can surface the denial.
 //
+// Evaluates ActionToolExec — the fine-grained "run this specific tool"
+// action `default_policy.cedar` permits. Distinct from CheckUseTool
+// (ActionUseTool), which every shipped tool policy actually names; wire
+// both from the same dispatch boundary (UNIT-15 / trust-surfaces-that-
+// fire-01PMZ202 WP17).
+//
 // server / tool follow the kenaz-harness "<server>__<tool>" naming;
 // pass server="" for first-party tools.
 func CheckTool(ctx context.Context, g Gate, server, tool string) error {
@@ -71,6 +77,34 @@ func CheckTool(ctx context.Context, g Gate, server, tool string) error {
 		ctx,
 		UserUID(),
 		ActionToolExec,
+		ToolUID(server, tool),
+		nil,
+	)
+	return enforce(d)
+}
+
+// CheckUseTool is the gate-hook helper for the coarse `Action::"use_tool"`
+// family every shipped tool policy actually names —
+// `default_tool_policy.cedar:38` (embedded into every engine) and the
+// installable `sites-recommended.cedar` (`:29,35,41,49`), whose only
+// production writer (`core/rpc/views/tools/impl.go`) pre-seeds a grant
+// with no reader before this wire. CheckTool/ActionToolExec is the
+// sibling per-call evaluator for a narrower action; both must be
+// consulted at the same dispatch boundary so an `Action::"use_tool"`
+// forbid rule (the shape the shipped policy editor produces) actually
+// blocks a call.
+//
+// enforce() maps Allow and NotApplicable to nil (default-allow — see
+// Rule 6): absent any matching policy every currently-working tool
+// keeps working; only an explicit forbid bites.
+func CheckUseTool(ctx context.Context, g Gate, server, tool string) error {
+	if g == nil {
+		return nil
+	}
+	d := g.Evaluate(
+		ctx,
+		UserUID(),
+		ActionUseTool,
 		ToolUID(server, tool),
 		nil,
 	)
