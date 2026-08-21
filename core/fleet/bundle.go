@@ -121,6 +121,28 @@ func (b *Bundle) signingPayload() ([]byte, error) {
 	return json.Marshal(p)
 }
 
+// SignBundleForTesting computes the ed25519 signature over b's canonical
+// signing payload using priv and sets b.Signature (base64 standard, no
+// padding — the same encoding VerifyWithKeySet accepts). Mutates b in
+// place and returns an error only on marshal failure.
+//
+// Test seam ONLY, mirroring NewClientForTesting /
+// SetSigningKeyForTesting: production bundles are signed server-side.
+// Exists so cross-package tests (e.g. core/rpc/views/settings driving the
+// REAL compositeConfigApplier through fleet.ConfigPoller) can build a
+// bundle that passes real signature verification instead of stubbing it
+// out — spec §8 rule 2 requires VerifyWithKeySet actually be reached.
+func SignBundleForTesting(b *Bundle, priv ed25519.PrivateKey) error {
+	payload, err := b.signingPayload()
+	if err != nil {
+		return err
+	}
+	hash := sha256.Sum256(payload)
+	sig := ed25519.Sign(priv, hash[:])
+	b.Signature = base64.RawStdEncoding.EncodeToString(sig)
+	return nil
+}
+
 // Verify verifies the ed25519 signature of the bundle against key and
 // enforces the monotonic bundle_id guard (lastAppliedID is the last
 // successfully applied bundle_id, or 0 on first apply).

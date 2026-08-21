@@ -720,6 +720,15 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 	var errs []error
 
 	// Cedar delta.
+	//
+	// fleet-enforcement-truth-01PMZ505 WP02: a signed bundle carrying a
+	// cedar_delta section that this device cannot apply (no engine wired)
+	// must NOT ack "applied:true" — that is a silently-discarded team
+	// policy, not a no-op (spec §1.1). The else branch is the fix: it
+	// turns a skipped section into a named apply error so
+	// config_pull.go's "len(applyErrs) == 0" success check goes false,
+	// lastAppliedID does not advance, and the bundle is re-attempted on
+	// the next poll instead of being reported as enforced.
 	if len(b.CedarDelta) > 0 {
 		a.state.mu.RLock()
 		engine := a.state.cedarEngine
@@ -728,6 +737,8 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 			if err := fleet.ApplyCedarDelta(ctx, engine, b.CedarDelta); err != nil {
 				errs = append(errs, err)
 			}
+		} else {
+			errs = append(errs, fmt.Errorf("fleet/config: cedar_delta present but no Cedar engine wired (SetCedarEngine never called)"))
 		}
 	}
 
@@ -737,10 +748,19 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 	}
 
 	// Model prefs.
+	//
+	// fleet-enforcement-truth-01PMZ505 WP02: the copy into fleetModelPrefs
+	// below has no reader today (FleetModelPrefs() has zero callers — a
+	// copy into another struct is not consumption, per the sweep
+	// doctrine). Until WP04 wires a real consumer (ProviderAllowlist /
+	// DefaultModel reaching an observable branch), a bundle carrying
+	// model_prefs must not ack clean either — same defect shape as
+	// cedar_delta above.
 	if b.ModelPrefs != nil {
 		a.state.mu.Lock()
 		a.state.fleetModelPrefs = b.ModelPrefs
 		a.state.mu.Unlock()
+		errs = append(errs, fmt.Errorf("fleet/config: model_prefs present but no consumer wired yet (tracked: fleet-enforcement-truth-01PMZ505 WP04)"))
 	}
 
 	// Weight URLs (kameas_ml_weight_urls): intentionally ignored — the
@@ -749,6 +769,10 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 	// Mandated skills (fleet-skills-sync-01NDFSEX18 WP05).
 	// FR-012: all section errors are collected and returned so the ACK
 	// carries the full set and the caller can decide not to advance lastAppliedID.
+	//
+	// fleet-enforcement-truth-01PMZ505 WP02: same fix as cedar_delta — a
+	// bundle carrying mandated_skills that this device cannot apply (refs
+	// not wired) must not ack clean.
 	if len(b.MandatedSkills) > 0 {
 		a.state.mu.RLock()
 		skillStore := a.state.skillStore
@@ -760,6 +784,8 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 				logging.L().Warn("fleet.config.mandated_skills.apply_error", "err", se.Error())
 				errs = append(errs, se)
 			}
+		} else {
+			errs = append(errs, fmt.Errorf("fleet/config: mandated_skills present but skill refs not wired (SetSkillRefs never called)"))
 		}
 	}
 

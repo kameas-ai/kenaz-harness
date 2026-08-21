@@ -68,6 +68,32 @@ func FleetSigningKeys() []ed25519.PublicKey {
 	return []ed25519.PublicKey{ed25519.PublicKey(b)}
 }
 
+// SetSigningKeyForTesting installs pub as the accept-set fleet signing key
+// for the duration of a test and returns a restore func that puts the
+// previous (ldflags-populated, normally empty in dev/CI) value back.
+//
+// This is a test seam ONLY — production code populates
+// fleetSigningPublicKeyBytes exclusively via the release-time -ldflags
+// injection documented above. It exists so cross-package integration tests
+// (e.g. core/rpc/views/settings, which cannot set the unexported package
+// var directly) can drive a REAL VerifyWithKeySet pass against a bundle
+// they sign in-test, rather than stubbing verification out — spec rule
+// (fleet-enforcement-truth-01PMZ505 §8 rule 2 / AC-002): "the test proves
+// nothing about the integrity claim" if verification is bypassed. Mirrors
+// the existing NewClientForTesting / SeedFleetConfigForTesting convention
+// in this package.
+func SetSigningKeyForTesting(pub ed25519.PublicKey) (restore func()) {
+	hexStr := make([]byte, len(pub)*2)
+	for i, b := range []byte(pub) {
+		const digits = "0123456789abcdef"
+		hexStr[i*2] = digits[b>>4]
+		hexStr[i*2+1] = digits[b&0x0f]
+	}
+	saved := fleetSigningPublicKeyBytes
+	fleetSigningPublicKeyBytes = string(hexStr)
+	return func() { fleetSigningPublicKeyBytes = saved }
+}
+
 // ConfigDistributionEnabled reports whether a fleet signing key is configured
 // in this binary. When false, all config-bundle distribution is disabled:
 // every Verify call returns ErrSigningKeyNotConfigured and no bundle is applied.
