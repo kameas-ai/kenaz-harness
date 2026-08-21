@@ -85,6 +85,16 @@ var defaultSessionExportPolicySource []byte
 //go:embed policies/default_acp_policy.cedar
 var defaultACPPolicySource []byte
 
+// defaultBundlePolicySource is the embedded Bundle-family default for
+// mission bundle-download-and-verify-01PMZ909 (UNIT-7). Posture:
+// permit the local user to install a bundle over any registered
+// channel; see the file's leading comment and spec E-001 for why a
+// channel allowlist is deliberately left to an operator-authored
+// layered policy rather than encoded here.
+//
+//go:embed policies/default_bundle_policy.cedar
+var defaultBundlePolicySource []byte
+
 // DefaultPolicyName is the synthetic filename used when reporting the
 // embedded policy to the frontend.
 const DefaultPolicyName = "default_policy.cedar"
@@ -104,6 +114,7 @@ const (
 	DefaultWorkflowsPolicyName     = "default_workflows_policy.cedar"
 	DefaultSessionExportPolicyName = "default_session_export_policy.cedar"
 	DefaultACPPolicyName           = "default_acp_policy.cedar"
+	DefaultBundlePolicyName        = "default_bundle_policy.cedar"
 )
 
 // PolicyDir is the directory under DataDir where user-authored
@@ -258,6 +269,7 @@ func (e *Engine) Reload(ctx context.Context) error {
 			{DefaultWorkflowsPolicyName, defaultWorkflowsPolicySource},
 			{DefaultSessionExportPolicyName, defaultSessionExportPolicySource},
 			{DefaultACPPolicyName, defaultACPPolicySource},
+			{DefaultBundlePolicyName, defaultBundlePolicySource},
 		}
 		for _, em := range embedded {
 			sources = append(sources, policySource{

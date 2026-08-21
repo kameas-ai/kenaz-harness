@@ -1,7 +1,12 @@
 // Package bundle's impl wires the cache + lockfile readers behind the
-// BundleAPI surface. Read-only by construction — installation is the
-// resolver mission's responsibility; this surface answers "what is
-// installed today?" for the /bundles view.
+// BundleAPI surface for the /bundles view.
+//
+// Install (UNIT-5, bundle-download-and-verify-01PMZ909) routes entirely
+// through the core/bundle/channels abstraction: the manifest itself and
+// every declared artifact are fetched via Channel.Fetch, each artifact's
+// bytes are verified against its ArtifactDescriptor.ContentHash, and
+// only verified bytes are written into the CAS — never the raw return
+// value alone (spec §11.2).
 //
 // Privacy CI invariant: this surface NEVER exposes credentials or
 // signing keys. Source URLs and signature refs are reference-only;
@@ -9,19 +14,32 @@
 package bundle
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/bundle/cache"
+	"github.com/kameas-ai/kenaz-harness/core/bundle/channels"
+	"github.com/kameas-ai/kenaz-harness/core/bundle/channels/localpath"
 	"github.com/kameas-ai/kenaz-harness/core/bundle/integrity"
 	"github.com/kameas-ai/kenaz-harness/core/bundle/lockfile"
 	"github.com/kameas-ai/kenaz-harness/core/bundle/manifest"
+	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
 	"github.com/kameas-ai/kenaz-harness/core/trust"
 )
+
+// manifestFileName is the well-known in-bundle relative path every
+// channel resolves the manifest at — the same convention local_path
+// always used, generalized to every channel kind (UNIT-5/6).
+const manifestFileName = "kenaz.yaml"
 
 // Reader is the minimal interface this impl needs — backed in
 // production by os.ReadFile against the data-dir lockfile, and by an
@@ -39,8 +57,18 @@ type Writer interface {
 
 // CASLike is the slimmed view of cache.CAS used here. Lets tests
 // supply a fake without pulling in the filesystem.
+//
+// Put was added by UNIT-5 (bundle-download-and-verify-01PMZ909):
+// before UNIT-5, Install never wrote artifact bytes anywhere, so Has
+// was the only method List/Get needed for the "(uncached)" tier
+// annotation. Install now streams every fetched artifact through Put,
+// which performs its own SHA-256 verification against the digest the
+// caller supplies (cache.CAS.Put's documented contract) and refuses to
+// land bytes that fail it — this is where AC-005's "corrupt one byte
+// in transit → refuse, no CAS entry" is enforced.
 type CASLike interface {
 	Has(digest string) bool
+	Put(ctx context.Context, reader io.Reader, expected string) (cache.Receipt, error)
 }
 
 // API is the concrete BundleAPI implementation.
@@ -59,6 +87,29 @@ type API struct {
 	verifier          trust.Verifier
 	anchorsFunc       func(ctx context.Context) ([]trust.Anchor, error)
 	signingPolicyFunc func() integrity.SigningPolicy
+
+	// registry and creds are UNIT-5's channel-fetch seam
+	// (bundle-download-and-verify-01PMZ909, spec §5.5). registry
+	// defaults to NewDefaultRegistry() (local_path only) when nil —
+	// every existing caller and test that never wired one keeps
+	// working. creds defaults to secrets.NoopResolver{}, matching the
+	// channel package's own established default
+	// (core/bundle/channels/localpath wires the same façade).
+	registry channels.Registry
+	creds    secrets.ResolverAPI
+
+	// gate and audit are UNIT-7's security seam
+	// (bundle-download-and-verify-01PMZ909, spec §1.7 F-3 / §5.6). gate
+	// is consulted BEFORE any channel is opened — nil default-allows
+	// (matching cedar.enforce's own NotApplicable→allow stance), which
+	// is safe here only because the shipped default_bundle_policy.cedar
+	// keeps the evaluation itself from being NotApplicable once a real
+	// Gate IS wired (core/rpc/api.go always wires one in production).
+	// audit is optional; a nil emitter drops every bundle.* event
+	// silently (audit.MustEmit's own contract) — acceptable in test
+	// harnesses without one wired.
+	gate  cedar.Gate
+	audit contextaudit.Emitter
 }
 
 // Option configures NewAPI.
@@ -104,6 +155,59 @@ func WithSigningPolicyFunc(f func() integrity.SigningPolicy) Option {
 	return func(a *API) { a.signingPolicyFunc = f }
 }
 
+// WithChannelRegistry injects the channels.Registry Install routes
+// every fetch through (UNIT-5). Nil (the default) makes Install lazily
+// use NewDefaultRegistry() — local_path only. Production wiring
+// (core/rpc/api.go) overrides this once UNIT-7 registers the
+// http_mirror factory alongside local_path so the sequencing rule in
+// plan.md ("UNIT-7 lands before UNIT-6 is enabled in production
+// wiring") is enforced at the one call site that builds the
+// production registry, not scattered across this package.
+func WithChannelRegistry(r channels.Registry) Option {
+	return func(a *API) { a.registry = r }
+}
+
+// WithSecretsResolver injects the secrets.ResolverAPI passed to
+// Registry.Open for channels whose ChannelSpec.Auth needs resolving
+// (e.g. UNIT-6's http_mirror). nil (the default) resolves to
+// secrets.NoopResolver{} — safe for local_path, which never reads Auth.
+func WithSecretsResolver(r secrets.ResolverAPI) Option {
+	return func(a *API) { a.creds = r }
+}
+
+// WithGate injects the Cedar policy gate Install consults, via
+// CheckBundleInstall, before opening any channel (UNIT-7, spec §5.6).
+// nil (the default) default-allows every install — the pre-UNIT-7
+// behaviour, and the correct one for callers/tests that intentionally
+// don't wire policy.
+func WithGate(g cedar.Gate) Option {
+	return func(a *API) { a.gate = g }
+}
+
+// WithAuditEmitter injects the append-only event-log emitter Install
+// writes bundle.fetched / bundle.signature_verified /
+// bundle.signature_rejected records to (UNIT-7). nil (the default)
+// drops every event silently, matching audit.MustEmit's own contract —
+// acceptable in test harnesses without one wired.
+func WithAuditEmitter(e contextaudit.Emitter) Option {
+	return func(a *API) { a.audit = e }
+}
+
+// NewDefaultRegistry returns a channels.Registry with only the
+// always-available local_path factory registered. Callers that add
+// further channels (e.g. UNIT-6's http_mirror) call Register on the
+// returned registry themselves and pass the result to
+// WithChannelRegistry — see core/rpc/api.go's UNIT-7 wiring, which is
+// the only place the production http_mirror factory is registered
+// (plan.md Rule 2: UNIT-7 must land first).
+func NewDefaultRegistry() channels.Registry {
+	r := channels.NewRegistry()
+	// A fixed, package-owned kind string registered into a fresh
+	// registry cannot collide; the error is structurally unreachable.
+	_ = r.Register(localpath.Kind, localpath.Factory)
+	return r
+}
+
 // NewAPI constructs the bundle view-scoped API.
 func NewAPI(opts ...Option) *API {
 	a := &API{}
@@ -111,6 +215,25 @@ func NewAPI(opts ...Option) *API {
 		opt(a)
 	}
 	return a
+}
+
+// channelRegistry returns the configured registry, lazily defaulting
+// to NewDefaultRegistry() so every pre-UNIT-5 caller (tests included)
+// that never wired one keeps working unchanged.
+func (a *API) channelRegistry() channels.Registry {
+	if a.registry != nil {
+		return a.registry
+	}
+	return NewDefaultRegistry()
+}
+
+// secretsResolver returns the configured credential resolver, lazily
+// defaulting to secrets.NoopResolver{}.
+func (a *API) secretsResolver() secrets.ResolverAPI {
+	if a.creds != nil {
+		return a.creds
+	}
+	return secrets.NoopResolver{}
 }
 
 // fsReader resolves <dataDir>/kenaz.lock (the canonical lockfile path
@@ -245,7 +368,7 @@ func lockedToBundle(lb lockfile.LockedBundle, cas CASLike, includeArtifacts bool
 	if lb.Verified {
 		tier = "signed"
 	}
-	if cas != nil && lb.ContentHash != "" && !cas.Has(lb.ContentHash) {
+	if cas != nil && !bundleIsCached(lb, cas) {
 		tier = tier + " (uncached)"
 	}
 	out := Bundle{
@@ -271,34 +394,102 @@ func lockedToBundle(lb lockfile.LockedBundle, cas CASLike, includeArtifacts bool
 	return out
 }
 
-// Install registers a bundle in the lockfile. Beta-scoped to the
-// local_path channel: req.Path must point at a directory that contains
-// a kenaz.yaml manifest at its root. The manifest is parsed, validated,
-// and converted into a LockedBundle entry that's appended to the
-// lockfile (replacing any existing entry of the same name). Artifact
-// bytes are NOT fetched into the CAS by this minimal install path —
-// the resolver mission ships the byte-fetch pipeline; this beta surface
-// surfaces "uncached" tier annotations on the resulting list rows so
-// the operator knows the bundle is registered but not yet materialized.
+// bundleIsCached reports whether lb's bytes are actually present in
+// cas. UNIT-5 (bundle-download-and-verify-01PMZ909): before UNIT-5,
+// nothing ever fetched artifact bytes, so this check historically
+// compared lb.ContentHash (the MANIFEST's canonical hash) against the
+// CAS — a digest the CAS never stores anything under, because the CAS
+// is keyed by ARTIFACT content hashes. That made "(uncached)" either
+// always true (nothing installed real bytes) or, after UNIT-5 without
+// this fix, permanently true even for a freshly, successfully cached
+// install (AC-005's exact regression to avoid).
+//
+// A bundle with recorded per-artifact entries (every row UNIT-5+
+// writes) is cached iff every one of those digests is in the CAS. A
+// legacy row with no per-artifact entries (nothing UNIT-4-and-earlier
+// ever wrote one) falls back to the old bundle-level content_hash
+// check so TestList_UncachedTierAnnotation's pre-UNIT-5 fixture shape
+// keeps its documented behaviour.
+func bundleIsCached(lb lockfile.LockedBundle, cas CASLike) bool {
+	if len(lb.Artifacts) > 0 {
+		for _, art := range lb.Artifacts {
+			if art.ContentHash == "" || !cas.Has(art.ContentHash) {
+				return false
+			}
+		}
+		return true
+	}
+	if lb.ContentHash == "" {
+		return true
+	}
+	return cas.Has(lb.ContentHash)
+}
+
+// Install fetches and registers a bundle. It routes entirely through
+// the core/bundle/channels abstraction (UNIT-5,
+// bundle-download-and-verify-01PMZ909, spec §5.5): Registry.Open opens
+// a Channel for req.Kind, the manifest itself is fetched via
+// Channel.Fetch at the well-known manifestFileName path (generalizing
+// what local_path always did — read a file at the channel root — to
+// every channel kind), and every declared artifact is fetched and
+// verified against its ArtifactDescriptor.ContentHash before being
+// written into the CAS. A digest mismatch, an unreachable channel, or
+// a rejected signature all refuse the install with NO lockfile row and
+// NO CAS entry for the artifact that failed — the lockfile write is
+// the last step, after every fetch has already succeeded.
+//
+// Before this unit, local_path only ever registered a lockfile row
+// pointing at req.Path; nothing was copied or hashed, and removing the
+// source directory silently orphaned the "installed" bundle. This is a
+// visible behaviour change for anyone relying on that pointer
+// semantics — local_path now copies and hashes, exactly like every
+// other channel.
 func (a *API) Install(ctx context.Context, req InstallRequest) (Bundle, error) {
 	if a.reader == nil || a.writer == nil {
 		return Bundle{}, fmt.Errorf("bundle: install requires a writable lockfile")
 	}
-	if req.Kind != "local_path" {
-		return Bundle{}, fmt.Errorf("bundle: install kind %q unsupported (v0.3.0 beta: local_path only)", req.Kind)
+	if req.Kind == "" {
+		return Bundle{}, fmt.Errorf("bundle: install kind is required")
 	}
-	if req.Path == "" {
-		return Bundle{}, fmt.Errorf("bundle: install path is required")
+	if req.Kind == "local_path" {
+		if req.Path == "" {
+			return Bundle{}, fmt.Errorf("bundle: install path is required")
+		}
+		if !filepath.IsAbs(req.Path) {
+			return Bundle{}, fmt.Errorf("bundle: install path %q must be absolute", req.Path)
+		}
 	}
-	if !filepath.IsAbs(req.Path) {
-		return Bundle{}, fmt.Errorf("bundle: install path %q must be absolute", req.Path)
+
+	locator := req.Path
+	if locator == "" {
+		locator = req.URL
 	}
-	manifestPath := filepath.Join(req.Path, "kenaz.yaml")
-	raw, err := os.ReadFile(manifestPath)
+
+	// UNIT-7 (spec §1.7 F-3 / §5.6): gate BEFORE any channel is opened —
+	// Bundle_Install is otherwise a fully ungated remote-fetch primitive
+	// the instant a non-local_path channel is registered in production
+	// (UNIT-6's http_mirror, armed only by UNIT-7's own commit — see
+	// core/rpc/api.go). The resource identity is the caller-supplied
+	// locator, not the bundle name: the manifest that would reveal the
+	// name hasn't been fetched yet.
+	if err := cedar.CheckBundleInstall(ctx, a.gate, req.Kind+":"+locator); err != nil {
+		return Bundle{}, err
+	}
+
+	spec := channels.ChannelSpec{Kind: req.Kind, Path: req.Path, URL: req.URL}
+	ch, err := a.channelRegistry().Open(spec, a.secretsResolver())
 	if err != nil {
-		return Bundle{}, fmt.Errorf("bundle: read manifest %s: %w", manifestPath, err)
+		return Bundle{}, fmt.Errorf("bundle: open channel: %w", err)
 	}
-	m, err := manifest.Parse(raw)
+	if err := ch.Reachable(ctx); err != nil {
+		return Bundle{}, fmt.Errorf("bundle: channel unreachable: %w", err)
+	}
+
+	var manifestBuf bytes.Buffer
+	if _, err := ch.Fetch(ctx, channels.ArtifactCoord{Path: manifestFileName}, &manifestBuf); err != nil {
+		return Bundle{}, fmt.Errorf("bundle: fetch manifest: %w", err)
+	}
+	m, err := manifest.Parse(manifestBuf.Bytes())
 	if err != nil {
 		return Bundle{}, fmt.Errorf("bundle: parse manifest: %w", err)
 	}
@@ -306,11 +497,10 @@ func (a *API) Install(ctx context.Context, req InstallRequest) (Bundle, error) {
 		return Bundle{}, fmt.Errorf("bundle: validate manifest: %w", err)
 	}
 
-	// UNIT-4 (spec §2): verify signatures BEFORE the lockfile lock and
-	// before any write, so a refused install leaves no lockfile row and
-	// no partial state — "rollback on refusal" falls out of ordering
-	// rather than needing an explicit undo. VerifyManifestSignatures had
-	// zero callers before this; this is the first one.
+	// UNIT-4 (spec §2): verify signatures BEFORE any artifact fetch or
+	// the lockfile lock, so a refused install leaves no lockfile row
+	// and no CAS residue — "rollback on refusal" falls out of ordering
+	// rather than needing an explicit undo.
 	policy := integrity.SigningOptional
 	if a.signingPolicyFunc != nil {
 		policy = a.signingPolicyFunc()
@@ -322,10 +512,73 @@ func (a *API) Install(ctx context.Context, req InstallRequest) (Bundle, error) {
 			return Bundle{}, fmt.Errorf("bundle: load trust anchors: %w", err)
 		}
 	}
-	verified, err := integrity.VerifyManifestSignatures(ctx, m, a.verifier, anchors, policy, integrity.FileResolver(req.Path))
+	// local_path keeps the exact pre-UNIT-5 FileResolver (a direct
+	// os.ReadFile against req.Path) so its already-tested signature
+	// path — and FileResolver's own non-test caller, guarding it from
+	// I10 orphaning — is unchanged. Every other channel resolves a
+	// signature locator the same way it resolves an artifact: through
+	// Channel.Fetch, so a channel that never has a local root (e.g.
+	// UNIT-6's http_mirror) still works.
+	resolve := integrity.FileResolver(req.Path)
+	if req.Kind != "local_path" {
+		resolve = channelSignatureResolver(ctx, ch)
+	}
+	verified, err := integrity.VerifyManifestSignatures(ctx, m, a.verifier, anchors, policy, resolve)
 	if err != nil {
+		// UNIT-7: report the rejection BEFORE returning — this is the
+		// refusal path (no lockfile row, no CAS residue for this
+		// artifact loop, which hasn't run yet).
+		contextaudit.MustEmit(ctx, a.audit, contextaudit.KindBundleSignatureRejected, contextaudit.BundleSignatureRejectedPayload{
+			Name:    m.Name,
+			Version: m.Version,
+			Reason:  err.Error(),
+		}, time.Now())
 		return Bundle{}, fmt.Errorf("bundle: verify signatures: %w", err)
 	}
+	if verified {
+		var keyID string
+		if len(m.Signatures) > 0 {
+			keyID = m.Signatures[0].KeyID
+		}
+		contextaudit.MustEmit(ctx, a.audit, contextaudit.KindBundleSignatureVerified, contextaudit.BundleSignatureVerifiedPayload{
+			Name:    m.Name,
+			Version: m.Version,
+			KeyID:   keyID,
+		}, time.Now())
+	}
+
+	// UNIT-5: fetch + hash-verify + store every declared artifact BEFORE
+	// touching the lockfile. A digest mismatch on any artifact refuses
+	// the whole install; artifacts already streamed into the CAS by an
+	// earlier iteration are untouched (they are individually
+	// hash-verified, content-addressed, and harmless to leave behind —
+	// what must never happen, and does not, is a lockfile row for a
+	// bundle whose fetch did not fully succeed).
+	if a.cas == nil && len(m.Artifacts) > 0 {
+		return Bundle{}, fmt.Errorf("bundle: install requires a configured CAS to fetch %d artifact(s)", len(m.Artifacts))
+	}
+	for _, ad := range m.Artifacts {
+		coord := channels.ArtifactCoord{
+			BundleName:    m.Name,
+			BundleVersion: m.Version,
+			ArtifactName:  ad.Name,
+			Path:          ad.Path,
+			ContentHash:   ad.ContentHash,
+		}
+		if err := a.fetchArtifactToCAS(ctx, ch, coord); err != nil {
+			return Bundle{}, fmt.Errorf("bundle: artifact %s: %w", ad.Name, err)
+		}
+	}
+	// UNIT-7: the fetch record — every declared artifact is now
+	// hash-verified and in the CAS, about to be committed to the
+	// lockfile below.
+	contextaudit.MustEmit(ctx, a.audit, contextaudit.KindBundleFetched, contextaudit.BundleFetchedPayload{
+		Name:          m.Name,
+		Version:       m.Version,
+		Channel:       req.Kind,
+		Source:        req.Kind + ":" + locator,
+		ArtifactCount: len(m.Artifacts),
+	}, time.Now())
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -342,7 +595,7 @@ func (a *API) Install(ctx context.Context, req InstallRequest) (Bundle, error) {
 	lb := lockfile.LockedBundle{
 		Name:        m.Name,
 		Version:     m.Version,
-		Source:      "local_path:" + req.Path,
+		Source:      req.Kind + ":" + locator,
 		ContentHash: m.ContentHash(),
 		// Verified is the real, positive verification result from
 		// above — never derived from SignatureRef's mere presence
@@ -385,6 +638,57 @@ func (a *API) Install(ctx context.Context, req InstallRequest) (Bundle, error) {
 		return Bundle{}, err
 	}
 	return lockedToBundle(lb, a.cas, true), nil
+}
+
+// fetchArtifactToCAS streams one artifact from ch straight into the
+// CAS via an io.Pipe — no intermediate buffering, no temp file. The
+// CAS's own Put verifies the streamed bytes' SHA-256 against
+// coord.ContentHash and refuses (deleting its staging file) on
+// mismatch; that refusal is this function's enforcement of "verify
+// each artifact against its ArtifactDescriptor.ContentHash and refuse
+// on mismatch" (spec UNIT-5 step 3) — channels themselves are
+// documented to never verify content hashes (channel.go:37-39).
+//
+// io.Pipe is safe for concurrent use by design (it exists precisely
+// for this producer/consumer shape); no shared mutable state crosses
+// the goroutine boundary here, so this needs no CLAUDE.md
+// mutex+snapshot fake pattern — that pattern is for TEST fakes the
+// test body also reads, not for this production pipe.
+func (a *API) fetchArtifactToCAS(ctx context.Context, ch channels.Channel, coord channels.ArtifactCoord) error {
+	if coord.ContentHash == "" {
+		return fmt.Errorf("no content_hash declared")
+	}
+	pr, pw := io.Pipe()
+	fetchDone := make(chan error, 1)
+	go func() {
+		_, ferr := ch.Fetch(ctx, coord, pw)
+		_ = pw.CloseWithError(ferr)
+		fetchDone <- ferr
+	}()
+	_, putErr := a.cas.Put(ctx, pr, coord.ContentHash)
+	if ferr := <-fetchDone; ferr != nil {
+		return fmt.Errorf("fetch: %w", ferr)
+	}
+	if putErr != nil {
+		return fmt.Errorf("store: %w", putErr)
+	}
+	return nil
+}
+
+// channelSignatureResolver resolves a manifest SignatureRef.Locator to
+// bytes by fetching it through ch — the same channel the manifest and
+// every artifact came from. This is the non-local_path counterpart to
+// integrity.FileResolver: it has no notion of a filesystem bundleRoot,
+// so it works for any channel kind, including one with no local root
+// at all (UNIT-6's http_mirror, where a locator is a sibling URL path).
+func channelSignatureResolver(ctx context.Context, ch channels.Channel) integrity.SignatureResolver {
+	return func(locator string) ([]byte, error) {
+		var buf bytes.Buffer
+		if _, err := ch.Fetch(ctx, channels.ArtifactCoord{Path: locator}, &buf); err != nil {
+			return nil, fmt.Errorf("fetch signature %s: %w", locator, err)
+		}
+		return buf.Bytes(), nil
+	}
 }
 
 // Remove drops the bundle whose name matches id from the lockfile and
@@ -443,3 +747,7 @@ func CASFromCache(c cache.CAS) CASLike {
 type casAdapter struct{ c cache.CAS }
 
 func (a casAdapter) Has(d string) bool { return a.c.Has(d) }
+
+func (a casAdapter) Put(ctx context.Context, r io.Reader, expected string) (cache.Receipt, error) {
+	return a.c.Put(ctx, r, expected)
+}
