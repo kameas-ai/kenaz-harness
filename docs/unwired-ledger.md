@@ -1155,10 +1155,96 @@ and not a nice-to-have.
   is explicitly OUT of this mission's scope (spec.md §2, D-701: routing
   `Graph_*` would be new capability work, not a parity fix) — but the gap
   is now a *named, allowlisted, dated* line per method rather than a
-  silent, unenforced one. Per-method reclassification (which of the 419
-  are `unrouted` / `boundary-panelled` / `gated` / `desktop-only-by-nature`
-  vs. genuinely `untriaged`) is WP07 of the same mission, not yet run as of
-  this entry — see the mission's own report for where the cut landed.
+  silent, unenforced one. **Per-method reclassification CLOSED 2026-08-21
+  (WP07, same mission):** all 416 remaining forward-gap entries now carry
+  one of the five classes (26 `gated`, 187 `boundary-panelled`, 115
+  `unrouted`, 13 `desktop-only-by-nature`, 75 `untriaged` — each untriaged
+  entry individually dated and owned, not a repeat of this WP02 note).
+  `scripts/ci/check-serve-gap-classification.sh` (wired into `pr.yml`)
+  now fails a PR that adds a classless entry or an undated/unowned
+  `untriaged` one. `Graph_*`/`Workflows_*` themselves landed as
+  `boundary-panelled` (WorkflowsView.vue and the four agentgraph views
+  are all panelled — WP03/WP05).
+
+### 2026-08-21 · WP07's own caller-site pass found two live served-mode bugs neither the closing sweep nor WP03/04/05's per-view scans could see
+
+Both are shell-chrome / cross-affordance findings — the class of bug a
+per-VIEW audit structurally cannot catch, which is the exact gap
+`served-mode-is-a-real-mode-01PMZ707` §1.7 named. Both **CLOSED
+2026-08-21** in the same WP07 commit that found them:
+
+- **`shell/MemoryBadge.vue` rendered "Loading memory count…" PERMANENTLY
+  in served mode.** `Memory_HealthSnapshot`/`Memory_ListChunks` are
+  unrouted; `chunkCount` starts `null` and the `fetchCount()` catch
+  leaves it there ("keep the previous value" — never true on the FIRST
+  call). The badge is mounted from `shell/LeftRail.vue`, which is not a
+  "view" any per-view scan (including this mission's own WP03) would
+  have enumerated. Fixed: gated `v-if="!served"` in `LeftRail.vue`.
+- **WP04's `/` slash-menu gate covered only the dropdown's autocomplete
+  fetch, not the independent send-time branch.** `ChatInput.vue`'s
+  `send()` has a SEPARATE `if (text.startsWith('/'))` branch (typing
+  "/foo" and pressing Enter, with no dropdown ever opened) that emits
+  `slashCommand`, reaching `SessionsView.vue`'s unguarded
+  `client.slash.execute()`. WP04's gate on the dropdown fetch alone left
+  this fully reachable. Fixed: `send()`'s slash branch now also checks
+  `!served`.
+
+### 2026-08-21 · Open findings from WP07's per-method triage — chat-surface affordances needing a WP04-style port/gate call
+
+`served-mode-is-a-real-mode-01PMZ707` WP04 scoped six chat affordances
+(paperclip, `/`, autonomy chip, title suggestion, Branches, feature
+flags). WP07's own caller-site pass found several MORE affordances
+reachable from the live, routed chat surface (`SessionsView.vue`,
+`MessageBubble.vue`, `CodeBlock.vue`/`MarkdownBlock.vue`) with no
+`isServedMode()` guard of their own — none is an active data-fabrication
+lie (each fails via an honest `ServedUnsupportedError` today), but none
+has had the WP04-shape port-or-gate review either. Full detail and
+per-binding reasoning: the `untriaged` class in
+`scripts/ci/allowlists/i15-serve-dispatch-gap.txt`. Summary, owner alec
+for all:
+
+- **Artifact save/view from chat** (`Artifacts_Delete/Get/List/Promote`,
+  `Sessions_SaveAsArtifact`) — MarkdownBlock.vue/CodeBlock.vue's "save as
+  artifact" flow. `CodeBlock.vue`'s `saveAsArtifact()` also calls
+  `createHarnessClient()` directly instead of the injected
+  `useHarnessClient()`, bypassing the served/desktop transport switch
+  AND fake-client test injection — a second, architecture-level bug
+  independent of served mode, found as a side effect.
+- **Context-attachment management outside the paperclip**
+  (`Attachments_Add/ListResolved/Refresh/Remove`,
+  `Contexts_AttachModule/CreateFolder/Get/List`) — reachable via
+  `ResolvedContextPanel.vue` (mounted in `SessionsView.vue`), a separate
+  path from the paperclip WP04 gated in `ChatInput.vue`.
+- **`Sessions_ResumeMessage`, `Sessions_ClearTitle`** — live in
+  `MessageBubble.vue`/`SessionHeader.vue`. `ClearTitle` is the undo half
+  of `Sessions_SuggestTitle`, which WP04 ported — porting one without the
+  other is itself arguably a half-flow WP04's own bar would reject.
+- **`Bash_Exec`** (the inline `!command` chat affordance) — already
+  fails honestly (inline error text, not fake output) but the port/gate
+  question is a genuine security escalation, not a mechanical one:
+  unlike the Cedar-gated `kenaz__bash` MODEL tool, this is a direct
+  human-to-shell bypass with no gate at all today.
+- **`Slashcmd_Get`/`Slashcmd_Run`** — the user-authored slash-command
+  EXECUTION path from `SessionsView.vue`, distinct from the
+  already-boundary-panelled `Slashcmd_List/Save/Delete` settings UI.
+- **`Memory_RememberMessage`, `Handoff_Inbox/ListTeam/Share`,
+  `SessionSync_Toggle`, `Search_Sessions/Search_Unified`,
+  `Settings_GetArtifactPreview`** — each degrades safely today (empty
+  list / disabled default, not fake data) but carries no
+  `isServedMode()` gate.
+
+### 2026-08-21 · Two more orphan Wails bindings found alongside A-14's nine (not part of A-14)
+
+`escalation-register:1139`'s A-14 already rules on nine zero-caller
+bindings. WP07's caller-site pass found two more with the identical
+shape (zero TS callers anywhere, desktop or served) that are NOT among
+A-14's nine: `MCP_HealthSnapshot`, `MCP_SubscribeHealthChanges`,
+`LLM_UpdateProviderCredential`, `Settings_GetLocalRuntimeRAMOverrideGB`,
+`Settings_SetLocalRuntimeRAMOverrideGB`. Recorded here rather than
+silently dropped; owner alec, needs the same per-binding A-0-style
+ruling A-14 got (wire, delete, or keep as a dev tool) — not resolved by
+this mission, which only classifies served-mode reachability and these
+have none to classify.
 
 ### 2026-08-21 · An "absorbed" finding that was never actually fixed — `dead-code-audit-2026-08-18.md:1794`'s SD-01/SD-02 (serve) claim
 
