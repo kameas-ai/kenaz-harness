@@ -278,6 +278,18 @@ jobs:
         # reverts to informational-only.
         run: bash scripts/ci/check-serve-dispatch-drift.sh
 
+      - name: serve-gap classification coverage (WP07, AC-717)
+        # served-mode-is-a-real-mode-01PMZ707 WP07: every entry in
+        # scripts/ci/allowlists/i15-serve-dispatch-gap.txt must sit under one
+        # of spec.md §5.7's five classes (gated / boundary-panelled /
+        # unrouted / desktop-only-by-nature / untriaged), and every
+        # untriaged entry must be dated and name an owner. The drift gate
+        # above only checks that an entry EXISTS in the allowlist — it has
+        # never known or cared about classification, so this closes the gap
+        # AC-717 names: a taxonomy nothing enforces is the same failure as
+        # the gate that used to always exit 0.
+        run: bash scripts/ci/check-serve-gap-classification.sh
+
       - name: agentgraph-convergence guard (I3/I6/I7)
         # kitty-specs/agentgraph-total-convergence-01PMGX01 WP01. Every
         # callable node kind must be exercised end-to-end by a shipped

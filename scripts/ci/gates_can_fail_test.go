@@ -128,6 +128,7 @@ var cwdSensitiveGates = []string{
 	"check-installer-payload.sh",
 	"check-audit-store-before-retention.sh",
 	"check-fts-sync.sh",
+	"check-serve-gap-classification.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -982,6 +983,24 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			gate:       "check-serve-dispatch-drift.sh",
 			file:       "core/rpc/bindings.go",
 			append:     "\nfunc (bnd *Bindings) Zz_Injected() {}\n",
+		},
+		{
+			// served-mode-is-a-real-mode-01PMZ707 WP07, AC-717 + CLAUDE.md's
+			// gate-extension rule. check-serve-dispatch-drift.sh's
+			// read_allowlist() strips every comment and treats the file as
+			// a flat name list — it has never known about classification,
+			// so a WP07 that reclassified 416 entries and relied on that
+			// gate alone would have shipped a taxonomy nothing enforces.
+			// This plants an entry under an untriaged reason paragraph that
+			// names neither a date nor an owner — the exact shape 419
+			// entries were in before this WP, now caught before promotion
+			// rather than ageing silently the way the file's own prior
+			// bulk note did.
+			name:       "serve-gap-classification/untriaged-entry-missing-date-and-owner",
+			wantOutput: "Zz_Injected",
+			gate:       "check-serve-gap-classification.sh",
+			file:       "scripts/ci/allowlists/i15-serve-dispatch-gap.txt",
+			append:     "# No date or owner mentioned anywhere in this reason.\n\"Zz_Injected\"\n",
 		},
 	}
 

@@ -117,6 +117,22 @@ describe('ChatInput — `/` slash menu (WP04 gate)', () => {
     expect(w.findComponent({ name: 'SlashAutocomplete' }).exists()).toBe(true);
   });
 
+  it('sends a leading-slash message as a normal message instead of calling slash.execute under served mode', async () => {
+    servedModeFlag = true;
+    const w = mountInput();
+    await flushPromises();
+    const textarea = w.find('textarea');
+    await textarea.setValue('/help');
+    await textarea.trigger('keydown', { key: 'Enter' });
+    // *Falsify*: drop `&& !served` from ChatInput.vue's send() slash
+    // branch -- this goes red because 'slashCommand' would be emitted
+    // instead of 'send', reaching SessionsView.vue's unguarded
+    // client.slash.execute() call.
+    expect(w.emitted('slashCommand')).toBeFalsy();
+    expect(w.emitted('send')).toBeTruthy();
+    expect(w.emitted('send')![0]).toEqual(['/help']);
+  });
+
   it('never fetches the command list and never opens the dropdown under served mode', async () => {
     servedModeFlag = true;
     const list = vi.fn(async () => [

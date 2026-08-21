@@ -3,7 +3,7 @@
 # switch (GET /ws). A desktop binding lands here, is served mode's answer
 # to it, or files a per-method disposition — never a silent gap again.
 #
-# Spec: kitty-specs/served-mode-is-a-real-mode-01PMZ707/spec.md §1.4, §5.2.
+# Spec: kitty-specs/served-mode-is-a-real-mode-01PMZ707/spec.md §1.4, §5.2, §5.7.
 # Escalation-register E-2 (docs/escalation-register-2026-08-19.md:2067).
 # Enforced by scripts/ci/check-serve-dispatch-drift.sh, gate G-701.
 #
@@ -17,183 +17,545 @@
 # the discovery pass first and the tree second — see i14's own lesson,
 # which this file inherits without re-deriving it.
 #
-# NOT EMPTY at introduction/promotion (2026-08-21,
-# served-mode-is-a-real-mode-01PMZ707 WP02). Seeded from a FRESH run
-# against this branch's actual HEAD, not against the spec's cited base
-# revision (55029354 / v0.64.0): plan.md's out-of-band check #1 says "if
-# the numbers differ, the branch base is not what this spec was written
-# against — stop and re-derive, do not adjust the allowlist to fit." They
-# differ (v0.65.0/v0.66.0/v0.67.0 landed more bindings and dispatch cases
-# between the spec's citation and this promotion): the spec cites 447
-# bindings / 35 served / 417 gap.
+# HISTORY (kept for the trail; current figures are in the WP07 block below):
+#   2026-08-21 WP02 promotion: seeded 419 forward entries, ALL `untriaged`
+#     with the single note "owner: WP07 of this mission" — deliberate
+#     (E-2: promote the gate before the mission's own port/gate/panel
+#     decisions churn the list, so it shrinks a live allowlist rather than
+#     a dormant one; per-method triage against the pre-WP03/04/05 tree
+#     would reproduce the exact over-claim dead-code-audit:1625 found).
+#   2026-08-21 WP04: ported Config_GetFlags, Sessions_ResolveAutonomy,
+#     Sessions_SuggestTitle (removed, 419 → 416); gated (not reclassified
+#     yet) the paperclip/drag-drop, `/` slash menu, and Branches_*.
 #
-# CORRECTED 2026-08-21 (F5, independent review of PR #304). This block
-# previously read "this run measured 449 / 35 / 419" and called that a
-# fresh run against the branch HEAD. It was a fresh run against the
-# WP02 AUTHORING base (8ffd0766, v0.67.0) — not against the merged
-# branch. The merge brought in Sessions_SaveScrollPosition and
-# Sessions_LoadScrollPosition as BOTH a binding and a dispatch case, so
-# the true figures on the merged HEAD are:
+# WP07 (served-mode-is-a-real-mode-01PMZ707), 2026-08-21: walked all 416
+# remaining entries caller-site-by-caller-site — frontend/src/components/
+# and frontend/src/lib/ included, not just frontend/src/views/, since the
+# per-VIEW reasoning is exactly what missed spec §1.5's six chat
+# affordances (dead-code-audit:1625's own admission). Every entry below
+# now carries one of the five classes spec §5.7 defines
+# (gated/boundary-panelled/unrouted/desktop-only-by-nature/untriaged), a
+# real reason grounded in a caller-site grep, and — for `untriaged` — a
+# date and a named owner. Entries with IDENTICAL reasoning are grouped
+# under one shared comment (this file's own prior "e.g. all eleven Audit_*
+# ... carry a shared inline note" claim was aspirational when written —
+# WP02 never actually added one; it does now, and this time the sentence
+# is true of the file it sits in).
 #
-#   Desktop bindings: 451   Serve-handled: 37   Forward gap: 419
+# This pass also found and fixed two real served-mode bugs as a side
+# effect of per-method triage (not WP07's job description, but leaving a
+# known bug narrated in a comment while the pass has the fix in hand
+# would be its own kind of lie), plus one related non-bug note:
+#   - shell/MemoryBadge.vue rendered "Loading memory count…" PERMANENTLY
+#     in served mode (Memory_HealthSnapshot/_ListChunks are unrouted, and
+#     chunkCount starts null with no un-stuck path) — now gated in
+#     LeftRail.vue.
+#   - ChatInput.vue's `/` dropdown gate (WP04) covered only the
+#     autocomplete half of the slash-command affordance; typing "/foo"
+#     and pressing Enter bypassed it entirely and reached
+#     SessionsView.vue's unguarded client.slash.execute() — now gated in
+#     send() too.
+#   - core/rpc/bindings.go's Config_GetFlags body (WP04) is now shared via
+#     rpc.ComputeFeatureFlags() — not a bug fix, listed here only because
+#     it is the reason scripts/ci/wailsjs-bindings.sha256 changed in the
+#     WP04/WP08 commits despite no Bindings signature changing.
 #
-# The gap is unchanged at 419 because the two additions cancel, which is
-# why the entry list below is still exactly correct. Corrected anyway:
-# leaving a stale number under a "stop and re-derive" trip-wire trains
-# the next reader to ignore the trip-wire.
-#
-# CLASSIFICATION STATUS: every entry below is `untriaged` per spec §5.7's
-# five-class taxonomy (unrouted / boundary-panelled / gated /
-# desktop-only-by-nature / untriaged). WP02 (this file's author) is the
-# gate-promotion WP, not the per-method triage WP — WP07 owns walking
-# this list caller-site-by-caller-site and reclassifying each entry,
-# after WP03/WP05/WP04 land (plan.md Rule 3: the `boundary-panelled` and
-# `gated` classes are larger after those WPs than before, and triaging
-# against the pre-WP03 tree reproduces the exact over-claim
-# docs/dead-code-audit-2026-08-18.md:1625 found). Owner: WP07 of this
-# same mission, served-mode-is-a-real-mode-01PMZ707 — unclaimed as of
-# 2026-08-21 because this pass stopped after WP05 (see the mission's own
-# report). Until WP07 runs, every line below carries the same disposition
-# (`untriaged`, dated 2026-08-21, owner WP07) rather than 419 individually
-# hand-written justifications that would either be copy-pasted (false
-# precision) or block the gate's promotion on 419 judgement calls E-2
-# explicitly says not to require up front.
-#
-# UPDATED 2026-08-21 (served-mode-is-a-real-mode-01PMZ707 WP04). Three
-# entries removed — ported, not reclassified: Config_GetFlags,
-# Sessions_ResolveAutonomy, Sessions_SuggestTitle now have a serve
-# dispatch case (core/serve/server.go) and a servedMethods entry
-# (core/serve/methods.go), per spec §5.4's "port" column. The live
-# figures after this change:
+# Figures as of this pass (RAN: bash scripts/ci/check-serve-dispatch-drift.sh):
 #
 #   Desktop bindings: 451   Serve-handled: 40   Forward gap: 416
 #
-# WP04 also GATED (kept in this file, not ported) the paperclip/drag-drop
-# (7 Attachments_*), the `/` slash menu (Slash_Execute, Slash_List), and
-# all ten Branches_*, per spec §5.4's "gate" column — those entries are
-# untouched here; WP07 assigns them the `gated` class once it runs.
+# 416 = 26 gated + 187 boundary-panelled + 115 unrouted +
+#       13 desktop-only-by-nature + 75 untriaged.
 #
-# Grouped by desktop-binding PREFIX (the nearest proxy for a feature
-# surface / caller-site neighbourhood available without doing WP07's
-# work), not strictly alphabetically within a prefix in every case, so a
-# future triage pass can lift a whole block at once when a prefix turns
-# out to be one class (e.g. all eleven Audit_* entries below were
-# reviewed together in WP05, which is why they carry a shared inline
-# note now instead of the bare UNTRIAGED header).
+# `untriaged` (75) is the class that must shrink release over release — a
+# gate that could never fail was replaced by an allowlist; an allowlist
+# whose untriaged class never shrinks is the same failure with a longer
+# name (spec AC-717). Every untriaged entry below names a REAL blocker
+# (a live chat-surface caller needing a WP04-style port/gate call, an
+# ambient shell-level read that degrades safely today but carries no
+# literal isServedMode() check, or a genuine product/security
+# escalation) — not "we'll get to it".
 #
-# Format: one double-quoted method name per line. A line's disposition
-# note says what changed and when. Removing a line entirely means the
-# method now has a serve dispatch case (ported) — WP04's mechanism.
-# Boundary-panelling (WP03/WP05-style) or gating (!isServedMode()) does
-# NOT remove a backend binding from this gap — the server genuinely
-# still has no dispatch case for it — it RECLASSIFIES the entry from
-# `untriaged` to `boundary-panelled`/`gated` in place, which is what
-# WP07 (still pending) does for the remainder. Allowlists shrink
-# monotonically only in the `ported` sense; nothing is added without a
-# date, and no entry's class regresses without one either.
+# Format: one double-quoted method name per line, grouped by class, and
+# within a class by shared reasoning (a comment block covers every name
+# under it until the next comment block or class header). Removing a line
+# entirely means the method now has a serve dispatch case (ported).
+# Boundary-panelling or gating does NOT remove a backend binding from this
+# gap — the server genuinely still has no dispatch case for it — it only
+# changes the entry's class. Allowlists shrink monotonically only in the
+# `ported` sense; nothing is added without a date, and no entry's class
+# regresses without one either.
 
-# UNTRIAGED 2026-08-21 (served-mode-is-a-real-mode-01PMZ707 WP02 seed).
-# Owner: WP07 of the same mission.
+
+# CLASS: gated -- the affordance carries !isServedMode() (or, for
+# PermissionDialsPanel's pair, WP05's equivalent explicit-failure-state
+# pattern, noted per-entry). WP04's + WP07's own output.
+# 26 entries in 8 group(s).
+
+# Caller(s) ChatInput.vue carry the WP04 served-mode gate.
+"Attachments_AddMedia"
+"Branches_SetAdvisorDismissed"
+"LLM_GetAttachmentLimits"
+"Slash_List"
+
+# Caller(s) BranchSidebar.vue carry the WP04 served-mode gate.
+"Branches_Abandon"
+"Branches_List"
+
+# Caller(s) ReintegrationPreviewModal.vue carry the WP04 served-mode gate.
+"Branches_CommitReintegration"
+"Branches_ProposeReintegrationSummary"
+
+# Caller(s) CreateBranchModal.vue carry the WP04 served-mode gate.
+"Branches_Create"
+"Branches_RecommendModel"
+
+# RAN: ProvidersView.vue:65 `readOnly = computed(() => servedMode.value)` --
+# every write affordance calling these (Add/Update/Test/Remove provider, the
+# LocalRuntimesSection subtree, the AddProviderForm/CustomEndpointFields drawer)
+# sits behind `v-if="!readOnly"`, confirming WP03's own "confirmed to exist, not
+# confirmed sufficient" flag (spec Sec.13 item 6). Verified against a computed
+# derived from useServedMode(), the canonical gate shape.
+"LLM_AddProvider"
+"LLM_AutoConfigureLocalRuntime"
+"LLM_ListCustomTemplates"
+"LLM_ListDetectedLocalRuntimes"
+"LLM_ListModels"
+"LLM_ProbeCustomEndpoint"
+"LLM_RecognizeTemplate"
+"LLM_RemoveProvider"
+"LLM_RescanLocalRuntimes"
+"LLM_TestProvider"
+"LLM_UpdateProvider"
+
+# MemoryBadge.vue's mount in LeftRail.vue is now gated `v-if="!served"` (this
+# WP, LeftRail.vue) after a caller-site pass found the badge rendered a
+# permanently-stuck "Loading memory count..." state in served mode (chunkCount
+# starts null and the catch never advances it). Memory_ListChunks is ALSO called
+# from the boundary-panelled MemoryView.vue and ProjectLandingPage.vue -- all
+# three caller paths are now inaccessible in served mode.
+"Memory_HealthSnapshot"
+"Memory_ListChunks"
+
+# PermissionDialsPanel.vue (WP05, D-710): a failed getPermissionMode() renders
+# an explicit inline unavailable state rather than a default-looking dial
+# (AC-713), and the write path already had the same honest treatment before this
+# mission. Not a literal isServedMode() check but functionally the same G1
+# outcome via an explicit-failure-state pattern rather than a proactive hide;
+# classed `gated` because the practical effect (no live dial reachable) matches,
+# with this note distinguishing the mechanism from WP04's isServedMode() gates.
+"Settings_GetPermissionMode"
+"Settings_SetPermissionMode"
+
+# ChatInput.vue's send() slash branch (which is what feeds SessionsView.vue's
+# client.slash.execute() call) is gated `&& !served` -- found and closed during
+# THIS WP's own caller-site pass: the dropdown gate WP04 shipped covered only
+# the autocomplete half, not the independent "type /foo and press Enter" path.
+# Fixed in ChatInput.vue this commit.
+"Slash_Execute"
+
+
+# CLASS: boundary-panelled -- the only caller (or callers, ALL of them)
+# is/are inside a view that renders NotAvailableInServedMode. Grown by
+# WP03/WP05's panels; classified here by walking actual caller sites
+# (frontend/src/components/ and frontend/src/lib/ included, not just
+# frontend/src/views/) per spec Sec.5.7's instruction -- the per-view
+# reasoning the 2026-08-18 closing sweep used is exactly what missed
+# Sec.1.5's six chat affordances, so this pass does not repeat it.
+# Entries are grouped by their exact caller-file SET below (not just by
+# desktop-binding prefix), so identical reasoning is stated once.
+# 187 entries in 52 group(s).
+
+# Caller(s) PeersPanel.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"ACP_ListPeers"
+"ACP_ListTraces"
+"ACP_RevokePeer"
+"ACP_TrustPeer"
+
+# Caller(s) AgentsView.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Agents_DeleteProfile"
+"Agents_ListProfiles"
+"Agents_LoadProfile"
+"Agents_SaveProfile"
+
+# Caller(s) GlobalContextPanel.vue, ProjectLandingPage.vue, SettingsView.vue
+# only reachable from a view that renders NotAvailableInServedMode.
+"Attachments_List"
+"Attachments_Reorder"
+
+# Caller(s) AuditView.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Audit_BulkPurge"
+"Audit_DeleteQuery"
+"Audit_Export"
+"Audit_Filter"
+"Audit_ListSavedQueries"
+"Audit_SaveQuery"
+"Audit_VerifyChain"
+
+# Caller(s) BundlesView.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Bundle_Get"
+"Bundle_Install"
+"Bundle_List"
+"Bundle_Remove"
+
+# Caller(s) CatalogPreviewDrawer.vue, MarketplaceView.vue span multiple views,
+# ALL of which are inaccessible in served mode (boundary-panelled and/or
+# unrouted and/or gated) -- no single caller reaches this in a served build via
+# any path.
+"Catalog_Install"
+
+# Caller(s) CatalogView.vue, MarketplaceView.vue span multiple views, ALL of
+# which are inaccessible in served mode (boundary-panelled and/or unrouted
+# and/or gated) -- no single caller reaches this in a served build via any path.
+"Catalog_List"
+
+# Caller(s) CedarEditor.vue, PolicyView.vue only reachable from a view that
+# renders NotAvailableInServedMode.
+"CedarPolicy_Delete"
+"CedarPolicy_Get"
+"CedarPolicy_ListPolicies"
+"CedarPolicy_ReloadPolicies"
+"CedarPolicy_Save"
+"CedarPolicy_Validate"
+
+# Caller(s) RecipeKeyPromptModal.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"CedarPolicy_InstallTemplate"
+
+# Caller(s) PolicyView.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"CedarPolicy_RecentDecisions"
+
+# Caller(s) CedarEditor.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Cedar_PublishToTeam"
+"Settings_FleetConfigPullStatus"
+
+# Caller(s) CompactionStrategyPanel.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Compaction_GetConfig"
+"Compaction_GetEffective"
+"Compaction_ListCustomStrategies"
+"Compaction_SetConfig"
+
+# Caller(s) CompactionStrategyPanel.vue, SettingsView.vue only reachable from a
+# view that renders NotAvailableInServedMode.
+"Compaction_GetTierExplain"
+
+# Caller(s) CompliancePanel.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Compliance_ArchiveNow"
+"Compliance_SetRetention"
+"Compliance_Status"
+
+# Caller(s) RecoveryCodeFlow.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"ContextSync_ApplyRecoveryCode"
+"ContextSync_GenerateRecoveryCode"
+
+# Caller(s) ContextsView.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Contexts_ContextPublish"
+"Contexts_ContextSyncStatus"
+"Contexts_ListAll"
+"Contexts_RecentlyApplied"
+"Contexts_RootPath"
+"Contexts_Save"
+
+# views/settings/FleetTelemetryPanel.vue (nested under SettingsView.vue) --
+# caller confirmed by hand (multi-line client.fleet.getTelemetryConsent() chain
+# this mapper's single-line regex missed).
+"Fleet_GetTelemetryConsent"
+
+# Caller(s) RunView.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Graph_CancelRun"
+"Graph_GetRunStatus"
+"Graph_GetRunTrace"
+"Graph_Resume"
+
+# Caller(s) GraphEditor.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Graph_CheckEdge"
+"Graph_LoadGraph"
+"Graph_SaveGraph"
+"Graph_Validate"
+
+# Caller(s) GraphsView.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Graph_DeleteGraph"
+"Graph_ListGraphs"
+"Graph_StartRun"
+
+# Caller(s) GraphEditor.vue, RunView.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Graph_MaterializeRun"
+
+# Caller(s) HooksSettingsView.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Hooks_Add"
+"Hooks_AvailableBuiltins"
+"Hooks_List"
+"Hooks_Remove"
+"Hooks_Update"
+
+# Caller(s) HookDryRunDrawer.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Hooks_DryRun"
+
+# Caller(s) HooksSettingsView.vue, KenazToolsPanel.vue only reachable from a
+# view that renders NotAvailableInServedMode.
+"Hooks_InstallStarterMemory"
+
+# Caller(s) KenazToolsPanel.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Hooks_RemoveStarterMemory"
+"Settings_GetBash"
+"Settings_GetFSReadEnabled"
+"Settings_GetFSWriteEnabled"
+"Settings_GetSaveArtifactEnabled"
+"Settings_GetTodoEnabled"
+"Settings_GetWebFetchEnabled"
+"Settings_GetWebSearch"
+"Settings_SetBash"
+"Settings_SetFSReadEnabled"
+"Settings_SetFSWriteEnabled"
+"Settings_SetMemory"
+"Settings_SetSaveArtifactEnabled"
+"Settings_SetTodoEnabled"
+"Settings_SetWebFetchEnabled"
+"Settings_SetWebSearch"
+
+# Caller(s) LLMRoutingPanel.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"LLM_DeleteChain"
+"LLM_ListFallbackChains"
+"LLM_LoadChain"
+"LLM_SaveChain"
+
+# Caller(s) LogsPanel.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Logs_Tail"
+
+# Caller(s) PasteConfigTab.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"MCP_ImportClaudeDesktopConfig"
+
+# Caller(s) ToolsView.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"MCP_ListServers"
+
+# Caller(s) CustomRecipeTab.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"MCP_SaveCustomRecipe"
+"MCP_TestRecipe"
+
+# Caller(s) SettingsView.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Memory_EmbedderEligibility"
+"Settings_GetAutoCaptureGeneratedImages"
+"Settings_GetAutoTitleEnabled"
+"Settings_GetChatCustomInstructions"
+"Settings_GetEmbedderConfig"
+"Settings_GetMaxGeneratedImageBytes"
+"Settings_GetShowPerMessageTokenMeter"
+"Settings_SetAutoCaptureGeneratedImages"
+"Settings_SetAutoResumeOnKeyRotation"
+"Settings_SetAutoTitleEnabled"
+"Settings_SetChatCustomInstructions"
+"Settings_SetEmbedderConfig"
+"Settings_SetMaxGeneratedImageBytes"
+"Settings_SetMonthlyCostNotifyUSD"
+"Settings_SetMultimodalInput"
+"Settings_SetShowPerMessageTokenMeter"
+
+# Caller(s) MemoryView.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Memory_EmbeddingProbe"
+"Memory_Forget"
+"Memory_GetChunkProvenance"
+"Memory_LastRetrieval"
+"Memory_MarkImportant"
+"Memory_NarrativeFailedCount"
+"Memory_NarrativeFailedList"
+"Memory_Pin"
+"Memory_PromoteScope"
+"Memory_PrunePreview"
+"Memory_RetryFailedNarrative"
+"Memory_RunPruneNow"
+
+# Caller(s) HookJournalView.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Memory_JournalTail"
+
+# Caller(s) MemoryHealthPanel.vue, SettingsView.vue only reachable from a view
+# that renders NotAvailableInServedMode.
+"Memory_TestEmbedder"
+
+# Caller(s) ProjectLandingPage.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"ProjectSync_SetArtifactClass"
+"ProjectSync_Toggle"
+"Projects_Get"
+"Projects_ListSessions"
+"Projects_UpdateDescription"
+
+# Caller(s) ProjectAutonomyPanel.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Projects_GetAutonomy"
+"Projects_SetAutonomy"
+
+# Called through scheduledChatClient.ts, a separate bridge module (not part of
+# HarnessClient/harnessClient.ts). All UI callers are
+# views/settings/scheduledchat/* (nested under SettingsView.vue) and
+# views/workflows/* (RunsHistoryTab.vue, ScheduledInbox.vue, WorkflowsView.vue
+# itself), both boundary-panelled.
+"ScheduledChat_Create"
+"ScheduledChat_Delete"
+"ScheduledChat_Get"
+"ScheduledChat_History"
+"ScheduledChat_List"
+"ScheduledChat_RunNow"
+"ScheduledChat_SetEnabled"
+"ScheduledChat_Update"
+
+# Caller(s) ModelAccessibleSecretsPanel.vue only reachable from a view that
+# renders NotAvailableInServedMode.
+"Secrets_Expose"
+"Secrets_List"
+"Secrets_Revoke"
+
+# views/settings/CrashReportingPanel.vue (nested under SettingsView.vue) --
+# caller confirmed by hand (multi-line b().Sentry_* chain).
+"Sentry_GenerateLocalReport"
+"Sentry_GetLastFive"
+"Sentry_TestDSN"
+
+# Caller(s) AuditSettingsPanel.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Settings_GetAuditSettings"
+"Settings_SetAuditSettings"
+
+# Caller(s) AutonomyPanel.vue, ProjectAutonomyPanel.vue only reachable from a
+# view that renders NotAvailableInServedMode.
+"Settings_GetAutonomy"
+
+# Caller(s) MCPHealthSettingsPanel.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Settings_GetMCPAutoRestart"
+"Settings_SetMCPAutoRestart"
+
+# Caller(s) ChatInput.vue, SettingsView.vue span multiple views, ALL of which
+# are inaccessible in served mode (boundary-panelled and/or unrouted and/or
+# gated) -- no single caller reaches this in a served build via any path.
+"Settings_GetMultimodalInput"
+
+# components/settings/KeyboardShortcuts.vue (nested under SettingsView.vue).
+"Settings_GetShortcuts"
+"Settings_SetShortcut"
+"Settings_SetShortcuts"
+
+# Caller(s) AutonomyPanel.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Settings_SetAutonomy"
+
+# Caller(s) SlashCommandsView.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Slashcmd_Delete"
+"Slashcmd_List"
+"Slashcmd_Save"
+"Slashcmd_SkillPublish"
+
+# Caller(s) SkillsPanel.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Slashcmd_SkillList"
+"Slashcmd_SkillRenameLocalTrigger"
+
+# Caller(s) MarketplaceView.vue, SkillsPanel.vue span multiple views, ALL of
+# which are inaccessible in served mode (boundary-panelled and/or unrouted
+# and/or gated) -- no single caller reaches this in a served build via any path.
+"Slashcmd_SkillUninstall"
+
+# Caller(s) MigrationDriftPanel.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Storage_ApplyDriftFix"
+"Storage_GetMigrationDriftReport"
+
+# Caller(s) SyncPanel.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Sync_ForcePull"
+"Sync_ForcePush"
+"Sync_PendingMCPSecrets"
+"Sync_Status"
+"Sync_Toggle"
+
+# Caller(s) UnitConflictsPanel.vue only reachable from a view that renders
+# NotAvailableInServedMode.
+"Unit_ListConflicts"
+"Unit_ResolveMerge"
+"Unit_SyncStatus"
+
+# Called through workflowsClient.ts, a separate bridge module (not part of
+# HarnessClient/harnessClient.ts). All UI callers are views/workflows/*
+# (WorkflowsView.vue itself, CatalogView.vue, CatalogPreviewDrawer.vue,
+# RunsHistoryTab.vue, ScheduledInbox.vue, WorkflowEditor.vue,
+# SimpleTemplateEditor.vue) and components/workflows/WorkflowGraphEditor.vue
+# plus views/settings/WorkflowsSettingsPanel.vue (nested under SettingsView.vue)
+# -- all boundary-panelled.
+"Workflows_CancelRun"
+"Workflows_CatalogGet"
+"Workflows_CatalogInstall"
+"Workflows_CatalogList"
+"Workflows_Delete"
+"Workflows_Get"
+"Workflows_List"
+"Workflows_Run"
+"Workflows_RunNow"
+"Workflows_Save"
+"Workflows_ScheduleClear"
+"Workflows_ScheduleList"
+"Workflows_ScheduleNextFire"
+"Workflows_ScheduleRunHistory"
+"Workflows_ScheduleSet"
+
+
+# CLASS: unrouted -- either the only caller is in a view main-served.ts
+# does not register (Sites_*, Marketplace-only callers), or -- a
+# necessary widening of this class beyond spec Sec.5.7's literal wording --
+# there is NO caller anywhere in EITHER build (desktop or served), which is
+# vacuously true of "the only caller is in an unregistered view": there is
+# no caller to be in ANY view. Each such entry says so explicitly (RAN:
+# zero hits) rather than silently reusing the same sentence as a real
+# unrouted-view finding.
+# 115 entries in 6 group(s).
+
+# RAN: zero TS client callers found anywhere in frontend/src (outside
+# harnessClient.ts's own declaration) in either build. Vacuously unrouted.
 "A2A_ListCards"
 "A2A_StartStream"
 "A2A_StopStream"
 "ACP_Dispatch"
 "ACP_GetTrace"
-"ACP_ListPeers"
-"ACP_ListTraces"
-"ACP_RevokePeer"
-"ACP_TrustPeer"
-"Agents_DeleteProfile"
-"Agents_ListProfiles"
-"Agents_LoadProfile"
-"Agents_SaveProfile"
-"Artifacts_Delete"
-"Artifacts_Get"
-"Artifacts_List"
-"Artifacts_Promote"
-"Attachments_Add"
-"Attachments_AddMedia"
-"Attachments_List"
-"Attachments_ListResolved"
-"Attachments_Refresh"
-"Attachments_Remove"
-"Attachments_Reorder"
-"Audit_BulkPurge"
-"Audit_DeleteQuery"
-"Audit_Export"
-"Audit_Filter"
 "Audit_ListEntries"
-"Audit_ListSavedQueries"
-"Audit_SaveQuery"
-"Audit_StartStream"
-"Audit_StopStream"
-"Audit_VerifyChain"
 "Audit_VerifyEntry"
-"Bash_Exec"
-"Branches_Abandon"
-"Branches_CommitReintegration"
-"Branches_Create"
 "Branches_GetStatus"
-"Branches_List"
 "Branches_ListWithBranchTree"
-"Branches_Merge"
-"Branches_ProposeReintegrationSummary"
-"Branches_RecommendModel"
-"Branches_SetAdvisorDismissed"
-"Bundle_Get"
-"Bundle_Install"
-"Bundle_List"
-"Bundle_Remove"
-"Catalog_Install"
 "Catalog_Installed"
-"Catalog_List"
-"Catalog_Publish"
-"Catalog_Uninstall"
-"Cedar_PublishToTeam"
-"CedarPolicy_Delete"
-"CedarPolicy_Get"
-"CedarPolicy_InstallTemplate"
-"CedarPolicy_ListPlanModeActions"
-"CedarPolicy_ListPolicies"
-"CedarPolicy_RecentDecisions"
-"CedarPolicy_ReloadPolicies"
 "CedarPolicy_RevokeSnippet"
-"CedarPolicy_Save"
-"CedarPolicy_Validate"
 "CedarPolicy_WriteSnippet"
-"Compaction_GetConfig"
-"Compaction_GetEffective"
-"Compaction_GetTierExplain"
-"Compaction_ListCustomStrategies"
-"Compaction_SetConfig"
 "Compaction_TriggerManual"
-"Compliance_ArchiveNow"
-"Compliance_SetRetention"
-"Compliance_Status"
+"ContextBootstrap_Resume"
+"ContextBootstrap_Status"
 "Context_List"
 "Context_StartStream"
 "Context_StopStream"
-"ContextBootstrap_Health"
-"ContextBootstrap_Resume"
-"ContextBootstrap_Start"
-"ContextBootstrap_Status"
-"Contexts_AttachModule"
-"Contexts_ContextExport"
 "Contexts_ContextPromote"
-"Contexts_ContextPublish"
-"Contexts_ContextSearch"
-"Contexts_ContextSyncStatus"
-"Contexts_CreateFolder"
 "Contexts_Delete"
-"Contexts_Get"
-"Contexts_List"
-"Contexts_ListAll"
-"Contexts_RecentlyApplied"
 "Contexts_Rename"
-"Contexts_RootPath"
-"Contexts_Save"
-"ContextSync_ApplyRecoveryCode"
-"ContextSync_GenerateRecoveryCode"
 "Corpus_CreateCorpus"
 "Corpus_DeleteCorpus"
 "Corpus_GetCorpus"
@@ -203,260 +565,44 @@
 "Corpus_ListCorpora"
 "Corpus_ListFiles"
 "Corpus_Retrieve"
-"Diag_LogClientEvent"
-"Diag_LogPath"
-"Elicit_AnswerDeferred"
 "Elicit_RegisterDeferred"
 "Elicit_SubmitWizardStep"
-"Fleet_GetTelemetryConsent"
-"Fleet_SetTelemetryConsent"
-"Graph_CancelRun"
-"Graph_CheckEdge"
-"Graph_DeleteGraph"
-"Graph_GetRunStatus"
-"Graph_GetRunTrace"
-"Graph_ListGraphs"
-"Graph_LoadGraph"
-"Graph_MaterializeRun"
-"Graph_Resume"
-"Graph_SaveGraph"
-"Graph_StartRun"
-"Graph_Validate"
 "Handoff_Accept"
-"Handoff_Inbox"
-"Handoff_ListTeam"
-"Handoff_Share"
-"Hooks_Add"
-"Hooks_AvailableBuiltins"
-"Hooks_DryRun"
 "Hooks_Get"
-"Hooks_InstallStarterMemory"
-"Hooks_List"
-"Hooks_Remove"
-"Hooks_RemoveStarterMemory"
-"Hooks_Update"
-"LLM_AddProvider"
-"LLM_AutoConfigureLocalRuntime"
-"LLM_DeleteChain"
-"LLM_GetAttachmentLimits"
-"LLM_ListCustomTemplates"
-"LLM_ListDetectedLocalRuntimes"
-"LLM_ListFallbackChains"
-"LLM_ListModels"
-"LLM_LoadChain"
-"LLM_ProbeCustomEndpoint"
-"LLM_RecognizeTemplate"
-"LLM_RemoveProvider"
-"LLM_RescanLocalRuntimes"
-"LLM_ResumeAfterKeyRotation"
-"LLM_SaveChain"
-"LLM_TestAndRotateKey"
-"LLM_TestProvider"
 "LLM_TestProviderKey"
-"LLM_UpdateProvider"
-"LLM_UpdateProviderCredential"
-"LoadRoute"
-"LoadTheme"
-"LogRouteChange"
-"Logs_Tail"
-"MCP_HealthSnapshot"
-"MCP_ImportClaudeDesktopConfig"
-"MCP_ListServers"
-"MCP_SaveCustomRecipe"
 "MCP_StartStream"
 "MCP_StopStream"
-"MCP_SubscribeHealthChanges"
-"MCP_TestRecipe"
-"Memory_CaptureRate"
-"Memory_EmbedderEligibility"
-"Memory_EmbeddingProbe"
-"Memory_Forget"
-"Memory_GetChunkProvenance"
-"Memory_HealthSnapshot"
-"Memory_JournalTail"
-"Memory_LastRetrieval"
-"Memory_ListChunks"
-"Memory_MarkImportant"
-"Memory_NarrativeFailedCount"
-"Memory_NarrativeFailedList"
 "Memory_NarrativeMetricsForChunk"
-"Memory_Pin"
-"Memory_PromoteScope"
-"Memory_PrunePreview"
-"Memory_RememberMessage"
 "Memory_ResummarizeChunk"
-"Memory_RetryFailedNarrative"
-"Memory_RunPruneNow"
-"Memory_TestEmbedder"
-"Nodes_Catalog"
 "Nodes_Doctor"
-"Nodes_Get"
 "Nodes_ListUserOverrides"
 "Nodes_ReloadOverrides"
 "Onboarding_AcceptHandoffHint"
-"Onboarding_Begin"
-"Onboarding_Dismiss"
 "Onboarding_GetHandoffHint"
-"Onboarding_ListStarters"
 "Onboarding_RecordProgress"
-"Onboarding_RestartPhase2"
-"Onboarding_RunBootstrap"
-"Onboarding_State"
-"Onboarding_Step"
-"Permissions_ListGrants"
-"Permissions_RevokeGrant"
 "Planmode_Approve"
 "Planmode_Discard"
 "Planmode_Edit"
 "Policy_Explain"
 "Policy_StartStream"
 "Policy_StopStream"
-"Projects_AddSession"
-"Projects_Create"
-"Projects_Delete"
-"Projects_Get"
-"Projects_GetAutonomy"
-"Projects_ListSessions"
-"Projects_RemoveSession"
-"Projects_Rename"
-"Projects_SetAutonomy"
-"Projects_UpdateDescription"
 "ProjectSync_DeleteRemote"
-"ProjectSync_SetArtifactClass"
-"ProjectSync_Toggle"
-"SaveRoute"
-"SaveTheme"
-"ScheduledChat_Create"
-"ScheduledChat_Delete"
-"ScheduledChat_Get"
-"ScheduledChat_History"
-"ScheduledChat_List"
-"ScheduledChat_RunNow"
-"ScheduledChat_SetEnabled"
-"ScheduledChat_Update"
-"Search_Sessions"
-"Search_Unified"
-"Secrets_Expose"
-"Secrets_List"
-"Secrets_Revoke"
-"Sentry_GenerateLocalReport"
-"Sentry_GetLastFive"
-"Sentry_TestDSN"
-"Sessions_ClearTitle"
-"Sessions_DeleteWithOptions"
-"Sessions_GetAutonomy"
-"Sessions_Reorder"
-"Sessions_ResumeMessage"
-"Sessions_SaveAsArtifact"
-"Sessions_SetAutonomy"
-"Sessions_StartCapture"
-"Sessions_StartStream"
-"Sessions_StopCapture"
-"Sessions_StopStream"
 "SessionSync_DeleteRemote"
 "SessionSync_ResumeFrom"
-"SessionSync_Toggle"
-"Settings_FleetCapabilities"
-"Settings_FleetConfigPullStatus"
-"Settings_FleetHealth"
-"Settings_FleetLockdownStatus"
-"Settings_FleetProfile"
-"Settings_FleetRefreshCapabilities"
-"Settings_FleetRefreshIdentity"
+"Sessions_GetAutonomy"
+"Sessions_Reorder"
 "Settings_FleetSetTelemetryOptIn"
-"Settings_FleetSignedIn"
-"Settings_FleetSignIn"
-"Settings_FleetSignOut"
 "Settings_FleetTelemetryOptIns"
-"Settings_Get"
-"Settings_GetArtifactPreview"
-"Settings_GetAuditSettings"
-"Settings_GetAutoCaptureGeneratedImages"
-"Settings_GetAutonomy"
-"Settings_GetAutoResumeOnKeyRotation"
-"Settings_GetAutoTitleEnabled"
-"Settings_GetBash"
 "Settings_GetBashAllowlistMigrated"
 "Settings_GetCedarStrictCredentialMode"
-"Settings_GetChatCustomInstructions"
-"Settings_GetEmbedderConfig"
-"Settings_GetFSReadEnabled"
 "Settings_GetFSRequestAccessEnabled"
-"Settings_GetFSWriteEnabled"
-"Settings_GetLocalRuntimeRAMOverrideGB"
 "Settings_GetMaxAgentTurns"
-"Settings_GetMaxGeneratedImageBytes"
-"Settings_GetMCPAutoRestart"
-"Settings_GetMemory"
 "Settings_GetMonthlyCostNotifyUSD"
-"Settings_GetMultimodalInput"
-"Settings_GetPermissionCacheDangerousOps"
-"Settings_GetPermissionMode"
-"Settings_GetPermissionsMigrationToastShown"
-"Settings_GetSaveArtifactEnabled"
-"Settings_GetShortcuts"
-"Settings_GetShowPerMessageTokenMeter"
-"Settings_GetTodoEnabled"
-"Settings_GetWebFetchEnabled"
-"Settings_GetWebSearch"
-"Settings_Set"
-"Settings_SetAuditSettings"
-"Settings_SetAutoCaptureGeneratedImages"
-"Settings_SetAutonomy"
-"Settings_SetAutoResumeOnKeyRotation"
-"Settings_SetAutoTitleEnabled"
-"Settings_SetBash"
 "Settings_SetBashAllowlistMigrated"
 "Settings_SetCedarStrictCredentialMode"
-"Settings_SetChatCustomInstructions"
-"Settings_SetEmbedderConfig"
-"Settings_SetFSReadEnabled"
 "Settings_SetFSRequestAccessEnabled"
-"Settings_SetFSWriteEnabled"
-"Settings_SetLocalRuntimeRAMOverrideGB"
 "Settings_SetMaxAgentTurns"
-"Settings_SetMaxGeneratedImageBytes"
-"Settings_SetMCPAutoRestart"
-"Settings_SetMemory"
-"Settings_SetMonthlyCostNotifyUSD"
-"Settings_SetMultimodalInput"
-"Settings_SetPermissionCacheDangerousOps"
-"Settings_SetPermissionMode"
-"Settings_SetPermissionsMigrationToastShown"
-"Settings_SetSaveArtifactEnabled"
-"Settings_SetShortcut"
-"Settings_SetShortcuts"
-"Settings_SetShowPerMessageTokenMeter"
-"Settings_SetTodoEnabled"
-"Settings_SetWebFetchEnabled"
-"Settings_SetWebSearch"
-"Shell_OpenInOSBrowser"
-"Shell_PathComplete"
-"Shell_ReadFile"
-"Sites_Delete"
-"Sites_Deploy"
-"Sites_List"
-"Sites_Logs"
 "Sites_Status"
-"Slash_Execute"
-"Slash_List"
-"Slashcmd_Delete"
-"Slashcmd_Get"
-"Slashcmd_List"
-"Slashcmd_Run"
-"Slashcmd_Save"
-"Slashcmd_SkillInstall"
-"Slashcmd_SkillList"
-"Slashcmd_SkillPublish"
-"Slashcmd_SkillRenameLocalTrigger"
-"Slashcmd_SkillUninstall"
-"Storage_ApplyDriftFix"
-"Storage_GetMigrationDriftReport"
-"Sync_ForcePull"
-"Sync_ForcePush"
-"Sync_PendingMCPSecrets"
-"Sync_Status"
-"Sync_Toggle"
 "Tasks_Abort"
 "Tasks_AbortBySession"
 "Tasks_Get"
@@ -479,12 +625,100 @@
 "Trust_InstallAnchor"
 "Trust_ListAnchors"
 "Trust_ListSecretReferences"
-"Unit_ListConflicts"
-"Unit_PromoteAsMergeRequest"
 "Unit_ResolveEnshrine"
+"Workflow_ListJobs"
+"Workflow_StartStream"
+"Workflow_StopStream"
+
+# Caller(s) PublishDialog.vue only reachable from a route main-served.ts does
+# not register.
+"Catalog_Publish"
+
+# Caller(s) MarketplaceView.vue only reachable from a route main-served.ts does
+# not register.
+"Catalog_Uninstall"
+"Slashcmd_SkillInstall"
+
+# A-14 orphan binding (WP09 research/a14-served-dispositions.md): zero TS client
+# callers in EITHER build, desktop or served. Vacuously unrouted -- no view
+# anywhere reaches it, so served mode tells no lie about it. A-14's own mission
+# wires the caller; that PR must give it a served disposition in the same change
+# (spec E-1).
+"CedarPolicy_ListPlanModeActions"
+"Contexts_ContextExport"
+"Contexts_ContextSearch"
+"Diag_LogPath"
+"Sessions_DeleteWithOptions"
+"Sessions_StartCapture"
+"Sessions_StopCapture"
+"Unit_PromoteAsMergeRequest"
 "Unit_ResolveLoadable"
-"Unit_ResolveMerge"
-"Unit_SyncStatus"
+
+# RAN: zero TS client callers anywhere in frontend/src outside
+# harnessClient.ts's own declaration, in EITHER build. Vacuously unrouted, same
+# class as the A-14 nine but NOT one of them -- a desktop-side dead-binding
+# finding this mission surfaced as a side effect of per-method triage, recorded
+# here rather than silently dropped. Belongs on docs/unwired-ledger.md as a
+# fresh (non-A-14) orphan-binding finding.
+"LLM_UpdateProviderCredential"
+"MCP_HealthSnapshot"
+"MCP_SubscribeHealthChanges"
+"Settings_GetLocalRuntimeRAMOverrideGB"
+"Settings_SetLocalRuntimeRAMOverrideGB"
+
+# Caller(s) SitesView.vue only reachable from a route main-served.ts does not
+# register.
+"Sites_Delete"
+"Sites_Deploy"
+"Sites_List"
+"Sites_Logs"
+
+
+# CLASS: desktop-only-by-nature -- an OS/filesystem/Wails-runtime
+# capability that cannot exist server-side (Update_* is the spec's own
+# worked example, docs/served-mode-boundary.md:89-99), OR a desktop-only
+# TRANSPORT superseded by a different served-mode mechanism providing the
+# identical user-facing behaviour (Sessions_StartStream/StopStream vs the
+# Sessions_Stream WebSocket) -- noted per-entry which applies.
+# 13 entries in 5 group(s).
+
+# lib/eventLog.ts calls this exclusively via the raw window.go.rpc.Bindings
+# bridge (bypassing harnessClient.ts's overlay entirely) and explicitly no-ops
+# when that bridge is absent (`if (!fn) return;`) -- which is always true in a
+# browser. Already self-gating and honest: console.error still fires, only the
+# backend log mirror is skipped.
+"Diag_LogClientEvent"
+
+# lib/useSession.ts's callers are the DESKTOP Wails-event-based streaming
+# transport. Served mode does not need these: WP01's Sessions_Stream WebSocket
+# already delivers the identical user-facing behaviour (live token streaming)
+# via a different transport, and createServedHarnessClient's
+# sessions.startStream/stopStream overlay (harnessClient.ts) implements the SAME
+# interface methods against that WS instead of these RPCs. Mechanism
+# substitution, not a capability gap.
+"Sessions_StartStream"
+"Sessions_StopStream"
+
+# Wails-runtime browser-open call; served mode's openExternalURL overlay already
+# uses window.open directly instead (harnessClient.ts
+# createServedHarnessClient), so this specific binding is superseded by a
+# different served-mode mechanism for the same user-facing action, not a gap.
+"Shell_OpenInOSBrowser"
+
+# Resolves a LOCAL filesystem path on the machine running the harness process.
+# In served mode that machine is the VM, not the operator's machine the @-path
+# UI implies -- ChatInput.vue's @filepath affordance already degrades safely
+# today (refreshAtSuggestions' catch sets atState to null, so the autocomplete
+# silently shows nothing rather than faking a path list; commitAtPath's catch is
+# likewise silent). Read-only degrade is honest; not reclassified as a bug.
+"Shell_PathComplete"
+"Shell_ReadFile"
+
+# The spec's own worked example (docs/served-mode-boundary.md:89-99, NG3): a
+# served harness has no self binary to update. Caller (UpdatesPanel.vue) is also
+# boundary-panelled (nested under SettingsView.vue), but the more informative
+# class is the capability class, not the accident of where its one UI happens to
+# live.
 "Update_Apply"
 "Update_ListSkippedVersions"
 "Update_SkipVersion"
@@ -492,21 +726,222 @@
 "Update_StartDownload"
 "Update_Status"
 "Update_UnskipVersion"
-"Workflow_ListJobs"
-"Workflow_StartStream"
-"Workflow_StopStream"
-"Workflows_CancelRun"
-"Workflows_CatalogGet"
-"Workflows_CatalogInstall"
-"Workflows_CatalogList"
-"Workflows_Delete"
-"Workflows_Get"
-"Workflows_List"
-"Workflows_Run"
-"Workflows_RunNow"
-"Workflows_Save"
-"Workflows_ScheduleClear"
-"Workflows_ScheduleList"
-"Workflows_ScheduleNextFire"
-"Workflows_ScheduleRunHistory"
-"Workflows_ScheduleSet"
+
+
+# CLASS: untriaged -- dated 2026-08-21, owner named per entry (alec unless
+# noted). This is NOT a repeat of WP02's bulk note: every group below
+# carries an INDIVIDUAL reason naming what is unresolved and why a
+# mechanical classification could not close it -- a live chat-surface
+# caller needing a WP04-style port/gate judgement call, an ambient
+# shell-level read verified safe-on-failure but not literally gated, or a
+# genuine escalation. This class must shrink release over release (spec
+# AC-717); the next sweep should re-walk these against the tree it finds,
+# not assume this list still holds.
+# 75 entries in 16 group(s).
+
+# Reachable from the LIVE routed chat surface (MarkdownBlock.vue /
+# CodeBlock.vue's "save as artifact" + artifact-chip flow, and SessionsView.vue
+# directly) -- NOT from any boundary-panelled view. WP04's affordance table
+# (spec Sec.5.4) scoped six specific affordances and did not include the
+# artifact-from-chat flow; this needs the same port-or-gate rigor WP04 gave
+# Attachments_*/Branches_*, not a mechanical caller-site classification.
+# CodeBlock.vue's saveAsArtifact() also calls createHarnessClient() directly
+# instead of the injected client (bypasses useHarnessClient()'s served/desktop
+# switch and fake-client test injection) -- a second, architecture-level bug
+# independent of served mode, found as a side effect of this triage. Dated
+# 2026-08-21. Owner: alec -- needs a product call on whether chat-originated
+# artifact save/view is meant to work in a workbench (ARTIFACTS itself has no
+# served route, so probably gate) plus a decision on the CodeBlock.vue client-
+# construction bug's owning mission.
+"Artifacts_Delete"
+"Artifacts_Get"
+"Artifacts_List"
+"Artifacts_Promote"
+
+# Reachable from ResolvedContextPanel.vue (mounted directly in SessionsView.vue
+# -- the live chat surface's context-attachments panel) and/or
+# AttachmentTreePicker.vue / AttachmentRow.vue, NONE of which carry an
+# isServedMode() check of their own -- a separate path from the paperclip WP04
+# gated in ChatInput.vue. The paperclip's dial fix (AC-711) does not cover this
+# panel. Needs its own gate, matching WP04's Attachments_* disposition, in the
+# same class as the paperclip but not wired by that WP. Dated 2026-08-21. Owner:
+# alec.
+"Attachments_Add"
+"Attachments_ListResolved"
+"Attachments_Refresh"
+"Attachments_Remove"
+"Contexts_AttachModule"
+"Contexts_CreateFolder"
+"Contexts_Get"
+"Contexts_List"
+
+# Ambient / shell-level / cross-cutting read or write with a caller outside any
+# boundary-panelled view, and no literal isServedMode() check. Sampled call
+# sites (Settings_Get in App.vue/LeftRail.vue/LegendBar.vue/Shell.vue;
+# Onboarding-adjacent) degrade honestly today -- explicit fallback default,
+# several with structured logEvent() calls -- but that is a property of each
+# catch block, not a mechanical gate this triage can verify for every one of
+# these without WP04-level per-affordance review. None fit unrouted/boundary-
+# panelled/gated/desktop-only-by-nature cleanly. Dated 2026-08-21. Owner: alec
+# -- candidates for a future 'ambient safe-degrade' formalization if this
+# pattern keeps recurring, or individual review if any turns out NOT to degrade
+# safely.
+"Audit_StartStream"
+"Audit_StopStream"
+"Branches_Merge"
+"ContextBootstrap_Health"
+"ContextBootstrap_Start"
+"Elicit_AnswerDeferred"
+"Fleet_SetTelemetryConsent"
+"LLM_ResumeAfterKeyRotation"
+"LLM_TestAndRotateKey"
+"LoadRoute"
+"LoadTheme"
+"LogRouteChange"
+"Nodes_Catalog"
+"Nodes_Get"
+"Permissions_ListGrants"
+"Permissions_RevokeGrant"
+"Projects_AddSession"
+"Projects_Create"
+"Projects_Delete"
+"Projects_RemoveSession"
+"Projects_Rename"
+"SaveRoute"
+"SaveTheme"
+"Sessions_SetAutonomy"
+"Settings_FleetCapabilities"
+"Settings_FleetHealth"
+"Settings_FleetLockdownStatus"
+"Settings_FleetProfile"
+"Settings_FleetRefreshCapabilities"
+"Settings_FleetRefreshIdentity"
+"Settings_FleetSignIn"
+"Settings_FleetSignOut"
+"Settings_FleetSignedIn"
+"Settings_Get"
+"Settings_GetAutoResumeOnKeyRotation"
+"Settings_GetMemory"
+"Settings_GetPermissionCacheDangerousOps"
+"Settings_GetPermissionsMigrationToastShown"
+"Settings_Set"
+"Settings_SetPermissionCacheDangerousOps"
+"Settings_SetPermissionsMigrationToastShown"
+
+# Reachable from SessionsView.vue's inline `!command` affordance on the live
+# chat surface. Already fails honestly today (the error text renders inline in
+# the transcript via appendSlashResult, not fake output), so this is not an
+# active lie -- but the port-or-gate question is a genuine escalation, not a
+# mechanical one: unlike the model-invoked kenaz__bash tool (Cedar-gated), this
+# is a direct human-to-shell bypass, and whether a served workbench operator
+# should get unmediated shell access to the VM from chat is a product/security
+# decision this triage pass declines to make unilaterally. Dated 2026-08-21.
+# Owner: alec -- escalation, not a classification.
+"Bash_Exec"
+
+# Reachable from SessionsView.vue / ShareSessionDialog.vue (live chat surface),
+# not gated by isServedMode() or by the signedIn fence (Handoff_Inbox's
+# onMounted call fires unconditionally; its catch degrades to an empty inbox,
+# which is a safe but silent default, not an explicit unavailable state). Fleet
+# session-handoff is plausibly meaningless inside a single-workbench VM, which
+# would argue for GATE, but that is a product call this pass declines to make.
+# Dated 2026-08-21. Owner: alec.
+"Handoff_Inbox"
+"Handoff_ListTeam"
+"Handoff_Share"
+
+# MemoryCaptureRatePill.vue polls this every 5s unconditionally from
+# LegendBar/shell chrome, with no isServedMode() check. Unlike MemoryBadge it is
+# already SAFE by construction (visible computed defaults to chunksPerMinute:0
+# && recentErrorCount:0 => hidden, and the catch leaves those defaults in place)
+# -- not a lie, just a small perpetual no-op poll. Left untriaged (not gated)
+# since fixing this is a minor efficiency cleanup, not a G1 violation, and out
+# of proportion to fix inside a classification pass. Dated 2026-08-21. Owner:
+# alec.
+"Memory_CaptureRate"
+
+# Reachable from SessionsView.vue directly (live chat surface), not from
+# MemoryView.vue. A write RPC (manually flagging a message as memory-worthy)
+# with no isServedMode() guard today; needs the same port-or-gate call as the
+# rest of Memory_* WP04 did not scope. Dated 2026-08-21. Owner: alec.
+"Memory_RememberMessage"
+
+# App.vue mounts OnboardingDialog unconditionally and opens it only when
+# onboarding.state() resolves with firstRun=true (App.vue onMounted, verified:
+# the catch logs and skips opening on failure). Onboarding_State is itself in
+# this gap list, so the dialog structurally never opens in served mode today --
+# safe by construction, but NOT via an isServedMode() check, so it does not fit
+# `gated` literally. Left untriaged rather than force-fit. Dated 2026-08-21.
+# Owner: alec.
+"Onboarding_Begin"
+"Onboarding_Dismiss"
+"Onboarding_ListStarters"
+"Onboarding_RestartPhase2"
+"Onboarding_RunBootstrap"
+"Onboarding_Step"
+
+# Reachable from App.vue (shell-level, unconditional) and SettingsView.vue.
+# App.vue's call already degrades honestly (logged, onboarding skipped on
+# failure -- see the Onboarding_Begin/etc. note). Not gated by isServedMode()
+# itself, so does not fit any of the four concrete classes cleanly. Dated
+# 2026-08-21. Owner: alec.
+"Onboarding_State"
+
+# SearchPalette.vue mounts unconditionally in shell/Shell.vue (every routed
+# page, served or desktop) and SearchModal.vue opens on Cmd/Ctrl-F from the same
+# shell. Both already degrade to an empty result set on failure (hits.value =
+# []) rather than fake data, but an empty result set reads as "nothing matches
+# your query" rather than "search is unavailable here" -- the same class of soft
+# lie MemoryCaptureRatePill avoids by staying hidden and MemoryBadge did NOT
+# avoid (fixed this WP). Lower severity (bounded to one interaction, not a
+# persistent stuck state) so left untriaged rather than fixed outright given
+# WP07's classification scope. Dated 2026-08-21. Owner: alec -- likely PORT
+# (session search over already-synced session metadata seems VM-answerable) but
+# not decided here.
+"Search_Sessions"
+"Search_Unified"
+
+# Reachable from SessionsView.vue directly, same reasoning as Handoff_* above
+# (fleet-session-sync inside a single VM is plausibly meaningless, arguing for
+# GATE, but not decided here). Dated 2026-08-21. Owner: alec.
+"SessionSync_Toggle"
+
+# Reachable from SessionHeader.vue (live chat surface) -- the undo half of
+# Sessions_SuggestTitle, which WP04 ported. Porting SuggestTitle without
+# ClearTitle is arguably itself a half-flow (WP04's own bar, server.go:534-538)
+# missed for this one companion method. Dated 2026-08-21. Owner: alec -- likely
+# PORT, matching SuggestTitle's WP04 reasoning, but not decided here.
+"Sessions_ClearTitle"
+
+# Reachable from MessageBubble.vue / SessionsView.vue (a live chat-surface
+# "resume" affordance on a stopped/failed message), not from any boundary-
+# panelled view. Needs a port-or-gate call WP04's table did not scope. Dated
+# 2026-08-21. Owner: alec.
+"Sessions_ResumeMessage"
+
+# Same finding as Artifacts_*: reachable from CodeBlock.vue/MarkdownBlock.vue's
+# "save as artifact" button on the live chat surface, needs the same port-or-
+# gate call. Dated 2026-08-21. Owner: alec.
+"Sessions_SaveAsArtifact"
+
+# ArtifactPreview.vue is mounted from three places: ArtifactsView.vue and
+# ProjectLandingPage.vue (both boundary-panelled) AND SessionsView.vue directly
+# (live chat surface, when a message references an artifact). The live-surface
+# caller means this is NOT cleanly boundary-panelled. Low severity: on failure
+# binaryPreviewEnabled defaults to false (binary preview silently disabled, not
+# faked), which is a safe default -- but recorded as untriaged rather than
+# silently folded into boundary-panelled, which would have been the exact per-
+# view over-claim Section1.7 names. Dated 2026-08-21. Owner: alec.
+"Settings_GetArtifactPreview"
+
+# Reachable from SessionsView.vue -- the slash-command EXECUTION path from a
+# typed message, distinct from Slashcmd_List/Save/Delete's settings-management
+# UI (boundary-panelled under SlashCommandsView.vue). Same class of finding as
+# WP04's Slash_Execute gate (user-defined slash commands can run local
+# hooks/scripts) but for the SEPARATE Slashcmd_* (user-authored) family WP04's
+# table did not enumerate. Dated 2026-08-21. Owner: alec -- likely GATE,
+# matching Slash_Execute's WP04 reasoning (coreslashcmd hooks execute locally),
+# but not decided here.
+"Slashcmd_Get"
+"Slashcmd_Run"
+

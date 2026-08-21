@@ -977,7 +977,15 @@ function send() {
   // are assembled — staged attachments are NOT consumed (they
   // remain pending so the user can send them as a normal message
   // afterwards).
-  if (text.startsWith('/')) {
+  //
+  // served-mode-is-a-real-mode-01PMZ707 WP07: this branch is independent
+  // of `slashState`/the dropdown gate above -- a user can type "/foo" and
+  // press Enter without ever opening the dropdown. The dropdown gate
+  // alone left this reachable under served mode (found during WP07's
+  // per-caller-site pass: SessionsView.vue's onSlashCommand handler calls
+  // client.slash.execute() with no guard of its own). Gate here too so
+  // the whole affordance -- not just its autocomplete half -- is unreachable.
+  if (text.startsWith('/') && !served) {
     emit('slashCommand', text);
     internal.value = '';
     emit('update:modelValue', '');
