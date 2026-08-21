@@ -379,8 +379,39 @@ while IFS=$'\t' read -r file name; do
   called=$(printf '%s' "$api_collapsed" | grep -cE "${impalias}\.${name}\(" || true)
   call=$(printf '%s' "$api_collapsed" | grep -oE "${impalias}\.${name}\([^()]*\)" | head -1 || true)
   if [[ "${called:-0}" -gt 0 && -z "$call" ]]; then
-    # Called with a nested-call argument (e.g. a.cedarGate()). Not a
-    # literal permit; nothing for clause 4 to flag.
+    # Called with a nested-call argument, e.g. `WithGate(a.cedarGate())`.
+    #
+    # The nesting itself is fine — that is the legitimate production shape
+    # this branch exists to stop mis-flagging. But "not a literal permit"
+    # is NOT the same as "not a permit": the approving review of PR #302
+    # planted `WithGate(helper())` where helper's body is
+    # `return cedar.AllowAll{}` and every clause missed it. Skipping here
+    # unconditionally would trade the false positive for a false negative,
+    # which is the worse of the two — a gate that cannot see an
+    # unconditional permit is the exact lie this gate exists to end.
+    #
+    # So: resolve the callee one level and check whether its body returns
+    # an unconditional permit. One level is not full call-graph analysis
+    # (that needs a Go AST tool, same caveat clause 2 carries), but it
+    # closes the shape an adversary or a careless refactor actually
+    # produces.
+    callee=$(printf '%s' "$api_collapsed" \
+      | grep -oE "${impalias}\.${name}\([A-Za-z0-9_.]+\(" \
+      | head -1 | sed -E "s#.*\(([A-Za-z0-9_.]+)\($#\1#" || true)
+    if [[ -n "$callee" ]]; then
+      shortname="${callee##*.}"
+      # Body of `func (recv) shortname(...) ... { ... }` up to the next
+      # column-0 close brace, then look for an unconditional permit.
+      permit=$(awk -v fn="$shortname" '
+        $0 ~ ("^func .*[ \t(]" fn "\(") {inside=1}
+        inside {print}
+        inside && /^}/ {exit}
+      ' $(find core -name '*.go' ! -name '*_test.go') 2>/dev/null \
+        | grep -cE "return[[:space:]]+(cedar\.)?AllowAll\{\}" || true)
+      if [[ "${permit:-0}" -gt 0 ]]; then
+        violations="${violations}${file}: ${name} is called as ${impalias}.${name}(${callee}(...)), and ${shortname} returns an unconditional cedar.AllowAll{} — the gate can never deny (clause 4, nested-call permit)"$'\n'
+      fi
+    fi
     continue
   fi
   if [[ -z "$call" ]]; then
