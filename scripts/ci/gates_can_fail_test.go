@@ -120,6 +120,7 @@ var cwdSensitiveGates = []string{
 	"check-listpending-coverage.sh",
 	"check-upgrade-snapshots-locked.sh",
 	"check-destructive-migration-coverage.sh",
+	"check-declared-output-ports.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -232,6 +233,23 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			// `logger.` not `slog.` — the receiver spelling the gate was blind
 			// to, and the one 86% of this codebase's log calls actually use.
 			content: "package rpc\n\nfunc zzGateProbe(p string) { logger.Info(\"saved\", \"Path\", p) }\n",
+		},
+		{
+			// I16 (approval-node-01PMZC12 UNIT-9): a manifest-declared
+			// output port with no Go writer anywhere in
+			// core/agentgraph's executors. This is the reverse
+			// direction of check-output-ports.sh (write -> reader);
+			// this gate checks declared -> writer. A brand-new manifest
+			// file (rather than appending to an existing one) because
+			// the gate's manifest scan is line-position-sensitive
+			// (ports: -> outputs: block) and plant()'s append lands at
+			// end-of-file, past attrs:/budget:, where it would not be
+			// read as part of the ports block at all.
+			name:       "declared-output-ports/unwritten-port-on-new-manifest",
+			gate:       "check-declared-output-ports.sh",
+			file:       "core/agentgraph/nodes/manifests/zz_gate_probe.yaml",
+			content:    "schema_version: \"1\"\nmanifest_version: \"1.0.0\"\nid: zz_gate_probe\nextends: write\ndisplay_name: ZZ Gate Probe\ndescription: \"Planted violation for check-declared-output-ports.sh (I16).\"\nexecutor: agentgraph.ExecZzGateProbe\ndispatch: graph\nports:\n  inputs:\n    - { name: in, type: any }\n  outputs:\n    - { name: zz_gate_probe_port, type: any }\nbudget: none\n",
+			wantOutput: "zz_gate_probe_port",
 		},
 		{
 			name: "agentgraph-convergence/I5-second-ask-store",
@@ -728,6 +746,51 @@ func plant(t *testing.T, full, content, appendText string) func() {
 				t.Errorf("removing %s: %v — WORKING TREE IS DIRTY", createdDir, err)
 			}
 		}
+	}
+}
+
+// TestCheckDeclaredOutputPorts_IgnoresPortsGenWrites is I16's true
+// negative (approval-node-01PMZC12 UNIT-9, AC-11): a port written ONLY
+// through ports_gen.go's generated ToPortValues() — which writes every
+// declared port of a kind unconditionally, whether or not the real
+// executor ever populates the field — must NOT be treated as evidence
+// of a real writer. Without this the gate would land as a repo-wide
+// false-positive generator, since ports_gen.go trivially "writes"
+// every port that exists.
+//
+// Plants a fake write in ports_gen.go (excluded from the scan by
+// filename) alongside a manifest declaring the SAME port with no real
+// executor writer, and asserts the gate still reports it — proving the
+// exclusion is load-bearing, not decorative. Not in the table above:
+// it needs two coordinated plants (manifest + ports_gen.go), which the
+// single-file plant() helper does not support.
+func TestCheckDeclaredOutputPorts_IgnoresPortsGenWrites(t *testing.T) {
+	root := repoRoot(t)
+
+	manifestPath := filepath.Join(root, "core/agentgraph/nodes/manifests/zz_gate_probe_gen.yaml")
+	manifestContent := "schema_version: \"1\"\nmanifest_version: \"1.0.0\"\nid: zz_gate_probe_gen\nextends: write\ndisplay_name: ZZ Gate Probe Gen\ndescription: \"I16 true-negative probe: a port written only via ports_gen.go must not count.\"\nexecutor: agentgraph.ExecZzGateProbeGen\ndispatch: graph\nports:\n  inputs:\n    - { name: in, type: any }\n  outputs:\n    - { name: zz_gate_probe_gen_port, type: any }\nbudget: none\n"
+	cleanupManifest := plant(t, manifestPath, manifestContent, "")
+	defer cleanupManifest()
+
+	genPath := filepath.Join(root, "core/agentgraph/ports_gen.go")
+	// Shaped exactly like a real ToPortValues assignment
+	// (`pv["k"] = o.K`) so a naive grep for the write pattern would
+	// count it — the whole point of excluding this file by name.
+	genAppend := "\n// zzGateProbeGenGeneratedOnlyWrite exists ONLY to prove\n" +
+		"// check-declared-output-ports.sh (I16) ignores ports_gen.go —\n" +
+		"// see TestCheckDeclaredOutputPorts_IgnoresPortsGenWrites.\n" +
+		"func zzGateProbeGenGeneratedOnlyWrite(pv PortValues) {\n" +
+		"\tpv[\"zz_gate_probe_gen_port\"] = nil\n" +
+		"}\n"
+	cleanupGen := plant(t, genPath, "", genAppend)
+	defer cleanupGen()
+
+	code, out := runGate(t, "check-declared-output-ports.sh", root)
+	if code == 0 {
+		t.Fatalf("check-declared-output-ports.sh exited 0 — a port written only in ports_gen.go was accepted as having a real writer.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "zz_gate_probe_gen_port") {
+		t.Fatalf("check-declared-output-ports.sh failed, but not for the planted port — output does not mention zz_gate_probe_gen_port.\noutput:\n%s", out)
 	}
 }
 
