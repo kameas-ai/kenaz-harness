@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
 	"github.com/kameas-ai/kenaz-harness/core/workflows/web"
 )
 
@@ -91,13 +92,15 @@ func DefaultRunnersWithDeps(deps Deps) map[StepKind]StepRunner {
 		out[StepKindWriteArtifact] = writeArtifactRunner{art: deps.Artifacts, sessionID: deps.SessionID}
 	}
 	// web_fetch and web_scrape always get a fresh shared Fetcher; the
-	// NetAuthz gate is threaded in from Deps.
+	// NetAuthz gate and the network-fetch audit emitter are threaded in
+	// from Deps.
 	fetcher := web.NewFetcher()
-	out[StepKindWebFetch] = webFetchRunner{fetcher: fetcher, authz: deps.NetAuthz}
+	out[StepKindWebFetch] = webFetchRunner{fetcher: fetcher, authz: deps.NetAuthz, audit: deps.NetworkAudit}
 	out[StepKindWebScrape] = webScrapeRunner{
 		fetcher:            fetcher,
 		llm:                deps.LLM,
 		profile:            deps.DefaultLLMProfile,
+		audit:              deps.NetworkAudit,
 		defaultProfileFunc: deps.DefaultProfileFunc, // FR-006: wire DefaultProfileFunc so llm mode resolves default profile
 		authz:              deps.NetAuthz,
 	}
@@ -684,6 +687,9 @@ func evalPredicate(s string) bool {
 type webFetchRunner struct {
 	fetcher *web.Fetcher
 	authz   NetworkAuthorizer
+	// audit, when non-nil, receives KindWorkflowNetworkFetch once per
+	// successful fetch (audit-that-tells-the-truth-01PMZA10 UNIT-5).
+	audit contextaudit.Emitter
 }
 
 func (webFetchRunner) Validate(st Step) error {
@@ -693,7 +699,7 @@ func (webFetchRunner) Validate(st Step) error {
 	return nil
 }
 
-func (r webFetchRunner) Run(ctx context.Context, st Step, _ *RunContext) (TypedValue, error) {
+func (r webFetchRunner) Run(ctx context.Context, st Step, rc *RunContext) (TypedValue, error) {
 	// Cedar gate: emit before any network I/O.
 	if r.authz != nil {
 		if err := r.authz.Authorize(ctx, "workflow.network.fetch", st.Name); err != nil {
@@ -723,7 +729,7 @@ func (r webFetchRunner) Run(ctx context.Context, st Step, _ *RunContext) (TypedV
 			fmt.Errorf("web_fetch step %q (host=%s): %w", st.Name, host, err)
 	}
 
-	_ = host // audit: host + result.Status + len(result.Body) only; never full URL or body
+	emitNetworkFetch(ctx, r.audit, rc, st, "web_fetch", host, result.Status, len(result.Body))
 
 	payload := map[string]any{
 		"kind":    result.Kind,
@@ -754,6 +760,9 @@ type webScrapeRunner struct {
 	// step.profile when a default provider is configured.
 	defaultProfileFunc func() string
 	authz              NetworkAuthorizer
+	// audit, when non-nil, receives KindWorkflowNetworkFetch once per
+	// successful fetch (audit-that-tells-the-truth-01PMZA10 UNIT-5).
+	audit contextaudit.Emitter
 }
 
 func (webScrapeRunner) Validate(st Step) error {
@@ -771,7 +780,7 @@ func (webScrapeRunner) Validate(st Step) error {
 	return nil
 }
 
-func (r webScrapeRunner) Run(ctx context.Context, st Step, _ *RunContext) (TypedValue, error) {
+func (r webScrapeRunner) Run(ctx context.Context, st Step, rc *RunContext) (TypedValue, error) {
 	// Cedar gate: emit before any network I/O.
 	if r.authz != nil {
 		if err := r.authz.Authorize(ctx, "workflow.network.fetch", st.Name); err != nil {
@@ -799,6 +808,8 @@ func (r webScrapeRunner) Run(ctx context.Context, st Step, _ *RunContext) (Typed
 		return TypedValue{Type: ValueTypeError},
 			fmt.Errorf("web_scrape step %q (host=%s): %w", st.Name, host, err)
 	}
+
+	emitNetworkFetch(ctx, r.audit, rc, st, "web_scrape", host, result.Status, len(result.Body))
 
 	mode := st.Mode
 	if mode == "" {

@@ -63,6 +63,35 @@ func EmitStepFailures(ctx context.Context, em audit.Emitter, r *Run) {
 	}
 }
 
+// emitNetworkFetch records one KindWorkflowNetworkFetch event
+// (core/context/audit/audit.go:108) for a web_fetch/web_scrape step
+// that completed a network request — called from both runners.go's
+// webFetchRunner.Run and webScrapeRunner.Run right after a successful
+// fetch (audit-that-tells-the-truth-01PMZA10 UNIT-5: zero emit sites
+// existed anywhere in the tree before this). em/rc nil-safe: rc is nil
+// only in test harnesses that call a runner directly without an
+// Engine-managed RunContext, and em is nil whenever Deps.NetworkAudit
+// was not wired.
+//
+// Privacy invariant (payload doc comment, audit.go): hostname, HTTP
+// status, and byte count ONLY — never the full URL (which may carry
+// signed auth tokens) or response body.
+func emitNetworkFetch(ctx context.Context, em audit.Emitter, rc *RunContext, st Step, stepKind, hostname string, status, bytes int) {
+	if em == nil || rc == nil {
+		return
+	}
+	audit.MustEmit(ctx, em, audit.KindWorkflowNetworkFetch,
+		audit.WorkflowNetworkFetchPayload{
+			WorkflowID: rc.Workflow.ID,
+			RunID:      rc.RunID,
+			StepID:     st.Name,
+			StepKind:   stepKind,
+			Hostname:   hostname,
+			Status:     status,
+			Bytes:      bytes,
+		}, time.Now().UTC())
+}
+
 // EmitSaved records a successful Save on the audit log.
 func EmitSaved(ctx context.Context, em audit.Emitter, w Workflow) {
 	if em == nil {

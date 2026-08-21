@@ -2,14 +2,18 @@ package workflows
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
+
+	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
 )
 
 // =============================================================================
@@ -687,6 +691,141 @@ func TestWebFetch_CedarGateDenies(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "policy denied") {
 		t.Errorf("error should mention policy denied: %v", err)
+	}
+}
+
+// fakeNetworkAuditEmitter records every Emit call. Race-safe per
+// CLAUDE.md's canonical fake-emitter pattern: a test fake written into
+// from goroutines the test body also reads needs a mutex + snapshot.
+type fakeNetworkAuditEmitter struct {
+	mu     sync.Mutex
+	events []contextaudit.Event
+}
+
+func (f *fakeNetworkAuditEmitter) Emit(_ context.Context, e contextaudit.Event) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.events = append(f.events, e)
+	return nil
+}
+
+func (f *fakeNetworkAuditEmitter) snapshot() []contextaudit.Event {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]contextaudit.Event, len(f.events))
+	copy(out, f.events)
+	return out
+}
+
+// TestWebFetch_EmitsNetworkFetchAudit is audit-that-tells-the-truth-
+// 01PMZA10 UNIT-5's direct proof for KindWorkflowNetworkFetch: zero
+// emit sites existed anywhere in the tree before this mission. Drives
+// a real Engine + real HTTP fetch and asserts the event fires with the
+// documented payload shape (hostname/status/bytes only — never the
+// full URL or body, per audit.go's privacy invariant on
+// WorkflowNetworkFetchPayload).
+func TestWebFetch_EmitsNetworkFetchAudit(t *testing.T) {
+	const body = "<html><h1>Hello</h1></html>"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/robots.txt" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, body)
+	}))
+	defer srv.Close()
+
+	em := &fakeNetworkAuditEmitter{}
+	wf := Workflow{
+		ID: "wf-na", Name: "wf", Version: 1,
+		Steps: []Step{{Name: "fetch", Kind: StepKindWebFetch, URL: srv.URL + "/page"}},
+	}
+	e := NewEngineWithDeps(Deps{NetworkAudit: em})
+	run, err := e.Run(context.Background(), wf, nil, RunOptions{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if run.Status != "completed" {
+		t.Fatalf("status: %s err=%s", run.Status, run.Err)
+	}
+
+	events := em.snapshot()
+	if len(events) != 1 {
+		t.Fatalf("emitted %d events, want 1: %+v", len(events), events)
+	}
+	if events[0].Kind != contextaudit.KindWorkflowNetworkFetch {
+		t.Fatalf("Kind = %q, want %q", events[0].Kind, contextaudit.KindWorkflowNetworkFetch)
+	}
+	var payload contextaudit.WorkflowNetworkFetchPayload
+	if err := json.Unmarshal(events[0].Payload, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload.WorkflowID != "wf-na" || payload.StepID != "fetch" || payload.StepKind != "web_fetch" {
+		t.Errorf("payload ids = %+v, want workflow_id=wf-na step_id=fetch step_kind=web_fetch", payload)
+	}
+	if payload.RunID != run.ID {
+		t.Errorf("RunID = %q, want %q", payload.RunID, run.ID)
+	}
+	if payload.Status != http.StatusOK {
+		t.Errorf("Status = %d, want %d", payload.Status, http.StatusOK)
+	}
+	if payload.Bytes != len(body) {
+		t.Errorf("Bytes = %d, want %d", payload.Bytes, len(body))
+	}
+	// hostOf (runners.go) returns url.URL.Hostname(), which strips the
+	// port — matches the privacy invariant's "hostname only" framing.
+	srvURL, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("parse srv.URL: %v", err)
+	}
+	if payload.Hostname != srvURL.Hostname() {
+		t.Errorf("Hostname = %q, want %q", payload.Hostname, srvURL.Hostname())
+	}
+	// Privacy invariant: the full URL (path included) and body must
+	// never appear in the marshalled payload.
+	raw := string(events[0].Payload)
+	if strings.Contains(raw, "/page") || strings.Contains(raw, body) {
+		t.Errorf("payload leaked the URL path or response body: %s", raw)
+	}
+}
+
+// TestWebScrape_EmitsNetworkFetchAudit is the web_scrape half of the
+// same proof.
+func TestWebScrape_EmitsNetworkFetchAudit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/robots.txt" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		fmt.Fprint(w, `<html><div class="title">Hi</div></html>`)
+	}))
+	defer srv.Close()
+
+	em := &fakeNetworkAuditEmitter{}
+	wf := Workflow{
+		ID: "wf-na-scrape", Name: "wf", Version: 1,
+		Steps: []Step{{Name: "scrape", Kind: StepKindWebScrape, URL: srv.URL + "/page", Mode: "css"}},
+	}
+	e := NewEngineWithDeps(Deps{NetworkAudit: em})
+	run, err := e.Run(context.Background(), wf, nil, RunOptions{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if run.Status != "completed" {
+		t.Fatalf("status: %s err=%s", run.Status, run.Err)
+	}
+
+	events := em.snapshot()
+	if len(events) != 1 {
+		t.Fatalf("emitted %d events, want 1: %+v", len(events), events)
+	}
+	var payload contextaudit.WorkflowNetworkFetchPayload
+	if err := json.Unmarshal(events[0].Payload, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload.StepKind != "web_scrape" {
+		t.Errorf("StepKind = %q, want web_scrape", payload.StepKind)
 	}
 }
 

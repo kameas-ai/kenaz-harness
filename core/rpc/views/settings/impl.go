@@ -24,7 +24,9 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
+	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
 	"github.com/kameas-ai/kenaz-harness/core/paths"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
 )
 
 // FileStore is a SettingsStore backed by a single JSON file. Safe for
@@ -1392,6 +1394,27 @@ type API struct {
 	// from the wiring and UNIT-8 can flip it to a live check with a
 	// one-line change at the wiring site and zero frontend edit.
 	auditRetentionEnforced bool
+
+	// auditRetentionDB is the unified database's storage.DB handle, set
+	// via SetAuditRetentionDB at chassis-boot wiring time (only when a
+	// real DataDir exists). UNIT-8: GetAuditSettings/SetAuditSettings
+	// route through core/event/log's retention_config table (migration
+	// event-log/0103) when this is non-nil, superseding the in-memory
+	// auditSettings field below — spec §5.6 item 3, and §1.7a's
+	// "SetAuditSettings ... persists" doc comment, which was false
+	// (a.auditSettings under a mutex, gone on restart) until now.
+	// Nil in the test chassis (c == nil / no DataDir), where
+	// auditSettings stays the fallback so existing in-process tests
+	// keep working without a real database.
+	auditRetentionDB storage.DB
+}
+
+// SetAuditRetentionDB wires the unified database so GetAuditSettings /
+// SetAuditSettings persist the retention policy in retention_config
+// instead of the in-memory auditSettings field. core/rpc/api.go calls
+// this once, at construction, only when db != nil (a real DataDir).
+func (a *API) SetAuditRetentionDB(db storage.DB) {
+	a.auditRetentionDB = db
 }
 
 // SetSyncNotifier wires the fleet-sync mutation hook. The rpc layer connects
@@ -1580,7 +1603,26 @@ func (a *API) SetMemoryNarrativeEnabled(_ context.Context, enabled bool) error {
 
 // GetAuditSettings returns the current audit retention policy.
 // Defaults to keep_forever if no policy has been set.
-func (a *API) GetAuditSettings(_ context.Context) (AuditSettings, error) {
+//
+// UNIT-8 (audit-that-tells-the-truth-01PMZA10): when a real database is
+// wired (SetAuditRetentionDB), reads through to retention_config — the
+// table event-log/0103 creates and the local retention sweeper
+// (core/event/log.LocalRetentionScheduler) reads from directly. This is
+// the SAME table, not a second copy: a value read here is exactly what
+// the sweeper will act on. Falls back to the in-memory field only in
+// the test chassis (no DataDir).
+func (a *API) GetAuditSettings(ctx context.Context) (AuditSettings, error) {
+	if a.auditRetentionDB != nil {
+		p, err := eventlog.ReadRetentionPolicy(ctx, a.auditRetentionDB)
+		if err != nil {
+			return AuditSettings{}, fmt.Errorf("settings: GetAuditSettings: %w", err)
+		}
+		return AuditSettings{
+			Strategy:          string(p.Kind),
+			WindowDays:        p.WindowDays,
+			RetentionEnforced: a.auditRetentionEnforced,
+		}, nil
+	}
 	// Stored as a JSON blob in the shared settings field. The simpler approach
 	// is to keep it in-memory with a mutex until a dedicated store field lands.
 	a.auditSettingsMu.Lock()
@@ -1594,7 +1636,28 @@ func (a *API) GetAuditSettings(_ context.Context) (AuditSettings, error) {
 }
 
 // SetAuditSettings persists the audit retention policy.
-func (a *API) SetAuditSettings(_ context.Context, s AuditSettings) error {
+//
+// UNIT-8: when a real database is wired, writes through to
+// retention_config (see GetAuditSettings) instead of the in-memory
+// field — this is what makes AC-013 ("the dial reaches the deleter")
+// true: LocalRetentionScheduler reads the same row on its next pass.
+// Rejects a Strategy that is not one of the three RetentionStrategy
+// values rather than persisting it and silently degrading to
+// keep_forever on read (ReadRetentionPolicy's safety net is for
+// values that reach the table some OTHER way — e.g. the pre-106
+// shipped seed — not an excuse to accept garbage here).
+func (a *API) SetAuditSettings(ctx context.Context, s AuditSettings) error {
+	if a.auditRetentionDB != nil {
+		switch eventlog.RetentionStrategy(s.Strategy) {
+		case eventlog.RetentionKeepForever, eventlog.RetentionDeleteAfterWindow, eventlog.RetentionArchiveAfterWindow:
+		default:
+			return fmt.Errorf("settings: SetAuditSettings: unknown strategy %q", s.Strategy)
+		}
+		return eventlog.WriteRetentionPolicy(ctx, a.auditRetentionDB, eventlog.PersistedPolicy{
+			Kind:       eventlog.RetentionStrategy(s.Strategy),
+			WindowDays: s.WindowDays,
+		})
+	}
 	a.auditSettingsMu.Lock()
 	defer a.auditSettingsMu.Unlock()
 	a.auditSettings = s

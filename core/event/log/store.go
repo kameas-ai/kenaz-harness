@@ -206,6 +206,16 @@ func (s *Store) SizeBytes(ctx context.Context) (int64, error) {
 	return s.backend.SizeBytes(ctx)
 }
 
+// VerifyChain walks the persisted hash chain for events with event_id
+// in [fromID, toID] and reports whether it is intact. Proxies to the
+// package-level VerifyChain (chain.go) against this Store's backend —
+// the real, persisted-data verifier audit-that-tells-the-truth-01PMZA10
+// UNIT-7 routes views/audit/impl.go's VerifyChain to, replacing the
+// ring-only implementation that always reported Verified: true.
+func (s *Store) VerifyChain(ctx context.Context, fromID, toID string) (VerifyChainResult, error) {
+	return VerifyChain(ctx, s.backend, fromID, toID)
+}
+
 // MemoryBackend is an in-memory Backend used by tests and (until the
 // real storage-foundations adapter lands) as the default development
 // backend. It serializes writes per session via a sync.Map of mutexes
