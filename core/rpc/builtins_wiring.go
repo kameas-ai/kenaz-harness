@@ -8,10 +8,14 @@
 package rpc
 
 import (
+	"context"
+	"io"
 	"path/filepath"
 
 	"github.com/kameas-ai/kenaz-harness/core"
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	coretasks "github.com/kameas-ai/kenaz-harness/core/tasks"
+	coremonitor "github.com/kameas-ai/kenaz-harness/core/tools/monitor"
 	coresubagent "github.com/kameas-ai/kenaz-harness/core/tools/subagentdispatch"
 	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
 	corecontexts "github.com/kameas-ai/kenaz-harness/core/contexts"
@@ -85,6 +89,12 @@ func registerBuiltinTools(
 	exposureIdx *coresecrets.ExposureIndex,
 	budget *refs.Budget,
 	posture coreplanmode.SessionPostureManager,
+	// taskReg is the process's background-task registry
+	// (subagent-control-and-background-tasks-01PMZB11 UNIT-3). nil
+	// means run_in_background falls back to synchronous execution (test
+	// harness path, same as before this parameter existed) and
+	// kenaz__monitor is not registered (see the monitor block below).
+	taskReg *coretasks.Registry,
 ) {
 	if registry == nil {
 		return
@@ -118,12 +128,57 @@ func registerBuiltinTools(
 	if c != nil {
 		dataDir = c.DataDir()
 	}
+	// Background-task seam (subagent-control-and-background-tasks-
+	// 01PMZB11 UNIT-3). Only wired when taskReg is non-nil — the same
+	// nil-tolerant contract every other optional dependency in this
+	// file follows, and bash.go's own schema selection already keys off
+	// exactly this: BackgroundSpawn == nil means the model is never
+	// offered run_in_background, so it must actually be nil (not a
+	// func wrapping a nil registry) when taskReg is nil.
+	var bgSpawn corebash.BackgroundSpawnFunc
+	var bgWriters corebash.BackgroundWritersFunc
+	var bgSetPID corebash.BackgroundSetPIDFunc
+	var bgEnd corebash.BackgroundEndFunc
+	if taskReg != nil {
+		bgSpawn = func(ctx context.Context, sessionID, cmd, description string, pid int) (string, error) {
+			return taskReg.Register(ctx, coretasks.RegisterOpts{
+				Kind:           coretasks.KindBash,
+				OwnerSessionID: sessionID,
+				Cmd:            cmd,
+				Description:    description,
+				PID:            pid,
+			})
+		}
+		bgWriters = func(taskID string) (io.Writer, io.Writer, bool) {
+			stdout, ok1 := taskReg.StdoutWriter(taskID)
+			stderr, ok2 := taskReg.StderrWriter(taskID)
+			if !ok1 || !ok2 {
+				return nil, nil, false
+			}
+			return stdout, stderr, true
+		}
+		bgSetPID = func(taskID string, pid int) {
+			taskReg.SetPID(taskID, pid)
+		}
+		bgEnd = func(ctx context.Context, taskID string, exitCode int) {
+			_ = taskReg.End(ctx, taskID, exitCode)
+		}
+	}
 	bashTool := corebash.New(corebash.Options{
-		SandboxRoot:    sandboxRoot,
-		Store:          bashStore,
-		CedarEngine:    cedarEngine,
-		PromptRegistry: promptRegistry,
-		DataDir:        dataDir,
+		SandboxRoot:       sandboxRoot,
+		Store:             bashStore,
+		CedarEngine:       cedarEngine,
+		PromptRegistry:    promptRegistry,
+		DataDir:           dataDir,
+		BackgroundSpawn:   bgSpawn,
+		BackgroundWriters: bgWriters,
+		BackgroundSetPID:  bgSetPID,
+		BackgroundEnd:     bgEnd,
+		// UNIT-3: was never wired, so every background task's
+		// OwnerSessionID was permanently empty — Tasks_ListBySession /
+		// Tasks_AbortBySession (the session-close-dialog surface, §14
+		// E-004) could never find a session's own background tasks.
+		SessionIDFromCtx: toolloop.SessionIDFromContext,
 		// Unwired sweep 2026-08-14: this was never passed, so the
 		// Settings dial was permanently false in every shipped build
 		// while BashPermissionModal.vue kept offering "Allow always"
@@ -334,6 +389,27 @@ func registerBuiltinTools(
 				"reason", "BranchSeam not yet wired — tool omitted from model catalog (FR-007)",
 			)
 		}
+	}
+
+	// kenaz__monitor: drain/watch a background task's captured output
+	// (subagent-control-and-background-tasks-01PMZB11 UNIT-5). Only
+	// registered when taskReg is non-nil — a registered monitor over a
+	// nil registry would return an error result for every call, and
+	// the mission's whole point is that this tool now has real output
+	// to read (UNIT-3's writer-attachment fix). Deletes
+	// core/tools/monitor from i11-unregistered-builtin-tools.txt and
+	// i7-orphan-packages.txt in this same commit.
+	if taskReg != nil {
+		monitorTool := coremonitor.New(coremonitor.Options{
+			Registry:         taskReg,
+			SessionIDFromCtx: toolloop.SessionIDFromContext,
+		})
+		registry.Register(monitorTool)
+		logging.L().Info("rpc.builtins.register", "tool", monitorTool.Name())
+	} else {
+		logging.L().Info("rpc.builtins.monitor_skipped",
+			"reason", "no task registry wired",
+		)
 	}
 
 	// kenaz__enter_plan_mode / kenaz__exit_plan_mode: plan-mode posture
@@ -818,6 +894,17 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 			// by a Settings dial. Added proactively so wiring the seam in a
 			// future mission doesn't silently repeat the ask_user_question
 			// regression.
+			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
+			return true
+
+		case coremonitor.ToolName:
+			// kenaz__monitor (subagent-control-and-background-tasks-
+			// 01PMZB11 UNIT-5): always-on at this coarse gate, same
+			// posture as sleep/skill/read_context_file. It only reads
+			// already-captured task output (no side effects of its
+			// own); Cedar's ActionToolTasksMonitor is the per-call
+			// gate. Registration itself is already conditioned on a
+			// non-nil task registry (see registerBuiltinTools above).
 			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 		}

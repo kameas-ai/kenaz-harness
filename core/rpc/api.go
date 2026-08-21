@@ -1931,6 +1931,30 @@ func New(c *core.Core, opts ...Option) *API {
 	if c != nil && a.hookRunner != nil {
 		c.SetSessionHookRunner(&hooks.SessionRunnerAdapter{Runner: a.hookRunner})
 	}
+	// subagent-control-and-background-tasks-01PMZB11 UNIT-4: late-bind
+	// the task registry's HookFirer now that the process-singleton
+	// *hooks.Runner exists. taskReg is constructed earlier in this
+	// function (before hookRunnerImpl, so RecoverOrphansWithPIDCheck
+	// runs before this) — Registry.SetHookFirer exists specifically so
+	// this doesn't require reordering either subsystem's boot. Firing
+	// through the real Runner is what turns background_task_complete
+	// from a declared-only event constant into one that actually
+	// fires (FR-004).
+	if taskReg != nil && a.hookRunner != nil {
+		hookRunnerForTasks := a.hookRunner
+		taskReg.SetHookFirer(func(ctx context.Context, payload coretasks.BackgroundTaskCompletePayload) {
+			_, _ = hookRunnerForTasks.Fire(ctx, hooks.EventBackgroundTaskComplete, hooks.BackgroundTaskCompleteEvent{
+				SessionID:  payload.OwnerSessionID,
+				TaskID:     payload.TaskID,
+				TaskKind:   payload.Kind,
+				ExitCode:   payload.ExitCode,
+				DurationMs: payload.DurationMs,
+				StdoutTail: payload.StdoutTail,
+				StderrTail: payload.StderrTail,
+				Success:    payload.ExitCode == 0,
+			})
+		})
+	}
 	// Register skill-catalog pre_send hook so the model sees the
 	// model-invokable commands at send time (model-invoked-skills-catalog-01KZNP3E WP03).
 	if hookBuiltins != nil && slashStore != nil {
@@ -2046,7 +2070,7 @@ func New(c *core.Core, opts ...Option) *API {
 		Emitter: WailsEmitter{},
 	})
 
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, a.cedarEngine)
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, a.cedarEngine, taskReg)
 	a.llmAPI = stack.api
 	// confirm-each-enforcement-01PMAG05 WP02: the resolve leg. Bound to
 	// the SAME bus the chat runner's tool adapter parks on — a second bus
@@ -4681,6 +4705,13 @@ func newLLMStack(
 	// or a boot-time construction failure already logged by
 	// buildCedarEngineOrNil).
 	cedarEngine *cedar.Engine,
+	// taskReg is the process's background-task registry
+	// (subagent-control-and-background-tasks-01PMZB11 UNIT-3/UNIT-4),
+	// constructed early in New() (before this function is called) so
+	// RecoverOrphansWithPIDCheck can run before any new task registers.
+	// nil on the nil-core test chassis, same degrade every other
+	// optional dependency in this function follows.
+	taskReg *coretasks.Registry,
 ) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
@@ -4897,7 +4928,7 @@ func newLLMStack(
 	if exposureIdx != nil {
 		secretsBudget = credstoreRefs.NewBudget(credstoreRefs.DefaultBudget)
 	}
-	registerBuiltinTools(c, builtinRegistry, bashStore, artifactsMgr, settingsStore, bashCedarEngine, promptRegistry, elicitAPI, slashDispatch, exposureIdx, secretsBudget, postureManager)
+	registerBuiltinTools(c, builtinRegistry, bashStore, artifactsMgr, settingsStore, bashCedarEngine, promptRegistry, elicitAPI, slashDispatch, exposureIdx, secretsBudget, postureManager, taskReg)
 	// builtin-filesystem-tools-01KR3N4P: register the read/write family of
 	// in-process filesystem tools. Gated behind per-family settings dials
 	// (FSReadEnabled / FSWriteEnabled) so the Tools panel toggles take effect

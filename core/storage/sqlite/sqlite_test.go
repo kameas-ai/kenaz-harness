@@ -232,14 +232,17 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	//   schema_version, saved_audit_queries) +
 	// 1 event-log/0106-events-fts-sync (audit-that-tells-the-truth-
 	//   01PMZA10 UNIT-8: events_fts AFTER UPDATE/DELETE sync triggers,
-	//   plus the one-time retention_config seed correction) = 52.
+	//   plus the one-time retention_config seed correction) +
+	// 1 tasks/1200-tasks-init (subagent-control-and-background-tasks-
+	//   01PMZB11 UNIT-2: the tasks table backing core/tasks.Registry's
+	//   persistence store) = 53.
 	//
 	// ZA10's branch asserted 49: it was cut from a base whose count was 43,
 	// before 0336 and bundle/700 landed, so 43+6. The merged tree had all
 	// three sources at 51 (v0.65.0); UNIT-8 adds one more migration on
-	// top, hence 52.
-	if count != 52 {
-		t.Errorf("ledger count = %d, want 52", count)
+	// top, hence 52; UNIT-2 (01PMZB11) adds one more still, hence 53.
+	if count != 53 {
+		t.Errorf("ledger count = %d, want 53", count)
 	}
 }
 
@@ -291,4 +294,3 @@ func TestSessionRoundTrip_ThroughAdapter(t *testing.T) {
 		t.Errorf("messages = %v, want one with content hello", msgs)
 	}
 }
-
