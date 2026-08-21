@@ -1931,6 +1931,30 @@ func New(c *core.Core, opts ...Option) *API {
 	if c != nil && a.hookRunner != nil {
 		c.SetSessionHookRunner(&hooks.SessionRunnerAdapter{Runner: a.hookRunner})
 	}
+	// subagent-control-and-background-tasks-01PMZB11 UNIT-4: late-bind
+	// the task registry's HookFirer now that the process-singleton
+	// *hooks.Runner exists. taskReg is constructed earlier in this
+	// function (before hookRunnerImpl, so RecoverOrphansWithPIDCheck
+	// runs before this) — Registry.SetHookFirer exists specifically so
+	// this doesn't require reordering either subsystem's boot. Firing
+	// through the real Runner is what turns background_task_complete
+	// from a declared-only event constant into one that actually
+	// fires (FR-004).
+	if taskReg != nil && a.hookRunner != nil {
+		hookRunnerForTasks := a.hookRunner
+		taskReg.SetHookFirer(func(ctx context.Context, payload coretasks.BackgroundTaskCompletePayload) {
+			_, _ = hookRunnerForTasks.Fire(ctx, hooks.EventBackgroundTaskComplete, hooks.BackgroundTaskCompleteEvent{
+				SessionID:  payload.OwnerSessionID,
+				TaskID:     payload.TaskID,
+				TaskKind:   payload.Kind,
+				ExitCode:   payload.ExitCode,
+				DurationMs: payload.DurationMs,
+				StdoutTail: payload.StdoutTail,
+				StderrTail: payload.StderrTail,
+				Success:    payload.ExitCode == 0,
+			})
+		})
+	}
 	// Register skill-catalog pre_send hook so the model sees the
 	// model-invokable commands at send time (model-invoked-skills-catalog-01KZNP3E WP03).
 	if hookBuiltins != nil && slashStore != nil {
