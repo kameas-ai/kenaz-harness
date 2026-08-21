@@ -1,0 +1,15 @@
+id: 'test-workflow'
+name: 'Test Workflow'
+version: 1
+steps:
+  - name: plan
+    kind: model_turn
+    model: 'claude-sonnet-4-6'
+    user_prompt: |
+      Plan: the task
+  - name: execute
+    kind: model_turn
+    inputs_from: [plan]
+    model: 'claude-sonnet-4-6'
+    user_prompt: |
+      Execute the plan from ${step.plan.output}

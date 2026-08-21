@@ -1,0 +1,9 @@
+id: 'test-workflow'
+name: 'Test Workflow'
+version: 1
+steps:
+  - name: respond
+    kind: model_turn
+    model: 'claude-sonnet-4-6'
+    user_prompt: |
+      Say hello.

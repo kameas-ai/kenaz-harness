@@ -78,17 +78,34 @@ permit (
     resource is Workflow
 );
 
-// --- network.fetch (WP05) -----------------------------------------------
+// --- network.fetch (WP05, strict arm added by automation-actually-runs-
+// --- 01PMZ404 UNIT-7) ----------------------------------------------------
 // Actions:
 //   `Action::"workflow.network.fetch"` — any web_fetch / web_scrape step
 //
 // Permissive default: all outbound fetches are permitted.
-// In strict mode the permit is absent (NotApplicable); the chassis may
-// layer a forbid rule that requires an explicit allowlist by domain.
 permit (
     principal == User::"local",
     action == Action::"workflow.network.fetch",
     resource is Workflow
 ) when {
     context.mode == "permissive"
+};
+
+// Strict: deny by default. Absence-only ("the permit's `when` just
+// doesn't match") is NOT enforcement — core/policy/cedar/hooks.go's
+// enforce() maps NotApplicable to nil (proceed), the same outcome as
+// Allow. Without this explicit forbid, wiring a NetworkAuthorizer
+// adapter cannot make strict mode deny anything: the fetch always
+// proceeds regardless of the adapter's own logic (this is the fifth
+// appearance of the enforce-treats-NotApplicable-as-allow shape found
+// in this campaign — see docs/unwired-ledger.md). The policy file is
+// where this posture belongs, not a bespoke
+// NotApplicable-means-deny branch duplicated in every adapter.
+forbid (
+    principal == User::"local",
+    action == Action::"workflow.network.fetch",
+    resource is Workflow
+) when {
+    context.mode == "strict"
 };

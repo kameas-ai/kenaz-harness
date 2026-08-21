@@ -9,7 +9,10 @@
  *
  *   1. single_llm    — one model_turn step.
  *   2. plan_execute  — two model_turn steps chained (plan, execute).
- *   3. http_save     — http_request → write_artifact pipeline.
+ *   3. http_save     — http_request → write_artifact pipeline. Saves the
+ *                      whole {status, headers, body} response envelope
+ *                      as a JSON artifact (the ref grammar has no field
+ *                      selector to extract just the body — spec X-10).
  *
  * The output YAML is a string built by hand (no js-yaml dependency
  * needed for templates this small) and routed through the same
@@ -65,7 +68,11 @@ const TEMPLATES: TemplateMeta[] = [
   {
     id: 'http_save',
     label: 'HTTP GET → save artifact',
-    blurb: 'Fetch a URL with http_request and persist the body as an artifact.',
+    // UNIT-9 / D-10: the ref grammar has no field selector, so this
+    // template stores the fetch's whole {status, headers, body} JSON
+    // envelope, not just the body — see the "the response" wording below.
+    blurb:
+      'Fetch a URL with http_request and save the response (status, headers, body) as a JSON artifact.',
     needsModel: false,
     needsPrompt: false,
     needsUrl: true,
@@ -92,7 +99,10 @@ const description = ref<string>('');
 const model = ref<string>('claude-sonnet-4-6');
 const promptTemplate = ref<string>('');
 const url = ref<string>('https://example.com/');
-const artifactPath = ref<string>('out.txt');
+// Holds the artifact's title (write_artifact requires one), not a
+// filesystem path — UNIT-9 / D-10 relabelled the field; the variable
+// name is kept to avoid an unrelated rename of every reference below.
+const artifactPath = ref<string>('Fetched response');
 
 const saving = ref(false);
 const saveError = ref<string | null>(null);
@@ -161,12 +171,31 @@ function assembleYaml(): string {
       `    ${blockScalar('user_prompt', `Plan: ${promptTemplate.value || 'the task'}`)}\n` +
       `  - name: execute\n` +
       `    kind: model_turn\n` +
+      `    inputs_from: [plan]\n` +
       modelLine +
-      `    ${blockScalar('user_prompt', `Execute the plan from {{ steps.plan.output }}`)}\n`
+      // automation-actually-runs-01PMZ404 UNIT-9 / spec D-10: the engine's
+      // ref grammar is `${step.<name>.output}` (core/workflows/refs.go) —
+      // the mustache-style `{{ steps.plan.output }}` this used to emit
+      // matches nothing, so the token was passed to the model VERBATIM
+      // and the workflow "succeeded" while the second step never actually
+      // saw the first step's output.
+      `    ${blockScalar('user_prompt', 'Execute the plan from ${step.plan.output}')}\n`
     );
   }
 
-  // http_save
+  // http_save — UNIT-9 / D-10: two independent bugs fixed together.
+  // (1) `path:` is not a Step field (no yaml:"path" tag); the loader
+  //     silently drops it and the backend then rejects the document for
+  //     missing `title`. Every save of this template failed.
+  // (2) `content: '{{ steps.fetch.body }}'` used the same non-existent
+  //     mustache grammar as plan_execute AND assumed a `.body` field
+  //     selector that doesn't exist even in the real `${...}` grammar —
+  //     httpRequestRunner's step output is the whole
+  //     {status, headers, body} JSON envelope (core/workflows/runners.go),
+  //     not just the response body (spec X-10). `content_ref` is the
+  //     correct field for a ref-sourced value (UNIT-5 made it functional);
+  //     labelling this as "save the response envelope" rather than
+  //     "save the body" is honest about what actually gets stored.
   return (
     header +
     `steps:\n` +
@@ -176,8 +205,10 @@ function assembleYaml(): string {
     `    url: ${yamlString(url.value)}\n` +
     `  - name: save\n` +
     `    kind: write_artifact\n` +
-    `    path: ${yamlString(artifactPath.value)}\n` +
-    `    content: '{{ steps.fetch.body }}'\n`
+    `    inputs_from: [fetch]\n` +
+    `    title: ${yamlString(artifactPath.value)}\n` +
+    `    content_ref: \${step.fetch.output}\n` +
+    `    mime_type: application/json\n`
   );
 }
 
@@ -311,7 +342,7 @@ defineExpose({ assembleYaml });
 
     <div v-if="meta.needsArtifact">
       <label class="font-ui text-xs text-ink" for="wf-artifact">
-        Artifact path
+        Artifact title
       </label>
       <input
         id="wf-artifact"

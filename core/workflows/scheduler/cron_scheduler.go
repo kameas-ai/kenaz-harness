@@ -30,13 +30,16 @@ var ErrInvalidCronExpr = errors.New("scheduler: invalid cron expression")
 var ErrInvalidTimezone = errors.New("scheduler: invalid timezone")
 
 // ErrNoDispatcherWired is returned by fireSync (via RunNow and the cron
-// fire path) when no Dispatcher has been configured. Until a production
-// wfsched.Dispatcher exists (workflows-agentic mission's UNIT-2), this is
-// the only production state: Config.Dispatcher has no non-test caller.
-// A run in this state never happened — no engine was invoked, no run ID
-// was produced — so it is recorded as a failure and does not advance
-// last_fired_at/last_run_id, and does not appear in History (unlike a run
-// that reached a real Dispatcher and failed there).
+// fire path) when resolveDispatcher() returns nil — no Dispatcher has
+// been configured, or DispatcherFunc resolved to nil (e.g. the chassis
+// booted with the workflows subsystem disabled). Production wires a real
+// wfsched.Dispatcher via Config.DispatcherFunc
+// (automation-actually-runs-01PMZ404 UNIT-2, core/rpc/api.go's
+// `wfsched.New` call site). A run in this state never happened — no
+// engine was invoked, no run ID was produced — so it is recorded as a
+// failure and does not advance last_fired_at/last_run_id, and does not
+// appear in History (unlike a run that reached a real Dispatcher and
+// failed there).
 var ErrNoDispatcherWired = errors.New("no workflow dispatcher wired")
 
 // historyLimit caps the in-memory history ring-buffer per workflow.
@@ -58,6 +61,11 @@ type CronScheduler struct {
 	history    map[string][]RunSummary   // workflowID → ring
 	store      Storage                   // may be nil in tests
 	dispatcher Dispatcher                // may be nil in tests
+	// dispatcherFunc, when non-nil, is consulted instead of dispatcher
+	// on every fire (automation-actually-runs-01PMZ404 UNIT-2). Set once
+	// at construction and never mutated afterward, so reading it from the
+	// cron goroutine needs no lock.
+	dispatcherFunc DispatcherFunc
 
 	// started tracks whether Start() has been called.
 	started bool
@@ -68,18 +76,25 @@ type Config struct {
 	// Store persists schedules across chassis restarts. nil is allowed
 	// in tests; schedules are lost on process exit.
 	Store Storage
-	// Dispatcher fires actual workflow runs. As of this writing nil is
-	// NOT a supported "test-only" state — it is the only production
-	// state, because no production wfsched.Dispatcher is constructed
-	// anywhere in the chassis (see core/rpc/api.go's sole `wfsched.New`
-	// call site). RunNow and tick-triggered runs on a nil Dispatcher do
-	// NOT return a stub "completed" summary: they fail loudly with
-	// ErrNoDispatcherWired, and do not advance the persisted
-	// last_fired_at/last_run_id. Until a real Dispatcher is wired
-	// (workflows-agentic mission's UNIT-2), every enabled schedule
-	// reports failure — that is intentional honesty, not a regression
-	// to be worked around here.
+	// Dispatcher fires actual workflow runs, resolved once at
+	// construction time. Prefer DispatcherFunc in production (see its
+	// doc); Dispatcher remains for tests and any caller that already has
+	// a live Dispatcher in hand before calling New. nil is a valid state
+	// (and, before UNIT-2, was the only production state): RunNow and
+	// tick-triggered runs on a nil-resolved Dispatcher do NOT return a
+	// stub "completed" summary — they fail loudly with
+	// ErrNoDispatcherWired and do not advance the persisted
+	// last_fired_at/last_run_id.
 	Dispatcher Dispatcher
+	// DispatcherFunc, when non-nil, is called on every fire (cron tick
+	// or RunNow) to resolve the Dispatcher to use, and takes priority
+	// over Dispatcher when both are set. This is the production wiring:
+	// core/rpc/api.go constructs the CronScheduler before the
+	// workflowsview.API it dispatches through exists (77 lines later, in
+	// the same function), so the func defers that read to fire time
+	// instead of requiring a post-construction setter that would need a
+	// mutex to satisfy -race.
+	DispatcherFunc DispatcherFunc
 }
 
 // New constructs a CronScheduler. It does NOT start the cron engine;
@@ -95,10 +110,11 @@ func New(ctx context.Context, cfg Config) (*CronScheduler, error) {
 				cron.Minute|cron.Hour|cron.Dom|cron.Month|cron.Dow|cron.Descriptor,
 			)),
 		),
-		schedules:  make(map[string]*scheduleState),
-		history:    make(map[string][]RunSummary),
-		store:      cfg.Store,
-		dispatcher: cfg.Dispatcher,
+		schedules:      make(map[string]*scheduleState),
+		history:        make(map[string][]RunSummary),
+		store:          cfg.Store,
+		dispatcher:     cfg.Dispatcher,
+		dispatcherFunc: cfg.DispatcherFunc,
 	}
 	// Reload from DB at boot.
 	if cfg.Store != nil {
@@ -307,7 +323,8 @@ func (s *CronScheduler) fire(workflowID string, scheduled bool) {
 func (s *CronScheduler) fireSync(ctx context.Context, workflowID string, scheduled bool) (RunSummary, error) {
 	startedAt := time.Now().UTC()
 
-	if s.dispatcher == nil {
+	dispatcher := s.resolveDispatcher()
+	if dispatcher == nil {
 		return RunSummary{
 			WorkflowID: workflowID,
 			Status:     "failed",
@@ -326,7 +343,7 @@ func (s *CronScheduler) fireSync(ctx context.Context, workflowID string, schedul
 		Scheduled:  scheduled,
 	}
 
-	runID, err := s.dispatcher.Dispatch(ctx, workflowID, scheduled)
+	runID, err := dispatcher.Dispatch(ctx, workflowID, scheduled)
 
 	endedAt := time.Now().UTC()
 	if err != nil {
@@ -349,14 +366,26 @@ func (s *CronScheduler) fireSync(ctx context.Context, workflowID string, schedul
 	s.history[workflowID] = h
 	s.mu.Unlock()
 
-	// Guarded on s.dispatcher != nil as well as summary.Status ==
+	// Guarded on dispatcher != nil as well as summary.Status ==
 	// "completed" — deliberately redundant with the early return above.
 	// A later refactor of the status assignment above must not be able
 	// to silently re-arm this durable write for the nil-dispatcher case.
-	if scheduled && s.dispatcher != nil && s.store != nil && summary.Status == "completed" {
+	if scheduled && dispatcher != nil && s.store != nil && summary.Status == "completed" {
 		_ = s.store.SetLastFired(ctx, workflowID, summary.RunID, startedAt)
 	}
 	return summary, err
+}
+
+// resolveDispatcher returns the Dispatcher to use for this fire.
+// dispatcherFunc, when set, takes priority and is called fresh on every
+// fire (production wiring — see DispatcherFunc's doc). dispatcherFunc
+// itself is never mutated after New() returns, so this read is safe from
+// the cron goroutine without a lock.
+func (s *CronScheduler) resolveDispatcher() Dispatcher {
+	if s.dispatcherFunc != nil {
+		return s.dispatcherFunc()
+	}
+	return s.dispatcher
 }
 
 // newRunID returns a 16-byte random hex string.

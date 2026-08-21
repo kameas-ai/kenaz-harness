@@ -1,0 +1,14 @@
+id: 'test-workflow'
+name: 'Test Workflow'
+version: 1
+steps:
+  - name: fetch
+    kind: http_request
+    method: GET
+    url: 'https://example.com/'
+  - name: save
+    kind: write_artifact
+    inputs_from: [fetch]
+    title: 'Fetched response'
+    content_ref: ${step.fetch.output}
+    mime_type: application/json

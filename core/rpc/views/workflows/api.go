@@ -137,6 +137,15 @@ type RunRequest struct {
 	// Used after the user confirms a "rerun_policy=prompt" gate so
 	// the second invocation dispatches fresh.
 	SkipCache bool `json:"skipCache,omitempty"`
+	// SessionID, when non-empty, is threaded onto
+	// corewf.RunOptions.ParentSessionID so a write_artifact step has
+	// somewhere to attach the artifact (automation-actually-runs-
+	// 01PMZ404 UNIT-5). The /wf slash gateway supplies
+	// slashcmd.Env.SessionID here; the Workflows-view run form has no
+	// session and leaves this empty — a session-less run's
+	// write_artifact step then fails loudly (spec D-8) rather than
+	// inventing one.
+	SessionID string `json:"sessionId,omitempty"`
 }
 
 // ScheduleSetInput is the wire shape for ScheduleSet.

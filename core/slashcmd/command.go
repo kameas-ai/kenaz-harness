@@ -331,6 +331,11 @@ type WorkflowRunOptions struct {
 	// Inline, when true, routes through the inline-run path so progress
 	// events stream into the current session transcript.
 	Inline bool
+	// SessionID threads the invoking session onto the run so a
+	// write_artifact step has somewhere to attach the artifact
+	// (automation-actually-runs-01PMZ404 UNIT-5). Callers pass
+	// Env.SessionID.
+	SessionID string
 }
 
 // WorkflowProgressEvent is one step-transition event forwarded from

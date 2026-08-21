@@ -24,7 +24,7 @@ func TestInlineRun_HappyPath(t *testing.T) {
 	}
 	e := NewEngine()
 
-	ch, err := InlineRun(context.Background(), e, wf, map[string]any{"who": "world"})
+	ch, err := InlineRun(context.Background(), e, wf, map[string]any{"who": "world"}, "")
 	if err != nil {
 		t.Fatalf("InlineRun: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestInlineRun_RejectsMultiStep(t *testing.T) {
 			{Name: "b", Kind: StepKindShell, Cmd: "echo", Args: []string{"second"}},
 		},
 	}
-	_, err := InlineRun(context.Background(), NewEngine(), wf, nil)
+	_, err := InlineRun(context.Background(), NewEngine(), wf, nil, "")
 	if !errors.Is(err, ErrInlineMultiStep) {
 		t.Fatalf("want ErrInlineMultiStep, got %v", err)
 	}
@@ -100,7 +100,7 @@ func TestInlineRun_RejectsNonInlineWorkflow(t *testing.T) {
 		Version: 1,
 		Steps:   []Step{{Name: "a", Kind: StepKindModelTurn, UserPrompt: "hi"}},
 	}
-	_, err := InlineRun(context.Background(), NewEngine(), wf, nil)
+	_, err := InlineRun(context.Background(), NewEngine(), wf, nil, "")
 	if err == nil {
 		t.Fatal("InlineRun accepted non-inline workflow")
 	}
@@ -144,7 +144,7 @@ func TestInlineRun_ContextCancel(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	ch, err := InlineRun(ctx, NewEngine(), wf, nil)
+	ch, err := InlineRun(ctx, NewEngine(), wf, nil, "")
 	if err != nil {
 		t.Fatalf("InlineRun: %v", err)
 	}

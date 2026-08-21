@@ -99,7 +99,7 @@ func (wfCommand) Run(ctx context.Context, env Env, args []string) (Result, error
 	}
 
 	// All required inputs satisfied — dispatch inline.
-	ch, err := env.Workflows.Run(ctx, wf.ID, inputs, WorkflowRunOptions{Inline: true})
+	ch, err := env.Workflows.Run(ctx, wf.ID, inputs, WorkflowRunOptions{Inline: true, SessionID: env.SessionID})
 	if err != nil {
 		return Result{
 			Kind: ResultKindError,

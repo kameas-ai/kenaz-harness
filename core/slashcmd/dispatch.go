@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/context/audit"
@@ -184,9 +183,16 @@ func (d *Dispatch) Run(
 		}
 		splitArgs := SplitArgs(rendered)
 		if d.tools == nil {
+			// automation-actually-runs-01PMZ404 UNIT-3: this branch used to
+			// return ResultKindInfo with a nil error and a "would dispatch"
+			// bubble that looked harmless — the field's own doc comment
+			// above (`tools ToolDispatcher // may be nil (kind:tool
+			// commands return an error)`) already promised this behaviour;
+			// the code just never did it. Nothing dispatched; say so.
+			err := fmt.Errorf("tool dispatch is not configured: %q was not run", cmd.Tool)
 			return RunResult{
-				Kind:         ResultKindInfo,
-				Text:         fmt.Sprintf("would dispatch: %s %s", cmd.Tool, strings.Join(splitArgs, " ")),
+				Kind:         ResultKindError,
+				Text:         err.Error(),
 				RenderedArgs: splitArgs,
 				ToolName:     cmd.Tool,
 				Metadata: map[string]any{
@@ -194,7 +200,7 @@ func (d *Dispatch) Run(
 					"tool_dispatched":  cmd.Tool,
 					"dry_run":          true,
 				},
-			}, nil
+			}, err
 		}
 		output, dispErr := d.tools.DispatchTool(ctx, cmd.Tool, splitArgs)
 		if dispErr != nil {

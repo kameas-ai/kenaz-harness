@@ -2514,6 +2514,16 @@ func New(c *core.Core, opts ...Option) *API {
 			var err error
 			sched, err = wfsched.New(context.Background(), wfsched.Config{
 				Store: schedStore,
+				// automation-actually-runs-01PMZ404 UNIT-2: wfSchedDispatcher
+				// drives cron ticks and RunNow through the same live engine
+				// (a.workflowsAPI.RunWithOptions) the manual Run button uses.
+				// DispatcherFunc — not a plain Dispatcher field — because
+				// a.workflowsAPI is constructed 77 lines below this call, in
+				// this same function; the closure captures *API and resolves
+				// a.workflowsAPI lazily on each fire, once boot has finished.
+				DispatcherFunc: func() wfsched.Dispatcher {
+					return &wfSchedDispatcher{api: a}
+				},
 			})
 			if err != nil {
 				logging.L().Warn("wf.scheduler.init_failed", "err", err.Error())
@@ -2527,9 +2537,18 @@ func New(c *core.Core, opts ...Option) *API {
 		// the same Store + Scheduler constructed above so Install can
 		// persist and arm schedules. nil Store / Scheduler degrade
 		// gracefully inside the catalog implementation.
+		//
+		// automation-actually-runs-01PMZ404 UNIT-10: RecipeRegistry was
+		// never assigned, so every mcp_call.server reported as missing
+		// regardless of install state — the catalog preview drawer's
+		// credential chip could only ever render red. wfRecipeRegistryAdapter
+		// re-reads recipes.enabled.json per call (dataDir=="" degrades to
+		// Has()==false, matching the prior always-missing behaviour on the
+		// test-chassis / disabled path).
 		wfCatalog := wfcatalogpkg.New(wfcatalogpkg.Config{
-			Store:     wfStore,
-			Scheduler: sched,
+			Store:          wfStore,
+			Scheduler:      sched,
+			RecipeRegistry: &wfRecipeRegistryAdapter{dataDir: dataDir},
 		})
 		// WP01 (workflows-finalization-01NWFX01): wire a concrete MCPCaller
 		// and LLMStreamer into the workflow engine so mcp_call and model_turn
@@ -2578,6 +2597,25 @@ func New(c *core.Core, opts ...Option) *API {
 		// The ctxFn defers ctx resolution to Notify-call time so construction
 		// before OnStartup is safe.
 		wfDeps.Notifier = &wfNotifierAdapter{ctxFn: a.broker.EmitCtx}
+		// automation-actually-runs-01PMZ404 UNIT-5: read_artifact /
+		// write_artifact steps had no ArtifactsReadWriter — the shipped
+		// doc_generator builtin burns a full model turn and then fails on
+		// its final write_artifact step. artStore/artMgr/media are the
+		// SAME instances newArtifactsAPI wires the artifacts RPC surface
+		// with (constructed above), so a workflow-written artifact shows
+		// up through the normal artifacts surface too. nil-guarded the
+		// same way newArtifactsAPI is: both artStore and artMgr are nil
+		// on the disabled/no-DB test-chassis path.
+		if artStore != nil && artMgr != nil {
+			wfDeps.Artifacts = &wfArtifactsAdapter{store: artStore, mgr: artMgr, media: media}
+		}
+		// automation-actually-runs-01PMZ404 UNIT-7: NetAuthz was never
+		// assigned, so cedarStrictWorkflowMode could not deny a
+		// web_fetch/web_scrape step no matter how it was set. Same
+		// live-read mode resolver as workflowsAPI's CedarModeFn below —
+		// see workflowCedarModeFn's doc for why a boot snapshot is wrong
+		// here.
+		wfDeps.NetAuthz = &wfNetworkAuthorizerAdapter{gate: a.cedarGate(), modeFn: workflowCedarModeFn(settingsImpl)}
 		// audit-that-tells-the-truth-01PMZA10 UNIT-5: KindWorkflowNetworkFetch
 		// (core/context/audit/audit.go:108) had zero emit sites in the
 		// tree. Shape 1 (contextaudit.Emitter) — a SEPARATE field from
@@ -3994,9 +4032,10 @@ func (g *slashWorkflowsGateway) Run(ctx context.Context, id string, inputs map[s
 		return nil, errors.New("slashcmd: workflows surface unavailable")
 	}
 	res, err := g.inner.RunWithOptions(ctx, workflowsview.RunRequest{
-		ID:     id,
-		Inputs: inputs,
-		Inline: opts.Inline,
+		ID:        id,
+		Inputs:    inputs,
+		Inline:    opts.Inline,
+		SessionID: opts.SessionID,
 	})
 	if err != nil {
 		return nil, err
