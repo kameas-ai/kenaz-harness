@@ -1805,6 +1805,37 @@ a bootstrap (`BashAllowlistMigrated`) that writes persisted state and has
   `KENAZ_HARNESS_WORKSPACE` read the same six lines are missing). Owner:
   alecfeeman. Filed 2026-08-20 by the same mission's WP01 scope-cut record.
 
+### 2026-08-20 · The snapshot dumper emitted raw BLOB bytes as a quoted SQL string
+
+Found independently by `audit-that-tells-the-truth-01PMZA10` while
+generating the `v0.65.0` snapshot, in parallel with the FTS5 shadow-table
+fix in PR #300. The two are separate bugs in the same dumper.
+
+`upgradesnap` (and its duplicate in `scripts/ci/upgrade-snapshot/`) wrapped
+`[]byte` column values in `quoteStr` — a quoted SQL string literal —
+instead of emitting a `X'...'` hex literal. `events_fts_data`'s shadow
+columns hold real compressed FTS5 blobs, so the regenerated dump came out
+as `data` rather than text under `file(1)`.
+
+**Why the committed `v0.65.0` dump is nevertheless clean** (verified, not
+assumed): PR #300's fix excludes FTS5 shadow tables from the dump
+entirely, and those are the only BLOB-bearing tables in the schema today.
+With them gone there is nothing left to mis-encode — the committed file is
+ASCII with zero non-printable bytes. The encoder was still wrong, and would
+have produced a binary, unreplayable snapshot for **any** future table with
+a BLOB column. Both fixes are now in.
+
+**The standing hazard is the duplication, not either bug.** The dump logic
+exists twice on purpose (`upgradesnap` does not exist at old tags, so the
+generator must be self-contained), and **nothing compares the two sources**.
+`TestDumpMaterializeRoundTrip` round-trips only `upgradesnap`'s copy. Both
+of these bugs existed in both copies, and both had to be fixed twice. The
+header comment claiming a test keeps them in sync describes a test that
+does not exist.
+
+**Owed:** a real source-comparison test, or a single shared implementation
+with a build-tag shim. **Owner: unassigned.**
+
 ## Drained
 
 ### 2026-08-19 · CLOSED — the missing-upgrade-snapshot hole is now gated
