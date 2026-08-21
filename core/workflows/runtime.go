@@ -18,7 +18,16 @@ type RunContext struct {
 	Workflow    Workflow
 	Inputs      map[string]TypedValue
 	StepOutputs map[string]TypedValue
-	mu          sync.RWMutex
+	// ParentSessionID is this run's session id, threaded from
+	// RunOptions.ParentSessionID (automation-actually-runs-01PMZ404
+	// UNIT-5). Runners that need a session — write_artifact — must read
+	// this per-Run value rather than a Deps field bound once at engine
+	// construction, since the session varies per invocation (e.g. the
+	// /wf slash gateway's slashcmd.Env.SessionID). Empty when the
+	// dispatching surface has no session (e.g. the Workflows-view run
+	// form).
+	ParentSessionID string
+	mu              sync.RWMutex
 	// branchSkip records the step name a conditional asked the
 	// engine to skip (the not-chosen branch). Cleared once consumed.
 	branchSkip string
@@ -179,10 +188,11 @@ func (e *Engine) Run(ctx context.Context, wf Workflow, inputs map[string]TypedVa
 	}
 
 	rc := &RunContext{
-		RunID:       randomRunID(),
-		Workflow:    wf,
-		Inputs:      mergeInputDefaults(wf, inputs),
-		StepOutputs: make(map[string]TypedValue, len(wf.Steps)),
+		RunID:           randomRunID(),
+		Workflow:        wf,
+		Inputs:          mergeInputDefaults(wf, inputs),
+		StepOutputs:     make(map[string]TypedValue, len(wf.Steps)),
+		ParentSessionID: opts.ParentSessionID,
 	}
 	run := &Run{
 		ID:         rc.RunID,

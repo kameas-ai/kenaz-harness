@@ -567,12 +567,23 @@ func (writeArtifactRunner) Validate(st Step) error {
 	return nil
 }
 
-func (r writeArtifactRunner) Run(ctx context.Context, st Step, _ *RunContext) (TypedValue, error) {
+func (r writeArtifactRunner) Run(ctx context.Context, st Step, rc *RunContext) (TypedValue, error) {
 	if r.art == nil {
 		return TypedValue{Type: ValueTypeError},
 			fmt.Errorf("write_artifact step %q: %w (no Artifacts wired)", st.Name, errDepUnavailable)
 	}
-	if r.sessionID == "" {
+	// The run-scoped session id (threaded from RunOptions.ParentSessionID,
+	// e.g. the /wf slash gateway's slashcmd.Env.SessionID) wins over the
+	// Deps-level fallback bound once at engine construction —
+	// automation-actually-runs-01PMZ404 UNIT-5, spec §5.5. D-8: a
+	// session-less run (neither carries one) fails loudly here rather
+	// than inventing a synthetic session or writing a global-scoped
+	// artifact.
+	sessionID := r.sessionID
+	if rc != nil && rc.ParentSessionID != "" {
+		sessionID = rc.ParentSessionID
+	}
+	if sessionID == "" {
 		return TypedValue{Type: ValueTypeError},
 			fmt.Errorf("write_artifact step %q: no SessionID configured on engine deps", st.Name)
 	}
@@ -580,11 +591,21 @@ func (r writeArtifactRunner) Run(ctx context.Context, st Step, _ *RunContext) (T
 	if mime == "" {
 		mime = "text/plain"
 	}
+	// content_ref, when content is empty, is the source of the bytes.
+	// expandStep has already ref-expanded st.ContentRef by the time it
+	// reaches Run (runtime.go's expandStep), so this is the resolved
+	// text, not the raw "${...}" token — automation-actually-runs-01PMZ404
+	// UNIT-5 §5c: before this, a content_ref-only step validated, ran,
+	// reported success, and stored a zero-byte artifact.
+	content := st.Content
+	if content == "" {
+		content = st.ContentRef
+	}
 	id, err := r.art.Write(ctx, ArtifactWrite{
-		SessionID: r.sessionID,
+		SessionID: sessionID,
 		Title:     st.Title,
 		MimeType:  mime,
-		Content:   []byte(st.Content),
+		Content:   []byte(content),
 	})
 	if err != nil {
 		return TypedValue{Type: ValueTypeError}, fmt.Errorf("write_artifact step %q: %w", st.Name, err)

@@ -638,9 +638,15 @@ type Deps struct {
 	Tools              ToolCaller
 	MCP                MCPCaller
 	Artifacts         ArtifactsReadWriter
-	// SessionID is threaded into write_artifact rows so they show up
-	// under the right session in the artifacts table. Empty disables
-	// artifact writes (write_artifact returns an error).
+	// SessionID is the fallback session id threaded into write_artifact
+	// rows when the run itself carries none. The run-scoped value —
+	// RunOptions.ParentSessionID, surfaced to the runner via
+	// RunContext.ParentSessionID — wins when non-empty (UNIT-5: the
+	// session id a slash-dispatched /wf run carries via
+	// slashcmd.Env.SessionID varies per invocation, so it cannot be
+	// bound once at Deps-construction time the way this field is).
+	// Empty on both disables artifact writes (write_artifact returns an
+	// error naming the gap).
 	SessionID string
 	// NetAuthz, when non-nil, gates web_fetch and web_scrape steps via
 	// Cedar action "workflow.network.fetch". nil permits all fetches.
