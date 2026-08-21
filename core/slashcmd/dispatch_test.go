@@ -3,6 +3,7 @@ package slashcmd_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/kameas-ai/kenaz-harness/core/slashcmd"
@@ -177,7 +178,16 @@ func TestDispatch_NotFound(t *testing.T) {
 	}
 }
 
-func TestDispatch_KindTool_NilDispatcher_DryRun(t *testing.T) {
+// TestDispatch_KindTool_NilDispatcher_ReturnsError is AC-004
+// (automation-actually-runs-01PMZ404 UNIT-3). Before this unit, a nil
+// tools dispatcher took the dry-run branch: ResultKindInfo, a "would
+// dispatch: ..." bubble, and a NIL error — indistinguishable from success
+// to any caller that only checks err. Nothing was ever dispatched. Now
+// the same nil-dispatcher state returns ResultKindError and a non-nil
+// error naming the gap, matching the `tools` field's own doc comment
+// ("may be nil (kind:tool commands return an error)") for the first
+// time.
+func TestDispatch_KindTool_NilDispatcher_ReturnsError(t *testing.T) {
 	t.Parallel()
 	db, dir := openDispatchDB(t)
 	store := slashcmd.NewStore(db, dir)
@@ -195,16 +205,19 @@ func TestDispatch_KindTool_NilDispatcher_DryRun(t *testing.T) {
 		t.Fatalf("SaveUser: %v", err)
 	}
 
-	// nil tool dispatcher → dry-run mode
+	// nil tool dispatcher — must fail loudly, not dry-run.
 	d := slashcmd.NewDispatch(store, nil)
 	result, err := d.Run(ctx, "lint", nil, slashcmd.SessionContext{SessionID: "s4"})
-	if err != nil {
-		t.Fatalf("Run with nil dispatcher: %v", err)
+	if err == nil {
+		t.Fatal("Run with nil dispatcher returned a nil error — a caller branching on err would treat this as success")
 	}
-	if result.Kind != slashcmd.ResultKindInfo {
-		t.Errorf("Kind = %q, want info", result.Kind)
+	if result.Kind != slashcmd.ResultKindError {
+		t.Errorf("Kind = %q, want error", result.Kind)
 	}
 	if result.ToolName != "bash" {
 		t.Errorf("ToolName = %q, want %q", result.ToolName, "bash")
+	}
+	if !strings.Contains(err.Error(), "bash") {
+		t.Errorf("err = %v, want it to name the tool %q", err, "bash")
 	}
 }
