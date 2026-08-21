@@ -15,12 +15,28 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import EventStreamRow from '@/components/ui/EventStreamRow.vue';
 import AuditEventDrawer from './AuditEventDrawer.vue';
-import { useHarnessClient, useEventLogStream } from '@/lib/useHarnessAPI';
+import { useHarnessClient, useEventLogStream, type UseStreamResult } from '@/lib/useHarnessAPI';
+import { useServedMode } from '@/lib/useServedMode';
+import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import { CATEGORIES, type Category } from '@/lib/categories';
 import type { AuditEntry, AuditFilter, AuditFilterQuery, SavedAuditQuery, AuditExportOptions } from '@/lib/types';
 import { defaultAuditSince, defaultAuditUntil } from '@/lib/auditDateFilters';
 
 const client = useHarnessClient();
+
+// served-mode-is-a-real-mode-01PMZ707 WP05, spec.md §1.2/§5.5. All eleven
+// Audit_* RPCs (listEntries/filter, listSavedQueries, startStream, export,
+// bulkPurge, deleteQuery, saveQuery, stopStream, verifyChain, verifyEntry)
+// are unrouted in served mode (verified in the drift gate's own gap list —
+// scripts/ci/allowlists/i15-serve-dispatch-gap.txt), so /audit joins WP03's
+// boundary-panel list rather than trying to fix this one field at a time.
+// Before this WP, a rejected client.audit.filter() call landed on a bare
+// `catch { seeded.value = []; }` — a served user opening the audit log to
+// check what the agent did was shown a CLEAN, EMPTY, non-erroring
+// compliance trail. That is fabricated evidence about a compliance record,
+// and per spec.md §1.2 it is the single worst instance of the served-mode
+// "renders a default instead of an answer" class in the tree.
+const servedMode = useServedMode();
 
 // ── Filter state ────────────────────────────────────────────────────────
 // audit-that-tells-the-truth-01PMZA10 UNIT-6 (WP08): selectedCategories
@@ -104,6 +120,12 @@ const exportToast = ref<string>('');
 // only. Before this change audit.filter() had no caller anywhere in
 // the frontend despite being a fully-implemented RPC method.
 async function refresh() {
+  // Served mode: the whole view renders NotAvailableInServedMode instead.
+  // Audit_Filter has no serve dispatch case — calling it would only ever
+  // reject, and a bare catch turning that rejection into an empty array is
+  // exactly the fabrication this WP exists to stop (see the module-level
+  // comment above).
+  if (servedMode.value) return;
   loading.value = true;
   try {
     seeded.value = await client.audit.filter(richFilter.value);
@@ -118,7 +140,18 @@ watch(richFilter, () => {
   void refresh();
 }, { immediate: true });
 
-const stream = useEventLogStream(filter);
+// Served mode: skip Audit_StartStream entirely rather than let it reject
+// into a permanently-empty, silently-attached stream. useEventLogStream
+// has no lifecycle hooks of its own (plain refs + an immediately-invoked
+// async IIFE), so calling it conditionally here is safe.
+const inertStream: UseStreamResult<AuditEntry> = {
+  events: ref([]),
+  paused: ref(false),
+  pause: () => {},
+  resume: () => {},
+  stop: async () => {},
+};
+const stream = servedMode.value ? inertStream : useEventLogStream(filter);
 
 // Display: union of the seeded snapshot with the live tail. Newest first.
 const entries = computed<readonly AuditEntry[]>(() => {
@@ -195,6 +228,7 @@ function clearFilters() {
 
 // ── Saved queries ─────────────────────────────────────────────────────────
 async function loadSavedQueries() {
+  if (servedMode.value) return;
   try {
     savedQueries.value = await client.audit.listSavedQueries();
   } catch {
@@ -314,7 +348,12 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div>
+  <NotAvailableInServedMode
+    v-if="servedMode"
+    feature="Audit log"
+    reason="The append-only event log, its live tail and saved queries run through Audit_* RPCs that are not routed in served mode. Showing an empty log here would look like a clean compliance trail rather than the truth: this view has no way to read one."
+  />
+  <div v-else>
     <CanvasHead
       number="05"
       section="AUDIT"

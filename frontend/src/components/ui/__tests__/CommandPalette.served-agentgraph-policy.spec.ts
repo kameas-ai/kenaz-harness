@@ -70,10 +70,14 @@ describe('CommandPalette — Agent graphs / Policy in served mode', () => {
   });
 
   it('leaves the ungated majority alone in served mode', async () => {
+    // served-mode-is-a-real-mode-01PMZ707 WP05 also gated nav.audit (all
+    // eleven Audit_* RPCs are unrouted — see AuditView.served.test.ts), so
+    // it is deliberately NOT in this list; nav.permissions stays ungated
+    // per D-710 (its pending-prompt surface genuinely works in served mode).
     servedModeFlag = true;
     const w = await openPalette();
     expect(w.text()).toContain('Go to Sessions');
-    expect(w.text()).toContain('Go to Audit log');
     expect(w.text()).toContain('Go to Permissions');
+    expect(w.text()).toContain('Go to Tools');
   });
 });

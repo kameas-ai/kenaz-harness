@@ -59,7 +59,17 @@ const NAV_ACTIONS: PaletteAction[] = [
     visible: () => !isServedMode(),
     perform: () => navigate('#/agentgraph'),
   },
-  { id: 'nav.audit', label: 'Go to Audit log', hint: 'Session & tool audit trail', perform: () => navigate('#/audit') },
+  // served-mode-is-a-real-mode-01PMZ707 WP05: gated on !isServedMode() —
+  // all eleven Audit_* RPCs are unrouted in served mode, so /audit now
+  // renders NotAvailableInServedMode wholesale (unlike nav.permissions
+  // below, whose view has a genuinely working half — D-710).
+  {
+    id: 'nav.audit',
+    label: 'Go to Audit log',
+    hint: 'Session & tool audit trail',
+    visible: () => !isServedMode(),
+    perform: () => navigate('#/audit'),
+  },
   { id: 'nav.permissions', label: 'Go to Permissions', hint: 'Tool & bash permissions', perform: () => navigate('#/permissions') },
   {
     id: 'nav.policy',
