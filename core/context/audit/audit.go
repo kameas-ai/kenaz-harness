@@ -490,6 +490,22 @@ const (
 	// will not be asked about". Emitted on failure too (Written=false)
 	// so a silent write failure cannot masquerade as a grant.
 	KindToolConfirmGrantWritten Kind = "tool.confirm_grant_written"
+
+	// KindApprovalResolved fires once per resolved approval-graph-node
+	// decision (approval-node-01PMZC12 UNIT-3/UNIT-4, FR-003). This is
+	// the RPC-surface audit trail (visible in the Settings audit
+	// panel), distinct from the run's own agent_graph_events
+	// approval_resolved trace event — the two are emitted from
+	// different layers (Impl.ResolveApproval / the no-watcher timeout
+	// vs the approval executor) and neither substitutes for the other:
+	// this one is queryable independent of any single run's trace, the
+	// trace event is what RunView replays.
+	//
+	// Emitted exactly once per resolution, including the no-watcher
+	// fail-closed path (Auto=true, Approver="") and the
+	// auto_approve_window_seconds timeout, so a run resolved without a
+	// human is as auditable as one a human resolved.
+	KindApprovalResolved Kind = "agentgraph.approval_resolved"
 )
 
 // ToolConfirmPath names which branch of the confirm-each dispatch path
@@ -1573,4 +1589,27 @@ type ContextBootstrapRunPayload struct {
 	// ErrorClass is a typed error label when Outcome=="failed" (never a raw
 	// error message).
 	ErrorClass string `json:"error_class,omitempty"`
+}
+
+// ApprovalResolvedPayload is the audit payload for KindApprovalResolved
+// (approval-node-01PMZC12 UNIT-3/UNIT-4).
+//
+// Privacy invariant: RunID/NodeID/Reason identify WHICH decision was
+// made and WHY at the level a graph author already sees in the run
+// trace; no upstream conversation content, tool arguments, or node
+// input/output payload is carried here.
+type ApprovalResolvedPayload struct {
+	// RunID / NodeID identify the paused node.
+	RunID  string `json:"run_id"`
+	NodeID string `json:"node_id"`
+	// Approved is the recorded verdict.
+	Approved bool `json:"approved"`
+	// Auto is true for a timer-driven resolution (auto_approve_window
+	// elapsing, or the no-watcher fail-closed timeout) and false for a
+	// human's explicit Graph_ResolveApproval call.
+	Auto bool `json:"auto"`
+	// Approver names who resolved it; empty for any Auto resolution.
+	Approver string `json:"approver,omitempty"`
+	// Reason is the human-supplied or system-generated justification.
+	Reason string `json:"reason,omitempty"`
 }

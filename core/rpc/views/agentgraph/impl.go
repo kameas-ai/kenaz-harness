@@ -102,6 +102,14 @@ func (a *Impl) Resume(_ context.Context, runID, askResponse string) error {
 	return a.mgr.resumeRun(runID, askResponse)
 }
 
+// ResolveApproval implements API.
+func (a *Impl) ResolveApproval(ctx context.Context, runID, nodeID string, approved bool, reason string) error {
+	if a == nil || a.mgr == nil {
+		return ErrManagerUnavailable
+	}
+	return a.mgr.resolveApproval(ctx, runID, nodeID, approved, reason)
+}
+
 // CancelRun implements API.
 func (a *Impl) CancelRun(_ context.Context, runID string) error {
 	if a == nil || a.mgr == nil {

@@ -2,6 +2,7 @@ package agentgraph
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime/debug"
@@ -1490,33 +1491,113 @@ func summarizeTail(ctx context.Context, env *Env, tail []Message, mode string) s
 
 // ---- ApprovalNode (NEW, FR-048) ----
 
+// ApprovalVerdict is the decoded shape of an approval resolution. It is
+// carried as the JSON Value of the elicitation.Answer the resolve verb
+// (Graph_ResolveApproval, approval-node-01PMZC12 UNIT-3) or the
+// no-watcher/auto-approve-window timeout (UNIT-4/UNIT-5) writes back
+// onto AskBus. The approval executor decodes it on its resumed fire to
+// pick exactly one output port and to record the true verdict on
+// EventApprovalResolved (FR-004, FR-005).
+type ApprovalVerdict struct {
+	// Approved selects the output port: true writes "approved", false
+	// writes "rejected".
+	Approved bool `json:"approved"`
+	// Reason is a human-readable justification. Required (non-generic)
+	// for a fail-closed no-watcher resolution — spec.md AC-05.
+	Reason string `json:"reason,omitempty"`
+	// Auto is true when a timer resolved this (auto_approve_window or
+	// the no-watcher timeout), false for a human's explicit resolve
+	// call. Recorded truthfully on approval_resolved (FR-005/FR-007).
+	Auto bool `json:"auto,omitempty"`
+	// Approver names who resolved it. Empty for any Auto resolution —
+	// a missing approver must not read as "approved" (spec.md §5.3,
+	// mirroring B-3's warning about a missing allowlist).
+	Approver string `json:"approver,omitempty"`
+}
+
+// EncodeApprovalAnswer builds the elicitation.Answer an approval
+// resolution writes onto AskBus.
+func EncodeApprovalAnswer(v ApprovalVerdict) (elicitation.Answer, error) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return elicitation.Answer{}, fmt.Errorf("approval: encode verdict: %w", err)
+	}
+	return elicitation.JSONAnswer(raw), nil
+}
+
+// DecodeApprovalVerdict recovers the verdict from an elicitation.Answer
+// the approval executor reads back on its resumed fire.
+func DecodeApprovalVerdict(ans elicitation.Answer) (ApprovalVerdict, error) {
+	var v ApprovalVerdict
+	if len(ans.Value) == 0 {
+		return v, fmt.Errorf("approval: answer carries no structured verdict")
+	}
+	if err := json.Unmarshal(ans.Value, &v); err != nil {
+		return v, fmt.Errorf("approval: decode verdict: %w", err)
+	}
+	return v, nil
+}
+
 // approvalExecutor implements ExecApproval — a binary HITL gate that
 // pauses the run until a human resolves it via Approve or Reject.
-// approval-node-01PMZC12 UNIT-2 makes this real: the node registers the
-// pending decision on AskBus (the same seam `ask` uses — see
-// core/agentgraph/seams.go) and parks the run (res.Pause), writing no
-// output port. No resolve verb exists yet (UNIT-3 adds
-// Graph_ResolveApproval; UNIT-4 gives the resolved verdict the
-// `rejected` port to land on), so today every fire parks — that is
-// honest: a run nobody has wired a decision-maker for should hang, not
-// silently auto-pass. It does NOT emit EventApprovalResolved: that kind
-// is reserved for a real human decision, and a prior version of this
-// code fabricated one (trust-surfaces-that-fire-01PMZ202 WP02, Class F
-// "manufactured success" — docs/dead-code-audit-2026-08-18.md).
+// approval-node-01PMZC12 UNIT-2 made the first fire park (res.Pause)
+// instead of deciding on the human's behalf, writing no output port.
+// UNIT-3/UNIT-4 add the second half: on the resumed fire (a verdict is
+// already on AskBus, mirroring the `ask` node's LookupAnswer-before-
+// Pending pattern in exec_compute.go) the executor writes EXACTLY ONE
+// of "approved" / "rejected" and emits the one true
+// EventApprovalResolved recording the real verdict, the real `auto`
+// flag and the approver identity when there was one (FR-004, FR-005).
+// A prior version of this code fabricated an approval nobody made
+// (trust-surfaces-that-fire-01PMZ202 WP02, Class F "manufactured
+// success" — docs/dead-code-audit-2026-08-18.md); this must never
+// special-case Approved=true from anywhere but a decoded verdict.
 //
 // This is an authoring-time capability, not a gate on unattended or
 // model-scheduled execution — per ruling B-3, containment
 // (harness-self-attach-01PMHS01 WP04) is the load-bearing control for
-// that case (approval-node-01PMZC12/research/framing.md).
+// that case (approval-node-01PMZC12/research/framing.md). The
+// no-watcher fail-closed timeout (UNIT-4) exists so a parked approval
+// cannot become a silent, unaudited hang — not as a substitute for
+// containment.
 type approvalExecutor struct{}
 
 func (approvalExecutor) Kind() NodeKind { return NodeKindApproval }
 
-func (approvalExecutor) Execute(ctx context.Context, env *Env, node *Node, _ PortValues) (Result, error) {
+func (approvalExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
 	res := NewResult()
 	a, ok := node.Attrs.(ApprovalAttrs)
 	if !ok {
 		return res, fmt.Errorf("approval: node %q has wrong attrs type %T", node.ID, node.Attrs)
+	}
+
+	// Resumed fire: a verdict is already on the bus. Checked first so a
+	// resolved approval does not re-pause (same ordering the `ask` node
+	// uses). Write EXACTLY ONE port — never both, never neither.
+	if ans, ok := env.Ask.LookupAnswer(ctx, env.RunID, node.ID); ok {
+		verdict, err := DecodeApprovalVerdict(ans)
+		if err != nil {
+			// Defensive: an unreadable verdict is not a human approval.
+			// Fail closed rather than guess (spec.md §5.3's fail-closed
+			// rule applies to a corrupt answer too, not only a missing
+			// one).
+			verdict = ApprovalVerdict{Approved: false, Reason: "approval: unreadable verdict; failing closed"}
+		}
+		if verdict.Approved {
+			res.Outputs["approved"] = inputs["in"]
+		} else {
+			// "rejected" only — "approved" stays absent from the map,
+			// not present-and-nil, so a downstream node wired to
+			// "approved" does not fire (spec.md AC-03).
+			res.Outputs["rejected"] = inputs["in"]
+		}
+		_ = res.Events.AppendKind(env.RunID, node.ID, EventApprovalResolved, map[string]any{
+			"approved": verdict.Approved,
+			"auto":     verdict.Auto,
+			"reason":   verdict.Reason,
+			"approver": verdict.Approver,
+		})
+		return res, nil
 	}
 
 	prompt := a.Prompt

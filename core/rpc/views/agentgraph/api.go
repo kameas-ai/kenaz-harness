@@ -114,6 +114,14 @@ type RunStatus struct {
 	ToolCalls     int     `json:"toolCalls"`
 	CostUSD       float64 `json:"costUsd"`
 	PendingAsk    *PendingAsk `json:"pendingAsk,omitempty"`
+
+	// PendingApproval surfaces an approval node's parked decision,
+	// beside (not replacing) PendingAsk — the two pending kinds must
+	// not collapse into one shape (approval-node-01PMZC12 UNIT-3,
+	// FR-002). Exactly one of PendingAsk / PendingApproval is set on
+	// any given paused run: the kernel parks on at most one node per
+	// pause cycle, and its kind is what decides which field this is.
+	PendingApproval *PendingApproval `json:"pendingApproval,omitempty"`
 }
 
 // PendingAsk surfaces an AskNode's parked question so the UI can
@@ -135,6 +143,18 @@ type PendingAsk struct {
 	// Spec carries the full question (options, bounds, preview) so the
 	// UI can render the same controls the dialog does.
 	Spec *elicitation.Question `json:"spec,omitempty"`
+}
+
+// PendingApproval surfaces an approval node's parked decision so the UI
+// can render an approve/reject prompt (approval-node-01PMZC12 UNIT-3,
+// FR-002/FR-010). Distinct from PendingAsk: an approval's resume verb
+// is Graph_ResolveApproval(runID, nodeID, approved, reason), not
+// Resume(runID, freeText) — resuming an approval through Resume, or an
+// ask through ResolveApproval, is refused (spec.md §5.2).
+type PendingApproval struct {
+	NodeID       string `json:"nodeId"`
+	Prompt       string `json:"prompt"`
+	ApproverRole string `json:"approverRole,omitempty"`
 }
 
 // RunTraceEvent is one row of the EventLog tail.
@@ -212,8 +232,20 @@ type API interface {
 	GetRunTrace(ctx context.Context, runID string, since int64) ([]RunTraceEvent, error)
 
 	// Resume un-parks a paused run. Requires the run is in state=paused
-	// and an AskNode is pending; otherwise returns an error.
+	// and an AskNode is pending; otherwise returns an error — including
+	// when what's pending is an approval, not an ask (use
+	// ResolveApproval for that).
 	Resume(ctx context.Context, runID, askResponse string) error
+
+	// ResolveApproval resolves a paused run's pending approval node,
+	// approve or reject, with an optional reason (approval-node-01PMZC12
+	// UNIT-3, FR-003). Requires the run is in state=paused and an
+	// approval is pending; otherwise returns an error — including when
+	// what's pending is an ask, not an approval (use Resume for that).
+	// Cedar-gated (cedar.ActionApprovalResolve) and audited
+	// (audit.KindApprovalResolved) — a human approval is trust- or
+	// compliance-relevant under CLAUDE.md's own rubric.
+	ResolveApproval(ctx context.Context, runID, nodeID string, approved bool, reason string) error
 
 	// CancelRun signals a running run to stop. Idempotent on
 	// already-finished runs.
