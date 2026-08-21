@@ -83,11 +83,20 @@ func (a *API) BeginDeviceAuth(ctx context.Context, id string) (DeviceAuthBeginRe
 	if recipe.Auth == nil || recipe.Auth.Kind != recipes.AuthKindMCPOAuth {
 		return DeviceAuthBeginResult{}, fmt.Errorf("tools: recipe %q is not an OAuth recipe", id)
 	}
-	if recipe.Auth.ClientID == "" {
+	// Same ${VAR} substitution seam as SignInRecipe (FR-003). No shipped
+	// device_code recipe carries a placeholder today — github's is a real
+	// baked id — so this currently changes no observable behaviour, but it
+	// is the same field and the same lie, so it lands in the same commit
+	// rather than waiting for the first placeholder device_code recipe.
+	clientID, _, err := a.resolveOAuthClientCredentials(ctx, recipe)
+	if err != nil {
+		return DeviceAuthBeginResult{}, err
+	}
+	if clientID == "" {
 		return DeviceAuthBeginResult{}, fmt.Errorf("tools: recipe %q has no OAuth client_id configured", id)
 	}
 
-	cfg := oauth.GitHubDeviceConfig(recipe.Auth.ClientID, recipe.Auth.Scopes, nil)
+	cfg := oauth.GitHubDeviceConfig(clientID, recipe.Auth.Scopes, nil)
 	dar, err := oauth.RequestDeviceAuthorization(ctx, cfg)
 	if err != nil {
 		return DeviceAuthBeginResult{}, fmt.Errorf("tools: device auth request for %q: %w", id, err)
