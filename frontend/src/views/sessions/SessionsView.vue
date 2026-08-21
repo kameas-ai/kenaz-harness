@@ -46,7 +46,7 @@ import CostCell from '@/components/chat/CostCell.vue';
 import LongSessionNudge from '@/components/chat/LongSessionNudge.vue';
 import ShareSessionDialog from '@/views/sessions/ShareSessionDialog.vue';
 import { useArtifacts, useHarnessClient, useSessions } from '@/lib/useHarnessAPI';
-import { useSession } from '@/lib/useSession';
+import { useSession, streamTruncatedCopy } from '@/lib/useSession';
 import { useEventStream } from '@/lib/useEventStream';
 import { useLongSessionNudge } from '@/lib/useLongSessionNudge';
 import { countTurns } from '@/lib/transcript';
@@ -1847,7 +1847,7 @@ async function onShared() {
             role="status"
             data-testid="stream-truncated-notice"
           >
-            {{ session.streamTruncated.value.message }}
+            {{ streamTruncatedCopy(session.streamTruncated.value) }}
             <button
               type="button"
               class="ml-2 underline underline-offset-2"

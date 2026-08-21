@@ -156,10 +156,20 @@ harness rendered that button — over a `Catalog_Publish` served mode refuses.
 
 So `lib/featureFlags.ts` now closes `signedIn` and `capability()` outright
 when `isServedMode()` is true. There is no fleet method anywhere in the
-33-entry allowlist, so no fleet gate can legitimately open in served mode,
-and the fence needs no per-surface knowledge. The per-surface mechanisms
-above stay — they are better UX than an invisible control — but they are no
-longer the only thing standing between a served build and a dead RPC.
+`servedMethods` allowlist (39 entries as of served-mode-is-a-real-mode-01PMZ707
+WP08, up from the 33 this line originally cited — this count moves every
+time a method is ported; `TestServedMethodsCountMatchesDoc`,
+`core/serve/wp08_served_count_test.go`, fails and names both citations to
+update the next time it drifts), so no fleet gate can legitimately open in
+served mode, and the fence needs no per-surface knowledge. Its scope is
+also narrower than "everything": it closes exactly `signedIn` and
+`capability()`, both FLEET gates — every finding this doc's own history
+above describes (the boundary panel, the unrouted path, the per-affordance
+gate) is a non-fleet RPC this fence structurally cannot see, because
+`AppInfo` (which feeds it) carries no non-fleet capability information at
+all. The per-surface mechanisms above stay — they are better UX than an
+invisible control — but they are no longer the only thing standing between
+a served build and a dead RPC.
 
 Pinned by `src/lib/__tests__/featureFlags.servedFence.spec.ts`. When
 `core/serve/methods.go` does gain a fleet surface, this fence is the first
