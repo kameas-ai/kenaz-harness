@@ -569,7 +569,7 @@ func runTask(
 			"code":              "graph_run_failed",
 			"message_truncated": truncate(wireMsg, maxMessageLen),
 		})
-		ledger.emitTaskComplete(taskID)               // terminal ledger event
+		ledger.emitTaskComplete(taskID, 1)            // terminal ledger event (exit_code=1: failed)
 		audit.emitTaskComplete(taskID, 1, durationMs) // non-zero exit = failed
 		return
 	}
@@ -582,7 +582,7 @@ func runTask(
 		"kind":    "task.complete",
 		"task_id": taskID,
 	})
-	ledger.emitTaskComplete(taskID)               // terminal ledger event
+	ledger.emitTaskComplete(taskID, 0)            // terminal ledger event (exit_code=0: ok)
 	audit.emitTaskComplete(taskID, 0, durationMs) // terminal audit event (ok)
 }
 

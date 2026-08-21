@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"net"
 	"sync"
 	"testing"
@@ -217,7 +218,7 @@ func TestLedgerDisabledIsNoop(t *testing.T) {
 	}
 	e.emitTaskStart("t", 1)
 	e.emitToolCall("t", "x")
-	e.emitTaskComplete("t")
+	e.emitTaskComplete("t", 0)
 	e.emitTaskCancelled("t")
 
 	// nil receiver must be a safe no-op too.
@@ -226,7 +227,7 @@ func TestLedgerDisabledIsNoop(t *testing.T) {
 		t.Fatalf("nil emitter must report disabled")
 	}
 	ne.emitTaskStart("t", 1)
-	ne.emitTaskComplete("t")
+	ne.emitTaskComplete("t", 0)
 }
 
 // TestLedgerDialFailureDoesNotBlock verifies that a dead ingest endpoint does
@@ -309,6 +310,82 @@ func TestTaskLifecycleEmitsToLedger(t *testing.T) {
 	}
 	if tools < 1 {
 		t.Fatalf("expected >=1 tool_call; got %d", tools)
+	}
+}
+
+// TestLedgerFailedTaskDiffersFromSuccess drives runTask to a graph-run
+// failure and asserts the ledger's task.complete record differs from a
+// successful run's — WP11 / AC-016. Before this WP, emitTaskComplete took no
+// exit code, so main.go:566 (the failure path) and main.go:585 (the success
+// path) wrote the byte-identical {"phase":"task.complete"} record. The audit
+// sink already distinguished them (auditsink.go:67 ExitCode); the ledger did
+// not, even though the two terminal calls sit one line apart.
+func TestLedgerFailedTaskDiffersFromSuccess(t *testing.T) {
+	ingest := newFakeIngest(t)
+	defer ingest.close()
+
+	ledger := newTCPEmitter(ingest.addr(), "wb-fail")
+	srv, addr := startTestServerFull(t, "", failingExecutor{err: errors.New("boom")}, nil, ledger)
+	defer srv.Close()
+
+	conn := dialAndAuth(t, addr, "")
+	defer conn.Close()
+
+	msgs, mu, stop := readMessages(t, conn)
+	defer stop()
+
+	sendMsg(t, conn, map[string]any{
+		"kind":    "task.start",
+		"task_id": "task-fail",
+		"prompt":  "do the thing",
+	})
+
+	// The RPC stream reports the failure as task.error (graph_run_failed);
+	// the ledger record is a separate side channel written at the same call
+	// site (main.go's runTask), so wait for both signals independently.
+	waitForKind(t, msgs, mu, "task.error", 3*time.Second)
+	recs := ingest.waitForPhases(t, 3*time.Second, phaseTaskComplete)
+
+	var completeRec *ledgerRecord
+	for i := range recs {
+		if recs[i].Payload["phase"] == phaseTaskComplete && recs[i].Payload["task_id"] == "task-fail" {
+			completeRec = &recs[i]
+			break
+		}
+	}
+	if completeRec == nil {
+		t.Fatalf("no task.complete ledger record found for the failed task: %v", recs)
+	}
+	exitCode, ok := completeRec.Payload["exit_code"].(float64)
+	if !ok {
+		t.Fatalf("failed task's ledger record carries no exit_code key: %v", completeRec.Payload)
+	}
+	if exitCode == 0 {
+		t.Fatalf("failed task's ledger record reports exit_code=0 — looks like a success record: %v", completeRec.Payload)
+	}
+}
+
+// TestLedgerCancelRecordUnchanged pins AC-016's second half: WP11's exit_code
+// addition is scoped to emitTaskComplete (task.complete) only. The cancel
+// path already had its own correct terminal phase (phaseTaskCancelled,
+// main.go's cancellation branch) before this WP and must not grow the new key.
+func TestLedgerCancelRecordUnchanged(t *testing.T) {
+	ingest := newFakeIngest(t)
+	defer ingest.close()
+
+	e := newTCPEmitter(ingest.addr(), "wb-cancel")
+	e.emitTaskCancelled("task-c")
+
+	recs := ingest.waitForPhases(t, 2*time.Second, phaseTaskCancelled)
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 record; got %d", len(recs))
+	}
+	r := recs[0]
+	if r.Payload["phase"] != phaseTaskCancelled {
+		t.Fatalf("phase = %v; want %q", r.Payload["phase"], phaseTaskCancelled)
+	}
+	if _, ok := r.Payload["exit_code"]; ok {
+		t.Fatalf("cancel record must not carry exit_code (scoped to task.complete only): %v", r.Payload)
 	}
 }
 
