@@ -13,6 +13,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 	cedarpolicy "github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	llmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
 	"github.com/kameas-ai/kenaz-harness/core/slashcmd"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -34,10 +35,6 @@ type fleetState struct {
 	// cedarEngine is the Cedar policy engine wired at SetCedarEngine time.
 	// Used by the composite ConfigApplier to apply team policy bundles.
 	cedarEngine *cedarpolicy.Engine
-
-	// fleetModelPrefs is the last-received fleet model preferences.
-	// Protected by mu.
-	fleetModelPrefs *fleet.BundleModelPrefs
 
 	// skillStore + skillRegistry are wired at boot time via SetSkillRefs so the
 	// compositeConfigApplier can call fleet.ApplyMandatedSkills when a bundle
@@ -315,8 +312,12 @@ func (a *API) StopFleetBackground() {
 	a.fleet.poller = nil
 	a.fleet.configPoller = nil
 	a.fleet.lockdownWatcher = nil
-	// Clear in-memory caches that are session-scoped.
-	a.fleet.fleetModelPrefs = nil
+	// Clear in-memory caches that are session-scoped. Fleet model prefs
+	// (fleet-enforcement-truth-01PMZ505 WP04) live in
+	// core/rpc/views/llm's package-level store now, not here — clear
+	// them there too, so a signed-out device does not keep enforcing an
+	// allow-list or default model pushed before sign-out.
+	llmview.ClearFleetModelPrefs()
 	a.fleet.telemetryOptIns = nil
 	pipeline := a.fleet.otlpPipeline
 	a.fleet.mu.Unlock()
@@ -712,7 +713,7 @@ func (a *API) FleetHealth(ctx context.Context) (FleetHealthView, error) {
 // section of the bundle to the appropriate sub-system:
 //   - cedar_delta   → cedarpolicy.Engine.SetTeamBundle
 //   - mcp_allowlist → recipes.ApplyFleetAllowlist
-//   - model_prefs   → stored in fleetState.fleetModelPrefs
+//   - model_prefs   → llmview.ApplyFleetModelPrefs (core/rpc/views/llm)
 //
 // The kameas_ml_weight_urls bundle section is intentionally ignored: the
 // fleet-hosted-LLM / kameas-ml surface was removed
@@ -756,18 +757,16 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 
 	// Model prefs.
 	//
-	// fleet-enforcement-truth-01PMZ505 WP02: the copy into fleetModelPrefs
-	// below has no reader today (FleetModelPrefs() has zero callers — a
-	// copy into another struct is not consumption, per the sweep
-	// doctrine). Until WP04 wires a real consumer (ProviderAllowlist /
-	// DefaultModel reaching an observable branch), a bundle carrying
-	// model_prefs must not ack clean either — same defect shape as
-	// cedar_delta above.
+	// fleet-enforcement-truth-01PMZ505 WP04: DefaultModel and
+	// ProviderAllowlist now reach real branches —
+	// llmview.ApplyFleetModelPrefs installs them into the package-level
+	// store core/rpc/views/llm.ListProviders (filters the list),
+	// StartStream (blocks an excluded profile) and
+	// profileKindAndModel (seeds DefaultModel, D-3) read. WP02's
+	// stored-and-unread-with-an-error state is gone; this is the real
+	// consumer, mirroring the mcp_allowlist section immediately above.
 	if b.ModelPrefs != nil {
-		a.state.mu.Lock()
-		a.state.fleetModelPrefs = b.ModelPrefs
-		a.state.mu.Unlock()
-		errs = append(errs, fmt.Errorf("fleet/config: model_prefs present but no consumer wired yet (tracked: fleet-enforcement-truth-01PMZ505 WP04)"))
+		llmview.ApplyFleetModelPrefs(b.ModelPrefs.DefaultModel, b.ModelPrefs.ProviderAllowlist)
 	}
 
 	// Weight URLs (kameas_ml_weight_urls): intentionally ignored — the
@@ -798,17 +797,6 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 
 	// Return all errors (FR-012). An empty slice means full success.
 	return errs
-}
-
-// FleetModelPrefs returns the current fleet-managed model preferences, or nil
-// when no bundle has been applied.
-func (a *API) FleetModelPrefs() *fleet.BundleModelPrefs {
-	if a.fleet == nil {
-		return nil
-	}
-	a.fleet.mu.RLock()
-	defer a.fleet.mu.RUnlock()
-	return a.fleet.fleetModelPrefs
 }
 
 // LockdownStatusView is the wire shape returned by FleetLockdownStatus.
