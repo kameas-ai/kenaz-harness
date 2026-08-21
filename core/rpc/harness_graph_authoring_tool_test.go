@@ -312,6 +312,114 @@ nodes:
 	}
 }
 
+// TestGraphAuthoringTool_CreateOnly_UnparseableExistingFile is the
+// regression for the F1 finding of PR #304's independent review.
+//
+// The create-only check used to be a caller-side
+// `LoadGraph(id) == nil` probe. loadGraph returns an ERROR for a file
+// that exists but does not parse, so an existing-but-broken graph read
+// as "does not exist" and was renamed over — the tool returning OK=true
+// and the audit entry recording outcome=permitted with no hint that a
+// file had been replaced. That is the worst case to get wrong: a
+// half-edited work-in-progress is precisely the graph a user is most
+// likely to still want.
+//
+// Falsifiable: revert the os.Stat check in saveGraph to the old
+// LoadGraph probe and this test must fail on the content comparison.
+// TestGraphAuthoringTool_CreateOnly above passes either way — it only
+// covers the parseable-collision case, which is why the bug shipped.
+func TestGraphAuthoringTool_CreateOnly_UnparseableExistingFile(t *testing.T) {
+	api := cedarWiringAPI(t, "")
+	dataDir := api.core.DataDir()
+	if err := api.settingsImpl.Store().SaveGraphAuthoringEnabled(true); err != nil {
+		t.Fatalf("SaveGraphAuthoringEnabled(true): %v", err)
+	}
+
+	id := "zz_unit7_unparseable_existing"
+	path := graphLibraryPath(dataDir, id)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// A user's hand-edited work in progress, mid-breakage.
+	precious := "# the user's hand-edited work in progress\nid: " + id + "\nnodes: [[[ not valid yaml\n"
+	if err := os.WriteFile(path, []byte(precious), 0o644); err != nil {
+		t.Fatalf("seed unparseable graph: %v", err)
+	}
+
+	args, _ := json.Marshal(map[string]string{"id": id, "yaml": graphAuthoringYAML(id)})
+	res := callHarnessToolRaw(t, api, "sess-unparseable", harnessmcp.ToolDraftAgentGraph, args)
+	if res.IsError {
+		t.Fatalf("expected a classified refusal, got IsError=true: %s", contentText(res))
+	}
+	if tr := decodeToolResult(t, res); tr.OK {
+		t.Fatal("draft over an existing-but-unparseable file succeeded — create-only was not enforced")
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read after collision attempt: %v", err)
+	}
+	if string(after) != precious {
+		t.Fatalf("the user's unparseable file was OVERWRITTEN.\nbefore:\n%s\nafter:\n%s", precious, after)
+	}
+}
+
+// TestGraphAuthoringTool_CreateOnly_NoEnumerationOracle is the F2
+// regression: with the graph.author dial OFF, an existing id and an
+// absent id must be refused with the SAME message. The old caller-side
+// pre-check ran before the gate, so the two cases returned
+// distinguishable messages and a model could enumerate the user's graph
+// library without any policy ever being consulted.
+//
+// Falsifiable: move the create-only check back above the gate in
+// saveGraph and the two refusal messages diverge.
+func TestGraphAuthoringTool_CreateOnly_NoEnumerationOracle(t *testing.T) {
+	api := cedarWiringAPI(t, "")
+	dataDir := api.core.DataDir()
+
+	// Seed an existing graph while the dial is ON, then turn it OFF.
+	if err := api.settingsImpl.Store().SaveGraphAuthoringEnabled(true); err != nil {
+		t.Fatalf("SaveGraphAuthoringEnabled(true): %v", err)
+	}
+	existing := "zz_unit7_oracle_existing"
+	args, _ := json.Marshal(map[string]string{"id": existing, "yaml": graphAuthoringYAML(existing)})
+	if res := callHarnessToolRaw(t, api, "sess-oracle", harnessmcp.ToolDraftAgentGraph, args); res.IsError || !decodeToolResult(t, res).OK {
+		t.Fatalf("seeding draft failed: IsError=%v", res.IsError)
+	}
+	if _, err := os.Stat(graphLibraryPath(dataDir, existing)); err != nil {
+		t.Fatalf("seeded graph not on disk: %v", err)
+	}
+	if err := api.settingsImpl.Store().SaveGraphAuthoringEnabled(false); err != nil {
+		t.Fatalf("SaveGraphAuthoringEnabled(false): %v", err)
+	}
+
+	reasonFor := func(id string) string {
+		t.Helper()
+		a, _ := json.Marshal(map[string]string{"id": id, "yaml": graphAuthoringYAML(id)})
+		res := callHarnessToolRaw(t, api, "sess-oracle", harnessmcp.ToolDraftAgentGraph, a)
+		if res.IsError {
+			t.Fatalf("id=%s: expected a classified refusal, got IsError=true: %s", id, contentText(res))
+		}
+		tr := decodeToolResult(t, res)
+		if tr.OK {
+			t.Fatalf("id=%s: draft succeeded with the graph.author dial OFF", id)
+		}
+		// Compare the REASON, not the whole message: the message
+		// echoes back the id the model itself supplied, so a
+		// whole-string comparison always differs and proves nothing.
+		if _, reason, found := strings.Cut(tr.Message, "was refused: "); found {
+			return reason
+		}
+		return tr.Message
+	}
+
+	gotExisting := reasonFor(existing)
+	gotAbsent := reasonFor("zz_unit7_oracle_absent")
+	if gotExisting != gotAbsent {
+		t.Fatalf("the refusal reason leaks whether an id exists — an enumeration oracle.\n existing: %q\n absent:   %q", gotExisting, gotAbsent)
+	}
+}
+
 // zz_ac010_fakeLLM answers with one tool call carrying a distinctive
 // argument VALUE, so AC-010 can assert the value never reaches the
 // materialized YAML while the argument KEY and tool name do.

@@ -41,7 +41,7 @@ detection rather than in reminders.
 
 ## Schema review for v0.68.0
 
-628 lines, 52 ledger rows, high-water `event-log/0106-events-fts-sync` —
+744 lines, 52 ledger rows, high-water `event-log/0106-events-fts-sync` —
 **byte-identical to `v0.67.0/dump.sql`**.
 
 Correct and expected: v0.68.0 shipped four missions (Bedrock tool

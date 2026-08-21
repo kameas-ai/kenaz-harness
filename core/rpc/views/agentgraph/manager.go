@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -442,10 +443,29 @@ func (m *Manager) saveGraph(ctx context.Context, spec GraphSpec, initiator strin
 	if dir == "" {
 		return errors.New("agentgraph: data dir not configured; cannot persist")
 	}
+	full := filepath.Join(dir, sanitizeGraphFilename(spec.ID))
+	// Create-only for non-user saves (E-008). Deliberately os.Stat on
+	// the resolved path rather than "does LoadGraph succeed": an
+	// existing file that fails to PARSE is exactly the case the old
+	// caller-side check got wrong, and exactly the case where
+	// overwriting costs a user the most — a half-edited graph they
+	// were in the middle of fixing. See GraphExistsError.
+	//
+	// Placed after the graph.author gate on purpose: refusing here
+	// before the gate let a model with the dial OFF distinguish
+	// "already exists" from "forbid policy matched" and enumerate the
+	// library. A user save is unaffected — the editor overwrites by
+	// design.
+	if initiator != "user" {
+		if _, statErr := os.Stat(full); statErr == nil {
+			return &GraphExistsError{ID: spec.ID}
+		} else if !errors.Is(statErr, fs.ErrNotExist) {
+			return fmt.Errorf("agentgraph: stat %q: %w", spec.ID, statErr)
+		}
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // application data dir
 		return fmt.Errorf("agentgraph: mkdir: %w", err)
 	}
-	full := filepath.Join(dir, sanitizeGraphFilename(spec.ID))
 	tmp := full + ".tmp"
 	if err := os.WriteFile(tmp, payload, 0o644); err != nil { //nolint:gosec // user data
 		return fmt.Errorf("agentgraph: write: %w", err)

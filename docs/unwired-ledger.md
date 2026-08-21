@@ -63,6 +63,35 @@ mission's spec §1.4 and its `research/escalations.md` E-004 for the
 corrected list and for why "per gate" overstated the
 coverage this sentence used to claim unconditionally.
 
+### The draft tool promises a review path served mode does not have
+
+**Found**: 2026-08-21, by the independent review of PR #304 (finding F3).
+**Owner**: alec. **Ungated** — no existing gate can see a contradiction
+between a tool description and a route's availability.
+
+`harness_write_draft_agent_graph` tells the model the draft stays inert
+*"until a human opens it in the graph editor and saves it."*
+`cmd/harness-served/main.go:204` calls `rpc.New`, so the harness-self server
+is constructed in served mode and the tool is reachable during a served
+chat turn. In the **same PR**, Z707 WP03 boundary-panels `/agentgraph`,
+`/agentgraph/edit/:id` and `/agentgraph/run/:runId` under served mode, and
+all twelve `Graph_*` bindings sit in the forward gap allowlist
+(`scripts/ci/allowlists/i15-serve-dispatch-gap.txt`).
+`NotAvailableInServedMode.vue`'s own copy says the served user "often has
+no desktop harness at all."
+
+So in served mode the model can produce drafts nobody in that deployment
+can open, review or run, while being told a review path exists. Two
+missions landing together, each correct alone, contradicting each other at
+the seam — which is the class of defect only integration finds.
+
+**Owed**: either an `isServedMode()`-aware refusal in the draft handler, or
+a tool description that does not promise the editor. Not fixed in #304
+because the right answer is a product call: served mode may well want graph
+authoring with a different review surface, and silently refusing would
+remove a capability rather than stop a lie.
+
+
 ### Declined gate — 2026-08-18 · "An RPC's async contract vs. its caller's await sequence" — NOT BUILDABLE
 
 `docs/dead-code-audit-2026-08-16.md` §5 owed a gate for the class that

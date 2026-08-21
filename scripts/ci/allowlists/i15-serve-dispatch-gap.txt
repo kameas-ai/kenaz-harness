@@ -23,11 +23,24 @@
 # revision (55029354 / v0.64.0): plan.md's out-of-band check #1 says "if
 # the numbers differ, the branch base is not what this spec was written
 # against — stop and re-derive, do not adjust the allowlist to fit." They
-# differ (v0.65.0/v0.66.0/v0.67.0 landed 21 more bindings and one more
-# dispatch case between the spec's citation and this promotion): spec
-# cites 447 bindings / 35 served / 417 gap; this run measured 449 / 35 /
-# 419. The two extra bindings and matching two extra gap entries are
-# unrelated to this mission — re-derived, not forced to 417.
+# differ (v0.65.0/v0.66.0/v0.67.0 landed more bindings and dispatch cases
+# between the spec's citation and this promotion): the spec cites 447
+# bindings / 35 served / 417 gap.
+#
+# CORRECTED 2026-08-21 (F5, independent review of PR #304). This block
+# previously read "this run measured 449 / 35 / 419" and called that a
+# fresh run against the branch HEAD. It was a fresh run against the
+# WP02 AUTHORING base (8ffd0766, v0.67.0) — not against the merged
+# branch. The merge brought in Sessions_SaveScrollPosition and
+# Sessions_LoadScrollPosition as BOTH a binding and a dispatch case, so
+# the true figures on the merged HEAD are:
+#
+#   Desktop bindings: 451   Serve-handled: 37   Forward gap: 419
+#
+# The gap is unchanged at 419 because the two additions cancel, which is
+# why the entry list below is still exactly correct. Corrected anyway:
+# leaving a stale number under a "stop and re-derive" trip-wire trains
+# the next reader to ignore the trip-wire.
 #
 # CLASSIFICATION STATUS: every entry below is `untriaged` per spec §5.7's
 # five-class taxonomy (unrouted / boundary-panelled / gated /

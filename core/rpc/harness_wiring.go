@@ -397,19 +397,6 @@ func (a *graphAuthorAdapter) DraftAgentGraph(ctx context.Context, id, yaml strin
 		return harness.GraphDraftOutcome{}, errors.New("agentgraph: manager not configured")
 	}
 
-	// Create-only (E-008): a collision with an existing user OR bundled
-	// graph is refused before the validator or the gate ever run, and
-	// before anything reaches disk — this tool cannot overwrite or
-	// delete a graph. LoadGraph checks the user library first, then
-	// the bundled set, so both collision classes are caught here.
-	if _, err := a.api.LoadGraph(ctx, id); err == nil {
-		a.emitDraftAttempt(ctx, id, "", 0, "refused", "id already exists (create-only)")
-		return harness.GraphDraftOutcome{
-			OK:           false,
-			DeniedReason: fmt.Sprintf("id %q already exists; this tool is create-only and cannot overwrite it", id),
-		}, nil
-	}
-
 	// Parsed independently of SaveGraph purely to report node_kinds/
 	// node_count on the audit kind even when SaveGraph itself refuses
 	// before reaching the gate. A parse failure here just means the
@@ -436,6 +423,18 @@ func (a *graphAuthorAdapter) DraftAgentGraph(ctx context.Context, id, yaml strin
 		}
 		a.emitDraftAttempt(ctx, id, nodeKinds, nodeCount, "refused", "validation_failed")
 		return harness.GraphDraftOutcome{OK: false, Issues: issues}, nil
+	}
+
+	// Create-only refusal (E-008). Raised inside saveGraph at the write
+	// seam, after the gate — see GraphExistsError for why it is not a
+	// caller-side LoadGraph probe any more.
+	var gee *graphview.GraphExistsError
+	if errors.As(saveErr, &gee) {
+		a.emitDraftAttempt(ctx, id, nodeKinds, nodeCount, "refused", "id already exists (create-only)")
+		return harness.GraphDraftOutcome{
+			OK:           false,
+			DeniedReason: fmt.Sprintf("id %q already exists; this tool is create-only and cannot overwrite it", id),
+		}, nil
 	}
 
 	var pde *cedar.PolicyDeniedError
