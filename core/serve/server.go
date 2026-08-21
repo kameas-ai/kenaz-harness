@@ -731,6 +731,41 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 	case "Projects_List":
 		return s.api.Projects().List(ctx)
 
+	// Sessions_ResolveAutonomy — a read on session state the served build
+	// already owns (folds global → project → session autonomy layers).
+	// Ported per served-mode-is-a-real-mode-01PMZ707 WP04. NOTE: this does
+	// NOT make SessionHeader.vue's plan-mode badge appear — no producer
+	// emits a plan-mode event on desktop either (NG7); porting the read
+	// closes the lie in the seed, not the missing badge.
+	case "Sessions_ResolveAutonomy":
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Sessions_ResolveAutonomy: bad params: " + err.Error())
+		}
+		return s.api.Sessions().ResolveAutonomy(ctx, p.ID)
+
+	// Sessions_SuggestTitle — runs a model call the served build can already
+	// make (LLM_StartStream is served), and the whole "suggest a title"
+	// flow completes inside the VM. Ported per WP04.
+	case "Sessions_SuggestTitle":
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Sessions_SuggestTitle: bad params: " + err.Error())
+		}
+		return s.api.Sessions().SuggestTitle(ctx, p.ID)
+
+	// Config_GetFlags — a side-effect-free read (env-derived flags only, no
+	// settings store or database access) whose absence made every flag read
+	// silently fall back to a hardcoded default. Ported per WP04, through
+	// the SAME rpc.ComputeFeatureFlags() projection the desktop binding
+	// uses so this is not a second hand-maintained flag list.
+	case "Config_GetFlags":
+		return rpc.ComputeFeatureFlags(), nil
+
 	// Auth_State returns the current in-VM auth state for the served frontend.
 	// Privacy: no token bytes are included in the response.
 	case "Auth_State":

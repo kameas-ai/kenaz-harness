@@ -16,6 +16,8 @@ import AttachmentRow from '@/components/contexts/AttachmentRow.vue';
 import AttachmentTreePicker from '@/components/contexts/AttachmentTreePicker.vue';
 import NewSessionDialog from '@/shell/NewSessionDialog.vue';
 import ArtifactPreview from '@/views/artifacts/ArtifactPreview.vue';
+import { useServedMode } from '@/lib/useServedMode';
+import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import type {
   Artifact,
   ArtifactScope,
@@ -29,6 +31,17 @@ import type {
 const client = useHarnessClient();
 const route = useRoute();
 const router = useRouter();
+
+// served-mode-is-a-real-mode-01PMZ707 WP04 (E-705). This view's very
+// first read on mount — Projects_Get — is unrouted in served mode, and so
+// is nearly everything below it (Contexts_*, Attachments_*, Artifacts_*,
+// Memory_*, ProjectSync_*). The previous state already surfaced an
+// honest `errorMsg` rather than fake data (load()'s catch below), but a
+// raw ServedUnsupportedError string is not the specific, actionable copy
+// the boundary panel demands, and this is functionally the same class of
+// fully-unported view WP03/WP05 already panel. Boundary-panelling the
+// whole view is the answer E-705 asked to record.
+const servedMode = useServedMode();
 
 const project = ref<Project | null>(null);
 const sessions = ref<readonly Session[]>([]);
@@ -290,10 +303,12 @@ async function loadAttachments(id: string) {
 }
 
 onMounted(() => {
+  if (servedMode.value) return;
   void load(projectId.value);
 });
 
 watch(projectId, (next) => {
+  if (servedMode.value) return;
   void load(next);
 });
 
@@ -436,7 +451,12 @@ async function onToggleArtifactClass(cls: string, enabled: boolean) {
 </script>
 
 <template>
-  <div class="h-full flex flex-col" data-testid="project-landing">
+  <NotAvailableInServedMode
+    v-if="servedMode"
+    feature="Project pages"
+    reason="Project metadata, sessions, context attachments, artifacts, and memory counts all run through RPCs (Projects_Get, Contexts_*, Attachments_*, Artifacts_*, Memory_*) that are not routed in served mode."
+  />
+  <div v-else class="h-full flex flex-col" data-testid="project-landing">
     <CanvasHead
       number="08"
       section="PROJECT"

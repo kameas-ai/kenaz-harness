@@ -4442,6 +4442,21 @@ export function createServedHarnessClient(opts?: {
         }
         return Promise.resolve();
       },
+
+      // resolveAutonomy — a read on session state the served build already
+      // owns (served-mode-is-a-real-mode-01PMZ707 WP04). Porting this read
+      // does NOT make SessionHeader.vue's plan-mode badge appear: no
+      // producer emits a plan-mode event on desktop either, so the badge
+      // stays hidden either way (NG7). This closes the seed's honesty
+      // problem, not the missing badge.
+      resolveAutonomy: (id: string) =>
+        transport.call<ResolvedAutonomy>('Sessions_ResolveAutonomy', { id }),
+
+      // suggestTitle — runs a model call the served build can already make
+      // (LLM_StartStream is served); the whole flow completes inside the
+      // VM. Ported per WP04.
+      suggestTitle: (id: string) =>
+        transport.call<string>('Sessions_SuggestTitle', { id }),
     },
 
     confirm: {
@@ -4591,6 +4606,16 @@ export function createServedHarnessClient(opts?: {
         }),
       listPending: () =>
         transport.call<PermissionRequest[]>('Permissions_ListPending'),
+    },
+
+    config: {
+      ...base.config,
+
+      // getFlags — a side-effect-free read whose absence made every
+      // feature-flag read in a served workbench silently fall back to a
+      // hardcoded default, the exact class of lie this mission exists to
+      // kill (served-mode-is-a-real-mode-01PMZ707 WP04).
+      getFlags: () => transport.call<FeatureFlagInfo[]>('Config_GetFlags'),
     },
   };
 }

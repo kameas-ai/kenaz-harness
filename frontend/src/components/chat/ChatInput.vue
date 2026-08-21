@@ -31,6 +31,7 @@ import { useDropZone } from '@vueuse/core';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import { isServedMode } from '@/lib/useServedMode';
 import { useConnectionState } from '@/lib/useConnectionState';
+import { ServedUnsupportedError } from '@/lib/errors';
 import type {
   ContentBlock,
   CostEstimate,
@@ -346,15 +347,26 @@ const costLabel = computed(() => {
 // Default true — assumes enabled until the settings RPC returns. On false,
 // the paperclip button and drop overlay are hidden and drag-drop is disabled.
 // (multimodal-io-01KQ8TDF WP08 / FR-022 / FR-023 / FR-024)
+//
+// served-mode-is-a-real-mode-01PMZ707 WP04: Settings_GetMultimodalInput is
+// gated (unported) in served mode, so the read above always rejects with
+// ServedUnsupportedError there. A ServedUnsupportedError means "hide it",
+// not "assume on" — the old bare `catch {}` kept the default `true`, so an
+// operator who turned multimodal input OFF still got a paperclip in every
+// workbench, and every attach then died at the unported Attachments_Add.
+// A genuine desktop RPC failure (settings store unreadable, etc.) is a
+// different class of problem and keeps the previous best-effort behaviour
+// of leaving the default in place, since Attachments_* IS wired on desktop.
 const multimodalEnabled = ref(true);
 
-// Fetch the multimodal toggle on mount. Best-effort: if the RPC fails we
-// keep the default (true) so the attachment surface stays available.
 onMounted(async () => {
   try {
     multimodalEnabled.value = await client.settings.getMultimodalInput();
-  } catch {
-    // Non-fatal: keep default (true = enabled).
+  } catch (err) {
+    if (err instanceof ServedUnsupportedError) {
+      multimodalEnabled.value = false;
+    }
+    // Otherwise non-fatal: keep the default (true = enabled).
   }
 });
 
@@ -844,6 +856,22 @@ const slashAutocompleteRef = ref<InstanceType<typeof SlashAutocomplete> | null>(
 );
 
 onMounted(() => {
+  // served-mode-is-a-real-mode-01PMZ707 WP04: the `/` slash menu is
+  // GATED, not ported. Slash_Execute runs local hooks/scripts a served VM
+  // does not have, so porting Slash_List alone would render a working
+  // dropdown over a command that always fails to run — "half a flow",
+  // the exact shape WP04's bar forbids. Skip the fetch entirely under
+  // served mode so the affordance never appears, rather than relying on
+  // the list resolving empty (which reads as "no commands configured"
+  // instead of "unavailable here").
+  //
+  // Correction to the spec's citation: `client.slash.list()` had NO
+  // caller when the mission was scoped (dead-code-audit-2026-08-18.md:1383,
+  // read against 55029354/v0.64.0); this call site was added afterward
+  // (branch HEAD has moved past that citation). The disposition is
+  // unchanged — gate, not port — because Slash_Execute still cannot
+  // complete inside a VM; the caller's existence doesn't change the bar.
+  if (served) return;
   // Best-effort fetch — when the harness boots without a wired
   // slashcmd registry (test harness path), the surface returns an
   // empty list. The composer renders nothing and stays usable.
@@ -872,6 +900,10 @@ interface SlashState {
 }
 
 const slashState = computed<SlashState | null>(() => {
+  // Gated per WP04 (see the onMounted fetch skip above) — never open the
+  // dropdown under served mode, rather than opening one over an
+  // always-empty list.
+  if (served) return null;
   const trimmed = internal.value.trimStart();
   if (!trimmed.startsWith('/')) return null;
   const body = trimmed.slice(1);

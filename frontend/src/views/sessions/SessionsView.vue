@@ -850,8 +850,20 @@ async function onNewSessionDialogClose() {
 }
 
 // ── branches sidebar (agent-kernel-graph; Bundle B WP09) ──────────────
+//
+// served-mode-is-a-real-mode-01PMZ707 WP04: GATED, not ported. Ten
+// Branches_* methods back this surface (list/merge/abandon in
+// BranchSidebar.vue, recommendModel/create in CreateBranchModal.vue); a
+// branch flow that can list but not merge/create is exactly "half a
+// flow", and porting ten methods is a mission in its own right, not a WP.
+// `<BranchSidebar>`'s mount below is gated on `servedMode`; this function
+// is ALSO a no-op there so the other entry points that call it
+// (MessageBubble's "branch from this turn", BranchSuggestionBanner,
+// LongSessionNudge) fail closed rather than opening a modal whose submit
+// would hit the unported RPC.
 const createBranchModalOpen = ref(false);
 function openCreateBranchModal() {
+  if (servedMode) return;
   createBranchModalOpen.value = true;
 }
 function closeCreateBranchModal() {
@@ -867,6 +879,10 @@ const branchFromTurnError = ref<string | null>(null);
 const branchFromTurnLoading = ref(false);
 
 async function onBranchFromTurn(message: { id?: string }) {
+  // Gated per WP04 (see openCreateBranchModal above) — the button that
+  // fires this is itself hidden under served mode (MessageBubble.vue), but
+  // this stays a no-op too rather than relying on the render gate alone.
+  if (servedMode) return;
   const parentSessionId = sessionId.value;
   const parentMessageId = message.id;
   if (!parentSessionId || !parentMessageId) return;
@@ -1842,7 +1858,7 @@ async function onShared() {
             </button>
           </div>
           <BranchSidebar
-            v-if="hasSession"
+            v-if="hasSession && !servedMode"
             :parent-session-id="sessionId"
             class="hidden lg:flex"
             @open="onBranchOpen"

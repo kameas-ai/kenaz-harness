@@ -59,6 +59,20 @@
 # precision) or block the gate's promotion on 419 judgement calls E-2
 # explicitly says not to require up front.
 #
+# UPDATED 2026-08-21 (served-mode-is-a-real-mode-01PMZ707 WP04). Three
+# entries removed — ported, not reclassified: Config_GetFlags,
+# Sessions_ResolveAutonomy, Sessions_SuggestTitle now have a serve
+# dispatch case (core/serve/server.go) and a servedMethods entry
+# (core/serve/methods.go), per spec §5.4's "port" column. The live
+# figures after this change:
+#
+#   Desktop bindings: 451   Serve-handled: 40   Forward gap: 416
+#
+# WP04 also GATED (kept in this file, not ported) the paperclip/drag-drop
+# (7 Attachments_*), the `/` slash menu (Slash_Execute, Slash_List), and
+# all ten Branches_*, per spec §5.4's "gate" column — those entries are
+# untouched here; WP07 assigns them the `gated` class once it runs.
+#
 # Grouped by desktop-binding PREFIX (the nearest proxy for a feature
 # surface / caller-site neighbourhood available without doing WP07's
 # work), not strictly alphabetically within a prefix in every case, so a
@@ -156,7 +170,6 @@
 "Compliance_ArchiveNow"
 "Compliance_SetRetention"
 "Compliance_Status"
-"Config_GetFlags"
 "Context_List"
 "Context_StartStream"
 "Context_StopStream"
@@ -333,7 +346,6 @@
 "Sessions_DeleteWithOptions"
 "Sessions_GetAutonomy"
 "Sessions_Reorder"
-"Sessions_ResolveAutonomy"
 "Sessions_ResumeMessage"
 "Sessions_SaveAsArtifact"
 "Sessions_SetAutonomy"
@@ -341,7 +353,6 @@
 "Sessions_StartStream"
 "Sessions_StopCapture"
 "Sessions_StopStream"
-"Sessions_SuggestTitle"
 "SessionSync_DeleteRemote"
 "SessionSync_ResumeFrom"
 "SessionSync_Toggle"
