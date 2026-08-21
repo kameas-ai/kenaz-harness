@@ -780,3 +780,5 @@ func (m *Manager) moveFidelityEnabled() bool {
 	}
 	return dial()
 }
+
+func zzGateProbeMoveAssign(m *Message) { m.moveKind = MoveKindFinal }

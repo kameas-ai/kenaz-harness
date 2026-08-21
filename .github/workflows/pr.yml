@@ -142,6 +142,16 @@ jobs:
         # touching this script; a naive Go-only version over-reports 3x.
         run: bash scripts/ci/check-output-ports.sh
 
+      - name: declared-output-ports guard
+        # The reverse direction of the guard above: every manifest-
+        # declared output port on a concrete node kind must have a Go
+        # writer, or an allowlist entry
+        # (scripts/ci/allowlists/i16-declared-unwritten-output-ports.txt).
+        # approval-node-01PMZC12 UNIT-9 — the gate-extension obligation
+        # for approval.yaml's `rejected` port, which had a declared type
+        # and no writer until UNIT-4 (docs/dead-code-audit-2026-08-18.md:775).
+        run: bash scripts/ci/check-declared-output-ports.sh
+
       - name: seam-implementers guard
         # Every interface in core/agentgraph/seams.go has >=1 non-test
         # implementer or a //wiring:deferred directive. Uses the Go type

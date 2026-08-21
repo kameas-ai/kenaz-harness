@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -400,6 +401,55 @@ func TestValidate_AcceptsExtraDials(t *testing.T) {
 	}
 	if err := Validate(g); err == nil {
 		t.Errorf("extra dial should fail without WithExtraDials")
+	}
+}
+
+// TestValidate_ApprovalPolicyLabelRefusedAtLoad is AC-07
+// (approval-node-01PMZC12 UNIT-5, FR-008): a graph declaring
+// policy_label on an approval node is refused at load with an error
+// naming the blocker, and a graph without the attr loads unchanged —
+// the negative arm, without which the validator could be
+// satisfiable by rejecting every approval graph outright.
+func TestValidate_ApprovalPolicyLabelRefusedAtLoad(t *testing.T) {
+	t.Parallel()
+
+	withLabel := `spec_version: "1"
+id: approval_policy_label
+entrypoints: [a]
+nodes:
+  - id: a
+    kind: approval
+    attrs:
+      prompt: "Ship it?"
+      policy_label: "requires-legal-review"
+`
+	g, err := LoadYAML([]byte(withLabel))
+	if err != nil {
+		t.Fatalf("LoadYAML: %v", err)
+	}
+	err = Validate(g)
+	if err == nil {
+		t.Fatalf("expected Validate to refuse a graph declaring policy_label")
+	}
+	if !strings.Contains(err.Error(), "policy_label") {
+		t.Errorf("error %q does not name the blocked attr", err.Error())
+	}
+
+	withoutLabel := `spec_version: "1"
+id: approval_no_policy_label
+entrypoints: [a]
+nodes:
+  - id: a
+    kind: approval
+    attrs:
+      prompt: "Ship it?"
+`
+	g2, err := LoadYAML([]byte(withoutLabel))
+	if err != nil {
+		t.Fatalf("LoadYAML: %v", err)
+	}
+	if err := Validate(g2); err != nil {
+		t.Errorf("a graph without policy_label must load unchanged; got err=%v", err)
 	}
 }
 

@@ -1353,6 +1353,20 @@ hand every session write access to provider credentials and settings,
 which is why the mission's own sequencing rule (see its `tasks.md`) is
 non-negotiable: no commit may make `harnessServer.Server()` reachable
 from a session until AC-002 passes.
+attached) is **deferred to a dedicated follow-on mission**, not executed
+in `mcp-connector-lifecycle-01PMMC01` (that mission's own WP07 is
+explicitly out of scope for the attach — see its spec). **Owner of the
+attach execution:** **escalated 2026-08-19 as G-9**
+(`docs/escalation-register-2026-08-19.md` Part 8), per ruling F-1 — this row
+names a real blocker but no person, which is exactly what F-1 forbids. G-9's
+recommended default is to name alec and date it: the product decision (attach)
+was already ruled 2026-08-18, so no capability question is open. **This row was
+missed by F-1's count of sixteen**, which anchored on the bold
+`**Owner:** unassigned` form — see Part 8 §8.3-P2. **Blocker:** the visibility seam
+and `EmbeddedCedar` wiring do not exist yet (spec §6 option A cost items
+2 and 3) — attaching without them would hand every session write access
+to provider credentials and settings, which is why this is not a
+same-commit fix.
 
 Two small pieces of this finding were resolved immediately, regardless
 of the attach mission's timeline, because they were unambiguous under

@@ -2403,6 +2403,19 @@ func (b *Bindings) Graph_Resume(runID, askResponse string) error {
 	}
 	return b.api.Graph().Resume(b.ctx(), runID, askResponse)
 }
+
+// Graph_ResolveApproval resolves a paused run's pending approval node
+// (approval-node-01PMZC12 UNIT-3, FR-003). Cedar-gated and audited
+// inside the API layer; refuses when what's pending is an ask, not an
+// approval.
+func (b *Bindings) Graph_ResolveApproval(runID, nodeID string, approved bool, reason string) error {
+	defer sentry.WrapBinding("Graph_ResolveApproval")()
+	// fleet-emergency-lockdown-01NDFSEX12 WP04: freeze graph resume during lockdown.
+	if err := middleware.CheckLockdown(); err != nil {
+		return err
+	}
+	return b.api.Graph().ResolveApproval(b.ctx(), runID, nodeID, approved, reason)
+}
 func (b *Bindings) Graph_CancelRun(runID string) error {
 	defer sentry.WrapBinding("Graph_CancelRun")()
 	return b.api.Graph().CancelRun(b.ctx(), runID)

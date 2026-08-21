@@ -2041,7 +2041,7 @@ func New(c *core.Core, opts ...Option) *API {
 	a.convMgr = newConversationManager(c)
 	a.corpusMgr = newCorpusManager(c, embedder)
 	var compactionPipeline *compaction.Pipeline
-	a.graphMgr, compactionPipeline = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore, settingsImpl, a.cedarEngine, a.hookRunner)
+	a.graphMgr, compactionPipeline = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore, settingsImpl, a.cedarEngine, a.hookRunner, a.auditImpl)
 	// Wire the same FR-041 pipeline instance the kernel runs onto the
 	// Settings RPC surface, so edits made through
 	// core/rpc/views/compaction reach the live kernel path instead of
@@ -6753,7 +6753,7 @@ func newCorpusManager(c *core.Core, embedder corememory.Embedder) *corecorpus.Ma
 // library and runs in-memory graphs; user-graph persistence is the
 // only feature lost when DataDir is empty.
 func newGraphManager(c *core.Core) *graphview.Manager {
-	mgr, _ := newGraphManagerWithDeps(c, nil, nil, nil, nil, nil, nil, nil, nil)
+	mgr, _ := newGraphManagerWithDeps(c, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	return mgr
 }
 
@@ -6958,6 +6958,13 @@ func newGraphManagerWithDeps(
 	// was read from three call sites, but nothing ever constructed the
 	// one implementation.
 	hookRunner *hooks.Runner,
+	// auditImpl is a.auditImpl — the Settings audit ring. Threaded here
+	// so Graph_ResolveApproval's resolution lands in the same audit
+	// surface every other gated RPC writes to
+	// (approval-node-01PMZC12 UNIT-3). nil is a valid boot state (see
+	// New()'s auditImpl construction failure path); wrapped nil-safely
+	// below.
+	auditImpl *audit.API,
 ) (*graphview.Manager, *compaction.Pipeline) {
 	dataDir := ""
 	if c != nil {
@@ -7157,6 +7164,13 @@ func newGraphManagerWithDeps(
 		graphview.WithAuthoringEnabled(func() bool {
 			return graphAuthoringEnabledFromSettings(settingsImpl)
 		}),
+		// Graph_ResolveApproval's Cedar gate (approval-node-01PMZC12
+		// UNIT-3) reuses the SAME gate the node-executor policy checks
+		// above use — one process-shared engine, not a second private
+		// copy (the exact bug WP05's hoist fixed for every other gate
+		// site).
+		graphview.WithCedarGate(graphCedarGate),
+		graphview.WithAuditEmitter(approvalAuditEmitter{impl: auditImpl}),
 	}
 
 	mgr, err := graphview.NewManager(mgrOpts...)
@@ -8378,6 +8392,39 @@ func (e confirmAuditEmitter) Emit(_ context.Context, ev contextaudit.Event) erro
 		Category:  "PERMISSION",
 		Subject:   string(ev.Kind),
 		Trailing:  fmt.Sprintf("payload_bytes=%d", len(ev.Payload)),
+	})
+	return nil
+}
+
+// approvalAuditEmitter implements contextaudit.Emitter for
+// KindApprovalResolved (approval-node-01PMZC12 UNIT-3/UNIT-4),
+// forwarding into the rpc/views/audit ring buffer like every other
+// gated-RPC emitter in this file.
+//
+// Unlike confirmAuditEmitter's byte-count-only Trailing, the payload
+// here (run id, node id, approved, auto, approver, reason) is already
+// the redaction-safe summary a graph author sees in the run trace, so
+// it is decoded and rendered directly rather than reduced to a size.
+type approvalAuditEmitter struct {
+	impl *audit.API
+}
+
+func (e approvalAuditEmitter) Emit(_ context.Context, ev contextaudit.Event) error {
+	if e.impl == nil {
+		return nil
+	}
+	trailing := fmt.Sprintf("payload_bytes=%d", len(ev.Payload))
+	var p contextaudit.ApprovalResolvedPayload
+	if err := json.Unmarshal(ev.Payload, &p); err == nil {
+		trailing = fmt.Sprintf("run=%s node=%s approved=%t auto=%t approver=%q reason=%q",
+			p.RunID, p.NodeID, p.Approved, p.Auto, p.Approver, p.Reason)
+	}
+	e.impl.Push(audit.Entry{
+		ID:        fmt.Sprintf("approval-resolved-%d", ev.TS.UnixNano()),
+		Timestamp: ev.TS.UTC().Format(time.RFC3339Nano),
+		Category:  "PERMISSION",
+		Subject:   string(ev.Kind),
+		Trailing:  trailing,
 	})
 	return nil
 }

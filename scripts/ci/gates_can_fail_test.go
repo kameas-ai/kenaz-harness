@@ -1402,3 +1402,48 @@ func TestCSSTokensGate_SameVerdictFromAnyCWD(t *testing.T) {
 		t.Fatalf("check-css-tokens.mjs crashed with ENOENT instead of reporting a verdict:\n%s", outRoot)
 	}
 }
+
+// TestCheckDeclaredOutputPorts_IgnoresPortsGenWrites is I16's true
+// negative (approval-node-01PMZC12 UNIT-9, AC-11): a port written ONLY
+// through ports_gen.go's generated ToPortValues() — which writes every
+// declared port of a kind unconditionally, whether or not the real
+// executor ever populates the field — must NOT be treated as evidence
+// of a real writer. Without this the gate would land as a repo-wide
+// false-positive generator, since ports_gen.go trivially "writes"
+// every port that exists.
+//
+// Plants a fake write in ports_gen.go (excluded from the scan by
+// filename) alongside a manifest declaring the SAME port with no real
+// executor writer, and asserts the gate still reports it — proving the
+// exclusion is load-bearing, not decorative. Not in the table above:
+// it needs two coordinated plants (manifest + ports_gen.go), which the
+// single-file plant() helper does not support.
+func TestCheckDeclaredOutputPorts_IgnoresPortsGenWrites(t *testing.T) {
+	root := repoRoot(t)
+
+	manifestPath := filepath.Join(root, "core/agentgraph/nodes/manifests/zz_gate_probe_gen.yaml")
+	manifestContent := "schema_version: \"1\"\nmanifest_version: \"1.0.0\"\nid: zz_gate_probe_gen\nextends: write\ndisplay_name: ZZ Gate Probe Gen\ndescription: \"I16 true-negative probe: a port written only via ports_gen.go must not count.\"\nexecutor: agentgraph.ExecZzGateProbeGen\ndispatch: graph\nports:\n  inputs:\n    - { name: in, type: any }\n  outputs:\n    - { name: zz_gate_probe_gen_port, type: any }\nbudget: none\n"
+	cleanupManifest := plant(t, manifestPath, manifestContent, "")
+	defer cleanupManifest()
+
+	genPath := filepath.Join(root, "core/agentgraph/ports_gen.go")
+	// Shaped exactly like a real ToPortValues assignment
+	// (`pv["k"] = o.K`) so a naive grep for the write pattern would
+	// count it — the whole point of excluding this file by name.
+	genAppend := "\n// zzGateProbeGenGeneratedOnlyWrite exists ONLY to prove\n" +
+		"// check-declared-output-ports.sh (I16) ignores ports_gen.go —\n" +
+		"// see TestCheckDeclaredOutputPorts_IgnoresPortsGenWrites.\n" +
+		"func zzGateProbeGenGeneratedOnlyWrite(pv PortValues) {\n" +
+		"\tpv[\"zz_gate_probe_gen_port\"] = nil\n" +
+		"}\n"
+	cleanupGen := plant(t, genPath, "", genAppend)
+	defer cleanupGen()
+
+	code, out := runGate(t, "check-declared-output-ports.sh", root)
+	if code == 0 {
+		t.Fatalf("check-declared-output-ports.sh exited 0 — a port written only in ports_gen.go was accepted as having a real writer.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "zz_gate_probe_gen_port") {
+		t.Fatalf("check-declared-output-ports.sh failed, but not for the planted port — output does not mention zz_gate_probe_gen_port.\noutput:\n%s", out)
+	}
+}

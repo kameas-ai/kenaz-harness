@@ -3,6 +3,7 @@ package cedar
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -773,6 +774,37 @@ func CheckExportSession(ctx context.Context, g Gate, sessionID, format string) e
 		SessionUID(sessionID),
 		map[cedar.String]cedar.Value{
 			cedar.String("format"): cedar.String(format),
+		},
+	)
+	return enforce(d)
+}
+
+// CheckApprovalResolve is the gate-hook helper for the
+// Graph_ResolveApproval RPC (approval-node-01PMZC12 UNIT-3, FR-003).
+// Returns nil on Allow / NotApplicable; *PolicyDeniedError on Deny.
+// Default-allow when g is nil (pre-boot / test posture) — a human
+// resolving their own paused run is not blocked by the absence of a
+// policy engine.
+//
+// This gate covers ONLY the human-verb path
+// (Bindings.Graph_ResolveApproval). The no-watcher fail-closed timeout
+// and the auto_approve_window_seconds timeout (UNIT-4/UNIT-5) resolve
+// server-side and do not call this — they are the safety mechanism a
+// Cedar misconfiguration must not be able to block (spec.md §5.3: a
+// missing approver must not read as "approved", and symmetrically a
+// gate denial must not be able to leave a run parked forever when the
+// system itself decided to fail closed).
+func CheckApprovalResolve(ctx context.Context, g Gate, runID, nodeID string, approved bool) error {
+	if g == nil {
+		return nil
+	}
+	d := g.Evaluate(
+		ctx,
+		UserUID(),
+		ActionApprovalResolve,
+		ApprovalUID(runID, nodeID),
+		map[cedar.String]cedar.Value{
+			cedar.String("approved"): cedar.String(fmt.Sprintf("%t", approved)),
 		},
 	)
 	return enforce(d)
