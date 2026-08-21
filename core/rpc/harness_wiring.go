@@ -18,6 +18,7 @@ import (
 	harness "github.com/kameas-ai/kenaz-harness/core/mcp/builtin/harness"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
+	projectsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/projects"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/sessions"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/session"
@@ -279,6 +280,28 @@ func (a sessionCreatorAdapter) CreateSession(ctx context.Context, name, kind str
 	}, nil
 }
 
+// projectWriterAdapter wraps projectsview.ProjectsAPI and implements
+// harness.ProjectWriter (handleCreateProject's dependency).
+//
+// harness-self-attach-01PMHS01 UNIT-6: before this adapter existed,
+// buildHarnessManagers never set Managers.ProjectsWriter, so
+// harness_write_create_project always returned errNotConfigured — one
+// of the 13 canonical tools, silently broken for every caller. It was
+// unreachable (and so unobserved) before this mission's attach gave
+// the server a production caller at all; TestHarnessSelfAttach_AC001_
+// OnboardingSessionReachesRealHandlers is what surfaced it.
+type projectWriterAdapter struct{ api projectsview.ProjectsAPI }
+
+var _ harness.ProjectWriter = projectWriterAdapter{}
+
+func (a projectWriterAdapter) CreateProject(ctx context.Context, name, description string) (string, error) {
+	p, err := a.api.Create(ctx, name, description)
+	if err != nil {
+		return "", err
+	}
+	return p.ID, nil
+}
+
 // harnessServer wraps a harness.Server and exposes its concrete type for
 // the in-process transport (WP09). Held on rpc.API so future WPs can
 // attach the server to the MCP pool without re-constructing it.
@@ -298,6 +321,7 @@ func buildHarnessManagers(
 	sessionsAPI sessions.SessionsAPI,
 	sessionMgr *session.Manager,
 	cat *recipes.MergedCatalog,
+	projectsAPI projectsview.ProjectsAPI,
 ) harness.Managers {
 	m := harness.Managers{}
 
@@ -319,5 +343,22 @@ func buildHarnessManagers(
 	if cat != nil {
 		m.Recipes = recipesAdapter{cat: cat}
 	}
+	if projectsAPI != nil {
+		// harness-self-attach-01PMHS01 UNIT-6: previously unwired — see
+		// projectWriterAdapter's doc comment.
+		m.ProjectsWriter = projectWriterAdapter{api: projectsAPI}
+	}
+	// Managers.Status (StatusReporter) and Managers.RecipesWriter
+	// (RecipeWriter) remain unwired: no adapter exists yet for either.
+	// harness_read_get_status and harness_write_install_mcp_recipe are
+	// therefore still errNotConfigured for every caller — a real,
+	// pre-existing gap this unit's attach makes reachable (and so
+	// observable) for the first time. Not fixed here: StatusReporter
+	// needs a projects count PLUS an "installed MCP servers" count PLUS
+	// a policy count, none of which has an obvious single source on
+	// this call path yet, and RecipeWriter's idOrConfig contract (a
+	// curated-registry id OR a raw config blob, ToolsAPI.InstallRecipe
+	// wants id+env+config separately) needs a real design decision, not
+	// a guessed adapter. Flagged in the mission report as a follow-up.
 	return m
 }

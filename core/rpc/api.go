@@ -3415,8 +3415,14 @@ func New(c *core.Core, opts ...Option) *API {
 
 	// Harness-self MCP server (WP04/WP05). Build with real adapters so
 	// the onboarding agent can call list_settings, list_providers, etc.
-	// The server is held on a.harnessServer; the in-process transport
-	// wiring (WP09) will attach it to the session pool.
+	// The server is held on a.harnessServer, wrapped with real audit
+	// emission (AC-009(b)) and registered into a.dispatchPool's
+	// in-process transport arm (harness-self-attach-01PMHS01 UNIT-5)
+	// below — the ATTACH itself (UNIT-6): a session's tool discovery
+	// and dispatch reach it exactly like any stdio/http/sse recipe.
+	// Containment (UNIT-4, above — a.toolPermsResolver) is already live
+	// by this point in New(), so this attach is not a security
+	// regression; see the sequencing rule in plan.md.
 	{
 		var sessionMgr *session.Manager
 		if c != nil {
@@ -3428,13 +3434,36 @@ func New(c *core.Core, opts ...Option) *API {
 			a.sessionsAPI,
 			sessionMgr,
 			mergedCat,
+			a.projectsAPI,
 		)
-		a.harnessServer = &harnessServer{
-			srv: harnessmcp.RegisterAll(harnessmcp.NewServer(), hManagers),
-		}
+		srv := harnessmcp.RegisterAll(harnessmcp.NewServer(), hManagers)
+		srv = harnessmcp.WithAudit(srv, &harnessSelfAuditBridge{impl: a.auditImpl})
+		a.harnessServer = &harnessServer{srv: srv}
 		logging.L().Info("harness.self.server.ready",
 			"tools", len(a.harnessServer.srv.Tools()),
 		)
+		// The server name MUST stay harnessmcp.ServerName ("harness-self"):
+		// the three embedded Cedar policies (UNIT-2) match on
+		// context.server_name == "harness-self" (C-008) — a mismatch
+		// makes every policy NotApplicable and silently ungates the
+		// write tools. Using the constant on both sides (here and in
+		// harnessmcp.NewServer, which sets it via toolserver.NewServer)
+		// means this can't drift independently; TestHarnessSelfServerName
+		// PinsAgainstCedarPolicyText pins it against the actual policy
+		// file bytes too.
+		if a.dispatchPool != nil {
+			// a.harnessServer.Server() — not the srv field directly —
+			// so this is genuinely harnessServer.Server()'s first
+			// production caller (core/rpc/harness_wiring.go:290 was
+			// zero-caller before this unit; model-authored-graphs-
+			// 01PMGA01 UNIT-7 was blocked on exactly that).
+			hTransport := harnessmcp.NewTransport(a.harnessServer.Server())
+			if err := a.dispatchPool.RegisterInProcess(context.Background(), harnessmcp.ServerName, hTransport); err != nil {
+				logging.L().Error("harness.self.server.attach_failed", "err", err.Error())
+			}
+		} else {
+			logging.L().Error("harness.self.server.attach_failed", "err", "dispatchPool is nil")
+		}
 	}
 
 	// Context-bootstrap engine (context-bootstrap-harness-integration).
@@ -4752,6 +4781,12 @@ func newLLMStack(
 		Stdio: mcpPool,
 		HTTP:  httpPool,
 		SSE:   ssePool,
+		// InProcess wires the fourth transport arm
+		// (harness-self-attach-01PMHS01 UNIT-5). New() registers the
+		// harness-self server into it once both this pool AND the
+		// server exist (New's harnessServer construction block, which
+		// runs after a.dispatchPool = stack.dispatchPool below).
+		InProcess: dispatch.NewInProcessSubPool(),
 	})
 	// Built-in tools registry. The chassis registers websearch + bash
 	// here when Settings toggles are ON. The BuiltinPool merges them
@@ -8279,6 +8314,55 @@ func (e *searchAuditEmitter) Emit(_ context.Context, kind string, attrs map[stri
 		Category:  "SEARCH",
 		Subject:   kind,
 		Trailing:  b.String(),
+	})
+}
+
+// harnessSelfAuditBridge implements harness.AuditSink
+// (core/mcp/builtin/harness/audit.go) for the harness-self MCP server
+// (harness-self-attach-01PMHS01 UNIT-6, AC-009(b)). Routes every
+// harness_read_*/harness_write_* dispatch — emitted by
+// harnessmcp.WithAudit as KindHarnessSelfToolCalled — to the real
+// audit ring instead of the noopAudit default WithAudit falls back to
+// when its sink argument is nil.
+//
+// Category "MCP": harness-self tools ARE MCP tool calls (dispatched
+// through the in-process transport arm exactly like a stdio/http/sse
+// recipe's tools/call), and impl.go's categoryForKind already buckets
+// "mcp."-prefixed event kinds there — reusing it here means the
+// AuditView's existing MCP filter surfaces these rows for free instead
+// of introducing a category nothing in the frontend renders yet.
+//
+// Modelled on searchAuditEmitter above: Entry has no map-valued field,
+// so payload (tool_name, success, duration_ms — never raw arguments;
+// WithAudit already redacts those before this bridge ever sees them)
+// is rendered into Trailing as a deterministic (sorted-key) "k=v k=v"
+// string.
+type harnessSelfAuditBridge struct {
+	impl *audit.API
+}
+
+func (b *harnessSelfAuditBridge) Emit(_ context.Context, k string, payload map[string]any) {
+	if b == nil || b.impl == nil {
+		return
+	}
+	keys := make([]string, 0, len(payload))
+	for pk := range payload {
+		keys = append(keys, pk)
+	}
+	sort.Strings(keys)
+	var sb strings.Builder
+	for i, pk := range keys {
+		if i > 0 {
+			sb.WriteByte(' ')
+		}
+		fmt.Fprintf(&sb, "%s=%v", pk, payload[pk])
+	}
+	b.impl.Push(audit.Entry{
+		ID:        fmt.Sprintf("harness-self-%d", time.Now().UnixNano()),
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Category:  "MCP",
+		Subject:   k,
+		Trailing:  sb.String(),
 	})
 }
 
