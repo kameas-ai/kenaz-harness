@@ -2490,6 +2490,16 @@ func New(c *core.Core, opts ...Option) *API {
 			var err error
 			sched, err = wfsched.New(context.Background(), wfsched.Config{
 				Store: schedStore,
+				// automation-actually-runs-01PMZ404 UNIT-2: wfSchedDispatcher
+				// drives cron ticks and RunNow through the same live engine
+				// (a.workflowsAPI.RunWithOptions) the manual Run button uses.
+				// DispatcherFunc — not a plain Dispatcher field — because
+				// a.workflowsAPI is constructed 77 lines below this call, in
+				// this same function; the closure captures *API and resolves
+				// a.workflowsAPI lazily on each fire, once boot has finished.
+				DispatcherFunc: func() wfsched.Dispatcher {
+					return &wfSchedDispatcher{api: a}
+				},
 			})
 			if err != nil {
 				logging.L().Warn("wf.scheduler.init_failed", "err", err.Error())
