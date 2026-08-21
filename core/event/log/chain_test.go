@@ -1,3 +1,13 @@
+// AC-PI-2 (audit-that-tells-the-truth-01PMZA10 WP-PI): drives
+// NewMemoryBackend() deliberately — VerifyChain's own hash-walking
+// logic is backend-agnostic (it only calls Backend.SelectByTimeRange),
+// so exercising it over the in-memory reference implementation is a
+// legitimate, cheap unit test of the algorithm, not a persistence
+// claim. The real-store path (UNIT-7's routing in
+// core/rpc/views/audit.API.VerifyChain) is exercised against real
+// sqlite by core/rpc/views/audit/store_integration_test.go's
+// TestVerifyChain_WithStore_Verified and
+// TestVerifyChain_WithStore_TamperedRow_Identified.
 package log
 
 import (

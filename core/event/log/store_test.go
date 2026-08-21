@@ -1,3 +1,8 @@
+// AC-PI-2 (audit-that-tells-the-truth-01PMZA10 WP-PI): this file drives
+// NewMemoryBackend() deliberately — it tests the in-memory REFERENCE
+// implementation itself (the thing WP03's differential test compares
+// SQLBackend against), not a persistence claim. sqlbackend_test.go is
+// where the real-sqlite assertions live.
 package log
 
 import (

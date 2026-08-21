@@ -1,3 +1,10 @@
+// AC-PI-2 (audit-that-tells-the-truth-01PMZA10 WP-PI): drives
+// NewMemoryBackend() deliberately — this exercises Filter's own
+// predicate logic (kind matching, verbose skip, free-text contains),
+// which is identical code regardless of backend. The SQL-reproduction
+// of the same semantics (impl.go's Filter reading a real *eventlog.Store)
+// is covered by core/rpc/views/audit/store_integration_test.go's
+// TestFilter_StoreAndRingAgree, driven against real sqlite.
 package log
 
 import (
