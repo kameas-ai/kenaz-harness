@@ -237,6 +237,78 @@ describe('SessionsView (chat-ui)', () => {
     w.unmount();
   });
 
+  // controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-8 (WP13,
+  // FR-020, AC-035): the long-session nudge's token arm used to read
+  // session.lastUsage.promptTokens — a PER-TURN snapshot overwritten by
+  // every session.usage.updated event — against a threshold documented
+  // as CUMULATIVE. This proves the nudge now reads the real cumulative
+  // aggregate (Sessions_GetUsage) instead: a low per-turn event must NOT
+  // suppress a nudge the cumulative total already crossed.
+  //
+  // Mutation: revert _nudgeCumulativePromptTokens to read
+  // session.lastUsage.value?.promptTokens directly. Must fail — the
+  // low-value per-turn event below would leave the nudge's token arm at
+  // 100, under the 50,000 default, and the banner would not appear.
+  it('long-session nudge fires on cumulative tokens, not the per-turn usage snapshot', async () => {
+    // Two human turns — well under the 30-turn default, so only the
+    // token arm can fire.
+    const messages: Message[] = [
+      makeMessage({ id: 'q1', role: 'user', content: 'hi' }),
+      makeMessage({ id: 'a1', role: 'assistant', content: 'hello' }),
+      makeMessage({ id: 'q2', role: 'user', content: 'how are you' }),
+      makeMessage({ id: 'a2', role: 'assistant', content: 'well, thanks' }),
+    ];
+    const providers: Provider[] = [
+      { id: 'anthropic-p-1', name: 'Anthropic', tier: 'cloud', kind: 'anthropic', model: 'claude' },
+    ];
+    const { w } = await mountWithRoute('#s-1', {
+      sessions: {
+        list: async () => [],
+        get: async (id: string) => ({ id, name: 'Long chat', createdAt: '', updatedAt: '' }),
+        create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => messages,
+        listMessagesActive: async () => ({ messages, sweptCount: 0 }),
+        listMessagesAll: async () => ({ messages, sweptCount: 0 }),
+        appendMessage: async (id: string, role: string, content: string) =>
+          makeMessage({ id: 'new', sessionId: id, role: role as Message['role'], content }),
+        sendMessageWithBlocks: async () => makeMessage({ id: 'b' }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+        setSystemPrompt: async () => undefined,
+        moveToProject: async () => undefined,
+        // Cumulative aggregate is ABOVE the 50,000 default threshold.
+        getUsage: async () => ({ promptTokens: 60_000, completionTokens: 0, totalTokens: 60_000, costUsd: 0, costSource: 'unknown' as const, messageCount: 4, pricingDataDate: '' }),
+        saveAsArtifact: async () => ({ id: '', sessionId: '', title: '', mimeType: 'text/plain', contentHash: '', byteSize: 0, source: 'user_pin' as const, sourceRef: { messageId: '', offset: 0, length: 0 }, scopeKind: 'session' as const, createdAt: '' }),
+      } as any,
+      llm: {
+        listProviders: async () => providers,
+        startStream: async () => 'sub-llm',
+        stopStream: async () => undefined,
+      } as any,
+    });
+
+    // A per-turn usage snapshot arrives with a LOW promptTokens value —
+    // this is the number the pre-fix code fed the nudge directly, and
+    // it alone would never cross the threshold.
+    fakeRuntime.emit('session.usage.updated', {
+      sessionId: 's-1',
+      promptTokens: 100,
+      completionTokens: 20,
+      totalTokens: 120,
+      costUsd: 0.001,
+      costSource: 'provider',
+    });
+    await flushPromises();
+
+    expect(w.find('[data-testid="long-session-nudge-banner"]').exists()).toBe(true);
+    w.unmount();
+  });
+
   it('renders the Artifacts tab and filters its list to the active session', async () => {
     const messages: Message[] = [
       makeMessage({ id: 'q', role: 'user', content: 'How are you?' }),

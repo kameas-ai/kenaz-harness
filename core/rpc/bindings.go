@@ -252,6 +252,18 @@ func (b *Bindings) Sessions_LoadDraft(id string) (string, error) {
 	defer sentry.WrapBinding("Sessions_LoadDraft")()
 	return b.api.Sessions().LoadDraft(b.ctx(), id)
 }
+
+// Sessions_SaveScrollPosition and Sessions_LoadScrollPosition
+// (controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-8 WP13,
+// FR-021) mirror the SaveDraft/LoadDraft pair above.
+func (b *Bindings) Sessions_SaveScrollPosition(id string, pos int64) error {
+	defer sentry.WrapBinding("Sessions_SaveScrollPosition")()
+	return b.api.Sessions().SaveScrollPosition(b.ctx(), id, pos)
+}
+func (b *Bindings) Sessions_LoadScrollPosition(id string) (int64, error) {
+	defer sentry.WrapBinding("Sessions_LoadScrollPosition")()
+	return b.api.Sessions().LoadScrollPosition(b.ctx(), id)
+}
 func (b *Bindings) Sessions_SetSystemPrompt(id, content, kind string) error {
 	defer sentry.WrapBinding("Sessions_SetSystemPrompt")()
 	return b.api.Sessions().SetSystemPrompt(b.ctx(), id, content, kind)
@@ -2893,15 +2905,27 @@ func (b *Bindings) Onboarding_AcceptHandoffHint(hint onboardingview.HandoffHint)
 }
 
 // Onboarding_GetHandoffHint returns the most recently stored HandoffHint.
-// The account step reads this to pre-fill the email field.
+// NARROWED (controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-14
+// WP19, C2V-22, 2026-08-21): no account step exists in the frontend
+// today and this binding has zero `.vue` callers.
 func (b *Bindings) Onboarding_GetHandoffHint() (onboardingview.HandoffHint, error) {
 	defer sentry.WrapBinding("Onboarding_GetHandoffHint")()
 	return b.api.Onboarding().GetHandoffHint(b.ctx())
 }
 
-// Onboarding_RecordProgress records a named onboarding step as complete.
-// The frontend calls this after each milestone so the Fleet shared checklist
-// can be kept in sync (best-effort; errors are non-fatal).
+// Onboarding_RecordProgress records a named onboarding step as complete
+// so the Fleet shared checklist can be kept in sync (best-effort; errors
+// are non-fatal).
+//
+// NARROWED (controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-14
+// WP19, C2V-23, 2026-08-21): this used to say "the frontend calls this
+// after each milestone" — it does not; zero `.vue` callers. The Go
+// implementation (core/rpc/views/onboarding/impl.go) calls it
+// internally at its own milestone transitions
+// (ProgressStepProviderConfigured, ProgressStepAccountConnected,
+// ProgressStepGuidedActionShown, ProgressStepBootstrapRun). The binding
+// is still exported on WailsBindingsLike/HarnessClient and is not dead
+// — it is exercised, just not from where the doc claimed.
 //
 // DEFERRED FLEET INTEGRATION (WP07): the Fleet progress-mirror endpoint is not
 // yet deployed. Recording is local-only until the fleet side ships.

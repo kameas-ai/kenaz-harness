@@ -102,7 +102,7 @@ state. pr.yml's test-go step now scopes to `./core/... ./cmd/... .`, not
 
 - All UI state lives in `$USER_CONFIG_DIR/kenaz-harness/settings.json` with a top-level `schemaVersion: 1` integer.
 - **CI gate**: `bash scripts/ci/check-single-persistence-file.sh` (asserts a single canonical persistence filename in `core/rpc/views/settings/impl.go` — **not** `core/rpc/settings.go`, which no longer exists; pointing at the old path is what made this gate a no-op).
-- The Go-side test (when WP13 lands) covers schemaVersion migrations + corruption recovery.
+- **`schemaVersion` does not gate any migration today** (narrowed by `controls-and-readouts-that-tell-the-truth-01PMZ808` WP06, 2026-08-19). Three sites default-backfill a zero value to `1`; nothing compares it against any other value, and there is no migration dispatcher. `justify(blocker: "no settings-migration dispatcher; needs the settings.json upgrade fixture WP-PI builds", owner: alec, date: 2026-08-19)`.
 
 ## Adjacent guardrails
 

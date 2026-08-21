@@ -565,6 +565,8 @@ function makeSessionsStub(
     sendMessageWithBlocks: async () => makeMessage({}),
     saveDraft: async () => undefined,
     loadDraft: async () => '',
+    saveScrollPosition: async () => undefined,
+    loadScrollPosition: async () => 0,
     setSystemPrompt: async () => undefined,
     moveToProject: async () => undefined,
     resumeMessage: async () => ({ subscriptionId: '', originalMessageId: '' }),

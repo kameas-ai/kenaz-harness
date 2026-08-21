@@ -86,24 +86,83 @@ type Config struct {
 	VectorBackend VectorBackend
 
 	// WAL toggles WAL mode. Defaults to true. Only set false in tests
-	// that explicitly need rollback-journal mode.
+	// that explicitly need rollback-journal mode. Wired
+	// (controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-16
+	// WP21, 2026-08-21): core/storage/sqlite/sqlite.go's DSN now reads
+	// this field instead of a hardcoded WAL literal.
 	WAL *bool
 
 	// ForeignKeys toggles foreign-key enforcement. Defaults to true.
+	//
+	// NARROWED (controls-and-readouts-that-tell-the-truth-01PMZ808
+	// UNIT-16 WP21, spec R-12/D-6, 2026-08-21): despite the field's
+	// name, foreign-key enforcement is UNCONDITIONAL —
+	// core/storage/sqlite/sqlite.go's DSN always sets
+	// `_pragma=foreign_keys(1)` and does not read this field.
+	// Deliberately not honoured: the sessions/0327 and sessions/0332
+	// scratch-table rebuild migrations depend on foreign_keys=1 being
+	// unconditional to preserve CASCADE behaviour
+	// (migration_0327_test.go, artifacts_rebuild_test.go both assert
+	// "the production DSN always sets foreign_keys(1)"). Honouring
+	// this field would open a supported one-field path to run those
+	// rebuilds without CASCADE — the exact hazard
+	// docs/unwired-ledger.md records as having already destroyed user
+	// data unrecoverably on schema <=326 installs, and which the
+	// v0.63.1 repair reaches again on such installs. The field is
+	// retained on Config for forward compatibility (a future storage
+	// backend without that migration history could honour it safely)
+	// and is guarded by TestConfig_ForeignKeys_False_StillEnforced.
 	ForeignKeys *bool
 
 	// EventBufferSize is the BootstrapEventSink ring-buffer capacity.
 	// Defaults to 1024 if zero.
+	//
+	// NOT WIRED (controls-and-readouts-that-tell-the-truth-01PMZ808
+	// UNIT-16 WP21, re-derived from FR-030, 2026-08-21): found while
+	// investigating FR-030's original "WIRE Config.WAL and
+	// Config.EventBufferSize" prescription. This field's only would-be
+	// consumer, core/storage/internal/events.NewBuffered, has zero
+	// non-test callers ANYWHERE — not because this field is unread,
+	// but because concreteDB.sink (core/storage/sqlite/sqlite.go) is
+	// itself write-only: SetEventSink assigns it and nothing in
+	// core/storage/sqlite ever calls sink.Emit. Constructing a
+	// events.NewBuffered(cfg.EventBufferSize) at Open() and assigning
+	// it to sink would make this field LOOK wired (a real constructor
+	// call site) while remaining exactly as unreachable as today —
+	// the same "wiring link one over a broken link two" trap spec
+	// §1.3 names for BranchAdvisorDefaultModel, and strictly worse
+	// than the inert dial this sweep exists to find. `justify(blocker:
+	// "concreteDB.sink has no Emit call site anywhere in
+	// core/storage/sqlite — the bootstrap swap-and-drain handshake
+	// events/sink.go's own package doc describes was never connected
+	// on the emit side", owner: alec, date: 2026-08-21)`.
 	EventBufferSize int
 
 	// SecretsBackend resolves the encryption key. May be nil when
 	// encryption is disabled. TODO(secrets-keychain): swap to the real
 	// backend once the secrets mission merges.
+	//
+	// NARROWED (controls-and-readouts-that-tell-the-truth-01PMZ808
+	// UNIT-16 WP21, 2026-08-21): zero non-test readers today —
+	// core/storage/sqlite/sqlite.go's Open hard-rejects
+	// EncryptionStatusEnabled with storage.ErrNotImplemented before
+	// any secrets code would run, so this field cannot yet be reached
+	// regardless of value. Consistent with the TODO above: this
+	// activates when the secrets-keychain mission actually wires
+	// encryption-at-rest, not before.
 	SecretsBackend SecretsBackend
 }
 
 // applyDefaults returns cfg with zero-valued fields filled in. It does not
 // mutate the receiver.
+//
+// UNUSED DUPLICATE (controls-and-readouts-that-tell-the-truth-01PMZ808
+// UNIT-16 WP21, 2026-08-21): zero callers, including tests.
+// core/storage/sqlite.Open calls its own package-level applyDefaults,
+// not this method — that copy is what production runs. If the two
+// definitions ever drift, patch the sqlite package's copy; this one is
+// dead weight kept for whichever future backend needs the same
+// defaulting logic without importing core/storage/sqlite.
 func (cfg Config) applyDefaults() Config {
 	out := cfg
 	if out.VectorBackend == "" {
@@ -129,6 +188,8 @@ func (cfg Config) applyDefaults() Config {
 }
 
 // validate returns the first violation in cfg.
+//
+// UNUSED DUPLICATE — see applyDefaults's note above; same disposition.
 func (cfg Config) validate() error {
 	if cfg.DataDir == "" {
 		return errors.New("storage: Config.DataDir required")

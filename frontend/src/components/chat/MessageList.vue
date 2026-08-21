@@ -120,6 +120,16 @@ const props = defineProps<{
    * (per-message-token-meter-01KR3PQR)
    */
   showTokenMeter?: boolean;
+  /**
+   * The persisted scroll offset to restore on mount (or on switching to
+   * a session whose history was already loaded once). Undefined / 0
+   * falls back to the pre-existing scroll-to-bottom behaviour — a
+   * brand-new session (or one that has never had a position saved)
+   * should still open at the latest message.
+   * (controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-8 WP13,
+   * FR-021.)
+   */
+  initialScrollPosition?: number;
 }>();
 
 const emit = defineEmits<{
@@ -156,6 +166,15 @@ const emit = defineEmits<{
    * client.sessions.resumeMessage to continue the interrupted stream.
    */
   (e: 'resume', messageId: string): void;
+  /**
+   * Debounced scroll-position readout. The parent (SessionsView.vue)
+   * owns session identity and the client, so it debounce-persists this
+   * via client.sessions.saveScrollPosition — MessageList stays
+   * presentational and only reports the raw scrollTop.
+   * (controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-8 WP13,
+   * FR-021.)
+   */
+  (e: 'scroll-position', pos: number): void;
 }>();
 
 function artifactsFor(messageId: string): readonly Artifact[] {
@@ -247,6 +266,12 @@ function scrollToBottom() {
   stickToBottom.value = true;
 }
 
+// controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-8 (WP13,
+// FR-021): debounce the scroll-position emit so a fast scroll gesture
+// doesn't fire an RPC per event. 400ms mirrors useSession.ts's existing
+// saveDraft debounce (the sibling this WP's own doc points at as the
+// pattern to mirror).
+let scrollPositionDebounce: ReturnType<typeof setTimeout> | undefined;
 function onScroll() {
   const el = scrollEl.value;
   if (!el) return;
@@ -256,11 +281,46 @@ function onScroll() {
   } else {
     stickToBottom.value = false;
   }
+  if (scrollPositionDebounce) clearTimeout(scrollPositionDebounce);
+  const pos = el.scrollTop;
+  scrollPositionDebounce = setTimeout(() => {
+    emit('scroll-position', pos);
+  }, 400);
 }
 
 onMounted(() => {
   void nextTick(scrollToBottom);
 });
+
+// FR-021's restore half is a WATCHER, not onMounted-only: the parent
+// (SessionsView.vue) fetches the persisted position with
+// client.sessions.loadScrollPosition ASYNCHRONOUSLY, and it can resolve
+// after this component has already mounted (the parent has no way to
+// block the `:key`-triggered remount on that fetch without adding a
+// loading-state flicker of its own). onMounted alone would silently use
+// whichever value the prop happened to hold at mount time — 0, if the
+// fetch hadn't resolved yet — and never look again. Applies at most
+// once per component instance (appliedInitialScrollPosition), so a
+// later unrelated change to the prop doesn't yank the view out from
+// under a user who has since scrolled themselves. A genuinely-zero
+// value (no saved position — a new session) is a deliberate no-op: the
+// onMounted scrollToBottom above already produced the correct fallback.
+const appliedInitialScrollPosition = ref(false);
+watch(
+  () => props.initialScrollPosition,
+  (restore) => {
+    if (appliedInitialScrollPosition.value) return;
+    if (!restore || restore <= 0) return;
+    appliedInitialScrollPosition.value = true;
+    void nextTick(() => {
+      const el = scrollEl.value;
+      if (!el) return;
+      el.scrollTop = restore;
+      stickToBottom.value = isNearBottom(el);
+    });
+  },
+  { immediate: true },
+);
 
 const isStreaming = computed(() => (props.streamingMessages ?? []).length > 0);
 

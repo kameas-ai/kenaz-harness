@@ -438,6 +438,19 @@ const breadcrumbParentDeleted = computed(() => {
   return !sessionList.value.some((s) => s.id === parentId);
 });
 
+// controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-8 (WP13,
+// FR-019 / AC-032): ancestorCount was never passed, so the ">1 levels
+// deep" expander and readout were permanently unreachable dead code.
+// branchDepth is pre-computed server-side (core/rpc/views/sessions/
+// api.go's Session.BranchDepth doc: "pre-computed by iterative ancestor
+// walks capped at 32") and LeftRail.vue already proves it arrives
+// populated on session-list rows. turnNumber has no source (nothing
+// converts a message id to a turn ordinal) and stays unpassed — see the
+// prop doc narrowing on BranchBreadcrumb.vue.
+const breadcrumbAncestorCount = computed(
+  () => session.session.value?.branchDepth,
+);
+
 const isStreaming = computed(
   () => session.streamSubscriptionId.value !== null,
 );
@@ -1216,21 +1229,83 @@ function formatSize(bytes: number): string {
 // docstring for why the row count it replaced was wrong
 // (model-moves-transcript-01PMCH01 WP04).
 const _nudgeTurnCount = computed(() => countTurns(visibleMessages.value));
-const _nudgePromptTokens = computed(() => session.lastUsage.value?.promptTokens ?? 0);
+
+// controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-8 (WP13,
+// FR-020): session.lastUsage.promptTokens is a PER-TURN snapshot,
+// overwritten on every session.usage.updated event (see useSession.ts
+// — correct for the context-window meter above, which wants "how full
+// is the model's context right now"). useLongSessionNudge's threshold
+// is documented as CUMULATIVE prompt tokens; against a per-turn value
+// it essentially never crosses the 50,000 default. Sessions_GetUsage
+// returns the real cumulative aggregate — refetch it whenever a turn
+// completes or the session switches.
+const _nudgeCumulativePromptTokens = ref(0);
+async function refreshNudgeCumulativeUsage() {
+  const id = sessionId.value;
+  if (!id) {
+    _nudgeCumulativePromptTokens.value = 0;
+    return;
+  }
+  try {
+    const usage = await client.sessions.getUsage(id);
+    _nudgeCumulativePromptTokens.value = usage.promptTokens ?? 0;
+  } catch {
+    // Transient RPC failure: keep the last known value rather than
+    // flapping the nudge visibility to zero.
+  }
+}
+watch(() => session.lastUsage.value, () => { void refreshNudgeCumulativeUsage(); });
 
 const longSessionNudge = useLongSessionNudge({
   turnCount: _nudgeTurnCount,
-  promptTokens: _nudgePromptTokens,
+  promptTokens: _nudgeCumulativePromptTokens,
 });
 
 // Reset dismiss state when navigating to a different session.
+// FR-020: SessionsView lives inside Shell.vue's <KeepAlive> with no
+// :key, so this component (and useLongSessionNudge's closure) is never
+// re-instantiated across a session switch. Calling dismiss() here (the
+// pre-fix code) permanently disabled the banner after the very first
+// switch, because `dismissed` was write-once with no way back to
+// false. reset() clears dismissed/shownOnce without tearing down the
+// composable, restoring correct per-session behaviour.
 watch(sessionId, () => {
-  longSessionNudge.dismiss(); // dismiss carries across sessions; re-set by the
-  // composable's internal ref which resets on re-instantiation. Because
-  // SessionsView is kept alive across navigation, we re-create by recreating
-  // the dismissed ref indirectly. Use a stable "last dismissed session" ref
-  // to achieve per-session semantics without full re-mount.
-});
+  longSessionNudge.reset();
+  void refreshNudgeCumulativeUsage();
+}, { immediate: true });
+
+// ── Scroll position (controls-and-readouts-that-tell-the-truth-01PMZ808
+// UNIT-8, WP13, FR-021) ─────────────────────────────────────────────────
+//
+// core/session's SaveScrollPosition + the scroll_position column existed
+// with zero non-test callers. This is the client/binding/serve chain
+// (mirroring SaveDraft) plus the MessageList wiring. `:key="sessionId"`
+// on the <MessageList> mount below forces a remount on session switch
+// (MessageList otherwise persists as the same instance the same way
+// SessionsView itself persists under Shell.vue's KeepAlive), so its
+// onMounted restore logic runs fresh per session rather than only once.
+const messageListInitialScrollPosition = ref(0);
+async function loadInitialScrollPosition() {
+  const id = sessionId.value;
+  if (!id) {
+    messageListInitialScrollPosition.value = 0;
+    return;
+  }
+  try {
+    messageListInitialScrollPosition.value = await client.sessions.loadScrollPosition(id);
+  } catch {
+    messageListInitialScrollPosition.value = 0;
+  }
+}
+watch(sessionId, () => { void loadInitialScrollPosition(); }, { immediate: true });
+
+function onMessageListScrollPosition(pos: number) {
+  const id = sessionId.value;
+  if (!id) return;
+  void client.sessions.saveScrollPosition(id, pos).catch(() => {
+    // Best-effort: a failed persist shouldn't interrupt scrolling.
+  });
+}
 
 // Per-session dismiss: track which session the user dismissed so that
 // navigating to a new session shows the banner fresh.
@@ -1341,6 +1416,7 @@ async function onShared() {
         :parent-session-id="breadcrumbParentSessionId"
         :parent-title="breadcrumbParentTitle"
         :parent-deleted="breadcrumbParentDeleted"
+        :ancestor-count="breadcrumbAncestorCount"
       />
       <!-- Fleet sync toolbar (fleet-context-sync-01NDFSEX15 WP07) -->
       <!-- Only rendered when a session is loaded. -->
@@ -1694,6 +1770,7 @@ async function onShared() {
           style="grid-template-rows: minmax(0, 1fr)"
         >
           <MessageList
+            :key="sessionId"
             :messages="visibleMessages"
             :focus-message-id="searchFocusMessageId"
             :streaming-messages="session.streamingMoves.value"
@@ -1707,12 +1784,14 @@ async function onShared() {
             :swept-count="session.sweptCount.value"
             :archive-days="compactionArchiveDays"
             :show-token-meter="showPerMessageTokenMeter"
+            :initial-scroll-position="messageListInitialScrollPosition"
             @new-session="onNudgeNewSession"
             @remember="onRemember"
             @save-artifact="onSaveArtifactFromMessage"
             @open-artifact="openArtifactPreview"
             @branch-from-turn="onBranchFromTurn"
             @resume="onResumeMessage"
+            @scroll-position="onMessageListScrollPosition"
           />
           <!-- Branch-from-turn failure — rendered below the chat thread
                (FR-003: the error ref was set but never displayed). -->

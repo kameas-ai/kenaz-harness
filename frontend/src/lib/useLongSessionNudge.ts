@@ -48,6 +48,19 @@ export interface UseLongSessionNudgeReturn {
   nudgeVisible: Ref<boolean>;
   /** Permanently hides the banner for the current component lifecycle. */
   dismiss: () => void;
+  /**
+   * Clears dismissed/shownOnce so a fresh session gets its own nudge
+   * lifecycle, WITHOUT tearing down the composable instance itself.
+   * (controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-8 WP13,
+   * FR-020.) The caller (SessionsView.vue) lives inside a `<KeepAlive>`
+   * with no `:key`, so the component — and this composable's closure —
+   * is never re-instantiated across a session switch; calling dismiss()
+   * on session change (the pre-fix behaviour) permanently disabled the
+   * banner for the process lifetime after the very first switch. reset()
+   * is the per-session equivalent of "re-instantiating" without paying
+   * for a real remount.
+   */
+  reset: () => void;
   /** The effective turn threshold (loaded from settings or default). */
   nudgeTurns: Ref<number>;
   /** The effective token threshold (loaded from settings or default). */
@@ -110,5 +123,10 @@ export function useLongSessionNudge(
     dismissed.value = true;
   }
 
-  return { nudgeVisible, dismiss, nudgeTurns, nudgeTokens };
+  function reset() {
+    dismissed.value = false;
+    shownOnce.value = false;
+  }
+
+  return { nudgeVisible, dismiss, reset, nudgeTurns, nudgeTokens };
 }
