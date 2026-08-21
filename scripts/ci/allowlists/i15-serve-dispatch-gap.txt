@@ -197,6 +197,21 @@
 "Elicit_SubmitWizardStep"
 "Fleet_GetTelemetryConsent"
 "Fleet_SetTelemetryConsent"
+# ── approval-node-01PMZC12 UNIT-3, added 2026-08-21 ─────────────────
+# Graph_ResolveApproval — DISPOSITION: boundary panel. NOT untriaged.
+#
+# Served mode boundary-panels every /agentgraph route
+# (served-mode-is-a-real-mode-01PMZ707 WP03), including
+# /agentgraph/run/:runId — the ONLY surface from which a human resolves
+# an approval. A dispatch case would expose a resolve endpoint that no
+# UI in that deployment can reach.
+#
+# Same seam docs/unwired-ledger.md records as open for the
+# graph-authoring tool: served mode can REACH graph capabilities it
+# cannot SHOW. Owner alec. Both entries move together whichever way that
+# ruling goes — porting this verb without porting the run view would be
+# the lie in the other direction.
+"Graph_ResolveApproval"
 "Graph_CancelRun"
 "Graph_CheckEdge"
 "Graph_DeleteGraph"
@@ -499,3 +514,4 @@
 "Workflows_ScheduleNextFire"
 "Workflows_ScheduleRunHistory"
 "Workflows_ScheduleSet"
+

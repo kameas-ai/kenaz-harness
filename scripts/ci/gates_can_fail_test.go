@@ -1447,3 +1447,53 @@ func TestCheckDeclaredOutputPorts_IgnoresPortsGenWrites(t *testing.T) {
 		t.Fatalf("check-declared-output-ports.sh failed, but not for the planted port — output does not mention zz_gate_probe_gen_port.\noutput:\n%s", out)
 	}
 }
+
+// TestNoUnwiredGates_StaleCheckIsPackageAware pins the fix for a
+// false-positive class found on 2026-08-21 during v0.70.0 integration.
+//
+// The stale-entry check matched a BARE symbol name anywhere in the tree.
+// The allowlist carries `core/credstore.WithCedarGate` — genuinely
+// unwired, with a written justification. approval-node-01PMZC12 added an
+// identically named `graphview.WithCedarGate` in a different package and
+// wired it, and the gate declared the credstore entry stale, demanding
+// deletion of a justification that was still true.
+//
+// That is the worst failure mode a gate of this kind has: it does not
+// merely miss something, it actively instructs you to delete the record
+// of a real gap. Deleting the line would have made credstore's unwired
+// gate invisible to the very check that exists to track it.
+//
+// Two directions, both asserted:
+//   - a same-named symbol in ANOTHER package must NOT mark the entry
+//     stale (the false positive)
+//   - a real caller of the entry's OWN package MUST still mark it stale
+//     (the true positive the fix must not trade away)
+func TestNoUnwiredGates_StaleCheckIsPackageAware(t *testing.T) {
+	root := repoRoot(t)
+	const gate = "check-no-unwired-gates.sh"
+
+	// Direction 1: the real tree already contains graphview.WithCedarGate,
+	// wired at core/rpc/api.go, while core/credstore.WithCedarGate stays
+	// allowlisted. A package-blind check fails here.
+	if code, out := runGate(t, gate, root); code != 0 {
+		t.Fatalf("gate must pass on the real tree — a same-named symbol in another package is not staleness (exit %d).\n%s", code, out)
+	}
+
+	// Direction 2: plant a genuine in-package caller. The entry IS stale
+	// now and the gate must say so; otherwise the fix bought a false
+	// negative.
+	probe := filepath.Join(root, "core/credstore/zz_stale_probe.go")
+	content := "package credstore\n\n" +
+		"import \"github.com/kameas-ai/kenaz-harness/core/policy/cedar\"\n\n" +
+		"func zzStaleProbeUsesGate(g cedar.Gate) StoreOption { return WithCedarGate(g, nil) }\n"
+	cleanup := plant(t, probe, content, "")
+	defer cleanup()
+
+	code, out := runGate(t, gate, root)
+	if code == 0 {
+		t.Fatalf("gate passed with a real in-package caller of an allowlisted symbol — the stale check cannot fail.\n%s", out)
+	}
+	if !strings.Contains(out, "STALE") || !strings.Contains(out, "credstore.WithCedarGate") {
+		t.Fatalf("gate failed, but not with the STALE diagnosis for credstore.WithCedarGate:\n%s", out)
+	}
+}

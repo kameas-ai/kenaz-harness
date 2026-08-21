@@ -216,6 +216,22 @@ export namespace agentgraph {
 	        this.specProvenance = source["specProvenance"];
 	    }
 	}
+	export class PendingApproval {
+	    nodeId: string;
+	    prompt: string;
+	    approverRole?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PendingApproval(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.nodeId = source["nodeId"];
+	        this.prompt = source["prompt"];
+	        this.approverRole = source["approverRole"];
+	    }
+	}
 	export class PendingAsk {
 	    nodeId: string;
 	    question: string;
@@ -267,6 +283,7 @@ export namespace agentgraph {
 	    toolCalls: number;
 	    costUsd: number;
 	    pendingAsk?: PendingAsk;
+	    pendingApproval?: PendingApproval;
 	
 	    static createFrom(source: any = {}) {
 	        return new RunStatus(source);
@@ -288,6 +305,7 @@ export namespace agentgraph {
 	        this.toolCalls = source["toolCalls"];
 	        this.costUsd = source["costUsd"];
 	        this.pendingAsk = this.convertValues(source["pendingAsk"], PendingAsk);
+	        this.pendingApproval = this.convertValues(source["pendingApproval"], PendingApproval);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

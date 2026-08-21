@@ -378,8 +378,16 @@ func TestBackgroundTaskComplete_FiresOnceOnTerminal_ZeroWhileRunning(t *testing.
 	// this test); python3 is, and this test's registerBuiltinTools call
 	// has no way to pass a custom allowlist, so python3 stands in for a
 	// slow command.
+	//
+	// -B is load-bearing, not cosmetic: without it CPython writes
+	// __pycache__ bytecode under $HOME/Library/Caches/com.apple.python,
+	// which is OUTSIDE this test's t.TempDir(). That made
+	// check-tests-are-hermetic.sh fail with a sentinel-tree diff listing
+	// nothing but Xcode .pyc files — a real escape, just an unusually
+	// boring one. Any future test that shells out to an interpreter
+	// needs the same treatment.
 	argsJSON, _ := json.Marshal(map[string]any{
-		"command":           `python3 -c "import time; time.sleep(0.3); print('done_marker')"`,
+		"command":           `python3 -B -c "import time; time.sleep(0.3); print('done_marker')"`,
 		"run_in_background": true,
 	})
 	ctx := context.Background()
