@@ -53,7 +53,6 @@ core/acp/transports/uds
 core/agentgraph/internal/recorders
 core/asktemplates
 core/branchadvisor
-core/bundle/channels/localpath
 core/bundle/events
 core/bundle/kinds/testkind
 core/context
