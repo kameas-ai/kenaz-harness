@@ -18,8 +18,6 @@ import (
 // TestKeychainDelete_NotFoundIsSilent asserts that ErrNotFound from a delete
 // is swallowed (the desired post-state is achieved) and no error is returned.
 func TestKeychainDelete_NotFoundIsSilent(t *testing.T) {
-	// Use keyring's in-memory mock.
-	keyring.MockInit()
 	// The key was never set, so delete must return ErrNotFound which
 	// keychainDelete converts to nil.
 	if err := keychainDelete(context.Background(), "test-svc", "missing-key"); err != nil {
@@ -29,7 +27,6 @@ func TestKeychainDelete_NotFoundIsSilent(t *testing.T) {
 
 // TestKeychainSet_SuccessNoError asserts that a successful set returns nil.
 func TestKeychainSet_SuccessNoError(t *testing.T) {
-	keyring.MockInit()
 	if err := keychainSet(context.Background(), "test-svc", "my-key", "my-value"); err != nil {
 		t.Errorf("keychainSet should succeed with mock backend; got %v", err)
 	}
@@ -37,7 +34,6 @@ func TestKeychainSet_SuccessNoError(t *testing.T) {
 
 // TestKeychainDelete_ExistingKeyReturnsNil asserts a present key is deleted cleanly.
 func TestKeychainDelete_ExistingKeyReturnsNil(t *testing.T) {
-	keyring.MockInit()
 	// Plant the key first.
 	if err := keyring.Set("test-svc", "del-key", "v"); err != nil {
 		t.Fatalf("setup: %v", err)

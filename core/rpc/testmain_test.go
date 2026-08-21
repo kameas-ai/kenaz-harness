@@ -23,9 +23,32 @@ import (
 	"testing"
 
 	"github.com/kameas-ai/kenaz-harness/core/logging"
+	"github.com/zalando/go-keyring"
 )
 
 func TestMain(m *testing.M) {
+	// keyring.MockInit() installs go-keyring's in-memory backend by WRITING
+	// a package-level global. Doing it per-test races every goroutine that
+	// READS that global concurrently — and rpc.New starts one: the fleet
+	// ConfigPoller calls fleet.LoadTokens -> keyring.Get() on a ticker.
+	//
+	// This surfaced repeatedly as "TestKeychainDelete_NotFoundIsSilent:
+	// race detected", which reads like a keychain flake and is not one.
+	// Two earlier fixes attacked the wrong half: t.Cleanup(api.Shutdown)
+	// on every API construction site (v0.66.0) and making Syncer.Stop
+	// idempotent. Both were correct in themselves and neither could work,
+	// because cleanup runs when a test ENDS while tests run in PARALLEL —
+	// one test's poller is alive precisely when another calls MockInit.
+	//
+	// Installing the mock once here, before m.Run and therefore before any
+	// test or goroutine exists, removes the concurrent WRITE entirely.
+	// Afterwards every access is a read.
+	//
+	// Safe for the tests that used to call it per-test: they use distinct
+	// service/key pairs and plant whatever they need, so they require the
+	// mock to be INSTALLED, not RESET.
+	keyring.MockInit()
+
 	dir, err := os.MkdirTemp("", "kenaz-rpc-test-logs-*")
 	if err == nil {
 		logging.Configure(dir)

@@ -7,6 +7,7 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
@@ -94,8 +95,29 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 		a.fleet.poller = p
 		p.Start(context.Background())
 	}
-	// Start the config poller lazily.
-	if a.fleet.configPoller == nil {
+	// Background network workers do not run under `go test`.
+	//
+	// The ConfigPoller calls fleet.LoadTokens -> keyring.Get() on a ticker.
+	// go-keyring's mock backend is a package-level global whose provider
+	// pointer AND whose internal map are both unsynchronised, so a poller
+	// alive during a test race any test touching the keyring. That surfaced
+	// for weeks as "TestKeychainDelete/Set...: race detected", which reads
+	// like a keychain flake and is not one.
+	//
+	// Three earlier attempts fixed real but insufficient things:
+	//   - t.Cleanup(api.Shutdown) at all 13 construction sites (v0.66.0)
+	//   - making fleet.Syncer.Stop idempotent (a genuine latent panic)
+	//   - hoisting keyring.MockInit() into TestMain
+	// None could work. Cleanup runs when a test ENDS, but tests run in
+	// PARALLEL — one test's poller is alive exactly while another test
+	// touches the keyring. And MockInit hoisting removed the pointer race
+	// only to expose the map race beneath it.
+	//
+	// The poller has no business running in a unit test at all: it is a
+	// network worker on a ticker. Not starting it removes the whole class
+	// rather than another instance of it. Production is unaffected —
+	// testing.Testing() is false in the shipped binary.
+	if a.fleet.configPoller == nil && !testing.Testing() {
 		applier := &compositeConfigApplier{state: a.fleet}
 		cp := fleet.NewConfigPoller(c, dataDir, applier)
 		a.fleet.configPoller = cp

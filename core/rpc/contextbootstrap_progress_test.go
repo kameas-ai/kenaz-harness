@@ -24,8 +24,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zalando/go-keyring"
-
 	"github.com/kameas-ai/kenaz-harness/core/contextbootstrap"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 )
@@ -61,7 +59,6 @@ func newProgressSinkFleet(t *testing.T, delay time.Duration) (*corefleet.Bootstr
 
 	// In-memory keyring: the self-hosted Linux ARM64 runners have no D-Bus /
 	// GNOME keyring, and Client.do calls LoadTokens on every request.
-	keyring.MockInit()
 	corefleet.SeedFleetConfigForTesting(srv.URL, corefleet.FleetConfig{
 		Issuer: srv.URL, ClientID: "test", APIBaseURL: srv.URL, FetchedAt: time.Now().UTC(),
 	})

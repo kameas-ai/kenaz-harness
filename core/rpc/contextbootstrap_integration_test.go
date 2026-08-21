@@ -22,7 +22,6 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/contextbootstrap"
 	corecontexts "github.com/kameas-ai/kenaz-harness/core/contexts"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
-	"github.com/zalando/go-keyring"
 )
 
 // ─── fakes ────────────────────────────────────────────────────────────────────
@@ -154,7 +153,6 @@ func newIntegrationFleetWithHook(t *testing.T, rec *fleetRecorder, hook func(rec
 	// no D-Bus / GNOME keyring ("The name is not activatable"), which made the
 	// real SaveTokens fail there while passing on the macOS keychain locally.
 	// Matches the per-test convention in core/rpc/keychain_test.go.
-	keyring.MockInit()
 
 	corefleet.SeedFleetConfigForTesting(srv.URL, corefleet.FleetConfig{
 		Issuer: srv.URL, ClientID: "test", APIBaseURL: srv.URL, FetchedAt: time.Now().UTC(),
