@@ -38,6 +38,9 @@ var CanonicalBlocks = map[string]VersionBlock{
 	// Units + unit_versions + unit_edges tables for the unified
 	// context+artifacts store (core/units package).
 	"units": {Min: 1100, Max: 1199},
+	// subagent-control-and-background-tasks-01PMZB11: 1200-1299.
+	// The tasks table for core/tasks.Registry's persistence store.
+	"tasks": {Min: 1200, Max: 1299},
 }
 
 // LookupBlock returns the reserved block for the given owning-mission

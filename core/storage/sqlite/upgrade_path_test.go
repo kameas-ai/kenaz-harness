@@ -38,6 +38,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/storage"
 	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
 	"github.com/kameas-ai/kenaz-harness/core/storage/sqlite/upgradesnap"
+	coretasks "github.com/kameas-ai/kenaz-harness/core/tasks"
 
 	_ "modernc.org/sqlite"
 )
@@ -228,6 +229,16 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	// up; this asserts the concrete evidence a reviewer would ask for
 	// (the ledger rows exist AND the table they create is queryable). ----
 	assertEventLogMigrated(t, ctx, db)
+
+	// ---- AC-01/AC-02 (subagent-control-and-background-tasks-01PMZB11
+	// UNIT-2): the tasks table exists and accepts a write on THIS
+	// upgraded install, through the exact production wiring shape
+	// (coretasks.NewSQLiteStore against the *sql.DB storage.Open hands
+	// out) — not a hand-rolled fixture. Every tag under testdata/upgrade/
+	// predates the tasks/1200-tasks-init migration's registration, so on
+	// every one of them this is a "first migration to land below an
+	// install's high-water mark" case, same shape as event-log above. ----
+	assertTasksTableMigrated(t, ctx, db)
 
 	// ---- item 6: no seeded row disappeared, except declared changes.
 	// "sessions" always gained exactly the one row from the item-4
@@ -434,6 +445,56 @@ func assertEventLogMigrated(t *testing.T, ctx context.Context, db storage.DB) {
 	}
 	if err := r.QueryRow(ctx, "SELECT COUNT(*) FROM saved_audit_queries").Scan(&n); err != nil {
 		t.Errorf("saved_audit_queries table not queryable after Open: %v", err)
+	}
+}
+
+// assertTasksTableMigrated is AC-01/AC-02's concrete evidence, run
+// against every snapshot in the chain: the tasks table exists, is
+// queryable, and accepts a write through the exact production writer
+// (coretasks.NewSQLiteStore(rawDB), the same call core/rpc/api.go makes)
+// — not a memory-store fixture or a hand-assembled insert (CLAUDE.md
+// blind spot #2). A pre-migration snapshot has no `tasks` table at all,
+// so this is the "first migration to land below an install's high-water
+// mark" case: Pending()==0 above (item 2) already proved selection
+// picked it up, and this asserts the table it creates is actually
+// there and writable, not merely ledgered.
+func assertTasksTableMigrated(t *testing.T, ctx context.Context, db storage.DB) {
+	t.Helper()
+	r := db.Reader()
+
+	var n int
+	if err := r.QueryRow(ctx, "SELECT COUNT(*) FROM tasks").Scan(&n); err != nil {
+		t.Fatalf("tasks table not queryable after Open (tasks/1200-tasks-init did not apply): %v", err)
+	}
+	if n != 0 {
+		t.Errorf("tasks row count on a fresh upgrade = %d, want 0 (no snapshot seeds a task row)", n)
+	}
+
+	type sqlHandle interface{ SQL() *sql.DB }
+	h, ok := db.(sqlHandle)
+	if !ok {
+		t.Fatalf("storage.DB does not expose SQL() *sql.DB — cannot drive the production tasks writer")
+	}
+	rawDB := h.SQL()
+	if rawDB == nil {
+		t.Fatalf("db.SQL() returned nil")
+	}
+	store := coretasks.NewSQLiteStore(rawDB)
+	probe := coretasks.Task{
+		ID:        "upgrade-path-tasks-probe",
+		Kind:      coretasks.KindBash,
+		Status:    coretasks.StatusRunning,
+		StartedAt: fixedProbeTime,
+	}
+	if err := store.Insert(ctx, probe); err != nil {
+		t.Fatalf("tasks store insert after Open on an upgraded install failed: %v — "+
+			"this is the exact failure mode of a table that does not exist (spec.md §1.4)", err)
+	}
+	if err := r.QueryRow(ctx, "SELECT COUNT(*) FROM tasks WHERE id = ?", probe.ID).Scan(&n); err != nil {
+		t.Fatalf("re-query tasks after insert: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("tasks row for %s after insert = %d, want 1", probe.ID, n)
 	}
 }
 
