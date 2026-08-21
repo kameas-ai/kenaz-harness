@@ -6662,9 +6662,21 @@ func (r *liveDialResolver) Resolve(scope compaction.ScopeKey) compaction.Compact
 }
 
 // syncTier rewrites the global layer when — and only when — the dial has
-// moved since the last observation. The first call always writes, which
-// is deliberate: it makes the resolver's state a function of the dial
-// rather than of whatever the boot seed happened to catch.
+// moved since the last observation.
+//
+// chat-turn-integrity-01PMZ606 WP06: the first call used to always
+// write, on the theory that it made the resolver's state a function of
+// the dial rather than of whatever the boot seed happened to catch. In
+// practice that theory was the bug: newLiveDialResolver wraps a resolver
+// that has ALREADY loaded the user's persisted compaction.yaml (which
+// may hold hand-tuned fields the compaction Settings view wrote, not
+// merely PresetForTier(tier) verbatim), and the first Resolve() call —
+// triggered by the panel's own GetEffective, or by the first turn of the
+// user's session — clobbered that just-loaded layer wholesale before the
+// user ever saw it. newLiveDialResolver now seeds `last` from the dial's
+// value at construction time, so this first call is a no-op unless the
+// dial has genuinely moved since boot — exactly the same test this
+// function already applies to every later call.
 func (r *liveDialResolver) syncTier() {
 	if r == nil || r.tier == nil {
 		return
@@ -6692,21 +6704,38 @@ func (r *liveDialResolver) syncTier() {
 // Returns inner unchanged when there is no settings store to read (the
 // nil-Core test chassis), which leaves the boot seed in place — the
 // pre-existing behaviour for callers with no dial to track.
+//
+// WP06: `last` is seeded from the dial's value read right here, at
+// construction — the same read compactionGlobalSeed already made to
+// compute inner's boot seed, and (barring a hand-edited settings file
+// between the two reads) the same tier that produced whatever
+// compaction.yaml's global section already holds by the time inner was
+// built. Seeding it means syncTier's first call is a no-op unless the
+// dial has moved since boot, instead of unconditionally overwriting the
+// persisted layer the very first time anything resolves — see syncTier.
 func newLiveDialResolver(inner compaction.Resolver, settingsImpl *settings.API) compaction.Resolver {
 	if inner == nil || settingsImpl == nil || settingsImpl.Store() == nil {
 		return inner
 	}
+	tier := func() string {
+		s, err := settingsImpl.Store().LoadAll()
+		if err != nil {
+			// Empty is the read-failure sentinel; syncTier treats
+			// it as "leave the layer alone".
+			return ""
+		}
+		return string(s.EffectiveCompactionAggressiveness())
+	}
 	return &liveDialResolver{
 		Resolver: inner,
-		tier: func() string {
-			s, err := settingsImpl.Store().LoadAll()
-			if err != nil {
-				// Empty is the read-failure sentinel; syncTier treats
-				// it as "leave the layer alone".
-				return ""
-			}
-			return string(s.EffectiveCompactionAggressiveness())
-		},
+		tier:     tier,
+		// Seed with today's dial value, not the zero value, so the
+		// first syncTier() call is a no-op unless the dial has
+		// genuinely moved since this resolver was constructed. An
+		// unreadable dial (tier() returning "") seeds `last` to ""
+		// too, which is consistent: syncTier already treats "" as
+		// "leave the layer alone" on every subsequent call.
+		last: tier(),
 	}
 }
 
