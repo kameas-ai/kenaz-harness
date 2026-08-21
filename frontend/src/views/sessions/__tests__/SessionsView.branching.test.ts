@@ -177,6 +177,54 @@ describe('SessionsView (branching-ux-polish WP07)', () => {
     w.unmount();
   });
 
+  // controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-8 (WP13,
+  // AC-032): ancestorCount was never passed to BranchBreadcrumb, so the
+  // ">1 levels deep" expander/readout were permanently unreachable dead
+  // code. Verifies SessionsView now wires it from
+  // session.session.value.branchDepth (the server-projected field).
+  // Mutation: remove :ancestor-count from the mount. Must fail — the
+  // ancestors toggle would no longer render.
+  it('BranchBreadcrumb shows "N levels deep" from the session branchDepth', async () => {
+    const sessions: Session[] = [
+      { id: 's-parent', name: 'Alpha', createdAt: '', updatedAt: '' },
+      {
+        id: 's-branch',
+        name: 'Alpha (branch)',
+        parentSessionId: 's-parent',
+        branchDepth: 3,
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+    const { w } = await mountWithRoute('s-branch', {}, sessions);
+    const toggle = w.find('[data-testid="branch-breadcrumb-ancestors-toggle"]');
+    expect(toggle.exists()).toBe(true);
+    await toggle.trigger('click');
+    const popover = w.find('[data-testid="branch-breadcrumb-ancestor-popover"]');
+    expect(popover.exists()).toBe(true);
+    expect(popover.text()).toContain('3 levels deep');
+    w.unmount();
+  });
+
+  // AC-033: the retracted "Branch from turn N" claim must be gone from
+  // the tree, not merely unreachable via the prop the mission narrowed.
+  it('no source string renders "Branch from turn N" anywhere', async () => {
+    const sessions: Session[] = [
+      { id: 's-parent', name: 'Alpha', createdAt: '', updatedAt: '' },
+      {
+        id: 's-branch',
+        name: 'Alpha (branch)',
+        parentSessionId: 's-parent',
+        branchDepth: 2,
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+    const { w } = await mountWithRoute('s-branch', {}, sessions);
+    expect(w.text()).not.toContain('Branch from turn');
+    w.unmount();
+  });
+
   it('Branch-from-turn button triggers createExplicit and navigates to child', async () => {
     const createCalls: { parentSessionId: string; parentMessageId: string }[] = [];
     const fakeBranch: Branch = makeBranch({ childSessionId: 's-child' });

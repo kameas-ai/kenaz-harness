@@ -622,6 +622,8 @@ export function Sessions_ListMessagesAll(arg1:string):Promise<sessions.ListMessa
 
 export function Sessions_LoadDraft(arg1:string):Promise<string>;
 
+export function Sessions_LoadScrollPosition(arg1:string):Promise<number>;
+
 export function Sessions_MoveToProject(arg1:string,arg2:string):Promise<void>;
 
 export function Sessions_Rename(arg1:string,arg2:string):Promise<void>;
@@ -635,6 +637,8 @@ export function Sessions_ResumeMessage(arg1:string,arg2:string):Promise<sessions
 export function Sessions_SaveAsArtifact(arg1:string,arg2:string,arg3:string,arg4:number,arg5:number):Promise<artifacts.Artifact>;
 
 export function Sessions_SaveDraft(arg1:string,arg2:string):Promise<void>;
+
+export function Sessions_SaveScrollPosition(arg1:string,arg2:number):Promise<void>;
 
 export function Sessions_SendMessageWithBlocks(arg1:string,arg2:Array<llm.ContentBlock>):Promise<sessions.Message>;
 

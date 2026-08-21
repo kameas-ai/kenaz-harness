@@ -71,9 +71,24 @@ func (s *auditedStream) Final() (llm.Response, error) {
 		return resp, err
 	}
 	resp.Attempts = s.attempts
-	if s.reducer != nil {
+	// Cost derivation (model-settings-reach-the-model-01PMZ101 WP05 /
+	// FR-004, AC-004). A provider-sourced cost (OpenRouter reads
+	// usage.cost off its own wire and stamps Source:"provider") always
+	// wins over a derived estimate — it is ground truth, the reducer is a
+	// guess. This check must come BEFORE the reducer branch: once a
+	// production Cost reducer is constructed (which was not true before
+	// this WP — no call site ever set Options.Cost), an unconditional
+	// `if s.reducer != nil { resp.Cost = s.reducer.Derive(...) }` would
+	// silently overwrite OpenRouter's real cost with a table estimate on
+	// every turn. That would have been a brand-new defect introduced by
+	// wiring the reducer at all, in the same class this mission exists to
+	// end.
+	switch {
+	case resp.Cost.Source == "provider":
+		// Already populated by the adapter itself; leave it.
+	case s.reducer != nil:
 		resp.Cost = s.reducer.Derive(resp.Usage, s.prof.Kind, s.prof.Model)
-	} else if resp.Cost.Currency == "" {
+	case resp.Cost.Currency == "":
 		resp.Cost = llm.Cost{Indeterminate: true}
 	}
 	if resp.SnapshotID == "" {

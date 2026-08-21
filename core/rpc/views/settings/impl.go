@@ -245,8 +245,35 @@ func validateCompactionFields(in Settings) error {
 		return ErrInvalidLongSessionNudgeTokens
 	}
 
+	// controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-16 WP21
+	// (FR-032, SD-14): both struct comments (api.go) claim negative
+	// values are "rejected at Save" — neither field was reachable from
+	// any of SaveAll's four validators until this WP. Added here
+	// (rather than a new validator) because validateCompactionFields
+	// already covers this file's other bare numeric-range dials
+	// (MonthlyCostNotifyUSD, LongSessionNudgeTurns/Tokens above), and
+	// this function IS called from both FileStore.SaveAll and
+	// memoryStore.SaveAll — so this closes the gap for both stores in
+	// one place, not just the one a hand-picked test happens to drive.
+	if in.MaxGeneratedImageBytes < 0 {
+		return ErrInvalidMaxGeneratedImageBytes
+	}
+	if in.LocalRuntimeRAMOverrideGB < 0 {
+		return ErrInvalidLocalRuntimeRAMOverrideGB
+	}
+
 	return nil
 }
+
+// ErrInvalidMaxGeneratedImageBytes is returned when the per-image
+// auto-capture byte cap is negative. Zero is valid (resolves to
+// DefaultMaxGeneratedImageBytes).
+var ErrInvalidMaxGeneratedImageBytes = errors.New("settings: invalid maxGeneratedImageBytes — must be >= 0")
+
+// ErrInvalidLocalRuntimeRAMOverrideGB is returned when the local-model
+// RAM override is negative. Zero is valid (resolves to the detected
+// SystemRAMBytes).
+var ErrInvalidLocalRuntimeRAMOverrideGB = errors.New("settings: invalid localRuntimeRAMOverrideGB — must be >= 0")
 
 // ErrInvalidLongSessionNudgeTurns is returned when the turn-count threshold
 // is negative. Zero is valid (resolves to DefaultLongSessionNudgeTurns).

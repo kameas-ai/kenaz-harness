@@ -1130,6 +1130,10 @@ export function Sessions_LoadDraft(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_LoadDraft'](arg1);
 }
 
+export function Sessions_LoadScrollPosition(arg1) {
+  return window['go']['rpc']['Bindings']['Sessions_LoadScrollPosition'](arg1);
+}
+
 export function Sessions_MoveToProject(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Sessions_MoveToProject'](arg1, arg2);
 }
@@ -1156,6 +1160,10 @@ export function Sessions_SaveAsArtifact(arg1, arg2, arg3, arg4, arg5) {
 
 export function Sessions_SaveDraft(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Sessions_SaveDraft'](arg1, arg2);
+}
+
+export function Sessions_SaveScrollPosition(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Sessions_SaveScrollPosition'](arg1, arg2);
 }
 
 export function Sessions_SendMessageWithBlocks(arg1, arg2) {

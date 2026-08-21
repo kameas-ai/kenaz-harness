@@ -53,6 +53,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/hooks"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	llmcap "github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
+	"github.com/kameas-ai/kenaz-harness/core/llm/cost"
 	"github.com/kameas-ai/kenaz-harness/core/llm/credref"
 	"github.com/kameas-ai/kenaz-harness/core/llm/personal"
 	llmregistry "github.com/kameas-ai/kenaz-harness/core/llm/registry"
@@ -3461,8 +3462,14 @@ func New(c *core.Core, opts ...Option) *API {
 
 	// Harness-self MCP server (WP04/WP05). Build with real adapters so
 	// the onboarding agent can call list_settings, list_providers, etc.
-	// The server is held on a.harnessServer; the in-process transport
-	// wiring (WP09) will attach it to the session pool.
+	// The server is held on a.harnessServer, wrapped with real audit
+	// emission (AC-009(b)) and registered into a.dispatchPool's
+	// in-process transport arm (harness-self-attach-01PMHS01 UNIT-5)
+	// below — the ATTACH itself (UNIT-6): a session's tool discovery
+	// and dispatch reach it exactly like any stdio/http/sse recipe.
+	// Containment (UNIT-4, above — a.toolPermsResolver) is already live
+	// by this point in New(), so this attach is not a security
+	// regression; see the sequencing rule in plan.md.
 	{
 		var sessionMgr *session.Manager
 		if c != nil {
@@ -3474,13 +3481,36 @@ func New(c *core.Core, opts ...Option) *API {
 			a.sessionsAPI,
 			sessionMgr,
 			mergedCat,
+			a.projectsAPI,
 		)
-		a.harnessServer = &harnessServer{
-			srv: harnessmcp.RegisterAll(harnessmcp.NewServer(), hManagers),
-		}
+		srv := harnessmcp.RegisterAll(harnessmcp.NewServer(), hManagers)
+		srv = harnessmcp.WithAudit(srv, &harnessSelfAuditBridge{impl: a.auditImpl})
+		a.harnessServer = &harnessServer{srv: srv}
 		logging.L().Info("harness.self.server.ready",
 			"tools", len(a.harnessServer.srv.Tools()),
 		)
+		// The server name MUST stay harnessmcp.ServerName ("harness-self"):
+		// the three embedded Cedar policies (UNIT-2) match on
+		// context.server_name == "harness-self" (C-008) — a mismatch
+		// makes every policy NotApplicable and silently ungates the
+		// write tools. Using the constant on both sides (here and in
+		// harnessmcp.NewServer, which sets it via toolserver.NewServer)
+		// means this can't drift independently; TestHarnessSelfServerName
+		// PinsAgainstCedarPolicyText pins it against the actual policy
+		// file bytes too.
+		if a.dispatchPool != nil {
+			// a.harnessServer.Server() — not the srv field directly —
+			// so this is genuinely harnessServer.Server()'s first
+			// production caller (core/rpc/harness_wiring.go:290 was
+			// zero-caller before this unit; model-authored-graphs-
+			// 01PMGA01 UNIT-7 was blocked on exactly that).
+			hTransport := harnessmcp.NewTransport(a.harnessServer.Server())
+			if err := a.dispatchPool.RegisterInProcess(context.Background(), harnessmcp.ServerName, hTransport); err != nil {
+				logging.L().Error("harness.self.server.attach_failed", "err", err.Error())
+			}
+		} else {
+			logging.L().Error("harness.self.server.attach_failed", "err", "dispatchPool is nil")
+		}
 	}
 
 	// Context-bootstrap engine (context-bootstrap-harness-integration).
@@ -4667,9 +4697,33 @@ func newLLMStack(
 		cedarLLMGate = cedarEngine
 	}
 	cedarGuard := cedar.NewLLMPolicyGuard(cedarLLMGate)
+	// Cost reducer (model-settings-reach-the-model-01PMZ101 WP05 / FR-004).
+	// Without this, registry/audited_stream.go's `else if resp.Cost.Currency
+	// == ""` guard falls to Indeterminate for every adapter except
+	// OpenRouter (which populates Cost itself off its own wire), and the
+	// `derived` arm of the usage hook below (api.go ~:5601) is unreachable.
+	// A table-load failure is a reporting-quality concern, not a boot gate —
+	// log and continue with Cost unset, matching the fallback precedent a
+	// few lines below for registry construction itself.
+	// Cost reducer (model-settings-reach-the-model-01PMZ101 WP05 / FR-004).
+	// Without this, registry/audited_stream.go's `else if resp.Cost.Currency
+	// == ""` guard falls to Indeterminate for every adapter except
+	// OpenRouter (which populates Cost itself off its own wire), and the
+	// `derived` arm of the usage hook below (api.go ~:5601) is unreachable.
+	// A table-load failure is a reporting-quality concern, not a boot gate —
+	// log and continue with Cost unset, matching the fallback precedent a
+	// few lines below for registry construction itself.
+	var costReducer llmregistry.CostReducer
+	if tab, terr := cost.LoadDefault(); terr != nil {
+		logging.L().Warn("llm.cost_table.load_failed",
+			"err", terr.Error())
+	} else {
+		costReducer = cost.New(tab)
+	}
 	reg, err := llmregistry.New(llmregistry.Options{
 		Resolver: credref.New(secretsBackend),
 		Policy:   cedarGuard,
+		Cost:     costReducer,
 	})
 	if err != nil {
 		// Fall back to the stub on a registry construction failure so
@@ -4798,6 +4852,12 @@ func newLLMStack(
 		Stdio: mcpPool,
 		HTTP:  httpPool,
 		SSE:   ssePool,
+		// InProcess wires the fourth transport arm
+		// (harness-self-attach-01PMHS01 UNIT-5). New() registers the
+		// harness-self server into it once both this pool AND the
+		// server exist (New's harnessServer construction block, which
+		// runs after a.dispatchPool = stack.dispatchPool below).
+		InProcess: dispatch.NewInProcessSubPool(),
 	})
 	// Built-in tools registry. The chassis registers websearch + bash
 	// here when Settings toggles are ON. The BuiltinPool merges them
@@ -5396,6 +5456,42 @@ func resolveAutonomyKnobsWithSettingsFallback(global, project, session autonomy.
 	return autonomy.Resolve(global, project, session)
 }
 
+// registerManualCompactionStrategies installs the strategies the BASE
+// compaction pipeline was missing so the manual-trigger RPC surface
+// (core/rpc/views/compaction.API.TriggerManualCompaction — the "Compact
+// now" button) stops failing with ErrUnknownStrategy.
+// chat-turn-integrity-01PMZ606 WP07. A nil pipeline is a no-op — the
+// same degraded-install shape newGraphManagerWithDeps already tolerates
+// for drop_oldest/summary.
+//
+// session_rewrite: compaction.PresetForTier sets SiteManual's default
+// Strategy to session_rewrite, and TriggerManualCompaction runs against
+// THIS base pipeline, not the per-run Bind() clone chat_default.yaml's
+// `compact` node uses (bindCompactor, in session_compaction.go).
+// Without this registration, every manual trigger with no explicit
+// strategy override resolved a strategy the base pipeline had never
+// heard of and failed with "unknown strategy: session_rewrite"
+// unconditionally — a plain wiring bug, not a policy choice.
+// profileID/modelOverride are empty inside chat.NewSessionRewriteStrategy
+// on purpose: this registration has no run identity to inherit them
+// from, and Compact's pickModel() already prefers the settings-configured
+// compaction model when one is wired.
+//
+// semantic_cluster: constructible with a nil Embedder — it degrades to
+// an even stride-pick across the transcript rather than erroring
+// (SemanticClusterStrategy.FallbackEnabled defaults true), the same
+// shape as NewSummaryStrategy(nil)'s heuristic fallback. Registering it
+// is what turns the panel's offered option from "always
+// ErrUnknownStrategy" into "actually runs, degraded until an embedder
+// is wired" — no embedder is wired on this path today.
+func registerManualCompactionStrategies(p *compaction.Pipeline, deps *chat.CompactionDeps, history chat.SessionMessageReader) {
+	if p == nil {
+		return
+	}
+	p.RegisterStrategy(chat.NewSessionRewriteStrategy(deps, history))
+	p.RegisterStrategy(compaction.NewSemanticClusterStrategy(nil))
+}
+
 // buildChatRunner constructs the *chat.ChatRunner that replaces
 // core/toolloop as the chassis chat path. Returns nil when the graph
 // manager is unavailable (test path or boot failure) so the LLM view
@@ -5733,6 +5829,7 @@ func buildChatRunner(
 	// built without a compactor yields nil here, which makes the node a
 	// documented passthrough.
 	chatCompactionPipeline, _ := graphMgr.Kernel().Compactor().(*compaction.Pipeline)
+	registerManualCompactionStrategies(chatCompactionPipeline, compactionDeps, historyReader)
 
 	runner, err := chat.New(chat.Config{
 		Kernel:        graphMgr.Kernel(),
@@ -6708,9 +6805,21 @@ func (r *liveDialResolver) Resolve(scope compaction.ScopeKey) compaction.Compact
 }
 
 // syncTier rewrites the global layer when — and only when — the dial has
-// moved since the last observation. The first call always writes, which
-// is deliberate: it makes the resolver's state a function of the dial
-// rather than of whatever the boot seed happened to catch.
+// moved since the last observation.
+//
+// chat-turn-integrity-01PMZ606 WP06: the first call used to always
+// write, on the theory that it made the resolver's state a function of
+// the dial rather than of whatever the boot seed happened to catch. In
+// practice that theory was the bug: newLiveDialResolver wraps a resolver
+// that has ALREADY loaded the user's persisted compaction.yaml (which
+// may hold hand-tuned fields the compaction Settings view wrote, not
+// merely PresetForTier(tier) verbatim), and the first Resolve() call —
+// triggered by the panel's own GetEffective, or by the first turn of the
+// user's session — clobbered that just-loaded layer wholesale before the
+// user ever saw it. newLiveDialResolver now seeds `last` from the dial's
+// value at construction time, so this first call is a no-op unless the
+// dial has genuinely moved since boot — exactly the same test this
+// function already applies to every later call.
 func (r *liveDialResolver) syncTier() {
 	if r == nil || r.tier == nil {
 		return
@@ -6738,21 +6847,38 @@ func (r *liveDialResolver) syncTier() {
 // Returns inner unchanged when there is no settings store to read (the
 // nil-Core test chassis), which leaves the boot seed in place — the
 // pre-existing behaviour for callers with no dial to track.
+//
+// WP06: `last` is seeded from the dial's value read right here, at
+// construction — the same read compactionGlobalSeed already made to
+// compute inner's boot seed, and (barring a hand-edited settings file
+// between the two reads) the same tier that produced whatever
+// compaction.yaml's global section already holds by the time inner was
+// built. Seeding it means syncTier's first call is a no-op unless the
+// dial has moved since boot, instead of unconditionally overwriting the
+// persisted layer the very first time anything resolves — see syncTier.
 func newLiveDialResolver(inner compaction.Resolver, settingsImpl *settings.API) compaction.Resolver {
 	if inner == nil || settingsImpl == nil || settingsImpl.Store() == nil {
 		return inner
 	}
+	tier := func() string {
+		s, err := settingsImpl.Store().LoadAll()
+		if err != nil {
+			// Empty is the read-failure sentinel; syncTier treats
+			// it as "leave the layer alone".
+			return ""
+		}
+		return string(s.EffectiveCompactionAggressiveness())
+	}
 	return &liveDialResolver{
 		Resolver: inner,
-		tier: func() string {
-			s, err := settingsImpl.Store().LoadAll()
-			if err != nil {
-				// Empty is the read-failure sentinel; syncTier treats
-				// it as "leave the layer alone".
-				return ""
-			}
-			return string(s.EffectiveCompactionAggressiveness())
-		},
+		tier:     tier,
+		// Seed with today's dial value, not the zero value, so the
+		// first syncTier() call is a no-op unless the dial has
+		// genuinely moved since this resolver was constructed. An
+		// unreadable dial (tier() returning "") seeds `last` to ""
+		// too, which is consistent: syncTier already treats "" as
+		// "leave the layer alone" on every subsequent call.
+		last: tier(),
 	}
 }
 
@@ -8325,6 +8451,55 @@ func (e *searchAuditEmitter) Emit(_ context.Context, kind string, attrs map[stri
 		Category:  "SEARCH",
 		Subject:   kind,
 		Trailing:  b.String(),
+	})
+}
+
+// harnessSelfAuditBridge implements harness.AuditSink
+// (core/mcp/builtin/harness/audit.go) for the harness-self MCP server
+// (harness-self-attach-01PMHS01 UNIT-6, AC-009(b)). Routes every
+// harness_read_*/harness_write_* dispatch — emitted by
+// harnessmcp.WithAudit as KindHarnessSelfToolCalled — to the real
+// audit ring instead of the noopAudit default WithAudit falls back to
+// when its sink argument is nil.
+//
+// Category "MCP": harness-self tools ARE MCP tool calls (dispatched
+// through the in-process transport arm exactly like a stdio/http/sse
+// recipe's tools/call), and impl.go's categoryForKind already buckets
+// "mcp."-prefixed event kinds there — reusing it here means the
+// AuditView's existing MCP filter surfaces these rows for free instead
+// of introducing a category nothing in the frontend renders yet.
+//
+// Modelled on searchAuditEmitter above: Entry has no map-valued field,
+// so payload (tool_name, success, duration_ms — never raw arguments;
+// WithAudit already redacts those before this bridge ever sees them)
+// is rendered into Trailing as a deterministic (sorted-key) "k=v k=v"
+// string.
+type harnessSelfAuditBridge struct {
+	impl *audit.API
+}
+
+func (b *harnessSelfAuditBridge) Emit(_ context.Context, k string, payload map[string]any) {
+	if b == nil || b.impl == nil {
+		return
+	}
+	keys := make([]string, 0, len(payload))
+	for pk := range payload {
+		keys = append(keys, pk)
+	}
+	sort.Strings(keys)
+	var sb strings.Builder
+	for i, pk := range keys {
+		if i > 0 {
+			sb.WriteByte(' ')
+		}
+		fmt.Fprintf(&sb, "%s=%v", pk, payload[pk])
+	}
+	b.impl.Push(audit.Entry{
+		ID:        fmt.Sprintf("harness-self-%d", time.Now().UnixNano()),
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Category:  "MCP",
+		Subject:   k,
+		Trailing:  sb.String(),
 	})
 }
 

@@ -3498,7 +3498,15 @@ export function emptyAutonomyLayer(): AutonomyLayer {
   return { level: null, overrides: {} };
 }
 
-/** True when the Layer contributes nothing to resolution. */
+/**
+ * True when the Layer contributes nothing to resolution.
+ * NARROWED (controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-14
+ * WP19, C2V-34, 2026-08-21): this is the only occurrence of this
+ * symbol in the tree — no non-test reader. Its sibling
+ * `emptyAutonomyLayer()` above has twelve callers and is the live
+ * path; the `export` on this function is itself the advertisement
+ * that narrows here, since there is no test file to also point at.
+ */
 export function isAutonomyLayerEmpty(
   l: AutonomyLayer | null | undefined,
 ): boolean {

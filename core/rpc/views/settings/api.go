@@ -12,8 +12,19 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
 )
 
-// Settings is the persisted UI state shape (plan §5.5). schemaVersion
-// gates migrations; lastRoute drives first-paint route restoration.
+// Settings is the persisted UI state shape (plan §5.5). lastRoute drives
+// first-paint route restoration.
+//
+// SchemaVersion does NOT gate any migration today
+// (controls-and-readouts-that-tell-the-truth-01PMZ808 WP06, FR-007,
+// narrowed 2026-08-19). Three production sites default-backfill it
+// (impl.go:84-85, :308-309, :1580-1581 — `if got.SchemaVersion == 0 { …
+// = 1 }`); nothing compares it against any other value, and there is no
+// migration table or dispatcher. `justify(blocker: "no
+// settings-migration dispatcher; needs the settings.json upgrade
+// fixture WP-PI builds", owner: alec, date: 2026-08-19)`. The field and
+// its About-panel display stay: a number that is always 1 is a fact,
+// not a lie.
 //
 // MemoryEnabled is the explicit opt-in for the cross-session long-term
 // memory feature. Privacy default is OFF: when false the harness never
@@ -343,9 +354,13 @@ type Settings struct {
 	// the harness fires escalating notifications at 50 / 80 / 100 /
 	// 150 / 200 % of the dial value (token-cost-telemetry-01KQ8TD7
 	// WP06). Zero (the default) disables the scheduler entirely.
-	// Range [0, MaxMonthlyCostNotifyUSD]; Save rejects negative or
-	// out-of-range values. FR-007c: this is a visibility dial — hard
-	// caps live in the user's provider dashboard.
+	// Range [0, MaxMonthlyCostNotifyUSD]. NARROWED
+	// (controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-14
+	// WP19, FR-029, 2026-08-21): Save does NOT reject a negative value
+	// — both FileStore and memoryStore clamp it to zero — and only
+	// errors above MaxMonthlyCostNotifyUSD. FR-007c: this is a
+	// visibility dial — hard caps live in the user's provider
+	// dashboard.
 	MonthlyCostNotifyUSD float64 `json:"monthlyCostNotifyUsd,omitempty"`
 
 	// MCPAutoRestartDisabled is the inverted persisted bit for the
@@ -1211,9 +1226,15 @@ type SettingsStore interface {
 	// LoadMonthlyCostNotifyUSD / SaveMonthlyCostNotifyUSD expose the
 	// monthly-spend notification threshold dial
 	// (token-cost-telemetry-01KQ8TD7 WP06). Zero disables the
-	// scheduler. Save rejects negative values and values above
-	// MaxMonthlyCostNotifyUSD; the threshold checker reads through
-	// LoadMonthlyCostNotifyUSD on every Manager.Add tail.
+	// scheduler. NARROWED
+	// (controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-14
+	// WP19, FR-029, 2026-08-21): Save normalises a negative value to
+	// zero (does not reject it) and rejects only values above
+	// MaxMonthlyCostNotifyUSD — matching the FileStore/binding docs,
+	// which already said "normalised to zero" correctly. The other
+	// half of this doc is true and unchanged: the threshold checker
+	// reads through LoadMonthlyCostNotifyUSD on every Manager.Add
+	// tail (core/rpc/api.go, core/usage/usage.go).
 	LoadMonthlyCostNotifyUSD() (float64, error)
 	SaveMonthlyCostNotifyUSD(usd float64) error
 
@@ -1718,8 +1739,17 @@ func (s Settings) EffectiveMaxGeneratedImageBytes() int64 {
 // override is used (converted from GiB to bytes); otherwise `detected`
 // (from core/system/resources.EffectiveRAMBytes()) is returned.
 //
-// This helper is called by the model-fit filter (WP06) and by the
-// frontend settings panel (WP07) to present a consistent effective value.
+// NARROWED (controls-and-readouts-that-tell-the-truth-01PMZ808
+// UNIT-16 WP21, FR-033, 2026-08-21): this used to name "the model-fit
+// filter (WP06)" and "the frontend settings panel (WP07)" as callers —
+// neither exists. Zero non-test callers of this method anywhere in the
+// tree; the raw override itself IS reachable via
+// Settings_{Get,Set}LocalRuntimeRAMOverrideGB (harnessClient.ts), but
+// nothing computes the EFFECTIVE (override-or-detected) value the
+// frontend would need to show "how much RAM will actually be used."
+// See docs/unwired-ledger.md's dated entry for this field —
+// re-dated here, not re-filed, per AC-M4 (claim the field, not the
+// row it shares with several sibling fields).
 // (local-model-runtimes-01KQ8VMZ WP07)
 func (s Settings) EffectiveLocalRuntimeRAMBytes(detected int64) int64 {
 	if s.LocalRuntimeRAMOverrideGB > 0 {

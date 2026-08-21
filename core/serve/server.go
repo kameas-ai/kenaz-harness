@@ -654,6 +654,27 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 		}
 		return s.api.Sessions().LoadDraft(ctx, p.ID)
 
+	// controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-8 WP13
+	// (FR-021): mirrors the SaveDraft/LoadDraft pair above.
+	case "Sessions_SaveScrollPosition":
+		var p struct {
+			ID  string `json:"id"`
+			Pos int64  `json:"pos"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Sessions_SaveScrollPosition: bad params: " + err.Error())
+		}
+		return nil, s.api.Sessions().SaveScrollPosition(ctx, p.ID, p.Pos)
+
+	case "Sessions_LoadScrollPosition":
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, errors.New("Sessions_LoadScrollPosition: bad params: " + err.Error())
+		}
+		return s.api.Sessions().LoadScrollPosition(ctx, p.ID)
+
 	case "Sessions_GetUsage":
 		var p struct {
 			ID string `json:"id"`

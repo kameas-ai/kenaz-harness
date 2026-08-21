@@ -1496,7 +1496,7 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		// copy when the reason we stopped is that the budget ran out,
 		// rather than a generic backend error that tells the user
 		// nothing about why their long turn died.
-		reason, message, runTerminatedClean = r.recoverFromOverflow(log, sub, env, err)
+		reason, message, runTerminatedClean = r.recoverFromOverflow(ctx, log, sub, env, err)
 		// The budget-exhausted branch reports the session-full copy. It
 		// is the same situation for the user as the compact node's own
 		// session-full verdict — the conversation no longer fits and
@@ -1678,6 +1678,16 @@ func cancelCauseString(sub *chatSub) string {
 // session_messages write cannot block the chat-runner terminal goroutine
 // indefinitely. 5s is generous — the write is a single UPDATE.
 const persistPartialTimeout = 5 * time.Second
+
+// overflowRedriveTimeout caps a single overflow-recovery redrive
+// (chat-turn-integrity-01PMZ606 WP04). A redrive is a full agent
+// re-run — potentially several tool calls and model round-trips, not
+// one UPDATE — so this is generous relative to persistPartialTimeout.
+// It exists as a backstop against a wedged provider that never returns,
+// independent of Stop: the redrive's context is also a child of the
+// run's own ctx, so an explicit sub.cancel() (StopStream) unblocks it
+// immediately regardless of this deadline.
+const overflowRedriveTimeout = 5 * time.Minute
 
 // classifyPartialFailureKind returns the failure_kind string the
 // frontend persists alongside the partial row. The classifier only sees
@@ -2011,7 +2021,21 @@ func (r *ChatRunner) maxOverflowRecoveries() int {
 // copy — the same honest wording the pre-send path uses when the user
 // is genuinely out of context — instead of the raw provider overflow
 // string, which reads as an opaque backend failure.
+//
+// ctx is the run's own context (driveRun's streamCtx) — chat-turn-
+// integrity-01PMZ606 WP04. Before this it took no ctx at all: the
+// compaction call and the redrive both ran on a bare
+// context.Background(), so an explicit user Stop (sub.cancel(), which
+// cancels this same ctx) could not reach either one. StopStream blocks
+// on <-sub.done, and close(sub.done) cannot run until driveRun's
+// Kernel.Run call returns — so Stop pressed during an overflow redrive
+// did nothing and the RPC hung for as long as the model took (CHAT-03).
+// The arm that calls this function only fires when the primary run
+// exited with an overflow error, not context.Canceled (that lands in
+// driveRun's own errors.Is(err, context.Canceled) case instead), so ctx
+// is provably not already cancelled on entry here.
 func (r *ChatRunner) recoverFromOverflow(
+	ctx context.Context,
 	log *slog.Logger,
 	sub *chatSub,
 	env *coreag.Env,
@@ -2037,8 +2061,16 @@ func (r *ChatRunner) recoverFromOverflow(
 			return "backend-error", compaction.ErrSessionFull.Error(), false
 		}
 
+		// WP04: context.WithoutCancel(ctx), not context.Background(). The
+		// compaction call deliberately keeps its detachment from ctx's
+		// cancellation — a Stop mid-compact must not corrupt the
+		// persisted history by aborting the rewrite halfway — but it
+		// should still carry ctx's values, and attemptOverflowRecovery
+		// already bounds it with its own 30s timeout internally. A bare
+		// Background() would also have silently dropped any values ctx
+		// carried (e.g. runposture.Unattended's marker).
 		if recErr := attemptOverflowRecovery(
-			context.Background(), // fresh ctx — run ctx may be cancelled
+			context.WithoutCancel(ctx),
 			sub.sessionID,
 			sub.profileID,
 			sub.modelOverride,
@@ -2079,13 +2111,37 @@ func (r *ChatRunner) recoverFromOverflow(
 			})
 		}
 
-		redriveCtx, redriveCancel := context.WithCancel(context.Background())
+		// WP04: derived from ctx (the run's own context), not
+		// context.Background() — so sub.cancel() (StopStream) reaches
+		// this redrive instead of the Stop button doing nothing while
+		// the RPC hangs on <-sub.done for as long as the model takes
+		// (CHAT-03). The added timeout is a second, independent reason:
+		// a wedged provider that never returns must not hold the redrive
+		// open forever even absent a Stop.
+		redriveCtx, redriveCancel := context.WithTimeout(ctx, overflowRedriveTimeout)
 		redriveErr := r.cfg.Kernel.Run(redriveCtx, env)
 		redriveCancel()
 
 		switch {
 		case redriveErr == nil:
 			return "completed", "", true
+		case ctx.Err() != nil:
+			// The run's own context was cancelled while the redrive was
+			// in flight — an explicit user Stop or app shutdown, the
+			// same two causes driveRun's primary
+			// errors.Is(err, context.Canceled) arm distinguishes via
+			// cancelCauseString. Checking ctx.Err() (the outer, run-
+			// owned context) rather than redriveErr itself is
+			// deliberate: it is correct regardless of how deep inside
+			// Kernel.Run the cancellation was observed and wrapped, and
+			// it cannot be confused with redriveCtx's own timeout
+			// expiring (context.DeadlineExceeded on redriveCtx while
+			// ctx.Err() stays nil), which falls to the default case
+			// below and is reported as a backend error, not a stop.
+			log.Info("chat.overflow_recovery.redrive_stopped",
+				"sub_id", sub.id, "session_id", sub.sessionID,
+				"cause", cancelCauseString(sub))
+			return "stop-called", "", false
 		case isContextOverflowError(redriveErr):
 			// Overflowed again. Loop: another rescue if the budget has
 			// room, otherwise the exhaustion branch above reports

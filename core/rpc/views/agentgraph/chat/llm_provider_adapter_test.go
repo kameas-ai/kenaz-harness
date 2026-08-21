@@ -363,3 +363,54 @@ func TestGenerate_ResponseSchemaConstrainsTheResponse(t *testing.T) {
 		}
 	})
 }
+
+// TestGenerate_ModelFieldWinsOverOverride is
+// model-settings-reach-the-model-01PMZ101 WP15's AC-013 (FR-013,
+// closing-sweep finding CHAT-08): before this fix, Generate() built
+// GenerationRequest.Model from a.modelOverride ONLY — req.Model, the
+// field core/agentgraph's nine LLMRequest{} construction sites set (most
+// visibly exec_escalation_ladder.go's TargetModel/PlannerModel rungs),
+// was never read. An escalation ladder whose "stronger model" request
+// always lands on the session's own model reports an escalation that did
+// not happen.
+//
+// Per spec D-9: req.Model wins when non-empty; a.modelOverride (the chat
+// surface's own picker) is the fallback used only when the kernel didn't
+// name a model at all.
+func TestGenerate_ModelFieldWinsOverOverride(t *testing.T) {
+	cases := []struct {
+		name          string
+		modelOverride string
+		reqModel      string
+		wantModel     string
+	}{
+		{
+			name:          "req.Model set and different from modelOverride: req.Model wins",
+			modelOverride: "anthropic/claude-sonnet-4-5",
+			reqModel:      "anthropic/claude-opus-4-6",
+			wantModel:     "anthropic/claude-opus-4-6",
+		},
+		{
+			name:          "req.Model empty: modelOverride is the fallback",
+			modelOverride: "anthropic/claude-sonnet-4-5",
+			reqModel:      "",
+			wantModel:     "anthropic/claude-sonnet-4-5",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := &capturingRegistry{}
+			adapter := NewLLMProviderAdapter(reg, "profile-1", tc.modelOverride, nil, nil)
+			if _, err := adapter.Generate(context.Background(), coreag.LLMRequest{
+				SystemPrompt: "base",
+				Model:        tc.reqModel,
+			}); err != nil {
+				t.Fatalf("Generate: %v", err)
+			}
+			if got := reg.snapshot().Model; got != tc.wantModel {
+				t.Fatalf("GenerationRequest.Model = %q, want %q (modelOverride=%q, req.Model=%q)",
+					got, tc.wantModel, tc.modelOverride, tc.reqModel)
+			}
+		})
+	}
+}

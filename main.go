@@ -174,6 +174,16 @@ func main() {
 
 	api := rpc.New(c)
 
+	// controls-and-readouts-that-tell-the-truth-01PMZ808 WP06 (FR-006,
+	// spec D-5): resolve the persisted window size before wails.Run so
+	// options.App.Width/Height carry the user's last size instead of a
+	// literal 1280x800. options.App.Width/Height are consumed before
+	// OnStartup fires, so a restore-in-OnStartup approach would produce a
+	// visible resize flash on every launch; reading settings here (the
+	// store is already constructed inside rpc.New, independent of
+	// core.Start/OnStartup) avoids it entirely.
+	initWidth, initHeight := resolveInitialWindowSize(context.Background(), api)
+
 	// os-menu-bar-01NDFSEX16 WP03: build the initial native application menu.
 	// Handlers wire the broker (topic publish) + updater (CheckNow /
 	// StartDownload / Apply adapter — widened in self-update-repair
@@ -225,8 +235,8 @@ func main() {
 
 	err = wails.Run(&options.App{
 		Title:  "kenaz-harness",
-		Width:  1280,
-		Height: 800,
+		Width:  initWidth,
+		Height: initHeight,
 		AssetServer: &assetserver.Options{
 			Assets:     assets,
 			Middleware: rpc.NewCSPMiddleware(),
@@ -338,6 +348,12 @@ func main() {
 			}
 		},
 		OnShutdown: func(ctx context.Context) {
+			// controls-and-readouts-that-tell-the-truth-01PMZ808 WP06
+			// (FR-006): persist the live window size so the next launch
+			// restores it, instead of leaving Settings -> About stuck
+			// reporting the boot-time literal forever. Runs before
+			// c.Shutdown so the settings store is still open.
+			persistWindowSize(ctx, api, wailsruntime.WindowGetSize)
 			_ = c.Shutdown(ctx)
 		},
 		Bind: api.Bindings(),
@@ -536,6 +552,67 @@ func deriveMenuState(api *rpc.API) coremenus.MenuState {
 	}
 
 	return state
+}
+
+// defaultWindowWidth / defaultWindowHeight mirror the literal that used to
+// be hardcoded directly into options.App (and still are the fallback for a
+// fresh install / unreadable settings file).
+const (
+	defaultWindowWidth  = 1280
+	defaultWindowHeight = 800
+)
+
+// resolveInitialWindowSize reads the persisted window size from settings so
+// the window opens at the size the user left it at. Falls back to the
+// historical 1280x800 literal on a fresh install, a settings read error, or
+// a zero-valued (never-persisted) field.
+// (controls-and-readouts-that-tell-the-truth-01PMZ808 WP06, FR-006)
+func resolveInitialWindowSize(ctx context.Context, api *rpc.API) (width, height int) {
+	width, height = defaultWindowWidth, defaultWindowHeight
+	if api == nil || api.Settings() == nil {
+		return width, height
+	}
+	s, err := api.Settings().Get(ctx)
+	if err != nil {
+		return width, height
+	}
+	if s.WindowSize.Width > 0 {
+		width = s.WindowSize.Width
+	}
+	if s.WindowSize.Height > 0 {
+		height = s.WindowSize.Height
+	}
+	return width, height
+}
+
+// persistWindowSize reads the live window size via getSize (the production
+// caller passes wailsruntime.WindowGetSize; tests inject a fake so this can
+// be exercised without a real windowing backend) and writes it back into
+// settings, so Settings -> About stops reporting the boot-time literal
+// forever and the next launch restores the real size.
+// (controls-and-readouts-that-tell-the-truth-01PMZ808 WP06, FR-006)
+func persistWindowSize(ctx context.Context, api *rpc.API, getSize func(context.Context) (int, int)) {
+	if api == nil || api.Settings() == nil || getSize == nil {
+		return
+	}
+	w, h := getSize(ctx)
+	if w <= 0 || h <= 0 {
+		// Headless / not-yet-shown window: never persist a bogus size.
+		return
+	}
+	s, err := api.Settings().Get(ctx)
+	if err != nil {
+		logging.L().Warn("windowsize.persist.read_error", "err", err.Error())
+		return
+	}
+	if s.WindowSize.Width == w && s.WindowSize.Height == h {
+		return
+	}
+	s.WindowSize.Width = w
+	s.WindowSize.Height = h
+	if err := api.Settings().Set(ctx, s); err != nil {
+		logging.L().Warn("windowsize.persist.write_error", "err", err.Error())
+	}
 }
 
 // initSentryFromSettings reads the crash-reporting settings, calls

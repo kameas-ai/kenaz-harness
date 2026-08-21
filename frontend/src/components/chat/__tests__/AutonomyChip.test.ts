@@ -80,6 +80,8 @@ function mountChip(resolved: ResolvedAutonomy) {
       }),
       saveDraft: async () => undefined,
       loadDraft: async () => '',
+      saveScrollPosition: async () => undefined,
+      loadScrollPosition: async () => 0,
       setSystemPrompt: async () => undefined,
       moveToProject: async () => undefined,
       resumeMessage: async () => ({ subscriptionId: 's', originalMessageId: 'm' }),

@@ -524,8 +524,14 @@ func (m *Manager) SaveDraft(ctx context.Context, id, draft string) error {
 	return nil
 }
 
-// SaveScrollPosition pins the rail's scroll offset for a session
-// (FR-002).
+// SaveScrollPosition pins the chat message list's scroll offset for a
+// session (FR-002). Corrected
+// (controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-8 WP13,
+// E-006): this used to say "the rail's scroll offset", but the field is
+// keyed per-session, which the app-wide session-rail sidebar
+// (LeftRail.vue — one shared scroll position across every session) has
+// no per-session state to hold. The chat message list
+// (MessageList.vue) is the surface this actually restores.
 func (m *Manager) SaveScrollPosition(ctx context.Context, id string, pos int64) error {
 	if err := m.store.UpdateScrollPosition(ctx, id, pos, m.now()); err != nil {
 		return err

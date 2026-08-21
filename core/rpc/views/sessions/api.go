@@ -298,6 +298,20 @@ type SessionsAPI interface {
 	SaveDraft(ctx context.Context, id, draft string) error
 	LoadDraft(ctx context.Context, id string) (string, error)
 
+	// SaveScrollPosition persists the message list's scroll offset for
+	// id, so switching sessions and coming back restores where the user
+	// left off (controls-and-readouts-that-tell-the-truth-01PMZ808
+	// UNIT-8 WP13, FR-021). Emitted by MessageList.vue's onScroll,
+	// debounced client-side. Resolved E-006: this pins the CHAT MESSAGE
+	// LIST's scroll offset, not the session-rail sidebar's — the field
+	// is keyed per-session, which the app-wide rail (LeftRail.vue, no
+	// per-session scroll state of its own) cannot be; MessageList.vue
+	// already owns an `onScroll` handler reading `el.scrollTop`.
+	SaveScrollPosition(ctx context.Context, id string, pos int64) error
+	// LoadScrollPosition returns the persisted scroll offset for id, or
+	// 0 for a session that has never had one saved.
+	LoadScrollPosition(ctx context.Context, id string) (int64, error)
+
 	// SetSystemPrompt persists per-session starting context. kind is
 	// 'system' (invisible, prepended on every send) or 'user_seed'
 	// (visible — the caller is responsible for also appending the
