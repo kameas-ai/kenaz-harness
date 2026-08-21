@@ -15,6 +15,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core"
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	coretasks "github.com/kameas-ai/kenaz-harness/core/tasks"
+	coremonitor "github.com/kameas-ai/kenaz-harness/core/tools/monitor"
 	coresubagent "github.com/kameas-ai/kenaz-harness/core/tools/subagentdispatch"
 	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
 	corecontexts "github.com/kameas-ai/kenaz-harness/core/contexts"
@@ -388,6 +389,27 @@ func registerBuiltinTools(
 				"reason", "BranchSeam not yet wired — tool omitted from model catalog (FR-007)",
 			)
 		}
+	}
+
+	// kenaz__monitor: drain/watch a background task's captured output
+	// (subagent-control-and-background-tasks-01PMZB11 UNIT-5). Only
+	// registered when taskReg is non-nil — a registered monitor over a
+	// nil registry would return an error result for every call, and
+	// the mission's whole point is that this tool now has real output
+	// to read (UNIT-3's writer-attachment fix). Deletes
+	// core/tools/monitor from i11-unregistered-builtin-tools.txt and
+	// i7-orphan-packages.txt in this same commit.
+	if taskReg != nil {
+		monitorTool := coremonitor.New(coremonitor.Options{
+			Registry:         taskReg,
+			SessionIDFromCtx: toolloop.SessionIDFromContext,
+		})
+		registry.Register(monitorTool)
+		logging.L().Info("rpc.builtins.register", "tool", monitorTool.Name())
+	} else {
+		logging.L().Info("rpc.builtins.monitor_skipped",
+			"reason", "no task registry wired",
+		)
 	}
 
 	// kenaz__enter_plan_mode / kenaz__exit_plan_mode: plan-mode posture
@@ -872,6 +894,17 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 			// by a Settings dial. Added proactively so wiring the seam in a
 			// future mission doesn't silently repeat the ask_user_question
 			// regression.
+			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
+			return true
+
+		case coremonitor.ToolName:
+			// kenaz__monitor (subagent-control-and-background-tasks-
+			// 01PMZB11 UNIT-5): always-on at this coarse gate, same
+			// posture as sleep/skill/read_context_file. It only reads
+			// already-captured task output (no side effects of its
+			// own); Cedar's ActionToolTasksMonitor is the per-call
+			// gate. Registration itself is already conditioned on a
+			// non-nil task registry (see registerBuiltinTools above).
 			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 		}

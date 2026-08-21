@@ -21,6 +21,7 @@ import (
 	coretasks "github.com/kameas-ai/kenaz-harness/core/tasks"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 	corebash "github.com/kameas-ai/kenaz-harness/core/tools/bash"
+	coremonitor "github.com/kameas-ai/kenaz-harness/core/tools/monitor"
 )
 
 // fakeHookFirer is a race-safe recorder for hook firing — it stands in
@@ -77,6 +78,137 @@ func newProductionShapedBashRegistry(t *testing.T) (*toolloop.BuiltinRegistry, *
 		taskReg,
 	)
 	return registry, taskReg, firer
+}
+
+// TestMonitorTool_ProductionWiring_DrainReturnsRealLines is AC-06
+// (FR-005): kenaz__monitor, registered through the exact production
+// wiring (registerBuiltinTools with a real taskReg — not a hand-built
+// monitor.Tool over a fake registry), returns non-empty lines for a
+// live task's drain mode. Mutation named in tasks.md UNIT-5 ("revert
+// UNIT-3's cmd.Stdout attachment. Must fail.") is exercised
+// transitively: TestBashBackgroundMode_ProductionWiring_
+// CapturesRealOutput's falsification (UNIT-3 commit) already proves
+// that revert empties Registry.Tail, and kenaz__monitor's drain reads
+// through the identical Tail call, so the same revert empties this
+// too.
+func TestMonitorTool_ProductionWiring_DrainReturnsRealLines(t *testing.T) {
+	registry, _, _ := newProductionShapedBashRegistry(t)
+	bashTool, ok := registry.Lookup(corebash.Name)
+	if !ok {
+		t.Fatal("kenaz__bash not registered")
+	}
+	monitorTool, ok := registry.Lookup(coremonitor.ToolName)
+	if !ok {
+		t.Fatal("kenaz__monitor not registered — AC-06 registration half failed")
+	}
+
+	const marker = "unit5_monitor_drain_marker_71ac"
+	argsJSON, _ := json.Marshal(map[string]any{
+		"command":           "echo " + marker,
+		"run_in_background": true,
+	})
+	ctx := context.Background()
+	result, err := bashTool.Call(ctx, argsJSON)
+	if err != nil {
+		t.Fatalf("bash Call: %v", err)
+	}
+	var out map[string]any
+	_ = json.Unmarshal(result, &out)
+	taskID, _ := out["task_id"].(string)
+	if taskID == "" {
+		t.Fatal("no task_id")
+	}
+
+	// Wait for the task to finish producing output, then drain.
+	deadline := time.Now().Add(3 * time.Second)
+	var monResult map[string]any
+	for time.Now().Before(deadline) {
+		drainArgs, _ := json.Marshal(map[string]any{"task_id": taskID, "mode": "drain"})
+		res, err := monitorTool.Call(ctx, drainArgs)
+		if err != nil {
+			t.Fatalf("monitor Call: %v", err)
+		}
+		_ = json.Unmarshal(res, &monResult)
+		lines, _ := monResult["lines"].([]any)
+		if len(lines) > 0 {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	lines, _ := monResult["lines"].([]any)
+	if len(lines) == 0 {
+		t.Fatalf("kenaz__monitor drain returned zero lines (result=%+v) — registered over an empty ring buffer, the exact defect i11 protected against", monResult)
+	}
+	var sawMarker bool
+	for _, raw := range lines {
+		m, _ := raw.(map[string]any)
+		if m["stream"] == "stdout" && m["text"] == marker {
+			sawMarker = true
+		}
+	}
+	if !sawMarker {
+		t.Errorf("drained lines %+v do not contain the echoed marker %q", lines, marker)
+	}
+}
+
+// TestMonitorTool_ProductionWiring_WatchReturnsOnExit is AC-06's watch-mode
+// half: watch with until.exit blocks until the task terminates and
+// returns lines produced before exit.
+func TestMonitorTool_ProductionWiring_WatchReturnsOnExit(t *testing.T) {
+	registry, _, _ := newProductionShapedBashRegistry(t)
+	bashTool, ok := registry.Lookup(corebash.Name)
+	if !ok {
+		t.Fatal("kenaz__bash not registered")
+	}
+	monitorTool, ok := registry.Lookup(coremonitor.ToolName)
+	if !ok {
+		t.Fatal("kenaz__monitor not registered")
+	}
+
+	const marker = "unit5_monitor_watch_marker_22be"
+	argsJSON, _ := json.Marshal(map[string]any{
+		"command":           "echo " + marker,
+		"run_in_background": true,
+	})
+	ctx := context.Background()
+	result, err := bashTool.Call(ctx, argsJSON)
+	if err != nil {
+		t.Fatalf("bash Call: %v", err)
+	}
+	var out map[string]any
+	_ = json.Unmarshal(result, &out)
+	taskID, _ := out["task_id"].(string)
+	if taskID == "" {
+		t.Fatal("no task_id")
+	}
+
+	watchArgs, _ := json.Marshal(map[string]any{
+		"task_id": taskID,
+		"mode":    "watch",
+		"until":   map[string]any{"exit": true, "timeout_s": 5},
+	})
+	watchCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	res, err := monitorTool.Call(watchCtx, watchArgs)
+	if err != nil {
+		t.Fatalf("monitor watch Call: %v", err)
+	}
+	var monResult map[string]any
+	_ = json.Unmarshal(res, &monResult)
+	if monResult["matched"] != "exit" {
+		t.Errorf("matched = %v, want %q", monResult["matched"], "exit")
+	}
+	lines, _ := monResult["lines"].([]any)
+	var sawMarker bool
+	for _, raw := range lines {
+		m, _ := raw.(map[string]any)
+		if m["stream"] == "stdout" && m["text"] == marker {
+			sawMarker = true
+		}
+	}
+	if !sawMarker {
+		t.Errorf("watch-mode lines %+v (result=%+v) do not contain the echoed marker %q", lines, monResult, marker)
+	}
 }
 
 // TestBashBackgroundMode_ProductionWiring_RegistersATaskRow is AC-03: a
