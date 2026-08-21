@@ -76,6 +76,14 @@ const (
 	ActionWorkflowSave   = "workflow.save"
 	ActionWorkflowDelete = "workflow.delete"
 
+	// ActionWorkflowNetworkFetch gates a web_fetch / web_scrape step's
+	// outbound request (automation-actually-runs-01PMZ404 UNIT-7). The
+	// shipped default_workflows_policy.cedar bundle already references
+	// this action string (WP05's "network.fetch" section); the constant
+	// did not exist until UNIT-7 built GateWorkflowNetworkFetch, the
+	// first Go call site.
+	ActionWorkflowNetworkFetch = "workflow.network.fetch"
+
 	// ActionArtifactUpdate gates the kenaz__update_artifact builtin
 	// (update-artifact-tool-01KQ8TD4). Default-allow under FSWriteEnabled;
 	// gated by the same FSWriteDisabled toggle as the write-family fs

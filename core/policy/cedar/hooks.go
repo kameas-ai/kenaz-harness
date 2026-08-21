@@ -567,6 +567,51 @@ func GateWorkflowRun(ctx context.Context, g Gate, workflowID, mode, stepKinds st
 	return d, enforce(d)
 }
 
+// GateWorkflowNetworkFetch is the gate-hook helper for a workflow's
+// web_fetch / web_scrape step, called immediately before any outbound
+// request (automation-actually-runs-01PMZ404 UNIT-7, spec D-9).
+//
+//   - g may be nil — the helper short-circuits to nil (default-allow),
+//     same contract as GateWorkflowRun.
+//   - mode is "permissive" or "strict"; "" coerces to "permissive".
+//
+// IMPORTANT — mode alone is not the enforcement mechanism. enforce()
+// maps Deny to *PolicyDeniedError but maps BOTH Allow and NotApplicable
+// to nil. The shipped default_workflows_policy.cedar bundle's strict
+// arm for workflow.network.fetch is an explicit forbid rule (not mere
+// permit-absence) precisely so that in strict mode this call returns
+// Deny, not NotApplicable — see the policy file's "strict: deny by
+// default" comment. A caller that reads this helper's contract from
+// GateWorkflowRun's docstring alone and assumes "strict ⇒ NotApplicable
+// ⇒ prompt" would be wrong for THIS action: strict mode denies outright,
+// because a network step has no interactive-prompt fallback mid-run the
+// way GateWorkflowRun's caller does before dispatch.
+//
+// Returns nil on Allow / NotApplicable, *PolicyDeniedError on Deny.
+func GateWorkflowNetworkFetch(ctx context.Context, g Gate, workflowID, mode string) (Decision, error) {
+	if mode == "" {
+		mode = "permissive"
+	}
+	if g == nil {
+		return Decision{
+			Outcome:  Allow,
+			Action:   ActionWorkflowNetworkFetch,
+			Resource: WorkflowUID(workflowID).String(),
+			Reason:   "no engine wired (default-allow)",
+		}, nil
+	}
+	d := g.Evaluate(
+		ctx,
+		UserUID(),
+		ActionWorkflowNetworkFetch,
+		WorkflowUID(workflowID),
+		map[cedar.String]cedar.Value{
+			cedar.String("mode"): cedar.String(mode),
+		},
+	)
+	return d, enforce(d)
+}
+
 // GateWorkflowSave is the gate-hook helper for workflow persistence.
 // Mirrors GateWorkflowRun's contract for the save action; the policy
 // bundle's strict-mode forbid rule denies workflows containing a

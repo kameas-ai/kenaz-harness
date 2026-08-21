@@ -699,6 +699,18 @@ func evalPredicate(s string) bool {
 	return true
 }
 
+// workflowIDFor returns rc.Workflow.ID, or "" when rc is nil (defensive —
+// Engine.Run always constructs one). The NetworkAuthorizer gates a
+// specific Workflow::"<id>" resource (automation-actually-runs-01PMZ404
+// UNIT-7), so the id — not the step name — is the resource identity a
+// policy author's `resource is Workflow` rule needs.
+func workflowIDFor(rc *RunContext) string {
+	if rc == nil {
+		return ""
+	}
+	return rc.Workflow.ID
+}
+
 // ===========================================================================
 // web_fetch (WP05) — fetches a URL honoring robots.txt + rate-limits.
 // Cedar gate: emits "workflow.network.fetch" before any network I/O.
@@ -723,7 +735,7 @@ func (webFetchRunner) Validate(st Step) error {
 func (r webFetchRunner) Run(ctx context.Context, st Step, rc *RunContext) (TypedValue, error) {
 	// Cedar gate: emit before any network I/O.
 	if r.authz != nil {
-		if err := r.authz.Authorize(ctx, "workflow.network.fetch", st.Name); err != nil {
+		if err := r.authz.Authorize(ctx, "workflow.network.fetch", workflowIDFor(rc)); err != nil {
 			return TypedValue{Type: ValueTypeError},
 				fmt.Errorf("web_fetch step %q: policy denied: %w", st.Name, err)
 		}
@@ -804,7 +816,7 @@ func (webScrapeRunner) Validate(st Step) error {
 func (r webScrapeRunner) Run(ctx context.Context, st Step, rc *RunContext) (TypedValue, error) {
 	// Cedar gate: emit before any network I/O.
 	if r.authz != nil {
-		if err := r.authz.Authorize(ctx, "workflow.network.fetch", st.Name); err != nil {
+		if err := r.authz.Authorize(ctx, "workflow.network.fetch", workflowIDFor(rc)); err != nil {
 			return TypedValue{Type: ValueTypeError},
 				fmt.Errorf("web_scrape step %q: policy denied: %w", st.Name, err)
 		}

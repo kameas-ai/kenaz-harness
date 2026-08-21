@@ -2576,6 +2576,13 @@ func New(c *core.Core, opts ...Option) *API {
 		if artStore != nil && artMgr != nil {
 			wfDeps.Artifacts = &wfArtifactsAdapter{store: artStore, mgr: artMgr, media: media}
 		}
+		// automation-actually-runs-01PMZ404 UNIT-7: NetAuthz was never
+		// assigned, so cedarStrictWorkflowMode could not deny a
+		// web_fetch/web_scrape step no matter how it was set. Same
+		// live-read mode resolver as workflowsAPI's CedarModeFn below —
+		// see workflowCedarModeFn's doc for why a boot snapshot is wrong
+		// here.
+		wfDeps.NetAuthz = &wfNetworkAuthorizerAdapter{gate: a.cedarGate(), modeFn: workflowCedarModeFn(settingsImpl)}
 		// audit-that-tells-the-truth-01PMZA10 UNIT-5: KindWorkflowNetworkFetch
 		// (core/context/audit/audit.go:108) had zero emit sites in the
 		// tree. Shape 1 (contextaudit.Emitter) — a SEPARATE field from

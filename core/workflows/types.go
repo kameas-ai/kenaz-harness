@@ -584,8 +584,12 @@ type ArtifactWrite struct {
 
 // NetworkAuthorizer is the Cedar gate for external-network step kinds.
 // Before any web_fetch or web_scrape step makes a network request, the
-// engine calls Authorize with action "workflow.network.fetch". A non-nil
-// error aborts the step with a policy_denied classification.
+// engine calls Authorize with action "workflow.network.fetch" and
+// resourceID set to the RUNNING WORKFLOW's id (not the step name) — the
+// production adapter (automation-actually-runs-01PMZ404 UNIT-7) gates
+// a Cedar Workflow::"<id>" resource, matching GateWorkflowRun /
+// GateWorkflowSave / GateWorkflowDelete's shape. A non-nil error aborts
+// the step with a policy_denied classification.
 //
 // nil is a no-op (permit by default) so test harnesses and the chassis
 // boot path can run without a wired Cedar engine.
