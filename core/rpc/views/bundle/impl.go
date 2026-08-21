@@ -426,7 +426,7 @@ func (a *API) Install(ctx context.Context, req InstallRequest) (Bundle, error) {
 		}
 	}
 
-	spec := channels.ChannelSpec{Kind: req.Kind, Path: req.Path}
+	spec := channels.ChannelSpec{Kind: req.Kind, Path: req.Path, URL: req.URL}
 	ch, err := a.channelRegistry().Open(spec, a.secretsResolver())
 	if err != nil {
 		return Bundle{}, fmt.Errorf("bundle: open channel: %w", err)
@@ -513,10 +513,14 @@ func (a *API) Install(ctx context.Context, req InstallRequest) (Bundle, error) {
 		return Bundle{}, fmt.Errorf("bundle: parse lockfile: %w", err)
 	}
 
+	locator := req.Path
+	if locator == "" {
+		locator = req.URL
+	}
 	lb := lockfile.LockedBundle{
 		Name:        m.Name,
 		Version:     m.Version,
-		Source:      req.Kind + ":" + req.Path,
+		Source:      req.Kind + ":" + locator,
 		ContentHash: m.ContentHash(),
 		// Verified is the real, positive verification result from
 		// above — never derived from SignatureRef's mere presence
