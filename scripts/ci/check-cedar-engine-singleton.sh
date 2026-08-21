@@ -56,6 +56,19 @@
 #        the defect happened to live last time is a gate that catches
 #        the defect once.
 #
+#    A third widening (mission vm-execution-surface-truth-01PMZD14 WP03,
+#    HV-03/UNIT-1's G-1): Check 2's scan additionally covers cmd/. A
+#    hand-built `cedar.Engine` under cmd/harness-vm would satisfy "this
+#    process has a policy guard" while breaking the single-engine promise
+#    just as completely as one under core/ — and CORE_ROOT="core" alone
+#    was blind to it (verified: the gate reported "no other production
+#    caller under core" while cmd/harness-vm/agentexec.go left Policy
+#    unset entirely, R-4 in spec.md). Check 1's RPC_ROOT is UNCHANGED —
+#    it is about core/rpc's two named builder functions specifically, and
+#    has no cmd/ analogue: cmd/harness-vm does not call
+#    buildCedarGate/buildCedarEngineOrNil, it consults the shared engine
+#    through rpc.API.CedarGate().
+#
 # Usage: bash scripts/ci/check-cedar-engine-singleton.sh (from anywhere).
 
 set -euo pipefail
@@ -65,12 +78,15 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/ci-gate.sh"
 GATE="[cedar-engine-singleton]"
 API_FILE="core/rpc/api.go"
 RPC_ROOT="core/rpc"
-# Check 2 is process-wide, not rpc-wide — see the header.
+# Check 2 is process-wide, not rpc-wide — see the header. cmd/ was added by
+# WP03 above; core/ is unchanged from the original cut of this gate.
 CORE_ROOT="core"
+CMD_ROOT="cmd"
 
 ci_require_file "$API_FILE" "$GATE"
 ci_require_dir "$RPC_ROOT" "$GATE"
 ci_require_dir "$CORE_ROOT" "$GATE"
+ci_require_dir "$CMD_ROOT" "$GATE"
 
 # ---------------------------------------------------------------------------
 # Vacuous-pass guard: the two builder functions must still exist under
@@ -133,12 +149,14 @@ fi
 
 # ---------------------------------------------------------------------------
 # Check 2: `.NewEngine(` appears exactly twice — once in each builder's
-# body. A third occurrence anywhere under core/ is a hand-built engine
-# bypassing the singleton entirely. Package-qualifier-agnostic and
-# process-wide on purpose; see the header for the two evasions that
-# motivated each widening.
+# body. A third occurrence anywhere under core/ OR cmd/ is a hand-built
+# engine bypassing the singleton entirely. Package-qualifier-agnostic and
+# process-wide on purpose; see the header for the evasions that motivated
+# each widening (the cmd/ root closes the one this gate could not see
+# until WP03: a hand-built engine in cmd/harness-vm would pass Check 1
+# untouched, since Check 1 only watches core/rpc's two named builders).
 # ---------------------------------------------------------------------------
-newengine_hits=$(grep -rnE '\.NewEngine\(' --include='*.go' "$CORE_ROOT" 2>/dev/null | grep -v '_test\.go' || true)
+newengine_hits=$(grep -rnE '\.NewEngine\(' --include='*.go' "$CORE_ROOT" "$CMD_ROOT" 2>/dev/null | grep -v '_test\.go' || true)
 newengine_hits=$(printf '%s\n' "$newengine_hits" | grep -v '^$' || true)
 ne_count=0
 if [[ -n "$newengine_hits" ]]; then
@@ -147,7 +165,7 @@ fi
 
 if [[ "$ne_count" -ne 2 ]]; then
   echo "" >&2
-  echo "${GATE} FAIL: .NewEngine( appears ${ne_count} time(s) in non-test ${CORE_ROOT}" >&2
+  echo "${GATE} FAIL: .NewEngine( appears ${ne_count} time(s) in non-test ${CORE_ROOT}+${CMD_ROOT}" >&2
   echo "${GATE} code — want exactly 2 (buildCedarGate's body + buildCedarEngineOrNil's" >&2
   echo "${GATE} body):" >&2
   printf '%s\n' "$newengine_hits" | sed 's/^/    /' >&2
@@ -164,4 +182,4 @@ if [[ "$fail" -ne 0 ]]; then
   exit 1
 fi
 
-echo "${GATE} clean — exactly one Cedar engine construction (${count} call site) is reachable from rpc.New; .NewEngine has no other production caller under ${CORE_ROOT}."
+echo "${GATE} clean — exactly one Cedar engine construction (${count} call site) is reachable from rpc.New; .NewEngine has no other production caller under ${CORE_ROOT} or ${CMD_ROOT}."

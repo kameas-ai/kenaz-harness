@@ -506,6 +506,26 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			wantOutput: "NewEngine( appears 3 time(s)",
 		},
 		{
+			// vm-execution-surface-truth-01PMZD14 WP03 (HV-03/UNIT-1, G-1).
+			// The cmd/ scope hole this WP closes: before widening Check 2's
+			// scan root from core/ alone to core/+cmd/, a hand-built
+			// *cedar.Engine anywhere under cmd/ — most concretely
+			// cmd/harness-vm, which owns its own Cedar-gated model-call
+			// path (agentexec.go) — bypassed the singleton exactly as
+			// completely as one built under core/, and this gate could not
+			// see it. VERIFIED pre-widening: with CORE_ROOT="core" alone,
+			// the gate reported "no other production caller under core"
+			// with this exact construction sitting one directory over
+			// (spec.md §0.3, §4.1 D-2 — the evasion R-4 rejects).
+			name: "cedar-engine-singleton/engine-built-under-cmd",
+			gate: "check-cedar-engine-singleton.sh",
+			file: "cmd/zzgateprobe/probe.go",
+			content: "package zzgateprobe\n\n" +
+				"import \"github.com/kameas-ai/kenaz-harness/core/policy/cedar\"\n\n" +
+				"var ZzGateProbeEngine, _ = cedar.NewEngine(cedar.Options{})\n",
+			wantOutput: "NewEngine( appears 3 time(s)",
+		},
+		{
 			name: "slog-privacy/typed-attr-constructor",
 			gate: "check-no-user-content-in-slog.sh",
 			file: "core/rpc/zz_gate_probe.go",
