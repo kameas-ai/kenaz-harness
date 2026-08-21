@@ -1,3 +1,14 @@
+// AC-PI-2 (audit-that-tells-the-truth-01PMZA10 WP-PI): drives
+// NewMemoryBackend() / a fake SweepableBackend deliberately — this
+// exercises RetentionSweep's own strategy/window logic (keep_forever /
+// delete_after_window / archive_after_window selection, archive-before-
+// delete ordering), which is backend-agnostic. WP10's AC-011/AC-012/
+// AC-013 — a real sqlite database, POPULATED (booted from a committed
+// upgrade snapshot, not Open on an empty directory), asserting aged
+// rows are gone, SearchFTS on a purged term returns zero rows without
+// erroring, and unrelated rows survive — is covered by
+// core/storage/sqlite/audit_retention_populated_test.go's
+// TestAuditRetention_DeleteAfterWindow_AgainstPopulatedUpgradedDatabase.
 package log
 
 import (

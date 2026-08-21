@@ -126,6 +126,8 @@ var cwdSensitiveGates = []string{
 	"check-graph-write-paths.sh",
 	"check-entrypoint-coverage.sh",
 	"check-installer-payload.sh",
+	"check-audit-store-before-retention.sh",
+	"check-fts-sync.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -865,6 +867,30 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				"}\n",
 		},
 		{
+			// audit-that-tells-the-truth-01PMZA10 WP12 (G-3, new class). An
+			// external-content FTS5 table with an AFTER INSERT sync trigger
+			// and no AFTER DELETE trigger (and no direct 'delete'-command
+			// sync) is the exact defect events_fts shipped with at 0001 and
+			// migration 0007 corrected — and the same class sessions/0335
+			// exists to fix for messages_fts. Plants a fresh table+trigger
+			// pair reproducing only the AFTER INSERT half.
+			name: "fts-sync/external-content-table-no-delete-sync",
+			// The probe table's own name, not the gate's "[fts-sync]" label
+			// — the label also prefixes "checkftssync failed to build",
+			// which would let a compile-broken checker satisfy this proof.
+			wantOutput: "zz_probe_fts",
+			gate:       "check-fts-sync.sh",
+			file:       "core/rpc/views/zzgateprobe/migration_probe.sql",
+			content: "CREATE VIRTUAL TABLE IF NOT EXISTS zz_probe_fts USING fts5(\n" +
+				"    payload,\n" +
+				"    content='zz_probe_table',\n" +
+				"    content_rowid='rowid'\n" +
+				");\n\n" +
+				"CREATE TRIGGER IF NOT EXISTS zz_probe_ai AFTER INSERT ON zz_probe_table BEGIN\n" +
+				"    INSERT INTO zz_probe_fts(rowid, payload) VALUES (new.rowid, new.payload);\n" +
+				"END;\n",
+		},
+		{
 			// THE CLASS CI COULD NOT SEE. An independent review of PR #300
 			// broke v1 of this gate against the real production file: move
 			// the write OUT of saveGraph into an unvalidated sibling method
@@ -1032,6 +1058,60 @@ func TestToolContainmentUnconditionalGate_PlantedConditionalWrapperFails(t *test
 	}
 	if !strings.Contains(out, "conditional-assignment shape") {
 		t.Fatalf("gate failed, but its output does not mention the expected defect class "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+}
+
+// TestAuditStoreBeforeRetentionGate_PlantedStoreRemovalFails is the
+// planted-violation proof for check-audit-store-before-retention.sh (G-1,
+// audit-that-tells-the-truth-01PMZA10 WP12). The shared plant() helper
+// above only supports appending to, or creating, a file — this gate's
+// defect class is specifically about REMOVING an existing option from an
+// existing call (`audit.WithStore(auditStore)` dropped from the
+// auditOpts literal in core/rpc/api.go while
+// `eventlog.NewLocalRetentionScheduler(` stays present, exactly the
+// shape a future refactor that "simplifies" the option list without
+// touching the sweeper could produce), which append cannot express — so
+// this test does its own read-mutate-restore cycle on core/rpc/api.go
+// directly, mirroring TestToolContainmentUnconditionalGate_
+// PlantedConditionalWrapperFails above.
+func TestAuditStoreBeforeRetentionGate_PlantedStoreRemovalFails(t *testing.T) {
+	root := repoRoot(t)
+	apiPath := filepath.Join(root, "core", "rpc", "api.go")
+
+	orig, err := os.ReadFile(apiPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", apiPath, err)
+	}
+
+	const target = "auditOpts := []audit.Option{audit.WithSubscriber(a.broker), audit.WithGate(auditGate), audit.WithStore(auditStore)}"
+	if !strings.Contains(string(orig), target) {
+		t.Fatalf("expected line not found in api.go — the UNIT-4 wire may have moved; "+
+			"update this test and the gate together:\n%q", target)
+	}
+	// Drop ONLY the WithStore option — the sweep construction site
+	// (eventlog.NewLocalRetentionScheduler) and the frontend panel copy
+	// both stay untouched, reproducing exactly the ordering violation
+	// G-1 exists to catch: claims outliving the store that backs them.
+	mutated := "auditOpts := []audit.Option{audit.WithSubscriber(a.broker), audit.WithGate(auditGate)}"
+	newContent := strings.Replace(string(orig), target, mutated, 1)
+
+	if err := os.WriteFile(apiPath, []byte(newContent), 0o644); err != nil {
+		t.Fatalf("writing mutated api.go: %v", err)
+	}
+	defer func() {
+		if err := os.WriteFile(apiPath, orig, 0o644); err != nil {
+			t.Errorf("restoring api.go: %v — WORKING TREE IS DIRTY", err)
+		}
+	}()
+
+	code, out := runGate(t, "check-audit-store-before-retention.sh", root)
+	if code == 0 {
+		t.Fatalf("check-audit-store-before-retention.sh exited 0 with audit.WithStore( removed "+
+			"while a sweep construction site remains — the gate cannot fail.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "NewLocalRetentionScheduler(") {
+		t.Fatalf("gate failed, but its output does not mention the expected defect "+
 			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
 	}
 }
