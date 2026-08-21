@@ -35,15 +35,22 @@ type GraphScope = string
 // forbids quarantining or deleting a user's file to satisfy a validator —
 // but it is marked so the frontend can disable Run and startRun refuses
 // it with the validator's own issues rather than a bare wrapped error.
+//
+// SpecProvenance (UNIT-6) surfaces coreag.Graph.SpecProvenance at LIST
+// granularity — "model_authored" for an unreviewed draft (UNIT-5 stamps
+// this server-side in saveGraph) — so GraphsView can badge a row and
+// disable Run without fetching each entry's full YAML. Empty for an
+// ordinary human-authored graph.
 type GraphInfo struct {
-	ID            string `json:"id"`
-	Name          string `json:"name,omitempty"`
-	Description   string `json:"description,omitempty"`
-	Scope         string `json:"scope"` // "library" | "user"
-	Source        string `json:"source,omitempty"`
-	UpdatedAt     string `json:"updatedAt,omitempty"`
-	Invalid       bool   `json:"invalid,omitempty"`
-	InvalidReason string `json:"invalidReason,omitempty"`
+	ID             string `json:"id"`
+	Name           string `json:"name,omitempty"`
+	Description    string `json:"description,omitempty"`
+	Scope          string `json:"scope"` // "library" | "user"
+	Source         string `json:"source,omitempty"`
+	UpdatedAt      string `json:"updatedAt,omitempty"`
+	Invalid        bool   `json:"invalid,omitempty"`
+	InvalidReason  string `json:"invalidReason,omitempty"`
+	SpecProvenance string `json:"specProvenance,omitempty"`
 }
 
 // GraphSpec is the wire shape carrying the graph YAML across the boundary.
@@ -56,11 +63,18 @@ type GraphInfo struct {
 // conversation, and it is read-only for the same reason a log line is —
 // editing a record of what happened would make it a record of something
 // else.
+//
+// SpecProvenance (UNIT-6) mirrors coreag.Graph.SpecProvenance so a
+// caller has the canonical field alongside the raw YAML rather than
+// having to re-parse `spec_provenance:` out of the buffer itself — the
+// buffer already carries it as plain text (DumpYAML round-trips it), so
+// this is a convenience projection, not a second source of truth.
 type GraphSpec struct {
-	ID    string `json:"id"`
-	Name  string `json:"name,omitempty"`
-	Scope string `json:"scope"`
-	YAML  string `json:"yaml"`
+	ID             string `json:"id"`
+	Name           string `json:"name,omitempty"`
+	Scope          string `json:"scope"`
+	YAML           string `json:"yaml"`
+	SpecProvenance string `json:"specProvenance,omitempty"`
 }
 
 // ValidationIssue is one validator violation. Stable shape so the

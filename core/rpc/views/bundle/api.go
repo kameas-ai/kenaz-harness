@@ -23,25 +23,32 @@ type Artifact struct {
 	ContentHash string `json:"contentHash"`
 }
 
-// InstallRequest is the parameter shape for a localpath bundle install.
-// Beta scope (v0.3.0): only the local_path channel is supported here.
-// The resolver mission will replace this minimal install path with the
-// full multi-channel pipeline.
+// InstallRequest is the parameter shape for a bundle install
+// (bundle-download-and-verify-01PMZ909). Kind selects the channel:
+// "local_path" reads Path; "http_mirror" (UNIT-6; not reachable in
+// production until UNIT-7 registers its factory — see
+// core/rpc/api.go) reads URL. Exactly one of Path / URL is meaningful
+// per Kind; the unused field is ignored by that channel's Factory.
 type InstallRequest struct {
-	// Kind identifies the channel kind. Must be "local_path" for v0.3.0.
+	// Kind identifies the channel kind ("local_path", "http_mirror",
+	// …). Registry.Open refuses any kind with no registered factory.
 	Kind string `json:"kind"`
 	// Path is the absolute filesystem path to a directory that contains
-	// a kenaz.yaml manifest at its root.
+	// a kenaz.yaml manifest at its root. Used by local_path.
 	Path string `json:"path"`
+	// URL is the mirror root a network channel fetches from. Used by
+	// http_mirror (UNIT-6).
+	URL string `json:"url,omitempty"`
 }
 
 // BundleAPI is the view-scoped accessor for bundle listing/pinning.
 type BundleAPI interface {
 	List(ctx context.Context) ([]Bundle, error)
 	Get(ctx context.Context, id string) (Bundle, error)
-	// Install registers a bundle in the lockfile by reading + validating
-	// a kenaz.yaml manifest at req.Path. Beta-scoped to local_path; the
-	// resolver mission owns the production multi-channel pipeline.
+	// Install fetches a bundle through the channel named by req.Kind —
+	// see InstallRequest — verifies its signatures and every artifact's
+	// content hash, and registers it in the lockfile only after every
+	// fetch has succeeded.
 	Install(ctx context.Context, req InstallRequest) (Bundle, error)
 	// Remove drops the bundle whose name matches id from the lockfile.
 	// Removing a missing bundle is a no-op (returns nil).

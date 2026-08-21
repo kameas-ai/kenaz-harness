@@ -309,6 +309,22 @@ const (
 	// a date, so the symbol is not created at all.
 	ActionGraphAuthor = "graph.author"
 	ActionGraphRun    = "graph.run"
+
+	// ActionBundleInstall gates Bundle_Install
+	// (bundle-download-and-verify-01PMZ909, UNIT-7, spec §1.7 F-3).
+	// Bundle_Install (core/rpc/bindings.go) consulted no policy gate at
+	// all before this — harmless while Install only registered a
+	// lockfile pointer, but UNIT-6's http_mirror turns it into a
+	// caller-supplied-URL fetch primitive. Consulted BEFORE any channel
+	// is opened (spec §5.6: "before any fetch"), so the resource UID is
+	// built from the install locator (path or URL) the caller supplied,
+	// NOT the bundle name — the manifest that would reveal the name
+	// hasn't been fetched yet at gate-check time. Resource UID:
+	// Bundle::"<kind>:<locator>". Shipped default: permit the local
+	// user (default_bundle_policy.cedar) — E-001 (spec §12) leaves the
+	// channel-allowlist question to the operator; this constant and its
+	// gate call are the plumbing, not the policy.
+	ActionBundleInstall = "bundle.install"
 )
 
 // Entity-type names mirror spec §4.10's recommended mapping:
@@ -421,6 +437,14 @@ const (
 	// Introduced by mission model-authored-graphs-01PMGA01 (UNIT-3).
 	// Resource UIDs take the shape Graph::"<graph-id>".
 	EntityTypeGraph = "Graph"
+
+	// EntityTypeBundle is the Cedar entity type for the bundle-install
+	// resource. Introduced by mission
+	// bundle-download-and-verify-01PMZ909 (UNIT-7). Resource UIDs take
+	// the shape Bundle::"<kind>:<locator>" — see BundleUID and
+	// ActionBundleInstall's doc for why the locator (not the not-yet-
+	// fetched bundle name) is the identity the gate checks against.
+	EntityTypeBundle = "Bundle"
 
 	// PrincipalLocal is the canonical EntityUID id for the single
 	// local user. The harness is single-user / privacy-first
@@ -865,4 +889,20 @@ func ContextBootstrapUID(id string) cedar.EntityUID {
 		safeID = invalidUIDID
 	}
 	return cedar.NewEntityUID(EntityTypeContextBootstrap, cedar.String(safeID))
+}
+
+// BundleUID builds a Cedar EntityUID for the Bundle family introduced by
+// mission bundle-download-and-verify-01PMZ909 (UNIT-7). id is the
+// channel-qualified install locator the caller supplied — "<kind>:<path>"
+// or "<kind>:<url>" — NOT the bundle's own name, which is only known
+// after the manifest is fetched (and this gate is deliberately consulted
+// before that fetch, spec §5.6). Malformed ids are replaced with the
+// literal "invalid" so the resulting UID type-matches in
+// `resource is Bundle` clauses but never satisfies any real permit.
+func BundleUID(id string) cedar.EntityUID {
+	safeID := id
+	if !validateFamilyID(id) {
+		safeID = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeBundle, cedar.String(safeID))
 }

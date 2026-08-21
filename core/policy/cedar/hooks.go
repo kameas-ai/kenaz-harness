@@ -849,6 +849,30 @@ func CheckContextBootstrapRun(ctx context.Context, g Gate) error {
 	return enforce(d)
 }
 
+// CheckBundleInstall is the gate-hook helper for Bundle_Install
+// (bundle-download-and-verify-01PMZ909, UNIT-7, spec §1.7 F-3 / §5.6).
+// locator is the channel-qualified install target the caller supplied
+// ("<kind>:<path>" or "<kind>:<url>") — see BundleUID's doc for why
+// this, not the bundle name, is the resource identity at gate-check
+// time. Default-allow (g nil, or no policy names the action — the
+// shipped default_bundle_policy.cedar prevents that from being silent,
+// see engine.go); an operator forbid rule against ActionBundleInstall
+// refuses the install BEFORE any channel is opened. Returns
+// *PolicyDeniedError on deny.
+func CheckBundleInstall(ctx context.Context, g Gate, locator string) error {
+	if g == nil {
+		return nil
+	}
+	d := g.Evaluate(
+		ctx,
+		UserUID(),
+		ActionBundleInstall,
+		BundleUID(locator),
+		nil,
+	)
+	return enforce(d)
+}
+
 // enforce maps a Decision to a Go error. Allow + NotApplicable both
 // return nil (default-allow stance); Deny returns *PolicyDeniedError.
 func enforce(d Decision) error {

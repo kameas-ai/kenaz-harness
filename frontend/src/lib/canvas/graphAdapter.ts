@@ -104,6 +104,19 @@ export function defaultAttrsForKind(
 export const SPEC_PROVENANCE_LIBRARY_FALLBACK = 'library_fallback';
 
 /**
+ * `Graph.SpecProvenance` value stamped server-side (saveGraph,
+ * model-authored-graphs-01PMGA01 UNIT-5) on a graph saved by anything
+ * other than the desktop editor's user-initiated path. It marks an
+ * UNREVIEWED draft: the `graph.run` Cedar policy
+ * (`graph_run_unreviewed_forbid.cedar`) refuses to start it, and the
+ * canvas (UNIT-6) badges it and disables Run for the same reason. A
+ * user-initiated save clears the marker — that clearing IS the review
+ * step this mission records, not a containment mechanism for
+ * unattended execution (spec §0.4).
+ */
+export const SPEC_PROVENANCE_MODEL_AUTHORED = 'model_authored';
+
+/**
  * Maps the materializer's status vocabulary onto the canvas enum.
  *
  * The two vocabularies deliberately do not match one-for-one: the

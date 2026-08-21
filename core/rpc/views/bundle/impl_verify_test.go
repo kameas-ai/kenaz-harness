@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	corebundle "github.com/kameas-ai/kenaz-harness/core/bundle"
+	"github.com/kameas-ai/kenaz-harness/core/bundle/cache"
 	"github.com/kameas-ai/kenaz-harness/core/bundle/integrity"
 	"github.com/kameas-ai/kenaz-harness/core/bundle/lockfile"
 	"github.com/kameas-ai/kenaz-harness/core/bundle/manifest"
@@ -26,10 +27,13 @@ import (
 )
 
 // signedFixture builds a bundle directory containing kenaz.yaml (with a
-// signatures: block pointing at kenaz.yaml.sig) plus the matching
-// ed25519 key pair, and returns the directory, the parsed manifest, and
-// the key pair so the caller can install a matching (or non-matching)
-// anchor.
+// signatures: block pointing at kenaz.yaml.sig), the matching ed25519
+// key pair, AND the real bytes of the one declared artifact (UNIT-5:
+// Install now actually fetches and hash-verifies every artifact, so a
+// content_hash with no matching bytes on disk refuses the install
+// before signature verification is even relevant to the caller).
+// Returns the directory, the parsed manifest, and the key pair so the
+// caller can install a matching (or non-matching) anchor.
 func signedFixture(t *testing.T, name string) (dir string, pub ed25519.PublicKey, priv ed25519.PrivateKey) {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -37,6 +41,14 @@ func signedFixture(t *testing.T, name string) (dir string, pub ed25519.PublicKey
 		t.Fatalf("GenerateKey: %v", err)
 	}
 	dir = t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "policy"), 0o755); err != nil {
+		t.Fatalf("mkdir policy dir: %v", err)
+	}
+	artifactBytes := []byte(name + "-policy-bytes")
+	digest := sha256Hex(artifactBytes)
+	if err := os.WriteFile(filepath.Join(dir, "policy", "policy.toml"), artifactBytes, 0o644); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
 	manifestYAML := `schema_version: 1
 name: ` + name + `
 version: 1.0.0
@@ -45,7 +57,7 @@ artifacts:
   - name: policy.toml
     kind: policy
     path: policy/policy.toml
-    content_hash: "sha256:` + sha64(name+"-policy") + `"
+    content_hash: "` + digest + `"
 signatures:
   - kind: ed25519_detached
     locator: kenaz.yaml.sig
@@ -104,6 +116,7 @@ func TestInstall_AC001Analog_SignedAndAnchored_VerifiesAndTierIsSigned(t *testin
 		WithAnchorsFunc(func(ctx context.Context) ([]trust.Anchor, error) {
 			return engine.ListAnchors(ctx)
 		}),
+		WithCAS(testCAS(t)),
 	)
 
 	got, err := api.Install(context.Background(), InstallRequest{Kind: "local_path", Path: dir})
@@ -150,6 +163,11 @@ func TestInstall_AC006_BadSignature_SigningOptional_RefusesWithNoLockfileRow(t *
 	}
 
 	rw := &memReadWriter{}
+	casDir := t.TempDir()
+	realCAS, cerr := cache.New(casDir)
+	if cerr != nil {
+		t.Fatalf("cache.New: %v", cerr)
+	}
 	api := NewAPI(
 		WithReader(rw), WithWriter(rw),
 		WithVerifier(verifier),
@@ -157,6 +175,7 @@ func TestInstall_AC006_BadSignature_SigningOptional_RefusesWithNoLockfileRow(t *
 			return engine.ListAnchors(ctx)
 		}),
 		WithSigningPolicyFunc(func() integrity.SigningPolicy { return integrity.SigningOptional }),
+		WithCAS(CASFromCache(realCAS)),
 	)
 
 	_, err = api.Install(context.Background(), InstallRequest{Kind: "local_path", Path: dir})
@@ -174,6 +193,11 @@ func TestInstall_AC006_BadSignature_SigningOptional_RefusesWithNoLockfileRow(t *
 	}
 	if len(list) != 0 {
 		t.Fatalf("expected no lockfile row after a refused install, got %+v", list)
+	}
+	// AC-006: no CAS residue either — the refusal happens before the
+	// artifact-fetch loop even starts (signatures are verified first).
+	if realCAS.Has(sha256Hex([]byte("tampered-policy-bytes"))) {
+		t.Fatalf("refused install must not leave a CAS entry")
 	}
 }
 
@@ -199,7 +223,7 @@ func TestInstall_AC006_Falsifiable_NilVerifierPassesVacuously(t *testing.T) {
 
 	rw := &memReadWriter{}
 	// No WithVerifier — the pre-UNIT-4 / no-trust-wired configuration.
-	api := NewAPI(WithReader(rw), WithWriter(rw))
+	api := NewAPI(WithReader(rw), WithWriter(rw), WithCAS(testCAS(t)))
 	got, err := api.Install(context.Background(), InstallRequest{Kind: "local_path", Path: dir})
 	if err != nil {
 		t.Fatalf("expected a nil verifier to skip verification and succeed, got error: %v", err)
@@ -218,6 +242,14 @@ func TestInstall_AC006_Falsifiable_NilVerifierPassesVacuously(t *testing.T) {
 // must go red (Install would refuse the unsigned bundle outright).
 func TestInstall_AC007_UnsignedBundle_DefaultPolicy_Installs(t *testing.T) {
 	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, "policy"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	artifactBytes := []byte("unsigned-policy-bytes")
+	digest := sha256Hex(artifactBytes)
+	if err := os.WriteFile(filepath.Join(tmp, "policy", "policy.toml"), artifactBytes, 0o644); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
 	manifestYAML := `schema_version: 1
 name: unsigned-bundle
 version: 1.0.0
@@ -226,14 +258,14 @@ artifacts:
   - name: policy.toml
     kind: policy
     path: policy/policy.toml
-    content_hash: "sha256:` + sha64("unsigned-policy") + `"
+    content_hash: "` + digest + `"
 `
 	if err := os.WriteFile(filepath.Join(tmp, "kenaz.yaml"), []byte(manifestYAML), 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
 	rw := &memReadWriter{}
 	// No WithVerifier / WithSigningPolicyFunc — the DEFAULT path.
-	api := NewAPI(WithReader(rw), WithWriter(rw))
+	api := NewAPI(WithReader(rw), WithWriter(rw), WithCAS(testCAS(t)))
 	got, err := api.Install(context.Background(), InstallRequest{Kind: "local_path", Path: tmp})
 	if err != nil {
 		t.Fatalf("Install of an unsigned bundle under the default policy should succeed: %v", err)
@@ -263,6 +295,7 @@ func TestInstall_UnknownAnchor_SigningRequired_Refuses(t *testing.T) {
 		WithVerifier(verifier),
 		WithAnchorsFunc(func(ctx context.Context) ([]trust.Anchor, error) { return nil, nil }),
 		WithSigningPolicyFunc(func() integrity.SigningPolicy { return integrity.SigningRequired }),
+		WithCAS(testCAS(t)),
 	)
 	_, err = api.Install(context.Background(), InstallRequest{Kind: "local_path", Path: dir})
 	if !errors.Is(err, corebundle.ErrSignatureRequired) {

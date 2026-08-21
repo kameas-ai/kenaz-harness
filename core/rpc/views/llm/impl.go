@@ -778,6 +778,16 @@ func (a *API) ListProviders(ctx context.Context) ([]Provider, error) {
 	}
 	out := make([]Provider, 0, len(seen))
 	for _, v := range seen {
+		// fleet-enforcement-truth-01PMZ505 WP04: a fleet-pushed
+		// ProviderAllowlist restricts which providers this device may
+		// list/use at all — an allow-list is a restriction and wins
+		// over anything the user configured locally (D-3). This must
+		// filter the list AND (below, in StartStream) block execution;
+		// filtering only the list here would be a UI suggestion, not
+		// governance (spec AC-004).
+		if !providerAllowed(v.Kind) {
+			continue
+		}
 		// WP05: populate Redaction via credPeeker if wired.
 		if a.credPeeker != nil {
 			v.Redaction = a.credPeeker.PeekCred(ctx, v.Cred.Kind, v.Cred.Locator)
@@ -911,6 +921,18 @@ func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverri
 		log.Error("llm.start_stream.failed", "reason", "provider load failed", "err", err.Error())
 		return "", err
 	}
+	// fleet-enforcement-truth-01PMZ505 WP04, spec AC-004: a filtered
+	// ListProviders result is a UI suggestion, not governance, unless
+	// execution is blocked too. Check the profile's provider kind
+	// against the fleet allow-list before starting a stream — an
+	// excluded profile must fail here even if a caller bypasses the
+	// (already-filtered) picker.
+	if a.reg != nil {
+		if prof, perr := a.reg.Profile(profileID); perr == nil && !providerAllowed(prof.Kind) {
+			log.Warn("llm.start_stream.blocked", "reason", "fleet provider allowlist", "profile_id", profileID, "kind", prof.Kind)
+			return "", fmt.Errorf("llm: profile %q is blocked by the fleet provider allow-list", profileID)
+		}
+	}
 	if a.chatRunner == nil {
 		log.Error("llm.start_stream.failed", "reason", "chat runner not wired")
 		return "", errors.New("llm: chat runner not wired")
@@ -1012,6 +1034,15 @@ func (a *API) profileKindAndModel(profileID, modelOverride string) (kind, model 
 	}
 	if modelOverride != "" {
 		return prof.Kind, modelOverride
+	}
+	// fleet-enforcement-truth-01PMZ505 WP04, spec D-3/AC-005: a
+	// fleet-pushed DefaultModel SEEDS resolution only when the caller
+	// made no explicit per-run choice (modelOverride == "", handled
+	// above by returning first). It never overrides one. This is the
+	// opposite precedence from ProviderAllowlist, which restricts and
+	// wins regardless of user selection — see providerAllowed above.
+	if def := fleetDefaultModel(); def != "" {
+		return prof.Kind, def
 	}
 	return prof.Kind, prof.Model
 }

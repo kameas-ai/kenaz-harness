@@ -1147,6 +1147,23 @@ export interface Settings {
    * "optional" (default, empty==optional), "required", "forbidden".
    */
   bundleSigningPolicy?: string;
+
+  /**
+   * GraphAuthoringEnabled — the model-authored-agent-graphs consent
+   * dial (model-authored-graphs-01PMGA01 UNIT-4/UNIT-6, FR-006).
+   * Default false: a fresh install, and any install upgraded from a
+   * build that predates this field, denies `graph.author` until the
+   * user opts in here. Read live on every graph.author evaluation, so
+   * flipping it takes effect on the next draft attempt without an app
+   * restart. Round-trips through the generic Settings_Get/Settings_Set
+   * surface like autoCollapseBranchesInSidebar above — there is no
+   * dedicated Settings_Get/SetGraphAuthoringEnabled binding.
+   * Deliberately NOT exposed to a model through
+   * harness.SettingsAllowlist (a model that can flip its own authoring
+   * permission has no permission gate at all — see manager.go's
+   * WithGraphCedarGate wiring comment).
+   */
+  graphAuthoringEnabled?: boolean;
 }
 
 /**
@@ -2737,6 +2754,15 @@ export interface GraphInfo {
   invalid?: boolean;
   /** Short human-readable reason when invalid is true. */
   invalidReason?: string;
+  /**
+   * "model_authored" when this user-library entry was drafted by a
+   * model and has not yet been reviewed (model-authored-graphs-01PMGA01
+   * UNIT-5 stamps it server-side in saveGraph; UNIT-6 reads it here so
+   * GraphsView can badge the row and disable Run without loading the
+   * full YAML). Empty for an ordinary human-authored graph and for
+   * every bundled library entry.
+   */
+  specProvenance?: string;
 }
 
 /**
@@ -2755,6 +2781,15 @@ export interface GraphSpec {
   name?: string;
   scope: 'library' | 'user' | 'materialized';
   yaml: string;
+  /**
+   * Mirrors the `spec_provenance:` scalar already round-tripped inside
+   * `yaml` (model-authored-graphs-01PMGA01 UNIT-6) — a convenience
+   * projection, not a second source of truth. "model_authored" marks
+   * an unreviewed model draft; "library_fallback" marks a materialized
+   * run projected against the library file because the resolved spec
+   * was no longer available.
+   */
+  specProvenance?: string;
 }
 
 /**

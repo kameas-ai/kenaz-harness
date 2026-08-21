@@ -1017,6 +1017,33 @@ async function toggleAutoCollapseBranches() {
   });
 }
 
+/* ── Model-authored agent graphs (model-authored-graphs-01PMGA01 UNIT-4/6) ── */
+
+/**
+ * graphAuthoringEnabled — the FR-006 consent dial. Default false: a
+ * session cannot draft an agent graph until the user opts in here.
+ * Round-trips through the generic Settings_Get/Settings_Set surface
+ * (no dedicated binding) and is read live by GateGraphAuthor on every
+ * graph.author evaluation, so flipping it here takes effect on the
+ * next draft attempt without an app restart.
+ */
+const graphAuthoringEnabled = computed({
+  get: () => settings.value.graphAuthoringEnabled ?? false,
+  set: (next: boolean) => {
+    settings.value = { ...settings.value, graphAuthoringEnabled: next };
+  },
+});
+
+async function toggleGraphAuthoringEnabled() {
+  const next = !graphAuthoringEnabled.value;
+  await runAsyncAction({
+    optimistic: () => { graphAuthoringEnabled.value = next; },
+    revert:     () => { graphAuthoringEnabled.value = !next; },
+    action:     () => client.settings.set({ ...settings.value, graphAuthoringEnabled: next }),
+    errorLabel: 'Toggle model-authored graph drafting',
+  });
+}
+
 /** deleteBranchesWithParent — default false (safe orphan behaviour). */
 const deleteBranchesWithParent = computed({
   get: () => settings.value.deleteBranchesWithParent ?? false,
@@ -2049,6 +2076,42 @@ onMounted(() => {
             data-testid="max-branch-depth-slider"
             @change="setMaxVisibleBranchDepth(+($event.target as HTMLInputElement).value)"
           />
+        </div>
+      </section>
+
+      <!-- Model-authored agent graphs (model-authored-graphs-01PMGA01 UNIT-4/6) -->
+      <section data-testid="graph-authoring-section">
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Agent graphs
+        </h2>
+        <div class="mt-2 flex items-start justify-between gap-4">
+          <div>
+            <p class="font-ui text-[12px] text-ink">Let the assistant draft new agent graphs</p>
+            <p class="font-ui text-[11px] text-ink-dim">
+              When on, a chat session may save a new agent graph as an unreviewed
+              draft in your library — it cannot run until you open it and save it
+              yourself, which marks it reviewed. When off (default), any attempt
+              to draft a graph is refused. This does not affect graphs you author
+              yourself in the editor.
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            :aria-checked="graphAuthoringEnabled"
+            aria-label="Let the assistant draft new agent graphs"
+            class="relative mt-0.5 h-5 w-9 flex-shrink-0 rounded-full border transition-colors"
+            :class="graphAuthoringEnabled
+              ? 'border-accent bg-accent'
+              : 'border-surface-3 bg-surface-2'"
+            data-testid="graph-authoring-enabled-toggle"
+            @click="toggleGraphAuthoringEnabled"
+          >
+            <span
+              class="absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform"
+              :class="graphAuthoringEnabled ? 'translate-x-4' : 'translate-x-0.5'"
+            />
+          </button>
         </div>
       </section>
 

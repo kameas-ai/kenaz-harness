@@ -159,6 +159,39 @@ describe('GraphsView', () => {
     expect(startRun).not.toHaveBeenCalled();
   });
 
+  it('badges an unreviewed model-authored graph and disables its Run button (UNIT-6, AC-009)', async () => {
+    const graphs = [
+      makeGraph({ id: 'human_one', name: 'Human', scope: 'user' }),
+      makeGraph({
+        id: 'draft_one',
+        name: 'Draft',
+        scope: 'user',
+        specProvenance: 'model_authored',
+      }),
+    ];
+    const { wrapper, startRun } = mountWith({ graphs });
+    await flushPromises();
+
+    // Badge renders only on the unreviewed row.
+    expect(wrapper.find('[data-testid="graph-unreviewed-draft_one"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="graph-unreviewed-human_one"]').exists()).toBe(false);
+
+    // Run is disabled for the unreviewed row and clicking it never calls
+    // startRun — this is honesty, not the security control (AC-008's
+    // graph_run_unreviewed_forbid.cedar is the real gate); the mutation
+    // this guards is "hardcode the disabled/banner condition to false".
+    const runButton = wrapper.get('[data-testid="graph-run-draft_one"]');
+    expect(runButton.attributes('disabled')).toBeDefined();
+    await runButton.trigger('click');
+    await flushPromises();
+    expect(startRun).not.toHaveBeenCalled();
+
+    // The reviewed row's Run stays enabled.
+    expect(
+      wrapper.get('[data-testid="graph-run-human_one"]').attributes('disabled'),
+    ).toBeUndefined();
+  });
+
   it('confirms before deleting a user graph and forwards the id', async () => {
     const graphs = [makeGraph({ id: 'user_g', scope: 'user' })];
     const { wrapper, deleteGraph } = mountWith({ graphs });

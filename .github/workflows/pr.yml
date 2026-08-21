@@ -411,6 +411,32 @@ jobs:
         # directory and fails on any change to that tree.
         run: bash scripts/ci/check-tests-are-hermetic.sh
 
+      - name: audit-store-before-retention guard (G-1)
+        # audit-that-tells-the-truth-01PMZA10 WP12, tasks.md §UNIT-10,
+        # plan.md Rule 3: "nothing advertises retention before UNIT-8."
+        # Fails if anything under core/rpc/ or frontend/src/ claims
+        # retention is enforced — a hardcoded RetentionEnforced: true, a
+        # scheduled sweep construction site, or a panel string promising
+        # a sweep — while core/rpc/api.go's audit.NewAPI( construction
+        # carries no audit.WithStore( option. Planted-violation proof:
+        # scripts/ci/gates_can_fail_test.go
+        # TestAuditStoreBeforeRetentionGate_PlantedStoreRemovalFails.
+        run: bash scripts/ci/check-audit-store-before-retention.sh
+
+      - name: fts-sync guard (G-3, new class)
+        # audit-that-tells-the-truth-01PMZA10 WP12, tasks.md §UNIT-10.
+        # Catches the events_fts-class defect a second time: an
+        # external-content FTS5 virtual table with an AFTER INSERT sync
+        # trigger and no AFTER DELETE trigger (and no direct
+        # 'delete'-command sync) leaves a deleted row's terms matchable
+        # AND makes any later SearchFTS on that rowid error with
+        # "fts5: missing row N from content table". This class has
+        # shipped twice — 0001_events.sql here, and sessions/0335 for
+        # messages_fts. Planted-violation proof:
+        # scripts/ci/gates_can_fail_test.go
+        # "fts-sync/external-content-table-no-delete-sync".
+        run: bash scripts/ci/check-fts-sync.sh
+
       # csp guard runs in test-frontend after `npm run build` produces
       # the real frontend/dist/index.html — there's no point checking
       # the CSP of a stub.

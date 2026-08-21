@@ -303,12 +303,13 @@ func (m *Manager) listLibrary(scope GraphScope) []GraphInfo {
 						updated = st.ModTime().UTC().Format(time.RFC3339Nano)
 					}
 					info := GraphInfo{
-						ID:          g.ID,
-						Name:        g.Name,
-						Description: g.Description,
-						Scope:       "user",
-						Source:      full,
-						UpdatedAt:   updated,
+						ID:             g.ID,
+						Name:           g.Name,
+						Description:    g.Description,
+						Scope:          "user",
+						Source:         full,
+						UpdatedAt:      updated,
+						SpecProvenance: g.SpecProvenance,
 					}
 					// FR-004: a file that parses but fails Validate is the
 					// §1.2 back-door defence — a graph written straight to
@@ -343,7 +344,7 @@ func (m *Manager) loadGraph(id string) (GraphSpec, error) {
 			if err != nil {
 				return GraphSpec{}, fmt.Errorf("agentgraph: parse %s: %w", full, err)
 			}
-			return GraphSpec{ID: g.ID, Name: g.Name, Scope: "user", YAML: string(data)}, nil
+			return GraphSpec{ID: g.ID, Name: g.Name, Scope: "user", YAML: string(data), SpecProvenance: g.SpecProvenance}, nil
 		}
 	}
 	m.mu.RLock()
@@ -352,7 +353,7 @@ func (m *Manager) loadGraph(id string) (GraphSpec, error) {
 	if !ok {
 		return GraphSpec{}, fmt.Errorf("agentgraph: graph %q not found", id)
 	}
-	return GraphSpec{ID: id, Name: b.graph.Name, Scope: "library", YAML: b.yaml}, nil
+	return GraphSpec{ID: id, Name: b.graph.Name, Scope: "library", YAML: b.yaml, SpecProvenance: b.graph.SpecProvenance}, nil
 }
 
 // saveGraph persists user-supplied YAML at <DataDir>/agent_graph/library/<id>.yaml.
@@ -878,7 +879,7 @@ func (m *Manager) materializeRun(runID string) (GraphSpec, error) {
 	if err != nil {
 		return GraphSpec{}, fmt.Errorf("agentgraph: encode materialized run %q: %w", runID, err)
 	}
-	return GraphSpec{ID: mg.ID, Name: mg.Name, Scope: "materialized", YAML: string(out)}, nil
+	return GraphSpec{ID: mg.ID, Name: mg.Name, Scope: "materialized", YAML: string(out), SpecProvenance: mg.SpecProvenance}, nil
 }
 
 // runSpecFor resolves the spec a run executed, in decreasing order of

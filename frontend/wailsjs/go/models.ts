@@ -177,6 +177,7 @@ export namespace agentgraph {
 	    updatedAt?: string;
 	    invalid?: boolean;
 	    invalidReason?: string;
+	    specProvenance?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new GraphInfo(source);
@@ -192,6 +193,7 @@ export namespace agentgraph {
 	        this.updatedAt = source["updatedAt"];
 	        this.invalid = source["invalid"];
 	        this.invalidReason = source["invalidReason"];
+	        this.specProvenance = source["specProvenance"];
 	    }
 	}
 	export class GraphSpec {
@@ -199,6 +201,7 @@ export namespace agentgraph {
 	    name?: string;
 	    scope: string;
 	    yaml: string;
+	    specProvenance?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new GraphSpec(source);
@@ -210,6 +213,7 @@ export namespace agentgraph {
 	        this.name = source["name"];
 	        this.scope = source["scope"];
 	        this.yaml = source["yaml"];
+	        this.specProvenance = source["specProvenance"];
 	    }
 	}
 	export class PendingAsk {
@@ -1072,6 +1076,7 @@ export namespace bundle {
 	export class InstallRequest {
 	    kind: string;
 	    path: string;
+	    url?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new InstallRequest(source);
@@ -1081,6 +1086,7 @@ export namespace bundle {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.kind = source["kind"];
 	        this.path = source["path"];
+	        this.url = source["url"];
 	    }
 	}
 

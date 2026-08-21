@@ -154,9 +154,19 @@ func (e *ledgerEmitter) emitToolCall(taskID, tool string) {
 	e.emit(taskID, phaseToolCall, map[string]any{"tool": tool})
 }
 
-// emitTaskComplete records successful terminal completion of a task.
-func (e *ledgerEmitter) emitTaskComplete(taskID string) {
-	e.emit(taskID, phaseTaskComplete, nil)
+// emitTaskComplete records terminal completion of a task — success or
+// failure. exitCode is 0 for a successful run and non-zero for a failed one,
+// mirroring auditRecord.ExitCode (auditsink.go:67): the ledger and the audit
+// sink now agree, where before this method could not distinguish the two.
+//
+// The "exit_code" payload key is additive: a reporter/consumer built against
+// the pre-existing wire contract (which never carried this key) sees exactly
+// today's record when exitCode is omitted by an older caller, and gains the
+// distinction once it starts reading the new key. It does not touch the phase
+// vocabulary (ledger.go phaseTask* constants) — that change is E-006 and is
+// blocked on the sigil TerminalSource contract living outside this repo.
+func (e *ledgerEmitter) emitTaskComplete(taskID string, exitCode int) {
+	e.emit(taskID, phaseTaskComplete, map[string]any{"exit_code": exitCode})
 }
 
 // emitTaskCancelled records cancellation (terminal) of a task.

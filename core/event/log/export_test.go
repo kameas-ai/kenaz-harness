@@ -1,3 +1,12 @@
+// AC-PI-2 (audit-that-tells-the-truth-01PMZA10 WP-PI): drives
+// NewMemoryBackend() deliberately — this exercises eventlog.Export's own
+// CSV/JSONL/PDF formatting logic, which is identical regardless of
+// backend. The claim that Export writes a REAL file against a REAL
+// backend end to end (through core/rpc/views/audit.API.Export, WP07's
+// AC-009) is covered against real sqlite by
+// core/rpc/views/audit/store_integration_test.go's
+// TestExport_WithBackend_WritesRealFileWithRows and
+// TestExport_NoBackend_ErrorsNotEmptyFile.
 package log
 
 import (

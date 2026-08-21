@@ -671,6 +671,106 @@ describe('RecipeKeyPromptModal — primary_auth UX', () => {
   });
 });
 
+// ── UNIT-2: bring-your-own OAuth copy (ruling D-3, FR-003b) ────────────────
+// A recipe whose auth.clientId is still a literal "${VAR}" token — the
+// shape UNIT-1 substitutes server-side once the operator supplies the
+// key — must not tell the user "no token to paste"; that copy is exactly
+// backwards for these recipes; per spec.md AC-003b the modal must instead
+// explain the bring-your-own setup and link the registration page, and must
+// never claim Kameas registers the app.
+describe('RecipeKeyPromptModal — bring-your-own OAuth copy (UNIT-2)', () => {
+  function makeByoOAuthRecipe(overrides: Partial<Recipe> = {}): Recipe {
+    return {
+      id: 'atlassian',
+      displayName: 'Atlassian (Jira & Confluence)',
+      description: 'Search and manage Jira issues.',
+      category: 'productivity',
+      // NOTE: the real atlassian recipe declares primary_auth:
+      // "browser_oauth_pkce", but the frontend `PrimaryAuth` type (spec.md
+      // §1.8 — 46 recipes' worth of gap) does not include that arm yet;
+      // widening it is UNIT-3's job (3g), coupled to envKeysAreSecondary.
+      // Omitted here deliberately — this fixture's behaviour under test
+      // (the OAuth-section BYO copy) depends only on auth.clientId being an
+      // unresolved token, not on primaryAuth.
+      auth: {
+        kind: 'mcp_oauth',
+        clientId: '${KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID}',
+        scopes: ['read:jira-work'],
+      },
+      envKeys: [
+        {
+          name: 'KAMEAS_ATLASSIAN_OAUTH_CLIENT_ID',
+          display: "Your Atlassian OAuth client ID (bring your own — Kameas does not provide one)",
+          docsUrl: 'https://developer.atlassian.com/console/myapps/',
+          required: true,
+        },
+      ],
+      capabilities: { tools: true, resources: false, prompts: false, sampling: false },
+      docsUrl: 'https://developer.atlassian.com/cloud/jira/platform/mcp-server/',
+      ...overrides,
+    };
+  }
+
+  it('renders bring-your-own copy, not "no token to paste", for a placeholder client id', async () => {
+    const recipe = makeByoOAuthRecipe();
+    const install = vi.fn(async () => okStatus(recipe.id));
+    const w = mount(RecipeKeyPromptModal, {
+      global: { plugins: [{ install: (app) => provideFakeClient(app) }] },
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+
+    expect(w.find('[data-testid=recipe-modal-oauth-section]').exists()).toBe(true);
+    const notice = w.find('[data-testid=recipe-modal-byo-oauth-notice]');
+    expect(notice.exists()).toBe(true);
+    expect(notice.text()).not.toContain('no token to paste');
+    expect(notice.text()).toContain('your own OAuth app');
+    expect(notice.text()).not.toMatch(/Kameas (registers|will register|manages)/i);
+  });
+
+  it('links the provider registration page via recipe.docsUrl', async () => {
+    const recipe = makeByoOAuthRecipe();
+    const install = vi.fn(async () => okStatus(recipe.id));
+    const w = mount(RecipeKeyPromptModal, {
+      global: { plugins: [{ install: (app) => provideFakeClient(app) }] },
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+
+    const link = w.get('[data-testid=recipe-modal-byo-oauth-link]');
+    expect(link.attributes('href')).toBe(recipe.docsUrl);
+    expect(link.attributes('target')).toBe('_blank');
+    expect(link.attributes('rel')).toBe('noopener');
+  });
+
+  it('renders the ordinary "no token to paste" copy for a non-BYO OAuth recipe (unchanged behaviour)', async () => {
+    const recipe: Recipe = {
+      id: 'remote-oauth',
+      displayName: 'GitHub (remote)',
+      description: 'Official remote MCP server.',
+      category: 'developer',
+      primaryAuth: 'oauth',
+      auth: {
+        kind: 'mcp_oauth',
+        clientId: 'Iv23liRealBakedID',
+        scopes: ['repo'],
+      },
+      envKeys: [],
+      capabilities: { tools: true, resources: false, prompts: false, sampling: false },
+    };
+    const install = vi.fn(async () => okStatus(recipe.id));
+    const w = mount(RecipeKeyPromptModal, {
+      global: { plugins: [{ install: (app) => provideFakeClient(app) }] },
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+
+    expect(w.find('[data-testid=recipe-modal-oauth-section]').exists()).toBe(true);
+    expect(w.find('[data-testid=recipe-modal-byo-oauth-notice]').exists()).toBe(false);
+    expect(w.text()).toContain('no token to paste');
+  });
+});
+
 // ── prereq pre-flight banner tests ───────────────────────────────────────
 describe('RecipeKeyPromptModal — prereq pre-flight', () => {
   function withPrereqStub(missing: MissingPrereq[]) {

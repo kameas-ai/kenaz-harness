@@ -36,6 +36,7 @@ import (
 	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
 	coreatt "github.com/kameas-ai/kenaz-harness/core/attachments"
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
+	bundlehttp "github.com/kameas-ai/kenaz-harness/core/bundle/channels/http"
 	bundleintegrity "github.com/kameas-ai/kenaz-harness/core/bundle/integrity"
 	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
 	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
@@ -1699,6 +1700,20 @@ func New(c *core.Core, opts ...Option) *API {
 	settingsImpl := settings.NewAPI(settingsStore)
 	a.settingsAPI = settingsImpl
 	a.settingsImpl = settingsImpl
+	// Hand the process-singleton Cedar engine to the fleet config applier
+	// (fleet-enforcement-truth-01PMZ505 WP03, spec §1.1/§5.2). Without
+	// this, compositeConfigApplier.ApplyBundle's cedarEngine read
+	// (core/rpc/views/settings/fleet.go) is always nil, so a
+	// signature-verified cedar_delta bundle is never installed into the
+	// live engine — WP02 now surfaces that as a named apply error instead
+	// of a clean ACK, but this is the wire that removes the error and
+	// makes team Cedar policy actually enforce. a.cedarEngine is the same
+	// singleton assigned above (buildCedarEngineOrNil) and read
+	// elsewhere in this file — check-cedar-engine-singleton.sh fails on a
+	// second construction site, so pass the existing pointer, never build
+	// a new one. May be nil (no dataDir / construction failure);
+	// SetCedarEngine and the applier both handle that.
+	settingsImpl.SetCedarEngine(a.cedarEngine)
 	// AuditSettings.RetentionEnforced (audit-that-tells-the-truth-01PMZA10
 	// UNIT-4, spec D-8): false until UNIT-8 lands a real sweep. This is
 	// the wiring site that makes the value honest — GetAuditSettings
@@ -2359,6 +2374,37 @@ func New(c *core.Core, opts ...Option) *API {
 			return bundleintegrity.SigningOptional
 		}
 	}))
+	// UNIT-7 (bundle-download-and-verify-01PMZ909, spec §1.7 F-3, plan.md
+	// Rule 2): Bundle_Install had NO Cedar gate at all before this — a
+	// hazard the moment the registered channel set includes a network
+	// fetch. a.cedarGate() is the SAME process-singleton every other
+	// gate site consults (WP05 hoist); it default-allows
+	// (cedar.AllowAll{}) only when no engine was constructed at all,
+	// never silently for a constructed-but-non-matching policy — the
+	// shipped default_bundle_policy.cedar (core/policy/cedar/engine.go)
+	// is what keeps a REAL engine's evaluation from being
+	// NotApplicable-and-therefore-allowed by accident.
+	bundleOpts = append(bundleOpts, bundle.WithGate(a.cedarGate()))
+	bundleOpts = append(bundleOpts, bundle.WithAuditEmitter(&bundleAuditBridge{impl: a.auditImpl}))
+	// This is the ONLY place http_mirror's factory is registered into a
+	// production channels.Registry — deliberately not in UNIT-6's
+	// commit (plan.md Rule 2 / this mission's hard sequencing
+	// constraint: UNIT-7's gate above must exist before a caller-
+	// supplied URL becomes fetchable in production). NewDefaultRegistry
+	// already carries local_path; Register only adds http_mirror on
+	// top. Credential resolution for http_mirror's AuthRef is left at
+	// its safe default (secrets.NoopResolver{}, inside WithSecretsResolver's
+	// nil-default in core/rpc/views/bundle) — no production
+	// secrets.Resolver singleton is wired anywhere else in this
+	// constructor for WithSecretsResolver to reuse; an AuthRef-bearing
+	// http_mirror install fails closed with a clear "no resolver
+	// configured" error rather than silently skipping credential
+	// resolution. Tracked as a known follow-up, not a hidden gap.
+	channelRegistry := bundle.NewDefaultRegistry()
+	if regErr := channelRegistry.Register(bundlehttp.Kind, bundlehttp.Factory); regErr != nil {
+		slog.Warn("bundle http_mirror channel registration failed", "err", regErr)
+	}
+	bundleOpts = append(bundleOpts, bundle.WithChannelRegistry(channelRegistry))
 	a.bundleAPI = bundle.NewAPI(bundleOpts...)
 
 	// Corpora subsystem (mission agent-kernel-graph; Bundle C). Wired
@@ -8300,6 +8346,33 @@ func (e *contextSyncAuditBridge) Emit(_ context.Context, ev contextaudit.Event) 
 		ID:        fmt.Sprintf("ctx-sync-%d", ev.TS.UnixNano()),
 		Timestamp: ev.TS.UTC().Format(time.RFC3339Nano),
 		Category:  "FLEET",
+		Subject:   string(ev.Kind),
+		Trailing:  fmt.Sprintf("payload_type=%T", ev.Payload),
+	})
+	return nil
+}
+
+// bundleAuditBridge implements contextaudit.Emitter for the bundle
+// install path (bundle-download-and-verify-01PMZ909 UNIT-7). Routes
+// bundle.fetched / bundle.signature_verified / bundle.signature_rejected
+// events to the in-process audit ring. Privacy: only ids, versions,
+// channel kinds, and typed rejection reason STRINGS appear in
+// Trailing — never artifact bytes, signature bytes, or a resolved
+// credential (audit.go's BundleFetchedPayload / BundleSignature*Payload
+// doc comments record this invariant at the payload-type source).
+// Modelled on contextSyncAuditBridge above.
+type bundleAuditBridge struct {
+	impl *audit.API
+}
+
+func (e *bundleAuditBridge) Emit(_ context.Context, ev contextaudit.Event) error {
+	if e.impl == nil {
+		return nil
+	}
+	e.impl.Push(audit.Entry{
+		ID:        fmt.Sprintf("bundle-%d", ev.TS.UnixNano()),
+		Timestamp: ev.TS.UTC().Format(time.RFC3339Nano),
+		Category:  "BUNDLE",
 		Subject:   string(ev.Kind),
 		Trailing:  fmt.Sprintf("payload_type=%T", ev.Payload),
 	})

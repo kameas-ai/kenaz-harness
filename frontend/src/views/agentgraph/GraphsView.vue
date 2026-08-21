@@ -10,6 +10,18 @@ import { useRouter } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { GraphInfo } from '@/lib/types';
+import { SPEC_PROVENANCE_MODEL_AUTHORED } from '@/lib/canvas/graphAdapter';
+
+/**
+ * UNIT-6: the canvas is the review step. An unreviewed row is one
+ * the backend's graph_run_unreviewed_forbid.cedar will refuse to
+ * start (UNIT-4/UNIT-5) — the Run button reflects that here so the UI
+ * is honest about a control the backend already enforces, not the
+ * control itself (spec §0.4).
+ */
+function isUnreviewed(g: GraphInfo): boolean {
+  return g.specProvenance === SPEC_PROVENANCE_MODEL_AUTHORED;
+}
 
 const client = useHarnessClient();
 const router = useRouter();
@@ -33,7 +45,7 @@ async function refresh() {
 }
 
 async function runGraph(g: GraphInfo) {
-  if (g.invalid) return;
+  if (g.invalid || isUnreviewed(g)) return;
   runError.value = null;
   try {
     const resp = await client.graph.startRun({ graphId: g.id });
@@ -153,6 +165,14 @@ defineExpose({ refresh });
                 >
                   invalid
                 </span>
+                <span
+                  v-if="isUnreviewed(g)"
+                  class="rounded-sm border border-signal-warn px-2 py-0 font-ui text-[10px] uppercase tracking-[0.18em] text-signal-warn"
+                  :data-testid="`graph-unreviewed-${g.id}`"
+                  title="Drafted by the assistant; not yet reviewed"
+                >
+                  unreviewed
+                </span>
               </div>
               <div
                 v-if="g.description"
@@ -167,14 +187,27 @@ defineExpose({ refresh });
               >
                 {{ g.invalidReason || 'This graph does not pass validation and cannot run.' }}
               </div>
+              <div
+                v-else-if="isUnreviewed(g)"
+                class="mt-1 font-ui text-[11px] text-signal-warn"
+                :data-testid="`graph-unreviewed-reason-${g.id}`"
+              >
+                Drafted by the assistant — open it and save to mark it reviewed before it can run.
+              </div>
             </div>
             <div class="flex shrink-0 items-center gap-2">
               <button
                 type="button"
                 class="rounded-sm border border-accent px-2 py-1 font-ui text-[11px] uppercase tracking-[0.18em] text-accent hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-40"
                 :data-testid="`graph-run-${g.id}`"
-                :disabled="g.invalid"
-                :title="g.invalid ? (g.invalidReason || 'Invalid graph') : undefined"
+                :disabled="g.invalid || isUnreviewed(g)"
+                :title="
+                  g.invalid
+                    ? (g.invalidReason || 'Invalid graph')
+                    : isUnreviewed(g)
+                      ? 'Unreviewed draft — open and save to review before running'
+                      : undefined
+                "
                 @click="runGraph(g)"
               >
                 Run

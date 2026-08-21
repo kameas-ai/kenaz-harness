@@ -1870,11 +1870,32 @@ so the only path that emits has no coverage whatsoever. The explicit path
 needs a real persisted parent message, which the current fixture
 (`newTestStack`) does not build.
 
-**Owed:** decide whether the legacy path should audit; then a spy-emitter
-test on whichever paths are meant to emit, for `branches`, `tools` and
-`update`. The test written during this investigation was removed rather than
-left red or weakened to pass — a green test over the non-emitting path would
-have enshrined the gap. **Owner: unassigned; belongs with ZA10 WP06.**
+**Sharpened by the approving review of PR #301 (2026-08-21).** The
+unaudited path is not an edge case — it is the *ordinary* one.
+`frontend/src/components/chat/CreateBranchModal.vue`, opened by the "+ Fork"
+button and reached from `ChatInput.vue` / `BranchSidebar.vue` /
+`BranchSuggestionBanner.vue`, sends **no** `ParentMessageID`. So a user
+creating a branch the normal way produces **zero** audit trail, while only
+the fork-at-a-specific-message path is recorded. A trust surface that audits
+the rare path and not the common one is worse than one that audits neither,
+because the log looks populated.
+
+**Owed:** decide whether the legacy path should audit — it almost certainly
+should, given the above; then a spy-emitter test on whichever paths are
+meant to emit, for `branches`, `tools` and `update` (all three lack one).
+The test written during this investigation was removed rather than left red
+or weakened to pass — a green test over the non-emitting path would have
+enshrined the gap.
+
+**Owner: alec. Date: 2026-08-21. Belongs with ZA10 WP06.** Recorded with an
+owner because CLAUDE.md's own rule is that a justification names the blocker
+*and* the owner — the first version of this entry said "unassigned", which
+the PR #301 reviewer correctly flagged as failing that bar. It approved the
+release anyway on the grounds that the gap is honestly disclosed, is a net
+improvement over zero branch auditing, and matches how equivalent findings
+are carried elsewhere in the same PR. That reasoning is sound and the
+release shipped; the owner gap is fixed here rather than left as a second
+lie about the first.
 
 ## Drained
 
