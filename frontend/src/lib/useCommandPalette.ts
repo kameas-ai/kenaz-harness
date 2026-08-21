@@ -48,10 +48,26 @@ const NAV_ACTIONS: PaletteAction[] = [
   // agentgraph-total-convergence-01PMGX01 WP16: back in the left rail as well
   // (see LeftRail.vue). The palette entry stays — a rail entry and a Cmd+K
   // action are not redundant, they serve different reach.
-  { id: 'nav.agentgraph', label: 'Go to Agent graphs', hint: 'Graphs the kernel runs, and the materialized graph of each conversation', perform: () => navigate('#/agentgraph') },
+  // served-mode-is-a-real-mode-01PMZ707 WP03: gated on !isServedMode() —
+  // both routes render NotAvailableInServedMode in a served build (D-701;
+  // Graph_*/CedarPolicy_*/Policy_* have no serve dispatch case), mirroring
+  // the nav.sites/nav.marketplace predicate below.
+  {
+    id: 'nav.agentgraph',
+    label: 'Go to Agent graphs',
+    hint: 'Graphs the kernel runs, and the materialized graph of each conversation',
+    visible: () => !isServedMode(),
+    perform: () => navigate('#/agentgraph'),
+  },
   { id: 'nav.audit', label: 'Go to Audit log', hint: 'Session & tool audit trail', perform: () => navigate('#/audit') },
   { id: 'nav.permissions', label: 'Go to Permissions', hint: 'Tool & bash permissions', perform: () => navigate('#/permissions') },
-  { id: 'nav.policy', label: 'Go to Security policy', hint: 'Advanced security policy editor', perform: () => navigate('#/policy') },
+  {
+    id: 'nav.policy',
+    label: 'Go to Security policy',
+    hint: 'Advanced security policy editor',
+    visible: () => !isServedMode(),
+    perform: () => navigate('#/policy'),
+  },
   // Fleet surfaces. Both routes exist only in the desktop bundle
   // (docs/served-mode-boundary.md) and both are entitlement-gated, so these
   // carry the same predicate as their LeftRail entries. Before

@@ -100,6 +100,12 @@ describe('ProvidersView (served mode)', () => {
     // TestProvider is not ported to the served transport — a Test button
     // would reject on click.
     expect(wrapper.text()).not.toContain('Test');
+    // served-mode-is-a-real-mode-01PMZ707 WP03, spec.md §5.3: the local-
+    // runtime detection cards are a write surface too (Add local runtime) —
+    // confirmed hidden, not just the table's own buttons.
+    expect(
+      wrapper.find('[data-testid="local-runtimes-section"]').exists(),
+    ).toBe(false);
   });
 
   it('tells the user how to fix it when no provider was delivered', async () => {

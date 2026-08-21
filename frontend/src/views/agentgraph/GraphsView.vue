@@ -9,8 +9,17 @@ import { onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
+import { useServedMode } from '@/lib/useServedMode';
+import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import type { GraphInfo } from '@/lib/types';
 import { SPEC_PROVENANCE_MODEL_AUTHORED } from '@/lib/canvas/graphAdapter';
+
+// served-mode-is-a-real-mode-01PMZ707 WP03, spec.md §2/§5.3 (D-701): graph
+// authoring/execution are genuinely unrouted in served mode (no Graph_*
+// entry in core/serve/methods.go, no dispatch case — verified, not a gap
+// pending a port) and routing them in would be new capability work, not a
+// parity fix. This is an honest refusal, not a deferred one.
+const servedMode = useServedMode();
 
 /**
  * UNIT-6: the canvas is the review step. An unreviewed row is one
@@ -88,7 +97,12 @@ defineExpose({ refresh });
 </script>
 
 <template>
-  <div>
+  <NotAvailableInServedMode
+    v-if="servedMode"
+    feature="Agent graphs"
+    reason="Graph authoring and execution run through Graph_* RPCs that are not routed in served mode — porting them would put graph authoring and execution behind the shared workbench token, which the served build's confinement model does not support yet."
+  />
+  <div v-else>
     <CanvasHead
       number="12"
       section="GRAPHS"

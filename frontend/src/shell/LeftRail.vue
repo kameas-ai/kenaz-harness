@@ -1028,8 +1028,13 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
              production chat path, so this is now where you go to see what the
              agent actually did. A substrate nobody can reach is a substrate
              that rots — 19 of 34 kinds went unexercised while this was
-             palette-only. The nav.agentgraph command-palette action stays. -->
-        <li data-testid="nav-agentgraph">
+             palette-only. The nav.agentgraph command-palette action stays.
+             served-mode-is-a-real-mode-01PMZ707 WP03: gated on !served —
+             Graph_* has no serve dispatch case (D-701), so this entry would
+             route into GraphsView.vue's own NotAvailableInServedMode panel
+             in a served build. Hiding the rail entry is the honest answer,
+             matching the Sites/Marketplace treatment below. -->
+        <li v-if="!served" data-testid="nav-agentgraph">
           <RailEntry :icon="Route" label="Agent graphs" to="/agentgraph" />
         </li>
         <!-- nav-settings-ia-cleanup WP04: Audit log demoted from top-level nav.

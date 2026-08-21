@@ -39,6 +39,8 @@ import { useRoute, useRouter } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import GraphCanvas from '@/components/canvas/GraphCanvas.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
+import { useServedMode } from '@/lib/useServedMode';
+import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import { useManifestStore } from '@/composables/useNodeManifest';
 import {
   buildGraphAdapter,
@@ -51,6 +53,9 @@ import type { GraphRunStatus, GraphRunTraceEvent } from '@/lib/types';
 const client = useHarnessClient();
 const route = useRoute();
 const router = useRouter();
+
+// served-mode-is-a-real-mode-01PMZ707 WP03, spec.md §2/§5.3 (D-701).
+const servedMode = useServedMode();
 
 const runId = computed(() => String(route.params.runId ?? ''));
 
@@ -262,6 +267,10 @@ function openMaterialized() {
 }
 
 onMounted(async () => {
+  // Served mode: the whole view renders NotAvailableInServedMode instead
+  // (Graph_* has no serve dispatch case — D-701). Starting the poll loop
+  // anyway would just be a 500ms cadence of guaranteed-rejecting calls.
+  if (servedMode.value) return;
   await pollOnce();
   // The first projection is unconditional: a run that finished before
   // this view opened returns its whole trace in one tail, and a run with
@@ -297,7 +306,12 @@ defineExpose({ pollOnce, refreshGraph, onNodeStatusClick, focusedSeq });
 </script>
 
 <template>
-  <div>
+  <NotAvailableInServedMode
+    v-if="servedMode"
+    feature="Graph run"
+    reason="Run status and trace stream through Graph_* RPCs that are not routed in served mode — porting them would put graph execution behind the shared workbench token, which the served build's confinement model does not support yet."
+  />
+  <div v-else>
     <CanvasHead
       number="12"
       section="GRAPHS"

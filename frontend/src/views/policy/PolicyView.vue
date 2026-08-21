@@ -28,10 +28,17 @@
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
+import { useServedMode } from '@/lib/useServedMode';
+import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import SettingsTabs from '@/views/settings/SettingsTabs.vue';
 import type { PolicyFileDetail, ParseError, PolicyDecision } from '@/lib/types';
 
 const client = useHarnessClient();
+
+// served-mode-is-a-real-mode-01PMZ707 WP03, spec.md §5.3. All CedarPolicy_*
+// and Policy_* RPCs this view calls are unrouted in served mode; verified
+// no serve dispatch case exists for any of them.
+const servedMode = useServedMode();
 
 // ── state ─────────────────────────────────────────────────────────────
 
@@ -102,6 +109,8 @@ const isEmbedded = computed(() => selectedFile.value?.embedded === true);
 // ── lifecycle ─────────────────────────────────────────────────────────
 
 onMounted(async () => {
+  // Served mode: the whole view renders NotAvailableInServedMode instead.
+  if (servedMode.value) return;
   // Read policyEditorEnabled from AppInfo.
   try {
     const info = await client.appInfo();
@@ -352,7 +361,12 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
 </script>
 
 <template>
-  <div class="flex h-full min-h-0">
+  <NotAvailableInServedMode
+    v-if="servedMode"
+    feature="Policy editor"
+    reason="Cedar policy files, validation and the decision audit trail run through CedarPolicy_*/Policy_* RPCs that are not routed in served mode."
+  />
+  <div v-else class="flex h-full min-h-0">
     <SettingsTabs />
     <div class="policy-view flex-1 min-w-0">
     <!-- Disabled state when feature flag is off -->
