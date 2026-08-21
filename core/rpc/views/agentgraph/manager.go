@@ -456,19 +456,65 @@ func (m *Manager) saveGraph(ctx context.Context, spec GraphSpec, initiator strin
 	// "already exists" from "forbid policy matched" and enumerate the
 	// library. A user save is unaffected — the editor overwrites by
 	// design.
-	if initiator != "user" {
-		if _, statErr := os.Stat(full); statErr == nil {
-			return &GraphExistsError{ID: spec.ID}
-		} else if !errors.Is(statErr, fs.ErrNotExist) {
-			return fmt.Errorf("agentgraph: stat %q: %w", spec.ID, statErr)
-		}
-	}
 	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // application data dir
 		return fmt.Errorf("agentgraph: mkdir: %w", err)
 	}
-	tmp := full + ".tmp"
-	if err := os.WriteFile(tmp, payload, 0o644); err != nil { //nolint:gosec // user data
-		return fmt.Errorf("agentgraph: write: %w", err)
+
+	// A non-user save is create-only, and the check IS the write.
+	//
+	// The first repair of this (PR #304 F1) was os.Stat followed by the
+	// shared rename path. That fixed the semantics — existence stopped
+	// meaning "does it parse" — but left a stat-then-rename window:
+	// two concurrent drafts for the same id both pass the stat, both
+	// write the SAME tmp path, and both rename. One silently loses, and
+	// interleaved writes to the shared tmp name can land a spliced
+	// file. Found by the same review, second round (N2).
+	//
+	// O_CREATE|O_EXCL makes the existence check and the claim on the
+	// path one syscall, so there is no window to lose. A create-only
+	// write also does not need the tmp-then-rename dance: the file did
+	// not exist a moment ago, so a crash mid-write leaves a partial NEW
+	// file rather than a destroyed existing one — strictly better than
+	// what a rename can promise here.
+	if initiator != "user" {
+		f, oerr := os.OpenFile(full, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644) //nolint:gosec // user data
+		if oerr != nil {
+			if errors.Is(oerr, fs.ErrExist) {
+				return &GraphExistsError{ID: spec.ID}
+			}
+			return fmt.Errorf("agentgraph: create %q: %w", spec.ID, oerr)
+		}
+		if _, werr := f.Write(payload); werr != nil {
+			_ = f.Close()
+			_ = os.Remove(full)
+			return fmt.Errorf("agentgraph: write: %w", werr)
+		}
+		if cerr := f.Close(); cerr != nil {
+			_ = os.Remove(full)
+			return fmt.Errorf("agentgraph: close: %w", cerr)
+		}
+		return nil
+	}
+
+	// A user save overwrites by design (the editor), so it keeps the
+	// tmp-then-rename atomic replace. The tmp name is unique per call:
+	// the old shared `full + ".tmp"` meant two concurrent editor saves
+	// of the same graph wrote the same scratch path.
+	tmpf, terr := os.CreateTemp(dir, filepath.Base(full)+".tmp*")
+	if terr != nil {
+		return fmt.Errorf("agentgraph: create temp: %w", terr)
+	}
+	tmp := tmpf.Name()
+	defer func() { _ = os.Remove(tmp) }() // no-op once the rename succeeds
+	if _, werr := tmpf.Write(payload); werr != nil {
+		_ = tmpf.Close()
+		return fmt.Errorf("agentgraph: write: %w", werr)
+	}
+	if cerr := tmpf.Close(); cerr != nil {
+		return fmt.Errorf("agentgraph: close temp: %w", cerr)
+	}
+	if err := os.Chmod(tmp, 0o644); err != nil { //nolint:gosec // user data
+		return fmt.Errorf("agentgraph: chmod temp: %w", err)
 	}
 	return os.Rename(tmp, full)
 }

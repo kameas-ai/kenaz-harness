@@ -90,13 +90,6 @@ type ValidationResult struct {
 	Issues []ValidationIssue `json:"issues"`
 }
 
-// ValidationFailedError is returned by saveGraph and startRun when the
-// kernel validator rejects a graph (model-authored-graphs-01PMGA01
-// UNIT-2, FR-002/FR-003/FR-004). It carries the same per-rule Issues
-// shape ValidationResult / Graph_Validate already returns, so every
-// caller — the editor's direct SaveGraph call, a future authoring tool
-// — gets identical per-rule feedback instead of a single opaque wrapped
-// error string.
 // GraphExistsError is returned by SaveGraph when a non-user save would
 // land on a path that already holds a file. It exists because the
 // create-only guarantee the graph-authoring tool states to the model —
@@ -127,6 +120,13 @@ func (e *GraphExistsError) Error() string {
 	return fmt.Sprintf("agentgraph: id %q already exists; this tool is create-only and cannot overwrite it", e.ID)
 }
 
+// ValidationFailedError is returned by saveGraph and startRun when the
+// kernel validator rejects a graph (model-authored-graphs-01PMGA01
+// UNIT-2, FR-002/FR-003/FR-004). It carries the same per-rule Issues
+// shape ValidationResult / Graph_Validate already returns, so every
+// caller — the editor's direct SaveGraph call, a future authoring tool
+// — gets identical per-rule feedback instead of a single opaque wrapped
+// error string.
 type ValidationFailedError struct {
 	Issues []ValidationIssue
 }
