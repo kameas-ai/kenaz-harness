@@ -104,6 +104,39 @@ func TestRetentionSweep_ArchivePath_InAuditArchiveDir(t *testing.T) {
 	}
 }
 
+// TestRetentionSweep_ArchiveAfterWindow_UnwritableArchiveDir_DeletesNothing
+// is AC-012: with an unwritable archive directory, archive_after_window
+// must delete NOTHING — the archive-before-delete invariant
+// (retention.go:64-65 / ArchiveAndDelete) means a failed archive stops
+// the delete before it happens, not after.
+//
+// Mutation-verified manually: swapping the archive+delete order (delete
+// first, archive second) in ArchiveAndDelete makes this go red — see
+// the mission report for the pasted transcript.
+func TestRetentionSweep_ArchiveAfterWindow_UnwritableArchiveDir_DeletesNothing(t *testing.T) {
+	b := buildAgedRows(t, 3, "01RU", 48*time.Hour)
+	dir := t.TempDir()
+	// Create a REGULAR FILE at the exact path archiveRows would
+	// os.MkdirAll as a directory — MkdirAll fails with "not a
+	// directory" regardless of the test process's uid (portable across
+	// CI, unlike a chmod-based unwritable-directory trick, which a
+	// root-run CI container can silently bypass).
+	archiveDirPath := filepath.Join(dir, "audit-archive")
+	if err := os.WriteFile(archiveDirPath, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("seed blocking file: %v", err)
+	}
+
+	_, err := RetentionSweep(context.Background(), b, dir, RetentionArchiveAfterWindow, 24*time.Hour)
+	if err == nil {
+		t.Fatal("RetentionSweep with an unwritable archive dir returned nil error, want one")
+	}
+
+	rows, _ := b.SelectByTimeRange(context.Background(), time.Time{}, time.Time{}, "", 0, false)
+	if len(rows) != 3 {
+		t.Errorf("rows remaining after a failed archive = %d, want 3 (nothing deleted — archive-before-delete)", len(rows))
+	}
+}
+
 func TestRetentionSweep_NoOldRows_DoesNothing(t *testing.T) {
 	b := NewMemoryBackend()
 	ctx := context.Background()

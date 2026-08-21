@@ -48,6 +48,12 @@ var migration0105UpSource string
 //go:embed migrations/0006_saved_audit_queries.down.sql
 var migration0105DownSource string
 
+//go:embed migrations/0007_events_fts_sync.up.sql
+var migration0106UpSource string
+
+//go:embed migrations/0007_events_fts_sync.down.sql
+var migration0106DownSource string
+
 // Migrations returns the event-log migration set in version order,
 // shaped for the production storage-foundations migration framework
 // (core/storage/migrations). Versions occupy 100-105 inside the
@@ -146,7 +152,46 @@ func Migrations() []migrations.Migration {
 				return execAll(ctx, tx, splitSQL(migration0105DownSource))
 			},
 		},
+		{
+			// FTS5 delete/update sync triggers for events_fts (fixes the
+			// data-loss-of-privacy + search-breakage defect at
+			// migrations/0001_events.sql:33 — see 0007's own header for
+			// the full account of why that comment could not be edited
+			// in place) plus a one-time correction of migration 103's
+			// invalid seed value. audit-that-tells-the-truth-01PMZA10
+			// UNIT-8. Optional per the campaign allocation
+			// (docs/v0.65.0-merge-order.md §4: "100-105, optionally
+			// 106") — included because UNIT-8 (retention deletes) does
+			// not ship without it: plan.md Rule 5.
+			ID:            "event-log/0106-events-fts-sync",
+			Version:       106,
+			OwningMission: OwningMission,
+			UpSource:      migration0106UpSource,
+			Up:            migration0106Up,
+			Down: func(ctx context.Context, tx migrations.WriteTx) error {
+				return execAll(ctx, tx, splitSQL(migration0106DownSource))
+			},
+		},
 	}
+}
+
+// migration0106Up executes migrations/0007_events_fts_sync.up.sql: one
+// plain UPDATE statement followed by TWO CREATE TRIGGER ... BEGIN ...
+// END; blocks. splitTrailingTrigger (singular, used by migration0100Up)
+// only isolates ONE trailing trigger and silently discards anything
+// after it — insufficient here. splitTrailingTriggers (plural) below
+// generalises it.
+func migration0106Up(ctx context.Context, tx migrations.WriteTx) error {
+	head, triggers := splitTrailingTriggers(migration0106UpSource)
+	if err := execAll(ctx, tx, head); err != nil {
+		return err
+	}
+	for _, trig := range triggers {
+		if _, err := tx.Exec(ctx, trig); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // migration0100Up executes migrations/0001_events.sql. It cannot use
@@ -226,6 +271,42 @@ func splitTrailingTrigger(src string) (head string, trigger string) {
 		return head, strings.TrimSpace(tail)
 	}
 	return head, strings.TrimSpace(tail[:endIdx+len("END;")])
+}
+
+// splitTrailingTriggers separates a SQL script into every "plain"
+// statement before the first CREATE TRIGGER (split via splitSQL —
+// safe, because that portion contains no embedded semicolons) and
+// EACH INDIVIDUAL CREATE TRIGGER ... END; block after it, taken
+// verbatim through its own closing "END;" (trigger bodies contain
+// their own internal semicolons and must not be split). Generalises
+// splitTrailingTrigger (singular), which only isolates ONE trailing
+// trigger and silently drops anything after it — migration 0106 needs
+// two (events_fts_au, events_fts_ad) after one plain UPDATE statement.
+func splitTrailingTriggers(src string) (head []string, triggers []string) {
+	upper := strings.ToUpper(src)
+	idx := strings.Index(upper, "CREATE TRIGGER")
+	if idx < 0 {
+		return splitSQL(src), nil
+	}
+	head = splitSQL(src[:idx])
+	rest := src[idx:]
+	for {
+		restUpper := strings.ToUpper(rest)
+		ti := strings.Index(restUpper, "CREATE TRIGGER")
+		if ti < 0 {
+			break
+		}
+		tail := rest[ti:]
+		tailUpper := restUpper[ti:]
+		endIdx := strings.Index(tailUpper, "END;")
+		if endIdx < 0 {
+			triggers = append(triggers, strings.TrimSpace(tail))
+			break
+		}
+		triggers = append(triggers, strings.TrimSpace(tail[:endIdx+len("END;")]))
+		rest = tail[endIdx+len("END;"):]
+	}
+	return head, triggers
 }
 
 // splitSQL is a tiny semicolon splitter for statement lists that

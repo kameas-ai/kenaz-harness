@@ -187,6 +187,80 @@ func TestBuiltinEnabledPredicate_AllRegisteredToolsHaveExplicitCase(t *testing.T
 	}
 }
 
+// TestBashTool_LoggerWired is UNIT-20's AC-16a (trust-surfaces-that-
+// fire-01PMZ202 WP22 / FR-017): bash's Cedar gate decision logging must
+// actually reach the log file in the PRODUCTION wiring path. Before
+// this WP, corebash.Options.Logger was never set at the registration
+// site (registerBuiltinTools), so t.logf returned early at every one
+// of bash's 18 gate log sites (bash.go:734) in every shipped build —
+// including a snippet-write failure that was swallowed with no trace.
+// Mutation: revert `Logger: logging.L()`. Must fail (no "bash.gate."
+// line is ever captured).
+func TestBashTool_LoggerWired(t *testing.T) {
+	// corebash.Options.Logger is set to logging.L() ONCE, at
+	// registerBuiltinTools time (bash.go copies the pointer verbatim,
+	// no live re-fetch) — the same pattern every sibling tool in
+	// builtins_wiring.go uses. captureLog's logging.Replace swaps in a
+	// NEW *slog.Logger object rather than mutating the existing one in
+	// place, so it only affects logging.L() calls made AFTER the swap.
+	// Construction must therefore happen INSIDE the captured closure,
+	// not before it — otherwise this test silently observes nothing
+	// and would falsely pass on the pre-WP22 state (no Logger set) by
+	// mis-attributing an empty buffer to "no gate log fired" instead of
+	// "the capture never saw this component at all".
+	logs := captureLog(t, func() {
+		c, err := core.New(core.Options{DataDir: t.TempDir()})
+		if err != nil {
+			t.Fatalf("core.New: %v", err)
+		}
+		api := New(c, WithSettingsStore(newTestStore(t)))
+
+		registry := api.Builtins()
+		if registry == nil {
+			t.Fatal("builtins registry is nil — construction broke")
+		}
+		tool, ok := registry.Lookup(corebash.Name)
+		if !ok {
+			t.Fatalf("%s is not registered in the production wiring path", corebash.Name)
+		}
+
+		// default_bash_policy.cedar is header-only by design
+		// (NotApplicable for every command); an un-cancelled context
+		// would block on the interactive prompt registry for its
+		// 5-minute timeout with no resolver attached. An already-
+		// cancelled context makes RequestInteractive return
+		// immediately via its ctx.Done() arm
+		// (core/policy/cedar/prompt.go:958-971), which bash.go's
+		// cedarGate logs as "bash.gate.prompt_err" — still one of the
+		// 18 previously-dead log sites this WP wires, so it still
+		// proves the fix.
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, _ = tool.Call(ctx, json.RawMessage(`{"command":"echo hi"}`))
+	})
+
+	var sawGateLog bool
+	for _, line := range strings.Split(strings.TrimSpace(logs), "\n") {
+		if line == "" {
+			continue
+		}
+		var rec struct {
+			Msg string `json:"msg"`
+		}
+		if jsonErr := json.Unmarshal([]byte(line), &rec); jsonErr != nil {
+			continue
+		}
+		if strings.HasPrefix(rec.Msg, "bash.gate.") {
+			sawGateLog = true
+			break
+		}
+	}
+	if !sawGateLog {
+		t.Errorf("no bash.gate.* log line was captured for a real dispatch — "+
+			"corebash.Options.Logger is not wired in the production path; captured logs: %s", logs)
+	}
+}
+
 // dangerousOpsStore overrides exactly the one accessor under test.
 // Embedding the interface keeps this from drifting as SettingsStore grows.
 type dangerousOpsStore struct {

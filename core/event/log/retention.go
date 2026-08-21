@@ -89,24 +89,30 @@ func RetentionSweep(ctx context.Context, backend SweepableBackend, dataDir strin
 	result := RetentionResult{}
 
 	if strategy == RetentionArchiveAfterWindow {
-		// Write archive JSONL before deleting.
-		archivePath, archived, archiveErr := archiveRows(ctx, dataDir, old)
-		if archiveErr != nil {
-			return result, fmt.Errorf("retention sweep: archive: %w", archiveErr)
+		// Write archive JSONL before deleting, then delete — via the
+		// same ArchiveAndDelete helper the fleet-sweeper adapter
+		// (core/rpc/views/settings) uses, so the archive-before-delete
+		// invariant holds regardless of which sweeper selected the
+		// rows (E-007: "exactly one function ever issues DeleteRows
+		// against events").
+		archived, archivePath, err := ArchiveAndDelete(ctx, backend, dataDir, old)
+		if err != nil {
+			return result, fmt.Errorf("retention sweep: %w", err)
 		}
 		result.Archived = archived
 		result.ArchivePath = archivePath
+		result.Purged = len(old)
+	} else {
+		// delete_after_window: no archive, by definition of the strategy.
+		ids := make([]string, len(old))
+		for i, r := range old {
+			ids[i] = r.EventID
+		}
+		if err := backend.DeleteRows(ctx, ids); err != nil {
+			return result, fmt.Errorf("retention sweep: delete: %w", err)
+		}
+		result.Purged = len(ids)
 	}
-
-	// Delete.
-	ids := make([]string, len(old))
-	for i, r := range old {
-		ids[i] = r.EventID
-	}
-	if err := backend.DeleteRows(ctx, ids); err != nil {
-		return result, fmt.Errorf("retention sweep: delete: %w", err)
-	}
-	result.Purged = len(ids)
 
 	// Post-sweep chain verify.
 	verifyRes, verifyErr := VerifyChain(ctx, backend, "", "")
@@ -115,6 +121,46 @@ func RetentionSweep(ctx context.Context, backend SweepableBackend, dataDir strin
 	}
 
 	return result, nil
+}
+
+// ArchiveAndDelete writes rows to the JSONL archive (same file/rotation
+// RetentionSweep's archive_after_window path uses) and, ONLY if that
+// succeeds, deletes them via backend.DeleteRows — preserving the
+// archive-before-delete invariant no matter which caller selected the
+// rows.
+//
+// This is the SOLE path in production that issues DeleteRows against
+// events for a row that must be archived first (E-007, spec §5.6 item
+// 2 / §1.7c: "the local sweeper and the fleet sweeper both delete from
+// one table under an archive-before-delete invariant... pick one
+// owner"). The local strategy sweeper (RetentionSweep, above) calls it
+// directly for archive_after_window. The fleet ACK sweeper
+// (core/fleet.AuditRetentionSweeper) does not call it directly — it
+// cannot import this package's types without a circular/boundary
+// violation (check-no-fleet-imports.sh) — instead
+// core/rpc/views/settings's fleetAuditRetentionBackendAdapter routes
+// the fleet sweeper's DeleteRows calls through this function, so an
+// ACK'd-and-aged row fleet selects is archived exactly the same way a
+// locally-aged row is, and there is exactly one function body in the
+// tree that ever calls SweepableBackend.DeleteRows without archiving
+// first: the delete_after_window branch above, which is a deliberate
+// no-archive strategy by definition, not a second deleter.
+func ArchiveAndDelete(ctx context.Context, backend SweepableBackend, dataDir string, rows []Row) (archived int, archivePath string, err error) {
+	if len(rows) == 0 {
+		return 0, "", nil
+	}
+	archivePath, archived, archErr := archiveRows(ctx, dataDir, rows)
+	if archErr != nil {
+		return 0, "", fmt.Errorf("archive-and-delete: archive: %w", archErr)
+	}
+	ids := make([]string, len(rows))
+	for i, r := range rows {
+		ids[i] = r.EventID
+	}
+	if err := backend.DeleteRows(ctx, ids); err != nil {
+		return archived, archivePath, fmt.Errorf("archive-and-delete: delete: %w", err)
+	}
+	return archived, archivePath, nil
 }
 
 // archiveRows writes rows to a dated JSONL file in <dataDir>/audit-archive/.

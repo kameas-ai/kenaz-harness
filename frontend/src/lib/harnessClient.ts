@@ -1795,6 +1795,17 @@ export interface PolicyClient {
 
 export interface AuditClient {
   listEntries(filter: AuditFilter): Promise<AuditEntry[]>;
+  /**
+   * Membership check ONLY — reports whether an entry id is present in
+   * the store (or the ring, ring-only posture), nothing about tamper-
+   * evidence. core/rpc/views/audit/impl.go's own doc comment on
+   * VerifyEntry says as much in Go ("this is membership only"), but
+   * that concession never reached this client interface — narrowed
+   * here (audit-that-tells-the-truth-01PMZA10 UNIT-6, spec FR-024 /
+   * C2V-26). For chain/tamper verification use verifyChain below,
+   * which is what AuditView.vue's "Verify chain" button actually
+   * calls; verifyEntry has no caller in this codebase.
+   */
   verifyEntry(id: string): Promise<boolean>;
   verifyChain(fromID: string, toID: string): Promise<VerifyChainResult>;
   filter(query: AuditFilterQuery): Promise<AuditEntry[]>;
@@ -3347,6 +3358,15 @@ export interface HarnessClient {
   Unit_ListConflicts(): Promise<import('./types').UnitConflictView[]>;
   Unit_ResolveMerge(unitID: string, resolvedBody: string): Promise<void>;
   Unit_ResolveEnshrine(srcUnitID: string, enshrinedTitle: string, enshrinedBody: string, reason: string): Promise<string>;
+  // ── Plan mode approval (plan-mode-posture-01KZNP3F WP06;
+  // trust-surfaces-that-fire-01PMZ202 WP21 / UNIT-19 — routed through
+  // harnessClient so served mode raises ServedUnsupportedError instead
+  // of the optional-chained `window.go?.rpc?.Bindings?.X` call silently
+  // resolving `undefined` and reading as an approval that was never
+  // sent). ─────────────────────────────────────────────────────────────
+  Planmode_Approve(req: { session_id: string; plan_id: string }): Promise<Record<string, unknown>>;
+  Planmode_Discard(req: { session_id: string; plan_id: string }): Promise<Record<string, unknown>>;
+  Planmode_Edit(req: { session_id: string; plan_id: string; edited_plan: string }): Promise<Record<string, unknown>>;
   // ── Boot health (agent-loop-robustness-parity WP08 / FR-008) ──────────
   /** Returns per-subsystem init error strings from the boot phase. */
   BootHealth_Get(): Promise<BootHealthReport>;
@@ -4046,6 +4066,10 @@ export function createHarnessClient(): HarnessClient {
     Unit_ResolveMerge: (unitID, resolvedBody) => b().Unit_ResolveMerge(unitID, resolvedBody),
     Unit_ResolveEnshrine: (srcUnitID, enshrinedTitle, enshrinedBody, reason) =>
       b().Unit_ResolveEnshrine(srcUnitID, enshrinedTitle, enshrinedBody, reason),
+    // ── Plan mode approval (trust-surfaces-that-fire-01PMZ202 WP21) ───────
+    Planmode_Approve: (req) => b().Planmode_Approve(req),
+    Planmode_Discard: (req) => b().Planmode_Discard(req),
+    Planmode_Edit: (req) => b().Planmode_Edit(req),
     // ── Boot health (agent-loop-robustness-parity WP08 / FR-008) ──────────
     BootHealth_Get: () => b().BootHealth_Get(),
     // ── Background tasks (background-task-monitor WP05) ───────────────────
@@ -5726,6 +5750,10 @@ export function createFakeHarnessClient(
     Unit_ListConflicts: async (): Promise<import('./types').UnitConflictView[]> => [],
     Unit_ResolveMerge: noop,
     Unit_ResolveEnshrine: async () => '',
+    // ── Plan mode approval (trust-surfaces-that-fire-01PMZ202 WP21) ───────
+    Planmode_Approve: async () => ({}),
+    Planmode_Discard: async () => ({}),
+    Planmode_Edit: async () => ({}),
     // ── Boot health (agent-loop-robustness-parity WP08 / FR-008) ──────────
     BootHealth_Get: async (): Promise<BootHealthReport> => ({}),
     // ── Background tasks (background-task-monitor WP05) ───────────────────

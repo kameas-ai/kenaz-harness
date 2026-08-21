@@ -217,18 +217,17 @@ github.com/kameas-ai/kenaz-harness/core/storage/db.CheckSQLiteVersion
 #   Owner: manifest-versioning-01NDFSEX02.
 github.com/kameas-ai/kenaz-harness/core/agentgraph.CheckManifestDrift
 
-# github.com/kameas-ai/kenaz-harness/core/policy/cedar.CheckTool
-#   SEEDED 2026-08-14. Verdict: DELETE (superseded). The generic
-#   "any tool dispatch" gate over ActionToolExec, which itself has zero
-#   production Evaluate sites. Tool dispatch is NOT ungated — production
-#   replaced one coarse gate with per-family ones: ActionRunBashCommand
-#   (core/tools/bash), ActionRead/WriteFilesystem (core/tools/fs),
-#   cedar.CheckNetwork (websearch + webfetch), cedar.GateMCPSpawn
-#   (core/rpc/api.go), cedar.CheckRecipeSpawn (views/tools).
-#   docs/production-wiring.md claims CheckTool is wired into "toolloop's
-#   permission resolver"; core/toolloop/perms.go contains no cedar
-#   reference at all. Correct that doc line in the deleting change.
-github.com/kameas-ai/kenaz-harness/core/policy/cedar.CheckTool
+# core/policy/cedar.CheckTool — CORRECTED 2026-08-20 (X-2, R-06,
+# trust-surfaces-that-fire-01PMZ202 WP17 / UNIT-15). The 2026-08-14
+# "DELETE (superseded)" verdict above was wrong on its own premise:
+# ActionToolExec was never superseded by the per-family gates it lists,
+# and CheckTool is a sibling of the NEW ActionUseTool evaluator
+# (CheckUseTool) this WP adds, not a duplicate of it. Both are now
+# called from the tool-dispatch boundary
+# (core/agentgraph/exec_dispatch.go, via
+# core/rpc/views/agentgraph.PolicyGateAdapter.CheckTool), so the entry
+# is deleted rather than corrected in place — a stale entry naming a
+# symbol that now has a real call site fails this gate's own check.
 
 # github.com/kameas-ai/kenaz-harness/core/policy/cedar.CheckModel
 #   SEEDED 2026-08-14. Verdict: DELETE (dead twin). LLMPolicyGuard.Allow

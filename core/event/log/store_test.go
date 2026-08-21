@@ -188,8 +188,8 @@ func TestStoreCtor(t *testing.T) {
 
 func TestMigrationsList(t *testing.T) {
 	got := Migrations()
-	if len(got) != 6 {
-		t.Fatalf("expected 6 migrations, got %d", len(got))
+	if len(got) != 7 {
+		t.Fatalf("expected 7 migrations, got %d", len(got))
 	}
 	wantIDs := []string{
 		"event-log/0100-events",
@@ -198,8 +198,9 @@ func TestMigrationsList(t *testing.T) {
 		"event-log/0103-retention-config",
 		"event-log/0104-schema-version",
 		"event-log/0105-saved-audit-queries",
+		"event-log/0106-events-fts-sync",
 	}
-	wantVersions := []int{100, 101, 102, 103, 104, 105}
+	wantVersions := []int{100, 101, 102, 103, 104, 105, 106}
 	for i, m := range got {
 		if m.ID != wantIDs[i] {
 			t.Fatalf("migration[%d].ID = %q want %q", i, m.ID, wantIDs[i])
@@ -309,6 +310,195 @@ func TestMigration0100Up_ExecutesAllStatements(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("fts trigger did not fire: got %d matches, want 1", n)
+	}
+}
+
+// TestSplitTrailingTriggers pins the parser migration0106Up depends on:
+// migrations/0007_events_fts_sync.up.sql is one plain UPDATE statement
+// followed by TWO CREATE TRIGGER ... END; blocks. splitTrailingTrigger
+// (singular) only isolates one trailing trigger and silently drops
+// anything after it — this must isolate both.
+func TestSplitTrailingTriggers(t *testing.T) {
+	head, triggers := splitTrailingTriggers(migration0106UpSource)
+	if len(head) != 1 {
+		t.Fatalf("head statement count = %d, want 1 (the UPDATE): %v", len(head), head)
+	}
+	if !strings.Contains(strings.ToUpper(head[0]), "UPDATE RETENTION_CONFIG") {
+		t.Errorf("head[0] does not look like the retention_config UPDATE: %q", head[0])
+	}
+	if len(triggers) != 2 {
+		t.Fatalf("trigger count = %d, want 2 (events_fts_au, events_fts_ad): %v", len(triggers), triggers)
+	}
+	if !strings.Contains(triggers[0], "events_fts_au") {
+		t.Errorf("triggers[0] = %q, want events_fts_au first (source order)", triggers[0])
+	}
+	if !strings.Contains(triggers[1], "events_fts_ad") {
+		t.Errorf("triggers[1] = %q, want events_fts_ad second", triggers[1])
+	}
+	for i, trig := range triggers {
+		if !strings.HasSuffix(strings.TrimSpace(trig), "END;") {
+			t.Errorf("triggers[%d] must end at END;, got %q", i, trig)
+		}
+	}
+}
+
+// TestMigration0106Up_FixesTheFTSDeleteLeak is the direct executed
+// proof for spec §1.6 / [RAN 2026-08-19]: before this migration, a
+// DELETE from events left the row's term matchable in events_fts AND
+// made a subsequent SearchFTS query for it error with "fts5: missing
+// row N from content table". Drives migration0100Up (creates events +
+// events_fts + the INSERT trigger) then migration0106Up (adds the
+// DELETE/UPDATE triggers this test exists to prove) against a real
+// sqlite3 connection, inserts a row, deletes it, and asserts BOTH
+// halves of the fix: the term is gone from the FTS index (not just
+// absent from a row-count query) AND a subsequent MATCH query succeeds
+// without the "missing row from content table" error.
+func TestMigration0106Up_FixesTheFTSDeleteLeak(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	wtx := &fakeWriteTx{tx: tx}
+	if err := migration0100Up(ctx, wtx); err != nil {
+		t.Fatalf("migration0100Up: %v", err)
+	}
+	// migration0106Up also runs the retention_config UPDATE (the other
+	// half of the same migration) — real ordering (103 before 106)
+	// guarantees the table exists; replicate that minimally here.
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE retention_config (
+		version INTEGER PRIMARY KEY, policy TEXT NOT NULL, effective_at INTEGER NOT NULL)`); err != nil {
+		t.Fatalf("create retention_config: %v", err)
+	}
+	if err := migration0106Up(ctx, wtx); err != nil {
+		t.Fatalf("migration0106Up: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	// Both new triggers must exist.
+	for _, name := range []string{"events_fts_au", "events_fts_ad"} {
+		var n int
+		if err := db.QueryRowContext(ctx,
+			"SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name=?", name).Scan(&n); err != nil {
+			t.Fatalf("query trigger %s: %v", name, err)
+		}
+		if n != 1 {
+			t.Errorf("trigger %s not found after migration0106Up", name)
+		}
+	}
+
+	if _, err := db.ExecContext(ctx, `INSERT INTO events
+		(event_id, session_id, emitter_id, kind, emitted_at, payload, payload_hash, prev_hash, redaction_summary)
+		VALUES ('e1','s1','em1','k1',1,'ZORKMIDPAYLOAD',x'00',x'00','none')`); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	var before int
+	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM events_fts WHERE events_fts MATCH 'ZORKMIDPAYLOAD'").Scan(&before); err != nil {
+		t.Fatalf("pre-delete fts query: %v", err)
+	}
+	if before != 1 {
+		t.Fatalf("pre-delete match count = %d, want 1", before)
+	}
+
+	if _, err := db.ExecContext(ctx, `DELETE FROM events WHERE event_id='e1'`); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	// The defect this migration exists to fix (spec §1.6, [RAN]): a
+	// query that ignores the error and only checks the result set
+	// passes on the broken tree, because the row-count would read 0
+	// from an ERRORED query with a zero-value Scan destination. This
+	// assertion must see the error explicitly.
+	var after int
+	err = db.QueryRowContext(ctx, "SELECT count(*) FROM events_fts WHERE events_fts MATCH 'ZORKMIDPAYLOAD'").Scan(&after)
+	if err != nil {
+		t.Fatalf("post-delete fts query errored (the exact pre-fix defect — "+
+			"'fts5: missing row N from content table'): %v", err)
+	}
+	if after != 0 {
+		t.Errorf("post-delete match count = %d, want 0 (term must be gone from the index, not just the row)", after)
+	}
+
+	// Availability half: a query for an unrelated, never-indexed term
+	// must also succeed cleanly (sanity check that the table itself is
+	// not corrupted).
+	var unrelated int
+	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM events_fts WHERE events_fts MATCH 'NEVERINDEXEDTERM'").Scan(&unrelated); err != nil {
+		t.Fatalf("unrelated-term fts query: %v", err)
+	}
+	if unrelated != 0 {
+		t.Errorf("unrelated-term match count = %d, want 0", unrelated)
+	}
+}
+
+// TestMigration0106Up_FixesRetentionConfigSeed proves the second half
+// of migration 106: event-log/0103-retention-config's shipped seed
+// ('{"kind":"keep_all"}', not a valid RetentionStrategy value) is
+// corrected to '{"kind":"keep_forever"}' by the UPDATE statement, and —
+// separately — that the fix is scoped to the known-bad literal: a row
+// already holding a different value is left untouched.
+func TestMigration0106Up_FixesRetentionConfigSeed(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	if _, err := db.ExecContext(ctx, `CREATE TABLE retention_config (
+		version INTEGER PRIMARY KEY, policy TEXT NOT NULL, effective_at INTEGER NOT NULL)`); err != nil {
+		t.Fatalf("create retention_config: %v", err)
+	}
+	// Row 1: the exact shipped-bad seed (event-log/0103's real
+	// behaviour). Row 2: a different version already holding a real
+	// strategy, standing in for an install where a later write already
+	// happened — must survive untouched.
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO retention_config (version, policy, effective_at) VALUES
+			(1, '{"kind":"keep_all"}', 0),
+			(2, '{"kind":"delete_after_window","window_days":30}', 1000)`); err != nil {
+		t.Fatalf("seed retention_config: %v", err)
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	wtx := &fakeWriteTx{tx: tx}
+	// migration0106Up also creates the events_fts_au/_ad triggers,
+	// which require events/events_fts to already exist — real migration
+	// ordering (100 before 106) guarantees that; replicate it here
+	// rather than narrowing the schema this test drives.
+	if err := migration0100Up(ctx, wtx); err != nil {
+		t.Fatalf("migration0100Up: %v", err)
+	}
+	if err := migration0106Up(ctx, wtx); err != nil {
+		t.Fatalf("migration0106Up: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	var policy1, policy2 string
+	if err := db.QueryRowContext(ctx, "SELECT policy FROM retention_config WHERE version=1").Scan(&policy1); err != nil {
+		t.Fatalf("read version 1: %v", err)
+	}
+	if policy1 != `{"kind":"keep_forever"}` {
+		t.Errorf("version 1 policy = %q, want %q", policy1, `{"kind":"keep_forever"}`)
+	}
+	if err := db.QueryRowContext(ctx, "SELECT policy FROM retention_config WHERE version=2").Scan(&policy2); err != nil {
+		t.Fatalf("read version 2: %v", err)
+	}
+	if policy2 != `{"kind":"delete_after_window","window_days":30}` {
+		t.Errorf("version 2 policy was touched: got %q, want it left alone", policy2)
 	}
 }
 

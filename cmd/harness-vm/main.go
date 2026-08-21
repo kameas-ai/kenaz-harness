@@ -158,7 +158,13 @@ func main() {
 	// the in-VM environment (agentexec.go). KENAZ_AGENT_EXEC=stub keeps the
 	// offline echo graph for CI; a real mode with no resolvable credential
 	// fails every task with a named error — never a silent echo.
-	exec := resolveAgentExecutor(log)
+	//
+	// reads.policyGuard() is the process's real Cedar gate (same singleton
+	// promptRegistry() above attaches to) — threading it here closes HV-03:
+	// prior to this, the registry.Options literal in agentexec.go left
+	// Policy unset and silently ran under llm.AllowAllGuard{}, which can
+	// never refuse (mission vm-execution-surface-truth-01PMZD14 UNIT-1).
+	exec := resolveAgentExecutor(log, reads.policyGuard())
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {

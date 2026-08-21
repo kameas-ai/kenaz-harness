@@ -2,6 +2,7 @@ package agentgraph
 
 import (
 	"context"
+	"strings"
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
@@ -47,6 +48,34 @@ func (a *PolicyGateAdapter) CheckStateRead(ctx context.Context, source string) e
 // CheckStateWrite delegates to cedar.CheckStateWrite.
 func (a *PolicyGateAdapter) CheckStateWrite(ctx context.Context, target string) error {
 	return cedar.CheckStateWrite(ctx, a.gate, target)
+}
+
+// CheckTool delegates to BOTH cedar.CheckUseTool (the coarse
+// Action::"use_tool" family every shipped tool policy names) and
+// cedar.CheckTool (the finer-grained ActionToolExec sibling) — UNIT-15
+// (trust-surfaces-that-fire-01PMZ202 WP17). toolName is the
+// fully-qualified "<server>__<tool>" name; splitToolName mirrors the
+// split cedar.Engine.populateFamilyContext applies to the resource id
+// (core/policy/cedar/engine.go) so both evaluators see the same
+// server/tool pair the entity UID was built from.
+func (a *PolicyGateAdapter) CheckTool(ctx context.Context, toolName string) error {
+	server, tool := splitToolName(toolName)
+	if err := cedar.CheckUseTool(ctx, a.gate, server, tool); err != nil {
+		return err
+	}
+	return cedar.CheckTool(ctx, a.gate, server, tool)
+}
+
+// splitToolName splits the kenaz-harness "<server>__<tool>" convention.
+// Falls back to server="" (which cedar.ToolUID maps to "builtin") when
+// no separator is present.
+func splitToolName(name string) (server, tool string) {
+	const sep = "__"
+	idx := strings.Index(name, sep)
+	if idx < 0 {
+		return "", name
+	}
+	return name[:idx], name[idx+len(sep):]
 }
 
 // Compile-time witness.

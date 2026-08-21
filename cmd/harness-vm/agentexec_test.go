@@ -9,6 +9,7 @@ import (
 	"time"
 
 	llm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
 // clearAgentEnv blanks every env var the executor resolution reads so tests
@@ -77,11 +78,22 @@ func (s *fakeAgentStream) Final() (llm.Response, error) {
 // newFakeLLMExecutor builds a real-mode executor whose registry serves the
 // fake adapter instead of the real anthropic client. The env credential path
 // is real (env → credref → adapter cred bytes); only the wire call is faked.
+// The policy guard is nil — registry.New's own nil-substitution applies
+// (llm.AllowAllGuard{}), matching every caller here that isn't itself testing
+// the guard wiring (see newFakeLLMExecutorWithGuard for those).
 func newFakeLLMExecutor(t *testing.T, fake *fakeAgentAdapter) *llmExecutor {
+	t.Helper()
+	return newFakeLLMExecutorWithGuard(t, fake, nil)
+}
+
+// newFakeLLMExecutorWithGuard is newFakeLLMExecutor with an explicit policy
+// guard, for the UNIT-1 tests (mission vm-execution-surface-truth-01PMZD14)
+// that assert the guard set on registry.Options is actually consulted.
+func newFakeLLMExecutorWithGuard(t *testing.T, fake *fakeAgentAdapter, guard llm.PolicyGuard) *llmExecutor {
 	t.Helper()
 	clearAgentEnv(t)
 	t.Setenv("ANTHROPIC_API_KEY", "test-key-bytes")
-	exec, err := newLLMExecutor()
+	exec, err := newLLMExecutor(guard, newTestLogger())
 	if err != nil {
 		t.Fatalf("newLLMExecutor: %v", err)
 	}
@@ -99,7 +111,7 @@ func newFakeLLMExecutor(t *testing.T, fake *fakeAgentAdapter) *llmExecutor {
 func TestResolveAgentExecutorStubMode(t *testing.T) {
 	clearAgentEnv(t)
 	t.Setenv(agentExecEnv, "stub")
-	exec := resolveAgentExecutor(newTestLogger())
+	exec := resolveAgentExecutor(newTestLogger(), nil)
 	if _, ok := exec.(stubExecutor); !ok {
 		t.Fatalf("expected stubExecutor, got %T", exec)
 	}
@@ -119,7 +131,7 @@ func TestResolveAgentExecutorRealNoCredential(t *testing.T) {
 	for _, mode := range []string{"", "real"} {
 		clearAgentEnv(t)
 		t.Setenv(agentExecEnv, mode)
-		exec := resolveAgentExecutor(newTestLogger())
+		exec := resolveAgentExecutor(newTestLogger(), nil)
 		if _, ok := exec.(failingExecutor); !ok {
 			t.Fatalf("mode %q: expected failingExecutor, got %T", mode, exec)
 		}
@@ -142,7 +154,7 @@ func TestResolveAgentExecutorUnknownMode(t *testing.T) {
 	clearAgentEnv(t)
 	t.Setenv(agentExecEnv, "yolo")
 	t.Setenv("ANTHROPIC_API_KEY", "irrelevant") // must NOT rescue a bad mode
-	exec := resolveAgentExecutor(newTestLogger())
+	exec := resolveAgentExecutor(newTestLogger(), nil)
 	_, err := exec.Generate(context.Background(), "", "p")
 	if err == nil || !strings.Contains(err.Error(), "bad_agent_exec_mode") {
 		t.Fatalf("expected bad_agent_exec_mode error; got %v", err)
@@ -233,7 +245,7 @@ func TestProviderSelection(t *testing.T) {
 			for k, v := range tc.env {
 				t.Setenv(k, v)
 			}
-			exec, err := newLLMExecutor()
+			exec, err := newLLMExecutor(nil, newTestLogger())
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("want error containing %q; got %v", tc.wantErr, err)
@@ -364,7 +376,7 @@ func TestStubModeEchoesOverWire(t *testing.T) {
 // state with the named cause — it never completes with echoed text.
 func TestRealModeNoCredentialErrorsOverWire(t *testing.T) {
 	clearAgentEnv(t)
-	closeSrv, addr := startTestServerExec(t, resolveAgentExecutor(newTestLogger()))
+	closeSrv, addr := startTestServerExec(t, resolveAgentExecutor(newTestLogger(), nil))
 	defer closeSrv()
 
 	conn := dialAndAuth(t, addr, "")
@@ -430,5 +442,166 @@ func TestRealModeStreamsModelOutputOverWire(t *testing.T) {
 	}
 	if last == prompt {
 		t.Fatalf("run chunk must not be the echoed prompt")
+	}
+}
+
+// --- UNIT-1 policy guard tests (mission vm-execution-surface-truth-01PMZD14,
+// HV-03 / 01PMZD13 V-2). Before this WP, cmd/harness-vm/agentexec.go's
+// registry.Options literal left Policy unset, which registry.New silently
+// substitutes with llm.AllowAllGuard{} — a guard that can never refuse. Every
+// test below drives newLLMExecutor, the production construction path (AC-001:
+// a test that hand-builds registry.Options{Policy: ...} itself cannot see a
+// missing assignment, which is the defect this AC exists to catch).
+
+// denyModelSelectEngine builds a real *cedar.Engine (never a private one in
+// production code — see newLLMExecutor's doc comment and
+// scripts/ci/check-cedar-engine-singleton.sh) whose only policy denies
+// Action::"model_select" unconditionally, for every principal and resource.
+func denyModelSelectEngine(t *testing.T) *cedar.Engine {
+	t.Helper()
+	e, err := cedar.NewEngine(cedar.Options{LoadFromDisk: false, IncludeEmbedded: false})
+	if err != nil {
+		t.Fatalf("cedar.NewEngine: %v", err)
+	}
+	const src = `forbid (principal, action == Action::"model_select", resource);`
+	if err := e.SetPolicyText("deny-all.cedar", []byte(src)); err != nil {
+		t.Fatalf("SetPolicyText: %v", err)
+	}
+	return e
+}
+
+// TestNewLLMExecutorPolicyGuardCanDeny is AC-002: with a Cedar policy that
+// denies ActionModelSelect, a dispatched generation terminates with a
+// policy-denial error, not a completed run.
+//
+// No adapter method other than RegisterAdapter is ever reached: the registry
+// pipeline evaluates PolicyGuard.Allow (step 3) before it dials the adapter
+// (step 4+, core/llm/registry/registry.go's documented pipeline order), so a
+// fake adapter that would fail loudly if invoked is deliberately NOT wired —
+// reaching it at all would already falsify this test.
+func TestNewLLMExecutorPolicyGuardCanDeny(t *testing.T) {
+	clearAgentEnv(t)
+	t.Setenv("ANTHROPIC_API_KEY", "test-key-bytes")
+
+	guard := cedar.NewLLMPolicyGuard(denyModelSelectEngine(t))
+	exec, err := newLLMExecutor(guard, newTestLogger())
+	if err != nil {
+		t.Fatalf("newLLMExecutor: %v", err)
+	}
+
+	_, err = exec.Generate(context.Background(), "", "prompt")
+	if err == nil {
+		t.Fatal("expected a policy denial, got success")
+	}
+	var pd *llm.ErrPolicyDenied
+	if !errors.As(err, &pd) {
+		t.Fatalf("expected *llm.ErrPolicyDenied (the registry pipeline's policy-denial type); got %T: %v", err, err)
+	}
+	if pd.Reason == "" {
+		t.Fatal("expected a non-empty denial reason")
+	}
+}
+
+// TestNewLLMExecutorPolicyGuardAllowsWhenNotApplicable is AC-003: the
+// permissive path is unchanged. A real Cedar engine with no matching policy
+// returns NotApplicable, and the run completes exactly as it did before this
+// WP (registry construction is DefaultDeny: false at the production call
+// site — this test does not change that posture, it only proves the guard
+// that can now refuse does not refuse everything).
+func TestNewLLMExecutorPolicyGuardAllowsWhenNotApplicable(t *testing.T) {
+	e, err := cedar.NewEngine(cedar.Options{IncludeEmbedded: true})
+	if err != nil {
+		t.Fatalf("cedar.NewEngine: %v", err)
+	}
+	guard := cedar.NewLLMPolicyGuard(e)
+	fake := &fakeAgentAdapter{text: "model output under a real, non-denying policy"}
+	exec := newFakeLLMExecutorWithGuard(t, fake, guard)
+
+	out, err := exec.Generate(context.Background(), "", "prompt")
+	if err != nil {
+		t.Fatalf("expected success under a NotApplicable policy; got %v", err)
+	}
+	if out != fake.text {
+		t.Fatalf("want %q; got %q", fake.text, out)
+	}
+}
+
+// TestResolveCostReducerLoadsEmbeddedTable is AC-004, adapted to this tree's
+// observed state: WP01 found no Cost: field on the registry.Options literal
+// at the v0.66.0 merge base (model-settings-reach-the-model-01PMZ101 WP05's
+// harness-vm half had not landed), so this WP absorbed that mission's own
+// prescription rather than re-adding a field that was never there. This test
+// pins that the absorption still resolves a usable reducer from the embedded
+// starter table — the regression AC-004 exists to catch (a future edit
+// silently dropping the Cost wiring) would show up here as a nil return.
+func TestResolveCostReducerLoadsEmbeddedTable(t *testing.T) {
+	r := resolveCostReducer(newTestLogger())
+	if r == nil {
+		t.Fatal("expected a non-nil CostReducer from the embedded starter cost table")
+	}
+}
+
+// TestRealModePolicyDenialOverWire is AC-002 in its literal, stated shape:
+// "Assert on the wire frame and on the audit sink's exitCode — not on the
+// ledger phase." (The ledger phase stays task.complete on every terminal
+// branch by design, blocked on audit-that-tells-the-truth-01PMZA10's own
+// out-of-repo-consumer escalation — spec.md §0.2 — so a test asserting the
+// ledger here would be asserting somebody else's escalation, not this one.)
+//
+// Drives resolveAgentExecutor -> newLLMExecutor (the production
+// construction path) with a REAL registry — the default anthropic adapter
+// registry.New wires in, not a fake — proving Policy denies before any
+// network dial. No live network call happens: PolicyGuard.Allow (registry
+// pipeline step 3) runs before CredentialResolver/adapter dispatch (steps
+// 4/6), so a deny short-circuits the run before the adapter is ever reached.
+func TestRealModePolicyDenialOverWire(t *testing.T) {
+	clearAgentEnv(t)
+	t.Setenv("ANTHROPIC_API_KEY", "test-key-bytes")
+
+	guard := cedar.NewLLMPolicyGuard(denyModelSelectEngine(t))
+	exec := resolveAgentExecutor(newTestLogger(), guard)
+	if _, ok := exec.(*llmExecutor); !ok {
+		t.Fatalf("expected real-mode resolution to a *llmExecutor (env is fully resolvable); got %T", exec)
+	}
+
+	sock := newFakeAuditSock(t)
+	defer sock.close()
+	audit := newTCPAuditSink(sock.addr())
+
+	ln, addr := startTestServerFull(t, "", exec, audit, nil)
+	defer ln.Close()
+
+	conn := dialAndAuth(t, addr, "")
+	defer conn.Close()
+	msgs, mu, stop := readMessages(t, conn)
+	defer stop()
+
+	sendMsg(t, conn, map[string]any{"kind": "task.start", "task_id": "t-denied", "prompt": "do work"})
+	errMsg := waitForKind(t, msgs, mu, "task.error", 3*time.Second)
+
+	// --- The wire frame. ---
+	if errMsg["code"] != "graph_run_failed" {
+		t.Fatalf("unexpected error code: %v", errMsg["code"])
+	}
+	mt, _ := errMsg["message_truncated"].(string)
+	if !strings.Contains(mt, "policy denied") {
+		t.Fatalf("error must name the policy denial (llm.ErrPolicyDenied's message); got %q", mt)
+	}
+	mu.Lock()
+	if findKind(*msgs, "task.complete") != nil {
+		t.Fatalf("task must not complete under a policy denial")
+	}
+	mu.Unlock()
+
+	// --- The audit sink's exitCode (NOT the ledger phase). ---
+	recs := sock.waitForCount(t, 2, 3*time.Second) // task.start + terminal
+	var sawNonZeroTerminal bool
+	for _, r := range recs {
+		if r.Kind == auditKindTaskComplete && r.TaskID == "t-denied" && r.ExitCode != 0 {
+			sawNonZeroTerminal = true
+		}
+	}
+	if !sawNonZeroTerminal {
+		t.Fatalf("expected a non-zero exit_code terminal audit record for the policy-denied task; got %v", recs)
 	}
 }

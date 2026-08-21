@@ -8,9 +8,9 @@ import (
 
 // PolicyCheckCall records one call to any PolicyGate method.
 type PolicyCheckCall struct {
-	Method string // "CheckFileRead" | "CheckFileWrite" | "CheckStateRead" | "CheckStateWrite"
+	Method string // "CheckFileRead" | "CheckFileWrite" | "CheckStateRead" | "CheckStateWrite" | "CheckTool"
 	Ctx    context.Context
-	Arg    string // path or source
+	Arg    string // path, source, or fully-qualified tool name
 }
 
 // PolicyGate is a recording fake that satisfies agentgraph.PolicyGate.
@@ -65,6 +65,11 @@ func (r *PolicyGate) CheckStateRead(ctx context.Context, source string) error {
 // CheckStateWrite satisfies agentgraph.PolicyGate.
 func (r *PolicyGate) CheckStateWrite(ctx context.Context, target string) error {
 	return r.check(ctx, "CheckStateWrite", target)
+}
+
+// CheckTool satisfies agentgraph.PolicyGate.
+func (r *PolicyGate) CheckTool(ctx context.Context, toolName string) error {
+	return r.check(ctx, "CheckTool", toolName)
 }
 
 // Calls returns a snapshot of all recorded policy check calls.

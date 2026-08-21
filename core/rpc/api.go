@@ -831,6 +831,15 @@ type API struct {
 	// fleet archiver's TailReader. Populated by ObserveTailEvent
 	// which is called from AuditObserver when auditArchiver is wired.
 	auditTailBuf *auditTailBuffer
+
+	// localAuditRetentionScheduler is the LOCAL audit-retention sweep
+	// background loop (audit-that-tells-the-truth-01PMZA10 UNIT-8).
+	// Unlike auditSweeper above (the fleet ACK sweeper — constructed
+	// ONLY when a fleet client is present and non-nop), this is
+	// constructed and started on EVERY install with a real DataDir,
+	// unconditionally (spec D-7: "local retention is not fleet-gated").
+	// Held for Start (in SetContext) and Stop (in Shutdown).
+	localAuditRetentionScheduler *eventlog.LocalRetentionScheduler
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
@@ -931,6 +940,13 @@ func (a *API) SetContext(ctx context.Context) {
 	if a.auditSweeper != nil {
 		a.auditSweeper.Start(ctx)
 		logging.L().Info("fleet.audit_sweeper.started")
+	}
+	// audit-that-tells-the-truth-01PMZA10 UNIT-8: the local retention
+	// sweeper, unconditionally on every install with a real backend —
+	// no fleet-client gate (spec D-7), unlike auditSweeper above.
+	if a.localAuditRetentionScheduler != nil {
+		a.localAuditRetentionScheduler.Start(ctx)
+		logging.L().Info("event_log.local_retention_scheduler.started")
 	}
 }
 
@@ -1172,6 +1188,10 @@ func (a *API) Shutdown() {
 	}
 	if a.auditSweeper != nil {
 		a.auditSweeper.Stop()
+	}
+	// audit-that-tells-the-truth-01PMZA10 UNIT-8.
+	if a.localAuditRetentionScheduler != nil {
+		a.localAuditRetentionScheduler.Stop()
 	}
 }
 
@@ -1539,11 +1559,45 @@ func New(c *core.Core, opts ...Option) *API {
 	// event-log's migrations into this same db's registry (sqlite.go),
 	// so by the time db is non-nil here its schema is already applied.
 	var auditStore *eventlog.Store
+	var auditBackend *eventlog.SQLBackend
 	if db != nil {
-		auditStore = eventlog.NewStore(eventlog.NewSQLBackend(db))
+		auditBackend = eventlog.NewSQLBackend(db)
+		auditStore = eventlog.NewStore(auditBackend)
 	}
-	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker), audit.WithGate(auditGate), audit.WithStore(auditStore))
+	// audit-that-tells-the-truth-01PMZA10 UNIT-6 (WP07): WithSweepableBackend
+	// also sets the plain Backend when unset (impl.go's own doc comment on
+	// the option), so this one call feeds BOTH Export (views/audit/impl.go:298,
+	// which returned "audit: Export requires a backend" for every caller
+	// until now — audit export has never worked in a shipped build) and
+	// BulkPurge's actual delete path.
+	auditOpts := []audit.Option{audit.WithSubscriber(a.broker), audit.WithGate(auditGate), audit.WithStore(auditStore)}
+	if auditBackend != nil {
+		// Guard against the classic Go nil-interface trap: passing a nil
+		// *eventlog.SQLBackend through eventlog.SweepableBackend would
+		// produce a NON-nil interface holding a nil pointer, defeating
+		// impl.go's own `if backend == nil` checks and panicking on the
+		// first method call. Only add the option when there is a real
+		// backend to add.
+		auditOpts = append(auditOpts, audit.WithSweepableBackend(auditBackend))
+	}
+	if db != nil {
+		// UNIT-6: saved queries persist in saved_audit_queries
+		// (migration event-log/0105) instead of an in-memory map.
+		auditOpts = append(auditOpts, audit.WithSavedQueryStore(eventlog.NewSavedQueryStore(db)))
+	}
+	a.auditImpl = audit.NewAPI(auditOpts...)
 	a.auditAPI = a.auditImpl
+
+	// Local audit-retention sweeper (audit-that-tells-the-truth-01PMZA10
+	// UNIT-8). Constructed unconditionally whenever a real backend
+	// exists — spec D-7, "local retention is not fleet-gated": this is
+	// deliberately NOT inside the fleet-client-present branch below that
+	// gates auditArchiver/auditSweeper. Started in SetContext, stopped
+	// in Shutdown, same lifecycle pattern as every other background
+	// loop in this file.
+	if auditBackend != nil {
+		a.localAuditRetentionScheduler = eventlog.NewLocalRetentionScheduler(auditBackend, db, dataDir)
+	}
 
 	// mission 01NLOGS01 WP01: construct the bounded in-memory log store and
 	// TEE the current active slog handler through it. We use logging.Handler()
@@ -1648,9 +1702,19 @@ func New(c *core.Core, opts ...Option) *API {
 	// AuditSettings.RetentionEnforced (audit-that-tells-the-truth-01PMZA10
 	// UNIT-4, spec D-8): false until UNIT-8 lands a real sweep. This is
 	// the wiring site that makes the value honest — GetAuditSettings
-	// itself never hardcodes it. UNIT-8 changes this one call to report
-	// whatever actually schedules and runs the sweep; no frontend edit.
-	settingsImpl.SetAuditRetentionEnforced(false)
+	// itself never hardcodes it. UNIT-8 is this exact call: it now
+	// reports true whenever localAuditRetentionScheduler was actually
+	// constructed (a real backend exists) — matching AC-006/D-8 exactly,
+	// with zero frontend edit.
+	settingsImpl.SetAuditRetentionEnforced(a.localAuditRetentionScheduler != nil)
+	if auditBackend != nil {
+		// UNIT-8, spec §5.6 item 3: retention_config, not the settings
+		// blob, is now the persisted policy's real home. Wiring this
+		// makes Settings_{Get,Set}AuditSettings and
+		// localAuditRetentionScheduler read/write the exact same row —
+		// AC-013's "the dial reaches the deleter".
+		settingsImpl.SetAuditRetentionDB(db)
+	}
 
 	// Wire the Settings-backed MemoryNarrativeEnabled dial into
 	// core/memory/narrative (agentgraph-total-convergence-01PMGX01 WP17,
@@ -1788,6 +1852,14 @@ func New(c *core.Core, opts ...Option) *API {
 	if c != nil && c.Storage() != nil && c.DataDir() != "" && coreslashcmd.UserSlashcmdEnabled() {
 		slashStore = coreslashcmd.NewStore(c.Storage(), c.DataDir())
 		slashDispatch = coreslashcmd.NewDispatch(slashStore, nil)
+		// audit-that-tells-the-truth-01PMZA10 UNIT-5: dispatch.go:113's
+		// KindSlashCommandExecuted emit site (and its argument-redaction
+		// path, core/slashcmd/audit.go) has been unreachable since it
+		// was written — the nil above was the only value ever passed.
+		// a.auditImpl already exists (constructed above). Shape 1
+		// (contextaudit.Emitter) — acpAuditBridge already is this
+		// shape; reused rather than a new bridge type.
+		slashDispatch.WithAuditEmitter(&acpAuditBridge{impl: a.auditImpl})
 
 		// Install bundled skill templates on first launch (idempotent).
 		// Best-effort: a failure here never prevents the chassis from booting.
@@ -2105,7 +2177,13 @@ func New(c *core.Core, opts ...Option) *API {
 	// branches which also pass nil today); tracked for follow-up
 	// (session-export-01NDFSEX05 WP02).
 	if c != nil {
-		a.sessionsAPI = sessions.WithExportOpts(a.sessionsAPI, a.cedarGate(), nil, nil)
+		// audit-that-tells-the-truth-01PMZA10 UNIT-5 (spec R-1, D-9): this
+	// site was owned by NOBODY before this mission — it appears in no
+	// mission's tasks.md — and its emitter param 4 was nil, so
+	// views/sessions/impl.go:1054's KindSessionExport ("fires on every
+	// successful Sessions_Export call", audit.go:205) has never fired.
+	// Shape 1 (contextaudit.Emitter).
+	a.sessionsAPI = sessions.WithExportOpts(a.sessionsAPI, a.cedarGate(), nil, &acpAuditBridge{impl: a.auditImpl})
 	}
 	if c != nil && a.dispatchPool != nil {
 		// Wire the dispatch pool (all transports) onto Core.MCP so the
@@ -2143,7 +2221,15 @@ func New(c *core.Core, opts ...Option) *API {
 	// Pass the dispatch pool as the tools-view PoolController so
 	// InstallRecipe/UninstallRecipe route http/sse recipes to the right
 	// transport sub-pool.
-	a.toolsAPI = newToolsAPI(c, a.dispatchPool, stack.secrets, a.promptRegistry, a.cedarPolicyAPI, opt.connectorTokens, mcpUserRecipeSource(a.mcpUserStore), a.cedarGate())
+	// audit-that-tells-the-truth-01PMZA10 UNIT-5: &searchAuditEmitter{impl: a.auditImpl}
+	// is Shape 3 (toolsview.AuditEmitter) — copied from the search
+	// view's own bridge, which already forwards this exact shape.
+	// Before this, tools.Config.Audit was `nil, // TODO(audit-wired):
+	// reuse process-wide event.Emitter once it's available` — that
+	// precondition was already met at a.auditImpl's construction above
+	// when the TODO was written. views/tools/impl.go:401,649,669,
+	// device_auth.go:179, oauth.go:109,132,179 have never fired.
+	a.toolsAPI = newToolsAPI(c, a.dispatchPool, stack.secrets, a.promptRegistry, a.cedarPolicyAPI, opt.connectorTokens, mcpUserRecipeSource(a.mcpUserStore), a.cedarGate(), &searchAuditEmitter{impl: a.auditImpl})
 	// Register the fsrequest built-in after toolsAPI is wired so the
 	// tool's delegate can be the real (non-stub) implementation. The
 	// tool is registered unconditionally; the EnabledFilter gates
@@ -2297,6 +2383,11 @@ func New(c *core.Core, opts ...Option) *API {
 		Conversations: a.convMgr,
 		Sessions:      sessionManagerOrNil(c),
 		Recommender:   newBranchRecommender(recommenderCat),
+		// audit-that-tells-the-truth-01PMZA10 UNIT-5: this field was
+		// never set, so branches/impl.go's KindBranchAdvisorAccepted /
+		// KindBranchCreated emit sites (:159, :236, :560, :584) have
+		// never fired. Shape 1 (contextaudit.Emitter).
+		Audit: &acpAuditBridge{impl: a.auditImpl},
 		// Broker enables LeftRail real-time updates on branch creation
 		// (branch creates a new child session row): v0.5.3 fix.
 		Broker: a.broker,
@@ -2416,6 +2507,12 @@ func New(c *core.Core, opts ...Option) *API {
 		// The ctxFn defers ctx resolution to Notify-call time so construction
 		// before OnStartup is safe.
 		wfDeps.Notifier = &wfNotifierAdapter{ctxFn: a.broker.EmitCtx}
+		// audit-that-tells-the-truth-01PMZA10 UNIT-5: KindWorkflowNetworkFetch
+		// (core/context/audit/audit.go:108) had zero emit sites in the
+		// tree. Shape 1 (contextaudit.Emitter) — a SEPARATE field from
+		// wfDeps.Audit above (that one is corewf's own narrow,
+		// notify-only AuditEmitter, out of scope here per spec R-3).
+		wfDeps.NetworkAudit = &acpAuditBridge{impl: a.auditImpl}
 		// Cedar policy gate for workflow run / save / delete. Without
 		// this the workflows surface consulted no policy at all: the
 		// gate helpers short-circuit a nil Gate to
@@ -2437,6 +2534,11 @@ func New(c *core.Core, opts ...Option) *API {
 			WorkflowCatalog: wfCatalog,
 			Cedar:           a.cedarGate(),
 			CedarModeFn:     workflowCedarModeFn(settingsImpl),
+			// audit-that-tells-the-truth-01PMZA10 UNIT-5: this field
+			// was never set, so workflows/impl.go's six emit sites
+			// (:443, :444, :473, :474, :522, :563) have never fired.
+			// Shape 1 (contextaudit.Emitter).
+			Audit: &acpAuditBridge{impl: a.auditImpl},
 		})
 	}
 
@@ -2497,6 +2599,12 @@ func New(c *core.Core, opts ...Option) *API {
 			CurrentVersion: c.BuildVersion(),
 			DataDir:        c.DataDir(),
 			Publisher:      brokerPublisher{broker: a.broker},
+			// audit-that-tells-the-truth-01PMZA10 UNIT-5: this field
+			// was never set ("today the chassis runs with Audit=nil"
+			// per the field's own doc comment) — core/update/audit.go's
+			// six emit sites have never fired. Shape 1
+			// (contextaudit.Emitter).
+			Audit: &acpAuditBridge{impl: a.auditImpl},
 		})
 		if err != nil {
 			logging.L().Warn("update.service.init_failed", "err", err.Error())
@@ -2563,7 +2671,12 @@ func New(c *core.Core, opts ...Option) *API {
 		editorEnv := os.Getenv("HARNESS_POLICY_EDITOR_UI")
 		policyEditorEnabled := editorEnv != "0" && editorEnv != "false"
 		a.policyEditorEnabled = policyEditorEnabled
-		a.cedarPolicyAPI = cedarpolicyview.NewAPIWithOptions(cedarEng, cedarDataDir, nil, policyEditorEnabled)
+		// audit-that-tells-the-truth-01PMZA10 UNIT-5 (spec R-1, D-9):
+		// this site was owned by NOBODY before this mission — param 3
+		// was nil, so views/cedarpolicy/impl.go's three policy.* emit
+		// sites (:283, :315, :372) have never fired. Shape 1
+		// (contextaudit.Emitter).
+		a.cedarPolicyAPI = cedarpolicyview.NewAPIWithOptions(cedarEng, cedarDataDir, &acpAuditBridge{impl: a.auditImpl}, policyEditorEnabled)
 
 		// Read HARNESS_KEYCHAIN_ROTATION once at boot. Default = on ("").
 		// Set to "off", "0", or "false" to disable the rotation UI.
@@ -3228,10 +3341,24 @@ func New(c *core.Core, opts ...Option) *API {
 			})
 			a.auditArchiver = archiver
 
-			// AuditRetentionSweeper: runs hourly, deletes ACK'd + aged rows.
-			// Backend is nil here (event-log backend not yet fully wired);
-			// SweepOnce returns 0 rows when backend is nil (safe no-op).
+			// AuditRetentionSweeper: runs hourly, deletes ACK'd + aged
+			// rows. Backend is now the event-log SQL backend, adapted
+			// through settings.NewFleetAuditRetentionBackend (the
+			// fleet-boundary conversion — core/event/log must not
+			// import core/fleet, check-no-fleet-imports.sh) —
+			// audit-that-tells-the-truth-01PMZA10 UNIT-7, AC-015. The
+			// no-op path this comment used to describe ("Backend is nil
+			// here... SweepOnce returns 0 rows when backend is nil") is
+			// unreachable in production wiring as of this unit: it can
+			// still occur with auditBackend == nil (dataDir set without
+			// a real storage.DB — not a production configuration, but a
+			// defensive fallback rather than a panic).
+			var fleetRetentionBackend corefleet.AuditRetentionBackend
+			if auditBackend != nil {
+				fleetRetentionBackend = settings.NewFleetAuditRetentionBackend(auditBackend, dataDir)
+			}
 			sweeper := corefleet.NewAuditRetentionSweeper(corefleet.AuditRetentionConfig{
+				Backend: fleetRetentionBackend,
 				Cursor:  archiver.CurrentCursor,
 				Emitter: &auditArchiverEmitter{impl: a.auditImpl},
 			})
@@ -4231,7 +4358,7 @@ func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secr
 // only call site — rather than a freshly-built engine of this
 // function's own, so a policy save + reload reaches recipe-spawn like
 // every other gate.
-func newToolsAPI(c *core.Core, pool tools.PoolController, secretsBackend *secrets.MemoryBackend, promptReg *cedar.Registry, cedarPolicyAPI cedarpolicyview.CedarPolicyAPI, connectorTokens tools.ConnectorTokenSource, userSource func() []recipes.Recipe, cedarGate cedar.Gate) tools.ToolsAPI {
+func newToolsAPI(c *core.Core, pool tools.PoolController, secretsBackend *secrets.MemoryBackend, promptReg *cedar.Registry, cedarPolicyAPI cedarpolicyview.CedarPolicyAPI, connectorTokens tools.ConnectorTokenSource, userSource func() []recipes.Recipe, cedarGate cedar.Gate, auditEmitter tools.AuditEmitter) tools.ToolsAPI {
 	if c == nil {
 		return &stubTools{}
 	}
@@ -4252,7 +4379,7 @@ func newToolsAPI(c *core.Core, pool tools.PoolController, secretsBackend *secret
 		Secrets:        secretsBackend,
 		DataDir:        dataDir,
 		WorkspaceDir:   c.WorkspaceDir(),
-		Audit:          nil, // TODO(audit-wired): reuse process-wide event.Emitter once it's available
+		Audit:          auditEmitter,
 		Keychain:       &keychainWriter{backend: secretsBackend},
 		Forgetter:      &keychainForgetter{backend: secretsBackend},
 		PromptRegistry: promptReg,
@@ -4662,7 +4789,7 @@ func newLLMStack(
 	// in-process filesystem tools. Gated behind per-family settings dials
 	// (FSReadEnabled / FSWriteEnabled) so the Tools panel toggles take effect
 	// on the next chat turn. Uses the same Cedar engine as the bash tool.
-	registerFSBuiltinTools(builtinRegistry, bashCedarEngine, settingsStore)
+	registerFSBuiltinTools(builtinRegistry, bashCedarEngine, settingsStore, promptRegistry, dataDir)
 	// unified-context-artifacts-01NCTXU01: register the read_context_file
 	// built-in so the agent can read on-demand files from attached context
 	// modules. Requires both the contexts library AND an attachment manager;
@@ -8281,6 +8408,23 @@ func (a *API) cedarGate() cedar.Gate {
 		return cedar.AllowAll{}
 	}
 	return a.cedarEngine
+}
+
+// CedarGate exposes the process-singleton Cedar gate so an out-of-band
+// execution surface can consult the SAME engine every in-process gate
+// site consults, rather than standing up a second one.
+// cmd/harness-vm's newLLMExecutor is the caller (mission
+// vm-execution-surface-truth-01PMZD14, HV-03/UNIT-1): the workbench's
+// model-call path previously left registry.Options.Policy unset, which
+// silently substitutes llm.AllowAllGuard{} — strictly weaker than the
+// trusted host's cedarGuard-backed path at this file's LLMConnector
+// construction site. This accessor closes that gap without a second
+// engine.
+//
+// Inherits cedarGate()'s nil-safety: cedar.AllowAll{} when no engine was
+// constructed.
+func (a *API) CedarGate() cedar.Gate {
+	return a.cedarGate()
 }
 
 // buildCedarEngineOrNil constructs a *cedar.Engine. In production it

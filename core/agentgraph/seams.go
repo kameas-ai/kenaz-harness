@@ -641,6 +641,14 @@ type PolicyGate interface {
 	CheckStateRead(ctx context.Context, source string) error
 	// CheckStateWrite mirrors CheckStateRead for write targets.
 	CheckStateWrite(ctx context.Context, target string) error
+	// CheckTool is consulted by the tool-dispatch boundary (WP17,
+	// trust-surfaces-that-fire-01PMZ202 UNIT-15) before a model-emitted
+	// tool call executes. toolName is the fully-qualified
+	// "<server>__<tool>" name (cedar.ToolUID's convention; empty server
+	// segment is written as "builtin"). Implementations consult BOTH
+	// the coarse Action::"use_tool" family every shipped policy names
+	// and the finer-grained tool_exec action.
+	CheckTool(ctx context.Context, toolName string) error
 }
 
 // ---- Trace ----
@@ -951,6 +959,7 @@ func (allowAllPolicy) CheckFileRead(_ context.Context, _ string) error   { retur
 func (allowAllPolicy) CheckFileWrite(_ context.Context, _ string) error  { return nil }
 func (allowAllPolicy) CheckStateRead(_ context.Context, _ string) error  { return nil }
 func (allowAllPolicy) CheckStateWrite(_ context.Context, _ string) error { return nil }
+func (allowAllPolicy) CheckTool(_ context.Context, _ string) error       { return nil }
 
 // applyEnvDefaults fills missing seams with safe stubs so executors
 // don't need to nil-check every dependency.

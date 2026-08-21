@@ -57,6 +57,30 @@ var expectedChangedTables = map[string][]string{
 		// sessions/0334-move-fidelity-columns adds sessions.move_history_mode.
 		"sessions",
 	},
+	"v0.65.0": {
+		// event-log/0106-events-fts-sync (audit-that-tells-the-truth-
+		// 01PMZA10 UNIT-8) UPDATEs the single retention_config row,
+		// correcting event-log/0103's shipped seed
+		// ('{"kind":"keep_all"}', not a valid RetentionStrategy value)
+		// to '{"kind":"keep_forever"}'. A deliberate DATA change, not a
+		// shape change — TestReadRetentionPolicy_AfterMigration106_ReadsTheFixedSeed
+		// (core/event/log/retention_config_test.go) asserts the
+		// corrected value is actually readable afterwards.
+		"retention_config",
+	},
+	"v0.65.1": {
+		// Same migration, same reason as v0.65.0 above: v0.65.1 is a
+		// CI-only patch release (PR #300) whose dump is byte-identical
+		// to v0.65.0's, so event-log/0106 corrects the same seeded row
+		// when it boots under HEAD.
+		//
+		// This entry exists because the tag exists: `fix(ci):` is a
+		// patch prefix, so a CI-hygiene PR minted a real release tag,
+		// and check-upgrade-snapshot-present.sh then required a snapshot
+		// for it. Every release tag owes one, including the ones nobody
+		// set out to cut.
+		"retention_config",
+	},
 }
 
 // fixedProbeTime is used for the item-4 session INSERT probe so the

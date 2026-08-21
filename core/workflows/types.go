@@ -26,6 +26,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
 )
 
 // ValueType is the closed enum of TypedValue payload shapes.
@@ -648,6 +650,18 @@ type Deps struct {
 	Notifier Notifier
 	// Audit, when non-nil, receives notify.sent events. nil is a no-op.
 	Audit AuditEmitter
+	// NetworkAudit, when non-nil, receives KindWorkflowNetworkFetch
+	// events — one per web_fetch/web_scrape step that completes a
+	// network request (core/context/audit/audit.go:108,
+	// audit-that-tells-the-truth-01PMZA10 UNIT-5). A SEPARATE field
+	// from Audit above, deliberately: Audit is the narrow, notify-only
+	// AuditEmitter defined in this file (Shape 2 in the mission's
+	// vocabulary — out of scope here, owned by automation-actually-
+	// runs-01PMZ404 UNIT-8); NetworkAudit is the general-purpose
+	// contextaudit.Emitter (Shape 1) core/workflows/audit.go's
+	// EmitExecuted/EmitStepFailures/EmitSaved/EmitDeleted already use,
+	// threaded here so the runner layer (runners.go) can reach it too.
+	NetworkAudit contextaudit.Emitter
 }
 
 // Sentinels.

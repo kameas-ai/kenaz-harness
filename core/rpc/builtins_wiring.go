@@ -131,6 +131,13 @@ func registerBuiltinTools(
 		// demoted it to AllowOnce, and the next identical command
 		// re-prompted with no explanation.
 		PermissionCacheDangerousOps: dangerousOpsCacheLookup(store),
+		// trust-surfaces-that-fire-01PMZ202 WP22 / UNIT-20 (FR-017):
+		// Logger was never set, so t.logf returned early at every one
+		// of bash's 18 Cedar-gate log sites (bash.go:734) — including
+		// every gate decision and a swallowed snippet-write failure, in
+		// every shipped build. Logger: logging.L() matches the pattern
+		// every sibling tool in this file already uses.
+		Logger: logging.L(),
 	})
 	registry.Register(bashTool)
 	workspaceSource := "none"
@@ -479,13 +486,23 @@ func saveArtifactEnabledLookup(store settings.SettingsStore) func() bool {
 // nil registry is a no-op so the test harness path stays clean. nil
 // cedarEngine falls back to AllowAll (same pattern as websearch).
 // nil store falls back to "disabled" (correct default-off posture for
-// filesystem write access).
+// filesystem write access). nil promptRegistry / empty dataDir degrade
+// the Prompter/PolicyDir fields to their own safe defaults (NoOpPrompter,
+// snippet persistence disabled) — same nil-tolerant shape as the bash
+// tool's own PromptRegistry/DataDir wiring above.
 //
-// (builtin-filesystem-tools-01KR3N4P WP02–WP06)
+// (builtin-filesystem-tools-01KR3N4P WP02–WP06;
+// trust-surfaces-that-fire-01PMZ202 WP22 / UNIT-20 adds Prompter +
+// PolicyDir, C-16: both land in the same commit because PolicyDir's
+// two call sites are unreachable until a real Prompter exists — a
+// Prompter landing alone makes "Allow always" silently degrade to
+// allow-once, re-prompting forever.)
 func registerFSBuiltinTools(
 	registry *toolloop.BuiltinRegistry,
 	cedarEngine *cedar.Engine,
 	store settings.SettingsStore,
+	promptRegistry *cedar.Registry,
+	dataDir string,
 ) {
 	if registry == nil {
 		return
@@ -499,8 +516,30 @@ func registerFSBuiltinTools(
 	if cedarEngine != nil {
 		fsGateEngine = cedarEngine
 	}
+	var policyDir string
+	if dataDir != "" {
+		policyDir = filepath.Join(dataDir, cedar.PolicyDir)
+	}
 	gate := corefs.NewGate(corefs.GateOptions{
 		Engine: fsGateEngine,
+		// B-4/R-01: the interactive arm — an adapter over
+		// cedar.Registry.RequestInteractive, the same registry bash
+		// already prompts through, so an attended user gets the modal
+		// bash already has. promptRegistry is the process-shared
+		// singleton (nil only on the test-harness / nil-core path);
+		// corefs.CedarPrompter degrades a nil Registry to PromptDeny,
+		// i.e. NoOpPrompter's own behaviour — the "interactive when a
+		// channel is attached, NoOpPrompter otherwise" composite from
+		// the coordination note falls out of that nil-tolerance for
+		// free, with no explicit fallback chain to write here.
+		Prompter: &corefs.CedarPrompter{Registry: promptRegistry},
+		// C-16: PolicyDir was doubly dead (unset here, and both write
+		// call sites sat inside switch arms NoOpPrompter could never
+		// reach). Wiring the Prompter alone would silently degrade
+		// every "Allow always" grant to allow-once. Same
+		// <DataDir>/policy convention bash's own snippet writer uses
+		// (bash.go:598, cedar.PolicyDir).
+		PolicyDir: policyDir,
 	})
 
 	// Per-family enabled closures. Soft-fail to false on transient store
