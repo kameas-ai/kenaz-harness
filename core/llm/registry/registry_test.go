@@ -1207,3 +1207,122 @@ func TestRegistry_StructuredOutput_GrammarModeSkipsValidation(t *testing.T) {
 		t.Fatalf("grammar mode must not retry, expected 1 call, got %d", n)
 	}
 }
+
+// --- WP05: cost reducer construction (model-settings-reach-the-model-01PMZ101) ---
+//
+// Before this mission no production call site ever set Options.Cost
+// (spec §1.4 / FR-004): registry/audited_stream.go's Final() unconditionally
+// stamped every response Indeterminate except OpenRouter, which populates
+// its own Cost off the wire. These pin the registry-level contract WP05
+// depends on: a constructed reducer derives a real cost, and a
+// provider-sourced cost (Source:"provider") is never clobbered by it —
+// AC-004's second assertion, which the naive
+// `if s.reducer != nil { resp.Cost = s.reducer.Derive(...) }` shape fails.
+
+// zzCostReducer is a deterministic fake CostReducer — no dependency on the
+// real starter_table.yaml, so this test cannot be satisfied by accident if
+// the shipped table happens to have an entry for the (kind, model) pair.
+type zzCostReducer struct {
+	calls int32
+	fixed llm.Cost
+}
+
+func (z *zzCostReducer) Derive(_ llm.Usage, _, _ string) llm.Cost {
+	atomic.AddInt32(&z.calls, 1)
+	return z.fixed
+}
+
+func newRegWithCostReducer(t *testing.T, reducer CostReducer) (*Registry, *fakeAdapter) {
+	t.Helper()
+	sink := &events.MemorySink{}
+	emit := events.New(sink)
+	emit.SetClock(func() time.Time { return time.Unix(0, 0) })
+	r, err := New(Options{Emitter: emit, Cost: reducer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := &fakeAdapter{
+		kind: "anthropic",
+		chunks: []llm.StreamEvent{
+			{Kind: llm.StreamFinish, Finish: "stop"},
+		},
+	}
+	r.RegisterAdapter(adapter)
+	prof := llm.ProviderProfile{
+		ID: "p-cost", Kind: "anthropic", Model: "claude-sonnet-4-5",
+		Cred: llm.CredentialReference{Kind: "env", Locator: "TEST_REG_COST_KEY"},
+	}
+	if err := r.LoadProfiles([]llm.ProviderProfile{prof}); err != nil {
+		t.Fatal(err)
+	}
+	return r, adapter
+}
+
+// TestRegistry_StreamCostReducer_DerivesCostWhenConstructed is AC-004's
+// first assertion, driven at the registry level (the same reducer field
+// core/rpc/api.go's newLLMStack now populates): when Options.Cost is set,
+// a Response whose adapter left Cost unpopulated comes back with the
+// reducer's derived figure, not llm.Cost{Indeterminate:true}.
+func TestRegistry_StreamCostReducer_DerivesCostWhenConstructed(t *testing.T) {
+	reducer := &zzCostReducer{fixed: llm.Cost{Currency: "USD", Total: 1.23}}
+	r, adapter := newRegWithCostReducer(t, reducer)
+	adapter.final = llm.Response{
+		FinishReason: "stop",
+		Usage:        llm.Usage{InputTokens: 1000, OutputTokens: 500},
+		// Cost intentionally left zero-value — the adapter did not
+		// populate it, matching every shipped adapter except OpenRouter.
+	}
+
+	stream, err := r.Stream(context.Background(), llm.GenerationRequest{ProfileID: "p-cost"})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	resp, ferr := stream.Final()
+	if ferr != nil {
+		t.Fatalf("Final: %v", ferr)
+	}
+	if resp.Cost.Indeterminate {
+		t.Fatal("want a derived cost, got Indeterminate=true — the reducer was not consulted")
+	}
+	if resp.Cost.Total != 1.23 || resp.Cost.Currency != "USD" {
+		t.Fatalf("want the reducer's derived Cost{USD,1.23}, got %+v", resp.Cost)
+	}
+	if atomic.LoadInt32(&reducer.calls) != 1 {
+		t.Fatalf("want reducer.Derive called exactly once, got %d", reducer.calls)
+	}
+}
+
+// TestRegistry_StreamCostReducer_PreservesProviderSourcedCost is AC-004's
+// second, load-bearing assertion. An adapter that already populated Cost
+// with Source:"provider" (OpenRouter reads usage.cost off its own wire) is
+// ground truth; a constructed reducer must not overwrite it with a table
+// estimate. This is the mutation the naive
+// `if s.reducer != nil { resp.Cost = s.reducer.Derive(...) }` shape fails —
+// it would silently downgrade OpenRouter's real cost to a derived guess
+// the instant a reducer is constructed anywhere in production.
+func TestRegistry_StreamCostReducer_PreservesProviderSourcedCost(t *testing.T) {
+	reducer := &zzCostReducer{fixed: llm.Cost{Currency: "USD", Total: 99.0}}
+	r, adapter := newRegWithCostReducer(t, reducer)
+	providerCost := llm.Cost{Currency: "USD", Total: 0.0042, Source: "provider"}
+	adapter.final = llm.Response{
+		FinishReason: "stop",
+		Usage:        llm.Usage{InputTokens: 1000, OutputTokens: 500},
+		Cost:         providerCost,
+	}
+
+	stream, err := r.Stream(context.Background(), llm.GenerationRequest{ProfileID: "p-cost"})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	resp, ferr := stream.Final()
+	if ferr != nil {
+		t.Fatalf("Final: %v", ferr)
+	}
+	if resp.Cost != providerCost {
+		t.Fatalf("want the provider-sourced Cost preserved verbatim %+v, got %+v — a constructed "+
+			"reducer must never overwrite Source:\"provider\"", providerCost, resp.Cost)
+	}
+	if atomic.LoadInt32(&reducer.calls) != 0 {
+		t.Fatalf("want reducer.Derive NOT called when the adapter already provided Source:\"provider\", got %d calls", reducer.calls)
+	}
+}

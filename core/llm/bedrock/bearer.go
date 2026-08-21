@@ -376,6 +376,19 @@ func toConverseJSON(msgs []llm.Message) ([]map[string]any, []map[string]any, err
 				"role":    role,
 				"content": blocks,
 			})
+		case llm.RoleTool:
+			// Tool-result message (model-settings-reach-the-model-01PMZ101
+			// WP04 / FR-003), mirroring toBedrockMessages' RoleTool arm:
+			// the Converse REST API requires role "user" for a tool-result
+			// turn, paired to the assistant's prior toolUse by toolUseId.
+			blocks := toConverseContentBlocksJSON(m.Content)
+			if len(blocks) == 0 {
+				continue
+			}
+			converseMsgs = append(converseMsgs, map[string]any{
+				"role":    "user",
+				"content": blocks,
+			})
 		default:
 			continue
 		}
@@ -430,6 +443,57 @@ func toConverseContentBlocksJSON(parts []llm.ContentBlock) []map[string]any {
 					"name":   name,
 					"format": format,
 					"source": map[string]any{"bytes": p.Source.Data},
+				},
+			})
+		case "tool_use":
+			// Assistant-side tool call (model-settings-reach-the-model-01PMZ101
+			// WP04 / FR-003). Mirrors toBedrockContentBlocks' SDK-path arm.
+			if p.ToolUse == nil {
+				continue
+			}
+			var input any = map[string]any{}
+			if len(p.ToolUse.Input) > 0 {
+				if err := json.Unmarshal(p.ToolUse.Input, &input); err != nil {
+					input = map[string]any{}
+				}
+			}
+			out = append(out, map[string]any{
+				"toolUse": map[string]any{
+					"toolUseId": p.ToolUse.ID,
+					"name":      p.ToolUse.Name,
+					"input":     input,
+				},
+			})
+		case "tool_result":
+			// Tool-result payload, paired to the assistant's toolUse by
+			// toolUseId (model-settings-reach-the-model-01PMZ101 WP04 /
+			// FR-003). Mirrors toBedrockContentBlocks' SDK-path arm.
+			if p.ToolResult == nil {
+				continue
+			}
+			status := "success"
+			if p.ToolResult.IsError {
+				status = "error"
+			}
+			raw := p.ToolResult.Content
+			var resultBlock map[string]any
+			if len(raw) == 0 {
+				resultBlock = map[string]any{"text": ""}
+			} else {
+				var decoded any
+				if err := json.Unmarshal(raw, &decoded); err != nil {
+					resultBlock = map[string]any{"text": string(raw)}
+				} else if s, ok := decoded.(string); ok {
+					resultBlock = map[string]any{"text": s}
+				} else {
+					resultBlock = map[string]any{"json": decoded}
+				}
+			}
+			out = append(out, map[string]any{
+				"toolResult": map[string]any{
+					"toolUseId": p.ToolResult.ToolUseID,
+					"content":   []map[string]any{resultBlock},
+					"status":    status,
 				},
 			})
 		}

@@ -710,9 +710,24 @@ func toBedrockMessages(msgs []llm.Message) ([]types.Message, []types.SystemConte
 				Content: blocks,
 			})
 		case llm.RoleTool:
-			// Tool results aren't yet wired through the harness — skip
-			// silently rather than producing a malformed Converse turn.
-			continue
+			// A tool-result message (model-settings-reach-the-model-01PMZ101
+			// WP04 / FR-003). The chat seam (llm_provider_adapter.go's
+			// KernelMessagesToWire) emits exactly one tool_result content
+			// block per RoleTool message. The Converse API requires the
+			// tool-result turn to carry role "user" — mirrors what
+			// anthropic.go already does at buildRequestBody (`if m.Role ==
+			// llm.RoleTool { converted["role"] = "user" }`) — and pairs it
+			// with the assistant's prior toolUse by ToolUseId; an unpaired
+			// id is a 400 from Bedrock, the same failure this WP exists to
+			// stop dropping silently.
+			blocks := toBedrockContentBlocks(m.Content)
+			if len(blocks) == 0 {
+				continue
+			}
+			bedrockMsgs = append(bedrockMsgs, types.Message{
+				Role:    types.ConversationRoleUser,
+				Content: blocks,
+			})
 		default:
 			// Unknown role — skip rather than fail the stream open.
 			continue
@@ -780,6 +795,63 @@ func toBedrockContentBlocks(parts []llm.ContentBlock) []types.ContentBlock {
 					Name:   aws.String(name),
 					Format: types.DocumentFormat(format),
 					Source: &types.DocumentSourceMemberBytes{Value: data},
+				},
+			})
+		case "tool_use":
+			// Assistant-side tool call (model-settings-reach-the-model-01PMZ101
+			// WP04 / FR-003). Input arrives as raw JSON bytes
+			// (llm.ToolUse.Input) — decode to an any so document.NewLazyDocument
+			// marshals it as a JSON object on the wire, not as a base64 string.
+			if p.ToolUse == nil {
+				continue
+			}
+			var input any = map[string]any{}
+			if len(p.ToolUse.Input) > 0 {
+				if err := json.Unmarshal(p.ToolUse.Input, &input); err != nil {
+					input = map[string]any{}
+				}
+			}
+			out = append(out, &types.ContentBlockMemberToolUse{
+				Value: types.ToolUseBlock{
+					ToolUseId: aws.String(p.ToolUse.ID),
+					Name:      aws.String(p.ToolUse.Name),
+					Input:     document.NewLazyDocument(input),
+				},
+			})
+		case "tool_result":
+			// Tool-result payload, paired to the assistant's toolUse by
+			// ToolUseId (model-settings-reach-the-model-01PMZ101 WP04 /
+			// FR-003). Converse requires Content even for an empty result,
+			// so an empty/absent payload becomes an explicit empty string
+			// rather than being dropped.
+			if p.ToolResult == nil {
+				continue
+			}
+			status := types.ToolResultStatusSuccess
+			if p.ToolResult.IsError {
+				status = types.ToolResultStatusError
+			}
+			raw := p.ToolResult.Content
+			var resultContent types.ToolResultContentBlock
+			if len(raw) == 0 {
+				resultContent = &types.ToolResultContentBlockMemberText{Value: ""}
+			} else {
+				var decoded any
+				if err := json.Unmarshal(raw, &decoded); err != nil {
+					// Not valid JSON — carry it as literal text rather than
+					// dropping the tool result outright.
+					resultContent = &types.ToolResultContentBlockMemberText{Value: string(raw)}
+				} else if s, ok := decoded.(string); ok {
+					resultContent = &types.ToolResultContentBlockMemberText{Value: s}
+				} else {
+					resultContent = &types.ToolResultContentBlockMemberJson{Value: document.NewLazyDocument(decoded)}
+				}
+			}
+			out = append(out, &types.ContentBlockMemberToolResult{
+				Value: types.ToolResultBlock{
+					ToolUseId: aws.String(p.ToolResult.ToolUseID),
+					Content:   []types.ToolResultContentBlock{resultContent},
+					Status:    status,
 				},
 			})
 		}

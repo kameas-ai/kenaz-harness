@@ -53,6 +53,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/hooks"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	llmcap "github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
+	"github.com/kameas-ai/kenaz-harness/core/llm/cost"
 	"github.com/kameas-ai/kenaz-harness/core/llm/credref"
 	"github.com/kameas-ai/kenaz-harness/core/llm/personal"
 	llmregistry "github.com/kameas-ai/kenaz-harness/core/llm/registry"
@@ -4667,9 +4668,33 @@ func newLLMStack(
 		cedarLLMGate = cedarEngine
 	}
 	cedarGuard := cedar.NewLLMPolicyGuard(cedarLLMGate)
+	// Cost reducer (model-settings-reach-the-model-01PMZ101 WP05 / FR-004).
+	// Without this, registry/audited_stream.go's `else if resp.Cost.Currency
+	// == ""` guard falls to Indeterminate for every adapter except
+	// OpenRouter (which populates Cost itself off its own wire), and the
+	// `derived` arm of the usage hook below (api.go ~:5601) is unreachable.
+	// A table-load failure is a reporting-quality concern, not a boot gate —
+	// log and continue with Cost unset, matching the fallback precedent a
+	// few lines below for registry construction itself.
+	// Cost reducer (model-settings-reach-the-model-01PMZ101 WP05 / FR-004).
+	// Without this, registry/audited_stream.go's `else if resp.Cost.Currency
+	// == ""` guard falls to Indeterminate for every adapter except
+	// OpenRouter (which populates Cost itself off its own wire), and the
+	// `derived` arm of the usage hook below (api.go ~:5601) is unreachable.
+	// A table-load failure is a reporting-quality concern, not a boot gate —
+	// log and continue with Cost unset, matching the fallback precedent a
+	// few lines below for registry construction itself.
+	var costReducer llmregistry.CostReducer
+	if tab, terr := cost.LoadDefault(); terr != nil {
+		logging.L().Warn("llm.cost_table.load_failed",
+			"err", terr.Error())
+	} else {
+		costReducer = cost.New(tab)
+	}
 	reg, err := llmregistry.New(llmregistry.Options{
 		Resolver: credref.New(secretsBackend),
 		Policy:   cedarGuard,
+		Cost:     costReducer,
 	})
 	if err != nil {
 		// Fall back to the stub on a registry construction failure so
