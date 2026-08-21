@@ -153,6 +153,12 @@ func (s *stubSessions) SaveDraft(_ context.Context, _, _ string) error { return 
 func (s *stubSessions) LoadDraft(_ context.Context, _ string) (string, error) {
 	return "", nil
 }
+func (s *stubSessions) SaveScrollPosition(_ context.Context, _ string, _ int64) error {
+	return nil
+}
+func (s *stubSessions) LoadScrollPosition(_ context.Context, _ string) (int64, error) {
+	return 0, nil
+}
 func (s *stubSessions) SetSystemPrompt(_ context.Context, _, _, _ string) error {
 	return errNotWired
 }

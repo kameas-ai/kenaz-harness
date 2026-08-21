@@ -247,6 +247,8 @@ interface WailsBindingsLike {
   ): Promise<Message>;
   Sessions_SaveDraft(id: string, draft: string): Promise<void>;
   Sessions_LoadDraft(id: string): Promise<string>;
+  Sessions_SaveScrollPosition(id: string, pos: number): Promise<void>;
+  Sessions_LoadScrollPosition(id: string): Promise<number>;
   Sessions_SetSystemPrompt(
     id: string,
     content: string,
@@ -1297,6 +1299,15 @@ export interface SessionsClient {
   saveDraft(id: string, draft: string): Promise<void>;
   /** Load the persisted draft (empty string if none). */
   loadDraft(id: string): Promise<string>;
+  /**
+   * Persist the chat message list's scroll offset for the session
+   * (debounced caller — see MessageList.vue's onScroll).
+   * (controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-8 WP13,
+   * FR-021.)
+   */
+  saveScrollPosition(id: string, pos: number): Promise<void>;
+  /** Load the persisted scroll offset for the session (0 if none). */
+  loadScrollPosition(id: string): Promise<number>;
   /**
    * Persist the per-session starting context (Mission A). kind is
    * 'system' (invisible system prompt prepended on every send) or
@@ -3462,6 +3473,8 @@ export function createHarnessClient(): HarnessClient {
         b().Sessions_SendMessageWithBlocks(id, contentBlocks),
       saveDraft: (id, draft) => b().Sessions_SaveDraft(id, draft),
       loadDraft: (id) => b().Sessions_LoadDraft(id),
+      saveScrollPosition: (id, pos) => b().Sessions_SaveScrollPosition(id, pos),
+      loadScrollPosition: (id) => b().Sessions_LoadScrollPosition(id),
       setSystemPrompt: (id, content, kind) =>
         b().Sessions_SetSystemPrompt(id, content, kind),
       moveToProject: (id, projectId) =>
@@ -4308,6 +4321,12 @@ export function createServedHarnessClient(opts?: {
       loadDraft: (id: string) =>
         transport.call<string>('Sessions_LoadDraft', { id }),
 
+      saveScrollPosition: (id: string, pos: number) =>
+        transport.call<void>('Sessions_SaveScrollPosition', { id, pos }),
+
+      loadScrollPosition: (id: string) =>
+        transport.call<number>('Sessions_LoadScrollPosition', { id }),
+
       getUsage: (id: string) =>
         transport.call<SessionUsage>('Sessions_GetUsage', { id }),
 
@@ -4604,6 +4623,8 @@ export function createFakeHarnessClient(
       },
       saveDraft: noop,
       loadDraft: async () => '',
+      saveScrollPosition: noop,
+      loadScrollPosition: async () => 0,
       setSystemPrompt: noop,
       moveToProject: noop,
       resumeMessage: async (_sessionId, messageId) => ({

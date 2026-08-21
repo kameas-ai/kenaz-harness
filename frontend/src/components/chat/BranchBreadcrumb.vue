@@ -1,12 +1,23 @@
 <script setup lang="ts">
 /**
- * BranchBreadcrumb — displays a contextual "Branch from turn N of <parent>"
- * bar at the top of a branch session's chat view.
+ * BranchBreadcrumb — displays a contextual "Branch of <parent>" bar at
+ * the top of a branch session's chat view, with an ancestor-depth
+ * expander when the branch nests more than one level deep.
  *
  * Hidden when parentSessionId is empty.
  * Hidden when HARNESS_BRANCHING_POLISH feature flag is off.
  *
  * branching-ux-polish-01KQ8TD7 WP04.
+ *
+ * NARROWED (controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-8,
+ * WP13, spec D-8): the docstring used to promise "Branch from turn N of
+ * <parent>" — turnNumber is never passed by the sole mount
+ * (SessionsView.vue), because nothing in the tree converts a parent
+ * message id into a turn ordinal, and SessionsView does not hold the
+ * parent's message list turnNumber's own doc claimed it would be
+ * computed from. `justify(blocker: "no message-id-to-turn-ordinal
+ * conversion exists", owner: alec, date: 2026-08-19)`. `ancestorCount`
+ * IS wired (session.branchDepth, pre-computed server-side).
  */
 import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
@@ -21,8 +32,11 @@ const props = defineProps<{
   parentTitle: string;
   /**
    * 1-based turn number in the parent session where the fork was made.
-   * Computed by the host (SessionsView) from the parent's message list.
-   * Omit (undefined) to fall back to "Branch of <parent>" wording.
+   * NARROWED (01PMZ808 UNIT-8 WP13): no caller passes this today — the
+   * host (SessionsView) does not hold the parent's message list this
+   * would be computed from, and no message-id-to-turn-ordinal
+   * conversion exists anywhere in the tree. Omit (undefined, the only
+   * value ever supplied) falls back to "Branch of <parent>" wording.
    */
   turnNumber?: number;
   /**

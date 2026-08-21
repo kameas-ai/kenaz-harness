@@ -252,6 +252,18 @@ func (b *Bindings) Sessions_LoadDraft(id string) (string, error) {
 	defer sentry.WrapBinding("Sessions_LoadDraft")()
 	return b.api.Sessions().LoadDraft(b.ctx(), id)
 }
+
+// Sessions_SaveScrollPosition and Sessions_LoadScrollPosition
+// (controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-8 WP13,
+// FR-021) mirror the SaveDraft/LoadDraft pair above.
+func (b *Bindings) Sessions_SaveScrollPosition(id string, pos int64) error {
+	defer sentry.WrapBinding("Sessions_SaveScrollPosition")()
+	return b.api.Sessions().SaveScrollPosition(b.ctx(), id, pos)
+}
+func (b *Bindings) Sessions_LoadScrollPosition(id string) (int64, error) {
+	defer sentry.WrapBinding("Sessions_LoadScrollPosition")()
+	return b.api.Sessions().LoadScrollPosition(b.ctx(), id)
+}
 func (b *Bindings) Sessions_SetSystemPrompt(id, content, kind string) error {
 	defer sentry.WrapBinding("Sessions_SetSystemPrompt")()
 	return b.api.Sessions().SetSystemPrompt(b.ctx(), id, content, kind)

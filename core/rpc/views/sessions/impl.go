@@ -747,6 +747,26 @@ func (a *managerAPI) LoadDraft(ctx context.Context, id string) (string, error) {
 	return r.Draft, nil
 }
 
+// SaveScrollPosition implements SessionsAPI
+// (controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-8 WP13,
+// FR-021). Mirrors SaveDraft: the Manager method + Store.
+// UpdateScrollPosition + the scroll_position column already existed
+// with zero non-test callers — this is the client/binding/serve chain
+// that was missing.
+func (a *managerAPI) SaveScrollPosition(ctx context.Context, id string, pos int64) error {
+	return a.mgr.SaveScrollPosition(ctx, id, pos)
+}
+
+// LoadScrollPosition implements SessionsAPI. Round-trips through Get,
+// mirroring LoadDraft, to keep the wire shape single-purpose.
+func (a *managerAPI) LoadScrollPosition(ctx context.Context, id string) (int64, error) {
+	r, err := a.mgr.Get(ctx, id)
+	if err != nil {
+		return 0, err
+	}
+	return r.ScrollPosition, nil
+}
+
 // SetSystemPrompt implements SessionsAPI.
 //
 // Post-WP03 this is a thin wrapper over the attachments table — the

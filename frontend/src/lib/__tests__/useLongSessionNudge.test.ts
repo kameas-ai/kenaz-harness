@@ -100,4 +100,35 @@ describe('useLongSessionNudge', () => {
     expect(nudge.nudgeVisible.value).toBe(false);
     w.unmount();
   });
+
+  // controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-8 (WP13,
+  // FR-020, AC-034): reset() must restore visibility after a dismiss —
+  // this is what SessionsView.vue now calls on session switch instead
+  // of dismiss(). The pre-fix code called dismiss() on every session
+  // switch, and because `dismissed` was write-once with no way back to
+  // false, the banner was permanently disabled for the process lifetime
+  // after the very first switch.
+  //
+  // Mutation: replace `reset()`'s body with a no-op (or delete it and
+  // have callers use dismiss() again, the pre-fix shape). Must fail —
+  // nudgeVisible stays false forever after the first dismiss/reset
+  // cycle.
+  it('reset() clears a prior dismiss so a new session gets its own nudge', async () => {
+    const { w, nudge } = mountNudge(ref(40));
+    await nextTick();
+    expect(nudge.nudgeVisible.value).toBe(true);
+
+    nudge.dismiss();
+    await nextTick();
+    expect(nudge.nudgeVisible.value).toBe(false);
+
+    nudge.reset();
+    await nextTick();
+    // Still above threshold (same turns ref — a real session-switch
+    // would also swap the turnCount ref, but reset()'s own contract is
+    // "dismissed no longer forces false"), so visibility returns.
+    expect(nudge.nudgeVisible.value).toBe(true);
+
+    w.unmount();
+  });
 });
