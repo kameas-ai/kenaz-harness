@@ -84,6 +84,25 @@ const (
 	// directory; the file it cited never existed.)
 	KindHarnessSelfToolCalled Kind = "harness-self.tool.called"
 
+	// KindGraphAuthorAttempted (mission model-authored-graphs-01PMGA01
+	// UNIT-7, FR-012) is emitted on EVERY harness_write_draft_agent_graph
+	// attempt — permitted or refused — through
+	// core/rpc/harness_wiring.go's graphAuthorAdapter, which sits
+	// alongside (not instead of) the generic KindHarnessSelfToolCalled
+	// wrapper every harness-self tool already gets: that wrapper's
+	// payload ({tool_name, success, duration_ms}) has no field for
+	// node_kinds or a Cedar decision reason, so this kind carries what
+	// the wrapper structurally cannot.
+	//
+	//   KindGraphAuthorAttempted — payload:
+	//     {session_id, graph_id, node_kinds, node_count, outcome,
+	//      decision_reason}
+	//     outcome is "permitted" | "refused". decision_reason is empty
+	//     on a permitted attempt. NEVER carries the graph YAML, a node
+	//     attrs value, or a write_file path — node_kinds is the
+	//     sorted, comma-joined `kind:` set only.
+	KindGraphAuthorAttempted Kind = "agentgraph.author.attempted"
+
 	// KindMigrationDriftDetected is emitted at most once per chassis boot
 	// when the migration drift detector finds a discrepancy between the
 	// harness_migrations ledger and the registered migration set (v0.5.1
@@ -142,6 +161,8 @@ var builtIn = []Kind{
 	KindMCPRecipeAdded, KindMCPRecipeRemoved, KindMCPRecipeTested,
 	// Harness-self MCP audit (harness-self-mcp-onboarding-01KQ8TDU WP10).
 	KindHarnessSelfToolCalled,
+	// Graph-authoring draft attempts (model-authored-graphs-01PMGA01 UNIT-7).
+	KindGraphAuthorAttempted,
 	// Migration drift detector (v0.5.1 migration-doctor).
 	KindMigrationDriftDetected,
 	// Model-side secret reference audit (model-secret-references-01KW7M5A WP03).

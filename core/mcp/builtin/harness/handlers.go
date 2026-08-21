@@ -37,6 +37,15 @@ type Managers struct {
 	SettingsWriter  SettingsWriter
 	ProjectsWriter  ProjectWriter
 	SessionsWriter  SessionCreator
+
+	// GraphAuthor / GraphMaterializer (model-authored-graphs-01PMGA01
+	// UNIT-7). GraphAuthor is write-side (harness_write_draft_agent_graph);
+	// GraphMaterializer is read-side (harness_read_materialize_run) —
+	// grouped here rather than split into the two blocks above because
+	// they are one capability pair and the mission that owns them treats
+	// them as such.
+	GraphAuthor       GraphAuthorWriter
+	GraphMaterializer GraphMaterializer
 }
 
 // ---- Read-side interfaces (WP04 stubs) ----
@@ -138,6 +147,78 @@ type ProjectWriter interface {
 // SessionCreator creates a new session with an optional kind tag.
 type SessionCreator interface {
 	CreateSession(ctx context.Context, name, kind string) (SessionSummary, error)
+}
+
+// ---- Agent-graph authoring interfaces (model-authored-graphs-01PMGA01
+// UNIT-7) ----
+//
+// These mirror graphview types locally (GraphDraftIssue mirrors
+// graphview.ValidationIssue, GraphMaterializeResult mirrors
+// graphview.GraphSpec) rather than importing core/rpc/views/agentgraph
+// directly — the same convention every other manager interface in this
+// file already follows (SessionSummary, ProviderSummary, ...): this
+// package stays a leaf with no core/rpc/views/* or core/policy/cedar
+// dependency, and the adapter in core/rpc/harness_wiring.go (which CAN
+// import both) does the translation, including the errors.As
+// type-switch on Manager.saveGraph's *ValidationFailedError /
+// *cedar.PolicyDeniedError.
+
+// GraphDraftIssue is one validator rule violation, mirroring
+// graphview.ValidationIssue.
+type GraphDraftIssue struct {
+	Rule    string `json:"rule"`
+	Message string `json:"message"`
+}
+
+// GraphDraftOutcome is the adapter's already-classified report of one
+// draft attempt. Exactly one of three shapes is populated:
+//   - OK true, PathHint set — the draft was validated, gated, stamped
+//     and persisted (FR-001/FR-002/FR-005/FR-009).
+//   - OK false, Issues non-empty — coreag.Validate rejected the YAML;
+//     nothing was written (FR-002/FR-003).
+//   - OK false, DeniedReason non-empty — the graph.author Cedar gate
+//     denied (FR-005/FR-006/FR-008); nothing was written.
+//
+// A returned Go error (see GraphAuthorWriter) is reserved for anything
+// that isn't one of these three classified outcomes (malformed
+// arguments, an id collision with an existing graph — this tool is
+// create-only per E-008 — or a manager-level configuration error).
+type GraphDraftOutcome struct {
+	OK           bool
+	PathHint     string
+	Issues       []GraphDraftIssue
+	DeniedReason string
+}
+
+// GraphAuthorWriter drafts a model-authored agent graph via
+// Manager.saveGraph(initiator="model") — validated, gated on
+// graph.author, and stamped spec_provenance=model_authored server-side
+// (FR-001, FR-002, FR-005, FR-009). It never starts the graph: no
+// method on this interface reaches Manager.startRun (FR-007).
+type GraphAuthorWriter interface {
+	DraftAgentGraph(ctx context.Context, id, yaml string) (GraphDraftOutcome, error)
+}
+
+// GraphMaterializeResult mirrors graphview.GraphSpec — the projected,
+// already-redacted shape of one run (FR-011). SpecProvenance is
+// surfaced verbatim, INCLUDING the degraded "library_fallback" marker
+// (C-006) — a caller must not treat an empty SpecProvenance the same
+// as a faithful one.
+type GraphMaterializeResult struct {
+	ID             string `json:"id"`
+	Name           string `json:"name,omitempty"`
+	Scope          string `json:"scope"`
+	YAML           string `json:"yaml"`
+	SpecProvenance string `json:"specProvenance,omitempty"`
+}
+
+// GraphMaterializer exposes Manager.materializeRun (via the agentgraph
+// API's MaterializeRun) as a read tool (FR-011). Straight through, no
+// new redaction: materialize.go already reduces tool-call arguments to
+// key names, results to byte counts, and errors to a closed constant
+// vocabulary.
+type GraphMaterializer interface {
+	MaterializeRun(ctx context.Context, runID string) (GraphMaterializeResult, error)
 }
 
 // SettingsAllowlist enumerates the keys harness_write_set_setting is
@@ -346,6 +427,74 @@ func (m Managers) handleListModels(ctx context.Context, _ json.RawMessage) (any,
 		return nil, err
 	}
 	return ToolResult{OK: true, Message: fmt.Sprintf("%d model(s) across configured providers", len(out)), Data: out}, nil
+}
+
+// ---- Agent-graph authoring handlers (model-authored-graphs-01PMGA01
+// UNIT-7) ----
+
+func (m Managers) handleDraftAgentGraph(ctx context.Context, args json.RawMessage) (any, error) {
+	if m.GraphAuthor == nil {
+		return nil, errNotConfigured
+	}
+	var p struct {
+		ID   string `json:"id"`
+		YAML string `json:"yaml"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return nil, fmt.Errorf("harness_write_draft_agent_graph: %w", err)
+	}
+	if p.ID == "" || p.YAML == "" {
+		return nil, errors.New("harness_write_draft_agent_graph: id and yaml are required")
+	}
+	outcome, err := m.GraphAuthor.DraftAgentGraph(ctx, p.ID, p.YAML)
+	if err != nil {
+		return nil, err
+	}
+	if !outcome.OK {
+		if len(outcome.Issues) > 0 {
+			return ToolResult{
+				OK:      false,
+				Message: fmt.Sprintf("Draft %q failed validation (%d issue(s)); nothing was written.", p.ID, len(outcome.Issues)),
+				Data:    map[string]any{"issues": outcome.Issues},
+			}, nil
+		}
+		return ToolResult{
+			OK:      false,
+			Message: fmt.Sprintf("Draft %q was refused: %s", p.ID, outcome.DeniedReason),
+		}, nil
+	}
+	return ToolResult{
+		OK: true,
+		Message: fmt.Sprintf(
+			"Draft %q saved as an UNREVIEWED draft at %s. It will NOT run — no tool, including this one, can start it — until a human opens it in the graph editor and saves it, which marks it reviewed.",
+			p.ID, outcome.PathHint,
+		),
+		Data: map[string]any{"id": p.ID, "path_hint": outcome.PathHint, "reviewed": false},
+	}, nil
+}
+
+func (m Managers) handleMaterializeRun(ctx context.Context, args json.RawMessage) (any, error) {
+	if m.GraphMaterializer == nil {
+		return nil, errNotConfigured
+	}
+	var p struct {
+		RunID string `json:"run_id"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return nil, fmt.Errorf("harness_read_materialize_run: %w", err)
+	}
+	if p.RunID == "" {
+		return nil, errors.New("harness_read_materialize_run: run_id is required")
+	}
+	result, err := m.GraphMaterializer.MaterializeRun(ctx, p.RunID)
+	if err != nil {
+		return nil, err
+	}
+	return ToolResult{
+		OK:      true,
+		Message: fmt.Sprintf("Materialized run %q as graph %q (spec_provenance=%q).", p.RunID, result.ID, result.SpecProvenance),
+		Data:    result,
+	}, nil
 }
 
 func (m Managers) handleCreateSession(ctx context.Context, args json.RawMessage) (any, error) {
