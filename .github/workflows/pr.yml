@@ -561,7 +561,7 @@ jobs:
         # check scripts and mutate a scratch tree, so they must not run
         # concurrently with the -race suite (a build racing a mutation
         # poisons the Go build cache under the clean content hash).
-        run: go test ./scripts/... -count=1
+        run: go test ./scripts/... -count=1 -timeout 25m
 
   wire-golden-locked:
     name: Wire golden tests (locked tier)

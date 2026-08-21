@@ -1062,6 +1062,10 @@ func plant(t *testing.T, full, content, appendText string) func() {
 		if err != nil {
 			t.Fatalf("reading %s: %v", full, err)
 		}
+		// Journal BEFORE touching the file — see plantguard_test.go. A
+		// timeout kills the binary without unwinding defers, so the only
+		// record that survives is one written first.
+		journalPlant(plantRecord{Path: full, Orig: string(orig), Existed: true})
 		if err := os.WriteFile(full, append(orig, []byte(appendText)...), 0o644); err != nil {
 			t.Fatalf("appending to %s: %v", full, err)
 		}
@@ -1069,6 +1073,7 @@ func plant(t *testing.T, full, content, appendText string) func() {
 			if err := os.WriteFile(full, orig, 0o644); err != nil {
 				t.Errorf("restoring %s: %v — WORKING TREE IS DIRTY", full, err)
 			}
+			journalClear(full)
 		}
 	}
 
@@ -1088,6 +1093,7 @@ func plant(t *testing.T, full, content, appendText string) func() {
 		}
 		createdDir = dir
 	}
+	journalPlant(plantRecord{Path: full, Existed: false, CreatedDir: createdDir})
 	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
 		t.Fatalf("writing %s: %v", full, err)
 	}
@@ -1095,6 +1101,7 @@ func plant(t *testing.T, full, content, appendText string) func() {
 		if err := os.Remove(full); err != nil {
 			t.Errorf("removing %s: %v — WORKING TREE IS DIRTY", full, err)
 		}
+		journalClear(full)
 		if createdDir != "" {
 			if err := os.Remove(createdDir); err != nil {
 				t.Errorf("removing %s: %v — WORKING TREE IS DIRTY", createdDir, err)
@@ -1482,25 +1489,43 @@ func TestCheckDeclaredOutputPorts_IgnoresPortsGenWrites(t *testing.T) {
 // of a real gap. Deleting the line would have made credstore's unwired
 // gate invisible to the very check that exists to track it.
 //
-// Two directions, both asserted:
-//   - a same-named symbol in ANOTHER package must NOT mark the entry
-//     stale (the false positive)
-//   - a real caller of the entry's OWN package MUST still mark it stale
-//     (the true positive the fix must not trade away)
+// Both directions PLANT their own conditions. The first version of this
+// test did not: Direction 1 leaned on `graphview.WithCedarGate` existing
+// in the tree, and one commit later the N3 fix collapsed that duplicate
+// option away. The same-named-symbol condition vanished, the test kept
+// passing, and it passed against a deliberately package-BLIND gate too —
+// verified. A proof that depends on unrelated production code is a proof
+// with an expiry date nobody is watching (finding D1, review of PR #306).
 func TestNoUnwiredGates_StaleCheckIsPackageAware(t *testing.T) {
 	root := repoRoot(t)
 	const gate = "check-no-unwired-gates.sh"
 
-	// Direction 1: the real tree already contains graphview.WithCedarGate,
-	// wired at core/rpc/api.go, while core/credstore.WithCedarGate stays
-	// allowlisted. A package-blind check fails here.
-	if code, out := runGate(t, gate, root); code != 0 {
-		t.Fatalf("gate must pass on the real tree — a same-named symbol in another package is not staleness (exit %d).\n%s", code, out)
+	// Direction 1 (the false positive): a DIFFERENT package declares a
+	// symbol with the same name as an allowlisted entry, and calls it for
+	// real. That must not mark the credstore entry stale.
+	decoy := filepath.Join(root, "core/rpc/zz_decoy_withcedargate.go")
+	decoyContent := "package rpc\n\n" +
+		"// zzDecoyStore mimics an unrelated package that happens to declare a\n" +
+		"// symbol named WithCedarGate — exactly the shape that produced the\n" +
+		"// false positive. It is called below, so a package-blind stale check\n" +
+		"// sees \"WithCedarGate( has a real call site\" and wrongly fires.\n" +
+		"type zzDecoyStore struct{ gate any }\n\n" +
+		"type zzDecoyOption func(*zzDecoyStore)\n\n" +
+		"func WithCedarGate(g any) zzDecoyOption { return func(s *zzDecoyStore) { s.gate = g } }\n\n" +
+		"func zzDecoyUse() zzDecoyOption { return WithCedarGate(nil) }\n"
+	cleanupDecoy := plant(t, decoy, decoyContent, "")
+
+	code, out := runGate(t, gate, root)
+	cleanupDecoy()
+	if code != 0 {
+		t.Fatalf("gate marked core/credstore.WithCedarGate stale because ANOTHER package "+
+			"declares and calls a symbol of the same name — that is the false positive this "+
+			"fix exists to prevent (exit %d).\n%s", code, out)
 	}
 
-	// Direction 2: plant a genuine in-package caller. The entry IS stale
-	// now and the gate must say so; otherwise the fix bought a false
-	// negative.
+	// Direction 2 (the true positive the fix must not trade away): a real
+	// caller inside the entry's OWN package. The entry IS stale and the
+	// gate must say so.
 	probe := filepath.Join(root, "core/credstore/zz_stale_probe.go")
 	content := "package credstore\n\n" +
 		"import \"github.com/kameas-ai/kenaz-harness/core/policy/cedar\"\n\n" +
@@ -1508,7 +1533,7 @@ func TestNoUnwiredGates_StaleCheckIsPackageAware(t *testing.T) {
 	cleanup := plant(t, probe, content, "")
 	defer cleanup()
 
-	code, out := runGate(t, gate, root)
+	code, out = runGate(t, gate, root)
 	if code == 0 {
 		t.Fatalf("gate passed with a real in-package caller of an allowlisted symbol — the stale check cannot fail.\n%s", out)
 	}

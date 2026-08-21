@@ -123,12 +123,16 @@ fi
 while IFS='|' read -r cls stated actual; do
   [[ -z "$cls" ]] && continue
   if [[ "$stated" != "$actual" ]]; then
-    echo "${GATE} FAIL: CLASS ${cls} header says ${stated} entries; the section holds ${actual}." >&2
+    if [[ -z "$stated" ]]; then
+      echo "${GATE} FAIL: CLASS ${cls} has no '# N entries.' header line; the section holds ${actual}." >&2
+    else
+      echo "${GATE} FAIL: CLASS ${cls} header says ${stated} entries; the section holds ${actual}." >&2
+    fi
     fail=1
   fi
 done < <(awk '
-  /^# CLASS: / { if (cls != "") print cls "|" stated "|" n; cls=$3; sub(/:$/,"",cls); stated=""; n=0; next }
-  cls != "" && /^# [0-9]+ entries\.$/ { stated=$2; next }
+  /^# CLASS: [a-z-]+ -- / { if (cls != "") print cls "|" stated "|" n; cls=$3; sub(/:$/,"",cls); stated=""; n=0; next }
+  cls != "" && /^# [0-9]+ entries\.$/ { if (stated == "") stated=$2; next }
   cls != "" && /^"/ { n++ }
   END { if (cls != "") print cls "|" stated "|" n }
 ' "$ALLOWLIST")

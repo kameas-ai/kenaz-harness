@@ -176,7 +176,7 @@
 # Sec.1.5's six chat affordances, so this pass does not repeat it.
 # Entries are grouped by their exact caller-file SET below (not just by
 # desktop-binding prefix), so identical reasoning is stated once.
-# 192 entries.
+# 188 entries.
 
 # Caller(s) PeersPanel.vue only reachable from a view that renders
 # NotAvailableInServedMode.
@@ -544,24 +544,16 @@
 
 
 
-# CORRECTED 2026-08-22 (finding B1, independent review of PR #306). These
-# five were in the "zero TS client callers" group under CLASS: unrouted,
-# on evidence that was false — real callers exist at tasks.ts:37,42,51,56
-# and UnitConflictsPanel.vue:92.
+# CORRECTED 2026-08-22 (finding B1, independent review of PR #306).
+# Unit_ResolveEnshrine was in the "zero TS client callers" group of the
+# unrouted section, on evidence that was false — UnitConflictsPanel.vue:92
+# calls it, SettingsView.vue:1221 mounts the panel, and
+# SettingsView.vue:1085-1089 renders NotAvailableInServedMode against
+# SettingsShell as a real v-if/v-else short-circuit.
 #
-# Behaviour was never wrong: Tasks_* is reached from TasksPanel.vue /
-# TaskOutputViewer.vue under SettingsView, and Unit_ResolveEnshrine from
-# UnitConflictsPanel.vue, all boundary-panelled. Only the CLASS and its
-# stated evidence were wrong — which matters because a wrong class reads as
-# decided and check-serve-gap-classification.sh validates class syntax, not
-# class truth.
-#
-# Note for a future sweep: BackgroundTaskChip.vue has no mounter at all,
-# so it is not what makes these reachable.
-"Tasks_Abort"
-"Tasks_Get"
-"Tasks_List"
-"Tasks_Tail"
+# Behaviour was never wrong; only the class and its stated evidence were
+# — which matters because a wrong class reads as decided, and
+# check-serve-gap-classification.sh validates class syntax, not truth.
 "Unit_ResolveEnshrine"
 
 # CLASS: unrouted -- either the only caller is in a view main-served.ts
@@ -572,7 +564,7 @@
 # no caller to be in ANY view. Each such entry says so explicitly (RAN:
 # zero hits) rather than silently reusing the same sentence as a real
 # unrouted-view finding.
-# 107 entries.
+# 111 entries.
 
 # RAN: zero TS client callers found anywhere in frontend/src (outside
 # harnessClient.ts's own declaration) in either build. Vacuously unrouted.
@@ -706,6 +698,35 @@
 "Sites_List"
 "Sites_Logs"
 
+
+
+# CORRECTED TWICE 2026-08-22. First move (finding B1) took these out of a
+# group falsely claiming "zero TS client callers" — real callers exist at
+# lib/tasks.ts:37,42,51,56 — and put them under boundary-panelled with the
+# reason "reached from TasksPanel.vue / TaskOutputViewer.vue under
+# SettingsView". That reason was ALSO false (finding D2, second-round
+# review of PR #306), and it is my error, not WP07's.
+#
+# What is actually true: all three consumers of lib/tasks.ts are UNMOUNTED.
+# `grep -rn "<TasksPanel|<TaskOutputViewer|<BackgroundTaskChip"` over
+# frontend/src returns zero hits, no defineAsyncComponent references them,
+# and SettingsView.vue:140-142 says so in its own words ("The Tasks
+# sub-tab was removed 2026-08-14. TasksPanel.vue is retained but
+# unmounted"). TaskOutputViewer.vue has no referrer at all, so it is not
+# "under SettingsView" either.
+#
+# So this is the widened unrouted arm: a caller chain exists, but no view
+# that reaches it is mounted in EITHER build. Nothing is hidden from a
+# served user, because nothing is reachable by any user.
+#
+# subagent-control-and-background-tasks-01PMZB11 UNIT-10 is the unit that
+# mounts these; it is not in this release. When it lands, these four move
+# to gated or boundary-panelled depending on how it mounts them — they
+# must not silently stay here.
+"Tasks_Abort"
+"Tasks_Get"
+"Tasks_List"
+"Tasks_Tail"
 
 # CLASS: desktop-only-by-nature -- an OS/filesystem/Wails-runtime
 # capability that cannot exist server-side (Update_* is the spec's own

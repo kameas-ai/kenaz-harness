@@ -73,3 +73,6 @@ docs/*-internal.md
 /harness-served
 /kenaz-updater
 /mcpsubcmd
+
+# gates_can_fail plant journal (plantguard_test.go) — never commit
+scripts/ci/.zz-plant-journal.json
