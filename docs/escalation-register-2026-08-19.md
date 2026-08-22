@@ -3363,3 +3363,35 @@ discards. The tool reports success and changes nothing.
   field it adds, the moment `controls-and-readouts-that-tell-the-truth-01PMZ808`
   UNIT-17 lands. That obligation appears in neither mission's document and is
   recorded here so it survives.
+
+---
+
+# Part 10 — Fifth sitting, 2026-08-22
+
+Three rulings taken against the post-v0.70.0 map, plus a cadence decision.
+
+## G-5 — Z808 E-005: wire the grouped hook-event picker; Z808 owns it
+
+**Question.** Never actually filed as an escalation. `trust-surfaces-that-fire-01PMZ202`'s spec asserts the hook-event display path "keeps working". It does not: `EVENT_FAMILY` is two lines in `frontend/src/lib/hooks.ts` with no consumer, and `HookEditor.vue` renders a flat list. One of the two documents is wrong, and until settled two missions could edit the same path with opposite intent.
+
+**Ruling: WIRE it. `controls-and-readouts-that-tell-the-truth-01PMZ808` UNIT-15 owns it.** Z202's spec sentence is corrected to match reality in the same change. One owner, one edit, no collision.
+
+## G-6 — Z101 E-005: the `ollama` kind ships for new profiles only
+
+**Question.** Ollama users configure Ollama as `custom-openai`, and the catalog wrongly reports `tool_calling: false`. Registering a real `ollama` kind fixes new setups; the question was whether existing profiles migrate.
+
+**Ruling: register the new kind, leave existing `custom-openai` profiles alone. NO migration.**
+
+**Consequences.** Z101 UNIT-9 (WP13+WP14) is unblocked and is NOT a destructive migration — it takes no profile rows, needs no populated-table test beyond the ordinary upgrade-path assertion, and cannot strand an existing install. Existing Ollama users keep the wrong capability row until they re-add the provider; that is the accepted cost, taken against rewriting rows in real user profiles. WP13's `ollama.yaml` correction (`tool_calling: true`) still ships, so a NEW profile is correct immediately.
+
+## G-7 — `ContextSync_*`: gate the destructive operations now
+
+**Question.** The family has zero Cedar action constants and zero gate calls across 21 non-test `DeleteRemote` call sites. v0.71.0 ships a purge button that deletes remote fleet data with nothing able to constrain it. Independently confirmed by the PR #307 review (finding N3), which also noted the repo already has the pattern this does not follow: `Sessions_Export` gates via `cedar.CheckExportSession`, and `Audit_BulkPurge` fails closed and emits `KindAuditBulkPurgeBlockedByPolicy`.
+
+**Ruling: gate the DESTRUCTIVE operations now — purge and delete — fail-closed. Leave toggle/resume ungated for the moment.**
+
+**Consequences.** New action vocabulary is required before a policy author can write any rule at all; that is the first half of the work. The gate must return an explicit `Deny` rather than relying on `enforce()`, which maps `NotApplicable` to nil. Toggle and resume stay ungated and that stays a known, dated gap — not silently closed by implication.
+
+## G-8 — cadence: continue in parallel waves
+
+Dispatch the next file-disjoint wave as soon as v0.71.0 merges, same pattern: unit-scoped agents in isolated worktrees, spec read from the main checkout, decisions surfaced to the owner as they arise rather than batched.
