@@ -29,7 +29,7 @@ func TestValidate_ValidCommands(t *testing.T) {
 				ProjectID:        "proj-abc",
 				Kind:             KindTool,
 				Description:      "Deploy to staging",
-				Tool:             "bash",
+				Tool:             "kenaz__bash",
 				ToolArgsTemplate: "./scripts/deploy.sh",
 			},
 		},
@@ -50,7 +50,7 @@ func TestValidate_ValidCommands(t *testing.T) {
 				Scope:            ScopeGlobal,
 				Kind:             KindTool,
 				Description:      "Ship to env",
-				Tool:             "bash",
+				Tool:             "kenaz__bash",
 				ToolArgsTemplate: "./ship.sh {{env}}",
 				Inputs: []UserCommandInput{
 					{
@@ -142,7 +142,7 @@ func TestValidate_MissingProjectID(t *testing.T) {
 		ProjectID:   "", // missing
 		Kind:        KindTool,
 		Description: "test",
-		Tool:        "bash",
+		Tool:        "kenaz__bash",
 		ToolArgsTemplate: "./deploy.sh",
 	}
 	err := Validate(cmd)
@@ -219,7 +219,7 @@ func TestValidate_ToolMissingTemplate(t *testing.T) {
 		Scope:       ScopeGlobal,
 		Kind:        KindTool,
 		Description: "test",
-		Tool:        "bash",
+		Tool:        "kenaz__bash",
 		// ToolArgsTemplate missing
 	}
 	err := Validate(cmd)
@@ -250,7 +250,7 @@ func TestValidate_EnumMissingValues(t *testing.T) {
 		Scope:            ScopeGlobal,
 		Kind:             KindTool,
 		Description:      "test",
-		Tool:             "bash",
+		Tool:             "kenaz__bash",
 		ToolArgsTemplate: "./foo.sh {{env}}",
 		Inputs: []UserCommandInput{
 			{
@@ -274,7 +274,7 @@ func TestValidate_EnumBadDefault(t *testing.T) {
 		Scope:            ScopeGlobal,
 		Kind:             KindTool,
 		Description:      "test",
-		Tool:             "bash",
+		Tool:             "kenaz__bash",
 		ToolArgsTemplate: "./foo.sh {{env}}",
 		Inputs: []UserCommandInput{
 			{
@@ -299,7 +299,7 @@ func TestValidate_InputMissingName(t *testing.T) {
 		Scope:            ScopeGlobal,
 		Kind:             KindTool,
 		Description:      "test",
-		Tool:             "bash",
+		Tool:             "kenaz__bash",
 		ToolArgsTemplate: "./foo.sh",
 		Inputs: []UserCommandInput{
 			{Name: "", Kind: InputKindText},
