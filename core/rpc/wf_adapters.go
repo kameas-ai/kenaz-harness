@@ -44,6 +44,7 @@ import (
 	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 	corewf "github.com/kameas-ai/kenaz-harness/core/workflows"
@@ -459,9 +460,23 @@ func splitToolName(name string) (server, tool string) {
 // directly-dispatched slash command. Skipping it can only make this
 // path prompt in a case chat would have silently skipped — a strictly
 // more conservative divergence, never a more permissive one.
+//
+// gate is the SAME process-singleton Cedar engine (a.cedarGate() in
+// core/rpc/api.go) the chat tool path's PolicyGateAdapter.CheckTool
+// consults (core/rpc/views/agentgraph/env_deps_policy.go). An
+// independent review of PR #307 found that perms above only ever
+// evaluates the coarse Action::"use_tool" family (via the merged
+// resolver's Cedar-backed session-kind arm) — the finer-grained
+// Action::"tool_exec" sibling, which default_policy.cedar:38-46
+// explicitly invites a user to forbid per-tool ("Per-tool deny rules
+// can be added by the user to lock down individual tools"), was never
+// consulted on this path. DispatchTool's cedar.CheckTool call below
+// closes that gap; see the comment there for why it is safe to add
+// without also duplicating the use_tool leg.
 type slashToolDispatcherAdapter struct {
 	pool  toolloop.MCPPool
 	perms toolloop.PermissionResolver
+	gate  cedar.Gate
 
 	// confirm-each collaborators — the SAME instances core/rpc/api.go
 	// hands the chat runner's kernelToolAdapter (via chat.ConfirmDeps).
@@ -538,6 +553,26 @@ func (a *slashToolDispatcherAdapter) DispatchTool(ctx context.Context, toolName 
 			// kernelToolAdapter.dispatch enforces for chat.
 			return "", fmt.Errorf("tool %q denied: unrecognised permission policy %q", toolName, v.Policy)
 		}
+	}
+
+	// The chat tool path's PolicyGateAdapter.CheckTool
+	// (core/rpc/views/agentgraph/env_deps_policy.go) evaluates BOTH
+	// Action::"use_tool" and the finer-grained Action::"tool_exec"
+	// sibling from the SAME dispatch boundary
+	// (core/agentgraph/exec_dispatch.go), in that order, propagating
+	// the first Deny unwrapped. The perms ladder just above is this
+	// path's use_tool-equivalent leg (its Cedar-backed session-kind
+	// arm evaluates Action::"use_tool" with the real session context —
+	// see cedarSessionKindResolver.Resolve); this call is the missing
+	// second leg, evaluated immediately after in the same order.
+	// Mirroring PolicyGateAdapter.CheckTool's failure semantics rather
+	// than inventing a new one: cedar.CheckTool returns nil for a nil
+	// gate (fail-open, matching every unwired test double that
+	// constructs this adapter without one) and *cedar.PolicyDeniedError
+	// on Deny, which %w preserves so cedar.IsPolicyDenied still
+	// discriminates it from any other error this func returns.
+	if err := cedar.CheckTool(ctx, a.gate, server, tool); err != nil {
+		return "", fmt.Errorf("tool %q denied: %w", toolName, err)
 	}
 
 	// Owner ruling G-2's "JSON arguments": the []string tokens the slash

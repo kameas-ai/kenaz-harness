@@ -29,6 +29,22 @@ package rpc
 //     actual entry point (kenaz__skill's Tool.Call -> Dispatch.
 //     RunModelInvoked -> Dispatch.Run), not from a helper — the ruling
 //     calls this conversion "the part most likely to be got wrong quietly".
+//   - TestSlashToolDispatcher_ToolExecForbidDiscriminates is UNIT-4's fix
+//     for the gap an independent review of PR #307 found: the tests above
+//     drove the perms ladder's Cedar-backed arm, which only ever evaluates
+//     Action::"use_tool" — the finer-grained Action::"tool_exec" sibling
+//     the chat tool path also evaluates (PolicyGateAdapter.CheckTool,
+//     core/rpc/views/agentgraph/env_deps_policy.go) was never consulted
+//     here. This test installs the EXACT forbid shape
+//     default_policy.cedar:38-46 invites a user to write
+//     (`forbid (principal == User::"local", action ==
+//     Action::"tool_exec", resource == Tool::"...")`) and proves
+//     DispatchTool now denies it — paired with a permit leg (CLAUDE.md's
+//     enforce()-NotApplicable trap) so the verdict is shown to
+//     discriminate by resource, not blanket-refuse. perms is left nil so
+//     the denial can only come from the new gate-backed cedar.CheckTool
+//     call, not the pre-existing perms ladder the tests above already
+//     cover.
 
 import (
 	"context"
@@ -38,6 +54,7 @@ import (
 	"testing"
 
 	harnessmcp "github.com/kameas-ai/kenaz-harness/core/mcp/builtin/harness"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	slashview "github.com/kameas-ai/kenaz-harness/core/rpc/views/slashcmd"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
@@ -231,6 +248,152 @@ func TestSlash_UserRun_ProductionWireDiscriminatesByCedar(t *testing.T) {
 // leg red. Verified by hand for this commit; see the mission report.
 func TestSlashToolDispatcher_ProductionWire_DenyDiscipline_MutationNote(t *testing.T) {
 	t.Skip("documentation-only marker; see the function doc comment")
+}
+
+// ─── tool_exec forbid (the gap PR #307's review found) ─────────────────────
+
+// TestSlashToolDispatcher_ToolExecForbidDiscriminates is UNIT-4's proof for
+// the second Cedar action the chat tool path evaluates.
+// PolicyGateAdapter.CheckTool (core/rpc/views/agentgraph/env_deps_policy.go)
+// composes cedar.CheckUseTool (Action::"use_tool") and cedar.CheckTool
+// (Action::"tool_exec") from the SAME dispatch boundary
+// (core/agentgraph/exec_dispatch.go:217-219) a chat tool call takes.
+// Before this commit, DispatchTool's perms ladder only ever reached the
+// use_tool-equivalent leg (its Cedar-backed session-kind arm evaluates
+// Action::"use_tool" — see cedarSessionKindResolver.Resolve); a forbid on
+// Action::"tool_exec" — the EXACT rule default_policy.cedar:38-46 invites a
+// user to write ("Per-tool deny rules can be added by the user to lock down
+// individual tools") — reached the tool pool unevaluated.
+//
+// perms is left nil so the deny below can only come from the new
+// gate-backed cedar.CheckTool call this test exists to pin, not from the
+// perms ladder TestSlashToolDispatcher_CedarDenyAndPermitDiscriminate
+// already covers.
+//
+// Paired with a permit leg (CLAUDE.md's enforce()-NotApplicable trap:
+// hooks.go's enforce() maps both Allow and NotApplicable to nil, so a
+// deny-only test cannot distinguish "the policy denied this" from "the
+// adapter blanket-refuses everything"): the SAME forbid, scoped to one
+// tool by resource, must not deny an unrelated tool.
+func TestSlashToolDispatcher_ToolExecForbidDiscriminates(t *testing.T) {
+	e, err := cedar.NewEngine(cedar.Options{LoadFromDisk: false, IncludeEmbedded: true})
+	if err != nil {
+		t.Fatalf("cedar.NewEngine: %v", err)
+	}
+	if err := e.SetPolicyText("tool-exec-forbid.cedar", []byte(`
+forbid (
+    principal == User::"local",
+    action == Action::"tool_exec",
+    resource == Tool::"kenaz__bash"
+);
+`)); err != nil {
+		t.Fatalf("SetPolicyText: %v", err)
+	}
+
+	t.Run("deny leg: forbidden tool", func(t *testing.T) {
+		pool := &recordingPool{output: json.RawMessage(`"ok"`)}
+		adapter := &slashToolDispatcherAdapter{pool: pool, gate: e} // perms nil: not this test's concern.
+		_, err := adapter.DispatchTool(context.Background(), "kenaz__bash", []string{"echo", "hi"})
+		if err == nil {
+			t.Fatal("expected a denial for kenaz__bash (tool_exec forbid), got nil")
+		}
+		if !strings.Contains(err.Error(), "denied") {
+			t.Errorf("err = %v, want it to name a denial", err)
+		}
+		if !cedar.IsPolicyDenied(err) {
+			t.Errorf("err = %v, want it to wrap a *cedar.PolicyDeniedError", err)
+		}
+		if calls := pool.snapshot(); len(calls) != 0 {
+			t.Errorf("pool was called %d times, want 0 — a tool_exec-denied call must never reach the pool", len(calls))
+		}
+	})
+
+	t.Run("permit leg: same forbid, different tool", func(t *testing.T) {
+		pool := &recordingPool{output: json.RawMessage(`"ok"`)}
+		adapter := &slashToolDispatcherAdapter{pool: pool, gate: e} // perms nil: not this test's concern.
+		_, err := adapter.DispatchTool(context.Background(), "kenaz__websearch", []string{"query"})
+		if err != nil {
+			t.Fatalf("kenaz__websearch: unexpected denial: %v", err)
+		}
+		if calls := pool.snapshot(); len(calls) != 1 {
+			t.Fatalf("pool was called %d times, want 1 — an unrelated tool must still dispatch", len(calls))
+		}
+	})
+}
+
+// TestSlashToolDispatcher_ToolExecForbid_ProductionWireDiscriminatesByCedar
+// repeats the tool_exec pairing through the production wire — rpc.New's
+// wired slashDispatch reached via Slash().UserSave + Slash().UserRun, with
+// zero test doubles — proving core/rpc/api.go actually assigns gate:
+// a.cedarGate() at the slashToolDispatcherAdapter construction site, not
+// just that the adapter type enforces tool_exec when hand-built with one.
+// Uses the SAME shipped default_policy.cedar tool_exec permit-by-default
+// rule (default_policy.cedar:38-46) plus an installed forbid, exactly as a
+// user would add one from the policy editor.
+func TestSlashToolDispatcher_ToolExecForbid_ProductionWireDiscriminatesByCedar(t *testing.T) {
+	_, api := bootAPIWithCore(t, t.TempDir(), "")
+
+	if api.cedarEngine == nil {
+		t.Fatal("api.cedarEngine is nil after New() — the production Cedar wire did not run")
+	}
+	if err := api.cedarEngine.SetPolicyText("tool-exec-forbid.cedar", []byte(`
+forbid (
+    principal == User::"local",
+    action == Action::"tool_exec",
+    resource == Tool::"kenaz__bash"
+);
+`)); err != nil {
+		t.Fatalf("SetPolicyText: %v", err)
+	}
+
+	ctx := context.Background()
+	rec, err := api.Sessions().Create(ctx, "chat session")
+	if err != nil {
+		t.Fatalf("Sessions().Create: %v", err)
+	}
+
+	saveErr := api.Slash().UserSave(ctx, slashview.UserCommandWire{
+		Name:             "tool-exec-forbidden",
+		Scope:            "global",
+		Kind:             "tool",
+		Description:      "test: a tool forbidden by Action::tool_exec only",
+		ModelInvokable:   true,
+		Tool:             "kenaz__bash",
+		ToolArgsTemplate: "echo hi",
+	})
+	if saveErr != nil {
+		t.Fatalf("UserSave: %v", saveErr)
+	}
+
+	// ── deny leg ─────────────────────────────────────────────────────
+	_, err = api.Slash().UserRun(ctx, "tool-exec-forbidden", nil, rec.ID, "", "", "")
+	if err == nil {
+		t.Fatal("UserRun: expected an error for a tool_exec-forbidden tool, got nil")
+	}
+	if !strings.Contains(err.Error(), "denied") {
+		t.Errorf("UserRun: err = %v, want it to name a denial", err)
+	}
+	if strings.Contains(err.Error(), "not configured") {
+		t.Errorf("UserRun: err = %v — this is UNIT-3's nil-dispatcher sentinel; the production wire did not attach a tool dispatcher", err)
+	}
+
+	// ── permit leg: a different tool, same forbid still installed ──────
+	saveErr = api.Slash().UserSave(ctx, slashview.UserCommandWire{
+		Name:             "tool-exec-allowed",
+		Scope:            "global",
+		Kind:             "tool",
+		Description:      "test: an unrelated tool the forbid does not name",
+		ModelInvokable:   true,
+		Tool:             "kenaz__websearch",
+		ToolArgsTemplate: "query",
+	})
+	if saveErr != nil {
+		t.Fatalf("UserSave (allowed): %v", saveErr)
+	}
+	_, err = api.Slash().UserRun(ctx, "tool-exec-allowed", nil, rec.ID, "", "", "")
+	if err != nil && strings.Contains(err.Error(), "denied") {
+		t.Fatalf("UserRun (kenaz__websearch): unexpected denial: %v — the tool_exec forbid must not blanket-deny every tool", err)
+	}
 }
 
 // ─── confirm-each ladder ────────────────────────────────────────────────
