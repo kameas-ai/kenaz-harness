@@ -122,7 +122,17 @@ func TestSlashToolDispatcher_CedarDenyAndPermitDiscriminate(t *testing.T) {
 		t.Fatalf("Sessions().Create: %v", err)
 	}
 
-	const toolName = "harness-self__" + harnessmcp.ToolSetSetting
+	// harness_write_create_project, not harness_write_set_setting: ruling
+	// G-4 removed the set_setting tool entirely (harness-self-attach-01PMHS01
+	// UNIT-8) while this unit was in flight, so the symbol this test
+	// originally used no longer exists.
+	//
+	// The substitution preserves what the test measures. harness_write_forbid
+	// .cedar forbids by PATTERN — `context.tool_name like "harness_write_*"
+	// && context.session_kind != "onboarding"` — so any surviving
+	// harness_write_* tool exercises the same rule. The test is about the
+	// dispatcher consulting Cedar at all, not about which tool it names.
+	const toolName = "harness-self__" + harnessmcp.ToolCreateProject
 
 	pool := &recordingPool{output: json.RawMessage(`"ok"`)}
 	adapter := &slashToolDispatcherAdapter{
@@ -154,8 +164,8 @@ func TestSlashToolDispatcher_CedarDenyAndPermitDiscriminate(t *testing.T) {
 	if calls := pool.snapshot(); len(calls) != 1 {
 		t.Fatalf("onboarding session: pool was called %d times, want 1 — the permitted call must reach the pool", len(calls))
 	}
-	if calls := pool.snapshot(); calls[0].Server != "harness-self" || calls[0].Tool != harnessmcp.ToolSetSetting {
-		t.Errorf("pool.Call got (server=%q, tool=%q), want (harness-self, %q)", calls[0].Server, calls[0].Tool, harnessmcp.ToolSetSetting)
+	if calls := pool.snapshot(); calls[0].Server != "harness-self" || calls[0].Tool != harnessmcp.ToolCreateProject {
+		t.Errorf("pool.Call got (server=%q, tool=%q), want (harness-self, %q)", calls[0].Server, calls[0].Tool, harnessmcp.ToolCreateProject)
 	}
 }
 
@@ -175,7 +185,7 @@ func TestSlash_UserRun_ProductionWireDiscriminatesByCedar(t *testing.T) {
 		t.Fatalf("Sessions().Create: %v", err)
 	}
 
-	const toolName = "harness-self__" + harnessmcp.ToolSetSetting
+	const toolName = "harness-self__" + harnessmcp.ToolCreateProject
 	saveErr := api.Slash().UserSave(ctx, slashview.UserCommandWire{
 		Name:             "danger-write",
 		Scope:            "global",
