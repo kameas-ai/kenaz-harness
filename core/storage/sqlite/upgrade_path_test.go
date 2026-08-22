@@ -50,6 +50,27 @@ import (
 // shape (e.g. gains/loses a column) fails the test, which is exactly
 // the point: an undeclared shape change is a regression.
 var expectedChangedTables = map[string][]string{
+	"v0.70.0": {
+		// NOT a migration writing rows — this one is the TEST's own
+		// probe. tasks/1200-tasks-init (subagent-control-and-background-
+		// tasks-01PMZB11 UNIT-2) creates the table empty, and then
+		// assertTasksTableMigrated inserts through the production writer
+		// coretasks.NewSQLiteStore(...) to prove the table is actually
+		// usable and not merely present.
+		//
+		// For v0.63.0..v0.69.0 that insert is invisible here: `tasks`
+		// does not exist in those dumps, so there is no before-state to
+		// diff. v0.70.0 is the first snapshot containing the table, so
+		// the probe's row shows up as 0 -> 1 and the test correctly
+		// refuses it until declared.
+		//
+		// Declaring it is right, but note what it costs: a real
+		// migration that writes to `tasks` in a future release will now
+		// be masked for THIS tag. If one lands, split the probe onto a
+		// table nobody migrates, or assert the row count exactly rather
+		// than allowlisting the table.
+		"tasks",
+	},
 	"v0.63.0": {
 		// sessions/0333-transcript-moves adds nullable columns to
 		// session_messages (kind, move_index, turn_span_id,
