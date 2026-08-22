@@ -43,6 +43,7 @@ current_class=""
 # so it holds exactly the paragraph immediately above the entry line(s)
 # it applies to.
 reason_block=""
+last_was_entry=0
 classless=()
 undated=()
 
@@ -62,6 +63,21 @@ while IFS= read -r line; do
     continue
   fi
   if [[ "$line" =~ ^#(.*)$ ]]; then
+    # A comment that FOLLOWS an entry starts a new reason paragraph. Without
+    # this, a paragraph bleeds across entries: append
+    #     # No date or owner here.
+    #     "Zz_Injected"
+    # directly after a group whose reason DID name a date and owner, and the
+    # planted entry inherits that reason and passes.
+    #
+    # Found 2026-08-22 by CI, not locally — the planted-violation proof for
+    # this very rule went vacuous the moment a file edit changed which
+    # paragraph sat at EOF. Same shape as finding D1: a proof that depends on
+    # surrounding content rather than planting its own conditions.
+    if [[ "$last_was_entry" -eq 1 ]]; then
+      reason_block=""
+      last_was_entry=0
+    fi
     reason_block="${reason_block}${BASH_REMATCH[1]}"$'\n'
     continue
   fi
@@ -78,6 +94,7 @@ while IFS= read -r line; do
   fi
   if [[ "$line" =~ ^\"([A-Za-z0-9_]+)\"$ ]]; then
     name="${BASH_REMATCH[1]}"
+    last_was_entry=1
     if [[ -z "$current_class" ]]; then
       classless+=("$name")
       continue
