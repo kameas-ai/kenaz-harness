@@ -22,7 +22,7 @@
 // --- credentials & SSH ----------------------------------------------
 forbid (
     principal == User::"local",
-    action in [Action::"file_read", Action::"file_write"],
+    action in [Action::"read_filesystem", Action::"write_filesystem"],
     resource is FilesystemOp
 ) when {
     context.canonical_path like "*/.ssh/*" ||
@@ -31,7 +31,7 @@ forbid (
 
 forbid (
     principal == User::"local",
-    action in [Action::"file_read", Action::"file_write"],
+    action in [Action::"read_filesystem", Action::"write_filesystem"],
     resource is FilesystemOp
 ) when {
     context.canonical_path like "*/.aws/*" ||
@@ -40,7 +40,7 @@ forbid (
 
 forbid (
     principal == User::"local",
-    action in [Action::"file_read", Action::"file_write"],
+    action in [Action::"read_filesystem", Action::"write_filesystem"],
     resource is FilesystemOp
 ) when {
     context.canonical_path like "*/.gnupg/*" ||
@@ -49,7 +49,7 @@ forbid (
 
 forbid (
     principal == User::"local",
-    action in [Action::"file_read", Action::"file_write"],
+    action in [Action::"read_filesystem", Action::"write_filesystem"],
     resource is FilesystemOp
 ) when {
     context.canonical_path like "*/.config/gh/*" ||
@@ -61,7 +61,7 @@ forbid (
 
 forbid (
     principal == User::"local",
-    action in [Action::"file_read", Action::"file_write"],
+    action in [Action::"read_filesystem", Action::"write_filesystem"],
     resource is FilesystemOp
 ) when {
     context.canonical_path like "*/.netrc" ||
@@ -74,7 +74,7 @@ forbid (
 // --- dotenv files (any depth) ---------------------------------------
 forbid (
     principal == User::"local",
-    action in [Action::"file_read", Action::"file_write"],
+    action in [Action::"read_filesystem", Action::"write_filesystem"],
     resource is FilesystemOp
 ) when {
     context.canonical_path like "*/.env" ||
@@ -86,7 +86,7 @@ forbid (
 // --- macOS keychain + login items -----------------------------------
 forbid (
     principal == User::"local",
-    action in [Action::"file_read", Action::"file_write"],
+    action in [Action::"read_filesystem", Action::"write_filesystem"],
     resource is FilesystemOp
 ) when {
     context.canonical_path like "*/Library/Keychains/*"
@@ -98,7 +98,7 @@ forbid (
 // reads denied too.
 forbid (
     principal == User::"local",
-    action == Action::"file_write",
+    action == Action::"write_filesystem",
     resource is FilesystemOp
 ) when {
     context.canonical_path like "/etc/*" ||
@@ -118,7 +118,7 @@ forbid (
 // .git internals directly.
 forbid (
     principal == User::"local",
-    action == Action::"file_write",
+    action == Action::"write_filesystem",
     resource is FilesystemOp
 ) when {
     context.canonical_path like "*/.git/*"
@@ -129,7 +129,7 @@ forbid (
 // business there.
 forbid (
     principal == User::"local",
-    action in [Action::"file_read", Action::"file_write"],
+    action in [Action::"read_filesystem", Action::"write_filesystem"],
     resource is FilesystemOp
 ) when {
     context.canonical_path like "*/kenaz-harness/data.db*" ||
