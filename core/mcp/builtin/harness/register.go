@@ -8,25 +8,30 @@ import "encoding/json"
 // default. Write-side tools (harness_write_*) are gated to
 // kind=onboarding sessions by the default Cedar policies.
 const (
-	ToolListProviders        = "harness_read_list_providers"
-	ToolListMCPRecipes       = "harness_read_list_mcp_recipes"
-	ToolListSettings         = "harness_read_list_settings"
-	ToolGetStatus            = "harness_read_get_status"
-	ToolGetRecommendations   = "harness_read_get_onboarding_recommendations"
-	ToolListSessions         = "harness_read_list_sessions"
-	ToolListModels           = "harness_read_list_models"
+	ToolListProviders      = "harness_read_list_providers"
+	ToolListMCPRecipes     = "harness_read_list_mcp_recipes"
+	ToolListSettings       = "harness_read_list_settings"
+	ToolGetStatus          = "harness_read_get_status"
+	ToolGetRecommendations = "harness_read_get_onboarding_recommendations"
+	ToolListSessions       = "harness_read_list_sessions"
+	ToolListModels         = "harness_read_list_models"
 	// ToolMaterializeRun (model-authored-graphs-01PMGA01 UNIT-7, FR-011)
 	// is a read tool: no Cedar gate, permitted like any other
 	// harness_read_* tool (subject to the pre-existing harness-self
 	// containment default, which does not restrict reads).
 	ToolMaterializeRun = "harness_read_materialize_run"
 
-	ToolAddProvider          = "harness_write_add_provider"
-	ToolRemoveProvider       = "harness_write_remove_provider"
-	ToolInstallMCPRecipe     = "harness_write_install_mcp_recipe"
-	ToolSetSetting           = "harness_write_set_setting"
-	ToolCreateProject        = "harness_write_create_project"
-	ToolCreateSession        = "harness_write_create_session"
+	ToolAddProvider      = "harness_write_add_provider"
+	ToolRemoveProvider   = "harness_write_remove_provider"
+	ToolInstallMCPRecipe = "harness_write_install_mcp_recipe"
+	// ToolSetSetting ("harness_write_set_setting") was REMOVED by
+	// harness-self-attach-01PMHS01 UNIT-8 (G-4,
+	// docs/escalation-register-2026-08-19.md Part 9). See handlers.go's
+	// doc comment above ProjectWriter for the full removal rationale —
+	// the allowlist backing this tool shrank to zero keys, so the tool
+	// was unregistered rather than shipped with nothing it could do.
+	ToolCreateProject = "harness_write_create_project"
+	ToolCreateSession = "harness_write_create_session"
 	// ToolDraftAgentGraph (model-authored-graphs-01PMGA01 UNIT-7,
 	// FR-001/FR-005/FR-006) is gated TWICE: the pre-existing
 	// harness_write_forbid.cedar/harness_write_onboarding.cedar pair
@@ -137,15 +142,6 @@ func RegisterAll(srv *Server, m Managers) *Server {
             "config":{"type":"object"}
         }`, "id"),
 		Handler: m.handleInstallRecipe,
-	})
-	srv.Register(ToolSpec{
-		Name:        ToolSetSetting,
-		Description: "Update a single allowlisted harness setting.",
-		InputSchema: schemaObject(`{
-            "key":{"type":"string"},
-            "value":{}
-        }`, "key", "value"),
-		Handler: m.handleSetSetting,
 	})
 	srv.Register(ToolSpec{
 		Name:        ToolCreateProject,
