@@ -6,7 +6,12 @@ package skill
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
+
+	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
+	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
 )
 
 // stubDispatch is a minimal Dispatch-alike that lets tests control Run output.
@@ -149,6 +154,114 @@ func TestTool_Call_NameTooLong_ReturnsError(t *testing.T) {
 	mustUnmarshal(t, out, &e)
 	if !e.IsError {
 		t.Error("expected isError=true for name exceeding MaxNameLen")
+	}
+}
+
+// ── model_invokable enforcement, driven through the real model entry
+// point (trust-surfaces-that-fire-01PMZ202 WP20 / AC-14) ───────────────
+//
+// These three tests exercise Tool.Call end to end: a real *coreslashcmd.Store
+// backed by real sqlite (not a fixture map — CLAUDE.md blind spot #2), a
+// real *coreslashcmd.Dispatch wired the way core/rpc/api.go wires it, and
+// the actual kenaz__skill Call() path. Unit-testing Dispatch.RunModelInvoked
+// directly would prove the guard exists; it would not prove the model's own
+// tool call reaches it — that is the gap this WP closes.
+
+func openSkillTestDB(t *testing.T) (storage.DB, string) {
+	t.Helper()
+	dir := t.TempDir()
+	db, err := storagesqlite.Open(storage.Config{
+		DataDir:          dir,
+		EncryptionStatus: storage.EncryptionStatusDisabledWithDiskEncryption,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close(context.Background()) })
+	return db, dir
+}
+
+// TestTool_Call_ModelInvokableFalse_Refused is the deny leg: a command
+// saved with model_invokable unset (the default) must be refused when the
+// model calls kenaz__skill, not silently run.
+func TestTool_Call_ModelInvokableFalse_Refused(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, dir := openSkillTestDB(t)
+	store := coreslashcmd.NewStore(db, dir)
+
+	if err := store.SaveUser(ctx, coreslashcmd.UserCommand{
+		Name:        "not-for-model",
+		Scope:       coreslashcmd.ScopeGlobal,
+		Kind:        coreslashcmd.KindText,
+		Description: "Human-only command",
+		Body:        "this body must never reach the model",
+		// ModelInvokable left false.
+	}); err != nil {
+		t.Fatalf("SaveUser: %v", err)
+	}
+
+	dispatch := coreslashcmd.NewDispatch(store, nil)
+	tool := New(Options{Dispatch: dispatch})
+
+	args := mustMarshal(t, map[string]any{"name": "not-for-model"})
+	out, err := tool.Call(ctx, args)
+	if err != nil {
+		t.Fatalf("Call() should never return a Go error, got: %v", err)
+	}
+
+	var e struct {
+		IsError bool   `json:"isError"`
+		Error   string `json:"error"`
+	}
+	mustUnmarshal(t, out, &e)
+	if !e.IsError {
+		t.Fatalf("expected isError=true for a model_invokable=false command, got success: %s", out)
+	}
+	if strings.Contains(e.Error, "this body must never reach the model") {
+		t.Errorf("refusal leaked the command body: %q", e.Error)
+	}
+}
+
+// TestTool_Call_ModelInvokableTrue_Runs is the allow leg: a command
+// explicitly marked model_invokable=true must still run through
+// kenaz__skill and produce the real output.
+func TestTool_Call_ModelInvokableTrue_Runs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, dir := openSkillTestDB(t)
+	store := coreslashcmd.NewStore(db, dir)
+
+	if err := store.SaveUser(ctx, coreslashcmd.UserCommand{
+		Name:           "for-model",
+		Scope:          coreslashcmd.ScopeGlobal,
+		Kind:           coreslashcmd.KindText,
+		Description:    "Model-eligible command",
+		Body:           "eligible output",
+		ModelInvokable: true,
+	}); err != nil {
+		t.Fatalf("SaveUser: %v", err)
+	}
+
+	dispatch := coreslashcmd.NewDispatch(store, nil)
+	tool := New(Options{Dispatch: dispatch})
+
+	args := mustMarshal(t, map[string]any{"name": "for-model"})
+	out, err := tool.Call(ctx, args)
+	if err != nil {
+		t.Fatalf("Call() should never return a Go error, got: %v", err)
+	}
+
+	var res struct {
+		Output  string `json:"output"`
+		IsError bool   `json:"isError"`
+	}
+	mustUnmarshal(t, out, &res)
+	if res.IsError {
+		t.Fatalf("expected success for a model_invokable=true command, got error: %s", out)
+	}
+	if res.Output != "eligible output" {
+		t.Errorf("Output = %q, want %q", res.Output, "eligible output")
 	}
 }
 

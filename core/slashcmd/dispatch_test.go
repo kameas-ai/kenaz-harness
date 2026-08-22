@@ -178,6 +178,112 @@ func TestDispatch_NotFound(t *testing.T) {
 	}
 }
 
+// TestDispatch_RunModelInvoked_BlocksNotModelInvokable is AC-14
+// (trust-surfaces-that-fire-01PMZ202 WP20), driven through the same
+// production entry point the kenaz__skill builtin uses:
+// Dispatch.RunModelInvoked. A command saved with model_invokable unset
+// (the default, false) must be refused — not silently run — when the
+// caller is the model.
+func TestDispatch_RunModelInvoked_BlocksNotModelInvokable(t *testing.T) {
+	t.Parallel()
+	db, dir := openDispatchDB(t)
+	store := slashcmd.NewStore(db, dir)
+	ctx := context.Background()
+
+	cmd := slashcmd.UserCommand{
+		Name:        "danger",
+		Scope:       slashcmd.ScopeGlobal,
+		Kind:        slashcmd.KindText,
+		Description: "Not meant for the model",
+		Body:        "some sensitive text the model must not surface",
+		// ModelInvokable left false — the default.
+	}
+	if err := store.SaveUser(ctx, cmd); err != nil {
+		t.Fatalf("SaveUser: %v", err)
+	}
+
+	d := slashcmd.NewDispatch(store, nil)
+	result, err := d.RunModelInvoked(ctx, "danger", nil, slashcmd.SessionContext{SessionID: "s1"})
+	if err == nil {
+		t.Fatal("RunModelInvoked: expected an error for model_invokable=false, got nil")
+	}
+	if !errors.Is(err, slashcmd.ErrNotModelInvokable) {
+		t.Errorf("err = %v, want errors.Is ErrNotModelInvokable", err)
+	}
+	if result.Kind != slashcmd.ResultKindError {
+		t.Errorf("Kind = %q, want error", result.Kind)
+	}
+	if strings.Contains(result.Text, "sensitive") {
+		t.Errorf("refusal result leaked the command body: %q", result.Text)
+	}
+}
+
+// TestDispatch_RunModelInvoked_AllowsModelInvokable is the positive leg
+// of AC-14: a command explicitly marked model_invokable=true still runs
+// through the model's entry point and produces the real output.
+func TestDispatch_RunModelInvoked_AllowsModelInvokable(t *testing.T) {
+	t.Parallel()
+	db, dir := openDispatchDB(t)
+	store := slashcmd.NewStore(db, dir)
+	ctx := context.Background()
+
+	cmd := slashcmd.UserCommand{
+		Name:           "summarize",
+		Scope:          slashcmd.ScopeGlobal,
+		Kind:           slashcmd.KindText,
+		Description:    "Model-eligible command",
+		Body:           "Summarize the attached document.",
+		ModelInvokable: true,
+	}
+	if err := store.SaveUser(ctx, cmd); err != nil {
+		t.Fatalf("SaveUser: %v", err)
+	}
+
+	d := slashcmd.NewDispatch(store, nil)
+	result, err := d.RunModelInvoked(ctx, "summarize", nil, slashcmd.SessionContext{SessionID: "s2"})
+	if err != nil {
+		t.Fatalf("RunModelInvoked: unexpected error: %v", err)
+	}
+	if result.Text != "Summarize the attached document." {
+		t.Errorf("Text = %q, want the command body", result.Text)
+	}
+}
+
+// TestDispatch_Run_HumanPathUnaffectedByModelInvokableFlag pins the third
+// case AC-14 calls out explicitly: the human RPC path
+// (core/rpc/views/slashcmd/impl.go UserRun) calls Run directly, never
+// RunModelInvoked, and must keep running a model_invokable=false command
+// for the human who owns it. model_invokable restricts the model, not
+// the user — WP20 must not turn into a blanket deny.
+func TestDispatch_Run_HumanPathUnaffectedByModelInvokableFlag(t *testing.T) {
+	t.Parallel()
+	db, dir := openDispatchDB(t)
+	store := slashcmd.NewStore(db, dir)
+	ctx := context.Background()
+
+	cmd := slashcmd.UserCommand{
+		Name:        "human-only",
+		Scope:       slashcmd.ScopeGlobal,
+		Kind:        slashcmd.KindText,
+		Description: "Never meant for the model",
+		Body:        "human-only output",
+		// ModelInvokable left false.
+	}
+	if err := store.SaveUser(ctx, cmd); err != nil {
+		t.Fatalf("SaveUser: %v", err)
+	}
+
+	// This is the exact call the RPC layer's UserRun makes.
+	d := slashcmd.NewDispatch(store, nil)
+	result, err := d.Run(ctx, "human-only", nil, slashcmd.SessionContext{SessionID: "s3"})
+	if err != nil {
+		t.Fatalf("Run: human-invoked dispatch must still succeed for a model_invokable=false command, got err: %v", err)
+	}
+	if result.Text != "human-only output" {
+		t.Errorf("Text = %q, want %q", result.Text, "human-only output")
+	}
+}
+
 // TestDispatch_KindTool_NilDispatcher_ReturnsError is AC-004
 // (automation-actually-runs-01PMZ404 UNIT-3). Before this unit, a nil
 // tools dispatcher took the dry-run branch: ResultKindInfo, a "would
