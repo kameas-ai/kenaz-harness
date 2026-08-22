@@ -7,8 +7,16 @@ import (
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 	"github.com/kameas-ai/kenaz-harness/core/tools/subagentdispatch"
 )
+
+// ctxWithTestSession attaches a session ID the way the production kernel
+// tool adapter does (toolloop.WithSessionID) immediately before dispatch —
+// see Options.SessionResolver's doc.
+func ctxWithTestSession() context.Context {
+	return toolloop.WithSessionID(context.Background(), "sess-test")
+}
 
 // TestInputSchema verifies the input schema is valid JSON.
 func TestInputSchema(t *testing.T) {
@@ -118,7 +126,7 @@ func TestSyncDispatch(t *testing.T) {
 		Seam:    seam,
 	})
 	args := json.RawMessage(`{"profile":"explore","prompt":"find all usages","run_in_background":false}`)
-	raw, err := tool.Call(context.Background(), args)
+	raw, err := tool.Call(ctxWithTestSession(), args)
 	if err != nil {
 		t.Fatalf("Call: unexpected Go error: %v", err)
 	}
@@ -136,6 +144,39 @@ func TestSyncDispatch(t *testing.T) {
 	if len(seam.Forks) != 1 {
 		t.Errorf("seam.Forks len=%d, want 1", len(seam.Forks))
 	}
+	// ParentSessionID must reach the seam — Fork's own contract requires
+	// it, and the fake doesn't enforce that the way the real
+	// BranchSeamAdapter does, so this assertion is the only thing that
+	// would have caught the pre-UNIT-6 bug where it was never set.
+	if seam.Forks[0].ParentSessionID != "sess-test" {
+		t.Errorf("ParentSessionID=%q, want sess-test", seam.Forks[0].ParentSessionID)
+	}
+}
+
+// TestNoSessionError verifies that a Call with no session ID on ctx fails
+// fast with a clear error instead of forking with an empty
+// ParentSessionID (which the real BranchSeamAdapter rejects — see
+// env_deps_branch.go's Fork).
+func TestNoSessionError(t *testing.T) {
+	t.Parallel()
+	seam := agentgraph.NewFakeBranchSeam()
+	tool := subagentdispatch.New(subagentdispatch.Options{
+		DataDir: t.TempDir(),
+		Seam:    seam,
+	})
+	args := json.RawMessage(`{"profile":"explore","prompt":"find something"}`)
+	raw, err := tool.Call(context.Background(), args) // no toolloop.WithSessionID
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	var result map[string]any
+	_ = json.Unmarshal(raw, &result)
+	if got, _ := result["error"].(string); got != "no_session" {
+		t.Errorf("error=%q, want no_session", got)
+	}
+	if len(seam.Forks) != 0 {
+		t.Errorf("seam.Forks len=%d, want 0 — Fork must not be attempted without a session id", len(seam.Forks))
+	}
 }
 
 // TestAsyncDispatch verifies the async path (run_in_background=true) returns
@@ -152,7 +193,7 @@ func TestAsyncDispatch(t *testing.T) {
 	args := json.RawMessage(`{"profile":"explore","prompt":"find usages","run_in_background":true}`)
 
 	start := time.Now()
-	raw, err := tool.Call(context.Background(), args)
+	raw, err := tool.Call(ctxWithTestSession(), args)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("Call: unexpected Go error: %v", err)

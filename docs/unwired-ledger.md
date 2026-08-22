@@ -817,14 +817,21 @@ unchanged. Sub-agent: **build**, not delete — spec `abort`/`steer`/`pause`/
 because **A-7** ruled that `subagent_start`, `background_task_complete` and
 `worktree_create` all get producers, and none can be built without this seam.
 
-⚠️ **Carry Part 7's correction.** A-13's stated premise that
-`kenaz__subagent_dispatch` is "already live" is FALSE, and this row's own text
-above repeats it. Re-verified 2026-08-19:
-`core/rpc/builtins_wiring.go:312-313` reads
+⚠️ **Carry Part 7's correction — now resolved by UNIT-6.** A-13's stated
+premise that `kenaz__subagent_dispatch` is "already live" was FALSE as of
+2026-08-19: `core/rpc/builtins_wiring.go:312-313` read
 `var subagentSeam agentgraph.BranchSeam // nil — no child-run spawner yet`
-followed by `if subagentSeam != nil`, so the registration inside is statically
-unreachable. The ruling stands; the mission must first build the child-run
-spawner, and size and risk go up accordingly.
+followed by `if subagentSeam != nil`, so the registration inside was
+statically unreachable. **`subagent-control-and-background-tasks-01PMZB11`
+UNIT-6 built the child-run spawner** the guard was waiting on
+(`core/rpc/subagent_run_spawner.go`, threaded through
+`agentgraph.BranchSeamAdapter.SetRunSpawner` and armed from `core/rpc/api.go`'s
+`New()` once the LLM connector exists) and replaced the dead local variable
+with `registerSubagentDispatchTool`, called only when a real, spawner-armed
+seam exists. `kenaz__subagent_dispatch` is genuinely live in production as of
+this commit. `SubagentTab.vue` / `SubagentBudgetMeter.vue` remain unmounted
+(UNIT-10, gated on UNIT-8 + UNIT-9 landing first per the mission's plan.md
+Rule 5) — this paragraph covers only the registration half.
 
 ### 2026-08-14 · The denial UX gap (opened by deleting `DenialNotice`)
 

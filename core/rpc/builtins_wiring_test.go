@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/kameas-ai/kenaz-harness/core"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 	coreaskuser "github.com/kameas-ai/kenaz-harness/core/tools/askuserquestion"
@@ -87,14 +88,17 @@ func TestBuiltinEnabledPredicate_WebFetchDefaultOff(t *testing.T) {
 }
 
 // TestSubagentDispatchNotRegisteredWhenSeamNil asserts that
-// kenaz__subagent_dispatch is not registered when the BranchSeam is nil,
-// so the model's tool catalog omits a permanently-broken tool (FR-007).
+// kenaz__subagent_dispatch is never registered by registerBuiltinTools
+// itself — registration for this one tool is split out into
+// registerSubagentDispatchTool (see that function's doc for why: it
+// needs the LLM connector, which doesn't exist yet at
+// registerBuiltinTools time). This also covers the historical FR-007
+// concern (a tool that always fails must never be advertised) since
+// registerBuiltinTools has no path that registers it at all.
 func TestSubagentDispatchNotRegisteredWhenSeamNil(t *testing.T) {
 	t.Parallel()
 
 	registry := toolloop.NewBuiltinRegistry()
-	// Call registerBuiltinTools with nil core and nil settings — the seam
-	// will be nil, so the subagent dispatch tool must not appear.
 	registerBuiltinTools(
 		nil, // core
 		registry,
@@ -113,8 +117,50 @@ func TestSubagentDispatchNotRegisteredWhenSeamNil(t *testing.T) {
 
 	for _, name := range registry.Names() {
 		if name == coresubagent.ToolName {
-			t.Errorf("kenaz__subagent_dispatch is registered even though BranchSeam is nil (FR-007)")
+			t.Errorf("kenaz__subagent_dispatch is registered by registerBuiltinTools — it must only be registered by registerSubagentDispatchTool (FR-007)")
 		}
+	}
+}
+
+// TestRegisterSubagentDispatchTool_NilSeamOmitsTool is the falsification
+// pin for FR-007 / AC-07's negative arm: with a nil seam,
+// registerSubagentDispatchTool must not register the tool. Mutation:
+// remove the `seam == nil` guard. Must fail (the tool would appear even
+// though dispatching it can never spawn a real run).
+func TestRegisterSubagentDispatchTool_NilSeamOmitsTool(t *testing.T) {
+	t.Parallel()
+	registry := toolloop.NewBuiltinRegistry()
+	registerSubagentDispatchTool(nil, registry, nil)
+	for _, name := range registry.Names() {
+		if name == coresubagent.ToolName {
+			t.Fatal("kenaz__subagent_dispatch is registered with a nil seam")
+		}
+	}
+}
+
+// TestRegisterSubagentDispatchTool_RealSeamRegistersTool is the
+// falsification pin for FR-007 / AC-07's positive arm: a real
+// (spawner-capable-shaped) seam must produce a registered tool.
+// Mutation: revert the call site in core/rpc/api.go (the
+// registerSubagentDispatchTool call inside the SetRunSpawner branch) —
+// the end-to-end production-wiring assertion in
+// TestSubagentDispatchRegisteredInProductionWiring
+// (subagent_run_spawner_test.go) is what actually catches that
+// regression; this test pins the registration function's own contract
+// in isolation.
+func TestRegisterSubagentDispatchTool_RealSeamRegistersTool(t *testing.T) {
+	t.Parallel()
+	registry := toolloop.NewBuiltinRegistry()
+	seam := agentgraph.NewFakeBranchSeam()
+	registerSubagentDispatchTool(nil, registry, seam)
+	var found bool
+	for _, name := range registry.Names() {
+		if name == coresubagent.ToolName {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("kenaz__subagent_dispatch is not registered with a real seam")
 	}
 }
 

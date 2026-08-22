@@ -28,6 +28,7 @@ import (
 
 	coreagents "github.com/kameas-ai/kenaz-harness/core/agents"
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 const (
@@ -135,17 +136,50 @@ type Options struct {
 	// Tasks is the optional tasks.Registry from the background-task-monitor
 	// mission. When nil the tool logs a debug note and continues without
 	// global task visibility.
+	//
+	// Deliberately left unwired in production as of UNIT-6
+	// (subagent-control-and-background-tasks-01PMZB11): task
+	// registration/completion for a dispatched sub-agent now flows
+	// through the RunSpawner threaded into agentgraph.BranchSeam's
+	// Fork (core/rpc/subagent_run_spawner.go), which registers a
+	// tasks.KindSubagent row and ends it when the child run reaches a
+	// terminal state — that IS the "task registry is the completion
+	// signal" UNIT-3/UNIT-4 built. Wiring this field too would create a
+	// SECOND, competing registration for the same dispatch (two Tasks
+	// panel rows per sub-agent). Left in place for the TasksRegistry
+	// interface's own sake — a future unit may still want it for a
+	// purpose the run spawner doesn't cover (e.g. a Cancel path that
+	// doesn't go through WaitForChildRun) — but do not wire it without
+	// removing the run spawner's own registration first.
 	Tasks TasksRegistry
+
+	// SessionResolver reads the dispatching session's ID off ctx. Every
+	// Fork call requires a non-empty ForkRequest.ParentSessionID
+	// (agentgraph.BranchSeam's contract — env_deps_branch.go's Fork
+	// returns an error otherwise), so this is not optional in
+	// production. Defaults to toolloop.SessionIDFromContext, the same
+	// convention every other session-scoped builtin tool uses
+	// (kenaz__monitor, kenaz__todo_write, kenaz__save_artifact, …) —
+	// the kernel tool adapter calls toolloop.WithSessionID(ctx, id)
+	// immediately before dispatching to any builtin, so this is always
+	// populated on the production path. Tests that don't go through
+	// that dispatch layer must call toolloop.WithSessionID themselves.
+	SessionResolver func(context.Context) string
 }
 
 // Tool implements the kenaz__subagent_dispatch builtin.
 type Tool struct {
-	opts Options
+	opts            Options
+	sessionResolver func(context.Context) string
 }
 
 // New constructs a Tool.
 func New(opts Options) *Tool {
-	return &Tool{opts: opts}
+	resolver := opts.SessionResolver
+	if resolver == nil {
+		resolver = toolloop.SessionIDFromContext
+	}
+	return &Tool{opts: opts, sessionResolver: resolver}
 }
 
 // Name implements toolloop.BuiltinTool.
@@ -213,6 +247,16 @@ func (t *Tool) Call(ctx context.Context, rawArgs json.RawMessage) (json.RawMessa
 			"subagent dispatch requires the branch seam to be wired; this build does not support it")
 	}
 
+	// Resolve the dispatching session. Required: BranchSeam.Fork rejects
+	// an empty ParentSessionID (env_deps_branch.go), and without it every
+	// dispatch would fail at the seam regardless of how the model called
+	// this tool. See the SessionResolver doc on Options.
+	parentSessionID := t.sessionResolver(ctx)
+	if parentSessionID == "" {
+		return marshalErr("no_session",
+			"subagent dispatch requires an active session context; the dispatching session id was not found on ctx")
+	}
+
 	// Build the title for the branch.
 	title := in.Description
 	if title == "" {
@@ -222,11 +266,12 @@ func (t *Tool) Call(ctx context.Context, rawArgs json.RawMessage) (json.RawMessa
 	// Build the ForkRequest. The profile's model override, tool allowlist,
 	// and system prompt override are applied via the seam.
 	forkReq := agentgraph.ForkRequest{
-		Title:         title,
-		TaskHint:      in.Prompt,
-		HandoffPrompt: buildHandoffPrompt(profile, in.Prompt),
-		ModelID:       profile.Model,
-		ToolAllowlist: profile.AllowedTools,
+		ParentSessionID: parentSessionID,
+		Title:           title,
+		TaskHint:        in.Prompt,
+		HandoffPrompt:   buildHandoffPrompt(profile, in.Prompt),
+		ModelID:         profile.Model,
+		ToolAllowlist:   profile.AllowedTools,
 	}
 
 	// Fork the session.
