@@ -604,6 +604,27 @@ export interface ContextSyncStatusView {
   team_cap_enabled: boolean;
 }
 
+/** One search result from `contexts.search` (Contexts_ContextSearch). */
+export interface ContextSearchHitView {
+  node_id: string;
+  title: string;
+  classification: 'team_shared' | 'org_shared';
+  snippet: string;
+  rank: number;
+}
+
+/**
+ * Result of `contexts.export` (Contexts_ContextExport): the base64-encoded
+ * export stream plus the server's content type. Empty `data_base64` when
+ * fleet is disabled / unentitled — the caller must distinguish that from
+ * an empty graph using `byte_len === 0`.
+ */
+export interface ContextExportView {
+  content_type: string;
+  data_base64: string;
+  byte_len: number;
+}
+
 export interface Bundle {
   id: string;
   name: string;

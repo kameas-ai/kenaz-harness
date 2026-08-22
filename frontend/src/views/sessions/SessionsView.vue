@@ -45,6 +45,8 @@ import ArtifactPreview from '@/views/artifacts/ArtifactPreview.vue';
 import CostCell from '@/components/chat/CostCell.vue';
 import LongSessionNudge from '@/components/chat/LongSessionNudge.vue';
 import ShareSessionDialog from '@/views/sessions/ShareSessionDialog.vue';
+import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
+import { useConfirmDialog } from '@/composables/useConfirmDialog';
 import { useArtifacts, useHarnessClient, useSessions } from '@/lib/useHarnessAPI';
 import { useSession, streamTruncatedCopy } from '@/lib/useSession';
 import { useEventStream } from '@/lib/useEventStream';
@@ -1402,6 +1404,44 @@ async function onToggleSync() {
   }
 }
 
+// ── Remote purge (fleet-enforcement-truth-01PMZ505 WP13) ────────────────────
+//
+// SessionSync_DeleteRemote purges every fleet event uploaded for this
+// session AND disables sync (core/fleet/session_sync.go:209) — the confirm
+// copy below names both effects so a user who only wants to stop future
+// uploads reaches for the sync toggle instead. The backend already emits
+// the audit event (session_sync_test.go:238); this WP adds no second emit.
+const { confirmState, confirm } = useConfirmDialog();
+const purgingRemote = ref(false);
+
+async function onPurgeRemote() {
+  const id = sessionId.value;
+  if (!id || purgingRemote.value) return;
+  const ok = await confirm({
+    title: 'Purge remote sync data?',
+    message:
+      'This permanently deletes every fleet event uploaded for this session from the server, and turns sync off for this session. It does not affect messages stored on this device.',
+    danger: true,
+    confirmLabel: 'Purge',
+  });
+  if (!ok) return;
+  purgingRemote.value = true;
+  try {
+    await client.SessionSync_DeleteRemote(id);
+    syncStatus.value = {
+      sessionID: id,
+      enabled: false,
+      resumedCount: 0,
+      lastSeq: 0,
+      lastSyncAt: '',
+    };
+  } catch {
+    // Ignore — capability may be unavailable.
+  } finally {
+    purgingRemote.value = false;
+  }
+}
+
 function onOpenShare() {
   shareDialogOpen.value = true;
 }
@@ -1467,6 +1507,19 @@ async function onShared() {
           @click="onOpenShare"
         >
           Share
+        </button>
+        <!-- Purge remote sync data (fleet-enforcement-truth-01PMZ505 WP13).
+             Shown alongside the toggle regardless of its current state —
+             turning sync off leaves already-uploaded events on the server,
+             and this is the only in-app control that removes them. -->
+        <button
+          type="button"
+          class="flex items-center gap-1 rounded px-2 py-0.5 font-ui text-[11px] uppercase tracking-[0.15em] text-danger border border-danger/40 bg-surface-2 hover:bg-danger/10 transition-colors"
+          :disabled="purgingRemote"
+          data-testid="session-purge-remote-btn"
+          @click="onPurgeRemote"
+        >
+          Purge remote
         </button>
         <!-- Inbox badge (shown when there are pending handoff items) -->
         <span
@@ -2163,6 +2216,12 @@ async function onShared() {
       :session-i-d="sessionId"
       @close="onShareClose"
       @shared="onShared"
+    />
+    <!-- Remote purge confirm (fleet-enforcement-truth-01PMZ505 WP13) -->
+    <ConfirmDialog
+      v-bind="confirmState"
+      @confirm="confirmState.resolve(true)"
+      @cancel="confirmState.resolve(false)"
     />
   </div>
 </template>

@@ -2,8 +2,9 @@
 //
 // The model calls this tool to invoke any user-defined slash command that
 // has model_invokable=true set in its frontmatter. The tool resolves the
-// command via core/slashcmd.Dispatch.Run and returns the rendered output
-// as a JSON string.
+// command via core/slashcmd.Dispatch.RunModelInvoked, which refuses
+// commands the user did not mark model_invokable (trust-surfaces-that-
+// fire-01PMZ202 WP20) and returns the rendered output as a JSON string.
 //
 // Tool name: kenaz__skill (follows the kenaz__ prefix convention for
 // first-party builtins so Cedar policy can gate it uniformly).
@@ -155,7 +156,7 @@ func (t *Tool) Call(ctx context.Context, args json.RawMessage) (json.RawMessage,
 		CWD:       in.CWD,
 	}
 
-	result, err := t.opts.Dispatch.Run(ctx, in.Name, in.Args, sc)
+	result, err := t.opts.Dispatch.RunModelInvoked(ctx, in.Name, in.Args, sc)
 	if err != nil {
 		return marshalErr(fmt.Sprintf("skill %q failed: %v", in.Name, err))
 	}

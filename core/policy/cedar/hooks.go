@@ -186,8 +186,11 @@ func CheckFileWrite(ctx context.Context, g Gate, path string) error {
 // CheckFileRead is the gate-hook helper for filesystem reads. Mirrors
 // CheckFileWrite: callers SHOULD pass an absolute, cleaned path so
 // policy authors get deterministic matching. The harness's State
-// `read_file` kind calls this from the executor; tool-side reads
-// (filesystem MCP) call it via the same helper.
+// `read_file` kind calls this from the executor. Tool-side reads
+// (filesystem MCP, the fs builtin tools) do NOT call it — they go
+// through core/tools/fs.Gate, which evaluates
+// ActionReadFilesystem/ActionWriteFilesystem against the FilesystemOp
+// resource family instead (trust-surfaces-that-fire-01PMZ202 WP18).
 func CheckFileRead(ctx context.Context, g Gate, path string) error {
 	if g == nil {
 		return nil
