@@ -309,6 +309,31 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-08-22 · `scheduledchat.API.CreateAsModel` has no caller (`model-scheduled-jobs-01PMSJ01` WP09)
+
+WP09 built the full server-side provenance mechanism FR-005 requires — the
+`created_by`/`tool_allowlist` columns (migration `sessions/0340`), the
+`CreateAsModel` entry point that stamps `created_by="model"` and refuses an
+empty allowlist (ruling B-3), and the Cedar fail-safe
+(`core/policy/cedar.GateScheduledChatExecute` treats `NotApplicable` as
+`Deny`, not default-allow, for a model-created row — see
+`policies/default_scheduled_run_policy.cedar`). `CreateAsModel` itself has
+zero callers outside its own package's tests: the model-facing surface
+(`harness_write_create_scheduled_run`) is WP10, per the mission's own
+tasks.md this is **HARD-BLOCKED** on `harness-self-attach-01PMHS01`
+WP04+WP06 (the merged-resolver wiring and the harness-self server actually
+being attached to a session) — landing WP10 without that dependency would
+make per-run tool containment *invisibly absent* rather than merely absent
+(spec.md §6.1 F2), which is worse than the current gap.
+
+Per `tasks.md`'s own cut-order note for this exact situation ("If UNIT-8 is
+cut, UNIT-7 files a dated entry..."): the `created_by='model'` arm has a
+tested mechanism and no producer.
+
+**Owner:** the wave lead landing `harness-self-attach-01PMHS01`.
+**Blocker:** `harness-self-attach-01PMHS01` WP04 (merged resolver) + WP06
+(attach the harness-self server). **Date:** 2026-08-22.
+
 ### 2026-08-19 · `settings.Settings.SchemaVersion` gates no migration (`SD-13` settings)
 
 `controls-and-readouts-that-tell-the-truth-01PMZ808` WP06 (FR-007). Three

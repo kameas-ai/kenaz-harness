@@ -572,9 +572,17 @@ func TestCedarWiring_DefaultInstall_PermitsEveryGatedAction(t *testing.T) {
 		t.Errorf("workflow.delete: outcome=%v err=%v; want permit", d.Outcome, err)
 	}
 	for name, call := range map[string]func() (cedar.Decision, error){
-		"scheduled_run.create":  func() (cedar.Decision, error) { return cedar.GateScheduledChatCreate(ctx, g, "sc-1") },
-		"scheduled_run.delete":  func() (cedar.Decision, error) { return cedar.GateScheduledChatDelete(ctx, g, "sc-1") },
-		"scheduled_run.execute": func() (cedar.Decision, error) { return cedar.GateScheduledChatExecute(ctx, g, "sc-1") },
+		"scheduled_run.create": func() (cedar.Decision, error) {
+			return cedar.GateScheduledChatCreate(ctx, g, "sc-1", "user")
+		},
+		"scheduled_run.delete": func() (cedar.Decision, error) { return cedar.GateScheduledChatDelete(ctx, g, "sc-1") },
+		// createdBy="user": this table's contract is "every site
+		// permits under the default posture." created_by="model" is
+		// deliberately fail-closed as of WP09 (ruling B-3) and is
+		// covered separately in core/policy/cedar/scheduled_run_test.go.
+		"scheduled_run.execute": func() (cedar.Decision, error) {
+			return cedar.GateScheduledChatExecute(ctx, g, "sc-1", "user", false)
+		},
 	} {
 		d, err := call()
 		if err != nil || d.Outcome == cedar.Deny {

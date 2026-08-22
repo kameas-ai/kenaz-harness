@@ -155,3 +155,54 @@ func TestPlanModeDeniedActions_Coverage(t *testing.T) {
 		}
 	}
 }
+
+// TestPlanModeDeniedActions_IncludesScheduledRunExecute is AC-011c
+// (model-scheduled-jobs-01PMSJ01 WP09, owner ruling B-3: "plan mode
+// should not fire schedules"). Before this WP, ActionScheduledRunCreate
+// and ActionScheduledRunDelete were denied in plan_mode but
+// ActionScheduledRunExecute was not — a gap this test pins shut. It is
+// deliberately a dedicated, named check (not folded into the generic
+// membership loop above) so reverting the one-line addition to
+// PlanModeDeniedActions turns THIS test red specifically.
+func TestPlanModeDeniedActions_IncludesScheduledRunExecute(t *testing.T) {
+	found := false
+	for _, a := range cedar.PlanModeDeniedActions {
+		if a == cedar.ActionScheduledRunExecute {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("PlanModeDeniedActions does not include ActionScheduledRunExecute — " +
+			"a plan-mode session could fire a scheduled run (ruling B-3 violation)")
+	}
+}
+
+// TestWithPostureMode_DeniesScheduledRunExecute drives the actual
+// enforcement path (postureModeGate.Evaluate), not just slice
+// membership: in plan_mode, ActionScheduledRunExecute must be denied
+// with the standard plan_mode:read_only reason and the inner gate must
+// never see the call — mirroring TestWithPostureMode_DeniesWriteActions
+// but pinned to this one action so AC-011c is falsifiable independent
+// of every other entry in the slice.
+func TestWithPostureMode_DeniesScheduledRunExecute(t *testing.T) {
+	inner := &fakeGate{fixed: cedar.Decision{Outcome: cedar.Allow}}
+	gate := cedar.WithPostureMode(cedar.PostureModePlanMode, inner)
+
+	d := gate.Evaluate(
+		context.Background(),
+		cedar.UserUID(),
+		cedar.ActionScheduledRunExecute,
+		cedar.ScheduledChatRunUID("run-1"),
+		nil,
+	)
+	if d.Outcome != cedar.Deny {
+		t.Fatalf("Outcome = %v, want Deny", d.Outcome)
+	}
+	if d.Reason != "plan_mode:read_only" {
+		t.Fatalf("Reason = %q, want plan_mode:read_only", d.Reason)
+	}
+	if len(inner.calls) != 0 {
+		t.Fatalf("inner gate called %d times, want 0 (denied before delegation)", len(inner.calls))
+	}
+}

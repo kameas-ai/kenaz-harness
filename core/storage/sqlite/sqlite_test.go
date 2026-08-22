@@ -163,7 +163,11 @@ func TestOpen_RegistersSessionMigrations(t *testing.T) {
 	// model-moves-transcript-01PMCH01 WP06.
 	// 0336 (stream_checkpoints table) lands with
 	// chat-turn-integrity-01PMZ606 WP02.
-	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336}
+	// 0340 (scheduled_chat_runs.created_by + .tool_allowlist) lands with
+	// model-scheduled-jobs-01PMSJ01 WP09. 0337-0339 are reserved for
+	// sibling WPs in this and the chat-turn-integrity mission and were
+	// not registered as of WP09.
+	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 340}
 	if len(versions) != len(want) {
 		t.Fatalf("session migrations applied = %v, want %v", versions, want)
 	}
@@ -235,14 +239,17 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	//   plus the one-time retention_config seed correction) +
 	// 1 tasks/1200-tasks-init (subagent-control-and-background-tasks-
 	//   01PMZB11 UNIT-2: the tasks table backing core/tasks.Registry's
-	//   persistence store) = 53.
+	//   persistence store) +
+	// 1 scheduled_chat_runs.created_by/.tool_allowlist (0340,
+	//   model-scheduled-jobs-01PMSJ01 WP09) = 54.
 	//
 	// ZA10's branch asserted 49: it was cut from a base whose count was 43,
 	// before 0336 and bundle/700 landed, so 43+6. The merged tree had all
 	// three sources at 51 (v0.65.0); UNIT-8 adds one more migration on
-	// top, hence 52; UNIT-2 (01PMZB11) adds one more still, hence 53.
-	if count != 53 {
-		t.Errorf("ledger count = %d, want 53", count)
+	// top, hence 52; UNIT-2 (01PMZB11) adds one more still, hence 53;
+	// WP09 (0340) adds one more, hence 54.
+	if count != 54 {
+		t.Errorf("ledger count = %d, want 54", count)
 	}
 }
 

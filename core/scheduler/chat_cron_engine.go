@@ -31,6 +31,8 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
+
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
 // ErrChatCronInvalidExpr is returned when Sync encounters an unparseable
@@ -65,6 +67,20 @@ type ChatCronEngineConfig struct {
 	// posture is in place. A nil Dispatcher at fire time is not a
 	// fallback to a fabricated success (FR-002) — see fireSync.
 	Dispatcher ChatRunDispatcher
+	// Cedar is the policy gate consulted before every cron-triggered
+	// fire (model-scheduled-jobs-01PMSJ01 WP09). Before this field
+	// existed, fireSync went straight from the store read to the
+	// dispatcher with NO Cedar evaluation at all — the RunNow path
+	// (core/rpc/views/scheduledchat.API.RunNow) was the only caller of
+	// GateScheduledChatExecute, so a schedule that only ever fired on
+	// its cron never consulted policy. ActionScheduledRunExecute's own
+	// doc claims it "gates background dispatch (both cron-triggered and
+	// RunNow paths)" (core/policy/cedar/types.go) — that sentence was
+	// false for the cron half until this field was wired. nil is
+	// allowed (matches GateScheduledChatExecute's nil-gate contract:
+	// default-allow for created_by=="user", fail-closed deny for
+	// created_by=="model").
+	Cedar cedar.Gate
 }
 
 // ErrChatCronStoreUnavailable is returned by Sync / Unregister when the
@@ -84,6 +100,7 @@ type ChatCronEngine struct {
 	entries  map[string]*chatEntry // chat run id -> registration
 	store    ScheduledChatStore
 	dispatch ChatRunDispatcher
+	cedar    cedar.Gate
 	started  bool
 }
 
@@ -104,6 +121,7 @@ func NewChatCronEngine(ctx context.Context, cfg ChatCronEngineConfig) (*ChatCron
 		entries:  make(map[string]*chatEntry),
 		store:    cfg.Store,
 		dispatch: cfg.Dispatcher,
+		cedar:    cfg.Cedar,
 	}
 	if e.store != nil {
 		recs, err := e.store.List(ctx)
@@ -318,6 +336,13 @@ func (e *ChatCronEngine) fire(id string) {
 // missing dispatcher. It never fabricates "completed" (FR-002): this is
 // the honest-failure behaviour plan.md's WP03 section requires of a cron
 // tick with no dispatcher wired.
+//
+// A Cedar denial (model-scheduled-jobs-01PMSJ01 WP09) is checked BEFORE
+// the dispatcher is ever consulted — see the Cedar field's doc on
+// ChatCronEngineConfig for why this call was missing entirely before
+// WP09. For a created_by=="model" row this is fail-closed: no shipped
+// or operator policy naming tool.scheduled_run.execute means deny, not
+// default-allow (owner ruling B-3).
 func (e *ChatCronEngine) fireSync(ctx context.Context, id string) (ChatRunHistoryRecord, error) {
 	now := time.Now().UTC()
 	if e.store == nil {
@@ -331,20 +356,33 @@ func (e *ChatCronEngine) fireSync(ctx context.Context, id string) (ChatRunHistor
 		return ChatRunHistoryRecord{}, err
 	}
 
-	job := Job{
-		ID:   rec.ID,
-		Kind: JobKindChatRun,
-		ChatRun: &ChatRunSpec{
-			ID:             rec.ID,
-			PromptTemplate: rec.PromptTemplate,
-			Model:          rec.Model,
-			OutputSink:     rec.OutputSink,
-		},
-		Trigger: Trigger{Cron: rec.Cron, TZ: rec.Timezone},
+	createdBy := rec.CreatedBy
+	if createdBy == "" {
+		createdBy = ScheduledRunCreatedByUser
 	}
+	hasAllowlist := len(rec.ToolAllowlist) > 0
 
 	var hist ChatRunHistoryRecord
-	if d := e.dispatcherSnapshot(); d != nil {
+	if _, gerr := cedar.GateScheduledChatExecute(ctx, e.cedar, id, createdBy, hasAllowlist); gerr != nil {
+		ended := time.Now().UTC()
+		hist = ChatRunHistoryRecord{
+			Status:    "failed",
+			StartedAt: now,
+			EndedAt:   &ended,
+			Error:     "denied by cedar policy: " + gerr.Error(),
+		}
+	} else if d := e.dispatcherSnapshot(); d != nil {
+		job := Job{
+			ID:   rec.ID,
+			Kind: JobKindChatRun,
+			ChatRun: &ChatRunSpec{
+				ID:             rec.ID,
+				PromptTemplate: rec.PromptTemplate,
+				Model:          rec.Model,
+				OutputSink:     rec.OutputSink,
+			},
+			Trigger: Trigger{Cron: rec.Cron, TZ: rec.Timezone},
+		}
 		hist, err = d.DispatchChatRun(ctx, job, now)
 		if err != nil {
 			ended := time.Now().UTC()

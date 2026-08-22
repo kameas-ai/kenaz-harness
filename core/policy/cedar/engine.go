@@ -95,6 +95,17 @@ var defaultACPPolicySource []byte
 //go:embed policies/default_bundle_policy.cedar
 var defaultBundlePolicySource []byte
 
+// defaultScheduledRunPolicySource is the embedded ScheduledChatRun-family
+// default for mission model-scheduled-jobs-01PMSJ01 (WP09). Posture:
+// permit ActionScheduledRunExecute for a model-created row ONLY when it
+// carries a tool allowlist (owner ruling B-3). This file's presence is
+// load-bearing, not cosmetic — see the file's own leading comment and
+// hooks.go's GateScheduledChatExecute for why removing it must cause
+// every model-created run to refuse rather than default-allow.
+//
+//go:embed policies/default_scheduled_run_policy.cedar
+var defaultScheduledRunPolicySource []byte
+
 // DefaultPolicyName is the synthetic filename used when reporting the
 // embedded policy to the frontend.
 const DefaultPolicyName = "default_policy.cedar"
@@ -115,6 +126,7 @@ const (
 	DefaultSessionExportPolicyName = "default_session_export_policy.cedar"
 	DefaultACPPolicyName           = "default_acp_policy.cedar"
 	DefaultBundlePolicyName        = "default_bundle_policy.cedar"
+	DefaultScheduledRunPolicyName  = "default_scheduled_run_policy.cedar"
 )
 
 // PolicyDir is the directory under DataDir where user-authored
@@ -270,6 +282,7 @@ func (e *Engine) Reload(ctx context.Context) error {
 			{DefaultSessionExportPolicyName, defaultSessionExportPolicySource},
 			{DefaultACPPolicyName, defaultACPPolicySource},
 			{DefaultBundlePolicyName, defaultBundlePolicySource},
+			{DefaultScheduledRunPolicyName, defaultScheduledRunPolicySource},
 		}
 		for _, em := range embedded {
 			sources = append(sources, policySource{
@@ -551,7 +564,7 @@ const (
 	//   CtxKeySecretBudget          — remaining resolution budget for the
 	//                                 session+locator pair (int64 string).
 	//   CtxKeySecretAgentKind       — "trusted" | "untrusted" agent kind.
-	CtxKeySecretToolName        = "tool_name"    // shared with Tool family
+	CtxKeySecretToolName        = "tool_name" // shared with Tool family
 	CtxKeySecretDestinationHost = "destination_host"
 	CtxKeySecretIsStreaming     = "is_streaming"
 	CtxKeySecretBudget          = "budget"

@@ -278,9 +278,18 @@ func TestCedarHoist_DefaultInstall_SharedEngineOverBlocksNothing(t *testing.T) {
 		t.Errorf("[site: workflows] workflow.delete outcome=%v err=%v", d.Outcome, err)
 	}
 	for name, call := range map[string]func() (cedar.Decision, error){
-		"scheduled_run.create":  func() (cedar.Decision, error) { return cedar.GateScheduledChatCreate(ctx, g, "sc") },
-		"scheduled_run.delete":  func() (cedar.Decision, error) { return cedar.GateScheduledChatDelete(ctx, g, "sc") },
-		"scheduled_run.execute": func() (cedar.Decision, error) { return cedar.GateScheduledChatExecute(ctx, g, "sc") },
+		"scheduled_run.create": func() (cedar.Decision, error) {
+			return cedar.GateScheduledChatCreate(ctx, g, "sc", "user")
+		},
+		"scheduled_run.delete": func() (cedar.Decision, error) { return cedar.GateScheduledChatDelete(ctx, g, "sc") },
+		// createdBy="user" here — this table asserts the DEFAULT-ALLOW
+		// posture every site had before model-scheduled-jobs-01PMSJ01
+		// WP09. WP09 made created_by="model" fail-closed (ruling B-3),
+		// which is intentionally NOT what this table checks; that
+		// behaviour has its own tests in core/policy/cedar/scheduled_run_test.go.
+		"scheduled_run.execute": func() (cedar.Decision, error) {
+			return cedar.GateScheduledChatExecute(ctx, g, "sc", "user", false)
+		},
 	} {
 		d, err := call()
 		if err != nil || d.Outcome == cedar.Deny {

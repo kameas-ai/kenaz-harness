@@ -208,6 +208,27 @@ func TestAuditRetention_DeleteAfterWindow_AgainstPopulatedUpgradedDatabase(t *te
 			// empty session_id these synthetic rows use) — a normal
 			// side effect of appending, not of the sweep.
 			continue
+		case "scheduled_chat_runs":
+			// model-scheduled-jobs-01PMSJ01 WP09's sessions/0340 migration
+			// ADD COLUMNs created_by + tool_allowlist onto this table,
+			// which the v0.65.0 fixture predates — the real Open() path
+			// this test drives applies 0340 same as any other pending
+			// migration, changing the table's digest (not its row
+			// count) as a normal side effect of schema evolution, not of
+			// the retention sweep. Row count is still checked below
+			// (only Digest is skipped) so a real regression in this
+			// table would still be caught. Mirrors upgrade_path_test.go's
+			// expectedChangedTables entries for the same migration.
+			after, ok := postSnap[table]
+			if !ok {
+				t.Errorf("table %s present before sweep, missing after", table)
+				continue
+			}
+			if before.RowCount != after.RowCount {
+				t.Errorf("unrelated table %s row count changed: %d -> %d (retention sweep must not touch it)",
+					table, before.RowCount, after.RowCount)
+			}
+			continue
 		}
 		after, ok := postSnap[table]
 		if !ok {

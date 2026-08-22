@@ -28,6 +28,18 @@ type ChatRunEntry struct {
 	Enabled        bool   `json:"enabled"`
 	CreatedAt      string `json:"createdAt"` // ISO 8601
 	UpdatedAt      string `json:"updatedAt"` // ISO 8601
+	// CreatedBy is "user" or "model" (model-scheduled-jobs-01PMSJ01 WP09,
+	// FR-005). Read-only: there is no corresponding field on
+	// CreateInput/UpdateInput. Always "user" for every row created before
+	// this WP's migration (sessions/0340) — the column default backfills
+	// them, correctly, since Create was the only entry point that
+	// existed.
+	CreatedBy string `json:"createdBy"`
+	// ToolAllowlist is the tool-name allowlist declared at creation time.
+	// Empty means "no allowlist declared." Owner ruling B-3: a
+	// CreatedBy=="model" row with an empty ToolAllowlist must never
+	// execute (see core/policy/cedar's GateScheduledChatExecute).
+	ToolAllowlist []string `json:"toolAllowlist,omitempty"`
 }
 
 // RunSummary is one row in the History result.
@@ -43,6 +55,14 @@ type RunSummary struct {
 }
 
 // CreateInput is the wire shape for Create.
+//
+// Deliberately absent: a "createdBy" field. FR-005 requires the
+// provenance marker be "stamped server-side... never taken from caller
+// input" — the enforcement mechanism IS the absence of the field, not a
+// validated-and-ignored one. Create always stamps
+// scheduler.ScheduledRunCreatedByUser; CreateAsModel (below) always
+// stamps scheduler.ScheduledRunCreatedByModel. Neither reads a
+// caller-supplied value because neither has one to read.
 type CreateInput struct {
 	Name           string `json:"name"`
 	PromptTemplate string `json:"promptTemplate"`
@@ -51,18 +71,24 @@ type CreateInput struct {
 	Model          string `json:"model,omitempty"`
 	OutputSink     string `json:"outputSink,omitempty"`
 	Enabled        bool   `json:"enabled"`
+	// ToolAllowlist declares the tool-name allowlist enforced against
+	// this schedule's runs. Optional for a user-created schedule
+	// (unrestricted). REQUIRED (non-empty) for CreateAsModel — see that
+	// method's doc.
+	ToolAllowlist []string `json:"toolAllowlist,omitempty"`
 }
 
 // UpdateInput is the wire shape for Update. ID is required.
 type UpdateInput struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	PromptTemplate string `json:"promptTemplate"`
-	Cron           string `json:"cron"`
-	Timezone       string `json:"timezone,omitempty"`
-	Model          string `json:"model,omitempty"`
-	OutputSink     string `json:"outputSink,omitempty"`
-	Enabled        bool   `json:"enabled"`
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	PromptTemplate string   `json:"promptTemplate"`
+	Cron           string   `json:"cron"`
+	Timezone       string   `json:"timezone,omitempty"`
+	Model          string   `json:"model,omitempty"`
+	OutputSink     string   `json:"outputSink,omitempty"`
+	Enabled        bool     `json:"enabled"`
+	ToolAllowlist  []string `json:"toolAllowlist,omitempty"`
 }
 
 // Registrar is the cron-arming seam into a chat-run cron engine (mission
@@ -85,9 +111,30 @@ type Registrar interface {
 // A nil store is allowed — methods return ErrStoreUnavailable so the
 // frontend can render an empty state without crashing.
 type ScheduledChatAPI interface {
-	// Create persists a new scheduled chat run.
-	// Returns ErrStoreUnavailable when no store is wired.
+	// Create persists a new scheduled chat run, stamped
+	// created_by="user" server-side. Returns ErrStoreUnavailable when no
+	// store is wired.
 	Create(ctx context.Context, in CreateInput) (ChatRunEntry, error)
+
+	// CreateAsModel persists a new scheduled chat run stamped
+	// created_by="model" server-side (FR-005, mission
+	// model-scheduled-jobs-01PMSJ01 WP09/WP10). It requires
+	// in.ToolAllowlist to be non-empty and returns ErrInvalidInput
+	// otherwise — per owner ruling B-3 ("PERMIT ONLY WITHIN A TOOL
+	// ALLOWLIST"), a model-created schedule with no declared allowlist
+	// must never be creatable in a state that could later execute
+	// unrestricted; core/policy/cedar's GateScheduledChatExecute
+	// enforces the same rule again at fire time as defense in depth
+	// (a row's allowlist can be emptied by a later Update).
+	//
+	// NOT REACHABLE from any production wiring as of WP09. The model-
+	// facing entry point (harness_write_create_scheduled_run) is WP10,
+	// which is HARD-BLOCKED on harness-self-attach-01PMHS01 WP04+WP06
+	// per owner rulings B-2/B-3 (spec.md §9, §6.1). This method is the
+	// mechanism WP10 wires a tool handler onto; until then it exists,
+	// is tested, and has no caller outside this package's own tests —
+	// a dated, named gap, not a silent one. See docs/unwired-ledger.md.
+	CreateAsModel(ctx context.Context, in CreateInput) (ChatRunEntry, error)
 
 	// Update replaces all mutable fields of an existing scheduled chat run.
 	// Returns ErrNotFound when no run with in.ID exists.

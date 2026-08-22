@@ -2878,6 +2878,11 @@ func New(c *core.Core, opts ...Option) *API {
 		if chatStore != nil {
 			eng, err := schedulerPkg.NewChatCronEngine(context.Background(), schedulerPkg.ChatCronEngineConfig{
 				Store: chatStore,
+				// model-scheduled-jobs-01PMSJ01 WP09: before this field
+				// was wired, a cron-triggered fire never consulted Cedar
+				// at all (only the RunNow path did) — see
+				// ChatCronEngineConfig.Cedar's doc.
+				Cedar: a.cedarGate(),
 			})
 			if err != nil {
 				logging.L().Warn("scheduler.chat_cron.init_failed", "err", err.Error())

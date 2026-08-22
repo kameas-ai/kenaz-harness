@@ -64,8 +64,31 @@ func New(cfg Config) *API {
 	return &API{cfg: cfg}
 }
 
-// Create implements ScheduledChatAPI.
+// Create implements ScheduledChatAPI. created_by is always stamped
+// "user" — see createInternal.
 func (a *API) Create(ctx context.Context, in CreateInput) (ChatRunEntry, error) {
+	return a.createInternal(ctx, in, scheduler.ScheduledRunCreatedByUser)
+}
+
+// CreateAsModel implements ScheduledChatAPI. created_by is always
+// stamped "model"; a missing ToolAllowlist is refused (ErrInvalidInput)
+// per owner ruling B-3 — see the interface doc for the full rationale.
+func (a *API) CreateAsModel(ctx context.Context, in CreateInput) (ChatRunEntry, error) {
+	if len(in.ToolAllowlist) == 0 {
+		return ChatRunEntry{}, fmt.Errorf(
+			"%w: a model-created schedule requires a non-empty tool allowlist (owner ruling B-3)",
+			ErrInvalidInput)
+	}
+	return a.createInternal(ctx, in, scheduler.ScheduledRunCreatedByModel)
+}
+
+// createInternal is shared by Create and CreateAsModel. createdBy is
+// NEVER read from in — it is the literal the caller passed, which for
+// both exported entry points is a Go constant, not wire data. This is
+// the whole enforcement of FR-005's "stamped server-side... never
+// taken from caller input": in has no created_by field to smuggle a
+// value through in the first place.
+func (a *API) createInternal(ctx context.Context, in CreateInput, createdBy string) (ChatRunEntry, error) {
 	if in.Cron == "" {
 		return ChatRunEntry{}, fmt.Errorf("%w: cron is required", ErrInvalidInput)
 	}
@@ -75,8 +98,7 @@ func (a *API) Create(ctx context.Context, in CreateInput) (ChatRunEntry, error) 
 
 	id := newID()
 
-	// Cedar gate — default-allow; permissive posture.
-	if _, gerr := cedar.GateScheduledChatCreate(ctx, a.cfg.Cedar, id); gerr != nil {
+	if _, gerr := cedar.GateScheduledChatCreate(ctx, a.cfg.Cedar, id, createdBy); gerr != nil {
 		return ChatRunEntry{}, fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
 	}
 
@@ -96,6 +118,8 @@ func (a *API) Create(ctx context.Context, in CreateInput) (ChatRunEntry, error) 
 		Enabled:        in.Enabled,
 		CreatedAt:      now,
 		UpdatedAt:      now,
+		CreatedBy:      createdBy,
+		ToolAllowlist:  in.ToolAllowlist,
 	}
 	if err := a.cfg.Store.Create(ctx, rec); err != nil {
 		return ChatRunEntry{}, fmt.Errorf("scheduledchat: create: %w", err)
@@ -116,8 +140,15 @@ func (a *API) Update(ctx context.Context, in UpdateInput) (ChatRunEntry, error) 
 		return ChatRunEntry{}, ErrStoreUnavailable
 	}
 
-	// Cedar gate for update (same action as create — manages the run record).
-	if _, gerr := cedar.GateScheduledChatCreate(ctx, a.cfg.Cedar, in.ID); gerr != nil {
+	// Cedar gate for update (same action as create — manages the run
+	// record). Update is only reachable through this user-facing wire
+	// method today (there is no "UpdateAsModel"), so "user" is the
+	// correct createdBy for this evaluation regardless of the row's own
+	// provenance — the row's actual created_by is immutable post-create
+	// (see scheduler.SQLiteChatStore.Update's doc) and is not what is
+	// being evaluated here; this gate call is about who may edit, not
+	// who originally created.
+	if _, gerr := cedar.GateScheduledChatCreate(ctx, a.cfg.Cedar, in.ID, scheduler.ScheduledRunCreatedByUser); gerr != nil {
 		return ChatRunEntry{}, fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
 	}
 
@@ -136,6 +167,7 @@ func (a *API) Update(ctx context.Context, in UpdateInput) (ChatRunEntry, error) 
 		OutputSink:     sink,
 		Enabled:        in.Enabled,
 		UpdatedAt:      now,
+		ToolAllowlist:  in.ToolAllowlist,
 	}
 	if err := a.cfg.Store.Update(ctx, rec); err != nil {
 		if errors.Is(err, scheduler.ErrChatRunNotFound) {
@@ -217,8 +249,17 @@ func (a *API) RunNow(ctx context.Context, id string) (RunSummary, error) {
 		return RunSummary{}, fmt.Errorf("scheduledchat: run-now get: %w", err)
 	}
 
-	// Cedar gate for execute.
-	if _, gerr := cedar.GateScheduledChatExecute(ctx, a.cfg.Cedar, id); gerr != nil {
+	// Cedar gate for execute. createdBy/hasAllowlist come from the just-
+	// reloaded row, not from the caller — RunNow has no input besides
+	// id. For createdBy=="model" this is fail-closed (see
+	// cedar.GateScheduledChatExecute's doc): NotApplicable denies, not
+	// defaults open.
+	createdBy := rec.CreatedBy
+	if createdBy == "" {
+		createdBy = scheduler.ScheduledRunCreatedByUser
+	}
+	hasAllowlist := len(rec.ToolAllowlist) > 0
+	if _, gerr := cedar.GateScheduledChatExecute(ctx, a.cfg.Cedar, id, createdBy, hasAllowlist); gerr != nil {
 		return RunSummary{}, fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
 	}
 
@@ -253,7 +294,7 @@ func (a *API) RunNow(ctx context.Context, id string) (RunSummary, error) {
 	if perr := a.cfg.Store.AppendHistory(ctx, histRec); perr != nil {
 		slog.WarnContext(ctx, "scheduledchat: history write failed; run record not persisted",
 			"chat_run_id", id,
-			"error",       perr.Error(),
+			"error", perr.Error(),
 		)
 	}
 
@@ -315,6 +356,10 @@ func (a *API) syncEngine(ctx context.Context, id string) {
 // ── helpers ───────────────────────────────────────────────────────────────
 
 func chatRunEntryFromRecord(r scheduler.ChatRunRecord) ChatRunEntry {
+	createdBy := r.CreatedBy
+	if createdBy == "" {
+		createdBy = scheduler.ScheduledRunCreatedByUser
+	}
 	return ChatRunEntry{
 		ID:             r.ID,
 		Name:           r.Name,
@@ -326,6 +371,8 @@ func chatRunEntryFromRecord(r scheduler.ChatRunRecord) ChatRunEntry {
 		Enabled:        r.Enabled,
 		CreatedAt:      r.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 		UpdatedAt:      r.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		CreatedBy:      createdBy,
+		ToolAllowlist:  r.ToolAllowlist,
 	}
 }
 
