@@ -6772,6 +6772,7 @@ export namespace settings {
 	    cedarStrictCredentialMode?: boolean;
 	    cedarStrictWorkflowMode?: boolean;
 	    graphAuthoringEnabled?: boolean;
+	    harnessSelfMCPDisabled?: boolean;
 	    credentialAuditRetentionDays?: number;
 	    branchAdvisorEnabled?: boolean;
 	    branchAdvisorMinConfidence?: number;
@@ -6860,6 +6861,7 @@ export namespace settings {
 	        this.cedarStrictCredentialMode = source["cedarStrictCredentialMode"];
 	        this.cedarStrictWorkflowMode = source["cedarStrictWorkflowMode"];
 	        this.graphAuthoringEnabled = source["graphAuthoringEnabled"];
+	        this.harnessSelfMCPDisabled = source["harnessSelfMCPDisabled"];
 	        this.credentialAuditRetentionDays = source["credentialAuditRetentionDays"];
 	        this.branchAdvisorEnabled = source["branchAdvisorEnabled"];
 	        this.branchAdvisorMinConfidence = source["branchAdvisorMinConfidence"];
