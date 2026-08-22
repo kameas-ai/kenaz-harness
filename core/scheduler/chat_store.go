@@ -8,6 +8,7 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -17,6 +18,19 @@ import (
 // ErrChatRunNotFound is returned when a requested scheduled chat run
 // does not exist in the store.
 var ErrChatRunNotFound = errors.New("scheduler: scheduled chat run not found")
+
+// ScheduledRunCreatedByUser / ScheduledRunCreatedByModel are the two
+// legal values of ChatRunRecord.CreatedBy (model-scheduled-jobs-01PMSJ01
+// WP09, FR-005). Mirrors the shape of core/agentgraph.SpecProvenance —
+// a string provenance marker on the record, stamped server-side by the
+// creating code path (never taken from caller input) and branched on
+// downstream (here, by the Cedar context attribute both
+// core/policy/cedar.GateScheduledChatCreate and
+// .GateScheduledChatExecute inject).
+const (
+	ScheduledRunCreatedByUser  = "user"
+	ScheduledRunCreatedByModel = "model"
+)
 
 // ChatRunRecord is the DB-level projection of scheduled_chat_runs.
 type ChatRunRecord struct {
@@ -28,8 +42,53 @@ type ChatRunRecord struct {
 	Model          string
 	OutputSink     string
 	Enabled        bool
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	// CreatedBy is one of ScheduledRunCreatedByUser / ...Model. Stamped
+	// server-side at the creating call site
+	// (core/rpc/views/scheduledchat.API.Create / .CreateAsModel) — never
+	// settable through CreateInput/UpdateInput, and Update's SQL (below)
+	// deliberately omits this column so an edit cannot change it either.
+	CreatedBy string
+	// ToolAllowlist is the tool-name allowlist declared at creation time.
+	// nil/empty means "no allowlist declared". Owner ruling B-3
+	// (2026-08-19): a CreatedBy == ScheduledRunCreatedByModel row with an
+	// empty ToolAllowlist must never execute — see
+	// core/policy/cedar/hooks.go GateScheduledChatExecute and
+	// core/policy/cedar/policies/default_scheduled_run_policy.cedar.
+	ToolAllowlist []string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+// encodeToolAllowlist JSON-encodes a tool allowlist for storage. A nil
+// or empty slice encodes to "" (not "[]" or "null") so the empty state
+// is a single unambiguous string F1's Cedar context check
+// (has_tool_allowlist) and the create-time guard in
+// core/rpc/views/scheduledchat can test with a plain != "" comparison.
+func encodeToolAllowlist(list []string) string {
+	if len(list) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(list)
+	if err != nil {
+		// list is a []string; json.Marshal on a []string cannot fail.
+		return ""
+	}
+	return string(b)
+}
+
+// decodeToolAllowlist reverses encodeToolAllowlist. A malformed value
+// (should not occur outside hand-edited DBs) decodes to nil, which is
+// the fail-safe direction: an unparseable allowlist reads as "no
+// allowlist declared," not as "unrestricted."
+func decodeToolAllowlist(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil
+	}
+	return out
 }
 
 // ChatRunHistoryRecord is one row in scheduled_chat_run_history.
@@ -85,29 +144,41 @@ func NewSQLiteChatStore(db storage.DB) *SQLiteChatStore {
 func (s *SQLiteChatStore) Create(ctx context.Context, r ChatRunRecord) error {
 	const q = `
 		INSERT INTO scheduled_chat_runs
-			(id, name, prompt_template, cron, timezone, model, output_sink, enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			(id, name, prompt_template, cron, timezone, model, output_sink, enabled, created_at, updated_at, created_by, tool_allowlist)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	enabledInt := 0
 	if r.Enabled {
 		enabledInt = 1
+	}
+	createdBy := r.CreatedBy
+	if createdBy == "" {
+		createdBy = ScheduledRunCreatedByUser
 	}
 	return s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
 		_, err := tx.Exec(ctx, q,
 			r.ID, r.Name, r.PromptTemplate, r.Cron, r.Timezone,
 			r.Model, r.OutputSink, enabledInt,
 			r.CreatedAt.Unix(), r.UpdatedAt.Unix(),
+			createdBy, encodeToolAllowlist(r.ToolAllowlist),
 		)
 		return err
 	})
 }
 
 // Update implements ScheduledChatStore.
+//
+// created_by is deliberately absent from both the column list and the
+// bound args below — Update cannot change who created a row. This is
+// the enforcement half of "stamped server-side, never settable by the
+// caller" (FR-005): even if a future caller smuggled a CreatedBy value
+// into the ChatRunRecord passed here, this statement has no column to
+// write it into.
 func (s *SQLiteChatStore) Update(ctx context.Context, r ChatRunRecord) error {
 	const q = `
 		UPDATE scheduled_chat_runs
 		SET name = ?, prompt_template = ?, cron = ?, timezone = ?,
-		    model = ?, output_sink = ?, enabled = ?, updated_at = ?
+		    model = ?, output_sink = ?, enabled = ?, updated_at = ?, tool_allowlist = ?
 		WHERE id = ?
 	`
 	enabledInt := 0
@@ -118,6 +189,7 @@ func (s *SQLiteChatStore) Update(ctx context.Context, r ChatRunRecord) error {
 		res, err := tx.Exec(ctx, q,
 			r.Name, r.PromptTemplate, r.Cron, r.Timezone,
 			r.Model, r.OutputSink, enabledInt, r.UpdatedAt.Unix(),
+			encodeToolAllowlist(r.ToolAllowlist),
 			r.ID,
 		)
 		if err != nil {
@@ -146,7 +218,7 @@ func (s *SQLiteChatStore) Delete(ctx context.Context, id string) error {
 // Get implements ScheduledChatStore.
 func (s *SQLiteChatStore) Get(ctx context.Context, id string) (ChatRunRecord, error) {
 	const q = `
-		SELECT id, name, prompt_template, cron, timezone, model, output_sink, enabled, created_at, updated_at
+		SELECT id, name, prompt_template, cron, timezone, model, output_sink, enabled, created_at, updated_at, created_by, tool_allowlist
 		FROM scheduled_chat_runs
 		WHERE id = ?
 	`
@@ -157,7 +229,7 @@ func (s *SQLiteChatStore) Get(ctx context.Context, id string) (ChatRunRecord, er
 // List implements ScheduledChatStore.
 func (s *SQLiteChatStore) List(ctx context.Context) ([]ChatRunRecord, error) {
 	const q = `
-		SELECT id, name, prompt_template, cron, timezone, model, output_sink, enabled, created_at, updated_at
+		SELECT id, name, prompt_template, cron, timezone, model, output_sink, enabled, created_at, updated_at, created_by, tool_allowlist
 		FROM scheduled_chat_runs
 		ORDER BY created_at ASC
 	`
@@ -273,16 +345,19 @@ func scanChatRunRecord(row scanner) (ChatRunRecord, error) {
 	var r ChatRunRecord
 	var enabledInt int
 	var createdAtRaw, updatedAtRaw int64
+	var toolAllowlistRaw string
 	if err := row.Scan(
 		&r.ID, &r.Name, &r.PromptTemplate, &r.Cron, &r.Timezone,
 		&r.Model, &r.OutputSink, &enabledInt,
 		&createdAtRaw, &updatedAtRaw,
+		&r.CreatedBy, &toolAllowlistRaw,
 	); err != nil {
 		return ChatRunRecord{}, ErrChatRunNotFound
 	}
 	r.Enabled = enabledInt != 0
 	r.CreatedAt = time.Unix(createdAtRaw, 0).UTC()
 	r.UpdatedAt = time.Unix(updatedAtRaw, 0).UTC()
+	r.ToolAllowlist = decodeToolAllowlist(toolAllowlistRaw)
 	return r, nil
 }
 

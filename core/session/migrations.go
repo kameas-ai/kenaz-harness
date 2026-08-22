@@ -146,6 +146,11 @@ const sqlInitSchema = `
 // migrations_stream_checkpoints.go). 0337 is reserved for the same
 // mission's repair migration (WP05); 0338-0340 belong to
 // model-scheduled-jobs-01PMSJ01 — see docs/v0.65.0-merge-order.md §4.
+// 0340 adds created_by and tool_allowlist to scheduled_chat_runs so a
+// model-created schedule is distinguishable from a user-created one at
+// Cedar policy-evaluation time (model-scheduled-jobs-01PMSJ01 WP09 — see
+// migrations_scheduled_chat_runs_provenance.go). 0338/0339 are reserved
+// for this mission's WP06/WP08 and were not registered as of WP09.
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -214,6 +219,7 @@ func Migrations() []migrations.Migration {
 		migration0334(),
 		migration0335(),
 		migration0336(),
+		migration0340(),
 	}
 }
 

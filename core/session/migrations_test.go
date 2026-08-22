@@ -325,10 +325,10 @@ func (r *migLedgerRows) Err() error   { return nil }
 // migration 0301).
 type migEmptyRows struct{}
 
-func (migEmptyRows) Next() bool             { return false }
-func (migEmptyRows) Scan(_ ...any) error    { return errors.New("no rows") }
-func (migEmptyRows) Close() error           { return nil }
-func (migEmptyRows) Err() error             { return nil }
+func (migEmptyRows) Next() bool          { return false }
+func (migEmptyRows) Scan(_ ...any) error { return errors.New("no rows") }
+func (migEmptyRows) Close() error        { return nil }
+func (migEmptyRows) Err() error          { return nil }
 
 // migCountRows is a single-row iterator returning a count value. Used by
 // the fake to satisfy pragma_table_info COUNT(*) queries (migration 0311).
@@ -452,12 +452,15 @@ func TestMigrations_RegisterAndApply(t *testing.T) {
 	// 0333 transcript_moves (model-moves-transcript-01PMCH01 WP01) +
 	// 0334 move_fidelity (model-moves-transcript-01PMCH01 WP03) +
 	// 0335 search_fts_tool_rows (model-moves-transcript-01PMCH01 WP06) +
-	// 0336 stream_checkpoints (chat-turn-integrity-01PMZ606 WP02)) =
-	// 39 applied entries (2 chassis bootstrap + 37 sessions migrations).
-	if got := len(db.ledger); got != 39 {
-		t.Fatalf("ledger size = %d, want 39", got)
+	// 0336 stream_checkpoints (chat-turn-integrity-01PMZ606 WP02) +
+	// 0340 scheduled_chat_runs_created_by (model-scheduled-jobs-01PMSJ01
+	// WP09; 0337-0339 are reserved for sibling WPs and were not
+	// registered as of WP09)) =
+	// 40 applied entries (2 chassis bootstrap + 38 sessions migrations).
+	if got := len(db.ledger); got != 40 {
+		t.Fatalf("ledger size = %d, want 40", got)
 	}
-	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336}
+	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 340}
 
 	for i, want := range wantVersions {
 		if db.ledger[i].Version != want {

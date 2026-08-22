@@ -51,6 +51,17 @@ import (
 // the migration responsible. A table not listed here that WOULD change
 // shape (e.g. gains/loses a column) fails the test, which is exactly
 // the point: an undeclared shape change is a regression.
+// model-scheduled-jobs-01PMSJ01 WP09's sessions/0340 migration ADD
+// COLUMNs created_by + tool_allowlist onto scheduled_chat_runs, which
+// was created by migration 0325 (v0.10.0, long before any committed
+// snapshot) and has not changed shape since. 0340 is newer than every
+// migration reflected in every currently-committed snapshot, so EVERY
+// tag below sees this table's shape change on Open — this is not a
+// per-tag judgement call, it's the same fact repeated for each one.
+const scheduledChatRunsProvenanceNote = "sessions/0340-scheduled-chat-runs-created-by " +
+	"(model-scheduled-jobs-01PMSJ01 WP09) adds created_by + tool_allowlist " +
+	"to scheduled_chat_runs (created by 0325, unchanged since)."
+
 var expectedChangedTables = map[string][]string{
 	"v0.70.0": {
 		// NOT a migration writing rows — this one is the TEST's own
@@ -80,7 +91,13 @@ var expectedChangedTables = map[string][]string{
 		"session_messages",
 		// sessions/0334-move-fidelity-columns adds sessions.move_history_mode.
 		"sessions",
+		// See scheduledChatRunsProvenanceNote above.
+		"scheduled_chat_runs",
 	},
+	"v0.63.1": {"scheduled_chat_runs"}, // see scheduledChatRunsProvenanceNote
+	"v0.63.2": {"scheduled_chat_runs"}, // see scheduledChatRunsProvenanceNote
+	"v0.64.0": {"scheduled_chat_runs"}, // see scheduledChatRunsProvenanceNote
+	"v0.64.1": {"scheduled_chat_runs"}, // see scheduledChatRunsProvenanceNote
 	"v0.65.0": {
 		// event-log/0106-events-fts-sync (audit-that-tells-the-truth-
 		// 01PMZA10 UNIT-8) UPDATEs the single retention_config row,
@@ -91,6 +108,8 @@ var expectedChangedTables = map[string][]string{
 		// (core/event/log/retention_config_test.go) asserts the
 		// corrected value is actually readable afterwards.
 		"retention_config",
+		// See scheduledChatRunsProvenanceNote above.
+		"scheduled_chat_runs",
 	},
 	"v0.65.1": {
 		// Same migration, same reason as v0.65.0 above: v0.65.1 is a
@@ -104,7 +123,13 @@ var expectedChangedTables = map[string][]string{
 		// for it. Every release tag owes one, including the ones nobody
 		// set out to cut.
 		"retention_config",
+		// See scheduledChatRunsProvenanceNote above.
+		"scheduled_chat_runs",
 	},
+	"v0.66.0": {"scheduled_chat_runs"}, // see scheduledChatRunsProvenanceNote
+	"v0.67.0": {"scheduled_chat_runs"}, // see scheduledChatRunsProvenanceNote
+	"v0.68.0": {"scheduled_chat_runs"}, // see scheduledChatRunsProvenanceNote
+	"v0.69.0": {"scheduled_chat_runs"}, // see scheduledChatRunsProvenanceNote
 }
 
 // fixedProbeTime is used for the item-4 session INSERT probe so the

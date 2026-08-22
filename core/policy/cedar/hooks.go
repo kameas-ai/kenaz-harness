@@ -758,7 +758,19 @@ func GateGraphRun(ctx context.Context, g Gate, graphID, specProvenance, sessionK
 // create and update operations (mission scheduled-chat-runs-01KX5R8B, WP03).
 // Returns nil on Allow / NotApplicable; *PolicyDeniedError on Deny.
 // Default-allow when g is nil.
-func GateScheduledChatCreate(ctx context.Context, g Gate, id string) (Decision, error) {
+// createdBy is model-scheduled-jobs-01PMSJ01 WP09's provenance marker —
+// one of the scheduler.ScheduledRunCreatedByUser / ...Model constants
+// (this package cannot import core/scheduler, which imports
+// core/session; the string is duplicated by contract, not by value —
+// see that package's doc comment). It is injected as the Cedar context
+// attribute "created_by" so a policy can distinguish a model-authored
+// schedule from a user-authored one. This helper does NOT fail closed
+// on NotApplicable — ordinary default-allow governs Create/Update for
+// both provenances; the fail-closed treatment owner ruling B-3
+// requires is specific to ActionScheduledRunExecute (see
+// GateScheduledChatExecute below) because create-time has no
+// unattended-execution consequence by itself.
+func GateScheduledChatCreate(ctx context.Context, g Gate, id, createdBy string) (Decision, error) {
 	if g == nil {
 		return Decision{
 			Outcome:  Allow,
@@ -767,7 +779,10 @@ func GateScheduledChatCreate(ctx context.Context, g Gate, id string) (Decision, 
 			Reason:   "no engine wired (default-allow)",
 		}, nil
 	}
-	d := g.Evaluate(ctx, UserUID(), ActionScheduledRunCreate, ScheduledChatRunUID(id), nil)
+	d := g.Evaluate(ctx, UserUID(), ActionScheduledRunCreate, ScheduledChatRunUID(id),
+		map[cedar.String]cedar.Value{
+			cedar.String("created_by"): cedar.String(createdBy),
+		})
 	return d, enforce(d)
 }
 
@@ -791,8 +806,50 @@ func GateScheduledChatDelete(ctx context.Context, g Gate, id string) (Decision, 
 // dispatch (both cron-triggered and RunNow paths). Returns nil on
 // Allow / NotApplicable; *PolicyDeniedError on Deny. Default-allow when
 // g is nil.
-func GateScheduledChatExecute(ctx context.Context, g Gate, id string) (Decision, error) {
+// createdBy is the row's provenance (scheduler.ScheduledRunCreatedByUser
+// / ...Model — see GateScheduledChatCreate's doc for why the string is
+// duplicated rather than imported). hasToolAllowlist reports whether
+// the row currently carries a non-empty tool_allowlist
+// (model-scheduled-jobs-01PMSJ01 WP09 migration 0340).
+//
+// UNLIKE every other gate-hook helper in this file, this one does NOT
+// delegate to the shared enforce() when createdBy is the model
+// provenance. enforce() maps NotApplicable to nil — "default-allow" —
+// which is exactly the trap owner ruling B-3
+// (docs/escalation-register-2026-08-19.md:1314, "PERMIT ONLY WITHIN A
+// TOOL ALLOWLIST") forbids here: ruling B-3 removes the human review
+// moment for a model-created schedule, so per-run tool containment
+// becomes the ONLY boundary between a model-chosen prompt running
+// unattended and the full tool catalogue (spec.md §6.1). If no shipped
+// or operator .cedar file mentions tool.scheduled_run.execute at all,
+// Evaluate returns NotApplicable — and for createdBy=="model" that MUST
+// deny, not default-allow, or the gate "looks like it works" while
+// gating nothing (the exact shape CLAUDE.md's unwired-sweep doctrine
+// names, and the same enforce()-treats-NotApplicable-as-allow trap the
+// campaign has found four times before this one). For
+// createdBy=="user" (or empty, pre-migration legacy rows) the ordinary
+// default-allow posture is completely unchanged: enforce() governs
+// exactly as it did before this WP.
+//
+// The policy half that makes createdBy=="model" ever reach Allow lives
+// in policies/default_scheduled_run_policy.cedar — permit only when
+// hasToolAllowlist is also true. Removing that file does not weaken
+// this fail-closed wrapper; it removes the only rule that can produce
+// Allow, so every model-created run refuses (spec.md AC-011b, the
+// "absence of a rule" proof).
+func GateScheduledChatExecute(ctx context.Context, g Gate, id, createdBy string, hasToolAllowlist bool) (Decision, error) {
+	failClosed := createdBy == "model"
+
 	if g == nil {
+		if failClosed {
+			d := Decision{
+				Outcome:  Deny,
+				Action:   ActionScheduledRunExecute,
+				Resource: ScheduledChatRunUID(id).String(),
+				Reason:   "fail-closed: no cedar engine wired and created_by=model (ruling B-3)",
+			}
+			return d, &PolicyDeniedError{Decision: d}
+		}
 		return Decision{
 			Outcome:  Allow,
 			Action:   ActionScheduledRunExecute,
@@ -800,8 +857,22 @@ func GateScheduledChatExecute(ctx context.Context, g Gate, id string) (Decision,
 			Reason:   "no engine wired (default-allow)",
 		}, nil
 	}
-	d := g.Evaluate(ctx, UserUID(), ActionScheduledRunExecute, ScheduledChatRunUID(id), nil)
-	return d, enforce(d)
+
+	d := g.Evaluate(ctx, UserUID(), ActionScheduledRunExecute, ScheduledChatRunUID(id),
+		map[cedar.String]cedar.Value{
+			cedar.String("created_by"):         cedar.String(createdBy),
+			cedar.String("has_tool_allowlist"): cedar.Boolean(hasToolAllowlist),
+		})
+
+	if !failClosed {
+		return d, enforce(d)
+	}
+	// Fail-closed: only an explicit Allow (matched permit rule) lets a
+	// model-created run execute. Deny AND NotApplicable both refuse.
+	if d.Outcome == Allow {
+		return d, nil
+	}
+	return d, &PolicyDeniedError{Decision: d}
 }
 
 // CheckExportSession is the gate-hook helper for the Sessions_Export RPC
