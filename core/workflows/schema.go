@@ -24,8 +24,20 @@ var validInputKinds = map[InputKind]bool{
 	InputKindProjectRef:  true,
 }
 
-// Validate runs every load-time invariant on a Workflow. Returns the
-// first error encountered. Validate does NOT mutate the Workflow.
+// Validate runs every load-time invariant on a Workflow EXCEPT the
+// rerun_policy dial, which is context-dependent — see ValidateForSave
+// and ValidateForLoad below (UNIT-13, automation-actually-runs-01PMZ404,
+// owner ruling A-10). Returns the first error encountered. Validate
+// does NOT mutate the Workflow.
+//
+// Validate is also called directly (not through a ValidateForX
+// variant) by Engine.Run and InlineRun: by the time a Workflow reaches
+// the engine it has already been through Store.Load, which is where
+// rerun_policy tolerance lives (see Store.Load's doc). Re-running the
+// strict save-time rerun_policy gate at run time would make an
+// already-loaded, already-tolerated workflow fail to RUN instead of
+// just quietly ignoring the dial — a worse regression than the one
+// this unit fixes.
 func Validate(w Workflow) error {
 	if !isKebab(w.ID) {
 		return fmt.Errorf("%w: id %q", ErrInvalidID, w.ID)
@@ -38,15 +50,6 @@ func Validate(w Workflow) error {
 	}
 	if len(w.Steps) == 0 {
 		return fmt.Errorf("workflows: at least one step required")
-	}
-	switch w.RerunPolicy {
-	case "", "fresh", "continue", "ask",
-		// WP08 canonical aliases — kept alongside the WP01 vocabulary
-		// so existing fixtures keep parsing while new authors can use
-		// the names that match the rerun resolver behaviour.
-		"always", "skip", "prompt":
-	default:
-		return fmt.Errorf("workflows: invalid rerun_policy %q", w.RerunPolicy)
 	}
 
 	// inline_run gating.
@@ -170,6 +173,52 @@ func Validate(w Workflow) error {
 	}
 
 	return nil
+}
+
+// ValidateForSave runs Validate plus the strict, authoring-time
+// rerun_policy gate (UNIT-13, owner ruling A-10): a non-empty
+// rerun_policy is refused outright.
+//
+// Why "narrow to empty" rather than "narrow to a smaller accepted
+// set": Engine.Cache has no production assignment anywhere in the
+// tree (core/workflows/runtime.go), so all six historically-accepted
+// values ("", "fresh", "continue", "ask", "always", "skip", "prompt")
+// already behave identically — a stored policy never takes effect.
+// Accepting some of them on save would keep advertising a dial that
+// does nothing; A-10 says stop.
+//
+// Call this wherever a user is authoring or importing a NEW workflow
+// document: the save RPC (via Store.Save) and ImportYAML's fresh-id
+// recheck. Do NOT call this on a path that reads an already-stored
+// workflow back — see ValidateForLoad and Store.Load's doc for why
+// that split matters (X-11: narrowing the load path the same way
+// makes an already-saved workflow vanish on next open).
+func ValidateForSave(w Workflow) error {
+	if err := Validate(w); err != nil {
+		return err
+	}
+	if w.RerunPolicy != "" {
+		return fmt.Errorf("workflows: rerun_policy %q is not supported: run caching is not implemented, so no rerun_policy value takes effect", w.RerunPolicy)
+	}
+	return nil
+}
+
+// ValidateForLoad runs every invariant Validate runs and, unlike
+// ValidateForSave, applies NO check to rerun_policy at all — any
+// stored value, including one this build's ValidateForSave would now
+// refuse to save, is tolerated. This is deliberately identical to
+// calling Validate directly; it exists as an explicit name so call
+// sites that are reading a persisted workflow back say so, rather
+// than leaving readers to guess whether the bare Validate call was a
+// considered choice or an oversight (UNIT-13, A-10, X-11).
+//
+// Call this — or the underlying Store.Load, which already does —
+// wherever a workflow is being read back rather than freshly
+// authored. Actual dropping of a stale rerun_policy value happens in
+// Store.Load, not here: ValidateForLoad only promises the document
+// will not be rejected because of it.
+func ValidateForLoad(w Workflow) error {
+	return Validate(w)
 }
 
 // validateRefsDAG is like validateRefs but relaxed for DAG workflows:

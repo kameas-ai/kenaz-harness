@@ -157,6 +157,14 @@ const FileSizeCap = 256 * 1024
 
 // LoadYAML parses a single YAML payload into a Workflow and runs the
 // load-time validator.
+//
+// LoadYAML uses ValidateForLoad, not ValidateForSave (UNIT-13, A-10):
+// it is the parse step shared by Store.Load (an already-persisted
+// workflow, which must keep loading even if a since-narrowed field
+// like rerun_policy is set — see storage.go's Load and X-11) and by
+// LoadBuiltins (trusted embedded content). Callers that ARE authoring
+// a new workflow — ImportYAML's fresh-id recheck, Store.Save — apply
+// ValidateForSave themselves on top of this parse.
 func LoadYAML(data []byte) (Workflow, error) {
 	if len(data) > FileSizeCap {
 		return Workflow{}, fmt.Errorf("%w: %d bytes", ErrFileTooLarge, len(data))
@@ -165,7 +173,7 @@ func LoadYAML(data []byte) (Workflow, error) {
 	if err := yaml.Unmarshal(data, &w); err != nil {
 		return Workflow{}, fmt.Errorf("workflows: yaml unmarshal: %w", err)
 	}
-	if err := Validate(w); err != nil {
+	if err := ValidateForLoad(w); err != nil {
 		return Workflow{}, err
 	}
 	return w, nil

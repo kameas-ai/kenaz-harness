@@ -31,6 +31,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,6 +40,7 @@ import (
 	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
 	"github.com/kameas-ai/kenaz-harness/core/storage/sqlite/upgradesnap"
 	coretasks "github.com/kameas-ai/kenaz-harness/core/tasks"
+	corewf "github.com/kameas-ai/kenaz-harness/core/workflows"
 
 	_ "modernc.org/sqlite"
 )
@@ -261,6 +263,15 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	// install's high-water mark" case, same shape as event-log above. ----
 	assertTasksTableMigrated(t, ctx, db)
 
+	// ---- automation-actually-runs-01PMZ404 UNIT-13 (owner ruling
+	// A-10): rerun_policy is refused on save but tolerated on load. A
+	// row this tag's own release could have written via the old,
+	// lenient validator (rerun_policy: skip) must still Load and still
+	// appear in List on THIS build, which narrows the same field to
+	// save-only rejection — the read-compat hazard the mission's PI
+	// table flags for yaml_source (X-11). ----
+	assertRerunPolicyToleratedOnLoad(t, ctx, db, tag)
+
 	// ---- item 6: no seeded row disappeared, except declared changes.
 	// "sessions" always gained exactly the one row from the item-4
 	// probe insert above, on every tag — that is expected regardless
@@ -275,7 +286,17 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	if err := postRaw.Close(); err != nil {
 		t.Fatalf("close raw after post-Open snapshot: %v", err)
 	}
-	changed := map[string]bool{"harness_migrations": true, "sessions": true}
+	// "workflows" gained exactly two rows from
+	// assertRerunPolicyToleratedOnLoad above (the direct-SQL legacy
+	// probe row plus the one successful Save of a fresh, empty-policy
+	// workflow — the rejected non-empty-policy Save writes nothing),
+	// and "workflow_versions" gained one row (Save's version-history
+	// append for that same successful save; the direct-SQL legacy
+	// insert bypasses Store.Save entirely, so it does not touch
+	// workflow_versions), unconditionally on every tag for the same
+	// reason "sessions" is: this test itself is the writer, not a
+	// migration.
+	changed := map[string]bool{"harness_migrations": true, "sessions": true, "workflows": true, "workflow_versions": true}
 	for _, tbl := range expectedChangedTables[tag] {
 		changed[tbl] = true
 	}
@@ -300,6 +321,13 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 		if after.RowCount != before.RowCount+1 {
 			t.Errorf("sessions row count = %d after Open+probe-insert, want exactly %d (before + the one item-4 probe row)",
 				after.RowCount, before.RowCount+1)
+		}
+	}
+	if before, ok := preOpen["workflows"]; ok {
+		after := postOpen["workflows"]
+		if after.RowCount != before.RowCount+2 {
+			t.Errorf("workflows row count = %d after Open+UNIT-13 probes, want exactly %d (before + legacy-load row + fresh-valid-save row)",
+				after.RowCount, before.RowCount+2)
 		}
 	}
 
@@ -516,6 +544,130 @@ func assertTasksTableMigrated(t *testing.T, ctx context.Context, db storage.DB) 
 	}
 	if n != 1 {
 		t.Errorf("tasks row for %s after insert = %d, want 1", probe.ID, n)
+	}
+}
+
+// assertRerunPolicyToleratedOnLoad is automation-actually-runs-01PMZ404
+// UNIT-13's persistence-integrity assertion (owner ruling A-10).
+//
+// core/workflows/schema.go's ValidateForSave now refuses a non-empty
+// rerun_policy outright — none of the six historically-accepted values
+// ("fresh", "continue", "ask", "always", "skip", "prompt") ever did
+// anything, because Engine.Cache has no production assignment. But a
+// row THIS SNAPSHOT'S OWN RELEASE could have written under the old,
+// lenient validator may still carry one of those values on disk, and
+// core/workflows/storage.go's sqliteStore.Load re-validates the stored
+// yaml_source on every single read (LoadYAML -> ValidateForLoad). If
+// the load path used the same strict gate as save, that row would
+// fail to parse and the workflow would vanish from the user's list —
+// the X-11 hazard the mission's own spec calls out as "a worse lie
+// than the dial it replaces."
+//
+// The legacy row below is inserted directly via SQL rather than
+// through workflows.Store.Save, because Save now rejects exactly this
+// value — that rejection is this same function's other half, asserted
+// against a SEPARATE, freshly-constructed workflow so the two
+// assertions don't entangle with each other's yaml_source caching (a
+// workflow already Loaded — and therefore already scrubbed by
+// storage.go's Load — carries its OLD raw text in its yaml_source
+// cache even after RerunPolicy is cleared in memory; reusing that
+// same struct for the save-side assertion would test the cache's
+// no-op-on-equal-hash path instead of ValidateForSave).
+func assertRerunPolicyToleratedOnLoad(t *testing.T, ctx context.Context, db storage.DB, tag string) {
+	t.Helper()
+	store := corewf.NewSQLiteStore(db)
+
+	// isKebab (core/workflows/refs.go) rejects '.', so a tag like
+	// "v0.69.0" cannot appear verbatim in a workflow id.
+	tagSlug := strings.ReplaceAll(tag, ".", "-")
+
+	// ---- Load side: a value this snapshot's release could have
+	// written must still load, and must come back cleared. ----
+	legacyID := "upgrade-path-rerun-policy-legacy-" + tagSlug
+	legacyYAML := "id: " + legacyID + "\n" +
+		"name: \"UNIT-13 legacy rerun_policy probe (" + tag + ")\"\n" +
+		"version: 1\n" +
+		"rerun_policy: skip\n" +
+		"steps:\n" +
+		"  - name: a\n" +
+		"    kind: model_turn\n" +
+		"    user_prompt: probe\n"
+	now := fixedProbeTime.UnixNano()
+	if err := db.WriteTx(ctx, func(tx storage.WriteTx) error {
+		_, err := tx.Exec(ctx,
+			`INSERT INTO workflows (id, name, description, yaml_source, version, hash, created_at, updated_at)
+			 VALUES (?, ?, '', ?, 1, 'upgrade-path-unit13-probe-hash', ?, ?)`,
+			legacyID, "UNIT-13 legacy rerun_policy probe", legacyYAML, now, now,
+		)
+		return err
+	}); err != nil {
+		t.Fatalf("insert legacy rerun_policy=skip workflow row directly (simulating what a previous release's Store.Save would have written): %v", err)
+	}
+
+	loaded, err := store.Load(ctx, legacyID)
+	if err != nil {
+		t.Fatalf("Load on a %s-snapshot-shaped workflow row with a legacy rerun_policy=skip failed — this is exactly the vanish-on-open regression X-11 warns about: %v", tag, err)
+	}
+	if loaded.RerunPolicy != "" {
+		t.Errorf("Load(%s).RerunPolicy = %q, want \"\" — storage.go's Load must drop a stale value, not merely tolerate it", legacyID, loaded.RerunPolicy)
+	}
+	summaries, err := store.List(ctx)
+	if err != nil {
+		t.Fatalf("List after inserting a legacy-rerun_policy row: %v", err)
+	}
+	found := false
+	for _, s := range summaries {
+		if s.ID == legacyID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("List does not include %q — a stored workflow with a legacy rerun_policy vanished after upgrade (X-11)", legacyID)
+	}
+
+	// ---- Save side: a NEW, freshly-authored workflow with a
+	// non-empty rerun_policy is refused outright, and the error names
+	// the field. ----
+	badID := "upgrade-path-rerun-policy-bad-" + tagSlug
+	bad := corewf.Workflow{
+		ID:          badID,
+		Name:        "UNIT-13 save-rejection probe",
+		Version:     1,
+		RerunPolicy: "skip",
+		Steps: []corewf.Step{
+			{Name: "a", Kind: corewf.StepKindModelTurn, UserPrompt: "probe"},
+		},
+	}
+	if _, err := store.Save(ctx, bad); err == nil {
+		t.Errorf("Save(%s) with rerun_policy=%q succeeded, want refusal (UNIT-13 save-side narrowing, A-10)", badID, bad.RerunPolicy)
+	} else if !strings.Contains(err.Error(), "rerun_policy") {
+		t.Errorf("Save(%s) rejection error = %q, want it to name rerun_policy", badID, err.Error())
+	}
+	if _, lerr := store.Load(ctx, badID); lerr == nil {
+		t.Errorf("Load(%s) succeeded after its Save was refused — a rejected save must not have persisted a row", badID)
+	}
+
+	// ---- Round trip: a fresh, valid (empty) rerun_policy saves and
+	// loads back unchanged. ----
+	goodID := "upgrade-path-rerun-policy-good-" + tagSlug
+	good := corewf.Workflow{
+		ID:      goodID,
+		Name:    "UNIT-13 round-trip probe",
+		Version: 1,
+		Steps: []corewf.Step{
+			{Name: "a", Kind: corewf.StepKindModelTurn, UserPrompt: "probe"},
+		},
+	}
+	if _, err := store.Save(ctx, good); err != nil {
+		t.Fatalf("Save(%s) with empty rerun_policy failed: %v", goodID, err)
+	}
+	reloaded, err := store.Load(ctx, goodID)
+	if err != nil {
+		t.Fatalf("Load(%s) after a clean save failed: %v", goodID, err)
+	}
+	if reloaded.RerunPolicy != "" {
+		t.Errorf("Load(%s).RerunPolicy = %q after a round trip of the empty value, want \"\"", goodID, reloaded.RerunPolicy)
 	}
 }
 

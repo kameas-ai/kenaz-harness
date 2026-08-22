@@ -309,6 +309,41 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-08-22 · `RunOptions.SkipCache` has zero frontend writers (UNIT-13, `automation-actually-runs-01PMZ404`)
+
+`RunOptions.SkipCache bool` (`core/rpc/views/workflows/api.go:139`, wire tag
+`json:"skipCache,omitempty"`), read at `core/rpc/views/workflows/impl.go:400`
+into `corewf.RunOptions{SkipCache: req.SkipCache}`, has no non-test writer
+anywhere under `frontend/src` — nothing on the run form or elsewhere sets it.
+It is a no-op today for the same reason `rerun_policy` was: `Engine.Cache`
+(`core/workflows/runtime.go`) has no production assignment, so the branch it
+guards (`runtime.go:166` `if e.Cache != nil && wf.RerunPolicy != "" &&
+!opts.SkipCache`) can never be reached in production regardless of what
+`SkipCache` is set to.
+
+UNIT-13 (owner ruling A-10) narrowed `rerun_policy` itself — `Store.Save` now
+refuses a non-empty value outright (`core/workflows/schema.go`
+`ValidateForSave`), and `Store.Load` tolerates a legacy stored value but
+scrubs it to `""` before the workflow ever reaches `Engine.Run`
+(`core/workflows/storage.go`, `sqliteStore.Load`) — so as of this unit
+`wf.RerunPolicy != ""` can no longer be true for anything that came through
+the Store, and the whole cache-consult branch `SkipCache` was built to bypass
+is now doubly unreachable in production. A-10 is explicit that this is
+intentional and not a delete-lane action: `Engine.Cache` and
+`runtime.go:157`'s branch **stay** as the seam for if/when run caching ships;
+narrowing `rerun_policy` and leaving `SkipCache` inert is what stops the
+product lying about the dial without tearing out the seam a future mission
+would rebuild on. See `kitty-specs/automation-actually-runs-01PMZ404/spec.md`
+§5.13 / §1.11 X-11 and `core/storage/sqlite/upgrade_path_test.go`'s
+`assertRerunPolicyToleratedOnLoad` for the load-side read-compat proof.
+
+`justify(blocker: "Engine.Cache has no production assignment", owner: alec,
+date: 2026-08-19)` — the date matches the owner ruling (A-10,
+`docs/escalation-register-2026-08-19.md`) that decided to preserve the seam
+rather than delete it; this entry was written 2026-08-22 when UNIT-13 shipped
+and is the first record of `SkipCache` specifically (the field itself
+predates this mission).
+
 ### 2026-08-19 · `settings.Settings.SchemaVersion` gates no migration (`SD-13` settings)
 
 `controls-and-readouts-that-tell-the-truth-01PMZ808` WP06 (FR-007). Three
