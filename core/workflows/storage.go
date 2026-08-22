@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -88,10 +89,12 @@ type sqliteStore struct {
 //     with the new yaml_source/hash/updated_at, and appends a new
 //     workflow_versions row at the new version.
 //
-// Validation: the supplied workflow must pass Validate. If
-// w.YAMLSource is empty, Save canonicalises via MarshalYAML.
+// Validation: the supplied workflow must pass ValidateForSave — the
+// authoring-time gate, which (UNIT-13, A-10) refuses a non-empty
+// rerun_policy outright. If w.YAMLSource is empty, Save canonicalises
+// via MarshalYAML.
 func (s *sqliteStore) Save(ctx context.Context, w Workflow) (Workflow, error) {
-	if err := Validate(w); err != nil {
+	if err := ValidateForSave(w); err != nil {
 		return Workflow{}, err
 	}
 	if w.ID == "" {
@@ -210,6 +213,18 @@ func (s *sqliteStore) Save(ctx context.Context, w Workflow) (Workflow, error) {
 }
 
 // Load implements Store.Load.
+//
+// rerun_policy tolerance (UNIT-13, A-10, X-11): the stored yaml_source
+// is parsed via LoadYAML, which validates with ValidateForLoad — the
+// lenient counterpart to Save's ValidateForSave — precisely so a row
+// written before this build narrowed the field (or hand-edited to
+// carry a value ValidateForSave would now refuse) still loads. A
+// non-empty rerun_policy surviving that parse is then dropped here
+// (never persisted back — this is an in-memory clear on the returned
+// value only) and logged at warn level. The load itself never fails
+// because of it; failing here would turn a narrowing meant to stop a
+// dishonest dial into a worse dishonesty — a workflow that silently
+// disappears from the user's list on next open.
 func (s *sqliteStore) Load(ctx context.Context, id string) (Workflow, error) {
 	if id == "" {
 		return Workflow{}, fmt.Errorf("%w: empty", ErrInvalidID)
@@ -234,6 +249,11 @@ func (s *sqliteStore) Load(ctx context.Context, id string) (Workflow, error) {
 	w, err := LoadYAML([]byte(yaml))
 	if err != nil {
 		return Workflow{}, fmt.Errorf("workflows: parse stored yaml: %w", err)
+	}
+	if w.RerunPolicy != "" {
+		slog.Default().Warn("workflows: dropping stored rerun_policy on load — run caching is not implemented",
+			"workflow_id", id, "rerun_policy", w.RerunPolicy)
+		w.RerunPolicy = ""
 	}
 	w.Version = version
 	w.yamlSource = yaml
@@ -365,16 +385,28 @@ func ExportYAML(w Workflow) ([]byte, error) {
 // The fresh-id behaviour is the safety net for the share/import flow:
 // importing the same YAML twice produces two distinct workflow rows
 // rather than overwriting the operator's existing copy.
+//
+// rerun_policy (UNIT-13, A-10): the initial LoadYAML parse below is
+// lenient (ValidateForLoad), so a legacy or hand-authored non-empty
+// rerun_policy does not fail the parse. The id-rewrite recheck a few
+// lines down uses ValidateForSave, which DOES refuse it — ImportYAML
+// is a save-adjacent path (its output is "ready to hand to
+// Store.Save"), so the strict gate applies here rather than being
+// deferred to Store.Save alone.
 func ImportYAML(b []byte) (Workflow, error) {
 	w, err := LoadYAML(b)
 	if err != nil {
 		return Workflow{}, err
 	}
 	w.ID = freshWorkflowID()
-	// Re-validate to confirm the rewritten id still satisfies isKebab.
-	// freshWorkflowID is deterministic kebab-case so this is a defensive
-	// check rather than a runtime risk.
-	if err := Validate(w); err != nil {
+	// Re-validate with the strict, save-adjacent gate. This both
+	// confirms the rewritten id still satisfies isKebab (the original
+	// reason for this recheck — freshWorkflowID is deterministic
+	// kebab-case, so that half is a defensive check rather than a
+	// runtime risk) and refuses a non-empty rerun_policy (UNIT-13):
+	// the initial LoadYAML parse above was lenient, so this is the
+	// only point in ImportYAML that applies ValidateForSave.
+	if err := ValidateForSave(w); err != nil {
 		return Workflow{}, err
 	}
 	// Cache the original source so a follow-on ExportYAML returns

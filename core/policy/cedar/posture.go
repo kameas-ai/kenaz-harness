@@ -50,8 +50,14 @@ var PlanModeDeniedFamilies = []string{
 //	ActionWorkflowSave       — workflow.save
 //	ActionWorkflowDelete     — workflow.delete
 //	ActionArtifactUpdate     — artifact update (write variant)
-//	ActionScheduledRunCreate — scheduled run creation/update
-//	ActionScheduledRunDelete — scheduled run deletion
+//	ActionScheduledRunCreate  — scheduled run creation/update
+//	ActionScheduledRunDelete  — scheduled run deletion
+//	ActionScheduledRunExecute — scheduled run execution (added WP09,
+//	                            model-scheduled-jobs-01PMSJ01, ruling
+//	                            B-3: "plan mode should not fire
+//	                            schedules" — closes the gap where Create
+//	                            and Delete were denied in plan_mode but
+//	                            Execute was not).
 //
 // Read-class / passive actions (NOT in this list):
 //
@@ -74,6 +80,7 @@ var PlanModeDeniedActions = []string{
 	ActionArtifactUpdate,
 	ActionScheduledRunCreate,
 	ActionScheduledRunDelete,
+	ActionScheduledRunExecute,
 }
 
 // postureModeGate wraps a real Gate and intercepts Evaluate calls when

@@ -173,7 +173,7 @@ func TestNewGraphManagerWithDeps_ThreadsSettingsIntoPipelineResolver(t *testing.
 		t.Fatalf("SaveAll: %v", err)
 	}
 
-	_, pipeline := newGraphManagerWithDeps(nil, nil, nil, nil, nil, nil, api, nil, nil, nil)
+	_, pipeline, _ := newGraphManagerWithDeps(nil, nil, nil, nil, nil, nil, api, nil, nil, nil)
 	if pipeline == nil {
 		t.Fatal("newGraphManagerWithDeps returned nil pipeline")
 	}
@@ -225,7 +225,7 @@ func TestCompactionGlobalSeed_TracksRuntimeDialChange(t *testing.T) {
 		t.Fatalf("SaveAll: %v", err)
 	}
 
-	_, pipeline := newGraphManagerWithDeps(nil, nil, nil, nil, nil, nil, api, nil, nil, nil)
+	_, pipeline, _ := newGraphManagerWithDeps(nil, nil, nil, nil, nil, nil, api, nil, nil, nil)
 	resolver := pipeline.Resolver()
 
 	// Boot state: balanced, so the automatic pre-call site is live.

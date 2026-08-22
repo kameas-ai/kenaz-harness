@@ -160,7 +160,7 @@ func TestEmitRun_ToolKindRecordsTool(t *testing.T) {
 		Scope:            "global",
 		Kind:             "tool",
 		Description:      "Deploy",
-		Tool:             "bash",
+		Tool:             "kenaz__bash",
 		ToolArgsTemplate: "./deploy.sh",
 	}); err != nil {
 		t.Fatalf("SaveUser: %v", err)
@@ -176,11 +176,66 @@ func TestEmitRun_ToolKindRecordsTool(t *testing.T) {
 	if err := json.Unmarshal(em.events[0].Payload, &payload); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if payload.DispatchedTool != "bash" {
-		t.Errorf("DispatchedTool = %q, want %q", payload.DispatchedTool, "bash")
+	if payload.DispatchedTool != "kenaz__bash" {
+		t.Errorf("DispatchedTool = %q, want %q", payload.DispatchedTool, "kenaz__bash")
 	}
 	if payload.Kind != "tool" {
 		t.Errorf("Kind = %q, want %q", payload.Kind, "tool")
+	}
+}
+
+// TestEmitRun_RunModelInvoked_RecordsRejection is the audit half of
+// AC-14 (trust-surfaces-that-fire-01PMZ202 WP20): a model attempt against
+// a model_invokable=false command must be visible in the audit log, not
+// merely refused. Without this, the only trace of a disallowed attempt
+// is a transient error string the caller may or may not surface.
+func TestEmitRun_RunModelInvoked_RecordsRejection(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	db, dir := openAuditTestDB(t)
+	store := coreslashcmd.NewStore(db, dir)
+	em := &fakeAuditEmitter{}
+	dispatch := coreslashcmd.NewDispatch(store, nil).WithAuditEmitter(em)
+
+	if err := store.SaveUser(ctx, coreslashcmd.UserCommand{
+		Name:        "restricted",
+		Scope:       "global",
+		Kind:        "text",
+		Description: "Not model-invokable",
+		Body:        "restricted body",
+		// ModelInvokable left false.
+	}); err != nil {
+		t.Fatalf("SaveUser: %v", err)
+	}
+
+	_, err := dispatch.RunModelInvoked(ctx, "restricted", nil, coreslashcmd.SessionContext{
+		SessionID: "s5",
+	})
+	if err == nil {
+		t.Fatal("expected RunModelInvoked to refuse a model_invokable=false command")
+	}
+
+	if len(em.events) != 1 {
+		t.Fatalf("expected 1 audit event for the rejected attempt, got %d", len(em.events))
+	}
+
+	var payload audit.SlashCommandRunPayload
+	if err := json.Unmarshal(em.events[0].Payload, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload.Name != "restricted" {
+		t.Errorf("Name = %q, want %q", payload.Name, "restricted")
+	}
+	if payload.Success {
+		t.Error("Success = true, want false for a refused model attempt")
+	}
+	if payload.ModelInvokable {
+		t.Error("ModelInvokable = true, want false (that is why it was refused)")
+	}
+	raw := string(em.events[0].Payload)
+	if contains(raw, "restricted body") {
+		t.Errorf("audit payload contains the command body — privacy violation: %s", raw)
 	}
 }
 

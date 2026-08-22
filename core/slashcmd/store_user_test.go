@@ -42,7 +42,7 @@ func projectToolCmd(name, projectID string) slashcmd.UserCommand {
 		ProjectID:        projectID,
 		Kind:             slashcmd.KindTool,
 		Description:      "A project tool command",
-		Tool:             "bash",
+		Tool:             "kenaz__bash",
 		ToolArgsTemplate: "./scripts/" + name + ".sh",
 	}
 }

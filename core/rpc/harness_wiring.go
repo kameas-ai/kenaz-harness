@@ -157,78 +157,20 @@ func (a sessionsListAdapter) ListSessions(ctx context.Context) ([]harness.Sessio
 
 // ---- WP05 write adapters ----
 
-// settingsWriterAdapter wraps settings.SettingsAPI and implements
-// harness.SettingsWriter. Applies a single key→value patch to the live
-// Settings record using a field switch. Only keys that appear in
-// harness.SettingsAllowlist are ever reached here (the handler validates
-// the allowlist before calling the writer).
-type settingsWriterAdapter struct{ api settings.SettingsAPI }
-
-func (a settingsWriterAdapter) SetSetting(ctx context.Context, key string, value any) error {
-	// Load the current settings so we can apply a field-level patch and
-	// save the updated record back. The Settings struct is the source of
-	// truth; we use a JSON round-trip to set the named field generically.
-	s, err := a.api.Get(ctx)
-	if err != nil {
-		return fmt.Errorf("harness.set_setting: load: %w", err)
-	}
-
-	// Encode the current settings as a JSON object, patch the target key,
-	// then decode back into Settings and save.
-	raw, err := json.Marshal(s)
-	if err != nil {
-		return fmt.Errorf("harness.set_setting: marshal settings: %w", err)
-	}
-	var patch map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &patch); err != nil {
-		return fmt.Errorf("harness.set_setting: unmarshal map: %w", err)
-	}
-
-	// Map allowlisted logical key names to their JSON field names.
-	jsonKey, ok := settingsKeyToJSON[key]
-	if !ok {
-		return fmt.Errorf("harness.set_setting: key %q not mapped", key)
-	}
-	valRaw, err := json.Marshal(value)
-	if err != nil {
-		return fmt.Errorf("harness.set_setting: marshal value: %w", err)
-	}
-	patch[jsonKey] = valRaw
-
-	merged, err := json.Marshal(patch)
-	if err != nil {
-		return fmt.Errorf("harness.set_setting: re-marshal: %w", err)
-	}
-	var updated settings.Settings
-	if err := json.Unmarshal(merged, &updated); err != nil {
-		return fmt.Errorf("harness.set_setting: decode updated: %w", err)
-	}
-	return a.api.Set(ctx, updated)
-}
-
-// settingsKeyToJSON maps the harness-self SettingsAllowlist key names to
-// their JSON field names in the Settings struct. Only keys in
-// harness.SettingsAllowlist need entries here; the handler validates the
-// allowlist before calling the writer.
-var settingsKeyToJSON = map[string]string{
-	// OnboardingCompleted has no single dedicated field in Settings today
-	// (it is a logical flag in the onboarding completion marker). We
-	// write it as a no-op by mapping to an unused sentinel key so the
-	// JSON round-trip silently discards it. A future dedicated field
-	// landing here makes the write effective without changing the handler.
-	"OnboardingCompleted":    "_onboardingCompleted",
-	"HarnessSelfMCPDisabled": "_harnessSelfMCPDisabled",
-	// DefaultProvider and DefaultModel have no current Settings fields;
-	// same sentinel approach.
-	"DefaultProvider":    "_defaultProvider",
-	"DefaultModel":       "_defaultModel",
-	// AutoTitleEnabled is exposed via Settings_GetAutoTitleEnabled /
-	// Settings_SetAutoTitleEnabled bindings (p0-wiring-fixes-3TVMG0MX WP05).
-	// The inverted storage bit (AutoTitleDisabled) cannot be set directly
-	// via the JSON-patch mechanism here without value inversion, so we keep
-	// the sentinel and let the dedicated binding methods handle persistence.
-	"AutoTitleEnabled": "_autoTitleEnabled",
-}
+// settingsWriterAdapter and settingsKeyToJSON were removed by
+// harness-self-attach-01PMHS01 UNIT-8 (G-4,
+// docs/escalation-register-2026-08-19.md Part 9). Every key
+// settingsWriterAdapter.SetSetting ever reached mapped through
+// settingsKeyToJSON to a `_`-prefixed sentinel the JSON round-trip
+// silently discarded — the tool reported OK:true and changed nothing
+// for all five formerly allowlisted keys (OnboardingCompleted,
+// HarnessSelfMCPDisabled, DefaultProvider, DefaultModel,
+// AutoTitleEnabled). The owner ruled removal rather than wiring a real
+// writer for any of them: see the doc comment above
+// harness.ProjectWriter (core/mcp/builtin/harness/handlers.go) for the
+// full rationale. harness.Managers.SettingsWriter, the SettingsWriter
+// interface, and handleSetSetting/ToolSetSetting were removed in the
+// same commit.
 
 // llmProviderWriterAdapter wraps llm.LLMConnectorAPI and implements
 // harness.ProviderWriter. The PlaintextAPIKey is stored in the OS
@@ -500,7 +442,9 @@ func buildHarnessManagers(
 
 	if settingsAPI != nil {
 		m.Settings = settingsReaderAdapter{api: settingsAPI}
-		m.SettingsWriter = settingsWriterAdapter{api: settingsAPI}
+		// m.SettingsWriter no longer exists — removed by
+		// harness-self-attach-01PMHS01 UNIT-8. See the doc comment on
+		// harness.Managers' write-side field block for why.
 	}
 	if llmAPI != nil {
 		m.Providers = llmProvidersAdapter{api: llmAPI}

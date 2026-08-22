@@ -213,6 +213,33 @@ type Settings struct {
 	// interface doc comment on LoadGraphAuthoringEnabled for why.
 	GraphAuthoringEnabled bool `json:"graphAuthoringEnabled,omitempty"`
 
+	// HarnessSelfMCPDisabled is the harness-self MCP server kill switch
+	// (harness-self-attach-01PMHS01 UNIT-7, FR-007). Default false: on a
+	// fresh install, and on any install upgraded from a build that
+	// predates this field (JSON decode leaves an absent bool key at Go's
+	// zero value), the harness-self server stays attached — the
+	// behaviour every install already had before this field existed
+	// (IsHarnessSelfMCPDisabled previously hardcoded `return false, nil`
+	// with a "not yet in the settings store" comment). Read live via
+	// onboardingview.SettingsDialReader
+	// (core/rpc/onboarding_wiring.go's onboardingSettingsDialAdapter),
+	// which onboardingview.API.State() surfaces as
+	// OnboardingState.HarnessSelfMCPDisabled — the exact field
+	// frontend/src/views/settings/SettingsView.vue's
+	// `v-if="!onboardingHarnessSelfMCPDisabled"` gate already reads.
+	// When true, no harness_* tool — including harness_read_* — is
+	// attached to any session.
+	//
+	// This is a HUMAN-set setting, not model-writable: G-4
+	// (docs/escalation-register-2026-08-19.md Part 9, "HS01 §10.4: the
+	// model writes no settings keys") ruled harness_write_set_setting
+	// writes NONE of its five formerly allowlisted keys, this one
+	// included — a model that could switch off the mechanism providing
+	// its own tools would have no permission gate at all (the same
+	// reasoning GraphAuthoringEnabled's doc comment above gives for the
+	// opposite direction).
+	HarnessSelfMCPDisabled bool `json:"harnessSelfMCPDisabled,omitempty"`
+
 	// CredentialAuditRetentionDays controls how long
 	// KindCredentialAccessed audit rows are retained before the daily
 	// sweep deletes them (credential-store-01KQ8TDD WP07). Zero (default)
@@ -1400,6 +1427,19 @@ type SettingsStore interface {
 	// HarnessSelfMCPDisabled).
 	LoadGraphAuthoringEnabled() (bool, error)
 	SaveGraphAuthoringEnabled(enabled bool) error
+
+	// LoadHarnessSelfMCPDisabled / SaveHarnessSelfMCPDisabled expose the
+	// harness-self MCP server kill switch
+	// (harness-self-attach-01PMHS01 UNIT-7, FR-007). Default false — on
+	// a fresh install, and on any install upgraded from a build that
+	// predates this field, the server stays attached (see the Settings
+	// struct field's doc comment for the full fail-direction rationale).
+	// Read live by onboardingSettingsDialAdapter
+	// (core/rpc/onboarding_wiring.go) on every OnboardingAPI.State()
+	// call, not cached, so flipping the setting takes effect on the next
+	// read without an app restart.
+	LoadHarnessSelfMCPDisabled() (bool, error)
+	SaveHarnessSelfMCPDisabled(disabled bool) error
 }
 
 // SettingsAPI is the view-scoped accessor exposed via HarnessAPI.

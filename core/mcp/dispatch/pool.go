@@ -59,6 +59,35 @@ type StdioSubPool interface {
 // Compile-time witness: *stdio.Pool satisfies StdioSubPool.
 var _ StdioSubPool = (*stdio.Pool)(nil)
 
+// RemoteSubPool is the subset of *http.Pool / *sse.Pool the dispatch
+// pool requires over-and-above the base coremcp.Pool interface,
+// mirroring StdioSubPool. Defined as an interface so tests can inject
+// fakes without constructing a live *http.Pool / *sse.Pool.
+//
+// Before connector-lifecycle-truth-01PMZ303 UNIT-6, httpPool and
+// ssePool were typed as bare coremcp.Pool, which has no per-server
+// close. dispatch.Pool.CloseOne's http/sse arm was comment-only and
+// silently returned nil, so uninstalling (or re-installing, via the
+// evict-before-spawn step of InstallRecipe) a remote recipe left its
+// health-probe goroutine running forever against the "uninstalled"
+// server on the credential that was injected at Open time, and left
+// its tools reachable through dispatch.Pool.Tools/Call. See
+// docs/unwired-ledger.md and the mission spec's §1.3 for the full
+// trace.
+type RemoteSubPool interface {
+	coremcp.Pool
+	// CloseOne removes a single server: stops any per-server health
+	// probe (blocking until its goroutine has exited) and closes the
+	// connection. Returns an error naming the server when it is not
+	// present in the sub-pool.
+	CloseOne(ctx context.Context, id string) error
+}
+
+// Compile-time witnesses: the concrete http/sse pools satisfy
+// RemoteSubPool.
+var _ RemoteSubPool = (*mcphttp.Pool)(nil)
+var _ RemoteSubPool = (*sse.Pool)(nil)
+
 // Pool fans out recipe-open/call operations to the correct transport
 // sub-pool based on ServerSpec.Transport.
 //
@@ -68,8 +97,8 @@ var _ StdioSubPool = (*stdio.Pool)(nil)
 // Pool is safe for concurrent use.
 type Pool struct {
 	stdioPool     StdioSubPool
-	httpPool      coremcp.Pool
-	ssePool       coremcp.Pool
+	httpPool      RemoteSubPool
+	ssePool       RemoteSubPool
 	inprocessPool *InProcessSubPool
 
 	// ownership maps a server id to the transport tag that opened it.
@@ -90,7 +119,7 @@ type Pool struct {
 //
 // HTTP and SSE are expressed as concrete types so callers do not need to
 // import the interface type; the dispatch package converts them to the
-// internal coremcp.Pool interface internally.
+// internal RemoteSubPool interface internally.
 type Options struct {
 	Stdio StdioSubPool
 	HTTP  *mcphttp.Pool
@@ -323,6 +352,22 @@ func (d *Pool) OpenOne(ctx context.Context, spec coremcp.ServerSpec) error {
 
 // CloseOne removes a single server from whichever sub-pool owns it.
 // Returns stdio.ErrServerNotFound when no server with id is tracked.
+//
+// Ownership bookkeeping (connector-lifecycle-truth-01PMZ303 UNIT-6,
+// spec.md §1.11 N-4): the ownership entry is deleted up front (under
+// the lock, so a concurrent CloseOne(id) for the same id observes
+// "not found" instead of racing this one into a double teardown
+// dispatch) and RESTORED if the underlying close fails. Before this
+// fix the entry was deleted unconditionally with no restore path, so
+// a failed close on ANY transport — not just http/sse — silently
+// forgot a server the pool had not actually torn down: Call/Tools
+// would then treat it as gone even though its process/connection was
+// still alive. The net externally-observable effect — present after
+// a failed close, absent after a successful one — is the same
+// contract the ownership-delete-after-success framing describes; this
+// implementation keeps the up-front delete-under-lock so the
+// concurrent-double-close guard the original code relied on does not
+// regress.
 func (d *Pool) CloseOne(ctx context.Context, id string) error {
 	d.mu.Lock()
 	tag, ok := d.ownership[id]
@@ -335,27 +380,56 @@ func (d *Pool) CloseOne(ctx context.Context, id string) error {
 		return fmt.Errorf("%w: %q", stdio.ErrServerNotFound, id)
 	}
 
+	if err := d.closeOneByTag(ctx, tag, id); err != nil {
+		d.mu.Lock()
+		d.ownership[id] = tag
+		d.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+// closeOneByTag dispatches CloseOne to the sub-pool tag names.
+//
+// Before UNIT-6 this switch's http/sse arm was comment-only ("http
+// and sse pools do not yet expose a per-server CloseOne method") and
+// fell through to the function's shared "return nil" tail — reporting
+// success for a close that never happened. Every arm below now either
+// really closes the server or returns an explicit error; there is no
+// remaining path that reports success without having called a real
+// CloseOne.
+//
+// A tag with no sub-pool wired, or a tag this switch does not
+// recognise, returns an explicit error rather than silently
+// succeeding. That combination should never occur for an id that made
+// it into d.ownership — Open/OpenOne only record ownership after
+// subPoolFor(tag) resolved to a non-nil sub-pool — so this is a
+// defensive backstop against an internal invariant breaking, not a
+// reachable production path.
+func (d *Pool) closeOneByTag(ctx context.Context, tag, id string) error {
 	switch tag {
 	case "stdio":
 		if d.stdioPool != nil {
 			return d.stdioPool.CloseOne(ctx, id)
 		}
+	case "http":
+		if d.httpPool != nil {
+			return d.httpPool.CloseOne(ctx, id)
+		}
+	case "sse":
+		if d.ssePool != nil {
+			return d.ssePool.CloseOne(ctx, id)
+		}
 	case "inprocess":
 		// Unlike http/sse, the inprocess sub-pool DOES expose a real
 		// per-server CloseOne (InProcessSubPool.CloseOne) — an
 		// in-process connection is cheap to tear down (it just closes
-		// Go channels, no network/process teardown), so there is no
-		// reason to defer it to sub-pool Close like http/sse do.
+		// Go channels, no network/process teardown).
 		if d.inprocessPool != nil {
 			return d.inprocessPool.CloseOne(ctx, id)
 		}
-	default:
-		// http and sse pools do not yet expose a per-server CloseOne method.
-		// We drop the ownership entry (done above) and return nil; the
-		// connection is torn down on sub-pool Close at process shutdown.
-		// A future revision should add CloseOne to the http/sse pool surface.
 	}
-	return nil
+	return fmt.Errorf("dispatch: no sub-pool wired to close %q (transport %q)", id, tag)
 }
 
 // RecipeStatus returns the live status snapshot for a server.

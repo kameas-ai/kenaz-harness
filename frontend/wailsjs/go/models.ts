@@ -5932,6 +5932,8 @@ export namespace scheduledchat {
 	    enabled: boolean;
 	    createdAt: string;
 	    updatedAt: string;
+	    createdBy: string;
+	    toolAllowlist?: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new ChatRunEntry(source);
@@ -5949,6 +5951,8 @@ export namespace scheduledchat {
 	        this.enabled = source["enabled"];
 	        this.createdAt = source["createdAt"];
 	        this.updatedAt = source["updatedAt"];
+	        this.createdBy = source["createdBy"];
+	        this.toolAllowlist = source["toolAllowlist"];
 	    }
 	}
 	export class CreateInput {
@@ -5959,6 +5963,7 @@ export namespace scheduledchat {
 	    model?: string;
 	    outputSink?: string;
 	    enabled: boolean;
+	    toolAllowlist?: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new CreateInput(source);
@@ -5973,6 +5978,7 @@ export namespace scheduledchat {
 	        this.model = source["model"];
 	        this.outputSink = source["outputSink"];
 	        this.enabled = source["enabled"];
+	        this.toolAllowlist = source["toolAllowlist"];
 	    }
 	}
 	export class RunSummary {
@@ -6030,6 +6036,7 @@ export namespace scheduledchat {
 	    model?: string;
 	    outputSink?: string;
 	    enabled: boolean;
+	    toolAllowlist?: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new UpdateInput(source);
@@ -6045,6 +6052,7 @@ export namespace scheduledchat {
 	        this.model = source["model"];
 	        this.outputSink = source["outputSink"];
 	        this.enabled = source["enabled"];
+	        this.toolAllowlist = source["toolAllowlist"];
 	    }
 	}
 
@@ -6764,6 +6772,7 @@ export namespace settings {
 	    cedarStrictCredentialMode?: boolean;
 	    cedarStrictWorkflowMode?: boolean;
 	    graphAuthoringEnabled?: boolean;
+	    harnessSelfMCPDisabled?: boolean;
 	    credentialAuditRetentionDays?: number;
 	    branchAdvisorEnabled?: boolean;
 	    branchAdvisorMinConfidence?: number;
@@ -6852,6 +6861,7 @@ export namespace settings {
 	        this.cedarStrictCredentialMode = source["cedarStrictCredentialMode"];
 	        this.cedarStrictWorkflowMode = source["cedarStrictWorkflowMode"];
 	        this.graphAuthoringEnabled = source["graphAuthoringEnabled"];
+	        this.harnessSelfMCPDisabled = source["harnessSelfMCPDisabled"];
 	        this.credentialAuditRetentionDays = source["credentialAuditRetentionDays"];
 	        this.branchAdvisorEnabled = source["branchAdvisorEnabled"];
 	        this.branchAdvisorMinConfidence = source["branchAdvisorMinConfidence"];

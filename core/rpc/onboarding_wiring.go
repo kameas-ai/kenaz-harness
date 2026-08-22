@@ -186,13 +186,39 @@ func (a onboardingSessionStarterAdapter) StartOnboardingSession(
 
 // ---- SettingsDialReader adapter ---------------------------------------------
 
-// onboardingSettingsDialAdapter implements onboardingview.SettingsDialReader.
-// HarnessSelfMCPDisabled is not yet in the settings store, so we always
-// return false (= MCP enabled). A follow-up adds the persistent dial.
-type onboardingSettingsDialAdapter struct{}
+// onboardingSettingsDialAdapter implements onboardingview.SettingsDialReader
+// by reading the real persisted HarnessSelfMCPDisabled setting
+// (harness-self-attach-01PMHS01 UNIT-7). Before this unit the method
+// hardcoded `return false, nil` with a "not yet in the settings store"
+// comment — a live lie: frontend/src/views/settings/SettingsView.vue's
+// `v-if="!onboardingHarnessSelfMCPDisabled"` gate consumed that value as
+// though it were real.
+//
+// A nil store (unconfigured build) or a store read error both degrade to
+// false (= MCP enabled) — the exact pre-UNIT-7 behaviour every existing
+// install already had, so an unreadable settings.json cannot spontaneously
+// make the harness-self server disappear. The error is deliberately
+// swallowed (logged, not returned): IsHarnessSelfMCPDisabled is one of
+// several reads OnboardingAPI.State() (impl.go:212-244) aggregates into a
+// single call, and a transient fault reading this one dial must not fail
+// the whole onboarding-state fetch — the same swallow-and-log convention
+// core/rpc/api.go's graphAuthoringEnabledFromSettings and
+// agenticTurnRoutingEnabledFromSettings already use for the same reason.
+type onboardingSettingsDialAdapter struct {
+	store settings.SettingsStore
+}
 
-func (onboardingSettingsDialAdapter) IsHarnessSelfMCPDisabled(_ context.Context) (bool, error) {
-	return false, nil
+func (a onboardingSettingsDialAdapter) IsHarnessSelfMCPDisabled(_ context.Context) (bool, error) {
+	if a.store == nil {
+		return false, nil
+	}
+	disabled, err := a.store.LoadHarnessSelfMCPDisabled()
+	if err != nil {
+		logging.L().Warn("onboarding.harness_self_mcp_disabled.read_failed",
+			"err", err.Error(), "detail", "defaulting to enabled")
+		return false, nil
+	}
+	return disabled, nil
 }
 
 // ---- AccountSigner adapter --------------------------------------------------

@@ -32,9 +32,17 @@ type Managers struct {
 	Models    ModelLister
 
 	// Write-side managers (WP05). Nil-safe in the same way.
+	//
+	// SettingsWriter was removed by harness-self-attach-01PMHS01 UNIT-8
+	// (G-4, docs/escalation-register-2026-08-19.md Part 9: "the model
+	// writes no settings keys"). It backed harness_write_set_setting,
+	// whose five allowlisted keys all routed through settingsKeyToJSON
+	// sentinels the JSON round-trip silently discarded — the tool
+	// reported success and changed nothing. The owner ruled removal
+	// rather than wiring a real writer: none of the five keys may be
+	// model-writable, so there is nothing left for this manager to do.
 	ProvidersWriter ProviderWriter
 	RecipesWriter   RecipeWriter
-	SettingsWriter  SettingsWriter
 	ProjectsWriter  ProjectWriter
 	SessionsWriter  SessionCreator
 
@@ -144,6 +152,26 @@ type ProjectWriter interface {
 	CreateProject(ctx context.Context, name, description string) (string, error)
 }
 
+// SettingsWriter, SettingsAllowlist, and handleSetSetting/
+// harness_write_set_setting were removed by harness-self-attach-01PMHS01
+// UNIT-8. All five formerly allowlisted keys (OnboardingCompleted,
+// HarnessSelfMCPDisabled, DefaultProvider, DefaultModel, AutoTitleEnabled)
+// routed through settingsKeyToJSON sentinels
+// (core/rpc/harness_wiring.go) the JSON round-trip silently discarded —
+// the tool reported OK:true and changed nothing. G-4
+// (docs/escalation-register-2026-08-19.md Part 9, "HS01 §10.4: the model
+// writes no settings keys") ruled removal, not a real writer: "The lie
+// ends immediately and no new model-write capability is created. In
+// particular the model cannot change DefaultProvider or DefaultModel, so
+// a prompt-injected model cannot redirect which vendor receives the
+// user's traffic and data." With zero keys left in the allowlist the
+// tool had no remaining purpose, so it was unregistered
+// (core/mcp/builtin/harness/register.go) rather than shipped as a tool
+// that reports failure for every call — one of the two honest exits
+// FR-009 named, and the one that applied once the allowlist reached
+// zero. harness_read_list_settings (SettingsReader, above) is unaffected
+// — reading settings was never the lie; writing them was.
+
 // SessionCreator creates a new session with an optional kind tag.
 type SessionCreator interface {
 	CreateSession(ctx context.Context, name, kind string) (SessionSummary, error)
@@ -219,18 +247,6 @@ type GraphMaterializeResult struct {
 // vocabulary.
 type GraphMaterializer interface {
 	MaterializeRun(ctx context.Context, runID string) (GraphMaterializeResult, error)
-}
-
-// SettingsAllowlist enumerates the keys harness_write_set_setting is
-// permitted to mutate. Hard-coded to keep the surface area auditable.
-// Update with care; an over-broad allowlist defeats Cedar's session-kind
-// gate.
-var SettingsAllowlist = map[string]struct{}{
-	"OnboardingCompleted":     {},
-	"HarnessSelfMCPDisabled":  {},
-	"DefaultProvider":         {},
-	"DefaultModel":            {},
-	"AutoTitleEnabled":        {},
 }
 
 // errNotConfigured is returned by handlers whose backing manager is nil.
@@ -364,26 +380,6 @@ func (m Managers) handleInstallRecipe(ctx context.Context, args json.RawMessage)
 		return nil, err
 	}
 	return ToolResult{OK: true, Message: fmt.Sprintf("Installed recipe %q", p.ID)}, nil
-}
-
-func (m Managers) handleSetSetting(ctx context.Context, args json.RawMessage) (any, error) {
-	if m.SettingsWriter == nil {
-		return nil, errNotConfigured
-	}
-	var p struct {
-		Key   string `json:"key"`
-		Value any    `json:"value"`
-	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return nil, err
-	}
-	if _, ok := SettingsAllowlist[p.Key]; !ok {
-		return nil, fmt.Errorf("harness_write_set_setting: key %q is not in the allowlist", p.Key)
-	}
-	if err := m.SettingsWriter.SetSetting(ctx, p.Key, p.Value); err != nil {
-		return nil, err
-	}
-	return ToolResult{OK: true, Message: fmt.Sprintf("Set %s", p.Key)}, nil
 }
 
 func (m Managers) handleCreateProject(ctx context.Context, args json.RawMessage) (any, error) {

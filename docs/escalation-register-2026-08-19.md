@@ -3260,3 +3260,138 @@ silently corrected.
 **Not done.** No escalation was resolved. No code, test, spec, allowlist or
 audit document was modified. No test was run and nothing was compiled. The only
 files written are this Part 8 and the pointer edits in `docs/unwired-ledger.md`.
+
+---
+
+# Part 9 — Fourth sitting, 2026-08-22
+
+Four rulings taken by the owner (alec) against the post-v0.70.0 dependency map.
+Each names the mission, the escalation, the decision, and what it changes about
+work already dispatched or already shipped.
+
+## G-1 — ZB11 E-001: the sub-agent mission runs to completion
+
+**Question.** UNIT-1..5 landed (background tasks capture output and fire a
+completion hook). UNIT-6 adds a child-run spawner and a model-callable
+`kenaz__subagent_dispatch`, so the model gains the ability to spawn sub-agents
+that spend tokens. The spec asked whether the mission is larger than ruling
+A-13 assumed and where to stop.
+
+**Ruling: build the FULL mission through UNIT-13.** Not the UNIT-5 cut line.
+
+**Consequences.**
+
+- The model gains sub-agent dispatch. That is a real new capability and a real
+  new token-spend surface, taken deliberately rather than by omission.
+- `harness-self-attach-01PMHS01` UNIT-4 has landed, so per-run containment
+  (`toolloop.NewMergedResolver`, unconditional at `core/rpc/api.go:4866`) bounds
+  what a dispatched sub-agent may do. UNIT-6's commit body must state the
+  posture it inherits rather than assuming it.
+- Sequence is forced: `UNIT-6 → {7, 8, 9, 12} → UNIT-10 → UNIT-13`. UNIT-10
+  needs BOTH 8 and 9 — mounting the UI first moves the lie from the backend to
+  the front, which is the defect the mission exists to remove.
+- E-002 (what "pause a sub-agent" means) still gates UNIT-8's Pause verb only.
+  Abort/Steer/Resume are unaffected.
+- Unblocks `trust-surfaces-that-fire-01PMZ202` WP14 and WP15's producer halves,
+  which Z202 must NOT build itself.
+
+## G-2 — Z404 E-004: slash tool calls take the chat tool path
+
+**Question.** `slashcmd.ToolDispatcher` is a nil stub. Three conventions were
+undecided: argument shape, bare vs namespaced tool names, and whether a slash
+tool call takes the same confirm/Cedar path as a chat tool call.
+
+**Ruling: namespaced tool names, JSON arguments, and the SAME confirm/Cedar
+path a chat tool call takes.**
+
+**Consequences.**
+
+- One permission story for the whole app. A slash command cannot become a
+  privilege-escalation route that reaches tools without the confirmation a chat
+  tool call would trigger.
+- UNIT-4 is unblocked, but it edits `core/slashcmd/dispatch.go`, which
+  `trust-surfaces-that-fire-01PMZ202` WP20 is editing in the current wave.
+  **Sequence UNIT-4 after WP20 lands** — do not dispatch them together.
+- The `[]string → json.RawMessage` conversion at the boundary is the part most
+  likely to be got wrong quietly; it needs a test driving the model's entry
+  point, not a helper.
+
+## G-3 — Z606 E-002: no repair migration
+
+**Question.** A periodic-flush defect wrote checkpoint rows into user
+transcripts across five releases. Fixed forward by UNIT-1. Should a repair
+migration purge the rows already on disk?
+
+**Ruling: do NOT repair. Ship a release note instead.** This matches the
+spec's own recommended default.
+
+**Consequences.**
+
+- WP05 no longer ships a destructive migration. It becomes a release-note item
+  and an escalation closure. `sessions/0337`, reserved for it, is released —
+  but do not reallocate it without amending
+  `docs/v0.65.0-merge-order.md` §4.
+- Some users keep visible duplicate assistant rows in old sessions. That is the
+  accepted cost, taken against the alternative: a DELETE against real user
+  transcripts on every install, in a repo where exactly that class silently
+  emptied `artifact_versions` twice before.
+- Z606's WP-PI loses its AC-PI-3 target. It must say so explicitly rather than
+  quietly passing with nothing to falsify.
+
+## G-4 — HS01 §10.4: the model writes no settings keys
+
+**Question.** `harness_write_set_setting` maps five keys
+(`OnboardingCompleted`, `DefaultProvider`, `DefaultModel`, `AutoTitleEnabled`,
+`HarnessSelfMCPDisabled`) to `_`-prefixed sentinels that the JSON round-trip
+discards. The tool reports success and changes nothing.
+
+**Ruling: remove the keys. The model writes none of them.**
+
+**Consequences.**
+
+- The lie ends immediately and no new model-write capability is created. In
+  particular the model cannot change `DefaultProvider` or `DefaultModel`, so a
+  prompt-injected model cannot redirect which vendor receives the user's
+  traffic and data.
+- UNIT-8 becomes a removal, not a wiring. The tool's advertised schema must
+  shrink in the same commit — a tool that still lists a key it will refuse is
+  the same lie one layer up.
+- `HarnessSelfMCPDisabled` is the one key with a separate future: UNIT-7 makes
+  it a real persisted setting read by the kill switch. That is a HUMAN-set
+  setting; removing it from the model-writable set does not block UNIT-7.
+- UNIT-7 still owes a `knobcoverage.Register[settings.Settings]` line for the
+  field it adds, the moment `controls-and-readouts-that-tell-the-truth-01PMZ808`
+  UNIT-17 lands. That obligation appears in neither mission's document and is
+  recorded here so it survives.
+
+---
+
+# Part 10 — Fifth sitting, 2026-08-22
+
+Three rulings taken against the post-v0.70.0 map, plus a cadence decision.
+
+## G-5 — Z808 E-005: wire the grouped hook-event picker; Z808 owns it
+
+**Question.** Never actually filed as an escalation. `trust-surfaces-that-fire-01PMZ202`'s spec asserts the hook-event display path "keeps working". It does not: `EVENT_FAMILY` is two lines in `frontend/src/lib/hooks.ts` with no consumer, and `HookEditor.vue` renders a flat list. One of the two documents is wrong, and until settled two missions could edit the same path with opposite intent.
+
+**Ruling: WIRE it. `controls-and-readouts-that-tell-the-truth-01PMZ808` UNIT-15 owns it.** Z202's spec sentence is corrected to match reality in the same change. One owner, one edit, no collision.
+
+## G-6 — Z101 E-005: the `ollama` kind ships for new profiles only
+
+**Question.** Ollama users configure Ollama as `custom-openai`, and the catalog wrongly reports `tool_calling: false`. Registering a real `ollama` kind fixes new setups; the question was whether existing profiles migrate.
+
+**Ruling: register the new kind, leave existing `custom-openai` profiles alone. NO migration.**
+
+**Consequences.** Z101 UNIT-9 (WP13+WP14) is unblocked and is NOT a destructive migration — it takes no profile rows, needs no populated-table test beyond the ordinary upgrade-path assertion, and cannot strand an existing install. Existing Ollama users keep the wrong capability row until they re-add the provider; that is the accepted cost, taken against rewriting rows in real user profiles. WP13's `ollama.yaml` correction (`tool_calling: true`) still ships, so a NEW profile is correct immediately.
+
+## G-7 — `ContextSync_*`: gate the destructive operations now
+
+**Question.** The family has zero Cedar action constants and zero gate calls across 21 non-test `DeleteRemote` call sites. v0.71.0 ships a purge button that deletes remote fleet data with nothing able to constrain it. Independently confirmed by the PR #307 review (finding N3), which also noted the repo already has the pattern this does not follow: `Sessions_Export` gates via `cedar.CheckExportSession`, and `Audit_BulkPurge` fails closed and emits `KindAuditBulkPurgeBlockedByPolicy`.
+
+**Ruling: gate the DESTRUCTIVE operations now — purge and delete — fail-closed. Leave toggle/resume ungated for the moment.**
+
+**Consequences.** New action vocabulary is required before a policy author can write any rule at all; that is the first half of the work. The gate must return an explicit `Deny` rather than relying on `enforce()`, which maps `NotApplicable` to nil. Toggle and resume stay ungated and that stays a known, dated gap — not silently closed by implication.
+
+## G-8 — cadence: continue in parallel waves
+
+Dispatch the next file-disjoint wave as soon as v0.71.0 merges, same pattern: unit-scoped agents in isolated worktrees, spec read from the main checkout, decisions surfaced to the owner as they arise rather than batched.

@@ -9,8 +9,13 @@ package workflows_test
 //
 //   1. Save a 3-step workflow → Run → step events fire + completion +
 //      audit events are emitted.
-//   2. Run the same workflow twice with rerun_policy=skip → second run
-//      hits the cache (no fresh step events).
+//   2. (automation-actually-runs-01PMZ404 UNIT-13 flipped this one) A
+//      workflow row carrying a legacy rerun_policy loads fine but the
+//      field is scrubbed, so running it twice dispatches fresh both
+//      times — it can no longer hit this fixture's wired Engine.Cache.
+//      See TestWP11_LegacyRerunPolicyNeverReachesCacheAfterLoad's own
+//      doc comment for why, and rerun_test.go for where the cache
+//      mechanism itself is still tested.
 //   3. Delete a workflow → workflow.deleted audit fires.
 //   4. Save a shell-bearing workflow in cedar strict mode → denied at
 //      the gate; no audit emitted (TODO marker if cedar isn't easily
@@ -21,6 +26,7 @@ import (
 	"encoding/json"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/context/audit"
 	cedarpkg "github.com/kameas-ai/kenaz-harness/core/policy/cedar"
@@ -94,12 +100,29 @@ func (c *captureProgress) snapshot() []rpcworkflows.FrontendProgressEvent {
 type integrationFixture struct {
 	api      *rpcworkflows.API
 	store    workflows.Store
+	db       storage.DB
 	cache    *workflows.MemoryCache
 	progress *captureProgress
 	audit    *captureEmitter
 }
 
 func newIntegrationFixture(t *testing.T, cedarMode string) *integrationFixture {
+	t.Helper()
+	return newIntegrationFixtureSeeded(t, cedarMode, nil)
+}
+
+// newIntegrationFixtureSeeded is newIntegrationFixture plus an optional
+// seed hook run against the raw DB after Open but before
+// rpcworkflows.New constructs the API. rpcworkflows.New hydrates its
+// in-memory byID catalog from cfg.Store.List/Load exactly once, at
+// construction (core/rpc/views/workflows/impl.go New) — a row inserted
+// AFTER that point (e.g. via a direct SQL bypass of Store.Save, as
+// TestWP11_RerunSkipServesFromCache needs post-UNIT-13, since Save no
+// longer accepts a non-empty rerun_policy) would otherwise never
+// appear in the catalog RunWithOptions resolves against, and Run would
+// fail with ErrWorkflowNotFound despite the row being on disk. seed
+// may be nil.
+func newIntegrationFixtureSeeded(t *testing.T, cedarMode string, seed func(ctx context.Context, db storage.DB)) *integrationFixture {
 	t.Helper()
 	dir := t.TempDir()
 	db, err := storagesqlite.Open(storage.Config{
@@ -110,6 +133,10 @@ func newIntegrationFixture(t *testing.T, cedarMode string) *integrationFixture {
 		t.Fatalf("open db: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close(context.Background()) })
+
+	if seed != nil {
+		seed(context.Background(), db)
+	}
 
 	store := workflows.NewSQLiteStore(db)
 	cache := workflows.NewMemoryCache()
@@ -143,20 +170,30 @@ func newIntegrationFixture(t *testing.T, cedarMode string) *integrationFixture {
 	return &integrationFixture{
 		api:      api,
 		store:    store,
+		db:       db,
 		cache:    cache,
 		progress: prog,
 		audit:    em,
 	}
 }
 
-// threeStepYAML — three echo-shell steps + a rerun_policy so test 2 can
-// flip between fresh and cached runs. No model_turn / http_request
+// threeStepYAML — three echo-shell steps. No model_turn / http_request
 // kinds so the test stays fully hermetic.
+//
+// This no longer declares rerun_policy (automation-actually-runs-
+// 01PMZ404 UNIT-13, A-10): Store.Save now refuses a non-empty
+// rerun_policy outright, so a workflow authored through the normal
+// Save() RPC — which is what every test using this fixture except
+// TestWP11_RerunSkipServesFromCache does — can no longer declare one.
+// TestWP11_RerunSkipServesFromCache still needs the dial to exercise
+// the Engine.Cache seam this unit deliberately preserves; it inserts
+// its own copy directly via SQL (bypassing Store.Save) to simulate a
+// workflow written before this build narrowed the schema — see that
+// test for why.
 const threeStepYAML = `
 id: integration-three-step
 name: "WP11 integration three-step"
 version: 1
-rerun_policy: skip
 steps:
   - name: alpha
     kind: shell
@@ -235,19 +272,66 @@ func TestWP11_SaveRunEmitsStepAndCompletionEvents(t *testing.T) {
 	}
 }
 
-// Test 2: Run same workflow twice with rerun_policy=skip → second run
-// hits cache, no fresh step progress events.
-func TestWP11_RerunSkipServesFromCache(t *testing.T) {
+// Test 2 (behaviour changed by automation-actually-runs-01PMZ404
+// UNIT-13, A-10): a workflow row carrying a legacy rerun_policy —
+// the shape a previous release's lenient Save could still write, or a
+// hand-edited row — loads successfully (UNIT-13's load-side
+// tolerance) but the field comes back SCRUBBED (storage.go's Load,
+// "drop the value"). This test's name and assertion used to be the
+// opposite (RerunSkipServesFromCache): before UNIT-13, a workflow
+// declaring rerun_policy=skip really did serve its second run from
+// this fixture's wired Engine.Cache. That is no longer reachable
+// through the store-backed RPC path, by design — Store.Load always
+// clears RerunPolicy before Engine.Run ever sees the workflow, so
+// e.g. Cache != nil && wf.RerunPolicy != "" (runtime.go) can never be
+// true for anything that came through Store, regardless of whether a
+// future release wires Engine.Cache in production. That is not a gap:
+// A-10 says plainly that "narrowing the schema stops the product
+// lying about the dial; it does not stop the cost — every workflow
+// run re-executes and re-bills," and this is what makes that true
+// even for a row that still carries the old value on disk. The
+// underlying cache mechanism itself — the seam A-10 says must stay —
+// is exercised directly against the Engine, independent of Store, by
+// rerun_test.go's TestEngine_RerunPolicy_SkipReturnsCached.
+func TestWP11_LegacyRerunPolicyNeverReachesCacheAfterLoad(t *testing.T) {
 	t.Parallel()
-	f := newIntegrationFixture(t, "permissive")
+	const id = "integration-three-step-rerun-skip"
+	legacyYAML := `
+id: ` + id + `
+name: "WP11 integration three-step (legacy rerun_policy)"
+version: 1
+rerun_policy: skip
+steps:
+  - name: alpha
+    kind: shell
+    cmd: "true"
+  - name: beta
+    kind: shell
+    cmd: "true"
+  - name: gamma
+    kind: shell
+    cmd: "true"
+`
+	// Seeded BEFORE rpcworkflows.New runs, so the row is present in the
+	// byID catalog New hydrates at construction — see
+	// newIntegrationFixtureSeeded's doc for why a post-construction
+	// insert would silently miss it.
+	f := newIntegrationFixtureSeeded(t, "permissive", func(ctx context.Context, db storage.DB) {
+		now := time.Now().UTC().UnixNano()
+		if err := db.WriteTx(ctx, func(tx storage.WriteTx) error {
+			_, err := tx.Exec(ctx,
+				`INSERT INTO workflows (id, name, description, yaml_source, version, hash, created_at, updated_at)
+				 VALUES (?, ?, '', ?, 1, 'wp11-rerun-skip-probe-hash', ?, ?)`,
+				id, "WP11 integration three-step (legacy rerun_policy)", legacyYAML, now, now,
+			)
+			return err
+		}); err != nil {
+			t.Fatalf("insert legacy rerun_policy=skip workflow row directly (Store.Save now refuses it — UNIT-13, A-10): %v", err)
+		}
+	})
 	ctx := context.Background()
 
-	saveOut, err := f.api.Save(ctx, rpcworkflows.SaveInput{YAML: threeStepYAML})
-	if err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-
-	if _, err := f.api.RunWithOptions(ctx, rpcworkflows.RunRequest{ID: saveOut.ID}); err != nil {
+	if _, err := f.api.RunWithOptions(ctx, rpcworkflows.RunRequest{ID: id}); err != nil {
 		t.Fatalf("Run #1: %v", err)
 	}
 	firstCount := len(f.progress.snapshot())
@@ -255,21 +339,21 @@ func TestWP11_RerunSkipServesFromCache(t *testing.T) {
 		t.Fatalf("first run progress events=%d, want >=3", firstCount)
 	}
 
-	// Second run should serve from the rerun cache. The progress
-	// channel SHOULD NOT see new step events because Engine.Run
-	// short-circuits via applyCachedRun before dispatching the runners.
-	res2, err := f.api.RunWithOptions(ctx, rpcworkflows.RunRequest{ID: saveOut.ID})
+	// Second run must NOT serve from the rerun cache — the loaded
+	// workflow's RerunPolicy was already scrubbed to "" by Store.Load,
+	// so Engine.Run's cache-consult guard (Cache != nil &&
+	// wf.RerunPolicy != "") is false and every step dispatches fresh
+	// again, the same as the first run.
+	res2, err := f.api.RunWithOptions(ctx, rpcworkflows.RunRequest{ID: id})
 	if err != nil {
 		t.Fatalf("Run #2: %v", err)
 	}
 	secondCount := len(f.progress.snapshot())
-	// The cache hit should not emit fresh step events (the engine
-	// short-circuits via applyCachedRun). We do permit one extra event
-	// (the run_completed lifecycle event that impl.go now always emits
-	// after engine.Run returns so the Runs sidebar never stays "running").
-	if secondCount > firstCount+1 {
-		t.Errorf("second run added too many progress events: before=%d after=%d (cache hit should skip step emitter)",
-			firstCount, secondCount)
+	newEvents := secondCount - firstCount
+	if newEvents < firstCount {
+		t.Errorf("second run added only %d new progress events (before=%d after=%d), want a full fresh dispatch (roughly firstCount more) — "+
+			"looks like the cache short-circuited, which UNIT-13's load-side scrub should make impossible",
+			newEvents, firstCount, secondCount)
 	}
 	if res2.Status != "completed" {
 		t.Errorf("second run status=%q want completed", res2.Status)

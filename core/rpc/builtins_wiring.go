@@ -345,51 +345,34 @@ func registerBuiltinTools(
 	)
 
 	// kenaz__subagent_dispatch: model-callable sub-agent spawner
-	// (branch-subagent-interactive-01KZNP3B WP03).
+	// (branch-subagent-interactive-01KZNP3B WP03) — registered
+	// separately from the rest of this function, by
+	// registerSubagentDispatchTool below, called from core/rpc's New()
+	// AFTER the LLM connector exists and a real, spawner-armed
+	// BranchSeamAdapter is wired (subagent-control-and-background-
+	// tasks-01PMZB11 UNIT-6).
 	//
-	// NOT registered when Seam is nil (crash-recovery-tool-gating-0XQTC4RK
-	// FR-007): advertising a tool that always returns seam_not_configured
-	// wastes model turns and creates confusing failures. Skip registration
-	// until the live BranchSeam is wired. The tool will appear in the
-	// catalog (and in the predicate switch) only when Seam is non-nil.
+	// WHY NOT HERE, LIKE EVERY OTHER TOOL: this function
+	// (registerBuiltinTools) is called from inside newLLMStack, before
+	// the LLM connector (llmview.API) is constructed — llmview.API is
+	// itself built from a chat runner that needs THIS function's own
+	// output (the populated tool registry) as an input. A child-run
+	// spawner needs the LLM connector to start the child's stream, so
+	// it categorically cannot exist yet at this point in the boot
+	// sequence. Trying to register the tool here — even behind a
+	// `!= nil` check on a locally-declared seam variable — would either
+	// stay permanently statically dead (the pre-UNIT-6 shape this
+	// mission removed: `var subagentSeam agentgraph.BranchSeam` on one
+	// line, `if subagentSeam != nil` on the next, at
+	// git blame 55029354:builtins_wiring.go:312-313) or, worse, register
+	// against a BranchSeamAdapter with no spawner armed yet — a
+	// dispatch that forks a session nothing ever executes and reports
+	// success anyway, the exact manufactured-success class this
+	// campaign exists to end.
 	//
-	// READ THIS BEFORE "FIXING" THE NIL (unwired sweep, 2026-08-14).
-	// A real BranchSeam already exists and is already wired into the
-	// kernel: core/rpc/api.go's newGraphManagerWithDeps sets
-	// `deps.Branch = graphview.NewBranchSeamAdapter(convMgr, ...)`.
-	// Pointing subagentSeam at it would NOT make this tool work. That
-	// adapter is storage-only by design — its own doc says it "does NOT
-	// spawn a child kernel run by itself… A future v2 will thread a
-	// child run-spawner through this seam — captured as a hook
-	// (RunSpawner) but unwired for v1" — and WaitForChildRun is a
-	// `return nil` no-op. Registering the tool against it would give the
-	// model a dispatcher that forks a session nothing ever executes and
-	// then reports success, which is a worse failure than the tool being
-	// absent.
-	//
-	// The guard comes out when a child RUN SPAWNER exists, not when a
-	// seam does. Same condition clears the `branch` / `merge` lines in
-	// scripts/ci/allowlists/i3-unexercised-kinds.txt.
-	{
-		var subagentSeam agentgraph.BranchSeam // nil — no child-run spawner yet
-		if subagentSeam != nil {
-			var dataDir string
-			if c != nil {
-				dataDir = c.DataDir()
-			}
-			subagentTool := coresubagent.New(coresubagent.Options{
-				DataDir: dataDir,
-				Seam:    subagentSeam,
-				Tasks:   nil, // wired by background-task-monitor in WP06
-			})
-			registry.Register(subagentTool)
-			logging.L().Info("rpc.builtins.register", "tool", subagentTool.Name())
-		} else {
-			logging.L().Info("rpc.builtins.subagent_dispatch_skipped",
-				"reason", "BranchSeam not yet wired — tool omitted from model catalog (FR-007)",
-			)
-		}
-	}
+	// See registerSubagentDispatchTool's own doc for the full wiring
+	// chain and core/rpc/subagent_run_spawner.go for the spawner
+	// itself.
 
 	// kenaz__monitor: drain/watch a background task's captured output
 	// (subagent-control-and-background-tasks-01PMZB11 UNIT-5). Only
@@ -440,6 +423,50 @@ func registerBuiltinTools(
 		logging.L().Info("rpc.builtins.plan_mode_tools_skipped",
 			"reason", "no posture manager wired")
 	}
+}
+
+// registerSubagentDispatchTool registers kenaz__subagent_dispatch
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-6). Deliberately
+// NOT called from registerBuiltinTools — see that function's doc comment
+// for why (a real dependency cycle: this tool needs the LLM connector,
+// which needs the tool registry registerBuiltinTools itself populates).
+//
+// core/rpc's New() calls this exactly once, from the SAME conditional
+// branch where BranchSeamAdapter.SetRunSpawner is called — so seam
+// arrives here either as a fully spawner-armed BranchSeamAdapter or this
+// function isn't called at all (seam == nil is handled defensively
+// below anyway, in case a future call site is added without that
+// guarantee). That coupling is what makes FR-007 hold: the tool is in
+// the model's catalog if and only if dispatching it would spawn a real
+// child run, never "the seam object exists but nothing will happen" —
+// crash-recovery-tool-gating-0XQTC4RK's invariant that a tool which
+// always fails is never advertised.
+func registerSubagentDispatchTool(c *core.Core, registry *toolloop.BuiltinRegistry, seam agentgraph.BranchSeam) {
+	if registry == nil || seam == nil {
+		logging.L().Info("rpc.builtins.subagent_dispatch_skipped",
+			"reason", "BranchSeam not wired with a live run spawner — tool omitted from model catalog (FR-007)",
+		)
+		return
+	}
+	var dataDir string
+	if c != nil {
+		dataDir = c.DataDir()
+	}
+	subagentTool := coresubagent.New(coresubagent.Options{
+		DataDir: dataDir,
+		Seam:    seam,
+		// Tasks deliberately left nil — see the Options.Tasks doc in
+		// core/tools/subagentdispatch/tool.go: task registration and
+		// completion for a dispatched sub-agent flow through the
+		// RunSpawner inside BranchSeamAdapter.Fork
+		// (core/rpc/subagent_run_spawner.go), which IS the "task
+		// registry is the completion signal" UNIT-3/UNIT-4 built.
+		// Wiring this field too would register a second, competing
+		// Tasks-panel row for the same dispatch.
+		Tasks: nil,
+	})
+	registry.Register(subagentTool)
+	logging.L().Info("rpc.builtins.register", "tool", subagentTool.Name())
 }
 
 // webFetchEnabledLookup returns a closure kenaz__web_fetch consults inside Call
@@ -886,14 +913,34 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 		case coresubagent.ToolName:
 			// subagent_dispatch (branch-subagent-interactive-01KZNP3B):
 			// always-on at this coarse Settings-store gate. Registration
-			// itself is already gated behind a non-nil BranchSeam (see
-			// registerBuiltinTools above — the seam is hardcoded nil today,
-			// so this tool is not currently reachable in production), and
-			// per-call authorization is enforced by Cedar's
-			// ActionToolSubagentDispatch action once the seam is wired, not
-			// by a Settings dial. Added proactively so wiring the seam in a
-			// future mission doesn't silently repeat the ask_user_question
-			// regression.
+			// itself is gated on a real, spawner-armed BranchSeam
+			// (registerSubagentDispatchTool, called from core/rpc's
+			// New() — subagent-control-and-background-tasks-01PMZB11
+			// UNIT-6 made this reachable in production).
+			//
+			// Per-call authorization for THIS tool call, like every
+			// other tool call, flows through the generic session-kind
+			// Cedar arm (cedar.ActionUseTool, evaluated by
+			// newCedarSessionKindResolver in
+			// core/rpc/harness_session_kind_resolver.go) — NOT through
+			// cedar.ActionToolSubagentDispatch. That constant is declared
+			// in core/policy/cedar/types.go but has zero evaluation
+			// sites anywhere in the tree; a prior version of this
+			// comment asserted it was the enforcement path in the
+			// present tense, which was false (containment review of PR
+			// #307, "Related note"). There is still no per-call gate
+			// dedicated to the dispatch itself (rate limits, containment
+			// beyond the session-wide tool set); see this tool's own
+			// depth guard (graphview.MaxForkDepth) for the one bound
+			// that mission actually shipped, and
+			// docs/unwired-ledger.md's 2026-08-22 entry for the
+			// still-unenforced profile fields (AllowedTools/
+			// DeniedTools/BudgetTokens/BudgetTimeS).
+			//
+			// This case predates the tool actually registering (added
+			// proactively so wiring the seam wouldn't silently repeat
+			// the ask_user_question regression) and needed no change
+			// when UNIT-6 landed.
 			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 

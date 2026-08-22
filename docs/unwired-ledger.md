@@ -309,6 +309,115 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-08-22 · Bundled sub-agent profiles advertise containment (allowed_tools/denied_tools/budget_*) that reaches no consumer (`subagent-control-and-background-tasks-01PMZB11`, containment review of PR #307 finding B3)
+
+Every bundled profile (`core/agents/bundled/*.yaml`) declares
+`allowed_tools`, `denied_tools`, `budget_tokens` and `budget_time_s`. None
+reaches a consumer on the dispatch path:
+
+- `BranchSeamAdapter.Fork` (`core/rpc/views/agentgraph/env_deps_branch.go`)
+  never reads `req.ToolAllowlist`, though `coreag.ForkRequest` carries the
+  field and `core/tools/subagentdispatch/tool.go` populates it from
+  `profile.AllowedTools`.
+- `DeniedTools` is dropped even earlier — `ForkRequest` has no field for
+  it at all.
+- `Profile.IsAllowed` / `IsDenied` (`core/agents/profile.go`) have zero
+  production callers.
+- `BudgetTokens` / `BudgetTimeS` have no reader outside the field copy
+  into `Profile` itself; `core/rpc/subagent_run_spawner.go` uses one
+  fixed `defaultSubagentSpawnTimeout` for every profile.
+
+Net effect: dispatching `explore` — whose bundled YAML says "Read-only
+research worker" and lists `kenaz__write_file` / `kenaz__edit_file` /
+`kenaz__bash` under `denied_tools` — produces a child session with the
+full session tool catalogue, those three tools included, and no
+profile-specific token ceiling. Session-level Cedar containment
+(`cedar.ActionUseTool`, evaluated for every tool call in every session)
+still gates every call, so this is not an absolute-terms regression, but
+the profile fields, `Profile.IsAllowed`/`IsDenied`'s doc comments, and
+the `kenaz__subagent_dispatch` tool description all previously implied a
+restriction that does not exist. The tool description and the four
+`agents.Profile` field docs were corrected in the same commit as this
+entry to stop asserting it; the fields, `IsAllowed` and `IsDenied` stay
+(deleting them fails the ritual's ruling test — no named live
+substitute, no documented retirement, and the mission that will consume
+them is already ruled to land).
+
+**Not fixed here because real enforcement needs a session-scoped tool
+permission overlay** — the containment PR #307 review answered (owner
+ruling G-1, `docs/escalation-register-2026-08-19.md` Part 9): the
+sub-agent mission runs to completion through UNIT-13, and per that
+ruling's sequencing (`UNIT-6 → {7, 8, 9, 12} → UNIT-10 → UNIT-13`),
+UNIT-9 is where these fields are meant to reach a consumer. Building that
+now, inside a three-finding containment fix, would mean touching
+`core/toolloop`'s `PermissionResolver` composition and
+`core/rpc/api.go`'s global `perms` construction (currently ONE
+`toolloop.NewMergedResolver` shared by every session, unconditional) —
+real mission-scale work, not a same-PR wire.
+
+**Owner:** alec. **Blocker:** `subagent-control-and-background-tasks-01PMZB11`
+UNIT-9 (not yet dispatched this release — see owner ruling G-1). **Date:**
+2026-08-22.
+
+### 2026-08-22 · `RunOptions.SkipCache` has zero frontend writers (UNIT-13, `automation-actually-runs-01PMZ404`)
+
+`RunOptions.SkipCache bool` (`core/rpc/views/workflows/api.go:139`, wire tag
+`json:"skipCache,omitempty"`), read at `core/rpc/views/workflows/impl.go:400`
+into `corewf.RunOptions{SkipCache: req.SkipCache}`, has no non-test writer
+anywhere under `frontend/src` — nothing on the run form or elsewhere sets it.
+It is a no-op today for the same reason `rerun_policy` was: `Engine.Cache`
+(`core/workflows/runtime.go`) has no production assignment, so the branch it
+guards (`runtime.go:166` `if e.Cache != nil && wf.RerunPolicy != "" &&
+!opts.SkipCache`) can never be reached in production regardless of what
+`SkipCache` is set to.
+
+UNIT-13 (owner ruling A-10) narrowed `rerun_policy` itself — `Store.Save` now
+refuses a non-empty value outright (`core/workflows/schema.go`
+`ValidateForSave`), and `Store.Load` tolerates a legacy stored value but
+scrubs it to `""` before the workflow ever reaches `Engine.Run`
+(`core/workflows/storage.go`, `sqliteStore.Load`) — so as of this unit
+`wf.RerunPolicy != ""` can no longer be true for anything that came through
+the Store, and the whole cache-consult branch `SkipCache` was built to bypass
+is now doubly unreachable in production. A-10 is explicit that this is
+intentional and not a delete-lane action: `Engine.Cache` and
+`runtime.go:157`'s branch **stay** as the seam for if/when run caching ships;
+narrowing `rerun_policy` and leaving `SkipCache` inert is what stops the
+product lying about the dial without tearing out the seam a future mission
+would rebuild on. See `kitty-specs/automation-actually-runs-01PMZ404/spec.md`
+§5.13 / §1.11 X-11 and `core/storage/sqlite/upgrade_path_test.go`'s
+`assertRerunPolicyToleratedOnLoad` for the load-side read-compat proof.
+
+`justify(blocker: "Engine.Cache has no production assignment", owner: alec,
+date: 2026-08-19)` — the date matches the owner ruling (A-10,
+`docs/escalation-register-2026-08-19.md`) that decided to preserve the seam
+rather than delete it; this entry was written 2026-08-22 when UNIT-13 shipped
+and is the first record of `SkipCache` specifically (the field itself
+predates this mission).
+### 2026-08-22 · `scheduledchat.API.CreateAsModel` has no caller (`model-scheduled-jobs-01PMSJ01` WP09)
+
+WP09 built the full server-side provenance mechanism FR-005 requires — the
+`created_by`/`tool_allowlist` columns (migration `sessions/0340`), the
+`CreateAsModel` entry point that stamps `created_by="model"` and refuses an
+empty allowlist (ruling B-3), and the Cedar fail-safe
+(`core/policy/cedar.GateScheduledChatExecute` treats `NotApplicable` as
+`Deny`, not default-allow, for a model-created row — see
+`policies/default_scheduled_run_policy.cedar`). `CreateAsModel` itself has
+zero callers outside its own package's tests: the model-facing surface
+(`harness_write_create_scheduled_run`) is WP10, per the mission's own
+tasks.md this is **HARD-BLOCKED** on `harness-self-attach-01PMHS01`
+WP04+WP06 (the merged-resolver wiring and the harness-self server actually
+being attached to a session) — landing WP10 without that dependency would
+make per-run tool containment *invisibly absent* rather than merely absent
+(spec.md §6.1 F2), which is worse than the current gap.
+
+Per `tasks.md`'s own cut-order note for this exact situation ("If UNIT-8 is
+cut, UNIT-7 files a dated entry..."): the `created_by='model'` arm has a
+tested mechanism and no producer.
+
+**Owner:** the wave lead landing `harness-self-attach-01PMHS01`.
+**Blocker:** `harness-self-attach-01PMHS01` WP04 (merged resolver) + WP06
+(attach the harness-self server). **Date:** 2026-08-22.
+
 ### 2026-08-19 · `settings.Settings.SchemaVersion` gates no migration (`SD-13` settings)
 
 `controls-and-readouts-that-tell-the-truth-01PMZ808` WP06 (FR-007). Three
@@ -758,14 +867,21 @@ unchanged. Sub-agent: **build**, not delete — spec `abort`/`steer`/`pause`/
 because **A-7** ruled that `subagent_start`, `background_task_complete` and
 `worktree_create` all get producers, and none can be built without this seam.
 
-⚠️ **Carry Part 7's correction.** A-13's stated premise that
-`kenaz__subagent_dispatch` is "already live" is FALSE, and this row's own text
-above repeats it. Re-verified 2026-08-19:
-`core/rpc/builtins_wiring.go:312-313` reads
+⚠️ **Carry Part 7's correction — now resolved by UNIT-6.** A-13's stated
+premise that `kenaz__subagent_dispatch` is "already live" was FALSE as of
+2026-08-19: `core/rpc/builtins_wiring.go:312-313` read
 `var subagentSeam agentgraph.BranchSeam // nil — no child-run spawner yet`
-followed by `if subagentSeam != nil`, so the registration inside is statically
-unreachable. The ruling stands; the mission must first build the child-run
-spawner, and size and risk go up accordingly.
+followed by `if subagentSeam != nil`, so the registration inside was
+statically unreachable. **`subagent-control-and-background-tasks-01PMZB11`
+UNIT-6 built the child-run spawner** the guard was waiting on
+(`core/rpc/subagent_run_spawner.go`, threaded through
+`agentgraph.BranchSeamAdapter.SetRunSpawner` and armed from `core/rpc/api.go`'s
+`New()` once the LLM connector exists) and replaced the dead local variable
+with `registerSubagentDispatchTool`, called only when a real, spawner-armed
+seam exists. `kenaz__subagent_dispatch` is genuinely live in production as of
+this commit. `SubagentTab.vue` / `SubagentBudgetMeter.vue` remain unmounted
+(UNIT-10, gated on UNIT-8 + UNIT-9 landing first per the mission's plan.md
+Rule 5) — this paragraph covers only the registration half.
 
 ### 2026-08-14 · The denial UX gap (opened by deleting `DenialNotice`)
 

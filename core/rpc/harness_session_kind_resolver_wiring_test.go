@@ -10,11 +10,12 @@ package rpc
 // The harness-self MCP server itself has NO production caller yet —
 // that is UNIT-6, hard-gated on this unit's AC-002 (spec.md). So AC-006
 // and AC-007 below drive the discoverer with a FAKE pool that reports
-// the 13 canonical harness-self tool names under the real "harness-self"
-// server prefix, through the REAL merged resolver. That is a faithful
-// test of "does the live wire filter harness-self-shaped tool names
-// correctly" without needing UNIT-6's attach — the pool contents are
-// not what this unit changes; the resolver is.
+// the harness-self tool names this list tracks (see the note on
+// harnessWriteToolNames below) under the real "harness-self" server
+// prefix, through the REAL merged resolver. That is a faithful test of
+// "does the live wire filter harness-self-shaped tool names correctly"
+// without needing UNIT-6's attach — the pool contents are not what this
+// unit changes; the resolver is.
 
 import (
 	"context"
@@ -32,11 +33,22 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
-// the 13 canonical harness-self tool names (7 read + 6 write), pulled
-// from the same exported constants harness_wiring.go registers against
-// the real server (core/mcp/builtin/harness/register.go) — kept as
-// symbols rather than literals so this test cannot drift from the real
-// tool set without failing to compile.
+// 7 read + 5 write harness-self tool names, pulled from the same
+// exported constants harness_wiring.go registers against the real
+// server (core/mcp/builtin/harness/register.go) — kept as symbols
+// rather than literals so this test cannot drift from the real tool set
+// without failing to compile. Not exhaustive against every tool the
+// live server registers today (it predates model-authored-graphs-01PMGA01's
+// harness_read_materialize_run / harness_write_draft_agent_graph, which
+// this list was never extended to track) — it exists to prove the
+// resolver correctly filters the write/read split for the tools it
+// does track, not to enumerate the server's full surface.
+//
+// harnessmcp.ToolSetSetting no longer exists:
+// harness-self-attach-01PMHS01 UNIT-8 (G-4) removed
+// harness_write_set_setting entirely (see the doc comment above
+// harness.ProjectWriter in core/mcp/builtin/harness/handlers.go), so it
+// is absent from harnessWriteToolNames rather than merely untracked.
 var (
 	harnessReadToolNames = []string{
 		harnessmcp.ToolListProviders,
@@ -51,14 +63,13 @@ var (
 		harnessmcp.ToolAddProvider,
 		harnessmcp.ToolRemoveProvider,
 		harnessmcp.ToolInstallMCPRecipe,
-		harnessmcp.ToolSetSetting,
 		harnessmcp.ToolCreateProject,
 		harnessmcp.ToolCreateSession,
 	}
 )
 
-// harnessShapedPool is a fake mcp.Pool reporting the 13 canonical
-// harness-self tool names under server "harness-self". No harness-self
+// harnessShapedPool is a fake mcp.Pool reporting the harness-self tool
+// names tracked above under server "harness-self". No harness-self
 // wiring is involved — this exists purely so AC-006/AC-007 can drive
 // the REAL merged resolver against the real tool-name shapes it will
 // see once UNIT-6 attaches the real server.

@@ -27,6 +27,17 @@ export interface ValidationError {
 }
 
 /**
+ * isNamespacedToolName — mirrors core/slashcmd/Validate's Go-side check.
+ * A namespaced tool name has the "server__tool" shape the dispatcher's
+ * splitter expects; both sides of "__" must be non-empty.
+ */
+function isNamespacedToolName(name: string): boolean {
+  const idx = name.indexOf('__');
+  if (idx <= 0) return false;
+  return idx + 2 < name.length;
+}
+
+/**
  * validateUserCommand — runs all checks the server runs.
  *
  * Returns null when the command is valid, or the first ValidationError
@@ -71,6 +82,15 @@ export function validateUserCommand(cmd: Partial<UserCommand>): ValidationError 
   if (cmd.kind === 'tool') {
     if (!cmd.tool) {
       return { field: 'tool', message: 'Tool name is required for kind "tool".' };
+    }
+    if (!isNamespacedToolName(cmd.tool)) {
+      // Owner ruling G-2 (docs/escalation-register-2026-08-19.md Part 9,
+      // automation-actually-runs-01PMZ404 E-004): namespaced tool names.
+      // Mirrors core/slashcmd/Validate's isNamespacedToolName.
+      return {
+        field: 'tool',
+        message: `Tool must be namespaced as "server__tool" (e.g. "kenaz__${cmd.tool}").`,
+      };
     }
     if (!cmd.toolArgsTemplate) {
       return {
@@ -164,6 +184,11 @@ export function allValidationErrors(cmd: Partial<UserCommand>): ValidationError[
   if (cmd.kind === 'tool') {
     if (!cmd.tool) {
       errors.push({ field: 'tool', message: 'Tool name is required for kind "tool".' });
+    } else if (!isNamespacedToolName(cmd.tool)) {
+      errors.push({
+        field: 'tool',
+        message: `Tool must be namespaced as "server__tool" (e.g. "kenaz__${cmd.tool}").`,
+      });
     }
     if (!cmd.toolArgsTemplate) {
       errors.push({

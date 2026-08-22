@@ -18,6 +18,8 @@ import NewSessionDialog from '@/shell/NewSessionDialog.vue';
 import ArtifactPreview from '@/views/artifacts/ArtifactPreview.vue';
 import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
+import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
+import { useConfirmDialog } from '@/composables/useConfirmDialog';
 import type {
   Artifact,
   ArtifactScope,
@@ -448,6 +450,44 @@ async function onToggleArtifactClass(cls: string, enabled: boolean) {
     projectSyncArtifactSaving.value = false;
   }
 }
+
+// ── Remote purge (fleet-enforcement-truth-01PMZ505 WP13) ────────────────────
+//
+// ProjectSync_DeleteRemote purges every fleet event uploaded for this
+// project AND disables sync (core/fleet/project_sync.go — same doc shape as
+// the session twin at session_sync.go:209). The confirm copy names both
+// effects. The backend already emits the audit event; this WP adds no
+// second emit.
+const { confirmState: projectPurgeConfirmState, confirm: confirmProjectPurge } = useConfirmDialog();
+const projectPurging = ref(false);
+
+async function onPurgeProjectRemote() {
+  const id = projectId.value;
+  if (!id || projectPurging.value) return;
+  const ok = await confirmProjectPurge({
+    title: 'Purge remote sync data?',
+    message:
+      'This permanently deletes every fleet event uploaded for this project from the server, and turns sync off for this project. It does not affect data stored on this device.',
+    danger: true,
+    confirmLabel: 'Purge',
+  });
+  if (!ok) return;
+  projectPurging.value = true;
+  try {
+    await client.ProjectSync_DeleteRemote(id);
+    projectSyncStatus.value = {
+      projectID: id,
+      enabled: false,
+      lastSeq: 0,
+      lastSyncAt: '',
+      artifactClasses: { classes: {} },
+    };
+  } catch {
+    // Capability unavailable.
+  } finally {
+    projectPurging.value = false;
+  }
+}
 </script>
 
 <template>
@@ -865,6 +905,20 @@ async function onToggleArtifactClass(cls: string, enabled: boolean) {
           When enabled, project events are encrypted and synced to the fleet for cross-device continuity.
         </p>
 
+        <!-- Purge remote sync data (fleet-enforcement-truth-01PMZ505 WP13).
+             Shown regardless of the toggle's current state — turning sync
+             off leaves already-uploaded events on the server, and this is
+             the only in-app control that removes them. -->
+        <button
+          type="button"
+          class="mb-3 flex items-center gap-1 rounded px-2 py-0.5 font-ui text-[11px] uppercase tracking-[0.15em] text-danger border border-danger/40 bg-surface-2 hover:bg-danger/10 transition-colors"
+          :disabled="projectPurging"
+          data-testid="project-purge-remote-btn"
+          @click="onPurgeProjectRemote"
+        >
+          Purge remote
+        </button>
+
         <!-- Per-artifact-class opt-in (only shown when sync is enabled) -->
         <div
           v-if="isProjectSyncEnabled"
@@ -912,6 +966,13 @@ async function onToggleArtifactClass(cls: string, enabled: boolean) {
       :on-promote="promoteArtifact"
       :on-delete="deleteArtifact"
       @close="closeArtifactPreview"
+    />
+
+    <!-- Remote purge confirm (fleet-enforcement-truth-01PMZ505 WP13) -->
+    <ConfirmDialog
+      v-bind="projectPurgeConfirmState"
+      @confirm="projectPurgeConfirmState.resolve(true)"
+      @cancel="projectPurgeConfirmState.resolve(false)"
     />
   </div>
 </template>

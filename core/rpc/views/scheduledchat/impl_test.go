@@ -73,6 +73,14 @@ func (f *fakeStore) Update(_ context.Context, r scheduler.ChatRunRecord) error {
 	}
 	existing := f.records[r.ID]
 	r.CreatedAt = existing.CreatedAt
+	// CreatedBy is immutable post-create — mirrors
+	// scheduler.SQLiteChatStore.Update's SQL statement, which does not
+	// list the created_by column at all (model-scheduled-jobs-01PMSJ01
+	// WP09). Without this line the fake's full-struct overwrite silently
+	// clobbers provenance on every Update, which is exactly the "test
+	// fixture bypasses the layer under test" shape CLAUDE.md's blind
+	// spot #2 warns about — caught by TestUpdateCannotChangeCreatedBy.
+	r.CreatedBy = existing.CreatedBy
 	f.records[r.ID] = r
 	return nil
 }
@@ -419,5 +427,176 @@ func TestHistoryDefaultLimit(t *testing.T) {
 	}
 	if len(hist) != 3 {
 		t.Errorf("got %d rows, want 3", len(hist))
+	}
+}
+
+// ── WP09: provenance + Cedar context injection ──────────────────────────
+//
+// AC-011 (FR-005). "Create a schedule through the model-facing path with
+// created_by set to 'user' in the request payload; assert the persisted
+// row says 'model'" — CreateInput has no created_by field to set, so the
+// "payload" half of that scenario is proven by construction: there is
+// nothing to smuggle. What these tests assert instead is the shape that
+// makes that true: Create always stamps "user", CreateAsModel always
+// stamps "model", and neither reads anything from the caller to decide.
+
+func TestCreateStampsCreatedByUser(t *testing.T) {
+	store := newFakeStore()
+	api := scheduledchat.New(scheduledchat.Config{Store: store})
+
+	entry, err := api.Create(context.Background(), scheduledchat.CreateInput{
+		Name: "user schedule", Cron: "0 9 * * *", Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if entry.CreatedBy != "user" {
+		t.Errorf("CreatedBy=%q, want %q", entry.CreatedBy, "user")
+	}
+
+	// Re-Get to prove it round-trips through the store, not just the
+	// in-memory return value.
+	got, err := api.Get(context.Background(), entry.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.CreatedBy != "user" {
+		t.Errorf("Get.CreatedBy=%q, want %q", got.CreatedBy, "user")
+	}
+}
+
+// TestCreateAsModelRequiresToolAllowlist is F1's create-time half (owner
+// ruling B-3): a model-created schedule with no declared allowlist must
+// not even be creatable, defense-in-depth ahead of the fire-time Cedar
+// check in core/policy/cedar.GateScheduledChatExecute.
+func TestCreateAsModelRequiresToolAllowlist(t *testing.T) {
+	store := newFakeStore()
+	api := scheduledchat.New(scheduledchat.Config{Store: store})
+
+	_, err := api.CreateAsModel(context.Background(), scheduledchat.CreateInput{
+		Name: "model schedule, no allowlist", Cron: "0 9 * * *", Enabled: true,
+	})
+	if !errors.Is(err, scheduledchat.ErrInvalidInput) {
+		t.Fatalf("CreateAsModel with empty ToolAllowlist: want ErrInvalidInput, got %v", err)
+	}
+
+	list, lerr := api.List(context.Background())
+	if lerr != nil {
+		t.Fatalf("List: %v", lerr)
+	}
+	if len(list) != 0 {
+		t.Errorf("a refused CreateAsModel must not persist a row; got %d", len(list))
+	}
+}
+
+// TestCreateAsModelStampsCreatedByModel is the paired positive: a
+// declared allowlist lets CreateAsModel succeed, and the persisted row
+// carries both created_by="model" and the allowlist.
+func TestCreateAsModelStampsCreatedByModel(t *testing.T) {
+	store := newFakeStore()
+	api := scheduledchat.New(scheduledchat.Config{Store: store})
+
+	entry, err := api.CreateAsModel(context.Background(), scheduledchat.CreateInput{
+		Name:          "model schedule",
+		Cron:          "0 9 * * *",
+		Enabled:       true,
+		ToolAllowlist: []string{"kenaz__web_fetch"},
+	})
+	if err != nil {
+		t.Fatalf("CreateAsModel: %v", err)
+	}
+	if entry.CreatedBy != "model" {
+		t.Errorf("CreatedBy=%q, want %q", entry.CreatedBy, "model")
+	}
+	if len(entry.ToolAllowlist) != 1 || entry.ToolAllowlist[0] != "kenaz__web_fetch" {
+		t.Errorf("ToolAllowlist=%v, want [kenaz__web_fetch]", entry.ToolAllowlist)
+	}
+}
+
+// TestUpdateCannotChangeCreatedBy: a row's provenance is immutable
+// post-create. Update has no way to smuggle a different created_by in
+// (UpdateInput has no such field either), and the store layer's Update
+// SQL statement omits the column entirely — this test asserts the
+// end-to-end behaviour, not just the SQL shape.
+func TestUpdateCannotChangeCreatedBy(t *testing.T) {
+	store := newFakeStore()
+	api := scheduledchat.New(scheduledchat.Config{Store: store})
+
+	entry, err := api.CreateAsModel(context.Background(), scheduledchat.CreateInput{
+		Name: "immutable provenance", Cron: "0 9 * * *", Enabled: true,
+		ToolAllowlist: []string{"kenaz__web_fetch"},
+	})
+	if err != nil {
+		t.Fatalf("CreateAsModel: %v", err)
+	}
+	if entry.CreatedBy != "model" {
+		t.Fatalf("precondition failed: CreatedBy=%q, want model", entry.CreatedBy)
+	}
+
+	updated, err := api.Update(context.Background(), scheduledchat.UpdateInput{
+		ID: entry.ID, Name: "renamed", Cron: "0 10 * * *", Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if updated.CreatedBy != "model" {
+		t.Errorf("after Update, CreatedBy=%q, want it to still be %q (immutable)", updated.CreatedBy, "model")
+	}
+}
+
+// recordingGate is a cedar.Gate stub that records the contextAttrs of
+// its most recent Evaluate call, so a test can assert what RunNow
+// actually sent to Cedar — not just that some call happened.
+type recordingGate struct {
+	mu       sync.Mutex
+	lastCtx  map[cedargo.String]cedargo.Value
+	lastCall int
+}
+
+func (g *recordingGate) Evaluate(_ context.Context, _ cedargo.EntityUID, action string, _ cedargo.EntityUID, contextAttrs map[cedargo.String]cedargo.Value) cedar.Decision {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.lastCtx = contextAttrs
+	g.lastCall++
+	return cedar.Decision{Outcome: cedar.Allow, Action: action, Reason: "recordingGate: test stub"}
+}
+
+var _ cedar.Gate = (*recordingGate)(nil)
+
+// TestRunNowInjectsCreatedByAndAllowlistIntoCedarContext proves the
+// context attribute actually reaches the Cedar call at the RunNow site
+// — not just that GateScheduledChatExecute's own unit tests (in
+// core/policy/cedar) build the map correctly in isolation.
+func TestRunNowInjectsCreatedByAndAllowlistIntoCedarContext(t *testing.T) {
+	store := newFakeStore()
+	gate := &recordingGate{}
+	api := scheduledchat.New(scheduledchat.Config{
+		Store:      store,
+		Dispatcher: &fakeDispatcher{},
+		Cedar:      gate,
+	})
+
+	entry, err := api.CreateAsModel(context.Background(), scheduledchat.CreateInput{
+		Name: "context probe", Cron: "0 9 * * *", Enabled: true,
+		ToolAllowlist: []string{"kenaz__web_fetch"},
+	})
+	if err != nil {
+		t.Fatalf("CreateAsModel: %v", err)
+	}
+
+	if _, err := api.RunNow(context.Background(), entry.ID); err != nil {
+		t.Fatalf("RunNow: %v", err)
+	}
+
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	if gate.lastCtx == nil {
+		t.Fatal("Cedar Evaluate was not called with any context attrs")
+	}
+	if v, ok := gate.lastCtx[cedargo.String("created_by")]; !ok || v != cedargo.String("model") {
+		t.Errorf("context[created_by] = %v (ok=%v), want %q", v, ok, "model")
+	}
+	if v, ok := gate.lastCtx[cedargo.String("has_tool_allowlist")]; !ok || v != cedargo.Boolean(true) {
+		t.Errorf("context[has_tool_allowlist] = %v (ok=%v), want true", v, ok)
 	}
 }

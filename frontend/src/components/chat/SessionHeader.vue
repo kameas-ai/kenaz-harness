@@ -16,15 +16,31 @@
  * event handled by usePlanMode.
  */
 import { ref, nextTick, onMounted } from 'vue';
+import { useRouter } from 'vue-router';
 import { useHarnessClient, useProjects } from '@/lib/useHarnessAPI';
 import type { Session } from '@/lib/types';
 import AutonomyChip from '@/components/chat/AutonomyChip.vue';
 import PlanModeBadge from '@/components/chat/PlanModeBadge.vue';
+// subagent-control-and-background-tasks-01PMZB11 UNIT-11 — this
+// component had never been mounted anywhere since it was created in
+// v0.11.0 (background-task-monitor-01KZNP3C WP06). SessionHeader is its
+// documented host ("chat-header chip") and already has session.id.
+import BackgroundTaskChip from '@/components/chat/BackgroundTaskChip.vue';
 import { usePlanMode } from '@/lib/planmode';
 
 const props = defineProps<{
   session: Session;
 }>();
+
+// useRouter() returns undefined outside a router context (vitest unit
+// tests mounting SessionHeader standalone) — the chip click becomes a
+// no-op there rather than throwing, matching SettingsTabs.vue's guard.
+const router = useRouter() as ReturnType<typeof useRouter> | undefined;
+
+function openTasksPanel() {
+  if (!router) return;
+  void router.push('/settings?tab=tasks');
+}
 
 const emit = defineEmits<{
   'title-changed': [];
@@ -222,6 +238,8 @@ function cancelConfirm() {
     />
 
     <AutonomyChip :session-id="session.id" />
+
+    <BackgroundTaskChip :session-id="session.id" @open-tasks="openTasksPanel" />
 
     <!-- Export dropdown (WP03: replaced window.confirm picker) -->
     <div class="relative shrink-0">

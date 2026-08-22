@@ -31,6 +31,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,6 +40,7 @@ import (
 	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
 	"github.com/kameas-ai/kenaz-harness/core/storage/sqlite/upgradesnap"
 	coretasks "github.com/kameas-ai/kenaz-harness/core/tasks"
+	corewf "github.com/kameas-ai/kenaz-harness/core/workflows"
 
 	_ "modernc.org/sqlite"
 )
@@ -49,7 +51,74 @@ import (
 // the migration responsible. A table not listed here that WOULD change
 // shape (e.g. gains/loses a column) fails the test, which is exactly
 // the point: an undeclared shape change is a regression.
+// model-scheduled-jobs-01PMSJ01 WP09's sessions/0340 migration ADD
+// COLUMNs created_by + tool_allowlist onto scheduled_chat_runs, which
+// was created by migration 0325 (v0.10.0, long before any committed
+// snapshot) and has not changed shape since. 0340 is newer than every
+// migration reflected in every currently-committed snapshot, so EVERY
+// tag below sees this table's shape change on Open — this is not a
+// per-tag judgement call, it's the same fact repeated for each one.
+// scheduledChatRunsProvenanceNote is the shared reason for the
+// scheduled_chat_runs entry that appears under EVERY tag below.
+//
+// COST OF THAT ENTRY, stated here because it is stated for `tasks` and
+// was not stated for this table (finding N6, re-review of PR #307):
+// scheduled_chat_runs is now allowlisted on all twelve tags, so the
+// comparison loop skips both its row-count and digest checks
+// permanently. A REAL future migration that writes rows to this table
+// will be masked. If one lands, assert the row count exactly rather
+// than allowlisting the table, or move the provenance assertion onto a
+// table no migration touches.
+//
+// The const is referenced from the per-tag comments rather than from
+// code, which is why a compiler cannot see it go stale — blind spot #1
+// in CLAUDE.md, inside the upgrade-path test of all places.
+const scheduledChatRunsProvenanceNote = "sessions/0340-scheduled-chat-runs-created-by " +
+	"(model-scheduled-jobs-01PMSJ01 WP09) adds created_by + tool_allowlist " +
+	"to scheduled_chat_runs (created by 0325, unchanged since)."
+
 var expectedChangedTables = map[string][]string{
+	"v0.70.0": {
+		// sessions/0340 (model-scheduled-jobs-01PMSJ01 WP09) ALTERs
+		// scheduled_chat_runs, adding created_by NOT NULL DEFAULT 'user'
+		// and tool_allowlist NOT NULL DEFAULT ''. Every pre-existing row
+		// in the v0.70.0 snapshot gains both columns, so the content
+		// digest legitimately changes.
+		//
+		// This surfaced only AFTER the merge: WP09's agent ran
+		// TestUpgradePath against v0.63.0-v0.69.0 and was green, because
+		// its worktree branched before the v0.70.0 snapshot existed. The
+		// defect is real and belongs to the integration, not to that
+		// agent — which is the class of failure a shared release branch
+		// exists to catch.
+		//
+		// The provenance columns are the POINT of WP09: an upgraded
+		// install must have created_by on rows written before the column
+		// existed, defaulted to 'user' so a pre-existing schedule is
+		// never mistaken for a model-created one. That default is
+		// load-bearing, not cosmetic — GateScheduledChatExecute fails
+		// closed only for created_by == "model".
+		"scheduled_chat_runs",
+		// NOT a migration writing rows — this one is the TEST's own
+		// probe. tasks/1200-tasks-init (subagent-control-and-background-
+		// tasks-01PMZB11 UNIT-2) creates the table empty, and then
+		// assertTasksTableMigrated inserts through the production writer
+		// coretasks.NewSQLiteStore(...) to prove the table is actually
+		// usable and not merely present.
+		//
+		// For v0.63.0..v0.69.0 that insert is invisible here: `tasks`
+		// does not exist in those dumps, so there is no before-state to
+		// diff. v0.70.0 is the first snapshot containing the table, so
+		// the probe's row shows up as 0 -> 1 and the test correctly
+		// refuses it until declared.
+		//
+		// Declaring it is right, but note what it costs: a real
+		// migration that writes to `tasks` in a future release will now
+		// be masked for THIS tag. If one lands, split the probe onto a
+		// table nobody migrates, or assert the row count exactly rather
+		// than allowlisting the table.
+		"tasks",
+	},
 	"v0.63.0": {
 		// sessions/0333-transcript-moves adds nullable columns to
 		// session_messages (kind, move_index, turn_span_id,
@@ -57,7 +126,13 @@ var expectedChangedTables = map[string][]string{
 		"session_messages",
 		// sessions/0334-move-fidelity-columns adds sessions.move_history_mode.
 		"sessions",
+		// See scheduledChatRunsProvenanceNote above.
+		"scheduled_chat_runs",
 	},
+	"v0.63.1": {"scheduled_chat_runs"}, // see scheduledChatRunsProvenanceNote
+	"v0.63.2": {"scheduled_chat_runs"}, // see scheduledChatRunsProvenanceNote
+	"v0.64.0": {"scheduled_chat_runs"}, // see scheduledChatRunsProvenanceNote
+	"v0.64.1": {"scheduled_chat_runs"}, // see scheduledChatRunsProvenanceNote
 	"v0.65.0": {
 		// event-log/0106-events-fts-sync (audit-that-tells-the-truth-
 		// 01PMZA10 UNIT-8) UPDATEs the single retention_config row,
@@ -68,6 +143,8 @@ var expectedChangedTables = map[string][]string{
 		// (core/event/log/retention_config_test.go) asserts the
 		// corrected value is actually readable afterwards.
 		"retention_config",
+		// See scheduledChatRunsProvenanceNote above.
+		"scheduled_chat_runs",
 	},
 	"v0.65.1": {
 		// Same migration, same reason as v0.65.0 above: v0.65.1 is a
@@ -81,7 +158,13 @@ var expectedChangedTables = map[string][]string{
 		// for it. Every release tag owes one, including the ones nobody
 		// set out to cut.
 		"retention_config",
+		// See scheduledChatRunsProvenanceNote above.
+		"scheduled_chat_runs",
 	},
+	"v0.66.0": {"scheduled_chat_runs"}, // see scheduledChatRunsProvenanceNote
+	"v0.67.0": {"scheduled_chat_runs"}, // see scheduledChatRunsProvenanceNote
+	"v0.68.0": {"scheduled_chat_runs"}, // see scheduledChatRunsProvenanceNote
+	"v0.69.0": {"scheduled_chat_runs"}, // see scheduledChatRunsProvenanceNote
 }
 
 // fixedProbeTime is used for the item-4 session INSERT probe so the
@@ -240,6 +323,15 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	// install's high-water mark" case, same shape as event-log above. ----
 	assertTasksTableMigrated(t, ctx, db)
 
+	// ---- automation-actually-runs-01PMZ404 UNIT-13 (owner ruling
+	// A-10): rerun_policy is refused on save but tolerated on load. A
+	// row this tag's own release could have written via the old,
+	// lenient validator (rerun_policy: skip) must still Load and still
+	// appear in List on THIS build, which narrows the same field to
+	// save-only rejection — the read-compat hazard the mission's PI
+	// table flags for yaml_source (X-11). ----
+	assertRerunPolicyToleratedOnLoad(t, ctx, db, tag)
+
 	// ---- item 6: no seeded row disappeared, except declared changes.
 	// "sessions" always gained exactly the one row from the item-4
 	// probe insert above, on every tag — that is expected regardless
@@ -254,7 +346,17 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	if err := postRaw.Close(); err != nil {
 		t.Fatalf("close raw after post-Open snapshot: %v", err)
 	}
-	changed := map[string]bool{"harness_migrations": true, "sessions": true}
+	// "workflows" gained exactly two rows from
+	// assertRerunPolicyToleratedOnLoad above (the direct-SQL legacy
+	// probe row plus the one successful Save of a fresh, empty-policy
+	// workflow — the rejected non-empty-policy Save writes nothing),
+	// and "workflow_versions" gained one row (Save's version-history
+	// append for that same successful save; the direct-SQL legacy
+	// insert bypasses Store.Save entirely, so it does not touch
+	// workflow_versions), unconditionally on every tag for the same
+	// reason "sessions" is: this test itself is the writer, not a
+	// migration.
+	changed := map[string]bool{"harness_migrations": true, "sessions": true, "workflows": true, "workflow_versions": true}
 	for _, tbl := range expectedChangedTables[tag] {
 		changed[tbl] = true
 	}
@@ -279,6 +381,13 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 		if after.RowCount != before.RowCount+1 {
 			t.Errorf("sessions row count = %d after Open+probe-insert, want exactly %d (before + the one item-4 probe row)",
 				after.RowCount, before.RowCount+1)
+		}
+	}
+	if before, ok := preOpen["workflows"]; ok {
+		after := postOpen["workflows"]
+		if after.RowCount != before.RowCount+2 {
+			t.Errorf("workflows row count = %d after Open+UNIT-13 probes, want exactly %d (before + legacy-load row + fresh-valid-save row)",
+				after.RowCount, before.RowCount+2)
 		}
 	}
 
@@ -495,6 +604,130 @@ func assertTasksTableMigrated(t *testing.T, ctx context.Context, db storage.DB) 
 	}
 	if n != 1 {
 		t.Errorf("tasks row for %s after insert = %d, want 1", probe.ID, n)
+	}
+}
+
+// assertRerunPolicyToleratedOnLoad is automation-actually-runs-01PMZ404
+// UNIT-13's persistence-integrity assertion (owner ruling A-10).
+//
+// core/workflows/schema.go's ValidateForSave now refuses a non-empty
+// rerun_policy outright — none of the six historically-accepted values
+// ("fresh", "continue", "ask", "always", "skip", "prompt") ever did
+// anything, because Engine.Cache has no production assignment. But a
+// row THIS SNAPSHOT'S OWN RELEASE could have written under the old,
+// lenient validator may still carry one of those values on disk, and
+// core/workflows/storage.go's sqliteStore.Load re-validates the stored
+// yaml_source on every single read (LoadYAML -> ValidateForLoad). If
+// the load path used the same strict gate as save, that row would
+// fail to parse and the workflow would vanish from the user's list —
+// the X-11 hazard the mission's own spec calls out as "a worse lie
+// than the dial it replaces."
+//
+// The legacy row below is inserted directly via SQL rather than
+// through workflows.Store.Save, because Save now rejects exactly this
+// value — that rejection is this same function's other half, asserted
+// against a SEPARATE, freshly-constructed workflow so the two
+// assertions don't entangle with each other's yaml_source caching (a
+// workflow already Loaded — and therefore already scrubbed by
+// storage.go's Load — carries its OLD raw text in its yaml_source
+// cache even after RerunPolicy is cleared in memory; reusing that
+// same struct for the save-side assertion would test the cache's
+// no-op-on-equal-hash path instead of ValidateForSave).
+func assertRerunPolicyToleratedOnLoad(t *testing.T, ctx context.Context, db storage.DB, tag string) {
+	t.Helper()
+	store := corewf.NewSQLiteStore(db)
+
+	// isKebab (core/workflows/refs.go) rejects '.', so a tag like
+	// "v0.69.0" cannot appear verbatim in a workflow id.
+	tagSlug := strings.ReplaceAll(tag, ".", "-")
+
+	// ---- Load side: a value this snapshot's release could have
+	// written must still load, and must come back cleared. ----
+	legacyID := "upgrade-path-rerun-policy-legacy-" + tagSlug
+	legacyYAML := "id: " + legacyID + "\n" +
+		"name: \"UNIT-13 legacy rerun_policy probe (" + tag + ")\"\n" +
+		"version: 1\n" +
+		"rerun_policy: skip\n" +
+		"steps:\n" +
+		"  - name: a\n" +
+		"    kind: model_turn\n" +
+		"    user_prompt: probe\n"
+	now := fixedProbeTime.UnixNano()
+	if err := db.WriteTx(ctx, func(tx storage.WriteTx) error {
+		_, err := tx.Exec(ctx,
+			`INSERT INTO workflows (id, name, description, yaml_source, version, hash, created_at, updated_at)
+			 VALUES (?, ?, '', ?, 1, 'upgrade-path-unit13-probe-hash', ?, ?)`,
+			legacyID, "UNIT-13 legacy rerun_policy probe", legacyYAML, now, now,
+		)
+		return err
+	}); err != nil {
+		t.Fatalf("insert legacy rerun_policy=skip workflow row directly (simulating what a previous release's Store.Save would have written): %v", err)
+	}
+
+	loaded, err := store.Load(ctx, legacyID)
+	if err != nil {
+		t.Fatalf("Load on a %s-snapshot-shaped workflow row with a legacy rerun_policy=skip failed — this is exactly the vanish-on-open regression X-11 warns about: %v", tag, err)
+	}
+	if loaded.RerunPolicy != "" {
+		t.Errorf("Load(%s).RerunPolicy = %q, want \"\" — storage.go's Load must drop a stale value, not merely tolerate it", legacyID, loaded.RerunPolicy)
+	}
+	summaries, err := store.List(ctx)
+	if err != nil {
+		t.Fatalf("List after inserting a legacy-rerun_policy row: %v", err)
+	}
+	found := false
+	for _, s := range summaries {
+		if s.ID == legacyID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("List does not include %q — a stored workflow with a legacy rerun_policy vanished after upgrade (X-11)", legacyID)
+	}
+
+	// ---- Save side: a NEW, freshly-authored workflow with a
+	// non-empty rerun_policy is refused outright, and the error names
+	// the field. ----
+	badID := "upgrade-path-rerun-policy-bad-" + tagSlug
+	bad := corewf.Workflow{
+		ID:          badID,
+		Name:        "UNIT-13 save-rejection probe",
+		Version:     1,
+		RerunPolicy: "skip",
+		Steps: []corewf.Step{
+			{Name: "a", Kind: corewf.StepKindModelTurn, UserPrompt: "probe"},
+		},
+	}
+	if _, err := store.Save(ctx, bad); err == nil {
+		t.Errorf("Save(%s) with rerun_policy=%q succeeded, want refusal (UNIT-13 save-side narrowing, A-10)", badID, bad.RerunPolicy)
+	} else if !strings.Contains(err.Error(), "rerun_policy") {
+		t.Errorf("Save(%s) rejection error = %q, want it to name rerun_policy", badID, err.Error())
+	}
+	if _, lerr := store.Load(ctx, badID); lerr == nil {
+		t.Errorf("Load(%s) succeeded after its Save was refused — a rejected save must not have persisted a row", badID)
+	}
+
+	// ---- Round trip: a fresh, valid (empty) rerun_policy saves and
+	// loads back unchanged. ----
+	goodID := "upgrade-path-rerun-policy-good-" + tagSlug
+	good := corewf.Workflow{
+		ID:      goodID,
+		Name:    "UNIT-13 round-trip probe",
+		Version: 1,
+		Steps: []corewf.Step{
+			{Name: "a", Kind: corewf.StepKindModelTurn, UserPrompt: "probe"},
+		},
+	}
+	if _, err := store.Save(ctx, good); err != nil {
+		t.Fatalf("Save(%s) with empty rerun_policy failed: %v", goodID, err)
+	}
+	reloaded, err := store.Load(ctx, goodID)
+	if err != nil {
+		t.Fatalf("Load(%s) after a clean save failed: %v", goodID, err)
+	}
+	if reloaded.RerunPolicy != "" {
+		t.Errorf("Load(%s).RerunPolicy = %q after a round trip of the empty value, want \"\"", goodID, reloaded.RerunPolicy)
 	}
 }
 

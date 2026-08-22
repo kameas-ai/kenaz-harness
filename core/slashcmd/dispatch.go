@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/context/audit"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 // RunResult is the output of a user command execution. The Kind field
@@ -32,6 +33,12 @@ type RunResult struct {
 	// shape as Result.Metadata).
 	Metadata map[string]any
 }
+
+// ErrNotModelInvokable is returned by RunModelInvoked when the resolved
+// command's model_invokable frontmatter flag is false (the default). The
+// command exists and a human can still run it via the RPC path (Run) —
+// this error only means the model is not permitted to invoke it.
+var ErrNotModelInvokable = errors.New("slashcmd: command is not model-invokable")
 
 // ToolDispatcher is the narrow interface the dispatch layer uses to
 // invoke a tool by name. The toolloop package satisfies this interface;
@@ -79,6 +86,23 @@ func NewDispatch(store *Store, tools ToolDispatcher) *Dispatch {
 // emit is itself non-blocking at the emitter level.
 func (d *Dispatch) WithAuditEmitter(em audit.Emitter) *Dispatch {
 	d.auditor = em
+	return d
+}
+
+// WithToolDispatcher injects a ToolDispatcher into the Dispatch after
+// construction — mirrors WithAuditEmitter.
+//
+// automation-actually-runs-01PMZ404 UNIT-4: this exists because the
+// production tool pool + permission resolver + confirm bus
+// (core/rpc/api.go's newLLMStack) are not available yet at the point
+// core/rpc/api.go constructs the Dispatch — slashStore (and the
+// Dispatch built over it) is needed early for hookBuiltins and the
+// kenaz__skill builtin's registration, both of which happen before
+// newLLMStack runs. The tools field is attached once those pieces
+// exist, synchronously inside New(), before *API is ever returned to a
+// caller — no request can observe a partially-wired Dispatch.
+func (d *Dispatch) WithToolDispatcher(tools ToolDispatcher) *Dispatch {
+	d.tools = tools
 	return d
 }
 
@@ -202,7 +226,20 @@ func (d *Dispatch) Run(
 				},
 			}, err
 		}
-		output, dispErr := d.tools.DispatchTool(ctx, cmd.Tool, splitArgs)
+		// Owner ruling G-2 (docs/escalation-register-2026-08-19.md Part
+		// 9, automation-actually-runs-01PMZ404 E-004): a slash-command
+		// tool call takes the SAME confirm/Cedar path a chat tool call
+		// takes, and that path is per-SESSION (permission resolution,
+		// confirm-each session grants, and the audit trail all key off
+		// it). DispatchTool's signature is unchanged ([]string args, no
+		// session parameter) — reusing toolloop's existing
+		// WithSessionID/SessionIDFromContext ctx convention (the same
+		// one kernelToolAdapter.dispatch uses to hand save_artifact its
+		// session id) avoids widening an interface every other
+		// implementer and every test fake would need to grow a
+		// parameter for.
+		dispatchCtx := toolloop.WithSessionID(ctx, sc.SessionID)
+		output, dispErr := d.tools.DispatchTool(dispatchCtx, cmd.Tool, splitArgs)
 		if dispErr != nil {
 			return RunResult{
 				Kind: ResultKindError,
@@ -226,4 +263,72 @@ func (d *Dispatch) Run(
 			Text: fmt.Sprintf("unknown command kind %q", cmd.Kind),
 		}, fmt.Errorf("slashcmd: unknown kind %q", cmd.Kind)
 	}
+}
+
+// RunModelInvoked is the model-invoked entry point into dispatch. It is
+// called exclusively by the kenaz__skill builtin tool
+// (core/tools/skill), the model's only path into user-defined slash
+// commands. Human-invoked dispatch — the RPC path at
+// core/rpc/views/slashcmd/impl.go UserRun — calls Run directly and is
+// unaffected by this method: model_invokable restricts what the model
+// may run, not what the user may run.
+//
+// trust-surfaces-that-fire-01PMZ202 WP20 (formerly WP14). Before this
+// method existed, LoadUserOne already scanned model_invokable onto the
+// struct (it has no WHERE-clause predicate — it is a discovery-only
+// flag), but nothing at dispatch read it: the model could name any
+// command, including one the user explicitly left off the model-invokable
+// catalog. skill.go's own doc comment claimed the opposite.
+//
+// RunModelInvoked loads the command once to check ModelInvokable before
+// executing. A command with model_invokable=false (the default) is
+// refused with ErrNotModelInvokable and never reaches Run — no text,
+// prompt or tool body is ever produced for a model-invoked call the user
+// did not authorize. The refusal is itself audited (mirroring Run's own
+// defer) so a rejected attempt by the model is visible in the audit log,
+// not merely swallowed by an error return.
+func (d *Dispatch) RunModelInvoked(
+	ctx context.Context,
+	name string,
+	args map[string]string,
+	sc SessionContext,
+) (RunResult, error) {
+	// Same feature-flag gate Run applies, checked up front so a disabled
+	// feature surfaces identically regardless of caller.
+	if !UserSlashcmdEnabled() {
+		return RunResult{
+			Kind: ResultKindError,
+			Text: ErrFeatureDisabled.Error(),
+		}, ErrFeatureDisabled
+	}
+
+	cmd, err := d.store.LoadUserOne(ctx, name, sc.ProjectID)
+	if err != nil {
+		if errors.Is(err, ErrCommandNotFound) {
+			return RunResult{
+				Kind: ResultKindError,
+				Text: fmt.Sprintf("user command %q not found", name),
+			}, err
+		}
+		return RunResult{Kind: ResultKindError, Text: "failed to load command"}, err
+	}
+
+	if !cmd.ModelInvokable {
+		res := RunResult{
+			Kind: ResultKindError,
+			Text: fmt.Sprintf("command %q is not model-invokable", name),
+		}
+		rerr := fmt.Errorf("%w: %q", ErrNotModelInvokable, name)
+		if d.auditor != nil {
+			auditSC := sc
+			auditSC.UserArgs = args
+			EmitRun(ctx, d.auditor, cmd, res, rerr, auditSC)
+		}
+		return res, rerr
+	}
+
+	// Eligible — delegate to the shared dispatch path. Run reloads the
+	// command; the extra read matches the cost TraceRun already pays for
+	// the same reason (span/guard metadata needed before the switch).
+	return d.Run(ctx, name, args, sc)
 }

@@ -1,20 +1,19 @@
 /**
  * TasksPanel tests — background-task-monitor-01KZNP3C WP05
+ *
+ * Routes through the typed harnessClient (Tasks_List / Tasks_Abort) —
+ * mirrors LogsPanel.spec.ts's HarnessClientKey provide pattern. Previously
+ * mocked `@/lib/tasks` directly; that module was deleted by
+ * subagent-control-and-background-tasks-01PMZB11 UNIT-11 once TasksPanel
+ * (and its sibling components) were the only consumers left and were
+ * routed onto the typed client instead.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import TasksPanel from '@/views/settings/TasksPanel.vue';
+import { createFakeHarnessClient } from '@/lib/harnessClient';
+import { HarnessClientKey } from '@/lib/harnessClientContext';
 import type { TaskRow } from '@/lib/types';
-
-// Mock the tasks module so we don't need a Wails runtime.
-vi.mock('@/lib/tasks', () => ({
-  tasksList: vi.fn().mockResolvedValue([]),
-  tasksAbort: vi.fn().mockResolvedValue(undefined),
-  tasksGet: vi.fn().mockResolvedValue(null),
-  tasksTail: vi.fn().mockResolvedValue([]),
-}));
-
-import { tasksList, tasksAbort } from '@/lib/tasks';
 
 const runningTask: TaskRow = {
   id: 'task-abc',
@@ -41,28 +40,44 @@ const completedTask: TaskRow = {
   ageMs: 10_000,
 };
 
+function buildClient(rows: TaskRow[] = []) {
+  const list = vi.fn(async () => [...rows]);
+  const abort = vi.fn(async () => undefined as void);
+  const client = createFakeHarnessClient({
+    Tasks_List: list,
+    Tasks_Abort: abort,
+  });
+  return { client, list, abort };
+}
+
+function mountPanel(rows: TaskRow[] = [], props: Record<string, unknown> = {}) {
+  const { client, list, abort } = buildClient(rows);
+  const wrapper = mount(TasksPanel, {
+    props,
+    global: { provide: { [HarnessClientKey as symbol]: client } },
+  });
+  return { wrapper, client, list, abort };
+}
+
 describe('TasksPanel', () => {
   beforeEach(() => {
-    vi.mocked(tasksList).mockResolvedValue([]);
-    vi.mocked(tasksAbort).mockResolvedValue(undefined);
+    vi.restoreAllMocks();
   });
 
   it('renders the panel', async () => {
-    const wrapper = mount(TasksPanel);
+    const { wrapper } = mountPanel([]);
     await flushPromises();
     expect(wrapper.find('[data-testid="tasks-panel"]').exists()).toBe(true);
   });
 
   it('shows empty state when there are no tasks', async () => {
-    vi.mocked(tasksList).mockResolvedValue([]);
-    const wrapper = mount(TasksPanel);
+    const { wrapper } = mountPanel([]);
     await flushPromises();
     expect(wrapper.find('[data-testid="tasks-empty"]').exists()).toBe(true);
   });
 
   it('renders running task with abort button', async () => {
-    vi.mocked(tasksList).mockResolvedValue([runningTask]);
-    const wrapper = mount(TasksPanel);
+    const { wrapper } = mountPanel([runningTask]);
     await flushPromises();
 
     const row = wrapper.find(`[data-testid="task-row-${runningTask.id}"]`);
@@ -73,8 +88,7 @@ describe('TasksPanel', () => {
   });
 
   it('renders completed task without abort button', async () => {
-    vi.mocked(tasksList).mockResolvedValue([completedTask]);
-    const wrapper = mount(TasksPanel);
+    const { wrapper } = mountPanel([completedTask]);
     await flushPromises();
 
     const row = wrapper.find(`[data-testid="task-row-${completedTask.id}"]`);
@@ -82,23 +96,21 @@ describe('TasksPanel', () => {
     expect(row.find('[data-testid="task-abort-btn"]').exists()).toBe(false);
   });
 
-  it('calls tasksAbort and reloads when abort button clicked', async () => {
-    vi.mocked(tasksList).mockResolvedValue([runningTask]);
-    const wrapper = mount(TasksPanel);
+  it('calls Tasks_Abort and reloads when abort button clicked', async () => {
+    const { wrapper, abort, list } = mountPanel([runningTask]);
     await flushPromises();
 
     // Change mock to return empty after abort.
-    vi.mocked(tasksList).mockResolvedValue([]);
+    list.mockResolvedValue([]);
 
     await wrapper.find('[data-testid="task-abort-btn"]').trigger('click');
     await flushPromises();
 
-    expect(tasksAbort).toHaveBeenCalledWith(runningTask.id);
+    expect(abort).toHaveBeenCalledWith(runningTask.id);
   });
 
   it('emits view-task when view output clicked', async () => {
-    vi.mocked(tasksList).mockResolvedValue([runningTask]);
-    const wrapper = mount(TasksPanel);
+    const { wrapper } = mountPanel([runningTask]);
     await flushPromises();
 
     await wrapper.find('[data-testid="task-view-btn"]').trigger('click');
@@ -107,10 +119,7 @@ describe('TasksPanel', () => {
   });
 
   it('filters by sessionId when prop provided', async () => {
-    vi.mocked(tasksList).mockResolvedValue([runningTask, completedTask]);
-    const wrapper = mount(TasksPanel, {
-      props: { filterSessionId: 'sess-other' },
-    });
+    const { wrapper } = mountPanel([runningTask, completedTask], { filterSessionId: 'sess-other' });
     await flushPromises();
 
     // Both tasks belong to sess-1; none should show.
@@ -118,11 +127,25 @@ describe('TasksPanel', () => {
   });
 
   it('shows running count when tasks are running', async () => {
-    vi.mocked(tasksList).mockResolvedValue([runningTask]);
-    const wrapper = mount(TasksPanel);
+    const { wrapper } = mountPanel([runningTask]);
     await flushPromises();
 
     expect(wrapper.find('[data-testid="running-count"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="running-count"]').text()).toContain('1 running');
+  });
+
+  // AC-12 (second half), tasks.md UNIT-11: the panel renders a row for a
+  // LIVE background task — proving it reads Tasks_List rather than a
+  // fixture. The backend half of this falsification (revert UNIT-3's
+  // BackgroundSpawn assignment => Tasks_List's underlying producer goes
+  // empty) is pinned by core/rpc/background_task_wiring_test.go's
+  // TestBashBackgroundMode_ProductionWiring_RegistersATaskRow; this test
+  // pins the frontend half of the same chain — an empty Tasks_List
+  // response renders the empty state, not stale/fixture rows.
+  it('renders empty when Tasks_List returns no rows (the BackgroundSpawn-reverted state)', async () => {
+    const { wrapper } = mountPanel([]);
+    await flushPromises();
+    expect(wrapper.find('[data-testid="task-list"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="tasks-empty"]').exists()).toBe(true);
   });
 });

@@ -486,6 +486,20 @@ type API struct {
 	compactionAPI  compactionview.CompactionAPI
 	convMgr        *coreconv.Manager
 	branchesAPI    branchesview.BranchesAPI
+	// branchSeam is the SAME BranchSeamAdapter instance
+	// newGraphManagerWithDeps builds as EnvDeps.Branch for ForkNode /
+	// MergeNode. Held here so New() can late-bind a RunSpawner onto it
+	// (SetRunSpawner) once the LLM stack exists — a.graphMgr is built
+	// BEFORE a.llmAPI, so that dependency isn't available at
+	// construction time — and so registerBuiltinTools can be given the
+	// real seam instead of the locally-declared-nil variable it used to
+	// test against (subagent-control-and-background-tasks-01PMZB11
+	// UNIT-6). nil when convMgr was nil at construction (degraded/no-DB
+	// boot) — callers must guard against the Go typed-nil-in-interface
+	// trap before handing this to anything typed as the
+	// agentgraph.BranchSeam interface; see the registerBuiltinTools call
+	// site.
+	branchSeam *graphview.BranchSeamAdapter
 	// cedarPolicyAPI is the policy-panel RPC surface (mission
 	// cedar-credential-policy-01KQ8TDE, WP02). Constructed in New
 	// when a real *cedar.Engine is available; nil falls back to the
@@ -687,6 +701,18 @@ type API struct {
 	// confirmSessionGrants backs "allow for this session" (WP03).
 	// Process-lifetime, never written to disk.
 	confirmSessionGrants *toolloop.SessionGrantCache
+
+	// slashDispatch is the shared core/slashcmd Dispatch instance: the
+	// human-invoked RPC path (Slash().UserRun) and the model-invoked
+	// kenaz__skill builtin (via RunModelInvoked) both call methods on
+	// this SAME pointer. automation-actually-runs-01PMZ404 UNIT-4 wires
+	// its tool dispatcher onto it after newLLMStack returns (the tool
+	// pool / permission resolver / confirm bus stack.wrappedPool /
+	// stack.perms / stack.confirmBus need to exist first — slashDispatch
+	// itself is constructed earlier, before newLLMStack runs). Held here
+	// so tests can drive the actual production wire directly instead of
+	// constructing an equivalent Dispatch by hand.
+	slashDispatch *coreslashcmd.Dispatch
 
 	// elicitAPI is the ask-user-question RPC surface (mission
 	// ask-user-question-interactive-01KZNP3G WP04). Constructed in New
@@ -2041,7 +2067,7 @@ func New(c *core.Core, opts ...Option) *API {
 	a.convMgr = newConversationManager(c)
 	a.corpusMgr = newCorpusManager(c, embedder)
 	var compactionPipeline *compaction.Pipeline
-	a.graphMgr, compactionPipeline = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore, settingsImpl, a.cedarEngine, a.hookRunner, a.auditImpl)
+	a.graphMgr, compactionPipeline, a.branchSeam = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore, settingsImpl, a.cedarEngine, a.hookRunner, a.auditImpl)
 	// Wire the same FR-041 pipeline instance the kernel runs onto the
 	// Settings RPC surface, so edits made through
 	// core/rpc/views/compaction reach the live kernel path instead of
@@ -2072,6 +2098,67 @@ func New(c *core.Core, opts ...Option) *API {
 
 	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, a.cedarEngine, taskReg)
 	a.llmAPI = stack.api
+
+	// subagent-control-and-background-tasks-01PMZB11 UNIT-6: late-bind
+	// the child-run spawner onto the SAME BranchSeamAdapter instance
+	// newGraphManagerWithDeps already built for ForkNode/MergeNode
+	// (a.branchSeam), THEN register kenaz__subagent_dispatch —
+	// deliberately in that order, in this one conditional branch, and
+	// deliberately NOT inside registerBuiltinTools.
+	//
+	// Why not registerBuiltinTools: that call happens INSIDE
+	// newLLMStack, several hundred lines before this function returns
+	// stack.api — llmview.API itself is built from chatRunner, which is
+	// built from the tool registry registerBuiltinTools populates, so
+	// the LLM connector this spawner needs cannot possibly exist yet at
+	// registerBuiltinTools time. That's a real dependency cycle (graph
+	// manager → tool registry → chat runner → LLM connector → spawner
+	// → back onto the graph manager's own branch seam), not a wiring
+	// oversight, and the same boot-order break tasks.Registry.
+	// SetHookFirer (core/tasks/registry.go) exists to cross.
+	//
+	// Why the registration call is IN this branch rather than
+	// unconditional: registering the tool whenever a.branchSeam merely
+	// exists (regardless of whether a spawner ever got armed) would be
+	// exactly the manufactured-success class this mission exists to
+	// end — a real seam that forks a session and then, because
+	// getRunSpawner() returns nil, silently falls back to the
+	// pre-UNIT-6 no-run-spawned behaviour while reporting success. Tying
+	// registration to the SAME nil-checks that gate SetRunSpawner
+	// guarantees FR-007's invariant: the tool is in the catalog if and
+	// only if dispatching it would spawn a real run.
+	//
+	// nil-guarded on all three: a.branchSeam is nil when convMgr was nil
+	// (degraded/no-DB boot); a.llmAPI is nil only if newLLMStack somehow
+	// left it unset (defensive — it does not today); a.eventBus is
+	// constructed unconditionally earlier in New() so this third check
+	// is belt-and-suspenders.
+	if a.branchSeam != nil && a.llmAPI != nil && a.eventBus != nil {
+		capturedPersonalStoreForSubagent := personalForLLM
+		a.branchSeam.SetRunSpawner(NewSubagentRunSpawner(SubagentRunSpawnerDeps{
+			LLM:   a.llmAPI,
+			Bus:   a.eventBus,
+			Tasks: taskReg,
+			// Lazy, mirroring ChatRunDispatcherDeps.DefaultProfile
+			// (this file's scheduled-chat wiring, below): first
+			// personal-provider profile wins, re-read on every spawn
+			// so a profile added after boot is picked up without a
+			// restart.
+			DefaultProfile: func() string {
+				if capturedPersonalStoreForSubagent == nil {
+					return ""
+				}
+				profs, err := capturedPersonalStoreForSubagent.List()
+				if err != nil || len(profs) == 0 {
+					return ""
+				}
+				return profs[0].ID
+			},
+		}))
+		logging.L().Info("rpc.subagent_run_spawner.armed")
+		registerSubagentDispatchTool(c, stack.builtins, a.branchSeam)
+	}
+
 	// confirm-each-enforcement-01PMAG05 WP02: the resolve leg. Bound to
 	// the SAME bus the chat runner's tool adapter parks on — a second bus
 	// would accept answers for rows nothing is waiting on, which reads
@@ -2087,6 +2174,45 @@ func New(c *core.Core, opts ...Option) *API {
 	// production wire (see harness_session_kind_resolver_wiring_test.go)
 	// instead of reconstructing an equivalent by hand.
 	a.toolPermsResolver = stack.perms
+	// automation-actually-runs-01PMZ404 UNIT-4: wire the tool dispatcher
+	// onto the Dispatch built earlier (before newLLMStack ran, so it
+	// could not have this yet). Owner ruling G-2
+	// (docs/escalation-register-2026-08-19.md Part 9, E-004): the SAME
+	// pool (stack.wrappedPool), the SAME merged permission resolver
+	// (stack.perms — Cedar-backed, the exact value a.toolPermsResolver
+	// above now also holds), the SAME confirm-each apparatus
+	// (stack.confirmBus + stack.confirmDeps), and the SAME process
+	// Cedar gate (a.cedarGate()) the chat tool loop uses — so a
+	// slash-invoked tool call cannot become a privilege-escalation
+	// route that reaches a tool without the confirmation or the Cedar
+	// check a chat tool call would trigger for the exact same tool.
+	//
+	// The gate field closes a hole an independent review of PR #307
+	// found: stack.perms's Cedar-backed arm only ever evaluates
+	// Action::"use_tool"; without gate wired here,
+	// slashToolDispatcherAdapter.DispatchTool never consulted
+	// Action::"tool_exec" — the sibling action
+	// default_policy.cedar:38-46 explicitly invites a user to forbid
+	// per-tool — so a tool_exec forbid installed exactly as that
+	// comment describes reached the tool pool unevaluated on this
+	// path even though PolicyGateAdapter.CheckTool already denied the
+	// identical chat tool call.
+	if slashDispatch != nil && stack.wrappedPool != nil {
+		slashDispatch.WithToolDispatcher(&slashToolDispatcherAdapter{
+			pool:             stack.wrappedPool,
+			perms:            stack.perms,
+			gate:             a.cedarGate(),
+			confirm:          stack.confirmBus,
+			confirmEnabled:   stack.confirmDeps.Enabled,
+			sessionGrants:    stack.confirmSessionGrants,
+			persistGrants:    stack.confirmDeps.PersistGrants,
+			headless:         stack.confirmDeps.Headless,
+			headlessExplicit: stack.confirmDeps.HeadlessExplicit,
+			auditEmitter:     stack.confirmDeps.Audit,
+			now:              stack.confirmDeps.Now,
+		})
+	}
+	a.slashDispatch = slashDispatch
 	// long-turn-resilience-01KR3PRS WP03: now that both the chat
 	// runner and the session manager are constructed, wire the
 	// ResumeStarter onto the existing sessionsAPI so
@@ -2878,6 +3004,11 @@ func New(c *core.Core, opts ...Option) *API {
 		if chatStore != nil {
 			eng, err := schedulerPkg.NewChatCronEngine(context.Background(), schedulerPkg.ChatCronEngineConfig{
 				Store: chatStore,
+				// model-scheduled-jobs-01PMSJ01 WP09: before this field
+				// was wired, a cron-triggered fire never consulted Cedar
+				// at all (only the RunNow path did) — see
+				// ChatCronEngineConfig.Cedar's doc.
+				Cedar: a.cedarGate(),
 			})
 			if err != nil {
 				logging.L().Warn("scheduler.chat_cron.init_failed", "err", err.Error())
@@ -3690,7 +3821,7 @@ func New(c *core.Core, opts ...Option) *API {
 			FirstRun:             firstRunDetector,
 			Completion:           onboardingCompletionAdapter{store: settingsStore},
 			SessionStarter:       sessionStarter,
-			SettingsDial:         onboardingSettingsDialAdapter{},
+			SettingsDial:         onboardingSettingsDialAdapter{store: settingsStore},
 			AccountStepAvailable: onboardingAccountStepAdapter{},
 			// Signer bridges the account step to the fleet owned-login flow
 			// (harness-onboarding-01NHON01 Blocker 3). When fleet is disabled
@@ -4706,6 +4837,16 @@ type llmStack struct {
 	// wfToolDiscovererAdapter both close over this same value — see
 	// AC-006/AC-007's "one resolver reaches both consumers" note.
 	perms toolloop.PermissionResolver
+	// confirmDeps is the EXACT chat.ConfirmDeps value buildChatRunner
+	// wires into the chat kernel tool adapter (Enabled, SessionGrants,
+	// PersistGrants, Headless, HeadlessExplicit, Audit). Held here so
+	// New() can hand slashToolDispatcherAdapter (automation-actually-
+	// runs-01PMZ404 UNIT-4) the SAME confirm-each collaborators chat
+	// uses, rather than reconstructing an equivalent bundle that could
+	// quietly drift from the real one — owner ruling G-2 requires the
+	// slash-command tool path to take the SAME confirm/Cedar path a
+	// chat tool call takes.
+	confirmDeps chat.ConfirmDeps
 }
 
 func newLLMStack(
@@ -5254,6 +5395,7 @@ func newLLMStack(
 
 		confirmBus:           confirmBus,
 		confirmSessionGrants: confirmSessionGrants,
+		confirmDeps:          confirmDeps,
 	}
 }
 
@@ -6800,7 +6942,7 @@ func newCorpusManager(c *core.Core, embedder corememory.Embedder) *corecorpus.Ma
 // library and runs in-memory graphs; user-graph persistence is the
 // only feature lost when DataDir is empty.
 func newGraphManager(c *core.Core) *graphview.Manager {
-	mgr, _ := newGraphManagerWithDeps(c, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	mgr, _, _ := newGraphManagerWithDeps(c, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	return mgr
 }
 
@@ -6977,12 +7119,16 @@ func newLiveDialResolver(inner compaction.Resolver, settingsImpl *settings.API) 
 // to so a downstream read_bash_output node sees transcripts written
 // by a prior bash call. Pass nil to disable read_bash_output entirely.
 //
-// Returns the graph Manager plus the FR-041 compaction pipeline it
-// built the kernel with, so the caller can wire the same pipeline
-// instance onto the RPC Settings surface (compactionview.API) — one
-// Pipeline, reachable both from live kernel runs and from the
-// Settings UI that edits its cascading config. See
-// compaction-convergence-01PMDL05 WP01.
+// Returns the graph Manager, the FR-041 compaction pipeline it built the
+// kernel with (so the caller can wire the same pipeline instance onto
+// the RPC Settings surface — compactionview.API, one Pipeline reachable
+// both from live kernel runs and from the Settings UI that edits its
+// cascading config, see compaction-convergence-01PMDL05 WP01), and the
+// *graphview.BranchSeamAdapter this call constructed as EnvDeps.Branch
+// (nil when convMgr is nil) — subagent-control-and-background-tasks-
+// 01PMZB11 UNIT-6's caller (New()) needs the concrete instance back so
+// it can late-bind a RunSpawner onto it once the LLM stack exists, and
+// so registerBuiltinTools can be given a real, spawner-capable seam.
 func newGraphManagerWithDeps(
 	c *core.Core,
 	convMgr *coreconv.Manager,
@@ -7012,7 +7158,7 @@ func newGraphManagerWithDeps(
 	// New()'s auditImpl construction failure path); wrapped nil-safely
 	// below.
 	auditImpl *audit.API,
-) (*graphview.Manager, *compaction.Pipeline) {
+) (*graphview.Manager, *compaction.Pipeline, *graphview.BranchSeamAdapter) {
 	dataDir := ""
 	if c != nil {
 		dataDir = c.DataDir()
@@ -7026,8 +7172,10 @@ func newGraphManagerWithDeps(
 		// post_tool_use_failure fire path.
 		deps.LifecycleHooks = &hooks.LifecycleRunnerAdapter{Runner: hookRunner}
 	}
+	var branchSeam *graphview.BranchSeamAdapter
 	if convMgr != nil {
-		deps.Branch = graphview.NewBranchSeamAdapter(convMgr, sessionManagerOrNil(c))
+		branchSeam = graphview.NewBranchSeamAdapter(convMgr, sessionManagerOrNil(c))
+		deps.Branch = branchSeam
 		// engineer-truth-pass-01PMTP01 WP08 (finding B16): the merge-
 		// suggestion heuristic is only meaningful once a real
 		// BranchSeam is wired — without one, ActiveBranchForChildSession
@@ -7218,9 +7366,9 @@ func newGraphManagerWithDeps(
 	if err != nil {
 		// Construction is best-effort; surface returns
 		// ErrManagerUnavailable when nil.
-		return nil, nil
+		return nil, nil, nil
 	}
-	return mgr, compactionPipeline
+	return mgr, compactionPipeline, branchSeam
 }
 
 // newNodesStack constructs the manifest-catalog view (mission
