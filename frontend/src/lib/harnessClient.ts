@@ -171,6 +171,8 @@ import type {
   ContextPublishResult,
   ContextPromoteResult,
   ContextSyncStatusView,
+  ContextSearchHitView,
+  ContextExportView,
   CatalogPublishInput,
   CatalogItemView,
   CatalogFilter,
@@ -392,6 +394,15 @@ interface WailsBindingsLike {
   Contexts_ContextPublish(req: ContextPublishRequest): Promise<ContextPublishResult>;
   Contexts_ContextPromote(nodeID: string): Promise<ContextPromoteResult>;
   Contexts_ContextSyncStatus(): Promise<ContextSyncStatusView>;
+  // A-14 Tier 1: bound in bindings.go / Bindings.d.ts already; this
+  // declaration was the missing type-safety site (controls-and-readouts
+  // UNIT-11 / WP16).
+  Contexts_ContextSearch(
+    query: string,
+    teamID: string,
+    limit: number,
+  ): Promise<ContextSearchHitView[]>;
+  Contexts_ContextExport(teamID: string, format: string): Promise<ContextExportView>;
 
   Attachments_List(scopeKind: string, scopeID: string): Promise<Attachment[]>;
   Attachments_ListResolved(sessionID: string): Promise<Attachment[]>;
@@ -1751,6 +1762,23 @@ export interface ContextsClient {
   promote(nodeID: string): Promise<ContextPromoteResult>;
   /** Return a snapshot of the fleet context-graph syncer state. */
   syncStatus(): Promise<ContextSyncStatusView>;
+  /**
+   * Server-side title+body search over the caller's visible fleet context
+   * graph (not the local library tree — that's a client-side filter).
+   * teamID narrows to one team; empty searches everything visible. Returns
+   * an empty array (no error) when fleet is disabled / unentitled.
+   */
+  search(
+    query: string,
+    teamID: string,
+    limit: number,
+  ): Promise<ContextSearchHitView[]>;
+  /**
+   * Export the caller's visible fleet context graph as NDJSON ("jsonl") or
+   * a gzipped tarball ("tarball"). Returns an empty view (no error) when
+   * fleet is disabled / unentitled — callers must check `byte_len`.
+   */
+  export(teamID: string, format: string): Promise<ContextExportView>;
 }
 
 /**
@@ -3666,6 +3694,9 @@ export function createHarnessClient(): HarnessClient {
       publish: (req: ContextPublishRequest) => b().Contexts_ContextPublish(req),
       promote: (nodeID: string) => b().Contexts_ContextPromote(nodeID),
       syncStatus: () => b().Contexts_ContextSyncStatus(),
+      search: (query, teamID, limit) =>
+        b().Contexts_ContextSearch(query, teamID, limit),
+      export: (teamID, format) => b().Contexts_ContextExport(teamID, format),
     },
     attachments: {
       list: ({ scopeKind, scopeId }) =>
@@ -4997,6 +5028,12 @@ export function createFakeHarnessClient(
         last_push_err: '',
         pull_count: 0,
         team_cap_enabled: false,
+      }),
+      search: async () => [],
+      export: async () => ({
+        content_type: 'application/x-ndjson',
+        data_base64: '',
+        byte_len: 0,
       }),
     },
     attachments: {

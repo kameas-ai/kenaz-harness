@@ -3,7 +3,14 @@ import { mount, flushPromises } from '@vue/test-utils';
 import ContextsView from '@/views/contexts/ContextsView.vue';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
-import type { ContextNode, ContextSyncStatusView, ContextPublishRequest, ContextPublishResult } from '@/lib/types';
+import type {
+  ContextNode,
+  ContextSyncStatusView,
+  ContextPublishRequest,
+  ContextPublishResult,
+  ContextSearchHitView,
+  ContextExportView,
+} from '@/lib/types';
 
 function provide(opts: {
   tree?: ContextNode;
@@ -15,6 +22,11 @@ function provide(opts: {
   syncStatus?: ContextSyncStatusView;
   publishSpy?: (req: ContextPublishRequest) => Promise<ContextPublishResult>;
   createFolderSpy?: (path: string) => Promise<void>;
+  renameSpy?: (oldPath: string, newPath: string) => Promise<void>;
+  deleteSpy?: (path: string) => Promise<void>;
+  promoteSpy?: (nodeID: string) => Promise<{ updated_node_id: string; new_classification: 'org_shared' }>;
+  searchSpy?: (query: string, teamID: string, limit: number) => Promise<ContextSearchHitView[]>;
+  exportSpy?: (teamID: string, format: string) => Promise<ContextExportView>;
 }) {
   const tree: ContextNode =
     opts.tree ?? { name: '', path: '', kind: 'folder' };
@@ -43,8 +55,8 @@ function provide(opts: {
       },
       save: opts.saveSpy ?? (async () => undefined),
       createFolder: opts.createFolderSpy ?? (async () => undefined),
-      rename: async () => undefined,
-      delete: async () => undefined,
+      rename: opts.renameSpy ?? (async () => undefined),
+      delete: opts.deleteSpy ?? (async () => undefined),
       recentlyApplied: async () => recent,
       rootPath: async () => rootPath,
       syncStatus: async () => syncStatus,
@@ -53,10 +65,20 @@ function provide(opts: {
         accepted_edges: 0,
         conflicts: [],
       })),
-      promote: async (nodeID: string) => ({
-        updated_node_id: nodeID,
-        new_classification: 'org_shared' as const,
-      }),
+      promote:
+        opts.promoteSpy ??
+        (async (nodeID: string) => ({
+          updated_node_id: nodeID,
+          new_classification: 'org_shared' as const,
+        })),
+      search: opts.searchSpy ?? (async () => []),
+      export:
+        opts.exportSpy ??
+        (async () => ({
+          content_type: 'application/x-ndjson',
+          data_base64: '',
+          byte_len: 0,
+        })),
     } as any,
   });
   return { client };
@@ -633,6 +655,365 @@ describe('ContextsView', () => {
       // ContextHealthCard calls health() in its onMounted hook.
       expect(healthSpy).toHaveBeenCalled();
       w.unmount();
+    });
+  });
+
+  describe('WP16 — rename, delete, promote, search, export', () => {
+    const tree: ContextNode = {
+      name: '',
+      path: '',
+      kind: 'folder',
+      children: [
+        {
+          name: 'notes',
+          path: 'notes',
+          kind: 'folder',
+          children: [
+            { name: 'welcome.md', path: 'notes/welcome.md', kind: 'file' },
+          ],
+        },
+        { name: 'top.md', path: 'top.md', kind: 'file' },
+      ],
+    };
+
+    it('renames a file to a sibling path and reloads the tree', async () => {
+      const renameSpy = vi.fn(async () => undefined);
+      const { client } = provide({ tree, renameSpy });
+      const listSpy = vi.spyOn(client.contexts, 'list');
+      const w = mount(ContextsView, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+
+      await w.find('[data-testid="context-rename-btn-top.md"]').trigger('click');
+      const input = w.find('[data-testid="context-rename-input-top.md"]');
+      expect(input.exists()).toBe(true);
+      await input.setValue('renamed.md');
+      await input.trigger('keydown.enter');
+      await flushPromises();
+
+      expect(renameSpy).toHaveBeenCalledWith('top.md', 'renamed.md');
+      expect(listSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('renames a nested file preserving its parent directory', async () => {
+      const renameSpy = vi.fn(async () => undefined);
+      const { client } = provide({ tree, renameSpy });
+      const w = mount(ContextsView, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+
+      // "notes" is a nested (non-root) folder; only the root's direct
+      // children auto-expand, so open it before reaching its child row.
+      await w.find('[data-testid="context-node-notes"]').trigger('click');
+      await flushPromises();
+      await w
+        .find('[data-testid="context-rename-btn-notes/welcome.md"]')
+        .trigger('click');
+      await w
+        .find('[data-testid="context-rename-input-notes/welcome.md"]')
+        .setValue('hello.md');
+      await w
+        .find('[data-testid="context-rename-input-notes/welcome.md"]')
+        .trigger('keydown.enter');
+      await flushPromises();
+
+      expect(renameSpy).toHaveBeenCalledWith('notes/welcome.md', 'notes/hello.md');
+    });
+
+    it('cancels rename on Escape without calling rename', async () => {
+      const renameSpy = vi.fn(async () => undefined);
+      const { client } = provide({ tree, renameSpy });
+      const w = mount(ContextsView, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+
+      await w.find('[data-testid="context-rename-btn-top.md"]').trigger('click');
+      const input = w.find('[data-testid="context-rename-input-top.md"]');
+      await input.setValue('renamed.md');
+      await input.trigger('keydown.esc');
+      await flushPromises();
+
+      expect(renameSpy).not.toHaveBeenCalled();
+      expect(w.find('[data-testid="context-rename-input-top.md"]').exists()).toBe(false);
+    });
+
+    it('deletes a file after confirming, and clears the selection if it was selected', async () => {
+      const deleteSpy = vi.fn(async () => undefined);
+      const { client } = provide({
+        tree,
+        files: { 'top.md': '# top' },
+        deleteSpy,
+      });
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      const w = mount(ContextsView, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+
+      await w.find('[data-testid="context-node-top.md"]').trigger('click');
+      await flushPromises();
+      await w.find('[data-testid="context-delete-btn-top.md"]').trigger('click');
+      await flushPromises();
+
+      expect(confirmSpy).toHaveBeenCalled();
+      expect(deleteSpy).toHaveBeenCalledWith('top.md');
+      confirmSpy.mockRestore();
+    });
+
+    it('does not delete when the confirm dialog is declined', async () => {
+      const deleteSpy = vi.fn(async () => undefined);
+      const { client } = provide({ tree, deleteSpy });
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      const w = mount(ContextsView, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+
+      await w.find('[data-testid="context-delete-btn-top.md"]').trigger('click');
+      await flushPromises();
+
+      expect(deleteSpy).not.toHaveBeenCalled();
+      confirmSpy.mockRestore();
+    });
+
+    describe('promote', () => {
+      it('renders disabled with a reason when fleet is off, and does not dispatch', async () => {
+        const promoteSpy = vi.fn(async (nodeID: string) => ({
+          updated_node_id: nodeID,
+          new_classification: 'org_shared' as const,
+        }));
+        const { client } = provide({
+          tree,
+          files: { 'top.md': '# top' },
+          syncStatus: {
+            cursor: '',
+            last_pull_err: '',
+            last_push_err: '',
+            pull_count: 0,
+            team_cap_enabled: false,
+          },
+          promoteSpy,
+        });
+        const w = mount(ContextsView, {
+          global: { provide: { [HarnessClientKey as symbol]: client } },
+        });
+        await flushPromises();
+        await w.find('[data-testid="context-node-top.md"]').trigger('click');
+        await flushPromises();
+
+        const btn = w.find('[data-testid="context-promote-btn"]');
+        expect(btn.exists()).toBe(true);
+        expect((btn.element as HTMLButtonElement).disabled).toBe(true);
+        expect(w.find('[data-testid="context-promote-disabled-reason"]').exists()).toBe(true);
+
+        await btn.trigger('click');
+        await flushPromises();
+        expect(promoteSpy).not.toHaveBeenCalled();
+      });
+
+      it('promotes the selected file when fleet is on', async () => {
+        const promoteSpy = vi.fn(async (nodeID: string) => ({
+          updated_node_id: nodeID,
+          new_classification: 'org_shared' as const,
+        }));
+        const { client } = provide({
+          tree,
+          files: { 'top.md': '# top' },
+          syncStatus: {
+            cursor: '',
+            last_pull_err: '',
+            last_push_err: '',
+            pull_count: 0,
+            team_cap_enabled: true,
+          },
+          promoteSpy,
+        });
+        const w = mount(ContextsView, {
+          global: { provide: { [HarnessClientKey as symbol]: client } },
+        });
+        await flushPromises();
+        await w.find('[data-testid="context-node-top.md"]').trigger('click');
+        await flushPromises();
+
+        const btn = w.find('[data-testid="context-promote-btn"]');
+        expect((btn.element as HTMLButtonElement).disabled).toBe(false);
+        await btn.trigger('click');
+        await flushPromises();
+
+        expect(promoteSpy).toHaveBeenCalledOnce();
+        expect(w.find('[data-testid="context-promote-result"]').exists()).toBe(true);
+      });
+    });
+
+    describe('team search + export', () => {
+      it('renders disabled with a reason when fleet is off', async () => {
+        const searchSpy = vi.fn(async () => []);
+        const exportSpy = vi.fn(async () => ({
+          content_type: 'application/x-ndjson',
+          data_base64: '',
+          byte_len: 0,
+        }));
+        const { client } = provide({
+          syncStatus: {
+            cursor: '',
+            last_pull_err: '',
+            last_push_err: '',
+            pull_count: 0,
+            team_cap_enabled: false,
+          },
+          searchSpy,
+          exportSpy,
+        });
+        const w = mount(ContextsView, {
+          global: { provide: { [HarnessClientKey as symbol]: client } },
+        });
+        await flushPromises();
+
+        expect(
+          (w.find('[data-testid="context-team-search-input"]').element as HTMLInputElement).disabled,
+        ).toBe(true);
+        expect(
+          (w.find('[data-testid="context-team-search-btn"]').element as HTMLButtonElement).disabled,
+        ).toBe(true);
+        expect(
+          (w.find('[data-testid="context-export-btn"]').element as HTMLButtonElement).disabled,
+        ).toBe(true);
+        expect(w.find('[data-testid="context-team-search-disabled-reason"]').exists()).toBe(true);
+
+        await w.find('[data-testid="context-team-search-input"]').setValue('style guide');
+        await w.find('[data-testid="context-team-search-btn"]').trigger('click');
+        await w.find('[data-testid="context-export-btn"]').trigger('click');
+        await flushPromises();
+
+        expect(searchSpy).not.toHaveBeenCalled();
+        expect(exportSpy).not.toHaveBeenCalled();
+      });
+
+      it('runs a search against the fleet graph and renders the hits', async () => {
+        const searchSpy = vi.fn(async () => [
+          {
+            node_id: 'n1',
+            title: 'Go style guide',
+            classification: 'team_shared' as const,
+            snippet: 'Prefer **early returns**.',
+            rank: 1.0,
+          },
+        ]);
+        const { client } = provide({
+          syncStatus: {
+            cursor: '',
+            last_pull_err: '',
+            last_push_err: '',
+            pull_count: 0,
+            team_cap_enabled: true,
+          },
+          searchSpy,
+        });
+        const w = mount(ContextsView, {
+          global: { provide: { [HarnessClientKey as symbol]: client } },
+        });
+        await flushPromises();
+
+        await w.find('[data-testid="context-team-search-input"]').setValue('style guide');
+        await w.find('[data-testid="context-team-search-btn"]').trigger('click');
+        await flushPromises();
+
+        expect(searchSpy).toHaveBeenCalledWith('style guide', '', 20);
+        expect(w.find('[data-testid="context-search-hit-n1"]').exists()).toBe(true);
+        expect(w.find('[data-testid="context-search-hit-n1"]').text()).toContain('Go style guide');
+      });
+
+      it('shows a no-matches state when the search returns nothing', async () => {
+        const { client } = provide({
+          syncStatus: {
+            cursor: '',
+            last_pull_err: '',
+            last_push_err: '',
+            pull_count: 0,
+            team_cap_enabled: true,
+          },
+          searchSpy: async () => [],
+        });
+        const w = mount(ContextsView, {
+          global: { provide: { [HarnessClientKey as symbol]: client } },
+        });
+        await flushPromises();
+        // No search dispatched yet — no empty-state message.
+        expect(w.find('[data-testid="context-team-search-empty"]').exists()).toBe(false);
+
+        await w.find('[data-testid="context-team-search-input"]').setValue('nothing here');
+        await w.find('[data-testid="context-team-search-btn"]').trigger('click');
+        await flushPromises();
+
+        expect(w.find('[data-testid="context-team-search-empty"]').exists()).toBe(true);
+      });
+
+      it('downloads the export payload when fleet is on', async () => {
+        const exportSpy = vi.fn(async () => ({
+          content_type: 'application/x-ndjson',
+          data_base64: btoa('{"id":"n1"}'),
+          byte_len: 12,
+        }));
+        const { client } = provide({
+          syncStatus: {
+            cursor: '',
+            last_pull_err: '',
+            last_push_err: '',
+            pull_count: 0,
+            team_cap_enabled: true,
+          },
+          exportSpy,
+        });
+        const createObjectURLSpy = vi
+          .spyOn(URL, 'createObjectURL')
+          .mockReturnValue('blob:fake');
+        const revokeObjectURLSpy = vi
+          .spyOn(URL, 'revokeObjectURL')
+          .mockImplementation(() => undefined);
+        const w = mount(ContextsView, {
+          global: { provide: { [HarnessClientKey as symbol]: client } },
+        });
+        await flushPromises();
+
+        await w.find('[data-testid="context-export-btn"]').trigger('click');
+        await flushPromises();
+
+        expect(exportSpy).toHaveBeenCalledWith('', 'jsonl');
+        expect(createObjectURLSpy).toHaveBeenCalled();
+        expect(revokeObjectURLSpy).toHaveBeenCalled();
+        createObjectURLSpy.mockRestore();
+        revokeObjectURLSpy.mockRestore();
+      });
+
+      it('surfaces an error when export returns no data', async () => {
+        const exportSpy = vi.fn(async () => ({
+          content_type: 'application/x-ndjson',
+          data_base64: '',
+          byte_len: 0,
+        }));
+        const { client } = provide({
+          syncStatus: {
+            cursor: '',
+            last_pull_err: '',
+            last_push_err: '',
+            pull_count: 0,
+            team_cap_enabled: true,
+          },
+          exportSpy,
+        });
+        const w = mount(ContextsView, {
+          global: { provide: { [HarnessClientKey as symbol]: client } },
+        });
+        await flushPromises();
+
+        await w.find('[data-testid="context-export-btn"]').trigger('click');
+        await flushPromises();
+
+        expect(w.find('[data-testid="context-export-error"]').exists()).toBe(true);
+      });
     });
   });
 });

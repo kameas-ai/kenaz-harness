@@ -32,6 +32,24 @@
  *     derived from the path (sha-ish stable ID approach: md5-hex of the path
  *     is not available in the browser; instead we use btoa(path) as the ID,
  *     which is stable across sessions for the same file path).
+ *
+ * WP16 additions (controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-11):
+ *   - Rename / delete are inline row affordances in `ContextTree` — this view
+ *     owns the `client.contexts.rename` / `.delete` calls and the sibling-path
+ *     computation. Delete moves the node to the library trash (30-day TTL,
+ *     `core/contexts/library.go:Delete`), not a hard delete.
+ *   - "Promote to org" sits beside "Share to team" and calls
+ *     `client.contexts.promote` with the same deterministic nodeID. Per
+ *     spec §1.10 it renders disabled-with-a-reason when fleet's team cap is
+ *     off rather than hidden — a hidden control and a broken one are
+ *     different lies.
+ *   - The "Team search" panel calls `client.contexts.search`
+ *     (Contexts_ContextSearch), a server-side title+body search over the
+ *     *fleet* context graph — distinct from the WP11 client-side text
+ *     filter above, which only searches the locally-loaded tree. "Export"
+ *     calls `client.contexts.export` (Contexts_ContextExport) and downloads
+ *     the decoded payload. Both are disabled-with-a-reason under the same
+ *     fleet gate as promote, for the same reason.
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
@@ -39,7 +57,13 @@ import { Plus, FileText } from '@/shell/icons';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
-import type { ContextNode, ContextSyncStatusView, ContextPublishResult } from '@/lib/types';
+import type {
+  ContextNode,
+  ContextSyncStatusView,
+  ContextPublishResult,
+  ContextPromoteResult,
+  ContextSearchHitView,
+} from '@/lib/types';
 import ContextTree from './ContextTree.vue';
 import ContextPreview from './ContextPreview.vue';
 import GlobalContextPanel from '@/components/settings/GlobalContextPanel.vue';
@@ -144,6 +168,146 @@ async function confirmPublish() {
     publishError.value = e instanceof Error ? e.message : 'Publish failed.';
   } finally {
     publishLoading.value = false;
+  }
+}
+
+// ── Promote (WP16) ────────────────────────────────────────────────────────
+/** Result of the most recent promote call. */
+const promoteResult = ref<ContextPromoteResult | null>(null);
+/** Error string from the last promote call. */
+const promoteError = ref<string | null>(null);
+/** Whether a promote call is in progress. */
+const promoteLoading = ref(false);
+
+/**
+ * onPromoteClick — elevate the selected file's fleet entry from
+ * team_shared to org_shared. Guarded on `teamCapEnabled` per spec §1.10:
+ * the button stays visible and clickable-looking whenever a file is
+ * selected, but a disabled state (with the reason shown alongside it)
+ * covers the fleet-off case rather than hiding the control outright.
+ */
+async function onPromoteClick() {
+  if (!teamCapEnabled.value || !selectedPath.value) return;
+  promoteLoading.value = true;
+  promoteError.value = null;
+  promoteResult.value = null;
+  try {
+    promoteResult.value = await client.contexts.promote(selectedNodeID.value);
+  } catch (e) {
+    promoteError.value = e instanceof Error ? e.message : 'Promote failed.';
+  } finally {
+    promoteLoading.value = false;
+  }
+}
+
+// ── Rename / delete (WP16) ───────────────────────────────────────────────
+
+/** siblingPath computes the new path for a rename: same parent dir, new leaf name. */
+function siblingPath(path: string, newName: string): string {
+  const safeName = newName.replace(/[/\\]+/g, '-');
+  const i = path.lastIndexOf('/');
+  return i === -1 ? safeName : `${path.slice(0, i)}/${safeName}`;
+}
+
+async function onRenameNode({ path, newName }: { path: string; newName: string }) {
+  const trimmed = newName.trim();
+  if (!trimmed) return;
+  const newPath = siblingPath(path, trimmed);
+  if (newPath === path) return;
+  treeError.value = null;
+  try {
+    await client.contexts.rename(path, newPath);
+    if (selectedPath.value === path) {
+      selectedPath.value = newPath;
+    }
+    await loadTree();
+  } catch (e) {
+    treeError.value = e instanceof Error ? e.message : 'Rename failed.';
+  }
+}
+
+async function onDeleteNode(path: string) {
+  const name = path.split('/').pop() ?? path;
+  if (
+    typeof window !== 'undefined' &&
+    typeof window.confirm === 'function' &&
+    !window.confirm(`Delete "${name}"? It moves to the library trash (recoverable for 30 days).`)
+  ) {
+    return;
+  }
+  treeError.value = null;
+  try {
+    await client.contexts.delete(path);
+    if (selectedPath.value === path) {
+      selectedPath.value = null;
+      previewContent.value = '';
+    }
+    await loadTree();
+  } catch (e) {
+    treeError.value = e instanceof Error ? e.message : 'Delete failed.';
+  }
+}
+
+// ── Team search + export (WP16, register A-14 Tier 1) ───────────────────
+// Server-side search/export over the *fleet* context graph — distinct
+// from `contextTextFilter` above, which only filters the already-loaded
+// local tree. Both are gated on `teamCapEnabled`, rendered disabled with
+// a visible reason rather than hidden (spec §1.10 / plan.md UNIT-11).
+
+const teamSearchQuery = ref('');
+const teamSearchResults = ref<ContextSearchHitView[]>([]);
+const teamSearchLoading = ref(false);
+const teamSearchError = ref<string | null>(null);
+/** True once a search has actually been dispatched, so the "no matches"
+ *  empty state doesn't show before the user has searched at all. */
+const teamSearchDispatched = ref(false);
+
+async function runTeamSearch() {
+  if (!teamCapEnabled.value) return;
+  const q = teamSearchQuery.value.trim();
+  if (!q) return;
+  teamSearchLoading.value = true;
+  teamSearchError.value = null;
+  teamSearchDispatched.value = true;
+  try {
+    teamSearchResults.value = await client.contexts.search(q, '', 20);
+  } catch (e) {
+    teamSearchResults.value = [];
+    teamSearchError.value = e instanceof Error ? e.message : 'Search failed.';
+  } finally {
+    teamSearchLoading.value = false;
+  }
+}
+
+const exportLoading = ref(false);
+const exportError = ref<string | null>(null);
+
+/** base64 → Blob → object URL → click a synthetic <a download>. Same
+ *  pattern as LogsPanel.vue's exportJSONL. */
+async function onExportClick() {
+  if (!teamCapEnabled.value) return;
+  exportLoading.value = true;
+  exportError.value = null;
+  try {
+    const result = await client.contexts.export('', 'jsonl');
+    if (!result.data_base64) {
+      exportError.value = 'Export returned no data — nothing is published to the fleet graph yet.';
+      return;
+    }
+    const bin = atob(result.data_base64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const blob = new Blob([bytes], { type: result.content_type || 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `context-graph-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.jsonl`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    exportError.value = e instanceof Error ? e.message : 'Export failed.';
+  } finally {
+    exportLoading.value = false;
   }
 }
 
@@ -534,6 +698,113 @@ onBeforeUnmount(() => {
       {{ publishError }}
     </div>
 
+    <!-- Promote result / error toast (WP16) -->
+    <div
+      v-if="promoteResult"
+      class="px-4 py-1 bg-surface-1 border-b border-border-muted font-ui text-[11px] text-signal-success"
+      data-testid="context-promote-result"
+    >
+      Promoted to {{ promoteResult.new_classification }}
+    </div>
+    <div
+      v-if="promoteError"
+      class="px-4 py-1 bg-surface-1 border-b border-border-muted font-ui text-[11px] text-signal-danger"
+      data-testid="context-promote-error"
+    >
+      {{ promoteError }}
+    </div>
+
+    <!-- Team search + export (WP16, register A-14 Tier 1) — a server-side
+         search/export over the fleet context graph, distinct from the
+         local text filter in the tree header below. Always rendered;
+         disabled with a visible reason when fleet's team cap is off. -->
+    <div
+      class="px-4 py-2 border-b border-border-muted"
+      data-testid="context-team-search-panel"
+    >
+      <div class="flex items-center gap-2">
+        <span class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle shrink-0">
+          Team search
+        </span>
+        <input
+          v-model="teamSearchQuery"
+          type="text"
+          placeholder="Search the fleet context graph…"
+          aria-label="Search the fleet context graph"
+          spellcheck="false"
+          autocomplete="off"
+          :disabled="!teamCapEnabled"
+          class="min-w-0 flex-1 rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink placeholder:text-ink-dim focus:border-accent focus:outline-none disabled:opacity-50"
+          data-testid="context-team-search-input"
+          @keydown.enter.prevent="runTeamSearch"
+        />
+        <button
+          type="button"
+          class="font-ui text-[11px] text-accent hover:text-accent-muted disabled:opacity-50 disabled:hover:text-accent shrink-0"
+          :disabled="!teamCapEnabled || teamSearchLoading"
+          data-testid="context-team-search-btn"
+          @click="runTeamSearch"
+        >
+          {{ teamSearchLoading ? 'Searching…' : 'Search' }}
+        </button>
+        <button
+          type="button"
+          class="font-ui text-[11px] text-ink-dim hover:text-accent disabled:opacity-50 disabled:hover:text-ink-dim shrink-0"
+          :disabled="!teamCapEnabled || exportLoading"
+          data-testid="context-export-btn"
+          @click="onExportClick"
+        >
+          {{ exportLoading ? 'Exporting…' : 'Export' }}
+        </button>
+      </div>
+      <p
+        v-if="!teamCapEnabled"
+        class="mt-1 font-ui text-[10px] text-ink-subtle"
+        data-testid="context-team-search-disabled-reason"
+      >
+        Fleet team sync is off — search and export need a signed-in fleet connection with the team-graph capability.
+      </p>
+      <template v-else>
+        <p
+          v-if="teamSearchError"
+          class="mt-1 font-ui text-[11px] text-signal-danger"
+          data-testid="context-team-search-error"
+        >
+          {{ teamSearchError }}
+        </p>
+        <ul
+          v-else-if="teamSearchResults.length > 0"
+          class="mt-1 space-y-1"
+          data-testid="context-team-search-results"
+        >
+          <li
+            v-for="hit in teamSearchResults"
+            :key="hit.node_id"
+            class="font-ui text-[11px] text-ink-muted"
+            :data-testid="`context-search-hit-${hit.node_id}`"
+          >
+            <span class="text-ink font-medium">{{ hit.title }}</span>
+            <span class="text-ink-subtle">· {{ hit.classification }}</span>
+            <p class="text-ink-subtle">{{ hit.snippet }}</p>
+          </li>
+        </ul>
+        <p
+          v-else-if="teamSearchDispatched"
+          class="mt-1 font-ui text-[11px] text-ink-subtle"
+          data-testid="context-team-search-empty"
+        >
+          No matches.
+        </p>
+        <p
+          v-if="exportError"
+          class="mt-1 font-ui text-[11px] text-signal-danger"
+          data-testid="context-export-error"
+        >
+          {{ exportError }}
+        </p>
+      </template>
+    </div>
+
     <div class="flex-1 grid grid-cols-[260px_1fr_240px] min-h-0">
       <!-- left: tree -->
       <nav
@@ -556,6 +827,29 @@ onBeforeUnmount(() => {
             <span v-if="publishLoading">Sharing…</span>
             <span v-else>Share to team</span>
           </button>
+          <!-- Promote affordance (WP16) — visible whenever a file is
+               selected, disabled (with a reason below) when fleet's team
+               cap is off, rather than hidden. See spec §1.10. -->
+          <span v-if="selectedPath" class="flex items-center gap-1">
+            <button
+              type="button"
+              class="text-[11px] text-accent hover:text-accent-muted flex items-center gap-1 disabled:opacity-50 disabled:hover:text-accent"
+              :disabled="!teamCapEnabled || promoteLoading"
+              :title="!teamCapEnabled ? 'Fleet team sync is off' : undefined"
+              data-testid="context-promote-btn"
+              @click="onPromoteClick"
+            >
+              <span v-if="promoteLoading">Promoting…</span>
+              <span v-else>Promote to org</span>
+            </button>
+            <span
+              v-if="!teamCapEnabled"
+              class="font-ui text-[10px] text-ink-subtle"
+              data-testid="context-promote-disabled-reason"
+            >
+              (fleet off)
+            </span>
+          </span>
           <button
             type="button"
             class="text-[11px] text-ink-dim hover:text-accent flex items-center gap-1"
@@ -678,6 +972,8 @@ onBeforeUnmount(() => {
             :selected-path="selectedPath"
             :is-root="true"
             @select="selectFile"
+            @rename="onRenameNode"
+            @delete="onDeleteNode"
           />
         </div>
       </nav>
