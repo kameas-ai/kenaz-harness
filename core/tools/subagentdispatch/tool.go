@@ -14,7 +14,17 @@
 //     mission's tasks.Registry (WP06). When tasks.Registry is nil the async
 //     path degrades gracefully: it still spawns the branch and returns the
 //     branch_id, but no global-task-visibility is available.
-//   - Cedar action: tool.subagent.dispatch (ActionToolSubagentDispatch).
+//   - Cedar containment: per-call authorization for THIS tool call flows
+//     through the generic session-kind arm (cedar.ActionUseTool), the
+//     same gate every other tool call goes through — NOT through the
+//     tool.subagent.dispatch / ActionToolSubagentDispatch constant
+//     declared in core/policy/cedar/types.go, which has zero evaluation
+//     sites in the tree. A dedicated per-call gate for the dispatch
+//     itself (depth beyond MaxForkDepth, profile enforcement) is not
+//     built; see MaxForkDepth (core/rpc/views/agentgraph/env_deps_branch.go)
+//     for the one bound that IS enforced, and docs/unwired-ledger.md's
+//     2026-08-22 entry for what still is not (containment review of PR
+//     #307).
 //
 // DIRECTIVE_001: backend-only; no CGo, no GUI imports.
 package subagentdispatch
@@ -36,10 +46,23 @@ const (
 	ToolName = "kenaz__subagent_dispatch"
 
 	// ToolDescription explains the tool to the model.
+	//
+	// Deliberately does NOT claim a profile's allowed_tools/denied_tools
+	// restrict what the spawned sub-agent can call — they do not (see
+	// this tool's own Cedar containment note above and
+	// docs/unwired-ledger.md's 2026-08-22 entry). Earlier wording said
+	// "explore = read-only research" / "code-reviewer = review code
+	// without changes", which read as a hard guarantee to the model when
+	// the spawned session in fact carries the full session tool
+	// catalogue. Describing profiles by INTENDED FOCUS avoids the model
+	// treating a sub-agent dispatch as a safety boundary it is not
+	// (containment review of PR #307, finding B3).
 	ToolDescription = "Dispatch a sub-agent to handle a delegated task. " +
-		"Choose a profile that matches the task (explore = read-only research, " +
-		"code-reviewer = review code without changes, implementer = write/edit code, " +
-		"summarizer = condense text, bug-finder = diagnose issues). " +
+		"Choose a profile that matches the task (explore = research-focused, " +
+		"code-reviewer = review-focused, implementer = write/edit code, " +
+		"summarizer = condense text, bug-finder = diagnose issues). Profile " +
+		"names describe intended focus, not an enforced restriction — the " +
+		"spawned sub-agent still has the parent session's full tool set. " +
 		"By default the sub-agent runs in the background and you receive a branch_id " +
 		"immediately. Set run_in_background=false to block until the worker returns its " +
 		"merge summary."

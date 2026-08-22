@@ -309,6 +309,56 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-08-22 · Bundled sub-agent profiles advertise containment (allowed_tools/denied_tools/budget_*) that reaches no consumer (`subagent-control-and-background-tasks-01PMZB11`, containment review of PR #307 finding B3)
+
+Every bundled profile (`core/agents/bundled/*.yaml`) declares
+`allowed_tools`, `denied_tools`, `budget_tokens` and `budget_time_s`. None
+reaches a consumer on the dispatch path:
+
+- `BranchSeamAdapter.Fork` (`core/rpc/views/agentgraph/env_deps_branch.go`)
+  never reads `req.ToolAllowlist`, though `coreag.ForkRequest` carries the
+  field and `core/tools/subagentdispatch/tool.go` populates it from
+  `profile.AllowedTools`.
+- `DeniedTools` is dropped even earlier — `ForkRequest` has no field for
+  it at all.
+- `Profile.IsAllowed` / `IsDenied` (`core/agents/profile.go`) have zero
+  production callers.
+- `BudgetTokens` / `BudgetTimeS` have no reader outside the field copy
+  into `Profile` itself; `core/rpc/subagent_run_spawner.go` uses one
+  fixed `defaultSubagentSpawnTimeout` for every profile.
+
+Net effect: dispatching `explore` — whose bundled YAML says "Read-only
+research worker" and lists `kenaz__write_file` / `kenaz__edit_file` /
+`kenaz__bash` under `denied_tools` — produces a child session with the
+full session tool catalogue, those three tools included, and no
+profile-specific token ceiling. Session-level Cedar containment
+(`cedar.ActionUseTool`, evaluated for every tool call in every session)
+still gates every call, so this is not an absolute-terms regression, but
+the profile fields, `Profile.IsAllowed`/`IsDenied`'s doc comments, and
+the `kenaz__subagent_dispatch` tool description all previously implied a
+restriction that does not exist. The tool description and the four
+`agents.Profile` field docs were corrected in the same commit as this
+entry to stop asserting it; the fields, `IsAllowed` and `IsDenied` stay
+(deleting them fails the ritual's ruling test — no named live
+substitute, no documented retirement, and the mission that will consume
+them is already ruled to land).
+
+**Not fixed here because real enforcement needs a session-scoped tool
+permission overlay** — the containment PR #307 review answered (owner
+ruling G-1, `docs/escalation-register-2026-08-19.md` Part 9): the
+sub-agent mission runs to completion through UNIT-13, and per that
+ruling's sequencing (`UNIT-6 → {7, 8, 9, 12} → UNIT-10 → UNIT-13`),
+UNIT-9 is where these fields are meant to reach a consumer. Building that
+now, inside a three-finding containment fix, would mean touching
+`core/toolloop`'s `PermissionResolver` composition and
+`core/rpc/api.go`'s global `perms` construction (currently ONE
+`toolloop.NewMergedResolver` shared by every session, unconditional) —
+real mission-scale work, not a same-PR wire.
+
+**Owner:** alec. **Blocker:** `subagent-control-and-background-tasks-01PMZB11`
+UNIT-9 (not yet dispatched this release — see owner ruling G-1). **Date:**
+2026-08-22.
+
 ### 2026-08-22 · `RunOptions.SkipCache` has zero frontend writers (UNIT-13, `automation-actually-runs-01PMZ404`)
 
 `RunOptions.SkipCache bool` (`core/rpc/views/workflows/api.go:139`, wire tag

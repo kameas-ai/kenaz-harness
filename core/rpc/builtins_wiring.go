@@ -916,13 +916,31 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 			// itself is gated on a real, spawner-armed BranchSeam
 			// (registerSubagentDispatchTool, called from core/rpc's
 			// New() — subagent-control-and-background-tasks-01PMZB11
-			// UNIT-6 made this reachable in production), and per-call
-			// authorization is enforced by Cedar's
-			// ActionToolSubagentDispatch action, not by a Settings
-			// dial. This case predates the tool actually registering
-			// (added proactively so wiring the seam wouldn't silently
-			// repeat the ask_user_question regression) and needed no
-			// change when UNIT-6 landed.
+			// UNIT-6 made this reachable in production).
+			//
+			// Per-call authorization for THIS tool call, like every
+			// other tool call, flows through the generic session-kind
+			// Cedar arm (cedar.ActionUseTool, evaluated by
+			// newCedarSessionKindResolver in
+			// core/rpc/harness_session_kind_resolver.go) — NOT through
+			// cedar.ActionToolSubagentDispatch. That constant is declared
+			// in core/policy/cedar/types.go but has zero evaluation
+			// sites anywhere in the tree; a prior version of this
+			// comment asserted it was the enforcement path in the
+			// present tense, which was false (containment review of PR
+			// #307, "Related note"). There is still no per-call gate
+			// dedicated to the dispatch itself (rate limits, containment
+			// beyond the session-wide tool set); see this tool's own
+			// depth guard (graphview.MaxForkDepth) for the one bound
+			// that mission actually shipped, and
+			// docs/unwired-ledger.md's 2026-08-22 entry for the
+			// still-unenforced profile fields (AllowedTools/
+			// DeniedTools/BudgetTokens/BudgetTimeS).
+			//
+			// This case predates the tool actually registering (added
+			// proactively so wiring the seam wouldn't silently repeat
+			// the ask_user_question regression) and needed no change
+			// when UNIT-6 landed.
 			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 

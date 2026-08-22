@@ -81,20 +81,35 @@ type Profile struct {
 	// lowercase string ("cautious", "default", etc.) via UnmarshalYAML.
 	AutonomyTier autonomy.Tier `yaml:"-" json:"autonomyTier"`
 
-	// AllowedTools is an explicit list of tool IDs the worker may call.
-	// An empty slice means "all tools the session allows" (inherited).
+	// AllowedTools is an explicit list of tool IDs the worker is INTENDED
+	// to call. NOT CURRENTLY ENFORCED: neither Fork
+	// (core/rpc/views/agentgraph/env_deps_branch.go) nor the run spawner
+	// (core/rpc/subagent_run_spawner.go) reads this field to narrow the
+	// spawned child session's tool set — the child inherits the full
+	// session tool catalogue, gated only by the same session-wide Cedar
+	// arm every session is gated by. See IsAllowed's doc and
+	// docs/unwired-ledger.md's 2026-08-22 entry (containment review of
+	// PR #307, finding B3) before relying on this field for containment.
 	AllowedTools []string `yaml:"allowed_tools" json:"allowedTools,omitempty"`
 
-	// DeniedTools is a list of tool IDs the worker is NEVER allowed to call,
-	// even if AllowedTools would permit them. Deny wins over allow.
+	// DeniedTools is a list of tool IDs the worker is INTENDED to never
+	// call, even if AllowedTools would permit them. NOT CURRENTLY
+	// ENFORCED — see AllowedTools's doc above. ForkRequest has no field
+	// to carry this list at all, so it does not even reach the seam.
 	DeniedTools []string `yaml:"denied_tools" json:"deniedTools,omitempty"`
 
-	// BudgetTokens is the maximum number of tokens the worker may consume.
-	// Zero means no limit beyond the parent session's limit.
+	// BudgetTokens is the INTENDED maximum number of tokens the worker
+	// may consume. NOT CURRENTLY ENFORCED — no reader outside a field
+	// copy; the spawned run has no token ceiling of its own beyond
+	// whatever bounds the parent session already has. See AllowedTools's
+	// doc above.
 	BudgetTokens int `yaml:"budget_tokens" json:"budgetTokens,omitempty"`
 
-	// BudgetTimeS is the maximum wall-clock seconds the worker may run.
-	// Zero means no time limit.
+	// BudgetTimeS is the INTENDED maximum wall-clock seconds the worker
+	// may run. NOT CURRENTLY ENFORCED — the spawner uses a single fixed
+	// defaultSubagentSpawnTimeout (core/rpc/subagent_run_spawner.go) for
+	// every profile regardless of this value. See AllowedTools's doc
+	// above.
 	BudgetTimeS int `yaml:"budget_time_s" json:"budgetTimeS,omitempty"`
 
 	// SystemPromptOverride replaces the default system prompt in the spawned
@@ -197,7 +212,10 @@ func (p Profile) EffectiveMergePolicy() MergePolicy {
 	return p.MergePolicy
 }
 
-// IsDenied reports whether the named tool is in the profile's DeniedTools list.
+// IsDenied reports whether the named tool is in the profile's DeniedTools
+// list. Has no production caller today — nothing on the dispatch path
+// consults it before a spawned session is allowed to call a tool. See
+// AllowedTools's doc and docs/unwired-ledger.md's 2026-08-22 entry.
 func (p Profile) IsDenied(toolID string) bool {
 	for _, d := range p.DeniedTools {
 		if d == toolID {
@@ -209,7 +227,8 @@ func (p Profile) IsDenied(toolID string) bool {
 
 // IsAllowed reports whether the named tool is permitted by the profile's
 // AllowedTools list. When AllowedTools is empty, every tool is implicitly
-// allowed (subject to DeniedTools and session policy).
+// allowed (subject to DeniedTools and session policy). Has no production
+// caller today, same gap as IsDenied — see its doc.
 func (p Profile) IsAllowed(toolID string) bool {
 	if len(p.AllowedTools) == 0 {
 		return true
