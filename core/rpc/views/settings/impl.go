@@ -773,6 +773,32 @@ func (s *FileStore) SaveGraphAuthoringEnabled(enabled bool) error {
 	return s.saveLocked(got)
 }
 
+// LoadHarnessSelfMCPDisabled returns the harness-self MCP server kill
+// switch (harness-self-attach-01PMHS01 UNIT-7). Default false (attached)
+// — a corrupt or missing settings file returns the pre-UNIT-7 default so
+// an unreadable settings.json cannot silently detach the server.
+func (s *FileStore) LoadHarnessSelfMCPDisabled() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.HarnessSelfMCPDisabled, err
+	}
+	return got.HarnessSelfMCPDisabled, nil
+}
+
+// SaveHarnessSelfMCPDisabled persists the harness-self MCP server kill
+// switch. Takes effect on the next OnboardingAPI.State() read — the
+// adapter reads live rather than caching at construction.
+func (s *FileStore) SaveHarnessSelfMCPDisabled(disabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.HarnessSelfMCPDisabled = disabled
+	return s.saveLocked(got)
+}
+
 // LoadFSRequestAccessEnabled returns the kenaz__request_filesystem_access
 // built-in opt-in. Default true (on) — zero-value FSRequestAccessDisabled
 // means enabled. Errors return the safe default so the tool keeps working
@@ -1935,6 +1961,19 @@ func (m *memoryStore) SaveGraphAuthoringEnabled(enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data.GraphAuthoringEnabled = enabled
+	return nil
+}
+
+func (m *memoryStore) LoadHarnessSelfMCPDisabled() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.HarnessSelfMCPDisabled, nil
+}
+
+func (m *memoryStore) SaveHarnessSelfMCPDisabled(disabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.HarnessSelfMCPDisabled = disabled
 	return nil
 }
 

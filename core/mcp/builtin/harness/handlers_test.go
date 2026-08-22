@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+
+	"github.com/kameas-ai/kenaz-harness/core/mcp/transport"
 )
 
 type stubProviderLister struct{ items []ProviderSummary }
@@ -21,7 +23,9 @@ func (s *stubProviderWriter) AddProvider(_ context.Context, kind, name, model, _
 func (s *stubProviderWriter) RemoveProvider(_ context.Context, _ string) error { return nil }
 
 // TestRegisterAll_HappyPath asserts the wiring registers the canonical
-// 15 tools (13 from WP04/WP05 + harness_read_materialize_run /
+// 14 tools (13 from WP04/WP05 minus harness_write_set_setting, removed
+// by harness-self-attach-01PMHS01 UNIT-8, G-4 — see the doc comment
+// above harness.ProjectWriter — plus harness_read_materialize_run /
 // harness_write_draft_agent_graph from model-authored-graphs-01PMGA01
 // UNIT-7) and dispatches AddProvider end-to-end. The count is a
 // registration-mechanics regression pin, not a reachability claim —
@@ -35,8 +39,8 @@ func TestRegisterAll_HappyPath(t *testing.T) {
 		Providers:       stubProviderLister{items: []ProviderSummary{{ID: "p0", Kind: "anthropic"}}},
 		ProvidersWriter: w,
 	})
-	if got := len(srv.Tools()); got != 15 {
-		t.Fatalf("registered tool count = %d, want 15", got)
+	if got := len(srv.Tools()); got != 14 {
+		t.Fatalf("registered tool count = %d, want 14", got)
 	}
 
 	// Drive add_provider via the handler directly.
@@ -63,23 +67,52 @@ func TestRegisterAll_HappyPath(t *testing.T) {
 	}
 }
 
-// TestSetSetting_Allowlist asserts non-allowlisted keys are rejected.
-func TestSetSetting_Allowlist(t *testing.T) {
+// TestRegisterAll_NoSetSettingTool is harness-self-attach-01PMHS01
+// UNIT-8's regression pin (G-4): harness_write_set_setting must not be
+// registered at all, and the identifiers backing it
+// (SettingsWriter/handleSetSetting/SettingsAllowlist/ToolSetSetting)
+// must not exist. The tool previously reported OK:true for every one of
+// its five allowlisted keys while silently discarding the write
+// (settingsKeyToJSON's `_`-prefixed sentinels, core/rpc/harness_wiring.go)
+// — a lie the owner ruled to end by removing the tool, not by shipping
+// it with an allowlist that shrank to zero.
+//
+// Mutation: re-add harness_write_set_setting to RegisterAll. Must fail.
+func TestRegisterAll_NoSetSettingTool(t *testing.T) {
 	t.Parallel()
-	m := Managers{SettingsWriter: stubSettingsWriter{}}
-	args, _ := json.Marshal(map[string]any{"key": "EvilKey", "value": 1})
-	if _, err := m.handleSetSetting(context.Background(), args); err == nil {
-		t.Errorf("expected error for non-allowlisted key")
-	}
-	args, _ = json.Marshal(map[string]any{"key": "OnboardingCompleted", "value": true})
-	if _, err := m.handleSetSetting(context.Background(), args); err != nil {
-		t.Errorf("unexpected error: %v", err)
+	srv := RegisterAll(NewServer(), Managers{})
+	if _, ok := srv.Lookup("harness_write_set_setting"); ok {
+		t.Fatal("harness_write_set_setting is still registered — UNIT-8 removed it; " +
+			"a tool that reports success for a write it silently discards is the class this mission exists to end")
 	}
 }
 
-type stubSettingsWriter struct{}
-
-func (stubSettingsWriter) SetSetting(_ context.Context, _ string, _ any) error { return nil }
+// TestToolsCall_SetSetting_FailsHonestly drives the actual JSON-RPC
+// tools/call entrypoint (HandleEnvelope) the way a real MCP client would,
+// end to end — not just the registration-catalog check above. Before
+// UNIT-8 this call would have returned {"ok":true,"message":"Set
+// OnboardingCompleted"} while silently discarding the write
+// (settingsKeyToJSON's sentinel). It must now fail as an ordinary
+// unknown-tool error: honest failure, not a lie with a 200-shaped
+// envelope.
+func TestToolsCall_SetSetting_FailsHonestly(t *testing.T) {
+	t.Parallel()
+	srv := RegisterAll(NewServer(), Managers{})
+	params, _ := json.Marshal(map[string]any{
+		"name":      "harness_write_set_setting",
+		"arguments": map[string]any{"key": "OnboardingCompleted", "value": true},
+	})
+	res, rpcErr := srv.HandleEnvelope(context.Background(), transport.RequestEnvelope{
+		Method: transport.MethodToolsCall,
+		Params: json.RawMessage(params),
+	})
+	if rpcErr == nil {
+		t.Fatalf("tools/call harness_write_set_setting: expected an error, got a result: %#v", res)
+	}
+	if rpcErr.Code != transport.ErrCodeMethodNotFound {
+		t.Errorf("rpcErr.Code = %d, want ErrCodeMethodNotFound (%d)", rpcErr.Code, transport.ErrCodeMethodNotFound)
+	}
+}
 
 // ---- WP04 read stubs ----
 
