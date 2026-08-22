@@ -702,6 +702,18 @@ type API struct {
 	// Process-lifetime, never written to disk.
 	confirmSessionGrants *toolloop.SessionGrantCache
 
+	// slashDispatch is the shared core/slashcmd Dispatch instance: the
+	// human-invoked RPC path (Slash().UserRun) and the model-invoked
+	// kenaz__skill builtin (via RunModelInvoked) both call methods on
+	// this SAME pointer. automation-actually-runs-01PMZ404 UNIT-4 wires
+	// its tool dispatcher onto it after newLLMStack returns (the tool
+	// pool / permission resolver / confirm bus stack.wrappedPool /
+	// stack.perms / stack.confirmBus need to exist first — slashDispatch
+	// itself is constructed earlier, before newLLMStack runs). Held here
+	// so tests can drive the actual production wire directly instead of
+	// constructing an equivalent Dispatch by hand.
+	slashDispatch *coreslashcmd.Dispatch
+
 	// elicitAPI is the ask-user-question RPC surface (mission
 	// ask-user-question-interactive-01KZNP3G WP04). Constructed in New
 	// and wired with a concrete Delegate into the askuserquestion tool.
@@ -2162,6 +2174,32 @@ func New(c *core.Core, opts ...Option) *API {
 	// production wire (see harness_session_kind_resolver_wiring_test.go)
 	// instead of reconstructing an equivalent by hand.
 	a.toolPermsResolver = stack.perms
+	// automation-actually-runs-01PMZ404 UNIT-4: wire the tool dispatcher
+	// onto the Dispatch built earlier (before newLLMStack ran, so it
+	// could not have this yet). Owner ruling G-2
+	// (docs/escalation-register-2026-08-19.md Part 9, E-004): the SAME
+	// pool (stack.wrappedPool), the SAME merged permission resolver
+	// (stack.perms — Cedar-backed, the exact value a.toolPermsResolver
+	// above now also holds), and the SAME confirm-each apparatus
+	// (stack.confirmBus + stack.confirmDeps) the chat tool loop uses —
+	// so a slash-invoked tool call cannot become a privilege-escalation
+	// route that reaches a tool without the confirmation or the Cedar
+	// check a chat tool call would trigger for the exact same tool.
+	if slashDispatch != nil && stack.wrappedPool != nil {
+		slashDispatch.WithToolDispatcher(&slashToolDispatcherAdapter{
+			pool:             stack.wrappedPool,
+			perms:            stack.perms,
+			confirm:          stack.confirmBus,
+			confirmEnabled:   stack.confirmDeps.Enabled,
+			sessionGrants:    stack.confirmSessionGrants,
+			persistGrants:    stack.confirmDeps.PersistGrants,
+			headless:         stack.confirmDeps.Headless,
+			headlessExplicit: stack.confirmDeps.HeadlessExplicit,
+			auditEmitter:     stack.confirmDeps.Audit,
+			now:              stack.confirmDeps.Now,
+		})
+	}
+	a.slashDispatch = slashDispatch
 	// long-turn-resilience-01KR3PRS WP03: now that both the chat
 	// runner and the session manager are constructed, wire the
 	// ResumeStarter onto the existing sessionsAPI so
@@ -4786,6 +4824,16 @@ type llmStack struct {
 	// wfToolDiscovererAdapter both close over this same value — see
 	// AC-006/AC-007's "one resolver reaches both consumers" note.
 	perms toolloop.PermissionResolver
+	// confirmDeps is the EXACT chat.ConfirmDeps value buildChatRunner
+	// wires into the chat kernel tool adapter (Enabled, SessionGrants,
+	// PersistGrants, Headless, HeadlessExplicit, Audit). Held here so
+	// New() can hand slashToolDispatcherAdapter (automation-actually-
+	// runs-01PMZ404 UNIT-4) the SAME confirm-each collaborators chat
+	// uses, rather than reconstructing an equivalent bundle that could
+	// quietly drift from the real one — owner ruling G-2 requires the
+	// slash-command tool path to take the SAME confirm/Cedar path a
+	// chat tool call takes.
+	confirmDeps chat.ConfirmDeps
 }
 
 func newLLMStack(
@@ -5334,6 +5382,7 @@ func newLLMStack(
 
 		confirmBus:           confirmBus,
 		confirmSessionGrants: confirmSessionGrants,
+		confirmDeps:          confirmDeps,
 	}
 }
 

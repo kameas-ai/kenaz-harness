@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // nameRe is the pattern every user command name must match.
@@ -70,6 +71,19 @@ func Validate(cmd UserCommand) error {
 		if cmd.Tool == "" {
 			return validationErr("kind:tool requires a non-empty tool field")
 		}
+		if !isNamespacedToolName(cmd.Tool) {
+			// Owner ruling G-2 (docs/escalation-register-2026-08-19.md
+			// Part 9, automation-actually-runs-01PMZ404 E-004):
+			// namespaced tool names, JSON arguments, and the SAME
+			// confirm/Cedar path a chat tool call takes. The dispatcher
+			// (core/rpc/wf_adapters.go slashToolDispatcherAdapter) splits
+			// on "__" the same way the chat kernel tool adapter and the
+			// workflow tool_call step do — a bare name like "bash" can
+			// never resolve to a real (server, tool) pair, so reject it
+			// at save time instead of failing silently at dispatch time.
+			return validationErr(fmt.Sprintf(
+				"tool %q must be namespaced as \"server__tool\" (e.g. %q)", cmd.Tool, "kenaz__"+cmd.Tool))
+		}
 		if cmd.ToolArgsTemplate == "" {
 			return validationErr("kind:tool requires a non-empty tool_args_template field")
 		}
@@ -108,6 +122,17 @@ func Validate(cmd UserCommand) error {
 	}
 
 	return nil
+}
+
+// isNamespacedToolName reports whether name has the "server__tool" shape
+// the dispatch-side splitter expects. Both sides of the "__" separator
+// must be non-empty — "__bash" and "bash__" are as invalid as "bash".
+func isNamespacedToolName(name string) bool {
+	idx := strings.Index(name, "__")
+	if idx <= 0 {
+		return false
+	}
+	return idx+2 < len(name)
 }
 
 func containsString(slice []string, s string) bool {

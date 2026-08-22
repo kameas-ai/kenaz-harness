@@ -118,7 +118,7 @@ func TestDispatch_KindTool_ArgsAsSlice(t *testing.T) {
 		Scope:            slashcmd.ScopeGlobal,
 		Kind:             slashcmd.KindTool,
 		Description:      "Deploy to env",
-		Tool:             "bash",
+		Tool:             "kenaz__bash",
 		ToolArgsTemplate: "./deploy.sh --env {{env}}",
 		Inputs: []slashcmd.UserCommandInput{
 			{Name: "env", Kind: slashcmd.InputKindText, Required: true},
@@ -144,8 +144,8 @@ func TestDispatch_KindTool_ArgsAsSlice(t *testing.T) {
 		t.Fatalf("tool calls = %d, want 1", len(fakeTool.calls))
 	}
 	call := fakeTool.calls[0]
-	if call.Name != "bash" {
-		t.Errorf("tool name = %q, want %q", call.Name, "bash")
+	if call.Name != "kenaz__bash" {
+		t.Errorf("tool name = %q, want %q", call.Name, "kenaz__bash")
 	}
 	// Args must be a slice, not a shell string.
 	wantArgs := []string{"./deploy.sh", "--env", "staging"}
@@ -304,7 +304,7 @@ func TestDispatch_KindTool_NilDispatcher_ReturnsError(t *testing.T) {
 		Scope:            slashcmd.ScopeGlobal,
 		Kind:             slashcmd.KindTool,
 		Description:      "Run linter",
-		Tool:             "bash",
+		Tool:             "kenaz__bash",
 		ToolArgsTemplate: "golangci-lint run ./...",
 	}
 	if err := store.SaveUser(ctx, cmd); err != nil {
@@ -320,10 +320,10 @@ func TestDispatch_KindTool_NilDispatcher_ReturnsError(t *testing.T) {
 	if result.Kind != slashcmd.ResultKindError {
 		t.Errorf("Kind = %q, want error", result.Kind)
 	}
-	if result.ToolName != "bash" {
-		t.Errorf("ToolName = %q, want %q", result.ToolName, "bash")
+	if result.ToolName != "kenaz__bash" {
+		t.Errorf("ToolName = %q, want %q", result.ToolName, "kenaz__bash")
 	}
-	if !strings.Contains(err.Error(), "bash") {
-		t.Errorf("err = %v, want it to name the tool %q", err, "bash")
+	if !strings.Contains(err.Error(), "kenaz__bash") {
+		t.Errorf("err = %v, want it to name the tool %q", err, "kenaz__bash")
 	}
 }

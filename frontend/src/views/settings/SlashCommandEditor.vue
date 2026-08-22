@@ -311,7 +311,7 @@ function insertToken(token: string) {
             v-model="form.tool"
             :disabled="readOnly"
             type="text"
-            placeholder="bash"
+            placeholder="kenaz__bash"
             class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1.5 font-mono text-sm text-ink outline-none focus:border-accent disabled:opacity-50"
             data-testid="cmd-tool-input"
           />

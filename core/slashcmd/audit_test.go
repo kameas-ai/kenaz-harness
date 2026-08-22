@@ -160,7 +160,7 @@ func TestEmitRun_ToolKindRecordsTool(t *testing.T) {
 		Scope:            "global",
 		Kind:             "tool",
 		Description:      "Deploy",
-		Tool:             "bash",
+		Tool:             "kenaz__bash",
 		ToolArgsTemplate: "./deploy.sh",
 	}); err != nil {
 		t.Fatalf("SaveUser: %v", err)
@@ -176,8 +176,8 @@ func TestEmitRun_ToolKindRecordsTool(t *testing.T) {
 	if err := json.Unmarshal(em.events[0].Payload, &payload); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if payload.DispatchedTool != "bash" {
-		t.Errorf("DispatchedTool = %q, want %q", payload.DispatchedTool, "bash")
+	if payload.DispatchedTool != "kenaz__bash" {
+		t.Errorf("DispatchedTool = %q, want %q", payload.DispatchedTool, "kenaz__bash")
 	}
 	if payload.Kind != "tool" {
 		t.Errorf("Kind = %q, want %q", payload.Kind, "tool")

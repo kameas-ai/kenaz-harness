@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/context/audit"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 // RunResult is the output of a user command execution. The Kind field
@@ -85,6 +86,23 @@ func NewDispatch(store *Store, tools ToolDispatcher) *Dispatch {
 // emit is itself non-blocking at the emitter level.
 func (d *Dispatch) WithAuditEmitter(em audit.Emitter) *Dispatch {
 	d.auditor = em
+	return d
+}
+
+// WithToolDispatcher injects a ToolDispatcher into the Dispatch after
+// construction — mirrors WithAuditEmitter.
+//
+// automation-actually-runs-01PMZ404 UNIT-4: this exists because the
+// production tool pool + permission resolver + confirm bus
+// (core/rpc/api.go's newLLMStack) are not available yet at the point
+// core/rpc/api.go constructs the Dispatch — slashStore (and the
+// Dispatch built over it) is needed early for hookBuiltins and the
+// kenaz__skill builtin's registration, both of which happen before
+// newLLMStack runs. The tools field is attached once those pieces
+// exist, synchronously inside New(), before *API is ever returned to a
+// caller — no request can observe a partially-wired Dispatch.
+func (d *Dispatch) WithToolDispatcher(tools ToolDispatcher) *Dispatch {
+	d.tools = tools
 	return d
 }
 
@@ -208,7 +226,20 @@ func (d *Dispatch) Run(
 				},
 			}, err
 		}
-		output, dispErr := d.tools.DispatchTool(ctx, cmd.Tool, splitArgs)
+		// Owner ruling G-2 (docs/escalation-register-2026-08-19.md Part
+		// 9, automation-actually-runs-01PMZ404 E-004): a slash-command
+		// tool call takes the SAME confirm/Cedar path a chat tool call
+		// takes, and that path is per-SESSION (permission resolution,
+		// confirm-each session grants, and the audit trail all key off
+		// it). DispatchTool's signature is unchanged ([]string args, no
+		// session parameter) — reusing toolloop's existing
+		// WithSessionID/SessionIDFromContext ctx convention (the same
+		// one kernelToolAdapter.dispatch uses to hand save_artifact its
+		// session id) avoids widening an interface every other
+		// implementer and every test fake would need to grow a
+		// parameter for.
+		dispatchCtx := toolloop.WithSessionID(ctx, sc.SessionID)
+		output, dispErr := d.tools.DispatchTool(dispatchCtx, cmd.Tool, splitArgs)
 		if dispErr != nil {
 			return RunResult{
 				Kind: ResultKindError,

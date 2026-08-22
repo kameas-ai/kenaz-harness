@@ -50,7 +50,7 @@ func projectToolCmd(name, projectID string) coreslashcmd.UserCommand {
 		ProjectID:        projectID,
 		Kind:             coreslashcmd.KindTool,
 		Description:      "a project tool command",
-		Tool:             "bash",
+		Tool:             "kenaz__bash",
 		ToolArgsTemplate: "./scripts/" + name + ".sh",
 	}
 }

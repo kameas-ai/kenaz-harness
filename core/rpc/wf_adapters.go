@@ -39,9 +39,12 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
+	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
+	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 	corewf "github.com/kameas-ai/kenaz-harness/core/workflows"
 )
@@ -419,4 +422,270 @@ func splitToolName(name string) (server, tool string) {
 		return "", name
 	}
 	return name[:idx], name[idx+len(sep):]
+}
+
+// ─── Slash-command tool dispatcher adapter ─────────────────────────────────────
+
+// slashToolDispatcherAdapter bridges slashcmd.ToolDispatcher onto the SAME
+// pool + permission resolver + confirm-each apparatus a chat tool call
+// uses (automation-actually-runs-01PMZ404 UNIT-4).
+//
+// Owner ruling G-2 (docs/escalation-register-2026-08-19.md Part 9,
+// E-004): "namespaced tool names, JSON arguments, and the SAME
+// confirm/Cedar path a chat tool call takes." The reason given: one
+// permission story for the whole app — a slash command must not become
+// a privilege-escalation route that reaches tools without the
+// confirmation a chat tool call would trigger.
+//
+// This is deliberately NOT wfToolDispatcherAdapter's shape (a bare
+// pool.Call with no permission gate at all). That adapter serves the
+// workflow engine's tool_call step, whose per-run containment is a
+// DIFFERENT mission's scope (harness-self-attach-01PMHS01 WP04; see
+// spec.md §4 non-goals for automation-actually-runs-01PMZ404) — copying
+// it here would leave a slash command MORE permissive than the chat
+// surface it is supposed to mirror, which is exactly the hole the
+// ruling closes. A slash-invoked tool call is user- or model-initiated
+// the same way a chat tool call is, so it gets the same ladder:
+// PermissionResolver.Resolve (the SAME merged static+Cedar resolver
+// chat uses — see core/rpc/api.go's newLLMStack) short-circuits an
+// explicit Deny before anything dispatches, and a confirm_each verdict
+// parks on the SAME *toolloop.ConfirmBus chat parks on — never a
+// silent auto-allow, and never a locally-reinvented decision that could
+// quietly diverge from chat's.
+//
+// The confirm-each ladder here intentionally omits kernelToolAdapter's
+// rung 1 (the autonomy prompt-skip set): that knob is scoped to a
+// chat TURN's resolved autonomy posture, which has no meaning for a
+// directly-dispatched slash command. Skipping it can only make this
+// path prompt in a case chat would have silently skipped — a strictly
+// more conservative divergence, never a more permissive one.
+type slashToolDispatcherAdapter struct {
+	pool  toolloop.MCPPool
+	perms toolloop.PermissionResolver
+
+	// confirm-each collaborators — the SAME instances core/rpc/api.go
+	// hands the chat runner's kernelToolAdapter (via chat.ConfirmDeps).
+	confirm          *toolloop.ConfirmBus
+	confirmEnabled   func() bool
+	sessionGrants    *toolloop.SessionGrantCache
+	persistGrants    toolloop.PersistentGrantStore
+	headless         toolloop.HeadlessConfirmPolicy
+	headlessExplicit bool
+	auditEmitter     contextaudit.Emitter
+	now              func() time.Time
+}
+
+// Compile-time witness: slashToolDispatcherAdapter satisfies the
+// interface slashcmd.Dispatch.Run dispatches through.
+var _ coreslashcmd.ToolDispatcher = (*slashToolDispatcherAdapter)(nil)
+
+func (a *slashToolDispatcherAdapter) clock() time.Time {
+	if a.now != nil {
+		return a.now()
+	}
+	return time.Now()
+}
+
+// DispatchTool implements slashcmd.ToolDispatcher. toolName is the
+// namespaced "server__tool" form — owner ruling G-2's "namespaced tool
+// names" — the same convention wfToolDispatcherAdapter, the workflow
+// tool_call step, and the chat kernel tool adapter all use.
+// core/slashcmd.Validate now rejects a bare (non-namespaced) tool name
+// at save time, so a malformed name reaching here is a defence-in-depth
+// check, not the primary gate.
+func (a *slashToolDispatcherAdapter) DispatchTool(ctx context.Context, toolName string, args []string) (string, error) {
+	if a == nil || a.pool == nil {
+		return "", fmt.Errorf("slash tool dispatch: no tool pool wired")
+	}
+	server, tool := splitToolName(toolName)
+	if server == "" {
+		return "", fmt.Errorf("slash tool dispatch: %q is not a namespaced tool name (want \"server__tool\")", toolName)
+	}
+
+	sessionID := toolloop.SessionIDFromContext(ctx)
+
+	if a.perms != nil {
+		v, err := a.perms.Resolve(ctx, sessionID, server, tool)
+		if err != nil {
+			return "", fmt.Errorf("slash tool dispatch: permission resolve: %w", err)
+		}
+		switch v.Policy {
+		case toolloop.PolicyAutoAllow:
+			// Fall through to dispatch.
+
+		case toolloop.PolicyDeny:
+			// The floor. Evaluated before any prompt, exactly like
+			// kernelToolAdapter.dispatch — a denied call is never
+			// surfaced as an approvable row.
+			reason := v.Reason
+			if reason == "" {
+				reason = "denied by permission policy"
+			}
+			return "", fmt.Errorf("tool %q denied: %s", toolName, reason)
+
+		case toolloop.PolicyConfirmEach:
+			approved, denyReason, err := a.resolveConfirmEach(ctx, sessionID, server, tool, v.Reason)
+			if err != nil {
+				return "", fmt.Errorf("slash tool dispatch: tool confirmation: %w", err)
+			}
+			if !approved {
+				return "", fmt.Errorf("tool %q denied: %s", toolName, denyReason)
+			}
+
+		default:
+			// An unrecognised or empty policy string is a configuration
+			// error and must not read as "allow" — the same rule
+			// kernelToolAdapter.dispatch enforces for chat.
+			return "", fmt.Errorf("tool %q denied: unrecognised permission policy %q", toolName, v.Policy)
+		}
+	}
+
+	// Owner ruling G-2's "JSON arguments": the []string tokens the slash
+	// command's rendered args template produced are marshalled as a JSON
+	// array — this is the []string -> json.RawMessage boundary
+	// conversion the ruling calls out as "the part most likely to be got
+	// wrong quietly", so it is driven from here (DispatchTool, the
+	// model's actual entry point via kenaz__skill -> Dispatch.
+	// RunModelInvoked -> Dispatch.Run), not from a helper nothing calls.
+	argsJSON, err := json.Marshal(args)
+	if err != nil {
+		return "", fmt.Errorf("slash tool dispatch: marshal args: %w", err)
+	}
+
+	raw, callErr := a.pool.Call(toolloop.WithSessionID(ctx, sessionID), server, tool, argsJSON)
+	if callErr != nil {
+		return "", callErr
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s, nil
+	}
+	return string(raw), nil
+}
+
+// resolveConfirmEach decides a `confirm_each` verdict for a slash-invoked
+// tool call. It mirrors kernelToolAdapter.resolveConfirmEach
+// (core/rpc/views/agentgraph/chat/kernel_tool_adapter.go) minus the
+// autonomy prompt-skip rung (see the type doc), consulting the SAME
+// collaborators — the SessionGrantCache, PersistentGrantStore,
+// ConfirmBus, and headless policy chat's confirm-each ladder uses — so a
+// tool that would prompt in chat also prompts here, and an "always
+// allow" grant recorded from either surface is honoured by both.
+//
+// Returns (approved, denyReason, err). err is non-nil only when the
+// confirmation itself could not be resolved (context cancelled while
+// parked) — the caller must treat that as "did not dispatch", same as a
+// deny.
+func (a *slashToolDispatcherAdapter) resolveConfirmEach(
+	ctx context.Context,
+	sessionID, server, tool, reason string,
+) (approved bool, denyReason string, err error) {
+	family := toolloop.ClassifyToolFamily(server, tool)
+
+	// Settings.ConfirmEachEnabled() off => the prompt is never offered,
+	// same as chat.
+	if a.confirmEnabled != nil && !a.confirmEnabled() {
+		a.auditConfirm(ctx, contextaudit.ToolConfirmDecisionPayload{
+			SessionID: sessionID, Server: server, Tool: tool, Family: family,
+			Path: contextaudit.ToolConfirmPathToggleOff, Approved: true,
+			Reason: "confirm-each disabled in Settings",
+		})
+		return true, "", nil
+	}
+
+	// Session grant — "allow for this session".
+	if a.sessionGrants.Has(sessionID, server, tool) {
+		a.auditConfirm(ctx, contextaudit.ToolConfirmDecisionPayload{
+			SessionID: sessionID, Server: server, Tool: tool, Family: family,
+			Path: contextaudit.ToolConfirmPathSessionGrant, Approved: true,
+			Reason: "session grant",
+		})
+		return true, "", nil
+	}
+
+	// Persisted grant — "always allow", consulted live so a revoke from
+	// Settings takes effect immediately.
+	if a.persistGrants != nil && a.persistGrants.HasGrant(server, tool) {
+		a.auditConfirm(ctx, contextaudit.ToolConfirmDecisionPayload{
+			SessionID: sessionID, Server: server, Tool: tool, Family: family,
+			Path: contextaudit.ToolConfirmPathPersistedGrant, Approved: true,
+			Reason: "persisted allow rule",
+		})
+		return true, "", nil
+	}
+
+	// No prompt channel, or the deployment declared itself headless: the
+	// SAME default-deny headless policy chat's ladder falls to.
+	if a.confirm == nil || !a.confirm.HasChannel() || a.headlessExplicit {
+		policy := a.headless
+		if policy != toolloop.HeadlessAllow {
+			policy = toolloop.HeadlessDeny
+		}
+		ok := policy == toolloop.HeadlessAllow
+		policyReason := "no confirmation channel is attached; headless policy: " + string(policy)
+		if a.headlessExplicit {
+			policyReason = "deployment declared headless by operator; headless policy: " + string(policy)
+		}
+		a.auditConfirm(ctx, contextaudit.ToolConfirmDecisionPayload{
+			SessionID: sessionID, Server: server, Tool: tool, Family: family,
+			Path: contextaudit.ToolConfirmPathHeadlessPolicy, Approved: ok,
+			Reason: policyReason,
+		})
+		if !ok {
+			return false, policyReason, nil
+		}
+		return true, "", nil
+	}
+
+	// Prompt: park on the SAME bus a chat tool call parks on.
+	req := toolloop.ConfirmRequest{
+		SessionID: sessionID,
+		CallID:    toolloop.NewConfirmID("confirm"),
+		BatchID:   toolloop.ConfirmBatchFromContext(ctx),
+		Server:    server,
+		Tool:      tool,
+		Reason:    reason,
+	}
+	if req.BatchID == "" {
+		req.BatchID = toolloop.NewConfirmID("batch")
+	}
+
+	decision, pendErr := a.confirm.Pending(ctx, req)
+	if pendErr != nil {
+		// Context cancellation or a caller bug — the call must not
+		// dispatch, and (matching kernelToolAdapter) nothing was
+		// decided, so nothing is audited.
+		return false, "", pendErr
+	}
+
+	if decision.Approved {
+		if decision.RememberSession {
+			a.sessionGrants.Grant(sessionID, server, tool)
+		}
+		if decision.Persist && a.persistGrants != nil {
+			_ = a.persistGrants.WriteGrant(server, tool)
+		}
+	}
+
+	payloadReason := decision.Reason
+	if !decision.Approved && payloadReason == "" {
+		payloadReason = "not approved by user"
+	}
+	a.auditConfirm(ctx, contextaudit.ToolConfirmDecisionPayload{
+		SessionID: sessionID, CallID: req.CallID, BatchID: req.BatchID,
+		Server: server, Tool: tool, Family: family,
+		Path: contextaudit.ToolConfirmPathPrompted, Approved: decision.Approved,
+		RememberSession: decision.Approved && decision.RememberSession,
+		Reason:          payloadReason,
+	})
+	return decision.Approved, payloadReason, nil
+}
+
+// auditConfirm emits one KindToolConfirmDecision record. Never blocks
+// the decision: a nil emitter is silence.
+func (a *slashToolDispatcherAdapter) auditConfirm(ctx context.Context, p contextaudit.ToolConfirmDecisionPayload) {
+	if a.auditEmitter == nil {
+		return
+	}
+	contextaudit.MustEmit(ctx, a.auditEmitter, contextaudit.KindToolConfirmDecision, p, a.clock())
 }

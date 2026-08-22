@@ -25,7 +25,7 @@ const TOOL_CMD: UserCommand = {
   kind: 'tool',
   description: 'Deploy to staging',
   modelInvokable: false,
-  tool: 'bash',
+  tool: 'kenaz__bash',
   toolArgsTemplate: './scripts/deploy.sh --env {{env}}',
 };
 
