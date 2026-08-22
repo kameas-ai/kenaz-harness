@@ -8,12 +8,24 @@
  * Refreshes every 2 s when there are running tasks; stops polling when all
  * tasks are terminal.
  *
- * (background-task-monitor-01KZNP3C WP05)
+ * (background-task-monitor-01KZNP3C WP05; remounted by
+ * subagent-control-and-background-tasks-01PMZB11 UNIT-11 now that
+ * bash.Options.BackgroundSpawn has a real producer — see
+ * core/rpc/background_task_wiring_test.go.)
+ *
+ * Routes through the typed harnessClient (Tasks_List / Tasks_Abort)
+ * rather than the old lib/tasks.ts direct window.go.rpc.Bindings
+ * accessor, which duplicated a client surface harnessClient.ts already
+ * carried in full (raw declaration / view interface / live wiring /
+ * fake stub, all four sites) and whose private WailsRPC type omitted
+ * Tasks_AbortBySession and Tasks_ListBySession.
  */
 
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import type { TaskRow } from '../../lib/types';
-import { tasksList, tasksAbort } from '../../lib/tasks';
+import { useHarnessClient } from '../../lib/useHarnessAPI';
+
+const client = useHarnessClient();
 
 const props = withDefaults(defineProps<{
   /** When set, only tasks for this session are shown. */
@@ -51,7 +63,7 @@ let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
 async function load() {
   try {
-    tasks.value = await tasksList();
+    tasks.value = await client.Tasks_List();
     error.value = null;
   } catch (err) {
     error.value = String(err);
@@ -89,7 +101,7 @@ onUnmounted(() => {
 async function abort(id: string) {
   abortingId.value = id;
   try {
-    await tasksAbort(id);
+    await client.Tasks_Abort(id);
     await load();
   } catch (err) {
     error.value = `Abort failed: ${err}`;

@@ -27,6 +27,7 @@ import {
   AlertTriangle,
   Archive,
   CalendarClock,
+  CheckSquare,
   CircleUser,
   Code,
   Command,
@@ -104,14 +105,24 @@ const groups: ReadonlyArray<TabGroup> = [
   {
     label: 'Runtime',
     tabs: [
-      // The 'Tasks' entry was removed 2026-08-14: the background-task
-      // subsystem has no producer, so the panel it linked to was always
-      // empty. See docs/unwired-ledger.md.
       {
         to: '/settings?tab=scheduledchats',
         label: 'Scheduled Chats',
         query: 'scheduledchats',
         icon: CalendarClock,
+      },
+      // The 'Tasks' entry was removed 2026-08-14 because the
+      // background-task subsystem had no producer (see
+      // docs/unwired-ledger.md). Restored by
+      // subagent-control-and-background-tasks-01PMZB11 UNIT-11: UNIT-3
+      // gave bash.Options.BackgroundSpawn a real caller and attached
+      // real output capture (core/rpc/background_task_wiring_test.go),
+      // so the panel behind this link is no longer permanently empty.
+      {
+        to: '/settings?tab=tasks',
+        label: 'Tasks',
+        query: 'tasks',
+        icon: CheckSquare,
       },
     ],
   },

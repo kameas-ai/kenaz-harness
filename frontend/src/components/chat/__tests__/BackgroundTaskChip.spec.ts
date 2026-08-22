@@ -1,16 +1,17 @@
 /**
  * BackgroundTaskChip tests — background-task-monitor-01KZNP3C WP06
+ *
+ * Routes through the typed harnessClient (Tasks_ListBySession) — see
+ * TasksPanel.spec.ts's header comment for why this replaced mocking
+ * `@/lib/tasks` directly (deleted by
+ * subagent-control-and-background-tasks-01PMZB11 UNIT-11).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import BackgroundTaskChip from '@/components/chat/BackgroundTaskChip.vue';
+import { createFakeHarnessClient } from '@/lib/harnessClient';
+import { HarnessClientKey } from '@/lib/harnessClientContext';
 import type { TaskRow } from '@/lib/types';
-
-vi.mock('@/lib/tasks', () => ({
-  tasksList: vi.fn().mockResolvedValue([]),
-}));
-
-import { tasksList } from '@/lib/tasks';
 
 const makeTask = (overrides: Partial<TaskRow> = {}): TaskRow => ({
   id: 'task-1',
@@ -25,68 +26,67 @@ const makeTask = (overrides: Partial<TaskRow> = {}): TaskRow => ({
   ...overrides,
 });
 
+function buildClient(rows: TaskRow[] = []) {
+  const listBySession = vi.fn(async (_sessionId: string) => [...rows]);
+  const client = createFakeHarnessClient({
+    Tasks_ListBySession: listBySession,
+  });
+  return { client, listBySession };
+}
+
+function mountChip(rows: TaskRow[], sessionId = 'sess-1') {
+  const { client, listBySession } = buildClient(rows);
+  const wrapper = mount(BackgroundTaskChip, {
+    props: { sessionId },
+    global: { provide: { [HarnessClientKey as symbol]: client } },
+  });
+  return { wrapper, client, listBySession };
+}
+
 describe('BackgroundTaskChip', () => {
   beforeEach(() => {
-    vi.mocked(tasksList).mockResolvedValue([]);
+    vi.restoreAllMocks();
   });
 
   it('is hidden when there are no running tasks', async () => {
-    vi.mocked(tasksList).mockResolvedValue([]);
-    const wrapper = mount(BackgroundTaskChip, {
-      props: { sessionId: 'sess-1' },
-    });
+    const { wrapper } = mountChip([]);
     await flushPromises();
     expect(wrapper.find('[data-testid="background-task-chip"]').exists()).toBe(false);
   });
 
   it('shows chip with count when tasks are running for the session', async () => {
-    vi.mocked(tasksList).mockResolvedValue([makeTask()]);
-    const wrapper = mount(BackgroundTaskChip, {
-      props: { sessionId: 'sess-1' },
-    });
+    const { wrapper } = mountChip([makeTask()]);
     await flushPromises();
     const chip = wrapper.find('[data-testid="background-task-chip"]');
     expect(chip.exists()).toBe(true);
     expect(chip.text()).toContain('1 running');
   });
 
-  it('hides chip for tasks belonging to a different session', async () => {
-    vi.mocked(tasksList).mockResolvedValue([makeTask({ ownerSessionId: 'sess-other' })]);
-    const wrapper = mount(BackgroundTaskChip, {
-      props: { sessionId: 'sess-1' },
-    });
+  it('scopes the query to the given sessionId via Tasks_ListBySession', async () => {
+    const { listBySession } = mountChip([makeTask()], 'sess-42');
     await flushPromises();
-    expect(wrapper.find('[data-testid="background-task-chip"]').exists()).toBe(false);
+    expect(listBySession).toHaveBeenCalledWith('sess-42');
   });
 
   it('emits open-tasks when chip is clicked', async () => {
-    vi.mocked(tasksList).mockResolvedValue([makeTask()]);
-    const wrapper = mount(BackgroundTaskChip, {
-      props: { sessionId: 'sess-1' },
-    });
+    const { wrapper } = mountChip([makeTask()]);
     await flushPromises();
     await wrapper.find('[data-testid="background-task-chip"]').trigger('click');
     expect(wrapper.emitted('open-tasks')).toBeTruthy();
   });
 
   it('hides chip when task is completed (not running)', async () => {
-    vi.mocked(tasksList).mockResolvedValue([makeTask({ status: 'completed' })]);
-    const wrapper = mount(BackgroundTaskChip, {
-      props: { sessionId: 'sess-1' },
-    });
+    const { wrapper } = mountChip([makeTask({ status: 'completed' })]);
     await flushPromises();
     expect(wrapper.find('[data-testid="background-task-chip"]').exists()).toBe(false);
   });
 
   it('shows count for multiple running tasks', async () => {
-    vi.mocked(tasksList).mockResolvedValue([
+    const { wrapper } = mountChip([
       makeTask({ id: 'task-1' }),
       makeTask({ id: 'task-2' }),
       makeTask({ id: 'task-3', status: 'completed' }),
     ]);
-    const wrapper = mount(BackgroundTaskChip, {
-      props: { sessionId: 'sess-1' },
-    });
     await flushPromises();
     expect(wrapper.find('[data-testid="background-task-chip"]').text()).toContain('2 running');
   });
