@@ -3690,7 +3690,7 @@ func New(c *core.Core, opts ...Option) *API {
 			FirstRun:             firstRunDetector,
 			Completion:           onboardingCompletionAdapter{store: settingsStore},
 			SessionStarter:       sessionStarter,
-			SettingsDial:         onboardingSettingsDialAdapter{},
+			SettingsDial:         onboardingSettingsDialAdapter{store: settingsStore},
 			AccountStepAvailable: onboardingAccountStepAdapter{},
 			// Signer bridges the account step to the fleet owned-login flow
 			// (harness-onboarding-01NHON01 Blocker 3). When fleet is disabled
