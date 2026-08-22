@@ -1,0 +1,20 @@
+# I16 allowlist — manifest-declared output ports on a CONCRETE node
+# kind with no Go writer in core/agentgraph's executors.
+#
+# Gate: scripts/ci/check-declared-output-ports.sh
+# Added: approval-node-01PMZC12 UNIT-9 (2026-08-21), the gate-extension
+# obligation for approval.yaml's `rejected` port
+# (docs/dead-code-audit-2026-08-18.md:775 — "one of only two
+# declared-but-never-written ports in the whole manifest set"). UNIT-4
+# gave `rejected` a writer in the same mission, so the seed instance
+# this gate was built to catch is already fixed by the time the gate
+# lands.
+#
+# This list is EMPTY and must stay empty. Every declared output port
+# on every concrete (non-archetype) node kind has a Go writer as of
+# this gate's introduction. An entry appearing here is a NEW
+# declared-but-unwritten port being introduced; wire a writer instead
+# of listing it, unless there is a genuine, dated, owned blocker.
+#
+# Format: one `<kind>.<port>` per line, relative to the manifest's
+# `id:` and the port's `name:`. '#' starts a comment; blank lines OK.

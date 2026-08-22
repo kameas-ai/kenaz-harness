@@ -1155,10 +1155,96 @@ and not a nice-to-have.
   is explicitly OUT of this mission's scope (spec.md §2, D-701: routing
   `Graph_*` would be new capability work, not a parity fix) — but the gap
   is now a *named, allowlisted, dated* line per method rather than a
-  silent, unenforced one. Per-method reclassification (which of the 419
-  are `unrouted` / `boundary-panelled` / `gated` / `desktop-only-by-nature`
-  vs. genuinely `untriaged`) is WP07 of the same mission, not yet run as of
-  this entry — see the mission's own report for where the cut landed.
+  silent, unenforced one. **Per-method reclassification CLOSED 2026-08-21
+  (WP07, same mission):** all 416 remaining forward-gap entries now carry
+  one of the five classes (26 `gated`, 187 `boundary-panelled`, 115
+  `unrouted`, 13 `desktop-only-by-nature`, 75 `untriaged` — each untriaged
+  entry individually dated and owned, not a repeat of this WP02 note).
+  `scripts/ci/check-serve-gap-classification.sh` (wired into `pr.yml`)
+  now fails a PR that adds a classless entry or an undated/unowned
+  `untriaged` one. `Graph_*`/`Workflows_*` themselves landed as
+  `boundary-panelled` (WorkflowsView.vue and the four agentgraph views
+  are all panelled — WP03/WP05).
+
+### 2026-08-21 · WP07's own caller-site pass found two live served-mode bugs neither the closing sweep nor WP03/04/05's per-view scans could see
+
+Both are shell-chrome / cross-affordance findings — the class of bug a
+per-VIEW audit structurally cannot catch, which is the exact gap
+`served-mode-is-a-real-mode-01PMZ707` §1.7 named. Both **CLOSED
+2026-08-21** in the same WP07 commit that found them:
+
+- **`shell/MemoryBadge.vue` rendered "Loading memory count…" PERMANENTLY
+  in served mode.** `Memory_HealthSnapshot`/`Memory_ListChunks` are
+  unrouted; `chunkCount` starts `null` and the `fetchCount()` catch
+  leaves it there ("keep the previous value" — never true on the FIRST
+  call). The badge is mounted from `shell/LeftRail.vue`, which is not a
+  "view" any per-view scan (including this mission's own WP03) would
+  have enumerated. Fixed: gated `v-if="!served"` in `LeftRail.vue`.
+- **WP04's `/` slash-menu gate covered only the dropdown's autocomplete
+  fetch, not the independent send-time branch.** `ChatInput.vue`'s
+  `send()` has a SEPARATE `if (text.startsWith('/'))` branch (typing
+  "/foo" and pressing Enter, with no dropdown ever opened) that emits
+  `slashCommand`, reaching `SessionsView.vue`'s unguarded
+  `client.slash.execute()`. WP04's gate on the dropdown fetch alone left
+  this fully reachable. Fixed: `send()`'s slash branch now also checks
+  `!served`.
+
+### 2026-08-21 · Open findings from WP07's per-method triage — chat-surface affordances needing a WP04-style port/gate call
+
+`served-mode-is-a-real-mode-01PMZ707` WP04 scoped six chat affordances
+(paperclip, `/`, autonomy chip, title suggestion, Branches, feature
+flags). WP07's own caller-site pass found several MORE affordances
+reachable from the live, routed chat surface (`SessionsView.vue`,
+`MessageBubble.vue`, `CodeBlock.vue`/`MarkdownBlock.vue`) with no
+`isServedMode()` guard of their own — none is an active data-fabrication
+lie (each fails via an honest `ServedUnsupportedError` today), but none
+has had the WP04-shape port-or-gate review either. Full detail and
+per-binding reasoning: the `untriaged` class in
+`scripts/ci/allowlists/i15-serve-dispatch-gap.txt`. Summary, owner alec
+for all:
+
+- **Artifact save/view from chat** (`Artifacts_Delete/Get/List/Promote`,
+  `Sessions_SaveAsArtifact`) — MarkdownBlock.vue/CodeBlock.vue's "save as
+  artifact" flow. `CodeBlock.vue`'s `saveAsArtifact()` also calls
+  `createHarnessClient()` directly instead of the injected
+  `useHarnessClient()`, bypassing the served/desktop transport switch
+  AND fake-client test injection — a second, architecture-level bug
+  independent of served mode, found as a side effect.
+- **Context-attachment management outside the paperclip**
+  (`Attachments_Add/ListResolved/Refresh/Remove`,
+  `Contexts_AttachModule/CreateFolder/Get/List`) — reachable via
+  `ResolvedContextPanel.vue` (mounted in `SessionsView.vue`), a separate
+  path from the paperclip WP04 gated in `ChatInput.vue`.
+- **`Sessions_ResumeMessage`, `Sessions_ClearTitle`** — live in
+  `MessageBubble.vue`/`SessionHeader.vue`. `ClearTitle` is the undo half
+  of `Sessions_SuggestTitle`, which WP04 ported — porting one without the
+  other is itself arguably a half-flow WP04's own bar would reject.
+- **`Bash_Exec`** (the inline `!command` chat affordance) — already
+  fails honestly (inline error text, not fake output) but the port/gate
+  question is a genuine security escalation, not a mechanical one:
+  unlike the Cedar-gated `kenaz__bash` MODEL tool, this is a direct
+  human-to-shell bypass with no gate at all today.
+- **`Slashcmd_Get`/`Slashcmd_Run`** — the user-authored slash-command
+  EXECUTION path from `SessionsView.vue`, distinct from the
+  already-boundary-panelled `Slashcmd_List/Save/Delete` settings UI.
+- **`Memory_RememberMessage`, `Handoff_Inbox/ListTeam/Share`,
+  `SessionSync_Toggle`, `Search_Sessions/Search_Unified`,
+  `Settings_GetArtifactPreview`** — each degrades safely today (empty
+  list / disabled default, not fake data) but carries no
+  `isServedMode()` gate.
+
+### 2026-08-21 · Two more orphan Wails bindings found alongside A-14's nine (not part of A-14)
+
+`escalation-register:1139`'s A-14 already rules on nine zero-caller
+bindings. WP07's caller-site pass found two more with the identical
+shape (zero TS callers anywhere, desktop or served) that are NOT among
+A-14's nine: `MCP_HealthSnapshot`, `MCP_SubscribeHealthChanges`,
+`LLM_UpdateProviderCredential`, `Settings_GetLocalRuntimeRAMOverrideGB`,
+`Settings_SetLocalRuntimeRAMOverrideGB`. Recorded here rather than
+silently dropped; owner alec, needs the same per-binding A-0-style
+ruling A-14 got (wire, delete, or keep as a dev tool) — not resolved by
+this mission, which only classifies served-mode reachability and these
+have none to classify.
 
 ### 2026-08-21 · An "absorbed" finding that was never actually fixed — `dead-code-audit-2026-08-18.md:1794`'s SD-01/SD-02 (serve) claim
 
@@ -1353,6 +1439,20 @@ hand every session write access to provider credentials and settings,
 which is why the mission's own sequencing rule (see its `tasks.md`) is
 non-negotiable: no commit may make `harnessServer.Server()` reachable
 from a session until AC-002 passes.
+attached) is **deferred to a dedicated follow-on mission**, not executed
+in `mcp-connector-lifecycle-01PMMC01` (that mission's own WP07 is
+explicitly out of scope for the attach — see its spec). **Owner of the
+attach execution:** **escalated 2026-08-19 as G-9**
+(`docs/escalation-register-2026-08-19.md` Part 8), per ruling F-1 — this row
+names a real blocker but no person, which is exactly what F-1 forbids. G-9's
+recommended default is to name alec and date it: the product decision (attach)
+was already ruled 2026-08-18, so no capability question is open. **This row was
+missed by F-1's count of sixteen**, which anchored on the bold
+`**Owner:** unassigned` form — see Part 8 §8.3-P2. **Blocker:** the visibility seam
+and `EmbeddedCedar` wiring do not exist yet (spec §6 option A cost items
+2 and 3) — attaching without them would hand every session write access
+to provider credentials and settings, which is why this is not a
+same-commit fix.
 
 Two small pieces of this finding were resolved immediately, regardless
 of the attach mission's timeline, because they were unambiguous under
@@ -1996,6 +2096,41 @@ improvement over zero branch auditing, and matches how equivalent findings
 are carried elsewhere in the same PR. That reasoning is sound and the
 release shipped; the owner gap is fixed here rather than left as a second
 lie about the first.
+
+**RESOLVED 2026-08-21, ZA10 WP06.** `CreateBranch`'s legacy path
+(`core/rpc/views/branches/impl.go`) now calls `audit.MustEmit(...,
+audit.KindBranchCreated, ...)` immediately before `publishBranchCreated`,
+using `br.CreationPath` (which `conversation.Manager.CreateBranch` already
+resolves to `"unknown"` when the caller specifies nothing — the ordinary
+"+ Fork" case today). The legacy path's `ForkOptions` construction was also
+silently dropping `opts.CreationPath`, so a caller-supplied
+`"edit_resend"` never reached storage either; both are now threaded
+through. `TestAPI_CreateBranch_LegacyPathEmitsAudit` and
+`TestAPI_CreateBranch_LegacyPathThreadsCreationPath` were written first and
+confirmed to fail against the pre-fix code with "no branch.created event
+reached the configured audit emitter; got []"; `TestAPI_CreateBranch_
+ExplicitPathStillEmitsAudit` pins the already-correct explicit path so a
+regression on the shared emit call is caught in the same file.
+
+Spy-emitter coverage was also added for `tools` (`TestInstallRecipe_
+EmitsAudit`, `TestUninstallRecipe_EmitsAudit`, `TestForgetRecipeKey_
+EmitsAudit` in `core/rpc/views/tools/impl_test.go`) — unlike `branches`,
+these three `a.emit(...)` call sites (`impl.go:401,649,669`) were already
+correctly wired; this closes the evidence gap without a functional
+change.
+
+`update` needed no fix and no new test: `core/rpc/views/update` (the RPC
+view) has no `Config.Audit` field at all — it wraps an already-constructed
+`coreupdate.Service`, injected in by `core/rpc/api.go`, and does not itself
+own any emit call. The actual audit owner is `core/update/audit.go`'s six
+`audit.MustEmit` sites in the `core/update` package (not
+`core/rpc/views/update`), which already have full spy-emitter coverage via
+`core/update/integration_test.go` (kind-ordering assertions across all six
+`Kind*` values) and a live, non-nil emitter at the production construction
+site (`core/rpc/api.go:2645-2654`, itself a ZA10 UNIT-5 fix, already
+shipped). The ledger's "three packages" framing conflated the RPC-view
+wrapper with its underlying service; once that boundary is drawn, `update`
+was never actually missing coverage.
 
 ## Drained
 

@@ -584,8 +584,12 @@ type ArtifactWrite struct {
 
 // NetworkAuthorizer is the Cedar gate for external-network step kinds.
 // Before any web_fetch or web_scrape step makes a network request, the
-// engine calls Authorize with action "workflow.network.fetch". A non-nil
-// error aborts the step with a policy_denied classification.
+// engine calls Authorize with action "workflow.network.fetch" and
+// resourceID set to the RUNNING WORKFLOW's id (not the step name) — the
+// production adapter (automation-actually-runs-01PMZ404 UNIT-7) gates
+// a Cedar Workflow::"<id>" resource, matching GateWorkflowRun /
+// GateWorkflowSave / GateWorkflowDelete's shape. A non-nil error aborts
+// the step with a policy_denied classification.
 //
 // nil is a no-op (permit by default) so test harnesses and the chassis
 // boot path can run without a wired Cedar engine.
@@ -638,9 +642,15 @@ type Deps struct {
 	Tools              ToolCaller
 	MCP                MCPCaller
 	Artifacts         ArtifactsReadWriter
-	// SessionID is threaded into write_artifact rows so they show up
-	// under the right session in the artifacts table. Empty disables
-	// artifact writes (write_artifact returns an error).
+	// SessionID is the fallback session id threaded into write_artifact
+	// rows when the run itself carries none. The run-scoped value —
+	// RunOptions.ParentSessionID, surfaced to the runner via
+	// RunContext.ParentSessionID — wins when non-empty (UNIT-5: the
+	// session id a slash-dispatched /wf run carries via
+	// slashcmd.Env.SessionID varies per invocation, so it cannot be
+	// bound once at Deps-construction time the way this field is).
+	// Empty on both disables artifact writes (write_artifact returns an
+	// error naming the gap).
 	SessionID string
 	// NetAuthz, when non-nil, gates web_fetch and web_scrape steps via
 	// Cedar action "workflow.network.fetch". nil permits all fetches.

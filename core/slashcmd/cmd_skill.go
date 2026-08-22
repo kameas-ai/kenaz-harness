@@ -30,8 +30,10 @@ func (c skillCommand) ComingSoon() bool    { return false }
 //   - kind:prompt → returns the templated body (no args rendering in this
 //     path; the full template engine is in Dispatch.Run which the frontend
 //     calls for user invocations).
-//   - kind:tool  → returns a "dispatched via tool" summary; the frontend
-//     routes the actual tool call.
+//   - kind:tool  → no frontend tool-routing branch exists for the
+//     fleet-skill path (automation-actually-runs-01PMZ404 UNIT-3), so this
+//     returns an error naming the gap instead of announcing a dispatch
+//     that never happens.
 //
 // This Run path is the model-invoked path (e.g. /standup from within a
 // session transcript). The frontend-invoked path goes through Dispatch.Run.
@@ -46,8 +48,8 @@ func (c skillCommand) Run(ctx context.Context, env Env, args []string) (Result, 
 		}
 		return Result{Kind: ResultKindInfo, Text: body}, nil
 	case KindTool:
-		summary := fmt.Sprintf("/%s: dispatching %s", c.skill.EffectiveTrigger(), c.skill.Tool)
-		return Result{Kind: ResultKindSystem, Text: summary}, nil
+		err := fmt.Errorf("/%s: tool dispatch is not configured: %q was not run", c.skill.EffectiveTrigger(), c.skill.Tool)
+		return Result{Kind: ResultKindError, Text: err.Error()}, err
 	default:
 		return Result{
 			Kind: ResultKindError,

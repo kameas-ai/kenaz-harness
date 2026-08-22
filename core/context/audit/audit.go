@@ -131,14 +131,18 @@ const (
 	KindUpdateSkipped    Kind = "update.skipped"
 	KindUpdateFailed     Kind = "update.failed"
 
-	// KindBranchCreated fires when a branch is created via either the
-	// explicit "Branch from this turn" path or the implicit edit-and-resend
-	// path (branching-ux-polish-01KQ8TD7 WP01). Payload:
-	// BranchCreatedPayload.
+	// KindBranchCreated fires on every branch creation, both the
+	// explicit "Branch from this turn" path and the legacy/implicit
+	// path (branching-ux-polish-01KQ8TD7 WP01; the legacy path's emit
+	// was added by audit-that-tells-the-truth-01PMZA10 WP06 — it
+	// previously emitted nothing). Payload: BranchCreatedPayload.
 	//
 	// CreationPath discriminates:
 	//   "explicit"    — user chose "Branch from this turn" in the menu.
 	//   "edit_resend" — implicit fork from the edit-and-resend flow.
+	//   "unknown"     — caller did not specify (today: the ordinary
+	//                   "+ Fork" button, which sends neither
+	//                   ParentMessageID nor CreationPath).
 	KindBranchCreated Kind = "branch.created"
 
 	// KindSlashCommandRun fires when a user-defined slash command is
@@ -523,6 +527,21 @@ const (
 	// signature bytes, the payload bytes, or a raw error chain that
 	// might embed a filesystem path outside the bundle root.
 	KindBundleSignatureRejected Kind = "bundle.signature_rejected"
+	// KindApprovalResolved fires once per resolved approval-graph-node
+	// decision (approval-node-01PMZC12 UNIT-3/UNIT-4, FR-003). This is
+	// the RPC-surface audit trail (visible in the Settings audit
+	// panel), distinct from the run's own agent_graph_events
+	// approval_resolved trace event — the two are emitted from
+	// different layers (Impl.ResolveApproval / the no-watcher timeout
+	// vs the approval executor) and neither substitutes for the other:
+	// this one is queryable independent of any single run's trace, the
+	// trace event is what RunView replays.
+	//
+	// Emitted exactly once per resolution, including the no-watcher
+	// fail-closed path (Auto=true, Approver="") and the
+	// auto_approve_window_seconds timeout, so a run resolved without a
+	// human is as auditable as one a human resolved.
+	KindApprovalResolved Kind = "agentgraph.approval_resolved"
 )
 
 // ToolConfirmPath names which branch of the confirm-each dispatch path
@@ -1010,7 +1029,10 @@ type WorkflowNetworkFetchPayload struct {
 // BranchCreatedPayload carries signalling for KindBranchCreated
 // (branching-ux-polish-01KQ8TD7 WP01). Emitted from both creation
 // paths so the audit view can show two distinct events after the
-// manual acceptance smoke.
+// manual acceptance smoke. As of audit-that-tells-the-truth-01PMZA10
+// WP06 the legacy (non-explicit-parent-message) path also emits — it
+// previously emitted nothing, which meant the ordinary "+ Fork" flow
+// produced zero audit trail.
 //
 // Privacy invariant: ParentMessageID is a stable opaque id (no content
 // bytes). Neither session names nor message bodies are included here.
@@ -1018,7 +1040,9 @@ type BranchCreatedPayload struct {
 	ParentSessionID string `json:"parent_session_id"`
 	ParentMessageID string `json:"parent_message_id,omitempty"`
 	BranchSessionID string `json:"branch_session_id"`
-	// CreationPath is "explicit" | "edit_resend".
+	// CreationPath is "explicit" | "edit_resend" | "unknown" — mirrors
+	// conversation.Branch.CreationPath (core/conversation/types.go),
+	// which is where the value actually comes from.
 	CreationPath string `json:"creation_path"`
 }
 
@@ -1642,4 +1666,27 @@ type ContextBootstrapRunPayload struct {
 	// ErrorClass is a typed error label when Outcome=="failed" (never a raw
 	// error message).
 	ErrorClass string `json:"error_class,omitempty"`
+}
+
+// ApprovalResolvedPayload is the audit payload for KindApprovalResolved
+// (approval-node-01PMZC12 UNIT-3/UNIT-4).
+//
+// Privacy invariant: RunID/NodeID/Reason identify WHICH decision was
+// made and WHY at the level a graph author already sees in the run
+// trace; no upstream conversation content, tool arguments, or node
+// input/output payload is carried here.
+type ApprovalResolvedPayload struct {
+	// RunID / NodeID identify the paused node.
+	RunID  string `json:"run_id"`
+	NodeID string `json:"node_id"`
+	// Approved is the recorded verdict.
+	Approved bool `json:"approved"`
+	// Auto is true for a timer-driven resolution (auto_approve_window
+	// elapsing, or the no-watcher fail-closed timeout) and false for a
+	// human's explicit Graph_ResolveApproval call.
+	Auto bool `json:"auto"`
+	// Approver names who resolved it; empty for any Auto resolution.
+	Approver string `json:"approver,omitempty"`
+	// Reason is the human-supplied or system-generated justification.
+	Reason string `json:"reason,omitempty"`
 }

@@ -75,6 +75,56 @@ load_allowlist() {
 # has_real_callsite <symbol> — true (exit 0) iff `<symbol>(` appears in a
 # non-test .go file under core/ outside of a comment line and outside the
 # symbol's own `func <symbol>(` declaration line.
+# has_real_callsite_in_pkg is the PACKAGE-AWARE form, used only by the
+# stale-entry check (section 3). has_real_callsite below matches a bare
+# symbol name anywhere in the tree, which is right for DISCOVERY (a
+# same-named helper is still a call worth noticing) and wrong for
+# staleness.
+#
+# Found 2026-08-21 during v0.70.0 integration. The allowlist carries
+# `core/credstore.WithCedarGate` — genuinely unwired, with a written
+# justification. approval-node-01PMZC12 then added an identically named
+# `graphview.WithCedarGate` in core/rpc/views/agentgraph and wired it at
+# core/rpc/api.go. The bare-symbol check saw "WithCedarGate(" with a real
+# call site and declared the credstore entry STALE, demanding deletion of
+# a justification that is still true. Deleting it would have removed the
+# only record that credstore's gate is unreached — the gate would have
+# caused exactly the blindness it exists to prevent.
+#
+# Two accepted call shapes for `<import path>.<Symbol>`:
+#   - qualified, from outside:  <pkgname>.<Symbol>(
+#   - unqualified, from inside: <Symbol>( within the package's own dir
+has_real_callsite_in_pkg() {
+  local import_path="$1" symbol="$2"
+  local pkgdir pkgname hits
+  # import path -> repo-relative dir (MODULE/core/credstore -> core/credstore)
+  pkgdir="${import_path#"${MODULE}/"}"
+  pkgname="${pkgdir##*/}"
+
+  # Qualified calls from anywhere outside the package itself.
+  hits=$(grep -rn "${pkgname}\.${symbol}(" --include='*.go' "$SCAN_ROOT" 2>/dev/null \
+    | grep -v '_test\.go' \
+    | grep -vE ':[0-9]+:[[:space:]]*//' \
+    || true)
+  if [[ -n "$hits" ]]; then
+    return 0
+  fi
+
+  # Unqualified calls from inside the declaring package.
+  if [[ -d "$pkgdir" ]]; then
+    hits=$(grep -rn "${symbol}(" --include='*.go' "$pkgdir" 2>/dev/null \
+      | grep -v '_test\.go' \
+      | grep -vE ':[0-9]+:[[:space:]]*//' \
+      | grep -vE ":[0-9]+:func ${symbol}\(" \
+      | grep -vE ":[0-9]+:func \([^)]*\) ${symbol}\(" \
+      || true)
+    if [[ -n "$hits" ]]; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
 has_real_callsite() {
   local symbol="$1"
   local hits
@@ -136,12 +186,13 @@ fi
 while IFS= read -r entry; do
   [[ -z "$entry" ]] && continue
   symbol="${entry##*.}"
+  entry_pkg="${entry%.*}"
   # Tolerate an entry naming a symbol that no longer exists anywhere —
   # deletion is a valid resolution and must not require a synchronized edit.
   if ! grep -rqE "^func (\([^)]*\) )?${symbol}\(" --include='*.go' "$SCAN_ROOT" 2>/dev/null; then
     continue
   fi
-  if has_real_callsite "$symbol"; then
+  if has_real_callsite_in_pkg "$entry_pkg" "$symbol"; then
     echo "" >&2
     echo "${GATE} FAIL: STALE entry in ${ALLOW_FILE} — ${entry} now has a real non-test call site. Delete the line (spec §4.1 requires allow-lists to shrink monotonically)." >&2
     fail=1

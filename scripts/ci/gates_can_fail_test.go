@@ -128,6 +128,9 @@ var cwdSensitiveGates = []string{
 	"check-installer-payload.sh",
 	"check-audit-store-before-retention.sh",
 	"check-fts-sync.sh",
+	"check-bundle-verify-ordering.sh",
+	"check-bundle-channel-kinds-sync.sh",
+	"check-serve-gap-classification.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -983,6 +986,24 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			file:       "core/rpc/bindings.go",
 			append:     "\nfunc (bnd *Bindings) Zz_Injected() {}\n",
 		},
+		{
+			// served-mode-is-a-real-mode-01PMZ707 WP07, AC-717 + CLAUDE.md's
+			// gate-extension rule. check-serve-dispatch-drift.sh's
+			// read_allowlist() strips every comment and treats the file as
+			// a flat name list — it has never known about classification,
+			// so a WP07 that reclassified 416 entries and relied on that
+			// gate alone would have shipped a taxonomy nothing enforces.
+			// This plants an entry under an untriaged reason paragraph that
+			// names neither a date nor an owner — the exact shape 419
+			// entries were in before this WP, now caught before promotion
+			// rather than ageing silently the way the file's own prior
+			// bulk note did.
+			name:       "serve-gap-classification/untriaged-entry-missing-date-and-owner",
+			wantOutput: "Zz_Injected",
+			gate:       "check-serve-gap-classification.sh",
+			file:       "scripts/ci/allowlists/i15-serve-dispatch-gap.txt",
+			append:     "# No date or owner mentioned anywhere in this reason.\n\"Zz_Injected\"\n",
+		},
 	}
 
 	for _, tc := range cases {
@@ -1041,6 +1062,10 @@ func plant(t *testing.T, full, content, appendText string) func() {
 		if err != nil {
 			t.Fatalf("reading %s: %v", full, err)
 		}
+		// Journal BEFORE touching the file — see plantguard_test.go. A
+		// timeout kills the binary without unwinding defers, so the only
+		// record that survives is one written first.
+		journalPlant(plantRecord{Path: full, Orig: string(orig), Existed: true, Planted: string(orig) + appendText})
 		if err := os.WriteFile(full, append(orig, []byte(appendText)...), 0o644); err != nil {
 			t.Fatalf("appending to %s: %v", full, err)
 		}
@@ -1048,6 +1073,7 @@ func plant(t *testing.T, full, content, appendText string) func() {
 			if err := os.WriteFile(full, orig, 0o644); err != nil {
 				t.Errorf("restoring %s: %v — WORKING TREE IS DIRTY", full, err)
 			}
+			journalClear(full)
 		}
 	}
 
@@ -1067,6 +1093,7 @@ func plant(t *testing.T, full, content, appendText string) func() {
 		}
 		createdDir = dir
 	}
+	journalPlant(plantRecord{Path: full, Existed: false, Planted: content, CreatedDir: createdDir})
 	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
 		t.Fatalf("writing %s: %v", full, err)
 	}
@@ -1074,6 +1101,7 @@ func plant(t *testing.T, full, content, appendText string) func() {
 		if err := os.Remove(full); err != nil {
 			t.Errorf("removing %s: %v — WORKING TREE IS DIRTY", full, err)
 		}
+		journalClear(full)
 		if createdDir != "" {
 			if err := os.Remove(createdDir); err != nil {
 				t.Errorf("removing %s: %v — WORKING TREE IS DIRTY", createdDir, err)
@@ -1192,6 +1220,106 @@ func TestAuditStoreBeforeRetentionGate_PlantedStoreRemovalFails(t *testing.T) {
 	}
 }
 
+// TestBundleVerifyOrderingGate_PlantedNilSignatureFires is the
+// planted-violation proof for check-bundle-verify-ordering.sh (G-1,
+// bundle-download-and-verify-01PMZ909 UNIT-9, spec §2 / §7 G-1). The
+// shared plant() helper's append-or-create mode cannot express this
+// defect class — an EXISTING field literal (`Signature: req.SignatureBytes,`)
+// reverting to the pre-UNIT-2 shape (`Signature: nil,`) while the
+// verify call site in core/rpc/views/bundle/impl.go stays present — so
+// this test does its own read-mutate-restore cycle on
+// core/trust/bundleadapter.go directly, mirroring
+// TestToolContainmentUnconditionalGate_PlantedConditionalWrapperFails
+// and TestAuditStoreBeforeRetentionGate_PlantedStoreRemovalFails above.
+func TestBundleVerifyOrderingGate_PlantedNilSignatureFires(t *testing.T) {
+	root := repoRoot(t)
+	adapterPath := filepath.Join(root, "core", "trust", "bundleadapter.go")
+
+	orig, err := os.ReadFile(adapterPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", adapterPath, err)
+	}
+
+	const target = "Signature: req.SignatureBytes,"
+	if !strings.Contains(string(orig), target) {
+		t.Fatalf("expected line not found in bundleadapter.go — the UNIT-2 wire may have moved; "+
+			"update this test and the gate together:\n%q", target)
+	}
+	// Reproduce the exact pre-UNIT-2 defect (spec §1.5): the envelope's
+	// Signature field reverts to a hardcoded nil while
+	// core/rpc/views/bundle/impl.go still calls VerifyManifestSignatures
+	// — the ordering violation this gate exists to catch.
+	mutated := "Signature: nil,"
+	newContent := strings.Replace(string(orig), target, mutated, 1)
+
+	if err := os.WriteFile(adapterPath, []byte(newContent), 0o644); err != nil {
+		t.Fatalf("writing mutated bundleadapter.go: %v", err)
+	}
+	defer func() {
+		if err := os.WriteFile(adapterPath, orig, 0o644); err != nil {
+			t.Errorf("restoring bundleadapter.go: %v — WORKING TREE IS DIRTY", err)
+		}
+	}()
+
+	code, out := runGate(t, "check-bundle-verify-ordering.sh", root)
+	if code == 0 {
+		t.Fatalf("check-bundle-verify-ordering.sh exited 0 with Signature: nil, restored "+
+			"while the impl.go call site remains — the gate cannot fail.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "Signature: nil,") {
+		t.Fatalf("gate failed, but its output does not mention the expected defect "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+}
+
+// TestBundleChannelKindsSyncGate_PlantedDriftFires is the planted-violation
+// proof for check-bundle-channel-kinds-sync.sh (bundle-download-and-
+// verify-01PMZ909 UNIT-8/UNIT-9). BundlesView.vue's channel picker
+// hardcodes CHANNEL_KINDS rather than querying a
+// Bundle_ListChannelKinds RPC (none exists — adding one needs a
+// frontend/wailsjs/** regen this campaign deliberately does not run);
+// this gate is what keeps that hardcoded list from drifting from the
+// backend's registered channels.Registry factories. Removes the
+// http_mirror entry from CHANNEL_KINDS while
+// core/bundle/channels/http/http.go's `const Kind = "http_mirror"`
+// stays present — the shape "a real channel package a user cannot
+// select from the UI".
+func TestBundleChannelKindsSyncGate_PlantedDriftFires(t *testing.T) {
+	root := repoRoot(t)
+	vuePath := filepath.Join(root, "frontend", "src", "views", "bundles", "BundlesView.vue")
+
+	orig, err := os.ReadFile(vuePath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", vuePath, err)
+	}
+
+	const target = `{ kind: 'http_mirror', label: 'http_mirror — a URL served over HTTP(S)', field: 'url' },`
+	if !strings.Contains(string(orig), target) {
+		t.Fatalf("expected CHANNEL_KINDS entry not found in BundlesView.vue — the UNIT-8 "+
+			"picker may have moved; update this test and the gate together:\n%q", target)
+	}
+	newContent := strings.Replace(string(orig), target, "", 1)
+
+	if err := os.WriteFile(vuePath, []byte(newContent), 0o644); err != nil {
+		t.Fatalf("writing mutated BundlesView.vue: %v", err)
+	}
+	defer func() {
+		if err := os.WriteFile(vuePath, orig, 0o644); err != nil {
+			t.Errorf("restoring BundlesView.vue: %v — WORKING TREE IS DIRTY", err)
+		}
+	}()
+
+	code, out := runGate(t, "check-bundle-channel-kinds-sync.sh", root)
+	if code == 0 {
+		t.Fatalf("check-bundle-channel-kinds-sync.sh exited 0 with http_mirror removed from "+
+			"the frontend picker while the backend package remains — the gate cannot fail.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "http_mirror") {
+		t.Fatalf("gate failed, but its output does not mention the expected defect "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+}
+
 // TestServeDispatchDriftGate_PlantedReverseCaseFires is the reverse-direction
 // planted-violation proof for check-serve-dispatch-drift.sh (I15,
 // served-mode-is-a-real-mode-01PMZ707 WP02, spec §5.2 deliverable 4). The
@@ -1298,5 +1426,118 @@ func TestCSSTokensGate_SameVerdictFromAnyCWD(t *testing.T) {
 	// stand in for a real result.
 	if strings.Contains(outRoot, "ENOENT") {
 		t.Fatalf("check-css-tokens.mjs crashed with ENOENT instead of reporting a verdict:\n%s", outRoot)
+	}
+}
+
+// TestCheckDeclaredOutputPorts_IgnoresPortsGenWrites is I16's true
+// negative (approval-node-01PMZC12 UNIT-9, AC-11): a port written ONLY
+// through ports_gen.go's generated ToPortValues() — which writes every
+// declared port of a kind unconditionally, whether or not the real
+// executor ever populates the field — must NOT be treated as evidence
+// of a real writer. Without this the gate would land as a repo-wide
+// false-positive generator, since ports_gen.go trivially "writes"
+// every port that exists.
+//
+// Plants a fake write in ports_gen.go (excluded from the scan by
+// filename) alongside a manifest declaring the SAME port with no real
+// executor writer, and asserts the gate still reports it — proving the
+// exclusion is load-bearing, not decorative. Not in the table above:
+// it needs two coordinated plants (manifest + ports_gen.go), which the
+// single-file plant() helper does not support.
+func TestCheckDeclaredOutputPorts_IgnoresPortsGenWrites(t *testing.T) {
+	root := repoRoot(t)
+
+	manifestPath := filepath.Join(root, "core/agentgraph/nodes/manifests/zz_gate_probe_gen.yaml")
+	manifestContent := "schema_version: \"1\"\nmanifest_version: \"1.0.0\"\nid: zz_gate_probe_gen\nextends: write\ndisplay_name: ZZ Gate Probe Gen\ndescription: \"I16 true-negative probe: a port written only via ports_gen.go must not count.\"\nexecutor: agentgraph.ExecZzGateProbeGen\ndispatch: graph\nports:\n  inputs:\n    - { name: in, type: any }\n  outputs:\n    - { name: zz_gate_probe_gen_port, type: any }\nbudget: none\n"
+	cleanupManifest := plant(t, manifestPath, manifestContent, "")
+	defer cleanupManifest()
+
+	genPath := filepath.Join(root, "core/agentgraph/ports_gen.go")
+	// Shaped exactly like a real ToPortValues assignment
+	// (`pv["k"] = o.K`) so a naive grep for the write pattern would
+	// count it — the whole point of excluding this file by name.
+	genAppend := "\n// zzGateProbeGenGeneratedOnlyWrite exists ONLY to prove\n" +
+		"// check-declared-output-ports.sh (I16) ignores ports_gen.go —\n" +
+		"// see TestCheckDeclaredOutputPorts_IgnoresPortsGenWrites.\n" +
+		"func zzGateProbeGenGeneratedOnlyWrite(pv PortValues) {\n" +
+		"\tpv[\"zz_gate_probe_gen_port\"] = nil\n" +
+		"}\n"
+	cleanupGen := plant(t, genPath, "", genAppend)
+	defer cleanupGen()
+
+	code, out := runGate(t, "check-declared-output-ports.sh", root)
+	if code == 0 {
+		t.Fatalf("check-declared-output-ports.sh exited 0 — a port written only in ports_gen.go was accepted as having a real writer.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "zz_gate_probe_gen_port") {
+		t.Fatalf("check-declared-output-ports.sh failed, but not for the planted port — output does not mention zz_gate_probe_gen_port.\noutput:\n%s", out)
+	}
+}
+
+// TestNoUnwiredGates_StaleCheckIsPackageAware pins the fix for a
+// false-positive class found on 2026-08-21 during v0.70.0 integration.
+//
+// The stale-entry check matched a BARE symbol name anywhere in the tree.
+// The allowlist carries `core/credstore.WithCedarGate` — genuinely
+// unwired, with a written justification. approval-node-01PMZC12 added an
+// identically named `graphview.WithCedarGate` in a different package and
+// wired it, and the gate declared the credstore entry stale, demanding
+// deletion of a justification that was still true.
+//
+// That is the worst failure mode a gate of this kind has: it does not
+// merely miss something, it actively instructs you to delete the record
+// of a real gap. Deleting the line would have made credstore's unwired
+// gate invisible to the very check that exists to track it.
+//
+// Both directions PLANT their own conditions. The first version of this
+// test did not: Direction 1 leaned on `graphview.WithCedarGate` existing
+// in the tree, and one commit later the N3 fix collapsed that duplicate
+// option away. The same-named-symbol condition vanished, the test kept
+// passing, and it passed against a deliberately package-BLIND gate too —
+// verified. A proof that depends on unrelated production code is a proof
+// with an expiry date nobody is watching (finding D1, review of PR #306).
+func TestNoUnwiredGates_StaleCheckIsPackageAware(t *testing.T) {
+	root := repoRoot(t)
+	const gate = "check-no-unwired-gates.sh"
+
+	// Direction 1 (the false positive): a DIFFERENT package declares a
+	// symbol with the same name as an allowlisted entry, and calls it for
+	// real. That must not mark the credstore entry stale.
+	decoy := filepath.Join(root, "core/rpc/zz_decoy_withcedargate.go")
+	decoyContent := "package rpc\n\n" +
+		"// zzDecoyStore mimics an unrelated package that happens to declare a\n" +
+		"// symbol named WithCedarGate — exactly the shape that produced the\n" +
+		"// false positive. It is called below, so a package-blind stale check\n" +
+		"// sees \"WithCedarGate( has a real call site\" and wrongly fires.\n" +
+		"type zzDecoyStore struct{ gate any }\n\n" +
+		"type zzDecoyOption func(*zzDecoyStore)\n\n" +
+		"func WithCedarGate(g any) zzDecoyOption { return func(s *zzDecoyStore) { s.gate = g } }\n\n" +
+		"func zzDecoyUse() zzDecoyOption { return WithCedarGate(nil) }\n"
+	cleanupDecoy := plant(t, decoy, decoyContent, "")
+
+	code, out := runGate(t, gate, root)
+	cleanupDecoy()
+	if code != 0 {
+		t.Fatalf("gate marked core/credstore.WithCedarGate stale because ANOTHER package "+
+			"declares and calls a symbol of the same name — that is the false positive this "+
+			"fix exists to prevent (exit %d).\n%s", code, out)
+	}
+
+	// Direction 2 (the true positive the fix must not trade away): a real
+	// caller inside the entry's OWN package. The entry IS stale and the
+	// gate must say so.
+	probe := filepath.Join(root, "core/credstore/zz_stale_probe.go")
+	content := "package credstore\n\n" +
+		"import \"github.com/kameas-ai/kenaz-harness/core/policy/cedar\"\n\n" +
+		"func zzStaleProbeUsesGate(g cedar.Gate) StoreOption { return WithCedarGate(g, nil) }\n"
+	cleanup := plant(t, probe, content, "")
+	defer cleanup()
+
+	code, out = runGate(t, gate, root)
+	if code == 0 {
+		t.Fatalf("gate passed with a real in-package caller of an allowlisted symbol — the stale check cannot fail.\n%s", out)
+	}
+	if !strings.Contains(out, "STALE") || !strings.Contains(out, "credstore.WithCedarGate") {
+		t.Fatalf("gate failed, but not with the STALE diagnosis for credstore.WithCedarGate:\n%s", out)
 	}
 }

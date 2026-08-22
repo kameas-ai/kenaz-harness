@@ -571,8 +571,15 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
         <span class="hidden two-col:inline">New session</span>
       </button>
       <!-- Memory trust badge (v0.5.6) — shows memory chunk count for the
-           active project (or all chunks when no project is selected). -->
-      <MemoryBadge :project-id="activeProjectId || undefined" />
+           active project (or all chunks when no project is selected).
+           served-mode-is-a-real-mode-01PMZ707 WP07: gated. Memory_* has no
+           serve dispatch case, so this badge's fetchCount() always failed
+           and — because chunkCount starts at `null` and stays there on
+           error — rendered "Loading memory count…" FOREVER rather than an
+           honest "not available" state. A per-view boundary panel would
+           never have caught this: LeftRail is shell chrome, mounted on
+           every routed page, not inside any of the panelled views. -->
+      <MemoryBadge v-if="!served" :project-id="activeProjectId || undefined" />
     </div>
     <NewSessionDialog
       :open="newSessionDialogOpen"

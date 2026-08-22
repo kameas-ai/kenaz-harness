@@ -542,6 +542,10 @@ export function Graph_MaterializeRun(arg1) {
   return window['go']['rpc']['Bindings']['Graph_MaterializeRun'](arg1);
 }
 
+export function Graph_ResolveApproval(arg1, arg2, arg3, arg4) {
+  return window['go']['rpc']['Bindings']['Graph_ResolveApproval'](arg1, arg2, arg3, arg4);
+}
+
 export function Graph_Resume(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Graph_Resume'](arg1, arg2);
 }

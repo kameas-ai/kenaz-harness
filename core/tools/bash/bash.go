@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -161,19 +162,36 @@ const (
 // SessionIDFromCtx is the optional function that extracts the session ID
 // from a context (used to populate Task.OwnerSessionID).
 type Options struct {
-	SandboxRoot                string
-	Allowlist                  []string
-	Logger                     *slog.Logger
-	Store                      *Store
-	IDGen                      func() string
-	CedarEngine                *cedar.Engine
-	PromptRegistry             *cedar.Registry
-	DataDir                    string
+	SandboxRoot                 string
+	Allowlist                   []string
+	Logger                      *slog.Logger
+	Store                       *Store
+	IDGen                       func() string
+	CedarEngine                 *cedar.Engine
+	PromptRegistry              *cedar.Registry
+	DataDir                     string
 	PermissionCacheDangerousOps func() bool
 	// BackgroundSpawn is called when run_in_background:true to register
 	// the newly-spawned process in the task registry. nil means
 	// background mode silently falls back to synchronous execution.
+	//
+	// Called with pid:0, BEFORE the process starts (subagent-control-
+	// and-background-tasks-01PMZB11 UNIT-3): the task id has to exist
+	// before cmd.Start() so BackgroundWriters can be attached to
+	// cmd.Stdout/cmd.Stderr ahead of time, which is what makes output
+	// capturable at all. The real PID is reported afterwards via
+	// BackgroundSetPID.
 	BackgroundSpawn BackgroundSpawnFunc
+	// BackgroundWriters returns the stdout/stderr io.Writers for a task
+	// id BackgroundSpawn already registered, so spawnBackground can
+	// attach them to cmd.Stdout/cmd.Stderr before Start(). nil (or a
+	// false ok) means output is not captured — the process still runs,
+	// but Tasks_Tail / kenaz__monitor see nothing for it.
+	BackgroundWriters BackgroundWritersFunc
+	// BackgroundSetPID records the OS PID once the process has actually
+	// started. nil is safe (informational only — feeds the same-process
+	// PID liveness check in core/tasks/recovery.go).
+	BackgroundSetPID BackgroundSetPIDFunc
 	// BackgroundEnd is called when the background process exits.
 	// nil is safe; the task will eventually be orphaned (the registry
 	// marks it crashed on next boot).
@@ -192,6 +210,18 @@ type Options struct {
 // import between core/tools/bash and core/tasks.
 type BackgroundSpawnFunc func(ctx context.Context, sessionID, cmd, description string, pid int) (taskID string, err error)
 
+// BackgroundWritersFunc returns the stdout/stderr io.Writers for a
+// task id already registered via BackgroundSpawn. ok is false when the
+// id is unknown (e.g. no task registry wired). Defined against the
+// stdlib io.Writer, not a core/tasks type, for the same reason
+// BackgroundSpawnFunc is a func type: core/tools/bash must not import
+// core/tasks.
+type BackgroundWritersFunc func(taskID string) (stdout, stderr io.Writer, ok bool)
+
+// BackgroundSetPIDFunc records the OS PID for an already-registered
+// background task, once the process has actually started.
+type BackgroundSetPIDFunc func(taskID string, pid int)
+
 // BackgroundEndFunc is the function the bash tool calls when the background
 // process exits, to mark the task terminal.
 type BackgroundEndFunc func(ctx context.Context, taskID string, exitCode int)
@@ -200,18 +230,20 @@ type BackgroundEndFunc func(ctx context.Context, taskID string, exitCode int)
 // concurrent use; all state is read-only after construction and the
 // per-call work happens in stack-local Run/Parse calls.
 type Tool struct {
-	sandboxRoot                string
-	allowlist                  []string
-	logger                     *slog.Logger
-	store                      *Store
-	idGen                      func() string
-	cedarEngine                *cedar.Engine
-	promptRegistry             *cedar.Registry
-	dataDir                    string
+	sandboxRoot                 string
+	allowlist                   []string
+	logger                      *slog.Logger
+	store                       *Store
+	idGen                       func() string
+	cedarEngine                 *cedar.Engine
+	promptRegistry              *cedar.Registry
+	dataDir                     string
 	permissionCacheDangerousOps func() bool
-	backgroundSpawn            BackgroundSpawnFunc
-	backgroundEnd              BackgroundEndFunc
-	sessionIDFromCtx           func(ctx context.Context) string
+	backgroundSpawn             BackgroundSpawnFunc
+	backgroundWriters           BackgroundWritersFunc
+	backgroundSetPID            BackgroundSetPIDFunc
+	backgroundEnd               BackgroundEndFunc
+	sessionIDFromCtx            func(ctx context.Context) string
 }
 
 // New constructs a Tool with the given options. SandboxRoot must be
@@ -222,18 +254,20 @@ func New(opts Options) *Tool {
 		allow = DefaultAllowlist
 	}
 	return &Tool{
-		sandboxRoot:                opts.SandboxRoot,
-		allowlist:                  allow,
-		logger:                     opts.Logger,
-		store:                      opts.Store,
-		idGen:                      opts.IDGen,
-		cedarEngine:                opts.CedarEngine,
-		promptRegistry:             opts.PromptRegistry,
-		dataDir:                    opts.DataDir,
+		sandboxRoot:                 opts.SandboxRoot,
+		allowlist:                   allow,
+		logger:                      opts.Logger,
+		store:                       opts.Store,
+		idGen:                       opts.IDGen,
+		cedarEngine:                 opts.CedarEngine,
+		promptRegistry:              opts.PromptRegistry,
+		dataDir:                     opts.DataDir,
 		permissionCacheDangerousOps: opts.PermissionCacheDangerousOps,
-		backgroundSpawn:            opts.BackgroundSpawn,
-		backgroundEnd:              opts.BackgroundEnd,
-		sessionIDFromCtx:           opts.SessionIDFromCtx,
+		backgroundSpawn:             opts.BackgroundSpawn,
+		backgroundWriters:           opts.BackgroundWriters,
+		backgroundSetPID:            opts.BackgroundSetPID,
+		backgroundEnd:               opts.BackgroundEnd,
+		sessionIDFromCtx:            opts.SessionIDFromCtx,
 	}
 }
 
@@ -273,11 +307,11 @@ func (t *Tool) InputSchema() json.RawMessage {
 // "explicitly zero" (treated the same as omitted; FR-010 says default
 // 30, max 300, but a zero or negative value is equally meaningless).
 type callArgs struct {
-	Command          string `json:"command"`
-	WorkingDir       string `json:"working_dir,omitempty"`
-	TimeoutSeconds   *int   `json:"timeout_seconds,omitempty"`
-	RunInBackground  bool   `json:"run_in_background,omitempty"`
-	Description      string `json:"description,omitempty"`
+	Command         string `json:"command"`
+	WorkingDir      string `json:"working_dir,omitempty"`
+	TimeoutSeconds  *int   `json:"timeout_seconds,omitempty"`
+	RunInBackground bool   `json:"run_in_background,omitempty"`
+	Description     string `json:"description,omitempty"`
 }
 
 // callResult mirrors the tool's documented JSON return shape

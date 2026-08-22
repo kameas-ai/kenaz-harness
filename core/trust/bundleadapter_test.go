@@ -311,3 +311,94 @@ func TestEngineVerifier_AC002_TamperedPayloadRejectsAsSignatureInvalid(t *testin
 		t.Fatalf("Reason=%q, want %q (not envelope-shape or anchor_missing)", res.Reason, RejSignatureInvalid)
 	}
 }
+
+// TestEngineVerifier_TruncatedSignatureBytesRejects is the third
+// negative case CLAUDE.md's "prove the negative" rule requires
+// alongside a tampered payload (AC-002) and an unknown/wrong anchor
+// (verify_test.go's TestVerifyAnchorMissing/TestVerifyAnchorRemoved,
+// exercised through the raw engine; TestInstall_UnknownAnchor_
+// SigningRequired_Refuses in core/rpc/views/bundle exercises the same
+// case through the full Install path): a SignatureBytes slice shorter
+// than ed25519.SignatureSize (64) must be rejected cleanly through the
+// WHOLE EngineVerifier pipeline — not just at the algo package's own
+// length guard (core/trust/internal/algo/ed25519.go's
+// "ed25519: bad signature length") — with no panic and Reason ==
+// "signature_invalid", the same reason a tampered-but-full-length
+// signature produces. A caller cannot distinguish "truncated in
+// transit" from "tampered" from this reason alone, which is
+// intentional: RejSignatureInvalid is the one signature-shaped
+// rejection code (verify.go step 7), and a locator that resolves to a
+// partial file must not surface a different, more specific error that
+// would let a caller fingerprint the failure mode.
+func TestEngineVerifier_TruncatedSignatureBytesRejects(t *testing.T) {
+	engine, err := NewEngine(Config{})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	v, err := NewEngineVerifier(engine)
+	if err != nil {
+		t.Fatalf("NewEngineVerifier: %v", err)
+	}
+
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	keyID := fingerprint.Compute(pub)
+	anchor := Anchor{
+		AnchorID:  "truncated-sig-anchor",
+		Kind:      AnchorRawPublicKey,
+		Algorithm: AlgEd25519,
+		PublicKey: PublicKey{
+			Algorithm:   AlgEd25519,
+			Bytes:       append([]byte(nil), pub...),
+			Fingerprint: keyID,
+		},
+	}
+	if err := engine.InstallAnchor(context.Background(), anchor); err != nil {
+		t.Fatalf("InstallAnchor: %v", err)
+	}
+
+	payload := []byte("truncated-signature payload")
+	sig := ed25519.Sign(priv, payload)
+	truncated := sig[:len(sig)/2] // half a signature — not a valid ed25519.SignatureSize input
+
+	res, err := v.Verify(context.Background(), VerifyRequest{
+		Payload: payload,
+		Signature: SignatureRef{
+			Algorithm: string(AlgEd25519),
+			KeyID:     keyID,
+		},
+		SignatureBytes: truncated,
+	})
+	if err != nil {
+		t.Fatalf("Verify returned error (should reject via VerifyResult, not error): %v", err)
+	}
+	if res.OK {
+		t.Fatalf("expected OK=false for a truncated signature")
+	}
+	if res.Reason != string(RejSignatureInvalid) {
+		t.Fatalf("Reason=%q, want %q", res.Reason, RejSignatureInvalid)
+	}
+
+	// Zero-length is the degenerate case of the same defect class — the
+	// pre-UNIT-2 shape (bundleadapter.go hardcoding Signature: nil) is
+	// exactly SignatureBytes == nil, already pinned by
+	// TestEngineVerifier_AC001_Mutation_NilSignatureBytesStillRejects
+	// above; this asserts the empty-but-non-nil slice takes the same
+	// path.
+	res2, err := v.Verify(context.Background(), VerifyRequest{
+		Payload: payload,
+		Signature: SignatureRef{
+			Algorithm: string(AlgEd25519),
+			KeyID:     keyID,
+		},
+		SignatureBytes: []byte{},
+	})
+	if err != nil {
+		t.Fatalf("Verify returned error for empty SignatureBytes: %v", err)
+	}
+	if res2.OK {
+		t.Fatalf("expected OK=false for empty SignatureBytes")
+	}
+}

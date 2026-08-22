@@ -17,8 +17,9 @@ type sqliteStore struct {
 // NewSQLiteStore wraps an open *sql.DB.
 //
 // The caller is responsible for ensuring the tasks table exists (the
-// harness migration framework runs 0001_tasks.sql at boot via
-// Migrations()).
+// harness migration framework runs the tasks/1200-tasks-init migration at
+// boot — see migrations.go — as long as RegisterMigrations was called
+// before storage.Open).
 func NewSQLiteStore(db *sql.DB) SQLStore {
 	return &sqliteStore{db: db}
 }
@@ -72,51 +73,6 @@ func (s *sqliteStore) MarkCrashed(ctx context.Context) (int, error) {
 	n, _ := res.RowsAffected()
 	return int(n), nil
 }
-
-// Migration shape — mirrors core/event/log/register.go so the harness
-// bootstrap can call Migrations() and forward them.
-type Migration struct {
-	ID  string
-	SQL string
-}
-
-// Migrations returns the tasks migration in registration order.
-func Migrations() []Migration {
-	return []Migration{
-		{ID: "0001_tasks", SQL: migration0001Tasks},
-	}
-}
-
-// MigrationRegistry is the minimal interface the harness migration framework
-// exposes. Tasks registers itself via RegisterMigrations.
-type MigrationRegistry interface {
-	Register(owner string, migrations []Migration) error
-}
-
-// RegisterMigrations registers the tasks migrations with the supplied registry.
-func RegisterMigrations(reg MigrationRegistry) error {
-	return reg.Register("core/tasks", Migrations())
-}
-
-// migration0001Tasks is the SQL for the tasks table and indexes.
-const migration0001Tasks = `-- Migration 0001: tasks table + indexes.
--- Owner: core/tasks (background-task-monitor-01KZNP3C).
-
-CREATE TABLE IF NOT EXISTS tasks (
-  id               TEXT PRIMARY KEY,
-  kind             TEXT NOT NULL,
-  owner_session_id TEXT,
-  cmd              TEXT,
-  description      TEXT,
-  status           TEXT NOT NULL,
-  exit_code        INTEGER,
-  started_at       INTEGER NOT NULL,
-  ended_at         INTEGER
-);
-
-CREATE INDEX IF NOT EXISTS idx_tasks_owner  ON tasks(owner_session_id);
-CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-`
 
 // GetTask is a convenience reader for recovery.go.
 func (s *sqliteStore) GetRunningIDs(ctx context.Context) ([]string, error) {

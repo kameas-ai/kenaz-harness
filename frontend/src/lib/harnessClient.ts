@@ -407,7 +407,12 @@ interface WailsBindingsLike {
 
   Bundle_List(): Promise<Bundle[]>;
   Bundle_Get(id: string): Promise<Bundle>;
-  Bundle_Install(req: { kind: string; path: string }): Promise<Bundle>;
+  // url is already part of the generated bundle.InstallRequest model
+  // (frontend/wailsjs/go/models.ts — UNIT-6/UNIT-7's http_mirror
+  // channel shipped it), just never reflected in this hand-written
+  // WailsBindingsLike surface until UNIT-8 gave the frontend a second
+  // channel to actually pass it for.
+  Bundle_Install(req: { kind: string; path: string; url?: string }): Promise<Bundle>;
   Bundle_Remove(id: string): Promise<void>;
 
   Policy_Explain(input: Record<string, unknown>): Promise<Denial>;
@@ -1800,7 +1805,13 @@ export interface AttachmentsClient {
 export interface BundleClient {
   list(): Promise<Bundle[]>;
   get(id: string): Promise<Bundle>;
-  install(req: { kind: string; path: string }): Promise<Bundle>;
+  // path is used by the local_path channel; url by every network channel
+  // (UNIT-6's http_mirror today). Exactly one is meaningful per kind —
+  // core/rpc/views/bundle.InstallRequest documents the same split, and
+  // core/bundle/channels.Registry.Open refuses any kind with no
+  // registered factory, so an unsupported kind fails server-side even
+  // if the picker (BundlesView.vue's CHANNEL_KINDS) ever drifts.
+  install(req: { kind: string; path?: string; url?: string }): Promise<Bundle>;
   remove(id: string): Promise<void>;
 }
 
@@ -3677,7 +3688,11 @@ export function createHarnessClient(): HarnessClient {
     bundle: {
       list: () => b().Bundle_List(),
       get: (id) => b().Bundle_Get(id),
-      install: (req) => b().Bundle_Install(req),
+      // bundle.InstallRequest.path is a plain `string` in wailsjs's
+      // generated model (models.ts), not optional, even though the Go
+      // struct leaves it "" for URL-based channels — normalize here
+      // rather than widening the generated type.
+      install: (req) => b().Bundle_Install({ kind: req.kind, path: req.path ?? '', url: req.url }),
       remove: (id) => b().Bundle_Remove(id),
     },
     policy: {
@@ -4185,30 +4200,68 @@ const _servedStreamRegistry = new Map<string, () => void>();
  * enumerate every method manually and stays automatically in sync when
  * new methods are added to HarnessClient.
  */
+/**
+ * wrapUnsupportedValue walks one value from createFakeHarnessClient()'s
+ * output and returns the served-client equivalent:
+ *
+ *   - a function becomes a rejector (ServedUnsupportedError(path));
+ *   - a plain object (not an array) is a sub-client boundary and is
+ *     recursed into;
+ *   - anything else — an array, a string, a number, a boolean, null,
+ *     undefined — is DATA, not a method, sitting directly on a client or
+ *     sub-client rather than behind a function call.
+ *
+ * served-mode-is-a-real-mode-01PMZ707 WP06 closes the hole the 2026-08-18
+ * closing sweep found here: the old version's final branch was
+ * `return val;`, so a non-function, non-object property on the fake
+ * client — an array in particular, explicitly excluded by the old
+ * `!Array.isArray(val)` guard — passed through to the served client
+ * VERBATIM AS FAKE DATA, directly contradicting this file's own docstring
+ * promise that "any method not explicitly overlaid by the real transport
+ * returns an honest error."
+ *
+ * research/served-client-overlay.md enumerates HarnessClient's actual
+ * runtime shape as of this WP: every leaf is a function or a sub-client
+ * object — zero arrays, zero primitives, zero nulls. So this THROWS
+ * rather than trying to invent a safe substitute for a shape that does
+ * not exist today. That is the correct failure mode for a structural
+ * mismatch: if a future field puts real data directly on a client (no
+ * function in between), catching it loudly at construction time — in any
+ * test or boot path that calls createUnsupportedServedClient() — is
+ * strictly better than the alternative of silently emitting whatever
+ * placeholder value createFakeHarnessClient() happened to seed there.
+ * Exported so a test can inject a synthetic value at an arbitrary path
+ * without needing an actual HarnessClient field to add one (AC-715).
+ */
+export function wrapUnsupportedValue(val: unknown, path: string): unknown {
+  if (typeof val === 'function') {
+    // Replace with a function that always rejects.
+    return (..._args: unknown[]) =>
+      Promise.reject(new ServedUnsupportedError(path));
+  }
+  if (val !== null && typeof val === 'object' && !Array.isArray(val)) {
+    // Recurse into sub-client objects.
+    const wrapped: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
+      wrapped[k] = wrapUnsupportedValue(v, `${path}.${k}`);
+    }
+    return wrapped;
+  }
+  throw new Error(
+    `createUnsupportedServedClient: non-function, non-object value at "${path}" ` +
+      `(${JSON.stringify(val)}) would leak fake data verbatim to a served ` +
+      `client. Give "${path}" an explicit case — a rejector or a documented ` +
+      `safe constant — instead of letting it fall through unwrapped.`,
+  );
+}
+
 export function createUnsupportedServedClient(): HarnessClient {
   const fake = createFakeHarnessClient();
-
-  function wrapValue(val: unknown, path: string): unknown {
-    if (typeof val === 'function') {
-      // Replace with a function that always rejects.
-      return (..._args: unknown[]) =>
-        Promise.reject(new ServedUnsupportedError(path));
-    }
-    if (val !== null && typeof val === 'object' && !Array.isArray(val)) {
-      // Recurse into sub-client objects.
-      const wrapped: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
-        wrapped[k] = wrapValue(v, `${path}.${k}`);
-      }
-      return wrapped;
-    }
-    return val;
-  }
 
   // Walk the fake client's top-level fields.
   const result: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(fake as unknown as Record<string, unknown>)) {
-    result[k] = wrapValue(v, k);
+    result[k] = wrapUnsupportedValue(v, k);
   }
   // openExternalURL is void (not Promise), so override it separately to be a no-op.
   result['openExternalURL'] = (_url: string): void => { /* no-op in unsupported client */ };
@@ -4442,9 +4495,36 @@ export function createServedHarnessClient(opts?: {
         }
         return Promise.resolve();
       },
+
+      // resolveAutonomy — a read on session state the served build already
+      // owns (served-mode-is-a-real-mode-01PMZ707 WP04). Porting this read
+      // does NOT make SessionHeader.vue's plan-mode badge appear: no
+      // producer emits a plan-mode event on desktop either, so the badge
+      // stays hidden either way (NG7). This closes the seed's honesty
+      // problem, not the missing badge.
+      resolveAutonomy: (id: string) =>
+        transport.call<ResolvedAutonomy>('Sessions_ResolveAutonomy', { id }),
+
+      // suggestTitle — runs a model call the served build can already make
+      // (LLM_StartStream is served); the whole flow completes inside the
+      // VM. Ported per WP04.
+      suggestTitle: (id: string) =>
+        transport.call<string>('Sessions_SuggestTitle', { id }),
     },
 
     confirm: {
+      // served-mode-is-a-real-mode-01PMZ707 WP06: every OTHER sub-client
+      // below spreads `...base.<name>` first so an unoverlaid method falls
+      // back to the rejecting base instead of `undefined`. This one did
+      // not, even though ALL FIVE ConfirmClient methods happen to be
+      // overlaid today (verified against ConfirmClient's declaration,
+      // harnessClient.ts:3139-3190) — a fifth call reaching an unmapped
+      // key would otherwise be a TypeError ("x is not a function"), not
+      // the honest ServedUnsupportedError refusal every other gap gets.
+      // Added for the day ConfirmClient grows a method and this literal
+      // is not updated in the same commit.
+      ...base.confirm,
+
       /**
        * The confirm-each round trip, wired for served mode.
        *
@@ -4591,6 +4671,16 @@ export function createServedHarnessClient(opts?: {
         }),
       listPending: () =>
         transport.call<PermissionRequest[]>('Permissions_ListPending'),
+    },
+
+    config: {
+      ...base.config,
+
+      // getFlags — a side-effect-free read whose absence made every
+      // feature-flag read in a served workbench silently fall back to a
+      // hardcoded default, the exact class of lie this mission exists to
+      // kill (served-mode-is-a-real-mode-01PMZ707 WP04).
+      getFlags: () => transport.call<FeatureFlagInfo[]>('Config_GetFlags'),
     },
   };
 }

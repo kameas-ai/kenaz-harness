@@ -27,6 +27,7 @@
 
 import { computed, ref } from 'vue';
 import { Archive, Layers, Lock } from 'lucide-vue-next';
+import { isServedMode } from '@/lib/useServedMode';
 import MarkdownBlock from './MarkdownBlock.vue';
 import PinMenu from './PinMenu.vue';
 import ImageBlock from './ImageBlock.vue';
@@ -199,6 +200,12 @@ const BRANCHING_POLISH_ENABLED: boolean = (() => {
   } catch { /* ignore */ }
   return true;
 })();
+
+// served-mode-is-a-real-mode-01PMZ707 WP04: Branches_* is GATED, not
+// ported (ten methods; list-but-not-merge is "half a flow"). Served mode
+// is fixed for the lifetime of the tab, same pattern as ChatInput.vue's
+// `served` const.
+const servedMode = isServedMode();
 
 function onBranchFromTurn() {
   if (!props.messageId) return;
@@ -533,7 +540,7 @@ function onResumeClick() {
              Visible on assistant messages with a stable messageId when
              HARNESS_BRANCHING_POLISH is on. Disabled while streaming. -->
         <button
-          v-if="BRANCHING_POLISH_ENABLED && isAssistant && messageId"
+          v-if="BRANCHING_POLISH_ENABLED && isAssistant && messageId && !servedMode"
           type="button"
           class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1 disabled:opacity-40 disabled:cursor-not-allowed"
           :disabled="!!streaming"

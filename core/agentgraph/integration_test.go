@@ -366,6 +366,216 @@ nodes:
 	}
 }
 
+// approvalGraphSrc is a minimal single-node approval graph shared by the
+// UNIT-3/UNIT-4 executor-resolution tests below.
+const approvalGraphSrc = `spec_version: "1"
+id: approval_resolve_e2e
+entrypoints: [a]
+nodes:
+  - id: a
+    kind: approval
+    attrs:
+      approver_role: user
+      prompt: "Ship it?"
+`
+
+// TestIntegration_ApprovalKindWritesApprovedOnResolvedApprove is AC-02:
+// once a verdict {approved:true} is on AskBus, the resumed fire writes
+// Outputs["approved"] and NOT Outputs["rejected"], and the run
+// completes (approval-node-01PMZC12 UNIT-3).
+func TestIntegration_ApprovalKindWritesApprovedOnResolvedApprove(t *testing.T) {
+	t.Parallel()
+	g, err := LoadYAML([]byte(approvalGraphSrc))
+	if err != nil {
+		t.Fatalf("LoadYAML: %v", err)
+	}
+	if err := Validate(g); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	bus := NewMemAskBus()
+	log := NewMemoryEventLog()
+	k := NewKernel(WithEventLog(log))
+	env := &Env{RunID: "run-approve", Graph: &g, Ask: bus}
+	if err := k.Run(context.Background(), env); !errors.Is(err, ErrPaused) {
+		t.Fatalf("Run: got err=%v, want ErrPaused", err)
+	}
+
+	ans, err := EncodeApprovalAnswer(ApprovalVerdict{Approved: true, Approver: "user"})
+	if err != nil {
+		t.Fatalf("EncodeApprovalAnswer: %v", err)
+	}
+	id := elicitation.NodeAskID(env.RunID, "a")
+	if err := bus.Registry().Resolve(id, ans); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	if err := k.Resume(context.Background(), env); err != nil {
+		t.Fatalf("Resume: got err=%v, want nil (run should complete)", err)
+	}
+	outs := env.State.Outputs("a")
+	if _, ok := outs["approved"]; !ok {
+		t.Errorf("expected Outputs[\"approved\"] to be set; got %v", outs)
+	}
+	if _, ok := outs["rejected"]; ok {
+		t.Errorf("Outputs[\"rejected\"] must be absent on approve; got %v", outs)
+	}
+}
+
+// TestIntegration_ApprovalKindWritesRejectedOnResolvedReject is AC-03:
+// a {approved:false} verdict writes Outputs["rejected"] and leaves
+// "approved" absent — not present-and-nil (approval-node-01PMZC12
+// UNIT-4).
+func TestIntegration_ApprovalKindWritesRejectedOnResolvedReject(t *testing.T) {
+	t.Parallel()
+	g, err := LoadYAML([]byte(approvalGraphSrc))
+	if err != nil {
+		t.Fatalf("LoadYAML: %v", err)
+	}
+	if err := Validate(g); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	bus := NewMemAskBus()
+	log := NewMemoryEventLog()
+	k := NewKernel(WithEventLog(log))
+	env := &Env{RunID: "run-reject", Graph: &g, Ask: bus}
+	if err := k.Run(context.Background(), env); !errors.Is(err, ErrPaused) {
+		t.Fatalf("Run: got err=%v, want ErrPaused", err)
+	}
+
+	ans, err := EncodeApprovalAnswer(ApprovalVerdict{Approved: false, Reason: "not ready", Approver: "user"})
+	if err != nil {
+		t.Fatalf("EncodeApprovalAnswer: %v", err)
+	}
+	id := elicitation.NodeAskID(env.RunID, "a")
+	if err := bus.Registry().Resolve(id, ans); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	if err := k.Resume(context.Background(), env); err != nil {
+		t.Fatalf("Resume: got err=%v, want nil (run should complete)", err)
+	}
+	outs := env.State.Outputs("a")
+	if _, ok := outs["rejected"]; !ok {
+		t.Errorf("expected Outputs[\"rejected\"] to be set; got %v", outs)
+	}
+	if _, ok := outs["approved"]; ok {
+		t.Errorf("Outputs[\"approved\"] must be absent on reject — a downstream node wired to it must not fire; got %v", outs)
+	}
+
+	events := readEvents(t, log, env.RunID)
+	if !hasEventKind(events, EventApprovalResolved) {
+		t.Fatalf("expected approval_resolved event; got kinds: %v", kindsOf(events))
+	}
+}
+
+// TestIntegration_ApprovalKindResolvedEventRecordsTrueVerdict is AC-04:
+// the resolution event records the ACTUAL verdict, not a fabricated
+// one — the trust-surfaces-that-fire-01PMZ202 WP02 regression this
+// mission's AC-04 exists to keep caught (spec.md AC-04's mutation is
+// "restore the approved:true literal"; this test also covers the
+// symmetric reject case which a same-shaped fabrication could hide
+// behind).
+func TestIntegration_ApprovalKindResolvedEventRecordsTrueVerdict(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		approved bool
+	}{
+		{"approve", true},
+		{"reject", false},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			g, err := LoadYAML([]byte(approvalGraphSrc))
+			if err != nil {
+				t.Fatalf("LoadYAML: %v", err)
+			}
+			if err := Validate(g); err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			bus := NewMemAskBus()
+			log := NewMemoryEventLog()
+			k := NewKernel(WithEventLog(log))
+			env := &Env{RunID: "run-verdict-" + tc.name, Graph: &g, Ask: bus}
+			if err := k.Run(context.Background(), env); !errors.Is(err, ErrPaused) {
+				t.Fatalf("Run: got err=%v, want ErrPaused", err)
+			}
+			ans, err := EncodeApprovalAnswer(ApprovalVerdict{Approved: tc.approved, Approver: "user"})
+			if err != nil {
+				t.Fatalf("EncodeApprovalAnswer: %v", err)
+			}
+			id := elicitation.NodeAskID(env.RunID, "a")
+			if err := bus.Registry().Resolve(id, ans); err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if err := k.Resume(context.Background(), env); err != nil {
+				t.Fatalf("Resume: %v", err)
+			}
+			events := readEvents(t, log, env.RunID)
+			var found bool
+			for _, e := range events {
+				if e.Kind != EventApprovalResolved {
+					continue
+				}
+				found = true
+				var payload map[string]any
+				if err := json.Unmarshal(e.Payload, &payload); err != nil {
+					t.Fatalf("unmarshal payload: %v", err)
+				}
+				if got, _ := payload["approved"].(bool); got != tc.approved {
+					t.Errorf("approved=%v, want %v (payload=%s)", got, tc.approved, e.Payload)
+				}
+				if got, _ := payload["auto"].(bool); got != false {
+					t.Errorf("auto=%v, want false for a human decision (payload=%s)", got, e.Payload)
+				}
+			}
+			if !found {
+				t.Fatalf("no approval_resolved event; got kinds: %v", kindsOf(events))
+			}
+		})
+	}
+}
+
+// TestIntegration_ApprovalKindUnreadableVerdictFailsClosed: a corrupt
+// answer on the bus (not a decodable ApprovalVerdict) must resolve to
+// "rejected", never "approved" — a missing/corrupt verdict must not
+// read as approval (spec.md §5.3, mirroring B-3's warning about a
+// missing allowlist).
+func TestIntegration_ApprovalKindUnreadableVerdictFailsClosed(t *testing.T) {
+	t.Parallel()
+	g, err := LoadYAML([]byte(approvalGraphSrc))
+	if err != nil {
+		t.Fatalf("LoadYAML: %v", err)
+	}
+	if err := Validate(g); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	bus := NewMemAskBus()
+	log := NewMemoryEventLog()
+	k := NewKernel(WithEventLog(log))
+	env := &Env{RunID: "run-corrupt", Graph: &g, Ask: bus}
+	if err := k.Run(context.Background(), env); !errors.Is(err, ErrPaused) {
+		t.Fatalf("Run: got err=%v, want ErrPaused", err)
+	}
+	// A plain free-form text answer (e.g. injected by a caller that
+	// mistook this for an `ask` node) carries no structured verdict.
+	id := elicitation.NodeAskID(env.RunID, "a")
+	if err := bus.Registry().Resolve(id, elicitation.TextAnswer("approved")); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if err := k.Resume(context.Background(), env); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	outs := env.State.Outputs("a")
+	if _, ok := outs["approved"]; ok {
+		t.Errorf("an unreadable verdict must never write \"approved\"; got %v", outs)
+	}
+	if _, ok := outs["rejected"]; !ok {
+		t.Errorf("an unreadable verdict must fail closed to \"rejected\"; got %v", outs)
+	}
+}
+
 // TestIntegration_ArtifactKindEndToEnd: an `artifact` node terminates
 // a graph and emits the artifact_emitted event with the configured
 // output_target and mime_type.

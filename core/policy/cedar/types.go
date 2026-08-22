@@ -76,6 +76,14 @@ const (
 	ActionWorkflowSave   = "workflow.save"
 	ActionWorkflowDelete = "workflow.delete"
 
+	// ActionWorkflowNetworkFetch gates a web_fetch / web_scrape step's
+	// outbound request (automation-actually-runs-01PMZ404 UNIT-7). The
+	// shipped default_workflows_policy.cedar bundle already references
+	// this action string (WP05's "network.fetch" section); the constant
+	// did not exist until UNIT-7 built GateWorkflowNetworkFetch, the
+	// first Go call site.
+	ActionWorkflowNetworkFetch = "workflow.network.fetch"
+
 	// ActionArtifactUpdate gates the kenaz__update_artifact builtin
 	// (update-artifact-tool-01KQ8TD4). Default-allow under FSWriteEnabled;
 	// gated by the same FSWriteDisabled toggle as the write-family fs
@@ -325,6 +333,17 @@ const (
 	// channel-allowlist question to the operator; this constant and its
 	// gate call are the plumbing, not the policy.
 	ActionBundleInstall = "bundle.install"
+	// ActionApprovalResolve gates Graph_ResolveApproval
+	// (approval-node-01PMZC12 UNIT-3, FR-003). A human approval is
+	// trust- or compliance-relevant under CLAUDE.md's own rubric; an
+	// approval nobody can audit is barely better than one nobody made.
+	//
+	// Resource UID: Approval::"<runID>:<nodeID>". Default-allow (a
+	// missing policy does not block a human's own resolution) — this is
+	// NOT the fail-closed no-watcher timeout, which resolves
+	// server-side without going through this gate at all (spec.md §5.3;
+	// the gate exists for the human-verb path, not the safety path).
+	ActionApprovalResolve = "approval.resolve"
 )
 
 // Entity-type names mirror spec §4.10's recommended mapping:
@@ -445,6 +464,11 @@ const (
 	// ActionBundleInstall's doc for why the locator (not the not-yet-
 	// fetched bundle name) is the identity the gate checks against.
 	EntityTypeBundle = "Bundle"
+	// EntityTypeApproval is the Cedar entity type for a graph run's
+	// approval-node decision. Introduced by mission
+	// approval-node-01PMZC12 (UNIT-3). Resource UIDs take the shape
+	// Approval::"<runID>:<nodeID>".
+	EntityTypeApproval = "Approval"
 
 	// PrincipalLocal is the canonical EntityUID id for the single
 	// local user. The harness is single-user / privacy-first
@@ -784,6 +808,18 @@ func SkillUID(name string) cedar.EntityUID {
 		safeID = invalidUIDID
 	}
 	return cedar.NewEntityUID(EntityTypeSkill, cedar.String(safeID))
+}
+
+// ApprovalUID builds a Cedar EntityUID for a graph run's approval-node
+// decision (approval-node-01PMZC12 UNIT-3). id is "<runID>:<nodeID>".
+// Malformed ids are replaced with "invalid" so the resulting UID never
+// satisfies a real permit.
+func ApprovalUID(runID, nodeID string) cedar.EntityUID {
+	id := runID + ":" + nodeID
+	if !validateFamilyID(id) {
+		id = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeApproval, cedar.String(id))
 }
 
 // ElicitTemplateActionID returns the Cedar action ID for a named template

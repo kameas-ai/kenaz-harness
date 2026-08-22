@@ -1931,6 +1931,30 @@ func New(c *core.Core, opts ...Option) *API {
 	if c != nil && a.hookRunner != nil {
 		c.SetSessionHookRunner(&hooks.SessionRunnerAdapter{Runner: a.hookRunner})
 	}
+	// subagent-control-and-background-tasks-01PMZB11 UNIT-4: late-bind
+	// the task registry's HookFirer now that the process-singleton
+	// *hooks.Runner exists. taskReg is constructed earlier in this
+	// function (before hookRunnerImpl, so RecoverOrphansWithPIDCheck
+	// runs before this) — Registry.SetHookFirer exists specifically so
+	// this doesn't require reordering either subsystem's boot. Firing
+	// through the real Runner is what turns background_task_complete
+	// from a declared-only event constant into one that actually
+	// fires (FR-004).
+	if taskReg != nil && a.hookRunner != nil {
+		hookRunnerForTasks := a.hookRunner
+		taskReg.SetHookFirer(func(ctx context.Context, payload coretasks.BackgroundTaskCompletePayload) {
+			_, _ = hookRunnerForTasks.Fire(ctx, hooks.EventBackgroundTaskComplete, hooks.BackgroundTaskCompleteEvent{
+				SessionID:  payload.OwnerSessionID,
+				TaskID:     payload.TaskID,
+				TaskKind:   payload.Kind,
+				ExitCode:   payload.ExitCode,
+				DurationMs: payload.DurationMs,
+				StdoutTail: payload.StdoutTail,
+				StderrTail: payload.StderrTail,
+				Success:    payload.ExitCode == 0,
+			})
+		})
+	}
 	// Register skill-catalog pre_send hook so the model sees the
 	// model-invokable commands at send time (model-invoked-skills-catalog-01KZNP3E WP03).
 	if hookBuiltins != nil && slashStore != nil {
@@ -2017,7 +2041,7 @@ func New(c *core.Core, opts ...Option) *API {
 	a.convMgr = newConversationManager(c)
 	a.corpusMgr = newCorpusManager(c, embedder)
 	var compactionPipeline *compaction.Pipeline
-	a.graphMgr, compactionPipeline = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore, settingsImpl, a.cedarEngine, a.hookRunner)
+	a.graphMgr, compactionPipeline = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore, settingsImpl, a.cedarEngine, a.hookRunner, a.auditImpl)
 	// Wire the same FR-041 pipeline instance the kernel runs onto the
 	// Settings RPC surface, so edits made through
 	// core/rpc/views/compaction reach the live kernel path instead of
@@ -2046,7 +2070,7 @@ func New(c *core.Core, opts ...Option) *API {
 		Emitter: WailsEmitter{},
 	})
 
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, a.cedarEngine)
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, a.cedarEngine, taskReg)
 	a.llmAPI = stack.api
 	// confirm-each-enforcement-01PMAG05 WP02: the resolve leg. Bound to
 	// the SAME bus the chat runner's tool adapter parks on — a second bus
@@ -2194,12 +2218,12 @@ func New(c *core.Core, opts ...Option) *API {
 	// (session-export-01NDFSEX05 WP02).
 	if c != nil {
 		// audit-that-tells-the-truth-01PMZA10 UNIT-5 (spec R-1, D-9): this
-	// site was owned by NOBODY before this mission — it appears in no
-	// mission's tasks.md — and its emitter param 4 was nil, so
-	// views/sessions/impl.go:1054's KindSessionExport ("fires on every
-	// successful Sessions_Export call", audit.go:205) has never fired.
-	// Shape 1 (contextaudit.Emitter).
-	a.sessionsAPI = sessions.WithExportOpts(a.sessionsAPI, a.cedarGate(), nil, &acpAuditBridge{impl: a.auditImpl})
+		// site was owned by NOBODY before this mission — it appears in no
+		// mission's tasks.md — and its emitter param 4 was nil, so
+		// views/sessions/impl.go:1054's KindSessionExport ("fires on every
+		// successful Sessions_Export call", audit.go:205) has never fired.
+		// Shape 1 (contextaudit.Emitter).
+		a.sessionsAPI = sessions.WithExportOpts(a.sessionsAPI, a.cedarGate(), nil, &acpAuditBridge{impl: a.auditImpl})
 	}
 	if c != nil && a.dispatchPool != nil {
 		// Wire the dispatch pool (all transports) onto Core.MCP so the
@@ -2432,8 +2456,16 @@ func New(c *core.Core, opts ...Option) *API {
 		Recommender:   newBranchRecommender(recommenderCat),
 		// audit-that-tells-the-truth-01PMZA10 UNIT-5: this field was
 		// never set, so branches/impl.go's KindBranchAdvisorAccepted /
-		// KindBranchCreated emit sites (:159, :236, :560, :584) have
-		// never fired. Shape 1 (contextaudit.Emitter).
+		// KindBranchCreated emit sites had never fired. ZA10 WP06 then
+		// added the legacy-path emit at impl.go:257 and shifted the
+		// rest; the sites are :159, :241, :257, :580, :604 as of
+		// 2026-08-22. Shape 1 (contextaudit.Emitter).
+		//
+		// Line numbers in a comment go stale the moment anyone inserts
+		// above them — this one already had (finding N5, review of
+		// PR #306). Kept because they are genuinely useful for a reader
+		// tracing the wiring, corrected because a wrong citation is
+		// worse than none.
 		Audit: &acpAuditBridge{impl: a.auditImpl},
 		// Broker enables LeftRail real-time updates on branch creation
 		// (branch creates a new child session row): v0.5.3 fix.
@@ -2490,6 +2522,16 @@ func New(c *core.Core, opts ...Option) *API {
 			var err error
 			sched, err = wfsched.New(context.Background(), wfsched.Config{
 				Store: schedStore,
+				// automation-actually-runs-01PMZ404 UNIT-2: wfSchedDispatcher
+				// drives cron ticks and RunNow through the same live engine
+				// (a.workflowsAPI.RunWithOptions) the manual Run button uses.
+				// DispatcherFunc — not a plain Dispatcher field — because
+				// a.workflowsAPI is constructed 77 lines below this call, in
+				// this same function; the closure captures *API and resolves
+				// a.workflowsAPI lazily on each fire, once boot has finished.
+				DispatcherFunc: func() wfsched.Dispatcher {
+					return &wfSchedDispatcher{api: a}
+				},
 			})
 			if err != nil {
 				logging.L().Warn("wf.scheduler.init_failed", "err", err.Error())
@@ -2503,9 +2545,18 @@ func New(c *core.Core, opts ...Option) *API {
 		// the same Store + Scheduler constructed above so Install can
 		// persist and arm schedules. nil Store / Scheduler degrade
 		// gracefully inside the catalog implementation.
+		//
+		// automation-actually-runs-01PMZ404 UNIT-10: RecipeRegistry was
+		// never assigned, so every mcp_call.server reported as missing
+		// regardless of install state — the catalog preview drawer's
+		// credential chip could only ever render red. wfRecipeRegistryAdapter
+		// re-reads recipes.enabled.json per call (dataDir=="" degrades to
+		// Has()==false, matching the prior always-missing behaviour on the
+		// test-chassis / disabled path).
 		wfCatalog := wfcatalogpkg.New(wfcatalogpkg.Config{
-			Store:     wfStore,
-			Scheduler: sched,
+			Store:          wfStore,
+			Scheduler:      sched,
+			RecipeRegistry: &wfRecipeRegistryAdapter{dataDir: dataDir},
 		})
 		// WP01 (workflows-finalization-01NWFX01): wire a concrete MCPCaller
 		// and LLMStreamer into the workflow engine so mcp_call and model_turn
@@ -2554,6 +2605,25 @@ func New(c *core.Core, opts ...Option) *API {
 		// The ctxFn defers ctx resolution to Notify-call time so construction
 		// before OnStartup is safe.
 		wfDeps.Notifier = &wfNotifierAdapter{ctxFn: a.broker.EmitCtx}
+		// automation-actually-runs-01PMZ404 UNIT-5: read_artifact /
+		// write_artifact steps had no ArtifactsReadWriter — the shipped
+		// doc_generator builtin burns a full model turn and then fails on
+		// its final write_artifact step. artStore/artMgr/media are the
+		// SAME instances newArtifactsAPI wires the artifacts RPC surface
+		// with (constructed above), so a workflow-written artifact shows
+		// up through the normal artifacts surface too. nil-guarded the
+		// same way newArtifactsAPI is: both artStore and artMgr are nil
+		// on the disabled/no-DB test-chassis path.
+		if artStore != nil && artMgr != nil {
+			wfDeps.Artifacts = &wfArtifactsAdapter{store: artStore, mgr: artMgr, media: media}
+		}
+		// automation-actually-runs-01PMZ404 UNIT-7: NetAuthz was never
+		// assigned, so cedarStrictWorkflowMode could not deny a
+		// web_fetch/web_scrape step no matter how it was set. Same
+		// live-read mode resolver as workflowsAPI's CedarModeFn below —
+		// see workflowCedarModeFn's doc for why a boot snapshot is wrong
+		// here.
+		wfDeps.NetAuthz = &wfNetworkAuthorizerAdapter{gate: a.cedarGate(), modeFn: workflowCedarModeFn(settingsImpl)}
 		// audit-that-tells-the-truth-01PMZA10 UNIT-5: KindWorkflowNetworkFetch
 		// (core/context/audit/audit.go:108) had zero emit sites in the
 		// tree. Shape 1 (contextaudit.Emitter) — a SEPARATE field from
@@ -3970,9 +4040,10 @@ func (g *slashWorkflowsGateway) Run(ctx context.Context, id string, inputs map[s
 		return nil, errors.New("slashcmd: workflows surface unavailable")
 	}
 	res, err := g.inner.RunWithOptions(ctx, workflowsview.RunRequest{
-		ID:     id,
-		Inputs: inputs,
-		Inline: opts.Inline,
+		ID:        id,
+		Inputs:    inputs,
+		Inline:    opts.Inline,
+		SessionID: opts.SessionID,
 	})
 	if err != nil {
 		return nil, err
@@ -4681,6 +4752,13 @@ func newLLMStack(
 	// or a boot-time construction failure already logged by
 	// buildCedarEngineOrNil).
 	cedarEngine *cedar.Engine,
+	// taskReg is the process's background-task registry
+	// (subagent-control-and-background-tasks-01PMZB11 UNIT-3/UNIT-4),
+	// constructed early in New() (before this function is called) so
+	// RecoverOrphansWithPIDCheck can run before any new task registers.
+	// nil on the nil-core test chassis, same degrade every other
+	// optional dependency in this function follows.
+	taskReg *coretasks.Registry,
 ) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
@@ -4897,7 +4975,7 @@ func newLLMStack(
 	if exposureIdx != nil {
 		secretsBudget = credstoreRefs.NewBudget(credstoreRefs.DefaultBudget)
 	}
-	registerBuiltinTools(c, builtinRegistry, bashStore, artifactsMgr, settingsStore, bashCedarEngine, promptRegistry, elicitAPI, slashDispatch, exposureIdx, secretsBudget, postureManager)
+	registerBuiltinTools(c, builtinRegistry, bashStore, artifactsMgr, settingsStore, bashCedarEngine, promptRegistry, elicitAPI, slashDispatch, exposureIdx, secretsBudget, postureManager, taskReg)
 	// builtin-filesystem-tools-01KR3N4P: register the read/write family of
 	// in-process filesystem tools. Gated behind per-family settings dials
 	// (FSReadEnabled / FSWriteEnabled) so the Tools panel toggles take effect
@@ -6722,7 +6800,7 @@ func newCorpusManager(c *core.Core, embedder corememory.Embedder) *corecorpus.Ma
 // library and runs in-memory graphs; user-graph persistence is the
 // only feature lost when DataDir is empty.
 func newGraphManager(c *core.Core) *graphview.Manager {
-	mgr, _ := newGraphManagerWithDeps(c, nil, nil, nil, nil, nil, nil, nil, nil)
+	mgr, _ := newGraphManagerWithDeps(c, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	return mgr
 }
 
@@ -6927,6 +7005,13 @@ func newGraphManagerWithDeps(
 	// was read from three call sites, but nothing ever constructed the
 	// one implementation.
 	hookRunner *hooks.Runner,
+	// auditImpl is a.auditImpl — the Settings audit ring. Threaded here
+	// so Graph_ResolveApproval's resolution lands in the same audit
+	// surface every other gated RPC writes to
+	// (approval-node-01PMZC12 UNIT-3). nil is a valid boot state (see
+	// New()'s auditImpl construction failure path); wrapped nil-safely
+	// below.
+	auditImpl *audit.API,
 ) (*graphview.Manager, *compaction.Pipeline) {
 	dataDir := ""
 	if c != nil {
@@ -7126,6 +7211,7 @@ func newGraphManagerWithDeps(
 		graphview.WithAuthoringEnabled(func() bool {
 			return graphAuthoringEnabledFromSettings(settingsImpl)
 		}),
+		graphview.WithAuditEmitter(approvalAuditEmitter{impl: auditImpl}),
 	}
 
 	mgr, err := graphview.NewManager(mgrOpts...)
@@ -8347,6 +8433,39 @@ func (e confirmAuditEmitter) Emit(_ context.Context, ev contextaudit.Event) erro
 		Category:  "PERMISSION",
 		Subject:   string(ev.Kind),
 		Trailing:  fmt.Sprintf("payload_bytes=%d", len(ev.Payload)),
+	})
+	return nil
+}
+
+// approvalAuditEmitter implements contextaudit.Emitter for
+// KindApprovalResolved (approval-node-01PMZC12 UNIT-3/UNIT-4),
+// forwarding into the rpc/views/audit ring buffer like every other
+// gated-RPC emitter in this file.
+//
+// Unlike confirmAuditEmitter's byte-count-only Trailing, the payload
+// here (run id, node id, approved, auto, approver, reason) is already
+// the redaction-safe summary a graph author sees in the run trace, so
+// it is decoded and rendered directly rather than reduced to a size.
+type approvalAuditEmitter struct {
+	impl *audit.API
+}
+
+func (e approvalAuditEmitter) Emit(_ context.Context, ev contextaudit.Event) error {
+	if e.impl == nil {
+		return nil
+	}
+	trailing := fmt.Sprintf("payload_bytes=%d", len(ev.Payload))
+	var p contextaudit.ApprovalResolvedPayload
+	if err := json.Unmarshal(ev.Payload, &p); err == nil {
+		trailing = fmt.Sprintf("run=%s node=%s approved=%t auto=%t approver=%q reason=%q",
+			p.RunID, p.NodeID, p.Approved, p.Auto, p.Approver, p.Reason)
+	}
+	e.impl.Push(audit.Entry{
+		ID:        fmt.Sprintf("approval-resolved-%d", ev.TS.UnixNano()),
+		Timestamp: ev.TS.UTC().Format(time.RFC3339Nano),
+		Category:  "PERMISSION",
+		Subject:   string(ev.Kind),
+		Trailing:  trailing,
 	})
 	return nil
 }

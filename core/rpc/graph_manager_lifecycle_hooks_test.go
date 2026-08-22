@@ -66,7 +66,7 @@ func TestNewGraphManagerWithDeps_LifecycleHooksReachEnv(t *testing.T) {
 	// chassis) — every other dependency defaults exactly as
 	// newGraphManager()'s nil-Core path already does; only hookRunner is
 	// new.
-	mgr, _ := newGraphManagerWithDeps(nil, nil, nil, nil, nil, nil, nil, nil, runner)
+	mgr, _ := newGraphManagerWithDeps(nil, nil, nil, nil, nil, nil, nil, nil, runner, nil)
 	if mgr == nil {
 		t.Fatal("newGraphManagerWithDeps returned a nil Manager")
 	}
@@ -105,7 +105,7 @@ func TestNewGraphManagerWithDeps_LifecycleHooksReachEnv(t *testing.T) {
 func TestNewGraphManagerWithDeps_NilHookRunner_LifecycleHooksStaysNil(t *testing.T) {
 	t.Parallel()
 
-	mgr, _ := newGraphManagerWithDeps(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	mgr, _ := newGraphManagerWithDeps(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	if mgr == nil {
 		t.Fatal("newGraphManagerWithDeps returned a nil Manager")
 	}

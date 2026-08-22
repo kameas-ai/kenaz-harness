@@ -36,6 +36,13 @@ const inlineEventBuffer = 16
 // are all accepted. The dispatcher coerces them to TypedValue before
 // handing to the engine.
 //
+// parentSessionID, when non-empty, is threaded onto RunOptions and
+// surfaced to runners via RunContext.ParentSessionID — e.g. the /wf
+// slash gateway's slashcmd.Env.SessionID, so a single-step inline
+// write_artifact has somewhere to write to (automation-actually-runs-
+// 01PMZ404 UNIT-5). Empty is valid; write_artifact then falls back to
+// Deps.SessionID and fails loudly if that is also empty.
+//
 // Validation:
 //   - w must satisfy Validate (this is also what Engine.Run runs).
 //   - w.InlineRun must be true.
@@ -47,7 +54,7 @@ const inlineEventBuffer = 16
 // Errors returned synchronously cover validation failures; runtime
 // errors surface on the channel as ProgressEvent{Status: "failed"}
 // before the channel closes.
-func InlineRun(ctx context.Context, e *Engine, w Workflow, inputs map[string]any) (<-chan ProgressEvent, error) {
+func InlineRun(ctx context.Context, e *Engine, w Workflow, inputs map[string]any, parentSessionID string) (<-chan ProgressEvent, error) {
 	if !w.InlineRun {
 		return nil, fmt.Errorf("workflows: inline dispatch requires inline_run:true on %q", w.ID)
 	}
@@ -67,6 +74,7 @@ func InlineRun(ctx context.Context, e *Engine, w Workflow, inputs map[string]any
 	go func() {
 		defer close(out)
 		opts := RunOptions{
+			ParentSessionID: parentSessionID,
 			ProgressSink: func(ev ProgressEvent) {
 				ev.Inline = true
 				select {

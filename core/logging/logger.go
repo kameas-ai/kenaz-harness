@@ -15,12 +15,24 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"testing"
 	"time"
 )
 
 const (
 	defaultDir  = ".kenaz"
 	defaultFile = "harness.log"
+
+	// maxLogBytes is the size at which the live log is rotated to
+	// harness.log.1 (one generation, previous backup discarded).
+	//
+	// There was no cap at all until 2026-08-21. The developer log on the
+	// machine this was found on had reached 669 MB and was still growing
+	// — roughly 16 MB per test session, because every `go test` that
+	// opened a real sqlite database logged into it (see initLogger's
+	// go-test branch below). Unbounded growth and the missing sandbox
+	// were two separate defects that happened to compound.
+	maxLogBytes = 32 << 20
 )
 
 var (
@@ -62,7 +74,31 @@ func L() *slog.Logger {
 
 func initLogger() {
 	dir := configuredDir
-	if dir == "" {
+	switch {
+	case dir != "":
+		// main calls Configure(paths.LogDir), so a real app run lands in
+		// the per-env directory.
+	case testing.Testing():
+		// Under `go test` NOTHING calls Configure, so the home fallback
+		// below used to apply: every test that opened a real sqlite
+		// database appended to the developer's live ~/.kenaz/harness.log,
+		// regardless of t.TempDir sandboxing elsewhere. Confirmed by
+		// finding storage.opened lines in it whose paths were
+		// /var/folders/.../TestSearch_* — sandboxed databases logging to
+		// an unsandboxed sink. check-tests-are-hermetic.sh explicitly
+		// CARVED OUT this write, so it was known and unowned rather than
+		// undetected.
+		//
+		// A test that wants to read its own log output can still call
+		// Configure(t.TempDir()) before the first L(); this branch only
+		// changes where the DEFAULT goes.
+		d, err := os.MkdirTemp("", "kenaz-logging-test-")
+		if err != nil {
+			fallback("test temp dir: " + err.Error())
+			return
+		}
+		dir = d
+	default:
 		home, err := os.UserHomeDir()
 		if err != nil {
 			fallback("home dir: " + err.Error())
@@ -75,6 +111,7 @@ func initLogger() {
 		return
 	}
 	path := filepath.Join(dir, defaultFile)
+	rotateIfLarge(path)
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		fallback("open " + path + ": " + err.Error())
@@ -208,4 +245,21 @@ func JSON(v any) string {
 		return fmt.Sprintf("<json:%v>", err)
 	}
 	return string(b)
+}
+
+// rotateIfLarge renames path to path+".1" when it has grown past
+// maxLogBytes, discarding any previous backup. Called once, at open.
+//
+// One generation on purpose: the point is a bounded ceiling, not an
+// archive. Checking only at open means a single very long-running
+// process can still exceed the cap between restarts — acceptable for a
+// desktop app, and cheaper than a size check on every write. Any error
+// is ignored: failing to rotate must never prevent logging.
+func rotateIfLarge(path string) {
+	fi, err := os.Stat(path)
+	if err != nil || fi.Size() < maxLogBytes {
+		return
+	}
+	_ = os.Remove(path + ".1")
+	_ = os.Rename(path, path+".1")
 }

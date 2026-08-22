@@ -142,6 +142,16 @@ jobs:
         # touching this script; a naive Go-only version over-reports 3x.
         run: bash scripts/ci/check-output-ports.sh
 
+      - name: declared-output-ports guard
+        # The reverse direction of the guard above: every manifest-
+        # declared output port on a concrete node kind must have a Go
+        # writer, or an allowlist entry
+        # (scripts/ci/allowlists/i16-declared-unwritten-output-ports.txt).
+        # approval-node-01PMZC12 UNIT-9 — the gate-extension obligation
+        # for approval.yaml's `rejected` port, which had a declared type
+        # and no writer until UNIT-4 (docs/dead-code-audit-2026-08-18.md:775).
+        run: bash scripts/ci/check-declared-output-ports.sh
+
       - name: seam-implementers guard
         # Every interface in core/agentgraph/seams.go has >=1 non-test
         # implementer or a //wiring:deferred directive. Uses the Go type
@@ -277,6 +287,18 @@ jobs:
         # no matching binding). Gates by default now — SERVE_DRIFT_GATE=0
         # reverts to informational-only.
         run: bash scripts/ci/check-serve-dispatch-drift.sh
+
+      - name: serve-gap classification coverage (WP07, AC-717)
+        # served-mode-is-a-real-mode-01PMZ707 WP07: every entry in
+        # scripts/ci/allowlists/i15-serve-dispatch-gap.txt must sit under one
+        # of spec.md §5.7's five classes (gated / boundary-panelled /
+        # unrouted / desktop-only-by-nature / untriaged), and every
+        # untriaged entry must be dated and name an owner. The drift gate
+        # above only checks that an entry EXISTS in the allowlist — it has
+        # never known or cared about classification, so this closes the gap
+        # AC-717 names: a taxonomy nothing enforces is the same failure as
+        # the gate that used to always exit 0.
+        run: bash scripts/ci/check-serve-gap-classification.sh
 
       - name: agentgraph-convergence guard (I3/I6/I7)
         # kitty-specs/agentgraph-total-convergence-01PMGX01 WP01. Every
@@ -441,6 +463,31 @@ jobs:
         # "fts-sync/external-content-table-no-delete-sync".
         run: bash scripts/ci/check-fts-sync.sh
 
+      - name: bundle-verify-ordering guard (G-1)
+        # bundle-download-and-verify-01PMZ909 UNIT-9, spec §2 / §7 G-1.
+        # Fails if core/rpc/views/bundle/impl.go calls
+        # VerifyManifestSignatures while core/trust/bundleadapter.go
+        # still builds the envelope with `Signature: nil,` (UNIT-2) or
+        # core/trust/trust.go's Config has no AnchorStore-typed field
+        # (UNIT-3) — the one ordering mistake that ships an install path
+        # refusing every valid bundle, or falsely accusing every
+        # correctly-signed one of a missing anchor. Planted-violation
+        # proof: scripts/ci/gates_can_fail_test.go
+        # TestBundleVerifyOrderingGate_PlantedNilSignatureFires.
+        run: bash scripts/ci/check-bundle-verify-ordering.sh
+
+      - name: bundle-channel-kinds-sync guard
+        # bundle-download-and-verify-01PMZ909 UNIT-8. BundlesView.vue's
+        # channel picker hardcodes CHANNEL_KINDS (no
+        # Bundle_ListChannelKinds RPC exists — adding one needs a
+        # frontend/wailsjs/** regen this campaign deliberately does not
+        # run). Fails if that hardcoded list and the backend's
+        # registered core/bundle/channels/*/ packages (one `const Kind
+        # = "..."` each) are not IDENTICAL sets, in either direction.
+        # Planted-violation proof: scripts/ci/gates_can_fail_test.go
+        # TestBundleChannelKindsSyncGate_PlantedDriftFires.
+        run: bash scripts/ci/check-bundle-channel-kinds-sync.sh
+
       # csp guard runs in test-frontend after `npm run build` produces
       # the real frontend/dist/index.html — there's no point checking
       # the CSP of a stub.
@@ -514,7 +561,7 @@ jobs:
         # check scripts and mutate a scratch tree, so they must not run
         # concurrently with the -race suite (a build racing a mutation
         # poisons the Go build cache under the clean content hash).
-        run: go test ./scripts/... -count=1
+        run: go test ./scripts/... -count=1 -timeout 25m
 
   wire-golden-locked:
     name: Wire golden tests (locked tier)

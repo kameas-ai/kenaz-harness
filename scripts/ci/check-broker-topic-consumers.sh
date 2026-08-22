@@ -168,6 +168,7 @@ FRONTEND_WINDOW=$(grep -A3 -E '(useEventStream|EventsOn|onServedEvent)(<[^>]*>)?
     exit 1
   fi
 }
+FRONTEND_WINDOW=$(grep -A3 -E '(useEventStream|EventsOn|onServedEvent)(<[^>]*>)?\(' "${FRONTEND_FILES[@]}" 2>/dev/null || true)
 
 # --- Precompute pass 2 (Go): same idea, over every non-test *.go file
 # in the repo (main.go at the root is the primary Go consumer of this

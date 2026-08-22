@@ -119,6 +119,18 @@ func WithAgenticTurnRouting(enabled func() bool) ManagerOption {
 // process-shared engine deps.Policy already uses; I13 clause 4
 // (check-cedar-gate-arguments.sh, UNIT-8(b)) is the CI gate that keeps
 // that argument from silently going missing.
+// It also supplies the gate for graph.run and for approval.resolve
+// (approval-node-01PMZC12 UNIT-3). ZC12 originally shipped a SECOND
+// option, WithCedarGate, writing the SAME m.cedarGate field; production
+// passed both, with the same value, in one mgrOpts slice. Harmless until
+// the two ever diverged, at which point it would have been silent
+// last-write-wins.
+//
+// That duplication also cost a real test: a deny-everything fake set
+// through one option denied graph.run as well, so ZC12's
+// approval-deny test failed before the approval node ever fired, for a
+// reason unrelated to approvals. Collapsed to one option after the
+// independent review of PR #306 (finding N3).
 func WithGraphCedarGate(g cedar.Gate) ManagerOption {
 	return func(m *Manager) { m.cedarGate = g }
 }

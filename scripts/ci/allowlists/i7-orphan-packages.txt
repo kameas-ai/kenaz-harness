@@ -90,6 +90,5 @@ core/storage/sqlite/upgradesnap
 #     Owner: release owner. Clears if the chain is ever rebootstrapped
 #     from a tag that already contains the generator.
 core/system/resources
-core/tools/monitor
 core/trust/backends/software
 core/workflows/builtin

@@ -52,6 +52,18 @@ type Dispatcher interface {
 	Dispatch(ctx context.Context, workflowID string, scheduled bool) (string, error)
 }
 
+// DispatcherFunc is a lazily-resolved Dispatcher provider. Config prefers
+// this over a plain Dispatcher field for the production wiring case: the
+// chassis constructs CronScheduler before the workflowsview.API it needs
+// to dispatch through exists (construction-order — see
+// automation-actually-runs-01PMZ404 UNIT-2), so the caller supplies a
+// closure that resolves the live Dispatcher per fire, once the rest of
+// the chassis has finished booting, instead of a field that would need a
+// mutex to be mutated safely after New() returns (fireSync runs on the
+// cron goroutine). CronScheduler never mutates DispatcherFunc after
+// construction, so no lock is needed to read it.
+type DispatcherFunc func() Dispatcher
+
 // Scheduler is the cron-scheduler surface.
 //
 // All methods are safe for concurrent use.

@@ -23,6 +23,7 @@ import (
 	storagedb "github.com/kameas-ai/kenaz-harness/core/storage/db"
 	"github.com/kameas-ai/kenaz-harness/core/storage/internal/lockfile"
 	"github.com/kameas-ai/kenaz-harness/core/storage/migrations"
+	coretasks "github.com/kameas-ai/kenaz-harness/core/tasks"
 	coretrust "github.com/kameas-ai/kenaz-harness/core/trust"
 	"github.com/kameas-ai/kenaz-harness/core/units"
 
@@ -136,6 +137,17 @@ func Open(cfg storage.Config) (storage.DB, error) {
 	if err := units.RegisterMigrations(registry); err != nil {
 		db.closeOnError()
 		return nil, fmt.Errorf("storage: register units migrations: %w", err)
+	}
+	// tasks: subagent-control-and-background-tasks-01PMZB11 UNIT-2. The
+	// tasks table backs core/tasks.Registry's persistence store
+	// (core/rpc/api.go constructs coretasks.NewSQLiteStore(rawDB) against
+	// it). Registering here is what makes the table exist on every
+	// install, including upgraded ones whose migration ledger high-water
+	// mark already sits well above the 1200-1299 block — see
+	// core/storage/sqlite/upgrade_path_test.go.
+	if err := coretasks.RegisterMigrations(registry); err != nil {
+		db.closeOnError()
+		return nil, fmt.Errorf("storage: register tasks migrations: %w", err)
 	}
 	if err := coretrust.RegisterMigrations(registry); err != nil {
 		db.closeOnError()

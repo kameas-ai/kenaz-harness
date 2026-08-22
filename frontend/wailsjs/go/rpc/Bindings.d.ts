@@ -328,6 +328,8 @@ export function Graph_LoadGraph(arg1:string):Promise<agentgraph.GraphSpec>;
 
 export function Graph_MaterializeRun(arg1:string):Promise<agentgraph.GraphSpec>;
 
+export function Graph_ResolveApproval(arg1:string,arg2:string,arg3:boolean,arg4:string):Promise<void>;
+
 export function Graph_Resume(arg1:string,arg2:string):Promise<void>;
 
 export function Graph_SaveGraph(arg1:agentgraph.GraphSpec):Promise<void>;

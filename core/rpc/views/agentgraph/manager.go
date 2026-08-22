@@ -19,6 +19,7 @@ import (
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph/activities"
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph/prompts"
+	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
 	"github.com/kameas-ai/kenaz-harness/core/elicitation"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
@@ -53,6 +54,17 @@ type Manager struct {
 	// default-allow (the correct library default; production wiring
 	// must pass a real gate — see check-cedar-gate-arguments.sh clause
 	// 4, UNIT-8(b)).
+	//
+	// The same gate also covers Graph_ResolveApproval
+	// (approval-node-01PMZC12 UNIT-3) — one engine, three actions.
+	// Merged here at integration: both missions declared their own
+	// `cedarGate` field independently and the duplicate would not
+	// compile. Note the asymmetry ZC12 documents and that survives the
+	// merge: the approval gate covers ONLY the human-verb path. The
+	// no-watcher and auto-approve-window timeouts resolve WITHOUT
+	// consulting it, so a Cedar misconfiguration cannot leave a run
+	// parked forever when the system itself decided to fail closed
+	// (approval-node-01PMZC12 spec.md §5.3).
 	cedarGate cedar.Gate
 
 	// authoringEnabled reports the FR-006 consent dial, read live from
@@ -80,7 +92,30 @@ type Manager struct {
 
 	// nowFn allows tests to pin timestamps.
 	nowFn func() time.Time
+
+	// auditEmitter records KindApprovalResolved to the Settings audit
+	// panel. nil ⇒ no-op (contextaudit.Emit is nil-safe against a nil
+	// Emitter only if the caller checks; this Manager checks before
+	// calling).
+	auditEmitter contextaudit.Emitter
+
+	// approvalTimeout bounds how long an approval node may sit
+	// unresolved before the no-watcher fail-closed posture resolves it
+	// to rejected (approval-node-01PMZC12 UNIT-4, FR-006, G5). A
+	// positive auto_approve_window_seconds on the node overrides this
+	// per-node with a shorter auto-APPROVE deadline (UNIT-5, FR-007).
+	// Zero disables the fallback entirely — test-only; production
+	// always sets defaultApprovalTimeout via NewManager.
+	approvalTimeout time.Duration
 }
+
+// defaultApprovalTimeout is the production no-watcher fail-closed
+// deadline: how long an approval node may sit unresolved, with no
+// auto_approve_window_seconds override, before the run resolves itself
+// to rejected rather than parking forever (spec.md G5). Generous on
+// purpose — this is the backstop for a run genuinely nobody is
+// watching, not a UX timeout for an attended one.
+const defaultApprovalTimeout = 24 * time.Hour
 
 // maxTrackedExternalRuns bounds the chat-run spec registry (WP12). Big
 // enough that "show me the graph of the turn I just ran" always works
@@ -122,6 +157,22 @@ func WithClock(now func() time.Time) ManagerOption {
 	return func(m *Manager) { m.nowFn = now }
 }
 
+// WithAuditEmitter records approval resolutions to the Settings audit
+// panel (approval-node-01PMZC12 UNIT-3). nil is equivalent to omitting
+// the option.
+func WithAuditEmitter(e contextaudit.Emitter) ManagerOption {
+	return func(m *Manager) { m.auditEmitter = e }
+}
+
+// WithApprovalTimeout overrides the no-watcher fail-closed deadline
+// (approval-node-01PMZC12 UNIT-4). Tests use a short duration so AC-05
+// resolves within a bounded test budget instead of
+// defaultApprovalTimeout's 24h; production wiring does not call this
+// and gets the default.
+func WithApprovalTimeout(d time.Duration) ManagerOption {
+	return func(m *Manager) { m.approvalTimeout = d }
+}
+
 // bundledGraph carries the parsed Graph alongside its YAML source so
 // LoadGraph can return both the typed metadata + the editable text.
 type bundledGraph struct {
@@ -147,16 +198,29 @@ type runEntry struct {
 
 	// pendingAsk is set when an AskNode parks the run.
 	pendingAsk *PendingAsk
+
+	// pendingApproval is set when an approval node parks the run.
+	// Mutually exclusive with pendingAsk — the kernel parks on at most
+	// one node per pause cycle (approval-node-01PMZC12 UNIT-3).
+	pendingApproval *PendingApproval
+
+	// approvalTimer fires the no-watcher fail-closed resolution (or the
+	// auto_approve_window_seconds auto-approve) if nobody resolves
+	// pendingApproval first. Stopped and cleared on any resolution or
+	// on cancelRun so it never fires against a run that already moved
+	// on (approval-node-01PMZC12 UNIT-4).
+	approvalTimer *time.Timer
 }
 
 // NewManager constructs a Manager populated with the bundled library
 // (toolloop_default.yaml) plus the bundled activity catalog.
 func NewManager(opts ...ManagerOption) (*Manager, error) {
 	m := &Manager{
-		bundled: map[string]bundledGraph{},
-		runs:    map[string]*runEntry{},
-		asks:    newAskRouter(),
-		nowFn:   func() time.Time { return time.Now().UTC() },
+		bundled:         map[string]bundledGraph{},
+		runs:            map[string]*runEntry{},
+		asks:            newAskRouter(),
+		nowFn:           func() time.Time { return time.Now().UTC() },
+		approvalTimeout: defaultApprovalTimeout,
 	}
 	for _, o := range opts {
 		o(m)
@@ -456,19 +520,65 @@ func (m *Manager) saveGraph(ctx context.Context, spec GraphSpec, initiator strin
 	// "already exists" from "forbid policy matched" and enumerate the
 	// library. A user save is unaffected — the editor overwrites by
 	// design.
-	if initiator != "user" {
-		if _, statErr := os.Stat(full); statErr == nil {
-			return &GraphExistsError{ID: spec.ID}
-		} else if !errors.Is(statErr, fs.ErrNotExist) {
-			return fmt.Errorf("agentgraph: stat %q: %w", spec.ID, statErr)
-		}
-	}
 	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // application data dir
 		return fmt.Errorf("agentgraph: mkdir: %w", err)
 	}
-	tmp := full + ".tmp"
-	if err := os.WriteFile(tmp, payload, 0o644); err != nil { //nolint:gosec // user data
-		return fmt.Errorf("agentgraph: write: %w", err)
+
+	// A non-user save is create-only, and the check IS the write.
+	//
+	// The first repair of this (PR #304 F1) was os.Stat followed by the
+	// shared rename path. That fixed the semantics — existence stopped
+	// meaning "does it parse" — but left a stat-then-rename window:
+	// two concurrent drafts for the same id both pass the stat, both
+	// write the SAME tmp path, and both rename. One silently loses, and
+	// interleaved writes to the shared tmp name can land a spliced
+	// file. Found by the same review, second round (N2).
+	//
+	// O_CREATE|O_EXCL makes the existence check and the claim on the
+	// path one syscall, so there is no window to lose. A create-only
+	// write also does not need the tmp-then-rename dance: the file did
+	// not exist a moment ago, so a crash mid-write leaves a partial NEW
+	// file rather than a destroyed existing one — strictly better than
+	// what a rename can promise here.
+	if initiator != "user" {
+		f, oerr := os.OpenFile(full, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644) //nolint:gosec // user data
+		if oerr != nil {
+			if errors.Is(oerr, fs.ErrExist) {
+				return &GraphExistsError{ID: spec.ID}
+			}
+			return fmt.Errorf("agentgraph: create %q: %w", spec.ID, oerr)
+		}
+		if _, werr := f.Write(payload); werr != nil {
+			_ = f.Close()
+			_ = os.Remove(full)
+			return fmt.Errorf("agentgraph: write: %w", werr)
+		}
+		if cerr := f.Close(); cerr != nil {
+			_ = os.Remove(full)
+			return fmt.Errorf("agentgraph: close: %w", cerr)
+		}
+		return nil
+	}
+
+	// A user save overwrites by design (the editor), so it keeps the
+	// tmp-then-rename atomic replace. The tmp name is unique per call:
+	// the old shared `full + ".tmp"` meant two concurrent editor saves
+	// of the same graph wrote the same scratch path.
+	tmpf, terr := os.CreateTemp(dir, filepath.Base(full)+".tmp*")
+	if terr != nil {
+		return fmt.Errorf("agentgraph: create temp: %w", terr)
+	}
+	tmp := tmpf.Name()
+	defer func() { _ = os.Remove(tmp) }() // no-op once the rename succeeds
+	if _, werr := tmpf.Write(payload); werr != nil {
+		_ = tmpf.Close()
+		return fmt.Errorf("agentgraph: write: %w", werr)
+	}
+	if cerr := tmpf.Close(); cerr != nil {
+		return fmt.Errorf("agentgraph: close temp: %w", cerr)
+	}
+	if err := os.Chmod(tmp, 0o644); err != nil { //nolint:gosec // user data
+		return fmt.Errorf("agentgraph: chmod temp: %w", err)
 	}
 	return os.Rename(tmp, full)
 }
@@ -653,17 +763,21 @@ func (m *Manager) startRun(ctx context.Context, req StartRunRequest) (StartRunRe
 }
 
 // runWorker is the goroutine that calls Kernel.Run. On Pause it surfaces
-// the AskNode pending question; on completion it records counters.
+// the pending ask or approval; on completion it records counters.
 func (m *Manager) runWorker(ctx context.Context, entry *runEntry) {
 	err := m.kernel.Run(ctx, entry.env)
 	entry.mu.Lock()
 	entry.endedAt = m.nowFn()
 	entry.updatedAt = entry.endedAt
+	var startApprovalTimeout bool
 	switch {
 	case errors.Is(err, coreag.ErrPaused):
 		entry.state = RunStatePaused
-		// Find the pending ask, if any.
-		entry.pendingAsk = m.asks.snapshot(entry.id, entry.env.Graph)
+		// Find the pending decision, if any (approval-node-01PMZC12
+		// UNIT-3: ask and approval are mutually exclusive, discriminated
+		// by the paused node's kind).
+		entry.pendingAsk, entry.pendingApproval = m.asks.snapshotDecision(entry.id, entry.env.Graph)
+		startApprovalTimeout = entry.pendingApproval != nil
 	case err == nil:
 		entry.state = RunStateCompleted
 	default:
@@ -671,6 +785,9 @@ func (m *Manager) runWorker(ctx context.Context, entry *runEntry) {
 		entry.err = err
 	}
 	entry.mu.Unlock()
+	if startApprovalTimeout {
+		m.scheduleApprovalTimeout(entry)
+	}
 }
 
 // resumeRun records the user's ask response + restarts the kernel.
@@ -685,6 +802,10 @@ func (m *Manager) resumeRun(runID, response string) error {
 	if entry.state != RunStatePaused {
 		entry.mu.Unlock()
 		return fmt.Errorf("agentgraph: run %q not paused (state=%s)", runID, entry.state)
+	}
+	if entry.pendingApproval != nil {
+		entry.mu.Unlock()
+		return fmt.Errorf("agentgraph: run %q has a pending approval, not an ask; use Graph_ResolveApproval", runID)
 	}
 	if entry.pendingAsk == nil {
 		entry.mu.Unlock()
@@ -718,10 +839,12 @@ func (m *Manager) resumeWorker(ctx context.Context, entry *runEntry) {
 	entry.mu.Lock()
 	entry.endedAt = m.nowFn()
 	entry.updatedAt = entry.endedAt
+	var startApprovalTimeout bool
 	switch {
 	case errors.Is(err, coreag.ErrPaused):
 		entry.state = RunStatePaused
-		entry.pendingAsk = m.asks.snapshot(entry.id, entry.env.Graph)
+		entry.pendingAsk, entry.pendingApproval = m.asks.snapshotDecision(entry.id, entry.env.Graph)
+		startApprovalTimeout = entry.pendingApproval != nil
 	case err == nil:
 		entry.state = RunStateCompleted
 	default:
@@ -729,6 +852,196 @@ func (m *Manager) resumeWorker(ctx context.Context, entry *runEntry) {
 		entry.err = err
 	}
 	entry.mu.Unlock()
+	if startApprovalTimeout {
+		m.scheduleApprovalTimeout(entry)
+	}
+}
+
+// scheduleApprovalTimeout arms the no-watcher fail-closed / auto-
+// approve-window timer for entry's CURRENT pendingApproval
+// (approval-node-01PMZC12 UNIT-4/UNIT-5). Must be called with
+// entry.mu NOT held — it takes the lock itself, both to read the
+// pending decision and again to install the timer.
+//
+// A positive auto_approve_window_seconds on the paused node overrides
+// the deadline with a SHORTER auto-APPROVE window (UNIT-5, FR-007);
+// otherwise the run falls back to m.approvalTimeout, which auto-
+// REJECTS as the no-watcher safety property (UNIT-4, FR-006, G5).
+// m.approvalTimeout == 0 disables the fallback (test-only escape
+// hatch for isolating the auto_approve_window_seconds=0 "parks
+// indefinitely" acceptance criterion, AC-06, from the no-watcher axis).
+func (m *Manager) scheduleApprovalTimeout(entry *runEntry) {
+	entry.mu.Lock()
+	pa := entry.pendingApproval
+	if pa == nil {
+		entry.mu.Unlock()
+		return
+	}
+	nodeID := pa.NodeID
+	graph := entry.env.Graph
+	entry.mu.Unlock()
+
+	var windowSeconds int
+	if graph != nil {
+		for i := range graph.Nodes {
+			if graph.Nodes[i].ID != nodeID {
+				continue
+			}
+			if a, ok := graph.Nodes[i].Attrs.(coreag.ApprovalAttrs); ok {
+				windowSeconds = a.AutoApproveWindowSeconds
+			}
+			break
+		}
+	}
+
+	var (
+		d       time.Duration
+		verdict coreag.ApprovalVerdict
+	)
+	if windowSeconds > 0 {
+		d = time.Duration(windowSeconds) * time.Second
+		verdict = coreag.ApprovalVerdict{
+			Approved: true,
+			Auto:     true,
+			Reason:   fmt.Sprintf("auto-approved after %ds window elapsed", windowSeconds),
+		}
+	} else {
+		if m.approvalTimeout <= 0 {
+			return
+		}
+		d = m.approvalTimeout
+		verdict = coreag.ApprovalVerdict{
+			Approved: false,
+			Auto:     true,
+			Reason:   fmt.Sprintf("no watcher: approval timed out after %s without a human resolution", d),
+		}
+	}
+
+	runID := entry.id
+	timer := time.AfterFunc(d, func() { m.timeoutApproval(runID, nodeID, verdict) })
+
+	entry.mu.Lock()
+	// Only arm if the same approval is still pending — a resolution
+	// that landed between the unlock above and here would otherwise
+	// leak a timer racing a decision that already happened.
+	if entry.pendingApproval != nil && entry.pendingApproval.NodeID == nodeID {
+		entry.approvalTimer = timer
+	} else {
+		timer.Stop()
+	}
+	entry.mu.Unlock()
+}
+
+// applyApprovalVerdict is the core state mutation for resolving a
+// pending approval: injects the verdict onto AskBus, clears the
+// pending decision + timer, flips the run back to running, and
+// restarts the kernel. Shared by the human resolve-verb path
+// (resolveApproval, Cedar-gated) and the no-watcher / auto-approve-
+// window timeout path (timeoutApproval, which bypasses the gate —
+// spec.md §5.3: a Cedar misconfiguration must not be able to block the
+// system's own fail-closed backstop).
+func (m *Manager) applyApprovalVerdict(runID, nodeID string, verdict coreag.ApprovalVerdict) error {
+	m.mu.RLock()
+	entry, ok := m.runs[runID]
+	m.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("agentgraph: run %q not found", runID)
+	}
+	entry.mu.Lock()
+	if entry.state != RunStatePaused {
+		entry.mu.Unlock()
+		return fmt.Errorf("agentgraph: run %q not paused (state=%s)", runID, entry.state)
+	}
+	if entry.pendingAsk != nil {
+		entry.mu.Unlock()
+		return fmt.Errorf("agentgraph: run %q has a pending ask, not an approval; use Graph_Resume", runID)
+	}
+	if entry.pendingApproval == nil {
+		entry.mu.Unlock()
+		return fmt.Errorf("agentgraph: run %q has no pending approval", runID)
+	}
+	if entry.pendingApproval.NodeID != nodeID {
+		entry.mu.Unlock()
+		return fmt.Errorf("agentgraph: run %q pending approval is node %q, not %q", runID, entry.pendingApproval.NodeID, nodeID)
+	}
+	entry.pendingApproval = nil
+	if entry.approvalTimer != nil {
+		entry.approvalTimer.Stop()
+		entry.approvalTimer = nil
+	}
+	entry.state = RunStateRunning
+	entry.updatedAt = m.nowFn()
+	entry.mu.Unlock()
+
+	ans, err := coreag.EncodeApprovalAnswer(verdict)
+	if err != nil {
+		return err
+	}
+	if err := m.asks.resolveApproval(runID, nodeID, ans); err != nil {
+		return err
+	}
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	entry.mu.Lock()
+	entry.cancel = cancel
+	entry.mu.Unlock()
+	go m.resumeWorker(runCtx, entry)
+	return nil
+}
+
+// resolveApproval is the human-verb entry point behind
+// Graph_ResolveApproval (approval-node-01PMZC12 UNIT-3, FR-003). The
+// Cedar gate + audit emission bracket the mutation on the ALLOW side
+// only: the gate is checked before anything changes (so a Deny is never
+// observed as "already applied"), and the audit record is emitted only
+// once the mutation actually landed.
+func (m *Manager) resolveApproval(ctx context.Context, runID, nodeID string, approved bool, reason string) error {
+	if err := cedar.CheckApprovalResolve(ctx, m.cedarGate, runID, nodeID, approved); err != nil {
+		return err
+	}
+	verdict := coreag.ApprovalVerdict{
+		Approved: approved,
+		Reason:   reason,
+		Auto:     false,
+		Approver: "user",
+	}
+	if err := m.applyApprovalVerdict(runID, nodeID, verdict); err != nil {
+		return err
+	}
+	m.auditApprovalResolved(ctx, runID, nodeID, verdict)
+	return nil
+}
+
+// timeoutApproval is the no-watcher / auto-approve-window timer
+// callback (approval-node-01PMZC12 UNIT-4/UNIT-5). Deliberately
+// bypasses cedar.CheckApprovalResolve — see applyApprovalVerdict's doc
+// comment — but is still audited.
+func (m *Manager) timeoutApproval(runID, nodeID string, verdict coreag.ApprovalVerdict) {
+	if err := m.applyApprovalVerdict(runID, nodeID, verdict); err != nil {
+		// A human beat the timer, or the run moved on for some other
+		// reason (cancelled, process state gone) — a lost race, not a
+		// failure. Nothing landed, so nothing to audit.
+		return
+	}
+	m.auditApprovalResolved(context.Background(), runID, nodeID, verdict)
+}
+
+// auditApprovalResolved emits audit.KindApprovalResolved. Best-effort:
+// called only after applyApprovalVerdict already succeeded, so a
+// broken emitter can drop the audit trail but never un-resolve a
+// verdict that already landed.
+func (m *Manager) auditApprovalResolved(ctx context.Context, runID, nodeID string, verdict coreag.ApprovalVerdict) {
+	if m.auditEmitter == nil {
+		return
+	}
+	_ = contextaudit.Emit(ctx, m.auditEmitter, contextaudit.KindApprovalResolved, contextaudit.ApprovalResolvedPayload{
+		RunID:    runID,
+		NodeID:   nodeID,
+		Approved: verdict.Approved,
+		Auto:     verdict.Auto,
+		Approver: verdict.Approver,
+		Reason:   verdict.Reason,
+	}, m.nowFn())
 }
 
 // cancelRun signals a running run to stop.
@@ -743,6 +1056,10 @@ func (m *Manager) cancelRun(runID string) error {
 	defer entry.mu.Unlock()
 	if entry.cancel != nil {
 		entry.cancel()
+	}
+	if entry.approvalTimer != nil {
+		entry.approvalTimer.Stop()
+		entry.approvalTimer = nil
 	}
 	if entry.state == RunStateRunning || entry.state == RunStatePaused {
 		entry.state = RunStateFailed
@@ -795,6 +1112,10 @@ func (m *Manager) snapshotStatus(entry *runEntry) RunStatus {
 		// Defensive copy to avoid the caller mutating shared state.
 		copy := *entry.pendingAsk
 		out.PendingAsk = &copy
+	}
+	if entry.pendingApproval != nil {
+		copy := *entry.pendingApproval
+		out.PendingApproval = &copy
 	}
 	return out
 }
@@ -1006,28 +1327,79 @@ func (r *askRouter) answer(runID, nodeID, ans string) {
 	r.bus(runID).answer(nodeID, ans)
 }
 
-// snapshot returns a PendingAsk that corresponds to the run's first
-// pending question (the kernel currently parks on at most one Ask per
-// pause cycle). Returns nil if no question is pending.
-func (r *askRouter) snapshot(runID string, _ *coreag.Graph) *PendingAsk {
+// resolveApproval injects a structured verdict answer for nodeID
+// (approval-node-01PMZC12 UNIT-3/UNIT-4). Mirrors answer() above but
+// carries a full elicitation.Answer (JSON-typed Value) rather than
+// plain text — a verdict needs more than a string (ApprovalVerdict's
+// approved/reason/auto/approver fields).
+func (r *askRouter) resolveApproval(runID, nodeID string, ans elicitation.Answer) error {
+	id := elicitation.NodeAskID(runID, nodeID)
+	if _, ok := r.registry.Get(id); !ok {
+		if _, err := r.registry.Register(elicitation.Request{
+			ID:     id,
+			RunID:  runID,
+			NodeID: nodeID,
+		}); err != nil {
+			return err
+		}
+	}
+	return r.registry.Resolve(id, ans)
+}
+
+// snapshotDecision returns the run's pending decision as EXACTLY ONE of
+// a *PendingAsk or a *PendingApproval — never both (the kernel parks on
+// at most one node per pause cycle). Returns nil, nil if nothing is
+// pending.
+//
+// The kind discriminator is the paused node's Kind in graph, not
+// anything stored in the elicitation registry itself — a plain
+// elicitation.KindRadio question is not proof of an approval node (a
+// user-authored `ask` node can ask a two-option radio question too),
+// so kind is read from the graph the run actually executed
+// (approval-node-01PMZC12 UNIT-3, spec.md §5.2). graph == nil, or a
+// lookup miss, falls back to treating the pause as an ask — the
+// pre-UNIT-3 behaviour — rather than guessing.
+func (r *askRouter) snapshotDecision(runID string, graph *coreag.Graph) (*PendingAsk, *PendingApproval) {
 	pending := r.registry.ListPending(elicitation.Filter{RunID: runID})
 	if len(pending) == 0 {
-		return nil
+		return nil, nil
 	}
 	// Deterministic pick: map iteration inside ListPending is random and
-	// a run with two parked asks must not flip which one the UI shows.
+	// a run with two parked decisions must not flip which one the UI
+	// shows.
 	first := pending[0]
 	for _, e := range pending[1:] {
 		if e.NodeID < first.NodeID {
 			first = e
 		}
 	}
+
+	if graph != nil {
+		for i := range graph.Nodes {
+			n := &graph.Nodes[i]
+			if n.ID != first.NodeID {
+				continue
+			}
+			if n.Kind != coreag.NodeKindApproval {
+				break
+			}
+			a, ok := n.Attrs.(coreag.ApprovalAttrs)
+			out := &PendingApproval{NodeID: first.NodeID, Prompt: first.Question.Text}
+			if ok && a.ApproverRole != "" {
+				out.ApproverRole = a.ApproverRole
+			} else {
+				out.ApproverRole = "user"
+			}
+			return nil, out
+		}
+	}
+
 	out := &PendingAsk{NodeID: first.NodeID, Question: first.Question.Text}
 	if first.Question.Kind != elicitation.KindFreeform {
 		out.Kind = string(first.Question.Kind)
 		out.Spec = &first.Question
 	}
-	return out
+	return out, nil
 }
 
 // runAskBus satisfies coreag.AskBus for a single run.

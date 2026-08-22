@@ -347,7 +347,7 @@ func (a *API) RunWithOptions(ctx context.Context, req RunRequest) (RunResult, er
 		for k, v := range req.Inputs {
 			loose[k] = v
 		}
-		ch, err := corewf.InlineRun(ctx, a.cfg.Engine, w, loose)
+		ch, err := corewf.InlineRun(ctx, a.cfg.Engine, w, loose, req.SessionID)
 		if err != nil {
 			return RunResult{}, err
 		}
@@ -397,7 +397,7 @@ func (a *API) RunWithOptions(ctx context.Context, req RunRequest) (RunResult, er
 		return res, nil
 	}
 
-	opts := corewf.RunOptions{SkipCache: req.SkipCache}
+	opts := corewf.RunOptions{SkipCache: req.SkipCache, ParentSessionID: req.SessionID}
 	if pub != nil {
 		opts.ProgressSink = func(ev corewf.ProgressEvent) {
 			pub.Publish("workflows:run-progress", translateProgressEvent(ev))

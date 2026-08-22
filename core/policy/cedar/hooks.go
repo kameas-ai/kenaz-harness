@@ -3,6 +3,7 @@ package cedar
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -567,6 +568,51 @@ func GateWorkflowRun(ctx context.Context, g Gate, workflowID, mode, stepKinds st
 	return d, enforce(d)
 }
 
+// GateWorkflowNetworkFetch is the gate-hook helper for a workflow's
+// web_fetch / web_scrape step, called immediately before any outbound
+// request (automation-actually-runs-01PMZ404 UNIT-7, spec D-9).
+//
+//   - g may be nil — the helper short-circuits to nil (default-allow),
+//     same contract as GateWorkflowRun.
+//   - mode is "permissive" or "strict"; "" coerces to "permissive".
+//
+// IMPORTANT — mode alone is not the enforcement mechanism. enforce()
+// maps Deny to *PolicyDeniedError but maps BOTH Allow and NotApplicable
+// to nil. The shipped default_workflows_policy.cedar bundle's strict
+// arm for workflow.network.fetch is an explicit forbid rule (not mere
+// permit-absence) precisely so that in strict mode this call returns
+// Deny, not NotApplicable — see the policy file's "strict: deny by
+// default" comment. A caller that reads this helper's contract from
+// GateWorkflowRun's docstring alone and assumes "strict ⇒ NotApplicable
+// ⇒ prompt" would be wrong for THIS action: strict mode denies outright,
+// because a network step has no interactive-prompt fallback mid-run the
+// way GateWorkflowRun's caller does before dispatch.
+//
+// Returns nil on Allow / NotApplicable, *PolicyDeniedError on Deny.
+func GateWorkflowNetworkFetch(ctx context.Context, g Gate, workflowID, mode string) (Decision, error) {
+	if mode == "" {
+		mode = "permissive"
+	}
+	if g == nil {
+		return Decision{
+			Outcome:  Allow,
+			Action:   ActionWorkflowNetworkFetch,
+			Resource: WorkflowUID(workflowID).String(),
+			Reason:   "no engine wired (default-allow)",
+		}, nil
+	}
+	d := g.Evaluate(
+		ctx,
+		UserUID(),
+		ActionWorkflowNetworkFetch,
+		WorkflowUID(workflowID),
+		map[cedar.String]cedar.Value{
+			cedar.String("mode"): cedar.String(mode),
+		},
+	)
+	return d, enforce(d)
+}
+
 // GateWorkflowSave is the gate-hook helper for workflow persistence.
 // Mirrors GateWorkflowRun's contract for the save action; the policy
 // bundle's strict-mode forbid rule denies workflows containing a
@@ -773,6 +819,37 @@ func CheckExportSession(ctx context.Context, g Gate, sessionID, format string) e
 		SessionUID(sessionID),
 		map[cedar.String]cedar.Value{
 			cedar.String("format"): cedar.String(format),
+		},
+	)
+	return enforce(d)
+}
+
+// CheckApprovalResolve is the gate-hook helper for the
+// Graph_ResolveApproval RPC (approval-node-01PMZC12 UNIT-3, FR-003).
+// Returns nil on Allow / NotApplicable; *PolicyDeniedError on Deny.
+// Default-allow when g is nil (pre-boot / test posture) — a human
+// resolving their own paused run is not blocked by the absence of a
+// policy engine.
+//
+// This gate covers ONLY the human-verb path
+// (Bindings.Graph_ResolveApproval). The no-watcher fail-closed timeout
+// and the auto_approve_window_seconds timeout (UNIT-4/UNIT-5) resolve
+// server-side and do not call this — they are the safety mechanism a
+// Cedar misconfiguration must not be able to block (spec.md §5.3: a
+// missing approver must not read as "approved", and symmetrically a
+// gate denial must not be able to leave a run parked forever when the
+// system itself decided to fail closed).
+func CheckApprovalResolve(ctx context.Context, g Gate, runID, nodeID string, approved bool) error {
+	if g == nil {
+		return nil
+	}
+	d := g.Evaluate(
+		ctx,
+		UserUID(),
+		ActionApprovalResolve,
+		ApprovalUID(runID, nodeID),
+		map[cedar.String]cedar.Value{
+			cedar.String("approved"): cedar.String(fmt.Sprintf("%t", approved)),
 		},
 	)
 	return enforce(d)
