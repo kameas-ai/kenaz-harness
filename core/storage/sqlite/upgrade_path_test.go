@@ -58,6 +58,21 @@ import (
 // migration reflected in every currently-committed snapshot, so EVERY
 // tag below sees this table's shape change on Open — this is not a
 // per-tag judgement call, it's the same fact repeated for each one.
+// scheduledChatRunsProvenanceNote is the shared reason for the
+// scheduled_chat_runs entry that appears under EVERY tag below.
+//
+// COST OF THAT ENTRY, stated here because it is stated for `tasks` and
+// was not stated for this table (finding N6, re-review of PR #307):
+// scheduled_chat_runs is now allowlisted on all twelve tags, so the
+// comparison loop skips both its row-count and digest checks
+// permanently. A REAL future migration that writes rows to this table
+// will be masked. If one lands, assert the row count exactly rather
+// than allowlisting the table, or move the provenance assertion onto a
+// table no migration touches.
+//
+// The const is referenced from the per-tag comments rather than from
+// code, which is why a compiler cannot see it go stale — blind spot #1
+// in CLAUDE.md, inside the upgrade-path test of all places.
 const scheduledChatRunsProvenanceNote = "sessions/0340-scheduled-chat-runs-created-by " +
 	"(model-scheduled-jobs-01PMSJ01 WP09) adds created_by + tool_allowlist " +
 	"to scheduled_chat_runs (created by 0325, unchanged since)."

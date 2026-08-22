@@ -55,10 +55,24 @@ type RunSpawner func(ctx context.Context, branchID, childSessionID string, req c
 // single-file change, rather than leaving the mission's own
 // depth/generation-field work (UNIT-9) as the only guard.
 //
-// This also bounds the pre-existing "edit and resend" fork path
-// (CreationPath="edit_resend" below), since BranchSeamAdapter.Fork is
-// the one seam both callers share — a deliberate, generous limit rather
-// than a narrower model-only check, so one choke point protects both.
+// SCOPE, corrected 2026-08-22 (finding D1, re-review of PR #307). An
+// earlier version of this comment claimed the bound "also bounds the
+// pre-existing edit-and-resend fork path, since BranchSeamAdapter.Fork
+// is the one seam both callers share". That is FALSE and was verified
+// so: Fork has exactly two callers — core/tools/subagentdispatch/
+// tool.go and core/agentgraph/exec_control.go's branch node. The human
+// branch / edit-and-resend surface is core/rpc/views/branches/impl.go,
+// which calls conversation.Manager.CreateBranch{,AtMessage} directly
+// and never reaches this adapter.
+//
+// The correction cuts in the reassuring direction: a human editing and
+// resending cannot be refused at generation 4 by a limit written for
+// sub-agents. But a comment that justifies a design choice with a
+// containment property the code does not have is the exact class this
+// release exists to remove, so it is corrected rather than softened.
+//
+// What this bound actually covers: model-initiated forks through the
+// sub-agent tool, and the graph `branch` node.
 const MaxForkDepth = 3
 
 // SpawnedRun is what a RunSpawner returns on success.
