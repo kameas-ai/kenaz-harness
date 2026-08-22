@@ -6,16 +6,23 @@
  * for new lines while the task is running. Stops polling once the task
  * reaches a terminal state.
  *
- * (background-task-monitor-01KZNP3C WP05)
+ * (background-task-monitor-01KZNP3C WP05; remounted by
+ * subagent-control-and-background-tasks-01PMZB11 UNIT-11 — this
+ * component previously had no importer at all.)
+ *
+ * Routes through the typed harnessClient (Tasks_Get / Tasks_Tail) —
+ * see TasksPanel.vue's header comment for why this replaced lib/tasks.ts.
  */
 
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue';
 import type { TaskRow, LineRow } from '../../lib/types';
-import { tasksTail, tasksGet } from '../../lib/tasks';
+import { useHarnessClient } from '../../lib/useHarnessAPI';
 
 const props = defineProps<{
   taskId: string;
 }>();
+
+const client = useHarnessClient();
 
 // ── state ─────────────────────────────────────────────────────────────────
 
@@ -38,7 +45,7 @@ const isTerminal = computed(() => {
 
 async function fetchTask() {
   try {
-    task.value = await tasksGet(props.taskId);
+    task.value = await client.Tasks_Get(props.taskId);
   } catch (_e) {
     // Tolerate — task may not exist yet.
   }
@@ -46,7 +53,7 @@ async function fetchTask() {
 
 async function poll() {
   try {
-    const newLines = await tasksTail(props.taskId, nextOffset);
+    const newLines = await client.Tasks_Tail(props.taskId, nextOffset);
     if (newLines.length > 0) {
       lines.value.push(...newLines);
       nextOffset = newLines[newLines.length - 1].offset + 1;
@@ -73,7 +80,7 @@ function schedulePoll() {
 onMounted(async () => {
   await fetchTask();
   try {
-    const initial = await tasksTail(props.taskId, 0);
+    const initial = await client.Tasks_Tail(props.taskId, 0);
     lines.value = initial;
     if (initial.length > 0) {
       nextOffset = initial[initial.length - 1].offset + 1;
@@ -106,7 +113,7 @@ watch(() => props.taskId, async () => {
   }
   await fetchTask();
   try {
-    const initial = await tasksTail(props.taskId, 0);
+    const initial = await client.Tasks_Tail(props.taskId, 0);
     lines.value = initial;
     if (initial.length > 0) {
       nextOffset = initial[initial.length - 1].offset + 1;

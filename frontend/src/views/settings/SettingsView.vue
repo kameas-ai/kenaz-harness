@@ -10,7 +10,7 @@
  * Settings_Set RPC); writes are debounced 250ms via lib/settings.ts
  * to coalesce rapid toggles into a single disk write.
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
@@ -25,6 +25,10 @@ import FeatureFlagsView from '@/views/settings/FeatureFlagsView.vue';
 import HooksSettingsView from '@/views/settings/HooksSettingsView.vue';
 import WorkflowsSettingsPanel from '@/views/settings/WorkflowsSettingsPanel.vue';
 import ScheduledChatsPanel from '@/views/settings/scheduledchat/ScheduledChatsPanel.vue';
+// subagent-control-and-background-tasks-01PMZB11 UNIT-11 — Tasks sub-tab,
+// restored now that bash.Options.BackgroundSpawn has a real producer.
+import TasksPanel from '@/views/settings/TasksPanel.vue';
+import TaskOutputViewer from '@/views/settings/TaskOutputViewer.vue';
 import ModelAccessibleSecretsPanel from '@/views/settings/ModelAccessibleSecretsPanel.vue';
 import LLMRoutingPanel from '@/views/settings/LLMRoutingPanel.vue';
 import AuditSettingsPanel from '@/views/settings/AuditSettingsPanel.vue';
@@ -138,8 +142,22 @@ const showSecretsTab = computed<boolean>(() => {
 });
 
 // The Tasks sub-tab (background-task-monitor-01KZNP3C WP05) was removed
-// 2026-08-14. TasksPanel.vue is retained but unmounted — see
-// docs/unwired-ledger.md.
+// 2026-08-14 because the background-task subsystem had no producer (see
+// docs/unwired-ledger.md). Restored by
+// subagent-control-and-background-tasks-01PMZB11 UNIT-11.
+// Disambiguates via ?tab=tasks. Mount switch is in <template> below.
+const showTasksTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'tasks';
+});
+
+// Tracks which task's output is being viewed within the Tasks pane (null
+// = showing the task list). Reset when the Tasks tab is left so
+// navigating away and back always starts at the list.
+const viewingTaskId = ref<string | null>(null);
+watch(showTasksTab, (shown) => {
+  if (!shown) viewingTaskId.value = null;
+});
 
 // model-fallback-routing-01NDFSEX04 WP05 — LLM Routing sub-tab.
 // Disambiguates via ?tab=llm-routing. Mount switch is in <template> below.
@@ -223,6 +241,7 @@ const SECTION_HEADS: Record<string, { title: string; subtitle: string }> = {
   workflows: { title: 'Workflows', subtitle: 'Workflow extension and authoring settings.' },
   hooks: { title: 'Hooks', subtitle: 'Lifecycle hooks that fire on chat-pipeline events.' },
   scheduledchats: { title: 'Scheduled chats', subtitle: 'Recurring chat runs on a schedule.' },
+  tasks: { title: 'Tasks', subtitle: 'Background tasks — bash commands run with run_in_background, and their live output.' },
   secrets: { title: 'Secrets', subtitle: 'Model-accessible secret references.' },
   'llm-routing': { title: 'LLM routing', subtitle: 'Model fallback and routing rules.' },
   // nav-settings-ia-cleanup WP04: renamed from 'Audit' to 'Audit Settings' to
@@ -1162,6 +1181,30 @@ onMounted(() => {
       data-testid="settings-scheduledchats-pane"
     >
       <ScheduledChatsPanel />
+    </div>
+
+    <!-- subagent-control-and-background-tasks-01PMZB11 UNIT-11 — Tasks
+         sub-tab. Toggles between the task list and a single task's live
+         output within the same pane (view-task / back), rather than a
+         separate route, so the Settings shell's numbered-section header
+         stays put. -->
+    <div
+      v-else-if="showTasksTab"
+      class="flex flex-col h-full"
+      data-testid="settings-tasks-pane"
+    >
+      <template v-if="viewingTaskId">
+        <button
+          type="button"
+          class="self-start m-4 mb-0 text-[11px] text-ink-muted hover:text-ink transition-colors underline"
+          data-testid="tasks-viewer-back-btn"
+          @click="viewingTaskId = null"
+        >
+          ← Back to tasks
+        </button>
+        <TaskOutputViewer :task-id="viewingTaskId" class="flex-1 min-h-0" />
+      </template>
+      <TasksPanel v-else @view-task="viewingTaskId = $event" />
     </div>
 
     <!-- model-secret-references-01KW7M5A WP10 — Model Secrets sub-tab. -->
