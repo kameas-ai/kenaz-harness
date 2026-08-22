@@ -33,6 +33,12 @@ type RunResult struct {
 	Metadata map[string]any
 }
 
+// ErrNotModelInvokable is returned by RunModelInvoked when the resolved
+// command's model_invokable frontmatter flag is false (the default). The
+// command exists and a human can still run it via the RPC path (Run) —
+// this error only means the model is not permitted to invoke it.
+var ErrNotModelInvokable = errors.New("slashcmd: command is not model-invokable")
+
 // ToolDispatcher is the narrow interface the dispatch layer uses to
 // invoke a tool by name. The toolloop package satisfies this interface;
 // tests stub it.
@@ -226,4 +232,72 @@ func (d *Dispatch) Run(
 			Text: fmt.Sprintf("unknown command kind %q", cmd.Kind),
 		}, fmt.Errorf("slashcmd: unknown kind %q", cmd.Kind)
 	}
+}
+
+// RunModelInvoked is the model-invoked entry point into dispatch. It is
+// called exclusively by the kenaz__skill builtin tool
+// (core/tools/skill), the model's only path into user-defined slash
+// commands. Human-invoked dispatch — the RPC path at
+// core/rpc/views/slashcmd/impl.go UserRun — calls Run directly and is
+// unaffected by this method: model_invokable restricts what the model
+// may run, not what the user may run.
+//
+// trust-surfaces-that-fire-01PMZ202 WP20 (formerly WP14). Before this
+// method existed, LoadUserOne already scanned model_invokable onto the
+// struct (it has no WHERE-clause predicate — it is a discovery-only
+// flag), but nothing at dispatch read it: the model could name any
+// command, including one the user explicitly left off the model-invokable
+// catalog. skill.go's own doc comment claimed the opposite.
+//
+// RunModelInvoked loads the command once to check ModelInvokable before
+// executing. A command with model_invokable=false (the default) is
+// refused with ErrNotModelInvokable and never reaches Run — no text,
+// prompt or tool body is ever produced for a model-invoked call the user
+// did not authorize. The refusal is itself audited (mirroring Run's own
+// defer) so a rejected attempt by the model is visible in the audit log,
+// not merely swallowed by an error return.
+func (d *Dispatch) RunModelInvoked(
+	ctx context.Context,
+	name string,
+	args map[string]string,
+	sc SessionContext,
+) (RunResult, error) {
+	// Same feature-flag gate Run applies, checked up front so a disabled
+	// feature surfaces identically regardless of caller.
+	if !UserSlashcmdEnabled() {
+		return RunResult{
+			Kind: ResultKindError,
+			Text: ErrFeatureDisabled.Error(),
+		}, ErrFeatureDisabled
+	}
+
+	cmd, err := d.store.LoadUserOne(ctx, name, sc.ProjectID)
+	if err != nil {
+		if errors.Is(err, ErrCommandNotFound) {
+			return RunResult{
+				Kind: ResultKindError,
+				Text: fmt.Sprintf("user command %q not found", name),
+			}, err
+		}
+		return RunResult{Kind: ResultKindError, Text: "failed to load command"}, err
+	}
+
+	if !cmd.ModelInvokable {
+		res := RunResult{
+			Kind: ResultKindError,
+			Text: fmt.Sprintf("command %q is not model-invokable", name),
+		}
+		rerr := fmt.Errorf("%w: %q", ErrNotModelInvokable, name)
+		if d.auditor != nil {
+			auditSC := sc
+			auditSC.UserArgs = args
+			EmitRun(ctx, d.auditor, cmd, res, rerr, auditSC)
+		}
+		return res, rerr
+	}
+
+	// Eligible — delegate to the shared dispatch path. Run reloads the
+	// command; the extra read matches the cost TraceRun already pays for
+	// the same reason (span/guard metadata needed before the switch).
+	return d.Run(ctx, name, args, sc)
 }
