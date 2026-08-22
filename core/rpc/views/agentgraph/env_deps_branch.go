@@ -35,6 +35,32 @@ import (
 // WaitForChildRun returns nil immediately without blocking on anything.
 type RunSpawner func(ctx context.Context, branchID, childSessionID string, req coreag.ForkRequest) (SpawnedRun, error)
 
+// MaxForkDepth bounds how many generations deep a chain of Fork calls
+// may nest before Fork refuses to create another one. Named here — the
+// ONE place — because nothing else in the spawn path bounds recursion:
+// a sub-agent's child session is an ordinary Kind="chat" session
+// (session.Manager.CreateInProject), kenaz__subagent_dispatch is
+// always-on in the builtin predicate for every session including that
+// one, and neither the tool nor the spawner carries a depth or
+// generation counter of its own. Without this, a spawned sub-agent could
+// dispatch a grandchild, which dispatches a great-grandchild, without
+// limit (containment review of PR #307, finding N2). Root/interactive
+// sessions are generation 0; a direct sub-agent is generation 1; Fork
+// refuses to create generation MaxForkDepth+1.
+//
+// This bound is process-local, in-memory, and not persisted (see
+// BranchSeamAdapter.generations) — a harness restart resets it. That is
+// a real limitation, but it still closes the common-case hole (a single
+// run recursing without limit inside one process) with a legible,
+// single-file change, rather than leaving the mission's own
+// depth/generation-field work (UNIT-9) as the only guard.
+//
+// This also bounds the pre-existing "edit and resend" fork path
+// (CreationPath="edit_resend" below), since BranchSeamAdapter.Fork is
+// the one seam both callers share — a deliberate, generous limit rather
+// than a narrower model-only check, so one choke point protects both.
+const MaxForkDepth = 3
+
 // SpawnedRun is what a RunSpawner returns on success.
 type SpawnedRun struct {
 	// TaskID is the tasks.Registry id tracking this run, when a task
@@ -76,6 +102,9 @@ type BranchSeamAdapter struct {
 
 	runsMu sync.Mutex
 	runs   map[string]spawnOutcome // branchID -> outcome, populated by Fork, consumed (and evicted) by WaitForChildRun
+
+	genMu       sync.Mutex
+	generations map[string]int // sessionID -> fork generation, populated by Fork, read by Fork on the NEXT fork off that session. Never evicted (unlike runs): a child session must stay lookupable for as long as the process might see it dispatch again.
 }
 
 // NewBranchSeamAdapter constructs the adapter. Both managers may be nil
@@ -122,6 +151,25 @@ func (a *BranchSeamAdapter) available() bool {
 	return a != nil && a.conversations != nil && a.sessions != nil
 }
 
+// generationOf returns the recorded fork generation for sessionID, or 0
+// when unrecorded — the correct default for a root/interactive session
+// that has never itself been the child end of a Fork call.
+func (a *BranchSeamAdapter) generationOf(sessionID string) int {
+	a.genMu.Lock()
+	defer a.genMu.Unlock()
+	return a.generations[sessionID]
+}
+
+// setGeneration records gen as sessionID's fork generation.
+func (a *BranchSeamAdapter) setGeneration(sessionID string, gen int) {
+	a.genMu.Lock()
+	defer a.genMu.Unlock()
+	if a.generations == nil {
+		a.generations = make(map[string]int)
+	}
+	a.generations[sessionID] = gen
+}
+
 // Fork allocates a new child session and persists a branch row.
 // Writes the handoff prompt as the child's first user message. The
 // kernel emits the branch_fork event on its side; this adapter only
@@ -132,6 +180,15 @@ func (a *BranchSeamAdapter) Fork(ctx context.Context, req coreag.ForkRequest) (c
 	}
 	if req.ParentSessionID == "" {
 		return coreag.BranchHandle{}, fmt.Errorf("branch_seam: parent_session_id required")
+	}
+	// N2 depth guard: refuse BEFORE creating anything, so a refusal never
+	// leaves an orphaned branch/child session behind. See MaxForkDepth's
+	// doc for why this lives here rather than in the model-facing tool.
+	childGen := a.generationOf(req.ParentSessionID) + 1
+	if childGen > MaxForkDepth {
+		return coreag.BranchHandle{}, fmt.Errorf(
+			"branch_seam: fork depth %d exceeds MaxForkDepth (%d) — a sub-agent may not spawn another sub-agent past this nesting level",
+			childGen, MaxForkDepth)
 	}
 	br, child, err := a.conversations.CreateBranch(ctx, coreconv.ForkOptions{
 		ParentSessionID: req.ParentSessionID,
@@ -148,6 +205,10 @@ func (a *BranchSeamAdapter) Fork(ctx context.Context, req coreag.ForkRequest) (c
 	if err != nil {
 		return coreag.BranchHandle{}, fmt.Errorf("branch_seam: create branch: %w", err)
 	}
+	// Record the child's generation so a FUTURE Fork off this child
+	// session (e.g. a spawned sub-agent dispatching another sub-agent)
+	// is measured from here, not from 0.
+	a.setGeneration(child.ID, childGen)
 	// Seed the child session with the handoff prompt as a user message
 	// so the child kernel run sees it on its first turn.
 	if req.HandoffPrompt != "" {

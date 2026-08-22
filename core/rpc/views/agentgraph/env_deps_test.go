@@ -3,6 +3,7 @@ package agentgraph_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
@@ -149,6 +150,86 @@ func TestEnvDeps_BranchSeamAdapter_CreationPath(t *testing.T) {
 	}
 	if branches[0].CreationPath != "edit_resend" {
 		t.Errorf("CreationPath = %q, want edit_resend", branches[0].CreationPath)
+	}
+}
+
+// TestEnvDeps_BranchSeamAdapter_ForkDepthLimit is containment finding
+// N2's ground truth: chaining Fork calls, each child session becoming
+// the next call's ParentSessionID (the shape a recursively-dispatching
+// sub-agent produces — a spawned child is an ordinary session, and
+// kenaz__subagent_dispatch has no depth guard of its own), succeeds up
+// to graphview.MaxForkDepth generations and is refused past it. "A child
+// at the limit cannot spawn" — the last Fork call here originates from a
+// session already AT the limit.
+func TestEnvDeps_BranchSeamAdapter_ForkDepthLimit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	sessStore := session.NewMemoryStore()
+	sessMgr := session.NewManager(sessStore)
+	brStore := conversation.NewMemoryStore()
+	brMgr := conversation.NewManager(brStore, sessMgr)
+
+	root, err := sessMgr.Create(ctx, "root")
+	if err != nil {
+		t.Fatalf("create root: %v", err)
+	}
+
+	adapter := graphview.NewBranchSeamAdapter(brMgr, sessMgr)
+
+	parentID := root.ID
+	for gen := 1; gen <= graphview.MaxForkDepth; gen++ {
+		handle, err := adapter.Fork(ctx, coreag.ForkRequest{
+			ParentSessionID: parentID,
+			Title:           fmt.Sprintf("gen-%d", gen),
+		})
+		if err != nil {
+			t.Fatalf("Fork at generation %d: unexpected error: %v", gen, err)
+		}
+		if handle.ChildSessionID == "" {
+			t.Fatalf("Fork at generation %d: empty ChildSessionID", gen)
+		}
+		parentID = handle.ChildSessionID
+	}
+
+	// parentID is now a session at MaxForkDepth. One more Fork off it
+	// must be refused, not silently produce generation MaxForkDepth+1.
+	if _, err := adapter.Fork(ctx, coreag.ForkRequest{
+		ParentSessionID: parentID,
+		Title:           "one-past-the-limit",
+	}); err == nil {
+		t.Fatal("Fork past MaxForkDepth succeeded; want an error refusing the nesting")
+	}
+}
+
+// TestEnvDeps_BranchSeamAdapter_ForkDepthLimit_SiblingsDoNotAccumulate
+// guards against a wrong implementation that counts TOTAL forks off a
+// session rather than the CHAIN depth: two independent children of the
+// SAME parent are siblings at the same generation, not escalating
+// generations, so both must succeed even though MaxForkDepth-many Forks
+// have now happened off that one parent.
+func TestEnvDeps_BranchSeamAdapter_ForkDepthLimit_SiblingsDoNotAccumulate(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	sessStore := session.NewMemoryStore()
+	sessMgr := session.NewManager(sessStore)
+	brStore := conversation.NewMemoryStore()
+	brMgr := conversation.NewManager(brStore, sessMgr)
+
+	root, err := sessMgr.Create(ctx, "root")
+	if err != nil {
+		t.Fatalf("create root: %v", err)
+	}
+	adapter := graphview.NewBranchSeamAdapter(brMgr, sessMgr)
+
+	for i := 0; i < graphview.MaxForkDepth+2; i++ {
+		if _, err := adapter.Fork(ctx, coreag.ForkRequest{
+			ParentSessionID: root.ID,
+			Title:           fmt.Sprintf("sibling-%d", i),
+		}); err != nil {
+			t.Fatalf("sibling fork %d off the root session: unexpected error: %v", i, err)
+		}
 	}
 }
 

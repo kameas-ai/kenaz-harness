@@ -29,6 +29,14 @@ type entry struct {
 	lines   []Line  // all captured lines (for Tail)
 	linesMu sync.Mutex
 	pid     int     // 0 if unknown (sub-agent tasks)
+	// stopFunc is the out-of-band stop callback for a task with no OS
+	// PID — a spawned sub-agent run is an LLM stream, not a child
+	// process (subagent-control-and-background-tasks-01PMZB11 UNIT-6).
+	// Registered via SetStopFunc; Abort calls it instead of kill/kill9
+	// when pid is 0. nil means Abort can only mark the row cancelled
+	// without actually stopping anything (the pre-containment-review
+	// behaviour for KindSubagent tasks — see Abort's doc).
+	stopFunc func(context.Context) error
 }
 
 // RegisterOpts carries the caller-supplied metadata for a new task.
@@ -202,6 +210,29 @@ func (r *Registry) SetPID(id string, pid int) bool {
 		return false
 	}
 	e.pid = pid
+	return true
+}
+
+// SetStopFunc registers an out-of-band stop callback for a task that has
+// no OS PID — the sub-agent-spawn shape (SetPID's counterpart for
+// subagent-control-and-background-tasks-01PMZB11 UNIT-6). Called by
+// core/rpc/subagent_run_spawner.go once a run's stream subscription id
+// is known, wiring fn to LLM.StopStream for that subscription.
+//
+// Abort prefers stopFunc over the pid path when pid is 0: without this,
+// Abort on a KindSubagent task could only mark the tasks.Registry row
+// cancelled — the underlying LLM stream kept running and kept spending
+// tokens until defaultSubagentSpawnTimeout (containment review of PR
+// #307, finding B2). Returns false when the task is unknown, mirroring
+// SetPID.
+func (r *Registry) SetStopFunc(id string, fn func(context.Context) error) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e, ok := r.entries[id]
+	if !ok {
+		return false
+	}
+	e.stopFunc = fn
 	return true
 }
 
@@ -398,8 +429,16 @@ func (r *Registry) Subscribe(id string) (<-chan Line, func(), bool) {
 	return ch, cancel, true
 }
 
-// Abort sends SIGTERM to the task's process (if PID is known), waits up to
-// 5 seconds, then sends SIGKILL. Marks the task as cancelled.
+// Abort stops the task and marks it cancelled. For a process-backed task
+// (pid > 0) it sends SIGTERM, waits up to 5 seconds, then sends SIGKILL.
+// For a task with no pid but a registered stopFunc (a spawned sub-agent
+// run — see SetStopFunc) it calls that instead, synchronously: the
+// production wiring is core/rpc/subagent_run_spawner.go's
+// LLM.StopStream, which itself blocks until the stream's driver
+// goroutine has actually exited, so Abort does not report "cancelled"
+// while the model is still mid-generation and still spending tokens.
+// A task with neither (pid == 0 and no stopFunc registered) can only be
+// marked cancelled — there is nothing to stop.
 func (r *Registry) Abort(ctx context.Context, id string) error {
 	r.mu.RLock()
 	e, ok := r.entries[id]
@@ -424,6 +463,14 @@ func (r *Registry) Abort(ctx context.Context, id string) error {
 			case <-ctx.Done():
 			}
 		}()
+	} else if e.stopFunc != nil {
+		// No OS process to kill — stop the underlying stream instead.
+		// context.Background(), not ctx: this call must not be cut short
+		// by the inbound RPC context's own lifecycle (the RPC handler may
+		// return well before StopStream's blocking wait completes).
+		if serr := e.stopFunc(context.Background()); serr != nil {
+			r.logf("tasks.abort.stop_err", "id", id, "err", serr.Error())
+		}
 	}
 	// Mark cancelled.
 	r.mu.Lock()

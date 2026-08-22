@@ -165,6 +165,19 @@ func NewSubagentRunSpawner(deps SubagentRunSpawnerDeps) graphview.RunSpawner {
 			"branch_id", branchID, "child_session_id", childSessionID,
 			"sub_id", subID, "task_id", taskID)
 
+		// Wire the Tasks-panel Abort button to a real stop: without this,
+		// tasks.Registry.Abort has no pid to kill for a KindSubagent task
+		// (SetPID is never called on this path) and could only mark the
+		// row cancelled while the LLM stream — and its token spend — kept
+		// running until deps.Timeout (containment review of PR #307,
+		// finding B2). SetStopFunc is the SetPID counterpart for a
+		// stream-backed task; see its doc in core/tasks/registry.go.
+		if taskID != "" {
+			deps.Tasks.SetStopFunc(taskID, func(stopCtx context.Context) error {
+				return deps.LLM.StopStream(stopCtx, subID)
+			})
+		}
+
 		// The await goroutine must outlive this call: Fork (the caller)
 		// returns to the tool's Call(), which — on the default async
 		// dispatch path — returns to the model turn immediately. Detach

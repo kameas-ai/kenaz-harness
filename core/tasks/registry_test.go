@@ -243,6 +243,86 @@ func TestAbort(t *testing.T) {
 	}
 }
 
+// TestAbort_CallsStopFuncForPIDlessTask is containment finding B2's
+// ground truth at the registry layer: a KindSubagent task has no OS PID
+// (SetPID is never called for it — only bash background mode calls it),
+// so before SetStopFunc existed, Abort on such a task could only mark
+// the row cancelled while whatever it represented kept running. This
+// proves Abort now calls the registered stop callback instead of
+// silently doing nothing beyond the status flip.
+func TestAbort_CallsStopFuncForPIDlessTask(t *testing.T) {
+	reg := newTestRegistry(newFakeStore(), nil)
+	ctx := context.Background()
+
+	id, _ := reg.Register(ctx, tasks.RegisterOpts{Kind: tasks.KindSubagent, PID: 0})
+
+	var mu sync.Mutex
+	var calls int
+	if ok := reg.SetStopFunc(id, func(_ context.Context) error {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		return nil
+	}); !ok {
+		t.Fatal("SetStopFunc returned false for a known task id")
+	}
+
+	if err := reg.Abort(ctx, id); err != nil {
+		t.Fatalf("Abort: %v", err)
+	}
+
+	mu.Lock()
+	got := calls
+	mu.Unlock()
+	if got != 1 {
+		t.Fatalf("stopFunc called %d times; want exactly 1", got)
+	}
+	task, _ := reg.Get(id)
+	if task.Status != tasks.StatusCancelled {
+		t.Errorf("Status = %q; want cancelled", task.Status)
+	}
+}
+
+// TestAbort_PIDTakesPrecedenceOverStopFunc pins the ordering: when a task
+// somehow carries both a pid and a stopFunc, Abort must still take the
+// pid (process-kill) path, not silently prefer the callback. Nothing in
+// production sets both today, but the precedence should not be
+// accidental.
+func TestAbort_PIDTakesPrecedenceOverStopFunc(t *testing.T) {
+	reg := newTestRegistry(newFakeStore(), nil)
+	ctx := context.Background()
+
+	id, _ := reg.Register(ctx, tasks.RegisterOpts{Kind: tasks.KindBash, PID: 0})
+	reg.SetPID(id, 999999999) // implausible pid; kill() is expected to error, which is fine — logged, not fatal.
+
+	var mu sync.Mutex
+	var stopCalled bool
+	reg.SetStopFunc(id, func(_ context.Context) error {
+		mu.Lock()
+		stopCalled = true
+		mu.Unlock()
+		return nil
+	})
+
+	if err := reg.Abort(ctx, id); err != nil {
+		t.Fatalf("Abort: %v", err)
+	}
+	mu.Lock()
+	got := stopCalled
+	mu.Unlock()
+	if got {
+		t.Error("stopFunc was called even though pid > 0; pid path should take precedence")
+	}
+}
+
+// TestSetStopFunc_UnknownTask mirrors SetPID's own "unknown id" contract.
+func TestSetStopFunc_UnknownTask(t *testing.T) {
+	reg := newTestRegistry(newFakeStore(), nil)
+	if ok := reg.SetStopFunc("does-not-exist", func(context.Context) error { return nil }); ok {
+		t.Error("SetStopFunc returned true for an unknown task id")
+	}
+}
+
 func TestSubscribe_ReceivesLines(t *testing.T) {
 	reg := newTestRegistry(newFakeStore(), nil)
 	ctx := context.Background()
