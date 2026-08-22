@@ -64,6 +64,26 @@ const scheduledChatRunsProvenanceNote = "sessions/0340-scheduled-chat-runs-creat
 
 var expectedChangedTables = map[string][]string{
 	"v0.70.0": {
+		// sessions/0340 (model-scheduled-jobs-01PMSJ01 WP09) ALTERs
+		// scheduled_chat_runs, adding created_by NOT NULL DEFAULT 'user'
+		// and tool_allowlist NOT NULL DEFAULT ''. Every pre-existing row
+		// in the v0.70.0 snapshot gains both columns, so the content
+		// digest legitimately changes.
+		//
+		// This surfaced only AFTER the merge: WP09's agent ran
+		// TestUpgradePath against v0.63.0-v0.69.0 and was green, because
+		// its worktree branched before the v0.70.0 snapshot existed. The
+		// defect is real and belongs to the integration, not to that
+		// agent — which is the class of failure a shared release branch
+		// exists to catch.
+		//
+		// The provenance columns are the POINT of WP09: an upgraded
+		// install must have created_by on rows written before the column
+		// existed, defaulted to 'user' so a pre-existing schedule is
+		// never mistaken for a model-created one. That default is
+		// load-bearing, not cosmetic — GateScheduledChatExecute fails
+		// closed only for created_by == "model".
+		"scheduled_chat_runs",
 		// NOT a migration writing rows — this one is the TEST's own
 		// probe. tasks/1200-tasks-init (subagent-control-and-background-
 		// tasks-01PMZB11 UNIT-2) creates the table empty, and then
