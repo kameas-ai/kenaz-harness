@@ -170,6 +170,44 @@ func (p *Pool) openOne(ctx context.Context, spec coremcp.ServerSpec) error {
 	return nil
 }
 
+// ErrServerNotFound is returned by CloseOne when no server with the
+// requested id is in the pool. Mirrors http.ErrServerNotFound — see
+// that package's doc comment for why this is a distinct value from
+// stdio.ErrServerNotFound rather than a shared import.
+var ErrServerNotFound = errors.New("sse: server not in pool")
+
+// CloseOne removes a single server and closes its connection. Unlike
+// the http transport, the sse Pool has no per-server health-probe
+// goroutine to stop today (ReconnectLoop is constructed per entry but
+// is not itself goroutine-driven — nothing calls Reconnect
+// automatically), so closing the connection is the whole of the
+// teardown. If a probe/reconnect goroutine is added to this transport
+// later, it must be stopped here too, mirroring http.Pool.CloseOne.
+//
+// Locking mirrors stdio.Pool.CloseOne and http.Pool.CloseOne: the map
+// mutation happens under the pool lock and completes before the
+// (potentially blocking) conn.Close() runs unlocked, so a concurrent
+// CloseOne(id) for the same id observes ErrServerNotFound rather than
+// racing this one into a double close.
+//
+// Returns ErrServerNotFound when id is not present.
+func (p *Pool) CloseOne(ctx context.Context, id string) error {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return errors.New("sse: pool closed")
+	}
+	entry, ok := p.servers[id]
+	if !ok {
+		p.mu.Unlock()
+		return fmt.Errorf("%w: %q", ErrServerNotFound, id)
+	}
+	delete(p.servers, id)
+	p.mu.Unlock()
+
+	return entry.conn.Close()
+}
+
 // Close fans out a Close to every entry.
 func (p *Pool) Close(ctx context.Context) error {
 	p.mu.Lock()

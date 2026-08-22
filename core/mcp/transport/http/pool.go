@@ -183,6 +183,51 @@ func (p *Pool) openOne(ctx context.Context, spec coremcp.ServerSpec) error {
 	return nil
 }
 
+// ErrServerNotFound is returned by CloseOne when no server with the
+// requested id is in the pool. This is a distinct value from
+// stdio.ErrServerNotFound (this package does not import the stdio
+// transport package, to avoid a transport-to-transport dependency),
+// but callers that already switch on stdio.ErrServerNotFound via
+// errors.Is observe the same "already gone" contract in practice:
+// dispatch.Pool.CloseOne only ever calls into this method after
+// confirming, via its own ownership map, that id exists — see
+// core/mcp/dispatch/pool.go's CloseOne. A caller driving *Pool
+// directly (as these tests do) sees this sentinel instead.
+var ErrServerNotFound = errors.New("http: server not in pool")
+
+// CloseOne removes a single server: stops its health probe and closes
+// its connection. Stop() blocks until the probe goroutine has
+// actually exited (see HealthProbe.Stop), so by the time CloseOne
+// returns nil, no further tools/list probe request will reach the
+// server on the credential that was injected at Open time.
+//
+// Locking mirrors stdio.Pool.CloseOne: the map mutation (delete)
+// happens under the pool lock and completes before the teardown work
+// (probe.Stop + conn.Close, both of which can block) runs unlocked.
+// That ordering is what makes a second, concurrent CloseOne(id) for
+// the same id observe ErrServerNotFound immediately rather than
+// racing this one into a double Stop/Close.
+//
+// Returns ErrServerNotFound when id is not present — the tools view
+// (UninstallRecipe) treats that as "already gone" and does not fail.
+func (p *Pool) CloseOne(ctx context.Context, id string) error {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return errors.New("http: pool closed")
+	}
+	entry, ok := p.servers[id]
+	if !ok {
+		p.mu.Unlock()
+		return fmt.Errorf("%w: %q", ErrServerNotFound, id)
+	}
+	delete(p.servers, id)
+	p.mu.Unlock()
+
+	entry.probe.Stop()
+	return entry.conn.Close()
+}
+
 // Close fans out a Close to every entry. After Close returns, all
 // dispatch and probe goroutines have exited.
 func (p *Pool) Close(ctx context.Context) error {

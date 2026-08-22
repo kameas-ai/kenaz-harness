@@ -103,12 +103,18 @@ var _ dispatch.StdioSubPool = (*fakeStdioPool)(nil)
 
 // ─── fake generic sub-pool ───────────────────────────────────────────────────
 
-// fakeGenericPool satisfies coremcp.Pool for http/sse tests.
+// fakeGenericPool satisfies dispatch.RemoteSubPool for http/sse tests.
+// closeOneErr, when set, makes CloseOne fail without removing the
+// server from opened — this is how TestDispatch_CloseOneFailure_
+// RestoresOwnership drives the N-4 restore-on-failure path without a
+// real http.Pool.
 type fakeGenericPool struct {
-	mu      sync.Mutex
-	opened  []string
-	closed  bool
-	callErr error
+	mu          sync.Mutex
+	opened      []string
+	closed      bool
+	callErr     error
+	closeOneErr error
+	closedOnes  []string
 }
 
 func (f *fakeGenericPool) Open(_ context.Context, specs []coremcp.ServerSpec) error {
@@ -141,11 +147,38 @@ func (f *fakeGenericPool) Call(_ context.Context, _, _ string, _ json.RawMessage
 	return json.RawMessage(`"ok"`), nil
 }
 
+func (f *fakeGenericPool) CloseOne(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closeOneErr != nil {
+		return f.closeOneErr
+	}
+	for i, n := range f.opened {
+		if n == id {
+			f.opened = append(f.opened[:i], f.opened[i+1:]...)
+			break
+		}
+	}
+	f.closedOnes = append(f.closedOnes, id)
+	return nil
+}
+
+// compile-time check: fakeGenericPool satisfies dispatch.RemoteSubPool.
+var _ dispatch.RemoteSubPool = (*fakeGenericPool)(nil)
+
 func (f *fakeGenericPool) snapshot() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := make([]string, len(f.opened))
 	copy(out, f.opened)
+	return out
+}
+
+func (f *fakeGenericPool) closedOnesSnapshot() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.closedOnes))
+	copy(out, f.closedOnes)
 	return out
 }
 
@@ -293,6 +326,93 @@ func TestDispatch_CloseOneRemovedFromOwnership(t *testing.T) {
 	_, err := d.Call(context.Background(), "srv", "t", nil)
 	if !errors.Is(err, stdio.ErrServerNotFound) {
 		t.Errorf("Call after CloseOne: want ErrServerNotFound, got %v", err)
+	}
+}
+
+// TestDispatch_CloseOneRoutesToHTTPSubPool verifies that CloseOne on an
+// http-owned server actually reaches the http sub-pool's CloseOne —
+// pinning UNIT-6's fix to the comment-only default arm
+// (dispatch/pool.go's pre-fix "http and sse pools do not yet expose a
+// per-server CloseOne method"). Before the fix, this assertion would
+// fail silently in the other direction: dispatch.Pool.CloseOne
+// returned nil without ever calling hf.CloseOne, so hf.closedOnes
+// would stay empty.
+func TestDispatch_CloseOneRoutesToHTTPSubPool(t *testing.T) {
+	t.Parallel()
+	d, _, hf, _ := newTestPool()
+
+	_ = d.OpenOne(context.Background(), coremcp.ServerSpec{Name: "http-srv", Transport: "http", URL: "http://x"})
+
+	if err := d.CloseOne(context.Background(), "http-srv"); err != nil {
+		t.Fatalf("CloseOne: %v", err)
+	}
+	if closed := hf.closedOnesSnapshot(); len(closed) != 1 || closed[0] != "http-srv" {
+		t.Errorf("http sub-pool CloseOne calls = %v, want [http-srv]", closed)
+	}
+	// The dispatch-level ownership contract still holds too.
+	if _, err := d.Call(context.Background(), "http-srv", "t", nil); !errors.Is(err, stdio.ErrServerNotFound) {
+		t.Errorf("Call after CloseOne: want ErrServerNotFound, got %v", err)
+	}
+}
+
+// TestDispatch_CloseOneRoutesToSSESubPool is the sse-arm twin of the
+// http test above.
+func TestDispatch_CloseOneRoutesToSSESubPool(t *testing.T) {
+	t.Parallel()
+	d, _, _, ef := newTestPool()
+
+	_ = d.OpenOne(context.Background(), coremcp.ServerSpec{Name: "sse-srv", Transport: "sse", URL: "http://x"})
+
+	if err := d.CloseOne(context.Background(), "sse-srv"); err != nil {
+		t.Fatalf("CloseOne: %v", err)
+	}
+	if closed := ef.closedOnesSnapshot(); len(closed) != 1 || closed[0] != "sse-srv" {
+		t.Errorf("sse sub-pool CloseOne calls = %v, want [sse-srv]", closed)
+	}
+}
+
+// TestDispatch_CloseOneFailureRestoresOwnership pins spec.md §1.11
+// N-4: before the fix, the ownership entry was deleted unconditionally
+// before the switch, so a CloseOne that failed still lost the
+// server's ownership record — Call/Tools would then treat a server
+// the pool never actually closed as gone. This drives the http arm
+// (the transport the fix's tasks.md text calls out) but the same code
+// path covers stdio/sse/inprocess identically.
+func TestDispatch_CloseOneFailureRestoresOwnership(t *testing.T) {
+	t.Parallel()
+	d, _, hf, _ := newTestPool()
+
+	_ = d.OpenOne(context.Background(), coremcp.ServerSpec{Name: "http-srv", Transport: "http", URL: "http://x"})
+
+	sentinel := errors.New("simulated close failure")
+	hf.mu.Lock()
+	hf.closeOneErr = sentinel
+	hf.mu.Unlock()
+
+	if err := d.CloseOne(context.Background(), "http-srv"); !errors.Is(err, sentinel) {
+		t.Fatalf("CloseOne with failing sub-pool = %v, want the sentinel error", err)
+	}
+
+	// Ownership must still be intact: Call still routes to the http
+	// sub-pool (proving the entry was not silently dropped), and the
+	// fake's Tools() still lists it as opened (proving CloseOne did
+	// not remove it either, since the fake only removes on success).
+	if _, err := d.Call(context.Background(), "http-srv", "t", nil); err != nil {
+		t.Errorf("Call after a FAILED CloseOne: want it to still route (ownership must survive a failed close), got %v", err)
+	}
+	if names := hf.snapshot(); len(names) != 1 || names[0] != "http-srv" {
+		t.Errorf("http sub-pool opened = %v, want [http-srv] still present after a failed CloseOne", names)
+	}
+
+	// Now let the retry succeed and confirm ownership finally clears.
+	hf.mu.Lock()
+	hf.closeOneErr = nil
+	hf.mu.Unlock()
+	if err := d.CloseOne(context.Background(), "http-srv"); err != nil {
+		t.Fatalf("retry CloseOne: %v", err)
+	}
+	if _, err := d.Call(context.Background(), "http-srv", "t", nil); !errors.Is(err, stdio.ErrServerNotFound) {
+		t.Errorf("Call after a SUCCESSFUL CloseOne: want ErrServerNotFound, got %v", err)
 	}
 }
 
