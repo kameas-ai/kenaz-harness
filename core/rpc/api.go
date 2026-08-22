@@ -2180,15 +2180,28 @@ func New(c *core.Core, opts ...Option) *API {
 	// (docs/escalation-register-2026-08-19.md Part 9, E-004): the SAME
 	// pool (stack.wrappedPool), the SAME merged permission resolver
 	// (stack.perms — Cedar-backed, the exact value a.toolPermsResolver
-	// above now also holds), and the SAME confirm-each apparatus
-	// (stack.confirmBus + stack.confirmDeps) the chat tool loop uses —
-	// so a slash-invoked tool call cannot become a privilege-escalation
+	// above now also holds), the SAME confirm-each apparatus
+	// (stack.confirmBus + stack.confirmDeps), and the SAME process
+	// Cedar gate (a.cedarGate()) the chat tool loop uses — so a
+	// slash-invoked tool call cannot become a privilege-escalation
 	// route that reaches a tool without the confirmation or the Cedar
 	// check a chat tool call would trigger for the exact same tool.
+	//
+	// The gate field closes a hole an independent review of PR #307
+	// found: stack.perms's Cedar-backed arm only ever evaluates
+	// Action::"use_tool"; without gate wired here,
+	// slashToolDispatcherAdapter.DispatchTool never consulted
+	// Action::"tool_exec" — the sibling action
+	// default_policy.cedar:38-46 explicitly invites a user to forbid
+	// per-tool — so a tool_exec forbid installed exactly as that
+	// comment describes reached the tool pool unevaluated on this
+	// path even though PolicyGateAdapter.CheckTool already denied the
+	// identical chat tool call.
 	if slashDispatch != nil && stack.wrappedPool != nil {
 		slashDispatch.WithToolDispatcher(&slashToolDispatcherAdapter{
 			pool:             stack.wrappedPool,
 			perms:            stack.perms,
+			gate:             a.cedarGate(),
 			confirm:          stack.confirmBus,
 			confirmEnabled:   stack.confirmDeps.Enabled,
 			sessionGrants:    stack.confirmSessionGrants,
