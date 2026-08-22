@@ -29,7 +29,7 @@
 #     yet) the paperclip/drag-drop, `/` slash menu, and Branches_*.
 #
 # WP07 (served-mode-is-a-real-mode-01PMZ707), 2026-08-21: walked all 416
-# remaining entries caller-site-by-caller-site — frontend/src/components/
+# entries that existed at the time, caller-site-by-caller-site — frontend/src/components/
 # and frontend/src/lib/ included, not just frontend/src/views/, since the
 # per-VIEW reasoning is exactly what missed spec §1.5's six chat
 # affordances (dead-code-audit:1625's own admission). Every entry below
@@ -85,6 +85,11 @@
 # changes the entry's class. Allowlists shrink monotonically only in the
 # `ported` sense; nothing is added without a date, and no entry's class
 # regresses without one either.
+#
+# The file now holds 417: the ZC12 merge added Graph_ResolveApproval after
+# WP07 had walked it. The per-section counts below are derived from the
+# file and gated by check-serve-gap-classification.sh; this "416" is a
+# historical statement about what WP07 examined, not a live total.
 
 
 # CLASS: gated -- the affordance carries !isServedMode() (or, for

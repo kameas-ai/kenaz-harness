@@ -1065,7 +1065,7 @@ func plant(t *testing.T, full, content, appendText string) func() {
 		// Journal BEFORE touching the file — see plantguard_test.go. A
 		// timeout kills the binary without unwinding defers, so the only
 		// record that survives is one written first.
-		journalPlant(plantRecord{Path: full, Orig: string(orig), Existed: true})
+		journalPlant(plantRecord{Path: full, Orig: string(orig), Existed: true, Planted: string(orig) + appendText})
 		if err := os.WriteFile(full, append(orig, []byte(appendText)...), 0o644); err != nil {
 			t.Fatalf("appending to %s: %v", full, err)
 		}
@@ -1093,7 +1093,7 @@ func plant(t *testing.T, full, content, appendText string) func() {
 		}
 		createdDir = dir
 	}
-	journalPlant(plantRecord{Path: full, Existed: false, CreatedDir: createdDir})
+	journalPlant(plantRecord{Path: full, Existed: false, Planted: content, CreatedDir: createdDir})
 	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
 		t.Fatalf("writing %s: %v", full, err)
 	}

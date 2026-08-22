@@ -48,7 +48,7 @@ classless=()
 undated=()
 
 while IFS= read -r line; do
-  if [[ "$line" =~ ^#\ CLASS:\ ([a-zA-Z-]+) ]]; then
+  if [[ "$line" =~ ^#\ CLASS:\ ([a-zA-Z-]+)\ --\  ]]; then
     candidate="${BASH_REMATCH[1]}"
     match=0
     for c in $VALID_CLASSES; do
