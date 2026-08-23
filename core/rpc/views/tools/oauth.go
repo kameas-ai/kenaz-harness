@@ -203,12 +203,51 @@ func (a *API) resolveOAuthClientCredentials(ctx context.Context, recipe recipes.
 
 // SignInRecipe runs the interactive MCP OAuth flow for a recipe (opening the
 // system browser), persists the resulting credential to the keychain, then
-// installs/respawns the recipe so the bearer takes effect immediately. The
-// recipe must declare Auth.Kind == mcp_oauth with a client id that resolves
-// to a non-empty value — either a literal (a registered OAuth app) or a
-// "${VAR}" token substituted from the operator's own bring-your-own app
-// (FR-003, FR-003b) — otherwise a clear, user-actionable error is returned
-// and no HTTP request is made.
+// installs/respawns the recipe so the bearer takes effect immediately.
+//
+// The dispatch is arm-aware (spec.md §1.8/§1.9, kitty-specs/connector-
+// lifecycle-truth-01PMZ303 UNIT-3 3f): every Recipe.PrimaryAuth value gets a
+// named disposition instead of the single "clientID == ''" reject this used
+// to fall back to for every arm alike. An arm that cannot complete a sign-in
+// fails closed here with a message naming the reason — never a provider
+// round-trip and never the generic "has no OAuth client_id configured"
+// error, which used to fire identically whether the recipe was DCR-capable,
+// PKCE-with-a-missing-BYO-id, or had no working path at all.
+//
+//   - PrimaryAuthOAuth ("oauth", 6 recipes, 4 with an Auth block and 2
+//     without — spec.md §1.9): fails closed unconditionally. None of the six
+//     is DCR-capable, PKCE-with-a-client-id, or device-code, and whether it
+//     moves to one of those arms is an open product question (E-006), not
+//     something this unit resolves.
+//   - PrimaryAuthBrowserOAuthPKCE ("browser_oauth_pkce", 16 recipes): wired
+//     when the client id resolves to a non-empty value (14 via UNIT-1's
+//     ${VAR} substitution); the 2 that ship client_id: "" (google-docs,
+//     google-sheets) fail closed with a named blocker instead of attempting
+//     DCR against a provider this arm declares is not DCR-capable.
+//   - PrimaryAuthBrowserOAuthDCR ("browser_oauth_dcr", 30 recipes): wired —
+//     routed through oauth.SignInWithDCR, which resolves an empty client id
+//     via RFC 7591 dynamic client registration. UNIT-0's ★1 (does DCR
+//     actually succeed against a real provider) was never executed — this
+//     environment has no live network access to third-party providers to
+//     verify it (see the UNIT-3 commit body) — so this ships the honest
+//     attempt without the confidential-client, registration-recovery, or
+//     cross-launch-persistence half (spec.md §1.12 R-3/R-4, UNIT-3 3b–3e):
+//     DCRStore is passed as nil below, so every sign-in re-registers as a
+//     public client and a revoked registration has no automatic recovery.
+//     A provider that does not accept DCR from an unregistered client
+//     (registry.json's own vercel warning flags this as expected, not a
+//     surprise) surfaces oauth.SignInWithDCR's real discovery/registration
+//     error, not a client-id-shaped one.
+//   - PrimaryAuthDeviceCode, PrimaryAuthKeys, PrimaryAuthNone: named
+//     dispositions that reject explicitly — these are not OAuth sign-in
+//     arms and SignInRecipe is not their entry point (device_code uses
+//     BeginDeviceAuth/PollDeviceAuth instead).
+//   - Legacy/unset primary_auth (""): the pre-existing bare "clientID == ''"
+//     guard, for any recipe with a baked client id outside the six-arm
+//     taxonomy.
+//
+// Auth.Kind == mcp_oauth is still required for every arm reachable past the
+// oauth-arm short-circuit below.
 func (a *API) SignInRecipe(ctx context.Context, id string) (stdio.RecipeStatus, error) {
 	a.mu.Lock()
 	if a.cfg.Catalog == nil {
@@ -220,6 +259,17 @@ func (a *API) SignInRecipe(ctx context.Context, id string) (stdio.RecipeStatus, 
 	if !ok {
 		return stdio.RecipeStatus{}, fmt.Errorf("%w: %q", recipes.ErrRecipeNotFound, id)
 	}
+
+	// The oauth arm (spec.md §1.9) is checked before the Auth-nil guard
+	// below because 2 of its 6 recipes (google-calendar, google-drive)
+	// carry no Auth block at all — a third state, not a subset of "oauth
+	// with an empty client_id" — and both must still name the real
+	// blocker (E-006) instead of falling through to the generic
+	// "not an OAuth recipe" message.
+	if recipe.PrimaryAuth == recipes.PrimaryAuthOAuth {
+		return stdio.RecipeStatus{}, fmt.Errorf("tools: recipe %q has no working sign-in path yet (primary_auth=%q, E-006 — kitty-specs/connector-lifecycle-truth-01PMZ303): it is not dynamically-registerable, ships no pre-registered client id, and has no device-code flow", id, recipes.PrimaryAuthOAuth)
+	}
+
 	if recipe.Auth == nil || recipe.Auth.Kind != recipes.AuthKindMCPOAuth {
 		return stdio.RecipeStatus{}, fmt.Errorf("tools: recipe %q is not an OAuth recipe", id)
 	}
@@ -227,15 +277,49 @@ func (a *API) SignInRecipe(ctx context.Context, id string) (stdio.RecipeStatus, 
 	if err != nil {
 		return stdio.RecipeStatus{}, err
 	}
-	if clientID == "" {
-		return stdio.RecipeStatus{}, fmt.Errorf("tools: recipe %q has no OAuth client_id configured — register an OAuth app and set auth.client_id", id)
+
+	switch recipe.PrimaryAuth {
+	case recipes.PrimaryAuthBrowserOAuthDCR:
+		// clientID may legitimately be empty — oauth.SignInWithDCR below
+		// resolves it via RFC 7591 dynamic client registration.
+	case recipes.PrimaryAuthBrowserOAuthPKCE:
+		if clientID == "" {
+			return stdio.RecipeStatus{}, fmt.Errorf("tools: recipe %q has no pre-registered OAuth client_id and its provider does not support dynamic client registration (browser_oauth_pkce) — register an OAuth app with the provider and set auth.client_id; Kameas does not register or host one for this connector", id)
+		}
+	case recipes.PrimaryAuthDeviceCode:
+		// Named disposition, not a fallthrough: this is GitHub's shape today
+		// (baked client id, Auth.Kind mcp_oauth, primary_auth=device_code).
+		// Routing it through the loopback authorization-code+PKCE grant below
+		// would reach the browser and then fail late — GitHub rejects
+		// random-port loopback redirects (RecipeKeyPromptModal.vue's own
+		// isHarnessDeviceFlow comment). The device-code flow lives at
+		// BeginDeviceAuth/PollDeviceAuth (device_auth.go); this recipe is
+		// simply not reachable through SignInRecipe.
+		return stdio.RecipeStatus{}, fmt.Errorf("tools: recipe %q uses the device-code flow (primary_auth=%q) — call BeginDeviceAuth, not SignInRecipe", id, recipes.PrimaryAuthDeviceCode)
+	case recipes.PrimaryAuthKeys, recipes.PrimaryAuthNone:
+		// Named disposition: these arms lead with env keys or need no
+		// credential at all — even a recipe that happens to carry an
+		// Auth.Kind == mcp_oauth block (none do today) has no business
+		// being routed through the browser grant while declaring one of
+		// these arms as primary.
+		return stdio.RecipeStatus{}, fmt.Errorf("tools: recipe %q declares primary_auth=%q, which is not an OAuth sign-in arm", id, recipe.PrimaryAuth)
+	default:
+		// Legacy/unset primary_auth (""): the pre-existing bare guard.
+		if clientID == "" {
+			return stdio.RecipeStatus{}, fmt.Errorf("tools: recipe %q has no OAuth client_id configured — register an OAuth app and set auth.client_id", id)
+		}
 	}
 
-	cred, err := oauth.SignIn(ctx, oauth.SignInConfig{
+	// oauth.SignInWithDCR is a drop-in replacement for oauth.SignIn: when
+	// clientID is non-empty it behaves identically (resolve.go doc), so it
+	// is safe to route both the DCR arm's empty-client-id recipes and every
+	// other arm's baked/substituted client id through the same call.
+	cred, err := oauth.SignInWithDCR(ctx, oauth.SignInWithDCRConfig{
 		ServerURL:   recipe.URL,
 		ClientID:    clientID,
 		Scopes:      recipe.Auth.Scopes,
 		OpenBrowser: oauth.OpenSystemBrowser,
+		DCRStore:    nil, // UNIT-3 3e deferred — see NewDCRStore's doc comment.
 	})
 	if err != nil {
 		return stdio.RecipeStatus{}, fmt.Errorf("tools: oauth sign-in for %q: %w", id, err)

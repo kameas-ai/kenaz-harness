@@ -112,11 +112,21 @@ func RegisterClient(ctx context.Context, client *http.Client, asm *AuthServerMet
 	}
 
 	redirectURIs := []string{
-		// The loopback pattern is always included; the specific port is
-		// determined at runtime when we start the listener, but many providers
-		// accept the 127.0.0.1 host with any port. Per RFC 8252 §8.3, the port
-		// component may be ignored when matching loopback redirect URIs.
-		"http://127.0.0.1",
+		// RFC 8252 §7.3 relaxes loopback redirect-URI matching on the PORT
+		// only — the authorization server MUST allow any port at request
+		// time, but the scheme, host and PATH must still match the
+		// registered value exactly. AuthorizeInteractive (loopback.go)
+		// always sends "http://127.0.0.1:<ephemeral-port>/callback"; the
+		// registered value must carry the same "/callback" path or a
+		// conformant server rejects the redirect_uri as unregistered.
+		// Registering the port-free form here (no scheme/host/path
+		// wildcard exists in the spec) is the correct fix — pinning a
+		// fixed port instead is unnecessary because §7.3 already makes
+		// the port negotiable, unlike Slack's PKCE lane
+		// (InteractiveConfig.FixedPort), which needs a fixed port only
+		// because Slack requires an exact pre-registered redirect_uri
+		// with no §7.3-style port relaxation.
+		"http://127.0.0.1/callback",
 	}
 	redirectURIs = append(redirectURIs, opts.ExtraRedirectURIs...)
 
