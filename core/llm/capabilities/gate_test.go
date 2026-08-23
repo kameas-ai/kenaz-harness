@@ -91,13 +91,24 @@ func TestGate_AcceptsStreamingByDefault(t *testing.T) {
 	}
 }
 
+// TestGate_RejectsToolCallingOnNonToolModel used "tiny-text-only" (an
+// unmatched model name that fell through to ollama.yaml's provider-
+// level default) as its non-tool-calling fixture. That default flipped
+// to tool_calling=true in model-settings-reach-the-model-01PMZ101 WP13
+// (spec D-15): registering a real "ollama" adapter kind makes
+// ollama.yaml's rows live for the first time, and the OLD
+// tool_calling=false default would have re-caused the exact P0 this
+// mission fixes, just for Ollama instead of azure/custom-openai. "llava"
+// is ollama.yaml's genuine non-tool-calling row (a vision model, not a
+// text-only stand-in) and keeps this test's actual subject —
+// per-model tool-calling rejection — intact.
 func TestGate_RejectsToolCallingOnNonToolModel(t *testing.T) {
 	c := mustCatalog(t)
 	g := NewGate(c)
-	prof := llm.ProviderProfile{ID: "p", Kind: "ollama", Model: "tiny-text-only"}
+	prof := llm.ProviderProfile{ID: "p", Kind: "ollama", Model: "llava"}
 	req := llm.GenerationRequest{Tools: []llm.ToolSpec{{Name: "x"}}}
 	if _, err := g.Check(req, prof); err == nil {
-		t.Fatal("expected tool-calling rejection on non-tool ollama default")
+		t.Fatal("expected tool-calling rejection on the llava row (tool_calling: false)")
 	}
 }
 

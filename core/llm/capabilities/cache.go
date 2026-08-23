@@ -8,6 +8,8 @@ import (
 	"time"
 
 	llm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
 )
 
 const (
@@ -16,8 +18,7 @@ const (
 	cacheTTL = 7 * 24 * time.Hour
 
 	// EnvCapabilityCache is the env var that selects the cache backend.
-	// Values: "sqlite" | "memory" | "off". Default is "memory" until the
-	// SQLite store is wired from the storage package.
+	// Values: "sqlite" | "memory" | "off". Default is "memory".
 	EnvCapabilityCache = "HARNESS_LLM_CAPABILITY_CACHE"
 )
 
@@ -146,14 +147,32 @@ func (NullCache) InvalidateSchemaVersion(_ context.Context) error { return nil }
 
 // DefaultCache returns the cache selected by HARNESS_LLM_CAPABILITY_CACHE.
 // "off" → NullCache; "memory" or unset → MemoryCache; "sqlite" →
-// MemoryCache until the SQLite backend is wired from the storage package.
-func DefaultCache() CapabilityCache {
+// SQLiteCache over db (model-settings-reach-the-model-01PMZ101 WP14 /
+// re-derivation finding R-4: the previous version of this function
+// documented "sqlite" as a value and silently fell through to
+// MemoryCache for it — the exact "documented value a switch absorbs
+// into default:" class G-6 exists to catch).
+//
+// db is the harness's unified storage handle (core/storage.DB); pass
+// nil when no DB is available (e.g. the nil-core test chassis) — DB
+// construction is the caller's job (see core/rpc's newLLMStack), this
+// function only selects among cache STRATEGIES. "sqlite" with a nil db
+// degrades to MemoryCache rather than panicking on first use, logged so
+// the gap is visible instead of silently losing persistence.
+func DefaultCache(db storage.DB) CapabilityCache {
 	switch os.Getenv(EnvCapabilityCache) {
 	case "off":
 		return NullCache{}
+	case "sqlite":
+		if db != nil {
+			return NewSQLiteCache(db)
+		}
+		logging.L().Warn("llm.capability_cache.sqlite_unavailable",
+			"reason", "HARNESS_LLM_CAPABILITY_CACHE=sqlite but no storage.DB handle was supplied; falling back to MemoryCache")
+		return NewMemoryCache()
 	default:
-		// "memory", "sqlite" (sqlite backend TBD), and unset all fall back
-		// to MemoryCache which is safe for in-process use.
+		// "memory" and unset fall back to MemoryCache, safe for
+		// in-process use with no persistence across restarts.
 		return NewMemoryCache()
 	}
 }
