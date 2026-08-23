@@ -14,7 +14,17 @@ import type { MediaSource } from '@/lib/types';
 
 const props = defineProps<{
   source: MediaSource;
-  /** Page count from WP06 metadata extraction; shown when > 0. */
+  /**
+   * Page count from WP06 metadata extraction; shown when > 0.
+   *
+   * NARROW (controls-and-readouts-that-tell-the-truth-01PMZ808 WP20 /
+   * UNIT-15, spec §1.15): no caller passes this today. Go computes and
+   * persists a page count (core/attachments/media.go:286) but core/llm's
+   * MediaSource — the struct this prop actually reads from — carries no
+   * page field at all, so there is no value to thread through even at the
+   * mount site. Wiring it needs a field added to core/llm.MediaSource,
+   * which is out of this WP's scope. Owner: alec. Date: 2026-08-23.
+   */
   pageCount?: number;
 }>();
 
@@ -22,6 +32,13 @@ const filename = computed(() => props.source.original_name ?? 'document');
 
 const sizeLabel = computed(() => {
   // Prefer the authoritative byte size from the backend (WP04 / FR-003).
+  // NARROW (01PMZ808 WP20 / UNIT-15): in production this branch is
+  // currently unreachable — ChatInput.vue builds every MediaSource for a
+  // freshly-staged attachment with only kind/media_type/data/original_name
+  // (frontend/src/components/chat/ChatInput.vue, the pending-attachment
+  // block builder), so size_bytes is always undefined at send time and
+  // the base64 fallback below is what actually renders. Owner: alec.
+  // Date: 2026-08-23.
   if (props.source.size_bytes && props.source.size_bytes > 0) {
     const n = props.source.size_bytes;
     if (n < 1024) return `${n} B`;

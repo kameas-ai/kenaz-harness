@@ -16,7 +16,8 @@
  */
 import { ref, computed, watch } from 'vue';
 import Button from '@/components/ui/Button.vue';
-import { FIRING_HOOK_EVENTS, HOOK_KINDS } from '@/lib/hooks';
+import { FIRING_HOOK_EVENTS, HOOK_KINDS, EVENT_FAMILY } from '@/lib/hooks';
+import type { HookEventName } from '@/lib/hooks';
 import type { Hook, BuiltinDescriptor } from '@/lib/types';
 
 const props = defineProps<{
@@ -71,6 +72,36 @@ const isCreate = computed(() => !props.hook);
 const isFiringEvent = computed(() =>
   (FIRING_HOOK_EVENTS as readonly string[]).includes(draft.value.event),
 );
+
+// ── event-picker grouping (controls-and-readouts-that-tell-the-truth-01PMZ808
+// WP20 / UNIT-15, spec §1.15 "EVENT_FAMILY") ─────────────────────────────
+//
+// EVENT_FAMILY (lib/hooks.ts) has mapped every event to a display category
+// since the event-surface-expansion mission, but nothing ever consumed it —
+// this picker rendered FIRING_HOOK_EVENTS as one flat <option> list.
+// FIRING_HOOK_EVENTS stays the only source for what the picker *offers*:
+// grouping must not re-widen it to an event with no production fire site
+// (see scripts/ci/allowlists/i17-eventless-hook-events.txt). Groups are
+// ordered by first appearance in FIRING_HOOK_EVENTS, which already keeps
+// same-family events adjacent, so this is a pure display transform.
+const firingEventGroups = computed<{ family: string; events: readonly HookEventName[] }[]>(() => {
+  const order: string[] = [];
+  const byFamily = new Map<string, HookEventName[]>();
+  for (const ev of FIRING_HOOK_EVENTS) {
+    const family = EVENT_FAMILY[ev];
+    if (!byFamily.has(family)) {
+      order.push(family);
+      byFamily.set(family, []);
+    }
+    byFamily.get(family)!.push(ev);
+  }
+  return order.map((family) => ({ family, events: byFamily.get(family) ?? [] }));
+});
+
+/** Title-case an EVENT_FAMILY key for the <optgroup> label ('tool' -> 'Tool'). */
+function familyLabel(family: string): string {
+  return family.charAt(0).toUpperCase() + family.slice(1);
+}
 
 // ── validation ─────────────────────────────────────────────────────────
 
@@ -175,7 +206,14 @@ function handleDryRun(): void {
           class="text-sm px-2 py-1.5 rounded-sm border border-border bg-surface-1 text-ink focus:outline-none focus:border-accent"
           data-testid="hook-editor-event"
         >
-          <option v-for="ev in FIRING_HOOK_EVENTS" :key="ev" :value="ev">{{ ev }}</option>
+          <optgroup
+            v-for="group in firingEventGroups"
+            :key="group.family"
+            :label="familyLabel(group.family)"
+            :data-testid="`hook-editor-event-group-${group.family}`"
+          >
+            <option v-for="ev in group.events" :key="ev" :value="ev">{{ ev }}</option>
+          </optgroup>
           <!--
             A hook saved before this WP (or against an event this
             release hasn't wired a producer for yet) keeps its real
