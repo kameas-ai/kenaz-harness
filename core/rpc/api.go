@@ -4933,6 +4933,16 @@ func newLLMStack(
 	// keys when the user submits AddProvider). Without this sharing,
 	// AddProvider would write into a backend the resolver can't see.
 	secretsBackend := secrets.NewMemoryBackend()
+	// Same storage.DB every other session-table writer in this file
+	// uses (see the `db` derivation at api.go's New(), ~:1382); nil on
+	// the nil-core test chassis. Threaded into llmregistry.Options.Cache
+	// below (review finding B3) so capabilities.DefaultCache can select
+	// the SQLite-backed provider_capabilities cache when
+	// HARNESS_LLM_CAPABILITY_CACHE=sqlite is set.
+	var db storage.DB
+	if c != nil {
+		db = c.Storage()
+	}
 	// Wire the Cedar LLM policy guard into the registry pipeline with
 	// the real policy engine. The pipeline shape (profile →
 	// CapabilityGate → PolicyGuard → CredentialResolver) is unchanged;
@@ -4973,10 +4983,21 @@ func newLLMStack(
 	} else {
 		costReducer = cost.New(tab)
 	}
+	// Capability probe cache (model-settings-reach-the-model-01PMZ101
+	// WP14 / FR-017, review finding B3). Without this, every production
+	// registry.New call site passed no Cache:, so DefaultCache(nil) at
+	// registry.go:98-104 could never select the SQLite path even with
+	// HARNESS_LLM_CAPABILITY_CACHE=sqlite set — it always degraded to
+	// MemoryCache, leaving the provider_capabilities table (migration
+	// sessions/0329, shipped in v0.63.0) permanently unwritten in every
+	// shipped binary. Same nil-on-test-chassis degrade as `db` above —
+	// DefaultCache(nil) still returns a safe in-process MemoryCache when
+	// no real storage.DB is available.
 	reg, err := llmregistry.New(llmregistry.Options{
 		Resolver: credref.New(secretsBackend),
 		Policy:   cedarGuard,
 		Cost:     costReducer,
+		Cache:    llmcap.DefaultCache(db),
 	})
 	if err != nil {
 		// Fall back to the stub on a registry construction failure so

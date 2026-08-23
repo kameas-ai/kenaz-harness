@@ -144,8 +144,16 @@ func (a *Adapter) Capabilities(model string) llm.CapabilityDescriptor {
 }
 
 func baseURL(prof llm.ProviderProfile) string {
-	if prof.Endpoint != "" {
-		return strings.TrimRight(prof.Endpoint, "/")
+	return resolveBase(prof.Endpoint)
+}
+
+// resolveBase applies the same "empty means DefaultBaseURL" fallback
+// Stream uses via baseURL, factored out so ProviderCapabilitiesAt (H4
+// fix) can apply it to an endpoint string that did not come from a
+// ProviderProfile.
+func resolveBase(endpoint string) string {
+	if strings.TrimSpace(endpoint) != "" {
+		return strings.TrimRight(endpoint, "/")
 	}
 	return DefaultBaseURL
 }
@@ -318,29 +326,59 @@ var errNoCapabilityField = errors.New("ollama: /api/show response has no capabil
 // ProviderCapabilities implements llm.CapabilitiesProvider —
 // the first live implementor of that interface anywhere in the tree
 // (model-settings-reach-the-model-01PMZ101 WP14 / FR-017, spec §5.12
-// "Change" item 1). It starts from the static catalog descriptor for
-// (Kind, modelID) — DescribeRich already curates every field this
-// probe doesn't check — and overlays only ToolCalling/Vision from a
-// live /api/show call. Per A-5's merge order ("probe → cache →
-// CapabilityHints reader ... the static baseline lands FIRST and
-// stays"), a probe error returns before any override happens, so the
-// caller (Registry, via Refresher.MaybeRefresh) never Puts a
-// cache entry and the static baseline in ollama.yaml keeps deciding
-// Gate.Check on its own — a probe failure degrades to "no live
-// data yet", never to "everything unsupported".
+// "Change" item 1). It probes the adapter's process-wide default
+// endpoint (a.probeAt) — used only by callers with no ProviderProfile
+// in scope. Every production caller that HAS a profile
+// (registry.Registry.refreshCapabilities) must go through
+// ProviderCapabilitiesAt instead (review finding H4): a single
+// *Adapter instance is shared by every "ollama"-kind profile
+// (registry.go registers one adapter per Kind), so probing via
+// a.probeAt regardless of which profile asked would cache a REMOTE
+// profile's capabilities from whatever host happens to be the
+// process-wide default, under that remote profile's ID.
 func (a *Adapter) ProviderCapabilities(ctx context.Context, modelID string) (llm.ProviderCapabilities, error) {
+	return a.ProviderCapabilitiesAt(ctx, a.probeAt, modelID)
+}
+
+// ProviderCapabilitiesAt implements llm.EndpointCapabilitiesProvider
+// (H4 fix). It starts from the static catalog descriptor for (Kind,
+// modelID) — DescribeRich already curates every field this probe
+// doesn't check — and overlays only ToolCalling/Vision from a live
+// /api/show call against endpoint (resolveBase applies the same
+// "empty means DefaultBaseURL" fallback Stream uses via baseURL). Per
+// A-5's merge order ("probe → cache → CapabilityHints reader ... the
+// static baseline lands FIRST and stays"), a probe error returns
+// before any override happens, so the caller (Registry, via
+// Refresher.MaybeRefresh) never Puts a cache entry and the static
+// baseline in ollama.yaml keeps deciding Gate.Check on its own — a
+// probe failure degrades to "no live data yet", never to "everything
+// unsupported".
+func (a *Adapter) ProviderCapabilitiesAt(ctx context.Context, endpoint, modelID string) (llm.ProviderCapabilities, error) {
 	if a.cat == nil {
 		return llm.ProviderCapabilities{}, errors.New("ollama: no capability catalog loaded")
 	}
-	toolCalling, vision, err := a.probeShow(ctx, a.probeAt, modelID)
+	base := resolveBase(endpoint)
+	toolCalling, vision, err := a.probeShow(ctx, base, modelID)
 	if err != nil {
 		return llm.ProviderCapabilities{}, fmt.Errorf("ollama: capability probe: %w", err)
 	}
 	caps := a.cat.DescribeRich(Kind, modelID)
 	caps.ToolCalling = toolCalling
 	caps.Vision = vision
+	// M5 fix: name exactly the two fields this probe actually
+	// determined. Without this, registry.mergeCapabilityHints (via
+	// ProbedSupported) would have no way to distinguish "the probe
+	// verified this" from "DescribeRich's static baseline happened to
+	// carry this value" — and a stale cache hit would shadow all 12
+	// Supported keys for up to cacheTTL, not just these two.
+	caps.ProbedCapabilities = []llm.Capability{llm.CapToolCalling, llm.CapVision}
 	return caps, nil
 }
+
+// Compile-time witness: *Adapter satisfies the H4-fix extension
+// interface as well as plain llm.CapabilitiesProvider (already
+// witnessed below).
+var _ llm.EndpointCapabilitiesProvider = (*Adapter)(nil)
 
 // classifyStatus maps HTTP error status codes to the connector
 // taxonomy, mirroring core/llm/custom's classifyStatus (a private
@@ -446,10 +484,17 @@ func (s *chatStream) Final() (llm.Response, error) {
 func (s *chatStream) pump() {
 	defer func() {
 		_ = s.resp.Body.Close()
-		close(s.events)
 		s.cancel()
 		s.mu.Lock()
+		// B2 fix: flush any tool-call deltas that never saw a trailing
+		// finish_reason=="tool_calls" (e.g. Ollama finishing with "stop"
+		// after tool_calls deltas, or a mid-stream drop) BEFORE closing
+		// s.events. flushPendingToolCallsLocked sends on s.events; doing
+		// that after close(s.events) is a "send on closed channel" panic
+		// that kills the whole desktop app (there is no recover on this
+		// goroutine).
 		s.flushPendingToolCallsLocked()
+		close(s.events)
 		if s.finalErr == nil && !s.cancelled {
 			s.final = llm.Response{
 				Content:      []llm.ContentBlock{{Type: "text", Text: s.textBuf.String()}},

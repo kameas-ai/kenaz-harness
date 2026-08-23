@@ -146,6 +146,24 @@ type ProviderCapabilities struct {
 
 	// Notes carries per-flag human-readable notes for debugging / docs.
 	Notes map[string]string `json:"notes,omitempty"`
+
+	// ProbedCapabilities lists exactly which of the keys above a LIVE
+	// probe actually determined, as opposed to copied through from the
+	// static catalog baseline the producer started from (review finding
+	// M5). A ProviderCapabilitiesProvider that begins from
+	// Catalog.DescribeRich and overwrites only e.g. ToolCalling and
+	// Vision (core/llm/ollama.Adapter.ProviderCapabilities is the first
+	// and, as of this writing, only implementor) MUST set this to
+	// exactly those two keys. See ProbedSupported, which is what
+	// callers overlaying a cached record onto a ProviderProfile's
+	// CapabilityHints must use instead of ToDescriptor().Supported —
+	// using the latter shadows all 12 Supported keys on every cache
+	// hit, not just the ones the probe verified, contradicting spec
+	// A-5's invariant ("the static baseline ... lands FIRST and stays;
+	// the probe result merges over it, never replaces it",
+	// core/llm/capabilities/gate.go:35-37) for up to cacheTTL (7 days)
+	// per stale entry.
+	ProbedCapabilities []Capability `json:"probed_capabilities,omitempty"`
 }
 
 // CapabilitySchemaVersion is incremented whenever the shape of
@@ -177,6 +195,32 @@ func (c ProviderCapabilities) ToDescriptor() CapabilityDescriptor {
 		Supported: sup,
 		Notes:     c.legacyNotes(),
 	}
+}
+
+// ProbedSupported returns the subset of ToDescriptor().Supported whose
+// keys are named in ProbedCapabilities — the capabilities THIS record's
+// producer actually verified via a live probe, not merely copied from a
+// static catalog baseline (review finding M5). A nil/empty
+// ProbedCapabilities — the zero value, and every producer written
+// before this field existed — yields an empty map: the safe default is
+// "this record determined nothing," never "assume every key it carries
+// was probed." Callers overlaying a cached ProviderCapabilities onto a
+// Gate's Supported map (core/llm/registry.mergeCapabilityHints is the
+// one production caller) must use THIS method, not
+// ToDescriptor().Supported, or a 7-day-old cache hit shadows fields the
+// probe never touched.
+func (c ProviderCapabilities) ProbedSupported() map[Capability]bool {
+	if len(c.ProbedCapabilities) == 0 {
+		return nil
+	}
+	full := c.ToDescriptor().Supported
+	out := make(map[Capability]bool, len(c.ProbedCapabilities))
+	for _, k := range c.ProbedCapabilities {
+		if v, ok := full[k]; ok {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 func (c ProviderCapabilities) legacyNotes() map[Capability]string {
@@ -320,4 +364,27 @@ type CapabilitiesProvider interface {
 	// given model. When the model is unknown the adapter returns a
 	// conservative curated default and emits an audit event.
 	ProviderCapabilities(ctx context.Context, modelID string) (ProviderCapabilities, error)
+}
+
+// EndpointCapabilitiesProvider is an opt-in extension of
+// CapabilitiesProvider for adapters that are shared across every
+// ProviderProfile of a given Kind (the registry holds exactly one
+// adapter instance per Kind — see registry.Registry.adapters) but whose
+// live probe must hit a PER-PROFILE endpoint rather than one process-
+// wide default (review finding H4). Plain CapabilitiesProvider's
+// ProviderCapabilities(ctx, modelID) signature carries no endpoint, so
+// a caller with no ProviderProfile in scope has no way to route the
+// probe correctly; a caller that DOES have the profile (registry.
+// Registry.refreshCapabilities is the one production caller) must
+// prefer this interface when the adapter implements it, passing
+// prof.Endpoint through. Without this, every profile of that Kind —
+// including a REMOTE endpoint — probes whatever host the adapter's
+// default happens to be, and the wrong-host answer is cached under the
+// remote profile's ID and fed straight into Gate.Check.
+type EndpointCapabilitiesProvider interface {
+	// ProviderCapabilitiesAt is ProviderCapabilities with an explicit
+	// endpoint. endpoint == "" means "use the adapter's own documented
+	// default" (mirroring how Stream treats an empty
+	// ProviderProfile.Endpoint).
+	ProviderCapabilitiesAt(ctx context.Context, endpoint, modelID string) (ProviderCapabilities, error)
 }

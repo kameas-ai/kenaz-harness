@@ -11,6 +11,7 @@ package registry
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -53,6 +54,70 @@ func (a *capabilityProbeAdapter) ProviderCapabilities(_ context.Context, modelID
 
 var _ llm.CapabilitiesProvider = (*capabilityProbeAdapter)(nil)
 
+// endpointCapabilityProbeAdapter extends capabilityProbeAdapter with
+// llm.EndpointCapabilitiesProvider (H4 fix), recording the endpoint
+// argument each ProviderCapabilitiesAt call received so tests can
+// assert refreshCapabilities routed the caller's actual profile
+// endpoint through, rather than falling back to whatever the shared
+// adapter's own process-wide default happens to be.
+type endpointCapabilityProbeAdapter struct {
+	*capabilityProbeAdapter
+	mu           sync.Mutex
+	gotEndpoints []string
+}
+
+func (a *endpointCapabilityProbeAdapter) ProviderCapabilitiesAt(_ context.Context, endpoint, modelID string) (llm.ProviderCapabilities, error) {
+	a.mu.Lock()
+	a.gotEndpoints = append(a.gotEndpoints, endpoint)
+	a.mu.Unlock()
+	if a.probeErr != nil {
+		return llm.ProviderCapabilities{}, a.probeErr
+	}
+	caps := a.probeCaps
+	caps.Model = modelID
+	return caps, nil
+}
+
+var _ llm.EndpointCapabilitiesProvider = (*endpointCapabilityProbeAdapter)(nil)
+
+// TestRegistry_RefreshCapabilities_UsesProfileEndpoint is the H4
+// falsification test for the endpoint-routing half of the finding
+// (review finding H4, 2026-08-23). A single adapter instance is shared
+// by every profile of its Kind (r.adapters is keyed by Kind, not by
+// profile ID), but plain llm.CapabilitiesProvider carries no endpoint
+// parameter. refreshCapabilities must route through
+// llm.EndpointCapabilitiesProvider with THIS profile's Endpoint when
+// the adapter implements it — otherwise a remote profile's capability
+// probe silently targets whatever host the adapter's own process-wide
+// default happens to be, and the wrong-host answer gets cached under
+// the remote profile's ID and fed straight into Gate.Check.
+func TestRegistry_RefreshCapabilities_UsesProfileEndpoint(t *testing.T) {
+	r, _ := newReg(t)
+	adapter := &endpointCapabilityProbeAdapter{capabilityProbeAdapter: newCapabilityProbeAdapter("custom-openai")}
+	r.RegisterAdapter(adapter)
+
+	const remoteEndpoint = "https://remote-ollama.example.internal:11434"
+	t.Setenv("ZZ_H4_ENDPOINT_TEST_KEY", "secret")
+	prof := llm.ProviderProfile{
+		ID: "remote-p", Kind: "custom-openai", Model: "m", Endpoint: remoteEndpoint,
+		Cred: llm.CredentialReference{Kind: "env", Locator: "ZZ_H4_ENDPOINT_TEST_KEY"},
+	}
+	if err := r.LoadProfiles([]llm.ProviderProfile{prof}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := r.refreshCapabilities(context.Background(), "remote-p", "m"); err != nil {
+		t.Fatalf("refreshCapabilities: %v", err)
+	}
+
+	adapter.mu.Lock()
+	got := append([]string(nil), adapter.gotEndpoints...)
+	adapter.mu.Unlock()
+	if len(got) != 1 || got[0] != remoteEndpoint {
+		t.Fatalf("ProviderCapabilitiesAt endpoint = %v, want [%q] — refreshCapabilities must route the profile's own Endpoint, not the adapter's process-wide default", got, remoteEndpoint)
+	}
+}
+
 // TestRegistry_Stream_CacheHitOverlaysCapabilityHints proves the
 // "cache → CapabilityHints reader" half of A-5's merge order directly:
 // a pre-populated cache entry for (profileID, model) must be visible
@@ -80,9 +145,14 @@ func TestRegistry_Stream_CacheHitOverlaysCapabilityHints(t *testing.T) {
 
 	// Pre-populate the cache directly (simulating a probe that already
 	// completed) with a record advertising Reasoning=true, and assert
-	// the SAME request now passes.
+	// the SAME request now passes. ProbedCapabilities must name Reasoning
+	// explicitly (review finding M5): ProbedSupported() only overlays the
+	// keys a producer declares it actually determined, so a record that
+	// left this empty would overlay nothing and this assertion would
+	// (correctly) fail the baseline-rejection request all over again.
 	if err := cache.Put(context.Background(), "p", "hosted-model", llm.ProviderCapabilities{
 		Provider: "custom-openai", Model: "hosted-model", Streaming: true, ToolCalling: true, Reasoning: true,
+		ProbedCapabilities: []llm.Capability{llm.CapReasoning},
 	}); err != nil {
 		t.Fatalf("cache.Put: %v", err)
 	}
@@ -94,6 +164,61 @@ func TestRegistry_Stream_CacheHitOverlaysCapabilityHints(t *testing.T) {
 	}
 	if _, err := stream.Final(); err != nil {
 		t.Fatalf("Final: %v", err)
+	}
+}
+
+// TestRegistry_Stream_CacheHitOnlyOverlaysProbedFields is the M5
+// falsification test (review finding M5, 2026-08-23). A cache record
+// whose producer only verified ToolCalling via a live probe must not
+// overlay ANY other field it happens to carry — even though the
+// record's own Reasoning/StructuredOutput flags are stored as true
+// here (simulating a ProviderCapabilities value that started from a
+// dense static-baseline copy, e.g. Catalog.DescribeRich, and only had
+// 1 of its 12 Supported-mapped fields actually overwritten by a live
+// probe — exactly the shape core/llm/ollama.Adapter.ProviderCapabilities
+// produces). Before the fix (overlaying cached.ToDescriptor().Supported
+// wholesale instead of cached.ProbedSupported()), BOTH requests below
+// would incorrectly pass — the cache hit would shadow every field the
+// static catalog baseline correctly said false, for up to cacheTTL,
+// contradicting spec A-5's invariant that the probe result merges over
+// the baseline for ONLY the capabilities it verified
+// (core/llm/capabilities/gate.go:35-37).
+func TestRegistry_Stream_CacheHitOnlyOverlaysProbedFields(t *testing.T) {
+	sink, cache := newRegWithCache(t)
+	r := sink.r
+
+	adapter := &fakeAdapter{kind: "custom-openai", wantCap: llm.CapabilityDescriptor{}}
+	r.RegisterAdapter(adapter)
+	setResolvedCred(t, r)
+
+	prof := llm.ProviderProfile{ID: "p", Kind: "custom-openai", Model: "hosted-model", Endpoint: "http://localhost:1234", Cred: llm.CredentialReference{Kind: "env", Locator: sink.credKey}}
+	if err := r.LoadProfiles([]llm.ProviderProfile{prof}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Cache record claims Reasoning=true AND StructuredOutput=true, but
+	// only declares ToolCalling as actually probed.
+	if err := cache.Put(context.Background(), "p", "hosted-model", llm.ProviderCapabilities{
+		Provider: "custom-openai", Model: "hosted-model",
+		Streaming: true, ToolCalling: true, Reasoning: true, StructuredOutput: true,
+		ProbedCapabilities: []llm.Capability{llm.CapToolCalling},
+	}); err != nil {
+		t.Fatalf("cache.Put: %v", err)
+	}
+
+	// Reasoning was NOT declared probed — must still be refused by the
+	// static custom-openai.yaml baseline (reasoning: false), even
+	// though the cached record's Reasoning field reads true.
+	reasoningReq := llm.GenerationRequest{ProfileID: "p", Reasoning: &llm.ReasoningSpec{Enabled: true, BudgetTokens: 512}}
+	if _, err := r.Stream(context.Background(), reasoningReq); err == nil {
+		t.Fatal("M5: a cache record that only probed ToolCalling must NOT overlay Reasoning, even though the cached record's Reasoning field is true")
+	}
+
+	// StructuredOutput was NOT declared probed either — same assertion,
+	// a second field to rule out "only Reasoning is special-cased."
+	structReq := llm.GenerationRequest{ProfileID: "p", ResponseFormat: &llm.ResponseFormat{Mode: "json_schema"}}
+	if _, err := r.Stream(context.Background(), structReq); err == nil {
+		t.Fatal("M5: a cache record that only probed ToolCalling must NOT overlay StructuredOutput either")
 	}
 }
 

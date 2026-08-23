@@ -107,3 +107,41 @@ func TestRefresher_MaybeRefresh(t *testing.T) {
 		t.Error("expected Streaming=true from refreshed entry")
 	}
 }
+
+// TestRefresher_MaybeRefresh_SkipsFreshEntry is the H4 falsification
+// test (review finding H4, 2026-08-23). MaybeRefresh's own doc says it
+// "checks whether the entry ... needs a background refresh (cache miss
+// or stale)" — before the fix it never consulted cache.Get at all and
+// spawned a probe goroutine (gated only by the in-flight dedup map) on
+// EVERY call, including one for an entry that was already fresh.
+// registry.Registry.Stream calls MaybeRefresh on every Stream for a
+// profile whose adapter implements CapabilitiesProvider (registry.go's
+// "1b." block), so this bug fired a live network probe on every chat
+// turn rather than only when an entry was missing or stale.
+func TestRefresher_MaybeRefresh_SkipsFreshEntry(t *testing.T) {
+	cache := capabilities.NewMemoryCache()
+	ctx := context.Background()
+
+	// Pre-populate a FRESH entry directly — no refresh call involved.
+	if err := cache.Put(ctx, "prof1", "gpt-4o", llm.ProviderCapabilities{Provider: "openai", Model: "gpt-4o", Streaming: true}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	refreshCalled := make(chan struct{}, 1)
+	refresher := capabilities.NewRefresher(cache, func(_ context.Context, _, modelID string) (llm.ProviderCapabilities, error) {
+		select {
+		case refreshCalled <- struct{}{}:
+		default:
+		}
+		return llm.ProviderCapabilities{Provider: "openai", Model: modelID, Streaming: true}, nil
+	})
+
+	refresher.MaybeRefresh(ctx, "prof1", "gpt-4o")
+
+	select {
+	case <-refreshCalled:
+		t.Fatal("H4: MaybeRefresh spawned a refresh for an entry that was already fresh — it must consult cache.Get before spawning")
+	case <-time.After(200 * time.Millisecond):
+		// No refresh fired within the window — correct.
+	}
+}

@@ -450,10 +450,15 @@ func (s *azureChatStream) Final() (llm.Response, error) {
 func (s *azureChatStream) pump() {
 	defer func() {
 		_ = s.resp.Body.Close()
-		close(s.events)
 		s.cancel()
 		s.mu.Lock()
+		// B2 fix: flush pending tool-call deltas BEFORE closing s.events.
+		// flushPendingToolCallsLocked sends on s.events; a tool-call delta
+		// not followed by finish_reason=="tool_calls" (finishing "stop",
+		// or a mid-stream drop) previously reached this defer with
+		// s.events already closed, panicking the whole process.
 		s.flushPendingToolCallsLocked()
+		close(s.events)
 		if s.finalErr == nil && !s.cancelled {
 			s.final = llm.Response{
 				Content:      []llm.ContentBlock{{Type: "text", Text: s.textBuf.String()}},

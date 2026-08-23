@@ -289,6 +289,68 @@ func TestStreamNativeToolCallsNoDoubleExtraction(t *testing.T) {
 	}
 }
 
+// TestStream_ToolCallDelta_FinishStop_DoesNotPanic is the B2
+// falsification test. Before the fix, pump()'s defer ran
+// close(s.events) BEFORE flushPendingToolCallsLocked(), so any
+// tool-call delta that never saw a trailing finish_reason=="tool_calls"
+// (many OpenAI-compatible local-runtime backends finish "stop" even
+// after emitting tool_calls deltas) panicked with "send on closed
+// channel" when the defer's flush tried to emit it — killing the whole
+// process, not just the request, because chatStream.pump runs
+// unrecovered on its own goroutine.
+func TestStream_ToolCallDelta_FinishStop_DoesNotPanic(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		frames := []string{
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"search","arguments":"{}"}}]},"finish_reason":null}]}`,
+			`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+		}
+		for _, f := range frames {
+			fmt.Fprintf(w, "data: %s\n\n", f)
+		}
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	a := &Adapter{
+		httpc:     srv.Client(),
+		templates: &Registry{templates: nil, byID: map[string]*Template{}},
+	}
+	prof := llm.ProviderProfile{
+		ID:       "test",
+		Kind:     Kind,
+		Model:    "llama-3",
+		Endpoint: srv.URL + "/v1",
+		Cred:     llm.CredentialReference{Kind: "env", Locator: "TEST"},
+		Defaults: map[string]any{"auth_scheme": "none"},
+	}
+	req := llm.GenerationRequest{
+		ProfileID: "test",
+		Messages:  []llm.Message{llm.NewTextMessage(llm.RoleUser, "search for weather")},
+	}
+
+	stream, err := a.Stream(context.Background(), req, prof, nil)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	var sawTool bool
+	for ev := range stream.Events() {
+		if ev.Kind == llm.StreamTool {
+			sawTool = true
+		}
+	}
+	resp, ferr := stream.Final()
+	if ferr != nil {
+		t.Fatalf("Final: %v", ferr)
+	}
+	if !sawTool {
+		t.Error("expected a StreamTool event for the delta that never saw finish_reason==\"tool_calls\"")
+	}
+	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].ID != "call_1" {
+		t.Errorf("Final().ToolCalls = %+v, want one call with ID call_1", resp.ToolCalls)
+	}
+}
+
 // TestGateOutgoingToolsBlocked verifies tools request is blocked when matrix says false.
 func TestGateOutgoingToolsBlocked(t *testing.T) {
 	// Create adapter with a fake store that returns tool_calling:false.
