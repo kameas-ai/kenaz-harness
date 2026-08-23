@@ -960,6 +960,74 @@ func CheckAuditBulkPurge(ctx context.Context, g Gate) error {
 	}
 }
 
+// CheckContextSyncSessionPurge is the gate-hook helper for
+// SessionSync_DeleteRemote (fleet-enforcement-truth-01PMZ505 WP13, owner
+// ruling G-7, docs/escalation-register-2026-08-19.md Part 10: "gate the
+// DESTRUCTIVE operations now — purge and delete — fail-closed"). Call this
+// BEFORE the backend's DeleteRemote — on Deny, no fleet event may be
+// purged.
+//
+// UNLIKE the shared enforce() (which maps NotApplicable to nil —
+// "default-allow", the exact trap CLAUDE.md's unwired-sweep doctrine names
+// and the one GateScheduledChatExecute was already bitten by), this helper
+// requires an EXPLICIT Allow outcome. NotApplicable — no engine wired
+// (AllowAll fallback), or an engine wired but no policy names
+// ActionContextSyncSessionPurge — denies exactly like a matched forbid
+// rule would. This mirrors CheckAuditBulkPurge's fail-closed contract for
+// the repo's other "destructive bulk delete must be policy-gated" surface.
+//
+// policies/default_context_sync_policy.cedar ships the permit that keeps
+// this from being vacuous for the ordinary local-user case: it is the
+// ONLY rule that can produce Allow here. Remove that file (or have an
+// operator layer a forbid) and every purge refuses — that is the required
+// behaviour, not a regression.
+//
+// g may be nil (pre-boot / test posture) — default-allow, matching every
+// other gate-hook's degrade-safe contract when no Gate object exists at
+// all. In production a.cedarGate() never returns a literal nil (it
+// degrades to AllowAll{}, which evaluates to NotApplicable and therefore
+// denies here) — so this branch is a test/pre-boot convenience, not a
+// live bypass.
+func CheckContextSyncSessionPurge(ctx context.Context, g Gate, sessionID string) error {
+	if g == nil {
+		return nil
+	}
+	d := g.Evaluate(
+		ctx,
+		UserUID(),
+		ActionContextSyncSessionPurge,
+		SessionUID(sessionID),
+		nil,
+	)
+	if d.Outcome == Allow {
+		return nil
+	}
+	return &PolicyDeniedError{Decision: d}
+}
+
+// CheckContextSyncProjectPurge is the gate-hook helper for
+// ProjectSync_DeleteRemote — the project-scoped twin of
+// CheckContextSyncSessionPurge. See that function's doc for the full
+// fail-closed rationale (ruling G-7); the contract here is identical,
+// evaluated against ActionContextSyncProjectPurge / ProjectUID instead of
+// the session action/resource.
+func CheckContextSyncProjectPurge(ctx context.Context, g Gate, projectID string) error {
+	if g == nil {
+		return nil
+	}
+	d := g.Evaluate(
+		ctx,
+		UserUID(),
+		ActionContextSyncProjectPurge,
+		ProjectUID(projectID),
+		nil,
+	)
+	if d.Outcome == Allow {
+		return nil
+	}
+	return &PolicyDeniedError{Decision: d}
+}
+
 // CheckLLMFallback is the gate-hook helper for per-turn LLM fallback chain
 // hops (model-fallback-routing-01NDFSEX04 WP03). The connector's retry
 // loop calls this before issuing each hop. Returns nil on Allow /
