@@ -2944,17 +2944,38 @@ func New(c *core.Core, opts ...Option) *API {
 		// share one pending-request map. Without sharing, a Resolve()
 		// call would hit a different registry from the one the gate
 		// enqueued in, and the resolution would never reach the waiter.
+		//
+		// M1 (unwired sweep, release/v0.72.0): permissionsview.Config.Engine
+		// is the Engine INTERFACE, not *cedar.Engine directly. Assigning
+		// a.cedarEngine straight into it — as this site used to — boxes a
+		// nil *cedar.Engine into a NON-nil interface value whenever
+		// a.cedarEngine is nil (nil Core / empty DataDir path): the
+		// interface's type word is set even though its value word is nil.
+		// RevokeGrant's `a.engine != nil` check (impl.go) is an interface
+		// nil check, so it would pass and call Reload on a nil receiver —
+		// AFTER RevokeGrant has already os.Remove'd the .cedar grant file,
+		// leaving a half-revoked state (file gone, engine call panics).
+		// Guarded exactly like the two adjacent hoist sites in this same
+		// function (cedarEng above, acpOpts.Cedar below) and like WP19's
+		// own secretLookup/secretGate guards later in this file: assign
+		// only when the concrete pointer is non-nil, so a nil case leaves
+		// the interface field a TRUE nil that RevokeGrant's existing
+		// nil-skip path already handles gracefully.
+		var permissionsEngine permissionsview.Engine
+		if eng := a.cedarEngine; eng != nil {
+			permissionsEngine = eng
+		}
 		a.permissionsAPI = permissionsview.New(permissionsview.Config{
 			DataDir:  cedarDataDir,
 			Registry: a.promptRegistry,
 			// Share the SAME a.cedarEngine every other gate site
 			// consults (WP05 hoist), so RevokeGrant's Reload actually
 			// swaps the atomic PolicySet pointer Evaluate reads —
-			// trust-surfaces-that-fire-01PMZ202 WP16. Before this fix
+			// trust-surfaces-that-fire-01PMZ202 WP16. Before that fix
 			// the field was left nil, RevokeGrant deleted the .cedar
 			// snippet but never told the cached PolicySet, and a
 			// revoked grant stayed live for the rest of the process.
-			Engine: a.cedarEngine,
+			Engine: permissionsEngine,
 			// ConfigTrimmer is wired after toolsAPI is constructed; see
 			// the wiring step below that calls setPermissionsConfigTrimmer.
 		})
