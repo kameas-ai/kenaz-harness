@@ -33,6 +33,7 @@ import type {
   CompactionCustomStrategy,
   CompactionEffectiveConfig,
   CompactionLayer,
+  CompactionManualResult,
   CompactionSite,
   CompactionSiteConfig,
   CompactionStrategy,
@@ -203,6 +204,8 @@ function selectOverrideScope(s: OverrideScope) {
   overrideScope.value = s;
   overrideScopeId.value = '';
   overrideConfig.value = { sites: {} };
+  manualCompactResult.value = null;
+  manualCompactError.value = null;
 }
 
 function updateOverrideSiteConfig(site: CompactionSite, patch: Partial<CompactionSiteConfig>) {
@@ -222,6 +225,49 @@ function overrideEffectiveSiteConfig(site: CompactionSite): CompactionSiteConfig
 
 function overrideAttributionFor(site: CompactionSite, field: string): CompactionLayer | '' {
   return overrideEffective.value.attribution?.[site]?.[field] ?? '';
+}
+
+// ── manual "compact now" trigger (controls-and-readouts-that-tell-the-
+// truth-01PMZ808 UNIT-12 / WP17, C2V-09) ────────────────────────────────
+//
+// TriggerManualCompaction only accepts a session id (core/rpc/views/
+// compaction/impl.go:107 hardcodes ScopeKey{SessionID: sessionID}), so
+// the control is offered only when the override scope picker above is
+// set to 'session' with an id entered — there is no project- or
+// global-scoped equivalent to wire it to. session_rewrite (the default
+// 'manual' site strategy from compaction.PresetForTier) is registered on
+// the BASE pipeline this RPC runs against as of chat-turn-integrity-
+// 01PMZ606 WP07 (core/rpc/api.go:5718, registerManualCompactionStrategies
+// called from New at :6059) — verified in this tree before wiring the
+// button, so an unselected strategy no longer resolves to
+// "unknown strategy: session_rewrite".
+const manualCompacting = ref(false);
+const manualCompactResult = ref<CompactionManualResult | null>(null);
+const manualCompactError = ref<string | null>(null);
+
+async function triggerManualCompact() {
+  const sessionID = overrideScopeId.value.trim();
+  if (!sessionID) return;
+  manualCompacting.value = true;
+  manualCompactError.value = null;
+  manualCompactResult.value = null;
+  try {
+    const manualSite = overrideSiteConfig('manual');
+    manualCompactResult.value = await client.compaction.triggerManualCompaction(
+      sessionID,
+      {
+        strategy: manualSite.strategy || undefined,
+        dropOldestKeepRecentN: manualSite.dropOldestKeepRecentN,
+        semanticClusterCount: manualSite.semanticClusterCount,
+        summaryProvider: manualSite.summaryProvider,
+        summaryModel: manualSite.summaryModel,
+      },
+    );
+  } catch (err) {
+    manualCompactError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    manualCompacting.value = false;
+  }
 }
 
 async function saveOverrideConfig() {
@@ -901,6 +947,48 @@ defineExpose({ refresh, saveGlobalConfig });
                 })"
               />
             </label>
+
+            <!-- "Compact now" — manual trigger, session scope only. The RPC
+                 (Compaction_TriggerManual) hardcodes ScopeKey{SessionID},
+                 so there is no project-scoped equivalent to offer here. -->
+            <div
+              v-if="site === 'manual' && overrideScope === 'session'"
+              class="col-span-2 flex flex-col gap-2"
+              data-testid="csp-manual-compact-now-wrap"
+            >
+              <button
+                type="button"
+                class="self-start rounded-sm border border-accent bg-surface-2 px-3 py-1.5 font-ui text-[12px] uppercase tracking-[0.18em] text-accent hover:bg-accent-glow disabled:opacity-50"
+                data-testid="csp-manual-compact-now"
+                :disabled="manualCompacting || !overrideScopeId.trim()"
+                @click="triggerManualCompact"
+              >
+                {{ manualCompacting ? 'Compacting…' : 'Compact now' }}
+              </button>
+              <p
+                v-if="manualCompactError"
+                class="font-ui text-[12px] text-signal-danger"
+                role="alert"
+                data-testid="csp-manual-compact-error"
+              >
+                {{ manualCompactError }}
+              </p>
+              <p
+                v-else-if="manualCompactResult && manualCompactResult.skipped"
+                class="font-ui text-[12px] text-signal-warning"
+                data-testid="csp-manual-compact-skipped"
+              >
+                Skipped: {{ manualCompactResult.reason || 'nothing to compact.' }}
+              </p>
+              <p
+                v-else-if="manualCompactResult"
+                class="font-ui text-[12px] text-signal-success"
+                data-testid="csp-manual-compact-success"
+              >
+                Compacted with {{ strategyLabel(manualCompactResult.strategy) }} —
+                {{ manualCompactResult.bytesSaved.toLocaleString() }} bytes saved.
+              </p>
+            </div>
           </div>
         </div>
 
