@@ -3259,7 +3259,13 @@ func New(c *core.Core, opts ...Option) *API {
 		if a.settingsImpl != nil {
 			syncStore = a.settingsImpl.Store()
 		}
-		mcpSyncCat := corefleet.NewMCPSyncCategory(nil, nil, nil, syncPending)
+		// WP07 (fleet-enforcement-truth-01PMZ505): id + Reader + Writer +
+		// SecretKeys land together — a Reader without a non-nil SecretKeys
+		// set would ship unredacted secret env values off the device (see
+		// sync_mcp_registry.go and the redaction guard at
+		// core/fleet/sync_mcp.go:137).
+		mcpRegistry := newToolsMCPRegistry(a.toolsAPI)
+		mcpSyncCat := corefleet.NewMCPSyncCategory(mcpRegistry, mcpRegistry, mcpRecipeSecretKeys(mcpUserRecipeSource(a.mcpUserStore)), syncPending)
 		a.syncKindRegistry = registerSyncCategories(context.Background(), syncer, syncStore, mcpSyncCat)
 
 		// fleet-generic-sync-framework-01NSYNC02 WP05: register slash_commands

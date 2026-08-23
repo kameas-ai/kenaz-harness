@@ -3,11 +3,11 @@
  * SyncPanel — Settings → Sync panel.
  *
  * Per-category sync toggles for:
- *   - provider_profiles     (LLM provider profile metadata — no creds)
- *   - model_prefs           (default model + allowlist + per-task prefs)
- *   - mcp_recipes           (MCP recipe templates)
- *   - installed_mcp_servers (installed server list; secrets never synced)
- *   - ui_theme              (color theme + density + a11y)
+ *   - provider_profiles (LLM provider profile metadata — no creds)
+ *   - model_prefs       (default model + allowlist + per-task prefs)
+ *   - mcp_recipes       (MCP recipe templates)
+ *   - installed_mcp     (installed server list; secrets never synced)
+ *   - ui_theme          (color theme + density + a11y)
  *
  * Plus:
  *   - "Last synced" timestamp per category (from SyncStatusView)
@@ -62,7 +62,14 @@ const CATEGORIES: CategoryDef[] = [
     description: 'Recipe templates (the "how to install" definitions, not secrets).',
   },
   {
-    id: 'installed_mcp_servers',
+    // Canonical wire value: corefleet.SyncCategoryInstalledMCP
+    // (core/fleet/sync.go:34), registered under this exact string at
+    // core/rpc/sync_categories.go:146. This id used to read
+    // 'installed_mcp_servers', which never matched a Sync_Status row
+    // (toggle silently no-opped: "Last synced: Never" forever) and
+    // reached the "unknown category" error on toggle
+    // (core/fleet/sync.go:151) — WP07, fleet-enforcement-truth-01PMZ505.
+    id: 'installed_mcp',
     label: 'Installed MCP servers',
     description: 'Your installed MCP server list + config overrides. Secrets never leave this device.',
   },
