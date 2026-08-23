@@ -65,12 +65,13 @@ package llm_test
 //     UNIT-6, coupled, persistence-bearing) — not attempted.
 //   - WP07 (auto-title/compaction overhead surfaced, UNIT-8) — unblocked
 //     now that WP05 landed (spec D-7), but not attempted this session.
-//   - WP13+WP14 (ollama adapter kind + capability probe/cache,
-//     UNIT-9, persistence-bearing — WP14 must write a real sqlite
-//     CapabilityCache backend per the spec's re-derivation finding 2)
-//     — blocked on E-005 (an open product ruling: does `ollama` migrate
-//     existing custom-openai profiles?) per tasks.md's own header; not
-//     attempted.
+//   - WP13+WP14 (ollama adapter kind + capability probe/cache, UNIT-9)
+//     — LANDED in a later session, after register G-6
+//     (2026-08-22, docs/escalation-register-2026-08-19.md Part 10)
+//     ruled E-005: "register the new kind, leave existing
+//     custom-openai profiles alone. NO migration." See
+//     core/llm/wp_pi_persistence_integrity_z101_unit9_test.go for that
+//     landing's own WP-PI record — do not duplicate it here.
 //   - WP17 (branch recommender, UNIT-10) — not attempted.
 //   - WP12 (G-1/G-2/G-3 gates, UNIT-11) — not attempted.
 //

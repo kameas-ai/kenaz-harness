@@ -1,7 +1,18 @@
 provider: ollama
 defaults:
   streaming: true
-  tool_calling: false
+  # tool_calling was false here until model-settings-reach-the-model-
+  # 01PMZ101 WP13 (spec D-15). No adapter registered Kind "ollama"
+  # before WP13, so this row was dead: Gate.Check resolves from
+  # prof.Kind, and every local Ollama install was (and, per register
+  # G-6's ruling, still IS for existing profiles — no migration) persisted
+  # as Kind "custom-openai", which has its own catalog entry. The instant
+  # an "ollama" kind adapter registers, this row goes live, and
+  # tool_calling=false here would refuse every tool-bearing turn again —
+  # the SAME P0 through a different door, since Ollama has supported tool
+  # calling since v0.3. Corrected so a NEW ollama-kind profile is right
+  # immediately.
+  tool_calling: true
   vision: false
   documents: false
   json_mode: true
@@ -9,12 +20,22 @@ defaults:
   cancellation: true
   usage_reporting: true
   # Structured-output capability defaults (structured-output-and-grammar-01KX5R8A FR-002).
-  # Ollama (llama.cpp backend) supports GBNF grammar constraints natively.
-  # structured_output=false here because the full json_schema adapter path
-  # is deferred to local-model-runtimes-01KQ8VMZ; grammar=true stubs the
-  # capability so the gate knows it's supported in principle.
+  # structured_output=false: the full json_schema adapter path is
+  # deferred to local-model-runtimes-01KQ8VMZ.
+  #
+  # grammar was true here (a stub capability, per the comment this
+  # replaces) until WP13. Registering the "ollama" adapter kind makes
+  # this row live for the first time via GenerationRequest.
+  # RequestedCapabilities()'s CapGrammar append (llm.go), and no adapter
+  # in this mission implements a real GBNF constraint — shipping
+  # grammar=true with an adapter that returns ErrUnsupportedFormat would
+  # move the lie from "unreachable capability row" to "gate says yes,
+  # adapter says no" (spec D-12/§5.13), which is strictly worse than the
+  # inert row this replaces. Set to false; the real grammar producer is
+  # explicitly deferred to structured-output-is-reachable-01PMZ808 (spec
+  # D-12 names this file's grammar rows as exactly what stays deferred).
   structured_output: false
-  grammar: true
+  grammar: false
   regex_grammar: false
   # Image output capability (multimodal-io-extended-01KQ8TD2 WP05).
   # Ollama does not support image generation output.
@@ -44,7 +65,7 @@ models:
     reasoning: false
     cancellation: true
     usage_reporting: true
-    grammar: true
+    grammar: false
     regex_grammar: false
     image_input: false
     document_input: false
@@ -58,7 +79,7 @@ models:
     reasoning: false
     cancellation: true
     usage_reporting: true
-    grammar: true
+    grammar: false
     regex_grammar: false
     image_input: true
     document_input: false
@@ -73,7 +94,7 @@ models:
     reasoning: false
     cancellation: true
     usage_reporting: true
-    grammar: true
+    grammar: false
     regex_grammar: false
     image_input: true
     document_input: false

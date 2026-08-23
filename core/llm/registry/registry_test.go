@@ -1168,10 +1168,20 @@ func TestRegistry_StructuredOutput_StrictValidationSkipsRetry(t *testing.T) {
 // re-validation (grammar constraints are enforced by the runtime's
 // token sampler, not this post-hoc validator).
 func TestRegistry_StructuredOutput_GrammarModeSkipsValidation(t *testing.T) {
-	// Grammar mode requests CapGrammar (llm.go GenerationRequest.RequiredCapabilities);
-	// Anthropic doesn't advertise it, so use Ollama (llama.cpp backend, native
-	// GBNF support per capabilities/data/ollama.yaml) to reach the structured
-	// stream at all.
+	// Grammar mode requests CapGrammar (llm.go GenerationRequest.RequiredCapabilities).
+	// No provider in the catalog advertises grammar:true as of
+	// model-settings-reach-the-model-01PMZ101 WP13 (spec D-12/§5.13):
+	// ollama.yaml's grammar row — the only one that was ever true —
+	// flipped to false in the same commit that registered a real
+	// "ollama" adapter kind, because no adapter implements a real GBNF
+	// constraint yet (the producer is deferred to
+	// structured-output-is-reachable-01PMZ808). So this test can no
+	// longer reach grammar mode through the static catalog at all; it
+	// uses ProviderProfile.CapabilityHints (WP14 / FR-017) instead —
+	// the same per-profile override mechanism a live capability probe
+	// would populate — to opt this one fake profile into CapGrammar
+	// for the purpose of exercising the downstream skip-validation
+	// behaviour this test actually targets.
 	const key = "TEST_REG_STRUCTURED_GRAMMAR_KEY"
 	os.Setenv(key, "secret-bytes")
 	t.Cleanup(func() { os.Unsetenv(key) })
@@ -1181,7 +1191,8 @@ func TestRegistry_StructuredOutput_GrammarModeSkipsValidation(t *testing.T) {
 	r.RegisterAdapter(adapter)
 	prof := llm.ProviderProfile{
 		ID: "p", Kind: "ollama", Model: "llama3.1",
-		Cred: llm.CredentialReference{Kind: "env", Locator: key},
+		Cred:            llm.CredentialReference{Kind: "env", Locator: key},
+		CapabilityHints: map[llm.Capability]bool{llm.CapGrammar: true},
 	}
 	if err := r.LoadProfiles([]llm.ProviderProfile{prof}); err != nil {
 		t.Fatalf("LoadProfiles: %v", err)

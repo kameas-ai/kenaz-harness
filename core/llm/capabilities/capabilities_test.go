@@ -187,10 +187,24 @@ func TestCatalog_GrammarFlags(t *testing.T) {
 		}
 	}
 
-	// Ollama must report CapGrammar=true (GBNF is the local path).
+	// Ollama's CapGrammar was true here (a stub the file's own comment
+	// called "supported in principle") until
+	// model-settings-reach-the-model-01PMZ101 WP13 (spec D-12/§5.13):
+	// no adapter was registered under Kind "ollama" at the time this
+	// assertion was written, so a true grammar row was inert regardless
+	// of its value. WP13 registers a real "ollama" adapter kind, which
+	// makes this row live for the first time via GenerationRequest.
+	// RequestedCapabilities()'s CapGrammar append — and this adapter
+	// does not implement a real GBNF constraint. Shipping true here
+	// would flip the lie from "unreachable capability row" to "gate
+	// says yes, adapter returns ErrUnsupportedFormat", which the spec
+	// calls strictly worse than the row this replaces. The real grammar
+	// producer is deferred to structured-output-is-reachable-01PMZ808
+	// (D-12 names this exact row as what stays deferred); CapGrammar is
+	// false until that mission's adapter work lands.
 	ollamaDesc := c.Describe("ollama", "llama3.2")
-	if !ollamaDesc.Has(llm.CapGrammar) {
-		t.Errorf("ollama/llama3.2: expected CapGrammar=true, got %+v", ollamaDesc.Supported)
+	if ollamaDesc.Has(llm.CapGrammar) {
+		t.Errorf("ollama/llama3.2: expected CapGrammar=false (grammar producer deferred to 01PMZ808), got %+v", ollamaDesc.Supported)
 	}
 }
 
