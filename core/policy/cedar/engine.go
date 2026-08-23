@@ -106,6 +106,18 @@ var defaultBundlePolicySource []byte
 //go:embed policies/default_scheduled_run_policy.cedar
 var defaultScheduledRunPolicySource []byte
 
+// defaultContextSyncPolicySource is the embedded ContextSync purge default
+// for mission fleet-enforcement-truth-01PMZ505 (WP13, owner ruling G-7).
+// Posture: permit the local user to purge their own session/project fleet
+// data (the existing pre-gate UX); see the file's leading comment for why
+// this file's presence — not enforce()'s NotApplicable-is-allow shortcut —
+// is what makes the purge work at all, and hooks.go's
+// CheckContextSyncSessionPurge / CheckContextSyncProjectPurge for the
+// fail-closed wrapper this file feeds.
+//
+//go:embed policies/default_context_sync_policy.cedar
+var defaultContextSyncPolicySource []byte
+
 // DefaultPolicyName is the synthetic filename used when reporting the
 // embedded policy to the frontend.
 const DefaultPolicyName = "default_policy.cedar"
@@ -127,6 +139,7 @@ const (
 	DefaultACPPolicyName           = "default_acp_policy.cedar"
 	DefaultBundlePolicyName        = "default_bundle_policy.cedar"
 	DefaultScheduledRunPolicyName  = "default_scheduled_run_policy.cedar"
+	DefaultContextSyncPolicyName   = "default_context_sync_policy.cedar"
 )
 
 // PolicyDir is the directory under DataDir where user-authored
@@ -283,6 +296,7 @@ func (e *Engine) Reload(ctx context.Context) error {
 			{DefaultACPPolicyName, defaultACPPolicySource},
 			{DefaultBundlePolicyName, defaultBundlePolicySource},
 			{DefaultScheduledRunPolicyName, defaultScheduledRunPolicySource},
+			{DefaultContextSyncPolicyName, defaultContextSyncPolicySource},
 		}
 		for _, em := range embedded {
 			sources = append(sources, policySource{

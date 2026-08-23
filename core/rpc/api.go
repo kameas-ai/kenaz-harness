@@ -3506,6 +3506,16 @@ func New(c *core.Core, opts ...Option) *API {
 				Project:  &projectSyncBackendAdapter{ps: projectSyncer},
 				Handoff:  &handoffBackendAdapter{hh: handoffHandler},
 				Recovery: &recoveryBackendAdapter{},
+				// fleet-enforcement-truth-01PMZ505 WP13 (owner ruling
+				// G-7): a.cedarGate() is the SAME process-singleton every
+				// other gate site consults (nil-safe — degrades to
+				// cedar.AllowAll{} when no engine is wired), so an
+				// operator-authored forbid rule against
+				// context_sync.session.purge / context_sync.project.purge
+				// actually reaches SessionSync_DeleteRemote /
+				// ProjectSync_DeleteRemote instead of being silently
+				// unconsultable.
+				Gate: a.cedarGate(),
 			}
 
 			// FR-003 (fleet-context-sync-01NDFSEX15): wire the append hook so
