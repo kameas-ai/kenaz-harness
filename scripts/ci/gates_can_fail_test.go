@@ -131,6 +131,7 @@ var cwdSensitiveGates = []string{
 	"check-bundle-verify-ordering.sh",
 	"check-bundle-channel-kinds-sync.sh",
 	"check-serve-gap-classification.sh",
+	"check-secret-lookup-wiring.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -498,6 +499,58 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				"}\n",
 			file2:   "core/rpc/api.go",
 			append2: "\n\nvar zzGateProbeCalledWithNil = graphview.WithZzGateProbeCalledWithNil(nil)\n",
+		},
+		{
+			// B4 (unwired sweep, release/v0.72.0), clause 5's type-widening
+			// half: a Config-struct field whose type is NOT literally
+			// cedar.Gate but IS witnessed as *cedar.Engine-satisfied in the
+			// SAME FILE (`var _ <Type> = (*cedar.Engine)(nil)`) — the exact
+			// shape permissions.Config.Engine has (impl.go:23). Clause 3
+			// alone is blind to this: it only matches a field typed
+			// literally `cedar.Gate`. api.go's real permissionsview.Config
+			// literal IS caught this way — this plant proves the mechanism
+			// fires on an orphan package too, not just the real one.
+			name: "cedar-gate-arguments/clause5-config-witnessed-engine-field-omitted",
+			gate: "check-cedar-gate-arguments.sh",
+			file: "core/rpc/views/zzgateprobe3/impl.go",
+			content: "package zzgateprobe3\n\n" +
+				"import \"github.com/kameas-ai/kenaz-harness/core/policy/cedar\"\n\n" +
+				"type Engine interface{ Reload() error }\n\n" +
+				"var _ Engine = (*cedar.Engine)(nil)\n\n" +
+				"type Config struct {\n\tEngine Engine\n}\n",
+		},
+		{
+			// B4, clause 5's struct-name-widening half: a cedar.Gate-typed
+			// field in a struct named Impl, not Config — the exact shape
+			// contextsync.Impl.Gate has (impl.go:33). Clause 3 only scans
+			// `type Config struct` blocks, so it cannot see this at all;
+			// nothing else in the gate family could until clause 5.
+			name: "cedar-gate-arguments/clause5-impl-gate-field-never-constructed",
+			gate: "check-cedar-gate-arguments.sh",
+			file: "core/rpc/views/zzgateprobe4/impl.go",
+			content: "package zzgateprobe4\n\n" +
+				"import \"github.com/kameas-ai/kenaz-harness/core/policy/cedar\"\n\n" +
+				"type Impl struct {\n\tGate cedar.Gate\n}\n",
+		},
+		{
+			// B4's third field: chat.Config.SecretLookup, wired inside
+			// buildChatRunner (core/rpc/api.go). This has no witness (its
+			// concrete implementer, *secrets.ExposureIndex, lives in a
+			// different package with no compile-time assertion anywhere)
+			// and no cedar.Gate typing, so it does not fit
+			// check-cedar-gate-arguments.sh's charter at all — it is
+			// covered by the standalone check-secret-lookup-wiring.sh
+			// instead. That script checks EVERY chat.Config{} literal in
+			// api.go, not just the first, specifically so a planted second
+			// literal can prove the field-omission detection fires without
+			// touching buildChatRunner's real, correct one — appended
+			// as an unreachable top-level var so it is valid Go, not
+			// merely gate-shaped text.
+			name:       "secret-lookup-wiring/second-literal-omits-field",
+			gate:       "check-secret-lookup-wiring.sh",
+			wantOutput: "literal #2",
+			file:       "core/rpc/api.go",
+			append:     "\n\nvar zzGateProbeSecondChatConfig = chat.Config{\n\tKernel: nil,\n}\n",
 		},
 		{
 			name: "cedar-engine-singleton/second-call-site",

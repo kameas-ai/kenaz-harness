@@ -670,6 +670,60 @@ func TestRevokeGrant_ChangesEvaluateOutcome_FiveFamilies(t *testing.T) {
 	})
 }
 
+// TestRevokeGrant_TypedNilEngine_PanicsWithoutTheCallerGuard is M1
+// (unwired sweep, release/v0.72.0): impl.go's RevokeGrant guards its
+// Reload call with `if a.engine != nil`, which is an INTERFACE nil
+// check. core/rpc/api.go used to assign `Engine: a.cedarEngine` straight
+// into this Config field with no guard at the call site — unlike the two
+// adjacent hoist sites in the same function and unlike WP19's own
+// secretLookup/secretGate guards. When a.cedarEngine is a nil
+// *cedar.Engine (construction failure, logged as a warning at boot; see
+// buildCedarEngineOrNil), that direct assignment boxes it into a
+// NON-nil Engine interface value — the type word is set even though the
+// pointer is nil — so `a.engine != nil` here is TRUE and Reload gets
+// called on a nil receiver. *cedar.Engine.Reload dereferences
+// e.reloadMu on its first line, so that call panics — and by the time
+// RevokeGrant reaches it, os.Remove has ALREADY deleted the .cedar grant
+// file, leaving a half-revoked state (file gone, panic mid-request).
+//
+// This test proves the panic is real for the shape the un-guarded
+// assignment produces (Engine: (*cedar.Engine)(nil) boxed directly into
+// the Config), so it stands in for that call-site regression even though
+// it constructs permissions.API directly rather than through
+// core/rpc/api.go — the field is impl.go's own contract, not something
+// this package's tests can drive through the api.go call site. The
+// call-site guard itself (`var permissionsEngine permissionsview.Engine;
+// if eng := a.cedarEngine; eng != nil { permissionsEngine = eng }`) is
+// what keeps a real nil a.cedarEngine from ever reaching this shape in
+// production; this test is the reason that guard is not optional.
+func TestRevokeGrant_TypedNilEngine_PanicsWithoutTheCallerGuard(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, cedar.PolicyDir), 0o755); err != nil {
+		t.Fatalf("mkdir policy dir: %v", err)
+	}
+	const grantID = "bash_allow_zz_m1_typed_nil.cedar"
+	writeGrantFile(t, dir, grantID,
+		"permit(\n  principal,\n  action == Action::\"run_bash_command\",\n  resource == BashCommand::\"echo x\"\n);\n")
+
+	var nilConcreteEngine *cedar.Engine // deliberately nil, boxed with no guard below
+	api := New(Config{DataDir: dir, Registry: cedar.NewRegistry(), Engine: nilConcreteEngine})
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("RevokeGrant did not panic on a typed-nil Engine — either " +
+				"cedar.Engine.Reload became nil-receiver-safe (update this test's " +
+				"rationale) or something else absorbed the panic; either way the " +
+				"documented M1 hazard needs re-verifying")
+		}
+		t.Logf("confirmed panic (this is what api.go's nil-guard exists to prevent): %v", r)
+		if _, statErr := os.Stat(filepath.Join(dir, cedar.PolicyDir, grantID)); !os.IsNotExist(statErr) {
+			t.Fatalf("grant file still present after the panic — expected the half-revoked state (file removed, then panic) that makes this hazard dangerous, stat err=%v", statErr)
+		}
+	}()
+	_ = api.RevokeGrant(context.Background(), grantID)
+}
+
 // TestExtractFilesystemOpPath verifies the Cedar body parser extracts the
 // path correctly from well-formed and malformed bodies.
 func TestExtractFilesystemOpPath(t *testing.T) {
