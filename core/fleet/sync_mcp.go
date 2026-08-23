@@ -115,11 +115,26 @@ type MCPSyncCategory struct {
 	Pending    *SecretPromptQueue // shared with Sync RPC view for banner
 }
 
+// localOnlyConfigKeys names config keys that resolveConfig
+// (core/rpc/views/tools/impl.go) injects into a recipe's persisted
+// EnabledRecipe.Config for LOCAL template substitution
+// (${DATA_DIR} in args_template) — never for cross-device sync.
+// "data_dir" is not a recipe-declared EnvKey, so it survives the
+// SecretKeys redaction below untouched; it carries the user's
+// absolute profile path (and therefore OS username) and MUST be
+// stripped here regardless of whether the caller's Reader ever
+// copies EnabledRecipe.Config verbatim into InstalledMCP.EnvOverrides.
+// See docs/unwired-ledger.md, H2, 2026-08-23.
+var localOnlyConfigKeys = map[string]bool{
+	"data_dir": true,
+}
+
 // Collect implements CategoryCollector. Reads local MCP registry, strips
 // secret env override values, and returns the redacted JSON payload.
 //
-// HARD RULE: EnvOverrides values for any key listed in SecretKeys are
-// silently dropped (never included in the returned payload).
+// HARD RULE: EnvOverrides values for any key listed in SecretKeys, or
+// in localOnlyConfigKeys, are silently dropped (never included in the
+// returned payload).
 func (m *MCPSyncCategory) Collect(ctx context.Context) (json.RawMessage, error) {
 	if m.Reader == nil {
 		// No reader wired; return empty payload rather than blocking sync.
@@ -130,19 +145,26 @@ func (m *MCPSyncCategory) Collect(ctx context.Context) (json.RawMessage, error) 
 	if err != nil {
 		return nil, err
 	}
-	// Redact: strip secret env override values.
+	// Redact: strip secret env override values and local-only
+	// infrastructure keys (e.g. "data_dir") that must never leave
+	// the device.
 	redacted := make([]InstalledMCP, len(items))
 	for i, it := range items {
 		r := it
-		if len(it.EnvOverrides) > 0 && len(m.SecretKeys) > 0 {
+		if len(it.EnvOverrides) > 0 {
 			clean := make(map[string]string, len(it.EnvOverrides))
 			for k, v := range it.EnvOverrides {
-				if !m.SecretKeys[k] {
-					clean[k] = v
+				if localOnlyConfigKeys[k] {
+					continue
 				}
-				// Secret keys are dropped — audit block is best-effort here;
-				// a full audit emit would require threading the audit emitter
-				// through MCPSyncCategory; deferred to follow-up.
+				if len(m.SecretKeys) > 0 && m.SecretKeys[k] {
+					continue
+				}
+				clean[k] = v
+				// Secret / local-only keys are dropped — audit block is
+				// best-effort here; a full audit emit would require
+				// threading the audit emitter through MCPSyncCategory;
+				// deferred to follow-up.
 			}
 			r.EnvOverrides = clean
 		}

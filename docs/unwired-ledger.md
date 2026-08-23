@@ -309,6 +309,71 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-08-23 · `Sanitizer.SanitizeStream` has zero production callers — streamed assistant tokens are not redacted (PR #308 secret-reference regression fix)
+
+`core/credstore/refs/sanitizer.go` docstrings previously claimed "Every
+tool result content block AND every streamed assistant token is scanned
+via Sanitize" (FR-007 of `model-secret-references-01KW7M5A`, which does
+require both). That was never true for the streamed-token half:
+`SanitizeStream` (`sanitizer.go:131`, now with a corrected docstring) is a
+thin `Sanitize` alias with no reader/writer chunk-boundary handling
+despite an earlier comment describing one, and
+`/usr/bin/grep -rn 'SanitizeStream' --include='*.go' core/` minus
+`_test.go` returns only the declaration — no call site anywhere in the
+LLM streaming bridge (`core/rpc/views/llm/impl.go`).
+
+Net effect: `Sanitize` now runs on every tool result the three
+production `Resolver.Substitute` callers produce (bash, web_fetch, and —
+as of this fix — the MCP stdio transport), so a secret echoed back
+*inside a tool result* is redacted before it reaches session history or
+the UI. A secret the **model itself** types directly into its own
+streamed response text (as opposed to relaying it through a tool
+result) is NOT caught by anything today.
+
+**Not fixed here** — this entry was found while closing the MCP
+tool-result sanitization gap (`core/mcp/transport/stdio/server.go`
+`CallTool`), which was the actual security regression in scope. Wiring
+`SanitizeStream` into the assistant-token streaming path is a distinct
+change touching `core/rpc/views/llm/impl.go`'s stream loop and needs its
+own persisted-history test (per CLAUDE.md's testing-rule-3 discipline —
+a test that calls `SanitizeStream` directly proves nothing).
+
+**Owner:** alec. **Blocker:** no mission currently owns wiring
+`SanitizeStream` into the LLM streaming bridge; the next mission that
+touches assistant-token streaming should pick this up. **Date:** 2026-08-23.
+
+### 2026-08-23 · `fleet.MCPRegistryReader` has zero production implementers — the installed-MCP sync category is registered but always collects empty (PR #308 secret-reference regression fix, H2 investigation)
+
+`core/rpc/api.go:3256` constructs
+`corefleet.NewMCPSyncCategory(nil, nil, nil, syncPending)` — `Reader`,
+`Writer` and `SecretKeys` are all `nil` in production.
+`MCPSyncCategory.Collect` (`core/fleet/sync_mcp.go`) short-circuits on a
+nil `Reader` and returns an empty `InstalledMCPPayload` unconditionally.
+`/usr/bin/grep -rn 'func.*ListInstalled'` finds implementations only in
+`sync_test.go` and `sync_categories_bytepin_test.go` mocks — no
+production type satisfies `MCPRegistryReader` anywhere in `core/` or
+`cmd/`.
+
+Found while investigating an external review's H2 finding ("`data_dir`
+ships the user's absolute path off-device via `InstalledMCP.EnvOverrides`
+on every fleet sync"). As written that chain is **not reachable today** —
+there is no live path from `EnabledRecipe.Config` (which
+`core/rpc/views/tools/impl.go:489-492`'s `resolveConfig` seeds with
+`data_dir`) into `InstalledMCP.EnvOverrides`, because nothing ever builds
+an `InstalledMCP` from a real installed recipe in production; the
+"installed-MCP sync" category is itself the unwired half.
+`core/fleet/sync_mcp.go`'s `Collect` was still hardened in the same
+commit as this entry (`localOnlyConfigKeys` strips `"data_dir"` from
+`EnvOverrides` regardless of `SecretKeys`) as defense-in-depth, so a
+future `MCPRegistryReader` implementation does not silently reopen H2
+the day it is wired.
+
+**Owner:** alec. **Blocker:** no mission currently claims wiring a real
+`MCPRegistryReader` (the reader would need to enumerate
+`recipes.EnabledRecipes` + the running pool and populate
+`RequiresSecretKeys` from each recipe's declared `EnvKeys`). **Date:**
+2026-08-23.
+
 ### 2026-08-22 · Bundled sub-agent profiles advertise containment (allowed_tools/denied_tools/budget_*) that reaches no consumer (`subagent-control-and-background-tasks-01PMZB11`, containment review of PR #307 finding B3)
 
 Every bundled profile (`core/agents/bundled/*.yaml`) declares

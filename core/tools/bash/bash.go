@@ -417,7 +417,10 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 	commandLine := args.Command
 	resolver := refs.ResolverFromContext(ctx)
 	if resolver != nil && refs.HasReference(commandLine) {
-		rctx := cedar.ResolveContext{ToolName: Name}
+		// AgentKind: "trusted" — bash runs in-process under harness
+		// control (not a third-party MCP server); see the MCP
+		// stdio CallTool comment for the "untrusted" counterpart.
+		rctx := cedar.ResolveContext{ToolName: Name, AgentKind: "trusted"}
 		sub, _, subErr := resolver.Substitute(ctx, commandLine, rctx)
 		if subErr != nil {
 			return marshalResult(callResult{

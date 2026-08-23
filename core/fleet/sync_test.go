@@ -263,6 +263,67 @@ func TestSync_SecretExclusion(t *testing.T) {
 	}
 }
 
+// TestSync_DataDirStripped is the falsification for H2 (external
+// review of PR #308's secret-reference regression): resolveConfig
+// (core/rpc/views/tools/impl.go:489-492) unconditionally seeds every
+// recipe's persisted EnabledRecipe.Config with "data_dir" — the
+// user's absolute harness profile path, which also discloses their OS
+// username. That key is not a recipe-declared EnvKey, so the existing
+// SecretKeys-only redaction below never drops it. This test asserts
+// Collect strips "data_dir" from EnvOverrides in the PERSISTED/
+// returned sync payload (the marshaled JSON a remote fleet server
+// would actually receive), not from an intermediate in-memory value,
+// and does so independent of whether SecretKeys is configured at all
+// (the vulnerable path has zero EnvKeys — "data_dir" is not a secret,
+// it's local-only infrastructure).
+func TestSync_DataDirStripped(t *testing.T) {
+	pending := &SecretPromptQueue{}
+	// No SecretKeys configured — this recipe declares none, which is
+	// exactly the case where the pre-fix code applied NO redaction at
+	// all (see Collect's `len(m.SecretKeys) > 0` guard) and EnvOverrides
+	// passed through completely unfiltered.
+	mcp := NewMCPSyncCategory(nil, nil, nil, pending)
+
+	items := []InstalledMCP{
+		{
+			ID:           "mcp-1",
+			RecipeID:     "filesystem-full",
+			EnabledState: true,
+			EnvOverrides: map[string]string{
+				"data_dir":   "/Users/alice.example/Library/Application Support/kenaz/harness/prod",
+				"CUSTOM_URL": "https://api.example.com", // must survive
+			},
+		},
+	}
+	mcp.Reader = &mockMCPReader{items: items}
+
+	raw, err := mcp.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+
+	var p InstalledMCPPayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(p.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(p.Items))
+	}
+	got := p.Items[0]
+	if _, present := got.EnvOverrides["data_dir"]; present {
+		t.Error("data_dir must be stripped from the synced payload (H2)")
+	}
+	if got.EnvOverrides["CUSTOM_URL"] != "https://api.example.com" {
+		t.Errorf("CUSTOM_URL should be preserved, got %q", got.EnvOverrides["CUSTOM_URL"])
+	}
+
+	// Ensure the absolute path / username never appears in the raw
+	// wire payload at all, not just under the expected key.
+	if strings.Contains(string(raw), "alice.example") {
+		t.Errorf("username/path leaked into synced payload: %s", raw)
+	}
+}
+
 func TestSync_PendingSecretQueue(t *testing.T) {
 	// Verify that Apply enqueues MCPs needing secrets.
 	pending := &SecretPromptQueue{}
