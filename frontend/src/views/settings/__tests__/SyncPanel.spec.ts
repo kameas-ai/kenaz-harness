@@ -49,12 +49,32 @@ vi.mock('vue-router', () => ({
 }));
 
 // ── fixtures ───────────────────────────────────────────────────────────────
+//
+// Canonical wire ids for SyncCategory, mirroring corefleet.AllSyncCategories()
+// (core/fleet/sync.go:39-47) in declaration order. Both the response fixture
+// below and the coverage assertion in spec 4 read from this single list, so
+// a wrong id here fails loudly instead of the two independently hardcoded
+// literals silently drifting apart — the exact shape of the bug this pins:
+// before WP07 (fleet-enforcement-truth-01PMZ505) this fixture hand-built
+// 'installed_mcp_servers', which is NOT corefleet.SyncCategoryInstalledMCP
+// ("installed_mcp") and so kept this file green while the real panel
+// (SyncPanel.vue) sent an id the backend rejected with "unknown category"
+// on every toggle. CLAUDE.md names this blind spot explicitly: a test
+// fixture that bypasses the layer under test.
+const BACKEND_SYNC_CATEGORY_IDS = [
+  'provider_profiles',
+  'model_prefs',
+  'mcp_recipes',
+  'installed_mcp',
+  'ui_theme',
+] as const;
+
 const STATUSES: SyncStatusView[] = [
-  { category: 'provider_profiles', enabled: true, last_push_at: '2026-07-01T10:00:00Z' },
-  { category: 'model_prefs', enabled: false },
-  { category: 'mcp_recipes', enabled: false },
-  { category: 'installed_mcp_servers', enabled: true },
-  { category: 'ui_theme', enabled: false },
+  { category: BACKEND_SYNC_CATEGORY_IDS[0], enabled: true, last_push_at: '2026-07-01T10:00:00Z' },
+  { category: BACKEND_SYNC_CATEGORY_IDS[1], enabled: false },
+  { category: BACKEND_SYNC_CATEGORY_IDS[2], enabled: false },
+  { category: BACKEND_SYNC_CATEGORY_IDS[3], enabled: true },
+  { category: BACKEND_SYNC_CATEGORY_IDS[4], enabled: false },
 ];
 
 const PENDING_SECRET: PendingMCPSecret = {
@@ -135,20 +155,12 @@ describe('SyncPanel', () => {
     expect(wrapper.find('[data-testid="sync-category-list"]').exists()).toBe(false);
   });
 
-  it('4. renders all 5 categories with toggles', async () => {
+  it('4. renders all 5 categories with toggles, matching the canonical backend ids', async () => {
     const { client } = buildClient({ statuses: STATUSES });
     const wrapper = mountPanel(client);
     await flushPromises();
 
-    const categories = [
-      'provider_profiles',
-      'model_prefs',
-      'mcp_recipes',
-      'installed_mcp_servers',
-      'ui_theme',
-    ];
-
-    for (const id of categories) {
+    for (const id of BACKEND_SYNC_CATEGORY_IDS) {
       expect(wrapper.find(`[data-testid="sync-category-${id}"]`).exists()).toBe(true);
       expect(wrapper.find(`[data-testid="sync-toggle-${id}"]`).exists()).toBe(true);
     }
@@ -165,6 +177,21 @@ describe('SyncPanel', () => {
     await flushPromises();
 
     expect(toggleFn).toHaveBeenCalledWith('model_prefs', true);
+  });
+
+  it('7. installed-MCP toggle sends the canonical backend category id, not the historic installed_mcp_servers id', async () => {
+    const { client, toggleFn } = buildClient({ statuses: STATUSES });
+    const wrapper = mountPanel(client);
+    await flushPromises();
+
+    // STATUSES marks installed_mcp enabled — toggling flips it off.
+    const toggle = wrapper.find('[data-testid="sync-toggle-installed_mcp"]');
+    expect(toggle.exists()).toBe(true);
+    await toggle.trigger('change');
+    await flushPromises();
+
+    expect(toggleFn).toHaveBeenCalledWith('installed_mcp', false);
+    expect(toggleFn).not.toHaveBeenCalledWith('installed_mcp_servers', expect.anything());
   });
 
   it('6. pending-secrets banner appears when MCP servers need credentials', async () => {
