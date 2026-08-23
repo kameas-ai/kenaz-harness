@@ -3265,7 +3265,12 @@ func New(c *core.Core, opts ...Option) *API {
 		// sync_mcp_registry.go and the redaction guard at
 		// core/fleet/sync_mcp.go:137).
 		mcpRegistry := newToolsMCPRegistry(a.toolsAPI)
-		mcpSyncCat := corefleet.NewMCPSyncCategory(mcpRegistry, mcpRegistry, mcpRecipeSecretKeys(mcpUserRecipeSource(a.mcpUserStore)), syncPending)
+		mcpSyncCat := corefleet.NewMCPSyncCategory(mcpRegistry, mcpRegistry, func() map[string]bool {
+			// Resolved per Collect, not once at boot: a.mcpUserStore accepts
+			// recipe imports at runtime, and a boot-time snapshot shipped the
+			// tokens of every recipe added after startup.
+			return mcpRecipeSecretKeys(mcpUserRecipeSource(a.mcpUserStore))
+		}, syncPending)
 		a.syncKindRegistry = registerSyncCategories(context.Background(), syncer, syncStore, mcpSyncCat)
 
 		// fleet-generic-sync-framework-01NSYNC02 WP05: register slash_commands

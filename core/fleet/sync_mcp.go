@@ -109,17 +109,30 @@ func (q *SecretPromptQueue) Remove(id string) {
 // SyncCategoryInstalledMCP. It is registered with a Syncer via
 // RegisterCategory.
 type MCPSyncCategory struct {
-	Reader     MCPRegistryReader
-	Writer     MCPRegistryWriter
-	SecretKeys map[string]bool   // set of env key names flagged as secrets in loaded recipes
+	Reader MCPRegistryReader
+	Writer MCPRegistryWriter
+	// SecretKeys reports which env-key names hold secret values. It is
+	// consulted on EVERY Collect, never snapshotted, so a recipe imported
+	// after boot is covered (a boot-time map silently shipped the tokens
+	// of anything installed later — fleet-enforcement-truth-01PMZ505 WP07
+	// follow-up, 2026-08-23).
+	//
+	// A nil func, or a func returning a nil map, means "the secret set
+	// could not be determined". Collect then drops EVERY EnvOverrides
+	// value rather than guessing. A non-nil EMPTY map is different: it
+	// means "determined — no key is secret", and overrides ship.
+	SecretKeys func() map[string]bool
 	Pending    *SecretPromptQueue // shared with Sync RPC view for banner
 }
 
 // Collect implements CategoryCollector. Reads local MCP registry, strips
 // secret env override values, and returns the redacted JSON payload.
 //
-// HARD RULE: EnvOverrides values for any key listed in SecretKeys are
-// silently dropped (never included in the returned payload).
+// HARD RULE: EnvOverrides values for any key the SecretKeys provider
+// lists are silently dropped (never included in the returned payload),
+// and if the provider cannot determine the set at all, EVERY override is
+// dropped. The set is resolved per call, so a recipe imported after boot
+// is covered.
 func (m *MCPSyncCategory) Collect(ctx context.Context) (json.RawMessage, error) {
 	if m.Reader == nil {
 		// No reader wired; return empty payload rather than blocking sync.
@@ -130,21 +143,38 @@ func (m *MCPSyncCategory) Collect(ctx context.Context) (json.RawMessage, error) 
 	if err != nil {
 		return nil, err
 	}
+	// Resolve the secret set fresh for this Collect. `known` distinguishes
+	// "determined, and it happens to be empty" from "could not determine",
+	// which must not share a code path: the first ships overrides, the
+	// second drops them.
+	var secretKeys map[string]bool
+	known := false
+	if m.SecretKeys != nil {
+		if s := m.SecretKeys(); s != nil {
+			secretKeys, known = s, true
+		}
+	}
 	// Redact: strip secret env override values.
 	redacted := make([]InstalledMCP, len(items))
 	for i, it := range items {
 		r := it
-		if len(it.EnvOverrides) > 0 && len(m.SecretKeys) > 0 {
-			clean := make(map[string]string, len(it.EnvOverrides))
-			for k, v := range it.EnvOverrides {
-				if !m.SecretKeys[k] {
-					clean[k] = v
+		if len(it.EnvOverrides) > 0 {
+			if !known {
+				// Fail closed. We cannot tell which of these keys hold
+				// credentials, so none of them leave the device.
+				r.EnvOverrides = nil
+			} else {
+				clean := make(map[string]string, len(it.EnvOverrides))
+				for k, v := range it.EnvOverrides {
+					if !secretKeys[k] {
+						clean[k] = v
+					}
+					// Secret keys are dropped — audit block is best-effort here;
+					// a full audit emit would require threading the audit emitter
+					// through MCPSyncCategory; deferred to follow-up.
 				}
-				// Secret keys are dropped — audit block is best-effort here;
-				// a full audit emit would require threading the audit emitter
-				// through MCPSyncCategory; deferred to follow-up.
+				r.EnvOverrides = clean
 			}
-			r.EnvOverrides = clean
 		}
 		redacted[i] = r
 	}
@@ -177,7 +207,7 @@ func (m *MCPSyncCategory) Apply(ctx context.Context, raw json.RawMessage) error 
 
 // NewMCPSyncCategory constructs a wired MCPSyncCategory. reader and writer
 // may be nil (best-effort: sync still runs, just with empty collect / no apply).
-func NewMCPSyncCategory(reader MCPRegistryReader, writer MCPRegistryWriter, secretKeys map[string]bool, pending *SecretPromptQueue) *MCPSyncCategory {
+func NewMCPSyncCategory(reader MCPRegistryReader, writer MCPRegistryWriter, secretKeys func() map[string]bool, pending *SecretPromptQueue) *MCPSyncCategory {
 	if pending == nil {
 		pending = &SecretPromptQueue{}
 	}

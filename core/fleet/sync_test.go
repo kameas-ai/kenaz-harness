@@ -211,7 +211,7 @@ func TestSync_SecretExclusion(t *testing.T) {
 	// Verify MCPSyncCategory.Collect strips secret keys from EnvOverrides.
 	secretKeys := map[string]bool{"API_KEY": true, "SECRET_TOKEN": true}
 	pending := &SecretPromptQueue{}
-	mcp := NewMCPSyncCategory(nil, nil, secretKeys, pending)
+	mcp := NewMCPSyncCategory(nil, nil, func() map[string]bool { return secretKeys }, pending)
 
 	// Feed via a mock reader.
 	items := []InstalledMCP{
@@ -220,9 +220,9 @@ func TestSync_SecretExclusion(t *testing.T) {
 			RecipeID:     "github",
 			EnabledState: true,
 			EnvOverrides: map[string]string{
-				"API_KEY":       "super-secret-value", // must be stripped
-				"CUSTOM_URL":    "https://api.example.com", // must survive
-				"SECRET_TOKEN":  "another-secret", // must be stripped
+				"API_KEY":      "super-secret-value",      // must be stripped
+				"CUSTOM_URL":   "https://api.example.com", // must survive
+				"SECRET_TOKEN": "another-secret",          // must be stripped
 			},
 			RequiresSecretKeys: []string{"API_KEY", "SECRET_TOKEN"},
 		},

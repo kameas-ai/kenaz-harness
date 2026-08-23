@@ -161,7 +161,7 @@ func TestToolsMCPRegistry_ListInstalled_RedactsSecretKeyedOverride(t *testing.T)
 		t.Fatalf("mcpRecipeSecretKeys() = %v, want ACME_TOKEN present (recipe declares it as an EnvKey)", secretKeys)
 	}
 
-	cattest := corefleet.NewMCPSyncCategory(registry, registry, secretKeys, nil)
+	cattest := corefleet.NewMCPSyncCategory(registry, registry, func() map[string]bool { return secretKeys }, nil)
 	raw, err := cattest.Collect(context.Background())
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
@@ -175,15 +175,16 @@ func TestToolsMCPRegistry_ListInstalled_RedactsSecretKeyedOverride(t *testing.T)
 	}
 }
 
-// TestToolsMCPRegistry_ListInstalled_NilSecretKeysLeaks is the
-// falsification half of AC-010: with SecretKeys nil (the exact defect
-// this WP fixes — core/rpc/api.go used to pass nil for all three
-// constructor arguments), the redaction guard at sync_mcp.go:137
-// (`len(m.SecretKeys) > 0`) never fires and the secret value ships in
-// the payload. This proves the guard is load-bearing, not merely
-// present: flip SecretKeys back to nil at the call site and this test
-// goes red with the secret value visible in raw.
-func TestToolsMCPRegistry_ListInstalled_NilSecretKeysLeaks(t *testing.T) {
+// TestToolsMCPRegistry_ListInstalled_UndeterminableSecretSet_ShipsNothing
+// pins the fail-closed half of AC-010. A nil SecretKeys provider (or one
+// returning a nil map) means "the secret set could not be determined" —
+// mergedRecipeCatalog returned nil, say. The old code treated that as
+// "no key is secret" and shipped every override in plaintext; it now
+// drops every override instead.
+//
+// Flip the `if !known` arm in MCPSyncCategory.Collect back to the old
+// `len(m.SecretKeys) > 0` guard and this goes red with the secret in raw.
+func TestToolsMCPRegistry_ListInstalled_UndeterminableSecretSet_ShipsNothing(t *testing.T) {
 	t.Parallel()
 	cat := &recipes.Catalog{Version: 1, Recipes: []recipes.Recipe{acmeRecipe()}}
 	pool := newRegistryFakePool()
@@ -198,18 +199,74 @@ func TestToolsMCPRegistry_ListInstalled_NilSecretKeysLeaks(t *testing.T) {
 	}
 
 	registry := newToolsMCPRegistry(toolsAPI)
-	// The mutation under test: nil SecretKeys, exactly what
-	// core/rpc/api.go passed before WP07.
-	cattest := corefleet.NewMCPSyncCategory(registry, registry, nil, nil)
+	for _, tc := range []struct {
+		name     string
+		provider func() map[string]bool
+	}{
+		{"nil provider", nil},
+		{"provider returns nil", func() map[string]bool { return nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cattest := corefleet.NewMCPSyncCategory(registry, registry, tc.provider, nil)
+			raw, err := cattest.Collect(context.Background())
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			if strings.Contains(string(raw), secretValue) {
+				t.Fatalf("an undeterminable secret set must drop EVERY env override rather than "+
+					"guessing that none are secret; the token shipped instead; raw = %s", raw)
+			}
+		})
+	}
+}
+
+// TestToolsMCPRegistry_ListInstalled_RedactsRecipeAddedAfterConstruction
+// pins that the secret set is resolved per Collect rather than snapshotted
+// at construction. WP07 originally passed mcpRecipeSecretKeys(...) — an
+// already-evaluated map — and a.mcpUserStore accepts recipe imports at
+// runtime, so a recipe imported after boot was absent from the redaction
+// set and its token shipped in plaintext on the ordinary "import an MCP
+// recipe, paste the token, sync" path.
+//
+// The category is constructed while the catalog does NOT yet contain the
+// recipe; the recipe (and therefore its ACME_TOKEN env key) only appears
+// afterwards. A provider evaluated at construction cannot know about it.
+func TestToolsMCPRegistry_ListInstalled_RedactsRecipeAddedAfterConstruction(t *testing.T) {
+	t.Parallel()
+	cat := &recipes.Catalog{Version: 1, Recipes: []recipes.Recipe{}}
+	pool := newRegistryFakePool()
+	toolsAPI := newTestToolsAPI(t, cat, pool)
+	registry := newToolsMCPRegistry(toolsAPI)
+
+	cattest := corefleet.NewMCPSyncCategory(registry, registry, func() map[string]bool {
+		out := map[string]bool{}
+		for _, rec := range cat.Recipes {
+			for _, k := range rec.EnvKeys {
+				if k.Name != "" {
+					out[k.Name] = true
+				}
+			}
+		}
+		return out
+	}, nil)
+
+	// The recipe arrives AFTER the category exists — the post-boot import.
+	cat.Recipes = append(cat.Recipes, acmeRecipe())
+
+	const secretValue = "sk-imported-after-the-category-was-built"
+	if _, err := toolsAPI.InstallRecipe(context.Background(), "acme-mcp", nil, map[string]any{
+		"ACME_TOKEN": secretValue,
+	}); err != nil {
+		t.Fatalf("InstallRecipe: %v", err)
+	}
+
 	raw, err := cattest.Collect(context.Background())
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-
-	if !strings.Contains(string(raw), secretValue) {
-		t.Fatalf("with SecretKeys nil the guard should NOT fire (this pins the defect this WP fixes) — "+
-			"got a payload that redacted anyway, meaning this test no longer demonstrates why the "+
-			"call site must always pass a non-nil SecretKeys map; raw = %s", raw)
+	if strings.Contains(string(raw), secretValue) {
+		t.Fatalf("a recipe imported after the sync category was constructed must still be "+
+			"redacted — a boot-time snapshot of the secret set ships its token; raw = %s", raw)
 	}
 }
 

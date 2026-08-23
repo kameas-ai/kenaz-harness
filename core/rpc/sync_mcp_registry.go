@@ -180,11 +180,14 @@ func (r *toolsMCPRegistry) ApplyInstalled(incoming []corefleet.InstalledMCP) err
 // credential-bearing), so the decidable secret set is every declared
 // name, not a narrower per-recipe subset.
 func mcpRecipeSecretKeys(userSource func() []recipes.Recipe) map[string]bool {
-	out := make(map[string]bool)
 	catalog := mergedRecipeCatalog(userSource)
 	if catalog == nil {
-		return out
+		// UNDETERMINABLE, not "empty". Returning an empty map here would
+		// tell MCPSyncCategory.Collect "no key is secret" and ship every
+		// env override in plaintext. nil makes it fail closed instead.
+		return nil
 	}
+	out := make(map[string]bool)
 	for _, rec := range catalog.List() {
 		for _, k := range rec.EnvKeys {
 			if k.Name != "" {
