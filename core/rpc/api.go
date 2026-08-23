@@ -2947,8 +2947,14 @@ func New(c *core.Core, opts ...Option) *API {
 		a.permissionsAPI = permissionsview.New(permissionsview.Config{
 			DataDir:  cedarDataDir,
 			Registry: a.promptRegistry,
-			// Engine left nil for now — RevokeGrant skips the reload
-			// gracefully when the engine is unset.
+			// Share the SAME a.cedarEngine every other gate site
+			// consults (WP05 hoist), so RevokeGrant's Reload actually
+			// swaps the atomic PolicySet pointer Evaluate reads —
+			// trust-surfaces-that-fire-01PMZ202 WP16. Before this fix
+			// the field was left nil, RevokeGrant deleted the .cedar
+			// snippet but never told the cached PolicySet, and a
+			// revoked grant stayed live for the rest of the process.
+			Engine: a.cedarEngine,
 			// ConfigTrimmer is wired after toolsAPI is constructed; see
 			// the wiring step below that calls setPermissionsConfigTrimmer.
 		})
