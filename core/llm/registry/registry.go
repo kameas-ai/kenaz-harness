@@ -102,6 +102,18 @@ func New(opts Options) (*Registry, error) {
 		// Options.Cache explicitly (capabilities.NewSQLiteCache(db)).
 		cache = capabilities.DefaultCache(nil)
 	}
+	// M5 (third part): InvalidateSchemaVersion's own doc says it is
+	// "intended for a startup sweep" but had zero non-production
+	// callers anywhere in the tree. Registry construction IS that
+	// startup — wiring it here means a llm.CapabilitySchemaVersion bump
+	// actually evicts stale-schema rows instead of only relying on the
+	// per-Get version check (which already keeps a stale row from being
+	// TRUSTED, but leaves it occupying the table forever). Best-effort:
+	// a failure here must not block chassis boot over a cache-hygiene
+	// sweep.
+	if err := cache.InvalidateSchemaVersion(context.Background()); err != nil {
+		logging.L().Warn("llm.capability_cache.schema_invalidate_failed", "err", err.Error())
+	}
 	r := &Registry{
 		adapters: map[string]llm.ProviderAdapter{},
 		profiles: map[string]llm.ProviderProfile{},
@@ -170,6 +182,17 @@ func New(opts Options) (*Registry, error) {
 // already checked the latter before calling MaybeRefresh, but this
 // method can also be invoked directly by tests, so the check is
 // repeated here rather than assumed.
+//
+// H4 fix: an adapter is shared by EVERY profile of its Kind
+// (r.adapters is keyed by Kind, not by profile ID), but plain
+// CapabilitiesProvider.ProviderCapabilities(ctx, modelID) carries no
+// endpoint. Since this method has prof (and prof.Endpoint) in scope,
+// it prefers llm.EndpointCapabilitiesProvider when the adapter
+// implements it, so the probe targets the ACTUAL profile's endpoint
+// instead of the adapter's process-wide default — otherwise a remote
+// profile's capability record would be a probe of whatever host that
+// default happens to be, cached under the remote profile's ID and fed
+// straight into Gate.Check.
 func (r *Registry) refreshCapabilities(ctx context.Context, profileID, modelID string) (llm.ProviderCapabilities, error) {
 	r.mu.RLock()
 	prof, ok := r.profiles[profileID]
@@ -180,6 +203,9 @@ func (r *Registry) refreshCapabilities(ctx context.Context, profileID, modelID s
 	r.mu.RUnlock()
 	if !ok {
 		return llm.ProviderCapabilities{}, fmt.Errorf("llm: capability refresh: profile %q not registered", profileID)
+	}
+	if ep, ok := adapter.(llm.EndpointCapabilitiesProvider); ok {
+		return ep.ProviderCapabilitiesAt(ctx, prof.Endpoint, modelID)
 	}
 	cp, ok := adapter.(llm.CapabilitiesProvider)
 	if !ok {
@@ -496,7 +522,18 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 	// A-5 states explicitly.
 	if cache != nil {
 		if cached, hit := cache.Get(ctx, prof.ID, prof.Model); hit {
-			prof.CapabilityHints = mergeCapabilityHints(cached.ToDescriptor().Supported, prof.CapabilityHints)
+			// M5 fix: overlay only the capability keys the probe that
+			// produced this record actually determined
+			// (cached.ProbedSupported()), not the full dense
+			// ToDescriptor().Supported map. Using the latter would
+			// shadow every one of the 12 Supported keys on every cache
+			// hit — including the 10 the probe never checked and only
+			// copied through from the static catalog baseline it
+			// started from — for up to cacheTTL (7 days), directly
+			// contradicting the A-5 invariant this comment block already
+			// describes ("the probe result merges over it, never
+			// replaces it").
+			prof.CapabilityHints = mergeCapabilityHints(cached.ProbedSupported(), prof.CapabilityHints)
 		}
 	}
 	// MaybeRefresh is the read-path trigger the spec's re-derivation

@@ -119,6 +119,66 @@ func TestStream_ToolRoundTrip(t *testing.T) {
 	}
 }
 
+// TestStream_ToolCallDelta_FinishStop_DoesNotPanic is the B2
+// falsification test (finding B2, review 2026-08-23). Ollama commonly
+// finishes a tool-calling turn with finish_reason=="stop" rather than
+// "tool_calls". Before the fix, pump()'s defer ran close(s.events)
+// BEFORE flushPendingToolCallsLocked(); any tool-call delta that never
+// saw finish_reason=="tool_calls" inline panicked with "send on closed
+// channel" when the defer's flush ran — there is no recover on this
+// goroutine, so the panic kills the whole desktop app, not just the
+// request. This drives exactly that shape through chatStream via a
+// real (httptest) SSE round trip and asserts (a) no panic and (b) the
+// tool call is not silently dropped from the event stream.
+func TestStream_ToolCallDelta_FinishStop_DoesNotPanic(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		frames := []string{
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"search","arguments":"{}"}}]},"finish_reason":null}]}`,
+			`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+		}
+		for _, f := range frames {
+			fmt.Fprintf(w, "data: %s\n\n", f)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		if fl, ok := w.(http.Flusher); ok {
+			fl.Flush()
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	a := ollama.New(ollama.WithHTTPClient(srv.Client()))
+	prof := llm.ProviderProfile{ID: "ollama-test", Kind: ollama.Kind, Model: "llama3.1", Endpoint: srv.URL}
+	req := llm.GenerationRequest{
+		ProfileID: "ollama-test",
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: "text", Text: "search for weather"}}},
+		},
+	}
+
+	stream, err := a.Stream(context.Background(), req, prof, nil)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	var sawTool bool
+	for ev := range stream.Events() {
+		if ev.Kind == llm.StreamTool {
+			sawTool = true
+		}
+	}
+	resp, ferr := stream.Final()
+	if ferr != nil {
+		t.Fatalf("Final: %v", ferr)
+	}
+	if !sawTool {
+		t.Error("expected a StreamTool event for the delta that never saw finish_reason==\"tool_calls\"")
+	}
+	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].ID != "call_1" {
+		t.Errorf("Final().ToolCalls = %+v, want one call with ID call_1", resp.ToolCalls)
+	}
+}
+
 func TestListModels_ParsesNativeTagsEndpoint(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/tags" {
