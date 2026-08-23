@@ -46,6 +46,193 @@ func TestSignInRecipe_NoClientID(t *testing.T) {
 	}
 }
 
+// ── UNIT-3 3f: the arm switch (spec.md §1.8/§1.9, kitty-specs/connector-
+// lifecycle-truth-01PMZ303) ─────────────────────────────────────────────
+
+// bareRejectMsg is the pre-UNIT-3 message SignInRecipe returned for EVERY
+// arm alike whenever the resolved client id was empty. AC-001 asserts no
+// mcp_oauth recipe in the shipped catalogs still hits this exact message
+// without DCR or substitution ever having been attempted.
+const bareRejectMsg = "has no OAuth client_id configured"
+
+// AC-001 (spec.md §7): a table test derived from the real catalogs — for
+// every mcp_oauth recipe in recipes.Registry() and recipes.Shipped(), the
+// arm switch must route SignInRecipe into a real attempt (DCR discovery, or
+// env substitution) instead of the old arm-blind bare reject. A hardcoded
+// id list would pass falsely on a newly added recipe; deriving the set from
+// the catalogs is the point of this test.
+//
+// Network-free by construction: every recipe's URL is swapped for a local
+// httptest server before the call — this makes zero requests to any
+// third-party provider, ever. The server answers 200 (not 401), so
+// oauth.SignInWithDCR's Discover step fails fast with ErrNoChallenge; that
+// failure — distinct from bareRejectMsg — is the proof an attempt was made.
+//
+// Mutation (tasks.md UNIT-3 3f AC-001): revert the switch to the single
+// pre-UNIT-3 "clientID == ''" reject. Must fail, naming ≥30 recipes (the
+// browser_oauth_dcr arm alone is 30).
+func TestSignInRecipe_ArmSwitch_NeverBareRejectsWithoutAttempting(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK) // not 401 → Discover fails fast, no real grant attempted
+	}))
+	defer srv.Close()
+
+	var subjects []recipes.Recipe
+	seen := map[string]bool{}
+	for _, cat := range []*recipes.Catalog{recipes.Registry(), recipes.Shipped()} {
+		for _, r := range cat.List() {
+			if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+				continue
+			}
+			if seen[r.ID] {
+				continue
+			}
+			seen[r.ID] = true
+			subjects = append(subjects, r)
+		}
+	}
+	if len(subjects) < 30 {
+		t.Fatalf("expected at least 30 mcp_oauth recipes across Registry()+Shipped() (spec.md §11 R-1), found %d — catalog census drifted", len(subjects))
+	}
+
+	var bareRejected []string
+	for _, r := range subjects {
+		r.URL = srv.URL // never dial the recipe's real provider from a test
+		cat := &recipes.Catalog{Version: 1, Recipes: []recipes.Recipe{r}}
+		api := New(Config{Catalog: cat, Secrets: secrets.NewMemoryBackend()})
+		_, err := api.SignInRecipe(context.Background(), r.ID)
+		if err != nil && strings.Contains(err.Error(), bareRejectMsg) {
+			bareRejected = append(bareRejected, r.ID)
+		}
+	}
+	if len(bareRejected) > 0 {
+		t.Errorf("%d of %d mcp_oauth recipes still hit the bare client_id reject without attempting DCR or substitution: %v",
+			len(bareRejected), len(subjects), bareRejected)
+	}
+}
+
+// AC-002 (Go) (spec.md §7): enumerate all six Recipe.PrimaryAuth constants
+// plus the oauth-with-no-Auth-block third state (spec.md §1.9) and assert
+// each gets a distinct, named disposition rather than falling through to a
+// shared generic message.
+func TestSignInRecipe_ArmSwitch_EveryArmNamed(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK) // never a real grant — see TestSignInRecipe_ArmSwitch_NeverBareRejectsWithoutAttempting
+	}))
+	defer srv.Close()
+
+	mk := func(id, primaryAuth string, auth *recipes.RecipeAuth) recipes.Recipe {
+		return recipes.Recipe{
+			ID:          id,
+			Transport:   recipes.TransportHTTP,
+			URL:         srv.URL,
+			PrimaryAuth: primaryAuth,
+			Auth:        auth,
+		}
+	}
+	oauthBlock := func(clientID string) *recipes.RecipeAuth {
+		return &recipes.RecipeAuth{Kind: recipes.AuthKindMCPOAuth, ClientID: clientID}
+	}
+
+	cases := []struct {
+		name        string
+		recipe      recipes.Recipe
+		wantErrHas  string
+		wantAttempt bool // true when the error must NOT be a fail-closed message (network was attempted)
+	}{
+		{
+			name:        "browser_oauth_dcr wires even with empty client id",
+			recipe:      mk("dcr-arm", recipes.PrimaryAuthBrowserOAuthDCR, oauthBlock("")),
+			wantAttempt: true,
+		},
+		{
+			name:        "browser_oauth_pkce wires when client id resolves",
+			recipe:      mk("pkce-arm-ready", recipes.PrimaryAuthBrowserOAuthPKCE, oauthBlock("baked-cid")),
+			wantAttempt: true,
+		},
+		{
+			name:       "browser_oauth_pkce fails closed with a named blocker when client id is empty",
+			recipe:     mk("pkce-arm-blocked", recipes.PrimaryAuthBrowserOAuthPKCE, oauthBlock("")),
+			wantErrHas: "does not support dynamic client registration",
+		},
+		{
+			name:       "oauth arm fails closed with an auth block",
+			recipe:     mk("oauth-arm-with-auth", recipes.PrimaryAuthOAuth, oauthBlock("")),
+			wantErrHas: "no working sign-in path yet",
+		},
+		{
+			name:       "oauth arm fails closed with NO auth block (spec.md §1.9 third state)",
+			recipe:     mk("oauth-arm-no-auth", recipes.PrimaryAuthOAuth, nil),
+			wantErrHas: "no working sign-in path yet",
+		},
+		{
+			name:       "device_code is not reachable through SignInRecipe",
+			recipe:     mk("device-code-arm", recipes.PrimaryAuthDeviceCode, oauthBlock("baked-cid")),
+			wantErrHas: "call BeginDeviceAuth",
+		},
+		{
+			name:       "keys arm is not an OAuth sign-in arm",
+			recipe:     mk("keys-arm", recipes.PrimaryAuthKeys, oauthBlock("baked-cid")),
+			wantErrHas: "not an OAuth sign-in arm",
+		},
+		{
+			name:       "none arm is not an OAuth sign-in arm",
+			recipe:     mk("none-arm", recipes.PrimaryAuthNone, oauthBlock("baked-cid")),
+			wantErrHas: "not an OAuth sign-in arm",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cat := &recipes.Catalog{Version: 1, Recipes: []recipes.Recipe{tc.recipe}}
+			api := New(Config{Catalog: cat, Secrets: secrets.NewMemoryBackend()})
+			_, err := api.SignInRecipe(context.Background(), tc.recipe.ID)
+			if tc.wantAttempt {
+				if err == nil {
+					t.Fatal("want an error (the loopback test server never completes a real grant), got nil")
+				}
+				if strings.Contains(err.Error(), bareRejectMsg) {
+					t.Errorf("wired arm still hit the bare reject: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErrHas) {
+				t.Fatalf("error = %v, want it to contain %q", err, tc.wantErrHas)
+			}
+		})
+	}
+}
+
+// Regression (tasks.md UNIT-3 3f/AC-001): a recipe with a baked literal
+// client_id and legacy (unset) primary_auth still takes the pre-UNIT-3
+// "default" path through SignInRecipe — the arm switch must not turn a
+// working baked-id recipe into a fail-closed one.
+func TestSignInRecipe_ArmSwitch_BakedLiteralClientIDLegacyArmStillAttempts(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK) // not 401 → fails fast at Discover, no real grant
+	}))
+	defer srv.Close()
+
+	recipe := oauthRecipe("Iv23li6LDja9hM0dAJGV") // GitHub's real device-flow id; PrimaryAuth unset (legacy)
+	recipe.URL = srv.URL
+	cat := &recipes.Catalog{Version: 1, Recipes: []recipes.Recipe{recipe}}
+	api := New(Config{Catalog: cat, Secrets: secrets.NewMemoryBackend()})
+
+	_, err := api.SignInRecipe(context.Background(), "remote-oauth")
+	if err == nil {
+		t.Fatal("want an error (the loopback test server never completes a real grant), got nil")
+	}
+	if strings.Contains(err.Error(), bareRejectMsg) || strings.Contains(err.Error(), "not an OAuth sign-in arm") {
+		t.Errorf("legacy arm with a baked client id was fail-closed: %v", err)
+	}
+}
+
 // ── UNIT-1: ${VAR} reaches Auth.ClientID / Auth.ClientSecret (spec.md FR-003) ──
 
 // byoOAuthRecipe returns a recipe whose Auth.ClientID (and, if

@@ -93,14 +93,31 @@ const errorMsg = ref<string | null>(null);
 const inputsContainer = ref<HTMLElement | null>(null);
 
 // ── primary_auth UX ────────────────────────────────────────────────────
-// Determines the leading presentation in the install modal.
+// Determines the leading presentation in the install modal. Mirrors the six
+// Recipe.PrimaryAuth* arms (spec.md §1.8, kitty-specs/connector-lifecycle-
+// truth-01PMZ303 UNIT-3 3g) — 'browser_oauth_dcr' and 'browser_oauth_pkce'
+// were missing from this doc (and from KNOWN_PRIMARY_AUTH in
+// harnessClient.ts, and from envKeysAreSecondary below) for 46 of 115
+// recipes; see showsOAuthSection / signInBlockedReason for the render guard
+// that now covers all six.
 //
-// 'oauth'       → lead with "Sign in" OAuth button (requires auth.kind=mcp_oauth).
-// 'device_code' → lead with device-code browser sign-in message; optional
-//                 env keys (Azure IDs) are collapsed under "Advanced".
-// 'keys'        → lead with env-key fields (standard).
-// 'none'        → no credentials required; optional env keys collapse to "Advanced".
-// undefined     → legacy (no reordering; render as-declared).
+// 'oauth'               → the recipe has NO working sign-in path today
+//                         (E-006); the "Sign in" section renders disabled
+//                         with an explanatory line — including the two
+//                         recipes (google-calendar, google-drive) with no
+//                         `auth` block at all.
+// 'browser_oauth_dcr'   → lead with "Sign in" via dynamic client registration
+//                         (RFC 7591) — always enabled, no client id needed.
+// 'browser_oauth_pkce'  → lead with "Sign in"; bring-your-own client id
+//                         (ruling D-3) — disabled with an explanatory line
+//                         only for the 2 recipes that ship no client id.
+// 'device_code'         → lead with device-code browser sign-in message;
+//                         optional env keys (Azure IDs) are collapsed under
+//                         "Advanced".
+// 'keys'                → lead with env-key fields (standard).
+// 'none'                → no credentials required; optional env keys
+//                         collapse to "Advanced".
+// undefined              → legacy (no reordering; render as-declared).
 const primaryAuth = computed(() => props.recipe.primaryAuth);
 
 // 'Advanced' section open/closed state. Defaults open when all env keys
@@ -114,10 +131,20 @@ const advancedOpen = ref(false);
 const envKeysAreSecondary = computed(() => {
   const pa = primaryAuth.value;
   if (!pa || pa === 'keys') return false;
-  // If any env key is required, we can't hide it under "Advanced".
+  // If any env key is required, we can't hide it under "Advanced". This is
+  // what keeps the 14 browser_oauth_pkce BYO recipes' client-id field
+  // visible (it's declared required) even though the arm is in the list
+  // below — only the 30 browser_oauth_dcr recipes (which need no env key
+  // at all) actually collapse in practice.
   const hasRequired = props.recipe.envKeys.some((k) => k.required);
   if (hasRequired) return false;
-  return pa === 'device_code' || pa === 'oauth' || pa === 'none';
+  return (
+    pa === 'device_code' ||
+    pa === 'oauth' ||
+    pa === 'none' ||
+    pa === 'browser_oauth_dcr' ||
+    pa === 'browser_oauth_pkce'
+  );
 });
 
 // Prereq pre-flight — populated when the modal opens.
@@ -219,8 +246,57 @@ const isByoOAuth = computed(
   () => !!oauthAuth.value?.clientId && oauthAuth.value.clientId.includes('${'),
 );
 
+// ── Render guard (spec.md §1.8/§1.9/§7 AC-002, kitty-specs/connector-
+// lifecycle-truth-01PMZ303 UNIT-3 3g) ───────────────────────────────────
+// The "Sign in" section must fail closed — disabled with a visible reason —
+// for any primary_auth arm that cannot complete a sign-in, instead of
+// rendering enabled and surfacing the backend's "has no OAuth client_id
+// configured" error only after the user clicks. It must also render (not
+// hide) for the 'oauth' arm's two recipes that carry no `auth` block at
+// all (google-calendar, google-drive — a third state, spec.md §1.9), which
+// `oauthAuth` alone cannot see since it requires `recipe.auth`.
+//
+// device_code, keys and none are excluded here even when a stray
+// `auth.kind === 'mcp_oauth'` block is present, mirroring SignInRecipe's own
+// explicit rejection of those three arms (core/rpc/views/tools/oauth.go) —
+// none of them is an OAuth sign-in arm, so the generic section must not
+// offer an affordance the backend has already decided to reject.
+// device_code additionally has its own dedicated section above
+// (isHarnessDeviceFlow / the server-driven device-code banner): without
+// this exclusion, a recipe like GitHub (auth.kind mcp_oauth + primary_auth
+// device_code) rendered BOTH sections — the intended "Start GitHub sign-in"
+// button and a second, spurious "Sign in to GitHub" button that called the
+// loopback PKCE grant GitHub rejects for random ports (see
+// isHarnessDeviceFlow's doc below) — a second, previously-unrendered,
+// button-that-errors defect this guard also closes.
+const showsOAuthSection = computed(() => {
+  const pa = primaryAuth.value;
+  if (pa === 'device_code' || pa === 'keys' || pa === 'none') return false;
+  return !!oauthAuth.value || pa === 'oauth';
+});
+
+// Non-null when this arm cannot complete a sign-in today — the button
+// renders disabled with this text instead of being clickable. Falsification:
+// with this computed forced to always return null (or the `:disabled`
+// binding below removed), an 'oauth'-arm or empty-client-id
+// 'browser_oauth_pkce' fixture renders the button ENABLED, and clicking it
+// round-trips to oauth.go's "has no OAuth client_id configured" /
+// "no working sign-in path yet" error instead of failing closed in the UI —
+// which is the exact defect this guard exists to close (see the deleted
+// TODO this replaces).
+const signInBlockedReason = computed<string | null>(() => {
+  const pa = primaryAuth.value;
+  if (pa === 'oauth') {
+    return `${props.recipe.displayName} has no working sign-in path yet — it does not support dynamic client registration, ships no pre-registered client id, and has no device-code flow. Use the fields below, or check back later.`;
+  }
+  if (pa === 'browser_oauth_pkce' && !oauthAuth.value?.clientId) {
+    return `${props.recipe.displayName} needs a pre-registered OAuth client id and does not support dynamic client registration. None is available yet — Kameas does not register or host one for this connector.`;
+  }
+  return null;
+});
+
 async function signIn() {
-  if (signingIn.value || !oauthAuth.value) return;
+  if (signingIn.value || !oauthAuth.value || signInBlockedReason.value) return;
   signingIn.value = true;
   errorMsg.value = null;
   try {
@@ -911,17 +987,30 @@ function onKeydown(event: KeyboardEvent) {
           </p>
         </section>
 
-        <!-- OAuth sign-in (preferred). Leads the modal for mcp_oauth recipes;
-             env keys below become an optional fallback. -->
+        <!-- OAuth sign-in (preferred). Leads the modal for mcp_oauth recipes
+             and the 'oauth'-arm recipes that carry no auth block at all
+             (spec.md §1.9's third state); env keys below become an optional
+             fallback. Render guard (spec.md §1.8/§7 AC-002, UNIT-3 3g): the
+             button fails closed — disabled with a visible reason, never
+             hidden — for any arm that cannot complete a sign-in. See
+             showsOAuthSection / signInBlockedReason. -->
         <section
-          v-if="oauthAuth"
+          v-if="showsOAuthSection"
           class="rounded-sm border border-accent-hairline bg-accent-glow/30 px-3 py-3 space-y-2"
           data-testid="recipe-modal-oauth-section"
         >
           <div class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
             Sign in
           </div>
-          <p v-if="!isByoOAuth" class="text-[12px] text-ink-muted leading-snug max-w-prose">
+          <!-- Fail-closed reason: the arm cannot complete a sign-in today. -->
+          <p
+            v-if="signInBlockedReason"
+            class="text-[12px] text-ink-muted leading-snug max-w-prose"
+            data-testid="recipe-modal-signin-blocked-reason"
+          >
+            {{ signInBlockedReason }}
+          </p>
+          <p v-else-if="!isByoOAuth" class="text-[12px] text-ink-muted leading-snug max-w-prose">
             Sign in with your account in the browser — no token to paste. The
             harness stores the credential securely and refreshes it
             automatically.
@@ -950,24 +1039,20 @@ function onKeydown(event: KeyboardEvent) {
             this app for you. Once the client ID is set, sign in with your
             account in the browser.
           </p>
-          <!-- TODO: this recipe's Auth.Kind is mcp_oauth, but not every
-               primary_auth arm has a working sign-in path yet — the
-               browser_oauth_dcr arm (dynamic client registration) and the
-               bare oauth arm's four non-Google recipes are still unbuilt as
-               of this commit (kitty-specs/connector-lifecycle-truth-01PMZ303
-               UNIT-3, not yet landed). The button renders enabled
-               regardless of arm; clicking it for those recipes still
-               surfaces oauth.go's "has no OAuth client_id configured"
-               error rather than failing closed in the UI. See spec.md
-               FR-002 / AC-002 for the render-guard fix. -->
           <button
             type="button"
             class="rounded-sm border border-accent-hairline bg-surface-0 px-3 py-1.5 font-ui text-[12px] text-accent hover:bg-accent-glow disabled:opacity-50 disabled:cursor-not-allowed"
-            :disabled="signingIn"
+            :disabled="signingIn || !!signInBlockedReason"
             data-testid="recipe-modal-signin-btn"
             @click="signIn"
           >
-            {{ signingIn ? 'Waiting for browser…' : `Sign in to ${recipe.displayName}` }}
+            {{
+              signInBlockedReason
+                ? 'Sign-in unavailable'
+                : signingIn
+                  ? 'Waiting for browser…'
+                  : `Sign in to ${recipe.displayName}`
+            }}
           </button>
         </section>
 

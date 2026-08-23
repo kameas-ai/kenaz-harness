@@ -87,6 +87,17 @@ type DCRStore struct {
 // created (with its parent directories) on first write. saveFn and loadFn
 // route client_secret values through the OS credstore; both may be nil when
 // only public-client registrations (no secret) are expected.
+//
+// STATUS (dated justification, kitty-specs/connector-lifecycle-truth-01PMZ303
+// UNIT-3, 2026-08-23): this constructor still has zero production callers.
+// SignInRecipe (core/rpc/views/tools/oauth.go) passes DCRStore: nil, so DCR
+// registrations are not persisted across launches yet — every sign-in
+// re-registers. Blocker: UNIT-0's ★1 (does DCR actually succeed against a
+// real provider) was never executed and this environment cannot make live
+// network calls to verify it, so wiring persistence + the credstore
+// SecretSaver/SecretLoader closures at the chassis (spec.md UNIT-3 3e) is
+// deferred to a follow-up unit once ★1 is run for real. Owner: whoever picks
+// up UNIT-3's deferred half; see the UNIT-3 commit body for the full record.
 func NewDCRStore(path string, saveFn SecretSaver, loadFn SecretLoader) *DCRStore {
 	return &DCRStore{
 		path:   path,
@@ -161,8 +172,8 @@ func (s *DCRStore) Save(key DCRKey, rc *RegisteredClient) error {
 
 // Load retrieves the RegisteredClient for the given key. Returns ErrDCRNotFound
 // when no entry exists and ErrDCRExpired when the stored secret has expired.
-// On success, LoadedClient.ClientSecret is populated from the credstore when
-// the entry has a secret.
+// On success, the returned RegisteredClient's ClientSecret is populated from
+// the credstore when the entry has a secret.
 func (s *DCRStore) Load(key DCRKey) (*RegisteredClient, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
