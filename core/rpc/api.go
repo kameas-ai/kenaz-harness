@@ -5116,6 +5116,23 @@ func newLLMStack(
 	if exposureIdx != nil {
 		secretsBudget = credstoreRefs.NewBudget(credstoreRefs.DefaultBudget)
 	}
+	// trust-surfaces-that-fire-01PMZ202 WP19: the same exposureIdx +
+	// secretsBudget the kenaz__list_secrets registration above uses,
+	// reshaped for chat.Config.SecretLookup/SecretBudget below. Both
+	// guards assign only when non-nil so the interface fields stay a
+	// TRUE nil — not a non-nil interface wrapping a nil
+	// *secrets.ExposureIndex / *cedar.Engine — mirroring the
+	// cedarLLMGate guard a few lines above in this same function.
+	// secretsBudget is already a bare *refs.Budget (no interface, no
+	// typed-nil trap) and is passed straight through.
+	var secretLookup credstoreRefs.SecretLookup
+	if exposureIdx != nil {
+		secretLookup = exposureIdx
+	}
+	var secretGate cedar.Gate
+	if bashCedarEngine != nil {
+		secretGate = bashCedarEngine
+	}
 	registerBuiltinTools(c, builtinRegistry, bashStore, artifactsMgr, settingsStore, bashCedarEngine, promptRegistry, elicitAPI, slashDispatch, exposureIdx, secretsBudget, postureManager, taskReg)
 	// builtin-filesystem-tools-01KR3N4P: register the read/write family of
 	// in-process filesystem tools. Gated behind per-family settings dials
@@ -5336,7 +5353,7 @@ func newLLMStack(
 		}
 		return resolveAutonomyKnobsWithSettingsFallback(global, project, session, effectiveMaxAgentTurnsFromSettings(settingsImpl))
 	}
-	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, chatAttResolver, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatWorkspaceDir, chatWorkspaceNote, confirmBus, confirmDeps, autonomyKnobsProvider)
+	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, chatAttResolver, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatWorkspaceDir, chatWorkspaceNote, confirmBus, confirmDeps, autonomyKnobsProvider, secretLookup, secretGate, secretsBudget)
 	var capCatalog llm.CapCatalog
 	if cat, err := llmcap.LoadDefault(); err == nil {
 		capCatalog = &capCatalogAdapter{cat: cat}
@@ -5763,6 +5780,16 @@ func buildChatRunner(
 	// as before this knob set existed. Built in newLLMStack, which has
 	// the *core.Core needed to reach the session + project managers.
 	autonomyKnobsProvider chat.AutonomyKnobsProvider,
+	// secretLookup / secretGate / secretBudget wire chat.Config's
+	// SecretLookup / SecretGate / SecretBudget (trust-surfaces-that-fire-
+	// 01PMZ202 WP19). All three are computed in newLLMStack from the
+	// same exposureIdx / cedarEngine / secretsBudget the
+	// kenaz__list_secrets builtin registration uses, with the same
+	// nil-guards applied there (never a typed-nil interface). nil
+	// secretLookup disables @secret: resolution entirely.
+	secretLookup credstoreRefs.SecretLookup,
+	secretGate cedar.Gate,
+	secretBudget *credstoreRefs.Budget,
 ) *chat.ChatRunner {
 	if graphMgr == nil || graphMgr.Kernel() == nil {
 		logging.L().Warn("chat.runner.disabled", "reason", "graph manager unavailable")
@@ -6157,6 +6184,18 @@ func buildChatRunner(
 		// reads r.cfg.AutonomyKnobs == nil and silently no-ops — the
 		// gap this WP closes.
 		AutonomyKnobs: autonomyKnobsProvider,
+		// trust-surfaces-that-fire-01PMZ202 WP19: without these three,
+		// driveRun's `if r.cfg.SecretLookup != nil` guard never fires,
+		// so refs.WithResolver / refs.WithTurnSanitizer are never
+		// installed and core/tools/bash, core/tools/webfetch and
+		// core/mcp/transport/stdio/server.go's existing
+		// refs.ResolverFromContext(ctx) calls keep seeing nil — the
+		// defect this WP exists to close. SecretAuditEmitter is
+		// deliberately left unset (nil, no-op) — see chat.Config's doc
+		// comment on that field.
+		SecretLookup: secretLookup,
+		SecretGate:   secretGate,
+		SecretBudget: secretBudget,
 	})
 	if err != nil {
 		logging.L().Error("chat.runner.construct_failed", "err", err.Error())
