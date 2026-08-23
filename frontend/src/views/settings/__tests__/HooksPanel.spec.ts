@@ -12,7 +12,7 @@ import HooksPanel from '@/components/settings/HooksPanel.vue';
 import HookEditor from '@/components/settings/HookEditor.vue';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
-import { FIRING_HOOK_EVENTS } from '@/lib/hooks';
+import { FIRING_HOOK_EVENTS, EVENT_FAMILY } from '@/lib/hooks';
 import type { Hook, BuiltinDescriptor, DryRunResult } from '@/lib/types';
 
 // ── fixtures ────────────────────────────────────────────────────────────
@@ -218,6 +218,32 @@ describe('HookEditor', () => {
       expect(options.map((o) => o.element.value)).toEqual([...FIRING_HOOK_EVENTS]);
       expect(options[0].element.value).toBe('pre_send');
       expect(wrapper.find('[data-testid="hook-editor-event-inert-badge"]').exists()).toBe(false);
+    });
+
+    // AC-051 (controls-and-readouts-that-tell-the-truth-01PMZ808 WP20 /
+    // UNIT-15): the event picker groups its <option>s into <optgroup>s by
+    // EVENT_FAMILY instead of rendering one flat list. Before WP20,
+    // EVENT_FAMILY had zero consumers repo-wide even though it was written
+    // for exactly this. Grouping must not change *which* events are
+    // offered — still exactly FIRING_HOOK_EVENTS, in the same order,
+    // because same-family events are already adjacent there.
+    it('groups the event picker into <optgroup>s by EVENT_FAMILY', () => {
+      const wrapper = mountEditor(null);
+      const select = wrapper.find('[data-testid="hook-editor-event"]');
+      const optgroups = select.findAll('optgroup');
+
+      // A flat list (the pre-WP20 shape) has zero optgroups.
+      expect(optgroups.length).toBeGreaterThan(0);
+
+      const expectedFamilies = [...new Set(FIRING_HOOK_EVENTS.map((ev) => EVENT_FAMILY[ev]))];
+      expect(optgroups.map((g) => g.element.getAttribute('label'))).toEqual(
+        expectedFamilies.map((f) => f.charAt(0).toUpperCase() + f.slice(1)),
+      );
+
+      // Grouping must not re-widen the picker to an event with no
+      // production fire site — still exactly FIRING_HOOK_EVENTS, in order.
+      const options = select.findAll('option');
+      expect(options.map((o) => o.element.value)).toEqual([...FIRING_HOOK_EVENTS]);
     });
 
     // A-6: 'mcp' is dropped from the kind picker (stub-only backend), but

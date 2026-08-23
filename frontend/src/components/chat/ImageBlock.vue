@@ -29,7 +29,18 @@ const dataURL = computed(() => {
 
 const filename = computed(() => props.source.original_name ?? '');
 
-/** Tooltip showing pixel dimensions, e.g. "1920×1080 px" */
+/**
+ * Tooltip showing pixel dimensions, e.g. "1920×1080 px".
+ *
+ * NARROW (controls-and-readouts-that-tell-the-truth-01PMZ808 WP20 /
+ * UNIT-15, spec §1.15): `image_dimensions` is never populated on the
+ * production path -- ChatInput.vue builds every image MediaSource for a
+ * freshly-staged attachment without it -- so this degrades gracefully to
+ * an empty (not-shown) tooltip rather than lying, but it also never
+ * renders anything today. Populating it needs no core/llm change (the
+ * field already exists on the wire type); it needs the frontend staging
+ * path to measure the bitmap before send. Owner: alec. Date: 2026-08-23.
+ */
 const dimensionTooltip = computed(() => {
   const dims = props.source.image_dimensions;
   if (!dims || !dims.width || !dims.height) return '';

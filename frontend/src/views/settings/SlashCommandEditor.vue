@@ -22,7 +22,17 @@ import { validateUserCommand } from '@/lib/slashcmdValidation';
 const props = defineProps<{
   /** Null means "new command". */
   command: UserCommand | null;
-  /** When true the form is read-only (bundled/catalog command). */
+  /**
+   * When true the form is read-only (bundled/catalog command).
+   *
+   * NARROW (controls-and-readouts-that-tell-the-truth-01PMZ808 WP20 /
+   * UNIT-15, spec §1.15): SlashCommandsView.vue never passes this prop
+   * (15 template bindings read it; the mount site sets none of them) —
+   * and there is no signal to pass yet: `UserCommand` (lib/types.ts)
+   * carries no builtin / managed / fleet-pushed marker to derive it
+   * from. Owner: alec. Blocker: no builtin/managed/fleet-pushed field on
+   * UserCommand. Date: 2026-08-23.
+   */
   readOnly?: boolean;
   saving?: boolean;
 }>();

@@ -10,9 +10,20 @@
  *   2. Fire button + latency.
  *   3. Per-hook output JSON viewer.
  *   4. Merged decision summary (blocked / approved / permission decision).
+ *   4a. Permission decision (output.permissionDecision + reason), when the
+ *       hook set one — distinct from #4, which reflects the *merged*
+ *       view; a single-hook dry run's merge should agree, but the raw
+ *       per-hook field is what the hook actually returned.
+ *   4b. Watched paths (output.watchPaths), when the hook set any.
  *   5. Shell stdout / stderr (for kind=shell hooks).
  *
  * hooks-event-surface-expansion-01KZNP3A WP07c.
+ * #4a/#4b added by controls-and-readouts-that-tell-the-truth-01PMZ808
+ * WP20 / UNIT-15: the Go mapper (core/rpc/views/hooks/dry_run.go:27-38)
+ * has always marshalled permissionDecision, permissionDecisionReason and
+ * watchPaths onto HookOutput; the drawer never rendered them as
+ * structured fields (they were only visible buried in the raw JSON dump
+ * at #3).
  */
 import { ref, watch, computed } from 'vue';
 import Button from '@/components/ui/Button.vue';
@@ -198,6 +209,34 @@ const decisionLabel = computed<string>(() => {
               >
                 {{ decisionLabel }}
               </span>
+            </div>
+
+            <!-- Permission decision (output-level, not the merged view above) -->
+            <div
+              v-if="result.output.permissionDecision"
+              data-testid="hook-dry-run-permission-decision"
+            >
+              <p class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-subtle mb-1">
+                Permission decision
+              </p>
+              <p class="font-mono text-xs text-ink">
+                {{ result.output.permissionDecision.toUpperCase() }}<template
+                  v-if="result.output.permissionDecisionReason"
+                >: {{ result.output.permissionDecisionReason }}</template>
+              </p>
+            </div>
+
+            <!-- Watched paths -->
+            <div
+              v-if="result.output.watchPaths && result.output.watchPaths.length"
+              data-testid="hook-dry-run-watch-paths"
+            >
+              <p class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-subtle mb-1">
+                Watched paths
+              </p>
+              <ul class="text-xs font-mono text-ink list-disc pl-4">
+                <li v-for="p in result.output.watchPaths" :key="p">{{ p }}</li>
+              </ul>
             </div>
 
             <!-- AdditionalContext -->

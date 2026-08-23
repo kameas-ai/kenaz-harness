@@ -29,7 +29,18 @@ const props = defineProps<{
   open: boolean;
   scopeKind: AttachmentScopeKind;
   scopeId: string;
-  /** Default kind for added attachments. Defaults to 'system'. */
+  /**
+   * Default kind for added attachments. Defaults to 'system'.
+   *
+   * NARROW (controls-and-readouts-that-tell-the-truth-01PMZ808 WP20 /
+   * UNIT-15, spec §1.15, D-9 — REFUTED as a defect): no caller overrides
+   * this today. All three mounts (GlobalContextPanel.vue,
+   * SettingsView.vue, ProjectLandingPage.vue) are context-library
+   * surfaces, the folder-attach branch takes no kind at all, and
+   * 'system' is the semantically correct default for "attach reference
+   * material for the model" — not a false readout, just an unexercised
+   * override.
+   */
   attachmentKind?: 'system' | 'user';
 }>();
 

@@ -309,6 +309,68 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-08-23 · WP20 (UNIT-15) — frontend props and exports with no consumer, five NARROWed after wiring the two that had a source
+
+`controls-and-readouts-that-tell-the-truth-01PMZ808` WP20. Spec §1.15 named
+nine findings grouped by class (declared prop no parent passes / exported
+symbol no non-test reader). Two wired in the same commit
+(`EVENT_FAMILY` → grouped `<optgroup>`s in `HookEditor.vue`;
+`HookDryRunDrawer.vue` now renders `output.permissionDecision` and
+`output.watchPaths`, which the Go mapper had always sent). The remaining
+seven, all NARROWed or left as documented no-ops:
+
+- **`SlashArgFill.prefilled`** (`components/chat/SlashArgFill.vue`) — no
+  caller passes it; `SessionsView.vue` captures typed args into a raw
+  string nobody tokenizes into `Record<string,string>`. **Blocker:** no
+  slash-arg tokenizer exists anywhere in `frontend/src` (spec D-10 — do
+  not invent one in this WP).
+- **`SlashCommandEditor.readOnly`** (`views/settings/SlashCommandEditor.vue`)
+  — never passed; `UserCommand` carries no builtin/managed/fleet-pushed
+  marker to derive it from. **Blocker:** no such field exists on
+  `UserCommand`.
+- **`AttachmentTreePicker.attachmentKind`** (`components/contexts/`) —
+  REFUTED as a defect (spec D-9). All three mounts are context-library
+  surfaces, the folder-attach branch takes no kind, and `'system'` is
+  semantically correct. Prop doc narrowed to stop implying an override
+  path exists; no functional change.
+- **`CANONICAL_RECIPE_CATEGORIES`** (`lib/recipeCategories.ts`) —
+  downgraded to an internal-duplication note (spec D-9): identical, and
+  in identical order, to `Object.keys(RECIPE_CATEGORY_META)`, which
+  `isCanonicalCategory` already treats as authoritative. Not a false
+  advertisement (no badge renders from it directly); documented as a
+  drift risk rather than rewritten, to avoid an unforced behavioural
+  change in a P3 item.
+- **`DocumentChip.pageCount`, `.sizeLabel`'s `size_bytes` branch, and
+  `ImageBlock.dimensionTooltip`'s `image_dimensions`** — the five-hop
+  wire spec §1.15 describes (`core/attachments/media.go` →
+  `core/llm.MediaSource` → `ChatInput.vue`'s block builder → the two
+  render components) needs a field added to `core/llm.MediaSource`.
+  `core/llm/**` is out of scope for this WP's dispatch (sibling missions
+  own it this wave). All three readouts degrade gracefully today (no
+  page count / size / dimension shown, not a wrong one) — documented as
+  dead-but-honest rather than wired. **Blocker:** `core/llm.MediaSource`
+  needs a `PageCount` field, and the frontend staging path
+  (`ChatInput.vue`) needs to populate `size_bytes` and
+  `image_dimensions` on send — cross-package work spanning a directory
+  this WP does not own.
+- **`MessageList.scrollToBottom` / `ConfirmToolModal.reconcile`**
+  (`defineExpose`, test-only callers) — spec §1.15 confirms this is a
+  house pattern (`FilesystemPermissionModal.vue`,
+  `BashPermissionModal.vue` do the same), both methods are fully used
+  internally, and neither component claims the expose is for external
+  consumption. No false claim exists to narrow; left unchanged.
+- **`HealthPill.label` / `.compact`** (`views/tools/HealthPill.vue`) —
+  never passed; both have declared defaults so behaviour is defined
+  (dead knobs, not a false readout — spec's own lowest-severity call).
+  **Not edited in this WP**: `frontend/src/views/tools/**` is out of
+  scope for this WP's dispatch (owned by a sibling agent this wave).
+  Recorded here so the next pass over that directory has the finding on
+  hand rather than rediscovering it.
+
+**Owner:** alec. **Blocker:** see each item above (tokenizer / UserCommand
+field / core/llm.MediaSource field + frontend staging / directory
+ownership this wave). **Date:** 2026-08-23.
+
 ### 2026-08-22 · Bundled sub-agent profiles advertise containment (allowed_tools/denied_tools/budget_*) that reaches no consumer (`subagent-control-and-background-tasks-01PMZB11`, containment review of PR #307 finding B3)
 
 Every bundled profile (`core/agents/bundled/*.yaml`) declares
