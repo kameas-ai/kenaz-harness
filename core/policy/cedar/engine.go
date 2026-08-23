@@ -118,6 +118,27 @@ var defaultScheduledRunPolicySource []byte
 //go:embed policies/default_context_sync_policy.cedar
 var defaultContextSyncPolicySource []byte
 
+// secretReferencePolicySource is the embedded SecretReference-family
+// default for mission model-secret-references-01KW7M5A (WP02). Posture
+// (see the file's own leading comment for the full text): permit a
+// resolution when the per-session budget remains and the requesting
+// agent is not "untrusted"; forbid outright when agent_kind ==
+// "untrusted" (un-audited MCP servers) or the budget is exhausted.
+//
+// Before this embed the file existed on disk under policies/ but had
+// no //go:embed directive and was absent from Reload's embedded
+// source list below, so Action::"secret_reference.resolve" matched no
+// rule on any install — every resolution fell through to
+// NotApplicable, which `enforce`-style callers (including
+// EvaluateSecretReferenceResolve's caller, core/credstore/refs) treat
+// as allow. That silently defeated both of this file's default
+// forbids (regression B1(b), trust-surfaces-that-fire-01PMZ202 review,
+// 2026-08-23). This file's presence is load-bearing, not cosmetic —
+// removing this embed re-opens the same gap.
+//
+//go:embed policies/secret_reference.cedar
+var secretReferencePolicySource []byte
+
 // DefaultPolicyName is the synthetic filename used when reporting the
 // embedded policy to the frontend.
 const DefaultPolicyName = "default_policy.cedar"
@@ -140,6 +161,10 @@ const (
 	DefaultBundlePolicyName        = "default_bundle_policy.cedar"
 	DefaultScheduledRunPolicyName  = "default_scheduled_run_policy.cedar"
 	DefaultContextSyncPolicyName   = "default_context_sync_policy.cedar"
+
+	// SecretReferencePolicyName mirrors the on-disk filename (the file
+	// predates the "default_" naming convention the other embeds use).
+	SecretReferencePolicyName = "secret_reference.cedar"
 )
 
 // PolicyDir is the directory under DataDir where user-authored
@@ -297,6 +322,8 @@ func (e *Engine) Reload(ctx context.Context) error {
 			{DefaultBundlePolicyName, defaultBundlePolicySource},
 			{DefaultScheduledRunPolicyName, defaultScheduledRunPolicySource},
 			{DefaultContextSyncPolicyName, defaultContextSyncPolicySource},
+
+			{SecretReferencePolicyName, secretReferencePolicySource},
 		}
 		for _, em := range embedded {
 			sources = append(sources, policySource{

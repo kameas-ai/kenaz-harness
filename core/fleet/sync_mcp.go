@@ -125,14 +125,28 @@ type MCPSyncCategory struct {
 	Pending    *SecretPromptQueue // shared with Sync RPC view for banner
 }
 
+// localOnlyConfigKeys names config keys that resolveConfig
+// (core/rpc/views/tools/impl.go) injects into a recipe's persisted
+// EnabledRecipe.Config for LOCAL template substitution
+// (${DATA_DIR} in args_template) — never for cross-device sync.
+// "data_dir" is not a recipe-declared EnvKey, so it survives the
+// SecretKeys redaction below untouched; it carries the user's
+// absolute profile path (and therefore OS username) and MUST be
+// stripped here regardless of whether the caller's Reader ever
+// copies EnabledRecipe.Config verbatim into InstalledMCP.EnvOverrides.
+// See docs/unwired-ledger.md, H2, 2026-08-23.
+var localOnlyConfigKeys = map[string]bool{
+	"data_dir": true,
+}
+
 // Collect implements CategoryCollector. Reads local MCP registry, strips
 // secret env override values, and returns the redacted JSON payload.
 //
 // HARD RULE: EnvOverrides values for any key the SecretKeys provider
-// lists are silently dropped (never included in the returned payload),
-// and if the provider cannot determine the set at all, EVERY override is
-// dropped. The set is resolved per call, so a recipe imported after boot
-// is covered.
+// lists, or any key in localOnlyConfigKeys, are silently dropped (never
+// included in the returned payload), and if the provider cannot determine
+// the secret set at all, EVERY override is dropped. The secret set is
+// resolved per call, so a recipe imported after boot is covered.
 func (m *MCPSyncCategory) Collect(ctx context.Context) (json.RawMessage, error) {
 	if m.Reader == nil {
 		// No reader wired; return empty payload rather than blocking sync.
@@ -166,12 +180,19 @@ func (m *MCPSyncCategory) Collect(ctx context.Context) (json.RawMessage, error) 
 			} else {
 				clean := make(map[string]string, len(it.EnvOverrides))
 				for k, v := range it.EnvOverrides {
+					if localOnlyConfigKeys[k] {
+						// Local-only infrastructure (e.g. "data_dir"):
+						// not a credential, but it publishes the user's
+						// OS username and local path layout off-device.
+						continue
+					}
 					if !secretKeys[k] {
 						clean[k] = v
 					}
-					// Secret keys are dropped — audit block is best-effort here;
-					// a full audit emit would require threading the audit emitter
-					// through MCPSyncCategory; deferred to follow-up.
+					// Secret / local-only keys are dropped — audit block is
+					// best-effort here; a full audit emit would require
+					// threading the audit emitter through MCPSyncCategory;
+					// deferred to follow-up.
 				}
 				r.EnvOverrides = clean
 			}

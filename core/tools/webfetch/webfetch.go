@@ -211,9 +211,13 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 
 	// Retrieve the resolver from ctx (may be nil in test or non-tool paths).
 	resolver := refs.ResolverFromContext(ctx)
+	// AgentKind: "trusted" — web_fetch runs in-process under harness
+	// control (not a third-party MCP server); see the MCP stdio
+	// CallTool comment for the "untrusted" counterpart.
 	rctx := cedar.ResolveContext{
 		ToolName:        ToolName,
 		DestinationHost: targetHost,
+		AgentKind:       "trusted",
 	}
 
 	// ── Substitute @secret: references ──────────────────────────────────

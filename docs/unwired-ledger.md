@@ -370,6 +370,72 @@ seven, all NARROWed or left as documented no-ops:
 **Owner:** alec. **Blocker:** see each item above (tokenizer / UserCommand
 field / core/llm.MediaSource field + frontend staging / directory
 ownership this wave). **Date:** 2026-08-23.
+### 2026-08-23 · `Sanitizer.SanitizeStream` has zero production callers — streamed assistant tokens are not redacted (PR #308 secret-reference regression fix)
+
+`core/credstore/refs/sanitizer.go` docstrings previously claimed "Every
+tool result content block AND every streamed assistant token is scanned
+via Sanitize" (FR-007 of `model-secret-references-01KW7M5A`, which does
+require both). That was never true for the streamed-token half:
+`SanitizeStream` (`sanitizer.go:131`, now with a corrected docstring) is a
+thin `Sanitize` alias with no reader/writer chunk-boundary handling
+despite an earlier comment describing one, and
+`/usr/bin/grep -rn 'SanitizeStream' --include='*.go' core/` minus
+`_test.go` returns only the declaration — no call site anywhere in the
+LLM streaming bridge (`core/rpc/views/llm/impl.go`).
+
+Net effect: `Sanitize` now runs on every tool result the three
+production `Resolver.Substitute` callers produce (bash, web_fetch, and —
+as of this fix — the MCP stdio transport), so a secret echoed back
+*inside a tool result* is redacted before it reaches session history or
+the UI. A secret the **model itself** types directly into its own
+streamed response text (as opposed to relaying it through a tool
+result) is NOT caught by anything today.
+
+**Not fixed here** — this entry was found while closing the MCP
+tool-result sanitization gap (`core/mcp/transport/stdio/server.go`
+`CallTool`), which was the actual security regression in scope. Wiring
+`SanitizeStream` into the assistant-token streaming path is a distinct
+change touching `core/rpc/views/llm/impl.go`'s stream loop and needs its
+own persisted-history test (per CLAUDE.md's testing-rule-3 discipline —
+a test that calls `SanitizeStream` directly proves nothing).
+
+**Owner:** alec. **Blocker:** no mission currently owns wiring
+`SanitizeStream` into the LLM streaming bridge; the next mission that
+touches assistant-token streaming should pick this up. **Date:** 2026-08-23.
+
+### 2026-08-23 · `data_dir` reached the fleet wire on every installed-MCP sync (PR #308 review finding H2 — FIXED, entry kept for the correction it carries)
+
+`core/rpc/views/tools/impl.go:489-492`'s `resolveConfig` unconditionally
+injects `out["data_dir"] = a.cfg.DataDir` into every recipe's persisted
+config. It is a non-empty string, so `stringifyConfig` copies it into
+`InstalledMCP.EnvOverrides`, and it is not an `EnvKey` name, so the
+`SecretKeys` redaction never dropped it. Every synced recipe published
+the user's OS username and local path layout to the fleet server.
+
+Fixed in the same commit: `core/fleet/sync_mcp.go`'s `Collect` now strips
+a `localOnlyConfigKeys` set (currently `"data_dir"`) independently of
+`SecretKeys`, so it is dropped even when the secret set is determined and
+empty. Falsified with a compiling mutation (`if false && localOnlyConfigKeys[k]`):
+`TestSync_DataDirStripped` goes red with the absolute path visible in the
+marshalled payload.
+
+**Correction on the record.** The sub-agent that produced this fix worked
+from a worktree whose base predated the v0.72.0 merges, and concluded
+from `core/rpc/api.go:3256`'s `NewMCPSyncCategory(nil, nil, nil, ...)`
+that `MCPRegistryReader` has no production implementer and the leak was
+therefore unreachable. **That was an artifact of the stale base.** On
+`release/v0.72.0`, Z505 WP07 wired a real reader — `toolsMCPRegistry`
+in `core/rpc/sync_mcp_registry.go`, passed at `core/rpc/api.go` as
+`NewMCPSyncCategory(mcpRegistry, mcpRegistry, ...)`. The leak was live,
+not hypothetical, and the fix is a fix rather than defence-in-depth.
+
+**Related, and genuinely still open:** `refs.SanitizeStream` has no
+production caller. FR-007 requires streamed-assistant-token redaction;
+only bash and webfetch tool *output* is sanitized today. The Sanitizer
+docstring was narrowed to what is actually enforced rather than left
+claiming coverage that does not exist. **Owner:** alec. **Blocker:**
+wiring it touches `core/rpc/views/llm/impl.go`'s stream loop and needs a
+persisted-history assertion. **Date:** 2026-08-23.
 
 ### 2026-08-22 · Bundled sub-agent profiles advertise containment (allowed_tools/denied_tools/budget_*) that reaches no consumer (`subagent-control-and-background-tasks-01PMZB11`, containment review of PR #307 finding B3)
 

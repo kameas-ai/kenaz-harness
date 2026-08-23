@@ -28,9 +28,18 @@ import (
 //
 // # Application
 //
-// Every tool result content block AND every streamed assistant token
-// is scanned via Sanitize. Matches are replaced with
+// Sanitize is called on every tool result content block returned by
+// the three production Substitute callers: bash (core/tools/bash),
+// web_fetch (core/tools/webfetch) and the MCP stdio transport
+// (core/mcp/transport/stdio). Matches are replaced with
 // "[redacted: <locator>]".
+//
+// Streamed assistant tokens are NOT scanned — SanitizeStream exists
+// but has no production caller today. A model that echoes a
+// just-resolved secret directly into its own response text (as
+// opposed to a tool result) is not caught by this type. See
+// docs/unwired-ledger.md, entry dated 2026-08-23, for the tracked gap
+// and owner.
 //
 // # Cleanup
 //
@@ -122,12 +131,13 @@ func (s *Sanitizer) SanitizeString(content string) string {
 	return string(s.Sanitize([]byte(content)))
 }
 
-// SanitizeStream processes a reader through the sanitizer, writing
-// redacted output to the writer. It maintains a tail buffer of size
-// maxPlaintextLen-1 so plaintext split across chunk boundaries is caught.
-//
-// n is the maximum plaintext length across all registered fingerprints.
-// When n is 0 (no fingerprints) the data is passed through unchanged.
+// SanitizeStream is a thin alias for Sanitize over a full chunk of
+// bytes. It has zero production callers today (docs/unwired-ledger.md,
+// 2026-08-23) — nothing wires it into the assistant-token streaming
+// path, so it does NOT do the reader/writer, chunk-boundary-aware
+// scan an earlier version of this comment claimed. A secret whose
+// plaintext is split across two separately-delivered stream chunks is
+// not caught by a caller that invokes this once per chunk.
 func (s *Sanitizer) SanitizeStream(chunks []byte) []byte {
 	return s.Sanitize(chunks)
 }
