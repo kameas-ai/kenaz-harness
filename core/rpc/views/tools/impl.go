@@ -140,6 +140,16 @@ type Config struct {
 	// PromptRegistry is the Cedar interactive-prompt registry used by
 	// RequestAdditionalAllowedDir. When nil the call returns an error.
 	PromptRegistry *cedar.Registry
+	// OpenBrowser opens the OAuth authorization URL. nil selects
+	// oauth.OpenSystemBrowser, the production hook.
+	//
+	// This seam exists so a test can drive SignInRecipe end-to-end. Without
+	// it the OAuth branch was untestable at its own entrypoint -- the hook
+	// really execs open/xdg-open/start -- which meant reverting the
+	// DCRStore wiring a few lines below was caught by NO test, the same
+	// vacuous-coverage shape as review finding B4. Production never sets
+	// this; only tests do.
+	OpenBrowser func(authURL string) error
 	// ConnectorTokens mints host-brokered access tokens for whitelisted
 	// OAuth connectors (spec 091 D8). Served mode only; nil (the desktop
 	// default) disables the fallback and OAuth recipes rely solely on

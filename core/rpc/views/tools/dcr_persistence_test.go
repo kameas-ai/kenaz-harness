@@ -466,3 +466,44 @@ func TestNewDCRStore_ClientSecretRoundTripsThroughRealKeychainAndSecrets(t *test
 		t.Errorf("ClientSecret = %q, want %q — the credstore closures did not round-trip the secret", rc.ClientSecret, "s3cr3t-from-provider")
 	}
 }
+
+// TestSignInRecipe_DCR_RealCallSite_ReusesRegistration closes the coverage
+// gap the UNIT-3 3e wiring shipped with: every other test in this file
+// reproduces SignInRecipe's DCR branch rather than calling it, because
+// SignInRecipe hardcoded oauth.OpenSystemBrowser and a successful grant
+// would have popped a real browser window on the host. That left the
+// literal `DCRStore: a.newDCRStore(ctx)` assignment caught by NO test —
+// revert it to nil and the suite stayed green. That is the same
+// vacuous-coverage shape as review finding B4, one layer down.
+//
+// Config.OpenBrowser now injects the hook, so this drives the REAL
+// api.SignInRecipe() twice, through a complete loopback grant, and asserts
+// the provider saw exactly one registration.
+//
+// Mutation (must fail): set `DCRStore: nil` at oauth.go's SignInWithDCR
+// call site — registerCount becomes 2.
+func TestSignInRecipe_DCR_RealCallSite_ReusesRegistration(t *testing.T) {
+	provider := newDCRFakeProvider(t)
+	backend := secrets.NewMemoryBackend()
+	cat := &recipes.Catalog{Version: 1, Recipes: []recipes.Recipe{dcrRecipe("dcr-recipe", provider.base)}}
+
+	cfg := dcrTestConfig(t, cat, backend)
+	cfg.OpenBrowser = dcrOpenBrowser // the seam — never set in production
+	api := New(cfg)
+
+	if _, err := api.SignInRecipe(context.Background(), "dcr-recipe"); err != nil {
+		t.Fatalf("first SignInRecipe: %v", err)
+	}
+	if got := provider.registerCount(); got != 1 {
+		t.Fatalf("after first SignInRecipe: register endpoint called %d times, want 1", got)
+	}
+
+	if _, err := api.SignInRecipe(context.Background(), "dcr-recipe"); err != nil {
+		t.Fatalf("second SignInRecipe: %v", err)
+	}
+	if got := provider.registerCount(); got != 1 {
+		t.Errorf("after second SignInRecipe: register endpoint called %d times, want STILL 1 — "+
+			"the cached DCR registration must be reused, or every sign-in click creates "+
+			"another OAuth client in the user's account at the provider", got)
+	}
+}

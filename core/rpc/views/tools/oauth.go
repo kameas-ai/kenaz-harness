@@ -146,6 +146,16 @@ func (a *API) injectOAuthBearer(ctx context.Context, recipe recipes.Recipe, spec
 // close over (a.cfg.Keychain / a.cfg.Secrets) is itself nil — a
 // configuration that today's production wiring (core/rpc/api.go) never
 // produces; DataDir, Keychain and Secrets are always set together.
+// openBrowser resolves the authorization-URL hook: the injected test seam
+// when set, oauth.OpenSystemBrowser otherwise. See Config.OpenBrowser for
+// why the seam exists.
+func (a *API) openBrowser() func(authURL string) error {
+	if a.cfg.OpenBrowser != nil {
+		return a.cfg.OpenBrowser
+	}
+	return oauth.OpenSystemBrowser
+}
+
 func (a *API) newDCRStore(ctx context.Context) *oauth.DCRStore {
 	if a.cfg.DataDir == "" {
 		return nil
@@ -392,7 +402,7 @@ func (a *API) SignInRecipe(ctx context.Context, id string) (stdio.RecipeStatus, 
 		ServerURL:   recipe.URL,
 		ClientID:    clientID,
 		Scopes:      recipe.Auth.Scopes,
-		OpenBrowser: oauth.OpenSystemBrowser,
+		OpenBrowser: a.openBrowser(),
 		DCRStore:    a.newDCRStore(ctx), // UNIT-3 3e — nil only when DataDir is unset (see newDCRStore).
 	})
 	if err != nil {
