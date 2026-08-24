@@ -71,7 +71,14 @@ ci_require_file "$CHAT_CONFIG_FILE" "$GATE"
 # still there before drawing any conclusion from its absence — the same
 # discipline check-cedar-gate-arguments.sh applies to its own clauses.
 # ---------------------------------------------------------------------------
-if ! grep -qE '^\tSecretLookup[[:space:]]+refs\.SecretLookup$' "$CHAT_CONFIG_FILE"; then
+# NOTE: the leading indent is matched with [[:space:]]*, NOT '\t'. In an ERE,
+# '\t' is not portable: BSD grep (macOS) reads it as a tab, GNU grep (Linux CI)
+# reads it as a literal 't', so a '^\t'-anchored pattern silently never matches
+# on CI. That made this gate fail its own precondition on every CI run -- caught
+# by gates_can_fail_test's "failed, but for an unrelated reason" assertion, which
+# is exactly the check that distinguishes a gate that fires from one that merely
+# exits non-zero. Do not reintroduce '\t' here or anywhere else in scripts/ci.
+if ! grep -qE '^[[:space:]]*SecretLookup[[:space:]]+refs\.SecretLookup$' "$CHAT_CONFIG_FILE"; then
   echo "${GATE} FAIL: chat.Config no longer declares 'SecretLookup refs.SecretLookup' in ${CHAT_CONFIG_FILE}." >&2
   echo "${GATE} Either the field was renamed/retyped (update this script in the same" >&2
   echo "${GATE} commit) or the field was removed, in which case this check's premise" >&2
