@@ -117,6 +117,75 @@ func (a *API) injectOAuthBearer(ctx context.Context, recipe recipes.Recipe, spec
 	return nil
 }
 
+// newDCRStore builds the Dynamic Client Registration (RFC 7591) persistence
+// store for the current process (spec.md kitty-specs/connector-lifecycle-
+// truth-01PMZ303 UNIT-3 3e), or returns nil when persistence cannot be
+// anchored to a data directory. A nil store is safe by construction —
+// oauth.ResolveClientID/SignInWithDCR treat cfg.Store == nil as "always
+// re-register", which is exactly today's (pre-3e) behaviour, never a panic.
+//
+// SecretSaver/SecretLoader are wired over the same
+// Resolve/Use/Destroy + Keychain.Write seam loadOAuthCredential and
+// persistOAuthCredential already use for the per-recipe OAuth credential,
+// keyed through recipes.DCRClientSecretLocator instead of
+// recipes.OAuthCredentialLocator — DCR secrets are addressed by DCRKey
+// (issuer+resource+scopes), not recipe ID, so they need a distinct locator
+// namespace.
+//
+// Both closures are supplied whenever their underlying dependency exists.
+// This is deliberate, not incidental: DCRStore.Save only guards the
+// credstore write with "rc.ClientSecret != "" && s.saveFn != nil" — when
+// saveFn is nil it skips the credstore write silently and still commits a
+// has_secret:true JSON entry (dcr_store.go Save), which DCRStore.Load can
+// then never populate a secret for (Load's credstore read is itself guarded
+// on s.loadFn != nil). A nil SecretSaver here would not "gracefully support
+// only public clients" as NewDCRStore's doc allows for — on any provider
+// that returns a client_secret it would silently produce a cached entry
+// that claims to have one and can never retrieve it, which is worse than
+// not caching at all. So this passes nil only when the dependency it would
+// close over (a.cfg.Keychain / a.cfg.Secrets) is itself nil — a
+// configuration that today's production wiring (core/rpc/api.go) never
+// produces; DataDir, Keychain and Secrets are always set together.
+func (a *API) newDCRStore(ctx context.Context) *oauth.DCRStore {
+	if a.cfg.DataDir == "" {
+		return nil
+	}
+	var saveFn oauth.SecretSaver
+	if a.cfg.Keychain != nil {
+		saveFn = func(key, secret string) error {
+			return a.cfg.Keychain.Write(ctx, recipes.DCRClientSecretLocator(key), []byte(secret))
+		}
+	}
+	var loadFn oauth.SecretLoader
+	if a.cfg.Secrets != nil {
+		loadFn = func(key string) (string, error) {
+			ref := secrets.CredentialReference{
+				Kind:     secrets.RefKeychain,
+				Locator:  recipes.DCRClientSecretLocator(key),
+				Optional: true,
+			}
+			s, err := a.cfg.Secrets.Resolve(ctx, ref)
+			if err != nil {
+				// Absent / unresolvable optional credential → no secret
+				// stored yet. Matches SecretLoader's documented contract:
+				// return ("", nil) when nothing is stored.
+				return "", nil //nolint:nilerr // absent credential is not an error here
+			}
+			defer s.Destroy()
+			var out string
+			useErr := s.Use(func(v []byte) error {
+				out = string(v)
+				return nil
+			})
+			if useErr != nil {
+				return "", fmt.Errorf("tools: read dcr client_secret: %w", useErr)
+			}
+			return out, nil
+		}
+	}
+	return oauth.NewDCRStore(oauth.DefaultDCRStorePath(a.cfg.DataDir), saveFn, loadFn)
+}
+
 // injectBrokerBearer is the served-mode fallback for OAuth recipes with no
 // locally-stored credential (spec 091 D8): the host auth broker mints a
 // short-lived access token for the whitelisted connector — the refresh
@@ -230,14 +299,19 @@ func (a *API) resolveOAuthClientCredentials(ctx context.Context, recipe recipes.
 //     actually succeed against a real provider) was never executed — this
 //     environment has no live network access to third-party providers to
 //     verify it (see the UNIT-3 commit body) — so this ships the honest
-//     attempt without the confidential-client, registration-recovery, or
-//     cross-launch-persistence half (spec.md §1.12 R-3/R-4, UNIT-3 3b–3e):
-//     DCRStore is passed as nil below, so every sign-in re-registers as a
-//     public client and a revoked registration has no automatic recovery.
-//     A provider that does not accept DCR from an unregistered client
-//     (registry.json's own vercel warning flags this as expected, not a
-//     surprise) surfaces oauth.SignInWithDCR's real discovery/registration
-//     error, not a client-id-shaped one.
+//     attempt without the confidential-client or registration-recovery half
+//     (spec.md §1.12 R-3/R-4, UNIT-3 3b/3c): registration is always a
+//     public client (TokenEndpointAuthMethod "none" is still hardcoded) and
+//     a revoked registration has no automatic recovery yet. Cross-launch
+//     persistence (UNIT-3 3e) IS wired — newDCRStore below anchors the
+//     registered client_id (and any client_secret a provider returns
+//     anyway) at <DataDir>/oauth/dcr_clients.json, so a repeat sign-in
+//     reuses the cached registration instead of registering a new OAuth
+//     client with the provider on every call. A provider that does not
+//     accept DCR from an unregistered client (registry.json's own vercel
+//     warning flags this as expected, not a surprise) surfaces
+//     oauth.SignInWithDCR's real discovery/registration error, not a
+//     client-id-shaped one.
 //   - PrimaryAuthDeviceCode, PrimaryAuthKeys, PrimaryAuthNone: named
 //     dispositions that reject explicitly — these are not OAuth sign-in
 //     arms and SignInRecipe is not their entry point (device_code uses
@@ -319,7 +393,7 @@ func (a *API) SignInRecipe(ctx context.Context, id string) (stdio.RecipeStatus, 
 		ClientID:    clientID,
 		Scopes:      recipe.Auth.Scopes,
 		OpenBrowser: oauth.OpenSystemBrowser,
-		DCRStore:    nil, // UNIT-3 3e deferred — see NewDCRStore's doc comment.
+		DCRStore:    a.newDCRStore(ctx), // UNIT-3 3e — nil only when DataDir is unset (see newDCRStore).
 	})
 	if err != nil {
 		return stdio.RecipeStatus{}, fmt.Errorf("tools: oauth sign-in for %q: %w", id, err)

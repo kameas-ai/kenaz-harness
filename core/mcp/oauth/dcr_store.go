@@ -88,16 +88,15 @@ type DCRStore struct {
 // route client_secret values through the OS credstore; both may be nil when
 // only public-client registrations (no secret) are expected.
 //
-// STATUS (dated justification, kitty-specs/connector-lifecycle-truth-01PMZ303
-// UNIT-3, 2026-08-23): this constructor still has zero production callers.
-// SignInRecipe (core/rpc/views/tools/oauth.go) passes DCRStore: nil, so DCR
-// registrations are not persisted across launches yet — every sign-in
-// re-registers. Blocker: UNIT-0's ★1 (does DCR actually succeed against a
-// real provider) was never executed and this environment cannot make live
-// network calls to verify it, so wiring persistence + the credstore
-// SecretSaver/SecretLoader closures at the chassis (spec.md UNIT-3 3e) is
-// deferred to a follow-up unit once ★1 is run for real. Owner: whoever picks
-// up UNIT-3's deferred half; see the UNIT-3 commit body for the full record.
+// Production caller (kitty-specs/connector-lifecycle-truth-01PMZ303 UNIT-3
+// 3e): core/rpc/views/tools/oauth.go's (*API).newDCRStore constructs one per
+// SignInRecipe call, anchored at DefaultDCRStorePath(a.cfg.DataDir), with
+// real SecretSaver/SecretLoader closures over the same
+// keychain-write/secrets-resolve seam the per-recipe OAuth credential uses.
+// So a DCR-registered client_id (and any client_secret a provider issues
+// despite the harness still requesting a public client — UNIT-3 3b is
+// separate and not yet wired) survives a relaunch instead of re-registering
+// with the provider on every sign-in.
 func NewDCRStore(path string, saveFn SecretSaver, loadFn SecretLoader) *DCRStore {
 	return &DCRStore{
 		path:   path,

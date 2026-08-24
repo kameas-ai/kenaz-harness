@@ -32,6 +32,18 @@ func OAuthCredentialLocator(recipeID string) string {
 	return "mcp/" + recipeID + "/__oauth"
 }
 
+// DCRClientSecretLocator returns the keychain locator under which a Dynamic
+// Client Registration (RFC 7591) client_secret is persisted:
+// "mcp/dcr/<key>". key is oauth.DCRStore's credstore key (derived from a
+// DCRKey — issuer + resource + sorted scopes — not a recipe ID), so this is
+// a distinct namespace from OAuthCredentialLocator: a single DCR-registered
+// client_secret can be shared across every recipe that authorizes against
+// the same authorization server, while OAuthCredentialLocator's blob is
+// always per-recipe.
+func DCRClientSecretLocator(key string) string {
+	return "mcp/dcr/" + key
+}
+
 // ResolveEnv resolves every EnvKey in recipe through backend and
 // returns the env map ready to attach to exec.Cmd.Env.
 //
