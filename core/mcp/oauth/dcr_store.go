@@ -154,17 +154,24 @@ func (s *DCRStore) Save(key DCRKey, rc *RegisteredClient) error {
 	}
 
 	// Persist the secret to the credstore before writing anything else.
+	// HasSecret below must track whether this write actually happened, not
+	// merely whether the caller supplied a secret: setting it unconditionally
+	// on rc.ClientSecret != "" let an entry claim a secret exists (and cache
+	// that claim past Load's "check the credstore" branch) even on the
+	// saveFn == nil / not-wired path, where no secret was ever persisted.
+	secretPersisted := false
 	if rc.ClientSecret != "" && s.saveFn != nil {
 		if err := s.saveFn(key.credstoreKey(), rc.ClientSecret); err != nil {
 			return fmt.Errorf("oauth: dcr: save client_secret to credstore: %w", err)
 		}
+		secretPersisted = true
 	}
 
 	f.Entries[key.String()] = dcrEntry{
 		ClientID:              rc.ClientID,
 		ClientIDIssuedAt:      rc.ClientIDIssuedAt,
 		ClientSecretExpiresAt: rc.ClientSecretExpiresAt,
-		HasSecret:             rc.ClientSecret != "",
+		HasSecret:             secretPersisted,
 	}
 	return s.writeFile(f)
 }
@@ -211,6 +218,20 @@ func (s *DCRStore) Load(key DCRKey) (*RegisteredClient, error) {
 			return nil, fmt.Errorf("oauth: dcr: load client_secret from credstore: %w", err)
 		}
 		rc.ClientSecret = secret
+	}
+
+	// e.HasSecret records a confidential client whose secret this store
+	// persisted. If we get here with ClientSecret still empty — the
+	// credstore row was removed out from under us (the production loadFn,
+	// core/rpc/views/tools/oauth.go's newDCRStore closure, converts ANY
+	// resolve failure to ("", nil)), or loadFn was nil so the lookup never
+	// ran at all — returning rc as-is would silently downgrade a
+	// confidential client to a public one with an empty secret, cached
+	// until ClientSecretExpiresAt with no invalidation. Treat it as
+	// equivalent to no registration so the caller re-registers cleanly
+	// instead of authenticating with a client_secret that quietly became "".
+	if e.HasSecret && rc.ClientSecret == "" {
+		return nil, ErrDCRNotFound
 	}
 
 	return rc, nil
