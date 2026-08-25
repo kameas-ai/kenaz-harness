@@ -40,14 +40,30 @@ package llm_test
 //   - WP14 (feat(llm): probe custom endpoints, cache the result, and
 //     let CapabilityHints override the catalog) — PERSISTENCE-BEARING,
 //     but adds no migration. core/llm/capabilities/cache_sqlite.go is
-//     the FIRST production code to write to provider_capabilities
-//     (migration sessions/0329-provider-capabilities, shipped in
-//     v0.63.0 per spec §11's correction to register A-5 — "the table
-//     and the migration already shipped in v0.63.0"). D-5 survives:
-//     WP14 adds code only. gate.go's CapabilityHints overlay
-//     (applyCapabilityHints / applyVisionHintToAttachments) reads an
-//     in-memory ProviderProfile field already declared before this
-//     mission — no new persisted setting.
+//     the FIRST production code CAPABLE of writing to
+//     provider_capabilities (migration sessions/0329-provider-
+//     capabilities, shipped in v0.63.0 per spec §11's correction to
+//     register A-5 — "the table and the migration already shipped in
+//     v0.63.0"). D-5 survives: WP14 adds code only. gate.go's
+//     CapabilityHints overlay (applyCapabilityHints /
+//     applyVisionHintToAttachments) reads an in-memory ProviderProfile
+//     field already declared before this mission — no new persisted
+//     setting.
+//
+//     Correction (2026-08-25, Finding 6 of the release/v0.72.0
+//     unwired sweep): "capable of writing" is not "writes on a real
+//     install". core/rpc/api.go's newLLMStack wires this cache via
+//     capabilities.DefaultCache(db), which selects SQLiteCache only
+//     when HARNESS_LLM_CAPABILITY_CACHE=sqlite is set in the process
+//     environment — and nothing in this repo (no launcher, no default
+//     Settings value, no packaging script) ever sets it. So on every
+//     shipped binary today, DefaultCache degrades to MemoryCache and
+//     provider_capabilities stays permanently empty; this landing
+//     removed the STRUCTURAL blocker (DefaultCache(nil) could
+//     previously never select sqlite even with the env var set — see
+//     the Falsifiability note below) but did not make the write path
+//     live. Whether to flip the default is an owner decision, not
+//     this test file's to make.
 //   - WP-PI (this file) — none; adds only this enumeration and the
 //     falsifiability re-run below.
 //
