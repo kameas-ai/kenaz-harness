@@ -142,6 +142,44 @@ func (s *Sanitizer) SanitizeStream(chunks []byte) []byte {
 	return s.Sanitize(chunks)
 }
 
+// Clone returns a new, independent Sanitizer pre-populated with a deep
+// copy of the receiver's currently-registered fingerprints. The clone
+// shares no memory with the receiver: calling Clear() on either
+// Sanitizer has no effect on the other.
+//
+// This exists for callers whose lifetime outlives the turn a Sanitizer
+// was constructed for. A background task spawned via kenaz__bash
+// (core/tools/bash/background.go) keeps writing output long after the
+// chat runner's defer sanitizer.Clear() fires at end-of-turn
+// (chat_runner.go, "Sanitizer scope is [turn-start, turn-end)"). Without
+// a task-scoped copy, wrapping the task's output writers with the
+// turn Sanitizer directly would redact correctly until Clear() runs,
+// then silently stop redacting for the remainder of the task's life —
+// worse than no fix, because it looks correct in a short-lived test.
+//
+// Clone must be called BEFORE the originating turn ends (in practice,
+// at task-registration time, before the task can write any output) so
+// the snapshot captures every secret substituted into the command up to
+// that point. Secrets resolved by unrelated calls after the clone is
+// taken are correctly absent — the already-spawned process cannot see
+// them either.
+//
+// Safe to call concurrently with Add/Sanitize/Clear on the receiver.
+func (s *Sanitizer) Clone() *Sanitizer {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	clone := &Sanitizer{entries: make([]fingerprintEntry, len(s.entries))}
+	for i, e := range s.entries {
+		buf := make([]byte, len(e.plain))
+		copy(buf, e.plain)
+		clone.entries[i] = fingerprintEntry{fp: e.fp, plain: buf, locator: e.locator}
+	}
+	return clone
+}
+
 // Clear drops all registered plaintexts and zeroes the copies.
 // Called at end-of-turn.
 func (s *Sanitizer) Clear() {

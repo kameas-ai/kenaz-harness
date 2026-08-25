@@ -141,12 +141,35 @@ func registerBuiltinTools(
 	var bgEnd corebash.BackgroundEndFunc
 	if taskReg != nil {
 		bgSpawn = func(ctx context.Context, sessionID, cmd, description string, pid int) (string, error) {
+			// LEAK 2 (round 3, output half): the background arm's
+			// cmd.Stdout/cmd.Stderr write straight to the registry's
+			// writers with no sanitizer anywhere — a resolved @secret:
+			// value echoed by the child process (e.g. `curl -v`
+			// printing an Authorization header to stderr) landed in
+			// the on-disk task log, the in-memory ring buffer, the
+			// background_task_complete hook payload, and the
+			// kenaz__monitor tool result, all in plaintext, while the
+			// identical synchronous call was redacted. The turn's
+			// refs.Sanitizer is scoped [turn-start, turn-end) and gets
+			// Clear()'d by chat_runner.go's defer when the turn ends —
+			// a background task outlives that. Clone() here, at
+			// Register time (before the process can write a single
+			// byte — Register is always called before cmd.Start(), see
+			// background.go), takes an independent snapshot that
+			// keeps redacting after the originating turn's Clear()
+			// has run. See core/credstore/refs.Sanitizer.Clone and
+			// core/tasks.RegisterOpts.Sanitizer.
+			var sanitizer coretasks.OutputSanitizer
+			if s := refs.SanitizerFromContext(ctx); s != nil {
+				sanitizer = s.Clone()
+			}
 			return taskReg.Register(ctx, coretasks.RegisterOpts{
 				Kind:           coretasks.KindBash,
 				OwnerSessionID: sessionID,
 				Cmd:            cmd,
 				Description:    description,
 				PID:            pid,
+				Sanitizer:      sanitizer,
 			})
 		}
 		bgWriters = func(taskID string) (io.Writer, io.Writer, bool) {

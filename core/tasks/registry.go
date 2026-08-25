@@ -20,6 +20,24 @@ var ErrAlreadyTerminal = errors.New("tasks: already in terminal state")
 // implementation; tests may supply a stub.
 type HookFirerFunc func(ctx context.Context, payload BackgroundTaskCompletePayload)
 
+// OutputSanitizer redacts secret plaintext from raw task output before
+// it reaches any sink this package owns: the ring buffer, the on-disk
+// log file, the background_task_complete hook payload (both read from
+// the ring buffer's Tail), and kenaz__monitor (which reads the Lines
+// this package records — see AppendLine). Applying it once, at the top
+// of lineWriter.Write, covers all four by construction instead of
+// requiring each sink to remember to sanitize independently.
+//
+// Defined as a minimal interface (not core/credstore/refs.Sanitizer
+// directly) so this package does not import the credential-policy
+// layer — the same reason core/tools/bash.BackgroundSpawnFunc is a
+// plain function type instead of importing core/tasks. *refs.Sanitizer
+// satisfies this interface structurally; see its Clone method for why
+// callers must pass a per-task clone, not the shared per-turn instance.
+type OutputSanitizer interface {
+	Sanitize(content []byte) []byte
+}
+
 // entry is the private in-memory record for a running task.
 type entry struct {
 	task    Task
@@ -37,6 +55,13 @@ type entry struct {
 	// without actually stopping anything (the pre-containment-review
 	// behaviour for KindSubagent tasks — see Abort's doc).
 	stopFunc func(context.Context) error
+	// sanitizer redacts resolved-secret plaintext from this task's
+	// stdout/stderr before it reaches ring/log/hook/__monitor. nil
+	// means no redaction (no resolver wired, or the caller passed
+	// nothing at Register time) — same as every other optional
+	// dependency in this package. Set once at Register and never
+	// mutated afterward, so reading it without linesMu/mu is safe.
+	sanitizer OutputSanitizer
 }
 
 // RegisterOpts carries the caller-supplied metadata for a new task.
@@ -48,7 +73,15 @@ type RegisterOpts struct {
 	Cmd            string
 	Description    string
 	// PID is the OS process ID; 0 for sub-agent tasks.
-	PID            int
+	PID int
+	// Sanitizer, when non-nil, redacts resolved-secret plaintext from
+	// this task's captured output before it reaches any sink. Callers
+	// spawning a process that may echo a just-resolved @secret:
+	// reference (core/tools/bash background mode) MUST pass a
+	// task-scoped clone here, not a per-turn Sanitizer that will be
+	// Clear()'d while the task keeps running — see
+	// core/credstore/refs.Sanitizer.Clone.
+	Sanitizer OutputSanitizer
 }
 
 // Registry tracks every background task in the current harness process.
@@ -142,11 +175,12 @@ func (r *Registry) Register(ctx context.Context, opts RegisterOpts) (string, err
 	stdout := newRingBuffer(DefaultRingCapBytes)
 	stderr := newRingBuffer(DefaultRingCapBytes)
 	e := &entry{
-		task:   t,
-		stdout: stdout,
-		stderr: stderr,
-		subs:   subs,
-		pid:    opts.PID,
+		task:      t,
+		stdout:    stdout,
+		stderr:    stderr,
+		subs:      subs,
+		pid:       opts.PID,
+		sanitizer: opts.Sanitizer,
 	}
 	// Wire up line writers that fan out to ring + log + subscribers.
 	e.task.Status = StatusRunning // confirm
@@ -178,7 +212,7 @@ func (r *Registry) StdoutWriter(id string) (*lineWriter, bool) {
 		return nil, false
 	}
 	lf, _ := openLogFile(r.logDir, id)
-	return newLineWriter("stdout", e.stdout, lf, func(ln Line) { r.AppendLine(id, ln) }), true
+	return newLineWriter("stdout", e.stdout, lf, e.sanitizer, func(ln Line) { r.AppendLine(id, ln) }), true
 }
 
 // StderrWriter returns an io.Writer that fans to ring buffer + log file +
@@ -191,7 +225,7 @@ func (r *Registry) StderrWriter(id string) (*lineWriter, bool) {
 		return nil, false
 	}
 	lf, _ := openLogFile(r.logDir, id)
-	return newLineWriter("stderr", e.stderr, lf, func(ln Line) { r.AppendLine(id, ln) }), true
+	return newLineWriter("stderr", e.stderr, lf, e.sanitizer, func(ln Line) { r.AppendLine(id, ln) }), true
 }
 
 // SetPID records the OS PID for an already-registered task. Used by

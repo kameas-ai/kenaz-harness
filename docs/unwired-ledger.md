@@ -444,6 +444,18 @@ correct — it stores `args.Command` (pre-substitution). Fixed by splitting
 used only for the registry write and the log line), matching the
 synchronous path's contract.
 
+**Correction (2026-08-25, round 3 — see the entry below):** the above
+fixed only the *command-line* half of LEAK 2. `background.go` still
+attached `cmd.Stdout`/`cmd.Stderr` directly to the task registry's
+writers with no sanitizer anywhere — a resolved secret **echoed by the
+child process itself** (e.g. `curl -v` printing a substituted
+`Authorization` header to stderr) still reached the on-disk task log,
+the in-memory ring buffer, the `background_task_complete` hook payload,
+and the `kenaz__monitor` tool result, all in plaintext. This was a
+distinct gap from the one fixed above, in a different code path
+(`t.backgroundWriters`, not `t.backgroundSpawn`), and shipped past this
+same review pass — see the round-3 entry for the fix and its scope.
+
 Both fixes are covered by falsification tests
 (`core/tools/webfetch/webfetch_test.go`
 `TestWebFetch_ErrorResult_DoesNotLeakSecret`,
@@ -457,6 +469,136 @@ This is also the correction referenced in the 2026-08-23 entry above: its
 claim that "`Sanitize` now runs on every tool result" was true only for
 the success path at the time it was written; these two gaps existed
 alongside it in the same release.
+
+**Owner:** alec. **Date:** 2026-08-25.
+
+### 2026-08-25 · LEAK 2 round 3 — bash background mode's OUTPUT path was still unsanitized (FIXED)
+
+Round 2 (previous entry) fixed the background arm's *command line* —
+`spawnBackground`'s persisted/logged string. It did not touch the arm's
+*output*. `core/tools/bash/background.go` attached `cmd.Stdout`/
+`cmd.Stderr` straight to `t.backgroundWriters(taskID)` — the task
+registry's raw writers — with zero sanitizer anywhere in that file
+(confirmed: `background.go` had no `credstore/refs` import at all). A
+child process that echoes a resolved `@secret:` value (`curl -v` writing
+a substituted `Authorization` header to stderr is the canonical case)
+put the plaintext into all four sinks `core/tasks/registry.go` fans
+each writer to: the on-disk log file (cleartext, mode 0600, 7-day
+retention, survives process exit — `core/tasks/log.go`), the in-memory
+ring buffer (`core/tasks/ring.go`), the `background_task_complete` hook
+payload (piped to an arbitrary user-configured executable's stdin), and
+the `kenaz__monitor` tool result (back into session history and FTS).
+The identical *synchronous* `kenaz__bash` call was correctly redacted
+(`bash.go:470-477`) — only the background arm was exposed.
+
+**The hard part:** `refs.Sanitizer` is turn-scoped —
+`chat_runner.go`'s `defer sanitizer.Clear()` zeroes it at end-of-turn —
+but a background task outlives its turn. Wrapping the task's output
+writers with the turn's shared `*refs.Sanitizer` would have redacted
+correctly for a fast test and then silently stopped the moment the
+turn ended, which is worse than shipping no fix at all: it looks green
+in CI and leaks in production on any task whose output arrives after
+its turn completes (which is the common case for anything that runs
+longer than one turn).
+
+**Fix (task-scoped sanitizer, chosen over refusing `@secret:` in
+background mode because it preserves the capability):**
+
+1. `refs.Sanitizer.Clone()` (new) returns an independent, deep-copied
+   Sanitizer whose entries survive the original's `Clear()`.
+2. `core/tasks.OutputSanitizer` (new minimal interface,
+   `Sanitize([]byte) []byte`) lets `core/tasks` accept a sanitizer
+   without importing `core/credstore/refs` — the same reasoning that
+   already makes `bash.BackgroundSpawnFunc` a plain function type
+   instead of an import of `core/tasks`. `*refs.Sanitizer` satisfies it
+   structurally.
+3. `core/rpc/builtins_wiring.go`'s `bgSpawn` closure calls
+   `refs.SanitizerFromContext(ctx).Clone()` and passes the clone via the
+   new `tasks.RegisterOpts.Sanitizer` field, **at `Register` time —
+   which always runs before `cmd.Start()`** (background.go's existing
+   ordering guarantee, originally added so the writers could be attached
+   before the first byte was written; the same ordering now guarantees
+   the sanitizer is attached before the first byte too).
+4. `core/tasks/ring.go`'s `lineWriter.Write` — the single chokepoint all
+   four sinks flow through (ring buffer, log file, and via
+   `record`/`AppendLine`, both `__monitor`'s `Lines` and the hook's
+   `Tail`-derived `StdoutTail`/`StderrTail`) — calls `Sanitize` on the
+   raw bytes before any sink sees them. One chokepoint fix covers all
+   four sinks by construction instead of requiring each to remember to
+   sanitize independently.
+
+**Covered:** on-disk log file, in-memory ring buffer,
+`background_task_complete` hook payload, `kenaz__monitor` (drain and
+watch, both read `Registry.Tail`/`AppendLine`, downstream of the same
+chokepoint) — for every task spawned by the fixed code, including
+tasks that are still running when their originating turn's `Clear()`
+fires (falsification-tested explicitly, see below).
+
+**NOT covered, dated + owned:**
+
+- **Pre-fix on-disk log files.** Any `<taskID>.log` written before this
+  fix deployed keeps its plaintext; nothing retroactively scrubs
+  existing files. 7-day retention (`core/tasks/log.go`) ages them out
+  naturally; no separate cleanup was written. **Owner:** alec.
+  **Blocker:** none planned — retention is considered sufficient
+  mitigation for a single-user desktop app; revisit only if a future
+  finding shows log files are backed up or synced somewhere retention
+  doesn't reach. **Date:** 2026-08-25.
+- **Chunk-boundary splitting.** `lineWriter.Write` sanitizes each
+  `cmd.Stdout`/`cmd.Stderr` write call independently (the same
+  chunk-boundary limitation already documented on `SanitizeStream`,
+  2026-08-23 entry above). A secret plaintext split across two
+  separate pipe reads from the child process is not caught. In
+  practice the sink test's `curl -v`-shaped scenario writes the header
+  in one line/one write; this is a real but narrow residual gap, not
+  exercised by the falsification test. **Owner:** alec. **Blocker:** no
+  mission currently owns a chunk-reassembly buffer for task output;
+  pick up alongside the `SanitizeStream` wiring already tracked in the
+  2026-08-23 entry, since both need the same boundary-aware scan.
+  **Date:** 2026-08-25.
+- **`core/rpc/subagent_run_spawner.go`'s `Register` call.** Sub-agent
+  tasks (`KindSubagent`) go through `Registry.Register` but never
+  through `StdoutWriter`/`StderrWriter` — they are LLM streams, not
+  child-process stdout/stderr, so this fix's chokepoint does not apply
+  to them and none was added. Out of scope for this fix (no
+  `@secret:`-bearing exec output exists on that path today); flagged
+  here only so a future reader doesn't assume `RegisterOpts.Sanitizer`
+  covers every task kind. **Owner:** alec. **Date:** 2026-08-25.
+- **The `builtins_wiring.go` `bgSpawn` closure itself is not directly
+  exercised by an automated test.** The falsification test
+  (`core/tools/bash/secret_background_output_leak_test.go`) drives a
+  real `tasks.Registry` through a test-local closure that mirrors
+  `bgSpawn` line-for-line (constructing the full `core.Core` needed to
+  reach the real closure is out of scope here) — the same pattern the
+  pre-existing round-2 test already used. A mutation was applied to
+  the test's mirrored `Clone()` call specifically (not to
+  `builtins_wiring.go`) to prove the Clear()-survival assertion is
+  load-bearing; it does not prove the production closure wasn't
+  independently mistyped. **Owner:** alec. **Blocker:** none planned —
+  the closure is small (6 lines) and structurally identical to its
+  tested mirror; revisit if `builtins_wiring.go`'s bash-background
+  block grows enough logic to diverge from the mirror unnoticed.
+  **Date:** 2026-08-25.
+
+Falsification: `core/tools/bash/secret_background_output_leak_test.go`
+(`TestRunInBackground_OutputSinksDoNotLeakResolvedSecret`,
+`TestRunInBackground_OutputRedactionSurvivesTurnClear`) drives a real
+`tasks.Registry` with a real temp `LogDir` and real
+`StdoutWriter`/`StderrWriter`, and asserts on the actual on-disk log
+file bytes, the ring-buffer tail (via the hook payload), and
+`Registry.Tail` (the `kenaz__monitor` read path) — not a stub's
+captured argument, which is what let the round-2 fix ship with this
+output-path gap still open (`secret_background_leak_test.go` stubs
+`BackgroundSpawn`/`BackgroundEnd` and has zero references to
+`BackgroundWriters`). Both tests were confirmed red against the pre-fix
+code (with the resolved plaintext visible in the failure output) and
+red again under two independent compiling mutations of the fix: (a)
+gating the `lineWriter.Write` sanitize call behind `if false && …` and
+(b) the `bgSpawn` mirror sharing the turn-scoped `*refs.Sanitizer`
+directly instead of calling `Clone()` — mutation (b) isolates
+specifically to `TestRunInBackground_OutputRedactionSurvivesTurnClear`,
+confirming that test (and not the plain sink test) is what catches a
+lifetime regression.
 
 **Owner:** alec. **Date:** 2026-08-25.
 
