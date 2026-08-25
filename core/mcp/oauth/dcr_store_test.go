@@ -255,6 +255,67 @@ func TestDCRStore_NoCredstoreFns_PublicClient(t *testing.T) {
 	}
 }
 
+// TestDCRStore_Save_NoSaveFn_DoesNotClaimSecret is Finding 7 (unwired
+// sweep, release/v0.72.0): Save must not set HasSecret when the
+// credstore write never actually happened. Before this fix, Save set
+// HasSecret = rc.ClientSecret != "" unconditionally, so a confidential
+// registration saved while saveFn was nil (credstore not wired) would
+// still record HasSecret: true — Load would then trust that claim.
+func TestDCRStore_Save_NoSaveFn_DoesNotClaimSecret(t *testing.T) {
+	dir := t.TempDir()
+	store := NewDCRStore(filepath.Join(dir, "dcr_clients.json"), nil, nil)
+	store.nowFn = func() time.Time { return timeUnix(5000) }
+
+	key := DCRKey{Issuer: "https://as.example.com", Resource: "r"}
+	rc := &RegisteredClient{ClientID: "cid-conf", ClientSecret: "s3cr3t!"}
+	if err := store.Save(key, rc); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	f, err := store.readFile()
+	if err != nil {
+		t.Fatalf("readFile: %v", err)
+	}
+	e, ok := f.Entries[key.String()]
+	if !ok {
+		t.Fatal("entry not persisted")
+	}
+	if e.HasSecret {
+		t.Fatal("REGRESSION: HasSecret is true even though saveFn is nil and no credstore write happened")
+	}
+}
+
+// TestDCRStore_Load_HasSecretButCredstoreEmpty_ReturnsNotFound is
+// Finding 7's Load half: an entry claiming HasSecret whose credstore
+// row is absent (removed by the user or another process after Save —
+// the loadFn contract, mirrored by fakeCredStore.load above, converts
+// a missing key to ("", nil) rather than an error) must not silently
+// downgrade to a confidential client with an empty secret. Before this
+// fix, Load returned err == nil with ClientSecret == "" in this case,
+// cached until ClientSecretExpiresAt with no invalidation.
+func TestDCRStore_Load_HasSecretButCredstoreEmpty_ReturnsNotFound(t *testing.T) {
+	store, creds := newTestStore(t)
+
+	key := DCRKey{Issuer: "https://as.example.com", Resource: "r"}
+	rc := &RegisteredClient{ClientID: "cid-conf", ClientSecret: "s3cr3t!"}
+	if err := store.Save(key, rc); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// Simulate the keychain entry being removed out from under the store
+	// (user revokes it in the OS keychain UI, or a keychain sync race).
+	creds.mu.Lock()
+	for k := range creds.secrets {
+		delete(creds.secrets, k)
+	}
+	creds.mu.Unlock()
+
+	_, err := store.Load(key)
+	if !errors.Is(err, ErrDCRNotFound) {
+		t.Fatalf("REGRESSION: want ErrDCRNotFound when HasSecret is true but the credstore row is gone, got %v", err)
+	}
+}
+
 func TestDCRStore_Concurrent(t *testing.T) {
 	store, _ := newTestStore(t)
 	const n = 20
