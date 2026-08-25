@@ -276,6 +276,27 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			content: "export type ZzGateProbeAliasAuth = {\n  client_id?: string;\n  client_secret?: string;\n};\n",
 		},
 		{
+			// 2026-08-25 round-5 hardening: the field regexes anchored on
+			// `^\s*`, which cannot cross the space after a TS member
+			// modifier. `readonly clientSecret: string` therefore evaded
+			// every trigger word. `readonly` is an ordinary TS idiom, so
+			// this was a plausible non-adversarial miss rather than a
+			// contrived evasion.
+			name:    "no-credential-in-ui/readonly-modifier-evasion",
+			gate:    "check-no-credential-in-ui.sh",
+			file:    "frontend/src/zz_gate_probe_readonly.ts",
+			content: "export interface ZzGateProbeReadonlyAuth {\n  readonly clientSecret: string;\n}\n",
+		},
+		{
+			// Same round: a leading quote on a quoted key matched neither
+			// `\s` nor `[a-zA-Z0-9_]`, so `'client_secret': string` was
+			// invisible to the trigger regex.
+			name:    "no-credential-in-ui/quoted-key-evasion",
+			gate:    "check-no-credential-in-ui.sh",
+			file:    "frontend/src/zz_gate_probe_quoted.ts",
+			content: "export interface ZzGateProbeQuotedAuth {\n  'client_secret': string;\n}\n",
+		},
+		{
 			// 2026-08-25 hardening: the field regex needed `^\s*` at the
 			// start of a physical LINE, so an entire single-line
 			// declaration — `interface FooAuth { client_secret: string }`

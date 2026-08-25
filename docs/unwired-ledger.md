@@ -406,6 +406,49 @@ a test that calls `SanitizeStream` directly proves nothing).
 `SanitizeStream` into the LLM streaming bridge; the next mission that
 touches assistant-token streaming should pick this up. **Date:** 2026-08-23.
 
+### 2026-08-25 · MCP stdio has THREE unsanitized channels, not one (review round 5 correction)
+
+An earlier entry conceded only the stdio **`RPCError.Message`** path. Round 5
+established that two sibling channels carry the same taint and were not
+covered by that wording:
+
+1. **Child stderr → `RingBuffer` → `StderrTail` → `RecipeStatus` → RPC/UI**
+   (`core/mcp/transport/stdio/connection.go:307`, `server.go:409/882`,
+   `status.go:30/53`). No sanitizer anywhere on this path, and it is read
+   *outside* any turn context. Can also be promoted into `LastError`.
+2. **`notifications/message` → `LogSink.Handle` → `slog.Default()`**
+   (`core/mcp/transport/log.go:65-68`, `server.go:871`). Production wiring is
+   `Logger: nil // defaults to slog.Default` (`core/rpc/api.go:5134`), so
+   server-controlled `params.Data` reaches `harness.log` — the same durable
+   sink as the seventh egress.
+
+**Why this is accepted rather than fixed:** all three require a stdio MCP
+server to echo back plaintext the harness *deliberately handed it* — that is
+what `@secret:` substitution into MCP arguments means. Once a server holds the
+plaintext it can exfiltrate over its own socket; redacting our logs does not
+reduce attacker capability. The sanitizer here defends against *accidental*
+echo by a buggy server, and the structurally identical `RPCError.Message`
+case was already accepted. Recorded so the accepted scope is stated
+accurately: three channels, not one.
+
+**Owner:** alec. **Date:** 2026-08-25.
+
+### 2026-08-25 · `refs.Sanitize` is exact-substring, so a transformed secret is caught by nothing
+
+Raised by review round 5 as the one genuinely open design question after seven
+egress fixes. `Sanitize` matches the resolved plaintext literally. A child
+process that base64-encodes, URL-encodes, case-folds, or splits a secret before
+echoing it defeats every sanitizer on every path — bash, webfetch, MCP stdio,
+and the background task chokepoint alike.
+
+This is a known property of the design, not a defect in any one call site, and
+no further review of a single PR can close it. It wants a spec: either a
+stronger matching primitive, or an explicit statement that redaction is
+best-effort against accidental echo only.
+
+**Owner:** alec. **Blocker:** needs a product decision on what redaction is
+supposed to guarantee. **Date:** 2026-08-25.
+
 ### 2026-08-25 · web_fetch error-path and bash background-mode secret leaks (release/v0.72.0 WP19 regressions — FIXED)
 
 Two confirmed secret-leak regressions, both introduced by WP19 wiring the

@@ -429,8 +429,17 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 			})
 		}
 		commandLine = sub
-		// ZeroBuffer is not applicable here since commandLine is a Go string;
-		// the internal buffer was already zeroed by refs.Substitute.
+		// commandLine is a Go string, so there is nothing here to zero.
+		// NOTE (review round 5, 2026-08-25): an earlier version of this
+		// comment claimed "the internal buffer was already zeroed by
+		// refs.Substitute". That is only half true and the half it got
+		// wrong matters. Substitute zeroes each per-reference `resolved`
+		// buffer (resolver.go), but the accumulating bytes.Buffer's
+		// backing array is never zeroed, and buf.String() copies out of
+		// it. So resolved plaintext DOES stay resident in the heap after
+		// this point. No in-repo sink reads it (no crash dump, no heap
+		// attach), which is why this is a comment fix and not a defect —
+		// but do not rely on the old claim.
 	}
 
 	// ── Background mode (run_in_background:true) ────────────────────────

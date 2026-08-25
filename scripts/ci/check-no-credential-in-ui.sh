@@ -17,7 +17,17 @@
 # field's identifier — clientSecret, client_secret, accessToken all count —
 # on a credential-shaped type, in both `interface Foo { ... }` and
 # `type Foo = { ... }` forms, whether the body is spread across multiple
-# lines or packed onto one.
+# lines or packed onto one, and whether or not the member carries a TS
+# modifier (`readonly`, `static`, `declare`, `public`, `private`,
+# `protected`) or is written as a quoted key (`'client_secret': string`).
+#
+# Those last two were NOT true when this paragraph was first written:
+# review round 5 (2026-08-25) demonstrated that `readonly clientSecret`
+# and `'client_secret'` both passed, because the field regexes anchored on
+# `^\s*` and could cross neither the space after a modifier nor a leading
+# quote. `readonly` is an ordinary TS idiom, so that was a plausible
+# non-adversarial miss. Both are now normalized away before the trigger
+# test and both carry planted-violation proofs in gates_can_fail_test.go.
 #
 # It does NOT, and cannot with a regex of this shape, distinguish a field
 # that NAMES a credential (a reference: an env var name, a key list, a
@@ -109,6 +119,15 @@ while IFS= read -r line; do
 
   violation_line=""
   while IFS= read -r fline; do
+    # Strip leading TS member modifiers and an optional quoted-key opener
+    # before any trigger test. Without this, `readonly clientSecret: string`
+    # and `'client_secret': string` both evade every regex below: the `^\s*`
+    # anchor cannot cross the space after `readonly`, and a leading quote
+    # matches neither `\s` nor `[a-zA-Z0-9_]`. `readonly` is an ordinary TS
+    # idiom, so this was a plausible non-adversarial miss, not just a
+    # theoretical evasion (review round 5, 2026-08-25).
+    fline=$(printf '%s' "$fline" | sed -E "s/^[[:space:]]*(readonly|static|declare|public|private|protected)[[:space:]]+/  /") 
+    fline=$(printf '%s' "$fline" | tr -d "\"'")
     # Presence-flag booleans (hasSecret, hasToken, ...) name a fact ABOUT
     # a credential, not the credential itself — exclude the `has<Pascal>`
     # idiom before testing the trigger words below.
