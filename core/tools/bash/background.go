@@ -26,7 +26,20 @@ import (
 //
 // The goroutine launched here monitors the process and calls
 // t.backgroundEnd(taskID, exitCode) when it finishes.
-func (t *Tool) spawnBackground(ctx context.Context, commandLine, cwd string, timeout time.Duration, description string) (json.RawMessage, error) {
+//
+// execCommand is the resolved (post-@secret:-substitution) command line —
+// the only thing ever handed to exec.Command, so the process itself still
+// sees the real credential. logCommand is the unresolved (pre-substitution)
+// command line the model originally sent — the only thing ever persisted
+// via backgroundSpawn (registry -> SQLite tasks.cmd) or written to logs.
+// This mirrors the synchronous path in bash.go, which stores args.Command
+// (pre-substitution) into t.store, never the resolved commandLine.
+// Regression: an earlier version of this function took a single
+// commandLine parameter and used the resolved form for both execution AND
+// persistence/logging, writing resolved secret plaintext permanently to
+// SQLite and to the bash.background.spawned log line on every DNS
+// failure- free background command carrying a @secret: reference.
+func (t *Tool) spawnBackground(ctx context.Context, execCommand, logCommand, cwd string, timeout time.Duration, description string) (json.RawMessage, error) {
 	shell := os.Getenv("SHELL")
 	if shell == "" || !filepath.IsAbs(shell) {
 		shell = "/bin/bash"
@@ -40,7 +53,8 @@ func (t *Tool) spawnBackground(ctx context.Context, commandLine, cwd string, tim
 	// Register FIRST, with pid:0 — the id must exist before Start() so
 	// the output writers below can be attached to cmd.Stdout/cmd.Stderr
 	// from the first byte the process writes, not after the fact.
-	taskID, err := t.backgroundSpawn(ctx, sessionID, commandLine, description, 0)
+	// logCommand (unresolved) is what gets persisted — never execCommand.
+	taskID, err := t.backgroundSpawn(ctx, sessionID, logCommand, description, 0)
 	if err != nil {
 		return marshalResult(callResult{
 			Stderr:   fmt.Sprintf("bash background: task registration failed: %v", err),
@@ -50,7 +64,9 @@ func (t *Tool) spawnBackground(ctx context.Context, commandLine, cwd string, tim
 
 	// Spawn without inheriting the parent context's cancellation.
 	// Background tasks live independently of the calling turn's context.
-	cmd := exec.Command(shell, "-l", "-c", commandLine)
+	// execCommand (resolved) is what actually runs — the process needs the
+	// real credential.
+	cmd := exec.Command(shell, "-l", "-c", execCommand)
 	cmd.Dir = cwd
 
 	// Attach the registry's stdout/stderr writers BEFORE Start() so every
@@ -114,7 +130,7 @@ func (t *Tool) spawnBackground(ctx context.Context, commandLine, cwd string, tim
 	t.logf("bash.background.spawned",
 		"task_id", taskID,
 		"pid", pid,
-		"command_truncated", truncateForLog(commandLine, 120),
+		"command_truncated", truncateForLog(logCommand, 120),
 	)
 
 	// Monitor goroutine: waits for process exit then calls backgroundEnd.
