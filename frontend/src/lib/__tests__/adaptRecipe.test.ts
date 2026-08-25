@@ -13,10 +13,19 @@
 //
 // This file feeds a realistic `WireRecipe` — the snake_case shape the Go
 // bridge actually sends over Tools_ListRecipes — through the real
-// `adaptRecipe` and asserts on the camelCase `Recipe` it produces. Delete
-// `auth: adaptRecipeAuth(w.auth),` from `adaptRecipe` in harnessClient.ts
-// and every `auth`-asserting case below goes red; that is the
-// falsification this file exists to make possible.
+// `adaptRecipe` and asserts on the camelCase `Recipe` it produces. The
+// falsification this file exists to make possible: change
+// `auth: adaptRecipeAuth(w.auth),` to `auth: adaptRecipeAuth(undefined),` in
+// `adaptRecipe` (harnessClient.ts) — NOT deleting the line, which leaves
+// `adaptRecipeAuth` unused and fails to compile (`TS6133: 'adaptRecipeAuth'
+// is declared but its value is never read`), a build error rather than a
+// falsification. `adaptRecipeAuth(undefined)` compiles cleanly and always
+// returns `undefined`, going red for the right reason: 2 of the 12 tests
+// below actually guard the auth mapping ("maps a realistic mcp_oauth
+// WireRecipe.auth..." and "never surfaces client_secret...") and fail; the
+// rest — including the two that assert `recipe.auth` is `undefined` — stay
+// green under this mutation, since forcing auth to `undefined` is
+// indistinguishable from the no-auth case for those.
 import { describe, it, expect } from 'vitest';
 import { adaptRecipe, type WireRecipe } from '@/lib/harnessClient';
 import type { PrimaryAuth } from '@/lib/types';

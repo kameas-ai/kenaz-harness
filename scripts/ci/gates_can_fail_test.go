@@ -266,6 +266,42 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			content: "interface ZzGateProbeAuth {\n  client_id?: string;\n  client_secret?: string;\n}\n",
 		},
 		{
+			// 2026-08-25 hardening: the type-name regex demanded the
+			// literal `interface` keyword, so a `type X = {...}` alias
+			// with an identical shape was invisible even though TS
+			// treats the two forms interchangeably for object shapes.
+			name:    "no-credential-in-ui/type-alias-evasion",
+			gate:    "check-no-credential-in-ui.sh",
+			file:    "frontend/src/zz_gate_probe_alias.ts",
+			content: "export type ZzGateProbeAliasAuth = {\n  client_id?: string;\n  client_secret?: string;\n};\n",
+		},
+		{
+			// 2026-08-25 hardening: the field regex needed `^\s*` at the
+			// start of a physical LINE, so an entire single-line
+			// declaration — `interface FooAuth { client_secret: string }`
+			// all on one row — put the field after the `interface`
+			// keyword on that same line and never matched at line-start.
+			name:    "no-credential-in-ui/single-line-body-evasion",
+			gate:    "check-no-credential-in-ui.sh",
+			file:    "frontend/src/zz_gate_probe_oneline.ts",
+			content: "interface ZzGateProbeOnelineAuth { client_secret: string }\n",
+		},
+		{
+			// 2026-08-25 hardening: the type-name regex only matched
+			// "Auth" as a literal SUFFIX of the identifier, so a real
+			// production type — DeviceAuthBeginResult
+			// (frontend/src/lib/harnessClient.ts:2515), the OAuth
+			// device-flow result and the single most likely place a
+			// token would actually land — was never selected because
+			// "Auth" sits in the middle of the name, not at the end.
+			// This plants the same shape: "Auth" as a mid-word
+			// PascalCase component.
+			name:    "no-credential-in-ui/auth-mid-word-evasion",
+			gate:    "check-no-credential-in-ui.sh",
+			file:    "frontend/src/zz_gate_probe_midword.ts",
+			content: "export interface DeviceAuthZzGateProbeResult {\n  userCode: string;\n  accessToken: string;\n}\n",
+		},
+		{
 			name: "slog-privacy/non-slog-receiver",
 			gate: "check-no-user-content-in-slog.sh",
 			file: "core/rpc/zz_gate_probe.go",
@@ -1610,5 +1646,62 @@ func TestNoUnwiredGates_StaleCheckIsPackageAware(t *testing.T) {
 	}
 	if !strings.Contains(out, "STALE") || !strings.Contains(out, "credstore.WithCedarGate") {
 		t.Fatalf("gate failed, but not with the STALE diagnosis for credstore.WithCedarGate:\n%s", out)
+	}
+}
+
+// TestNoCredentialInUI_BenignFieldsDoNotTrip is the false-positive-repair
+// proof for check-no-credential-in-ui.sh (2026-08-25 review). The field
+// regex used to anchor only at the start of the compound identifier, so
+// any field name ENDING in one of the trigger words fired — including
+// three shapes that carry no secret bytes at all:
+//
+//   - `hasSecret: boolean` — a presence flag; the boolean says whether a
+//     secret exists, it does not hold one.
+//   - `modelValue: string` — the standard Vue v-model prop name.
+//   - `defaultValue: string` — a generic default, not a credential.
+//
+// Each is planted on its own otherwise-unremarkable Auth-suffixed type
+// (which the gate's type-name half unambiguously selects) so a failure
+// here can only be attributed to the field regex, not to the type not
+// being scanned in the first place.
+func TestNoCredentialInUI_BenignFieldsDoNotTrip(t *testing.T) {
+	root := repoRoot(t)
+	const gate = "check-no-credential-in-ui.sh"
+
+	cases := []struct {
+		name    string
+		file    string
+		content string
+	}{
+		{
+			name:    "has-prefix-boolean",
+			file:    "frontend/src/zz_gate_probe_has.ts",
+			content: "export interface ZzGateProbeHasAuth {\n  hasSecret: boolean;\n}\n",
+		},
+		{
+			name:    "vue-model-value",
+			file:    "frontend/src/zz_gate_probe_modelvalue.ts",
+			content: "export interface ZzGateProbeModelValueAuth {\n  modelValue: string;\n}\n",
+		},
+		{
+			name:    "default-value",
+			file:    "frontend/src/zz_gate_probe_defaultvalue.ts",
+			content: "export interface ZzGateProbeDefaultValueAuth {\n  defaultValue: string;\n}\n",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			full := filepath.Join(root, tc.file)
+			cleanup := plant(t, full, tc.content, "")
+			defer cleanup()
+
+			code, out := runGate(t, gate, root)
+			if code != 0 {
+				t.Fatalf("%s rejected a benign field (%s) that carries no secret bytes — "+
+					"the gate is still over-broad.\noutput:\n%s", gate, tc.file, out)
+			}
+		})
 	}
 }
