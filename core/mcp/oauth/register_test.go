@@ -35,6 +35,15 @@ func TestRegisterClient_Success(t *testing.T) {
 		if len(meta.RedirectURIs) == 0 {
 			t.Errorf("redirect_uris empty")
 		}
+		// UNIT-3 3a (spec.md §1.12 R-2 / tasks.md 3a): RFC 8252 §7.3 relaxes
+		// loopback matching on the PORT only — the registered redirect URI's
+		// PATH must match what AuthorizeInteractive actually sends
+		// ("http://127.0.0.1:<port>/callback", loopback.go:106). Registering
+		// bare "http://127.0.0.1" (no path) fails that match on every
+		// conformant server; this pins the fix.
+		if len(meta.RedirectURIs) == 0 || meta.RedirectURIs[0] != "http://127.0.0.1/callback" {
+			t.Errorf("redirect_uris[0] = %v, want [\"http://127.0.0.1/callback\", ...] (RFC 8252 §7.3 — path must match; only the port is negotiable)", meta.RedirectURIs)
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)

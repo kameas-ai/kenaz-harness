@@ -744,12 +744,18 @@ describe('RecipeKeyPromptModal — bring-your-own OAuth copy (UNIT-2)', () => {
   });
 
   it('renders the ordinary "no token to paste" copy for a non-BYO OAuth recipe (unchanged behaviour)', async () => {
+    // primaryAuth deliberately omitted (legacy/unset): the 'oauth' arm now
+    // fails closed unconditionally regardless of whether auth.clientId is
+    // baked (spec.md §1.9/UNIT-3 3f — see the
+    // "render guard (UNIT-3 3g)" describe block below for that coverage).
+    // This fixture instead pins the orthogonal thing it always tested: a
+    // recipe with a real (non-token) baked client id gets the plain
+    // enabled "no token to paste" copy, not the BYO notice.
     const recipe: Recipe = {
       id: 'remote-oauth',
       displayName: 'GitHub (remote)',
       description: 'Official remote MCP server.',
       category: 'developer',
-      primaryAuth: 'oauth',
       auth: {
         kind: 'mcp_oauth',
         clientId: 'Iv23liRealBakedID',
@@ -1365,5 +1371,190 @@ describe('RecipeKeyPromptModal — warning severity', () => {
 
     await w.get('[data-testid=recipe-modal-warning-ack]').setValue(true);
     expect((submit.element as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+// ── AC-002 (vitest): render guard, per arm (spec.md §1.8/§1.9/§7,
+// kitty-specs/connector-lifecycle-truth-01PMZ303 UNIT-3 3g) ────────────────
+// For every primary_auth arm the recipe registry can carry, the "Sign in"
+// button's enabled/disabled state must match whether that arm can actually
+// complete. Falsification: comment out the `:disabled="... || !!signInBlockedReason"`
+// binding (or force signInBlockedReason to always return null) and the
+// 'oauth'-arm and empty-client-id 'browser_oauth_pkce' cases below render
+// the button ENABLED — the exact defect the deleted TODO used to document.
+describe('RecipeKeyPromptModal — render guard, per arm (UNIT-3 3g)', () => {
+  function oauthRecipe(overrides: Partial<Recipe> = {}): Recipe {
+    return makeRecipe({
+      id: 'remote-oauth',
+      displayName: 'Remote OAuth Connector',
+      envKeys: [],
+      auth: { kind: 'mcp_oauth', clientId: 'baked-cid', scopes: ['read'] },
+      ...overrides,
+    });
+  }
+
+  it('browser_oauth_dcr: button ENABLED — always attempted, even with no client id and no required env keys', async () => {
+    const recipe = oauthRecipe({
+      primaryAuth: 'browser_oauth_dcr',
+      auth: { kind: 'mcp_oauth', clientId: '', scopes: [] },
+      envKeys: [],
+    });
+    const w = mount(RecipeKeyPromptModal, {
+      ...withFakeClient,
+      props: { open: true, recipe, install: vi.fn(async () => okStatus(recipe.id)) },
+    });
+    await flushPromises();
+
+    expect(w.find('[data-testid=recipe-modal-oauth-section]').exists()).toBe(true);
+    expect(w.find('[data-testid=recipe-modal-signin-blocked-reason]').exists()).toBe(false);
+    expect(
+      (w.get('[data-testid=recipe-modal-signin-btn]').element as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it('browser_oauth_dcr with no required env keys collapses env keys under Advanced (AC-002)', async () => {
+    const recipe = oauthRecipe({
+      primaryAuth: 'browser_oauth_dcr',
+      auth: { kind: 'mcp_oauth', clientId: '', scopes: [] },
+      // An optional env key so hasEnvSection is true and there is
+      // something for envKeysAreSecondary to actually collapse — a recipe
+      // with zero env keys has no "Advanced" toggle to assert on regardless
+      // of the computed's return value.
+      envKeys: [{ name: 'OPTIONAL_OVERRIDE', display: 'Optional override', required: false }],
+    });
+    const w = mount(RecipeKeyPromptModal, {
+      ...withFakeClient,
+      props: { open: true, recipe, install: vi.fn(async () => okStatus(recipe.id)) },
+    });
+    await flushPromises();
+
+    // No required env keys and primary_auth=browser_oauth_dcr → the
+    // "Advanced" toggle is present and starts collapsed, mirroring the
+    // device_code/oauth/none arms (harnessClient.ts KNOWN_PRIMARY_AUTH +
+    // envKeysAreSecondary).
+    expect(w.find('[data-testid=recipe-modal-advanced-toggle]').exists()).toBe(true);
+  });
+
+  it('browser_oauth_pkce with a resolvable client id: button ENABLED', async () => {
+    const recipe = oauthRecipe({
+      primaryAuth: 'browser_oauth_pkce',
+      auth: { kind: 'mcp_oauth', clientId: '${KAMEAS_X_OAUTH_CLIENT_ID}', scopes: [] },
+      envKeys: [
+        { name: 'KAMEAS_X_OAUTH_CLIENT_ID', display: 'Client ID', required: true },
+      ],
+    });
+    const w = mount(RecipeKeyPromptModal, {
+      ...withFakeClient,
+      props: { open: true, recipe, install: vi.fn(async () => okStatus(recipe.id)) },
+    });
+    await flushPromises();
+
+    expect(w.find('[data-testid=recipe-modal-signin-blocked-reason]').exists()).toBe(false);
+    expect(
+      (w.get('[data-testid=recipe-modal-signin-btn]').element as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it('browser_oauth_pkce with NO client id (google-docs/google-sheets shape): button DISABLED with a named reason', async () => {
+    const recipe = oauthRecipe({
+      primaryAuth: 'browser_oauth_pkce',
+      auth: { kind: 'mcp_oauth', clientId: '', scopes: [] },
+      envKeys: [],
+    });
+    const w = mount(RecipeKeyPromptModal, {
+      ...withFakeClient,
+      props: { open: true, recipe, install: vi.fn(async () => okStatus(recipe.id)) },
+    });
+    await flushPromises();
+
+    const reason = w.find('[data-testid=recipe-modal-signin-blocked-reason]');
+    expect(reason.exists()).toBe(true);
+    expect(reason.text()).toContain('does not support dynamic client registration');
+    const btn = w.get('[data-testid=recipe-modal-signin-btn]');
+    expect((btn.element as HTMLButtonElement).disabled).toBe(true);
+    expect(btn.text()).toBe('Sign-in unavailable');
+  });
+
+  it("oauth arm WITH an auth block: button DISABLED with a named reason, not hidden", async () => {
+    const recipe = oauthRecipe({
+      primaryAuth: 'oauth',
+      auth: { kind: 'mcp_oauth', clientId: '', scopes: [] },
+    });
+    const w = mount(RecipeKeyPromptModal, {
+      ...withFakeClient,
+      props: { open: true, recipe, install: vi.fn(async () => okStatus(recipe.id)) },
+    });
+    await flushPromises();
+
+    expect(w.find('[data-testid=recipe-modal-oauth-section]').exists()).toBe(true);
+    const reason = w.find('[data-testid=recipe-modal-signin-blocked-reason]');
+    expect(reason.exists()).toBe(true);
+    expect(reason.text()).toContain('no working sign-in path yet');
+    expect(
+      (w.get('[data-testid=recipe-modal-signin-btn]').element as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it('oauth arm with NO auth block at all (google-calendar/google-drive shape, spec.md §1.9 third state): section still renders, disabled, not hidden', async () => {
+    const recipe = makeRecipe({
+      id: 'google-calendar-like',
+      displayName: 'Google Calendar',
+      primaryAuth: 'oauth',
+      auth: undefined,
+      envKeys: [],
+    });
+    const w = mount(RecipeKeyPromptModal, {
+      ...withFakeClient,
+      props: { open: true, recipe, install: vi.fn(async () => okStatus(recipe.id)) },
+    });
+    await flushPromises();
+
+    // The whole point of the third state: oauthAuth is null here (no auth
+    // block), so a naive `v-if="oauthAuth"` guard would hide the section
+    // entirely — this asserts it renders anyway.
+    expect(w.find('[data-testid=recipe-modal-oauth-section]').exists()).toBe(true);
+    const reason = w.find('[data-testid=recipe-modal-signin-blocked-reason]');
+    expect(reason.exists()).toBe(true);
+    expect(reason.text()).toContain('no working sign-in path yet');
+    expect(
+      (w.get('[data-testid=recipe-modal-signin-btn]').element as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it('device_code arm: the generic OAuth "Sign in" section does not render at all (it has its own dedicated section)', async () => {
+    const recipe = makeRecipe({
+      id: 'github',
+      displayName: 'GitHub',
+      primaryAuth: 'device_code',
+      auth: { kind: 'mcp_oauth', clientId: 'Iv23li6LDja9hM0dAJGV', scopes: ['repo'] },
+      envKeys: [],
+    });
+    const w = mount(RecipeKeyPromptModal, {
+      ...withFakeClient,
+      props: { open: true, recipe, install: vi.fn(async () => okStatus(recipe.id)) },
+    });
+    await flushPromises();
+
+    // Exactly one sign-in affordance for GitHub, not two: the device-code
+    // section (its own dedicated "Start GitHub sign-in" button) — and NOT
+    // the generic oauth section's "Sign in to GitHub" button, which used to
+    // render alongside it and would attempt a loopback PKCE grant GitHub
+    // rejects for random ports.
+    expect(w.find('[data-testid=recipe-modal-oauth-section]').exists()).toBe(false);
+    expect(w.find('[data-testid=recipe-modal-signin-btn]').exists()).toBe(false);
+    expect(w.find('[data-testid=recipe-modal-device-code-section]').exists()).toBe(true);
+    expect(w.find('[data-testid=recipe-modal-device-start-btn]').exists()).toBe(true);
+  });
+
+  it('keys and none arms: no OAuth section at all, even if a stray auth block is present', async () => {
+    for (const pa of ['keys', 'none'] as const) {
+      const recipe = oauthRecipe({ primaryAuth: pa });
+      const w = mount(RecipeKeyPromptModal, {
+        ...withFakeClient,
+        props: { open: true, recipe, install: vi.fn(async () => okStatus(recipe.id)) },
+      });
+      await flushPromises();
+      expect(w.find('[data-testid=recipe-modal-oauth-section]').exists()).toBe(false);
+    }
   });
 });

@@ -107,34 +107,52 @@ func (r *ringBuffer) Tail(n int) string {
 // lineWriter is safe for concurrent writes only via the per-task taskStream
 // which serializes all writes.
 type lineWriter struct {
-	mu      sync.Mutex
-	stream  string // "stdout" or "stderr"
-	ring    *ringBuffer
-	file    io.Writer // nil-safe
-	scratch []byte
-	record  func(Line) // nil-safe; records + broadcasts (Registry.AppendLine)
+	mu        sync.Mutex
+	stream    string // "stdout" or "stderr"
+	ring      *ringBuffer
+	file      io.Writer // nil-safe
+	scratch   []byte
+	record    func(Line)      // nil-safe; records + broadcasts (Registry.AppendLine)
+	sanitizer OutputSanitizer // nil-safe; redacts resolved-secret plaintext
 }
 
-func newLineWriter(stream string, ring *ringBuffer, file io.Writer, record func(Line)) *lineWriter {
+func newLineWriter(stream string, ring *ringBuffer, file io.Writer, sanitizer OutputSanitizer, record func(Line)) *lineWriter {
 	return &lineWriter{
-		stream: stream,
-		ring:   ring,
-		file:   file,
-		record: record,
+		stream:    stream,
+		ring:      ring,
+		file:      file,
+		sanitizer: sanitizer,
+		record:    record,
 	}
 }
 
 func (lw *lineWriter) Write(p []byte) (int, error) {
 	lw.mu.Lock()
 	defer lw.mu.Unlock()
+	// Redact resolved-secret plaintext BEFORE it reaches any sink below —
+	// ring buffer, log file, and (via record/AppendLine) __monitor's
+	// Lines and the background_task_complete hook's Tail-derived
+	// StdoutTail/StderrTail. n is the length of the ORIGINAL input p, not
+	// the (possibly shorter, post-redaction) sanitized bytes: io.Writer's
+	// contract is that n reports how much of the caller's buffer was
+	// consumed, and the caller (exec.Cmd's internal io.Copy from the
+	// child process's pipe) must see all of p accepted or it treats the
+	// short count as a write error and aborts the copy — silently
+	// truncating the task's captured output on every command whose
+	// output happens to contain a secret. sanitized is used only for
+	// what actually gets written to ring/file/scratch below.
+	sanitized := p
+	if lw.sanitizer != nil {
+		sanitized = lw.sanitizer.Sanitize(p)
+	}
 	// Write to ring buffer (best-effort, no error returned to producer).
-	_, _ = lw.ring.Write(p)
+	_, _ = lw.ring.Write(sanitized)
 	// Write to log file (best-effort).
 	if lw.file != nil {
-		_, _ = lw.file.Write(p)
+		_, _ = lw.file.Write(sanitized)
 	}
 	// Accumulate and record complete lines.
-	lw.scratch = append(lw.scratch, p...)
+	lw.scratch = append(lw.scratch, sanitized...)
 	for {
 		idx := strings.IndexByte(string(lw.scratch), '\n')
 		if idx < 0 {

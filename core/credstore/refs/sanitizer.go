@@ -28,9 +28,18 @@ import (
 //
 // # Application
 //
-// Every tool result content block AND every streamed assistant token
-// is scanned via Sanitize. Matches are replaced with
+// Sanitize is called on every tool result content block returned by
+// the three production Substitute callers: bash (core/tools/bash),
+// web_fetch (core/tools/webfetch) and the MCP stdio transport
+// (core/mcp/transport/stdio). Matches are replaced with
 // "[redacted: <locator>]".
+//
+// Streamed assistant tokens are NOT scanned — SanitizeStream exists
+// but has no production caller today. A model that echoes a
+// just-resolved secret directly into its own response text (as
+// opposed to a tool result) is not caught by this type. See
+// docs/unwired-ledger.md, entry dated 2026-08-23, for the tracked gap
+// and owner.
 //
 // # Cleanup
 //
@@ -122,14 +131,53 @@ func (s *Sanitizer) SanitizeString(content string) string {
 	return string(s.Sanitize([]byte(content)))
 }
 
-// SanitizeStream processes a reader through the sanitizer, writing
-// redacted output to the writer. It maintains a tail buffer of size
-// maxPlaintextLen-1 so plaintext split across chunk boundaries is caught.
-//
-// n is the maximum plaintext length across all registered fingerprints.
-// When n is 0 (no fingerprints) the data is passed through unchanged.
+// SanitizeStream is a thin alias for Sanitize over a full chunk of
+// bytes. It has zero production callers today (docs/unwired-ledger.md,
+// 2026-08-23) — nothing wires it into the assistant-token streaming
+// path, so it does NOT do the reader/writer, chunk-boundary-aware
+// scan an earlier version of this comment claimed. A secret whose
+// plaintext is split across two separately-delivered stream chunks is
+// not caught by a caller that invokes this once per chunk.
 func (s *Sanitizer) SanitizeStream(chunks []byte) []byte {
 	return s.Sanitize(chunks)
+}
+
+// Clone returns a new, independent Sanitizer pre-populated with a deep
+// copy of the receiver's currently-registered fingerprints. The clone
+// shares no memory with the receiver: calling Clear() on either
+// Sanitizer has no effect on the other.
+//
+// This exists for callers whose lifetime outlives the turn a Sanitizer
+// was constructed for. A background task spawned via kenaz__bash
+// (core/tools/bash/background.go) keeps writing output long after the
+// chat runner's defer sanitizer.Clear() fires at end-of-turn
+// (chat_runner.go, "Sanitizer scope is [turn-start, turn-end)"). Without
+// a task-scoped copy, wrapping the task's output writers with the
+// turn Sanitizer directly would redact correctly until Clear() runs,
+// then silently stop redacting for the remainder of the task's life —
+// worse than no fix, because it looks correct in a short-lived test.
+//
+// Clone must be called BEFORE the originating turn ends (in practice,
+// at task-registration time, before the task can write any output) so
+// the snapshot captures every secret substituted into the command up to
+// that point. Secrets resolved by unrelated calls after the clone is
+// taken are correctly absent — the already-spawned process cannot see
+// them either.
+//
+// Safe to call concurrently with Add/Sanitize/Clear on the receiver.
+func (s *Sanitizer) Clone() *Sanitizer {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	clone := &Sanitizer{entries: make([]fingerprintEntry, len(s.entries))}
+	for i, e := range s.entries {
+		buf := make([]byte, len(e.plain))
+		copy(buf, e.plain)
+		clone.entries[i] = fingerprintEntry{fp: e.fp, plain: buf, locator: e.locator}
+	}
+	return clone
 }
 
 // Clear drops all registered plaintexts and zeroes the copies.

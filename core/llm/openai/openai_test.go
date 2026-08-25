@@ -121,6 +121,47 @@ func TestAdapter_KindIsOpenAI(t *testing.T) {
 	}
 }
 
+// TestStream_ToolCallDelta_FinishStop_DoesNotPanic is the B2
+// falsification test. Before the fix, pump()'s defer ran
+// close(s.events) BEFORE flushPendingToolCallsLocked(), so a tool-call
+// delta that never saw a trailing finish_reason=="tool_calls" (e.g. a
+// mid-stream drop, or an OpenAI-compatible backend that finishes
+// "stop") panicked with "send on closed channel" when the defer's
+// flush ran — unrecovered, on chatStream.pump's own goroutine, killing
+// the whole process.
+func TestStream_ToolCallDelta_FinishStop_DoesNotPanic(t *testing.T) {
+	fs := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, _ int) {
+		writeSSE(w, []string{
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"search","arguments":"{}"}}]},"finish_reason":null}]}`,
+			`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+			`[DONE]`,
+		})
+	})
+	a := newAdapter(fs)
+	req, prof := stdReq()
+
+	stream, err := a.Stream(context.Background(), req, prof, []byte("sk-test"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	var sawTool bool
+	for ev := range stream.Events() {
+		if ev.Kind == llm.StreamTool {
+			sawTool = true
+		}
+	}
+	resp, ferr := stream.Final()
+	if ferr != nil {
+		t.Fatalf("Final: %v", ferr)
+	}
+	if !sawTool {
+		t.Error("expected a StreamTool event for the delta that never saw finish_reason==\"tool_calls\"")
+	}
+	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].ID != "call_1" {
+		t.Errorf("Final().ToolCalls = %+v, want one call with ID call_1", resp.ToolCalls)
+	}
+}
+
 func TestAdapter_Stream_HappyPath(t *testing.T) {
 	fs := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, _ int) {
 		if r.Method != http.MethodPost {

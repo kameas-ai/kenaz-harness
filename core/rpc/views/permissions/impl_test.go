@@ -446,6 +446,284 @@ func TestRevokeGrant_NilTrimmer_StillSucceeds(t *testing.T) {
 	}
 }
 
+// ---- WP16: RevokeGrant must reload a REAL engine and flip a REAL decision --
+
+// newRealEngineAPI builds an *API wired to a genuine *cedar.Engine reading
+// from disk — the same construction shape as core/rpc/api.go's
+// permissionsview.Config{Engine: a.cedarEngine} — so tests here exercise
+// the actual Evaluate()/Reload() contract instead of a call-counting fake.
+// IncludeEmbedded is false so only the grant this test writes can produce
+// an Allow; no shipped default policy can accidentally paper over a
+// regression.
+func newRealEngineAPI(t *testing.T) (*API, *cedar.Engine, string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, cedar.PolicyDir), 0o755); err != nil {
+		t.Fatalf("mkdir policy dir: %v", err)
+	}
+	eng, err := cedar.NewEngine(cedar.Options{DataDir: dir, LoadFromDisk: true, IncludeEmbedded: false})
+	if err != nil {
+		t.Fatalf("cedar.NewEngine: %v", err)
+	}
+	api := New(Config{DataDir: dir, Registry: cedar.NewRegistry(), Engine: eng})
+	return api, eng, dir
+}
+
+// writeGrantFile writes a raw grant body under <dir>/policy/<name> without
+// going through any production writer, for the two families (bash,
+// filesystem) whose write helpers are unexported outside their own
+// packages. The body shapes mirror those writers exactly (see
+// core/tools/bash/bash.go:writePolicySnippet and
+// core/tools/fs/gate.go:buildExactSnippet).
+func writeGrantFile(t *testing.T, dir, name, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, cedar.PolicyDir, name), []byte(body), 0o644); err != nil {
+		t.Fatalf("writeGrantFile(%s): %v", name, err)
+	}
+}
+
+// TestRevokeGrant_ChangesEvaluateOutcome_FiveFamilies is the falsifiable
+// proof for trust-surfaces-that-fire-01PMZ202 WP16 (FR-006).
+//
+// Before the fix, core/rpc/api.go's permissionsview.Config left Engine
+// nil ("Engine left nil for now — RevokeGrant skips the reload
+// gracefully when the engine is unset"), so RevokeGrant deleted the
+// .cedar grant file but never told the Engine's cached, atomically-
+// swapped PolicySet — Evaluate kept reading the pre-delete bundle and
+// kept returning Allow for the rest of the process. A revoked grant
+// stayed live until restart.
+//
+// Asserting only that RevokeGrant returned nil, or that a Reload
+// function was CALLED (see fakeEngine above, which is the right tool
+// for the other RevokeGrant tests but is vacuous here — a call counter
+// increments whether or not the swap actually changes what Evaluate
+// sees), does not prove behaviour changed. Nor does "no error", because
+// core/policy/cedar/hooks.go's enforce() maps BOTH Allow and
+// NotApplicable to nil — so this test reads Decision.Outcome directly
+// off a real *cedar.Engine, not through enforce().
+//
+// Covers all five grant families RevokeGrant branches on (bash,
+// filesystem, credential, tool, and the fs recipe-dir variant, which
+// takes a different action ("recipe_dir_add") and drives the
+// ConfigTrimmer path) per the WP16 task body.
+//
+// Falsification: revert the api.go wiring to Engine: nil (equivalently,
+// pass Config{Engine: nil} to New below) — every subtest below must
+// then fail, because the deleted-file's permit is still cached in the
+// unreloaded PolicySet and post-revoke Evaluate stays Allow.
+func TestRevokeGrant_ChangesEvaluateOutcome_FiveFamilies(t *testing.T) {
+	t.Parallel()
+
+	t.Run("bash", func(t *testing.T) {
+		t.Parallel()
+		api, eng, dir := newRealEngineAPI(t)
+		ctx := context.Background()
+
+		const pattern = "git status"
+		grantID := "bash_allow_git_status.cedar"
+		body := "permit(\n  principal,\n  action == Action::\"run_bash_command\",\n  resource == BashCommand::\"" + pattern + "\"\n);\n"
+		writeGrantFile(t, dir, grantID, body)
+		if err := eng.Reload(ctx); err != nil {
+			t.Fatalf("initial reload: %v", err)
+		}
+
+		resource := cedar.BashCommandUID(pattern)
+		before := eng.Evaluate(ctx, cedar.UserUID(), cedar.ActionRunBashCommand, resource, nil)
+		if before.Outcome != cedar.Allow {
+			t.Fatalf("setup broken: pre-revoke Evaluate = %v, want Allow: %+v", before.Outcome, before)
+		}
+
+		if err := api.RevokeGrant(ctx, grantID); err != nil {
+			t.Fatalf("RevokeGrant: %v", err)
+		}
+
+		after := eng.Evaluate(ctx, cedar.UserUID(), cedar.ActionRunBashCommand, resource, nil)
+		if after.Outcome == cedar.Allow {
+			t.Fatalf("revoked bash grant still permits the same call without a restart: %+v", after)
+		}
+	})
+
+	t.Run("filesystem", func(t *testing.T) {
+		t.Parallel()
+		api, eng, dir := newRealEngineAPI(t)
+		ctx := context.Background()
+
+		const path = "/tmp/wp16-allowed-file.txt"
+		grantID := "fs_allow_read_wp16_allowed_file_txt_path.cedar"
+		body := "permit (\n" +
+			"    principal == User::\"local\",\n" +
+			"    action == Action::\"read_filesystem\",\n" +
+			"    resource is FilesystemOp\n" +
+			") when {\n" +
+			"    context.canonical_path == \"" + path + "\"\n" +
+			"};\n"
+		writeGrantFile(t, dir, grantID, body)
+		if err := eng.Reload(ctx); err != nil {
+			t.Fatalf("initial reload: %v", err)
+		}
+
+		resource := cedar.FilesystemOpUID(path)
+		before := eng.Evaluate(ctx, cedar.UserUID(), cedar.ActionReadFilesystem, resource, nil)
+		if before.Outcome != cedar.Allow {
+			t.Fatalf("setup broken: pre-revoke Evaluate = %v, want Allow: %+v", before.Outcome, before)
+		}
+
+		if err := api.RevokeGrant(ctx, grantID); err != nil {
+			t.Fatalf("RevokeGrant: %v", err)
+		}
+
+		after := eng.Evaluate(ctx, cedar.UserUID(), cedar.ActionReadFilesystem, resource, nil)
+		if after.Outcome == cedar.Allow {
+			t.Fatalf("revoked filesystem grant still permits the same call without a restart: %+v", after)
+		}
+	})
+
+	t.Run("credential", func(t *testing.T) {
+		t.Parallel()
+		api, eng, dir := newRealEngineAPI(t)
+		ctx := context.Background()
+
+		const recipeID = "wp16testrecipe"
+		grantID := "cred_allow_mcp_" + recipeID + ".cedar"
+		body := "permit(\n" +
+			"  principal,\n" +
+			"  action == Action::\"use_credential\",\n" +
+			"  resource == Credential::\"" + recipeID + "::mcp_spawn\"\n" +
+			");\n"
+		writeGrantFile(t, dir, grantID, body)
+		if err := eng.Reload(ctx); err != nil {
+			t.Fatalf("initial reload: %v", err)
+		}
+
+		resource := cedar.CredentialUID(recipeID, "mcp_spawn")
+		before := eng.Evaluate(ctx, cedar.UserUID(), cedar.ActionUseCredential, resource, nil)
+		if before.Outcome != cedar.Allow {
+			t.Fatalf("setup broken: pre-revoke Evaluate = %v, want Allow: %+v", before.Outcome, before)
+		}
+
+		if err := api.RevokeGrant(ctx, grantID); err != nil {
+			t.Fatalf("RevokeGrant: %v", err)
+		}
+
+		after := eng.Evaluate(ctx, cedar.UserUID(), cedar.ActionUseCredential, resource, nil)
+		if after.Outcome == cedar.Allow {
+			t.Fatalf("revoked credential grant still permits the same call without a restart: %+v", after)
+		}
+	})
+
+	t.Run("tool", func(t *testing.T) {
+		t.Parallel()
+		api, eng, dir := newRealEngineAPI(t)
+		ctx := context.Background()
+
+		const server, toolName = "builtin", "websearch"
+		grantID, err := cedar.WriteToolAllowGrant(ctx, dir, eng, server, toolName)
+		if err != nil {
+			t.Fatalf("WriteToolAllowGrant: %v", err)
+		}
+
+		resource := cedar.ToolUID(server, toolName)
+		before := eng.Evaluate(ctx, cedar.UserUID(), cedar.ActionUseTool, resource, nil)
+		if before.Outcome != cedar.Allow {
+			t.Fatalf("setup broken: pre-revoke Evaluate = %v, want Allow: %+v", before.Outcome, before)
+		}
+
+		if err := api.RevokeGrant(ctx, grantID); err != nil {
+			t.Fatalf("RevokeGrant: %v", err)
+		}
+
+		after := eng.Evaluate(ctx, cedar.UserUID(), cedar.ActionUseTool, resource, nil)
+		if after.Outcome == cedar.Allow {
+			t.Fatalf("revoked tool grant still permits the same call without a restart: %+v", after)
+		}
+	})
+
+	// recipe-dir is the fs-family variant that carries a different
+	// action ("recipe_dir_add", not read/write_filesystem) and drives
+	// the ConfigTrimmer path (see TestRevokeGrant_TrimsRecipeConfig_*
+	// above). It must reload the engine exactly like every other family.
+	t.Run("recipe-dir", func(t *testing.T) {
+		t.Parallel()
+		api, eng, dir := newRealEngineAPI(t)
+		ctx := context.Background()
+
+		const canonical = "/tmp/wp16-recipe-dir"
+		grantID := writeFSRecipeDirPolicy(t, dir, "wp16recipedir", canonical)
+		if err := eng.Reload(ctx); err != nil {
+			t.Fatalf("initial reload: %v", err)
+		}
+
+		resource := cedar.FilesystemOpUID(canonical)
+		before := eng.Evaluate(ctx, cedar.UserUID(), "recipe_dir_add", resource, nil)
+		if before.Outcome != cedar.Allow {
+			t.Fatalf("setup broken: pre-revoke Evaluate = %v, want Allow: %+v", before.Outcome, before)
+		}
+
+		if err := api.RevokeGrant(ctx, grantID); err != nil {
+			t.Fatalf("RevokeGrant: %v", err)
+		}
+
+		after := eng.Evaluate(ctx, cedar.UserUID(), "recipe_dir_add", resource, nil)
+		if after.Outcome == cedar.Allow {
+			t.Fatalf("revoked recipe-dir grant still permits the same call without a restart: %+v", after)
+		}
+	})
+}
+
+// TestRevokeGrant_TypedNilEngine_PanicsWithoutTheCallerGuard is M1
+// (unwired sweep, release/v0.72.0): impl.go's RevokeGrant guards its
+// Reload call with `if a.engine != nil`, which is an INTERFACE nil
+// check. core/rpc/api.go used to assign `Engine: a.cedarEngine` straight
+// into this Config field with no guard at the call site — unlike the two
+// adjacent hoist sites in the same function and unlike WP19's own
+// secretLookup/secretGate guards. When a.cedarEngine is a nil
+// *cedar.Engine (construction failure, logged as a warning at boot; see
+// buildCedarEngineOrNil), that direct assignment boxes it into a
+// NON-nil Engine interface value — the type word is set even though the
+// pointer is nil — so `a.engine != nil` here is TRUE and Reload gets
+// called on a nil receiver. *cedar.Engine.Reload dereferences
+// e.reloadMu on its first line, so that call panics — and by the time
+// RevokeGrant reaches it, os.Remove has ALREADY deleted the .cedar grant
+// file, leaving a half-revoked state (file gone, panic mid-request).
+//
+// This test proves the panic is real for the shape the un-guarded
+// assignment produces (Engine: (*cedar.Engine)(nil) boxed directly into
+// the Config), so it stands in for that call-site regression even though
+// it constructs permissions.API directly rather than through
+// core/rpc/api.go — the field is impl.go's own contract, not something
+// this package's tests can drive through the api.go call site. The
+// call-site guard itself (`var permissionsEngine permissionsview.Engine;
+// if eng := a.cedarEngine; eng != nil { permissionsEngine = eng }`) is
+// what keeps a real nil a.cedarEngine from ever reaching this shape in
+// production; this test is the reason that guard is not optional.
+func TestRevokeGrant_TypedNilEngine_PanicsWithoutTheCallerGuard(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, cedar.PolicyDir), 0o755); err != nil {
+		t.Fatalf("mkdir policy dir: %v", err)
+	}
+	const grantID = "bash_allow_zz_m1_typed_nil.cedar"
+	writeGrantFile(t, dir, grantID,
+		"permit(\n  principal,\n  action == Action::\"run_bash_command\",\n  resource == BashCommand::\"echo x\"\n);\n")
+
+	var nilConcreteEngine *cedar.Engine // deliberately nil, boxed with no guard below
+	api := New(Config{DataDir: dir, Registry: cedar.NewRegistry(), Engine: nilConcreteEngine})
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("RevokeGrant did not panic on a typed-nil Engine — either " +
+				"cedar.Engine.Reload became nil-receiver-safe (update this test's " +
+				"rationale) or something else absorbed the panic; either way the " +
+				"documented M1 hazard needs re-verifying")
+		}
+		t.Logf("confirmed panic (this is what api.go's nil-guard exists to prevent): %v", r)
+		if _, statErr := os.Stat(filepath.Join(dir, cedar.PolicyDir, grantID)); !os.IsNotExist(statErr) {
+			t.Fatalf("grant file still present after the panic — expected the half-revoked state (file removed, then panic) that makes this hazard dangerous, stat err=%v", statErr)
+		}
+	}()
+	_ = api.RevokeGrant(context.Background(), grantID)
+}
+
 // TestExtractFilesystemOpPath verifies the Cedar body parser extracts the
 // path correctly from well-formed and malformed bodies.
 func TestExtractFilesystemOpPath(t *testing.T) {

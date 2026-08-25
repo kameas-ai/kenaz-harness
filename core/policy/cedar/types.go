@@ -344,6 +344,43 @@ const (
 	// server-side without going through this gate at all (spec.md §5.3;
 	// the gate exists for the human-verb path, not the safety path).
 	ActionApprovalResolve = "approval.resolve"
+
+	// ── ContextSync purge action family ────────────────────────────────────
+	// Introduced by mission fleet-enforcement-truth-01PMZ505 (WP13, owner
+	// ruling G-7, docs/escalation-register-2026-08-19.md Part 10: "gate the
+	// DESTRUCTIVE operations now — purge and delete — fail-closed").
+	//
+	// Before this family existed, SessionSync_DeleteRemote /
+	// ProjectSync_DeleteRemote (core/rpc/views/contextsync) reached
+	// core/fleet's SessionSyncer.DeleteRemote / ProjectSyncer.DeleteRemote —
+	// which irreversibly purge every fleet event for the session/project and
+	// disable sync — through 21 non-test call sites with zero Cedar action
+	// constants and zero gate calls anywhere in the chain. No policy author
+	// could write a rule against this surface at all.
+	//
+	// Deliberately narrow: only the two DESTRUCTIVE operations (purge/
+	// delete) are gated. SessionSync_Toggle / ProjectSync_Toggle (enable,
+	// disable) and SessionSync_ResumeFrom (replay) are NOT covered by this
+	// family — ruling G-7 explicitly leaves toggle/resume ungated for now,
+	// a recorded, dated gap rather than one silently closed by extension.
+	//
+	//   ActionContextSyncSessionPurge — gates SessionSync_DeleteRemote.
+	//     Resource UID: Session::"<session-id>" (reuses EntityTypeSession /
+	//     SessionUID — session-export-01NDFSEX05's family; a different
+	//     action against the same resource type).
+	//   ActionContextSyncProjectPurge — gates ProjectSync_DeleteRemote.
+	//     Resource UID: Project::"<project-id>".
+	//
+	// Both gate-hook helpers (CheckContextSyncSessionPurge /
+	// CheckContextSyncProjectPurge, hooks.go) deliberately do NOT delegate
+	// to the shared enforce() (which maps NotApplicable to nil —
+	// default-allow). They require an explicit Cedar Allow; Deny AND
+	// NotApplicable both refuse the purge. See
+	// policies/default_context_sync_policy.cedar for the shipped permit
+	// that keeps the existing (pre-gate) local-user purge UX working, and
+	// hooks.go's doc comment for why the fail-closed wrapper exists.
+	ActionContextSyncSessionPurge = "context_sync.session.purge"
+	ActionContextSyncProjectPurge = "context_sync.project.purge"
 )
 
 // Entity-type names mirror spec §4.10's recommended mapping:
@@ -469,6 +506,12 @@ const (
 	// approval-node-01PMZC12 (UNIT-3). Resource UIDs take the shape
 	// Approval::"<runID>:<nodeID>".
 	EntityTypeApproval = "Approval"
+
+	// EntityTypeProject is the Cedar entity type for a harness project.
+	// Introduced by mission fleet-enforcement-truth-01PMZ505 (WP13, owner
+	// ruling G-7) for the ContextSync purge action family. Resource UIDs
+	// take the shape Project::"<project-id>".
+	EntityTypeProject = "Project"
 
 	// PrincipalLocal is the canonical EntityUID id for the single
 	// local user. The harness is single-user / privacy-first
@@ -941,4 +984,18 @@ func BundleUID(id string) cedar.EntityUID {
 		safeID = invalidUIDID
 	}
 	return cedar.NewEntityUID(EntityTypeBundle, cedar.String(safeID))
+}
+
+// ProjectUID builds a Cedar EntityUID for the Project family introduced by
+// mission fleet-enforcement-truth-01PMZ505 (WP13, owner ruling G-7). id is
+// the project's canonical identifier. Malformed ids (empty / control
+// characters / leading "..") are replaced with the literal "invalid" so the
+// resulting UID type-matches in `resource is Project` clauses but never
+// satisfies any real permit.
+func ProjectUID(id string) cedar.EntityUID {
+	safeID := id
+	if !validateFamilyID(id) {
+		safeID = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeProject, cedar.String(safeID))
 }

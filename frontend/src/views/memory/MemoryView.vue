@@ -44,6 +44,7 @@ import type {
   MemoryPrunePreview,
   MemoryScopeKind,
   NarrativeJobStatus,
+  NarrativeMetrics,
   RetrievalReport,
   ScoredChunk,
 } from '@/lib/types';
@@ -373,6 +374,76 @@ async function toggleMarkImportant(chunk: MemoryChunk) {
     markingImportant.value = null;
   }
 }
+
+// ── Re-summarize + narrative metrics (controls-and-readouts-that-tell-
+// the-truth-01PMZ808 UNIT-12 / WP17, C2V-10 + C2V-11) ────────────────────
+//
+// core/rpc/views/memory/impl.go:825 ResummarizeChunk: for raw/legacy
+// chunks (TurnID empty) it runs synchronously and returns the updated
+// Chunk; for narrative chunks it re-enqueues to the Promoter's async job
+// queue and returns the chunk UNCHANGED. Either way we replace the row
+// with whatever comes back — for the async case that's a no-op paint
+// but an honest one, since the content hasn't changed yet.
+const resummarizingId = ref<string | null>(null);
+const resummarizeErrors = ref<Record<string, string>>({});
+
+async function resummarizeChunk(chunk: MemoryChunk) {
+  resummarizingId.value = chunk.id;
+  resummarizeErrors.value = { ...resummarizeErrors.value, [chunk.id]: '' };
+  try {
+    const updated = await client.memory.resummarizeChunk(chunk.id);
+    chunks.value = chunks.value.map((c) => (c.id === updated.id ? updated : c));
+  } catch (err) {
+    // Rate-limit (ErrResummarizeRateLimited, 60s/chunk) and any other
+    // failure must surface visibly here, not silently no-op — a second
+    // click inside the window is the exact case this exists to catch.
+    resummarizeErrors.value = {
+      ...resummarizeErrors.value,
+      [chunk.id]: err instanceof Error ? err.message : String(err),
+    };
+  } finally {
+    resummarizingId.value = null;
+  }
+}
+
+// Narrative metrics — retrieval/citation/pin counters + promotion score.
+// core/rpc/views/memory/impl.go:702 returns a zero-value payload (no
+// error) when the metrics store isn't wired, so an all-zero card is an
+// honest "not tracked yet" reading, not a fabricated OK.
+const metricsOpenId = ref<string | null>(null);
+const metricsById = ref<Record<string, NarrativeMetrics>>({});
+const metricsLoadingId = ref<string | null>(null);
+const metricsErrors = ref<Record<string, string>>({});
+
+async function toggleMetrics(chunk: MemoryChunk) {
+  if (metricsOpenId.value === chunk.id) {
+    metricsOpenId.value = null;
+    return;
+  }
+  metricsOpenId.value = chunk.id;
+  if (metricsById.value[chunk.id]) return;
+  metricsLoadingId.value = chunk.id;
+  metricsErrors.value = { ...metricsErrors.value, [chunk.id]: '' };
+  try {
+    const m = await client.memory.narrativeMetricsForChunk(chunk.id);
+    metricsById.value = { ...metricsById.value, [chunk.id]: m };
+  } catch (err) {
+    metricsErrors.value = {
+      ...metricsErrors.value,
+      [chunk.id]: err instanceof Error ? err.message : String(err),
+    };
+  } finally {
+    metricsLoadingId.value = null;
+  }
+}
+
+// The template only ever needs the metrics for whichever row is open, so
+// expose a single non-null-friendly getter instead of indexing the map
+// with a `!` assertion inline in the template.
+const openMetrics = computed<NarrativeMetrics | null>(() => {
+  if (!metricsOpenId.value) return null;
+  return metricsById.value[metricsOpenId.value] ?? null;
+});
 
 // ── Provenance Drawer (memory-inspection-ui-01KX5R8E WP08) ──────────────
 
@@ -1023,6 +1094,28 @@ defineExpose({ refresh });
               >
                 Provenance
               </button>
+              <!-- Re-summarize (WP17, C2V-10) -->
+              <button
+                type="button"
+                :disabled="resummarizingId === chunk.id"
+                class="px-2 py-1 rounded-sm border border-border-muted text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:text-accent hover:bg-surface-2 disabled:opacity-50"
+                :data-testid="`memory-resummarize-${chunk.id}`"
+                :title="'Re-run narrative synthesis on this chunk'"
+                @click="resummarizeChunk(chunk)"
+              >
+                {{ resummarizingId === chunk.id ? 'Re-summarizing…' : 'Re-summarize' }}
+              </button>
+              <!-- Narrative metrics (WP17, C2V-11) -->
+              <button
+                type="button"
+                class="px-2 py-1 rounded-sm border border-border-muted text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:text-accent hover:bg-surface-2"
+                :data-testid="`memory-metrics-${chunk.id}`"
+                :aria-expanded="metricsOpenId === chunk.id"
+                :title="'Show retrieval / citation / pin counters'"
+                @click="toggleMetrics(chunk)"
+              >
+                {{ metricsOpenId === chunk.id ? 'Hide metrics' : 'Metrics' }}
+              </button>
               <button
                 type="button"
                 class="px-2 py-1 rounded-sm border border-border-muted text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:text-signal-danger hover:bg-surface-2"
@@ -1036,6 +1129,61 @@ defineExpose({ refresh });
           <p class="mt-2 font-ui text-sm text-ink whitespace-pre-wrap">
             {{ preview(chunk.content) }}
           </p>
+          <!-- Re-summarize error — rate-limit and any other failure must be
+               visible, not a silent no-op. -->
+          <p
+            v-if="resummarizeErrors[chunk.id]"
+            class="mt-1 font-ui text-[11px] text-signal-danger"
+            role="alert"
+            :data-testid="`memory-resummarize-error-${chunk.id}`"
+          >
+            {{ resummarizeErrors[chunk.id] }}
+          </p>
+          <!-- Narrative metrics panel -->
+          <div
+            v-if="metricsOpenId === chunk.id"
+            class="mt-2 rounded-sm border border-border-muted bg-surface-2 px-3 py-2"
+            :data-testid="`memory-metrics-panel-${chunk.id}`"
+          >
+            <p
+              v-if="metricsLoadingId === chunk.id"
+              class="font-ui text-[11px] text-ink-muted"
+              role="status"
+            >
+              Loading metrics…
+            </p>
+            <p
+              v-else-if="metricsErrors[chunk.id]"
+              class="font-ui text-[11px] text-signal-danger"
+              role="alert"
+              :data-testid="`memory-metrics-error-${chunk.id}`"
+            >
+              {{ metricsErrors[chunk.id] }}
+            </p>
+            <dl
+              v-else-if="openMetrics"
+              class="grid gap-x-3 gap-y-0.5 font-mono text-[11px] text-ink-muted"
+              style="grid-template-columns: 12ch 1fr"
+              :data-testid="`memory-metrics-data-${chunk.id}`"
+            >
+              <dt>Retrievals</dt>
+              <dd>{{ openMetrics.retrievals }}</dd>
+              <dt>Citations</dt>
+              <dd>{{ openMetrics.citations }}</dd>
+              <dt>User pins</dt>
+              <dd>{{ openMetrics.userPins }}</dd>
+              <dt>Score</dt>
+              <dd>{{ openMetrics.score.toFixed(3) }}</dd>
+              <template v-if="openMetrics.lastRetrievedAt">
+                <dt>Last retrieved</dt>
+                <dd>{{ formatTimestamp(openMetrics.lastRetrievedAt) }}</dd>
+              </template>
+              <template v-if="openMetrics.lastCitedAt">
+                <dt>Last cited</dt>
+                <dd>{{ formatTimestamp(openMetrics.lastCitedAt) }}</dd>
+              </template>
+            </dl>
+          </div>
         </li>
       </ul>
     </div><!-- end v-if chunks tab -->

@@ -44,7 +44,18 @@ func NewRefresher(cache CapabilityCache, refresh RefreshFunc) *Refresher {
 // This implements the stale-while-revalidate pattern: readers always get
 // a response within p95 ≤ 1ms (from cache); a background goroutine
 // updates the cache for subsequent requests.
+//
+// H4 fix: this method previously never consulted r.cache.Get before
+// spawning — every call (registry.Registry.Stream calls it on EVERY
+// Stream for a profile whose adapter implements CapabilitiesProvider,
+// registry.go:508-511) started a live network probe, contradicting
+// this doc's own "cache miss or stale" premise. r.cache.Get's `ok`
+// return is exactly the freshness signal: true means a live, unexpired
+// entry already exists, so no refresh is needed this call.
 func (r *Refresher) MaybeRefresh(ctx context.Context, profileID, modelID string) {
+	if _, fresh := r.cache.Get(ctx, profileID, modelID); fresh {
+		return
+	}
 	key := cacheKey(profileID, modelID)
 	r.mu.Lock()
 	if _, running := r.inFlight[key]; running {

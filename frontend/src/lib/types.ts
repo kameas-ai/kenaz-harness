@@ -2188,17 +2188,43 @@ export interface RecipeAuth {
 /**
  * PrimaryAuth — the install-modal rendering hint for a recipe. Controls
  * which credential method is presented first and whether additional fields
- * are collapsed under "Advanced".
+ * are collapsed under "Advanced". Mirrors the six Recipe.PrimaryAuth*
+ * constants in core/mcp/recipes/recipes.go.
  *
- *   'oauth'       — lead with the OAuth "Sign in" button (requires auth.kind
- *                   === 'mcp_oauth'). Token/key fields are a secondary fallback.
- *   'device_code' — lead with a browser device-code sign-in message. Optional
- *                   env keys (Azure IDs etc.) are collapsed under "Advanced".
- *   'keys'        — lead with env-key fields; all keys are primary.
- *   'none'        — no credentials required; any optional env keys are hidden
- *                   by default under "Advanced".
+ *   'oauth'             — the recipe has NO working sign-in path today (it is
+ *                         not dynamically-registerable, ships no
+ *                         pre-registered client id, and has no device-code
+ *                         flow — E-006, kitty-specs/connector-lifecycle-
+ *                         truth-01PMZ303). The install modal renders the
+ *                         "Sign in" affordance DISABLED with an explanatory
+ *                         line rather than hiding it — some recipes in this
+ *                         arm (google-calendar, google-drive) carry no
+ *                         `auth` block at all, a third state distinct from
+ *                         "oauth with an empty client_id".
+ *   'browser_oauth_dcr' — lead with a browser OAuth "Sign in" button using
+ *                         RFC 7591 Dynamic Client Registration — no
+ *                         pre-registered app needed. Always enabled; DCR is
+ *                         attempted even when auth.clientId is empty.
+ *   'browser_oauth_pkce'— lead with a browser OAuth "Sign in" button using
+ *                         PKCE against a provider with no DCR support. The
+ *                         client id is bring-your-own (ruling D-3): enabled
+ *                         when auth.clientId resolves to a non-empty value,
+ *                         disabled with an explanatory line when the recipe
+ *                         ships no client id and none is available yet.
+ *   'device_code'       — lead with a browser device-code sign-in message.
+ *                         Optional env keys (Azure IDs etc.) are collapsed
+ *                         under "Advanced".
+ *   'keys'              — lead with env-key fields; all keys are primary.
+ *   'none'              — no credentials required; any optional env keys are
+ *                         hidden by default under "Advanced".
  */
-export type PrimaryAuth = 'oauth' | 'device_code' | 'keys' | 'none';
+export type PrimaryAuth =
+  | 'oauth'
+  | 'browser_oauth_dcr'
+  | 'browser_oauth_pkce'
+  | 'device_code'
+  | 'keys'
+  | 'none';
 
 export interface Recipe {
   id: string;

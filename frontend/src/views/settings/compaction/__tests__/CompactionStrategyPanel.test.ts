@@ -19,13 +19,15 @@
  *  10. Custom-strategy graph picker appears only when strategy === custom_subgraph.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { mount, flushPromises } from '@vue/test-utils';
+import { mount, flushPromises, type VueWrapper } from '@vue/test-utils';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
 import type {
   CompactionConfig,
   CompactionEffectiveConfig,
   CompactionLayer,
+  CompactionManualOpts,
+  CompactionManualResult,
   CompactionTierExplain,
   Settings,
 } from '@/lib/types';
@@ -116,6 +118,10 @@ interface MountOpts {
   setConfigImpl?: (l: CompactionLayer, id: string, cfg: CompactionConfig) => Promise<void>;
   setSettingsImpl?: (s: Settings) => Promise<void>;
   customStrategies?: Array<{ graphId: string; name: string }>;
+  triggerManualCompactionImpl?: (
+    sessionID: string,
+    opts: CompactionManualOpts,
+  ) => Promise<CompactionManualResult>;
 }
 
 function mountWith(opts: MountOpts = {}) {
@@ -127,6 +133,10 @@ function mountWith(opts: MountOpts = {}) {
   const setConfig = vi.fn(opts.setConfigImpl ?? (async () => undefined));
   const getTierExplain = vi.fn(async () => TIER_FIXTURE);
   const listCustomStrategies = vi.fn(async () => opts.customStrategies ?? []);
+  const triggerManualCompaction = vi.fn(
+    opts.triggerManualCompactionImpl ??
+      (async () => ({ strategy: 'summary' as const, bytesSaved: 0 })),
+  );
 
   // Spread the fake defaults then override get/set so the component sees the
   // right settings values. The cast silences the partial-SettingsClient TS
@@ -138,7 +148,7 @@ function mountWith(opts: MountOpts = {}) {
       getConfig,
       getEffective,
       setConfig,
-      triggerManualCompaction: async () => ({ strategy: 'summary', bytesSaved: 0 }),
+      triggerManualCompaction,
       listCustomStrategies,
       getTierExplain,
     },
@@ -150,7 +160,26 @@ function mountWith(opts: MountOpts = {}) {
     },
   });
 
-  return { wrapper, getSettings, setSettings, getConfig, getEffective, setConfig, getTierExplain };
+  return {
+    wrapper,
+    getSettings,
+    setSettings,
+    getConfig,
+    getEffective,
+    setConfig,
+    getTierExplain,
+    triggerManualCompaction,
+  };
+}
+
+// Drives the override section into 'session' scope with a scope id entered
+// — the state the "Compact now" control requires to render.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function enterSessionOverride(wrapper: VueWrapper<any>, sessionID: string) {
+  await wrapper.find('[data-testid="csp-override-scope-session"]').trigger('click');
+  await flushPromises();
+  await wrapper.find('[data-testid="csp-override-scope-id"]').setValue(sessionID);
+  await flushPromises();
 }
 
 // ── tests ────────────────────────────────────────────────────────────────
@@ -383,5 +412,97 @@ describe('CompactionStrategyPanel', () => {
     expect(wrapper.find('[data-testid="csp-manual-summary-model"]').exists()).toBe(false);
     const select = wrapper.find('[data-testid="csp-pre_call-strategy"]');
     expect(select.text()).not.toContain('Summary (LLM)');
+  });
+
+  // controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-12 / WP17,
+  // C2V-09: "Compact now" — the one of CompactionClient's six methods
+  // CompactionStrategyPanel did not call.
+  describe('"Compact now" (manual trigger, C2V-09)', () => {
+    it('is not offered under the project scope — TriggerManualCompaction only accepts a session id', async () => {
+      const { wrapper } = mountWith();
+      await flushPromises();
+      // Default override scope is 'project' (see selectOverrideScope / the
+      // initial ref). Enter a project id and confirm the control is absent.
+      await wrapper.find('[data-testid="csp-override-scope-id"]').setValue('proj-1');
+      await flushPromises();
+      expect(wrapper.find('[data-testid="csp-manual-compact-now"]').exists()).toBe(false);
+    });
+
+    it('calls triggerManualCompaction with the entered session id and the manual site strategy, and reports bytes actually saved', async () => {
+      const { wrapper, triggerManualCompaction } = mountWith({
+        triggerManualCompactionImpl: async (sessionID, opts) => {
+          // Prove the RPC receives the real session id and the manual
+          // site's configured strategy, then simulate the pipeline
+          // actually having compacted something (non-zero bytesSaved) —
+          // asserting only that the mock was invoked would be satisfied
+          // by a defect that fires the call and ignores the response.
+          expect(sessionID).toBe('sess-42');
+          expect(opts.strategy).toBe('drop_oldest');
+          return { strategy: 'drop_oldest', bytesSaved: 4096 };
+        },
+      });
+      await flushPromises();
+      await enterSessionOverride(wrapper, 'sess-42');
+
+      // Set the manual site's strategy via the override strategy picker.
+      const select = wrapper.find(
+        '[data-testid="csp-override-manual-strategy"]',
+      ).element as HTMLSelectElement;
+      select.value = 'drop_oldest';
+      await wrapper.find('[data-testid="csp-override-manual-strategy"]').trigger('change');
+
+      const button = wrapper.find('[data-testid="csp-manual-compact-now"]');
+      expect(button.exists()).toBe(true);
+      await button.trigger('click');
+      await flushPromises();
+
+      expect(triggerManualCompaction).toHaveBeenCalledTimes(1);
+      const success = wrapper.find('[data-testid="csp-manual-compact-success"]');
+      expect(success.exists()).toBe(true);
+      expect(success.text()).toContain('4,096');
+      // Mutation check (documented, not executed here): reverting the
+      // click handler to a no-op leaves triggerManualCompaction
+      // uncalled and csp-manual-compact-success absent — both
+      // assertions above would fail.
+    });
+
+    it('surfaces a skip reason visibly rather than reporting silent success', async () => {
+      const { wrapper } = mountWith({
+        triggerManualCompactionImpl: async () => ({
+          strategy: 'drop_oldest',
+          bytesSaved: 0,
+          skipped: true,
+          reason: 'nothing to compact below threshold',
+        }),
+      });
+      await flushPromises();
+      await enterSessionOverride(wrapper, 'sess-empty');
+
+      await wrapper.find('[data-testid="csp-manual-compact-now"]').trigger('click');
+      await flushPromises();
+
+      const skipped = wrapper.find('[data-testid="csp-manual-compact-skipped"]');
+      expect(skipped.exists()).toBe(true);
+      expect(skipped.text()).toContain('nothing to compact below threshold');
+      expect(wrapper.find('[data-testid="csp-manual-compact-success"]').exists()).toBe(false);
+    });
+
+    it('surfaces an RPC error (e.g. unknown strategy) visibly rather than swallowing it', async () => {
+      const { wrapper } = mountWith({
+        triggerManualCompactionImpl: async () => {
+          throw new Error('compaction: unknown strategy: "session_rewrite"');
+        },
+      });
+      await flushPromises();
+      await enterSessionOverride(wrapper, 'sess-broken');
+
+      await wrapper.find('[data-testid="csp-manual-compact-now"]').trigger('click');
+      await flushPromises();
+
+      const error = wrapper.find('[data-testid="csp-manual-compact-error"]');
+      expect(error.exists()).toBe(true);
+      expect(error.text()).toContain('unknown strategy');
+      expect(wrapper.find('[data-testid="csp-manual-compact-success"]').exists()).toBe(false);
+    });
   });
 });

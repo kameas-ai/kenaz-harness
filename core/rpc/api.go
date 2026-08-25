@@ -2944,11 +2944,38 @@ func New(c *core.Core, opts ...Option) *API {
 		// share one pending-request map. Without sharing, a Resolve()
 		// call would hit a different registry from the one the gate
 		// enqueued in, and the resolution would never reach the waiter.
+		//
+		// M1 (unwired sweep, release/v0.72.0): permissionsview.Config.Engine
+		// is the Engine INTERFACE, not *cedar.Engine directly. Assigning
+		// a.cedarEngine straight into it — as this site used to — boxes a
+		// nil *cedar.Engine into a NON-nil interface value whenever
+		// a.cedarEngine is nil (nil Core / empty DataDir path): the
+		// interface's type word is set even though its value word is nil.
+		// RevokeGrant's `a.engine != nil` check (impl.go) is an interface
+		// nil check, so it would pass and call Reload on a nil receiver —
+		// AFTER RevokeGrant has already os.Remove'd the .cedar grant file,
+		// leaving a half-revoked state (file gone, engine call panics).
+		// Guarded exactly like the two adjacent hoist sites in this same
+		// function (cedarEng above, acpOpts.Cedar below) and like WP19's
+		// own secretLookup/secretGate guards later in this file: assign
+		// only when the concrete pointer is non-nil, so a nil case leaves
+		// the interface field a TRUE nil that RevokeGrant's existing
+		// nil-skip path already handles gracefully.
+		var permissionsEngine permissionsview.Engine
+		if eng := a.cedarEngine; eng != nil {
+			permissionsEngine = eng
+		}
 		a.permissionsAPI = permissionsview.New(permissionsview.Config{
 			DataDir:  cedarDataDir,
 			Registry: a.promptRegistry,
-			// Engine left nil for now — RevokeGrant skips the reload
-			// gracefully when the engine is unset.
+			// Share the SAME a.cedarEngine every other gate site
+			// consults (WP05 hoist), so RevokeGrant's Reload actually
+			// swaps the atomic PolicySet pointer Evaluate reads —
+			// trust-surfaces-that-fire-01PMZ202 WP16. Before that fix
+			// the field was left nil, RevokeGrant deleted the .cedar
+			// snippet but never told the cached PolicySet, and a
+			// revoked grant stayed live for the rest of the process.
+			Engine: permissionsEngine,
 			// ConfigTrimmer is wired after toolsAPI is constructed; see
 			// the wiring step below that calls setPermissionsConfigTrimmer.
 		})
@@ -3253,7 +3280,18 @@ func New(c *core.Core, opts ...Option) *API {
 		if a.settingsImpl != nil {
 			syncStore = a.settingsImpl.Store()
 		}
-		mcpSyncCat := corefleet.NewMCPSyncCategory(nil, nil, nil, syncPending)
+		// WP07 (fleet-enforcement-truth-01PMZ505): id + Reader + Writer +
+		// SecretKeys land together — a Reader without a non-nil SecretKeys
+		// set would ship unredacted secret env values off the device (see
+		// sync_mcp_registry.go and the redaction guard at
+		// core/fleet/sync_mcp.go:137).
+		mcpRegistry := newToolsMCPRegistry(a.toolsAPI)
+		mcpSyncCat := corefleet.NewMCPSyncCategory(mcpRegistry, mcpRegistry, func() map[string]bool {
+			// Resolved per Collect, not once at boot: a.mcpUserStore accepts
+			// recipe imports at runtime, and a boot-time snapshot shipped the
+			// tokens of every recipe added after startup.
+			return mcpRecipeSecretKeys(mcpUserRecipeSource(a.mcpUserStore))
+		}, syncPending)
 		a.syncKindRegistry = registerSyncCategories(context.Background(), syncer, syncStore, mcpSyncCat)
 
 		// fleet-generic-sync-framework-01NSYNC02 WP05: register slash_commands
@@ -3500,6 +3538,16 @@ func New(c *core.Core, opts ...Option) *API {
 				Project:  &projectSyncBackendAdapter{ps: projectSyncer},
 				Handoff:  &handoffBackendAdapter{hh: handoffHandler},
 				Recovery: &recoveryBackendAdapter{},
+				// fleet-enforcement-truth-01PMZ505 WP13 (owner ruling
+				// G-7): a.cedarGate() is the SAME process-singleton every
+				// other gate site consults (nil-safe — degrades to
+				// cedar.AllowAll{} when no engine is wired), so an
+				// operator-authored forbid rule against
+				// context_sync.session.purge / context_sync.project.purge
+				// actually reaches SessionSync_DeleteRemote /
+				// ProjectSync_DeleteRemote instead of being silently
+				// unconsultable.
+				Gate: a.cedarGate(),
 			}
 
 			// FR-003 (fleet-context-sync-01NDFSEX15): wire the append hook so
@@ -4906,6 +4954,16 @@ func newLLMStack(
 	// keys when the user submits AddProvider). Without this sharing,
 	// AddProvider would write into a backend the resolver can't see.
 	secretsBackend := secrets.NewMemoryBackend()
+	// Same storage.DB every other session-table writer in this file
+	// uses (see the `db` derivation at api.go's New(), ~:1382); nil on
+	// the nil-core test chassis. Threaded into llmregistry.Options.Cache
+	// below (review finding B3) so capabilities.DefaultCache can select
+	// the SQLite-backed provider_capabilities cache when
+	// HARNESS_LLM_CAPABILITY_CACHE=sqlite is set.
+	var db storage.DB
+	if c != nil {
+		db = c.Storage()
+	}
 	// Wire the Cedar LLM policy guard into the registry pipeline with
 	// the real policy engine. The pipeline shape (profile →
 	// CapabilityGate → PolicyGuard → CredentialResolver) is unchanged;
@@ -4946,10 +5004,21 @@ func newLLMStack(
 	} else {
 		costReducer = cost.New(tab)
 	}
+	// Capability probe cache (model-settings-reach-the-model-01PMZ101
+	// WP14 / FR-017, review finding B3). Without this, every production
+	// registry.New call site passed no Cache:, so DefaultCache(nil) at
+	// registry.go:98-104 could never select the SQLite path even with
+	// HARNESS_LLM_CAPABILITY_CACHE=sqlite set — it always degraded to
+	// MemoryCache, leaving the provider_capabilities table (migration
+	// sessions/0329, shipped in v0.63.0) permanently unwritten in every
+	// shipped binary. Same nil-on-test-chassis degrade as `db` above —
+	// DefaultCache(nil) still returns a safe in-process MemoryCache when
+	// no real storage.DB is available.
 	reg, err := llmregistry.New(llmregistry.Options{
 		Resolver: credref.New(secretsBackend),
 		Policy:   cedarGuard,
 		Cost:     costReducer,
+		Cache:    llmcap.DefaultCache(db),
 	})
 	if err != nil {
 		// Fall back to the stub on a registry construction failure so
@@ -5115,6 +5184,23 @@ func newLLMStack(
 	var secretsBudget *credstoreRefs.Budget
 	if exposureIdx != nil {
 		secretsBudget = credstoreRefs.NewBudget(credstoreRefs.DefaultBudget)
+	}
+	// trust-surfaces-that-fire-01PMZ202 WP19: the same exposureIdx +
+	// secretsBudget the kenaz__list_secrets registration above uses,
+	// reshaped for chat.Config.SecretLookup/SecretBudget below. Both
+	// guards assign only when non-nil so the interface fields stay a
+	// TRUE nil — not a non-nil interface wrapping a nil
+	// *secrets.ExposureIndex / *cedar.Engine — mirroring the
+	// cedarLLMGate guard a few lines above in this same function.
+	// secretsBudget is already a bare *refs.Budget (no interface, no
+	// typed-nil trap) and is passed straight through.
+	var secretLookup credstoreRefs.SecretLookup
+	if exposureIdx != nil {
+		secretLookup = exposureIdx
+	}
+	var secretGate cedar.Gate
+	if bashCedarEngine != nil {
+		secretGate = bashCedarEngine
 	}
 	registerBuiltinTools(c, builtinRegistry, bashStore, artifactsMgr, settingsStore, bashCedarEngine, promptRegistry, elicitAPI, slashDispatch, exposureIdx, secretsBudget, postureManager, taskReg)
 	// builtin-filesystem-tools-01KR3N4P: register the read/write family of
@@ -5336,7 +5422,7 @@ func newLLMStack(
 		}
 		return resolveAutonomyKnobsWithSettingsFallback(global, project, session, effectiveMaxAgentTurnsFromSettings(settingsImpl))
 	}
-	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, chatAttResolver, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatWorkspaceDir, chatWorkspaceNote, confirmBus, confirmDeps, autonomyKnobsProvider)
+	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, chatAttResolver, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatWorkspaceDir, chatWorkspaceNote, confirmBus, confirmDeps, autonomyKnobsProvider, secretLookup, secretGate, secretsBudget)
 	var capCatalog llm.CapCatalog
 	if cat, err := llmcap.LoadDefault(); err == nil {
 		capCatalog = &capCatalogAdapter{cat: cat}
@@ -5763,6 +5849,16 @@ func buildChatRunner(
 	// as before this knob set existed. Built in newLLMStack, which has
 	// the *core.Core needed to reach the session + project managers.
 	autonomyKnobsProvider chat.AutonomyKnobsProvider,
+	// secretLookup / secretGate / secretBudget wire chat.Config's
+	// SecretLookup / SecretGate / SecretBudget (trust-surfaces-that-fire-
+	// 01PMZ202 WP19). All three are computed in newLLMStack from the
+	// same exposureIdx / cedarEngine / secretsBudget the
+	// kenaz__list_secrets builtin registration uses, with the same
+	// nil-guards applied there (never a typed-nil interface). nil
+	// secretLookup disables @secret: resolution entirely.
+	secretLookup credstoreRefs.SecretLookup,
+	secretGate cedar.Gate,
+	secretBudget *credstoreRefs.Budget,
 ) *chat.ChatRunner {
 	if graphMgr == nil || graphMgr.Kernel() == nil {
 		logging.L().Warn("chat.runner.disabled", "reason", "graph manager unavailable")
@@ -6157,6 +6253,18 @@ func buildChatRunner(
 		// reads r.cfg.AutonomyKnobs == nil and silently no-ops — the
 		// gap this WP closes.
 		AutonomyKnobs: autonomyKnobsProvider,
+		// trust-surfaces-that-fire-01PMZ202 WP19: without these three,
+		// driveRun's `if r.cfg.SecretLookup != nil` guard never fires,
+		// so refs.WithResolver / refs.WithTurnSanitizer are never
+		// installed and core/tools/bash, core/tools/webfetch and
+		// core/mcp/transport/stdio/server.go's existing
+		// refs.ResolverFromContext(ctx) calls keep seeing nil — the
+		// defect this WP exists to close. SecretAuditEmitter is
+		// deliberately left unset (nil, no-op) — see chat.Config's doc
+		// comment on that field.
+		SecretLookup: secretLookup,
+		SecretGate:   secretGate,
+		SecretBudget: secretBudget,
 	})
 	if err != nil {
 		logging.L().Error("chat.runner.construct_failed", "err", err.Error())

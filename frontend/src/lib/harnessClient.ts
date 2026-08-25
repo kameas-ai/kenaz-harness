@@ -71,6 +71,7 @@ import type {
   BuiltinDescriptor,
   DryRunResult,
   Recipe,
+  RecipeAuth,
   PrimaryAuth,
   RecipeCategory,
   RecipeListing,
@@ -1025,7 +1026,29 @@ interface WireMissingPrereq {
   file_setup_guide?: WireFileSetupGuide;
 }
 
-interface WireRecipe {
+/**
+ * WireRecipeAuth mirrors core/mcp/recipes.RecipeAuth's JSON shape. Notably
+ * absent: client_secret. The Go struct carries it (credential material,
+ * only ever an unresolved "${VAR}" placeholder at rest — the substituted
+ * value never leaves the backend), but the frontend type has no field for
+ * it and adaptRecipeAuth below does not read it, so it never reaches any
+ * Vue component or wire type (privacy CI invariant, check-no-credential-
+ * in-ui.sh).
+ */
+// Exported (rather than kept module-private like most Wire* shapes) so
+// __tests__/adaptRecipe.test.ts can drive adaptRecipe with a
+// type-checked, realistic wire payload — the exact shape the Go bridge
+// sends over Tools_ListRecipes — instead of a hand-built Recipe that
+// bypasses the adapter entirely. See adaptRecipe's doc comment for why
+// that bypass is the thing this test exists to prevent.
+export interface WireRecipeAuth {
+  kind: string;
+  client_id?: string;
+  scopes?: string[];
+  token_env_var?: string;
+}
+
+export interface WireRecipe {
   id: string;
   display_name: string;
   description: string;
@@ -1046,6 +1069,11 @@ interface WireRecipe {
   recommended_policy_template?: string;
   /** primary_auth hint; omitempty on the Go side (absent when empty). */
   primary_auth?: string;
+  /**
+   * OAuth sign-in declaration (core/mcp/recipes.RecipeAuth); omitempty on
+   * the Go side. Present for every recipe whose Auth.Kind == "mcp_oauth".
+   */
+  auth?: WireRecipeAuth;
 }
 
 interface WireRecipeStatus {
@@ -1162,11 +1190,39 @@ function adaptConfigOption(w: WireConfigOption): ConfigOption {
   };
 }
 
-const KNOWN_PRIMARY_AUTH = new Set<PrimaryAuth>(['oauth', 'device_code', 'keys', 'none']);
+// UNIT-3 3g (spec.md §1.8, kitty-specs/connector-lifecycle-truth-01PMZ303):
+// 'browser_oauth_dcr' and 'browser_oauth_pkce' were missing here, so
+// adaptPrimaryAuth silently dropped them to undefined for all 46 recipes
+// that declare one — `rtk proxy grep -rn "browser_oauth" frontend/src/`
+// returned nothing precisely because of this line.
+const KNOWN_PRIMARY_AUTH = new Set<PrimaryAuth>([
+  'oauth',
+  'browser_oauth_dcr',
+  'browser_oauth_pkce',
+  'device_code',
+  'keys',
+  'none',
+]);
 
 function adaptPrimaryAuth(raw: string | undefined): PrimaryAuth | undefined {
   if (!raw) return undefined;
   return KNOWN_PRIMARY_AUTH.has(raw as PrimaryAuth) ? (raw as PrimaryAuth) : undefined;
+}
+
+// UNIT-3 3g: adaptRecipe (below) did not map `w.auth` at all — every
+// recipe's `.auth` was undefined in the frontend regardless of what the Go
+// side sent, so the install modal's "Sign in" button never rendered for any
+// mcp_oauth recipe, including GitHub's device-code lane (isHarnessDeviceFlow
+// also gates on `recipe.auth?.kind === 'mcp_oauth'`). client_secret is
+// intentionally not read — see WireRecipeAuth's doc comment.
+function adaptRecipeAuth(w: WireRecipeAuth | undefined): RecipeAuth | undefined {
+  if (!w || w.kind !== 'mcp_oauth') return undefined;
+  return {
+    kind: 'mcp_oauth',
+    clientId: w.client_id,
+    scopes: w.scopes ? [...w.scopes] : undefined,
+    tokenEnvVar: w.token_env_var,
+  };
 }
 
 function adaptMissingPrereq(w: WireMissingPrereq): MissingPrereq {
@@ -1185,7 +1241,15 @@ function adaptMissingPrereq(w: WireMissingPrereq): MissingPrereq {
   return base;
 }
 
-function adaptRecipe(w: WireRecipe): Recipe {
+// UNIT-3 3g follow-up (2026-08-25 review finding 3): every component test
+// for the install modal constructs `Recipe` objects directly, so none of
+// them exercise this function — the exact blind spot (CLAUDE.md blind
+// spot #2) that let `auth: adaptRecipeAuth(w.auth)` below go missing for
+// a full release with the full suite green. Exported so
+// __tests__/adaptRecipe.test.ts can assert the wire→model mapping
+// (including client_secret exclusion) directly instead of through a
+// fixture that skips the adapter.
+export function adaptRecipe(w: WireRecipe): Recipe {
   const configOptions = w.config_options
     ? w.config_options.map(adaptConfigOption)
     : undefined;
@@ -1209,6 +1273,7 @@ function adaptRecipe(w: WireRecipe): Recipe {
           : undefined,
     recommendedPolicyTemplate: w.recommended_policy_template || undefined,
     primaryAuth: adaptPrimaryAuth(w.primary_auth),
+    auth: adaptRecipeAuth(w.auth),
   };
 }
 

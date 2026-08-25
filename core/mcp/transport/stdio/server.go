@@ -608,20 +608,43 @@ func (s *ServerInstance) Tools() []coremcp.Tool {
 // Before serialising the request, any @secret: references in the args
 // JSON are substituted via refs.ResolverFromContext (WP09). When no
 // resolver is wired in ctx the args pass through unchanged.
+//
+// AgentKind is "untrusted": an MCP server is a third-party child
+// process this harness has not audited, so a resolution attempt made
+// on its behalf is the exact case secret_reference.cedar's default
+// forbid targets (spec model-secret-references-01KW7M5A §2.4 / §8 —
+// "Untrusted MCP server attempts to resolve a reference"). Local
+// built-in tools (bash, web_fetch) run in-process under harness
+// control and set "trusted" at their own call sites.
+//
+// After the call returns, the result is scanned via
+// refs.SanitizerFromContext so a hostile or merely-buggy server
+// cannot smuggle a just-resolved plaintext back into the tool result
+// that lands in session history and the UI stream (B1(a) — before
+// this, Sanitize had no MCP caller at all; bash and web_fetch were
+// the only two production callers).
 func (s *ServerInstance) CallTool(ctx context.Context, tool string, args json.RawMessage) (json.RawMessage, error) {
 	// ── @secret: reference substitution (WP09) ──────────────────────────
 	// Walk the args JSON string values and substitute any @secret: tokens.
 	// We operate on the raw JSON text; the substitution is string-level.
 	resolver := refs.ResolverFromContext(ctx)
 	if resolver != nil && refs.HasReference(string(args)) {
-		rctx := cedar.ResolveContext{ToolName: "mcp:" + tool}
+		rctx := cedar.ResolveContext{ToolName: "mcp:" + tool, AgentKind: "untrusted"}
 		sub, _, err := resolver.Substitute(ctx, string(args), rctx)
 		if err != nil {
 			return nil, fmt.Errorf("mcp.CallTool: secret resolution failed for tool %q: %w", tool, err)
 		}
 		args = json.RawMessage(sub)
 	}
-	return s.CallToolWithProgress(ctx, tool, args, "")
+	result, err := s.CallToolWithProgress(ctx, tool, args, "")
+	if err != nil {
+		return result, err
+	}
+	// ── Sanitize any resolved plaintext echoed back in the result ───────
+	if sanitizer := refs.SanitizerFromContext(ctx); sanitizer != nil {
+		result = sanitizer.Sanitize(result)
+	}
+	return result, nil
 }
 
 // CallToolWithProgress is the progress-aware variant of CallTool.

@@ -162,15 +162,18 @@ func TestEngine_ReloadFromDisk(t *testing.T) {
 		t.Fatalf("NewEngine: %v", err)
 	}
 
-	// Listing should report 12 files: the 10 embedded defaults
+	// Listing should report 13 files: the 11 embedded defaults
 	// (default_policy + the four WP01 family defaults + the WP11
 	// workflows family default + the session-export family default +
 	// the ACP envelope family default + the UNIT-7 bundle-install
 	// family default + the model-scheduled-jobs-01PMSJ01 WP09
-	// scheduled-run family default) + 2 disk files.
+	// scheduled-run family default + the 01PMZ505 WP13 context-sync purge
+	// family default + the model-secret-references-01KW7M5A
+	// secret_reference family default, embedded 2026-08-23 per B1(b))
+	// + 2 disk files.
 	files := e.ListPolicies()
-	if len(files) != 12 {
-		t.Fatalf("ListPolicies len=%d, want 12", len(files))
+	if len(files) != 14 {
+		t.Fatalf("ListPolicies len=%d, want 14", len(files))
 	}
 	if !files[0].Embedded {
 		t.Fatalf("first file should be embedded default, got %+v", files[0])
@@ -371,6 +374,63 @@ func TestEngine_GateHooks_UseTool_NoMatchingPolicyAllows(t *testing.T) {
 	}
 	if err := CheckUseTool(context.Background(), nil, "any", "thing"); err != nil {
 		t.Fatalf("nil gate CheckUseTool returned err: %v", err)
+	}
+}
+
+// TestEngine_SecretReferencePolicy_EmbeddedDefaultForbidsFire is the
+// falsification for B1(b), trust-surfaces-that-fire-01PMZ202 review
+// (2026-08-23): before this fix, policies/secret_reference.cedar had
+// no //go:embed directive and was absent from Reload's embedded
+// source list, so Action::"secret_reference.resolve" matched no rule
+// on a real engine — every resolution came back NotApplicable
+// regardless of agent_kind or budget, silently defeating both of the
+// file's default forbids.
+//
+// This drives the real production construction path (NewEngine with
+// IncludeEmbedded: true, the same options core/rpc/api.go uses to
+// build the harness's live Cedar gate) rather than hand-installing the
+// policy text, so a regression in the embed wiring itself — not just
+// in the policy's rule text — is what this test catches.
+func TestEngine_SecretReferencePolicy_EmbeddedDefaultForbidsFire(t *testing.T) {
+	t.Parallel()
+	e, err := NewEngine(Options{LoadFromDisk: false, IncludeEmbedded: true})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	locator := "user:example-api-token"
+
+	// (a) agent_kind == "untrusted" with budget remaining must be
+	// denied outright — the un-audited-MCP-server forbid.
+	untrusted := EvaluateSecretReferenceResolve(context.Background(), e, locator, ResolveContext{
+		ToolName:  "mcp:some_server",
+		Budget:    10,
+		AgentKind: "untrusted",
+	})
+	if untrusted.Outcome != Deny {
+		t.Fatalf("agent_kind=untrusted: Outcome = %v, want Deny (policy not evaluated — is the embed missing?)", untrusted.Outcome)
+	}
+
+	// (b) budget == 0 must be denied outright — the exhausted-budget
+	// forbid — even for a trusted agent.
+	exhausted := EvaluateSecretReferenceResolve(context.Background(), e, locator, ResolveContext{
+		ToolName:  "bash",
+		Budget:    0,
+		AgentKind: "trusted",
+	})
+	if exhausted.Outcome != Deny {
+		t.Fatalf("budget=0: Outcome = %v, want Deny (policy not evaluated — is the embed missing?)", exhausted.Outcome)
+	}
+
+	// (c) trusted agent, budget remaining: the structural permit
+	// fires and resolution is allowed.
+	allowed := EvaluateSecretReferenceResolve(context.Background(), e, locator, ResolveContext{
+		ToolName:  "bash",
+		Budget:    10,
+		AgentKind: "trusted",
+	})
+	if allowed.Outcome != Allow {
+		t.Fatalf("agent_kind=trusted, budget>0: Outcome = %v, want Allow", allowed.Outcome)
 	}
 }
 

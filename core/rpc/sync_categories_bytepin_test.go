@@ -67,7 +67,10 @@ func TestSyncCategories_ByteStabilityPin(t *testing.T) {
 			RequiresSecretKeys: []string{"TOKEN"},
 		},
 	}}
-	mcpCat := corefleet.NewMCPSyncCategory(reader, nil, nil, nil)
+	// A non-nil empty set means "determined: no key is secret", which is
+	// what keeps the non-secret URL override in the pinned bytes. Passing
+	// nil here would mean "undeterminable" and drop every override.
+	mcpCat := corefleet.NewMCPSyncCategory(reader, nil, func() map[string]bool { return map[string]bool{} }, nil)
 
 	syncer := corefleet.NewSyncer(nil)
 	t.Cleanup(syncer.Stop)

@@ -426,6 +426,145 @@ while IFS=$'\t' read -r file name; do
   fi
 done <<< "$with_gate_funcs"
 
+# ---------------------------------------------------------------------------
+# Clause 5 (B4, unwired sweep, release/v0.72.0): a Cedar-Engine-backed
+# collaborator field that clause 3 is structurally blind to because it
+# violates one of clause 3's two hardcoded assumptions:
+#
+#   core/rpc/views/permissions/impl.go   Config.Engine   type Engine
+#     (permissions.Engine, NOT literally cedar.Gate — api.go's
+#     permissionsview.Config{...} assigns a.cedarEngine to it directly)
+#   core/rpc/views/contextsync/impl.go   Impl.Gate       type cedar.Gate
+#     (correctly typed, but the struct is named Impl, not Config —
+#     api.go's contextsyncview.Impl{...} assigns a.cedarGate())
+#
+# Reverting either assignment left every existing test green: the
+# permissions package's own impl_test.go constructs the engine ITSELF
+# (newRealEngineAPI) rather than driving api.go's real wiring, and
+# nothing drove the contextsync Gate's reach at all before this clause.
+#
+# TWO NARROW WIDENINGS of clause 3's exact mechanism — narrow on purpose,
+# to avoid the false-positive blast radius a fully generic version would
+# have (see below):
+#
+#   (a) STRUCT NAME: scan `type Impl struct` blocks in addition to
+#       `type Config struct` — the only two struct-literal-at-api.go
+#       idioms this codebase uses (Config for options-style views, Impl
+#       for directly-constructed ones; contextsync.Impl's own doc
+#       comment confirms the idiom: "All fields may be nil").
+#
+#   (b) FIELD TYPE: in a Config struct specifically, also accept a bare
+#       identifier type (declared in the SAME FILE, hence guaranteed
+#       same package) that carries a compile-time witness
+#       `var _ <TypeName> = (*cedar.Engine)(nil)` — i.e. an interface
+#       *cedar.Engine is declared to satisfy. This is deliberately NOT
+#       "any witnessed interface": that idiom appears 33 times under
+#       core/rpc/views/ for the ordinary "struct implements its own API
+#       interface" assertion (var _ FooAPI = (*API)(nil)), which would
+#       make this clause pure noise. Restricting the witness's RHS to
+#       exactly `(*cedar.Engine)(nil)` matches precisely two
+#       declarations today (cedarpolicy.Engine, permissions.Engine) —
+#       cedarpolicy's is wired through a plain constructor call, not a
+#       Config literal, so it never enters this clause's field list.
+#
+# Then, exactly like clause 3: resolve the api.go import alias, locate
+# the `<alias>.<StructName>{...}` literal (a leading `&` on a pointer
+# literal does not break the substring search below), and require the
+# field to be assigned something other than a bare `nil`.
+# ---------------------------------------------------------------------------
+cedar_engine_witness_types_by_file=$(
+  for f in $(find "$VIEWS_ROOT" -name '*.go' ! -name '*_test.go' | sort); do
+    grep -oE '^var _ [A-Za-z_][A-Za-z0-9_]* = \(\*cedar\.Engine\)\(nil\)' "$f" \
+      | sed -E "s#^var _ ([A-Za-z_][A-Za-z0-9_]*) =.*#${f}\t\1#" || true
+  done
+)
+
+if [[ -z "$cedar_engine_witness_types_by_file" ]]; then
+  echo "${GATE} FAIL: no 'var _ <Type> = (*cedar.Engine)(nil)' witness found under ${VIEWS_ROOT}." >&2
+  echo "${GATE} Clause 5's type-widening half has nothing to anchor on, which is" >&2
+  echo "${GATE} indistinguishable from passing. Either the witness idiom was removed" >&2
+  echo "${GATE} (permissions.Engine, cedarpolicy.Engine) or renamed — update this" >&2
+  echo "${GATE} script in the same commit." >&2
+  exit 1
+fi
+
+clause5_fields=$(
+  for f in $(find "$VIEWS_ROOT" -name '*.go' ! -name '*_test.go' | sort); do
+    file_witnesses=$(printf '%s\n' "$cedar_engine_witness_types_by_file" | awk -F'\t' -v file="$f" '$1==file{print $2}')
+    awk -v file="$f" -v witnesses="$file_witnesses" '
+      BEGIN {
+        n = split(witnesses, w, "\n")
+        for (i = 1; i <= n; i++) if (w[i] != "") wset[w[i]] = 1
+      }
+      /^type[[:space:]]+(Config|Impl)[[:space:]]+struct[[:space:]]*\{/ {
+        inblock = 1
+        split($0, parts, /[[:space:]]+/)
+        structname = parts[2]
+        next
+      }
+      inblock && /^\}/ { inblock = 0; next }
+      inblock {
+        line = $0
+        sub(/\/\/.*$/, "", line)
+        sub(/`[^`]*`/, "", line)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+        if (structname == "Impl" && line ~ /^[A-Z][A-Za-z0-9_]*[[:space:]]+cedar\.Gate$/) {
+          split(line, fp, /[[:space:]]+/)
+          print file "\t" structname "\t" fp[1]
+        } else if (structname == "Config" && line ~ /^[A-Z][A-Za-z0-9_]*[[:space:]]+[A-Za-z_][A-Za-z0-9_]*$/) {
+          split(line, fp, /[[:space:]]+/)
+          if (fp[2] in wset) print file "\t" structname "\t" fp[1]
+        }
+      }
+    ' "$f"
+  done
+)
+
+if [[ -z "$clause5_fields" ]]; then
+  echo "${GATE} FAIL: clause 5 found no Impl.<cedar.Gate> or witnessed-Config field under ${VIEWS_ROOT}." >&2
+  echo "${GATE} Clause 5 has nothing to inspect, which is indistinguishable from passing." >&2
+  echo "${GATE} Either contextsync.Impl.Gate / permissions.Config.Engine were removed or" >&2
+  echo "${GATE} restructured — update this script in the same commit." >&2
+  exit 1
+fi
+
+while IFS=$'\t' read -r file structname field; do
+  [[ -z "$file" ]] && continue
+  pkgdir=$(dirname "$file")
+  pkgname=$(basename "$pkgdir")
+  impalias=$(grep -oE "[A-Za-z0-9_]+[[:space:]]+\"github\.com/kameas-ai/kenaz-harness/${pkgdir}\"" "$API_FILE" \
+    | awk '{print $1}' | head -1 || true)
+  if [[ -z "$impalias" ]]; then
+    if grep -qE "\"github\.com/kameas-ai/kenaz-harness/${pkgdir}\"" "$API_FILE"; then
+      impalias="$pkgname"
+    else
+      violations="${violations}${file}: ${structname}.${field} is a Cedar-Engine-backed field but ${API_FILE} does not import ${pkgdir} — nothing constructs it with the shared engine (clause 5)"$'\n'
+      continue
+    fi
+  fi
+  found=$(awk -v a="${impalias}.${structname}{" -v fld="${field}:" '
+    function code(s) { sub(/\/\/.*$/, "", s); return s }
+    function assigned(s,   i, rest) {
+      i = index(s, fld); if (i == 0) return 0
+      rest = substr(s, i + length(fld))
+      gsub(/^[[:space:]]+/, "", rest)
+      if (rest ~ /^nil[[:space:]]*,?[[:space:]]*$/) return 0
+      return 1
+    }
+    { c = code($0) }
+    index(c, a) > 0 { depth=1; if (assigned(c)) { print "yes"; exit } ; collecting=1; next }
+    collecting {
+      n = gsub(/\{/, "{"); m = gsub(/\}/, "}")
+      depth += n - m
+      if (assigned(c)) { print "yes"; exit }
+      if (depth <= 0) { collecting=0 }
+    }
+  ' "$API_FILE")
+  if [[ "$found" != "yes" ]]; then
+    violations="${violations}${file}: ${structname}.${field} is never assigned a non-nil value in ${API_FILE}'s ${impalias}.${structname} literal — the zero value is a nil collaborator, i.e. no Cedar engine reaches it (clause 5)"$'\n'
+  fi
+done <<< "$clause5_fields"
+
 violations=$(printf '%s' "$violations" | grep -v '^$' | sort -u || true)
 allow=$(load_allowlist "$ALLOW_FILE")
 

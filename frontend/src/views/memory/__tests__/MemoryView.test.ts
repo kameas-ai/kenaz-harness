@@ -3,7 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils';
 import MemoryView from '@/views/memory/MemoryView.vue';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
-import type { MemoryChunk, Session } from '@/lib/types';
+import type { MemoryChunk, NarrativeMetrics, Session } from '@/lib/types';
 
 interface MountOpts {
   chunks?: MemoryChunk[];
@@ -12,6 +12,8 @@ interface MountOpts {
   listImpl?: (filter: { scopeKind?: string }) => MemoryChunk[];
   promoteImpl?: () => Promise<string>;
   sessions?: Record<string, Session>;
+  resummarizeImpl?: (chunkID: string) => Promise<MemoryChunk>;
+  narrativeMetricsImpl?: (chunkID: string) => Promise<NarrativeMetrics>;
 }
 
 function mountWith(opts: MountOpts = {}) {
@@ -38,6 +40,23 @@ function mountWith(opts: MountOpts = {}) {
       updatedAt: '',
     };
   });
+  const resummarizeChunk = vi.fn(
+    opts.resummarizeImpl ??
+      (async (chunkID: string) => {
+        const found = chunks.find((c) => c.id === chunkID);
+        return found ?? { id: chunkID, scopeKind: 'session', scopeId: '', content: '', createdAt: '' };
+      }),
+  );
+  const narrativeMetricsForChunk = vi.fn(
+    opts.narrativeMetricsImpl ??
+      (async (chunkID: string) => ({
+        chunkId: chunkID,
+        retrievals: 0,
+        citations: 0,
+        userPins: 0,
+        score: 0,
+      })),
+  );
   const client = createFakeHarnessClient({
     memory: {
       listChunks,
@@ -79,6 +98,8 @@ function mountWith(opts: MountOpts = {}) {
         capturedAt: '',
       }),
       testEmbedder: async () => 0,
+      resummarizeChunk,
+      narrativeMetricsForChunk,
     } as any,
     sessions: {
       list: async () => [],
@@ -123,6 +144,8 @@ function mountWith(opts: MountOpts = {}) {
     promoteScope,
     sessionGet,
     rememberMessage,
+    resummarizeChunk,
+    narrativeMetricsForChunk,
   };
 }
 
@@ -391,5 +414,151 @@ describe('MemoryView', () => {
     const btn = wrapper.find('[data-testid="memory-promote-chunk-global"]');
     expect(btn.exists()).toBe(true);
     expect(btn.attributes('disabled')).toBeDefined();
+  });
+
+  // controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-12 / WP17,
+  // C2V-10: "Re-summarize" — memory.resummarizeChunk had no .vue caller.
+  describe('Re-summarize (C2V-10)', () => {
+    it('replaces the row content with what the backend actually returns', async () => {
+      const chunks: MemoryChunk[] = [
+        makeChunk({ id: 'chunk-1', content: 'raw unsummarised turn text' }),
+      ];
+      const { wrapper, resummarizeChunk } = mountWith({
+        chunks,
+        resummarizeImpl: async (chunkID) => ({
+          id: chunkID,
+          scopeKind: 'session',
+          scopeId: 'sess-A',
+          content: 'a tighter narrative summary of the same turn',
+          createdAt: '2026-04-25T12:00:00Z',
+        }),
+      });
+      await flushPromises();
+
+      await wrapper.find('[data-testid="memory-resummarize-chunk-1"]').trigger('click');
+      await flushPromises();
+
+      expect(resummarizeChunk).toHaveBeenCalledWith('chunk-1');
+      // Assert the row now renders the CONTENT THE BACKEND RETURNED, not
+      // merely that the client method was invoked — a resummarize that
+      // silently discarded the response would still pass a call-count
+      // assertion.
+      expect(wrapper.text()).toContain('a tighter narrative summary of the same turn');
+      expect(wrapper.text()).not.toContain('raw unsummarised turn text');
+    });
+
+    it('surfaces the 60s rate-limit error visibly on a second click, instead of silently no-op-ing', async () => {
+      const chunks: MemoryChunk[] = [makeChunk({ id: 'chunk-1', content: 'original' })];
+      let calls = 0;
+      const { wrapper } = mountWith({
+        chunks,
+        resummarizeImpl: async (chunkID) => {
+          calls += 1;
+          if (calls > 1) {
+            throw new Error(
+              'memory: re-summarize rate limit: wait 60s between calls per chunk',
+            );
+          }
+          return {
+            id: chunkID,
+            scopeKind: 'session',
+            scopeId: 'sess-A',
+            content: 'summarised once',
+            createdAt: '2026-04-25T12:00:00Z',
+          };
+        },
+      });
+      await flushPromises();
+
+      await wrapper.find('[data-testid="memory-resummarize-chunk-1"]').trigger('click');
+      await flushPromises();
+      expect(wrapper.find('[data-testid="memory-resummarize-error-chunk-1"]').exists()).toBe(
+        false,
+      );
+
+      await wrapper.find('[data-testid="memory-resummarize-chunk-1"]').trigger('click');
+      await flushPromises();
+
+      const err = wrapper.find('[data-testid="memory-resummarize-error-chunk-1"]');
+      expect(err.exists()).toBe(true);
+      expect(err.text()).toContain('rate limit');
+    });
+  });
+
+  // controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-12 / WP17,
+  // C2V-11: narrative metrics — memory.narrativeMetricsForChunk had no
+  // .vue caller.
+  describe('Narrative metrics (C2V-11)', () => {
+    it('fetches and renders the real counters for the chunk on toggle', async () => {
+      const chunks: MemoryChunk[] = [makeChunk({ id: 'chunk-1' })];
+      const { wrapper, narrativeMetricsForChunk } = mountWith({
+        chunks,
+        narrativeMetricsImpl: async (chunkID) => ({
+          chunkId: chunkID,
+          retrievals: 7,
+          citations: 3,
+          userPins: 1,
+          score: 0.842,
+        }),
+      });
+      await flushPromises();
+
+      expect(wrapper.find('[data-testid="memory-metrics-panel-chunk-1"]').exists()).toBe(false);
+
+      await wrapper.find('[data-testid="memory-metrics-chunk-1"]').trigger('click');
+      await flushPromises();
+
+      expect(narrativeMetricsForChunk).toHaveBeenCalledWith('chunk-1');
+      const panel = wrapper.find('[data-testid="memory-metrics-data-chunk-1"]');
+      expect(panel.exists()).toBe(true);
+      // Real values from the (fake) backend, not zeros — proves the
+      // panel renders the RPC response rather than a static placeholder.
+      expect(panel.text()).toContain('7');
+      expect(panel.text()).toContain('3');
+      expect(panel.text()).toContain('0.842');
+
+      // Toggling again hides the panel without a redundant refetch.
+      await wrapper.find('[data-testid="memory-metrics-chunk-1"]').trigger('click');
+      await flushPromises();
+      expect(wrapper.find('[data-testid="memory-metrics-panel-chunk-1"]').exists()).toBe(false);
+
+      await wrapper.find('[data-testid="memory-metrics-chunk-1"]').trigger('click');
+      await flushPromises();
+      expect(narrativeMetricsForChunk).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows an all-zero card honestly when the metrics store is not wired, rather than fabricating success', async () => {
+      // Mirrors core/rpc/views/memory/impl.go:702-704: a nil metrics
+      // store returns a zero-value NarrativeMetrics with no error — the
+      // UI must show that zero reading, not hide the panel or claim data.
+      const chunks: MemoryChunk[] = [makeChunk({ id: 'chunk-1' })];
+      const { wrapper } = mountWith({ chunks });
+      await flushPromises();
+
+      await wrapper.find('[data-testid="memory-metrics-chunk-1"]').trigger('click');
+      await flushPromises();
+
+      const panel = wrapper.find('[data-testid="memory-metrics-data-chunk-1"]');
+      expect(panel.exists()).toBe(true);
+      expect(panel.text()).toContain('0');
+    });
+
+    it('surfaces a metrics-fetch error visibly', async () => {
+      const chunks: MemoryChunk[] = [makeChunk({ id: 'chunk-1' })];
+      const { wrapper } = mountWith({
+        chunks,
+        narrativeMetricsImpl: async () => {
+          throw new Error('metrics store unavailable');
+        },
+      });
+      await flushPromises();
+
+      await wrapper.find('[data-testid="memory-metrics-chunk-1"]').trigger('click');
+      await flushPromises();
+
+      const err = wrapper.find('[data-testid="memory-metrics-error-chunk-1"]');
+      expect(err.exists()).toBe(true);
+      expect(err.text()).toContain('metrics store unavailable');
+    });
   });
 });

@@ -417,7 +417,10 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 	commandLine := args.Command
 	resolver := refs.ResolverFromContext(ctx)
 	if resolver != nil && refs.HasReference(commandLine) {
-		rctx := cedar.ResolveContext{ToolName: Name}
+		// AgentKind: "trusted" — bash runs in-process under harness
+		// control (not a third-party MCP server); see the MCP
+		// stdio CallTool comment for the "untrusted" counterpart.
+		rctx := cedar.ResolveContext{ToolName: Name, AgentKind: "trusted"}
 		sub, _, subErr := resolver.Substitute(ctx, commandLine, rctx)
 		if subErr != nil {
 			return marshalResult(callResult{
@@ -426,8 +429,17 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 			})
 		}
 		commandLine = sub
-		// ZeroBuffer is not applicable here since commandLine is a Go string;
-		// the internal buffer was already zeroed by refs.Substitute.
+		// commandLine is a Go string, so there is nothing here to zero.
+		// NOTE (review round 5, 2026-08-25): an earlier version of this
+		// comment claimed "the internal buffer was already zeroed by
+		// refs.Substitute". That is only half true and the half it got
+		// wrong matters. Substitute zeroes each per-reference `resolved`
+		// buffer (resolver.go), but the accumulating bytes.Buffer's
+		// backing array is never zeroed, and buf.String() copies out of
+		// it. So resolved plaintext DOES stay resident in the heap after
+		// this point. No in-repo sink reads it (no crash dump, no heap
+		// attach), which is why this is a comment fix and not a defect —
+		// but do not rely on the old claim.
 	}
 
 	// ── Background mode (run_in_background:true) ────────────────────────
@@ -436,11 +448,22 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 	// is alive within 100 ms, register it in the task registry, and return
 	// immediately with {task_id, status:"running"}.
 	if args.RunInBackground && t.backgroundSpawn != nil {
-		return t.spawnBackground(ctx, commandLine, cwd, timeout, args.Description)
+		// commandLine (resolved, post-substitution) is what actually runs.
+		// args.Command (unresolved, pre-substitution) is what gets
+		// persisted to the task registry / SQLite and written to logs —
+		// matching the synchronous path below, which stores args.Command
+		// into t.store, never the resolved commandLine.
+		return t.spawnBackground(ctx, commandLine, args.Command, cwd, timeout, args.Description)
 	}
 
 	res, runErr := Run(ctx, RunOpts{
-		CommandLine:    commandLine,
+		CommandLine: commandLine,
+		// args.Command (unresolved, pre-substitution) is what may end up
+		// inside a %q error label — matching the background path, which
+		// persists/logs args.Command (via logCommand), never the resolved
+		// commandLine. See exec.go's LogCommandLine doc comment (the
+		// seventh @secret: egress finding, release/v0.72.0).
+		LogCommandLine: args.Command,
 		Cwd:            cwd,
 		Timeout:        timeout,
 		MaxOutputBytes: DefaultMaxOutputBytes,

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
 // ErrContextSyncUnavailable is returned when a context-sync method is called
@@ -18,6 +20,17 @@ type Impl struct {
 	Project  ProjectSyncBackend
 	Handoff  HandoffBackend
 	Recovery RecoveryBackend
+
+	// Gate is the Cedar policy gate consulted before the two DESTRUCTIVE
+	// ContextSync operations — SessionSync_DeleteRemote and
+	// ProjectSync_DeleteRemote (fleet-enforcement-truth-01PMZ505 WP13,
+	// owner ruling G-7). May be nil (pre-boot / test posture); the
+	// gate-hook helpers in core/policy/cedar degrade to default-allow in
+	// that case, matching every other Cedar-gated RPC view in this repo.
+	// Toggle (SessionSync_Toggle / ProjectSync_Toggle) and resume
+	// (SessionSync_ResumeFrom) are deliberately NOT gated by this field —
+	// ruling G-7 leaves them ungated for now.
+	Gate cedar.Gate
 }
 
 var _ ContextSyncAPI = (*Impl)(nil)
@@ -48,9 +61,16 @@ func (im *Impl) SessionSync_Toggle(ctx context.Context, sessionID string, enable
 }
 
 // SessionSync_DeleteRemote purges the remote stream for sessionID.
+//
+// Gated by ActionContextSyncSessionPurge (ruling G-7): the Cedar check
+// runs BEFORE the backend call, and on Deny (which includes NotApplicable
+// — see CheckContextSyncSessionPurge's doc) nothing is purged.
 func (im *Impl) SessionSync_DeleteRemote(ctx context.Context, sessionID string) error {
 	if im.Session == nil {
 		return ErrContextSyncUnavailable
+	}
+	if err := cedar.CheckContextSyncSessionPurge(ctx, im.Gate, sessionID); err != nil {
+		return fmt.Errorf("contextsync: session delete remote denied by policy: %w", err)
 	}
 	return im.Session.DeleteRemote(ctx, sessionID)
 }
@@ -100,9 +120,16 @@ func (im *Impl) ProjectSync_Toggle(ctx context.Context, projectID string, enable
 }
 
 // ProjectSync_DeleteRemote purges the remote stream for projectID.
+//
+// Gated by ActionContextSyncProjectPurge (ruling G-7): the Cedar check
+// runs BEFORE the backend call, and on Deny (which includes NotApplicable
+// — see CheckContextSyncProjectPurge's doc) nothing is purged.
 func (im *Impl) ProjectSync_DeleteRemote(ctx context.Context, projectID string) error {
 	if im.Project == nil {
 		return ErrContextSyncUnavailable
+	}
+	if err := cedar.CheckContextSyncProjectPurge(ctx, im.Gate, projectID); err != nil {
+		return fmt.Errorf("contextsync: project delete remote denied by policy: %w", err)
 	}
 	return im.Project.DeleteRemote(ctx, projectID)
 }

@@ -309,6 +309,525 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-08-23 · WP20 (UNIT-15) — frontend props and exports with no consumer, five NARROWed after wiring the two that had a source
+
+`controls-and-readouts-that-tell-the-truth-01PMZ808` WP20. Spec §1.15 named
+nine findings grouped by class (declared prop no parent passes / exported
+symbol no non-test reader). Two wired in the same commit
+(`EVENT_FAMILY` → grouped `<optgroup>`s in `HookEditor.vue`;
+`HookDryRunDrawer.vue` now renders `output.permissionDecision` and
+`output.watchPaths`, which the Go mapper had always sent). The remaining
+seven, all NARROWed or left as documented no-ops:
+
+- **`SlashArgFill.prefilled`** (`components/chat/SlashArgFill.vue`) — no
+  caller passes it; `SessionsView.vue` captures typed args into a raw
+  string nobody tokenizes into `Record<string,string>`. **Blocker:** no
+  slash-arg tokenizer exists anywhere in `frontend/src` (spec D-10 — do
+  not invent one in this WP).
+- **`SlashCommandEditor.readOnly`** (`views/settings/SlashCommandEditor.vue`)
+  — never passed; `UserCommand` carries no builtin/managed/fleet-pushed
+  marker to derive it from. **Blocker:** no such field exists on
+  `UserCommand`.
+- **`AttachmentTreePicker.attachmentKind`** (`components/contexts/`) —
+  REFUTED as a defect (spec D-9). All three mounts are context-library
+  surfaces, the folder-attach branch takes no kind, and `'system'` is
+  semantically correct. Prop doc narrowed to stop implying an override
+  path exists; no functional change.
+- **`CANONICAL_RECIPE_CATEGORIES`** (`lib/recipeCategories.ts`) —
+  downgraded to an internal-duplication note (spec D-9): identical, and
+  in identical order, to `Object.keys(RECIPE_CATEGORY_META)`, which
+  `isCanonicalCategory` already treats as authoritative. Not a false
+  advertisement (no badge renders from it directly); documented as a
+  drift risk rather than rewritten, to avoid an unforced behavioural
+  change in a P3 item.
+- **`DocumentChip.pageCount`, `.sizeLabel`'s `size_bytes` branch, and
+  `ImageBlock.dimensionTooltip`'s `image_dimensions`** — the five-hop
+  wire spec §1.15 describes (`core/attachments/media.go` →
+  `core/llm.MediaSource` → `ChatInput.vue`'s block builder → the two
+  render components) needs a field added to `core/llm.MediaSource`.
+  `core/llm/**` is out of scope for this WP's dispatch (sibling missions
+  own it this wave). All three readouts degrade gracefully today (no
+  page count / size / dimension shown, not a wrong one) — documented as
+  dead-but-honest rather than wired. **Blocker:** `core/llm.MediaSource`
+  needs a `PageCount` field, and the frontend staging path
+  (`ChatInput.vue`) needs to populate `size_bytes` and
+  `image_dimensions` on send — cross-package work spanning a directory
+  this WP does not own.
+- **`MessageList.scrollToBottom` / `ConfirmToolModal.reconcile`**
+  (`defineExpose`, test-only callers) — spec §1.15 confirms this is a
+  house pattern (`FilesystemPermissionModal.vue`,
+  `BashPermissionModal.vue` do the same), both methods are fully used
+  internally, and neither component claims the expose is for external
+  consumption. No false claim exists to narrow; left unchanged.
+- **`HealthPill.label` / `.compact`** (`views/tools/HealthPill.vue`) —
+  never passed; both have declared defaults so behaviour is defined
+  (dead knobs, not a false readout — spec's own lowest-severity call).
+  **Not edited in this WP**: `frontend/src/views/tools/**` is out of
+  scope for this WP's dispatch (owned by a sibling agent this wave).
+  Recorded here so the next pass over that directory has the finding on
+  hand rather than rediscovering it.
+
+**Owner:** alec. **Blocker:** see each item above (tokenizer / UserCommand
+field / core/llm.MediaSource field + frontend staging / directory
+ownership this wave). **Date:** 2026-08-23.
+### 2026-08-23 · `Sanitizer.SanitizeStream` has zero production callers — streamed assistant tokens are not redacted (PR #308 secret-reference regression fix)
+
+`core/credstore/refs/sanitizer.go` docstrings previously claimed "Every
+tool result content block AND every streamed assistant token is scanned
+via Sanitize" (FR-007 of `model-secret-references-01KW7M5A`, which does
+require both). That was never true for the streamed-token half:
+`SanitizeStream` (`sanitizer.go:131`, now with a corrected docstring) is a
+thin `Sanitize` alias with no reader/writer chunk-boundary handling
+despite an earlier comment describing one, and
+`/usr/bin/grep -rn 'SanitizeStream' --include='*.go' core/` minus
+`_test.go` returns only the declaration — no call site anywhere in the
+LLM streaming bridge (`core/rpc/views/llm/impl.go`).
+
+Net effect (**corrected 2026-08-25** — see the dated entry below; this
+paragraph originally overclaimed): `Sanitize` runs on every SUCCESS-path
+tool result the three production `Resolver.Substitute` callers produce
+(bash, web_fetch, and — as of this fix — the MCP stdio transport), so a
+secret echoed back *inside a successful tool result* is redacted before
+it reaches session history or the UI. Two v0.72.0 regressions meant
+error-path and background-mode results were NOT covered until fixed on
+2026-08-25 — see below. A secret the **model itself** types directly
+into its own streamed response text (as opposed to relaying it through a
+tool result) is still NOT caught by anything today.
+
+**Not fixed here** — this entry was found while closing the MCP
+tool-result sanitization gap (`core/mcp/transport/stdio/server.go`
+`CallTool`), which was the actual security regression in scope. Wiring
+`SanitizeStream` into the assistant-token streaming path is a distinct
+change touching `core/rpc/views/llm/impl.go`'s stream loop and needs its
+own persisted-history test (per CLAUDE.md's testing-rule-3 discipline —
+a test that calls `SanitizeStream` directly proves nothing).
+
+**Owner:** alec. **Blocker:** no mission currently owns wiring
+`SanitizeStream` into the LLM streaming bridge; the next mission that
+touches assistant-token streaming should pick this up. **Date:** 2026-08-23.
+
+### 2026-08-25 · MCP stdio has THREE unsanitized channels, not one (review round 5 correction)
+
+An earlier entry conceded only the stdio **`RPCError.Message`** path. Round 5
+established that two sibling channels carry the same taint and were not
+covered by that wording:
+
+1. **Child stderr → `RingBuffer` → `StderrTail` → `RecipeStatus` → RPC/UI**
+   (`core/mcp/transport/stdio/connection.go:307`, `server.go:409/882`,
+   `status.go:30/53`). No sanitizer anywhere on this path, and it is read
+   *outside* any turn context. Can also be promoted into `LastError`.
+2. **`notifications/message` → `LogSink.Handle` → `slog.Default()`**
+   (`core/mcp/transport/log.go:65-68`, `server.go:871`). Production wiring is
+   `Logger: nil // defaults to slog.Default` (`core/rpc/api.go:5134`), so
+   server-controlled `params.Data` reaches `harness.log` — the same durable
+   sink as the seventh egress.
+
+**Why this is accepted rather than fixed:** all three require a stdio MCP
+server to echo back plaintext the harness *deliberately handed it* — that is
+what `@secret:` substitution into MCP arguments means. Once a server holds the
+plaintext it can exfiltrate over its own socket; redacting our logs does not
+reduce attacker capability. The sanitizer here defends against *accidental*
+echo by a buggy server, and the structurally identical `RPCError.Message`
+case was already accepted. Recorded so the accepted scope is stated
+accurately: three channels, not one.
+
+**Owner:** alec. **Date:** 2026-08-25.
+
+### 2026-08-25 · `refs.Sanitize` is exact-substring, so a transformed secret is caught by nothing
+
+Raised by review round 5 as the one genuinely open design question after seven
+egress fixes. `Sanitize` matches the resolved plaintext literally. A child
+process that base64-encodes, URL-encodes, case-folds, or splits a secret before
+echoing it defeats every sanitizer on every path — bash, webfetch, MCP stdio,
+and the background task chokepoint alike.
+
+This is a known property of the design, not a defect in any one call site, and
+no further review of a single PR can close it. It wants a spec: either a
+stronger matching primitive, or an explicit statement that redaction is
+best-effort against accidental echo only.
+
+**Owner:** alec. **Blocker:** needs a product decision on what redaction is
+supposed to guarantee. **Date:** 2026-08-25.
+
+### 2026-08-25 · web_fetch error-path and bash background-mode secret leaks (release/v0.72.0 WP19 regressions — FIXED)
+
+Two confirmed secret-leak regressions, both introduced by WP19 wiring the
+`@secret:` resolver on `release/v0.72.0` (before it, no plaintext existed
+to leak). Both were independently reproduced by a reviewer and re-verified
+by reading the code before the fix landed.
+
+**LEAK 1 — `core/tools/webfetch/webfetch.go`.** The Sanitizer was only
+applied to the success-path response body; every `errorResult(...)` return
+(request-build failure, transport failure, response-read failure —
+13 call sites, `/usr/bin/grep -c 'return errorResult' webfetch.go` at the
+time of the fix) bypassed it. Go's `*url.Error` embeds the full request URL,
+so any DNS/TLS/connection failure on a URL carrying a resolved `@secret:`
+wrote the plaintext straight into the tool result, which is persisted as a
+`tool_result` move and indexed into FTS
+(`core/session/migrations_search_fts_tool_rows.go`) verbatim.
+
+Fixed with a single chokepoint rather than enumerating call sites: `Call`
+is now a thin wrapper that runs the (renamed) request logic in `call` and
+sanitizes `call`'s return value — success or error — exactly once, in one
+place, before it reaches the caller. A new `errorResult(...)` call added
+anywhere inside `call` cannot reintroduce the leak; it would have to
+bypass the `Call`/`call` split entirely.
+
+**LEAK 2 — `core/tools/bash/background.go`.** `bash.go` resolves
+`@secret:` references into `commandLine` and, for `run_in_background:
+true`, passed that *resolved* string to `spawnBackground`, which used it
+for both the actual `exec.Command` invocation AND for
+`t.backgroundSpawn(...)` (→ `core/tasks/registry.go` → `store_sql.go`'s
+`INSERT INTO tasks (..., cmd, ...)`, plaintext, never zeroed, never
+expired) AND for the `bash.background.spawned` log line
+(`logging.L()`, wired in production). The synchronous path was already
+correct — it stores `args.Command` (pre-substitution). Fixed by splitting
+`spawnBackground`'s single `commandLine` parameter into `execCommand`
+(resolved, used only for `exec.Command`) and `logCommand` (unresolved,
+used only for the registry write and the log line), matching the
+synchronous path's contract.
+
+**Correction (2026-08-25, round 3 — see the entry below):** the above
+fixed only the *command-line* half of LEAK 2. `background.go` still
+attached `cmd.Stdout`/`cmd.Stderr` directly to the task registry's
+writers with no sanitizer anywhere — a resolved secret **echoed by the
+child process itself** (e.g. `curl -v` printing a substituted
+`Authorization` header to stderr) still reached the on-disk task log,
+the in-memory ring buffer, the `background_task_complete` hook payload,
+and the `kenaz__monitor` tool result, all in plaintext. This was a
+distinct gap from the one fixed above, in a different code path
+(`t.backgroundWriters`, not `t.backgroundSpawn`), and shipped past this
+same review pass — see the round-3 entry for the fix and its scope.
+
+Both fixes are covered by falsification tests
+(`core/tools/webfetch/webfetch_test.go`
+`TestWebFetch_ErrorResult_DoesNotLeakSecret`,
+`core/tools/bash/secret_background_leak_test.go`
+`TestRunInBackground_DoesNotPersistOrLogResolvedSecret`) that assert on
+the actual marshalled/persisted bytes, not an in-memory intermediate, and
+were confirmed red against the pre-fix code and red again under a
+compiling mutation of the fix.
+
+This is also the correction referenced in the 2026-08-23 entry above: its
+claim that "`Sanitize` now runs on every tool result" was true only for
+the success path at the time it was written; these two gaps existed
+alongside it in the same release.
+
+**Owner:** alec. **Date:** 2026-08-25.
+
+### 2026-08-25 · LEAK 2 round 3 — bash background mode's OUTPUT path was still unsanitized (FIXED)
+
+Round 2 (previous entry) fixed the background arm's *command line* —
+`spawnBackground`'s persisted/logged string. It did not touch the arm's
+*output*. `core/tools/bash/background.go` attached `cmd.Stdout`/
+`cmd.Stderr` straight to `t.backgroundWriters(taskID)` — the task
+registry's raw writers — with zero sanitizer anywhere in that file
+(confirmed: `background.go` had no `credstore/refs` import at all). A
+child process that echoes a resolved `@secret:` value (`curl -v` writing
+a substituted `Authorization` header to stderr is the canonical case)
+put the plaintext into all four sinks `core/tasks/registry.go` fans
+each writer to: the on-disk log file (cleartext, mode 0600, 7-day
+retention, survives process exit — `core/tasks/log.go`), the in-memory
+ring buffer (`core/tasks/ring.go`), the `background_task_complete` hook
+payload (piped to an arbitrary user-configured executable's stdin), and
+the `kenaz__monitor` tool result (back into session history and FTS).
+The identical *synchronous* `kenaz__bash` call was correctly redacted
+(`bash.go:470-477`) — only the background arm was exposed.
+
+**The hard part:** `refs.Sanitizer` is turn-scoped —
+`chat_runner.go`'s `defer sanitizer.Clear()` zeroes it at end-of-turn —
+but a background task outlives its turn. Wrapping the task's output
+writers with the turn's shared `*refs.Sanitizer` would have redacted
+correctly for a fast test and then silently stopped the moment the
+turn ended, which is worse than shipping no fix at all: it looks green
+in CI and leaks in production on any task whose output arrives after
+its turn completes (which is the common case for anything that runs
+longer than one turn).
+
+**Fix (task-scoped sanitizer, chosen over refusing `@secret:` in
+background mode because it preserves the capability):**
+
+1. `refs.Sanitizer.Clone()` (new) returns an independent, deep-copied
+   Sanitizer whose entries survive the original's `Clear()`.
+2. `core/tasks.OutputSanitizer` (new minimal interface,
+   `Sanitize([]byte) []byte`) lets `core/tasks` accept a sanitizer
+   without importing `core/credstore/refs` — the same reasoning that
+   already makes `bash.BackgroundSpawnFunc` a plain function type
+   instead of an import of `core/tasks`. `*refs.Sanitizer` satisfies it
+   structurally.
+3. `core/rpc/builtins_wiring.go`'s `bgSpawn` closure calls
+   `refs.SanitizerFromContext(ctx).Clone()` and passes the clone via the
+   new `tasks.RegisterOpts.Sanitizer` field, **at `Register` time —
+   which always runs before `cmd.Start()`** (background.go's existing
+   ordering guarantee, originally added so the writers could be attached
+   before the first byte was written; the same ordering now guarantees
+   the sanitizer is attached before the first byte too).
+4. `core/tasks/ring.go`'s `lineWriter.Write` — the single chokepoint all
+   four sinks flow through (ring buffer, log file, and via
+   `record`/`AppendLine`, both `__monitor`'s `Lines` and the hook's
+   `Tail`-derived `StdoutTail`/`StderrTail`) — calls `Sanitize` on the
+   raw bytes before any sink sees them. One chokepoint fix covers all
+   four sinks by construction instead of requiring each to remember to
+   sanitize independently.
+
+**Covered:** on-disk log file, in-memory ring buffer,
+`background_task_complete` hook payload, `kenaz__monitor` (drain and
+watch, both read `Registry.Tail`/`AppendLine`, downstream of the same
+chokepoint) — for every task spawned by the fixed code, including
+tasks that are still running when their originating turn's `Clear()`
+fires (falsification-tested explicitly, see below).
+
+**NOT covered, dated + owned:**
+
+- **Pre-fix on-disk log files.** Any `<taskID>.log` written before this
+  fix deployed keeps its plaintext; nothing retroactively scrubs
+  existing files. 7-day retention (`core/tasks/log.go`) ages them out
+  naturally; no separate cleanup was written. **Owner:** alec.
+  **Blocker:** none planned — retention is considered sufficient
+  mitigation for a single-user desktop app; revisit only if a future
+  finding shows log files are backed up or synced somewhere retention
+  doesn't reach. **Date:** 2026-08-25.
+- **Chunk-boundary splitting.** `lineWriter.Write` sanitizes each
+  `cmd.Stdout`/`cmd.Stderr` write call independently (the same
+  chunk-boundary limitation already documented on `SanitizeStream`,
+  2026-08-23 entry above). A secret plaintext split across two
+  separate pipe reads from the child process is not caught. In
+  practice the sink test's `curl -v`-shaped scenario writes the header
+  in one line/one write; this is a real but narrow residual gap, not
+  exercised by the falsification test. **Owner:** alec. **Blocker:** no
+  mission currently owns a chunk-reassembly buffer for task output;
+  pick up alongside the `SanitizeStream` wiring already tracked in the
+  2026-08-23 entry, since both need the same boundary-aware scan.
+  **Date:** 2026-08-25.
+- **`core/rpc/subagent_run_spawner.go`'s `Register` call.** Sub-agent
+  tasks (`KindSubagent`) go through `Registry.Register` but never
+  through `StdoutWriter`/`StderrWriter` — they are LLM streams, not
+  child-process stdout/stderr, so this fix's chokepoint does not apply
+  to them and none was added. Out of scope for this fix (no
+  `@secret:`-bearing exec output exists on that path today); flagged
+  here only so a future reader doesn't assume `RegisterOpts.Sanitizer`
+  covers every task kind. **Owner:** alec. **Date:** 2026-08-25.
+- **The `builtins_wiring.go` `bgSpawn` closure itself is not directly
+  exercised by an automated test.** The falsification test
+  (`core/tools/bash/secret_background_output_leak_test.go`) drives a
+  real `tasks.Registry` through a test-local closure that mirrors
+  `bgSpawn` line-for-line (constructing the full `core.Core` needed to
+  reach the real closure is out of scope here) — the same pattern the
+  pre-existing round-2 test already used. A mutation was applied to
+  the test's mirrored `Clone()` call specifically (not to
+  `builtins_wiring.go`) to prove the Clear()-survival assertion is
+  load-bearing; it does not prove the production closure wasn't
+  independently mistyped. **Owner:** alec. **Blocker:** none planned —
+  the closure is small (6 lines) and structurally identical to its
+  tested mirror; revisit if `builtins_wiring.go`'s bash-background
+  block grows enough logic to diverge from the mirror unnoticed.
+  **Date:** 2026-08-25.
+
+Falsification: `core/tools/bash/secret_background_output_leak_test.go`
+(`TestRunInBackground_OutputSinksDoNotLeakResolvedSecret`,
+`TestRunInBackground_OutputRedactionSurvivesTurnClear`) drives a real
+`tasks.Registry` with a real temp `LogDir` and real
+`StdoutWriter`/`StderrWriter`, and asserts on the actual on-disk log
+file bytes, the ring-buffer tail (via the hook payload), and
+`Registry.Tail` (the `kenaz__monitor` read path) — not a stub's
+captured argument, which is what let the round-2 fix ship with this
+output-path gap still open (`secret_background_leak_test.go` stubs
+`BackgroundSpawn`/`BackgroundEnd` and has zero references to
+`BackgroundWriters`). Both tests were confirmed red against the pre-fix
+code (with the resolved plaintext visible in the failure output) and
+red again under two independent compiling mutations of the fix: (a)
+gating the `lineWriter.Write` sanitize call behind `if false && …` and
+(b) the `bgSpawn` mirror sharing the turn-scoped `*refs.Sanitizer`
+directly instead of calling `Clone()` — mutation (b) isolates
+specifically to `TestRunInBackground_OutputRedactionSurvivesTurnClear`,
+confirming that test (and not the plain sink test) is what catches a
+lifetime regression.
+
+**Owner:** alec. **Date:** 2026-08-25.
+
+**Correction (2026-08-25, later same day — see the dated entry below):**
+this entry and the two above it were written as though bash's `@secret:`
+handling was now complete. It was not: the *synchronous* path had its own
+separate error-message leak (`core/tools/bash/exec.go`'s `Run`, feeding
+`bash.go`'s `t.logf("bash.run_error", ...)`), a seventh distinct egress,
+found by a reviewer's execution-based reproduction and fixed the same day.
+See "seventh `@secret:` egress" below. That entry also closes the
+"`builtins_wiring.go` `bgSpawn` closure itself is not directly exercised by
+an automated test" gap flagged two bullets above (`core/rpc/api_b4_wiring_
+regression_test.go`'s `TestB4_BackgroundSanitizerWiring_ResolvedSecret
+RedactedInTaskLog` now drives the real closure, not a mirror).
+
+### 2026-08-25 · seventh `@secret:` egress — resolved plaintext in the synchronous run-error log record (release/v0.72.0 blocking finding — FIXED)
+
+A reviewer reproduced this by execution (side-by-side `LOG:`/`RES:` output
+showing the tool result redacted and the log record carrying the plaintext
+verbatim); re-verified by reading the code before the fix landed. This is
+a *different* code path from LEAK 2 (background mode, fixed twice above) —
+this one is the **synchronous** `kenaz__bash` call's error-wrapping, and it
+predates none of those fixes; it shipped alongside WP19 undetected because
+every prior falsification test for this file drove the happy path or the
+background arm, never a failing `exec.Cmd.Run()` on the *synchronous* arm.
+
+**Mechanism:** `core/tools/bash/exec.go`'s `Run` sets
+`label := opts.CommandLine` — the RESOLVED, post-`@secret:`-substitution
+command line — on the non-`*exec.ExitError` branch (shell-not-found,
+context-cancelled-before-`Start()`, etc.), and wraps it verbatim into
+`fmt.Errorf("bash: run %q: %w", label, err)`. `core/tools/bash/bash.go`
+then does `t.logf("bash.run_error", "err", runErr.Error())` — **three
+lines before** the WP08 sanitizer runs (`bash.go:470-477`, downstream of
+where `runErr.Error()` is folded into `rawStderr`). The tool result is
+sanitized correctly (it inherits the sanitize call on `rawStderr`); the
+log record embeds the raw `runErr.Error()` string separately and was
+never sanitized.
+
+**Two confirmed-reachable triggers** (not timing-dependent):
+
+- `$SHELL` set to an absolute path that no longer exists.
+  `exec.go:88-93` checks `filepath.IsAbs` but never existence, so this is
+  **deterministic** — every `@secret:`-bearing bash command on such a
+  machine leaks, forever, not just occasionally.
+- The turn is cancelled before `cmd.Start()` (user hits stop) — universal,
+  any command, any machine.
+
+Both land in `cmd.Run()`'s non-`*exec.ExitError` branch (an `*exec.Error`
+or a context-cancellation error, neither of which `errors.As(err,
+&exitErr)` matches), which is exactly the branch that builds the leaking
+label.
+
+**Sink:** `t.logf` → `logging.L()` → `~/.kenaz/harness/<env>/logs/
+harness.log`, mode 0600, rotated at 32 MB with one generation kept, so the
+plaintext persists past the leaking call. Worse: `core/core.go:416` sets
+`InstallSlogBridge: true` **unconditionally** — with an OTLP endpoint or
+the fleet telemetry pipeline configured, the same record egresses
+**off-device**, not just to a local file.
+
+**Fix:** removed the plaintext from the error message rather than relying
+on a second sanitize pass. `RunOpts` gained a `LogCommandLine` field (the
+PRE-substitution command line); `Run`'s error-label logic prefers it over
+`CommandLine` when building the `%q` label, falling back to `CommandLine`
+(then `Argv[0]`) when unset, so callers that never resolve a secret see no
+behaviour change. `bash.go`'s synchronous call site now passes
+`LogCommandLine: args.Command` (unresolved) — the exact
+`execCommand`/`logCommand` split `core/tools/bash/background.go` already
+used for the same reason, applied to the arm that didn't have it yet.
+
+**`t.logf` site audit (bash.go, relative to the substitution point at
+`bash.go:424`):** 16 call sites total. 15 are pre-substitution — they log
+`progBase` (from `argv := FirstSegmentArgv(args.Command)`, derived before
+the substitution point) or a Cedar-gate `pattern` (also derived from the
+pre-substitution `argv`), or a value with no relationship to command
+content at all (mkdir/write/reload errors, prompt-registry errors). The
+sixteenth, `bash.run_error` at line ~473 (post-fix), is the one downstream
+of substitution — confirmed independently by reading every call site, not
+taken on the reviewer's count. Lines (pre-fix numbering): 386
+(`bash.denied`), 397 (`bash.cwd_rejected`), 407 (`bash.invoke`), 468
+(`bash.run_error` — the fixed site), 548 (`bash.gate.allow`), 552
+(`bash.gate.deny`), 562 (`bash.gate.not_applicable.allow_unbooted`), 576
+(`bash.gate.prompt_err`), 586 (`bash.gate.prompt_deny`), 594
+(`bash.gate.allow_once`), 606 (`bash.gate.allow_always.dangerous_
+demoted`), 636 (`bash.gate.snippet_skip`), 642
+(`bash.gate.snippet_mkdir_err`), 652 (`bash.gate.snippet_write_err`), 655
+(`bash.gate.snippet_written`), 660 (`bash.gate.reload_warn`).
+
+**Also fixed in the same change:** `core/rpc/api_b4_wiring_regression_
+test.go` gained `TestB4_BackgroundSanitizerWiring_ResolvedSecretRedacted
+InTaskLog`, protecting `core/rpc/builtins_wiring.go`'s
+`Sanitizer: sanitizer` line (the round-3 fix's own production wiring,
+added above) against the exact same "no automated coverage of the real
+closure" gap the round-3 entry flagged and left open. It drives the real
+`registerBuiltinTools` with a real `*coretasks.Registry` over a real temp
+`LogDir`, spawns a background command carrying a `@secret:` reference
+through the real `refs.WithResolver`/`refs.WithTurnSanitizer` context, and
+reads the actual on-disk `<taskID>.log` bytes.
+
+**Falsification (both, confirmed red pre-fix and red again under a
+compiling mutation of each fix):**
+
+- `core/tools/bash/secret_run_error_leak_test.go`
+  `TestSyncRunError_DoesNotLogResolvedSecret` — real `*slog.Logger` with a
+  captured handler, `$SHELL` pointed at a nonexistent absolute path
+  (deterministic, no race). Pre-fix: failed with the plaintext visible in
+  the log record (`msg=bash.run_error err="bash: run \"echo
+  SUPERSECRET-PLAINTEXT-123\": fork/exec ..."`). Mutation
+  (`LogCommandLine: args.Command` → `LogCommandLine: ""`) compiled and
+  reproduced the same red failure.
+- `core/rpc/api_b4_wiring_regression_test.go`
+  `TestB4_BackgroundSanitizerWiring_ResolvedSecretRedactedInTaskLog` —
+  real production wiring, real on-disk task log. Pre-fix-equivalent
+  mutation (gating the `sanitizer = s.Clone()` assignment behind `if
+  false && s != nil` — a direct `Sanitizer: nil` literal does not compile,
+  since `sanitizer` would then be declared-and-unused) reproduced red with
+  the sentinel visible in the on-disk log file content.
+
+**Owner:** alec. **Date:** 2026-08-25.
+
+### 2026-08-25 · MCP http/sse transports never substitute or sanitize `@secret:` references (found alongside the WP19 leak fixes — NOT FIXED, tracked)
+
+Only the stdio MCP transport participates in `@secret:` resolution and
+sanitization: `/usr/bin/grep -rn "credstore/refs" core/mcp/` returns
+exactly one non-test production file
+(`core/mcp/transport/stdio/server.go`). The dispatch pool and the two
+other transports never call `Resolver.Substitute` or `Sanitizer.Sanitize`
+at all:
+
+- `core/mcp/dispatch/pool.go:319`
+- `core/mcp/transport/http/pool.go:337`
+- `core/mcp/transport/sse/pool.go:311`
+
+60 of the 115 recipes in `core/mcp/recipes/registry.json` declare
+`transport: "http"`. Consequences: (1) a `@secret:<locator>` token in a
+tool-call argument reaches the remote third-party MCP server verbatim —
+the *locator string itself* leaks to a third party, not just plaintext;
+(2) the per-turn Sanitizer never runs over an http/sse tool result, so if
+a secret was resolved earlier in the same turn (e.g. by bash or
+web_fetch) and the remote server's response happens to echo it back, it
+reaches session history and the UI unredacted.
+
+Not fixed in the same pass as the two confirmed leaks above — this is a
+missing-capability gap in two entire transport implementations, not a
+bypass of an existing chokepoint, and needs its own design pass (where in
+the http/sse request lifecycle substitution and sanitization should hook
+in, given they're not in-process subprocesses like stdio).
+
+**Owner:** alec. **Blocker:** no mission currently owns extending
+`@secret:` resolution + sanitization to the http/sse MCP transports; the
+next mission touching `core/mcp/transport/{http,sse}` or
+`core/mcp/dispatch` should pick this up. **Date:** 2026-08-25.
+
+### 2026-08-23 · `data_dir` reached the fleet wire on every installed-MCP sync (PR #308 review finding H2 — FIXED, entry kept for the correction it carries)
+
+`core/rpc/views/tools/impl.go:489-492`'s `resolveConfig` unconditionally
+injects `out["data_dir"] = a.cfg.DataDir` into every recipe's persisted
+config. It is a non-empty string, so `stringifyConfig` copies it into
+`InstalledMCP.EnvOverrides`, and it is not an `EnvKey` name, so the
+`SecretKeys` redaction never dropped it. Every synced recipe published
+the user's OS username and local path layout to the fleet server.
+
+Fixed in the same commit: `core/fleet/sync_mcp.go`'s `Collect` now strips
+a `localOnlyConfigKeys` set (currently `"data_dir"`) independently of
+`SecretKeys`, so it is dropped even when the secret set is determined and
+empty. Falsified with a compiling mutation (`if false && localOnlyConfigKeys[k]`):
+`TestSync_DataDirStripped` goes red with the absolute path visible in the
+marshalled payload.
+
+**Correction on the record.** The sub-agent that produced this fix worked
+from a worktree whose base predated the v0.72.0 merges, and concluded
+from `core/rpc/api.go:3256`'s `NewMCPSyncCategory(nil, nil, nil, ...)`
+that `MCPRegistryReader` has no production implementer and the leak was
+therefore unreachable. **That was an artifact of the stale base.** On
+`release/v0.72.0`, Z505 WP07 wired a real reader — `toolsMCPRegistry`
+in `core/rpc/sync_mcp_registry.go`, passed at `core/rpc/api.go` as
+`NewMCPSyncCategory(mcpRegistry, mcpRegistry, ...)`. The leak was live,
+not hypothetical, and the fix is a fix rather than defence-in-depth.
+
+**Related, and genuinely still open:** `refs.SanitizeStream` has no
+production caller. FR-007 requires streamed-assistant-token redaction;
+only bash and webfetch tool *output* is sanitized today. The Sanitizer
+docstring was narrowed to what is actually enforced rather than left
+claiming coverage that does not exist. **Owner:** alec. **Blocker:**
+wiring it touches `core/rpc/views/llm/impl.go`'s stream loop and needs a
+persisted-history assertion. **Date:** 2026-08-23.
+
 ### 2026-08-22 · Bundled sub-agent profiles advertise containment (allowed_tools/denied_tools/budget_*) that reaches no consumer (`subagent-control-and-background-tasks-01PMZB11`, containment review of PR #307 finding B3)
 
 Every bundled profile (`core/agents/bundled/*.yaml`) declares

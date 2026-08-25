@@ -37,6 +37,16 @@ const props = defineProps<{
    * Pre-resolved args parsed from what the user typed in the composer
    * (positional or named). Keys must match input.name values.
    * Allows skipping already-typed args.
+   *
+   * NARROW (controls-and-readouts-that-tell-the-truth-01PMZ808 WP20 /
+   * UNIT-15, spec §1.15): no caller passes this today. SessionsView.vue
+   * captures the typed line into `pendingArgFill.raw` (a string) but
+   * nothing reads it back out, and `prefilled` wants
+   * `Record<string,string>` — there is no `/deploy staging`-style
+   * tokenizer anywhere in `frontend/src` to bridge the two. Type a
+   * command with inline args today and this panel opens with an empty
+   * form. Building the tokenizer is out of scope for this WP (spec D-10).
+   * Owner: alec. Blocker: no slash-arg tokenizer exists. Date: 2026-08-23.
    */
   prefilled?: Record<string, string>;
 }>();

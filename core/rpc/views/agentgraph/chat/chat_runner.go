@@ -15,8 +15,10 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph/compaction"
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/compactionpolicy"
+	"github.com/kameas-ai/kenaz-harness/core/credstore/refs"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	artview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
 	"github.com/kameas-ai/kenaz-harness/core/runposture"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
@@ -388,6 +390,59 @@ type Config struct {
 	// (no error returned; the stream event is still forwarded to the
 	// kernel sink for frontend rendering).
 	GeneratedImageCapturer artview.GeneratedImageCapturer
+
+	// ---- @secret: reference resolution (trust-surfaces-that-fire-01PMZ202
+	// WP19) --------------------------------------------------------------
+	//
+	// kenaz__list_secrets tells the model to write "@secret:<locator>"
+	// tokens into tool arguments (core/tools/listsecrets), and
+	// core/tools/bash, core/tools/webfetch and
+	// core/mcp/transport/stdio/server.go all already call
+	// refs.ResolverFromContext(ctx) at their execution boundary to
+	// substitute those tokens. Before this WP nothing ever installed a
+	// Resolver on that ctx, so every one of those three call sites saw
+	// ResolverFromContext return nil and passed the literal token
+	// straight through — to a bash command line, an HTTP header, or an
+	// MCP tool argument. The four fields below are what driveRun uses,
+	// once per turn, to fix that (see the SecretLookup != nil block in
+	// driveRun).
+	//
+	// A resolver without a working Sanitizer is the worse failure mode
+	// (a secret that used to never reach the wire now reaches it AND
+	// gets persisted to the transcript), so driveRun always installs
+	// refs.WithTurnSanitizer in the same block as refs.WithResolver —
+	// there is no supported configuration that wires one without the
+	// other.
+
+	// SecretLookup backs the Resolver's plaintext lookup
+	// (refs.SecretLookup — Use(ctx, locator, op)). nil disables @secret:
+	// resolution entirely: driveRun leaves ctx unmodified, which is
+	// byte-identical to pre-WP19 behaviour. Production wiring is
+	// *secrets.ExposureIndex (core/rpc/api.go), guarded so a nil index
+	// yields a true nil interface here — assigning a nil
+	// *secrets.ExposureIndex directly would produce a non-nil
+	// refs.SecretLookup wrapping a nil pointer, and the first Use call
+	// would panic on the nil receiver's mutex.
+	SecretLookup refs.SecretLookup
+	// SecretGate is the Cedar gate Action::"secret_reference_resolve"
+	// evaluates against (secret_reference.cedar). nil default-allows
+	// every resolution — see cedar.EvaluateSecretReferenceResolve's
+	// g==nil branch — the same nil-tolerant posture every other
+	// Cedar-gated builtin in this package already has.
+	SecretGate cedar.Gate
+	// SecretBudget caps resolutions per locator (refs.DefaultBudget==50)
+	// across the process lifetime. nil is unlimited. Production wiring
+	// shares the SAME *refs.Budget the kenaz__list_secrets tool uses to
+	// display remaining counts (core/rpc/api.go), so both surfaces count
+	// against one ledger.
+	SecretBudget *refs.Budget
+	// SecretAuditEmitter optionally receives one event per resolution
+	// attempt (permit / deny / budget-exhausted / unknown-locator; see
+	// refs.AuditEmitter). nil is a no-op — refs.NewResolver already
+	// defaults to a no-op emitter, and WP19 deliberately does not wire a
+	// real one here: a durable audit sink is
+	// audit-that-tells-the-truth-01PMZA10 territory, not this WP's.
+	SecretAuditEmitter refs.AuditEmitter
 }
 
 // PartialPersister is the resume-flow persistence seam. Invoked by
@@ -1361,6 +1416,45 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		sub.journal.Finish(flushCtx)
 		flushCancel()
 	}()
+
+	// trust-surfaces-that-fire-01PMZ202 WP19: install the @secret:
+	// resolver and this turn's redaction Sanitizer on the ctx that
+	// Kernel.Run is about to receive. Every tool dispatch inside the run
+	// derives its ctx from this one — kernelToolAdapter.Call wraps it
+	// with toolloop.WithSessionID, which is a context.WithValue layer
+	// and therefore preserves everything already attached — so
+	// core/tools/bash, core/tools/webfetch and
+	// core/mcp/transport/stdio/server.go's existing
+	// refs.ResolverFromContext / refs.SanitizerFromContext calls start
+	// seeing real values instead of nil for the first time.
+	//
+	// Both are installed together, unconditionally, whenever a lookup is
+	// configured: a Resolver with no Sanitizer would turn "the literal
+	// token reaches the wire" into "the plaintext reaches the wire AND
+	// gets persisted to the transcript" the moment any tool result
+	// echoes its input back (webfetch already has exactly that shape —
+	// see no_plaintext_test.go's echo-server case), which is the worse
+	// of the two failures.
+	if r.cfg.SecretLookup != nil {
+		resolver := refs.NewResolver(refs.ResolverOptions{
+			Lookup:    r.cfg.SecretLookup,
+			Gate:      r.cfg.SecretGate,
+			Budget:    r.cfg.SecretBudget,
+			Emitter:   r.cfg.SecretAuditEmitter,
+			SessionID: sub.sessionID,
+			Agent:     "chat",
+		})
+		sanitizer := refs.NewSanitizer()
+		ctx = refs.WithResolver(ctx, resolver)
+		ctx = refs.WithTurnSanitizer(ctx, sanitizer)
+		// Sanitizer scope is [turn-start, turn-end) by contract (see the
+		// refs.Sanitizer doc comment) — Clear zeroes every retained
+		// plaintext copy so nothing survives into the next turn on this
+		// session, and nothing leaks if driveRun exits early (panic
+		// recovery, kernel error, interrupt) since this defer runs on
+		// every path out of this function.
+		defer sanitizer.Clear()
+	}
 
 	runStart := time.Now()
 	err := r.cfg.Kernel.Run(ctx, env)

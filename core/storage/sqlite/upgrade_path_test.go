@@ -78,6 +78,24 @@ const scheduledChatRunsProvenanceNote = "sessions/0340-scheduled-chat-runs-creat
 	"to scheduled_chat_runs (created by 0325, unchanged since)."
 
 var expectedChangedTables = map[string][]string{
+	"v0.71.0": {
+		// Same two reasons as v0.70.0 below, and this pair will now
+		// repeat for EVERY future tag:
+		//
+		//   scheduled_chat_runs — sessions/0340's DEFAULT backfill.
+		//   tasks               — assertTasksTableMigrated's own probe
+		//                         insert, not a migration.
+		//
+		// That recurrence is itself the finding. Every release from here
+		// needs both lines added by hand or TestUpgradePath goes red on
+		// a correct snapshot, which trains whoever cuts the next one to
+		// add entries reflexively rather than read them. The durable fix
+		// is to stop the probe writing to a table the digest check
+		// watches — assert an exact row count, or probe a table no
+		// migration touches. Owner: alec. Dated 2026-08-23.
+		"scheduled_chat_runs",
+		"tasks",
+	},
 	"v0.70.0": {
 		// sessions/0340 (model-scheduled-jobs-01PMSJ01 WP09) ALTERs
 		// scheduled_chat_runs, adding created_by NOT NULL DEFAULT 'user'

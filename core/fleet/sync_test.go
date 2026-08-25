@@ -211,7 +211,7 @@ func TestSync_SecretExclusion(t *testing.T) {
 	// Verify MCPSyncCategory.Collect strips secret keys from EnvOverrides.
 	secretKeys := map[string]bool{"API_KEY": true, "SECRET_TOKEN": true}
 	pending := &SecretPromptQueue{}
-	mcp := NewMCPSyncCategory(nil, nil, secretKeys, pending)
+	mcp := NewMCPSyncCategory(nil, nil, func() map[string]bool { return secretKeys }, pending)
 
 	// Feed via a mock reader.
 	items := []InstalledMCP{
@@ -220,9 +220,9 @@ func TestSync_SecretExclusion(t *testing.T) {
 			RecipeID:     "github",
 			EnabledState: true,
 			EnvOverrides: map[string]string{
-				"API_KEY":       "super-secret-value", // must be stripped
-				"CUSTOM_URL":    "https://api.example.com", // must survive
-				"SECRET_TOKEN":  "another-secret", // must be stripped
+				"API_KEY":      "super-secret-value",      // must be stripped
+				"CUSTOM_URL":   "https://api.example.com", // must survive
+				"SECRET_TOKEN": "another-secret",          // must be stripped
 			},
 			RequiresSecretKeys: []string{"API_KEY", "SECRET_TOKEN"},
 		},
@@ -260,6 +260,68 @@ func TestSync_SecretExclusion(t *testing.T) {
 		if strings.Contains(rawStr, secret) {
 			t.Errorf("secret %q must not appear in synced payload", secret)
 		}
+	}
+}
+
+// TestSync_DataDirStripped is the falsification for H2 (external
+// review of PR #308's secret-reference regression): resolveConfig
+// (core/rpc/views/tools/impl.go:489-492) unconditionally seeds every
+// recipe's persisted EnabledRecipe.Config with "data_dir" — the
+// user's absolute harness profile path, which also discloses their OS
+// username. That key is not a recipe-declared EnvKey, so the existing
+// SecretKeys-only redaction below never drops it. This test asserts
+// Collect strips "data_dir" from EnvOverrides in the PERSISTED/
+// returned sync payload (the marshaled JSON a remote fleet server
+// would actually receive), not from an intermediate in-memory value,
+// and does so independent of whether SecretKeys is configured at all
+// (the vulnerable path has zero EnvKeys — "data_dir" is not a secret,
+// it's local-only infrastructure).
+func TestSync_DataDirStripped(t *testing.T) {
+	pending := &SecretPromptQueue{}
+	// A DETERMINED, empty secret set: this recipe declares no secret env
+	// keys. That is deliberately not the same as a nil provider, which
+	// means "undeterminable" and drops every override — passing nil here
+	// would make this test pass for the wrong reason, hiding whether the
+	// localOnlyConfigKeys strip works at all.
+	mcp := NewMCPSyncCategory(nil, nil, func() map[string]bool { return map[string]bool{} }, pending)
+
+	items := []InstalledMCP{
+		{
+			ID:           "mcp-1",
+			RecipeID:     "filesystem-full",
+			EnabledState: true,
+			EnvOverrides: map[string]string{
+				"data_dir":   "/Users/alice.example/Library/Application Support/kenaz/harness/prod",
+				"CUSTOM_URL": "https://api.example.com", // must survive
+			},
+		},
+	}
+	mcp.Reader = &mockMCPReader{items: items}
+
+	raw, err := mcp.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+
+	var p InstalledMCPPayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(p.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(p.Items))
+	}
+	got := p.Items[0]
+	if _, present := got.EnvOverrides["data_dir"]; present {
+		t.Error("data_dir must be stripped from the synced payload (H2)")
+	}
+	if got.EnvOverrides["CUSTOM_URL"] != "https://api.example.com" {
+		t.Errorf("CUSTOM_URL should be preserved, got %q", got.EnvOverrides["CUSTOM_URL"])
+	}
+
+	// Ensure the absolute path / username never appears in the raw
+	// wire payload at all, not just under the expected key.
+	if strings.Contains(string(raw), "alice.example") {
+		t.Errorf("username/path leaked into synced payload: %s", raw)
 	}
 }
 

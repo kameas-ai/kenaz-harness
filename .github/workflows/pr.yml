@@ -488,6 +488,35 @@ jobs:
         # TestBundleChannelKindsSyncGate_PlantedDriftFires.
         run: bash scripts/ci/check-bundle-channel-kinds-sync.sh
 
+      - name: secret-lookup-wiring guard (B4)
+        # unwired sweep, release/v0.72.0: core/rpc/api.go's buildChatRunner
+        # builds the production chat.Config{} literal. Fails if any
+        # non-test chat.Config{} literal there omits SecretLookup: or sets
+        # it to nil — the same unconditional disable of @secret:<locator>
+        # resolution and turn-sanitization as never setting it at all.
+        # secret_resolver_wiring_test.go's own chat.Config{} construction
+        # never touches buildChatRunner, so that suite stayed green while
+        # this field was deletable with zero CI signal until this step
+        # existed. Planted-violation proof: scripts/ci/gates_can_fail_test.go
+        # "secret-lookup-wiring/second-literal-omits-field".
+        run: bash scripts/ci/check-secret-lookup-wiring.sh
+
+      - name: installer-payload guard
+        # entry-points-and-crash-reporting-01PMZD13 UNIT-2. Placed here
+        # (not release.yml) in the 2026-08-25 unwired sweep: this is a
+        # STATIC cross-reference of release.yml's -o "build/bin/*.exe"
+        # build targets against project.nsi's `File "*.exe"` payload
+        # lines — plain text, both already in the checkout — so it needs
+        # neither a Windows host nor makensis, and lint-go (self-hosted
+        # Linux ci-medium, per CLAUDE.md's runner pool policy) can run it
+        # on every PR instead of waiting for a tag push into release.yml.
+        # The script shipped with the mission that added it but no
+        # workflow ever called it, so `kenaz-updater.exe` shipping zipped
+        # but never installed — the defect this gate exists to catch —
+        # could recur with a fully green CI. Manifest-only: it does not
+        # prove an actual Windows install (see the script's own header).
+        run: bash scripts/ci/check-installer-payload.sh
+
       # csp guard runs in test-frontend after `npm run build` produces
       # the real frontend/dist/index.html — there's no point checking
       # the CSP of a stub.

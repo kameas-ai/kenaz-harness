@@ -26,6 +26,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/llm/custom"
 	"github.com/kameas-ai/kenaz-harness/core/llm/events"
 	"github.com/kameas-ai/kenaz-harness/core/llm/gemini"
+	"github.com/kameas-ai/kenaz-harness/core/llm/ollama"
 	"github.com/kameas-ai/kenaz-harness/core/llm/openai"
 	"github.com/kameas-ai/kenaz-harness/core/llm/openrouter"
 	"github.com/kameas-ai/kenaz-harness/core/llm/retry"
@@ -45,6 +46,15 @@ type Options struct {
 	Emitter  *events.Emitter
 	Policy   llm.PolicyGuard
 	Cost     CostReducer
+	// Cache is the capability probe cache (model-settings-reach-the-
+	// model-01PMZ101 WP14 / FR-017). Nil defaults to
+	// capabilities.DefaultCache(nil) — an in-process MemoryCache with
+	// no persistence across restarts. Production callers that want the
+	// SQLite-backed provider_capabilities table pass
+	// capabilities.NewSQLiteCache(realDB) here explicitly (mirrors how
+	// Cost is wired at the ONE production construction site — see
+	// core/rpc/api.go's newLLMStack).
+	Cache capabilities.CapabilityCache
 }
 
 // Registry is the mutable in-memory implementation.
@@ -53,12 +63,14 @@ type Registry struct {
 	adapters map[string]llm.ProviderAdapter
 	profiles map[string]llm.ProviderProfile
 
-	cat      *capabilities.Catalog
-	gate     *capabilities.Gate
-	resolver *credref.Resolver
-	em       *events.Emitter
-	policy   llm.PolicyGuard
-	reducer  CostReducer
+	cat       *capabilities.Catalog
+	gate      *capabilities.Gate
+	resolver  *credref.Resolver
+	em        *events.Emitter
+	policy    llm.PolicyGuard
+	reducer   CostReducer
+	cache     capabilities.CapabilityCache
+	refresher *capabilities.Refresher
 
 	now func() time.Time
 }
@@ -83,6 +95,25 @@ func New(opts Options) (*Registry, error) {
 	if policy == nil {
 		policy = llm.AllowAllGuard{}
 	}
+	cache := opts.Cache
+	if cache == nil {
+		// nil db: DefaultCache degrades to MemoryCache. A caller that
+		// wants the SQLite-backed provider_capabilities table passes
+		// Options.Cache explicitly (capabilities.NewSQLiteCache(db)).
+		cache = capabilities.DefaultCache(nil)
+	}
+	// M5 (third part): InvalidateSchemaVersion's own doc says it is
+	// "intended for a startup sweep" but had zero non-production
+	// callers anywhere in the tree. Registry construction IS that
+	// startup — wiring it here means a llm.CapabilitySchemaVersion bump
+	// actually evicts stale-schema rows instead of only relying on the
+	// per-Get version check (which already keeps a stale row from being
+	// TRUSTED, but leaves it occupying the table forever). Best-effort:
+	// a failure here must not block chassis boot over a cache-hygiene
+	// sweep.
+	if err := cache.InvalidateSchemaVersion(context.Background()); err != nil {
+		logging.L().Warn("llm.capability_cache.schema_invalidate_failed", "err", err.Error())
+	}
 	r := &Registry{
 		adapters: map[string]llm.ProviderAdapter{},
 		profiles: map[string]llm.ProviderProfile{},
@@ -92,8 +123,13 @@ func New(opts Options) (*Registry, error) {
 		em:       emitter,
 		policy:   policy,
 		reducer:  opts.Cost,
+		cache:    cache,
 		now:      time.Now,
 	}
+	// The refresher needs r (to resolve a profile's adapter and call
+	// its CapabilitiesProvider.ProviderCapabilities) so it is
+	// constructed after r, before returning it.
+	r.refresher = capabilities.NewRefresher(cache, r.refreshCapabilities)
 	// Built-in adapters. Operators can re-register against the same
 	// kind() string to swap (e.g. an enterprise build with custom
 	// transports / proxies); last-write-wins per RegisterAdapter.
@@ -122,7 +158,81 @@ func New(opts Options) (*Registry, error) {
 	if ca := custom.New(); ca != nil {
 		r.adapters[custom.Kind] = ca
 	}
+	// Ollama adapter: opt-out via HARNESS_OLLAMA=0. New() returns nil
+	// when the flag is 0, same pattern as custom-openai above.
+	// (model-settings-reach-the-model-01PMZ101 WP13, register D-1).
+	// Per register G-6: this registers the KIND only — no existing
+	// custom-openai profile is migrated or reinterpreted. A user's
+	// existing local Ollama setup keeps working exactly as it does
+	// today (Kind: "custom-openai"); only a NEW profile created with
+	// Kind: "ollama" resolves to this adapter.
+	if oa := ollama.New(); oa != nil {
+		r.adapters[ollama.Kind] = oa
+	}
 	return r, nil
+}
+
+// refreshCapabilities is the capabilities.RefreshFunc this Registry's
+// Refresher calls on a stale-while-revalidate background refresh
+// (WP14). It resolves profileID to its adapter and, if that adapter
+// implements llm.CapabilitiesProvider, calls its live probe.
+// Returns an error (which Refresher treats as non-fatal — the stale
+// cache entry, if any, is left in place) when the profile is gone or
+// the adapter has no probe implementation; the caller in Stream()
+// already checked the latter before calling MaybeRefresh, but this
+// method can also be invoked directly by tests, so the check is
+// repeated here rather than assumed.
+//
+// H4 fix: an adapter is shared by EVERY profile of its Kind
+// (r.adapters is keyed by Kind, not by profile ID), but plain
+// CapabilitiesProvider.ProviderCapabilities(ctx, modelID) carries no
+// endpoint. Since this method has prof (and prof.Endpoint) in scope,
+// it prefers llm.EndpointCapabilitiesProvider when the adapter
+// implements it, so the probe targets the ACTUAL profile's endpoint
+// instead of the adapter's process-wide default — otherwise a remote
+// profile's capability record would be a probe of whatever host that
+// default happens to be, cached under the remote profile's ID and fed
+// straight into Gate.Check.
+func (r *Registry) refreshCapabilities(ctx context.Context, profileID, modelID string) (llm.ProviderCapabilities, error) {
+	r.mu.RLock()
+	prof, ok := r.profiles[profileID]
+	var adapter llm.ProviderAdapter
+	if ok {
+		adapter = r.adapters[prof.Kind]
+	}
+	r.mu.RUnlock()
+	if !ok {
+		return llm.ProviderCapabilities{}, fmt.Errorf("llm: capability refresh: profile %q not registered", profileID)
+	}
+	if ep, ok := adapter.(llm.EndpointCapabilitiesProvider); ok {
+		return ep.ProviderCapabilitiesAt(ctx, prof.Endpoint, modelID)
+	}
+	cp, ok := adapter.(llm.CapabilitiesProvider)
+	if !ok {
+		return llm.ProviderCapabilities{}, fmt.Errorf("llm: capability refresh: adapter kind %q does not implement CapabilitiesProvider", prof.Kind)
+	}
+	return cp.ProviderCapabilities(ctx, modelID)
+}
+
+// mergeCapabilityHints returns a map combining cached (the full record
+// a live probe produced, via ToDescriptor().Supported) with explicit
+// (whatever the profile already carried in CapabilityHints). explicit
+// entries win — a hint someone deliberately set on the profile is more
+// specific than a cached probe result and must not be silently
+// clobbered by a background refresh. A nil/empty explicit map is the
+// common case and simply returns cached unchanged.
+func mergeCapabilityHints(cached, explicit map[llm.Capability]bool) map[llm.Capability]bool {
+	if len(cached) == 0 {
+		return explicit
+	}
+	merged := make(map[llm.Capability]bool, len(cached)+len(explicit))
+	for k, v := range cached {
+		merged[k] = v
+	}
+	for k, v := range explicit {
+		merged[k] = v
+	}
+	return merged
 }
 
 // SetClock overrides the registry's clock; used by tests.
@@ -244,10 +354,26 @@ func (r *Registry) LoadProfiles(profs []llm.ProviderProfile) error {
 // Evict is the seam that UpdateProvider and RemoveProvider use to replace a
 // live profile without hitting the "profile id already loaded" collision error
 // that LoadProfiles returns on duplicate ids.
+//
+// Also invalidates any cached capability probe for id (WP14): an
+// evicted profile is about to be reloaded with new credentials/model
+// settings, or removed outright, and a stale probe result from the
+// old configuration must not silently keep overlaying onto whatever
+// replaces it — CapabilityCache's own doc says Invalidate is "called
+// on profile edit," and this is the one seam every edit/removal path
+// already funnels through.
 func (r *Registry) Evict(id string) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	cache := r.cache
 	delete(r.profiles, id)
+	r.mu.Unlock()
+	if cache != nil {
+		// Best-effort: a cache invalidation failure must not block the
+		// profile evict itself, which is the operation the caller
+		// actually asked for. The stale entry, if the delete failed,
+		// is still bounded by cacheTTL and will expire on its own.
+		_ = cache.Invalidate(context.Background(), id)
+	}
 	return nil
 }
 
@@ -334,6 +460,8 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 	cat := r.cat
 	reducer := r.reducer
 	resolver := r.resolver
+	cache := r.cache
+	refresher := r.refresher
 	r.mu.RUnlock()
 
 	log.Info("registry.stream.dispatch",
@@ -378,6 +506,46 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 			return nil, fmt.Errorf("llm: model %q not authorised for profile %q (allowed: %v)", req.Model, req.ProfileID, allowed)
 		}
 		prof.Model = req.Model
+	}
+
+	// 1b. Capability cache overlay + background refresh
+	// (model-settings-reach-the-model-01PMZ101 WP14 / FR-017, register
+	// A-5 + D-2). "probe → cache → CapabilityHints reader": a cache hit
+	// overlays onto prof.CapabilityHints (which Gate.Check/
+	// CheckAttachments read below) UNDERNEATH any hint the profile
+	// already carried explicitly — an explicit hint wins over a cached
+	// probe result, since it is the more specific, deliberately-set
+	// value. A cache miss changes nothing: prof.CapabilityHints stays
+	// whatever it already was, so the static catalog baseline
+	// (custom-openai.yaml / ollama.yaml) alone decides the gate, which
+	// is the "probe failure leaves the static baseline intact" invariant
+	// A-5 states explicitly.
+	if cache != nil {
+		if cached, hit := cache.Get(ctx, prof.ID, prof.Model); hit {
+			// M5 fix: overlay only the capability keys the probe that
+			// produced this record actually determined
+			// (cached.ProbedSupported()), not the full dense
+			// ToDescriptor().Supported map. Using the latter would
+			// shadow every one of the 12 Supported keys on every cache
+			// hit — including the 10 the probe never checked and only
+			// copied through from the static catalog baseline it
+			// started from — for up to cacheTTL (7 days), directly
+			// contradicting the A-5 invariant this comment block already
+			// describes ("the probe result merges over it, never
+			// replaces it").
+			prof.CapabilityHints = mergeCapabilityHints(cached.ProbedSupported(), prof.CapabilityHints)
+		}
+	}
+	// MaybeRefresh is the read-path trigger the spec's re-derivation
+	// finding R-3 requires INSTEAD OF Refresher.Start (whose periodic
+	// tick body is empty — see refresh.go). It only fires when the
+	// resolved adapter actually implements CapabilitiesProvider, so a
+	// profile whose adapter never probes (every adapter except
+	// custom-openai-shaped ones today) costs nothing extra per call.
+	if refresher != nil && adapter != nil {
+		if _, ok := adapter.(llm.CapabilitiesProvider); ok {
+			refresher.MaybeRefresh(ctx, prof.ID, prof.Model)
+		}
 	}
 
 	// 2. CapabilityGate.

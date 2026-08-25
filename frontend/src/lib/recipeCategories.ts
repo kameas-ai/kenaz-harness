@@ -37,7 +37,19 @@ import type { CanonicalRecipeCategory, RecipeCategory } from '@/lib/types';
 /** All icon components share lucide's component signature. */
 type IconComponent = typeof Wrench;
 
-/** The 16 canonical categories the registry normalizes to. */
+/**
+ * The 16 canonical categories the registry normalizes to.
+ *
+ * Internal-duplication note (controls-and-readouts-that-tell-the-truth-01PMZ808
+ * WP20 / UNIT-15, spec §1.15, D-9 — downgraded from "false advertisement"):
+ * this list is identical, and in identical order, to
+ * `Object.keys(RECIPE_CATEGORY_META)` below, which `isCanonicalCategory`
+ * already treats as authoritative. No badge renders from this export
+ * directly — its only consumer is this module's own test — so it is not
+ * a lie, just a value that could drift from `RECIPE_CATEGORY_META` if one
+ * were edited without the other. The faithful non-duplicated form is
+ * `Object.keys(RECIPE_CATEGORY_META) as CanonicalRecipeCategory[]`.
+ */
 export const CANONICAL_RECIPE_CATEGORIES: readonly CanonicalRecipeCategory[] = [
   'automation',
   'communication',
