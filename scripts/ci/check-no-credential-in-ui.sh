@@ -16,10 +16,17 @@ ci_require_dir "$ROOT" "[no-credential-in-ui]"
 
 fail=0
 
-# Match `interface FooReference { ... value ... }` patterns roughly.
-# This is a coarse defensive grep — the full ESLint custom rule lives in
-# eslint.config.js and runs on every PR.
-matches=$(grep -rEn 'interface [A-Z][a-zA-Z0-9]*(Reference|Credential|Secret)\b' --include='*.ts' --include='*.vue' "$ROOT" 2>/dev/null || true)
+# Match `interface FooReference { ... value ... }` patterns roughly, plus
+# any `Foo...Auth`-shaped type (e.g. `WireRecipeAuth`) — auth payloads
+# routinely carry credential fields (client_secret, etc.) under a name
+# that doesn't end in Reference/Credential/Secret.
+#
+# This grep is the ONLY enforcement of FR-020 / C-004 that runs in CI.
+# There is no separate ESLint custom rule for this in eslint.config.js —
+# an earlier version of this comment claimed one existed; it never did.
+# Grep for `interface .*(Reference|Credential|Secret|Auth)` yourself if
+# you doubt this.
+matches=$(grep -rEn 'interface [A-Z][a-zA-Z0-9]*(Reference|Credential|Secret|Auth)\b' --include='*.ts' --include='*.vue' "$ROOT" 2>/dev/null || true)
 
 if [[ -z "$matches" ]]; then
   echo "[no-credential-in-ui] no credential-shaped types found — clean."
@@ -40,9 +47,17 @@ while IFS= read -r line; do
     NR == start { inblock=1; print; next }
     inblock { print; if ($0 ~ /^}/) exit }
   ' "$file")
+  # Match the forbidden words as a bare field name OR as a suffix on a
+  # compound field name (client_secret, clientSecret, access_token,
+  # api_key, ...) so credential-shaped payload types (WireRecipeAuth's
+  # `client_id?`/`client_secret?` pairing) can't smuggle credential bytes
+  # in under a snake_case Go-mirror name. Deliberately does NOT match
+  # `token_env_var` — that field name holds an env var *name*, not the
+  # secret bytes, and matching mid-word would make this gate un-passable
+  # for reference-only fields.
   if echo "$block" \
        | grep -v 'privacy-allow:' \
-       | grep -qE '^\s*(value|secret|password|apiKey|token)\s*[:?]'; then
+       | grep -qiE '^\s*[a-zA-Z0-9_]*(value|secret|password|api[_-]?key|token)\s*[:?]'; then
     echo "[no-credential-in-ui] FAIL: $file:$startln declares a forbidden field on a credential-shaped type" >&2
     fail=1
   fi

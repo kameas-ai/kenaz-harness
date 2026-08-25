@@ -248,6 +248,24 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			content: "export interface ZzGateProbeCredential {\n  value: string;\n}\n",
 		},
 		{
+			// 2026-08-25 review finding: a reviewer planted
+			// `client_secret?: string;` directly into WireRecipeAuth in
+			// harnessClient.ts and this gate reported clean, exit 0, for
+			// two independent reasons. (1) WireRecipeAuth doesn't end in
+			// Reference/Credential/Secret, so the type-name regex never
+			// selected its block. (2) Even for a selected block, the old
+			// field regex matched only the BARE words value/secret/
+			// password/apiKey/token — "client_secret" doesn't start with
+			// "secret", so it slipped the field check too. This plants
+			// both gaps together in one isolated file: an Auth-suffixed
+			// type carrying a compound client_secret field, the same
+			// shape the review found in production.
+			name:    "no-credential-in-ui/client-secret-on-auth-type",
+			gate:    "check-no-credential-in-ui.sh",
+			file:    "frontend/src/zz_gate_probe_auth.ts",
+			content: "interface ZzGateProbeAuth {\n  client_id?: string;\n  client_secret?: string;\n}\n",
+		},
+		{
 			name: "slog-privacy/non-slog-receiver",
 			gate: "check-no-user-content-in-slog.sh",
 			file: "core/rpc/zz_gate_probe.go",

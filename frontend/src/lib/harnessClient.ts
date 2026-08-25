@@ -1035,14 +1035,20 @@ interface WireMissingPrereq {
  * Vue component or wire type (privacy CI invariant, check-no-credential-
  * in-ui.sh).
  */
-interface WireRecipeAuth {
+// Exported (rather than kept module-private like most Wire* shapes) so
+// __tests__/adaptRecipe.test.ts can drive adaptRecipe with a
+// type-checked, realistic wire payload — the exact shape the Go bridge
+// sends over Tools_ListRecipes — instead of a hand-built Recipe that
+// bypasses the adapter entirely. See adaptRecipe's doc comment for why
+// that bypass is the thing this test exists to prevent.
+export interface WireRecipeAuth {
   kind: string;
   client_id?: string;
   scopes?: string[];
   token_env_var?: string;
 }
 
-interface WireRecipe {
+export interface WireRecipe {
   id: string;
   display_name: string;
   description: string;
@@ -1235,7 +1241,15 @@ function adaptMissingPrereq(w: WireMissingPrereq): MissingPrereq {
   return base;
 }
 
-function adaptRecipe(w: WireRecipe): Recipe {
+// UNIT-3 3g follow-up (2026-08-25 review finding 3): every component test
+// for the install modal constructs `Recipe` objects directly, so none of
+// them exercise this function — the exact blind spot (CLAUDE.md blind
+// spot #2) that let `auth: adaptRecipeAuth(w.auth)` below go missing for
+// a full release with the full suite green. Exported so
+// __tests__/adaptRecipe.test.ts can assert the wire→model mapping
+// (including client_secret exclusion) directly instead of through a
+// fixture that skips the adapter.
+export function adaptRecipe(w: WireRecipe): Recipe {
   const configOptions = w.config_options
     ? w.config_options.map(adaptConfigOption)
     : undefined;
