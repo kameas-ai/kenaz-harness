@@ -22,21 +22,51 @@ package rpc
 // the wrong object; these can.
 //
 // The third field (chat.Config.SecretLookup, wired inside buildChatRunner)
-// has no equivalent test here — see check-secret-lookup-wiring.sh's header
-// for why a behavioural test for that field was judged too costly to add
-// safely in this pass (driving a real tool-call round trip through
-// buildChatRunner needs a scripted tool-calling LLM registry that exists
-// today only inside the unexported chat package, and reconstructing an
-// equivalent one at the rpc-package level all-but-guarantees drifting
-// from the real dispatch path it is meant to prove reaches). That field's
-// only regression protection is the static presence check.
+// was initially judged (see check-secret-lookup-wiring.sh's header, and
+// this file's own history) too costly to cover behaviourally: driving a
+// real tool-call round trip through buildChatRunner appeared to need a
+// scripted tool-calling LLM registry that exists only inside the
+// unexported chat package. TestB4_SecretLookupWiring_ChatRunnerResolves
+// RealSecret below closes that gap without reconstructing chat package
+// internals: it calls newLLMStack directly (the real production
+// function, reachable because this file lives in package rpc), so
+// buildChatRunner's real chat.Config{} literal is what gets exercised,
+// and it scripts the model side by registering the REAL
+// core/llm/anthropic adapter against an httptest fixture (the same seam
+// cost_reducer_wiring_test.go's TestNewLLMStack_CostReducer_DerivesReal
+// Cost already uses for the Cost-reducer field) rather than inventing a
+// synthetic corellm.ProviderAdapter — capabilities.Catalog.Describe
+// keys off ProviderProfile.Kind, and an unrecognised Kind gets a
+// streaming-only baseline that fails the CapToolCalling check before a
+// fake adapter's Stream method would ever run. The tool side is the
+// REAL core/tools/bash.Tool newLLMStack's own registerBuiltinTools call
+// wires in — not a stand-in — so this proves @secret: resolution
+// through the actual refs.ResolverFromContext guard bash.go checks in
+// production, at the actual call site the static
+// check-secret-lookup-wiring.sh gate cannot see past (it only sees that
+// SOME non-nil value was assigned, never whether that value still does
+// anything by the time driveRun runs — see Finding 4, 2026-08-25).
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/kameas-ai/kenaz-harness/core"
+	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/anthropic"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
+	corebash "github.com/kameas-ai/kenaz-harness/core/tools/bash"
 )
 
 // TestB4_PermissionsEngineWiring_RevokeGrantReachesSharedEngine is the
@@ -142,5 +172,216 @@ func TestB4_ContextSyncGateWiring_ReachesSharedEngine(t *testing.T) {
 	err = cs.SessionSync_DeleteRemote(ctx, "zz-b4-no-such-session")
 	if err != nil && strings.Contains(err.Error(), "denied by policy") {
 		t.Fatalf("still denied after delete+reload: %v", err)
+	}
+}
+
+// TestB4_SecretLookupWiring_ChatRunnerResolvesRealSecret is the
+// api.go-level behavioural proof for chat.Config.SecretLookup, wired
+// inside buildChatRunner (core/rpc/api.go's newLLMStack). It drives
+// newLLMStack directly — the real production function this test file's
+// package can reach — so a real *chat.ChatRunner comes back wired
+// against the real registerBuiltinTools-installed core/tools/bash.Tool,
+// exactly as rpc.New(c) wires it at boot.
+//
+// The command's Cedar gate pattern is pre-granted via a raw policy file
+// (mirroring TestB4_PermissionsEngineWiring_RevokeGrantReachesShared
+// Engine above) because default_bash_policy.cedar is deliberately
+// NotApplicable for every pattern — the universal-prompt flow owns that
+// case in the real app, and this test isn't exercising it.
+//
+// The assertion never looks for the plaintext secret itself: bash.go
+// sanitizes its own stdout/stderr through the SAME
+// refs.SanitizerFromContext driveRun installs alongside the resolver,
+// so a correctly-wired run would redact it out of the persisted
+// tool_result anyway. Instead the scripted command performs the
+// comparison INSIDE the shell (`[ "@secret:<locator>" = "<sentinel>" ]`)
+// and echoes one of two sentinel-free markers — ZZ_B4_MATCH_OK only
+// appears in the transcript if the substitution actually happened
+// before the shell evaluated the test.
+//
+// Falsification (verified by hand while writing this test, mirroring
+// Finding 4's own planted mutation): appending `secretLookup = nil`
+// immediately after newLLMStack's `if exposureIdx != nil { secretLookup
+// = exposureIdx }` guard (api.go ~:5197) leaves `SecretLookup:
+// secretLookup,` textually present at the buildChatRunner call site —
+// check-secret-lookup-wiring.sh stays clean — but this test fails with
+// ZZ_B4_MATCH_FAIL: the shell sees the literal, un-substituted
+// "@secret:user:zz-b4-secretlookup" token.
+func TestB4_SecretLookupWiring_ChatRunnerResolvesRealSecret(t *testing.T) {
+	sandboxUserConfigDir(t)
+	dataDir := t.TempDir()
+
+	const locator = "user:zz-b4-secretlookup"
+	const sentinel = "ZZ_B4_SECRETLOOKUP_SENTINEL_0x7c1"
+	const cmd = `[ "@secret:` + locator + `" = "` + sentinel + `" ] && echo ZZ_B4_MATCH_OK || echo ZZ_B4_MATCH_FAIL`
+
+	// Pre-grant the exact BashCommand pattern this command derives to
+	// (DerivePattern/FirstSegmentArgv — the same functions bash.go's own
+	// cedarGate calls), so the run proceeds synchronously instead of
+	// falling to the (here-unconfigured) universal confirm-each prompt.
+	pattern := corebash.DerivePattern(corebash.FirstSegmentArgv(cmd))
+	polDir := filepath.Join(dataDir, cedar.PolicyDir)
+	if err := os.MkdirAll(polDir, 0o755); err != nil {
+		t.Fatalf("mkdir policy dir: %v", err)
+	}
+	grantBody := "permit(\n  principal,\n  action == Action::\"run_bash_command\",\n  resource == BashCommand::\"" + pattern + "\"\n);\n"
+	if err := os.WriteFile(filepath.Join(polDir, "zz_b4_secretlookup_allow.cedar"), []byte(grantBody), 0o644); err != nil {
+		t.Fatalf("write grant policy: %v", err)
+	}
+
+	c, err := core.New(core.Options{DataDir: dataDir})
+	if err != nil {
+		t.Fatalf("core.New: %v", err)
+	}
+	cedarEngine := buildCedarEngineOrNil(dataDir)
+	if cedarEngine == nil {
+		t.Fatal("buildCedarEngineOrNil returned nil over a real DataDir — cannot prove the gate/grant interaction")
+	}
+
+	exposureIdx := secrets.NewExposureIndex()
+	pt := []byte(sentinel)
+	exposureIdx.Add(secrets.ExposedEntry{
+		Locator:  locator,
+		Scope:    secrets.ScopeSession,
+		KindHint: secrets.KindHintRaw,
+	}, pt)
+
+	bashStore := corebash.NewStore()
+	// newGraphManagerWithDeps (not the bare graphview.NewManager()) —
+	// buildChatRunner's envDefaults closure (api.go's newLLMStack)
+	// unconditionally does `env.Hooks = coreag.NewHookManager(env.Memory,
+	// ...)`, and HookManager.Fire calls mem.Write with no nil-guard. A
+	// graphMgr with no EnvDeps.Memory (what the bare constructor leaves)
+	// panics the very first "ask" node hook fire — openMemoryStore(c) is
+	// the real production memory-store constructor (a real chromem-go
+	// store over this test's temp DataDir), matching how newLLMStack's
+	// real caller in New() never hands it a memStore-less graphMgr either.
+	memStore := openMemoryStore(c)
+	if memStore == nil {
+		t.Fatal("openMemoryStore returned nil over a real DataDir")
+	}
+	graphMgr, _, _ := newGraphManagerWithDeps(c, nil, nil, memStore, nil, bashStore, nil, cedarEngine, nil, nil)
+	if graphMgr == nil {
+		t.Fatal("newGraphManagerWithDeps returned a nil manager")
+	}
+	broker := NewStreamBroker(NewMultiEmitter())
+	store := newPersonalStore(c)
+
+	// The scripted transport: request 1 returns a tool_use call to the
+	// real kenaz__bash tool with the command above; request 2 (issued
+	// after the tool result is folded back in) returns a plain "done"
+	// text turn so the kernel run terminates. This is the REAL
+	// core/llm/anthropic adapter (see cost_reducer_wiring_test.go's
+	// TestNewLLMStack_CostReducer_DerivesRealCost for the same pattern
+	// against a different B4-adjacent field) pointed at an httptest
+	// fixture via ProviderProfile.Endpoint / anthropic.WithEndpoint —
+	// not a hand-rolled corellm.ProviderAdapter, which would carry an
+	// unrecognised Kind and fail capabilities.Gate's CapToolCalling
+	// check before ever reaching Stream.
+	var reqN int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&reqN, 1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		var frames []string
+		if n == 1 {
+			argsJSON, _ := json.Marshal(struct {
+				Command string `json:"command"`
+			}{Command: cmd})
+			frames = []string{
+				`{"type":"message_start","message":{"id":"msg_1","role":"assistant","model":"zz-b4-model","usage":{"input_tokens":1,"output_tokens":1}}}`,
+				`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tu_1","name":"` + corebash.Name + `","input":{}}}`,
+				`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":` + strconv.Quote(string(argsJSON)) + `}}`,
+				`{"type":"content_block_stop","index":0}`,
+				`{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":1,"output_tokens":1}}`,
+				`{"type":"message_stop"}`,
+			}
+		} else {
+			frames = []string{
+				`{"type":"message_start","message":{"id":"msg_2","role":"assistant","model":"zz-b4-model","usage":{"input_tokens":1,"output_tokens":1}}}`,
+				`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+				`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"done"}}`,
+				`{"type":"content_block_stop","index":0}`,
+				`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":1,"output_tokens":1}}`,
+				`{"type":"message_stop"}`,
+			}
+		}
+		for _, f := range frames {
+			fmt.Fprintf(w, "data: %s\n\n", f)
+		}
+		if fl, ok := w.(http.Flusher); ok {
+			fl.Flush()
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	stack := newLLMStack(c, broker, store, nil, nil, func() bool { return false },
+		nil, nil, nil, bashStore, nil, graphMgr, nil, nil, nil, nil,
+		exposureIdx, nil, nil, nil, confirmAuditEmitter{}, cedarEngine, nil)
+
+	if stack.chatRunner == nil {
+		t.Fatal("newLLMStack produced no chatRunner — cannot drive StartStream")
+	}
+	if stack.reg == nil {
+		t.Fatal("newLLMStack produced no registry")
+	}
+	stack.reg.RegisterAdapter(anthropic.New(anthropic.WithEndpoint(srv.URL)))
+
+	t.Setenv("ZZ_B4_SECRETLOOKUP_KEY", "unused-test-key")
+	prof := corellm.ProviderProfile{
+		ID:    "zz-b4-secretlookup-probe",
+		Kind:  anthropic.Kind,
+		Model: "default",
+		Cred:  corellm.CredentialReference{Kind: "env", Locator: "ZZ_B4_SECRETLOOKUP_KEY"},
+	}
+	if err := stack.reg.LoadProfiles([]corellm.ProviderProfile{prof}); err != nil {
+		t.Fatalf("LoadProfiles: %v", err)
+	}
+
+	ctx := context.Background()
+	sessRec, err := c.SessionManager().Create(ctx, "zz-b4-secretlookup")
+	if err != nil {
+		t.Fatalf("SessionManager().Create: %v", err)
+	}
+	sessionID := sessRec.ID
+	if _, err := stack.chatRunner.StartStream(ctx, prof.ID, sessionID, "", "run it"); err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+
+	var content string
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		msgs, herr := stack.historyAdapter.ListMessages(ctx, sessionID)
+		if herr == nil {
+			for _, m := range msgs {
+				if strings.Contains(m.Content, "ZZ_B4_MATCH_OK") || strings.Contains(m.Content, "ZZ_B4_MATCH_FAIL") {
+					content = m.Content
+					break
+				}
+				for _, cb := range m.ContentBlocks {
+					if strings.Contains(string(cb.ToolData), "ZZ_B4_MATCH_OK") || strings.Contains(string(cb.ToolData), "ZZ_B4_MATCH_FAIL") {
+						content = string(cb.ToolData)
+					}
+					if cb.ToolResult != nil && (strings.Contains(string(cb.ToolResult.Content), "ZZ_B4_MATCH_OK") || strings.Contains(string(cb.ToolResult.Content), "ZZ_B4_MATCH_FAIL")) {
+						content = string(cb.ToolResult.Content)
+					}
+				}
+			}
+		}
+		if content != "" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if content == "" {
+		t.Fatalf("no ZZ_B4_MATCH_{OK,FAIL} tool result observed in session %q within 8s — bash tool never ran, "+
+			"the Cedar grant did not match, or history was never persisted", sessionID)
+	}
+	if strings.Contains(content, "ZZ_B4_MATCH_FAIL") {
+		t.Fatalf("REGRESSION: bash saw the literal, un-substituted @secret: token — "+
+			"newLLMStack's secretLookup is not reaching buildChatRunner's chat.Config.SecretLookup (B4): %q", content)
+	}
+	if !strings.Contains(content, "ZZ_B4_MATCH_OK") {
+		t.Fatalf("tool result contained neither marker as expected: %q", content)
 	}
 }
