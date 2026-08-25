@@ -3,6 +3,7 @@ package webfetch_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -332,5 +333,70 @@ func TestWebFetch_DeniedResolution(t *testing.T) {
 	}
 	if errResult.Error == "" {
 		t.Error("expected non-empty error message")
+	}
+}
+
+// ─── LEAK 1 regression: error-path sanitization ───────────────────────────────
+
+// erroringTransport is an http.RoundTripper that always fails, standing in
+// for a real DNS/TLS/connection failure. http.Client.Do wraps whatever error
+// this returns in a *url.Error that embeds req.URL.String() verbatim — which
+// is exactly how a real "no such host" failure leaks a resolved @secret:
+// value baked into the request URL.
+type erroringTransport struct{}
+
+func (erroringTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return nil, fmt.Errorf("dial tcp: lookup %s: no such host", req.URL.Hostname())
+}
+
+const leakSentinel = "SUPERSECRET-PLAINTEXT-123"
+
+// TestWebFetch_ErrorResult_DoesNotLeakSecret is the falsification test for
+// LEAK 1: web_fetch's error-path results bypass the sanitizer entirely.
+// A URL carrying a @secret: reference in its query string, on ANY transport
+// failure (DNS, TLS, connection reset, timeout — reproduced here via a
+// RoundTripper that always errors), has its resolved plaintext embedded in
+// *url.Error.Error() by the net/http/net/url machinery, and errorResult()
+// marshals that raw error string straight into the tool result with no
+// sanitizer pass. That JSON becomes the persisted tool_result move and is
+// indexed into FTS verbatim (core/session/migrations_search_fts_tool_rows.go).
+//
+// This test asserts on `raw` — the actual marshalled bytes Call() returns,
+// i.e. the same bytes that get persisted — not on any in-memory intermediate.
+func TestWebFetch_ErrorResult_DoesNotLeakSecret(t *testing.T) {
+	_, _, ctx := setupResolver(t, map[string][]byte{
+		"user:tok": []byte(leakSentinel),
+	})
+
+	tool := webfetch.New(webfetch.Options{
+		HTTPClient:    &http.Client{Transport: erroringTransport{}},
+		SkipBlockList: true,
+	})
+	args := map[string]any{
+		"url": "http://this-host-does-not-exist.invalid/x?api_key=@secret:user:tok",
+	}
+	argsJSON, _ := json.Marshal(args)
+
+	raw, err := tool.Call(ctx, argsJSON)
+	if err != nil {
+		t.Fatalf("Call should not return a Go error, got %v", err)
+	}
+
+	if strings.Contains(string(raw), leakSentinel) {
+		t.Errorf("LEAK: resolved secret plaintext present in marshalled error result: %s", raw)
+	}
+
+	var result struct {
+		Error   string `json:"error"`
+		IsError bool   `json:"is_error"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected is_error=true for a transport failure, got: %s", raw)
+	}
+	if !strings.Contains(result.Error, "[redacted:") {
+		t.Errorf("expected the error message to carry a redaction placeholder, got: %q", result.Error)
 	}
 }

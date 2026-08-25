@@ -439,7 +439,12 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 	// is alive within 100 ms, register it in the task registry, and return
 	// immediately with {task_id, status:"running"}.
 	if args.RunInBackground && t.backgroundSpawn != nil {
-		return t.spawnBackground(ctx, commandLine, cwd, timeout, args.Description)
+		// commandLine (resolved, post-substitution) is what actually runs.
+		// args.Command (unresolved, pre-substitution) is what gets
+		// persisted to the task registry / SQLite and written to logs —
+		// matching the synchronous path below, which stores args.Command
+		// into t.store, never the resolved commandLine.
+		return t.spawnBackground(ctx, commandLine, args.Command, cwd, timeout, args.Description)
 	}
 
 	res, runErr := Run(ctx, RunOpts{

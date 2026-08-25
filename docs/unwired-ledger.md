@@ -383,13 +383,16 @@ despite an earlier comment describing one, and
 `_test.go` returns only the declaration — no call site anywhere in the
 LLM streaming bridge (`core/rpc/views/llm/impl.go`).
 
-Net effect: `Sanitize` now runs on every tool result the three
-production `Resolver.Substitute` callers produce (bash, web_fetch, and —
-as of this fix — the MCP stdio transport), so a secret echoed back
-*inside a tool result* is redacted before it reaches session history or
-the UI. A secret the **model itself** types directly into its own
-streamed response text (as opposed to relaying it through a tool
-result) is NOT caught by anything today.
+Net effect (**corrected 2026-08-25** — see the dated entry below; this
+paragraph originally overclaimed): `Sanitize` runs on every SUCCESS-path
+tool result the three production `Resolver.Substitute` callers produce
+(bash, web_fetch, and — as of this fix — the MCP stdio transport), so a
+secret echoed back *inside a successful tool result* is redacted before
+it reaches session history or the UI. Two v0.72.0 regressions meant
+error-path and background-mode results were NOT covered until fixed on
+2026-08-25 — see below. A secret the **model itself** types directly
+into its own streamed response text (as opposed to relaying it through a
+tool result) is still NOT caught by anything today.
 
 **Not fixed here** — this entry was found while closing the MCP
 tool-result sanitization gap (`core/mcp/transport/stdio/server.go`
@@ -402,6 +405,93 @@ a test that calls `SanitizeStream` directly proves nothing).
 **Owner:** alec. **Blocker:** no mission currently owns wiring
 `SanitizeStream` into the LLM streaming bridge; the next mission that
 touches assistant-token streaming should pick this up. **Date:** 2026-08-23.
+
+### 2026-08-25 · web_fetch error-path and bash background-mode secret leaks (release/v0.72.0 WP19 regressions — FIXED)
+
+Two confirmed secret-leak regressions, both introduced by WP19 wiring the
+`@secret:` resolver on `release/v0.72.0` (before it, no plaintext existed
+to leak). Both were independently reproduced by a reviewer and re-verified
+by reading the code before the fix landed.
+
+**LEAK 1 — `core/tools/webfetch/webfetch.go`.** The Sanitizer was only
+applied to the success-path response body; every `errorResult(...)` return
+(request-build failure, transport failure, response-read failure —
+13 call sites, `/usr/bin/grep -c 'return errorResult' webfetch.go` at the
+time of the fix) bypassed it. Go's `*url.Error` embeds the full request URL,
+so any DNS/TLS/connection failure on a URL carrying a resolved `@secret:`
+wrote the plaintext straight into the tool result, which is persisted as a
+`tool_result` move and indexed into FTS
+(`core/session/migrations_search_fts_tool_rows.go`) verbatim.
+
+Fixed with a single chokepoint rather than enumerating call sites: `Call`
+is now a thin wrapper that runs the (renamed) request logic in `call` and
+sanitizes `call`'s return value — success or error — exactly once, in one
+place, before it reaches the caller. A new `errorResult(...)` call added
+anywhere inside `call` cannot reintroduce the leak; it would have to
+bypass the `Call`/`call` split entirely.
+
+**LEAK 2 — `core/tools/bash/background.go`.** `bash.go` resolves
+`@secret:` references into `commandLine` and, for `run_in_background:
+true`, passed that *resolved* string to `spawnBackground`, which used it
+for both the actual `exec.Command` invocation AND for
+`t.backgroundSpawn(...)` (→ `core/tasks/registry.go` → `store_sql.go`'s
+`INSERT INTO tasks (..., cmd, ...)`, plaintext, never zeroed, never
+expired) AND for the `bash.background.spawned` log line
+(`logging.L()`, wired in production). The synchronous path was already
+correct — it stores `args.Command` (pre-substitution). Fixed by splitting
+`spawnBackground`'s single `commandLine` parameter into `execCommand`
+(resolved, used only for `exec.Command`) and `logCommand` (unresolved,
+used only for the registry write and the log line), matching the
+synchronous path's contract.
+
+Both fixes are covered by falsification tests
+(`core/tools/webfetch/webfetch_test.go`
+`TestWebFetch_ErrorResult_DoesNotLeakSecret`,
+`core/tools/bash/secret_background_leak_test.go`
+`TestRunInBackground_DoesNotPersistOrLogResolvedSecret`) that assert on
+the actual marshalled/persisted bytes, not an in-memory intermediate, and
+were confirmed red against the pre-fix code and red again under a
+compiling mutation of the fix.
+
+This is also the correction referenced in the 2026-08-23 entry above: its
+claim that "`Sanitize` now runs on every tool result" was true only for
+the success path at the time it was written; these two gaps existed
+alongside it in the same release.
+
+**Owner:** alec. **Date:** 2026-08-25.
+
+### 2026-08-25 · MCP http/sse transports never substitute or sanitize `@secret:` references (found alongside the WP19 leak fixes — NOT FIXED, tracked)
+
+Only the stdio MCP transport participates in `@secret:` resolution and
+sanitization: `/usr/bin/grep -rn "credstore/refs" core/mcp/` returns
+exactly one non-test production file
+(`core/mcp/transport/stdio/server.go`). The dispatch pool and the two
+other transports never call `Resolver.Substitute` or `Sanitizer.Sanitize`
+at all:
+
+- `core/mcp/dispatch/pool.go:319`
+- `core/mcp/transport/http/pool.go:337`
+- `core/mcp/transport/sse/pool.go:311`
+
+60 of the 115 recipes in `core/mcp/recipes/registry.json` declare
+`transport: "http"`. Consequences: (1) a `@secret:<locator>` token in a
+tool-call argument reaches the remote third-party MCP server verbatim —
+the *locator string itself* leaks to a third party, not just plaintext;
+(2) the per-turn Sanitizer never runs over an http/sse tool result, so if
+a secret was resolved earlier in the same turn (e.g. by bash or
+web_fetch) and the remote server's response happens to echo it back, it
+reaches session history and the UI unredacted.
+
+Not fixed in the same pass as the two confirmed leaks above — this is a
+missing-capability gap in two entire transport implementations, not a
+bypass of an existing chokepoint, and needs its own design pass (where in
+the http/sse request lifecycle substitution and sanitization should hook
+in, given they're not in-process subprocesses like stdio).
+
+**Owner:** alec. **Blocker:** no mission currently owns extending
+`@secret:` resolution + sanitization to the http/sse MCP transports; the
+next mission touching `core/mcp/transport/{http,sse}` or
+`core/mcp/dispatch` should pick this up. **Date:** 2026-08-25.
 
 ### 2026-08-23 · `data_dir` reached the fleet wire on every installed-MCP sync (PR #308 review finding H2 — FIXED, entry kept for the correction it carries)
 

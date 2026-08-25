@@ -3,9 +3,14 @@
 // web_fetch makes HTTP requests on behalf of the model. It supports
 // @secret: reference substitution in header values, the request body,
 // and URL query strings. Resolved plaintext is zeroed immediately after
-// the HTTP response returns (FR-003). Tool result content is passed
-// through the per-turn Sanitizer so any response body that echoes the
-// token is redacted before it re-enters the conversation (FR-007).
+// the HTTP response returns (FR-003). Every value Call returns — success
+// body or error message alike — passes through the per-turn Sanitizer
+// exactly once, in Call itself (see its doc comment for why that's a
+// single chokepoint rather than a per-call-site convention), so any
+// resolved plaintext that echoes back (in a response body) or leaks into
+// a Go error (e.g. a *url.Error embedding the request URL on a DNS/TLS/
+// connection failure) is redacted before it re-enters the conversation or
+// is persisted (FR-007).
 //
 // This is one of the primary tools the model uses to make authenticated
 // API calls without ever seeing a plaintext credential.
@@ -166,9 +171,33 @@ type callResult struct {
 }
 
 // Call implements BuiltinTool. Performs the HTTP request with @secret:
-// substitution on URL, headers, and body. The Sanitizer in ctx redacts
-// any resolved plaintext that appears in the response body.
+// substitution on URL, headers, and body.
+//
+// Call is a thin sanitizing wrapper around call: EVERY return value —
+// success or error — passes through the per-turn Sanitizer exactly once
+// before it reaches the caller. This is the single chokepoint for FR-007:
+// resolved secret plaintext can leak into an error path in more ways than
+// call-site enumeration can keep up with (a *url.Error embeds the full
+// request URL on any transport failure; a future error path might embed
+// a header or body). Routing every return through one point here means a
+// new errorResult(...) call added anywhere inside call cannot reintroduce
+// the leak — it would have to bypass this wrapper entirely, which is a
+// much easier invariant to keep than "every call site remembers to
+// sanitize."
 func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMessage, error) {
+	raw, err := t.call(ctx, argsJSON)
+	if raw != nil {
+		if sanitizer := refs.SanitizerFromContext(ctx); sanitizer != nil {
+			raw = sanitizer.Sanitize(raw)
+		}
+	}
+	return raw, err
+}
+
+// call performs the actual request/response work. It must never be called
+// directly by anything other than Call — every return path here (including
+// every errorResult(...) call) is unsanitized until Call's wrapper runs.
+func (t *Tool) call(ctx context.Context, argsJSON json.RawMessage) (json.RawMessage, error) {
 	if t.enabled != nil && !t.enabled() {
 		return errorResult("web_fetch is not enabled"), nil
 	}
@@ -284,16 +313,12 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 	}
 	defer resp.Body.Close()
 
-	// ── Read + sanitize response body ────────────────────────────────────
+	// ── Read response body ────────────────────────────────────────────────
+	// Sanitization happens once, in Call's wrapper, over the fully
+	// marshalled result — not here. See the Call doc comment.
 	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, MaxResponseBodyBytes))
 	if err != nil {
 		return errorResult("read response: " + err.Error()), nil
-	}
-
-	// Sanitize: redact any resolved plaintext that echoed back.
-	sanitizer := refs.SanitizerFromContext(ctx)
-	if sanitizer != nil {
-		bodyBytes = sanitizer.Sanitize(bodyBytes)
 	}
 
 	// Build response headers (F-006: expanded blocklist for token-bearing headers).
