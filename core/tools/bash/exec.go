@@ -29,6 +29,19 @@ type RunOpts struct {
 	// empty Run falls back to direct argv exec via Argv (legacy path,
 	// used by unit tests that drive Run directly).
 	CommandLine string
+	// LogCommandLine is the PRE-substitution command line to use for
+	// anything that leaves the process (error labels, logs) instead of
+	// CommandLine. When CommandLine came from @secret: reference
+	// substitution, it carries resolved plaintext; the caller-supplied
+	// error wrapper in Run must never fold that plaintext into the
+	// returned error's message, because the model-facing tool result IS
+	// sanitized before it reaches the caller but the harness's own
+	// t.logf(...) call is not (the seventh @secret: egress finding,
+	// release/v0.72.0). Empty falls back to CommandLine, so callers that
+	// never resolve a secret (or drive the legacy Argv path) see no
+	// behaviour change — this mirrors the execCommand/logCommand split
+	// background.go already uses for the exact same reason.
+	LogCommandLine string
 	// Argv is the direct-exec fallback used when CommandLine is empty.
 	// Argv[0] must be an absolute path already resolved by the caller.
 	Argv []string
@@ -115,7 +128,14 @@ func Run(ctx context.Context, opts RunOpts) (RunResult, error) {
 		} else {
 			// Includes context-cancellation, shell not found, etc.
 			// Caller surfaces these as failed runs with exit -1.
-			label := opts.CommandLine
+			//
+			// The label uses LogCommandLine (pre-substitution) in
+			// preference to CommandLine (which may carry resolved
+			// @secret: plaintext) — see the LogCommandLine doc comment.
+			label := opts.LogCommandLine
+			if label == "" {
+				label = opts.CommandLine
+			}
 			if label == "" && len(opts.Argv) > 0 {
 				label = opts.Argv[0]
 			}

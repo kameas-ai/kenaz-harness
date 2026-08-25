@@ -448,7 +448,13 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 	}
 
 	res, runErr := Run(ctx, RunOpts{
-		CommandLine:    commandLine,
+		CommandLine: commandLine,
+		// args.Command (unresolved, pre-substitution) is what may end up
+		// inside a %q error label — matching the background path, which
+		// persists/logs args.Command (via logCommand), never the resolved
+		// commandLine. See exec.go's LogCommandLine doc comment (the
+		// seventh @secret: egress finding, release/v0.72.0).
+		LogCommandLine: args.Command,
 		Cwd:            cwd,
 		Timeout:        timeout,
 		MaxOutputBytes: DefaultMaxOutputBytes,

@@ -602,6 +602,122 @@ lifetime regression.
 
 **Owner:** alec. **Date:** 2026-08-25.
 
+**Correction (2026-08-25, later same day — see the dated entry below):**
+this entry and the two above it were written as though bash's `@secret:`
+handling was now complete. It was not: the *synchronous* path had its own
+separate error-message leak (`core/tools/bash/exec.go`'s `Run`, feeding
+`bash.go`'s `t.logf("bash.run_error", ...)`), a seventh distinct egress,
+found by a reviewer's execution-based reproduction and fixed the same day.
+See "seventh `@secret:` egress" below. That entry also closes the
+"`builtins_wiring.go` `bgSpawn` closure itself is not directly exercised by
+an automated test" gap flagged two bullets above (`core/rpc/api_b4_wiring_
+regression_test.go`'s `TestB4_BackgroundSanitizerWiring_ResolvedSecret
+RedactedInTaskLog` now drives the real closure, not a mirror).
+
+### 2026-08-25 · seventh `@secret:` egress — resolved plaintext in the synchronous run-error log record (release/v0.72.0 blocking finding — FIXED)
+
+A reviewer reproduced this by execution (side-by-side `LOG:`/`RES:` output
+showing the tool result redacted and the log record carrying the plaintext
+verbatim); re-verified by reading the code before the fix landed. This is
+a *different* code path from LEAK 2 (background mode, fixed twice above) —
+this one is the **synchronous** `kenaz__bash` call's error-wrapping, and it
+predates none of those fixes; it shipped alongside WP19 undetected because
+every prior falsification test for this file drove the happy path or the
+background arm, never a failing `exec.Cmd.Run()` on the *synchronous* arm.
+
+**Mechanism:** `core/tools/bash/exec.go`'s `Run` sets
+`label := opts.CommandLine` — the RESOLVED, post-`@secret:`-substitution
+command line — on the non-`*exec.ExitError` branch (shell-not-found,
+context-cancelled-before-`Start()`, etc.), and wraps it verbatim into
+`fmt.Errorf("bash: run %q: %w", label, err)`. `core/tools/bash/bash.go`
+then does `t.logf("bash.run_error", "err", runErr.Error())` — **three
+lines before** the WP08 sanitizer runs (`bash.go:470-477`, downstream of
+where `runErr.Error()` is folded into `rawStderr`). The tool result is
+sanitized correctly (it inherits the sanitize call on `rawStderr`); the
+log record embeds the raw `runErr.Error()` string separately and was
+never sanitized.
+
+**Two confirmed-reachable triggers** (not timing-dependent):
+
+- `$SHELL` set to an absolute path that no longer exists.
+  `exec.go:88-93` checks `filepath.IsAbs` but never existence, so this is
+  **deterministic** — every `@secret:`-bearing bash command on such a
+  machine leaks, forever, not just occasionally.
+- The turn is cancelled before `cmd.Start()` (user hits stop) — universal,
+  any command, any machine.
+
+Both land in `cmd.Run()`'s non-`*exec.ExitError` branch (an `*exec.Error`
+or a context-cancellation error, neither of which `errors.As(err,
+&exitErr)` matches), which is exactly the branch that builds the leaking
+label.
+
+**Sink:** `t.logf` → `logging.L()` → `~/.kenaz/harness/<env>/logs/
+harness.log`, mode 0600, rotated at 32 MB with one generation kept, so the
+plaintext persists past the leaking call. Worse: `core/core.go:416` sets
+`InstallSlogBridge: true` **unconditionally** — with an OTLP endpoint or
+the fleet telemetry pipeline configured, the same record egresses
+**off-device**, not just to a local file.
+
+**Fix:** removed the plaintext from the error message rather than relying
+on a second sanitize pass. `RunOpts` gained a `LogCommandLine` field (the
+PRE-substitution command line); `Run`'s error-label logic prefers it over
+`CommandLine` when building the `%q` label, falling back to `CommandLine`
+(then `Argv[0]`) when unset, so callers that never resolve a secret see no
+behaviour change. `bash.go`'s synchronous call site now passes
+`LogCommandLine: args.Command` (unresolved) — the exact
+`execCommand`/`logCommand` split `core/tools/bash/background.go` already
+used for the same reason, applied to the arm that didn't have it yet.
+
+**`t.logf` site audit (bash.go, relative to the substitution point at
+`bash.go:424`):** 16 call sites total. 15 are pre-substitution — they log
+`progBase` (from `argv := FirstSegmentArgv(args.Command)`, derived before
+the substitution point) or a Cedar-gate `pattern` (also derived from the
+pre-substitution `argv`), or a value with no relationship to command
+content at all (mkdir/write/reload errors, prompt-registry errors). The
+sixteenth, `bash.run_error` at line ~473 (post-fix), is the one downstream
+of substitution — confirmed independently by reading every call site, not
+taken on the reviewer's count. Lines (pre-fix numbering): 386
+(`bash.denied`), 397 (`bash.cwd_rejected`), 407 (`bash.invoke`), 468
+(`bash.run_error` — the fixed site), 548 (`bash.gate.allow`), 552
+(`bash.gate.deny`), 562 (`bash.gate.not_applicable.allow_unbooted`), 576
+(`bash.gate.prompt_err`), 586 (`bash.gate.prompt_deny`), 594
+(`bash.gate.allow_once`), 606 (`bash.gate.allow_always.dangerous_
+demoted`), 636 (`bash.gate.snippet_skip`), 642
+(`bash.gate.snippet_mkdir_err`), 652 (`bash.gate.snippet_write_err`), 655
+(`bash.gate.snippet_written`), 660 (`bash.gate.reload_warn`).
+
+**Also fixed in the same change:** `core/rpc/api_b4_wiring_regression_
+test.go` gained `TestB4_BackgroundSanitizerWiring_ResolvedSecretRedacted
+InTaskLog`, protecting `core/rpc/builtins_wiring.go`'s
+`Sanitizer: sanitizer` line (the round-3 fix's own production wiring,
+added above) against the exact same "no automated coverage of the real
+closure" gap the round-3 entry flagged and left open. It drives the real
+`registerBuiltinTools` with a real `*coretasks.Registry` over a real temp
+`LogDir`, spawns a background command carrying a `@secret:` reference
+through the real `refs.WithResolver`/`refs.WithTurnSanitizer` context, and
+reads the actual on-disk `<taskID>.log` bytes.
+
+**Falsification (both, confirmed red pre-fix and red again under a
+compiling mutation of each fix):**
+
+- `core/tools/bash/secret_run_error_leak_test.go`
+  `TestSyncRunError_DoesNotLogResolvedSecret` — real `*slog.Logger` with a
+  captured handler, `$SHELL` pointed at a nonexistent absolute path
+  (deterministic, no race). Pre-fix: failed with the plaintext visible in
+  the log record (`msg=bash.run_error err="bash: run \"echo
+  SUPERSECRET-PLAINTEXT-123\": fork/exec ..."`). Mutation
+  (`LogCommandLine: args.Command` → `LogCommandLine: ""`) compiled and
+  reproduced the same red failure.
+- `core/rpc/api_b4_wiring_regression_test.go`
+  `TestB4_BackgroundSanitizerWiring_ResolvedSecretRedactedInTaskLog` —
+  real production wiring, real on-disk task log. Pre-fix-equivalent
+  mutation (gating the `sanitizer = s.Clone()` assignment behind `if
+  false && s != nil` — a direct `Sanitizer: nil` literal does not compile,
+  since `sanitizer` would then be declared-and-unused) reproduced red with
+  the sentinel visible in the on-disk log file content.
+
+**Owner:** alec. **Date:** 2026-08-25.
+
 ### 2026-08-25 · MCP http/sse transports never substitute or sanitize `@secret:` references (found alongside the WP19 leak fixes — NOT FIXED, tracked)
 
 Only the stdio MCP transport participates in `@secret:` resolution and

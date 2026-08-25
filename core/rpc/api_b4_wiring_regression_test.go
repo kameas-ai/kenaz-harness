@@ -62,10 +62,13 @@ import (
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core"
+	"github.com/kameas-ai/kenaz-harness/core/credstore/refs"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/llm/anthropic"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/secrets"
+	coretasks "github.com/kameas-ai/kenaz-harness/core/tasks"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 	corebash "github.com/kameas-ai/kenaz-harness/core/tools/bash"
 )
 
@@ -383,5 +386,128 @@ func TestB4_SecretLookupWiring_ChatRunnerResolvesRealSecret(t *testing.T) {
 	}
 	if !strings.Contains(content, "ZZ_B4_MATCH_OK") {
 		t.Fatalf("tool result contained neither marker as expected: %q", content)
+	}
+}
+
+// TestB4_BackgroundSanitizerWiring_ResolvedSecretRedactedInTaskLog is the
+// api.go-level (well, builtins_wiring.go-level) wiring proof for
+// core/rpc/builtins_wiring.go:172's `Sanitizer: sanitizer,` line — the
+// production wiring the review-round-3 background-output fix (PR #308)
+// shipped alongside zero regression protection of its own.
+//
+// PR #308's own suite, core/tools/bash/secret_background_output_leak_test.go,
+// builds its own bgSpawn closure with its OWN Clone() call — it proves the
+// tasks/ring/Sanitizer plumbing works in isolation, but never touches the
+// production closure at builtins_wiring.go:143-174. And
+// core/rpc/background_task_wiring_test.go — the one file in this package
+// that already drives real registerBuiltinTools + a real *coretasks.Registry
+// — has zero occurrences of "secret"/"sanitiz"/"redact" anywhere in it. The
+// reviewer mutated all five production wirings background.go's fix touches;
+// four (permissionsEngine, contextsync Gate, SecretLookup, DCRStore) were
+// caught RED by pre-existing tests with the right failure message; mutating
+// `Sanitizer: sanitizer` to nil left the ENTIRE ./core/rpc/... suite green.
+//
+// This test closes that gap: it drives the REAL registerBuiltinTools with a
+// REAL *coretasks.Registry constructed with a REAL temp LogDir (not
+// coretasks.Options{} in-memory-only, which is what
+// newProductionShapedBashRegistry in background_task_wiring_test.go uses —
+// this test needs the on-disk log file that Sanitizer wiring actually
+// protects), spawns a background kenaz__bash command carrying a @secret:
+// reference through the real refs.Resolver + refs.Sanitizer context the
+// chat runner installs (refs.WithResolver / refs.WithTurnSanitizer — same
+// setup core/tools/bash/secret_background_leak_test.go's
+// setupSecretResolverCtx uses, reproduced here because that helper is
+// unexported to package bash_test), and reads the ACTUAL bytes written to
+// disk at <logDir>/<taskID>.log.
+//
+// Falsification (verified by hand while writing this test): deleting
+// `Sanitizer: sanitizer,` from builtins_wiring.go's RegisterOpts literal
+// (or changing the assignment to `Sanitizer: nil`) leaves the on-disk task
+// log carrying the resolved secret plaintext — this test fails with the
+// sentinel visible in the file content. See the mission report for the
+// pasted RED output.
+func TestB4_BackgroundSanitizerWiring_ResolvedSecretRedactedInTaskLog(t *testing.T) {
+	logDir := t.TempDir()
+	taskReg := coretasks.NewRegistry(coretasks.Options{LogDir: logDir})
+
+	registry := toolloop.NewBuiltinRegistry()
+	registerBuiltinTools(
+		nil, // core
+		registry,
+		nil, // bashStore
+		nil, // artifactsMgr
+		nil, // store
+		nil, // cedarEngine
+		nil, // promptRegistry
+		nil, // elicitAPI
+		nil, // slashDispatch
+		nil, // exposureIdx
+		nil, // budget
+		nil, // posture
+		taskReg,
+	)
+	bashTool, ok := registry.Lookup(corebash.Name)
+	if !ok {
+		t.Fatal("kenaz__bash not registered")
+	}
+
+	const locator = "user:zz-b4-bgsanitizer"
+	const sentinel = "ZZ_B4_BGSANITIZER_SENTINEL_9f2c"
+
+	idx := secrets.NewExposureIndex()
+	idx.Add(secrets.ExposedEntry{
+		Locator:  locator,
+		Scope:    secrets.ScopeSession,
+		KindHint: secrets.KindHintRaw,
+	}, []byte(sentinel))
+	resolver := refs.NewResolver(refs.ResolverOptions{
+		Lookup:    idx,
+		SessionID: "sess-zz-b4-bgsanitizer",
+		Agent:     "chat",
+	})
+	san := refs.NewSanitizer()
+	ctx := refs.WithTurnSanitizer(context.Background(), san)
+	ctx = refs.WithResolver(ctx, resolver)
+
+	// No CedarEngine is wired above, so bash falls back to the legacy
+	// allowlist gate; "echo" is in corebash.DefaultAllowlist.
+	argsJSON, _ := json.Marshal(map[string]any{
+		"command":           "echo @secret:" + locator,
+		"run_in_background": true,
+		"description":       "zz-b4 sanitizer wiring probe",
+	})
+	result, err := bashTool.Call(ctx, argsJSON)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	var out struct {
+		TaskID string `json:"task_id"`
+	}
+	if err := json.Unmarshal(result, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.TaskID == "" {
+		t.Fatalf("no task_id in background-mode result: %s", result)
+	}
+
+	logPath := filepath.Join(logDir, out.TaskID+".log")
+	deadline := time.Now().Add(3 * time.Second)
+	var content []byte
+	for time.Now().Before(deadline) {
+		b, rerr := os.ReadFile(logPath)
+		if rerr == nil && len(b) > 0 {
+			content = b
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if len(content) == 0 {
+		t.Fatalf("task log %s never gained content within 3s — background command may not have run", logPath)
+	}
+
+	if strings.Contains(string(content), sentinel) {
+		t.Fatalf("REGRESSION: on-disk task log %s carries resolved secret plaintext — "+
+			"builtins_wiring.go's `Sanitizer: sanitizer` is not reaching the real production wiring (B4): %s",
+			logPath, content)
 	}
 }
