@@ -78,6 +78,26 @@ const scheduledChatRunsProvenanceNote = "sessions/0340-scheduled-chat-runs-creat
 	"to scheduled_chat_runs (created by 0325, unchanged since)."
 
 var expectedChangedTables = map[string][]string{
+	"v0.72.0": {
+		// ONLY `tasks` this time, NOT the scheduled_chat_runs/tasks pair
+		// v0.70.0 and v0.71.0 needed — v0.72.0 registered no migration at
+		// all (its dump.sql is byte-identical to v0.71.0's), so
+		// sessions/0340's DEFAULT backfill has nothing left to do. What
+		// remains is assertTasksTableMigrated's OWN probe insert, which
+		// is a test artifact, not a schema change.
+		//
+		// That distinction is the whole reason this entry is one element
+		// and not two: listing scheduled_chat_runs here would silently
+		// excuse a real future change to it.
+		//
+		// The durable fix is still owed: stop the probe writing to a
+		// watched table, so a no-migration release needs no entry here at
+		// all. Until then every tag needs this by hand, and a forgotten
+		// entry fails the release rather than hiding a defect — which is
+		// the safe direction, but it is friction, not a design.
+		// Owner: alec. Dated 2026-08-25.
+		"tasks",
+	},
 	"v0.71.0": {
 		// Same two reasons as v0.70.0 below, and this pair will now
 		// repeat for EVERY future tag:
