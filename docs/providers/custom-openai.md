@@ -99,6 +99,33 @@ streaming usage tokens.
 
 ---
 
+## Workbench (served) mode: host-granted endpoint
+
+The served harness inside a Kenaz workbench has no Settings surface — its
+single provider profile is seeded from the environment the control plane
+writes onto the KENAZMETA disk (Spec 078). To point a workbench at an
+OpenAI-compatible endpoint (for example a host-side `llama-server` reachable
+over the vmnet gateway), grant:
+
+| Env var | Required | Meaning |
+|---|---|---|
+| `KENAZ_HARNESS_PROVIDER=custom-openai` | yes | selects the custom-openai adapter |
+| `KENAZ_HARNESS_BASE_URL` | yes | base URL, e.g. `http://192.168.64.1:8081/v1` |
+| `KENAZ_HARNESS_MODEL` | yes | model id sent on every request (no default for this kind) |
+| `KENAZ_HARNESS_CRED_ENV` | no | name of the env var holding the API key; omit for local servers |
+| `KENAZ_HARNESS_AUTH_SCHEME` | no | `none` (default without a credential) / `bearer` (default with one) / `api-key-header` / `custom` |
+
+The workbench's egress policy must permit the destination: the RFC1918
+carve-out covers the vmnet gateway under the `local-only` tier; under
+`allowlist` add the host:port explicitly.
+
+At boot the served harness runs the same three-step probe against the granted
+endpoint and records the verdict on the profile's capability hints (logged as
+`harness.serve.host_provider.probed`). An unreachable endpoint logs
+`harness.serve.host_provider.probe_failed` and leaves the hints unset, so the
+adapter operates conservatively until the next boot. There is no Probe button
+in served mode — restart the workbench to re-probe.
+
 ## Troubleshooting
 
 **Probe returns "streaming: unknown"**

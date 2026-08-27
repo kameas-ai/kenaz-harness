@@ -114,6 +114,14 @@ type Options struct {
 	CredVar string
 	// ModelVar is the env var naming an explicit model id.
 	ModelVar string
+	// BaseURLVar names the env var carrying the endpoint base URL. Only
+	// consulted when ProviderVar resolves to CustomOpenAIKind; ignored
+	// (and never required) for the conventional kinds.
+	BaseURLVar string
+	// AuthSchemeVar names the env var carrying the custom-openai auth
+	// scheme (none|bearer|api-key-header|custom). Optional: defaults to
+	// "none" when no credential var is granted, "bearer" when one is.
+	AuthSchemeVar string
 	// NoCredentialHint is appended to ErrNoCredential so each caller can
 	// tell ITS user how to fix the problem. The in-VM agent executor points
 	// at KENAZ_AGENT_EXEC=stub; the served harness points at the Kenaz
@@ -142,7 +150,23 @@ type Resolution struct {
 	// Explicit is true when Kind came from the caller's ProviderVar override
 	// rather than from auto-detection. Surfaced for logging only.
 	Explicit bool
+	// BaseURL is the OpenAI-compatible endpoint base URL. Set only for
+	// CustomOpenAIKind.
+	BaseURL string
+	// AuthScheme is the custom-openai auth scheme. Set only for
+	// CustomOpenAIKind.
+	AuthScheme string
 }
+
+// CustomOpenAIKind is the provider kind for an OpenAI-compatible endpoint
+// (llama-server, vLLM, LiteLLM, …). It mirrors core/llm/custom.Kind without
+// importing it — envprovider must stay a leaf package.
+//
+// Unlike the conventional kinds it has no credential-detection entry and no
+// default model: the endpoint (BaseURLVar) and the model (ModelVar) MUST be
+// granted explicitly, and a credential is optional (local servers usually
+// run with auth_scheme=none).
+const CustomOpenAIKind = "custom-openai"
 
 // Profile renders the Resolution as a ProviderProfile with an env-backed
 // credential reference. id is the caller's structural profile id.
@@ -151,12 +175,25 @@ type Resolution struct {
 // the registry's credref resolver reads the bytes per-request and zeroizes
 // them afterwards, so key material never lands on this struct or on disk.
 func (r Resolution) Profile(id string) llm.ProviderProfile {
-	return llm.ProviderProfile{
+	p := llm.ProviderProfile{
 		ID:    id,
 		Kind:  r.Kind,
 		Model: r.Model,
-		Cred:  llm.CredentialReference{Kind: "env", Locator: r.CredEnv},
 	}
+	// A credential-less custom endpoint (auth_scheme=none) carries NO
+	// reference at all; the registry skips resolution for an empty
+	// reference rather than failing on an unknown kind.
+	if r.CredEnv != "" {
+		p.Cred = llm.CredentialReference{Kind: "env", Locator: r.CredEnv}
+	}
+	if r.Kind == CustomOpenAIKind {
+		p.Endpoint = r.BaseURL
+		// The custom adapter reads auth_scheme from Defaults first, then
+		// falls back to template glob-matching on the base URL; a granted
+		// endpoint on the vmnet gateway matches no template, so pin it.
+		p.Defaults = map[string]any{"auth_scheme": r.AuthScheme}
+	}
+	return p
 }
 
 // Resolve picks a provider kind, model, and credential env var from the
@@ -186,6 +223,10 @@ func Resolve(get Getenv, opts Options) (Resolution, error) {
 	kind := lookup(opts.ProviderVar)
 	credEnv := lookup(opts.CredVar)
 	explicit := kind != ""
+
+	if explicit && kind == CustomOpenAIKind {
+		return resolveCustom(get, lookup, opts, credEnv)
+	}
 
 	if explicit {
 		if credEnv == "" {
@@ -228,6 +269,50 @@ func Resolve(get Getenv, opts Options) (Resolution, error) {
 	}
 
 	return Resolution{Kind: kind, Model: model, CredEnv: credEnv, Explicit: explicit}, nil
+}
+
+// resolveCustom handles ProviderVar=custom-openai: endpoint + model are
+// mandatory grants, the credential is optional, and the auth scheme
+// defaults from whether a credential was granted.
+func resolveCustom(get Getenv, lookup func(string) string, opts Options, credEnv string) (Resolution, error) {
+	baseURL := lookup(opts.BaseURLVar)
+	if baseURL == "" {
+		return Resolution{}, fmt.Errorf(
+			"no_model_endpoint: provider %q needs an endpoint; set %s",
+			CustomOpenAIKind, orPlaceholder(opts.BaseURLVar, "the base-URL env var"))
+	}
+	model := lookup(opts.ModelVar)
+	if model == "" {
+		return Resolution{}, fmt.Errorf(
+			"no_model_default: provider %q has no default model; set %s",
+			CustomOpenAIKind, orPlaceholder(opts.ModelVar, "an explicit model env var"))
+	}
+	if credEnv != "" && get(credEnv) == "" {
+		return Resolution{}, fmt.Errorf(
+			"no_model_credential: %s is empty (provider %q); grant the credential or drop the credential var for auth_scheme=none",
+			credEnv, CustomOpenAIKind)
+	}
+	scheme := lookup(opts.AuthSchemeVar)
+	if scheme == "" {
+		if credEnv == "" {
+			scheme = "none"
+		} else {
+			scheme = "bearer"
+		}
+	}
+	if scheme == "none" {
+		// A key against a none scheme is an operator mistake; drop the
+		// reference so no credential bytes are ever read for it.
+		credEnv = ""
+	}
+	return Resolution{
+		Kind:       CustomOpenAIKind,
+		Model:      model,
+		CredEnv:    credEnv,
+		Explicit:   true,
+		BaseURL:    baseURL,
+		AuthScheme: scheme,
+	}, nil
 }
 
 func orPlaceholder(s, fallback string) string {
