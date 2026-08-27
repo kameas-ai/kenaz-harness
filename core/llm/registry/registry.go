@@ -621,9 +621,14 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 		return nil, perr
 	}
 
-	// 4. CredentialResolver.
+	// 4. CredentialResolver. A profile with no credential reference at
+	// all (a host-granted custom-openai endpoint with auth_scheme=none)
+	// skips resolution: there is nothing to resolve, and the previous
+	// behaviour — failing on "unknown credential kind \"\"" — made such
+	// endpoints unusable. Profiles created through AddProvider always
+	// carry an indirect reference, so this changes nothing for them.
 	var credBytes []byte
-	if resolver != nil {
+	if resolver != nil && prof.Cred.Kind != "" {
 		s, rerr := resolver.Resolve(ctx, prof.ID, prof.Cred)
 		if rerr != nil {
 			_ = emitter.Error(ctx, req, prof, rerr)

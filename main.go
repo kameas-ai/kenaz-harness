@@ -452,7 +452,7 @@ func runServeMode(listenAddr string) {
 	// (Spec 078). Without this the served harness boots with an empty
 	// provider list and no in-VM way to add one.
 	api := rpc.New(c,
-		rpc.WithHostProviders(serve.HostProviders(os.Getenv, serveLog)),
+		rpc.WithHostProviders(serve.ProbeHostProviders(context.Background(), os.Getenv, serve.HostProviders(os.Getenv, serveLog), serveLog)),
 		rpc.WithServedConnectors(connSup),
 		rpc.WithConnectorTokens(connTokens))
 
