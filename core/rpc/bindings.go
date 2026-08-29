@@ -135,6 +135,15 @@ func (b *Bindings) AppInfo() (AppInfo, error) {
 	return b.api.AppInfo(b.ctx())
 }
 
+// CompactionOverhead returns the running compaction-driven LLM cost
+// tally the SessionsView header row renders (chat-turn-integrity-
+// 01PMZ606 WP12, owner ruling X-7 / CK-08). Zero value, not an error,
+// when compaction was disabled at boot.
+func (b *Bindings) CompactionOverhead() (CompactionOverheadInfo, error) {
+	defer sentry.WrapBinding("CompactionOverhead")()
+	return b.api.CompactionOverhead(b.ctx())
+}
+
 // ── settings (privacy CI invariant #5; WP13 fleshes out persistence) ───
 
 func (b *Bindings) LoadRoute() (string, error) {

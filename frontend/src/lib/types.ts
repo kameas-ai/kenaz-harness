@@ -847,6 +847,28 @@ export interface WindowSize {
   height: number;
 }
 
+/**
+ * CompactionOverheadInfo — the running compaction-driven LLM cost tally
+ * the SessionsView header row renders (chat-turn-integrity-01PMZ606 WP12,
+ * owner ruling X-7 / CK-08). Mirrors core/rpc.CompactionOverheadInfo.
+ *
+ * Process-wide, not per-session: the backend running counter
+ * (compactionwiring.LLMCaller.Overhead()) accumulates for the whole
+ * process's lifetime, not per session — see the Go-side doc comment for
+ * why. `calls === 0` means "no compaction has run since this process
+ * started," not "this session never compacted."
+ */
+export interface CompactionOverheadInfo {
+  total: number;
+  currency?: string;
+  calls: number;
+  indeterminateCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  /** Aggressiveness tier of up to the last 5 successful compactions, oldest first. */
+  recentTiers?: string[];
+}
+
 export interface Settings {
   schemaVersion: number;
   lastRoute: string;

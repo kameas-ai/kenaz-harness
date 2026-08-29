@@ -52,6 +52,7 @@ import type {
   AuditExportOptions,
   ShellStatus,
   AppInfo,
+  CompactionOverheadInfo,
   Settings,
   Theme,
   ListMessagesResult,
@@ -222,6 +223,16 @@ export interface EmbedderConfigResult {
 interface WailsBindingsLike {
   ShellStatus(): Promise<ShellStatus>;
   AppInfo(): Promise<AppInfo>;
+  /**
+   * CompactionOverhead — chat-turn-integrity-01PMZ606 WP12. Hand-declared
+   * here (not in wailsjs/go/rpc/Bindings.d.ts) per the established
+   * WailsBindingsLike convention: `wails generate module` opens a REAL
+   * database (see CLAUDE.md's tooling footguns) and is never run by an
+   * agent, so a new Go-side binding is declared by hand on this
+   * interface until the next real `wails generate module` regenerates
+   * the file for real.
+   */
+  CompactionOverhead(): Promise<CompactionOverheadInfo>;
   LoadRoute(): Promise<string>;
   SaveRoute(route: string): Promise<void>;
   LogRouteChange(from: string, to: string): Promise<void>;
@@ -3446,6 +3457,12 @@ export interface ComplianceClient {
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
+  /**
+   * compactionOverhead returns the running compaction-driven LLM cost
+   * tally (chat-turn-integrity-01PMZ606 WP12, owner ruling X-7 / CK-08).
+   * Zero value, not a rejection, when compaction is disabled.
+   */
+  compactionOverhead(): Promise<CompactionOverheadInfo>;
 
   // openExternalURL forwards to Wails's BrowserOpenURL so the user's
   // default system browser handles the link (vs opening inside the
@@ -3604,6 +3621,7 @@ export function createHarnessClient(): HarnessClient {
   return {
     shellStatus: () => b().ShellStatus(),
     appInfo: () => b().AppInfo(),
+    compactionOverhead: () => b().CompactionOverhead(),
     openExternalURL,
 
     sessions: {
@@ -4811,6 +4829,13 @@ export function createFakeHarnessClient(
       goVersion: '',
       platform: 'fake',
       windowSize: { width: 1280, height: 800 },
+    }),
+    compactionOverhead: async () => ({
+      total: 0,
+      calls: 0,
+      indeterminateCalls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
     }),
     openExternalURL: () => {
       // No-op in fake; tests assert the call shape via vi.fn() seeds.

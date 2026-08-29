@@ -154,6 +154,13 @@ import (
 type HarnessAPI interface {
 	ShellStatus(ctx context.Context) (ShellStatus, error)
 	AppInfo(ctx context.Context) (AppInfo, error)
+	// CompactionOverhead returns the running compaction-driven LLM cost
+	// tally the SessionsView header row renders (chat-turn-integrity-
+	// 01PMZ606 WP12, owner ruling X-7 / CK-08). A direct method rather
+	// than living on Compaction() — the compaction-panel RPC surface is
+	// owned by a sibling mission (compaction-strategy-ui-01KQ8TDI) and
+	// this reader has nothing to do with strategy config.
+	CompactionOverhead(ctx context.Context) (CompactionOverheadInfo, error)
 
 	LLMConnector() llm.LLMConnectorAPI
 	MCP() mcp.MCPAPI
@@ -484,8 +491,20 @@ type API struct {
 	graphMgr       *graphview.Manager
 	graphAPI       graphview.API
 	compactionAPI  compactionview.CompactionAPI
-	convMgr        *coreconv.Manager
-	branchesAPI    branchesview.BranchesAPI
+	// compactionLLM / compactionAudit are the SAME instances newLLMStack
+	// constructs and stores on llmStack (api.go ~:4838/:4842). Prior to
+	// chat-turn-integrity-01PMZ606 WP12 those stack fields were read
+	// nowhere after newLLMStack returned — a repo-wide grep found only
+	// the two field declarations, the construction call, and the two
+	// assignments into llmStack{} — so Overhead()/Recent() had no
+	// caller and the SessionsView compaction-overhead header row was
+	// permanently hidden (CK-08 + owner ruling X-7). Copied here in
+	// New() so CompactionOverhead() can read them. nil when compaction
+	// is disabled at boot (HARNESS_COMPACTION=off or no session store).
+	compactionLLM   *compactionwiring.LLMCaller
+	compactionAudit *compactionwiring.AuditEmitter
+	convMgr         *coreconv.Manager
+	branchesAPI     branchesview.BranchesAPI
 	// branchSeam is the SAME BranchSeamAdapter instance
 	// newGraphManagerWithDeps builds as EnvDeps.Branch for ForkNode /
 	// MergeNode. Held here so New() can late-bind a RunSpawner onto it
@@ -2098,6 +2117,12 @@ func New(c *core.Core, opts ...Option) *API {
 
 	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, a.cedarEngine, taskReg)
 	a.llmAPI = stack.api
+	// chat-turn-integrity-01PMZ606 WP12: the join CK-08 + owner ruling
+	// X-7 wanted. Both were already constructed above (inside
+	// newLLMStack -> buildCompactionWiring); copying them here is what
+	// gives CompactionOverhead() something to read.
+	a.compactionLLM = stack.compactionLLM
+	a.compactionAudit = stack.compactionAudit
 
 	// subagent-control-and-background-tasks-01PMZB11 UNIT-6: late-bind
 	// the child-run spawner onto the SAME BranchSeamAdapter instance
@@ -8245,6 +8270,72 @@ func (a *API) AppInfo(ctx context.Context) (AppInfo, error) {
 		}
 	}
 	return info, nil
+}
+
+// CompactionOverheadInfo is the wire shape for the compaction-overhead
+// readout on the SessionsView header row (chat-turn-integrity-01PMZ606
+// WP12, owner ruling X-7 / CK-08 — docs/escalation-register-2026-08-19.md
+// :331-346, "ONE FINDING. WIRE IT.").
+//
+// Process-wide, not per-session: compactionwiring.LLMCaller.Overhead()
+// (core/agentgraph/compaction/wiring/llm.go) is a single running counter
+// for the whole process's lifetime, not keyed by session id. A future WP
+// that wants a true per-session breakdown would need to thread the
+// session id through CallForSummary and key the tally by it — out of
+// scope here; this WP's job was reading storage that already existed,
+// not redesigning it (both compactionLLM and compactionAudit were
+// already constructed and held on the rpc stack before this WP; nothing
+// after newLLMStack returned ever called them).
+type CompactionOverheadInfo struct {
+	// Total / Currency / Calls / IndeterminateCalls / InputTokens /
+	// OutputTokens mirror compactionwiring.OverheadTotals field-for-field
+	// — the running tally of every compaction-driven LLM call this
+	// process has issued since boot.
+	Total              float64 `json:"total"`
+	Currency           string  `json:"currency,omitempty"`
+	Calls              int     `json:"calls"`
+	IndeterminateCalls int     `json:"indeterminateCalls"`
+	InputTokens        int     `json:"inputTokens"`
+	OutputTokens       int     `json:"outputTokens"`
+	// RecentTiers is the aggressiveness tier of up to the last 5
+	// successful compactions, oldest first, decoded from
+	// compactionAudit.Recent() — AuditEmitter.Recent's first non-test
+	// caller (the other half of CK-08's "registered, never consumed"
+	// finding: the 256-entry ring accumulated for nobody).
+	RecentTiers []string `json:"recentTiers,omitempty"`
+}
+
+// CompactionOverhead implements HarnessAPI. Returns the zero value (not
+// an error) when compaction was disabled at boot — matching
+// buildCompactionWiring's own degrade contract, not a fault condition
+// this RPC should surface as one.
+func (a *API) CompactionOverhead(_ context.Context) (CompactionOverheadInfo, error) {
+	if a == nil || a.compactionLLM == nil {
+		return CompactionOverheadInfo{}, nil
+	}
+	totals := a.compactionLLM.Overhead()
+	out := CompactionOverheadInfo{
+		Total:              totals.Total,
+		Currency:           totals.Currency,
+		Calls:              totals.Calls,
+		IndeterminateCalls: totals.IndeterminateCalls,
+		InputTokens:        totals.InputTokens,
+		OutputTokens:       totals.OutputTokens,
+	}
+	if a.compactionAudit == nil {
+		return out, nil
+	}
+	for _, ev := range a.compactionAudit.Recent(5) {
+		if ev.Kind != contextaudit.KindSessionCompacted {
+			continue
+		}
+		var payload contextaudit.SessionCompactedPayload
+		if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+			continue
+		}
+		out.RecentTiers = append(out.RecentTiers, payload.AggressivenessTier)
+	}
+	return out, nil
 }
 
 // brokerPublisher adapts *StreamBroker to the workflowsview.ProgressPublisher
