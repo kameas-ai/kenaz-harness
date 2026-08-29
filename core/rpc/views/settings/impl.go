@@ -1440,6 +1440,14 @@ type API struct {
 	// wired; the call is a no-op in that case.
 	syncNotify func(category string)
 
+	// embedderNotify is the optional embedder-change hook (AN-12,
+	// chat-turn-integrity-01PMZ606 WP13). When set via
+	// SetEmbedderNotifier, SetEmbedderConfig calls it after a
+	// successful persist so the rpc layer can push the newly-selected
+	// provider onto the live corpus.Manager. nil is safe — the config
+	// still persists, it just has nothing to notify.
+	embedderNotify func()
+
 	// auditRetentionEnforced backs AuditSettings.RetentionEnforced
 	// (audit-that-tells-the-truth-01PMZA10 UNIT-4). Set via
 	// SetAuditRetentionEnforced at chassis-boot wiring time — NEVER a
@@ -1604,7 +1612,6 @@ func parseInt64Positive(s string) (int64, error) {
 	return n, nil
 }
 
-
 // GetEmbedderConfig returns the persisted (profileID, modelOverride)
 // pair for the memory embedder.  Empty strings mean "auto-pick".
 // (v0.5.2 universal-embedder fix)
@@ -1614,9 +1621,28 @@ func (a *API) GetEmbedderConfig(_ context.Context) (profileID, modelOverride str
 
 // SetEmbedderConfig persists the embedder provider selection and
 // optional model override.  Empty strings reset to auto-pick /
-// per-Kind-default behaviour.
+// per-Kind-default behaviour. Fires embedderNotify on a successful
+// persist (AN-12, chat-turn-integrity-01PMZ606 WP13) so a live
+// corpus.Manager can recompute its embedder without a restart — this
+// is the RPC the embedder-config panel calls, so it is the natural
+// "the user configured a provider" signal ruling X-4 refers to.
 func (a *API) SetEmbedderConfig(_ context.Context, profileID, modelOverride string) error {
-	return a.store.SaveEmbedderConfig(profileID, modelOverride)
+	if err := a.store.SaveEmbedderConfig(profileID, modelOverride); err != nil {
+		return err
+	}
+	if a.embedderNotify != nil {
+		a.embedderNotify()
+	}
+	return nil
+}
+
+// SetEmbedderNotifier wires the embedder-change hook (AN-12, chat-turn-
+// integrity-01PMZ606 WP13). The rpc layer connects this to
+// API.RefreshEmbedder so SetEmbedderConfig's persist reaches the live
+// corpus.Manager. Safe to leave unset — SetEmbedderConfig still
+// persists normally, it just has no live consumer to notify.
+func (a *API) SetEmbedderNotifier(fn func()) {
+	a.embedderNotify = fn
 }
 
 // ── Memory narrative layer API methods (memory-narrative-layer-01KQ8TD1) ──

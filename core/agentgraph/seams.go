@@ -809,8 +809,15 @@ const (
 	// request when the prepared input would exceed the token budget
 	// threshold (FR-041).
 	CompactionSitePreCall CompactionSite = "pre_call"
-	// CompactionSitePostTool fires after a ToolNode returns when the
-	// result payload exceeds tool_result_max_bytes (FR-041).
+	// CompactionSitePostTool fires after a ToolNode returns, gated by
+	// the pre_call site's token-watermark verdict
+	// (Env.automaticCompactionCrossed) — NOT by result byte size.
+	// CK-04/CK-05/CK-06 (chat-turn-integrity-01PMZ606 WP13): this used
+	// to claim firing was gated by tool_result_max_bytes;
+	// SiteConfig.ToolResultMaxBytes is round-tripped through Settings
+	// but absent from CompactOpts, so no strategy dispatch can ever
+	// read it — see that field's doc comment in
+	// core/agentgraph/compaction/config.go for the justify() block.
 	CompactionSitePostTool CompactionSite = "post_tool"
 	// CompactionSiteManual fires from the user-facing manual trigger.
 	CompactionSiteManual CompactionSite = "manual"

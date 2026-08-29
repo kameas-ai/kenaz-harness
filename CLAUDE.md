@@ -184,6 +184,14 @@ product decision made by a linter.
   `AttachmentTreePicker`; the toast trio → `useEventToasts`).
 - A **documented product retirement** superseded it (corpora → contexts;
   the update-dot → the Help menu, per `os-menu-bar-01NDFSEX16` §FR-006).
+  **Scope correction (ruling X-4, chat-turn-integrity-01PMZ606 WP13,
+  2026-08-29):** the corpora → contexts retirement applies to the
+  *corpora UI surface* only — `AN-12` verified `exec_state.go:106`
+  still calls `env.Corpus.Search` on the live agent-graph kernel path
+  and `corpus_read`/`corpus_write` ship in the node catalog. Do not
+  extend this bullet to the `core/corpus` kernel seam; that half is a
+  live capability (ruling: wire the embedder, don't delete the client
+  surface — see `docs/escalation-register-2026-08-19.md` X-4).
 - It is **rival infrastructure** — a second implementation of something
   the app already does one way (`lib/slashcmd.ts`, `lib/useStream.ts`).
 - The **whole subsystem has no producer and no product intent**, and

@@ -2303,9 +2303,17 @@ func ComputeFeatureFlags() []FeatureFlagInfo {
 			EnvVar:      "HARNESS_USER_SLASHCMD",
 		},
 		{
-			Name:        "multimodal-out",
-			Enabled:     llmcap.MultimodalOutEnabled(),
-			Description: "Model-generated image output pipeline (DALL-E 3, gpt-image-1, Titan Image). When off, StreamGeneratedImage events are silently discarded regardless of the auto-capture dial.", // model-lit-allow: feature-flag description prose, not classification
+			Name:    "multimodal-out",
+			Enabled: llmcap.MultimodalOutEnabled(),
+			// CHAT-06 justify(blocker: "no adapter emits StreamGeneratedImage",
+			// owner: alec, date: 2026-08-19; chat-turn-integrity-01PMZ606
+			// WP13, spec.md E-005): this used to claim a live
+			// "model-generated image output pipeline" that "silently
+			// discards" events when off — implying the pipeline works and
+			// this flag only gates it. Neither is true: no adapter in the
+			// tree constructs a StreamGeneratedImage event at all, on or
+			// off, so this flag currently controls nothing observable.
+			Description: "Reserved for a model-generated image output pipeline. No adapter currently produces the events this would gate — flipping it has no observable effect yet.", // model-lit-allow: feature-flag description prose, not classification
 			EnvVar:      "HARNESS_MULTIMODAL_OUT",
 		},
 		{

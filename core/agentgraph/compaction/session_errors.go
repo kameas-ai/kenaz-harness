@@ -32,12 +32,22 @@ func (e *ErrCompactionModelTooSmall) Error() string {
 		e.NeedsTokens, e.ModelMaxTokens)
 }
 
-// ErrCompactionDuringToolPair is reserved for the impossible-but-defensive
-// case where boundary-snap fails to produce a tool-pair-safe boundary.
-// The engine snaps boundaries proactively (see session_snap.go); this error
-// should never bubble out in practice but exists so tests can pin the
-// contract — splitting a tool_use/tool_result pair is an invariant
-// violation, never a silently-tolerated outcome.
+// ErrCompactionDuringToolPair is documented as SessionEngine.Compact's
+// defensive return value for the case where boundary-snap fails to
+// produce a tool-pair-safe boundary.
+//
+// CK-10 justify(blocker: "session_snap.go's snapBoundaryForToolPairs /
+// snapBoundaryBackForToolPairs are unconditional int-returning
+// functions with no failure mode to report — they snap to a safe
+// boundary by construction (a bounded forward/backward search over a
+// finite slice always terminates), so there is currently no call site
+// that COULD return this sentinel, not merely one that forgot to",
+// owner: alec, date: 2026-08-29; chat-turn-integrity-01PMZ606 WP13):
+// returned by nothing and — contrary to its own "tests pin the
+// contract" claim — asserted by no test either. Under A-0 this is not
+// deleted. Wiring it for real would mean making boundary-snap
+// fallible, which is a design change to session_snap.go, not a missing
+// wire in session_engine.go.
 var ErrCompactionDuringToolPair = fmt.Errorf("compaction boundary would split a tool_use/tool_result pair")
 
 // ErrSessionFull is returned when a session has hit its provider's
