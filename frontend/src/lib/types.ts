@@ -56,6 +56,26 @@ export interface Session {
   branchTitle?: string;
   /** Nesting depth; 0 for root sessions; pre-computed server-side. */
   branchDepth?: number;
+
+  /**
+   * Per-turn token/cost snapshot most recently persisted for this session
+   * (chat-turn-integrity-01PMZ606 WP11, task #37). Mirrors
+   * core/rpc/views/sessions.LastUsage, read from session.Manager
+   * .GetLastUsage via the sessions.last_usage_json column. Undefined when
+   * no turn has completed yet — distinct from a genuine zero-cost turn,
+   * which round-trips as a defined object with zero fields. useSession.ts's
+   * load() copies this into its own `lastUsage` ref so the composer footer
+   * and context-window meter (SessionsView.vue) show the real number on a
+   * session reopen instead of resetting to 0 tok · $0.0000 until the next
+   * live `session.usage.updated` event.
+   */
+  lastUsage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    costUsd: number;
+    costSource: string;
+  };
 }
 
 /**
