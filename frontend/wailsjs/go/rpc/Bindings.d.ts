@@ -198,6 +198,8 @@ export function CedarPolicy_WriteSnippet(arg1:string,arg2:string):Promise<void>;
 
 export function Cedar_PublishToTeam(arg1:string,arg2:string):Promise<void>;
 
+export function CompactionOverhead():Promise<rpc.CompactionOverheadInfo>;
+
 export function Compaction_GetConfig(arg1:compaction.Layer,arg2:string):Promise<compaction.Config>;
 
 export function Compaction_GetEffective(arg1:compaction.ScopeKey):Promise<compaction.EffectiveConfig>;

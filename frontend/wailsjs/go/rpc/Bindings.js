@@ -282,6 +282,10 @@ export function Cedar_PublishToTeam(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Cedar_PublishToTeam'](arg1, arg2);
 }
 
+export function CompactionOverhead() {
+  return window['go']['rpc']['Bindings']['CompactionOverhead']();
+}
+
 export function Compaction_GetConfig(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Compaction_GetConfig'](arg1, arg2);
 }

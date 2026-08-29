@@ -5742,6 +5742,30 @@ export namespace rpc {
 	        this.fleetInitError = source["fleetInitError"];
 	    }
 	}
+	export class CompactionOverheadInfo {
+	    total: number;
+	    currency?: string;
+	    calls: number;
+	    indeterminateCalls: number;
+	    inputTokens: number;
+	    outputTokens: number;
+	    recentTiers?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new CompactionOverheadInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.total = source["total"];
+	        this.currency = source["currency"];
+	        this.calls = source["calls"];
+	        this.indeterminateCalls = source["indeterminateCalls"];
+	        this.inputTokens = source["inputTokens"];
+	        this.outputTokens = source["outputTokens"];
+	        this.recentTiers = source["recentTiers"];
+	    }
+	}
 	export class EmbedderConfigResult {
 	    profileId: string;
 	    modelOverride: string;
@@ -6341,6 +6365,26 @@ export namespace sessions {
 	        this.byteCount = source["byteCount"];
 	    }
 	}
+	export class LastUsage {
+	    promptTokens: number;
+	    completionTokens: number;
+	    totalTokens: number;
+	    costUsd: number;
+	    costSource: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new LastUsage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.promptTokens = source["promptTokens"];
+	        this.completionTokens = source["completionTokens"];
+	        this.totalTokens = source["totalTokens"];
+	        this.costUsd = source["costUsd"];
+	        this.costSource = source["costSource"];
+	    }
+	}
 	export class ToolCall {
 	    id: string;
 	    name: string;
@@ -6530,6 +6574,7 @@ export namespace sessions {
 	    parentMessageId?: string;
 	    branchTitle?: string;
 	    branchDepth?: number;
+	    lastUsage?: LastUsage;
 	
 	    static createFrom(source: any = {}) {
 	        return new Session(source);
@@ -6550,7 +6595,26 @@ export namespace sessions {
 	        this.parentMessageId = source["parentMessageId"];
 	        this.branchTitle = source["branchTitle"];
 	        this.branchDepth = source["branchDepth"];
+	        this.lastUsage = this.convertValues(source["lastUsage"], LastUsage);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class SessionUsage {
 	    promptTokens: number;
