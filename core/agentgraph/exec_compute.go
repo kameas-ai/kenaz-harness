@@ -526,6 +526,14 @@ func (b builtinToolExecutor) Execute(ctx context.Context, env *Env, node *Node, 
 			ProjectID:     env.ProjectID,
 			Messages:      []Message{{Role: "tool", Name: a.Name, Content: tr.Content}},
 			CurrentTokens: estimateTokens([]Message{{Content: tr.Content}}),
+			// ContextWindow was omitted here entirely (CK-03), so
+			// pipeline.Run's threshold gate always took the "context
+			// window unknown" skip branch — the post_tool site could
+			// never fire regardless of its Enabled config. This builtin
+			// tool node carries no Provider/Model of its own, so fall
+			// back to the run's active model the same way the manual
+			// compact-node site does.
+			ContextWindow: resolveContextWindow(env, "", ""),
 		}
 		co, cerr := env.Compactor.Compact(ctx, ci)
 		if cerr != nil {
