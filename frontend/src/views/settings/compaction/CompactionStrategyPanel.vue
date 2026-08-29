@@ -372,13 +372,14 @@ function siteLabel(site: CompactionSite): string {
 
 function strategyLabel(s: CompactionStrategy | undefined | ''): string {
   switch (s) {
-    // chat-turn-integrity-01PMZ606 WP07 (Rule 3): the only production
-    // registration of this strategy (core/rpc/api.go) passes a nil LLM,
-    // so every run is heuristicSummary's 80-char-per-message pipe join —
-    // never an LLM call. "Summary (LLM)" over that would be exactly the
-    // lie this mission exists to end. Relabel here, not "(LLM)" restored,
-    // until a WP wires a real summariser (WP08, deferred).
-    case 'summary': return 'Summary';
+    // chat-turn-integrity-01PMZ606 WP08: the "(LLM)" suffix is restored.
+    // WP07 (Rule 3) had dropped it because the only production
+    // registration of this strategy passed a nil LLM, so every run was
+    // heuristicSummary's 80-char-per-message pipe join — never a model
+    // call. WP08 wired a real adapter (core/rpc/compaction_summary_llm.go,
+    // registered in registerManualCompactionStrategies), so the label is
+    // true again.
+    case 'summary': return 'Summary (LLM)';
     case 'drop_oldest': return 'Drop oldest';
     case 'semantic_cluster': return 'Semantic cluster';
     case 'custom_subgraph': return 'Custom subgraph';
@@ -390,6 +391,7 @@ function summaryLengthLabel(s: CompactionStrategy | undefined): string {
   switch (s) {
     case 'drop_oldest': return 'Keep recent N turns';
     case 'semantic_cluster': return 'Cluster count';
+    case 'summary': return 'Summary model';
     default: return '';
   }
 }
@@ -685,12 +687,27 @@ defineExpose({ refresh, saveGlobalConfig });
               />
             </label>
 
-            <!-- chat-turn-integrity-01PMZ606 WP07 (Rule 3): the "Summary
-                 model" input that used to render here is gone. It let a
-                 user target a model for a summariser that never made a
-                 model call — the production registration is a nil-LLM
-                 heuristic pipe-join (see strategyLabel's 'summary' case).
-                 Restore it alongside WP08's real adapter, not before. -->
+            <!-- Summary model (for summary strategy). Restored by
+                 chat-turn-integrity-01PMZ606 WP08 alongside the real LLM
+                 adapter (core/rpc/compaction_summary_llm.go) — WP07 had
+                 removed it because the production registration was a
+                 nil-LLM heuristic pipe-join with no model to target. -->
+            <label
+              v-if="siteConfig(site).strategy === 'summary'"
+              class="flex flex-col font-ui text-[12px] text-ink-muted"
+            >
+              <span>Summary model (optional)</span>
+              <input
+                type="text"
+                placeholder="Use session's active model"
+                :value="siteConfig(site).summaryModel ?? ''"
+                class="mt-1 rounded-sm border border-border-muted bg-surface-2 px-2 py-1 text-[12px] text-ink"
+                :data-testid="`csp-${site}-summary-model`"
+                @input="updateSiteConfig(site, {
+                  summaryModel: ($event.target as HTMLInputElement).value || undefined,
+                })"
+              />
+            </label>
 
             <!-- Custom subgraph picker (for custom_subgraph strategy) -->
             <label
