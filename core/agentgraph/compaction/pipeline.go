@@ -458,6 +458,12 @@ func (p *Pipeline) Compact(ctx context.Context, in agentgraph.CompactionInput) (
 			NodeID:    in.NodeID,
 		},
 		Site: kernelSiteToSite(in.Site),
+		// Override forces Run to dispatch this specific strategy instead
+		// of falling through to the resolved cascading config (CHAT-07:
+		// before this, a compact node's `strategy` attr reached nothing
+		// but event-payload telemetry, so the event could report a
+		// strategy that never actually ran).
+		Override: Strategy(in.Strategy),
 		Input: ContextSlice{
 			Messages:      in.Messages,
 			SystemPrompt:  in.SystemPrompt,
@@ -476,5 +482,10 @@ func (p *Pipeline) Compact(ctx context.Context, in agentgraph.CompactionInput) (
 		TokensAfter: res.Compacted.TokensAfter,
 		Skipped:     res.Skipped,
 		Reason:      res.Reason,
+		// Strategy is the pipeline's resolved dispatch, not the
+		// caller's request — Run.CompactedContext.Strategy is set on
+		// every return path (skip or real dispatch), so this is always
+		// "what actually happened", never the unresolved attr.
+		Strategy: string(res.Compacted.Strategy),
 	}, nil
 }

@@ -526,6 +526,14 @@ func (b builtinToolExecutor) Execute(ctx context.Context, env *Env, node *Node, 
 			ProjectID:     env.ProjectID,
 			Messages:      []Message{{Role: "tool", Name: a.Name, Content: tr.Content}},
 			CurrentTokens: estimateTokens([]Message{{Content: tr.Content}}),
+			// ContextWindow was omitted here entirely (CK-03), so
+			// pipeline.Run's threshold gate always took the "context
+			// window unknown" skip branch — the post_tool site could
+			// never fire regardless of its Enabled config. This builtin
+			// tool node carries no Provider/Model of its own, so fall
+			// back to the run's active model the same way the manual
+			// compact-node site does.
+			ContextWindow: resolveContextWindow(env, "", ""),
 		}
 		co, cerr := env.Compactor.Compact(ctx, ci)
 		if cerr != nil {
@@ -1638,7 +1646,18 @@ func (compactExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs
 		NodeID:    node.ID,
 		SessionID: env.SessionID,
 		ProjectID: env.ProjectID,
-		Messages:  msgs,
+		// Strategy forces the pipeline to dispatch the author's choice
+		// rather than falling through to the resolved cascading config
+		// (CHAT-07) — this is the node's whole reason to carry a
+		// `strategy` attr in the first place.
+		Strategy: a.Strategy,
+		// SystemPrompt was omitted here entirely (CHAT-14/CK-14): the
+		// attr exists on CompactAttrs and the seam has always had a
+		// field for it, but nothing threaded the value through, so a
+		// manual compaction silently dropped the system prompt every
+		// time.
+		SystemPrompt: a.SystemPrompt,
+		Messages:     msgs,
 		// The context-window budget this compaction sizes against —
 		// the denominator for every threshold decision downstream.
 		ContextWindow: resolveContextWindow(env, a.Provider, a.Model),
@@ -1655,7 +1674,11 @@ func (compactExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs
 
 	res.Outputs["result"] = co.Messages
 	_ = res.Events.AppendKind(env.RunID, node.ID, EventCompactionApplied, map[string]any{
-		"strategy":        a.Strategy,
+		// co.Strategy is what the pipeline actually dispatched — never
+		// a.Strategy, the node's unresolved request. Reporting the
+		// attr here is the exact CHAT-07 defect: an event that
+		// describes a strategy that did not run.
+		"strategy":        co.Strategy,
 		"target_tokens":   target,
 		"input_messages":  len(msgs),
 		"output_messages": len(co.Messages),
