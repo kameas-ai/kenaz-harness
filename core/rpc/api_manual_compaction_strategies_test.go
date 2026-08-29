@@ -38,7 +38,7 @@ func TestRegisterManualCompactionStrategies_ClosesEveryPanelOfferedGap(t *testin
 	// ErrUnknownStrategy — sessionRewriteStrategy.Compact degrades to a
 	// no-op passthrough on nil deps, which is a DIFFERENT, already-
 	// covered code path (see session_compaction.go's Compact tests).
-	registerManualCompactionStrategies(pipeline, nil, nil)
+	registerManualCompactionStrategies(pipeline, nil, nil, nil)
 
 	for _, tc := range []struct {
 		name     string

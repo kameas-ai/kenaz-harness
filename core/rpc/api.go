@@ -5797,12 +5797,31 @@ func resolveAutonomyKnobsWithSettingsFallback(global, project, session autonomy.
 // is what turns the panel's offered option from "always
 // ErrUnknownStrategy" into "actually runs, degraded until an embedder
 // is wired" — no embedder is wired on this path today.
-func registerManualCompactionStrategies(p *compaction.Pipeline, deps *chat.CompactionDeps, history chat.SessionMessageReader) {
+//
+// summary (WP08): re-registers "summary" with a real
+// compactionSummaryLLM in place of newGraphManagerWithDeps' nil-LLM
+// registration. RegisterStrategy is last-write-wins (Pipeline doc), the
+// same mechanism session_rewrite above relies on, and it has to happen
+// here rather than at the earlier site: newGraphManagerWithDeps runs
+// before the LLM stack (reg) is constructed in New() (see that
+// function's own "Constructed BEFORE the LLM stack" comment), so reg
+// does not exist yet at that call. reg==nil (nil-chassis test/boot path)
+// leaves the earlier nil-LLM registration in place unchanged —
+// newCompactionSummaryLLM returns nil in that case and the strategy is
+// simply not re-registered.
+func registerManualCompactionStrategies(p *compaction.Pipeline, deps *chat.CompactionDeps, history chat.SessionMessageReader, reg corellm.Registry) {
 	if p == nil {
 		return
 	}
 	p.RegisterStrategy(chat.NewSessionRewriteStrategy(deps, history))
 	p.RegisterStrategy(compaction.NewSemanticClusterStrategy(nil))
+	var defaultModel func() (compaction.ProviderProfileRef, bool)
+	if deps != nil {
+		defaultModel = deps.CompactionModel
+	}
+	if llm := newCompactionSummaryLLM(reg, defaultModel); llm != nil {
+		p.RegisterStrategy(compaction.NewSummaryStrategy(llm))
+	}
 }
 
 // buildChatRunner constructs the *chat.ChatRunner that replaces
@@ -6152,7 +6171,7 @@ func buildChatRunner(
 	// built without a compactor yields nil here, which makes the node a
 	// documented passthrough.
 	chatCompactionPipeline, _ := graphMgr.Kernel().Compactor().(*compaction.Pipeline)
-	registerManualCompactionStrategies(chatCompactionPipeline, compactionDeps, historyReader)
+	registerManualCompactionStrategies(chatCompactionPipeline, compactionDeps, historyReader, reg)
 
 	runner, err := chat.New(chat.Config{
 		Kernel:        graphMgr.Kernel(),
@@ -7426,10 +7445,16 @@ func newGraphManagerWithDeps(
 		compaction.WithEmitter(compaction.EventLogEmitter(agEventLog)),
 	)
 	compactionPipeline.RegisterStrategy(compaction.NewDropOldestStrategy())
-	// nil LLM: the summary strategy falls back to its inline heuristic
-	// summarizer. Wiring a real LLM provider here is a follow-up WP —
-	// this WP's scope is making SiteManual reachable at all, not
-	// picking which model does the summarizing.
+	// nil LLM here: this construction runs before the LLM stack (reg)
+	// exists in New() (see this function's own doc comment), so there is
+	// no registry to wire yet. registerManualCompactionStrategies
+	// (chat-turn-integrity-01PMZ606 WP08) re-registers "summary" with a
+	// real compactionSummaryLLM once reg is available — RegisterStrategy
+	// is last-write-wins, so this nil-LLM registration is the transient
+	// boot-time state, not the steady state. It remains the permanent
+	// state only on a nil-registry chassis (tests / degraded boot),
+	// where the strategy still runs via its heuristic fallback rather
+	// than erroring.
 	compactionPipeline.RegisterStrategy(compaction.NewSummaryStrategy(nil))
 
 	kernel := coreag.NewKernel(
