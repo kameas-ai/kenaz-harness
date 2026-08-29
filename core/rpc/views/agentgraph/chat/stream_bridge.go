@@ -71,16 +71,34 @@ type StreamClosedPayload struct {
 // same situation for the user and get the same copy.
 const StreamClosedErrorKindSessionFull = "session_full"
 
+// StreamClosedReasonUnknown is what Close() (as opposed to
+// EmitClosed/EmitClosedFull) reports, because Close() genuinely does
+// not know why the stream ended (CHAT-13, chat-turn-integrity-
+// 01PMZ606 WP13). It intentionally matches the frontend's own
+// pre-existing fallback string for an unrecognised reason
+// (useSession.ts's "closed-without-finish", used when payload.reason
+// is anything other than "completed") so a Close()-driven close reads
+// as "ended, no finish signal" rather than falsely as success.
+const StreamClosedReasonUnknown = "closed-without-finish"
+
 // StreamBridge implements agentgraph.StreamSink by translating each
 // kernel-bound StreamEvent into a corellm.StreamEvent and emitting
 // it on the broker's "llm:stream-chunk" topic.
 //
 // Per-LLMNode dispatch the kernel pins one StreamBridge onto the
 // run's Env via withStreamSink; a single chat run reuses the bridge
-// across multiple LLM dispatches inside the LoopNode body. Close is
-// idempotent — the runner's terminal-emit path calls it explicitly so
-// the chat surface always sees an "llm:stream-closed" payload even
-// when the kernel exits via a non-paused path.
+// across multiple LLM dispatches inside the LoopNode body.
+//
+// CHAT-13 (chat-turn-integrity-01PMZ606 WP13): the sentence that used
+// to sit here — "the runner's terminal-emit path calls [Close]
+// explicitly so the chat surface always sees a close signal" — is
+// false. Production never calls Close(); the runner's terminal path
+// always goes through EmitClosed / EmitClosedFull instead, which carry
+// the REAL reason ("completed" / "stop-called" / "backend-error" / …).
+// Close() exists only to satisfy the agentgraph.StreamSink interface
+// contract for a kernel that calls it directly with no reason
+// available — see Close's own doc for why it does not claim
+// "completed" either.
 type StreamBridge struct {
 	broker    Broker
 	subID     string
@@ -238,9 +256,28 @@ func (b *StreamBridge) SeenToolCalls() []coreag.ToolCallRequest {
 }
 
 // Close satisfies agentgraph.StreamSink. Emits a terminal
-// llm:stream-closed payload exactly once. The chat runner's terminal
-// path calls Close after the kernel run exits so the chat surface
-// always sees a close signal.
+// llm:stream-closed payload exactly once, sharing the same idempotency
+// flag as EmitClosedFull.
+//
+// CHAT-13 (chat-turn-integrity-01PMZ606 WP13): this used to hardcode
+// Reason: "completed" unconditionally. Close() carries no information
+// about whether the turn actually succeeded — the interface contract
+// (agentgraph.StreamSink) gives it no arguments — so claiming
+// "completed" was a guess dressed as a fact. Nothing in production
+// calls Close() today; the chat runner's terminal path always goes
+// through EmitClosed / EmitClosedFull with the real reason instead
+// (chat_runner.go:1352, :1744-ish). But Close() and EmitClosedFull
+// share the SAME `closed` flag and idempotency ("subsequent calls are
+// no-ops"): if a future kernel path ever called the generic
+// agentgraph.StreamSink.Close() directly — which its own interface doc
+// says is expected — arriving BEFORE the runner's EmitClosedFull, the
+// old "completed" would have both lied about a failed turn AND
+// silently suppressed the runner's real close payload (EmitClosedFull
+// would see b.closed already true and no-op). Reporting
+// StreamClosedReasonUnknown instead of "completed" removes the lie;
+// the frontend's useSession.ts already treats any non-"completed"
+// reason as "not a clean finish" (commitStreamingMoves), so this does
+// not require a frontend change.
 func (b *StreamBridge) Close() {
 	if b == nil || b.broker == nil {
 		return
@@ -255,7 +292,7 @@ func (b *StreamBridge) Close() {
 	b.broker.Emit("llm:stream-closed", StreamClosedPayload{
 		SubID:     b.subID,
 		SessionID: b.sessionID,
-		Reason:    "completed",
+		Reason:    StreamClosedReasonUnknown,
 	})
 }
 

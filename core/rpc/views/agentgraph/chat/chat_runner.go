@@ -183,9 +183,29 @@ type GraphLoader func() (coreag.Graph, error)
 type RunSpecRecorder func(runID string, g coreag.Graph)
 
 // AnswerInjector pushes the latest user message answer into the
-// kernel's AskBus for the supplied (runID, askNodeID). The chassis
-// wires this to the agentgraph manager's askRouter so the chat
-// runner can reuse the existing pause/resume plumbing.
+// kernel's AskBus for the supplied (runID, askNodeID).
+//
+// CHAT-12 justify(blocker: "chat's ask/pause handling does not need
+// live injection into an already-running kernel", owner: alec, date:
+// 2026-08-29; chat-turn-integrity-01PMZ606 WP13): this type has zero
+// references anywhere in the tree — not even in chat.Config, and not
+// in a test. The doc line that used to claim "the chassis wires this
+// to the agentgraph manager's askRouter" was aspirational, not a
+// description of running code. Under A-0 this is not deleted.
+//
+// What actually happens instead: each chat turn constructs a FRESH
+// AskBus and pre-seeds it with the user's message before the kernel
+// run starts (StartStream, coreag.NewMemAskBus() + askBus.Answer(subID,
+// chatAskNodeID, userMessage)) rather than resuming an already-paused
+// kernel mid-run. AnswerInjector's shape — inject an answer into a run
+// that is ALREADY executing, keyed by (runID, nodeID) — has no current
+// caller because chat never keeps a kernel run paused across a
+// send-message round trip; it starts a new run per turn. Wiring this
+// would need a use case that does not exist yet in the chat surface: an
+// ask node pausing mid-run that a follow-up user message resumes
+// WITHOUT starting a fresh kernel run. If that shape lands (e.g. a
+// multi-question ask flow inside one turn), this is the seam to wire it
+// through — do not build a second one.
 type AnswerInjector func(runID, nodeID, answer string)
 
 // ToolCatalogDiscoverer projects the chassis-side MCP pool catalog
@@ -322,23 +342,25 @@ type Config struct {
 	// the adapter falls through to the permission resolver on every call
 	// (v0.3.0 baseline behaviour).
 	//
-	// KNOWN GAP (confirm-each-enforcement-01PMAG05): the doc line that
-	// used to sit here claimed "production wiring threads this from the
-	// session's resolved autonomy knobs at StartStream time". It does
-	// not — grep `AutonomyKnobs:` outside _test.go and there is no
-	// production call site. Every shipped build therefore leaves this
-	// nil, so the prompt-skip set never suppresses a confirmation and
-	// confirm_each always prompts.
+	// WIRED (chat-turn-integrity-01PMZ606 WP13, correcting a stale
+	// "KNOWN GAP" note): this field IS set in production —
+	// core/rpc/api.go's autonomyKnobsProvider closure (newLLMStack) is
+	// assigned to Config.AutonomyKnobs at the buildChatRunner call site
+	// (AutonomyKnobs: autonomyKnobsProvider). It is session-scoped, not
+	// global-only: the closure reads the global layer from Settings,
+	// then the session + project layers from c.SessionManager() /
+	// c.ProjectManager() keyed on the sessionID StartStream passes in,
+	// exactly the three-layer resolution the old comment said would
+	// require a signature change nobody had made. That change already
+	// happened (autonomy-knobs-live-01PMAG02 WP05).
 	//
-	// That is the SAFE direction, and it is why this was left rather
-	// than half-wired: the provider has no session parameter, so the
-	// only thing wireable here without a signature change is the global
-	// autonomy layer, and a global-only resolution would silently
-	// ignore per-project and per-session postures — a knob that lies
-	// about its scope is worse than a knob that is off. Wiring belongs
-	// with autonomy-knobs-live-01PMAG02 WP05, which owns the posture
-	// semantics; the mechanism (WP04) and its tests are complete and
-	// exercised at the adapter seam.
+	// If confirm_each is still prompting when the resolved knobs say it
+	// shouldn't, that is CHAT-05 (mission 01PMZ202, in flight alongside
+	// this one) — a separate defect in how the prompt-skip set built
+	// from AutoApproveFamilies is applied, not in whether this provider
+	// is reachable. Do not re-diagnose it here (spec.md E-001): this
+	// comment's job is only to stop asserting the provider has no
+	// production call site, which was false.
 	AutonomyKnobs AutonomyKnobsProvider
 
 	// Confirm is the confirm-each pause registry

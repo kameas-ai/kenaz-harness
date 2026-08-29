@@ -51,8 +51,18 @@ func WithEmitter(e EventEmitter) PipelineOption {
 	return func(p *Pipeline) { p.emitter = e }
 }
 
-// WithClock overrides the clock used for event timestamps. Tests use
-// this to make event payloads deterministic.
+// WithClock overrides the clock used for event timestamps.
+//
+// CK-04/CK-05/CK-06 justify(blocker: "compaction.Event (the
+// EventCompactionFired payload) has no timestamp field to stamp — the
+// clock this overrides is read (p.now / the cloned CompactOpts.Now
+// field) but never called anywhere in this package", owner: alec,
+// date: 2026-08-29; chat-turn-integrity-01PMZ606 WP13): this doc used
+// to say "Tests use this to make event payloads deterministic", but no
+// event payload carries a timestamp for a clock to make deterministic
+// — see compactor.go's Event struct. Wiring this for real means adding
+// a Timestamp field to Event and a call site that reads it, which is a
+// new capability, not a missing wire.
 func WithClock(now func() time.Time) PipelineOption {
 	return func(p *Pipeline) {
 		if now != nil {

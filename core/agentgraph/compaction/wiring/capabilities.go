@@ -23,10 +23,25 @@ import (
 // sole source of context-window numbers: NewCapabilityLookup no longer
 // seeds `table` with any builtins, and MaxContextTokens falls back to
 // the shared Catalog (loaded once via llmcapabilities.LoadDefault)
-// when the operator-supplied `table` has no entry. `table` /
-// WithCustomTable / SetTable remain as the override layer for a model
-// the YAML catalog doesn't know about yet — that is a legitimate
-// escape hatch, not the duplicate this mission removed.
+// when the operator-supplied `table` has no entry.
+//
+// CK-15 justify(blocker: "no RPC, Settings field, or config file
+// anywhere in the tree reaches WithCustomTable or SetTable — the only
+// production construction path is NewCapabilityLookup() (api.go),
+// which starts with an empty table and nothing ever populates it after
+// boot; building the escape hatch for real means adding a settings
+// surface + RPC + frontend panel, which is new product scope, not a
+// missing wire", owner: alec, date: 2026-08-29; chat-turn-integrity-
+// 01PMZ606 WP13): `table` / WithCustomTable / SetTable used to be
+// described as "the override layer for a model the YAML catalog
+// doesn't know about yet — that is a legitimate escape hatch". It is
+// legitimate DESIGN, but not a reachable one: WithCustomTable has zero
+// callers anywhere including tests that aren't pinning the table
+// mechanism itself, and SetTable's only callers are tests. An operator
+// hitting an unknown model gets (0, false) from MaxContextTokens today
+// — the engine skips its pre-flight cap check and the problem surfaces
+// downstream as a provider context_length_exceeded mid-compaction,
+// exactly as if this override layer did not exist.
 type CapabilityLookup struct {
 	mu    sync.RWMutex
 	table map[string]int

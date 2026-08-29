@@ -77,8 +77,10 @@ const (
 	// SitePreCall fires before an LLMNode dispatches its request, when
 	// the prepared input would exceed the token budget threshold.
 	SitePreCall Site = "pre_call"
-	// SitePostTool fires after a ToolNode returns, when the result
-	// payload exceeds tool_result_max_bytes.
+	// SitePostTool fires after a ToolNode returns, gated by the
+	// pre_call site's token-watermark verdict, NOT by result byte size
+	// against tool_result_max_bytes — see SiteConfig.ToolResultMaxBytes's
+	// doc comment (config.go) for the CK-04/CK-05/CK-06 justify() block.
 	SitePostTool Site = "post_tool"
 	// SiteManual fires from the user-facing manual "compact now" trigger.
 	SiteManual Site = "manual"
@@ -219,8 +221,10 @@ type CompactOpts struct {
 	// SemanticClusterCount is the desired cluster count for
 	// StrategySemanticCluster. Zero means "use default".
 	SemanticClusterCount int
-	// Now overrides the clock. Tests use this to make event timestamps
-	// deterministic.
+	// Now overrides the clock. Assigned from Pipeline.now and cloned
+	// through Bind(), but never called — see WithClock's doc comment
+	// (pipeline.go) for the CK-04/CK-05/CK-06 justify() block: Event
+	// has no timestamp field for it to stamp.
 	Now func() time.Time
 }
 

@@ -682,12 +682,26 @@ func MultimodalInEnabled() bool {
 	return v != "off"
 }
 
-// MultimodalOutEnabled reports whether the HARNESS_MULTIMODAL_OUT env flag
-// permits the model-generated image output pipeline. Default on: the env var
-// must be explicitly set to "off" (case-insensitive) to disable. When
-// disabled, the auto-capture pipeline skips all StreamGeneratedImage events
-// regardless of the Settings.AutoCaptureGeneratedImages dial.
+// MultimodalOutEnabled reports whether the HARNESS_MULTIMODAL_OUT env
+// flag would permit the model-generated image output pipeline IF one
+// existed. Default on: the env var must be explicitly set to "off"
+// (case-insensitive) to disable.
 // (multimodal-io-extended-01KQ8TD2 WP08)
+//
+// CHAT-06 justify(blocker: "no adapter emits StreamGeneratedImage",
+// owner: alec, date: 2026-08-19; chat-turn-integrity-01PMZ606 WP13,
+// spec.md E-005): this flag currently gates NOTHING — this function's
+// only caller is the Config_GetFlags display projection
+// (core/rpc/bindings.go). The consumer-side plumbing this doc used to
+// describe (auto-capture pipeline, Settings.AutoCaptureGeneratedImages)
+// is real and does check
+// llmcap.MultimodalOutEnabled()-adjacent state at the capture site, but
+// there is nothing for it to gate: zero adapters in the tree construct
+// a StreamGeneratedImage event (`grep -rn "Kind:.*StreamGeneratedImage"
+// core --include="*.go"` is empty), so no such event ever reaches the
+// capturer regardless of this flag's value. Flip this comment back to
+// describing a live gate only once an adapter exists to emit the event
+// it would be gating.
 func MultimodalOutEnabled() bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv("HARNESS_MULTIMODAL_OUT")))
 	return v != "off"

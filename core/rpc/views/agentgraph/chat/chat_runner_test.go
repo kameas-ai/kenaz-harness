@@ -386,7 +386,13 @@ func TestStreamBridge_TranslatesEvents(t *testing.T) {
 		t.Errorf("finish = %q", finish.Chunk.Finish)
 	}
 	closed := evs[3].payload.(StreamClosedPayload)
-	if closed.SubID != "sub-1" || closed.Reason != "completed" {
+	// CHAT-13 (chat-turn-integrity-01PMZ606 WP13): Close() no longer
+	// reports Reason=="completed" — it has no basis for that claim (see
+	// stream_bridge_close_test.go for the dedicated coverage). This
+	// test only drives Close() directly (never EmitClosedFull, which
+	// carries the real reason in production), so it must assert the
+	// honest value, not the old optimistic guess.
+	if closed.SubID != "sub-1" || closed.Reason != StreamClosedReasonUnknown {
 		t.Errorf("closed = %+v", closed)
 	}
 }
