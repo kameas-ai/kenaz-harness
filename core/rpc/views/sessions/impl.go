@@ -365,7 +365,28 @@ func (a *managerAPI) Get(ctx context.Context, id string) (Session, error) {
 	if err != nil {
 		return Session{}, err
 	}
-	return recordToView(r), nil
+	out := recordToView(r)
+	// chat-turn-integrity-01PMZ606 WP11: rehydrate the per-turn usage
+	// snapshot on every read, not just on the live session.usage.updated
+	// broker event. GetLastUsage already existed and already read the
+	// persisted sessions.last_usage_json column (migration
+	// sessions/0322-last-usage-json) — nothing on this read path called
+	// it, so the composer footer and context-window meter reset to
+	// 0 tok · $0.0000 on every session reopen and every app restart. A
+	// lookup failure here must not fail the whole Get — the session
+	// itself was already resolved successfully above, so we degrade to
+	// "no usage data" (nil) rather than surface an error the caller has
+	// no session-integrity reason to see.
+	if u, uerr := a.mgr.GetLastUsage(ctx, id); uerr == nil && u != (session.LastUsage{}) {
+		out.LastUsage = &LastUsage{
+			PromptTokens:     u.PromptTokens,
+			CompletionTokens: u.CompletionTokens,
+			TotalTokens:      u.TotalTokens,
+			CostUSD:          u.CostUSD,
+			CostSource:       u.CostSource,
+		}
+	}
+	return out, nil
 }
 
 // Create implements SessionsAPI.

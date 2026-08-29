@@ -24,8 +24,14 @@ import (
 //     extensions). The registry still streams under the hood — that's
 //     fine; we drain the stream here and aggregate the final response.
 //   - Tags every call with cost.KindCompaction (a new constant in
-//     core/llm/cost) so the per-session cost view can break out
-//     compaction overhead from regular chat costs (plan §2.11).
+//     core/llm/cost) in a debug log line, for a human reading structured
+//     logs — NOT for a "per-session cost view" (CORRECTED,
+//     chat-turn-integrity-01PMZ606 WP12: no such view reads this tag; it
+//     never existed). What DOES exist is a process-wide running total
+//     (OverheadTotals, via Overhead() below), surfaced by
+//     core/rpc.API.CompactionOverhead to the SessionsView header row —
+//     see recordOverhead's doc for why that surface needs no separate
+//     Kind field.
 //   - Surfaces typed registry errors verbatim so the engine's
 //     classifyLLMError can recognize cap-exceeded, transport, auth
 //     classes.
@@ -181,9 +187,21 @@ func (a *LLMCaller) resolveProfile(ctx context.Context, ref compaction.ProviderP
 }
 
 // recordOverhead folds the response's reducer-derived cost + usage
-// into the running OverheadTotals. Tagged with cost.KindCompaction so
-// downstream surfaces can recognize compaction overhead without
-// re-deriving the kind from the audit payload.
+// into the running OverheadTotals.
+//
+// CORRECTED (chat-turn-integrity-01PMZ606 WP12): this doc used to claim
+// the cost.KindCompaction tag below let "downstream surfaces recognize
+// compaction overhead without re-deriving the kind from the audit
+// payload." That was never true — the tag is a key on a
+// logging.L().Debug(...) call, a structured log line, not a value any
+// Go or frontend code reads; grep found zero non-log-line consumers.
+// The real downstream surface is OverheadTotals itself (returned by
+// Overhead() below) — every call this adapter issues IS compaction cost
+// by construction (LLMCaller has exactly one call site, CallForSummary,
+// and the compaction engine is its only caller), so OverheadTotals needs
+// no separate Kind field to be recognizable as compaction overhead.
+// core/rpc.API.CompactionOverhead (WP12) reads Overhead() directly and
+// is what finally gives compactionLLM a caller outside a test.
 func (a *LLMCaller) recordOverhead(resp corellm.Response) {
 	prev := a.overheadCost.Load()
 	if prev == nil {

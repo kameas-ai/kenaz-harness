@@ -84,6 +84,31 @@ type Session struct {
 	// BranchDepth is 0 for top-level sessions; pre-computed by iterative
 	// ancestor walks capped at 32.
 	BranchDepth int `json:"branchDepth,omitempty"`
+
+	// LastUsage is the per-turn token/cost snapshot most recently
+	// persisted for this session (chat-turn-integrity-01PMZ606 WP11,
+	// task #37). Populated from session.Manager.GetLastUsage, which
+	// reads the sessions.last_usage_json column (migration
+	// sessions/0322-last-usage-json). nil when no turn has completed yet
+	// — distinct from a genuine zero-cost turn, which round-trips as a
+	// non-nil pointer with zero fields. The frontend's composer footer
+	// and context-window meter both read this via useSession.ts's
+	// load(), which is what makes the readout survive a session reopen
+	// instead of resetting to 0 tok · $0.0000 until the next live turn.
+	LastUsage *LastUsage `json:"lastUsage,omitempty"`
+}
+
+// LastUsage is the wire mirror of session.LastUsage (chat-turn-integrity-
+// 01PMZ606 WP11). Field names/JSON tags match the session.usage.updated
+// broker event payload (frontend SessionUsagePayload in useSession.ts) so
+// the reload path and the live-event path hand the composer footer /
+// context-meter byte-identical shapes.
+type LastUsage struct {
+	PromptTokens     int     `json:"promptTokens"`
+	CompletionTokens int     `json:"completionTokens"`
+	TotalTokens      int     `json:"totalTokens"`
+	CostUSD          float64 `json:"costUsd"`
+	CostSource       string  `json:"costSource"`
 }
 
 // ToolCall mirrors the frontend ToolCall shape for tool-use rendering.
