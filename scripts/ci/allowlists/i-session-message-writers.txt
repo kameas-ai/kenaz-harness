@@ -1,0 +1,44 @@
+# G-1 allowlist — non-test call sites of AppendMessage / AppendContinuation /
+# ApplyCompaction, the three functions that persist a row into
+# session_messages (chat-turn-integrity-01PMZ606 WP14, spec.md §6 G-1).
+#
+# Format: one `<repo-relative-path>:<Symbol>:<count>` per line. `count` is
+# the number of matching call-site lines scripts/ci/check-session-message-
+# writers.sh tolerates in that file for that symbol — see the gate's own
+# header for why count, not line number. Allowlists shrink monotonically
+# (CLAUDE.md): a row whose count no longer matches the tree — in either
+# direction — fails the gate.
+#
+# Seeded 2026-08-30 (chat-turn-integrity-01PMZ606 WP14) from the actual
+# call-site population of HEAD (`eeed5baf`), run against the gate itself
+# before writing this file, per the mission's WP14 instruction ("Run G-1
+# against HEAD before writing the allowlist; the initial allowlist is the
+# current legitimate set, dated, not a blanket"). Every line below is a
+# pre-existing, shipped call site, not a new grant.
+
+# --- AppendMessage: the chat/RPC/branch paths that append a genuine new
+#     message row (user turn, assistant turn, or a branch handoff/CoW
+#     message). ---
+core/serve/server.go:AppendMessage:1
+core/rpc/chat_run_dispatcher.go:AppendMessage:1
+core/rpc/bindings.go:AppendMessage:1
+core/rpc/api.go:AppendMessage:2
+core/conversation/manager.go:AppendMessage:1
+core/session/moves.go:AppendMessage:1
+core/session/manager.go:AppendMessage:1
+core/rpc/views/sessions/impl.go:AppendMessage:2
+core/rpc/views/agentgraph/env_deps_branch.go:AppendMessage:2
+core/rpc/views/branches/impl.go:AppendMessage:3
+
+# --- AppendContinuation: the resumed-partial-message seam.
+#     core/session/manager.go:AppendContinuation wraps the store's own
+#     AppendContinuation, which is why it is not itself a second entry
+#     here — Manager is the ONE production caller of the store method. ---
+core/session/manager.go:AppendContinuation:1
+
+# --- ApplyCompaction: the two compaction executors (linear + rolling)
+#     and the agentgraph wiring adapter that fronts the session store's
+#     ApplyCompaction for the compact-node executor path. ---
+core/agentgraph/compaction/session_engine.go:ApplyCompaction:1
+core/agentgraph/compaction/session_rolling.go:ApplyCompaction:1
+core/agentgraph/compaction/wiring/store.go:ApplyCompaction:1

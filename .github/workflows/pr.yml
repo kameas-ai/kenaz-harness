@@ -377,6 +377,20 @@ jobs:
         # production callers.
         run: bash scripts/ci/check-single-move-writer.sh
 
+      - name: session-message-writers guard (G-1)
+        # chat-turn-integrity-01PMZ606 WP14, spec.md §6 G-1: "no writer to
+        # session_messages outside the sanctioned set." This mission's own
+        # P0 was a durability mechanism (the partial-flush checkpoint path)
+        # writing INTO the transcript unplanned — a class no existing gate
+        # sees. Enumerates every non-test call site of AppendMessage /
+        # AppendContinuation / ApplyCompaction and fails on any growth past
+        # scripts/ci/allowlists/i-session-message-writers.txt, in either
+        # direction (a new call site, or a stale allowlist row for a call
+        # that no longer exists). Planted-violation proof:
+        # scripts/ci/gates_can_fail_test.go
+        # "session-message-writers/second-append-message-call-site".
+        run: bash scripts/ci/check-session-message-writers.sh
+
       - name: no-forbidden-compaction-symbols guard (I4)
         # kitty-specs/agentgraph-total-convergence-01PMGX01 WP01. Exactly
         # one compaction entry point: `SuppressAutomaticCompaction` and
