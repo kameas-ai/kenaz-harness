@@ -115,6 +115,7 @@ var cwdSensitiveGates = []string{
 	"check-serve-dispatch-drift.sh",
 	"check-builtin-tool-registration.sh",
 	"check-single-move-writer.sh",
+	"check-session-message-writers.sh",
 	"check-cedar-gate-arguments.sh",
 	"check-cedar-engine-singleton.sh",
 	"check-broker-topic-consumers.sh",
@@ -1131,6 +1132,29 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			gate:       "check-serve-gap-classification.sh",
 			file:       "scripts/ci/allowlists/i15-serve-dispatch-gap.txt",
 			append:     "# No date or owner mentioned anywhere in this reason.\n\"Zz_Injected\"\n",
+		},
+		{
+			// chat-turn-integrity-01PMZ606 WP14 (G-1, spec.md §6): "no
+			// writer to session_messages outside the sanctioned set." This
+			// mission's own P0 (UNIT-1/CHAT-01) was exactly this class — a
+			// durability mechanism (runPeriodicFlush's partial-message
+			// flush) writing an unplanned row into the transcript, and no
+			// existing gate had any vocabulary for "a new call site of
+			// AppendMessage/AppendContinuation/ApplyCompaction appeared".
+			// Plants a second, unallowlisted call site of AppendMessage in
+			// core/session/manager.go — the exact shape a future background
+			// job or "just call the writer directly" shortcut would take —
+			// in the SAME package the sanctioned call already lives in, so
+			// this does not also trip I7's orphan-package rule (same
+			// convention as the single-move-writer cases above).
+			name: "session-message-writers/second-append-message-call-site",
+			wantOutput: "core/session/manager.go calls .AppendMessage( 2 time(s); " +
+				"allowlist permits 1",
+			gate: "check-session-message-writers.sh",
+			file: "core/session/manager.go",
+			append: "\nfunc zzGateProbeSecondAppendMessageCaller(m *Manager, ctx context.Context, sessionID string, msg Message) {\n" +
+				"\t_, _ = m.AppendMessage(ctx, sessionID, msg)\n" +
+				"}\n",
 		},
 	}
 
