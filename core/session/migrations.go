@@ -143,8 +143,13 @@ const sqlInitSchema = `
 // flush durability seam out of session_messages, closing the P0 where
 // a healthy turn wrote up to six copies of its own answer into the
 // transcript (chat-turn-integrity-01PMZ606 WP02 — see
-// migrations_stream_checkpoints.go). 0337 is reserved for the same
-// mission's repair migration (WP05); 0338-0340 belong to
+// migrations_stream_checkpoints.go). 0337 is the same mission's repair
+// migration (WP05): a bounded, per-session DELETE against
+// session_messages rows already polluted by that P0 on installs that
+// upgraded before 0336 landed, gated on the three-condition
+// discriminator in spec.md §5.3, not on streaming_failure_kind alone
+// (owner ruling on E-002, 2026-08-30: REPAIR — see
+// migrations_checkpoint_repair.go). 0338-0340 belong to
 // model-scheduled-jobs-01PMSJ01 — see docs/v0.65.0-merge-order.md §4.
 // 0340 adds created_by and tool_allowlist to scheduled_chat_runs so a
 // model-created schedule is distinguishable from a user-created one at
@@ -219,6 +224,7 @@ func Migrations() []migrations.Migration {
 		migration0334(),
 		migration0335(),
 		migration0336(),
+		migration0337(),
 		migration0340(),
 	}
 }

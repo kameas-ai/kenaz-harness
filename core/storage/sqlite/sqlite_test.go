@@ -163,11 +163,15 @@ func TestOpen_RegistersSessionMigrations(t *testing.T) {
 	// model-moves-transcript-01PMCH01 WP06.
 	// 0336 (stream_checkpoints table) lands with
 	// chat-turn-integrity-01PMZ606 WP02.
+	// 0337 (repair-checkpoint-rows: the bounded per-session DELETE that
+	// purges pre-0336 checkpoint pollution from session_messages,
+	// gated on the three-condition discriminator, spec.md §5.3) lands
+	// with chat-turn-integrity-01PMZ606 WP05.
 	// 0340 (scheduled_chat_runs.created_by + .tool_allowlist) lands with
-	// model-scheduled-jobs-01PMSJ01 WP09. 0337-0339 are reserved for
-	// sibling WPs in this and the chat-turn-integrity mission and were
-	// not registered as of WP09.
-	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 340}
+	// model-scheduled-jobs-01PMSJ01 WP09. 0338-0339 are reserved for
+	// sibling WPs in the chat-turn-integrity mission and were not
+	// registered as of WP09.
+	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 340}
 	if len(versions) != len(want) {
 		t.Fatalf("session migrations applied = %v, want %v", versions, want)
 	}
@@ -230,6 +234,7 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// 1 conflict-edge (1103, unified-context-artifacts-01NCTXU01 Phase 3 enshrine marker) +
 	// 1 search_fts_tool_rows (0335, model-moves-transcript-01PMCH01 WP06) +
 	// 1 stream_checkpoints (0336, chat-turn-integrity-01PMZ606 WP02) +
+	// 1 repair_checkpoint_rows (0337, chat-turn-integrity-01PMZ606 WP05) +
 	// 1 trust_anchors_init (bundle/700, bundle-download-and-verify-01PMZ909 UNIT-3) +
 	// 6 event-log/0100-0105 (audit-that-tells-the-truth-01PMZA10 UNIT-2:
 	//   events, event_chain_heads, redaction_rules, retention_config,
@@ -241,15 +246,16 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	//   01PMZB11 UNIT-2: the tasks table backing core/tasks.Registry's
 	//   persistence store) +
 	// 1 scheduled_chat_runs.created_by/.tool_allowlist (0340,
-	//   model-scheduled-jobs-01PMSJ01 WP09) = 54.
+	//   model-scheduled-jobs-01PMSJ01 WP09) = 55.
 	//
 	// ZA10's branch asserted 49: it was cut from a base whose count was 43,
 	// before 0336 and bundle/700 landed, so 43+6. The merged tree had all
 	// three sources at 51 (v0.65.0); UNIT-8 adds one more migration on
 	// top, hence 52; UNIT-2 (01PMZB11) adds one more still, hence 53;
-	// WP09 (0340) adds one more, hence 54.
-	if count != 54 {
-		t.Errorf("ledger count = %d, want 54", count)
+	// WP09 (0340) adds one more, hence 54; WP05 (0337) adds one more
+	// still, hence 55.
+	if count != 55 {
+		t.Errorf("ledger count = %d, want 55", count)
 	}
 }
 

@@ -100,6 +100,15 @@ func (f *migFakeDB) Query(ctx context.Context, query string, args ...any) (migra
 	// answer from that map rather than guessing — see
 	// TestMigration0332_PreservesArtifactVersionRows in
 	// core/storage/sqlite for the real-sqlite half of this behaviour.
+	// Migration 0337's first (and, when it finds no candidates, only)
+	// query: find sessions carrying at least one condition-1 checkpoint
+	// candidate. The fake has no row store, so report none — the
+	// row-level contract (all three shapes, real sqlite) is pinned by
+	// TestMigration0337_RepairsCheckpointRowsWithoutTouchingRealPartials
+	// in core/storage/sqlite.
+	if strings.HasPrefix(q, "select distinct session_id from session_messages") {
+		return &migEmptyRows{}, nil
+	}
 	if strings.HasPrefix(q, "select count(*) from sqlite_master where type='table' and name=?") {
 		n := 0
 		if len(args) == 1 {
@@ -453,14 +462,15 @@ func TestMigrations_RegisterAndApply(t *testing.T) {
 	// 0334 move_fidelity (model-moves-transcript-01PMCH01 WP03) +
 	// 0335 search_fts_tool_rows (model-moves-transcript-01PMCH01 WP06) +
 	// 0336 stream_checkpoints (chat-turn-integrity-01PMZ606 WP02) +
+	// 0337 repair_checkpoint_rows (chat-turn-integrity-01PMZ606 WP05) +
 	// 0340 scheduled_chat_runs_created_by (model-scheduled-jobs-01PMSJ01
-	// WP09; 0337-0339 are reserved for sibling WPs and were not
+	// WP09; 0338-0339 are reserved for sibling WPs and were not
 	// registered as of WP09)) =
-	// 40 applied entries (2 chassis bootstrap + 38 sessions migrations).
-	if got := len(db.ledger); got != 40 {
-		t.Fatalf("ledger size = %d, want 40", got)
+	// 41 applied entries (2 chassis bootstrap + 39 sessions migrations).
+	if got := len(db.ledger); got != 41 {
+		t.Fatalf("ledger size = %d, want 41", got)
 	}
-	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 340}
+	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 340}
 
 	for i, want := range wantVersions {
 		if db.ledger[i].Version != want {
