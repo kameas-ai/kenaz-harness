@@ -36,16 +36,34 @@ package session_test
 //     -> "clean — 6 destructive migration(s) all covered."
 //     Then, to rule out vacuous coverage: renamed
 //     core/storage/sqlite/migration_0337_test.go to *.disabled (removing
-//     every literal reference to "sessions/0337-repair-checkpoint-rows"
-//     from the test corpus) and re-ran the gate:
-//       "DESTRUCTIVE MIGRATIONS WITHOUT COVERAGE:
-//          sessions/0337-repair-checkpoint-rows
-//            (core/session/migrations_checkpoint_repair.go): DELETE FROM session_messages
-//        1 destructive migration(s) need a populated-table test..."
-//     -> confirms the gate genuinely names 0337 and the specific DELETE
-//     target, not a vacuous pass. Restored the file
+//     every literal reference to the 0337 repair migration's ID from the
+//     test corpus) and re-ran the gate. It reported that migration as
+//     lacking coverage, naming both the ID and its DELETE FROM
+//     session_messages target -> confirms the gate genuinely names it and
+//     the specific DELETE target, not a vacuous pass. Restored the file
 //     (`git status --porcelain` empty afterward) and re-ran the gate
 //     clean again.
+//
+//     ⚠️ WHY THIS FILE DELIBERATELY DOES NOT SPELL THE FULL MIGRATION ID.
+//     check-destructive-migration-coverage.sh accepts, as proof of
+//     coverage, ANY *_test.go whose source contains the migration's ID
+//     string. This record is committed as a doc-only _test.go file, so
+//     when it first landed it quoted the full literal -- and thereby
+//     SATISFIED THE GATE BY ITSELF. Verified 2026-09-07 by the release
+//     coordinator: with this file present, deleting
+//     migration_0337_test.go entirely left the gate reporting "clean --
+//     6 destructive migration(s) all covered". Removing BOTH files made
+//     it fail correctly. A prose file was standing in for the test that
+//     guards an irreversible DELETE against real user rows -- the exact
+//     documentation-instead-of-guarantee class this mission exists to
+//     remove, reintroduced by the mission's own closing record.
+//     Every mention here is therefore deliberately partial ("0337", "the
+//     repair migration") and MUST STAY THAT WAY. Do not "fix" it by
+//     restoring the full ID.
+//
+//     Owed, and not fixed here (owner: alec): the gate should require a
+//     test that actually opens a database, not merely one that mentions a
+//     string. Any future doc-only _test.go can re-open this hole.
 //
 //  2. THE AC-PI-1 FALSIFICATION (mandatory, not optional, not predicted
 //     — see PARAGRAPH 3 below for the full result). Mutated
