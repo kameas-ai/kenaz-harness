@@ -2,12 +2,20 @@
 // model-settings-reach-the-model-01PMZ101 UNIT-12, 2026-09-09).
 //
 // The finding: core/agents/bundled/code-reviewer.yaml declared
-// "anthropic/claude-sonnet-4-5" (hyphen) while OpenRouter's real, live
-// model catalog carries "anthropic/claude-sonnet-4.5" (dot) — a DIFFERENT
-// string than Anthropic's own direct-API id, which really is hyphenated
-// (see core/llm/anthropic/anthropic_test.go's "claude-sonnet-4-5" fixture).
-// Every bundled agent profile that named a "4-5" generation model had the
-// same typo; core/agents/bundled/*.yaml now use the dot form throughout.
+// "anthropic/claude-sonnet-4-5" (hyphen, vendor-prefixed) — a string that
+// was never valid for EITHER provider, not a right-string-wrong-provider
+// trade. OpenRouter's real, live model catalog namespaces by vendor and
+// carries "anthropic/claude-sonnet-4.5" (dot); Anthropic's own direct API
+// takes a BARE id with no vendor prefix at all, hyphenated throughout
+// ("claude-sonnet-4-5" — see core/llm/anthropic/anthropic_test.go's
+// fixture; nothing in the codebase strips a vendor prefix before dispatch).
+// So the vendor-prefixed hyphen form matched neither convention — an
+// adversarial test dispatching all five bundled profiles against a
+// direct-Anthropic profile confirmed identical rejection before and after
+// this fix, only the spelling in the error differs. Every bundled agent
+// profile that named a "4-5" generation model had the same typo;
+// core/agents/bundled/*.yaml now use the dot form throughout, which is
+// correct for the OpenRouter-shaped dispatch these profiles actually use.
 //
 // The reporter's sharpest point: existing coverage of the model-selection
 // path (llm_provider_adapter_test.go and friends) drives fake
