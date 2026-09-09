@@ -552,8 +552,33 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 	// target_model is more specific than the session picker, the same
 	// precedence D-4 already gives /effort's knob over the chat-level
 	// reasoning control.
+	//
+	// "default" is a sentinel, not a model id (live-`wails dev` bug,
+	// 2026-09-09: "llm: model \"default\" not authorised for profile
+	// ... (allowed: [...])"). At least seven producers in
+	// core/agentgraph author it as the documented "no opinion, fall
+	// back to whatever the run already has" value — modelExecutor's
+	// `model` attr default, reflectExecutor, reviewExecutor,
+	// plannerExecutor, routerAskModel's `model` attr default (all in
+	// exec_compute.go / exec_router.go), and both
+	// exec_escalation_ladder.go rungs — exactly mirroring the
+	// convention prompt_render.go's resolvePromptTemplate and
+	// tier_defaults.go already document and treat as `model == "" ||
+	// model == "default"`. Before this fix only the `req.Model != ""`
+	// half of that convention was applied here, so an authored (or
+	// defaulted) "default" was treated as an explicit kernel choice and
+	// forwarded verbatim past this seam to the registry's authorisation
+	// check — which only ever knows concrete provider model ids and
+	// correctly rejects it. This is THE choke point every LLMRequest
+	// construction site in core/agentgraph funnels through before
+	// reaching the registry (see the WP15 comment above), so resolving
+	// the sentinel here — rather than patching each of the seven
+	// producers separately, or teaching the registry's authorisation
+	// check about "default" (which would weaken that boundary for every
+	// future producer) — is what makes the sentinel structurally unable
+	// to leak regardless of which executor authored it.
 	model := a.modelOverride
-	if req.Model != "" {
+	if req.Model != "" && req.Model != "default" {
 		model = req.Model
 	}
 	gen := corellm.GenerationRequest{
