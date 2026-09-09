@@ -78,6 +78,24 @@ const scheduledChatRunsProvenanceNote = "sessions/0340-scheduled-chat-runs-creat
 	"to scheduled_chat_runs (created by 0325, unchanged since)."
 
 var expectedChangedTables = map[string][]string{
+	"v0.73.0": {
+		// `tasks` ONLY, same as v0.72.0. This is assertTasksTableMigrated's
+		// own probe insert -- a test artifact, not a schema change.
+		//
+		// v0.73.0 DID register a migration (sessions/0337-repair-checkpoint-rows,
+		// the transcript repair), but it is a DELETE against rows that do not
+		// exist in this snapshot chain -- no committed snapshot carries
+		// checkpoint junk -- so it changes no row here. Its ledger row is the
+		// only delta from v0.72.0's dump.
+		//
+		// scheduled_chat_runs is deliberately absent: sessions/0340's DEFAULT
+		// backfill has nothing left to do. Copying a previous tag's entry
+		// wholesale would silently excuse a real future change to it.
+		//
+		// Still owed (owner: alec): stop the probe writing to a watched table
+		// so a release needs no hand-written entry at all. Third tag running.
+		"tasks",
+	},
 	"v0.72.0": {
 		// ONLY `tasks` this time, NOT the scheduled_chat_runs/tasks pair
 		// v0.70.0 and v0.71.0 needed — v0.72.0 registered no migration at
