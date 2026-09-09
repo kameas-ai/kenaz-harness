@@ -69,6 +69,18 @@ type ForkRequest struct {
 	ToolAllowlist      []string
 	CrossProviderWarn  bool
 	ParentMessageIDs   []string // CoW reference seeds (FR-038)
+
+	// BudgetTokens / BudgetTimeS carry a dispatching sub-agent profile's
+	// explicit per-run caps (core/agents.Profile.BudgetTokens /
+	// BudgetTimeS) through Fork to the RunSpawner (owner directive
+	// 2026-09-09, mission requirement 3). Zero means the profile did not
+	// declare one. The RunSpawner is the actual consumer — see
+	// core/rpc.NewSubagentRunSpawner and
+	// chat.SubagentBudgetRegistry/applyProfileBudgetClamp for how the
+	// value is combined with the dispatching session's autonomy-tier
+	// ceiling (clamp, never raise).
+	BudgetTokens int
+	BudgetTimeS  int
 }
 
 // BranchHandle is what BranchSeam.Fork returns. Carries the IDs both

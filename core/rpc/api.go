@@ -2219,6 +2219,12 @@ func New(c *core.Core, opts ...Option) *API {
 				}
 				return profs[0].ID
 			},
+			// owner directive 2026-09-09, mission requirement 3: the SAME
+			// registry instance buildChatRunner wired into
+			// chat.Config.SubagentBudgets, obtained through the accessor
+			// rather than reconstructing a second one — a second registry
+			// would be written into here and never read by StartStream.
+			BudgetOverrides: stack.chatRunner.SubagentBudgets(),
 		}))
 		logging.L().Info("rpc.subagent_run_spawner.armed")
 		registerSubagentDispatchTool(c, stack.builtins, a.branchSeam)
@@ -6446,6 +6452,14 @@ func buildChatRunner(
 		// reads r.cfg.AutonomyKnobs == nil and silently no-ops — the
 		// gap this WP closes.
 		AutonomyKnobs: autonomyKnobsProvider,
+		// owner directive 2026-09-09, mission requirement 3: constructed
+		// once here so core/rpc.NewSubagentRunSpawner's BudgetOverrides
+		// can be wired to the SAME instance via
+		// chatRunner.SubagentBudgets() — see the SetRunSpawner call site
+		// in New(). nil would silently disable the profile-budget clamp
+		// (Set/Get/Clear are all nil-receiver-safe), so this is the one
+		// place that must not be left unset.
+		SubagentBudgets: chat.NewSubagentBudgetRegistry(),
 		// trust-surfaces-that-fire-01PMZ202 WP19: without these three,
 		// driveRun's `if r.cfg.SecretLookup != nil` guard never fires,
 		// so refs.WithResolver / refs.WithTurnSanitizer are never

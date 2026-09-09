@@ -265,11 +265,13 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 		// the call, bail out.
 		if env.Budget.MaxLLMCallsPerRun > 0 &&
 			env.Counters.LLMCallsMade >= env.Budget.MaxLLMCallsPerRun {
-			_ = res.Events.AppendKind(env.RunID, node.ID, EventBudgetCapHit, map[string]any{
-				"reason": "max_llm_calls_per_run",
-				"limit":  env.Budget.MaxLLMCallsPerRun,
-			})
-			return res, ErrBudgetExceeded
+			marker := PauseMarker{
+				Reason: "max_llm_calls_per_run",
+				Limit:  float64(env.Budget.MaxLLMCallsPerRun),
+				Used:   float64(env.Counters.LLMCallsMade),
+			}
+			_ = res.Events.AppendKind(env.RunID, node.ID, EventBudgetCapHit, marker)
+			return res, &BudgetCapError{Reason: marker.Reason, Limit: marker.Limit, Used: marker.Used}
 		}
 	}
 
@@ -433,11 +435,13 @@ func (b builtinToolExecutor) Execute(ctx context.Context, env *Env, node *Node, 
 
 	if env.Budget.MaxToolCallsPerRun > 0 && env.Counters != nil &&
 		env.Counters.ToolCallsMade >= env.Budget.MaxToolCallsPerRun {
-		_ = res.Events.AppendKind(env.RunID, node.ID, EventBudgetCapHit, map[string]any{
-			"reason": "max_tool_calls_per_run",
-			"limit":  env.Budget.MaxToolCallsPerRun,
-		})
-		return res, ErrBudgetExceeded
+		marker := PauseMarker{
+			Reason: "max_tool_calls_per_run",
+			Limit:  float64(env.Budget.MaxToolCallsPerRun),
+			Used:   float64(env.Counters.ToolCallsMade),
+		}
+		_ = res.Events.AppendKind(env.RunID, node.ID, EventBudgetCapHit, marker)
+		return res, &BudgetCapError{Reason: marker.Reason, Limit: marker.Limit, Used: marker.Used}
 	}
 
 	if !env.Tools.Has(a.Name) {

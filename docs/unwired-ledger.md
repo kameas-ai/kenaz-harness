@@ -830,9 +830,32 @@ persisted-history assertion. **Date:** 2026-08-23.
 
 ### 2026-08-22 · Bundled sub-agent profiles advertise containment (allowed_tools/denied_tools/budget_*) that reaches no consumer (`subagent-control-and-background-tasks-01PMZB11`, containment review of PR #307 finding B3)
 
-Every bundled profile (`core/agents/bundled/*.yaml`) declares
-`allowed_tools`, `denied_tools`, `budget_tokens` and `budget_time_s`. None
-reaches a consumer on the dispatch path:
+**UPDATE 2026-09-09 — `budget_tokens`/`budget_time_s` half FIXED, filed
+live against the owner's "agent reached the per-run budget cap" report
+(ruling: "we should be using our built in autonomy dial").** As of that
+change, `Profile.BudgetTokens`/`BudgetTimeS` DO reach a consumer:
+`core/tools/subagentdispatch/tool.go` forwards them onto
+`ForkRequest.BudgetTokens`/`BudgetTimeS` (new fields) →
+`core/rpc.NewSubagentRunSpawner` records them in
+`chat.SubagentBudgetRegistry`, keyed by the spawned child session id →
+`ChatRunner.StartStream` reads the registry back and
+`chat.applyProfileBudgetClamp` folds the value onto the run's
+`coreag.Budget` (clamp, not override — see that function's doc for the
+precedence justification). This landed alongside the bigger fix in the
+same change: the per-run call-volume budget cap
+(`MaxLLMCallsPerRun`/`MaxToolCallsPerRun`) is now scaled by the
+dispatching session's autonomy tier at all (`chat.applyBudgetTierDial`,
+`autonomy.BudgetCeilingForTier`) — before this, those two caps were the
+flat `chat_default_classic.yaml` constants (5000/10000) for every tier
+alike, which is what actually fired live. `Profile.BudgetTokens`/
+`BudgetTimeS`'s doc comments were updated in the same commit.
+
+**`AllowedTools`/`DeniedTools` are UNCHANGED — still open, see below.**
+The two containment fields and the two budget fields were always
+separate gaps sharing one entry; only the budget half had a live user
+report driving it. Every bundled profile (`core/agents/bundled/*.yaml`)
+declares `allowed_tools` and `denied_tools`. Neither reaches a consumer
+on the dispatch path:
 
 - `BranchSeamAdapter.Fork` (`core/rpc/views/agentgraph/env_deps_branch.go`)
   never reads `req.ToolAllowlist`, though `coreag.ForkRequest` carries the
@@ -842,25 +865,23 @@ reaches a consumer on the dispatch path:
   it at all.
 - `Profile.IsAllowed` / `IsDenied` (`core/agents/profile.go`) have zero
   production callers.
-- `BudgetTokens` / `BudgetTimeS` have no reader outside the field copy
-  into `Profile` itself; `core/rpc/subagent_run_spawner.go` uses one
-  fixed `defaultSubagentSpawnTimeout` for every profile.
 
 Net effect: dispatching `explore` — whose bundled YAML says "Read-only
 research worker" and lists `kenaz__write_file` / `kenaz__edit_file` /
 `kenaz__bash` under `denied_tools` — produces a child session with the
-full session tool catalogue, those three tools included, and no
-profile-specific token ceiling. Session-level Cedar containment
-(`cedar.ActionUseTool`, evaluated for every tool call in every session)
-still gates every call, so this is not an absolute-terms regression, but
-the profile fields, `Profile.IsAllowed`/`IsDenied`'s doc comments, and
-the `kenaz__subagent_dispatch` tool description all previously implied a
-restriction that does not exist. The tool description and the four
-`agents.Profile` field docs were corrected in the same commit as this
-entry to stop asserting it; the fields, `IsAllowed` and `IsDenied` stay
-(deleting them fails the ritual's ruling test — no named live
-substitute, no documented retirement, and the mission that will consume
-them is already ruled to land).
+full session tool catalogue, those three tools included (now with a
+real, tier-clamped budget ceiling, but no tool-catalogue narrowing).
+Session-level Cedar containment (`cedar.ActionUseTool`, evaluated for
+every tool call in every session) still gates every call, so this is not
+an absolute-terms regression, but the profile fields,
+`Profile.IsAllowed`/`IsDenied`'s doc comments, and the
+`kenaz__subagent_dispatch` tool description all previously implied a
+restriction that does not exist for tools (it now does for budget). The
+tool description and the `agents.Profile` field docs were corrected when
+this entry was first filed to stop asserting it; the fields, `IsAllowed`
+and `IsDenied` stay (deleting them fails the ritual's ruling test — no
+named live substitute, no documented retirement, and the mission that
+will consume them is already ruled to land).
 
 **Not fixed here because real enforcement needs a session-scoped tool
 permission overlay** — the containment PR #307 review answered (owner
@@ -875,8 +896,46 @@ now, inside a three-finding containment fix, would mean touching
 real mission-scale work, not a same-PR wire.
 
 **Owner:** alec. **Blocker:** `subagent-control-and-background-tasks-01PMZB11`
-UNIT-9 (not yet dispatched this release — see owner ruling G-1). **Date:**
-2026-08-22.
+UNIT-9 (not yet dispatched this release — see owner ruling G-1), for
+`AllowedTools`/`DeniedTools` only. **Date:** 2026-08-22 (opened),
+2026-09-09 (budget half closed).
+
+### 2026-09-09 · `kernel.emitCapHit`'s `PausePending`/`ResumeToken` document a `BumpAndResume` RPC that was never built — cap hits still hard-terminate the run
+
+Found while wiring the autonomy tier to the per-run budget cap (owner
+directive, live "agent reached the per-run budget cap" report).
+`core/agentgraph/kernel.go`'s `PauseMarker`/`emitCapHit` doc comments
+say a cap hit "pauses" the run and the frontend echoes a `ResumeToken`
+back via `BumpAndResume` "so the kernel can match resume-without-bump as
+a no-op" (WP17, `agentgraph-total-convergence-01PMGX01`, "cap-hit
+pause-not-kill"). **`BumpAndResume` does not exist anywhere in this
+tree** — not as a Go function, not as a Wails binding, not as a frontend
+call site. (This is a *different*, unrelated `BumpAndResume` from the
+one in the 2026-08-14 orphan-deletion entry above, which was part of the
+already-deleted `core/agentgraph/dials`/`dialsview` cascade; this one is
+still live prose in `kernel.go` today.)
+
+What actually happens on a cap hit: `chat.driveRun`'s
+`errors.Is(err, coreag.ErrBudgetExceeded)` case sets `reason =
+"backend-error"` and closes the stream — a hard terminal error, not a
+pause the user can resume from. `PausePending: true` is set on every
+emitted marker regardless, which is the exact "a comment (here, a field
+docstring plus a struct literal) asserting an invariant nothing
+enforces" shape CLAUDE.md's ritual targets.
+
+**Not fixed here**: building the resume RPC (a new Wails-bound method,
+a frontend "bump and retry" affordance reading the marker's
+`ResumeToken`/`Limit`/`Used`, and a kernel-side resume-with-bumped-cap
+path) is real UI+RPC surface work, out of scope for a backend-only
+budget-governance fix that must not touch Wails binding signatures. The
+message fix landed alongside this entry (`chat.budgetCapMessage`) gives
+the user an actionable "raise the tier in Settings" instruction instead,
+which does not require a resume RPC to be true.
+
+**Owner:** alec. **Blocker:** a mission to build the actual resume path
+(new RPC + frontend), or a decision to rewrite `PauseMarker`'s docs down
+to what `ErrBudgetExceeded` actually does today (hard-terminate) and
+drop `PausePending`. **Date:** 2026-09-09.
 
 ### 2026-08-22 · `RunOptions.SkipCache` has zero frontend writers (UNIT-13, `automation-actually-runs-01PMZ404`)
 

@@ -57,6 +57,37 @@ var ErrPaused = errors.New("agentgraph: run paused")
 // ErrBudgetExceeded is returned when a per-run budget cap fires.
 var ErrBudgetExceeded = errors.New("agentgraph: budget exceeded")
 
+// BudgetCapError decorates ErrBudgetExceeded with which cap fired and
+// the limit/usage that tripped it (owner directive 2026-09-09, filed
+// live against the generic "agent reached the per-run budget cap"
+// message: it named neither the cap, the limit, nor a way to raise it).
+//
+// Reason matches checkBudget's cap names ("max_tokens_per_run",
+// "max_llm_calls_per_run", "max_tool_calls_per_run",
+// "max_cost_usd_per_run", "max_wallclock_per_run_seconds",
+// "max_backtracks_per_run").
+//
+// Is(ErrBudgetExceeded) reports true so every existing
+// errors.Is(err, ErrBudgetExceeded) call site keeps matching without
+// change -- callers that only need the sentinel-equality behaviour
+// never have to know this type exists. Callers that want the detail
+// (chat.driveRun's terminal message) use errors.As.
+type BudgetCapError struct {
+	Reason string
+	Limit  float64
+	Used   float64
+}
+
+func (e *BudgetCapError) Error() string {
+	return fmt.Sprintf("agentgraph: budget exceeded (%s: %.0f/%.0f)", e.Reason, e.Used, e.Limit)
+}
+
+// Is reports equality against ErrBudgetExceeded so errors.Is(err,
+// ErrBudgetExceeded) keeps working for every existing call site.
+func (e *BudgetCapError) Is(target error) bool {
+	return target == ErrBudgetExceeded
+}
+
 // ErrNotImplemented marks executors that exist only as stubs in this
 // bundle (Fork/Merge real impl lands in Bundle B; Corpus real impl in
 // Bundle C). Tests rely on the sentinel to assert the kernel surfaced
