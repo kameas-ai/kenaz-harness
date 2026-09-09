@@ -686,6 +686,22 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 			_ = emitter.Error(ctx, req, prof, decorated)
 			return nil, decorated
 		}
+		// Same decoration for *ErrPaymentRequired (402) as ErrAuth above:
+		// the chat surface needs (provider, profileID) to tell the user
+		// which of their configured providers is out of credit — see
+		// ErrProviderPaymentRequired's doc comment.
+		var paymentErr *llm.ErrPaymentRequired
+		if errors.As(err, &paymentErr) {
+			decorated := &llm.ErrProviderPaymentRequired{
+				Provider:  prof.Kind,
+				ProfileID: prof.ID,
+				ModelID:   prof.Model,
+				Reason:    paymentErr.Message,
+				Cause:     paymentErr,
+			}
+			_ = emitter.Error(ctx, req, prof, decorated)
+			return nil, decorated
+		}
 		_ = emitter.Error(ctx, req, prof, err)
 		return nil, err
 	}

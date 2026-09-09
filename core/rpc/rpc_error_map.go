@@ -52,6 +52,9 @@ func friendlyOr(err error, fallback string) string {
 //
 //   - *ErrAuth / *ErrProviderAuthFailed → code "auth", not retryable,
 //     hint to check the API key in Settings.
+//   - *ErrPaymentRequired / *ErrProviderPaymentRequired → code
+//     "payment_required", not retryable, hint to add credits or lower
+//     max_tokens/prompt size.
 //   - *ErrTransient (status 413 or any 5xx) → code "transient", retryable.
 //   - *ErrRetryBudgetExhausted → code "budget_exhausted", not retryable,
 //     hint to re-send the message (the LLM provider may be temporarily down).
@@ -80,6 +83,27 @@ func MapLLMError(err error) *RPCError {
 			Code:      "auth",
 			Message:   msg,
 			Hint:      "Check your API key in Settings → Providers.",
+			Retryable: false,
+		}
+	}
+
+	// ErrPaymentRequired / ErrProviderPaymentRequired — insufficient
+	// provider credit (402). Non-retryable: retrying cannot conjure
+	// credits.
+	var providerPayment *corellm.ErrProviderPaymentRequired
+	var payment *corellm.ErrPaymentRequired
+	if errors.As(err, &providerPayment) || errors.As(err, &payment) {
+		msg := err.Error()
+		if providerPayment != nil {
+			msg = providerPayment.Reason
+		} else if payment != nil {
+			msg = payment.Message
+		}
+		msg = friendlyOr(err, msg)
+		return &RPCError{
+			Code:      "payment_required",
+			Message:   msg,
+			Hint:      "Add credits with the provider, or lower max_tokens / shorten the prompt.",
 			Retryable: false,
 		}
 	}
