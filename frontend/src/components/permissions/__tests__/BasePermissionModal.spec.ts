@@ -1,10 +1,11 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import { nextTick } from 'vue';
 import BasePermissionModal from '@/components/permissions/BasePermissionModal.vue';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
 import type { PermissionRequest } from '@/lib/types';
+import { useToastQueue, _resetToastQueue } from '@/composables/useToastQueue';
 
 /**
  * BasePermissionModal — FR-001 / WP01 review migration tests.
@@ -52,6 +53,10 @@ function mountModal(request: PermissionRequest | null, resolveImpl = vi.fn(async
 }
 
 describe('BasePermissionModal (FR-001 BaseDialog migration)', () => {
+  beforeEach(() => {
+    _resetToastQueue();
+  });
+
   afterEach(() => {
     document.body.innerHTML = '';
     vi.restoreAllMocks();
@@ -136,6 +141,45 @@ describe('BasePermissionModal (FR-001 BaseDialog migration)', () => {
     expect(dangerEl).not.toBeNull();
     expect(dangerEl!.textContent).toContain('Dangerous');
     expect(dangerEl!.textContent).toContain('This may delete important files.');
+
+    wrapper.unmount();
+  });
+
+  it('dismisses and surfaces an honest message when resolve rejects with ErrUnknownRequest (backend restart trap)', async () => {
+    // Reproduces the real backend error text: core/policy/cedar/prompt.go's
+    // Registry.Resolve returns cedar.ErrUnknownRequest = "cedar/prompt:
+    // unknown request id" when the pending entry the modal is holding no
+    // longer exists in the (in-process, non-persistent) prompt registry —
+    // e.g. because the backend restarted while the prompt was pending.
+    const resolveMock = vi.fn(async () => {
+      throw new Error('cedar/prompt: unknown request id');
+    });
+    const req = makeRequest();
+    const wrapper = mountModal(req, resolveMock);
+    await nextTick();
+
+    const btn = document.querySelector('[data-testid="perm-modal-allow-once"]') as HTMLElement;
+    expect(btn).not.toBeNull();
+    btn.click();
+    await flushPromises();
+
+    // The modal must not be left stuck: it must emit resolved so the
+    // parent queue drops the stale request (which hides the modal, since
+    // BashPermissionModal/etc. render :request="head" from the queue).
+    expect(wrapper.emitted('resolved')).toBeTruthy();
+    expect(wrapper.emitted('resolved')![0][0]).toBe('req-001');
+
+    // And it must never report the vanished request as approved.
+    const decisionEmitted = wrapper.emitted('resolved')![0][1] as string;
+    expect(decisionEmitted).not.toBe('allow_once');
+    expect(decisionEmitted).not.toBe('allow_always');
+
+    // The user must be told plainly what happened, in a surface that
+    // survives the modal closing (a toast), not just the modal's own
+    // (about-to-disappear) inline error strip.
+    const { toasts } = useToastQueue();
+    expect(toasts.length).toBe(1);
+    expect(toasts[0].message.toLowerCase()).toContain('restart');
 
     wrapper.unmount();
   });
