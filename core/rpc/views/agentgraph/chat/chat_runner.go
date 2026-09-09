@@ -1658,7 +1658,19 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		}
 	default:
 		reason = "backend-error"
-		message = err.Error()
+		// Prefer the typed error's Friendly() text over the raw wrapped
+		// message. By kernel-exit time err.Error() carries the full
+		// graph-node chain ("loop: node ...: body ...: model: node ...:
+		// chat: registry stream: llm: ...") — useful in the log line
+		// above, but developer noise in a chat bubble. Friendly()
+		// renders fresh from the typed error's own fields (provider,
+		// status, message) and ignores the wrapping text entirely, so
+		// this also strips the node-chain prefix for every typed error
+		// in the taxonomy (ErrAuth, ErrPaymentRequired, ErrInvalidRequest,
+		// the attachment-error family, …), not just the case that
+		// prompted this fix. Untyped errors still fall back to
+		// err.Error() unchanged.
+		message = corellm.FriendlyOr(err, err.Error())
 	}
 
 	// long-turn-resilience-01KR3PRS WP03: when the kernel exited with

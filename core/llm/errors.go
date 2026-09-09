@@ -186,6 +186,41 @@ func (e *ErrInvalidRequest) Friendly() string {
 		e.Status, e.Message)
 }
 
+// ErrPaymentRequired marks a 402 provider rejection: the request would
+// exceed the account's available credits/balance. Non-transient — never
+// retried (FR-017, same rule as ErrAuth/ErrInvalidRequest): retrying
+// cannot conjure credits, so classifying this into ErrTransient would
+// burn the retry budget on a doomed request.
+//
+// It is a distinct type from ErrInvalidRequest (rather than folding 402
+// into that bucket the way ClassifyStatus's default case does for other
+// 4xx codes) because ErrInvalidRequest.Friendly() tells the user to
+// "check the request shape" — actively wrong advice for an insufficient-
+// credit rejection, which has nothing to do with malformed parameters.
+type ErrPaymentRequired struct {
+	Status  int
+	Message string
+}
+
+func (e *ErrPaymentRequired) Error() string {
+	return fmt.Sprintf("llm: payment required (status=%d): %s", e.Status, e.Message)
+}
+
+// Friendly renders ErrPaymentRequired in the model-agnostic, type-specific
+// style of the ErrAuth/ErrInvalidRequest family. It carries no
+// provider/profile context on its own — that is added by the
+// registry-level decoration, ErrProviderPaymentRequired, mirroring how
+// ErrAuth is decorated into ErrProviderAuthFailed. This base Friendly()
+// is the fallback for callers that see the raw adapter error before
+// decoration (e.g. adapter-level tests, TestKey paths).
+func (e *ErrPaymentRequired) Friendly() string {
+	msg := e.Message
+	if msg == "" {
+		msg = "Add credits, or lower max_tokens / shorten the prompt, then try again."
+	}
+	return fmt.Sprintf("Insufficient credits for this request. %s", msg)
+}
+
 // ErrPolicyDenied indicates a policy-engine refusal pre-call.
 type ErrPolicyDenied struct {
 	Reason string
@@ -233,6 +268,55 @@ func (e *ErrProviderAuthFailed) Error() string {
 // traverses through ErrProviderAuthFailed.
 func (e *ErrProviderAuthFailed) Unwrap() error { return e.Cause }
 
+// ErrProviderPaymentRequired is the registry-level decoration of
+// *ErrPaymentRequired with the profile/provider context needed to tell
+// the user which of their configured providers is out of credit — the
+// same shape as ErrProviderAuthFailed (provider-keychain-rotation-
+// 01KQ8TD9 WP01), applied to the 402 leg instead of 401/403. It wraps
+// the raw *ErrPaymentRequired so errors.As works for both types in the
+// same chain:
+//
+//	var paymentFailed *ErrProviderPaymentRequired
+//	var paymentBare    *ErrPaymentRequired
+//	errors.As(err, &paymentFailed) // true — registry context
+//	errors.As(err, &paymentBare)   // true — via Unwrap
+type ErrProviderPaymentRequired struct {
+	Provider  string              // adapter kind: "anthropic" | "openai" | …
+	ProfileID string              // the profile that was about to be dispatched
+	ModelID   string              // the resolved model (post-override)
+	Reason    string              // human-readable copy from the wrapped ErrPaymentRequired.Message
+	Cause     *ErrPaymentRequired // original adapter-level error; reachable via Unwrap
+}
+
+func (e *ErrProviderPaymentRequired) Error() string {
+	return fmt.Sprintf("llm: provider payment required (provider=%s profile=%s model=%s): %s",
+		e.Provider, e.ProfileID, e.ModelID, e.Reason)
+}
+
+// Unwrap exposes the underlying *ErrPaymentRequired so
+// errors.As(err, &ErrPaymentRequired{}) traverses through
+// ErrProviderPaymentRequired.
+func (e *ErrProviderPaymentRequired) Unwrap() error { return e.Cause }
+
+// Friendly renders ErrProviderPaymentRequired naming the provider and
+// profile so a user with several configured providers knows which
+// account is out of credit, followed by the provider's own remedy text
+// (Reason carries the wrapped ErrPaymentRequired.Message verbatim — the
+// 402 body already says "add credits, or lower max_tokens or prompt
+// size", so this does not invent a remedy the harness cannot perform;
+// it just attributes the provider's own words to the right account).
+func (e *ErrProviderPaymentRequired) Friendly() string {
+	who := e.Provider
+	if e.ProfileID != "" {
+		who = fmt.Sprintf("%s (profile %q)", who, e.ProfileID)
+	}
+	msg := e.Reason
+	if msg == "" {
+		msg = "This request would exceed your available credits. Add credits, or lower max_tokens / shorten the prompt, then try again."
+	}
+	return fmt.Sprintf("%s rejected this request for insufficient credits: %s", who, msg)
+}
+
 // IsTransient reports whether err should be retried by the middleware.
 //
 // The classification is by error type (errors.As against ErrTransient)
@@ -245,6 +329,37 @@ func IsTransient(err error) bool {
 	}
 	var t *ErrTransient
 	return errors.As(err, &t)
+}
+
+// friendlyErr is implemented by error types in this package (and any
+// type wrapping them) that render a model-agnostic, user-actionable
+// message via Friendly() in place of the raw error text/chain.
+type friendlyErr interface{ Friendly() string }
+
+// FriendlyOr returns the Friendly() text of the first error in err's
+// chain that implements Friendly(), provided that text is non-empty.
+// Otherwise it returns fallback unchanged.
+//
+// This is the shared implementation behind two independent call sites
+// that both need it and cannot import one another: core/rpc's
+// friendlyOr (rpc_error_map.go, the synchronous-RPC boundary) and the
+// chat runner's terminal-message assembly (core/rpc/views/agentgraph/
+// chat/chat_runner.go, the mid-stream boundary — chat_runner.go's
+// "backend-error" default case used to render err.Error() verbatim,
+// which by kernel-exit time carries the full graph-node wrapping chain
+// ("loop: node ...: body ...: model: node ...: chat: registry stream:
+// llm: ..."); that is the bug this function closes for that path).
+// core/rpc/views/agentgraph/chat cannot import core/rpc (core/rpc wires
+// the chat package, not the reverse), so the logic lives here in
+// core/llm instead of being duplicated by hand at each boundary.
+func FriendlyOr(err error, fallback string) string {
+	var f friendlyErr
+	if errors.As(err, &f) {
+		if s := f.Friendly(); s != "" {
+			return s
+		}
+	}
+	return fallback
 }
 
 // ── Attachment pre-flight errors (multimodal-io-01KQ8TDF FR-002) ─────────

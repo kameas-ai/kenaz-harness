@@ -226,6 +226,45 @@ func TestAdapter_ErrorClassification(t *testing.T) {
 			},
 		},
 		{
+			// 402 is the reported bug (provider-billing-failure mission):
+			// before classification this fell into the ErrInvalidRequest
+			// catch-all, whose Friendly() text ("check the request shape")
+			// is actively wrong for an insufficient-credits rejection.
+			name:   "402 payment required",
+			status: 402,
+			body:   `{"type":"error","error":{"type":"invalid_request_error","message":"This request's maximum cost exceeds your available credits. Add credits, or lower max_tokens or prompt size."}}`,
+			assertErr: func(t *testing.T, err error) {
+				var pr *llm.ErrPaymentRequired
+				if !errors.As(err, &pr) {
+					t.Fatalf("expected ErrPaymentRequired, got %T %v", err, err)
+				}
+				if pr.Status != 402 {
+					t.Fatalf("status = %d", pr.Status)
+				}
+				if !strings.Contains(pr.Message, "maximum cost exceeds") {
+					t.Fatalf("message = %q", pr.Message)
+				}
+				if llm.IsTransient(err) {
+					t.Fatalf("402 must not be transient — retrying cannot conjure credits")
+				}
+				// It must NOT classify as the generic ErrInvalidRequest —
+				// that type's Friendly() text ("malformed parameters...
+				// check the request shape") is wrong advice for a billing
+				// failure.
+				var ir *llm.ErrInvalidRequest
+				if errors.As(err, &ir) {
+					t.Fatalf("402 must not also match ErrInvalidRequest, got %v", ir)
+				}
+				friendly := pr.Friendly()
+				if !strings.Contains(friendly, "credit") {
+					t.Fatalf("Friendly() = %q, want it to mention credits", friendly)
+				}
+				if strings.Contains(friendly, "malformed parameters") {
+					t.Fatalf("Friendly() = %q, leaked the generic invalid-request copy", friendly)
+				}
+			},
+		},
+		{
 			name:   "429 transient",
 			status: 429,
 			body:   `{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`,
