@@ -27,6 +27,7 @@ import (
 
 	coreagents "github.com/kameas-ai/kenaz-harness/core/agents"
 	llm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/envprovider"
 )
 
 // liveOpenRouterCatalogModels mirrors the models a real OpenRouter
@@ -193,5 +194,45 @@ func TestRegistry_StreamAuthorizesDefaultModelEvenWithoutOverride(t *testing.T) 
 	}
 	if adapter.calls != 0 {
 		t.Fatalf("adapter was called (%d times) with an unauthorized default model", adapter.calls)
+	}
+}
+
+// TestEnvProviderDefaultModels_OpenRouterIsAuthorized closes the gap an
+// independent review found in this PR: core/llm/envprovider.DefaultModels
+// carried the identical hyphen typo for its "openrouter" entry — a second,
+// separate live site for the same defect class, on the cmd/harness-vm and
+// served-mode default-model resolution path that core/agents/bundled/*.yaml
+// coverage above does not reach (envprovider.go's own doc comment calls this
+// table the single source of truth for both callers). Bare "anthropic" is
+// intentionally NOT checked here: it is a direct-API kind with no vendor
+// prefix and is authorized by construction against any profile whose Models
+// list is empty (llm.ProviderProfile.AvailableModels' single-model
+// fallback) — the OpenRouter entry is the one that must match a live,
+// vendor-namespaced catalog.
+func TestEnvProviderDefaultModels_OpenRouterIsAuthorized(t *testing.T) {
+	r, adapter := newOpenRouterFourModelsProfile(t)
+
+	model := envprovider.DefaultModels["openrouter"]
+	if model == "" {
+		t.Fatal("envprovider.DefaultModels has no \"openrouter\" entry")
+	}
+
+	stream, err := r.Stream(context.Background(), llm.GenerationRequest{
+		ProfileID: "openrouter-4-models",
+		Model:     model,
+		SessionID: "s",
+	})
+	if err != nil {
+		t.Fatalf("envprovider.DefaultModels[%q] = %q, which registry.Stream rejected "+
+			"against profile \"openrouter-4-models\" (models: %v): %v",
+			"openrouter", model, liveOpenRouterCatalogModels, err)
+	}
+	for range stream.Events() {
+	}
+	if _, err := stream.Final(); err != nil {
+		t.Fatalf("stream.Final: %v", err)
+	}
+	if adapter.calls == 0 {
+		t.Fatal("expected the fake adapter to have been reached (authorization passed)")
 	}
 }
