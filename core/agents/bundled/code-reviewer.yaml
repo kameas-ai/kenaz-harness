@@ -5,7 +5,7 @@ when_to_use: |
   Use when the parent session needs a focused code review of a file, diff, or
   module. The reviewer reads code and produces actionable feedback but cannot
   apply changes. Pair with the implementer profile to apply suggestions.
-model: anthropic/claude-sonnet-4-5
+model: anthropic/claude-sonnet-4.5
 autonomy_tier: cautious
 allowed_tools:
   - kenaz__read_file

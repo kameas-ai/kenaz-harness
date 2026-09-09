@@ -6,7 +6,7 @@ when_to_use: |
   adding a function, fixing a bug, writing tests, or refactoring a module.
   The implementer has read and write filesystem access plus bash. Give it a
   precise task description and let it work autonomously within its budget.
-model: anthropic/claude-sonnet-4-5
+model: anthropic/claude-sonnet-4.5
 autonomy_tier: default
 allowed_tools:
   - kenaz__read_file
