@@ -9,13 +9,32 @@
 # transcript when it was only ever meant to checkpoint it. Every existing
 # gate in this directory answers a different question (single writer for
 # MOVE metadata, single persistence FILE, destructive migration coverage);
-# none of them would have caught a second, unplanned call site of the
-# functions that actually persist a row into session_messages. This gate
-# is that missing tripwire: it enumerates every non-test call site of
-# AppendMessage / AppendContinuation / ApplyCompaction and fails on any
-# growth beyond a dated allowlist — not because a new call site is
-# necessarily wrong, but because durability mechanisms writing into the
-# transcript is exactly the class that must never land silently again.
+# none of them would have caught a second, unplanned call site reaching
+# session_messages. This gate is that tripwire: it enumerates every
+# non-test call site of a fixed symbol list and fails on any growth
+# beyond a dated allowlist — not because a new call site is necessarily
+# wrong, but because durability mechanisms writing into the transcript is
+# exactly the class that must never land silently again.
+#
+# F2 CORRECTION (2026-09-09): the original SYMBOLS list — AppendMessage,
+# AppendContinuation, ApplyCompaction — is exactly the set of LEAF
+# functions that execute the SQL write, and that was the wrong altitude.
+# The actual P0 (runPeriodicFlush) never called any of them directly: it
+# called PartialPersister.PersistPartial, an INTERFACE method whose
+# production implementation is a closure in core/rpc/api.go that itself
+# calls AppendMessage once. That closure's source line does not change
+# when a new caller starts invoking the interface more often — the leaf
+# grep count is blind to call FREQUENCY, only call-site COUNT, and a new
+# caller reaching an already-sanctioned leaf through an existing seam
+# adds no new leaf line to see. A reviewer proved this by restoring the
+# pre-fix core/rpc/views/agentgraph/chat/partial_flush.go verbatim and
+# running this gate: it exited 0. PersistPartial and AppendEntry (the
+# HistoryWriter seam — see core/agentgraph/seams.go — through which every
+# non-partial transcript write also flows) are now first-class SYMBOLS
+# for exactly this reason: they are the seam altitude at which a NEW
+# CALLER is visible, even when the leaf write it eventually reaches is
+# unchanged. This closes the demonstrated hole but not the general one —
+# see blind spot 4 below.
 #
 # WHAT THIS GATE CAN AND CANNOT SEE (read before trusting it)
 # -------------------------------------------------------------
@@ -25,7 +44,7 @@
 # (`func (m *Manager) AppendMessage(`, no dot precedes the name) or an
 # interface method signature (`AppendMessage(ctx ...)` inside a `type X
 # interface { ... }` block, also no leading dot). This is a deliberate,
-# narrow textual match, not a type-checked call graph, and it has three
+# narrow textual match, not a type-checked call graph, and it has four
 # known blind spots:
 #
 #   1. METHOD-NAME COLLISION. Any receiver type with a same-named method
@@ -51,22 +70,53 @@
 #   3. LINE-COUNT GRANULARITY. `grep -c` counts MATCHING LINES, not
 #      occurrences — two calls to the same symbol on one physical line
 #      would count as one. No call site in the current tree does this.
+#   4. UNENUMERATED SEAMS (the F2 gap, narrowed but not closed). This
+#      gate can only ever see the symbols named in SYMBOLS below. Any
+#      OTHER interface method or wrapper that eventually reaches
+#      session_messages — and is not itself named here — hides a new
+#      caller exactly the way PersistPartial did before this fix,
+#      because the leaf write it bottoms out at is a fixed, already-
+#      allowlisted line whose count does not move. PersistPartial and
+#      AppendEntry are now enumerated because they are the two seams a
+#      real incident and this review demonstrated; nothing here proves
+#      there is no third. Concretely NOT covered by this gate today,
+#      named rather than silently omitted:
+#        - core/usage/usage.go's raw `UPDATE session_messages ...` via
+#          tx.Exec (updates usage-tracking columns on an existing row;
+#          does not mint a new row, so it is a different risk class from
+#          the P0 but is still an uncounted mutator of this table).
+#        - session.Manager.MarkStreamingFailure and
+#          session.Manager.DeleteArchivedBefore (UPDATE / DELETE against
+#          an existing row, not an INSERT of a new transcript entry).
+#        - the sessions/checkpoint-repair migration's own
+#          `DELETE FROM session_messages` (migrations_checkpoint_repair.go),
+#          a one-time repair path, not a runtime writer.
+#      None of these mint a duplicate transcript row the way the P0 did,
+#      which is why they were left out of this pass rather than folded
+#      into SYMBOLS sight unseen; each is a mutator of the same table by
+#      a different mechanism (raw SQL, not a Go symbol this grep-based
+#      design can name) and would need its own scan shape, not a SYMBOLS
+#      entry. Extending this gate to them is future work, not something
+#      this fix silently claims to have done.
 #
 # What the gate DOES promise: every call shaped like the ones enumerated
 # below, on their own line, through any receiver, is counted per (file,
 # symbol) pair, and the count may not increase without a dated allowlist
 # update naming the new line. That is sufficient to catch the actual
-# defect class (a NEW call site appearing) even though it cannot prove a
-# call site's TYPE is session.Manager without a real Go type checker.
+# defect class (a NEW call site of a NAMED symbol appearing) even though
+# it cannot prove a call site's TYPE is session.Manager without a real Go
+# type checker, and it is blind to any writer that reaches
+# session_messages through a symbol not named in SYMBOLS (blind spot 4).
 #
 # ALLOWLIST FORMAT
 # -----------------
 # scripts/ci/allowlists/i-session-message-writers.txt, one
 # `<repo-relative-path>:<Symbol>:<count>` per line. `count` is the number
-# of matching lines this gate tolerates in that file for that symbol — NOT
-# a call site identifier, because line numbers shift on unrelated edits
-# and using them as keys would force an allowlist update on every nearby
-# reformat. A file/symbol pair not listed is implicitly allowlisted at 0.
+# of matching call-site lines this gate tolerates in that file for that
+# symbol — NOT a call site identifier, because line numbers shift on
+# unrelated edits and using them as keys would force an allowlist update
+# on every nearby reformat. A file/symbol pair not listed is implicitly
+# allowlisted at 0.
 #
 # Fails on:
 #   - a (file, symbol) pair whose real count EXCEEDS its allowlist count
@@ -90,7 +140,7 @@ ALLOWLIST="scripts/ci/allowlists/i-session-message-writers.txt"
 ci_require_dir "$SCAN_ROOT" "$GATE"
 ci_require_file "$ALLOWLIST" "$GATE"
 
-SYMBOLS=(AppendMessage AppendContinuation ApplyCompaction)
+SYMBOLS=(AppendMessage AppendContinuation ApplyCompaction PersistPartial AppendEntry)
 
 mapfile -t GO_FILES < <(find "$SCAN_ROOT" -name '*.go' ! -name '*_test.go' | sort)
 

@@ -1156,6 +1156,32 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				"\t_, _ = m.AppendMessage(ctx, sessionID, msg)\n" +
 				"}\n",
 		},
+		{
+			// F2 fix (2026-09-09): the case above plants the EASY shape — a
+			// direct, own-line call to a leaf writer (AppendMessage) in a
+			// file that already calls it. It never probed the shape that
+			// actually escaped review: a NEW caller reaching
+			// session_messages through an INTERFACE SEAM whose production
+			// implementation is an already-allowlisted leaf call elsewhere.
+			// That is exactly what the mission's own P0 was — runPeriodicFlush
+			// called PartialPersister.PersistPartial, not AppendMessage
+			// directly, and the closure in core/rpc/api.go that implements
+			// PersistPartial by calling AppendMessage did not change, so
+			// the pre-widening gate (SYMBOLS = AppendMessage /
+			// AppendContinuation / ApplyCompaction only) exited 0 against
+			// the verbatim pre-fix file. This plants a second PersistPartial
+			// caller in partial_flush.go itself — the real file, the real
+			// seam, the real shape — to prove the widened SYMBOLS list
+			// (which now includes PersistPartial) actually sees it.
+			name: "session-message-writers/indirect-persist-partial-via-seam",
+			wantOutput: "core/rpc/views/agentgraph/chat/partial_flush.go calls .PersistPartial( 1 time(s); " +
+				"allowlist permits 0",
+			gate: "check-session-message-writers.sh",
+			file: "core/rpc/views/agentgraph/chat/partial_flush.go",
+			append: "\nfunc zzGateProbeIndirectPartialPersistCaller(p PartialPersister, ctx context.Context, sessionID, text string) {\n" +
+				"\t_, _ = p.PersistPartial(ctx, sessionID, text, \"transient\", true)\n" +
+				"}\n",
+		},
 	}
 
 	for _, tc := range cases {
