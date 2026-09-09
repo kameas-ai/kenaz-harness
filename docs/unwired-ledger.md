@@ -937,6 +937,78 @@ which does not require a resume RPC to be true.
 to what `ErrBudgetExceeded` actually does today (hard-terminate) and
 drop `PausePending`. **Date:** 2026-09-09.
 
+### 2026-09-09 · Egress-guard census (`egress-guards-that-hold-01PMZF15` WP03) — MCP HTTP/SSE connectors have no address validation at all
+
+`web_fetch`'s DNS-rebinding bypass (`core/tools/webfetch/webfetch.go`,
+fixed the same day, same mission) prompted a census of every other
+outbound-HTTP-fetch site in the tree, per spec §4. Confirmed by grep:
+`net.LookupHost` now appears exactly zero times in production Go (only
+in the fix's own test file) — no other site does resolve-then-connect by
+hand, because no other site validates addresses at all, guarded or not.
+
+**MCP HTTP/SSE connectors — needs the same treatment, and is arguably a
+bigger gap than web_fetch was.** `core/mcp/transport/http/connection.go:205-217`
+and `core/mcp/transport/sse/connection.go:202-209` each default
+`spec.HTTPClient` to a bare `&http.Client{CheckRedirect: ...}` when nil —
+no `Transport`, no `DialContext`, connects via `http.DefaultTransport`'s
+own unvalidated resolution. Unlike web_fetch's pre-fix state, there is no
+block list here at all: `validateURL` (`sse/connection.go:474`) and
+`validateRecipeURL` (`core/mcp/recipes/recipes.go:516`) check only
+scheme/host-non-empty/no-fragment/no-userinfo — a recipe pointed at
+`169.254.169.254` or an internal service connects today with zero
+resistance, blocklist or pinning. Provenance is user-typed (the
+Claude-Desktop/Cursor-style `mcpServers` import flow,
+`core/mcp/recipes/import.go`) or fleet/registry-shipped
+(`core/mcp/recipes/registry.json`, precedence "user > registry >
+shipped") — not model-controlled per call, but an imported config from
+an untrusted source (a pasted "helpful" MCP config, a compromised
+registry entry) reaches an internal address exactly as easily as the
+pre-fix web_fetch model-injection path did. **Not fixed here** — out of
+scope for the webfetch mission (spec put WP03 at P2/independent, and the
+right shape is probably extending `webfetch`'s `pinnedDialContext` into
+a shared helper both HTTP and SSE connectors call, not a copy). Recommend
+a follow-up mission.
+
+**Custom-OpenAI capability prober — does not need guarding, same
+exception as the `ollama`/`custom` LLM adapters.**
+`core/llm/custom/probe.go:51-56`'s `NewProber(httpc)` defaults to
+`http.DefaultClient` when `httpc` is nil, and the real (non-test)
+production call site, `core/rpc/views/llm/impl.go:1813`, does pass nil:
+`prober := custom.NewProber(nil) // uses http.DefaultClient`. `BaseURL`
+(`impl.go:1809-1815`) is typed by the user into the Add-Custom-Provider
+settings form. This is the identical class spec §2 already carves the
+`ollama`/`custom` LLM adapters out of: pointing the probe at a
+self-hosted or local (`127.0.0.1`) OpenAI-compatible endpoint is the
+product feature, not a bypass. `http.DefaultClient` vs.
+`httpx.DefaultTransport()` is an inconsistency worth a `chore:` cleanup
+someday, but not a security gap — the URL is deliberately user-owned
+infrastructure.
+
+**Fleet sync / update-manifest fetches — does not need guarding; URL is
+a compile-time constant.** `core/update/manifest.go:52-53`:
+`stableManifestURL = "https://downloads.kameas.ai/kenaz-harness/manifest.json"`,
+`prereleaseManifestURL = "https://stage-downloads.kameas.ai/..."` — both
+literal constants, `ManifestURL` has no production override path
+(test-only). `fetchManifest` (`manifest.go:74-105`) and the asset
+downloader (`core/update/service.go:99,265-405`) use a plain
+`&http.Client{Timeout: 30 * time.Second}`, no custom `Transport` — but
+`info.DownloadURL` (`service.go:184,314`) is read from the manifest JSON
+itself, fetched from the same pinned first-party host over TLS. Never
+influenced by the model or by untrusted external input.
+
+**E-001 recommendation** (gate-or-not, owner call per spec §6): a
+general "checked but not enforced" gate is hard to express without false
+positives against the legitimate `ollama`/`custom` exemption above. A
+narrower, expressible gate is plausible: lint the two MCP connector
+constructors specifically for "default `http.Client` has no
+`DialContext` override," since that's a fixed, small set of
+call sites rather than an open-ended semantic property. Recommendation,
+not a decision — owner to rule.
+
+**Owner:** alec. **Blocker:** a follow-up mission to extend
+`pinnedDialContext`-equivalent pinning to `core/mcp/transport/{http,sse}`.
+**Date:** 2026-09-09.
+
 ### 2026-08-22 · `RunOptions.SkipCache` has zero frontend writers (UNIT-13, `automation-actually-runs-01PMZ404`)
 
 `RunOptions.SkipCache bool` (`core/rpc/views/workflows/api.go:139`, wire tag
