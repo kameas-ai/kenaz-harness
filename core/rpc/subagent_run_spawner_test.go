@@ -463,6 +463,102 @@ func TestAbort_StopsSpawnedSubagentStream(t *testing.T) {
 	t.Fatal("Abort did not stop the underlying LLM stream — blockingModel's context was never cancelled")
 }
 
+// TestTimeout_StopsSpawnedSubagentStream is the timeout-path counterpart
+// to TestAbort_StopsSpawnedSubagentStream above, proving the SAME
+// underlying defect for the path a human never touches: when
+// awaitSubagentRun's deadline fires before the run's stream ever closes,
+// the run must actually stop, not merely be reported as stopped.
+//
+// Before this fix, the <-deadline.C branch in awaitSubagentRun set
+// outcome/exitCode and called taskReg.End directly — it never routed
+// through the SAME stopStream/LLM.StopStream mechanism
+// TestAbort_StopsSpawnedSubagentStream already exercises for the
+// human-initiated Abort path. taskReg.End would report a terminal task
+// status (failed, exit -1) while blockingModel.Generate stayed parked on
+// <-ctx.Done() indefinitely: the LLM stream, its driver goroutine and its
+// token spend all kept running past the reported timeout. Ground truth
+// here is deliberately the SAME as TestAbort_StopsSpawnedSubagentStream's:
+// the model's own context observing cancellation, not the task row's
+// Status field (which reaches a terminal value on either side of the fix,
+// since awaitSubagentRun's pre-fix build already called taskReg.End on
+// the timeout branch — that call was always the lie, not a missing one).
+//
+// Mutation: comment out the `if stopStream != nil { stopStream(...) }`
+// block in the <-deadline.C case of awaitSubagentRun (core/rpc/
+// subagent_run_spawner.go). Must revert to this test's pre-fix failure.
+func TestTimeout_StopsSpawnedSubagentStream(t *testing.T) {
+	blocking := &blockingModel{started: make(chan struct{})}
+	stack := buildSubagentSpawnerTestStackWithLLM(t, blocking)
+	// Short enough that the test doesn't stall, but long enough that
+	// blocking.started is reliably observed before the deadline fires —
+	// the whole point is to catch the run genuinely mid-generation when
+	// the timeout hits, not to race the spawn itself.
+	stack.armSpawner(t, 200*time.Millisecond)
+
+	parent, err := stack.sessionsAPI.Create(context.Background(), "parent session")
+	if err != nil {
+		t.Fatalf("create parent session: %v", err)
+	}
+
+	tool := coresubagent.New(coresubagent.Options{
+		DataDir: t.TempDir(),
+		Seam:    stack.seam,
+	})
+	ctx := toolloop.WithSessionID(context.Background(), parent.ID)
+	args := json.RawMessage(`{"profile":"explore","prompt":"long-running task"}`) // run_in_background defaults true
+
+	raw, err := tool.Call(ctx, args)
+	if err != nil {
+		t.Fatalf("Call: unexpected Go error: %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got, _ := result["status"].(string); got != "running" {
+		t.Fatalf("status=%q, want running; full result=%+v", got, result)
+	}
+
+	// Confirm the model was actually mid-generation — otherwise the
+	// timeout firing before Generate even started would prove nothing
+	// about stopping a LIVE stream.
+	select {
+	case <-blocking.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("blockingModel.Generate was never called — the spawner never actually started a run")
+	}
+
+	// Do NOT call Abort. Just wait past the spawner's 200ms timeout and
+	// assert the model's OWN context observed cancellation — ground
+	// truth that the run actually stopped, not that a task row somewhere
+	// says it did.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if blocking.wasCancelled() {
+			goto stopped
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timeout did not stop the underlying LLM stream — blockingModel's context was never cancelled")
+
+stopped:
+	// Ground truth #2: the task registry must ALSO report the run as
+	// terminal (this half already worked pre-fix — taskReg.End was
+	// always called on the timeout branch, which is exactly what made
+	// the pre-fix behaviour a lie: a true terminal status paired with a
+	// stream that was still running). Both must hold post-fix.
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, tk := range stack.tasks.List() {
+			if tk.Kind == coretasks.KindSubagent && tk.IsTerminal() {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("no terminal subagent task found after the stream was stopped")
+}
+
 // TestSubagentDispatch_DepthLimitRefusesRecursion is N2's falsification
 // proof: chain kenaz__subagent_dispatch's own seam (BranchSeamAdapter.Fork)
 // graphview.MaxForkDepth times, each dispatch's child session becoming
