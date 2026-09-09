@@ -291,6 +291,73 @@ describe('useSession (chat-ui)', () => {
     w.unmount();
   });
 
+  // live-usage-mid-stream defect (owner report, 2026-09-09): the header
+  // COST/CONTEXT figures and the composer footer's "N tok · $M" readout
+  // are both driven by session.lastUsage, which was previously updated
+  // ONLY by the `session.usage.updated` broker event fired from
+  // HookPostLLM after Generate() returns (core/rpc/api.go ~6321) — i.e.
+  // at turn end. The provider's terminal SSE frame reports usage tokens
+  // earlier than that (before persistence/hooks run), and the backend
+  // already threads it onto the stream as a `kind: "usage"` llm:stream-
+  // chunk (core/rpc/views/agentgraph/chat/stream_bridge.go
+  // translateAGStreamEvent). useSession.ts's stream-chunk switch dropped
+  // this case silently ("tool / reasoning / usage frames not yet
+  // rendered"), so the live wire data never reached lastUsage. This test
+  // fires a `usage` chunk WITHOUT a subsequent `llm:stream-closed` and
+  // asserts lastUsage already reflects it — proving the update happens
+  // while the turn is still streaming, not just at turn end.
+  it('updates lastUsage live from a usage stream chunk, before the turn closes', async () => {
+    const { w, session } = mountWithSession({
+      sessions: {
+        list: async () => [],
+        get: async (id: string) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => [],
+        appendMessage: async (id: string, role: string, content: string) =>
+          makeMessage({ id: 'u-1', sessionId: id, role: role as Message['role'], content }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+      } as any,
+      llm: {
+        listProviders: async () => [],
+        startStream: async () => 'sub-x',
+        stopStream: async () => undefined,
+      } as any,
+    });
+    await vi.runAllTimersAsync();
+    await session.send('q', 'profile');
+    await nextTick();
+    rt.emit('llm:stream-chunk', {
+      sub_id: 'sub-x',
+      session_id: 's-1',
+      chunk: { kind: 'text', text: 'Working on it' },
+    });
+    rt.emit('llm:stream-chunk', {
+      sub_id: 'sub-x',
+      session_id: 's-1',
+      chunk: {
+        kind: 'usage',
+        usage: { input_tokens: 122145, output_tokens: 981, reasoning_tokens: 0 },
+      },
+    });
+    await nextTick();
+    // The stream is still open — no llm:stream-closed has fired — yet
+    // lastUsage must already carry the provider's reported tokens.
+    expect(session.streamSubscriptionId.value).toBe('sub-x');
+    expect(session.lastUsage.value).not.toBeNull();
+    expect(session.lastUsage.value).toMatchObject({
+      promptTokens: 122145,
+      completionTokens: 981,
+      totalTokens: 123126,
+    });
+    w.unmount();
+  });
+
   it('appends messages from sessions:event/message_appended', async () => {
     const { w, session } = mountWithSession({
       sessions: {

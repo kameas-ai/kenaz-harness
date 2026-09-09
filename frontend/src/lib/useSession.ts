@@ -437,6 +437,22 @@ export function useSession(id: Ref<string>): UseSessionResult {
     args_summary?: string;
     is_error?: boolean;
   };
+  /**
+   * WireUsage mirrors core/llm.Usage as carried on a `kind: "usage"`
+   * stream chunk (core/rpc/views/agentgraph/chat/stream_bridge.go
+   * translateAGStreamEvent). It does NOT carry a cost figure — the
+   * dollar amount is only known once the full LLM response has
+   * returned (core/rpc/api.go's usageHookFn, fired from HookPostLLM)
+   * and is published separately on `session.usage.updated`. Token
+   * counts, though, are exactly what the provider's terminal usage
+   * frame reports, so they can update the live readout as soon as they
+   * arrive instead of waiting for that later turn-end event.
+   */
+  type WireUsage = {
+    input_tokens?: number;
+    output_tokens?: number;
+    reasoning_tokens?: number;
+  };
   type WireChunk = {
     sub_id?: string;
     session_id?: string;
@@ -446,6 +462,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
       finish?: string;
       err?: string;
       move?: WireMoveBoundary;
+      usage?: WireUsage;
     };
   };
   type WireClosed = {
@@ -650,8 +667,36 @@ export function useSession(id: Ref<string>): UseSessionResult {
         // the close handler does the commit so we don't double-append.
         return;
       }
+      case "usage": {
+        // Live mid-stream usage (owner report, 2026-09-09): the provider's
+        // terminal SSE usage frame arrives on the stream BEFORE Generate()
+        // returns and HookPostLLM fires the `session.usage.updated` event
+        // that previously drove this ref exclusively — so the header
+        // CONTEXT meter and the composer footer's token readout used to
+        // sit frozen at the previous turn's numbers for the entire
+        // duration of every turn, then jump once at the very end. This
+        // updates the token counts as soon as the provider reports them.
+        // Cost is deliberately left untouched: the wire event carries no
+        // dollar figure (core/llm.Usage has none), so costUsd keeps
+        // whatever `session.usage.updated` last set rather than being
+        // zeroed or guessed at.
+        const u = ev.usage;
+        if (!u) return;
+        const prompt = u.input_tokens ?? lastUsage.value?.promptTokens ?? 0;
+        const completion =
+          u.output_tokens ?? lastUsage.value?.completionTokens ?? 0;
+        lastUsage.value = {
+          sessionId: id.value,
+          promptTokens: prompt,
+          completionTokens: completion,
+          totalTokens: prompt + completion,
+          costUsd: lastUsage.value?.costUsd ?? 0,
+          costSource: lastUsage.value?.costSource ?? "unknown",
+        };
+        return;
+      }
       default:
-        // tool / reasoning / usage frames not yet rendered.
+        // tool / reasoning frames not yet rendered.
         return;
     }
   });
