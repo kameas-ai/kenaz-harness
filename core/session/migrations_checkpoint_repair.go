@@ -40,24 +40,50 @@ import (
 //     continuation_of = R.id — a partial the user actually resumed is
 //     user-visible history (the Resume RPC's continuation row points
 //     back at it) and is never touched, regardless of condition 1.
-//  3. There exists a LATER row S in the same session
-//     (S.sequence > R.sequence, S.role = 'assistant') whose content has
-//     R.content as a STRICT prefix (len(S.content) > len(R.content) and
-//     S.content starts with R.content byte-for-byte).
+//  3. There exists a LATER row S IN THE SAME TURN AS R
+//     (S.sequence > R.sequence, S.role = 'assistant', and no
+//     role = 'user' row sits at a sequence strictly between R's and
+//     S's) whose content has R.content as a STRICT prefix
+//     (len(S.content) > len(R.content) and S.content starts with
+//     R.content byte-for-byte).
 //
-// CONDITION 3 IS THE SAFETY ARGUMENT, NOT AN OPTIMISATION. A genuine
-// error-path partial is the LAST thing its turn produced — by
-// construction nothing later supersedes it by prefix, so condition 3
-// can never spuriously hold for it. A checkpoint, by contrast, is
-// always a strict prefix of the next checkpoint or of the final healthy
-// answer that superseded it. Weakening this migration to conditions 1+2
-// only (or to condition 1 alone) deletes real user data — falsified by
-// hand against
+// CONDITION 3 IS THE SAFETY ARGUMENT, NOT AN OPTIMISATION, AND IT MUST
+// BE SCOPED TO THE TURN. A genuine error-path partial is the LAST thing
+// ITS TURN produced — by construction nothing later IN THAT TURN
+// supersedes it by prefix, so condition 3 can never spuriously hold for
+// it within the turn boundary. Without the turn scope, an unrelated
+// LATER turn's answer can coincidentally share R's opening bytes — short
+// partials like "Sure! " or "Here's " collide easily, and the most
+// common reaction to a dropped stream is to re-ask the same prompt,
+// reproducing the same opening bytes — and condition 3 would spuriously
+// hold, deleting a genuine, never-resumed partial. A checkpoint, by
+// contrast, is always a strict prefix of the next checkpoint or of the
+// final healthy answer that superseded it IN THE SAME TURN: checkpoints
+// are periodic flushes of one in-flight generation, so nothing else
+// (in particular no user message) is ever interleaved between a
+// checkpoint and the row that supersedes it. Turn scope is implemented
+// as "no role='user' row at a sequence strictly between R and S", not
+// via the turn_span_id column: turn_span_id is populated only for rows
+// written through the moves seam (core/session/moves.go,
+// model-moves-transcript-01PMCH01), which postdates the checkpoint-era
+// data (v0.59.0-v0.65.0) this migration targets — those rows are
+// "classic" entries with turn_span_id NULL on both sides of a genuine
+// pair, so matching on it would silently stop scoping for exactly the
+// rows this migration exists to repair. The user-row boundary has no
+// such gap: every human turn, in every schema era this migration can
+// see, opens with a role='user' row.
+//
+// Weakening this migration to conditions 1+2 only (or to condition 1
+// alone), or dropping the turn scope from condition 3, deletes real user
+// data — falsified by hand against
 // TestMigration0337_RepairsCheckpointRowsAgainstUpgradedDatabase
 // (core/storage/sqlite/migration_0337_test.go): with conditions 2 and 3
 // removed from the loop, that test goes RED because BOTH the genuine
-// error-path partial and the resumed partial are deleted. See that
-// test's doc comment for the pasted failure.
+// error-path partial and the resumed partial are deleted; with the turn
+// scope removed from condition 3, the test's cross-turn shape goes RED
+// because a genuine, never-resumed partial from one turn is deleted for
+// coincidentally prefix-matching an unrelated later turn's answer. See
+// that test's doc comment for the pasted failures.
 //
 // THE BOUND (spec.md §5.3: "the WP states the bound"). SQLite has no
 // cheap prefix-join (no index makes "does any later row start with
@@ -107,8 +133,9 @@ const sqlCheckpointRepairUpSource = `
 --   1. R.role='assistant' AND R.streaming_failed_at IS NOT NULL AND
 --      R.streaming_recoverable=1 AND R.streaming_failure_kind='transient'
 --   2. R.continuation_of IS NULL AND no row has continuation_of=R.id
---   3. a later same-session assistant row S exists (S.sequence >
---      R.sequence) whose content has R.content as a strict prefix.
+--   3. a later same-TURN assistant row S exists (S.sequence >
+--      R.sequence, and no role='user' row sits at a sequence strictly
+--      between R and S) whose content has R.content as a strict prefix.
 -- Executed procedurally (bounded per-session scan) because SQLite has
 -- no cheap prefix-join; see migrations_checkpoint_repair.go.
 `
@@ -199,6 +226,10 @@ func checkpointRowsToDeleteForSession(ctx context.Context, tx migrations.WriteTx
 	if err != nil {
 		return nil, err
 	}
+	userSequences, err := checkpointUserRowSequences(ctx, tx, sessionID)
+	if err != nil {
+		return nil, err
+	}
 
 	rows, err := tx.Query(ctx, `
         SELECT id, sequence, content, continuation_of,
@@ -238,7 +269,7 @@ func checkpointRowsToDeleteForSession(ctx context.Context, tx migrations.WriteTx
 		if !isCheckpointCondition2(r, referenced) {
 			continue
 		}
-		if hasSupersedingRow(all, i) {
+		if hasSupersedingRow(all, i, userSequences) {
 			toDelete = append(toDelete, r.id)
 		}
 	}
@@ -273,6 +304,44 @@ func checkpointReferencedContinuationTargets(ctx context.Context, tx migrations.
 	return out, rows.Err()
 }
 
+// checkpointUserRowSequences returns the ascending sequences of every
+// role='user' row in the session — the turn-boundary markers condition
+// 3 scopes against. Every human turn opens with exactly one of these;
+// a role='user' row sitting strictly between a candidate's sequence and
+// a would-be superseding row's sequence means the two rows belong to
+// different turns, so a prefix match between them is coincidence, not
+// evidence of a checkpoint chain. See hasSupersedingRow and the "THE
+// DISCRIMINATOR" doc comment above for why this — not turn_span_id — is
+// the scoping mechanism.
+func checkpointUserRowSequences(ctx context.Context, tx migrations.WriteTx, sessionID string) ([]int64, error) {
+	rows, err := tx.Query(ctx, `
+        SELECT sequence FROM session_messages
+         WHERE session_id = ? AND role = 'user'
+         ORDER BY sequence`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []int64
+	for rows.Next() {
+		var seq int64
+		if err := rows.Scan(&seq); err != nil {
+			return nil, err
+		}
+		out = append(out, seq)
+	}
+	return out, rows.Err()
+}
+
+// userRowBetween reports whether any sequence in userSequences (assumed
+// sorted ascending) falls strictly between lo and hi — i.e. whether a
+// human turn boundary separates the two given sequences.
+func userRowBetween(userSequences []int64, lo, hi int64) bool {
+	// First index with sequence > lo.
+	idx := sort.Search(len(userSequences), func(i int) bool { return userSequences[i] > lo })
+	return idx < len(userSequences) && userSequences[idx] < hi
+}
+
 // isCheckpointCondition1 is discriminator condition 1: the row is
 // flagged exactly as a resumable, transient streaming failure.
 func isCheckpointCondition1(r checkpointCandidateRow) bool {
@@ -293,16 +362,24 @@ func isCheckpointCondition2(r checkpointCandidateRow, referenced map[string]bool
 }
 
 // hasSupersedingRow is discriminator condition 3: does a later
-// same-session assistant row exist whose content has all[i]'s content
-// as a strict prefix. all is ordered ascending by sequence, so indices
-// after i are exactly the later rows. This is the O(A) forward scan
-// that makes the whole per-session pass O(A^2) in the worst case — see
-// the bound documented on migrationIDCheckpointRepair.
-func hasSupersedingRow(all []checkpointCandidateRow, i int) bool {
+// same-TURN assistant row exist whose content has all[i]'s content as a
+// strict prefix. all is ordered ascending by sequence, so indices after
+// i are exactly the later rows; userSequences (ascending) is the
+// session's turn-boundary markers (see checkpointUserRowSequences). A
+// candidate row S is only considered if no role='user' row sits at a
+// sequence strictly between r's and s's — otherwise s belongs to a
+// later, unrelated turn and a prefix match is coincidence (see "THE
+// DISCRIMINATOR" doc comment above). This is the O(A) forward scan that
+// makes the whole per-session pass O(A^2) in the worst case — see the
+// bound documented on migrationIDCheckpointRepair.
+func hasSupersedingRow(all []checkpointCandidateRow, i int, userSequences []int64) bool {
 	r := all[i]
 	for j := i + 1; j < len(all); j++ {
 		s := all[j]
 		if s.sequence <= r.sequence {
+			continue
+		}
+		if userRowBetween(userSequences, r.sequence, s.sequence) {
 			continue
 		}
 		if len(s.content) > len(r.content) && strings.HasPrefix(s.content, r.content) {
