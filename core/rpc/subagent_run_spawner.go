@@ -66,6 +66,30 @@ import (
 // subscription forever for a run that never closes.
 const defaultSubagentSpawnTimeout = 20 * time.Minute
 
+// subagentStopTimeout bounds how long awaitSubagentRun's OWN timeout
+// branch (case <-deadline.C below) waits for stopStream to return before
+// giving up on the stop call itself and ending the task anyway.
+//
+// 5 seconds, matching two existing precedents for "how long to wait on a
+// stop/cleanup call before treating it as stuck" in this codebase:
+// tasks/registry.go's Abort PID-arm (SIGTERM, wait 5s, then SIGKILL —
+// registry.go:490-498) and chat_runner.go's persistPartialTimeout (also
+// 5s, bounding the checkpoint-flush calls this same stream's driveRun
+// makes on its own exit path). Not invented — picked to match what's
+// already sitting a few lines away from the two things this call touches.
+//
+// Scope decision (PR #315 review): this bounds ONLY the timeout branch
+// below, which is what this PR introduces. Registry.Abort's OWN call to
+// the same stopFunc (tasks/registry.go:505,
+// `e.stopFunc(context.Background())`) stays unbounded — that call
+// pre-dates this PR and is left asymmetric deliberately, not by
+// oversight: Abort is user-initiated with a human watching the Tasks
+// panel for the row to update, so an operator can notice a stuck Abort
+// and escalate; a spawner timeout has nobody watching. Bounding Abort
+// too is a defensible follow-up, not a silent gap — tracked, not done
+// here, to keep this PR's blast radius to the path it's actually fixing.
+const subagentStopTimeout = 5 * time.Second
+
 // SubagentRunSpawnerDeps bundles the production seams
 // NewSubagentRunSpawner needs. LLM and Bus are required; Tasks and
 // DefaultProfile are nil-tolerant (best-effort visibility / a hard
@@ -300,13 +324,55 @@ waitLoop:
 			outcome = fmt.Errorf("subagent_run_spawner: timed out after %s waiting for the run to finish", timeout)
 			exitCode = -1
 			// Actually stop the run — not merely stop waiting for it.
-			// This blocks (see stopStream's doc at the call site) until
-			// the stream's driver goroutine has genuinely exited, so the
-			// task.End below reports a status that is already true.
+			// Bounded to subagentStopTimeout (PR #315 review): chat
+			// runner's StopStream ignores the context it's handed (its
+			// ctx parameter is `_`) and blocks unconditionally on
+			// <-sub.done, so passing a context.WithTimeout to stopStream
+			// alone would NOT bound this call by itself — the bound has
+			// to be enforced from THIS side, via the select below. A
+			// stopStream call that never returns must not wedge this
+			// goroutine forever: that would trade "leaked stream" for
+			// "leaked await-goroutine that never reports terminal" —
+			// the same class of lie this unit exists to end, one layer
+			// down. The task still reaches a terminal state below
+			// either way; only the outcome message differs.
 			if stopStream != nil {
-				if serr := stopStream(context.Background()); serr != nil {
-					logging.L().Warn("rpc.subagent_run_spawner.timeout_stop_err",
-						"sub_id", subID, "task_id", taskID, "err", serr.Error())
+				stopCtx, stopCancel := context.WithTimeout(context.Background(), subagentStopTimeout)
+				stopErrCh := make(chan error, 1)
+				go func() { stopErrCh <- stopStream(stopCtx) }()
+				select {
+				case serr := <-stopErrCh:
+					stopCancel()
+					if serr != nil {
+						logging.L().Warn("rpc.subagent_run_spawner.timeout_stop_err",
+							"sub_id", subID, "task_id", taskID, "err", serr.Error())
+					}
+				case <-stopCtx.Done():
+					// The stop call itself did not return within
+					// subagentStopTimeout — a DIFFERENT failure than
+					// "the run merely took too long to finish", and
+					// worth its own log line and outcome message. This
+					// costs no new vocabulary: outcome is already a
+					// free-form error (every branch above formats its
+					// own message), not a fixed enum, so distinguishing
+					// here is just another message in the same style.
+					// Task.Status/ExitCode are NOT extended with a new
+					// value for this — that IS a fixed, cross-mission
+					// contract (tasks.go's Task doc), and this PR does
+					// not touch it: the task still ends up
+					// StatusFailed/-1 below, same as any other
+					// non-"completed" outcome. The background goroutine
+					// above is intentionally left running past this
+					// point (same detached-goroutine shape as
+					// registry.go's SIGTERM→SIGKILL escalation) — it
+					// will still call the real StopStream eventually if
+					// the wedge clears; this call site just refuses to
+					// wait on it any longer.
+					stopCancel()
+					logging.L().Warn("rpc.subagent_run_spawner.timeout_stop_wedged",
+						"sub_id", subID, "task_id", taskID,
+						"stop_timeout", subagentStopTimeout.String())
+					outcome = fmt.Errorf("subagent_run_spawner: timed out after %s waiting for the run to finish, and the stop call itself did not return within %s", timeout, subagentStopTimeout)
 				}
 			}
 			break waitLoop
