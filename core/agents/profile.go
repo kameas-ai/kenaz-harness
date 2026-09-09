@@ -98,18 +98,44 @@ type Profile struct {
 	// to carry this list at all, so it does not even reach the seam.
 	DeniedTools []string `yaml:"denied_tools" json:"deniedTools,omitempty"`
 
-	// BudgetTokens is the INTENDED maximum number of tokens the worker
-	// may consume. NOT CURRENTLY ENFORCED — no reader outside a field
-	// copy; the spawned run has no token ceiling of its own beyond
-	// whatever bounds the parent session already has. See AllowedTools's
-	// doc above.
+	// BudgetTokens is the maximum number of tokens the worker may
+	// consume, enforced as a per-run token cap (owner directive
+	// 2026-09-09, mission requirement 3).
+	//
+	// ENFORCED as of that change, via a CLAMP, not an override: the
+	// dispatching session's autonomy tier already derives a token
+	// ceiling for the spawned run (autonomy.BudgetCeilingForTier via
+	// chat.applyBudgetTierDial / applyTokenCeilingKnob); BudgetTokens
+	// can only lower that ceiling further, never raise it above what
+	// the tier allows. Wired: subagentdispatch.Tool forwards this onto
+	// ForkRequest.BudgetTokens -> core/rpc.NewSubagentRunSpawner Sets it
+	// on chat.SubagentBudgetRegistry, keyed by the spawned child session
+	// id -> ChatRunner.StartStream reads it back via
+	// applyProfileBudgetClamp. Zero means the profile declares no
+	// opinion; the tier ceiling alone governs.
+	//
+	// Still NOT enforced: AllowedTools/DeniedTools (see their docs
+	// above) — this field's wiring does not extend to tool-catalog
+	// narrowing.
 	BudgetTokens int `yaml:"budget_tokens" json:"budgetTokens,omitempty"`
 
-	// BudgetTimeS is the INTENDED maximum wall-clock seconds the worker
-	// may run. NOT CURRENTLY ENFORCED — the spawner uses a single fixed
-	// defaultSubagentSpawnTimeout (core/rpc/subagent_run_spawner.go) for
-	// every profile regardless of this value. See AllowedTools's doc
-	// above.
+	// BudgetTimeS is the maximum wall-clock seconds the worker's run may
+	// spend before the kernel's own per-run budget check
+	// (checkBudget's MaxWallclockPerRunSecs guard) fires
+	// ErrBudgetExceeded, enforced as of the same change as BudgetTokens
+	// above — same clamp-not-override precedence and the same wiring
+	// path (ForkRequest.BudgetTimeS -> SubagentBudgetRegistry ->
+	// applyProfileBudgetClamp).
+	//
+	// This is DISTINCT from defaultSubagentSpawnTimeout
+	// (core/rpc/subagent_run_spawner.go), which still bounds how long
+	// WaitForChildRun's await-goroutine waits before giving up on the
+	// run from the OUTSIDE — unaffected by this field, and still a
+	// single fixed value for every profile. BudgetTimeS instead bounds
+	// the run's own kernel-enforced wall-clock budget from the inside;
+	// a run that exceeds it terminates via ErrBudgetExceeded well
+	// before defaultSubagentSpawnTimeout would ever fire, for any
+	// profile that sets it below 20 minutes.
 	BudgetTimeS int `yaml:"budget_time_s" json:"budgetTimeS,omitempty"`
 
 	// SystemPromptOverride replaces the default system prompt in the spawned

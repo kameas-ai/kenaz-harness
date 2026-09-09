@@ -56,7 +56,9 @@ const visible = computed(() => runningCount.value > 0);
 
 async function load() {
   try {
-    tasks.value = await client.Tasks_ListBySession(props.sessionId);
+    // See TasksPanel.vue: a Go nil slice arrives as JSON null despite
+    // the TaskRow[] type. Coerce so .filter cannot throw.
+    tasks.value = (await client.Tasks_ListBySession(props.sessionId)) ?? [];
   } catch {
     // Silently fail — chip just hides.
   }

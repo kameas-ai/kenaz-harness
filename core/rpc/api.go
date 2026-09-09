@@ -154,6 +154,13 @@ import (
 type HarnessAPI interface {
 	ShellStatus(ctx context.Context) (ShellStatus, error)
 	AppInfo(ctx context.Context) (AppInfo, error)
+	// CompactionOverhead returns the running compaction-driven LLM cost
+	// tally the SessionsView header row renders (chat-turn-integrity-
+	// 01PMZ606 WP12, owner ruling X-7 / CK-08). A direct method rather
+	// than living on Compaction() — the compaction-panel RPC surface is
+	// owned by a sibling mission (compaction-strategy-ui-01KQ8TDI) and
+	// this reader has nothing to do with strategy config.
+	CompactionOverhead(ctx context.Context) (CompactionOverheadInfo, error)
 
 	LLMConnector() llm.LLMConnectorAPI
 	MCP() mcp.MCPAPI
@@ -481,11 +488,27 @@ type API struct {
 	slashAPI       slashview.SlashAPI
 	corpusMgr      *corecorpus.Manager
 	corpusAPI      corpusview.CorpusAPI
-	graphMgr       *graphview.Manager
-	graphAPI       graphview.API
-	compactionAPI  compactionview.CompactionAPI
-	convMgr        *coreconv.Manager
-	branchesAPI    branchesview.BranchesAPI
+	// personalStore is the same personal.Store instance newEmbedder(c,
+	// personalForLLM, settingsImpl) reads at boot, held here so
+	// RefreshEmbedder (AN-12, chat-turn-integrity-01PMZ606 WP13) can
+	// recompute the embedder from whatever profiles + Settings selection
+	// exist NOW, not only at construction time.
+	personalStore personal.Store
+	graphMgr      *graphview.Manager
+	graphAPI      graphview.API
+	compactionAPI compactionview.CompactionAPI
+	// compactionLLM / compactionAudit are the SAME instances newLLMStack
+	// constructs and stores on llmStack. Prior to
+	// chat-turn-integrity-01PMZ606 WP12 those stack fields were read
+	// nowhere after newLLMStack returned, so Overhead()/Recent() had no
+	// caller and the SessionsView compaction-overhead header row was
+	// permanently hidden (CK-08 + owner ruling X-7). Copied here in
+	// New() so CompactionOverhead() can read them. nil when compaction
+	// is disabled at boot (HARNESS_COMPACTION=off or no session store).
+	compactionLLM   *compactionwiring.LLMCaller
+	compactionAudit *compactionwiring.AuditEmitter
+	convMgr         *coreconv.Manager
+	branchesAPI     branchesview.BranchesAPI
 	// branchSeam is the SAME BranchSeamAdapter instance
 	// newGraphManagerWithDeps builds as EnvDeps.Branch for ForkNode /
 	// MergeNode. Held here so New() can late-bind a RunSpawner onto it
@@ -860,6 +883,15 @@ type API struct {
 	// which is called from AuditObserver when auditArchiver is wired.
 	auditTailBuf *auditTailBuffer
 
+	// compactionScheduler is the soft-archive sweep scheduler (CK-09,
+	// chat-turn-integrity-01PMZ606 WP13). Held so Shutdown can call
+	// Stop() — before this field existed, newLLMStack's local
+	// sweepScheduler var was started (Start) but never captured
+	// anywhere the shutdown path could reach, so the background
+	// goroutine + ticker ran until process exit on every boot instead
+	// of stopping cleanly.
+	compactionScheduler *compaction.SweepScheduler
+
 	// localAuditRetentionScheduler is the LOCAL audit-retention sweep
 	// background loop (audit-that-tells-the-truth-01PMZA10 UNIT-8).
 	// Unlike auditSweeper above (the fleet ACK sweeper — constructed
@@ -1183,6 +1215,14 @@ func (a *API) Shutdown() {
 	a.updatePollMu.Unlock()
 	if a.wfScheduler != nil {
 		a.wfScheduler.Stop()
+	}
+	// CK-09 (chat-turn-integrity-01PMZ606 WP13): Stop() had zero
+	// callers anywhere in the tree before this — the sweep scheduler's
+	// background goroutine + ticker ran until process exit on every
+	// boot instead of stopping on shutdown like every other scheduler
+	// here.
+	if a.compactionScheduler != nil {
+		a.compactionScheduler.Stop()
 	}
 	if a.chatCronEngine != nil {
 		a.chatCronEngine.Stop()
@@ -1848,6 +1888,7 @@ func New(c *core.Core, opts ...Option) *API {
 		gs.SetGate(&memoryGateAdapter{gate: a.cedarGate()})
 	}
 	personalForLLM := newPersonalStore(c)
+	a.personalStore = personalForLLM
 	// controls-and-readouts-that-tell-the-truth-01PMZ808 WP10 (FR-014):
 	// decorate the single embedder so every Embed() call — regardless of
 	// which downstream consumer triggers it (the retriever, the hooks
@@ -2066,6 +2107,21 @@ func New(c *core.Core, opts ...Option) *API {
 	// falls back to ErrManagerUnavailable so the chassis still boots.
 	a.convMgr = newConversationManager(c)
 	a.corpusMgr = newCorpusManager(c, embedder)
+	// AN-12 (chat-turn-integrity-01PMZ606 WP13, ruling X-4 — corpus is a
+	// live kernel consumer via exec_state.go's env.Corpus.Search, not a
+	// retired subsystem): SetEmbedder previously had zero non-test
+	// callers, so a Noop/nil embedder computed here at boot (the common
+	// case — most installs have no eligible profile yet) was frozen for
+	// the rest of the process lifetime. Ingest and search returned
+	// ErrEmbedderUnavailable even after the user picked a provider in
+	// the embedder-config panel, because nothing ever recomputed the
+	// embedder and re-pushed it onto a.corpusMgr. SetEmbedderNotifier
+	// fires RefreshEmbedder on every Settings_SetEmbedderConfig call —
+	// the exact RPC the panel calls — so the live corpus.Manager picks
+	// up the newly-selected profile without a restart.
+	if settingsImpl != nil {
+		settingsImpl.SetEmbedderNotifier(a.RefreshEmbedder)
+	}
 	var compactionPipeline *compaction.Pipeline
 	a.graphMgr, compactionPipeline, a.branchSeam = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore, settingsImpl, a.cedarEngine, a.hookRunner, a.auditImpl)
 	// Wire the same FR-041 pipeline instance the kernel runs onto the
@@ -2098,6 +2154,15 @@ func New(c *core.Core, opts ...Option) *API {
 
 	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, a.cedarEngine, taskReg)
 	a.llmAPI = stack.api
+	// chat-turn-integrity-01PMZ606 WP12: the join CK-08 + owner ruling
+	// X-7 wanted. Both were already constructed above (inside
+	// newLLMStack -> buildCompactionWiring); copying them here is what
+	// gives CompactionOverhead() something to read.
+	a.compactionLLM = stack.compactionLLM
+	a.compactionAudit = stack.compactionAudit
+	// CK-09 (chat-turn-integrity-01PMZ606 WP13): capture the sweep
+	// scheduler newLLMStack already started so Shutdown can Stop() it.
+	a.compactionScheduler = stack.compactionScheduler
 
 	// subagent-control-and-background-tasks-01PMZB11 UNIT-6: late-bind
 	// the child-run spawner onto the SAME BranchSeamAdapter instance
@@ -2154,6 +2219,12 @@ func New(c *core.Core, opts ...Option) *API {
 				}
 				return profs[0].ID
 			},
+			// owner directive 2026-09-09, mission requirement 3: the SAME
+			// registry instance buildChatRunner wired into
+			// chat.Config.SubagentBudgets, obtained through the accessor
+			// rather than reconstructing a second one — a second registry
+			// would be written into here and never read by StartStream.
+			BudgetOverrides: stack.chatRunner.SubagentBudgets(),
 		}))
 		logging.L().Info("rpc.subagent_run_spawner.armed")
 		registerSubagentDispatchTool(c, stack.builtins, a.branchSeam)
@@ -5399,30 +5470,9 @@ func newLLMStack(
 	// cancellation actually reaches these reads instead of being
 	// silently ignored.
 	autonomyKnobsProvider := func(ctx context.Context, sessionID string) autonomy.ResolvedKnobs {
-		var global, project, session autonomy.Layer
-		if settingsImpl != nil {
-			if g, gerr := settingsImpl.LoadAutonomyProfile(ctx); gerr == nil {
-				global = g
-			}
-		}
-		if c != nil && sessionID != "" {
-			if sm := c.SessionManager(); sm != nil {
-				if s, serr := sm.GetAutonomyProfile(ctx, sessionID); serr == nil {
-					session = s
-				}
-				if pm := c.ProjectManager(); pm != nil {
-					if rec, rerr := sm.Get(ctx, sessionID); rerr == nil &&
-						rec.ProjectID != nil && *rec.ProjectID != "" {
-						if p, perr := pm.GetAutonomyProfile(ctx, *rec.ProjectID); perr == nil {
-							project = p
-						}
-					}
-				}
-			}
-		}
-		return resolveAutonomyKnobsWithSettingsFallback(global, project, session, effectiveMaxAgentTurnsFromSettings(settingsImpl))
+		return computeAutonomyKnobs(ctx, sessionID, c, settingsImpl)
 	}
-	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, chatAttResolver, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatWorkspaceDir, chatWorkspaceNote, confirmBus, confirmDeps, autonomyKnobsProvider, secretLookup, secretGate, secretsBudget)
+	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, chatAttResolver, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatWorkspaceDir, chatWorkspaceNote, confirmBus, confirmDeps, autonomyKnobsProvider, secretLookup, secretGate, secretsBudget, confirmAudit)
 	var capCatalog llm.CapCatalog
 	if cat, err := llmcap.LoadDefault(); err == nil {
 		capCatalog = &capCatalogAdapter{cat: cat}
@@ -5482,6 +5532,55 @@ func newLLMStack(
 		confirmBus:           confirmBus,
 		confirmSessionGrants: confirmSessionGrants,
 		confirmDeps:          confirmDeps,
+	}
+}
+
+// sweepLastRunSidecarName is the on-disk filename for the compaction
+// sweep scheduler's persisted last-run timestamp (CK-09, chat-turn-
+// integrity-01PMZ606 WP13). A small dedicated JSON sidecar rather than
+// a SettingsStore field — one scalar owned entirely by this scheduler
+// does not need a new interface method implemented across every
+// SettingsStore backend.
+const sweepLastRunSidecarName = "compaction-sweep-last-run.json"
+
+type sweepLastRunSidecar struct {
+	LastRun time.Time `json:"last_run"`
+}
+
+// loadSweepLastRunSidecar reads the persisted sweep timestamp, or the
+// zero time when dataDir is empty (test/degraded boot), the file does
+// not exist yet (first-ever launch — SweepScheduler's own Start()
+// catch-up logic treats zero exactly like "overdue", which is correct
+// here too), or is unreadable/corrupt.
+func loadSweepLastRunSidecar(dataDir string) time.Time {
+	if dataDir == "" {
+		return time.Time{}
+	}
+	b, err := os.ReadFile(filepath.Join(dataDir, sweepLastRunSidecarName))
+	if err != nil {
+		return time.Time{}
+	}
+	var v sweepLastRunSidecar
+	if err := json.Unmarshal(b, &v); err != nil {
+		return time.Time{}
+	}
+	return v.LastRun
+}
+
+// saveSweepLastRunSidecar persists t as the sweep scheduler's last-run
+// timestamp. Best-effort: a write failure is logged, not propagated —
+// losing this file only widens the catch-up window on the NEXT boot,
+// it never blocks the sweep that just ran.
+func saveSweepLastRunSidecar(dataDir string, t time.Time) {
+	if dataDir == "" {
+		return
+	}
+	b, err := json.Marshal(sweepLastRunSidecar{LastRun: t})
+	if err != nil {
+		return
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, sweepLastRunSidecarName), b, 0o600); err != nil {
+		logging.L().Warn("compaction.sweep.last_run_sidecar.write_failed", "err", err.Error())
 	}
 }
 
@@ -5572,6 +5671,19 @@ func buildCompactionWiring(
 		return compaction.RunSweep(ctx, sweepStoreAdapter, auditAdapter,
 			s.EffectiveCompactionArchiveDays(), nil)
 	}
+	// CK-09 (chat-turn-integrity-01PMZ606 WP13): SeedLastRun's own doc
+	// comment claims "WP08 uses this to feed the persisted last-sweep
+	// time from disk", but nothing ever built that disk half — a
+	// repo-wide grep found zero callers of SeedLastRun anywhere,
+	// including tests. Without it, lastRun starts zero on every boot,
+	// so Start's catch-up branch (lastRun.IsZero() || overdue) fires on
+	// EVERY launch, not once per DefaultSchedulerInterval (24h) as the
+	// package doc promises. sweepLastRunSidecar is a minimal on-disk
+	// timestamp (NOT routed through SettingsStore — a single scalar
+	// scoped to one subsystem does not need the shared-schema blast
+	// radius of a new SettingsStore interface method) written after
+	// every successful sweep and read back before Start.
+	dataDir := c.DataDir()
 	scheduler := compaction.NewSweepScheduler(sweepRunner,
 		compaction.WithOnSweep(func(deleted int, err error) {
 			if err != nil {
@@ -5581,8 +5693,10 @@ func buildCompactionWiring(
 			if deleted > 0 {
 				logging.L().Info("compaction.sweep.ok", "deleted", deleted)
 			}
+			saveSweepLastRunSidecar(dataDir, time.Now().UTC())
 		}),
 	)
+	scheduler.SeedLastRun(loadSweepLastRunSidecar(dataDir))
 
 	deps = &chat.CompactionDeps{
 		Engine: engine,
@@ -5769,6 +5883,42 @@ func resolveAutonomyKnobsWithSettingsFallback(global, project, session autonomy.
 	return autonomy.Resolve(global, project, session)
 }
 
+// computeAutonomyKnobs resolves the three-layer autonomy chain
+// (global from Settings, project + session from c's managers) for the
+// given sessionID and folds in the legacy max-turns fallback. Pulled
+// out of newLLMStack's autonomyKnobsProvider closure (chat-turn-
+// integrity-01PMZ606 WP13, CHAT-11) so the session-scoping this
+// provider's chat_runner.go doc comment now claims — global +
+// per-project + per-session, not global-only — is independently
+// testable, and so a future regression back to global-only resolution
+// (which chat_runner.go's old "KNOWN GAP" comment said would be the
+// only wireable shape without a signature change) reddens a test
+// instead of only reverting a comment.
+func computeAutonomyKnobs(ctx context.Context, sessionID string, c *core.Core, settingsImpl *settings.API) autonomy.ResolvedKnobs {
+	var global, project, session autonomy.Layer
+	if settingsImpl != nil {
+		if g, gerr := settingsImpl.LoadAutonomyProfile(ctx); gerr == nil {
+			global = g
+		}
+	}
+	if c != nil && sessionID != "" {
+		if sm := c.SessionManager(); sm != nil {
+			if s, serr := sm.GetAutonomyProfile(ctx, sessionID); serr == nil {
+				session = s
+			}
+			if pm := c.ProjectManager(); pm != nil {
+				if rec, rerr := sm.Get(ctx, sessionID); rerr == nil &&
+					rec.ProjectID != nil && *rec.ProjectID != "" {
+					if p, perr := pm.GetAutonomyProfile(ctx, *rec.ProjectID); perr == nil {
+						project = p
+					}
+				}
+			}
+		}
+	}
+	return resolveAutonomyKnobsWithSettingsFallback(global, project, session, effectiveMaxAgentTurnsFromSettings(settingsImpl))
+}
+
 // registerManualCompactionStrategies installs the strategies the BASE
 // compaction pipeline was missing so the manual-trigger RPC surface
 // (core/rpc/views/compaction.API.TriggerManualCompaction — the "Compact
@@ -5797,12 +5947,75 @@ func resolveAutonomyKnobsWithSettingsFallback(global, project, session autonomy.
 // is what turns the panel's offered option from "always
 // ErrUnknownStrategy" into "actually runs, degraded until an embedder
 // is wired" — no embedder is wired on this path today.
-func registerManualCompactionStrategies(p *compaction.Pipeline, deps *chat.CompactionDeps, history chat.SessionMessageReader) {
+//
+// summary (WP08): re-registers "summary" with a real
+// compactionSummaryLLM in place of newGraphManagerWithDeps' nil-LLM
+// registration. RegisterStrategy is last-write-wins (Pipeline doc), the
+// same mechanism session_rewrite above relies on, and it has to happen
+// here rather than at the earlier site: newGraphManagerWithDeps runs
+// before the LLM stack (reg) is constructed in New() (see that
+// function's own "Constructed BEFORE the LLM stack" comment), so reg
+// does not exist yet at that call. reg==nil (nil-chassis test/boot path)
+// leaves the earlier nil-LLM registration in place unchanged —
+// newCompactionSummaryLLM returns nil in that case and the strategy is
+// simply not re-registered.
+func registerManualCompactionStrategies(p *compaction.Pipeline, deps *chat.CompactionDeps, history chat.SessionMessageReader, reg corellm.Registry) {
 	if p == nil {
 		return
 	}
 	p.RegisterStrategy(chat.NewSessionRewriteStrategy(deps, history))
 	p.RegisterStrategy(compaction.NewSemanticClusterStrategy(nil))
+	var defaultModel func() (compaction.ProviderProfileRef, bool)
+	if deps != nil {
+		defaultModel = deps.CompactionModel
+	}
+	if llm := newCompactionSummaryLLM(reg, defaultModel); llm != nil {
+		p.RegisterStrategy(compaction.NewSummaryStrategy(llm))
+	}
+}
+
+// buildAutoTitleDeps wires the post-run auto-title trigger's deps, or
+// nil when either dependency it cannot function without is missing.
+// Pulled out of buildChatRunner (chat-turn-integrity-01PMZ606 WP13,
+// CHAT-10) so the Audit wiring is independently testable: before this
+// WP, Audit was always left zero-valued in the literal even though
+// AutoTitleAudit's own doc comment claims "production binds this to
+// the manager's own Audit sink" — a claim that was ALSO false
+// (session.Manager's internal audit field is always session.noopAudit{}
+// in production; core.Core.SessionManager never passes
+// session.WithAudit). Left unwired, the two failure-path diagnostics
+// autotitle.go emits on list_messages_failed and generate_failed (the
+// specific error + duration_ms) had no emitter anywhere.
+// autoTitleAuditEmitter forwards them onto the same rpc/views/audit
+// ring buffer every other gated-RPC emitter in this file uses.
+func buildAutoTitleDeps(
+	sessionMgr *session.Manager,
+	autoTitleGen chat.AutoTitleGenerator,
+	settingsImpl *settings.API,
+	broker *StreamBroker,
+	autoTitleAudit contextaudit.Emitter,
+) *chat.AutoTitleDeps {
+	if sessionMgr == nil || autoTitleGen == nil {
+		return nil
+	}
+	capturedSettings := settingsImpl
+	capturedBroker := broker
+	return &chat.AutoTitleDeps{
+		Manager:   sessionMgr,
+		Generator: autoTitleGen,
+		EffectiveEnabled: func() bool {
+			if capturedSettings == nil {
+				return true
+			}
+			enabled, err := capturedSettings.GetAutoTitleEnabled(context.Background())
+			if err != nil {
+				return true // default on
+			}
+			return enabled
+		},
+		Broker: capturedBroker,
+		Audit:  autoTitleAuditEmitter{emitter: autoTitleAudit},
+	}
 }
 
 // buildChatRunner constructs the *chat.ChatRunner that replaces
@@ -5859,6 +6072,11 @@ func buildChatRunner(
 	secretLookup credstoreRefs.SecretLookup,
 	secretGate cedar.Gate,
 	secretBudget *credstoreRefs.Budget,
+	// autoTitleAudit backs AutoTitleDeps.Audit (CHAT-10,
+	// chat-turn-integrity-01PMZ606 WP13). The SAME contextaudit.Emitter
+	// newLLMStack already threads through as confirmAudit — nil-safe,
+	// silences the trail without affecting the auto-title write itself.
+	autoTitleAudit contextaudit.Emitter,
 ) *chat.ChatRunner {
 	if graphMgr == nil || graphMgr.Kernel() == nil {
 		logging.L().Warn("chat.runner.disabled", "reason", "graph manager unavailable")
@@ -6124,26 +6342,7 @@ func buildChatRunner(
 	}
 	// WP05 (p0-wiring-fixes): wire AutoTitle deps so the post-run trigger
 	// actually gates on the user's toggle.
-	var autoTitleDeps *chat.AutoTitleDeps
-	if sessionMgr != nil && autoTitleGen != nil {
-		capturedSettings := settingsImpl
-		capturedBroker := broker
-		autoTitleDeps = &chat.AutoTitleDeps{
-			Manager:   sessionMgr,
-			Generator: autoTitleGen,
-			EffectiveEnabled: func() bool {
-				if capturedSettings == nil {
-					return true
-				}
-				enabled, err := capturedSettings.GetAutoTitleEnabled(context.Background())
-				if err != nil {
-					return true // default on
-				}
-				return enabled
-			},
-			Broker: capturedBroker,
-		}
-	}
+	autoTitleDeps := buildAutoTitleDeps(sessionMgr, autoTitleGen, settingsImpl, broker, autoTitleAudit)
 	// The chat runner binds its per-run session-rewrite strategy onto
 	// the very pipeline the kernel dispatches its automatic sites
 	// through, so the `compact` node in chat_default.yaml and the
@@ -6152,7 +6351,7 @@ func buildChatRunner(
 	// built without a compactor yields nil here, which makes the node a
 	// documented passthrough.
 	chatCompactionPipeline, _ := graphMgr.Kernel().Compactor().(*compaction.Pipeline)
-	registerManualCompactionStrategies(chatCompactionPipeline, compactionDeps, historyReader)
+	registerManualCompactionStrategies(chatCompactionPipeline, compactionDeps, historyReader, reg)
 
 	runner, err := chat.New(chat.Config{
 		Kernel:        graphMgr.Kernel(),
@@ -6253,6 +6452,14 @@ func buildChatRunner(
 		// reads r.cfg.AutonomyKnobs == nil and silently no-ops — the
 		// gap this WP closes.
 		AutonomyKnobs: autonomyKnobsProvider,
+		// owner directive 2026-09-09, mission requirement 3: constructed
+		// once here so core/rpc.NewSubagentRunSpawner's BudgetOverrides
+		// can be wired to the SAME instance via
+		// chatRunner.SubagentBudgets() — see the SetRunSpawner call site
+		// in New(). nil would silently disable the profile-budget clamp
+		// (Set/Get/Clear are all nil-receiver-safe), so this is the one
+		// place that must not be left unset.
+		SubagentBudgets: chat.NewSubagentBudgetRegistry(),
 		// trust-surfaces-that-fire-01PMZ202 WP19: without these three,
 		// driveRun's `if r.cfg.SecretLookup != nil` guard never fires,
 		// so refs.WithResolver / refs.WithTurnSanitizer are never
@@ -7035,13 +7242,54 @@ func newCorpusManager(c *core.Core, embedder corememory.Embedder) *corecorpus.Ma
 	if store == nil {
 		return nil
 	}
-	var corpusEmb corecorpus.Embedder
-	if embedder != nil {
-		if _, ok := embedder.(corememory.NoopEmbedder); !ok {
-			corpusEmb = &corpusEmbedderAdapter{inner: embedder}
-		}
+	return corecorpus.NewManager(corecorpus.NewStorageDB(store), c.DataDir(), corpusEmbedderFor(embedder))
+}
+
+// corpusEmbedderFor adapts a corememory.Embedder onto the narrower
+// corecorpus.Embedder seam, or returns nil for an unconfigured
+// (Noop/nil) embedder — corecorpus.Manager treats a nil embedder as
+// "reject ingest with ErrEmbedderUnavailable" rather than crashing on a
+// Noop that would silently return zero-length vectors. Shared by
+// newCorpusManager (boot) and RefreshEmbedder (AN-12, chat-turn-
+// integrity-01PMZ606 WP13 — a provider picked after boot) so both paths
+// apply the identical Noop check.
+func corpusEmbedderFor(embedder corememory.Embedder) corecorpus.Embedder {
+	if embedder == nil {
+		return nil
 	}
-	return corecorpus.NewManager(corecorpus.NewStorageDB(store), c.DataDir(), corpusEmb)
+	if _, ok := embedder.(corememory.NoopEmbedder); ok {
+		return nil
+	}
+	return &corpusEmbedderAdapter{inner: embedder}
+}
+
+// RefreshEmbedder recomputes the shared embedder from the personal
+// provider profiles + Settings selection AS THEY STAND NOW, and pushes
+// the result onto the live corpus.Manager (AN-12, chat-turn-integrity-
+// 01PMZ606 WP13, ruling X-4). Wired as settings.API's embedder-change
+// notifier (see New(), just after a.corpusMgr is constructed), so a
+// profile the user selects after boot — the common path, since most
+// installs have no eligible embedder profile at first launch — reaches
+// corpus ingest/search without a restart. Mirrors the boot-time
+// computation in New() (newEmbedder + embedderCaptureDecorator +
+// corpusEmbedderFor) exactly, so a provider picked live behaves
+// identically to one already configured at boot.
+//
+// Deliberately does not touch the memory retriever: its embedder is
+// captured by value into corememory.NewRetriever at boot with no
+// setter, so it stays frozen across a live embedder-config change
+// today. That is a pre-existing, narrower gap outside AN-12's scope
+// (which names corpus specifically, via exec_state.go's live kernel
+// call site) — not something this WP silently expands to cover.
+func (a *API) RefreshEmbedder() {
+	if a == nil || a.corpusMgr == nil {
+		return
+	}
+	embedder := newEmbedder(a.core, a.personalStore, a.settingsImpl)
+	if _, isNoop := embedder.(corememory.NoopEmbedder); !isNoop {
+		embedder = &embedderCaptureDecorator{inner: embedder}
+	}
+	a.corpusMgr.SetEmbedder(corpusEmbedderFor(embedder))
 }
 
 // newGraphManager constructs the agent-graph view's Manager. Nil core
@@ -7426,10 +7674,16 @@ func newGraphManagerWithDeps(
 		compaction.WithEmitter(compaction.EventLogEmitter(agEventLog)),
 	)
 	compactionPipeline.RegisterStrategy(compaction.NewDropOldestStrategy())
-	// nil LLM: the summary strategy falls back to its inline heuristic
-	// summarizer. Wiring a real LLM provider here is a follow-up WP —
-	// this WP's scope is making SiteManual reachable at all, not
-	// picking which model does the summarizing.
+	// nil LLM here: this construction runs before the LLM stack (reg)
+	// exists in New() (see this function's own doc comment), so there is
+	// no registry to wire yet. registerManualCompactionStrategies
+	// (chat-turn-integrity-01PMZ606 WP08) re-registers "summary" with a
+	// real compactionSummaryLLM once reg is available — RegisterStrategy
+	// is last-write-wins, so this nil-LLM registration is the transient
+	// boot-time state, not the steady state. It remains the permanent
+	// state only on a nil-registry chassis (tests / degraded boot),
+	// where the strategy still runs via its heuristic fallback rather
+	// than erroring.
 	compactionPipeline.RegisterStrategy(compaction.NewSummaryStrategy(nil))
 
 	kernel := coreag.NewKernel(
@@ -8247,6 +8501,72 @@ func (a *API) AppInfo(ctx context.Context) (AppInfo, error) {
 	return info, nil
 }
 
+// CompactionOverheadInfo is the wire shape for the compaction-overhead
+// readout on the SessionsView header row (chat-turn-integrity-01PMZ606
+// WP12, owner ruling X-7 / CK-08 — docs/escalation-register-2026-08-19.md
+// :331-346, "ONE FINDING. WIRE IT.").
+//
+// Process-wide, not per-session: compactionwiring.LLMCaller.Overhead()
+// (core/agentgraph/compaction/wiring/llm.go) is a single running counter
+// for the whole process's lifetime, not keyed by session id. A future WP
+// that wants a true per-session breakdown would need to thread the
+// session id through CallForSummary and key the tally by it — out of
+// scope here; this WP's job was reading storage that already existed,
+// not redesigning it (both compactionLLM and compactionAudit were
+// already constructed and held on the rpc stack before this WP; nothing
+// after newLLMStack returned ever called them).
+type CompactionOverheadInfo struct {
+	// Total / Currency / Calls / IndeterminateCalls / InputTokens /
+	// OutputTokens mirror compactionwiring.OverheadTotals field-for-field
+	// — the running tally of every compaction-driven LLM call this
+	// process has issued since boot.
+	Total              float64 `json:"total"`
+	Currency           string  `json:"currency,omitempty"`
+	Calls              int     `json:"calls"`
+	IndeterminateCalls int     `json:"indeterminateCalls"`
+	InputTokens        int     `json:"inputTokens"`
+	OutputTokens       int     `json:"outputTokens"`
+	// RecentTiers is the aggressiveness tier of up to the last 5
+	// successful compactions, oldest first, decoded from
+	// compactionAudit.Recent() — AuditEmitter.Recent's first non-test
+	// caller (the other half of CK-08's "registered, never consumed"
+	// finding: the 256-entry ring accumulated for nobody).
+	RecentTiers []string `json:"recentTiers,omitempty"`
+}
+
+// CompactionOverhead implements HarnessAPI. Returns the zero value (not
+// an error) when compaction was disabled at boot — matching
+// buildCompactionWiring's own degrade contract, not a fault condition
+// this RPC should surface as one.
+func (a *API) CompactionOverhead(_ context.Context) (CompactionOverheadInfo, error) {
+	if a == nil || a.compactionLLM == nil {
+		return CompactionOverheadInfo{}, nil
+	}
+	totals := a.compactionLLM.Overhead()
+	out := CompactionOverheadInfo{
+		Total:              totals.Total,
+		Currency:           totals.Currency,
+		Calls:              totals.Calls,
+		IndeterminateCalls: totals.IndeterminateCalls,
+		InputTokens:        totals.InputTokens,
+		OutputTokens:       totals.OutputTokens,
+	}
+	if a.compactionAudit == nil {
+		return out, nil
+	}
+	for _, ev := range a.compactionAudit.Recent(5) {
+		if ev.Kind != contextaudit.KindSessionCompacted {
+			continue
+		}
+		var payload contextaudit.SessionCompactedPayload
+		if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+			continue
+		}
+		out.RecentTiers = append(out.RecentTiers, payload.AggressivenessTier)
+	}
+	return out, nil
+}
+
 // brokerPublisher adapts *StreamBroker to the workflowsview.ProgressPublisher
 // interface so the workflows engine can fan progress events onto the
 // `workflows:run-progress` topic without importing rpc.
@@ -8691,6 +9011,32 @@ func (e confirmAuditEmitter) Emit(_ context.Context, ev contextaudit.Event) erro
 		Trailing:  fmt.Sprintf("payload_bytes=%d", len(ev.Payload)),
 	})
 	return nil
+}
+
+// autoTitleAuditEmitter implements chat.AutoTitleAudit
+// (Emit(ctx, kind string, payload map[string]any)) by marshalling the
+// payload and forwarding onto a contextaudit.Emitter — production wires
+// this to the SAME confirmAudit instance newLLMStack threads to
+// confirmAuditEmitter above (CHAT-10, chat-turn-integrity-01PMZ606
+// WP13). A nil inner emitter or a marshal failure silently drops the
+// event rather than aborting the auto-title write it decorates.
+type autoTitleAuditEmitter struct {
+	emitter contextaudit.Emitter
+}
+
+func (e autoTitleAuditEmitter) Emit(ctx context.Context, kind string, payload map[string]any) {
+	if e.emitter == nil {
+		return
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	_ = e.emitter.Emit(ctx, contextaudit.Event{
+		Kind:    contextaudit.Kind(kind),
+		TS:      time.Now().UTC(),
+		Payload: raw,
+	})
 }
 
 // approvalAuditEmitter implements contextaudit.Emitter for

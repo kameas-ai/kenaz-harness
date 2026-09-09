@@ -962,25 +962,42 @@ const contextWindowOverrides = ref<Settings['contextWindowOverrides']>({});
 // Default true on a fresh install.
 const autoResumeOnKeyRotation = ref(true);
 
-// Compaction overhead surface (mission compaction-strategy-ui-01KQ8TDI
-// WP08 / plan §2.11). The backend tags every compaction-driven LLM
-// call with cost.kind = "compaction" and accumulates a running total
-// (see core/agentgraph/compaction/wiring/llm.go OverheadTotals). The frontend
-// surface here renders a compact "Compaction overhead: $X.XX of $Y.YY
-// total" line on the chat header when the overhead is non-zero so
-// users can see the cost of compaction without opening a dedicated
-// panel.
+// Compaction overhead surface (chat-turn-integrity-01PMZ606 WP12, owner
+// ruling X-7 / CK-08 — docs/escalation-register-2026-08-19.md:331-346,
+// "compaction silently spends the user's tokens and money"). The backend
+// tags every compaction-driven LLM call with cost.kind = "compaction" and
+// accumulates a running total (core/agentgraph/compaction/wiring/llm.go
+// OverheadTotals via compactionLLM.Overhead()). Both compactionLLM and
+// compactionAudit were already constructed at boot before this WP — the
+// only missing piece was a caller: nothing read Overhead() or Recent(),
+// so this row was permanently hidden behind a hardcoded-zero placeholder
+// (compaction-strategy-ui-01KQ8TDI WP08's original TODO).
 //
-// TODO(compaction-strategy-ui WP08+): wire an RPC method that returns
-// the per-session OverheadTotals shape (Total / Currency / Calls /
-// Indeterminate / InputTokens / OutputTokens — defined in
-// core/agentgraph/compaction/wiring/llm.go). Until the RPC lands the values
-// stay at zero and the row is hidden by compactionOverheadVisible.
+// Process-wide, not per-session (see core/rpc.CompactionOverheadInfo's
+// Go-side doc comment: the backend counter accumulates for the whole
+// process's lifetime, not keyed by session id). Rendered as "$X.XX
+// across N compactions" rather than the originally-planned "$X of
+// session total $Y" — that framing would have compared two different
+// populations (all-process compaction spend vs. one session's spend) and
+// misled the exact user this ruling exists to be honest with.
 const compactionOverheadUSD = ref<number>(0);
-const compactionOverheadTotalUSD = ref<number>(0);
+const compactionOverheadCalls = ref<number>(0);
+const compactionOverheadIndeterminate = ref<number>(0);
 const compactionOverheadVisible = computed(
-  () => compactionOverheadUSD.value > 0,
+  () => compactionOverheadCalls.value > 0,
 );
+
+async function refreshCompactionOverhead() {
+  try {
+    const overhead = await client.compactionOverhead();
+    compactionOverheadUSD.value = overhead.total;
+    compactionOverheadCalls.value = overhead.calls;
+    compactionOverheadIndeterminate.value = overhead.indeterminateCalls;
+  } catch {
+    // Soft-fail: leave the hidden default in place, matching
+    // refreshCompactionSettings' existing soft-fail convention below.
+  }
+}
 
 async function refreshMemoryFlag() {
   try {
@@ -1017,10 +1034,12 @@ async function refreshCompactionSettings() {
 onMounted(() => {
   void refreshMemoryFlag();
   void refreshCompactionSettings();
+  void refreshCompactionOverhead();
 });
 window.addEventListener('focus', () => {
   void refreshMemoryFlag();
   void refreshCompactionSettings();
+  void refreshCompactionOverhead();
 });
 
 // ── search-focus pulse (cross-session-search WP05) ─────────────────────
@@ -1765,26 +1784,28 @@ async function onShared() {
           >
             Context
           </button>
-          <!-- Compaction overhead readout (compaction-strategy-ui WP08
-               / plan §2.11). Hidden until at least one compaction call
-               has run; renders the running total tagged with
-               cost.kind = "compaction" alongside the session's grand
-               total so users can see what fraction of their spend
-               compaction is responsible for. -->
+          <!-- Compaction overhead readout (chat-turn-integrity-01PMZ606
+               WP12, owner ruling X-7 / CK-08). Hidden until at least one
+               compaction call has run anywhere in this process; renders
+               the running total tagged with cost.kind = "compaction".
+               Deliberately NOT "$X of session total $Y" — the backend
+               counter is process-wide, not per-session (see
+               core/rpc.CompactionOverheadInfo's doc comment), so a
+               session-scoped denominator would misstate what the number
+               means. -->
           <span
             v-if="compactionOverheadVisible"
             class="ml-auto px-3 py-1 font-ui text-[11px] tracking-[0.05em] text-ink-muted"
             data-testid="compaction-overhead-line"
+            :title="`Running total across this app session; not specific to the conversation you're viewing.${compactionOverheadIndeterminate > 0 ? ` ${compactionOverheadIndeterminate} call(s) had no matching price entry and are excluded from the dollar total.` : ''}`"
           >
             Compaction overhead:
             <span class="text-ink font-mono">
               ${{ compactionOverheadUSD.toFixed(2) }}
             </span>
-            of
-            <span class="text-ink font-mono">
-              ${{ compactionOverheadTotalUSD.toFixed(2) }}
-            </span>
-            total
+            across
+            <span class="text-ink font-mono">{{ compactionOverheadCalls }}</span>
+            {{ compactionOverheadCalls === 1 ? 'compaction' : 'compactions' }}
           </span>
           <!-- Show full history toggle (compaction-strategy-ui WP07).
                Per-session UI state (NOT persisted) — flips the

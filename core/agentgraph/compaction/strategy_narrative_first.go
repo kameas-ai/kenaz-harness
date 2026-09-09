@@ -10,14 +10,24 @@ import (
 
 // StrategyNarrativeFirst is the narrative-layer compaction strategy
 // (memory-narrative-layer-01KQ8TD1 WP10). It splices per-turn synthesised
-// narratives verbatim for message ranges that have coverage. Ranges without
-// narrative coverage emit a "pass-through" sentinel and the pipeline falls
-// through to the next cascade tier (typically StrategySummary).
+// narratives verbatim for message ranges that have coverage. Ranges
+// without narrative coverage return the input unchanged (pass-through,
+// see passThrough's own doc for the CK-13 correction on what that
+// actually causes downstream).
 //
-// This strategy MUST NOT be invoked at SiteManual — manual compact
-// preserves "force fresh summary" UX. The pipeline enforces this via the
-// site-disabled check in Run when SiteManual is configured to exclude
-// narrative_first.
+// CK-13 justify(blocker: "NewNarrativeFirstStrategy has zero production
+// call sites — a repo-wide grep finds only its own declaration and
+// test files — so the strategy is not registered on any pipeline at
+// all; the enforcement + shadow-mode claims below described a
+// mechanism for a strategy nothing dispatches", owner: alec, date:
+// 2026-08-29; chat-turn-integrity-01PMZ606 WP13): this used to claim
+// "MUST NOT be invoked at SiteManual... The pipeline enforces this via
+// the site-disabled check in Run when SiteManual is configured to
+// exclude narrative_first." SiteConfig has no per-strategy exclusion
+// field at all (only a whole-site Enabled bool) — `grep -n "Exclude"
+// core/agentgraph/compaction/config.go` is empty — so no such
+// enforcement exists to configure. If this strategy is ever wired, the
+// SiteManual exclusion needs building from scratch, not flipping on.
 const StrategyNarrativeFirst Strategy = "narrative_first"
 
 // NarrativeLookup is the narrow interface NarrativeFirstStrategy uses to
@@ -41,9 +51,16 @@ type NarrativeLookup interface {
 // narrative message. When no narrative is found the strategy returns
 // the input messages unchanged (pass-through).
 //
-// Shadow mode (HARNESS_MEMORY_NARRATIVE_COMPACT_SHADOW=true) runs both
-// this strategy and the fallback, logs divergence, but uses only this
-// strategy's output.
+// CK-13 (chat-turn-integrity-01PMZ606 WP13): this used to describe a
+// live shadow mode — "Shadow mode
+// (HARNESS_MEMORY_NARRATIVE_COMPACT_SHADOW=true) runs both this
+// strategy and the fallback, logs divergence, but uses only this
+// strategy's output." core/memory/narrative.NarrativeCompactShadowMode
+// reads that env var correctly, but has zero callers anywhere in this
+// package (or the tree) — nothing runs a comparison, nothing logs a
+// divergence. See StrategyNarrativeFirst's doc for the justify() block
+// covering why: this strategy is not registered on any pipeline yet,
+// so there is no "both" to run a shadow comparison between.
 type NarrativeFirstStrategy struct {
 	lookup    NarrativeLookup
 	sessionID string
@@ -78,12 +95,13 @@ func (s *NarrativeFirstStrategy) Compact(ctx context.Context, in ContextSlice, _
 	// We pass nil turn IDs since the lookup can decide based on session.
 	narrativeContent, err := s.lookup.FindNarrative(ctx, s.sessionID, nil)
 	if err != nil {
-		// Log but don't fail — fall through to the next tier.
+		// Log but don't fail — return the input unchanged (CK-13: this
+		// is NOT a cascade to a fallback strategy; see passThrough's doc).
 		log.Printf("compaction: narrative_first lookup error: %v", err)
 		return passThrough(in), nil
 	}
 	if narrativeContent == "" {
-		// No narrative coverage — pass-through so the pipeline cascades.
+		// No narrative coverage — pass-through (CK-13: not a cascade).
 		return passThrough(in), nil
 	}
 
@@ -112,8 +130,17 @@ func (s *NarrativeFirstStrategy) Compact(ctx context.Context, in ContextSlice, _
 }
 
 // passThrough returns the input messages unchanged with Strategy set to
-// StrategyNarrativeFirst and BytesSaved=0. The pipeline recognises
-// BytesSaved=0 + pass-through content as "no-op from this strategy".
+// StrategyNarrativeFirst and BytesSaved=0.
+//
+// CK-13 (chat-turn-integrity-01PMZ606 WP13): this used to claim "The
+// pipeline recognises BytesSaved=0 + pass-through content as 'no-op
+// from this strategy'" — implying a cascade to a fallback strategy.
+// pipeline.go has no reference to StrategyNarrativeFirst, BytesSaved,
+// or any per-strategy fallback dispatch; a repo-wide grep confirms it.
+// A pass-through result is just this strategy's normal successful
+// output (Strategy() still reports narrative_first, no error) — the
+// pipeline has no mechanism to notice BytesSaved==0 and re-dispatch to
+// a different strategy for the same request.
 func passThrough(in ContextSlice) CompactedContext {
 	msgs := append([]agentgraph.Message(nil), in.Messages...)
 	return CompactedContext{

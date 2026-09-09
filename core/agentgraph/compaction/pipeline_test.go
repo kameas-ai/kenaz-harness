@@ -271,6 +271,99 @@ func TestPipeline_EventLogBridgeWritesCompactionFired(t *testing.T) {
 	}
 }
 
+// TestPipeline_AgentgraphOverrideDispatchesAuthorsStrategy is AC-011
+// (chat-turn-integrity-01PMZ606 WP09, CHAT-07). It closes the compact
+// node's `strategy` attr as decorative: before agentgraph.CompactionInput
+// carried a Strategy field mapped to CompactRequest.Override, a node's
+// own explicit choice was silently discarded in favour of whatever the
+// cascading site config resolved to — the resolved value could differ
+// from the author's, and the emitted event reported the request rather
+// than the dispatch.
+//
+// THE PROOF IS BEHAVIOURAL, NOT STRUCTURAL. Adding the Strategy field to
+// CompactionInput proves nothing on its own — the field could sit there
+// unread exactly like the CompactAttrs.Strategy node attr did before
+// this fix. This test drives two *actually different* registered
+// strategies (drop_oldest discards messages individually; summary with
+// a nil LLM folds everything into one heuristic-joined message) so the
+// message-count shape of the output is a direct fingerprint of which
+// strategy dispatched — not a log line that could be rewritten
+// independently of the real code path.
+func TestPipeline_AgentgraphOverrideDispatchesAuthorsStrategy(t *testing.T) {
+	em := &recordingEmitter{}
+	p := newPipeline(t, em)
+
+	// The site config (what an un-overridden call would resolve to) picks
+	// summary — summary collapses any input down to exactly ONE output
+	// message (heuristicSummary, since the registered SummaryStrategy has
+	// a nil LLM). drop_oldest, by contrast, keeps DefaultKeepRecentN (2)
+	// distinct messages. The two are unmistakably different shapes.
+	sc := compaction.SiteConfig{Strategy: compaction.StrategySummary}
+	sc.MarkStrategy()
+	p.Resolver().Set(compaction.LayerProject, "p-ac011", compaction.CompactionConfig{
+		Sites: map[compaction.Site]compaction.SiteConfig{compaction.SiteManual: sc},
+	})
+
+	in := agentgraph.CompactionInput{
+		Site:      agentgraph.CompactionSiteManual,
+		RunID:     "run-ac011",
+		NodeID:    "compact1",
+		ProjectID: "p-ac011",
+		// The author's explicit choice on the compact node — must win
+		// over the project-layer "summary" resolved above.
+		Strategy: string(compaction.StrategyDropOldest),
+		Messages: []agentgraph.Message{
+			{Role: "user", Content: strings.Repeat("a", 100)},
+			{Role: "assistant", Content: strings.Repeat("b", 100)},
+			{Role: "user", Content: strings.Repeat("c", 100)},
+			{Role: "assistant", Content: strings.Repeat("d", 100)},
+			{Role: "user", Content: strings.Repeat("e", 100)},
+		},
+		// SiteManual bypasses the threshold gate entirely (an explicit
+		// compaction request means it), so a real TargetTokens is what
+		// makes drop_oldest actually trim rather than no-op.
+		TargetTokens: 10,
+	}
+
+	out, err := p.Compact(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+
+	// THE LOAD-BEARING ASSERTION: the actual dispatched behaviour.
+	// summary would produce exactly 1 message; drop_oldest's default
+	// keep-floor produces 2. If Override is not wired (the reverted
+	// mutation), this fails here — on the real output shape, not on a
+	// reportable-but-disconnected event field.
+	if len(out.Messages) != 2 {
+		t.Fatalf("got %d output messages, want 2 (drop_oldest's keep-floor) — "+
+			"a count of 1 means summary dispatched instead of the node's own drop_oldest, "+
+			"i.e. CompactionInput.Strategy never reached CompactRequest.Override",
+			len(out.Messages))
+	}
+	for _, m := range out.Messages {
+		if strings.Contains(m.Content, " | ") {
+			t.Fatalf("output message contains summary's join delimiter %q — summary dispatched, not drop_oldest: %+v",
+				" | ", out.Messages)
+		}
+	}
+
+	// Secondary, structural confirmation: the reported strategy (both on
+	// CompactionOutput and the emitted event) must match the dispatch,
+	// not the site's resolved default.
+	if out.Strategy != string(compaction.StrategyDropOldest) {
+		t.Fatalf("CompactionOutput.Strategy = %q, want %q", out.Strategy, compaction.StrategyDropOldest)
+	}
+	evs := em.snapshot()
+	if len(evs) != 1 {
+		t.Fatalf("expected 1 compaction_fired event, got %d", len(evs))
+	}
+	if evs[0].Payload.Strategy != compaction.StrategyDropOldest {
+		t.Fatalf("event strategy = %q, want %q (the resolved site strategy %q must not win over the override)",
+			evs[0].Payload.Strategy, compaction.StrategyDropOldest, compaction.StrategySummary)
+	}
+}
+
 func TestPipeline_AdaptsToAgentgraphCompactor(t *testing.T) {
 	em := &recordingEmitter{}
 	p := newPipeline(t, em)

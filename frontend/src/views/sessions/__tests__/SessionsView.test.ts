@@ -237,6 +237,108 @@ describe('SessionsView (chat-ui)', () => {
     w.unmount();
   });
 
+  // chat-turn-integrity-01PMZ606 WP12 / AC-015 (owner ruling X-7, CK-08):
+  // compactionLLM.Overhead() and compactionAudit.Recent() were both
+  // constructed at boot but had no reader anywhere in production, so this
+  // header row was permanently hidden behind a hardcoded-zero placeholder.
+  // Drives the REAL client.compactionOverhead() call SessionsView.vue's
+  // own onMounted hook makes — not a hand-built prop — so the mapping
+  // from the RPC payload to the rendered row is genuinely exercised.
+  it('renders the compaction-overhead row when the backend reports a non-zero tally', async () => {
+    const messages: Message[] = [
+      makeMessage({ id: 'q', role: 'user', content: 'How are you?' }),
+    ];
+    const { w } = await mountWithRoute('#s-1', {
+      sessions: {
+        list: async () => [],
+        get: async (id: string) => ({ id, name: 'Onboarding', createdAt: '', updatedAt: '' }),
+        create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => messages,
+        listMessagesActive: async () => ({ messages, sweptCount: 0 }),
+        listMessagesAll: async () => ({ messages, sweptCount: 0 }),
+        appendMessage: async (id: string, role: string, content: string) =>
+          makeMessage({ id: 'new', sessionId: id, role: role as Message['role'], content }),
+        sendMessageWithBlocks: async () => makeMessage({ id: 'b' }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+        setSystemPrompt: async () => undefined,
+        moveToProject: async () => undefined,
+        getUsage: async () => ({ promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, costSource: 'unknown' as const, messageCount: 0, pricingDataDate: '' }),
+        saveAsArtifact: async () => ({ id: '', sessionId: '', title: '', mimeType: 'text/plain', contentHash: '', byteSize: 0, source: 'user_pin' as const, sourceRef: { messageId: '', offset: 0, length: 0 }, scopeKind: 'session' as const, createdAt: '' }),
+      } as any,
+      llm: {
+        listProviders: async () => [],
+        startStream: async () => 'sub-llm',
+        stopStream: async () => undefined,
+      } as any,
+      compactionOverhead: async () => ({
+        total: 0.0081,
+        currency: 'USD',
+        calls: 3,
+        indeterminateCalls: 0,
+        inputTokens: 2700,
+        outputTokens: 450,
+        recentTiers: ['balanced', 'balanced', 'aggressive'],
+      }),
+    });
+
+    expect(w.find('[data-testid="compaction-overhead-line"]').exists()).toBe(true);
+    expect(w.text()).toContain('$0.01');
+    expect(w.text()).toContain('3');
+    expect(w.text()).toContain('compactions');
+    w.unmount();
+  });
+
+  // The absence half of AC-015: "with none, it is absent rather than
+  // showing zeros." A row reading "$0.00 across 0 compactions" would be
+  // a NEW lie of the exact shape this WP exists to end.
+  it('hides the compaction-overhead row when the backend reports zero calls', async () => {
+    const { w } = await mountWithRoute('#s-1', {
+      sessions: {
+        list: async () => [],
+        get: async (id: string) => ({ id, name: 'Onboarding', createdAt: '', updatedAt: '' }),
+        create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => [],
+        listMessagesActive: async () => ({ messages: [], sweptCount: 0 }),
+        listMessagesAll: async () => ({ messages: [], sweptCount: 0 }),
+        appendMessage: async (id: string, role: string, content: string) =>
+          makeMessage({ id: 'new', sessionId: id, role: role as Message['role'], content }),
+        sendMessageWithBlocks: async () => makeMessage({ id: 'b' }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+        setSystemPrompt: async () => undefined,
+        moveToProject: async () => undefined,
+        getUsage: async () => ({ promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, costSource: 'unknown' as const, messageCount: 0, pricingDataDate: '' }),
+        saveAsArtifact: async () => ({ id: '', sessionId: '', title: '', mimeType: 'text/plain', contentHash: '', byteSize: 0, source: 'user_pin' as const, sourceRef: { messageId: '', offset: 0, length: 0 }, scopeKind: 'session' as const, createdAt: '' }),
+      } as any,
+      llm: {
+        listProviders: async () => [],
+        startStream: async () => 'sub-llm',
+        stopStream: async () => undefined,
+      } as any,
+      compactionOverhead: async () => ({
+        total: 0,
+        calls: 0,
+        indeterminateCalls: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+      }),
+    });
+
+    expect(w.find('[data-testid="compaction-overhead-line"]').exists()).toBe(false);
+    w.unmount();
+  });
+
   // controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-8 (WP13,
   // FR-020, AC-035): the long-session nudge's token arm used to read
   // session.lastUsage.promptTokens — a PER-TURN snapshot overwritten by

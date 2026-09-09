@@ -165,11 +165,16 @@ export interface UseSessionResult {
    */
   sweptCount: Ref<number>;
   /**
-   * Most-recent per-turn usage snapshot received via the
+   * Most-recent per-turn usage snapshot. Updated two ways: live, via the
    * `session.usage.updated` broker event
-   * (backend-context-window-length-01KQ8TD3 WP03). null until the
-   * first turn completes. The context-window indicator reads
-   * promptTokens from this to update its numerator in near-real-time.
+   * (backend-context-window-length-01KQ8TD3 WP03); and on every `load()`,
+   * from the fetched session's own `lastUsage` field
+   * (chat-turn-integrity-01PMZ606 WP11, task #37) — which is what makes
+   * this survive a session reopen or app restart instead of resetting to
+   * null until the next live turn. null only when the session genuinely
+   * has no completed turn yet. The composer footer
+   * (composerUsageEstimate) and the context-window indicator
+   * (contextNumerator) both read promptTokens / costUsd from this ref.
    */
   lastUsage: Ref<SessionUsagePayload | null>;
   /**
@@ -351,6 +356,22 @@ export function useSession(id: Ref<string>): UseSessionResult {
         client.sessions.loadDraft(sessionId).catch(() => ""),
       ]);
       session.value = s;
+      // chat-turn-integrity-01PMZ606 WP11 (task #37, C-5): repopulate the
+      // per-turn usage snapshot from the fetched session on every load —
+      // not just from the live `session.usage.updated` broker event. The
+      // composer footer (composerUsageEstimate) and the context-window
+      // meter (contextNumerator) both read this SAME ref
+      // (SessionsView.vue), so without this line both readouts showed
+      // 0 tok · $0.0000 on every session reopen and every app restart,
+      // even though `s.lastUsage` — read from the persisted
+      // sessions.last_usage_json column — already carried the real
+      // number. Explicitly null when the session has no persisted usage
+      // yet (a session that has never completed a turn), matching the
+      // watch(id, …) session-switch reset below rather than leaking a
+      // stale value from the previously loaded session.
+      lastUsage.value = s.lastUsage
+        ? { sessionId, ...s.lastUsage }
+        : null;
       messages.value = msgsResult.messages;
       sweptCount.value = msgsResult.sweptCount;
       draft.value = d;

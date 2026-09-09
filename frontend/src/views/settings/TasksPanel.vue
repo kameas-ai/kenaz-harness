@@ -63,7 +63,11 @@ let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
 async function load() {
   try {
-    tasks.value = await client.Tasks_List();
+    // A Go nil slice marshals to JSON null, not [], so this ref's
+    // TaskRow[] type lies whenever the backend returns nil (observed
+    // live in the fleet-session-expired state: 'null is not an object
+    // (evaluating tasks.value.filter)'). Coerce at the assignment.
+    tasks.value = (await client.Tasks_List()) ?? [];
     error.value = null;
   } catch (err) {
     error.value = String(err);

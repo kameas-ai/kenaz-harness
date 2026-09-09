@@ -16,6 +16,9 @@ import (
 // content — to guarantee retryability semantics are stable:
 //
 //   - 401 / 403 → *ErrAuth (non-retryable)
+//   - 402 → *ErrPaymentRequired (non-retryable; insufficient credits —
+//     retrying cannot conjure them, so this must never fall into the
+//     ErrTransient bucket below)
 //   - 408 / 425 / 429 → *ErrTransient (retryable)
 //   - 5xx → *ErrTransient (retryable)
 //   - everything else → *ErrInvalidRequest (non-retryable)
@@ -34,6 +37,8 @@ func ClassifyStatus(status int, body []byte) error {
 	switch {
 	case status == 401 || status == 403:
 		return &ErrAuth{Status: status, Message: msg}
+	case status == 402:
+		return &ErrPaymentRequired{Status: status, Message: msg}
 	case status == 408 || status == 425 || status == 429:
 		return &ErrTransient{Status: status, Message: msg}
 	case status >= 500 && status < 600:

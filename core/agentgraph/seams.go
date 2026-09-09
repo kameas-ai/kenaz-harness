@@ -809,8 +809,15 @@ const (
 	// request when the prepared input would exceed the token budget
 	// threshold (FR-041).
 	CompactionSitePreCall CompactionSite = "pre_call"
-	// CompactionSitePostTool fires after a ToolNode returns when the
-	// result payload exceeds tool_result_max_bytes (FR-041).
+	// CompactionSitePostTool fires after a ToolNode returns, gated by
+	// the pre_call site's token-watermark verdict
+	// (Env.automaticCompactionCrossed) — NOT by result byte size.
+	// CK-04/CK-05/CK-06 (chat-turn-integrity-01PMZ606 WP13): this used
+	// to claim firing was gated by tool_result_max_bytes;
+	// SiteConfig.ToolResultMaxBytes is round-tripped through Settings
+	// but absent from CompactOpts, so no strategy dispatch can ever
+	// read it — see that field's doc comment in
+	// core/agentgraph/compaction/config.go for the justify() block.
 	CompactionSitePostTool CompactionSite = "post_tool"
 	// CompactionSiteManual fires from the user-facing manual trigger.
 	CompactionSiteManual CompactionSite = "manual"
@@ -828,6 +835,16 @@ type CompactionInput struct {
 	// SessionID + ProjectID drive cascading-config resolution.
 	SessionID string
 	ProjectID string
+	// Strategy, when non-empty, forces the compactor to dispatch this
+	// specific strategy regardless of the resolved cascading config —
+	// mirrors compaction.CompactRequest.Override, the actual
+	// dispatch-selection field on the other side of this seam. Empty
+	// means "use whatever the cascading config resolves to". A graph
+	// author's `compact` node `strategy` attr is the production source
+	// of this value (CHAT-07): before this field existed the attr was
+	// read only into event-payload telemetry, so the event could report
+	// a strategy that never actually ran.
+	Strategy string
 	// SystemPrompt is preserved untouched across compaction.
 	SystemPrompt string
 	// Messages is the slice the compactor will shrink. The kernel
@@ -855,6 +872,15 @@ type CompactionOutput struct {
 	TokensAfter int
 	Skipped     bool
 	Reason      string
+	// Strategy reports the strategy the compactor actually dispatched
+	// (empty when Skipped, since nothing ran). This is the resolved
+	// strategy — Override if the caller set one, otherwise the
+	// cascading-config strategy — never the caller's unresolved intent.
+	// Callers that report "what ran" (e.g. EventCompactionApplied) must
+	// read this field rather than their own request attr: reporting the
+	// attr instead is the CHAT-07 defect (the event describes a
+	// strategy that never dispatched).
+	Strategy string
 }
 
 // Compactor is the kernel-side seam for the configurable compaction

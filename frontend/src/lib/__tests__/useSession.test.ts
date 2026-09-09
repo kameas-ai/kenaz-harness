@@ -138,6 +138,64 @@ describe('useSession (chat-ui)', () => {
     w.unmount();
   });
 
+  // chat-turn-integrity-01PMZ606 WP11 / AC-014 — the read half of the
+  // "the turn's cost survives a reload" defect. lastUsage had exactly two
+  // assignments before this WP: the `session.usage.updated` event handler,
+  // and a `null` reset on session switch. load() never repopulated it, so
+  // the composer footer and context-window meter (SessionsView.vue) read
+  // 0 tok · $0.0000 on every session reopen and every app restart, even
+  // though the true number was already sitting in
+  // sessions.last_usage_json.
+  //
+  // Deliberately fires NO `session.usage.updated` event — AC-014 calls out
+  // that a test asserting only the event path still passes with the bug.
+  // This drives the REAL useSession() adapter against a fake HarnessClient
+  // (not a hand-built view-model), so the mapping from the wire `Session
+  // .lastUsage` field to the `lastUsage` ref is genuinely exercised.
+  it('repopulates lastUsage from client.sessions.get on load(), with no event fired', async () => {
+    const { w, session } = mountWithSession({
+      sessions: {
+        list: async () => [],
+        get: async (id: string) => ({
+          id,
+          name: 'Reloaded Session',
+          createdAt: '',
+          updatedAt: '',
+          lastUsage: {
+            promptTokens: 4096,
+            completionTokens: 512,
+            totalTokens: 4608,
+            costUsd: 0.0234,
+            costSource: 'provider',
+          },
+        }),
+        create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => [],
+        appendMessage: async (id: string, role: string, content: string) =>
+          makeMessage({ id: 'new', sessionId: id, role: role as Message['role'], content }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+      } as any,
+    });
+    await vi.runAllTimersAsync();
+    await nextTick();
+
+    expect(session.lastUsage.value).not.toBeNull();
+    expect(session.lastUsage.value).toMatchObject({
+      promptTokens: 4096,
+      completionTokens: 512,
+      totalTokens: 4608,
+      costUsd: 0.0234,
+      costSource: 'provider',
+    });
+    w.unmount();
+  });
+
   it('append + send wires the LLM stream and surfaces subscriptionId', async () => {
     const seenAppend: string[] = [];
     const { w, session } = mountWithSession({

@@ -394,13 +394,13 @@ describe('CompactionStrategyPanel', () => {
     expect((input.element as HTMLInputElement).value).toBe('5');
   });
 
-  // chat-turn-integrity-01PMZ606 WP07 (Rule 3): the "Summary model" input
-  // is gone — the only production registration of the summary strategy
-  // (core/rpc/api.go) passes a nil LLM, so it never made a model call
-  // this input could target. "shows summary model input when strategy is
-  // summary" (removed) asserted the input existed; this pins its absence
-  // instead, and that the label reads "Summary", not "Summary (LLM)".
-  it('does not show a summary model input, and labels the strategy honestly', async () => {
+  // chat-turn-integrity-01PMZ606 WP08: a real LLM summariser
+  // (core/rpc/compaction_summary_llm.go) is registered on the "summary"
+  // strategy, so the "Summary (LLM)" label and its model-targeting input
+  // are honest again. WP07 (Rule 3) had removed both while the only
+  // production registration passed a nil LLM; this test now pins their
+  // presence instead of their absence.
+  it('shows a summary model input, and labels the strategy "Summary (LLM)"', async () => {
     const { wrapper } = mountWith({
       config: {
         sites: {
@@ -409,9 +409,9 @@ describe('CompactionStrategyPanel', () => {
       },
     });
     await flushPromises();
-    expect(wrapper.find('[data-testid="csp-manual-summary-model"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="csp-manual-summary-model"]').exists()).toBe(true);
     const select = wrapper.find('[data-testid="csp-pre_call-strategy"]');
-    expect(select.text()).not.toContain('Summary (LLM)');
+    expect(select.text()).toContain('Summary (LLM)');
   });
 
   // controls-and-readouts-that-tell-the-truth-01PMZ808 UNIT-12 / WP17,

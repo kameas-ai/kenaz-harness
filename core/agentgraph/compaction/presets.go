@@ -100,8 +100,19 @@ func PresetForTier(tier string) CompactionConfig {
 		// the tier's meaning is resolved inside the strategy, which is
 		// the only place that can distinguish "don't compact" from
 		// "don't compact AND the session is over cap, so fail honestly".
-		Enabled:               true,
-		Strategy:              StrategySessionRewrite,
+		Enabled:  true,
+		Strategy: StrategySessionRewrite,
+		// CK-04/CK-05/CK-06 justify(blocker: "pipeline.go's threshold
+		// gate is unconditionally skipped for SiteManual
+		// (`req.Site != SiteManual`), by design — a manual 'compact now'
+		// means it, and honouring an implicit threshold on an explicit
+		// request would be the wrong behaviour, not a missing wire",
+		// owner: alec, date: 2026-08-29; chat-turn-integrity-01PMZ606
+		// WP13): PreCallThreshold is computed, marked and round-tripped
+		// here for SiteManual same as the other two sites, but
+		// pipeline.go's Run never reads siteCfg.PreCallThreshold for
+		// this site — the field is structurally unreachable for
+		// SiteManual specifically, not merely unread today.
 		PreCallThreshold:      preCallThresholdForTier(tier),
 		MaxRecursionDepth:     DefaultMaxRecursionDepth,
 		DropOldestKeepRecentN: 2,

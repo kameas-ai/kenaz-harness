@@ -104,23 +104,26 @@ func (f *fakeHarnessAPI) ShellStatus(_ context.Context) (ShellStatus, error) {
 	return ShellStatus{}, nil
 }
 func (f *fakeHarnessAPI) AppInfo(_ context.Context) (AppInfo, error) { return AppInfo{}, nil }
-func (f *fakeHarnessAPI) LLMConnector() llm.LLMConnectorAPI          { return f.llmAPI }
-func (f *fakeHarnessAPI) MCP() mcp.MCPAPI                            { return f.mcpAPI }
-func (f *fakeHarnessAPI) MCPImport() *mcp.ImportAPI                  { return nil }
-func (f *fakeHarnessAPI) A2A() a2a.A2AAPI                            { return f.a2aAPI }
-func (f *fakeHarnessAPI) Workflow() workflow.WorkflowAPI             { return f.workflowAPI }
-func (f *fakeHarnessAPI) Workflows() workflowsview.WorkflowsAPI      { return f.workflowsAPI }
-func (f *fakeHarnessAPI) Sessions() sessions.SessionsAPI             { return f.sessionsAPI }
-func (f *fakeHarnessAPI) Trust() trust.TrustAPI                      { return f.trustAPI }
-func (f *fakeHarnessAPI) TrustAnchors() trustanchor.TrustAnchorAPI   { return trustanchor.New(nil) }
-func (f *fakeHarnessAPI) Context() contextview.ContextAPI            { return f.contextAPI }
-func (f *fakeHarnessAPI) Contexts() contextsview.ContextsAPI         { return f.contextsAPI }
-func (f *fakeHarnessAPI) Catalog() catalogview.CatalogAPI            { return nil }
-func (f *fakeHarnessAPI) Sync() syncview.SyncAPI                     { return nil }
-func (f *fakeHarnessAPI) CedarPublish() cedarview.CedarAPI           { return nil }
-func (f *fakeHarnessAPI) Bundle() bundle.BundleAPI                   { return f.bundleAPI }
-func (f *fakeHarnessAPI) Policy() policy.PolicyAPI                   { return f.policyAPI }
-func (f *fakeHarnessAPI) Audit() audit.AuditAPI                      { return f.auditAPI }
+func (f *fakeHarnessAPI) CompactionOverhead(_ context.Context) (CompactionOverheadInfo, error) {
+	return CompactionOverheadInfo{}, nil
+}
+func (f *fakeHarnessAPI) LLMConnector() llm.LLMConnectorAPI        { return f.llmAPI }
+func (f *fakeHarnessAPI) MCP() mcp.MCPAPI                          { return f.mcpAPI }
+func (f *fakeHarnessAPI) MCPImport() *mcp.ImportAPI                { return nil }
+func (f *fakeHarnessAPI) A2A() a2a.A2AAPI                          { return f.a2aAPI }
+func (f *fakeHarnessAPI) Workflow() workflow.WorkflowAPI           { return f.workflowAPI }
+func (f *fakeHarnessAPI) Workflows() workflowsview.WorkflowsAPI    { return f.workflowsAPI }
+func (f *fakeHarnessAPI) Sessions() sessions.SessionsAPI           { return f.sessionsAPI }
+func (f *fakeHarnessAPI) Trust() trust.TrustAPI                    { return f.trustAPI }
+func (f *fakeHarnessAPI) TrustAnchors() trustanchor.TrustAnchorAPI { return trustanchor.New(nil) }
+func (f *fakeHarnessAPI) Context() contextview.ContextAPI          { return f.contextAPI }
+func (f *fakeHarnessAPI) Contexts() contextsview.ContextsAPI       { return f.contextsAPI }
+func (f *fakeHarnessAPI) Catalog() catalogview.CatalogAPI          { return nil }
+func (f *fakeHarnessAPI) Sync() syncview.SyncAPI                   { return nil }
+func (f *fakeHarnessAPI) CedarPublish() cedarview.CedarAPI         { return nil }
+func (f *fakeHarnessAPI) Bundle() bundle.BundleAPI                 { return f.bundleAPI }
+func (f *fakeHarnessAPI) Policy() policy.PolicyAPI                 { return f.policyAPI }
+func (f *fakeHarnessAPI) Audit() audit.AuditAPI                    { return f.auditAPI }
 
 // Logs — mission 01NLOGS01 WP04: fake always returns a live store so
 // the compile-time interface witness passes with zero test overhead.

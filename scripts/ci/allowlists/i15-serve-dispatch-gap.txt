@@ -796,7 +796,7 @@
 # genuine escalation. This class must shrink release over release (spec
 # AC-717); the next sweep should re-walk these against the tree it finds,
 # not assume this list still holds.
-# 78 entries.
+# 79 entries.
 
 # Reachable from the LIVE routed chat surface (MarkdownBlock.vue /
 # CodeBlock.vue's "save as artifact" + artifact-chip flow, and SessionsView.vue
@@ -1029,3 +1029,16 @@
 "Planmode_Approve"
 "Planmode_Discard"
 "Planmode_Edit"
+
+# Still CLASS: untriaged (see the header above) — new binding,
+# chat-turn-integrity-01PMZ606 WP12 (owner ruling X-7 / CK-08):
+# CompactionOverhead reads the previously-unread
+# compactionLLM.Overhead() / compactionAudit.Recent() running tally and
+# feeds the SessionsView.vue compaction-overhead header row. Same live,
+# served-routed chat surface as the Planmode_* trio directly above (no
+# NotAvailableInServedMode guard on SessionsView), so it needs the same
+# port-or-gate call — deliberately NOT made here. WP12's spec (spec.md §4
+# Non-goals) scopes "Touching core/serve/**" out of this mission by name:
+# "Served-mode chat findings belong to served-mode-is-a-real-mode-01PMZ707."
+# Dated 2026-08-29. Owner: alec.
+"CompactionOverhead"

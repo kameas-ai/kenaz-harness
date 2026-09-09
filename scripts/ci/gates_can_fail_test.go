@@ -115,6 +115,7 @@ var cwdSensitiveGates = []string{
 	"check-serve-dispatch-drift.sh",
 	"check-builtin-tool-registration.sh",
 	"check-single-move-writer.sh",
+	"check-session-message-writers.sh",
 	"check-cedar-gate-arguments.sh",
 	"check-cedar-engine-singleton.sh",
 	"check-broker-topic-consumers.sh",
@@ -1131,6 +1132,55 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			gate:       "check-serve-gap-classification.sh",
 			file:       "scripts/ci/allowlists/i15-serve-dispatch-gap.txt",
 			append:     "# No date or owner mentioned anywhere in this reason.\n\"Zz_Injected\"\n",
+		},
+		{
+			// chat-turn-integrity-01PMZ606 WP14 (G-1, spec.md §6): "no
+			// writer to session_messages outside the sanctioned set." This
+			// mission's own P0 (UNIT-1/CHAT-01) was exactly this class — a
+			// durability mechanism (runPeriodicFlush's partial-message
+			// flush) writing an unplanned row into the transcript, and no
+			// existing gate had any vocabulary for "a new call site of
+			// AppendMessage/AppendContinuation/ApplyCompaction appeared".
+			// Plants a second, unallowlisted call site of AppendMessage in
+			// core/session/manager.go — the exact shape a future background
+			// job or "just call the writer directly" shortcut would take —
+			// in the SAME package the sanctioned call already lives in, so
+			// this does not also trip I7's orphan-package rule (same
+			// convention as the single-move-writer cases above).
+			name: "session-message-writers/second-append-message-call-site",
+			wantOutput: "core/session/manager.go calls .AppendMessage( 2 time(s); " +
+				"allowlist permits 1",
+			gate: "check-session-message-writers.sh",
+			file: "core/session/manager.go",
+			append: "\nfunc zzGateProbeSecondAppendMessageCaller(m *Manager, ctx context.Context, sessionID string, msg Message) {\n" +
+				"\t_, _ = m.AppendMessage(ctx, sessionID, msg)\n" +
+				"}\n",
+		},
+		{
+			// F2 fix (2026-09-09): the case above plants the EASY shape — a
+			// direct, own-line call to a leaf writer (AppendMessage) in a
+			// file that already calls it. It never probed the shape that
+			// actually escaped review: a NEW caller reaching
+			// session_messages through an INTERFACE SEAM whose production
+			// implementation is an already-allowlisted leaf call elsewhere.
+			// That is exactly what the mission's own P0 was — runPeriodicFlush
+			// called PartialPersister.PersistPartial, not AppendMessage
+			// directly, and the closure in core/rpc/api.go that implements
+			// PersistPartial by calling AppendMessage did not change, so
+			// the pre-widening gate (SYMBOLS = AppendMessage /
+			// AppendContinuation / ApplyCompaction only) exited 0 against
+			// the verbatim pre-fix file. This plants a second PersistPartial
+			// caller in partial_flush.go itself — the real file, the real
+			// seam, the real shape — to prove the widened SYMBOLS list
+			// (which now includes PersistPartial) actually sees it.
+			name: "session-message-writers/indirect-persist-partial-via-seam",
+			wantOutput: "core/rpc/views/agentgraph/chat/partial_flush.go calls .PersistPartial( 1 time(s); " +
+				"allowlist permits 0",
+			gate: "check-session-message-writers.sh",
+			file: "core/rpc/views/agentgraph/chat/partial_flush.go",
+			append: "\nfunc zzGateProbeIndirectPartialPersistCaller(p PartialPersister, ctx context.Context, sessionID, text string) {\n" +
+				"\t_, _ = p.PersistPartial(ctx, sessionID, text, \"transient\", true)\n" +
+				"}\n",
 		},
 	}
 

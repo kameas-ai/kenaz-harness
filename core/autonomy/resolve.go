@@ -31,6 +31,26 @@ type ResolvedKnobs struct {
 	SourceTrace              map[Knob]Source
 	// PostureMode is the active named posture mode, or "" when none.
 	PostureMode string
+	// EffectiveTier is the Tier Level in effect for this resolution:
+	// session.Level, else project.Level, else global.Level, else
+	// TierDefault. Unlike the seven knobs above this is not
+	// independently overridable (there is no KnobEffectiveTier /
+	// Overrides entry for it) -- it is resolver bookkeeping that
+	// exposes which tier's Level preset backstops any knob no layer
+	// explicitly overrode, same as SourceTrace.
+	//
+	// Computed the same way regardless of an active PostureMode:
+	// presets.go documents PostureMode as "deliberately distinct from
+	// Tier," and that separation is exactly why a plan-mode session
+	// still gets its own tier's per-run budget ceiling rather than a
+	// posture-locked one -- plan mode restricts WHICH actions run
+	// (write-class denied), not HOW MUCH volume the run's declared
+	// tier is allowed.
+	//
+	// Consumed by chat.applyBudgetTierDial to scale the per-run
+	// call-volume budget caps with the autonomy dial (owner directive
+	// 2026-09-09).
+	EffectiveTier Tier
 }
 
 // allKnobs is the canonical iteration order for resolution. Stable so the
@@ -74,6 +94,8 @@ var allKnobs = []Knob{
 // the named posture's locked preset is returned and all knob-level
 // resolution is skipped. Session PostureMode wins over project/global.
 func Resolve(global, project, session Layer) ResolvedKnobs {
+	effectiveTier := effectiveTierOf(global, project, session)
+
 	// Check PostureMode in session → project → global order. The first
 	// non-nil PostureMode wins and short-circuits knob resolution.
 	activePosture := ""
@@ -89,8 +111,9 @@ func Resolve(global, project, session Layer) ResolvedKnobs {
 		preset := PresetForPostureMode(activePosture)
 		if preset != nil {
 			out := ResolvedKnobs{
-				SourceTrace: make(map[Knob]Source, len(allKnobs)),
-				PostureMode: activePosture,
+				SourceTrace:   make(map[Knob]Source, len(allKnobs)),
+				PostureMode:   activePosture,
+				EffectiveTier: effectiveTier,
 			}
 			for _, k := range allKnobs {
 				assignKnob(&out, k, clonePresetValue(preset[k]))
@@ -103,7 +126,8 @@ func Resolve(global, project, session Layer) ResolvedKnobs {
 	}
 
 	out := ResolvedKnobs{
-		SourceTrace: make(map[Knob]Source, len(allKnobs)),
+		SourceTrace:   make(map[Knob]Source, len(allKnobs)),
+		EffectiveTier: effectiveTier,
 	}
 	for _, k := range allKnobs {
 		val, src := resolveKnob(k, global, project, session)
@@ -111,6 +135,23 @@ func Resolve(global, project, session Layer) ResolvedKnobs {
 		out.SourceTrace[k] = src
 	}
 	return out
+}
+
+// effectiveTierOf walks the same session → project → global → default
+// precedence resolveKnob's Pass 2 uses for individual knobs, but at the
+// Layer.Level granularity: the first layer that declares a Level wins,
+// independent of whether any knob on that layer has been overridden.
+func effectiveTierOf(global, project, session Layer) Tier {
+	if session.Level != nil {
+		return *session.Level
+	}
+	if project.Level != nil {
+		return *project.Level
+	}
+	if global.Level != nil {
+		return *global.Level
+	}
+	return TierDefault
 }
 
 // resolveKnob walks the seven priority slots for a single knob: Overrides

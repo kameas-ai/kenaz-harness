@@ -52,6 +52,7 @@ import type {
   AuditExportOptions,
   ShellStatus,
   AppInfo,
+  CompactionOverheadInfo,
   Settings,
   Theme,
   ListMessagesResult,
@@ -222,6 +223,16 @@ export interface EmbedderConfigResult {
 interface WailsBindingsLike {
   ShellStatus(): Promise<ShellStatus>;
   AppInfo(): Promise<AppInfo>;
+  /**
+   * CompactionOverhead — chat-turn-integrity-01PMZ606 WP12. Hand-declared
+   * here (not in wailsjs/go/rpc/Bindings.d.ts) per the established
+   * WailsBindingsLike convention: `wails generate module` opens a REAL
+   * database (see CLAUDE.md's tooling footguns) and is never run by an
+   * agent, so a new Go-side binding is declared by hand on this
+   * interface until the next real `wails generate module` regenerates
+   * the file for real.
+   */
+  CompactionOverhead(): Promise<CompactionOverheadInfo>;
   LoadRoute(): Promise<string>;
   SaveRoute(route: string): Promise<void>;
   LogRouteChange(from: string, to: string): Promise<void>;
@@ -3446,6 +3457,12 @@ export interface ComplianceClient {
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
+  /**
+   * compactionOverhead returns the running compaction-driven LLM cost
+   * tally (chat-turn-integrity-01PMZ606 WP12, owner ruling X-7 / CK-08).
+   * Zero value, not a rejection, when compaction is disabled.
+   */
+  compactionOverhead(): Promise<CompactionOverheadInfo>;
 
   // openExternalURL forwards to Wails's BrowserOpenURL so the user's
   // default system browser handles the link (vs opening inside the
@@ -3563,6 +3580,90 @@ export interface HarnessClient {
 
 // ── runtime client ─────────────────────────────────────────────────────
 
+/**
+ * ARRAY_RETURNING_BINDINGS — every `*Bindings` method in
+ * core/rpc/bindings.go whose Go signature is `([]X, error)`.
+ *
+ * Wails marshals a Go `nil` slice to JSON `null`, not `[]`. Every one of
+ * these bindings is declared on WailsBindingsLike as returning
+ * `Promise<T[]>` — never `T[] | null` — so a Go implementation that takes
+ * an early-return-nil path ("not wired yet" guard, empty registry,
+ * disabled-feature short circuit, no rows matched a filter, ...) delivers
+ * `null` to a `ref<T[]>` with zero compile-time signal. The first array
+ * method the view calls on it (`.filter`, `.map`, even a bare `.length`
+ * in a template) throws "null is not an object" / "Cannot read
+ * properties of null".
+ *
+ * This is exactly what took down TasksPanel.vue / BackgroundTaskChip.vue
+ * under a fleet-session-expired state: Tasks_List returns `nil, nil` when
+ * the task registry isn't wired, and Tasks_ListBySession returns `nil,
+ * nil` whenever no task matches the session (the common case — most
+ * sessions have never spawned a background task). The same shape was
+ * found in ~10 other bindings (Unit_ListConflicts when the fleet syncer
+ * is offline, Search_Unified when search is disabled, Shell_PathComplete
+ * on an empty `@` token, Slashcmd_SkillList / Memory_NarrativeFailedList
+ * when their subsystem isn't wired, ...).
+ *
+ * wailsBindings() wraps the raw generated client in a Proxy that
+ * normalises a `null`/`undefined` resolution from exactly these methods
+ * to `[]`, so no individual view has to guard a binding result itself.
+ * Keep this set in sync with bindings.go — `grep -c '(\[\]' core/rpc/bindings.go`
+ * catches drift by count; a name typo here is silently inert (the Proxy
+ * only intercepts an exact match), so prefer regenerating this list over
+ * hand-editing it.
+ */
+const ARRAY_RETURNING_BINDINGS: ReadonlySet<string> = new Set([
+  'Sessions_List', 'Sessions_ListMessages', 'LLM_ListProviders', 'LLM_ListModels',
+  'LLM_ListCustomTemplates', 'LLM_ListFallbackChains', 'MCP_ListServers', 'A2A_ListCards',
+  'Workflow_ListJobs', 'Trust_ListSecretReferences', 'Context_List', 'Contexts_RecentlyApplied',
+  'Contexts_ContextSearch', 'Bundle_List', 'Trust_ListAnchors', 'CedarPolicy_ListPolicies',
+  'CedarPolicy_RecentDecisions', 'Permissions_ListGrants', 'Permissions_ListPending', 'Audit_ListEntries',
+  'Audit_Filter', 'Audit_ListSavedQueries', 'Logs_Tail', 'Settings_FleetTelemetryOptIns',
+  'Memory_ListChunks', 'Memory_JournalTail', 'Memory_NarrativeFailedList', 'Memory_EmbeddingProbe',
+  'Projects_List', 'Projects_ListSessions', 'Artifacts_List', 'Attachments_List',
+  'Attachments_ListResolved', 'Hooks_List', 'Hooks_AvailableBuiltins', 'Tools_ListRecipes',
+  'Tools_CheckRecipePrereqs', 'Shell_PathComplete', 'Slash_List', 'Slashcmd_List',
+  'Slashcmd_SkillList', 'Config_GetFlags', 'Corpus_ListCorpora', 'Corpus_ListFiles',
+  'Corpus_ListChunks', 'Graph_ListGraphs', 'Graph_GetRunTrace', 'Compaction_ListCustomStrategies',
+  'Compaction_GetTierExplain', 'Branches_List', 'Branches_ListWithBranchTree', 'Workflows_List',
+  'Workflows_ScheduleList', 'Workflows_ScheduleRunHistory', 'Workflows_CatalogList', 'ScheduledChat_List',
+  'ScheduledChat_History', 'Update_ListSkippedVersions', 'Nodes_Catalog', 'Nodes_ListUserOverrides',
+  'CedarPolicy_ListPlanModeActions', 'Search_Sessions', 'Search_Unified', 'Onboarding_ListStarters',
+  'Elicit_ListPending', 'Confirm_ListPending', 'Secrets_List', 'LLM_ListDetectedLocalRuntimes',
+  'LLM_RescanLocalRuntimes', 'Agents_ListProfiles', 'Sentry_GetLastFive', 'Unit_ListConflicts',
+  'Unit_ResolveLoadable', 'Catalog_List', 'Catalog_Installed', 'Sync_Status',
+  'Sync_PendingMCPSecrets', 'Sites_List', 'Tasks_List', 'Tasks_Tail',
+  'Tasks_ListBySession', 'ACP_ListPeers', 'ACP_ListTraces', 'Handoff_ListTeam',
+  'Handoff_Inbox',
+]);
+
+/**
+ * Wraps the raw Wails bindings object so every call listed in
+ * ARRAY_RETURNING_BINDINGS resolves `null`/`undefined` to `[]` instead of
+ * handing a JS `null` to code that trusts the declared `Promise<T[]>`
+ * return type. See ARRAY_RETURNING_BINDINGS for why this exists.
+ */
+function withArrayNullSafety(bindings: WailsBindingsLike): WailsBindingsLike {
+  return new Proxy(bindings, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof prop !== 'string' || typeof value !== 'function' || !ARRAY_RETURNING_BINDINGS.has(prop)) {
+        return value;
+      }
+      return (...args: unknown[]) =>
+        Promise.resolve((value as (...a: unknown[]) => unknown).apply(target, args)).then(
+          (result) => result ?? [],
+        );
+    },
+  }) as WailsBindingsLike;
+}
+
+// Memoized so repeated calls don't allocate a new Proxy per RPC — the
+// underlying window.go.rpc.Bindings reference is a stable singleton once
+// Wails has injected it.
+let _cachedRawBindings: WailsBindingsLike | undefined;
+let _cachedWrappedBindings: WailsBindingsLike | undefined;
+
 function wailsBindings(): WailsBindingsLike {
   const b = (typeof window !== 'undefined' && window.go?.rpc?.Bindings) || undefined;
   if (!b) {
@@ -3570,7 +3671,11 @@ function wailsBindings(): WailsBindingsLike {
       'window.go.rpc.Bindings is not available. The harness frontend must run inside Wails.',
     );
   }
-  return b;
+  if (b !== _cachedRawBindings) {
+    _cachedRawBindings = b;
+    _cachedWrappedBindings = withArrayNullSafety(b);
+  }
+  return _cachedWrappedBindings as WailsBindingsLike;
 }
 
 // Lazy import: BrowserOpenURL is loaded only when a real Wails runtime
@@ -3604,6 +3709,7 @@ export function createHarnessClient(): HarnessClient {
   return {
     shellStatus: () => b().ShellStatus(),
     appInfo: () => b().AppInfo(),
+    compactionOverhead: () => b().CompactionOverhead(),
     openExternalURL,
 
     sessions: {
@@ -4811,6 +4917,13 @@ export function createFakeHarnessClient(
       goVersion: '',
       platform: 'fake',
       windowSize: { width: 1280, height: 800 },
+    }),
+    compactionOverhead: async () => ({
+      total: 0,
+      calls: 0,
+      indeterminateCalls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
     }),
     openExternalURL: () => {
       // No-op in fake; tests assert the call shape via vi.fn() seeds.

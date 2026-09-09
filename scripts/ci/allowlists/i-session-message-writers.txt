@@ -1,0 +1,85 @@
+# G-1 allowlist — non-test call sites of AppendMessage / AppendContinuation /
+# ApplyCompaction / PersistPartial / AppendEntry, the functions and seam
+# methods through which a row in session_messages gets written
+# (chat-turn-integrity-01PMZ606 WP14, spec.md §6 G-1).
+#
+# Format: one `<repo-relative-path>:<Symbol>:<count>` per line. `count` is
+# the number of matching call-site lines scripts/ci/check-session-message-
+# writers.sh tolerates in that file for that symbol — see the gate's own
+# header for why count, not line number. Allowlists shrink monotonically
+# (CLAUDE.md): a row whose count no longer matches the tree — in either
+# direction — fails the gate.
+#
+# Seeded 2026-08-30 (chat-turn-integrity-01PMZ606 WP14) from the actual
+# call-site population of HEAD (`eeed5baf`), run against the gate itself
+# before writing this file, per the mission's WP14 instruction ("Run G-1
+# against HEAD before writing the allowlist; the initial allowlist is the
+# current legitimate set, dated, not a blanket"). Every line below is a
+# pre-existing, shipped call site, not a new grant.
+#
+# WIDENED 2026-09-09 (F2 fix): a reviewer proved the original three-symbol
+# SYMBOLS list passes on the exact pre-fix runPeriodicFlush that this
+# mission's P0 was about, because the P0's call site was
+# PartialPersister.PersistPartial — an interface seam, not a direct call
+# to any of the three leaf functions above. PersistPartial and AppendEntry
+# (the HistoryWriter seam) are added to SYMBOLS in the same change; the 8
+# lines below (5 new (file, symbol) pairs) are the real, pre-existing,
+# legitimate population of those two symbols as of HEAD at the time of
+# the fix (`c4efef97`), seeded the same way the original set was — run
+# the widened gate against a clean tree first, allowlist exactly what it
+# reports.
+
+# --- AppendMessage: the chat/RPC/branch paths that append a genuine new
+#     message row (user turn, assistant turn, or a branch handoff/CoW
+#     message). ---
+core/serve/server.go:AppendMessage:1
+core/rpc/chat_run_dispatcher.go:AppendMessage:1
+core/rpc/bindings.go:AppendMessage:1
+core/rpc/api.go:AppendMessage:2
+core/conversation/manager.go:AppendMessage:1
+core/session/moves.go:AppendMessage:1
+core/session/manager.go:AppendMessage:1
+core/rpc/views/sessions/impl.go:AppendMessage:2
+core/rpc/views/agentgraph/env_deps_branch.go:AppendMessage:2
+core/rpc/views/branches/impl.go:AppendMessage:3
+
+# --- AppendContinuation: the resumed-partial-message seam.
+#     core/session/manager.go:AppendContinuation wraps the store's own
+#     AppendContinuation, which is why it is not itself a second entry
+#     here — Manager is the ONE production caller of the store method. ---
+core/session/manager.go:AppendContinuation:1
+
+# --- ApplyCompaction: the two compaction executors (linear + rolling)
+#     and the agentgraph wiring adapter that fronts the session store's
+#     ApplyCompaction for the compact-node executor path. ---
+core/agentgraph/compaction/session_engine.go:ApplyCompaction:1
+core/agentgraph/compaction/session_rolling.go:ApplyCompaction:1
+core/agentgraph/compaction/wiring/store.go:ApplyCompaction:1
+
+# --- PersistPartial: the resume-flow / backend-error partial-persist seam
+#     (PartialPersister interface, core/rpc/views/agentgraph/chat/chat_runner.go).
+#     Its production implementation is a closure in core/rpc/api.go that
+#     calls AppendMessage directly (already counted above as one of
+#     api.go's two AppendMessage sites); this entry is the ONE caller of
+#     the seam itself, on the backend-error close path. runPeriodicFlush
+#     (partial_flush.go) deliberately does NOT call this seam any more —
+#     it upserts a stream_checkpoints row instead (chat-turn-integrity-
+#     01PMZ606 WP03) — so a PersistPartial call site reappearing in
+#     partial_flush.go is exactly the regression this widened gate exists
+#     to catch. ---
+core/rpc/views/agentgraph/chat/chat_runner.go:PersistPartial:1
+
+# --- AppendEntry: the HistoryWriter interface seam (core/agentgraph/seams.go).
+#     Every non-partial transcript write funnels through this seam to
+#     llmHistoryWriter.AppendEntry (core/rpc/api.go), which calls
+#     session.Manager.AppendTranscriptEntry, which itself calls
+#     AppendMessage (already counted above as core/session/moves.go's one
+#     AppendMessage site). The four files below are the seam's real
+#     callers: the agentgraph session_write node kind, the chat runner's
+#     user-turn append, the turn journal (moves.go, three call sites:
+#     append, promote, finalize), and the interrupt-persistence path
+#     (interrupt.go, two call sites: interrupt row + resume marker). ---
+core/agentgraph/exec_state.go:AppendEntry:1
+core/rpc/views/agentgraph/chat/chat_runner.go:AppendEntry:1
+core/rpc/views/agentgraph/chat/moves.go:AppendEntry:3
+core/rpc/views/agentgraph/chat/interrupt.go:AppendEntry:2

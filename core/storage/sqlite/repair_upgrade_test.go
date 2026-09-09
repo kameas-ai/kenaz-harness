@@ -28,13 +28,18 @@ import (
 // This test builds that exact database — a real, fully-migrated data.db
 // rewound so the late sessions migrations are unapplied while the
 // high-numbered units rows stay in the ledger — reopens it through the
-// production Open path, and requires the (now six, since
-// chat-turn-integrity-01PMZ606 WP02 added 0336 and
+// production Open path, and requires the (now seven, since
+// chat-turn-integrity-01PMZ606 WP02 added 0336, WP05 added 0337, and
 // model-scheduled-jobs-01PMSJ01 WP09 added 0340) migrations to land and
 // a session INSERT to succeed. 0340's Up is idempotent (pragma_table_info
 // guard, matching the sessions/0330-knobs convention) — the rewind below
 // only deletes the ledger ROW for it, not the columns step 1 already
 // added, so re-applying it here exercises that idempotency for real.
+// 0337's Up is also idempotent under re-application here for a simpler
+// reason: this database has no session_messages rows matching the
+// discriminator at all, so its second run finds zero candidates and
+// deletes nothing — the same "re-run is a no-op on this data" shape as
+// 0330, just via an empty candidate set rather than a schema guard.
 //
 // Verified equivalently against a copy of the live dev database
 // (~/.kenaz/harness/dev/data.db) during the fix.
@@ -93,10 +98,11 @@ func TestOpen_RepairsDatabaseMissingLateSessionsMigrations(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = repaired.Close(context.Background()) })
 
-	// 4. The six missing migrations must be applied (332-336, 340; 0336
-	//    added by chat-turn-integrity-01PMZ606 WP02, 0340 added by
-	//    model-scheduled-jobs-01PMSJ01 WP09 — 0337-0339 are reserved for
-	//    sibling WPs and were not registered as of WP09).
+	// 4. The seven missing migrations must be applied (332-337, 340; 0336
+	//    added by chat-turn-integrity-01PMZ606 WP02, 0337 added by WP05,
+	//    0340 added by model-scheduled-jobs-01PMSJ01 WP09 — 0338-0339
+	//    are reserved for sibling WPs and were not registered as of
+	//    WP09).
 	rows, err := repaired.Reader().Query(ctx,
 		"SELECT version FROM harness_migrations WHERE owning_mission='sessions' AND version >= 332 AND action='applied' ORDER BY version")
 	if err != nil {
@@ -111,7 +117,7 @@ func TestOpen_RepairsDatabaseMissingLateSessionsMigrations(t *testing.T) {
 		got = append(got, v)
 	}
 	rows.Close()
-	want := []int{332, 333, 334, 335, 336, 340}
+	want := []int{332, 333, 334, 335, 336, 337, 340}
 	if len(got) != len(want) {
 		t.Fatalf("re-applied sessions migrations = %v, want %v", got, want)
 	}
