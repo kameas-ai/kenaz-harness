@@ -92,13 +92,13 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 	if env.Budget.MaxToolCallsPerRun > 0 && env.Counters != nil {
 		need := env.Counters.ToolCallsMade + len(calls)
 		if need > env.Budget.MaxToolCallsPerRun {
-			_ = res.Events.AppendKind(env.RunID, node.ID, EventBudgetCapHit, map[string]any{
-				"reason":  "max_tool_calls_per_run",
-				"limit":   env.Budget.MaxToolCallsPerRun,
-				"pending": len(calls),
-				"used":    env.Counters.ToolCallsMade,
-			})
-			return res, ErrBudgetExceeded
+			marker := PauseMarker{
+				Reason: "max_tool_calls_per_run",
+				Limit:  float64(env.Budget.MaxToolCallsPerRun),
+				Used:   float64(env.Counters.ToolCallsMade),
+			}
+			_ = res.Events.AppendKind(env.RunID, node.ID, EventBudgetCapHit, marker)
+			return res, &BudgetCapError{Reason: marker.Reason, Limit: marker.Limit, Used: marker.Used}
 		}
 	}
 

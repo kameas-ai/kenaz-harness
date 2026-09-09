@@ -32,7 +32,14 @@
 // pre-existing per-session containment plus the unattended posture below
 // to keep a spawned run from parking on (or silently escaping) an
 // interactive gate. See the commit body for what this does NOT cover
-// (profile-level AllowedTools/BudgetTokens/BudgetTimeS).
+// (profile-level AllowedTools/DeniedTools — still not enforced, see
+// core/agents.Profile's docs).
+//
+// BudgetTokens/BudgetTimeS ARE enforced as of owner directive
+// 2026-09-09 (mission requirement 3), via BudgetOverrides below — see
+// chat.SubagentBudgetRegistry and chat.applyProfileBudgetClamp for the
+// clamp-not-override precedence against the dispatching session's
+// autonomy-tier ceiling.
 package rpc
 
 import (
@@ -93,6 +100,14 @@ type SubagentRunSpawnerDeps struct {
 	DefaultProfile func() string
 	// Timeout overrides defaultSubagentSpawnTimeout. Zero uses the default.
 	Timeout time.Duration
+
+	// BudgetOverrides is the SAME registry instance wired into
+	// chat.Config.SubagentBudgets (chat.ChatRunner.SubagentBudgets()) --
+	// owner directive 2026-09-09, mission requirement 3. Set here, once
+	// per spawn, before StartStream; StartStream reads it back keyed by
+	// childSessionID. nil disables the clamp entirely (profile budgets
+	// stay documented-but-unenforced, today's pre-existing behaviour).
+	BudgetOverrides *chat.SubagentBudgetRegistry
 }
 
 // NewSubagentRunSpawner constructs the production graphview.RunSpawner.
@@ -145,6 +160,18 @@ func NewSubagentRunSpawner(deps SubagentRunSpawnerDeps) graphview.RunSpawner {
 		// default: arm (core/rpc/bus.go).
 		subCh, cancel := deps.Bus.Subscribe(64, "llm:stream-closed")
 
+		// Record the profile's declared budget (if any) BEFORE
+		// StartStream, keyed by the child session id StartStream will
+		// use to look it up (owner directive 2026-09-09, mission
+		// requirement 3). Must happen before StartStream, not after —
+		// StartStream resolves env.Budget synchronously at call time.
+		if deps.BudgetOverrides != nil && (req.BudgetTokens > 0 || req.BudgetTimeS > 0) {
+			deps.BudgetOverrides.Set(childSessionID, chat.SubagentBudget{
+				Tokens:        req.BudgetTokens,
+				WallclockSecs: req.BudgetTimeS,
+			})
+		}
+
 		// WP05's posture, reused here: a sub-agent run is unattended by
 		// construction — it has no UI, so confirm_each / askOnAmbiguity /
 		// Cedar's RequestInteractive must resolve to deny-and-record
@@ -185,7 +212,7 @@ func NewSubagentRunSpawner(deps SubagentRunSpawnerDeps) graphview.RunSpawner {
 		// its own streamCtx from context.Background() one layer up, so a
 		// cancelled inbound ctx can't cut this await short.
 		done := make(chan error, 1)
-		go awaitSubagentRun(subCh, cancel, subID, deps.Tasks, taskID, deps.Timeout, done)
+		go awaitSubagentRun(subCh, cancel, subID, deps.Tasks, taskID, deps.Timeout, done, deps.BudgetOverrides, childSessionID)
 
 		return graphview.SpawnedRun{
 			TaskID: taskID,
@@ -211,8 +238,14 @@ func NewSubagentRunSpawner(deps SubagentRunSpawnerDeps) graphview.RunSpawner {
 // channel and is buffered 1), but the goroutine itself is exactly the
 // kind -race is watching for, so keep the only shared value one buffered
 // send.
-func awaitSubagentRun(subCh <-chan BusEvent, cancel context.CancelFunc, subID string, taskReg *coretasks.Registry, taskID string, timeout time.Duration, done chan<- error) {
+func awaitSubagentRun(subCh <-chan BusEvent, cancel context.CancelFunc, subID string, taskReg *coretasks.Registry, taskID string, timeout time.Duration, done chan<- error, budgetOverrides *chat.SubagentBudgetRegistry, childSessionID string) {
 	defer cancel()
+	// Clear the recorded profile budget once this run reaches a
+	// terminal state (owner directive 2026-09-09, mission requirement
+	// 3) so a long-lived harness process's history of sub-agent
+	// dispatches doesn't leak SubagentBudgetRegistry entries forever.
+	// Safe on a nil registry (Clear no-ops).
+	defer budgetOverrides.Clear(childSessionID)
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
 

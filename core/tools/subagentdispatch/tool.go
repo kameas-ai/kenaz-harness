@@ -295,6 +295,13 @@ func (t *Tool) Call(ctx context.Context, rawArgs json.RawMessage) (json.RawMessa
 		HandoffPrompt:   buildHandoffPrompt(profile, in.Prompt),
 		ModelID:         profile.Model,
 		ToolAllowlist:   profile.AllowedTools,
+		// BudgetTokens / BudgetTimeS (owner directive 2026-09-09,
+		// mission requirement 3): forwarded to the RunSpawner, which
+		// clamps the spawned run's tier-derived budget ceiling to these
+		// values when set. Zero (profile didn't declare one) is a no-op
+		// all the way down.
+		BudgetTokens: profile.BudgetTokens,
+		BudgetTimeS:  profile.BudgetTimeS,
 	}
 
 	// Fork the session.

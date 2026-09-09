@@ -363,6 +363,20 @@ type Config struct {
 	// production call site, which was false.
 	AutonomyKnobs AutonomyKnobsProvider
 
+	// SubagentBudgets is the session-keyed side channel a spawned
+	// sub-agent's profile-declared BudgetTokens/BudgetTimeS travels
+	// through (owner directive 2026-09-09, mission requirement 3). nil
+	// means no sub-agent profile ever clamps the tier-derived ceiling —
+	// every run's Budget comes from the graph + autonomy tier alone,
+	// today's behaviour for interactive sessions and for any build that
+	// hasn't wired core/rpc.NewSubagentRunSpawner's BudgetOverrides.
+	//
+	// Constructed once (New) and shared with the SAME instance
+	// NewSubagentRunSpawner writes into — see SubagentBudgets() below,
+	// which is how core/rpc's spawner wiring obtains the pointer without
+	// a second, drifting registry.
+	SubagentBudgets *SubagentBudgetRegistry
+
 	// Confirm is the confirm-each pause registry
 	// (confirm-each-enforcement-01PMAG05 WP02). It MUST be the same
 	// *toolloop.ConfirmBus instance the confirm RPC view resolves
@@ -734,6 +748,13 @@ type chatSub struct {
 	// ("inbound-ctx" — the signature of a desktop focus-loss / webview
 	// suspend killing the run). Empty until something cancels.
 	cancelCause atomic.Value // string
+	// effectiveTier is the autonomy.ResolvedKnobs.EffectiveTier resolved
+	// once at StartStream time (fix F8's single-resolution rule) and
+	// carried onto the sub so driveRun's terminal error handling can
+	// name which tier produced a budget cap without re-resolving
+	// (owner directive 2026-09-09: "agent reached the per-run budget
+	// cap" told the user nothing actionable).
+	effectiveTier autonomy.Tier
 }
 
 // New constructs a ChatRunner. Every Config field is validated; a
@@ -867,6 +888,16 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// ResolvedKnobs{} when no provider is wired, matching every
 	// consumer's existing nil-safe fallback.
 	resolvedKnobs := r.autonomyKnobs(ctx, sessionID)
+
+	// subagentBudget is the profile-declared BudgetTokens/BudgetTimeS
+	// for THIS session, when it was spawned by
+	// core/rpc.NewSubagentRunSpawner (mission requirement 3). Not-found
+	// for every interactive session — the registry is only ever Set for
+	// a spawned child session id. See applyProfileBudgetClamp below.
+	subagentBudget, hasSubagentBudget := SubagentBudget{}, false
+	if r.cfg.SubagentBudgets != nil {
+		subagentBudget, hasSubagentBudget = r.cfg.SubagentBudgets.Get(sessionID)
+	}
 
 	// model-scheduled-jobs-01PMSJ01 WP05: the per-run unattended posture
 	// (spec.md §5.4 / FR-003). Read from the INBOUND ctx — the caller
@@ -1090,7 +1121,26 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		// both treat zero as "use the package default" rather than
 		// "unlimited" -- which is why the gap survived: the behavioural
 		// guards worked while the volume guards silently did not.
-		Budget: applyTokenCeilingKnob(graph.Budget, resolvedKnobs),
+		//
+		// applyBudgetTierDial (owner directive 2026-09-09): until this,
+		// MaxLLMCallsPerRun and MaxToolCallsPerRun were the flat
+		// chat_default_classic.yaml constants (5000/10000) regardless of
+		// autonomy tier -- applyTokenCeilingKnob only ever touched
+		// MaxTokensPerRun. A Strict-tier session got the same call-volume
+		// ceiling as an Autonomous one; only the token ceiling scaled.
+		//
+		// applyProfileBudgetClamp (mission requirement 3): a spawned
+		// sub-agent's profile-declared BudgetTokens/BudgetTimeS, when
+		// present, narrows the tier-derived ceiling further -- it can
+		// only lower it, same nested-clamp rule as the two dials above.
+		// subagentBudget is the zero value / not-found for every
+		// interactive session (SubagentBudgets is keyed by spawned
+		// child session id only), so this is a no-op on the ordinary
+		// chat path.
+		Budget: applyProfileBudgetClamp(
+			applyBudgetTierDial(applyTokenCeilingKnob(graph.Budget, resolvedKnobs), resolvedKnobs.EffectiveTier),
+			subagentBudget, hasSubagentBudget,
+		),
 		// AutoCompaction is the growth watermark in front of the
 		// kernel's own automatic pre_call site
 		// (turn-context-runway-01PMAG03 WP02).
@@ -1221,6 +1271,7 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		done:          make(chan struct{}),
 		bridge:        bridge,
 		journal:       journal,
+		effectiveTier: resolvedKnobs.EffectiveTier,
 	}
 	r.mu.Lock()
 	r.subs[subID] = sub
@@ -1575,7 +1626,7 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		runTerminatedClean = true
 	case errors.Is(err, coreag.ErrBudgetExceeded):
 		reason = "backend-error"
-		message = "agent reached the per-run budget cap"
+		message = budgetCapMessage(err, sub.effectiveTier)
 	case errors.Is(err, compaction.ErrSessionFull):
 		// The `compact` node decided the user is genuinely out of
 		// context: the dial is "off" and the session is already over
@@ -1907,9 +1958,35 @@ func applyMaxTurnsDial(g *coreag.Graph, cap int) {
 // method again.
 func (r *ChatRunner) autonomyKnobs(ctx context.Context, sessionID string) autonomy.ResolvedKnobs {
 	if r == nil || r.cfg.AutonomyKnobs == nil {
-		return autonomy.ResolvedKnobs{}
+		// Every other field's zero value already means "no opinion" to
+		// its consumer (0 token ceiling = applyTokenCeilingKnob no-ops,
+		// 0 maxIterations = the maxTurns fallback below applies
+		// instead). EffectiveTier cannot use that convention: Tier's
+		// zero value is TierStrict, an ACTIVE tier with the tightest
+		// budget ceiling in the table, not "no tier." Without this
+		// explicit override, a chassis that never wires AutonomyKnobs
+		// (today, only test harnesses and a not-yet-configured boot --
+		// see the field's "WIRED... in production" doc above) would
+		// silently clamp every run's call-volume budget to Strict's
+		// ceiling instead of leaving it at the graph's declared value,
+		// which is what "no dial configured" should mean. TierDefault
+		// matches autonomy.DefaultLayer()'s own fallback.
+		return autonomy.ResolvedKnobs{EffectiveTier: autonomy.TierDefault}
 	}
 	return r.cfg.AutonomyKnobs(ctx, sessionID)
+}
+
+// SubagentBudgets returns the registry StartStream reads sub-agent
+// profile budget overrides from, so core/rpc's NewSubagentRunSpawner
+// wiring can obtain the SAME instance to write into rather than
+// constructing a second, unread one. Safe to call on a nil ChatRunner
+// or before Config.SubagentBudgets is set — both return nil, and every
+// SubagentBudgetRegistry method is nil-receiver-safe.
+func (r *ChatRunner) SubagentBudgets() *SubagentBudgetRegistry {
+	if r == nil {
+		return nil
+	}
+	return r.cfg.SubagentBudgets
 }
 
 // askOnAmbiguityNeverDefaultAnswer is the stated assumption an AskNode
@@ -1939,6 +2016,11 @@ func init() {
 	knobcoverage.Register[autonomy.ResolvedKnobs]("TokenCeilingPerTurn", "chat.applyTokenCeilingKnob")
 	knobcoverage.RegisterDeferred[autonomy.ResolvedKnobs]("SourceTrace", "resolver bookkeeping, not a tunable knob")
 	knobcoverage.RegisterDeferred[autonomy.ResolvedKnobs]("PostureMode", "resolver bookkeeping, not a tunable knob")
+	// owner directive 2026-09-09: the per-run call-volume budget cap
+	// (MaxLLMCallsPerRun/MaxToolCallsPerRun) is now governed by the
+	// autonomy tier, same as TokenCeilingPerTurn already governs
+	// MaxTokensPerRun above.
+	knobcoverage.Register[autonomy.ResolvedKnobs]("EffectiveTier", "chat.applyBudgetTierDial")
 }
 
 // applyAskOnAmbiguityDial folds the askOnAmbiguity knob onto the chat
@@ -2303,6 +2385,163 @@ func applyTokenCeilingKnob(b coreag.Budget, knobs autonomy.ResolvedKnobs) coreag
 		b.MaxTokensPerRun = ceiling
 	}
 	return b
+}
+
+// applyBudgetTierDial folds the autonomy tier's call-volume budget
+// ceiling (autonomy.BudgetCeilingForTier) onto the graph's declared
+// per-run caps, so MaxLLMCallsPerRun and MaxToolCallsPerRun scale with
+// the dial the same way applyTokenCeilingKnob already scales
+// MaxTokensPerRun (owner directive 2026-09-09).
+//
+// Before this, chat_default_classic.yaml's budget: block
+// (max_llm_calls_per_run: 5000, max_tool_calls_per_run: 10000) was the
+// per-run cap for every tier alike -- ErrBudgetExceeded fired at the
+// same volume whether the session was Strict or Autonomous, which is
+// what prompted the owner's "we should be using our built in autonomy
+// dial" ruling.
+//
+// Same rule as applyTokenCeilingKnob: the dial may only LOWER the
+// graph's declared ceiling, never raise it -- the graph's budget block
+// is the author's outer safety net, and TierAutonomous's table entry is
+// set to match the graph's declared numbers exactly rather than exceed
+// them, so this never raises the ceiling in production even though the
+// <= guard technically allows it for a future graph with a smaller
+// declared budget. Zero on either side means "no opinion," same
+// convention as applyTokenCeilingKnob.
+func applyBudgetTierDial(b coreag.Budget, tier autonomy.Tier) coreag.Budget {
+	ceiling := autonomy.BudgetCeilingForTier(tier)
+	if ceiling.MaxLLMCallsPerRun > 0 && (b.MaxLLMCallsPerRun <= 0 || ceiling.MaxLLMCallsPerRun < b.MaxLLMCallsPerRun) {
+		b.MaxLLMCallsPerRun = ceiling.MaxLLMCallsPerRun
+	}
+	if ceiling.MaxToolCallsPerRun > 0 && (b.MaxToolCallsPerRun <= 0 || ceiling.MaxToolCallsPerRun < b.MaxToolCallsPerRun) {
+		b.MaxToolCallsPerRun = ceiling.MaxToolCallsPerRun
+	}
+	return b
+}
+
+// applyProfileBudgetClamp folds a spawned sub-agent's profile-declared
+// BudgetTokens/BudgetTimeS onto the run's Budget (mission requirement
+// 3, owner directive 2026-09-09: "keep the sub-agent profile's explicit
+// BudgetTokens/BudgetTimeS working").
+//
+// Precedence: CLAMP, not override. An explicit profile value can only
+// LOWER whatever ceiling the graph + autonomy tier already produced —
+// it can never raise it. This is the same nested-safety-net rule
+// applyTokenCeilingKnob and applyBudgetTierDial both already enforce
+// one layer up, extended one more layer: graph declares the outer max,
+// tier can only narrow it, profile can only narrow it further.
+//
+// Justification for clamp-over-override: a Profile is a YAML document a
+// user can hand-author (core/agents.Profile's package doc: "User
+// profiles win on id collision... Bundled profiles are read-only").
+// If an explicit profile budget could OVERRIDE the tier ceiling, a
+// mistyped or malicious profile (budget_tokens: 999999999) would let a
+// sub-agent dispatch outrun the dispatching session's own configured
+// autonomy tier — exactly the "runaway spend" failure class this whole
+// cap exists to stop (owner ruling: "no tier should mean unbounded...
+// this cap exists specifically to stop runaway spend"). A profile
+// author can always ask for LESS than the tier allows (e.g. a
+// summarizer profile with a small budget_tokens, because the task
+// genuinely needs less), but raising the ceiling above the dispatching
+// session's own dial is a decision only the dial should make.
+//
+// hasBudget=false (SubagentBudgets has no entry for this session — the
+// ordinary case for every interactive session) is a no-op, same
+// "zero/absent means no opinion" convention as the two dials above.
+func applyProfileBudgetClamp(b coreag.Budget, sb SubagentBudget, hasBudget bool) coreag.Budget {
+	if !hasBudget {
+		return b
+	}
+	if sb.Tokens > 0 && (b.MaxTokensPerRun <= 0 || sb.Tokens < b.MaxTokensPerRun) {
+		b.MaxTokensPerRun = sb.Tokens
+	}
+	if sb.WallclockSecs > 0 && (b.MaxWallclockPerRunSecs <= 0 || sb.WallclockSecs < b.MaxWallclockPerRunSecs) {
+		b.MaxWallclockPerRunSecs = sb.WallclockSecs
+	}
+	return b
+}
+
+// budgetCapMessage builds driveRun's user-facing terminal message for a
+// budget-cap hit (owner directive 2026-09-09: "agent reached the
+// per-run budget cap" named neither the cap, the limit, nor a way to
+// raise it — the exact complaint that prompted this whole change).
+//
+// errors.As extracts the *coreag.BudgetCapError's Reason/Limit/Used.
+// Falling back to the original generic wording when extraction fails
+// (rather than printing zeros) keeps this safe against any future
+// budget-error call site that hasn't been migrated onto
+// BudgetCapError — degrading to the pre-fix message is the honest
+// behaviour for missing detail, not a formatting artifact.
+func budgetCapMessage(err error, tier autonomy.Tier) string {
+	var capErr *coreag.BudgetCapError
+	if !errors.As(err, &capErr) {
+		return "agent reached the per-run budget cap"
+	}
+	label, tierGoverned := budgetCapReasonLabel(capErr.Reason)
+	usedLimit := fmt.Sprintf("%s used of %s allowed",
+		formatBudgetQuantity(capErr.Reason, capErr.Used),
+		formatBudgetQuantity(capErr.Reason, capErr.Limit))
+
+	if !tierGoverned {
+		// max_cost_usd_per_run / max_wallclock_per_run_seconds /
+		// max_backtracks_per_run: none of these are scaled by
+		// applyBudgetTierDial today (only tokens/LLM-calls/tool-calls
+		// are), so telling the user to raise the tier would be a lie —
+		// raising the tier would not move this number. Wallclock CAN
+		// be set by a sub-agent profile's BudgetTimeS
+		// (applyProfileBudgetClamp), which the phrasing below covers.
+		return fmt.Sprintf(
+			"agent reached the %s budget cap (%s) — this limit is set by the graph's declared budget"+
+				" (or, for a spawned sub-agent, its profile's budget_time_s), not the autonomy tier",
+			label, usedLimit)
+	}
+	if tier >= autonomy.TierAutonomous {
+		return fmt.Sprintf(
+			"agent reached the %s budget cap (%s) at the %q autonomy tier — that is already the highest"+
+				" tier's ceiling; raising it further requires editing the graph's declared budget",
+			label, usedLimit, tier.String())
+	}
+	return fmt.Sprintf(
+		"agent reached the %s budget cap (%s) at the %q autonomy tier — raise the autonomy tier in"+
+			" Settings → Autonomy to raise this cap",
+		label, usedLimit, tier.String())
+}
+
+// budgetCapReasonLabel maps checkBudget's cap reason strings to a human
+// label plus whether autonomy.BudgetCeilingForTier / applyBudgetTierDial
+// actually governs that cap. Keep in sync with checkBudget's reason
+// strings (core/agentgraph/kernel.go) and applyBudgetTierDial above.
+func budgetCapReasonLabel(reason string) (label string, tierGoverned bool) {
+	switch reason {
+	case "max_tokens_per_run":
+		return "token", true
+	case "max_llm_calls_per_run":
+		return "LLM-call", true
+	case "max_tool_calls_per_run":
+		return "tool-call", true
+	case "max_cost_usd_per_run":
+		return "cost", false
+	case "max_wallclock_per_run_seconds":
+		return "time", false
+	case "max_backtracks_per_run":
+		return "backtrack", false
+	default:
+		return reason, false
+	}
+}
+
+// formatBudgetQuantity renders a cap's limit/used value in the unit its
+// reason implies -- dollars for cost, seconds for wallclock, a bare
+// count for everything else (tokens/LLM-calls/tool-calls/backtracks).
+func formatBudgetQuantity(reason string, v float64) string {
+	switch reason {
+	case "max_cost_usd_per_run":
+		return fmt.Sprintf("$%.2f", v)
+	case "max_wallclock_per_run_seconds":
+		return fmt.Sprintf("%.0fs", v)
+	default:
+		return fmt.Sprintf("%.0f", v)
+	}
 }
 
 // applyReasoningBudgetDial threads the resolved extended-thinking budget

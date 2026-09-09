@@ -105,6 +105,53 @@ func clonePresetValue(v any) any {
 	return v
 }
 
+// BudgetCeiling is the tier-scaled ceiling for the two call-volume
+// agentgraph.Budget fields (MaxLLMCallsPerRun, MaxToolCallsPerRun) that
+// KnobTokenCeilingPerTurn does not already govern.
+//
+// Filed live (owner directive 2026-09-09) after ErrBudgetExceeded fired
+// mid-session against chat_default_classic.yaml's flat budget: block
+// (max_llm_calls_per_run: 5000, max_tool_calls_per_run: 10000) --
+// constants that do not vary by autonomy tier at all today. The owner's
+// ruling: "we should be using our built in autonomy dial."
+//
+// This is deliberately NOT a fully independently-tunable Knob (no
+// per-layer Overrides slot, no Settings surface): it is a direct
+// function of the tier ladder, the same shape KnobMaxIterations already
+// uses (5/15/40/100/unbounded). See chat.applyBudgetTierDial for the
+// consumer -- it applies the ceiling the same way
+// chat.applyTokenCeilingKnob applies KnobTokenCeilingPerTurn: the dial
+// may only LOWER the graph's declared budget, never raise it, and
+// TierAutonomous's ceiling equals the graph's own declared cap rather
+// than "unbounded" -- the owner asked for the dial to govern this cap,
+// not for the cap to stop existing. It exists to stop runaway spend.
+type BudgetCeiling struct {
+	MaxLLMCallsPerRun  int
+	MaxToolCallsPerRun int
+}
+
+// budgetCeilingTable mirrors presetTable's five-tier shape. TierAutonomous
+// intentionally matches chat_default_classic.yaml's declared budget: block
+// (5000/10000) -- the most permissive tier gets the graph author's full
+// declared ceiling, not a value beyond it.
+var budgetCeilingTable = map[Tier]BudgetCeiling{
+	TierStrict:     {MaxLLMCallsPerRun: 150, MaxToolCallsPerRun: 300},
+	TierCautious:   {MaxLLMCallsPerRun: 500, MaxToolCallsPerRun: 1000},
+	TierDefault:    {MaxLLMCallsPerRun: 1500, MaxToolCallsPerRun: 3000},
+	TierBold:       {MaxLLMCallsPerRun: 3000, MaxToolCallsPerRun: 6000},
+	TierAutonomous: {MaxLLMCallsPerRun: 5000, MaxToolCallsPerRun: 10000},
+}
+
+// BudgetCeilingForTier returns the tier's call-volume budget ceiling.
+// Unknown tiers fall back to TierDefault's, mirroring presetValue's
+// fallback for the seven-knob preset table.
+func BudgetCeilingForTier(t Tier) BudgetCeiling {
+	if c, ok := budgetCeilingTable[t]; ok {
+		return c
+	}
+	return budgetCeilingTable[TierDefault]
+}
+
 // PresetForPostureMode returns a defensive copy of the knob preset for a
 // named posture mode. Currently only PostureModePlanMode ("plan_mode") is
 // supported; other values return nil.

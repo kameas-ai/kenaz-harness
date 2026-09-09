@@ -642,8 +642,7 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 					maxBT = DefaultMaxBacktracksPerRun
 				}
 				if used > maxBT {
-					k.emitCapHit(env, EventBudgetCapHit, "max_backtracks_per_run", float64(maxBT), float64(used))
-					backtrackErr = ErrBudgetExceeded
+					backtrackErr = k.emitCapHit(env, EventBudgetCapHit, "max_backtracks_per_run", float64(maxBT), float64(used))
 				} else {
 					validBacktrack = true
 					ann := FailureAnnotation{
@@ -1539,42 +1538,48 @@ func (k *Kernel) checkBudget(env *Env) error {
 	}
 	tokens, calls, tools, cost := env.Counters.Snapshot()
 	if env.Budget.MaxTokensPerRun > 0 && tokens > env.Budget.MaxTokensPerRun {
-		k.emitCapHit(env, EventBudgetCapHit, "max_tokens_per_run",
+		return k.emitCapHit(env, EventBudgetCapHit, "max_tokens_per_run",
 			float64(env.Budget.MaxTokensPerRun), float64(tokens))
-		return ErrBudgetExceeded
 	}
 	if env.Budget.MaxLLMCallsPerRun > 0 && calls > env.Budget.MaxLLMCallsPerRun {
-		k.emitCapHit(env, EventBudgetCapHit, "max_llm_calls_per_run",
+		return k.emitCapHit(env, EventBudgetCapHit, "max_llm_calls_per_run",
 			float64(env.Budget.MaxLLMCallsPerRun), float64(calls))
-		return ErrBudgetExceeded
 	}
 	if env.Budget.MaxToolCallsPerRun > 0 && tools > env.Budget.MaxToolCallsPerRun {
-		k.emitCapHit(env, EventBudgetCapHit, "max_tool_calls_per_run",
+		return k.emitCapHit(env, EventBudgetCapHit, "max_tool_calls_per_run",
 			float64(env.Budget.MaxToolCallsPerRun), float64(tools))
-		return ErrBudgetExceeded
 	}
 	if env.Budget.MaxCostUSDPerRun > 0 && cost > env.Budget.MaxCostUSDPerRun {
-		k.emitCapHit(env, EventCostCapHit, "max_cost_usd_per_run",
+		return k.emitCapHit(env, EventCostCapHit, "max_cost_usd_per_run",
 			env.Budget.MaxCostUSDPerRun, cost)
-		return ErrBudgetExceeded
 	}
 	if env.Budget.MaxWallclockPerRunSecs > 0 && env.Counters.WallclockStart > 0 {
 		elapsed := time.Now().UnixNano() - env.Counters.WallclockStart
 		if elapsed > int64(env.Budget.MaxWallclockPerRunSecs)*int64(time.Second) {
-			k.emitCapHit(env, EventBudgetCapHit, "max_wallclock_per_run_seconds",
+			return k.emitCapHit(env, EventBudgetCapHit, "max_wallclock_per_run_seconds",
 				float64(env.Budget.MaxWallclockPerRunSecs), float64(elapsed)/float64(time.Second))
-			return ErrBudgetExceeded
 		}
 	}
 	return nil
 }
 
-// emitCapHit appends a cap-hit event with a PauseMarker. The resume
-// token is the run id + a deterministic suffix per reason — the
-// frontend echoes it back via BumpAndResume so the kernel can
-// match resume-without-bump as a no-op (the marker is still in the
-// log).
-func (k *Kernel) emitCapHit(env *Env, kind EventKind, reason string, limit, used float64) {
+// emitCapHit appends a cap-hit event with a PauseMarker and returns a
+// *BudgetCapError carrying the same reason/limit/used detail, so the
+// caller's `return k.emitCapHit(...)` gives the chat surface enough to
+// build an actionable message (owner directive 2026-09-09) instead of
+// the bare ErrBudgetExceeded sentinel.
+//
+// The resume token is the run id + a deterministic suffix per reason —
+// intended for a future BumpAndResume RPC the frontend would echo it
+// back to so the kernel can match resume-without-bump as a no-op (the
+// marker is still in the log). NOTE: BumpAndResume does not exist yet
+// anywhere in this codebase — PausePending is documented forward to a
+// resume path that has never been built, so ErrBudgetExceeded still
+// terminates the run as a hard backend-error today (chat.driveRun),
+// not a pause. Tracked in docs/unwired-ledger.md rather than fixed
+// here — building the resume RPC is out of scope for wiring the
+// autonomy dial to this cap.
+func (k *Kernel) emitCapHit(env *Env, kind EventKind, reason string, limit, used float64) *BudgetCapError {
 	marker := PauseMarker{
 		Reason:       reason,
 		Limit:        limit,
@@ -1585,6 +1590,7 @@ func (k *Kernel) emitCapHit(env *Env, kind EventKind, reason string, limit, used
 	var b EventBatch
 	_ = b.AppendKind(env.RunID, "", kind, marker)
 	_, _ = k.log.Append(b)
+	return &BudgetCapError{Reason: reason, Limit: limit, Used: used}
 }
 
 // ---- conditional execution: edge liveness ----

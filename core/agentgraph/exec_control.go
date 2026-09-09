@@ -1155,7 +1155,15 @@ func (retryExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 		})
 		// classify retryable / fatal: anything not ErrBudgetExceeded /
 		// ErrPaused / ErrNotImplemented is retryable for now.
-		if stepErr == ErrBudgetExceeded || stepErr == ErrPaused {
+		//
+		// errors.Is, not ==: checkBudget's callers now return
+		// *BudgetCapError (wraps ErrBudgetExceeded via Is) so the
+		// terminal chat message can name which cap fired. A bare ==
+		// here would stop matching that wrapped value and let a
+		// budget-exhausted step retry instead of terminating --
+		// exactly the fatal-vs-retryable regression this comment
+		// warns against.
+		if errors.Is(stepErr, ErrBudgetExceeded) || errors.Is(stepErr, ErrPaused) {
 			logging.L().Info("agentgraph.retry.end",
 				"run_id", env.RunID, "node_id", node.ID, "outcome", "fatal",
 				"attempts", attempt, "err", stepErr.Error(),
