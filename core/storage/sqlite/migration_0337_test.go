@@ -31,17 +31,30 @@ import (
 // fresh empty database where the defect (and the fix) would be
 // structurally invisible.
 //
-// THE THREE SHAPES (spec.md §5.3's discriminator). Seeded into a new
-// session ("wp05-session-1") so the base snapshot's own seed rows
-// (seed-session-1) are an independent, simultaneous proof that a
-// healthy row with no streaming columns set is never touched:
+// THE FOUR SHAPES (spec.md §5.3's discriminator, condition 3 turn-scoped
+// per F1's fix). Seeded into a new session ("wp05-session-1") so the
+// base snapshot's own seed rows (seed-session-1) are an independent,
+// simultaneous proof that a healthy row with no streaming columns set
+// is never touched:
 //
-//   - checkpoint-chain junk (all three conditions hold) -> DELETED.
+//   - checkpoint-chain junk (all three conditions hold, same turn) ->
+//     DELETED.
 //   - a genuine error-path partial, transient, nothing supersedes it
-//     (condition 3 fails: no later row has it as a prefix) -> SURVIVES
-//     byte-for-byte.
+//     (condition 3 fails: no later row in the same turn has it as a
+//     prefix) -> SURVIVES byte-for-byte.
 //   - a resumed partial, something points at it via continuation_of
 //     (condition 2 fails) -> SURVIVES byte-for-byte.
+//   - a genuine, never-resumed partial from turn 1 whose opening bytes
+//     coincidentally prefix-match turn 2's unrelated healthy answer
+//     (F1: condition 3 must be scoped to the turn — a role='user' row
+//     sits between the two, so the prefix match is coincidence, not a
+//     checkpoint chain) -> SURVIVES byte-for-byte. This is the exact
+//     shape an adversarial reviewer's probe demonstrated against the
+//     unscoped implementation: "Explain quicksort" drops mid-stream
+//     leaving the partial "Sure! Let me explain", never resumed; the
+//     user re-asks as "Explain mergesort" and gets a healthy answer
+//     "Sure! Let me explain mergesort. ..." that happens to share the
+//     dropped partial's opening bytes.
 //
 // FALSIFIABILITY (the mission's proof requirement). This test was run
 // against a deliberately weakened Up — checkpointRowsToDeleteForSession's
@@ -56,6 +69,16 @@ import (
 // both actually deleted. The mutation was reverted before landing; it
 // must never be a code path this file can select at runtime, only a
 // manual, temporary edit for the falsification run.
+//
+// A second falsification (F1's fix, 2026-09-09) confirms the turn-scope
+// specifically: reverting hasSupersedingRow's userRowBetween guard (so
+// condition 3 scans the whole session again, unscoped) reddens this
+// test on the fourth shape alone:
+//   migration_0337_test.go: read wp05-turn1-partial-1 after Open:
+//     sql: no rows in result set (0 rows means it was incorrectly deleted)
+// — the cross-turn partial is deleted for coincidentally prefix-matching
+// an unrelated turn's answer, exactly the F1 defect. The mutation was
+// reverted before landing.
 func TestMigration0337_RepairsCheckpointRowsAgainstUpgradedDatabase(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -163,6 +186,63 @@ func TestMigration0337_RepairsCheckpointRowsAgainstUpgradedDatabase(t *testing.T
 		     'the rest of the resumed answer',
 		     NULL, 1700100005000, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 		     NULL, NULL, NULL, 'wp05-resumed-partial-1', NULL, NULL, NULL, NULL, NULL)`,
+
+		// ---- Shape 4: cross-turn coincidence (F1). Turn 1 ("Explain
+		// quicksort") drops mid-stream, leaving a genuine, never-resumed
+		// partial. Turn 2 ("Explain mergesort") gets a healthy answer
+		// that happens to share turn 1's opening bytes byte-for-byte.
+		// Condition 1 holds for the turn-1 partial (transient/
+		// recoverable/streaming_failed_at set), condition 2 holds
+		// (continuation_of NULL, nothing points at it). Condition 3 must
+		// NOT hold: the turn-2 answer is a later ASSISTANT row whose
+		// content has the turn-1 partial's content as a strict prefix,
+		// but a role='user' row (turn 2's opening message) sits strictly
+		// between them, so they are different turns and the prefix match
+		// is coincidence -> the turn-1 partial must SURVIVE.
+		`INSERT INTO session_messages
+		    (id, session_id, sequence, role, content, tool_calls, created_at, content_json,
+		     compacted_into_id, compacted_at, archived_at, prompt_tokens, completion_tokens,
+		     cost_usd, cost_source, streaming_failed_at, streaming_failure_kind,
+		     streaming_recoverable, continuation_of, knobs_override, kind, move_index,
+		     turn_span_id, model_tool_args)
+		 VALUES
+		    ('wp05-turn1-user-1', 'wp05-session-1', 40, 'user',
+		     'Explain quicksort',
+		     NULL, 1700100006000, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+		     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)`,
+		`INSERT INTO session_messages
+		    (id, session_id, sequence, role, content, tool_calls, created_at, content_json,
+		     compacted_into_id, compacted_at, archived_at, prompt_tokens, completion_tokens,
+		     cost_usd, cost_source, streaming_failed_at, streaming_failure_kind,
+		     streaming_recoverable, continuation_of, knobs_override, kind, move_index,
+		     turn_span_id, model_tool_args)
+		 VALUES
+		    ('wp05-turn1-partial-1', 'wp05-session-1', 41, 'assistant',
+		     'Sure! Let me explain',
+		     NULL, 1700100007000, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+		     1700100007000, 'transient', 1, NULL, NULL, NULL, NULL, NULL, NULL)`,
+		`INSERT INTO session_messages
+		    (id, session_id, sequence, role, content, tool_calls, created_at, content_json,
+		     compacted_into_id, compacted_at, archived_at, prompt_tokens, completion_tokens,
+		     cost_usd, cost_source, streaming_failed_at, streaming_failure_kind,
+		     streaming_recoverable, continuation_of, knobs_override, kind, move_index,
+		     turn_span_id, model_tool_args)
+		 VALUES
+		    ('wp05-turn2-user-1', 'wp05-session-1', 50, 'user',
+		     'Explain mergesort',
+		     NULL, 1700100008000, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+		     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)`,
+		`INSERT INTO session_messages
+		    (id, session_id, sequence, role, content, tool_calls, created_at, content_json,
+		     compacted_into_id, compacted_at, archived_at, prompt_tokens, completion_tokens,
+		     cost_usd, cost_source, streaming_failed_at, streaming_failure_kind,
+		     streaming_recoverable, continuation_of, knobs_override, kind, move_index,
+		     turn_span_id, model_tool_args)
+		 VALUES
+		    ('wp05-turn2-answer-1', 'wp05-session-1', 51, 'assistant',
+		     'Sure! Let me explain mergesort. It is a divide and conquer sort.',
+		     NULL, 1700100009000, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+		     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)`,
 	}
 	for _, stmt := range seedStmts {
 		if _, err := raw.ExecContext(ctx, stmt); err != nil {
@@ -246,6 +326,20 @@ func TestMigration0337_RepairsCheckpointRowsAgainstUpgradedDatabase(t *testing.T
 	if !continuationOf.Valid || continuationOf.String != "wp05-resumed-partial-1" {
 		t.Errorf("wp05-resumed-continuation-1.continuation_of = %v, want wp05-resumed-partial-1", continuationOf)
 	}
+
+	// ---- Shape 4 (F1): the turn-1 partial survives BYTE-FOR-BYTE even
+	// though turn 2's unrelated healthy answer coincidentally has it as
+	// a strict prefix — condition 3 is scoped to the turn by the
+	// intervening role='user' row, so the cross-turn match is not
+	// treated as a checkpoint chain. ----
+	assertMessageSurvivesUnchanged(t, ctx, r, "wp05-turn1-partial-1",
+		"Sure! Let me explain",
+		true, true, true, "transient")
+	// The turn-2 answer itself must also be untouched (it was never a
+	// candidate — no streaming_* columns set).
+	assertMessageSurvivesUnchanged(t, ctx, r, "wp05-turn2-answer-1",
+		"Sure! Let me explain mergesort. It is a divide and conquer sort.",
+		false, false, false, "")
 
 	// ---- Unrelated tables untouched (the sessions/0327 precedent: a
 	// migration can empty a CASCADE-linked child table while both
