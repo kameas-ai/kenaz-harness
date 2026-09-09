@@ -26,7 +26,7 @@ env:
 jobs:
   lint-go:
     name: Go lint + vet + codegen drift
-    runs-on: [self-hosted, Linux, ARM64, ci-medium]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_MEDIUM || '["self-hosted","Linux","ARM64","ci-medium"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
@@ -529,7 +529,7 @@ jobs:
     # mid-job (blank step conclusion + BlobNotFound logs) — especially when
     # several PRs run concurrently and saturate the medium pool. ci-large is
     # an on-demand ephemeral tier (autostarter EPHEMERAL_TIERS=ci-medium,ci-large).
-    runs-on: [self-hosted, Linux, ARM64, ci-large]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_LARGE || '["self-hosted","Linux","ARM64","ci-large"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
@@ -598,7 +598,7 @@ jobs:
     # Runs all *_WireGolden tests across the LLM adapter + chat view packages.
     # No network keys required — each test drives a real adapter against an
     # httptest.Server that replays recorded fixture responses.
-    runs-on: [self-hosted, Linux, ARM64, ci-medium]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_MEDIUM || '["self-hosted","Linux","ARM64","ci-medium"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
@@ -629,7 +629,7 @@ jobs:
     # the v0.63.0 P0 proved the rest of the suite structurally cannot
     # provide (spec.md §1.2: every other test starts from an empty
     # database, where the max-based-selection defect cannot occur).
-    runs-on: [self-hosted, Linux, ARM64, ci-medium]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_MEDIUM || '["self-hosted","Linux","ARM64","ci-medium"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
@@ -660,7 +660,7 @@ jobs:
     # frontend peak past 4 GB and OOM-killed the medium runner mid-job
     # (runner-died / BlobNotFound signature), flaking this job on ~every PR
     # under concurrency — same fix as test-go. ci-large is an on-demand tier.
-    runs-on: [self-hosted, Linux, ARM64, ci-large]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_LARGE || '["self-hosted","Linux","ARM64","ci-large"]') }}
     defaults:
       run:
         working-directory: frontend
