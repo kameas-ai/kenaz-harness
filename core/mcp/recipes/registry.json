@@ -559,6 +559,7 @@
         "default": false
       },
       "warning": "Gives the model COMPLETE control of your computer — screen, mouse and keyboard. The upstream author's own warning: models \"make frequent mistakes and are vulnerable to prompt injections\\u2026 this could do a lot of damage\", and advises treating it \"like giving a hyperactive toddler access to your computer\" — supervise closely, and prefer a sandboxed user account. Anything the model reads on screen or from a page can attempt to steer it. First npm fetch can take 10–30 s; nut.js pulls native binaries. macOS additionally requires Accessibility and Screen Recording permission for the spawning app.",
+      "warning_severity": "danger",
       "primary_auth": "none"
     },
     {
