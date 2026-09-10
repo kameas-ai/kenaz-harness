@@ -33,6 +33,9 @@ import (
 //	  "mcp_allowlist":     ["github", "slack", ...],
 //	  "model_prefs":       {"default_model": "...", "provider_allowlist": [...]},
 //	  "kameas_ml_weight_urls": ["https://..."],
+//	  "mandated_skills":   [{...}],
+//	  "provisioned_mcp":   [{"recipe_id": "slack", "primary_auth": "oauth", ...}],
+//	  "provider_setups":   [{"provider": "anthropic", "access_mode": "org_shared_key", ...}],
 //	  "signature":         "<base64 ed25519>"
 //	}
 //
@@ -75,10 +78,107 @@ type Bundle struct {
 	// the signing payload stays minimal for orgs that don't use this feature.
 	MandatedSkills []json.RawMessage `json:"mandated_skills,omitempty"`
 
+	// ProvisionedMCP is the push-down section for org-provisioned MCP
+	// servers (fleet-org-config-inheritance-01NORGX01 §3.1). Each entry
+	// names a recipe, an optional transport/URL override, the org's
+	// declared auth mechanism, and (for OAuth) the org's PUBLIC PKCE
+	// client_id + scopes — never a bearer token, bot token, or API key.
+	//
+	// SECURITY: an entry here is a command line the harness spawns or a
+	// URL it connects to. It MUST be covered by the ed25519 signature
+	// (see bundleSigningPayload below) — an unsigned ProvisionedMCP
+	// section would let anyone who can modify the bundle in transit
+	// dictate what the harness executes. WP01 (this field) only adds the
+	// wire contract; the apply pipeline that actually registers these as
+	// read-only recipes lands in WP02.
+	//
+	// omitempty: orgs not using this feature keep the signing payload
+	// minimal. Unlike MCPAllowlist there is no "block all" semantic for
+	// provisioning — nil, an empty slice, and an absent key are all
+	// equivalent ("no org-provisioned MCP entries"), so the nil-vs-empty
+	// distinction that matters for MCPAllowlist does not apply here. See
+	// bundle_test.go's TestBundle_ProvisionedMCP_EmptyVsAbsentVsNil.
+	ProvisionedMCP []ProvisionedMCP `json:"provisioned_mcp,omitempty"`
+
+	// ProviderSetups is the push-down section for org-provisioned model
+	// providers (fleet-org-config-inheritance-01NORGX01 §3.1, as amended
+	// by the owner resolution recorded in
+	// fleet-generic-sync-framework-01NSYNC02 §6.2, 2026-07-18: fleet is
+	// never in the inference path — no broker, no org-hosted gateway
+	// distributed this way). AccessMode is "org_shared_key" (the actual
+	// key rides a DEDICATED ENCRYPTED CHANNEL directly into the device
+	// credstore — never this field, never any bundle, never Wails RPC,
+	// frontend state, or logs) or "byo_key" (config inherits; the member
+	// supplies their own key locally).
+	//
+	// SECURITY: same signing requirement as ProvisionedMCP — this section
+	// steers which provider/model a member's harness talks to, so it must
+	// be covered by the signature. WP01 (this field) only adds the wire
+	// contract; the apply pipeline lands in WP04.
+	//
+	// omitempty: same nil/empty/absent equivalence as ProvisionedMCP —
+	// there is no meaningful distinction for a push-down-only section.
+	ProviderSetups []ProviderSetup `json:"provider_setups,omitempty"`
+
 	// Signature is the base64-encoded ed25519 signature over the SHA-256 of
 	// the canonical JSON of this bundle with the "signature" field absent.
 	// This field is excluded from the signing input.
 	Signature string `json:"signature"`
+}
+
+// ProvisionedMCP is one org-provisioned MCP server entry (see
+// Bundle.ProvisionedMCP's doc for the security rationale). All fields are
+// non-secret by construction — there is deliberately no field here that
+// could carry key/token material; see bundle_test.go's
+// TestBundle_ProvisionedMCP_NoSecretField for the negative-shape check that
+// backs FR-008.
+type ProvisionedMCP struct {
+	// RecipeID identifies which MCP recipe this entry configures.
+	RecipeID string `json:"recipe_id"`
+	// Transport optionally overrides the recipe's default transport
+	// (e.g. "http", "stdio").
+	Transport string `json:"transport,omitempty"`
+	// URL is the remote server endpoint for transports that use one.
+	URL string `json:"url,omitempty"`
+	// PrimaryAuth is the org's declared auth mechanism for this recipe:
+	// "oauth" | "device_code" | "none" | "keys".
+	PrimaryAuth string `json:"primary_auth,omitempty"`
+	// OAuth carries the org's PUBLIC OAuth client_id + scopes for a PKCE
+	// flow. ClientID is NOT a secret (PKCE public client) — it is never a
+	// bearer or bot token.
+	OAuth *ProvisionedMCPOAuth `json:"oauth,omitempty"`
+	// Config carries non-secret config_options overrides for the recipe.
+	// MUST NOT contain credential bytes (FR-008) — this is not the
+	// dedicated org-secret channel and never will be.
+	Config json.RawMessage `json:"config,omitempty"`
+}
+
+// ProvisionedMCPOAuth is the org-owned PKCE client identity a
+// ProvisionedMCP entry inherits. ClientID is a public PKCE client
+// identifier, not a secret.
+type ProvisionedMCPOAuth struct {
+	ClientID string   `json:"client_id,omitempty"`
+	Scopes   []string `json:"scopes,omitempty"`
+}
+
+// ProviderSetup is one org-provisioned model-provider entry (see
+// Bundle.ProviderSetups's doc for the access-mode resolution history).
+// There is deliberately no field here that could carry or reference key
+// material — the org-shared key rides the dedicated encrypted channel
+// straight into the device credstore, never this struct.
+type ProviderSetup struct {
+	// Provider is the provider identifier (e.g. "anthropic", "openai").
+	Provider string `json:"provider"`
+	// AccessMode is "org_shared_key" (key delivered out-of-band to the
+	// credstore) or "byo_key" (member supplies their own key; only this
+	// config is inherited).
+	AccessMode string `json:"access_mode"`
+	// Models optionally restricts/lists the models exposed for this
+	// provider.
+	Models []string `json:"models,omitempty"`
+	// Default marks this provider as the harness's default profile when
+	// applied (FR-005).
+	Default bool `json:"default,omitempty"`
 }
 
 // BundleModelPrefs is the model-preferences section of a config bundle.
@@ -103,6 +203,8 @@ type bundleSigningPayload struct {
 	ModelPrefs         *BundleModelPrefs `json:"model_prefs,omitempty"`
 	KameasMLWeightURLs []string          `json:"kameas_ml_weight_urls,omitempty"`
 	MandatedSkills     []json.RawMessage `json:"mandated_skills,omitempty"`
+	ProvisionedMCP     []ProvisionedMCP  `json:"provisioned_mcp,omitempty"`
+	ProviderSetups     []ProviderSetup   `json:"provider_setups,omitempty"`
 }
 
 // signingPayload produces the canonical JSON bytes that were signed (all
@@ -117,6 +219,8 @@ func (b *Bundle) signingPayload() ([]byte, error) {
 		ModelPrefs:         b.ModelPrefs,
 		KameasMLWeightURLs: b.KameasMLWeightURLs,
 		MandatedSkills:     b.MandatedSkills,
+		ProvisionedMCP:     b.ProvisionedMCP,
+		ProviderSetups:     b.ProviderSetups,
 	}
 	return json.Marshal(p)
 }
