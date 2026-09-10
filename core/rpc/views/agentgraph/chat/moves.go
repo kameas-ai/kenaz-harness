@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
@@ -66,6 +67,29 @@ import (
 // AppendTranscriptEntry would reject it, failing the run. That is a
 // degenerate data condition, not a feature switch: there is no setting
 // that reaches it.
+//
+// USAGE CAPTURE (fix/usage-persists-on-every-move). Before this fix,
+// token/cost usage was recorded ONLY for the turn's `final` row, via
+// HookPostLLM firing exactly once from exec_state.go's
+// sessionWriteExecutor — the sole caller of FirePostHooks. Every other
+// assistant_move this journal persists bypasses that node entirely (it
+// writes straight to j.writer), so on a multi-move tool-using turn every
+// Generate() call except the last one silently dropped its usage. The
+// journal now closes that gap AT THE SAME PLACE it already persists a
+// move: RecordAssistantMove parks the corellm.Response alongside the
+// held text (heldResp/heldProviderKind/heldModelID), and flushHeld /
+// RecordPartial invoke j.usageHook directly, once per persisted
+// assistant-role row, right after that row's message id comes back from
+// the writer. This is deliberately NOT routed through
+// HookManager.FirePostHooks(HookPostLLM, ...) — that boundary also fans
+// out to the artifacts code-block detector and the generated-image
+// drain (see chat_runner.go / api.go), and firing those for every
+// intermediate move is a separate, out-of-scope behaviour change. The
+// `final` row keeps using the pre-existing HookPostLLM mechanism
+// unchanged (LLMProviderAdapter.LastResponse(), read once when
+// session_write's AppendEntry call returns) — j.usageHook is never
+// invoked for a `final` entry, so the two mechanisms cannot double-count
+// the same row.
 // ---------------------------------------------------------------------------
 
 // moveKind mirrors core/session.MoveKind. The chat package cannot
@@ -111,18 +135,37 @@ type turnJournal struct {
 	held     string
 	heldIdx  int
 	heldLive bool
+	// heldResp/heldProviderKind/heldModelID are the usage snapshot for
+	// the Generate() call that produced `held`, captured by
+	// RecordAssistantMove at the moment it parked the text — NOT read
+	// later off LLMProviderAdapter.lastResp, which is a single mutable
+	// slot overwritten by every subsequent Generate() call (including
+	// ones this journal never records). Cleared together with
+	// held/heldIdx/heldLive everywhere that trio is cleared, so a later
+	// flush can never fire usage against a stale response.
+	heldResp         corellm.Response
+	heldProviderKind string
+	heldModelID      string
+	// usageHook fires once per persisted assistant-role row this journal
+	// writes OUTSIDE the final path (see the file header's USAGE CAPTURE
+	// note). nil disables usage capture for non-final moves entirely —
+	// tests that don't exercise usage leave it nil.
+	usageHook UsageHookFunc
 }
 
 // newTurnJournal builds the journal for one turn. spanID is the id of
-// the user message that opened it.
+// the user message that opened it. usageHook may be nil (usage capture
+// disabled for this turn — e.g. no Manager wired, or a test that isn't
+// exercising usage).
 func newTurnJournal(writer coreag.HistoryWriter, emit func(coreag.StreamEvent),
-	sessionID, spanID string) *turnJournal {
+	sessionID, spanID string, usageHook UsageHookFunc) *turnJournal {
 	return &turnJournal{
 		writer:    writer,
 		emit:      emit,
 		sessionID: sessionID,
 		spanID:    spanID,
 		openIdx:   -1,
+		usageHook: usageHook,
 	}
 }
 
@@ -171,36 +214,64 @@ func (j *turnJournal) allocate(kind string, d moveDetail) int {
 
 // persist writes one entry through the single seam. Caller holds j.mu.
 // Failures are logged, never fatal: losing a transcript row must not
-// abort the user's turn.
-func (j *turnJournal) persist(ctx context.Context, e coreag.HistoryEntry) {
+// abort the user's turn. Returns the assigned message id (empty on
+// failure or when no writer is wired) so callers that need to correlate
+// a follow-up write — usage capture, in particular — can do so without
+// a second read.
+func (j *turnJournal) persist(ctx context.Context, e coreag.HistoryEntry) (string, error) {
 	if j.writer == nil {
-		return
+		return "", nil
 	}
-	if _, err := j.writer.AppendEntry(ctx, j.sessionID, e); err != nil {
+	id, err := j.writer.AppendEntry(ctx, j.sessionID, e)
+	if err != nil {
 		logging.L().Warn("chat.move.persist_failed",
 			"session_id", j.sessionID,
 			"kind", e.MoveKind,
 			"index", e.MoveIndex,
 			"err", err.Error())
+		return "", err
 	}
+	return id, nil
+}
+
+// fireUsage invokes j.usageHook for one persisted assistant-role row,
+// when a hook is wired and the row actually landed (non-empty id, no
+// write error). Caller holds j.mu — usageHook is expected to be fast or
+// to accept the latency (see UsageHookFunc's doc comment); this mirrors
+// how the pre-existing final-row path already invokes it synchronously
+// from within the kernel's single-threaded run.
+func (j *turnJournal) fireUsage(ctx context.Context, id string, err error,
+	resp corellm.Response, providerKind, modelID string) {
+	if err != nil || id == "" || j.usageHook == nil {
+		return
+	}
+	j.usageHook(ctx, j.sessionID, id, providerKind, modelID, resp)
 }
 
 // flushHeld writes the parked assistant text as an assistant_move.
 // Caller holds j.mu. Called by every persisting path before its own
 // write, which is what keeps the transcript in allocation order.
+//
+// This is also THE fix for the dropped-usage bug (see the file header's
+// USAGE CAPTURE note): every assistant_move flushHeld persists is a
+// Generate() call session_write's HookPostLLM fire will never see, so
+// this is the only place that call's usage can still be recorded.
 func (j *turnJournal) flushHeld(ctx context.Context) {
 	if !j.heldLive {
 		return
 	}
 	text, idx := j.held, j.heldIdx
+	resp, providerKind, modelID := j.heldResp, j.heldProviderKind, j.heldModelID
 	j.held, j.heldIdx, j.heldLive = "", 0, false
-	j.persist(ctx, coreag.HistoryEntry{
+	j.heldResp, j.heldProviderKind, j.heldModelID = corellm.Response{}, "", ""
+	id, err := j.persist(ctx, coreag.HistoryEntry{
 		Role:       "assistant",
 		Content:    text,
 		MoveKind:   moveKindAssistantMove,
 		MoveIndex:  idx,
 		TurnSpanID: j.spanID,
 	})
+	j.fireUsage(ctx, id, err, resp, providerKind, modelID)
 }
 
 // ---- the three feed points ----------------------------------------------
@@ -236,8 +307,23 @@ func (j *turnJournal) OpenAssistantSegment() {
 // text flushed as an assistant_move by whatever comes next.
 //
 // An empty text parks nothing: a fire that only emitted tool calls has
-// no segment to render and no bubble was opened for it.
-func (j *turnJournal) RecordAssistantMove(ctx context.Context, text string) {
+// no segment to render and no bubble was opened for it — and, as a
+// consequence, that fire's usage has nowhere to attach either (usage.Add
+// UPDATEs an existing session_messages row by id; a fire with no row has
+// none). That gap is pre-existing and out of scope here: this fix
+// targets fires that DO produce a persisted row, matching the reported
+// defect (a 58-row, 3-move turn contributing $0), not the deeper "no row
+// exists to bill against" case, which would need a usage ledger
+// decoupled from session_messages.
+//
+// resp/providerKind/modelID are the just-computed Generate() call's
+// usage snapshot, parked alongside the text so flushHeld can fire usage
+// for this exact call — never LLMProviderAdapter.LastResponse(), which
+// by the time flushHeld runs may already reflect a LATER Generate()
+// call (the whole reason the final-only hook undercounts a multi-move
+// turn).
+func (j *turnJournal) RecordAssistantMove(ctx context.Context, text string,
+	resp corellm.Response, providerKind, modelID string) {
 	if !j.records() {
 		return
 	}
@@ -256,6 +342,7 @@ func (j *turnJournal) RecordAssistantMove(ctx context.Context, text string) {
 		idx = j.allocate(moveKindAssistantMove, moveDetail{})
 	}
 	j.held, j.heldIdx, j.heldLive = text, idx, true
+	j.heldResp, j.heldProviderKind, j.heldModelID = resp, providerKind, modelID
 }
 
 // RecordToolCall persists the model's request to run a tool. Called by
@@ -417,12 +504,22 @@ func (j *turnJournal) AppendEntry(ctx context.Context, sessionID string,
 	entry.MoveKind = moveKindFinal
 	entry.MoveIndex = idx
 	entry.TurnSpanID = j.spanID
+	// NOTE: no j.fireUsage call here, deliberately. This `final` row's
+	// usage is recorded by the PRE-EXISTING mechanism — the caller
+	// (exec_state.go's sessionWriteExecutor) fires HookPostLLM once this
+	// AppendEntry returns, and the registered usage-hook callback reads
+	// LLMProviderAdapter.LastResponse() at that point. Firing j.usageHook
+	// here too, for the exact same row, would double-count it — see the
+	// file header's USAGE CAPTURE note.
 	id, err := j.writer.AppendEntry(ctx, sessionID, entry)
 	if absorbed {
 		j.mu.Lock()
 		if err == nil {
-			// The parked copy became this row. Drop it.
+			// The parked copy became this row. Drop it — including the
+			// usage snapshot, so a hypothetical later flush in this same
+			// journal can never fire usage using a stale response.
 			j.held, j.heldIdx, j.heldLive = "", 0, false
+			j.heldResp, j.heldProviderKind, j.heldModelID = corellm.Response{}, "", ""
 		}
 		// On failure the park stands, so Finish's terminal flush still
 		// gets the segment into the transcript. Clearing it first would
@@ -455,6 +552,16 @@ func (j *turnJournal) RecordPartial(ctx context.Context, text string) {
 	defer j.mu.Unlock()
 	idx := j.openIdx
 	j.openIdx = -1
+	// resp/providerKind/modelID carry the completed fire's usage
+	// snapshot ONLY in the prefix branch below — that is the one case
+	// where a real corellm.Response was actually computed for the text
+	// being persisted (see the branch comment). The else branch persists
+	// text from a fire that never reached stream.Final(), so there is no
+	// response to attach; fireUsage's err/id guard covers the zero-value
+	// resp harmlessly, but we gate on hadUsage explicitly for clarity.
+	var resp corellm.Response
+	var providerKind, modelID string
+	hadUsage := false
 	if j.heldLive && strings.HasPrefix(text, j.held) {
 		// The stop landed AFTER the fire completed but before the turn's
 		// session_write claimed its text: the parked segment is this
@@ -463,21 +570,31 @@ func (j *turnJournal) RecordPartial(ctx context.Context, text string) {
 		// the same words in the transcript twice, which is the
 		// duplicate this mission exists to remove, not create.
 		// (adversarial review of WP02)
+		//
+		// The fire DID complete (RecordAssistantMove parked it, which
+		// only happens after stream.Final() returns), so its usage
+		// snapshot is real and must not be dropped along with `held`.
 		idx = j.heldIdx
+		resp, providerKind, modelID = j.heldResp, j.heldProviderKind, j.heldModelID
+		hadUsage = true
 		j.held, j.heldIdx, j.heldLive = "", 0, false
+		j.heldResp, j.heldProviderKind, j.heldModelID = corellm.Response{}, "", ""
 	} else {
 		j.flushHeld(ctx)
 	}
 	if idx < 0 {
 		idx = j.allocate(moveKindAssistantMove, moveDetail{})
 	}
-	j.persist(ctx, coreag.HistoryEntry{
+	id, err := j.persist(ctx, coreag.HistoryEntry{
 		Role:       "assistant",
 		Content:    text,
 		MoveKind:   moveKindAssistantMove,
 		MoveIndex:  idx,
 		TurnSpanID: j.spanID,
 	})
+	if hadUsage {
+		j.fireUsage(ctx, id, err, resp, providerKind, modelID)
+	}
 }
 
 // RecordSyntheticToolResult persists the is_error tool_result that

@@ -852,11 +852,11 @@ func TestMoves_InterruptKeepsPartialAndClosesDanglingPairs(t *testing.T) {
 	ctx := context.Background()
 	w := &recordingHistoryWriter{}
 	sink := &recordingSink{}
-	j := newTurnJournal(w, sink.emit, "sess-1", "span-1")
+	j := newTurnJournal(w, sink.emit, "sess-1", "span-1", nil)
 
 	// Fire 1 completes with text and asks for a tool.
 	j.OpenAssistantSegment()
-	j.RecordAssistantMove(ctx, "I'll read the file")
+	j.RecordAssistantMove(ctx, "I'll read the file", corellm.Response{}, "", "")
 	call := coreag.ToolCall{ID: "tu-1", Name: "fs__read", Args: map[string]any{"path": "/tmp/x"}}
 	j.RecordToolCall(ctx, call)
 	j.RecordToolResult(ctx, call, coreag.ToolResult{Content: "contents"})
@@ -972,12 +972,12 @@ func TestMoves_InterruptPersistsOnlyTheInFlightSegment(t *testing.T) {
 		ctx := context.Background()
 		w := &recordingHistoryWriter{}
 		bridge := NewStreamBridge(&recordingBroker{}, "sub-1", "sess-1")
-		j := newTurnJournal(w, bridge.Emit, "sess-1", "span-1")
+		j := newTurnJournal(w, bridge.Emit, "sess-1", "span-1", nil)
 
 		// Fire 1: a preamble, then a tool.
 		j.OpenAssistantSegment()
 		bridge.Emit(coreag.StreamEvent{Kind: coreag.StreamEventText, Text: preamble})
-		j.RecordAssistantMove(ctx, preamble)
+		j.RecordAssistantMove(ctx, preamble, corellm.Response{}, "", "")
 		call := coreag.ToolCall{ID: "tu-1", Name: "fs__read"}
 		j.RecordToolCall(ctx, call)
 		j.RecordToolResult(ctx, call, coreag.ToolResult{Content: "contents"})
@@ -1009,14 +1009,14 @@ func TestMoves_InterruptPersistsOnlyTheInFlightSegment(t *testing.T) {
 		ctx := context.Background()
 		w := &recordingHistoryWriter{}
 		bridge := NewStreamBridge(&recordingBroker{}, "sub-1", "sess-1")
-		j := newTurnJournal(w, bridge.Emit, "sess-1", "span-1")
+		j := newTurnJournal(w, bridge.Emit, "sess-1", "span-1", nil)
 
 		// A single fire that finished streaming — its text is parked,
 		// waiting to learn whether session_write claims it — and the
 		// stop lands in that window.
 		j.OpenAssistantSegment()
 		bridge.Emit(coreag.StreamEvent{Kind: coreag.StreamEventText, Text: inflight})
-		j.RecordAssistantMove(ctx, inflight)
+		j.RecordAssistantMove(ctx, inflight, corellm.Response{}, "", "")
 
 		is := NewInterruptState(bridge, nil)
 		is.PersistInterrupt(ctx, "sess-1", w, j)
@@ -1050,10 +1050,10 @@ func TestMoves_InertWithoutTurnSpan(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	w := &recordingHistoryWriter{}
-	j := newTurnJournal(w, nil, "sess-1", "")
+	j := newTurnJournal(w, nil, "sess-1", "", nil)
 
 	j.OpenAssistantSegment()
-	j.RecordAssistantMove(ctx, "text")
+	j.RecordAssistantMove(ctx, "text", corellm.Response{}, "", "")
 	j.RecordToolCall(ctx, coreag.ToolCall{ID: "t", Name: "a__b"})
 	if _, err := j.AppendEntry(ctx, "sess-1", coreag.HistoryEntry{Role: "assistant", Content: "answer"}); err != nil {
 		t.Fatalf("AppendEntry: %v", err)
@@ -1083,10 +1083,10 @@ func TestMoves_RevisedAnswerKeepsBothTheDraftAndTheFinal(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	w := &recordingHistoryWriter{}
-	j := newTurnJournal(w, nil, "sess-1", "span-1")
+	j := newTurnJournal(w, nil, "sess-1", "span-1", nil)
 
 	j.OpenAssistantSegment()
-	j.RecordAssistantMove(ctx, "half-finished draft")
+	j.RecordAssistantMove(ctx, "half-finished draft", corellm.Response{}, "", "")
 	if _, err := j.AppendEntry(ctx, "sess-1", coreag.HistoryEntry{
 		Role: "assistant", Content: "the revised answer",
 	}); err != nil {
@@ -1124,10 +1124,10 @@ func TestMoves_WhitespaceOnlyDifferenceIsNotARevision(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	w := &recordingHistoryWriter{}
-	j := newTurnJournal(w, nil, "sess-1", "span-1")
+	j := newTurnJournal(w, nil, "sess-1", "span-1", nil)
 
 	j.OpenAssistantSegment()
-	j.RecordAssistantMove(ctx, "the answer is 42\n")
+	j.RecordAssistantMove(ctx, "the answer is 42\n", corellm.Response{}, "", "")
 	if _, err := j.AppendEntry(ctx, "sess-1", coreag.HistoryEntry{
 		Role: "assistant", Content: "the answer is 42",
 	}); err != nil {
@@ -1165,10 +1165,10 @@ func TestMoves_NonStreamingFireStillAnnouncesItsBoundary(t *testing.T) {
 	ctx := context.Background()
 	w := &recordingHistoryWriter{}
 	sink := &recordingSink{}
-	j := newTurnJournal(w, sink.emit, "sess-1", "span-1")
+	j := newTurnJournal(w, sink.emit, "sess-1", "span-1", nil)
 
 	// No OpenAssistantSegment: no delta ever arrived.
-	j.RecordAssistantMove(ctx, "whole body at once")
+	j.RecordAssistantMove(ctx, "whole body at once", corellm.Response{}, "", "")
 	j.RecordToolCall(ctx, coreag.ToolCall{ID: "t1", Name: "a__b"})
 	j.Finish(ctx)
 

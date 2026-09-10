@@ -1042,7 +1042,12 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// resolved knobs and the tool catalog); the journal needs the
 	// bridge, which needs the sub id. Attaching afterwards keeps the
 	// construction order honest — the adapters hold pointers.
-	journal := newTurnJournal(r.cfg.HistoryWriter, bridge.Emit, sessionID, turnSpanID)
+	// r.cfg.UsageHook is threaded straight in (fix/usage-persists-on-
+	// every-move): the journal now fires it directly for every non-final
+	// assistant_move it persists, since HookPostLLM (registered on it
+	// below) only ever fires once per turn, for the `final` row. Nil is
+	// fine — records() / fireUsage both nil-check before doing anything.
+	journal := newTurnJournal(r.cfg.HistoryWriter, bridge.Emit, sessionID, turnSpanID, r.cfg.UsageHook)
 	llmAdapter.WithMoveJournal(journal)
 	toolAdapter.withMoves(journal)
 	// env.HistoryWriter stays nil when nothing was configured, so

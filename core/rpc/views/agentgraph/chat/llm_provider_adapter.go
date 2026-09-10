@@ -80,10 +80,34 @@ type LLMProviderAdapter struct {
 	// lastRespMu protects lastResp.
 	lastRespMu sync.Mutex
 	// lastResp stores the most recent llm.Response produced by Generate.
-	// The session_write HookPostLLM callback reads this to record usage.
-	// Overwritten on every Generate call; safe because each kernel run is
+	// The session_write HookPostLLM callback reads this to record usage
+	// for the turn's TERMINAL Generate call ONLY — the one whose text
+	// becomes (or is absorbed into) the `final` transcript row
+	// session_write persists.
+	//
+	// CORRECTED (fix/usage-persists-on-every-move): this comment used to
+	// claim the single mutable slot was "safe because each kernel run is
 	// sequential (one Generate completes before session_write fires, and
-	// session_write fires before the next Generate could start).
+	// session_write fires before the next Generate could start)". That
+	// was true only before model-moves-transcript-01PMCH01 WP02 taught
+	// the chat graph to loop Generate multiple times per turn (the
+	// tool-call loop) before session_write ever fires once. Since then, a
+	// multi-move turn overwrites this field N-1 times before anyone reads
+	// it, so reading it here only ever recovers the LAST Generate call's
+	// usage — the other N-1 calls' usage was silently dropped (a 58-row,
+	// 3-move real-world turn contributed $0 to its session's totals).
+	//
+	// That undercount is now fixed, but NOT by changing this field: it is
+	// still exactly what it says, a single overwritten slot, and reading
+	// it is still only correct for the terminal call (nothing else
+	// touches it between the last RecordAssistantMove and session_write
+	// firing in the common, non-revised case). The other N-1 calls' usage
+	// is captured separately and does not go through this field at all —
+	// RecordAssistantMove in moves.go takes its own per-call
+	// corellm.Response snapshot, and turnJournal.flushHeld /
+	// RecordPartial fire the usage hook directly from that snapshot the
+	// moment a non-final assistant_move is persisted. See moves.go's file
+	// header, "USAGE CAPTURE".
 	lastResp corellm.Response
 
 	// capturer is the optional generated-image auto-capture pipeline
@@ -838,8 +862,13 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 	// One model fire = one move. Park its text; the journal decides
 	// whether it becomes an assistant_move or, if nothing follows it,
 	// the turn's `final` (model-moves-transcript-01PMCH01 WP02).
+	//
+	// resp travels with it (fix/usage-persists-on-every-move) so the
+	// journal can fire usage for THIS call specifically when it persists
+	// the move — not by re-reading a.lastResp later, which by then may
+	// already hold a DIFFERENT Generate call's response.
 	if recordMoves {
-		a.moves.RecordAssistantMove(ctx, out.Content)
+		a.moves.RecordAssistantMove(ctx, out.Content, resp, a.ProviderKind(), a.ActiveModelID())
 	}
 	return out, nil
 }
