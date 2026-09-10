@@ -65,4 +65,14 @@ var (
 	// running. Advance-only semantics: a finalized run cannot be re-patched.
 	// (context-bootstrap-harness-integration WP01)
 	ErrBootstrapRunFinalized = errors.New("fleet: bootstrap run is finalized (409 run_finalized)")
+
+	// ErrUserNotProvisioned is returned by enrollIdentity when POST
+	// /api/v1/enroll responds 403 with code "user_not_provisioned": the
+	// caller authenticated with Zitadel (valid access token), but that
+	// identity has no corresponding Fleet account. This is TERMINAL — the
+	// same tokens will 403 on every retry until the user finishes signup
+	// out-of-band at the SPA host. Callers that poll (e.g. UserMenu's
+	// identity refresh) must treat this as a stop condition, not a
+	// transient failure to back off from.
+	ErrUserNotProvisioned = errors.New("fleet: this Zitadel user has no Fleet account; finish signup at the SPA host")
 )
