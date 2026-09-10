@@ -30,6 +30,7 @@
 package ci_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -1394,6 +1395,145 @@ func TestAuditStoreBeforeRetentionGate_PlantedStoreRemovalFails(t *testing.T) {
 	}
 	if !strings.Contains(out, "NewLocalRetentionScheduler(") {
 		t.Fatalf("gate failed, but its output does not mention the expected defect "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+}
+
+// TestStructuredOutputRowParityGate_PlantedEncoderDropFires is the
+// planted-violation proof for check-structured-output-row-parity.sh
+// (G-3, structured-output-is-reachable-01PMZE14 UNIT-6/WP09).
+//
+// OVERLAY, NOT read-mutate-restore (PR #323 review; reproduced, not
+// hypothesised: re-running the original version of this test with
+// `-timeout 1s` killed the process while it was blocked inside the
+// nested `go test ./core/llm/...` subprocess, and `git diff` showed
+// core/llm/gemini/wire.go left carrying the planted mutation —
+// `_ = translated // ZZ_GATE_PROBE: schema silently dropped` — i.e.
+// the exact Gemini-structured-output-disabling defect this probe
+// exists to catch, persisted into the working tree. A bare `defer`
+// (or `t.Cleanup`) cannot run after a hard kill — SIGKILL, OOM, or
+// CI's own `-timeout 25m` on a cold-cache run (pr.yml:616) — so the
+// restore is not guaranteed. CLAUDE.md already names this class: an
+// interrupted run left an orphaned `ci.test` binary that mutated a
+// committed `dump.sql`.
+//
+// The fix is `go test -overlay=<json>`: write the MUTATED content to
+// a scratch file under t.TempDir() (never the real path), point an
+// overlay JSON's "Replace" map from the real
+// core/llm/gemini/wire.go at that scratch file, and pass
+// WP09_G3_OVERLAY through runGateEnv so
+// check-structured-output-row-parity.sh forwards it as `go test
+// -overlay=`. The real file is never opened for writing at any point
+// in this test, so the hazard class disappears rather than being
+// narrowed — a kill at any instant leaves core/llm/gemini/wire.go
+// exactly as git has it, and t.TempDir()'s own cleanup (which also
+// isn't kill-safe, but touches only a scratch dir, never a tracked
+// file) is the only residue possible.
+//
+// NOTE for future gate authors: SEVEN other planted-violation tests in
+// this file still carry a hazard this test used to have, in two
+// different shapes — this fix does NOT convert any of them (doing so
+// without studying each one's gate risks silently breaking a working
+// planted-violation proof, which is worse than an unsafe-but-correct
+// one); recorded here as a follow-up with the overlay technique named
+// as the fix.
+//
+// FIVE use the bare os.WriteFile + defer pattern this test used to
+// use — a hard kill (SIGKILL, OOM, a CI -timeout) skips the defer and
+// leaves the real file mutated, exactly as reproduced above:
+//   - TestToolContainmentUnconditionalGate_PlantedConditionalWrapperFails
+//     -> core/rpc/api.go
+//   - TestAuditStoreBeforeRetentionGate_PlantedStoreRemovalFails
+//     -> core/rpc/api.go
+//   - TestBundleVerifyOrderingGate_PlantedNilSignatureFires
+//     -> core/trust/bundleadapter.go
+//   - TestBundleChannelKindsSyncGate_PlantedDriftFires
+//     -> frontend/src/views/bundles/BundlesView.vue
+//   - TestServeDispatchDriftGate_PlantedReverseCaseFires
+//     -> core/serve/server.go (this one's own docstring already says
+//     it mirrors the two core/rpc/api.go probes above — it self-
+//     identifies as the same class and was simply missing from an
+//     earlier, undercounted version of this note)
+//
+// TWO more mutate real agentgraph paths through the JOURNALED plant()
+// helper instead — safer than the five above, since plantguard_test.go
+// can detect and roll back an unclean plant left by a killed process,
+// but still NOT overlay-safe (plant() still writes the real file; it
+// just also journals the write first so recovery is possible after
+// the fact, rather than making the mutation impossible to begin with):
+//   - TestCheckDeclaredOutputPorts_IgnoresPortsGenWrites creates
+//     core/agentgraph/nodes/manifests/zz_gate_probe_gen.yaml AND
+//     appends to core/agentgraph/ports_gen.go. The second target is
+//     worth flagging specifically: ports_gen.go is a GENERATED file,
+//     so a mutation stranded there by an unrecovered kill would trip
+//     bash scripts/ci/check-codegen.sh as drift on top of leaving the
+//     ports-declaration gate itself silently poisoned — a second,
+//     unrelated failure mode compounding the first.
+func TestStructuredOutputRowParityGate_PlantedEncoderDropFires(t *testing.T) {
+	root := repoRoot(t)
+	wirePath := filepath.Join(root, "core", "llm", "gemini", "wire.go")
+
+	orig, err := os.ReadFile(wirePath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", wirePath, err)
+	}
+
+	const target = "\t\t\tif len(req.ResponseFormat.Schema) > 0 {\n" +
+		"\t\t\t\ttranslated, err := translateSchemaForGemini(req.ResponseFormat.Schema)\n" +
+		"\t\t\t\tif err != nil {\n" +
+		"\t\t\t\t\treturn nil, err\n" +
+		"\t\t\t\t}\n" +
+		"\t\t\t\tgc.ResponseSchema = translated\n" +
+		"\t\t\t}\n"
+	if !strings.Contains(string(orig), target) {
+		t.Fatalf("expected block not found in wire.go — the WP04 arm may have moved; "+
+			"update this test and the gate together:\n%q", target)
+	}
+	// Drop ONLY the schema assignment — the ResponseMimeType line just
+	// above it, and gemini.yaml's structured_output rows, both stay
+	// untouched. The gate's job is to notice that the row still
+	// promises a schema-carrying response while the encoder that used
+	// to produce one now silently no-ops. This mutated content is
+	// written ONLY to a scratch file below — never to wirePath itself.
+	mutated := "\t\t\tif len(req.ResponseFormat.Schema) > 0 {\n" +
+		"\t\t\t\ttranslated, err := translateSchemaForGemini(req.ResponseFormat.Schema)\n" +
+		"\t\t\t\tif err != nil {\n" +
+		"\t\t\t\t\treturn nil, err\n" +
+		"\t\t\t\t}\n" +
+		"\t\t\t\t_ = translated // ZZ_GATE_PROBE: schema silently dropped\n" +
+		"\t\t\t}\n"
+	mutatedContent := strings.Replace(string(orig), target, mutated, 1)
+
+	scratch := t.TempDir()
+	scratchWire := filepath.Join(scratch, "wire_zz_gate_probe.go")
+	if err := os.WriteFile(scratchWire, []byte(mutatedContent), 0o644); err != nil {
+		t.Fatalf("writing scratch mutated wire.go: %v", err)
+	}
+
+	overlay := struct {
+		Replace map[string]string
+	}{Replace: map[string]string{wirePath: scratchWire}}
+	overlayJSON, err := json.Marshal(overlay)
+	if err != nil {
+		t.Fatalf("marshalling overlay: %v", err)
+	}
+	overlayPath := filepath.Join(scratch, "overlay.json")
+	if err := os.WriteFile(overlayPath, overlayJSON, 0o644); err != nil {
+		t.Fatalf("writing overlay.json: %v", err)
+	}
+
+	// No defer/restore: wirePath was never written. A kill at any
+	// point up to here leaves nothing but an OS-cleaned scratch dir.
+	code, out := runGateEnv(t, "check-structured-output-row-parity.sh", root, map[string]string{
+		"WP09_G3_OVERLAY": overlayPath,
+	})
+	if code == 0 {
+		t.Fatalf("check-structured-output-row-parity.sh exited 0 with gemini's json_schema arm "+
+			"silently dropping the schema (via overlay) while gemini.yaml still advertises "+
+			"structured_output: true — the gate cannot fail.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "gemini") {
+		t.Fatalf("gate failed, but its output does not mention gemini "+
 			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
 	}
 }
