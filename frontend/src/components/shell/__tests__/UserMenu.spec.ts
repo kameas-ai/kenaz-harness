@@ -226,4 +226,76 @@ describe('UserMenu', () => {
     await flushPromises();
     expect(signOut).toHaveBeenCalledOnce();
   });
+
+  // ── Poll stop-vs-backoff (fleet-enroll-not-provisioned) ────────────────
+  //
+  // fleetSignedIn() is token-expiry based, so it keeps reporting true even
+  // when enroll has never succeeded (SaveTokens persists before enroll
+  // runs — core/rpc/views/settings/fleet.go FleetSignIn). Before this fix,
+  // the 15s interval below hit /api/v1/enroll forever with zero backoff,
+  // 403ing every time, confirmed in production as 60+ consecutive
+  // fleet.rpc.enroll.start/.failed pairs. These tests assert the call
+  // count itself stops growing — the observable defect — not just that
+  // an error was logged.
+
+  it('stops polling after a terminal user_not_provisioned error', async () => {
+    const client = createFakeHarnessClient({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      settings: {
+        fleetProfile: vi.fn(async () => prodProfile),
+        fleetSignedIn: vi.fn(async () => true),
+        fleetSignIn: vi.fn(async () => aliceIdentity),
+        fleetSignOut: vi.fn(async () => {}),
+        fleetRefreshIdentity: vi.fn(async () => {
+          throw new Error(
+            'fleet: this Zitadel user has no Fleet account; finish signup at the SPA host ' +
+              '(server: This Zitadel user has no Fleet account. Finish signup at the SPA host.)',
+          );
+        }),
+      } as any,
+    });
+    const refreshSpy = client.settings.fleetRefreshIdentity as unknown as ReturnType<typeof vi.fn>;
+
+    mountUserMenu(client);
+    await flushPromises();
+    // The terminal error surfaces on the very first (mount-time) refresh,
+    // and stopPolling() runs from inside that same call's catch handler —
+    // so the interval never gets a chance to fire even once.
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+
+    // Several intervals' worth of time pass. Before this fix, each one
+    // would have re-hit fleetRefreshIdentity (-> /api/v1/enroll) with no
+    // backoff; the call count must stay frozen at 1 forever instead.
+    await vi.advanceTimersByTimeAsync(15000 * 5);
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps polling through a transient (non-terminal) error', async () => {
+    const client = createFakeHarnessClient({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      settings: {
+        fleetProfile: vi.fn(async () => prodProfile),
+        fleetSignedIn: vi.fn(async () => true),
+        fleetSignIn: vi.fn(async () => aliceIdentity),
+        fleetSignOut: vi.fn(async () => {}),
+        fleetRefreshIdentity: vi.fn(async () => {
+          throw new Error('fleet: server unreachable (check VPN connection, then retry)');
+        }),
+      } as any,
+    });
+    const refreshSpy = client.settings.fleetRefreshIdentity as unknown as ReturnType<typeof vi.fn>;
+
+    mountUserMenu(client);
+    await flushPromises();
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(15000);
+    const callsAfterFirstTick = refreshSpy.mock.calls.length;
+    expect(callsAfterFirstTick).toBeGreaterThanOrEqual(2);
+
+    // A network blip must keep retrying — the poll only stops for the
+    // terminal user_not_provisioned condition.
+    await vi.advanceTimersByTimeAsync(15000 * 3);
+    expect(refreshSpy.mock.calls.length).toBeGreaterThan(callsAfterFirstTick);
+  });
 });

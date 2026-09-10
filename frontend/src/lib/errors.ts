@@ -197,6 +197,38 @@ export function friendlyUnsupportedFeatureError(err: unknown): string | null {
   return `Feature "${parsed.feature}" is not supported by model "${parsed.modelId}".`;
 }
 
+// ── ErrUserNotProvisioned (fleet-enroll-not-provisioned) ─────────────────
+
+/**
+ * isUserNotProvisionedError matches core/fleet.ErrUserNotProvisioned's
+ * Error() text: "fleet: this Zitadel user has no Fleet account; finish
+ * signup at the SPA host". That prefix is the STABLE sentinel-wrapper text
+ * from `fmt.Errorf("%w (server: %s)", ErrUserNotProvisioned, msg)` in
+ * core/fleet/identity.go — match against it, never against the raw fleet
+ * server JSON body appended after it, which is not part of the contract.
+ *
+ * TERMINAL, not transient: the same tokens will 403 with this code on
+ * every retry until the user finishes signup out-of-band at the SPA host.
+ * Callers that poll (UserMenu's periodic identity refresh) must stop
+ * rather than back off — see UserMenu.vue's refresh().
+ */
+export function isUserNotProvisionedError(err: unknown): boolean {
+  const raw = toErrorString(err);
+  return raw.includes('this Zitadel user has no Fleet account');
+}
+
+/**
+ * friendlyUserNotProvisionedError returns an actionable message for
+ * ErrUserNotProvisioned, or null for unrelated errors. Callers that also
+ * have a FleetProfileInfo (fetched on every AccountPanel mount) should
+ * render profile.fleetBaseUrl as a real link alongside this text rather
+ * than concatenating the URL into the string — see AccountPanel.vue.
+ */
+export function friendlyUserNotProvisionedError(err: unknown): string | null {
+  if (!isUserNotProvisionedError(err)) return null;
+  return "You signed in with Zitadel, but this account hasn't finished Fleet signup yet. Finish signup, then sign in again.";
+}
+
 // ── Structured RPC error envelope (agent-loop-robustness-parity WP08) ────
 
 /**
@@ -351,6 +383,8 @@ export function friendly(err: unknown): string {
   if (attachment) return attachment;
   const unsupported = friendlyUnsupportedFeatureError(err);
   if (unsupported) return unsupported;
+  const notProvisioned = friendlyUserNotProvisionedError(err);
+  if (notProvisioned) return notProvisioned;
   if (isServedUnsupportedError(err)) return err.friendly();
   const raw = toErrorString(err);
   if (!raw) return 'An unexpected error occurred.';
