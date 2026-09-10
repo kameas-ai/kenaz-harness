@@ -173,4 +173,53 @@ describe('AccountPanel', () => {
 
     expect(wrapper.find('[data-testid="env-badge"]').exists()).toBe(false);
   });
+
+  // ── fleet-enroll-not-provisioned ────────────────────────────────────────
+  //
+  // Before this fix, enrollIdentity's raw-body error (no code branch) fell
+  // through humanizeFleetError's `return raw;` and the panel rendered the
+  // literal 403 JSON body to the user. This pins that a sign-in failing
+  // with ErrUserNotProvisioned now renders an actionable message + a real
+  // link built from FleetProfileInfo.fleetBaseUrl, not the raw response.
+
+  it('6. user_not_provisioned sign-in error renders an actionable link, not raw JSON', async () => {
+    const rawServerBody =
+      '{"code":"user_not_provisioned","message":"This Zitadel user has no Fleet account. ' +
+      'Finish signup at the SPA host.","details":{"zitadel_user_id":"test-user-id"}}';
+    const client = createFakeHarnessClient({
+      settings: {
+        fleetProfile: vi.fn(async () => prodProfile),
+        fleetSignedIn: vi.fn(async () => false),
+        fleetSignIn: vi.fn(async () => {
+          // Mirrors core/fleet/identity.go's wrapped sentinel: stable
+          // prefix from ErrUserNotProvisioned, raw server body appended
+          // after "(server: ...)" the way mapSiteError-style wrapping does.
+          throw new Error(
+            'fleet: this Zitadel user has no Fleet account; finish signup at the SPA host ' +
+              `(server: ${rawServerBody})`,
+          );
+        }),
+        fleetSignOut: vi.fn(async () => {}),
+        fleetRefreshIdentity: vi.fn(async () => mockIdentity),
+      } as any,
+    });
+    const wrapper = mount(AccountPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+
+    await wrapper.find('[data-testid="sign-in-btn"]').trigger('click');
+    await flushPromises();
+
+    const errorMsg = wrapper.find('[data-testid="error-msg"]');
+    expect(errorMsg.exists()).toBe(true);
+    // The raw JSON body must never reach the DOM.
+    expect(errorMsg.text()).not.toContain('user_not_provisioned');
+    expect(errorMsg.text()).not.toContain('zitadel_user_id');
+    expect(errorMsg.text()).not.toContain('{');
+
+    const link = wrapper.find('[data-testid="finish-signup-link"]');
+    expect(link.exists()).toBe(true);
+    expect(link.attributes('href')).toBe(prodProfile.fleetBaseUrl);
+  });
 });
