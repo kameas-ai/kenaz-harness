@@ -78,61 +78,16 @@ const scheduledChatRunsProvenanceNote = "sessions/0340-scheduled-chat-runs-creat
 	"to scheduled_chat_runs (created by 0325, unchanged since)."
 
 var expectedChangedTables = map[string][]string{
-	"v0.73.0": {
-		// `tasks` ONLY, same as v0.72.0. This is assertTasksTableMigrated's
-		// own probe insert -- a test artifact, not a schema change.
-		//
-		// v0.73.0 DID register a migration (sessions/0337-repair-checkpoint-rows,
-		// the transcript repair), but it is a DELETE against rows that do not
-		// exist in this snapshot chain -- no committed snapshot carries
-		// checkpoint junk -- so it changes no row here. Its ledger row is the
-		// only delta from v0.72.0's dump.
-		//
-		// scheduled_chat_runs is deliberately absent: sessions/0340's DEFAULT
-		// backfill has nothing left to do. Copying a previous tag's entry
-		// wholesale would silently excuse a real future change to it.
-		//
-		// Still owed (owner: alec): stop the probe writing to a watched table
-		// so a release needs no hand-written entry at all. Third tag running.
-		"tasks",
-	},
-	"v0.72.0": {
-		// ONLY `tasks` this time, NOT the scheduled_chat_runs/tasks pair
-		// v0.70.0 and v0.71.0 needed — v0.72.0 registered no migration at
-		// all (its dump.sql is byte-identical to v0.71.0's), so
-		// sessions/0340's DEFAULT backfill has nothing left to do. What
-		// remains is assertTasksTableMigrated's OWN probe insert, which
-		// is a test artifact, not a schema change.
-		//
-		// That distinction is the whole reason this entry is one element
-		// and not two: listing scheduled_chat_runs here would silently
-		// excuse a real future change to it.
-		//
-		// The durable fix is still owed: stop the probe writing to a
-		// watched table, so a no-migration release needs no entry here at
-		// all. Until then every tag needs this by hand, and a forgotten
-		// entry fails the release rather than hiding a defect — which is
-		// the safe direction, but it is friction, not a design.
-		// Owner: alec. Dated 2026-08-25.
-		"tasks",
-	},
 	"v0.71.0": {
-		// Same two reasons as v0.70.0 below, and this pair will now
-		// repeat for EVERY future tag:
+		// scheduled_chat_runs — sessions/0340's DEFAULT backfill. See
+		// v0.70.0 below for the full rationale.
 		//
-		//   scheduled_chat_runs — sessions/0340's DEFAULT backfill.
-		//   tasks               — assertTasksTableMigrated's own probe
-		//                         insert, not a migration.
-		//
-		// That recurrence is itself the finding. Every release from here
-		// needs both lines added by hand or TestUpgradePath goes red on
-		// a correct snapshot, which trains whoever cuts the next one to
-		// add entries reflexively rather than read them. The durable fix
-		// is to stop the probe writing to a table the digest check
-		// watches — assert an exact row count, or probe a table no
-		// migration touches. Owner: alec. Dated 2026-08-23.
+		// This entry used to also carry "tasks", and its comment recorded
+		// that the pair "will now repeat for EVERY future tag" and that
+		// the durable fix was owed. That fix has now landed: `tasks` is in
+		// the unconditional test-writer set with an exact row-count
+		// assertion, so no tag needs to declare it by hand again.
 		"scheduled_chat_runs",
-		"tasks",
 	},
 	"v0.70.0": {
 		// sessions/0340 (model-scheduled-jobs-01PMSJ01 WP09) ALTERs
@@ -155,25 +110,13 @@ var expectedChangedTables = map[string][]string{
 		// load-bearing, not cosmetic — GateScheduledChatExecute fails
 		// closed only for created_by == "model".
 		"scheduled_chat_runs",
-		// NOT a migration writing rows — this one is the TEST's own
-		// probe. tasks/1200-tasks-init (subagent-control-and-background-
-		// tasks-01PMZB11 UNIT-2) creates the table empty, and then
-		// assertTasksTableMigrated inserts through the production writer
-		// coretasks.NewSQLiteStore(...) to prove the table is actually
-		// usable and not merely present.
-		//
-		// For v0.63.0..v0.69.0 that insert is invisible here: `tasks`
-		// does not exist in those dumps, so there is no before-state to
-		// diff. v0.70.0 is the first snapshot containing the table, so
-		// the probe's row shows up as 0 -> 1 and the test correctly
-		// refuses it until declared.
-		//
-		// Declaring it is right, but note what it costs: a real
-		// migration that writes to `tasks` in a future release will now
-		// be masked for THIS tag. If one lands, split the probe onto a
-		// table nobody migrates, or assert the row count exactly rather
-		// than allowlisting the table.
-		"tasks",
+		// This entry used to also carry "tasks" — the TEST's own probe row
+		// from assertTasksTableMigrated, v0.70.0 being the first snapshot
+		// whose dump contains the table. That comment closed by naming the
+		// durable fix: "assert the row count exactly rather than
+		// allowlisting the table." That is now what happens, so the
+		// per-tag declaration is gone and a real migration writing to
+		// `tasks` is no longer masked for this tag.
 	},
 	"v0.63.0": {
 		// sessions/0333-transcript-moves adds nullable columns to
@@ -412,7 +355,43 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 	// workflow_versions), unconditionally on every tag for the same
 	// reason "sessions" is: this test itself is the writer, not a
 	// migration.
-	changed := map[string]bool{"harness_migrations": true, "sessions": true, "workflows": true, "workflow_versions": true}
+	// "tasks" joins this set for the same reason as "sessions": the
+	// writer is assertTasksTableMigrated's probe insert, not a
+	// migration. It was previously declared per-tag in
+	// expectedChangedTables, which meant every release had to add the
+	// line by hand or TestUpgradePath went red on a correct snapshot —
+	// four tags running (v0.70.0, v0.71.0, v0.72.0, v0.73.0), each with
+	// a comment saying the durable fix was still owed.
+	//
+	// Blanket-exempting the table would mask a real future migration
+	// that writes rows to it, which is precisely what v0.70.0's comment
+	// warned about. So this exemption is paired with an EXACT row-count
+	// assertion below (before+1, the probe's single row), mirroring what
+	// "sessions" already does. A migration that adds or removes a tasks
+	// row still fails the test; only the probe's own write is tolerated.
+	//
+	// COST OF THIS ENTRY — read before assuming `tasks` is covered.
+	// Membership here waives the content-DIGEST check for `tasks`
+	// permanently, on every tag. The row-count assertion below catches a
+	// migration that ADDS or REMOVES rows; it cannot see one that MUTATES
+	// an existing row without changing the count — an UPDATE, or a column
+	// added with a backfilled NOT NULL DEFAULT. That is not hypothetical:
+	// it is exactly the sessions/0340 shape that put `scheduled_chat_runs`
+	// in this map in the first place.
+	//
+	// This blind spot is not new here. `sessions`, `workflows` and
+	// `workflow_versions` have carried the identical row-count-only
+	// treatment since before this change, so `tasks` is being brought into
+	// line with an accepted trade-off rather than given a weaker one — and
+	// the per-tag entries this replaces waived BOTH checks, so nothing
+	// regressed. But "row count is asserted" is not "the table is
+	// covered," and a future reader should not read it that way.
+	//
+	// The honest fix is to compute the post-Open digest with the probe
+	// row's primary key excluded and compare it to the pre-Open digest,
+	// which would close this for all four tables at once. Out of scope for
+	// a chore: snapshot PR. Owner: alec. Dated 2026-09-09.
+	changed := map[string]bool{"harness_migrations": true, "sessions": true, "workflows": true, "workflow_versions": true, "tasks": true}
 	for _, tbl := range expectedChangedTables[tag] {
 		changed[tbl] = true
 	}
@@ -430,6 +409,25 @@ func testUpgradeSnapshot(t *testing.T, tag string) {
 		}
 		if before.Digest != after.Digest {
 			t.Errorf("table %s content digest changed (not in expectedChangedTables[%q]): a seeded row was altered", table, tag)
+		}
+	}
+	// Same shape as the sessions check below, and the reason "tasks" can
+	// safely sit in `changed` above: the blanket digest check is waived
+	// for this table, but the row count is not. assertTasksTableMigrated
+	// inserts exactly one probe row, so anything other than before+1
+	// means a migration wrote to `tasks` and must be accounted for
+	// deliberately rather than absorbed by an allowlist entry.
+	//
+	// Tags before v0.70.0 have no `tasks` table in their dump, so there
+	// is no before-state to diff — the `ok` guard skips them, exactly as
+	// the sessions check guards itself.
+	if before, ok := preOpen["tasks"]; ok {
+		after, present := postOpen["tasks"]
+		if !present {
+			t.Errorf("tasks table present before Open, missing after")
+		} else if after.RowCount != before.RowCount+1 {
+			t.Errorf("tasks row count = %d after Open+probe-insert, want exactly %d (before + assertTasksTableMigrated's one probe row)",
+				after.RowCount, before.RowCount+1)
 		}
 	}
 	if before, ok := preOpen["sessions"]; ok {
