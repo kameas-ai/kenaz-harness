@@ -527,6 +527,41 @@
       "primary_auth": "none"
     },
     {
+      "id": "computer-use",
+      "display_name": "Computer Use",
+      "description": "Give the model direct control of this computer: screenshot the screen, move and click the mouse, type, and press keys. Implements Anthropic's computer-use tool shape locally via nut.js. Controls YOUR desktop — not a sandboxed browser.",
+      "category": "automation",
+      "aliases": [
+        "computer use",
+        "desktop control",
+        "screen control",
+        "mouse and keyboard",
+        "gui automation"
+      ],
+      "command": [
+        "npx",
+        "-y",
+        "computer-use-mcp@1.8.0"
+      ],
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://github.com/domdomegg/computer-use-mcp",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Gives the model COMPLETE control of your computer — screen, mouse and keyboard. The upstream author's own warning: models \"make frequent mistakes and are vulnerable to prompt injections\\u2026 this could do a lot of damage\", and advises treating it \"like giving a hyperactive toddler access to your computer\" — supervise closely, and prefer a sandboxed user account. Anything the model reads on screen or from a page can attempt to steer it. First npm fetch can take 10–30 s; nut.js pulls native binaries. macOS additionally requires Accessibility and Screen Recording permission for the spawning app.",
+      "primary_auth": "none"
+    },
+    {
       "id": "notion",
       "display_name": "Notion",
       "description": "Read and write Notion pages, databases, blocks, and comments. Sign in with Notion — no token to paste.",
