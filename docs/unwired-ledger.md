@@ -309,6 +309,49 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-09-09 (vm-execution-surface-truth-01PMZD14 WP05) · `approvalGateFrom` — HV-01, no `PromptSurface` variant for a model call
+
+`cmd/harness-vm/approvalgate.go`'s `approvalGateFrom` is the one function a
+task-path call site would use to read the run's approval gate and park on
+`RequestInteractive`. It has zero non-test callers — the four hits are all
+in `approvalgate_test.go`, which supplies its own executor and calls it
+directly, so coverage is real and proves nothing about reachability. The
+writer half of the seam (`withApprovalGate`, `cmd/harness-vm/main.go`) is
+wired; only the reader has no caller. Superseded the broader
+2026-08-20 UNIT-2/UNIT-4 scope-cut entry this mission's WP01 filed — UNIT-2
+(WP04 + WP05) has now landed: `contracts/vm-rpc.md`'s self-contradiction is
+corrected, the grant is self-describing, and this is the dated justification
+that correction promised.
+
+- **Blocker:** no `cedar.PromptSurface` variant exists for a model call.
+  `core/policy/cedar/prompt.go`'s `PromptSurface` is a closed four-variant
+  union (`Bash`/`FS`/`Cred`/`Tool`), *"Exactly one MUST be non-nil"*, enforced
+  by `Family()` which returns empty for zero or multiple variants. Adding a
+  fifth variant means a new family, the host modal that renders it, and a
+  wire payload change (`vm-execution-surface-truth-01PMZD14/spec.md` R-2) —
+  a product feature with a product owner, not a wiring fix. The in-VM task
+  graph (`plan` → `run`) also has no tool dispatch of its own to raise
+  anything through.
+- **Owner:** alecfeeman.
+- **Date:** 2026-09-09.
+
+### 2026-09-09 (vm-execution-surface-truth-01PMZD14 WP05) · `approvalBridge.runStatus` — HV-05, the wire has no status field and the contract forbids adding one
+
+`cmd/harness-vm/approvalgate.go`'s `approvalBridge.runStatus()` derives
+`waiting_for_input` / `running` from approval state. It has zero non-test
+callers — six hits, all in `approvalgate_test.go`. Superseded the broader
+2026-08-20 UNIT-2/UNIT-4 scope-cut entry this mission's WP01 filed, now that
+UNIT-2 (WP04 + WP05) has landed.
+
+- **Blocker:** the wire has no status field, and `contracts/vm-rpc.md`'s
+  "Run status is DERIVED, not a wire field" explicitly forbids adding one —
+  the host already computes the same value independently from the
+  `task.approval_requested` / `task.approval_resolved` event pair. The named
+  future consumer is the deferred `agent_feed.*` push stream
+  (`contracts/vm-rpc.md`'s "Deferred (not in this surface)" list).
+- **Owner:** alecfeeman.
+- **Date:** 2026-09-09.
+
 ### 2026-08-23 · WP20 (UNIT-15) — frontend props and exports with no consumer, five NARROWed after wiring the two that had a source
 
 `controls-and-readouts-that-tell-the-truth-01PMZ808` WP20. Spec §1.15 named
@@ -2684,51 +2727,6 @@ fix could have taken) and does not build the nil-optional-dependency gate.
   `TestNewLLMExecutorPolicyGuardCanDeny`/`...AllowsWhenNotApplicable` tests,
   not by a standing gate that would catch a *future* nil-optional-dependency
   regression on this exact field.
-
-### 2026-08-20 (vm-execution-surface-truth-01PMZD14) · UNIT-2 cut this run — the approval capability grant still overclaims (HV-01, HV-02, HV-05, HV-08)
-
-This mission's floor (UNIT-0 + UNIT-1 + UNIT-PI) landed; UNIT-2 through
-UNIT-6 were cut for scope in the run that produced UNIT-1, per the mission's
-own cut-order rule (`tasks.md` "Cut order", item 5: *"If UNIT-2 is cut,
-UNIT-0's record must say so explicitly ... an undated known lie is what this
-ritual exists to end"*). Recording that explicitly here, since UNIT-2's own
-WP05 was the unit that would have filed the dated justifications for
-`approvalGateFrom` and `runStatus` directly.
-
-Current state, unchanged by this run: `cmd/harness-vm/main.go` grants the
-`approval` capability whenever `readservice.go`'s `promptRegistry()` is
-non-nil — which is true on every boot where the read-service bootstrap
-succeeded, since `core/rpc/api.go`'s `rpc.New` assigns the prompt registry
-unconditionally. **No gate site in this process can raise an approval**:
-`approvalGateFrom` (`cmd/harness-vm/approvalgate.go`) and
-`approvalBridge.runStatus()` (same file) each have zero non-test callers
-(verified by this mission's WP01 observation, re-confirmed identical to the
-spec's own RAN ledger). `contracts/vm-rpc.md:474-477` still asserts, in the
-present tense, a call site that does not exist and contradicts itself three
-lines later.
-
-- **Blocker (HV-01 / `approvalGateFrom`):** no `cedar.PromptSurface` variant
-  exists for a model call — `core/policy/cedar/prompt.go`'s `PromptSurface`
-  is a closed four-variant union (`Bash`/`FS`/`Cred`/`Tool`) enforced by
-  `Family()`. Adding a fifth variant is a product feature (a new host modal,
-  a wire payload change) with a product owner, not a wiring fix
-  (`vm-execution-surface-truth-01PMZD14/spec.md` R-2).
-- **Blocker (HV-05 / `runStatus`):** the wire has no status field and
-  `contracts/vm-rpc.md:436-438` explicitly forbids adding one (*"Run status
-  is DERIVED, not a wire field"*); the named future consumer is the deferred
-  `agent_feed.*` push stream (`contracts/vm-rpc.md:482-483`).
-- **Blocker (HV-02, the grant itself / HV-08, the contract's stale smoke
-  probe):** a genuine product call — whether the `approval` capability
-  should be granted at all when nothing in the process can raise one (escalation
-  E-002 in the mission spec) — was not answered before this run's scope cut.
-  The spec's default disposition is (c): make the grant self-describing
-  ("this process is listening") rather than narrowing it to never-granted.
-- **Owner / deleting change:** land `vm-execution-surface-truth-01PMZD14`
-  UNIT-2 (WP04 + WP05, `contracts/vm-rpc.md`'s two corrections plus
-  `main.go:145-155`'s comment and the approval-grant self-description),
-  which deletes this entry and files HV-01/HV-05's dated justifications
-  directly. Owner: alecfeeman. Filed 2026-08-20 by the same mission's WP01
-  scope-cut record.
 
 ### 2026-08-20 (vm-execution-surface-truth-01PMZD14) · UNIT-4 cut this run — `cmd/harness-vm` boots `core.New → Start → rpc.New`, the reverse of both shipped entry points (HV-N1)
 
