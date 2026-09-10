@@ -1398,6 +1398,76 @@ func TestAuditStoreBeforeRetentionGate_PlantedStoreRemovalFails(t *testing.T) {
 	}
 }
 
+// TestStructuredOutputRowParityGate_PlantedEncoderDropFires is the
+// planted-violation proof for check-structured-output-row-parity.sh
+// (G-3, structured-output-is-reachable-01PMZE14 UNIT-6/WP09). The
+// shared plant() helper's append-or-create mode cannot express this
+// defect class either — it needs an EXISTING assignment
+// (`gc.ResponseSchema = translated`) replaced with a no-op while
+// gemini.yaml's provider-default `structured_output: true` row stays
+// untouched, reproducing exactly the class the mission's own finding
+// names: "gemini's rows are honest only because its adapter does
+// nothing" (tasks.md UNIT-6) — a row that keeps claiming a capability
+// after the one arm backing it silently stops working. Mirrors
+// TestToolContainmentUnconditionalGate_PlantedConditionalWrapperFails,
+// TestAuditStoreBeforeRetentionGate_PlantedStoreRemovalFails and
+// TestBundleVerifyOrderingGate_PlantedNilSignatureFires above: its own
+// read-mutate-restore cycle on core/llm/gemini/wire.go directly.
+func TestStructuredOutputRowParityGate_PlantedEncoderDropFires(t *testing.T) {
+	root := repoRoot(t)
+	wirePath := filepath.Join(root, "core", "llm", "gemini", "wire.go")
+
+	orig, err := os.ReadFile(wirePath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", wirePath, err)
+	}
+
+	const target = "\t\t\tif len(req.ResponseFormat.Schema) > 0 {\n" +
+		"\t\t\t\ttranslated, err := translateSchemaForGemini(req.ResponseFormat.Schema)\n" +
+		"\t\t\t\tif err != nil {\n" +
+		"\t\t\t\t\treturn nil, err\n" +
+		"\t\t\t\t}\n" +
+		"\t\t\t\tgc.ResponseSchema = translated\n" +
+		"\t\t\t}\n"
+	if !strings.Contains(string(orig), target) {
+		t.Fatalf("expected block not found in wire.go — the WP04 arm may have moved; "+
+			"update this test and the gate together:\n%q", target)
+	}
+	// Drop ONLY the schema assignment — the ResponseMimeType line just
+	// above it, and gemini.yaml's structured_output rows, both stay
+	// untouched. The gate's job is to notice that the row still
+	// promises a schema-carrying response while the encoder that used
+	// to produce one now silently no-ops.
+	mutated := "\t\t\tif len(req.ResponseFormat.Schema) > 0 {\n" +
+		"\t\t\t\ttranslated, err := translateSchemaForGemini(req.ResponseFormat.Schema)\n" +
+		"\t\t\t\tif err != nil {\n" +
+		"\t\t\t\t\treturn nil, err\n" +
+		"\t\t\t\t}\n" +
+		"\t\t\t\t_ = translated // ZZ_GATE_PROBE: schema silently dropped\n" +
+		"\t\t\t}\n"
+	newContent := strings.Replace(string(orig), target, mutated, 1)
+
+	if err := os.WriteFile(wirePath, []byte(newContent), 0o644); err != nil {
+		t.Fatalf("writing mutated wire.go: %v", err)
+	}
+	defer func() {
+		if err := os.WriteFile(wirePath, orig, 0o644); err != nil {
+			t.Errorf("restoring wire.go: %v — WORKING TREE IS DIRTY", err)
+		}
+	}()
+
+	code, out := runGate(t, "check-structured-output-row-parity.sh", root)
+	if code == 0 {
+		t.Fatalf("check-structured-output-row-parity.sh exited 0 with gemini's json_schema arm "+
+			"silently dropping the schema while gemini.yaml still advertises structured_output: true "+
+			"— the gate cannot fail.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "gemini") {
+		t.Fatalf("gate failed, but its output does not mention gemini "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+}
+
 // TestBundleVerifyOrderingGate_PlantedNilSignatureFires is the
 // planted-violation proof for check-bundle-verify-ordering.sh (G-1,
 // bundle-download-and-verify-01PMZ909 UNIT-9, spec §2 / §7 G-1). The
