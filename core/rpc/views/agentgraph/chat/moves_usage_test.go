@@ -655,3 +655,206 @@ func TestUsage_RoutedGraphFinalRowGetsTheChatMovesUsageNotTheExitGates(t *testin
 		t.Errorf("aggregate cost = %v, want the chat move's %v", agg.CostUSD, chatCost)
 	}
 }
+
+// TestUsage_RevisedFinalRowGetsTheLadderUsageNotTheGates is the
+// permanent regression test for round 3's finding: on the REVISED
+// path, exit_gate's own verdict call is not usually the last Generate()
+// before AppendEntry — it is ALWAYS the last one. chat_default.yaml
+// wires both replan_check's false edge AND recover's result edge into
+// exit_gate:draft, and only exit_gate's approved output reaches
+// assistant_write; reviewExecutor.Execute (exec_compute.go) calls
+// env.LLM.Generate unconditionally on every fire, no bypass. So a
+// fallback that reads "whatever Generate call ran last" can NEVER
+// recover a reviser's own usage on the revised path — proved live with
+// the production write order: chat move -> escalation-ladder revision
+// -> exit-gate verdict -> AppendEntry with the REVISED text, final row
+// got the GATE's numbers, not the ladder's.
+//
+// SCOPE NOTE: this drives the REAL LLMProviderAdapter.Generate (so
+// RecordCandidateUsage runs exactly as production calls it) and the
+// REAL turnJournal.AppendEntry against REAL sqlite for the three
+// Generate calls usage attribution actually depends on. It does NOT
+// drive the full loadRoutedChatGraph kernel run to organically trigger
+// the escalation ladder — doing so needs the doom-loop guard's exact
+// retry/backtrack state machine (tool_dispatch's guard +
+// escalationLadderExecutor's retry->escalate->replan rungs), which is
+// the GRAPH's pre-existing routing logic, unrelated to this fix, and is
+// separately covered by TestRoutedTurn_DoomLoopRoutesIntoTheLadder
+// (core/agentgraph). What this fix changed is what AppendEntry does
+// once a revision reaches it with exit_gate's verdict call sitting
+// between — and that is exactly what this test drives, through the
+// same production Generate()/AppendEntry code
+// TestUsage_RoutedGraphFinalRowGetsTheChatMovesUsageNotTheExitGates
+// uses for the absorbed case.
+//
+// MUTATION EVIDENCE (run and confirmed to fail, then reverted): change
+// AppendEntry's revised branch to take the LAST recorded candidate
+// (append order) instead of a content match against entry.Content ->
+// the final row gets the GATE's 50/8/$0.0009 (the last call recorded),
+// not the ladder's 500/20/$0.0200, reproducing the reviewer's exact
+// finding.
+func TestUsage_RevisedFinalRowGetsTheLadderUsageNotTheGates(t *testing.T) {
+	ctx := context.Background()
+
+	cfg := storage.Config{
+		DataDir:          t.TempDir(),
+		EncryptionStatus: storage.EncryptionStatusDisabledWithDiskEncryption,
+	}
+	db, err := storagesqlite.Open(cfg)
+	if err != nil {
+		t.Fatalf("storagesqlite.Open: %v", err)
+	}
+	defer db.Close(context.Background())
+	store := session.NewSQLStore(session.NewStorageDB(db))
+	sessionMgr := session.NewManager(store)
+	usageMgr := usage.New(db)
+
+	rec, err := sessionMgr.Create(ctx, "revised usage session")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	sessionID := rec.ID
+	if _, err := sessionMgr.AppendMessage(ctx, sessionID, session.Message{
+		Role: session.RoleUser, Content: "start",
+	}); err != nil {
+		t.Fatalf("append user message: %v", err)
+	}
+
+	const chatPrompt, chatCompletion = 1000, 40
+	const chatCost = 0.0110
+	const ladderPrompt, ladderCompletion = 500, 20
+	const ladderCost = 0.0200
+	const gatePrompt, gateCompletion = 50, 8
+	const gateCost = 0.0009
+
+	reg := &scriptedRegistry{}
+	reg.push(textTurnWithUsage("draft answer", chatPrompt, chatCompletion, chatCost))
+	reg.push(textTurnWithUsage("the ladder's revised answer", ladderPrompt, ladderCompletion, ladderCost))
+	reg.push(textTurnWithUsage(`{"verdict":"pass","reason":"looks right now"}`, gatePrompt, gateCompletion, gateCost))
+
+	journal := newTurnJournal(realHistoryWriter(sessionMgr), nil, sessionID, "span-1", testUsageHook(usageMgr, sessionMgr))
+	adapter := NewLLMProviderAdapter(reg, "profile-1", "", nil, nil).WithMoveJournal(journal)
+
+	// 1. The chat move: StreamToChat=true, tracked — parks held+heldResp.
+	if _, err := adapter.Generate(ctx, coreag.LLMRequest{StreamToChat: true}); err != nil {
+		t.Fatalf("chat move Generate: %v", err)
+	}
+	// 2. The escalation ladder's OWN Generate call
+	// (exec_escalation_ladder.go's escalate/replan rung): StreamToChat=
+	// false — never a move, but RecordCandidateUsage still records it
+	// unconditionally, the instant this call finishes.
+	ladderOut, err := adapter.Generate(ctx, coreag.LLMRequest{StreamToChat: false})
+	if err != nil {
+		t.Fatalf("ladder Generate: %v", err)
+	}
+	// 3. exit_gate's own verdict call (reviewExecutor.Execute,
+	// exec_compute.go): StreamToChat=false, unconditional on every fire,
+	// and — per chat_default.yaml's topology — ALWAYS the last
+	// Generate() call before AppendEntry, revised branch included.
+	if _, err := adapter.Generate(ctx, coreag.LLMRequest{StreamToChat: false}); err != nil {
+		t.Fatalf("gate verdict Generate: %v", err)
+	}
+
+	// reviewExecutor forwards `approved: draft` UNCHANGED on PASS — the
+	// persisted text is the LADDER's own output verbatim, never the
+	// gate's verdict JSON. Reproduce that exactly.
+	if _, err := journal.AppendEntry(ctx, sessionID, coreag.HistoryEntry{
+		Role: "assistant", Content: ladderOut.Content,
+	}); err != nil {
+		t.Fatalf("AppendEntry: %v", err)
+	}
+
+	rows := readAssistantUsageRows(t, db, sessionID)
+	// Two rows: the chat move (flushed as its own assistant_move because
+	// the final text differs from it) and the final (the ladder's
+	// revision). The gate's verdict never gets a row of its own — it is
+	// not a move — which is itself part of the proof: if its numbers
+	// showed up ANYWHERE, that would be the misattribution this test
+	// exists to catch.
+	if len(rows) != 2 {
+		t.Fatalf("revised turn persisted %d usage rows, want 2 (chat move + final): %+v", len(rows), rows)
+	}
+	if rows[0].prompt != chatPrompt || rows[0].completion != chatCompletion {
+		t.Errorf("move 0 (flushed draft) tokens = %d/%d, want the chat move's %d/%d",
+			rows[0].prompt, rows[0].completion, chatPrompt, chatCompletion)
+	}
+	final := rows[1]
+	if final.prompt != ladderPrompt || final.completion != ladderCompletion {
+		t.Errorf("final row tokens = %d/%d, want the LADDER's %d/%d — got the gate's %d/%d instead "+
+			"if this reads like the misattribution bug",
+			final.prompt, final.completion, ladderPrompt, ladderCompletion, gatePrompt, gateCompletion)
+	}
+	if !approxEqualUSD(final.cost, ladderCost, 1e-9) {
+		t.Errorf("final row cost = %v, want the ladder's %v (not the gate's %v)", final.cost, ladderCost, gateCost)
+	}
+	for i, r := range rows {
+		if r.prompt == gatePrompt && r.completion == gateCompletion {
+			t.Errorf("row %d carries the GATE's usage (%d/%d) — the gate's private verdict must never "+
+				"be attributed to any persisted row", i, r.prompt, r.completion)
+		}
+	}
+}
+
+// TestUsage_DegenerateJournalStillGetsUsageViaCandidateLookup pins the
+// no-span (!journal.records()) fallback chat_runner.go registers: a
+// turn with no user message anywhere to span from (moves.go's file
+// header) makes the journal inert, and StartStream wires a SEPARATE
+// HookPostLLM callback for exactly that case — this test's job is to
+// prove usage lands AT ALL through it, which the coordinator flagged as
+// "plausible by inspection but untested" (i.e. an unverified claim of
+// exactly the kind this PR exists to stop shipping). Round 3 also
+// changed what that callback reads, from capturedAdapter.LastResponse()
+// to capturedJournal.LookupCandidateUsage — RecordCandidateUsage is not
+// gated on records(), so an inert journal still accumulates every
+// Generate call's (text, usage) pair, and the same exit_gate-always-
+// runs-last structural fact applies to a degenerate turn on the routed
+// graph too. This single-call fixture can't discriminate that rewiring
+// from the pre-existing LastResponse() read (nothing else runs in
+// between here), so it does not double as round 3's routed-graph
+// regression test — that is
+// TestUsage_RevisedFinalRowGetsTheLadderUsageNotTheGates's job. This
+// test's only job is the row-count claim.
+//
+// MUTATION EVIDENCE (run and confirmed to fail, then reverted):
+// comment out the env.Hooks.RegisterPostHook call in chat_runner.go's
+// degenerate branch -> zero usage rows land and the row-count assertion
+// fails.
+func TestUsage_DegenerateJournalStillGetsUsageViaCandidateLookup(t *testing.T) {
+	ctx := context.Background()
+
+	reg := &scriptedRegistry{}
+	reg.push(textTurnWithUsage("the only answer", 300, 15, 0.0033))
+	pool := &scriptedPool{}
+	graph := loadProductionChatGraph(t)
+	runner, broker, sessionMgr, _, db := buildMoveRunnerRealSQLite(t, reg, pool, graph)
+
+	rec, err := sessionMgr.Create(ctx, "degenerate usage session")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	sessionID := rec.ID
+
+	// Empty userMessage + no TurnSpan resolver configured (buildMoveRunnerRealSQLite
+	// wires neither) reproduces the exact degenerate condition: StartStream
+	// cannot resolve a turnSpanID, so journal.records() is false for this
+	// whole turn and every entry — including what would be the final —
+	// is written classic.
+	if _, err := runner.StartStream(ctx, "profile-1", sessionID, "", ""); err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	if closed := waitForClosed(t, broker); closed.Reason == "backend-error" {
+		t.Fatalf("run failed: %s", closed.Message)
+	}
+
+	rows := readAssistantUsageRows(t, db, sessionID)
+	if len(rows) != 1 {
+		t.Fatalf("degenerate-journal turn persisted %d usage rows, want 1 — the no-span fallback "+
+			"registration is this turn's ONLY usage writer, and it must not go silent: %+v", len(rows), rows)
+	}
+	if rows[0].prompt != 300 || rows[0].completion != 15 {
+		t.Errorf("degenerate row tokens = %d/%d, want 300/15", rows[0].prompt, rows[0].completion)
+	}
+	if !approxEqualUSD(rows[0].cost, 0.0033, 1e-9) {
+		t.Errorf("degenerate row cost = %v, want 0.0033", rows[0].cost)
+	}
+}

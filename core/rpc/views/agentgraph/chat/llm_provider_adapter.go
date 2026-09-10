@@ -86,7 +86,15 @@ type LLMProviderAdapter struct {
 	// the compaction strategy all reach this same adapter and all
 	// overwrite it).
 	//
-	// CORRECTED TWICE (fix/usage-persists-on-every-move):
+	// NOTHING ON THE USAGE-FIRING PATH READS THIS FIELD ANY MORE (fix/
+	// usage-persists-on-every-move, round 3). It is kept only because
+	// usage_pipeline_test.go independently pins that Generate() stores
+	// corellm.Stream.Final()'s response into it with no field dropped —
+	// a real regression class of its own (the "0 tok · $0.0000" footer
+	// bug), unrelated to who reads it afterward.
+	//
+	// CORRECTED THREE TIMES as the mutable-slot design kept failing one
+	// hop further down the pipeline:
 	//
 	//  1. This comment used to claim the slot was "safe because each
 	//     kernel run is sequential (one Generate completes before
@@ -103,27 +111,37 @@ type LLMProviderAdapter struct {
 	//     for every non-final assistant_move.
 	//
 	//  2. Round 1 of that fix left the `final` row reading THIS field
-	//     directly, on the claim that "nothing else touches it between
-	//     the last RecordAssistantMove and session_write firing in the
-	//     common, non-revised case." That claim is true on the CLASSIC
-	//     graph (AgenticTurnRouting off, the shipped default) — nothing
-	//     runs between the chat move's Generate and session_write there,
-	//     so lastResp genuinely held the terminal call's own usage. It
-	//     is FALSE on the ROUTED graph (AgenticTurnRouting on, built and
-	//     gated off, not yet the default): exit_gate (kind: review)
-	//     makes its own real, costed Generate call between the loop and
-	//     session_write, overwriting this field with the GATE's small
-	//     verdict usage before the final row's hook could read it — a
-	//     misattribution an independent reviewer proved by running
-	//     loadRoutedChatGraph with distinct usage per call. Fixed by
-	//     moves.go's AppendEntry: the common (absorbed) case now sources
-	//     usage from heldResp — the same per-call snapshot moves use,
-	//     captured before the gate's call could ever run — and this
-	//     field is read (via lastResponseFn) ONLY for the genuinely-
-	//     revised case, where the last Generate call before AppendEntry
-	//     really did author the persisted text and reading this field is
-	//     correct for the reason it always was. See moves.go's file
-	//     header, "USAGE CAPTURE", and AppendEntry's doc comment.
+	//     directly for the ABSORBED case (draft approved unchanged), on
+	//     the claim that "nothing else touches it between the last
+	//     RecordAssistantMove and session_write firing in the common,
+	//     non-revised case." True on the CLASSIC graph (AgenticTurnRouting
+	//     off, the shipped default); FALSE on the ROUTED graph (built,
+	//     gated off): exit_gate (kind: review) makes its own real,
+	//     costed Generate call between the loop and session_write,
+	//     overwriting this field with the GATE's small verdict usage
+	//     before the final row's hook could read it. Fixed by sourcing
+	//     the absorbed case from heldResp — the same per-call snapshot
+	//     moves use, captured before the gate's call could ever run.
+	//
+	//  3. Round 2 fixed the absorbed case but left the REVISED case
+	//     (exit gate or escalation ladder actually rewrote the draft)
+	//     reading this field as a fallback, reasoning "the last Generate
+	//     call before AppendEntry authored the revision." That reasoning
+	//     does not hold on the routed graph: reviewExecutor.Execute
+	//     calls Generate UNCONDITIONALLY on every fire, with no bypass,
+	//     and exit_gate sits on EVERY path into session_write — so the
+	//     gate's own verdict call is not usually last, it is ALWAYS
+	//     last, revised branch included. Reading this field there always
+	//     returned the gate's usage, never the reviser's — proved live:
+	//     chat move → ladder revision → gate verdict → the final row got
+	//     the GATE's numbers, not the ladder's. Fixed by
+	//     RecordCandidateUsage: every Generate call, tracked or not,
+	//     records its own (text, usage) pair immediately, and
+	//     AppendEntry looks up whichever call's text matches what is
+	//     actually being persisted — a lookup keyed by content, not by
+	//     "whatever ran last." See moves.go's file header, "USAGE
+	//     CAPTURE", and AppendEntry's / RecordCandidateUsage's doc
+	//     comments.
 	lastResp corellm.Response
 
 	// capturer is the optional generated-image auto-capture pipeline
@@ -874,6 +892,21 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 			})
 		}
 		out.ToolCalls = calls
+	}
+	// Round 3 (fix/usage-persists-on-every-move): record THIS call's own
+	// (text, usage) pair unconditionally — chat move, exit gate verdict,
+	// escalation-ladder rung, replan draft, whatever this fire actually
+	// was. journal.AppendEntry needs this to recover a REVISED final
+	// row's real usage by matching on entry.Content, because exit_gate's
+	// own verdict call always runs last on the routed graph before
+	// AppendEntry and would otherwise be the only thing a "last
+	// response" read could ever find — see moves.go's
+	// RecordCandidateUsage / AppendEntry doc comments for the full
+	// mechanism. Safe on a bare adapter with no journal wired
+	// (a.moves is nil, RecordCandidateUsage no-ops) and on an
+	// empty-text fire (a pure tool-use response has nothing to key on).
+	if out.Content != "" {
+		a.moves.RecordCandidateUsage(out.Content, resp, a.ProviderKind(), a.ActiveModelID())
 	}
 	// One model fire = one move. Park its text; the journal decides
 	// whether it becomes an assistant_move or, if nothing follows it,

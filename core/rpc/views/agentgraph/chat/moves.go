@@ -176,16 +176,29 @@ type turnJournal struct {
 	// CAPTURE note). nil disables usage capture entirely — tests that
 	// don't exercise usage leave it nil.
 	usageHook UsageHookFunc
-	// lastResponseFn is AppendEntry's fallback source for a REVISED
-	// final row's usage — the one case heldResp cannot cover, because
-	// the persisted text did not come from any Generate() call this
-	// journal parked as a move (the exit gate or escalation ladder wrote
-	// it directly). Wired once, right after construction, to
-	// LLMProviderAdapter.LastResponse/ProviderKind/ActiveModelID via
-	// WithLastResponseFn. nil in tests that don't exercise the
-	// revised-final usage path — AppendEntry then fires no usage for a
-	// revised final rather than fire a fabricated zero value.
-	lastResponseFn func() (resp corellm.Response, providerKind, modelID string)
+	// candidates is a bounded, per-turn history of every non-empty text
+	// a Generate() call produced during this turn — chat move or not —
+	// paired with THAT call's own usage. See RecordCandidateUsage and
+	// AppendEntry's doc comment for why this exists: on the ROUTED
+	// graph, exit_gate ALWAYS makes its own real, costed Generate() call
+	// between whatever revised the draft and assistant_write
+	// (unconditional, exec_compute.go's reviewExecutor), so it is ALWAYS
+	// the last call before AppendEntry — reading a single mutable
+	// "last response" slot at AppendEntry time can therefore NEVER
+	// recover a revision's own usage, not merely "if something else
+	// intervenes". Content-matching against this history is what
+	// recovers it without threading a new port through every executor
+	// between the reviser and session_write.
+	candidates []journalCandidate
+}
+
+// journalCandidate is one Generate() call's (text, usage) pair, recorded
+// unconditionally by RecordCandidateUsage.
+type journalCandidate struct {
+	text         string
+	resp         corellm.Response
+	providerKind string
+	modelID      string
 }
 
 // newTurnJournal builds the journal for one turn. spanID is the id of
@@ -204,31 +217,68 @@ func newTurnJournal(writer coreag.HistoryWriter, emit func(coreag.StreamEvent),
 	}
 }
 
-// WithLastResponseFn wires the fallback source AppendEntry uses for a
-// REVISED final row's usage (see lastResponseFn's doc comment on the
-// struct). Chained like the adapter's With* methods; safe to call on a
-// nil journal.
+// RecordCandidateUsage records one Generate() call's (text, usage) pair
+// for later content-matched lookup by AppendEntry's revised-final
+// branch. Called unconditionally by LLMProviderAdapter.Generate for
+// EVERY fire that produces non-empty text — the chat move, the exit
+// gate's verdict, an escalation-ladder rung, a replan draft, all of
+// them — the instant that call's own response is computed, before any
+// LATER call on the same adapter can overwrite the shared mutable
+// LastResponse() slot. This is what makes the revised-final case immune
+// to "which node happened to run last": AppendEntry looks up the exact
+// persisted text, not whatever the adapter's single slot holds at read
+// time.
 //
-// fix/usage-persists-on-every-move, round 2: without this, the ROUTED
-// graph's exit_gate node — which makes its own real, costed Generate()
-// call between the loop and assistant_write (kind: review,
-// exec_compute.go's reviewExecutor) — clobbers
-// LLMProviderAdapter.lastResp before the pre-existing HookPostLLM path
-// ever reads it, so an ABSORBED final row (the gate approved the draft
-// unchanged, by far the common case) got the GATE's small verdict
-// usage instead of the chat answer's. That misattribution is now
-// impossible for the absorbed case: AppendEntry sources it from
-// heldResp, captured by RecordAssistantMove before the gate's call ever
-// ran. This fallback covers only the genuinely-revised case, where the
-// persisted text truly did come from whatever Generate() call ran last
-// (the gate or ladder authoring the revision) — LastResponse() is
-// correct there for the same reason it always was.
-func (j *turnJournal) WithLastResponseFn(fn func() (corellm.Response, string, string)) *turnJournal {
-	if j == nil {
-		return j
+// Safe to call on a nil journal or with empty text (both no-op) — a
+// bare adapter with no move journal (batch/activity runs) must not
+// panic here.
+func (j *turnJournal) RecordCandidateUsage(text string, resp corellm.Response, providerKind, modelID string) {
+	if j == nil || text == "" {
+		return
 	}
-	j.lastResponseFn = fn
-	return j
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.candidates = append(j.candidates, journalCandidate{
+		text: text, resp: resp, providerKind: providerKind, modelID: modelID,
+	})
+}
+
+// lookupCandidateUsageLocked searches this turn's candidate history,
+// most-recently-recorded first, for a text match against target
+// (TrimSpace-compared — the same rule AppendEntry's absorbed check
+// uses, for the same reason: a whitespace-only difference is not a
+// different call). Caller holds j.mu.
+func (j *turnJournal) lookupCandidateUsageLocked(target string) (resp corellm.Response, providerKind, modelID string, ok bool) {
+	want := strings.TrimSpace(target)
+	for i := len(j.candidates) - 1; i >= 0; i-- {
+		if strings.TrimSpace(j.candidates[i].text) == want {
+			c := j.candidates[i]
+			return c.resp, c.providerKind, c.modelID, true
+		}
+	}
+	return corellm.Response{}, "", "", false
+}
+
+// LookupCandidateUsage is lookupCandidateUsageLocked's locking wrapper
+// for callers that don't already hold j.mu — chat_runner.go's
+// degenerate (!records()) HookPostLLM registration is the one
+// production caller.
+//
+// RecordCandidateUsage is NOT gated on records(): an inert journal (no
+// user message to span a turn from) still accumulates every Generate()
+// call's (text, usage) pair, so even that edge case can recover the
+// right call's usage by content match instead of trusting
+// LLMProviderAdapter.LastResponse() — which, on the ROUTED graph, would
+// be exit_gate's own always-runs-last verdict call there too; the
+// degenerate case is not exempt from that structural fact just because
+// it has no span. Safe to call on a nil journal (returns ok=false).
+func (j *turnJournal) LookupCandidateUsage(target string) (resp corellm.Response, providerKind, modelID string, ok bool) {
+	if j == nil {
+		return corellm.Response{}, "", "", false
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.lookupCandidateUsageLocked(target)
 }
 
 // records reports whether this journal stamps moves. False means every
@@ -524,24 +574,35 @@ func (j *turnJournal) RecordToolResult(ctx context.Context, call coreag.ToolCall
 // position — which is the honest record: the model said one thing and
 // the turn returned another.
 //
-// USAGE, absorbed vs. revised (fix/usage-persists-on-every-move, round
-// 2 — a misattribution a reviewer caught by running loadRoutedChatGraph
-// with distinct per-call usage): on the ROUTED graph, exit_gate makes
-// its OWN real, costed Generate() call between the loop and this
-// AppendEntry call — see moves_test.go's
-// TestMoves_OnlyTheChatBoundModelNodeBecomesAMove for where that call
-// is proven to happen. In the absorbed case that call has ALREADY run
-// by the time we get here, so sourcing usage from
-// LLMProviderAdapter.LastResponse() (a single mutable slot, last-write-
-// wins) would silently credit the gate's small verdict cost to the
-// user's visible answer instead of the chat model's own — the exact
-// finding. heldResp is immune to this: RecordAssistantMove captured it
-// BEFORE the gate ever ran, so it is provably the chat move's own
-// response regardless of what ran after. The revised case has no such
-// snapshot (the persisted text isn't anything this journal parked) and
-// falls back to lastResponseFn, which is correct there for the reason
-// it always was: the last Generate() call before this AppendEntry is
-// the one that authored the revision.
+// USAGE, absorbed vs. revised (fix/usage-persists-on-every-move, rounds
+// 2 and 3 — two misattributions an independent reviewer caught by
+// running loadRoutedChatGraph with distinct per-call usage): on the
+// ROUTED graph, exit_gate (kind: review) sits on EVERY path into this
+// AppendEntry call — chat_default.yaml wires both replan_check's false
+// edge and recover's result edge into exit_gate:draft, and only
+// exit_gate's approved output reaches assistant_write — and
+// reviewExecutor.Execute calls env.LLM.Generate UNCONDITIONALLY on
+// every fire, no bypass (exec_compute.go). So the gate's own verdict
+// call is not "usually" the last Generate() before AppendEntry — it is
+// ALWAYS the last one, in the revised branch exactly as much as the
+// absorbed one. A single mutable "last response" slot read at
+// AppendEntry time can therefore NEVER recover a revision's own usage;
+// it will always return the gate's small verdict cost instead (proven
+// live: chat move 1000/40/$0.0110 → ladder revision 500/20/$0.0200 →
+// gate verdict 50/8/$0.0009 → the final row got 50/8/$0.0009, not the
+// ladder's $0.0200). Round 2 fixed the absorbed case with heldResp
+// (RecordAssistantMove captures it BEFORE the gate's call can run, so
+// it is provably the chat move's own response regardless of what runs
+// after) but left the revised case reading the mutable slot one hop
+// later, reproducing the same defect shape on the revised path. Round 3
+// closes that: the revised case now does a CONTENT-MATCHED lookup
+// against j.candidates (see RecordCandidateUsage), which every
+// Generate() call — chat move, ladder rung, replan draft, gate verdict,
+// all of them — populates unconditionally and immediately, before any
+// later call can overwrite anything. Whichever call actually produced
+// entry.Content is the one whose usage this finds, regardless of what
+// ran after it. No reader of LLMProviderAdapter.LastResponse() remains
+// anywhere on this path.
 //
 // Anything that is not an assistant entry (a system note) is forwarded
 // unchanged as a classic entry, after flushing so ordering holds.
@@ -588,8 +649,14 @@ func (j *turnJournal) AppendEntry(ctx context.Context, sessionID string,
 	} else {
 		j.flushHeld(ctx)
 		idx = j.allocate(moveKindFinal, moveDetail{})
-		if j.lastResponseFn != nil {
-			resp, providerKind, modelID = j.lastResponseFn()
+		// Content-matched, not "last one wins": exit_gate's own verdict
+		// call is ALWAYS the last Generate() before this point (see the
+		// doc comment above), so a positional read is structurally
+		// wrong here. Looking up entry.Content against every call's own
+		// recorded text finds whichever call actually authored the
+		// revision, no matter what ran after it.
+		if r, pk, mid, ok := j.lookupCandidateUsageLocked(entry.Content); ok {
+			resp, providerKind, modelID = r, pk, mid
 			haveUsage = true
 		}
 	}

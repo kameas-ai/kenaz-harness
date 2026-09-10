@@ -1050,16 +1050,15 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	journal := newTurnJournal(r.cfg.HistoryWriter, bridge.Emit, sessionID, turnSpanID, r.cfg.UsageHook)
 	llmAdapter.WithMoveJournal(journal)
 	toolAdapter.withMoves(journal)
-	// WithLastResponseFn wires the fallback source for a REVISED final
-	// row's usage (moves.go's AppendEntry doc comment — the exit
-	// gate/escalation ladder authored the persisted text directly, so
-	// there is no per-move heldResp snapshot to use instead). llmAdapter
-	// is already fully constructed at this point (see the comment
-	// above), so its LastResponse/ProviderKind/ActiveModelID are safe to
-	// close over here.
-	journal.WithLastResponseFn(func() (corellm.Response, string, string) {
-		return llmAdapter.LastResponse(), llmAdapter.ProviderKind(), llmAdapter.ActiveModelID()
-	})
+	// Round 3 (fix/usage-persists-on-every-move): no separate wiring
+	// needed here for the revised-final case any more. LLMProviderAdapter
+	// .Generate calls journal.RecordCandidateUsage unconditionally for
+	// every fire with non-empty text — chat move or not — the instant
+	// each call's own response is computed, so AppendEntry can look up
+	// whichever call actually authored the persisted text by content,
+	// instead of reading a single mutable "last response" slot that
+	// exit_gate's own always-runs-last verdict call would otherwise own.
+	// See moves.go's RecordCandidateUsage / AppendEntry doc comments.
 	// env.HistoryWriter stays nil when nothing was configured, so
 	// applyEnvDefaults installs the kernel's ErrNoHistoryWriter stub and
 	// session_write still fails loudly. Interposing the journal there
@@ -1246,29 +1245,42 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		}
 		capturedAdapter := llmAdapter
 		capturedSessionID := sessionID
-		// fix/usage-persists-on-every-move, round 2: gated on
+		capturedJournal := journal
+		// fix/usage-persists-on-every-move, rounds 2+3: gated on
 		// !journal.records(). For every ordinary turn (a resolved span —
 		// the overwhelming majority) turnJournal.AppendEntry now fires
-		// usage for the final row itself, sourced from heldResp/
-		// lastResponseFn (see moves.go). Registering THIS callback too
-		// would fire a SECOND write for the same row, reading
-		// LastResponse() unconditionally — on the routed graph that is
-		// provably the exit gate's verdict usage, not the chat answer's
-		// (the misattribution a reviewer's loadRoutedChatGraph repro
-		// caught), and it would run AFTER the journal's own correct
-		// write (this hook fires once AppendEntry returns to
-		// sessionWriteExecutor), so it would silently overwrite the
-		// right value with the wrong one. journal.records() is false
-		// only for the degenerate no-user-message-to-span-from case,
-		// where the journal writes everything classic and never calls
-		// fireUsage itself — this registration is that case's only
-		// usage writer, unchanged from before this fix.
+		// usage for the final row itself (see moves.go). Registering
+		// THIS callback too would fire a SECOND write for the same row,
+		// and it would run AFTER the journal's own write (this hook
+		// fires once AppendEntry returns to sessionWriteExecutor), so it
+		// would silently overwrite the right value with whatever it
+		// found. journal.records() is false only for the degenerate
+		// no-user-message-to-span-from case, where the journal writes
+		// everything classic and never calls fireUsage itself — this
+		// registration is that case's only usage writer.
+		//
+		// It sources usage via capturedJournal.LookupCandidateUsage, NOT
+		// capturedAdapter.LastResponse() — RecordCandidateUsage runs
+		// unconditionally in Generate regardless of records(), so even
+		// an inert journal has the same content-matched history
+		// AppendEntry uses, and needs it for the same structural reason:
+		// on the ROUTED graph, exit_gate's own verdict call is ALWAYS
+		// the last Generate() before this hook fires, degenerate journal
+		// or not, so a "last response" read would ALWAYS be the gate's
+		// usage here too. There is no reader of LastResponse() left
+		// anywhere on the usage-firing path.
 		if r.cfg.UsageHook != nil && !journal.records() {
 			usageHook := r.cfg.UsageHook
-			env.Hooks.RegisterPostHook(coreag.HookPostLLM, func(ctx context.Context, sID, messageID, _ string) {
-				resp := capturedAdapter.LastResponse()
-				providerKind := capturedAdapter.ProviderKind()
-				modelID := capturedAdapter.ActiveModelID()
+			env.Hooks.RegisterPostHook(coreag.HookPostLLM, func(ctx context.Context, sID, messageID, text string) {
+				resp, providerKind, modelID, ok := capturedJournal.LookupCandidateUsage(text)
+				if !ok {
+					// No recorded Generate() call produced this exact
+					// text — nothing to attribute usage to. Safer to
+					// skip than to guess.
+					logging.L().Warn("chat.usage.no_candidate_match",
+						"session_id", capturedSessionID, "message_id", messageID)
+					return
+				}
 				usageHook(ctx, capturedSessionID, messageID, providerKind, modelID, resp)
 			})
 		}
