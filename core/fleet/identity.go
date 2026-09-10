@@ -118,6 +118,19 @@ type enrollResponse struct {
 	Tier        string `json:"tier,omitempty"`
 }
 
+// enrollErrorEnvelope matches the Fleet API error response shape for
+// POST /api/v1/enroll. Mirrors siteErrorEnvelope in sites.go — this file
+// was the odd one out in not parsing the {code, message} envelope that
+// the rest of the fleet client already understands.
+//
+// The envelope may also carry a "details" object (e.g. zitadel_user_id
+// on user_not_provisioned); that is real identity data and deliberately
+// not unmarshalled here — enrollIdentity only ever needs Code + Message.
+type enrollErrorEnvelope struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
 // orgIDToString converts the fleet org_id (which may be a JSON number or string)
 // to a string for forward-compat.
 func orgIDToString(v any) string {
@@ -272,6 +285,21 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 		if resp.StatusCode == http.StatusNotFound &&
 			strings.Contains(strings.ToLower(preview), "404 page not found") {
 			return Identity{}, fmt.Errorf("fleet: enroll route not registered on the deployed fleet binary at %s — fleet needs to deploy the branch that ships POST /api/v1/enroll (raw response: %s)", reqURL, preview)
+		}
+		// 403 user_not_provisioned: the identity authenticated with Zitadel
+		// but has no matching Fleet account. Parse the {code, message}
+		// envelope (mirrors mapSiteError in sites.go) so this terminal
+		// condition is a typed sentinel instead of a raw-body string that
+		// nothing downstream can branch on.
+		if resp.StatusCode == http.StatusForbidden {
+			var env enrollErrorEnvelope
+			if jsonErr := json.Unmarshal(respBody, &env); jsonErr == nil && env.Code == "user_not_provisioned" {
+				msg := env.Message
+				if msg == "" {
+					msg = preview
+				}
+				return Identity{}, fmt.Errorf("%w (server: %s)", ErrUserNotProvisioned, msg)
+			}
 		}
 		return Identity{}, fmt.Errorf("fleet: enroll: status %d: %s", resp.StatusCode, respBody)
 	}
