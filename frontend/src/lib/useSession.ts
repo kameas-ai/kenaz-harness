@@ -656,7 +656,18 @@ export function useSession(id: Ref<string>): UseSessionResult {
    * marker on the LAST move — the only one the drop actually truncated.
    *
    * Empty assistant rows are dropped: a boundary whose fire produced
-   * only tool calls opened no visible segment.
+   * only tool calls opened no visible segment. This also means a
+   * reasoning-only row (non-empty `reasoning`, empty `content` — e.g.
+   * the model emitted thinking but no answer text before the turn
+   * ended) is dropped here on the CLASSIC (kind-less) path — known
+   * limitation, tracked as a follow-up, not fixed by
+   * model-settings-reach-the-model-01PMZ101 WP16. On the moves-based
+   * path (`kind` set) the equivalent drop happens earlier and more
+   * severely, in `projectTranscript` (lib/transcript.ts) — see that
+   * file's note near its `content.length === 0` filter — because that
+   * function also runs over the live (pre-commit) rows, so a
+   * reasoning-only move there is invisible from the first frame, not
+   * merely lost at commit.
    */
   function commitStreamingMoves(failure: string | null) {
     const rows = streamingMoves.value;
