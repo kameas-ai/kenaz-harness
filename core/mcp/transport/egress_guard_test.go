@@ -172,6 +172,70 @@ func TestPinnedDialContext_IPv6LinkLocalLiteral_Blocked(t *testing.T) {
 	}
 }
 
+// ── PinnedDialContext: IPv4-mapped IPv6 literals ─────────────────────────
+//
+// 2026-09-09 PR #324 review: the reviewer probed the obvious next bypass
+// attempt after the link-local-literal fix — writing the blocked address
+// in IPv4-mapped IPv6 form ("::ffff:a.b.c.d") to see whether it slips
+// past literalBlockedIPNets's IPv4-shaped CIDR entries. It does not:
+// net.IPNet.Contains normalises via To4() on both operands (see
+// checkEgressIP's doc comment in egress_guard.go for exactly why), so
+// the mapped form collapses to its 4-byte equivalent before comparison.
+// These three cases pin that this holds for the two blocked link-local
+// addresses that matter (the IMDS address itself, and the general
+// 169.254.0.0/16 range) and that it does NOT over-block a mapped
+// loopback literal, which must keep working for AC-6.
+
+func TestPinnedDialContext_IPv4MappedLiteral_Blocked(t *testing.T) {
+	cases := []string{
+		"[::ffff:169.254.169.254]:80", // the IMDS address itself
+		"[::ffff:a9fe:a9fe]:80",       // same address, hex-group form (169.254.169.254 = a9fe:a9fe)
+	}
+	for _, addr := range cases {
+		t.Run(addr, func(t *testing.T) {
+			resolve := func(ctx context.Context, host string) ([]net.IPAddr, error) {
+				t.Fatalf("resolve should never be called for a literal IP")
+				return nil, nil
+			}
+			dialed := false
+			dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+				dialed = true
+				return &net.TCPConn{}, nil
+			}
+			dc := PinnedDialContext(resolve, dial)
+			_, err := dc(context.Background(), "tcp", addr)
+			if err == nil {
+				t.Fatalf("expected error dialing IPv4-mapped link-local literal %q, got nil", addr)
+			}
+			if dialed {
+				t.Errorf("dial was invoked for IPv4-mapped link-local literal %q — IMDS bypass via mapped form", addr)
+			}
+		})
+	}
+}
+
+func TestPinnedDialContext_IPv4MappedLoopbackLiteral_Allowed(t *testing.T) {
+	// The mapped-form check must not over-block: a mapped loopback
+	// literal is the same AC-6 case as "127.0.0.1" and must still dial.
+	resolve := func(ctx context.Context, host string) ([]net.IPAddr, error) {
+		t.Fatalf("resolve should never be called for a literal IP")
+		return nil, nil
+	}
+	var dialedAddr string
+	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		dialedAddr = addr
+		return &net.TCPConn{}, nil
+	}
+	dc := PinnedDialContext(resolve, dial)
+	addr := "[::ffff:127.0.0.1]:80"
+	if _, err := dc(context.Background(), "tcp", addr); err != nil {
+		t.Fatalf("dial to IPv4-mapped loopback literal returned error: %v", err)
+	}
+	if dialedAddr != addr {
+		t.Errorf("dialed %q, want %q", dialedAddr, addr)
+	}
+}
+
 // ── PinnedDialContext: hostname resolution path ──────────────────────────
 
 func TestPinnedDialContext_HostnameResolvesToPrivate_Blocked(t *testing.T) {

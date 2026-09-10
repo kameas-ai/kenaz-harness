@@ -196,9 +196,11 @@ func TestHTTPConnection_UnvalidatedDial_ReachesPrivateAddress(t *testing.T) {
 
 	// Deliberately NOT an IP literal and NOT "localhost" — a real
 	// hostname is what makes this go through resolution at all. A
-	// literal address is exempt from validation by design (see
-	// egress_guard.go's isLiteralDialAddress) — that is the separate,
-	// correct behaviour AC-6 covers, not this test.
+	// literal address goes through PinnedDialContext's literal branch in
+	// egress_guard.go, which validates it against the narrower
+	// literalBlockedIPNets list instead of the resolved-hostname path
+	// below — that is the separate, correct behaviour AC-6 covers, not
+	// this test.
 	conn := httptransport.NewConnection(httptransport.Spec{
 		ID:  "rebind",
 		URL: fmt.Sprintf("http://attacker-controlled.egress-guards.test:%s/mcp", victimPort),

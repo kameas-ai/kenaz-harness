@@ -123,6 +123,21 @@ func init() {
 // checkEgressIP returns an error if ip falls in a blocked range for a
 // RESOLVED HOSTNAME (the full block list — loopback, RFC-1918,
 // link-local, IPv6 ULA).
+//
+// IPv4-mapped IPv6 note (2026-09-09 PR #324 review): a literal like
+// "::ffff:169.254.169.254" parses as a 16-byte net.IP, but
+// net.IPNet.Contains calls To4() on BOTH the network number and the
+// tested IP before comparing when the network was itself parsed from an
+// IPv4 CIDR (as every entry in egressBlockedIPNets/literalBlockedIPNets
+// is) — so it collapses to the 4-byte form and correctly matches the
+// IPv4 "169.254.0.0/16" entry. This is stdlib behaviour working in this
+// function's favour, not something engineered here, and it is NOT
+// universally true: a hand-rolled byte-slice prefix comparison (e.g.
+// "optimising" this loop to compare ip.To16() against a precomputed
+// mask) would NOT get that normalisation and would silently let the
+// IMDS-mapped form back through, with every OTHER test still green.
+// TestPinnedDialContext_IPv4MappedLiteral_Blocked pins this so it can't
+// regress silently.
 func checkEgressIP(ip net.IP) error {
 	for _, blocked := range egressBlockedIPNets {
 		if blocked.Contains(ip) {
@@ -137,6 +152,11 @@ func checkEgressIP(ip net.IP) error {
 // local only). See this file's top doc comment for why loopback and
 // RFC-1918/ULA space are deliberately allowed here even though
 // checkEgressIP blocks them for a resolved hostname.
+//
+// See checkEgressIP's doc comment for the IPv4-mapped-IPv6 dependency on
+// net.IPNet.Contains's To4() normalisation — it applies identically
+// here, and is the reason "::ffff:169.254.169.254" as a literal is
+// blocked rather than a second, silent IMDS bypass.
 func checkLiteralIP(ip net.IP) error {
 	for _, blocked := range literalBlockedIPNets {
 		if blocked.Contains(ip) {
