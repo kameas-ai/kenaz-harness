@@ -1205,6 +1205,22 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	if r.cfg.EnvDefaults != nil {
 		r.cfg.EnvDefaults(env)
 	}
+	// trust-surfaces-that-fire-01PMZ202 WP23 (AN-04 second seam): apply
+	// the resolved posture mode to the Cedar gate env.Policy now points
+	// at, AFTER EnvDefaults so this isn't clobbered by the process-wide
+	// PolicyGateAdapter EnvDeps.applyTo installs. resolvedKnobs was
+	// already resolved once for this StartStream (fix F8) — reusing it
+	// here rather than re-deriving keeps that single-resolution
+	// invariant intact. The type assertion (rather than an import of
+	// core/rpc/views/agentgraph) keeps this package's dependency
+	// direction unchanged; a fake env.Policy that doesn't implement
+	// WithPostureMode is simply left as-is, matching every other
+	// unset-seam degrade in this function.
+	if pm, ok := env.Policy.(interface {
+		WithPostureMode(string) coreag.PolicyGate
+	}); ok {
+		env.Policy = pm.WithPostureMode(resolvedKnobs.PostureMode)
+	}
 	// WP12: register the spec this turn will actually execute, so the
 	// turn can be projected back into a graph afterwards. Recorded here
 	// — after the routing gate and the max-turns dial have finished
@@ -2027,11 +2043,23 @@ func init() {
 	knobcoverage.Register[autonomy.ResolvedKnobs]("ContinueOnError", "chat.continueOnErrorPolicy")
 	knobcoverage.Register[autonomy.ResolvedKnobs]("TokenCeilingPerTurn", "chat.applyTokenCeilingKnob")
 	knobcoverage.RegisterDeferred[autonomy.ResolvedKnobs]("SourceTrace", "resolver bookkeeping, not a tunable knob")
-	knobcoverage.RegisterDeferred[autonomy.ResolvedKnobs]("PostureMode", "resolver bookkeeping, not a tunable knob")
+	// trust-surfaces-that-fire-01PMZ202 WP23 (AN-04 second seam): was
+	// RegisterDeferred("resolver bookkeeping, not a tunable knob") until
+	// this WP gave it a real consumer — env.Policy is re-wrapped with
+	// cedar.WithPostureMode(resolvedKnobs.PostureMode, ...) right below
+	// the EnvDefaults call in StartStream, so plan_mode denies
+	// write-class Cedar actions instead of only lowering the knob-level
+	// AutoApproveFamilies preset.
+	knobcoverage.Register[autonomy.ResolvedKnobs]("PostureMode", "chat.ChatRunner.StartStream (PolicyGateAdapter.WithPostureMode re-wrap)")
 	// owner directive 2026-09-09: the per-run call-volume budget cap
 	// (MaxLLMCallsPerRun/MaxToolCallsPerRun) is now governed by the
 	// autonomy tier, same as TokenCeilingPerTurn already governs
-	// MaxTokensPerRun above.
+	// MaxTokensPerRun above. trust-surfaces-that-fire-01PMZ202 WP23
+	// (AN-04) added a second consumer, core/rpc's
+	// setPromptRegistryPostureFromKnobs (a.promptRegistry's posture) —
+	// not re-registered here, since knobcoverage.Register only needs one
+	// consumer named per field and panics on a second registration for
+	// the same field.
 	knobcoverage.Register[autonomy.ResolvedKnobs]("EffectiveTier", "chat.applyBudgetTierDial")
 }
 
