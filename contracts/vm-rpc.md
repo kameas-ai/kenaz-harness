@@ -471,10 +471,22 @@ builds, so **any** gate site reached in this process surfaces on `:7881`. The
 `task.start` graph path itself (`plan` → `run`, a bare model call) contains no
 gate site today: it has no tool dispatch, so it raises no approvals of its own.
 The four live gate sites — bash, tool dispatch, credential hooks, MCP recipe
-add — are reached through the served engine. Plumbed-and-listening, but the
-in-VM task graph will not exercise it until that path grows a gated call site.
-The engine seam is wired and ready: the run context carries an `approvalGate`,
-and a call site parks on it with `RequestInteractive`.
+add — are reached through the served engine, not through this process's task
+graph.
+
+**The engine seam's writer half is wired; its reader half has no caller.** The
+run context carries an `approvalGate` (`withApprovalGate`, set once per task
+on `cmd/harness-vm/main.go`'s dispatch path) — the plumbing exists. But
+`approvalGateFrom` (`cmd/harness-vm/approvalgate.go`), the one function a
+task-path call site would use to read that gate and park on
+`RequestInteractive`, has zero non-test callers today. No call site in this
+process reads the seam. The blocker is not a missing line: `cedar.PromptSurface`
+(`core/policy/cedar/prompt.go`) is a closed four-variant union (`Bash`, `FS`,
+`Cred`, `Tool`) with no variant for a model call, so wiring one means a new
+family, a host modal to render it, and a wire payload change — a product
+feature with an owner, not this surface's fix. Tracked as a dated
+justification in `docs/unwired-ledger.md` (mission
+`vm-execution-surface-truth-01PMZD14`).
 
 ### Deferred (not in this surface)
 
@@ -486,21 +498,54 @@ stream (per-workbench task lifecycle → host AgentFeed panel).
 
 ## Smoke Probe (Phase 1)
 
-The smoke script (`kenaz-workbench/scripts/smoke-macos.sh --image=headless`)
-verifies the harness-vm service by:
+**This probe has not matched the server since Phase 8 — VERIFIED against
+`cmd/harness-vm` directly (mission `vm-execution-surface-truth-01PMZD14`
+WP04, 2026-09-09).** Three independent reasons the previously-documented
+`{"command":"noop"}` frame cannot pass: the `auth` frame is required first
+(`cmd/harness-vm/main.go`'s `handleConn`), a configured token is compared
+constant-time and the baked image always sets `HARNESS_VM_TOKEN`, and
+dispatch is keyed on `kind`, not `command` — there is no `noop` kind and no
+production code path emits `status:"ok"` or `stub:true`. Confirmed by
+running the old frame against a live instance: it gets
+`{"kind":"auth.error","message_truncated":"expected auth message"}`.
 
-1. Booting the headless Tart VM.
-2. Getting the VM's NAT IP via `tart ip`.
-3. Sending a no-op task over TCP:
+The corrected probe is the real handshake plus a real `kind`:
+
+1. Booting the headless Tart VM (or, for a local dry run, building and
+   running the binary directly: `go build -o bin/kenaz-harness-vm
+   ./cmd/harness-vm/`).
+2. Getting the VM's NAT IP via `tart ip` (or `127.0.0.1` for a local dry
+   run).
+3. Sending the real two-frame handshake over TCP:
    ```
-   echo '{"command":"noop"}' | socat - TCP:<ip>:7881
+   {"kind":"auth","token":"<HARNESS_VM_TOKEN, or omit when unset>"}
+   {"kind":"task.start","task_id":"smoke-1","prompt":"hello"}
    ```
-   or via the orchestrator's `RunHarnessTask`:
-   ```go
-   result, err := orch.RunHarnessTask(ctx, orchestrator.HarnessTask{Command: "noop"})
-   // expect: result.Stdout or result containing {"status":"ok","stub":true}
-   ```
-4. Asserting the response contains `"status":"ok"` and `"stub":true`.
+4. Asserting `auth.ok` (not `auth.error`), then one or more `task.running`
+   frames, then a terminal `task.complete` frame carrying the same
+   `task_id`.
+
+**Verified transcript** (`KENAZ_AGENT_EXEC=stub` — offline echo graph,
+`HARNESS_VM_TOKEN` unset — local dev posture):
+
+```
+>>> {"kind": "auth"}
+<<< {"kind": "auth.ok"}
+>>> {"kind": "task.start", "task_id": "smoke-1", "prompt": "hello"}
+<<< {"kind": "task.running", "task_id": "smoke-1", "text": "hello"}
+<<< {"kind": "task.running", "task_id": "smoke-1", "text": "hello"}
+<<< {"kind": "task.complete", "task_id": "smoke-1"}
+```
+
+With `HARNESS_VM_TOKEN` set (the baked-image / production posture): a missing
+or wrong token gets `{"kind":"auth.error","message_truncated":"invalid
+token"}`; the correct token gets the same `auth.ok` → `task.running*` →
+`task.complete` sequence above. Verified both ways.
+
+**The smoke *script*** (`kenaz-workbench/scripts/smoke-macos.sh`) **lives
+outside this repository and cannot be corrected here.** This section
+corrects the contract that tells the script's author what to assert; the
+script itself still needs updating by whoever owns `kenaz-workbench`.
 
 ---
 
