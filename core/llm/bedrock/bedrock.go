@@ -1048,12 +1048,27 @@ func buildToolConfig(specs []llm.ToolSpec) (*types.ToolConfiguration, error) {
 	return &types.ToolConfiguration{Tools: tools}, nil
 }
 
+// converseStreamSource narrows *bedrockruntime.ConverseStreamOutput to
+// the one method pump() actually calls. bedrockruntime.ConverseStreamOutput
+// satisfies this automatically (structural typing) — the seam exists so
+// tests can inject a fake event source built from the SDK's own
+// bedrockruntime.NewConverseStreamEventStream + a fake
+// ConverseStreamOutputReader (both exported specifically "for testing and
+// mocking", per that constructor's doc comment) instead of standing up a
+// SigV4-signed HTTP round-trip, which the bearer/REST path's own test
+// comment records as impractical for this SDK path
+// (model-settings-reach-the-model-01PMZ101 WP09 review follow-up: the
+// reasoning arm added to pump() had zero coverage before this seam).
+type converseStreamSource interface {
+	GetStream() *bedrockruntime.ConverseStreamEventStream
+}
+
 // converseStream wraps a Bedrock ConverseStream response so it
 // satisfies llm.Stream. Events are translated on the fly so the
 // frontend never has to learn the AWS event-stream binary protocol.
 type converseStream struct {
 	ctx       context.Context
-	out       *bedrockruntime.ConverseStreamOutput
+	out       converseStreamSource
 	events    chan llm.StreamEvent
 	done      chan struct{}
 	finalResp llm.Response
