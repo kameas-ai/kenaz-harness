@@ -161,7 +161,7 @@ function stringToToolList(s: string): string[] {
               id="profile-model"
               v-model="local.model"
               type="text"
-              placeholder="anthropic/claude-haiku-4-5 (empty = inherit parent)"
+              placeholder="anthropic/claude-haiku-4.5 (empty = inherit parent)"
               :disabled="readOnly"
               class="w-full rounded border border-border-muted bg-surface-1 px-3 py-1.5 font-ui text-sm text-ink placeholder:text-ink-subtle focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-60"
               data-testid="profile-model-input"

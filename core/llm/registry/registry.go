@@ -488,25 +488,58 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 		return nil, err
 	}
 
-	// Per-call model override: when the chat surface picks a model
-	// other than the profile default (and that model is in the
-	// authorised set), substitute prof.Model so the adapter,
-	// capability gate, and audit trail all see the actual model
-	// being called.
-	if req.Model != "" && req.Model != prof.Model {
-		allowed := prof.AvailableModels()
-		ok := false
-		for _, m := range allowed {
-			if m == req.Model {
-				ok = true
-				break
-			}
-		}
-		if !ok {
-			return nil, fmt.Errorf("llm: model %q not authorised for profile %q (allowed: %v)", req.Model, req.ProfileID, allowed)
-		}
-		prof.Model = req.Model
+	// Per-call model override: when the chat surface (or a bundled/
+	// user agent profile forwarding its declared model as an override
+	// — core/agents.Profile.Model) picks a model other than the
+	// profile default, substitute prof.Model so the adapter,
+	// capability gate, and audit trail all see the actual model being
+	// called — but only after confirming the credential is actually
+	// authorised for it.
+	//
+	// This check now runs UNCONDITIONALLY on whatever model will
+	// actually reach the wire (the override when one was given,
+	// otherwise prof.Model itself), not only when req.Model differs
+	// from prof.Model (bundled-profile-model-preflight, WP18 /
+	// model-settings-reach-the-model-01PMZ101 UNIT-12, 2026-09-09).
+	// The narrower, override-only form shipped a real gap: a
+	// misconfigured profile whose own default Model isn't a member of
+	// its Models list (e.g. an OpenRouter multi-model profile whose
+	// stored default was seeded from a bundled agent profile's typoed
+	// model id) sailed straight past this guard whenever no override
+	// was in play, because `req.Model != prof.Model` was false —
+	// req.Model was simply empty. The bad id then reached the adapter
+	// and failed at the wire as an opaque provider auth/payment error
+	// instead of here, before any request was sent. This is the
+	// authoritative check every LLMRequest funnels through (registry.
+	// Stream is step 6 of the pipeline documented at the top of this
+	// file, ahead of CredentialResolver and the adapter call) — same
+	// principle as the "default" sentinel fix at
+	// core/rpc/views/agentgraph/chat/llm_provider_adapter.go:581
+	// (resolve at the one choke point, not by teaching every producer
+	// or by adding a second, rival validation elsewhere).
+	wantModel := prof.Model
+	if req.Model != "" {
+		wantModel = req.Model
 	}
+	allowed := prof.AvailableModels()
+	authorised := false
+	for _, m := range allowed {
+		if m == wantModel {
+			authorised = true
+			break
+		}
+	}
+	if !authorised {
+		return nil, fmt.Errorf(
+			"llm: model %q is not authorised for profile %q (this profile only serves: %v) — "+
+				"fix the model id at its source: if it came from an agent profile's `model:` "+
+				"field (core/agents/bundled/*.yaml or a user-authored override under "+
+				"<DataDir>/agents/), correct it to one of the models above; if it is this "+
+				"profile's own default or allowed-models list, fix it in Settings → Providers → %[2]q",
+			wantModel, req.ProfileID, allowed,
+		)
+	}
+	prof.Model = wantModel
 
 	// 1b. Capability cache overlay + background refresh
 	// (model-settings-reach-the-model-01PMZ101 WP14 / FR-017, register

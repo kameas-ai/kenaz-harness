@@ -7,7 +7,7 @@ when_to_use: |
   The bug finder will trace the execution path, identify the root cause, and
   produce a diagnosis report. It does NOT fix the bug — use the implementer
   profile for that.
-model: anthropic/claude-sonnet-4-5
+model: anthropic/claude-sonnet-4.5
 autonomy_tier: cautious
 allowed_tools:
   - kenaz__read_file
