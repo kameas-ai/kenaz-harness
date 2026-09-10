@@ -201,7 +201,15 @@ func (c *Connection) Open(ctx context.Context) error {
 
 	httpClient := spec.HTTPClient
 	if httpClient == nil {
+		// Transport is transport.GuardedHTTPTransport(), not nil — see
+		// the http package's identical comment and
+		// core/mcp/transport/egress_guard.go (S-1,
+		// paste-import-accepts-what-we-support-01PMZG16). A nil
+		// Transport here falls back to http.DefaultTransport for both
+		// the SSE GET stream and every POST to PostURL, with no
+		// address validation at all.
 		httpClient = &stdhttp.Client{
+			Transport: transport.GuardedHTTPTransport(),
 			CheckRedirect: func(*stdhttp.Request, []*stdhttp.Request) error {
 				return stdhttp.ErrUseLastResponse
 			},

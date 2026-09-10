@@ -228,6 +228,63 @@ func TestHTTPConnection_UnvalidatedDial_ReachesPrivateAddress(t *testing.T) {
 	}
 }
 
+// ─── AC-6: deliberately-configured loopback still connects ─────────────────
+
+// TestHTTPConnection_LoopbackLiteral_StillConnects is AC-6: a recipe
+// deliberately pointed at "http://127.0.0.1:PORT" — a local MCP server the
+// user is running themselves — must keep working through the SAME default
+// client the DNS-rebinding gate above hardens. This is not a redirect or a
+// custom-HTTPClient test escape hatch: spec.HTTPClient is left nil, so
+// Connection.Open builds transport.GuardedHTTPTransport() exactly as
+// production does, and the request goes out over a real TCP connection to
+// a real (loopback) server.
+//
+// Together with TestHTTPConnection_UnvalidatedDial_ReachesPrivateAddress
+// above, this is the pair spec §3 calls out: "if AC-5 and AC-6 cannot both
+// hold, that is an escalation." They hold simultaneously here because the
+// guard's exemption is keyed on whether the URL's host is a literal
+// address (no DNS involved — see egress_guard.go's isLiteralDialAddress),
+// not on whether the address happens to be private. "127.0.0.1" written
+// directly in the recipe is a literal; "attacker-controlled.egress-
+// guards.test" above is a hostname that must be resolved, and resolution
+// is exactly the step this fix validates.
+func TestHTTPConnection_LoopbackLiteral_StillConnects(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"local_tool"}]}}`)
+	}))
+	defer srv.Close()
+
+	// srv.URL is already "http://127.0.0.1:PORT" — an IP literal, not a
+	// hostname. spec.HTTPClient is deliberately left unset.
+	conn := httptransport.NewConnection(httptransport.Spec{
+		ID:  "local",
+		URL: srv.URL,
+	}, nil)
+
+	if err := conn.Open(context.Background()); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	if err := conn.Send(map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "tools/list",
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	msg, err := recvWithTimeout(t, conn, 5*time.Second)
+	if err != nil {
+		t.Fatalf("Recv: %v", err)
+	}
+	if msg.Error != nil {
+		t.Fatalf("deliberately-configured loopback server was blocked: %+v", msg.Error)
+	}
+	if !strings.Contains(string(msg.Result), "local_tool") {
+		t.Errorf("result = %s, want it to contain local_tool", string(msg.Result))
+	}
+}
+
 // recvWithTimeout wraps conn.Recv with a hard deadline so a bug that
 // hangs instead of erroring doesn't hang the test suite.
 func recvWithTimeout(t *testing.T, conn *httptransport.Connection, d time.Duration) (transport.RawMessage, error) {
