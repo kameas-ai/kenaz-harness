@@ -231,57 +231,84 @@ func TestHTTPConnection_UnvalidatedDial_ReachesPrivateAddress(t *testing.T) {
 // ─── AC-6: deliberately-configured loopback still connects ─────────────────
 
 // TestHTTPConnection_LoopbackLiteral_StillConnects is AC-6: a recipe
-// deliberately pointed at "http://127.0.0.1:PORT" — a local MCP server the
-// user is running themselves — must keep working through the SAME default
+// deliberately pointed at a loopback literal — a local MCP server the user
+// is running themselves — must keep working through the SAME default
 // client the DNS-rebinding gate above hardens. This is not a redirect or a
 // custom-HTTPClient test escape hatch: spec.HTTPClient is left nil, so
 // Connection.Open builds transport.GuardedHTTPTransport() exactly as
 // production does, and the request goes out over a real TCP connection to
-// a real (loopback) server.
+// a real server.
 //
 // Together with TestHTTPConnection_UnvalidatedDial_ReachesPrivateAddress
 // above, this is the pair spec §3 calls out: "if AC-5 and AC-6 cannot both
 // hold, that is an escalation." They hold simultaneously here because the
-// guard's exemption is keyed on whether the URL's host is a literal
-// address (no DNS involved — see egress_guard.go's isLiteralDialAddress),
-// not on whether the address happens to be private. "127.0.0.1" written
-// directly in the recipe is a literal; "attacker-controlled.egress-
-// guards.test" above is a hostname that must be resolved, and resolution
-// is exactly the step this fix validates.
+// guard's rule is keyed on whether the URL's host is a literal address (no
+// DNS involved — see egress_guard.go's top doc comment) validated against
+// an MCP-specific list that permits loopback/RFC-1918/ULA, not on whether
+// resolution is skipped outright: "127.0.0.1"/"[::1]" written directly in
+// the recipe are literals that pass that narrower check; "attacker-
+// controlled.egress-guards.test" above is a hostname that must be resolved
+// and validated against the full block list, which is exactly the step
+// this fix protects.
+//
+// Covers both IPv4 and IPv6 loopback end-to-end (real sockets). RFC-1918
+// literal coverage (e.g. a LAN MCP server at 192.168.x.x) is at the unit
+// level instead — TestPinnedDialContext_RFC1918Literal_Allowed in
+// egress_guard_test.go — because this test binds a real listener and a
+// non-loopback private address is not reliably bindable in a CI sandbox.
 func TestHTTPConnection_LoopbackLiteral_StillConnects(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"local_tool"}]}}`)
-	}))
-	defer srv.Close()
-
-	// srv.URL is already "http://127.0.0.1:PORT" — an IP literal, not a
-	// hostname. spec.HTTPClient is deliberately left unset.
-	conn := httptransport.NewConnection(httptransport.Spec{
-		ID:  "local",
-		URL: srv.URL,
-	}, nil)
-
-	if err := conn.Open(context.Background()); err != nil {
-		t.Fatalf("Open: %v", err)
+	cases := []struct {
+		name    string
+		network string
+		bindIP  string
+	}{
+		{name: "IPv4", network: "tcp4", bindIP: "127.0.0.1"},
+		{name: "IPv6", network: "tcp6", bindIP: "::1"},
 	}
-	t.Cleanup(func() { _ = conn.Close() })
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ln, err := net.Listen(c.network, net.JoinHostPort(c.bindIP, "0"))
+			if err != nil {
+				t.Skipf("cannot bind %s loopback in this environment: %v", c.name, err)
+			}
+			srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"local_tool"}]}}`)
+			}))
+			srv.Listener = ln
+			srv.Start()
+			defer srv.Close()
 
-	if err := conn.Send(map[string]any{
-		"jsonrpc": "2.0", "id": 1, "method": "tools/list",
-	}); err != nil {
-		t.Fatalf("Send: %v", err)
-	}
+			// srv.URL is "http://127.0.0.1:PORT" or "http://[::1]:PORT" — an
+			// IP literal, not a hostname. spec.HTTPClient is deliberately
+			// left unset.
+			conn := httptransport.NewConnection(httptransport.Spec{
+				ID:  "local-" + c.name,
+				URL: srv.URL,
+			}, nil)
 
-	msg, err := recvWithTimeout(t, conn, 5*time.Second)
-	if err != nil {
-		t.Fatalf("Recv: %v", err)
-	}
-	if msg.Error != nil {
-		t.Fatalf("deliberately-configured loopback server was blocked: %+v", msg.Error)
-	}
-	if !strings.Contains(string(msg.Result), "local_tool") {
-		t.Errorf("result = %s, want it to contain local_tool", string(msg.Result))
+			if err := conn.Open(context.Background()); err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			t.Cleanup(func() { _ = conn.Close() })
+
+			if err := conn.Send(map[string]any{
+				"jsonrpc": "2.0", "id": 1, "method": "tools/list",
+			}); err != nil {
+				t.Fatalf("Send: %v", err)
+			}
+
+			msg, err := recvWithTimeout(t, conn, 5*time.Second)
+			if err != nil {
+				t.Fatalf("Recv: %v", err)
+			}
+			if msg.Error != nil {
+				t.Fatalf("deliberately-configured loopback server was blocked: %+v", msg.Error)
+			}
+			if !strings.Contains(string(msg.Result), "local_tool") {
+				t.Errorf("result = %s, want it to contain local_tool", string(msg.Result))
+			}
+		})
 	}
 }
 

@@ -27,38 +27,18 @@ func mustIPAddr(t *testing.T, s string) net.IPAddr {
 	return net.IPAddr{IP: ip}
 }
 
-// ── isLiteralDialAddress ─────────────────────────────────────────────────
+// ── PinnedDialContext: literal handling — resolution skipped, validation
+// NOT skipped ─────────────────────────────────────────────────────────────
+//
+// 2026-09-09 PR #324 review: an earlier version of this file treated
+// "is a literal" and "skip validation entirely" as the same branch, which
+// let a pasted recipe pointed at "http://169.254.169.254/..." (the cloud
+// IMDS endpoint, a literal, not a hostname) reach a real dial completely
+// unvalidated. The tests below pin the corrected rule: a literal always
+// skips resolve() (there is nothing to resolve), but is still checked
+// against checkLiteralIP before dial() is ever called.
 
-func TestIsLiteralDialAddress(t *testing.T) {
-	cases := []struct {
-		host string
-		want bool
-	}{
-		{"localhost", true},
-		{"LOCALHOST", true},
-		{"LocalHost", true},
-		{"127.0.0.1", true},
-		{"::1", true},
-		// Non-loopback private IP literal: still a literal — the user
-		// typed an address directly, no DNS involved. See the doc
-		// comment on isLiteralDialAddress for why this is deliberate.
-		{"192.168.1.50", true},
-		{"10.0.0.5", true},
-		{"93.184.216.34", true}, // public IP literal is still a literal
-		{"example.com", false},
-		{"attacker-controlled.example.test", false},
-		{"localhost.evil.com", false}, // NOT the literal "localhost"
-	}
-	for _, c := range cases {
-		if got := isLiteralDialAddress(c.host); got != c.want {
-			t.Errorf("isLiteralDialAddress(%q) = %v, want %v", c.host, got, c.want)
-		}
-	}
-}
-
-// ── PinnedDialContext: literal bypass (AC-6 unit-level) ─────────────────────
-
-func TestPinnedDialContext_LoopbackLiteral_BypassesResolutionAndBlockList(t *testing.T) {
+func TestPinnedDialContext_LoopbackLiteral_ResolutionSkipped_Dials(t *testing.T) {
 	resolveCalled := false
 	resolve := func(ctx context.Context, host string) ([]net.IPAddr, error) {
 		resolveCalled = true
@@ -76,14 +56,34 @@ func TestPinnedDialContext_LoopbackLiteral_BypassesResolutionAndBlockList(t *tes
 		t.Fatalf("dial to loopback literal returned error: %v", err)
 	}
 	if resolveCalled {
-		t.Error("resolve was called for a literal address; want bypass")
+		t.Error("resolve was called for a literal address; want resolution skipped")
 	}
 	if dialedAddr != "127.0.0.1:3000" {
 		t.Errorf("dialed %q, want 127.0.0.1:3000", dialedAddr)
 	}
 }
 
-func TestPinnedDialContext_LocalhostLiteral_BypassesResolutionAndBlockList(t *testing.T) {
+func TestPinnedDialContext_IPv6LoopbackLiteral_ResolutionSkipped_Dials(t *testing.T) {
+	resolve := func(ctx context.Context, host string) ([]net.IPAddr, error) {
+		t.Fatalf("resolve should never be called for a literal address")
+		return nil, nil
+	}
+	var dialedAddr string
+	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		dialedAddr = addr
+		return &net.TCPConn{}, nil
+	}
+	dc := PinnedDialContext(resolve, dial)
+	_, err := dc(context.Background(), "tcp", "[::1]:3000")
+	if err != nil {
+		t.Fatalf("dial to IPv6 loopback literal returned error: %v", err)
+	}
+	if dialedAddr != "[::1]:3000" {
+		t.Errorf("dialed %q, want [::1]:3000", dialedAddr)
+	}
+}
+
+func TestPinnedDialContext_LocalhostLiteral_ResolutionSkipped_Dials(t *testing.T) {
 	resolve := func(ctx context.Context, host string) ([]net.IPAddr, error) {
 		t.Fatalf("resolve should never be called for the literal host %q", host)
 		return nil, nil
@@ -97,11 +97,13 @@ func TestPinnedDialContext_LocalhostLiteral_BypassesResolutionAndBlockList(t *te
 	}
 }
 
-func TestPinnedDialContext_NonLoopbackPrivateIPLiteral_StillBypasses(t *testing.T) {
+func TestPinnedDialContext_RFC1918Literal_Allowed(t *testing.T) {
 	// A deliberately-configured LAN MCP server (e.g. a Raspberry Pi at
 	// 192.168.1.50) is the same kind of explicit, non-attacker-
 	// influenceable choice as "localhost" — the recipe author wrote the
-	// address directly, no DNS resolution occurred.
+	// address directly, no DNS resolution occurred, and RFC-1918 space is
+	// a plausible real server location (unlike link-local — see the
+	// tests below).
 	resolve := func(ctx context.Context, host string) ([]net.IPAddr, error) {
 		t.Fatalf("resolve should never be called for a literal IP")
 		return nil, nil
@@ -117,6 +119,56 @@ func TestPinnedDialContext_NonLoopbackPrivateIPLiteral_StillBypasses(t *testing.
 	}
 	if dialedAddr != "192.168.1.50:8080" {
 		t.Errorf("dialed %q, want 192.168.1.50:8080", dialedAddr)
+	}
+}
+
+// ── PinnedDialContext: link-local literal is BLOCKED, not bypassed ──────────
+//
+// This is the exact bypass the review caught: 169.254.169.254 is a
+// numeric IP literal, so it never goes through resolve() — but that must
+// not mean it skips validation. checkLiteralIP still runs and still
+// blocks it.
+
+func TestPinnedDialContext_LinkLocalLiteral_Blocked(t *testing.T) {
+	resolve := func(ctx context.Context, host string) ([]net.IPAddr, error) {
+		t.Fatalf("resolve should never be called for a literal IP")
+		return nil, nil
+	}
+	dialed := false
+	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		dialed = true
+		return &net.TCPConn{}, nil
+	}
+	dc := PinnedDialContext(resolve, dial)
+	// The cloud instance-metadata endpoint, pasted as a literal IP —
+	// exactly the payload the review demonstrated reaching a real dial
+	// on the pre-fix code.
+	_, err := dc(context.Background(), "tcp", "169.254.169.254:80")
+	if err == nil {
+		t.Fatal("expected error dialing a link-local literal, got nil")
+	}
+	if dialed {
+		t.Error("dial was invoked for a link-local literal (169.254.169.254) — IMDS bypass")
+	}
+}
+
+func TestPinnedDialContext_IPv6LinkLocalLiteral_Blocked(t *testing.T) {
+	resolve := func(ctx context.Context, host string) ([]net.IPAddr, error) {
+		t.Fatalf("resolve should never be called for a literal IP")
+		return nil, nil
+	}
+	dialed := false
+	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		dialed = true
+		return &net.TCPConn{}, nil
+	}
+	dc := PinnedDialContext(resolve, dial)
+	_, err := dc(context.Background(), "tcp", "[fe80::1]:80")
+	if err == nil {
+		t.Fatal("expected error dialing an IPv6 link-local literal, got nil")
+	}
+	if dialed {
+		t.Error("dial was invoked for an IPv6 link-local literal")
 	}
 }
 
@@ -302,6 +354,29 @@ func TestCheckEgressIP(t *testing.T) {
 	for _, ip := range allowed {
 		if err := checkEgressIP(net.ParseIP(ip)); err != nil {
 			t.Errorf("checkEgressIP(%q) = %v, want allowed", ip, err)
+		}
+	}
+}
+
+// TestCheckLiteralIP pins the narrower list applied to a URL host that
+// is itself a numeric IP literal: link-local (incl. IMDS) blocked,
+// everything else checkEgressIP blocks — loopback, RFC-1918, IPv6 ULA —
+// deliberately ALLOWED here, because those are real self-hosted MCP
+// server locations a recipe author can legitimately type directly.
+func TestCheckLiteralIP(t *testing.T) {
+	blocked := []string{"169.254.169.254", "169.254.1.1", "fe80::1"}
+	for _, ip := range blocked {
+		if err := checkLiteralIP(net.ParseIP(ip)); err == nil {
+			t.Errorf("checkLiteralIP(%q) = nil, want blocked", ip)
+		}
+	}
+	allowed := []string{
+		"127.0.0.1", "::1", "10.1.2.3", "172.16.0.1", "192.168.0.1",
+		"fd00::1", "93.184.216.34", "8.8.8.8",
+	}
+	for _, ip := range allowed {
+		if err := checkLiteralIP(net.ParseIP(ip)); err != nil {
+			t.Errorf("checkLiteralIP(%q) = %v, want allowed (literal-address rule)", ip, err)
 		}
 	}
 }
