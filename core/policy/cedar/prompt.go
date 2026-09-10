@@ -620,6 +620,83 @@ const (
 	PostureAlwaysPrompt PromptPosture = "always-prompt"
 )
 
+// PromptPostureForTierName maps an autonomy tier's canonical name
+// (autonomy.Tier.String() — "strict" | "cautious" | "default" | "bold"
+// | "autonomous") to the interactive-permission posture
+// (trust-surfaces-that-fire-01PMZ202 WP23 / AN-04).
+//
+// Takes a string rather than core/autonomy.Tier so this package's
+// "no dependency on any other core/* package" contract holds — see
+// PostureModePlanMode above, which redeclares autonomy's constant for
+// the identical reason. Callers in core/rpc/views/agentgraph/chat pass
+// autonomy.ResolvedKnobs.EffectiveTier.String().
+//
+// Strict/Cautious ask on every call — even one a prior Allow-once grant
+// already covers — matching those tiers' AskAlways/AskHard knob values.
+// Bold/Autonomous skip the interactive prompt entirely, matching their
+// AskProceed/AskNever knob values and their DestructiveCedarOnly
+// posture (Cedar deny is still the floor; RequestInteractive is only
+// ever reached on NotApplicable, where no Cedar policy matched).
+// "default" and any unrecognised name keep the v0.3.0 baseline:
+// PostureDefault. The caller (chat_runner.go) only calls this — and
+// only stamps ctx with the result — when a real AutonomyKnobsProvider
+// is wired; see that call site for why an unwired provider must not
+// reach this function at all: autonomy.Tier's zero value stringifies
+// to "strict", not "default".
+func PromptPostureForTierName(tierName string) PromptPosture {
+	switch tierName {
+	case "strict", "cautious":
+		return PostureAlwaysPrompt
+	case "bold", "autonomous":
+		return PostureAutoAllow
+	default:
+		return PostureDefault
+	}
+}
+
+// promptPostureCtxKey is the context.Value key WithPromptPosture /
+// promptPostureFromContext share. Unexported + zero-sized so nothing
+// outside this package can forge or collide with it.
+type promptPostureCtxKey struct{}
+
+// WithPromptPosture stamps a per-call-chain interactive-permission
+// posture onto ctx (trust-surfaces-that-fire-01PMZ202 WP23 follow-up,
+// post-review finding: Registry.posture is process-wide, so mutating it
+// per StartStream let one session's resolved tier leak into every
+// OTHER concurrently-running session's RequestInteractive calls — a
+// Strict-tier session's confirmations could be silently auto-allowed by
+// a looser-tier sibling tab or a synchronously-spawned subagent).
+//
+// ctx propagation is the fix: unlike Registry.posture, a ctx value is
+// immutable and scoped to exactly the goroutine chain that derived it —
+// chat_runner.go's StartStream stamps streamCtx once per turn from that
+// session's own resolved tier, and the interactive gate sites nested
+// under it (kernelToolAdapter → bash.go / fs's CedarPrompter) already
+// thread ctx through unchanged, the same path runposture.Unattended
+// uses for exactly this reason (see streamCtx's own doc comment in
+// StartStream).
+//
+// Same rule holds for a subagent spawned synchronously on the parent's
+// own tool-dispatch goroutine (subagent_run_spawner.go): it calls its
+// OWN StartStream, which resolves and stamps its OWN posture onto its
+// OWN derived ctx before any of ITS tool calls reach RequestInteractive
+// — the parent's stamp is never read because the child's stamp shadows
+// it on the child's ctx chain, and the parent's ctx chain (paused while
+// the subagent runs) never sees the child's value either.
+func WithPromptPosture(ctx context.Context, p PromptPosture) context.Context {
+	return context.WithValue(ctx, promptPostureCtxKey{}, p)
+}
+
+// promptPostureFromContext reads the ctx-scoped posture WithPromptPosture
+// stamped, if any. ok is false when nothing stamped it — no autonomy
+// provider wired, or a call path (bash/fs/cred gate sites that don't
+// carry a chat turn's ctx) that predates this mechanism — in which case
+// RequestInteractive falls back to the registry-wide r.Posture().
+func promptPostureFromContext(ctx context.Context) (PromptPosture, bool) {
+	p, ok := ctx.Value(promptPostureCtxKey{}).(PromptPosture)
+	return p, ok
+}
+
 // RegistryOption configures a Registry at construction time.
 type RegistryOption func(*Registry)
 
@@ -847,12 +924,41 @@ func (r *Registry) RequestInteractive(
 
 	// WP05 — autonomy posture fast paths.
 	//
+	// posture is resolved PER CALL, not read off the shared r.posture
+	// field directly (trust-surfaces-that-fire-01PMZ202 WP23 follow-up,
+	// post-review). r.posture / SetPosture are process-wide — Registry
+	// is an explicit process singleton shared by every gate site AND
+	// every concurrently-running chat session/subagent. A caller that
+	// stamped ctx via WithPromptPosture (chat_runner.go's StartStream,
+	// once per turn from the session's resolved autonomy tier) gets
+	// THAT session's posture, scoped to the goroutine chain the ctx
+	// propagates through — including a subagent spawned synchronously
+	// on the parent's own tool-dispatch goroutine, which resolves and
+	// stamps its OWN ctx before its OWN RequestInteractive calls. A
+	// caller with no ctx stamp (bash/fs/cred gate sites that don't carry
+	// a chat turn's ctx, or a session that never wired an autonomy
+	// provider) falls back to the registry-wide r.posture via the
+	// mutex-guarded Posture() accessor — the pre-WP23-follow-up
+	// behaviour, and what WithPosture's construction-time option and
+	// SetPosture's direct callers (both still exported, still tested)
+	// continue to configure.
+	//
+	// This is also what fixes the raw-field data race the previous
+	// shape had at this exact pair of reads: SetPosture writes under
+	// r.mu.Lock() (documented on that method); these two reads used to
+	// read r.posture directly with no lock at all. Posture() (below,
+	// via r.Posture()) takes r.mu.RLock().
+	posture := r.Posture()
+	if p, ok := promptPostureFromContext(ctx); ok {
+		posture = p
+	}
+	//
 	// PostureAutoAllow: the resolved tier (autonomous/bold) permits the
 	// call without user interaction. Return Allow immediately, before any
 	// transient-cache or dispatcher work. Cedar deny has already been
 	// checked by the call site gate; this path is only reached on
 	// NotApplicable where no Cedar policy matched.
-	if r.posture == PostureAutoAllow {
+	if posture == PostureAutoAllow {
 		return Resolution{Decision: DecisionAllowOnce, Reason: "auto-allow (autonomy posture)"}, nil
 	}
 
@@ -861,7 +967,7 @@ func (r *Registry) RequestInteractive(
 	// PostureAlwaysPrompt skips this cache so every call surfaces to the
 	// UI regardless of prior grants (strict/cautious tier).
 	key := surface.resourceKey()
-	if r.posture != PostureAlwaysPrompt {
+	if posture != PostureAlwaysPrompt {
 		r.mu.RLock()
 		if existing, ok := r.transient[key]; ok && existing.Decision == DecisionAllowOnce {
 			r.mu.RUnlock()

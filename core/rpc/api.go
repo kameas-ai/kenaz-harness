@@ -5470,7 +5470,7 @@ func newLLMStack(
 	// cancellation actually reaches these reads instead of being
 	// silently ignored.
 	autonomyKnobsProvider := func(ctx context.Context, sessionID string) autonomy.ResolvedKnobs {
-		return applyPromptPostureFromTier(ctx, sessionID, c, settingsImpl, promptRegistry)
+		return computeAutonomyKnobs(ctx, sessionID, c, settingsImpl)
 	}
 	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, chatAttResolver, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatWorkspaceDir, chatWorkspaceNote, confirmBus, confirmDeps, autonomyKnobsProvider, secretLookup, secretGate, secretsBudget, confirmAudit)
 	var capCatalog llm.CapCatalog
@@ -5917,64 +5917,6 @@ func computeAutonomyKnobs(ctx context.Context, sessionID string, c *core.Core, s
 		}
 	}
 	return resolveAutonomyKnobsWithSettingsFallback(global, project, session, effectiveMaxAgentTurnsFromSettings(settingsImpl))
-}
-
-// applyPromptPostureFromTier resolves the autonomy chain via
-// computeAutonomyKnobs and additionally drives the Cedar prompt
-// registry's posture from the resolved EffectiveTier
-// (trust-surfaces-that-fire-01PMZ202 WP23 / AN-04).
-//
-// Pulled out of the autonomyKnobsProvider closure in newLLMStack for
-// the same reason computeAutonomyKnobs itself was pulled out of that
-// closure (chat-turn-integrity-01PMZ606 WP13): so the WIRING — not
-// just promptPostureForTier's mapping table — is independently
-// testable against a real *cedar.Registry, without which a test could
-// prove the mapping correct while a future edit silently dropped the
-// SetPosture call and left the registry frozen again.
-//
-// promptRegistry is the process-wide singleton (a.promptRegistry at
-// this function's production call site) shared by every gate site
-// (bash/fs/cred/tool) and the permissions view — nil is the nil-core
-// test chassis / boot-failure degrade every other optional dependency
-// in this file follows; SetPosture is simply skipped.
-func applyPromptPostureFromTier(ctx context.Context, sessionID string, c *core.Core, settingsImpl *settings.API, promptRegistry *cedar.Registry) autonomy.ResolvedKnobs {
-	resolved := computeAutonomyKnobs(ctx, sessionID, c, settingsImpl)
-	setPromptRegistryPostureFromKnobs(resolved, promptRegistry)
-	return resolved
-}
-
-// setPromptRegistryPostureFromKnobs is applyPromptPostureFromTier's
-// side effect, split out one level further so a test can drive it with
-// a synthetic autonomy.ResolvedKnobs — no live core.Core, session
-// store, or settings store needed to prove two different tiers leave
-// the registry in two different postures.
-func setPromptRegistryPostureFromKnobs(resolved autonomy.ResolvedKnobs, promptRegistry *cedar.Registry) {
-	if promptRegistry != nil {
-		promptRegistry.SetPosture(promptPostureForTier(resolved.EffectiveTier))
-	}
-}
-
-// promptPostureForTier maps the resolved autonomy tier to the Cedar
-// prompt registry's interactive-permission posture
-// (trust-surfaces-that-fire-01PMZ202 WP23 / AN-04). Strict/Cautious ask
-// on every call — even one a prior Allow-once grant already covers —
-// matching those tiers' AskAlways/AskHard knob values. Bold/Autonomous
-// skip the interactive prompt entirely, matching their AskProceed/
-// AskNever knob values and their DestructiveCedarOnly posture (Cedar
-// deny is still the floor; RequestInteractive is only ever reached on
-// NotApplicable, where no Cedar policy matched). Default keeps the
-// v0.3.0 baseline: prompt on NotApplicable, short-circuit repeat
-// requests via the transient-grants cache. Unknown tiers fall back to
-// Default, mirroring autonomy.BudgetCeilingForTier's own fallback.
-func promptPostureForTier(t autonomy.Tier) cedar.PromptPosture {
-	switch t {
-	case autonomy.TierStrict, autonomy.TierCautious:
-		return cedar.PostureAlwaysPrompt
-	case autonomy.TierBold, autonomy.TierAutonomous:
-		return cedar.PostureAutoAllow
-	default:
-		return cedar.PostureDefault
-	}
 }
 
 // registerManualCompactionStrategies installs the strategies the BASE
