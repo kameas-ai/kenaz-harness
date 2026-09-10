@@ -176,19 +176,23 @@ type turnJournal struct {
 	// CAPTURE note). nil disables usage capture entirely — tests that
 	// don't exercise usage leave it nil.
 	usageHook UsageHookFunc
-	// candidates is a bounded, per-turn history of every non-empty text
-	// a Generate() call produced during this turn — chat move or not —
-	// paired with THAT call's own usage. See RecordCandidateUsage and
-	// AppendEntry's doc comment for why this exists: on the ROUTED
-	// graph, exit_gate ALWAYS makes its own real, costed Generate() call
-	// between whatever revised the draft and assistant_write
-	// (unconditional, exec_compute.go's reviewExecutor), so it is ALWAYS
-	// the last call before AppendEntry — reading a single mutable
-	// "last response" slot at AppendEntry time can therefore NEVER
-	// recover a revision's own usage, not merely "if something else
-	// intervenes". Content-matching against this history is what
-	// recovers it without threading a new port through every executor
-	// between the reviser and session_write.
+	// candidates is a per-turn history of every non-empty text a
+	// Generate() call produced during this turn — chat move or not —
+	// paired with THAT call's own usage. It carries no size cap of its
+	// own; its lifetime is one turn (the journal is discarded when the
+	// turn ends) and its length is bounded only by ceilings enforced
+	// elsewhere — the loop's MaxIterations / agent_loop's iteration cap,
+	// the escalation ladder's four rungs — not by anything in this file.
+	// See RecordCandidateUsage and AppendEntry's doc comment for why
+	// this exists: on the ROUTED graph, exit_gate ALWAYS makes its own
+	// real, costed Generate() call between whatever revised the draft
+	// and assistant_write (unconditional, exec_compute.go's
+	// reviewExecutor), so it is ALWAYS the last call before AppendEntry
+	// — reading a single mutable "last response" slot at AppendEntry
+	// time can therefore NEVER recover a revision's own usage, not
+	// merely "if something else intervenes". Content-matching against
+	// this history is what recovers it without threading a new port
+	// through every executor between the reviser and session_write.
 	candidates []journalCandidate
 }
 
@@ -247,7 +251,19 @@ func (j *turnJournal) RecordCandidateUsage(text string, resp corellm.Response, p
 // most-recently-recorded first, for a text match against target
 // (TrimSpace-compared — the same rule AppendEntry's absorbed check
 // uses, for the same reason: a whitespace-only difference is not a
-// different call). Caller holds j.mu.
+// different call). The reverse scan is a deterministic tie-break, not a
+// probabilistic one: candidates is a plain slice, so "most recent"
+// means the same thing on every run, never map-iteration-order
+// intermittent. Caller holds j.mu.
+//
+// Known, accepted residual: two different Generate() calls that happen
+// to produce byte-identical (post-TrimSpace) text collide, and this
+// picks the more recent one. In this codebase today that would require
+// the review model to violate its JSON-only verdict instruction and
+// echo the draft verbatim — guarded by prompt format, not by code. Not
+// addressed here; a real occurrence would need either a stronger key
+// (e.g. a per-call id threaded through the port graph) or a schema
+// change, both bigger than this fix's scope.
 func (j *turnJournal) lookupCandidateUsageLocked(target string) (resp corellm.Response, providerKind, modelID string, ok bool) {
 	want := strings.TrimSpace(target)
 	for i := len(j.candidates) - 1; i >= 0; i-- {
@@ -658,6 +674,19 @@ func (j *turnJournal) AppendEntry(ctx context.Context, sessionID string,
 		if r, pk, mid, ok := j.lookupCandidateUsageLocked(entry.Content); ok {
 			resp, providerKind, modelID = r, pk, mid
 			haveUsage = true
+		} else {
+			// No recorded Generate() call produced this exact text — the
+			// row is dropped from usage rather than zeroed or
+			// misattributed (wrong-by-omission, not wrong-by-value), but
+			// for a fix whose entire purpose is eliminating invisible
+			// billing gaps, a silent no-op here is the wrong failure
+			// mode. This is the resolved-span path — the far more
+			// common of the two no-match sites (chat_runner.go's
+			// degenerate registration logs the same miss for the rare
+			// no-span case) — so if it ever fires in the wild we need
+			// to know.
+			logging.L().Warn("chat.usage.no_candidate_match",
+				"session_id", j.sessionID)
 		}
 	}
 	j.mu.Unlock()

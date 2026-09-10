@@ -679,9 +679,10 @@ func TestUsage_RoutedGraphFinalRowGetsTheChatMovesUsageNotTheExitGates(t *testin
 // retry/backtrack state machine (tool_dispatch's guard +
 // escalationLadderExecutor's retry->escalate->replan rungs), which is
 // the GRAPH's pre-existing routing logic, unrelated to this fix, and is
-// separately covered by TestRoutedTurn_DoomLoopRoutesIntoTheLadder
-// (core/agentgraph). What this fix changed is what AppendEntry does
-// once a revision reaches it with exit_gate's verdict call sitting
+// separately covered by TestRoutedTurn_DoomLoopRoutesIntoTheLadder —
+// package chat, routed_turn_integration_test.go, same package as this
+// file, not core/agentgraph. What this fix changed is what AppendEntry
+// does once a revision reaches it with exit_gate's verdict call sitting
 // between — and that is exactly what this test drives, through the
 // same production Generate()/AppendEntry code
 // TestUsage_RoutedGraphFinalRowGetsTheChatMovesUsageNotTheExitGates
