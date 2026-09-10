@@ -95,6 +95,7 @@ function mountWith(spec?: Partial<GraphSpec>) {
       }),
       getRunTrace: async () => [],
       resume: async () => undefined,
+      resolveApproval: async () => undefined,
       cancelRun: async () => undefined,
       materializeRun,
     },

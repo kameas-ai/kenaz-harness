@@ -20,6 +20,12 @@ interface MountOpts {
   status?: GraphRunStatus;
   trace?: GraphRunTraceEvent[];
   resumeImpl?: (runId: string, ans: string) => Promise<void>;
+  resolveApprovalImpl?: (
+    runId: string,
+    nodeId: string,
+    approved: boolean,
+    reason: string,
+  ) => Promise<void>;
   /** Materialized projection the run graph renders from (WP05). */
   materializedYAML?: string;
   materializeError?: string;
@@ -47,6 +53,7 @@ function mountWith(opts: MountOpts = {}) {
   const getRunStatus = vi.fn(async () => status);
   const getRunTrace = vi.fn(async () => trace);
   const resume = vi.fn(opts.resumeImpl ?? (async () => undefined));
+  const resolveApproval = vi.fn(opts.resolveApprovalImpl ?? (async () => undefined));
   const cancelRun = vi.fn(async () => undefined);
   const materializeRun = vi.fn(async (runID: string) => {
     if (opts.materializeError) throw new Error(opts.materializeError);
@@ -83,6 +90,7 @@ function mountWith(opts: MountOpts = {}) {
       getRunStatus,
       getRunTrace,
       resume,
+      resolveApproval,
       cancelRun,
       materializeRun,
     },
@@ -98,7 +106,15 @@ function mountWith(opts: MountOpts = {}) {
       },
     },
   });
-  return { wrapper, getRunStatus, getRunTrace, resume, cancelRun, materializeRun };
+  return {
+    wrapper,
+    getRunStatus,
+    getRunTrace,
+    resume,
+    resolveApproval,
+    cancelRun,
+    materializeRun,
+  };
 }
 
 describe('RunView', () => {
@@ -145,6 +161,56 @@ describe('RunView', () => {
     await wrapper.get('[data-testid="run-ask-submit"]').trigger('click');
     await flushPromises();
     expect(resume).toHaveBeenCalledWith('run-1', 'Alice');
+  });
+
+  // approval-node-01PMZC12 UNIT-7 / AC-09: the pending-approval block
+  // renders the prompt + approver role, and each button calls
+  // Graph_ResolveApproval with the correct verdict. Two assertions, not
+  // one — a single test that only exercises Approve would pass with
+  // Reject wired to Approve.
+  it('renders the pending-approval block and resolves Approve with approved=true', async () => {
+    const { wrapper, resolveApproval } = mountWith({
+      status: defaultStatus({
+        state: 'paused',
+        pendingApproval: { nodeId: 'a', prompt: 'Deploy to prod?', approverRole: 'admin' },
+      }),
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="run-pending-approval"]').exists()).toBe(true);
+    expect(wrapper.html()).toContain('Deploy to prod?');
+    expect(wrapper.html()).toContain('admin');
+    // The ask-resume control must not also render for an approval pause.
+    expect(wrapper.find('[data-testid="run-pending-ask"]').exists()).toBe(false);
+
+    await wrapper.get('[data-testid="run-approval-reason"]').setValue('looks good');
+    await wrapper.get('[data-testid="run-approval-approve"]').trigger('click');
+    await flushPromises();
+    expect(resolveApproval).toHaveBeenCalledWith('run-1', 'a', true, 'looks good');
+  });
+
+  it('resolves Reject with approved=false', async () => {
+    const { wrapper, resolveApproval } = mountWith({
+      status: defaultStatus({
+        state: 'paused',
+        pendingApproval: { nodeId: 'a', prompt: 'Deploy to prod?' },
+      }),
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="run-approval-reject"]').trigger('click');
+    await flushPromises();
+    expect(resolveApproval).toHaveBeenCalledWith('run-1', 'a', false, '');
+  });
+
+  it('renders the pending-ask block, not approval controls, for a pending ask', async () => {
+    const { wrapper } = mountWith({
+      status: defaultStatus({
+        state: 'paused',
+        pendingAsk: { nodeId: 'q', question: 'What is your name?' },
+      }),
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="run-pending-ask"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="run-pending-approval"]').exists()).toBe(false);
   });
 
   // agentgraph-total-convergence-01PMGX01 WP12: the run's trace and the
