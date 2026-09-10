@@ -1123,6 +1123,20 @@ func (s *converseStream) pump() {
 				if accum, ok := s.toolPartial[*v.Value.ContentBlockIndex]; ok {
 					accum.input.WriteString(*d.Value.Input)
 				}
+			case *types.ContentBlockDeltaMemberReasoningContent:
+				// Extended thinking (model-settings-reach-the-model-01PMZ101
+				// WP09). Only the text member carries renderable content;
+				// signature/redacted-content deltas are round-trip tokens
+				// with nothing to show the user.
+				if rd, ok := d.Value.(*types.ReasoningContentBlockDeltaMemberText); ok && rd.Value != "" {
+					s.events <- llm.StreamEvent{
+						Kind: llm.StreamReasoning,
+						Reasoning: &llm.ReasoningBlock{
+							Type:    "thinking",
+							Content: rd.Value,
+						},
+					}
+				}
 			}
 		case *types.ConverseStreamOutputMemberContentBlockStop:
 			if v.Value.ContentBlockIndex == nil {
