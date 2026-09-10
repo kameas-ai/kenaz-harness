@@ -786,6 +786,25 @@ func forbidSubagentAbortEngine(t *testing.T, branchID string) *cedar.Engine {
 	return e
 }
 
+// forbidSubagentSteerEngine is forbidSubagentAbortEngine's steer-action
+// mirror.
+func forbidSubagentSteerEngine(t *testing.T, branchID string) *cedar.Engine {
+	t.Helper()
+	e, err := cedar.NewEngine(cedar.Options{LoadFromDisk: false, IncludeEmbedded: false})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	src := fmt.Sprintf(`forbid (
+    principal == User::"local",
+    action == Action::"tool.subagent.steer",
+    resource == SubagentBranch::"%s"
+);`, branchID)
+	if err := e.SetPolicyText("deny_steer.cedar", []byte(src)); err != nil {
+		t.Fatalf("SetPolicyText: %v", err)
+	}
+	return e
+}
+
 // TestAPI_AbortSubagent_AllowedByDefault_StopsTaskAndAuditsOnce is
 // AC-09's positive half for Abort: against a live sub-agent (a tracked,
 // not-yet-terminal task), the call produces its observable effect
@@ -927,5 +946,97 @@ func TestAPI_AbortSubagent_TasksUnavailable(t *testing.T) {
 	}
 	if err := api.AbortSubagent(ctx, br.ID); !errors.Is(err, ErrSubagentUnavailable) {
 		t.Errorf("got %v, want ErrSubagentUnavailable", err)
+	}
+}
+
+// TestAPI_SteerSubagent_AppendsToChildSession_AndAuditsOnce is AC-09's
+// positive half for Steer.
+func TestAPI_SteerSubagent_AppendsToChildSession_AndAuditsOnce(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, _, _, em := newSubagentTestStack(t)
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, err := api.CreateBranch(ctx, CreateBranchOptions{ParentSessionID: parent.ID, Title: "worker"})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	before, _ := sessMgr.ListMessages(ctx, br.ChildSessionID)
+
+	if err := api.SteerSubagent(ctx, br.ID, "also check the retry path"); err != nil {
+		t.Fatalf("SteerSubagent: %v", err)
+	}
+
+	after, err := sessMgr.ListMessages(ctx, br.ChildSessionID)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	if len(after) != len(before)+1 {
+		t.Fatalf("child message count = %d, want %d", len(after), len(before)+1)
+	}
+	last := after[len(after)-1]
+	if last.Role != session.RoleUser || last.Content != "also check the retry path" {
+		t.Errorf("appended message = %+v, want role=user content=%q", last, "also check the retry path")
+	}
+
+	var found []audit.Event
+	for _, e := range em.snapshot() {
+		if e.Kind == audit.KindSubagentSteered {
+			found = append(found, e)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("KindSubagentSteered count = %d, want 1", len(found))
+	}
+	var payload audit.SubagentSteeredPayload
+	if err := json.Unmarshal(found[0].Payload, &payload); err != nil {
+		t.Fatalf("unmarshal SubagentSteeredPayload: %v", err)
+	}
+	if payload.BranchID != br.ID {
+		t.Errorf("payload.BranchID = %q, want %q", payload.BranchID, br.ID)
+	}
+	if payload.MessageLength != utf8.RuneCountInString("also check the retry path") {
+		t.Errorf("payload.MessageLength = %d, want %d", payload.MessageLength, utf8.RuneCountInString("also check the retry path"))
+	}
+}
+
+// TestAPI_SteerSubagent_DeniedByRealCedarPolicy is AC-09's negative
+// half for Steer. Fails if cedar.GateSubagentSteer is removed from
+// SteerSubagent.
+func TestAPI_SteerSubagent_DeniedByRealCedarPolicy(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, _, _, _ := newSubagentTestStack(t)
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, err := api.CreateBranch(ctx, CreateBranchOptions{ParentSessionID: parent.ID, Title: "worker"})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	before, _ := sessMgr.ListMessages(ctx, br.ChildSessionID)
+	api.cfg.Cedar = forbidSubagentSteerEngine(t, br.ID)
+
+	err = api.SteerSubagent(ctx, br.ID, "keep going")
+	if !errors.Is(err, ErrCedarDenied) {
+		t.Fatalf("SteerSubagent: got %v, want ErrCedarDenied", err)
+	}
+	after, _ := sessMgr.ListMessages(ctx, br.ChildSessionID)
+	if len(after) != len(before) {
+		t.Errorf("child message count changed under a denying gate: before=%d after=%d", len(before), len(after))
+	}
+}
+
+// TestAPI_SteerSubagent_InvalidArgs covers empty branchID and
+// empty/whitespace-only message.
+func TestAPI_SteerSubagent_InvalidArgs(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, _, _, _ := newSubagentTestStack(t)
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, _ := api.CreateBranch(ctx, CreateBranchOptions{ParentSessionID: parent.ID, Title: "worker"})
+
+	if err := api.SteerSubagent(ctx, "", "hi"); !errors.Is(err, ErrInvalidArg) {
+		t.Errorf("empty branchID: got %v, want ErrInvalidArg", err)
+	}
+	if err := api.SteerSubagent(ctx, br.ID, "   "); !errors.Is(err, ErrInvalidArg) {
+		t.Errorf("whitespace-only message: got %v, want ErrInvalidArg", err)
 	}
 }

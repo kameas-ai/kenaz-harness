@@ -702,6 +702,38 @@ func (a *API) AbortSubagent(ctx context.Context, branchID string) error {
 	return nil
 }
 
+// SteerSubagent appends a user message to a dispatched sub-agent's
+// child session (subagent-control-and-background-tasks-01PMZB11
+// UNIT-8) — the mirror of AppendToParent (used by the merge path
+// above), but onto br.ChildSessionID instead of br.ParentSessionID.
+func (a *API) SteerSubagent(ctx context.Context, branchID, message string) error {
+	if a == nil || a.cfg.Conversations == nil {
+		return ErrManagerUnavailable
+	}
+	if branchID == "" || strings.TrimSpace(message) == "" {
+		return ErrInvalidArg
+	}
+	if _, gerr := cedar.GateSubagentSteer(ctx, a.cfg.Cedar, branchID, utf8.RuneCountInString(message)); gerr != nil {
+		return fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
+	}
+	br, err := a.cfg.Conversations.Get(ctx, branchID)
+	if err != nil {
+		return fmt.Errorf("branches: get branch %q: %w", branchID, err)
+	}
+	if a.cfg.Sessions == nil {
+		return ErrManagerUnavailable
+	}
+	if _, err := a.cfg.Sessions.AppendMessage(ctx, br.ChildSessionID, session.Message{
+		Role:    session.RoleUser,
+		Content: message,
+	}); err != nil {
+		return fmt.Errorf("branches: append child: %w", err)
+	}
+	audit.MustEmit(ctx, a.cfg.Audit, audit.KindSubagentSteered,
+		audit.SubagentSteeredPayload{BranchID: branchID, MessageLength: utf8.RuneCountInString(message)}, a.now())
+	return nil
+}
+
 // toWire projects a conversation.Branch onto the Branch wire shape.
 func toWire(b conversation.Branch) Branch {
 	return Branch{

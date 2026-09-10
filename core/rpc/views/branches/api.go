@@ -200,6 +200,13 @@ type BranchesAPI interface {
 	// already-terminal sub-agent (returns nil, writes no additional
 	// audit record).
 	AbortSubagent(ctx context.Context, branchID string) error
+
+	// SteerSubagent appends a user message to a dispatched sub-agent's
+	// child session — the mirror of AppendToParent, but onto the child
+	// side (UNIT-8). Gated by cedar.ActionToolSubagentSteer and audited
+	// once per call (message text itself is never in the audit
+	// payload — see SubagentSteeredPayload).
+	SteerSubagent(ctx context.Context, branchID, message string) error
 }
 
 // fmtTime renders a time.Time as RFC3339Nano UTC, returning "" for the

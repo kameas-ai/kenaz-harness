@@ -209,9 +209,16 @@ const (
 	//     LLM stream; trust-relevant per owner ruling C-5, so it is
 	//     gated and audited like every other verb that mutates a running
 	//     agent.
+	//
+	//   ActionToolSubagentSteer — gates Subagent_Steer (append a user
+	//     message to a dispatched sub-agent's child session — UNIT-8).
+	//     Resource UID: SubagentBranch::"<branch-id>". Default-allow;
+	//     policy authors can forbid steering a specific branch or all
+	//     sub-agent branches.
 	ActionToolSubagentDispatch = "tool.subagent.dispatch"
 	ActionToolSubagentMerge    = "tool.subagent.merge"
 	ActionToolSubagentAbort    = "tool.subagent.abort"
+	ActionToolSubagentSteer    = "tool.subagent.steer"
 
 	// ── Model-side secret reference action family ──────────────────────────
 	// Introduced by mission model-secret-references-01KW7M5A.
