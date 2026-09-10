@@ -96,7 +96,7 @@ jobs:
     # Trivial bash coordinator — moved off ubuntu-latest to keep release
     # runs entirely on the self-hosted pool except for the Apple/Microsoft
     # platform builds below that genuinely need macos-latest / windows-latest.
-    runs-on: [self-hosted, Linux, ARM64, ci-fast]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_FAST || '["self-hosted","Linux","ARM64","ci-fast"]') }}
     outputs:
       target_env:         ${{ steps.pick.outputs.target_env }}
       bucket:             ${{ steps.pick.outputs.bucket }}
@@ -174,7 +174,7 @@ jobs:
   # ────────────────────────────────────────────────────────────────────────────
   derive-version:
     name: Derive version
-    runs-on: [self-hosted, Linux, ARM64, ci-fast]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_FAST || '["self-hosted","Linux","ARM64","ci-fast"]') }}
     needs: [resolve-env]
     outputs:
       version: ${{ steps.set.outputs.version }}
@@ -842,7 +842,7 @@ jobs:
     # Prod releases only — the image bake pins stable tags; dev/stage
     # channels don't need the asset.
     if: needs.resolve-env.outputs.target_env == 'prod'
-    runs-on: [self-hosted, Linux, ARM64, ci-medium]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_MEDIUM || '["self-hosted","Linux","ARM64","ci-medium"]') }}
     permissions:
       contents: read
       packages: read
@@ -906,7 +906,7 @@ jobs:
     # Prod releases only — same gating as served-spa: the image bake and
     # the kenaz vendoring pin stable tags.
     if: needs.resolve-env.outputs.target_env == 'prod'
-    runs-on: [self-hosted, Linux, ARM64, ci-fast]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_FAST || '["self-hosted","Linux","ARM64","ci-fast"]') }}
     permissions:
       contents: read
     steps:
@@ -938,7 +938,7 @@ jobs:
     # Only create/update a GitHub Release for prod-bound triggers.
     # dev (main push) and stage (rc tag) publish to S3 only.
     if: needs.resolve-env.outputs.target_env == 'prod'
-    runs-on: [self-hosted, Linux, ARM64, ci-fast]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_FAST || '["self-hosted","Linux","ARM64","ci-fast"]') }}
     outputs:
       release_tag: ${{ steps.create.outputs.tag }}
       release_url: ${{ steps.create.outputs.url }}
@@ -1123,7 +1123,7 @@ jobs:
       always() &&
       needs.build.result == 'success' &&
       (needs.release.result == 'success' || needs.release.result == 'skipped')
-    runs-on: [self-hosted, Linux, ARM64, ci-medium]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_MEDIUM || '["self-hosted","Linux","ARM64","ci-medium"]') }}
     # The kenaz-harness repo is private and GitHub release assets on
     # private repos require auth — public docs visitors get 404 hitting
     # github.com/.../releases/download/. Mirror to the per-env S3 bucket
