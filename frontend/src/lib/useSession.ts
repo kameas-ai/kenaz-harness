@@ -453,6 +453,17 @@ export function useSession(id: Ref<string>): UseSessionResult {
     output_tokens?: number;
     reasoning_tokens?: number;
   };
+  /**
+   * WireReasoning mirrors core/llm.ReasoningBlock as carried on a
+   * `kind: "reasoning"` stream chunk (model-settings-reach-the-model-
+   * 01PMZ101 WP16). `summary` and `raw` are not surfaced — only
+   * `content` renders.
+   */
+  type WireReasoning = {
+    type?: string;
+    content?: string;
+    summary?: string;
+  };
   type WireChunk = {
     sub_id?: string;
     session_id?: string;
@@ -463,6 +474,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
       err?: string;
       move?: WireMoveBoundary;
       usage?: WireUsage;
+      reasoning?: WireReasoning;
     };
   };
   type WireClosed = {
@@ -594,6 +606,51 @@ export function useSession(id: Ref<string>): UseSessionResult {
   }
 
   /**
+   * appendReasoningDelta routes one reasoning delta into the open move's
+   * `reasoning` field (model-settings-reach-the-model-01PMZ101 WP16).
+   * Mirrors appendDelta's fallback ladder exactly — same open-slot /
+   * newest-assistant-row / no-boundary-yet cases — so reasoning and text
+   * deltas land on the same bubble regardless of whether a move boundary
+   * announced it. Deliberately live-only: unlike `content`, `reasoning`
+   * is never written back to the persisted row (see the field's
+   * docstring in types.ts), so commitStreamingMoves carries it into
+   * `messages` for the remainder of this session's in-memory life but a
+   * reload never repopulates it.
+   */
+  function appendReasoningDelta(subID: string, delta: string) {
+    const rows = streamingMoves.value;
+    if (openMoveSlot >= 0 && openMoveSlot < rows.length) {
+      const target = rows[openMoveSlot];
+      const next = rows.slice();
+      next[openMoveSlot] = {
+        ...target,
+        reasoning: (target.reasoning ?? "") + delta,
+      };
+      streamingMoves.value = next;
+      return;
+    }
+    for (let i = rows.length - 1; i >= 0; i--) {
+      if (rows[i].role !== "assistant") continue;
+      const next = rows.slice();
+      next[i] = { ...rows[i], reasoning: (rows[i].reasoning ?? "") + delta };
+      openMoveSlot = i;
+      streamingMoves.value = next;
+      return;
+    }
+    const row: Message = {
+      id: `streaming-${subID}`,
+      sessionId: id.value,
+      role: "assistant",
+      content: "",
+      reasoning: delta,
+      createdAt: new Date().toISOString(),
+      streaming: true,
+    };
+    openMoveSlot = rows.length;
+    streamingMoves.value = [...rows, row];
+  }
+
+  /**
    * commitStreamingMoves lands the in-flight moves in `messages` and
    * clears the buffer. `failure` non-null stamps the partial-output
    * marker on the LAST move — the only one the drop actually truncated.
@@ -695,8 +752,20 @@ export function useSession(id: Ref<string>): UseSessionResult {
         };
         return;
       }
+      case "reasoning": {
+        // Extended-thinking delta (model-settings-reach-the-model-
+        // 01PMZ101 WP16). Closes the gap CHAT-09 named: reasoning
+        // reached this handler on every provider that emits it
+        // (Anthropic already; Bedrock and Gemini as of WP09) and was
+        // dropped one line short of the screen by the `default:` arm
+        // below. Live-only — see Message.reasoning's docstring.
+        const content = ev.reasoning?.content ?? "";
+        if (!content) return;
+        appendReasoningDelta(subID, content);
+        return;
+      }
       default:
-        // tool / reasoning frames not yet rendered.
+        // tool frames not yet rendered.
         return;
     }
   });
