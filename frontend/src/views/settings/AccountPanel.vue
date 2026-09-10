@@ -16,6 +16,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { refreshFeatureFlags } from '@/lib/featureFlags';
+import { isUserNotProvisionedError } from '@/lib/errors';
 import type { FleetIdentity, FleetProfileInfo } from '@/lib/types';
 
 const client = useHarnessClient();
@@ -28,6 +29,14 @@ const profile = ref<FleetProfileInfo | null>(null);
 const fleetDisabled = ref(false);
 const loading = ref(false);
 const error = ref('');
+/**
+ * True when the current `error` is ErrUserNotProvisioned — the Zitadel
+ * identity authenticated but has no Fleet account. Tracked separately from
+ * the humanized `error` string so the template can render a real `<a>`
+ * link built from `profile.fleetBaseUrl` instead of baking the URL into
+ * plain text (see humanizeFleetError below).
+ */
+const signupRequired = ref(false);
 
 // ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -38,6 +47,7 @@ onMounted(async () => {
 async function init() {
   loading.value = true;
   error.value = '';
+  signupRequired.value = false;
   try {
     // Try to fetch profile first — if fleet is disabled this will throw.
     profile.value = await client.settings.fleetProfile();
@@ -51,6 +61,17 @@ async function init() {
     const msg: string = e?.message ?? String(e);
     if (msg.includes('disabled by env')) {
       fleetDisabled.value = true;
+      identity.value = false;
+    } else if (isUserNotProvisionedError(e)) {
+      // This is the mount-time equivalent of signIn()'s catch: a user who
+      // signed in previously (tokens saved, SignedIn() reports true) but
+      // whose enroll never succeeded lands here on every app launch /
+      // Settings-Account visit, not just after clicking something. Without
+      // this branch they saw a plain "Sign in to fleet" button —
+      // indistinguishable from never having signed in at all, with no
+      // error text and no path to the fix.
+      signupRequired.value = true;
+      error.value = humanizeFleetError(msg);
       identity.value = false;
     } else {
       // Profile not configured or network error — treat as signed out.
@@ -81,6 +102,7 @@ const tierLabel = computed(() => {
 async function signIn() {
   loading.value = true;
   error.value = '';
+  signupRequired.value = false;
   // Pre-flight: if the build hasn't populated the env profile's client_id,
   // explain why sign-in is unavailable instead of trying and failing with
   // an opaque message. The fleet client returns ErrProfileNotConfigured in
@@ -103,6 +125,15 @@ async function signIn() {
     // (docs/dead-code-audit-2026-08-16.md finding A4, part 2)
     await refreshFeatureFlags(client);
   } catch (e: any) {
+    // Branch on the sentinel, not a substring of the raw fleet server
+    // response — enrollIdentity now parses the {code, message} envelope
+    // and wraps ErrUserNotProvisioned with a stable prefix (see
+    // core/fleet/identity.go). Checking the raw error here (before
+    // humanizeFleetError's generic string matching) is what lets the
+    // template render an actual link instead of the raw JSON body that
+    // used to leak straight through humanizeFleetError's `return raw;`
+    // fallthrough.
+    signupRequired.value = isUserNotProvisionedError(e);
     error.value = humanizeFleetError(e?.message ?? String(e ?? ''));
     identity.value = false;
   } finally {
@@ -115,6 +146,9 @@ async function signIn() {
 // core/fleet/errors.go.
 function humanizeFleetError(raw: string): string {
   if (!raw) return 'Sign-in failed. Please try again.';
+  if (isUserNotProvisionedError(raw)) {
+    return "You signed in with Zitadel, but this account hasn't finished Fleet signup yet.";
+  }
   if (raw.includes('env profile not populated')) {
     return (
       'Sign-in is not available: the identity provider is not configured in this build. ' +
@@ -188,13 +222,19 @@ async function signOut() {
 async function refreshIdentity() {
   loading.value = true;
   error.value = '';
+  signupRequired.value = false;
   try {
     identity.value = await client.settings.fleetRefreshIdentity();
     // Re-enrolment is where a tier change lands (roles/tier come back from the
     // enroll endpoint), and tier is what the capability set is derived from.
     await refreshFeatureFlags(client);
   } catch (e: any) {
-    error.value = e?.message ?? 'Refresh failed.';
+    // Same terminal condition as signIn()'s catch: route through
+    // humanizeFleetError instead of showing the raw error string, so a
+    // re-enroll that starts 403ing (e.g. the account was deprovisioned)
+    // renders the same actionable message + link, not raw JSON.
+    signupRequired.value = isUserNotProvisionedError(e);
+    error.value = humanizeFleetError(e?.message ?? String(e ?? 'Refresh failed.'));
   } finally {
     loading.value = false;
   }
@@ -238,7 +278,17 @@ async function refreshIdentity() {
         {{ loading ? 'Opening browser…' : 'Sign in to fleet' }}
       </button>
     </div>
-    <p v-if="error" class="error-msg" data-testid="error-msg">{{ error }}</p>
+    <p v-if="error" class="error-msg" data-testid="error-msg">
+      {{ error }}
+      <a
+        v-if="signupRequired && profile?.fleetBaseUrl"
+        :href="profile.fleetBaseUrl"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="finish-signup-link"
+        data-testid="finish-signup-link"
+      >Finish signup at {{ profile.fleetBaseUrl }}</a>
+    </p>
   </div>
 
   <!-- ── Signed-in state ───────────────────────────────────────────────── -->
@@ -298,7 +348,17 @@ async function refreshIdentity() {
         Sign out
       </button>
     </div>
-    <p v-if="error" class="error-msg" data-testid="error-msg">{{ error }}</p>
+    <p v-if="error" class="error-msg" data-testid="error-msg">
+      {{ error }}
+      <a
+        v-if="signupRequired && profile?.fleetBaseUrl"
+        :href="profile.fleetBaseUrl"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="finish-signup-link"
+        data-testid="finish-signup-link"
+      >Finish signup at {{ profile.fleetBaseUrl }}</a>
+    </p>
   </div>
 </template>
 
@@ -450,5 +510,12 @@ async function refreshIdentity() {
   font-size: 0.8125rem;
   color: var(--danger);
   margin-top: 0.5rem;
+}
+
+.finish-signup-link {
+  display: block;
+  margin-top: 0.35rem;
+  color: var(--accent);
+  text-decoration: underline;
 }
 </style>

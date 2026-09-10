@@ -72,8 +72,10 @@ type Profile struct {
 	WhenToUse string `yaml:"when_to_use" json:"whenToUse,omitempty"`
 
 	// Model is the LLM to use in the spawned branch. Follows the
-	// "<provider>/<model-id>" convention (e.g. "anthropic/claude-haiku-4-5").
-	// Empty means inherit the parent session's model.
+	// "<provider>/<model-id>" convention (e.g. "anthropic/claude-haiku-4.5")
+	// — this is an OpenRouter-shaped vendor/model id, not Anthropic's own
+	// direct-API id (which is bare, no vendor prefix). Empty means inherit
+	// the parent session's model.
 	Model string `yaml:"model" json:"model,omitempty"`
 
 	// AutonomyTier controls the worker's auto-approval and iteration budget.

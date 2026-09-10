@@ -463,6 +463,217 @@ func TestAbort_StopsSpawnedSubagentStream(t *testing.T) {
 	t.Fatal("Abort did not stop the underlying LLM stream — blockingModel's context was never cancelled")
 }
 
+// TestTimeout_StopsSpawnedSubagentStream is the timeout-path counterpart
+// to TestAbort_StopsSpawnedSubagentStream above, proving the SAME
+// underlying defect for the path a human never touches: when
+// awaitSubagentRun's deadline fires before the run's stream ever closes,
+// the run must actually stop, not merely be reported as stopped.
+//
+// Before this fix, the <-deadline.C branch in awaitSubagentRun set
+// outcome/exitCode and called taskReg.End directly — it never routed
+// through the SAME stopStream/LLM.StopStream mechanism
+// TestAbort_StopsSpawnedSubagentStream already exercises for the
+// human-initiated Abort path. taskReg.End would report a terminal task
+// status (failed, exit -1) while blockingModel.Generate stayed parked on
+// <-ctx.Done() indefinitely: the LLM stream, its driver goroutine and its
+// token spend all kept running past the reported timeout. Ground truth
+// here is deliberately the SAME as TestAbort_StopsSpawnedSubagentStream's:
+// the model's own context observing cancellation, not the task row's
+// Status field (which reaches a terminal value on either side of the fix,
+// since awaitSubagentRun's pre-fix build already called taskReg.End on
+// the timeout branch — that call was always the lie, not a missing one).
+//
+// Mutation: comment out the `if stopStream != nil { stopStream(...) }`
+// block in the <-deadline.C case of awaitSubagentRun (core/rpc/
+// subagent_run_spawner.go). Must revert to this test's pre-fix failure.
+func TestTimeout_StopsSpawnedSubagentStream(t *testing.T) {
+	blocking := &blockingModel{started: make(chan struct{})}
+	stack := buildSubagentSpawnerTestStackWithLLM(t, blocking)
+	// Short enough that the test doesn't stall, but long enough that
+	// blocking.started is reliably observed before the deadline fires —
+	// the whole point is to catch the run genuinely mid-generation when
+	// the timeout hits, not to race the spawn itself.
+	stack.armSpawner(t, 200*time.Millisecond)
+
+	parent, err := stack.sessionsAPI.Create(context.Background(), "parent session")
+	if err != nil {
+		t.Fatalf("create parent session: %v", err)
+	}
+
+	tool := coresubagent.New(coresubagent.Options{
+		DataDir: t.TempDir(),
+		Seam:    stack.seam,
+	})
+	ctx := toolloop.WithSessionID(context.Background(), parent.ID)
+	args := json.RawMessage(`{"profile":"explore","prompt":"long-running task"}`) // run_in_background defaults true
+
+	raw, err := tool.Call(ctx, args)
+	if err != nil {
+		t.Fatalf("Call: unexpected Go error: %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got, _ := result["status"].(string); got != "running" {
+		t.Fatalf("status=%q, want running; full result=%+v", got, result)
+	}
+
+	// Confirm the model was actually mid-generation — otherwise the
+	// timeout firing before Generate even started would prove nothing
+	// about stopping a LIVE stream.
+	select {
+	case <-blocking.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("blockingModel.Generate was never called — the spawner never actually started a run")
+	}
+
+	// Do NOT call Abort. Just wait past the spawner's 200ms timeout and
+	// assert the model's OWN context observed cancellation — ground
+	// truth that the run actually stopped, not that a task row somewhere
+	// says it did.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if blocking.wasCancelled() {
+			goto stopped
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timeout did not stop the underlying LLM stream — blockingModel's context was never cancelled")
+
+stopped:
+	// Ground truth #2: the task registry must ALSO report the run as
+	// terminal (this half already worked pre-fix — taskReg.End was
+	// always called on the timeout branch, which is exactly what made
+	// the pre-fix behaviour a lie: a true terminal status paired with a
+	// stream that was still running). Both must hold post-fix.
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, tk := range stack.tasks.List() {
+			if tk.Kind == coretasks.KindSubagent && tk.IsTerminal() {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("no terminal subagent task found after the stream was stopped")
+}
+
+// wedgedStopLLM is a minimal llmview.LLMConnectorAPI fake (embeds stubLLM
+// for every method this test doesn't care about) whose StopStream call
+// NEVER returns — not even when the context it's handed is cancelled,
+// mirroring the real production hazard this fixture exists to guard
+// against: ChatRunner.StopStream's own ctx parameter is `_` (chat_runner.go),
+// so it cannot be short-circuited by a caller-side context.WithTimeout
+// either. This is the fake for PR #315's second falsification: proving
+// awaitSubagentRun's OWN bound (subagentStopTimeout) protects the await
+// goroutine even when the underlying stop call is genuinely, permanently
+// stuck — not just slow.
+//
+// This substitutes deps.LLM directly rather than going through the real
+// ChatRunner (unlike blockingModel, which fakes only the model beneath a
+// real ChatRunner). That is deliberate here: the property under test —
+// "does awaitSubagentRun's select still return when stopStream itself
+// never does" — lives entirely inside awaitSubagentRun and the stopStream
+// closure (`deps.LLM.StopStream`), so faking LLM at that boundary still
+// drives the REAL awaitSubagentRun function, the REAL select/goroutine
+// bound, and the REAL taskReg.End call — it does not drive a real
+// ChatRunner, but the real ChatRunner is not what this bound protects
+// against; a wedged StopStream implementation is.
+type wedgedStopLLM struct {
+	stubLLM
+	subID      string
+	stopCalled chan struct{}
+}
+
+func (w *wedgedStopLLM) StartStream(_ context.Context, _, _, _ string) (string, error) {
+	return w.subID, nil
+}
+
+func (w *wedgedStopLLM) StopStream(_ context.Context, _ string) error {
+	close(w.stopCalled)
+	select {} // never returns, regardless of ctx — the hazard itself.
+}
+
+// TestTimeout_StopCallWedged_TaskStillReachesTerminal is the bounded-stop
+// counterpart to TestTimeout_StopsSpawnedSubagentStream: it proves that
+// when the STOP CALL ITSELF (not just the run) is stuck, awaitSubagentRun
+// does not wedge forever waiting on it — subagentStopTimeout bounds that
+// wait, and the task still reaches a terminal state.
+//
+// Ground truth is deliberately structural, matching the file's existing
+// standard (not "the stop func was called" — TestAbort_StopsSpawnedSubagentStream
+// already proved calling isn't the same as stopping): here it's "does
+// run.Wait() return at all" and "does the task registry reach a terminal
+// state", neither of which the pre-bound code could guarantee once
+// stopStream itself never returns.
+//
+// Mutation: replace the bounded select/goroutine block in the
+// <-deadline.C case of awaitSubagentRun with a direct, unbounded
+// `stopStream(context.Background())` call (the PR's own prior shape).
+// Must fail — this test's own external bound (well past
+// subagentStopTimeout) times out waiting for run.Wait() to return.
+func TestTimeout_StopCallWedged_TaskStillReachesTerminal(t *testing.T) {
+	bus := NewEventBus()
+	taskReg := coretasks.NewRegistry(coretasks.Options{})
+	fakeLLM := &wedgedStopLLM{subID: "wedged-sub-1", stopCalled: make(chan struct{})}
+
+	spawn := NewSubagentRunSpawner(SubagentRunSpawnerDeps{
+		LLM:            fakeLLM,
+		Bus:            bus,
+		Tasks:          taskReg,
+		DefaultProfile: func() string { return "test-profile" },
+		Timeout:        50 * time.Millisecond, // short: the outer wait should give up fast
+	})
+
+	run, err := spawn(context.Background(), "branch-1", "child-session-1", coreag.ForkRequest{
+		ParentSessionID: "parent-1",
+		Title:           "wedged stop test",
+	})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if run.TaskID == "" {
+		t.Fatal("spawn produced no TaskID")
+	}
+
+	// Confirm StopStream was actually invoked — otherwise a fast pass
+	// here would prove nothing about the bound (it could just mean the
+	// timeout branch was never reached).
+	select {
+	case <-fakeLLM.stopCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("StopStream was never called — the spawner's timeout branch never fired")
+	}
+
+	// Ground truth #1: Wait() must return within a bounded time even
+	// though wedgedStopLLM.StopStream never does. Give it generous
+	// headroom over subagentStopTimeout (5s) so this isn't a flaky race
+	// against the bound itself — 15s total is still far short of
+	// "forever", which is the only alternative if the bound is missing.
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- run.Wait(context.Background()) }()
+	select {
+	case werr := <-waitDone:
+		if werr == nil {
+			t.Fatal("Wait() returned nil error for a run that never completed")
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("Wait() did not return within 15s — the await goroutine wedged on the stuck stop call")
+	}
+
+	// Ground truth #2: the task must still reach a terminal state. A
+	// wedged stop call must not leave the Tasks panel showing "running"
+	// forever any more than the original defect this PR fixes did.
+	tk, ok := taskReg.Get(run.TaskID)
+	if !ok {
+		t.Fatal("task not found in registry")
+	}
+	if !tk.IsTerminal() {
+		t.Fatalf("task status = %q, want a terminal status", tk.Status)
+	}
+}
+
 // TestSubagentDispatch_DepthLimitRefusesRecursion is N2's falsification
 // proof: chain kenaz__subagent_dispatch's own seam (BranchSeamAdapter.Fork)
 // graphview.MaxForkDepth times, each dispatch's child session becoming

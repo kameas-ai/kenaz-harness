@@ -43,7 +43,7 @@ concurrency:
 jobs:
   reconcile:
     name: Tags vs published releases
-    runs-on: [self-hosted, Linux, ARM64, ci-fast]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_FAST || '["self-hosted","Linux","ARM64","ci-fast"]') }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
