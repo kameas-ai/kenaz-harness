@@ -875,6 +875,25 @@ func GateScheduledChatExecute(ctx context.Context, g Gate, id, createdBy string,
 	return d, &PolicyDeniedError{Decision: d}
 }
 
+// GateSubagentAbort is the gate-hook helper for the Subagent_Abort RPC
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8, AC-09).
+// Returns nil on Allow / NotApplicable; *PolicyDeniedError on Deny.
+// Default-allow when g is nil (pre-boot / test posture), same as every
+// other gate-hook helper in this file. branchID is the
+// core/rpc/views/branches.Branch.ID being aborted.
+func GateSubagentAbort(ctx context.Context, g Gate, branchID string) (Decision, error) {
+	if g == nil {
+		return Decision{
+			Outcome:  Allow,
+			Action:   ActionToolSubagentAbort,
+			Resource: SubagentBranchUID(branchID).String(),
+			Reason:   "no engine wired (default-allow)",
+		}, nil
+	}
+	d := g.Evaluate(ctx, UserUID(), ActionToolSubagentAbort, SubagentBranchUID(branchID), nil)
+	return d, enforce(d)
+}
+
 // CheckExportSession is the gate-hook helper for the Sessions_Export RPC
 // (session-export-01NDFSEX05 WP01). Returns nil on Allow / NotApplicable;
 // *PolicyDeniedError on Deny. Default-allow when g is nil.

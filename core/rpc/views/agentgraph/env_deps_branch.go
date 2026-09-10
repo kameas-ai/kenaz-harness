@@ -328,6 +328,41 @@ func (a *BranchSeamAdapter) WaitForChildRun(ctx context.Context, branchID string
 	return outcome.run.Wait(ctx)
 }
 
+// TaskIDForBranch returns the core/tasks.Registry id backing branchID's
+// spawned child run, when one was recorded by Fork (subagent-control-
+// and-background-tasks-01PMZB11 UNIT-8 — Subagent_Abort's lookup from
+// a branch id to the task Registry.Abort actually needs).
+//
+// Deliberately a READ, unlike WaitForChildRun which evicts a.runs[branchID]
+// on the same lookup: WaitForChildRun's eviction is correct for its own
+// contract (called at most once per branch, by the merge path, to hand
+// back the terminal outcome) but would be wrong here — Abort must be
+// able to find the same branch's task id on every call for as long as
+// the run hasn't been waited on yet, including a second Abort call
+// against an already-terminal task (the idempotency case AC-09
+// requires: Abort must still resolve the same task id so
+// Registry.Abort's own ErrAlreadyTerminal path — not a "task not
+// found" error masking it — is what the caller sees).
+//
+// ok is false when Fork never recorded an outcome for this branch (no
+// spawner wired, WaitForChildRun already evicted it, or the spawner
+// itself failed to start — SpawnedRun.TaskID is only ever set on a
+// success path, see subagent_run_spawner.go), or when a spawner ran
+// but no task registry was wired (deps.Tasks nil — SpawnedRun.TaskID
+// stays "").
+func (a *BranchSeamAdapter) TaskIDForBranch(branchID string) (string, bool) {
+	if a == nil {
+		return "", false
+	}
+	a.runsMu.Lock()
+	outcome, ok := a.runs[branchID]
+	a.runsMu.Unlock()
+	if !ok || outcome.err != nil || outcome.run.TaskID == "" {
+		return "", false
+	}
+	return outcome.run.TaskID, true
+}
+
 // AppendToParent appends a message to the parent session of the
 // branch. role is usually "system" so the rail UI can mark the merge
 // summary as a system note.

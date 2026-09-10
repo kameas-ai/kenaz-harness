@@ -14,8 +14,10 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/context/audit"
 	"github.com/kameas-ai/kenaz-harness/core/conversation"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/session"
+	coretasks "github.com/kameas-ai/kenaz-harness/core/tasks"
 )
 
 // ErrManagerUnavailable signals the chassis booted without the
@@ -24,6 +26,42 @@ var ErrManagerUnavailable = errors.New("branches: manager unavailable")
 
 // ErrInvalidArg covers trivially invalid inputs.
 var ErrInvalidArg = errors.New("branches: invalid argument")
+
+// ErrCedarDenied is returned when a cedar gate explicitly denies
+// AbortSubagent / SteerSubagent (subagent-control-and-background-tasks-
+// 01PMZB11 UNIT-8). Wrapped, not swallowed, so callers can
+// errors.Is(err, ErrCedarDenied) — same convention as
+// core/rpc/views/scheduledchat.ErrCedarDenied.
+var ErrCedarDenied = errors.New("branches: denied by cedar policy")
+
+// ErrSubagentUnavailable is returned by AbortSubagent / SteerSubagent
+// when the task registry or task-lookup dependency was not wired
+// (degraded boot — mirrors ErrManagerUnavailable's posture for the
+// rest of this API).
+var ErrSubagentUnavailable = errors.New("branches: subagent task tracking unavailable")
+
+// ErrSubagentTaskNotFound is returned by AbortSubagent when branchID
+// has no tracked background task — either it was never a spawner-
+// backed dispatch, or WaitForChildRun already consumed the mapping
+// (see BranchSeamAdapter.TaskIDForBranch's doc for when that happens).
+var ErrSubagentTaskNotFound = errors.New("branches: no tracked task for this branch")
+
+// SubagentTaskRegistry is the narrow core/tasks.Registry surface
+// AbortSubagent needs (subagent-control-and-background-tasks-01PMZB11
+// UNIT-8). Kept narrow — mirrors core/rpc/views/tasks.RegistryIface —
+// so this package depends on one method, not the registry's full
+// surface.
+type SubagentTaskRegistry interface {
+	Abort(ctx context.Context, id string) error
+}
+
+// SubagentTaskLookup resolves the core/tasks.Registry id backing a
+// branch's spawned child run. Narrow interface over
+// *core/rpc/views/agentgraph.BranchSeamAdapter.TaskIDForBranch so this
+// package does not need to import agentgraph's full surface.
+type SubagentTaskLookup interface {
+	TaskIDForBranch(branchID string) (string, bool)
+}
 
 // BranchListBroker is the narrow publish surface the branches API needs
 // to emit session.list_changed events after a new branch session is created.
@@ -68,6 +106,21 @@ type Config struct {
 	// the zero value, which EffectiveBranchReintegrationMaxTokens
 	// already treats as "use the default".
 	Settings func() settings.Settings
+	// Tasks is the background-task registry AbortSubagent delegates to
+	// (subagent-control-and-background-tasks-01PMZB11 UNIT-8). nil
+	// degrades AbortSubagent to ErrSubagentUnavailable — matches this
+	// file's existing degraded-boot posture rather than panicking.
+	Tasks SubagentTaskRegistry
+	// TaskLookup resolves a branch id to its tracked task id.
+	// Production wiring is the SAME *BranchSeamAdapter instance
+	// core/rpc/api.go threads through EnvDeps.Branch (a.branchSeam) —
+	// not a second lookup path. nil degrades the same as Tasks == nil.
+	TaskLookup SubagentTaskLookup
+	// Cedar gates AbortSubagent / SteerSubagent. nil default-allows
+	// (matches every other gate-hook call site in the harness —
+	// cedar.GateSubagentAbort / GateSubagentSteer's own nil-Gate
+	// contract), the pre-boot / test posture.
+	Cedar cedar.Gate
 }
 
 // API is the concrete BranchesAPI implementation.
@@ -606,6 +659,46 @@ func (a *API) SetAdvisorDismissed(ctx context.Context, sessionID string, dismiss
 			Scope:  "session",
 			Reason: "dont_suggest_again",
 		}, a.now())
+	return nil
+}
+
+// AbortSubagent stops a dispatched sub-agent's underlying run and
+// marks its task cancelled (subagent-control-and-background-tasks-
+// 01PMZB11 UNIT-8). Delegates to Tasks.Abort for the actual stop — see
+// core/tasks.Registry.Abort's doc for the pid-vs-stopFunc mechanics —
+// this method is the branch-scoped resolver + gate + audit wrapper
+// around that existing call, not a second stop implementation.
+//
+// Idempotent: a second call against an already-terminal task (Abort
+// returns coretasks.ErrAlreadyTerminal) returns nil without writing a
+// second audit record — the state transition already happened once,
+// on whichever call produced it.
+func (a *API) AbortSubagent(ctx context.Context, branchID string) error {
+	if a == nil || a.cfg.Conversations == nil {
+		return ErrManagerUnavailable
+	}
+	if branchID == "" {
+		return ErrInvalidArg
+	}
+	if _, gerr := cedar.GateSubagentAbort(ctx, a.cfg.Cedar, branchID); gerr != nil {
+		return fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
+	}
+	if a.cfg.Tasks == nil || a.cfg.TaskLookup == nil {
+		return ErrSubagentUnavailable
+	}
+	taskID, ok := a.cfg.TaskLookup.TaskIDForBranch(branchID)
+	if !ok {
+		return ErrSubagentTaskNotFound
+	}
+	if err := a.cfg.Tasks.Abort(ctx, taskID); err != nil {
+		if errors.Is(err, coretasks.ErrAlreadyTerminal) {
+			// Idempotent no-op: nothing changed, so nothing new to audit.
+			return nil
+		}
+		return fmt.Errorf("branches: abort subagent: %w", err)
+	}
+	audit.MustEmit(ctx, a.cfg.Audit, audit.KindSubagentAborted,
+		audit.SubagentAbortedPayload{BranchID: branchID, TaskID: taskID}, a.now())
 	return nil
 }
 

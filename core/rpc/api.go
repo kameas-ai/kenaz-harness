@@ -2667,6 +2667,18 @@ func New(c *core.Core, opts ...Option) *API {
 		// Broker enables LeftRail real-time updates on branch creation
 		// (branch creates a new child session row): v0.5.3 fix.
 		Broker: a.broker,
+		// Tasks / TaskLookup / Cedar wire AbortSubagent + SteerSubagent
+		// (subagent-control-and-background-tasks-01PMZB11 UNIT-8).
+		// taskReg and a.branchSeam are both already constructed by this
+		// point in New() (taskReg at this function's top, a.branchSeam
+		// at newGraphManagerWithDeps a few hundred lines above) — the
+		// SAME instances the sub-agent dispatch/spawn path (UNIT-6,
+		// core/rpc/subagent_run_spawner.go) already threads through
+		// EnvDeps.Branch and SubagentRunSpawnerDeps.Tasks, not a second
+		// registry or a second seam.
+		Tasks:      taskReg,
+		TaskLookup: a.branchSeam,
+		Cedar:      a.cedarGate(),
 		// Settings gives ProposeReintegrationSummary the persisted
 		// BranchReintegrationMaxTokens instead of a hardcoded 2000
 		// (engineer-truth-pass-01PMTP01 WP02, finding B2).
