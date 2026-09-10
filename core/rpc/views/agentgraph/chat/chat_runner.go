@@ -1043,13 +1043,23 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// bridge, which needs the sub id. Attaching afterwards keeps the
 	// construction order honest — the adapters hold pointers.
 	// r.cfg.UsageHook is threaded straight in (fix/usage-persists-on-
-	// every-move): the journal now fires it directly for every non-final
-	// assistant_move it persists, since HookPostLLM (registered on it
-	// below) only ever fires once per turn, for the `final` row. Nil is
-	// fine — records() / fireUsage both nil-check before doing anything.
+	// every-move): the journal fires it directly for every persisted
+	// assistant-role row, final included (see moves.go's file header).
+	// Nil is fine — records() / fireUsage both nil-check before doing
+	// anything.
 	journal := newTurnJournal(r.cfg.HistoryWriter, bridge.Emit, sessionID, turnSpanID, r.cfg.UsageHook)
 	llmAdapter.WithMoveJournal(journal)
 	toolAdapter.withMoves(journal)
+	// WithLastResponseFn wires the fallback source for a REVISED final
+	// row's usage (moves.go's AppendEntry doc comment — the exit
+	// gate/escalation ladder authored the persisted text directly, so
+	// there is no per-move heldResp snapshot to use instead). llmAdapter
+	// is already fully constructed at this point (see the comment
+	// above), so its LastResponse/ProviderKind/ActiveModelID are safe to
+	// close over here.
+	journal.WithLastResponseFn(func() (corellm.Response, string, string) {
+		return llmAdapter.LastResponse(), llmAdapter.ProviderKind(), llmAdapter.ActiveModelID()
+	})
 	// env.HistoryWriter stays nil when nothing was configured, so
 	// applyEnvDefaults installs the kernel's ErrNoHistoryWriter stub and
 	// session_write still fails loudly. Interposing the journal there
@@ -1236,7 +1246,24 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		}
 		capturedAdapter := llmAdapter
 		capturedSessionID := sessionID
-		if r.cfg.UsageHook != nil {
+		// fix/usage-persists-on-every-move, round 2: gated on
+		// !journal.records(). For every ordinary turn (a resolved span —
+		// the overwhelming majority) turnJournal.AppendEntry now fires
+		// usage for the final row itself, sourced from heldResp/
+		// lastResponseFn (see moves.go). Registering THIS callback too
+		// would fire a SECOND write for the same row, reading
+		// LastResponse() unconditionally — on the routed graph that is
+		// provably the exit gate's verdict usage, not the chat answer's
+		// (the misattribution a reviewer's loadRoutedChatGraph repro
+		// caught), and it would run AFTER the journal's own correct
+		// write (this hook fires once AppendEntry returns to
+		// sessionWriteExecutor), so it would silently overwrite the
+		// right value with the wrong one. journal.records() is false
+		// only for the degenerate no-user-message-to-span-from case,
+		// where the journal writes everything classic and never calls
+		// fireUsage itself — this registration is that case's only
+		// usage writer, unchanged from before this fix.
+		if r.cfg.UsageHook != nil && !journal.records() {
 			usageHook := r.cfg.UsageHook
 			env.Hooks.RegisterPostHook(coreag.HookPostLLM, func(ctx context.Context, sID, messageID, _ string) {
 				resp := capturedAdapter.LastResponse()

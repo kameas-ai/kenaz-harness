@@ -79,35 +79,51 @@ type LLMProviderAdapter struct {
 	tools []corellm.ToolSpec
 	// lastRespMu protects lastResp.
 	lastRespMu sync.Mutex
-	// lastResp stores the most recent llm.Response produced by Generate.
-	// The session_write HookPostLLM callback reads this to record usage
-	// for the turn's TERMINAL Generate call ONLY — the one whose text
-	// becomes (or is absorbed into) the `final` transcript row
-	// session_write persists.
+	// lastResp stores the most recent llm.Response produced by Generate —
+	// a single mutable slot, overwritten by EVERY Generate call this
+	// adapter serves, tracked-move or not (the tool-call loop, the exit
+	// gate's private verdict, the escalation ladder, the fused router,
+	// the compaction strategy all reach this same adapter and all
+	// overwrite it).
 	//
-	// CORRECTED (fix/usage-persists-on-every-move): this comment used to
-	// claim the single mutable slot was "safe because each kernel run is
-	// sequential (one Generate completes before session_write fires, and
-	// session_write fires before the next Generate could start)". That
-	// was true only before model-moves-transcript-01PMCH01 WP02 taught
-	// the chat graph to loop Generate multiple times per turn (the
-	// tool-call loop) before session_write ever fires once. Since then, a
-	// multi-move turn overwrites this field N-1 times before anyone reads
-	// it, so reading it here only ever recovers the LAST Generate call's
-	// usage — the other N-1 calls' usage was silently dropped (a 58-row,
-	// 3-move real-world turn contributed $0 to its session's totals).
+	// CORRECTED TWICE (fix/usage-persists-on-every-move):
 	//
-	// That undercount is now fixed, but NOT by changing this field: it is
-	// still exactly what it says, a single overwritten slot, and reading
-	// it is still only correct for the terminal call (nothing else
-	// touches it between the last RecordAssistantMove and session_write
-	// firing in the common, non-revised case). The other N-1 calls' usage
-	// is captured separately and does not go through this field at all —
-	// RecordAssistantMove in moves.go takes its own per-call
-	// corellm.Response snapshot, and turnJournal.flushHeld /
-	// RecordPartial fire the usage hook directly from that snapshot the
-	// moment a non-final assistant_move is persisted. See moves.go's file
-	// header, "USAGE CAPTURE".
+	//  1. This comment used to claim the slot was "safe because each
+	//     kernel run is sequential (one Generate completes before
+	//     session_write fires, and session_write fires before the next
+	//     Generate could start)". That was true only before
+	//     model-moves-transcript-01PMCH01 WP02 taught the chat graph to
+	//     loop Generate multiple times per turn — since then, a
+	//     multi-move turn overwrote this field N-1 times before anyone
+	//     read it (a 58-row, 3-move real-world turn contributed $0 to
+	//     its session's totals). Fixed by moves.go: RecordAssistantMove
+	//     now takes its own per-call corellm.Response snapshot the
+	//     instant each move completes, and turnJournal.flushHeld /
+	//     RecordPartial fire usage from THAT snapshot, never this field,
+	//     for every non-final assistant_move.
+	//
+	//  2. Round 1 of that fix left the `final` row reading THIS field
+	//     directly, on the claim that "nothing else touches it between
+	//     the last RecordAssistantMove and session_write firing in the
+	//     common, non-revised case." That claim is true on the CLASSIC
+	//     graph (AgenticTurnRouting off, the shipped default) — nothing
+	//     runs between the chat move's Generate and session_write there,
+	//     so lastResp genuinely held the terminal call's own usage. It
+	//     is FALSE on the ROUTED graph (AgenticTurnRouting on, built and
+	//     gated off, not yet the default): exit_gate (kind: review)
+	//     makes its own real, costed Generate call between the loop and
+	//     session_write, overwriting this field with the GATE's small
+	//     verdict usage before the final row's hook could read it — a
+	//     misattribution an independent reviewer proved by running
+	//     loadRoutedChatGraph with distinct usage per call. Fixed by
+	//     moves.go's AppendEntry: the common (absorbed) case now sources
+	//     usage from heldResp — the same per-call snapshot moves use,
+	//     captured before the gate's call could ever run — and this
+	//     field is read (via lastResponseFn) ONLY for the genuinely-
+	//     revised case, where the last Generate call before AppendEntry
+	//     really did author the persisted text and reading this field is
+	//     correct for the reason it always was. See moves.go's file
+	//     header, "USAGE CAPTURE", and AppendEntry's doc comment.
 	lastResp corellm.Response
 
 	// capturer is the optional generated-image auto-capture pipeline

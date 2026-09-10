@@ -184,7 +184,13 @@ func (noopMemoryStore) Read(context.Context, coreag.MemoryReadFilter) ([]coreag.
 // production wiring uses (core/rpc/api.go), instead of
 // recordingHistoryWriter. A fake writer cannot exercise the SQL-path
 // mutations these tests exist to pin (CLAUDE.md blind spot #2).
-func buildMoveRunnerRealSQLite(t *testing.T, reg *scriptedRegistry, pool *scriptedPool) (
+//
+// graph is caller-supplied (loadProductionChatGraph or
+// loadRoutedChatGraph) so the SAME real-sqlite/real-usage.Manager
+// harness can drive either topology — round 2 of this fix needs the
+// routed graph specifically, since the misattribution it found only
+// exists where exit_gate sits between the loop and session_write.
+func buildMoveRunnerRealSQLite(t *testing.T, reg *scriptedRegistry, pool *scriptedPool, graph coreag.Graph) (
 	runner *ChatRunner, broker *recordingBroker, sessionMgr *session.Manager, usageMgr usage.Manager, db storage.DB) {
 	t.Helper()
 
@@ -204,7 +210,6 @@ func buildMoveRunnerRealSQLite(t *testing.T, reg *scriptedRegistry, pool *script
 	usageMgr = usage.New(db)
 
 	broker = &recordingBroker{}
-	graph := loadProductionChatGraph(t)
 	runner, err = New(Config{
 		Kernel:        coreag.NewKernel(),
 		Registry:      reg,
@@ -324,7 +329,7 @@ func buildUsageAcceptanceFixture() (reg *scriptedRegistry, pool *scriptedPool, w
 func TestUsage_MultiMoveTurnPersistsUsageForEveryGenerateCall(t *testing.T) {
 	ctx := context.Background()
 	reg, pool, wants := buildUsageAcceptanceFixture()
-	runner, broker, sessionMgr, usageMgr, db := buildMoveRunnerRealSQLite(t, reg, pool)
+	runner, broker, sessionMgr, usageMgr, db := buildMoveRunnerRealSQLite(t, reg, pool, loadProductionChatGraph(t))
 
 	rec, err := sessionMgr.Create(ctx, "usage repro session")
 	if err != nil {
@@ -557,5 +562,96 @@ func TestUsage_PartialAfterCompletedFireStillPersistsUsage(t *testing.T) {
 	}
 	if !approxEqualUSD(rows[0].cost, 0.0099, 1e-9) {
 		t.Errorf("partial move cost = %v, want 0.0099", rows[0].cost)
+	}
+}
+
+// TestUsage_RoutedGraphFinalRowGetsTheChatMovesUsageNotTheExitGates is
+// round 2 of fix/usage-persists-on-every-move: an independent reviewer
+// built this exact reproduction (loadRoutedChatGraph + distinct usage
+// per scripted call) and proved that round 1 left a misattribution on
+// the ROUTED graph (AgenticTurnRouting on — built, gated off, not yet
+// the shipped default): exit_gate (kind: review) makes its own real,
+// costed Generate() call between the loop and assistant_write
+// (exec_compute.go's reviewExecutor; see
+// TestMoves_OnlyTheChatBoundModelNodeBecomesAMove above for where that
+// call is independently proven to happen), and the persisted `final`
+// row got the GATE's small verdict usage — not the chat answer's —
+// because the final row sourced usage from
+// LLMProviderAdapter.LastResponse(), a single mutable slot the gate's
+// call overwrites after the chat move's own call already ran.
+//
+// The chat move's usage (1000/40/$0.0110) and the exit gate's verdict
+// usage (50/8/$0.0009) are deliberately far apart and both nonzero, so
+// this test cannot pass by accident — a fix that fires SOME response
+// for the final row but the WRONG one fails exactly the same way the
+// live reproduction did.
+//
+// MUTATION EVIDENCE (run and confirmed to fail, then reverted): in
+// AppendEntry's absorbed branch, source resp/providerKind/modelID from
+// j.lastResponseFn() (mimicking round 1's design) instead of
+// j.heldResp/heldProviderKind/heldModelID -> the final row's usage
+// becomes 50/8/$0.0009 (the gate's) instead of 1000/40/$0.0110 (the
+// chat move's), and both assertions below fail.
+func TestUsage_RoutedGraphFinalRowGetsTheChatMovesUsageNotTheExitGates(t *testing.T) {
+	ctx := context.Background()
+
+	const chatPrompt, chatCompletion = 1000, 40
+	const chatCost = 0.0110
+	const gatePrompt, gateCompletion = 50, 8
+	const gateCost = 0.0009
+
+	reg := &scriptedRegistry{}
+	// 1. The chat move: the model answers "the answer is 42" and the
+	// draft is approved unchanged (absorbed) below.
+	reg.push(textTurnWithUsage("the answer is 42", chatPrompt, chatCompletion, chatCost))
+	// 2. exit_gate's own real Generate() call: a JSON verdict, small and
+	// cheap relative to the chat move — the shape a review/classifier
+	// call actually has. Not tracked as a move (StreamToChat is false
+	// for this node), but it DOES run through the same adapter and DOES
+	// report real usage.
+	reg.push(textTurnWithUsage(`{"verdict":"pass","reason":"looks right"}`, gatePrompt, gateCompletion, gateCost))
+
+	pool := &scriptedPool{}
+	graph := loadRoutedChatGraph(t)
+	runner, broker, sessionMgr, usageMgr, db := buildMoveRunnerRealSQLite(t, reg, pool, graph)
+
+	rec, err := sessionMgr.Create(ctx, "routed usage session")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	sessionID := rec.ID
+
+	if _, err := runner.StartStream(ctx, "profile-1", sessionID, "", "ask"); err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	if closed := waitForClosed(t, broker); closed.Reason == "backend-error" {
+		t.Fatalf("run failed: %s", closed.Message)
+	}
+
+	rows := readAssistantUsageRows(t, db, sessionID)
+	if len(rows) != 1 {
+		t.Fatalf("routed turn persisted %d usage rows, want exactly 1 (the final — the gate's "+
+			"verdict is not a move and gets no row of its own): %+v", len(rows), rows)
+	}
+	if rows[0].prompt != chatPrompt || rows[0].completion != chatCompletion {
+		t.Errorf("final row tokens = %d/%d, want the CHAT MOVE's %d/%d — got the exit gate's "+
+			"%d/%d instead if this reads like the misattribution bug",
+			rows[0].prompt, rows[0].completion, chatPrompt, chatCompletion, gatePrompt, gateCompletion)
+	}
+	if !approxEqualUSD(rows[0].cost, chatCost, 1e-9) {
+		t.Errorf("final row cost = %v, want the chat move's %v (not the exit gate's %v)",
+			rows[0].cost, chatCost, gateCost)
+	}
+
+	agg, err := usageMgr.GetSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if agg.PromptTokens != chatPrompt || agg.CompletionTokens != chatCompletion {
+		t.Errorf("aggregate tokens = %d/%d, want the chat move's %d/%d",
+			agg.PromptTokens, agg.CompletionTokens, chatPrompt, chatCompletion)
+	}
+	if !approxEqualUSD(agg.CostUSD, chatCost, 1e-9) {
+		t.Errorf("aggregate cost = %v, want the chat move's %v", agg.CostUSD, chatCost)
 	}
 }

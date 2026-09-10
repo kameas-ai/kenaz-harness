@@ -74,22 +74,47 @@ import (
 // sessionWriteExecutor — the sole caller of FirePostHooks. Every other
 // assistant_move this journal persists bypasses that node entirely (it
 // writes straight to j.writer), so on a multi-move tool-using turn every
-// Generate() call except the last one silently dropped its usage. The
-// journal now closes that gap AT THE SAME PLACE it already persists a
-// move: RecordAssistantMove parks the corellm.Response alongside the
-// held text (heldResp/heldProviderKind/heldModelID), and flushHeld /
-// RecordPartial invoke j.usageHook directly, once per persisted
-// assistant-role row, right after that row's message id comes back from
-// the writer. This is deliberately NOT routed through
+// Generate() call except the last one silently dropped its usage
+// (confirmed live: OpenRouter billed ~$13 on a conversation the app's
+// own footer showed as $0.13 — a ~100x undercount on the CLASSIC graph,
+// where AgenticTurnRouting is off, the shipped default).
+//
+// The journal now owns usage capture end to end, including the `final`
+// row — round 1 of this fix left the final row on the pre-existing
+// HookPostLLM mechanism, which a reviewer proved MISATTRIBUTES usage on
+// the ROUTED graph (AgenticTurnRouting on, not yet the default): the
+// exit_gate node makes its own real, costed Generate() call between the
+// loop and session_write, so LastResponse() — a single mutable slot,
+// last-write-wins — held the GATE's small verdict cost by the time the
+// hook fired, not the chat answer's. See AppendEntry's doc comment for
+// the absorbed/revised split that fixes this.
+//
+// The mechanism, current state:
+//   - RecordAssistantMove parks the corellm.Response alongside the held
+//     text (heldResp/heldProviderKind/heldModelID) the instant a
+//     Generate() call for the user's turn completes — BEFORE anything
+//     else (a tool loop, the exit gate) can run and clobber the
+//     adapter's mutable LastResponse().
+//   - flushHeld / RecordPartial fire j.usageHook directly from that
+//     snapshot, once per persisted non-final assistant-role row, right
+//     after the row's message id comes back from the writer.
+//   - AppendEntry (the final row) fires j.usageHook too: from heldResp
+//     when the draft was absorbed unchanged (the common case — immune
+//     to whatever ran after the chat move), or from lastResponseFn when
+//     the exit gate/escalation ladder genuinely revised the draft (the
+//     one case with no per-move snapshot, where LastResponse() remains
+//     correct — the revision IS the last Generate() call's own output).
+//
+// This is deliberately NOT routed through
 // HookManager.FirePostHooks(HookPostLLM, ...) — that boundary also fans
 // out to the artifacts code-block detector and the generated-image
 // drain (see chat_runner.go / api.go), and firing those for every
-// intermediate move is a separate, out-of-scope behaviour change. The
-// `final` row keeps using the pre-existing HookPostLLM mechanism
-// unchanged (LLMProviderAdapter.LastResponse(), read once when
-// session_write's AppendEntry call returns) — j.usageHook is never
-// invoked for a `final` entry, so the two mechanisms cannot double-count
-// the same row.
+// intermediate move is a separate, out-of-scope behaviour change.
+// chat_runner.go now registers the OLD HookPostLLM-based usage callback
+// only when !journal.records() (the degenerate no-span case, unchanged
+// from before this fix) — so for every ordinary turn there is exactly
+// ONE writer of a row's usage, never two, and the journal's own writer
+// is immune to the misattribution the old mechanism had.
 // ---------------------------------------------------------------------------
 
 // moveKind mirrors core/session.MoveKind. The chat package cannot
@@ -147,10 +172,20 @@ type turnJournal struct {
 	heldProviderKind string
 	heldModelID      string
 	// usageHook fires once per persisted assistant-role row this journal
-	// writes OUTSIDE the final path (see the file header's USAGE CAPTURE
-	// note). nil disables usage capture for non-final moves entirely —
-	// tests that don't exercise usage leave it nil.
+	// writes, INCLUDING the final row (see the file header's USAGE
+	// CAPTURE note). nil disables usage capture entirely — tests that
+	// don't exercise usage leave it nil.
 	usageHook UsageHookFunc
+	// lastResponseFn is AppendEntry's fallback source for a REVISED
+	// final row's usage — the one case heldResp cannot cover, because
+	// the persisted text did not come from any Generate() call this
+	// journal parked as a move (the exit gate or escalation ladder wrote
+	// it directly). Wired once, right after construction, to
+	// LLMProviderAdapter.LastResponse/ProviderKind/ActiveModelID via
+	// WithLastResponseFn. nil in tests that don't exercise the
+	// revised-final usage path — AppendEntry then fires no usage for a
+	// revised final rather than fire a fabricated zero value.
+	lastResponseFn func() (resp corellm.Response, providerKind, modelID string)
 }
 
 // newTurnJournal builds the journal for one turn. spanID is the id of
@@ -167,6 +202,33 @@ func newTurnJournal(writer coreag.HistoryWriter, emit func(coreag.StreamEvent),
 		openIdx:   -1,
 		usageHook: usageHook,
 	}
+}
+
+// WithLastResponseFn wires the fallback source AppendEntry uses for a
+// REVISED final row's usage (see lastResponseFn's doc comment on the
+// struct). Chained like the adapter's With* methods; safe to call on a
+// nil journal.
+//
+// fix/usage-persists-on-every-move, round 2: without this, the ROUTED
+// graph's exit_gate node — which makes its own real, costed Generate()
+// call between the loop and assistant_write (kind: review,
+// exec_compute.go's reviewExecutor) — clobbers
+// LLMProviderAdapter.lastResp before the pre-existing HookPostLLM path
+// ever reads it, so an ABSORBED final row (the gate approved the draft
+// unchanged, by far the common case) got the GATE's small verdict
+// usage instead of the chat answer's. That misattribution is now
+// impossible for the absorbed case: AppendEntry sources it from
+// heldResp, captured by RecordAssistantMove before the gate's call ever
+// ran. This fallback covers only the genuinely-revised case, where the
+// persisted text truly did come from whatever Generate() call ran last
+// (the gate or ladder authoring the revision) — LastResponse() is
+// correct there for the same reason it always was.
+func (j *turnJournal) WithLastResponseFn(fn func() (corellm.Response, string, string)) *turnJournal {
+	if j == nil {
+		return j
+	}
+	j.lastResponseFn = fn
+	return j
 }
 
 // records reports whether this journal stamps moves. False means every
@@ -462,6 +524,25 @@ func (j *turnJournal) RecordToolResult(ctx context.Context, call coreag.ToolCall
 // position — which is the honest record: the model said one thing and
 // the turn returned another.
 //
+// USAGE, absorbed vs. revised (fix/usage-persists-on-every-move, round
+// 2 — a misattribution a reviewer caught by running loadRoutedChatGraph
+// with distinct per-call usage): on the ROUTED graph, exit_gate makes
+// its OWN real, costed Generate() call between the loop and this
+// AppendEntry call — see moves_test.go's
+// TestMoves_OnlyTheChatBoundModelNodeBecomesAMove for where that call
+// is proven to happen. In the absorbed case that call has ALREADY run
+// by the time we get here, so sourcing usage from
+// LLMProviderAdapter.LastResponse() (a single mutable slot, last-write-
+// wins) would silently credit the gate's small verdict cost to the
+// user's visible answer instead of the chat model's own — the exact
+// finding. heldResp is immune to this: RecordAssistantMove captured it
+// BEFORE the gate ever ran, so it is provably the chat move's own
+// response regardless of what ran after. The revised case has no such
+// snapshot (the persisted text isn't anything this journal parked) and
+// falls back to lastResponseFn, which is correct there for the reason
+// it always was: the last Generate() call before this AppendEntry is
+// the one that authored the revision.
+//
 // Anything that is not an assistant entry (a system note) is forwarded
 // unchanged as a classic entry, after flushing so ordering holds.
 func (j *turnJournal) AppendEntry(ctx context.Context, sessionID string,
@@ -493,24 +574,30 @@ func (j *turnJournal) AppendEntry(ctx context.Context, sessionID string,
 	// equality alone makes that duplicate one stray "\n" away, from any
 	// future graph that trims on its way to session_write.
 	absorbed := j.heldLive && strings.TrimSpace(j.held) == strings.TrimSpace(entry.Content)
+	var resp corellm.Response
+	var providerKind, modelID string
+	haveUsage := false
 	if absorbed {
 		idx = j.heldIdx
+		// Captured NOW, before this branch's own unlock/write, so a
+		// Generate() call racing in on another goroutine cannot land
+		// between this read and the clear below. See the doc comment
+		// above for why this must be heldResp and not LastResponse().
+		resp, providerKind, modelID = j.heldResp, j.heldProviderKind, j.heldModelID
+		haveUsage = true
 	} else {
 		j.flushHeld(ctx)
 		idx = j.allocate(moveKindFinal, moveDetail{})
+		if j.lastResponseFn != nil {
+			resp, providerKind, modelID = j.lastResponseFn()
+			haveUsage = true
+		}
 	}
 	j.mu.Unlock()
 
 	entry.MoveKind = moveKindFinal
 	entry.MoveIndex = idx
 	entry.TurnSpanID = j.spanID
-	// NOTE: no j.fireUsage call here, deliberately. This `final` row's
-	// usage is recorded by the PRE-EXISTING mechanism — the caller
-	// (exec_state.go's sessionWriteExecutor) fires HookPostLLM once this
-	// AppendEntry returns, and the registered usage-hook callback reads
-	// LLMProviderAdapter.LastResponse() at that point. Firing j.usageHook
-	// here too, for the exact same row, would double-count it — see the
-	// file header's USAGE CAPTURE note.
 	id, err := j.writer.AppendEntry(ctx, sessionID, entry)
 	if absorbed {
 		j.mu.Lock()
@@ -526,6 +613,14 @@ func (j *turnJournal) AppendEntry(ctx context.Context, sessionID string,
 		// mean a failed final write silently deleted the text the user
 		// watched stream.
 		j.mu.Unlock()
+	}
+	// This is the journal's OWN write for the final row — it replaces
+	// the old external mechanism entirely (chat_runner.go only registers
+	// that mechanism when !journal.records(), i.e. never for a turn that
+	// reaches this branch), so there is exactly one writer per row: no
+	// double-count, and (as of round 2) no misattribution either.
+	if haveUsage {
+		j.fireUsage(ctx, id, err, resp, providerKind, modelID)
 	}
 	return id, err
 }
