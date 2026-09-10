@@ -1430,17 +1430,45 @@ func TestAuditStoreBeforeRetentionGate_PlantedStoreRemovalFails(t *testing.T) {
 // isn't kill-safe, but touches only a scratch dir, never a tracked
 // file) is the only residue possible.
 //
-// NOTE for future gate authors: three OTHER planted-violation tests in
-// this file — TestToolContainmentUnconditionalGate_
-// PlantedConditionalWrapperFails, TestAuditStoreBeforeRetentionGate_
-// PlantedStoreRemovalFails and TestBundleVerifyOrderingGate_
-// PlantedNilSignatureFires — still use the bare read-mutate-restore
-// pattern this test used to use, against core/rpc/api.go (×2) and
-// core/trust/bundleadapter.go. They carry the identical hazard. This
-// fix intentionally does NOT convert them: doing so without studying
-// each one's gate risks silently breaking a working planted-violation
-// proof, which is worse than an unsafe-but-correct one. Recorded as a
-// follow-up with this overlay technique named as the fix.
+// NOTE for future gate authors: SEVEN other planted-violation tests in
+// this file still carry a hazard this test used to have, in two
+// different shapes — this fix does NOT convert any of them (doing so
+// without studying each one's gate risks silently breaking a working
+// planted-violation proof, which is worse than an unsafe-but-correct
+// one); recorded here as a follow-up with the overlay technique named
+// as the fix.
+//
+// FIVE use the bare os.WriteFile + defer pattern this test used to
+// use — a hard kill (SIGKILL, OOM, a CI -timeout) skips the defer and
+// leaves the real file mutated, exactly as reproduced above:
+//   - TestToolContainmentUnconditionalGate_PlantedConditionalWrapperFails
+//     -> core/rpc/api.go
+//   - TestAuditStoreBeforeRetentionGate_PlantedStoreRemovalFails
+//     -> core/rpc/api.go
+//   - TestBundleVerifyOrderingGate_PlantedNilSignatureFires
+//     -> core/trust/bundleadapter.go
+//   - TestBundleChannelKindsSyncGate_PlantedDriftFires
+//     -> frontend/src/views/bundles/BundlesView.vue
+//   - TestServeDispatchDriftGate_PlantedReverseCaseFires
+//     -> core/serve/server.go (this one's own docstring already says
+//     it mirrors the two core/rpc/api.go probes above — it self-
+//     identifies as the same class and was simply missing from an
+//     earlier, undercounted version of this note)
+//
+// TWO more mutate real agentgraph paths through the JOURNALED plant()
+// helper instead — safer than the five above, since plantguard_test.go
+// can detect and roll back an unclean plant left by a killed process,
+// but still NOT overlay-safe (plant() still writes the real file; it
+// just also journals the write first so recovery is possible after
+// the fact, rather than making the mutation impossible to begin with):
+//   - TestCheckDeclaredOutputPorts_IgnoresPortsGenWrites creates
+//     core/agentgraph/nodes/manifests/zz_gate_probe_gen.yaml AND
+//     appends to core/agentgraph/ports_gen.go. The second target is
+//     worth flagging specifically: ports_gen.go is a GENERATED file,
+//     so a mutation stranded there by an unrecovered kill would trip
+//     bash scripts/ci/check-codegen.sh as drift on top of leaving the
+//     ports-declaration gate itself silently poisoned — a second,
+//     unrelated failure mode compounding the first.
 func TestStructuredOutputRowParityGate_PlantedEncoderDropFires(t *testing.T) {
 	root := repoRoot(t)
 	wirePath := filepath.Join(root, "core", "llm", "gemini", "wire.go")
