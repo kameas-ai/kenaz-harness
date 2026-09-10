@@ -222,4 +222,46 @@ describe('AccountPanel', () => {
     expect(link.exists()).toBe(true);
     expect(link.attributes('href')).toBe(prodProfile.fleetBaseUrl);
   });
+
+  it('7. mounting with stuck tokens (already "signed in", enroll never succeeded) renders the same actionable link', async () => {
+    // This is the half-signed-in state from the bug report: FleetSignIn
+    // saved tokens before enroll ran, so fleetSignedIn() (token-expiry
+    // based) reports true on every future mount even though enroll has
+    // never once succeeded. init() runs automatically on mount — this is
+    // the path a user hits by opening the app or Settings → Account, with
+    // no click required, so it must not stay silent.
+    const rawServerBody =
+      '{"code":"user_not_provisioned","message":"This Zitadel user has no Fleet account. ' +
+      'Finish signup at the SPA host.","details":{"zitadel_user_id":"test-user-id"}}';
+    const client = createFakeHarnessClient({
+      settings: {
+        fleetProfile: vi.fn(async () => prodProfile),
+        fleetSignedIn: vi.fn(async () => true),
+        fleetSignIn: vi.fn(async () => mockIdentity),
+        fleetSignOut: vi.fn(async () => {}),
+        fleetRefreshIdentity: vi.fn(async () => {
+          throw new Error(
+            'fleet: this Zitadel user has no Fleet account; finish signup at the SPA host ' +
+              `(server: ${rawServerBody})`,
+          );
+        }),
+      } as any,
+    });
+    const wrapper = mount(AccountPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+
+    // Must NOT render as an indistinguishable-from-never-signed-in button
+    // with no explanation.
+    const errorMsg = wrapper.find('[data-testid="error-msg"]');
+    expect(errorMsg.exists()).toBe(true);
+    expect(errorMsg.text()).not.toContain('user_not_provisioned');
+    expect(errorMsg.text()).not.toContain('zitadel_user_id');
+    expect(errorMsg.text()).not.toContain('{');
+
+    const link = wrapper.find('[data-testid="finish-signup-link"]');
+    expect(link.exists()).toBe(true);
+    expect(link.attributes('href')).toBe(prodProfile.fleetBaseUrl);
+  });
 });

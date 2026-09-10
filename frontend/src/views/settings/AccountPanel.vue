@@ -47,6 +47,7 @@ onMounted(async () => {
 async function init() {
   loading.value = true;
   error.value = '';
+  signupRequired.value = false;
   try {
     // Try to fetch profile first — if fleet is disabled this will throw.
     profile.value = await client.settings.fleetProfile();
@@ -60,6 +61,17 @@ async function init() {
     const msg: string = e?.message ?? String(e);
     if (msg.includes('disabled by env')) {
       fleetDisabled.value = true;
+      identity.value = false;
+    } else if (isUserNotProvisionedError(e)) {
+      // This is the mount-time equivalent of signIn()'s catch: a user who
+      // signed in previously (tokens saved, SignedIn() reports true) but
+      // whose enroll never succeeded lands here on every app launch /
+      // Settings-Account visit, not just after clicking something. Without
+      // this branch they saw a plain "Sign in to fleet" button —
+      // indistinguishable from never having signed in at all, with no
+      // error text and no path to the fix.
+      signupRequired.value = true;
+      error.value = humanizeFleetError(msg);
       identity.value = false;
     } else {
       // Profile not configured or network error — treat as signed out.
