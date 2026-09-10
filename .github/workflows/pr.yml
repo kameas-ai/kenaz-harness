@@ -170,12 +170,17 @@ jobs:
         run: bash scripts/ci/check-knob-coverage.sh
 
       - name: structured-output-row-parity guard
-        # A capability row cannot advertise a structured-output mode its
-        # adapter cannot serve (structured-output-is-reachable-01PMZE14
+        # A capability row cannot silently desynchronize from its own
+        # wire-encoding (structured-output-is-reachable-01PMZE14
         # UNIT-6/WP09, gate G-3). go test ./core/llm/... -run '^TestG3_'
         # drives every registered adapter kind's row through
         # capabilities.LoadDefault() -> Gate.Check and, where the row
-        # says true, the adapter's own wire-encoding path.
+        # says true, the adapter's own wire-encoding path. Six of eight
+        # kinds route through capability-UNAWARE encoders that emit
+        # response_format regardless of the row, so this catches an
+        # encoder regressing under a row that still claims support —
+        # it does NOT verify real vendor support was ever correct. See
+        # the script's header for the full per-kind boundary.
         run: bash scripts/ci/check-structured-output-row-parity.sh
 
       - name: bindings-name guard

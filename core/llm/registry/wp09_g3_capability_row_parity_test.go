@@ -1,13 +1,45 @@
 package registry
 
 // WP09 (structured-output-is-reachable-01PMZE14, UNIT-6, G-3): "a
-// capability row cannot advertise what its adapter cannot serve."
+// capability row cannot silently desynchronize from its own
+// wire-encoding."
 //
-// A Go test — not a shell script (tasks.md UNIT-6) — asserting that
+// RENAMED FROM the WP's original framing ("a capability row cannot
+// advertise what its adapter cannot serve") after PR #323 review: that
+// phrasing overclaims. Flipping openai.yaml's o1* row to
+// structured_output: true and re-running this test still passes,
+// because openai.ApplyResponseFormat has no internal capability
+// awareness and emits response_format mechanically for ANY model —
+// the six capability-unaware kinds below cannot have their VENDOR
+// TRUTH checked this way at all, only their internal consistency.
+// Verifying real vendor support needs either a live network call or a
+// maintained ground-truth table; this gate is neither.
+//
+// WHAT THIS GATE SEES, PRECISELY:
+//   - gemini and bedrock: their encoders DO branch on capability-
+//     relevant structure (gemini's schema-keyword translation can
+//     fail; bedrock's real arm lives behind an unexported function
+//     this file cannot reach at all — see the bedrock case below).
+//     For these two, a row that stops matching behaviour is
+//     detectable.
+//   - anthropic, openai, openrouter, azure-openai, custom-openai,
+//     ollama: CAPABILITY-UNAWARE. Their encoders
+//     (ApplyResponseFormat / openaiwire.BuildRequestBody) emit
+//     response_format for ANY (kind, model) whenever Mode:"json_schema"
+//     is requested — they do not consult the capability row at all.
+//     For these six, this gate can only catch a row that has gone
+//     STRUCTURALLY inconsistent with Gate.Check's own enforcement
+//     (impossible by construction, since Gate.Check reads the same
+//     row) or an encoder that REGRESSES to stop emitting the schema
+//     it used to. It CANNOT catch a row that was always wrong about
+//     what the real vendor endpoint supports — that class needs a
+//     ground-truth source this gate does not have.
+//
+// A Go test — not a shell script (tasks.md UNIT-6) — that drives
 // every registered adapter kind's structured_output capability row
 // (core/llm/capabilities/data/*.yaml, read ONLY through
 // capabilities.LoadDefault() -> Catalog.Describe, never as a raw
-// file — spec §8 rule 2) agrees with what that adapter's OWN
+// file — spec §8 rule 2) against what that adapter's OWN
 // wire-encoding code actually does — never a struct field read
 // (spec §8 rule 3):
 //
@@ -23,11 +55,12 @@ package registry
 //   - structured_output: true ⟹ Gate.Check allows the request AND
 //     the adapter's own encoder — called directly, the same function
 //     production reaches once the gate has let the request through —
-//     actually carries the schema on the wire. This is the class the
-//     mission's own finding names: "gemini's rows are honest only
-//     because its adapter does nothing" (tasks.md UNIT-6) — a row
-//     flipped true with no matching encoder arm is exactly what this
-//     half catches.
+//     actually carries the schema on the wire. This catches an
+//     encoder that REGRESSES while its row still claims true — the
+//     class the mission's own finding names: "gemini's rows are
+//     honest only because its adapter does nothing" (tasks.md UNIT-6).
+//     It does NOT catch a row that was wrong from the start for a
+//     capability-unaware kind — see the boundary note above.
 //
 // bedrock is a documented, deliberate exception: see the "true" case
 // comment below and core/llm/bedrock/wp09_g3_row_parity_test.go,
@@ -134,7 +167,10 @@ func wp09G3GeminiProbe(t *testing.T, req llm.GenerationRequest) bool {
 	return len(gr.GenerationConfig.ResponseSchema) > 0
 }
 
-// TestG3_CapabilityRowMatchesAdapterBehaviour is UNIT-6/WP09's gate.
+// TestG3_CapabilityRowMatchesAdapterBehaviour is UNIT-6/WP09's gate:
+// a capability row cannot silently desynchronize from its own
+// wire-encoding. See the package-level boundary note above for what
+// this specifically does and does not catch per kind.
 func TestG3_CapabilityRowMatchesAdapterBehaviour(t *testing.T) {
 	cat, err := capabilities.LoadDefault()
 	if err != nil {
