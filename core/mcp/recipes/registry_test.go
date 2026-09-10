@@ -27,6 +27,7 @@ var expectedRegistryIDs = []string{
 	"git",
 	"puppeteer",
 	"playwright",
+	"computer-use",
 	"notion",
 	"linear",
 	"sentry",

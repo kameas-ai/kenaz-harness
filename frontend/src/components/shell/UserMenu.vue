@@ -25,6 +25,7 @@ import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { runAsyncAction } from '@/composables/useAsyncAction';
+import { isUserNotProvisionedError } from '@/lib/errors';
 import type { FleetIdentity, FleetProfileInfo } from '@/lib/types';
 
 const client = useHarnessClient();
@@ -40,19 +41,39 @@ const signOutError = ref<string | null>(null);
 
 let pollTimer: number | null = null;
 
-onMounted(() => {
-  void refresh();
+/**
+ * startPolling (re)starts the 15s identity-refresh interval. Idempotent —
+ * a no-op when already running, so it's safe to call after a fresh
+ * sign-in that may have followed a stopPolling() call.
+ */
+function startPolling() {
+  if (pollTimer !== null) return;
   pollTimer = window.setInterval(() => {
     void refresh();
   }, 15000);
-  document.addEventListener('click', onDocumentClick);
-});
+}
 
-onBeforeUnmount(() => {
+/**
+ * stopPolling cancels the identity-refresh interval. Called when refresh()
+ * hits a terminal, non-retryable error (ErrUserNotProvisioned) — see the
+ * comment in refresh() for why this must be a hard stop rather than a
+ * slower retry.
+ */
+function stopPolling() {
   if (pollTimer !== null) {
     window.clearInterval(pollTimer);
     pollTimer = null;
   }
+}
+
+onMounted(() => {
+  void refresh();
+  startPolling();
+  document.addEventListener('click', onDocumentClick);
+});
+
+onBeforeUnmount(() => {
+  stopPolling();
   document.removeEventListener('click', onDocumentClick);
 });
 
@@ -63,8 +84,23 @@ async function refresh() {
     if (signedIn) {
       try {
         identity.value = await client.settings.fleetRefreshIdentity();
-      } catch {
+      } catch (e: unknown) {
         identity.value = false;
+        // Terminal condition: SaveTokens() persists on FleetSignIn even
+        // when the subsequent enroll call fails (core/rpc/views/settings/
+        // fleet.go FleetSignIn), so fleetSignedIn() (token-expiry based)
+        // keeps reporting true forever while enroll keeps 403ing forever.
+        // Without this stop, refresh() re-runs every 15s and re-hits
+        // /api/v1/enroll on a permanently-failing account with no backoff
+        // — confirmed in production as 60+ consecutive
+        // fleet.rpc.enroll.start/.failed pairs. A network blip or other
+        // transient failure is NOT this condition and keeps polling at the
+        // normal cadence; only the identity-provider-confirmed "this
+        // account will never be provisioned without user action" case
+        // stops the timer.
+        if (isUserNotProvisionedError(e)) {
+          stopPolling();
+        }
       }
     } else {
       identity.value = false;
@@ -138,6 +174,11 @@ async function handleSignIn() {
   loading.value = true;
   try {
     identity.value = await client.settings.fleetSignIn();
+    // A fresh, successful sign-in means whatever condition previously
+    // stopped the poll (see refresh()) no longer applies — restart it so
+    // session-expiry / role changes are picked up again. No-op if the
+    // poll was never stopped.
+    startPolling();
   } catch {
     // Send the user to the full panel so they can see the error and retry.
     void router.push('/settings?tab=account');

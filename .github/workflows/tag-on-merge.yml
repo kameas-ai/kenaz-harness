@@ -44,7 +44,7 @@ concurrency:
 jobs:
   bump-and-release:
     name: Bump version + cut release
-    runs-on: [self-hosted, Linux, ARM64, ci-fast]
+    runs-on: ${{ fromJson(vars.CI_RUNNER_FAST || '["self-hosted","Linux","ARM64","ci-fast"]') }}
     permissions:
       contents: write     # tag + release
       actions: write      # workflow_dispatch
