@@ -39,7 +39,7 @@ func TestCanonicalBlocks_Coverage(t *testing.T) {
 		"storage", "event-log", "secrets-keychain", "sessions", "scheduler",
 		"mcp", "a2a", "signed-cards-trust", "bundle",
 		"shared-context-distribution", "memory-rag", "app-layer",
-		"user-slash-commands",
+		"user-slash-commands", "units", "tasks", "cedar-policy",
 	}
 	for _, m := range missions {
 		if _, ok := LookupBlock(m); !ok {
@@ -48,25 +48,36 @@ func TestCanonicalBlocks_Coverage(t *testing.T) {
 	}
 }
 
-func TestCanonicalBlocks_NoOverlapWithinNonSharedRanges(t *testing.T) {
+// TestCanonicalBlocks_NoOverlap is table-driven over the declared blocks
+// themselves (not a fixed mission list) so that adding a new overlapping
+// block to CanonicalBlocks fails this test in CI, rather than lying
+// dormant until two missions actually collide on a Version number and
+// the app refuses to boot (storagesqlite.Open -> Registry.Register ->
+// ErrVersionCollision — the v0.63.0 P0 shape).
+//
+// Every mission previously had a distinct block (2026-08-20 finding:
+// "a2a"/"signed-cards-trust" both {600,699} and "bundle"/
+// "shared-context-distribution" both {700,799} — see docs/unwired-ledger.md
+// and the comments in blocks.go). This test codifies that invariant going
+// forward: NO two owning-mission names may share any part of a range,
+// full stop. There is no "intentional sharing" exemption — Registry.Register
+// keys on Version globally across the whole registry, so two names sharing
+// a block is a live boot-failure hazard regardless of intent.
+func TestCanonicalBlocks_NoOverlap(t *testing.T) {
 	t.Parallel()
-	// Note: a2a and signed-cards-trust intentionally share 600-699;
-	// bundle and shared-context-distribution share 700-799. Other
-	// missions must not overlap.
-	shared := map[string]string{
-		"a2a": "signed-cards-trust", "signed-cards-trust": "a2a",
-		"bundle": "shared-context-distribution", "shared-context-distribution": "bundle",
+	type entry struct {
+		mission string
+		block   VersionBlock
 	}
-	for ma, ba := range CanonicalBlocks {
-		for mb, bb := range CanonicalBlocks {
-			if ma == mb {
-				continue
-			}
-			if shared[ma] == mb {
-				continue
-			}
-			if ba.Min <= bb.Max && bb.Min <= ba.Max {
-				t.Errorf("blocks %s%v and %s%v overlap", ma, ba, mb, bb)
+	entries := make([]entry, 0, len(CanonicalBlocks))
+	for m, b := range CanonicalBlocks {
+		entries = append(entries, entry{mission: m, block: b})
+	}
+	for i := 0; i < len(entries); i++ {
+		for j := i + 1; j < len(entries); j++ {
+			a, b := entries[i], entries[j]
+			if a.block.Min <= b.block.Max && b.block.Min <= a.block.Max {
+				t.Errorf("blocks overlap: %q %+v and %q %+v", a.mission, a.block, b.mission, b.block)
 			}
 		}
 	}
