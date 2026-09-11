@@ -409,8 +409,9 @@ func TestWP01_ElicitPendingSnapshot_ForeignSessionSeesNothing(t *testing.T) {
 // (usage.ThresholdCrossedPayload) is a calendar-month account aggregate
 // with no session id at all, unlike every other passthrough topic. A
 // connected client must never receive it — not because the topic was
-// dropped from the subscription (it stays subscribed, or
-// TestPassthroughTopics_MatchServedStreamTopicsTS would fail), but
+// dropped from the subscription (it stays subscribed — see the
+// passthroughTopics comment on it — because removing it would also drop
+// it from the generated SERVED_STREAM_TOPICS the frontend gates on), but
 // because frameFor's sessionIDOf probe always returns ok=false for it and
 // D-705 says an unscopable payload is not forwarded, not "forwarded to
 // everyone because it's probably account-wide."

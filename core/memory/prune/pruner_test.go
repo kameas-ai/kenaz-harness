@@ -340,6 +340,82 @@ func TestScheduler_StartStop_NoLeak(t *testing.T) {
 	s.Stop()
 }
 
+// TestScheduler_RunOnce_EvictsPastCapOnRealDisk is the finding #61
+// GAP-1 behavioral proof: an automatic sweep (Scheduler.RunOnce, the
+// exact call api.go's boot-time Start loop makes) must actually evict
+// rows past MaxEntries on a REAL on-disk store, and the eviction must
+// survive a close + reopen as a FRESH store instance (CLAUDE.md blind
+// spot #2 — an in-process List() proves nothing about the disk state;
+// core/memory has no sqlite backend, so a gob-backed chromem store
+// reopened fresh is this subsystem's equivalent of "drive real
+// sqlite").
+func TestScheduler_RunOnce_EvictsPastCapOnRealDisk(t *testing.T) {
+	t.Parallel()
+	path := t.TempDir() + "/memory.gob"
+	store, err := memory.NewChromemStore(path)
+	if err != nil {
+		t.Fatalf("NewChromemStore: %v", err)
+	}
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	ctx := context.Background()
+
+	// Five rows, cap of 3, no other signal active — only the size cap
+	// should fire. Oldest-LastAccessed (r1, r2) must be evicted.
+	ids := []string{"r1", "r2", "r3", "r4", "r5"}
+	for i, id := range ids {
+		c := mkChunk(id, memory.ScopeKindGlobal, now, now.Add(time.Duration(i)*time.Hour), 1, false)
+		if err := store.Add(ctx, c); err != nil {
+			t.Fatalf("Add %s: %v", id, err)
+		}
+	}
+
+	rules := Rules{MaxEntries: 3, KeepThreshold: 0.5}
+	pruner := New(store, rules, fixedClock(now))
+	sched := NewScheduler(pruner, WithClock(fixedClock(now)))
+
+	dec, err := sched.RunOnce(ctx)
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if len(dec.Dropped) != 2 || !contains(dec.Dropped, "r1") || !contains(dec.Dropped, "r2") {
+		t.Fatalf("RunOnce dropped the wrong set: %+v", dec)
+	}
+
+	// Close and reopen a FRESH store instance at the same path — the
+	// deletes must be on disk, not just reflected in the live handle's
+	// in-memory slice.
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened, err := memory.NewChromemStore(path)
+	if err != nil {
+		t.Fatalf("reopen NewChromemStore: %v", err)
+	}
+	defer reopened.Close()
+
+	listed, err := reopened.List(ctx)
+	if err != nil {
+		t.Fatalf("List on reopened store: %v", err)
+	}
+	if len(listed) != 3 {
+		t.Fatalf("reopened store has %d rows, want 3 (cap enforced on disk): %+v", len(listed), listed)
+	}
+	survivors := map[string]bool{}
+	for _, c := range listed {
+		survivors[c.ID] = true
+	}
+	for _, id := range []string{"r1", "r2"} {
+		if survivors[id] {
+			t.Fatalf("evicted row %q survived the close/reopen round trip", id)
+		}
+	}
+	for _, id := range []string{"r3", "r4", "r5"} {
+		if !survivors[id] {
+			t.Fatalf("kept row %q did not survive the close/reopen round trip", id)
+		}
+	}
+}
+
 func contains(ss []string, s string) bool {
 	for _, x := range ss {
 		if x == s {

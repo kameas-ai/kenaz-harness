@@ -278,7 +278,16 @@ func main() {
 		// SD-16 (served-mode-is-a-real-mode-01PMZ707 WP08): both served
 		// entry points must agree — see main.go's identical wiring.
 		serve.WithStreamQueueCap(serve.StreamQueueCapFromEnv(os.Getenv)))
-	if serveErr := srv.Serve(ctx); serveErr != nil && serveErr != context.Canceled {
+	serveErr := srv.Serve(ctx)
+	// Review finding (Blocker 3, finding #61 follow-up, 2026-09-11):
+	// this binary never called api.Shutdown() either — see main.go's
+	// runServeMode for the full history (the same gap, same fix, "both
+	// served entry points must agree" per this file's own convention
+	// above). Runs on every exit from Serve so a queued post_send embed
+	// and the prune/compaction schedulers are stopped before the
+	// process exits.
+	api.Shutdown()
+	if serveErr != nil && serveErr != context.Canceled {
 		log.Error("harness-served: server error", "err", serveErr)
 		os.Exit(1)
 	}

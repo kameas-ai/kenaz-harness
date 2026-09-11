@@ -1,9 +1,27 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
+import { readonly, ref } from 'vue';
 import ToolsView from '@/views/tools/ToolsView.vue';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
 import type { MCPServer, MCPToolPolicyRule } from '@/lib/types';
+
+// #66 (test-honesty-trio): onMounted() used to call refresh() and
+// refreshPolicies() unconditionally, so a served build fired
+// MCP_ListServers / MCP_ListToolPolicies even though the template's
+// NotAvailableInServedMode guard means neither response is ever
+// rendered. Mocking useServedMode (rather than the window.go.rpc.Bindings
+// stub in test-setup.ts) lets one test flip served mode on while the rest
+// of this file stays in the desktop-mode default.
+const servedFlag = ref(false);
+vi.mock('@/lib/useServedMode', () => ({
+  isServedMode: () => servedFlag.value,
+  useServedMode: () => readonly(servedFlag),
+}));
+
+afterEach(() => {
+  servedFlag.value = false;
+});
 
 function provide(
   seed: MCPServer[] = [],
@@ -90,6 +108,35 @@ describe('ToolsView (FR-001b numbered-section header)', () => {
     const html = w.html();
     expect(html).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
     expect(html).not.toMatch(/rgba?\s*\(/i);
+  });
+
+  // #66: the template guard (NotAvailableInServedMode v-if) blocks the
+  // UI, but onMounted ran past it — this pins that the eager fetches are
+  // now ALSO gated, matching the i15 allowlist's boundary-panelled claim
+  // for MCP_ListServers / MCP_ListToolPolicies.
+  it('does not call listServers or listToolPolicies when served', async () => {
+    servedFlag.value = true;
+    const listServers = vi.fn(async () => []);
+    const listToolPolicies = vi.fn(async () => []);
+    const client = createFakeHarnessClient({
+      mcp: {
+        listServers,
+        startStream: async () => 'fake-mcp-sub',
+        stopStream: async () => undefined,
+        healthSnapshot: async () => ({}),
+        subscribeHealthChanges: async () => 'fake-health-sub',
+        listToolPolicies,
+        setToolPolicy: vi.fn(async () => undefined),
+      } as any,
+    });
+    const w = mount(ToolsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(w.find('[data-testid=tools-empty]').exists()).toBe(false);
+    expect(w.find('[data-testid=tools-table]').exists()).toBe(false);
+    expect(listServers).not.toHaveBeenCalled();
+    expect(listToolPolicies).not.toHaveBeenCalled();
   });
 });
 

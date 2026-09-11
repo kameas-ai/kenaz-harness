@@ -126,9 +126,12 @@ const (
 	// than importing core/event/kind, matching every other Topic*
 	// constant in this file being a plain string.
 	//
-	// Must be added to passthroughTopics (core/serve/wsstream.go) and
-	// SERVED_STREAM_TOPICS (frontend/src/lib/harnessClient.ts) for served
-	// mode to forward it — see wsstream_topics_parity_test.go.
+	// Must be added to passthroughTopics (core/serve/wsstream.go) for
+	// served mode to forward it — frontend/src/lib/servedStreamTopics.gen.ts
+	// (and therefore harnessClient.ts's SERVED_STREAM_TOPICS) is generated
+	// FROM passthroughTopics via `go generate ./core/serve/...`, so a
+	// passthroughTopics entry is now the only edit required; run codegen
+	// (checked by scripts/ci/check-codegen.sh) and commit the diff.
 	TopicMigrationDriftDetected = "storage.migration.drift-detected"
 )
 

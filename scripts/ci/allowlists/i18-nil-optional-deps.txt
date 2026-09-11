@@ -97,20 +97,6 @@ core/fleet/audit_archive.go:70: AuditArchiverConfig.Poster (AuditHTTPPoster) is 
 # posting path should wire Poster or delete this field + this line
 # together.
 
-core/policy/cedar/engine.go:212: Options.Decisions (DecisionStore) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
-# 2026-09-10 — genuine gap. Both real cedar.NewEngine call sites
-# (core/rpc/api.go:9423 buildCedarEngineOrNil, :9500 buildCedarGate) omit
-# Decisions; production always falls back to the 256-capacity in-memory
-# ring buffer (core/policy/cedar/decisions.go's MemoryDecisionStore).
-# This is audit-relevant per CLAUDE.md's trust/compliance disposition
-# rule: cedar policy decisions older than the last 256 are unrecoverable
-# across a restart, with no persistent backing. Not P0-severity (the
-# store works, just isn't durable) but worth flagging prominently.
-# Blocker: no persistent DecisionStore implementation exists yet — would
-# need a design decision on backing store (SQLite table vs. the
-# event-log SQL backend audit_archive.go already uses for a similar
-# purpose). Owner: unassigned — flagging for the policy/audit workstream.
-
 core/tools/monitor/tool.go:160: Options.Offsets (OffsetStore) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
 # 2026-09-10 — genuine gap, low severity. core/rpc/builtins_wiring.go:409
 # (registerBuiltinTools' kenaz__monitor wiring, mission subagent-control-
@@ -119,11 +105,16 @@ core/tools/monitor/tool.go:160: Options.Offsets (OffsetStore) is documented opti
 # processLocalOffsets), so kenaz__monitor's per-session drain cursor
 # resets to 0 on restart rather than resuming — a UX rough edge, not
 # data loss (the tool just re-reads from the start on next call).
-# Blocker: a persistent OffsetStore needs the same backing-store design
-# decision core/policy/cedar's Options.Decisions above is waiting on
-# (SQLite table vs. the event-log SQL backend audit_archive.go already
-# uses) — nobody has specced which, and UNIT-5 shipped without a
-# cross-restart requirement in scope. Owner: whoever next specs
+# Blocker: UPDATED 2026-09-11 — the backing-store question this entry
+# used to defer to is now ANSWERED. cedar's Options.Decisions (which sat
+# directly above this entry until finding #58 closed it) is now backed by
+# a SQLDecisionStore on the unified storage.DB, with a migration in its
+# own reserved block and retention enforced by a DELETE after every
+# durable write. So the pattern a persistent OffsetStore would follow is
+# established and has a worked example to copy; what remains is only that
+# UNIT-5 shipped without a cross-restart requirement in scope, so nobody
+# has asked for it. This is now a scope/priority gap, not a design gap —
+# do not re-cite the Decisions decision as a blocker. Owner: whoever next specs
 # persistent background-task state for 01PMZB11's successor work should
 # wire Offsets and delete this line in the same change, or explicitly
 # defer it again with a new date.

@@ -96,6 +96,16 @@ function stateColor(state: string): string {
 }
 
 onMounted(() => {
+  // Guard the eager fetches, not just the template. The template's
+  // NotAvailableInServedMode v-if/v-else means the fetched data is
+  // never rendered in served mode, but onMounted still runs regardless
+  // of which template branch is chosen -- these two calls fired one
+  // unservable MCP_ListServers/MCP_ListToolPolicies RPC per served-mode
+  // visit to /tools (error swallowed, so harmless, but it made the i15
+  // allowlist's "boundary-panelled" claim about scripts/ci/allowlists/
+  // i15-serve-dispatch-gap.txt technically false: the panel blocked the
+  // UI, not the call).
+  if (servedMode.value) return;
   void refresh();
   void refreshPolicies();
 });

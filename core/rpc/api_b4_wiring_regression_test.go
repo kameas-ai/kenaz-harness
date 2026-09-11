@@ -236,7 +236,7 @@ func TestB4_SecretLookupWiring_ChatRunnerResolvesRealSecret(t *testing.T) {
 	if err != nil {
 		t.Fatalf("core.New: %v", err)
 	}
-	cedarEngine := buildCedarEngineOrNil(dataDir)
+	cedarEngine := buildCedarEngineOrNil(dataDir, nil)
 	if cedarEngine == nil {
 		t.Fatal("buildCedarEngineOrNil returned nil over a real DataDir — cannot prove the gate/grant interaction")
 	}
@@ -321,6 +321,17 @@ func TestB4_SecretLookupWiring_ChatRunnerResolvesRealSecret(t *testing.T) {
 	stack := newLLMStack(c, broker, store, nil, nil, func() bool { return false },
 		nil, nil, nil, bashStore, nil, graphMgr, nil, nil, nil, nil,
 		exposureIdx, nil, nil, nil, confirmAuditEmitter{}, cedarEngine, nil, nil)
+	// Blocker 2 follow-up (found by core/rpc/blocker2_goroutine_leak_test.go
+	// under the full package's -race run, 2026-09-11): newLLMStack itself
+	// calls sweepScheduler.Start() when it builds a non-nil compaction
+	// scheduler over a real DataDir — this is independent of, and bypasses,
+	// the New()-level pruneScheduler gate the rest of Blocker 2 audited.
+	// Every direct newLLMStack test call site over a real Core leaks a
+	// compaction.(*SweepScheduler).loop goroutine unless it stops the
+	// scheduler itself; there is no full *API here for Shutdown() to do it.
+	if stack.compactionScheduler != nil {
+		t.Cleanup(stack.compactionScheduler.Stop)
+	}
 
 	if stack.chatRunner == nil {
 		t.Fatal("newLLMStack produced no chatRunner — cannot drive StartStream")

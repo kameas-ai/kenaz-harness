@@ -91,6 +91,11 @@ func TestUpdateConstruction_PositiveCase(t *testing.T) {
 		// settings.NewFileStoreFromEnv(), which opens the developer's
 		// real settings.json.
 		api := New(c, WithSettingsStore(newTestStore(t)))
+		// Blocker 2 (review of finding #61, 2026-09-11): New(c) with a
+		// real DataDir now starts api.pruneScheduler's background
+		// goroutine unconditionally; Shutdown must run so it doesn't
+		// leak past this test.
+		t.Cleanup(api.Shutdown)
 		if api.updateSvc == nil {
 			t.Error("updateSvc is nil — update service was not wired; check BuildVersion/DataDir gate in api.go")
 		}
@@ -124,6 +129,11 @@ func TestUpdateConstruction_NegativeCase_EmptyBuildVersion(t *testing.T) {
 		// WithSettingsStore(newTestStore(t)) — see
 		// TestUpdateConstruction_PositiveCase above.
 		api := New(c, WithSettingsStore(newTestStore(t)))
+		// Blocker 2 (review of finding #61, 2026-09-11): New(c) with a
+		// real DataDir now starts api.pruneScheduler's background
+		// goroutine unconditionally; Shutdown must run so it doesn't
+		// leak past this test.
+		t.Cleanup(api.Shutdown)
 		if api.updateSvc != nil {
 			t.Error("updateSvc should be nil when BuildVersion is empty")
 		}

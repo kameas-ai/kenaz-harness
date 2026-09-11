@@ -44,6 +44,11 @@ func newChatHarness(t *testing.T, opts ...serve.ServerOption) (api *rpc.API, bas
 		t.Fatalf("core.New: %v", err)
 	}
 	api = rpc.New(c)
+	// Blocker 2 (review of finding #61, 2026-09-11): rpc.New(c) with a
+	// real DataDir now starts api.pruneScheduler's background goroutine
+	// unconditionally; Shutdown must run so it doesn't leak past each
+	// of this helper's 8 callers.
+	t.Cleanup(api.Shutdown)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

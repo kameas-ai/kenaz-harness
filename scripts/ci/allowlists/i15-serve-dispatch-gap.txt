@@ -1062,26 +1062,23 @@
 # including the per-server policy <select> that calls setToolPolicy. A
 # served user cannot reach either RPC through any rendered affordance.
 #
-# Caveat, stated honestly rather than smoothed over: onMounted() calls
-# refresh() and refreshPolicies() (which calls listToolPolicies())
-# unconditionally -- the v-if guard is template-only and does not gate
-# the lifecycle hook. In served mode this fires one MCP_ListToolPolicies
-# call against server.go's unhandled case, the error is caught and
-# assigned to policyError, and policyError is never rendered because the
-# v-else branch that would show it is not mounted. Net effect: a silently
-# swallowed failed RPC call on every /tools visit in served mode, no
-# visible breakage, no reachable write path (setToolPolicy is only called
-# from the guarded v-else branch's onPolicyChange, never from onMounted).
-# Boundary-panelled is still the honest class for the classes this gate
-# distinguishes (the risk is a wasted round-trip, not an exposed control).
-#
-# Blocker/owner: the onMounted eager-fetch running past its own served
-# guard is a pre-existing pattern in this file, not something this sweep
-# introduced -- follow-up to add a `if (servedMode.value) return` guard at
-# the top of refresh()/refreshPolicies(), owner: alec, no mission
-# currently tracks it. Filing here rather than silently fixing it, per
-# the instruction to disposition rather than drive-by patch during an
-# integration sweep.
+# FIXED 2026-09-11 (test-honesty-trio #66): onMounted() called refresh()
+# and refreshPolicies() (which calls listToolPolicies()) unconditionally
+# -- the v-if guard was template-only and did not gate the lifecycle
+# hook, so every served-mode /tools visit fired one unservable
+# MCP_ListToolPolicies call (error caught, assigned to policyError,
+# never rendered since the v-else branch isn't mounted -- no visible
+# breakage, but the "the panel blocks the UI" half of the class
+# justification below was not yet true of the CALL). onMounted() now
+# starts with `if (servedMode.value) return;` before either fetch
+# (ToolsView.vue), so a served build issues neither MCP_ListToolPolicies
+# nor MCP_ListServers. Regression-pinned by
+# frontend/src/views/tools/__tests__/ToolsView.test.ts's
+# "does not call listServers or listToolPolicies when served" case.
+# setToolPolicy was never reachable from onMounted (only from the
+# guarded v-else branch's onPolicyChange) and remains so -- boundary-
+# panelled was and is the honest class for both entries; this note
+# updates the evidence, not the classification.
 "MCP_ListToolPolicies"
 "MCP_SetToolPolicy"
 
