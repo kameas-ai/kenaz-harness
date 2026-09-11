@@ -10,7 +10,6 @@ import (
 
 	"golang.org/x/net/websocket"
 
-	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
 	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
@@ -86,6 +85,23 @@ const (
 	// TestServedChat_StreamTopicsMatchProducer will fail loudly.
 	topicLLMStreamChunk  = "llm:stream-chunk"
 	topicLLMStreamClosed = "llm:stream-closed"
+
+	// topicFleetLockdownChanged / topicFleetSessionExpired mirror the
+	// literals corefleet.TopicFleetLockdownChanged (core/fleet/lockdown.go)
+	// and corefleet.TopicFleetSessionExpired (core/fleet/http.go) publish
+	// on. They are hand-copied rather than imported because core/serve is
+	// not on scripts/ci/check-no-fleet-imports.sh's allowlist — core/fleet
+	// is the control-plane client and core/serve is the served-mode
+	// HTTP/WS server, and importing the former into the latter would
+	// dissolve a deliberate OSS-fork boundary (a fork that deletes
+	// core/fleet/ must still build core/serve/) to save two string
+	// constants. If either literal ever drifts from its corefleet source
+	// of truth, TestFleetTopicLiterals_MatchCorefleetConstants
+	// (wsstream_fleet_topic_drift_test.go, an internal `package serve`
+	// test — test-file imports don't count toward the fleet-import gate)
+	// fails loudly.
+	topicFleetLockdownChanged = "fleet:lockdown:changed"
+	topicFleetSessionExpired  = "fleet:session:expired"
 
 	// defaultStreamQueueCap is the per-connection frame queue depth. 512
 	// frames is roughly 30 s of token-level chunks at a typical streaming
@@ -252,22 +268,25 @@ var passthroughTopics = []string{
 	// D-705 exists to prevent, not a legitimate process-wide signal.
 	elicitview.TopicElicitDeferredAnswered,
 
-	// corefleet.TopicFleetLockdownChanged: LockdownChangedPayload
-	// (core/fleet/lockdown.go) is {Active, Reason} — no session concept.
-	// A fleet lockdown affects the whole harness process, and its
-	// frontend consumer (LockdownBanner) is a global banner, not a
-	// per-session component. processWideTopics entry below.
-	corefleet.TopicFleetLockdownChanged,
+	// topicFleetLockdownChanged (mirrors corefleet.TopicFleetLockdownChanged
+	// — see the const block above for why this is a literal, not an
+	// import): LockdownChangedPayload (core/fleet/lockdown.go) is
+	// {Active, Reason} — no session concept. A fleet lockdown affects the
+	// whole harness process, and its frontend consumer (LockdownBanner) is
+	// a global banner, not a per-session component. processWideTopics
+	// entry below.
+	topicFleetLockdownChanged,
 
-	// corefleet.TopicFleetSessionExpired: the allowlist's placeholder
-	// note speculated this "plausibly carries a session id already"
-	// because of the name. Verified false: SessionExpiredPayload
-	// (core/fleet/http.go) is {Reason} only, and the "session" in the
-	// name is the fleet control-plane AUTH session (access-token
-	// refresh failure), not a chat session — there is no session id to
-	// carry. Its only frontend consumer (SessionExpiredBanner.vue) is a
-	// global banner. processWideTopics entry below.
-	corefleet.TopicFleetSessionExpired,
+	// topicFleetSessionExpired (mirrors corefleet.TopicFleetSessionExpired
+	// — see the const block above): the allowlist's placeholder note
+	// speculated this "plausibly carries a session id already" because of
+	// the name. Verified false: SessionExpiredPayload (core/fleet/http.go)
+	// is {Reason} only, and the "session" in the name is the fleet
+	// control-plane AUTH session (access-token refresh failure), not a
+	// chat session — there is no session id to carry. Its only frontend
+	// consumer (SessionExpiredBanner.vue) is a global banner.
+	// processWideTopics entry below.
+	topicFleetSessionExpired,
 }
 
 // PassthroughTopics returns a copy of passthroughTopics: the bus topics
@@ -539,8 +558,8 @@ func (s *Server) runPump(ctx context.Context, p *streamPump, sessionID string) {
 // difference here is that a session id would be actively wrong, not
 // merely absent, so this is exempted rather than left to fail closed.
 //
-// TopicContextBootstrapProgress, TopicFleetLockdownChanged,
-// TopicFleetSessionExpired: served-mode-topic-forwarding-gaps follow-up
+// TopicContextBootstrapProgress, topicFleetLockdownChanged,
+// topicFleetSessionExpired: served-mode-topic-forwarding-gaps follow-up
 // (2026-09, closing the allowlist scripts/ci/allowlists/served-mode-
 // topic-forwarding-gaps.txt froze on fix/z303-mcp-health-truth /
 // PR #336). Each payload was verified to carry no session id and to be
@@ -551,12 +570,18 @@ func (s *Server) runPump(ctx context.Context, p *streamPump, sessionID string) {
 // session-scoped (a deferred ask's pill belongs to one session's chat
 // header) and was fixed by adding a SessionID field to the payload
 // instead (core/rpc/views/elicit/api.go), not by broadcasting it.
+//
+// The two fleet entries are keyed by the topicFleetLockdownChanged /
+// topicFleetSessionExpired literals (const block above), not by
+// corefleet's exported constants — core/serve does not import core/fleet
+// (scripts/ci/check-no-fleet-imports.sh). See
+// TestFleetTopicLiterals_MatchCorefleetConstants for the drift guard.
 var processWideTopics = map[string]bool{
-	rpc.TopicMigrationDriftDetected:     true,
-	mcpview.TopicMCPHealthChanged:       true,
-	rpc.TopicContextBootstrapProgress:   true,
-	corefleet.TopicFleetLockdownChanged: true,
-	corefleet.TopicFleetSessionExpired:  true,
+	rpc.TopicMigrationDriftDetected:   true,
+	mcpview.TopicMCPHealthChanged:     true,
+	rpc.TopicContextBootstrapProgress: true,
+	topicFleetLockdownChanged:         true,
+	topicFleetSessionExpired:          true,
 }
 
 // sessionIDOf extracts the session id from a bus event payload without
