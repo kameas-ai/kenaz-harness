@@ -1245,6 +1245,200 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				"\t_, _ = p.PersistPartial(ctx, sessionID, text, \"transient\", true)\n" +
 				"}\n",
 		},
+		// ---- 2026-09-11: closing finding #48 (10 of 51 gates had no
+		// planted-violation proof at all — nothing demonstrated they could
+		// fail). The seven cases below are the grep/test-shaped gates from
+		// that list; the two structural ones (check-codegen,
+		// check-manifest-version-bump) are standalone functions further
+		// down in this file (they share one plant on
+		// core/agentgraph/nodes/manifests/sleep.yaml, since both react to
+		// the same "fingerprint changed without a commensurate commit"
+		// class), and check-release-integrity.sh — which needs REPO set
+		// and hits api.github.com on a real run — has its own standalone
+		// function further down (TestReleaseIntegrityGate_PlantedMissingReleaseFires)
+		// that fakes `gh` on PATH instead of touching the network.
+		//
+		// While investigating the no-fleet-imports case below, this sweep
+		// also found and documented (did NOT silently fix) a real,
+		// currently-live vacuity in check-no-fleet-imports.sh's allowlist
+		// matching — see docs/unwired-ledger.md's 2026-09-11 entry.
+		{
+			// check-fleet-log-export-fence.sh part 3: no un-annotated
+			// OTLP *log* exporter constructor call anywhere under
+			// core/fleet/ — re-opening the lane that once shipped plain
+			// slog bodies to Fleet's /v1/logs requires an explicit
+			// `fleet-log-fence-allow: <reason>` comment on the same or
+			// the two preceding lines (core/fleet/otlp_log_fence_test.go
+			// itself carries exactly one, annotated, for this reason).
+			// Plants a second, deliberately UN-annotated
+			// otlploghttp.New(...) call — a real, compiling call against
+			// the same package the annotated one already imports, so
+			// this is the actual shape a careless re-introduction would
+			// take, not a synthetic string match.
+			name:       "fleet-log-export-fence/unannotated-otlp-log-exporter",
+			wantOutput: "zz_gate_probe_otlp_test.go",
+			gate:       "check-fleet-log-export-fence.sh",
+			file:       "core/fleet/zz_gate_probe_otlp_test.go",
+			content: "package fleet\n\n" +
+				"import (\n" +
+				"\t\"context\"\n" +
+				"\t\"testing\"\n\n" +
+				"\t\"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp\"\n" +
+				")\n\n" +
+				"// TestZZGateProbeReopensLogLane exists only to prove\n" +
+				"// check-fleet-log-export-fence.sh can fail — see\n" +
+				"// gates_can_fail_test.go's fleet-log-export-fence case.\n" +
+				"// Deliberately UN-annotated: no fleet-log-fence-allow comment\n" +
+				"// on this line or the two immediately above it.\n" +
+				"func TestZZGateProbeReopensLogLane(t *testing.T) {\n" +
+				"\tctx := context.Background()\n" +
+				"\t_, _ = otlploghttp.New(ctx)\n" +
+				"}\n",
+		},
+		{
+			// check-no-fleet-imports.sh (OSS-first boundary): only
+			// core/rpc, core/rpc/views/settings, core/rpc/views/fleet,
+			// core/rpc/middleware and core/mcp/builtin/sites may import
+			// core/fleet. This is the exact class that fired FOR REAL on
+			// release/v0.78.1 (core/serve importing core/fleet) — this
+			// plant reproduces that shape in an isolated new package
+			// OUTSIDE core/rpc entirely so it cannot collide with the real
+			// violation's own fix landing in the same release.
+			//
+			// NOT planted under core/rpc/views/ — while investigating this
+			// case (2026-09-11) that shape exposed a REAL vacuity: the
+			// bare "${MODULE}/core/rpc" allowlist entry matches via the
+			// same "${a}/"* prefix wildcard as every other entry, so it
+			// silently exempts EVERY package under core/rpc/ (not just
+			// core/rpc itself), including core/rpc/views/sessions,
+			// core/rpc/views/agentgraph, etc. Confirmed live and NOT
+			// hypothetical: core/rpc/views/{catalog,cedar,compliance,
+			// contexts,sites,slashcmd,sync} all import core/fleet in
+			// impl.go today and are none of them in the ALLOWLIST array —
+			// they pass ONLY because of this prefix hole. A locally-tested
+			// fix (exact-match the bare core/rpc entry, keep prefix
+			// matching for the other four) is technically correct but
+			// turns FAIL for those 7 real, currently-shipping packages,
+			// which is a product/architecture call (are they meant to be
+			// fleet-facing, or is this OSS-first drift that predates
+			// anyone noticing?) this sweep is not positioned to resolve
+			// unilaterally — see docs/unwired-ledger.md's dated entry.
+			// Escalated rather than silently fixed or silently left,
+			// per CLAUDE.md's disposition rules. The gate as shipped
+			// still correctly catches the field-proven class (an
+			// unrelated package importing fleet), which is what this
+			// proof demonstrates.
+			name:       "no-fleet-imports/unauthorized-package-imports-fleet",
+			wantOutput: "core/sessions/zzgateprobefleetimport",
+			gate:       "check-no-fleet-imports.sh",
+			file:       "core/sessions/zzgateprobefleetimport/probe.go",
+			content: "package zzgateprobefleetimport\n\n" +
+				"import _ \"github.com/kameas-ai/kenaz-harness/core/fleet\"\n",
+		},
+		{
+			// check-no-cred-bytes-in-rpc.sh check 1: the literal `cred
+			// []byte` outside core/credstore/, core/secrets/, core/llm/
+			// and *_test.go files. Planted in a brand-new file under
+			// core/rpc/ (not one of the allowlisted directories).
+			name:       "no-cred-bytes-in-rpc/cred-bytes-outside-allowlist",
+			wantOutput: "zz_gate_probe_credbytes.go",
+			gate:       "check-no-cred-bytes-in-rpc.sh",
+			file:       "core/rpc/zz_gate_probe_credbytes.go",
+			content: "package rpc\n\n" +
+				"func zzGateProbeCredBytes(cred []byte) {\n\t_ = cred\n}\n",
+		},
+		{
+			// check-no-forbidden-compaction-symbols.sh (I4): exactly one
+			// compaction entry point. SuppressAutomaticCompaction and
+			// runPreSendCompaction are grep-forbidden outside
+			// scripts/ci/allowlists/i4-forbidden-compaction-symbols.txt's
+			// two allowed (already-tracked) production call sites. This
+			// plants a THIRD, unallowlisted textual occurrence of the
+			// forbidden symbol in a brand-new production file.
+			name:       "no-forbidden-compaction-symbols/symbol-outside-allowlist",
+			wantOutput: "zz_gate_probe_compaction.go",
+			gate:       "check-no-forbidden-compaction-symbols.sh",
+			file:       "core/rpc/zz_gate_probe_compaction.go",
+			content: "package rpc\n\n" +
+				"// zzGateProbeMentionsForbiddenSymbol exists only to prove\n" +
+				"// check-no-forbidden-compaction-symbols.sh can fail — see\n" +
+				"// gates_can_fail_test.go's no-forbidden-compaction-symbols case.\n" +
+				"const zzGateProbeMentionsForbiddenSymbol = \"SuppressAutomaticCompaction\"\n",
+		},
+		{
+			// check-output-ports.sh (I-existing): every agentgraph node
+			// Outputs["k"] write must be read by Go, a shipped/tested YAML
+			// graph, the frontend, or carry a //wiring:deferred directive.
+			// Plants a write-only port with a name unique enough (the
+			// zz_gate_probe_dead_port key) that it cannot accidentally be
+			// "read" by an unrelated quoted-string match anywhere else in
+			// the tree.
+			name:       "output-ports/write-only-no-reader-anywhere",
+			wantOutput: "zz_gate_probe_dead_port",
+			gate:       "check-output-ports.sh",
+			file:       "core/agentgraph/zz_gate_probe_output.go",
+			content: "package agentgraph\n\n" +
+				"// zzGateProbeDeadOutputWrite writes a port nothing ever reads —\n" +
+				"// the write-only defect check-output-ports.sh exists to catch.\n" +
+				"func zzGateProbeDeadOutputWrite(res *Result) {\n" +
+				"\tres.Outputs[\"zz_gate_probe_dead_port\"] = nil\n" +
+				"}\n",
+		},
+		{
+			// check-oss-first.sh: with HARNESS_FLEET_DISABLED=1, every
+			// non-fleet core package it names (including ./core/mcp/...,
+			// which core/mcp/builtin/sites lives under) must pass `go
+			// test`. The gate's whole reason to exist is catching a defect
+			// reachable ONLY in that mode — an ordinary `go test
+			// ./core/mcp/...` run (no env var) would never see it. This
+			// plants exactly that shape: a test that fails if and only if
+			// HARNESS_FLEET_DISABLED=1 is set, which check-oss-first.sh is
+			// the only CI step that ever sets.
+			name:       "oss-first/fails-only-under-fleet-disabled",
+			wantOutput: "TestZZGateProbeOSSFirstRegression",
+			gate:       "check-oss-first.sh",
+			file:       "core/mcp/builtin/sites/zz_gate_probe_test.go",
+			content: "package sites\n\n" +
+				"import (\n" +
+				"\t\"os\"\n" +
+				"\t\"testing\"\n" +
+				")\n\n" +
+				"// TestZZGateProbeOSSFirstRegression exists only to prove\n" +
+				"// check-oss-first.sh can fail — see gates_can_fail_test.go's\n" +
+				"// oss-first case. It reproduces the exact class the gate exists\n" +
+				"// for: a defect reachable ONLY when HARNESS_FLEET_DISABLED=1,\n" +
+				"// which no ordinary 'go test' run (without the env var) would\n" +
+				"// ever catch.\n" +
+				"func TestZZGateProbeOSSFirstRegression(t *testing.T) {\n" +
+				"\tif os.Getenv(\"HARNESS_FLEET_DISABLED\") == \"1\" {\n" +
+				"\t\tt.Fatal(\"zz_gate_probe: planted OSS-first-only regression — check-oss-first.sh should have caught this\")\n" +
+				"\t}\n" +
+				"}\n",
+		},
+		{
+			// check-node-dispatch.sh's manifest-side half
+			// (TestBundledCatalog_DispatchDeclarations): every shipped,
+			// callable manifest's dispatch: value must be "graph" or
+			// "builtin_tool" (paired correctly with tool_name). Plants a
+			// standalone manifest (no extends: chain, so no archetype
+			// inheritance is needed to make it loadable) with a nonsense
+			// dispatch value — the "unknown dispatch value" shape
+			// dispatch_test.go's own synthetic-catalog table already
+			// covers for a throwaway fixture dir; this proves the SAME
+			// validator rejects it when it is a real bundled manifest,
+			// which is what check-node-dispatch.sh actually runs against.
+			name:       "node-dispatch/unknown-dispatch-value-on-bundled-manifest",
+			wantOutput: "zz_gate_probe_dispatch",
+			gate:       "check-node-dispatch.sh",
+			file:       "core/agentgraph/nodes/manifests/zz_gate_probe_dispatch.yaml",
+			content: "schema_version: \"1\"\n" +
+				"manifest_version: \"1.0.0\"\n" +
+				"id: zz_gate_probe_dispatch\n" +
+				"display_name: ZZ Gate Probe Dispatch\n" +
+				"description: \"Planted by gates_can_fail_test.go's node-dispatch case; dispatch value is deliberately invalid.\"\n" +
+				"dispatch: sometimes\n" +
+				"budget: none\n",
+		},
 	}
 
 	for _, tc := range cases {
@@ -2357,5 +2551,217 @@ func zzGateProbeDeadFireSite(r *Runner) {
 	if !strings.Contains(out, "zz_gate_probe") || !strings.Contains(out, "one-hop") {
 		t.Fatalf("%s failed, but its output does not name the planted event and the "+
 			"one-hop diagnosis — it may be failing for an unrelated reason.\noutput:\n%s", gate, out)
+	}
+}
+
+// plantSleepManifestFingerprintDrift mutates the REAL, committed
+// core/agentgraph/nodes/manifests/sleep.yaml — adding a new, harmless
+// attr to its `attrs:` block without touching its `manifest_version:`
+// field — and returns a restore func. sleep.yaml was picked because it
+// is a small, self-contained, extends:-tool leaf manifest with no ports
+// and no other gate's fixtures pinned to its exact shape (unlike
+// read_file.yaml, ask.yaml, etc., which several other gates' cases in
+// this file reference by name).
+//
+// check-codegen.sh's ManifestFingerprint is computed over {kind, budget,
+// ports, attrs} (core/agentgraph/nodes/cmd/gen/main.go's
+// computeGenFingerprint) — NOT display_name/description — so a
+// description-only edit would not move the fingerprint at all. Adding a
+// real attr is the minimal edit that both (a) changes the fingerprint
+// and (b) cannot itself alter Sleep's runtime behavior (nothing reads
+// `zz_gate_probe` — the tool only consumes `seconds`), the same
+// non-invasive-plant discipline the table above uses for existing
+// production files.
+//
+// This is the crash-safety-hazardous class already documented at this
+// file's TestStructuredOutputRowParityGate_PlantedEncoderDropFires
+// block comment ("TWO more mutate real agentgraph paths through the
+// JOURNALED plant() helper... but still NOT overlay-safe"): the shared
+// journal covers sleep.yaml itself (this function uses journalPlant/
+// journalClear directly, mirroring plant()'s own append branch, since
+// the edit is a mid-file insertion the shared plant() helper's
+// append-or-create contract cannot express), but NOT the three
+// *_gen.go files check-codegen.sh's own internal `go generate` call
+// mutates as a side effect of running the gate. Both callers below
+// close that gap the same way: `defer` a second `go generate
+// ./core/agentgraph/...` AFTER (LIFO: registered before, so it runs
+// after) the manifest restore, so the generated files are regenerated
+// from the ORIGINAL manifest before the test returns. A kill between
+// the gate's internal generate and that final regenerate would leave
+// the *_gen.go files drifted with no journal entry — a real residual
+// hazard, accepted here on the same terms as the five pre-existing
+// unconverted cases the block comment already lists, not a new class.
+func plantSleepManifestFingerprintDrift(t *testing.T, root string) func() {
+	t.Helper()
+	manifestPath := filepath.Join(root, "core/agentgraph/nodes/manifests/sleep.yaml")
+	orig, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", manifestPath, err)
+	}
+	const marker = "attrs:\n  seconds:"
+	const inserted = "attrs:\n" +
+		"  zz_gate_probe:\n" +
+		"    type: string\n" +
+		"    description: \"gate-probe: planted by gates_can_fail_test.go to change Sleep's fingerprint without bumping manifest_version — never a real attr.\"\n" +
+		"  seconds:"
+	if !strings.Contains(string(orig), marker) {
+		t.Fatalf("sleep.yaml no longer contains %q — this plant needs updating to match its current shape", marker)
+	}
+	mutated := strings.Replace(string(orig), marker, inserted, 1)
+	journalPlant(plantRecord{Path: manifestPath, Orig: string(orig), Existed: true, Planted: mutated})
+	if err := os.WriteFile(manifestPath, []byte(mutated), 0o644); err != nil {
+		t.Fatalf("writing %s: %v", manifestPath, err)
+	}
+	return func() {
+		if err := os.WriteFile(manifestPath, orig, 0o644); err != nil {
+			t.Errorf("restoring %s: %v — WORKING TREE IS DIRTY", manifestPath, err)
+		}
+		journalClear(manifestPath)
+	}
+}
+
+// regenerateAgentgraphCodegen runs `go generate ./core/agentgraph/...`
+// against whatever core/agentgraph/nodes/manifests/ currently holds. The
+// two tests below defer this AFTER (meaning: registered before, so it
+// executes after per Go's LIFO defer order) their manifest restore, so
+// the three committed *_gen.go files check-codegen.sh's own internal
+// `go generate` mutated as a side effect of running the gate get
+// regenerated back to what the UNPLANTED manifest produces — restoring
+// `git status --porcelain` to clean.
+func regenerateAgentgraphCodegen(t *testing.T, root string) {
+	t.Helper()
+	cmd := exec.Command("go", "generate", "./core/agentgraph/...")
+	cmd.Dir = root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("post-test 'go generate ./core/agentgraph/...' to restore the working tree failed: %v\noutput:\n%s", err, out)
+	}
+}
+
+// TestCodegenGate_PlantedManifestDriftFires is check-codegen.sh's
+// planted-violation proof (finding #48). The violation class: a
+// manifest under core/agentgraph/nodes/manifests/ changed without the
+// regenerated *_gen.go files being committed alongside it. check-
+// codegen.sh's own `git diff --exit-code` is against the INDEX (not
+// HEAD~1), so the plant just needs to change what `go generate` outputs
+// relative to what is currently committed — it does not need to touch
+// git history.
+func TestCodegenGate_PlantedManifestDriftFires(t *testing.T) {
+	root := repoRoot(t)
+	cleanup := plantSleepManifestFingerprintDrift(t, root)
+	defer regenerateAgentgraphCodegen(t, root)
+	defer cleanup()
+
+	code, out := runGate(t, "check-codegen.sh", root)
+	if code == 0 {
+		t.Fatalf("check-codegen.sh exited 0 with a manifest attr planted but the regenerated "+
+			"*_gen.go files never committed — the gate cannot see codegen drift.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "DRIFT DETECTED") || !strings.Contains(out, "zz_gate_probe") {
+		t.Fatalf("check-codegen.sh failed, but its output does not both diagnose DRIFT and name "+
+			"the planted zz_gate_probe attr — it may be failing for an unrelated reason.\noutput:\n%s", out)
+	}
+}
+
+// TestManifestVersionBumpGate_PlantedFingerprintDriftFires is
+// check-manifest-version-bump.sh's planted-violation proof (finding
+// #48). Same plant as the codegen case above (they are the same
+// underlying defect class viewed from two different gates), but this
+// gate's comparison is against HEAD~1 via `git show`, not the index —
+// confirmed before writing this test that Sleep's fingerprint AND
+// version are byte-identical at HEAD and HEAD~1 (`git show
+// HEAD~1:core/agentgraph/manifest_versions_gen.go` vs the committed
+// file), so the plant's fingerprint change is real drift relative to
+// BOTH comparison points, not an artifact of whichever commit the
+// worktree happened to branch from.
+func TestManifestVersionBumpGate_PlantedFingerprintDriftFires(t *testing.T) {
+	root := repoRoot(t)
+	cleanup := plantSleepManifestFingerprintDrift(t, root)
+	defer regenerateAgentgraphCodegen(t, root)
+	defer cleanup()
+
+	code, out := runGate(t, "check-manifest-version-bump.sh", root)
+	if code == 0 {
+		t.Fatalf("check-manifest-version-bump.sh exited 0 with Sleep's fingerprint changed and "+
+			"manifest_version left at 2.0.0 — the gate cannot see an unbumped version.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "Sleep: fingerprint changed") {
+		t.Fatalf("check-manifest-version-bump.sh failed, but its output does not name Sleep's "+
+			"unbumped fingerprint change — it may be failing for an unrelated reason.\noutput:\n%s", out)
+	}
+}
+
+// TestReleaseIntegrityGate_PlantedMissingReleaseFires is
+// check-release-integrity.sh's planted-violation proof (finding #48).
+// The gate shells out to `gh api` for two data sources (every vX.Y.Z
+// tag, and every GitHub Release with its draft/asset-count) and
+// reconciles them; a real end-to-end run needs REPO set to a real repo
+// and network access to api.github.com, neither of which this test
+// suite may assume (P-8: no real network calls from a planted-violation
+// proof). Instead this fakes `gh` itself: a throwaway script placed
+// first on PATH that recognises exactly the two `gh api` calls this
+// gate's happy path needs (git/refs/tags and /releases) and returns
+// canned data with one tag (v77.7.7) that has NO release at all — the
+// simplest of the three violation shapes the gate's own header
+// documents (no Release / a draft Release / a Release with zero
+// assets).
+//
+// Every OTHER `gh api` call this gate makes (the tag's ref/sha/date
+// lookups, the release-workflow-runs lookup) is left unimplemented by
+// the fake — deliberately. The gate's own script already treats each of
+// those as best-effort (stderr discarded, falling back to an empty
+// string on failure), and an empty/failed
+// response for the date lookups makes `age_min` fall through to its
+// 999999-minute default, which is what pushes v77.7.7 past
+// GRACE_MINUTES without this test needing to fake a plausible tag
+// timestamp at all.
+func TestReleaseIntegrityGate_PlantedMissingReleaseFires(t *testing.T) {
+	root := repoRoot(t)
+
+	binDir := t.TempDir()
+	fakeGh := filepath.Join(binDir, "gh")
+	fakeGhScript := "#!/usr/bin/env bash\n" +
+		"# Fake gh for TestReleaseIntegrityGate_PlantedMissingReleaseFires.\n" +
+		"# $1=api $2=<path>; every other gh subcommand/path this gate calls\n" +
+		"# is intentionally left to fail (exit 1, empty stdout) — the real\n" +
+		"# script treats those failures as best-effort and tolerates them.\n" +
+		"if [[ \"$1\" == \"api\" ]]; then\n" +
+		"  case \"$2\" in\n" +
+		"    repos/*/git/refs/tags)\n" +
+		"      printf 'refs/tags/v77.7.6\\nrefs/tags/v77.7.7\\n'\n" +
+		"      exit 0\n" +
+		"      ;;\n" +
+		"    repos/*/releases*)\n" +
+		"      # v77.7.6: published, 1 asset (healthy — must NOT be reported).\n" +
+		"      # v77.7.7: intentionally absent — no release row at all.\n" +
+		"      printf 'v77.7.6\\tfalse\\t1\\n'\n" +
+		"      exit 0\n" +
+		"      ;;\n" +
+		"  esac\n" +
+		"fi\n" +
+		"exit 1\n"
+	if err := os.WriteFile(fakeGh, []byte(fakeGhScript), 0o755); err != nil {
+		t.Fatalf("writing fake gh: %v", err)
+	}
+
+	code, out := runGateEnv(t, "check-release-integrity.sh", root, map[string]string{
+		"PATH": binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"REPO": "zzgateprobe/fake-repo",
+	})
+	if code == 0 {
+		t.Fatalf("check-release-integrity.sh exited 0 with a tag (v77.7.7) that has no GitHub "+
+			"Release at all — the gate cannot see an unreleased tag.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "v77.7.7") || !strings.Contains(out, "no GitHub Release exists for this tag") {
+		t.Fatalf("check-release-integrity.sh failed, but its output does not name the planted "+
+			"tag v77.7.7 and diagnose a missing release — it may be failing for an unrelated "+
+			"reason (e.g. a real-network REPO/gh failure this fake was supposed to prevent).\noutput:\n%s", out)
+	}
+	// v77.7.6 (the healthy control tag) must NOT be reported as a gap —
+	// otherwise this "proof" would pass even if the gate flags EVERY tag
+	// unconditionally, which is exactly the false-positive-shaped
+	// non-proof CLAUDE.md's finding #59 warns about.
+	if strings.Contains(out, "v77.7.6") && strings.Contains(out, "v77.7.6` — ") {
+		t.Fatalf("check-release-integrity.sh flagged the healthy control tag v77.7.6 as a gap too — "+
+			"this proof cannot distinguish a real violation from a gate that fails unconditionally.\noutput:\n%s", out)
 	}
 }
