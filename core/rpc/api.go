@@ -1327,6 +1327,23 @@ type options struct {
 	// settingsStore overrides the settings store New would otherwise
 	// build via settings.NewFileStoreFromEnv(). See WithSettingsStore.
 	settingsStore settings.SettingsStore
+
+	// mcpHTTPPoolOptions overrides the construction options for the HTTP
+	// MCP sub-pool newLLMStack builds (below). nil in every production
+	// call site, so the default (mcphttp.PoolOptions{Logger: nil}, which
+	// falls back to a 30s real-wall-clock health-ping cadence — see
+	// transport.DefaultPingPeriod) is unchanged.
+	//
+	// This is a same-package, unexported test seam (there is no exported
+	// With* function for it — nothing outside core/rpc should ever need
+	// to override health-probe cadence) added for PR #336 review MUST
+	// FIX 3: driving a real probe TRIP through rpc.New()'s actual
+	// SetHealthObserver wiring (the `a.dispatchPool.SetHealthObserver`
+	// closure a few hundred lines below) requires an http sub-pool that
+	// ticks fast enough for a test to wait on, and nothing upstream of
+	// this field could reach into newLLMStack's httpPool construction
+	// otherwise. See api_mcp_health_observer_wiring_test.go.
+	mcpHTTPPoolOptions *mcphttp.PoolOptions
 }
 
 // WithHostProviders seeds provider profiles that the surrounding control
@@ -2152,7 +2169,7 @@ func New(c *core.Core, opts ...Option) *API {
 		Emitter: WailsEmitter{},
 	})
 
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, a.cedarEngine, taskReg)
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, a.cedarEngine, taskReg, opt.mcpHTTPPoolOptions)
 	a.llmAPI = stack.api
 	// chat-turn-integrity-01PMZ606 WP12: the join CK-08 + owner ruling
 	// X-7 wanted. Both were already constructed above (inside
@@ -5052,6 +5069,11 @@ func newLLMStack(
 	// nil on the nil-core test chassis, same degrade every other
 	// optional dependency in this function follows.
 	taskReg *coretasks.Registry,
+	// mcpHTTPPoolOptions overrides the HTTP MCP sub-pool's construction
+	// options (ping cadence, ticker factory). nil in production — see
+	// options.mcpHTTPPoolOptions's doc comment (PR #336 review MUST
+	// FIX 3 test seam).
+	mcpHTTPPoolOptions *mcphttp.PoolOptions,
 ) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
@@ -5241,9 +5263,17 @@ func newLLMStack(
 	// three so the tools view and the core MCP seam route recipes to the
 	// correct transport based on ServerSpec.Transport without the caller
 	// knowing which pool is active.
-	httpPool := mcphttp.NewPool(mcphttp.PoolOptions{
+	httpPoolOptions := mcphttp.PoolOptions{
 		Logger: nil, // defaults to slog.Default
-	})
+	}
+	if mcpHTTPPoolOptions != nil {
+		// Test-only override (PR #336 review MUST FIX 3) — production
+		// never passes a non-nil value here, so httpPoolOptions above
+		// (and its 30s DefaultPingPeriod fallback) is what every real
+		// chassis builds.
+		httpPoolOptions = *mcpHTTPPoolOptions
+	}
+	httpPool := mcphttp.NewPool(httpPoolOptions)
 	ssePool := mcpsse.NewPool(mcpsse.PoolOptions{
 		Logger: nil, // defaults to slog.Default
 	})

@@ -105,6 +105,7 @@ describe('SERVED_STREAM_TOPICS ↔ passthroughTopics parity (G-703, AC-716)', ()
     'chat:overflow-recovery',
     'tool:confirm-pending',
     'storage.migration.drift-detected',
+    'mcp:health-changed',
   ].sort();
 
   it('SERVED_STREAM_TOPICS matches the Go-side passthroughTopics set exactly', () => {

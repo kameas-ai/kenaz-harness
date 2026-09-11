@@ -228,12 +228,51 @@ func (a *API) HealthSnapshot(_ context.Context) (map[string]HealthEntry, error) 
 	return out, nil
 }
 
-// TopicMCPHealthChanged is the broker "kind" argument SubscribeHealthChanges
-// registers and PublishHealthChange fans events for. Declared as a named
-// const (connector-lifecycle-truth-01PMZ303 UNIT-8) so
+// mcpHealthChangedEventKind is the broker "kind" argument
+// SubscribeHealthChanges passes to Subscribe — the StreamBroker composes
+// the wire topic as "<view>:<kind>" (rpc.StreamBroker.Subscribe), so
+// "mcp" (the view, passed at the call site below) + this value produces
+// exactly TopicMCPHealthChanged's value. Kept as a plain string literal
+// distinct from TopicMCPHealthChanged, and NOT built via Go string
+// concatenation (`"mcp:" + mcpHealthChangedEventKind`), because
+// scripts/ci/check-broker-topic-consumers.sh's discovery pass only
+// recognises `Ident = "literal"` shapes — a concatenation expression
+// parses as a truncated value ("mcp:") and silently breaks the gate's
+// frontend-subscriber detection (confirmed while fixing PR #336 MUST
+// FIX 2: `CI_GATE_REPORT=1` showed `TopicMCPHealthChanged = mcp:` with
+// frontend=0 the moment this was written as concatenation). The two
+// constants below must be kept in sync by hand — the same
+// "NOTE: the constant value must match" convention
+// TopicElicitPending/elicitview.TopicElicitPending and
+// TopicToolConfirmPending/toolloop.TopicToolConfirmPending already use
+// in core/rpc/stream_broker.go for the identical cross-identifier
+// duplication problem.
+const mcpHealthChangedEventKind = "health-changed"
+
+// TopicMCPHealthChanged is the fully-composed broker topic
+// SubscribeHealthChanges registers and PublishHealthChange fans events
+// for. Holds the COMPLETE wire value ("mcp:" + mcpHealthChangedEventKind,
+// spelled out as its own literal — see that constant's comment for why),
+// matching every peer Topic* constant's convention of storing the full
+// topic string (core/rpc/stream_broker.go's TopicSessionUsageUpdated
+// etc.), not just the bare event-kind suffix. Declared as a named const
+// (connector-lifecycle-truth-01PMZ303 UNIT-8) so
 // scripts/ci/check-broker-topic-consumers.sh's discovery pass can see it —
 // before this it was a bare string literal, invisible to the gate's
 // `[Tt]opic` naming-convention discovery (spec.md §1.12 R-6).
+//
+// PR #336 review MUST FIX 2: before this fix, the constant held only the
+// bare "health-changed" suffix while the frontend's real subscriber
+// (useHarnessAPI.ts) keys on the composed "mcp:health-changed" string.
+// That mismatch made check-broker-topic-consumers.sh's pass 1 (frontend
+// detection) blind to the real subscriber — the gate reported
+// frontend=0 and only escaped a false FAIL because pass 2b's
+// `.Publish*(` window happened to also match the qualified identifier on
+// an adjacent debug-log call in api.go. Making the constant hold the
+// composed value (and splitting the Subscribe call's kind argument into
+// mcpHealthChangedEventKind above, so the "mcp:" prefix is not
+// double-applied) makes pass 1 see the real subscriber for the real
+// reason instead of by accident.
 //
 // NOT the same string as audit.KindMCPHealthChanged
 // ("mcp.recipe.health_changed", core/context/audit/audit.go) — that is
@@ -241,7 +280,7 @@ func (a *API) HealthSnapshot(_ context.Context) (map[string]HealthEntry, error) 
 // different value. Do not conflate them; the audit kind is emitted
 // alongside a publish (see core/rpc/api.go's wiring), not renamed to
 // this constant.
-const TopicMCPHealthChanged = "health-changed"
+const TopicMCPHealthChanged = "mcp:health-changed"
 
 // SubscribeHealthChanges registers a broker subscription for
 // TopicMCPHealthChanged events. The caller tears it down via StopStream.
@@ -252,7 +291,11 @@ func (a *API) SubscribeHealthChanges(ctx context.Context) (string, error) {
 		return "", nil
 	}
 	ch := make(chan any, 64)
-	id, err := a.broker.Subscribe(ctx, "mcp", TopicMCPHealthChanged, ch)
+	// "mcp" + mcpHealthChangedEventKind is composed by StreamBroker.Subscribe
+	// into TopicMCPHealthChanged ("mcp:health-changed") — passing the
+	// already-composed TopicMCPHealthChanged here would double the "mcp:"
+	// prefix.
+	id, err := a.broker.Subscribe(ctx, "mcp", mcpHealthChangedEventKind, ch)
 	if err != nil {
 		return "", err
 	}

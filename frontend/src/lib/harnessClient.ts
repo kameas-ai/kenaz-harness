@@ -4604,6 +4604,11 @@ export const SERVED_STREAM_TOPICS = [
   // surfaces a persistent toast so a served workbench user with a
   // corrupted ledger isn't left with no signal at all.
   'storage.migration.drift-detected',
+  // Live MCP connector health pushes (connector-lifecycle-truth-01PMZ303
+  // UNIT-8; review finding served-mode-forwarding-gap). useHarnessAPI.ts
+  // subscribes here to flip a connector's health pill without a poll
+  // tick. Must match core/rpc/views/mcp.TopicMCPHealthChanged.
+  'mcp:health-changed',
 ] as const;
 
 /**
