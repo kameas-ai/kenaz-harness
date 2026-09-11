@@ -8,7 +8,10 @@
  *   - the Airflow-style GRAPH of the run, per-node status, clickable
  *     through to the trace rows (visual-graph-authoring-01PMUX01 WP05)
  *   - the trace tail (last N events) with kind + node-id badges
- *   - paused-state UI: reads PendingAsk and exposes a resume input
+ *   - paused-state UI: reads PendingAsk and exposes a resume input, or
+ *     reads PendingApproval and exposes approve/reject controls
+ *     (approval-node-01PMZC12 UNIT-7) — the two pending kinds are
+ *     mutually exclusive and never both render
  *
  * ── WHERE THE LIVE NODE STATES COME FROM ──────────────────────────────
  *
@@ -64,6 +67,8 @@ const events = ref<readonly GraphRunTraceEvent[]>([]);
 const error = ref<string | null>(null);
 const askResponse = ref('');
 const submittingAsk = ref(false);
+const approvalReason = ref('');
+const submittingApproval = ref(false);
 
 let pollHandle: ReturnType<typeof setTimeout> | null = null;
 let cancelled = false;
@@ -238,6 +243,29 @@ async function resume() {
     error.value = err instanceof Error ? err.message : String(err);
   } finally {
     submittingAsk.value = false;
+  }
+}
+
+/**
+ * resolveApproval calls the approval verb, not `resume` — an approval
+ * is a verdict (approved/rejected + an optional reason), not free text,
+ * and `Graph_Resume` refuses a pending approval server-side
+ * (approval-node-01PMZC12 UNIT-3/UNIT-7).
+ */
+async function resolveApproval(approved: boolean) {
+  const id = runId.value;
+  const nodeId = status.value?.pendingApproval?.nodeId;
+  if (!id || !nodeId) return;
+  submittingApproval.value = true;
+  try {
+    await client.graph.resolveApproval(id, nodeId, approved, approvalReason.value);
+    approvalReason.value = '';
+    await pollOnce();
+    schedulePoll();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    submittingApproval.value = false;
   }
 }
 
@@ -416,6 +444,48 @@ defineExpose({ pollOnce, refreshGraph, onNodeStatusClick, focusedSeq });
             @click="resume"
           >
             Resume
+          </button>
+        </div>
+      </div>
+
+      <div
+        v-if="status?.pendingApproval"
+        class="rounded-md border border-signal-warn bg-surface-1 px-4 py-3"
+        data-testid="run-pending-approval"
+      >
+        <div class="font-ui text-[12px] uppercase tracking-[0.18em] text-signal-warn">
+          Approval requested<template v-if="status.pendingApproval.approverRole">
+            — {{ status.pendingApproval.approverRole }}</template
+          >
+        </div>
+        <div class="mt-1 font-ui text-[14px] font-semibold text-ink">
+          {{ status.pendingApproval.prompt }}
+        </div>
+        <div class="mt-2 flex items-end gap-2">
+          <input
+            v-model="approvalReason"
+            type="text"
+            data-testid="run-approval-reason"
+            class="flex-1 rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-[13px] text-ink"
+            placeholder="Reason (optional)…"
+          />
+          <button
+            type="button"
+            :disabled="submittingApproval"
+            class="rounded-sm border border-signal-ok bg-surface-2 px-3 py-1 font-ui text-[12px] uppercase tracking-[0.18em] text-signal-ok disabled:opacity-50"
+            data-testid="run-approval-approve"
+            @click="resolveApproval(true)"
+          >
+            Approve
+          </button>
+          <button
+            type="button"
+            :disabled="submittingApproval"
+            class="rounded-sm border border-signal-danger bg-surface-2 px-3 py-1 font-ui text-[12px] uppercase tracking-[0.18em] text-signal-danger disabled:opacity-50"
+            data-testid="run-approval-reject"
+            @click="resolveApproval(false)"
+          >
+            Reject
           </button>
         </div>
       </div>

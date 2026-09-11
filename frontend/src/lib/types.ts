@@ -2938,6 +2938,20 @@ export interface GraphPendingAsk {
   spec?: ElicitationQuestion;
 }
 
+/**
+ * PendingApproval surfaces a parked approval node's decision for the
+ * approve/reject UI (approval-node-01PMZC12 UNIT-7). Distinct from
+ * GraphPendingAsk — an approval resolves through
+ * `Graph_ResolveApproval(runID, nodeID, approved, reason)`, not
+ * `Graph_Resume(runID, freeText)`. Mirrors
+ * `core/rpc/views/agentgraph/api.go`'s `PendingApproval` struct.
+ */
+export interface GraphPendingApproval {
+  nodeId: string;
+  prompt: string;
+  approverRole?: string;
+}
+
 /** RunStatus is the snapshot the RunView renders. */
 export interface GraphRunStatus {
   runId: string;
@@ -2954,6 +2968,12 @@ export interface GraphRunStatus {
   toolCalls: number;
   costUsd: number;
   pendingAsk?: GraphPendingAsk;
+  /**
+   * Exactly one of pendingAsk / pendingApproval is set on a paused run
+   * — the kernel parks on at most one node per pause cycle, and its
+   * kind is what decides which field this is.
+   */
+  pendingApproval?: GraphPendingApproval;
 }
 
 /** RunTraceEvent is one row of the EventLog tail. */
