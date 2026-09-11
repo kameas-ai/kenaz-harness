@@ -160,6 +160,24 @@ jobs:
         # wiring-integrity-01PMAG04 WP06.
         run: bash scripts/ci/check-seam-implementers.sh
 
+      - name: nil-optional-dep guard (I18)
+        # An interface field on a struct, documented by its own author as
+        # optional ("nil is allowed" / "nil causes …" / "nil disables …"),
+        # that no production wiring site under core/ or cmd/ ever assigns —
+        # so the type system and the doc comment both say the capability
+        # exists while nothing turns it on. Six confirmed instances shipped
+        # before this gate existed (ChatRunDispatcher, wfsched.Dispatcher,
+        # registry.Options.Cost, a nil cedarPolicyAPI, the fs.Prompter that
+        # denied every kenaz__write_file call, HV-03's registry.Options.Policy
+        # in cmd/harness-vm). Three missions independently specced this gate
+        # (model-scheduled-jobs-01PMSJ01 §7 G-1, model-settings-reach-the-
+        # model-01PMZ101 §7 G-2, fleet-enforcement-truth-01PMZ505 §7 G-1) and
+        # none built it — docs/unwired-ledger.md's 2026-08-20 entry. Uses the
+        # Go type checker (golang.org/x/tools/go/packages), same pattern as
+        # the seam-implementers guard above — see
+        # scripts/ci/cmd/checknilopts/main.go's header for the full design.
+        run: bash scripts/ci/check-nil-optional-deps.sh
+
       - name: knob-coverage guard
         # Generalises the resolved-config coverage check any dial system
         # can opt into: go test ./core/... -run 'TestKnobCoverage' picks
@@ -379,6 +397,19 @@ jobs:
         # scripts/ci/allowlists/i14-unconsumed-broker-topics.txt
         # documents today's single instance (mcp:progress).
         run: bash scripts/ci/check-broker-topic-consumers.sh
+
+      - name: served-mode-topic-forwarding guard
+        # PR #336 review item 2. I14 (above) asks "does anything consume
+        # this topic anywhere"; it never asked whether a topic reachable
+        # from a frontend `useEventStream` call is ALSO forwarded by
+        # core/serve/wsstream.go's passthroughTopics — mcp:health-changed
+        # had a real publisher and a real frontend subscriber and was
+        # covered by I14 while silently never reaching a served-mode
+        # client. This narrower gate freezes today's five known gaps
+        # (scripts/ci/allowlists/served-mode-topic-forwarding-gaps.txt —
+        # each needs its own session-scoping decision before it can be
+        # wired) and fails on any NEW topic in that same shape.
+        run: bash scripts/ci/check-served-mode-topic-forwarding.sh
 
       - name: single-move-writer guard
         # kitty-specs/model-moves-transcript-01PMCH01 WP01, spec §4:

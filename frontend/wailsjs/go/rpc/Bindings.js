@@ -738,8 +738,16 @@ export function MCP_ListServers() {
   return window['go']['rpc']['Bindings']['MCP_ListServers']();
 }
 
+export function MCP_ListToolPolicies() {
+  return window['go']['rpc']['Bindings']['MCP_ListToolPolicies']();
+}
+
 export function MCP_SaveCustomRecipe(arg1) {
   return window['go']['rpc']['Bindings']['MCP_SaveCustomRecipe'](arg1);
+}
+
+export function MCP_SetToolPolicy(arg1, arg2, arg3, arg4) {
+  return window['go']['rpc']['Bindings']['MCP_SetToolPolicy'](arg1, arg2, arg3, arg4);
 }
 
 export function MCP_StartStream(arg1) {
@@ -1604,6 +1612,22 @@ export function Storage_ApplyDriftFix(arg1) {
 
 export function Storage_GetMigrationDriftReport() {
   return window['go']['rpc']['Bindings']['Storage_GetMigrationDriftReport']();
+}
+
+export function Subagent_Abort(arg1) {
+  return window['go']['rpc']['Bindings']['Subagent_Abort'](arg1);
+}
+
+export function Subagent_Pause(arg1) {
+  return window['go']['rpc']['Bindings']['Subagent_Pause'](arg1);
+}
+
+export function Subagent_Resume(arg1) {
+  return window['go']['rpc']['Bindings']['Subagent_Resume'](arg1);
+}
+
+export function Subagent_Steer(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Subagent_Steer'](arg1, arg2);
 }
 
 export function Sync_ForcePull(arg1) {

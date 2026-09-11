@@ -44,6 +44,32 @@
 #     core/fswatch/watcher.go uses: `w.runner.Fire(ctx, hooks.EventFileChanged, ev)`).
 # Both patterns exclude core/hooks/hooks.go itself and every _test.go file.
 #
+# ONE-HOP REACHABILITY (added 2026-09-10, ledger #46 close-out): a
+# textual match alone is not proof an event fires. `pre_send`'s only
+# match lived inside `(a *API).buildMessages`, a method with ZERO
+# non-test callers — dead since commit f0b17126 (2026-04-27), four
+# months before this gate said otherwise. It was a leg-(a) false
+# positive this gate manufactured, not merely missed: a 2026-08-19
+# mission relied on the "clean" verdict for three weeks. Leg (a) now
+# also resolves the function ENCLOSING each textual match and requires
+# that enclosing function to have at least one non-test caller anywhere
+# in core/ (a plain grep for `.Name(` / `Name(` outside the function's
+# own declaration line, excluding _test.go). An event whose every match
+# fails this is reported the same as an event with no match at all.
+#
+# This is ONE hop, not reachability, and does not claim to be. What it
+# still cannot see (see one_hop_reachable()'s own comment for the full
+# list): (1) hop two — the enclosing function has a caller, but that
+# caller is itself dead (only reachable from another orphaned function,
+# a disabled flag branch, or a type never constructed in production);
+# (2) indirect invocation through an interface value, a stored closure,
+# or reflection, which the textual caller search can miss; (3) a caller
+# whose name collides with an unrelated method on a different receiver,
+# which the same textual search can wrongly count. A gate that closes
+# gap (1) would need to walk the call graph transitively to a real
+# entrypoint (main(), an HTTP/RPC handler, a registered builtin) — a
+# materially bigger lift, deferred; see docs/unwired-ledger.md.
+#
 # Usage: bash scripts/ci/check-hook-event-fire-sites.sh (from anywhere).
 
 set -euo pipefail
@@ -186,6 +212,82 @@ to_pascal_case() {
   printf '%s' "$out"
 }
 
+# ---- one-hop reachability (2026-09-10, ledger #46 close-out) ----
+#
+# A textual fire-site match alone is not evidence the event fires: the
+# match can sit inside a function with ZERO non-test callers, which is
+# exactly how this gate certified pre_send as firing while its only call
+# site lived inside (a *API).buildMessages — dead since commit f0b17126
+# (2026-04-27), four months before the gate said otherwise. Leg (a) is
+# widened with a single hop: resolve the function ENCLOSING each matched
+# call site, then require that function itself have at least one
+# non-test caller anywhere in core/. An event with textual hits but where
+# every one of them is unreachable at hop one is treated the same as an
+# event with no textual hit at all.
+#
+# This is deliberately ONE hop, not reachability. It cannot see:
+#   - hop two: the enclosing function HAS a caller, but that caller is
+#     itself dead (e.g. only reachable from another orphaned function, a
+#     disabled feature flag branch, or a struct method whose type is
+#     never constructed in production). Confirming that requires walking
+#     the call graph transitively to a real entrypoint, which this gate
+#     does not do.
+#   - indirect invocation: a caller reached only through an interface
+#     value, a struct field holding a func value, a closure captured and
+#     invoked elsewhere, or reflection. The caller search below is a
+#     textual grep for `.Name(` / `Name(`, so a genuine call routed
+#     through an interface method set or a stored closure can be missed
+#     (false negative) — and, symmetrically, an unrelated method with the
+#     same short name on a different receiver type can be counted as a
+#     caller when it is not (false positive). Short, common method names
+#     are the likeliest source of either.
+#   - build-tag-gated or test-helper-only callers: the caller search
+#     excludes _test.go files by design (a test-only caller is not a
+#     production path) but does not evaluate build tags, so a caller
+#     gated behind a tag that never ships would still count.
+#
+# Where this heuristic produces a false positive on real code, the fix is
+# either to make the caller search more precise for that shape, or to
+# allowlist the event here with a dated, owner-named row per CLAUDE.md's
+# release-ritual rules — not to weaken the check generally.
+one_hop_reachable() {
+  local file="$1" line="$2"
+  local header
+  header=$(awk -v target="$line" '
+    /^func / { last=$0 }
+    NR==target { print last; exit }
+  ' "$file" 2>/dev/null)
+  [[ -z "$header" ]] && return 1
+
+  local name="" is_method=0
+  if [[ "$header" =~ ^func\ \([^\)]*\)[[:space:]]+([A-Za-z0-9_]+) ]]; then
+    name="${BASH_REMATCH[1]}"
+    is_method=1
+  elif [[ "$header" =~ ^func[[:space:]]+([A-Za-z0-9_]+) ]]; then
+    name="${BASH_REMATCH[1]}"
+  fi
+  [[ -z "$name" ]] && return 1
+
+  local pattern
+  if [[ "$is_method" -eq 1 ]]; then
+    # Method: only a receiver-dot call counts, same convention leg (a)
+    # itself uses for Run<Pascal>/Fire<Pascal>.
+    pattern="\\.${name}\\("
+  else
+    # Package-level func: any call not immediately preceded by another
+    # identifier char or a dot (which would make it someone else's
+    # method of the same short name).
+    pattern="(^|[^.A-Za-z0-9_])${name}\\("
+  fi
+
+  local hits
+  hits=$(grep -rnE "$pattern" --include='*.go' core 2>/dev/null \
+    | grep -v '_test\.go' \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*func ' \
+    || true)
+  [[ -n "$hits" ]]
+}
+
 has_fire_site() {
   local event="$1" pascal="$2"
   # Real method-call site: preceded by a receiver dot, which excludes both
@@ -196,9 +298,6 @@ has_fire_site() {
     | grep -v '_test\.go' \
     | grep -v "^${HOOKS_GO}:" \
     || true)
-  if [[ -n "$method_hits" ]]; then
-    return 0
-  fi
   # Generic-dispatch call site: a .Fire( / .FireAsync( call on a line that
   # also names the event's own Go constant (core/fswatch/watcher.go's shape).
   local generic_hits
@@ -207,19 +306,53 @@ has_fire_site() {
     | grep -v "^${HOOKS_GO}:" \
     | grep -E "Event${pascal}\b" \
     || true)
-  [[ -n "$generic_hits" ]]
+
+  local all_hits
+  all_hits=$(printf '%s\n%s\n' "$method_hits" "$generic_hits" | grep -v '^$' || true)
+  if [[ -z "$all_hits" ]]; then
+    HAS_FIRE_SITE_REASON="no-textual-match"
+    return 1
+  fi
+
+  local hit hfile hline
+  while IFS= read -r hit; do
+    [[ -z "$hit" ]] && continue
+    hfile="${hit%%:*}"
+    hline="${hit#*:}"
+    hline="${hline%%:*}"
+    if one_hop_reachable "$hfile" "$hline"; then
+      HAS_FIRE_SITE_REASON=""
+      return 0
+    fi
+  done <<< "$all_hits"
+
+  HAS_FIRE_SITE_REASON="textual match(es) found, but every enclosing function is unreachable at one hop (see: $(printf '%s' "$all_hits" | head -1))"
+  return 1
 }
 
 checked_count=0
 firing_without_site=""
+firing_unreachable=""
 while IFS= read -r event; do
   [[ -z "$event" ]] && continue
   checked_count=$((checked_count + 1))
   pascal=$(to_pascal_case "$event")
+  HAS_FIRE_SITE_REASON=""
   if ! has_fire_site "$event" "$pascal"; then
-    firing_without_site="${firing_without_site}${event} (derived candidate: ${pascal})"$'\n'
+    if [[ "$HAS_FIRE_SITE_REASON" == "no-textual-match" ]]; then
+      firing_without_site="${firing_without_site}${event} (derived candidate: ${pascal})"$'\n'
+    else
+      firing_unreachable="${firing_unreachable}${event} (derived candidate: ${pascal}): ${HAS_FIRE_SITE_REASON}"$'\n'
+    fi
   fi
 done <<< "$firing_sorted"
+
+if [[ -n "$firing_unreachable" ]]; then
+  echo "" >&2
+  echo "${GATE} FAIL: FIRING_HOOK_EVENTS entries whose fire site is textually present but not one-hop reachable — the enclosing function has zero non-test callers (leg a, one-hop):" >&2
+  printf '%s\n' "$firing_unreachable" | sed 's/^/    /' >&2
+  fail=1
+fi
 
 if [[ -n "$firing_without_site" ]]; then
   echo "" >&2

@@ -30,6 +30,8 @@ import type {
   ModelInfo,
   MCPServer,
   MCPTestResult,
+  MCPToolPolicy,
+  MCPToolPolicyRule,
   A2ACard,
   Job,
   SecretReference,
@@ -78,6 +80,7 @@ import type {
   RecipeListing,
   RecipeState,
   RecipeStatus,
+  HealthEntry,
   MissingPrereq,
   EnvKey,
   ConfigOption,
@@ -360,6 +363,8 @@ interface WailsBindingsLike {
   MCP_ListServers(): Promise<MCPServer[]>;
   MCP_StartStream(id: string): Promise<string>;
   MCP_StopStream(id: string): Promise<void>;
+  MCP_HealthSnapshot(): Promise<Record<string, WireHealthEntry>>;
+  MCP_SubscribeHealthChanges(): Promise<string>;
   MCP_TestRecipe(
     recipeID: string,
     env: Record<string, string>,
@@ -371,6 +376,16 @@ interface WailsBindingsLike {
   MCP_SaveCustomRecipe(
     req: MCPSaveCustomRecipeRequest,
   ): Promise<{ id: string }>;
+  // trust-surfaces-that-fire-01PMZ202 WP24 (CHAT-05): the writer for the
+  // static permission source. Read once at chassis boot — a write here
+  // applies starting with the next restart.
+  MCP_SetToolPolicy(
+    server: string,
+    tool: string,
+    policy: string,
+    reason: string,
+  ): Promise<void>;
+  MCP_ListToolPolicies(): Promise<MCPToolPolicyRule[]>;
 
   A2A_ListCards(): Promise<A2ACard[]>;
   A2A_StartStream(): Promise<string>;
@@ -1313,6 +1328,43 @@ function adaptRecipeStatus(w: WireRecipeStatus): RecipeStatus {
   };
 }
 
+/**
+ * WireHealthEntry — Wails-generated shape for `mcp.HealthEntry`
+ * (connector-lifecycle-truth-01PMZ303 UNIT-7/UNIT-8): both
+ * `MCP_HealthSnapshot`'s map values and the raw `mcp:health-changed`
+ * push-event payload `useEventStream` receives before adaptation.
+ * Exported (with adaptHealthEntry below) so a subscriber consuming the
+ * push event directly — rather than through the mcp client's
+ * `healthSnapshot()` — can adapt the same wire shape instead of
+ * re-declaring it and drifting from PublishHealthChange's real JSON
+ * tags (see core/rpc/views/mcp.HealthEntry).
+ */
+export interface WireHealthEntry {
+  id: string;
+  state: string;
+  last_error?: string;
+  restart_attempts: number;
+  stderr_tail?: string;
+  tool_count: number;
+  server_name?: string;
+  server_version?: string;
+  protocol_version?: string;
+}
+
+export function adaptHealthEntry(w: WireHealthEntry): HealthEntry {
+  return {
+    id: w.id,
+    state: adaptState(w.state),
+    lastError: w.last_error || undefined,
+    restartAttempts: w.restart_attempts,
+    stderrTail: w.stderr_tail || undefined,
+    toolCount: w.tool_count,
+    serverName: w.server_name || undefined,
+    serverVersion: w.server_version || undefined,
+    protocolVersion: w.protocol_version || undefined,
+  };
+}
+
 function adaptRecipeListing(w: WireRecipeListing): RecipeListing {
   return {
     recipe: adaptRecipe(w.recipe),
@@ -1720,6 +1772,26 @@ export interface MCPClient {
   startStream(id: string): Promise<string>;
   stopStream(id: string): Promise<void>;
   /**
+   * healthSnapshot — the current live-probed health for every installed
+   * recipe, keyed by recipe id (connector-lifecycle-truth-01PMZ303
+   * UNIT-7/UNIT-8). Before UNIT-7, the state behind this call was a
+   * permanently-synthesised "running" for every http/sse recipe; it is
+   * now the real, transport-delegated status. Use
+   * `subscribeHealthChanges` for push updates rather than polling this
+   * repeatedly.
+   */
+  healthSnapshot(): Promise<Record<string, HealthEntry>>;
+  /**
+   * subscribeHealthChanges — registers for live `mcp:health-changed`
+   * push events (UNIT-8, ruling A-2). Returns a subscription id for
+   * `stopStream`. After calling this once, listen for payloads with
+   * `useEventStream<HealthEntry>('mcp:health-changed', handler)` — the
+   * subscription id itself is only needed for teardown, not for
+   * receiving events (the broker delivers on the fixed `view:kind`
+   * topic, not a per-subscription channel).
+   */
+  subscribeHealthChanges(): Promise<string>;
+  /**
    * testRecipe — run a one-shot connection test against the recipe
    * identified by recipeID (mission mcp-server-install-01KQ8TDP, WP07).
    *
@@ -1756,6 +1828,24 @@ export interface MCPClient {
    * full saved recipe should re-fetch via Tools_ListRecipes.
    */
   saveCustomRecipe(req: MCPSaveCustomRecipeRequest): Promise<{ id: string }>;
+  /**
+   * setToolPolicy — the writer for the static permission source
+   * (trust-surfaces-that-fire-01PMZ202 WP24, finding CHAT-05):
+   * `<DataDir>/mcp_servers.json` had a reader
+   * (toolloop.NewStaticResolverFromDataDir) but nothing that ever wrote
+   * it, so a "confirm each use" / "deny" policy could never be produced
+   * from a shipped surface. `tool: '*'` sets a whole-server policy.
+   * The static resolver is read once at chassis boot — this takes
+   * effect on the next restart, not the running session.
+   */
+  setToolPolicy(
+    server: string,
+    tool: string,
+    policy: MCPToolPolicy,
+    reason?: string,
+  ): Promise<void>;
+  /** listToolPolicies — every rule currently persisted in mcp_servers.json. */
+  listToolPolicies(): Promise<MCPToolPolicyRule[]>;
 }
 
 export type {
@@ -1767,6 +1857,8 @@ export type {
   MCPTranslationReport,
   MCPImportWrotePath,
   MCPSaveCustomRecipeRequest,
+  MCPToolPolicy,
+  MCPToolPolicyRule,
   AttachmentLimitsView,
 };
 
@@ -3634,7 +3726,7 @@ export interface HarnessClient {
  */
 const ARRAY_RETURNING_BINDINGS: ReadonlySet<string> = new Set([
   'Sessions_List', 'Sessions_ListMessages', 'LLM_ListProviders', 'LLM_ListModels',
-  'LLM_ListCustomTemplates', 'LLM_ListFallbackChains', 'MCP_ListServers', 'A2A_ListCards',
+  'LLM_ListCustomTemplates', 'LLM_ListFallbackChains', 'MCP_ListServers', 'MCP_ListToolPolicies', 'A2A_ListCards',
   'Workflow_ListJobs', 'Trust_ListSecretReferences', 'Context_List', 'Contexts_RecentlyApplied',
   'Contexts_ContextSearch', 'Bundle_List', 'Trust_ListAnchors', 'CedarPolicy_ListPolicies',
   'CedarPolicy_RecentDecisions', 'Permissions_ListGrants', 'Permissions_ListPending', 'Audit_ListEntries',
@@ -3842,10 +3934,22 @@ export function createHarnessClient(): HarnessClient {
       listServers: () => b().MCP_ListServers(),
       startStream: (id) => b().MCP_StartStream(id),
       stopStream: (id) => b().MCP_StopStream(id),
+      healthSnapshot: async () => {
+        const raw = await b().MCP_HealthSnapshot();
+        const out: Record<string, HealthEntry> = {};
+        for (const [id, entry] of Object.entries(raw)) {
+          out[id] = adaptHealthEntry(entry);
+        }
+        return out;
+      },
+      subscribeHealthChanges: () => b().MCP_SubscribeHealthChanges(),
       testRecipe: (recipeID, env = {}, config = {}) =>
         b().MCP_TestRecipe(recipeID, env, config),
       importClaudeDesktopConfig: (req) => b().MCP_ImportClaudeDesktopConfig(req),
       saveCustomRecipe: (req) => b().MCP_SaveCustomRecipe(req),
+      setToolPolicy: (server, tool, policy, reason = '') =>
+        b().MCP_SetToolPolicy(server, tool, policy, reason),
+      listToolPolicies: () => b().MCP_ListToolPolicies(),
     },
     a2a: {
       listCards: () => b().A2A_ListCards(),
@@ -4535,6 +4639,11 @@ export const SERVED_STREAM_TOPICS = [
   // surfaces a persistent toast so a served workbench user with a
   // corrupted ledger isn't left with no signal at all.
   'storage.migration.drift-detected',
+  // Live MCP connector health pushes (connector-lifecycle-truth-01PMZ303
+  // UNIT-8; review finding served-mode-forwarding-gap). useHarnessAPI.ts
+  // subscribes here to flip a connector's health pill without a poll
+  // tick. Must match core/rpc/views/mcp.TopicMCPHealthChanged.
+  'mcp:health-changed',
 ] as const;
 
 /**
@@ -5130,6 +5239,8 @@ export function createFakeHarnessClient(
       listServers: async () => [],
       startStream: async () => 'fake-sub',
       stopStream: noop,
+      healthSnapshot: async () => ({}),
+      subscribeHealthChanges: async () => 'fake-health-sub',
       importClaudeDesktopConfig: async () => ({
         report: {
           entries: [],
@@ -5151,6 +5262,8 @@ export function createFakeHarnessClient(
         duration_ms: 1,
       }),
       saveCustomRecipe: async (req) => ({ id: req.id }),
+      setToolPolicy: noop,
+      listToolPolicies: async () => [],
     },
     a2a: {
       listCards: async () => [],

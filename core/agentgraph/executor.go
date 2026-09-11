@@ -88,6 +88,21 @@ func (e *BudgetCapError) Is(target error) bool {
 	return target == ErrBudgetExceeded
 }
 
+// TurnPauseGate is consulted by loopExecutor.Execute (exec_control.go)
+// before beginning each Loop-node iteration — see Env.TurnPause's doc
+// for why this is a distinct mechanism from Result.Pause/ErrPaused.
+//
+// subagent-control-and-background-tasks-01PMZB11 UNIT-8, owner ruling
+// E-002.
+type TurnPauseGate interface {
+	// Wait blocks while the run is paused. It returns nil once
+	// unpaused (including immediately, if never paused), or ctx.Err()
+	// if ctx is cancelled/expired while waiting — the path Abort (ctx
+	// cancellation) uses to unblock a paused run instead of leaving it
+	// parked forever.
+	Wait(ctx context.Context) error
+}
+
 // ErrNotImplemented marks executors that exist only as stubs in this
 // bundle (Fork/Merge real impl lands in Bundle B; Corpus real impl in
 // Bundle C). Tests rely on the sentinel to assert the kernel surfaced
@@ -475,6 +490,30 @@ type Env struct {
 	// core/agentgraph never imports the autonomy domain and any
 	// Kernel.Run caller can set it.
 	AskPolicy AskPolicy
+
+	// TurnPause is consulted by loopExecutor.Execute (exec_control.go)
+	// at the top of every Loop-node iteration — i.e. before beginning a
+	// new "turn" (applyMaxTurnsDial in core/rpc/views/agentgraph/chat
+	// aliases the Loop node's MaxIterations as the max-turns dial, so
+	// one iteration IS one turn). nil means "never pauses" — the
+	// default for every Kernel.Run caller except a dispatched
+	// background sub-agent run (subagent-control-and-background-tasks-
+	// 01PMZB11 UNIT-8, owner ruling E-002).
+	//
+	// Deliberately NOT the same mechanism as Result.Pause / ErrPaused
+	// (the Ask-node checkpoint-and-resume primitive used by ask_user /
+	// approval / escalation-ladder nodes, kernel.go). That mechanism
+	// terminates the run and persists a resumable checkpoint for a
+	// human to answer later. TurnPause is a live, in-process WAIT: the
+	// goroutine already driving this run blocks at the iteration
+	// boundary and simply proceeds once unpaused — "Resume clears the
+	// pause so turns begin again" (spec.md §13 E-002) requires exactly
+	// this, not a re-dispatch from a stored checkpoint. It does not
+	// interrupt whatever turn is already in flight — "mid-turn cost is
+	// not bounded by Pause" (E-002); that is what Abort (PR #331) is
+	// for, via ctx cancellation, which also unblocks a paused Wait (see
+	// TurnPauseGate's doc).
+	TurnPause TurnPauseGate
 
 	// registry is the executor lookup table the control executors
 	// (Loop, Retry, Parallel) use to dispatch into peer nodes. The

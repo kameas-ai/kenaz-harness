@@ -1327,6 +1327,23 @@ type options struct {
 	// settingsStore overrides the settings store New would otherwise
 	// build via settings.NewFileStoreFromEnv(). See WithSettingsStore.
 	settingsStore settings.SettingsStore
+
+	// mcpHTTPPoolOptions overrides the construction options for the HTTP
+	// MCP sub-pool newLLMStack builds (below). nil in every production
+	// call site, so the default (mcphttp.PoolOptions{Logger: nil}, which
+	// falls back to a 30s real-wall-clock health-ping cadence — see
+	// transport.DefaultPingPeriod) is unchanged.
+	//
+	// This is a same-package, unexported test seam (there is no exported
+	// With* function for it — nothing outside core/rpc should ever need
+	// to override health-probe cadence) added for PR #336 review MUST
+	// FIX 3: driving a real probe TRIP through rpc.New()'s actual
+	// SetHealthObserver wiring (the `a.dispatchPool.SetHealthObserver`
+	// closure a few hundred lines below) requires an http sub-pool that
+	// ticks fast enough for a test to wait on, and nothing upstream of
+	// this field could reach into newLLMStack's httpPool construction
+	// otherwise. See api_mcp_health_observer_wiring_test.go.
+	mcpHTTPPoolOptions *mcphttp.PoolOptions
 }
 
 // WithHostProviders seeds provider profiles that the surrounding control
@@ -1713,6 +1730,16 @@ func New(c *core.Core, opts ...Option) *API {
 		mcpUserRecipeSource(a.mcpUserStore),
 	)
 	mcpOpts := []mcp.Option{mcp.WithSubscriber(a.broker), mcp.WithCatalog(mergedCat)}
+	// CHAT-05 writer wiring (trust-surfaces-that-fire-01PMZ202 WP24):
+	// SetToolPolicy/ListToolPolicies need the same DataDir the static
+	// permission resolver below reads at boot. A func, not a captured
+	// string, matching mcpImportAPI's DataDir: c.DataDir a few lines
+	// down — c may be nil in the rpc.New(nil) test harness, in which
+	// case the option is simply omitted and the API methods degrade to
+	// ErrDataDirNotConfigured.
+	if c != nil {
+		mcpOpts = append(mcpOpts, mcp.WithDataDir(c.DataDir))
+	}
 	// Only install the saver when there is a real store behind it. Passing
 	// a nil *recipes.UserStore straight into WithRecipeSaver would wrap it
 	// in a non-nil RecipeSaver interface value holding a nil pointer, so
@@ -1824,7 +1851,11 @@ func New(c *core.Core, opts ...Option) *API {
 	// FR-008 (agent-loop-robustness-parity WP08): boot health error strings
 	// collected during subsystem init. Passed to SetBootErrors at the end of
 	// api.New so the frontend's BootHealthBanner can display targeted warnings.
-	var bootMCPErr, bootSkillsErr, bootFleetErr string
+	// bootPermsErr is populated below from stack.staticPermsLoadError once
+	// newLLMStack returns (trust-surfaces-that-fire-01PMZ202 WP24 review
+	// finding: a corrupt mcp_servers.json must surface to the user, not
+	// only to the log).
+	var bootMCPErr, bootSkillsErr, bootFleetErr, bootPermsErr string
 
 	// Wire the fleet client (fleet-auth-foundation-01NDFSEX08 chassis-boot wire-
 	// up). Without this every fleet RPC returns ErrFleetDisabled because
@@ -2152,8 +2183,13 @@ func New(c *core.Core, opts ...Option) *API {
 		Emitter: WailsEmitter{},
 	})
 
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, a.cedarEngine, taskReg)
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, a.cedarEngine, taskReg, opt.mcpHTTPPoolOptions)
 	a.llmAPI = stack.api
+	// trust-surfaces-that-fire-01PMZ202 WP24 review finding: fold the
+	// static tool-permission load error (if any) into the boot-health
+	// report so BootHealthBanner tells the user their configured
+	// allow/deny rules are not in force, instead of only a log line.
+	bootPermsErr = stack.staticPermsLoadError
 	// chat-turn-integrity-01PMZ606 WP12: the join CK-08 + owner ruling
 	// X-7 wanted. Both were already constructed above (inside
 	// newLLMStack -> buildCompactionWiring); copying them here is what
@@ -2453,6 +2489,39 @@ func New(c *core.Core, opts ...Option) *API {
 	if a.dispatchPool != nil {
 		if mcpImpl, ok := a.mcpAPI.(*mcp.API); ok {
 			mcpImpl.SetHealthPool(a.dispatchPool)
+			// connector-lifecycle-truth-01PMZ303 UNIT-8 (ruling A-2):
+			// before this, mcp:health-changed had a Subscribe call and
+			// zero publishers (spec.md §1.10, §11 R-8) — a dead server
+			// never told anyone. dispatch.Pool.SetHealthObserver is the
+			// push signal UNIT-7's probe-state tracking produces on
+			// every real transition (http/sse only — stdio's existing
+			// poll-based AllRecipeStatuses already reflects live state,
+			// see transport.HealthObserver's doc comment). Two things
+			// happen on every transition: the desktop-facing broker
+			// publish, and the audit-log record — same shape as
+			// acpAuditBridge's reuse a few lines above (Shape 1,
+			// contextaudit.Emitter).
+			a.dispatchPool.SetHealthObserver(func(id, previousState string, current stdio.RecipeStatus) {
+				entry := mcp.HealthEntry{
+					ID:              current.ID,
+					State:           current.State,
+					LastError:       current.LastError,
+					RestartAttempts: current.RestartAttempts,
+					StderrTail:      current.StderrTail,
+					ToolCount:       current.ToolCount,
+					ServerName:      current.ServerName,
+					ServerVersion:   current.ServerVersion,
+					ProtocolVersion: current.ProtocolVersion,
+				}
+				mcpImpl.PublishHealthChange(entry)
+				logging.L().Debug("mcp.health.published", "topic", mcp.TopicMCPHealthChanged, "id", id, "new_state", current.State)
+				contextaudit.MustEmit(context.Background(), &acpAuditBridge{impl: a.auditImpl}, contextaudit.KindMCPHealthChanged, contextaudit.MCPHealthChangedPayload{
+					RecipeID:        id,
+					PreviousState:   previousState,
+					NewState:        current.State,
+					RestartAttempts: current.RestartAttempts,
+				}, time.Now())
+			})
 		}
 	}
 	// Pass the dispatch pool as the tools-view PoolController so
@@ -2667,6 +2736,24 @@ func New(c *core.Core, opts ...Option) *API {
 		// Broker enables LeftRail real-time updates on branch creation
 		// (branch creates a new child session row): v0.5.3 fix.
 		Broker: a.broker,
+		// Tasks / TaskLookup wire AbortSubagent + SteerSubagent
+		// (subagent-control-and-background-tasks-01PMZB11 UNIT-8).
+		// taskReg and a.branchSeam are both already constructed by this
+		// point in New() (taskReg at this function's top, a.branchSeam
+		// at newGraphManagerWithDeps a few hundred lines above) — the
+		// SAME instances the sub-agent dispatch/spawn path (UNIT-6,
+		// core/rpc/subagent_run_spawner.go) already threads through
+		// EnvDeps.Branch and SubagentRunSpawnerDeps.Tasks, not a second
+		// registry or a second seam.
+		Tasks:      taskReg,
+		TaskLookup: a.branchSeam,
+		// Cedar gates all four sub-agent control verbs — Abort, Steer,
+		// Pause, Resume (subagent-control-and-background-tasks-01PMZB11
+		// UNIT-8) — through the same accessor every other gate-hook call
+		// site in this file uses. A single Config.Cedar field serves
+		// both AbortSubagent/SteerSubagent (above) and
+		// PauseSubagent/ResumeSubagent (below, via PauseControl).
+		Cedar: a.cedarGate(),
 		// Settings gives ProposeReintegrationSummary the persisted
 		// BranchReintegrationMaxTokens instead of a hardcoded 2000
 		// (engineer-truth-pass-01PMTP01 WP02, finding B2).
@@ -2686,6 +2773,19 @@ func New(c *core.Core, opts ...Option) *API {
 			}
 			return s
 		},
+		// subagent-control-and-background-tasks-01PMZB11 UNIT-8:
+		// PauseSubagent/ResumeSubagent delegate to the SAME
+		// SubagentPauseRegistry instance StartStream reads from --
+		// obtained through stack.chatRunner.SubagentPause() rather than
+		// constructing a second, unread registry (mirrors
+		// BudgetOverrides: stack.chatRunner.SubagentBudgets() at this
+		// file's SetRunSpawner call site above). stack.chatRunner is
+		// constructed earlier in this function (newLLMStack); a nil
+		// chatRunner (degraded boot) makes SubagentPause() return nil,
+		// which degrades Pause/Resume to ErrSubagentPauseUnavailable --
+		// the same posture every other nil-dependency branch in this
+		// Config takes. Gated by the SAME Config.Cedar field set above.
+		PauseControl: stack.chatRunner.SubagentPause(),
 	})
 
 	// Agent-graph view surface — graph manager already built above so
@@ -2763,10 +2863,33 @@ func New(c *core.Core, opts ...Option) *API {
 		// LLM stack (constructed above); either may be nil (test chassis or
 		// disabled subsystem) — DefaultRunnersWithDeps handles nil gracefully.
 		wfDeps := corewf.Deps{}
+		// workflow-tool-permission-gate: ONE shared gate for both workflow
+		// tool-dispatch surfaces (mcp_call's wfMCPCallerAdapter and
+		// model_turn's wfToolDispatcherAdapter), wired with the EXACT same
+		// collaborators slashToolDispatcherAdapter above uses — stack.perms
+		// (the merged resolver), a.cedarGate() (the process-singleton Cedar
+		// engine), and stack.confirmBus/stack.confirmDeps (the SAME
+		// confirm-each apparatus chat and slash park on). Before this gate
+		// existed, both adapters called pool.Call directly with no
+		// Cedar/permission check at all — a scheduled workflow could invoke
+		// any configured MCP tool, including write-capable ones, with no
+		// enforcement whatsoever.
+		wfGate := &wfToolGate{
+			perms:            stack.perms,
+			gate:             a.cedarGate(),
+			confirm:          stack.confirmBus,
+			confirmEnabled:   stack.confirmDeps.Enabled,
+			sessionGrants:    stack.confirmSessionGrants,
+			persistGrants:    stack.confirmDeps.PersistGrants,
+			headless:         stack.confirmDeps.Headless,
+			headlessExplicit: stack.confirmDeps.HeadlessExplicit,
+			auditEmitter:     stack.confirmDeps.Audit,
+			now:              stack.confirmDeps.Now,
+		}
 		if stack.dispatchPool != nil {
 			// Use the dispatch pool so workflow mcp_call steps can reach
 			// remote (http/sse) servers as well as stdio ones.
-			wfDeps.MCP = &wfMCPCallerAdapter{pool: stack.dispatchPool}
+			wfDeps.MCP = &wfMCPCallerAdapter{pool: stack.dispatchPool, gate: wfGate}
 		}
 		if stack.reg != nil {
 			wfDeps.LLM = &wfLLMStreamerAdapter{reg: stack.reg}
@@ -2778,7 +2901,7 @@ func New(c *core.Core, opts ...Option) *API {
 			wfDeps.ToolDiscoverer = &wfToolDiscovererAdapter{inner: stack.toolDiscoverer}
 		}
 		if stack.wrappedPool != nil {
-			wfDeps.ToolDispatcher = &wfToolDispatcherAdapter{pool: stack.wrappedPool}
+			wfDeps.ToolDispatcher = &wfToolDispatcherAdapter{pool: stack.wrappedPool, gate: wfGate}
 		}
 		// FR-001/FR-002 (01NBUG03): wire DefaultProfileFunc so model_turn steps
 		// resolve the active LLM profile lazily at run time. This avoids the
@@ -3969,7 +4092,9 @@ func New(c *core.Core, opts ...Option) *API {
 	// chance to log their init errors. Async subsystems (MCP pool, skills
 	// BootLoad) are not yet captured here; they update the store when their
 	// goroutines complete (future follow-up). Fleet init is synchronous.
-	SetBootErrors(bootMCPErr, bootSkillsErr, bootFleetErr)
+	// bootPermsErr (trust-surfaces-that-fire-01PMZ202 WP24 review finding)
+	// is synchronous too — captured from stack.staticPermsLoadError above.
+	SetBootErrors(bootMCPErr, bootSkillsErr, bootFleetErr, bootPermsErr)
 
 	return a
 }
@@ -4966,6 +5091,16 @@ type llmStack struct {
 	// slash-command tool path to take the SAME confirm/Cedar path a
 	// chat tool call takes.
 	confirmDeps chat.ConfirmDeps
+	// staticPermsLoadError is non-empty when <DataDir>/mcp_servers.json
+	// existed but failed to parse at boot — the resolver degraded to
+	// NewFailSafeStaticResolver (confirm_each for everything) rather
+	// than the auto_allow a nil static arm would default to. Held here
+	// so New() can fold it into BootHealthReport: the resolver-level
+	// fail-safe keeps tool calls from being silently allowed, but the
+	// user still needs a surface telling them their configured
+	// allow/deny rules are not in force until the file is repaired
+	// (trust-surfaces-that-fire-01PMZ202 WP24 review finding).
+	staticPermsLoadError string
 }
 
 func newLLMStack(
@@ -5019,6 +5154,11 @@ func newLLMStack(
 	// nil on the nil-core test chassis, same degrade every other
 	// optional dependency in this function follows.
 	taskReg *coretasks.Registry,
+	// mcpHTTPPoolOptions overrides the HTTP MCP sub-pool's construction
+	// options (ping cadence, ticker factory). nil in production — see
+	// options.mcpHTTPPoolOptions's doc comment (PR #336 review MUST
+	// FIX 3 test seam).
+	mcpHTTPPoolOptions *mcphttp.PoolOptions,
 ) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
@@ -5106,19 +5246,31 @@ func newLLMStack(
 	historyAdapter := newSessionHistoryReader(c)
 	// WP02 — wire the global static resolver against
 	// <DataDir>/mcp_servers.json. A missing file soft-fails to
-	// auto_allow (the file is opt-in); a malformed file logs a
-	// warning and the resolver is left nil, which NewMergedResolver
-	// below treats as auto_allow for the static arm specifically
-	// (perms.go:291-293) — safe ONLY because the session arm
-	// constructed unconditionally below still enforces containment on
-	// its own. Per-session overrides (C2) are composed on top of this
-	// when the session manager grows the MCPOverrides reader.
+	// auto_allow (the file is opt-in — "never configured" and "no
+	// rules apply" are the same state). A malformed file is a
+	// different case: SetStaticRule (this PR) is the first writer
+	// that can ever put a real deny/confirm_each rule in this file,
+	// so a corrupt read here now means "the user's configured policy
+	// silently stopped applying," not "nothing was ever configured."
+	// Leaving staticPerms nil would let NewMergedResolver's nil-static
+	// normalization (an empty, always-auto_allow resolver) stand in
+	// for it — see the review finding on trust-surfaces-that-fire-
+	// 01PMZ202 WP24: a corrupted file made resolve(github, exec) go
+	// from {deny, "shell exec disabled"} to {auto_allow, ""} with only
+	// a log line. Fail-shut instead: degrade to confirm_each (asks the
+	// user rather than silently allowing) and surface it on
+	// staticPermsLoadErr so New() can populate BootHealthReport —
+	// logging alone is not a surface the user ever sees.
 	var staticPerms toolloop.PermissionResolver
+	var staticPermsLoadErr string
 	if c != nil && c.DataDir() != "" {
 		sp, permErr := toolloop.NewStaticResolverFromDataDir(c.DataDir())
 		if permErr != nil {
 			logging.L().Warn("toolloop.permissions.static_load_failed",
 				"data_dir", c.DataDir(), "err", permErr.Error())
+			staticPermsLoadErr = permErr.Error()
+			staticPerms = toolloop.NewFailSafeStaticResolver(
+				"mcp_servers.json failed to load (" + permErr.Error() + "); tool calls require confirmation until it is repaired")
 		} else {
 			staticPerms = sp
 		}
@@ -5143,8 +5295,11 @@ func newLLMStack(
 	// The session arm is built UNCONDITIONALLY, below, before either
 	// branch above runs — it does not depend on DataDir, only on a
 	// session store and the shared Cedar engine. A static-load failure
-	// (the permErr branch above) still yields
-	// NewMergedResolver(nil, sessionArm), never a bare nil perms.
+	// (the permErr branch above) now yields
+	// NewMergedResolver(failSafeConfirmEach, sessionArm) — never a
+	// bare nil perms, and never a bare nil static arm either (that nil
+	// would itself normalize to auto_allow inside NewMergedResolver;
+	// see NewFailSafeStaticResolver's doc comment in perms.go).
 	var sessionMgr *session.Manager
 	if c != nil {
 		sessionMgr = c.SessionManager()
@@ -5208,9 +5363,17 @@ func newLLMStack(
 	// three so the tools view and the core MCP seam route recipes to the
 	// correct transport based on ServerSpec.Transport without the caller
 	// knowing which pool is active.
-	httpPool := mcphttp.NewPool(mcphttp.PoolOptions{
+	httpPoolOptions := mcphttp.PoolOptions{
 		Logger: nil, // defaults to slog.Default
-	})
+	}
+	if mcpHTTPPoolOptions != nil {
+		// Test-only override (PR #336 review MUST FIX 3) — production
+		// never passes a non-nil value here, so httpPoolOptions above
+		// (and its 30s DefaultPingPeriod fallback) is what every real
+		// chassis builds.
+		httpPoolOptions = *mcpHTTPPoolOptions
+	}
+	httpPool := mcphttp.NewPool(httpPoolOptions)
 	ssePool := mcpsse.NewPool(mcpsse.PoolOptions{
 		Logger: nil, // defaults to slog.Default
 	})
@@ -5472,7 +5635,7 @@ func newLLMStack(
 	autonomyKnobsProvider := func(ctx context.Context, sessionID string) autonomy.ResolvedKnobs {
 		return computeAutonomyKnobs(ctx, sessionID, c, settingsImpl)
 	}
-	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, chatAttResolver, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatWorkspaceDir, chatWorkspaceNote, confirmBus, confirmDeps, autonomyKnobsProvider, secretLookup, secretGate, secretsBudget, confirmAudit)
+	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, chatAttResolver, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatWorkspaceDir, chatWorkspaceNote, confirmBus, confirmDeps, autonomyKnobsProvider, secretLookup, secretGate, secretsBudget, confirmAudit, hooksRunner)
 	var capCatalog llm.CapCatalog
 	if cat, err := llmcap.LoadDefault(); err == nil {
 		capCatalog = &capCatalogAdapter{cat: cat}
@@ -5532,6 +5695,8 @@ func newLLMStack(
 		confirmBus:           confirmBus,
 		confirmSessionGrants: confirmSessionGrants,
 		confirmDeps:          confirmDeps,
+
+		staticPermsLoadError: staticPermsLoadErr,
 	}
 }
 
@@ -6077,6 +6242,15 @@ func buildChatRunner(
 	// newLLMStack already threads through as confirmAudit — nil-safe,
 	// silences the trail without affecting the auto-title write itself.
 	autoTitleAudit contextaudit.Emitter,
+	// hooksRunner is the same llm.HookRunner newLLMStack already holds
+	// (constructed by newHooksStack) — used here to fire the core/hooks
+	// `post_send` event from the real send path (ledger #46: post_send
+	// had a complete adapter chain and zero callers, because its only
+	// call site was `(a *API) buildMessages` in core/rpc/views/llm/
+	// impl.go, a method with no production caller since the
+	// agent-kernel-graph-chat-migration cutover). nil disables post_send
+	// entirely, same degrade as every other optional collaborator here.
+	hooksRunner llm.HookRunner,
 ) *chat.ChatRunner {
 	if graphMgr == nil || graphMgr.Kernel() == nil {
 		logging.L().Warn("chat.runner.disabled", "reason", "graph manager unavailable")
@@ -6268,6 +6442,28 @@ func buildChatRunner(
 	//   3. publishes session.usage.updated on the broker so the frontend
 	//      updates the context-window indicator in near-real-time without
 	//      polling (backend-context-window-length-01KQ8TD3 WP03).
+	// post_send hook (ledger #46). Fires hooksRunner.RunPostSend — the
+	// SAME hooksRunnerAdapter method that already existed, already
+	// translated PostSendHookEvent -> hooks.PostSendEvent, and already
+	// ran the memory.persist builtin end to end in tests — from the
+	// real HookPostLLM boundary instead of the dead buildMessages
+	// method. This is the whole fix: no new dispatch logic, just a
+	// live call site.
+	var postSendHookFn chat.PostSendHookFunc
+	if hooksRunner != nil {
+		capturedHooksRunner := hooksRunner
+		postSendHookFn = func(ctx context.Context, sessionID, userTurn, assistantTurn, providerKind, modelID, finishReason string) {
+			capturedHooksRunner.RunPostSend(ctx, llm.PostSendHookEvent{
+				SessionID:     sessionID,
+				UserTurn:      userTurn,
+				AssistantTurn: assistantTurn,
+				Model:         modelID,
+				Kind:          providerKind,
+				FinishReason:  finishReason,
+			})
+		}
+	}
+
 	var usageHookFn chat.UsageHookFunc
 	if usageMgr != nil || sessionMgr != nil {
 		capturedUsageMgr := usageMgr
@@ -6441,6 +6637,7 @@ func buildChatRunner(
 		PartialPersister:   partialPersister,
 		StreamCheckpoints:  streamCheckpoints,
 		UsageHook:          usageHookFn,
+		PostSendHook:       postSendHookFn,
 		AutoTitle:          autoTitleDeps,
 		// multimodal-io-extended-01KQ8TD2 WP02: wire the concrete artifact
 		// sink as the generated-image capturer so StreamGeneratedImage
@@ -6460,6 +6657,16 @@ func buildChatRunner(
 		// (Set/Get/Clear are all nil-receiver-safe), so this is the one
 		// place that must not be left unset.
 		SubagentBudgets: chat.NewSubagentBudgetRegistry(),
+		// subagent-control-and-background-tasks-01PMZB11 UNIT-8: same
+		// shape and same reasoning as SubagentBudgets immediately
+		// above — constructed once here so core/rpc/views/branches's
+		// PauseSubagent/ResumeSubagent (wired below, at the
+		// branchesview.New call site) write into the SAME instance
+		// StartStream reads via chatRunner.SubagentPause(). nil would
+		// silently make Subagent_Pause a no-op (Pause/Resume/Wait are
+		// all nil-receiver-safe), so this is the one place that must
+		// not be left unset.
+		SubagentPause: chat.NewSubagentPauseRegistry(),
 		// trust-surfaces-that-fire-01PMZ202 WP19: without these three,
 		// driveRun's `if r.cfg.SecretLookup != nil` guard never fires,
 		// so refs.WithResolver / refs.WithTurnSanitizer are never

@@ -552,6 +552,28 @@ func (b *Bindings) MCP_SaveCustomRecipe(req mcp.SaveCustomRecipeRequest) (recipe
 	return b.api.MCP().SaveCustomRecipe(b.ctx(), req)
 }
 
+// MCP_SetToolPolicy upserts a permission rule for (server, tool) into
+// the static permission source (<DataDir>/mcp_servers.json) — the
+// writer trust-surfaces-that-fire-01PMZ202 WP24 (finding CHAT-05) adds
+// so a "confirm each use" policy is producible from a shipped surface
+// instead of only by hand-editing a JSON file. policy is one of
+// "auto_allow" | "confirm_each" | "deny"; tool may be "*" for a
+// whole-server rule. The static resolver is read once at chassis boot,
+// so this takes effect starting with the next restart, not the running
+// session.
+func (b *Bindings) MCP_SetToolPolicy(server, tool, policy, reason string) error {
+	defer sentry.WrapBinding("MCP_SetToolPolicy")()
+	return b.api.MCP().SetToolPolicy(b.ctx(), server, tool, policy, reason)
+}
+
+// MCP_ListToolPolicies returns every rule currently persisted in the
+// static permission source, for the Tools view to render current
+// policy state.
+func (b *Bindings) MCP_ListToolPolicies() ([]toolloop.StaticRule, error) {
+	defer sentry.WrapBinding("MCP_ListToolPolicies")()
+	return b.api.MCP().ListToolPolicies(b.ctx())
+}
+
 // MCP_HealthSnapshot returns the current health status for every installed
 // MCP recipe as a map of recipe-id → HealthEntry.
 // (mcp-server-health-ui-01KQ8TD6 WP01)
@@ -2538,6 +2560,45 @@ func (b *Bindings) Branches_SetAdvisorDismissed(sessionID string, dismissed bool
 func (b *Bindings) Branches_ListWithBranchTree(projectID string) ([]branchesview.SessionWithBranchPointer, error) {
 	defer sentry.WrapBinding("Branches_ListWithBranchTree")()
 	return b.api.Branches().ListWithBranchTree(b.ctx(), projectID)
+}
+
+// Subagent_Abort stops a dispatched sub-agent's underlying run and marks
+// its task cancelled — the branch-scoped alias of Tasks_Abort
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8). Gated by
+// cedar.ActionToolSubagentAbort; idempotent against an already-terminal
+// sub-agent.
+func (b *Bindings) Subagent_Abort(branchID string) error {
+	defer sentry.WrapBinding("Subagent_Abort")()
+	return b.api.Branches().AbortSubagent(b.ctx(), branchID)
+}
+
+// Subagent_Steer appends a user message to a dispatched sub-agent's
+// child session (UNIT-8). Gated by cedar.ActionToolSubagentSteer.
+func (b *Bindings) Subagent_Steer(branchID, message string) error {
+	defer sentry.WrapBinding("Subagent_Steer")()
+	return b.api.Branches().SteerSubagent(b.ctx(), branchID, message)
+}
+
+// Subagent_Pause arms a dispatched sub-agent's turn-pause signal — it
+// finishes the turn it is currently on and starts no further turn
+// until Subagent_Resume clears the signal (subagent-control-and-
+// background-tasks-01PMZB11 UNIT-8, owner ruling E-002). NOT
+// immediate: a long turn already in flight keeps running; to stop
+// spend right now use Subagent_Abort instead. Gated by
+// cedar.ActionToolSubagentPause; idempotent against an already-paused
+// sub-agent.
+func (b *Bindings) Subagent_Pause(branchID string) error {
+	defer sentry.WrapBinding("Subagent_Pause")()
+	return b.api.Branches().PauseSubagent(b.ctx(), branchID)
+}
+
+// Subagent_Resume clears a dispatched sub-agent's turn-pause signal so
+// its next turn begins again (UNIT-8). Gated by
+// cedar.ActionToolSubagentResume; idempotent against a sub-agent that
+// was not paused.
+func (b *Bindings) Subagent_Resume(branchID string) error {
+	defer sentry.WrapBinding("Subagent_Resume")()
+	return b.api.Branches().ResumeSubagent(b.ctx(), branchID)
 }
 
 // ── workflows (mission workflows-01KQ8TDG, v0.3.0 beta) ───────────────

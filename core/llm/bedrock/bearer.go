@@ -753,6 +753,13 @@ func (s *bearerStream) dispatch(msg eventStreamMessage) {
 				ToolUse *struct {
 					Input string `json:"input"`
 				} `json:"toolUse"`
+				// ReasoningContent carries extended-thinking deltas
+				// (model-settings-reach-the-model-01PMZ101 WP09). Only
+				// the text field is renderable; signature/redactedContent
+				// are round-trip tokens with nothing to show the user.
+				ReasoningContent *struct {
+					Text string `json:"text"`
+				} `json:"reasoningContent"`
 			} `json:"delta"`
 		}
 		if err := json.Unmarshal(msg.payload, &p); err != nil {
@@ -764,6 +771,15 @@ func (s *bearerStream) dispatch(msg eventStreamMessage) {
 		if p.Delta.ToolUse != nil {
 			if accum, ok := s.toolPartial[p.ContentBlockIndex]; ok {
 				accum.input.WriteString(p.Delta.ToolUse.Input)
+			}
+		}
+		if p.Delta.ReasoningContent != nil && p.Delta.ReasoningContent.Text != "" {
+			s.events <- llm.StreamEvent{
+				Kind: llm.StreamReasoning,
+				Reasoning: &llm.ReasoningBlock{
+					Type:    "thinking",
+					Content: p.Delta.ReasoningContent.Text,
+				},
 			}
 		}
 	case "contentBlockStop":

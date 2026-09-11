@@ -132,6 +132,14 @@ const props = defineProps<{
    * server-side row materializes via ListMessages refresh.
    */
   streamingError?: string;
+  /**
+   * Live extended-thinking content (model-settings-reach-the-model-
+   * 01PMZ101 WP16, closing CHAT-09). Renders as a muted, italic block
+   * above the answer text whenever non-empty. Live-only — see
+   * Message.reasoning's docstring in types.ts; a reload never
+   * repopulates this prop.
+   */
+  reasoning?: string;
 
   // ── per-message-token-meter-01KR3PQR ────────────────────────────────
 
@@ -585,6 +593,14 @@ function onResumeClick() {
         >
           → summary
         </button>
+      </div>
+
+      <div
+        v-if="reasoning"
+        class="mb-2 font-ui text-[11px] text-ink-subtle italic whitespace-pre-wrap"
+        data-testid="message-reasoning"
+      >
+        {{ reasoning }}
       </div>
 
       <!-- tool-call rows: namespaced monospace line each -->

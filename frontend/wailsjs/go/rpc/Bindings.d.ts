@@ -426,7 +426,11 @@ export function MCP_ImportClaudeDesktopConfig(arg1:mcp.ImportRequest):Promise<mc
 
 export function MCP_ListServers():Promise<Array<mcp.Server>>;
 
+export function MCP_ListToolPolicies():Promise<Array<toolloop.permRule>>;
+
 export function MCP_SaveCustomRecipe(arg1:mcp.SaveCustomRecipeRequest):Promise<recipes.Recipe>;
+
+export function MCP_SetToolPolicy(arg1:string,arg2:string,arg3:string,arg4:string):Promise<void>;
 
 export function MCP_StartStream(arg1:string):Promise<string>;
 
@@ -859,6 +863,14 @@ export function Slashcmd_SkillUninstall(arg1:string):Promise<void>;
 export function Storage_ApplyDriftFix(arg1:number):Promise<void>;
 
 export function Storage_GetMigrationDriftReport():Promise<storage.DriftReport>;
+
+export function Subagent_Abort(arg1:string):Promise<void>;
+
+export function Subagent_Pause(arg1:string):Promise<void>;
+
+export function Subagent_Resume(arg1:string):Promise<void>;
+
+export function Subagent_Steer(arg1:string,arg2:string):Promise<void>;
 
 export function Sync_ForcePull(arg1:string):Promise<void>;
 

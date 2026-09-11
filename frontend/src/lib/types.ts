@@ -305,6 +305,24 @@ export interface MCPServer {
   capabilities?: string[];
 }
 
+// ── Static tool permission rules (trust-surfaces-that-fire-01PMZ202
+// WP24, finding CHAT-05) ────────────────────────────────────────────
+//
+// Wire shape for `MCP_SetToolPolicy` / `MCP_ListToolPolicies`. Mirrors
+// toolloop.StaticRule's JSON tags verbatim. `server`/`tool` may be "*"
+// for a wildcard rule; `tool: "*"` is the whole-server policy the Tools
+// view sets. The static resolver behind this is read once at chassis
+// boot, so a write here takes effect on the next restart, not the
+// running session.
+export type MCPToolPolicy = 'auto_allow' | 'confirm_each' | 'deny';
+
+export interface MCPToolPolicyRule {
+  server: string;
+  tool: string;
+  policy: MCPToolPolicy;
+  reason?: string;
+}
+
 // ── MCP Test Connection (mission mcp-server-install-01KQ8TDP, WP07) ────
 //
 // Wire shape for `MCP_TestRecipe`. Field names follow Go JSON tags
@@ -1487,6 +1505,21 @@ export interface Message {
   kind?: MoveKind;
   moveIndex?: number;
   turnSpanId?: string;
+
+  /**
+   * Live extended-thinking content (model-settings-reach-the-model-
+   * 01PMZ101 WP16). Populated only while streaming, from
+   * `llm:stream-chunk` frames of kind "reasoning" — mirrors
+   * core/llm.StreamEvent.Reasoning.Content, itself sourced from the
+   * provider's own reasoning/thinking deltas (Anthropic
+   * thinking_delta, Bedrock reasoningContent, Gemini thought parts).
+   * Deliberately **not persisted**: no SQL column carries it and no
+   * server round-trip returns it on reload — a reopened session shows
+   * the answer but not the reasoning that produced it. Empty /
+   * undefined for every non-streaming render and for any turn where
+   * the model did not emit reasoning.
+   */
+  reasoning?: string;
 }
 
 /**
@@ -2397,6 +2430,30 @@ export interface RecipeStatus {
   resourceCount: number;
   promptCount: number;
   stderrTail?: string;
+}
+
+/**
+ * HealthEntry — live-probed health for one MCP connector. Mirrors
+ * `core/rpc/views/mcp.HealthEntry`, the shape `MCP_HealthSnapshot` and
+ * the `mcp:health-changed` push event both carry
+ * (connector-lifecycle-truth-01PMZ303 UNIT-7/UNIT-8). Distinct from
+ * `RecipeStatus` above: `RecipeStatus` is the STDIO-process-centric
+ * shape `Tools_RecipeStatus` returns (pid, keysPresent, resource/
+ * prompt counts); `HealthEntry` is transport-agnostic and is the one
+ * that is honest for http/sse servers after UNIT-7 — before that unit,
+ * the http/sse fields behind this shape were a permanently-synthesised
+ * "running" with no real check behind it.
+ */
+export interface HealthEntry {
+  id: string;
+  state: RecipeState;
+  lastError?: string;
+  restartAttempts: number;
+  stderrTail?: string;
+  toolCount: number;
+  serverName?: string;
+  serverVersion?: string;
+  protocolVersion?: string;
 }
 
 // ── Artifacts (artifacts-storage WP01..WP03) ─────────────────────────
@@ -4426,11 +4483,19 @@ export interface DeployProgressEvent {
  * harness boot phase. A non-empty field means that subsystem failed to
  * start; empty means healthy (FR-008 / agent-loop-robustness-parity WP08).
  * Mirrors core/rpc.BootHealthReport.
+ *
+ * permissionsInitError (trust-surfaces-that-fire-01PMZ202 WP24 review
+ * finding) is non-empty when <DataDir>/mcp_servers.json existed but
+ * failed to parse at boot — the resolver degrades to confirm_each for
+ * every tool rather than silently defaulting to auto_allow, but the
+ * user still needs to know their configured allow/deny rules are not
+ * in force until the file is repaired.
  */
 export interface BootHealthReport {
   mcpInitError?: string;
   skillsInitError?: string;
   fleetInitError?: string;
+  permissionsInitError?: string;
 }
 
 // ── ACP peer management (acp-orchestration-integration-01NDFSEX06) ────────────
