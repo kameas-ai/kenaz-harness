@@ -81,6 +81,26 @@ type RemoteSubPool interface {
 	// connection. Returns an error naming the server when it is not
 	// present in the sub-pool.
 	CloseOne(ctx context.Context, id string) error
+	// RecipeStatus returns the live status snapshot for a server, or
+	// ok=false if id is not present. Added by
+	// connector-lifecycle-truth-01PMZ303 UNIT-7: before this, neither
+	// http.Pool nor sse.Pool exposed any status accessor at all, which
+	// is exactly why dispatch.Pool.RecipeStatus had to synthesise a
+	// permanent "running" instead of asking the sub-pool — see this
+	// file's RecipeStatus for the fix.
+	RecipeStatus(id string) (stdio.RecipeStatus, bool)
+	// AllRecipeStatuses returns status snapshots for every server the
+	// sub-pool currently tracks. UNIT-7: same motivation as
+	// RecipeStatus — this is the accessor AllRecipeStatuses (below)
+	// now delegates to instead of synthesising.
+	AllRecipeStatuses() []stdio.RecipeStatus
+	// SetHealthObserver installs a callback invoked whenever any
+	// server's live-probed health state changes.
+	// connector-lifecycle-truth-01PMZ303 UNIT-8: the push signal that
+	// makes a dead-then-alive (or alive-then-dead) transition
+	// observable without polling — see dispatch.Pool.SetHealthObserver
+	// (below), which forwards to both http.Pool and sse.Pool.
+	SetHealthObserver(fn transport.HealthObserver)
 }
 
 // Compile-time witnesses: the concrete http/sse pools satisfy
@@ -433,9 +453,16 @@ func (d *Pool) closeOneByTag(ctx context.Context, tag, id string) error {
 }
 
 // RecipeStatus returns the live status snapshot for a server.
-// For stdio servers it delegates to the stdioPool.RecipeStatus.
-// For http/sse servers it synthesises a "running" status because
-// those pools have no per-server status API yet.
+//
+// stdio, http and sse each delegate to their own sub-pool's real,
+// live-probed accessor (connector-lifecycle-truth-01PMZ303 UNIT-7 —
+// before this, http/sse hardcoded a permanent "running" here; see
+// spec.md §1.4). inprocess is genuinely different, not an
+// unaddressed instance of the same bug: a Go-native in-process server
+// has no network liveness to lose — RegisterInProcess succeeding
+// means its channels are live in THIS process, and if the process
+// were gone this call could not run either. "running" here is a fact
+// about the process, not a probe result nothing ran.
 func (d *Pool) RecipeStatus(id string) (stdio.RecipeStatus, bool) {
 	d.mu.RLock()
 	tag, ok := d.ownership[id]
@@ -449,16 +476,23 @@ func (d *Pool) RecipeStatus(id string) (stdio.RecipeStatus, bool) {
 		if d.stdioPool != nil {
 			return d.stdioPool.RecipeStatus(id)
 		}
-	case "http", "sse", "inprocess":
-		// Synthesised: the ownership entry proves the server was opened
-		// (registered, for inprocess) successfully. None of these three
-		// pools provide a richer per-server status today.
-		return stdio.RecipeStatus{
-			ID:        id,
-			Enabled:   true,
-			State:     string(transport.StateRunning),
-			UpdatedAt: time.Now().UTC(),
-		}, true
+	case "http":
+		if d.httpPool != nil {
+			return d.httpPool.RecipeStatus(id)
+		}
+	case "sse":
+		if d.ssePool != nil {
+			return d.ssePool.RecipeStatus(id)
+		}
+	case "inprocess":
+		if d.inprocessPool != nil {
+			return stdio.RecipeStatus{
+				ID:        id,
+				Enabled:   true,
+				State:     string(transport.StateRunning),
+				UpdatedAt: time.Now().UTC(),
+			}, true
+		}
 	}
 	return stdio.RecipeStatus{}, false
 }
@@ -482,8 +516,15 @@ func (d *Pool) ServerTools(id string) []coremcp.Tool {
 	return nil
 }
 
-// AllRecipeStatuses returns status snapshots from all sub-pools.
-// This satisfies the mcp-health view's HealthPool interface.
+// AllRecipeStatuses returns status snapshots from all sub-pools. This
+// satisfies the mcp-health view's HealthPool interface — the site
+// HealthSnapshot (and, via UNIT-8's publisher, mcp:health-changed)
+// actually reads. connector-lifecycle-truth-01PMZ303 UNIT-7: http and
+// sse now delegate to their own real, live-probed
+// AllRecipeStatuses instead of synthesising "running" for every
+// owned id (spec.md §1.4, FR-005, AC-005). inprocess keeps its
+// synthesis — see RecipeStatus's doc comment for why that case is
+// honest, not fabricated.
 func (d *Pool) AllRecipeStatuses() []stdio.RecipeStatus {
 	var out []stdio.RecipeStatus
 	if d.stdioPool != nil {
@@ -491,27 +532,53 @@ func (d *Pool) AllRecipeStatuses() []stdio.RecipeStatus {
 			out = append(out, s...)
 		}
 	}
+	if d.httpPool != nil {
+		out = append(out, d.httpPool.AllRecipeStatuses()...)
+	}
+	if d.ssePool != nil {
+		out = append(out, d.ssePool.AllRecipeStatuses()...)
+	}
 
-	// Append synthesised statuses for http/sse/inprocess owned servers.
+	// inprocess servers still synthesise "running" — see RecipeStatus's
+	// case "inprocess" comment for why that is honest, not fabricated.
 	d.mu.RLock()
-	type entry struct{ id, tag string }
-	var remote []entry
+	var inprocessIDs []string
 	for id, tag := range d.ownership {
-		if tag == "http" || tag == "sse" || tag == "inprocess" {
-			remote = append(remote, entry{id, tag})
+		if tag == "inprocess" {
+			inprocessIDs = append(inprocessIDs, id)
 		}
 	}
 	d.mu.RUnlock()
 
-	for _, e := range remote {
+	for _, id := range inprocessIDs {
 		out = append(out, stdio.RecipeStatus{
-			ID:        e.id,
+			ID:        id,
 			Enabled:   true,
 			State:     string(transport.StateRunning),
 			UpdatedAt: time.Now().UTC(),
 		})
 	}
 	return out
+}
+
+// SetHealthObserver installs a callback invoked whenever a remote
+// (http/sse) server's live-probed health state changes
+// (connector-lifecycle-truth-01PMZ303 UNIT-8's mcp:health-changed
+// publisher). Forwards to both sub-pools; either may be nil (no
+// sub-pool wired), in which case that transport contributes no
+// events. stdio has no equivalent here: its AllRecipeStatuses already
+// reflects the supervisor's real-time state on every poll (see
+// transport.HealthObserver's doc comment for the full reasoning).
+func (d *Pool) SetHealthObserver(fn transport.HealthObserver) {
+	d.mu.RLock()
+	httpPool, ssePool := d.httpPool, d.ssePool
+	d.mu.RUnlock()
+	if httpPool != nil {
+		httpPool.SetHealthObserver(fn)
+	}
+	if ssePool != nil {
+		ssePool.SetHealthObserver(fn)
+	}
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────

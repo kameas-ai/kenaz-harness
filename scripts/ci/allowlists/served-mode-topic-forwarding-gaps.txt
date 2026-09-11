@@ -1,0 +1,87 @@
+# served-mode-topic-forwarding allowlist — Topic* broker-topic consts with
+# a real frontend `useEventStream(...)` subscriber that are NOT forwarded
+# by core/serve/wsstream.go's passthroughTopics.
+#
+# Enforced by scripts/ci/check-served-mode-topic-forwarding.sh.
+# Discovery: wsstream_topics_parity_test.go's header (connector-lifecycle-
+# truth-01PMZ303 UNIT-8 / PR #336 review MUST FIX 1). Cross-referencing
+# every `Topic* = "..."` Go const's declaring file against
+# `useEventStream(...)` call sites in frontend/src surfaced FIVE such
+# topics missing from passthroughTopics; mcp:health-changed was the sixth
+# and is now fixed (it is forwarded, not allowlisted here). This file
+# freezes the remaining five so a served-mode workbench silently missing
+# an event they DO fire is a known, tracked gap — and so that check-
+# served-mode-topic-forwarding.sh fails loudly on a NEW topic in this
+# shape rather than letting it join the backlog unnoticed.
+#
+# Each of the five needs the SAME two-part disposition MUST FIX 1
+# required for mcp:health-changed: (1) a passthroughTopics /
+# SERVED_STREAM_TOPICS entry, AND (2) a session-scoping decision — does
+# the payload carry a session id D-705's fail-closed filter
+# (core/serve/wsstream.go's frameFor) can key on, or does it need a
+# processWideTopics exemption the way TopicMigrationDriftDetected and
+# mcp.TopicMCPHealthChanged both do? That is real per-topic research,
+# not a mechanical fix, and out of scope for the PR that added this gate
+# (fix/z303-mcp-health-truth) — tracked here as a candidate for its own
+# follow-up mission instead of a rushed, unresearched disposition of four
+# unrelated topics.
+#
+# Format: one double-quoted topic VALUE (not the Go identifier) per line,
+# preceded by a comment giving the date, the const's
+# <package-import-path>.<Identifier>, and the blocker + owner (never
+# "we'll get to it" — see CLAUDE.md's "Release ritual: unwired sweep" /
+# "Rules").
+
+# JUSTIFIED 2026-09-11 (fix/z303-mcp-health-truth, PR #336 review item 2).
+# github.com/kameas-ai/kenaz-harness/core/rpc/contextbootstrap_wiring.go's
+# TopicContextBootstrapProgress. Real frontend subscriber
+# (useContextBootstrap-shaped useEventStream call), real Go emitter
+# (p.broker.emitter.Emit(...) at contextbootstrap_wiring.go:416). Blocker:
+# needs the session-scoping decision above before it can be added to
+# passthroughTopics. Owner: the next context-bootstrap or served-mode-
+# parity mission; whoever resolves it deletes this line in the same
+# change.
+"contextbootstrap:progress"
+
+# JUSTIFIED 2026-09-11 (fix/z303-mcp-health-truth, PR #336 review item 2).
+# github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit.TopicElicitDeferred.
+# Real frontend subscriber, real Go emitter (the shared deferred-ask
+# registry announces on this topic — core/rpc/views/elicit/api.go:306).
+# Blocker: same session-scoping decision as above (a deferred ask is
+# scoped to the session that raised it, but the wiring to key D-705's
+# filter on it does not exist yet). Owner: the next elicitation or
+# served-mode-parity mission; whoever resolves it deletes this line in
+# the same change.
+"elicit:deferred"
+
+# JUSTIFIED 2026-09-11 (fix/z303-mcp-health-truth, PR #336 review item 2).
+# github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit.TopicElicitDeferredAnswered.
+# Real frontend subscriber, real Go emitter
+# (core/rpc/views/elicit/api.go:438). Same disposition and owner as
+# elicit:deferred immediately above — the two are answered/raised halves
+# of the same deferred-ask flow and should get the session-scoping
+# decision together, not separately.
+"elicit:deferred:answered"
+
+# JUSTIFIED 2026-09-11 (fix/z303-mcp-health-truth, PR #336 review item 2).
+# github.com/kameas-ai/kenaz-harness/core/fleet.TopicFleetLockdownChanged
+# (core/fleet/lockdown.go). Real frontend subscriber, real Go emitter
+# (w.broker.Emit(...) at lockdown.go:280). Blocker: needs the session-
+# scoping decision above — a lockdown is fleet-wide, not session-scoped,
+# so this one is a processWideTopics candidate rather than a session-id
+# candidate, but that is still a product decision, not a mechanical one.
+# Owner: the next fleet or served-mode-parity mission; whoever resolves
+# it deletes this line in the same change.
+"fleet:lockdown:changed"
+
+# JUSTIFIED 2026-09-11 (fix/z303-mcp-health-truth, PR #336 review item 2).
+# github.com/kameas-ai/kenaz-harness/core/fleet.TopicFleetSessionExpired
+# (core/fleet/http.go). Real frontend subscriber, real Go emitter
+# (c.sessionBroker.Emit(...) at http.go:186). Blocker: same session-
+# scoping decision as fleet:lockdown:changed above — this one plausibly
+# DOES carry a session id already (a fleet session expiring is inherently
+# about one session), which is exactly the kind of per-topic research
+# this allowlist exists to defer rather than rush. Owner: the next fleet
+# or served-mode-parity mission; whoever resolves it deletes this line in
+# the same change.
+"fleet:session:expired"

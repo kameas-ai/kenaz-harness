@@ -10,6 +10,7 @@ import (
 
 	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/dispatch"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/transport"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/transport/stdio"
 )
 
@@ -115,6 +116,16 @@ type fakeGenericPool struct {
 	callErr     error
 	closeOneErr error
 	closedOnes  []string
+
+	// statusOverride, keyed by id, lets a test prove dispatch.Pool
+	// DELEGATES RecipeStatus/AllRecipeStatuses to this sub-pool
+	// (connector-lifecycle-truth-01PMZ303 UNIT-7) rather than
+	// synthesising a fixed "running" — see
+	// TestDispatch_RecipeStatusHTTP_DelegatesRealState. An id with no
+	// override falls back to the old default "running" response so
+	// every pre-existing test keeps passing unchanged.
+	statusOverride map[string]stdio.RecipeStatus
+	healthObserver transport.HealthObserver
 }
 
 func (f *fakeGenericPool) Open(_ context.Context, specs []coremcp.ServerSpec) error {
@@ -161,6 +172,81 @@ func (f *fakeGenericPool) CloseOne(_ context.Context, id string) error {
 	}
 	f.closedOnes = append(f.closedOnes, id)
 	return nil
+}
+
+// RecipeStatus returns statusOverride[id] when set; otherwise a
+// default "running" snapshot for any id that was opened. This default
+// mirrors the pre-UNIT-7 synthesised behaviour so it is
+// indistinguishable at the fake level from a healthy real sub-pool —
+// the point is that dispatch.Pool now reaches THIS method rather than
+// hardcoding the literal itself, which
+// TestDispatch_RecipeStatusHTTP_DelegatesRealState proves by setting
+// an override.
+func (f *fakeGenericPool) RecipeStatus(id string) (stdio.RecipeStatus, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if rs, ok := f.statusOverride[id]; ok {
+		return rs, true
+	}
+	for _, n := range f.opened {
+		if n == id {
+			return stdio.RecipeStatus{
+				ID:        id,
+				Enabled:   true,
+				State:     "running",
+				UpdatedAt: time.Now().UTC(),
+			}, true
+		}
+	}
+	return stdio.RecipeStatus{}, false
+}
+
+// AllRecipeStatuses mirrors RecipeStatus's override behaviour across
+// every opened id.
+func (f *fakeGenericPool) AllRecipeStatuses() []stdio.RecipeStatus {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []stdio.RecipeStatus
+	for _, n := range f.opened {
+		if rs, ok := f.statusOverride[n]; ok {
+			out = append(out, rs)
+			continue
+		}
+		out = append(out, stdio.RecipeStatus{ID: n, Enabled: true, State: "running"})
+	}
+	return out
+}
+
+// SetHealthObserver records the installed observer so
+// TestDispatch_SetHealthObserver_ForwardsToBothSubPools can prove
+// dispatch.Pool.SetHealthObserver reaches both sub-pools.
+func (f *fakeGenericPool) SetHealthObserver(fn transport.HealthObserver) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.healthObserver = fn
+}
+
+// setStatusOverride installs a fixed RecipeStatus for id, overriding
+// the default "running" response.
+func (f *fakeGenericPool) setStatusOverride(id string, rs stdio.RecipeStatus) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.statusOverride == nil {
+		f.statusOverride = make(map[string]stdio.RecipeStatus)
+	}
+	f.statusOverride[id] = rs
+}
+
+// fireHealthObserver invokes the installed observer directly (if any)
+// — a test-only hook standing in for what a real sub-pool's probe
+// goroutine does internally.
+func (f *fakeGenericPool) fireHealthObserver(id, previous string, current stdio.RecipeStatus) {
+	f.mu.Lock()
+	fn := f.healthObserver
+	f.mu.Unlock()
+	if fn != nil {
+		fn(id, previous, current)
+	}
 }
 
 // compile-time check: fakeGenericPool satisfies dispatch.RemoteSubPool.
@@ -438,8 +524,12 @@ func TestDispatch_RecipeStatusStdio(t *testing.T) {
 	}
 }
 
-// TestDispatch_RecipeStatusHTTP verifies that RecipeStatus synthesises a
-// running status for http-owned servers.
+// TestDispatch_RecipeStatusHTTP verifies that RecipeStatus delegates to
+// the http sub-pool for http-owned servers (connector-lifecycle-truth
+// UNIT-7 — before this, dispatch.Pool hardcoded a "running" literal
+// here instead of asking the sub-pool at all; see
+// TestDispatch_RecipeStatusHTTP_DelegatesRealState for the test that
+// actually distinguishes delegation from synthesis).
 func TestDispatch_RecipeStatusHTTP(t *testing.T) {
 	t.Parallel()
 	d, _, _, _ := newTestPool()
@@ -461,6 +551,83 @@ func TestDispatch_RecipeStatusHTTP(t *testing.T) {
 	}
 	if rs.UpdatedAt.IsZero() {
 		t.Error("RecipeStatus http-srv: UpdatedAt is zero")
+	}
+}
+
+// TestDispatch_RecipeStatusHTTP_DelegatesRealState is the test that
+// actually falsifies synthesis: fakeGenericPool.RecipeStatus is told
+// to answer "failed" with a LastError for this id. Before UNIT-7,
+// dispatch.Pool.RecipeStatus returned a hardcoded
+// `State: string(transport.StateRunning)` literal for every http/sse
+// id regardless of what the sub-pool said (it never even called the
+// sub-pool) — this test would have failed against that code, unlike
+// TestDispatch_RecipeStatusHTTP above, which a permanently-"running"
+// stub also satisfies by coincidence.
+//
+// Mutation: restore the synthesised literal at dispatch.Pool's
+// RecipeStatus http case. Must fail.
+func TestDispatch_RecipeStatusHTTP_DelegatesRealState(t *testing.T) {
+	t.Parallel()
+	d, _, hf, _ := newTestPool()
+
+	_ = d.OpenOne(context.Background(), coremcp.ServerSpec{Name: "http-srv", Transport: "http", URL: "http://x"})
+	hf.setStatusOverride("http-srv", stdio.RecipeStatus{
+		ID:        "http-srv",
+		Enabled:   true,
+		State:     string(transport.StateFailed),
+		LastError: "two consecutive tools/list probe failures",
+	})
+
+	rs, ok := d.RecipeStatus("http-srv")
+	if !ok {
+		t.Fatal("RecipeStatus http-srv: want ok=true")
+	}
+	if rs.State != string(transport.StateFailed) {
+		t.Errorf("RecipeStatus http-srv: State=%q, want %q", rs.State, transport.StateFailed)
+	}
+	if rs.LastError == "" {
+		t.Error("RecipeStatus http-srv: LastError is empty, want the sub-pool's error")
+	}
+
+	all := d.AllRecipeStatuses()
+	var found bool
+	for _, s := range all {
+		if s.ID == "http-srv" {
+			found = true
+			if s.State != string(transport.StateFailed) {
+				t.Errorf("AllRecipeStatuses http-srv: State=%q, want %q", s.State, transport.StateFailed)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("AllRecipeStatuses: http-srv not found; got %v", all)
+	}
+}
+
+// TestDispatch_SetHealthObserver_ForwardsToBothSubPools proves
+// dispatch.Pool.SetHealthObserver (connector-lifecycle-truth
+// UNIT-8) reaches both the http and sse sub-pools, not just one —
+// the observer installed on the dispatch pool must be the SAME
+// callback each sub-pool's own probe goroutine would invoke.
+func TestDispatch_SetHealthObserver_ForwardsToBothSubPools(t *testing.T) {
+	t.Parallel()
+	d, _, hf, ef := newTestPool()
+
+	var mu sync.Mutex
+	var calls []string
+	d.SetHealthObserver(func(id, previous string, current stdio.RecipeStatus) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls = append(calls, id)
+	})
+
+	hf.fireHealthObserver("http-srv", "", stdio.RecipeStatus{ID: "http-srv", State: "running"})
+	ef.fireHealthObserver("sse-srv", "", stdio.RecipeStatus{ID: "sse-srv", State: "running"})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) != 2 {
+		t.Fatalf("observer calls = %v, want 2 (one per sub-pool)", calls)
 	}
 }
 
@@ -507,7 +674,7 @@ func TestDispatch_StdioRegressionOpenAndCall(t *testing.T) {
 }
 
 // TestDispatch_AllRecipeStatuses verifies that AllRecipeStatuses includes
-// both stdio and synthesised http entries.
+// both stdio and (as of UNIT-7) real, delegated http entries.
 func TestDispatch_AllRecipeStatuses(t *testing.T) {
 	t.Parallel()
 	d, _, _, _ := newTestPool()

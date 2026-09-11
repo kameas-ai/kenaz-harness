@@ -120,6 +120,7 @@ var cwdSensitiveGates = []string{
 	"check-cedar-gate-arguments.sh",
 	"check-cedar-engine-singleton.sh",
 	"check-broker-topic-consumers.sh",
+	"check-served-mode-topic-forwarding.sh",
 	"check-listpending-coverage.sh",
 	"check-upgrade-snapshots-locked.sh",
 	"check-destructive-migration-coverage.sh",
@@ -754,6 +755,67 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			// on its own, not because someone declared it a violation.
 			file:    "core/rpc/zz_gate_probe.go",
 			content: "package rpc\n\nconst TopicNobodyReads = \"nobody:reads-this\"\n",
+		},
+		{
+			// G-0 (connector-lifecycle-truth-01PMZ303 UNIT-8, spec.md §1.12
+			// R-6). Before this correction, a topic const's OWN
+			// declaring/subscribing call satisfied the gate's pass-2
+			// window — this is EXACTLY UNIT-0's independently-reproduced
+			// ★3 shape (a Topic* const + one Subscribe call + no
+			// publisher, no other consumer) that the register's stated
+			// gate-extension obligation ("declaring the topic constant
+			// enables the gate to cover it") turned out not to fix. The
+			// unconsumed-topic-const case above tests a topic with NO
+			// Subscribe call anywhere; this one specifically tests a topic
+			// WITH a Subscribe call — self-registration only — which the
+			// pre-correction gate treated as covered (exit 0, "clean").
+			name: "broker-topic-consumers/self-subscribe-only",
+			// The planted const's own violation line — same requirement
+			// as unconsumed-topic-const above: the gate must have
+			// actually derived and rejected THIS topic, not failed for an
+			// unrelated reason.
+			wantOutput: `TopicGateProbeSelfSubscribe = "gate-probe:self-subscribe"`,
+			gate:       "check-broker-topic-consumers.sh",
+			file:       "core/rpc/zz_gate_probe.go",
+			content: "package rpc\n\n" +
+				"const TopicGateProbeSelfSubscribe = \"gate-probe:self-subscribe\"\n\n" +
+				"type zzGateProbeSubscriber interface {\n" +
+				"\tSubscribe(view, kind string, ch chan any) (string, error)\n" +
+				"}\n\n" +
+				"func zzGateProbeWireSelfSubscribe(s zzGateProbeSubscriber, ch chan any) {\n" +
+				"\t_, _ = s.Subscribe(\"gate-probe\", TopicGateProbeSelfSubscribe, ch)\n" +
+				"}\n",
+		},
+		{
+			// PR #336 review item 2. check-served-mode-topic-forwarding.sh's
+			// FIRST EVER planted-violation proof: a Topic* const with a real
+			// frontend `useEventStream` subscriber, no entry in
+			// core/serve/wsstream.go's passthroughTopics, and no allowlist
+			// line — exactly the mcp:health-changed shape MUST FIX 1 found.
+			// Two plants, same reason I13 clause 4 needs two: the defect
+			// only exists once BOTH the Go const and the frontend
+			// subscriber are present (either half alone is inert — a const
+			// nobody subscribes to is I14's problem, not this gate's; a
+			// subscriber with no matching const can't happen, there is
+			// nothing to look up).
+			name: "served-mode-topic-forwarding/subscribed-not-forwarded",
+			// The planted const's own violation line — the gate must have
+			// actually derived and rejected THIS topic, not failed for an
+			// unrelated reason (e.g. a syntax error in the probe files).
+			wantOutput: `TopicZzGateProbeServedForward = "zzgateprobe:served-forward"`,
+			gate:       "check-served-mode-topic-forwarding.sh",
+			file:       "core/rpc/zz_gate_probe_servedtopic.go",
+			content: "package rpc\n\n" +
+				"// TopicZzGateProbeServedForward is planted by gates_can_fail_test.go's\n" +
+				"// check-served-mode-topic-forwarding.sh proof and removed after the\n" +
+				"// test runs.\n" +
+				"const TopicZzGateProbeServedForward = \"zzgateprobe:served-forward\"\n",
+			file2: "frontend/src/zz_gate_probe_servedtopic.ts",
+			content2: "// Planted by gates_can_fail_test.go's\n" +
+				"// check-served-mode-topic-forwarding.sh proof; removed after the test\n" +
+				"// runs.\n" +
+				"import { useEventStream } from './lib/useEventStream';\n\n" +
+				"useEventStream<null>('zzgateprobe:served-forward', () => {});\n",
 		},
 		{
 			name: "listpending-coverage/no-client-reader",

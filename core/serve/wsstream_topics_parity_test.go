@@ -24,6 +24,55 @@ package serve
 // text-level parse: the array is a `] as const` literal of plain string
 // literals, and the parse fails loudly (not silently-empty) if that
 // shape ever changes.
+//
+// # Known gap: this test cannot catch a topic missing from BOTH lists
+//
+// PR #336 review MUST FIX 1 found exactly that shape: mcp:health-changed
+// had a real Go publisher (mcp.API.PublishHealthChange, reaching the
+// process-wide EventBus) and a real frontend subscriber
+// (useHarnessAPI.ts's useEventStream('mcp:health-changed', ...)), but was
+// absent from passthroughTopics AND SERVED_STREAM_TOPICS. Set-equality
+// between two lists that both omit the same entry is still equality —
+// this test passed the whole time the bug was live.
+//
+// The fix for THAT topic is wsstream_mcp_health_topic_test.go: an
+// end-to-end test that drives a real EventBus.Publish through a real
+// served.Server + WebSocket connection and asserts the frame is actually
+// delivered. It fails red without either list entry (see that file's
+// header for the mutation results) — a completeness check for one
+// topic, proven the hard way rather than by static parsing.
+//
+// A GENERAL completeness gate — "every topic with a real frontend
+// useEventStream subscriber must appear in passthroughTopics" — was
+// considered and deliberately NOT added here, because it is not
+// tractable to add safely in this PR's scope. Cross-referencing every
+// `Topic* = "..."` Go const's declaring file against
+// `useEventStream(...)` call sites in frontend/src (the same two-pass
+// technique scripts/ci/check-broker-topic-consumers.sh already uses,
+// see its pass 1) surfaces FIVE Go-published, frontend-subscribed
+// topics currently missing from passthroughTopics, of which
+// mcp:health-changed was only one:
+//
+//   - contextbootstrap:progress (core/rpc/contextbootstrap_wiring.go)
+//   - elicit:deferred, elicit:deferred:answered (core/rpc/views/elicit/api.go)
+//   - fleet:lockdown:changed (core/fleet/lockdown.go)
+//   - fleet:session:expired (core/fleet/http.go)
+//
+// Each of these needs the SAME two-part disposition MUST FIX 1 required
+// for mcp:health-changed — a passthroughTopics/SERVED_STREAM_TOPICS
+// entry, AND a session-scoping decision (does the payload carry a
+// session id D-705's filter can key on, or does it need a
+// processWideTopics exemption like TopicMigrationDriftDetected and
+// mcpview.TopicMCPHealthChanged do?). That is real per-topic research
+// this PR's three MUST FIX findings did not ask for and this fix does
+// not attempt — a blanket gate that fails on them today would either
+// force a rushed, unresearched disposition of four unrelated topics
+// (exactly the "allowlist without a real reason" CLAUDE.md's unwired-
+// sweep doctrine warns against) or need those four allowlisted with no
+// better justification than "out of scope," which is not a dated
+// justification naming a blocker and an owner. Recorded here instead,
+// as a candidate for its own follow-up mission — see
+// docs/unwired-ledger.md's convention for this class of finding.
 
 import (
 	"os"

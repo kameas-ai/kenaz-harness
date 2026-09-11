@@ -2414,6 +2414,30 @@ export interface RecipeStatus {
   stderrTail?: string;
 }
 
+/**
+ * HealthEntry — live-probed health for one MCP connector. Mirrors
+ * `core/rpc/views/mcp.HealthEntry`, the shape `MCP_HealthSnapshot` and
+ * the `mcp:health-changed` push event both carry
+ * (connector-lifecycle-truth-01PMZ303 UNIT-7/UNIT-8). Distinct from
+ * `RecipeStatus` above: `RecipeStatus` is the STDIO-process-centric
+ * shape `Tools_RecipeStatus` returns (pid, keysPresent, resource/
+ * prompt counts); `HealthEntry` is transport-agnostic and is the one
+ * that is honest for http/sse servers after UNIT-7 — before that unit,
+ * the http/sse fields behind this shape were a permanently-synthesised
+ * "running" with no real check behind it.
+ */
+export interface HealthEntry {
+  id: string;
+  state: RecipeState;
+  lastError?: string;
+  restartAttempts: number;
+  stderrTail?: string;
+  toolCount: number;
+  serverName?: string;
+  serverVersion?: string;
+  protocolVersion?: string;
+}
+
 // ── Artifacts (artifacts-storage WP01..WP03) ─────────────────────────
 //
 // Mirrors core/rpc/views/artifacts.Artifact. The wire shape is camelCase

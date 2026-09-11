@@ -398,6 +398,19 @@ jobs:
         # documents today's single instance (mcp:progress).
         run: bash scripts/ci/check-broker-topic-consumers.sh
 
+      - name: served-mode-topic-forwarding guard
+        # PR #336 review item 2. I14 (above) asks "does anything consume
+        # this topic anywhere"; it never asked whether a topic reachable
+        # from a frontend `useEventStream` call is ALSO forwarded by
+        # core/serve/wsstream.go's passthroughTopics — mcp:health-changed
+        # had a real publisher and a real frontend subscriber and was
+        # covered by I14 while silently never reaching a served-mode
+        # client. This narrower gate freezes today's five known gaps
+        # (scripts/ci/allowlists/served-mode-topic-forwarding-gaps.txt —
+        # each needs its own session-scoping decision before it can be
+        # wired) and fails on any NEW topic in that same shape.
+        run: bash scripts/ci/check-served-mode-topic-forwarding.sh
+
       - name: single-move-writer guard
         # kitty-specs/model-moves-transcript-01PMCH01 WP01, spec §4:
         # "One writer: session_write/the chat runner persists moves
