@@ -2268,3 +2268,94 @@ func TestNilOptionalDepsGate_PlantedUnwiredFieldFires(t *testing.T) {
 		}
 	})
 }
+
+// TestHookEventFireSitesGate_PlantedDeadEnclosingFunctionFires is the
+// planted-violation proof for check-hook-event-fire-sites.sh's one-hop
+// reachability widening (ledger #46 close-out, CLAUDE.md's gate-extension
+// rule: "if a find represents a class the existing gates cannot see,
+// extend a gate in the same commit, with a planted-violation proof").
+//
+// Named class: an emit site that is textually present but sits inside a
+// function with ZERO non-test callers — precisely the shape that let this
+// gate certify pre_send as firing while its only call site
+// (a.hooks.RunPreSend, core/rpc/views/llm/impl.go:638) lived inside
+// (a *API).buildMessages, a method dead since commit f0b17126
+// (2026-04-27). The plant reproduces that shape from scratch rather than
+// touching the real pre_send/buildMessages code (which this PR already
+// corrected): a brand-new event is registered end to end — a Go
+// hooks.AllEvents entry, a matching FIRING_HOOK_EVENTS/ALL_HOOK_EVENTS
+// pair in the frontend — with its ONLY fire site inside a function that
+// has no caller anywhere in core/. The shared plant() helper only
+// supports one append per file (or two, via the table's file/file2
+// slots), and this violation is inherently three-file (a new Go source
+// file under core/hooks/ carrying both the event constant and the dead
+// fire site, plus an append to hooks.ts), so this is a standalone test
+// rather than a cases-table entry, mirroring
+// TestBundleChannelKindsSyncGate_PlantedDriftFires above.
+//
+// The new Go file's fire site and AllEvents registration deliberately do
+// NOT live in core/hooks/hooks.go — the gate excludes exactly that one
+// file from its fire-site scan (by design: hooks.go is where Run*/Fire*
+// are DECLARED, not called), and a same-package sibling file proves the
+// one-hop check is scanning by caller-count, not by file identity.
+func TestHookEventFireSitesGate_PlantedDeadEnclosingFunctionFires(t *testing.T) {
+	root := repoRoot(t)
+	const gate = "check-hook-event-fire-sites.sh"
+
+	goPath := filepath.Join(root, "core", "hooks", "zz_gate_probe_deadfire.go")
+	goContent := `package hooks
+
+// zz_gate_probe_deadfire.go — planted by
+// TestHookEventFireSitesGate_PlantedDeadEnclosingFunctionFires. Registers
+// a fake event and gives it exactly one fire site, inside a function
+// with zero non-test callers anywhere in core/ — the pre_send/
+// buildMessages defect class, reproduced from scratch.
+
+const EventZzGateProbe = "zz_gate_probe"
+
+func zzGateProbeRegisterEvent() {
+	AllEvents = append(AllEvents, EventZzGateProbe)
+}
+
+// zzGateProbeDeadFireSite has a real Fire call naming the event's own
+// constant (satisfies the OLD, textual-only leg-a regex) but is never
+// called from anywhere outside this file and _test.go files.
+func zzGateProbeDeadFireSite(r *Runner) {
+	_, _ = r.Fire(nil, EventZzGateProbe, nil)
+}
+`
+
+	tsPath := filepath.Join(root, "frontend", "src", "lib", "hooks.ts")
+	// A second, later declaration of FIRING_HOOK_EVENTS / ALL_HOOK_EVENTS.
+	// The gate's extract_ts_array scans the WHOLE file for every
+	// occurrence of "export const <NAME> = [ ... ] as const;" independent
+	// of how many times it appears, so this second block's one entry is
+	// unioned in alongside the real lists without disturbing them — no
+	// need to touch (or duplicate) the real declarations to add one fake
+	// event. This is not valid TypeScript (duplicate top-level const), but
+	// the gate never runs tsc — it greps — and the plant is removed before
+	// any test that does compile the frontend runs.
+	tsAppend := "\n" +
+		"export const FIRING_HOOK_EVENTS = [\n" +
+		"  'zz_gate_probe',\n" +
+		"] as const;\n" +
+		"\n" +
+		"export const ALL_HOOK_EVENTS = [\n" +
+		"  'zz_gate_probe',\n" +
+		"] as const;\n"
+
+	cleanupGo := plant(t, goPath, goContent, "")
+	defer cleanupGo()
+	cleanupTs := plant(t, tsPath, "", tsAppend)
+	defer cleanupTs()
+
+	code, out := runGate(t, gate, root)
+	if code == 0 {
+		t.Fatalf("%s exited 0 with an emit site planted inside a function with zero "+
+			"non-test callers — the gate cannot see this violation class.\noutput:\n%s", gate, out)
+	}
+	if !strings.Contains(out, "zz_gate_probe") || !strings.Contains(out, "one-hop") {
+		t.Fatalf("%s failed, but its output does not name the planted event and the "+
+			"one-hop diagnosis — it may be failing for an unrelated reason.\noutput:\n%s", gate, out)
+	}
+}
