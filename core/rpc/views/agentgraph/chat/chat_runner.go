@@ -772,6 +772,13 @@ type chatSub struct {
 	// (owner directive 2026-09-09: "agent reached the per-run budget
 	// cap" told the user nothing actionable).
 	effectiveTier autonomy.Tier
+	// pauseGen is the generation token SubagentPauseRegistry.BeginRun
+	// returned for this run (0 if SubagentPause is unwired). driveRun's
+	// cleanup defer passes it to EndRun so the pause-entry release is
+	// scoped to THIS run, never a later run that reused the same
+	// sessionID — see subagent_pause.go's BeginRun/EndRun doc for the
+	// race this closes (PR #334 review).
+	pauseGen uint64
 }
 
 // New constructs a ChatRunner. Every Config field is validated; a
@@ -1371,6 +1378,14 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		bridge:        bridge,
 		journal:       journal,
 		effectiveTier: resolvedKnobs.EffectiveTier,
+		// Claimed synchronously, here, rather than at the top of
+		// driveRun's goroutine: PauseSubagent can race in the instant
+		// StartStream returns subID to the caller, and BeginRun must
+		// have already registered this run as sessionID's active
+		// generation before that can happen, or a Pause call landing in
+		// that window would arm an unowned (owner==0) entry no run ever
+		// claims. See subagent_pause.go's BeginRun doc.
+		pauseGen: r.cfg.SubagentPause.BeginRun(sessionID),
 	}
 	r.mu.Lock()
 	r.subs[subID] = sub
@@ -1551,17 +1566,30 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		r.mu.Lock()
 		delete(r.subs, sub.id)
 		r.mu.Unlock()
-		// Release any armed pause entry for this run unconditionally,
-		// mirroring the r.subs delete above. Without this, a sub-agent
-		// paused and then aborted (rather than resumed) leaves its
-		// never-closed channel in SubagentPauseRegistry.paused for the
-		// life of the process: TurnPause.Wait returns ctx.Err() on
-		// abort and exits the loop, but nothing ever calls Resume to
-		// clear the entry. Resume is nil-receiver-safe (no-op when
-		// SubagentPause is unwired) and idempotent (a no-op when this
-		// run was never paused), so this is safe to call unconditionally
-		// rather than only on the abort path.
-		r.cfg.SubagentPause.Resume(sub.sessionID)
+		// Release this run's pause entry, if it owns one, unconditionally
+		// on every exit path — mirroring the r.subs delete above.
+		// Without this, a sub-agent paused and then aborted (rather than
+		// resumed) leaves its never-closed channel in
+		// SubagentPauseRegistry.paused for the life of the process:
+		// TurnPause.Wait returns ctx.Err() on abort and exits the loop,
+		// but nothing ever calls Resume to clear the entry.
+		//
+		// This calls EndRun, not Resume: a plain session-keyed Resume
+		// here would be unconditionally correct only if sessionIDs were
+		// never reused across runs, and they are (RedriveLastTurn
+		// re-issues StartStream for the same session; so does every
+		// ordinary next chat turn). A stale run's cleanup can stall here
+		// behind the DeleteStreamCheckpoint call above; a second run can
+		// start AND get freshly paused on the same sessionID before this
+		// stale cleanup resumes. EndRun(sessionID, pauseGen) only
+		// releases the entry if it is still owned by THIS run's
+		// generation, so it can never clear a newer run's pause — see
+		// subagent_pause.go's BeginRun/EndRun doc. EndRun is
+		// nil-receiver-safe (no-op when SubagentPause is unwired) and a
+		// no-op when this run never owned an entry (pauseGen==0, or the
+		// entry's owner has since moved on), so this is safe to call
+		// unconditionally rather than only on the abort path.
+		r.cfg.SubagentPause.EndRun(sub.sessionID, sub.pauseGen)
 		close(sub.done)
 	}()
 

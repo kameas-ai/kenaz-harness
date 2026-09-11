@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -219,6 +220,176 @@ func TestChatRunner_DriveRun_ReleasesPauseEntryOnAbort(t *testing.T) {
 	}
 	if changed := reg.Resume(sessionID); changed {
 		t.Error("a subsequent Resume must report changed=false — the entry should already be gone")
+	}
+}
+
+// firstCallBlockingCheckpointStore is a StreamCheckpointStore fake that
+// blocks exactly the FIRST DeleteStreamCheckpoint call it receives
+// until the test releases it, and lets every later call through
+// immediately. This is the reviewer's reproduction shape for the
+// run-scoped-release race
+// (TestChatRunner_DriveRun_StaleCleanupDoesNotClearNewerRunsPause
+// below): driveRun's cleanup defer calls DeleteStreamCheckpoint
+// (chat_runner.go, bounded by persistPartialTimeout) BEFORE the
+// pause-registry release this test is pinning, so stalling that one
+// call holds a stale run inside its cleanup defer while a second run
+// starts on the same (reused) sessionID and gets paused.
+//
+// "First call" rather than "call matching run A's subID" deliberately
+// avoids needing to learn run A's subID (returned by StartStream) and
+// hand it back to the fake before run A's own driveRun goroutine —
+// already running concurrently — could reach this method: there is no
+// happens-before relationship between those two things, so matching on
+// a subID set after the fact is a genuine data race (caught the first
+// time this test ran, not just a theoretical one). The call ordering
+// itself IS safe to rely on: run B's StartStream is not invoked until
+// after this test has already observed (via <-entered) that the first
+// call — necessarily run A's, since run A is StartStream'd first and
+// nothing else could have called DeleteStreamCheckpoint yet — has
+// landed.
+type firstCallBlockingCheckpointStore struct {
+	mu      sync.Mutex
+	started bool
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *firstCallBlockingCheckpointStore) UpsertStreamCheckpoint(context.Context, string, string, string, bool) error {
+	return nil
+}
+
+func (s *firstCallBlockingCheckpointStore) DeleteStreamCheckpoint(ctx context.Context, _, _ string) error {
+	s.mu.Lock()
+	first := !s.started
+	s.started = true
+	s.mu.Unlock()
+	if !first {
+		return nil
+	}
+	close(s.entered)
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+	}
+	return nil
+}
+
+// TestChatRunner_DriveRun_StaleCleanupDoesNotClearNewerRunsPause pins
+// the race a reviewer reproduced deterministically against PR #334's
+// original fix for TestChatRunner_DriveRun_ReleasesPauseEntryOnAbort's
+// leak: that fix called SubagentPauseRegistry.Resume(sessionID)
+// unconditionally from driveRun's cleanup defer, keyed only by
+// sessionID. sessionIDs are genuinely reused across sequential runs
+// (ChatRunner.RedriveLastTurn re-issues StartStream for the same
+// session; so does every ordinary next chat turn), and a run stalled
+// in its own cleanup defer (behind the DeleteStreamCheckpoint call,
+// bounded by persistPartialTimeout — see chat_runner.go) can have its
+// stale Resume call fire AFTER a second run has started on the same
+// session and been freshly paused, silently dropping that pause with
+// no error.
+//
+// Sequence:
+//  1. Run A starts, completes its (trivial, single-AskNode) body, and
+//     stalls in its cleanup defer's DeleteStreamCheckpoint call.
+//  2. Run B starts on the SAME sessionID while A is still stalled.
+//  3. The session is paused (mirrors an external PauseSubagent RPC
+//     call landing on whichever run is now current — B).
+//  4. Run A's stalled cleanup is released and runs to completion.
+//  5. Assert run B's pause SURVIVED run A's cleanup — observable
+//     registry state (IsPaused / a subsequent Resume's changed value),
+//     never a status field.
+//
+// This must go RED (assert failure) against the unconditional
+// Resume(sessionID) shape and GREEN against the run-scoped
+// BeginRun/EndRun release (chat_runner.go's driveRun cleanup calling
+// r.cfg.SubagentPause.EndRun(sub.sessionID, sub.pauseGen)).
+func TestChatRunner_DriveRun_StaleCleanupDoesNotClearNewerRunsPause(t *testing.T) {
+	t.Parallel()
+	const sessionID = "reused-session-race"
+
+	reg := NewSubagentPauseRegistry()
+	broker := &recordingBroker{}
+
+	store := &firstCallBlockingCheckpointStore{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+
+	runner, err := New(Config{
+		Kernel:            coreag.NewKernel(),
+		Registry:          stubRegistry{},
+		Broker:            broker,
+		HistoryWriter:     &recordingHistoryWriter{},
+		History:           staticHistoryReader{},
+		GraphLoader:       func() (coreag.Graph, error) { return minimalChatGraph(), nil },
+		MaxTurns:          func() int { return 25 },
+		SubagentPause:     reg,
+		StreamCheckpoints: store,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Run A: starts, completes its trivial body, then stalls in
+	// driveRun's cleanup defer.
+	subIDA, err := runner.StartStream(context.Background(), "profile-1", sessionID, "", "hello-a")
+	if err != nil {
+		t.Fatalf("StartStream (run A): %v", err)
+	}
+
+	select {
+	case <-store.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run A never reached the blocking cleanup call")
+	}
+
+	// Grab run A's sub so we can wait for its cleanup to fully finish
+	// later (same pattern StopStream uses internally: block on
+	// <-sub.done to know the cleanup defer, including the release call
+	// under test, has already run).
+	runner.mu.Lock()
+	subA, ok := runner.subs[subIDA]
+	runner.mu.Unlock()
+	if !ok {
+		t.Fatal("run A's sub not found while stalled in cleanup")
+	}
+
+	// Run B: starts on the SAME sessionID while A is still stalled —
+	// the sessionID-reuse shape RedriveLastTurn / an ordinary next chat
+	// turn produce. B's StartStream call claims sessionID's active
+	// generation synchronously (chat_runner.go calls
+	// SubagentPause.BeginRun in StartStream itself, before spawning
+	// driveRun), so this happens before the test proceeds — no race
+	// against B's own goroutine scheduling.
+	if _, err := runner.StartStream(context.Background(), "profile-1", sessionID, "", "hello-b"); err != nil {
+		t.Fatalf("StartStream (run B): %v", err)
+	}
+
+	// Pause targets whichever run is current for this session — B, per
+	// the real PauseSubagent RPC flow (branches/impl.go resolves
+	// branchID -> ChildSessionID and calls PauseControl.Pause knowing
+	// nothing about run generations). Armed AFTER B has started, so a
+	// correct implementation attributes it to B.
+	if changed := reg.Pause(sessionID); !changed {
+		t.Fatal("Pause must report changed=true for a freshly-armed session")
+	}
+
+	// Release run A's stalled cleanup and wait for it to fully exit.
+	close(store.release)
+	select {
+	case <-subA.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run A's cleanup never completed after release")
+	}
+
+	// The assertion that matters: run A's cleanup must not have cleared
+	// run B's pause. Observable registry state, not a status field.
+	if !reg.IsPaused(sessionID) {
+		t.Fatal("run A's stale cleanup released run B's freshly-armed pause entry — " +
+			"the race TestChatRunner_DriveRun_StaleCleanupDoesNotClearNewerRunsPause exists to catch")
+	}
+	if changed := reg.Resume(sessionID); !changed {
+		t.Error("run B's pause entry should still be present and releasable via an explicit Resume")
 	}
 }
 
