@@ -76,7 +76,12 @@ func TestRunner_Shutdown_AbandonsHangingHook(t *testing.T) {
 	// Shutdown itself does not wait for this — that's the point.
 	close(block)
 
-	const bound = 10 * time.Second // comfortably under the old 240s ceiling
+	// 5s, not 10s: the deadline is 3s, so this leaves ~2s of CI jitter
+	// headroom while still catching a regression to 6-8s. A 10s bound only
+	// catches a regression back toward the old 240s ceiling, which is the
+	// easy case -- the plausible regression is someone nudging the deadline
+	// up, not removing it.
+	const bound = 5 * time.Second
 	if elapsed > bound {
 		t.Fatalf("Shutdown() took %v with a hung post_send hook, want <= %v (drain deadline is not being enforced)", elapsed, bound)
 	}

@@ -77,9 +77,15 @@ func (p *asyncPool) submit(w asyncWork) bool {
 }
 
 // shutdown closes the work channel and waits up to timeout for all
-// in-flight workers to drain. If timeout <= 0 it waits unboundedly
-// (kept for test call sites that want the old unconditional-drain
-// behavior).
+// in-flight workers to drain.
+//
+// If timeout <= 0 it waits unboundedly. NOTE: no caller passes <= 0 today
+// -- production always passes asyncShutdownDrainTimeout, and both
+// pool_test.go call sites pass 5s. The unbounded branch is reachable only
+// by a deliberate mutation, which is how TestRunner_Shutdown_AbandonsHangingHook
+// proves the deadline is load-bearing. An earlier version of this comment
+// claimed the branch was "kept for test call sites"; that was inaccurate
+// and is corrected here rather than left to mislead the next reader.
 //
 // When the timeout elapses first, shutdown returns false without
 // waiting any further — the wg.Wait() keeps running in a background
