@@ -71,6 +71,27 @@ mission's spec §1.4 and its `research/escalations.md` E-004 for the
 corrected list and for why "per gate" overstated the
 coverage this sentence used to claim unconditionally.
 
+**2026-09-11 update (finding #48 closure)**: re-derived from scratch
+(`comm` between `scripts/ci/check-*.sh` filenames and every real `gate:`
+field / `runGate(t, "check-*.sh"` literal / `const gate = "check-*.sh"`
+call in `gates_can_fail_test.go`, **plus** `check-no-model-family-literals_test.go`,
+a separate file the naive single-file `comm` above misses). By then the
+repo had **51** `check-*.sh` scripts, **41** already proved, and exactly
+**10** missing: `check-codegen`, `check-fleet-log-export-fence`,
+`check-manifest-version-bump`, `check-no-cred-bytes-in-rpc`,
+`check-no-fleet-imports`, `check-no-forbidden-compaction-symbols`,
+`check-node-dispatch`, `check-oss-first`, `check-output-ports`,
+`check-release-integrity`. All 10 now have a proof (7 as new
+`TestGates_PlantedViolationFires` table cases; `check-codegen` and
+`check-manifest-version-bump` as standalone functions sharing one plant on
+`core/agentgraph/nodes/manifests/sleep.yaml`; `check-release-integrity` as
+a standalone function that fakes `gh` on PATH rather than hitting the
+network). **51 of 51 now have a planted-violation proof.** One gate
+(`check-no-fleet-imports.sh`) was found to have a real, live scope hole
+while writing its proof — see the dedicated 2026-09-11 entry below; the
+proof itself was adjusted to stay honest about what the *shipped* gate can
+prove rather than silently landing a fix with unassessed blast radius.
+
 ### The draft tool promises a review path served mode does not have
 
 **Found**: 2026-08-21, by the independent review of PR #304 (finding F3).
@@ -3277,6 +3298,82 @@ documented retirement.
   bindings exist) but functionally inert: calling them produces a capture
   file with nothing but start/stop markers, and no UI currently exposes even
   that much.
+
+### 2026-09-11 · `check-no-fleet-imports.sh`'s bare `core/rpc` allowlist entry exempts its whole subtree, and 7 real view packages already rely on the hole
+
+**Found**: 2026-09-11, during the finding-#48 planted-violation-proof sweep
+(11 of 49 CI gates had no proof they could fail — see
+`scripts/ci/gates_can_fail_test.go`'s 2026-09-11 block). Planting a
+`core/fleet` import in a brand-new package under `core/rpc/views/` to prove
+`check-no-fleet-imports.sh` (the OSS-first boundary gate) could fail — it
+didn't. **RAN**, not read: `bash scripts/ci/check-no-fleet-imports.sh` with
+`import _ ".../core/fleet"` planted in a fresh
+`core/rpc/views/zzgateprobefleetimport/probe.go` reported
+`clean — no unauthorized fleet imports found: PASS`, exit 0.
+
+**Root cause** (`scripts/ci/check-no-fleet-imports.sh:79`, unchanged by this
+sweep — see disposition below): the allowlist match is
+`[[ "$pkg" == "$a" || "$pkg" == "${a}/"* ]]` for every entry in `ALLOWLIST`,
+including the bare `"${MODULE}/core/rpc"` entry. The `"${a}/"*` wildcard
+means that entry matches **any** package whose import path starts with
+`core/rpc/` — not just the top-level `core/rpc` chassis-wiring package the
+comment above it describes. `core/rpc` has exactly two subdirectories,
+`middleware` (separately allowlisted) and `views` (dozens of packages, only
+two of which — `settings`, `fleet` — are supposed to be exempt). Every other
+package under `core/rpc/views/` inherits the exemption by accident.
+
+**This is not hypothetical — RAN and confirmed live**: reverting the plant
+and instead running the gate against the unmodified tree with a locally
+tested fix (exact-match the bare `core/rpc` entry, keep prefix matching for
+the other four) turned the gate red against the **real, currently-committed
+tree**, naming 7 packages: `core/rpc/views/{catalog,cedar,compliance,
+contexts,sites,slashcmd,sync}`. Each has a non-test `impl.go` importing
+`core/fleet` (confirmed via `grep -l core/fleet core/rpc/views/<pkg>/*.go`)
+and none is in `ALLOWLIST`. They pass today only because of the prefix hole.
+This sweep did not ship that fix — see disposition.
+
+**Disposition: escalate, not fix-and-ship.** The technically-correct fix
+(exact-match `core/rpc`) is small in diff size but not small in blast
+radius: it immediately fails CI for 7 packages that have apparently been
+fleet-facing for some time without anyone widening the allowlist to say so
+in review. Two readings are equally plausible from here and this sweep has
+no way to distinguish them:
+
+1. These 7 packages have a legitimate, undocumented reason to import fleet
+   (config-pull, capability checks, telemetry — several plausible per their
+   names: `sites`, `sync`, `compliance`), and the allowlist itself is stale
+   — it should be widened to name them explicitly, with the same
+   per-package justification style as the existing 5 entries.
+2. This is exactly the OSS-first drift the gate exists to prevent, and it
+   shipped silently because the prefix bug made the gate incapable of
+   seeing it — the fork/OSS-first contract (`check-oss-first.sh`,
+   `HARNESS_FLEET_DISABLED=1`) may currently be broken for anyone who forks
+   and deletes `core/fleet/`, since 7 RPC view packages would fail to build.
+
+Per CLAUDE.md's "Escalate when the call is genuinely product, not
+technical" — resolving which reading is true requires knowing why each of
+the 7 packages reaches into `core/fleet`, which is a review call, not a
+grep result.
+
+- **Blocker:** someone who knows the fleet-integration roadmap needs to
+  classify each of the 7 packages as (a) legitimately fleet-facing → add to
+  `ALLOWLIST` with a one-line reason matching the existing 5 entries' style,
+  or (b) drift → remove the import / route it through `core/rpc/views/fleet`
+  or `core/rpc/views/settings` instead. Only after that classification
+  should the exact-match fix to `check-no-fleet-imports.sh:79` (tested and
+  ready — see the sweep's PR) land, since landing the gate fix first with no
+  classification done would just turn CI red with no actionable diff.
+- **Owner:** whoever owns the fleet-auth-foundation-01NDFSEX08 boundary
+  (the mission `check-no-fleet-imports.sh`'s own header attributes WP07 to).
+  No owner currently assigned.
+
+The gate's planted-violation proof added by this sweep
+(`no-fleet-imports/unauthorized-package-imports-fleet` in
+`gates_can_fail_test.go`) deliberately plants outside `core/rpc/` (under
+`core/sessions/`) to stay honest about what the **shipped** gate can
+currently prove — the field-proven class (an unrelated package importing
+fleet, the shape that really fired on release/v0.78.1 against
+`core/serve`). It does not claim the `core/rpc/views/` hole is closed.
 
 ## Drained
 
