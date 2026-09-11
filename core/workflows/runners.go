@@ -13,6 +13,7 @@ import (
 	"time"
 
 	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 	"github.com/kameas-ai/kenaz-harness/core/workflows/web"
 )
 
@@ -145,7 +146,16 @@ func (modelTurnRunner) Validate(st Step) error {
 	return nil
 }
 
-func (r modelTurnRunner) Run(ctx context.Context, st Step, _ *RunContext) (TypedValue, error) {
+func (r modelTurnRunner) Run(ctx context.Context, st Step, rc *RunContext) (TypedValue, error) {
+	// workflow-tool-permission-gate: thread this run's session id (empty
+	// for a scheduled/RunNow/direct-UI run; the chat session id for an
+	// inline_run dispatch) into ctx so the tool-loop dispatcher below —
+	// wfToolDispatcherAdapter, wired in core/rpc/api.go — can resolve
+	// session-scoped grants and Cedar's session-kind arm the same way a
+	// chat tool call does. Harmless no-op for the no-tools path.
+	if rc != nil {
+		ctx = toolloop.WithSessionID(ctx, rc.ParentSessionID)
+	}
 	if r.llm == nil {
 		// Beta fallback: keep the chassis bootable when no LLM
 		// registry is wired (e.g. unit tests of the rpc layer).
@@ -469,6 +479,11 @@ func (r mcpCallRunner) Run(ctx context.Context, st Step, rc *RunContext) (TypedV
 	if r.mcp == nil {
 		return TypedValue{Type: ValueTypeError},
 			fmt.Errorf("mcp_call step %q: %w (no MCPCaller wired)", st.Name, errDepUnavailable)
+	}
+	// workflow-tool-permission-gate: see modelTurnRunner.Run's comment —
+	// same session-id threading for wfMCPCallerAdapter's gate.
+	if rc != nil {
+		ctx = toolloop.WithSessionID(ctx, rc.ParentSessionID)
 	}
 	args, err := expandArgs(st.ToolArgs, rc)
 	if err != nil {

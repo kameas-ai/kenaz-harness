@@ -12,7 +12,9 @@ package rpc
 //	wfMCPCallerAdapter       — coremcp.Pool (json.RawMessage args) →
 //	                           corewf.MCPCaller (map[string]any args).
 //	                           Wraps "unknown server" errors with an
-//	                           actionable user message (FR-004).
+//	                           actionable user message (FR-004). Gated
+//	                           by the shared wfToolGate ladder before
+//	                           dispatch (workflow-tool-permission-gate).
 //
 //	wfLLMStreamerAdapter     — corellm.Registry (GenerationRequest/Stream) →
 //	                           corewf.LLMStreamer (LLMRequest/LLMStream).
@@ -28,7 +30,21 @@ package rpc
 //	wfToolDispatcherAdapter  — toolloop.MCPPool.Call →
 //	                           corewf.ToolDispatcher.
 //	                           Dispatches through the same BuiltinPool
-//	                           chat's tool loop uses (one Cedar path).
+//	                           chat's tool loop uses, behind the SAME
+//	                           shared wfToolGate ladder wfMCPCallerAdapter
+//	                           applies — one Cedar/permission/confirm-each
+//	                           path for both mcp_call and model_turn
+//	                           (workflow-tool-permission-gate).
+//
+//	wfToolGate               — the permission-resolve → confirm-each →
+//	                           Cedar ladder shared by wfMCPCallerAdapter
+//	                           and wfToolDispatcherAdapter. An unattended
+//	                           run (runposture.IsUnattended, set by
+//	                           wfSchedDispatcher for a scheduled/cron
+//	                           dispatch) denies any confirm_each verdict
+//	                           unconditionally — mirroring
+//	                           kernel_tool_adapter.go's rung 5 for
+//	                           scheduled chat runs.
 //
 //	wfNotifierAdapter        — satisfies corewf.Notifier via the Wails
 //	                           runtime notification call.
@@ -36,6 +52,7 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -45,6 +62,7 @@ import (
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/runposture"
 	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 	corewf "github.com/kameas-ai/kenaz-harness/core/workflows"
@@ -65,11 +83,25 @@ import (
 //   - All other errors propagate unchanged.
 type wfMCPCallerAdapter struct {
 	pool coremcp.Pool
+	// gate applies the SAME permission-resolve → confirm-each → Cedar
+	// ladder slashToolDispatcherAdapter applies to a slash-invoked tool
+	// call (workflow-tool-permission-gate). Before this field existed,
+	// mcp_call steps reached pool.Call directly with no Cedar/permission
+	// check at all — a scheduled (unattended) workflow could invoke any
+	// configured MCP tool, including write-capable ones, with no
+	// enforcement and no way for a user-authored `deny` rule to take
+	// effect. nil fails open, matching every unwired test double that
+	// constructs this adapter without one; core/rpc/api.go always wires
+	// a real gate in production.
+	gate *wfToolGate
 }
 
 func (a *wfMCPCallerAdapter) Call(ctx context.Context, server, tool string, args map[string]any) (string, error) {
 	if a.pool == nil {
 		return "", fmt.Errorf("MCP server %q is not available — MCP is disabled. Enable it in Settings → Tools", server)
+	}
+	if err := a.gate.authorize(ctx, toolloop.SessionIDFromContext(ctx), server, tool); err != nil {
+		return "", err
 	}
 	// Marshal args to json.RawMessage (nil args → null).
 	var rawArgs json.RawMessage
@@ -390,10 +422,23 @@ func (a *wfToolDiscovererAdapter) Discover(ctx context.Context) ([]corewf.ToolSp
 
 // wfToolDispatcherAdapter bridges toolloop.MCPPool onto
 // corewf.ToolDispatcher. It dispatches through the same BuiltinPool
-// the chat tool loop uses so the same Cedar/permission path applies —
-// no new egress bypass (FR-003).
+// the chat tool loop uses, gated by the SAME shared wfToolGate ladder
+// wfMCPCallerAdapter applies (workflow-tool-permission-gate) — so the
+// Cedar/permission/confirm-each path genuinely is shared between
+// mcp_call and model_turn's tool loop, not merely the underlying pool
+// object. Before wfToolGate existed this doc comment was aspirational:
+// Dispatch called pool.Call directly with no permission check
+// whatsoever, and the neighbouring slashToolDispatcherAdapter comment
+// correctly called this out as "a bare pool.Call with no permission
+// gate at all" — that description is now stale in the other
+// direction and has been corrected at its own site.
 type wfToolDispatcherAdapter struct {
 	pool toolloop.MCPPool
+	// gate — see wfMCPCallerAdapter's field doc. In production
+	// (core/rpc/api.go) this is the SAME *wfToolGate instance wired
+	// into wfMCPCallerAdapter, so mcp_call and model_turn dispatch
+	// through one gate, not two independently-drifting copies.
+	gate *wfToolGate
 }
 
 func (a *wfToolDispatcherAdapter) Dispatch(ctx context.Context, name string, input []byte) (string, bool, error) {
@@ -402,6 +447,9 @@ func (a *wfToolDispatcherAdapter) Dispatch(ctx context.Context, name string, inp
 	}
 	// Split the namespaced "server__tool" name back into (server, tool).
 	server, tool := splitToolName(name)
+	if err := a.gate.authorize(ctx, toolloop.SessionIDFromContext(ctx), server, tool); err != nil {
+		return "", true, err
+	}
 	raw, err := a.pool.Call(ctx, server, tool, json.RawMessage(input))
 	if err != nil {
 		return "", true, err
@@ -438,15 +486,19 @@ func splitToolName(name string) (server, tool string) {
 // a privilege-escalation route that reaches tools without the
 // confirmation a chat tool call would trigger.
 //
-// This is deliberately NOT wfToolDispatcherAdapter's shape (a bare
-// pool.Call with no permission gate at all). That adapter serves the
-// workflow engine's tool_call step, whose per-run containment is a
+// This was deliberately NOT wfToolDispatcherAdapter's shape at the time
+// this comment was written (a bare pool.Call with no permission gate at
+// all) — that adapter served the workflow engine's mcp_call /
+// model_turn steps, whose per-run containment was carved out as a
 // DIFFERENT mission's scope (harness-self-attach-01PMHS01 WP04; see
-// spec.md §4 non-goals for automation-actually-runs-01PMZ404) — copying
-// it here would leave a slash command MORE permissive than the chat
-// surface it is supposed to mirror, which is exactly the hole the
-// ruling closes. A slash-invoked tool call is user- or model-initiated
-// the same way a chat tool call is, so it gets the same ladder:
+// spec.md §4 non-goals for automation-actually-runs-01PMZ404). That gap
+// closed under workflow-tool-permission-gate: both workflow dispatch
+// paths now share the wfToolGate ladder defined below, applying the
+// SAME perms → confirm-each → cedar.CheckTool sequence this adapter
+// does, plus an unattended-run override this adapter's callers never
+// need (a slash command is always attended — see wfToolGate's doc). A
+// slash-invoked tool call is user- or model-initiated the same way a
+// chat tool call is, so it gets the same ladder:
 // PermissionResolver.Resolve (the SAME merged static+Cedar resolver
 // chat uses — see core/rpc/api.go's newLLMStack) short-circuits an
 // explicit Deny before anything dispatches, and a confirm_each verdict
@@ -723,4 +775,340 @@ func (a *slashToolDispatcherAdapter) auditConfirm(ctx context.Context, p context
 		return
 	}
 	contextaudit.MustEmit(ctx, a.auditEmitter, contextaudit.KindToolConfirmDecision, p, a.clock())
+}
+
+// ─── Shared workflow tool-dispatch gate ────────────────────────────────────
+
+// wfToolGate is the permission-resolve → confirm-each → Cedar ladder
+// shared by wfMCPCallerAdapter (mcp_call steps) and
+// wfToolDispatcherAdapter (model_turn's tool loop) —
+// workflow-tool-permission-gate. Before this type existed, BOTH
+// workflow tool-dispatch paths called pool.Call directly with no
+// Cedar/permission check whatsoever: a scheduled workflow could invoke
+// any configured MCP tool, including write-capable ones, with no
+// enforcement and no way for a user-authored `deny` rule to take
+// effect. This closes that gap the same way UNIT-4 closed it for slash
+// commands: reuse slashToolDispatcherAdapter's exact ladder (perms →
+// confirm-each → cedar.CheckTool), not a locally-reinvented one that
+// could quietly diverge from it.
+//
+// THE UNATTENDED QUESTION: a workflow can run with nobody present to
+// answer a confirm_each prompt — dispatched from the scheduler, or
+// from a "Run now" click, or (for the scheduler leg specifically) with
+// literally no human anywhere near the app. Auto-allowing in that case
+// would reproduce this exact bug under a new name; parking forever
+// would hang the run. The answer already exists in this codebase for
+// the identical problem on the chat surface: core/runposture
+// (model-scheduled-jobs-01PMSJ01 WP05) marks a ctx "unattended", and
+// kernel_tool_adapter.go's rung 5 makes that posture deny any
+// confirm_each verdict unconditionally — even overriding a deployment
+// configured HeadlessAllow, because "this whole deployment has no
+// human anywhere" and "THIS run is unwatched" are different questions.
+// resolveConfirmEach below applies the identical override. The other
+// half of the wire is wfSchedDispatcher (core/rpc/wf_sched_dispatcher.go):
+// it marks ctx unattended only for a cron tick (scheduled=true) — a
+// human-clicked "Run now" (scheduled=false) and an inline /wf run from
+// chat both stay attended, so a live confirm channel still gets a
+// chance to prompt them.
+//
+// gate is the SAME process-singleton Cedar engine (a.cedarGate() in
+// core/rpc/api.go) slashToolDispatcherAdapter.gate and the chat tool
+// path's PolicyGateAdapter.CheckTool consult, closing the same
+// Action::"tool_exec" gap UNIT-4 closed for slash (see
+// slashToolDispatcherAdapter's doc for the PR #307 review finding).
+//
+// THE PARK BOUND (workflow-tool-permission-gate hang fix): an attended
+// confirm_each park (RunNow, or an inline /wf run) has a live channel —
+// HasChannel() is process-global, not per-view — but ConfirmToolModal.vue,
+// the only surface that can answer it, used to mount exclusively inside
+// SessionsView. Navigating to /workflows unmounted the modal's
+// subscription while the goroutine stayed parked, so a user could click
+// "Run now" from the Workflows view, having never opened Sessions, and
+// hang the run forever with no visible way to resolve it — indistinguishable
+// from the app freezing. Fix #1 (App.vue) makes the modal reachable from
+// every route; this field is the defence-in-depth half: even a globally
+// mounted modal does not guarantee anyone is looking, so the wait is
+// bounded. confirm.go's ConfirmBus.Pending deliberately carries no
+// deadline of its own ("there is no timeout ... do not add one") — that
+// doctrine protects the chat/session pause, where a durable park is the
+// whole point. This does not touch that registry; it mirrors
+// core/rpc/views/elicit/api.go's OpenDialog, which wraps ctx with a
+// caller-side context.WithTimeout before calling the (also
+// deadline-free) elicitation registry's Park. See resolveConfirmEach's
+// "prompt: park" branch and confirmWaitTimeout below. A fired timeout
+// always resolves to a DENIAL (approved=false) — never a fallthrough to
+// dispatch, and never surfaced as a bare context error the caller could
+// mistake for "did not run for some unrelated reason."
+type wfToolGate struct {
+	perms toolloop.PermissionResolver
+	gate  cedar.Gate
+
+	// confirm-each collaborators — the SAME instances core/rpc/api.go
+	// hands the chat runner's kernelToolAdapter and
+	// slashToolDispatcherAdapter (via chat.ConfirmDeps).
+	confirm          *toolloop.ConfirmBus
+	confirmEnabled   func() bool
+	sessionGrants    *toolloop.SessionGrantCache
+	persistGrants    toolloop.PersistentGrantStore
+	headless         toolloop.HeadlessConfirmPolicy
+	headlessExplicit bool
+	auditEmitter     contextaudit.Emitter
+	now              func() time.Time
+
+	// confirmTimeout bounds an attended confirm_each park's wait on
+	// g.confirm.Pending — see confirmWaitTimeout. Zero (the value every
+	// production construction site in core/rpc/api.go leaves it at)
+	// means "use defaultWorkflowConfirmTimeout"; tests override it to
+	// avoid actually waiting out the production duration.
+	confirmTimeout time.Duration
+}
+
+// defaultWorkflowConfirmTimeout bounds how long an attended workflow
+// confirm_each park waits for an answer before denying by construction.
+// Ten minutes matches the existing precedent for exactly this class of
+// problem: core/rpc/views/elicit/api.go's OpenDialog applies the same
+// dialogTimeout to kenaz__ask_user_question's park for the identical
+// reason (a human may not be watching the instant the pause starts, but
+// must not be made to hang forever either). It is long enough for
+// someone to notice the now-global ConfirmToolModal affordance (fix #1)
+// and act on it, short enough that a genuinely unattended click does not
+// tie up the run indefinitely.
+const defaultWorkflowConfirmTimeout = 10 * time.Minute
+
+// confirmWaitTimeout returns the bound applied before g.confirm.Pending
+// is allowed to block — see wfToolGate's "THE PARK BOUND" doc.
+func (g *wfToolGate) confirmWaitTimeout() time.Duration {
+	if g.confirmTimeout > 0 {
+		return g.confirmTimeout
+	}
+	return defaultWorkflowConfirmTimeout
+}
+
+func (g *wfToolGate) clock() time.Time {
+	if g == nil || g.now == nil {
+		return time.Now()
+	}
+	return g.now()
+}
+
+// authorize resolves the permission ladder + confirm-each ladder +
+// Cedar tool_exec check for (server, tool), mirroring
+// slashToolDispatcherAdapter.DispatchTool's sequence exactly (perms →
+// confirm-each → cedar.CheckTool). A nil gate fails open — matching
+// cedar.CheckTool's own nil-gate convention — so test doubles that
+// construct wfMCPCallerAdapter / wfToolDispatcherAdapter without a
+// gate keep their prior (ungated) behaviour; every production
+// construction site (core/rpc/api.go) always supplies one.
+func (g *wfToolGate) authorize(ctx context.Context, sessionID, server, tool string) error {
+	if g == nil {
+		return nil
+	}
+
+	if g.perms != nil {
+		v, err := g.perms.Resolve(ctx, sessionID, server, tool)
+		if err != nil {
+			return fmt.Errorf("workflow tool dispatch: permission resolve: %w", err)
+		}
+		switch v.Policy {
+		case toolloop.PolicyAutoAllow:
+			// Fall through to the Cedar check below.
+
+		case toolloop.PolicyDeny:
+			reason := v.Reason
+			if reason == "" {
+				reason = "denied by permission policy"
+			}
+			return fmt.Errorf("tool %q denied: %s", server+"__"+tool, reason)
+
+		case toolloop.PolicyConfirmEach:
+			approved, denyReason, err := g.resolveConfirmEach(ctx, sessionID, server, tool, v.Reason)
+			if err != nil {
+				return fmt.Errorf("workflow tool dispatch: tool confirmation: %w", err)
+			}
+			if !approved {
+				return fmt.Errorf("tool %q denied: %s", server+"__"+tool, denyReason)
+			}
+
+		default:
+			// An unrecognised or empty policy string is a configuration
+			// error and must not read as "allow" — the same rule
+			// kernelToolAdapter.dispatch and slashToolDispatcherAdapter
+			// enforce.
+			return fmt.Errorf("tool %q denied: unrecognised permission policy %q", server+"__"+tool, v.Policy)
+		}
+	}
+
+	if err := cedar.CheckTool(ctx, g.gate, server, tool); err != nil {
+		return fmt.Errorf("tool %q denied: %w", server+"__"+tool, err)
+	}
+	return nil
+}
+
+// resolveConfirmEach mirrors slashToolDispatcherAdapter.resolveConfirmEach
+// (and, one layer further, kernelToolAdapter.resolveConfirmEach in
+// core/rpc/views/agentgraph/chat), with one addition: an unattended run
+// (runposture.IsUnattended) denies unconditionally at the headless
+// rung, exactly like kernel_tool_adapter.go's rung 5 — see wfToolGate's
+// doc for why.
+//
+// Returns (approved, denyReason, err). err is non-nil only when the
+// confirmation itself could not be resolved (context cancelled while
+// parked) — the caller must treat that as "did not dispatch", same as
+// a deny.
+func (g *wfToolGate) resolveConfirmEach(
+	ctx context.Context,
+	sessionID, server, tool, reason string,
+) (approved bool, denyReason string, err error) {
+	family := toolloop.ClassifyToolFamily(server, tool)
+
+	// Settings.ConfirmEachEnabled() off => the prompt is never offered,
+	// same as chat and slash.
+	if g.confirmEnabled != nil && !g.confirmEnabled() {
+		g.auditConfirm(ctx, contextaudit.ToolConfirmDecisionPayload{
+			SessionID: sessionID, Server: server, Tool: tool, Family: family,
+			Path: contextaudit.ToolConfirmPathToggleOff, Approved: true,
+			Reason: "confirm-each disabled in Settings",
+		})
+		return true, "", nil
+	}
+
+	// Session grant — "allow for this session". sessionID is typically
+	// empty for a scheduled/RunNow dispatch (no session), which is a
+	// stable, intentional key — matching wfToolDiscovererAdapter's own
+	// "workflows have no chat session, fall back to the global policy"
+	// convention — rather than a bug.
+	if g.sessionGrants.Has(sessionID, server, tool) {
+		g.auditConfirm(ctx, contextaudit.ToolConfirmDecisionPayload{
+			SessionID: sessionID, Server: server, Tool: tool, Family: family,
+			Path: contextaudit.ToolConfirmPathSessionGrant, Approved: true,
+			Reason: "session grant",
+		})
+		return true, "", nil
+	}
+
+	// Persisted grant — "always allow", consulted live so a revoke from
+	// Settings takes effect immediately.
+	if g.persistGrants != nil && g.persistGrants.HasGrant(server, tool) {
+		g.auditConfirm(ctx, contextaudit.ToolConfirmDecisionPayload{
+			SessionID: sessionID, Server: server, Tool: tool, Family: family,
+			Path: contextaudit.ToolConfirmPathPersistedGrant, Approved: true,
+			Reason: "persisted allow rule",
+		})
+		return true, "", nil
+	}
+
+	// Headless / unattended. Three ways in: no prompt channel is
+	// attached, the operator explicitly declared the deployment
+	// headless, or this specific run is unattended (runposture — see
+	// wfToolGate's doc). Auto-allowing was the bug this type exists to
+	// close; the default is deny.
+	unattended := runposture.IsUnattended(ctx)
+	if unattended || g.confirm == nil || !g.confirm.HasChannel() || g.headlessExplicit {
+		policy := g.headless
+		if unattended {
+			// A per-run unattended posture always denies, regardless of
+			// the DEPLOYMENT's configured headless-allow policy —
+			// HeadlessAllow answers "does this whole deployment have a
+			// human anywhere," not "is THIS scheduled run attended."
+			policy = toolloop.HeadlessDeny
+		}
+		if policy != toolloop.HeadlessAllow {
+			policy = toolloop.HeadlessDeny
+		}
+		ok := policy == toolloop.HeadlessAllow
+		policyReason := "no confirmation channel is attached; headless policy: " + string(policy)
+		if unattended {
+			policyReason = "unattended workflow run (scheduled dispatch): confirm_each denies by construction"
+		} else if g.headlessExplicit {
+			policyReason = "deployment declared headless by operator; headless policy: " + string(policy)
+		}
+		g.auditConfirm(ctx, contextaudit.ToolConfirmDecisionPayload{
+			SessionID: sessionID, Server: server, Tool: tool, Family: family,
+			Path: contextaudit.ToolConfirmPathHeadlessPolicy, Approved: ok,
+			Reason: policyReason,
+		})
+		if !ok {
+			return false, policyReason, nil
+		}
+		return true, "", nil
+	}
+
+	// Prompt: park on the SAME bus a chat/slash tool call parks on.
+	req := toolloop.ConfirmRequest{
+		SessionID: sessionID,
+		CallID:    toolloop.NewConfirmID("confirm"),
+		BatchID:   toolloop.ConfirmBatchFromContext(ctx),
+		Server:    server,
+		Tool:      tool,
+		Reason:    reason,
+	}
+	if req.BatchID == "" {
+		req.BatchID = toolloop.NewConfirmID("batch")
+	}
+
+	// THE PARK BOUND — see wfToolGate's type doc. g.confirm.Pending
+	// itself never times out (confirm.go's ConfirmBus is deliberately
+	// deadline-free); this caller-side context.WithTimeout is what
+	// keeps an unanswered workflow park from blocking forever. Mirrors
+	// core/rpc/views/elicit/api.go's OpenDialog exactly: the registry
+	// stays timeout-free, the caller bounds its own wait.
+	confirmCtx, cancel := context.WithTimeout(ctx, g.confirmWaitTimeout())
+	defer cancel()
+
+	decision, pendErr := g.confirm.Pending(confirmCtx, req)
+	if pendErr != nil {
+		if errors.Is(pendErr, context.DeadlineExceeded) {
+			// Nobody answered within the bound. This is a DENIAL, not a
+			// bare context error the caller could mistake for "did not
+			// run for some unrelated reason" — it must read clearly in
+			// run history, and it must never be treated as approval.
+			timeoutReason := fmt.Sprintf(
+				"no one answered the tool confirmation within %s; denying rather than hanging the run indefinitely",
+				g.confirmWaitTimeout(),
+			)
+			g.auditConfirm(ctx, contextaudit.ToolConfirmDecisionPayload{
+				SessionID: sessionID, CallID: req.CallID, BatchID: req.BatchID,
+				Server: server, Tool: tool, Family: family,
+				Path: contextaudit.ToolConfirmPathPrompted, Approved: false,
+				Reason: timeoutReason,
+			})
+			return false, timeoutReason, nil
+		}
+		// Context cancellation from the OUTER run (stopped by the user,
+		// session torn down) or a caller bug — the call must not
+		// dispatch, and (matching kernelToolAdapter) nothing was
+		// decided, so nothing is audited.
+		return false, "", pendErr
+	}
+
+	if decision.Approved {
+		if decision.RememberSession {
+			g.sessionGrants.Grant(sessionID, server, tool)
+		}
+		if decision.Persist && g.persistGrants != nil {
+			_ = g.persistGrants.WriteGrant(server, tool)
+		}
+	}
+
+	payloadReason := decision.Reason
+	if !decision.Approved && payloadReason == "" {
+		payloadReason = "not approved by user"
+	}
+	g.auditConfirm(ctx, contextaudit.ToolConfirmDecisionPayload{
+		SessionID: sessionID, CallID: req.CallID, BatchID: req.BatchID,
+		Server: server, Tool: tool, Family: family,
+		Path: contextaudit.ToolConfirmPathPrompted, Approved: decision.Approved,
+		RememberSession: decision.Approved && decision.RememberSession,
+		Reason:          payloadReason,
+	})
+	return decision.Approved, payloadReason, nil
+}
+
+// auditConfirm emits one KindToolConfirmDecision record. Never blocks
+// the decision: a nil emitter is silence.
+func (g *wfToolGate) auditConfirm(ctx context.Context, p contextaudit.ToolConfirmDecisionPayload) {
+	if g.auditEmitter == nil {
+		return
+	}
+	contextaudit.MustEmit(ctx, g.auditEmitter, contextaudit.KindToolConfirmDecision, p, g.clock())
 }

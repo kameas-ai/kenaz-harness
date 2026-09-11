@@ -2832,10 +2832,33 @@ func New(c *core.Core, opts ...Option) *API {
 		// LLM stack (constructed above); either may be nil (test chassis or
 		// disabled subsystem) — DefaultRunnersWithDeps handles nil gracefully.
 		wfDeps := corewf.Deps{}
+		// workflow-tool-permission-gate: ONE shared gate for both workflow
+		// tool-dispatch surfaces (mcp_call's wfMCPCallerAdapter and
+		// model_turn's wfToolDispatcherAdapter), wired with the EXACT same
+		// collaborators slashToolDispatcherAdapter above uses — stack.perms
+		// (the merged resolver), a.cedarGate() (the process-singleton Cedar
+		// engine), and stack.confirmBus/stack.confirmDeps (the SAME
+		// confirm-each apparatus chat and slash park on). Before this gate
+		// existed, both adapters called pool.Call directly with no
+		// Cedar/permission check at all — a scheduled workflow could invoke
+		// any configured MCP tool, including write-capable ones, with no
+		// enforcement whatsoever.
+		wfGate := &wfToolGate{
+			perms:            stack.perms,
+			gate:             a.cedarGate(),
+			confirm:          stack.confirmBus,
+			confirmEnabled:   stack.confirmDeps.Enabled,
+			sessionGrants:    stack.confirmSessionGrants,
+			persistGrants:    stack.confirmDeps.PersistGrants,
+			headless:         stack.confirmDeps.Headless,
+			headlessExplicit: stack.confirmDeps.HeadlessExplicit,
+			auditEmitter:     stack.confirmDeps.Audit,
+			now:              stack.confirmDeps.Now,
+		}
 		if stack.dispatchPool != nil {
 			// Use the dispatch pool so workflow mcp_call steps can reach
 			// remote (http/sse) servers as well as stdio ones.
-			wfDeps.MCP = &wfMCPCallerAdapter{pool: stack.dispatchPool}
+			wfDeps.MCP = &wfMCPCallerAdapter{pool: stack.dispatchPool, gate: wfGate}
 		}
 		if stack.reg != nil {
 			wfDeps.LLM = &wfLLMStreamerAdapter{reg: stack.reg}
@@ -2847,7 +2870,7 @@ func New(c *core.Core, opts ...Option) *API {
 			wfDeps.ToolDiscoverer = &wfToolDiscovererAdapter{inner: stack.toolDiscoverer}
 		}
 		if stack.wrappedPool != nil {
-			wfDeps.ToolDispatcher = &wfToolDispatcherAdapter{pool: stack.wrappedPool}
+			wfDeps.ToolDispatcher = &wfToolDispatcherAdapter{pool: stack.wrappedPool, gate: wfGate}
 		}
 		// FR-001/FR-002 (01NBUG03): wire DefaultProfileFunc so model_turn steps
 		// resolve the active LLM profile lazily at run time. This avoids the
