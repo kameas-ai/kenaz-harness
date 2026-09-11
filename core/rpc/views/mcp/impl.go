@@ -228,8 +228,23 @@ func (a *API) HealthSnapshot(_ context.Context) (map[string]HealthEntry, error) 
 	return out, nil
 }
 
+// TopicMCPHealthChanged is the broker "kind" argument SubscribeHealthChanges
+// registers and PublishHealthChange fans events for. Declared as a named
+// const (connector-lifecycle-truth-01PMZ303 UNIT-8) so
+// scripts/ci/check-broker-topic-consumers.sh's discovery pass can see it —
+// before this it was a bare string literal, invisible to the gate's
+// `[Tt]opic` naming-convention discovery (spec.md §1.12 R-6).
+//
+// NOT the same string as audit.KindMCPHealthChanged
+// ("mcp.recipe.health_changed", core/context/audit/audit.go) — that is
+// the persisted audit-log event kind, a different namespace with a
+// different value. Do not conflate them; the audit kind is emitted
+// alongside a publish (see core/rpc/api.go's wiring), not renamed to
+// this constant.
+const TopicMCPHealthChanged = "health-changed"
+
 // SubscribeHealthChanges registers a broker subscription for
-// `mcp:health-changed` events. The caller tears it down via StopStream.
+// TopicMCPHealthChanged events. The caller tears it down via StopStream.
 // Events are pushed by PublishHealthChange.
 // (mcp-server-health-ui WP02)
 func (a *API) SubscribeHealthChanges(ctx context.Context) (string, error) {
@@ -237,7 +252,7 @@ func (a *API) SubscribeHealthChanges(ctx context.Context) (string, error) {
 		return "", nil
 	}
 	ch := make(chan any, 64)
-	id, err := a.broker.Subscribe(ctx, "mcp", "health-changed", ch)
+	id, err := a.broker.Subscribe(ctx, "mcp", TopicMCPHealthChanged, ch)
 	if err != nil {
 		return "", err
 	}
@@ -248,8 +263,12 @@ func (a *API) SubscribeHealthChanges(ctx context.Context) (string, error) {
 }
 
 // PublishHealthChange fans a HealthEntry event to every active health
-// subscriber. Called by the pool supervisor or audit hook when a recipe's
-// state transitions. Best-effort: drops rather than blocks on slow consumers.
+// subscriber. Called by dispatch.Pool's health observer (wired in
+// core/rpc/api.go) when a remote recipe's probed state transitions —
+// before connector-lifecycle-truth-01PMZ303 UNIT-8, this method was
+// reachable only from health_test.go: the subscription existed with
+// zero publishers and zero frontend callers (spec.md §1.10, §11 R-8).
+// Best-effort: drops rather than blocks on slow consumers.
 // (mcp-server-health-ui WP02)
 func (a *API) PublishHealthChange(entry HealthEntry) {
 	a.mu.RLock()

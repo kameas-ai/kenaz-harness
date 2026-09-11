@@ -8,6 +8,7 @@ import {
   type HarnessClient,
 } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
+import { dispatchServedEvent } from '@/lib/useServedEvents';
 import type {
   Recipe,
   RecipeListing,
@@ -192,6 +193,60 @@ describe('KenazToolsPanel — recipes section', () => {
     expect(w.find('[data-testid=recipe-state-filesystem]').text()).toContain(
       'running',
     );
+  });
+
+  it('a live mcp:health-changed push event flips the health pill and shows the error, with no user action or poll tick (connector-lifecycle-truth-01PMZ303 UNIT-8, AC-005b)', async () => {
+    // Before UNIT-8, MCP_SubscribeHealthChanges had a Subscribe call
+    // and ZERO publishers and ZERO frontend callers — a dead remote
+    // connector's row stayed "running" until the next manual refresh.
+    // This is the desktop half of "a dead remote server is visibly
+    // dead": drive the exact wire event PublishHealthChange emits
+    // (core/rpc/views/mcp.HealthEntry's JSON shape — snake_case) and
+    // assert on RENDERED OUTPUT (the HealthPill's text + the error
+    // banner), not a store field nothing displays — CLAUDE.md's rule
+    // for this test class.
+    //
+    // Deliberately does NOT touch the row's polled `status` directly
+    // and does NOT wait for the 1 Hz poll (useToolsRecipes'
+    // isTerminal() treats "running" as terminal, so polling has
+    // already stopped for this row by the time the event fires) — the
+    // whole point is that the push path is what moves the pill.
+    const recipes = [
+      makeListing(makeRecipe('remote-srv', { category: 'search' }), {
+        enabled: true,
+        keysPresent: true,
+        status: makeStatus('remote-srv', {
+          enabled: true,
+          state: 'running',
+          keysPresent: true,
+        }),
+      }),
+    ];
+    const setup = makeClient(recipes);
+    const w = await mountPanel(setup);
+    await flushPromises();
+
+    // Before: rendered as running, no error banner.
+    expect(w.find('[data-testid=recipe-state-remote-srv]').text()).toContain('running');
+    expect(w.find('[data-testid=recipe-health-alert-remote-srv]').exists()).toBe(false);
+
+    // The raw wire payload — snake_case, exactly what
+    // PublishHealthChange's mcp.HealthEntry marshals to.
+    dispatchServedEvent('mcp:health-changed', {
+      id: 'remote-srv',
+      state: 'failed',
+      last_error: 'two consecutive tools/list probe failures',
+      restart_attempts: 0,
+      tool_count: 0,
+    });
+    await flushPromises();
+
+    // After: the pill and the error banner both update, with no click,
+    // no refresh() call, and no poll tick driving it.
+    expect(w.find('[data-testid=recipe-state-remote-srv]').text()).toContain('failed');
+    const alert = w.find('[data-testid=recipe-health-alert-remote-srv]');
+    expect(alert.exists()).toBe(true);
+    expect(alert.text()).toContain('two consecutive tools/list probe failures');
   });
 
   it('edit-configuration flow on an enabled recipe forwards env+config to install via the modal', async () => {

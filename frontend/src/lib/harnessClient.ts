@@ -78,6 +78,7 @@ import type {
   RecipeListing,
   RecipeState,
   RecipeStatus,
+  HealthEntry,
   MissingPrereq,
   EnvKey,
   ConfigOption,
@@ -360,6 +361,8 @@ interface WailsBindingsLike {
   MCP_ListServers(): Promise<MCPServer[]>;
   MCP_StartStream(id: string): Promise<string>;
   MCP_StopStream(id: string): Promise<void>;
+  MCP_HealthSnapshot(): Promise<Record<string, WireHealthEntry>>;
+  MCP_SubscribeHealthChanges(): Promise<string>;
   MCP_TestRecipe(
     recipeID: string,
     env: Record<string, string>,
@@ -1313,6 +1316,43 @@ function adaptRecipeStatus(w: WireRecipeStatus): RecipeStatus {
   };
 }
 
+/**
+ * WireHealthEntry — Wails-generated shape for `mcp.HealthEntry`
+ * (connector-lifecycle-truth-01PMZ303 UNIT-7/UNIT-8): both
+ * `MCP_HealthSnapshot`'s map values and the raw `mcp:health-changed`
+ * push-event payload `useEventStream` receives before adaptation.
+ * Exported (with adaptHealthEntry below) so a subscriber consuming the
+ * push event directly — rather than through the mcp client's
+ * `healthSnapshot()` — can adapt the same wire shape instead of
+ * re-declaring it and drifting from PublishHealthChange's real JSON
+ * tags (see core/rpc/views/mcp.HealthEntry).
+ */
+export interface WireHealthEntry {
+  id: string;
+  state: string;
+  last_error?: string;
+  restart_attempts: number;
+  stderr_tail?: string;
+  tool_count: number;
+  server_name?: string;
+  server_version?: string;
+  protocol_version?: string;
+}
+
+export function adaptHealthEntry(w: WireHealthEntry): HealthEntry {
+  return {
+    id: w.id,
+    state: adaptState(w.state),
+    lastError: w.last_error || undefined,
+    restartAttempts: w.restart_attempts,
+    stderrTail: w.stderr_tail || undefined,
+    toolCount: w.tool_count,
+    serverName: w.server_name || undefined,
+    serverVersion: w.server_version || undefined,
+    protocolVersion: w.protocol_version || undefined,
+  };
+}
+
 function adaptRecipeListing(w: WireRecipeListing): RecipeListing {
   return {
     recipe: adaptRecipe(w.recipe),
@@ -1719,6 +1759,26 @@ export interface MCPClient {
   listServers(): Promise<MCPServer[]>;
   startStream(id: string): Promise<string>;
   stopStream(id: string): Promise<void>;
+  /**
+   * healthSnapshot — the current live-probed health for every installed
+   * recipe, keyed by recipe id (connector-lifecycle-truth-01PMZ303
+   * UNIT-7/UNIT-8). Before UNIT-7, the state behind this call was a
+   * permanently-synthesised "running" for every http/sse recipe; it is
+   * now the real, transport-delegated status. Use
+   * `subscribeHealthChanges` for push updates rather than polling this
+   * repeatedly.
+   */
+  healthSnapshot(): Promise<Record<string, HealthEntry>>;
+  /**
+   * subscribeHealthChanges — registers for live `mcp:health-changed`
+   * push events (UNIT-8, ruling A-2). Returns a subscription id for
+   * `stopStream`. After calling this once, listen for payloads with
+   * `useEventStream<HealthEntry>('mcp:health-changed', handler)` — the
+   * subscription id itself is only needed for teardown, not for
+   * receiving events (the broker delivers on the fixed `view:kind`
+   * topic, not a per-subscription channel).
+   */
+  subscribeHealthChanges(): Promise<string>;
   /**
    * testRecipe — run a one-shot connection test against the recipe
    * identified by recipeID (mission mcp-server-install-01KQ8TDP, WP07).
@@ -3842,6 +3902,15 @@ export function createHarnessClient(): HarnessClient {
       listServers: () => b().MCP_ListServers(),
       startStream: (id) => b().MCP_StartStream(id),
       stopStream: (id) => b().MCP_StopStream(id),
+      healthSnapshot: async () => {
+        const raw = await b().MCP_HealthSnapshot();
+        const out: Record<string, HealthEntry> = {};
+        for (const [id, entry] of Object.entries(raw)) {
+          out[id] = adaptHealthEntry(entry);
+        }
+        return out;
+      },
+      subscribeHealthChanges: () => b().MCP_SubscribeHealthChanges(),
       testRecipe: (recipeID, env = {}, config = {}) =>
         b().MCP_TestRecipe(recipeID, env, config),
       importClaudeDesktopConfig: (req) => b().MCP_ImportClaudeDesktopConfig(req),
@@ -5130,6 +5199,8 @@ export function createFakeHarnessClient(
       listServers: async () => [],
       startStream: async () => 'fake-sub',
       stopStream: noop,
+      healthSnapshot: async () => ({}),
+      subscribeHealthChanges: async () => 'fake-health-sub',
       importClaudeDesktopConfig: async () => ({
         report: {
           entries: [],

@@ -756,6 +756,36 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			content: "package rpc\n\nconst TopicNobodyReads = \"nobody:reads-this\"\n",
 		},
 		{
+			// G-0 (connector-lifecycle-truth-01PMZ303 UNIT-8, spec.md §1.12
+			// R-6). Before this correction, a topic const's OWN
+			// declaring/subscribing call satisfied the gate's pass-2
+			// window — this is EXACTLY UNIT-0's independently-reproduced
+			// ★3 shape (a Topic* const + one Subscribe call + no
+			// publisher, no other consumer) that the register's stated
+			// gate-extension obligation ("declaring the topic constant
+			// enables the gate to cover it") turned out not to fix. The
+			// unconsumed-topic-const case above tests a topic with NO
+			// Subscribe call anywhere; this one specifically tests a topic
+			// WITH a Subscribe call — self-registration only — which the
+			// pre-correction gate treated as covered (exit 0, "clean").
+			name: "broker-topic-consumers/self-subscribe-only",
+			// The planted const's own violation line — same requirement
+			// as unconsumed-topic-const above: the gate must have
+			// actually derived and rejected THIS topic, not failed for an
+			// unrelated reason.
+			wantOutput: `TopicGateProbeSelfSubscribe = "gate-probe:self-subscribe"`,
+			gate:       "check-broker-topic-consumers.sh",
+			file:       "core/rpc/zz_gate_probe.go",
+			content: "package rpc\n\n" +
+				"const TopicGateProbeSelfSubscribe = \"gate-probe:self-subscribe\"\n\n" +
+				"type zzGateProbeSubscriber interface {\n" +
+				"\tSubscribe(view, kind string, ch chan any) (string, error)\n" +
+				"}\n\n" +
+				"func zzGateProbeWireSelfSubscribe(s zzGateProbeSubscriber, ch chan any) {\n" +
+				"\t_, _ = s.Subscribe(\"gate-probe\", TopicGateProbeSelfSubscribe, ch)\n" +
+				"}\n",
+		},
+		{
 			name: "listpending-coverage/no-client-reader",
 			// The planted binding's own failure line ("<fam>_ListPending
 			// has no reader in …") — exit-code-only would also pass for

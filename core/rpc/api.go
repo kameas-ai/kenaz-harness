@@ -2453,6 +2453,39 @@ func New(c *core.Core, opts ...Option) *API {
 	if a.dispatchPool != nil {
 		if mcpImpl, ok := a.mcpAPI.(*mcp.API); ok {
 			mcpImpl.SetHealthPool(a.dispatchPool)
+			// connector-lifecycle-truth-01PMZ303 UNIT-8 (ruling A-2):
+			// before this, mcp:health-changed had a Subscribe call and
+			// zero publishers (spec.md §1.10, §11 R-8) — a dead server
+			// never told anyone. dispatch.Pool.SetHealthObserver is the
+			// push signal UNIT-7's probe-state tracking produces on
+			// every real transition (http/sse only — stdio's existing
+			// poll-based AllRecipeStatuses already reflects live state,
+			// see transport.HealthObserver's doc comment). Two things
+			// happen on every transition: the desktop-facing broker
+			// publish, and the audit-log record — same shape as
+			// acpAuditBridge's reuse a few lines above (Shape 1,
+			// contextaudit.Emitter).
+			a.dispatchPool.SetHealthObserver(func(id, previousState string, current stdio.RecipeStatus) {
+				entry := mcp.HealthEntry{
+					ID:              current.ID,
+					State:           current.State,
+					LastError:       current.LastError,
+					RestartAttempts: current.RestartAttempts,
+					StderrTail:      current.StderrTail,
+					ToolCount:       current.ToolCount,
+					ServerName:      current.ServerName,
+					ServerVersion:   current.ServerVersion,
+					ProtocolVersion: current.ProtocolVersion,
+				}
+				mcpImpl.PublishHealthChange(entry)
+				logging.L().Debug("mcp.health.published", "topic", mcp.TopicMCPHealthChanged, "id", id, "new_state", current.State)
+				contextaudit.MustEmit(context.Background(), &acpAuditBridge{impl: a.auditImpl}, contextaudit.KindMCPHealthChanged, contextaudit.MCPHealthChangedPayload{
+					RecipeID:        id,
+					PreviousState:   previousState,
+					NewState:        current.State,
+					RestartAttempts: current.RestartAttempts,
+				}, time.Now())
+			})
 		}
 	}
 	// Pass the dispatch pool as the tools-view PoolController so

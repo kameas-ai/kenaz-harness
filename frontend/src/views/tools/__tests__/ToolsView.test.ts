@@ -11,6 +11,8 @@ function provide(seed: MCPServer[] = []) {
       listServers: async () => seed,
       startStream: async () => 'fake-mcp-sub',
       stopStream: async () => undefined,
+      healthSnapshot: async () => ({}),
+      subscribeHealthChanges: async () => 'fake-health-sub',
     } as any,
   });
   return { client };
