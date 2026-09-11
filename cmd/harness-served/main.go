@@ -278,7 +278,15 @@ func main() {
 		// SD-16 (served-mode-is-a-real-mode-01PMZ707 WP08): both served
 		// entry points must agree — see main.go's identical wiring.
 		serve.WithStreamQueueCap(serve.StreamQueueCapFromEnv(os.Getenv)))
-	if serveErr := srv.Serve(ctx); serveErr != nil && serveErr != context.Canceled {
+	serveErr := srv.Serve(ctx)
+
+	// #70: shared with main.go's runServeMode via serve.ShutdownServedCore
+	// (see that function's doc comment for the full rationale) so both
+	// served entry points cannot drift from each other. Runs even when
+	// serveErr is a real error.
+	serve.ShutdownServedCore(ctx, api, c, log, "harness-served")
+
+	if serveErr != nil && serveErr != context.Canceled {
 		log.Error("harness-served: server error", "err", serveErr)
 		os.Exit(1)
 	}

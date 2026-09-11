@@ -531,7 +531,20 @@ func runServeMode(listenAddr string) {
 		// config surface WithStreamQueueCap's "constrained workbench" half
 		// never had. 0 (absent/invalid) keeps serve.defaultStreamQueueCap.
 		serve.WithStreamQueueCap(serve.StreamQueueCapFromEnv(os.Getenv)))
-	if serveErr := srv.Serve(ctx); serveErr != nil && serveErr != context.Canceled {
+	serveErr := srv.Serve(ctx)
+
+	// #70: on a real SIGTERM/SIGINT, installServeShutdownSignal's cancel()
+	// unblocks Serve with context.Canceled (verified by SD-11 above), so
+	// this point is genuinely reached on every served exit, not just a
+	// clean one. Before this, the function returned here having closed
+	// nothing core owns: no final WAL checkpoint, no orderly MCP child
+	// teardown, no telemetry flush. serve.ShutdownServedCore documents
+	// the api.Shutdown()-then-core.Shutdown() ordering; it runs even
+	// when serveErr is a real error, so the os.Exit(1) below no longer
+	// skips teardown.
+	serve.ShutdownServedCore(ctx, api, c, serveLog, "harness.serve")
+
+	if serveErr != nil && serveErr != context.Canceled {
 		serveLog.Error("harness.serve: server error", "err", serveErr)
 		os.Exit(1)
 	}
