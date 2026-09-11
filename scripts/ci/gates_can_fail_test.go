@@ -1639,8 +1639,15 @@ func TestServedModeTopicForwardingGate_PlantedOrphanBroadcastFires(t *testing.T)
 	defer cleanupConst()
 
 	wsstreamPath := filepath.Join(root, "core", "serve", "wsstream.go")
-	const target = "\tmcpview.TopicMCPHealthChanged,\n}\n"
-	mutated := "\tmcpview.TopicMCPHealthChanged,\n\trpc.TopicZzGateProbeServedOrphan,\n}\n"
+	// Anchored to the ENTRY LINE, not to "entry + closing brace". The
+	// original anchor was "\tmcpview.TopicMCPHealthChanged,\n}\n", which
+	// silently assumed that topic was the LAST element of passthroughTopics
+	// -- it stopped being last the moment the #336 follow-up appended five
+	// more, and this proof broke with "target text not found". Finding #67
+	// is the same class (a planted proof depending on file ORDER rather than
+	// content); anchor on content so appending to the slice cannot break it.
+	const target = "\tmcpview.TopicMCPHealthChanged,\n"
+	mutated := "\tmcpview.TopicMCPHealthChanged,\n\trpc.TopicZzGateProbeServedOrphan,\n"
 	cleanupSlice := plantReplace(t, wsstreamPath, target, mutated)
 	defer cleanupSlice()
 
@@ -1690,8 +1697,19 @@ func TestServedModeTopicForwardingGate_PlantedPassthroughDiscoveryFloorFires(t *
 	cleanupOpen := plantReplace(t, wsstreamPath, openTarget, openMutated)
 	defer cleanupOpen()
 
-	const closeTarget = "\tmcpview.TopicMCPHealthChanged,\n}\n"
-	const closeMutated = "\tmcpview.TopicMCPHealthChanged,\n\t}\n)\n"
+	// Unlike the proof above, this one genuinely needs the DECLARATION'S
+	// TERMINATOR: it wraps the whole declaration in a grouped var (...)
+	// block, so it must close the slice and then the group. That makes it
+	// inherently coupled to whatever entry is currently last -- it was
+	// anchored on mcpview.TopicMCPHealthChanged and broke when the #336
+	// follow-up appended five topics after it. Kept terminator-anchored on
+	// purpose (the mutation has no other valid form), and the mitigation is
+	// that plantReplace fails LOUDLY with "the anchor may have moved; update
+	// this test" rather than silently planting nothing -- which is exactly
+	// the difference between this and finding #67's silent version.
+	// If you append to passthroughTopics, update the entry named here.
+	const closeTarget = "\ttopicFleetSessionExpired,\n}\n"
+	const closeMutated = "\ttopicFleetSessionExpired,\n\t}\n)\n"
 	cleanupClose := plantReplace(t, wsstreamPath, closeTarget, closeMutated)
 	defer cleanupClose()
 
