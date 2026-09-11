@@ -6,7 +6,8 @@
  * /settings?tab=health — a query-param-gated tab a user has no reason to
  * know exists. This composable now subscribes to the
  * `storage.migration.drift-detected` broker topic (forwarded in served
- * mode via SERVED_STREAM_TOPICS, see core/serve/wsstream_topics_parity_test.go)
+ * mode via SERVED_STREAM_TOPICS, generated from core/serve/wsstream.go's
+ * passthroughTopics — see frontend/src/lib/servedStreamTopics.gen.ts)
  * and surfaces a persistent toast when the payload's hasError is true.
  *
  * Tests run in served mode (no window.runtime) via dispatchServedEvent,

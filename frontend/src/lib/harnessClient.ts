@@ -17,6 +17,7 @@
 import { ServedTransport } from './servedTransport';
 import { ServedUnsupportedError } from './errors';
 import { dispatchServedEvent } from './useServedEvents';
+import { SERVED_STREAM_TOPICS } from './servedStreamTopics.gen';
 
 import type {
   AutonomyLayer,
@@ -4499,43 +4500,21 @@ export function createUnsupportedServedClient(): HarnessClient {
  * event bus so `useEventStream(topic, …)` receives it exactly as it would
  * over the Wails bridge on the desktop — no per-topic component changes.
  *
- * Keep this list in sync with `passthroughTopics` in core/serve/wsstream.go.
- * A topic present there but missing here is delivered to the browser and
- * then dropped on the floor, which looks to the user like the backend
- * hanging.
+ * Re-exported from the GENERATED servedStreamTopics.gen.ts (findings
+ * #63/#62): this used to be a hand-maintained array that had to be kept
+ * in sync with `passthroughTopics` by hand, plus a second hand-copied
+ * mirror in harnessClient.wp06Overlay.test.ts — the three-way drift that
+ * let mcp:health-changed go missing from all three at once. There is now
+ * exactly one authored list (passthroughTopics in wsstream.go); this one
+ * is derived by `go generate ./core/serve/...` and drift is caught by
+ * scripts/ci/check-codegen.sh, not by a runtime parity test. A topic
+ * missing from passthroughTopics is delivered to the browser and then
+ * dropped on the floor, which looks to the user like the backend
+ * hanging — that failure mode still exists, it just can no longer be
+ * caused by this file falling out of sync, because this file has no
+ * independent content to fall out of sync.
  */
-export const SERVED_STREAM_TOPICS = [
-  // Chat streaming.
-  'llm:stream-chunk',
-  'llm:stream-closed',
-  'llm:fallback-attempted',
-  // Per-turn accounting rendered inline in the chat surface.
-  'session.usage.updated',
-  'cost.threshold.crossed',
-  // Interactive gates. A tool call BLOCKS on the user's answer, so a
-  // dropped permission-pending event reads as "the harness hung".
-  'bash:permission-pending',
-  'cred:permission-pending',
-  'fs:permission-pending',
-  'tool:permission-pending',
-  // Blocking elicitation (kenaz__ask_user_question).
-  'elicit:pending',
-  // Confirm-each tool confirmation. Same reasoning as the permission
-  // gates above and then some: the tool call is parked with NO deadline,
-  // so a dropped frame is not a missed notification — it is a turn that
-  // never resumes.
-  'tool:confirm-pending',
-  // Mid-turn context-overflow recovery (01PMGX01 WP17). The backend
-  // compacted the session and re-drove the turn; the reply is still
-  // coming. Dropping this leaves the compaction pause looking like a
-  // hang — the same failure shape as the gates above, minus the block.
-  'chat:overflow-recovery',
-  // Boot-time migration drift, severity:"error" only
-  // (upgrade-path-coverage-01PMUG01 WP04, FR-3c). useEventToasts.ts
-  // surfaces a persistent toast so a served workbench user with a
-  // corrupted ledger isn't left with no signal at all.
-  'storage.migration.drift-detected',
-] as const;
+export { SERVED_STREAM_TOPICS };
 
 /**
  * SERVED_STREAM_TRUNCATED is the transport-level event the served server

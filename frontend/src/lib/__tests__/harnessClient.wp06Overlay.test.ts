@@ -6,11 +6,26 @@
  *  1. AC-715 — no non-function, non-object value survives
  *     createUnsupportedServedClient() unwrapped.
  *  2. G-703 / AC-716 — SERVED_STREAM_TOPICS (TS) and passthroughTopics
- *     (Go, core/serve/wsstream.go) agree. The Go side already has its own
- *     cross-check (wsstream_topics_parity_test.go, which parses this
- *     file's array literal out of the TS source); this is the TS side's
- *     own local assertion so frontend CI catches drift in the same job a
- *     SERVED_STREAM_TOPICS edit lands in, not only in the separate Go job.
+ *     (Go, core/serve/wsstream.go) agree.
+ *
+ *     Findings #63/#62 (served-topic-single-source, 2026-09) collapsed
+ *     what this describe block used to check by hand: SERVED_STREAM_TOPICS
+ *     is no longer an independently-authored array here — it is
+ *     re-exported from frontend/src/lib/servedStreamTopics.gen.ts, which
+ *     `go generate ./core/serve/...` derives directly from
+ *     passthroughTopics (via serve.PassthroughTopics()). The hand-copied
+ *     `EXPECTED_GO_PASSTHROUGH_TOPICS` mirror this block used to carry —
+ *     a THIRD hand-maintained copy of the same list, alongside
+ *     passthroughTopics and SERVED_STREAM_TOPICS itself — is deleted:
+ *     comparing a generated value against a second hand-copy would have
+ *     reintroduced exactly the drift class this finding closes. Parity
+ *     is now enforced by scripts/ci/check-codegen.sh regenerating and
+ *     byte-diffing servedStreamTopics.gen.ts, which is strictly stronger
+ *     than this test's old regex-based set-equality check (it catches
+ *     ordering/comment/format drift too, not just membership). The
+ *     surviving assertion below is a cheap same-job sanity check that
+ *     the re-export actually resolved to real content, not a parity
+ *     check — that job now belongs entirely to check-codegen.sh.
  *
  * Also documents `research/served-client-overlay.md`'s finding: today
  * every leaf of createFakeHarnessClient()'s output is a function or a
@@ -85,33 +100,16 @@ describe('confirm overlay is total (WP06)', () => {
 });
 
 describe('SERVED_STREAM_TOPICS ↔ passthroughTopics parity (G-703, AC-716)', () => {
-  // Sourced by running `go test ./core/serve/... -run TestPrintPassthroughTopics`
-  // against core/serve/wsstream.go's passthroughTopics (RAN, not assumed —
-  // see the WP06 commit message / mission report for the exact command).
-  // core/serve/wsstream_topics_parity_test.go is the authoritative
-  // cross-check; this list is a maintained mirror so this file's own test
-  // run catches drift too.
-  const EXPECTED_GO_PASSTHROUGH_TOPICS = [
-    'llm:stream-chunk',
-    'llm:stream-closed',
-    'llm:fallback-attempted',
-    'session.usage.updated',
-    'cost.threshold.crossed',
-    'bash:permission-pending',
-    'cred:permission-pending',
-    'fs:permission-pending',
-    'tool:permission-pending',
-    'elicit:pending',
-    'chat:overflow-recovery',
-    'tool:confirm-pending',
-    'storage.migration.drift-detected',
-  ].sort();
-
-  it('SERVED_STREAM_TOPICS matches the Go-side passthroughTopics set exactly', () => {
-    // *Falsify*: add a topic to either list without the other → this goes
-    // red (either an extra or a missing entry in the diff).
-    expect([...SERVED_STREAM_TOPICS].sort()).toEqual(
-      EXPECTED_GO_PASSTHROUGH_TOPICS,
-    );
+  // Parity itself is scripts/ci/check-codegen.sh's job now (see the
+  // module doc comment above) — it regenerates
+  // servedStreamTopics.gen.ts from the live Go source and byte-diffs it
+  // against what's committed, which is strictly stronger than a
+  // hand-maintained expected-list comparison. This is a same-job sanity
+  // check that the generated re-export actually has content, catching
+  // the failure mode where the import path is wrong or the generated
+  // file was accidentally emptied.
+  it('SERVED_STREAM_TOPICS is a non-empty generated set with no duplicates', () => {
+    expect(SERVED_STREAM_TOPICS.length).toBeGreaterThan(0);
+    expect(new Set(SERVED_STREAM_TOPICS).size).toBe(SERVED_STREAM_TOPICS.length);
   });
 });

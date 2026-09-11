@@ -111,6 +111,50 @@ EOF
   exit 1
 fi
 
+# ---- served-mode topic-forwarding parity gate ----
+# Running go generate ./core/serve/... regenerates
+# frontend/src/lib/servedStreamTopics.gen.ts from the canonical
+# passthroughTopics slice in core/serve/wsstream.go (via the exported
+# serve.PassthroughTopics() accessor). If a topic is added to
+# passthroughTopics without re-running the generator the committed TS
+# file drifts, and SERVED_STREAM_TOPICS (re-exported from it by
+# harnessClient.ts) silently stops matching what core/serve actually
+# forwards. This collapses what used to be three hand-maintained copies
+# (passthroughTopics, SERVED_STREAM_TOPICS, and a third hand-copied
+# mirror in harnessClient.wp06Overlay.test.ts) down to one authored
+# list plus one generated file.
+echo "check-codegen: running 'go generate ./core/serve/...' from ${REPO_ROOT}"
+if ! go generate ./core/serve/...; then
+  echo "check-codegen: go generate ./core/serve/... FAILED" >&2
+  exit 2
+fi
+
+SERVE_TS_PATTERN='frontend/src/lib/servedStreamTopics.gen.ts'
+UNTRACKED_SERVE=$(git ls-files --others --exclude-standard -- ${SERVE_TS_PATTERN})
+if [[ -n "${UNTRACKED_SERVE}" ]]; then
+  echo "check-codegen: UNTRACKED generated file detected:" >&2
+  echo "${UNTRACKED_SERVE}" >&2
+  echo "Run 'git add' and commit the generated servedStreamTopics.gen.ts." >&2
+  exit 1
+fi
+# shellcheck disable=SC2086
+if ! git diff --exit-code -- ${SERVE_TS_PATTERN}; then
+  cat >&2 <<EOF
+
+check-codegen: SERVED-STREAM-TOPICS DRIFT DETECTED.
+
+The committed frontend/src/lib/servedStreamTopics.gen.ts does not match
+what 'go generate ./core/serve/...' produces now. This usually means a
+topic was added to or removed from passthroughTopics
+(core/serve/wsstream.go) without regenerating the TS file.
+
+Fix: run 'go generate ./core/serve/...' locally and commit the diff
+above alongside the Go change.
+
+EOF
+  exit 1
+fi
+
 # ---- wailsjs binding source → committed hash gate ----
 #
 # `wails generate module` requires the Wails toolchain (CGO + macOS/Windows

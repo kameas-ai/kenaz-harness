@@ -10,8 +10,10 @@ import (
 
 	"golang.org/x/net/websocket"
 
+	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
+	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
 )
 
 // wsstream.go owns the served-mode WebSocket fan-out: it bridges the
@@ -143,9 +145,11 @@ var passthroughTopics = []string{
 
 	// Per-turn accounting the chat surface renders inline.
 	rpc.TopicSessionUsageUpdated,
-	// rpc.TopicCostThresholdCrossed stays SUBSCRIBED (it must, or
-	// TestPassthroughTopics_MatchServedStreamTopicsTS fails against the
-	// frontend's SERVED_STREAM_TOPICS) but never DELIVERED: its payload
+	// rpc.TopicCostThresholdCrossed stays SUBSCRIBED (it must — removing
+	// it here also removes it from the generated SERVED_STREAM_TOPICS
+	// via `go generate ./core/serve/...`, so the frontend would stop
+	// gating it into dispatchServedEvent entirely) but never DELIVERED:
+	// its payload
 	// (usage.ThresholdCrossedPayload) is a calendar-month account
 	// aggregate with no SessionID field at all, unlike every other
 	// entry in this list. frameFor's sessionIDOf probe therefore always
@@ -191,6 +195,84 @@ var passthroughTopics = []string{
 	// the desktop build's toast is the only surface, and served mode has
 	// no other path to Settings → Health either.
 	rpc.TopicMigrationDriftDetected,
+
+	// Five topics closed by the served-mode-topic-forwarding-gaps
+	// allowlist follow-up (scripts/ci/allowlists/served-mode-topic-
+	// forwarding-gaps.txt, gate added on fix/z303-mcp-health-truth /
+	// PR #336): each has a real frontend useEventStream subscriber but
+	// was missing here, so a served client silently never received it.
+	// Per-topic session-scoping disposition below; the three that are
+	// process-wide also need a processWideTopics entry (below) or
+	// D-705's fail-closed filter drops them anyway — the exact bug the
+	// gate's own header documents for mcp:health-changed.
+
+	// TopicContextBootstrapProgress: contextbootstrap.RunStatus
+	// (core/contextbootstrap/types.go) carries no session id field, and
+	// verified NOT a missing-field bug — the onboarding bootstrap engine
+	// runs at most one run process-wide at a time (bootstrapProgressSink
+	// tracks a single runID, not a per-session map;
+	// core/rpc/contextbootstrap_wiring.go), and its only frontend
+	// consumer (BootstrapStep.vue) renders during onboarding, not inside
+	// a chat session. processWideTopics entry below.
+	rpc.TopicContextBootstrapProgress,
+
+	// elicitview.TopicElicitDeferred: payload is elicitview.ElicitRequest,
+	// the SAME struct TopicElicitPending already forwards above — it
+	// already carries SessionID (api.go), populated from
+	// toolloop.SessionIDFromContext the same way. Session-scoped with no
+	// further change needed.
+	elicitview.TopicElicitDeferred,
+
+	// elicitview.TopicElicitDeferredAnswered: DeferredAnsweredPayload
+	// previously carried no session id. Fixed alongside this entry
+	// (core/rpc/views/elicit/api.go AnswerDeferred now reads
+	// elicitation.Registry.Get(askID).SessionID and stamps it onto the
+	// payload) rather than exempted into processWideTopics — a deferred
+	// ask's pill lives in one session's chat header
+	// (DeferredAskPill.vue), so broadcasting its answer to every
+	// connected session would be a cross-session leak of the same shape
+	// D-705 exists to prevent, not a legitimate process-wide signal.
+	elicitview.TopicElicitDeferredAnswered,
+
+	// corefleet.TopicFleetLockdownChanged: LockdownChangedPayload
+	// (core/fleet/lockdown.go) is {Active, Reason} — no session concept.
+	// A fleet lockdown affects the whole harness process, and its
+	// frontend consumer (LockdownBanner) is a global banner, not a
+	// per-session component. processWideTopics entry below.
+	corefleet.TopicFleetLockdownChanged,
+
+	// corefleet.TopicFleetSessionExpired: the allowlist's placeholder
+	// note speculated this "plausibly carries a session id already"
+	// because of the name. Verified false: SessionExpiredPayload
+	// (core/fleet/http.go) is {Reason} only, and the "session" in the
+	// name is the fleet control-plane AUTH session (access-token
+	// refresh failure), not a chat session — there is no session id to
+	// carry. Its only frontend consumer (SessionExpiredBanner.vue) is a
+	// global banner. processWideTopics entry below.
+	corefleet.TopicFleetSessionExpired,
+}
+
+// PassthroughTopics returns a copy of passthroughTopics: the bus topics
+// forwarded to served-mode clients verbatim.
+//
+// This is the single source of truth findings #63/#62 collapse three
+// hand-maintained copies into: core/serve/cmd/gen-served-topics (driven
+// by `go generate ./core/serve/...`, declared in topics_gen.go) calls
+// this to emit frontend/src/lib/servedStreamTopics.gen.ts, which
+// harnessClient.ts re-exports as SERVED_STREAM_TOPICS. Drift between the
+// two is no longer merely detected (the old wsstream_topics_parity_test.go
+// regex-parsed the TS file at Go-test time to catch it after the fact) —
+// it cannot occur without scripts/ci/check-codegen.sh failing, the same
+// gate that already covers frontend/src/lib/capability-keys.ts.
+//
+// Exported for that generator only. Production code that wants to know
+// whether a topic is forwarded should drive a real event through the
+// server, not introspect this list (see core/serve/wsstream_mcp_health_topic_test.go
+// for the pattern).
+func PassthroughTopics() []string {
+	out := make([]string, len(passthroughTopics))
+	copy(out, passthroughTopics)
+	return out
 }
 
 // subscribedTopics is every topic the WS handler subscribes to: the
@@ -426,8 +508,24 @@ func (s *Server) runPump(ctx context.Context, p *streamPump, sessionID string) {
 // session to scope it to. Anything added here must be justified the
 // same way SD-14's disposition required for the filter itself: this is
 // an intentional exemption from D-705, not a shortcut around it.
+//
+// TopicContextBootstrapProgress, TopicFleetLockdownChanged,
+// TopicFleetSessionExpired: served-mode-topic-forwarding-gaps follow-up
+// (2026-09, closing the allowlist scripts/ci/allowlists/served-mode-
+// topic-forwarding-gaps.txt froze on fix/z303-mcp-health-truth /
+// PR #336). Each payload was verified to carry no session id and to be
+// genuinely process-wide in the same sense TopicMigrationDriftDetected
+// is — see the per-topic comments on their passthroughTopics entries
+// above for the evidence (payload shape + frontend consumer). NOT
+// exempted here: TopicElicitDeferredAnswered — that one genuinely IS
+// session-scoped (a deferred ask's pill belongs to one session's chat
+// header) and was fixed by adding a SessionID field to the payload
+// instead (core/rpc/views/elicit/api.go), not by broadcasting it.
 var processWideTopics = map[string]bool{
-	rpc.TopicMigrationDriftDetected: true,
+	rpc.TopicMigrationDriftDetected:     true,
+	rpc.TopicContextBootstrapProgress:   true,
+	corefleet.TopicFleetLockdownChanged: true,
+	corefleet.TopicFleetSessionExpired:  true,
 }
 
 // sessionIDOf extracts the session id from a bus event payload without
