@@ -1,0 +1,38 @@
+# I18 — nil-optional-dependency class.
+#
+# Enforced by scripts/ci/check-nil-optional-deps.sh /
+# scripts/ci/cmd/checknilopts. An interface field on a struct, documented
+# by its own author as optional ("nil is allowed" / "nil causes …" /
+# "nil disables …"), with no production assignment anywhere under core/
+# or cmd/ — a composite-literal field or a Set*/With* call. See that
+# tool's header for the three missions (model-scheduled-jobs-01PMSJ01,
+# model-settings-reach-the-model-01PMZ101, fleet-enforcement-truth-
+# 01PMZ505) that each specced this gate and the design disagreement that
+# left it unbuilt, per docs/unwired-ledger.md's 2026-08-20 entry.
+#
+# Format: one line per violation, copied verbatim from the gate's
+# stderr, followed by a `#` comment carrying the DATE, the BLOCKER, and
+# the change that will delete the line. "We'll get to it" is not a
+# reason. Entries shrink monotonically — a line that no longer matches a
+# real violation is STALE and fails the gate.
+#
+# Calibration run 2026-09-10 (this gate's introduction): 33 optional-by-
+# doc-comment interface fields found under core/+cmd/, 32 already wired
+# in production. One entry below — pre-existing, already carrying its
+# own scripts/ci/check-seam-implementers.sh wiring:deferred directive
+# (core/agentgraph/seams.go:569) from an earlier sweep. Per CLAUDE.md
+# ruling A-0 (the delete/fix lane is frozen for this PR — this gate's
+# job is to surface findings, not resolve them), it is dated-justified
+# here rather than fixed.
+
+core/agentgraph/executor.go:235: Env.AttachmentRegistry (AttachmentRegistrar) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
+# 2026-09-10 — pre-existing gap, not introduced by this PR. Blocker: the
+# only candidate producer, core/attachments.Manager.AddMedia, cannot
+# satisfy AttachmentRegistrar without a design decision (what
+# scopeKind/scopeID does content registered via as_attachment bind to?)
+# that the read_file/AttachmentNode call site does not currently carry
+# — see core/agentgraph/seams.go:569's wiring:deferred directive, which
+# already names this. Owner: unassigned (entry-points-and-crash-
+# reporting-01PMZD13 UNIT-4 left it unassigned; whoever picks it up
+# should delete both this line and the wiring:deferred directive
+# together).

@@ -1916,3 +1916,115 @@ func TestNoCredentialInUI_BenignFieldsDoNotTrip(t *testing.T) {
 		})
 	}
 }
+
+// TestNilOptionalDepsGate_PlantedUnwiredFieldFires is the
+// planted-violation proof for check-nil-optional-deps.sh
+// (scripts/ci/cmd/checknilopts) — the nil-optional-dependency gate
+// three missions specced (model-scheduled-jobs-01PMSJ01 §7 G-1,
+// model-settings-reach-the-model-01PMZ101 §7 G-2,
+// fleet-enforcement-truth-01PMZ505 §7 G-1) and none built, per
+// docs/unwired-ledger.md's 2026-08-20 entry.
+//
+// OVERLAY, NOT read-mutate-restore — same reasoning as
+// TestStructuredOutputRowParityGate_PlantedEncoderDropFires above (PR
+// #323's review, reproduced against core/llm/gemini/wire.go under
+// `-timeout 1s`): a bare os.WriteFile + defer restore is not
+// kill-safe, and checknilopts's own Overlay mechanism
+// (golang.org/x/tools/go/packages's native Overlay field, fed through
+// checknilopts's NIL_OPTIONAL_DEPS_OVERLAY env var — see that
+// package's loadOverlay) makes the real file un-writable-to in the
+// first place: the mutated content lives only in a t.TempDir() scratch
+// file, and packages.Load substitutes it in-memory at type-check time.
+// A kill at any point in this test leaves core/rpc/views/scheduledchat/
+// impl.go exactly as git has it.
+//
+// The plant adds a new Config field (ZzGateProbe) with the same
+// doc-comment trigger idiom Dispatcher already carries two lines above
+// it ("nil causes …"), backed by a freshly declared interface type, and
+// never assigns it anywhere — exactly SJ01 §7 G-1's own planted-
+// violation design ("add a Config field ZzGateProbe ZzProbeDispatcher
+// … with no assignment anywhere; assert the gate exits non-zero").
+//
+// A second subtest plants the inverse (Z505 §7 G-1's explicit ask: "a
+// gate that fires on everything is as useless as one that fires on
+// nothing") — the same field, but with an in-file composite-literal
+// assignment — and asserts the gate stays clean.
+func TestNilOptionalDepsGate_PlantedUnwiredFieldFires(t *testing.T) {
+	root := repoRoot(t)
+	implPath := filepath.Join(root, "core", "rpc", "views", "scheduledchat", "impl.go")
+
+	orig, err := os.ReadFile(implPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", implPath, err)
+	}
+
+	const anchor = "\tStore scheduler.ScheduledChatStore\n"
+	if !strings.Contains(string(orig), anchor) {
+		t.Fatalf("expected Config.Store field line not found in impl.go — the struct shape may "+
+			"have moved; update this test and the gate together:\n%q", anchor)
+	}
+
+	const probeField = "\t// ZzGateProbe is a planted probe field for\n" +
+		"\t// TestNilOptionalDepsGate_PlantedUnwiredFieldFires. nil causes this\n" +
+		"\t// test to exist — deliberately never assigned anywhere, to prove\n" +
+		"\t// check-nil-optional-deps.sh can fail. Overlay-only; never written\n" +
+		"\t// to the real file.\n" +
+		"\tZzGateProbe ZzGateProbeDispatcher\n"
+	const probeType = "\n// ZzGateProbeDispatcher is a planted probe type — see Config.ZzGateProbe.\n" +
+		"type ZzGateProbeDispatcher interface {\n\tZzGateProbe()\n}\n"
+
+	buildOverlay := func(t *testing.T, extraSuffix string) string {
+		t.Helper()
+		mutated := strings.Replace(string(orig), anchor, anchor+probeField, 1) + probeType + extraSuffix
+
+		scratch := t.TempDir()
+		scratchImpl := filepath.Join(scratch, "impl_zz_gate_probe.go")
+		if err := os.WriteFile(scratchImpl, []byte(mutated), 0o644); err != nil {
+			t.Fatalf("writing scratch mutated impl.go: %v", err)
+		}
+		overlay := struct{ Replace map[string]string }{Replace: map[string]string{implPath: scratchImpl}}
+		overlayJSON, err := json.Marshal(overlay)
+		if err != nil {
+			t.Fatalf("marshalling overlay: %v", err)
+		}
+		overlayPath := filepath.Join(scratch, "overlay.json")
+		if err := os.WriteFile(overlayPath, overlayJSON, 0o644); err != nil {
+			t.Fatalf("writing overlay.json: %v", err)
+		}
+		return overlayPath
+	}
+
+	t.Run("unassigned-field-fires", func(t *testing.T) {
+		// No defer/restore anywhere in this test: implPath is never
+		// written. A kill at any point leaves nothing but an
+		// OS-cleaned scratch dir.
+		overlayPath := buildOverlay(t, "")
+		code, out := runGateEnv(t, "check-nil-optional-deps.sh", root, map[string]string{
+			"NIL_OPTIONAL_DEPS_OVERLAY": overlayPath,
+		})
+		if code == 0 {
+			t.Fatalf("check-nil-optional-deps.sh exited 0 with a planted, documented-optional "+
+				"interface field (ZzGateProbe) that is never assigned anywhere — the gate cannot "+
+				"fail.\noutput:\n%s", out)
+		}
+		if !strings.Contains(out, "ZzGateProbe") {
+			t.Fatalf("gate failed, but its output does not mention ZzGateProbe "+
+				"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+		}
+	})
+
+	t.Run("assigned-field-does-not-fire", func(t *testing.T) {
+		const wiring = "\ntype zzGateProbeImpl struct{}\n\n" +
+			"func (zzGateProbeImpl) ZzGateProbe() {}\n\n" +
+			"var zzGateProbeWired = Config{ZzGateProbe: zzGateProbeImpl{}}\n"
+		overlayPath := buildOverlay(t, wiring)
+		code, out := runGateEnv(t, "check-nil-optional-deps.sh", root, map[string]string{
+			"NIL_OPTIONAL_DEPS_OVERLAY": overlayPath,
+		})
+		if code != 0 {
+			t.Fatalf("check-nil-optional-deps.sh flagged ZzGateProbe even though this variant "+
+				"assigns it a non-nil value in a production composite literal — the gate fires on "+
+				"everything, not just the real defect class.\noutput:\n%s", out)
+		}
+	})
+}
