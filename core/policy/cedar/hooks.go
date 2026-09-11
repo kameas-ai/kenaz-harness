@@ -899,6 +899,21 @@ func GateSubagentPause(ctx context.Context, g Gate, branchID string) (Decision, 
 	return d, enforce(d)
 }
 
+// GateSubagentResume is GateSubagentPause's resume-action mirror
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8, AC-09).
+func GateSubagentResume(ctx context.Context, g Gate, branchID string) (Decision, error) {
+	if g == nil {
+		return Decision{
+			Outcome:  Allow,
+			Action:   ActionToolSubagentResume,
+			Resource: SubagentBranchUID(branchID).String(),
+			Reason:   "no engine wired (default-allow)",
+		}, nil
+	}
+	d := g.Evaluate(ctx, UserUID(), ActionToolSubagentResume, SubagentBranchUID(branchID), nil)
+	return d, enforce(d)
+}
+
 // CheckExportSession is the gate-hook helper for the Sessions_Export RPC
 // (session-export-01NDFSEX05 WP01). Returns nil on Allow / NotApplicable;
 // *PolicyDeniedError on Deny. Default-allow when g is nil.

@@ -783,6 +783,297 @@ func forbidSubagentPauseEngine(t *testing.T, branchID string) *cedar.Engine {
 	return e
 }
 
+// forbidSubagentResumeEngine is forbidSubagentPauseEngine's resume-action
+// mirror.
+func forbidSubagentResumeEngine(t *testing.T, branchID string) *cedar.Engine {
+	t.Helper()
+	e, err := cedar.NewEngine(cedar.Options{LoadFromDisk: false, IncludeEmbedded: false})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	src := fmt.Sprintf(`forbid (
+    principal == User::"local",
+    action == Action::"tool.subagent.resume",
+    resource == SubagentBranch::"%s"
+);`, branchID)
+	if err := e.SetPolicyText("deny_resume.cedar", []byte(src)); err != nil {
+		t.Fatalf("SetPolicyText: %v", err)
+	}
+	return e
+}
+
+// TestAPI_PauseSubagent_AllowedByDefault_ArmsSignalAndAuditsOnce is
+// AC-09's positive half for Pause: against a live sub-agent branch, the
+// call produces its observable effect (PauseControl.Pause is actually
+// invoked with the branch's child session id) and writes exactly one
+// audit record.
+func TestAPI_PauseSubagent_AllowedByDefault_ArmsSignalAndAuditsOnce(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, pc, em := newSubagentPauseTestStack(t)
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, err := api.CreateBranch(ctx, CreateBranchOptions{ParentSessionID: parent.ID, Title: "worker"})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+
+	if err := api.PauseSubagent(ctx, br.ID); err != nil {
+		t.Fatalf("PauseSubagent: %v", err)
+	}
+	if got := pc.pauseCalls(); len(got) != 1 || got[0] != br.ChildSessionID {
+		t.Fatalf("pause calls = %v, want [%s]", got, br.ChildSessionID)
+	}
+	if !pc.isPaused(br.ChildSessionID) {
+		t.Error("child session must be paused after PauseSubagent")
+	}
+
+	var found []audit.Event
+	for _, e := range em.snapshot() {
+		if e.Kind == audit.KindSubagentPaused {
+			found = append(found, e)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("KindSubagentPaused count = %d, want 1 (got events: %v)", len(found), em.snapshot())
+	}
+	var payload audit.SubagentPausedPayload
+	if err := json.Unmarshal(found[0].Payload, &payload); err != nil {
+		t.Fatalf("unmarshal SubagentPausedPayload: %v", err)
+	}
+	if payload.BranchID != br.ID {
+		t.Errorf("payload.BranchID = %q, want %q", payload.BranchID, br.ID)
+	}
+}
+
+// TestAPI_PauseSubagent_DeniedByRealCedarPolicy is AC-09's negative
+// half for Pause. Fails (as intended) if the cedar.GateSubagentPause
+// call is removed from PauseSubagent — the deny case starts passing,
+// exactly the mutation AC-09 names.
+func TestAPI_PauseSubagent_DeniedByRealCedarPolicy(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, pc, _ := newSubagentPauseTestStack(t)
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, err := api.CreateBranch(ctx, CreateBranchOptions{ParentSessionID: parent.ID, Title: "worker"})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	api.cfg.Cedar = forbidSubagentPauseEngine(t, br.ID)
+
+	err = api.PauseSubagent(ctx, br.ID)
+	if !errors.Is(err, ErrCedarDenied) {
+		t.Fatalf("PauseSubagent: got %v, want ErrCedarDenied", err)
+	}
+	if got := pc.pauseCalls(); len(got) != 0 {
+		t.Errorf("pause calls = %v, want none — the gate must short-circuit before PauseControl.Pause", got)
+	}
+}
+
+// TestAPI_PauseSubagent_Idempotent_OneAuditRecordNotTwo pins the
+// mirrored idempotency contract: a second Pause while already paused
+// writes one audit record, not two (AC-09).
+func TestAPI_PauseSubagent_Idempotent_OneAuditRecordNotTwo(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, pc, em := newSubagentPauseTestStack(t)
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, err := api.CreateBranch(ctx, CreateBranchOptions{ParentSessionID: parent.ID, Title: "worker"})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+
+	if err := api.PauseSubagent(ctx, br.ID); err != nil {
+		t.Fatalf("first PauseSubagent: %v", err)
+	}
+	if err := api.PauseSubagent(ctx, br.ID); err != nil {
+		t.Fatalf("second (idempotent) PauseSubagent: got error %v, want nil", err)
+	}
+	if got := pc.pauseCalls(); len(got) != 2 {
+		t.Fatalf("pause calls = %v, want 2 (both calls should reach PauseControl.Pause; the SECOND is what proves idempotency, not a skipped call)", got)
+	}
+
+	var found []audit.Event
+	for _, e := range em.snapshot() {
+		if e.Kind == audit.KindSubagentPaused {
+			found = append(found, e)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("KindSubagentPaused count = %d after 2 Pause calls, want exactly 1", len(found))
+	}
+}
+
+// TestAPI_PauseSubagent_PauseControlUnavailable covers the
+// degraded-boot case (Config.PauseControl unset).
+func TestAPI_PauseSubagent_PauseControlUnavailable(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, _ := newTestStack(t) // no PauseControl wired
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, err := api.CreateBranch(ctx, CreateBranchOptions{ParentSessionID: parent.ID, Title: "worker"})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	if err := api.PauseSubagent(ctx, br.ID); !errors.Is(err, ErrSubagentUnavailable) {
+		t.Errorf("got %v, want ErrSubagentUnavailable", err)
+	}
+}
+
+// TestAPI_PauseSubagent_TerminalOrNeverDispatchedBranch defines the
+// behaviour the mission brief asks for explicitly: "Pause on an
+// already-terminal one" (mirroring Abort's idempotency posture from
+// PR #331). Unlike Abort, Pause does not consult the task registry at
+// all — it only arms a session-keyed signal the run loop may or may
+// not ever consult again. Pausing a branch whose sub-agent already
+// finished (or was never dispatched) is therefore well-defined and
+// harmless: it succeeds and audits once, exactly like pausing a live
+// one, because from this package's perspective nothing distinguishes
+// the two cases (no TaskLookup dependency is wired for Pause/Resume).
+func TestAPI_PauseSubagent_TerminalOrNeverDispatchedBranch(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, pc, em := newSubagentPauseTestStack(t)
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, err := api.CreateBranch(ctx, CreateBranchOptions{ParentSessionID: parent.ID, Title: "worker"})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	// No task registry / dispatch involved at all — this package never
+	// learns whether a sub-agent run ever started or already finished.
+	if err := api.PauseSubagent(ctx, br.ID); err != nil {
+		t.Fatalf("PauseSubagent on a never-dispatched branch: got %v, want nil", err)
+	}
+	if !pc.isPaused(br.ChildSessionID) {
+		t.Error("the pause signal must still be armed even though nothing may ever consult it")
+	}
+	var found int
+	for _, e := range em.snapshot() {
+		if e.Kind == audit.KindSubagentPaused {
+			found++
+		}
+	}
+	if found != 1 {
+		t.Errorf("KindSubagentPaused count = %d, want 1", found)
+	}
+}
+
+// TestAPI_ResumeSubagent_AllowedByDefault_ClearsSignalAndAuditsOnce is
+// AC-09's positive half for Resume.
+func TestAPI_ResumeSubagent_AllowedByDefault_ClearsSignalAndAuditsOnce(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, pc, em := newSubagentPauseTestStack(t)
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, err := api.CreateBranch(ctx, CreateBranchOptions{ParentSessionID: parent.ID, Title: "worker"})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	if err := api.PauseSubagent(ctx, br.ID); err != nil {
+		t.Fatalf("PauseSubagent: %v", err)
+	}
+
+	if err := api.ResumeSubagent(ctx, br.ID); err != nil {
+		t.Fatalf("ResumeSubagent: %v", err)
+	}
+	if got := pc.resumeCalls(); len(got) != 1 || got[0] != br.ChildSessionID {
+		t.Fatalf("resume calls = %v, want [%s]", got, br.ChildSessionID)
+	}
+	if pc.isPaused(br.ChildSessionID) {
+		t.Error("child session must not be paused after ResumeSubagent")
+	}
+
+	var found []audit.Event
+	for _, e := range em.snapshot() {
+		if e.Kind == audit.KindSubagentResumed {
+			found = append(found, e)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("KindSubagentResumed count = %d, want 1 (got events: %v)", len(found), em.snapshot())
+	}
+	var payload audit.SubagentResumedPayload
+	if err := json.Unmarshal(found[0].Payload, &payload); err != nil {
+		t.Fatalf("unmarshal SubagentResumedPayload: %v", err)
+	}
+	if payload.BranchID != br.ID {
+		t.Errorf("payload.BranchID = %q, want %q", payload.BranchID, br.ID)
+	}
+}
+
+// TestAPI_ResumeSubagent_DeniedByRealCedarPolicy is AC-09's negative
+// half for Resume. Fails if cedar.GateSubagentResume is removed from
+// ResumeSubagent.
+func TestAPI_ResumeSubagent_DeniedByRealCedarPolicy(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, pc, _ := newSubagentPauseTestStack(t)
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, err := api.CreateBranch(ctx, CreateBranchOptions{ParentSessionID: parent.ID, Title: "worker"})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	if err := api.PauseSubagent(ctx, br.ID); err != nil {
+		t.Fatalf("PauseSubagent: %v", err)
+	}
+	api.cfg.Cedar = forbidSubagentResumeEngine(t, br.ID)
+
+	err = api.ResumeSubagent(ctx, br.ID)
+	if !errors.Is(err, ErrCedarDenied) {
+		t.Fatalf("ResumeSubagent: got %v, want ErrCedarDenied", err)
+	}
+	if !pc.isPaused(br.ChildSessionID) {
+		t.Error("child session must remain paused under a denying gate")
+	}
+}
+
+// TestAPI_ResumeSubagent_NotPaused_Idempotent defines and tests the
+// second explicitly-requested behaviour: "Resume on a non-paused
+// sub-agent" — a no-op that writes no audit record, mirroring Abort's
+// idempotency posture (the state never changed, so there is nothing
+// new to attest to).
+func TestAPI_ResumeSubagent_NotPaused_Idempotent(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, pc, em := newSubagentPauseTestStack(t)
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, err := api.CreateBranch(ctx, CreateBranchOptions{ParentSessionID: parent.ID, Title: "worker"})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	// Never paused.
+	if err := api.ResumeSubagent(ctx, br.ID); err != nil {
+		t.Fatalf("ResumeSubagent on a never-paused branch: got %v, want nil", err)
+	}
+	if got := pc.resumeCalls(); len(got) != 1 {
+		t.Fatalf("resume calls = %v, want 1 (the call must still reach PauseControl.Resume)", got)
+	}
+	var found int
+	for _, e := range em.snapshot() {
+		if e.Kind == audit.KindSubagentResumed {
+			found++
+		}
+	}
+	if found != 0 {
+		t.Errorf("KindSubagentResumed count = %d, want 0 (nothing changed, nothing to audit)", found)
+	}
+}
+
+// TestAPI_ResumeSubagent_PauseControlUnavailable covers the
+// degraded-boot case (Config.PauseControl unset).
+func TestAPI_ResumeSubagent_PauseControlUnavailable(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, _ := newTestStack(t) // no PauseControl wired
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, err := api.CreateBranch(ctx, CreateBranchOptions{ParentSessionID: parent.ID, Title: "worker"})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	if err := api.ResumeSubagent(ctx, br.ID); !errors.Is(err, ErrSubagentUnavailable) {
+		t.Errorf("got %v, want ErrSubagentUnavailable", err)
+	}
+}
+
 // TestAPI_PauseSubagent_InvalidArgs covers empty branchID.
 func TestAPI_PauseSubagent_InvalidArgs(t *testing.T) {
 	t.Parallel()
@@ -790,5 +1081,15 @@ func TestAPI_PauseSubagent_InvalidArgs(t *testing.T) {
 	ctx := context.Background()
 	if err := api.PauseSubagent(ctx, ""); !errors.Is(err, ErrInvalidArg) {
 		t.Errorf("PauseSubagent(\"\"): got %v, want ErrInvalidArg", err)
+	}
+}
+
+// TestAPI_ResumeSubagent_InvalidArgs covers empty branchID.
+func TestAPI_ResumeSubagent_InvalidArgs(t *testing.T) {
+	t.Parallel()
+	api, _, _, _ := newSubagentPauseTestStack(t)
+	ctx := context.Background()
+	if err := api.ResumeSubagent(ctx, ""); !errors.Is(err, ErrInvalidArg) {
+		t.Errorf("ResumeSubagent(\"\"): got %v, want ErrInvalidArg", err)
 	}
 }

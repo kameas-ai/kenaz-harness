@@ -202,6 +202,14 @@ type BranchesAPI interface {
 	// actually arms the signal (a second Pause while already paused is
 	// a no-op, writes no additional audit record).
 	PauseSubagent(ctx context.Context, branchID string) error
+
+	// ResumeSubagent clears a dispatched sub-agent's turn-pause signal
+	// so its next turn begins again (UNIT-8). Gated by
+	// cedar.ActionToolSubagentResume and audited once per call that
+	// actually clears an armed signal (Resume on a branch that was
+	// never paused, or already resumed, is a no-op, writes no
+	// additional audit record).
+	ResumeSubagent(ctx context.Context, branchID string) error
 }
 
 // fmtTime renders a time.Time as RFC3339Nano UTC, returning "" for the

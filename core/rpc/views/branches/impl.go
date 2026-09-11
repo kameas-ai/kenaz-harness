@@ -41,19 +41,18 @@ var ErrCedarDenied = errors.New("branches: denied by cedar policy")
 // ErrManagerUnavailable's posture for the rest of this API).
 var ErrSubagentUnavailable = errors.New("branches: subagent pause control unavailable")
 
-// SubagentPauseControl is the narrow surface PauseSubagent needs
-// (subagent-control-and-background-tasks-01PMZB11 UNIT-8). Production
-// binds this to the SAME *chat.SubagentPauseRegistry instance
-// ChatRunner.StartStream reads from (core/rpc/api.go, via
-// chatRunner.SubagentPause()) — not a second, unread registry. Pause
-// reports whether the call actually changed the pause state, which
-// PauseSubagent uses to decide whether to write an audit record
-// (idempotent re-calls write none, mirroring PR #331's Abort
-// contract). The registry backing this also has a Resume method
-// (core/rpc/views/agentgraph/chat/subagent_pause.go) that a following
-// commit adds to this interface + a ResumeSubagent method.
+// SubagentPauseControl is the narrow surface PauseSubagent /
+// ResumeSubagent need (subagent-control-and-background-tasks-01PMZB11
+// UNIT-8). Production binds this to the SAME
+// *chat.SubagentPauseRegistry instance ChatRunner.StartStream reads
+// from (core/rpc/api.go, via chatRunner.SubagentPause()) — not a
+// second, unread registry. Both methods report whether the call
+// actually changed the pause state, which PauseSubagent/ResumeSubagent
+// use to decide whether to write an audit record (idempotent re-calls
+// write none, mirroring PR #331's Abort contract).
 type SubagentPauseControl interface {
 	Pause(sessionID string) (changed bool)
+	Resume(sessionID string) (changed bool)
 }
 
 // BranchListBroker is the narrow publish surface the branches API needs
@@ -685,6 +684,39 @@ func (a *API) PauseSubagent(ctx context.Context, branchID string) error {
 	}
 	audit.MustEmit(ctx, a.cfg.Audit, audit.KindSubagentPaused,
 		audit.SubagentPausedPayload{BranchID: branchID}, a.now())
+	return nil
+}
+
+// ResumeSubagent clears a dispatched sub-agent's turn-pause signal so
+// its next turn begins again (UNIT-8). Mirrors PauseSubagent's shape;
+// delegates to Config.PauseControl.Resume.
+//
+// Idempotent: Resume against a branch that was never paused, or
+// already resumed (PauseControl.Resume returns changed=false), returns
+// nil without writing a second audit record.
+func (a *API) ResumeSubagent(ctx context.Context, branchID string) error {
+	if a == nil || a.cfg.Conversations == nil {
+		return ErrManagerUnavailable
+	}
+	if branchID == "" {
+		return ErrInvalidArg
+	}
+	if _, gerr := cedar.GateSubagentResume(ctx, a.cfg.Cedar, branchID); gerr != nil {
+		return fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
+	}
+	br, err := a.cfg.Conversations.Get(ctx, branchID)
+	if err != nil {
+		return fmt.Errorf("branches: get branch %q: %w", branchID, err)
+	}
+	if a.cfg.PauseControl == nil {
+		return ErrSubagentUnavailable
+	}
+	if !a.cfg.PauseControl.Resume(br.ChildSessionID) {
+		// Idempotent no-op: was not paused, nothing new to audit.
+		return nil
+	}
+	audit.MustEmit(ctx, a.cfg.Audit, audit.KindSubagentResumed,
+		audit.SubagentResumedPayload{BranchID: branchID}, a.now())
 	return nil
 }
 

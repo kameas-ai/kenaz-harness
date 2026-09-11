@@ -215,9 +215,14 @@ const (
 	//     be identical duplicates of PR #331's copy at merge time
 	//     (CLAUDE.md shared-file conflict zone — resolve additively,
 	//     keep one copy).
+	//
+	//   ActionToolSubagentResume — gates Subagent_Resume, clearing the
+	//     pause signal ActionToolSubagentPause arms so turns begin again
+	//     (UNIT-8). Same resource UID family as Pause.
 	ActionToolSubagentDispatch = "tool.subagent.dispatch"
 	ActionToolSubagentMerge    = "tool.subagent.merge"
 	ActionToolSubagentPause    = "tool.subagent.pause"
+	ActionToolSubagentResume   = "tool.subagent.resume"
 
 	// ── Model-side secret reference action family ──────────────────────────
 	// Introduced by mission model-secret-references-01KW7M5A.

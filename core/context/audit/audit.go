@@ -567,6 +567,12 @@ const (
 	// Privacy invariant: only ids — no transcript content, no tool
 	// arguments, no LLM output — crosses the audit boundary.
 	KindSubagentPaused Kind = "subagent.paused"
+
+	// KindSubagentResumed fires when Subagent_Resume actually clears an
+	// armed pause signal (i.e. the branch was paused).
+	//
+	// Privacy invariant: ids only, same as KindSubagentPaused.
+	KindSubagentResumed Kind = "subagent.resumed"
 )
 
 // ToolConfirmPath names which branch of the confirm-each dispatch path
@@ -1722,5 +1728,14 @@ type ApprovalResolvedPayload struct {
 // Privacy invariant: ids only — no transcript content.
 type SubagentPausedPayload struct {
 	// BranchID is the paused sub-agent's branch row id.
+	BranchID string `json:"branch_id"`
+}
+
+// SubagentResumedPayload is the audit payload for KindSubagentResumed
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8).
+//
+// Privacy invariant: ids only — no transcript content.
+type SubagentResumedPayload struct {
+	// BranchID is the resumed sub-agent's branch row id.
 	BranchID string `json:"branch_id"`
 }
