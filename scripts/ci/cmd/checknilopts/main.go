@@ -5,15 +5,34 @@
 // THE DEFECT CLASS
 // -----------------
 // An interface-typed field on a struct, documented by its own author as
-// optional ("nil is allowed" / "nil causes …" / "nil disables …"), that
-// no production wiring site ever assigns. The type system says the
-// capability exists; the doc comment even says what "off" looks like;
-// nothing ever turns it on. Six confirmed instances shipped as real
-// defects before this gate existed (docs/unwired-ledger.md, 2026-08-20
-// entry): ChatRunDispatcher, wfsched.Dispatcher, registry.Options.Cost,
-// core/policy/cedar's nil cedarPolicyAPI, the fs.Prompter that denied
-// every kenaz__write_file call, and HV-03's registry.Options.Policy in
-// cmd/harness-vm.
+// optional ("nil is allowed" / "nil causes …" / "nil disables …" / "nil
+// falls back …" / "when nil" / "if nil"), that no production wiring site
+// ever assigns. The type system says the capability exists; the doc
+// comment even says what "off" looks like; nothing ever turns it on.
+// Six confirmed instances shipped as real defects before this gate
+// existed (docs/unwired-ledger.md, 2026-08-20 entry): ChatRunDispatcher,
+// wfsched.Dispatcher, registry.Options.Cost, core/policy/cedar's nil
+// cedarPolicyAPI, the fs.Prompter that denied every kenaz__write_file
+// call, and HV-03's registry.Options.Policy in cmd/harness-vm.
+//
+// PR #332's review round found that the gate's ORIGINAL 3-phrase trigger
+// ("nil is allowed" / "nil causes" / "nil disables") could only see ONE
+// of those six (scheduledchat.Config.Dispatcher, via "nil causes") — the
+// gate that exists BECAUSE of these six P0s was blind to 5 of them, a
+// self-refuting state for a PR whose header cited them as motivating
+// history. Fixed same-commit: the trigger widened to also match "nil
+// falls back", "when nil", "if nil" (below), which alone closes the gap
+// for fs.GateOptions.Prompter ("Defaults to NoOpPrompter when nil") and
+// core/rpc/api.go's cedarPolicyAPI ("nil falls back to the
+// cedarpolicy.NewAPI(nil) graceful-empty surface") — both already
+// correctly wired in production, now visible AND reported clean instead
+// of invisible. registry.Options.Cost and .Policy needed a different
+// fix: neither carried ANY doc comment (see "WHAT THIS GATE CANNOT SEE"
+// below) — true doc comments were added to both, verified against
+// registry.go's New() and audited_stream.go's cost-derivation switch
+// before writing, closing the last 2 of the six. HV-03's
+// registry.Options.Policy in cmd/harness-vm is the same registry.Options
+// type; the same fix covers it.
 //
 // THREE MISSIONS SPECCED THIS GATE AND NONE BUILT IT
 // ----------------------------------------------------
@@ -42,6 +61,50 @@
 // trigger's recall proves too narrow — the two are not mutually
 // exclusive; see the gate's own script header.
 //
+// WHAT THIS GATE CANNOT SEE
+// ---------------------------
+// Two structural blind spots, both discovered against live code (not
+// hypothetical) during the PR #332 review round and its follow-up
+// calibration:
+//
+//  1. A field with NO doc comment at all is invisible to a doc-comment
+//     trigger BY CONSTRUCTION — there is no text to match against.
+//     registry.Options.Cost and .Policy shipped with zero doc comment
+//     right up until this commit (see above); they were real,
+//     genuinely-wired production fields the gate could not have
+//     verified either way, because it never knew they existed. Adding a
+//     true doc comment (only where verified true — see the field itself
+//     for what "true" meant here) closes individual cases one at a
+//     time, but does not close the CLASS: any future interface field
+//     that is optional-by-doc-comment convention but whose author
+//     forgets the comment is invisible to this gate the same way. This
+//     is exactly the gap Z505 §7 G-1's type+location design would have
+//     closed — "any interface-typed field on a Config/Options struct"
+//     doesn't need a comment to be found, because it doesn't trigger on
+//     comments at all. This gate deliberately does not implement that
+//     design (see "THREE MISSIONS" above for the precision-over-recall
+//     reasoning); the trade-off is real and this paragraph is its
+//     receipt, not a hedge.
+//
+//  2. scanPatterns is `./core/...` and `./cmd/...` — the module root
+//     (main.go) matches NEITHER pattern, and even a hypothetical `.`
+//     pattern would fail modulePrefix's own filter (main.go's package
+//     path has no trailing "/", modulePrefix requires one). Both field
+//     discovery and assignment search are blind to main.go. Found
+//     2026-09-10 chasing down core/update/bootswap.Config.Relauncher:
+//     its one real production call site is main.go's
+//     MaybeSwapAndRelaunch call, which the gate cannot see either way —
+//     the finding happened to be correct only because main.go's own
+//     adjacent comment independently confirms the same nil-by-design
+//     fact the gate inferred from bare absence. A field whose ONLY
+//     production wiring lived in main.go would be misreported as
+//     unwired by this gate, with no way to tell the two cases apart
+//     from the gate's own output. Not fixed in this commit — scanPatterns
+//     could add "." to cover it, but main.go is a single ~200-line file
+//     with a handful of composite literals in it; the fix is cheap
+//     enough that it should happen alongside the next real finding that
+//     needs it, not speculatively here.
+//
 // WHY NOT A SHELL/GREP GATE
 // --------------------------
 // "Is this field's type an interface" and "is this field ever assigned
@@ -67,11 +130,46 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-// triggerPhrase matches the doc-comment idiom this codebase already uses
-// to mark an interface field as an intentionally optional collaborator.
-// Case-insensitive: both "nil disables" and "Nil disables" appear in
-// production doc comments (sentence-initial after a period).
-var triggerPhrase = regexp.MustCompile(`(?i)nil is allowed|nil causes|nil disables`)
+// triggerPhrase matches the doc-comment idioms this codebase already
+// uses to mark an interface field as an intentionally optional
+// collaborator. Case-insensitive: both "nil disables" and "Nil
+// disables" appear in production doc comments (sentence-initial after a
+// period).
+//
+// Widened in the PR #332 review round from the original 3 phrases ("nil
+// is allowed" / "nil causes" / "nil disables") after the reviewer showed
+// those 3 alone missed 5 of the 6 P0s cited as this gate's own
+// motivating history (see the package doc comment above). "nil falls
+// back" / "when nil" / "if nil" are the natural-prose variants actually
+// found in this tree by grepping every interface-typed struct field's
+// doc comment for the word "nil" and reading each one (not guessed):
+// calibration went from 33 scanned fields to 60, all newly-visible
+// fields still gated on the SAME downstream check (must be a non-empty
+// interface type), so the false-positive risk from widening a doc-text
+// match is bounded by that type filter — see
+// scripts/ci/allowlists/i18-nil-optional-deps.txt's header for the 6
+// genuinely-unwired fields this widening surfaced and how each was
+// dispositioned. Candidate phrases considered and REJECTED, run and
+// measured (not guessed): a bare "optional" was tried and reverted —
+// 33→92 scanned fields (vs. 33→60 for the phrase set actually shipped),
+// producing 4 additional unlisted violations on top of the 6 this
+// commit already dispositions. Spot-checking two of them
+// (core/hooks/runner.go:231's Config.MCP, "optional — nil means kind=mcp
+// hooks are skipped with a warning"; chat_runner.go:481's
+// Config.SecretAuditEmitter, "SecretAuditEmitter optionally receives …
+// nil is a no-op") shows "optional" pulls in a broader, adjacent idiom
+// — "nil silently skips/no-ops this specific feature" — that is a real
+// and arguably related pattern, but expanding scope AND triaging a
+// second wave of findings in the same PR that exists to fix a
+// mistrusted gate risks re-committing the same "claims more than it
+// delivers" failure this PR is closing. Left for deliberate follow-up
+// scoping, not silently dropped: this paragraph is that follow-up's
+// starting point. "may be nil" / "can be nil" / "left nil" were also
+// tried and reverted for the same reason — 33→71 scanned, 2 additional
+// unlisted violations beyond this commit's 6 — a real, live-matching
+// idiom in this tree, not a hypothetical one, but a second wave of
+// findings this PR's scope does not cover triaging.
+var triggerPhrase = regexp.MustCompile(`(?i)nil is allowed|nil causes|nil disables|nil falls back|when nil|if nil`)
 
 // candidatePkgPrefixes bound both field-discovery and assignment-search
 // to this module's own source, for the same reason checkseams bounds
@@ -363,11 +461,15 @@ func findTriggerFields(pkgs []*packages.Package) []*triggerField {
 //     struct, not the pointer, so no unwrapping is needed).
 //
 //  2. A call `x.SetFieldName(...)` or `x.WithFieldName(...)` where x's
-//     type (pointer-stripped) is the field's owner type. Best-effort:
-//     the argument's own value is not inspected (mirrors I13 clause 4's
-//     documented "called at all" leniency) — a setter called with a nil
-//     argument would be a false negative here, same limitation I13
-//     accepts for its With* clause.
+//     type (pointer-stripped) is the field's owner type and the single
+//     argument is not a bare `nil` identifier — `x.SetDispatcher(nil)`
+//     does NOT count as wiring (PR #332 review nit: this clause used to
+//     mark the field assigned on the call alone, without checking the
+//     argument, the one detection path that didn't apply isBareNil
+//     while the other two already did). A call with zero or multiple
+//     arguments is left best-effort assigned=true — same "called at
+//     all" leniency I13 accepts for its own With* clause, kept only for
+//     the shapes isBareNil cannot unambiguously judge.
 //
 //  3. A plain assignment statement `x.FieldName = <non-nil expr>` where
 //     x's type (pointer-stripped) is the field's owner type. This is
@@ -474,6 +576,19 @@ func markAssignments(pkgs []*packages.Package, fields []*triggerField) {
 						return true
 					}
 					if tf, ok := index[key{named.Obj(), fieldName}]; ok {
+						// isBareNil applies here for the same reason it
+						// applies to the composite-literal and plain-
+						// assignment clauses: `x.SetDispatcher(nil)` must
+						// not count as wiring. Only the unambiguous
+						// single-argument case is checked — a call with
+						// zero or multiple arguments can't be mapped to
+						// "the field's value" without guessing which
+						// argument is the field, so those are left as
+						// best-effort assigned=true (same leniency the
+						// multi-hop EnvDeps case above documents).
+						if len(node.Args) == 1 && isBareNil(node.Args[0]) {
+							return true
+						}
 						tf.assigned = true
 					}
 				case *ast.AssignStmt:

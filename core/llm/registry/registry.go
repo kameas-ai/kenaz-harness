@@ -44,8 +44,19 @@ type Options struct {
 	Catalog  *capabilities.Catalog
 	Resolver *credref.Resolver
 	Emitter  *events.Emitter
-	Policy   llm.PolicyGuard
-	Cost     CostReducer
+	// Policy is the optional policy-guard collaborator. Nil falls back
+	// to llm.AllowAllGuard{} (see New(), below) — production wires the
+	// real cedar-backed guard at the ONE construction site,
+	// core/rpc/api.go's newLLMStack.
+	Policy llm.PolicyGuard
+	// Cost is the optional usage→cost stage (WP11). If nil, resp.Cost
+	// is left {Indeterminate: true} unless the provider adapter already
+	// supplied a Source:"provider" cost (see audited_stream.go's
+	// cost-derivation switch, which documents why the provider-sourced
+	// check must run before the reducer branch). Production wires the
+	// real reducer at the ONE construction site, core/rpc/api.go's
+	// newLLMStack — same site Cache's comment below references.
+	Cost CostReducer
 	// Cache is the capability probe cache (model-settings-reach-the-
 	// model-01PMZ101 WP14 / FR-017). Nil defaults to
 	// capabilities.DefaultCache(nil) — an in-process MemoryCache with

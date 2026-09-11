@@ -25,6 +25,25 @@
 # main.go's header for the full comparison — this tool takes the
 # doc-phrase design.
 #
+# WHAT THIS GATE CANNOT SEE
+# -----------------------------
+# Two structural blind spots — full detail in scripts/ci/cmd/checknilopts/
+# main.go's header, kept here as a pointer so a reader of just this
+# script isn't misled into thinking the gate has full coverage:
+#   1. A field with NO doc comment at all cannot trigger a doc-comment
+#      match, by construction — this is what let registry.Options.Cost
+#      and .Policy ship invisible to this gate right up until the PR
+#      #332 review round found it (both now carry a true doc comment,
+#      closing those two specific cases; the general class limitation —
+#      any future undocumented optional interface field — remains).
+#      Z505's type+location design (above) does not have this blind
+#      spot; this gate does not implement that design (see main.go for
+#      why) and this is the cost of that choice.
+#   2. The module root (main.go) is outside scanPatterns
+#      (./core/... and ./cmd/... only) for BOTH field discovery and
+#      assignment search — found chasing core/update/bootswap.Config.
+#      Relauncher, whose one real production call site is main.go.
+#
 # WHY THIS IS A GO TOOL, NOT A GREP
 # ------------------------------------
 # "Is this field's type an interface" and "is it assigned a non-nil
