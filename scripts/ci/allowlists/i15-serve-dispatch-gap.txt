@@ -1042,3 +1042,71 @@
 # "Served-mode chat findings belong to served-mode-is-a-real-mode-01PMZ707."
 # Dated 2026-08-29. Owner: alec.
 "CompactionOverhead"
+
+# CLASS: escalated -- release/v0.78.0 integration sweep, 2026-09-11.
+# Four Subagent_* control verbs added by
+# subagent-control-and-background-tasks-01PMZB11 UNIT-8 (PRs #331 abort/
+# steer, #334 pause/resume; core/rpc/bindings.go:2570-2607). The mission's
+# own spec.md §7 Non-goals states this in terms, not by omission:
+# "Served-mode parity for Tasks_* or the control verbs. Zero Tasks_ and
+# zero Graph_ entries exist in core/serve/methods.go; under E-1 each new
+# binding needs a served answer, and this mission's answer is a recorded
+# boundary decision in UNIT-12, not a dispatch table entry. Escalated as
+# E-003." Spec.md:697-703 (escalation E-003) names the blocker precisely:
+# "do the background-task and sub-agent surfaces get served dispatch, or a
+# boundary panel? ... served-mode-is-a-real-mode-01PMZ707 is the mission
+# that owns the answer; this mission must not invent a third mechanism."
+#
+# Verified, not assumed: `grep -c 'case "Subagent_' core/serve/server.go`
+# and `core/serve/methods.go` both confirm zero Subagent_* dispatch cases,
+# and `go build -tags serve ./core/...` exits 0 — this is an honest
+# compile-time absence (no route exists to fail at), not a case that
+# silently no-ops at runtime.
+#
+# Blocker: served-mode-is-a-real-mode-01PMZ707's UNIT-12 boundary decision
+# (port vs. boundary panel) for Tasks_*/Subagent_* control surfaces —
+# not yet specced as of this release. Owner: alec. Delete this entry (or
+# convert to gated/boundary-panelled) the moment UNIT-12 lands.
+"Subagent_Abort"
+"Subagent_Pause"
+"Subagent_Resume"
+"Subagent_Steer"
+
+# CLASS: boundary-panelled -- release/v0.78.0 integration sweep,
+# 2026-09-11. MCP_SetToolPolicy / MCP_ListToolPolicies were added by
+# trust-surfaces-that-fire-01PMZ202 WP24 (finding CHAT-05;
+# core/rpc/bindings.go:552-573) as the writer/reader for the static MCP
+# tool-permission source (<DataDir>/mcp_servers.json). WP24's tasks.md
+# entry does not mention served mode at all -- the spec is silent on this
+# binding's served-mode disposition, so this is not a cited mission
+# ruling, it is this sweep's own read of the only caller.
+#
+# Sole caller is frontend/src/views/tools/ToolsView.vue (client.mcp.
+# listToolPolicies() / setToolPolicy(), :52 and :68). The ENTIRE view is
+# guarded: ToolsView.vue:105 `<NotAvailableInServedMode v-if="servedMode"
+# feature="Tools" .../>` with a `<div v-else>` wrapping every control,
+# including the per-server policy <select> that calls setToolPolicy. A
+# served user cannot reach either RPC through any rendered affordance.
+#
+# Caveat, stated honestly rather than smoothed over: onMounted() calls
+# refresh() and refreshPolicies() (which calls listToolPolicies())
+# unconditionally -- the v-if guard is template-only and does not gate
+# the lifecycle hook. In served mode this fires one MCP_ListToolPolicies
+# call against server.go's unhandled case, the error is caught and
+# assigned to policyError, and policyError is never rendered because the
+# v-else branch that would show it is not mounted. Net effect: a silently
+# swallowed failed RPC call on every /tools visit in served mode, no
+# visible breakage, no reachable write path (setToolPolicy is only called
+# from the guarded v-else branch's onPolicyChange, never from onMounted).
+# Boundary-panelled is still the honest class for the classes this gate
+# distinguishes (the risk is a wasted round-trip, not an exposed control).
+#
+# Blocker/owner: the onMounted eager-fetch running past its own served
+# guard is a pre-existing pattern in this file, not something this sweep
+# introduced -- follow-up to add a `if (servedMode.value) return` guard at
+# the top of refresh()/refreshPolicies(), owner: alec, no mission
+# currently tracks it. Filing here rather than silently fixing it, per
+# the instruction to disposition rather than drive-by patch during an
+# integration sweep.
+"MCP_ListToolPolicies"
+"MCP_SetToolPolicy"
