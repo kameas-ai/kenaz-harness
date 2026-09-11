@@ -31,6 +31,7 @@ import (
 	"strings"
 
 	workflowsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/workflows"
+	"github.com/kameas-ai/kenaz-harness/core/runposture"
 )
 
 // wfSchedDispatcher implements wfsched.Dispatcher over the API's
@@ -43,9 +44,23 @@ type wfSchedDispatcher struct {
 // tick (true) from a human-clicked "Run now" (false, via
 // CronScheduler.RunNow) — both arrive here with zero inputs, since
 // neither surface collects a run form.
+//
+// workflow-tool-permission-gate: a cron tick has nobody present to
+// answer a confirm_each prompt a tool call inside the run might raise,
+// so ctx is marked runposture.Unattended before the run starts — the
+// SAME per-run posture model-scheduled-jobs-01PMSJ01 built for scheduled
+// CHAT runs, now reaching scheduled WORKFLOW runs too. wfToolGate
+// (core/rpc/wf_adapters.go) denies any confirm_each verdict
+// unconditionally when this posture is set, regardless of the
+// deployment's configured headless-allow policy. A human-clicked "Run
+// now" (scheduled=false) stays attended on purpose: someone is at the
+// app and a live confirm channel can still prompt them.
 func (d *wfSchedDispatcher) Dispatch(ctx context.Context, workflowID string, scheduled bool) (string, error) {
 	if d == nil || d.api == nil || d.api.workflowsAPI == nil {
 		return "", fmt.Errorf("workflow dispatcher: workflows API not constructed")
+	}
+	if scheduled {
+		ctx = runposture.Unattended(ctx)
 	}
 
 	// A scheduled or RunNow dispatch supplies no inputs — neither surface
