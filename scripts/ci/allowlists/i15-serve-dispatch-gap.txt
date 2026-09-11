@@ -1043,38 +1043,6 @@
 # Dated 2026-08-29. Owner: alec.
 "CompactionOverhead"
 
-# CLASS: untriaged -- release/v0.78.0 integration sweep, 2026-09-11.
-# 4 entries.
-#
-# Four Subagent_* control verbs added by
-# subagent-control-and-background-tasks-01PMZB11 UNIT-8 (PRs #331 abort/
-# steer, #334 pause/resume; core/rpc/bindings.go:2570-2607). The mission's
-# own spec.md §7 Non-goals states this in terms, not by omission:
-# "Served-mode parity for Tasks_* or the control verbs. Zero Tasks_ and
-# zero Graph_ entries exist in core/serve/methods.go; under E-1 each new
-# binding needs a served answer, and this mission's answer is a recorded
-# boundary decision in UNIT-12, not a dispatch table entry. Escalated as
-# E-003." Spec.md:697-703 (escalation E-003) names the blocker precisely:
-# "do the background-task and sub-agent surfaces get served dispatch, or a
-# boundary panel? ... served-mode-is-a-real-mode-01PMZ707 is the mission
-# that owns the answer; this mission must not invent a third mechanism."
-#
-# Verified, not assumed: `grep -c 'case "Subagent_' core/serve/server.go`
-# and `core/serve/methods.go` both confirm zero Subagent_* dispatch cases,
-# and `go build -tags serve ./core/...` exits 0 — this is an honest
-# compile-time absence (no route exists to fail at), not a case that
-# silently no-ops at runtime.
-#
-# Blocker: served-mode-is-a-real-mode-01PMZ707's UNIT-12 boundary decision
-# (port vs. boundary panel) for Tasks_*/Subagent_* control surfaces —
-# not yet specced as of this release. Dated 2026-09-11. Owner: alec.
-# Delete this entry (or convert to gated/boundary-panelled) the moment
-# UNIT-12 lands.
-"Subagent_Abort"
-"Subagent_Pause"
-"Subagent_Resume"
-"Subagent_Steer"
-
 # CLASS: boundary-panelled -- release/v0.78.0 integration sweep,
 # 2026-09-11.
 # 2 entries.
@@ -1116,3 +1084,35 @@
 # integration sweep.
 "MCP_ListToolPolicies"
 "MCP_SetToolPolicy"
+
+# CLASS: untriaged -- release/v0.78.0 integration sweep, 2026-09-11.
+# 4 entries.
+#
+# Four Subagent_* control verbs added by
+# subagent-control-and-background-tasks-01PMZB11 UNIT-8 (PRs #331 abort/
+# steer, #334 pause/resume; core/rpc/bindings.go:2570-2607). The mission's
+# own spec.md §7 Non-goals states this in terms, not by omission:
+# "Served-mode parity for Tasks_* or the control verbs. Zero Tasks_ and
+# zero Graph_ entries exist in core/serve/methods.go; under E-1 each new
+# binding needs a served answer, and this mission's answer is a recorded
+# boundary decision in UNIT-12, not a dispatch table entry. Escalated as
+# E-003." Spec.md:697-703 (escalation E-003) names the blocker precisely:
+# "do the background-task and sub-agent surfaces get served dispatch, or a
+# boundary panel? ... served-mode-is-a-real-mode-01PMZ707 is the mission
+# that owns the answer; this mission must not invent a third mechanism."
+#
+# Verified, not assumed: `grep -c 'case "Subagent_' core/serve/server.go`
+# and `core/serve/methods.go` both confirm zero Subagent_* dispatch cases,
+# and `go build -tags serve ./core/...` exits 0 — this is an honest
+# compile-time absence (no route exists to fail at), not a case that
+# silently no-ops at runtime.
+#
+# Blocker: served-mode-is-a-real-mode-01PMZ707's UNIT-12 boundary decision
+# (port vs. boundary panel) for Tasks_*/Subagent_* control surfaces —
+# not yet specced as of this release. Dated 2026-09-11. Owner: alec.
+# Delete this entry (or convert to gated/boundary-panelled) the moment
+# UNIT-12 lands.
+"Subagent_Abort"
+"Subagent_Pause"
+"Subagent_Resume"
+"Subagent_Steer"
