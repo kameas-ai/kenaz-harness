@@ -5730,6 +5730,7 @@ export namespace rpc {
 	    mcpInitError?: string;
 	    skillsInitError?: string;
 	    fleetInitError?: string;
+	    permissionsInitError?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new BootHealthReport(source);
@@ -5740,6 +5741,7 @@ export namespace rpc {
 	        this.mcpInitError = source["mcpInitError"];
 	        this.skillsInitError = source["skillsInitError"];
 	        this.fleetInitError = source["fleetInitError"];
+	        this.permissionsInitError = source["permissionsInitError"];
 	    }
 	}
 	export class CompactionOverheadInfo {
@@ -7445,6 +7447,24 @@ export namespace toolloop {
 	        this.server = source["server"];
 	        this.tool = source["tool"];
 	        this.args_summary = source["args_summary"];
+	        this.reason = source["reason"];
+	    }
+	}
+	export class permRule {
+	    server: string;
+	    tool: string;
+	    policy: string;
+	    reason?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new permRule(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.server = source["server"];
+	        this.tool = source["tool"];
+	        this.policy = source["policy"];
 	        this.reason = source["reason"];
 	    }
 	}

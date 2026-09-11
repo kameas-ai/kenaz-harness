@@ -18,15 +18,20 @@ var globalBootStore = &bootHealthStore{}
 
 // SetBootErrors records the init-phase errors from the named subsystems.
 // Should be called once by the harness startup path (harness_wiring.go)
-// immediately after the three subsystems are initialised. Safe to call
+// immediately after the subsystems are initialised. Safe to call
 // concurrently; later calls overwrite earlier ones.
-func SetBootErrors(mcpErr, skillsErr, fleetErr string) {
+//
+// permsErr (trust-surfaces-that-fire-01PMZ202 WP24 review finding) is
+// non-empty when <DataDir>/mcp_servers.json failed to parse at boot;
+// see BootHealthReport.PermissionsInitError.
+func SetBootErrors(mcpErr, skillsErr, fleetErr, permsErr string) {
 	globalBootStore.mu.Lock()
 	defer globalBootStore.mu.Unlock()
 	globalBootStore.report = BootHealthReport{
-		MCPInitError:    mcpErr,
-		SkillsInitError: skillsErr,
-		FleetInitError:  fleetErr,
+		MCPInitError:         mcpErr,
+		SkillsInitError:      skillsErr,
+		FleetInitError:       fleetErr,
+		PermissionsInitError: permsErr,
 	}
 }
 

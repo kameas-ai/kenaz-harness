@@ -552,6 +552,28 @@ func (b *Bindings) MCP_SaveCustomRecipe(req mcp.SaveCustomRecipeRequest) (recipe
 	return b.api.MCP().SaveCustomRecipe(b.ctx(), req)
 }
 
+// MCP_SetToolPolicy upserts a permission rule for (server, tool) into
+// the static permission source (<DataDir>/mcp_servers.json) — the
+// writer trust-surfaces-that-fire-01PMZ202 WP24 (finding CHAT-05) adds
+// so a "confirm each use" policy is producible from a shipped surface
+// instead of only by hand-editing a JSON file. policy is one of
+// "auto_allow" | "confirm_each" | "deny"; tool may be "*" for a
+// whole-server rule. The static resolver is read once at chassis boot,
+// so this takes effect starting with the next restart, not the running
+// session.
+func (b *Bindings) MCP_SetToolPolicy(server, tool, policy, reason string) error {
+	defer sentry.WrapBinding("MCP_SetToolPolicy")()
+	return b.api.MCP().SetToolPolicy(b.ctx(), server, tool, policy, reason)
+}
+
+// MCP_ListToolPolicies returns every rule currently persisted in the
+// static permission source, for the Tools view to render current
+// policy state.
+func (b *Bindings) MCP_ListToolPolicies() ([]toolloop.StaticRule, error) {
+	defer sentry.WrapBinding("MCP_ListToolPolicies")()
+	return b.api.MCP().ListToolPolicies(b.ctx())
+}
+
 // MCP_HealthSnapshot returns the current health status for every installed
 // MCP recipe as a map of recipe-id → HealthEntry.
 // (mcp-server-health-ui-01KQ8TD6 WP01)

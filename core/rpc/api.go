@@ -1730,6 +1730,16 @@ func New(c *core.Core, opts ...Option) *API {
 		mcpUserRecipeSource(a.mcpUserStore),
 	)
 	mcpOpts := []mcp.Option{mcp.WithSubscriber(a.broker), mcp.WithCatalog(mergedCat)}
+	// CHAT-05 writer wiring (trust-surfaces-that-fire-01PMZ202 WP24):
+	// SetToolPolicy/ListToolPolicies need the same DataDir the static
+	// permission resolver below reads at boot. A func, not a captured
+	// string, matching mcpImportAPI's DataDir: c.DataDir a few lines
+	// down — c may be nil in the rpc.New(nil) test harness, in which
+	// case the option is simply omitted and the API methods degrade to
+	// ErrDataDirNotConfigured.
+	if c != nil {
+		mcpOpts = append(mcpOpts, mcp.WithDataDir(c.DataDir))
+	}
 	// Only install the saver when there is a real store behind it. Passing
 	// a nil *recipes.UserStore straight into WithRecipeSaver would wrap it
 	// in a non-nil RecipeSaver interface value holding a nil pointer, so
@@ -1841,7 +1851,11 @@ func New(c *core.Core, opts ...Option) *API {
 	// FR-008 (agent-loop-robustness-parity WP08): boot health error strings
 	// collected during subsystem init. Passed to SetBootErrors at the end of
 	// api.New so the frontend's BootHealthBanner can display targeted warnings.
-	var bootMCPErr, bootSkillsErr, bootFleetErr string
+	// bootPermsErr is populated below from stack.staticPermsLoadError once
+	// newLLMStack returns (trust-surfaces-that-fire-01PMZ202 WP24 review
+	// finding: a corrupt mcp_servers.json must surface to the user, not
+	// only to the log).
+	var bootMCPErr, bootSkillsErr, bootFleetErr, bootPermsErr string
 
 	// Wire the fleet client (fleet-auth-foundation-01NDFSEX08 chassis-boot wire-
 	// up). Without this every fleet RPC returns ErrFleetDisabled because
@@ -2171,6 +2185,11 @@ func New(c *core.Core, opts ...Option) *API {
 
 	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, a.cedarEngine, taskReg, opt.mcpHTTPPoolOptions)
 	a.llmAPI = stack.api
+	// trust-surfaces-that-fire-01PMZ202 WP24 review finding: fold the
+	// static tool-permission load error (if any) into the boot-health
+	// report so BootHealthBanner tells the user their configured
+	// allow/deny rules are not in force, instead of only a log line.
+	bootPermsErr = stack.staticPermsLoadError
 	// chat-turn-integrity-01PMZ606 WP12: the join CK-08 + owner ruling
 	// X-7 wanted. Both were already constructed above (inside
 	// newLLMStack -> buildCompactionWiring); copying them here is what
@@ -4019,7 +4038,9 @@ func New(c *core.Core, opts ...Option) *API {
 	// chance to log their init errors. Async subsystems (MCP pool, skills
 	// BootLoad) are not yet captured here; they update the store when their
 	// goroutines complete (future follow-up). Fleet init is synchronous.
-	SetBootErrors(bootMCPErr, bootSkillsErr, bootFleetErr)
+	// bootPermsErr (trust-surfaces-that-fire-01PMZ202 WP24 review finding)
+	// is synchronous too — captured from stack.staticPermsLoadError above.
+	SetBootErrors(bootMCPErr, bootSkillsErr, bootFleetErr, bootPermsErr)
 
 	return a
 }
@@ -5016,6 +5037,16 @@ type llmStack struct {
 	// slash-command tool path to take the SAME confirm/Cedar path a
 	// chat tool call takes.
 	confirmDeps chat.ConfirmDeps
+	// staticPermsLoadError is non-empty when <DataDir>/mcp_servers.json
+	// existed but failed to parse at boot — the resolver degraded to
+	// NewFailSafeStaticResolver (confirm_each for everything) rather
+	// than the auto_allow a nil static arm would default to. Held here
+	// so New() can fold it into BootHealthReport: the resolver-level
+	// fail-safe keeps tool calls from being silently allowed, but the
+	// user still needs a surface telling them their configured
+	// allow/deny rules are not in force until the file is repaired
+	// (trust-surfaces-that-fire-01PMZ202 WP24 review finding).
+	staticPermsLoadError string
 }
 
 func newLLMStack(
@@ -5161,19 +5192,31 @@ func newLLMStack(
 	historyAdapter := newSessionHistoryReader(c)
 	// WP02 — wire the global static resolver against
 	// <DataDir>/mcp_servers.json. A missing file soft-fails to
-	// auto_allow (the file is opt-in); a malformed file logs a
-	// warning and the resolver is left nil, which NewMergedResolver
-	// below treats as auto_allow for the static arm specifically
-	// (perms.go:291-293) — safe ONLY because the session arm
-	// constructed unconditionally below still enforces containment on
-	// its own. Per-session overrides (C2) are composed on top of this
-	// when the session manager grows the MCPOverrides reader.
+	// auto_allow (the file is opt-in — "never configured" and "no
+	// rules apply" are the same state). A malformed file is a
+	// different case: SetStaticRule (this PR) is the first writer
+	// that can ever put a real deny/confirm_each rule in this file,
+	// so a corrupt read here now means "the user's configured policy
+	// silently stopped applying," not "nothing was ever configured."
+	// Leaving staticPerms nil would let NewMergedResolver's nil-static
+	// normalization (an empty, always-auto_allow resolver) stand in
+	// for it — see the review finding on trust-surfaces-that-fire-
+	// 01PMZ202 WP24: a corrupted file made resolve(github, exec) go
+	// from {deny, "shell exec disabled"} to {auto_allow, ""} with only
+	// a log line. Fail-shut instead: degrade to confirm_each (asks the
+	// user rather than silently allowing) and surface it on
+	// staticPermsLoadErr so New() can populate BootHealthReport —
+	// logging alone is not a surface the user ever sees.
 	var staticPerms toolloop.PermissionResolver
+	var staticPermsLoadErr string
 	if c != nil && c.DataDir() != "" {
 		sp, permErr := toolloop.NewStaticResolverFromDataDir(c.DataDir())
 		if permErr != nil {
 			logging.L().Warn("toolloop.permissions.static_load_failed",
 				"data_dir", c.DataDir(), "err", permErr.Error())
+			staticPermsLoadErr = permErr.Error()
+			staticPerms = toolloop.NewFailSafeStaticResolver(
+				"mcp_servers.json failed to load (" + permErr.Error() + "); tool calls require confirmation until it is repaired")
 		} else {
 			staticPerms = sp
 		}
@@ -5198,8 +5241,11 @@ func newLLMStack(
 	// The session arm is built UNCONDITIONALLY, below, before either
 	// branch above runs — it does not depend on DataDir, only on a
 	// session store and the shared Cedar engine. A static-load failure
-	// (the permErr branch above) still yields
-	// NewMergedResolver(nil, sessionArm), never a bare nil perms.
+	// (the permErr branch above) now yields
+	// NewMergedResolver(failSafeConfirmEach, sessionArm) — never a
+	// bare nil perms, and never a bare nil static arm either (that nil
+	// would itself normalize to auto_allow inside NewMergedResolver;
+	// see NewFailSafeStaticResolver's doc comment in perms.go).
 	var sessionMgr *session.Manager
 	if c != nil {
 		sessionMgr = c.SessionManager()
@@ -5595,6 +5641,8 @@ func newLLMStack(
 		confirmBus:           confirmBus,
 		confirmSessionGrants: confirmSessionGrants,
 		confirmDeps:          confirmDeps,
+
+		staticPermsLoadError: staticPermsLoadErr,
 	}
 }
 

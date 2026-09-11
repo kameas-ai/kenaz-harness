@@ -1,11 +1,16 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import ToolsView from '@/views/tools/ToolsView.vue';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
-import type { MCPServer } from '@/lib/types';
+import type { MCPServer, MCPToolPolicyRule } from '@/lib/types';
 
-function provide(seed: MCPServer[] = []) {
+function provide(
+  seed: MCPServer[] = [],
+  policies: MCPToolPolicyRule[] = [],
+  mcpOverrides: Record<string, unknown> = {},
+) {
+  const setToolPolicy = vi.fn(async () => undefined);
   const client = createFakeHarnessClient({
     mcp: {
       listServers: async () => seed,
@@ -13,9 +18,12 @@ function provide(seed: MCPServer[] = []) {
       stopStream: async () => undefined,
       healthSnapshot: async () => ({}),
       subscribeHealthChanges: async () => 'fake-health-sub',
+      listToolPolicies: async () => policies,
+      setToolPolicy,
+      ...mcpOverrides,
     } as any,
   });
-  return { client };
+  return { client, setToolPolicy };
 }
 
 describe('ToolsView (FR-001b numbered-section header)', () => {
@@ -82,5 +90,75 @@ describe('ToolsView (FR-001b numbered-section header)', () => {
     const html = w.html();
     expect(html).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
     expect(html).not.toMatch(/rgba?\s*\(/i);
+  });
+});
+
+// trust-surfaces-that-fire-01PMZ202 WP24 (CHAT-05): the per-server
+// policy control is the shipped surface that makes a confirm_each
+// verdict producible at all. These pin the UI half; the production
+// path from a written rule to an actual parked tool call is proven in
+// Go (core/rpc/views/agentgraph/chat — real toolloop resolver, real
+// file on disk, real ConfirmBus).
+describe('ToolsView — tool policy control (WP24, CHAT-05)', () => {
+  const seed: MCPServer[] = [
+    { id: 'fs', name: 'filesystem', state: 'ready', version: '0.1.0' },
+  ];
+
+  it('defaults the policy select to auto_allow when no rule is persisted', async () => {
+    const { client } = provide(seed, []);
+    const w = mount(ToolsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    const select = w.find('[data-testid=tool-policy-select-filesystem]');
+    expect(select.exists()).toBe(true);
+    expect((select.element as HTMLSelectElement).value).toBe('auto_allow');
+  });
+
+  it('seeds the select from a persisted confirm_each rule', async () => {
+    const { client } = provide(seed, [
+      { server: 'filesystem', tool: '*', policy: 'confirm_each', reason: 'fs default' },
+    ]);
+    const w = mount(ToolsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    const select = w.find('[data-testid=tool-policy-select-filesystem]');
+    expect((select.element as HTMLSelectElement).value).toBe('confirm_each');
+  });
+
+  it('calls setToolPolicy with a whole-server ("*") rule when the select changes', async () => {
+    const { client, setToolPolicy } = provide(seed, []);
+    const w = mount(ToolsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    const select = w.find('[data-testid=tool-policy-select-filesystem]');
+    await select.setValue('confirm_each');
+    await flushPromises();
+    expect(setToolPolicy).toHaveBeenCalledWith(
+      'filesystem',
+      '*',
+      'confirm_each',
+      expect.any(String),
+    );
+  });
+
+  it('surfaces a policy save failure without crashing the view', async () => {
+    const { client } = provide(seed, [], {
+      setToolPolicy: async () => {
+        throw new Error('disk full');
+      },
+    });
+    const w = mount(ToolsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    const select = w.find('[data-testid=tool-policy-select-filesystem]');
+    await select.setValue('deny');
+    await flushPromises();
+    const err = w.find('[data-testid=tool-policy-error]');
+    expect(err.exists()).toBe(true);
+    expect(err.text()).toContain('disk full');
   });
 });
