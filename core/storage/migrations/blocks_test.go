@@ -73,6 +73,21 @@ func TestCanonicalBlocks_NoOverlap(t *testing.T) {
 	for m, b := range CanonicalBlocks {
 		entries = append(entries, entry{mission: m, block: b})
 	}
+	// A reservation must be well-formed before overlap means anything. An
+	// inverted block ({Min:1499, Max:1400}) makes the overlap arithmetic
+	// below vacuously false against every other range, so a typo'd
+	// reservation would sail through both this test and
+	// TestOpen_EveryMigrationVersionFallsInsideItsOwnBlock -- the latter
+	// walks from SHIPPED migrations forward to their block, so a block with
+	// no migrations yet (true of every freshly-claimed range, including the
+	// two this file just handed out) is invisible to it. Found 2026-09-11 by
+	// the review of this change, which planted exactly that inversion and
+	// watched both tests pass.
+	for _, e := range entries {
+		if e.block.Min > e.block.Max {
+			t.Errorf("block for %q is inverted: %+v (Min must be <= Max)", e.mission, e.block)
+		}
+	}
 	for i := 0; i < len(entries); i++ {
 		for j := i + 1; j < len(entries); j++ {
 			a, b := entries[i], entries[j]
