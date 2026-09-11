@@ -67,11 +67,40 @@
 # question for it (mirrors the G-0 self-exclusion precedent in I14: a
 # file's own declaration doesn't count as evidence about itself).
 #
+# PASS 2 (#69): THE REVERSE DIRECTION
+# -----------------------------------------------------------------
+# Pass 1 above asks "does every useEventStream-subscribed topic reach
+# passthroughTopics". It says nothing about the other direction: a topic
+# IN passthroughTopics that NO useEventStream call subscribes to — dead
+# weight forwarded to every served connection's frame stream, and more
+# importantly a passthroughTopics entry that no longer states real
+# intent. This matters more than it used to: passthroughTopics recently
+# became the single hand-authored source of truth (the TS
+# SERVED_STREAM_TOPICS list is generated from it, per
+# wsstream_topics_parity_test.go), so an orphan entry is read as a
+# statement of intent nobody meant, not a harmless leftover.
+#
+# Pass 2 reuses this same file's discovery machinery: PASSTHROUGH_BLOCK /
+# IDENT_TO_VALUE to walk passthroughTopics' own elements (this time
+# keeping the identifier, not collapsing straight to a value set) and
+# FRONTEND_WINDOW to ask the identical "does a real useEventStream call
+# mention this value" question pass 1 already asks — just with the two
+# sides swapped. No new discovery machinery.
+#
+# Legitimate exceptions go in a SEPARATE dated allowlist
+# (served-mode-topic-forwarding-orphans.txt), not the pass-1 one — "not
+# forwarded despite a subscriber" and "forwarded despite no subscriber"
+# are different claims about the same value, and conflating the two
+# files would let a pass-1 exception silently launder a pass-2 violation
+# for an unrelated topic that happens to share a line-matching quirk.
+#
 # Exit codes:
 #   0 — every useEventStream-subscribed Topic* const (outside the
 #       excluded desktop-only/self-referential packages) is forwarded via
-#       passthroughTopics, or explicitly allowlisted.
-#   2 — at least one such topic is missing from both.
+#       passthroughTopics, or explicitly allowlisted (pass 1) AND every
+#       passthroughTopics entry has a real useEventStream consumer, or is
+#       explicitly allowlisted (pass 2).
+#   2 — at least one topic fails either pass.
 set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/ci-gate.sh"
@@ -268,14 +297,84 @@ done
 
 if [[ $REPORT_MODE -eq 1 ]]; then
   echo ""
-  echo "${GATE} ${candidates} useEventStream-subscribed candidates checked, ${allowlisted_count} allowlisted."
+  echo "${GATE} pass 1: ${candidates} useEventStream-subscribed candidates checked, ${allowlisted_count} allowlisted."
 fi
 
-if [[ $fail -ne 0 ]]; then
+# --- Pass 2 (reverse direction, #69). See header. Reuses PASSTHROUGH_BLOCK
+# and IDENT_TO_VALUE (built above for pass 1) and FRONTEND_WINDOW (built
+# above for pass 1's frontend scan) — no new discovery machinery.
+ORPHAN_ALLOWLIST="scripts/ci/allowlists/served-mode-topic-forwarding-orphans.txt"
+
+ORPHAN_ALLOWLIST_DATA=""
+if [[ -f "$ORPHAN_ALLOWLIST" ]]; then
+  ORPHAN_ALLOWLIST_DATA=$(grep -v '^[[:space:]]*#' "$ORPHAN_ALLOWLIST") || {
+    rc=$?
+    if [[ $rc -ge 2 ]]; then
+      echo "${GATE} ERROR: orphan allowlist read failed (grep exit ${rc})." >&2
+      exit 1
+    fi
+  }
+fi
+
+orphan_fail=0
+forwarded=0
+orphan_allowlisted_count=0
+
+# Walk passthroughTopics' own slice-element tokens (same extraction
+# regex as the PASSTHROUGH_VALUES build above — comments stripped first,
+# then real identifier tokens only), this time keeping the identifier
+# for reporting instead of collapsing straight to a value set.
+while IFS= read -r tok; do
+  [[ -z "$tok" ]] && continue
+  bare="${tok##*.}"
+  [[ -z "$bare" ]] && continue
+  value="${IDENT_TO_VALUE[$bare]:-}"
+  # Not a resolvable Topic* const (e.g. a stray identifier in a comment
+  # the "strip full-comment lines" filter missed) — not a real slice
+  # element, skip rather than false-fail on it.
+  [[ -z "$value" ]] && continue
+
+  forwarded=$((forwarded + 1))
+
+  frontend_hit=0
+  if [[ "$FRONTEND_WINDOW" == *"\"${value}\""* || "$FRONTEND_WINDOW" == *"'${value}'"* ]]; then
+    frontend_hit=1
+  fi
+
+  if [[ $frontend_hit -eq 1 ]]; then
+    if [[ $REPORT_MODE -eq 1 ]]; then
+      printf '  %-32s = %-40s <- consumed (useEventStream)\n' "$tok" "$value"
+    fi
+    continue
+  fi
+
+  if [[ -n "$ORPHAN_ALLOWLIST_DATA" && "$ORPHAN_ALLOWLIST_DATA" == *"\"${value}\""* ]]; then
+    orphan_allowlisted_count=$((orphan_allowlisted_count + 1))
+    if [[ $REPORT_MODE -eq 1 ]]; then
+      printf '  %-32s = %-40s <- ALLOWLISTED (no useEventStream consumer, dated blocker on file)\n' "$tok" "$value"
+    fi
+    continue
+  fi
+
+  orphan_fail=1
+  if [[ $REPORT_MODE -eq 1 ]]; then
+    printf '  %-32s = %-40s <- FAIL (no useEventStream consumer, not allowlisted)\n' "$tok" "$value"
+  fi
   echo "" >&2
-  echo "${GATE} FAIL — see offending topics above." >&2
+  echo "${GATE} FAIL: passthroughTopics entry ${tok} = \"${value}\" (${PASSTHROUGH_FILE}) is forwarded to every served-mode client but no frontend useEventStream(...) call subscribes to it." >&2
+  echo "  This is dead weight on every served connection's frame stream, and passthroughTopics is the single hand-authored source of truth the frontend's SERVED_STREAM_TOPICS list is generated from — an orphan entry reads as a statement of intent nobody meant. Fix: add a real useEventStream(...) subscriber, remove the entry from passthroughTopics if the feature is retired or desktop-only, or add a dated line to ${ORPHAN_ALLOWLIST} naming the blocker and an owner (e.g. the payload is delivered by a mechanism this gate cannot see — see that file's header for why TopicStreamTruncated is NOT an example of this)." >&2
+done < <(printf '%s\n' "$PASSTHROUGH_BLOCK" | grep -vE '^[[:space:]]*//' | grep -oE '[A-Za-z_][A-Za-z0-9_.]*' || true)
+
+if [[ $REPORT_MODE -eq 1 ]]; then
+  echo ""
+  echo "${GATE} pass 2: ${forwarded} passthroughTopics entries checked, ${orphan_allowlisted_count} allowlisted."
+fi
+
+if [[ $fail -ne 0 || $orphan_fail -ne 0 ]]; then
+  echo "" >&2
+  echo "${GATE} FAIL — see offending topics above (pass 1: subscribed but not forwarded; pass 2: forwarded but not subscribed)." >&2
   exit 2
 fi
 
-echo "${GATE} clean — every useEventStream-subscribed Topic* const is forwarded via passthroughTopics or explicitly allowlisted (${candidates} candidates, ${allowlisted_count} allowlisted)."
+echo "${GATE} clean — pass 1: every useEventStream-subscribed Topic* const is forwarded via passthroughTopics or explicitly allowlisted (${candidates} candidates, ${allowlisted_count} allowlisted). pass 2: every passthroughTopics entry has a useEventStream consumer or is explicitly allowlisted (${forwarded} entries, ${orphan_allowlisted_count} allowlisted)."
 exit 0

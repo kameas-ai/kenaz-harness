@@ -1351,6 +1351,102 @@ func plant(t *testing.T, full, content, appendText string) func() {
 	}
 }
 
+// plantReplace performs a journaled read-mutate-restore on an EXISTING
+// file, replacing the first occurrence of target with mutated. plant()'s
+// append mode can only add content at the very END of a file, which
+// cannot express "an existing slice literal gains a new element in the
+// middle of the file" — the shape check-served-mode-topic-forwarding.sh's
+// reverse-direction proof needs (a new passthroughTopics entry has to
+// land before the slice's closing brace, not after the whole file).
+// Journaled exactly the way plant()'s append branch journals its own
+// mutation, so a `-timeout` kill mid-plant heals on TestMain's next run
+// the same way every other case in this file does — see
+// plantguard_test.go. This intentionally does NOT retrofit the five
+// pre-existing bare-os.WriteFile-plus-defer read-mutate-restore tests
+// noted in TestStructuredOutputRowParityGate_PlantedEncoderDropFires's
+// doc comment; it only avoids adding a sixth one.
+func plantReplace(t *testing.T, full, target, mutated string) func() {
+	t.Helper()
+	orig, err := os.ReadFile(full)
+	if err != nil {
+		t.Fatalf("reading %s: %v", full, err)
+	}
+	if !strings.Contains(string(orig), target) {
+		t.Fatalf("target text not found in %s — the anchor may have moved; update this test:\n%q", full, target)
+	}
+	newContent := strings.Replace(string(orig), target, mutated, 1)
+	// Journal BEFORE touching the file — see plant()'s append branch and
+	// plantguard_test.go for the rationale: a kill after the write but
+	// before cleanup runs is exactly the case the journal exists for.
+	journalPlant(plantRecord{Path: full, Orig: string(orig), Existed: true, Planted: newContent})
+	if err := os.WriteFile(full, []byte(newContent), 0o644); err != nil {
+		t.Fatalf("writing %s: %v", full, err)
+	}
+	return func() {
+		if err := os.WriteFile(full, orig, 0o644); err != nil {
+			t.Errorf("restoring %s: %v — WORKING TREE IS DIRTY", full, err)
+		}
+		journalClear(full)
+	}
+}
+
+// TestServedModeTopicForwardingGate_PlantedOrphanBroadcastFires is the
+// REVERSE-direction planted-violation proof for
+// check-served-mode-topic-forwarding.sh's pass 2 (#69): a topic present
+// in core/serve/wsstream.go's passthroughTopics with NO real frontend
+// useEventStream subscriber. Before pass 2 existed, this shape was
+// invisible: pass 1 only ever asked "does a subscribed topic reach
+// passthroughTopics", never the reverse "does everything in
+// passthroughTopics reach a subscriber" — dead weight forwarded to every
+// served connection, and a passthroughTopics entry that no longer
+// states real intent (the entries are the single hand-authored source
+// of truth the TS list is generated from, so an orphan there is read as
+// a statement of intent nobody meant).
+//
+// Two plants, both journaled so a `-timeout` kill mid-plant heals on the
+// next run (mirrors the two-plant shape of
+// "served-mode-topic-forwarding/subscribed-not-forwarded" above, which
+// proves the FORWARD direction; this proves the reverse):
+//  1. A brand-new Topic* const (plant(), create mode — already
+//     journaled).
+//  2. wsstream.go's passthroughTopics slice gains that const as a new
+//     element (plantReplace, above — inserting into an existing slice
+//     literal is not expressible through plant()'s append-to-end-of-file
+//     mode).
+//
+// No frontend file is planted — the ABSENCE of a subscriber is the
+// violation being proved.
+func TestServedModeTopicForwardingGate_PlantedOrphanBroadcastFires(t *testing.T) {
+	root := repoRoot(t)
+
+	constFile := filepath.Join(root, "core", "rpc", "zz_gate_probe_orphan.go")
+	constContent := "package rpc\n\n" +
+		"// TopicZzGateProbeServedOrphan is planted by gates_can_fail_test.go's\n" +
+		"// check-served-mode-topic-forwarding.sh pass-2 (reverse direction)\n" +
+		"// proof and removed after the test runs. Deliberately has no\n" +
+		"// frontend useEventStream subscriber — that absence is the point.\n" +
+		"const TopicZzGateProbeServedOrphan = \"zzgateprobe:served-orphan\"\n"
+	cleanupConst := plant(t, constFile, constContent, "")
+	defer cleanupConst()
+
+	wsstreamPath := filepath.Join(root, "core", "serve", "wsstream.go")
+	const target = "\tmcpview.TopicMCPHealthChanged,\n}\n"
+	mutated := "\tmcpview.TopicMCPHealthChanged,\n\trpc.TopicZzGateProbeServedOrphan,\n}\n"
+	cleanupSlice := plantReplace(t, wsstreamPath, target, mutated)
+	defer cleanupSlice()
+
+	code, out := runGate(t, "check-served-mode-topic-forwarding.sh", root)
+	if code == 0 {
+		t.Fatalf("check-served-mode-topic-forwarding.sh exited 0 with a passthroughTopics entry "+
+			"(TopicZzGateProbeServedOrphan) that has no useEventStream consumer — the reverse-direction "+
+			"pass cannot fail.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "TopicZzGateProbeServedOrphan") || !strings.Contains(out, "zzgateprobe:served-orphan") {
+		t.Fatalf("gate failed, but its output does not name the planted orphan topic "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+}
+
 // TestToolContainmentUnconditionalGate_PlantedConditionalWrapperFails is
 // the planted-violation proof for
 // check-tool-containment-unconditional.sh (AC-015,
