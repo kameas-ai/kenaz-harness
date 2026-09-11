@@ -5,9 +5,23 @@
 // <DataDir>/eval-captures/<session_id>.jsonl. Every record is one
 // CaptureEntry; the Kind field identifies the payload shape.
 //
-// Security: any entry passing through the capture pipeline is subject to
-// the same redaction rules as the event log. Plaintext credential bytes
-// MUST NEVER appear in a capture file.
+// Security: every entry passing through the capture pipeline is redacted
+// with the SAME credential-pattern catalog as core/sessions/export (the
+// package's RedactValue for free text and RedactStructured for arbitrary
+// JSON) — see docs/escalation-register-2026-08-19.md G-3, "ONE OWNER, ONE
+// SHARED CATALOG." That catalog covers provider-specific key shapes (AWS,
+// GitHub, OpenAI, Anthropic, Google, Slack, Stripe, JWTs, PEM blocks,
+// connection-string passwords) and key-NAME scanning (a field named
+// "password"/"token"/"authorization"/"secret"/etc. is redacted regardless
+// of whether its value matches a known shape).
+//
+// Known gap: Source.Data (inline base64 media bytes on a ContentBlock) is
+// deliberately NOT scanned, matching core/sessions/export's own precedent
+// — it cannot carry a pattern-matched credential in readable form, and
+// running the catalog over multi-megabyte blobs on every turn is the one
+// way this pass gets expensive. Everything else reaching a capture file —
+// message text, tool-call arguments and results, tool_use/tool_result
+// payloads, attachment names/URIs — is redacted before it is written.
 package eval
 
 import (
@@ -18,11 +32,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
+	sessionexport "github.com/kameas-ai/kenaz-harness/core/sessions/export"
 )
 
 // EntryKind identifies the payload type of a CaptureEntry.
@@ -127,52 +141,49 @@ type CaptureStopEntry struct {
 // Redaction helpers
 // -----------------------------------------------------------------------------
 
-// redactString replaces any substring that looks like a credential token
-// with a placeholder. This is a best-effort scan; the authoritative redaction
-// pipeline runs inside the event log. Capture redaction is defense-in-depth.
+// redactText redacts a single free-text string via the shared
+// core/sessions/export catalog (provider key shapes + key-name-agnostic
+// generic-secret patterns; key-NAME-forced redaction only applies to
+// structured values, see redactRawJSON).
+func redactText(s string) string {
+	out, _ := sessionexport.RedactValue(s)
+	return out
+}
+
+// redactRawJSON round-trips raw through JSON, walks the decoded value with
+// the shared catalog's structured redactor (sessionexport.RedactStructured
+// — the same one core/sessions/export uses for tool-call arguments), and
+// re-encodes. This is what catches a credential sitting under a key NAME
+// like "password" or "api_key" that doesn't match any value-shape pattern
+// — RedactValue alone cannot see that class since it only scans flat text.
 //
-// Patterns redacted:
-//   - API key-like tokens: sk-ant-..., sk-..., Bearer ...
-//   - Anything that matches the "env:..." CredentialReference locator format
-func redactString(s string) string {
-	// Anthropic / OpenAI key pattern: sk-<alphanum> prefixes
-	if strings.Contains(s, "sk-") {
-		s = redactPattern(s, "sk-", 40)
+// Fails closed: if raw isn't valid JSON (shouldn't happen for a
+// json.RawMessage that already round-tripped once) or re-encoding fails,
+// a sentinel is written rather than the original bytes — this function
+// exists specifically so unredacted bytes never reach disk.
+func redactRawJSON(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return raw
 	}
-	// Bearer tokens
-	if strings.Contains(s, "Bearer ") {
-		s = redactPattern(s, "Bearer ", 60)
+	var anyVal any
+	if err := json.Unmarshal(raw, &anyVal); err != nil {
+		return json.RawMessage(`"[REDACTED: unparsable payload]"`)
 	}
-	return s
+	redacted := sessionexport.RedactStructured(anyVal)
+	out, err := json.Marshal(redacted)
+	if err != nil {
+		return json.RawMessage(`"[REDACTED: marshal error]"`)
+	}
+	return out
 }
 
-// redactPattern replaces the prefix + the next maxLen non-whitespace characters
-// with a placeholder.
-func redactPattern(s, prefix string, maxLen int) string {
-	var sb strings.Builder
-	remaining := s
-	for {
-		idx := strings.Index(remaining, prefix)
-		if idx < 0 {
-			sb.WriteString(remaining)
-			break
-		}
-		sb.WriteString(remaining[:idx])
-		sb.WriteString(prefix)
-		sb.WriteString("[REDACTED]")
-		// Skip past the token value
-		rest := remaining[idx+len(prefix):]
-		tokenEnd := 0
-		for tokenEnd < len(rest) && tokenEnd < maxLen && rest[tokenEnd] != ' ' && rest[tokenEnd] != '\n' && rest[tokenEnd] != '"' {
-			tokenEnd++
-		}
-		remaining = rest[tokenEnd:]
-	}
-	return sb.String()
-}
-
-// redactJSONMessages walks the messages slice and redacts string fields.
-// Returns the redacted JSON bytes.
+// redactMessages walks the messages slice and redacts each block's Text
+// via the shared catalog. Returns the redacted JSON bytes.
+//
+// Only Type and Text are carried into the reduced block form — ToolUse,
+// ToolResult, ToolData and Source (inline media) are intentionally not
+// captured here; tool invocations are captured separately via
+// AppendToolCall, and media bytes are never written to a capture file.
 func redactMessages(msgs []corellm.Message) (json.RawMessage, error) {
 	// For each message, walk content blocks and redact text fields.
 	type safeBlock struct {
@@ -189,11 +200,53 @@ func redactMessages(msgs []corellm.Message) (json.RawMessage, error) {
 		for _, b := range m.Content {
 			safe[i].Content = append(safe[i].Content, safeBlock{
 				Type: b.Type,
-				Text: redactString(b.Text),
+				Text: redactText(b.Text),
 			})
 		}
 	}
 	return json.Marshal(safe)
+}
+
+// redactContentBlocks returns a redacted copy of blocks, scrubbing every
+// text, attachment-metadata, tool-use and tool-result field through the
+// shared catalog. Unlike redactMessages (used for outbound request
+// messages), this preserves the full block shape — LLMResponseEntry
+// stores complete ContentBlocks today (including tool_use/tool_result),
+// and Replay's response cache depends on that fidelity.
+//
+// Source.Data (base64 media bytes) is intentionally left untouched,
+// matching core/sessions/export's own precedent: it cannot carry a
+// pattern-matched credential in readable form, and running the catalog
+// over multi-megabyte blobs on every turn is the one way this gets
+// expensive.
+func redactContentBlocks(blocks []corellm.ContentBlock) []corellm.ContentBlock {
+	if blocks == nil {
+		return nil
+	}
+	out := make([]corellm.ContentBlock, len(blocks))
+	for i, b := range blocks {
+		b.Text = redactText(b.Text)
+		if b.Source != nil {
+			src := *b.Source
+			src.OriginalName = redactText(src.OriginalName)
+			src.URI = redactText(src.URI)
+			b.Source = &src
+		}
+		if b.ToolUse != nil {
+			tu := *b.ToolUse
+			tu.Name = redactText(tu.Name)
+			tu.Input = redactRawJSON(tu.Input)
+			b.ToolUse = &tu
+		}
+		if b.ToolResult != nil {
+			tr := *b.ToolResult
+			tr.Content = redactRawJSON(tr.Content)
+			b.ToolResult = &tr
+		}
+		b.ToolData = redactRawJSON(b.ToolData)
+		out[i] = b
+	}
+	return out
 }
 
 // -----------------------------------------------------------------------------
@@ -351,7 +404,7 @@ func (r *Recorder) AppendMessage(sessionID string, role string, blocks []corellm
 	for i, b := range blocks {
 		redacted[i] = corellm.ContentBlock{
 			Type: b.Type,
-			Text: redactString(b.Text),
+			Text: redactText(b.Text),
 		}
 	}
 	content, err := json.Marshal(redacted)
@@ -366,12 +419,20 @@ func (r *Recorder) AppendMessage(sessionID string, role string, blocks []corellm
 	_ = w.Append(KindMessage, payload)
 }
 
-// AppendToolCall appends a KindToolCall entry for the session.
+// AppendToolCall appends a KindToolCall entry for the session, after
+// redacting the tool name and the arbitrary-shaped Args/Result JSON via
+// the shared catalog. Tool arguments are the primary place a credential
+// reaches capture under a key NAME rather than a recognisable value shape
+// (e.g. {"password": "hunter2"}) — redactRawJSON's structured walk is what
+// catches that class.
 func (r *Recorder) AppendToolCall(sessionID string, tc ToolCallEntry) {
 	w := r.writerFor(sessionID)
 	if w == nil {
 		return
 	}
+	tc.Name = redactText(tc.Name)
+	tc.Args = redactRawJSON(tc.Args)
+	tc.Result = redactRawJSON(tc.Result)
 	payload, err := json.Marshal(tc)
 	if err != nil {
 		return
@@ -390,7 +451,7 @@ func (r *Recorder) AppendLLMRequest(sessionID string, req corellm.GenerationRequ
 	entry := LLMRequestEntry{
 		ProfileID:   req.ProfileID,
 		Model:       req.Model,
-		System:      redactString(req.System),
+		System:      redactText(req.System),
 		Messages:    nil, // messages embedded as raw JSON below
 		Fingerprint: fp,
 	}
@@ -405,14 +466,18 @@ func (r *Recorder) AppendLLMRequest(sessionID string, req corellm.GenerationRequ
 	_ = w.Append(KindLLMRequest, payload)
 }
 
-// AppendLLMResponse appends a KindLLMResponse entry.
+// AppendLLMResponse appends a KindLLMResponse entry, redacting response
+// content the same way requests are redacted. Before this fix response
+// content was written entirely unredacted (no local pattern match, no
+// shared-catalog consumption) — a model that echoes a credential back
+// (or emits a tool_use call carrying one) reached disk in plaintext.
 func (r *Recorder) AppendLLMResponse(sessionID, requestFingerprint string, resp corellm.Response) {
 	w := r.writerFor(sessionID)
 	if w == nil {
 		return
 	}
 	entry := LLMResponseEntry{
-		Content:            resp.Content,
+		Content:            redactContentBlocks(resp.Content),
 		FinishReason:       resp.FinishReason,
 		Usage:              resp.Usage,
 		RequestFingerprint: requestFingerprint,
