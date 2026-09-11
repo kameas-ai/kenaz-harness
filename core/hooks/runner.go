@@ -436,17 +436,94 @@ func (r *Runner) runShellElicitationResult(ctx context.Context, h Hook, ev Elici
 	return ElicitationResultEventResult{}, nil
 }
 
-// RunPostSend fires every enabled post_send hook for the event. Errors
-// are logged and skipped — there is no return-side mutation.
+// RunPostSend fires every enabled post_send hook for the event.
+// Dispatch is asynchronous, via the same bounded worker pool Fire /
+// FireAsync use for v2 events (finding #61 GAP-2): post_send is
+// documented as side-effect only — there is no return-side mutation
+// flowing back to the caller — so nothing observes the outcome
+// synchronously. Before this, RunPostSend dispatched every hook
+// in-line on the caller's goroutine, and the memory.persist builtin's
+// OpenAIEmbedder.Embed call is a real blocking HTTP round-trip to
+// api.openai.com. Once post_send was wired onto the live chat send
+// path (ledger #46 / this ledger's #61), that HTTP call sat directly
+// on StartStream's critical path: a slow or hanging embeddings
+// endpoint delayed every turn for any user with memory enabled.
+//
+// RunPostSend now enqueues each hook and returns immediately. The
+// dispatch itself still calls Embed() and Store.Add() in the normal
+// order inside the worker — a chunk is only ever written AFTER its
+// embedding succeeds, exactly as before. This deliberately avoids
+// introducing a "row persisted without its embedding" state (which
+// would need a pending marker, a backfill path, and a store schema
+// change — a mission-sized addition, not a patch-lane latency fix):
+// on success the row lands slightly later than the turn that produced
+// it; on error or timeout it is dropped and logged, which is the same
+// data-loss behavior an Embed() failure already had synchronously
+// (RunPostSend's contract has never propagated post_send errors back
+// to the send path). The dispatch context is detached from the
+// caller's ctx (context.WithoutCancel, mirroring FireAsync) so
+// cancelling/completing the turn does not abort an in-flight embed,
+// and is bounded by the hook's TimeoutMs (default
+// DefaultAsyncTimeoutMs = 60s) so a hanging endpoint cannot leak the
+// goroutine forever. The pool itself is bounded (asyncPoolSize
+// workers, a size*4 buffered queue) and non-blocking: a saturated
+// queue drops the work and logs, it never blocks the caller. Runner.
+// Shutdown drains the pool so no queued embed outlives process
+// shutdown.
+//
+// Ordering (review of finding #61, 2026-09-11): the async dispatch is
+// a genuine semantic change to this public extensibility surface, not
+// just an internal latency fix — post_send now completes strictly
+// AFTER the turn that triggered it closes (StartStream/the chat send
+// path returns before any post_send hook has run, not after), so a
+// fast next turn on the same session can race a still-in-flight
+// post_send write. This is judged best-effort-acceptable: the turn's
+// actual content already lives in the real conversation transcript
+// regardless of post_send's outcome, and long-term memory (the one
+// production consumer today, via memory.persist) is a supplementary
+// retrieval aid, not the record of truth — losing or delaying one
+// write to it is a materially different risk than losing or delaying
+// the turn itself. This is the necessary trade for getting a blocking
+// HTTP embed off the send path; callers that need a synchronization
+// point (e.g. a test asserting on a post_send side effect) must call
+// Shutdown to drain the pool first — see core/hooks/runner_test.go's
+// TestRunner_BuiltinPostSendFiresOnce and
+// core/rpc/views/agentgraph/chat/post_send_hook_integration_test.go's
+// TestPostSendHook_MemoryPersist_WritesRealRow for the pattern. This
+// applies uniformly to every post_send hook kind, not just the
+// memory.persist builtin: a user-authored KindShell or KindMCP
+// post_send hook gets the same async, detached, timeout-bounded
+// dispatch and is subject to the same race against a fast next turn.
 func (r *Runner) RunPostSend(ctx context.Context, ev PostSendEvent) {
 	if r == nil || r.registry == nil {
 		return
 	}
 	hookList := r.registry.EnabledForEvent(EventPostSend, ev.SessionID, ev.Kind, ev.Model)
+	if len(hookList) == 0 {
+		return
+	}
+	pool := r.lazyPool()
+	// Detach from the caller's context — the turn that triggered this
+	// event may finish (and cancel its context) long before the
+	// embedding call the hook makes completes.
+	asyncCtx := context.WithoutCancel(ctx)
 	for _, h := range hookList {
-		if err := r.safeDispatchPostSend(ctx, h, ev); err != nil {
-			r.logger.Warn("hooks.postsend.dispatch_failed",
-				"id", h.ID, "kind", h.Kind, "err", err.Error())
+		h := h // capture loop variable
+		work := asyncWork{fn: func() {
+			timeoutMs := h.TimeoutMs
+			if timeoutMs <= 0 {
+				timeoutMs = DefaultAsyncTimeoutMs
+			}
+			tctx, cancel := context.WithTimeout(asyncCtx, time.Duration(timeoutMs)*time.Millisecond)
+			defer cancel()
+			if err := r.safeDispatchPostSend(tctx, h, ev); err != nil {
+				r.logger.Warn("hooks.postsend.dispatch_failed",
+					"id", h.ID, "kind", h.Kind, "err", err.Error())
+			}
+		}}
+		if !pool.submit(work) {
+			r.logger.Warn("hooks.postsend.pool_saturated",
+				"id", h.ID, "event", EventPostSend, "dropped", true)
 		}
 	}
 }

@@ -356,6 +356,21 @@ func main() {
 			// reporting the boot-time literal forever. Runs before
 			// c.Shutdown so the settings store is still open.
 			persistWindowSize(ctx, api, wailsruntime.WindowGetSize)
+			// Review finding (Blocker 3, finding #61 follow-up,
+			// 2026-09-11): api.Shutdown() previously had zero production
+			// callers anywhere — this OnShutdown only ever called
+			// c.Shutdown (core.Core.Shutdown, a different type), so
+			// API.Shutdown()'s own docstring claim ("main.go calls this
+			// from OnShutdown") was false, and so was the commit message
+			// that introduced the async post_send embed queue ("no queued
+			// embed outlives process shutdown") — nothing drained
+			// a.hookRunner's pool or stopped a.pruneScheduler /
+			// a.compactionScheduler on a real quit. Safe to call before
+			// c.Shutdown now that hooks.Runner.Shutdown (core/hooks/fire.go)
+			// is idempotent (Blocker 1) — an unguarded double-call here
+			// would otherwise have been a crash on exit the first time this
+			// ran alongside any other Shutdown call path.
+			api.Shutdown()
 			_ = c.Shutdown(ctx)
 		},
 		Bind: api.Bindings(),
@@ -531,7 +546,15 @@ func runServeMode(listenAddr string) {
 		// config surface WithStreamQueueCap's "constrained workbench" half
 		// never had. 0 (absent/invalid) keeps serve.defaultStreamQueueCap.
 		serve.WithStreamQueueCap(serve.StreamQueueCapFromEnv(os.Getenv)))
-	if serveErr := srv.Serve(ctx); serveErr != nil && serveErr != context.Canceled {
+	serveErr := srv.Serve(ctx)
+	// Review finding (Blocker 3, finding #61 follow-up, 2026-09-11):
+	// served mode never called api.Shutdown() either — see the OnShutdown
+	// comment above for the full history. Runs on every exit from Serve
+	// (clean SIGTERM/SIGINT via cancel(), or a real server error) so a
+	// queued post_send embed and the prune/compaction schedulers are
+	// stopped before the process exits, not just on the desktop path.
+	api.Shutdown()
+	if serveErr != nil && serveErr != context.Canceled {
 		serveLog.Error("harness.serve: server error", "err", serveErr)
 		os.Exit(1)
 	}

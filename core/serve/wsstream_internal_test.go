@@ -131,6 +131,11 @@ func newPipeServer(t *testing.T, queueCap int) (*rpc.API, *Server) {
 		t.Fatalf("core.New: %v", err)
 	}
 	api := rpc.New(c)
+	// Blocker 2 (review of finding #61, 2026-09-11): rpc.New(c) with a
+	// real DataDir now starts api.pruneScheduler's background goroutine
+	// unconditionally; Shutdown must run so it doesn't leak past each
+	// of this helper's callers.
+	t.Cleanup(api.Shutdown)
 	return api, New(api, "127.0.0.1:0", "tok", nil,
 		slog.New(slog.NewTextHandler(io.Discard, nil)), WithStreamQueueCap(queueCap))
 }

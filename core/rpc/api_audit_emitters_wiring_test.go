@@ -49,6 +49,11 @@ func auditEmittersWiringAPI(t *testing.T) *API {
 		t.Fatalf("core.New: %v", err)
 	}
 	api := New(c)
+	// Blocker 2 (review of finding #61, 2026-09-11): New(c) with a real
+	// DataDir now starts api.pruneScheduler's background goroutine
+	// unconditionally; Shutdown must run so it doesn't leak past each
+	// of this helper's callers.
+	t.Cleanup(api.Shutdown)
 	assertSettingsStoreIsSandboxed(t, api)
 	return api
 }

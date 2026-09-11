@@ -488,6 +488,16 @@ func llmRegistryOverDataDir(t *testing.T, dataDir string) corellm.Registry {
 	stack := newLLMStack(c, NewStreamBroker(NewMultiEmitter()), newPersonalStore(c),
 		nil, nil, func() bool { return false }, nil, nil, nil, nil, nil, nil, nil,
 		nil, nil, nil, nil, nil, nil, nil, nil, cedarEngine, nil, nil)
+	// Blocker 2 follow-up (found by core/rpc/blocker2_goroutine_leak_test.go
+	// under the full package's -race run, 2026-09-11): newLLMStack itself
+	// calls sweepScheduler.Start() when it builds a non-nil compaction
+	// scheduler over a real DataDir — independent of, and bypassing, the
+	// New()-level pruneScheduler gate the rest of Blocker 2 audited. This
+	// helper has no full *API for Shutdown() to reach, so stop the
+	// scheduler directly.
+	if stack.compactionScheduler != nil {
+		t.Cleanup(stack.compactionScheduler.Stop)
+	}
 	if stack.reg == nil {
 		t.Fatal("newLLMStack produced no registry — construction changed")
 	}

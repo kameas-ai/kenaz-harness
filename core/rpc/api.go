@@ -69,6 +69,7 @@ import (
 	mcpsse "github.com/kameas-ai/kenaz-harness/core/mcp/transport/sse"
 	corememory "github.com/kameas-ai/kenaz-harness/core/memory"
 	"github.com/kameas-ai/kenaz-harness/core/memory/narrative"
+	"github.com/kameas-ai/kenaz-harness/core/memory/prune"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/a2a"
 	acpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/acp"
@@ -897,6 +898,13 @@ type API struct {
 	// anywhere the shutdown path could reach, so the background
 	// goroutine + ticker ran until process exit on every boot instead
 	// of stopping cleanly.
+	//
+	// Correction (review of finding #61, 2026-09-11): capturing the
+	// field only fixed half of "stopping cleanly" — API.Shutdown()
+	// itself had zero production callers until Blocker 3's fix (see
+	// Shutdown's doc comment), so this scheduler leaked past process
+	// exit on every real quit right up until that fix landed, same as
+	// pruneScheduler below. Real now.
 	compactionScheduler *compaction.SweepScheduler
 
 	// localAuditRetentionScheduler is the LOCAL audit-retention sweep
@@ -907,6 +915,32 @@ type API struct {
 	// unconditionally (spec D-7: "local retention is not fleet-gated").
 	// Held for Start (in SetContext) and Stop (in Shutdown).
 	localAuditRetentionScheduler *eventlog.LocalRetentionScheduler
+
+	// pruneScheduler is the long-term-memory prune sweep scheduler
+	// (finding #61 GAP-1). Mirrors compactionScheduler immediately
+	// above, including the bug it fixes: prune.NewScheduler had a
+	// complete, tested Start/Stop/RunOnce implementation and ZERO
+	// production callers — only the manual "Prune preview" / "Prune
+	// now" inspector RPCs ever constructed a Pruner, so the store's
+	// default 10k-row cap was never enforced automatically. It grew
+	// until a user happened to open the memory inspector and prune by
+	// hand. Constructed (and Started) in New() only when a real
+	// on-disk memory store exists (memStore != nil — the same gate
+	// openMemoryStore already applies for the nil-core test chassis
+	// and DataDir-less boots), so ordinary unit tests that construct
+	// API without a real DataDir never spin up this goroutine. Held
+	// here so Shutdown can call Stop() and the in-flight sweep (if
+	// any) returns cleanly instead of leaking past process exit.
+	//
+	// Correction (review of finding #61, 2026-09-11): "Shutdown can
+	// call Stop()" was true from day one, but nothing in production
+	// ever called API.Shutdown() itself until Blocker 3's fix wired it
+	// into main.go's OnShutdown / runServeMode and
+	// cmd/harness-served/main.go — so until then this goroutine DID
+	// leak past process exit on every real quit, same as every
+	// real-DataDir test that never called Shutdown (see
+	// core/rpc/blocker2_goroutine_leak_test.go). It is real now.
+	pruneScheduler *prune.Scheduler
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
@@ -1206,10 +1240,31 @@ func (a *API) runMigrationDriftCheck(ctx context.Context) {
 	}
 }
 
-// Shutdown cancels the auto-update background poller and stops the
-// workflow cron scheduler and the chat-run cron scheduler. main.go calls
-// this from OnShutdown so all background goroutines exit cleanly. Safe to
-// call when no poller is running.
+// Shutdown stops every background goroutine this API wired at
+// construction time: the auto-update poller, the workflow cron
+// scheduler, the chat-run cron scheduler, the compaction sweep
+// scheduler (CK-09), the memory prune sweep scheduler (finding #61
+// GAP-1), the settings/context-graph/unit sync pollers, the eval
+// recorder, and — via a.hookRunner.Shutdown() — the async hooks
+// worker pool, which drains any post_send dispatch still in flight
+// (finding #61 GAP-2, e.g. a queued memory.persist embedding call) so
+// it cannot outlive process shutdown.
+//
+// Idempotent and nil-safe: a is nil-checked below, and every
+// scheduler's own Stop()/Shutdown() (including hooks.Runner.Shutdown,
+// core/hooks/fire.go) tolerates being called more than once or on a
+// never-started instance.
+//
+// Called from main.go's Wails OnShutdown (desktop), main.go's
+// runServeMode, and cmd/harness-served/main.go (both served entry
+// points) — corrected 2026-09-11 (review of finding #61): this
+// docstring previously claimed "main.go calls this from OnShutdown"
+// while no production call site anywhere actually did; OnShutdown only
+// ever called core.Core.Shutdown, a different type. That gap is what
+// made the commit message introducing the async post_send embed queue
+// ("no queued embed outlives process shutdown") untrue for real users.
+// Wiring a real call site required Shutdown to be double-call-safe
+// first (Blocker 1) — see hooks.Runner.Shutdown's own doc for why.
 func (a *API) Shutdown() {
 	if a == nil {
 		return
@@ -1275,6 +1330,21 @@ func (a *API) Shutdown() {
 		if err := a.cedarDecisions.Close(); err != nil {
 			logging.L().Warn("cedar.decision_store.shutdown_close_failed", "err", err.Error())
 		}
+	}
+	// finding #61 GAP-1: stop the memory prune sweep scheduler so no
+	// in-flight sweep is abandoned on shutdown, mirroring
+	// compactionScheduler (CK-09) above.
+	if a.pruneScheduler != nil {
+		a.pruneScheduler.Stop()
+	}
+	// finding #61 GAP-2: drain the hooks async pool so a queued
+	// post_send dispatch (memory.persist's embedding call, now async —
+	// see hooks.Runner.RunPostSend) cannot outlive process shutdown.
+	// hookRunner is nil under the same memStore==nil condition that
+	// keeps pruneScheduler nil above (see newHooksStack's guard
+	// clause), so this is nil-safe on the same test paths.
+	if a.hookRunner != nil {
+		a.hookRunner.Shutdown()
 	}
 }
 
@@ -2595,6 +2665,28 @@ func New(c *core.Core, opts ...Option) *API {
 	})
 	// Keep a ref for the search adapter (unified-search-01KX5R8C WP03).
 	a.memStoreRef = memStore
+	// finding #61 GAP-1: wire the automatic prune sweep so the memory
+	// store's default 10k-row cap is actually enforced without a user
+	// manually opening the inspector and pruning by hand. See the
+	// pruneScheduler field doc for the full history. buildMemoryPruneScheduler
+	// returns nil when memStore is nil (nil-core test chassis or a boot
+	// with no DataDir) so this never starts a background goroutine in
+	// the ordinary unit-test path.
+	a.pruneScheduler = buildMemoryPruneScheduler(memStore)
+	if a.pruneScheduler != nil {
+		// Same Start(ctx, lastRun) contract compaction's sweepScheduler
+		// uses just above in newLLMStack. lastRun is the zero value —
+		// unlike compaction there is no on-disk sidecar recording the
+		// previous sweep time (prune/scheduler.go's own doc comment:
+		// "does NOT persist LastRunAt anywhere"), so Start's overdue
+		// check (lastRun.IsZero() || now.Sub(lastRun) >= interval) is
+		// always true on boot and a catch-up sweep fires once on every
+		// launch. That is a deliberately conservative default — it
+		// costs one List+maybe-Delete pass over the store, not a
+		// per-turn cost — rather than skipping enforcement until a
+		// sidecar mechanism is built.
+		a.pruneScheduler.Start(context.Background(), time.Time{})
+	}
 	if hookRegistry != nil {
 		a.hooksAPI = hooksview.New(hooksview.Config{
 			Registry: hookRegistry,
@@ -7241,6 +7333,30 @@ func openMemoryStore(c *core.Core) corememory.Store {
 		return nil
 	}
 	return store
+}
+
+// buildMemoryPruneScheduler constructs the automatic prune-sweep
+// scheduler for the long-term memory store (finding #61 GAP-1: see
+// the API.pruneScheduler field doc). Returns nil when there is no
+// real on-disk store to sweep — the same condition openMemoryStore
+// itself already returns nil for (nil-core test chassis, or a boot
+// with no DataDir) — which is what keeps this scheduler's background
+// goroutine out of the ordinary unit-test suite: any test that builds
+// API without a real DataDir gets store == nil here and this function
+// never touches prune.NewScheduler at all.
+//
+// Uses prune.DefaultRules() — the same ruleset the manual "Prune
+// preview" / "Prune now" inspector RPCs fall back to when
+// memoryview.Config.PruneRules is left zero (which is exactly what
+// the memoryview.New call in New() does today: it does not set
+// PruneRules), so the automatic sweep and a manual run apply
+// identical thresholds.
+func buildMemoryPruneScheduler(store corememory.Store) *prune.Scheduler {
+	if store == nil {
+		return nil
+	}
+	pruner := prune.New(store, prune.DefaultRules(), nil)
+	return prune.NewScheduler(pruner)
 }
 
 // newEmbedder picks an eligible OpenAI-API-compatible personal provider

@@ -14,7 +14,7 @@ func TestAsyncPool_PanicDoesNotCrashWorker(t *testing.T) {
 	t.Parallel()
 
 	p := newAsyncPool(2)
-	defer p.shutdown()
+	defer p.shutdown(5 * time.Second)
 
 	var panicFired atomic.Bool
 	var afterPanic atomic.Bool
@@ -72,7 +72,7 @@ func TestAsyncPool_SubmitAndDrain(t *testing.T) {
 		}
 	}
 
-	p.shutdown()
+	p.shutdown(5 * time.Second)
 	if got := count.Load(); got != n {
 		t.Errorf("count = %d, want %d", got, n)
 	}

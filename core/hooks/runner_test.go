@@ -159,6 +159,10 @@ func TestRunner_BuiltinPostSendFiresOnce(t *testing.T) {
 	runner.RunPostSend(context.Background(), PostSendEvent{
 		SessionID: "s", UserTurn: "u", AssistantTurn: "a", FinishReason: "completed",
 	})
+	// RunPostSend dispatches asynchronously (finding #61 GAP-2) — drain
+	// the pool so the assertion below observes the completed dispatch
+	// rather than racing it.
+	runner.Shutdown()
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("post-send fired %d times, want 1", got)
 	}
