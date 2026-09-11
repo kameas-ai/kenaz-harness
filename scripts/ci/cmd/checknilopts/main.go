@@ -98,7 +98,7 @@
 //
 // WHAT THIS GATE CANNOT SEE
 // ---------------------------
-// Two structural blind spots, both discovered against live code (not
+// Three structural blind spots, all discovered against live code (not
 // hypothetical) during the PR #332 review round and its follow-up
 // calibration:
 //
@@ -139,6 +139,25 @@
 //     with a handful of composite literals in it; the fix is cheap
 //     enough that it should happen alongside the next real finding that
 //     needs it, not speculatively here.
+//
+//  3. A receiver-less HELPER function that takes the owner type as an
+//     explicit pointer parameter gets the same self==nil leniency the
+//     FuncLit escape used to get, and clause 2 cannot see its
+//     free-function call syntax either. So:
+//
+//     func configure(c *Config, d Dep) { c.Field = d }
+//
+//     marks Field wired even with ZERO call sites — the same shape as
+//     the nested-closure escape this commit closes, reached by writing
+//     a helper instead of a method. This is NOT a contrived edge case:
+//     it is this codebase's own established idiom for wiring optional
+//     collaborators, and four real fields depend on it today —
+//     managerAPI.resumeStarter, .titleGen, .cedarGate and .autonomyCtx
+//     in core/rpc/views/sessions/, wired at core/rpc/api.go:2295,
+//     :2351, :2386 and :2423. All four call sites are real, so today's
+//     "wired" verdicts are CORRECT — but the gate would not notice if
+//     those call sites were deleted. Treat a "wired" verdict on a field
+//     assigned only through a free function as unverified.
 //
 // WHY NOT A SHELL/GREP GATE
 // --------------------------
