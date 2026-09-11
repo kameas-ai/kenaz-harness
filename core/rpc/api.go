@@ -614,8 +614,15 @@ type API struct {
 	// — see check-cedar-engine-singleton.sh (I15), which fails when a
 	// second construction site reappears.
 	cedarEngine *cedar.Engine
-	searchAPI   searchview.SearchAPI
-	storageAPI  storageview.StorageAPI
+	// cedarDecisions is the durable backing for cedarEngine's
+	// audit-decision log (finding-58-cedar-decision-persistence). nil
+	// on the test chassis (no real storage.DB) — Engine then falls back
+	// to its in-memory NewMemoryDecisionStore(0), the documented nil
+	// fallback. Held here (not just inside cedarEngine's private
+	// Options) so Shutdown can flush the background writer.
+	cedarDecisions *cedar.SQLDecisionStore
+	searchAPI      searchview.SearchAPI
+	storageAPI     storageview.StorageAPI
 	// memStoreRef is the long-term memory store held for the search adapter
 	// (unified-search-01KX5R8C WP03). The main memory path (memoryAPI) is
 	// already wired; this ref lets the search lazy-init access it without
@@ -1261,6 +1268,14 @@ func (a *API) Shutdown() {
 	if a.localAuditRetentionScheduler != nil {
 		a.localAuditRetentionScheduler.Stop()
 	}
+	// finding-58-cedar-decision-persistence: flush the Cedar
+	// decision-store background writer so a decision queued right
+	// before shutdown is not lost.
+	if a.cedarDecisions != nil {
+		if err := a.cedarDecisions.Close(); err != nil {
+			logging.L().Warn("cedar.decision_store.shutdown_close_failed", "err", err.Error())
+		}
+	}
 }
 
 // ErrEvalNotConfigured is returned by Sessions_StartCapture /
@@ -1566,7 +1581,26 @@ func New(c *core.Core, opts ...Option) *API {
 	// in-session policy edit unable to reach twelve of the thirteen
 	// gates it should have. See the field's doc comment on the API
 	// struct and check-cedar-engine-singleton.sh (I15).
-	a.cedarEngine = buildCedarEngineOrNil(coreDataDir(c))
+	//
+	// finding-58-cedar-decision-persistence: the audit-decision log
+	// (Engine.decisions) previously had no persistent backing — both
+	// buildCedarEngineOrNil and buildCedarGate omitted Options.Decisions,
+	// so every install silently fell back to a 256-entry in-memory ring
+	// (NewMemoryDecisionStore(0)), lost on every restart. Construct the
+	// durable store here (nil-safe: nil on the test chassis / no
+	// storage.DB, same fail-open posture as every other builder in this
+	// file) and thread it through explicitly rather than assigning the
+	// concrete *cedar.SQLDecisionStore straight into an interface field
+	// — a nil *SQLDecisionStore boxed into a non-nil cedar.DecisionStore
+	// interface would defeat Engine's `if opts.Decisions != nil` guard
+	// (the same nil-interface trap WithSweepableBackend's own comment
+	// documents a few hundred lines below).
+	a.cedarDecisions = buildCedarDecisionStore(c)
+	var cedarDecisionsOpt cedar.DecisionStore
+	if a.cedarDecisions != nil {
+		cedarDecisionsOpt = a.cedarDecisions
+	}
+	a.cedarEngine = buildCedarEngineOrNil(coreDataDir(c), cedarDecisionsOpt)
 
 	// harness-self-attach-01PMHS01 UNIT-2: install the three shipped
 	// harness-self Cedar policies (harness_read_default.cedar,
@@ -9610,6 +9644,44 @@ func (a *API) CedarGate() cedar.Gate {
 	return a.cedarGate()
 }
 
+// buildCedarDecisionStore constructs the production durable backing
+// for the Cedar engine's audit-decision log
+// (finding-58-cedar-decision-persistence). Returns nil when there is no
+// real storage.DB to back it (nil Core, test chassis, or a storage.DB
+// implementation that doesn't expose a stdlib *sql.DB) — callers must
+// then leave Options.Decisions unset so Engine falls back to its
+// documented in-memory default (NewMemoryDecisionStore(0)), never boot
+// with a broken store.
+//
+// Mirrors buildJournalWriter's structural type-assertion bridge (same
+// file, same pattern): it asks storage.DB whether it satisfies the
+// SQL-handle shape without storage.DB growing a public method.
+func buildCedarDecisionStore(c *core.Core) *cedar.SQLDecisionStore {
+	if c == nil {
+		return nil
+	}
+	store := c.Storage()
+	if store == nil {
+		return nil
+	}
+	type sqlHandle interface{ SQL() *sql.DB }
+	h, ok := store.(sqlHandle)
+	if !ok {
+		return nil
+	}
+	rawDB := h.SQL()
+	if rawDB == nil {
+		return nil
+	}
+	s, err := cedar.NewSQLDecisionStore(rawDB)
+	if err != nil {
+		slog.Warn("cedar decision store construction failed; consumer falls back to its safe-default behaviour",
+			"err", err)
+		return nil
+	}
+	return s
+}
+
 // buildCedarEngineOrNil constructs a *cedar.Engine. In production it
 // has exactly ONE caller — the WP05 hoist site in New(), which stores
 // the result on a.cedarEngine — enforced by
@@ -9623,7 +9695,14 @@ func (a *API) CedarGate() cedar.Gate {
 // rather than booting a disk-walk engine with nowhere to walk. Mirrors
 // buildCedarGate's options but returns *Engine instead of the Gate
 // interface.
-func buildCedarEngineOrNil(dataDir string) *cedar.Engine {
+//
+// decisions is the audit-decision persistence seam
+// (finding-58-cedar-decision-persistence) — nil is a legitimate value
+// (Engine's documented in-memory fallback); callers pass nil directly
+// rather than a nil-valued concrete pointer boxed into the interface
+// (see New()'s cedarDecisionsOpt construction for why that distinction
+// matters).
+func buildCedarEngineOrNil(dataDir string, decisions cedar.DecisionStore) *cedar.Engine {
 	if dataDir == "" {
 		return nil
 	}
@@ -9632,6 +9711,7 @@ func buildCedarEngineOrNil(dataDir string) *cedar.Engine {
 		LoadFromDisk:    true,
 		IncludeEmbedded: true,
 		DefaultDeny:     false,
+		Decisions:       decisions,
 	})
 	if err != nil {
 		slog.Warn("cedar engine construction failed; consumer falls back to its safe-default behaviour",
@@ -9700,7 +9780,14 @@ func coreDataDir(c *core.Core) string {
 //     unexpected fail-closed posture due to a typo.
 //   - construction itself errors: log a warning + fall back to
 //     AllowAll so the chassis boots
-func buildCedarGate(dataDir string) cedar.Gate {
+//
+// decisions is the audit-decision persistence seam
+// (finding-58-cedar-decision-persistence); nil is the documented
+// in-memory fallback. This builder has zero non-test production
+// callers today (check-cedar-engine-singleton.sh I15 — the singleton
+// call is buildCedarEngineOrNil via New()), but is wired identically
+// for consistency and because tests exercise it directly.
+func buildCedarGate(dataDir string, decisions cedar.DecisionStore) cedar.Gate {
 	if dataDir == "" {
 		return cedar.AllowAll{}
 	}
@@ -9713,6 +9800,7 @@ func buildCedarGate(dataDir string) cedar.Gate {
 		// once the policy engine settles down (a future settings toggle
 		// will surface this).
 		DefaultDeny: false,
+		Decisions:   decisions,
 	})
 	if err != nil {
 		slog.Warn("cedar engine construction failed; falling back to AllowAll",

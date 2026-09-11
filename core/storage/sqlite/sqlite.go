@@ -17,6 +17,7 @@ import (
 
 	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
+	cedarpolicy "github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 	"github.com/kameas-ai/kenaz-harness/core/slashcmd"
 	"github.com/kameas-ai/kenaz-harness/core/storage"
@@ -164,6 +165,19 @@ func Open(cfg storage.Config) (storage.DB, error) {
 	if err := eventlog.RegisterMigrations(registry); err != nil {
 		db.closeOnError()
 		return nil, fmt.Errorf("storage: register event-log migrations: %w", err)
+	}
+	// cedar-policy: finding-58-cedar-decision-persistence. Creates
+	// policy_decisions (version 1300), the durable backing table for
+	// cedar.SQLDecisionStore — the fix for the Cedar engine's
+	// audit-decision log having no persistent backing in production
+	// (it silently fell back to a 256-entry in-memory ring, lost on
+	// every restart). Registering here is what makes the table exist
+	// on every install, including upgraded ones whose ledger
+	// high-water mark already sits well above the 1300-1399 block —
+	// see core/storage/sqlite/upgrade_path_test.go.
+	if err := cedarpolicy.RegisterMigrations(registry); err != nil {
+		db.closeOnError()
+		return nil, fmt.Errorf("storage: register cedar-policy migrations: %w", err)
 	}
 	db.registry = registry
 
