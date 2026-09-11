@@ -1043,7 +1043,9 @@
 # Dated 2026-08-29. Owner: alec.
 "CompactionOverhead"
 
-# CLASS: escalated -- release/v0.78.0 integration sweep, 2026-09-11.
+# CLASS: untriaged -- release/v0.78.0 integration sweep, 2026-09-11.
+# 4 entries.
+#
 # Four Subagent_* control verbs added by
 # subagent-control-and-background-tasks-01PMZB11 UNIT-8 (PRs #331 abort/
 # steer, #334 pause/resume; core/rpc/bindings.go:2570-2607). The mission's
@@ -1065,15 +1067,19 @@
 #
 # Blocker: served-mode-is-a-real-mode-01PMZ707's UNIT-12 boundary decision
 # (port vs. boundary panel) for Tasks_*/Subagent_* control surfaces —
-# not yet specced as of this release. Owner: alec. Delete this entry (or
-# convert to gated/boundary-panelled) the moment UNIT-12 lands.
+# not yet specced as of this release. Dated 2026-09-11. Owner: alec.
+# Delete this entry (or convert to gated/boundary-panelled) the moment
+# UNIT-12 lands.
 "Subagent_Abort"
 "Subagent_Pause"
 "Subagent_Resume"
 "Subagent_Steer"
 
 # CLASS: boundary-panelled -- release/v0.78.0 integration sweep,
-# 2026-09-11. MCP_SetToolPolicy / MCP_ListToolPolicies were added by
+# 2026-09-11.
+# 2 entries.
+#
+# MCP_SetToolPolicy / MCP_ListToolPolicies were added by
 # trust-surfaces-that-fire-01PMZ202 WP24 (finding CHAT-05;
 # core/rpc/bindings.go:552-573) as the writer/reader for the static MCP
 # tool-permission source (<DataDir>/mcp_servers.json). WP24's tasks.md
