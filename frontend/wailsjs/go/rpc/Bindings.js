@@ -1618,6 +1618,14 @@ export function Subagent_Abort(arg1) {
   return window['go']['rpc']['Bindings']['Subagent_Abort'](arg1);
 }
 
+export function Subagent_Pause(arg1) {
+  return window['go']['rpc']['Bindings']['Subagent_Pause'](arg1);
+}
+
+export function Subagent_Resume(arg1) {
+  return window['go']['rpc']['Bindings']['Subagent_Resume'](arg1);
+}
+
 export function Subagent_Steer(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Subagent_Steer'](arg1, arg2);
 }
