@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync"
+	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
@@ -75,9 +76,37 @@ func (p *asyncPool) submit(w asyncWork) bool {
 	}
 }
 
-// shutdown closes the work channel and blocks until all in-flight
-// workers have exited.
-func (p *asyncPool) shutdown() {
+// shutdown closes the work channel and waits up to timeout for all
+// in-flight workers to drain. If timeout <= 0 it waits unboundedly
+// (kept for test call sites that want the old unconditional-drain
+// behavior).
+//
+// When the timeout elapses first, shutdown returns false without
+// waiting any further — the wg.Wait() keeps running in a background
+// goroutine and any workers still processing queued items are simply
+// abandoned. This is safe: close(p.work) has already happened above,
+// so no new work can be enqueued (submit()'s select-with-default
+// never blocks and the closed channel only ever has receivers, not
+// senders, after this point); each worker only touches its own
+// captured closure state, never the pool itself, so an abandoned
+// worker cannot race the caller or write into anything the caller is
+// tearing down. The process exiting is what ultimately reclaims the
+// goroutine.
+func (p *asyncPool) shutdown(timeout time.Duration) bool {
 	close(p.work)
-	p.wg.Wait()
+	if timeout <= 0 {
+		p.wg.Wait()
+		return true
+	}
+	done := make(chan struct{})
+	go func() {
+		p.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }

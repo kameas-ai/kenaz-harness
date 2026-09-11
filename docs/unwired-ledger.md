@@ -309,6 +309,48 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-09-11 (finding #61 round-2 review, `fix/memory-persist-growth-and-latency-v2`) · served-mode exit never calls `core.Core.Shutdown(ctx)` — only `api.Shutdown()` does
+
+Round 2 of the finding #61 follow-up (Blocker 3: wiring `rpc.API.Shutdown()`
+into real process exit) traced both served-mode entry points —
+`runServeMode` in `main.go` and `cmd/harness-served/main.go` — end to end.
+Both now call `api.Shutdown()` after `srv.Serve(ctx)` returns (that wiring
+is correct and covered by this same commit's shutdown-deadline fix). Neither
+one calls `core.Core.Shutdown(ctx)` anywhere. The desktop path
+(`main.go`'s `OnShutdown` callback) calls both — `api.Shutdown()` then
+`_ = c.Shutdown(ctx)` — so this is a served-mode-only gap, not a repeat of
+Blocker 3 itself.
+
+Practical effect: on served-mode exit (SIGTERM/SIGINT via
+`installServeShutdownSignal`, or a real server error from `Serve`), whatever
+`core.Core.Shutdown` closes — storage, MCP client connections, telemetry —
+never closes. `rpc.API.Shutdown()` only reaches what the `API` struct
+touches directly (hook runner, prune/compaction schedulers, fleet/audit
+background pollers, etc.); `Core` is a separate type the `API` merely holds
+a reference to, per `main.go`'s own comment at the `OnShutdown` call site
+("`c.Shutdown` (`core.Core.Shutdown`, a different type)"). Not a data-loss
+bug on its own — the OS process exiting reclaims file handles and network
+connections regardless — but it means served-mode quit skips whatever
+graceful-close behavior `Core.Shutdown` is meant to provide (e.g. any
+buffered telemetry flush, orderly MCP disconnect), silently, on every
+served-mode process exit.
+
+Explicitly out of scope for the branch that found it: the round-2 brief for
+`fix/memory-persist-growth-and-latency-v2` scoped that branch to the
+async-pool shutdown-deadline fix only and named this finding as a
+do-not-fix-here discovery to record.
+
+**Owner:** whoever next touches served-mode shutdown wiring (natural
+pairing with any future `runServeMode/cmd/harness-served` shutdown-sequence
+work — the two call sites already have a "both served entry points must
+agree" convention per their own comments, so a fix should touch both files
+together). **Blocker:** no active mission currently owns served-mode
+shutdown sequencing; needs a decision on whether `core.Core.Shutdown(ctx)`
+should run before or after `api.Shutdown()` in served mode (the desktop path
+runs it after, per `main.go`'s ordering, for the reason documented there:
+`API` fields must still be able to reach `Core`'s live storage/MCP/Events
+while they're being drained). **Date:** 2026-09-11.
+
 ### 2026-09-10 (ledger #46) · `post_send` never fired — WIRED. `pre_send` was ALSO dead, not just the "one that works" — CORRECTED
 
 **Disposition: WIRED (post_send), CORRECTED (pre_send's status), DEFERRED with named blocker (pre_send/user_prompt_submit/notification/pre_save_session/post_assistant_turn_complete's real producer work).**

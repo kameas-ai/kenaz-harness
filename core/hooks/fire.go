@@ -253,8 +253,31 @@ func (r *Runner) FireAsync(ctx context.Context, event string, payload any) {
 	}
 }
 
-// Shutdown drains the async pool and waits for all workers to finish.
-// It should be called when the harness shuts down. Idempotent: the pool
+// asyncShutdownDrainTimeout bounds the TOTAL time Runner.Shutdown waits
+// for the async pool to drain — not the per-dispatch timeout (that
+// stays DefaultAsyncTimeoutMs = 60s, governing a live in-flight
+// dispatch, and is unrelated to this deadline).
+//
+// This is now reachable from real process exit (desktop OnShutdown,
+// runServeMode, cmd/harness-served — finding #61 Blocker 3), and the
+// pool has no bound of its own: worst case is
+// ceil(queueDepth/poolSize) * DefaultAsyncTimeoutMs =
+// ceil(32/8) * 60s = 240s, which would hang process exit for up to
+// four minutes with no user feedback.
+//
+// 3s is the trade: long enough that a normal in-flight embed (the
+// dominant async post_send hook — memory.persist's embedding call)
+// usually completes and its write survives, short enough that quit
+// still feels close to immediate rather than a visible stall. Any
+// dispatch still running past the deadline is abandoned — see
+// asyncPool.shutdown for why that is safe — which costs nothing that
+// isn't already lost on an ordinary embed failure, since queued
+// embeds are already best-effort.
+const asyncShutdownDrainTimeout = 3 * time.Second
+
+// Shutdown drains the async pool and waits up to asyncShutdownDrainTimeout
+// for all in-flight workers to finish, then returns regardless. It
+// should be called when the harness shuts down. Idempotent: the pool
 // is nil'd out under the lock before it is drained, so a second (or
 // concurrent) call to Shutdown sees r.pool == nil and is a no-op instead
 // of calling asyncPool.shutdown() twice, which would panic with "close
@@ -265,8 +288,12 @@ func (r *Runner) Shutdown() {
 	p := r.pool
 	r.pool = nil
 	r.poolMu.Unlock()
-	if p != nil {
-		p.shutdown()
+	if p == nil {
+		return
+	}
+	if drained := p.shutdown(asyncShutdownDrainTimeout); !drained {
+		r.logger.Warn("hooks.runner.shutdown_deadline_exceeded",
+			"timeout_ms", asyncShutdownDrainTimeout.Milliseconds())
 	}
 }
 
