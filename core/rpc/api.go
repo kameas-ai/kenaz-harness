@@ -5472,7 +5472,7 @@ func newLLMStack(
 	autonomyKnobsProvider := func(ctx context.Context, sessionID string) autonomy.ResolvedKnobs {
 		return computeAutonomyKnobs(ctx, sessionID, c, settingsImpl)
 	}
-	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, chatAttResolver, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatWorkspaceDir, chatWorkspaceNote, confirmBus, confirmDeps, autonomyKnobsProvider, secretLookup, secretGate, secretsBudget, confirmAudit)
+	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, chatAttResolver, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatWorkspaceDir, chatWorkspaceNote, confirmBus, confirmDeps, autonomyKnobsProvider, secretLookup, secretGate, secretsBudget, confirmAudit, hooksRunner)
 	var capCatalog llm.CapCatalog
 	if cat, err := llmcap.LoadDefault(); err == nil {
 		capCatalog = &capCatalogAdapter{cat: cat}
@@ -6077,6 +6077,15 @@ func buildChatRunner(
 	// newLLMStack already threads through as confirmAudit — nil-safe,
 	// silences the trail without affecting the auto-title write itself.
 	autoTitleAudit contextaudit.Emitter,
+	// hooksRunner is the same llm.HookRunner newLLMStack already holds
+	// (constructed by newHooksStack) — used here to fire the core/hooks
+	// `post_send` event from the real send path (ledger #46: post_send
+	// had a complete adapter chain and zero callers, because its only
+	// call site was `(a *API) buildMessages` in core/rpc/views/llm/
+	// impl.go, a method with no production caller since the
+	// agent-kernel-graph-chat-migration cutover). nil disables post_send
+	// entirely, same degrade as every other optional collaborator here.
+	hooksRunner llm.HookRunner,
 ) *chat.ChatRunner {
 	if graphMgr == nil || graphMgr.Kernel() == nil {
 		logging.L().Warn("chat.runner.disabled", "reason", "graph manager unavailable")
@@ -6268,6 +6277,28 @@ func buildChatRunner(
 	//   3. publishes session.usage.updated on the broker so the frontend
 	//      updates the context-window indicator in near-real-time without
 	//      polling (backend-context-window-length-01KQ8TD3 WP03).
+	// post_send hook (ledger #46). Fires hooksRunner.RunPostSend — the
+	// SAME hooksRunnerAdapter method that already existed, already
+	// translated PostSendHookEvent -> hooks.PostSendEvent, and already
+	// ran the memory.persist builtin end to end in tests — from the
+	// real HookPostLLM boundary instead of the dead buildMessages
+	// method. This is the whole fix: no new dispatch logic, just a
+	// live call site.
+	var postSendHookFn chat.PostSendHookFunc
+	if hooksRunner != nil {
+		capturedHooksRunner := hooksRunner
+		postSendHookFn = func(ctx context.Context, sessionID, userTurn, assistantTurn, providerKind, modelID, finishReason string) {
+			capturedHooksRunner.RunPostSend(ctx, llm.PostSendHookEvent{
+				SessionID:     sessionID,
+				UserTurn:      userTurn,
+				AssistantTurn: assistantTurn,
+				Model:         modelID,
+				Kind:          providerKind,
+				FinishReason:  finishReason,
+			})
+		}
+	}
+
 	var usageHookFn chat.UsageHookFunc
 	if usageMgr != nil || sessionMgr != nil {
 		capturedUsageMgr := usageMgr
@@ -6441,6 +6472,7 @@ func buildChatRunner(
 		PartialPersister:   partialPersister,
 		StreamCheckpoints:  streamCheckpoints,
 		UsageHook:          usageHookFn,
+		PostSendHook:       postSendHookFn,
 		AutoTitle:          autoTitleDeps,
 		// multimodal-io-extended-01KQ8TD2 WP02: wire the concrete artifact
 		// sink as the generated-image capturer so StreamGeneratedImage

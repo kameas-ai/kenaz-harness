@@ -309,6 +309,103 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-09-10 (ledger #46) · `post_send` never fired — WIRED. `pre_send` was ALSO dead, not just the "one that works" — CORRECTED
+
+**Disposition: WIRED (post_send), CORRECTED (pre_send's status), DEFERRED with named blocker (pre_send/user_prompt_submit/notification/pre_save_session/post_assistant_turn_complete's real producer work).**
+
+Ledger item #46 ("post_send hooks never fire — only 1 of 18 hook events
+works, and memory.persist rides on it") verified accurate as *stated*, but
+the "1 of 18" premise — `pre_send`, seeded 2026-08-19 by
+`trust-surfaces-that-fire-01PMZ202` WP08/WP01 as the one confirmed-firing
+event — was itself wrong, and had been wrong since before WP01 ran.
+`core/rpc/views/llm/impl.go:638`'s `a.hooks.RunPreSend(...)` is real code,
+but it lives inside `(a *API).buildMessages` (`impl.go:556`), a method with
+**zero production callers** — `grep -rn '\.buildMessages(' core/
+--include='*.go'` finds only `impl_test.go` / `integration_test.go`. The
+live send path since the agent-kernel-graph-chat-migration cutover (commit
+`f0b17126`, **2026-04-27** — four months before WP01's 2026-08-19
+investigation) is `API.StartStream` → `ChatRunner.StartStream`
+(`core/rpc/views/agentgraph/chat/chat_runner.go`), which never imports
+`core/hooks`. `memory.retrieve` (registered on `pre_send`) has therefore
+never run in a shipped build either — the identical defect class as
+`post_send`/`memory.persist`, just not fixed in this same change (see
+below). The gate that certified `pre_send` as firing
+(`scripts/ci/check-hook-event-fire-sites.sh` leg (a)) is a **syntactic**
+grep for `.RunPreSend(` outside test files — it cannot distinguish a real
+call site from one buried in dead code, so it passed on a false positive
+for three-plus weeks. That blind spot is not closed here (see Blocker
+below); this fix's own tests substitute a real-path integration proof for
+the one event they cover, which is the stronger guarantee CLAUDE.md's
+testing-rule-3 doctrine asks for, but it does not generalize into the
+static gate.
+
+**What shipped:** `post_send` now fires from the real path.
+`ChatRunner.Config.PostSendHook` (new field, `chat_runner.go`) is
+registered on the SAME `HookPostLLM` boundary `UsageHook` already uses —
+after `exec_state.go`'s `sessionWriteExecutor` persists the assistant
+message — and reads `FinishReason`/`ProviderKind`/`ModelID` via
+`turnJournal.LookupCandidateUsage` (content-matched against the persisted
+text), not `LLMProviderAdapter.LastResponse()`, for the same reason the
+usage hook already had to switch: on a routed graph `LastResponse()` is
+`exit_gate`'s own always-runs-last verdict call, not the turn that
+produced the text being persisted — a bug this fix would have introduced
+if it had copied the usage hook's *pre*-fix shape instead of its current
+one. `core/rpc/api.go`'s `buildChatRunner` gained a `hooksRunner
+llm.HookRunner` parameter (threaded from `newLLMStack`, which already held
+it) and a `postSendHookFn` closure calling the existing
+`hooksRunnerAdapter.RunPostSend` — no new dispatch logic, only a live call
+site. `memory.persist` (`core/hooks/memory_builtins.go:191`) now runs in a
+shipped build for the first time — this is the behaviour-change warning
+the mission's own WP12 plan already carried (D-9, spec.md §12): every user
+with the starter memory hooks installed gets `post_send` behaviour they
+have never observed.
+
+**Honesty-floor correction (`frontend/src/lib/hooks.ts`):**
+`FIRING_HOOK_EVENTS` swapped `pre_send` out and `post_send` in (same
+position — index 0, "chat" family). `scripts/ci/allowlists/
+i17-eventless-hook-events.txt` gained a dated `pre_send` row and lost the
+`post_send` row. Rippled into `HookEditor.vue`'s `blankHook()` default and
+`HooksPanel.spec.ts`'s fixtures/exemplars (the "does this event fire"
+honesty-floor tests had `post_send` as the negative exemplar and
+`pre_send`/`FAKE_HOOK` as the positive one — inverted to match reality).
+
+**Tests:** `core/rpc/views/agentgraph/chat/post_send_hook_integration_test.go`
+— `TestChatRunner_PostSendHook_FiresOnRealPath` (real `StartStream`, a
+race-safe recorder asserts one call with the real session id / user turn /
+assistant turn / finish reason) and
+`TestPostSendHook_MemoryPersist_WritesRealRow` (real `hooks.Runner` + real
+`hooks.Registry` + a real saved `post_send` hook wired to `memory.persist`,
+backed by a REAL `corememory.NewChromemStore` on-disk file — `core/memory`
+has no sqlite backend, so this is that subsystem's equivalent of CLAUDE.md
+blind spot #2's "must drive real sqlite": the assertion re-opens a FRESH
+store instance against the same path rather than reading back through the
+original in-process `Store`, proving the write survived a real gob
+encode → rename → decode round trip). Both pass under `-race`. Mutation
+proof: gating the `chat_runner.go` registration behind `if false &&
+r.cfg.PostSendHook != nil` (reproducing "never registered") turned both
+tests red (`PostSendHook fired 0 times, want 1`; `len(chunks) = 0, want
+1`); reverting turned them green again.
+
+**Blocker / owner — the four still-dead v1/v2 events + the gate's
+syntactic-only leg (a):** `user_prompt_submit`, `notification`,
+`pre_save_session`, `post_assistant_turn_complete` remain unbuilt — see
+their (corrected) rows in `i17-eventless-hook-events.txt`; two of the four
+rows previously cited `buildMessages`/`impl.go:892 StartStream` as live
+seats, which this finding shows was never true, so those rows were
+corrected to point at `ChatRunner.StartStream` instead. Wiring `pre_send`
+for real needs a genuinely bigger change than `post_send`'s did:
+`post_send` is a post-hoc side effect (fire-and-forget after the message
+is already persisted, trivially hung off the existing `HookPostLLM`
+boundary); `pre_send` must MUTATE the outbound message list BEFORE the LLM
+call is built, and `ChatRunner` has no pre-LLM injection point today
+(`HookPreLLM` exists as a boundary constant in `core/agentgraph/hooks.go`
+but has zero `Fire` call sites of its own). Separately,
+`check-hook-event-fire-sites.sh`'s leg (a) stays syntactic-only — it can
+be fooled by another dead call site the same way `pre_send` fooled it for
+three weeks. Neither is fixed here. **Owner: alec — follow-up WP**, scoped
+separately from this fix (dated 2026-09-10, same as the corrected
+allowlist rows).
+
 ### 2026-09-09 (vm-execution-surface-truth-01PMZD14 WP05) · `approvalGateFrom` — HV-01, no `PromptSurface` variant for a model call
 
 `cmd/harness-vm/approvalgate.go`'s `approvalGateFrom` is the one function a
