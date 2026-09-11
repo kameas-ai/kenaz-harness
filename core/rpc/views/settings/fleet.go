@@ -90,19 +90,23 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 	}
 	// Start the capability poller lazily. When c is a nop client the poller
 	// will degrade gracefully on every Refresh call.
-	if a.fleet.poller == nil {
-		p := fleet.NewCapabilityPoller(c, dataDir)
-		a.fleet.poller = p
-		p.Start(context.Background())
-	}
+	//
 	// Background network workers do not run under `go test`.
 	//
-	// The ConfigPoller calls fleet.LoadTokens -> keyring.Get() on a ticker.
-	// go-keyring's mock backend is a package-level global whose provider
-	// pointer AND whose internal map are both unsynchronised, so a poller
-	// alive during a test race any test touching the keyring. That surfaced
-	// for weeks as "TestKeychainDelete/Set...: race detected", which reads
-	// like a keychain flake and is not one.
+	// The CapabilityPoller and the ConfigPoller both call fleet.LoadTokens ->
+	// keyring.Get() — the CapabilityPoller does an immediate Refresh on
+	// Start when its cache is empty/stale (which it always is for a
+	// freshly-constructed test poller), so it hits the keychain even
+	// sooner than the ConfigPoller's first ticker fire. go-keyring's mock
+	// backend is a package-level global whose provider pointer AND whose
+	// internal map are both unsynchronised, so a poller alive during a
+	// test races any test touching the keyring. That surfaced for weeks
+	// as "TestKeychainDelete/Set...: race detected", which reads like a
+	// keychain flake and is not one — and blocked PR #342 on a real CI
+	// run because only the ConfigPoller half of this had been guarded
+	// (keyring-poller-race, WARNING: DATA RACE between
+	// CapabilityPoller.Start -> fetch -> LoadTokens -> keyring.Get and any
+	// sibling test's keyring.Set/keychainSet).
 	//
 	// Three earlier attempts fixed real but insufficient things:
 	//   - t.Cleanup(api.Shutdown) at all 13 construction sites (v0.66.0)
@@ -111,12 +115,23 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 	// None could work. Cleanup runs when a test ENDS, but tests run in
 	// PARALLEL — one test's poller is alive exactly while another test
 	// touches the keyring. And MockInit hoisting removed the pointer race
-	// only to expose the map race beneath it.
+	// only to expose the map race beneath it. The ConfigPoller below got
+	// the right fix (not starting it in tests) but the CapabilityPoller a
+	// few lines up did not, leaving this exact class of leak alive under
+	// its own name.
 	//
-	// The poller has no business running in a unit test at all: it is a
-	// network worker on a ticker. Not starting it removes the whole class
+	// Neither poller has any business running in a unit test at all: both
+	// are network workers on a ticker (or an immediate-fetch-then-ticker,
+	// for the CapabilityPoller). Not starting them removes the whole class
 	// rather than another instance of it. Production is unaffected —
 	// testing.Testing() is false in the shipped binary.
+	if a.fleet.poller == nil {
+		p := fleet.NewCapabilityPoller(c, dataDir)
+		a.fleet.poller = p
+		if !testing.Testing() {
+			p.Start(context.Background())
+		}
+	}
 	if a.fleet.configPoller == nil && !testing.Testing() {
 		applier := &compositeConfigApplier{state: a.fleet}
 		cp := fleet.NewConfigPoller(c, dataDir, applier)
