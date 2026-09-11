@@ -40,11 +40,17 @@ type Decision struct {
 
 // DecisionStore is the seam Engine writes decisions through. The
 // in-memory implementation is the default; production wiring (telemetry
-// span store or a dedicated SQLite policy_log table) implements the
-// same interface. Engine treats Store errors as non-fatal — a logging
+// span store or a dedicated SQLite policy_log table — see
+// SQLDecisionStore in sql_decision_store.go) implements the same
+// interface. Engine treats Store errors as non-fatal — a logging
 // failure must NEVER block an authorization decision.
 type DecisionStore interface {
-	// Append records one decision. MUST be safe for concurrent use.
+	// Append records one decision. MUST be safe for concurrent use AND
+	// MUST NOT block on I/O — Engine.Evaluate is the hot path and calls
+	// Append synchronously on every gated action. An implementation
+	// backed by durable storage (SQLDecisionStore) must hand the actual
+	// write off to a background writer (e.g. a buffered channel) rather
+	// than performing it inline.
 	Append(d Decision)
 
 	// Recent returns up to limit most-recent decisions, newest first.

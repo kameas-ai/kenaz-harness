@@ -1856,6 +1856,61 @@ If the product wants live, push-driven denial toasts, that is still the
 mission this entry originally called for; it did not need to gate the
 cheap pull-based win, and should not have been read as blocking it.
 
+### finding #58 · the Cedar audit-decision log had no persistent backing
+
+**Found and RESOLVED in the same pass, 2026-09-11.** Distinct from the
+WP05/WP06 entry immediately above — that one fixed *which* engine
+`RecentDecisions` reads (one shared singleton instead of thirteen
+private ones); this finding is about what backs the `DecisionStore`
+*inside* that singleton once it is reached correctly.
+
+`core/policy/cedar/engine.go`'s `Options.Decisions` (the `DecisionStore`
+seam `Engine.Evaluate` appends every decision through) was omitted at
+**both** real `cedar.NewEngine` call sites —
+`buildCedarEngineOrNil`/`buildCedarGate` in `core/rpc/api.go`. With it
+nil, `NewEngine` always fell back to `NewMemoryDecisionStore(0)`: a
+256-entry in-memory ring, silently truncated while running and wholly
+lost on every restart. This is the audit trail for every permission-gate
+decision the harness makes (trust/compliance-relevant per this repo's
+disposition rules) — invisible by design, since an audit log that
+silently forgets looks identical to one with nothing to report.
+
+**Fix:** a new `cedar.SQLDecisionStore` (`core/policy/cedar/
+sql_decision_store.go`), backed by a dedicated `policy_decisions` table
+(migration `cedar-policy/1300-policy-decisions`,
+`core/policy/cedar/migrations.go` — new reserved block 1300-1399,
+verified free against every other `CanonicalBlocks` entry and every
+migration file in the tree before claiming it). `decisions.go`'s own doc
+comment had already anticipated this exact shape ("production wiring …
+a dedicated SQLite policy_log table"). Retention is bounded and
+deliberate — the most recent 5,000 decisions, enforced by a `DELETE`
+after every durable write (not a periodic sweep, so the bound cannot be
+silently skipped the way finding #61's unbounded store was). `Append` is
+non-blocking (queues onto a buffered channel; a background goroutine
+performs the actual write) to preserve `Evaluate`'s documented "MUST NOT
+block on I/O" hot-path contract; the in-memory ring `Recent()` reads
+from is hydrated from disk at construction so history survives a
+restart. Both builders now thread a real `*cedar.SQLDecisionStore`
+(built from the same unified `storage.DB` every other harness store
+uses — no second sqlite connection) through `Options.Decisions`; the nil
+fallback stays intact for the test chassis.
+
+**Falsifiability:** `TestCedarDecisionPersistence_SurvivesCloseAndReopen`
+(`core/rpc/api_cedar_decision_persistence_test.go`) drives the real
+`rpc.New` boot path, evaluates a gated action, shuts the process down,
+boots a brand-new `core.New`/`rpc.New` over the same `DataDir`, and
+asserts the decision is still there — plus an independent raw-sqlite
+query of `policy_decisions`. Run against the production wiring reverted
+(the `cedarDecisionsOpt` assignment removed), it failed with
+`RecentDecisions is empty on the reopened engine — the decision did not
+survive a restart`; restored, it passes. `core/policy/cedar/
+sql_decision_store_test.go` additionally pins retention actually
+evicting from the durable table (not just the in-memory ring) and race
+safety under concurrent `Append`/`Recent`. `core/storage/sqlite/
+cedar_decision_upgrade_test.go` proves migration 1300 applies over a
+populated database a previous release (`testdata/upgrade/v0.77.1`)
+actually produced, per this repo's blind-spot-#3 discipline.
+
 ### 2026-08-14 · `LocalRuntimesSection` has a branch it can never render
 
 `LocalRuntimesSection.vue` renders three mutually-exclusive states per

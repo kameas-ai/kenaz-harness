@@ -41,6 +41,10 @@ var CanonicalBlocks = map[string]VersionBlock{
 	// subagent-control-and-background-tasks-01PMZB11: 1200-1299.
 	// The tasks table for core/tasks.Registry's persistence store.
 	"tasks": {Min: 1200, Max: 1299},
+	// finding-58-cedar-decision-persistence: 1300-1399.
+	// The policy_decisions table backing core/policy/cedar.SQLDecisionStore
+	// — the durable Cedar audit-decision log (see core/policy/cedar/migrations.go).
+	"cedar-policy": {Min: 1300, Max: 1399},
 }
 
 // LookupBlock returns the reserved block for the given owning-mission

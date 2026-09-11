@@ -246,16 +246,19 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	//   01PMZB11 UNIT-2: the tasks table backing core/tasks.Registry's
 	//   persistence store) +
 	// 1 scheduled_chat_runs.created_by/.tool_allowlist (0340,
-	//   model-scheduled-jobs-01PMSJ01 WP09) = 55.
+	//   model-scheduled-jobs-01PMSJ01 WP09) +
+	// 1 cedar-policy/1300-policy-decisions (finding-58-cedar-decision-
+	//   persistence: the durable backing table for
+	//   cedar.SQLDecisionStore) = 56.
 	//
 	// ZA10's branch asserted 49: it was cut from a base whose count was 43,
 	// before 0336 and bundle/700 landed, so 43+6. The merged tree had all
 	// three sources at 51 (v0.65.0); UNIT-8 adds one more migration on
 	// top, hence 52; UNIT-2 (01PMZB11) adds one more still, hence 53;
 	// WP09 (0340) adds one more, hence 54; WP05 (0337) adds one more
-	// still, hence 55.
-	if count != 55 {
-		t.Errorf("ledger count = %d, want 55", count)
+	// still, hence 55; cedar-policy/1300 adds one more, hence 56.
+	if count != 56 {
+		t.Errorf("ledger count = %d, want 56", count)
 	}
 }
 

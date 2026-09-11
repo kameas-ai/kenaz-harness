@@ -236,7 +236,7 @@ func TestB4_SecretLookupWiring_ChatRunnerResolvesRealSecret(t *testing.T) {
 	if err != nil {
 		t.Fatalf("core.New: %v", err)
 	}
-	cedarEngine := buildCedarEngineOrNil(dataDir)
+	cedarEngine := buildCedarEngineOrNil(dataDir, nil)
 	if cedarEngine == nil {
 		t.Fatal("buildCedarEngineOrNil returned nil over a real DataDir — cannot prove the gate/grant interaction")
 	}
