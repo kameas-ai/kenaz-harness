@@ -44,16 +44,41 @@ type Options struct {
 	Catalog  *capabilities.Catalog
 	Resolver *credref.Resolver
 	Emitter  *events.Emitter
-	Policy   llm.PolicyGuard
-	Cost     CostReducer
+	// Policy is the optional policy-guard collaborator. Nil falls back
+	// to llm.AllowAllGuard{} (see New(), below). Production wires a real
+	// PolicyGuard at two construction sites: core/rpc/api.go's
+	// newLLMStack (the harness UI chassis, the cedar-backed guard) and
+	// cmd/harness-vm/agentexec.go:221's newLLMExecutor (the in-VM
+	// dispatch RPC service — a separate `package main` production
+	// binary, not a test/smoke path; its guard argument is the caller's
+	// real Cedar engine, never AllowAllGuard{} by omission — see that
+	// function's own doc comment). PR #332 review round: an earlier
+	// version of this comment named newLLMStack as "the ONE" site,
+	// which the tool's own header (scripts/ci/cmd/checknilopts/main.go)
+	// self-contradicted by naming HV-03's harness-vm site as one of the
+	// six motivating P0s — corrected here to name both.
+	Policy llm.PolicyGuard
+	// Cost is the optional usage→cost stage (WP11). If nil, resp.Cost
+	// is left {Indeterminate: true} unless the provider adapter already
+	// supplied a Source:"provider" cost (see audited_stream.go's
+	// cost-derivation switch, which documents why the provider-sourced
+	// check must run before the reducer branch). Production wires a
+	// real CostReducer at two construction sites: core/rpc/api.go's
+	// newLLMStack and cmd/harness-vm/agentexec.go's newLLMExecutor (via
+	// resolveCostReducer — best-effort: it falls back to leaving Cost
+	// unset, logging a warning, only when the on-disk cost table itself
+	// fails to load, not by omission).
+	Cost CostReducer
 	// Cache is the capability probe cache (model-settings-reach-the-
 	// model-01PMZ101 WP14 / FR-017). Nil defaults to
 	// capabilities.DefaultCache(nil) — an in-process MemoryCache with
-	// no persistence across restarts. Production callers that want the
-	// SQLite-backed provider_capabilities table pass
-	// capabilities.NewSQLiteCache(realDB) here explicitly (mirrors how
-	// Cost is wired at the ONE production construction site — see
-	// core/rpc/api.go's newLLMStack).
+	// no persistence across restarts. The harness UI's construction
+	// site (core/rpc/api.go's newLLMStack) passes
+	// capabilities.NewSQLiteCache(realDB) explicitly for the
+	// SQLite-backed provider_capabilities table; cmd/harness-vm's
+	// newLLMExecutor does not set Cache, so the in-VM dispatch path
+	// runs on the in-process MemoryCache default (no cross-restart
+	// persistence there — the VM process is short-lived by design).
 	Cache capabilities.CapabilityCache
 }
 

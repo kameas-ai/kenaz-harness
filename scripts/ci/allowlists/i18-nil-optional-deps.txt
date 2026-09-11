@@ -1,0 +1,164 @@
+# I18 — nil-optional-dependency class.
+#
+# Enforced by scripts/ci/check-nil-optional-deps.sh /
+# scripts/ci/cmd/checknilopts. An interface field on a struct, documented
+# by its own author as optional ("nil is allowed" / "nil causes …" /
+# "nil disables …" / "nil falls back …" / "when nil" / "if nil"), with no
+# production assignment anywhere under core/ or cmd/ — a composite-literal
+# field or a Set*/With* call with a non-nil argument. See that tool's
+# header for the three missions (model-scheduled-jobs-01PMSJ01,
+# model-settings-reach-the-model-01PMZ101, fleet-enforcement-truth-
+# 01PMZ505) that each specced this gate and the design disagreement that
+# left it unbuilt, per docs/unwired-ledger.md's 2026-08-20 entry. See the
+# same header for what this trigger-phrase design still cannot see (a
+# field with zero doc comment).
+#
+# Format: one line per violation, copied verbatim from the gate's
+# stderr, followed by a `#` comment carrying the DATE, the BLOCKER, and
+# the change that will delete the line. "We'll get to it" is not a
+# reason. Entries shrink monotonically — a line that no longer matches a
+# real violation is STALE and fails the gate.
+#
+# Calibration run 2026-09-10 (this gate's introduction): 33 optional-by-
+# doc-comment interface fields found under core/+cmd/, 32 already wired
+# in production, on the gate's ORIGINAL 3-phrase trigger ("nil is
+# allowed" / "nil causes" / "nil disables"). One entry below (Env.
+# AttachmentRegistry) — pre-existing, already carrying its own
+# scripts/ci/check-seam-implementers.sh wiring:deferred directive
+# (core/agentgraph/seams.go:569) from an earlier sweep.
+#
+# PR #332 review round (same date): the original 3-phrase trigger missed
+# 3 of the 6 P0s the gate's own header cites as motivating history —
+# scheduledchat.Config.Dispatcher was the only one of the six the
+# original regex could see. registry.Options.Cost/.Policy carried NO doc
+# comment at all (structurally invisible to any doc-phrase trigger — see
+# main.go's header); cedarPolicyAPI and fs.GateOptions.Prompter carried
+# real comments ("nil falls back to…", "Defaults to X when nil") the
+# 3-phrase trigger's literal wording didn't match. Response, same commit:
+# (a) widened the trigger to "nil falls back|when nil|if nil" — this
+# also closes the fs.GateOptions.Prompter and cedarPolicyAPI gaps without
+# any code change to those files (both are already correctly wired in
+# production, so both are now visible AND clean); (b) added true doc
+# comments to registry.Options.Cost and .Policy (verified against
+# registry.go's New() and audited_stream.go's cost-derivation switch
+# before writing) so the "no doc comment" blind spot no longer applies to
+# either of those two specific historical citations — the general class
+# limitation (any field with zero doc comment is invisible by
+# construction) remains and is documented in main.go's header.
+#
+# Widening recall from 33 to 60 scanned fields (53 wired, 7 not) surfaced
+# 6 new genuinely-unwired fields beyond the pre-existing AttachmentRegistry
+# entry. None reproduce the P0 severity of the six motivating historical
+# cases (a promised capability silently and completely disabled) — each
+# falls back to a working, non-fail-closed default (a real per-platform
+# installer, a real OS relaunch, an in-memory store) rather than an error
+# or a deny-everything stub. They are dated-justified below rather than
+# wired because each requires a product decision this PR's scope (fixing
+# the gate, not resolving every finding it produces) does not license.
+#
+# PR #332 SECOND review round (same date): the reviewer found clause 3 of
+# markAssignments (scripts/ci/cmd/checknilopts/main.go) counted a field
+# as wired the instant its Set*-named setter's own body assigned it from
+# the setter's own parameter, regardless of whether the setter was ever
+# CALLED — proved with a planted setter that has zero call sites. Fixed;
+# see main.go's header for the full account, including the independent
+# clause-2 name-derivation gap the fix's re-measurement surfaced and also
+# closed (ContextGraphSyncer.auditEmitter, LLMProviderAdapter.attachments
+# — both genuinely wired, not new findings). Re-measured counts after
+# both fixes: 60 scanned, 53 wired, 7 not wired, 7 allowlisted, 0
+# unlisted — IDENTICAL to the first-round numbers above. No entry in this
+# file changed as a result of the second round.
+
+core/agentgraph/executor.go:235: Env.AttachmentRegistry (AttachmentRegistrar) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
+# 2026-09-10 — pre-existing gap, not introduced by this PR. Blocker: the
+# only candidate producer, core/attachments.Manager.AddMedia, cannot
+# satisfy AttachmentRegistrar without a design decision (what
+# scopeKind/scopeID does content registered via as_attachment bind to?)
+# that the read_file/AttachmentNode call site does not currently carry
+# — see core/agentgraph/seams.go:569's wiring:deferred directive, which
+# already names this. Owner: unassigned (entry-points-and-crash-
+# reporting-01PMZD13 UNIT-4 left it unassigned; whoever picks it up
+# should delete both this line and the wiring:deferred directive
+# together).
+
+core/fleet/audit_archive.go:70: AuditArchiverConfig.Poster (AuditHTTPPoster) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
+# 2026-09-10 — found by the widened "if nil" trigger; not a capability
+# gap. The field's own doc comment says "This field is intended for
+# tests" — the real production posting path is Client (AuditArchiverConfig.
+# Client), which IS wired at its one construction site,
+# core/rpc/api.go:3700. When Poster is nil, the documented fallback
+# (Client.Post) is exactly what runs, and it does. Blocker: none
+# identified — no product need for a second HTTP-posting backend exists
+# today. Owner: unassigned; whoever adds a real need for an alternate
+# posting path should wire Poster or delete this field + this line
+# together.
+
+core/policy/cedar/engine.go:212: Options.Decisions (DecisionStore) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
+# 2026-09-10 — genuine gap. Both real cedar.NewEngine call sites
+# (core/rpc/api.go:9423 buildCedarEngineOrNil, :9500 buildCedarGate) omit
+# Decisions; production always falls back to the 256-capacity in-memory
+# ring buffer (core/policy/cedar/decisions.go's MemoryDecisionStore).
+# This is audit-relevant per CLAUDE.md's trust/compliance disposition
+# rule: cedar policy decisions older than the last 256 are unrecoverable
+# across a restart, with no persistent backing. Not P0-severity (the
+# store works, just isn't durable) but worth flagging prominently.
+# Blocker: no persistent DecisionStore implementation exists yet — would
+# need a design decision on backing store (SQLite table vs. the
+# event-log SQL backend audit_archive.go already uses for a similar
+# purpose). Owner: unassigned — flagging for the policy/audit workstream.
+
+core/tools/monitor/tool.go:160: Options.Offsets (OffsetStore) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
+# 2026-09-10 — genuine gap, low severity. core/rpc/builtins_wiring.go:409
+# (registerBuiltinTools' kenaz__monitor wiring, mission subagent-control-
+# and-background-tasks-01PMZB11 UNIT-5) omits Offsets; production always
+# uses the process-local in-memory offset store (tool.go's
+# processLocalOffsets), so kenaz__monitor's per-session drain cursor
+# resets to 0 on restart rather than resuming — a UX rough edge, not
+# data loss (the tool just re-reads from the start on next call).
+# Blocker: a persistent OffsetStore needs the same backing-store design
+# decision core/policy/cedar's Options.Decisions above is waiting on
+# (SQLite table vs. the event-log SQL backend audit_archive.go already
+# uses) — nobody has specced which, and UNIT-5 shipped without a
+# cross-restart requirement in scope. Owner: whoever next specs
+# persistent background-task state for 01PMZB11's successor work should
+# wire Offsets and delete this line in the same change, or explicitly
+# defer it again with a new date.
+
+core/tools/subagentdispatch/tool.go:177: Options.Tasks (TasksRegistry) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
+# 2026-09-10 — already deliberately unwired; the field's own doc comment
+# (tool.go:163-176) records why: UNIT-6 of subagent-control-and-
+# background-tasks-01PMZB11 moved task registration to the RunSpawner
+# path (core/rpc/subagent_run_spawner.go), and wiring Tasks here too
+# would create a second, competing registration per dispatched sub-agent.
+# Blocker: named in the field's own comment — a future Cancel path that
+# doesn't go through WaitForChildRun might still want it, but do not wire
+# it without first removing the run spawner's own registration. Owner:
+# unassigned (same as the field's own comment leaves it).
+
+core/update/bootswap/bootswap.go:70: Config.Relauncher (Relauncher) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
+# 2026-09-10 — genuinely unwired, confirmed intentional. The one real
+# production call site is main.go:159 (bootswap.MaybeSwapAndRelaunch),
+# whose own adjacent comment says "The Relauncher is nil → real os.Exit
+# path" — i.e. nil is the deliberately chosen production value, not an
+# oversight. NOTE for gate maintainers: main.go is OUTSIDE this gate's
+# scan scope (scanPatterns is ./core/... and ./cmd/... only; the module
+# root matches neither, and its package path has no trailing "/" so it
+# would fail modulePrefix's filter even if scanned) — this finding is
+# correct only because main.go's own author happens to confirm the same
+# nil-by-design fact the gate infers from bare absence. A hypothetical
+# field whose ONLY real wiring lived in root main.go would be
+# misreported as unwired by this gate; see main.go's (checknilopts)
+# header for this as a named, general limitation. Blocker: none — real
+# OS relaunch is the desired production behaviour; Relauncher exists so
+# bootswap_test.go can inject a fake. Owner: n/a.
+
+core/update/service.go:51: Config.Swapper (Swapper) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
+# 2026-09-10 — genuinely unwired, not a capability gap. core/rpc/api.go:
+# 2912's construction omits Swapper; production always uses
+# NewRealSwapper() (core/update/swap.go:45), which is the real
+# per-platform installer, not a stub — same shape as
+# fs.GateOptions.Prompter's NoOpPrompter default used to look safe until
+# it turned out to fail-closed-deny; verified here that NewRealSwapper
+# does the real work, it is not a deny-everything default. Blocker: none
+# — Swapper exists for core/update/service_test.go to inject a fake; no
+# product need for an alternate installer exists today. Owner: n/a.

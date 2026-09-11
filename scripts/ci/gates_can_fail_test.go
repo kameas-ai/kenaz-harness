@@ -1916,3 +1916,293 @@ func TestNoCredentialInUI_BenignFieldsDoNotTrip(t *testing.T) {
 		})
 	}
 }
+
+// TestNilOptionalDepsGate_PlantedUnwiredFieldFires is the
+// planted-violation proof for check-nil-optional-deps.sh
+// (scripts/ci/cmd/checknilopts) — the nil-optional-dependency gate
+// three missions specced (model-scheduled-jobs-01PMSJ01 §7 G-1,
+// model-settings-reach-the-model-01PMZ101 §7 G-2,
+// fleet-enforcement-truth-01PMZ505 §7 G-1) and none built, per
+// docs/unwired-ledger.md's 2026-08-20 entry.
+//
+// OVERLAY, NOT read-mutate-restore — same reasoning as
+// TestStructuredOutputRowParityGate_PlantedEncoderDropFires above (PR
+// #323's review, reproduced against core/llm/gemini/wire.go under
+// `-timeout 1s`): a bare os.WriteFile + defer restore is not
+// kill-safe, and checknilopts's own Overlay mechanism
+// (golang.org/x/tools/go/packages's native Overlay field, fed through
+// checknilopts's NIL_OPTIONAL_DEPS_OVERLAY env var — see that
+// package's loadOverlay) makes the real file un-writable-to in the
+// first place: the mutated content lives only in a t.TempDir() scratch
+// file, and packages.Load substitutes it in-memory at type-check time.
+// A kill at any point in this test leaves core/rpc/views/scheduledchat/
+// impl.go exactly as git has it.
+//
+// The plant adds a new Config field (ZzGateProbe) with the same
+// doc-comment trigger idiom Dispatcher already carries two lines above
+// it ("nil causes …"), backed by a freshly declared interface type, and
+// never assigns it anywhere — exactly SJ01 §7 G-1's own planted-
+// violation design ("add a Config field ZzGateProbe ZzProbeDispatcher
+// … with no assignment anywhere; assert the gate exits non-zero").
+//
+// A second subtest plants the inverse (Z505 §7 G-1's explicit ask: "a
+// gate that fires on everything is as useless as one that fires on
+// nothing") — the same field, but with an in-file composite-literal
+// assignment — and asserts the gate stays clean.
+//
+// Two more subtests were added in the PR #332 second review round to
+// close the hole the reviewer found in clause 3 (markAssignments'
+// plain-assignment scan, checknilopts/main.go): a setter's own body —
+// `func (e *Engine) SetDispatcher(d ChatRunDispatcher) { e.dispatch = d
+// }` — used to mark the field assigned the instant the method was
+// DECLARED, regardless of whether anything ever CALLED it, because
+// clause 3 walked every AssignStmt with no notion of which function it
+// sat inside and `d` (a parameter) is not a bare `nil`. The reviewer
+// proved this with a planted field whose setter has zero call sites and
+// is still reported "wired". "setter-defined-but-never-called-still-
+// fires" is that exact proof, committed: it plants a SetZzGateProbe
+// method that assigns the field from its own parameter and calls it
+// nowhere, and asserts the gate still fires. Its companion,
+// "setter-called-with-real-value-still-wires", plants the same setter
+// PLUS a real call site with a genuinely non-nil argument, and asserts
+// the gate stays clean — proving the fix didn't just make clause 3
+// unconditionally reject setter bodies (that would fail this subtest
+// too, since nothing else in the plant would supply the wiring
+// evidence).
+//
+// A fifth subtest, "nested-closure-setter-still-fires", was added in the
+// PR #332 FOURTH review round to close the round-2 fix's own escape
+// hatch: assignVisitor.Visit's *ast.FuncLit case reset self to nil for
+// ANY closure, so wrapping the exact same never-called-setter
+// assignment in a nested closure (`helper := func() { c.Field = d };
+// helper()`, still zero call sites for the enclosing setter) defeated
+// the clause-3 exception one syntactic layer down — reproduced as
+// "scanned 61: 54 wired ... clean" against the round-2/3 binary. See
+// the *ast.FuncLit case's doc comment in checknilopts/main.go for the
+// fix (thread self through closure boundaries instead of resetting it)
+// and why it leaves the WithSessionHookRunner functional-option idiom
+// (core/session/manager.go:185-192, a plain non-method function) exactly
+// as before.
+func TestNilOptionalDepsGate_PlantedUnwiredFieldFires(t *testing.T) {
+	root := repoRoot(t)
+	implPath := filepath.Join(root, "core", "rpc", "views", "scheduledchat", "impl.go")
+
+	orig, err := os.ReadFile(implPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", implPath, err)
+	}
+
+	const anchor = "\tStore scheduler.ScheduledChatStore\n"
+	if !strings.Contains(string(orig), anchor) {
+		t.Fatalf("expected Config.Store field line not found in impl.go — the struct shape may "+
+			"have moved; update this test and the gate together:\n%q", anchor)
+	}
+
+	const probeField = "\t// ZzGateProbe is a planted probe field for\n" +
+		"\t// TestNilOptionalDepsGate_PlantedUnwiredFieldFires. nil causes this\n" +
+		"\t// test to exist — deliberately never assigned anywhere, to prove\n" +
+		"\t// check-nil-optional-deps.sh can fail. Overlay-only; never written\n" +
+		"\t// to the real file.\n" +
+		"\tZzGateProbe ZzGateProbeDispatcher\n"
+	const probeType = "\n// ZzGateProbeDispatcher is a planted probe type — see Config.ZzGateProbe.\n" +
+		"type ZzGateProbeDispatcher interface {\n\tZzGateProbe()\n}\n"
+
+	buildOverlay := func(t *testing.T, extraSuffix string) string {
+		t.Helper()
+		mutated := strings.Replace(string(orig), anchor, anchor+probeField, 1) + probeType + extraSuffix
+
+		scratch := t.TempDir()
+		scratchImpl := filepath.Join(scratch, "impl_zz_gate_probe.go")
+		if err := os.WriteFile(scratchImpl, []byte(mutated), 0o644); err != nil {
+			t.Fatalf("writing scratch mutated impl.go: %v", err)
+		}
+		overlay := struct{ Replace map[string]string }{Replace: map[string]string{implPath: scratchImpl}}
+		overlayJSON, err := json.Marshal(overlay)
+		if err != nil {
+			t.Fatalf("marshalling overlay: %v", err)
+		}
+		overlayPath := filepath.Join(scratch, "overlay.json")
+		if err := os.WriteFile(overlayPath, overlayJSON, 0o644); err != nil {
+			t.Fatalf("writing overlay.json: %v", err)
+		}
+		return overlayPath
+	}
+
+	t.Run("unassigned-field-fires", func(t *testing.T) {
+		// No defer/restore anywhere in this test: implPath is never
+		// written. A kill at any point leaves nothing but an
+		// OS-cleaned scratch dir.
+		overlayPath := buildOverlay(t, "")
+		code, out := runGateEnv(t, "check-nil-optional-deps.sh", root, map[string]string{
+			"NIL_OPTIONAL_DEPS_OVERLAY": overlayPath,
+		})
+		if code == 0 {
+			t.Fatalf("check-nil-optional-deps.sh exited 0 with a planted, documented-optional "+
+				"interface field (ZzGateProbe) that is never assigned anywhere — the gate cannot "+
+				"fail.\noutput:\n%s", out)
+		}
+		if !strings.Contains(out, "ZzGateProbe") {
+			t.Fatalf("gate failed, but its output does not mention ZzGateProbe "+
+				"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+		}
+	})
+
+	t.Run("assigned-field-does-not-fire", func(t *testing.T) {
+		const wiring = "\ntype zzGateProbeImpl struct{}\n\n" +
+			"func (zzGateProbeImpl) ZzGateProbe() {}\n\n" +
+			"var zzGateProbeWired = Config{ZzGateProbe: zzGateProbeImpl{}}\n"
+		overlayPath := buildOverlay(t, wiring)
+		code, out := runGateEnv(t, "check-nil-optional-deps.sh", root, map[string]string{
+			"NIL_OPTIONAL_DEPS_OVERLAY": overlayPath,
+		})
+		if code != 0 {
+			t.Fatalf("check-nil-optional-deps.sh flagged ZzGateProbe even though this variant "+
+				"assigns it a non-nil value in a production composite literal — the gate fires on "+
+				"everything, not just the real defect class.\noutput:\n%s", out)
+		}
+	})
+
+	// setter-defined-but-never-called-still-fires is the PR #332 second
+	// review round's planted-violation proof for the clause-3 hole: a
+	// Set*-named method whose body assigns the field from its own
+	// parameter — `func (c *Config) SetZzGateProbe(d ZzGateProbeDispatcher)
+	// { c.ZzGateProbe = d }` — with NO call site anywhere in the plant.
+	// Before the fix, clause 3 (markAssignments' plain-assignment scan)
+	// walked every *ast.AssignStmt with no notion of which function it
+	// sat inside, saw `c.ZzGateProbe = d`, and marked the field assigned
+	// because `d` is a parameter, not a literal `nil` — regardless of
+	// whether SetZzGateProbe is ever invoked. Reproduces
+	// core/scheduler/chat_cron_engine.go:150's SetDispatcher shape
+	// exactly. Must still fail after the fix.
+	t.Run("setter-defined-but-never-called-still-fires", func(t *testing.T) {
+		const setterNeverCalled = "\nfunc (c *Config) SetZzGateProbe(d ZzGateProbeDispatcher) {\n" +
+			"\tc.ZzGateProbe = d\n" +
+			"}\n"
+		overlayPath := buildOverlay(t, setterNeverCalled)
+		code, out := runGateEnv(t, "check-nil-optional-deps.sh", root, map[string]string{
+			"NIL_OPTIONAL_DEPS_OVERLAY": overlayPath,
+		})
+		if code == 0 {
+			t.Fatalf("check-nil-optional-deps.sh exited 0 with ZzGateProbe wired ONLY by a "+
+				"SetZzGateProbe method whose own body assigns the field from its parameter — the "+
+				"method is never CALLED anywhere in the plant, so this is not production wiring. "+
+				"A setter that merely exists must not count as a setter that was invoked.\noutput:\n%s", out)
+		}
+		if !strings.Contains(out, "ZzGateProbe") {
+			t.Fatalf("gate failed, but its output does not mention ZzGateProbe "+
+				"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+		}
+	})
+
+	// setter-called-with-real-value-still-wires is the companion true-
+	// negative: the identical SetZzGateProbe method, but this time
+	// called once at package scope with a genuinely non-nil argument.
+	// Confirms the clause-3 fix didn't just make setter bodies
+	// unconditionally inert — a setter that IS actually invoked with a
+	// real value must still be detected, via clause 2 (the Set*/With*
+	// call-site scan), which is untouched by this fix and independently
+	// verifies the call argument.
+	t.Run("setter-called-with-real-value-still-wires", func(t *testing.T) {
+		const setterCalledWithReal = "\nfunc (c *Config) SetZzGateProbe(d ZzGateProbeDispatcher) {\n" +
+			"\tc.ZzGateProbe = d\n" +
+			"}\n\n" +
+			"type zzGateProbeSetterImpl struct{}\n\n" +
+			"func (zzGateProbeSetterImpl) ZzGateProbe() {}\n\n" +
+			"var zzGateProbeSetterWired = func() *Config {\n" +
+			"\tc := &Config{}\n" +
+			"\tc.SetZzGateProbe(zzGateProbeSetterImpl{})\n" +
+			"\treturn c\n" +
+			"}()\n"
+		overlayPath := buildOverlay(t, setterCalledWithReal)
+		code, out := runGateEnv(t, "check-nil-optional-deps.sh", root, map[string]string{
+			"NIL_OPTIONAL_DEPS_OVERLAY": overlayPath,
+		})
+		if code != 0 {
+			t.Fatalf("check-nil-optional-deps.sh flagged ZzGateProbe even though "+
+				"SetZzGateProbe is called at package scope with a genuinely non-nil "+
+				"zzGateProbeSetterImpl{} — the clause-3 fix over-corrected and now rejects real "+
+				"setter-based wiring, not just the uncalled-setter defect class.\noutput:\n%s", out)
+		}
+	})
+
+	// nested-closure-setter-still-fires is round 4's planted-violation
+	// proof, added after a reviewer showed the round-2 fix above (the
+	// clause-3 exception) was escapable by one syntactic layer:
+	// assignVisitor.Visit's *ast.FuncLit case used to reset self to nil
+	// unconditionally for ANY closure, so moving the exact same
+	// never-called-setter assignment one layer down into a nested
+	// closure defeated the exception's own guard
+	// (`v.self != nil && v.self.owner == named.Obj()`) — self was
+	// already nil by the time the walk reached the assignment, so the
+	// guard never had a chance to engage:
+	//
+	//	func (c *Config) SetZzGateProbeNested(d ZzGateProbeNestedDispatcher) {
+	//		helper := func() {
+	//			c.ZzGateProbeNested = d
+	//		}
+	//		helper()
+	//	}
+	//
+	// With ZERO call sites for SetZzGateProbeNested anywhere in the
+	// plant, this reproduced as "scanned 61: 54 wired ... clean" against
+	// the pre-fix binary (verified by hand against the round-2 binary
+	// before this subtest was written). Fixed by threading self through
+	// *ast.FuncLit boundaries unchanged instead of resetting it — see
+	// the *ast.FuncLit case's doc comment in main.go for why this does
+	// not reopen the WithSessionHookRunner functional-option idiom
+	// (core/session/manager.go:185-192) — that idiom's continued
+	// wiring is covered by the tree-wide gate run itself (no overlay,
+	// no plant needed): session.Manager.hooks is one of the 53 fields
+	// this gate already reports wired against the real tree, before and
+	// after this fix.
+	t.Run("nested-closure-setter-still-fires", func(t *testing.T) {
+		const nestedField = "\t// ZzGateProbeNested is a planted probe field for the round-4\n" +
+			"\t// nested-closure escape reproduction. nil causes this test to\n" +
+			"\t// exist — deliberately never assigned anywhere, to prove\n" +
+			"\t// check-nil-optional-deps.sh can see through a nested closure.\n" +
+			"\t// Overlay-only; never written to the real file.\n" +
+			"\tZzGateProbeNested ZzGateProbeNestedDispatcher\n"
+		const nestedType = "\n// ZzGateProbeNestedDispatcher is a planted probe type — see " +
+			"Config.ZzGateProbeNested.\ntype ZzGateProbeNestedDispatcher interface {\n" +
+			"\tZzGateProbeNested()\n}\n"
+		const nestedSetterNeverCalled = "\nfunc (c *Config) SetZzGateProbeNested(d ZzGateProbeNestedDispatcher) {\n" +
+			"\thelper := func() {\n" +
+			"\t\tc.ZzGateProbeNested = d\n" +
+			"\t}\n" +
+			"\thelper()\n" +
+			"}\n"
+
+		mutated := strings.Replace(string(orig), anchor, anchor+nestedField, 1) + nestedType + nestedSetterNeverCalled
+
+		scratch := t.TempDir()
+		scratchImpl := filepath.Join(scratch, "impl_zz_gate_probe_nested.go")
+		if err := os.WriteFile(scratchImpl, []byte(mutated), 0o644); err != nil {
+			t.Fatalf("writing scratch mutated impl.go: %v", err)
+		}
+		overlay := struct{ Replace map[string]string }{Replace: map[string]string{implPath: scratchImpl}}
+		overlayJSON, err := json.Marshal(overlay)
+		if err != nil {
+			t.Fatalf("marshalling overlay: %v", err)
+		}
+		overlayPath := filepath.Join(scratch, "overlay.json")
+		if err := os.WriteFile(overlayPath, overlayJSON, 0o644); err != nil {
+			t.Fatalf("writing overlay.json: %v", err)
+		}
+
+		code, out := runGateEnv(t, "check-nil-optional-deps.sh", root, map[string]string{
+			"NIL_OPTIONAL_DEPS_OVERLAY": overlayPath,
+		})
+		if code == 0 {
+			t.Fatalf("check-nil-optional-deps.sh exited 0 with ZzGateProbeNested wired ONLY by a "+
+				"nested closure inside SetZzGateProbeNested's own body — the closure is one "+
+				"syntactic layer removed from the setter, but SetZzGateProbeNested itself is never "+
+				"CALLED anywhere in the plant, so this is not production wiring by the same logic "+
+				"as the outer-scope setter-defined-but-never-called-still-fires case above.\n"+
+				"output:\n%s", out)
+		}
+		if !strings.Contains(out, "ZzGateProbeNested") {
+			t.Fatalf("gate failed, but its output does not mention ZzGateProbeNested "+
+				"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+		}
+	})
+}
