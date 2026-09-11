@@ -12,10 +12,19 @@ package chat
 //     `choices` loop (core/llm/openrouter/openrouter.go), and
 //     TestAdapter_Stream_HappyPath in that package already exercises this
 //     exact shape end-to-end through Stream().Final().
-//  2. Does that parsed usage reach the LLMProviderAdapter's LastResponse(),
-//     which buildChatRunner's UsageHook (HookPostLLM) reads? This file
-//     confirms that too: Generate() stores whatever corellm.Stream.Final()
-//     returns verbatim into a.lastResp, with no field dropped in between.
+//  2. Does that parsed usage reach the LLMProviderAdapter's LastResponse()
+//     unmodified? This file confirms that: Generate() stores whatever
+//     corellm.Stream.Final() returns verbatim into a.lastResp, with no
+//     field dropped in between. (As of fix/usage-persists-on-every-move
+//     round 3, LastResponse() itself is no longer read anywhere on the
+//     usage-firing path — turnJournal content-matches against
+//     RecordCandidateUsage's per-call history instead, because
+//     LastResponse() is a single mutable slot the routed graph's
+//     exit_gate always overwrites last. This test still matters: it
+//     locks the field-preservation contract RecordCandidateUsage's
+//     caller — Generate() itself — depends on, since the resp it hands
+//     to RecordCandidateUsage is the exact same local variable this
+//     test proves lastResp mirrors.)
 //  3. Does the frontend footer read it? NO — this was the actual bug.
 //     frontend/src/views/sessions/SessionsView.vue passed the ChatInput
 //     `estimate` prop a hardcoded `{ tokens: 0, usd: 0 }` literal instead
@@ -116,13 +125,16 @@ func TestGenerate_UsageAndCostSurviveToLastResponse(t *testing.T) {
 		t.Errorf("LLMResponse.CostUSD = %v, want %v", out.CostUSD, want.Cost.Total)
 	}
 
-	// LastResponse() is what the UsageHook (HookPostLLM, registered in
-	// buildChatRunner) reads to build the UsageTurn it persists and the
-	// SessionUsagePayload it publishes on session.usage.updated. If this
-	// ever comes back zeroed, the frontend footer regresses exactly the
-	// way it did here — even though the frontend fix (reading
-	// session.lastUsage instead of a hardcoded stub) is what actually
-	// resolves the reported bug.
+	// LastResponse() is no longer what the usage-firing path reads (fix/
+	// usage-persists-on-every-move round 3 — see moves.go's
+	// RecordCandidateUsage), but it is the exact local `resp` Generate()
+	// hands to RecordCandidateUsage, so this still locks the contract
+	// that matters: the value making it into the candidate history (and
+	// therefore into a persisted row) is byte-identical to what the
+	// stream actually reported. If this ever comes back zeroed, both
+	// paths would regress the same way the frontend footer did here —
+	// even though the frontend fix (reading session.lastUsage instead of
+	// a hardcoded stub) is what actually resolved the reported bug.
 	got := adapter.LastResponse()
 	if got.Usage.InputTokens != want.Usage.InputTokens || got.Usage.OutputTokens != want.Usage.OutputTokens {
 		t.Errorf("LastResponse().Usage = %+v, want %+v", got.Usage, want.Usage)

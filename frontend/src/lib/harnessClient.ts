@@ -686,6 +686,12 @@ interface WailsBindingsLike {
     since: number,
   ): Promise<GraphRunTraceEvent[]>;
   Graph_Resume(runID: string, askResponse: string): Promise<void>;
+  Graph_ResolveApproval(
+    runID: string,
+    nodeID: string,
+    approved: boolean,
+    reason: string,
+  ): Promise<void>;
   Graph_CancelRun(runID: string): Promise<void>;
   Graph_MaterializeRun(runID: string): Promise<GraphSpec>;
 
@@ -2727,6 +2733,20 @@ export interface GraphClient {
   getRunStatus(runID: string): Promise<GraphRunStatus>;
   getRunTrace(runID: string, since: number): Promise<GraphRunTraceEvent[]>;
   resume(runID: string, askResponse: string): Promise<void>;
+  /**
+   * resolveApproval resolves a paused run's pending approval node —
+   * approve or reject, with an optional reason
+   * (approval-node-01PMZC12 UNIT-3/UNIT-7). This is the sibling verb to
+   * `resume`, not a widened form of it: an approval resolution is a
+   * verdict, not free text, and resolving an approval through `resume`
+   * (or an ask through this) is refused server-side.
+   */
+  resolveApproval(
+    runID: string,
+    nodeID: string,
+    approved: boolean,
+    reason: string,
+  ): Promise<void>;
   cancelRun(runID: string): Promise<void>;
   /**
    * materializeRun projects a run — including a chat turn — into a
@@ -4153,6 +4173,8 @@ export function createHarnessClient(): HarnessClient {
       getRunStatus: (runID) => b().Graph_GetRunStatus(runID),
       getRunTrace: (runID, since) => b().Graph_GetRunTrace(runID, since),
       resume: (runID, askResponse) => b().Graph_Resume(runID, askResponse),
+      resolveApproval: (runID, nodeID, approved, reason) =>
+        b().Graph_ResolveApproval(runID, nodeID, approved, reason),
       cancelRun: (runID) => b().Graph_CancelRun(runID),
       materializeRun: (runID) => b().Graph_MaterializeRun(runID),
     },
@@ -5758,6 +5780,7 @@ export function createFakeHarnessClient(
       }),
       getRunTrace: async () => [],
       resume: noop,
+      resolveApproval: noop,
       cancelRun: noop,
       materializeRun: async (runID) => ({
         id: `fake__run_${runID}`,
