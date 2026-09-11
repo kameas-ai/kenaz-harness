@@ -1081,6 +1081,19 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		// (H-1) and cedar.Registry.RequestInteractive (H-3) read.
 		streamCtx = runposture.Unattended(streamCtx)
 	}
+	// trust-surfaces-that-fire-01PMZ202 WP23 (AN-04), post-review fix:
+	// stamp THIS turn's resolved posture onto streamCtx via ctx
+	// propagation (same mechanism as runposture.Unattended above)
+	// rather than mutating a.promptRegistry's shared r.posture field the
+	// way an earlier version of this WP did — a.promptRegistry is an
+	// explicit process-wide singleton, so a global SetPosture call let
+	// one session's resolved tier leak into every OTHER concurrently-
+	// running session's interactive prompts (a Strict-tier session's
+	// confirmations could be silently auto-allowed by a looser-tier
+	// sibling tab or subagent), and was a genuine unsynchronized read
+	// under -race besides. See applyPromptPostureToCtx and
+	// cedar.WithPromptPosture's doc comments for the full reasoning.
+	streamCtx = applyPromptPostureToCtx(streamCtx, r.cfg.AutonomyKnobs != nil, resolvedKnobs.EffectiveTier)
 
 	// Pre-seed the AskBus with the user's message so the chat graph's
 	// `ask_user` AskNode resolves on its first fire. The chat graph is
@@ -1218,6 +1231,22 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	}
 	if r.cfg.EnvDefaults != nil {
 		r.cfg.EnvDefaults(env)
+	}
+	// trust-surfaces-that-fire-01PMZ202 WP23 (AN-04 second seam): apply
+	// the resolved posture mode to the Cedar gate env.Policy now points
+	// at, AFTER EnvDefaults so this isn't clobbered by the process-wide
+	// PolicyGateAdapter EnvDeps.applyTo installs. resolvedKnobs was
+	// already resolved once for this StartStream (fix F8) — reusing it
+	// here rather than re-deriving keeps that single-resolution
+	// invariant intact. The type assertion (rather than an import of
+	// core/rpc/views/agentgraph) keeps this package's dependency
+	// direction unchanged; a fake env.Policy that doesn't implement
+	// WithPostureMode is simply left as-is, matching every other
+	// unset-seam degrade in this function.
+	if pm, ok := env.Policy.(interface {
+		WithPostureMode(string) coreag.PolicyGate
+	}); ok {
+		env.Policy = pm.WithPostureMode(resolvedKnobs.PostureMode)
 	}
 	// WP12: register the spec this turn will actually execute, so the
 	// turn can be projected back into a graph afterwards. Recorded here
@@ -2071,12 +2100,47 @@ func init() {
 	knobcoverage.Register[autonomy.ResolvedKnobs]("ContinueOnError", "chat.continueOnErrorPolicy")
 	knobcoverage.Register[autonomy.ResolvedKnobs]("TokenCeilingPerTurn", "chat.applyTokenCeilingKnob")
 	knobcoverage.RegisterDeferred[autonomy.ResolvedKnobs]("SourceTrace", "resolver bookkeeping, not a tunable knob")
-	knobcoverage.RegisterDeferred[autonomy.ResolvedKnobs]("PostureMode", "resolver bookkeeping, not a tunable knob")
+	// trust-surfaces-that-fire-01PMZ202 WP23 (AN-04 second seam): was
+	// RegisterDeferred("resolver bookkeeping, not a tunable knob") until
+	// this WP gave it a real consumer — env.Policy is re-wrapped with
+	// cedar.WithPostureMode(resolvedKnobs.PostureMode, ...) right below
+	// the EnvDefaults call in StartStream, so plan_mode denies
+	// write-class Cedar actions instead of only lowering the knob-level
+	// AutoApproveFamilies preset.
+	knobcoverage.Register[autonomy.ResolvedKnobs]("PostureMode", "chat.ChatRunner.StartStream (PolicyGateAdapter.WithPostureMode re-wrap)")
 	// owner directive 2026-09-09: the per-run call-volume budget cap
 	// (MaxLLMCallsPerRun/MaxToolCallsPerRun) is now governed by the
 	// autonomy tier, same as TokenCeilingPerTurn already governs
-	// MaxTokensPerRun above.
+	// MaxTokensPerRun above. trust-surfaces-that-fire-01PMZ202 WP23
+	// (AN-04) added a second consumer in this same file,
+	// applyPromptPostureToCtx (stamps the Cedar prompt registry's
+	// interactive-permission posture onto streamCtx) — not re-registered
+	// here, since knobcoverage.Register only needs one consumer named
+	// per field and panics on a second registration for the same field.
 	knobcoverage.Register[autonomy.ResolvedKnobs]("EffectiveTier", "chat.applyBudgetTierDial")
+}
+
+// applyPromptPostureToCtx stamps ctx with the Cedar prompt registry's
+// interactive-permission posture derived from tier
+// (trust-surfaces-that-fire-01PMZ202 WP23 / AN-04, post-review fix).
+// Pulled out of StartStream so the gating logic is independently
+// testable — a real *cedar.Registry, driven with the ctx this returns,
+// proves the wiring rather than just the mapping table.
+//
+// knobsProviderWired MUST be r.cfg.AutonomyKnobs != nil, not merely
+// "tier looks like a real value" — autonomy.Tier's zero value
+// stringifies to "strict" (TierStrict is iota 0), not "default", so a
+// nil AutonomyKnobs provider's zero-value resolvedKnobs would silently
+// flip every unwired chassis (tests, the nil-core boot path) from
+// today's PostureDefault to PostureAlwaysPrompt if this stamped
+// unconditionally. false leaves ctx exactly as passed in — no stamp —
+// so RequestInteractive falls back to the registry-wide default,
+// byte-identical to a harness with no autonomy provider wired.
+func applyPromptPostureToCtx(ctx context.Context, knobsProviderWired bool, tier autonomy.Tier) context.Context {
+	if !knobsProviderWired {
+		return ctx
+	}
+	return cedar.WithPromptPosture(ctx, cedar.PromptPostureForTierName(tier.String()))
 }
 
 // applyAskOnAmbiguityDial folds the askOnAmbiguity knob onto the chat
