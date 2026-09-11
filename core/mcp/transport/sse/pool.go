@@ -34,14 +34,21 @@ type Pool struct {
 	closed  bool
 
 	idCounter atomic.Int64
+
+	// healthObserver, when set, is notified on every observed state
+	// transition of any server in the pool (connector-lifecycle-truth
+	// UNIT-8's mcp:health-changed publisher). Guarded by mu alongside
+	// servers/closed. Mirrors http.Pool's field of the same name.
+	healthObserver transport.HealthObserver
 }
 
-// sseEntry pairs a Connection with its reconnect loop and
-// dispatch-serialisation mutex.
+// sseEntry pairs a Connection with its reconnect loop, health probe
+// and dispatch-serialisation mutex.
 type sseEntry struct {
 	id        string
 	conn      *Connection
 	reconnect *ReconnectLoop
+	probe     *HealthProbe
 	logger    ConnectionLogger
 
 	// dispatchMu serialises Send/Recv pairs so a Send + its
@@ -152,16 +159,41 @@ func (p *Pool) openOne(ctx context.Context, spec coremcp.ServerSpec) error {
 		reconnect: reconnect,
 		logger:    loggerAdapter,
 	}
+	// connector-lifecycle-truth-01PMZ303 UNIT-7: before this unit sse
+	// had no per-server health probe at all (see CloseOne's doc
+	// comment, corrected below) — a stalled stream or a POST channel
+	// that started timing out had no detector short of the next real
+	// tool call failing. Mirrors http.Pool's identical wiring.
+	entry.probe = &HealthProbe{
+		Period:    p.opts.PingPeriod,
+		Timeout:   p.opts.PingTimeout,
+		NewTicker: p.opts.NewTicker,
+		Probe: NewToolsListProbe(conn, func() int64 {
+			return p.idCounter.Add(1)
+		}),
+		OnFailure: func(reason string) {
+			p.opts.Logger.Warn("sse.health.tripped", "server", spec.Name, "reason", reason)
+		},
+		OnStateChange: func(previous, current transport.State) {
+			p.notifyHealth(spec.Name, string(previous))
+		},
+		Logger: loggerAdapter,
+	}
+	entry.probe.Start()
 
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
+		entry.probe.Stop()
 		_ = conn.Close()
 		return errors.New("sse: pool closed mid-open")
 	}
 	if existing, ok := p.servers[spec.Name]; ok {
 		p.servers[spec.Name] = entry
 		p.mu.Unlock()
+		if existing.probe != nil {
+			existing.probe.Stop()
+		}
 		_ = existing.conn.Close()
 		return nil
 	}
@@ -176,17 +208,18 @@ func (p *Pool) openOne(ctx context.Context, spec coremcp.ServerSpec) error {
 // stdio.ErrServerNotFound rather than a shared import.
 var ErrServerNotFound = errors.New("sse: server not in pool")
 
-// CloseOne removes a single server and closes its connection. Unlike
-// the http transport, the sse Pool has no per-server health-probe
-// goroutine to stop today (ReconnectLoop is constructed per entry but
-// is not itself goroutine-driven — nothing calls Reconnect
-// automatically), so closing the connection is the whole of the
-// teardown. If a probe/reconnect goroutine is added to this transport
-// later, it must be stopped here too, mirroring http.Pool.CloseOne.
+// CloseOne removes a single server: stops its health probe and closes
+// its connection. Stop() blocks until the probe goroutine has
+// actually exited (see HealthProbe.Stop), so by the time CloseOne
+// returns nil, no further tools/list probe request will reach the
+// server. (Corrected connector-lifecycle-truth-01PMZ303 UNIT-7 — this
+// comment previously said "the sse Pool has no per-server
+// health-probe goroutine to stop today"; UNIT-7 added one, mirroring
+// http.Pool's.)
 //
 // Locking mirrors stdio.Pool.CloseOne and http.Pool.CloseOne: the map
 // mutation happens under the pool lock and completes before the
-// (potentially blocking) conn.Close() runs unlocked, so a concurrent
+// (potentially blocking) teardown work runs unlocked, so a concurrent
 // CloseOne(id) for the same id observes ErrServerNotFound rather than
 // racing this one into a double close.
 //
@@ -205,7 +238,86 @@ func (p *Pool) CloseOne(ctx context.Context, id string) error {
 	delete(p.servers, id)
 	p.mu.Unlock()
 
+	if entry.probe != nil {
+		entry.probe.Stop()
+	}
 	return entry.conn.Close()
+}
+
+// RecipeStatus returns the live status snapshot for a single server,
+// derived from its HealthProbe's last recorded outcome (UNIT-7 —
+// before this, dispatch.Pool synthesised a permanent "running" for
+// every sse-owned id instead of asking this pool). ok is false when
+// id is not in the pool. Mirrors http.Pool.RecipeStatus, including
+// the Enabled-is-a-documented-placeholder note in that method's doc
+// comment.
+func (p *Pool) RecipeStatus(id string) (transport.RecipeStatus, bool) {
+	p.mu.RLock()
+	entry, ok := p.servers[id]
+	p.mu.RUnlock()
+	if !ok || entry.probe == nil {
+		return transport.RecipeStatus{}, false
+	}
+
+	snap := entry.probe.Snapshot()
+	state := snap.State
+	if state == "" {
+		state = transport.StateStarting
+	}
+	return transport.RecipeStatus{
+		ID:        id,
+		Enabled:   true,
+		State:     string(state),
+		LastError: snap.LastError,
+		UpdatedAt: snap.LastProbeAt,
+	}, true
+}
+
+// AllRecipeStatuses returns the live status snapshot for every server
+// currently in the pool. Satisfies dispatch.RemoteSubPool. Mirrors
+// http.Pool.AllRecipeStatuses.
+func (p *Pool) AllRecipeStatuses() []transport.RecipeStatus {
+	p.mu.RLock()
+	ids := make([]string, 0, len(p.servers))
+	for id := range p.servers {
+		ids = append(ids, id)
+	}
+	p.mu.RUnlock()
+
+	out := make([]transport.RecipeStatus, 0, len(ids))
+	for _, id := range ids {
+		if rs, ok := p.RecipeStatus(id); ok {
+			out = append(out, rs)
+		}
+	}
+	return out
+}
+
+// SetHealthObserver installs a callback invoked whenever any server's
+// live-probed health state changes (connector-lifecycle-truth
+// UNIT-8's mcp:health-changed publisher). Pass nil to clear. Mirrors
+// http.Pool.SetHealthObserver.
+func (p *Pool) SetHealthObserver(fn transport.HealthObserver) {
+	p.mu.Lock()
+	p.healthObserver = fn
+	p.mu.Unlock()
+}
+
+// notifyHealth builds the current RecipeStatus for id and, if an
+// observer is installed, invokes it with (id, previousState,
+// current). Mirrors http.Pool.notifyHealth.
+func (p *Pool) notifyHealth(id, previousState string) {
+	p.mu.RLock()
+	observer := p.healthObserver
+	p.mu.RUnlock()
+	if observer == nil {
+		return
+	}
+	current, ok := p.RecipeStatus(id)
+	if !ok {
+		return
+	}
+	observer(id, previousState, current)
 }
 
 // Close fans out a Close to every entry.
@@ -230,6 +342,9 @@ func (p *Pool) Close(ctx context.Context) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			if entry.probe != nil {
+				entry.probe.Stop()
+			}
 			if err := entry.conn.Close(); err != nil {
 				mu.Lock()
 				if first == nil {
