@@ -207,7 +207,16 @@ func (c *Connection) Open(ctx context.Context) error {
 		// client lets Close cleanly tear down the underlying
 		// transport's idle keep-alives without touching a shared
 		// http.DefaultTransport that other code paths depend on.
+		//
+		// Transport is transport.GuardedHTTPTransport(), not nil: a
+		// nil Transport falls back to http.DefaultTransport, which
+		// dials wherever DNS says at connect time with no address
+		// validation at all — see egress_guard.go's doc comment
+		// (S-1, paste-import-accepts-what-we-support-01PMZG16). This
+		// matters once a recipe's URL can come from a pasted config
+		// rather than only the curated shipped catalog.
 		spec.HTTPClient = &stdhttp.Client{
+			Transport: transport.GuardedHTTPTransport(),
 			// Don't follow redirects — JSON-RPC POST endpoints
 			// should not 3xx, and following one quietly would mask
 			// a misconfigured base URL.
