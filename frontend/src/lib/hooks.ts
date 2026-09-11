@@ -103,11 +103,37 @@ export type HookEventName = (typeof ALL_HOOK_EVENTS)[number];
  *
  * Seeded 2026-08-19 (trust-surfaces-that-fire-01PMZ202 WP08 / UNIT-7)
  * with the truthful set derived empirically by WP01: of the 18 events
- * ALL_HOOK_EVENTS listed, exactly one — pre_send — has a real production
- * call site (core/rpc/views/llm/impl.go:638, `a.hooks.RunPreSend(...)`).
- * post_send looked like a second one (a complete adapter chain, a live
- * builtin) but has zero call sites outside test files — see F31 in
- * research/execution-ledger.md. NOT ['pre_send', 'post_send'].
+ * ALL_HOOK_EVENTS listed, exactly one — pre_send — was believed to have a
+ * real production call site (core/rpc/views/llm/impl.go:638,
+ * `a.hooks.RunPreSend(...)`).
+ *
+ * CORRECTED 2026-09-10 (ledger #46): that belief was wrong, and had been
+ * wrong since before WP01 ran. `a.hooks.RunPreSend` lives inside
+ * `(a *API).buildMessages` (impl.go:556) — a method with ZERO production
+ * callers (only `impl_test.go` / `integration_test.go` call it). The real
+ * send path since the agent-kernel-graph-chat-migration cutover (commit
+ * f0b17126, 2026-04-27 — four months before WP01's own investigation) is
+ * `API.StartStream` -> `ChatRunner.StartStream`
+ * (core/rpc/views/agentgraph/chat/chat_runner.go), which never imports
+ * core/hooks or calls RunPreSend. `pre_send` — and the memory.retrieve
+ * builtin registered on it — has therefore never fired in a shipped
+ * build either. Moved OUT of FIRING_HOOK_EVENTS; see
+ * scripts/ci/allowlists/i17-eventless-hook-events.txt for the dated
+ * justification and what wiring it for real needs (a pre-LLM injection
+ * point in ChatRunner, which does not exist today — a materially bigger
+ * change than post_send's post-hoc fire below).
+ *
+ * `post_send` moved IN the same commit: it also looked like a dead-adapter
+ * case (a complete chain, a live memory.persist builtin, zero call sites
+ * outside test files — F31 in research/execution-ledger.md) but is now
+ * wired onto the real path: ChatRunner.Config.PostSendHook fires from the
+ * SAME HookPostLLM boundary UsageHook already uses (after
+ * SessionWriteNode persists the assistant message), and
+ * core/rpc/api.go's buildChatRunner wires it to the real
+ * hooksRunner.RunPostSend. Covered by
+ * TestChatRunner_PostSendHook_FiresOnRealPath /
+ * TestPostSendHook_MemoryPersist_WritesRealRow (real on-disk gob-backed
+ * chromem store — core/memory has no sqlite backend).
  *
  * Every producer WP appends its event(s) here in the same commit as its
  * fire site (WP09-WP21). scripts/ci/check-hook-event-fire-sites.sh (G-2)
@@ -148,7 +174,7 @@ export type HookEventName = (typeof ALL_HOOK_EVENTS)[number];
  * See scripts/ci/allowlists/i17-eventless-hook-events.txt.
  */
 export const FIRING_HOOK_EVENTS = [
-  'pre_send',
+  'post_send',
   'pre_tool_use',
   'post_tool_use',
   'post_tool_use_failure',

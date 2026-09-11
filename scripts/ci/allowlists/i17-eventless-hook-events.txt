@@ -24,6 +24,17 @@
 # that populated agentgraph.Env.LifecycleHooks (env_deps.go's applyTo +
 # newGraphManagerWithDeps threading a.hookRunner) — rows removed. ----
 
+# ---- ledger #46 LANDED 2026-09-10 (CORRECTION, not a new producer):
+# post_send moved INTO FIRING_HOOK_EVENTS (real fire site:
+# core/rpc/api.go's postSendHookFn -> hooksRunner.RunPostSend, registered
+# from core/rpc/views/agentgraph/chat/chat_runner.go's StartStream on the
+# HookPostLLM boundary — the memory.persist builtin runs in production for
+# the first time). pre_send moved OUT in the SAME commit — row added below;
+# it is a correction of a false positive seeded 2026-08-19, not a new
+# regression. row removed. ----
+
+pre_send justify(blocker: "core/rpc/views/llm/impl.go:638's a.hooks.RunPreSend(...) is real code but lives inside (a *API).buildMessages (impl.go:556), a method with ZERO production callers — grep '\.buildMessages(' across core/ non-test files finds none; only impl_test.go and integration_test.go call it. The live send path since the agent-kernel-graph-chat-migration cutover (commit f0b17126, 2026-04-27 — four months before this event was first marked as firing on 2026-08-19) is API.StartStream -> ChatRunner.StartStream (core/rpc/views/agentgraph/chat/chat_runner.go), which never imports core/hooks. memory.retrieve (core/hooks/memory_builtins.go, registered on pre_send) has therefore never run in a shipped build either — the same defect class as post_send/memory.persist (ledger #46), just not fixed in the same commit: post_send is a POST-hoc side-effect (fire-and-forget after SessionWriteNode persists the message — trivial to hang off the existing HookPostLLM boundary, see PostSendHook in chat_runner.go). pre_send needs to MUTATE the outbound message list BEFORE the LLM call is built, and ChatRunner has no pre-LLM injection point today (HookPreLLM exists as a boundary constant in core/agentgraph/hooks.go but has zero Fire call sites of its own) — wiring it means adding a new seam to LLMProviderAdapter/StartStream's message-construction path, not just registering a callback. Follow-up WP, scoped separately from ledger #46.", owner: alec, date: 2026-09-10)
+
 # ---- WP10 (UNIT-9) LANDED 2026-08-20 (PARTIAL): permission_request,
 # permission_denied and session_start moved into FIRING_HOOK_EVENTS in the
 # same commit that constructed cedar.PermissionRunnerAdapter (backfilled
@@ -40,14 +51,23 @@ cwd_changed justify(blocker: "session.Manager.FireCwdChanged (core/session/manag
 elicitation justify(blocker: "RunElicitation has no call site — core/rpc/views/elicit/api.go OpenDialog never calls it, and elicit.API/elicit.Config carry no hooks.Runner field yet; WP11 wires both elicitation legs in one commit (a request-leg hook with no answer-leg hook is a half-surface)", owner: alec, date: 2026-08-19)
 elicitation_result justify(blocker: "RunElicitationResult has no call site — core/rpc/views/elicit/api.go SubmitAnswer never calls it; WP11, same commit as elicitation (both legs or neither)", owner: alec, date: 2026-08-19)
 
-# ---- WP12 (UNIT-11): the five buildable v1/v2 producers, including
-# post_send (F31 — the novel finding: a complete adapter chain, a live
-# memory.persist builtin, and zero call sites outside test files). ----
-post_send justify(blocker: "RunPostSend has zero call sites outside core/hooks/runner_test.go — core/rpc/views/llm/impl.go's buildMessages calls RunPreSend only (impl.go:638); memory.persist (core/hooks/memory_builtins.go:191) has therefore never run in a shipped build (F31); WP12", owner: alec, date: 2026-08-19)
-user_prompt_submit justify(blocker: "payload struct exists (core/hooks/fire.go:66) but no Run*/Fire* call site; seat is adjacent to the live RunPreSend at core/rpc/views/llm/impl.go:556 buildMessages; WP12", owner: alec, date: 2026-08-19)
+# ---- WP12 (UNIT-11): the five buildable v1/v2 producers. post_send (F31)
+# LANDED 2026-09-10 as ledger #46 — row removed, see the correction note
+# above. The remaining four are still open.
+#
+# CORRECTION (2026-09-10, ledger #46): user_prompt_submit's row below still
+# says its seat is "adjacent to the live RunPreSend at ...buildMessages" —
+# that description is now known false (see the pre_send row above:
+# buildMessages has zero production callers). Whoever wires
+# user_prompt_submit should seat it on the real send path
+# (ChatRunner.StartStream), not beside RunPreSend in dead code — the exact
+# mistake post_send's original WP12 plan would have made if F31's own
+# "zero call sites outside test files" wording had been read as "wire it
+# in buildMessages" rather than "find where the real send path is". ----
+user_prompt_submit justify(blocker: "payload struct exists (core/hooks/fire.go:66) but no Run*/Fire* call site. NOT seated in buildMessages (core/rpc/views/llm/impl.go:556) — that method has zero production callers, per the pre_send row above. Real seat is core/rpc/views/agentgraph/chat/chat_runner.go's StartStream, before env construction; needs a new Run*/Fire* method (Runner has no UserPromptSubmit method yet) and a wiring path into ChatRunner.Config mirroring PostSendHook's shape (ledger #46). WP12", owner: alec, date: 2026-08-19)
 notification justify(blocker: "payload struct exists (core/hooks/fire.go:141) but no Run*/Fire* call site; seat is core/rpc/wf_adapters_notifier.go:29 wfNotifierAdapter.Notify; WP12", owner: alec, date: 2026-08-19)
 pre_save_session justify(blocker: "no payload struct, no Run*/Fire* method, no fire site at all; seat is core/session/manager.go:474 AppendMessage; WP12 builds all three", owner: alec, date: 2026-08-19)
-post_assistant_turn_complete justify(blocker: "no payload struct, no Run*/Fire* method, no fire site at all; seat is core/rpc/views/llm/impl.go:892 StartStream completion leg; WP12 builds all three", owner: alec, date: 2026-08-19)
+post_assistant_turn_complete justify(blocker: "no payload struct, no Run*/Fire* method, no fire site at all. NOT seated in impl.go:892 StartStream (that is (a *API).StartStream in views/llm/impl.go, which forwards to ChatRunner and does nothing else — see the pre_send row above); real seat is ChatRunner.StartStream's driveRun completion, mirroring PostSendHook (ledger #46). WP12 builds all three", owner: alec, date: 2026-08-19)
 
 # ---- WP13 (UNIT-12): file_changed. ----
 file_changed justify(blocker: "the sole firer (core/fswatch/watcher.go:210) is correct but core/fswatch has zero non-test importers — it fires from dead code and never runs in a real binary (scripts/ci/allowlists/i7-orphan-packages.txt:68); WP13 gives the watcher a production owner and removes the i7 entry in the same commit", owner: alec, date: 2026-08-19)

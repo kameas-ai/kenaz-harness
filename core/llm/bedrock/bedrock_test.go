@@ -302,6 +302,121 @@ func TestBearer_ToolUseRoundTrip(t *testing.T) {
 	}
 }
 
+// TestBearer_ReasoningContentEmitsStreamReasoning drives the bearer-auth
+// REST path (the real adapter's own event-stream decode, via httptest —
+// not a hand-built llm.StreamEvent fixture) with a recorded
+// contentBlockDelta.reasoningContent frame and asserts the adapter emits
+// llm.StreamReasoning with the reasoning text
+// (model-settings-reach-the-model-01PMZ101 WP09, AC-008). Before WP09,
+// bearer.go's contentBlockDelta decode had no reasoningContent field at
+// all, so the delta was silently dropped by json.Unmarshal.
+func TestBearer_ReasoningContentEmitsStreamReasoning(t *testing.T) {
+	frames := [][]byte{
+		encodeEventStreamMessage(t,
+			map[string]string{":event-type": "contentBlockDelta", ":message-type": "event"},
+			[]byte(`{"contentBlockIndex":0,"delta":{"reasoningContent":{"text":"Let me "}}}`),
+		),
+		encodeEventStreamMessage(t,
+			map[string]string{":event-type": "contentBlockDelta", ":message-type": "event"},
+			[]byte(`{"contentBlockIndex":0,"delta":{"reasoningContent":{"text":"think about this."}}}`),
+		),
+		// A signature delta carries no renderable text and must not
+		// produce a StreamReasoning event with empty content.
+		encodeEventStreamMessage(t,
+			map[string]string{":event-type": "contentBlockDelta", ":message-type": "event"},
+			[]byte(`{"contentBlockIndex":0,"delta":{"reasoningContent":{"signature":"sig-abc"}}}`),
+		),
+		encodeEventStreamMessage(t,
+			map[string]string{":event-type": "contentBlockDelta", ":message-type": "event"},
+			[]byte(`{"contentBlockIndex":1,"delta":{"text":"42"}}`),
+		),
+		encodeEventStreamMessage(t,
+			map[string]string{":event-type": "messageStop", ":message-type": "event"},
+			[]byte(`{"stopReason":"end_turn"}`),
+		),
+	}
+
+	fs := newFakeServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.amazon.eventstream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		for _, frame := range frames {
+			_, _ = w.Write(frame)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	})
+	a := New(WithHTTPClient(rewritingClient(fs)))
+	req, prof := stdRequest("anthropic.claude-3-7-sonnet-20250219-v1:0")
+	req.Reasoning = &llm.ReasoningSpec{Enabled: true, BudgetTokens: 2048}
+	stream, err := a.Stream(context.Background(), req, prof, []byte("ABSKtestkey"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	var reasoning []string
+	var texts []string
+	for ev := range stream.Events() {
+		switch ev.Kind {
+		case llm.StreamReasoning:
+			if ev.Reasoning == nil {
+				t.Fatalf("StreamReasoning event with nil Reasoning payload")
+			}
+			if ev.Reasoning.Content == "" {
+				t.Fatalf("StreamReasoning event with empty content (signature delta leaked through)")
+			}
+			reasoning = append(reasoning, ev.Reasoning.Content)
+		case llm.StreamText:
+			texts = append(texts, ev.Text)
+		}
+	}
+	if _, ferr := stream.Final(); ferr != nil {
+		t.Fatalf("Final: %v", ferr)
+	}
+
+	gotReasoning := strings.Join(reasoning, "")
+	if gotReasoning != "Let me think about this." {
+		t.Fatalf("reasoning content = %q, want %q", gotReasoning, "Let me think about this.")
+	}
+	gotText := strings.Join(texts, "")
+	if gotText != "42" {
+		t.Fatalf("text content = %q, want %q (reasoning must not leak into the text stream)", gotText, "42")
+	}
+}
+
+// TestBearer_NoReasoning_NoReasoningEvent is the no-reasoning control:
+// an ordinary response with no reasoningContent delta must not produce
+// any StreamReasoning event.
+func TestBearer_NoReasoning_NoReasoningEvent(t *testing.T) {
+	fs := newFakeServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.amazon.eventstream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(encodeEventStreamMessage(t,
+			map[string]string{":event-type": "contentBlockDelta", ":message-type": "event"},
+			[]byte(`{"contentBlockIndex":0,"delta":{"text":"hello"}}`),
+		))
+		_, _ = w.Write(encodeEventStreamMessage(t,
+			map[string]string{":event-type": "messageStop", ":message-type": "event"},
+			[]byte(`{"stopReason":"end_turn"}`),
+		))
+	})
+	a := New(WithHTTPClient(rewritingClient(fs)))
+	req, prof := stdRequest("anthropic.claude-3-haiku-20240307-v1:0")
+	stream, err := a.Stream(context.Background(), req, prof, []byte("ABSKtestkey"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for ev := range stream.Events() {
+		if ev.Kind == llm.StreamReasoning {
+			t.Fatalf("unexpected StreamReasoning event for a no-reasoning response: %+v", ev)
+		}
+	}
+	if _, ferr := stream.Final(); ferr != nil {
+		t.Fatalf("Final: %v", ferr)
+	}
+}
+
 // TestBearer_ImageBlock_Serialized verifies the bearer-auth REST path
 // emits an image content block with the right format + base64 source
 // shape per the Converse contract:

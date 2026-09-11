@@ -320,7 +320,7 @@ func TestB4_SecretLookupWiring_ChatRunnerResolvesRealSecret(t *testing.T) {
 
 	stack := newLLMStack(c, broker, store, nil, nil, func() bool { return false },
 		nil, nil, nil, bashStore, nil, graphMgr, nil, nil, nil, nil,
-		exposureIdx, nil, nil, nil, confirmAuditEmitter{}, cedarEngine, nil)
+		exposureIdx, nil, nil, nil, confirmAuditEmitter{}, cedarEngine, nil, nil)
 
 	if stack.chatRunner == nil {
 		t.Fatal("newLLMStack produced no chatRunner — cannot drive StartStream")

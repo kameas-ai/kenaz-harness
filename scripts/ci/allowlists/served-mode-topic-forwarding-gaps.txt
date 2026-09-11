@@ -1,0 +1,42 @@
+# served-mode-topic-forwarding allowlist — Topic* broker-topic consts with
+# a real frontend `useEventStream(...)` subscriber that are NOT forwarded
+# by core/serve/wsstream.go's passthroughTopics.
+#
+# Enforced by scripts/ci/check-served-mode-topic-forwarding.sh.
+# Discovery: this gate's own header + the now-deleted
+# wsstream_topics_parity_test.go's header (connector-lifecycle-
+# truth-01PMZ303 UNIT-8 / PR #336 review MUST FIX 1). Cross-referencing
+# every `Topic* = "..."` Go const's declaring file against
+# `useEventStream(...)` call sites in frontend/src surfaced FIVE such
+# topics missing from passthroughTopics; mcp:health-changed was the sixth
+# and was fixed first (it is forwarded, not allowlisted here).
+#
+# RESOLVED 2026-09 (served-topic-single-source): all five topics this
+# file used to freeze — contextbootstrap:progress, elicit:deferred,
+# elicit:deferred:answered, fleet:lockdown:changed,
+# fleet:session:expired — are now wired. Each got the two-part
+# disposition this allowlist's header always required: a
+# passthroughTopics entry (core/serve/wsstream.go) plus an evidenced
+# session-scoping decision (three are process-wide, added to
+# processWideTopics; elicit:deferred already carried SessionID on its
+# ElicitRequest payload; elicit:deferred:answered got a new SessionID
+# field on DeferredAnsweredPayload). See wsstream.go's per-topic
+# comments for the evidence and core/serve/wsstream_gap_topics_test.go
+# for the end-to-end regression coverage (real EventBus.Publish through
+# a real served.Server + WebSocket, mirroring
+# wsstream_mcp_health_topic_test.go's pattern). One correction along the
+# way: this file's own placeholder justification for
+# fleet:session:expired guessed it "plausibly" carried a session id
+# already; verified false — that topic's "session" is the fleet
+# control-plane AUTH session (token refresh), not a chat session, so it
+# is process-wide like the other two fleet/context topics, not
+# session-scoped.
+#
+# This file is intentionally EMPTY. The gate stays wired — it fails on
+# any NEW topic joining this backlog shape, which is the point.
+#
+# Format: one double-quoted topic VALUE (not the Go identifier) per line,
+# preceded by a comment giving the date, the const's
+# <package-import-path>.<Identifier>, and the blocker + owner (never
+# "we'll get to it" — see CLAUDE.md's "Release ritual: unwired sweep" /
+# "Rules").

@@ -875,6 +875,82 @@ func GateScheduledChatExecute(ctx context.Context, g Gate, id, createdBy string,
 	return d, &PolicyDeniedError{Decision: d}
 }
 
+// GateSubagentAbort is the gate-hook helper for the Subagent_Abort RPC
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8, AC-09).
+// Returns nil on Allow / NotApplicable; *PolicyDeniedError on Deny.
+// Default-allow when g is nil (pre-boot / test posture), same as every
+// other gate-hook helper in this file. branchID is the
+// core/rpc/views/branches.Branch.ID being aborted.
+func GateSubagentAbort(ctx context.Context, g Gate, branchID string) (Decision, error) {
+	if g == nil {
+		return Decision{
+			Outcome:  Allow,
+			Action:   ActionToolSubagentAbort,
+			Resource: SubagentBranchUID(branchID).String(),
+			Reason:   "no engine wired (default-allow)",
+		}, nil
+	}
+	d := g.Evaluate(ctx, UserUID(), ActionToolSubagentAbort, SubagentBranchUID(branchID), nil)
+	return d, enforce(d)
+}
+
+// GateSubagentSteer is the gate-hook helper for the Subagent_Steer RPC
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8, AC-09).
+// Returns nil on Allow / NotApplicable; *PolicyDeniedError on Deny.
+// Default-allow when g is nil. branchID is the branch being steered;
+// messageLength is the steering message's rune count, carried as a
+// context attribute (not the message text itself — audit/gate context
+// attributes follow the same no-content-bytes convention as this
+// package's audit payloads).
+func GateSubagentSteer(ctx context.Context, g Gate, branchID string, messageLength int) (Decision, error) {
+	if g == nil {
+		return Decision{
+			Outcome:  Allow,
+			Action:   ActionToolSubagentSteer,
+			Resource: SubagentBranchUID(branchID).String(),
+			Reason:   "no engine wired (default-allow)",
+		}, nil
+	}
+	d := g.Evaluate(ctx, UserUID(), ActionToolSubagentSteer, SubagentBranchUID(branchID),
+		map[cedar.String]cedar.Value{
+			cedar.String("message_length"): cedar.Long(int64(messageLength)),
+		})
+	return d, enforce(d)
+}
+
+// GateSubagentPause is the gate-hook helper for the Subagent_Pause RPC
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8, AC-09).
+// Returns nil on Allow / NotApplicable; *PolicyDeniedError on Deny.
+// Default-allow when g is nil (pre-boot / test posture). branchID is the
+// core/rpc/views/branches.Branch.ID being paused.
+func GateSubagentPause(ctx context.Context, g Gate, branchID string) (Decision, error) {
+	if g == nil {
+		return Decision{
+			Outcome:  Allow,
+			Action:   ActionToolSubagentPause,
+			Resource: SubagentBranchUID(branchID).String(),
+			Reason:   "no engine wired (default-allow)",
+		}, nil
+	}
+	d := g.Evaluate(ctx, UserUID(), ActionToolSubagentPause, SubagentBranchUID(branchID), nil)
+	return d, enforce(d)
+}
+
+// GateSubagentResume is GateSubagentPause's resume-action mirror
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8, AC-09).
+func GateSubagentResume(ctx context.Context, g Gate, branchID string) (Decision, error) {
+	if g == nil {
+		return Decision{
+			Outcome:  Allow,
+			Action:   ActionToolSubagentResume,
+			Resource: SubagentBranchUID(branchID).String(),
+			Reason:   "no engine wired (default-allow)",
+		}, nil
+	}
+	d := g.Evaluate(ctx, UserUID(), ActionToolSubagentResume, SubagentBranchUID(branchID), nil)
+	return d, enforce(d)
+}
+
 // CheckExportSession is the gate-hook helper for the Sessions_Export RPC
 // (session-export-01NDFSEX05 WP01). Returns nil on Allow / NotApplicable;
 // *PolicyDeniedError on Deny. Default-allow when g is nil.

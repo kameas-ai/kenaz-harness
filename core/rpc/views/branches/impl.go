@@ -14,8 +14,10 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/context/audit"
 	"github.com/kameas-ai/kenaz-harness/core/conversation"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/session"
+	coretasks "github.com/kameas-ai/kenaz-harness/core/tasks"
 )
 
 // ErrManagerUnavailable signals the chassis booted without the
@@ -24,6 +26,71 @@ var ErrManagerUnavailable = errors.New("branches: manager unavailable")
 
 // ErrInvalidArg covers trivially invalid inputs.
 var ErrInvalidArg = errors.New("branches: invalid argument")
+
+// ErrCedarDenied is returned when a cedar gate explicitly denies
+// AbortSubagent / SteerSubagent / PauseSubagent / ResumeSubagent
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8). Wrapped, not
+// swallowed, so callers can errors.Is(err, ErrCedarDenied) — same
+// convention as core/rpc/views/scheduledchat.ErrCedarDenied.
+var ErrCedarDenied = errors.New("branches: denied by cedar policy")
+
+// ErrSubagentUnavailable is returned by AbortSubagent / SteerSubagent
+// when the task registry or task-lookup dependency was not wired
+// (degraded boot — mirrors ErrManagerUnavailable's posture for the
+// rest of this API).
+var ErrSubagentUnavailable = errors.New("branches: subagent task tracking unavailable")
+
+// ErrSubagentTaskNotFound is returned by AbortSubagent when branchID
+// has no tracked background task — either it was never a spawner-
+// backed dispatch, or WaitForChildRun already consumed the mapping
+// (see BranchSeamAdapter.TaskIDForBranch's doc for when that happens).
+var ErrSubagentTaskNotFound = errors.New("branches: no tracked task for this branch")
+
+// SubagentTaskRegistry is the narrow core/tasks.Registry surface
+// AbortSubagent needs (subagent-control-and-background-tasks-01PMZB11
+// UNIT-8). Kept narrow — mirrors core/rpc/views/tasks.RegistryIface —
+// so this package depends on one method, not the registry's full
+// surface.
+type SubagentTaskRegistry interface {
+	Abort(ctx context.Context, id string) error
+}
+
+// SubagentTaskLookup resolves the core/tasks.Registry id backing a
+// branch's spawned child run. Narrow interface over
+// *core/rpc/views/agentgraph.BranchSeamAdapter.TaskIDForBranch so this
+// package does not need to import agentgraph's full surface.
+type SubagentTaskLookup interface {
+	TaskIDForBranch(branchID string) (string, bool)
+}
+
+// ErrSubagentPauseUnavailable is returned by PauseSubagent /
+// ResumeSubagent when Config.PauseControl was not wired (degraded
+// boot — mirrors ErrManagerUnavailable's posture for the rest of this
+// API).
+//
+// Named with the "Pause" infix (not the bare ErrSubagentUnavailable)
+// to avoid a same-package collision with ErrSubagentUnavailable above,
+// which guards a different degraded-boot condition (an unset task
+// registry / lookup, message "branches: subagent task tracking
+// unavailable") on the Abort/Steer surface. Both sentinels return
+// unwrapped through Subagent_Pause/Subagent_Resume and Subagent_Abort
+// to the Wails caller, so collapsing them to one literal would have
+// silently mislabeled one feature's degraded-boot error.
+var ErrSubagentPauseUnavailable = errors.New("branches: subagent pause control unavailable")
+
+// SubagentPauseControl is the narrow surface PauseSubagent /
+// ResumeSubagent need (subagent-control-and-background-tasks-01PMZB11
+// UNIT-8). Production binds this to the SAME
+// *chat.SubagentPauseRegistry instance ChatRunner.StartStream reads
+// from (core/rpc/api.go, via chatRunner.SubagentPause()) — not a
+// second, unread registry. Both methods report whether the call
+// actually changed the pause state, which PauseSubagent/ResumeSubagent
+// use to decide whether to write an audit record (idempotent re-calls
+// write none, mirroring Abort's contract).
+type SubagentPauseControl interface {
+	Pause(sessionID string) (changed bool)
+	Resume(sessionID string) (changed bool)
+}
 
 // BranchListBroker is the narrow publish surface the branches API needs
 // to emit session.list_changed events after a new branch session is created.
@@ -68,6 +135,27 @@ type Config struct {
 	// the zero value, which EffectiveBranchReintegrationMaxTokens
 	// already treats as "use the default".
 	Settings func() settings.Settings
+	// Tasks is the background-task registry AbortSubagent delegates to
+	// (subagent-control-and-background-tasks-01PMZB11 UNIT-8). nil
+	// degrades AbortSubagent to ErrSubagentUnavailable — matches this
+	// file's existing degraded-boot posture rather than panicking.
+	Tasks SubagentTaskRegistry
+	// TaskLookup resolves a branch id to its tracked task id.
+	// Production wiring is the SAME *BranchSeamAdapter instance
+	// core/rpc/api.go threads through EnvDeps.Branch (a.branchSeam) —
+	// not a second lookup path. nil degrades the same as Tasks == nil.
+	TaskLookup SubagentTaskLookup
+	// Cedar gates AbortSubagent / SteerSubagent / PauseSubagent /
+	// ResumeSubagent. nil default-allows (matches every other gate-hook
+	// call site in the harness — cedar.GateSubagentAbort /
+	// GateSubagentSteer / GateSubagentPause / GateSubagentResume's own
+	// nil-Gate contract), the pre-boot / test posture.
+	Cedar cedar.Gate
+	// PauseControl is the pause/resume side channel PauseSubagent /
+	// ResumeSubagent delegate to (UNIT-8). nil degrades both to
+	// ErrSubagentPauseUnavailable — matches this file's existing
+	// degraded-boot posture rather than panicking.
+	PauseControl SubagentPauseControl
 }
 
 // API is the concrete BranchesAPI implementation.
@@ -606,6 +694,148 @@ func (a *API) SetAdvisorDismissed(ctx context.Context, sessionID string, dismiss
 			Scope:  "session",
 			Reason: "dont_suggest_again",
 		}, a.now())
+	return nil
+}
+
+// AbortSubagent stops a dispatched sub-agent's underlying run and
+// marks its task cancelled (subagent-control-and-background-tasks-
+// 01PMZB11 UNIT-8). Delegates to Tasks.Abort for the actual stop — see
+// core/tasks.Registry.Abort's doc for the pid-vs-stopFunc mechanics —
+// this method is the branch-scoped resolver + gate + audit wrapper
+// around that existing call, not a second stop implementation.
+//
+// Idempotent: a second call against an already-terminal task (Abort
+// returns coretasks.ErrAlreadyTerminal) returns nil without writing a
+// second audit record — the state transition already happened once,
+// on whichever call produced it.
+func (a *API) AbortSubagent(ctx context.Context, branchID string) error {
+	if a == nil || a.cfg.Conversations == nil {
+		return ErrManagerUnavailable
+	}
+	if branchID == "" {
+		return ErrInvalidArg
+	}
+	if _, gerr := cedar.GateSubagentAbort(ctx, a.cfg.Cedar, branchID); gerr != nil {
+		return fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
+	}
+	if a.cfg.Tasks == nil || a.cfg.TaskLookup == nil {
+		return ErrSubagentUnavailable
+	}
+	taskID, ok := a.cfg.TaskLookup.TaskIDForBranch(branchID)
+	if !ok {
+		return ErrSubagentTaskNotFound
+	}
+	if err := a.cfg.Tasks.Abort(ctx, taskID); err != nil {
+		if errors.Is(err, coretasks.ErrAlreadyTerminal) {
+			// Idempotent no-op: nothing changed, so nothing new to audit.
+			return nil
+		}
+		return fmt.Errorf("branches: abort subagent: %w", err)
+	}
+	audit.MustEmit(ctx, a.cfg.Audit, audit.KindSubagentAborted,
+		audit.SubagentAbortedPayload{BranchID: branchID, TaskID: taskID}, a.now())
+	return nil
+}
+
+// SteerSubagent appends a user message to a dispatched sub-agent's
+// child session (subagent-control-and-background-tasks-01PMZB11
+// UNIT-8) — the mirror of AppendToParent (used by the merge path
+// above), but onto br.ChildSessionID instead of br.ParentSessionID.
+func (a *API) SteerSubagent(ctx context.Context, branchID, message string) error {
+	if a == nil || a.cfg.Conversations == nil {
+		return ErrManagerUnavailable
+	}
+	if branchID == "" || strings.TrimSpace(message) == "" {
+		return ErrInvalidArg
+	}
+	if _, gerr := cedar.GateSubagentSteer(ctx, a.cfg.Cedar, branchID, utf8.RuneCountInString(message)); gerr != nil {
+		return fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
+	}
+	br, err := a.cfg.Conversations.Get(ctx, branchID)
+	if err != nil {
+		return fmt.Errorf("branches: get branch %q: %w", branchID, err)
+	}
+	if a.cfg.Sessions == nil {
+		return ErrManagerUnavailable
+	}
+	if _, err := a.cfg.Sessions.AppendMessage(ctx, br.ChildSessionID, session.Message{
+		Role:    session.RoleUser,
+		Content: message,
+	}); err != nil {
+		return fmt.Errorf("branches: append child: %w", err)
+	}
+	audit.MustEmit(ctx, a.cfg.Audit, audit.KindSubagentSteered,
+		audit.SubagentSteeredPayload{BranchID: branchID, MessageLength: utf8.RuneCountInString(message)}, a.now())
+	return nil
+}
+
+// PauseSubagent arms a dispatched sub-agent's turn-pause signal
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8, owner ruling
+// E-002). Delegates to Config.PauseControl.Pause — see
+// chat.SubagentPauseRegistry / coreag.Env.TurnPause / the loop
+// executor's consult site (core/agentgraph/exec_control.go) for the
+// consumption half. This method is the branch-scoped resolver + gate +
+// audit wrapper, not a second storage mechanism.
+//
+// Idempotent: a second Pause while already paused (PauseControl.Pause
+// returns changed=false) returns nil without writing a second audit
+// record — mirrors Abort's idempotency contract.
+func (a *API) PauseSubagent(ctx context.Context, branchID string) error {
+	if a == nil || a.cfg.Conversations == nil {
+		return ErrManagerUnavailable
+	}
+	if branchID == "" {
+		return ErrInvalidArg
+	}
+	if _, gerr := cedar.GateSubagentPause(ctx, a.cfg.Cedar, branchID); gerr != nil {
+		return fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
+	}
+	br, err := a.cfg.Conversations.Get(ctx, branchID)
+	if err != nil {
+		return fmt.Errorf("branches: get branch %q: %w", branchID, err)
+	}
+	if a.cfg.PauseControl == nil {
+		return ErrSubagentPauseUnavailable
+	}
+	if !a.cfg.PauseControl.Pause(br.ChildSessionID) {
+		// Idempotent no-op: already paused, nothing new to audit.
+		return nil
+	}
+	audit.MustEmit(ctx, a.cfg.Audit, audit.KindSubagentPaused,
+		audit.SubagentPausedPayload{BranchID: branchID}, a.now())
+	return nil
+}
+
+// ResumeSubagent clears a dispatched sub-agent's turn-pause signal so
+// its next turn begins again (UNIT-8). Mirrors PauseSubagent's shape;
+// delegates to Config.PauseControl.Resume.
+//
+// Idempotent: Resume against a branch that was never paused, or
+// already resumed (PauseControl.Resume returns changed=false), returns
+// nil without writing a second audit record.
+func (a *API) ResumeSubagent(ctx context.Context, branchID string) error {
+	if a == nil || a.cfg.Conversations == nil {
+		return ErrManagerUnavailable
+	}
+	if branchID == "" {
+		return ErrInvalidArg
+	}
+	if _, gerr := cedar.GateSubagentResume(ctx, a.cfg.Cedar, branchID); gerr != nil {
+		return fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
+	}
+	br, err := a.cfg.Conversations.Get(ctx, branchID)
+	if err != nil {
+		return fmt.Errorf("branches: get branch %q: %w", branchID, err)
+	}
+	if a.cfg.PauseControl == nil {
+		return ErrSubagentPauseUnavailable
+	}
+	if !a.cfg.PauseControl.Resume(br.ChildSessionID) {
+		// Idempotent no-op: was not paused, nothing new to audit.
+		return nil
+	}
+	audit.MustEmit(ctx, a.cfg.Audit, audit.KindSubagentResumed,
+		audit.SubagentResumedPayload{BranchID: branchID}, a.now())
 	return nil
 }
 

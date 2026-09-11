@@ -397,6 +397,20 @@ When merging multiple mission branches, expect simultaneous additions in these f
 - `core/hooks/hooks.go` — `Event*` constants + `AllEvents` slice (the slice is what `isKnownEvent` validates against; new events must be added there too)
 - `core/hooks/runner.go` — `BuiltinRegistry` fields + constructor map initialisers
 
+**Exception: same sentinel name, different meaning is not additive.** PR
+#334 (pause/resume) and PR #331 (Abort/Steer) both declared `var
+ErrSubagentUnavailable` in `core/rpc/views/branches` — same name, but
+guarding two genuinely different degraded-boot conditions with two
+different messages (an unset pause registry vs. an unset task registry).
+Go forbids two same-named package-level vars, so "keep all additions"
+does not apply here: whoever merges second must rename, not collapse,
+or the surviving literal silently mislabels the other feature's error.
+The tell that this is more than cosmetic is that the value escapes
+unwrapped to a caller (here, through the Wails-bound `Subagent_*`
+methods) — when that's true, treat a same-name collision as a real
+conflict and pick a more specific name for the newer or not-yet-merged
+copy, rather than reflexively combining both sides.
+
 ### Worktree agents cannot read `kitty-specs/` — copy it in
 
 **`kitty-specs/` is in `.gitignore` (line 13).** `git worktree add` does not

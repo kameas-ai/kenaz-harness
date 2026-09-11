@@ -144,7 +144,7 @@ func TestBootHealth_GetSetRoundTrip(t *testing.T) {
 	globalBootStore = store
 	defer func() { globalBootStore = orig }()
 
-	SetBootErrors("mcp: dial failed", "", "fleet: timeout")
+	SetBootErrors("mcp: dial failed", "", "fleet: timeout", "perms: bad json")
 
 	b := NewBindings(nil)
 	report := b.BootHealth_Get()
@@ -158,8 +158,11 @@ func TestBootHealth_GetSetRoundTrip(t *testing.T) {
 	if report.FleetInitError != "fleet: timeout" {
 		t.Errorf("FleetInitError = %q, want %q", report.FleetInitError, "fleet: timeout")
 	}
+	if report.PermissionsInitError != "perms: bad json" {
+		t.Errorf("PermissionsInitError = %q, want %q", report.PermissionsInitError, "perms: bad json")
+	}
 	if report.IsHealthy() {
-		t.Error("IsHealthy() = true, want false (MCP and Fleet errors present)")
+		t.Error("IsHealthy() = true, want false (MCP, Fleet and Permissions errors present)")
 	}
 }
 

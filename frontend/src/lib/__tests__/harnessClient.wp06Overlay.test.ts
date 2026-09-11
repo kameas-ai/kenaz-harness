@@ -108,6 +108,15 @@ describe('SERVED_STREAM_TOPICS ↔ passthroughTopics parity (G-703, AC-716)', ()
   // check that the generated re-export actually has content, catching
   // the failure mode where the import path is wrong or the generated
   // file was accidentally emptied.
+  //
+  // This describe block used to also carry EXPECTED_GO_PASSTHROUGH_TOPICS,
+  // a hand-maintained mirror of passthroughTopics that origin/main's
+  // fix/z303-mcp-health-truth (PR 336) had just added 'mcp:health-changed'
+  // to when this branch merged it — the exact three-way-drift failure
+  // mode findings #63/#62 close. That list is gone now; mcp:health-changed
+  // reaches SERVED_STREAM_TOPICS through the generator instead (it is in
+  // core/serve/wsstream.go's passthroughTopics), so there is nothing left
+  // to hand-copy.
   it('SERVED_STREAM_TOPICS is a non-empty generated set with no duplicates', () => {
     expect(SERVED_STREAM_TOPICS.length).toBeGreaterThan(0);
     expect(new Set(SERVED_STREAM_TOPICS).size).toBe(SERVED_STREAM_TOPICS.length);

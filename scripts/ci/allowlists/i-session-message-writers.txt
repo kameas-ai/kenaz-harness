@@ -41,7 +41,19 @@ core/session/moves.go:AppendMessage:1
 core/session/manager.go:AppendMessage:1
 core/rpc/views/sessions/impl.go:AppendMessage:2
 core/rpc/views/agentgraph/env_deps_branch.go:AppendMessage:2
-core/rpc/views/branches/impl.go:AppendMessage:3
+core/rpc/views/branches/impl.go:AppendMessage:4
+# 2026-09-11 (release/v0.78.0 integration sweep): count moved 3 -> 4.
+# subagent-control-and-background-tasks-01PMZB11 UNIT-8 (PR #331) added
+# SteerSubagent (impl.go:761), which appends the user's steering message
+# as a session.RoleUser message onto the sub-agent's child session so the
+# running sub-agent picks it up on its next turn — a genuine new user-
+# turn row, the same class as the three pre-existing branch-handoff/
+# summary writers already allowlisted here, not a durability/flush
+# mechanism (the class this gate exists to catch). Verified: gated by
+# cedar.GateSubagentSteer beforehand (impl.go:759-760's Cedar deny check
+# runs first) and audited (SubagentSteer's caller records an audit entry
+# — see core/rpc/bindings.go:2577's Subagent_Steer wrapper). Deliberate,
+# not accidental.
 
 # --- AppendContinuation: the resumed-partial-message seam.
 #     core/session/manager.go:AppendContinuation wraps the store's own

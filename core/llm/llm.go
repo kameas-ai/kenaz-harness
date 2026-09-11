@@ -718,8 +718,16 @@ type Cost struct {
 
 // Response is the terminal result of a generation (FR-011).
 type Response struct {
-	Content      []ContentBlock   `json:"content"`
-	ToolCalls    []ToolUse        `json:"tool_calls,omitempty"`
+	Content   []ContentBlock `json:"content"`
+	ToolCalls []ToolUse      `json:"tool_calls,omitempty"`
+	// Reasoning has no production writer today — no adapter accumulates
+	// reasoning content into the terminal Response; every provider
+	// (Anthropic, Bedrock, Gemini) emits reasoning only as
+	// StreamEvent{Kind: StreamReasoning} during streaming.
+	// StreamEvent.Reasoning is the live carrier; see
+	// docs/unwired-ledger.md 2026-09-10 for the dated justification
+	// (model-settings-reach-the-model-01PMZ101 WP09) for why this field
+	// is kept rather than deleted.
 	Reasoning    []ReasoningBlock `json:"reasoning,omitempty"`
 	FinishReason string           `json:"finish_reason"`
 	Usage        Usage            `json:"usage"`

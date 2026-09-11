@@ -14,6 +14,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
 	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
+	mcpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/mcp"
 )
 
 // wsstream.go owns the served-mode WebSocket fan-out: it bridges the
@@ -195,6 +196,23 @@ var passthroughTopics = []string{
 	// the desktop build's toast is the only surface, and served mode has
 	// no other path to Settings → Health either.
 	rpc.TopicMigrationDriftDetected,
+
+	// Live MCP connector health pushes (connector-lifecycle-truth-01PMZ303
+	// UNIT-8; PR #336 review MUST FIX 1). Publishes reach the process-wide
+	// EventBus fine (production wires
+	// NewStreamBroker(NewMultiEmitter(WailsEmitter{}, &busEmitter{...}))
+	// — WailsEmitter no-ops under `serve`, busEmitter doesn't), but
+	// without this entry a served client never even SUBSCRIBES to the
+	// topic on the bus (subscribedTopics(), below, is built from this
+	// slice), so the health pill in a served workbench's connector list
+	// never updates on a live trip/recovery — silently, with no error,
+	// because nothing was listening to notice the drop. See also
+	// mcpview.TopicMCPHealthChanged's entry in processWideTopics below:
+	// HealthEntry carries no session id (it is a connector, not a
+	// session, that owns health state), so the topic ALSO needs that
+	// entry or D-705's fail-closed session filter (frameFor, below)
+	// drops every frame anyway even once subscribed.
+	mcpview.TopicMCPHealthChanged,
 
 	// Five topics closed by the served-mode-topic-forwarding-gaps
 	// allowlist follow-up (scripts/ci/allowlists/served-mode-topic-
@@ -509,6 +527,18 @@ func (s *Server) runPump(ctx context.Context, p *streamPump, sessionID string) {
 // same way SD-14's disposition required for the filter itself: this is
 // an intentional exemption from D-705, not a shortcut around it.
 //
+// mcpview.TopicMCPHealthChanged: an MCP connector is process-wide
+// infrastructure, not owned by any one session (mcp.HealthEntry — the
+// payload PublishHealthChange fans out — has no session field at all,
+// by design: a connector's health state is the same regardless of
+// which session's conversation is asking about it). sessionIDOf would
+// therefore return ok=false for every event on this topic and D-705
+// would silently drop it for every connection, exactly like
+// TopicCostThresholdCrossed's documented (but NOT exempted, since that
+// one genuinely lacks a session id it SHOULD carry) case above — the
+// difference here is that a session id would be actively wrong, not
+// merely absent, so this is exempted rather than left to fail closed.
+//
 // TopicContextBootstrapProgress, TopicFleetLockdownChanged,
 // TopicFleetSessionExpired: served-mode-topic-forwarding-gaps follow-up
 // (2026-09, closing the allowlist scripts/ci/allowlists/served-mode-
@@ -523,6 +553,7 @@ func (s *Server) runPump(ctx context.Context, p *streamPump, sessionID string) {
 // instead (core/rpc/views/elicit/api.go), not by broadcasting it.
 var processWideTopics = map[string]bool{
 	rpc.TopicMigrationDriftDetected:     true,
+	mcpview.TopicMCPHealthChanged:       true,
 	rpc.TopicContextBootstrapProgress:   true,
 	corefleet.TopicFleetLockdownChanged: true,
 	corefleet.TopicFleetSessionExpired:  true,

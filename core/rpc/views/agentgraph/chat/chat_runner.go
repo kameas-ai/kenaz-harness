@@ -303,6 +303,24 @@ type Config struct {
 	// nil disables usage capture entirely.
 	UsageHook UsageHookFunc
 
+	// PostSendHook is an optional callback that fires the core/hooks
+	// `post_send` event (fix for ledger #46 — "post_send hooks never
+	// fire, only 1 of 18 hook events works, and memory.persist rides on
+	// it"). Registered on the SAME HookPostLLM boundary as UsageHook, so
+	// it fires on the real send path (StartStream -> driveRun ->
+	// SessionWriteNode) instead of the legacy `(a *API) buildMessages`
+	// method in core/rpc/views/llm/impl.go, which has had zero
+	// production callers since the agent-kernel-graph-chat-migration
+	// cutover (commit f0b17126, 2026-04-27) — a call wired there would
+	// compile, pass a direct-invocation test, and still never run in a
+	// shipped build.
+	//
+	// The callback receives the session id, the user turn that started
+	// this run, the assistant text this LLM call produced, the provider
+	// kind, the model id, and the response's finish reason. nil disables
+	// post_send entirely (including the memory.persist builtin).
+	PostSendHook PostSendHookFunc
+
 	// PartialPersister is the long-turn-resilience-01KR3PRS WP03 seam
 	// that handles the "kernel returned an error mid-stream" case: when
 	// driveRun observes a non-nil err that classifies as backend-error
@@ -376,6 +394,23 @@ type Config struct {
 	// which is how core/rpc's spawner wiring obtains the pointer without
 	// a second, drifting registry.
 	SubagentBudgets *SubagentBudgetRegistry
+
+	// SubagentPause is the session-keyed side channel
+	// core/rpc/views/branches.API.PauseSubagent/ResumeSubagent write
+	// into (subagent-control-and-background-tasks-01PMZB11 UNIT-8,
+	// owner ruling E-002). StartStream wires a gate backed by this
+	// registry onto every Env's TurnPause field — see
+	// core/agentgraph/executor.go's Env.TurnPause doc. nil (or an entry
+	// this session never has) means the run never pauses — today's
+	// behaviour for every interactive session and for any build that
+	// hasn't wired this registry.
+	//
+	// Constructed once (New) and shared with the SAME instance
+	// core/rpc/views/branches.Config.PauseControl wraps — see
+	// SubagentPause() below, mirroring SubagentBudgets()'s accessor
+	// shape so core/rpc's wiring obtains the pointer without a second,
+	// drifting registry.
+	SubagentPause *SubagentPauseRegistry
 
 	// Confirm is the confirm-each pause registry
 	// (confirm-each-enforcement-01PMAG05 WP02). It MUST be the same
@@ -553,6 +588,16 @@ type StreamCheckpointStore interface {
 // must not block the chat turn — it should write async or accept the
 // latency.
 type UsageHookFunc func(ctx context.Context, sessionID, messageID, providerKind, modelID string, resp corellm.Response)
+
+// PostSendHookFunc is the callback signature for the core/hooks
+// `post_send` event. userTurn is the user message that started this
+// StartStream run; assistantTurn is the text this LLM call produced
+// (the same text SessionWriteNode just persisted). providerKind and
+// modelID mirror UsageHookFunc; finishReason is the response's
+// llm.Response.FinishReason ("stop", "tool_use", "error", …) — the
+// memory.persist builtin uses it to skip incomplete turns. The hook
+// must not block the chat turn.
+type PostSendHookFunc func(ctx context.Context, sessionID, userTurn, assistantTurn, providerKind, modelID, finishReason string)
 
 // CompactionDeps bundles every collaborator the pre-send compaction
 // hook needs. The runner reads the active aggressiveness tier on every
@@ -755,6 +800,13 @@ type chatSub struct {
 	// (owner directive 2026-09-09: "agent reached the per-run budget
 	// cap" told the user nothing actionable).
 	effectiveTier autonomy.Tier
+	// pauseGen is the generation token SubagentPauseRegistry.BeginRun
+	// returned for this run (0 if SubagentPause is unwired). driveRun's
+	// cleanup defer passes it to EndRun so the pause-entry release is
+	// scoped to THIS run, never a later run that reused the same
+	// sessionID — see subagent_pause.go's BeginRun/EndRun doc for the
+	// race this closes (PR #334 review).
+	pauseGen uint64
 }
 
 // New constructs a ChatRunner. Every Config field is validated; a
@@ -1168,6 +1220,15 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 			applyBudgetTierDial(applyTokenCeilingKnob(graph.Budget, resolvedKnobs), resolvedKnobs.EffectiveTier),
 			subagentBudget, hasSubagentBudget,
 		),
+		// TurnPause (subagent-control-and-background-tasks-01PMZB11
+		// UNIT-8, owner ruling E-002): wired unconditionally, mirroring
+		// how Budget is wired unconditionally above — sessionTurnPauseGate
+		// and its backing SubagentPauseRegistry are both nil-receiver-safe,
+		// so this is a no-op Wait for every interactive session and for
+		// any build that hasn't wired r.cfg.SubagentPause. A spawned
+		// sub-agent's child session id only ever has an entry once
+		// Subagent_Pause is actually called against its branch.
+		TurnPause: sessionTurnPauseGate{reg: r.cfg.SubagentPause, sessionID: sessionID},
 		// AutoCompaction is the growth watermark in front of the
 		// kernel's own automatic pre_call site
 		// (turn-context-runway-01PMAG03 WP02).
@@ -1268,7 +1329,7 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// provider kind and model id from the adapter so the usage hook can
 	// populate UsageTurn.ProviderKind / UsageTurn.ModelID for full
 	// token-cost-telemetry alignment.
-	if r.cfg.UsageHook != nil || r.cfg.GeneratedImageCapturer != nil {
+	if r.cfg.UsageHook != nil || r.cfg.GeneratedImageCapturer != nil || r.cfg.PostSendHook != nil {
 		if env.Hooks == nil {
 			env.Hooks = coreag.NewHookManager(env.Memory, env.SessionID, env.ProjectID)
 		}
@@ -1313,6 +1374,38 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 				usageHook(ctx, capturedSessionID, messageID, providerKind, modelID, resp)
 			})
 		}
+		// Register the post_send hook (ledger #46). Unlike the usage hook
+		// above, this is NOT gated on journal.records(): memory.persist
+		// wants every real assistant reply SessionWriteNode lands, not
+		// just the one the usage journal attributes as the turn's final
+		// billed row. `text` here is exactly what exec_state.go's
+		// sessionWriteExecutor just wrote for role=="assistant" — the
+		// real persisted content, not an internal exit_gate verdict
+		// (exit_gate's own text never reaches this callback because it
+		// is never written as an assistant history row itself).
+		//
+		// FinishReason is looked up via capturedJournal.LookupCandidateUsage,
+		// NOT capturedAdapter.LastResponse() — the same fix the usage hook
+		// above already needed and documents just above: on a ROUTED
+		// graph, LastResponse() is exit_gate's own always-runs-last
+		// verdict call, not the Generate() that actually produced `text`.
+		// memory.persist's skip_on_finish_reason filter would silently
+		// key off the wrong call's finish reason otherwise. Falls back to
+		// providerKind/modelID from the adapter only when no candidate
+		// matches (never blocks the hook on a lookup miss).
+		if r.cfg.PostSendHook != nil {
+			postSendHook := r.cfg.PostSendHook
+			capturedUserMessage := userMessage
+			env.Hooks.RegisterPostHook(coreag.HookPostLLM, func(ctx context.Context, sID, messageID, text string) {
+				resp, providerKind, modelID, ok := capturedJournal.LookupCandidateUsage(text)
+				if !ok {
+					resp = capturedAdapter.LastResponse()
+					providerKind = capturedAdapter.ProviderKind()
+					modelID = capturedAdapter.ActiveModelID()
+				}
+				postSendHook(ctx, capturedSessionID, capturedUserMessage, text, providerKind, modelID, resp.FinishReason)
+			})
+		}
 		// WP02 (multimodal-io-extended-01KQ8TD2): drain buffered generated
 		// images into the artifact store now that session_write has produced
 		// a stable messageID. Non-fatal: a capture error is logged and
@@ -1345,6 +1438,14 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		bridge:        bridge,
 		journal:       journal,
 		effectiveTier: resolvedKnobs.EffectiveTier,
+		// Claimed synchronously, here, rather than at the top of
+		// driveRun's goroutine: PauseSubagent can race in the instant
+		// StartStream returns subID to the caller, and BeginRun must
+		// have already registered this run as sessionID's active
+		// generation before that can happen, or a Pause call landing in
+		// that window would arm an unowned (owner==0) entry no run ever
+		// claims. See subagent_pause.go's BeginRun doc.
+		pauseGen: r.cfg.SubagentPause.BeginRun(sessionID),
 	}
 	r.mu.Lock()
 	r.subs[subID] = sub
@@ -1525,6 +1626,30 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		r.mu.Lock()
 		delete(r.subs, sub.id)
 		r.mu.Unlock()
+		// Release this run's pause entry, if it owns one, unconditionally
+		// on every exit path — mirroring the r.subs delete above.
+		// Without this, a sub-agent paused and then aborted (rather than
+		// resumed) leaves its never-closed channel in
+		// SubagentPauseRegistry.paused for the life of the process:
+		// TurnPause.Wait returns ctx.Err() on abort and exits the loop,
+		// but nothing ever calls Resume to clear the entry.
+		//
+		// This calls EndRun, not Resume: a plain session-keyed Resume
+		// here would be unconditionally correct only if sessionIDs were
+		// never reused across runs, and they are (RedriveLastTurn
+		// re-issues StartStream for the same session; so does every
+		// ordinary next chat turn). A stale run's cleanup can stall here
+		// behind the DeleteStreamCheckpoint call above; a second run can
+		// start AND get freshly paused on the same sessionID before this
+		// stale cleanup resumes. EndRun(sessionID, pauseGen) only
+		// releases the entry if it is still owned by THIS run's
+		// generation, so it can never clear a newer run's pause — see
+		// subagent_pause.go's BeginRun/EndRun doc. EndRun is
+		// nil-receiver-safe (no-op when SubagentPause is unwired) and a
+		// no-op when this run never owned an entry (pauseGen==0, or the
+		// entry's owner has since moved on), so this is safe to call
+		// unconditionally rather than only on the abort path.
+		r.cfg.SubagentPause.EndRun(sub.sessionID, sub.pauseGen)
 		close(sub.done)
 	}()
 
@@ -2072,6 +2197,20 @@ func (r *ChatRunner) SubagentBudgets() *SubagentBudgetRegistry {
 		return nil
 	}
 	return r.cfg.SubagentBudgets
+}
+
+// SubagentPause returns the registry StartStream wires onto every Env's
+// TurnPause field, so core/rpc/views/branches's Subagent_Pause /
+// Subagent_Resume wiring can obtain the SAME instance to write into
+// rather than constructing a second, unread one (subagent-control-and-
+// background-tasks-01PMZB11 UNIT-8). Safe to call on a nil ChatRunner
+// or before Config.SubagentPause is set — both return nil, and every
+// SubagentPauseRegistry method is nil-receiver-safe.
+func (r *ChatRunner) SubagentPause() *SubagentPauseRegistry {
+	if r == nil {
+		return nil
+	}
+	return r.cfg.SubagentPause
 }
 
 // askOnAmbiguityNeverDefaultAnswer is the stated assumption an AskNode

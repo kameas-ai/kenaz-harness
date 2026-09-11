@@ -24,6 +24,7 @@ export const SERVED_STREAM_TOPICS = [
   'chat:overflow-recovery',
   'tool:confirm-pending',
   'storage.migration.drift-detected',
+  'mcp:health-changed',
   'contextbootstrap:progress',
   'elicit:deferred',
   'elicit:deferred:answered',

@@ -476,6 +476,21 @@ func (s *geminiStream) handleFrame(raw []byte) {
 		}
 		for _, part := range cand.Content.Parts {
 			switch {
+			case part.Thought && part.Text != "":
+				// Thought-summary fragment (model-settings-reach-the-
+				// model-01PMZ101 WP09). Must be checked before the
+				// plain-text case below: a thought part also carries
+				// non-empty Text, and would otherwise be misrouted into
+				// the answer stream and persisted as if it were content.
+				s.events <- llm.StreamEvent{
+					Kind: llm.StreamReasoning,
+					Reasoning: &llm.ReasoningBlock{
+						Type:    "thinking",
+						Content: part.Text,
+					},
+					Raw: raw,
+				}
+
 			case part.Text != "":
 				s.mu.Lock()
 				s.textBuf.WriteString(part.Text)
