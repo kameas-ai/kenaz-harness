@@ -1713,6 +1713,16 @@ func New(c *core.Core, opts ...Option) *API {
 		mcpUserRecipeSource(a.mcpUserStore),
 	)
 	mcpOpts := []mcp.Option{mcp.WithSubscriber(a.broker), mcp.WithCatalog(mergedCat)}
+	// CHAT-05 writer wiring (trust-surfaces-that-fire-01PMZ202 WP24):
+	// SetToolPolicy/ListToolPolicies need the same DataDir the static
+	// permission resolver below reads at boot. A func, not a captured
+	// string, matching mcpImportAPI's DataDir: c.DataDir a few lines
+	// down — c may be nil in the rpc.New(nil) test harness, in which
+	// case the option is simply omitted and the API methods degrade to
+	// ErrDataDirNotConfigured.
+	if c != nil {
+		mcpOpts = append(mcpOpts, mcp.WithDataDir(c.DataDir))
+	}
 	// Only install the saver when there is a real store behind it. Passing
 	// a nil *recipes.UserStore straight into WithRecipeSaver would wrap it
 	// in a non-nil RecipeSaver interface value holding a nil pointer, so

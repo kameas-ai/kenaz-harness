@@ -738,8 +738,16 @@ export function MCP_ListServers() {
   return window['go']['rpc']['Bindings']['MCP_ListServers']();
 }
 
+export function MCP_ListToolPolicies() {
+  return window['go']['rpc']['Bindings']['MCP_ListToolPolicies']();
+}
+
 export function MCP_SaveCustomRecipe(arg1) {
   return window['go']['rpc']['Bindings']['MCP_SaveCustomRecipe'](arg1);
+}
+
+export function MCP_SetToolPolicy(arg1, arg2, arg3, arg4) {
+  return window['go']['rpc']['Bindings']['MCP_SetToolPolicy'](arg1, arg2, arg3, arg4);
 }
 
 export function MCP_StartStream(arg1) {

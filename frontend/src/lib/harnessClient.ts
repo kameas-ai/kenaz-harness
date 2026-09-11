@@ -30,6 +30,8 @@ import type {
   ModelInfo,
   MCPServer,
   MCPTestResult,
+  MCPToolPolicy,
+  MCPToolPolicyRule,
   A2ACard,
   Job,
   SecretReference,
@@ -371,6 +373,16 @@ interface WailsBindingsLike {
   MCP_SaveCustomRecipe(
     req: MCPSaveCustomRecipeRequest,
   ): Promise<{ id: string }>;
+  // trust-surfaces-that-fire-01PMZ202 WP24 (CHAT-05): the writer for the
+  // static permission source. Read once at chassis boot — a write here
+  // applies starting with the next restart.
+  MCP_SetToolPolicy(
+    server: string,
+    tool: string,
+    policy: string,
+    reason: string,
+  ): Promise<void>;
+  MCP_ListToolPolicies(): Promise<MCPToolPolicyRule[]>;
 
   A2A_ListCards(): Promise<A2ACard[]>;
   A2A_StartStream(): Promise<string>;
@@ -1756,6 +1768,24 @@ export interface MCPClient {
    * full saved recipe should re-fetch via Tools_ListRecipes.
    */
   saveCustomRecipe(req: MCPSaveCustomRecipeRequest): Promise<{ id: string }>;
+  /**
+   * setToolPolicy — the writer for the static permission source
+   * (trust-surfaces-that-fire-01PMZ202 WP24, finding CHAT-05):
+   * `<DataDir>/mcp_servers.json` had a reader
+   * (toolloop.NewStaticResolverFromDataDir) but nothing that ever wrote
+   * it, so a "confirm each use" / "deny" policy could never be produced
+   * from a shipped surface. `tool: '*'` sets a whole-server policy.
+   * The static resolver is read once at chassis boot — this takes
+   * effect on the next restart, not the running session.
+   */
+  setToolPolicy(
+    server: string,
+    tool: string,
+    policy: MCPToolPolicy,
+    reason?: string,
+  ): Promise<void>;
+  /** listToolPolicies — every rule currently persisted in mcp_servers.json. */
+  listToolPolicies(): Promise<MCPToolPolicyRule[]>;
 }
 
 export type {
@@ -1767,6 +1797,8 @@ export type {
   MCPTranslationReport,
   MCPImportWrotePath,
   MCPSaveCustomRecipeRequest,
+  MCPToolPolicy,
+  MCPToolPolicyRule,
   AttachmentLimitsView,
 };
 
@@ -3634,7 +3666,7 @@ export interface HarnessClient {
  */
 const ARRAY_RETURNING_BINDINGS: ReadonlySet<string> = new Set([
   'Sessions_List', 'Sessions_ListMessages', 'LLM_ListProviders', 'LLM_ListModels',
-  'LLM_ListCustomTemplates', 'LLM_ListFallbackChains', 'MCP_ListServers', 'A2A_ListCards',
+  'LLM_ListCustomTemplates', 'LLM_ListFallbackChains', 'MCP_ListServers', 'MCP_ListToolPolicies', 'A2A_ListCards',
   'Workflow_ListJobs', 'Trust_ListSecretReferences', 'Context_List', 'Contexts_RecentlyApplied',
   'Contexts_ContextSearch', 'Bundle_List', 'Trust_ListAnchors', 'CedarPolicy_ListPolicies',
   'CedarPolicy_RecentDecisions', 'Permissions_ListGrants', 'Permissions_ListPending', 'Audit_ListEntries',
@@ -3846,6 +3878,9 @@ export function createHarnessClient(): HarnessClient {
         b().MCP_TestRecipe(recipeID, env, config),
       importClaudeDesktopConfig: (req) => b().MCP_ImportClaudeDesktopConfig(req),
       saveCustomRecipe: (req) => b().MCP_SaveCustomRecipe(req),
+      setToolPolicy: (server, tool, policy, reason = '') =>
+        b().MCP_SetToolPolicy(server, tool, policy, reason),
+      listToolPolicies: () => b().MCP_ListToolPolicies(),
     },
     a2a: {
       listCards: () => b().A2A_ListCards(),
@@ -5151,6 +5186,8 @@ export function createFakeHarnessClient(
         duration_ms: 1,
       }),
       saveCustomRecipe: async (req) => ({ id: req.id }),
+      setToolPolicy: noop,
+      listToolPolicies: async () => [],
     },
     a2a: {
       listCards: async () => [],

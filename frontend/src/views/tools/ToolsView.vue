@@ -14,7 +14,7 @@ import KenazToolsPanel from './KenazToolsPanel.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
-import type { MCPServer } from '@/lib/types';
+import type { MCPServer, MCPToolPolicy, MCPToolPolicyRule } from '@/lib/types';
 
 const servedMode = useServedMode();
 const client = useHarnessClient();
@@ -22,6 +22,17 @@ const client = useHarnessClient();
 const servers = ref<readonly MCPServer[]>([]);
 const loading = ref(false);
 const error = ref<string | null>(null);
+
+// trust-surfaces-that-fire-01PMZ202 WP24 (finding CHAT-05): this is the
+// writer for the static permission source. Without it, no shipped
+// surface could ever set a "confirm each use" or "deny" policy on an
+// MCP server — <DataDir>/mcp_servers.json had a reader
+// (toolloop.NewStaticResolverFromDataDir) and nothing that ever wrote
+// it. One rule per server, keyed on tool "*" (whole-server policy) —
+// per-tool granularity is a follow-up, not this WP's scope.
+const policies = ref<readonly MCPToolPolicyRule[]>([]);
+const policyError = ref<string | null>(null);
+const policySaving = ref<string | null>(null); // server name currently saving, or null
 
 async function refresh() {
   loading.value = true;
@@ -34,6 +45,38 @@ async function refresh() {
   } finally {
     loading.value = false;
   }
+}
+
+async function refreshPolicies() {
+  try {
+    policies.value = await client.mcp.listToolPolicies();
+  } catch (e) {
+    policyError.value = e instanceof Error ? e.message : 'Failed to load tool policies.';
+    policies.value = [];
+  }
+}
+
+function policyFor(serverName: string): MCPToolPolicy {
+  const rule = policies.value.find((r) => r.server === serverName && r.tool === '*');
+  return rule?.policy ?? 'auto_allow';
+}
+
+async function setPolicy(serverName: string, policy: MCPToolPolicy) {
+  policyError.value = null;
+  policySaving.value = serverName;
+  try {
+    await client.mcp.setToolPolicy(serverName, '*', policy, 'set from Tools view');
+    await refreshPolicies();
+  } catch (e) {
+    policyError.value = e instanceof Error ? e.message : 'Failed to save tool policy.';
+  } finally {
+    policySaving.value = null;
+  }
+}
+
+function onPolicyChange(serverName: string, event: Event) {
+  const value = (event.target as HTMLSelectElement).value as MCPToolPolicy;
+  void setPolicy(serverName, value);
 }
 
 function stateColor(state: string): string {
@@ -54,6 +97,7 @@ function stateColor(state: string): string {
 
 onMounted(() => {
   void refresh();
+  void refreshPolicies();
 });
 </script>
 
@@ -92,6 +136,14 @@ onMounted(() => {
       {{ error }}
     </div>
     <div
+      v-if="policyError"
+      class="mx-6 mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+      role="alert"
+      data-testid="tool-policy-error"
+    >
+      {{ policyError }}
+    </div>
+    <div
       v-else-if="servers.length === 0"
       class="px-6 py-6 font-ui text-sm text-ink-muted"
       data-testid="tools-empty"
@@ -117,6 +169,7 @@ onMounted(() => {
           <th class="text-left px-4 py-2 font-medium">Capabilities</th>
           <th class="text-left px-4 py-2 font-medium">Version</th>
           <th class="text-left px-4 py-2 font-medium">Status</th>
+          <th class="text-left px-4 py-2 font-medium">Policy</th>
         </tr>
       </thead>
       <tbody>
@@ -143,8 +196,24 @@ onMounted(() => {
               {{ s.state || 'unknown' }}
             </span>
           </td>
+          <td class="px-4 py-2">
+            <select
+              class="rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-[11px] uppercase tracking-[0.1em] text-ink disabled:opacity-50"
+              :value="policyFor(s.name)"
+              :disabled="policySaving === s.name"
+              :data-testid="`tool-policy-select-${s.name}`"
+              @change="onPolicyChange(s.name, $event)"
+            >
+              <option value="auto_allow">Auto-allow</option>
+              <option value="confirm_each">Confirm each use</option>
+              <option value="deny">Deny</option>
+            </select>
+          </td>
         </tr>
       </tbody>
     </table>
+    <p v-if="servers.length > 0" class="px-6 pt-2 pb-4 font-ui text-[11px] text-ink-subtle">
+      Policy changes take effect on next restart — the permission list is read once at startup.
+    </p>
   </div>
 </template>

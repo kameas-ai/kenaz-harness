@@ -181,6 +181,162 @@ func NewStaticResolverFromDataDir(dataDir string) (PermissionResolver, error) {
 	return NewStaticResolverFromFile(filepath.Join(dataDir, "mcp_servers.json"))
 }
 
+// StaticRule is the exported alias of permRule: it names the same type,
+// so its Server/Tool/Policy/Reason fields are directly constructible by
+// callers outside this package. permRule already carries the on-disk
+// JSON tags NewStaticResolverFromFile reads, so a StaticRule marshals
+// to exactly the schema staticConfig.Rules expects.
+//
+// This is CHAT-05's missing half (trust-surfaces-that-fire-01PMZ202
+// WP24): staticConfig (:130 above) had a reader
+// (NewStaticResolverFromFile / NewStaticResolverFromDataDir) and, until
+// this file grew SetStaticRule below, no writer anywhere in the tree —
+// so no production path could ever make a tool call resolve to
+// PolicyConfirmEach. NewMergedResolver's session arm and
+// NewSessionOverrideResolver remain unwired; only the static arm gets a
+// writer here.
+type StaticRule = permRule
+
+// mcpServersFileName is the on-disk filename staticConfig persists to,
+// relative to a data directory. Both the reader
+// (NewStaticResolverFromDataDir) and the writer (SetStaticRule /
+// RemoveStaticRule / LoadStaticConfigRules) resolve the same path from
+// this one constant so they can never drift apart.
+const mcpServersFileName = "mcp_servers.json"
+
+// LoadStaticConfigRules reads the rules currently persisted at
+// <dataDir>/mcp_servers.json. A missing file or an empty dataDir
+// returns an empty, non-nil slice — the same "opt-in, soft-fail"
+// contract NewStaticResolverFromDataDir uses for reading, so a caller
+// building a settings list never has to special-case "not configured
+// yet" versus "configured with zero rules". Malformed JSON returns an
+// error, matching NewStaticResolverFromFile.
+func LoadStaticConfigRules(dataDir string) ([]StaticRule, error) {
+	if dataDir == "" {
+		return []StaticRule{}, nil
+	}
+	cfg, err := readStaticConfig(filepath.Join(dataDir, mcpServersFileName))
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Rules == nil {
+		return []StaticRule{}, nil
+	}
+	return cfg.Rules, nil
+}
+
+// SetStaticRule upserts a (server, tool) permission rule into
+// <dataDir>/mcp_servers.json, creating the file (and dataDir, if
+// needed) when it does not already exist. An existing rule for the
+// exact same (server, tool) pair is replaced in place so re-saving a
+// changed policy does not accumulate duplicate entries that
+// matchRules' "last one wins on rank ties" behaviour would otherwise
+// make order-dependent; anything else is appended. The write is
+// atomic — temp file, then rename — so a crash mid-write can never
+// leave NewStaticResolverFromFile looking at a truncated file (AC-24c:
+// this file must survive a chassis restart and be re-read from real
+// disk).
+func SetStaticRule(dataDir string, rule StaticRule) error {
+	if dataDir == "" {
+		return fmt.Errorf("toolloop/perms: SetStaticRule: empty data dir")
+	}
+	if rule.Server == "" || rule.Tool == "" {
+		return fmt.Errorf("toolloop/perms: SetStaticRule: server and tool are required")
+	}
+	if err := validatePolicy(rule.Policy); err != nil {
+		return fmt.Errorf("toolloop/perms: SetStaticRule: %w", err)
+	}
+	path := filepath.Join(dataDir, mcpServersFileName)
+	cfg, err := readStaticConfig(path)
+	if err != nil {
+		return err
+	}
+	replaced := false
+	for i, r := range cfg.Rules {
+		if r.Server == rule.Server && r.Tool == rule.Tool {
+			cfg.Rules[i] = rule
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		cfg.Rules = append(cfg.Rules, rule)
+	}
+	if cfg.Version == 0 {
+		cfg.Version = 1
+	}
+	return writeStaticConfigAtomic(path, cfg)
+}
+
+// RemoveStaticRule deletes the rule for (server, tool), if one is
+// present. Removing a rule that does not exist is a no-op, not an
+// error — the resolver's no-match default (auto_allow) already
+// matches "there is no rule here", so "no rule" and "rule just
+// deleted" converge on the same read-side behaviour.
+func RemoveStaticRule(dataDir, server, tool string) error {
+	if dataDir == "" {
+		return fmt.Errorf("toolloop/perms: RemoveStaticRule: empty data dir")
+	}
+	path := filepath.Join(dataDir, mcpServersFileName)
+	cfg, err := readStaticConfig(path)
+	if err != nil {
+		return err
+	}
+	out := make([]permRule, 0, len(cfg.Rules))
+	for _, r := range cfg.Rules {
+		if r.Server == server && r.Tool == tool {
+			continue
+		}
+		out = append(out, r)
+	}
+	cfg.Rules = out
+	return writeStaticConfigAtomic(path, cfg)
+}
+
+// readStaticConfig loads <path>. A missing file returns a zero-value
+// config (version 0, no rules) rather than an error — the same
+// soft-fail contract NewStaticResolverFromFile uses for reads, applied
+// here so the writer's read-modify-write cycle behaves identically
+// whether the file has ever been written before.
+func readStaticConfig(path string) (staticConfig, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return staticConfig{}, nil
+		}
+		return staticConfig{}, fmt.Errorf("toolloop/perms: read %q: %w", path, err)
+	}
+	var cfg staticConfig
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return staticConfig{}, fmt.Errorf("toolloop/perms: parse %q: %w", path, err)
+	}
+	return cfg, nil
+}
+
+// writeStaticConfigAtomic marshals cfg and writes it to path via a
+// temp-file-then-rename so a crash mid-write can never leave
+// NewStaticResolverFromFile looking at a partially-written file. The
+// containing directory is created if missing (a fresh profile may not
+// have written anything under DataDir yet).
+func writeStaticConfigAtomic(path string, cfg staticConfig) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("toolloop/perms: mkdir %q: %w", dir, err)
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("toolloop/perms: marshal: %w", err)
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return fmt.Errorf("toolloop/perms: write %q: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("toolloop/perms: rename %q -> %q: %w", tmp, path, err)
+	}
+	return nil
+}
+
 // Resolve is concurrency-safe: rules is read-only after construction.
 func (r *staticResolver) Resolve(_ context.Context, _ /*sessionID*/, server, tool string) (Resolution, error) {
 	if rule, ok := matchRules(r.rules, server, tool); ok {

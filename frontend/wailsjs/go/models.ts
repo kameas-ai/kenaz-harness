@@ -7432,11 +7432,11 @@ export namespace toolloop {
 	    tool: string;
 	    args_summary: string;
 	    reason?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ConfirmRequest(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.session_id = source["session_id"];
@@ -7445,6 +7445,27 @@ export namespace toolloop {
 	        this.server = source["server"];
 	        this.tool = source["tool"];
 	        this.args_summary = source["args_summary"];
+	        this.reason = source["reason"];
+	    }
+	}
+	// StaticRule mirrors toolloop.StaticRule (= permRule), the on-disk
+	// schema of <DataDir>/mcp_servers.json (trust-surfaces-that-fire-01PMZ202
+	// WP24, finding CHAT-05).
+	export class StaticRule {
+	    server: string;
+	    tool: string;
+	    policy: string;
+	    reason?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new StaticRule(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.server = source["server"];
+	        this.tool = source["tool"];
+	        this.policy = source["policy"];
 	        this.reason = source["reason"];
 	    }
 	}

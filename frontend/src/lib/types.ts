@@ -305,6 +305,24 @@ export interface MCPServer {
   capabilities?: string[];
 }
 
+// ── Static tool permission rules (trust-surfaces-that-fire-01PMZ202
+// WP24, finding CHAT-05) ────────────────────────────────────────────
+//
+// Wire shape for `MCP_SetToolPolicy` / `MCP_ListToolPolicies`. Mirrors
+// toolloop.StaticRule's JSON tags verbatim. `server`/`tool` may be "*"
+// for a wildcard rule; `tool: "*"` is the whole-server policy the Tools
+// view sets. The static resolver behind this is read once at chassis
+// boot, so a write here takes effect on the next restart, not the
+// running session.
+export type MCPToolPolicy = 'auto_allow' | 'confirm_each' | 'deny';
+
+export interface MCPToolPolicyRule {
+  server: string;
+  tool: string;
+  policy: MCPToolPolicy;
+  reason?: string;
+}
+
 // ── MCP Test Connection (mission mcp-server-install-01KQ8TDP, WP07) ────
 //
 // Wire shape for `MCP_TestRecipe`. Field names follow Go JSON tags

@@ -18,6 +18,7 @@ import (
 	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 // Subscriber is the broker contract used by API.StartStream. Mirrors
@@ -63,6 +64,14 @@ type API struct {
 	// WithRecipeSaver is passed — SaveCustomRecipe returns
 	// ErrRecipeSaverNotConfigured in that case.
 	recipeSaver RecipeSaver
+	// dataDir backs SetToolPolicy / ListToolPolicies (CHAT-05, WP24). A
+	// func rather than a captured string so it tracks whatever DataDir
+	// the wrapping core.Core reports at call time, matching the
+	// mcp.ImportConfig{DataDir: c.DataDir} pattern used elsewhere in
+	// this package's chassis wiring. nil unless WithDataDir is passed —
+	// SetToolPolicy / ListToolPolicies return ErrDataDirNotConfigured /
+	// an empty list respectively in that case.
+	dataDir func() string
 }
 
 // Option configures NewAPI.
@@ -91,6 +100,15 @@ func WithCatalog(c RecipeCatalog) Option {
 // safe — HealthSnapshot returns an empty map.
 func WithHealthPool(p HealthPool) Option {
 	return func(a *API) { a.healthPool = p }
+}
+
+// WithDataDir injects the DataDir accessor SetToolPolicy /
+// ListToolPolicies write through to (CHAT-05, WP24). Without it,
+// SetToolPolicy returns ErrDataDirNotConfigured and ListToolPolicies
+// returns an empty list — the same "not configured" contract the
+// import surface (WithRecipeSaver) uses.
+func WithDataDir(fn func() string) Option {
+	return func(a *API) { a.dataDir = fn }
 }
 
 // SetHealthPool wires the health pool after construction. The rpc chassis
@@ -297,4 +315,47 @@ func (a *API) TestRecipe(ctx context.Context, recipeID string, env map[string]st
 	spec := recipe.ToServerSpec(env, config)
 	result := TestConnection(ctx, spec)
 	return result, nil
+}
+
+// ErrDataDirNotConfigured is returned by SetToolPolicy when no real
+// DataDir is wired (the rpc.New(nil) test harness, or a build that
+// never called WithDataDir). Mirrors ErrCatalogNotConfigured /
+// ErrRecipeSaverNotConfigured's "feature not available in this API
+// instance" shape.
+var ErrDataDirNotConfigured = errors.New("mcp: data dir not configured")
+
+// SetToolPolicy is the CHAT-05 writer (trust-surfaces-that-fire-01PMZ202
+// WP24): it upserts a rule into <DataDir>/mcp_servers.json, the file
+// toolloop.NewStaticResolverFromDataDir has read since
+// confirm-each-enforcement-01PMAG05 but that, before this method
+// existed, nothing anywhere ever wrote. See toolloop.SetStaticRule for
+// the on-disk schema, upsert-by-(server,tool) semantics and atomicity
+// guarantee.
+func (a *API) SetToolPolicy(_ context.Context, server, tool, policy, reason string) error {
+	a.mu.RLock()
+	dd := a.dataDir
+	a.mu.RUnlock()
+	if dd == nil || dd() == "" {
+		return ErrDataDirNotConfigured
+	}
+	return toolloop.SetStaticRule(dd(), toolloop.StaticRule{
+		Server: server,
+		Tool:   tool,
+		Policy: toolloop.ToolPolicy(policy),
+		Reason: reason,
+	})
+}
+
+// ListToolPolicies returns every rule currently persisted in
+// <DataDir>/mcp_servers.json. Empty (not an error) when no DataDir is
+// wired or nothing has been written yet — matching ListServers' "v1
+// expected state" convention for a not-yet-populated surface.
+func (a *API) ListToolPolicies(_ context.Context) ([]toolloop.StaticRule, error) {
+	a.mu.RLock()
+	dd := a.dataDir
+	a.mu.RUnlock()
+	if dd == nil || dd() == "" {
+		return []toolloop.StaticRule{}, nil
+	}
+	return toolloop.LoadStaticConfigRules(dd())
 }
