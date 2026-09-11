@@ -426,7 +426,7 @@ export function MCP_ImportClaudeDesktopConfig(arg1:mcp.ImportRequest):Promise<mc
 
 export function MCP_ListServers():Promise<Array<mcp.Server>>;
 
-export function MCP_ListToolPolicies():Promise<Array<toolloop.StaticRule>>;
+export function MCP_ListToolPolicies():Promise<Array<toolloop.permRule>>;
 
 export function MCP_SaveCustomRecipe(arg1:mcp.SaveCustomRecipeRequest):Promise<recipes.Recipe>;
 

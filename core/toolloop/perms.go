@@ -152,6 +152,37 @@ func NewStaticResolver(rules []permRule) (PermissionResolver, error) {
 	return &staticResolver{rules: append([]permRule(nil), rules...)}, nil
 }
 
+// NewFailSafeStaticResolver returns a resolver that answers
+// PolicyConfirmEach for every (server, tool) pair, carrying reason on
+// the Resolution.
+//
+// Used when <DataDir>/mcp_servers.json exists but fails to parse. The
+// naive wiring — leave the static resolver nil on a load error — is a
+// silent auto_allow: NewMergedResolver normalizes a nil static arm to
+// NewStaticResolver(nil), whose empty rule set matches nothing and
+// defaults every call to auto_allow. That converts "the user's
+// configured deny rules are corrupt" into "every configured deny rule
+// is now silently off" (trust-surfaces-that-fire-01PMZ202 WP24 review
+// finding: before this PR's SetStaticRule writer existed, the file
+// could never contain anything but an empty ruleset, so the nil-static
+// auto_allow default was reasoned about as inert; SetStaticRule makes
+// it the first time a real deny/confirm_each rule can live in that
+// file, and the corrupt-file path had never been re-examined against
+// that risk).
+//
+// confirm_each is the deliberate middle ground: PolicyDeny would brick
+// every tool call on a transient disk hiccup, and it is the resolver
+// package's job to enforce a fail-shut *default*, not to guess whether
+// a given corrupted rule set was meant to deny or allow. Asking the
+// user, once, per call, is safe in both directions until the file is
+// repaired.
+func NewFailSafeStaticResolver(reason string) PermissionResolver {
+	// The error from NewStaticResolver is unreachable here: the single
+	// literal rule below always has a valid Policy.
+	r, _ := NewStaticResolver([]permRule{{Server: "*", Tool: "*", Policy: PolicyConfirmEach, Reason: reason}})
+	return r
+}
+
 // NewStaticResolverFromFile loads rules from <path>. Missing file is
 // not an error: the returned resolver behaves as auto_allow for every
 // (server, tool). Malformed JSON or unknown policy strings return an
@@ -236,6 +267,20 @@ func LoadStaticConfigRules(dataDir string) ([]StaticRule, error) {
 // leave NewStaticResolverFromFile looking at a truncated file (AC-24c:
 // this file must survive a chassis restart and be re-read from real
 // disk).
+//
+// NOT safe for concurrent callers: the read-modify-write cycle above
+// (readStaticConfig then writeStaticConfigAtomic) has no lock, so two
+// concurrent SetStaticRule/RemoveStaticRule calls against the same
+// dataDir can race and the loser's edit is silently dropped
+// (last-writer-wins, not merged). This is distinct from the crash-
+// atomicity guaranteed above — the file on disk is never left
+// truncated or partially written, only a concurrent caller's edit can
+// be lost. Low-risk today: ToolsView.vue is SetStaticRule's only
+// production caller, and it disables its policy `<select>` via
+// policySaving while a save is in flight, so the harness never issues
+// two overlapping writes from that surface. RemoveStaticRule ships
+// with no callers yet; a future concurrent caller needs a mutex (or a
+// file lock) added here first.
 func SetStaticRule(dataDir string, rule StaticRule) error {
 	if dataDir == "" {
 		return fmt.Errorf("toolloop/perms: SetStaticRule: empty data dir")

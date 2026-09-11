@@ -4444,11 +4444,19 @@ export interface DeployProgressEvent {
  * harness boot phase. A non-empty field means that subsystem failed to
  * start; empty means healthy (FR-008 / agent-loop-robustness-parity WP08).
  * Mirrors core/rpc.BootHealthReport.
+ *
+ * permissionsInitError (trust-surfaces-that-fire-01PMZ202 WP24 review
+ * finding) is non-empty when <DataDir>/mcp_servers.json existed but
+ * failed to parse at boot — the resolver degrades to confirm_each for
+ * every tool rather than silently defaulting to auto_allow, but the
+ * user still needs to know their configured allow/deny rules are not
+ * in force until the file is repaired.
  */
 export interface BootHealthReport {
   mcpInitError?: string;
   skillsInitError?: string;
   fleetInitError?: string;
+  permissionsInitError?: string;
 }
 
 // ── ACP peer management (acp-orchestration-integration-01NDFSEX06) ────────────
