@@ -361,6 +361,23 @@ func RedactValue(s string) (string, []RedactionMatch) {
 	return out, matches
 }
 
+// RedactStructured returns a redacted deep copy of an arbitrary decoded
+// JSON value (the result of json.Unmarshal into `any`) using the same
+// catalog as RedactValue, including forced key-NAME redaction
+// (secretNamingKeyRe) and the depth/cycle guards documented on
+// MaxRedactDepth.
+//
+// This is the exported entry point for callers outside this package that
+// need to redact a whole payload of unknown shape — e.g.
+// core/eval/capture.go, which writes tool-call arguments and LLM
+// request/response bodies to disk and cannot know their shape ahead of
+// time. See docs/escalation-register-2026-08-19.md G-3: this package's
+// catalog is the widened, canonical one; other redactors should consume
+// it rather than keep their own copy.
+func RedactStructured(v any) any {
+	return redactStructured(v, 0, false, make(map[uintptr]struct{}))
+}
+
 // redactStructured returns a redacted DEEP COPY of an arbitrary decoded
 // JSON value: nested objects to MaxRedactDepth, arrays, and map KEYS.
 //

@@ -2896,6 +2896,74 @@ shipped). The ledger's "three packages" framing conflated the RPC-view
 wrapper with its underlying service; once that boundary is drawn, `update`
 was never actually missing coverage.
 
+### 2026-09-10 · `eval.Recorder.AppendMessage`/`AppendToolCall`/`AppendLLMRequest`/`AppendLLMResponse` have zero production call sites
+
+**Found**: 2026-09-10, during review follow-up on PR #337
+(`fix/eval-capture-canonical-redaction`). **RAN**: grep across `core/` for
+every caller of `*eval.Recorder`. The only production holder of a
+`*eval.Recorder` is `core/rpc/api.go`'s `evalRecorder` field, and it calls
+exactly `StartCapture`, `StopCapture`, and `StopAll`
+(`api.go:1233,1278,1287`). `StartCapture`/`StopCapture`
+(`core/eval/capture.go:361,377`) only open/close a `captureWriter` and write
+the `KindCaptureStart`/`KindCaptureStop` administrative records; neither
+those two methods nor anything else on the production path calls
+`AppendMessage`, `AppendToolCall`, `AppendLLMRequest`, or
+`AppendLLMResponse`. Every call site for those four is a test
+(`core/eval/model_profile_gate_test.go`, `core/eval/eval_test.go`,
+`core/eval/capture_redaction_test.go`).
+
+Concretely: an eval capture started today (via the wired
+`Sessions_StartCapture`/`Sessions_StopCapture` Wails bindings) produces a
+`.jsonl` file containing only `capture_start`/`capture_stop` records — no
+session message, tool call, or LLM request/response content is ever written
+to a capture file in the shipped build. PR #337's redaction fix is real and
+correct (the catalog it replaced genuinely under-redacted), but it hardens a
+path nothing currently reaches.
+
+**Checked whether this is a user-visible lie: it is not, today.** No
+`.vue` file references `StartCapture`/`StopCapture`/`evalCapture`, and
+`harnessClient.ts`/`types.ts` have no wrapper for either binding — every
+"capture" hit in those two files is the unrelated auto-capture-generated-
+images or memory-capture-rate features. There is no UI surface that offers
+to start an eval capture at all, so no UI claims it records conversation
+content. The only prose claiming eval-capture writes message/LLM content is
+internal and developer-facing: `core/eval/capture.go`'s own package doc and
+`docs/escalation-register-2026-08-19.md`'s G-3 discussion — not a
+user-visible claim.
+
+**Disposition: finish, not delete.** Per CLAUDE.md's "only surface for a
+real capability" rule: `AppendMessage`/`AppendToolCall`/`AppendLLMRequest`/
+`AppendLLMResponse` are the only way eval capture could ever record a real
+conversation. The `Recorder` type, the JSONL schema (`CaptureEntry`,
+`MessageEntry`, `ToolCallEntry`, `LLMRequestEntry`, `LLMResponseEntry`), the
+replay/diff/model-profile-gate machinery in
+`core/eval/{replay,diff,model_profile_gate}.go`, and now PR #337's
+redaction fix, are all built specifically to consume records only these
+four methods can produce. Deleting them removes eval capture — and with it
+eval-harness-replay and the model-profile-gate regression check — from the
+product, not just from the tree. There is no live substitute and no
+documented retirement.
+
+- **Blocker:** nothing calls `Recorder.AppendMessage`/`AppendToolCall`/
+  `AppendLLMRequest`/`AppendLLMResponse` from the chat/tool-execution path.
+  Wiring them means finding the actual turn-loop call sites —
+  `core/rpc/chat_run_dispatcher.go` and/or the `core/rpc/views/agentgraph`
+  env/session plumbing, wherever a message is appended to the session and a
+  request/response crosses the LLM boundary — and, behind an
+  `if a.evalRecorder != nil && a.evalRecorder.IsCapturing(sessionID)` guard,
+  calling the matching `Append*`. That is a real wiring mission (turn-loop
+  + tool-exec + LLM-adapter call sites, tests with `IsCapturing` both on and
+  off, a populated capture file asserted against `ReadCapture`), not a
+  drive-by fix.
+- **Owner:** whoever picks up eval-harness-replay end-to-end — the feature
+  `Sessions_StartCapture`/`Sessions_StopCapture` were built for, per
+  `core/rpc/api.go:785`'s own comment ("the per-session eval-capture writer
+  (eval-harness-replay)"). No owner is currently assigned. Until claimed,
+  `Sessions_StartCapture`/`Sessions_StopCapture` stay reachable (the Wails
+  bindings exist) but functionally inert: calling them produces a capture
+  file with nothing but start/stop markers, and no UI currently exposes even
+  that much.
+
 ## Drained
 
 ### 2026-08-19 · CLOSED — the missing-upgrade-snapshot hole is now gated
