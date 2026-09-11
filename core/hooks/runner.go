@@ -470,6 +470,30 @@ func (r *Runner) runShellElicitationResult(ctx context.Context, h Hook, ev Elici
 // queue drops the work and logs, it never blocks the caller. Runner.
 // Shutdown drains the pool so no queued embed outlives process
 // shutdown.
+//
+// Ordering (review of finding #61, 2026-09-11): the async dispatch is
+// a genuine semantic change to this public extensibility surface, not
+// just an internal latency fix — post_send now completes strictly
+// AFTER the turn that triggered it closes (StartStream/the chat send
+// path returns before any post_send hook has run, not after), so a
+// fast next turn on the same session can race a still-in-flight
+// post_send write. This is judged best-effort-acceptable: the turn's
+// actual content already lives in the real conversation transcript
+// regardless of post_send's outcome, and long-term memory (the one
+// production consumer today, via memory.persist) is a supplementary
+// retrieval aid, not the record of truth — losing or delaying one
+// write to it is a materially different risk than losing or delaying
+// the turn itself. This is the necessary trade for getting a blocking
+// HTTP embed off the send path; callers that need a synchronization
+// point (e.g. a test asserting on a post_send side effect) must call
+// Shutdown to drain the pool first — see core/hooks/runner_test.go's
+// TestRunner_BuiltinPostSendFiresOnce and
+// core/rpc/views/agentgraph/chat/post_send_hook_integration_test.go's
+// TestPostSendHook_MemoryPersist_WritesRealRow for the pattern. This
+// applies uniformly to every post_send hook kind, not just the
+// memory.persist builtin: a user-authored KindShell or KindMCP
+// post_send hook gets the same async, detached, timeout-bounded
+// dispatch and is subject to the same race against a fast next turn.
 func (r *Runner) RunPostSend(ctx context.Context, ev PostSendEvent) {
 	if r == nil || r.registry == nil {
 		return

@@ -191,6 +191,7 @@ func TestBuiltinEnabledPredicate_AllRegisteredToolsHaveExplicitCase(t *testing.T
 	// settings.NewFileStoreFromEnv() and opens the developer's real
 	// settings.json.
 	api := New(c, WithSettingsStore(newTestStore(t)))
+	t.Cleanup(api.Shutdown)
 
 	registry := api.Builtins()
 	if registry == nil {
@@ -261,6 +262,7 @@ func TestBashTool_LoggerWired(t *testing.T) {
 			t.Fatalf("core.New: %v", err)
 		}
 		api := New(c, WithSettingsStore(newTestStore(t)))
+		t.Cleanup(api.Shutdown)
 
 		registry := api.Builtins()
 		if registry == nil {
@@ -385,6 +387,7 @@ func TestAskUserQuestionDelegateIsWired(t *testing.T) {
 	// settings.NewFileStoreFromEnv() and opens the developer's real
 	// settings.json.
 	api := New(c, WithSettingsStore(newTestStore(t)))
+	t.Cleanup(api.Shutdown)
 
 	registry := api.Builtins()
 	if registry == nil {

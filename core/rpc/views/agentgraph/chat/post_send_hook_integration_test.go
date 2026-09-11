@@ -283,6 +283,20 @@ func TestPostSendHook_MemoryPersist_WritesRealRow(t *testing.T) {
 		t.Fatalf("Reason = %q, want non-error; msg=%q", closed.Reason, closed.Message)
 	}
 
+	// Blocker 4 (review of finding #61, 2026-09-11): RunPostSend dispatches
+	// the memory.persist embed+write asynchronously through hookRunner's
+	// worker pool (core/hooks/fire.go) — waitForClosed only proves the
+	// chat turn itself finished, not that the detached post_send dispatch
+	// it kicked off has completed. Without draining the pool here, the
+	// re-open below raced the write with no happens-before guarantee;
+	// the reviewer ran it 50+ times under -race -count=50
+	// GOMAXPROCS=1 and it passed every time by scheduling luck alone.
+	// hookRunner.Shutdown() blocks until every in-flight dispatch (this
+	// one included) returns, mirroring the same drain
+	// core/hooks/runner_test.go's TestRunner_BuiltinPostSendFiresOnce
+	// already does before its own post-dispatch assertion.
+	hookRunner.Shutdown()
+
 	// Re-open a FRESH store instance against the same on-disk path — proves
 	// the write survived a real gob encode -> file rename -> decode
 	// round-trip, not just that the original in-process Store still holds

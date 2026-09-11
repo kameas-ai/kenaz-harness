@@ -25,13 +25,26 @@ package rpc
 // package-locally, in core/memory/prune/pruner_test.go's
 // TestScheduler_RunOnce_EvictsPastCapOnRealDisk — not re-litigated
 // here.
+//
+// Review finding (Blocker 1, 2026-09-11): TestAPI_New_StartsAndStopsPruneScheduler
+// previously called api.Shutdown() twice to "prove idempotency" without
+// ever dispatching a hook, so hooks.Runner.lazyPool() never created
+// r.pool and the dangerous path — asyncPool.shutdown() unconditionally
+// closing r.pool.work a second time — was never exercised. The test
+// passed for the wrong reason. It now installs the real starter
+// memory.persist hook and dispatches a post_send event first, so the
+// pool actually exists before the double-Shutdown assertion runs. See
+// core/hooks/fire.go's Runner.Shutdown for the fix (nil the pool under
+// the lock before draining it, so a second call is a no-op).
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core"
+	"github.com/kameas-ai/kenaz-harness/core/hooks"
 	"github.com/kameas-ai/kenaz-harness/core/memory"
 )
 
@@ -97,9 +110,33 @@ func TestAPI_New_StartsAndStopsPruneScheduler(t *testing.T) {
 		t.Fatal("pruneScheduler.LastRun() is still zero after 2s — the boot catch-up sweep never ran, meaning Start() was not called (GAP-1 still open)")
 	}
 
+	// Blocker 1 (review of finding #61): the double-Shutdown assertion
+	// below only exercises hooks.Runner.Shutdown()'s dangerous
+	// double-close-of-channel path if the async pool was actually
+	// created first (hooks.Runner.lazyPool() creates it lazily, on
+	// first dispatch). Install the real starter memory.persist hook —
+	// the same one production wires via the Settings "enable long-term
+	// memory" toggle — and dispatch a post_send event through it so
+	// api.hookRunner's pool exists before we shut down.
+	ctx := context.Background()
+	if err := api.Hooks().InstallStarterMemoryHooks(ctx); err != nil {
+		t.Fatalf("InstallStarterMemoryHooks: %v", err)
+	}
+	if api.hookRunner == nil {
+		t.Fatal("api.hookRunner is nil — cannot dispatch a post_send event to exercise the pool")
+	}
+	api.hookRunner.RunPostSend(ctx, hooks.PostSendEvent{
+		SessionID:     "s1",
+		UserTurn:      strings.Repeat("u", 200),
+		AssistantTurn: strings.Repeat("a", 400),
+		FinishReason:  "completed",
+	})
+
 	api.Shutdown()
 	// Shutdown must be safe to call twice (main.go's OnShutdown /
 	// double-invocation safety, same contract every other scheduler
-	// Shutdown stops honors).
+	// Shutdown stops honors). Before the core/hooks/fire.go fix, this
+	// second call panicked with "close of closed channel" — verified by
+	// reverting the fix locally and confirming this line then panics.
 	api.Shutdown()
 }

@@ -254,10 +254,16 @@ func (r *Runner) FireAsync(ctx context.Context, event string, payload any) {
 }
 
 // Shutdown drains the async pool and waits for all workers to finish.
-// It should be called when the harness shuts down.
+// It should be called when the harness shuts down. Idempotent: the pool
+// is nil'd out under the lock before it is drained, so a second (or
+// concurrent) call to Shutdown sees r.pool == nil and is a no-op instead
+// of calling asyncPool.shutdown() twice, which would panic with "close
+// of closed channel" (pool.go's shutdown() unconditionally closes the
+// work channel).
 func (r *Runner) Shutdown() {
 	r.poolMu.Lock()
 	p := r.pool
+	r.pool = nil
 	r.poolMu.Unlock()
 	if p != nil {
 		p.shutdown()

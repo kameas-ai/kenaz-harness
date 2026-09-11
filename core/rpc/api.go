@@ -891,6 +891,13 @@ type API struct {
 	// anywhere the shutdown path could reach, so the background
 	// goroutine + ticker ran until process exit on every boot instead
 	// of stopping cleanly.
+	//
+	// Correction (review of finding #61, 2026-09-11): capturing the
+	// field only fixed half of "stopping cleanly" — API.Shutdown()
+	// itself had zero production callers until Blocker 3's fix (see
+	// Shutdown's doc comment), so this scheduler leaked past process
+	// exit on every real quit right up until that fix landed, same as
+	// pruneScheduler below. Real now.
 	compactionScheduler *compaction.SweepScheduler
 
 	// localAuditRetentionScheduler is the LOCAL audit-retention sweep
@@ -917,6 +924,15 @@ type API struct {
 	// API without a real DataDir never spin up this goroutine. Held
 	// here so Shutdown can call Stop() and the in-flight sweep (if
 	// any) returns cleanly instead of leaking past process exit.
+	//
+	// Correction (review of finding #61, 2026-09-11): "Shutdown can
+	// call Stop()" was true from day one, but nothing in production
+	// ever called API.Shutdown() itself until Blocker 3's fix wired it
+	// into main.go's OnShutdown / runServeMode and
+	// cmd/harness-served/main.go — so until then this goroutine DID
+	// leak past process exit on every real quit, same as every
+	// real-DataDir test that never called Shutdown (see
+	// core/rpc/blocker2_goroutine_leak_test.go). It is real now.
 	pruneScheduler *prune.Scheduler
 }
 
@@ -1217,10 +1233,31 @@ func (a *API) runMigrationDriftCheck(ctx context.Context) {
 	}
 }
 
-// Shutdown cancels the auto-update background poller and stops the
-// workflow cron scheduler and the chat-run cron scheduler. main.go calls
-// this from OnShutdown so all background goroutines exit cleanly. Safe to
-// call when no poller is running.
+// Shutdown stops every background goroutine this API wired at
+// construction time: the auto-update poller, the workflow cron
+// scheduler, the chat-run cron scheduler, the compaction sweep
+// scheduler (CK-09), the memory prune sweep scheduler (finding #61
+// GAP-1), the settings/context-graph/unit sync pollers, the eval
+// recorder, and — via a.hookRunner.Shutdown() — the async hooks
+// worker pool, which drains any post_send dispatch still in flight
+// (finding #61 GAP-2, e.g. a queued memory.persist embedding call) so
+// it cannot outlive process shutdown.
+//
+// Idempotent and nil-safe: a is nil-checked below, and every
+// scheduler's own Stop()/Shutdown() (including hooks.Runner.Shutdown,
+// core/hooks/fire.go) tolerates being called more than once or on a
+// never-started instance.
+//
+// Called from main.go's Wails OnShutdown (desktop), main.go's
+// runServeMode, and cmd/harness-served/main.go (both served entry
+// points) — corrected 2026-09-11 (review of finding #61): this
+// docstring previously claimed "main.go calls this from OnShutdown"
+// while no production call site anywhere actually did; OnShutdown only
+// ever called core.Core.Shutdown, a different type. That gap is what
+// made the commit message introducing the async post_send embed queue
+// ("no queued embed outlives process shutdown") untrue for real users.
+// Wiring a real call site required Shutdown to be double-call-safe
+// first (Blocker 1) — see hooks.Runner.Shutdown's own doc for why.
 func (a *API) Shutdown() {
 	if a == nil {
 		return
