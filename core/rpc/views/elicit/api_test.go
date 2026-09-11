@@ -583,3 +583,50 @@ func TestPendingAndDeferredShareOneStoreWithoutBleeding(t *testing.T) {
 		t.Fatalf("deferred asks leaked across sessions: %+v", got)
 	}
 }
+
+// TestAnswerDeferred_StampsSessionIDOntoPayload pins the served-topic-
+// single-source (findings #63/#62) fix: DeferredAnsweredPayload now
+// carries the SessionID of the ask it answers, read back from the
+// registry in AnswerDeferred. Without this, core/serve's WS fan-out has
+// no session id to key D-705's fail-closed filter on and
+// elicit:deferred:answered would need a processWideTopics exemption
+// instead — broadcasting one session's answered-ask pill dismissal to
+// every connected client, a cross-session leak of the same shape D-705
+// exists to prevent.
+//
+// *Falsify*: comment out the `entry, ok := a.registry.Get(askID)` read
+// in AnswerDeferred (core/rpc/views/elicit/api.go) → this test fails
+// because the emitted payload's SessionID reverts to "".
+func TestAnswerDeferred_StampsSessionIDOntoPayload(t *testing.T) {
+	em := &fakeEmitter{}
+	api := elicit.New(elicit.Config{Emitter: em})
+	api.SetContext(context.Background())
+
+	req := elicit.ElicitRequest{Question: "Deploy now?", Kind: "radio", Mode: "deferred"}
+	dr, err := api.RegisterDeferred(context.Background(), "sess-9", req)
+	if err != nil {
+		t.Fatalf("RegisterDeferred: %v", err)
+	}
+
+	if _, err := api.AnswerDeferred(context.Background(), dr.AskID, "yes"); err != nil {
+		t.Fatalf("AnswerDeferred: %v", err)
+	}
+
+	var found bool
+	for _, e := range em.snapshot() {
+		if e.topic != elicit.TopicElicitDeferredAnswered {
+			continue
+		}
+		found = true
+		payload, ok := e.payload.(elicit.DeferredAnsweredPayload)
+		if !ok {
+			t.Fatalf("payload type = %T, want elicit.DeferredAnsweredPayload", e.payload)
+		}
+		if payload.SessionID != "sess-9" {
+			t.Errorf("payload.SessionID = %q, want %q", payload.SessionID, "sess-9")
+		}
+	}
+	if !found {
+		t.Fatal("should have emitted TopicElicitDeferredAnswered")
+	}
+}

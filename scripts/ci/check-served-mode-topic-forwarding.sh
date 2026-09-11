@@ -14,16 +14,29 @@
 # I14 reported it "covered" (frontend_hit=1 was enough), while a served
 # workbench never received the frame at all, because passthroughTopics is
 # a SEPARATE list I14 never required frontend-subscribed topics to be in.
-# wsstream_topics_parity_test.go's header records FIVE more topics in
+# wsstream_topics_parity_test.go's header recorded FIVE more topics in
 # exactly that shape, found by the same cross-reference and deliberately
-# not gated at the time — each needs its own session-scoping disposition
+# not gated at the time — each needed its own session-scoping disposition
 # (does the payload carry a session id, or does it need a
 # processWideTopics exemption like TopicMigrationDriftDetected /
-# mcp.TopicMCPHealthChanged?) before it can be wired, which is real
-# per-topic research, not a mechanical fix. This gate freezes today's five
-# known gaps in a dated allowlist and fails on anything NEW — so the
-# five stay a tracked, bounded backlog instead of an invisible one, and
-# nobody adds a sixth by accident.
+# mcp.TopicMCPHealthChanged?) before it could be wired, which was real
+# per-topic research, not a mechanical fix. This gate froze that
+# five-topic gap in a dated allowlist and failed on anything NEW — so the
+# five stayed a tracked, bounded backlog instead of an invisible one, and
+# nobody added a sixth by accident.
+#
+# UPDATE (served-topic-single-source, 2026-09): the allowlist below is
+# now EMPTY — all five were wired, each with an evidenced per-topic
+# session-scoping decision in core/serve/wsstream.go's passthroughTopics
+# / processWideTopics comments and a regression test
+# (core/serve/wsstream_gap_topics_test.go). This gate stays live: it
+# fails on anything NEW joining the backlog, which is the whole point.
+# wsstream_topics_parity_test.go itself is also gone — collapsing
+# passthroughTopics / SERVED_STREAM_TOPICS / the harnessClient.wp06Overlay
+# hand-copy to one generated source
+# (frontend/src/lib/servedStreamTopics.gen.ts, `go generate
+# ./core/serve/...`) made its runtime regex-parse cross-check strictly
+# subsumed by scripts/ci/check-codegen.sh's regenerate-and-diff.
 #
 # WHY "useEventStream" ONLY (not EventsOn / onServedEvent, unlike I14's
 # pass 1)
@@ -263,7 +276,7 @@ for def in "${CHECK_DEFS[@]}"; do
   fi
   echo "" >&2
   echo "${GATE} FAIL: ${ident} = \"${value}\" (${file}:${line}) has a real frontend useEventStream subscriber but is missing from ${PASSTHROUGH_FILE}'s passthroughTopics and has no dated allowlist line." >&2
-  echo "  A served-mode client that subscribes to this topic will silently never receive it. Fix: add the value to passthroughTopics (and harnessClient.ts's SERVED_STREAM_TOPICS — see wsstream_topics_parity_test.go), deciding along the way whether it needs a processWideTopics entry (payload carries no session id), or add a dated line to ${ALLOWLIST} naming the blocker and an owner." >&2
+  echo "  A served-mode client that subscribes to this topic will silently never receive it. Fix: add the value to passthroughTopics (core/serve/wsstream.go), then run 'go generate ./core/serve/...' to regenerate frontend/src/lib/servedStreamTopics.gen.ts (harnessClient.ts's SERVED_STREAM_TOPICS re-exports it — see scripts/ci/check-codegen.sh), deciding along the way whether it needs a processWideTopics entry (payload carries no session id), or add a dated line to ${ALLOWLIST} naming the blocker and an owner." >&2
 done
 
 if [[ $REPORT_MODE -eq 1 ]]; then

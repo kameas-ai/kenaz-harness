@@ -46,8 +46,16 @@ Non-allowlist gates that also protect against unwired code:
 `check-output-ports.sh` (output port with no reader),
 `check-knob-coverage.sh` (registered config field with no consumer),
 `check-seam-implementers.sh`, `check-node-dispatch.sh`,
-`check-serve-dispatch-drift.sh`, `core/serve/wsstream_topics_parity_test.go`
-(desktop `passthroughTopics` ↔ `SERVED_STREAM_TOPICS`),
+`check-serve-dispatch-drift.sh`, `scripts/ci/check-codegen.sh`'s
+served-stream-topics block (`frontend/src/lib/servedStreamTopics.gen.ts`
+generated from `core/serve/wsstream.go`'s `passthroughTopics` — findings
+#63/#62, served-topic-single-source, 2026-09: this used to be
+`core/serve/wsstream_topics_parity_test.go`, a runtime regex-parse
+cross-check between `passthroughTopics` and a hand-maintained
+`SERVED_STREAM_TOPICS` array; it and the third hand-copied mirror in
+`harnessClient.wp06Overlay.test.ts` are deleted now that
+`SERVED_STREAM_TOPICS` is generated code with no independent content to
+drift),
 `core/rpc/builtins_wiring_test.go` (registered tool ↔ predicate case).
 `scripts/ci/gates_can_fail_test.go` is the meta-gate: it plants a violation
 per gate and asserts the gate rejects it — for the gates it covers. As of
