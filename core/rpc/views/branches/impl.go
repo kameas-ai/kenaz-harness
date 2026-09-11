@@ -36,10 +36,24 @@ var ErrInvalidArg = errors.New("branches: invalid argument")
 // duplicate at merge, per CLAUDE.md's shared-file conflict-zone note).
 var ErrCedarDenied = errors.New("branches: denied by cedar policy")
 
-// ErrSubagentUnavailable is returned by PauseSubagent / ResumeSubagent
-// when Config.PauseControl was not wired (degraded boot — mirrors
-// ErrManagerUnavailable's posture for the rest of this API).
-var ErrSubagentUnavailable = errors.New("branches: subagent pause control unavailable")
+// ErrSubagentPauseUnavailable is returned by PauseSubagent /
+// ResumeSubagent when Config.PauseControl was not wired (degraded
+// boot — mirrors ErrManagerUnavailable's posture for the rest of this
+// API).
+//
+// Named with the "Pause" infix (not the bare ErrSubagentUnavailable
+// this sentinel originally used) to avoid a same-package collision
+// with PR #331's ErrSubagentUnavailable, which guards a different
+// degraded-boot condition (an unset task registry / lookup, message
+// "branches: subagent task tracking unavailable") on the Abort/Steer
+// surface. Same name + different meaning is exactly the case CLAUDE.md's
+// "Shared-file conflict zones" additive-merge guidance does not cover:
+// both sentinels return unwrapped through Subagent_Pause/Subagent_Resume
+// and Subagent_Abort to the Wails caller, so whichever literal survived
+// a naive merge would have silently mislabeled the other feature's
+// degraded-boot error. Renaming here (rather than #331 renaming its
+// copy) makes the eventual merge a true no-op.
+var ErrSubagentPauseUnavailable = errors.New("branches: subagent pause control unavailable")
 
 // SubagentPauseControl is the narrow surface PauseSubagent /
 // ResumeSubagent need (subagent-control-and-background-tasks-01PMZB11
@@ -106,7 +120,7 @@ type Config struct {
 	Cedar cedar.Gate
 	// PauseControl is the pause/resume side channel PauseSubagent /
 	// ResumeSubagent delegate to (UNIT-8). nil degrades both to
-	// ErrSubagentUnavailable — matches this file's existing
+	// ErrSubagentPauseUnavailable — matches this file's existing
 	// degraded-boot posture rather than panicking.
 	PauseControl SubagentPauseControl
 }
@@ -676,7 +690,7 @@ func (a *API) PauseSubagent(ctx context.Context, branchID string) error {
 		return fmt.Errorf("branches: get branch %q: %w", branchID, err)
 	}
 	if a.cfg.PauseControl == nil {
-		return ErrSubagentUnavailable
+		return ErrSubagentPauseUnavailable
 	}
 	if !a.cfg.PauseControl.Pause(br.ChildSessionID) {
 		// Idempotent no-op: already paused, nothing new to audit.
@@ -709,7 +723,7 @@ func (a *API) ResumeSubagent(ctx context.Context, branchID string) error {
 		return fmt.Errorf("branches: get branch %q: %w", branchID, err)
 	}
 	if a.cfg.PauseControl == nil {
-		return ErrSubagentUnavailable
+		return ErrSubagentPauseUnavailable
 	}
 	if !a.cfg.PauseControl.Resume(br.ChildSessionID) {
 		// Idempotent no-op: was not paused, nothing new to audit.

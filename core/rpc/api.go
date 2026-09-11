@@ -2697,8 +2697,9 @@ func New(c *core.Core, opts ...Option) *API {
 		// SetRunSpawner call site above). stack.chatRunner is
 		// constructed earlier in this function (newLLMStack); a nil
 		// chatRunner (degraded boot) makes SubagentPause() return
-		// nil, which degrades Pause/Resume to ErrSubagentUnavailable
-		// -- the same posture every other nil-dependency branch in
+		// nil, which degrades Pause/Resume to
+		// ErrSubagentPauseUnavailable -- the same posture every other
+		// nil-dependency branch in
 		// this Config takes.
 		Cedar:        a.cedarGate(),
 		PauseControl: stack.chatRunner.SubagentPause(),

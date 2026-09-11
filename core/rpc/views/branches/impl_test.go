@@ -914,8 +914,8 @@ func TestAPI_PauseSubagent_PauseControlUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateBranch: %v", err)
 	}
-	if err := api.PauseSubagent(ctx, br.ID); !errors.Is(err, ErrSubagentUnavailable) {
-		t.Errorf("got %v, want ErrSubagentUnavailable", err)
+	if err := api.PauseSubagent(ctx, br.ID); !errors.Is(err, ErrSubagentPauseUnavailable) {
+		t.Errorf("got %v, want ErrSubagentPauseUnavailable", err)
 	}
 }
 
@@ -1069,8 +1069,8 @@ func TestAPI_ResumeSubagent_PauseControlUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateBranch: %v", err)
 	}
-	if err := api.ResumeSubagent(ctx, br.ID); !errors.Is(err, ErrSubagentUnavailable) {
-		t.Errorf("got %v, want ErrSubagentUnavailable", err)
+	if err := api.ResumeSubagent(ctx, br.ID); !errors.Is(err, ErrSubagentPauseUnavailable) {
+		t.Errorf("got %v, want ErrSubagentPauseUnavailable", err)
 	}
 }
 

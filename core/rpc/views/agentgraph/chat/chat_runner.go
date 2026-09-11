@@ -1551,6 +1551,17 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		r.mu.Lock()
 		delete(r.subs, sub.id)
 		r.mu.Unlock()
+		// Release any armed pause entry for this run unconditionally,
+		// mirroring the r.subs delete above. Without this, a sub-agent
+		// paused and then aborted (rather than resumed) leaves its
+		// never-closed channel in SubagentPauseRegistry.paused for the
+		// life of the process: TurnPause.Wait returns ctx.Err() on
+		// abort and exits the loop, but nothing ever calls Resume to
+		// clear the entry. Resume is nil-receiver-safe (no-op when
+		// SubagentPause is unwired) and idempotent (a no-op when this
+		// run was never paused), so this is safe to call unconditionally
+		// rather than only on the abort path.
+		r.cfg.SubagentPause.Resume(sub.sessionID)
 		close(sub.done)
 	}()
 

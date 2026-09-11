@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 )
 
 // TestSubagentPauseRegistry_PauseResumeIdempotency pins the
@@ -158,6 +160,65 @@ func TestSubagentPauseRegistry_WaitNoOpWhenNeverPaused(t *testing.T) {
 	defer cancel()
 	if err := r.Wait(ctx, "never-paused"); err != nil {
 		t.Errorf("Wait on an unpaused session must return nil immediately, got %v", err)
+	}
+}
+
+// TestChatRunner_DriveRun_ReleasesPauseEntryOnAbort covers the
+// registry-entry leak found in review of this PR: a sub-agent paused
+// via PauseSubagent and then ABORTED rather than resumed used to leave
+// its entry in SubagentPauseRegistry.paused forever — Wait returns
+// ctx.Err() and the run's loop exits, but nothing ever called Resume
+// to release the entry. driveRun's cleanup defer must release it
+// unconditionally, mirroring how r.subs is already deleted there.
+//
+// minimalChatGraph is a single AskNode, so this test does not drive
+// the run through a real Loop-node TurnPause consult; instead it arms
+// the registry directly (the same state a genuine PauseSubagent RPC
+// call produces while a run is in-flight), then aborts the run via
+// StopStream and asserts the registry's own observable state — never
+// a status field — shows the entry gone.
+func TestChatRunner_DriveRun_ReleasesPauseEntryOnAbort(t *testing.T) {
+	t.Parallel()
+	const sessionID = "paused-then-aborted-session"
+
+	reg := NewSubagentPauseRegistry()
+	if changed := reg.Pause(sessionID); !changed {
+		t.Fatal("Pause must report changed=true for a fresh session")
+	}
+
+	broker := &recordingBroker{}
+	runner, err := New(Config{
+		Kernel:        coreag.NewKernel(),
+		Registry:      stubRegistry{},
+		Broker:        broker,
+		HistoryWriter: &recordingHistoryWriter{},
+		History:       staticHistoryReader{},
+		GraphLoader:   func() (coreag.Graph, error) { return minimalChatGraph(), nil },
+		MaxTurns:      func() int { return 25 },
+		SubagentPause: reg,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	subID, err := runner.StartStream(context.Background(), "profile-1", sessionID, "", "hello")
+	if err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+
+	// Abort rather than resume — the leak's trigger condition.
+	// StopStream cancels the run and blocks on <-sub.done, so by the
+	// time it returns, driveRun's cleanup defer (where the fix lives)
+	// has already run synchronously.
+	if err := runner.StopStream(context.Background(), subID); err != nil {
+		t.Fatalf("StopStream: %v", err)
+	}
+
+	if reg.IsPaused(sessionID) {
+		t.Error("registry entry must be released when driveRun exits, even on abort-without-resume")
+	}
+	if changed := reg.Resume(sessionID); changed {
+		t.Error("a subsequent Resume must report changed=false — the entry should already be gone")
 	}
 }
 
