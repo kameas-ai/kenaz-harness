@@ -573,6 +573,82 @@ func findTriggerFields(pkgs []*packages.Package) []*triggerField {
 //     fix is either renaming the method to the Set*/With* idiom clause 2
 //     already recognises, or a documented allowlist entry naming this
 //     paragraph as the blocker.
+//
+//     PR #332's FOURTH review round closed a DIFFERENT escape from this
+//     same exception: assignVisitor.Visit's *ast.FuncLit case used to
+//     reset self to nil for ANY closure, so the exact never-called-
+//     setter shape above still counted as "wired" the instant it was
+//     moved one syntactic layer down into a nested closure —
+//     `func (c *Config) SetX(d T) { helper := func() { c.Field = d };
+//     helper() }`, zero call sites for SetX anywhere. Reproduced as
+//     "scanned 61: 54 wired ... clean" against the round-2/3 binary
+//     (gates_can_fail_test.go's
+//     TestNilOptionalDepsGate_PlantedUnwiredFieldFires/nested-closure-
+//     setter-still-fires is the committed proof). FIXED: self now
+//     threads through *ast.FuncLit boundaries unchanged instead of
+//     resetting — see that case's own doc comment for why this leaves
+//     the WithSessionHookRunner functional-option idiom (a plain,
+//     receiver-less function) untouched, and why the fix generalises to
+//     ARBITRARY closure nesting depth inside the setter's own body (Go
+//     has no nested func DECLARATIONS, only func LITERALS, so every
+//     nesting level is an *ast.FuncLit and every one of them now
+//     inherits self the same way).
+//
+//     A THIRD gap SURVIVES the fourth round's fix — not because the fix
+//     missed it, but because it sits entirely outside what the fix
+//     touches: a plain, receiver-less top-level function that takes the
+//     owner type as an explicit pointer PARAMETER (rather than a
+//     receiver) and assigns the field from its own second parameter,
+//     called once from inside a setter that itself has zero call sites —
+//
+//     func (c *Config) SetX(d T) { assignX(c, d) }
+//     func assignX(cfg *Config, val T) { cfg.Field = val }
+//
+//     — reproduces "wired" with zero call sites for SetX anywhere
+//     (verified overlay-only against the post-fourth-round binary: a
+//     planted ZzGateProbeHelperFn field/setter of exactly this shape
+//     still reports "scanned 61: 54 wired ... clean"). The reason: this
+//     has nothing to do with *ast.FuncLit threading — assignX is an
+//     *ast.FuncDecl, and methodSelfCtx recomputes self from EVERY
+//     FuncDecl's OWN receiver regardless of caller context. assignX has
+//     no receiver, so self is nil for its entire body BY THE SAME RULE
+//     that gives WithSessionHookRunner's plain FuncDecl a nil self — the
+//     rule the round-2 exception was built on top of, not one round 4
+//     touched. Clause 2 cannot see the call either: `assignX(c, d)` is a
+//     free-function call (`*ast.Ident` Fun), not `x.SetFieldName(...)`
+//     (`*ast.SelectorExpr` Fun), so clause 2's own match never engages.
+//     Net effect: clause 3 has never distinguished "a plain function
+//     that's a real, externally-called wiring helper" from "a plain
+//     function that exists solely to launder an uncalled setter's own
+//     parameter one hop sideways" — both get the same self=nil leniency,
+//     because BOTH shapes are, syntactically, indistinguishable at the
+//     point of the assignment itself.
+//
+//     This is not hypothetical scaffolding — it is the SAME mechanism
+//     already load-bearing for real fields in this tree today.
+//     core/rpc/views/sessions/impl.go's WithResumeStarter,
+//     WithTitleGeneratorOpt and WithExportOpts, and
+//     core/rpc/views/sessions/autonomy.go's WithAutonomyContext, are all
+//     free functions of exactly this shape (`func WithX(api SessionsAPI,
+//     ...) SessionsAPI { if m, ok := api.(*managerAPI); ok { m.field =
+//     ... } ...}` — a type-asserted parameter standing in for a
+//     receiver) whose ONLY detection path is this clause-3 leniency:
+//     clause 2 cannot match their free-function call syntax, so
+//     managerAPI.resumeStarter/.titleGen/.cedarGate/.autonomyCtx are
+//     reported "wired" purely because their WithX function is DECLARED,
+//     not because anything verifies WithX is ever CALLED. All four do
+//     have real call sites today (core/rpc/api.go:2295, :2386, :2423,
+//     :2351 — checked by hand, not assumed), so the current 53-wired
+//     verdict is not a false positive; the point is that checknilopts's
+//     verdict for these four fields would be UNCHANGED if those four
+//     call sites in api.go were deleted tomorrow. Closing this would
+//     need a real call-graph hop from a self=nil plain function to ITS
+//     OWN callers — the same escalation the round-2 exception's design
+//     note (above) already rejected as disproportionate for the
+//     receiver-method case, for the identical reason. No allowlist
+//     action needed today (all known instances trace to real callers);
+//     if a future plain-function helper of this shape does NOT have a
+//     real caller, this paragraph names the blocker.
 func markAssignments(pkgs []*packages.Package, fields []*triggerField) {
 	// Index fields by owner type identity + name for O(1) lookup during
 	// the walk. types.Named objects are shared across one packages.Load
@@ -605,15 +681,17 @@ type fieldKey struct {
 }
 
 // selfCtx captures the receiver-parameter context of the innermost
-// enclosing function, when that function is itself a method (has a
-// receiver) — see markAssignments' clause-3 doc comment above for why
-// this exists. nil whenever the walk is not directly inside a method's
-// own body, including whenever it has descended into a nested closure
-// (*ast.FuncLit): a FuncLit can never have a receiver, so it is never a
-// "method" regardless of where it is textually written or what it
-// captures — this is what keeps the WithSessionHookRunner-style
-// functional-options closure (a plain function returning a *ast.FuncLit)
-// unaffected by the exception below.
+// enclosing *method* (has a receiver) — see markAssignments' clause-3
+// doc comment above for why this exists. nil whenever the walk is not
+// inside a method's own body at all — a plain (receiver-less)
+// *ast.FuncDecl, or any nesting entirely outside one.
+//
+// A nested *ast.FuncLit no longer resets this to nil (round 4 of PR
+// #332's review — see the *ast.FuncLit case in assignVisitor.Visit):
+// self now threads through closure boundaries unchanged, the same way
+// it already threads through everything else. A FuncLit still can never
+// itself BE a method (it has no receiver), so it never SETS self — it
+// only preserves whatever self it was declared inside of.
 type selfCtx struct {
 	owner  *types.TypeName
 	params map[string]bool
@@ -621,11 +699,13 @@ type selfCtx struct {
 
 // assignVisitor implements ast.Visitor for markAssignments' single walk
 // per file. It threads self (the innermost enclosing method's
-// receiver+params, or nil) through *ast.FuncDecl/*ast.FuncLit boundaries
-// by returning a NEW visitor value on descent — ast.Walk's contract
-// (Visit returns the Visitor to use for a node's children) restores the
-// parent visitor, and hence its self, automatically once that subtree's
-// traversal finishes; no manual stack push/pop is needed.
+// receiver+params, or nil) through *ast.FuncDecl boundaries by
+// returning a NEW visitor value on descent, re-derived from that decl —
+// ast.Walk's contract (Visit returns the Visitor to use for a node's
+// children) restores the parent visitor, and hence its self,
+// automatically once that subtree's traversal finishes; no manual stack
+// push/pop is needed. *ast.FuncLit boundaries are NOT a self reset
+// point (see selfCtx's doc comment and the *ast.FuncLit case below).
 type assignVisitor struct {
 	p     *packages.Package
 	index map[fieldKey]*triggerField
@@ -637,11 +717,53 @@ func (v *assignVisitor) Visit(n ast.Node) ast.Visitor {
 	case *ast.FuncDecl:
 		return &assignVisitor{p: v.p, index: v.index, self: methodSelfCtx(v.p, node)}
 	case *ast.FuncLit:
-		// A closure is never a method — reset self so an assignment
-		// inside it (e.g. WithSessionHookRunner's `m.hooks = h`) is
-		// judged purely on isBareNil, same as before this exception
-		// existed.
-		return &assignVisitor{p: v.p, index: v.index, self: nil}
+		// Round 4 of PR #332's review: a closure is never itself a
+		// method, but that used to mean unconditionally RESETTING self
+		// to nil on every *ast.FuncLit — which made the clause-3
+		// exception one syntactic layer removable. A reviewer proved it
+		// with an overlay-only plant:
+		//
+		//	func (c *Config) SetZzGateProbeNested(d ZzGateProbeNestedDispatcher) {
+		//		helper := func() {
+		//			c.ZzGateProbeNested = d
+		//		}
+		//		helper()
+		//	}
+		//
+		// With zero call sites for SetZzGateProbeNested anywhere, the old
+		// code reset self to nil the moment the walk descended into
+		// `helper`'s body, so `c.ZzGateProbeNested = d` was judged by
+		// clause 3 with self == nil — the exception's own guard
+		// (`v.self != nil && v.self.owner == named.Obj()`) never had a
+		// chance to fire, and the assignment counted as wiring even
+		// though the enclosing setter is never invoked. Reported:
+		// "scanned 61: 54 wired ... clean".
+		//
+		// Fixed by NOT resetting self here — it threads through
+		// unchanged, same as every other node kind the switch doesn't
+		// name explicitly (see the default `return v` at the bottom).
+		// Now `c.ZzGateProbeNested = d` inside `helper` is evaluated
+		// with self still pointing at SetZzGateProbeNested's own
+		// receiver+params, the exception's guard matches (owner ==
+		// Config, "d" is the setter's own parameter), and the assignment
+		// is correctly excluded — the field falls through to clauses 1-2
+		// exactly as it would if the closure didn't exist.
+		//
+		// This does NOT reopen the WithSessionHookRunner functional-
+		// option idiom (core/session/manager.go:185-192): that pattern
+		// is a PLAIN function — `func WithSessionHookRunner(h
+		// SessionHookRunner) ManagerOption { return func(m *Manager) {
+		// if h != nil { m.hooks = h } } }` — with no receiver, so
+		// methodSelfCtx already returns nil for its *ast.FuncDecl before
+		// the walk ever reaches the FuncLit. Inheriting "nil" through a
+		// FuncLit that was already nil changes nothing. More generally,
+		// the exception can only ever engage when self.owner equals the
+		// assignment target's OWN receiver type (assignVisitor's
+		// *ast.AssignStmt case, `v.self.owner == named.Obj()`) — a
+		// closure inside one method that happens to assign a DIFFERENT
+		// struct's field, or a closure inside a non-method function, is
+		// unaffected either way, self-reset or not.
+		return v
 	case *ast.CompositeLit:
 		t := v.p.TypesInfo.TypeOf(node)
 		named, ok := t.(*types.Named)

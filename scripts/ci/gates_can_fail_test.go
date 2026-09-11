@@ -1969,6 +1969,20 @@ func TestNoCredentialInUI_BenignFieldsDoNotTrip(t *testing.T) {
 // unconditionally reject setter bodies (that would fail this subtest
 // too, since nothing else in the plant would supply the wiring
 // evidence).
+//
+// A fifth subtest, "nested-closure-setter-still-fires", was added in the
+// PR #332 FOURTH review round to close the round-2 fix's own escape
+// hatch: assignVisitor.Visit's *ast.FuncLit case reset self to nil for
+// ANY closure, so wrapping the exact same never-called-setter
+// assignment in a nested closure (`helper := func() { c.Field = d };
+// helper()`, still zero call sites for the enclosing setter) defeated
+// the clause-3 exception one syntactic layer down — reproduced as
+// "scanned 61: 54 wired ... clean" against the round-2/3 binary. See
+// the *ast.FuncLit case's doc comment in checknilopts/main.go for the
+// fix (thread self through closure boundaries instead of resetting it)
+// and why it leaves the WithSessionHookRunner functional-option idiom
+// (core/session/manager.go:185-192, a plain non-method function) exactly
+// as before.
 func TestNilOptionalDepsGate_PlantedUnwiredFieldFires(t *testing.T) {
 	root := repoRoot(t)
 	implPath := filepath.Join(root, "core", "rpc", "views", "scheduledchat", "impl.go")
@@ -2108,6 +2122,87 @@ func TestNilOptionalDepsGate_PlantedUnwiredFieldFires(t *testing.T) {
 				"SetZzGateProbe is called at package scope with a genuinely non-nil "+
 				"zzGateProbeSetterImpl{} — the clause-3 fix over-corrected and now rejects real "+
 				"setter-based wiring, not just the uncalled-setter defect class.\noutput:\n%s", out)
+		}
+	})
+
+	// nested-closure-setter-still-fires is round 4's planted-violation
+	// proof, added after a reviewer showed the round-2 fix above (the
+	// clause-3 exception) was escapable by one syntactic layer:
+	// assignVisitor.Visit's *ast.FuncLit case used to reset self to nil
+	// unconditionally for ANY closure, so moving the exact same
+	// never-called-setter assignment one layer down into a nested
+	// closure defeated the exception's own guard
+	// (`v.self != nil && v.self.owner == named.Obj()`) — self was
+	// already nil by the time the walk reached the assignment, so the
+	// guard never had a chance to engage:
+	//
+	//	func (c *Config) SetZzGateProbeNested(d ZzGateProbeNestedDispatcher) {
+	//		helper := func() {
+	//			c.ZzGateProbeNested = d
+	//		}
+	//		helper()
+	//	}
+	//
+	// With ZERO call sites for SetZzGateProbeNested anywhere in the
+	// plant, this reproduced as "scanned 61: 54 wired ... clean" against
+	// the pre-fix binary (verified by hand against the round-2 binary
+	// before this subtest was written). Fixed by threading self through
+	// *ast.FuncLit boundaries unchanged instead of resetting it — see
+	// the *ast.FuncLit case's doc comment in main.go for why this does
+	// not reopen the WithSessionHookRunner functional-option idiom
+	// (core/session/manager.go:185-192) — that idiom's continued
+	// wiring is covered by the tree-wide gate run itself (no overlay,
+	// no plant needed): session.Manager.hooks is one of the 53 fields
+	// this gate already reports wired against the real tree, before and
+	// after this fix.
+	t.Run("nested-closure-setter-still-fires", func(t *testing.T) {
+		const nestedField = "\t// ZzGateProbeNested is a planted probe field for the round-4\n" +
+			"\t// nested-closure escape reproduction. nil causes this test to\n" +
+			"\t// exist — deliberately never assigned anywhere, to prove\n" +
+			"\t// check-nil-optional-deps.sh can see through a nested closure.\n" +
+			"\t// Overlay-only; never written to the real file.\n" +
+			"\tZzGateProbeNested ZzGateProbeNestedDispatcher\n"
+		const nestedType = "\n// ZzGateProbeNestedDispatcher is a planted probe type — see " +
+			"Config.ZzGateProbeNested.\ntype ZzGateProbeNestedDispatcher interface {\n" +
+			"\tZzGateProbeNested()\n}\n"
+		const nestedSetterNeverCalled = "\nfunc (c *Config) SetZzGateProbeNested(d ZzGateProbeNestedDispatcher) {\n" +
+			"\thelper := func() {\n" +
+			"\t\tc.ZzGateProbeNested = d\n" +
+			"\t}\n" +
+			"\thelper()\n" +
+			"}\n"
+
+		mutated := strings.Replace(string(orig), anchor, anchor+nestedField, 1) + nestedType + nestedSetterNeverCalled
+
+		scratch := t.TempDir()
+		scratchImpl := filepath.Join(scratch, "impl_zz_gate_probe_nested.go")
+		if err := os.WriteFile(scratchImpl, []byte(mutated), 0o644); err != nil {
+			t.Fatalf("writing scratch mutated impl.go: %v", err)
+		}
+		overlay := struct{ Replace map[string]string }{Replace: map[string]string{implPath: scratchImpl}}
+		overlayJSON, err := json.Marshal(overlay)
+		if err != nil {
+			t.Fatalf("marshalling overlay: %v", err)
+		}
+		overlayPath := filepath.Join(scratch, "overlay.json")
+		if err := os.WriteFile(overlayPath, overlayJSON, 0o644); err != nil {
+			t.Fatalf("writing overlay.json: %v", err)
+		}
+
+		code, out := runGateEnv(t, "check-nil-optional-deps.sh", root, map[string]string{
+			"NIL_OPTIONAL_DEPS_OVERLAY": overlayPath,
+		})
+		if code == 0 {
+			t.Fatalf("check-nil-optional-deps.sh exited 0 with ZzGateProbeNested wired ONLY by a "+
+				"nested closure inside SetZzGateProbeNested's own body — the closure is one "+
+				"syntactic layer removed from the setter, but SetZzGateProbeNested itself is never "+
+				"CALLED anywhere in the plant, so this is not production wiring by the same logic "+
+				"as the outer-scope setter-defined-but-never-called-still-fires case above.\n"+
+				"output:\n%s", out)
+		}
+		if !strings.Contains(out, "ZzGateProbeNested") {
+			t.Fatalf("gate failed, but its output does not mention ZzGateProbeNested "+
+				"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
 		}
 	})
 }
