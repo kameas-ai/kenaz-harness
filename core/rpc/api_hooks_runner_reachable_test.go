@@ -48,7 +48,7 @@ func TestWP06_HooksRunnerReachable_AdaptersConstructible(t *testing.T) {
 	// End-to-end: call newHooksStack itself (the real production function,
 	// not a hand-built stand-in) and confirm its fourth return value is
 	// usable the same way.
-	_, _, _, stackRunner := newHooksStack(nil, nil, nil, nil)
+	_, _, _, stackRunner := newHooksStack(nil, nil, nil, nil, nil)
 	if stackRunner != nil {
 		t.Fatalf("expected nil *hooks.Runner from newHooksStack with nil memStore (guard clause), got %v", stackRunner)
 	}

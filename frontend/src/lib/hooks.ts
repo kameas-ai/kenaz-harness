@@ -210,12 +210,25 @@ export const EVENT_FAMILY: Record<HookEventName, string> = {
 /**
  * HOOK_KINDS is the list of hook kinds offered by the kind picker.
  *
- * 'mcp' is intentionally NOT here (trust-surfaces-that-fire-01PMZ202 WP08 /
- * UNIT-7, A-6): the MCP hook kind is stub-only in the backend today. A
- * saved kind=mcp hook must still load and dispatch through Go's
- * hooks.KindMCP — that machinery is untouched — this only stops the
- * picker from offering a kind that would be a no-op stub if a user chose
- * it new. core/hooks.Kind* constants (including KindMCP) are unchanged.
+ * 'mcp' is intentionally NOT here. Originally (trust-surfaces-that-fire-
+ * 01PMZ202 WP08 / UNIT-7, A-6) because the MCP hook kind was stub-only in
+ * the backend — every kind=mcp dispatch failed with "not configured".
+ *
+ * CORRECTED 2026-09-11 (finding #71): that backend gap is now closed —
+ * core/rpc's mcpHookInvokerAdapter (hooks_mcp_invoker.go) wires
+ * hooks.Config.MCP onto the live MCP dispatch pool, so a saved kind=mcp
+ * hook actually reaches a configured MCP server tool. 'mcp' stays off the
+ * picker for a different, still-open reason: MCPTool must be a
+ * "<server>__<tool>" namespaced identifier (mirroring
+ * core/rpc/views/llm.ToolNameSeparator), and there is no UI surface yet
+ * that lets a user pick from installed servers/tools and compose that
+ * identifier — HookEditor only has a free-text field, which would ship a
+ * kind users can select but can't correctly configure without reading Go
+ * source. That is a frontend-only mission (a tool picker sourced from the
+ * same MCP_ListServers/recipe-tools surface ToolsView.vue already reads),
+ * not a backend gap. core/hooks.Kind* constants (including KindMCP) are
+ * unchanged; a hook saved via direct API/config with a correctly-
+ * namespaced MCPTool dispatches for real today.
  */
 export const HOOK_KINDS = ['builtin', 'shell'] as const;
 export type HookKindName = (typeof HOOK_KINDS)[number];

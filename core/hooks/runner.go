@@ -12,8 +12,11 @@
 //   - builtin hook: looked up in the BuiltinRegistry the embedder
 //     supplies. Receives the event and may return a mutated copy
 //     (PreSend) or only an error (PostSend).
-//   - mcp hook: stubbed for v1. Logged + skipped. The seam returns the
-//     event unchanged so adding real MCP wiring later is additive.
+//   - mcp hook: dispatched through the MCPInvoker seam (see MCPInvoker's
+//     doc below). When no invoker is configured (Config.MCP == nil) the
+//     hook fails with an explicit "not configured" error, logged +
+//     skipped — the same visible-failure behaviour as any other
+//     dispatch error, never a silent no-op.
 //
 // The runner is safe to call from any goroutine; the underlying
 // Registry locks its own state.
@@ -206,8 +209,21 @@ func (b *BuiltinRegistry) Describe() []BuiltinDescriptor {
 }
 
 // MCPInvoker is the seam the runner uses to dispatch kind=mcp hooks.
-// v1 implementations are stubs; the contract is here so wiring an
-// MCP-pool-backed dispatcher later does not touch the runner's API.
+// The production implementation (core/rpc's mcpHookInvokerAdapter,
+// hooks_mcp_invoker.go) routes to the same MCP dispatch pool every
+// other tool-call path in the harness uses (finding #71 — this seam
+// used to have no production implementation at all: Config.MCP was
+// never set, so every kind=mcp hook failed on every dispatch).
+//
+// Implementations MUST tolerate InvokeTool being called concurrently
+// with the underlying transport being closed (e.g. process shutdown):
+// RunPostSend and FireAsync dispatch through Runner's detached async
+// worker pool, and Runner.Shutdown abandons — rather than kills — any
+// dispatch still running past its drain deadline (fire.go's
+// asyncShutdownDrainTimeout). A still-running InvokeTool call can
+// therefore observe the pool it dispatches to being closed by an
+// unrelated shutdown path. It must return an error in that case, never
+// panic or write through a freed resource.
 type MCPInvoker interface {
 	InvokeTool(ctx context.Context, tool string, payload []byte) ([]byte, error)
 }
@@ -374,7 +390,7 @@ func (r *Runner) dispatchElicitation(ctx context.Context, h Hook, ev Elicitation
 		return r.runShellElicitation(ctx, h, ev)
 	case KindMCP:
 		if r.mcp == nil {
-			return ElicitationEventResult{}, errors.New("mcp invoker not configured (v1 stub)")
+			return ElicitationEventResult{}, errors.New("mcp invoker not configured")
 		}
 		body, _ := json.Marshal(ev)
 		out, _ := r.mcp.InvokeTool(ctx, h.MCPTool, body)
@@ -400,7 +416,7 @@ func (r *Runner) dispatchElicitationResult(ctx context.Context, h Hook, ev Elici
 		return r.runShellElicitationResult(ctx, h, ev)
 	case KindMCP:
 		if r.mcp == nil {
-			return ElicitationResultEventResult{}, errors.New("mcp invoker not configured (v1 stub)")
+			return ElicitationResultEventResult{}, errors.New("mcp invoker not configured")
 		}
 		body, _ := json.Marshal(ev)
 		out, _ := r.mcp.InvokeTool(ctx, h.MCPTool, body)
@@ -562,12 +578,16 @@ func (r *Runner) dispatchPreSend(ctx context.Context, h Hook, ev PreSendEvent) (
 		return out, nil
 	case KindMCP:
 		if r.mcp == nil {
-			return ev, errors.New("mcp invoker not configured (v1 stub)")
+			return ev, errors.New("mcp invoker not configured")
 		}
-		// Stub: invoke the tool with the JSON event and discard the
-		// result for now — v1 does not yet thread mcp output back into
-		// the message list. The seam is here so the wiring lands cleanly
-		// in a future mission.
+		// Invokes the tool with the JSON event but discards the result —
+		// pre_send does not thread mcp output back into the message
+		// list (a separate, larger feature from finding #71's scope,
+		// which is only that the dispatch reaches a live invoker at
+		// all). Note pre_send itself has no production fire site today
+		// (see frontend/src/lib/hooks.ts's FIRING_HOOK_EVENTS doc and
+		// scripts/ci/allowlists/i17-eventless-hook-events.txt) — this
+		// branch is reachable only via Fire/dry-run today.
 		body, _ := json.Marshal(ev)
 		_, _ = r.mcp.InvokeTool(ctx, h.MCPTool, body)
 		return ev, nil
@@ -592,7 +612,7 @@ func (r *Runner) dispatchPostSend(ctx context.Context, h Hook, ev PostSendEvent)
 		return err
 	case KindMCP:
 		if r.mcp == nil {
-			return errors.New("mcp invoker not configured (v1 stub)")
+			return errors.New("mcp invoker not configured")
 		}
 		body, _ := json.Marshal(ev)
 		_, _ = r.mcp.InvokeTool(ctx, h.MCPTool, body)

@@ -8,8 +8,12 @@
 //   - shell — exec a user-configured command, pipe lifecycle JSON over
 //     stdin, read mutated JSON from stdout. Mirrors Claude Code's hook
 //     stdin/stdout protocol.
-//   - mcp — invoke a configured MCP server tool by name. Stub-only for
-//     v1; the seam is documented for the MCP-pool wiring mission.
+//   - mcp — invoke a configured MCP server tool by name. Dispatches
+//     through the MCPInvoker seam (runner.go); the production
+//     implementation (core/rpc's mcpHookInvokerAdapter,
+//     hooks_mcp_invoker.go) routes to the same MCP dispatch pool every
+//     other tool-call path uses. MCPTool must be a "<server>__<tool>"
+//     namespaced identifier — see MCPInvoker's doc.
 //
 // Persistence: <DataDir>/hooks.json (mode 0600). The Registry is the
 // only writer; all callers go through Registry.Add / Update / Remove
@@ -173,6 +177,14 @@ const (
 
 // Hook is a configured lifecycle hook. The persisted shape mirrors
 // the JSON the operator edits in the UI.
+//
+// MCPTool (kind=mcp only) is the tool identifier production dispatch
+// (core/rpc's mcpHookInvokerAdapter) expects in the namespaced
+// "<server>__<tool>" form — the same convention
+// core/rpc/views/llm.ToolNameSeparator uses elsewhere to fold an MCP
+// (server, tool) pair into one string. A value with no "__" separator
+// dispatches with an empty server and fails with an explicit "unknown
+// server" error rather than silently no-opping.
 type Hook struct {
 	ID      string         `json:"id"`
 	Name    string         `json:"name"`
