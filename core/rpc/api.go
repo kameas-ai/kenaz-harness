@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core"
@@ -993,7 +994,28 @@ func (a *API) SetContext(ctx context.Context) {
 	// goroutine so the SetContext critical path is never delayed by a
 	// network round-trip. The Watcher's long-poll loop catches any state
 	// that changes after boot. (fleet-emergency-lockdown-01NDFSEX12 WP02)
-	if a.settingsImpl != nil {
+	//
+	// Not started under `go test`, for the same reason SetFleetClient does
+	// not start its pollers: BootstrapLockdownStatus -> Client.Get ->
+	// Client.do -> fleet.LoadTokens -> keyring.Get, and go-keyring's MOCK
+	// provider (installed process-wide by testmain_test.go's keyring.MockInit)
+	// mutates a bare map[string]map[string]string with no mutex. Any
+	// background goroutine that reaches the keyring therefore races any
+	// sibling test's keyring.Set -- which is what the "views/sites keyring
+	// flake" always was. The independent review of the CapabilityPoller fix
+	// reproduced the race through THIS call site against the already-fixed
+	// poller, so this is a second live instance, not a hypothetical.
+	//
+	// This guard is a mitigation, not the fix. LoadTokens has ~16 non-test
+	// call sites and is hit by EVERY fleet HTTP request via Client.do, so
+	// guarding call sites one at a time does not close the class -- see the
+	// scar at contextbootstrap_wiring.go:337 for a third instance. The real
+	// fix is a single serialised keyring seam plus a gate forbidding direct
+	// go-keyring imports outside it; go-keyring exposes no way to install a
+	// thread-safe provider (`provider` is package-private and MockInit is
+	// the only door), so it cannot be fixed upstream-side from here.
+	// Tracked as its own mission.
+	if a.settingsImpl != nil && !testing.Testing() {
 		go func() {
 			c := a.settingsImpl.FleetClientForBootstrap()
 			if c != nil {
