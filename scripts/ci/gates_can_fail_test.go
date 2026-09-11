@@ -1236,6 +1236,28 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				"\t_, _ = p.PersistPartial(ctx, sessionID, text, \"transient\", true)\n" +
 				"}\n",
 		},
+		{
+			// Finding #72 (2026-09-11): check-no-fleet-imports.sh's
+			// ALLOWLIST held a single entry for the core/rpc chassis
+			// ("${MODULE}/core/rpc") but the matcher applied a
+			// prefix-wildcard to every entry ("$pkg" == "$a" ||
+			// "$pkg" == "${a}/"*), so that one entry silently exempted
+			// every package UNDER core/rpc/ too. Eleven packages relied
+			// on the hole. The ad hoc verification cited in the script's
+			// own comments planted its probe in core/sessions -- outside
+			// core/rpc/ entirely -- so it could never have caught this.
+			// This plants a NEW, unallowlisted package directly under
+			// core/rpc/views/ that imports core/fleet, proving the split
+			// EXACT_ALLOWLIST (core/rpc, exact-match only) /
+			// PREFIX_ALLOWLIST (named subpackages) matcher actually
+			// inspects core/rpc's subpackages instead of waving the whole
+			// subtree through.
+			name:       "no-fleet-imports/unallowlisted-subpackage-of-core-rpc",
+			wantOutput: "core/rpc/views/zzgatefleetprobe",
+			gate:       "check-no-fleet-imports.sh",
+			file:       "core/rpc/views/zzgatefleetprobe/impl.go",
+			content:    "package zzgatefleetprobe\n\nimport _ \"github.com/kameas-ai/kenaz-harness/core/fleet\"\n",
+		},
 	}
 
 	for _, tc := range cases {
