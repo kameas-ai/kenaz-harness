@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/context/audit"
 	"github.com/kameas-ai/kenaz-harness/core/conversation"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 )
@@ -663,5 +665,130 @@ func TestAPI_CommitReintegration_EmptySummary(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("expected error for empty summary, got nil")
+	}
+}
+
+// ── UNIT-8: PauseSubagent / ResumeSubagent (subagent-control-and-
+// background-tasks-01PMZB11, AC-09/AC-10 — owner ruling E-002 resolved
+// 2026-09-10, "stop after the current turn". Abort/Steer are PR #331's
+// scope; this branch adds Pause/Resume independently off the same
+// origin/main base, per CLAUDE.md's shared-file conflict-zone note) ──
+
+// fakeSubagentPauseControl is a race-safe fake SubagentPauseControl.
+// Mirrors chat.SubagentPauseRegistry's changed-bool contract exactly
+// (Pause/Resume report whether the call actually changed state) so
+// these tests pin the SAME idempotency behaviour the real registry
+// provides, without pulling in the full chat package.
+type fakeSubagentPauseControl struct {
+	mu      sync.Mutex
+	paused  map[string]bool
+	pauses  []string
+	resumes []string
+}
+
+func newFakeSubagentPauseControl() *fakeSubagentPauseControl {
+	return &fakeSubagentPauseControl{paused: map[string]bool{}}
+}
+
+func (f *fakeSubagentPauseControl) Pause(sessionID string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pauses = append(f.pauses, sessionID)
+	if f.paused[sessionID] {
+		return false
+	}
+	f.paused[sessionID] = true
+	return true
+}
+
+func (f *fakeSubagentPauseControl) Resume(sessionID string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resumes = append(f.resumes, sessionID)
+	if !f.paused[sessionID] {
+		return false
+	}
+	f.paused[sessionID] = false
+	return true
+}
+
+func (f *fakeSubagentPauseControl) isPaused(sessionID string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.paused[sessionID]
+}
+
+func (f *fakeSubagentPauseControl) pauseCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.pauses))
+	copy(out, f.pauses)
+	return out
+}
+
+func (f *fakeSubagentPauseControl) resumeCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.resumes))
+	copy(out, f.resumes)
+	return out
+}
+
+// newSubagentPauseTestStack builds the same real conversation/session
+// stack as newTestStack, plus the Pause/Resume dependencies
+// (PauseControl/Cedar/Audit). gate is nil by default (default-allow);
+// tests that need a real deny install one via api.cfg.Cedar after
+// construction — same pattern PR #331's newSubagentTestStack uses for
+// Abort/Steer.
+func newSubagentPauseTestStack(t *testing.T) (api *API, sessMgr *session.Manager, pc *fakeSubagentPauseControl, em *fakeAuditEmitter) {
+	t.Helper()
+	sessStore := session.NewMemoryStore()
+	sessMgr = session.NewManager(sessStore,
+		session.WithClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }),
+	)
+	convStore := conversation.NewMemoryStore()
+	convMgr := conversation.NewManager(convStore, sessMgr,
+		conversation.WithClock(func() time.Time { return time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC) }),
+	)
+	pc = newFakeSubagentPauseControl()
+	em = &fakeAuditEmitter{}
+	api = New(Config{
+		Conversations: convMgr,
+		Sessions:      sessMgr,
+		PauseControl:  pc,
+		Audit:         em,
+	})
+	return api, sessMgr, pc, em
+}
+
+// forbidSubagentPauseEngine installs a REAL cedar.Engine with a REAL
+// forbid rule for ActionToolSubagentPause scoped to branchID — not
+// cedar.AllowAll{}, and not an absent rule that would resolve
+// NotApplicable (which enforce() maps to nil / allow — the exact trap
+// AC-09 calls out, core/policy/cedar/hooks.go's enforce()).
+func forbidSubagentPauseEngine(t *testing.T, branchID string) *cedar.Engine {
+	t.Helper()
+	e, err := cedar.NewEngine(cedar.Options{LoadFromDisk: false, IncludeEmbedded: false})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	src := fmt.Sprintf(`forbid (
+    principal == User::"local",
+    action == Action::"tool.subagent.pause",
+    resource == SubagentBranch::"%s"
+);`, branchID)
+	if err := e.SetPolicyText("deny_pause.cedar", []byte(src)); err != nil {
+		t.Fatalf("SetPolicyText: %v", err)
+	}
+	return e
+}
+
+// TestAPI_PauseSubagent_InvalidArgs covers empty branchID.
+func TestAPI_PauseSubagent_InvalidArgs(t *testing.T) {
+	t.Parallel()
+	api, _, _, _ := newSubagentPauseTestStack(t)
+	ctx := context.Background()
+	if err := api.PauseSubagent(ctx, ""); !errors.Is(err, ErrInvalidArg) {
+		t.Errorf("PauseSubagent(\"\"): got %v, want ErrInvalidArg", err)
 	}
 }

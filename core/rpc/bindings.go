@@ -2540,6 +2540,19 @@ func (b *Bindings) Branches_ListWithBranchTree(projectID string) ([]branchesview
 	return b.api.Branches().ListWithBranchTree(b.ctx(), projectID)
 }
 
+// Subagent_Pause arms a dispatched sub-agent's turn-pause signal — it
+// finishes the turn it is currently on and starts no further turn
+// until Subagent_Resume clears the signal (subagent-control-and-
+// background-tasks-01PMZB11 UNIT-8, owner ruling E-002). NOT
+// immediate: a long turn already in flight keeps running; to stop
+// spend right now use Subagent_Abort instead. Gated by
+// cedar.ActionToolSubagentPause; idempotent against an already-paused
+// sub-agent.
+func (b *Bindings) Subagent_Pause(branchID string) error {
+	defer sentry.WrapBinding("Subagent_Pause")()
+	return b.api.Branches().PauseSubagent(b.ctx(), branchID)
+}
+
 // ── workflows (mission workflows-01KQ8TDG, v0.3.0 beta) ───────────────
 
 func (b *Bindings) Workflows_List() ([]workflowsview.Summary, error) {

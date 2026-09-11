@@ -14,6 +14,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/context/audit"
 	"github.com/kameas-ai/kenaz-harness/core/conversation"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 )
@@ -24,6 +25,36 @@ var ErrManagerUnavailable = errors.New("branches: manager unavailable")
 
 // ErrInvalidArg covers trivially invalid inputs.
 var ErrInvalidArg = errors.New("branches: invalid argument")
+
+// ErrCedarDenied is returned when a cedar gate explicitly denies
+// PauseSubagent / ResumeSubagent (subagent-control-and-background-
+// tasks-01PMZB11 UNIT-8). Wrapped, not swallowed, so callers can
+// errors.Is(err, ErrCedarDenied) — same convention PR #331's Abort/
+// Steer commits use for this package (that PR is an open, not-yet-
+// merged sibling off the same origin/main base as this branch, so its
+// copy of this sentinel does not exist here yet; expected identical
+// duplicate at merge, per CLAUDE.md's shared-file conflict-zone note).
+var ErrCedarDenied = errors.New("branches: denied by cedar policy")
+
+// ErrSubagentUnavailable is returned by PauseSubagent / ResumeSubagent
+// when Config.PauseControl was not wired (degraded boot — mirrors
+// ErrManagerUnavailable's posture for the rest of this API).
+var ErrSubagentUnavailable = errors.New("branches: subagent pause control unavailable")
+
+// SubagentPauseControl is the narrow surface PauseSubagent needs
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8). Production
+// binds this to the SAME *chat.SubagentPauseRegistry instance
+// ChatRunner.StartStream reads from (core/rpc/api.go, via
+// chatRunner.SubagentPause()) — not a second, unread registry. Pause
+// reports whether the call actually changed the pause state, which
+// PauseSubagent uses to decide whether to write an audit record
+// (idempotent re-calls write none, mirroring PR #331's Abort
+// contract). The registry backing this also has a Resume method
+// (core/rpc/views/agentgraph/chat/subagent_pause.go) that a following
+// commit adds to this interface + a ResumeSubagent method.
+type SubagentPauseControl interface {
+	Pause(sessionID string) (changed bool)
+}
 
 // BranchListBroker is the narrow publish surface the branches API needs
 // to emit session.list_changed events after a new branch session is created.
@@ -68,6 +99,17 @@ type Config struct {
 	// the zero value, which EffectiveBranchReintegrationMaxTokens
 	// already treats as "use the default".
 	Settings func() settings.Settings
+	// Cedar gates PauseSubagent / ResumeSubagent (subagent-control-and-
+	// background-tasks-01PMZB11 UNIT-8). nil default-allows (matches
+	// every other gate-hook call site in the harness —
+	// cedar.GateSubagentPause / GateSubagentResume's own nil-Gate
+	// contract), the pre-boot / test posture.
+	Cedar cedar.Gate
+	// PauseControl is the pause/resume side channel PauseSubagent /
+	// ResumeSubagent delegate to (UNIT-8). nil degrades both to
+	// ErrSubagentUnavailable — matches this file's existing
+	// degraded-boot posture rather than panicking.
+	PauseControl SubagentPauseControl
 }
 
 // API is the concrete BranchesAPI implementation.
@@ -606,6 +648,43 @@ func (a *API) SetAdvisorDismissed(ctx context.Context, sessionID string, dismiss
 			Scope:  "session",
 			Reason: "dont_suggest_again",
 		}, a.now())
+	return nil
+}
+
+// PauseSubagent arms a dispatched sub-agent's turn-pause signal
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8, owner ruling
+// E-002). Delegates to Config.PauseControl.Pause — see
+// chat.SubagentPauseRegistry / coreag.Env.TurnPause / the loop
+// executor's consult site (core/agentgraph/exec_control.go) for the
+// consumption half. This method is the branch-scoped resolver + gate +
+// audit wrapper, not a second storage mechanism.
+//
+// Idempotent: a second Pause while already paused (PauseControl.Pause
+// returns changed=false) returns nil without writing a second audit
+// record — mirrors PR #331's Abort idempotency contract.
+func (a *API) PauseSubagent(ctx context.Context, branchID string) error {
+	if a == nil || a.cfg.Conversations == nil {
+		return ErrManagerUnavailable
+	}
+	if branchID == "" {
+		return ErrInvalidArg
+	}
+	if _, gerr := cedar.GateSubagentPause(ctx, a.cfg.Cedar, branchID); gerr != nil {
+		return fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
+	}
+	br, err := a.cfg.Conversations.Get(ctx, branchID)
+	if err != nil {
+		return fmt.Errorf("branches: get branch %q: %w", branchID, err)
+	}
+	if a.cfg.PauseControl == nil {
+		return ErrSubagentUnavailable
+	}
+	if !a.cfg.PauseControl.Pause(br.ChildSessionID) {
+		// Idempotent no-op: already paused, nothing new to audit.
+		return nil
+	}
+	audit.MustEmit(ctx, a.cfg.Audit, audit.KindSubagentPaused,
+		audit.SubagentPausedPayload{BranchID: branchID}, a.now())
 	return nil
 }
 

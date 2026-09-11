@@ -201,8 +201,23 @@ const (
 	//   ActionToolSubagentMerge — gates explicit __subagent_merge(branch_id)
 	//     calls (MergePolicyManual path). Default-allow; admins can deny
 	//     to prevent the parent from absorbing a worker's output.
+	//
+	//   ActionToolSubagentPause — gates Subagent_Pause
+	//     (subagent-control-and-background-tasks-01PMZB11 UNIT-8, owner
+	//     ruling E-002: pause means "stop after the current turn, start
+	//     no further turn"). Resource UID: SubagentBranch::"<branch-id>"
+	//     — same family PR #331's Subagent_Abort/Subagent_Steer already
+	//     use for that entity type. Note: PR #331 (Abort/Steer) is an
+	//     OPEN, not-yet-merged PR off this same origin/main base, so
+	//     ActionToolSubagentAbort/Steer are not yet declared here;
+	//     EntityTypeSubagentBranch and SubagentBranchUID below ARE
+	//     declared here (Pause/Resume need them too) and are expected to
+	//     be identical duplicates of PR #331's copy at merge time
+	//     (CLAUDE.md shared-file conflict zone — resolve additively,
+	//     keep one copy).
 	ActionToolSubagentDispatch = "tool.subagent.dispatch"
 	ActionToolSubagentMerge    = "tool.subagent.merge"
+	ActionToolSubagentPause    = "tool.subagent.pause"
 
 	// ── Model-side secret reference action family ──────────────────────────
 	// Introduced by mission model-secret-references-01KW7M5A.
@@ -512,6 +527,16 @@ const (
 	// ruling G-7) for the ContextSync purge action family. Resource UIDs
 	// take the shape Project::"<project-id>".
 	EntityTypeProject = "Project"
+
+	// EntityTypeSubagentBranch is the Cedar entity type for a dispatched
+	// sub-agent's branch row. Introduced by mission
+	// subagent-control-and-background-tasks-01PMZB11 (UNIT-8) for the
+	// Abort / Steer / Pause / Resume control-verb gates. Resource UIDs
+	// take the shape SubagentBranch::"<branch-id>" — the SAME branch id
+	// core/rpc/views/branches.Branch.ID already carries, not a separate
+	// task or session id, so a policy author can target one dispatched
+	// sub-agent without needing to know its backing task id.
+	EntityTypeSubagentBranch = "SubagentBranch"
 
 	// PrincipalLocal is the canonical EntityUID id for the single
 	// local user. The harness is single-user / privacy-first
@@ -998,4 +1023,18 @@ func ProjectUID(id string) cedar.EntityUID {
 		safeID = invalidUIDID
 	}
 	return cedar.NewEntityUID(EntityTypeProject, cedar.String(safeID))
+}
+
+// SubagentBranchUID builds a Cedar EntityUID for the SubagentBranch family
+// introduced by mission subagent-control-and-background-tasks-01PMZB11
+// (UNIT-8), gating Subagent_Abort / Subagent_Steer / Subagent_Pause /
+// Subagent_Resume. branchID is the core/rpc/views/branches.Branch.ID
+// primary key. Malformed ids are replaced with "invalid" so the
+// resulting UID never satisfies a real permit.
+func SubagentBranchUID(branchID string) cedar.EntityUID {
+	safeID := branchID
+	if !validateFamilyID(branchID) {
+		safeID = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeSubagentBranch, cedar.String(safeID))
 }

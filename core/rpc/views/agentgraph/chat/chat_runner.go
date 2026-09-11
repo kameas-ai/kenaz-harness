@@ -377,6 +377,23 @@ type Config struct {
 	// a second, drifting registry.
 	SubagentBudgets *SubagentBudgetRegistry
 
+	// SubagentPause is the session-keyed side channel
+	// core/rpc/views/branches.API.PauseSubagent/ResumeSubagent write
+	// into (subagent-control-and-background-tasks-01PMZB11 UNIT-8,
+	// owner ruling E-002). StartStream wires a gate backed by this
+	// registry onto every Env's TurnPause field — see
+	// core/agentgraph/executor.go's Env.TurnPause doc. nil (or an entry
+	// this session never has) means the run never pauses — today's
+	// behaviour for every interactive session and for any build that
+	// hasn't wired this registry.
+	//
+	// Constructed once (New) and shared with the SAME instance
+	// core/rpc/views/branches.Config.PauseControl wraps — see
+	// SubagentPause() below, mirroring SubagentBudgets()'s accessor
+	// shape so core/rpc's wiring obtains the pointer without a second,
+	// drifting registry.
+	SubagentPause *SubagentPauseRegistry
+
 	// Confirm is the confirm-each pause registry
 	// (confirm-each-enforcement-01PMAG05 WP02). It MUST be the same
 	// *toolloop.ConfirmBus instance the confirm RPC view resolves
@@ -1168,6 +1185,15 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 			applyBudgetTierDial(applyTokenCeilingKnob(graph.Budget, resolvedKnobs), resolvedKnobs.EffectiveTier),
 			subagentBudget, hasSubagentBudget,
 		),
+		// TurnPause (subagent-control-and-background-tasks-01PMZB11
+		// UNIT-8, owner ruling E-002): wired unconditionally, mirroring
+		// how Budget is wired unconditionally above — sessionTurnPauseGate
+		// and its backing SubagentPauseRegistry are both nil-receiver-safe,
+		// so this is a no-op Wait for every interactive session and for
+		// any build that hasn't wired r.cfg.SubagentPause. A spawned
+		// sub-agent's child session id only ever has an entry once
+		// Subagent_Pause is actually called against its branch.
+		TurnPause: sessionTurnPauseGate{reg: r.cfg.SubagentPause, sessionID: sessionID},
 		// AutoCompaction is the growth watermark in front of the
 		// kernel's own automatic pre_call site
 		// (turn-context-runway-01PMAG03 WP02).
@@ -2072,6 +2098,20 @@ func (r *ChatRunner) SubagentBudgets() *SubagentBudgetRegistry {
 		return nil
 	}
 	return r.cfg.SubagentBudgets
+}
+
+// SubagentPause returns the registry StartStream wires onto every Env's
+// TurnPause field, so core/rpc/views/branches's Subagent_Pause /
+// Subagent_Resume wiring can obtain the SAME instance to write into
+// rather than constructing a second, unread one (subagent-control-and-
+// background-tasks-01PMZB11 UNIT-8). Safe to call on a nil ChatRunner
+// or before Config.SubagentPause is set — both return nil, and every
+// SubagentPauseRegistry method is nil-receiver-safe.
+func (r *ChatRunner) SubagentPause() *SubagentPauseRegistry {
+	if r == nil {
+		return nil
+	}
+	return r.cfg.SubagentPause
 }
 
 // askOnAmbiguityNeverDefaultAnswer is the stated assumption an AskNode

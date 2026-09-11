@@ -2686,6 +2686,22 @@ func New(c *core.Core, opts ...Option) *API {
 			}
 			return s
 		},
+		// subagent-control-and-background-tasks-01PMZB11 UNIT-8:
+		// PauseSubagent/ResumeSubagent need a Cedar gate (same
+		// accessor every other gate-hook call site in this file
+		// uses) and the SAME SubagentPauseRegistry instance
+		// StartStream reads from -- obtained through
+		// stack.chatRunner.SubagentPause() rather than constructing
+		// a second, unread registry (mirrors BudgetOverrides:
+		// stack.chatRunner.SubagentBudgets() at this file's
+		// SetRunSpawner call site above). stack.chatRunner is
+		// constructed earlier in this function (newLLMStack); a nil
+		// chatRunner (degraded boot) makes SubagentPause() return
+		// nil, which degrades Pause/Resume to ErrSubagentUnavailable
+		// -- the same posture every other nil-dependency branch in
+		// this Config takes.
+		Cedar:        a.cedarGate(),
+		PauseControl: stack.chatRunner.SubagentPause(),
 	})
 
 	// Agent-graph view surface — graph manager already built above so
@@ -6460,6 +6476,16 @@ func buildChatRunner(
 		// (Set/Get/Clear are all nil-receiver-safe), so this is the one
 		// place that must not be left unset.
 		SubagentBudgets: chat.NewSubagentBudgetRegistry(),
+		// subagent-control-and-background-tasks-01PMZB11 UNIT-8: same
+		// shape and same reasoning as SubagentBudgets immediately
+		// above — constructed once here so core/rpc/views/branches's
+		// PauseSubagent/ResumeSubagent (wired below, at the
+		// branchesview.New call site) write into the SAME instance
+		// StartStream reads via chatRunner.SubagentPause(). nil would
+		// silently make Subagent_Pause a no-op (Pause/Resume/Wait are
+		// all nil-receiver-safe), so this is the one place that must
+		// not be left unset.
+		SubagentPause: chat.NewSubagentPauseRegistry(),
 		// trust-surfaces-that-fire-01PMZ202 WP19: without these three,
 		// driveRun's `if r.cfg.SecretLookup != nil` guard never fires,
 		// so refs.WithResolver / refs.WithTurnSanitizer are never
