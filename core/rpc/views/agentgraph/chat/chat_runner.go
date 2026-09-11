@@ -1042,9 +1042,23 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// resolved knobs and the tool catalog); the journal needs the
 	// bridge, which needs the sub id. Attaching afterwards keeps the
 	// construction order honest — the adapters hold pointers.
-	journal := newTurnJournal(r.cfg.HistoryWriter, bridge.Emit, sessionID, turnSpanID)
+	// r.cfg.UsageHook is threaded straight in (fix/usage-persists-on-
+	// every-move): the journal fires it directly for every persisted
+	// assistant-role row, final included (see moves.go's file header).
+	// Nil is fine — records() / fireUsage both nil-check before doing
+	// anything.
+	journal := newTurnJournal(r.cfg.HistoryWriter, bridge.Emit, sessionID, turnSpanID, r.cfg.UsageHook)
 	llmAdapter.WithMoveJournal(journal)
 	toolAdapter.withMoves(journal)
+	// Round 3 (fix/usage-persists-on-every-move): no separate wiring
+	// needed here for the revised-final case any more. LLMProviderAdapter
+	// .Generate calls journal.RecordCandidateUsage unconditionally for
+	// every fire with non-empty text — chat move or not — the instant
+	// each call's own response is computed, so AppendEntry can look up
+	// whichever call actually authored the persisted text by content,
+	// instead of reading a single mutable "last response" slot that
+	// exit_gate's own always-runs-last verdict call would otherwise own.
+	// See moves.go's RecordCandidateUsage / AppendEntry doc comments.
 	// env.HistoryWriter stays nil when nothing was configured, so
 	// applyEnvDefaults installs the kernel's ErrNoHistoryWriter stub and
 	// session_write still fails loudly. Interposing the journal there
@@ -1231,12 +1245,42 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		}
 		capturedAdapter := llmAdapter
 		capturedSessionID := sessionID
-		if r.cfg.UsageHook != nil {
+		capturedJournal := journal
+		// fix/usage-persists-on-every-move, rounds 2+3: gated on
+		// !journal.records(). For every ordinary turn (a resolved span —
+		// the overwhelming majority) turnJournal.AppendEntry now fires
+		// usage for the final row itself (see moves.go). Registering
+		// THIS callback too would fire a SECOND write for the same row,
+		// and it would run AFTER the journal's own write (this hook
+		// fires once AppendEntry returns to sessionWriteExecutor), so it
+		// would silently overwrite the right value with whatever it
+		// found. journal.records() is false only for the degenerate
+		// no-user-message-to-span-from case, where the journal writes
+		// everything classic and never calls fireUsage itself — this
+		// registration is that case's only usage writer.
+		//
+		// It sources usage via capturedJournal.LookupCandidateUsage, NOT
+		// capturedAdapter.LastResponse() — RecordCandidateUsage runs
+		// unconditionally in Generate regardless of records(), so even
+		// an inert journal has the same content-matched history
+		// AppendEntry uses, and needs it for the same structural reason:
+		// on the ROUTED graph, exit_gate's own verdict call is ALWAYS
+		// the last Generate() before this hook fires, degenerate journal
+		// or not, so a "last response" read would ALWAYS be the gate's
+		// usage here too. There is no reader of LastResponse() left
+		// anywhere on the usage-firing path.
+		if r.cfg.UsageHook != nil && !journal.records() {
 			usageHook := r.cfg.UsageHook
-			env.Hooks.RegisterPostHook(coreag.HookPostLLM, func(ctx context.Context, sID, messageID, _ string) {
-				resp := capturedAdapter.LastResponse()
-				providerKind := capturedAdapter.ProviderKind()
-				modelID := capturedAdapter.ActiveModelID()
+			env.Hooks.RegisterPostHook(coreag.HookPostLLM, func(ctx context.Context, sID, messageID, text string) {
+				resp, providerKind, modelID, ok := capturedJournal.LookupCandidateUsage(text)
+				if !ok {
+					// No recorded Generate() call produced this exact
+					// text — nothing to attribute usage to. Safer to
+					// skip than to guess.
+					logging.L().Warn("chat.usage.no_candidate_match",
+						"session_id", capturedSessionID, "message_id", messageID)
+					return
+				}
 				usageHook(ctx, capturedSessionID, messageID, providerKind, modelID, resp)
 			})
 		}
