@@ -2105,7 +2105,13 @@ func New(c *core.Core, opts ...Option) *API {
 	a.secretsAPI = secretsview.NewAPI(a.exposureIdx)
 	logging.L().Info("rpc.boot.exposure_index_created")
 
-	hooksRunner, hookRegistry, hookBuiltins, hookRunnerImpl := newHooksStack(c, retriever, memStore, embedder)
+	// finding #71: constructed empty and backfilled with the real MCP
+	// dispatch pool once newLLMStack builds it (see the a.dispatchPool =
+	// stack.dispatchPool assignment below) — hooks_mcp_invoker.go's
+	// mcpHookInvokerAdapter doc explains why the ordering forces a
+	// backfill rather than a constructor argument here.
+	hookMCPInvoker := &mcpHookInvokerAdapter{}
+	hooksRunner, hookRegistry, hookBuiltins, hookRunnerImpl := newHooksStack(c, retriever, memStore, embedder, hookMCPInvoker)
 	// WP06 / UNIT-5: hold the concrete *hooks.Runner on the stack (see the
 	// a.hookRunner field doc) so future WPs can construct the three hook
 	// adapters without re-plumbing through api.New.
@@ -2379,6 +2385,15 @@ func New(c *core.Core, opts ...Option) *API {
 	a.confirmAPI = confirmview.New(confirmview.Config{Bus: stack.confirmBus})
 	a.stdioPool = stack.pool
 	a.dispatchPool = stack.dispatchPool
+	// finding #71: backfill the hooks MCP invoker now that the live pool
+	// exists — see hookMCPInvoker's construction comment above (near
+	// newHooksStack) and hooks_mcp_invoker.go for why this can't be a
+	// constructor argument. This is the SAME *dispatch.Pool that
+	// c.SetMCP(a.dispatchPool) (below) hands to core.Core, so a kind=mcp
+	// hook dispatch and core.Core.Shutdown's MCP teardown share one pool
+	// instance — see mcpHookInvokerAdapter.InvokeTool's doc for the
+	// shutdown-race analysis.
+	hookMCPInvoker.setPool(stack.dispatchPool)
 	a.builtins = stack.builtins
 	// harness-self-attach-01PMHS01 UNIT-4: hold the merged resolver
 	// newLLMStack constructed so tests can exercise the actual
@@ -8249,11 +8264,22 @@ func (a *corpusEmbedderAdapter) Embed(ctx context.Context, texts []string) ([][]
 // llm.HookRunner interface — can be constructed by callers. Before this,
 // the *hooks.Runner was trapped inside the unexported hooksRunnerAdapter.r
 // field and unreachable anywhere else in the binary (WP06 / UNIT-5, R-07).
+//
+// mcpInvoker (finding #71) wires kind=mcp lifecycle hooks onto the live
+// MCP dispatch pool. It is passed in — rather than constructed here —
+// because newHooksStack runs before the pool exists (newLLMStack builds
+// it afterward); the caller backfills the adapter's pool once
+// newLLMStack returns (see hooks_mcp_invoker.go's mcpHookInvokerAdapter
+// doc). A nil mcpInvoker (e.g. the WP06 reachability test's direct call
+// with memStore==nil) leaves hooks.Config.MCP nil, same as before this
+// fix — kind=mcp hooks fail loudly with "not configured" rather than
+// panicking.
 func newHooksStack(
 	c *core.Core,
 	retriever *corememory.Retriever,
 	memStore corememory.Store,
 	embedder corememory.Embedder,
+	mcpInvoker hooks.MCPInvoker,
 ) (llm.HookRunner, *hooks.Registry, *hooks.BuiltinRegistry, *hooks.Runner) {
 	if memStore == nil {
 		return nil, nil, nil, nil
@@ -8275,6 +8301,7 @@ func newHooksStack(
 	runner := hooks.NewRunner(hooks.Config{
 		Registry: registry,
 		Builtins: builtins,
+		MCP:      mcpInvoker,
 	})
 	return &hooksRunnerAdapter{r: runner}, registry, builtins, runner
 }
