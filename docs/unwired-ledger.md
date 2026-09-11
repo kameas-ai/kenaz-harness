@@ -428,9 +428,38 @@ review-nit follow-up (see the "CLOSED (same PR...)" note above): leg (a)
 now requires the enclosing function of each matched fire site to have a
 non-test caller (one hop), with
 `TestHookEventFireSitesGate_PlantedDeadEnclosingFunctionFires` as the
-planted-violation proof. Full transitive call-graph reachability (a
-caller that is itself unreachable, or invocation through an interface/
-closure/reflection) remains open and is not this entry's scope.
+planted-violation proof.
+
+What remains open, stated with the same specificity the four dead events
+above get, because a generic "remains open" is the shape this entry exists
+to correct:
+
+- **Name collision — the one that still bites.** `one_hop_reachable` finds
+  callers textually (`.Name(` / `Name(`). Go does not require method names
+  to be unique across receivers, so a dead fire site inside a method whose
+  name is shared with ANY called method elsewhere in `core/` still reads as
+  reachable. Reproduced 2026-09-10 by the review: a plant inside
+  `(d *zzCollisionProbeDead) Validate()` — colliding with ~66 `Validate()`
+  declarations, 29 with real call sites — passes BOTH the pre-fix and the
+  one-hop gate. For that class this commit buys nothing. It does not affect
+  the 7 currently-firing events: each resolves through a distinctively named
+  enclosing method (`RunPostSend`, `FirePreToolUse`, `FirePostToolUse`,
+  `FirePermissionRequest`, `FirePermissionDenied`, `FireSessionStart`), each
+  directly verified to have a real production caller — no verdict rests on
+  an incidental match. **Blocker:** disambiguating requires correlating the
+  caller-side receiver's static type, which grep/awk cannot do reliably
+  (aliasing, embedding, interface satisfaction); it is a Go/packages job of
+  the same order as the hop-two work, not a regex tweak. **Owner: alec.
+  Date: 2026-09-10.**
+- Hop two (a caller that is itself dead), and invocation through an
+  interface, a stored closure, or reflection. Same blocker, same owner.
+
+Closures nested one level inside a named function are NOT affected: the
+awk "last `^func ` at column 0" heuristic attributes them to the enclosing
+declaration, which is why `post_send`'s fire site (inside the
+`postSendHookFn` closure) correctly resolves to `buildChatRunner`, called
+at `core/rpc/api.go:5475`. That is a structural property of Go syntax, not
+a coincidence of this case.
 
 ### 2026-09-09 (vm-execution-surface-truth-01PMZD14 WP05) · `approvalGateFrom` — HV-01, no `PromptSurface` variant for a model call
 
