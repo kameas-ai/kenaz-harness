@@ -124,10 +124,10 @@ type CommitReintegrationOptions struct {
 
 // BranchStatus + ChildRunStatus is the wire shape for GetBranchStatus.
 type BranchStatus struct {
-	Branch          Branch `json:"branch"`
-	ChildSessionID  string `json:"childSessionId"`
-	HasInflightRun  bool   `json:"hasInflightRun"`
-	LastActivityAt  string `json:"lastActivityAt,omitempty"`
+	Branch           Branch `json:"branch"`
+	ChildSessionID   string `json:"childSessionId"`
+	HasInflightRun   bool   `json:"hasInflightRun"`
+	LastActivityAt   string `json:"lastActivityAt,omitempty"`
 	LastAssistantMsg string `json:"lastAssistantMessage,omitempty"`
 }
 
@@ -207,6 +207,26 @@ type BranchesAPI interface {
 	// once per call (message text itself is never in the audit
 	// payload — see SubagentSteeredPayload).
 	SteerSubagent(ctx context.Context, branchID, message string) error
+
+	// PauseSubagent arms a dispatched sub-agent's turn-pause signal
+	// (subagent-control-and-background-tasks-01PMZB11 UNIT-8, owner
+	// ruling E-002): the run finishes whatever turn it is currently on
+	// and starts no further turn until ResumeSubagent clears the
+	// signal. NOT immediate — a long turn already in flight keeps
+	// running; a caller wanting to stop spend right now wants
+	// AbortSubagent, not this. Gated by cedar.ActionToolSubagentPause
+	// and audited once per call that actually arms the signal (a
+	// second Pause while already paused is a no-op, writes no
+	// additional audit record).
+	PauseSubagent(ctx context.Context, branchID string) error
+
+	// ResumeSubagent clears a dispatched sub-agent's turn-pause signal
+	// so its next turn begins again (UNIT-8). Gated by
+	// cedar.ActionToolSubagentResume and audited once per call that
+	// actually clears an armed signal (Resume on a branch that was
+	// never paused, or already resumed, is a no-op, writes no
+	// additional audit record).
+	ResumeSubagent(ctx context.Context, branchID string) error
 }
 
 // fmtTime renders a time.Time as RFC3339Nano UTC, returning "" for the

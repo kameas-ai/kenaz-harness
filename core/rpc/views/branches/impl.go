@@ -28,10 +28,10 @@ var ErrManagerUnavailable = errors.New("branches: manager unavailable")
 var ErrInvalidArg = errors.New("branches: invalid argument")
 
 // ErrCedarDenied is returned when a cedar gate explicitly denies
-// AbortSubagent / SteerSubagent (subagent-control-and-background-tasks-
-// 01PMZB11 UNIT-8). Wrapped, not swallowed, so callers can
-// errors.Is(err, ErrCedarDenied) — same convention as
-// core/rpc/views/scheduledchat.ErrCedarDenied.
+// AbortSubagent / SteerSubagent / PauseSubagent / ResumeSubagent
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8). Wrapped, not
+// swallowed, so callers can errors.Is(err, ErrCedarDenied) — same
+// convention as core/rpc/views/scheduledchat.ErrCedarDenied.
 var ErrCedarDenied = errors.New("branches: denied by cedar policy")
 
 // ErrSubagentUnavailable is returned by AbortSubagent / SteerSubagent
@@ -61,6 +61,35 @@ type SubagentTaskRegistry interface {
 // package does not need to import agentgraph's full surface.
 type SubagentTaskLookup interface {
 	TaskIDForBranch(branchID string) (string, bool)
+}
+
+// ErrSubagentPauseUnavailable is returned by PauseSubagent /
+// ResumeSubagent when Config.PauseControl was not wired (degraded
+// boot — mirrors ErrManagerUnavailable's posture for the rest of this
+// API).
+//
+// Named with the "Pause" infix (not the bare ErrSubagentUnavailable)
+// to avoid a same-package collision with ErrSubagentUnavailable above,
+// which guards a different degraded-boot condition (an unset task
+// registry / lookup, message "branches: subagent task tracking
+// unavailable") on the Abort/Steer surface. Both sentinels return
+// unwrapped through Subagent_Pause/Subagent_Resume and Subagent_Abort
+// to the Wails caller, so collapsing them to one literal would have
+// silently mislabeled one feature's degraded-boot error.
+var ErrSubagentPauseUnavailable = errors.New("branches: subagent pause control unavailable")
+
+// SubagentPauseControl is the narrow surface PauseSubagent /
+// ResumeSubagent need (subagent-control-and-background-tasks-01PMZB11
+// UNIT-8). Production binds this to the SAME
+// *chat.SubagentPauseRegistry instance ChatRunner.StartStream reads
+// from (core/rpc/api.go, via chatRunner.SubagentPause()) — not a
+// second, unread registry. Both methods report whether the call
+// actually changed the pause state, which PauseSubagent/ResumeSubagent
+// use to decide whether to write an audit record (idempotent re-calls
+// write none, mirroring Abort's contract).
+type SubagentPauseControl interface {
+	Pause(sessionID string) (changed bool)
+	Resume(sessionID string) (changed bool)
 }
 
 // BranchListBroker is the narrow publish surface the branches API needs
@@ -116,11 +145,17 @@ type Config struct {
 	// core/rpc/api.go threads through EnvDeps.Branch (a.branchSeam) —
 	// not a second lookup path. nil degrades the same as Tasks == nil.
 	TaskLookup SubagentTaskLookup
-	// Cedar gates AbortSubagent / SteerSubagent. nil default-allows
-	// (matches every other gate-hook call site in the harness —
-	// cedar.GateSubagentAbort / GateSubagentSteer's own nil-Gate
-	// contract), the pre-boot / test posture.
+	// Cedar gates AbortSubagent / SteerSubagent / PauseSubagent /
+	// ResumeSubagent. nil default-allows (matches every other gate-hook
+	// call site in the harness — cedar.GateSubagentAbort /
+	// GateSubagentSteer / GateSubagentPause / GateSubagentResume's own
+	// nil-Gate contract), the pre-boot / test posture.
 	Cedar cedar.Gate
+	// PauseControl is the pause/resume side channel PauseSubagent /
+	// ResumeSubagent delegate to (UNIT-8). nil degrades both to
+	// ErrSubagentPauseUnavailable — matches this file's existing
+	// degraded-boot posture rather than panicking.
+	PauseControl SubagentPauseControl
 }
 
 // API is the concrete BranchesAPI implementation.
@@ -731,6 +766,76 @@ func (a *API) SteerSubagent(ctx context.Context, branchID, message string) error
 	}
 	audit.MustEmit(ctx, a.cfg.Audit, audit.KindSubagentSteered,
 		audit.SubagentSteeredPayload{BranchID: branchID, MessageLength: utf8.RuneCountInString(message)}, a.now())
+	return nil
+}
+
+// PauseSubagent arms a dispatched sub-agent's turn-pause signal
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8, owner ruling
+// E-002). Delegates to Config.PauseControl.Pause — see
+// chat.SubagentPauseRegistry / coreag.Env.TurnPause / the loop
+// executor's consult site (core/agentgraph/exec_control.go) for the
+// consumption half. This method is the branch-scoped resolver + gate +
+// audit wrapper, not a second storage mechanism.
+//
+// Idempotent: a second Pause while already paused (PauseControl.Pause
+// returns changed=false) returns nil without writing a second audit
+// record — mirrors Abort's idempotency contract.
+func (a *API) PauseSubagent(ctx context.Context, branchID string) error {
+	if a == nil || a.cfg.Conversations == nil {
+		return ErrManagerUnavailable
+	}
+	if branchID == "" {
+		return ErrInvalidArg
+	}
+	if _, gerr := cedar.GateSubagentPause(ctx, a.cfg.Cedar, branchID); gerr != nil {
+		return fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
+	}
+	br, err := a.cfg.Conversations.Get(ctx, branchID)
+	if err != nil {
+		return fmt.Errorf("branches: get branch %q: %w", branchID, err)
+	}
+	if a.cfg.PauseControl == nil {
+		return ErrSubagentPauseUnavailable
+	}
+	if !a.cfg.PauseControl.Pause(br.ChildSessionID) {
+		// Idempotent no-op: already paused, nothing new to audit.
+		return nil
+	}
+	audit.MustEmit(ctx, a.cfg.Audit, audit.KindSubagentPaused,
+		audit.SubagentPausedPayload{BranchID: branchID}, a.now())
+	return nil
+}
+
+// ResumeSubagent clears a dispatched sub-agent's turn-pause signal so
+// its next turn begins again (UNIT-8). Mirrors PauseSubagent's shape;
+// delegates to Config.PauseControl.Resume.
+//
+// Idempotent: Resume against a branch that was never paused, or
+// already resumed (PauseControl.Resume returns changed=false), returns
+// nil without writing a second audit record.
+func (a *API) ResumeSubagent(ctx context.Context, branchID string) error {
+	if a == nil || a.cfg.Conversations == nil {
+		return ErrManagerUnavailable
+	}
+	if branchID == "" {
+		return ErrInvalidArg
+	}
+	if _, gerr := cedar.GateSubagentResume(ctx, a.cfg.Cedar, branchID); gerr != nil {
+		return fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
+	}
+	br, err := a.cfg.Conversations.Get(ctx, branchID)
+	if err != nil {
+		return fmt.Errorf("branches: get branch %q: %w", branchID, err)
+	}
+	if a.cfg.PauseControl == nil {
+		return ErrSubagentPauseUnavailable
+	}
+	if !a.cfg.PauseControl.Resume(br.ChildSessionID) {
+		// Idempotent no-op: was not paused, nothing new to audit.
+		return nil
+	}
+	audit.MustEmit(ctx, a.cfg.Audit, audit.KindSubagentResumed,
+		audit.SubagentResumedPayload{BranchID: branchID}, a.now())
 	return nil
 }
 

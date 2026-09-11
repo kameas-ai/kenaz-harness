@@ -574,6 +574,34 @@ const (
 	// evidence THAT a steer happened and WHEN, not a second copy of
 	// WHAT was said.
 	KindSubagentSteered Kind = "subagent.steered"
+
+	// Sub-agent Pause/Resume audit kinds (subagent-control-and-
+	// background-tasks-01PMZB11 UNIT-8, AC-09/owner ruling C-5: a
+	// control verb that mutates a running agent is trust-relevant, so
+	// it is recorded, not silent). Mirror the shape of PR #331's
+	// KindSubagentAborted/KindSubagentSteered (Abort/Steer, same
+	// mission).
+	//
+	// Both fire exactly once per verb call that actually changed the
+	// pause state — NOT once per call. A no-op Pause against an
+	// already-paused branch, or a no-op Resume against a branch that
+	// was never paused, writes zero additional records (AC-09's "one
+	// audit record, not two", mirrored from Abort's idempotency
+	// contract).
+
+	// KindSubagentPaused fires when Subagent_Pause actually arms the
+	// pause signal for a dispatched sub-agent's child session (i.e. the
+	// branch was not already paused).
+	//
+	// Privacy invariant: only ids — no transcript content, no tool
+	// arguments, no LLM output — crosses the audit boundary.
+	KindSubagentPaused Kind = "subagent.paused"
+
+	// KindSubagentResumed fires when Subagent_Resume actually clears an
+	// armed pause signal (i.e. the branch was paused).
+	//
+	// Privacy invariant: ids only, same as KindSubagentPaused.
+	KindSubagentResumed Kind = "subagent.resumed"
 )
 
 // ToolConfirmPath names which branch of the confirm-each dispatch path
@@ -1746,4 +1774,22 @@ type SubagentSteeredPayload struct {
 	BranchID string `json:"branch_id"`
 	// MessageLength is the appended steering message's rune count.
 	MessageLength int `json:"message_length"`
+}
+
+// SubagentPausedPayload is the audit payload for KindSubagentPaused
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8).
+//
+// Privacy invariant: ids only — no transcript content.
+type SubagentPausedPayload struct {
+	// BranchID is the paused sub-agent's branch row id.
+	BranchID string `json:"branch_id"`
+}
+
+// SubagentResumedPayload is the audit payload for KindSubagentResumed
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8).
+//
+// Privacy invariant: ids only — no transcript content.
+type SubagentResumedPayload struct {
+	// BranchID is the resumed sub-agent's branch row id.
+	BranchID string `json:"branch_id"`
 }

@@ -215,10 +215,21 @@ const (
 	//     Resource UID: SubagentBranch::"<branch-id>". Default-allow;
 	//     policy authors can forbid steering a specific branch or all
 	//     sub-agent branches.
+	//
+	//   ActionToolSubagentPause — gates Subagent_Pause (owner ruling
+	//     E-002: pause means "stop after the current turn, start no
+	//     further turn"). Resource UID: SubagentBranch::"<branch-id>" —
+	//     same family as Abort/Steer above.
+	//
+	//   ActionToolSubagentResume — gates Subagent_Resume, clearing the
+	//     pause signal ActionToolSubagentPause arms so turns begin again
+	//     (UNIT-8). Same resource UID family as Pause.
 	ActionToolSubagentDispatch = "tool.subagent.dispatch"
 	ActionToolSubagentMerge    = "tool.subagent.merge"
 	ActionToolSubagentAbort    = "tool.subagent.abort"
 	ActionToolSubagentSteer    = "tool.subagent.steer"
+	ActionToolSubagentPause    = "tool.subagent.pause"
+	ActionToolSubagentResume   = "tool.subagent.resume"
 
 	// ── Model-side secret reference action family ──────────────────────────
 	// Introduced by mission model-secret-references-01KW7M5A.
@@ -532,8 +543,8 @@ const (
 	// EntityTypeSubagentBranch is the Cedar entity type for a dispatched
 	// sub-agent's branch row. Introduced by mission
 	// subagent-control-and-background-tasks-01PMZB11 (UNIT-8) for the
-	// Abort / Steer control-verb gates. Resource UIDs take the shape
-	// SubagentBranch::"<branch-id>" — the SAME branch id
+	// Abort / Steer / Pause / Resume control-verb gates. Resource UIDs
+	// take the shape SubagentBranch::"<branch-id>" — the SAME branch id
 	// core/rpc/views/branches.Branch.ID already carries, not a separate
 	// task or session id, so a policy author can target one dispatched
 	// sub-agent without needing to know its backing task id.
@@ -914,20 +925,6 @@ func ScheduledChatRunUID(id string) cedar.EntityUID {
 	return cedar.NewEntityUID(EntityTypeScheduledChatRun, cedar.String(safeID))
 }
 
-// SubagentBranchUID builds a Cedar EntityUID for the SubagentBranch family
-// introduced by mission subagent-control-and-background-tasks-01PMZB11
-// (UNIT-8), gating Subagent_Abort / Subagent_Steer. branchID is the
-// core/rpc/views/branches.Branch.ID primary key. Malformed ids are
-// replaced with "invalid" so the resulting UID never satisfies a real
-// permit.
-func SubagentBranchUID(branchID string) cedar.EntityUID {
-	safeID := branchID
-	if !validateFamilyID(branchID) {
-		safeID = invalidUIDID
-	}
-	return cedar.NewEntityUID(EntityTypeSubagentBranch, cedar.String(safeID))
-}
-
 // SecretReferenceUID builds a Cedar EntityUID for the SecretReference family
 // introduced by mission model-secret-references-01KW7M5A (WP02). locator is
 // the keychain locator string (e.g. "user:example-api-token",
@@ -1038,4 +1035,18 @@ func ProjectUID(id string) cedar.EntityUID {
 		safeID = invalidUIDID
 	}
 	return cedar.NewEntityUID(EntityTypeProject, cedar.String(safeID))
+}
+
+// SubagentBranchUID builds a Cedar EntityUID for the SubagentBranch family
+// introduced by mission subagent-control-and-background-tasks-01PMZB11
+// (UNIT-8), gating Subagent_Abort / Subagent_Steer / Subagent_Pause /
+// Subagent_Resume. branchID is the core/rpc/views/branches.Branch.ID
+// primary key. Malformed ids are replaced with "invalid" so the
+// resulting UID never satisfies a real permit.
+func SubagentBranchUID(branchID string) cedar.EntityUID {
+	safeID := branchID
+	if !validateFamilyID(branchID) {
+		safeID = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeSubagentBranch, cedar.String(safeID))
 }

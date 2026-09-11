@@ -763,6 +763,26 @@ func (loopExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 	var adaptedLast bool
 iterLoop:
 	for iter = 0; iter < a.MaxIterations; iter++ {
+		// subagent-control-and-background-tasks-01PMZB11 UNIT-8 (owner
+		// ruling E-002): consult the turn-pause gate BEFORE beginning
+		// this iteration — i.e. before starting a new turn. Checked
+		// first, ahead of the condition below, so a pause issued before
+		// the run's very first turn (iter==0) holds it too. A nil gate
+		// (every Kernel.Run caller except a dispatched sub-agent run)
+		// never blocks. Whatever turn already completed stays completed
+		// — this only gates the NEXT one, which is the whole point: "the
+		// sub-agent finishes the turn it is on and starts no further
+		// turn" (spec.md §13 E-002), not an immediate mid-turn stop
+		// (that's Abort, PR #331, via ctx cancellation — which is also
+		// what unblocks a Wait call here if the paused run is aborted).
+		if env.TurnPause != nil {
+			if err := env.TurnPause.Wait(ctx); err != nil {
+				logging.L().Info("agentgraph.loop.turn_pause.unblocked_by_err",
+					"run_id", env.RunID, "node_id", node.ID, "iter", iter,
+					"err", err.Error())
+				return res, err
+			}
+		}
 		// Optional condition stops early when the body's outputs no
 		// longer satisfy it.
 		if a.Condition != "" && iter > 0 && !adaptedLast {
