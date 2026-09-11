@@ -1178,24 +1178,15 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			file:       "core/rpc/bindings.go",
 			append:     "\nfunc (bnd *Bindings) Zz_Injected() {}\n",
 		},
-		{
-			// served-mode-is-a-real-mode-01PMZ707 WP07, AC-717 + CLAUDE.md's
-			// gate-extension rule. check-serve-dispatch-drift.sh's
-			// read_allowlist() strips every comment and treats the file as
-			// a flat name list — it has never known about classification,
-			// so a WP07 that reclassified 416 entries and relied on that
-			// gate alone would have shipped a taxonomy nothing enforces.
-			// This plants an entry under an untriaged reason paragraph that
-			// names neither a date nor an owner — the exact shape 419
-			// entries were in before this WP, now caught before promotion
-			// rather than ageing silently the way the file's own prior
-			// bulk note did.
-			name:       "serve-gap-classification/untriaged-entry-missing-date-and-owner",
-			wantOutput: "Zz_Injected",
-			gate:       "check-serve-gap-classification.sh",
-			file:       "scripts/ci/allowlists/i15-serve-dispatch-gap.txt",
-			append:     "# No date or owner mentioned anywhere in this reason.\n\"Zz_Injected\"\n",
-		},
+		// serve-gap-classification/untriaged-entry-missing-date-and-owner
+		// used to live here as a table case using the shared plant()
+		// helper's EOF-append semantics. That only proved the gate could
+		// fail while the allowlist's LAST section happened to be
+		// untriaged -- see #67 and
+		// TestServeGapClassificationGate_PlantedUntriagedEntryFiresRegardlessOfSectionOrder
+		// below, which anchors the plant to the
+		// `# CLASS: untriaged --` header by CONTENT rather than by file
+		// position, so it fires regardless of section order.
 		{
 			// chat-turn-integrity-01PMZ606 WP14 (G-1, spec.md §6): "no
 			// writer to session_messages outside the sanctioned set." This
@@ -1458,6 +1449,110 @@ func TestAuditStoreBeforeRetentionGate_PlantedStoreRemovalFails(t *testing.T) {
 	if !strings.Contains(out, "NewLocalRetentionScheduler(") {
 		t.Fatalf("gate failed, but its output does not mention the expected defect "+
 			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+}
+
+// TestServeGapClassificationGate_PlantedUntriagedEntryFiresRegardlessOfSectionOrder
+// is the planted-violation proof for check-serve-gap-classification.sh's
+// untriaged date/owner check (AC-717, #67).
+//
+// This case used to live in the shared cases table above, using plant()'s
+// EOF-append semantics: `append` just tacked the plant onto whatever
+// content happened to be the LAST byte in
+// scripts/ci/allowlists/i15-serve-dispatch-gap.txt. That only proved the
+// gate could fail while the file's last "# CLASS:" section happened to
+// be `untriaged` — true when the case was written, but not a property
+// of the gate, just an accident of file layout. When a later sweep
+// (release/v0.78.0) made `boundary-panelled` the last section instead,
+// the EOF-appended plant landed there: `boundary-panelled` has no
+// date/owner check, so the `undated` per-entry check this test exists to
+// pin never saw it. The gate still failed non-zero — but only because
+// the injected quoted line bumped the boundary-panelled section's actual
+// entry count one past its stated "# N entries." header, a REAL but
+// different defect class whose message never names the planted entry.
+// The proof kept "passing" (non-zero exit, `wantOutput` matched some
+// prior run's cached expectation) while silently testing nothing about
+// the class of bug it was written for — worked around once by reordering
+// sections back (ordering only, no content change), which fixes nothing
+// about the proof's fragility.
+//
+// Fixed here by anchoring the plant to the `# CLASS: untriaged --`
+// header LINE, found by content (a prefix match), and inserting
+// immediately after it — never at EOF. The plant lands inside the
+// untriaged section no matter where that section sits in the file, so
+// this proof cannot go quietly wrong the way the table-case version did.
+//
+// Not folded back into the shared cases table because plant() only
+// supports "create a new file" or "append at EOF" — inserting after an
+// interior anchor line needs its own read-mutate-restore cycle, the same
+// reason TestToolContainmentUnconditionalGate_PlantedConditionalWrapperFails
+// and TestAuditStoreBeforeRetentionGate_PlantedStoreRemovalFails above
+// are also standalone. Uses journalPlant/journalClear (not a bare
+// defer) for the same crash-safety reason plant() does: this mutates a
+// real, currently-committed repo file directly on disk (unlike the
+// go-toolchain-only overlay technique below, which does not apply here
+// — check-serve-gap-classification.sh is a bash script that reads the
+// allowlist straight off disk, not through `go build`/`go test`/`go vet`,
+// so there is no overlay layer for a bash `cat`/`read` loop to honor).
+func TestServeGapClassificationGate_PlantedUntriagedEntryFiresRegardlessOfSectionOrder(t *testing.T) {
+	root := repoRoot(t)
+	allowlistPath := filepath.Join(root, "scripts", "ci", "allowlists", "i15-serve-dispatch-gap.txt")
+
+	orig, err := os.ReadFile(allowlistPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", allowlistPath, err)
+	}
+
+	const anchor = "# CLASS: untriaged -- "
+	lines := strings.Split(string(orig), "\n")
+	anchorIdx := -1
+	for i, l := range lines {
+		if strings.HasPrefix(l, anchor) {
+			anchorIdx = i
+			break
+		}
+	}
+	if anchorIdx == -1 {
+		t.Fatalf("no line starting %q found in %s — the untriaged class may have been "+
+			"renamed or removed; update this test and the gate together", anchor, allowlistPath)
+	}
+
+	// Insert directly after the header line, before whatever comes next
+	// (the header's own reason paragraph, or the section's "# N entries."
+	// line — order among those does not matter to the gate's parser,
+	// which tracks current_class/reason_block by content, not position).
+	plantLines := []string{
+		`# No date or owner mentioned anywhere in this reason.`,
+		`"Zz_Injected"`,
+	}
+	mutatedLines := make([]string, 0, len(lines)+len(plantLines))
+	mutatedLines = append(mutatedLines, lines[:anchorIdx+1]...)
+	mutatedLines = append(mutatedLines, plantLines...)
+	mutatedLines = append(mutatedLines, lines[anchorIdx+1:]...)
+	mutated := strings.Join(mutatedLines, "\n")
+
+	journalPlant(plantRecord{Path: allowlistPath, Orig: string(orig), Existed: true, Planted: mutated})
+	if err := os.WriteFile(allowlistPath, []byte(mutated), 0o644); err != nil {
+		t.Fatalf("writing mutated %s: %v", allowlistPath, err)
+	}
+	defer func() {
+		if err := os.WriteFile(allowlistPath, orig, 0o644); err != nil {
+			t.Errorf("restoring %s: %v — WORKING TREE IS DIRTY", allowlistPath, err)
+		}
+		journalClear(allowlistPath)
+	}()
+
+	code, out := runGate(t, "check-serve-gap-classification.sh", root)
+	if code == 0 {
+		t.Fatalf("check-serve-gap-classification.sh exited 0 with an undated/unowned "+
+			"untriaged entry (Zz_Injected) planted right after the untriaged header — "+
+			"the gate cannot fail.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "Zz_Injected") {
+		t.Fatalf("check-serve-gap-classification.sh failed with a planted violation, but "+
+			"its output does not mention %q — it may be failing for an unrelated reason "+
+			"(e.g. only a section entry-count mismatch, the exact failure mode #67 found):\n%s",
+			"Zz_Injected", out)
 	}
 }
 
