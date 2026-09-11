@@ -26,7 +26,6 @@ import ComposerError from '@/components/chat/ComposerError.vue';
 import ReasoningControl from '@/components/chat/ReasoningControl.vue';
 import SlashArgFill from '@/components/chat/SlashArgFill.vue';
 import ResolvedContextPanel from '@/views/sessions/ResolvedContextPanel.vue';
-import ConfirmToolModal from '@/components/chat/ConfirmToolModal.vue';
 import PlanApprovalModal from '@/views/sessions/PlanApprovalModal.vue';
 import BranchSidebar from '@/components/chat/BranchSidebar.vue';
 import BranchBreadcrumb from '@/components/chat/BranchBreadcrumb.vue';
@@ -2187,12 +2186,13 @@ async function onShared() {
       :open="newSessionDialogOpen"
       @close="onNewSessionDialogClose"
     />
-    <!-- Confirm-each tool confirmations. The queue is deliberately
-         cross-session (a background session's tool call must still be
-         answerable), so the modal is told which session is in front in
-         order to LABEL foreign rows rather than to filter them.
-         (confirm-each-enforcement-01PMAG05) -->
-    <ConfirmToolModal :active-session-id="sessionId" />
+    <!-- Confirm-each tool confirmations moved to App.vue
+         (workflow-tool-permission-gate hang fix): the queue is
+         process-global (ConfirmBus.HasChannel() is not per-session/per-view),
+         so mounting the modal only here meant navigating to /workflows
+         unsubscribed the one surface that could answer a parked
+         confirm_each call, hanging any workflow tool dispatch that
+         parked. See App.vue for the live mount. -->
     <!-- Plan approval modal (p0-wiring-fixes WP01) — renders when the model
          has exited plan_mode and the toolloop is awaiting user approval. -->
     <PlanApprovalModal

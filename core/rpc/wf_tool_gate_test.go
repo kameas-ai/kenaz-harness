@@ -48,14 +48,40 @@ package rpc
 //     mcp_call step naming a nonexistent server proves the gate runs
 //     BEFORE the pool lookup: if the gate had not run, the visible
 //     failure would be "server not found", not "denied".
+//   - TestWfToolGate_ConfirmEach_UnansweredParkTimesOutToDenial is the
+//     hang-fix regression pin: the frontend surface that answers a
+//     confirm_each park (ConfirmToolModal.vue) used to mount only inside
+//     SessionsView, so a "Run now" click from /workflows could park a
+//     call nobody was subscribed to hear about — ConfirmBus.Pending has
+//     no deadline of its own (by design, for chat), so the run hung
+//     forever. wfToolGate.resolveConfirmEach now bounds its own wait
+//     (confirmTimeout / defaultWorkflowConfirmTimeout in wf_adapters.go,
+//     mirroring elicit's OpenDialog). This test proves the bound fires,
+//     denies, and never dispatches — with the test's own bounded
+//     select/time.After so a regression (someone deletes the wrapping)
+//     fails FAST instead of hanging the test binary.
+//   - TestWfSchedDispatcher_ProductionWire_ScheduledDeniesViaMergedResolver_EmptyParentSessionID
+//     closes the reviewer's nit: every other wfToolGate test injects a
+//     fake PermissionResolver, and the one production-wire test above
+//     drives RunNow (attended, scheduled=false). This drives
+//     scheduled=true — a cron tick, whose RunOptions carry no
+//     ParentSessionID — through the REAL merged resolver
+//     (api.toolPermsResolver / stack.perms) with an ACTIVE static deny
+//     rule, proving the empty session id does not fail open. Paired with
+//     a permit leg (CLAUDE.md's enforce()-NotApplicable trap) on a
+//     different tool with no matching rule.
 
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/kameas-ai/kenaz-harness/core"
 	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	workflowsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/workflows"
@@ -522,4 +548,210 @@ func TestWfSchedDispatcher_ScheduledMarksContextUnattended_RunNowDoesNot(t *test
 	if seen[1] {
 		t.Error("scheduled=false (\"Run now\") dispatch marked ctx unattended — a human clicked this, it must stay attended")
 	}
+}
+
+// ─── the hang fix: an unanswered park must not block forever ──────────────
+
+// TestWfToolGate_ConfirmEach_UnansweredParkTimesOutToDenial is the
+// regression pin for the newly-introduced hang PR #339's follow-up
+// closes: ConfirmToolModal.vue (the only UI surface that can answer a
+// confirm_each park) used to mount exclusively inside SessionsView, so
+// a "Run now" click from the Workflows view — having never opened
+// Sessions — could park a call with a live channel (HasChannel() is
+// process-global) that nothing was actually subscribed to answer. Before
+// this fix that hung the run forever: confirm.go's ConfirmBus.Pending
+// has no deadline of its own by design (see its package doc), and
+// nothing wrapped the workflow dispatch context with one either.
+//
+// The fixture's ConfirmBus publisher deliberately does nothing — it
+// never calls Resolve or Cancel — which is exactly "parked with nobody
+// present to answer." confirmTimeout is set to a few milliseconds so
+// the test does not wait out the real 10-minute production bound; the
+// outer select/time.After(2s) is the CI safety net called for by the
+// mission brief — if a future change deletes the context.WithTimeout
+// wrapping in resolveConfirmEach, this test fails FAST instead of
+// hanging the whole `go test` invocation.
+func TestWfToolGate_ConfirmEach_UnansweredParkTimesOutToDenial(t *testing.T) {
+	pool := &recordingPool{output: json.RawMessage(`"ok"`)}
+	bus := toolloop.NewConfirmBus(func(toolloop.ConfirmRequest) {
+		// Nobody answers. This is the bug scenario: a live channel with
+		// no one actually watching it.
+	})
+	if !bus.HasChannel() {
+		t.Fatal("fixture bus reports no channel — this test requires a live channel so the call takes the prompt rung, not the no-channel default-deny rung")
+	}
+	adapter := &wfToolDispatcherAdapter{
+		pool: pool,
+		gate: &wfToolGate{
+			perms:          fixedResolver{policy: toolloop.PolicyConfirmEach, reason: "confirm each use"},
+			confirm:        bus,
+			confirmTimeout: 20 * time.Millisecond,
+		},
+	}
+
+	type result struct {
+		isErr bool
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		_, isErr, err := adapter.Dispatch(context.Background(), "kenaz__bash", []byte(`{}`))
+		done <- result{isErr: isErr, err: err}
+	}()
+
+	select {
+	case r := <-done:
+		if r.err == nil {
+			t.Fatal("unanswered confirm_each park returned nil error — an unbounded park must deny, never silently dispatch")
+		}
+		if !r.isErr {
+			t.Error("Dispatch returned err != nil but isError == false")
+		}
+		if !strings.Contains(r.err.Error(), "denied") {
+			t.Errorf("err = %v, want it to name a denial", r.err)
+		}
+		if n := len(pool.snapshot()); n != 0 {
+			t.Fatalf("pool was called %d times, want 0 — a timed-out park must never dispatch", n)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Dispatch did not return within 2s of an unanswered confirm_each park — THIS is the hang: " +
+			"ConfirmBus.Pending has no deadline of its own, and nothing bounded the caller's wait, " +
+			"so a park nobody answers blocks the run forever")
+	}
+}
+
+// ─── production-wire: scheduled=true through the REAL merged resolver ─────
+
+// permRuleFile is the on-disk shape core/toolloop.NewStaticResolverFromDataDir
+// reads from <DataDir>/mcp_servers.json (core/toolloop/perms.go's
+// unexported staticConfig/permRule, mirrored here by field name/JSON tag
+// since the production types are unexported). Writing this file BEFORE
+// core.New/rpc.New boot is what makes api.toolPermsResolver (stack.perms)
+// carry a real, active rule rather than a hand-built fixedResolver.
+type permRuleFile struct {
+	Version int `json:"version"`
+	Rules   []struct {
+		Server string `json:"server"`
+		Tool   string `json:"tool"`
+		Policy string `json:"policy"`
+		Reason string `json:"reason,omitempty"`
+	} `json:"rules"`
+}
+
+// productionAPIWithPermRule boots a real Core + rpc.API exactly like
+// cedarWiringAPI (api_cedar_gate_wiring_test.go), but seeds a static
+// permission rule at <DataDir>/mcp_servers.json instead of (or in
+// addition to) a Cedar policy — driving api.toolPermsResolver (the
+// stack.perms merged resolver newLLMStack constructs) with an ACTIVE
+// rule rather than a fake PermissionResolver.
+func productionAPIWithPermRule(t *testing.T, server, tool, policy, reason string) *API {
+	t.Helper()
+	sandboxUserConfigDir(t)
+	dataDir := t.TempDir()
+
+	cfg := permRuleFile{Version: 1}
+	cfg.Rules = append(cfg.Rules, struct {
+		Server string `json:"server"`
+		Tool   string `json:"tool"`
+		Policy string `json:"policy"`
+		Reason string `json:"reason,omitempty"`
+	}{Server: server, Tool: tool, Policy: policy, Reason: reason})
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal mcp_servers.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, "mcp_servers.json"), raw, 0o644); err != nil {
+		t.Fatalf("write mcp_servers.json: %v", err)
+	}
+
+	c, err := core.New(core.Options{DataDir: dataDir})
+	if err != nil {
+		t.Fatalf("core.New: %v", err)
+	}
+	api := New(c)
+	t.Cleanup(api.Shutdown)
+	assertSettingsStoreIsSandboxed(t, api)
+	return api
+}
+
+// TestWfSchedDispatcher_ProductionWire_ScheduledDeniesViaMergedResolver_EmptyParentSessionID
+// is the reviewer's requested lock-down: a scheduled (cron-tick)
+// dispatch's RunOptions carry no ParentSessionID
+// (wfSchedDispatcher.Dispatch calls RunWithOptions with only an ID —
+// see core/rpc/wf_sched_dispatcher.go), so the sessionID reaching
+// api.toolPermsResolver.Resolve is the empty string. Every other
+// wfToolGate test injects a fake PermissionResolver; this drives the
+// REAL merged resolver New() actually wires, with a real static deny
+// rule for the exact tool the workflow calls, and proves the empty
+// session id does not fail open. Paired with a permit leg on a
+// different (unruled) tool — CLAUDE.md's enforce()-NotApplicable trap —
+// so the assertion discriminates "this specific rule denied" from "the
+// resolver blanket-denies everything when sessionID is empty."
+func TestWfSchedDispatcher_ProductionWire_ScheduledDeniesViaMergedResolver_EmptyParentSessionID(t *testing.T) {
+	api := productionAPIWithPermRule(t, "ghost-server", "ghost-tool-denied", "deny", "blocked by static permission rule")
+	if api.toolPermsResolver == nil {
+		t.Fatal("api.toolPermsResolver is nil after New() — the production perms wire did not run")
+	}
+	ctx := context.Background()
+	api.SetContext(ctx)
+
+	t.Run("deny leg: rule matches, empty ParentSessionID does not fail open", func(t *testing.T) {
+		const yaml = `
+id: zz-wf-sched-perms-probe-deny
+name: "wf scheduled perms probe (deny)"
+version: 1
+steps:
+  - name: call_it
+    kind: mcp_call
+    server: ghost-server
+    tool_name: ghost-tool-denied
+`
+		saved, serr := api.Workflows().Save(ctx, workflowsview.SaveInput{YAML: yaml})
+		if serr != nil {
+			t.Fatalf("Save: %v", serr)
+		}
+		d := &wfSchedDispatcher{api: api}
+		_, err := d.Dispatch(ctx, saved.ID, true) // scheduled=true: cron tick, no session
+		if err == nil {
+			t.Fatal("scheduled dispatch against a REAL static deny rule succeeded — " +
+				"the merged resolver failed open on an empty ParentSessionID")
+		}
+		if !strings.Contains(err.Error(), "denied") {
+			t.Fatalf("err = %v, want it to name a denial", err)
+		}
+		if strings.Contains(err.Error(), "not installed") || strings.Contains(err.Error(), "unknown server") {
+			t.Fatalf("err = %v names a pool-lookup failure, not a permission denial — "+
+				"the gate did not run before the pool lookup", err)
+		}
+	})
+
+	t.Run("permit leg: same scheduled dispatch, unruled tool reaches the pool", func(t *testing.T) {
+		const yaml = `
+id: zz-wf-sched-perms-probe-permit
+name: "wf scheduled perms probe (permit)"
+version: 1
+steps:
+  - name: call_it
+    kind: mcp_call
+    server: ghost-server
+    tool_name: ghost-tool-unruled
+`
+		saved, serr := api.Workflows().Save(ctx, workflowsview.SaveInput{YAML: yaml})
+		if serr != nil {
+			t.Fatalf("Save: %v", serr)
+		}
+		d := &wfSchedDispatcher{api: api}
+		_, err := d.Dispatch(ctx, saved.ID, true)
+		if err == nil {
+			t.Fatal("expected an error (ghost-server is not a real configured MCP server) — " +
+				"but the point of this leg is WHICH error")
+		}
+		if strings.Contains(err.Error(), "denied") {
+			t.Fatalf("err = %v: the unruled tool was denied — the merged resolver is blanket-denying "+
+				"under an empty ParentSessionID, not discriminating by rule", err)
+		}
+		if !strings.Contains(err.Error(), "not installed") && !strings.Contains(err.Error(), "unknown server") {
+			t.Fatalf("err = %v, want a pool-lookup failure proving the call reached past the gate", err)
+		}
+	})
 }

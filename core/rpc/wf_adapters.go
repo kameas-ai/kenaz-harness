@@ -52,6 +52,7 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -815,6 +816,29 @@ func (a *slashToolDispatcherAdapter) auditConfirm(ctx context.Context, p context
 // path's PolicyGateAdapter.CheckTool consult, closing the same
 // Action::"tool_exec" gap UNIT-4 closed for slash (see
 // slashToolDispatcherAdapter's doc for the PR #307 review finding).
+//
+// THE PARK BOUND (workflow-tool-permission-gate hang fix): an attended
+// confirm_each park (RunNow, or an inline /wf run) has a live channel —
+// HasChannel() is process-global, not per-view — but ConfirmToolModal.vue,
+// the only surface that can answer it, used to mount exclusively inside
+// SessionsView. Navigating to /workflows unmounted the modal's
+// subscription while the goroutine stayed parked, so a user could click
+// "Run now" from the Workflows view, having never opened Sessions, and
+// hang the run forever with no visible way to resolve it — indistinguishable
+// from the app freezing. Fix #1 (App.vue) makes the modal reachable from
+// every route; this field is the defence-in-depth half: even a globally
+// mounted modal does not guarantee anyone is looking, so the wait is
+// bounded. confirm.go's ConfirmBus.Pending deliberately carries no
+// deadline of its own ("there is no timeout ... do not add one") — that
+// doctrine protects the chat/session pause, where a durable park is the
+// whole point. This does not touch that registry; it mirrors
+// core/rpc/views/elicit/api.go's OpenDialog, which wraps ctx with a
+// caller-side context.WithTimeout before calling the (also
+// deadline-free) elicitation registry's Park. See resolveConfirmEach's
+// "prompt: park" branch and confirmWaitTimeout below. A fired timeout
+// always resolves to a DENIAL (approved=false) — never a fallthrough to
+// dispatch, and never surfaced as a bare context error the caller could
+// mistake for "did not run for some unrelated reason."
 type wfToolGate struct {
 	perms toolloop.PermissionResolver
 	gate  cedar.Gate
@@ -830,6 +854,34 @@ type wfToolGate struct {
 	headlessExplicit bool
 	auditEmitter     contextaudit.Emitter
 	now              func() time.Time
+
+	// confirmTimeout bounds an attended confirm_each park's wait on
+	// g.confirm.Pending — see confirmWaitTimeout. Zero (the value every
+	// production construction site in core/rpc/api.go leaves it at)
+	// means "use defaultWorkflowConfirmTimeout"; tests override it to
+	// avoid actually waiting out the production duration.
+	confirmTimeout time.Duration
+}
+
+// defaultWorkflowConfirmTimeout bounds how long an attended workflow
+// confirm_each park waits for an answer before denying by construction.
+// Ten minutes matches the existing precedent for exactly this class of
+// problem: core/rpc/views/elicit/api.go's OpenDialog applies the same
+// dialogTimeout to kenaz__ask_user_question's park for the identical
+// reason (a human may not be watching the instant the pause starts, but
+// must not be made to hang forever either). It is long enough for
+// someone to notice the now-global ConfirmToolModal affordance (fix #1)
+// and act on it, short enough that a genuinely unattended click does not
+// tie up the run indefinitely.
+const defaultWorkflowConfirmTimeout = 10 * time.Minute
+
+// confirmWaitTimeout returns the bound applied before g.confirm.Pending
+// is allowed to block — see wfToolGate's "THE PARK BOUND" doc.
+func (g *wfToolGate) confirmWaitTimeout() time.Duration {
+	if g.confirmTimeout > 0 {
+		return g.confirmTimeout
+	}
+	return defaultWorkflowConfirmTimeout
 }
 
 func (g *wfToolGate) clock() time.Time {
@@ -994,9 +1046,36 @@ func (g *wfToolGate) resolveConfirmEach(
 		req.BatchID = toolloop.NewConfirmID("batch")
 	}
 
-	decision, pendErr := g.confirm.Pending(ctx, req)
+	// THE PARK BOUND — see wfToolGate's type doc. g.confirm.Pending
+	// itself never times out (confirm.go's ConfirmBus is deliberately
+	// deadline-free); this caller-side context.WithTimeout is what
+	// keeps an unanswered workflow park from blocking forever. Mirrors
+	// core/rpc/views/elicit/api.go's OpenDialog exactly: the registry
+	// stays timeout-free, the caller bounds its own wait.
+	confirmCtx, cancel := context.WithTimeout(ctx, g.confirmWaitTimeout())
+	defer cancel()
+
+	decision, pendErr := g.confirm.Pending(confirmCtx, req)
 	if pendErr != nil {
-		// Context cancellation or a caller bug — the call must not
+		if errors.Is(pendErr, context.DeadlineExceeded) {
+			// Nobody answered within the bound. This is a DENIAL, not a
+			// bare context error the caller could mistake for "did not
+			// run for some unrelated reason" — it must read clearly in
+			// run history, and it must never be treated as approval.
+			timeoutReason := fmt.Sprintf(
+				"no one answered the tool confirmation within %s; denying rather than hanging the run indefinitely",
+				g.confirmWaitTimeout(),
+			)
+			g.auditConfirm(ctx, contextaudit.ToolConfirmDecisionPayload{
+				SessionID: sessionID, CallID: req.CallID, BatchID: req.BatchID,
+				Server: server, Tool: tool, Family: family,
+				Path: contextaudit.ToolConfirmPathPrompted, Approved: false,
+				Reason: timeoutReason,
+			})
+			return false, timeoutReason, nil
+		}
+		// Context cancellation from the OUTER run (stopped by the user,
+		// session torn down) or a caller bug — the call must not
 		// dispatch, and (matching kernelToolAdapter) nothing was
 		// decided, so nothing is audited.
 		return false, "", pendErr
