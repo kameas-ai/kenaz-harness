@@ -7,6 +7,22 @@
 #
 # If core/fleet/ has been removed entirely (fork case), the script also passes.
 #
+# READ THAT LINE NARROWLY. It means this script exits 0; it does NOT mean the
+# tree builds without core/fleet/. It does not. core/rpc imports core/fleet
+# directly and uses *fleet.Client as a bare local type, and all 11 packages in
+# PREFIX_ALLOWLIST below hold a typed *fleet.X struct field. Deleting
+# core/fleet/ breaks compilation of every one of them.
+#
+# So the OSS-first property people reasonably read into this gate -- "delete
+# core/fleet/ and core/rpc still builds" -- is NOT held today, and nothing in
+# CI verifies it: check-oss-first.sh only sets HARNESS_FLEET_DISABLED=1 with the
+# package still present, so it cannot catch this. What this gate actually
+# enforces is narrower and still worth having: no NEW package starts importing
+# core/fleet without a dated allowlist entry, i.e. the coupling cannot grow
+# silently. Closing the gap needs a neutral interface or a build tag, which is
+# an architecture decision with no owner assigned -- see docs/unwired-ledger.md
+# (2026-09-11, finding #72).
+#
 # Usage: bash scripts/ci/check-no-fleet-imports.sh
 
 set -euo pipefail
@@ -21,7 +37,7 @@ echo "[no-fleet-imports] fleet package: ${FLEET_PKG}"
 
 # If core/fleet/ doesn't exist (fork case), nothing to check.
 if [ ! -d "core/fleet" ]; then
-  echo "[no-fleet-imports] core/fleet/ not present — fork case: PASS"
+  echo "[no-fleet-imports] core/fleet/ not present — fork case: PASS (import boundary only; see header — this does not assert the tree builds)"
   exit 0
 fi
 

@@ -3299,7 +3299,7 @@ documented retirement.
   file with nothing but start/stop markers, and no UI currently exposes even
   that much.
 
-### 2026-09-11 · `check-no-fleet-imports.sh`'s bare `core/rpc` allowlist entry exempts its whole subtree, and 7 real view packages already rely on the hole
+### 2026-09-11 · RESOLVED (import boundary) / STILL OPEN (buildability) — `check-no-fleet-imports.sh`'s bare `core/rpc` allowlist entry exempted its whole subtree, and 7 real view packages relied on the hole
 
 **Found**: 2026-09-11, during the finding-#48 planted-violation-proof sweep
 (11 of 49 CI gates had no proof they could fail — see
@@ -3331,6 +3331,41 @@ contexts,sites,slashcmd,sync}`. Each has a non-test `impl.go` importing
 `core/fleet` (confirmed via `grep -l core/fleet core/rpc/views/<pkg>/*.go`)
 and none is in `ALLOWLIST`. They pass today only because of the prefix hole.
 This sweep did not ship that fix — see disposition.
+
+> **UPDATE 2026-09-11 (same day), v0.78.2.** The classification the escalation
+> below asked for was **done**, and the gate fix **shipped**. Each of the 7
+> packages was checked by reading actual usage rather than import lines: every
+> one holds a `*fleet.Client` / `*fleet.Syncer` / `*fleet.AuditArchiver` (etc.)
+> as a structural field on its API struct, wired with a live fleet object at
+> boot in `core/rpc/api.go`, and none is cheaply decouplable. So reading (a)
+> — legitimately fleet-facing — won for all 7; none was OSS-first drift to
+> unwind. All 7 are now in `PREFIX_ALLOWLIST` with dated justifications, the
+> matcher is split into `EXACT_ALLOWLIST` (equality; the `core/rpc` chassis)
+> and `PREFIX_ALLOWLIST` (named leaves), and a new planted-violation proof
+> plants *inside* `core/rpc/views/` and is named by the gate.
+>
+> **Two corrections to the entry below.** (1) The exemption was larger than
+> recorded: the wildcard exempted not 7-plus-chassis importers but **every
+> package under `core/rpc/` — 53 of them — plus `core/mcp/builtin/sites`,
+> i.e. 54 of 242 checkable packages went unreviewed.** The count of *real*
+> importers (12 = 1 exact + 11 prefix) was right; the count of *exempted*
+> packages was never stated. (2) `core/rpc/middleware` was already in the
+> pre-fix allowlist by name, so it was never "previously unlisted" — the 7
+> genuinely-new entries are `catalog, cedar, compliance, contexts, sites,
+> slashcmd, sync`. Independent review caught this; the PR body and commit
+> message for the fix both said 8 and are wrong.
+>
+> **What is still open is not the gate, it is the architecture.** The property
+> the OSS-first framing implies — *delete `core/fleet/` and `core/rpc` still
+> builds* — is **genuinely not held**: `core/rpc` imports `core/fleet`
+> directly and uses `*fleet.Client` as a bare local type, and all 11 prefix
+> packages hold typed `*fleet.X` fields. **No CI job verifies it**;
+> `check-oss-first.sh` only sets `HARNESS_FLEET_DISABLED=1` with the package
+> still physically present, so it cannot catch this. The gate's header now
+> discloses that its "fork case: PASS" is an import-boundary pass only and
+> says so in the script. Unwinding it (neutral interface, or a build tag)
+> remains an architecture decision with **no owner assigned** — that half of
+> the escalation below stands unchanged.
 
 **Disposition: escalate, not fix-and-ship.** The technically-correct fix
 (exact-match `core/rpc`) is small in diff size but not small in blast
