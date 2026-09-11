@@ -29,8 +29,13 @@ storage: a permission gate that never ran (#339), connector health that was
 a hardcoded `StateRunning` literal (#336), a `confirm_each` ladder with no
 writer (#333), reasoning tokens billed and never rendered (#329), a hook
 surface advertising 18 events and delivering six (#338), a redaction catalog
-consulted for 2 of ~21 patterns (#337), and two sub-agent control verbs
-(#331, #334). Every one of those is wiring, policy or presentation. The only
+consulted for 2 of ~21 patterns (#337), two sub-agent control verbs
+(#331, #334), and a CI gate for unwired optional dependencies (#332 --
+pure tooling, no runtime or storage footprint). That is all nine; the
+count and the enumeration agree deliberately, because this file is
+immutable and a record claiming nine while accounting for eight is the
+same small untruth the release was about. Every one of those is wiring,
+policy, presentation or tooling. The only
 new persistence — `confirm_each`'s tool-policy rules — lives in
 `<DataDir>/mcp_servers.json`, a plain file, deliberately not a table.
 
