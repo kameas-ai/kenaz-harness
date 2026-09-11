@@ -1949,6 +1949,26 @@ func TestNoCredentialInUI_BenignFieldsDoNotTrip(t *testing.T) {
 // gate that fires on everything is as useless as one that fires on
 // nothing") — the same field, but with an in-file composite-literal
 // assignment — and asserts the gate stays clean.
+//
+// Two more subtests were added in the PR #332 second review round to
+// close the hole the reviewer found in clause 3 (markAssignments'
+// plain-assignment scan, checknilopts/main.go): a setter's own body —
+// `func (e *Engine) SetDispatcher(d ChatRunDispatcher) { e.dispatch = d
+// }` — used to mark the field assigned the instant the method was
+// DECLARED, regardless of whether anything ever CALLED it, because
+// clause 3 walked every AssignStmt with no notion of which function it
+// sat inside and `d` (a parameter) is not a bare `nil`. The reviewer
+// proved this with a planted field whose setter has zero call sites and
+// is still reported "wired". "setter-defined-but-never-called-still-
+// fires" is that exact proof, committed: it plants a SetZzGateProbe
+// method that assigns the field from its own parameter and calls it
+// nowhere, and asserts the gate still fires. Its companion,
+// "setter-called-with-real-value-still-wires", plants the same setter
+// PLUS a real call site with a genuinely non-nil argument, and asserts
+// the gate stays clean — proving the fix didn't just make clause 3
+// unconditionally reject setter bodies (that would fail this subtest
+// too, since nothing else in the plant would supply the wiring
+// evidence).
 func TestNilOptionalDepsGate_PlantedUnwiredFieldFires(t *testing.T) {
 	root := repoRoot(t)
 	implPath := filepath.Join(root, "core", "rpc", "views", "scheduledchat", "impl.go")
@@ -2025,6 +2045,69 @@ func TestNilOptionalDepsGate_PlantedUnwiredFieldFires(t *testing.T) {
 			t.Fatalf("check-nil-optional-deps.sh flagged ZzGateProbe even though this variant "+
 				"assigns it a non-nil value in a production composite literal — the gate fires on "+
 				"everything, not just the real defect class.\noutput:\n%s", out)
+		}
+	})
+
+	// setter-defined-but-never-called-still-fires is the PR #332 second
+	// review round's planted-violation proof for the clause-3 hole: a
+	// Set*-named method whose body assigns the field from its own
+	// parameter — `func (c *Config) SetZzGateProbe(d ZzGateProbeDispatcher)
+	// { c.ZzGateProbe = d }` — with NO call site anywhere in the plant.
+	// Before the fix, clause 3 (markAssignments' plain-assignment scan)
+	// walked every *ast.AssignStmt with no notion of which function it
+	// sat inside, saw `c.ZzGateProbe = d`, and marked the field assigned
+	// because `d` is a parameter, not a literal `nil` — regardless of
+	// whether SetZzGateProbe is ever invoked. Reproduces
+	// core/scheduler/chat_cron_engine.go:150's SetDispatcher shape
+	// exactly. Must still fail after the fix.
+	t.Run("setter-defined-but-never-called-still-fires", func(t *testing.T) {
+		const setterNeverCalled = "\nfunc (c *Config) SetZzGateProbe(d ZzGateProbeDispatcher) {\n" +
+			"\tc.ZzGateProbe = d\n" +
+			"}\n"
+		overlayPath := buildOverlay(t, setterNeverCalled)
+		code, out := runGateEnv(t, "check-nil-optional-deps.sh", root, map[string]string{
+			"NIL_OPTIONAL_DEPS_OVERLAY": overlayPath,
+		})
+		if code == 0 {
+			t.Fatalf("check-nil-optional-deps.sh exited 0 with ZzGateProbe wired ONLY by a "+
+				"SetZzGateProbe method whose own body assigns the field from its parameter — the "+
+				"method is never CALLED anywhere in the plant, so this is not production wiring. "+
+				"A setter that merely exists must not count as a setter that was invoked.\noutput:\n%s", out)
+		}
+		if !strings.Contains(out, "ZzGateProbe") {
+			t.Fatalf("gate failed, but its output does not mention ZzGateProbe "+
+				"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+		}
+	})
+
+	// setter-called-with-real-value-still-wires is the companion true-
+	// negative: the identical SetZzGateProbe method, but this time
+	// called once at package scope with a genuinely non-nil argument.
+	// Confirms the clause-3 fix didn't just make setter bodies
+	// unconditionally inert — a setter that IS actually invoked with a
+	// real value must still be detected, via clause 2 (the Set*/With*
+	// call-site scan), which is untouched by this fix and independently
+	// verifies the call argument.
+	t.Run("setter-called-with-real-value-still-wires", func(t *testing.T) {
+		const setterCalledWithReal = "\nfunc (c *Config) SetZzGateProbe(d ZzGateProbeDispatcher) {\n" +
+			"\tc.ZzGateProbe = d\n" +
+			"}\n\n" +
+			"type zzGateProbeSetterImpl struct{}\n\n" +
+			"func (zzGateProbeSetterImpl) ZzGateProbe() {}\n\n" +
+			"var zzGateProbeSetterWired = func() *Config {\n" +
+			"\tc := &Config{}\n" +
+			"\tc.SetZzGateProbe(zzGateProbeSetterImpl{})\n" +
+			"\treturn c\n" +
+			"}()\n"
+		overlayPath := buildOverlay(t, setterCalledWithReal)
+		code, out := runGateEnv(t, "check-nil-optional-deps.sh", root, map[string]string{
+			"NIL_OPTIONAL_DEPS_OVERLAY": overlayPath,
+		})
+		if code != 0 {
+			t.Fatalf("check-nil-optional-deps.sh flagged ZzGateProbe even though "+
+				"SetZzGateProbe is called at package scope with a genuinely non-nil "+
+				"zzGateProbeSetterImpl{} — the clause-3 fix over-corrected and now rejects real "+
+				"setter-based wiring, not just the uncalled-setter defect class.\noutput:\n%s", out)
 		}
 	})
 }

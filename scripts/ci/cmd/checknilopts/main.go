@@ -34,6 +34,41 @@
 // registry.Options.Policy in cmd/harness-vm is the same registry.Options
 // type; the same fix covers it.
 //
+// PR #332's SECOND review round (same date, 2026-09-10) found the first
+// round's own Set*/With* fix was incomplete: clause 3 of markAssignments
+// (the plain-assignment scan, below) still marked a field "wired" the
+// instant its setter's OWN BODY assigned it from the setter's own
+// parameter — `func (e *Engine) SetDispatcher(d ChatRunDispatcher) {
+// e.dispatch = d }` — regardless of whether anything ever CALLED
+// SetDispatcher. The reviewer proved this with a planted field whose
+// setter has zero call sites and was still reported wired. Fixed
+// same-commit: clause 3 now excludes an assignment when the enclosing
+// function is a method on the field's own owner type and the RHS is
+// that method's own parameter (see markAssignments' doc comment for the
+// exact exclusion and its residual limitation). Re-running the gate
+// after the fix surfaced two false "unwired" fields
+// (core/fleet/context_graph_sync.go's ContextGraphSyncer.auditEmitter,
+// core/rpc/views/agentgraph/chat/llm_provider_adapter.go's
+// LLMProviderAdapter.attachments) caused by an INDEPENDENT, pre-existing
+// gap the clause-3 bug had been masking: clause 2's Set*/With*-call
+// detection derives the field name by stripping the method's own prefix
+// (WithAuditEmitter -> "AuditEmitter"), which never matched either
+// field's actual unexported camelCase name ("auditEmitter",
+// "attachments") — both are genuinely wired at real call sites
+// (core/rpc/api.go:3420, chat_runner.go:995) that clause 2 simply could
+// not see under the old name-derivation. Fixed same-commit: clause 2
+// also tries the lowercase-first-letter form of the derived name. Net
+// result: scanned/wired/not-wired/allowlisted/unlisted counts are
+// UNCHANGED from before this second round (60/53/7/7/0) — the fix closes
+// a real detection hole without changing today's verdicts, because no
+// field in this tree currently depends on an uncalled setter to look
+// wired. See gates_can_fail_test.go's
+// TestNilOptionalDepsGate_PlantedUnwiredFieldFires/setter-defined-but-
+// never-called-still-fires for the committed planted-violation proof
+// (reproduces core/scheduler/chat_cron_engine.go:150's SetDispatcher
+// shape) and its companion .../setter-called-with-real-value-still-wires
+// for the true-negative half.
+//
 // THREE MISSIONS SPECCED THIS GATE AND NONE BUILT IT
 // ----------------------------------------------------
 // model-scheduled-jobs-01PMSJ01 (§7 G-1, "the nil-dispatcher class") and
@@ -501,17 +536,50 @@ func findTriggerFields(pkgs []*packages.Package) []*triggerField {
 //     Env.Corpus (or whichever field carries EnvDeps.Corpus onward)
 //     carrying its own "nil disables" doc comment makes a broken chain
 //     visible, and today it does.
+//
+//     EXCEPTION, added in the PR #332 second review round: clause 3 does
+//     NOT count an assignment `recv.FieldName = p` when the enclosing
+//     function is itself a method on the field's owner type AND `p` is
+//     literally that method's own parameter. Before this exception,
+//     `func (e *Engine) SetDispatcher(d ChatRunDispatcher) { e.dispatch =
+//     d }` was marked "wired" the instant the method was DECLARED,
+//     because clause 3 walked every AssignStmt in the tree with no
+//     notion of which function it sat inside, and `d` (a parameter, not
+//     a literal `nil`) passed isBareNil — regardless of whether
+//     SetDispatcher was ever CALLED. The reviewer proved this with a
+//     planted field whose setter has zero call sites and is still
+//     reported "wired" (see gates_can_fail_test.go's
+//     TestNilOptionalDepsGate_PlantedUnwiredFieldFires/setter-defined-
+//     but-never-called-still-fires). core/scheduler/chat_cron_engine.go:
+//     150's SetDispatcher is exactly this shape; it happens to be
+//     genuinely wired today (called with a real value at
+//     core/rpc/api.go:3158, still detected via clause 2), but the
+//     mechanism generalises to any field with an uncalled setter, which
+//     defeats the gate's own purpose. A field excluded here falls
+//     through to clauses 1-2, which already verify an actual
+//     composite-literal or call-site value — see assignVisitor.Visit's
+//     *ast.FuncDecl/*ast.FuncLit cases for how the enclosing-method
+//     context is tracked. This is the "acceptable alternative" from the
+//     review (skip a full call-graph hop; let the setter's own body not
+//     count, and require clause 2's real call-site check to do the
+//     work) rather than a second call-graph hop from the setter to ITS
+//     callers — the latter was judged disproportionate for a gate this
+//     narrowly scoped. Residual limitation: a field wired exclusively
+//     through a real call to a helper method that is NOT named Set*/
+//     With* (so clause 2 cannot recognise the call) and that assigns the
+//     field from its own parameter (so this exception excludes clause 3
+//     too) would now be misreported as unwired. No such case exists in
+//     this tree today (calibration re-run below); if one appears, the
+//     fix is either renaming the method to the Set*/With* idiom clause 2
+//     already recognises, or a documented allowlist entry naming this
+//     paragraph as the blocker.
 func markAssignments(pkgs []*packages.Package, fields []*triggerField) {
 	// Index fields by owner type identity + name for O(1) lookup during
 	// the walk. types.Named objects are shared across one packages.Load
 	// call, so comparing *types.TypeName pointers (Obj()) is sound.
-	type key struct {
-		owner *types.TypeName
-		field string
-	}
-	index := make(map[key]*triggerField, len(fields))
+	index := make(map[fieldKey]*triggerField, len(fields))
 	for _, f := range fields {
-		index[key{f.owner.Obj(), f.fieldName}] = f
+		index[fieldKey{f.owner.Obj(), f.fieldName}] = f
 	}
 
 	packages.Visit(pkgs, func(p *packages.Package) bool { return true }, func(p *packages.Package) {
@@ -523,113 +591,238 @@ func markAssignments(pkgs []*packages.Package, fields []*triggerField) {
 			if strings.HasSuffix(pos.Filename, "_test.go") {
 				continue
 			}
-			ast.Inspect(file, func(n ast.Node) bool {
-				switch node := n.(type) {
-				case *ast.CompositeLit:
-					t := p.TypesInfo.TypeOf(node)
-					named, ok := t.(*types.Named)
-					if !ok {
-						return true
-					}
-					for _, elt := range node.Elts {
-						kv, ok := elt.(*ast.KeyValueExpr)
-						if !ok {
-							continue
-						}
-						keyIdent, ok := kv.Key.(*ast.Ident)
-						if !ok {
-							continue
-						}
-						tf, ok := index[key{named.Obj(), keyIdent.Name}]
-						if !ok {
-							continue
-						}
-						if isBareNil(kv.Value) {
-							continue
-						}
-						tf.assigned = true
-					}
-				case *ast.CallExpr:
-					sel, ok := node.Fun.(*ast.SelectorExpr)
-					if !ok {
-						return true
-					}
-					name := sel.Sel.Name
-					var fieldName string
-					switch {
-					case strings.HasPrefix(name, "Set") && len(name) > 3:
-						fieldName = name[3:]
-					case strings.HasPrefix(name, "With") && len(name) > 4:
-						fieldName = name[4:]
-					default:
-						return true
-					}
-					recvType := p.TypesInfo.TypeOf(sel.X)
-					if recvType == nil {
-						return true
-					}
-					if ptr, ok := recvType.(*types.Pointer); ok {
-						recvType = ptr.Elem()
-					}
-					named, ok := recvType.(*types.Named)
-					if !ok {
-						return true
-					}
-					if tf, ok := index[key{named.Obj(), fieldName}]; ok {
-						// isBareNil applies here for the same reason it
-						// applies to the composite-literal and plain-
-						// assignment clauses: `x.SetDispatcher(nil)` must
-						// not count as wiring. Only the unambiguous
-						// single-argument case is checked — a call with
-						// zero or multiple arguments can't be mapped to
-						// "the field's value" without guessing which
-						// argument is the field, so those are left as
-						// best-effort assigned=true (same leniency the
-						// multi-hop EnvDeps case above documents).
-						if len(node.Args) == 1 && isBareNil(node.Args[0]) {
-							return true
-						}
-						tf.assigned = true
-					}
-				case *ast.AssignStmt:
-					if node.Tok != token.ASSIGN || len(node.Lhs) != len(node.Rhs) {
-						return true
-					}
-					for i, lhs := range node.Lhs {
-						sel, ok := lhs.(*ast.SelectorExpr)
-						if !ok {
-							continue
-						}
-						recvType := p.TypesInfo.TypeOf(sel.X)
-						if recvType == nil {
-							continue
-						}
-						if ptr, ok := recvType.(*types.Pointer); ok {
-							recvType = ptr.Elem()
-						}
-						named, ok := recvType.(*types.Named)
-						if !ok {
-							continue
-						}
-						tf, ok := index[key{named.Obj(), sel.Sel.Name}]
-						if !ok {
-							continue
-						}
-						if isBareNil(node.Rhs[i]) {
-							continue
-						}
-						tf.assigned = true
-					}
-				}
-				return true
-			})
+			ast.Walk(&assignVisitor{p: p, index: index}, file)
 		}
 	})
+}
+
+// fieldKey identifies a triggerField by its owner struct's identity plus
+// the field name — shared between markAssignments' index construction
+// and assignVisitor's lookups.
+type fieldKey struct {
+	owner *types.TypeName
+	field string
+}
+
+// selfCtx captures the receiver-parameter context of the innermost
+// enclosing function, when that function is itself a method (has a
+// receiver) — see markAssignments' clause-3 doc comment above for why
+// this exists. nil whenever the walk is not directly inside a method's
+// own body, including whenever it has descended into a nested closure
+// (*ast.FuncLit): a FuncLit can never have a receiver, so it is never a
+// "method" regardless of where it is textually written or what it
+// captures — this is what keeps the WithSessionHookRunner-style
+// functional-options closure (a plain function returning a *ast.FuncLit)
+// unaffected by the exception below.
+type selfCtx struct {
+	owner  *types.TypeName
+	params map[string]bool
+}
+
+// assignVisitor implements ast.Visitor for markAssignments' single walk
+// per file. It threads self (the innermost enclosing method's
+// receiver+params, or nil) through *ast.FuncDecl/*ast.FuncLit boundaries
+// by returning a NEW visitor value on descent — ast.Walk's contract
+// (Visit returns the Visitor to use for a node's children) restores the
+// parent visitor, and hence its self, automatically once that subtree's
+// traversal finishes; no manual stack push/pop is needed.
+type assignVisitor struct {
+	p     *packages.Package
+	index map[fieldKey]*triggerField
+	self  *selfCtx
+}
+
+func (v *assignVisitor) Visit(n ast.Node) ast.Visitor {
+	switch node := n.(type) {
+	case *ast.FuncDecl:
+		return &assignVisitor{p: v.p, index: v.index, self: methodSelfCtx(v.p, node)}
+	case *ast.FuncLit:
+		// A closure is never a method — reset self so an assignment
+		// inside it (e.g. WithSessionHookRunner's `m.hooks = h`) is
+		// judged purely on isBareNil, same as before this exception
+		// existed.
+		return &assignVisitor{p: v.p, index: v.index, self: nil}
+	case *ast.CompositeLit:
+		t := v.p.TypesInfo.TypeOf(node)
+		named, ok := t.(*types.Named)
+		if !ok {
+			return v
+		}
+		for _, elt := range node.Elts {
+			kv, ok := elt.(*ast.KeyValueExpr)
+			if !ok {
+				continue
+			}
+			keyIdent, ok := kv.Key.(*ast.Ident)
+			if !ok {
+				continue
+			}
+			tf, ok := v.index[fieldKey{named.Obj(), keyIdent.Name}]
+			if !ok {
+				continue
+			}
+			if isBareNil(kv.Value) {
+				continue
+			}
+			tf.assigned = true
+		}
+	case *ast.CallExpr:
+		sel, ok := node.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return v
+		}
+		name := sel.Sel.Name
+		var fieldName string
+		switch {
+		case strings.HasPrefix(name, "Set") && len(name) > 3:
+			fieldName = name[3:]
+		case strings.HasPrefix(name, "With") && len(name) > 4:
+			fieldName = name[4:]
+		default:
+			return v
+		}
+		recvType := v.p.TypesInfo.TypeOf(sel.X)
+		if recvType == nil {
+			return v
+		}
+		if ptr, ok := recvType.(*types.Pointer); ok {
+			recvType = ptr.Elem()
+		}
+		named, ok := recvType.(*types.Named)
+		if !ok {
+			return v
+		}
+		// The derived fieldName is PascalCase (stripped straight off the
+		// exported Set*/With* method name), but the field it wires is
+		// routinely unexported camelCase — WithAuditEmitter wires
+		// auditEmitter (core/fleet/context_graph_sync.go), WithAttachments
+		// wires attachments (llm_provider_adapter.go). Try the exact name
+		// first, then the lowercase-first-letter form. Found 2026-09-10
+		// while re-measuring after the clause-3 exception above: both
+		// fields' ONLY detection path used to be clause 3's unconditional
+		// setter-body match (which doesn't care about names at all,
+		// selectors carry the real field name verbatim) — once clause 3
+		// stopped counting an uncalled setter's own body, these two
+		// genuinely-wired fields (real non-nil call sites: core/rpc/api.go:
+		// 3420 WithAuditEmitter, chat_runner.go:995 WithAttachments) came
+		// up as false "unwired" purely because clause 2 could never match
+		// their case-mismatched name. This is a real, independent gap in
+		// clause 2 — not something to allowlist as a genuine finding, since
+		// both fields ARE wired.
+		tf, ok := v.index[fieldKey{named.Obj(), fieldName}]
+		if !ok {
+			if lowered := lowerFirst(fieldName); lowered != fieldName {
+				tf, ok = v.index[fieldKey{named.Obj(), lowered}]
+			}
+		}
+		if ok {
+			// isBareNil applies here for the same reason it applies to
+			// the composite-literal and plain-assignment clauses:
+			// `x.SetDispatcher(nil)` must not count as wiring. Only the
+			// unambiguous single-argument case is checked — a call with
+			// zero or multiple arguments can't be mapped to "the
+			// field's value" without guessing which argument is the
+			// field, so those are left as best-effort assigned=true
+			// (same leniency the multi-hop EnvDeps case documents).
+			if len(node.Args) == 1 && isBareNil(node.Args[0]) {
+				return v
+			}
+			tf.assigned = true
+		}
+	case *ast.AssignStmt:
+		if node.Tok != token.ASSIGN || len(node.Lhs) != len(node.Rhs) {
+			return v
+		}
+		for i, lhs := range node.Lhs {
+			sel, ok := lhs.(*ast.SelectorExpr)
+			if !ok {
+				continue
+			}
+			recvType := v.p.TypesInfo.TypeOf(sel.X)
+			if recvType == nil {
+				continue
+			}
+			if ptr, ok := recvType.(*types.Pointer); ok {
+				recvType = ptr.Elem()
+			}
+			named, ok := recvType.(*types.Named)
+			if !ok {
+				continue
+			}
+			tf, ok := v.index[fieldKey{named.Obj(), sel.Sel.Name}]
+			if !ok {
+				continue
+			}
+			if isBareNil(node.Rhs[i]) {
+				continue
+			}
+			if v.self != nil && v.self.owner == named.Obj() {
+				if rhsIdent, ok := node.Rhs[i].(*ast.Ident); ok && v.self.params[rhsIdent.Name] {
+					// The clause-3 exception: this assignment sits
+					// directly inside a method on the field's own owner
+					// type, and the RHS is literally that method's own
+					// parameter — i.e. this is the setter's body, not
+					// proof the setter was ever called. Leave unassigned
+					// here; clause 2 (a real Set*/With* call site with a
+					// non-nil argument) or clause 1 (a composite literal)
+					// must supply the actual evidence.
+					continue
+				}
+			}
+			tf.assigned = true
+		}
+	}
+	return v
+}
+
+// methodSelfCtx returns the selfCtx for decl when it is a method (has a
+// single receiver), or nil when decl is a plain function.
+func methodSelfCtx(p *packages.Package, decl *ast.FuncDecl) *selfCtx {
+	if decl.Recv == nil || len(decl.Recv.List) != 1 {
+		return nil
+	}
+	recvType := p.TypesInfo.TypeOf(decl.Recv.List[0].Type)
+	if recvType == nil {
+		return nil
+	}
+	if ptr, ok := recvType.(*types.Pointer); ok {
+		recvType = ptr.Elem()
+	}
+	named, ok := recvType.(*types.Named)
+	if !ok {
+		return nil
+	}
+	params := map[string]bool{}
+	if decl.Type.Params != nil {
+		for _, field := range decl.Type.Params.List {
+			for _, name := range field.Names {
+				params[name.Name] = true
+			}
+		}
+	}
+	return &selfCtx{owner: named.Obj(), params: params}
 }
 
 func isBareNil(e ast.Expr) bool {
 	ident, ok := e.(*ast.Ident)
 	return ok && ident.Name == "nil"
+}
+
+// lowerFirst returns s with its first byte lowercased — enough to turn a
+// Set*/With* method's stripped PascalCase suffix ("AuditEmitter") into
+// the unexported camelCase field name it conventionally wires
+// ("auditEmitter"). ASCII-only (byte, not rune) because every field name
+// in this codebase is ASCII; ASCII lowercasing an ASCII byte is safe and
+// avoids importing unicode for ~a dozen call sites.
+func lowerFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	b := s[0]
+	if b >= 'A' && b <= 'Z' {
+		b += 'a' - 'A'
+	}
+	return string(b) + s[1:]
 }
 
 func relToRepoRoot(abs string) string {

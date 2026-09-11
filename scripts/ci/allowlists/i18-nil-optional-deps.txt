@@ -55,6 +55,19 @@
 # or a deny-everything stub. They are dated-justified below rather than
 # wired because each requires a product decision this PR's scope (fixing
 # the gate, not resolving every finding it produces) does not license.
+#
+# PR #332 SECOND review round (same date): the reviewer found clause 3 of
+# markAssignments (scripts/ci/cmd/checknilopts/main.go) counted a field
+# as wired the instant its Set*-named setter's own body assigned it from
+# the setter's own parameter, regardless of whether the setter was ever
+# CALLED — proved with a planted setter that has zero call sites. Fixed;
+# see main.go's header for the full account, including the independent
+# clause-2 name-derivation gap the fix's re-measurement surfaced and also
+# closed (ContextGraphSyncer.auditEmitter, LLMProviderAdapter.attachments
+# — both genuinely wired, not new findings). Re-measured counts after
+# both fixes: 60 scanned, 53 wired, 7 not wired, 7 allowlisted, 0
+# unlisted — IDENTICAL to the first-round numbers above. No entry in this
+# file changed as a result of the second round.
 
 core/agentgraph/executor.go:235: Env.AttachmentRegistry (AttachmentRegistrar) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
 # 2026-09-10 — pre-existing gap, not introduced by this PR. Blocker: the
@@ -96,12 +109,20 @@ core/policy/cedar/engine.go:212: Options.Decisions (DecisionStore) is documented
 
 core/tools/monitor/tool.go:160: Options.Offsets (OffsetStore) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
 # 2026-09-10 — genuine gap, low severity. core/rpc/builtins_wiring.go:409
-# omits Offsets; production always uses the process-local in-memory
-# offset store (tool.go's processLocalOffsets), so kenaz__monitor's
-# per-session drain cursor resets to 0 on restart rather than resuming —
-# a UX rough edge, not data loss (the tool just re-reads from the start
-# on next call). Blocker: no persistence requirement has been raised.
-# Owner: unassigned.
+# (registerBuiltinTools' kenaz__monitor wiring, mission subagent-control-
+# and-background-tasks-01PMZB11 UNIT-5) omits Offsets; production always
+# uses the process-local in-memory offset store (tool.go's
+# processLocalOffsets), so kenaz__monitor's per-session drain cursor
+# resets to 0 on restart rather than resuming — a UX rough edge, not
+# data loss (the tool just re-reads from the start on next call).
+# Blocker: a persistent OffsetStore needs the same backing-store design
+# decision core/policy/cedar's Options.Decisions above is waiting on
+# (SQLite table vs. the event-log SQL backend audit_archive.go already
+# uses) — nobody has specced which, and UNIT-5 shipped without a
+# cross-restart requirement in scope. Owner: whoever next specs
+# persistent background-task state for 01PMZB11's successor work should
+# wire Offsets and delete this line in the same change, or explicitly
+# defer it again with a new date.
 
 core/tools/subagentdispatch/tool.go:177: Options.Tasks (TasksRegistry) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
 # 2026-09-10 — already deliberately unwired; the field's own doc comment
