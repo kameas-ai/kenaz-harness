@@ -57,6 +57,7 @@ function failingGraphClient() {
       getRunStatus: fail,
       getRunTrace: fail,
       resume: fail,
+      resolveApproval: fail,
       cancelRun: fail,
       materializeRun: fail,
     },
@@ -154,6 +155,7 @@ describe('agentgraph views (desktop mode regression)', () => {
         }),
         getRunTrace: async () => [],
         resume: async () => undefined,
+        resolveApproval: async () => undefined,
         cancelRun: async () => undefined,
         materializeRun: async (runID: string) => ({
           id: `g__run_${runID}`,

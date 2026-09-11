@@ -1042,9 +1042,23 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// resolved knobs and the tool catalog); the journal needs the
 	// bridge, which needs the sub id. Attaching afterwards keeps the
 	// construction order honest — the adapters hold pointers.
-	journal := newTurnJournal(r.cfg.HistoryWriter, bridge.Emit, sessionID, turnSpanID)
+	// r.cfg.UsageHook is threaded straight in (fix/usage-persists-on-
+	// every-move): the journal fires it directly for every persisted
+	// assistant-role row, final included (see moves.go's file header).
+	// Nil is fine — records() / fireUsage both nil-check before doing
+	// anything.
+	journal := newTurnJournal(r.cfg.HistoryWriter, bridge.Emit, sessionID, turnSpanID, r.cfg.UsageHook)
 	llmAdapter.WithMoveJournal(journal)
 	toolAdapter.withMoves(journal)
+	// Round 3 (fix/usage-persists-on-every-move): no separate wiring
+	// needed here for the revised-final case any more. LLMProviderAdapter
+	// .Generate calls journal.RecordCandidateUsage unconditionally for
+	// every fire with non-empty text — chat move or not — the instant
+	// each call's own response is computed, so AppendEntry can look up
+	// whichever call actually authored the persisted text by content,
+	// instead of reading a single mutable "last response" slot that
+	// exit_gate's own always-runs-last verdict call would otherwise own.
+	// See moves.go's RecordCandidateUsage / AppendEntry doc comments.
 	// env.HistoryWriter stays nil when nothing was configured, so
 	// applyEnvDefaults installs the kernel's ErrNoHistoryWriter stub and
 	// session_write still fails loudly. Interposing the journal there
@@ -1067,6 +1081,19 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		// (H-1) and cedar.Registry.RequestInteractive (H-3) read.
 		streamCtx = runposture.Unattended(streamCtx)
 	}
+	// trust-surfaces-that-fire-01PMZ202 WP23 (AN-04), post-review fix:
+	// stamp THIS turn's resolved posture onto streamCtx via ctx
+	// propagation (same mechanism as runposture.Unattended above)
+	// rather than mutating a.promptRegistry's shared r.posture field the
+	// way an earlier version of this WP did — a.promptRegistry is an
+	// explicit process-wide singleton, so a global SetPosture call let
+	// one session's resolved tier leak into every OTHER concurrently-
+	// running session's interactive prompts (a Strict-tier session's
+	// confirmations could be silently auto-allowed by a looser-tier
+	// sibling tab or subagent), and was a genuine unsynchronized read
+	// under -race besides. See applyPromptPostureToCtx and
+	// cedar.WithPromptPosture's doc comments for the full reasoning.
+	streamCtx = applyPromptPostureToCtx(streamCtx, r.cfg.AutonomyKnobs != nil, resolvedKnobs.EffectiveTier)
 
 	// Pre-seed the AskBus with the user's message so the chat graph's
 	// `ask_user` AskNode resolves on its first fire. The chat graph is
@@ -1205,6 +1232,22 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	if r.cfg.EnvDefaults != nil {
 		r.cfg.EnvDefaults(env)
 	}
+	// trust-surfaces-that-fire-01PMZ202 WP23 (AN-04 second seam): apply
+	// the resolved posture mode to the Cedar gate env.Policy now points
+	// at, AFTER EnvDefaults so this isn't clobbered by the process-wide
+	// PolicyGateAdapter EnvDeps.applyTo installs. resolvedKnobs was
+	// already resolved once for this StartStream (fix F8) — reusing it
+	// here rather than re-deriving keeps that single-resolution
+	// invariant intact. The type assertion (rather than an import of
+	// core/rpc/views/agentgraph) keeps this package's dependency
+	// direction unchanged; a fake env.Policy that doesn't implement
+	// WithPostureMode is simply left as-is, matching every other
+	// unset-seam degrade in this function.
+	if pm, ok := env.Policy.(interface {
+		WithPostureMode(string) coreag.PolicyGate
+	}); ok {
+		env.Policy = pm.WithPostureMode(resolvedKnobs.PostureMode)
+	}
 	// WP12: register the spec this turn will actually execute, so the
 	// turn can be projected back into a graph afterwards. Recorded here
 	// — after the routing gate and the max-turns dial have finished
@@ -1231,12 +1274,42 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		}
 		capturedAdapter := llmAdapter
 		capturedSessionID := sessionID
-		if r.cfg.UsageHook != nil {
+		capturedJournal := journal
+		// fix/usage-persists-on-every-move, rounds 2+3: gated on
+		// !journal.records(). For every ordinary turn (a resolved span —
+		// the overwhelming majority) turnJournal.AppendEntry now fires
+		// usage for the final row itself (see moves.go). Registering
+		// THIS callback too would fire a SECOND write for the same row,
+		// and it would run AFTER the journal's own write (this hook
+		// fires once AppendEntry returns to sessionWriteExecutor), so it
+		// would silently overwrite the right value with whatever it
+		// found. journal.records() is false only for the degenerate
+		// no-user-message-to-span-from case, where the journal writes
+		// everything classic and never calls fireUsage itself — this
+		// registration is that case's only usage writer.
+		//
+		// It sources usage via capturedJournal.LookupCandidateUsage, NOT
+		// capturedAdapter.LastResponse() — RecordCandidateUsage runs
+		// unconditionally in Generate regardless of records(), so even
+		// an inert journal has the same content-matched history
+		// AppendEntry uses, and needs it for the same structural reason:
+		// on the ROUTED graph, exit_gate's own verdict call is ALWAYS
+		// the last Generate() before this hook fires, degenerate journal
+		// or not, so a "last response" read would ALWAYS be the gate's
+		// usage here too. There is no reader of LastResponse() left
+		// anywhere on the usage-firing path.
+		if r.cfg.UsageHook != nil && !journal.records() {
 			usageHook := r.cfg.UsageHook
-			env.Hooks.RegisterPostHook(coreag.HookPostLLM, func(ctx context.Context, sID, messageID, _ string) {
-				resp := capturedAdapter.LastResponse()
-				providerKind := capturedAdapter.ProviderKind()
-				modelID := capturedAdapter.ActiveModelID()
+			env.Hooks.RegisterPostHook(coreag.HookPostLLM, func(ctx context.Context, sID, messageID, text string) {
+				resp, providerKind, modelID, ok := capturedJournal.LookupCandidateUsage(text)
+				if !ok {
+					// No recorded Generate() call produced this exact
+					// text — nothing to attribute usage to. Safer to
+					// skip than to guess.
+					logging.L().Warn("chat.usage.no_candidate_match",
+						"session_id", capturedSessionID, "message_id", messageID)
+					return
+				}
 				usageHook(ctx, capturedSessionID, messageID, providerKind, modelID, resp)
 			})
 		}
@@ -2027,12 +2100,47 @@ func init() {
 	knobcoverage.Register[autonomy.ResolvedKnobs]("ContinueOnError", "chat.continueOnErrorPolicy")
 	knobcoverage.Register[autonomy.ResolvedKnobs]("TokenCeilingPerTurn", "chat.applyTokenCeilingKnob")
 	knobcoverage.RegisterDeferred[autonomy.ResolvedKnobs]("SourceTrace", "resolver bookkeeping, not a tunable knob")
-	knobcoverage.RegisterDeferred[autonomy.ResolvedKnobs]("PostureMode", "resolver bookkeeping, not a tunable knob")
+	// trust-surfaces-that-fire-01PMZ202 WP23 (AN-04 second seam): was
+	// RegisterDeferred("resolver bookkeeping, not a tunable knob") until
+	// this WP gave it a real consumer — env.Policy is re-wrapped with
+	// cedar.WithPostureMode(resolvedKnobs.PostureMode, ...) right below
+	// the EnvDefaults call in StartStream, so plan_mode denies
+	// write-class Cedar actions instead of only lowering the knob-level
+	// AutoApproveFamilies preset.
+	knobcoverage.Register[autonomy.ResolvedKnobs]("PostureMode", "chat.ChatRunner.StartStream (PolicyGateAdapter.WithPostureMode re-wrap)")
 	// owner directive 2026-09-09: the per-run call-volume budget cap
 	// (MaxLLMCallsPerRun/MaxToolCallsPerRun) is now governed by the
 	// autonomy tier, same as TokenCeilingPerTurn already governs
-	// MaxTokensPerRun above.
+	// MaxTokensPerRun above. trust-surfaces-that-fire-01PMZ202 WP23
+	// (AN-04) added a second consumer in this same file,
+	// applyPromptPostureToCtx (stamps the Cedar prompt registry's
+	// interactive-permission posture onto streamCtx) — not re-registered
+	// here, since knobcoverage.Register only needs one consumer named
+	// per field and panics on a second registration for the same field.
 	knobcoverage.Register[autonomy.ResolvedKnobs]("EffectiveTier", "chat.applyBudgetTierDial")
+}
+
+// applyPromptPostureToCtx stamps ctx with the Cedar prompt registry's
+// interactive-permission posture derived from tier
+// (trust-surfaces-that-fire-01PMZ202 WP23 / AN-04, post-review fix).
+// Pulled out of StartStream so the gating logic is independently
+// testable — a real *cedar.Registry, driven with the ctx this returns,
+// proves the wiring rather than just the mapping table.
+//
+// knobsProviderWired MUST be r.cfg.AutonomyKnobs != nil, not merely
+// "tier looks like a real value" — autonomy.Tier's zero value
+// stringifies to "strict" (TierStrict is iota 0), not "default", so a
+// nil AutonomyKnobs provider's zero-value resolvedKnobs would silently
+// flip every unwired chassis (tests, the nil-core boot path) from
+// today's PostureDefault to PostureAlwaysPrompt if this stamped
+// unconditionally. false leaves ctx exactly as passed in — no stamp —
+// so RequestInteractive falls back to the registry-wide default,
+// byte-identical to a harness with no autonomy provider wired.
+func applyPromptPostureToCtx(ctx context.Context, knobsProviderWired bool, tier autonomy.Tier) context.Context {
+	if !knobsProviderWired {
+		return ctx
+	}
+	return cedar.WithPromptPosture(ctx, cedar.PromptPostureForTierName(tier.String()))
 }
 
 // applyAskOnAmbiguityDial folds the askOnAmbiguity knob onto the chat
