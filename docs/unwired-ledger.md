@@ -330,14 +330,33 @@ investigation) is `API.StartStream` → `ChatRunner.StartStream`
 never run in a shipped build either — the identical defect class as
 `post_send`/`memory.persist`, just not fixed in this same change (see
 below). The gate that certified `pre_send` as firing
-(`scripts/ci/check-hook-event-fire-sites.sh` leg (a)) is a **syntactic**
-grep for `.RunPreSend(` outside test files — it cannot distinguish a real
-call site from one buried in dead code, so it passed on a false positive
-for three-plus weeks. That blind spot is not closed here (see Blocker
-below); this fix's own tests substitute a real-path integration proof for
-the one event they cover, which is the stronger guarantee CLAUDE.md's
-testing-rule-3 doctrine asks for, but it does not generalize into the
-static gate.
+(`scripts/ci/check-hook-event-fire-sites.sh` leg (a)) was a **syntactic**
+grep for `.RunPreSend(` outside test files — it could not distinguish a
+real call site from one buried in dead code, so it passed on a false
+positive for three-plus weeks. **CLOSED (same PR, review-nit follow-up,
+2026-09-10):** leg (a) now adds a one-hop reachability check — it
+resolves the function ENCLOSING each textual match and requires that
+function to have at least one non-test caller anywhere in `core/`,
+reproducing exactly the `buildMessages` shape found here. Planted-
+violation proof:
+`TestHookEventFireSitesGate_PlantedDeadEnclosingFunctionFires`
+(`scripts/ci/gates_can_fail_test.go`) registers a fake event with its only
+fire site inside a zero-caller function and confirms the new gate rejects
+it while the pre-fix gate passes it — the exact regression this entry
+describes. This is deliberately ONE hop, not full call-graph reachability
+— see the gate's own header comment and `one_hop_reachable()` for what it
+still cannot see (a live caller that is itself unreachable at hop two;
+indirect invocation through an interface, stored closure, or reflection;
+a same-named method on an unrelated receiver miscounted as a caller).
+Tree-wide run after the widening: 0 events flagged, 0 false positives
+among the 7 currently-firing events (`post_send`, `pre_tool_use`,
+`post_tool_use`, `post_tool_use_failure`, `permission_request`,
+`permission_denied`, `session_start`) — each already has a reachable
+production call site. Full transitive reachability (hop two and beyond)
+remains open; this fix's own tests still substitute a real-path
+integration proof for the one event they cover, which is the stronger
+guarantee CLAUDE.md's testing-rule-3 doctrine asks for and which no
+static gate can fully replace.
 
 **What shipped:** `post_send` now fires from the real path.
 `ChatRunner.Config.PostSendHook` (new field, `chat_runner.go`) is
@@ -386,25 +405,32 @@ r.cfg.PostSendHook != nil` (reproducing "never registered") turned both
 tests red (`PostSendHook fired 0 times, want 1`; `len(chunks) = 0, want
 1`); reverting turned them green again.
 
-**Blocker / owner — the four still-dead v1/v2 events + the gate's
-syntactic-only leg (a):** `user_prompt_submit`, `notification`,
-`pre_save_session`, `post_assistant_turn_complete` remain unbuilt — see
-their (corrected) rows in `i17-eventless-hook-events.txt`; two of the four
-rows previously cited `buildMessages`/`impl.go:892 StartStream` as live
-seats, which this finding shows was never true, so those rows were
-corrected to point at `ChatRunner.StartStream` instead. Wiring `pre_send`
-for real needs a genuinely bigger change than `post_send`'s did:
-`post_send` is a post-hoc side effect (fire-and-forget after the message
-is already persisted, trivially hung off the existing `HookPostLLM`
-boundary); `pre_send` must MUTATE the outbound message list BEFORE the LLM
-call is built, and `ChatRunner` has no pre-LLM injection point today
+**Blocker / owner — the four still-dead v1/v2 events:**
+`user_prompt_submit`, `notification`, `pre_save_session`,
+`post_assistant_turn_complete` remain unbuilt — see their (corrected)
+rows in `i17-eventless-hook-events.txt`; two of the four rows previously
+cited `buildMessages`/`impl.go:892 StartStream` as live seats, which this
+finding shows was never true, so those rows were corrected to point at
+`ChatRunner.StartStream` instead. Wiring `pre_send` for real needs a
+genuinely bigger change than `post_send`'s did: `post_send` is a
+post-hoc side effect (fire-and-forget after the message is already
+persisted, trivially hung off the existing `HookPostLLM` boundary);
+`pre_send` must MUTATE the outbound message list BEFORE the LLM call is
+built, and `ChatRunner` has no pre-LLM injection point today
 (`HookPreLLM` exists as a boundary constant in `core/agentgraph/hooks.go`
-but has zero `Fire` call sites of its own). Separately,
-`check-hook-event-fire-sites.sh`'s leg (a) stays syntactic-only — it can
-be fooled by another dead call site the same way `pre_send` fooled it for
-three weeks. Neither is fixed here. **Owner: alec — follow-up WP**, scoped
-separately from this fix (dated 2026-09-10, same as the corrected
-allowlist rows).
+but has zero `Fire` call sites of its own). **Owner: alec — follow-up
+WP**, scoped separately from this fix (dated 2026-09-10, same as the
+corrected allowlist rows).
+
+The gate's syntactic-only leg (a) — the part of this entry that used to
+say "neither is fixed here" — **was** closed in the same PR as a
+review-nit follow-up (see the "CLOSED (same PR...)" note above): leg (a)
+now requires the enclosing function of each matched fire site to have a
+non-test caller (one hop), with
+`TestHookEventFireSitesGate_PlantedDeadEnclosingFunctionFires` as the
+planted-violation proof. Full transitive call-graph reachability (a
+caller that is itself unreachable, or invocation through an interface/
+closure/reflection) remains open and is not this entry's scope.
 
 ### 2026-09-09 (vm-execution-surface-truth-01PMZD14 WP05) · `approvalGateFrom` — HV-01, no `PromptSurface` variant for a model call
 

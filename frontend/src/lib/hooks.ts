@@ -132,7 +132,8 @@ export type HookEventName = (typeof ALL_HOOK_EVENTS)[number];
  * core/rpc/api.go's buildChatRunner wires it to the real
  * hooksRunner.RunPostSend. Covered by
  * TestChatRunner_PostSendHook_FiresOnRealPath /
- * TestPostSendHook_MemoryPersist_WritesRealRow (real sqlite).
+ * TestPostSendHook_MemoryPersist_WritesRealRow (real on-disk gob-backed
+ * chromem store — core/memory has no sqlite backend).
  *
  * Every producer WP appends its event(s) here in the same commit as its
  * fire site (WP09-WP21). scripts/ci/check-hook-event-fire-sites.sh (G-2)
