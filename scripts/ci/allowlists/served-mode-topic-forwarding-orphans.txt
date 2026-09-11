@@ -1,0 +1,33 @@
+# served-mode-topic-forwarding-orphans.txt
+#
+# Reverse-direction allowlist for check-served-mode-topic-forwarding.sh's
+# pass 2 (#69): a topic value in core/serve/wsstream.go's
+# passthroughTopics with NO real frontend useEventStream(...) subscriber.
+#
+# Format: one bare "<value>" DATA line per entry (comments stripped by
+# the gate before matching). Each line MUST be preceded by a dated
+# comment naming the blocker and an owner (allowlist rule A-0 — see
+# CLAUDE.md's "Rules" under the unwired-sweep ritual: allowlists shrink
+# monotonically, and nothing gets added without a date).
+#
+# As of 2026-09-11 (finding #69's fix), every entry in passthroughTopics
+# has a real useEventStream consumer — verified by hand against the
+# 14-entry array in core/serve/wsstream.go:139-212 cross-referenced
+# against every `useEventStream(...)` call site under frontend/src.
+# This file is therefore currently EMPTY of data lines. It exists so a
+# future genuine exception (e.g. a topic intentionally broadcast ahead
+# of its UI landing, or one delivered by a mechanism outside
+# useEventStream that this gate's discovery pass cannot see) has
+# somewhere to go without widening the gate itself.
+#
+# NOT an example of what belongs here:
+# core/serve/wsstream.go's TopicStreamTruncated ("served:stream-truncated")
+# is NOT a passthroughTopics entry at all — it is written directly via
+# wsstream.go's own writeFrame helper, bypassing EventBus.Publish and the
+# passthroughTopics forwarding mechanism entirely, and it DOES have a real
+# useEventStream consumer (frontend/src/lib/useSession.ts). It is excluded
+# from pass 1 by is_excluded_file's self-reference rule (it is declared in
+# $PASSTHROUGH_FILE itself) and never becomes a pass-2 candidate at all,
+# because pass 2 only walks passthroughTopics' own elements and this
+# value is not one of them. Recorded here only so the next allowlister
+# does not mistake it for a precedent.

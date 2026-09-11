@@ -32,9 +32,11 @@ package ci_test
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -1533,6 +1535,275 @@ func plant(t *testing.T, full, content, appendText string) func() {
 				t.Errorf("removing %s: %v — WORKING TREE IS DIRTY", createdDir, err)
 			}
 		}
+	}
+}
+
+// plantReplace performs a journaled read-mutate-restore on an EXISTING
+// file, replacing the first occurrence of target with mutated. plant()'s
+// append mode can only add content at the very END of a file, which
+// cannot express "an existing slice literal gains a new element in the
+// middle of the file" — the shape check-served-mode-topic-forwarding.sh's
+// reverse-direction proof needs (a new passthroughTopics entry has to
+// land before the slice's closing brace, not after the whole file).
+// Journaled exactly the way plant()'s append branch journals its own
+// mutation, so a `-timeout` kill mid-plant heals on TestMain's next run
+// the same way every other case in this file does — see
+// plantguard_test.go. This intentionally does NOT retrofit the five
+// pre-existing bare-os.WriteFile-plus-defer read-mutate-restore tests
+// noted in TestStructuredOutputRowParityGate_PlantedEncoderDropFires's
+// doc comment; it only avoids adding a sixth one.
+func plantReplace(t *testing.T, full, target, mutated string) func() {
+	t.Helper()
+	orig, err := os.ReadFile(full)
+	if err != nil {
+		t.Fatalf("reading %s: %v", full, err)
+	}
+	if !strings.Contains(string(orig), target) {
+		t.Fatalf("target text not found in %s — the anchor may have moved; update this test:\n%q", full, target)
+	}
+	newContent := strings.Replace(string(orig), target, mutated, 1)
+	// Journal BEFORE touching the file — see plant()'s append branch and
+	// plantguard_test.go for the rationale: a kill after the write but
+	// before cleanup runs is exactly the case the journal exists for.
+	journalPlant(plantRecord{Path: full, Orig: string(orig), Existed: true, Planted: newContent})
+	if err := os.WriteFile(full, []byte(newContent), 0o644); err != nil {
+		t.Fatalf("writing %s: %v", full, err)
+	}
+	return func() {
+		if err := os.WriteFile(full, orig, 0o644); err != nil {
+			t.Errorf("restoring %s: %v — WORKING TREE IS DIRTY", full, err)
+		}
+		journalClear(full)
+	}
+}
+
+// TestServedModeTopicForwardingGate_PlantedOrphanBroadcastFires is the
+// REVERSE-direction planted-violation proof for
+// check-served-mode-topic-forwarding.sh's pass 2 (#69): a topic present
+// in core/serve/wsstream.go's passthroughTopics with NO real frontend
+// useEventStream subscriber. Before pass 2 existed, this shape was
+// invisible: pass 1 only ever asked "does a subscribed topic reach
+// passthroughTopics", never the reverse "does everything in
+// passthroughTopics reach a subscriber" — dead weight forwarded to every
+// served connection, and a passthroughTopics entry that no longer
+// states real intent (the entries are the single hand-authored source
+// of truth the TS list is generated from, so an orphan there is read as
+// a statement of intent nobody meant).
+//
+// Two plants, both journaled so a `-timeout` kill mid-plant heals on the
+// next run (mirrors the two-plant shape of
+// "served-mode-topic-forwarding/subscribed-not-forwarded" above, which
+// proves the FORWARD direction; this proves the reverse):
+//  1. A brand-new Topic* const (plant(), create mode — already
+//     journaled).
+//  2. wsstream.go's passthroughTopics slice gains that const as a new
+//     element (plantReplace, above — inserting into an existing slice
+//     literal is not expressible through plant()'s append-to-end-of-file
+//     mode).
+//
+// No frontend file is planted — the ABSENCE of a subscriber is the
+// violation being proved.
+func TestServedModeTopicForwardingGate_PlantedOrphanBroadcastFires(t *testing.T) {
+	root := repoRoot(t)
+
+	constFile := filepath.Join(root, "core", "rpc", "zz_gate_probe_orphan.go")
+	constContent := "package rpc\n\n" +
+		"// TopicZzGateProbeServedOrphan is planted by gates_can_fail_test.go's\n" +
+		"// check-served-mode-topic-forwarding.sh pass-2 (reverse direction)\n" +
+		"// proof and removed after the test runs. Deliberately has no\n" +
+		"// frontend useEventStream subscriber — that absence is the point.\n" +
+		"const TopicZzGateProbeServedOrphan = \"zzgateprobe:served-orphan\"\n"
+	cleanupConst := plant(t, constFile, constContent, "")
+	defer cleanupConst()
+
+	wsstreamPath := filepath.Join(root, "core", "serve", "wsstream.go")
+	const target = "\tmcpview.TopicMCPHealthChanged,\n}\n"
+	mutated := "\tmcpview.TopicMCPHealthChanged,\n\trpc.TopicZzGateProbeServedOrphan,\n}\n"
+	cleanupSlice := plantReplace(t, wsstreamPath, target, mutated)
+	defer cleanupSlice()
+
+	code, out := runGate(t, "check-served-mode-topic-forwarding.sh", root)
+	if code == 0 {
+		t.Fatalf("check-served-mode-topic-forwarding.sh exited 0 with a passthroughTopics entry "+
+			"(TopicZzGateProbeServedOrphan) that has no useEventStream consumer — the reverse-direction "+
+			"pass cannot fail.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "TopicZzGateProbeServedOrphan") || !strings.Contains(out, "zzgateprobe:served-orphan") {
+		t.Fatalf("gate failed, but its output does not name the planted orphan topic "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+}
+
+// TestServedModeTopicForwardingGate_PlantedPassthroughDiscoveryFloorFires
+// is the planted-violation proof for the PASSTHROUGH_BLOCK floor guard
+// (2026-09-11 hardening). Before the floor guard existed, reformatting
+// core/serve/wsstream.go's `var passthroughTopics = []string{ ... }`
+// declaration into a grouped `var (...)` block — a realistic
+// gofmt-adjacent change, not a contrived one — silently broke the awk
+// pattern this gate anchors discovery on (`/var passthroughTopics =
+// \[\]string\{/`). PASSTHROUGH_BLOCK went empty, pass 1 (forward
+// direction) fell back to "not forwarded" for every candidate, and pass 2
+// (reverse direction, which reuses the same block) reported "0 entries
+// checked... clean" — a gate malfunction indistinguishable from an
+// actually-empty passthroughTopics list. The only reason the OLD gate
+// still exited non-zero on this shape at all was incidental coupling: as
+// long as pass 1 had at least one non-allowlisted forwarded+consumed
+// topic, it still failed loudly for an unrelated reason. This test
+// proves the NEW, explicit floor guard fires on its own terms, not by
+// relying on that coupling.
+//
+// Two plantReplace calls on the SAME file (core/serve/wsstream.go),
+// applied and cleaned up in sequence: the opening `var passthroughTopics
+// = []string{` line gains a wrapping `var (`, and the closing `}` right
+// after the last real entry (mcpview.TopicMCPHealthChanged) gains a
+// matching `)` — kept syntactically valid Go throughout, mirroring the
+// exact defect class described in BLOCKER 1's repro ("reformat
+// passthroughTopics into a grouped var (...) block").
+func TestServedModeTopicForwardingGate_PlantedPassthroughDiscoveryFloorFires(t *testing.T) {
+	root := repoRoot(t)
+	wsstreamPath := filepath.Join(root, "core", "serve", "wsstream.go")
+
+	const openTarget = "var passthroughTopics = []string{\n"
+	const openMutated = "var (\n\tpassthroughTopics = []string{\n"
+	cleanupOpen := plantReplace(t, wsstreamPath, openTarget, openMutated)
+	defer cleanupOpen()
+
+	const closeTarget = "\tmcpview.TopicMCPHealthChanged,\n}\n"
+	const closeMutated = "\tmcpview.TopicMCPHealthChanged,\n\t}\n)\n"
+	cleanupClose := plantReplace(t, wsstreamPath, closeTarget, closeMutated)
+	defer cleanupClose()
+
+	code, out := runGate(t, "check-served-mode-topic-forwarding.sh", root)
+	if code == 0 {
+		t.Fatalf("check-served-mode-topic-forwarding.sh exited 0 after passthroughTopics was "+
+			"reformatted into a grouped var (...) block — PASSTHROUGH_BLOCK discovery silently broke "+
+			"and the gate reported clean instead of a discovery malfunction.\noutput:\n%s", out)
+	}
+	if code != 2 {
+		t.Fatalf("check-served-mode-topic-forwarding.sh exited %d, want 2 (the documented "+
+			"discovery-malfunction exit code).\noutput:\n%s", code, out)
+	}
+	if !strings.Contains(out, "passthroughTopics discovery resolved 0 real Topic* token") {
+		t.Fatalf("gate failed, but its output does not name the passthroughTopics discovery floor "+
+			"failure (a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+}
+
+// TestServedModeTopicForwardingGate_PlantedFrontendDiscoveryFloorFires is
+// the planted-violation proof for the FRONTEND_CALL_COUNT floor guard
+// (2026-09-11 hardening, the other half of the same fix). Before the
+// floor guard existed, renaming every real `useEventStream(...)` call
+// site (a realistic wholesale-rename refactor of the composable, not a
+// contrived one) silently zeroed FRONTEND_WINDOW. Because frontend_hit —
+// computed by substring-matching against FRONTEND_WINDOW — determines
+// CANDIDACY (not just pass/fail) for pass 1, an empty window did not
+// fail every candidate; it disqualified them from candidacy entirely, so
+// pass 1 reported "0 candidates... clean". Pass 2 (which also reads
+// FRONTEND_WINDOW to decide whether a passthroughTopics entry is
+// consumed) was the only thing still failing loudly on this shape,
+// again incidental coupling rather than a guard.
+//
+// This defect class is fundamentally repo-wide (the check aggregates a
+// count across every production frontend/src file), so — unlike the
+// passthrough proof above, which is a two-line change to one file —
+// proving it requires actually renaming every real call site the gate's
+// own discovery would find, run the gate, and restore every file
+// byte-for-byte afterward. That is a larger footprint than this file's
+// usual plant()/plantReplace() single- or dual-file cases, but there is
+// no smaller-footprint mutation that is faithful to what "FRONTEND_WINDOW
+// resolves to zero real matches" actually requires: any topic-count
+// floor on a repo-wide aggregate can only be driven to zero by
+// eliminating every real match, regardless of how low the floor is set.
+//
+// Each touched file is journaled via journalPlant/journalClear (the same
+// primitive plant()/plantReplace() use) before it is mutated, so a
+// `-timeout` kill mid-run heals via TestMain on the next invocation
+// exactly like every other case in this file — see plantguard_test.go.
+func TestServedModeTopicForwardingGate_PlantedFrontendDiscoveryFloorFires(t *testing.T) {
+	root := repoRoot(t)
+	frontendSrc := filepath.Join(root, "frontend", "src")
+
+	callSitePattern := regexp.MustCompile(`useEventStream(<[^>]*>)?\(`)
+
+	type mutatedFile struct {
+		path    string
+		orig    string
+		planted string
+	}
+	var mutated []mutatedFile
+
+	err := filepath.WalkDir(frontendSrc, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		name := d.Name()
+		if !strings.HasSuffix(name, ".ts") && !strings.HasSuffix(name, ".vue") {
+			return nil
+		}
+		if strings.HasSuffix(name, ".spec.ts") || strings.HasSuffix(name, ".test.ts") {
+			return nil
+		}
+		if strings.Contains(filepath.ToSlash(path), "/__tests__/") {
+			return nil
+		}
+		orig, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if !callSitePattern.MatchString(string(orig)) {
+			return nil
+		}
+		planted := callSitePattern.ReplaceAllString(string(orig), "zzGateProbeRenamedUseEventStream${1}(")
+		mutated = append(mutated, mutatedFile{path: path, orig: string(orig), planted: planted})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking %s to find useEventStream call sites: %v", frontendSrc, err)
+	}
+	if len(mutated) == 0 {
+		t.Fatalf("found zero production files containing a useEventStream(...) call site under %s — "+
+			"the walk itself is broken (wrong path, or the pattern no longer matches this codebase); "+
+			"cannot plant the floor-guard violation this test proves", frontendSrc)
+	}
+
+	// Journal every file BEFORE mutating (same discipline as plant()'s
+	// append branch), then write the mutation. Two separate loops so the
+	// journal is complete before any real write happens.
+	for _, mf := range mutated {
+		journalPlant(plantRecord{Path: mf.path, Orig: mf.orig, Existed: true, Planted: mf.planted})
+	}
+	defer func() {
+		for i := len(mutated) - 1; i >= 0; i-- {
+			mf := mutated[i]
+			if err := os.WriteFile(mf.path, []byte(mf.orig), 0o644); err != nil {
+				t.Errorf("restoring %s: %v — WORKING TREE IS DIRTY", mf.path, err)
+				continue
+			}
+			journalClear(mf.path)
+		}
+	}()
+	for _, mf := range mutated {
+		if err := os.WriteFile(mf.path, []byte(mf.planted), 0o644); err != nil {
+			t.Fatalf("planting renamed call sites into %s: %v", mf.path, err)
+		}
+	}
+
+	code, out := runGate(t, "check-served-mode-topic-forwarding.sh", root)
+	if code == 0 {
+		t.Fatalf("check-served-mode-topic-forwarding.sh exited 0 after every real useEventStream(...) "+
+			"call site (%d file(s)) was renamed — FRONTEND_WINDOW discovery silently broke and the gate "+
+			"reported clean instead of a discovery malfunction.\noutput:\n%s", len(mutated), out)
+	}
+	if code != 2 {
+		t.Fatalf("check-served-mode-topic-forwarding.sh exited %d, want 2 (the documented "+
+			"discovery-malfunction exit code).\noutput:\n%s", code, out)
+	}
+	if !strings.Contains(out, "frontend useEventStream discovery found 0 call site") {
+		t.Fatalf("gate failed, but its output does not name the frontend discovery floor failure "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
 	}
 }
 
