@@ -352,6 +352,63 @@ UNIT-2 (WP04 + WP05) has landed.
 - **Owner:** alecfeeman.
 - **Date:** 2026-09-09.
 
+### 2026-09-10 · `llm.Response.Reasoning` has zero writers and zero readers — `model-settings-reach-the-model-01PMZ101` WP09
+
+Found while wiring UNIT-5 (WP09 + WP16): Bedrock and Gemini did not emit
+`llm.StreamReasoning` at all — the user paid for reasoning tokens on those
+two providers and saw nothing, live or on reload, matching Anthropic's
+pre-existing gap on the other two providers still open at the time
+(`docs/unwired-ledger.md` earlier entries; closed for Anthropic only).
+WP09 added the missing delta-decode arms in `core/llm/bedrock/bedrock.go`,
+`core/llm/bedrock/bearer.go`, `core/llm/gemini/wire.go` and
+`core/llm/gemini/adapter.go` so all three providers now emit
+`llm.StreamReasoning` during streaming.
+
+`llm.Response.Reasoning` (`core/llm/llm.go:723`,
+`Reasoning []ReasoningBlock`) is a different thing: the **terminal,
+non-streaming** response struct's reasoning field. It has zero
+production writers repo-wide (no adapter — including the newly-wired
+Bedrock/Gemini paths and the pre-existing Anthropic path — ever assigns
+`Response.Reasoning`; every adapter accumulates reasoning only on the
+`StreamEvent`/`StreamReasoning` side, matching how `Response.Content`
+and `Response.ToolCalls` are accumulated from stream events by the
+*caller*, not the adapter) and zero readers.
+
+**Not deleted.** Register A-0 (this release's delete-lane freeze, spec
+D-11) is explicit: "a commit whose body's only justification for a
+removal is absence of callers is rejected at review" — which is exactly
+this field's only justification. WP09 instead:
+
+1. Amended the field's docstring (`core/llm/llm.go`) to name
+   `StreamEvent.Reasoning` as the live carrier, so a future reader does
+   not mistake `Response.Reasoning` for the place reasoning content
+   accumulates.
+2. Records this dated justification here, since no existing gate class
+   in `scripts/ci/allowlists/` covers "exported struct field with zero
+   writers and zero readers" — I10 is scoped to
+   `Evaluate*/Enforce*/Authorize*/Check*/Verify*/Guard*/Permit*/*Gate`
+   control-flow symbols (`scripts/ci/allowlists/i10-unwired-gates.txt`),
+   I16 is scoped to agentgraph manifest output ports
+   (`scripts/ci/allowlists/i16-declared-unwritten-output-ports.txt`),
+   and the other allowlists are similarly domain-specific. This finding
+   has no allowlist to live in, so per CLAUDE.md ("Where the ledger
+   lives") it stays here in the ungated half.
+
+**Blocker:** wiring a non-streaming consumer of `Response.Reasoning`
+would mean either (a) accumulating `StreamReasoning` events into
+`Response.Reasoning` at the adapter layer — a second accumulation path
+alongside the kernel-side accumulation `llm_provider_adapter.go` and
+`stream_bridge.go` already do for the UI, which is exactly the "rival
+infrastructure" class CLAUDE.md's delete-vs-finish section says to avoid
+— or (b) a genuinely new non-streaming `Generate()` consumer that has no
+product owner today. Neither is UNIT-5's scope (spec: WP16 is the
+render-path fix; both are P1, coupled, and explicitly must not widen to
+a third mechanism). **Owner:** alec — next reasoning-related mission
+should re-examine whether `Response.Reasoning` should be populated from
+the same `StreamReasoning` accumulation the kernel already performs, or
+deleted once that accumulation has run for a full release with zero
+regressions reported. **Date:** 2026-09-10.
+
 ### 2026-08-23 · WP20 (UNIT-15) — frontend props and exports with no consumer, five NARROWed after wiring the two that had a source
 
 `controls-and-readouts-that-tell-the-truth-01PMZ808` WP20. Spec §1.15 named

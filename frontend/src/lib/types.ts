@@ -1487,6 +1487,21 @@ export interface Message {
   kind?: MoveKind;
   moveIndex?: number;
   turnSpanId?: string;
+
+  /**
+   * Live extended-thinking content (model-settings-reach-the-model-
+   * 01PMZ101 WP16). Populated only while streaming, from
+   * `llm:stream-chunk` frames of kind "reasoning" — mirrors
+   * core/llm.StreamEvent.Reasoning.Content, itself sourced from the
+   * provider's own reasoning/thinking deltas (Anthropic
+   * thinking_delta, Bedrock reasoningContent, Gemini thought parts).
+   * Deliberately **not persisted**: no SQL column carries it and no
+   * server round-trip returns it on reload — a reopened session shows
+   * the answer but not the reasoning that produced it. Empty /
+   * undefined for every non-streaming render and for any turn where
+   * the model did not emit reasoning.
+   */
+  reasoning?: string;
 }
 
 /**
