@@ -69,8 +69,8 @@ type CapabilityPoller struct {
 	backoff  *backoffState
 	sf       singleflight.Group
 
-	mu       sync.RWMutex
-	current  Capabilities
+	mu      sync.RWMutex
+	current Capabilities
 	// listeners holds OnChange callbacks, appended under mu.
 	listeners []func(Capabilities)
 
@@ -88,7 +88,6 @@ func NewCapabilityPoller(client *Client, dataDir string) *CapabilityPoller {
 		dataDir:  dataDir,
 		interval: pollInterval,
 		backoff:  &backoffState{},
-		done:     make(chan struct{}),
 		// Initialize with default-deny so Current() is never nil.
 		current: DefaultDenyCapabilities(),
 	}
@@ -150,6 +149,12 @@ func enabledSetChanged(a, b Capabilities) bool {
 func (p *CapabilityPoller) Start(ctx context.Context) {
 	innerCtx, cancel := context.WithCancel(ctx)
 	p.cancel = cancel
+	// done is allocated HERE, not in the constructor, so that a
+	// constructed-but-never-started poller leaves it nil and Stop has a
+	// reliable way to tell "no goroutine to wait for" from "running".
+	// See Stop for why that distinction is load-bearing. This matches
+	// AuditArchiver and AuditRetentionSweeper, which already do it this way.
+	p.done = make(chan struct{})
 
 	// Load the disk cache as the initial state so we have something to serve
 	// before the first network fetch completes.
@@ -227,7 +232,18 @@ func (p *CapabilityPoller) Stop() {
 	if p.cancel != nil {
 		p.cancel()
 	}
-	<-p.done
+	// Only Start spawns the goroutine that closes done, so a poller that was
+	// constructed but never started has nothing to wait for -- and because
+	// done used to be allocated in the constructor, the bare receive below
+	// blocked FOREVER in exactly that case. That is not hypothetical: the
+	// construct-without-start state is documented on NewCapabilityPoller and
+	// is what settings.SetFleetClient produces under `go test`, where the
+	// Start call is guarded but the poller is still assigned (the lockdown
+	// watcher needs the instance). The result was a 10-minute hang in
+	// API.Shutdown -> StopFleetBackground -> here.
+	if p.done != nil {
+		<-p.done
+	}
 }
 
 // ForceSetCurrentForTesting calls setCurrent directly, bypassing the
