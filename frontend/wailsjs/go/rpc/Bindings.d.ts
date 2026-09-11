@@ -864,6 +864,10 @@ export function Storage_ApplyDriftFix(arg1:number):Promise<void>;
 
 export function Storage_GetMigrationDriftReport():Promise<storage.DriftReport>;
 
+export function Subagent_Abort(arg1:string):Promise<void>;
+
+export function Subagent_Steer(arg1:string,arg2:string):Promise<void>;
+
 export function Sync_ForcePull(arg1:string):Promise<void>;
 
 export function Sync_ForcePush(arg1:string):Promise<void>;

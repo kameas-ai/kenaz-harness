@@ -1614,6 +1614,14 @@ export function Storage_GetMigrationDriftReport() {
   return window['go']['rpc']['Bindings']['Storage_GetMigrationDriftReport']();
 }
 
+export function Subagent_Abort(arg1) {
+  return window['go']['rpc']['Bindings']['Subagent_Abort'](arg1);
+}
+
+export function Subagent_Steer(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Subagent_Steer'](arg1, arg2);
+}
+
 export function Sync_ForcePull(arg1) {
   return window['go']['rpc']['Bindings']['Sync_ForcePull'](arg1);
 }

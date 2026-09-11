@@ -190,6 +190,23 @@ type BranchesAPI interface {
 	// Depth is pre-computed server-side (iterative walk, cap 32).
 	// (branching-ux-polish-01KQ8TD7 WP02)
 	ListWithBranchTree(ctx context.Context, projectID string) ([]SessionWithBranchPointer, error)
+
+	// AbortSubagent stops a dispatched sub-agent's underlying run and
+	// marks its task cancelled — the branch-scoped alias of Tasks_Abort
+	// (subagent-control-and-background-tasks-01PMZB11 UNIT-8; NOT a
+	// second abort implementation, see Tasks_Abort). Gated by
+	// cedar.ActionToolSubagentAbort and audited exactly once per call
+	// that actually stops a running task; idempotent against an
+	// already-terminal sub-agent (returns nil, writes no additional
+	// audit record).
+	AbortSubagent(ctx context.Context, branchID string) error
+
+	// SteerSubagent appends a user message to a dispatched sub-agent's
+	// child session — the mirror of AppendToParent, but onto the child
+	// side (UNIT-8). Gated by cedar.ActionToolSubagentSteer and audited
+	// once per call (message text itself is never in the audit
+	// payload — see SubagentSteeredPayload).
+	SteerSubagent(ctx context.Context, branchID, message string) error
 }
 
 // fmtTime renders a time.Time as RFC3339Nano UTC, returning "" for the

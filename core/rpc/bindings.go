@@ -2562,6 +2562,23 @@ func (b *Bindings) Branches_ListWithBranchTree(projectID string) ([]branchesview
 	return b.api.Branches().ListWithBranchTree(b.ctx(), projectID)
 }
 
+// Subagent_Abort stops a dispatched sub-agent's underlying run and marks
+// its task cancelled — the branch-scoped alias of Tasks_Abort
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-8). Gated by
+// cedar.ActionToolSubagentAbort; idempotent against an already-terminal
+// sub-agent.
+func (b *Bindings) Subagent_Abort(branchID string) error {
+	defer sentry.WrapBinding("Subagent_Abort")()
+	return b.api.Branches().AbortSubagent(b.ctx(), branchID)
+}
+
+// Subagent_Steer appends a user message to a dispatched sub-agent's
+// child session (UNIT-8). Gated by cedar.ActionToolSubagentSteer.
+func (b *Bindings) Subagent_Steer(branchID, message string) error {
+	defer sentry.WrapBinding("Subagent_Steer")()
+	return b.api.Branches().SteerSubagent(b.ctx(), branchID, message)
+}
+
 // ── workflows (mission workflows-01KQ8TDG, v0.3.0 beta) ───────────────
 
 func (b *Bindings) Workflows_List() ([]workflowsview.Summary, error) {

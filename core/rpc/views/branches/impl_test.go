@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -13,8 +14,10 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/context/audit"
 	"github.com/kameas-ai/kenaz-harness/core/conversation"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/session"
+	coretasks "github.com/kameas-ai/kenaz-harness/core/tasks"
 )
 
 // fakeAuditEmitter records audit.Event emissions in a thread-safe slice.
@@ -663,5 +666,377 @@ func TestAPI_CommitReintegration_EmptySummary(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("expected error for empty summary, got nil")
+	}
+}
+
+// ── UNIT-8: AbortSubagent / SteerSubagent (subagent-control-and-
+// background-tasks-01PMZB11, AC-09/AC-10-adjacent — Abort/Steer only;
+// Pause/Resume are out of scope, gated on unresolved E-002) ─────────────
+
+// fakeSubagentTasks is a race-safe fake SubagentTaskRegistry. Abort
+// mirrors core/tasks.Registry.Abort's real contract: aborting an
+// already-terminal task returns coretasks.ErrAlreadyTerminal instead of
+// silently succeeding twice — that's the behaviour AbortSubagent's
+// idempotency handling depends on.
+type fakeSubagentTasks struct {
+	mu       sync.Mutex
+	terminal map[string]bool
+	aborts   []string
+}
+
+func newFakeSubagentTasks() *fakeSubagentTasks {
+	return &fakeSubagentTasks{terminal: map[string]bool{}}
+}
+
+func (f *fakeSubagentTasks) Abort(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.aborts = append(f.aborts, id)
+	if f.terminal[id] {
+		return coretasks.ErrAlreadyTerminal
+	}
+	f.terminal[id] = true
+	return nil
+}
+
+func (f *fakeSubagentTasks) abortCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.aborts))
+	copy(out, f.aborts)
+	return out
+}
+
+// fakeTaskLookup is a race-safe fake SubagentTaskLookup — the test
+// double for BranchSeamAdapter.TaskIDForBranch.
+type fakeTaskLookup struct {
+	mu sync.Mutex
+	m  map[string]string
+}
+
+func newFakeTaskLookup() *fakeTaskLookup {
+	return &fakeTaskLookup{m: map[string]string{}}
+}
+
+func (f *fakeTaskLookup) set(branchID, taskID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.m[branchID] = taskID
+}
+
+func (f *fakeTaskLookup) TaskIDForBranch(branchID string) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	id, ok := f.m[branchID]
+	return id, ok
+}
+
+// newSubagentTestStack builds the same real conversation/session stack
+// as newTestStack, plus the sub-agent control-verb dependencies
+// (Tasks/TaskLookup/Cedar/Audit) AbortSubagent and SteerSubagent need.
+// gate is nil by default (default-allow, matching every other gate-hook
+// call site's nil-Gate posture); tests that need a real deny install one
+// via api.cfg.Cedar after construction.
+func newSubagentTestStack(t *testing.T) (api *API, sessMgr *session.Manager, tasks *fakeSubagentTasks, lookup *fakeTaskLookup, em *fakeAuditEmitter) {
+	t.Helper()
+	sessStore := session.NewMemoryStore()
+	sessMgr = session.NewManager(sessStore,
+		session.WithClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }),
+	)
+	convStore := conversation.NewMemoryStore()
+	convMgr := conversation.NewManager(convStore, sessMgr,
+		conversation.WithClock(func() time.Time { return time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC) }),
+	)
+	tasks = newFakeSubagentTasks()
+	lookup = newFakeTaskLookup()
+	em = &fakeAuditEmitter{}
+	api = New(Config{
+		Conversations: convMgr,
+		Sessions:      sessMgr,
+		Tasks:         tasks,
+		TaskLookup:    lookup,
+		Audit:         em,
+	})
+	return api, sessMgr, tasks, lookup, em
+}
+
+// forbidSubagentAbortEngine installs a REAL cedar.Engine with a REAL
+// forbid rule for ActionToolSubagentAbort scoped to branchID — not
+// cedar.AllowAll{}, and not an absent rule that would resolve
+// NotApplicable (which enforce() maps to nil / allow — the exact trap
+// AC-09 calls out, core/policy/cedar/hooks.go's enforce()). SetPolicyText
+// is the engine's documented test seam for installing a policy bundle
+// (engine.go: "the test seam ... the engine boots even when every disk
+// file is broken" path) — a real engine evaluating a real installed
+// policy, exactly as AC-09 requires.
+func forbidSubagentAbortEngine(t *testing.T, branchID string) *cedar.Engine {
+	t.Helper()
+	e, err := cedar.NewEngine(cedar.Options{LoadFromDisk: false, IncludeEmbedded: false})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	src := fmt.Sprintf(`forbid (
+    principal == User::"local",
+    action == Action::"tool.subagent.abort",
+    resource == SubagentBranch::"%s"
+);`, branchID)
+	if err := e.SetPolicyText("deny_abort.cedar", []byte(src)); err != nil {
+		t.Fatalf("SetPolicyText: %v", err)
+	}
+	return e
+}
+
+// forbidSubagentSteerEngine is forbidSubagentAbortEngine's steer-action
+// mirror.
+func forbidSubagentSteerEngine(t *testing.T, branchID string) *cedar.Engine {
+	t.Helper()
+	e, err := cedar.NewEngine(cedar.Options{LoadFromDisk: false, IncludeEmbedded: false})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	src := fmt.Sprintf(`forbid (
+    principal == User::"local",
+    action == Action::"tool.subagent.steer",
+    resource == SubagentBranch::"%s"
+);`, branchID)
+	if err := e.SetPolicyText("deny_steer.cedar", []byte(src)); err != nil {
+		t.Fatalf("SetPolicyText: %v", err)
+	}
+	return e
+}
+
+// TestAPI_AbortSubagent_AllowedByDefault_StopsTaskAndAuditsOnce is
+// AC-09's positive half for Abort: against a live sub-agent (a tracked,
+// not-yet-terminal task), the call produces its observable effect
+// (Tasks.Abort is actually invoked with the resolved task id) and
+// writes exactly one audit record.
+func TestAPI_AbortSubagent_AllowedByDefault_StopsTaskAndAuditsOnce(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, tasks, lookup, em := newSubagentTestStack(t)
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, err := api.CreateBranch(ctx, CreateBranchOptions{ParentSessionID: parent.ID, Title: "worker"})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	lookup.set(br.ID, "task-1")
+
+	if err := api.AbortSubagent(ctx, br.ID); err != nil {
+		t.Fatalf("AbortSubagent: %v", err)
+	}
+	if got := tasks.abortCalls(); len(got) != 1 || got[0] != "task-1" {
+		t.Fatalf("abort calls = %v, want [task-1]", got)
+	}
+
+	var found []audit.Event
+	for _, e := range em.snapshot() {
+		if e.Kind == audit.KindSubagentAborted {
+			found = append(found, e)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("KindSubagentAborted count = %d, want 1 (got events: %v)", len(found), em.snapshot())
+	}
+	var payload audit.SubagentAbortedPayload
+	if err := json.Unmarshal(found[0].Payload, &payload); err != nil {
+		t.Fatalf("unmarshal SubagentAbortedPayload: %v", err)
+	}
+	if payload.BranchID != br.ID || payload.TaskID != "task-1" {
+		t.Errorf("payload = %+v, want BranchID=%q TaskID=task-1", payload, br.ID)
+	}
+}
+
+// TestAPI_AbortSubagent_DeniedByRealCedarPolicy is AC-09's negative
+// half for Abort. Fails (as intended) if the cedar.GateSubagentAbort
+// call is removed from AbortSubagent — the deny case starts passing,
+// exactly the mutation AC-09 names. Manually verified 2026-09-10: with
+// the gate call commented out, this test goes red with "AbortSubagent:
+// got <nil>, want ErrCedarDenied" and the abort call count assertion
+// also fails (the fake registry records a call that should never have
+// happened); reverting the comment-out restores green.
+func TestAPI_AbortSubagent_DeniedByRealCedarPolicy(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, tasks, lookup, _ := newSubagentTestStack(t)
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, err := api.CreateBranch(ctx, CreateBranchOptions{ParentSessionID: parent.ID, Title: "worker"})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	lookup.set(br.ID, "task-1")
+	api.cfg.Cedar = forbidSubagentAbortEngine(t, br.ID)
+
+	err = api.AbortSubagent(ctx, br.ID)
+	if !errors.Is(err, ErrCedarDenied) {
+		t.Fatalf("AbortSubagent: got %v, want ErrCedarDenied", err)
+	}
+	if got := tasks.abortCalls(); len(got) != 0 {
+		t.Errorf("abort calls = %v, want none — the gate must short-circuit before Tasks.Abort", got)
+	}
+}
+
+// TestAPI_AbortSubagent_Idempotent_OneAuditRecordNotTwo pins the spec's
+// explicit idempotency requirement: "Abort on an already-terminal
+// sub-agent is idempotent and writes one audit record, not two."
+func TestAPI_AbortSubagent_Idempotent_OneAuditRecordNotTwo(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, tasks, lookup, em := newSubagentTestStack(t)
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, err := api.CreateBranch(ctx, CreateBranchOptions{ParentSessionID: parent.ID, Title: "worker"})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	lookup.set(br.ID, "task-1")
+
+	if err := api.AbortSubagent(ctx, br.ID); err != nil {
+		t.Fatalf("first AbortSubagent: %v", err)
+	}
+	// Second call: the fake registry now reports task-1 as terminal
+	// (mirrors coretasks.Registry.Abort's real ErrAlreadyTerminal
+	// behaviour). AbortSubagent must treat this as a successful no-op,
+	// not an error.
+	if err := api.AbortSubagent(ctx, br.ID); err != nil {
+		t.Fatalf("second (idempotent) AbortSubagent: got error %v, want nil", err)
+	}
+	if got := tasks.abortCalls(); len(got) != 2 {
+		t.Fatalf("abort calls = %v, want 2 (both calls should reach Tasks.Abort; the SECOND one is what proves idempotency, not a skipped call)", got)
+	}
+
+	var found []audit.Event
+	for _, e := range em.snapshot() {
+		if e.Kind == audit.KindSubagentAborted {
+			found = append(found, e)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("KindSubagentAborted count = %d after 2 Abort calls, want exactly 1", len(found))
+	}
+}
+
+// TestAPI_AbortSubagent_NoTrackedTask covers a branch that was never a
+// spawner-backed dispatch (or whose mapping was already evicted by
+// WaitForChildRun) — AbortSubagent must refuse cleanly, not panic or
+// silently no-op.
+func TestAPI_AbortSubagent_NoTrackedTask(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, _, _, _ := newSubagentTestStack(t)
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, err := api.CreateBranch(ctx, CreateBranchOptions{ParentSessionID: parent.ID, Title: "worker"})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	// lookup.set is never called for br.ID.
+	if err := api.AbortSubagent(ctx, br.ID); !errors.Is(err, ErrSubagentTaskNotFound) {
+		t.Errorf("got %v, want ErrSubagentTaskNotFound", err)
+	}
+}
+
+// TestAPI_AbortSubagent_TasksUnavailable covers the degraded-boot case
+// (Config.Tasks / Config.TaskLookup unset).
+func TestAPI_AbortSubagent_TasksUnavailable(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, _ := newTestStack(t) // no Tasks/TaskLookup wired
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, err := api.CreateBranch(ctx, CreateBranchOptions{ParentSessionID: parent.ID, Title: "worker"})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	if err := api.AbortSubagent(ctx, br.ID); !errors.Is(err, ErrSubagentUnavailable) {
+		t.Errorf("got %v, want ErrSubagentUnavailable", err)
+	}
+}
+
+// TestAPI_SteerSubagent_AppendsToChildSession_AndAuditsOnce is AC-09's
+// positive half for Steer.
+func TestAPI_SteerSubagent_AppendsToChildSession_AndAuditsOnce(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, _, _, em := newSubagentTestStack(t)
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, err := api.CreateBranch(ctx, CreateBranchOptions{ParentSessionID: parent.ID, Title: "worker"})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	before, _ := sessMgr.ListMessages(ctx, br.ChildSessionID)
+
+	if err := api.SteerSubagent(ctx, br.ID, "also check the retry path"); err != nil {
+		t.Fatalf("SteerSubagent: %v", err)
+	}
+
+	after, err := sessMgr.ListMessages(ctx, br.ChildSessionID)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	if len(after) != len(before)+1 {
+		t.Fatalf("child message count = %d, want %d", len(after), len(before)+1)
+	}
+	last := after[len(after)-1]
+	if last.Role != session.RoleUser || last.Content != "also check the retry path" {
+		t.Errorf("appended message = %+v, want role=user content=%q", last, "also check the retry path")
+	}
+
+	var found []audit.Event
+	for _, e := range em.snapshot() {
+		if e.Kind == audit.KindSubagentSteered {
+			found = append(found, e)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("KindSubagentSteered count = %d, want 1", len(found))
+	}
+	var payload audit.SubagentSteeredPayload
+	if err := json.Unmarshal(found[0].Payload, &payload); err != nil {
+		t.Fatalf("unmarshal SubagentSteeredPayload: %v", err)
+	}
+	if payload.BranchID != br.ID {
+		t.Errorf("payload.BranchID = %q, want %q", payload.BranchID, br.ID)
+	}
+	if payload.MessageLength != utf8.RuneCountInString("also check the retry path") {
+		t.Errorf("payload.MessageLength = %d, want %d", payload.MessageLength, utf8.RuneCountInString("also check the retry path"))
+	}
+}
+
+// TestAPI_SteerSubagent_DeniedByRealCedarPolicy is AC-09's negative
+// half for Steer. Fails if cedar.GateSubagentSteer is removed from
+// SteerSubagent.
+func TestAPI_SteerSubagent_DeniedByRealCedarPolicy(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, _, _, _ := newSubagentTestStack(t)
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, err := api.CreateBranch(ctx, CreateBranchOptions{ParentSessionID: parent.ID, Title: "worker"})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	before, _ := sessMgr.ListMessages(ctx, br.ChildSessionID)
+	api.cfg.Cedar = forbidSubagentSteerEngine(t, br.ID)
+
+	err = api.SteerSubagent(ctx, br.ID, "keep going")
+	if !errors.Is(err, ErrCedarDenied) {
+		t.Fatalf("SteerSubagent: got %v, want ErrCedarDenied", err)
+	}
+	after, _ := sessMgr.ListMessages(ctx, br.ChildSessionID)
+	if len(after) != len(before) {
+		t.Errorf("child message count changed under a denying gate: before=%d after=%d", len(before), len(after))
+	}
+}
+
+// TestAPI_SteerSubagent_InvalidArgs covers empty branchID and
+// empty/whitespace-only message.
+func TestAPI_SteerSubagent_InvalidArgs(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, _, _, _ := newSubagentTestStack(t)
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, _ := api.CreateBranch(ctx, CreateBranchOptions{ParentSessionID: parent.ID, Title: "worker"})
+
+	if err := api.SteerSubagent(ctx, "", "hi"); !errors.Is(err, ErrInvalidArg) {
+		t.Errorf("empty branchID: got %v, want ErrInvalidArg", err)
+	}
+	if err := api.SteerSubagent(ctx, br.ID, "   "); !errors.Is(err, ErrInvalidArg) {
+		t.Errorf("whitespace-only message: got %v, want ErrInvalidArg", err)
 	}
 }
