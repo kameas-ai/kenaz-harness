@@ -172,6 +172,28 @@ export type HookEventName = (typeof ALL_HOOK_EVENTS)[number];
  * caller exists would be the exact lie this mission exists to close:
  * a picker entry that claims to fire and does not.
  * See scripts/ci/allowlists/i17-eventless-hook-events.txt.
+ *
+ * Grown 2026-09-12 (subagent-control-and-background-tasks-01PMZB11,
+ * finding #85) by `background_task_complete`: `core/tasks.Registry.End`
+ * (core/tasks/registry.go) snapshots `r.hookFirer` under its lock and
+ * invokes it (`go hookFirer(ctx, payload)`) for every terminal task.
+ * `core/rpc/api.go`'s `New()` late-binds that field via
+ * `taskReg.SetHookFirer(func(ctx, payload) {...})` once the
+ * process-singleton `*hooks.Runner` exists, and the closure body calls
+ * `hookRunnerForTasks.Fire(ctx, hooks.EventBackgroundTaskComplete, ...)`.
+ * This is a genuinely new *shape* for this list — every prior entry's
+ * Fire/Run<X> call sits directly inside a function reachable by an
+ * ordinary caller chain; this one sits inside an anonymous closure
+ * that is stored as a struct field and invoked from a different file
+ * entirely. `scripts/ci/check-hook-event-fire-sites.sh`'s one-hop
+ * reachability check was extended in the same commit to recognize a
+ * closure passed to a `Set<Name>`/`With<Name>` call and to require a
+ * real, non-test, non-comment call site for the field the setter
+ * conventionally assigns (`SetHookFirer` -> `hookFirer`) — see that
+ * script's `closure_indirect_reachable()` and
+ * `TestHookEventFireSitesGate_PlantedDeadClosureRegistrationFires`.
+ * `scripts/ci/allowlists/i17-eventless-hook-events.txt`'s
+ * `background_task_complete` row is deleted in the same commit.
  */
 export const FIRING_HOOK_EVENTS = [
   'post_send',
@@ -181,6 +203,7 @@ export const FIRING_HOOK_EVENTS = [
   'permission_request',
   'permission_denied',
   'session_start',
+  'background_task_complete',
 ] as const;
 
 /**
