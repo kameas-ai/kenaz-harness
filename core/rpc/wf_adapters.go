@@ -56,6 +56,19 @@ package rpc
 //
 //	wfNotifierAdapter        — satisfies corewf.Notifier via the Wails
 //	                           runtime notification call.
+//
+//	wfNotifyAuditBridge      — satisfies corewf.AuditEmitter (Deps.Audit,
+//	                           automation-actually-runs-01PMZ404 UNIT-8)
+//	                           by forwarding EmitNotifySent calls into
+//	                           the rpc/views/audit.API ring, the same
+//	                           Push-based shape acpAuditBridge and
+//	                           searchAuditEmitter use in api.go. A
+//	                           SEPARATE, narrower seam from wfDeps.
+//	                           NetworkAudit (contextaudit.Emitter,
+//	                           general-purpose) — this one exists only
+//	                           because notifyRunner's audit field is
+//	                           corewf's own notify-only AuditEmitter
+//	                           interface, not the general one.
 
 import (
 	"context"
@@ -70,6 +83,7 @@ import (
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/audit"
 	"github.com/kameas-ai/kenaz-harness/core/runposture"
 	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
@@ -1165,4 +1179,51 @@ func (g *wfToolGate) auditConfirm(ctx context.Context, p contextaudit.ToolConfir
 		return
 	}
 	contextaudit.MustEmit(ctx, g.auditEmitter, contextaudit.KindToolConfirmDecision, p, g.clock())
+}
+
+// ─── Notify audit bridge ────────────────────────────────────────────────────────
+
+// wfNotifyAuditBridge satisfies corewf.AuditEmitter (Deps.Audit) —
+// automation-actually-runs-01PMZ404 UNIT-8. Before this, Deps.Audit was
+// never assigned in production, so notifyRunner.emitSent's call to
+// EmitNotifySent (core/workflows/runners_notify.go:149) was always a
+// silent no-op: `notify` is the only workflow step kind that reaches
+// outside the process (OS notification, Slack, email, push) and it was
+// the only one with no audit trail.
+//
+// Modelled on acpAuditBridge / searchAuditEmitter (core/rpc/api.go):
+// forwards through contextaudit.Emit so the ring entry carries a real
+// Kind (KindWorkflowNotifySent) and a marshalled payload, then renders
+// target+title into Entry.Trailing as a deterministic "k=v k=v" string
+// (searchAuditEmitter's convention) rather than an opaque byte count —
+// target and the CALLER-truncated title are not privacy-sensitive on
+// their own (the body is what must never appear, and EmitNotifySent's
+// signature has no body parameter to leak in the first place).
+type wfNotifyAuditBridge struct {
+	impl *audit.API
+}
+
+// Emit implements contextaudit.Emitter, the shape EmitNotifySent below
+// forwards through so the entry carries a real Kind + marshalled
+// payload rather than a hand-built string.
+func (b *wfNotifyAuditBridge) Emit(_ context.Context, ev contextaudit.Event) error {
+	if b == nil || b.impl == nil {
+		return nil
+	}
+	var p contextaudit.WorkflowNotifySentPayload
+	_ = json.Unmarshal(ev.Payload, &p)
+	b.impl.Push(audit.Entry{
+		ID:        fmt.Sprintf("wf-notify-%d", ev.TS.UnixNano()),
+		Timestamp: ev.TS.UTC().Format(time.RFC3339Nano),
+		Category:  "WORKFLOW",
+		Subject:   string(ev.Kind),
+		Trailing:  fmt.Sprintf("target=%s title=%s", p.Target, p.Title),
+	})
+	return nil
+}
+
+// EmitNotifySent implements corewf.AuditEmitter.
+func (b *wfNotifyAuditBridge) EmitNotifySent(ctx context.Context, target, title string) error {
+	return contextaudit.Emit(ctx, b, contextaudit.KindWorkflowNotifySent,
+		contextaudit.WorkflowNotifySentPayload{Target: target, Title: title}, time.Now().UTC())
 }

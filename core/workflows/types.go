@@ -658,7 +658,11 @@ type Deps struct {
 	// Notifier is the OS notification dispatch surface for the notify
 	// runner. nil disables the "os" surface without failing the run.
 	Notifier Notifier
-	// Audit, when non-nil, receives notify.sent events. nil is a no-op.
+	// Audit, when non-nil, receives one event per surface a notify step
+	// dispatches to successfully (core/context/audit/audit.go's
+	// KindWorkflowNotifySent, automation-actually-runs-01PMZ404 UNIT-8).
+	// nil is a no-op. Wired in production by wfNotifyAuditBridge
+	// (core/rpc/wf_adapters.go).
 	Audit AuditEmitter
 	// NetworkAudit, when non-nil, receives KindWorkflowNetworkFetch
 	// events — one per web_fetch/web_scrape step that completes a
@@ -666,8 +670,7 @@ type Deps struct {
 	// audit-that-tells-the-truth-01PMZA10 UNIT-5). A SEPARATE field
 	// from Audit above, deliberately: Audit is the narrow, notify-only
 	// AuditEmitter defined in this file (Shape 2 in the mission's
-	// vocabulary — out of scope here, owned by automation-actually-
-	// runs-01PMZ404 UNIT-8); NetworkAudit is the general-purpose
+	// vocabulary); NetworkAudit is the general-purpose
 	// contextaudit.Emitter (Shape 1) core/workflows/audit.go's
 	// EmitExecuted/EmitStepFailures/EmitSaved/EmitDeleted already use,
 	// threaded here so the runner layer (runners.go) can reach it too.

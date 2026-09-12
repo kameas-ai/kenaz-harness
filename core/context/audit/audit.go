@@ -106,6 +106,15 @@ const (
 	// Full URL (which may contain auth tokens) and response body are NEVER
 	// recorded (privacy invariant).
 	KindWorkflowNetworkFetch Kind = "workflow.network_fetch"
+	// KindWorkflowNotifySent fires once per surface a `notify` step
+	// dispatches to successfully (automation-actually-runs-01PMZ404
+	// UNIT-8). Payload: WorkflowNotifySentPayload. notify is the only
+	// workflow step kind that reaches outside the process (OS
+	// notification, Slack, email, push); before this unit it was the
+	// only one with no audit trail. Per the privacy invariant, only the
+	// target name and a TRUNCATED title (≤60 chars, enforced by the
+	// caller) are recorded — the notification body is NEVER included.
+	KindWorkflowNotifySent Kind = "workflow.notify_sent"
 
 	// KindMCPHealthChanged fires when an installed MCP recipe transitions
 	// state (stopped → starting → running → restarting → failed).
@@ -1084,6 +1093,27 @@ type WorkflowNetworkFetchPayload struct {
 	Hostname string `json:"hostname"`
 	Status   int    `json:"status"`
 	Bytes    int    `json:"bytes"`
+}
+
+// WorkflowNotifySentPayload carries signalling for KindWorkflowNotifySent
+// (automation-actually-runs-01PMZ404 UNIT-8).
+//
+// Privacy invariant: Title is the CALLER-truncated title (≤60 chars —
+// core/workflows/runners_notify.go's notifyTitleAuditMaxLen); the
+// notification body is NEVER included, here or anywhere upstream of
+// this struct. corewf.Deps.Audit's own EmitNotifySent(ctx, target,
+// title string) signature has no body parameter to begin with.
+//
+// This struct does not carry WorkflowID/RunID/StepID, unlike its
+// siblings above: notifyRunner.Run (runners_notify.go) discards the
+// *RunContext that would supply them (its third parameter is `_`), so
+// they are not available at the EmitNotifySent call site. Threading
+// RunContext through would let a future revision add them; not required
+// by FR-008 / AC-009, which asks only for the target and truncated
+// title.
+type WorkflowNotifySentPayload struct {
+	Target string `json:"target"`
+	Title  string `json:"title"`
 }
 
 // BranchCreatedPayload carries signalling for KindBranchCreated
