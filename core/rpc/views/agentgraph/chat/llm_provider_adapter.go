@@ -207,6 +207,13 @@ type LLMProviderAdapter struct {
 	// NewSessionDialog.vue) was persisted correctly but never reached the
 	// model. See buildAttachmentsBlock.
 	attachments AttachmentsResolver
+
+	// knobsDefault resolves the session-level RequestKnobs override
+	// (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10). nil
+	// disables the layer — every request's Knobs stays nil, matching
+	// every chat turn before this field existed. See Generate's
+	// gen.Knobs assignment.
+	knobsDefault KnobsDefaultResolver
 }
 
 // ResolvedAttachment is the narrow shape buildAttachmentsBlock consumes.
@@ -225,6 +232,15 @@ type ResolvedAttachment struct {
 // is byte-identical to every chat turn before this field existed.
 type AttachmentsResolver interface {
 	ListResolved(ctx context.Context, sessionID string) ([]ResolvedAttachment, error)
+}
+
+// KnobsDefaultResolver loads the session-level RequestKnobs override
+// persisted via Sessions_SetKnobsDefault (model-settings-reach-the-model-
+// 01PMZ101 UNIT-6 / WP10, migration sessions/0330-knobs). nil means
+// "knobs not wired" — Generate leaves gen.Knobs nil, today's behaviour.
+// Implemented in production by *session.Manager.
+type KnobsDefaultResolver interface {
+	GetKnobsDefault(ctx context.Context, sessionID string) (*corellm.RequestKnobs, error)
 }
 
 // NewLLMProviderAdapter constructs an adapter pinned to a specific
@@ -277,6 +293,14 @@ func (a *LLMProviderAdapter) WithEnvContext(now func() time.Time, workspaceDir, 
 // (first-run-onboarding-01PMOB01 WP02). nil disables the layer.
 func (a *LLMProviderAdapter) WithAttachments(resolver AttachmentsResolver) *LLMProviderAdapter {
 	a.attachments = resolver
+	return a
+}
+
+// WithKnobsDefault pins the session-knobs resolver onto the adapter
+// (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10). nil disables
+// the layer.
+func (a *LLMProviderAdapter) WithKnobsDefault(resolver KnobsDefaultResolver) *LLMProviderAdapter {
+	a.knobsDefault = resolver
 	return a
 }
 
@@ -654,6 +678,26 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 		System:   composeSystemPrompt(nil, req.SystemPrompt, a.buildAttachmentsBlock(ctx), a.buildEnvBlock(), a.buildRecapBlock(), a.buildAskBarBlock(), a.buildUserInstructionsBlock()),
 		Messages: llmMsgs,
 		Tools:    a.tools,
+	}
+
+	// Merge the session-level RequestKnobs default (model-settings-reach-
+	// the-model-01PMZ101 UNIT-6 / WP10) onto the wire request. Before this,
+	// llm.Request.Knobs had zero production writers anywhere in the tree —
+	// Sessions_SetKnobsDefault persisted a value to sessions.knobs_default
+	// that nothing ever read back into a live request (spec FR-009). This
+	// is the "reaches the model" half; the store round-trip alone is not
+	// consumption (CLAUDE.md sweep pass 4).
+	//
+	// Best-effort: a lookup failure degrades to no override rather than
+	// failing the turn, mirroring buildAttachmentsBlock's fail-open
+	// posture for the same class of optional per-session read.
+	if a.knobsDefault != nil {
+		if knobs, err := a.knobsDefault.GetKnobsDefault(ctx, a.sessionID); err != nil {
+			logging.L().Warn("chat.knobs_default.resolve_failed",
+				"session_id", a.sessionID, "err", err.Error())
+		} else if knobs != nil {
+			gen.Knobs = knobs
+		}
 	}
 
 	// Per-request tool-catalog visibility: log exactly what's attached to

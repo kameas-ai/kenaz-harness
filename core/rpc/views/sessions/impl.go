@@ -930,6 +930,18 @@ func (a *managerAPI) ClearTitle(ctx context.Context, id string) error {
 	return nil
 }
 
+// GetKnobsDefault implements SessionsAPI (model-settings-reach-the-model-
+// 01PMZ101 UNIT-6 / WP10).
+func (a *managerAPI) GetKnobsDefault(ctx context.Context, id string) (*SessionKnobs, error) {
+	return a.mgr.GetKnobsDefault(ctx, id)
+}
+
+// SetKnobsDefault implements SessionsAPI (model-settings-reach-the-model-
+// 01PMZ101 UNIT-6 / WP10).
+func (a *managerAPI) SetKnobsDefault(ctx context.Context, id string, knobs *SessionKnobs) error {
+	return a.mgr.SetKnobsDefault(ctx, id, knobs)
+}
+
 // WithUsageManager wires a usage.Manager into the sessions view so
 // GetUsage can return real aggregates (token-cost-telemetry WP03).
 // Safe to call at boot before any request arrives.

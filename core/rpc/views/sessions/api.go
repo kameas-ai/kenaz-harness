@@ -111,6 +111,17 @@ type LastUsage struct {
 	CostSource       string  `json:"costSource"`
 }
 
+// SessionKnobs is the wire mirror of llm.RequestKnobs for the
+// session-level default override (model-settings-reach-the-model-
+// 01PMZ101 UNIT-6 / WP10). A type alias, not a copy: llm.RequestKnobs'
+// own json tags (openai_effort, anthropic_thinking_budget nested under
+// "reasoning"; top_p, top_k, ...) ARE the wire shape — SessionTunePanel
+// posts a llm.ReasoningConfig-shaped object today (see
+// frontend/src/lib/types.ts's ReasoningConfig), and this alias keeps
+// the Go and TS sides byte-identical to core/llm's own struct without a
+// second field-by-field struct to drift out of sync with it.
+type SessionKnobs = llm.RequestKnobs
+
 // ToolCall mirrors the frontend ToolCall shape for tool-use rendering.
 type ToolCall struct {
 	ID          string `json:"id"`
@@ -390,6 +401,19 @@ type SessionsAPI interface {
 	// folding global → project → session layers. Returns the resolved
 	// knobs plus the three input layers so panels can render badges.
 	ResolveAutonomy(ctx context.Context, id string) (ResolvedAutonomy, error)
+
+	// GetKnobsDefault returns the session-level RequestKnobs override
+	// (reasoning effort, sampling knobs), or nil when none has been set
+	// (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10, migration
+	// sessions/0330-knobs). SessionTunePanel reads this on open.
+	GetKnobsDefault(ctx context.Context, id string) (*SessionKnobs, error)
+	// SetKnobsDefault persists the session-level RequestKnobs override.
+	// Passing nil clears any existing override. The stored value is
+	// merged onto every GenerationRequest.Knobs the session issues
+	// (core/rpc/views/agentgraph/chat.LLMProviderAdapter.Generate) — this
+	// is the "reaches the model" half; without it the column round-trips
+	// but nothing downstream ever reads it.
+	SetKnobsDefault(ctx context.Context, id string, knobs *SessionKnobs) error
 
 	// Export serialises a session transcript to the local filesystem.
 	// format is "markdown" or "json". The file-picker dialog is opened

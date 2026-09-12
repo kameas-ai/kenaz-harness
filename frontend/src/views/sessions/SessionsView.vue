@@ -365,6 +365,34 @@ watch(
   { immediate: true },
 );
 
+// Hydrate the session-level reasoning-knob default on session switch
+// (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP11). Without this,
+// activeReasoningConfig only ever reflected the CURRENT process's /effort
+// calls and tune-panel saves — a session reopened (or the app restarted)
+// showed no reasoning-effort chip / tune-panel state even though the
+// stored default was already reaching the model on the send path
+// (chat.LLMProviderAdapter.Generate merges it server-side regardless of
+// whether this ref is populated). Soft-fail on error, matching every
+// other best-effort per-session read in this file (refreshCompactionOverhead
+// et al.) — a resolver hiccup should not block opening the session.
+watch(
+  sessionId,
+  async (newSid) => {
+    activeReasoningConfig.value = undefined;
+    if (!newSid) return;
+    try {
+      const knobs = await client.sessions.getKnobsDefault(newSid);
+      activeReasoningConfig.value = knobs ?? undefined;
+    } catch {
+      // Soft-fail: leave activeReasoningConfig unset, matching the
+      // "no override" state — the tune panel will simply show blank
+      // until the user re-saves, and the stored default (if any)
+      // still reaches the model independently of this ref.
+    }
+  },
+  { immediate: true },
+);
+
 const switcherOpen = ref(false);
 function toggleSwitcher() {
   switcherOpen.value = !switcherOpen.value;

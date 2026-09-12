@@ -265,6 +265,12 @@ type Config struct {
 	// ordinary session's attached context via NewSessionDialog.vue) is
 	// stored correctly but never reaches the model.
 	Attachments AttachmentsResolver
+	// KnobsDefault resolves the session-level RequestKnobs override onto
+	// each LLMProviderAdapter (model-settings-reach-the-model-01PMZ101
+	// UNIT-6 / WP10). nil disables the layer — every request's Knobs
+	// stays nil, pre-existing behaviour for every session before this
+	// field existed. Production wiring is *session.Manager.
+	KnobsDefault KnobsDefaultResolver
 	// EnvDefaults is an optional callback the runner invokes on the
 	// constructed Env before kernel.Run; production wiring threads
 	// Memory / Policy / Branch / Hooks-journal seams through it.
@@ -1045,6 +1051,7 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	llmAdapter := NewLLMProviderAdapter(r.cfg.Registry, profileID, modelOverride, toolCatalog, imageCapturer).
 		WithSessionID(sessionID).
 		WithAttachments(r.cfg.Attachments).
+		WithKnobsDefault(r.cfg.KnobsDefault).
 		WithEnvContext(r.cfg.Clock, r.cfg.WorkspaceDir, r.cfg.WorkspaceNote).
 		WithCustomInstructions(r.cfg.CustomInstructions).
 		// autonomy-knobs-live-01PMAG02 WP06: recapStyle was resolved

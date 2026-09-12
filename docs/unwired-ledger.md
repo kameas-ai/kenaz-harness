@@ -317,6 +317,34 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-09-12 (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10) · `session_messages.knobs_override` stays unread — a product decision, not an oversight
+
+Migration `sessions/0330-knobs` shipped two columns:
+`sessions.knobs_default` and `session_messages.knobs_override`. UNIT-6 /
+WP10 gave the first one its first production writer AND reader
+(`Sessions_{Get,Set}KnobsDefault`; `chat.LLMProviderAdapter.Generate`'s
+send-path merge onto `GenerationRequest.Knobs`) — the "reaches the model"
+half spec FR-009 asks for. `session_messages.knobs_override` is
+**deliberately left unwired**, named here per CLAUDE.md's rule that "we'll
+get to it" is not a reason and every disposition needs a stated blocker
+and owner.
+
+**Blocker:** no surface today asks for a PER-MESSAGE knob override
+distinct from the per-session default. `/effort`'s text says the new
+value "takes effect on the next message," but there is no mechanism (and
+no spec) for it to apply to *only* that one message and then revert —
+today it simply updates the session default going forward, same as the
+tune panel. Wiring `knobs_override` needs a product decision about what a
+one-message override means UX-wise before it needs a Go reader; guessing
+at a mechanism here would be inventing a UX nobody asked for, the same
+class of mistake CLAUDE.md's "spec it and finish it" guidance warns
+against for a half-built feature.
+
+**Owner:** alec — whichever mission specs a per-message knob override.
+Re-check at the release after model-settings-reach-the-model-01PMZ101
+UNIT-6 merges. See `core/session/migrations_knobs.go`'s doc comment for
+the same note kept with the column.
+
 ### 2026-09-11 (finding #61 round-2 review, `fix/memory-persist-growth-and-latency-v2`) · served-mode exit never calls `core.Core.Shutdown(ctx)` — only `api.Shutdown()` does
 
 Round 2 of the finding #61 follow-up (Blocker 3: wiring `rpc.API.Shutdown()`
