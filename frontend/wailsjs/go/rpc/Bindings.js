@@ -1122,6 +1122,10 @@ export function Sessions_GetAutonomy(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_GetAutonomy'](arg1);
 }
 
+export function Sessions_GetKnobsDefault(arg1) {
+  return window['go']['rpc']['Bindings']['Sessions_GetKnobsDefault'](arg1);
+}
+
 export function Sessions_GetUsage(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_GetUsage'](arg1);
 }
@@ -1188,6 +1192,10 @@ export function Sessions_SendMessageWithBlocks(arg1, arg2) {
 
 export function Sessions_SetAutonomy(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Sessions_SetAutonomy'](arg1, arg2);
+}
+
+export function Sessions_SetKnobsDefault(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Sessions_SetKnobsDefault'](arg1, arg2);
 }
 
 export function Sessions_SetSystemPrompt(arg1, arg2, arg3) {

@@ -3658,6 +3658,20 @@ export namespace llm {
 	        this.message = source["message"];
 	    }
 	}
+	export class ReasoningConfig {
+	    openai_effort?: string;
+	    anthropic_thinking_budget?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ReasoningConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.openai_effort = source["openai_effort"];
+	        this.anthropic_thinking_budget = source["anthropic_thinking_budget"];
+	    }
+	}
 	export class RecognizeTemplateResult {
 	    matched: boolean;
 	    template?: CustomTemplateSummary;
@@ -3691,6 +3705,60 @@ export namespace llm {
 		}
 	}
 	
+	export class RequestKnobs {
+	    reasoning?: ReasoningConfig;
+	    seed?: number;
+	    response_format_mode?: string;
+	    json_mode?: boolean;
+	    temperature?: number;
+	    top_p?: number;
+	    top_k?: number;
+	    max_tokens?: number;
+	    frequency_penalty?: number;
+	    presence_penalty?: number;
+	    parallel_tool_calls?: boolean;
+	    stop_sequences?: string[];
+	    vendor_extensions?: Record<string, Array<number>>;
+	
+	    static createFrom(source: any = {}) {
+	        return new RequestKnobs(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.reasoning = this.convertValues(source["reasoning"], ReasoningConfig);
+	        this.seed = source["seed"];
+	        this.response_format_mode = source["response_format_mode"];
+	        this.json_mode = source["json_mode"];
+	        this.temperature = source["temperature"];
+	        this.top_p = source["top_p"];
+	        this.top_k = source["top_k"];
+	        this.max_tokens = source["max_tokens"];
+	        this.frequency_penalty = source["frequency_penalty"];
+	        this.presence_penalty = source["presence_penalty"];
+	        this.parallel_tool_calls = source["parallel_tool_calls"];
+	        this.stop_sequences = source["stop_sequences"];
+	        this.vendor_extensions = source["vendor_extensions"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class RotationResult {
 	    success: boolean;
 	    message?: string;
