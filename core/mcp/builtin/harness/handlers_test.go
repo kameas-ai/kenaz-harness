@@ -23,15 +23,17 @@ func (s *stubProviderWriter) AddProvider(_ context.Context, kind, name, model, _
 func (s *stubProviderWriter) RemoveProvider(_ context.Context, _ string) error { return nil }
 
 // TestRegisterAll_HappyPath asserts the wiring registers the canonical
-// 14 tools (13 from WP04/WP05 minus harness_write_set_setting, removed
+// 15 tools (13 from WP04/WP05 minus harness_write_set_setting, removed
 // by harness-self-attach-01PMHS01 UNIT-8, G-4 — see the doc comment
 // above harness.ProjectWriter — plus harness_read_materialize_run /
 // harness_write_draft_agent_graph from model-authored-graphs-01PMGA01
-// UNIT-7) and dispatches AddProvider end-to-end. The count is a
-// registration-mechanics regression pin, not a reachability claim —
-// spec.md §11.2 (model-authored-graphs-01PMGA01) is explicit that a
-// tool count proves nothing about whether the server is attached to
-// anything; see core/rpc/harness_self_attach_test.go for that.
+// UNIT-7, plus harness_write_create_scheduled_run from
+// model-scheduled-jobs-01PMSJ01 WP10) and dispatches AddProvider
+// end-to-end. The count is a registration-mechanics regression pin, not
+// a reachability claim — spec.md §11.2 (model-authored-graphs-01PMGA01)
+// is explicit that a tool count proves nothing about whether the server
+// is attached to anything; see core/rpc/harness_self_attach_test.go for
+// that.
 func TestRegisterAll_HappyPath(t *testing.T) {
 	t.Parallel()
 	w := &stubProviderWriter{}
@@ -39,8 +41,8 @@ func TestRegisterAll_HappyPath(t *testing.T) {
 		Providers:       stubProviderLister{items: []ProviderSummary{{ID: "p0", Kind: "anthropic"}}},
 		ProvidersWriter: w,
 	})
-	if got := len(srv.Tools()); got != 14 {
-		t.Fatalf("registered tool count = %d, want 14", got)
+	if got := len(srv.Tools()); got != 15 {
+		t.Fatalf("registered tool count = %d, want 15", got)
 	}
 
 	// Drive add_provider via the handler directly.
@@ -240,5 +242,120 @@ func TestCreateSession_MissingName(t *testing.T) {
 	_, err := m.handleCreateSession(context.Background(), args)
 	if err == nil {
 		t.Errorf("expected error for missing name, got nil")
+	}
+}
+
+// ---- model-scheduled-jobs-01PMSJ01 WP10 ----
+
+// stubScheduledRunWriter is a fake ScheduledRunWriter that enforces NO
+// business rules of its own — unlike the real
+// scheduledchatview.API.CreateAsModel, it always succeeds. This is
+// deliberate: it isolates handleCreateScheduledRun's OWN validation
+// (promptTemplate/cron/toolAllowlist required) from the adapter's,
+// which core/rpc/harness_wp10_scheduled_run_test.go already exercises
+// end to end against the real store. A test built on this stub is what
+// makes the handler-level checks independently mutation-provable — with
+// a stub that always succeeds, only the handler's own `if` statements
+// can turn a bad call into an error.
+type stubScheduledRunWriter struct {
+	created ScheduledRunCreateInput
+	called  bool
+}
+
+func (s *stubScheduledRunWriter) CreateScheduledRun(_ context.Context, in ScheduledRunCreateInput) (ScheduledRunSummary, error) {
+	s.called = true
+	s.created = in
+	return ScheduledRunSummary{
+		ID:            "zz-scheduled-run",
+		Name:          in.Name,
+		Cron:          in.Cron,
+		Enabled:       in.Enabled,
+		CreatedBy:     "model",
+		ToolAllowlist: in.ToolAllowlist,
+	}, nil
+}
+
+// TestCreateScheduledRun_HappyPath asserts the handler decodes every
+// field and forwards them unchanged to ScheduledRunWriter.
+func TestCreateScheduledRun_HappyPath(t *testing.T) {
+	t.Parallel()
+	w := &stubScheduledRunWriter{}
+	m := Managers{ScheduledRunWriter: w}
+	args, _ := json.Marshal(map[string]any{
+		"name":           "daily digest",
+		"promptTemplate": "summarise today",
+		"cron":           "0 8 * * *",
+		"toolAllowlist":  []string{"harness_read_list_providers"},
+	})
+	res, err := m.handleCreateScheduledRun(context.Background(), args)
+	if err != nil {
+		t.Fatalf("handleCreateScheduledRun: %v", err)
+	}
+	tr, ok := res.(ToolResult)
+	if !ok || !tr.OK {
+		t.Fatalf("expected ok ToolResult, got %#v", res)
+	}
+	if !w.called {
+		t.Fatal("ScheduledRunWriter.CreateScheduledRun was never called")
+	}
+	if w.created.PromptTemplate != "summarise today" || w.created.Cron != "0 8 * * *" {
+		t.Errorf("forwarded input = %#v, want promptTemplate/cron preserved", w.created)
+	}
+	if len(w.created.ToolAllowlist) != 1 || w.created.ToolAllowlist[0] != "harness_read_list_providers" {
+		t.Errorf("forwarded ToolAllowlist = %v", w.created.ToolAllowlist)
+	}
+}
+
+// TestCreateScheduledRun_NilManager asserts the tool returns
+// errNotConfigured when ScheduledRunWriter is nil, mirroring every
+// other write handler's nil-safety contract.
+func TestCreateScheduledRun_NilManager(t *testing.T) {
+	t.Parallel()
+	m := Managers{}
+	args, _ := json.Marshal(map[string]any{
+		"promptTemplate": "x", "cron": "0 8 * * *", "toolAllowlist": []string{"t"},
+	})
+	if _, err := m.handleCreateScheduledRun(context.Background(), args); err == nil {
+		t.Error("expected errNotConfigured, got nil")
+	}
+}
+
+// TestCreateScheduledRun_MissingRequiredFields is the handler-level
+// mutation pin for owner ruling B-3: even against a stub writer that
+// would happily accept an empty allowlist, the HANDLER itself must
+// refuse before ever calling CreateScheduledRun. This isolates the
+// check core/rpc/harness_wp10_scheduled_run_test.go's
+// TestHarnessSelfAttach_WP10_MissingToolAllowlistRefused cannot isolate
+// on its own, because the real adapter enforces the same rule one layer
+// down (scheduledchatview.API.CreateAsModel) and would mask a deleted
+// handler-level check.
+//
+// Mutation: delete the `len(p.ToolAllowlist) == 0` branch from
+// handleCreateScheduledRun. Must fail: the "missing allowlist" case
+// starts reaching stubScheduledRunWriter.CreateScheduledRun (w.called
+// becomes true) instead of being refused at the handler.
+func TestCreateScheduledRun_MissingRequiredFields(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		args map[string]any
+	}{
+		{"missing promptTemplate", map[string]any{"cron": "0 8 * * *", "toolAllowlist": []string{"t"}}},
+		{"missing cron", map[string]any{"promptTemplate": "x", "toolAllowlist": []string{"t"}}},
+		{"missing toolAllowlist", map[string]any{"promptTemplate": "x", "cron": "0 8 * * *"}},
+		{"empty toolAllowlist", map[string]any{"promptTemplate": "x", "cron": "0 8 * * *", "toolAllowlist": []string{}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := &stubScheduledRunWriter{}
+			m := Managers{ScheduledRunWriter: w}
+			args, _ := json.Marshal(tc.args)
+			if _, err := m.handleCreateScheduledRun(context.Background(), args); err == nil {
+				t.Errorf("%s: expected error, got nil", tc.name)
+			}
+			if w.called {
+				t.Errorf("%s: CreateScheduledRun was called despite invalid input — the handler-level check did not refuse before dispatching", tc.name)
+			}
+		})
 	}
 }

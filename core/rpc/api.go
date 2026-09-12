@@ -4058,6 +4058,11 @@ func New(c *core.Core, opts ...Option) *API {
 			// this point in New(), well before this block.
 			a.graphAPI,
 			a.auditImpl,
+			// model-scheduled-jobs-01PMSJ01 WP10: a.scheduledChatAPI is
+			// assigned above (search "a.scheduledChatAPI = scheduledchatview.New"),
+			// well before this block, so it is already non-nil here
+			// whenever the scheduled-chat surface is wired at all.
+			a.scheduledChatAPI,
 		)
 		srv := harnessmcp.RegisterAll(harnessmcp.NewServer(), hManagers)
 		srv = harnessmcp.WithAudit(srv, &harnessSelfAuditBridge{impl: a.auditImpl})

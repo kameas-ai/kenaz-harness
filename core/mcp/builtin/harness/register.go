@@ -41,6 +41,19 @@ const (
 	// FR-006 consent dial before it persists anything, regardless of
 	// session kind. Neither substitutes for the other; see spec.md §4.1.
 	ToolDraftAgentGraph = "harness_write_draft_agent_graph"
+	// ToolCreateScheduledRun (model-scheduled-jobs-01PMSJ01 WP10,
+	// FR-005) lets the model schedule a chat job to run later,
+	// unattended — the owner-ruled capability this mission exists to
+	// build. It always creates with created_by="model" (stamped
+	// server-side, never caller-settable) and REQUIRES a non-empty
+	// tool_allowlist per owner ruling B-3: a model-created schedule may
+	// fire without a human review moment, so per-run tool containment is
+	// the only remaining boundary. Gated the same as every other
+	// harness_write_* tool (kind=onboarding by default, see
+	// cedar/harness_write_onboarding.cedar) AND by
+	// ActionScheduledRunCreate inside scheduledchatview.API.CreateAsModel
+	// with context.created_by="model" (WP09's policy surface).
+	ToolCreateScheduledRun = "harness_write_create_scheduled_run"
 )
 
 // schemaObject is a tiny helper to build a top-level JSON schema object.
@@ -174,6 +187,25 @@ func RegisterAll(srv *Server, m Managers) *Server {
             "yaml":{"type":"string","description":"Agent graph YAML — the same format the graph editor edits and Graph_Validate accepts."}
         }`, "id", "yaml"),
 		Handler: m.handleDraftAgentGraph,
+	})
+	srv.Register(ToolSpec{
+		Name: ToolCreateScheduledRun,
+		Description: "Schedule a chat prompt to run later, unattended, on a cron expression. " +
+			"REQUIRES tool_allowlist: a non-empty list of tool names this scheduled run may call when it " +
+			"fires — a model-created schedule with no allowlist is refused, and the allowlist is the only " +
+			"enforcement boundary since this schedule can fire with nobody watching. The run executes " +
+			"against the active default provider/model unless \"model\" overrides it.",
+		InputSchema: schemaObject(`{
+            "name":{"type":"string"},
+            "promptTemplate":{"type":"string","description":"The prompt sent as the run's user turn when it fires."},
+            "cron":{"type":"string","description":"A standard 5/6-field cron expression, e.g. \"0 9 * * *\"."},
+            "timezone":{"type":"string","description":"IANA timezone for the cron expression. Defaults to UTC."},
+            "model":{"type":"string","description":"Optional model override. Empty uses the active default profile."},
+            "outputSink":{"type":"string","description":"Where the result goes: \"banner\" (default) or \"none\"."},
+            "enabled":{"type":"boolean","description":"Whether the schedule is armed immediately. Defaults to false."},
+            "toolAllowlist":{"type":"array","items":{"type":"string"},"description":"REQUIRED, non-empty. Tool names this run may call when it fires."}
+        }`, "promptTemplate", "cron", "toolAllowlist"),
+		Handler: m.handleCreateScheduledRun,
 	})
 
 	return srv
