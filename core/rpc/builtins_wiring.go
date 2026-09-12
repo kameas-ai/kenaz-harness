@@ -766,6 +766,27 @@ func defaultBashSandbox(c *core.Core) string {
 	return filepath.Join("/tmp", "kenaz-bash")
 }
 
+// mcpRootsDir returns the directory a spawned stdio MCP server's
+// roots/list response advertises to it.
+//
+// connector-lifecycle-truth-01PMZ303 AN-06: this used to be unconditionally
+// dataDir — the harness data directory, which holds the sessions database,
+// the policy bundle and credential locators — so every stdio MCP server was
+// told "here is where the harness keeps its secrets," while the bash
+// sandbox (defaultBashSandbox, above) was anchored at the resolved agent
+// workspace. Two tools, two different answers to "where is the workspace."
+// core.Core.WorkspaceDir's doc says consumers MUST use it instead of
+// joining "agent-workspace" themselves; this mirrors defaultBashSandbox's
+// resolution so both tools agree. Falls back to dataDir only for the
+// nil-core / unresolved-workspace test path, so existing fixtures that
+// construct the pool without a core keep working.
+func mcpRootsDir(c *core.Core, dataDir string) string {
+	if c != nil && c.WorkspaceDir() != "" {
+		return c.WorkspaceDir()
+	}
+	return dataDir
+}
+
 // builtinEnabledPredicate returns a func(name) bool that the toolloop
 // EnabledFilter consults on every tool listing / dispatch. Maps the
 // in-binary tool names onto the corresponding Settings store toggles.

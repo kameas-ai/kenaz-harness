@@ -5567,7 +5567,7 @@ func newLLMStack(
 			// owns the explicit selector knob.
 			return "", ""
 		}),
-		Roots:  stdio.DefaultRoots(dataDir, nil),
+		Roots:  stdio.DefaultRoots(mcpRootsDir(c, dataDir), nil),
 		Broker: &poolEventPublisher{broker: broker},
 		Logger: nil, // defaults to slog.Default
 	})
