@@ -317,6 +317,36 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-09-12 (`automation-actually-runs-01PMZ404` UNIT-11) · `WorkflowRunsSection.vue`'s `workflow-run:focus` emit has zero listeners — dated-justified, not deleted
+
+UNIT-11 wired the OTHER half of this finding (`WorkflowsView.vue` now reads
+`?run=<id>` via `useRoute()` and forwards it to `RunsHistoryTab.vue`, which
+expands and scrolls to the named run — see `spec.md` §1.10 / §5.11). The
+`router.push({ path: '/workflows', query: { run: run.runId } })` call in
+`WorkflowRunsSection.vue`'s `onRowClick` is no longer a "hash-style hint …
+harmless if ignored"; it genuinely navigates.
+
+The sibling `emit('workflow-run:focus', run.runId)` two lines above it,
+declared at `WorkflowRunsSection.vue:33`, still has **zero listeners** —
+the sole mount site, `frontend/src/shell/LeftRail.vue:964`, is bare
+(`<WorkflowRunsSection />`, no `@workflow-run:focus`). A-0 forbids
+resolving that by deleting the emit.
+
+**Why this is left dated-justified rather than wired to a listener:**
+`LeftRail.vue` has no in-place surface of its own that a "run got
+focused" event could sensibly drive — it is the persistent left rail,
+not a panel that shows run detail. `/workflows?run=<id>` (the query
+param path) already *is* the surface that shows run detail, and the
+`router.push` two lines below the emit already reaches it. A listener on
+`LeftRail.vue` would have nothing to do except duplicate that navigation,
+which is not a second capability, just a second name for the same one.
+
+**Owner:** whoever next redesigns the left rail's workflow-runs panel
+into something with its own in-place detail view (at which point the
+emit would have a real consumer). **Blocker:** no such redesign is
+scoped or planned. **Date:** 2026-09-12.
+
+
 ### 2026-09-11 (finding #61 round-2 review, `fix/memory-persist-growth-and-latency-v2`) · served-mode exit never calls `core.Core.Shutdown(ctx)` — only `api.Shutdown()` does
 
 Round 2 of the finding #61 follow-up (Blocker 3: wiring `rpc.API.Shutdown()`

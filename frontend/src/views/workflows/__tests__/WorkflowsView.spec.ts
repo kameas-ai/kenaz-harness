@@ -11,7 +11,23 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
+import { reactive, nextTick } from 'vue';
 import WorkflowsView from '../WorkflowsView.vue';
+
+// automation-actually-runs-01PMZ404 UNIT-11: WorkflowsView now calls
+// useRoute() to consume `?run=<id>`. mockRoute is `reactive` (not a
+// plain object) so mutating `.query.run` after a test has already
+// mounted the component triggers the component's `watch(() =>
+// route.query.run, ...)` — exercising the "navigation after mount" leg
+// of AC-012, not just "query present at mount". Every OTHER test in
+// this file mounts with mockRoute.query == {}, matching the pre-UNIT-11
+// behaviour of no query at all.
+const mockRoute = reactive<{ query: Record<string, string | undefined> }>({
+  query: {},
+});
+vi.mock('vue-router', () => ({
+  useRoute: () => mockRoute,
+}));
 
 // ScheduledInbox is NOT stubbed here — the real component mounts fine with
 // the fake client's default scheduleList() → [] stub.  We just verify the
@@ -101,6 +117,7 @@ function fakeClient(seed: Partial<WorkflowsClient> = {}): WorkflowsClient {
 describe('WorkflowsView', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRoute.query = {};
   });
 
   it('renders the catalog and auto-selects the first workflow', async () => {
@@ -424,5 +441,86 @@ describe('WorkflowsView — the canvas editor is reachable', () => {
     expect(wrapper.find('[data-testid="workflows-editor-slot-canvas"]').exists()).toBe(
       true,
     );
+  });
+});
+
+/*
+ * UNIT-11 (automation-actually-runs-01PMZ404, AC-012): `?run=<id>` deep-link.
+ *
+ * WorkflowRunsSection.vue's sidebar panel (frontend/src/components/
+ * workflows/WorkflowRunsSection.vue) navigates to `/workflows?run=<id>` on
+ * row click. Before this unit, WorkflowsView never imported useRoute and
+ * never inspected the query string, so the navigation was — per that
+ * component's own prior comment — "just a hash-style hint and harmless if
+ * ignored." These tests drive the query end to end: it must switch to the
+ * Runs tab and select the named run there, in BOTH orders (query present
+ * at mount; query arriving via navigation after mount).
+ */
+describe('WorkflowsView — the ?run=<id> deep-link (UNIT-11)', () => {
+  beforeEach(async () => {
+    mockRoute.query = {};
+    const { __resetWorkflowRunsStoreForTests, ingest } = await import(
+      '@/lib/workflowRunsStore'
+    );
+    __resetWorkflowRunsStoreForTests();
+    ingest({
+      runId: 'run-deeplink-target',
+      workflowId: 'plan_implement_review',
+      workflowName: 'Plan → Implement → Review',
+      phase: 'run_completed',
+      ts: '2026-07-01T10:00:00.000Z',
+    });
+    ingest({
+      runId: 'run-deeplink-other',
+      workflowId: 'plan_implement_review',
+      workflowName: 'Plan → Implement → Review',
+      phase: 'run_completed',
+      ts: '2026-07-01T10:00:05.000Z',
+    });
+  });
+
+  it('query present AT MOUNT switches to Runs and selects that run', async () => {
+    mockRoute.query = { run: 'run-deeplink-target' };
+
+    const wrapper = mount(WorkflowsView, { props: { client: fakeClient() } });
+    await flushPromises();
+    await nextTick();
+
+    // Runs tab is active, not Library.
+    expect(wrapper.find('[data-testid="runs-history-tab"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="workflows-catalog"]').exists()).toBe(false);
+
+    // The target run is expanded; the other run is not.
+    expect(
+      wrapper.find('[data-testid="runs-history-steps-run-deeplink-target"]').exists(),
+    ).toBe(true);
+    expect(
+      wrapper.find('[data-testid="runs-history-steps-run-deeplink-other"]').exists(),
+    ).toBe(false);
+  });
+
+  it('query arriving via NAVIGATION AFTER MOUNT switches to Runs and selects that run', async () => {
+    const wrapper = mount(WorkflowsView, { props: { client: fakeClient() } });
+    await flushPromises();
+
+    // Starts on Library (no query yet).
+    expect(wrapper.find('[data-testid="workflows-catalog"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="runs-history-tab"]').exists()).toBe(false);
+
+    // Simulate the sidebar's router.push({ query: { run: ... } }) by
+    // mutating the SAME reactive route object useRoute() returned —
+    // this is what a real Vue Router navigation updates.
+    mockRoute.query = { run: 'run-deeplink-other' };
+    await nextTick();
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="runs-history-tab"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="workflows-catalog"]').exists()).toBe(false);
+    expect(
+      wrapper.find('[data-testid="runs-history-steps-run-deeplink-other"]').exists(),
+    ).toBe(true);
+    expect(
+      wrapper.find('[data-testid="runs-history-steps-run-deeplink-target"]').exists(),
+    ).toBe(false);
   });
 });

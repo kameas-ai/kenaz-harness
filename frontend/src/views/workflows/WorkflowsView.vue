@@ -16,7 +16,8 @@
  *     returns the full transcript. WP10 will swap to broker-driven
  *     progress once a real model_turn dispatcher is wired.
  */
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
@@ -386,6 +387,45 @@ function statusClass(s: string): string {
 }
 
 onMounted(loadCatalog);
+
+// automation-actually-runs-01PMZ404 UNIT-11: WorkflowsView previously
+// never imported useRoute or inspected the query string, so
+// WorkflowRunsSection's `?run=<id>` deep-link (the sidebar's "Workflow
+// Runs" panel) went nowhere — its own comment called it "just a
+// hash-style hint and harmless if ignored." focusRunId below closes
+// that: it switches to the Runs tab and forwards the id to
+// RunsHistoryTab, which expands and scrolls to it.
+const route = (() => {
+  // Defensive, mirroring WorkflowRunsSection.vue's useRouter() guard:
+  // useRoute() throws when there's no active router (every existing
+  // WorkflowsView.spec.ts mount predates this unit and installs none).
+  try {
+    return useRoute();
+  } catch {
+    return null;
+  }
+})();
+
+const focusRunId = ref<string | null>(null);
+
+function applyRunQuery() {
+  const raw = route?.query?.run;
+  const id = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof id === 'string' && id.length > 0) {
+    activeTab.value = 'Runs';
+    focusRunId.value = id;
+  }
+}
+
+// Both orders per AC-012: query present at mount, and navigation to a
+// new ?run=<id> after mount (the sidebar panel is always visible via
+// LeftRail, so a click while already on /workflows only changes the
+// query — Vue Router does not remount the view for a query-only change
+// on the same route).
+onMounted(applyRunQuery);
+if (route) {
+  watch(() => route.query.run, applyRunQuery);
+}
 </script>
 
 <template>
@@ -438,7 +478,7 @@ onMounted(loadCatalog);
 
       <!-- Runs tab (01NBUG04 — execution history + scheduled subsection) -->
       <template v-else-if="activeTab === 'Runs'">
-        <RunsHistoryTab :client="client" :chat-client="chatClient" />
+        <RunsHistoryTab :client="client" :chat-client="chatClient" :focus-run-id="focusRunId" />
       </template>
 
       <!-- Library tab (existing content) -->
