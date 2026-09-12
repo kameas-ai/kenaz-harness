@@ -132,5 +132,33 @@ func (l *SQLEventLog) Len(runID string) int {
 	return n
 }
 
+// PausedRunIDs returns every run_id whose highest-seq event is
+// run_paused or run_abandoned. The subquery bounds the scan to one
+// MAX(seq) lookup per candidate row rather than requiring the caller
+// to replay the full history of every run ever recorded (approval-node
+// -01PMZC12 E-002's "abandoned" fallback; see the EventLog interface
+// doc comment on PausedRunIDs).
+func (l *SQLEventLog) PausedRunIDs() ([]string, error) {
+	ctx := context.Background()
+	rows, err := l.db.QueryContext(ctx,
+		`SELECT e.run_id
+		   FROM agent_graph_events e
+		  WHERE e.kind IN ('run_paused', 'run_abandoned')
+		    AND e.seq = (SELECT MAX(seq) FROM agent_graph_events e2 WHERE e2.run_id = e.run_id)`)
+	if err != nil {
+		return nil, fmt.Errorf("agentgraph: sql event log: paused run ids: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var runID string
+		if err := rows.Scan(&runID); err != nil {
+			return nil, fmt.Errorf("agentgraph: sql event log: scan paused run id: %w", err)
+		}
+		out = append(out, runID)
+	}
+	return out, rows.Err()
+}
+
 // Close is a no-op — the caller owns the underlying SQLDB.
 func (l *SQLEventLog) Close() error { return nil }

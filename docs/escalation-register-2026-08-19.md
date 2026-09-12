@@ -2419,6 +2419,23 @@ record, a verdict-carrying resume verb (`Graph_Resume` takes free text), the
 so **AC-PI-1 is unmet today for ANY pause, `ask` included.** That enlargement is
 `01PMZC12` E-002.
 
+**Update (2026-09-12, mission finish pass).** E-002 shipped the "abandoned"
+alternative spec.md §5.5 sanctioned rather than full durable pause (UNIT-6 as
+originally scoped — rebuilding a resumable `*coreag.Env` from the event log —
+remains cut). `Manager.rehydrateAbandonedRuns`, called from `NewManager`,
+scans `EventLog.PausedRunIDs()` at boot and marks an orphaned paused run
+`RunStateAbandoned` with a recorded reason and an `EventRunAbandoned` event,
+instead of `GetRunStatus` answering "not found" forever for a trace whose last
+word claims a human was asked and never answered. This is generic over pause
+kind — it keys on the last durable event being `run_paused`, not on the node
+kind — so it also closes the gap for `ask` pauses, not only `approval` ones.
+`RunView` renders the abandoned state distinctly from a resolvable pending
+decision. `TestUpgradePath_PausedApprovalIsAbandonedAcrossRestart`
+(`core/storage/sqlite/upgrade_path_approval_test.go`) proves this against a
+real upgraded database, not an empty one. A run still cannot be *resumed*
+after a restart — only truthfully reported — so G7 ("resumes under the next
+release") is met via the fallback disposition, not literally.
+
 ### F-2 — `01NORGX01` was never ownerless
 
 The escalation said the mission was *"on disk, unstarted, with no named owner"*.

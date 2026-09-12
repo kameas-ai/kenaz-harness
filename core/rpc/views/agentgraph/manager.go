@@ -254,7 +254,146 @@ func NewManager(opts ...ManagerOption) (*Manager, error) {
 	if err := loadBundledLibrary(m); err != nil {
 		return nil, err
 	}
+	// m.runs is always empty at this point — no run this process
+	// started could have paused yet — so every run PausedRunIDs finds
+	// was orphaned by an EARLIER process (approval-node-01PMZC12 E-002's
+	// "abandoned" fallback for the C-3 durability gap). Reconciling here,
+	// once, at construction, is "at boot" for every caller: production
+	// wiring (core/rpc/api.go) and every test that constructs a Manager
+	// over a pre-populated EventLog alike.
+	if err := m.rehydrateAbandonedRuns(); err != nil {
+		return nil, err
+	}
 	return m, nil
+}
+
+// rehydrateAbandonedRuns scans m.log for runs a PREVIOUS process
+// paused and never resolved. The in-memory run registry (m.runs) and
+// the pending-decision bus (m.asks) both die with the process that
+// held them — the durable event trail is the only surviving record
+// (C-3). Full durable pause (rebuilding a resumable *coreag.Env from
+// the log so the run can actually continue) is UNIT-6 and is cut per
+// E-002; this is the cheaper alternative E-002 sanctions instead:
+// mark the run ABANDONED, with an event recording why, rather than
+// letting GetRunStatus answer "not found" forever for a run whose
+// trace still says a human was asked and never answered (spec.md
+// §5.5, "Silence is the one unacceptable outcome").
+//
+// Idempotent — a run already carrying EventRunAbandoned as its last
+// event (this ran once in an earlier boot) is registered again without
+// re-appending a second abandonment event.
+func (m *Manager) rehydrateAbandonedRuns() error {
+	if m.log == nil {
+		return nil
+	}
+	ids, err := m.log.PausedRunIDs()
+	if err != nil {
+		return fmt.Errorf("agentgraph: rehydrate abandoned runs: %w", err)
+	}
+	for _, runID := range ids {
+		if err := m.rehydrateOneAbandonedRun(runID); err != nil {
+			return fmt.Errorf("agentgraph: rehydrate abandoned run %q: %w", runID, err)
+		}
+	}
+	return nil
+}
+
+// rehydrateOneAbandonedRun replays runID's full trail to recover
+// enough identity (graph id, session id, the node it parked on) to
+// report it truthfully, then registers a synthetic runEntry in
+// RunStateAbandoned. It never touches env or cancel beyond a no-op —
+// an abandoned run cannot be resumed or cancelled, only observed.
+func (m *Manager) rehydrateOneAbandonedRun(runID string) error {
+	var (
+		haveLast         bool
+		sessionID        string
+		graphID          string
+		startedAt        time.Time
+		pendingNode      string
+		pendingKind      coreag.EventKind
+		alreadyAbandoned bool
+		abandonedReason  string
+	)
+	if err := m.log.Replay(runID, func(ev coreag.Event) error {
+		haveLast = true
+		if ev.SessionID != "" {
+			sessionID = ev.SessionID
+		}
+		switch ev.Kind {
+		case coreag.EventRunStart:
+			startedAt = ev.Timestamp
+			var payload struct {
+				GraphID string `json:"graph_id"`
+			}
+			_ = json.Unmarshal(ev.Payload, &payload)
+			if payload.GraphID != "" {
+				graphID = payload.GraphID
+			}
+		case coreag.EventApprovalPending, coreag.EventAskPending:
+			pendingNode = ev.NodeID
+			pendingKind = ev.Kind
+		case coreag.EventRunAbandoned:
+			alreadyAbandoned = true
+			var payload struct {
+				Reason string `json:"reason"`
+			}
+			_ = json.Unmarshal(ev.Payload, &payload)
+			abandonedReason = payload.Reason
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("replay: %w", err)
+	}
+	if !haveLast {
+		return nil
+	}
+
+	now := m.nowFn()
+	entry := &runEntry{
+		id:        runID,
+		graphID:   graphID,
+		sessionID: sessionID,
+		state:     RunStateAbandoned,
+		startedAt: startedAt,
+		updatedAt: now,
+		endedAt:   now,
+		cancel:    func() {},
+	}
+
+	if alreadyAbandoned {
+		if abandonedReason == "" {
+			abandonedReason = "abandoned: process restarted while this run was paused"
+		}
+		entry.err = errors.New(abandonedReason)
+		m.mu.Lock()
+		m.runs[runID] = entry
+		m.mu.Unlock()
+		return nil
+	}
+
+	reason := fmt.Sprintf(
+		"abandoned: process restarted while this run was paused at node %q (pending %s); "+
+			"durable run state is not implemented (approval-node-01PMZC12 E-002), so the "+
+			"pending decision could not survive the restart — resolve manually or re-run the graph",
+		pendingNode, pendingKind)
+	entry.err = errors.New(reason)
+
+	var batch coreag.EventBatch
+	if err := batch.AppendKind(runID, pendingNode, coreag.EventRunAbandoned, map[string]any{
+		"reason":       reason,
+		"pending_node": pendingNode,
+		"pending_kind": string(pendingKind),
+	}); err != nil {
+		return fmt.Errorf("encode abandoned event: %w", err)
+	}
+	if _, err := m.log.Append(batch); err != nil {
+		return fmt.Errorf("append abandoned event: %w", err)
+	}
+
+	m.mu.Lock()
+	m.runs[runID] = entry
+	m.mu.Unlock()
+	return nil
 }
 
 // Catalog exposes the activity catalog so the API can satisfy

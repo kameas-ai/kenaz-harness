@@ -213,6 +213,29 @@ describe('RunView', () => {
     expect(wrapper.find('[data-testid="run-pending-approval"]').exists()).toBe(false);
   });
 
+  // approval-node-01PMZC12 E-002's "abandoned" fallback: a run a
+  // previous process paused and never resolved must render as
+  // abandoned — not as an unresolvable pending-approval/pending-ask
+  // block promising a resolution that can never land, and not silently
+  // as if nothing were pending at all.
+  it('renders the abandoned state instead of a resolvable pending decision', async () => {
+    const { wrapper } = mountWith({
+      status: defaultStatus({
+        state: 'abandoned',
+        error:
+          'abandoned: process restarted while this run was paused at node "a" (pending approval_pending); ' +
+          'durable run state is not implemented',
+      }),
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="run-abandoned"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="run-pending-approval"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="run-pending-ask"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="run-state"]').text()).toContain('Abandoned');
+    // Cancel is meaningless for a run nothing is executing anymore.
+    expect(wrapper.find('[data-testid="run-cancel"]').exists()).toBe(false);
+  });
+
   // agentgraph-total-convergence-01PMGX01 WP12: the run's trace and the
   // run's graph are two renderings of one recorded stream, so the trace
   // view is where the graph view is reached from.

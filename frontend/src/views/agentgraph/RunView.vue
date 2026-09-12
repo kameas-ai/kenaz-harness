@@ -318,6 +318,11 @@ const stateLabel = computed(() => {
   if (st === 'paused') return 'Paused';
   if (st === 'completed') return 'Completed';
   if (st === 'failed') return 'Failed';
+  // approval-node-01PMZC12 E-002: a run a previous process paused and
+  // never resolved (Manager.rehydrateAbandonedRuns). Distinct from
+  // 'failed' — nothing went wrong with the run itself, the pending
+  // decision just could not survive a restart.
+  if (st === 'abandoned') return 'Abandoned';
   return 'Pending';
 });
 
@@ -327,6 +332,7 @@ const stateClass = computed(() => {
   if (st === 'paused') return 'border-signal-warn text-signal-warn';
   if (st === 'completed') return 'border-signal-ok text-signal-ok';
   if (st === 'failed') return 'border-signal-danger text-signal-danger';
+  if (st === 'abandoned') return 'border-signal-danger text-signal-danger';
   return 'border-border-muted text-ink-dim';
 });
 
@@ -414,6 +420,20 @@ defineExpose({ pollOnce, refreshGraph, onNodeStatusClick, focusedSeq });
           >
             Cancel
           </button>
+        </div>
+      </div>
+
+      <div
+        v-if="status?.state === 'abandoned'"
+        class="rounded-md border border-signal-danger bg-surface-1 px-4 py-3"
+        data-testid="run-abandoned"
+      >
+        <div class="font-ui text-[12px] uppercase tracking-[0.18em] text-signal-danger">
+          Run abandoned
+        </div>
+        <div class="mt-1 font-ui text-[13px] text-ink">
+          This run was paused before a process restart and cannot be resumed.
+          <template v-if="status?.error">{{ status.error }}</template>
         </div>
       </div>
 

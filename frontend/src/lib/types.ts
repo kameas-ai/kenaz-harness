@@ -3010,7 +3010,17 @@ export interface GraphEdgeCheckResult {
 }
 
 /** RunState mirrors the kernel's emitted lifecycle. */
-export type GraphRunState = 'running' | 'paused' | 'completed' | 'failed';
+/**
+ * 'abandoned' (approval-node-01PMZC12 E-002's "abandoned" fallback):
+ * a run a PREVIOUS process paused and never resolved. Durable run
+ * state (rebuilding a resumable Env from the event log — UNIT-6) is
+ * not built, so a process restart cannot bring the run back; Manager
+ * .rehydrateAbandonedRuns reports this instead of "not found" so the
+ * UI never has to render a paused run whose pendingApproval/pendingAsk
+ * will silently never resolve (spec.md §5.5: "Silence is the one
+ * unacceptable outcome").
+ */
+export type GraphRunState = 'running' | 'paused' | 'completed' | 'failed' | 'abandoned';
 
 /** PendingAsk surfaces a parked AskNode question for the resume UI. */
 export interface GraphPendingAsk {
