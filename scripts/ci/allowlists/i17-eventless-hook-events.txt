@@ -91,10 +91,20 @@ file_changed justify(blocker: "the sole firer (core/fswatch/watcher.go:210) is c
 # separately found to pass only via comment-text false positives, not a
 # real call site; both are fixed in the same commit). ----
 
-# ---- WP15 (UNIT-13): the subagent_start mislabel is fixed (a live
-# pre_tool_use dispatch stops being mislabelled as subagent_start), but
-# WP15 explicitly does NOT change which event fires — that is A-13's
-# producer work. worktree_create has no subsystem at all. Neither row is
-# removable by this mission. ----
-subagent_start justify(blocker: "no production subagent start path; kenaz__subagent_dispatch is never registered (builtins_wiring.go:311-330 is statically dead)", owner: alec, date: 2026-08-19)
+# ---- subagent_start: LANDED 2026-09-12 (UNIT-7,
+# subagent-control-and-background-tasks-01PMZB11) — row removed. The
+# producer is core/rpc/subagent_run_spawner.go's production
+# `graphview.RunSpawner`, which fires `hooks.EventSubagentStart` (via
+# `SubagentRunSpawnerDeps.HookRunner`, the SAME `*hooks.Runner` instance
+# `background_task_complete` above fires through) immediately before
+# `deps.LLM.StartStream(...)` — after the task row registers, strictly
+# before the child run's first turn. Wired from core/rpc/api.go's `New()`
+# via `HookRunner: a.hookRunner` at the `SetRunSpawner` call site. The
+# WP15 mislabel fix (a live pre_tool_use dispatch that used to log itself
+# as `"at": "subagent_start"` inside core/agentgraph/exec_control.go's
+# branch-fork node — an unrelated agentgraph code path, not this
+# producer) predates this and is unaffected. ----
+
+# ---- worktree_create has no subsystem at all — not removable by this
+# mission (C-3, spec.md §14). ----
 worktree_create justify(blocker: "no worktree lifecycle subsystem exists in core/ or cmd/; A-13 does not cover it — raised as E-009", owner: alec, date: 2026-08-19)

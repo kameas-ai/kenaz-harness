@@ -194,6 +194,31 @@ export type HookEventName = (typeof ALL_HOOK_EVENTS)[number];
  * `TestHookEventFireSitesGate_PlantedDeadClosureRegistrationFires`.
  * `scripts/ci/allowlists/i17-eventless-hook-events.txt`'s
  * `background_task_complete` row is deleted in the same commit.
+ *
+ * Grown again 2026-09-12 (same mission, UNIT-7) by `subagent_start`:
+ * `core/rpc/subagent_run_spawner.go`'s production `graphview.RunSpawner`
+ * fires `hooks.EventSubagentStart` immediately before
+ * `deps.LLM.StartStream(...)` — after the task row is registered (so a
+ * hook consumer can correlate `TaskID`) and strictly before the child
+ * run's first turn, which is AC-08's falsifiable ordering claim. Wired
+ * from `core/rpc/api.go`'s `New()` via `SubagentRunSpawnerDeps.HookRunner
+ * = a.hookRunner` — the SAME Runner instance
+ * `background_task_complete` above already fires through, not a second
+ * one. `scripts/ci/allowlists/i17-eventless-hook-events.txt`'s
+ * `subagent_start` row is deleted in the same commit.
+ *
+ * Ordering note (caught by HooksPanel.spec.ts, not by inspection):
+ * `subagent_start`'s EVENT_FAMILY is `'session'`, the same family as
+ * `session_start` earlier in this list — HookEditor.vue's
+ * `firingEventGroups` groups `<option>`s by family, "ordered by first
+ * appearance in FIRING_HOOK_EVENTS, which already keeps same-family
+ * events adjacent" (that file's own comment). Appending
+ * `subagent_start` at the tail, after the unrelated `'task'`-family
+ * `background_task_complete`, would have rendered it pulled backward
+ * into the `session` group next to `session_start` while this raw array
+ * still listed it last — array order and render order silently
+ * diverging. Placed immediately after `session_start` instead, so the
+ * two stay in sync the same way every prior addition to this list did.
  */
 export const FIRING_HOOK_EVENTS = [
   'post_send',
@@ -203,6 +228,7 @@ export const FIRING_HOOK_EVENTS = [
   'permission_request',
   'permission_denied',
   'session_start',
+  'subagent_start',
   'background_task_complete',
 ] as const;
 

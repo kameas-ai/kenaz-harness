@@ -49,6 +49,7 @@ import (
 	"time"
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/hooks"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	graphview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph/chat"
@@ -132,6 +133,24 @@ type SubagentRunSpawnerDeps struct {
 	// childSessionID. nil disables the clamp entirely (profile budgets
 	// stay documented-but-unenforced, today's pre-existing behaviour).
 	BudgetOverrides *chat.SubagentBudgetRegistry
+
+	// HookRunner fires hooks.EventSubagentStart once per dispatch, before
+	// deps.LLM.StartStream is called (UNIT-7, FR-007). The SAME
+	// process-singleton *hooks.Runner core/rpc/api.go's New() assigns to
+	// a.hookRunner and wires onto tasks.Registry.SetHookFirer for
+	// background_task_complete (finding #85) — one Runner instance, two
+	// independent fire sites. Optional: nil means a spawned sub-agent run
+	// still executes, it just does not announce its own start (the
+	// degraded-boot posture every other hook fire site in this file
+	// tolerates — see Bus/Tasks above). Non-blocking by design: by the
+	// time this spawner runs, BranchSeamAdapter.Fork has ALREADY created
+	// the child session and seeded its first message (see this file's
+	// package doc), so there is no "block the fork" semantic left to
+	// honour here — a hook wanting to prevent a dispatch must act on
+	// tool.subagent.dispatch's Cedar action (ActionToolSubagentDispatch),
+	// not this event. Mirrors background_task_complete's own `_, _ =
+	// ...Fire(...)` discard.
+	HookRunner *hooks.Runner
 }
 
 // NewSubagentRunSpawner constructs the production graphview.RunSpawner.
@@ -193,6 +212,24 @@ func NewSubagentRunSpawner(deps SubagentRunSpawnerDeps) graphview.RunSpawner {
 			deps.BudgetOverrides.Set(childSessionID, chat.SubagentBudget{
 				Tokens:        req.BudgetTokens,
 				WallclockSecs: req.BudgetTimeS,
+			})
+		}
+
+		// UNIT-7 (FR-007, AC-08): subagent_start fires here — after the
+		// task row exists (so a hook consumer can correlate TaskID) and
+		// BEFORE the child run's first turn (the very next statement is
+		// StartStream). Ordering is the falsifiable half of AC-08: an
+		// event that fired after StartStream would arrive after the
+		// worker had already spoken, which is not a start hook. Result
+		// discarded, matching background_task_complete's own `_, _ =
+		// ...Fire(...)` — see HookRunner's doc for why this event does
+		// not block the dispatch.
+		if deps.HookRunner != nil {
+			_, _ = deps.HookRunner.Fire(ctx, hooks.EventSubagentStart, hooks.SubagentStartEvent{
+				ParentSessionID: req.ParentSessionID,
+				BranchID:        branchID,
+				ProfileID:       profileID,
+				Prompt:          req.HandoffPrompt,
 			})
 		}
 

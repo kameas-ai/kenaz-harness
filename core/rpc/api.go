@@ -2344,6 +2344,11 @@ func New(c *core.Core, opts ...Option) *API {
 			LLM:   a.llmAPI,
 			Bus:   a.eventBus,
 			Tasks: taskReg,
+			// UNIT-7 (FR-007): the SAME process-singleton *hooks.Runner
+			// a.hookRunner already holds (set earlier in this function,
+			// above the background_task_complete SetHookFirer block) —
+			// one Runner, fired from two independent sites.
+			HookRunner: a.hookRunner,
 			// Lazy, mirroring ChatRunDispatcherDeps.DefaultProfile
 			// (this file's scheduled-chat wiring, below): first
 			// personal-provider profile wins, re-read on every spawn
