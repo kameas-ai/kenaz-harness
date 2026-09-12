@@ -5,10 +5,21 @@ import (
 	"sync"
 
 	cedarlib "github.com/cedar-policy/cedar-go"
+	harnessmcp "github.com/kameas-ai/kenaz-harness/core/mcp/builtin/harness"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
+
+// harnessKillSwitchReader is satisfied by onboardingSettingsDialAdapter
+// (core/rpc/onboarding_wiring.go), which already wraps the real
+// settings.SettingsStore and degrades a nil store or a read error to
+// "enabled" (false). Declared independently here via structural typing
+// so this file does not need to import the onboarding view package for
+// a one-method interface.
+type harnessKillSwitchReader interface {
+	IsHarnessSelfMCPDisabled(ctx context.Context) (bool, error)
+}
 
 // cedarSessionKindResolver implements toolloop.PermissionResolver by
 // asking the shared Cedar engine's ActionUseTool evaluation for a
@@ -65,6 +76,26 @@ type cedarSessionKindResolver struct {
 
 	mu    sync.RWMutex
 	cache map[string]string // sessionID -> last-known Kind; invalidated via session.Manager.AddKindTransitionObserver
+
+	// killSwitch, when set, is consulted before session-kind resolution —
+	// see Resolve. nil (the zero value; every UNIT-3 test's constructor
+	// call) preserves the resolver's pre-AC-008-completion behaviour: the
+	// harness-self server is always enabled as far as this arm is
+	// concerned. Set via SetKillSwitch, late-bound like
+	// session.Manager.AddKindTransitionObserver's own registration, so
+	// existing constructor call sites do not need a signature change.
+	killSwitch harnessKillSwitchReader
+}
+
+// SetKillSwitch wires the persisted HarnessSelfMCPDisabled reader.
+// Late-bound so newCedarSessionKindResolver's existing call sites (all of
+// UNIT-3's resolver-level tests) are unaffected by its absence. Safe to
+// call with a nil receiver or a nil k.
+func (r *cedarSessionKindResolver) SetKillSwitch(k harnessKillSwitchReader) {
+	if r == nil {
+		return
+	}
+	r.killSwitch = k
 }
 
 // newCedarSessionKindResolver builds the resolver and — when sessions
@@ -137,6 +168,25 @@ func (r *cedarSessionKindResolver) kindFor(ctx context.Context, sessionID string
 // Resolve implements toolloop.PermissionResolver.
 func (r *cedarSessionKindResolver) Resolve(ctx context.Context, sessionID, server, tool string) (toolloop.Resolution, error) {
 	res := toolloop.Resolution{Server: server, Tool: tool, Policy: toolloop.PolicyAutoAllow}
+
+	// AC-008 completion: the kill switch denies EVERY harness-self tool —
+	// read or write — in EVERY session, including onboarding, per FR-007's
+	// own text ("none of its tools appear in any session — including
+	// onboarding"). Checked before session-kind resolution so an
+	// onboarding session gains no exemption. A read error is treated as
+	// enabled (fail-open on this one flag, matching
+	// onboardingSettingsDialAdapter's own convention for the identical
+	// read) rather than folded into the nil-engine deny-all branch below —
+	// losing settings.json must not silently widen that branch's blast
+	// radius to every non-harness-self tool in every session.
+	if r != nil && r.killSwitch != nil && server == harnessmcp.ServerName {
+		if disabled, err := r.killSwitch.IsHarnessSelfMCPDisabled(ctx); err == nil && disabled {
+			res.Policy = toolloop.PolicyDeny
+			res.Reason = "harness-self MCP server is disabled by settings"
+			return res, nil
+		}
+	}
+
 	if r == nil || r.engine == nil {
 		// harness-self-attach-01PMHS01 UNIT-4, B-3 rule 3: "if the
 		// session arm itself cannot be constructed... fail the boot
