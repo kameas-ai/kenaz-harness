@@ -346,6 +346,39 @@ into something with its own in-place detail view (at which point the
 emit would have a real consumer). **Blocker:** no such redesign is
 scoped or planned. **Date:** 2026-09-12.
 
+### 2026-09-12 (`automation-actually-runs-01PMZ404` UNIT-16) · five inherited closing-sweep findings, dispositioned
+
+`docs/dead-code-audit-2026-08-18.md:1796` assigned five findings to this
+mission. A-0 forbids resolving any of them by deletion.
+
+- **`C2V-14` `contextBootstrap.resume`** (audit `:1401`) — re-checked
+  2026-09-12: `docs/dead-code-audit-2026-08-18.md`'s own body entry
+  already recorded this as backend-live/UI-missing with no scoped mission
+  claiming the UI mount. Nothing new to add; still open.
+  `justify(blocker: "no mission has scoped the UI mount", owner: alec,
+  date: 2026-09-12)`.
+- **`C2V-35` `Tasks_AbortBySession` / `ListBySession`** (audit `:1419`) —
+  filed under the audit's own "a named live substitute exists (delete)"
+  bucket, but no substitute is named for these two, and the background-
+  task subsystem is already recorded elsewhere in this ledger as
+  producerless. A-0 names it explicitly:
+  `justify(blocker: "background-task subsystem has no producer", owner:
+  alec, date: 2026-09-12)`.
+- **`C2V-01`'s handoff-share prerequisite** (audit `:1397`) — this
+  ledger already records (see the handoff entries elsewhere in this
+  file) that `Handoff_Share` sends a nil payload, so wiring
+  `Handoff_Accept` alone would open an EMPTY session. Recording the
+  prerequisite here per UNIT-16's obligation; `automation-actually-runs`
+  does not own the handoff subsystem and does not wire `Accept`.
+- **`C2V-08`, `C2V-30` — NOT CARRIED.** Per spec.md §1.11 X-12, both
+  appear **only** in `docs/dead-code-audit-2026-08-18.md:1796`'s
+  assignment table — neither has a body entry anywhere else in that
+  file. Escalated as E-007 (spec.md §14): either the audit's author
+  supplies the finding text, or these two are struck from this
+  mission's inventory. **Nobody has acted on them** — inventing a
+  defect to match a label is exactly the failure mode
+  `feedback_verify_agent_citations` exists to prevent. **Owner:** the
+  `docs/dead-code-audit-2026-08-18.md` author. **Date:** 2026-09-12.
 
 ### 2026-09-11 (finding #61 round-2 review, `fix/memory-persist-growth-and-latency-v2`) · served-mode exit never calls `core.Core.Shutdown(ctx)` — only `api.Shutdown()` does
 
