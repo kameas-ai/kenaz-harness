@@ -5444,6 +5444,22 @@ func newLLMStack(
 	// run, just one level down. See harness_session_kind_resolver.go's
 	// Resolve for where this posture is implemented.
 	sessionArm := newCedarSessionKindResolver(sessionMgr, cedarEngine)
+	// harness-self-attach-01PMHS01 UNIT-7 completion (AC-008, finishing
+	// pass 2026-09-12): IsHarnessSelfMCPDisabled was wired to
+	// OnboardingAPI.State()'s read-only display field (the SettingsView.vue
+	// banner) but nothing on the attach/dispatch/listing path ever
+	// consulted it — flipping the persisted value changed the UI banner
+	// and changed nothing else; a direct harness_read_get_status call
+	// still succeeded and the tool still listed. Fold the check into the
+	// resolver that already governs every harness-self tool's
+	// reachability (C-004) and visibility (C-003), so the switch works
+	// with no restart and gains no second enforcement point to drift out
+	// of sync with the first. onboardingSettingsDialAdapter already reads
+	// the real store live per call; reuse it rather than inventing a
+	// second reader.
+	if settingsImpl != nil {
+		sessionArm.SetKillSwitch(onboardingSettingsDialAdapter{store: settingsImpl.Store()})
+	}
 	perms := toolloop.NewMergedResolver(staticPerms, sessionArm)
 	// WP03 — pre/post-tool-use hooks and audit emission. core/hooks
 	// only exposes pre_send / post_send for chat-pipeline events;
