@@ -232,6 +232,18 @@ const (
 	EventRunStart    EventKind = "run_start"
 	EventRunComplete EventKind = "run_complete"
 	EventRunPaused   EventKind = "run_paused"
+
+	// EventRunAbandoned is appended when a boot-time reconciliation
+	// pass (Manager.RehydrateAbandonedRuns, approval-node-01PMZC12
+	// E-002's "abandoned" fallback) finds a run whose last durable
+	// event is EventRunPaused with no live in-memory registry entry —
+	// i.e. a process restart lost the pending decision. Durable run
+	// state (rebuilding a resumable Env from the event log) is NOT
+	// built; this event exists so the trace's last word is never
+	// silently "run_paused forever" (spec.md §5.5: "Silence is the one
+	// unacceptable outcome"). Payload carries `reason`, `pending_node`
+	// and `pending_kind`.
+	EventRunAbandoned EventKind = "run_abandoned"
 )
 
 // AllEventKinds returns every EventKind this package declares.
@@ -280,7 +292,7 @@ func AllEventKinds() []EventKind {
 		EventRetryAttempt,
 		EventLadderRung,
 		EventRouterChoice, EventRouterOverride,
-		EventRunStart, EventRunComplete, EventRunPaused,
+		EventRunStart, EventRunComplete, EventRunPaused, EventRunAbandoned,
 	}
 }
 
@@ -372,6 +384,15 @@ type EventLog interface {
 	// Len returns the number of events currently stored for a run.
 	// Used by tests + the resume path to size pre-allocations.
 	Len(runID string) int
+	// PausedRunIDs returns the run_id of every run whose most recently
+	// recorded event is EventRunPaused or EventRunAbandoned — the
+	// candidate set for boot-time reconciliation
+	// (Manager.RehydrateAbandonedRuns, approval-node-01PMZC12 E-002's
+	// "abandoned" fallback for the run registry's C-3 durability gap).
+	// Deliberately narrow: it filters in the query/scan rather than
+	// requiring the caller to replay every run ever recorded just to
+	// find the handful that are parked.
+	PausedRunIDs() ([]string, error)
 	// Close releases any resources (file handles, connections, etc.).
 	Close() error
 }
@@ -433,6 +454,22 @@ func (l *memEventLog) Len(runID string) int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return len(l.rows[runID])
+}
+
+func (l *memEventLog) PausedRunIDs() ([]string, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []string
+	for runID, rows := range l.rows {
+		if len(rows) == 0 {
+			continue
+		}
+		switch rows[len(rows)-1].Kind {
+		case EventRunPaused, EventRunAbandoned:
+			out = append(out, runID)
+		}
+	}
+	return out, nil
 }
 
 func (l *memEventLog) Close() error { return nil }
