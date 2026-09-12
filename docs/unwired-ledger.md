@@ -345,6 +345,45 @@ Re-check at the release after model-settings-reach-the-model-01PMZ101
 UNIT-6 merges. See `core/session/migrations_knobs.go`'s doc comment for
 the same note kept with the column.
 
+### 2026-09-12 (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP11) · `LLM_TestProviderKey` has no `.vue` caller; the interface doc named the wrong substitute
+
+`core/rpc/views/llm/api.go`'s `TestProviderKey` (bound as `LLM_TestProviderKey`
+in `core/rpc/bindings.go`) is a read-only pre-submit key probe with exactly
+one real implementation arm (`azure-openai`, via the `azureTester` duck-typed
+interface in `impl.go`) — every other provider kind falls through to
+`"no adapter registered for provider kind %s"` or a similar stub result. A
+case-insensitive grep for `testProviderKey` over `frontend/src` finds it only
+in `types.ts` and `harnessClient.ts`; **no `.vue` file calls it.**
+
+The interface doc used to compound this by naming the wrong substitute:
+"others are stubs for now" implied more kinds were coming, and nothing
+pointed at what the AddProvider form actually does instead. Corrected here
+(spec C-1): `AddProviderForm.vue:344`'s pre-submit connection-status check
+calls `client.llm.listModels(form.kind, form.apiKey)`, **not**
+`TestProviderKey` and not `TestAndRotateKey` either (`TestAndRotateKey`
+exists because it's the one that WRITES to the keychain, per this same
+interface's adjacent doc comment — a real, different reason to exist,
+which is why this is not simply "delete the rival").
+
+**Class: reachable-but-unconsumed surface, not rival infrastructure.**
+`listModels` and `TestProviderKey` do different jobs (list vs. probe-one-key);
+the AddProviderForm using `listModels` for its pre-submit check does not
+make `TestProviderKey` a duplicate of it. Register A-0 (model-settings-
+reach-the-model-01PMZ101) froze the delete lane for exactly this
+distinction: "a commit whose only justification for a removal is absence
+of callers is rejected at review." **Nothing is deleted** — not the impl
+arm, not `azureTestKeyResult`, not the interface method, not the
+`LLM_TestProviderKey` binding, not `harnessClient.ts`'s `testProviderKey`
+wrapper, not `types.ts`'s `ProviderKeyTestResult`.
+
+**Blocker:** no surface today asks for a non-writing pre-submit key probe
+separate from `listModels`'s implicit one (a failed `listModels` call
+already tells the AddProvider form the key/host combination doesn't work).
+**Owner:** alec — wire a caller if a future AddProviderForm redesign wants
+a probe that doesn't also fetch the model list, or drop this entry to
+"delete: no producer, no consumer, unreachable" if the answer is settled
+as "never." Re-check at the next unwired sweep touching `core/rpc/views/llm`.
+
 ### 2026-09-11 (finding #61 round-2 review, `fix/memory-persist-growth-and-latency-v2`) · served-mode exit never calls `core.Core.Shutdown(ctx)` — only `api.Shutdown()` does
 
 Round 2 of the finding #61 follow-up (Blocker 3: wiring `rpc.API.Shutdown()`

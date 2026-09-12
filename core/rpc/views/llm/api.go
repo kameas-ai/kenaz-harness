@@ -259,10 +259,20 @@ type LLMConnectorAPI interface {
 
 	// TestProviderKey validates a plaintext API key against the given provider
 	// kind and resource host. Unlike TestAndRotateKey, this does NOT write the
-	// key to the keychain — it is a read-only probe used by the AddProvider form
-	// to display connection status before the user clicks Submit.
+	// key to the keychain — it is intended as a read-only pre-submit probe.
 	//
-	// kind       — the provider kind string ("azure-openai"; others are stubs for now).
+	// NOT the AddProvider form's actual pre-submit check (corrected
+	// model-settings-reach-the-model-01PMZ101 UNIT-6 / WP11, spec C-1):
+	// AddProviderForm.vue's connection-status probe calls
+	// client.llm.listModels(kind, apiKey), not this method. No `.vue`
+	// caller of TestProviderKey exists anywhere in the tree — see the
+	// dated docs/unwired-ledger.md entry for this method's disposition
+	// (register A-0: not deleted, per this mission's "delete nothing"
+	// rule — the impl arm, binding and frontend declarations all stay).
+	//
+	// kind       — the provider kind string ("azure-openai" is the only
+	//              real implementation; every other kind is a stub that
+	//              always returns an error — see impl.go).
 	// host       — the provider-specific resource host (Azure: resource hostname,
 	//              e.g. "myresource.openai.azure.com"; other kinds: ignored).
 	// plaintextKey — the API key to test. Zeroed before this method returns.
