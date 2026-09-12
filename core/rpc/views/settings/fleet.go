@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -71,6 +72,13 @@ type fleetState struct {
 	// fleet store is authoritative; this is the harness-side cache populated at
 	// enroll. nil before the first successful fetch.
 	telemetryOptIns []fleet.TelemetryOptInItem
+
+	// syncKindRegistry is the SyncKind registry wired at SetSyncKindRegistry
+	// time (fleet-generic-sync-framework-01NSYNC02 WP02). Used by the
+	// composite ConfigApplier to dispatch a bundle's org_config keyed
+	// section to each entry's registered kind. nil when sync registration
+	// has not run (fleet disabled) — the org_config branch skips cleanly.
+	syncKindRegistry *fleet.KindRegistry
 }
 
 // SetFleetClient wires a fleet.Client into the API and starts the capability
@@ -226,6 +234,26 @@ func (a *API) SetSkillRefs(store *slashcmd.SkillStore, registry *slashcmd.Regist
 	defer a.fleet.mu.Unlock()
 	a.fleet.skillStore = store
 	a.fleet.skillRegistry = registry
+}
+
+// SetSyncKindRegistry wires the SyncKind registry into the fleet state so
+// the compositeConfigApplier can dispatch a bundle's org_config keyed
+// section to each entry's registered kind
+// (fleet-generic-sync-framework-01NSYNC02 WP02).
+//
+// Called from rpc.New() after registerSyncCategories (and, in whichever
+// order, registerSlashCommandsSyncKind — both mutate the same *fleet.
+// KindRegistry pointer in place, so call order relative to this setter does
+// not matter; SetSyncKindRegistry only needs to run once with that pointer).
+// Safe to skip — when nil, ApplyBundle's org_config branch logs and skips
+// every entry rather than applying nothing silently as a false "success".
+func (a *API) SetSyncKindRegistry(registry *fleet.KindRegistry) {
+	if a.fleet == nil {
+		a.fleet = &fleetState{}
+	}
+	a.fleet.mu.Lock()
+	defer a.fleet.mu.Unlock()
+	a.fleet.syncKindRegistry = registry
 }
 
 func (a *API) fleetClient() *fleet.Client {
@@ -814,6 +842,69 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 			}
 		} else {
 			errs = append(errs, fmt.Errorf("fleet/config: mandated_skills present but skill refs not wired (SetSkillRefs never called)"))
+		}
+	}
+
+	// Org config (fleet-generic-sync-framework-01NSYNC02 WP02).
+	//
+	// Each entry in the bundle's keyed org_config map dispatches to its
+	// registered SyncKind's Apply(ctx, ScopeOrg, payload). Three distinct
+	// "cannot apply" cases here get deliberately different treatment,
+	// spelled out because they look similar and are not:
+	//
+	//   - registry is nil (sync registration never ran — fleet disabled,
+	//     or SetSyncKindRegistry not yet called): every entry is skipped
+	//     with a single log line, not an error. This mirrors the offline/
+	//     fleet-disabled posture the whole config-pull path preserves
+	//     elsewhere (registerSyncCategories itself no-ops the same way).
+	//   - kind id has NO registration in this build (registry.Kind returns
+	//     ok=false): a per-entry SKIP, not an error — spec §WP02's
+	//     "unknown kind → logged skip, not fatal". This is the forward-
+	//     compatibility case: a newer fleet server may ship an org_config
+	//     kind an older harness build has never heard of, and treating
+	//     that as a hard apply failure would block every OTHER section in
+	//     the same bundle from advancing lastAppliedID on old binaries.
+	//   - kind IS registered but doesn't declare ScopeOrg, or declares it
+	//     but has a nil Apply: this is a real wiring gap (the kind
+	//     promised org support the code doesn't back), not a forward-
+	//     compat gap, so it gets the same error-not-skip treatment as
+	//     cedar_delta/mandated_skills above — an ACK must not read
+	//     "applied:true" for a section this device cannot actually apply.
+	if len(b.OrgConfig) > 0 {
+		a.state.mu.RLock()
+		registry := a.state.syncKindRegistry
+		a.state.mu.RUnlock()
+		if registry == nil {
+			logging.L().Warn("fleet.config.org_config.registry_unwired",
+				"kind_count", len(b.OrgConfig))
+		} else {
+			// Deterministic order for logging/error-collection readability;
+			// sorted map keys are already what json.Marshal produced on
+			// the wire (see Bundle.OrgConfig's doc comment), but ranging a
+			// Go map directly is not itself ordered, so sort explicitly.
+			ids := make([]string, 0, len(b.OrgConfig))
+			for id := range b.OrgConfig {
+				ids = append(ids, id)
+			}
+			sort.Strings(ids)
+			for _, id := range ids {
+				payload := b.OrgConfig[id]
+				kind, ok := registry.Kind(id)
+				if !ok {
+					logging.L().Warn("fleet.config.org_config.unknown_kind_skipped", "kind", id)
+					continue
+				}
+				if !kind.HasScope(fleet.ScopeOrg) || kind.Apply == nil {
+					errs = append(errs, fmt.Errorf(
+						"fleet/config: org_config kind %q is registered but cannot apply an org-scope payload (HasScope(org)=%v, Apply nil=%v)",
+						id, kind.HasScope(fleet.ScopeOrg), kind.Apply == nil))
+					continue
+				}
+				if err := kind.Apply(ctx, fleet.ScopeOrg, payload); err != nil {
+					logging.L().Warn("fleet.config.org_config.apply_error", "kind", id, "err", err.Error())
+					errs = append(errs, fmt.Errorf("fleet/config: org_config kind %q apply: %w", id, err))
+				}
+			}
 		}
 	}
 

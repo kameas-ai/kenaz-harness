@@ -29,5 +29,6 @@ func init() {
 	knobcoverage.Register[Bundle]("MandatedSkills", "compositeConfigApplier.ApplyBundle -> fleet.ApplyMandatedSkills (fleet-skills-sync-01NDFSEX18 WP05)")
 	knobcoverage.RegisterDeferred[Bundle]("ProvisionedMCP", "wire contract only as of fleet-org-config-inheritance-01NORGX01 WP01 (core/fleet/bundle.go) — apply pipeline (org-managed read-only recipe layer, core/mcp/recipes/merged.go+enabled.go) lands in WP02")
 	knobcoverage.RegisterDeferred[Bundle]("ProviderSetups", "wire contract only as of fleet-org-config-inheritance-01NORGX01 WP01 (core/fleet/bundle.go) — apply pipeline (LLM stack wiring, core/rpc/api.go + core/llm/*) lands in WP04")
+	knobcoverage.Register[Bundle]("OrgConfig", "compositeConfigApplier.ApplyBundle -> fleet.KindRegistry.Kind(id) -> SyncKind.Apply(ctx, ScopeOrg, payload) (core/rpc/views/settings/fleet.go, fleet-generic-sync-framework-01NSYNC02 WP02) — dispatches each keyed entry to its registered kind; an id with no registration is a logged skip (forward-compat), a registered kind that cannot accept ScopeOrg is a collected apply error")
 	knobcoverage.Register[Bundle]("Signature", "fleet.VerifyWithKeySet (core/fleet/bundle.go) — envelope field, not a config section")
 }

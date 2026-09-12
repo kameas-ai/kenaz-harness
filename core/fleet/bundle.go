@@ -120,6 +120,37 @@ type Bundle struct {
 	// there is no meaningful distinction for a push-down-only section.
 	ProviderSetups []ProviderSetup `json:"provider_setups,omitempty"`
 
+	// OrgConfig is the generalized keyed section for org/team-scoped
+	// SyncKind payloads (fleet-generic-sync-framework-01NSYNC02 §2.1 WP02).
+	// The map key is a registered SyncKind.ID ("provider_profiles",
+	// "installed_mcp", a future kind, …); the value is that kind's opaque,
+	// kind-defined payload. This supersedes the pattern of adding a
+	// bespoke Bundle field per org-scoped kind (as MandatedSkills did, and
+	// as ProvisionedMCP/ProviderSetups above do today) — new org kinds add
+	// a registry entry, not a new field here.
+	//
+	// Canonicalization: encoding/json marshals Go maps with string keys in
+	// sorted-key order (documented stdlib behavior), so the signing
+	// payload below is deterministic across repeated marshals of the same
+	// map without any extra sorting step here. TestOrgConfig_SigningPayload_
+	// StableKeyOrder pins this so a future encoding/json change — or a
+	// hand-rolled "optimization" that bypasses json.Marshal — cannot
+	// silently reintroduce non-determinism into a signed payload.
+	//
+	// SECURITY: same signing requirement as ProvisionedMCP/ProviderSetups —
+	// every entry here is applied read-only on the member's device, so it
+	// must be covered by the ed25519 signature (see bundleSigningPayload
+	// below). FR-006's central secret-shape rejection (WP06) still governs
+	// what may be collected into a kind's payload; this field only carries
+	// entries a kind already agreed are secret-free — the one exception
+	// (org-shared provider keys) rides the dedicated encrypted credstore
+	// channel described in spec §6.2, never this map.
+	//
+	// omitempty: an org with no org_config kinds configured keeps the
+	// signing payload minimal, same rationale as MandatedSkills/
+	// ProvisionedMCP above.
+	OrgConfig map[string]json.RawMessage `json:"org_config,omitempty"`
+
 	// Signature is the base64-encoded ed25519 signature over the SHA-256 of
 	// the canonical JSON of this bundle with the "signature" field absent.
 	// This field is excluded from the signing input.
@@ -196,15 +227,16 @@ type BundleModelPrefs struct {
 // included in the signature and the verify+apply path can distinguish nil
 // (no restriction) from [] (block-all). Must stay in sync with Bundle above.
 type bundleSigningPayload struct {
-	BundleID           int64             `json:"bundle_id"`
-	IssuedAt           time.Time         `json:"issued_at"`
-	CedarDelta         json.RawMessage   `json:"cedar_delta,omitempty"`
-	MCPAllowlist       []string          `json:"mcp_allowlist"`
-	ModelPrefs         *BundleModelPrefs `json:"model_prefs,omitempty"`
-	KameasMLWeightURLs []string          `json:"kameas_ml_weight_urls,omitempty"`
-	MandatedSkills     []json.RawMessage `json:"mandated_skills,omitempty"`
-	ProvisionedMCP     []ProvisionedMCP  `json:"provisioned_mcp,omitempty"`
-	ProviderSetups     []ProviderSetup   `json:"provider_setups,omitempty"`
+	BundleID           int64                      `json:"bundle_id"`
+	IssuedAt           time.Time                  `json:"issued_at"`
+	CedarDelta         json.RawMessage            `json:"cedar_delta,omitempty"`
+	MCPAllowlist       []string                   `json:"mcp_allowlist"`
+	ModelPrefs         *BundleModelPrefs          `json:"model_prefs,omitempty"`
+	KameasMLWeightURLs []string                   `json:"kameas_ml_weight_urls,omitempty"`
+	MandatedSkills     []json.RawMessage          `json:"mandated_skills,omitempty"`
+	ProvisionedMCP     []ProvisionedMCP           `json:"provisioned_mcp,omitempty"`
+	ProviderSetups     []ProviderSetup            `json:"provider_setups,omitempty"`
+	OrgConfig          map[string]json.RawMessage `json:"org_config,omitempty"`
 }
 
 // signingPayload produces the canonical JSON bytes that were signed (all
@@ -221,6 +253,7 @@ func (b *Bundle) signingPayload() ([]byte, error) {
 		MandatedSkills:     b.MandatedSkills,
 		ProvisionedMCP:     b.ProvisionedMCP,
 		ProviderSetups:     b.ProviderSetups,
+		OrgConfig:          b.OrgConfig,
 	}
 	return json.Marshal(p)
 }

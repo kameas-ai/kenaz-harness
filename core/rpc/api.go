@@ -3621,6 +3621,16 @@ func New(c *core.Core, opts ...Option) *API {
 		// New() (feature-gated by HARNESS_USER_SLASHCMD) so it may be nil.
 		registerSlashCommandsSyncKind(syncer, a.syncKindRegistry, slashStore)
 
+		// fleet-generic-sync-framework-01NSYNC02 WP02: wire the same
+		// registry into settingsImpl's fleetState so compositeConfigApplier
+		// can dispatch a bundle's org_config keyed section to each entry's
+		// registered kind. Safe to call with either registry state — the
+		// registry above is never nil (registerSyncCategories always
+		// returns a *fleet.KindRegistry, empty or populated).
+		if a.settingsImpl != nil {
+			a.settingsImpl.SetSyncKindRegistry(a.syncKindRegistry)
+		}
+
 		// Connect settings mutations to the Syncer's debounced push so a theme
 		// change schedules a push-up (no-op when the category is disabled).
 		if a.settingsImpl != nil {
