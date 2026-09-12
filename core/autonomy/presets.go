@@ -128,6 +128,27 @@ func clonePresetValue(v any) any {
 type BudgetCeiling struct {
 	MaxLLMCallsPerRun  int
 	MaxToolCallsPerRun int
+
+	// MaxCostUSDPerRun is the tier's per-run spend ceiling in USD.
+	//
+	// Owner ruling 2026-09-12, on "I want to be able to run an agent for
+	// hours doing work and not stop it": the cost cap "should exist as a
+	// dial but in autonomous it should be disabled". So this ladder
+	// establishes a spend guard for every tier EXCEPT TierAutonomous,
+	// whose entry is 0 -- the same "0 == unbounded" convention
+	// KnobMaxIterations already uses for that tier.
+	//
+	// Cost, not tokens, is the right unit for a runaway guard: it is
+	// denominated in what "runaway" actually means, and unlike the token
+	// counter (raw input+output, CachedInputRead ignored,
+	// ReasoningTokens omitted) it is provider-accurate, coming from
+	// resp.Cost.Total via RunCounters.AddCost.
+	//
+	// The graphs declare no max_cost_usd_per_run, so for every tier below
+	// TierAutonomous this dial ESTABLISHES the cap rather than lowering
+	// one -- the "zero graph value lets the dial establish one" half of
+	// applyTokenCeilingKnob's convention.
+	MaxCostUSDPerRun float64
 }
 
 // budgetCeilingTable mirrors presetTable's five-tier shape. TierAutonomous
@@ -135,11 +156,16 @@ type BudgetCeiling struct {
 // (5000/10000) -- the most permissive tier gets the graph author's full
 // declared ceiling, not a value beyond it.
 var budgetCeilingTable = map[Tier]BudgetCeiling{
-	TierStrict:     {MaxLLMCallsPerRun: 150, MaxToolCallsPerRun: 300},
-	TierCautious:   {MaxLLMCallsPerRun: 500, MaxToolCallsPerRun: 1000},
-	TierDefault:    {MaxLLMCallsPerRun: 1500, MaxToolCallsPerRun: 3000},
-	TierBold:       {MaxLLMCallsPerRun: 3000, MaxToolCallsPerRun: 6000},
-	TierAutonomous: {MaxLLMCallsPerRun: 5000, MaxToolCallsPerRun: 10000},
+	TierStrict:   {MaxLLMCallsPerRun: 150, MaxToolCallsPerRun: 300, MaxCostUSDPerRun: 1},
+	TierCautious: {MaxLLMCallsPerRun: 500, MaxToolCallsPerRun: 1000, MaxCostUSDPerRun: 5},
+	TierDefault:  {MaxLLMCallsPerRun: 1500, MaxToolCallsPerRun: 3000, MaxCostUSDPerRun: 15},
+	TierBold:     {MaxLLMCallsPerRun: 3000, MaxToolCallsPerRun: 6000, MaxCostUSDPerRun: 50},
+	// MaxCostUSDPerRun: 0 is deliberate and load-bearing, not a missing
+	// value -- owner ruling 2026-09-12, cost capping is DISABLED at this
+	// tier so an hours-long autonomous run is never stopped by spend.
+	// Its backstops are max_llm_calls_per_run, the doom-loop guard and
+	// the max-agent-turns dial.
+	TierAutonomous: {MaxLLMCallsPerRun: 5000, MaxToolCallsPerRun: 10000, MaxCostUSDPerRun: 0},
 }
 
 // BudgetCeilingForTier returns the tier's call-volume budget ceiling.

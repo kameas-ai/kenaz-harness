@@ -2724,6 +2724,18 @@ func applyBudgetTierDial(b coreag.Budget, tier autonomy.Tier) coreag.Budget {
 	if ceiling.MaxToolCallsPerRun > 0 && (b.MaxToolCallsPerRun <= 0 || ceiling.MaxToolCallsPerRun < b.MaxToolCallsPerRun) {
 		b.MaxToolCallsPerRun = ceiling.MaxToolCallsPerRun
 	}
+	// Cost ceiling (owner ruling 2026-09-12). The graphs declare no
+	// max_cost_usd_per_run, so below TierAutonomous this ESTABLISHES the
+	// only spend guard there is; at TierAutonomous the table entry is 0,
+	// which lands in the "no opinion" branch and leaves cost capping
+	// DISABLED so an hours-long run is never stopped by spend.
+	//
+	// Kernel.checkBudget already enforces MaxCostUSDPerRun against
+	// RunCounters.AddCost(resp.CostUSD), so this needed a tier value and a
+	// fold, not new enforcement.
+	if ceiling.MaxCostUSDPerRun > 0 && (b.MaxCostUSDPerRun <= 0 || ceiling.MaxCostUSDPerRun < b.MaxCostUSDPerRun) {
+		b.MaxCostUSDPerRun = ceiling.MaxCostUSDPerRun
+	}
 	return b
 }
 
