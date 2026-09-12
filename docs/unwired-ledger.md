@@ -317,6 +317,93 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-09-12 (model-settings-reach-the-model-01PMZ101 UNIT-10 / WP17, ESCALATION — not resolved here) · `branchesview.API.parentModel` is a hardcoded `return "", ""` stub; the cross-provider warning can never fire
+
+Found while implementing WP17 (branch recommender provider hydration,
+closing finding AN-07). WP17's own spec text describes only a narrower
+gap — `core/rpc/branches_wiring.go`'s `knownModelProviders` literal
+covering just `["anthropic", "openai"]` — and that half is fixed in this
+landing (widened to `anthropic, openai, gemini, azure-openai,
+openrouter`, plus a real `agentgraph.BranchRecommender.pickAtTier` fix
+so an unknown provider degrades to the parent's own pair instead of
+silently substituting a different provider's model — see the mutation-
+verified `TestRecommender_UnknownProvider_FallsBackToParentNotCrossProvider`).
+
+**But the recommender was never the whole path**, and this second half
+is NOT fixed here — it needs a product decision, not a technical patch:
+
+`core/rpc/views/branches/impl.go`'s `parentModel(_ context.Context, _
+string) (string, string)` — the function `RecommendModel` calls to learn
+what provider/model the FORK'S PARENT session is actually on — is
+verbatim:
+
+```go
+func (a *API) parentModel(_ context.Context, _ string) (string, string) {
+	// v1: we don't yet thread the parent's active model through
+	// session.Record. The recommender accepts empty parents and uses
+	// the model id heuristic. Future patch: read from the per-session
+	// model dial.
+	return "", ""
+}
+```
+
+It ignores both its `ctx` and `sessionID` arguments, and ignores
+`a.cfg.Sessions` (a real, already-wired `*session.Manager`) — not
+because the wiring is missing, but because **there is nowhere to read
+the answer from**: `session.Record` has no provider/model field at all
+(confirmed by reading `core/session/types.go`'s full struct). The
+session's active (provider, model) selection lives ONLY in the
+frontend's per-session `localStorage`
+(`kenaz.session.config.${sessionID}`, `SessionsView.vue`'s
+`readSessionConfig`) — it is never sent to the backend at all, let alone
+persisted.
+
+**Practical effect, verified by reading the call chain, not run against
+a live app:** every `RecommendModel` call resolves `parentProvider = ""`
+unconditionally. `RecommendModel`'s own cross-provider-warning check —
+
+```go
+if parentProvider != "" && rec.ProviderID != "" && parentProvider != rec.ProviderID {
+    out.CrossProviderWarning = "Cross-provider fork: ..."
+}
+```
+
+— can **never fire**, for any parent, on any provider, today — not
+because same-provider detection works, but because the first operand is
+always false. This mission's own WP17 fix (the recommender degrading
+correctly to the parent's pair for an unknown provider) is invisible
+through this RPC: `Recommend("", "", ...)` always resolves via the
+empty-string branch regardless of which provider the parent is really
+on, so AC-015 as literally written ("assert the recommender returns a
+candidate of the parent's own provider ... with no cross-provider
+warning") is verified in this landing at the `agentgraph.BranchRecommender`
+level (where WP17's actual fix lives) and is **not** observable end to
+end through the live RPC, independent of how correct the recommender
+itself now is.
+
+**Why this is an escalation, not a fix landed here:** closing it needs
+one of two real product decisions, not a guess:
+
+1. Persist an "active (providerID, modelID)" field on `session.Record`
+   (a new migration, a new write path on every model switch, and a
+   decision about whether the tune-panel/`/effort`-style "session
+   default" pattern this same mission's UNIT-6 just built is the right
+   home for it or a separate concept), **or**
+2. Widen the `RecommendModel` RPC signature to accept the frontend's
+   already-known `activeProviderId`/`activeModelId` as explicit
+   parameters (no new persistence, but a live RPC contract change — the
+   same `wails generate module` regeneration blocker this mission's
+   UNIT-6 WP10 hit, at larger blast radius since `RecommendModel` is a
+   live, already-shipped binding, not a new one).
+
+Neither is a WP17-sized change, and picking one without owner input
+would be exactly the "two rival implementations, pick unilaterally"
+mistake CLAUDE.md's escalation guidance warns against.
+
+**Blocker:** an owner ruling on (1) vs (2) above. **Owner:** alec.
+Re-check at the next mission that touches `branchesview.API` or session
+provider/model selection.
+
 ### 2026-09-12 (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10) · `session_messages.knobs_override` stays unread — a product decision, not an oversight
 
 Migration `sessions/0330-knobs` shipped two columns:

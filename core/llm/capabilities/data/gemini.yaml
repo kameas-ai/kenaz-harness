@@ -55,6 +55,48 @@ defaults:
   # unchanged behaviour, expressed here as data instead of a fallback
   # a caller would otherwise have to string-match for.
   tier: medium
+# Size tiers (model-settings-reach-the-model-01PMZ101 UNIT-10 / WP17).
+# gemini.yaml previously had NO tiers: block at all, so
+# KnownModels("gemini") always returned nil and a gemini parent session
+# could never get a same-provider branch recommendation. The exact
+# (non-glob) rows below are the base model ids documented in the
+# `models:` list further down (dropping the trailing `*` — Google's
+# Gemini API model ids are exactly these strings, e.g. "gemini-2.5-pro",
+# not a versioned/dated variant the way Bedrock's are). "Flash" models
+# are the fast/cheap tier, "Pro" the mid/large tier; 2.5 Pro is the
+# frontier reasoning model and gets "large" — the same small/medium/large
+# split anthropic.yaml/openai.yaml already use for their own flagship vs.
+# mini models. The glob rows mirror the exact ones so Tier() still
+# resolves a live wire id with a suffix Google may append.
+tiers:
+  - match: "gemini-2.5-flash"
+    tier: small
+  - match: "gemini-2.0-flash"
+    tier: small
+  - match: "gemini-1.5-flash"
+    tier: small
+  - match: "gemini-1.0-pro"
+    tier: small
+  - match: "gemini-1.5-pro"
+    tier: medium
+  - match: "gemini-2.0-pro"
+    tier: medium
+  - match: "gemini-2.5-pro"
+    tier: large
+  - match: "gemini-2.5-flash*"
+    tier: small
+  - match: "gemini-2.0-flash*"
+    tier: small
+  - match: "gemini-1.5-flash*"
+    tier: small
+  - match: "gemini-1.0-pro*"
+    tier: small
+  - match: "gemini-1.5-pro*"
+    tier: medium
+  - match: "gemini-2.0-pro*"
+    tier: medium
+  - match: "gemini-2.5-pro*"
+    tier: large
 models:
   # Gemini 2.5 Pro — supports reasoning (extended thinking)
   - match: "gemini-2.5-pro*"
