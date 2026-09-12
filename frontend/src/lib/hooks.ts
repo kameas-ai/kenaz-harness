@@ -172,6 +172,53 @@ export type HookEventName = (typeof ALL_HOOK_EVENTS)[number];
  * caller exists would be the exact lie this mission exists to close:
  * a picker entry that claims to fire and does not.
  * See scripts/ci/allowlists/i17-eventless-hook-events.txt.
+ *
+ * Grown 2026-09-12 (subagent-control-and-background-tasks-01PMZB11,
+ * finding #85) by `background_task_complete`: `core/tasks.Registry.End`
+ * (core/tasks/registry.go) snapshots `r.hookFirer` under its lock and
+ * invokes it (`go hookFirer(ctx, payload)`) for every terminal task.
+ * `core/rpc/api.go`'s `New()` late-binds that field via
+ * `taskReg.SetHookFirer(func(ctx, payload) {...})` once the
+ * process-singleton `*hooks.Runner` exists, and the closure body calls
+ * `hookRunnerForTasks.Fire(ctx, hooks.EventBackgroundTaskComplete, ...)`.
+ * This is a genuinely new *shape* for this list — every prior entry's
+ * Fire/Run<X> call sits directly inside a function reachable by an
+ * ordinary caller chain; this one sits inside an anonymous closure
+ * that is stored as a struct field and invoked from a different file
+ * entirely. `scripts/ci/check-hook-event-fire-sites.sh`'s one-hop
+ * reachability check was extended in the same commit to recognize a
+ * closure passed to a `Set<Name>`/`With<Name>` call and to require a
+ * real, non-test, non-comment call site for the field the setter
+ * conventionally assigns (`SetHookFirer` -> `hookFirer`) — see that
+ * script's `closure_indirect_reachable()` and
+ * `TestHookEventFireSitesGate_PlantedDeadClosureRegistrationFires`.
+ * `scripts/ci/allowlists/i17-eventless-hook-events.txt`'s
+ * `background_task_complete` row is deleted in the same commit.
+ *
+ * Grown again 2026-09-12 (same mission, UNIT-7) by `subagent_start`:
+ * `core/rpc/subagent_run_spawner.go`'s production `graphview.RunSpawner`
+ * fires `hooks.EventSubagentStart` immediately before
+ * `deps.LLM.StartStream(...)` — after the task row is registered (so a
+ * hook consumer can correlate `TaskID`) and strictly before the child
+ * run's first turn, which is AC-08's falsifiable ordering claim. Wired
+ * from `core/rpc/api.go`'s `New()` via `SubagentRunSpawnerDeps.HookRunner
+ * = a.hookRunner` — the SAME Runner instance
+ * `background_task_complete` above already fires through, not a second
+ * one. `scripts/ci/allowlists/i17-eventless-hook-events.txt`'s
+ * `subagent_start` row is deleted in the same commit.
+ *
+ * Ordering note (caught by HooksPanel.spec.ts, not by inspection):
+ * `subagent_start`'s EVENT_FAMILY is `'session'`, the same family as
+ * `session_start` earlier in this list — HookEditor.vue's
+ * `firingEventGroups` groups `<option>`s by family, "ordered by first
+ * appearance in FIRING_HOOK_EVENTS, which already keeps same-family
+ * events adjacent" (that file's own comment). Appending
+ * `subagent_start` at the tail, after the unrelated `'task'`-family
+ * `background_task_complete`, would have rendered it pulled backward
+ * into the `session` group next to `session_start` while this raw array
+ * still listed it last — array order and render order silently
+ * diverging. Placed immediately after `session_start` instead, so the
+ * two stay in sync the same way every prior addition to this list did.
  */
 export const FIRING_HOOK_EVENTS = [
   'post_send',
@@ -181,6 +228,8 @@ export const FIRING_HOOK_EVENTS = [
   'permission_request',
   'permission_denied',
   'session_start',
+  'subagent_start',
+  'background_task_complete',
 ] as const;
 
 /**

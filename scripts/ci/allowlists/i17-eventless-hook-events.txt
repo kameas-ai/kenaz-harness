@@ -72,15 +72,39 @@ post_assistant_turn_complete justify(blocker: "no payload struct, no Run*/Fire* 
 # ---- WP13 (UNIT-12): file_changed. ----
 file_changed justify(blocker: "the sole firer (core/fswatch/watcher.go:210) is correct but core/fswatch has zero non-test importers — it fires from dead code and never runs in a real binary (scripts/ci/allowlists/i7-orphan-packages.txt:68); WP13 gives the watcher a production owner and removes the i7 entry in the same commit", owner: alec, date: 2026-08-19)
 
-# ---- WP14 (UNIT-13): background_task_complete. The injection lands in
-# WP14, but the PRODUCER stays blocked on A-13's sub-agent mission — this
-# row is not removable by anything in THIS mission. See spec.md §14.2. ----
-background_task_complete justify(blocker: "no production caller of tasks.Registry.Register; the only call site (core/tools/subagentdispatch/tool.go:240) sits inside the block C-19 proves is statically dead (core/rpc/builtins_wiring.go:311-330's `if subagentSeam != nil` never executes) — A-13's sub-agent mission owns the producer, not this mission", owner: alec, date: 2026-08-19)
+# ---- background_task_complete: LANDED 2026-09-12 (finding #85,
+# subagent-control-and-background-tasks-01PMZB11) — row removed. The
+# producer is core/rpc/api.go's `New()` (`taskReg.SetHookFirer(func(ctx,
+# payload) { hookRunnerForTasks.Fire(ctx,
+# hooks.EventBackgroundTaskComplete, ...) })`), invoked from
+# core/tasks/registry.go's `End()` for every terminal task. Moved into
+# frontend/src/lib/hooks.ts's FIRING_HOOK_EVENTS in the same commit that
+# extended check-hook-event-fire-sites.sh's one-hop reachability check to
+# see a closure registered via `Set<Name>`/`With<Name>` and actually
+# invoked elsewhere (`closure_indirect_reachable()`) — without that
+# extension, adding this event would have turned a false-positive
+# allowlist row into a false-negative gate (the old check's "enclosing
+# function" for a Fire call inside an anonymous closure resolves to
+# whatever ordinary function contains the closure literal — here,
+# `New()` — which says nothing about whether the closure itself is ever
+# called, and a `New(` textual caller search inside `core/` was
+# separately found to pass only via comment-text false positives, not a
+# real call site; both are fixed in the same commit). ----
 
-# ---- WP15 (UNIT-13): the subagent_start mislabel is fixed (a live
-# pre_tool_use dispatch stops being mislabelled as subagent_start), but
-# WP15 explicitly does NOT change which event fires — that is A-13's
-# producer work. worktree_create has no subsystem at all. Neither row is
-# removable by this mission. ----
-subagent_start justify(blocker: "no production subagent start path; kenaz__subagent_dispatch is never registered (builtins_wiring.go:311-330 is statically dead)", owner: alec, date: 2026-08-19)
+# ---- subagent_start: LANDED 2026-09-12 (UNIT-7,
+# subagent-control-and-background-tasks-01PMZB11) — row removed. The
+# producer is core/rpc/subagent_run_spawner.go's production
+# `graphview.RunSpawner`, which fires `hooks.EventSubagentStart` (via
+# `SubagentRunSpawnerDeps.HookRunner`, the SAME `*hooks.Runner` instance
+# `background_task_complete` above fires through) immediately before
+# `deps.LLM.StartStream(...)` — after the task row registers, strictly
+# before the child run's first turn. Wired from core/rpc/api.go's `New()`
+# via `HookRunner: a.hookRunner` at the `SetRunSpawner` call site. The
+# WP15 mislabel fix (a live pre_tool_use dispatch that used to log itself
+# as `"at": "subagent_start"` inside core/agentgraph/exec_control.go's
+# branch-fork node — an unrelated agentgraph code path, not this
+# producer) predates this and is unaffected. ----
+
+# ---- worktree_create has no subsystem at all — not removable by this
+# mission (C-3, spec.md §14). ----
 worktree_create justify(blocker: "no worktree lifecycle subsystem exists in core/ or cmd/; A-13 does not cover it — raised as E-009", owner: alec, date: 2026-08-19)

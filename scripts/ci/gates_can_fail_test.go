@@ -3171,3 +3171,88 @@ func TestReleaseIntegrityGate_PlantedMissingReleaseFires(t *testing.T) {
 			"this proof cannot distinguish a real violation from a gate that fails unconditionally.\noutput:\n%s", out)
 	}
 }
+
+// TestHookEventFireSitesGate_PlantedDeadClosureRegistrationFires is the
+// planted-violation proof for the 2026-09-12 extension of
+// check-hook-event-fire-sites.sh (finding #85,
+// subagent-control-and-background-tasks-01PMZB11): closure_indirect_reachable(),
+// which recognizes a Fire call sitting inside an anonymous closure passed to a
+// `Set<Name>(func(...))` / `With<Name>(func(...))` registration — the exact
+// shape `background_task_complete`'s real fire site takes
+// (core/rpc/api.go's `taskReg.SetHookFirer(func(ctx, payload) {
+// hookRunnerForTasks.Fire(ctx, hooks.EventBackgroundTaskComplete, ...) })`,
+// invoked from core/tasks/registry.go's `End()`).
+//
+// Recognizing that SHAPE is not the same as proving the closure is ever
+// CALLED. This test plants a closure of the identical shape — passed to a
+// Set<Name>(func(...)) call — whose stored field genuinely has zero callers
+// anywhere in the tree, and asserts the gate still fails it. Without this
+// case, closure_indirect_reachable() could regress into treating "looks like
+// a late-bound setter" as proof by itself, which would silently readmit the
+// exact defect class this extension exists to close (a picker/allowlist
+// state that says an event fires when nothing ever invokes it).
+func TestHookEventFireSitesGate_PlantedDeadClosureRegistrationFires(t *testing.T) {
+	root := repoRoot(t)
+	const gate = "check-hook-event-fire-sites.sh"
+
+	goPath := filepath.Join(root, "core", "hooks", "zz_gate_probe_deadclosure.go")
+	goContent := `package hooks
+
+// zz_gate_probe_deadclosure.go — planted by
+// TestHookEventFireSitesGate_PlantedDeadClosureRegistrationFires. Registers
+// a fake event whose only fire site sits inside an anonymous closure passed
+// to a Set<Name>(func(...)) call — the same registration shape
+// background_task_complete's real fire site uses — but the field the setter
+// assigns (deadFirer) is never called anywhere in this file or the rest of
+// the tree. closure_indirect_reachable() must not treat "shaped like a
+// late-bound setter" as reachability by itself.
+
+const EventZzGateProbeDeadClosure = "zz_gate_probe_deadclosure"
+
+type zzGateProbeDeadClosureRegistry struct {
+	deadFirer func(ctx interface{}, payload interface{})
+}
+
+// SetDeadFirer stores the callback. Nothing anywhere else in the tree ever
+// invokes r.deadFirer(...) — the field is write-only, which is the defect
+// closure_indirect_reachable's extra "field is actually called" requirement
+// exists to catch.
+func (r *zzGateProbeDeadClosureRegistry) SetDeadFirer(fn func(ctx interface{}, payload interface{})) {
+	r.deadFirer = fn
+}
+
+func zzGateProbeWireDeadClosure(reg *zzGateProbeDeadClosureRegistry, run *Runner) {
+	reg.SetDeadFirer(func(ctx interface{}, payload interface{}) {
+		_, _ = run.Fire(nil, EventZzGateProbeDeadClosure, nil)
+	})
+}
+`
+
+	tsPath := filepath.Join(root, "frontend", "src", "lib", "hooks.ts")
+	tsAppend := "\n" +
+		"export const FIRING_HOOK_EVENTS = [\n" +
+		"  'zz_gate_probe_deadclosure',\n" +
+		"] as const;\n" +
+		"\n" +
+		"export const ALL_HOOK_EVENTS = [\n" +
+		"  'zz_gate_probe_deadclosure',\n" +
+		"] as const;\n"
+
+	cleanupGo := plant(t, goPath, goContent, "")
+	defer cleanupGo()
+	cleanupTs := plant(t, tsPath, "", tsAppend)
+	defer cleanupTs()
+
+	code, out := runGate(t, gate, root)
+	if code == 0 {
+		t.Fatalf("%s exited 0 with a Fire call planted inside a closure registered via "+
+			"Set<Name>(func(...)) whose stored field has zero callers anywhere — "+
+			"closure_indirect_reachable() is treating the registration SHAPE alone as proof "+
+			"of reachability instead of requiring a real call site for the field.\noutput:\n%s",
+			gate, out)
+	}
+	if !strings.Contains(out, "zz_gate_probe_deadclosure") {
+		t.Fatalf("%s failed, but its output does not name the planted event — it may be "+
+			"failing for an unrelated reason.\noutput:\n%s", gate, out)
+	}
+}

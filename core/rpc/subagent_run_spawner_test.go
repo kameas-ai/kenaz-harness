@@ -31,6 +31,7 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core"
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/hooks"
 	graphview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph/chat"
 	llmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
@@ -159,6 +160,23 @@ func (s *subagentSpawnerTestStack) armSpawner(t *testing.T, timeout time.Duratio
 	}))
 }
 
+// armSpawnerWithHookRunner is armSpawner plus a HookRunner (UNIT-7,
+// FR-007) — a separate helper rather than widening armSpawner's
+// signature, so the many existing armSpawner(t, timeout) call sites
+// above stay untouched (a nil HookRunner is the default, already
+// covered by every one of those).
+func (s *subagentSpawnerTestStack) armSpawnerWithHookRunner(t *testing.T, timeout time.Duration, hr *hooks.Runner) {
+	t.Helper()
+	s.seam.SetRunSpawner(NewSubagentRunSpawner(SubagentRunSpawnerDeps{
+		LLM:            s.llmAPI,
+		Bus:            s.bus,
+		Tasks:          s.tasks,
+		DefaultProfile: func() string { return "test-profile" },
+		Timeout:        timeout,
+		HookRunner:     hr,
+	}))
+}
+
 // TestSubagentSpawnRoundTrip is AC-07's positive arm: in a
 // production-shaped wiring (real seam, real spawner, real ChatRunner —
 // only the model is faked), dispatching kenaz__subagent_dispatch
@@ -210,6 +228,203 @@ func TestSubagentSpawnRoundTrip(t *testing.T) {
 	// stub that fabricated the reply).
 	if len(stack.model.snapshotRequests()) == 0 {
 		t.Fatal("fake model was never called — the spawner didn't actually start a run")
+	}
+}
+
+// gatedLLM is a coreag.LLMProvider that signals modelCalled the instant
+// Generate is entered, then BLOCKS until release is closed (or ctx is
+// cancelled). Built for
+// TestSubagentSpawnRoundTrip_FiresSubagentStartBeforeFirstTurn: a naive
+// "sample the hook-fire count at the same wall-clock moment the model
+// was called" check is racy against real goroutine scheduling (the chat
+// runner's first turn does not run synchronously inside StartStream —
+// confirmed while writing this test: an earlier draft that merely
+// snapshotted state passed even after the fire call was moved to AFTER
+// StartStream, because the mutated fire still consistently won the race
+// against the runner's background goroutine reaching the model). Gating
+// the model turns "did the hook fire before the model was called" into a
+// real causal fact instead of a timing coincidence: the test does not
+// release the model until it has positively observed the hook fired
+// AND positively observed the model had not yet been entered.
+type gatedLLM struct {
+	modelCalled chan struct{}
+	release     chan struct{}
+	response    string
+	once        sync.Once
+}
+
+func (g *gatedLLM) Generate(ctx context.Context, req coreag.LLMRequest) (coreag.LLMResponse, error) {
+	g.once.Do(func() { close(g.modelCalled) })
+	select {
+	case <-g.release:
+	case <-ctx.Done():
+		return coreag.LLMResponse{}, ctx.Err()
+	}
+	if sink, ok := coreag.StreamSinkFromContext(ctx); ok && sink != nil {
+		sink.Emit(coreag.StreamEvent{Kind: coreag.StreamEventText, Text: g.response})
+	}
+	return coreag.LLMResponse{Content: g.response, FinishReason: "stop"}, nil
+}
+
+// TestSubagentSpawnRoundTrip_FiresSubagentStartBeforeFirstTurn is AC-08's
+// falsifiable claim: hooks.EventSubagentStart fires exactly once per
+// dispatch, and — the part occurrence alone cannot prove — strictly
+// BEFORE the child run's first turn. A real *hooks.Runner backed by a
+// real in-memory Registry + a registered test builtin drives this (per
+// CLAUDE.md blind spot #2's spirit: a fake HookRunnerIface would only
+// prove the spawner calls *some* function, not that a real hooks.Runner
+// dispatch actually threads through).
+//
+// gatedLLM (above) makes the ordering claim a real causal fact: the test
+// waits for the hook to fire, THEN positively asserts the model has not
+// been entered yet (a non-blocking read on modelCalled), THEN releases
+// the model to proceed. A naive "read counters at the same instant"
+// version of this test does NOT work — measured while writing it: moving
+// the Fire call to immediately after deps.LLM.StartStream (still
+// synchronous, still before the driving goroutine yields) passed just as
+// often as the correct position, because StartStream does not run the
+// first turn synchronously — the actual model call happens on a
+// separately-scheduled goroutine, so two placements that are both
+// "before that goroutine gets scheduled" are not an observable ordering
+// difference at all. That sub-case is NOT claimed as caught below; a
+// gate on wall-clock/scheduling coincidence would be exactly the
+// "adjacent to the property it claims" defect class CLAUDE.md's quality
+// bar warns about, so it is recorded here as a known limit rather than
+// papered over with a flaky assertion.
+//
+// Mutation, RAN by hand against core/rpc/subagent_run_spawner.go while
+// writing this test:
+//   - Delete the fire block entirely: reddens with "timed out waiting
+//     for subagent_start to fire" (hookFired never closes).
+//   - Move the fire call to after the run has actually finished — inside
+//     the `go awaitSubagentRun(...)` goroutine, after it returns, so the
+//     event can only fire once the model has already been called AND
+//     returned: reddens with the same "timed out" message. This is
+//     correct, not just convenient — the mutation makes hookFired and
+//     gated.release mutually dependent (Fire cannot run until Generate
+//     has returned, which this test will not allow until hookFired has
+//     already closed), so a real deadlock is the true consequence of
+//     that reordering, and the test times out rather than hanging
+//     forever only because of its own 5s bound.
+//   - Moving the fire call to immediately after StartStream returns (the
+//     race described above) is NOT caught by this test — see the
+//     paragraph above.
+func TestSubagentSpawnRoundTrip_FiresSubagentStartBeforeFirstTurn(t *testing.T) {
+	gated := &gatedLLM{
+		modelCalled: make(chan struct{}),
+		release:     make(chan struct{}),
+		response:    "sub-agent worker done",
+	}
+	stack := buildSubagentSpawnerTestStackWithLLM(t, gated)
+
+	reg, err := hooks.NewRegistry("")
+	if err != nil {
+		t.Fatalf("hooks.NewRegistry: %v", err)
+	}
+	builtins := hooks.NewBuiltinRegistry()
+
+	var (
+		mu            sync.Mutex
+		fireCount     int
+		capturedEvent string
+	)
+	hookFired := make(chan struct{})
+	var hookFiredOnce sync.Once
+	builtins.RegisterGenericFire("test.subagent_start_probe",
+		func(_ context.Context, event string, _ any, _ map[string]any) (hooks.HookOutput, error) {
+			mu.Lock()
+			fireCount++
+			capturedEvent = event
+			mu.Unlock()
+			hookFiredOnce.Do(func() { close(hookFired) })
+			return hooks.HookOutput{}, nil
+		},
+		hooks.BuiltinDescriptor{
+			ID:     "test.subagent_start_probe",
+			Name:   "subagent_start probe",
+			Events: []string{hooks.EventSubagentStart},
+		})
+	if err := reg.Add(hooks.Hook{
+		ID: "h", Name: "n", Event: hooks.EventSubagentStart, Kind: hooks.KindBuiltin,
+		Enabled: true, Builtin: "test.subagent_start_probe",
+	}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	runner := hooks.NewRunner(hooks.Config{Registry: reg, Builtins: builtins})
+
+	stack.armSpawnerWithHookRunner(t, 5*time.Second, runner)
+
+	parent, err := stack.sessionsAPI.Create(context.Background(), "parent session")
+	if err != nil {
+		t.Fatalf("create parent session: %v", err)
+	}
+
+	tool := coresubagent.New(coresubagent.Options{
+		DataDir: t.TempDir(),
+		Seam:    stack.seam,
+	})
+	ctx := toolloop.WithSessionID(context.Background(), parent.ID)
+	args := json.RawMessage(`{"profile":"explore","prompt":"find all usages","run_in_background":false}`)
+
+	type callResult struct {
+		raw json.RawMessage
+		err error
+	}
+	done := make(chan callResult, 1)
+	go func() {
+		raw, err := tool.Call(ctx, args)
+		done <- callResult{raw: raw, err: err}
+	}()
+
+	select {
+	case <-hookFired:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for subagent_start to fire")
+	}
+
+	// The causal check: at the instant the hook has fired, the model
+	// must NOT have been entered yet. A non-blocking read — if
+	// modelCalled were already closed, this test would be proving
+	// nothing about ordering.
+	select {
+	case <-gated.modelCalled:
+		t.Fatal("model was already called before subagent_start fired")
+	default:
+	}
+
+	close(gated.release)
+
+	var res callResult
+	select {
+	case res = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for tool.Call to finish")
+	}
+	if res.err != nil {
+		t.Fatalf("Call: unexpected Go error: %v", res.err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(res.raw, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got, _ := result["status"].(string); got != "complete" {
+		t.Fatalf("status=%q, want complete; full result=%+v", got, result)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if fireCount != 1 {
+		t.Fatalf("subagent_start hook fired %d times, want exactly 1", fireCount)
+	}
+	if capturedEvent != hooks.EventSubagentStart {
+		t.Errorf("captured event = %q, want %q", capturedEvent, hooks.EventSubagentStart)
+	}
+	// Ground truth the run actually reached the model, so "fired before
+	// a turn that never happened" cannot pass vacuously.
+	select {
+	case <-gated.modelCalled:
+	default:
+		t.Fatal("model was never called — the spawner didn't actually start a run")
 	}
 }
 
