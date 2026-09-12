@@ -3028,6 +3028,13 @@ func New(c *core.Core, opts ...Option) *API {
 		}
 		if stack.wrappedPool != nil {
 			wfDeps.ToolDispatcher = &wfToolDispatcherAdapter{pool: stack.wrappedPool, gate: wfGate}
+			// automation-actually-runs-01PMZ404 UNIT-6: Tools (ToolCaller)
+			// was never assigned, so a tool_call step always failed with
+			// "no ToolCaller wired" regardless of the pool's state. Same
+			// pool, same wfToolGate ladder as ToolDispatcher above — one
+			// Cedar/permission/confirm-each path for mcp_call, model_turn
+			// and tool_call alike (spec D-5).
+			wfDeps.Tools = &wfToolCallerAdapter{pool: stack.wrappedPool, gate: wfGate}
 		}
 		// FR-001/FR-002 (01NBUG03): wire DefaultProfileFunc so model_turn steps
 		// resolve the active LLM profile lazily at run time. This avoids the

@@ -36,6 +36,14 @@ package rpc
 //	                           path for both mcp_call and model_turn
 //	                           (workflow-tool-permission-gate).
 //
+//	wfToolCallerAdapter      — toolloop.MCPPool.Call →
+//	                           corewf.ToolCaller (automation-actually-
+//	                           runs-01PMZ404 UNIT-6). Same pool, same
+//	                           wfToolGate ladder as the two adapters
+//	                           above; serves the standalone tool_call
+//	                           step kind, which map[string]any-encodes
+//	                           its args rather than pre-encoded bytes.
+//
 //	wfToolGate               — the permission-resolve → confirm-each →
 //	                           Cedar ladder shared by wfMCPCallerAdapter
 //	                           and wfToolDispatcherAdapter. An unattended
@@ -471,6 +479,52 @@ func splitToolName(name string) (server, tool string) {
 		return "", name
 	}
 	return name[:idx], name[idx+len(sep):]
+}
+
+// ─── Tool caller adapter (tool_call step) ──────────────────────────────────────
+
+// wfToolCallerAdapter bridges toolloop.MCPPool onto corewf.ToolCaller —
+// the interface tool_call steps dispatch against
+// (automation-actually-runs-01PMZ404 UNIT-6). Distinct from
+// wfToolDispatcherAdapter above: that one satisfies corewf.ToolDispatcher
+// for model_turn's bounded tool loop (Dispatch(ctx, name string, input
+// []byte) (string, bool, error)); this one satisfies corewf.ToolCaller for
+// a standalone tool_call step (Call(ctx, name string, args map[string]any)
+// (corewf.ToolResult, error)) — same underlying pool, same wfToolGate
+// ladder, different call shape because tool_call steps carry args as a
+// map (already expanded via expandArgs), not pre-encoded bytes.
+type wfToolCallerAdapter struct {
+	pool toolloop.MCPPool
+	// gate — the SAME *wfToolGate instance wired into wfMCPCallerAdapter
+	// and wfToolDispatcherAdapter in production, so tool_call shares one
+	// Cedar/permission/confirm-each path with mcp_call and model_turn
+	// rather than opening a fourth, ungated one (spec D-5).
+	gate *wfToolGate
+}
+
+func (a *wfToolCallerAdapter) Call(ctx context.Context, name string, args map[string]any) (corewf.ToolResult, error) {
+	if a.pool == nil {
+		return corewf.ToolResult{}, fmt.Errorf("tool caller not wired (no MCP pool)")
+	}
+	server, tool := splitToolName(name)
+	if err := a.gate.authorize(ctx, toolloop.SessionIDFromContext(ctx), server, tool); err != nil {
+		return corewf.ToolResult{}, err
+	}
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return corewf.ToolResult{}, fmt.Errorf("tool_call %q: encode args: %w", name, err)
+	}
+	result, err := a.pool.Call(ctx, server, tool, json.RawMessage(raw))
+	if err != nil {
+		return corewf.ToolResult{}, err
+	}
+	// Unwrap a JSON string result to plain text, matching
+	// wfToolDispatcherAdapter's convention.
+	var s string
+	if json.Unmarshal(result, &s) == nil {
+		return corewf.ToolResult{Content: s}, nil
+	}
+	return corewf.ToolResult{Content: string(result)}, nil
 }
 
 // ─── Slash-command tool dispatcher adapter ─────────────────────────────────────
