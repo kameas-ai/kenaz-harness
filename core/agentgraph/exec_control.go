@@ -1290,7 +1290,19 @@ func (branchExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs 
 		ParentMessageIDs: append([]string(nil), a.MessageSubset...),
 	}
 
-	// v2 lifecycle hook: subagent_start (WP04, hooks-event-surface-expansion).
+	// v2 lifecycle hook: pre_tool_use, tool "branch.fork"
+	// (trust-surfaces-that-fire-01PMZ202 WP15 / R-09). This used to be
+	// labelled "subagent_start" in the comment, the audit event's "at"
+	// value, and the error string below — but the call three lines down
+	// dispatches FirePreToolUse, not a subagent_start hook, and
+	// SubagentStartEvent (core/hooks/fire.go) is never constructed
+	// anywhere in the repo. That mislabel attributed a pre_tool_use
+	// decision to a hook the user could not have written: fixed here to
+	// say what actually fires. Do NOT change which event fires — that
+	// is a separate mission's producer work (see
+	// scripts/ci/allowlists/i17-eventless-hook-events.txt), and
+	// changing it here would silently disable any pre_tool_use hook a
+	// user already has against branch forks.
 	// Fire before Fork so hooks can inspect / block the spawn before it commits.
 	// The BranchID is not yet known; use an empty string.
 	if env.LifecycleHooks != nil {
@@ -1299,9 +1311,9 @@ func (branchExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs 
 		if saErr == nil && saMerged.Blocked {
 			_ = res.Events.AppendKind(env.RunID, node.ID, EventHookDenied, map[string]any{
 				"reason": saMerged.BlockReason,
-				"at":     "subagent_start",
+				"at":     "pre_tool_use",
 			})
-			return res, fmt.Errorf("branch: node %q: blocked by subagent_start hook: %s", node.ID, saMerged.BlockReason)
+			return res, fmt.Errorf("branch: node %q: blocked by pre_tool_use hook: %s", node.ID, saMerged.BlockReason)
 		}
 	}
 

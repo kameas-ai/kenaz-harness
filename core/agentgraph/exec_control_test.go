@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -527,6 +528,74 @@ func TestForkExecutor_RealImpl_FiresFork(t *testing.T) {
 	}
 	if !sawBranchFork {
 		t.Error("missing branch_fork event")
+	}
+}
+
+// TestForkExecutor_PreToolUseHookLabel is WP15's regression test
+// (trust-surfaces-that-fire-01PMZ202, R-09). The branch-fork lifecycle
+// hook actually dispatches FirePreToolUse (tool "branch.fork"), so a
+// block from it must be attributed to pre_tool_use everywhere it is
+// reported — the "at" value on the EventHookDenied audit event, and the
+// returned error string. Before this fix both said "subagent_start", an
+// event SubagentStartEvent (core/hooks/fire.go) that is never
+// constructed anywhere in the repo, so the audit trail attributed the
+// decision to a hook the user could not have written.
+//
+// AC-15a: labels say pre_tool_use.
+// AC-15b (regression guard): the hook still actually blocks the fork —
+// this WP must not change behaviour, only the label.
+//
+// Mutation: restore the old "subagent_start" labels (comment, the "at"
+// value, and the error string) in exec_control.go. Must fail on both
+// the "at" assertion and the error-string assertion below.
+func TestForkExecutor_PreToolUseHookLabel(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(&Graph{})
+	seam := NewFakeBranchSeam()
+	env.Branch = seam
+	hooks := &fakeLifecycleHookRunner{
+		preResult: LifecycleMergedOutput{Blocked: true, BlockReason: "denied by policy"},
+	}
+	env.LifecycleHooks = hooks
+	ex := branchExecutor{}
+	node := &Node{ID: "fk", Kind: NodeKindBranch, Attrs: BranchAttrs{Title: "child"}}
+
+	res, err := ex.Execute(context.Background(), env, node, PortValues{"context": "seed"})
+
+	// AC-15b: the fork is still blocked, and Fork itself is never called.
+	if err == nil {
+		t.Fatalf("expected an error from a blocked pre_tool_use hook")
+	}
+	if len(seam.Forks) != 0 {
+		t.Errorf("Fork calls = %d, want 0 (blocked before Fork)", len(seam.Forks))
+	}
+
+	// AC-15a: the error names pre_tool_use, not subagent_start.
+	if !strings.Contains(err.Error(), "pre_tool_use") {
+		t.Errorf("error = %q, want it to name pre_tool_use", err.Error())
+	}
+	if strings.Contains(err.Error(), "subagent_start") {
+		t.Errorf("error = %q, still names the retired subagent_start label", err.Error())
+	}
+
+	// AC-15a: the EventHookDenied audit event's "at" value is
+	// pre_tool_use, not subagent_start.
+	var sawDenied bool
+	for _, e := range res.Events.Events {
+		if e.Kind != EventHookDenied {
+			continue
+		}
+		sawDenied = true
+		var payload map[string]any
+		if uerr := json.Unmarshal(e.Payload, &payload); uerr != nil {
+			t.Fatalf("decode EventHookDenied payload: %v", uerr)
+		}
+		if payload["at"] != "pre_tool_use" {
+			t.Errorf(`EventHookDenied payload["at"] = %v, want "pre_tool_use"`, payload["at"])
+		}
+	}
+	if !sawDenied {
+		t.Fatalf("expected an EventHookDenied event")
 	}
 }
 
