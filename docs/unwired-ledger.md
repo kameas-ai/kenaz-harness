@@ -317,6 +317,64 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-09-12 (`automation-actually-runs-01PMZ404` UNIT-15, PARTIAL) · `elicitview.API.OpenWizard` still has zero non-test callers — the deferred-ask leg landed, the wizard leg did not
+
+UNIT-15 was scoped as three pieces the mission's own tasks.md and the
+ledger's prior entry (`docs/unwired-ledger.md:592-623`, dated 2026-08-19)
+both insist ship together, because any one alone is "a half-surface that
+reads, in a code review, like a shipped feature":
+
+1. `mode` on `AskArgs`, plumbed to a real producer — **DONE.**
+   `core/tools/askuserquestion/askuserquestion.go` now declares
+   `AskArgs.Mode` (`"blocking"` default / `"deferred"`), advertised in
+   the tool's own JSON schema so the model can actually request it.
+   `askuserquestion.Delegate` gained `Defer(ctx, q) (askID string, err
+   error)`; `core/rpc/views/elicit/api.go`'s `*API` (the production
+   Delegate, wired at `core/rpc/builtins_wiring.go:305-312`) implements
+   it by calling `elicitation.Registry.Register` — never `Park` — so
+   the call never blocks. `Tool.Call` branches on `args.deferredMode()`
+   before ever reaching `OpenDialog`.
+2. **Mounting `DeferredAskPill` / `DeferredAskPanel`** — **DONE.**
+   `frontend/src/components/chat/SessionHeader.vue` now mounts
+   `DeferredAskPill :session-id="session.id"`, the same "chat-header
+   chip" pattern `BackgroundTaskChip` already uses on the line above
+   it. `DeferredAskPill.vue` gained an optional `sessionId` prop that
+   filters `elicit:deferred`'s process-wide broker payloads to the
+   mounted session — without it, a pill on session A's header would
+   have shown session B's pending questions, since the topic carries no
+   inherent scoping of its own. Mounting was safe to do the moment (1)
+   gave the topics a real producer, per the ledger's original
+   objection.
+3. **`OpenWizard`'s missing call site** — **NOT DONE.** Still zero
+   non-test callers (`grep -rn "OpenWizard(" core/` — only the
+   declaration at `core/rpc/views/elicit/api.go:393` and
+   `api_test.go`'s four call sites). Closing this needs two things
+   neither of which exists yet: (a) a model-facing way to submit a
+   *batch* of questions — `AskArgs` has no `questions:` field, so there
+   is no tool call shape that could reach `OpenWizard` even in
+   principle; (b) a wizard renderer in
+   `frontend/src/components/dialogs/AskUserQuestion/AskUserQuestion.vue`
+   — confirmed absent: `grep -in wizard` on that file is zero hits;
+   its two hits for "questions" (singular-vs-plural key-generation
+   comments) are unrelated to a multi-question batch. Building either
+   alone is a bigger, separately-reviewable
+   change than the deferred-mode leg above; scoping both into the same
+   commit as (1)+(2) would have meant shipping neither well or shipping
+   the deferred leg late.
+
+This does **not** repeat the half-surface failure the prior entry
+warned about: (1) and (2) together are a complete, real capability on
+their own terms (a model can defer a question; a human sees it and
+answers it; nothing about that path implies or advertises a wizard).
+`OpenWizard` remains exactly as before — built, zero callers, no new
+lie created by leaving it that way.
+
+**Owner:** whoever next extends `askuserquestion` with a multi-question
+batch shape. **Blocker:** no tool schema exists for a question batch,
+and no wizard UI exists to render one — both need to land together,
+which is a second unit of comparable size to the one this entry closes.
+**Date:** 2026-09-12.
+
 ### 2026-09-12 (`automation-actually-runs-01PMZ404` UNIT-11) · `WorkflowRunsSection.vue`'s `workflow-run:focus` emit has zero listeners — dated-justified, not deleted
 
 UNIT-11 wired the OTHER half of this finding (`WorkflowsView.vue` now reads

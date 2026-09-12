@@ -353,6 +353,30 @@ func (a *API) OpenDialog(ctx context.Context, q elicitation.Question) (elicitati
 	})
 }
 
+// Defer implements askuserquestion.Delegate (UNIT-15, A-12). Unlike
+// OpenDialog, it calls Registry.Register — never Park — so the calling
+// goroutine is never blocked: this is what makes a deferred ask
+// callable from a run with no attached UI (SJ01's unattended runs
+// depend on that property; see askuserquestion.Delegate's doc). The
+// SAME session-id-from-context read as OpenDialog: the toolloop
+// dispatcher wraps ctx with toolloop.WithSessionID before calling into
+// the built-in tool pool, and this is how the registry entry — and
+// therefore TopicElicitDeferred's ElicitRequest — carries the session
+// that raised it, so DeferredAskPill can filter to its own session and
+// core/serve's WS fan-out can scope the event correctly.
+func (a *API) Defer(ctx context.Context, q elicitation.Question) (string, error) {
+	sessionID := toolloop.SessionIDFromContext(ctx)
+	entry, err := a.registry.Register(elicitation.Request{
+		SessionID: sessionID,
+		Question:  q,
+		Mode:      elicitation.ModeDeferred,
+	})
+	if err != nil {
+		return "", err
+	}
+	return entry.ID, nil
+}
+
 // SubmitAnswer resolves a pending elicitation. Called by the Bindings
 // layer when the frontend submits Elicit_SubmitAnswer.
 func (a *API) SubmitAnswer(_ context.Context, requestID string, answerJSON json.RawMessage, cancelled bool) error {

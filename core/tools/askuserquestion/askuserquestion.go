@@ -131,6 +131,11 @@ const inputSchema = `{
         }
       },
       "required": ["kind", "content"]
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["blocking", "deferred"],
+      "description": "'blocking' (default) pauses the turn until the user answers. 'deferred' registers the question and continues immediately — use this when you do not need the answer to proceed right now, or when a human may not be watching (e.g. an unattended/scheduled run); the answer arrives as a note on a future turn."
     }
   },
   "required": ["question", "kind"]
@@ -149,6 +154,26 @@ type PreviewSpec struct {
 	Language string `json:"language,omitempty"`
 }
 
+// Mode is the wire value of AskArgs.Mode. Mirrors
+// elicitation.Mode's two values without importing that package's Mode
+// type directly — this file owns the model's wire vocabulary
+// (automation-actually-runs-01PMZ404 UNIT-15, A-12).
+type Mode string
+
+const (
+	// ModeBlocking (the default, empty string also means this) parks
+	// the tool call until the user answers — the pre-UNIT-15 behavior,
+	// unchanged.
+	ModeBlocking Mode = "blocking"
+	// ModeDeferred registers the ask and returns immediately; the tool
+	// call does not wait. The user answers in their own time and the
+	// answer arrives as a system_reminder on a future turn (see
+	// core/rpc/views/elicit's TopicElicitDeferredAnswered). This is
+	// what lets an unattended/scheduled run pose a question without
+	// blocking forever on a UI nobody may ever attach.
+	ModeDeferred Mode = "deferred"
+)
+
 // AskArgs is the wire shape parsed from the model's args JSON.
 type AskArgs struct {
 	Question     string           `json:"question"`
@@ -160,7 +185,14 @@ type AskArgs struct {
 	Step         *float64         `json:"step,omitempty"`
 	DefaultValue json.RawMessage  `json:"default_value,omitempty"`
 	Preview      *PreviewSpec     `json:"preview,omitempty"`
+	// Mode is "blocking" (default/empty) or "deferred" (UNIT-15).
+	Mode Mode `json:"mode,omitempty"`
 }
+
+// deferredMode reports whether args requests deferred delivery,
+// treating an empty/unrecognized value as blocking (the pre-existing
+// behavior — unknown values do not silently change dispatch shape).
+func (a AskArgs) deferredMode() bool { return a.Mode == ModeDeferred }
 
 // ToQuestion projects the model's args onto the canonical question
 // shape. This is the only place the tool's wire vocabulary meets the
@@ -202,6 +234,16 @@ type AskResult struct {
 	Cancelled bool `json:"cancelled"`
 }
 
+// DeferredAskResult is returned to the model immediately when
+// AskArgs.Mode is ModeDeferred (UNIT-15). No Answer field: none exists
+// yet. The model is told, in-band, that the answer is not available
+// synchronously and will arrive as a note on a future turn.
+type DeferredAskResult struct {
+	Deferred bool   `json:"deferred"`
+	AskID    string `json:"ask_id"`
+	Message  string `json:"message"`
+}
+
 // errorResult is the JSON the model receives when the tool call fails.
 type errorResult struct {
 	Error   string `json:"error"`
@@ -231,6 +273,15 @@ const (
 // errKindNotWired.
 type Delegate interface {
 	OpenDialog(ctx context.Context, q elicitation.Question) (elicitation.Answer, error)
+
+	// Defer registers q as a deferred ask and returns immediately with
+	// its id — it does not wait for an answer (UNIT-15, A-12). Used
+	// when AskArgs.Mode == ModeDeferred. The concrete implementation
+	// (core/rpc/views/elicit) calls elicitation.Registry.Register
+	// (never Park) so the caller's goroutine is never blocked, which is
+	// what makes this callable from a run with no attached UI —
+	// SJ01's unattended runs depend on that property.
+	Defer(ctx context.Context, q elicitation.Question) (askID string, err error)
 }
 
 // Options configures the Tool at construction.
@@ -319,6 +370,31 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 		)
 		return marshalErr(errKindNotWired,
 			"ask_user_question dialog bridge is not wired; call will return once WP04 lands")
+	}
+
+	// UNIT-15 (A-12): deferred mode registers and returns immediately —
+	// it does not park the tool call on Delegate.OpenDialog. This is
+	// the leg that makes an ask callable from a run with no attached
+	// UI (SJ01's unattended runs).
+	if args.deferredMode() {
+		askID, derr := t.delegate.Defer(ctx, question)
+		if derr != nil {
+			t.logger.Warn("askuserquestion.defer_error",
+				"tool", ToolName,
+				"kind", args.Kind,
+				"err", derr.Error(),
+			)
+			return marshalErr(errKindDelegate, fmt.Sprintf("defer error: %v", derr))
+		}
+		encoded, merr := json.Marshal(DeferredAskResult{
+			Deferred: true,
+			AskID:    askID,
+			Message:  "Question registered for the user to answer later. You will receive their answer as a note on a future turn; continue your task in the meantime.",
+		})
+		if merr != nil {
+			return nil, fmt.Errorf("askuserquestion: marshal deferred result: %w", merr)
+		}
+		return encoded, nil
 	}
 
 	answer, err := t.delegate.OpenDialog(ctx, question)

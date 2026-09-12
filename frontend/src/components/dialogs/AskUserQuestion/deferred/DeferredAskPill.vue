@@ -14,32 +14,57 @@
  *   5. Backend injects system_reminder on the next LLM turn.
  */
 
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useEventStream } from '@/lib/useEventStream';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import type { ElicitRequest } from '@/lib/types';
 import DeferredAskPanel from './DeferredAskPanel.vue';
 
+const props = defineProps<{
+  /**
+   * Scopes the pill to one session's deferred asks (automation-
+   * actually-runs-01PMZ404 UNIT-15). "elicit:deferred" is a process-
+   * wide broker topic — every session's deferred asks fire on it — so
+   * without this a chat header mounted for session A would show
+   * session B's pending questions too. Optional and unfiltered when
+   * omitted, matching this component's pre-UNIT-15 behavior (its
+   * existing spec mounts it standalone with no session context).
+   */
+  sessionId?: string;
+}>();
+
 const client = useHarnessClient();
 
 // ── deferred ask queue ─────────────────────────────────────────────────────
 
-const pending = ref<ElicitRequest[]>([]);
-const panelOpen = ref(false);
+const allPending = ref<ElicitRequest[]>([]);
 
 useEventStream<ElicitRequest>('elicit:deferred', (payload) => {
   if (!payload?.request_id) return;
-  if (pending.value.some((p) => p.request_id === payload.request_id)) return;
-  pending.value = [...pending.value, payload];
+  if (allPending.value.some((p) => p.request_id === payload.request_id)) return;
+  allPending.value = [...allPending.value, payload];
 });
 
 useEventStream<{ ask_id: string }>('elicit:deferred:answered', (payload) => {
   if (!payload?.ask_id) return;
-  pending.value = pending.value.filter((p) => p.request_id !== payload.ask_id);
-  if (pending.value.length === 0) panelOpen.value = false;
+  allPending.value = allPending.value.filter((p) => p.request_id !== payload.ask_id);
 });
 
+// Session-scoped view. Falls back to the full queue when no sessionId
+// was supplied (see the prop doc above).
+const pending = computed<ElicitRequest[]>(() =>
+  props.sessionId === undefined
+    ? allPending.value
+    : allPending.value.filter((p) => p.session_id === props.sessionId),
+);
+
+const panelOpen = ref(false);
+
 const pendingCount = computed(() => pending.value.length);
+
+watch(pendingCount, (count) => {
+  if (count === 0) panelOpen.value = false;
+});
 
 function togglePanel() {
   panelOpen.value = !panelOpen.value;
