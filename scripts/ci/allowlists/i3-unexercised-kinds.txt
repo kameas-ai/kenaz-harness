@@ -120,9 +120,6 @@ merge
 #     through the promotion golden test), but they run as graphs in
 #     their own right, not via an `activity` NODE. No shipped graph
 #     contains `kind: activity`.
-#   approval — the human approval gate. Distinct from `ask`, which the
-#     chat graph does use: approval blocks on an explicit approve/reject
-#     decision and no shipped graph has an approval step to gate.
 #   artifact — emits an artifact to an output target. Appears in
 #     kernel_liveness_test.go, but ONLY as a scripted-stub node standing
 #     in for "some node downstream of a decision"; livenessKernel
@@ -133,8 +130,19 @@ merge
 #     node, so that entry never fires. The escalation ladder performs a
 #     retry RUNG internally (exec_escalation_ladder.go); that is not the
 #     standalone kind.
+#
+# approval DRAINED 2026-09-12 (approval-node-01PMZC12, FR-011/AC-10/G8):
+# no shipped graph declares `kind: approval` yet (still true — the node
+# is authoring-time only, per B-3/C-4; it is deliberately NOT in
+# chat_default.yaml), but core/agentgraph/seam_fanout_test.go's
+# TestSeamFanout_Approval_ParksThenResolvesOnAskBus carries a
+# `// convergence:exercised approval` marker: it constructs a real
+# Kernel, calls .Run( then .Resume(, and asserts the pause/resolve
+# behaviour end to end. Per this gate's anti-launder rules the marker
+# goes stale (and this gate starts failing) the moment a shipped graph,
+# library entry, or activity YAML declares `kind: approval` — at that
+# point drop the marker and let the shipped YAML carry the line.
 activity
-approval
 artifact
 retry
 
