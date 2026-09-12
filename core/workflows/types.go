@@ -280,9 +280,18 @@ type Step struct {
 	Separator string `yaml:"separator,omitempty" json:"separator,omitempty"`
 }
 
-// WorkflowSecretRef declares one @secret: locator that a workflow needs
-// at runtime. The Locator is checked against the live ExposureIndex when
-// the run starts; the run fails fast if the locator is not exposed.
+// WorkflowSecretRef declares one @secret: locator a workflow's author
+// says it needs at runtime.
+//
+// automation-actually-runs-01PMZ404 UNIT-12: this is validated for
+// SHAPE only (non-empty, whitespace-free, not already @secret:-prefixed
+// — schema.go's Validate) at save time. Nothing on the run path
+// resolves Locator against the live ExposureIndex or confirms it is
+// exposed before step 1 runs; a workflow can declare a locator it
+// never uses, or omit one a step actually needs, with no run-start
+// signal either way. A step that reaches for an unexposed secret still
+// errors when it tries to use it — this manifest does not move that
+// failure earlier.
 //
 // No plaintext is stored here — this is a manifest entry only.
 // (model-secret-references-01KW7M5A WP12)
@@ -311,15 +320,22 @@ type Workflow struct {
 	// with Schedule. Defaults to UTC when empty.
 	Timezone string `yaml:"timezone,omitempty" json:"timezone,omitempty"`
 	Inputs        []Input `yaml:"inputs,omitempty" json:"inputs,omitempty"`
-	// Secrets declares the set of @secret: locators this workflow needs
-	// at runtime. Each entry names a locator from the session-scoped
-	// ExposureIndex; when the workflow engine starts a run it asserts
-	// all declared locators are exposed and fails fast if any are missing,
-	// so the model never reaches a step that would fail mid-run due to a
-	// missing credential.
+	// Secrets declares the set of @secret: locators this workflow's
+	// author says it needs at runtime.
 	//
-	// The entries do NOT carry plaintext — they are merely a manifest
-	// that the run validator checks against the live ExposureIndex.
+	// automation-actually-runs-01PMZ404 UNIT-12 — corrected: this field
+	// does NOT get a run-start assertion. Engine.Run never reads
+	// wf.Secrets. schema.go's Validate checks only that each entry is a
+	// well-formed locator string (non-empty, no whitespace, no
+	// @secret: prefix) — a save-time shape check, not a run-time
+	// existence check against the live ExposureIndex. A workflow can
+	// declare a locator nothing uses, or omit one a step actually
+	// needs; either way nothing surfaces it before the step that would
+	// need the secret runs (and fails on its own, later, if it is
+	// missing).
+	//
+	// The entries do NOT carry plaintext — they are manifest metadata
+	// only.
 	//
 	// Example YAML:
 	//   secrets:
