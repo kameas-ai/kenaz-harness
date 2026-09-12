@@ -202,7 +202,7 @@ func main() {
 	// comment above: "both served entry points" describes source-level
 	// intent, not a claim that this binary ships today.
 	api := rpc.New(c,
-		rpc.WithHostProviders(serve.HostProviders(os.Getenv, log)),
+		rpc.WithHostProviders(serve.ProbeHostProviders(context.Background(), os.Getenv, serve.HostProviders(os.Getenv, log), log)),
 		rpc.WithServedConnectors(connSup),
 		rpc.WithConnectorTokens(connTokens))
 
