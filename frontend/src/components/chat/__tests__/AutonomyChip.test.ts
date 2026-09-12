@@ -111,6 +111,8 @@ function mountChip(resolved: ResolvedAutonomy) {
       getAutonomy: async () => resolved.session,
       setAutonomy,
       resolveAutonomy,
+      getKnobsDefault: async () => null,
+      setKnobsDefault: async () => undefined,
       export: async () => ({ path: '', byteCount: 0 }),
     },
   });

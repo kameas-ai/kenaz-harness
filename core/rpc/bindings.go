@@ -282,6 +282,34 @@ func (b *Bindings) Sessions_MoveToProject(id, projectID string) error {
 	return b.api.Sessions().MoveToProject(b.ctx(), id, projectID)
 }
 
+// Sessions_GetKnobsDefault returns the session-level RequestKnobs
+// override, or nil when none has been set (model-settings-reach-the-
+// model-01PMZ101 UNIT-6 / WP10). SessionTunePanel reads this on open.
+//
+// NOT YET reflected in frontend/wailsjs/go/rpc/Bindings.{js,d.ts}: this
+// mission's worktree could not run `wails generate module` (it opens a
+// REAL database — CLAUDE.md tooling footguns — and this session's
+// dispatch instructions forbid running it under any circumstance). The
+// method is hand-declared on harnessClient.ts's WailsBindingsLike
+// interface instead, following the CompactionOverhead precedent
+// (chat-turn-integrity-01PMZ606 WP12) — see that interface's doc
+// comment. A real `wails generate module` run (with the documented
+// HOME/KENAZ_HARNESS_ENV override) is required before this binding is
+// reachable at runtime; until then check-codegen.sh's wailsjs-hash gate
+// will correctly report drift.
+func (b *Bindings) Sessions_GetKnobsDefault(id string) (*sessions.SessionKnobs, error) {
+	defer sentry.WrapBinding("Sessions_GetKnobsDefault")()
+	return b.api.Sessions().GetKnobsDefault(b.ctx(), id)
+}
+
+// Sessions_SetKnobsDefault persists the session-level RequestKnobs
+// override; nil clears it. See Sessions_GetKnobsDefault's doc comment
+// for the wailsjs-regeneration caveat.
+func (b *Bindings) Sessions_SetKnobsDefault(id string, knobs *sessions.SessionKnobs) error {
+	defer sentry.WrapBinding("Sessions_SetKnobsDefault")()
+	return b.api.Sessions().SetKnobsDefault(b.ctx(), id, knobs)
+}
+
 // Sessions_SuggestTitle triggers a manual auto-title generation for the
 // session identified by id. Returns the generated title string on success
 // (session-auto-titling-01KQ8TDS WP04).

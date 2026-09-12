@@ -18,6 +18,22 @@ import (
 //     session default and/or global default. NULL means "inherit from
 //     session/global".
 //
+//     STILL UNWIRED as of model-settings-reach-the-model-01PMZ101 UNIT-6 /
+//     WP10 — that WP gave sessions.knobs_default (above) its first
+//     production writer AND reader (Sessions_{Get,Set}KnobsDefault,
+//     chat.LLMProviderAdapter.Generate's send-path merge), but deliberately
+//     did NOT extend the same treatment to this column. Blocker: no
+//     surface today asks for a PER-MESSAGE override distinct from the
+//     per-session default — /effort sets a knob that "takes effect on the
+//     next message" (cmd_effort.go) but has no notion of reverting after
+//     that one message, and SessionTunePanel only ever edits the session
+//     default. Wiring this column needs a product decision about what a
+//     one-message override even means UX-wise (a slash-command flag? a
+//     per-send toggle?) before it needs a Go reader. Owner: whichever
+//     mission specs a per-message knob override; re-check at the release
+//     after model-settings-reach-the-model-01PMZ101 UNIT-6 merges. See
+//     docs/unwired-ledger.md for the dated entry.
+//
 // Numbering: 0330, the next free version after 0329 (provider_capabilities).
 //
 // Idempotent: the Up function checks pragma_table_info before issuing each

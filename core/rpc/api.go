@@ -6829,6 +6829,11 @@ func buildChatRunner(
 		EnvDefaults:        envDefaults,
 		ToolDiscoverer:     chatToolDiscovererAdapter{inner: tools},
 		Attachments:        attachments,
+		// model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10:
+		// *session.Manager satisfies chat.KnobsDefaultResolver directly
+		// (GetKnobsDefault(ctx, sessionID) (*llm.RequestKnobs, error)) —
+		// the same manager already threaded through as sessionMgr above.
+		KnobsDefault:       sessionMgr,
 		Compaction:         compactionDeps,
 		CompactionPipeline: chatCompactionPipeline,
 		PartialPersister:   partialPersister,

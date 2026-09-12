@@ -22,6 +22,8 @@ import { SERVED_STREAM_TOPICS } from './servedStreamTopics.gen';
 import type {
   AutonomyLayer,
   ResolvedAutonomy,
+  ReasoningConfig,
+  WireSessionKnobs,
   Session,
   SiteSummary,
   Project,
@@ -318,6 +320,23 @@ interface WailsBindingsLike {
   Sessions_GetAutonomy(sessionID: string): Promise<AutonomyLayer>;
   Sessions_SetAutonomy(sessionID: string, layer: AutonomyLayer): Promise<void>;
   Sessions_ResolveAutonomy(sessionID: string): Promise<ResolvedAutonomy>;
+  /**
+   * Sessions_{Get,Set}KnobsDefault — model-settings-reach-the-model-
+   * 01PMZ101 UNIT-6 / WP10. Hand-declared here (not in
+   * wailsjs/go/rpc/Bindings.d.ts) per the CompactionOverhead precedent
+   * above: `wails generate module` opens a REAL database and was not run
+   * for this change — see core/rpc/bindings.go's matching doc comment.
+   * The wire shape is WireSessionKnobs (snake_case, matching Go
+   * llm.RequestKnobs' own JSON tags), NOT the camelCase ReasoningConfig
+   * SessionTunePanel edits — getKnobsDefault/setKnobsDefault below do
+   * the translation, the same class of fix as cmd_effort.go's
+   * reasoningKnobMetadata.
+   */
+  Sessions_GetKnobsDefault(id: string): Promise<WireSessionKnobs | null>;
+  Sessions_SetKnobsDefault(
+    id: string,
+    knobs: WireSessionKnobs | null,
+  ): Promise<void>;
 
   LLM_ListProviders(): Promise<Provider[]>;
   LLM_StartStream(
@@ -1531,6 +1550,22 @@ export interface SessionsClient {
    * + per-session panel.
    */
   resolveAutonomy(id: string): Promise<ResolvedAutonomy>;
+
+  // ── model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10 ───────────
+  /**
+   * Read the session-level reasoning-knob default persisted via
+   * setKnobsDefault, or null when none has been set. SessionTunePanel
+   * reads this on mount.
+   */
+  getKnobsDefault(id: string): Promise<ReasoningConfig | null>;
+  /**
+   * Persist the session-level reasoning-knob default. null clears any
+   * existing override (SessionTunePanel's "Reset"). The stored value
+   * merges onto every GenerationRequest.Knobs the session issues —
+   * this is the "reaches the model" half; without it the value only
+   * round-trips through the database.
+   */
+  setKnobsDefault(id: string, knobs: ReasoningConfig | null): Promise<void>;
 
   // ── session-export-01NDFSEX05 WP03 ──────────────────────────────────
   /**
@@ -3751,6 +3786,48 @@ const ARRAY_RETURNING_BINDINGS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * reasoningConfigToWire / wireToReasoningConfig — the camelCase <->
+ * snake_case translation at the Sessions_{Get,Set}KnobsDefault boundary
+ * (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP11). See
+ * WireSessionKnobs' doc comment in types.ts: Go llm.RequestKnobs.Reasoning
+ * marshals as `openai_effort` / `anthropic_thinking_budget`, not the
+ * camelCase SessionTunePanel.vue edits. Retagging the Go struct was
+ * rejected for the same reason cmd_effort.go's fix rejected it — that
+ * struct is also KnobsToParams' and the send-path merge's wire type, so
+ * changing its tags would silently break both. The translation lives
+ * here instead, the one place both directions cross the RPC boundary.
+ */
+function reasoningConfigToWire(
+  knobs: ReasoningConfig | null,
+): WireSessionKnobs | null {
+  if (!knobs) return null;
+  const reasoning: WireSessionKnobs['reasoning'] = {};
+  if (knobs.openAIEffort) reasoning.openai_effort = knobs.openAIEffort;
+  if (knobs.anthropicThinkingBudget && knobs.anthropicThinkingBudget > 0) {
+    reasoning.anthropic_thinking_budget = knobs.anthropicThinkingBudget;
+  }
+  if (Object.keys(reasoning).length === 0) return null;
+  return { reasoning };
+}
+
+function wireToReasoningConfig(
+  wire: WireSessionKnobs | null | undefined,
+): ReasoningConfig | null {
+  if (!wire?.reasoning) return null;
+  const cfg: ReasoningConfig = {};
+  if (wire.reasoning.openai_effort) {
+    cfg.openAIEffort = wire.reasoning.openai_effort;
+  }
+  if (
+    wire.reasoning.anthropic_thinking_budget &&
+    wire.reasoning.anthropic_thinking_budget > 0
+  ) {
+    cfg.anthropicThinkingBudget = wire.reasoning.anthropic_thinking_budget;
+  }
+  return Object.keys(cfg).length > 0 ? cfg : null;
+}
+
+/**
  * Wraps the raw Wails bindings object so every call listed in
  * ARRAY_RETURNING_BINDINGS resolves `null`/`undefined` to `[]` instead of
  * handing a JS `null` to code that trusts the declared `Promise<T[]>`
@@ -3866,6 +3943,12 @@ export function createHarnessClient(): HarnessClient {
       getAutonomy: (id) => b().Sessions_GetAutonomy(id),
       setAutonomy: (id, layer) => b().Sessions_SetAutonomy(id, layer),
       resolveAutonomy: (id) => b().Sessions_ResolveAutonomy(id),
+      getKnobsDefault: (id) =>
+        b()
+          .Sessions_GetKnobsDefault(id)
+          .then(wireToReasoningConfig),
+      setKnobsDefault: (id, knobs) =>
+        b().Sessions_SetKnobsDefault(id, reasoningConfigToWire(knobs)),
       export: (sessionId, format) => b().Sessions_Export(sessionId, format),
     },
     artifacts: {
@@ -5123,6 +5206,8 @@ export function createFakeHarnessClient(
         project: { level: null, overrides: {} },
         session: { level: null, overrides: {} },
       }),
+      getKnobsDefault: async () => null,
+      setKnobsDefault: noop,
       export: async (_sessionId, _format) => ({ path: '/fake/export.md', byteCount: 0 }),
     },
     projects: {

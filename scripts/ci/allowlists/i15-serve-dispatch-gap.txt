@@ -1113,3 +1113,34 @@
 "Subagent_Pause"
 "Subagent_Resume"
 "Subagent_Steer"
+
+# CLASS: untriaged -- model-settings-reach-the-model-01PMZ101 UNIT-6
+# (WP10/WP11), 2026-09-12.
+# 2 entries.
+#
+# Sessions_GetKnobsDefault / Sessions_SetKnobsDefault (core/rpc/
+# bindings.go) give SessionTunePanel.vue a real backend: the session-level
+# RequestKnobs override persisted to sessions.knobs_default (migration
+# sessions/0330-knobs) and merged onto every GenerationRequest.Knobs the
+# session issues. Same untriaged posture as CompactionOverhead above: a
+# live desktop chat-surface control with no NotAvailableInServedMode
+# guard on SessionsView, and this mission's spec (model-settings-reach-
+# the-model-01PMZ101) does not scope core/serve/** work in or out by
+# name the way 01PMZ707/01PMZB11 do above -- port-or-gate is a real open
+# question, deliberately not resolved here.
+#
+# Also true today, and load-bearing for whoever resolves the port
+# question: this worktree could not run `wails generate module` (see
+# CLAUDE.md tooling footguns; this session's dispatch forbade it
+# outright), so the two bindings exist only in core/rpc/bindings.go +
+# a hand-declared frontend/src/lib/harnessClient.ts WailsBindingsLike
+# entry, not yet in the generated frontend/wailsjs/go/rpc/Bindings.{js,d.ts}
+# — a desktop build cannot reach them yet either. Landing the served
+# route and regenerating wailsjs are two independent follow-ups; do not
+# conflate them.
+#
+# Blocker: served-mode-is-a-real-mode-01PMZ707's port-or-boundary-panel
+# ruling for this surface (not yet requested as of this entry). Dated
+# 2026-09-12. Owner: alec.
+"Sessions_GetKnobsDefault"
+"Sessions_SetKnobsDefault"

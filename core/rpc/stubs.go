@@ -183,6 +183,12 @@ func (s *stubSessions) SaveAutonomyProfile(_ context.Context, _ string, _ autono
 func (s *stubSessions) ResolveAutonomy(_ context.Context, _ string) (sessions.ResolvedAutonomy, error) {
 	return sessions.ResolvedAutonomy{}, errNotWired
 }
+func (s *stubSessions) GetKnobsDefault(_ context.Context, _ string) (*sessions.SessionKnobs, error) {
+	return nil, errNotWired
+}
+func (s *stubSessions) SetKnobsDefault(_ context.Context, _ string, _ *sessions.SessionKnobs) error {
+	return errNotWired
+}
 func (s *stubSessions) Export(_ context.Context, _, _ string) (sessions.ExportResult, error) {
 	return sessions.ExportResult{}, errNotWired
 }

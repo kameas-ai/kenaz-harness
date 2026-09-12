@@ -618,6 +618,8 @@ export function Sessions_Get(arg1:string):Promise<sessions.Session>;
 
 export function Sessions_GetAutonomy(arg1:string):Promise<autonomy.Layer>;
 
+export function Sessions_GetKnobsDefault(arg1:string):Promise<llm.RequestKnobs>;
+
 export function Sessions_GetUsage(arg1:string):Promise<sessions.SessionUsage>;
 
 export function Sessions_List():Promise<Array<sessions.Session>>;
@@ -651,6 +653,8 @@ export function Sessions_SaveScrollPosition(arg1:string,arg2:number):Promise<voi
 export function Sessions_SendMessageWithBlocks(arg1:string,arg2:Array<llm.ContentBlock>):Promise<sessions.Message>;
 
 export function Sessions_SetAutonomy(arg1:string,arg2:autonomy.Layer):Promise<void>;
+
+export function Sessions_SetKnobsDefault(arg1:string,arg2:llm.RequestKnobs):Promise<void>;
 
 export function Sessions_SetSystemPrompt(arg1:string,arg2:string,arg3:string):Promise<void>;
 

@@ -55,10 +55,46 @@ func (a *tierSourceAdapter) Tier(providerKind, modelID string) (agentgraph.Model
 
 // knownModelProviders lists the (providerID, providerKind) pairs the v1
 // recommender enumerates concrete candidates for. providerID and
-// providerKind coincide for the two directly-configured providers
-// covered here; a real multi-connection setup would key providerID off
-// the user's configured connection name instead — tracked below.
-var knownModelProviders = []string{"anthropic", "openai"}
+// providerKind coincide for every kind listed here; a real
+// multi-connection setup would key providerID off the user's configured
+// connection name instead — tracked below.
+//
+// WIDENED (model-settings-reach-the-model-01PMZ101 UNIT-10 / WP17, closing
+// finding AN-07) from the original two-entry literal
+// ("anthropic", "openai"): a gemini/azure-openai/openrouter parent could
+// only ever be answered with an anthropic or openai model plus a
+// cross-provider warning. Every kind here now has a real
+// capabilities.Catalog entry with at least one EXACT (non-glob) tiers:
+// row — KnownModels skips glob rows by design ("classify a model rather
+// than name one"), so openrouter's pre-existing tiers: table
+// contributed ZERO candidates despite having data (an independent gap
+// from the hardcoded-list one this WP set out to fix); gemini had no
+// tiers: table at all before this WP.
+//
+// bedrock, custom-openai and ollama are deliberately EXCLUDED, for two
+// different reasons:
+//
+//   - custom-openai / ollama name an arbitrary user-configured endpoint
+//     (a self-hosted OpenAI-compatible server, a local Ollama install)
+//     with no fixed catalog of real model ids to recommend — there is
+//     no "the model" to enumerate. A parent on either kind falls back
+//     to BranchRecommender.Recommend's own no-candidate-found path (the
+//     parent's exact pair), the correct degrade.
+//   - bedrock's own tiers: table (core/llm/capabilities/data/bedrock.yaml)
+//     is ALSO glob-only today, the same class of gap this WP fixed for
+//     gemini/openrouter — but AWS Bedrock's real model ids carry a
+//     dated version suffix ("anthropic.claude-3-5-sonnet-20241022-v2:0")
+//     that changes as AWS ships new snapshots, and this WP could not
+//     verify a current one against a live source the way the openrouter
+//     ids below were verified against openrouter.ai. Recommending a
+//     stale or wrong id is the exact WP18 "default sentinel" class of
+//     defect (a string that claims to be a model but is not one,
+//     discovered only at the provider boundary) — shipping a guess here
+//     would be worse than leaving bedrock out. Tracked as a known,
+//     narrower follow-up to this WP, not silently dropped.
+var knownModelProviders = []string{
+	"anthropic", "openai", "gemini", "azure-openai", "openrouter",
+}
 
 // newBranchRecommender returns the v1 recommender pre-loaded with a
 // known-model table sourced from the LLM capabilities registry

@@ -2707,8 +2707,23 @@ export interface SlashExecuteResult {
 
 /**
  * ReasoningConfig — the wire shape returned in SlashExecuteResult.metadata
- * under the `reasoningKnob` key after a successful /effort command.
- * Mirrors the Go llm.ReasoningConfig struct.
+ * under the `reasoningKnob` key after a successful /effort command, and
+ * the shape SessionTunePanel.vue edits.
+ *
+ * CORRECTED (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP11):
+ * this does NOT mirror the Go llm.ReasoningConfig struct's own JSON tags
+ * — that struct marshals as `openai_effort` / `anthropic_thinking_budget`
+ * (snake_case; core/llm/capabilities.go), which is what this camelCase
+ * interface's docstring used to (wrongly) claim it matched. The two were
+ * never byte-compatible: cmd_effort.go marshalled the Go struct directly
+ * into /effort's metadata for years, so `metadata.reasoningKnob` actually
+ * carried snake_case keys this interface's fields could never read.
+ * cmd_effort.go's fix (reasoningKnobMetadata) now builds this exact
+ * camelCase shape by hand instead of marshalling the struct, and
+ * harnessClient's getKnobsDefault/setKnobsDefault do the same
+ * camelCase<->snake_case translation at the Sessions_{Get,Set}KnobsDefault
+ * boundary (see WireSessionKnobs below) — this interface is the one true
+ * frontend shape either path produces or consumes.
  *
  * Exactly one field is set:
  *   - openAIEffort:              "low" | "medium" | "high" | "minimal"
@@ -2717,6 +2732,22 @@ export interface SlashExecuteResult {
 export interface ReasoningConfig {
   openAIEffort?: string;
   anthropicThinkingBudget?: number;
+}
+
+/**
+ * WireSessionKnobs — the Sessions_{Get,Set}KnobsDefault wire shape,
+ * matching Go llm.RequestKnobs' OWN json tags byte-for-byte (snake_case
+ * — core/llm/capabilities.go). Deliberately narrow: only the `reasoning`
+ * sub-object has a frontend surface today (SessionTunePanel.vue). Widen
+ * this type, and harnessClient's translation in getKnobsDefault/
+ * setKnobsDefault, together in the same change when a second RequestKnobs
+ * field gets a UI (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10).
+ */
+export interface WireSessionKnobs {
+  reasoning?: {
+    openai_effort?: string;
+    anthropic_thinking_budget?: number;
+  };
 }
 
 /**

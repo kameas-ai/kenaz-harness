@@ -338,6 +338,160 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-09-12 (model-settings-reach-the-model-01PMZ101 UNIT-10 / WP17, ESCALATION — not resolved here) · `branchesview.API.parentModel` is a hardcoded `return "", ""` stub; the cross-provider warning can never fire
+
+Found while implementing WP17 (branch recommender provider hydration,
+closing finding AN-07). WP17's own spec text describes only a narrower
+gap — `core/rpc/branches_wiring.go`'s `knownModelProviders` literal
+covering just `["anthropic", "openai"]` — and that half is fixed in this
+landing (widened to `anthropic, openai, gemini, azure-openai,
+openrouter`, plus a real `agentgraph.BranchRecommender.pickAtTier` fix
+so an unknown provider degrades to the parent's own pair instead of
+silently substituting a different provider's model — see the mutation-
+verified `TestRecommender_UnknownProvider_FallsBackToParentNotCrossProvider`).
+
+**But the recommender was never the whole path**, and this second half
+is NOT fixed here — it needs a product decision, not a technical patch:
+
+`core/rpc/views/branches/impl.go`'s `parentModel(_ context.Context, _
+string) (string, string)` — the function `RecommendModel` calls to learn
+what provider/model the FORK'S PARENT session is actually on — is
+verbatim:
+
+```go
+func (a *API) parentModel(_ context.Context, _ string) (string, string) {
+	// v1: we don't yet thread the parent's active model through
+	// session.Record. The recommender accepts empty parents and uses
+	// the model id heuristic. Future patch: read from the per-session
+	// model dial.
+	return "", ""
+}
+```
+
+It ignores both its `ctx` and `sessionID` arguments, and ignores
+`a.cfg.Sessions` (a real, already-wired `*session.Manager`) — not
+because the wiring is missing, but because **there is nowhere to read
+the answer from**: `session.Record` has no provider/model field at all
+(confirmed by reading `core/session/types.go`'s full struct). The
+session's active (provider, model) selection lives ONLY in the
+frontend's per-session `localStorage`
+(`kenaz.session.config.${sessionID}`, `SessionsView.vue`'s
+`readSessionConfig`) — it is never sent to the backend at all, let alone
+persisted.
+
+**Practical effect, verified by reading the call chain, not run against
+a live app:** every `RecommendModel` call resolves `parentProvider = ""`
+unconditionally. `RecommendModel`'s own cross-provider-warning check —
+
+```go
+if parentProvider != "" && rec.ProviderID != "" && parentProvider != rec.ProviderID {
+    out.CrossProviderWarning = "Cross-provider fork: ..."
+}
+```
+
+— can **never fire**, for any parent, on any provider, today — not
+because same-provider detection works, but because the first operand is
+always false. This mission's own WP17 fix (the recommender degrading
+correctly to the parent's pair for an unknown provider) is invisible
+through this RPC: `Recommend("", "", ...)` always resolves via the
+empty-string branch regardless of which provider the parent is really
+on, so AC-015 as literally written ("assert the recommender returns a
+candidate of the parent's own provider ... with no cross-provider
+warning") is verified in this landing at the `agentgraph.BranchRecommender`
+level (where WP17's actual fix lives) and is **not** observable end to
+end through the live RPC, independent of how correct the recommender
+itself now is.
+
+**Why this is an escalation, not a fix landed here:** closing it needs
+one of two real product decisions, not a guess:
+
+1. Persist an "active (providerID, modelID)" field on `session.Record`
+   (a new migration, a new write path on every model switch, and a
+   decision about whether the tune-panel/`/effort`-style "session
+   default" pattern this same mission's UNIT-6 just built is the right
+   home for it or a separate concept), **or**
+2. Widen the `RecommendModel` RPC signature to accept the frontend's
+   already-known `activeProviderId`/`activeModelId` as explicit
+   parameters (no new persistence, but a live RPC contract change — the
+   same `wails generate module` regeneration blocker this mission's
+   UNIT-6 WP10 hit, at larger blast radius since `RecommendModel` is a
+   live, already-shipped binding, not a new one).
+
+Neither is a WP17-sized change, and picking one without owner input
+would be exactly the "two rival implementations, pick unilaterally"
+mistake CLAUDE.md's escalation guidance warns against.
+
+**Blocker:** an owner ruling on (1) vs (2) above. **Owner:** alec.
+Re-check at the next mission that touches `branchesview.API` or session
+provider/model selection.
+
+### 2026-09-12 (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10) · `session_messages.knobs_override` stays unread — a product decision, not an oversight
+
+Migration `sessions/0330-knobs` shipped two columns:
+`sessions.knobs_default` and `session_messages.knobs_override`. UNIT-6 /
+WP10 gave the first one its first production writer AND reader
+(`Sessions_{Get,Set}KnobsDefault`; `chat.LLMProviderAdapter.Generate`'s
+send-path merge onto `GenerationRequest.Knobs`) — the "reaches the model"
+half spec FR-009 asks for. `session_messages.knobs_override` is
+**deliberately left unwired**, named here per CLAUDE.md's rule that "we'll
+get to it" is not a reason and every disposition needs a stated blocker
+and owner.
+
+**Blocker:** no surface today asks for a PER-MESSAGE knob override
+distinct from the per-session default. `/effort`'s text says the new
+value "takes effect on the next message," but there is no mechanism (and
+no spec) for it to apply to *only* that one message and then revert —
+today it simply updates the session default going forward, same as the
+tune panel. Wiring `knobs_override` needs a product decision about what a
+one-message override means UX-wise before it needs a Go reader; guessing
+at a mechanism here would be inventing a UX nobody asked for, the same
+class of mistake CLAUDE.md's "spec it and finish it" guidance warns
+against for a half-built feature.
+
+**Owner:** alec — whichever mission specs a per-message knob override.
+Re-check at the release after model-settings-reach-the-model-01PMZ101
+UNIT-6 merges. See `core/session/migrations_knobs.go`'s doc comment for
+the same note kept with the column.
+
+### 2026-09-12 (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP11) · `LLM_TestProviderKey` has no `.vue` caller; the interface doc named the wrong substitute
+
+`core/rpc/views/llm/api.go`'s `TestProviderKey` (bound as `LLM_TestProviderKey`
+in `core/rpc/bindings.go`) is a read-only pre-submit key probe with exactly
+one real implementation arm (`azure-openai`, via the `azureTester` duck-typed
+interface in `impl.go`) — every other provider kind falls through to
+`"no adapter registered for provider kind %s"` or a similar stub result. A
+case-insensitive grep for `testProviderKey` over `frontend/src` finds it only
+in `types.ts` and `harnessClient.ts`; **no `.vue` file calls it.**
+
+The interface doc used to compound this by naming the wrong substitute:
+"others are stubs for now" implied more kinds were coming, and nothing
+pointed at what the AddProvider form actually does instead. Corrected here
+(spec C-1): `AddProviderForm.vue:344`'s pre-submit connection-status check
+calls `client.llm.listModels(form.kind, form.apiKey)`, **not**
+`TestProviderKey` and not `TestAndRotateKey` either (`TestAndRotateKey`
+exists because it's the one that WRITES to the keychain, per this same
+interface's adjacent doc comment — a real, different reason to exist,
+which is why this is not simply "delete the rival").
+
+**Class: reachable-but-unconsumed surface, not rival infrastructure.**
+`listModels` and `TestProviderKey` do different jobs (list vs. probe-one-key);
+the AddProviderForm using `listModels` for its pre-submit check does not
+make `TestProviderKey` a duplicate of it. Register A-0 (model-settings-
+reach-the-model-01PMZ101) froze the delete lane for exactly this
+distinction: "a commit whose only justification for a removal is absence
+of callers is rejected at review." **Nothing is deleted** — not the impl
+arm, not `azureTestKeyResult`, not the interface method, not the
+`LLM_TestProviderKey` binding, not `harnessClient.ts`'s `testProviderKey`
+wrapper, not `types.ts`'s `ProviderKeyTestResult`.
+
+**Blocker:** no surface today asks for a non-writing pre-submit key probe
+separate from `listModels`'s implicit one (a failed `listModels` call
+already tells the AddProvider form the key/host combination doesn't work).
+**Owner:** alec — wire a caller if a future AddProviderForm redesign wants
+a probe that doesn't also fetch the model list, or drop this entry to
+"delete: no producer, no consumer, unreachable" if the answer is settled
+as "never." Re-check at the next unwired sweep touching `core/rpc/views/llm`.
+
 ### 2026-09-11 (finding #61 round-2 review, `fix/memory-persist-growth-and-latency-v2`) · served-mode exit never calls `core.Core.Shutdown(ctx)` — only `api.Shutdown()` does
 
 Round 2 of the finding #61 follow-up (Blocker 3: wiring `rpc.API.Shutdown()`

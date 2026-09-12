@@ -707,6 +707,8 @@ function makeSessionsStub(
       project: { level: null, overrides: {} },
       session: { level: null, overrides: {} },
     }),
+    getKnobsDefault: async () => null,
+    setKnobsDefault: async () => undefined,
     export: async () => ({ path: '', byteCount: 0 }),
   };
   return { ...stub, ...overrides };
