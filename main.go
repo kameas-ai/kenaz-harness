@@ -547,13 +547,21 @@ func runServeMode(listenAddr string) {
 		// never had. 0 (absent/invalid) keeps serve.defaultStreamQueueCap.
 		serve.WithStreamQueueCap(serve.StreamQueueCapFromEnv(os.Getenv)))
 	serveErr := srv.Serve(ctx)
-	// Review finding (Blocker 3, finding #61 follow-up, 2026-09-11):
-	// served mode never called api.Shutdown() either — see the OnShutdown
-	// comment above for the full history. Runs on every exit from Serve
-	// (clean SIGTERM/SIGINT via cancel(), or a real server error) so a
-	// queued post_send embed and the prune/compaction schedulers are
-	// stopped before the process exits, not just on the desktop path.
-	api.Shutdown()
+	// Two findings, one call. #68 (v0.78.1): served mode never called
+	// api.Shutdown() at all, so a queued post_send embed and the
+	// prune/compaction schedulers were never stopped -- see the
+	// OnShutdown comment above for that history. #70: it never called
+	// core.Shutdown(ctx) either, so nothing core owns was closed -- no
+	// final WAL checkpoint, no orderly MCP child teardown, no telemetry
+	// flush. serve.ShutdownServedCore does api.Shutdown() THEN
+	// core.Shutdown(), the ordering verified on the desktop path.
+	//
+	// On a real SIGTERM/SIGINT, installServeShutdownSignal's cancel()
+	// unblocks Serve with context.Canceled (verified by SD-11 above), so
+	// this point is genuinely reached on every served exit -- and it runs
+	// even when serveErr is a real error, so the os.Exit(1) below no
+	// longer skips teardown.
+	serve.ShutdownServedCore(ctx, api, c, serveLog, "harness.serve")
 	if serveErr != nil && serveErr != context.Canceled {
 		serveLog.Error("harness.serve: server error", "err", serveErr)
 		os.Exit(1)

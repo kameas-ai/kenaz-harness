@@ -124,7 +124,6 @@ func NewConfigPoller(client *Client, dataDir string, applier ConfigApplier) *Con
 		backoff:  &configBackoffState{},
 		applier:  applier,
 		source:   "default-deny",
-		done:     make(chan struct{}),
 	}
 	return p
 }
@@ -132,6 +131,11 @@ func NewConfigPoller(client *Client, dataDir string, applier ConfigApplier) *Con
 // Start launches the background polling goroutine. Loads the cached bundle
 // state (lastAppliedID + checksum) before the first fetch.
 func (p *ConfigPoller) Start(ctx context.Context) {
+	// Allocated here rather than in the constructor for the same reason as
+	// CapabilityPoller.Start: it is what lets Stop distinguish
+	// never-started from running instead of blocking forever.
+	p.done = make(chan struct{})
+
 	// Restore state from disk cache.
 	if id, cs, err := loadBundleState(p.dataDir); err == nil {
 		p.mu.Lock()
@@ -208,7 +212,15 @@ func (p *ConfigPoller) Stop() {
 	if cancel != nil {
 		cancel()
 	}
-	<-p.done
+	// Same latent deadlock CapabilityPoller.Stop carried: done was allocated
+	// in the constructor, so a never-started poller blocked here forever.
+	// Unreachable today only because SetFleetClient's testing.Testing() guard
+	// wraps the whole ConfigPoller block and leaves the field nil, so Stop is
+	// never called on an unstarted one. Fixed rather than left to the next
+	// person who guards it the other way.
+	if p.done != nil {
+		<-p.done
+	}
 }
 
 // Status returns a snapshot of the poller's current state.

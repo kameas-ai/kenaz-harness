@@ -32,9 +32,11 @@ package ci_test
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -1236,6 +1238,222 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				"\t_, _ = p.PersistPartial(ctx, sessionID, text, \"transient\", true)\n" +
 				"}\n",
 		},
+		// ---- 2026-09-11: closing finding #48 (10 of 51 gates had no
+		// planted-violation proof at all — nothing demonstrated they could
+		// fail). The seven cases below are the grep/test-shaped gates from
+		// that list; the two structural ones (check-codegen,
+		// check-manifest-version-bump) are standalone functions further
+		// down in this file (they share one plant on
+		// core/agentgraph/nodes/manifests/sleep.yaml, since both react to
+		// the same "fingerprint changed without a commensurate commit"
+		// class), and check-release-integrity.sh — which needs REPO set
+		// and hits api.github.com on a real run — has its own standalone
+		// function further down (TestReleaseIntegrityGate_PlantedMissingReleaseFires)
+		// that fakes `gh` on PATH instead of touching the network.
+		//
+		// While investigating the no-fleet-imports case below, this sweep
+		// also found and documented (did NOT silently fix) a real,
+		// currently-live vacuity in check-no-fleet-imports.sh's allowlist
+		// matching — see docs/unwired-ledger.md's 2026-09-11 entry.
+		{
+			// check-fleet-log-export-fence.sh part 3: no un-annotated
+			// OTLP *log* exporter constructor call anywhere under
+			// core/fleet/ — re-opening the lane that once shipped plain
+			// slog bodies to Fleet's /v1/logs requires an explicit
+			// `fleet-log-fence-allow: <reason>` comment on the same or
+			// the two preceding lines (core/fleet/otlp_log_fence_test.go
+			// itself carries exactly one, annotated, for this reason).
+			// Plants a second, deliberately UN-annotated
+			// otlploghttp.New(...) call — a real, compiling call against
+			// the same package the annotated one already imports, so
+			// this is the actual shape a careless re-introduction would
+			// take, not a synthetic string match.
+			name:       "fleet-log-export-fence/unannotated-otlp-log-exporter",
+			wantOutput: "zz_gate_probe_otlp_test.go",
+			gate:       "check-fleet-log-export-fence.sh",
+			file:       "core/fleet/zz_gate_probe_otlp_test.go",
+			content: "package fleet\n\n" +
+				"import (\n" +
+				"\t\"context\"\n" +
+				"\t\"testing\"\n\n" +
+				"\t\"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp\"\n" +
+				")\n\n" +
+				"// TestZZGateProbeReopensLogLane exists only to prove\n" +
+				"// check-fleet-log-export-fence.sh can fail — see\n" +
+				"// gates_can_fail_test.go's fleet-log-export-fence case.\n" +
+				"// Deliberately UN-annotated: no fleet-log-fence-allow comment\n" +
+				"// on this line or the two immediately above it.\n" +
+				"func TestZZGateProbeReopensLogLane(t *testing.T) {\n" +
+				"\tctx := context.Background()\n" +
+				"\t_, _ = otlploghttp.New(ctx)\n" +
+				"}\n",
+		},
+		{
+			// check-no-fleet-imports.sh (OSS-first boundary): only
+			// core/rpc, core/rpc/views/settings, core/rpc/views/fleet,
+			// core/rpc/middleware and core/mcp/builtin/sites may import
+			// core/fleet. This is the exact class that fired FOR REAL on
+			// release/v0.78.1 (core/serve importing core/fleet) — this
+			// plant reproduces that shape in an isolated new package
+			// OUTSIDE core/rpc entirely so it cannot collide with the real
+			// violation's own fix landing in the same release.
+			//
+			// NOT planted under core/rpc/views/ — while investigating this
+			// case (2026-09-11) that shape exposed a REAL vacuity: the
+			// bare "${MODULE}/core/rpc" allowlist entry matches via the
+			// same "${a}/"* prefix wildcard as every other entry, so it
+			// silently exempts EVERY package under core/rpc/ (not just
+			// core/rpc itself), including core/rpc/views/sessions,
+			// core/rpc/views/agentgraph, etc. Confirmed live and NOT
+			// hypothetical: core/rpc/views/{catalog,cedar,compliance,
+			// contexts,sites,slashcmd,sync} all import core/fleet in
+			// impl.go today and are none of them in the ALLOWLIST array —
+			// they pass ONLY because of this prefix hole. A locally-tested
+			// fix (exact-match the bare core/rpc entry, keep prefix
+			// matching for the other four) is technically correct but
+			// turns FAIL for those 7 real, currently-shipping packages,
+			// which is a product/architecture call (are they meant to be
+			// fleet-facing, or is this OSS-first drift that predates
+			// anyone noticing?) this sweep is not positioned to resolve
+			// unilaterally — see docs/unwired-ledger.md's dated entry.
+			// Escalated rather than silently fixed or silently left,
+			// per CLAUDE.md's disposition rules. The gate as shipped
+			// still correctly catches the field-proven class (an
+			// unrelated package importing fleet), which is what this
+			// proof demonstrates.
+			name:       "no-fleet-imports/unauthorized-package-imports-fleet",
+			wantOutput: "core/sessions/zzgateprobefleetimport",
+			gate:       "check-no-fleet-imports.sh",
+			file:       "core/sessions/zzgateprobefleetimport/probe.go",
+			content: "package zzgateprobefleetimport\n\n" +
+				"import _ \"github.com/kameas-ai/kenaz-harness/core/fleet\"\n",
+		},
+		{
+			// check-no-cred-bytes-in-rpc.sh check 1: the literal `cred
+			// []byte` outside core/credstore/, core/secrets/, core/llm/
+			// and *_test.go files. Planted in a brand-new file under
+			// core/rpc/ (not one of the allowlisted directories).
+			name:       "no-cred-bytes-in-rpc/cred-bytes-outside-allowlist",
+			wantOutput: "zz_gate_probe_credbytes.go",
+			gate:       "check-no-cred-bytes-in-rpc.sh",
+			file:       "core/rpc/zz_gate_probe_credbytes.go",
+			content: "package rpc\n\n" +
+				"func zzGateProbeCredBytes(cred []byte) {\n\t_ = cred\n}\n",
+		},
+		{
+			// check-no-forbidden-compaction-symbols.sh (I4): exactly one
+			// compaction entry point. SuppressAutomaticCompaction and
+			// runPreSendCompaction are grep-forbidden outside
+			// scripts/ci/allowlists/i4-forbidden-compaction-symbols.txt's
+			// two allowed (already-tracked) production call sites. This
+			// plants a THIRD, unallowlisted textual occurrence of the
+			// forbidden symbol in a brand-new production file.
+			name:       "no-forbidden-compaction-symbols/symbol-outside-allowlist",
+			wantOutput: "zz_gate_probe_compaction.go",
+			gate:       "check-no-forbidden-compaction-symbols.sh",
+			file:       "core/rpc/zz_gate_probe_compaction.go",
+			content: "package rpc\n\n" +
+				"// zzGateProbeMentionsForbiddenSymbol exists only to prove\n" +
+				"// check-no-forbidden-compaction-symbols.sh can fail — see\n" +
+				"// gates_can_fail_test.go's no-forbidden-compaction-symbols case.\n" +
+				"const zzGateProbeMentionsForbiddenSymbol = \"SuppressAutomaticCompaction\"\n",
+		},
+		{
+			// check-output-ports.sh (I-existing): every agentgraph node
+			// Outputs["k"] write must be read by Go, a shipped/tested YAML
+			// graph, the frontend, or carry a //wiring:deferred directive.
+			// Plants a write-only port with a name unique enough (the
+			// zz_gate_probe_dead_port key) that it cannot accidentally be
+			// "read" by an unrelated quoted-string match anywhere else in
+			// the tree.
+			name:       "output-ports/write-only-no-reader-anywhere",
+			wantOutput: "zz_gate_probe_dead_port",
+			gate:       "check-output-ports.sh",
+			file:       "core/agentgraph/zz_gate_probe_output.go",
+			content: "package agentgraph\n\n" +
+				"// zzGateProbeDeadOutputWrite writes a port nothing ever reads —\n" +
+				"// the write-only defect check-output-ports.sh exists to catch.\n" +
+				"func zzGateProbeDeadOutputWrite(res *Result) {\n" +
+				"\tres.Outputs[\"zz_gate_probe_dead_port\"] = nil\n" +
+				"}\n",
+		},
+		{
+			// check-oss-first.sh: with HARNESS_FLEET_DISABLED=1, every
+			// non-fleet core package it names (including ./core/mcp/...,
+			// which core/mcp/builtin/sites lives under) must pass `go
+			// test`. The gate's whole reason to exist is catching a defect
+			// reachable ONLY in that mode — an ordinary `go test
+			// ./core/mcp/...` run (no env var) would never see it. This
+			// plants exactly that shape: a test that fails if and only if
+			// HARNESS_FLEET_DISABLED=1 is set, which check-oss-first.sh is
+			// the only CI step that ever sets.
+			name:       "oss-first/fails-only-under-fleet-disabled",
+			wantOutput: "TestZZGateProbeOSSFirstRegression",
+			gate:       "check-oss-first.sh",
+			file:       "core/mcp/builtin/sites/zz_gate_probe_test.go",
+			content: "package sites\n\n" +
+				"import (\n" +
+				"\t\"os\"\n" +
+				"\t\"testing\"\n" +
+				")\n\n" +
+				"// TestZZGateProbeOSSFirstRegression exists only to prove\n" +
+				"// check-oss-first.sh can fail — see gates_can_fail_test.go's\n" +
+				"// oss-first case. It reproduces the exact class the gate exists\n" +
+				"// for: a defect reachable ONLY when HARNESS_FLEET_DISABLED=1,\n" +
+				"// which no ordinary 'go test' run (without the env var) would\n" +
+				"// ever catch.\n" +
+				"func TestZZGateProbeOSSFirstRegression(t *testing.T) {\n" +
+				"\tif os.Getenv(\"HARNESS_FLEET_DISABLED\") == \"1\" {\n" +
+				"\t\tt.Fatal(\"zz_gate_probe: planted OSS-first-only regression — check-oss-first.sh should have caught this\")\n" +
+				"\t}\n" +
+				"}\n",
+		},
+		{
+			// check-node-dispatch.sh's manifest-side half
+			// (TestBundledCatalog_DispatchDeclarations): every shipped,
+			// callable manifest's dispatch: value must be "graph" or
+			// "builtin_tool" (paired correctly with tool_name). Plants a
+			// standalone manifest (no extends: chain, so no archetype
+			// inheritance is needed to make it loadable) with a nonsense
+			// dispatch value — the "unknown dispatch value" shape
+			// dispatch_test.go's own synthetic-catalog table already
+			// covers for a throwaway fixture dir; this proves the SAME
+			// validator rejects it when it is a real bundled manifest,
+			// which is what check-node-dispatch.sh actually runs against.
+			name:       "node-dispatch/unknown-dispatch-value-on-bundled-manifest",
+			wantOutput: "zz_gate_probe_dispatch",
+			gate:       "check-node-dispatch.sh",
+			file:       "core/agentgraph/nodes/manifests/zz_gate_probe_dispatch.yaml",
+			content: "schema_version: \"1\"\n" +
+				"manifest_version: \"1.0.0\"\n" +
+				"id: zz_gate_probe_dispatch\n" +
+				"display_name: ZZ Gate Probe Dispatch\n" +
+				"description: \"Planted by gates_can_fail_test.go's node-dispatch case; dispatch value is deliberately invalid.\"\n" +
+				"dispatch: sometimes\n" +
+				"budget: none\n",
+		},
+		{
+			// Finding #72 (2026-09-11): check-no-fleet-imports.sh's
+			// ALLOWLIST held a single entry for the core/rpc chassis
+			// ("${MODULE}/core/rpc") but the matcher applied a
+			// prefix-wildcard to every entry ("$pkg" == "$a" ||
+			// "$pkg" == "${a}/"*), so that one entry silently exempted
+			// every package UNDER core/rpc/ too. Eleven packages relied
+			// on the hole. The ad hoc verification cited in the script's
+			// own comments planted its probe in core/sessions -- outside
+			// core/rpc/ entirely -- so it could never have caught this.
+			// This plants a NEW, unallowlisted package directly under
+			// core/rpc/views/ that imports core/fleet, proving the split
+			// EXACT_ALLOWLIST (core/rpc, exact-match only) /
+			// PREFIX_ALLOWLIST (named subpackages) matcher actually
+			// inspects core/rpc's subpackages instead of waving the whole
+			// subtree through.
+			name:       "no-fleet-imports/unallowlisted-subpackage-of-core-rpc",
+			wantOutput: "core/rpc/views/zzgatefleetprobe",
+			gate:       "check-no-fleet-imports.sh",
+			file:       "core/rpc/views/zzgatefleetprobe/impl.go",
+			content:    "package zzgatefleetprobe\n\nimport _ \"github.com/kameas-ai/kenaz-harness/core/fleet\"\n",
+		},
 	}
 
 	for _, tc := range cases {
@@ -1339,6 +1557,293 @@ func plant(t *testing.T, full, content, appendText string) func() {
 				t.Errorf("removing %s: %v — WORKING TREE IS DIRTY", createdDir, err)
 			}
 		}
+	}
+}
+
+// plantReplace performs a journaled read-mutate-restore on an EXISTING
+// file, replacing the first occurrence of target with mutated. plant()'s
+// append mode can only add content at the very END of a file, which
+// cannot express "an existing slice literal gains a new element in the
+// middle of the file" — the shape check-served-mode-topic-forwarding.sh's
+// reverse-direction proof needs (a new passthroughTopics entry has to
+// land before the slice's closing brace, not after the whole file).
+// Journaled exactly the way plant()'s append branch journals its own
+// mutation, so a `-timeout` kill mid-plant heals on TestMain's next run
+// the same way every other case in this file does — see
+// plantguard_test.go. This intentionally does NOT retrofit the five
+// pre-existing bare-os.WriteFile-plus-defer read-mutate-restore tests
+// noted in TestStructuredOutputRowParityGate_PlantedEncoderDropFires's
+// doc comment; it only avoids adding a sixth one.
+func plantReplace(t *testing.T, full, target, mutated string) func() {
+	t.Helper()
+	orig, err := os.ReadFile(full)
+	if err != nil {
+		t.Fatalf("reading %s: %v", full, err)
+	}
+	if !strings.Contains(string(orig), target) {
+		t.Fatalf("target text not found in %s — the anchor may have moved; update this test:\n%q", full, target)
+	}
+	newContent := strings.Replace(string(orig), target, mutated, 1)
+	// Journal BEFORE touching the file — see plant()'s append branch and
+	// plantguard_test.go for the rationale: a kill after the write but
+	// before cleanup runs is exactly the case the journal exists for.
+	journalPlant(plantRecord{Path: full, Orig: string(orig), Existed: true, Planted: newContent})
+	if err := os.WriteFile(full, []byte(newContent), 0o644); err != nil {
+		t.Fatalf("writing %s: %v", full, err)
+	}
+	return func() {
+		if err := os.WriteFile(full, orig, 0o644); err != nil {
+			t.Errorf("restoring %s: %v — WORKING TREE IS DIRTY", full, err)
+		}
+		journalClear(full)
+	}
+}
+
+// TestServedModeTopicForwardingGate_PlantedOrphanBroadcastFires is the
+// REVERSE-direction planted-violation proof for
+// check-served-mode-topic-forwarding.sh's pass 2 (#69): a topic present
+// in core/serve/wsstream.go's passthroughTopics with NO real frontend
+// useEventStream subscriber. Before pass 2 existed, this shape was
+// invisible: pass 1 only ever asked "does a subscribed topic reach
+// passthroughTopics", never the reverse "does everything in
+// passthroughTopics reach a subscriber" — dead weight forwarded to every
+// served connection, and a passthroughTopics entry that no longer
+// states real intent (the entries are the single hand-authored source
+// of truth the TS list is generated from, so an orphan there is read as
+// a statement of intent nobody meant).
+//
+// Two plants, both journaled so a `-timeout` kill mid-plant heals on the
+// next run (mirrors the two-plant shape of
+// "served-mode-topic-forwarding/subscribed-not-forwarded" above, which
+// proves the FORWARD direction; this proves the reverse):
+//  1. A brand-new Topic* const (plant(), create mode — already
+//     journaled).
+//  2. wsstream.go's passthroughTopics slice gains that const as a new
+//     element (plantReplace, above — inserting into an existing slice
+//     literal is not expressible through plant()'s append-to-end-of-file
+//     mode).
+//
+// No frontend file is planted — the ABSENCE of a subscriber is the
+// violation being proved.
+func TestServedModeTopicForwardingGate_PlantedOrphanBroadcastFires(t *testing.T) {
+	root := repoRoot(t)
+
+	constFile := filepath.Join(root, "core", "rpc", "zz_gate_probe_orphan.go")
+	constContent := "package rpc\n\n" +
+		"// TopicZzGateProbeServedOrphan is planted by gates_can_fail_test.go's\n" +
+		"// check-served-mode-topic-forwarding.sh pass-2 (reverse direction)\n" +
+		"// proof and removed after the test runs. Deliberately has no\n" +
+		"// frontend useEventStream subscriber — that absence is the point.\n" +
+		"const TopicZzGateProbeServedOrphan = \"zzgateprobe:served-orphan\"\n"
+	cleanupConst := plant(t, constFile, constContent, "")
+	defer cleanupConst()
+
+	wsstreamPath := filepath.Join(root, "core", "serve", "wsstream.go")
+	// Anchored to the ENTRY LINE, not to "entry + closing brace". The
+	// original anchor was "\tmcpview.TopicMCPHealthChanged,\n}\n", which
+	// silently assumed that topic was the LAST element of passthroughTopics
+	// -- it stopped being last the moment the #336 follow-up appended five
+	// more, and this proof broke with "target text not found". Finding #67
+	// is the same class (a planted proof depending on file ORDER rather than
+	// content); anchor on content so appending to the slice cannot break it.
+	const target = "\tmcpview.TopicMCPHealthChanged,\n"
+	mutated := "\tmcpview.TopicMCPHealthChanged,\n\trpc.TopicZzGateProbeServedOrphan,\n"
+	cleanupSlice := plantReplace(t, wsstreamPath, target, mutated)
+	defer cleanupSlice()
+
+	code, out := runGate(t, "check-served-mode-topic-forwarding.sh", root)
+	if code == 0 {
+		t.Fatalf("check-served-mode-topic-forwarding.sh exited 0 with a passthroughTopics entry "+
+			"(TopicZzGateProbeServedOrphan) that has no useEventStream consumer — the reverse-direction "+
+			"pass cannot fail.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "TopicZzGateProbeServedOrphan") || !strings.Contains(out, "zzgateprobe:served-orphan") {
+		t.Fatalf("gate failed, but its output does not name the planted orphan topic "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+}
+
+// TestServedModeTopicForwardingGate_PlantedPassthroughDiscoveryFloorFires
+// is the planted-violation proof for the PASSTHROUGH_BLOCK floor guard
+// (2026-09-11 hardening). Before the floor guard existed, reformatting
+// core/serve/wsstream.go's `var passthroughTopics = []string{ ... }`
+// declaration into a grouped `var (...)` block — a realistic
+// gofmt-adjacent change, not a contrived one — silently broke the awk
+// pattern this gate anchors discovery on (`/var passthroughTopics =
+// \[\]string\{/`). PASSTHROUGH_BLOCK went empty, pass 1 (forward
+// direction) fell back to "not forwarded" for every candidate, and pass 2
+// (reverse direction, which reuses the same block) reported "0 entries
+// checked... clean" — a gate malfunction indistinguishable from an
+// actually-empty passthroughTopics list. The only reason the OLD gate
+// still exited non-zero on this shape at all was incidental coupling: as
+// long as pass 1 had at least one non-allowlisted forwarded+consumed
+// topic, it still failed loudly for an unrelated reason. This test
+// proves the NEW, explicit floor guard fires on its own terms, not by
+// relying on that coupling.
+//
+// Two plantReplace calls on the SAME file (core/serve/wsstream.go),
+// applied and cleaned up in sequence: the opening `var passthroughTopics
+// = []string{` line gains a wrapping `var (`, and the closing `}` right
+// after the last real entry (mcpview.TopicMCPHealthChanged) gains a
+// matching `)` — kept syntactically valid Go throughout, mirroring the
+// exact defect class described in BLOCKER 1's repro ("reformat
+// passthroughTopics into a grouped var (...) block").
+func TestServedModeTopicForwardingGate_PlantedPassthroughDiscoveryFloorFires(t *testing.T) {
+	root := repoRoot(t)
+	wsstreamPath := filepath.Join(root, "core", "serve", "wsstream.go")
+
+	const openTarget = "var passthroughTopics = []string{\n"
+	const openMutated = "var (\n\tpassthroughTopics = []string{\n"
+	cleanupOpen := plantReplace(t, wsstreamPath, openTarget, openMutated)
+	defer cleanupOpen()
+
+	// Unlike the proof above, this one genuinely needs the DECLARATION'S
+	// TERMINATOR: it wraps the whole declaration in a grouped var (...)
+	// block, so it must close the slice and then the group. That makes it
+	// inherently coupled to whatever entry is currently last -- it was
+	// anchored on mcpview.TopicMCPHealthChanged and broke when the #336
+	// follow-up appended five topics after it. Kept terminator-anchored on
+	// purpose (the mutation has no other valid form), and the mitigation is
+	// that plantReplace fails LOUDLY with "the anchor may have moved; update
+	// this test" rather than silently planting nothing -- which is exactly
+	// the difference between this and finding #67's silent version.
+	// If you append to passthroughTopics, update the entry named here.
+	const closeTarget = "\ttopicFleetSessionExpired,\n}\n"
+	const closeMutated = "\ttopicFleetSessionExpired,\n\t}\n)\n"
+	cleanupClose := plantReplace(t, wsstreamPath, closeTarget, closeMutated)
+	defer cleanupClose()
+
+	code, out := runGate(t, "check-served-mode-topic-forwarding.sh", root)
+	if code == 0 {
+		t.Fatalf("check-served-mode-topic-forwarding.sh exited 0 after passthroughTopics was "+
+			"reformatted into a grouped var (...) block — PASSTHROUGH_BLOCK discovery silently broke "+
+			"and the gate reported clean instead of a discovery malfunction.\noutput:\n%s", out)
+	}
+	if code != 2 {
+		t.Fatalf("check-served-mode-topic-forwarding.sh exited %d, want 2 (the documented "+
+			"discovery-malfunction exit code).\noutput:\n%s", code, out)
+	}
+	if !strings.Contains(out, "passthroughTopics discovery resolved 0 real Topic* token") {
+		t.Fatalf("gate failed, but its output does not name the passthroughTopics discovery floor "+
+			"failure (a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+}
+
+// TestServedModeTopicForwardingGate_PlantedFrontendDiscoveryFloorFires is
+// the planted-violation proof for the FRONTEND_CALL_COUNT floor guard
+// (2026-09-11 hardening, the other half of the same fix). Before the
+// floor guard existed, renaming every real `useEventStream(...)` call
+// site (a realistic wholesale-rename refactor of the composable, not a
+// contrived one) silently zeroed FRONTEND_WINDOW. Because frontend_hit —
+// computed by substring-matching against FRONTEND_WINDOW — determines
+// CANDIDACY (not just pass/fail) for pass 1, an empty window did not
+// fail every candidate; it disqualified them from candidacy entirely, so
+// pass 1 reported "0 candidates... clean". Pass 2 (which also reads
+// FRONTEND_WINDOW to decide whether a passthroughTopics entry is
+// consumed) was the only thing still failing loudly on this shape,
+// again incidental coupling rather than a guard.
+//
+// This defect class is fundamentally repo-wide (the check aggregates a
+// count across every production frontend/src file), so — unlike the
+// passthrough proof above, which is a two-line change to one file —
+// proving it requires actually renaming every real call site the gate's
+// own discovery would find, run the gate, and restore every file
+// byte-for-byte afterward. That is a larger footprint than this file's
+// usual plant()/plantReplace() single- or dual-file cases, but there is
+// no smaller-footprint mutation that is faithful to what "FRONTEND_WINDOW
+// resolves to zero real matches" actually requires: any topic-count
+// floor on a repo-wide aggregate can only be driven to zero by
+// eliminating every real match, regardless of how low the floor is set.
+//
+// Each touched file is journaled via journalPlant/journalClear (the same
+// primitive plant()/plantReplace() use) before it is mutated, so a
+// `-timeout` kill mid-run heals via TestMain on the next invocation
+// exactly like every other case in this file — see plantguard_test.go.
+func TestServedModeTopicForwardingGate_PlantedFrontendDiscoveryFloorFires(t *testing.T) {
+	root := repoRoot(t)
+	frontendSrc := filepath.Join(root, "frontend", "src")
+
+	callSitePattern := regexp.MustCompile(`useEventStream(<[^>]*>)?\(`)
+
+	type mutatedFile struct {
+		path    string
+		orig    string
+		planted string
+	}
+	var mutated []mutatedFile
+
+	err := filepath.WalkDir(frontendSrc, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		name := d.Name()
+		if !strings.HasSuffix(name, ".ts") && !strings.HasSuffix(name, ".vue") {
+			return nil
+		}
+		if strings.HasSuffix(name, ".spec.ts") || strings.HasSuffix(name, ".test.ts") {
+			return nil
+		}
+		if strings.Contains(filepath.ToSlash(path), "/__tests__/") {
+			return nil
+		}
+		orig, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if !callSitePattern.MatchString(string(orig)) {
+			return nil
+		}
+		planted := callSitePattern.ReplaceAllString(string(orig), "zzGateProbeRenamedUseEventStream${1}(")
+		mutated = append(mutated, mutatedFile{path: path, orig: string(orig), planted: planted})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking %s to find useEventStream call sites: %v", frontendSrc, err)
+	}
+	if len(mutated) == 0 {
+		t.Fatalf("found zero production files containing a useEventStream(...) call site under %s — "+
+			"the walk itself is broken (wrong path, or the pattern no longer matches this codebase); "+
+			"cannot plant the floor-guard violation this test proves", frontendSrc)
+	}
+
+	// Journal every file BEFORE mutating (same discipline as plant()'s
+	// append branch), then write the mutation. Two separate loops so the
+	// journal is complete before any real write happens.
+	for _, mf := range mutated {
+		journalPlant(plantRecord{Path: mf.path, Orig: mf.orig, Existed: true, Planted: mf.planted})
+	}
+	defer func() {
+		for i := len(mutated) - 1; i >= 0; i-- {
+			mf := mutated[i]
+			if err := os.WriteFile(mf.path, []byte(mf.orig), 0o644); err != nil {
+				t.Errorf("restoring %s: %v — WORKING TREE IS DIRTY", mf.path, err)
+				continue
+			}
+			journalClear(mf.path)
+		}
+	}()
+	for _, mf := range mutated {
+		if err := os.WriteFile(mf.path, []byte(mf.planted), 0o644); err != nil {
+			t.Fatalf("planting renamed call sites into %s: %v", mf.path, err)
+		}
+	}
+
+	code, out := runGate(t, "check-served-mode-topic-forwarding.sh", root)
+	if code == 0 {
+		t.Fatalf("check-served-mode-topic-forwarding.sh exited 0 after every real useEventStream(...) "+
+			"call site (%d file(s)) was renamed — FRONTEND_WINDOW discovery silently broke and the gate "+
+			"reported clean instead of a discovery malfunction.\noutput:\n%s", len(mutated), out)
+	}
+	if code != 2 {
+		t.Fatalf("check-served-mode-topic-forwarding.sh exited %d, want 2 (the documented "+
+			"discovery-malfunction exit code).\noutput:\n%s", code, out)
+	}
+	if !strings.Contains(out, "frontend useEventStream discovery found 0 call site") {
+		t.Fatalf("gate failed, but its output does not name the frontend discovery floor failure "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
 	}
 }
 
@@ -2452,5 +2957,217 @@ func zzGateProbeDeadFireSite(r *Runner) {
 	if !strings.Contains(out, "zz_gate_probe") || !strings.Contains(out, "one-hop") {
 		t.Fatalf("%s failed, but its output does not name the planted event and the "+
 			"one-hop diagnosis — it may be failing for an unrelated reason.\noutput:\n%s", gate, out)
+	}
+}
+
+// plantSleepManifestFingerprintDrift mutates the REAL, committed
+// core/agentgraph/nodes/manifests/sleep.yaml — adding a new, harmless
+// attr to its `attrs:` block without touching its `manifest_version:`
+// field — and returns a restore func. sleep.yaml was picked because it
+// is a small, self-contained, extends:-tool leaf manifest with no ports
+// and no other gate's fixtures pinned to its exact shape (unlike
+// read_file.yaml, ask.yaml, etc., which several other gates' cases in
+// this file reference by name).
+//
+// check-codegen.sh's ManifestFingerprint is computed over {kind, budget,
+// ports, attrs} (core/agentgraph/nodes/cmd/gen/main.go's
+// computeGenFingerprint) — NOT display_name/description — so a
+// description-only edit would not move the fingerprint at all. Adding a
+// real attr is the minimal edit that both (a) changes the fingerprint
+// and (b) cannot itself alter Sleep's runtime behavior (nothing reads
+// `zz_gate_probe` — the tool only consumes `seconds`), the same
+// non-invasive-plant discipline the table above uses for existing
+// production files.
+//
+// This is the crash-safety-hazardous class already documented at this
+// file's TestStructuredOutputRowParityGate_PlantedEncoderDropFires
+// block comment ("TWO more mutate real agentgraph paths through the
+// JOURNALED plant() helper... but still NOT overlay-safe"): the shared
+// journal covers sleep.yaml itself (this function uses journalPlant/
+// journalClear directly, mirroring plant()'s own append branch, since
+// the edit is a mid-file insertion the shared plant() helper's
+// append-or-create contract cannot express), but NOT the three
+// *_gen.go files check-codegen.sh's own internal `go generate` call
+// mutates as a side effect of running the gate. Both callers below
+// close that gap the same way: `defer` a second `go generate
+// ./core/agentgraph/...` AFTER (LIFO: registered before, so it runs
+// after) the manifest restore, so the generated files are regenerated
+// from the ORIGINAL manifest before the test returns. A kill between
+// the gate's internal generate and that final regenerate would leave
+// the *_gen.go files drifted with no journal entry — a real residual
+// hazard, accepted here on the same terms as the five pre-existing
+// unconverted cases the block comment already lists, not a new class.
+func plantSleepManifestFingerprintDrift(t *testing.T, root string) func() {
+	t.Helper()
+	manifestPath := filepath.Join(root, "core/agentgraph/nodes/manifests/sleep.yaml")
+	orig, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", manifestPath, err)
+	}
+	const marker = "attrs:\n  seconds:"
+	const inserted = "attrs:\n" +
+		"  zz_gate_probe:\n" +
+		"    type: string\n" +
+		"    description: \"gate-probe: planted by gates_can_fail_test.go to change Sleep's fingerprint without bumping manifest_version — never a real attr.\"\n" +
+		"  seconds:"
+	if !strings.Contains(string(orig), marker) {
+		t.Fatalf("sleep.yaml no longer contains %q — this plant needs updating to match its current shape", marker)
+	}
+	mutated := strings.Replace(string(orig), marker, inserted, 1)
+	journalPlant(plantRecord{Path: manifestPath, Orig: string(orig), Existed: true, Planted: mutated})
+	if err := os.WriteFile(manifestPath, []byte(mutated), 0o644); err != nil {
+		t.Fatalf("writing %s: %v", manifestPath, err)
+	}
+	return func() {
+		if err := os.WriteFile(manifestPath, orig, 0o644); err != nil {
+			t.Errorf("restoring %s: %v — WORKING TREE IS DIRTY", manifestPath, err)
+		}
+		journalClear(manifestPath)
+	}
+}
+
+// regenerateAgentgraphCodegen runs `go generate ./core/agentgraph/...`
+// against whatever core/agentgraph/nodes/manifests/ currently holds. The
+// two tests below defer this AFTER (meaning: registered before, so it
+// executes after per Go's LIFO defer order) their manifest restore, so
+// the three committed *_gen.go files check-codegen.sh's own internal
+// `go generate` mutated as a side effect of running the gate get
+// regenerated back to what the UNPLANTED manifest produces — restoring
+// `git status --porcelain` to clean.
+func regenerateAgentgraphCodegen(t *testing.T, root string) {
+	t.Helper()
+	cmd := exec.Command("go", "generate", "./core/agentgraph/...")
+	cmd.Dir = root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("post-test 'go generate ./core/agentgraph/...' to restore the working tree failed: %v\noutput:\n%s", err, out)
+	}
+}
+
+// TestCodegenGate_PlantedManifestDriftFires is check-codegen.sh's
+// planted-violation proof (finding #48). The violation class: a
+// manifest under core/agentgraph/nodes/manifests/ changed without the
+// regenerated *_gen.go files being committed alongside it. check-
+// codegen.sh's own `git diff --exit-code` is against the INDEX (not
+// HEAD~1), so the plant just needs to change what `go generate` outputs
+// relative to what is currently committed — it does not need to touch
+// git history.
+func TestCodegenGate_PlantedManifestDriftFires(t *testing.T) {
+	root := repoRoot(t)
+	cleanup := plantSleepManifestFingerprintDrift(t, root)
+	defer regenerateAgentgraphCodegen(t, root)
+	defer cleanup()
+
+	code, out := runGate(t, "check-codegen.sh", root)
+	if code == 0 {
+		t.Fatalf("check-codegen.sh exited 0 with a manifest attr planted but the regenerated "+
+			"*_gen.go files never committed — the gate cannot see codegen drift.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "DRIFT DETECTED") || !strings.Contains(out, "zz_gate_probe") {
+		t.Fatalf("check-codegen.sh failed, but its output does not both diagnose DRIFT and name "+
+			"the planted zz_gate_probe attr — it may be failing for an unrelated reason.\noutput:\n%s", out)
+	}
+}
+
+// TestManifestVersionBumpGate_PlantedFingerprintDriftFires is
+// check-manifest-version-bump.sh's planted-violation proof (finding
+// #48). Same plant as the codegen case above (they are the same
+// underlying defect class viewed from two different gates), but this
+// gate's comparison is against HEAD~1 via `git show`, not the index —
+// confirmed before writing this test that Sleep's fingerprint AND
+// version are byte-identical at HEAD and HEAD~1 (`git show
+// HEAD~1:core/agentgraph/manifest_versions_gen.go` vs the committed
+// file), so the plant's fingerprint change is real drift relative to
+// BOTH comparison points, not an artifact of whichever commit the
+// worktree happened to branch from.
+func TestManifestVersionBumpGate_PlantedFingerprintDriftFires(t *testing.T) {
+	root := repoRoot(t)
+	cleanup := plantSleepManifestFingerprintDrift(t, root)
+	defer regenerateAgentgraphCodegen(t, root)
+	defer cleanup()
+
+	code, out := runGate(t, "check-manifest-version-bump.sh", root)
+	if code == 0 {
+		t.Fatalf("check-manifest-version-bump.sh exited 0 with Sleep's fingerprint changed and "+
+			"manifest_version left at 2.0.0 — the gate cannot see an unbumped version.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "Sleep: fingerprint changed") {
+		t.Fatalf("check-manifest-version-bump.sh failed, but its output does not name Sleep's "+
+			"unbumped fingerprint change — it may be failing for an unrelated reason.\noutput:\n%s", out)
+	}
+}
+
+// TestReleaseIntegrityGate_PlantedMissingReleaseFires is
+// check-release-integrity.sh's planted-violation proof (finding #48).
+// The gate shells out to `gh api` for two data sources (every vX.Y.Z
+// tag, and every GitHub Release with its draft/asset-count) and
+// reconciles them; a real end-to-end run needs REPO set to a real repo
+// and network access to api.github.com, neither of which this test
+// suite may assume (P-8: no real network calls from a planted-violation
+// proof). Instead this fakes `gh` itself: a throwaway script placed
+// first on PATH that recognises exactly the two `gh api` calls this
+// gate's happy path needs (git/refs/tags and /releases) and returns
+// canned data with one tag (v77.7.7) that has NO release at all — the
+// simplest of the three violation shapes the gate's own header
+// documents (no Release / a draft Release / a Release with zero
+// assets).
+//
+// Every OTHER `gh api` call this gate makes (the tag's ref/sha/date
+// lookups, the release-workflow-runs lookup) is left unimplemented by
+// the fake — deliberately. The gate's own script already treats each of
+// those as best-effort (stderr discarded, falling back to an empty
+// string on failure), and an empty/failed
+// response for the date lookups makes `age_min` fall through to its
+// 999999-minute default, which is what pushes v77.7.7 past
+// GRACE_MINUTES without this test needing to fake a plausible tag
+// timestamp at all.
+func TestReleaseIntegrityGate_PlantedMissingReleaseFires(t *testing.T) {
+	root := repoRoot(t)
+
+	binDir := t.TempDir()
+	fakeGh := filepath.Join(binDir, "gh")
+	fakeGhScript := "#!/usr/bin/env bash\n" +
+		"# Fake gh for TestReleaseIntegrityGate_PlantedMissingReleaseFires.\n" +
+		"# $1=api $2=<path>; every other gh subcommand/path this gate calls\n" +
+		"# is intentionally left to fail (exit 1, empty stdout) — the real\n" +
+		"# script treats those failures as best-effort and tolerates them.\n" +
+		"if [[ \"$1\" == \"api\" ]]; then\n" +
+		"  case \"$2\" in\n" +
+		"    repos/*/git/refs/tags)\n" +
+		"      printf 'refs/tags/v77.7.6\\nrefs/tags/v77.7.7\\n'\n" +
+		"      exit 0\n" +
+		"      ;;\n" +
+		"    repos/*/releases*)\n" +
+		"      # v77.7.6: published, 1 asset (healthy — must NOT be reported).\n" +
+		"      # v77.7.7: intentionally absent — no release row at all.\n" +
+		"      printf 'v77.7.6\\tfalse\\t1\\n'\n" +
+		"      exit 0\n" +
+		"      ;;\n" +
+		"  esac\n" +
+		"fi\n" +
+		"exit 1\n"
+	if err := os.WriteFile(fakeGh, []byte(fakeGhScript), 0o755); err != nil {
+		t.Fatalf("writing fake gh: %v", err)
+	}
+
+	code, out := runGateEnv(t, "check-release-integrity.sh", root, map[string]string{
+		"PATH": binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"REPO": "zzgateprobe/fake-repo",
+	})
+	if code == 0 {
+		t.Fatalf("check-release-integrity.sh exited 0 with a tag (v77.7.7) that has no GitHub "+
+			"Release at all — the gate cannot see an unreleased tag.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "v77.7.7") || !strings.Contains(out, "no GitHub Release exists for this tag") {
+		t.Fatalf("check-release-integrity.sh failed, but its output does not name the planted "+
+			"tag v77.7.7 and diagnose a missing release — it may be failing for an unrelated "+
+			"reason (e.g. a real-network REPO/gh failure this fake was supposed to prevent).\noutput:\n%s", out)
+	}
+	// v77.7.6 (the healthy control tag) must NOT be reported as a gap —
+	// otherwise this "proof" would pass even if the gate flags EVERY tag
+	// unconditionally, which is exactly the false-positive-shaped
+	// non-proof CLAUDE.md's finding #59 warns about.
+	if strings.Contains(out, "v77.7.6") && strings.Contains(out, "v77.7.6` — ") {
+		t.Fatalf("check-release-integrity.sh flagged the healthy control tag v77.7.6 as a gap too — "+
+			"this proof cannot distinguish a real violation from a gate that fails unconditionally.\noutput:\n%s", out)
 	}
 }

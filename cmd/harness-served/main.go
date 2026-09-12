@@ -279,14 +279,15 @@ func main() {
 		// entry points must agree — see main.go's identical wiring.
 		serve.WithStreamQueueCap(serve.StreamQueueCapFromEnv(os.Getenv)))
 	serveErr := srv.Serve(ctx)
-	// Review finding (Blocker 3, finding #61 follow-up, 2026-09-11):
-	// this binary never called api.Shutdown() either — see main.go's
-	// runServeMode for the full history (the same gap, same fix, "both
-	// served entry points must agree" per this file's own convention
-	// above). Runs on every exit from Serve so a queued post_send embed
-	// and the prune/compaction schedulers are stopped before the
-	// process exits.
-	api.Shutdown()
+	// Two findings, one call: #68 (v0.78.1) -- this binary never called
+	// api.Shutdown(), leaving a queued post_send embed and the
+	// prune/compaction schedulers running; and #70 -- it never called
+	// core.Shutdown(ctx), so storage, MCP and telemetry never closed.
+	// Shared with main.go's runServeMode via serve.ShutdownServedCore
+	// (see that function's doc comment) so both served entry points
+	// cannot drift from each other. Runs even when serveErr is a real
+	// error.
+	serve.ShutdownServedCore(ctx, api, c, log, "harness-served")
 	if serveErr != nil && serveErr != context.Canceled {
 		log.Error("harness-served: server error", "err", serveErr)
 		os.Exit(1)

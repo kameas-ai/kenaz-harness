@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -993,7 +994,41 @@ func (a *API) SetContext(ctx context.Context) {
 	// goroutine so the SetContext critical path is never delayed by a
 	// network round-trip. The Watcher's long-poll loop catches any state
 	// that changes after boot. (fleet-emergency-lockdown-01NDFSEX12 WP02)
-	if a.settingsImpl != nil {
+	//
+	// Not started under `go test`, for the same reason SetFleetClient does
+	// not start its pollers: BootstrapLockdownStatus -> Client.Get ->
+	// Client.do -> fleet.LoadTokens -> keyring.Get, and go-keyring's MOCK
+	// provider (installed process-wide by testmain_test.go's keyring.MockInit)
+	// mutates a bare map[string]map[string]string with no mutex. Any
+	// background goroutine that reaches the keyring therefore races any
+	// sibling test's keyring.Set -- which is what the "views/sites keyring
+	// flake" always was. The independent review of the CapabilityPoller fix
+	// reproduced the race through THIS call site against the already-fixed
+	// poller, so this is a second live instance, not a hypothetical.
+	//
+	// This guard is a mitigation, not the fix. LoadTokens has ~16 non-test
+	// call sites and is hit by EVERY fleet HTTP request via Client.do, so
+	// guarding call sites one at a time does not close the class -- see the
+	// scar at contextbootstrap_wiring.go:337 for a third instance. The real
+	// fix is a single serialised keyring seam plus a gate forbidding direct
+	// go-keyring imports outside it; go-keyring exposes no way to install a
+	// thread-safe provider (`provider` is package-private and MockInit is
+	// the only door), so it cannot be fixed upstream-side from here.
+	// Tracked as its own mission.
+	//
+	// The under-test check is flag.Lookup("test.v"), NOT testing.Testing(),
+	// and that is deliberate: scripts/ci/cmd/checknilopts's
+	// isTestDoublePackage() treats ANY package with a non-_test.go file that
+	// imports "testing" as a fixture package and drops it from the I18
+	// production-assignment scan. Importing "testing" here silently excluded
+	// all of core/rpc -- the largest wiring site in the repo -- and produced
+	// 25 phantom "documented optional but never assigned" violations across
+	// nine packages. flag.Lookup is the pre-Go1.21 idiom for this and is
+	// equally reliable: testing.Init() registers test.v before TestMain
+	// runs, so it is set for any test binary, including tests in other
+	// packages that construct an API. Do not "modernise" this to
+	// testing.Testing() without first fixing that gate.
+	if a.settingsImpl != nil && flag.Lookup("test.v") == nil {
 		go func() {
 			c := a.settingsImpl.FleetClientForBootstrap()
 			if c != nil {
@@ -2105,7 +2140,13 @@ func New(c *core.Core, opts ...Option) *API {
 	a.secretsAPI = secretsview.NewAPI(a.exposureIdx)
 	logging.L().Info("rpc.boot.exposure_index_created")
 
-	hooksRunner, hookRegistry, hookBuiltins, hookRunnerImpl := newHooksStack(c, retriever, memStore, embedder)
+	// finding #71: constructed empty and backfilled with the real MCP
+	// dispatch pool once newLLMStack builds it (see the a.dispatchPool =
+	// stack.dispatchPool assignment below) — hooks_mcp_invoker.go's
+	// mcpHookInvokerAdapter doc explains why the ordering forces a
+	// backfill rather than a constructor argument here.
+	hookMCPInvoker := &mcpHookInvokerAdapter{}
+	hooksRunner, hookRegistry, hookBuiltins, hookRunnerImpl := newHooksStack(c, retriever, memStore, embedder, hookMCPInvoker)
 	// WP06 / UNIT-5: hold the concrete *hooks.Runner on the stack (see the
 	// a.hookRunner field doc) so future WPs can construct the three hook
 	// adapters without re-plumbing through api.New.
@@ -2379,6 +2420,15 @@ func New(c *core.Core, opts ...Option) *API {
 	a.confirmAPI = confirmview.New(confirmview.Config{Bus: stack.confirmBus})
 	a.stdioPool = stack.pool
 	a.dispatchPool = stack.dispatchPool
+	// finding #71: backfill the hooks MCP invoker now that the live pool
+	// exists — see hookMCPInvoker's construction comment above (near
+	// newHooksStack) and hooks_mcp_invoker.go for why this can't be a
+	// constructor argument. This is the SAME *dispatch.Pool that
+	// c.SetMCP(a.dispatchPool) (below) hands to core.Core, so a kind=mcp
+	// hook dispatch and core.Core.Shutdown's MCP teardown share one pool
+	// instance — see mcpHookInvokerAdapter.InvokeTool's doc for the
+	// shutdown-race analysis.
+	hookMCPInvoker.setPool(stack.dispatchPool)
 	a.builtins = stack.builtins
 	// harness-self-attach-01PMHS01 UNIT-4: hold the merged resolver
 	// newLLMStack constructed so tests can exercise the actual
@@ -8249,11 +8299,22 @@ func (a *corpusEmbedderAdapter) Embed(ctx context.Context, texts []string) ([][]
 // llm.HookRunner interface — can be constructed by callers. Before this,
 // the *hooks.Runner was trapped inside the unexported hooksRunnerAdapter.r
 // field and unreachable anywhere else in the binary (WP06 / UNIT-5, R-07).
+//
+// mcpInvoker (finding #71) wires kind=mcp lifecycle hooks onto the live
+// MCP dispatch pool. It is passed in — rather than constructed here —
+// because newHooksStack runs before the pool exists (newLLMStack builds
+// it afterward); the caller backfills the adapter's pool once
+// newLLMStack returns (see hooks_mcp_invoker.go's mcpHookInvokerAdapter
+// doc). A nil mcpInvoker (e.g. the WP06 reachability test's direct call
+// with memStore==nil) leaves hooks.Config.MCP nil, same as before this
+// fix — kind=mcp hooks fail loudly with "not configured" rather than
+// panicking.
 func newHooksStack(
 	c *core.Core,
 	retriever *corememory.Retriever,
 	memStore corememory.Store,
 	embedder corememory.Embedder,
+	mcpInvoker hooks.MCPInvoker,
 ) (llm.HookRunner, *hooks.Registry, *hooks.BuiltinRegistry, *hooks.Runner) {
 	if memStore == nil {
 		return nil, nil, nil, nil
@@ -8275,6 +8336,7 @@ func newHooksStack(
 	runner := hooks.NewRunner(hooks.Config{
 		Registry: registry,
 		Builtins: builtins,
+		MCP:      mcpInvoker,
 	})
 	return &hooksRunnerAdapter{r: runner}, registry, builtins, runner
 }

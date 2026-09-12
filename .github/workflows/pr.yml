@@ -591,6 +591,19 @@ jobs:
     runs-on: ${{ fromJson(vars.CI_RUNNER_LARGE || '["self-hosted","Linux","ARM64","ci-large"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          # The `gate meta-tests` step below runs gates_can_fail_test.go,
+          # which invokes the real gate scripts -- and
+          # check-manifest-version-bump.sh reads its baseline from
+          # `HEAD~1:core/agentgraph/manifest_versions_gen.go`. At the
+          # default depth of 1 there IS no HEAD~1, so the gate saw an empty
+          # baseline, reported every node kind as "new" rather than
+          # "changed", and exited 0 -- so its planted-violation proof
+          # failed with "the gate cannot see an unbumped version". The gate
+          # itself runs in lint-go, which already sets fetch-depth: 0, so
+          # the gate was never blind where it actually runs; only the job
+          # PROVING it could fail was. Same requirement, same fix.
+          fetch-depth: 0
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
