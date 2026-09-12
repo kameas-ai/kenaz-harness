@@ -182,6 +182,32 @@ export interface WorkflowsClient {
   /** Returns ISO timestamp string or empty string if no schedule. */
   scheduleNextFire(workflowId: string): Promise<string>;
   cancelRun(runId: string): Promise<void>;
+
+  // ── Input-kind pickers (automation-actually-runs-01PMZ404 UNIT-14) ──
+  /** Options for an `artifact_ref` input. Narrow projection of Artifact. */
+  listArtifactOptions(): Promise<WorkflowsArtifactOption[]>;
+  /** Options for a `project_ref` input. Narrow projection of Project. */
+  listProjectOptions(): Promise<WorkflowsProjectOption[]>;
+  /**
+   * Options for a `file` input. Opens the OS-native file picker (the
+   * same Shell_PickFile binding FileQuestion.vue uses for the
+   * ask-user-question tool) and resolves to the selected absolute path,
+   * or '' on cancel. The workflow input's value is the path string; a
+   * step that reads the file's bytes does so itself at run time.
+   */
+  pickFile(): Promise<string>;
+}
+
+/** Narrow projection of artifacts.Artifact for the artifact_ref picker. */
+export interface WorkflowsArtifactOption {
+  id: string;
+  title: string;
+}
+
+/** Narrow projection of projects.Project for the project_ref picker. */
+export interface WorkflowsProjectOption {
+  id: string;
+  name: string;
 }
 
 interface BridgeShape {
@@ -205,6 +231,15 @@ interface BridgeShape {
   Workflows_ScheduleRunHistory: (workflowId: string, limit: number) => Promise<WorkflowsRunSummary[]>;
   Workflows_ScheduleNextFire: (workflowId: string) => Promise<string>;
   Workflows_CancelRun: (runId: string) => Promise<void>;
+  // Shared bindings this shim reaches into directly for the four input
+  // pickers (UNIT-14) — narrow argument/return shapes only; the full
+  // Artifact / Project types live in the generated wailsjs models this
+  // file deliberately does not import (see the file header: this shim
+  // predates the full HarnessClient integration).
+  Artifacts_List: (filter: { sessionId?: string; projectId?: string; mimeTypePrefix?: string; source?: string; scopeKind?: string }) =>
+    Promise<Array<{ id: string; title: string }>>;
+  Projects_List: () => Promise<Array<{ id: string; name: string }>>;
+  Shell_PickFile: (title: string, defaultPath: string, filters: string[]) => Promise<string>;
 }
 
 function bridge(): BridgeShape {
@@ -240,6 +275,15 @@ export function createWorkflowsClient(): WorkflowsClient {
       bridge().Workflows_ScheduleRunHistory(workflowId, limit),
     scheduleNextFire: (workflowId) => bridge().Workflows_ScheduleNextFire(workflowId),
     cancelRun: (runId) => bridge().Workflows_CancelRun(runId),
+    listArtifactOptions: async () => {
+      const rows = await bridge().Artifacts_List({});
+      return rows.map((a) => ({ id: a.id, title: a.title }));
+    },
+    listProjectOptions: async () => {
+      const rows = await bridge().Projects_List();
+      return rows.map((p) => ({ id: p.id, name: p.name }));
+    },
+    pickFile: () => bridge().Shell_PickFile('Choose a file', '', []),
   };
 }
 
@@ -329,5 +373,9 @@ export function createFakeWorkflowsClient(
     scheduleRunHistory: seed.scheduleRunHistory ?? (() => Promise.resolve([])),
     scheduleNextFire: seed.scheduleNextFire ?? (() => Promise.resolve('')),
     cancelRun: seed.cancelRun ?? (() => Promise.resolve()),
+    // Input-kind picker stubs (UNIT-14)
+    listArtifactOptions: seed.listArtifactOptions ?? (() => Promise.resolve([])),
+    listProjectOptions: seed.listProjectOptions ?? (() => Promise.resolve([])),
+    pickFile: seed.pickFile ?? (() => Promise.resolve('')),
   };
 }

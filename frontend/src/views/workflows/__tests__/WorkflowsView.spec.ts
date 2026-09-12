@@ -524,3 +524,139 @@ describe('WorkflowsView — the ?run=<id> deep-link (UNIT-11)', () => {
     ).toBe(false);
   });
 });
+
+/*
+ * UNIT-14 (automation-actually-runs-01PMZ404, AC-015): the four input
+ * pickers. Before this unit, WorkflowsView.vue rendered exactly one
+ * v-if ('multiline') with a v-else plain text box for the OTHER five
+ * declared InputKind values — a free-text box where an enum/file/
+ * artifact_ref/project_ref was declared let a user submit a value the
+ * workflow's own schema would reject. These tests assert the RENDERED
+ * CONTROL per kind, not merely that some input renders.
+ */
+describe('WorkflowsView — the six input kinds render distinct controls (UNIT-14)', () => {
+  beforeEach(() => {
+    mockRoute.query = {};
+  });
+
+  const sixKindWorkflow: WorkflowsWorkflow = {
+    id: 'six-kinds',
+    name: 'Six input kinds',
+    version: 1,
+    inputs: [
+      { name: 'a_string', kind: 'string' },
+      { name: 'a_multiline', kind: 'multiline' },
+      { name: 'a_enum', kind: 'enum', options: ['fast', 'thorough'] },
+      { name: 'a_file', kind: 'file' },
+      { name: 'a_artifact', kind: 'artifact_ref' },
+      { name: 'a_project', kind: 'project_ref' },
+    ],
+    steps: [{ name: 'noop', kind: 'transform' }],
+  };
+
+  function sixKindClient(seed: Partial<WorkflowsClient> = {}) {
+    return fakeClient({
+      get: () => Promise.resolve(sixKindWorkflow),
+      listArtifactOptions: () =>
+        Promise.resolve([{ id: 'art-1', title: 'Design doc' }]),
+      listProjectOptions: () =>
+        Promise.resolve([{ id: 'proj-1', name: 'Acme' }]),
+      ...seed,
+    });
+  }
+
+  it('string renders a plain text input', async () => {
+    const wrapper = mount(WorkflowsView, { props: { client: sixKindClient() } });
+    await flushPromises();
+    const el = wrapper.find('[data-testid="workflow-input-a_string"]');
+    expect(el.exists()).toBe(true);
+    expect(el.element.tagName).toBe('INPUT');
+  });
+
+  it('multiline renders a textarea', async () => {
+    const wrapper = mount(WorkflowsView, { props: { client: sixKindClient() } });
+    await flushPromises();
+    const el = wrapper.find('[data-testid="workflow-input-a_multiline"]');
+    expect(el.exists()).toBe(true);
+    expect(el.element.tagName).toBe('TEXTAREA');
+  });
+
+  it('enum renders a <select> offering exactly inp.options', async () => {
+    const wrapper = mount(WorkflowsView, { props: { client: sixKindClient() } });
+    await flushPromises();
+    const el = wrapper.find('[data-testid="workflow-input-a_enum"]');
+    expect(el.exists()).toBe(true);
+    expect(el.element.tagName).toBe('SELECT');
+    const optionTexts = wrapper
+      .findAll<HTMLOptionElement>('[data-testid="workflow-input-a_enum"] option')
+      .map((o) => o.element.value);
+    expect(optionTexts).toEqual(['fast', 'thorough']);
+  });
+
+  it('file renders a picker button, not a free-text box, and fills the value from pickFile()', async () => {
+    const pickFile = vi.fn().mockResolvedValue('/Users/alec/report.pdf');
+    const wrapper = mount(WorkflowsView, {
+      props: { client: sixKindClient({ pickFile }) },
+    });
+    await flushPromises();
+
+    // No plain <input type="text"> for this input.
+    const display = wrapper.find('[data-testid="workflow-input-a_file"]');
+    expect(display.exists()).toBe(true);
+    expect(display.element.tagName).not.toBe('INPUT');
+
+    await wrapper.find('[data-testid="workflow-input-a_file-pick"]').trigger('click');
+    await flushPromises();
+
+    expect(pickFile).toHaveBeenCalled();
+    expect(wrapper.find('[data-testid="workflow-input-a_file"]').text()).toContain(
+      '/Users/alec/report.pdf',
+    );
+  });
+
+  it('artifact_ref renders a <select> populated from listArtifactOptions()', async () => {
+    const wrapper = mount(WorkflowsView, { props: { client: sixKindClient() } });
+    await flushPromises();
+    const el = wrapper.find('[data-testid="workflow-input-a_artifact"]');
+    expect(el.exists()).toBe(true);
+    expect(el.element.tagName).toBe('SELECT');
+    expect(wrapper.text()).toContain('Design doc');
+  });
+
+  it('project_ref renders a <select> populated from listProjectOptions()', async () => {
+    const wrapper = mount(WorkflowsView, { props: { client: sixKindClient() } });
+    await flushPromises();
+    const el = wrapper.find('[data-testid="workflow-input-a_project"]');
+    expect(el.exists()).toBe(true);
+    expect(el.element.tagName).toBe('SELECT');
+    expect(wrapper.text()).toContain('Acme');
+  });
+
+  it('AC-015: an enum rejection from the run RPC surfaces as a visible error, not a swallowed failure', async () => {
+    // Client-side validation (the <select> only offering inp.options)
+    // is not the fix on its own per A-11 — the run RPC must also reject
+    // an out-of-set value, which UNIT-14 wires at the single choke
+    // point every caller passes through (Engine.Run's
+    // validateEnumInputs, core/workflows/runtime.go), independent of
+    // this <select>. This test is the OTHER half of that contract:
+    // WorkflowsView must surface whatever the RPC rejects with, rather
+    // than silently discarding it, so a caller that DID get past the
+    // widget (a scripted /wf invocation, or a future picker bug) still
+    // produces a visible failure instead of a silent no-op.
+    const run = vi
+      .fn()
+      .mockRejectedValue(
+        new Error('workflows: input "a_enum": value "sloppy" is not one of the declared options [fast thorough]'),
+      );
+    const wrapper = mount(WorkflowsView, { props: { client: sixKindClient({ run }) } });
+    await flushPromises();
+
+    await wrapper.find('[data-testid="workflows-run-button"]').trigger('click');
+    await flushPromises();
+
+    expect(run).toHaveBeenCalled();
+    expect(wrapper.find('[data-testid="workflows-run-error"]').text()).toContain(
+      'not one of the declared options',
+    );
+  });
+});
