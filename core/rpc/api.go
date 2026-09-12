@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -23,7 +24,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"testing"
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core"
@@ -1015,7 +1015,20 @@ func (a *API) SetContext(ctx context.Context) {
 	// thread-safe provider (`provider` is package-private and MockInit is
 	// the only door), so it cannot be fixed upstream-side from here.
 	// Tracked as its own mission.
-	if a.settingsImpl != nil && !testing.Testing() {
+	//
+	// The under-test check is flag.Lookup("test.v"), NOT testing.Testing(),
+	// and that is deliberate: scripts/ci/cmd/checknilopts's
+	// isTestDoublePackage() treats ANY package with a non-_test.go file that
+	// imports "testing" as a fixture package and drops it from the I18
+	// production-assignment scan. Importing "testing" here silently excluded
+	// all of core/rpc -- the largest wiring site in the repo -- and produced
+	// 25 phantom "documented optional but never assigned" violations across
+	// nine packages. flag.Lookup is the pre-Go1.21 idiom for this and is
+	// equally reliable: testing.Init() registers test.v before TestMain
+	// runs, so it is set for any test binary, including tests in other
+	// packages that construct an API. Do not "modernise" this to
+	// testing.Testing() without first fixing that gate.
+	if a.settingsImpl != nil && flag.Lookup("test.v") == nil {
 		go func() {
 			c := a.settingsImpl.FleetClientForBootstrap()
 			if c != nil {
