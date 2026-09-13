@@ -7422,6 +7422,8 @@ export namespace sync {
 	    last_push_at?: string;
 	    last_pull_at?: string;
 	    last_error?: string;
+	    scopes?: string[];
+	    org_applied_at?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new SyncStatusView(source);
@@ -7434,6 +7436,8 @@ export namespace sync {
 	        this.last_push_at = source["last_push_at"];
 	        this.last_pull_at = source["last_pull_at"];
 	        this.last_error = source["last_error"];
+	        this.scopes = source["scopes"];
+	        this.org_applied_at = source["org_applied_at"];
 	    }
 	}
 
