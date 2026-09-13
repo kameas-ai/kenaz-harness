@@ -178,6 +178,27 @@ jobs:
         # scripts/ci/cmd/checknilopts/main.go's header for the full design.
         run: bash scripts/ci/check-nil-optional-deps.sh
 
+      - name: config-nil-coverage guard (G-1, WP26)
+        # trust-surfaces-that-fire-01PMZ202 spec.md §G-1 / WP26. A
+        # narrower, structurally different sibling of I18 above: every
+        # exported Config/Options/GateOptions/Deps struct under core/
+        # constructed in >=1 production composite literal, with a
+        # pointer/interface/func/map/chan/slice field never set to a
+        # non-nil value ANYWHERE (a composite-literal key or a plain
+        # `x.Field = v` assignment outside the struct's own methods —
+        # not gated on a doc-comment phrase, unlike I18) — plus every
+        # exported With* function/method under core/ whose first
+        # parameter is a non-empty interface (the "injected collaborator"
+        # shape, not a test-only mock-injection knob) with zero non-test
+        # callers. Twenty of the finalizing mission's 29 findings were
+        # this exact class. See scripts/ci/cmd/checkconfig/main.go's
+        # header for the interface-arg restriction's justification and
+        # scripts/ci/allowlists/i16-config-nil-coverage.txt's header for
+        # the 2026-09-12 introduction calibration baseline (63 pre-
+        # existing findings, spot-checked, dated, owner-named — not
+        # individually triaged one by one in this change).
+        run: bash scripts/ci/check-config-nil-coverage.sh
+
       - name: knob-coverage guard
         # Generalises the resolved-config coverage check any dial system
         # can opt into: go test ./core/... -run 'TestKnobCoverage' picks

@@ -1,0 +1,287 @@
+# I16 — config-nil-coverage class (G-1, kitty-specs/trust-surfaces-that-
+# fire-01PMZ202 WP26).
+#
+# Enforced by scripts/ci/check-config-nil-coverage.sh /
+# scripts/ci/cmd/checkconfig. A struct field that is declared, read, and
+# never assigned in production — twenty of the finalizing mission's 29
+# findings were exactly this shape (spec.md §10). Two tiers, both
+# gating:
+#
+#   Tier 1: an exported struct type under core/ named Config, Options,
+#   GateOptions or Deps, constructed in >=1 non-test composite literal,
+#   with a pointer/interface/func/map/chan/slice field set in ZERO
+#   non-test sites (a composite-literal key OR a plain `x.Field = v`
+#   assignment outside the struct's own methods — see main.go's header
+#   for why the plain-assignment clause is required, not optional: it
+#   is the DOMINANT wiring idiom for corewf.Deps).
+#
+#   Tier 2: an exported With* function/method under core/ whose first
+#   parameter is a non-empty interface (the "injected collaborator"
+#   shape all five of the spec's own named examples share — see
+#   main.go's header for why this interface-typed-first-arg
+#   restriction exists: an unrestricted "every With* func" scan finds
+#   ~200 candidates dominated by test-only mock-injection knobs
+#   (*http.Client, string endpoints, clock funcs) that are a normal Go
+#   idiom, not this defect class), with zero non-test callers anywhere
+#   under core/.
+#
+# NAMING NOTE: the WP26 spec text names this allowlist
+# "i16-nil-optional-deps.txt" — but that literal filename collides
+# conceptually with the ALREADY-SHIPPED, unrelated
+# i18-nil-optional-deps.txt (a different gate, check-nil-optional-
+# deps.sh / checknilopts, triggered by a doc-comment phrase on ANY
+# interface field, not scoped to Config/Options/GateOptions/Deps
+# structs). Reusing a near-identical name for a structurally different
+# gate would be actively confusing for anyone grepping this directory,
+# so this file uses "i16-config-nil-coverage.txt" instead — same
+# numbering slot (I16), self-describing suffix.
+#
+# Format: one line per violation, copied verbatim from the gate's
+# stdout/stderr, followed by a `#` comment carrying the DATE, the
+# BLOCKER, and the change that will delete the line. "We'll get to it"
+# is not a reason. Entries shrink monotonically — a line that no longer
+# matches a real violation is STALE and fails the gate.
+#
+# ============================================================
+# CALIBRATION BASELINE — 2026-09-12 (this gate's introduction)
+# ============================================================
+#
+# First run against release/v0.78.2: 248 Tier-1 fields across 49 target
+# struct types, 73 Tier-2 With*-functions (after the interface-arg
+# restriction above — down from 213 unrestricted). 63 violations (42
+# Tier-1, 21 Tier-2).
+#
+# Spot-checked, not guessed, before seeding this file:
+#   - core/rpc/api.go:3046 constructs `wfDeps := corewf.Deps{}` (an
+#     EMPTY composite literal) then wires most fields via eleven
+#     `wfDeps.<Field> = ...` plain-assignment statements before wfDeps
+#     is used. A composite-literal-only Tier-1 scan misreported all
+#     eleven as violations; the plain-assignment clause (main.go's
+#     configAssignVisitor) resolved nine of the eleven as genuinely
+#     wired. The remaining two, Deps.Tools and Deps.Audit (both listed
+#     below), are REAL: api.go:3131's own comment ("wfDeps.Audit
+#     above") references an assignment that does not exist anywhere in
+#     the file — grep confirms zero `wfDeps.Audit =` or `wfDeps.Tools =`
+#     sites. This is exactly the "lie" CLAUDE.md's unwired-sweep
+#     doctrine names: a comment asserting wiring that was never written.
+#   - core/session/manager.go:159's `WithAudit` (a ManagerOption
+#     injecting the session.Audit interface) has zero non-test callers;
+#     confirmed distinct from the unrelated, genuinely-wired
+#     `harnessmcp.WithAudit` (core/mcp/builtin/harness/audit.go:33,
+#     called at api.go:4133) — same name, different package, different
+#     struct.
+#   - The Tier-2 interface-arg restriction was validated against all
+#     five of the spec's own named examples (audit.WithBackend,
+#     audit.WithSweepableBackend, cedar.WithPermissionHookRunner,
+#     session.WithSessionHookRunner — now itself wired at
+#     core/core.go:531, confirming the restriction doesn't lose real
+#     hits — and slashcmd.(*Dispatch).WithAuditEmitter): every one
+#     takes a non-empty-interface first parameter.
+#
+# DISPOSITION: this is a BASELINE seed, not 63 individually-triaged
+# findings — that triage (wire each real gap, or prove-and-delete each
+# genuinely-dead option, per CLAUDE.md's "wired, deleted, or
+# dated-justified" rule) is real follow-up work this gate-authoring
+# task's scope does not cover; a handful were spot-checked above as
+# real, not fabricated, findings, and the shape is consistent enough
+# across the rest (interface/pointer/func fields on request-scoped
+# view Config structs; With* functions whose only real customization
+# point is a test double) that this is very likely the SAME class of
+# genuine, historically-recurring gap this whole mission exists to
+# catch, not a bug in the gate. Blocker: a systematic per-entry pass
+# (wire / delete-with-proof / re-justify individually). Owner:
+# harness-core unwired-sweep (next release's ritual sweep — see
+# CLAUDE.md's "Release ritual: unwired sweep" — should burn this list
+# down entry by entry rather than accepting it as permanent). Any NEW
+# violation introduced after this commit is NOT covered by this
+# baseline disposition and must be individually wired, deleted, or
+# justified in the PR that introduces it.
+
+core/agentgraph/kernel.go:88: github.com/kameas-ai/kenaz-harness/core/agentgraph.WithExecutor is never called by any non-test source under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/agentgraph/validator_manifest.go:84: github.com/kameas-ai/kenaz-harness/core/agentgraph.WithCatalog is never called by any non-test source under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/artifacts/store_mem.go:45: github.com/kameas-ai/kenaz-harness/core/artifacts.WithMemSessionProjectReader is never called by any non-test source under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/attachments/attachments.go:165: github.com/kameas-ai/kenaz-harness/core/attachments.WithLibrary is never called by any non-test source under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/credstore/audit.go:34: github.com/kameas-ai/kenaz-harness/core/credstore.WithAuditEmitter is never called by any non-test source under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/credstore/prune.go:55: github.com/kameas-ai/kenaz-harness/core/credstore.WithAuditSweeper is never called by any non-test source under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/credstore/store.go:141: github.com/kameas-ai/kenaz-harness/core/credstore.WithCedarGate is never called by any non-test source under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/elicitation/registry.go:135: Config.Now (func) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/event/helpers.go:73: github.com/kameas-ai/kenaz-harness/core/event.WithSession is never called by any non-test source under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/hooks/hooks.go:515: github.com/kameas-ai/kenaz-harness/core/hooks.WithShellTimeout is never called by any non-test source under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/llm/custom/adapter.go:95: github.com/kameas-ai/kenaz-harness/core/llm/custom.WithCapabilityStore is never called by any non-test source under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/llm/registry/registry.go:44: Options.Catalog (pointer) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/llm/registry/registry.go:46: Options.Emitter (pointer) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/llm/registry/registry.go:831: github.com/kameas-ai/kenaz-harness/core/llm/registry.WithSnapshotID is never called by any non-test source under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/rpc/api.go:1506: github.com/kameas-ai/kenaz-harness/core/rpc.WithConnectorTokens is never called by any non-test source under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/rpc/api.go:1523: github.com/kameas-ai/kenaz-harness/core/rpc.WithSettingsStore is never called by any non-test source under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/rpc/views/acp/acp.go:314: Options.Verifier (interface) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/rpc/views/agentgraph/chat/chat_runner.go:443: Config.Clock (func) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/rpc/views/agentgraph/chat/chat_runner.go:522: Config.SecretAuditEmitter (interface) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/rpc/views/audit/impl.go:120: github.com/kameas-ai/kenaz-harness/core/rpc/views/audit.WithEmitter is never called by any non-test source under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/rpc/views/audit/impl.go:99: github.com/kameas-ai/kenaz-harness/core/rpc/views/audit.WithBackend is never called by any non-test source under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/rpc/views/branches/impl.go:115: Config.ModelInfos (slice) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/rpc/views/branches/impl.go:121: Config.Now (func) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/rpc/views/bundle/impl.go:174: github.com/kameas-ai/kenaz-harness/core/rpc/views/bundle.WithSecretsResolver is never called by any non-test source under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/rpc/views/llm/impl.go:424: Config.Bundles (interface) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/rpc/views/llm/impl.go:465: Config.CredPeeker (interface) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/rpc/views/llm/impl.go:476: Config.CredInvalidator (interface) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/rpc/views/llm/impl.go:480: Config.AuditRotation (interface) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/rpc/views/llm/impl.go:485: Config.CustomAdapter (interface) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/rpc/views/llm/impl.go:492: Config.FallbackStore (pointer) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/rpc/views/mcp/impl.go:101: github.com/kameas-ai/kenaz-harness/core/rpc/views/mcp.WithHealthPool is never called by any non-test source under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/rpc/views/mcp/impl.go:83: github.com/kameas-ai/kenaz-harness/core/rpc/views/mcp.WithRegistry is never called by any non-test source under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/rpc/views/memory/impl.go:124: Config.Journal (interface) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/rpc/views/memory/impl.go:126: Config.NarrativeMetrics (interface) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/rpc/views/memory/impl.go:127: Config.NarrativeJobs (interface) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/rpc/views/permissions/impl.go:65: Config.ConfigTrimmer (interface) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/rpc/views/tools/impl.go:152: Config.OpenBrowser (func) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/secrets/cache/cache.go:83: github.com/kameas-ai/kenaz-harness/core/secrets/cache.WithClock is never called by any non-test source under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/serve/server.go:213: github.com/kameas-ai/kenaz-harness/core/serve.WithElicitAPI is never called by any non-test source under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/session/manager.go:159: github.com/kameas-ai/kenaz-harness/core/session.WithAudit is never called by any non-test source under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph — spot-checked real, see above.
+
+core/storage/storage.go:153: Config.SecretsBackend (interface) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/tasks/registry.go:130: Options.HookFirer (func) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/telemetry/telemetry.go:56: Config.SpanExporters (slice) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/tools/askuserquestion/askuserquestion.go:247: Options.Enabled (func) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/tools/askuserquestion/askuserquestion.go:248: Options.Logger (pointer) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/tools/bash/bash.go:166: Options.Allowlist (slice) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/tools/bash/bash.go:169: Options.IDGen (func) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/tools/monitor/tool.go:160: Options.Offsets (interface) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/tools/readcontextfile/readcontextfile.go:89: Options.SessionResolver (func) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/tools/saveartifact/saveartifact.go:112: Options.SessionResolver (func) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/tools/saveartifact/saveartifact.go:113: Options.Logger (pointer) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/tools/skill/skill.go:87: Options.Enabled (func) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/tools/subagentdispatch/tool.go:177: Options.Tasks (interface) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/tools/subagentdispatch/tool.go:190: Options.SessionResolver (func) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/tools/updateartifact/updateartifact.go:91: Options.SessionResolver (func) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/tools/updateartifact/updateartifact.go:92: Options.Logger (pointer) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/tools/webfetch/webfetch.go:86: Options.HTTPClient (pointer) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/tools/websearch/websearch.go:50: Options.Logger (pointer) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/update/service.go:42: Config.HTTPClient (pointer) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/update/service.go:51: Config.Swapper (interface) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/workflows/scheduler/cron_scheduler.go:88: Config.Dispatcher (interface) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+
+core/workflows/types.go:642: Deps.Tools (interface) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph — spot-checked real, see above.
+
+core/workflows/types.go:662: Deps.Audit (interface) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph — spot-checked real, see above.
