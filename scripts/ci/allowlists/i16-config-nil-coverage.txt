@@ -136,10 +136,10 @@ core/llm/custom/adapter.go:95: github.com/kameas-ai/kenaz-harness/core/llm/custo
 
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
-core/rpc/api.go:1506: github.com/kameas-ai/kenaz-harness/core/rpc.WithConnectorTokens is never called by any non-test source under core/
+core/rpc/api.go:1542: github.com/kameas-ai/kenaz-harness/core/rpc.WithConnectorTokens is never called by any non-test source under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
-core/rpc/api.go:1523: github.com/kameas-ai/kenaz-harness/core/rpc.WithSettingsStore is never called by any non-test source under core/
+core/rpc/api.go:1559: github.com/kameas-ai/kenaz-harness/core/rpc.WithSettingsStore is never called by any non-test source under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
 core/rpc/views/acp/acp.go:314: Options.Verifier (interface) is never set to a non-nil value in any non-test composite literal under core/
