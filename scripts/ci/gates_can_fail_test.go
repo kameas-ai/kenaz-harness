@@ -2016,6 +2016,118 @@ func TestTransportParityGate_PlantedCommentOnlyArmFails(t *testing.T) {
 	}
 }
 
+// TestRecipeTokenSubstitutionGate_PlantedUnmanifestedTokenFails is
+// connector-lifecycle-truth-01PMZ303 UNIT-15's G-2 planted-violation
+// proof, first half: a "${...}" token on a JSON path with NO manifest
+// entry must fail the gate. Reproduces the exact oauth-clientid-not-
+// substituted shape (spec.md §1.2) on a different, deliberately
+// uncovered path (env_keys[].display) so this test cannot accidentally
+// pass just because auth.client_id already has real coverage.
+//
+// Uses the gate's G2_REGISTRY_JSON override so this never touches the
+// real tracked registry.json.
+func TestRecipeTokenSubstitutionGate_PlantedUnmanifestedTokenFails(t *testing.T) {
+	root := repoRoot(t)
+	registryPath := filepath.Join(root, "core", "mcp", "recipes", "registry.json")
+
+	raw, err := os.ReadFile(registryPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", registryPath, err)
+	}
+	var data struct {
+		Recipes []map[string]any `json:"recipes"`
+	}
+	if err := json.Unmarshal(raw, &data); err != nil {
+		t.Fatalf("unmarshal registry.json: %v", err)
+	}
+	planted := false
+	for _, r := range data.Recipes {
+		envKeys, ok := r["env_keys"].([]any)
+		if !ok || len(envKeys) == 0 {
+			continue
+		}
+		first, ok := envKeys[0].(map[string]any)
+		if !ok {
+			continue
+		}
+		first["display"] = "${KAMEAS_TEST_PLANTED}"
+		planted = true
+		break
+	}
+	if !planted {
+		t.Fatal("no registry recipe with a non-empty env_keys array found — cannot plant the violation")
+	}
+	mutated, err := json.Marshal(data)
+	if err != nil {
+		t.Fatalf("marshal mutated registry.json: %v", err)
+	}
+
+	scratch := t.TempDir()
+	scratchRegistry := filepath.Join(scratch, "registry_planted.json")
+	if err := os.WriteFile(scratchRegistry, mutated, 0o644); err != nil {
+		t.Fatalf("writing scratch registry.json: %v", err)
+	}
+
+	code, out := runGateEnv(t, "check-recipe-token-substitution.sh", root, map[string]string{
+		"G2_REGISTRY_JSON": scratchRegistry,
+	})
+	if code == 0 {
+		t.Fatalf("check-recipe-token-substitution.sh exited 0 with a \\${...} token planted on "+
+			"env_keys[].display, a path with no manifest entry — the gate cannot fail.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "env_keys[].display") {
+		t.Fatalf("gate failed, but its output does not name the uncovered path "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+}
+
+// TestRecipeTokenSubstitutionGate_PlantedStaleManifestEntryFails is G-2's
+// second planted-violation proof: a manifest entry whose grep pattern
+// matches nothing (the call site was deleted or renamed) must ALSO fail
+// — this is what stops the manifest degrading into an opt-out list.
+func TestRecipeTokenSubstitutionGate_PlantedStaleManifestEntryFails(t *testing.T) {
+	root := repoRoot(t)
+	manifestPath := filepath.Join(root, "scripts", "ci", "allowlists", "g2-recipe-substituted-paths.txt")
+
+	orig, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", manifestPath, err)
+	}
+	const target = `auth.client_id|SubstituteString\(clientID`
+	if !strings.Contains(string(orig), target) {
+		t.Fatalf("expected manifest line not found — update this test and the manifest together:\n%q", target)
+	}
+	mutated := strings.Replace(string(orig), target,
+		`auth.client_id|ThisFunctionDoesNotExistAnywhereZzGateProbe12345`, 1)
+
+	scratch := t.TempDir()
+	scratchManifest := filepath.Join(scratch, "manifest_stale.txt")
+	if err := os.WriteFile(scratchManifest, []byte(mutated), 0o644); err != nil {
+		t.Fatalf("writing scratch manifest: %v", err)
+	}
+
+	code, out := runGateEnv(t, "check-recipe-token-substitution.sh", root, map[string]string{
+		"G2_MANIFEST": scratchManifest,
+	})
+	if code == 0 {
+		t.Fatalf("check-recipe-token-substitution.sh exited 0 with auth.client_id's manifest "+
+			"pattern pointing at a symbol that does not exist — a deleted call site whose "+
+			"manifest entry survives must fail, not pass.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "auth.client_id") {
+		t.Fatalf("gate failed, but its output does not name the stale path "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+
+	// True-negative companion: the real manifest against the real tree
+	// must still pass.
+	realCode, realOut := runGate(t, "check-recipe-token-substitution.sh", root)
+	if realCode != 0 {
+		t.Fatalf("check-recipe-token-substitution.sh failed against the real manifest + catalogs — "+
+			"the gate is not correctly scoped:\n%s", realOut)
+	}
+}
+
 // TestServeGapClassificationGate_PlantedUntriagedEntryFiresRegardlessOfSectionOrder
 // is the planted-violation proof for check-serve-gap-classification.sh's
 // untriaged date/owner check (AC-717, #67).
