@@ -561,6 +561,23 @@ const (
 // engine's DefaultDeny flag is false. Default-allow is the spec's
 // stance ("observable, not blocking by default; user opts in to
 // fail-closed"). Frontends pattern-match on this value.
+//
+// Confirm (risk-rated-autonomy-01PMRA01 WP01) is a fourth member added
+// alongside the original three. Engine.Evaluate / fromCedar (decisions.go)
+// NEVER produce it — Cedar itself has no confirm effect and the engine
+// parses no annotations (that is out of scope by design, see the
+// mission spec's non-goals). Confirm is produced ONLY by
+// cedar.ThreeLayerResolve (risk_layer.go), the layer-3 resolver wired
+// into the chat kernel tool adapter's confirm-each ladder: layer 1
+// forbid -> Deny, layer 2 permit -> Allow, layer 3 (Cedar had no
+// opinion) -> Confirm, pending a risk rating (WP03-WP06) deciding
+// whether that specific rung answers with Allow or leaves it as
+// Confirm. Every production switch on Outcome must treat Confirm
+// explicitly and never fold it into "not deny, so allow" — that fold is
+// exactly the fail-open hole this mission exists to close one layer up
+// (enforce()'s historical NotApplicable -> nil). See
+// outcome_confirm_audit_test.go for the enumerated list of switches
+// this invariant is pinned against.
 type Outcome int
 
 const (
@@ -572,6 +589,10 @@ const (
 	// NotApplicable — no policy matched AND DefaultDeny is false.
 	// Callers treat this as "allow with audit" by default.
 	NotApplicable
+	// Confirm — layer 3 (risk-rated-autonomy-01PMRA01) says a human
+	// decision is required. Never produced by Engine.Evaluate itself;
+	// only by cedar.ThreeLayerResolve. See the type doc comment above.
+	Confirm
 )
 
 // String renders Outcome for logs and audit lines.
@@ -583,6 +604,8 @@ func (o Outcome) String() string {
 		return "deny"
 	case NotApplicable:
 		return "not_applicable"
+	case Confirm:
+		return "confirm"
 	default:
 		return "unknown"
 	}
@@ -618,6 +641,8 @@ func (o *Outcome) UnmarshalJSON(b []byte) error {
 		*o = Deny
 	case "not_applicable":
 		*o = NotApplicable
+	case "confirm":
+		*o = Confirm
 	default:
 		return fmt.Errorf("cedar: unknown Outcome %q", s)
 	}

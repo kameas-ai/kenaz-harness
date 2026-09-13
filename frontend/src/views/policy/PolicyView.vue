@@ -354,6 +354,8 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
       return 'policy-view__outcome--allow';
     case 'not_applicable':
       return 'policy-view__outcome--na';
+    case 'confirm':
+      return 'policy-view__outcome--confirm';
     default:
       return 'policy-view__outcome--unknown';
   }
@@ -1206,6 +1208,11 @@ function outcomeClass(outcome: PolicyDecision['outcome']): string {
 .policy-view__outcome--unknown {
   color: var(--ink-muted);
   background: var(--surface-2);
+}
+
+.policy-view__outcome--confirm {
+  color: var(--warn-ink, var(--ink));
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
 }
 
 .policy-view__decision-main {

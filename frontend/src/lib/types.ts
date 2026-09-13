@@ -4015,7 +4015,7 @@ export interface PolicyFile {
  * Used by the audit panel in the policy view.
  */
 export interface PolicyDecision {
-  outcome: 'allow' | 'deny' | 'not_applicable' | 'unknown';
+  outcome: 'allow' | 'deny' | 'not_applicable' | 'confirm' | 'unknown';
   action: string;
   principal: string;
   resource: string;

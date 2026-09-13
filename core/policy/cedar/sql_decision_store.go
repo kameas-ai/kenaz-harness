@@ -241,6 +241,8 @@ func outcomeFromString(s string) Outcome {
 		return Allow
 	case "deny":
 		return Deny
+	case "confirm":
+		return Confirm
 	default:
 		return NotApplicable
 	}

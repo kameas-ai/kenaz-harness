@@ -177,7 +177,16 @@ func (g *Gate) Evaluate(ctx context.Context, op Op, rawPath string) (cedar.Decis
 		return d, nil
 	case cedar.Deny:
 		return d, nil
-	case cedar.NotApplicable:
+	case cedar.NotApplicable, cedar.Confirm:
+		// risk-rated-autonomy-01PMRA01 WP01: Confirm is handled
+		// identically to NotApplicable here, explicitly rather than via
+		// a bare default. No producer sends Confirm through this gate
+		// today (layer 3 lives in the chat kernel tool adapter's
+		// resolver, not here), but this path already asks a human on
+		// NotApplicable — opts.Prompter defaults to NoOpPrompter, which
+		// denies rather than silently allowing — so folding Confirm in
+		// here is safe by construction, not merely convenient.
+		//
 		// Check transient cache first.
 		if g.hasTransientGrant(op, canonical) {
 			d.Outcome = cedar.Allow

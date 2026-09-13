@@ -7006,6 +7006,10 @@ func buildChatRunner(
 		SecretLookup: secretLookup,
 		SecretGate:   secretGate,
 		SecretBudget: secretBudget,
+		// risk-rated-autonomy-01PMRA01 WP02: the SAME live Cedar engine
+		// as SecretGate immediately above — layers 1-2 of the new
+		// confirm-each rung must see the operator's real policy set.
+		RiskGate: secretGate,
 	})
 	if err != nil {
 		logging.L().Error("chat.runner.construct_failed", "err", err.Error())

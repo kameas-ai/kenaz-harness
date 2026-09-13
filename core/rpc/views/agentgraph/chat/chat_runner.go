@@ -507,6 +507,16 @@ type Config struct {
 	// g==nil branch — the same nil-tolerant posture every other
 	// Cedar-gated builtin in this package already has.
 	SecretGate cedar.Gate
+	// RiskGate is the Cedar gate risk-rated-autonomy-01PMRA01 WP02 wires
+	// into the kernel tool adapter's confirm-each ladder (rung 0, ahead
+	// of the autonomy-posture prompt-skip set): layer 1 forbid denies,
+	// layer 2 permit allows, layer 3 (Cedar had no opinion) forces the
+	// prompt rather than letting the tool's coarse family classification
+	// decide. nil disables the rung entirely — byte-identical to the
+	// pre-WP02 ladder. Production wiring passes the SAME live engine as
+	// SecretGate immediately above (core/rpc/api.go) — layers 1-2 must
+	// see the operator's real policy set, not a second, divergent one.
+	RiskGate cedar.Gate
 	// SecretBudget caps resolutions per locator (refs.DefaultBudget==50)
 	// across the process lifetime. nil is unlimited. Production wiring
 	// shares the SAME *refs.Budget the kenaz__list_secrets tool uses to
@@ -1083,6 +1093,9 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// bus is still meaningful (it selects the headless policy) and the
 	// deps bundle's zero value is the safe configuration.
 	toolAdapter.withConfirm(r.cfg.Confirm).withConfirmDeps(r.cfg.ConfirmDeps)
+	// risk-rated-autonomy-01PMRA01 WP02: nil RiskGate leaves
+	// resolveConfirmEach's new rung 0 a no-op (pre-WP02 behaviour).
+	toolAdapter.withGate(r.cfg.RiskGate)
 
 	r.mu.Lock()
 	r.nextID++
