@@ -89,7 +89,17 @@ BODY="$(sed -n "${FUNC_START},${FUNC_END}p" "$POOL_GO")"
 # Derived input set: every `case "<tag>":` line inside the function body
 # — not a hardcoded list, so a newly added transport tag is picked up
 # automatically the next time this gate runs.
-mapfile -t TAGS < <(echo "$BODY" | grep -oE '^\tcase "[a-z]+":' | sed -E 's/^\tcase "([a-z]+)":$/\1/')
+# NOTE ON THE TAB: `\t` inside a grep ERE is NOT portable. BSD grep
+# (macOS) matches a literal tab; GNU grep (the Linux CI runners) treats
+# `\t` as an escaped ordinary character, i.e. the letter `t`, so
+# `^\tcase` looks for `^tcase` and matches NOTHING. That divergence made
+# this gate hit its own discovery floor on CI while passing locally, and
+# it broke the planted-violation proof rather than the gate's real pass —
+# the gate was never vacuous, but only because the floor caught it.
+# Use ANSI-C quoting so the pattern carries a real tab byte on both
+# platforms, matching the form check-tool-containment-unconditional.sh:63
+# already uses.
+mapfile -t TAGS < <(echo "$BODY" | grep -oE $'^\tcase "[a-z]+":' | sed -E $'s/^\tcase "([a-z]+)":$/\\1/')
 
 if [[ "${#TAGS[@]}" -eq 0 ]]; then
   echo "${GATE} FAIL: no \`case \"<tag>\":\` lines found in closeOneByTag — the switch shape changed;" >&2
