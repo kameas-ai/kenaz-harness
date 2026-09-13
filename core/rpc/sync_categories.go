@@ -32,9 +32,12 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 )
 
@@ -162,8 +165,8 @@ func installedMCPKind(mcpCategory *corefleet.MCPSyncCategory) corefleet.SyncKind
 }
 
 // emptyPayloadKind builds a SyncKind for categories that do not yet expose a
-// single credential-free snapshot accessor (provider_profiles, mcp_recipes).
-// The collector returns an empty JSON object (HARD RULE: no credential
+// single credential-free snapshot accessor (provider_profiles). The
+// collector returns an empty JSON object (HARD RULE: no credential
 // bytes) and the applier is a no-op (non-nil so the pull-apply path is
 // live — when fleet carries newer state the loop runs through without
 // error, ready for the subsystem to be extended later).
@@ -180,6 +183,59 @@ func emptyPayloadKind(id corefleet.SyncCategory, scopes []corefleet.Scope) coref
 		},
 		SecretPolicy:   corefleet.SecretPolicyMustNotContainSecrets,
 		ConflictPolicy: corefleet.ConflictPolicyLWW,
+	}
+}
+
+// mcpRecipesKind builds the mcp_recipes SyncKind. Per fleet-generic-sync-
+// framework-01NSYNC02 spec §2.3's kind table, this kind's ORG layer IS
+// fleet-org-config-inheritance-01NORGX01's provisioned_mcp: "installed_mcp
+// / mcp_recipes | user + org | lww + org_config | org layer = ORGX01
+// provisioned_mcp". This wires that org arm for real — the ScopeOrg branch
+// used to be part of emptyPayloadKind's blanket no-op (a payload arriving
+// for this kind at ANY scope would silently "succeed" while doing
+// nothing, indistinguishable on the wire from a real apply).
+//
+// The user-scope arm is UNCHANGED from the former emptyPayloadKind stub:
+// mcp_recipes has no single credential-free cross-device snapshot
+// accessor yet, so personal LWW sync for this kind stays a documented
+// no-op pending that follow-up — this mission only closes the org gap.
+//
+// cat may be nil (rpc.New(nil) test harness, or SetMCPCatalog not yet
+// called) — the org-scope branch then returns a named error instead of
+// silently discarding a signed org config, same posture as
+// compositeConfigApplier's other "ref not wired" branches.
+func mcpRecipesKind(cat *recipes.MergedCatalog) corefleet.SyncKind {
+	return corefleet.SyncKind{
+		ID:        string(corefleet.SyncCategoryMCPRecipes),
+		Scopes:    []corefleet.Scope{corefleet.ScopeUser, corefleet.ScopeOrg},
+		Transport: corefleet.TransportLWWCategory,
+		Collect: func(_ context.Context) ([]byte, error) {
+			return []byte(`{}`), nil
+		},
+		Apply: func(_ context.Context, scope corefleet.Scope, raw []byte) error {
+			if scope != corefleet.ScopeOrg {
+				// User-scope LWW apply: unchanged no-op (see doc above).
+				return nil
+			}
+			if cat == nil {
+				return fmt.Errorf("rpc: mcp_recipes org apply: MCP catalog not wired")
+			}
+			var entries []recipes.ProvisionedMCPEntry
+			if err := json.Unmarshal(raw, &entries); err != nil {
+				return fmt.Errorf("rpc: mcp_recipes org apply: decode: %w", err)
+			}
+			return errors.Join(recipes.ApplyProvisionedMCP(cat, entries)...)
+		},
+		SecretPolicy: corefleet.SecretPolicyMustNotContainSecrets,
+		// org_wins_readonly, not lww: the org arm always wins over a
+		// member's personal entry (mirrored via MergedCatalog's org-layer
+		// precedence in core/mcp/recipes/merged.go, not by this framework's
+		// own conflict machinery — fleet-generic-sync-framework-01NSYNC02
+		// WP03's generic org_wins_readonly enforcement has not landed yet).
+		// This value documents the kind's true org-scope semantics ahead of
+		// that landing rather than leaving the pre-WP03 LWW default, which
+		// never described this kind's org arm correctly.
+		ConflictPolicy: corefleet.ConflictPolicyOrgWinsReadonly,
 	}
 }
 
@@ -204,6 +260,7 @@ func registerSyncCategories(
 	syncer *corefleet.Syncer,
 	store settings.SettingsStore,
 	mcpCategory *corefleet.MCPSyncCategory,
+	mcpCatalog *recipes.MergedCatalog,
 ) *corefleet.KindRegistry {
 	registry := corefleet.NewKindRegistry()
 	if syncer == nil {
@@ -237,11 +294,16 @@ func registerSyncCategories(
 		register(modelPrefsKind(store))
 	}
 
-	// ── provider_profiles / mcp_recipes ─────────────────────────────────────
+	// ── provider_profiles ─────────────────────────────────────────────────
 	register(emptyPayloadKind(corefleet.SyncCategoryProviderProfiles,
 		[]corefleet.Scope{corefleet.ScopeUser, corefleet.ScopeOrg}))
-	register(emptyPayloadKind(corefleet.SyncCategoryMCPRecipes,
-		[]corefleet.Scope{corefleet.ScopeUser, corefleet.ScopeOrg}))
+
+	// ── mcp_recipes ──────────────────────────────────────────────────────
+	// Org arm = fleet-org-config-inheritance-01NORGX01's provisioned_mcp
+	// (see mcpRecipesKind's doc). Registered even when mcpCatalog is nil so
+	// a bad wiring order still produces a diagnosable "not wired" apply
+	// error rather than a silent skip.
+	register(mcpRecipesKind(mcpCatalog))
 
 	syncer.StartPolling(ctx)
 	logging.L().Info("rpc.settings_sync.started",

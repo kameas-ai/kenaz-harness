@@ -74,7 +74,7 @@ func TestSyncCategories_ByteStabilityPin(t *testing.T) {
 
 	syncer := corefleet.NewSyncer(nil)
 	t.Cleanup(syncer.Stop)
-	registerSyncCategories(context.Background(), syncer, store, mcpCat)
+	registerSyncCategories(context.Background(), syncer, store, mcpCat, nil)
 
 	cases := []struct {
 		cat  corefleet.SyncCategory
@@ -109,7 +109,7 @@ func TestSyncCategories_ApplyRoundTripPin(t *testing.T) {
 
 	syncer := corefleet.NewSyncer(nil)
 	t.Cleanup(syncer.Stop)
-	registerSyncCategories(context.Background(), syncer, store, mcpCat)
+	registerSyncCategories(context.Background(), syncer, store, mcpCat, nil)
 
 	// ui_theme apply round-trip.
 	themeIn, _ := json.Marshal(uiThemePayload{Theme: "light", Accent: "#abcdef"})

@@ -79,6 +79,16 @@ type fleetState struct {
 	// section to each entry's registered kind. nil when sync registration
 	// has not run (fleet disabled) — the org_config branch skips cleanly.
 	syncKindRegistry *fleet.KindRegistry
+
+	// mcpCatalog is the shared *recipes.MergedCatalog wired at
+	// SetMCPCatalog time (fleet-org-config-inheritance-01NORGX01 WP02).
+	// Used by the compositeConfigApplier to install/clear the org-
+	// provisioned recipe overlay when a bundle carries a provisioned_mcp
+	// section. nil in the rpc.New(nil) test harness path — the
+	// provisioned_mcp branch turns a missing catalog into a named apply
+	// error rather than a silently-discarded org config (same posture as
+	// the cedar_delta / mandated_skills "ref not wired" branches below).
+	mcpCatalog *recipes.MergedCatalog
 }
 
 // SetFleetClient wires a fleet.Client into the API and starts the capability
@@ -251,6 +261,26 @@ func (a *API) SetSkillRefs(store *slashcmd.SkillStore, registry *slashcmd.Regist
 	a.fleet.skillRegistry = registry
 }
 
+// SetMCPCatalog wires the shared *recipes.MergedCatalog into the fleet
+// state so the compositeConfigApplier can install org-provisioned recipes
+// when a bundle carries a provisioned_mcp section
+// (fleet-org-config-inheritance-01NORGX01 WP02).
+//
+// Called from rpc.New() after mergedCat is constructed. Safe to skip —
+// when nil, ApplyBundle's provisioned_mcp branch turns a non-empty
+// section into a named apply error (mirrors SetCedarEngine / SetSkillRefs
+// never being called) rather than silently discarding a signed org
+// config, per fleet-enforcement-truth-01PMZ505 WP02's "must not ack
+// applied:true for a section this device cannot apply" rule.
+func (a *API) SetMCPCatalog(cat *recipes.MergedCatalog) {
+	if a.fleet == nil {
+		a.fleet = &fleetState{}
+	}
+	a.fleet.mu.Lock()
+	defer a.fleet.mu.Unlock()
+	a.fleet.mcpCatalog = cat
+}
+
 // SetSyncKindRegistry wires the SyncKind registry into the fleet state so
 // the compositeConfigApplier can dispatch a bundle's org_config keyed
 // section to each entry's registered kind
@@ -385,7 +415,17 @@ func (a *API) StopFleetBackground() {
 	llmview.ClearFleetModelPrefs()
 	a.fleet.telemetryOptIns = nil
 	pipeline := a.fleet.otlpPipeline
+	mcpCatalog := a.fleet.mcpCatalog
 	a.fleet.mu.Unlock()
+
+	// Clear the org-provisioned recipe overlay (fleet-org-config-
+	// inheritance-01NORGX01 WP02 / spec §5's "removing fleet cleanly
+	// reverts to local-only" success criterion). Outside the lock, same
+	// as the OTLP pipeline clear below: SetOrgRecipes takes its own lock
+	// on the catalog, not fleetState's.
+	if mcpCatalog != nil {
+		mcpCatalog.SetOrgRecipes(nil)
+	}
 
 	// Drop the OTLP log lane's narrowing snapshot too: an empty snapshot
 	// admits nothing, so a signed-out harness cannot keep exporting against a
@@ -776,9 +816,11 @@ func (a *API) FleetHealth(ctx context.Context) (FleetHealthView, error) {
 
 // compositeConfigApplier implements fleet.ConfigApplier. It fans out each
 // section of the bundle to the appropriate sub-system:
-//   - cedar_delta   → cedarpolicy.Engine.SetTeamBundle
-//   - mcp_allowlist → recipes.ApplyFleetAllowlist
-//   - model_prefs   → llmview.ApplyFleetModelPrefs (core/rpc/views/llm)
+//   - cedar_delta     → cedarpolicy.Engine.SetTeamBundle
+//   - mcp_allowlist   → recipes.ApplyFleetAllowlist
+//   - model_prefs     → llmview.ApplyFleetModelPrefs (core/rpc/views/llm)
+//   - provisioned_mcp → recipes.ApplyProvisionedMCP (core/mcp/recipes) —
+//     fleet-org-config-inheritance-01NORGX01 WP02
 //
 // The kameas_ml_weight_urls bundle section is intentionally ignored: the
 // fleet-hosted-LLM / kameas-ml surface was removed
@@ -836,6 +878,49 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 
 	// Weight URLs (kameas_ml_weight_urls): intentionally ignored — the
 	// fleet-hosted-LLM / kameas-ml surface was removed. See the type doc above.
+
+	// Provisioned MCP (fleet-org-config-inheritance-01NORGX01 WP02).
+	//
+	// Unlike cedar_delta/mandated_skills above, this section is applied
+	// UNCONDITIONALLY on every ApplyBundle call, even when b.ProvisionedMCP
+	// is empty/nil — Bundle.ProvisionedMCP's own doc records that nil, an
+	// empty slice, and an absent key are all equivalent ("no org-
+	// provisioned MCP entries"), which means the field carries the org's
+	// CURRENT complete set on every successful bundle, not a delta. If we
+	// only called ApplyProvisionedMCP when non-empty, an org that
+	// de-provisions every entry (bundle N: 1 entry: bundle N+1: 0 entries)
+	// would leave the stale bundle-N recipe permanently shadowing the
+	// member's own catalog — exactly the "signed but the removal never
+	// applies" shape this mission exists to close.
+	//
+	// A nil mcpCatalog (SetMCPCatalog never called) turns a NON-empty
+	// section into a named apply error, same posture as cedar_delta/
+	// mandated_skills above — but an EMPTY section with no catalog wired is
+	// not an error: there is nothing to apply either way, and erroring on
+	// every bundle for a fleet-disabled/test harness that never carries
+	// provisioned_mcp would fail every apply for no operational reason.
+	if a.state.mcpCatalog != nil {
+		converted := make([]recipes.ProvisionedMCPEntry, 0, len(b.ProvisionedMCP))
+		for _, e := range b.ProvisionedMCP {
+			entry := recipes.ProvisionedMCPEntry{
+				RecipeID:    e.RecipeID,
+				Transport:   e.Transport,
+				URL:         e.URL,
+				PrimaryAuth: e.PrimaryAuth,
+				Config:      e.Config,
+			}
+			if e.OAuth != nil {
+				entry.OAuthClientID = e.OAuth.ClientID
+				entry.OAuthScopes = e.OAuth.Scopes
+			}
+			converted = append(converted, entry)
+		}
+		for _, err := range recipes.ApplyProvisionedMCP(a.state.mcpCatalog, converted) {
+			errs = append(errs, fmt.Errorf("fleet/config: provisioned_mcp: %w", err))
+		}
+	} else if len(b.ProvisionedMCP) > 0 {
+		errs = append(errs, fmt.Errorf("fleet/config: provisioned_mcp present but no MCP catalog wired (SetMCPCatalog never called)"))
+	}
 
 	// Mandated skills (fleet-skills-sync-01NDFSEX18 WP05).
 	// FR-012: all section errors are collected and returned so the ACK

@@ -2007,6 +2007,14 @@ func New(c *core.Core, opts ...Option) *API {
 		logging.L().Warn("fleet.client.init_error", "err", ferr.Error())
 		bootFleetErr = ferr.Error()
 	}
+	// Wire the shared merged recipe catalog into the fleet state so the
+	// compositeConfigApplier can install org-provisioned recipes when a
+	// bundle carries a provisioned_mcp section
+	// (fleet-org-config-inheritance-01NORGX01 WP02). Independent of
+	// whether the fleet client construction above succeeded — an OSS
+	// build with fleet disabled still wires the catalog; ApplyBundle is
+	// simply never invoked for it in that case.
+	settingsImpl.SetMCPCatalog(mergedCat)
 
 	// Wire the lockdown broker so fleet:lockdown:changed events reach the
 	// frontend banner. Must be called after both a.broker and a.settingsImpl
@@ -3667,7 +3675,7 @@ func New(c *core.Core, opts ...Option) *API {
 			// tokens of every recipe added after startup.
 			return mcpRecipeSecretKeys(mcpUserRecipeSource(a.mcpUserStore))
 		}, syncPending)
-		a.syncKindRegistry = registerSyncCategories(context.Background(), syncer, syncStore, mcpSyncCat)
+		a.syncKindRegistry = registerSyncCategories(context.Background(), syncer, syncStore, mcpSyncCat, mergedCat)
 
 		// fleet-generic-sync-framework-01NSYNC02 WP05: register slash_commands
 		// as a new user-scoped kind through the same registry — the
