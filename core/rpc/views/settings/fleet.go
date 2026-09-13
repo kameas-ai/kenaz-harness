@@ -1030,7 +1030,7 @@ type LockdownStatusView struct {
 // (fleet-emergency-lockdown-01NDFSEX12 WP02)
 func (a *API) FleetLockdownStatus(_ context.Context) (LockdownStatusView, error) {
 	active := fleet.LockdownActive()
-	return LockdownStatusView{Active: active}, nil
+	return LockdownStatusView{Active: active, Reason: fleet.LockdownReason()}, nil
 }
 
 // ── Telemetry opt-ins (harness-fleet-sync-activation-01NSYNC01 gap #4) ─────────

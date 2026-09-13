@@ -325,6 +325,64 @@ func TestBootstrapLockdownStatus(t *testing.T) {
 	if !LockdownActive() {
 		t.Error("expected LockdownActive()=true after bootstrap")
 	}
+
+	// AC-011 (fleet-enforcement-truth-01PMZ505 WP08): the reason must
+	// survive the BOOT-INTO-LOCKED-STATE path with no broker event ever
+	// replayed — this is the whole defect. Before WP08, bootstrap parsed
+	// the reason off the wire and dropped it (only logged it), so
+	// LockdownReason() read "" here even though the server sent one.
+	if got := LockdownReason(); got != "bootstrap-test" {
+		t.Errorf("LockdownReason() = %q, want %q (reason must survive the bootstrap "+
+			"path with no broker event replayed — this is the boot-into-locked-state "+
+			"case LockdownBanner.vue's mount hook exists to handle)", got, "bootstrap-test")
+	}
+}
+
+// TestLockdownReason_ClearsWhenLockdownClears is the negative half of
+// AC-011: LockdownStatusView.Reason is documented as "Empty when Active is
+// false" (fleet.go's LockdownStatusView doc comment) — a stale reason
+// surviving past the lockdown that produced it would misinform an operator
+// reading the banner after the fact.
+func TestLockdownReason_ClearsWhenLockdownClears(t *testing.T) {
+	lockdownActive.Store(false)
+	t.Cleanup(func() { lockdownActive.Store(false); lockdownReason.Store("") })
+
+	setLockdownState(true, "planned maintenance")
+	if got := LockdownReason(); got != "planned maintenance" {
+		t.Fatalf("LockdownReason() = %q, want %q", got, "planned maintenance")
+	}
+
+	setLockdownState(false, "")
+	if got := LockdownReason(); got != "" {
+		t.Errorf("LockdownReason() = %q, want \"\" once lockdown clears "+
+			"(a stale reason after clearing would misinform an operator)", got)
+	}
+	if LockdownActive() {
+		t.Error("expected LockdownActive()=false after clearing")
+	}
+}
+
+// TestSetLockdownState_RaceSafe drives concurrent writers and a concurrent
+// reader through setLockdownState/LockdownReason to prove the storage is
+// race-safe under -race, per spec §5.6's explicit requirement ("the watcher
+// goroutine writes and FleetLockdownStatus reads, so it must be race-safe
+// under -race").
+func TestSetLockdownState_RaceSafe(t *testing.T) {
+	lockdownActive.Store(false)
+	t.Cleanup(func() { lockdownActive.Store(false); lockdownReason.Store("") })
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			setLockdownState(i%2 == 0, "reason")
+		}
+	}()
+	for i := 0; i < 200; i++ {
+		_ = LockdownReason()
+		_ = LockdownActive()
+	}
+	<-done
 }
 
 func TestBootstrapLockdownStatus_404IsNoop(t *testing.T) {
