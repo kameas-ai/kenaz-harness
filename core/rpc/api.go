@@ -2328,7 +2328,7 @@ func New(c *core.Core, opts ...Option) *API {
 		Emitter: WailsEmitter{},
 	})
 
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, a.cedarEngine, taskReg, opt.mcpHTTPPoolOptions)
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, &acpAuditBridge{impl: a.auditImpl}, a.cedarEngine, taskReg, opt.mcpHTTPPoolOptions)
 	a.llmAPI = stack.api
 	// trust-surfaces-that-fire-01PMZ202 WP24 review finding: fold the
 	// static tool-permission load error (if any) into the boot-health
@@ -5331,6 +5331,14 @@ func newLLMStack(
 	// every path (confirm-each-enforcement-01PMAG05 WP05 / FR-007). nil
 	// silences the trail; the decision itself is unaffected.
 	confirmAudit contextaudit.Emitter,
+	// structuredAudit receives one record per structured-output call
+	// (KindLLMStructuredResponse — structured-output-is-reachable-
+	// 01PMZE14 WP06), regardless of validation outcome. nil silences the
+	// trail; the call itself is unaffected — audit.MustEmit is nil-safe.
+	// A separate parameter from confirmAudit because the two audit a
+	// different Kind through a different bridge type (Category label);
+	// both wrap the same a.auditImpl at the call site.
+	structuredAudit contextaudit.Emitter,
 	// cedarEngine is the process-shared Cedar engine (WP05 hoist,
 	// consent-surfaces-truth-01PMTR01) — a.cedarEngine at this
 	// function's production call site in New(). newLLMStack is the only
@@ -5421,11 +5429,27 @@ func newLLMStack(
 	// shipped binary. Same nil-on-test-chassis degrade as `db` above —
 	// DefaultCache(nil) still returns a safe in-process MemoryCache when
 	// no real storage.DB is available.
+	// Audit: structured-output-is-reachable-01PMZE14 WP06. structuredAudit
+	// is a Shape-1 bridge (acpAuditBridge, already used for
+	// KindMCPHealthChanged and several other kinds — see this
+	// function's parameter doc) constructed at the New() call site,
+	// where a.auditImpl is in scope; newLLMStack itself is a free
+	// function with no `a` receiver. It forwards
+	// KindLLMStructuredResponse into a.auditImpl, which, as of
+	// audit-that-tells-the-truth-01PMZA10 UNIT-4, write-throughs to a
+	// real sqlite-backed event-log store whenever a real storage.DB is
+	// available (see the auditOpts/WithStore block above newLLMStack's
+	// other construction). This is a *different* audit path from the
+	// toolloop AuditEmitter TODO a few hundred lines below (:5541) —
+	// that one is about pre/post tool-use hooks and stays unwired; this
+	// one is the LLM registry's own structured-output outcome audit and
+	// has nothing to do with hooks.
 	reg, err := llmregistry.New(llmregistry.Options{
 		Resolver: credref.New(secretsBackend),
 		Policy:   cedarGuard,
 		Cost:     costReducer,
 		Cache:    llmcap.DefaultCache(db),
+		Audit:    structuredAudit,
 	})
 	if err != nil {
 		// Fall back to the stub on a registry construction failure so

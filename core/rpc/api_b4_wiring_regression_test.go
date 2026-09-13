@@ -320,7 +320,7 @@ func TestB4_SecretLookupWiring_ChatRunnerResolvesRealSecret(t *testing.T) {
 
 	stack := newLLMStack(c, broker, store, nil, nil, func() bool { return false },
 		nil, nil, nil, bashStore, nil, graphMgr, nil, nil, nil, nil,
-		exposureIdx, nil, nil, nil, confirmAuditEmitter{}, cedarEngine, nil, nil)
+		exposureIdx, nil, nil, nil, confirmAuditEmitter{}, nil, cedarEngine, nil, nil)
 	// Blocker 2 follow-up (found by core/rpc/blocker2_goroutine_leak_test.go
 	// under the full package's -race run, 2026-09-11): newLLMStack itself
 	// calls sweepScheduler.Start() when it builds a non-nil compaction

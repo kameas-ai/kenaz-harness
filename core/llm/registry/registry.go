@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
 	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/llm/anthropic"
 	"github.com/kameas-ai/kenaz-harness/core/llm/azure"
@@ -80,6 +81,19 @@ type Options struct {
 	// runs on the in-process MemoryCache default (no cross-restart
 	// persistence there — the VM process is short-lived by design).
 	Cache capabilities.CapabilityCache
+	// Audit is the optional structured-output audit sink
+	// (structured-output-is-reachable-01PMZE14 WP06). Nil means audit
+	// emission for llm.structured.response is silently skipped —
+	// contextaudit.MustEmit is nil-safe, so a caller that does not care
+	// about the audit trail (tests, cmd/harness-vm's in-VM dispatch)
+	// pays nothing for omitting it. Production wires
+	// core/rpc/api.go's newLLMStack with a Shape-1 bridge
+	// (&acpAuditBridge{impl: a.auditImpl}) — the same shape already used
+	// for KindMCPHealthChanged and the ACP envelope kind, forwarding
+	// into the durable event-log store wired by
+	// audit-that-tells-the-truth-01PMZA10 UNIT-4 (audit.WithStore) when
+	// a real storage.DB is available.
+	Audit contextaudit.Emitter
 }
 
 // Registry is the mutable in-memory implementation.
@@ -96,6 +110,7 @@ type Registry struct {
 	reducer   CostReducer
 	cache     capabilities.CapabilityCache
 	refresher *capabilities.Refresher
+	audit     contextaudit.Emitter
 
 	now func() time.Time
 }
@@ -149,6 +164,7 @@ func New(opts Options) (*Registry, error) {
 		policy:   policy,
 		reducer:  opts.Cost,
 		cache:    cache,
+		audit:    opts.Audit,
 		now:      time.Now,
 	}
 	// The refresher needs r (to resolve a profile's adapter and call
@@ -487,6 +503,7 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 	resolver := r.resolver
 	cache := r.cache
 	refresher := r.refresher
+	auditEmitter := r.audit
 	r.mu.RUnlock()
 
 	log.Info("registry.stream.dispatch",
@@ -773,11 +790,14 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 	var pipelineStream llm.Stream = stream
 	if rf := req.ResponseFormat; rf != nil && (rf.Mode == "json" || rf.Mode == "json_schema") {
 		pipelineStream = &structuredStream{
-			inner:  stream,
-			schema: rf.Schema,
-			mode:   rf.Mode,
-			strict: rf.StrictValidation,
-			ctx:    ctx,
+			inner:    stream,
+			schema:   rf.Schema,
+			mode:     rf.Mode,
+			strict:   rf.StrictValidation,
+			ctx:      ctx,
+			provider: prof.Kind,
+			model:    prof.Model,
+			audit:    auditEmitter,
 			retry: func(rctx context.Context, priorResp llm.Response, hint string) (llm.Response, error) {
 				req2 := req
 				req2.Messages = append(append([]llm.Message{}, req.Messages...),
