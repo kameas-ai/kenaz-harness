@@ -359,6 +359,14 @@ const (
 	// Payload: FleetCatalogPublishedPayload.
 	KindFleetCatalogPublished Kind = "fleet.catalog_published"
 
+	// KindFleetCatalogUnpublished fires when a publisher or fleet admin
+	// withdraws a workflow, agent pack, or bundle from the team catalog
+	// (fleet-enforcement-truth-01PMZ505 WP11, register C-3). Publish
+	// already emitted through WithEmitter; withdrawal did not — an audit
+	// trail that records publications but not retractions is a worse
+	// record than none. Payload: FleetCatalogUnpublishedPayload.
+	KindFleetCatalogUnpublished Kind = "fleet.catalog_unpublished"
+
 	// ── Fleet skills (fleet-skills-sync-01NDFSEX18 WP07) ────────────────────
 
 	// KindFleetSkillPublished fires when the user successfully publishes a
@@ -1474,6 +1482,14 @@ type FleetCatalogPublishedPayload struct {
 	Slug string `json:"slug,omitempty"`
 	// Version is the published SemVer string.
 	Version string `json:"version,omitempty"`
+}
+
+// FleetCatalogUnpublishedPayload carries the signalling for
+// KindFleetCatalogUnpublished. Same privacy invariant as its publish
+// counterpart: no payload bytes, metadata only.
+type FleetCatalogUnpublishedPayload struct {
+	// CatalogID is the server-assigned catalog item ID that was withdrawn.
+	CatalogID string `json:"catalog_id"`
 }
 
 // Emit is a small convenience wrapper for callers that have a payload
