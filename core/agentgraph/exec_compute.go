@@ -1036,11 +1036,31 @@ func (reviewExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs 
 	if maxIterations <= 0 {
 		maxIterations = maxIterationsForTier(resolveNodeTier(env, a.Provider, model))
 	}
+	// ResponseSchema (structured-output-is-reachable-01PMZE14 WP10): ask
+	// for the exact shape reviewPrompt already demands in prose, on
+	// models whose capability row supports it. D-9: degrade, never
+	// fail — most rows say structured_output: false (spec §1.3), so a
+	// *llm.ErrCapabilityUnsupported naming CapStructuredOutput is
+	// expected on most providers and is handled below by dropping the
+	// schema and re-issuing, not by failing the run. Without this, a
+	// review gate that opted into a schema would break on every
+	// provider that cannot serve one — "the single most likely way this
+	// mission causes a regression" per the mission's own tasks.md.
 	resp, err := env.LLM.Generate(ctx, LLMRequest{
 		Model: model, MaxTokens: 256,
-		SystemPrompt: composePrompt(resolvePromptTemplate(env, a.Provider, model), graphBaseOf(env), a.SystemPrompt),
-		Messages:     []Message{{Role: "user", Content: reviewPrompt(env, draft)}},
+		SystemPrompt:   composePrompt(resolvePromptTemplate(env, a.Provider, model), graphBaseOf(env), a.SystemPrompt),
+		Messages:       []Message{{Role: "user", Content: reviewPrompt(env, draft)}},
+		ResponseSchema: json.RawMessage(reviewVerdictSchema),
 	})
+	if err != nil {
+		if isCapabilityUnsupported(err, corellm.CapStructuredOutput) {
+			resp, err = env.LLM.Generate(ctx, LLMRequest{
+				Model: model, MaxTokens: 256,
+				SystemPrompt: composePrompt(resolvePromptTemplate(env, a.Provider, model), graphBaseOf(env), a.SystemPrompt),
+				Messages:     []Message{{Role: "user", Content: reviewPrompt(env, draft)}},
+			})
+		}
+	}
 	if err != nil {
 		return res, fmt.Errorf("review: node %q: %w", node.ID, err)
 	}
@@ -1120,6 +1140,35 @@ func (reviewExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs 
 	res.Outputs["should_retry"] = true
 	res.Outputs["retry_target"] = a.UpstreamNode
 	return res, nil
+}
+
+// reviewVerdictSchema is the JSON-schema mirror of what reviewPrompt
+// already demands in prose (structured-output-is-reachable-01PMZE14
+// WP10, spec §5.6): {"verdict": "pass"|"fail", "reason": "<one line>"}.
+// Set on LLMRequest.ResponseSchema so a model whose capability row
+// supports structured output is actually constrained to this shape,
+// rather than merely asked nicely; parseReviewVerdict's tolerant passes
+// remain the fallback for a model that cannot serve one (D-9: degrade,
+// never fail — see the capability-refusal handling at the call site).
+const reviewVerdictSchema = `{"type":"object","required":["verdict","reason"],"properties":{"verdict":{"type":"string","enum":["pass","fail"]},"reason":{"type":"string"}}}`
+
+// isCapabilityUnsupported reports whether err is (or wraps)
+// *llm.ErrCapabilityUnsupported naming want among its refused
+// capabilities. Used by the review gate and router (WP10) to
+// distinguish "this model cannot serve a schema, drop it and retry"
+// from every other error, which must still propagate — D-9 bounds the
+// degrade path to exactly this one capability, not to every failure.
+func isCapabilityUnsupported(err error, want corellm.Capability) bool {
+	var capErr *corellm.ErrCapabilityUnsupported
+	if !errors.As(err, &capErr) {
+		return false
+	}
+	for _, c := range capErr.Capabilities {
+		if c == want {
+			return true
+		}
+	}
+	return false
 }
 
 // reviewPrompt builds the user-side message for a review call

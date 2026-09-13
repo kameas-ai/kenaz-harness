@@ -3851,6 +3851,102 @@ but did not fix (both predate this mission and are cross-cutting to
 
 ## Drained
 
+### 2026-09-12 · CLOSED — `structured-output-is-reachable-01PMZE14`, all six owed ledger entries
+
+The mission's own tasks.md Appendix names six findings this mission owed
+the ledger "on merge." None had been recorded when this mission was
+triaged and finished against `release/v0.78.2` — UNIT-0/UNIT-1/UNIT-2/
+UNIT-4/UNIT-5 had squash-merged via PR #299 (tag `v0.65.0`) and UNIT-6
+via PR #323, but the ledger entry itself was never written by either
+landing. Recorded now, all six, with the disposition each actually got
+(verified against the live tree, not copied from the spec):
+
+- **`ModelAttrs.JsonSchema` — authored end to end, dropped at the
+  executor** (spec §1.2). **Drained.** `core/agentgraph/seams.go`'s
+  `LLMRequest.ResponseSchema`, `exec_compute.go`'s marshal, and
+  `core/rpc/views/agentgraph/chat/llm_provider_adapter.go`'s translation
+  to `GenerationRequest.ResponseFormat` are all live (WP02, commit
+  `ca605714`). `core/wiring/knobcoverage` sees the whole
+  `agentgraph.ModelAttrs` struct (WP03, commit `03b0d68f`) —
+  `TestKnobCoverage_ModelAttrs` is the gate; a planted removal of the
+  `JsonSchema` registration reddens it.
+- **`llm.StructuredOutputAdapter` — no dispatcher; the documented
+  fallback does not exist** (spec §1.4). **Narrowed, not drained** (WP08,
+  commit `6c1480dd`, disposition (b) per E-002's default). The doc
+  comment at `core/llm/llm.go:353-388` now states plainly the interface
+  has no dispatcher and warns against a fifth `var _
+  StructuredOutputAdapter` assertion — verified live;
+  `TestStructuredOutputAdapterInterfaceNarrowing`-shaped coverage pins
+  exactly four implementors (anthropic/openai/openrouter/bedrock),
+  gemini deliberately absent. The fallback path itself remains
+  unbuilt and unowned (E-002 named no owner) — that residual is real
+  but is a design deferral recorded in the interface's own doc comment,
+  not a silent gap.
+- **`structured.SchemaHash` + `audit…SchemaHash` — two orphans, each the
+  other's only reason to exist** (spec §1.4a). **Drained**, in this
+  landing (WP06, below) — `core/llm/registry/structured_stream.go`'s
+  `emitAudit` is `structured.SchemaHash`'s first production caller, and
+  `LLMStructuredResponsePayload.SchemaHash` now has a real assigner.
+- **`RequestKnobs.ResponseFormatMode` / `.JSONMode` +
+  `openaiwire/base.go:77-79`'s false docstring** (spec §1.5). **Dated
+  justification**, not wired (WP07, commit `8a603ce8`; E-003's
+  recommended default). `core/llm/openaiwire/knob_coverage.go` registers
+  both as `RegisterDeferred`, each naming a real blocker and owner —
+  updated again during `model-settings-reach-the-model-01PMZ101` UNIT-6
+  to record that the *writer* half of the original blocker landed
+  (`Sessions_SetKnobsDefault`) but the *consumer* half (an override
+  branch in `openaiwire/body.go`) is still open and is out of scope for
+  this mission specifically because `body.go` is Z101 territory
+  (`CLAUDE.md`/plan.md Rule 2 — a commit here may not touch it). The
+  docstring itself no longer claims a wire that does not exist.
+- **`audit.KindLLMStructuredResponse` — declared, never emitted** (spec
+  §1.6). **Drained** by this landing's WP06: `llmregistry.Options` gained
+  an `Audit contextaudit.Emitter` field, wired at
+  `core/rpc/api.go`'s `newLLMStack` construction site via
+  `&acpAuditBridge{impl: a.auditImpl}`, and
+  `core/llm/registry/structured_stream.go`'s `Final()` emits the kind
+  with the real `Attempts` count, `ValidationOutcome`, and
+  `structured.SchemaHash(schema)` on every call that reaches schema
+  validation. **Correction to the spec's own §1.6/D-6, recorded so the
+  next reader does not carry the stale claim forward:** at spec-writing
+  time (2026-08-19) the audit event log had no durable backend
+  (`MemoryBackend` only, `RegisterMigrations` uncalled) and D-6 required
+  the WP06 commit body to say so. `audit-that-tells-the-truth-01PMZA10`
+  landed on this same release branch since then (`c6f40bb4` through
+  `7b0a95b2`) and wired a real sqlite-backed store
+  (`eventlog.NewSQLBackend` + `audit.WithStore`) into `a.auditImpl`
+  whenever a real `storage.DB` is available. So as of this landing, a
+  `KindLLMStructuredResponse` event genuinely reaches disk in a
+  production build via `audit.API.Push` → `store.AppendComputed` — it is
+  **not** still writing into a ring buffer that evaporates on process
+  exit. See `core/llm/wp_pi_persistence_integrity_test.go`'s addendum
+  for the full citation trail.
+- **`coverage_registry.yaml`'s false bedrock `unsupported:` row** (spec
+  §1.8). **Corrected** (WP05, commit `c20edafc`) — the bedrock
+  `ResponseFormat`/`JSONMode` rows now cite the real wire-shape test
+  functions instead of the false "not wired at generic adapter layer"
+  string; gemini rows were added to the same file. The
+  adapter↔capability-row parity gate itself (G-3) landed separately as
+  WP09 (PR #323, commit `e17b67ad`) — `core/llm/registry/
+  wp09_g3_capability_row_parity_test.go` and
+  `core/llm/bedrock/wp09_g3_row_parity_test.go` are its planted-violation
+  proofs.
+
+Also recorded and **not** fixed, per the mission's own tasks.md
+Appendix (unchanged by this landing, still true): four copies of the
+OpenAI `response_format` translation exist
+(`openaiwire/body.go`, `openai/openai.go`, `openrouter/openrouter.go`,
+`azure/adapter.go`) — consolidating them is a refactor the mission
+explicitly scoped out, not a lie; and `bearer.go` (bedrock's REST
+transport) still has no `JSONMode` handling while the SDK transport
+does.
+
+Mission fully closed with this entry: UNIT-3 (WP06, audit emitter) and
+UNIT-7 (WP10, review gate + router request a real schema, with
+`ErrCapabilityUnsupported`-gated degrade per D-9) were the two units
+still open when this pass started; both landed in the same change that
+added this entry.
+
 ### 2026-08-19 · CLOSED — the missing-upgrade-snapshot hole is now gated
 
 Three consecutive releases shipped without their snapshot, and each one's
