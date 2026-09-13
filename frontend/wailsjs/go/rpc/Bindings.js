@@ -154,6 +154,18 @@ export function Bash_Exec(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Bash_Exec'](arg1, arg2);
 }
 
+export function BlockedRequests_Dismiss(arg1) {
+  return window['go']['rpc']['Bindings']['BlockedRequests_Dismiss'](arg1);
+}
+
+export function BlockedRequests_Grant(arg1) {
+  return window['go']['rpc']['Bindings']['BlockedRequests_Grant'](arg1);
+}
+
+export function BlockedRequests_ListPending() {
+  return window['go']['rpc']['Bindings']['BlockedRequests_ListPending']();
+}
+
 export function BootHealth_Get() {
   return window['go']['rpc']['Bindings']['BootHealth_Get']();
 }

@@ -463,14 +463,18 @@ func TestMigrations_RegisterAndApply(t *testing.T) {
 	// 0335 search_fts_tool_rows (model-moves-transcript-01PMCH01 WP06) +
 	// 0336 stream_checkpoints (chat-turn-integrity-01PMZ606 WP02) +
 	// 0337 repair_checkpoint_rows (chat-turn-integrity-01PMZ606 WP05) +
+	// 0338 blocked_permission_requests (model-scheduled-jobs-01PMSJ01
+	// WP06) + 0339 scheduled_chat_runs_trigger (model-scheduled-jobs-
+	// 01PMSJ01 WP08; both registered BELOW the already-shipped 0340 per
+	// the reservation in migrations_blocked_permission_requests.go /
+	// migrations_scheduled_chat_runs_trigger.go) +
 	// 0340 scheduled_chat_runs_created_by (model-scheduled-jobs-01PMSJ01
-	// WP09; 0338-0339 are reserved for sibling WPs and were not
-	// registered as of WP09)) =
-	// 41 applied entries (2 chassis bootstrap + 39 sessions migrations).
-	if got := len(db.ledger); got != 41 {
-		t.Fatalf("ledger size = %d, want 41", got)
+	// WP09)) =
+	// 43 applied entries (2 chassis bootstrap + 41 sessions migrations).
+	if got := len(db.ledger); got != 43 {
+		t.Fatalf("ledger size = %d, want 43", got)
 	}
-	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 340}
+	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340}
 
 	for i, want := range wantVersions {
 		if db.ledger[i].Version != want {

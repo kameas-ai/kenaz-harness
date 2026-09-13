@@ -16,6 +16,7 @@ import (
 	artifactsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/attachments"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/audit"
+	blockedrequestsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/blockedrequests"
 	branchesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/branches"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/bundle"
 	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
@@ -165,6 +166,9 @@ func (f *fakeHarnessAPI) Confirm() confirmview.ConfirmAPI {
 }
 func (f *fakeHarnessAPI) ScheduledChat() scheduledchatview.ScheduledChatAPI {
 	return scheduledchatview.New(scheduledchatview.Config{})
+}
+func (f *fakeHarnessAPI) BlockedRequests() blockedrequestsview.BlockedRequestsAPI {
+	return blockedrequestsview.New(blockedrequestsview.Config{})
 }
 
 func (f *fakeHarnessAPI) Secrets() secretsview.SecretsAPI {

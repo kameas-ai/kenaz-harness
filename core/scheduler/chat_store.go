@@ -32,6 +32,20 @@ const (
 	ScheduledRunCreatedByModel = "model"
 )
 
+// TriggerKindCron / TriggerKindOnce are the two legal values of
+// ChatRunRecord.TriggerKind (model-scheduled-jobs-01PMSJ01 WP08, FR-006).
+// TriggerKindCron is the schema default and the only kind that existed
+// before migration sessions/0339 — every row created before that
+// migration backfills to it. A TriggerKindOnce row is armed with a
+// one-shot timer keyed on RunAt instead of a recurring cron entry; it
+// fires exactly once and the engine sets Enabled=false afterward so it
+// does not re-fire on the next boot reload (RunAt is not cleared —
+// history is what proves it already fired).
+const (
+	TriggerKindCron = "cron"
+	TriggerKindOnce = "once"
+)
+
 // ChatRunRecord is the DB-level projection of scheduled_chat_runs.
 type ChatRunRecord struct {
 	ID             string
@@ -42,6 +56,17 @@ type ChatRunRecord struct {
 	Model          string
 	OutputSink     string
 	Enabled        bool
+	// TriggerKind is TriggerKindCron or TriggerKindOnce. Empty reads as
+	// TriggerKindCron (scanChatRunRecord never actually produces empty —
+	// the column has a NOT NULL DEFAULT — but EffectiveTriggerKind below
+	// gives every caller, including hand-built test fixtures, the same
+	// backward-compatible fallback the rest of this mission's records use
+	// for CreatedBy).
+	TriggerKind string
+	// RunAt is the fire time for a TriggerKindOnce row, nil for a
+	// TriggerKindCron row. Unix-seconds precision (matches CreatedAt/
+	// UpdatedAt's own convention in this table).
+	RunAt *time.Time
 	// CreatedBy is one of ScheduledRunCreatedByUser / ...Model. Stamped
 	// server-side at the creating call site
 	// (core/rpc/views/scheduledchat.API.Create / .CreateAsModel) — never
@@ -57,6 +82,19 @@ type ChatRunRecord struct {
 	ToolAllowlist []string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+}
+
+// EffectiveTriggerKind returns r.TriggerKind, treating an empty string as
+// TriggerKindCron for backward compatibility with records built before
+// this field existed (mirrors ChatRunSpec... no, mirrors the CreatedBy /
+// Job.EffectiveKind convention: a zero-value field must resolve to the
+// behaviour that shipped before the field was added, not to whichever
+// branch happens to come first in a switch).
+func (r ChatRunRecord) EffectiveTriggerKind() string {
+	if r.TriggerKind == "" {
+		return TriggerKindCron
+	}
+	return r.TriggerKind
 }
 
 // encodeToolAllowlist JSON-encodes a tool allowlist for storage. A nil
@@ -144,8 +182,8 @@ func NewSQLiteChatStore(db storage.DB) *SQLiteChatStore {
 func (s *SQLiteChatStore) Create(ctx context.Context, r ChatRunRecord) error {
 	const q = `
 		INSERT INTO scheduled_chat_runs
-			(id, name, prompt_template, cron, timezone, model, output_sink, enabled, created_at, updated_at, created_by, tool_allowlist)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			(id, name, prompt_template, cron, timezone, model, output_sink, enabled, created_at, updated_at, created_by, tool_allowlist, trigger_kind, run_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	enabledInt := 0
 	if r.Enabled {
@@ -155,12 +193,18 @@ func (s *SQLiteChatStore) Create(ctx context.Context, r ChatRunRecord) error {
 	if createdBy == "" {
 		createdBy = ScheduledRunCreatedByUser
 	}
+	var runAt *int64
+	if r.RunAt != nil {
+		v := r.RunAt.Unix()
+		runAt = &v
+	}
 	return s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
 		_, err := tx.Exec(ctx, q,
 			r.ID, r.Name, r.PromptTemplate, r.Cron, r.Timezone,
 			r.Model, r.OutputSink, enabledInt,
 			r.CreatedAt.Unix(), r.UpdatedAt.Unix(),
 			createdBy, encodeToolAllowlist(r.ToolAllowlist),
+			r.EffectiveTriggerKind(), runAt,
 		)
 		return err
 	})
@@ -178,18 +222,25 @@ func (s *SQLiteChatStore) Update(ctx context.Context, r ChatRunRecord) error {
 	const q = `
 		UPDATE scheduled_chat_runs
 		SET name = ?, prompt_template = ?, cron = ?, timezone = ?,
-		    model = ?, output_sink = ?, enabled = ?, updated_at = ?, tool_allowlist = ?
+		    model = ?, output_sink = ?, enabled = ?, updated_at = ?, tool_allowlist = ?,
+		    trigger_kind = ?, run_at = ?
 		WHERE id = ?
 	`
 	enabledInt := 0
 	if r.Enabled {
 		enabledInt = 1
 	}
+	var runAt *int64
+	if r.RunAt != nil {
+		v := r.RunAt.Unix()
+		runAt = &v
+	}
 	return s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
 		res, err := tx.Exec(ctx, q,
 			r.Name, r.PromptTemplate, r.Cron, r.Timezone,
 			r.Model, r.OutputSink, enabledInt, r.UpdatedAt.Unix(),
 			encodeToolAllowlist(r.ToolAllowlist),
+			r.EffectiveTriggerKind(), runAt,
 			r.ID,
 		)
 		if err != nil {
@@ -218,7 +269,7 @@ func (s *SQLiteChatStore) Delete(ctx context.Context, id string) error {
 // Get implements ScheduledChatStore.
 func (s *SQLiteChatStore) Get(ctx context.Context, id string) (ChatRunRecord, error) {
 	const q = `
-		SELECT id, name, prompt_template, cron, timezone, model, output_sink, enabled, created_at, updated_at, created_by, tool_allowlist
+		SELECT id, name, prompt_template, cron, timezone, model, output_sink, enabled, created_at, updated_at, created_by, tool_allowlist, trigger_kind, run_at
 		FROM scheduled_chat_runs
 		WHERE id = ?
 	`
@@ -229,7 +280,7 @@ func (s *SQLiteChatStore) Get(ctx context.Context, id string) (ChatRunRecord, er
 // List implements ScheduledChatStore.
 func (s *SQLiteChatStore) List(ctx context.Context) ([]ChatRunRecord, error) {
 	const q = `
-		SELECT id, name, prompt_template, cron, timezone, model, output_sink, enabled, created_at, updated_at, created_by, tool_allowlist
+		SELECT id, name, prompt_template, cron, timezone, model, output_sink, enabled, created_at, updated_at, created_by, tool_allowlist, trigger_kind, run_at
 		FROM scheduled_chat_runs
 		ORDER BY created_at ASC
 	`
@@ -346,11 +397,13 @@ func scanChatRunRecord(row scanner) (ChatRunRecord, error) {
 	var enabledInt int
 	var createdAtRaw, updatedAtRaw int64
 	var toolAllowlistRaw string
+	var runAtRaw *int64
 	if err := row.Scan(
 		&r.ID, &r.Name, &r.PromptTemplate, &r.Cron, &r.Timezone,
 		&r.Model, &r.OutputSink, &enabledInt,
 		&createdAtRaw, &updatedAtRaw,
 		&r.CreatedBy, &toolAllowlistRaw,
+		&r.TriggerKind, &runAtRaw,
 	); err != nil {
 		return ChatRunRecord{}, ErrChatRunNotFound
 	}
@@ -358,6 +411,10 @@ func scanChatRunRecord(row scanner) (ChatRunRecord, error) {
 	r.CreatedAt = time.Unix(createdAtRaw, 0).UTC()
 	r.UpdatedAt = time.Unix(updatedAtRaw, 0).UTC()
 	r.ToolAllowlist = decodeToolAllowlist(toolAllowlistRaw)
+	if runAtRaw != nil {
+		t := time.Unix(*runAtRaw, 0).UTC()
+		r.RunAt = &t
+	}
 	return r, nil
 }
 

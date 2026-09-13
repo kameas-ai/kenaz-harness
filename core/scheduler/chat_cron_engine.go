@@ -46,9 +46,29 @@ var ErrChatCronInvalidExpr = errors.New("scheduler: invalid chat-run cron expres
 var ErrChatCronInvalidTimezone = errors.New("scheduler: invalid chat-run timezone")
 
 // chatEntry is the per-row in-memory registration state.
+//
+// A TriggerKindCron row (kind=="cron") is armed via the underlying
+// robfig/cron engine (entry is its cron.EntryID); a TriggerKindOnce row
+// (kind=="once", model-scheduled-jobs-01PMSJ01 WP08) is armed via a
+// one-shot time.Timer instead — it has no recurring schedule to give
+// cron.Cron, only a single fire time.
 type chatEntry struct {
 	id    string
-	entry cron.EntryID
+	kind  string       // TriggerKindCron or TriggerKindOnce
+	entry cron.EntryID // valid when kind == TriggerKindCron
+	// timer is non-nil once a TriggerKindOnce entry has actually been
+	// armed. Registration (registerOnce) always records the entry so
+	// Registered(id) reports true immediately, matching how a cron entry
+	// added via cron.AddFunc before Start() is already "registered" with
+	// the underlying cron.Cron even though it will not tick yet — but the
+	// timer itself is created lazily, in Start(), for exactly the same
+	// reason cron.Cron does not fire before Start() is called: AC-003's
+	// invariant that construction alone must not arm ticks
+	// (core/rpc.API.SetContext calls Start explicitly) would otherwise be
+	// silently broken for the 'once' kind, since time.AfterFunc has no
+	// concept of "added but not started" the way robfig/cron does.
+	timer *time.Timer // valid when kind == TriggerKindOnce and the engine has been Start()ed
+	runAt time.Time   // valid when kind == TriggerKindOnce
 	cron  string
 	tz    string
 }
@@ -132,9 +152,9 @@ func NewChatCronEngine(ctx context.Context, cfg ChatCronEngineConfig) (*ChatCron
 			if !r.Enabled {
 				continue
 			}
-			if err := e.register(r.ID, r.Cron, r.Timezone); err != nil {
+			if err := e.registerRecord(r); err != nil {
 				slog.WarnContext(ctx, "scheduler.chat_cron.boot_register_failed",
-					"chat_run_id", r.ID, "cron", r.Cron, "error", err.Error())
+					"chat_run_id", r.ID, "cron", r.Cron, "trigger_kind", r.EffectiveTriggerKind(), "error", err.Error())
 				continue
 			}
 		}
@@ -207,36 +227,101 @@ func (e *ChatCronEngine) register(id, cronExpr, tz string) error {
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if existing, ok := e.entries[id]; ok {
-		e.c.Remove(existing.entry)
-	}
+	e.disarmLocked(id)
 	entryID, err := e.c.AddFunc(spec, func() { e.fire(id) })
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrChatCronInvalidExpr, err)
 	}
-	e.entries[id] = &chatEntry{id: id, entry: entryID, cron: cronExpr, tz: tz}
+	e.entries[id] = &chatEntry{id: id, kind: TriggerKindCron, entry: entryID, cron: cronExpr, tz: tz}
 	return nil
 }
 
-// unregister removes the cron entry for id, if any. Caller must not hold e.mu.
+// ErrChatCronMissingRunAt is returned when a TriggerKindOnce row has a
+// nil RunAt — a malformed row (the API layer requires RunAt for a
+// trigger_kind='once' Create/Update, so this should only occur on a
+// hand-edited database). Like ErrChatCronInvalidExpr, the row is not
+// removed from the store; only the timer registration is skipped.
+var ErrChatCronMissingRunAt = errors.New("scheduler: chat-run trigger_kind='once' row has no run_at")
+
+// registerOnce records a one-shot registration for id at runAt (or
+// immediately, once armed, if runAt has already passed — a one-shot
+// schedule whose time passed while the app was closed still fires on the
+// next boot rather than silently vanishing, mirroring the "missed tick
+// still counts" posture a user scheduling "run this once at 6pm" would
+// expect). The underlying time.Timer is only created if the engine has
+// already been Start()ed; otherwise Start() arms it — see chatEntry.timer's
+// doc for why. Caller must not hold e.mu.
+func (e *ChatCronEngine) registerOnce(id string, runAt time.Time) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.disarmLocked(id)
+	ent := &chatEntry{id: id, kind: TriggerKindOnce, runAt: runAt}
+	if e.started {
+		ent.timer = e.armOnceLocked(id, runAt)
+	}
+	e.entries[id] = ent
+}
+
+// armOnceLocked creates the actual time.Timer for a one-shot entry.
+// Caller must hold e.mu.
+func (e *ChatCronEngine) armOnceLocked(id string, runAt time.Time) *time.Timer {
+	delay := time.Until(runAt)
+	if delay < 0 {
+		delay = 0
+	}
+	return time.AfterFunc(delay, func() { e.fireOnce(id) })
+}
+
+// registerRecord arms rec according to its EffectiveTriggerKind. Caller
+// must not hold e.mu.
+func (e *ChatCronEngine) registerRecord(rec ChatRunRecord) error {
+	if rec.EffectiveTriggerKind() == TriggerKindOnce {
+		if rec.RunAt == nil {
+			return ErrChatCronMissingRunAt
+		}
+		e.registerOnce(rec.ID, *rec.RunAt)
+		return nil
+	}
+	return e.register(rec.ID, rec.Cron, rec.Timezone)
+}
+
+// disarmLocked removes any existing registration (cron entry or one-shot
+// timer) for id. Caller must hold e.mu.
+func (e *ChatCronEngine) disarmLocked(id string) {
+	existing, ok := e.entries[id]
+	if !ok {
+		return
+	}
+	switch existing.kind {
+	case TriggerKindOnce:
+		if existing.timer != nil {
+			existing.timer.Stop()
+		}
+	default:
+		e.c.Remove(existing.entry)
+	}
+	delete(e.entries, id)
+}
+
+// unregister removes the cron entry or one-shot timer for id, if any.
+// Caller must not hold e.mu.
 func (e *ChatCronEngine) unregister(id string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if existing, ok := e.entries[id]; ok {
-		e.c.Remove(existing.entry)
-		delete(e.entries, id)
-	}
+	e.disarmLocked(id)
 }
 
-// Sync re-reads the row for id from the store and arms or disarms the
-// cron entry to match: enabled -> registered with the row's current cron
-// expression and timezone (replacing any stale entry so inline edits take
-// effect without a restart); disabled or not found -> disarmed.
+// Sync re-reads the row for id from the store and arms or disarms its
+// registration to match: enabled -> registered with the row's current
+// trigger kind (cron entry for 'cron', one-shot timer for 'once',
+// replacing any stale registration so inline edits take effect without a
+// restart); disabled or not found -> disarmed.
 //
 // Called by core/rpc/views/scheduledchat.API after Create, Update and
-// SetEnabled. A malformed cron expression is returned as an error (the
-// caller logs it — a bad expression does not roll back the already-
-// persisted row) rather than silently accepted or silently dropped.
+// SetEnabled. A malformed cron expression or a trigger_kind='once' row
+// with no run_at is returned as an error (the caller logs it — a bad
+// row does not roll back the already-persisted write) rather than
+// silently accepted or silently dropped.
 func (e *ChatCronEngine) Sync(ctx context.Context, id string) error {
 	if e.store == nil {
 		return ErrChatCronStoreUnavailable
@@ -253,7 +338,7 @@ func (e *ChatCronEngine) Sync(ctx context.Context, id string) error {
 		e.unregister(id)
 		return nil
 	}
-	return e.register(rec.ID, rec.Cron, rec.Timezone)
+	return e.registerRecord(rec)
 }
 
 // Unregister disarms the cron entry for id. Called by
@@ -267,7 +352,9 @@ func (e *ChatCronEngine) Unregister(ctx context.Context, id string) error {
 	return nil
 }
 
-// Start starts the underlying cron engine. Idempotent.
+// Start starts the underlying cron engine AND arms every registered
+// TriggerKindOnce entry's timer (which registerOnce deliberately left
+// unarmed until now — see chatEntry.timer's doc). Idempotent.
 func (e *ChatCronEngine) Start() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -276,9 +363,20 @@ func (e *ChatCronEngine) Start() {
 	}
 	e.c.Start()
 	e.started = true
+	for id, ent := range e.entries {
+		if ent.kind == TriggerKindOnce && ent.timer == nil {
+			ent.timer = e.armOnceLocked(id, ent.runAt)
+		}
+	}
 }
 
-// Stop halts cron dispatch. In-flight fires are not interrupted.
+// Stop halts cron dispatch AND stops every armed one-shot timer. In-flight
+// fires (already executing when Stop is called) are not interrupted —
+// time.Timer.Stop cannot cancel a callback already running, matching the
+// cron engine's own "in-flight fires are not interrupted" contract.
+// Entries survive Stop with timer reset to nil, so a later Start()
+// re-arms them (mirrors robfig/cron's own Stop-then-Start resumption for
+// entries added via AddFunc).
 func (e *ChatCronEngine) Stop() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -287,6 +385,12 @@ func (e *ChatCronEngine) Stop() {
 	}
 	e.c.Stop()
 	e.started = false
+	for _, ent := range e.entries {
+		if ent.kind == TriggerKindOnce && ent.timer != nil {
+			ent.timer.Stop()
+			ent.timer = nil
+		}
+	}
 }
 
 // Started reports whether Start has been called (and Stop has not
@@ -324,6 +428,32 @@ func (e *ChatCronEngine) fire(id string) {
 	go func() {
 		_, _ = e.fireSync(context.Background(), id)
 	}()
+}
+
+// fireOnce is the time.AfterFunc callback for a TriggerKindOnce row
+// (model-scheduled-jobs-01PMSJ01 WP08, AC-010). time.AfterFunc already
+// runs its function in its own goroutine, so — unlike fire above — no
+// extra `go func` is needed here.
+//
+// A one-shot gets exactly one attempt: after fireSync returns (success
+// OR failure — a failed attempt is still a used attempt, matching a
+// cron row's own behaviour of not retrying a failed tick), the row is
+// disabled via SetEnabled so a later boot's registerRecord does not
+// re-arm it, and its in-memory registration is dropped so Registered(id)
+// reports false immediately rather than waiting for the next Sync.
+// RunAt is deliberately left untouched — the history row plus
+// Enabled=false together are the durable proof it already fired, not a
+// cleared RunAt (spec.md §5.7 "sets enabled = 0").
+func (e *ChatCronEngine) fireOnce(id string) {
+	ctx := context.Background()
+	_, _ = e.fireSync(ctx, id)
+	if e.store != nil {
+		if err := e.store.SetEnabled(ctx, id, false); err != nil && !errors.Is(err, ErrChatRunNotFound) {
+			slog.WarnContext(ctx, "scheduler.chat_cron.once_disable_failed",
+				"chat_run_id", id, "error", err.Error())
+		}
+	}
+	e.unregister(id)
 }
 
 // fireSync dispatches one chat run and appends the outcome to history.

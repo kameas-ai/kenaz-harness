@@ -20,6 +20,17 @@ export interface ScheduledChatEntry {
   enabled: boolean;
   createdAt: string; // ISO 8601
   updatedAt: string; // ISO 8601
+  /**
+   * One-shot schedules (model-scheduled-jobs-01PMSJ01 WP08, FR-006).
+   * "cron" (the default, backward-compatible with every row created
+   * before this field existed) or "once". Always populated on the real
+   * wire response; optional here (rather than required) so existing
+   * fixtures/tests written before this field existed do not all need
+   * updating — treat a missing value as "cron".
+   */
+  triggerKind?: 'cron' | 'once';
+  /** Fire time for a triggerKind "once" row (ISO 8601, UTC). Absent for "cron". */
+  runAt?: string;
 }
 
 export interface ScheduledChatRunSummary {
@@ -36,11 +47,16 @@ export interface ScheduledChatRunSummary {
 export interface ScheduledChatCreateInput {
   name: string;
   promptTemplate: string;
+  /** Required when triggerKind is "cron" (the default); ignored for "once". */
   cron: string;
   timezone?: string;
   model?: string;
   outputSink?: string;
   enabled: boolean;
+  /** "cron" (default) or "once" (model-scheduled-jobs-01PMSJ01 WP08). */
+  triggerKind?: 'cron' | 'once';
+  /** Required (ISO 8601) when triggerKind is "once"; ignored for "cron". */
+  runAt?: string;
 }
 
 export interface ScheduledChatUpdateInput {
@@ -52,6 +68,8 @@ export interface ScheduledChatUpdateInput {
   model?: string;
   outputSink?: string;
   enabled: boolean;
+  triggerKind?: 'cron' | 'once';
+  runAt?: string;
 }
 
 // ── client interface ──────────────────────────────────────────────────────
@@ -115,6 +133,7 @@ export function createFakeScheduledChatClient(
     enabled: true,
     createdAt: '1970-01-01T00:00:00Z',
     updatedAt: '1970-01-01T00:00:00Z',
+    triggerKind: 'cron',
   };
   return {
     create: seed.create ?? ((input) => Promise.resolve({ ...stub, ...input, id: 'new-id' })),

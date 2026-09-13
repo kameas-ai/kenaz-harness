@@ -16,21 +16,27 @@ import BashPermissionsPanel from '@/views/settings/BashPermissionsPanel.vue';
 import FilesystemPermissionsPanel from '@/views/settings/FilesystemPermissionsPanel.vue';
 import CredentialPermissionsPanel from '@/views/settings/CredentialPermissionsPanel.vue';
 import ToolPermissionsPanel from '@/views/settings/ToolPermissionsPanel.vue';
+import BlockedPermissionRequestsPanel from '@/views/settings/BlockedPermissionRequestsPanel.vue';
 
-type Family = 'bash' | 'fs' | 'credential' | 'tool';
+type Family = 'bash' | 'fs' | 'credential' | 'tool' | 'blocked';
 
 const TABS: ReadonlyArray<{ id: Family; label: string; icon: string }> = [
   { id: 'bash', label: 'Bash', icon: '⚡' },
   { id: 'fs', label: 'Filesystem', icon: '📁' },
   { id: 'credential', label: 'Credentials', icon: '🔑' },
   { id: 'tool', label: 'Tools', icon: '🔧' },
+  // model-scheduled-jobs-01PMSJ01 WP07: pending blocked_permission_requests
+  // (denied filesystem writes/reads, including unattended scheduled runs
+  // that had nobody to ask) — distinct from the "Allow always" grant lists
+  // the other four tabs show.
+  { id: 'blocked', label: 'Blocked', icon: '🚧' },
 ];
 
 const route = useRoute();
 const router = useRouter();
 
 function isFamily(s: string): s is Family {
-  return s === 'bash' || s === 'fs' || s === 'credential' || s === 'tool';
+  return s === 'bash' || s === 'fs' || s === 'credential' || s === 'tool' || s === 'blocked';
 }
 
 const activeFamily = computed<Family>(() => {
@@ -106,6 +112,7 @@ watch(
         <FilesystemPermissionsPanel v-else-if="activeFamily === 'fs'" />
         <CredentialPermissionsPanel v-else-if="activeFamily === 'credential'" />
         <ToolPermissionsPanel v-else-if="activeFamily === 'tool'" />
+        <BlockedPermissionRequestsPanel v-else-if="activeFamily === 'blocked'" />
       </div>
     </div>
   </SettingsShell>
