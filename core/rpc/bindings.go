@@ -3508,6 +3508,23 @@ func (b *Bindings) Catalog_Installed() ([]catalogview.CatalogItemView, error) {
 	return b.api.Catalog().Catalog_Installed(b.ctx())
 }
 
+// Catalog_Unpublish withdraws catalogID from the org listing. Distinct
+// from Catalog_Uninstall (local copy only). Server-authorized (register
+// C-3/C-8); returns a distinct forbidden error on a 403, not the tier
+// error.
+//
+// (fleet-enforcement-truth-01PMZ505 WP11.) Go-side surface only as of
+// this commit — see docs/unwired-ledger.md for the frontend-binding
+// deferral this WP records: the operating constraints for this pass
+// disallowed hand-editing frontend/wailsjs/**, which a NEW Wails-bound
+// method's JS/TS mirror requires. The backend is fully wired and
+// tested; wiring the last-mile mirror + a Marketplace action is the
+// smallest possible follow-up.
+func (b *Bindings) Catalog_Unpublish(catalogID string) error {
+	defer sentry.WrapBinding("Catalog_Unpublish")()
+	return b.api.Catalog().Catalog_Unpublish(b.ctx(), catalogID)
+}
+
 // ── Sync bindings (fleet-share-and-sync-01NDFSEX14 WP05) ─────────────────────
 
 // Sync_Toggle enables or disables sync for the given category string
@@ -3588,6 +3605,28 @@ func (b *Bindings) Sites_Logs(site string, tailLines int) (string, error) {
 func (b *Bindings) Sites_Delete(site string) error {
 	defer sentry.WrapBinding("Sites_Delete")()
 	return b.api.Sites().Sites_Delete(b.ctx(), site)
+}
+
+// Sites_EnvSet sets one or more declared environment variable values for
+// site. This is the ONLY way secrets reach a site.
+//
+// (fleet-enforcement-truth-01PMZ505 WP09.) Go-side surface only as of
+// this commit — see docs/unwired-ledger.md for the frontend-binding
+// deferral this WP records: the operating constraints for this pass
+// disallowed hand-editing frontend/wailsjs/**, which a NEW Wails-bound
+// method's JS/TS mirror requires. The backend is fully wired and
+// tested; wiring the last-mile mirror + a settings surface is the
+// smallest possible follow-up.
+func (b *Bindings) Sites_EnvSet(site string, vars map[string]string) error {
+	defer sentry.WrapBinding("Sites_EnvSet")()
+	return b.api.Sites().Sites_EnvSet(b.ctx(), site, vars)
+}
+
+// Sites_EnvList returns declared env var names + metadata for site. Never
+// returns a value (WP09).
+func (b *Bindings) Sites_EnvList(site string) ([]sitesview.SiteEnvEntry, error) {
+	defer sentry.WrapBinding("Sites_EnvList")()
+	return b.api.Sites().Sites_EnvList(b.ctx(), site)
 }
 
 // ── Tasks bindings (background-task-monitor-01KZNP3C WP05) ──────────────────
@@ -3783,4 +3822,19 @@ func (b *Bindings) Compliance_ArchiveNow() error {
 func (b *Bindings) Compliance_SetRetention(days int) error {
 	defer sentry.WrapBinding("Compliance_SetRetention")()
 	return b.api.Compliance().SetRetention(b.ctx(), days)
+}
+
+// Compliance_SkipToID is the operator recovery action after a hash-chain
+// break: advances the archiver's cursor to toID and clears the halt.
+//
+// (fleet-enforcement-truth-01PMZ505 WP06.) Go-side surface only as of
+// this commit — see docs/unwired-ledger.md for the frontend-binding
+// deferral this WP records: the operating constraints for this pass
+// disallowed hand-editing frontend/wailsjs/**, which a NEW Wails-bound
+// method's JS/TS mirror requires. The backend is fully wired and
+// tested; wiring the last-mile mirror + Sync panel control is the
+// smallest possible follow-up.
+func (b *Bindings) Compliance_SkipToID(toID string) error {
+	defer sentry.WrapBinding("Compliance_SkipToID")()
+	return b.api.Compliance().SkipToID(b.ctx(), toID)
 }

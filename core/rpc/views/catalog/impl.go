@@ -15,8 +15,14 @@ type API struct {
 	signer  *corefleet.DeviceSigner
 	dataDir string
 	// pubKeyBase64 is the fleet-issued signing public key for install
-	// verification. Empty until the server-side per-device key lookup
-	// is implemented; verification is skipped when empty.
+	// verification. Always empty today (fleet-enforcement-truth-
+	// 01PMZ505 WP10, register C-2, 2026-08-19, owner alec):
+	// justify(blocker: "no per-device catalog signing key source exists
+	// in or out of this repo", owner: alec, date: 2026-08-19). This is
+	// a standing blocker, not a settled "verification is skipped when
+	// empty" design — every catalog install and fleet skill install is
+	// unverified until it is resolved. WithPubKey (below) is the seam
+	// the eventual fix uses; it is deliberately NOT deleted.
 	pubKeyBase64 string
 	// emitter is optional; nil emitter means audit events are silently dropped.
 	emitter auditEmitter
@@ -136,6 +142,21 @@ func (a *API) Catalog_Installed(_ context.Context) ([]CatalogItemView, error) {
 		out[i] = catalogItemToView(it, true)
 	}
 	return out, nil
+}
+
+// Catalog_Unpublish implements CatalogAPI.
+func (a *API) Catalog_Unpublish(ctx context.Context, catalogID string) error {
+	if a.client == nil {
+		return corefleet.ErrFleetDisabled
+	}
+	if err := a.client.Unpublish(ctx, catalogID); err != nil {
+		return err
+	}
+	if a.emitter != nil {
+		_ = a.emitter.EmitFleetEvent(ctx, contextaudit.KindFleetCatalogUnpublished,
+			contextaudit.FleetCatalogUnpublishedPayload{CatalogID: catalogID})
+	}
+	return nil
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

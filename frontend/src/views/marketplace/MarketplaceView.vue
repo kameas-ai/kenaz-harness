@@ -189,6 +189,23 @@ async function applyFilters() {
         </button>
       </div>
 
+      <!--
+        Unverified-install notice (fleet-enforcement-truth-01PMZ505 WP10,
+        register C-2): plain text on the install affordance, not a modal
+        or a tooltip — no per-device catalog signing key source exists
+        yet, so ed25519 signature verification is skipped on every
+        install from this catalog, on both the workflow/pack/bundle path
+        (client.catalog.install) and the skill path
+        (client.slashcmd.skillInstall). This stays visible until C-2's
+        key source lands.
+      -->
+      <p
+        class="border-b border-border-muted bg-surface-1 px-4 py-1.5 font-ui text-[11px] text-ink-subtle"
+        data-testid="marketplace-unverified-notice"
+      >
+        Fleet catalog installs are not signature-verified yet — content comes from your org's catalog but is not cryptographically checked before install.
+      </p>
+
       <!-- Error -->
       <div
         v-if="errorMsg"

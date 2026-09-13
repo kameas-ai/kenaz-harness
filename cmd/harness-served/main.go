@@ -157,11 +157,18 @@ func main() {
 	// token never crosses into the VM.
 	authCfg := authbroker.ReadConfig(os.Getenv)
 	connTokens := authbroker.NewConnectorTokens(authCfg, log)
+	// Named so the same emitter also backs authbroker.WithLedgerEmit below
+	// (fleet-enforcement-truth-01PMZ505 WP14) — one reporter-ingest-socket
+	// emitter for both connector-lifecycle and session-lifecycle events.
+	// Both served entry points must agree (Spec 078 precedent) — wiring
+	// only main.go and not this binary would reproduce exactly the
+	// SD-11 divergence class this file's own header already warns about.
+	ledgerEmitter := connectors.NewLedgerEmitterFromEnv(os.Getenv, log)
 	connSup := connectors.NewSupervisor(connectors.SupervisorConfig{
 		Provisioning: mcpProv,
 		Getenv:       os.Getenv,
 		Tokens:       connTokens,
-		Ledger:       connectors.NewLedgerEmitterFromEnv(os.Getenv, log),
+		Ledger:       ledgerEmitter,
 		// D13/US5: include operator-authored user recipes baked under
 		// <dataDir>/mcp/recipes so whitelisted custom connector ids
 		// resolve in served mode. The whitelist still gates every id.
@@ -219,7 +226,11 @@ func main() {
 	// disk, same mechanism as SIGIL_INGEST_TOKEN / HARNESS_VM_TOKEN).
 	//
 	// Privacy: broker token and access token bytes are never logged.
-	authSession := authbroker.NewSession(ctx, authCfg, log)
+	// WithLedgerEmit (fleet-enforcement-truth-01PMZ505 WP14): reuse the
+	// connector-lifecycle emitter so "session.signed_out" reaches the
+	// same reporter ingest socket as connector.* events.
+	authSession := authbroker.NewSession(ctx, authCfg, log,
+		authbroker.WithLedgerEmit(ledgerEmitter.EmitSessionLifecycle))
 	log.Info("harness-served: auth session initialised",
 		"auth_state", authSession.State().String(),
 		"broker_addr", authCfg.BrokerAddr,

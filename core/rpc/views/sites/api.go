@@ -68,4 +68,24 @@ type SitesAPI interface {
 	// confirm dialog before calling this method (FR-004); the RPC does not
 	// re-verify a bool guard.
 	Sites_Delete(ctx context.Context, site string) error
+
+	// Sites_EnvSet sets one or more declared environment variable values
+	// for site. This is the ONLY way secrets reach a site — they must
+	// never ride in a bundle or a manifest's inline "value" field
+	// (core/sites/manifest.go rejects that outright).
+	//
+	// (fleet-enforcement-truth-01PMZ505 WP09.)
+	Sites_EnvSet(ctx context.Context, site string, vars map[string]string) error
+
+	// Sites_EnvList returns declared env var names + metadata for site.
+	// Values are write-only — this never returns one (WP09).
+	Sites_EnvList(ctx context.Context, site string) ([]SiteEnvEntry, error)
+}
+
+// SiteEnvEntry mirrors corefleet.SiteEnvEntry on the view-scoped wire
+// shape — one declared env var's name + metadata, never a value.
+type SiteEnvEntry struct {
+	Name        string    `json:"name"`
+	Description string    `json:"description,omitempty"`
+	SetAt       time.Time `json:"setAt,omitempty"`
 }

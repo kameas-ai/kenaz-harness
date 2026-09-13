@@ -179,6 +179,45 @@ describe('SyncPanel', () => {
     expect(toggleFn).toHaveBeenCalledWith('model_prefs', true);
   });
 
+  // AC-024 (fleet-enforcement-truth-01PMZ505 WP12): each row's description
+  // must name what its payload actually carries, not what a designer once
+  // hoped it would. Asserts the exact strings, not a whole-panel snapshot —
+  // a snapshot goes green on any edit and red on every unrelated one.
+  it('8. model_prefs row names the four fields modelPrefsPayload actually carries, not the default model or an allowlist', async () => {
+    const { client } = buildClient({ statuses: STATUSES });
+    const wrapper = mountPanel(client);
+    await flushPromises();
+
+    const text = wrapper.find('[data-testid="sync-category-model_prefs"]').text();
+    expect(text).toContain('Compaction aggressiveness');
+    expect(text).toContain('max agent turns');
+    expect(text.toLowerCase()).not.toContain('default model');
+    expect(text.toLowerCase()).not.toContain('allowlist');
+  });
+
+  it('9. ui_theme row claims neither density nor accessibility, and drops Accent', async () => {
+    const { client } = buildClient({ statuses: STATUSES });
+    const wrapper = mountPanel(client);
+    await flushPromises();
+
+    const text = wrapper.find('[data-testid="sync-category-ui_theme"]').text().toLowerCase();
+    expect(text).not.toContain('density');
+    expect(text).not.toContain('accessib');
+    expect(text).not.toContain('a11y');
+    expect(text).not.toContain('accent');
+  });
+
+  it('10. provider_profiles and mcp_recipes rows state they are not yet syncing', async () => {
+    const { client } = buildClient({ statuses: STATUSES });
+    const wrapper = mountPanel(client);
+    await flushPromises();
+
+    const providerText = wrapper.find('[data-testid="sync-category-provider_profiles"]').text().toLowerCase();
+    const recipesText = wrapper.find('[data-testid="sync-category-mcp_recipes"]').text().toLowerCase();
+    expect(providerText).toContain('not yet syncing');
+    expect(recipesText).toContain('not yet syncing');
+  });
+
   it('7. installed-MCP toggle sends the canonical backend category id, not the historic installed_mcp_servers id', async () => {
     const { client, toggleFn } = buildClient({ statuses: STATUSES });
     const wrapper = mountPanel(client);

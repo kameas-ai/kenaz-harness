@@ -447,6 +447,103 @@ renders and Edit/Delete are hidden for `source: 'org'`, and — the
 mutation-proof half — still render for an ordinary shipped row.
 
 ### 2026-09-12 (model-settings-reach-the-model-01PMZ101 UNIT-10 / WP17, ESCALATION — not resolved here) · `branchesview.API.parentModel` is a hardcoded `return "", ""` stub; the cross-provider warning can never fire
+### 2026-09-12 (fleet-enforcement-truth-01PMZ505, WP01/WP10 decision record — AC-014/AC-015) · disposition of the mission's fourteen handed-over findings, triaged against the live tree
+
+**This mission was triaged, not built from scratch.** Its spec.md was
+written against `origin/main@55029354` (tag `v0.64.0`); the release branch
+this pass landed on (`release/v0.78.2`'s worktree base) already carried 23+
+merged missions from later campaigns. Re-verification against the LIVE tree
+(not the spec's cited state) found five of the spec's sixteen WPs already
+shipped by other missions, and the mission's flagship P0 (§1.3, the audit
+retention backend) already resolved more completely than the spec's own
+"interim honesty change" asked for. Per-finding disposition:
+
+| Finding | Spec's ask | Live-tree status | This pass |
+|---|---|---|---|
+| §1.1 `SetCedarEngine` zero callers (P0) | wire it, WP03 | **Already wired.** `api.go` calls `settingsImpl.SetCedarEngine(a.cedarEngine)`; `fleet_wp03_test.go` pins `TestSetCedarEngine_WiresApplierToLiveEngine` against the real engine. | Verified only (RAN `go test ./core/rpc/views/settings/... -run SetCedarEngine`, PASS). |
+| §1.2 `Bundle.ModelPrefs` stored, never read (WP04) | consumer reaching a branch, WP04 | **Already wired.** `llmview.ApplyFleetModelPrefs` installs `DefaultModel`+`ProviderAllowlist`; `bundle_knob_coverage.go` registers it against `knobcoverage`. | Verified only. |
+| §1.3 retention window confirmed, unenforced (WP05) | interim honesty change ONLY — spec explicitly forbids building the backend here (C-1 hands that to a successor mission) | **Superseded — the successor already shipped.** `audit-that-tells-the-truth-01PMZA10 UNIT-7` built the real event-log-backed `AuditRetentionBackend` (`core/rpc/views/settings/audit_retention_adapter.go`) and wired it at `api.go`'s sweeper construction (`fleetRetentionBackend` is non-nil whenever `auditBackend != nil`, which is the production shape). **RAN**, not read: `TestFleetAuditRetentionBackend_WiredIntoRealSweeper_AC015` passes with a real delete on a real sqlite-backed store (`log="fleet/audit_retention: sweep pass complete deleted=1"`). This mission's WP05 "ship the honesty change because nothing can enforce it" premise is **factually superseded**: something now enforces it. | Deleted the two remaining lies (AC-007): `applyRetentionConfig` (`core/fleet/audit_retention.go`, zero callers, fed a `Bundle.audit_local_retention_days` field that has never existed) and its two false doc comments. Did not add `RetentionEnforced`/`HasBackend()` — the residual nil-backend path is a "defensive fallback... not a production configuration" per ZA10's own in-code comment, not the live shape AC-006 was written against; adding a second honesty layer on top of a real implementation would be gold-plating a closed finding. **Escalation for a future sweep, not resolved here**: `ComplianceStatus` still has no field distinguishing "retention enforced by a real backend" from "retention configured but inert" for the residual `auditBackend == nil` edge case — low severity given it's non-production-shaped, but worth a one-line field if anyone hits it. |
+| §1.4 chain-break recovery, no surface (WP06) | `Compliance_SkipToID` RPC + binding + client + UI | **Backend built and mutation-tested this pass**: `ComplianceAPI.SkipToID`, gated identically to its siblings, delegates to the already-tested `*fleet.AuditArchiver.SkipToID`. `Bindings.Compliance_SkipToID` added. **Frontend NOT wired** — see "Frontend-binding deferral" below. | `core/rpc/views/compliance/{api,impl}.go`, `core/rpc/bindings.go`; `TestComplianceAPI_SkipToID_ClearsChainBreakAndEmits` mutation-proven (reverting the delegation makes it fail). |
+| §1.5 sync arm matched pair (`installed_mcp`, WP07) | id fix + Reader/Writer/SecretKeys, one commit | **Already wired.** `SyncPanel.vue`'s id is `installed_mcp`; `core/rpc/api.go` constructs `NewMCPSyncCategory(mcpRegistry, mcpRegistry, <secretKeys func>, syncPending)` with a real reader/writer over `tools.API.ListRecipes`; `SyncPanel.spec.ts` drives the canonical backend ids, not a hand-built fixture. | Verified only (RAN `go test ./core/rpc/... -run Sync`, PASS; frontend spec RAN, PASS). |
+| §1.6 lockdown reason dropped (WP08) | store + return the reason | **Not wired — fixed this pass.** `lockdownActive` was a bare `atomic.Bool`; both write paths (`Watcher.run`, `BootstrapLockdownStatus`) parsed the reason off the wire and only logged it. | `core/fleet/lockdown.go` (new `lockdownReason atomic.Value` + `setLockdownState` single write path), `core/rpc/views/settings/fleet.go`'s `FleetLockdownStatus`. Mutation-proven: `TestBootstrapLockdownStatus` now asserts `LockdownReason()=="bootstrap-test"` after the BOOT path (no broker replay) — reverting the fix fails it. No frontend change needed: `LockdownStatusView.Reason`/`types.ts`'s `reason` field already existed on the wire type. |
+| §1.7 site env vars unsettable (WP09) | `Sites_EnvSet`/`Sites_EnvList` RPC + binding + surface | **Not wired — backend built this pass.** `SitesAPI.Sites_EnvSet`/`Sites_EnvList`, `FleetSitesClient` interface extended, `Bindings.Sites_{EnvSet,EnvList}` added. **Frontend NOT wired.** | `core/rpc/views/sites/{api,impl}.go`, `core/rpc/bindings.go`; `TestSitesEnvList_NeverReturnsAValue` mutation-proven at the JSON-wire level (a planted `Value` field is caught). No MCP tool added (spec explicitly forbids it in the same WP). |
+| §1.8 four orphans (`Client.SignOut`, `Client.Unpublish`, `SyncKind.HasScope`+friends, `applyRetentionConfig`) | delete/wire/justify per-symbol | `Client.SignOut` **deleted** this pass (D-5 — zero callers, rival to `settings.API.FleetSignOut` which additionally calls `StopFleetBackground` first). `Client.Unpublish` **wired** this pass (WP11, below). `SyncKind.HasScope`+seven siblings — **RULED (register F-2): justified, not deleted** — `fleet-org-config-inheritance-01NORGX01`'s `meta.json`/`spec.md` already carry owner `alec` + blocker "kenaz-fleet org endpoints not yet available" + date 2026-08-19; this entry cross-references it rather than duplicating. `applyRetentionConfig` **deleted** (see §1.3 row). | `core/fleet/client.go` (deletion), `core/fleet/catalog.go`+`impl.go` (WP11 wiring, below). |
+| §1.9 catalog/skill signature verification skipped (WP10, register C-2) | honesty change: comments stop reading as settled, docstrings corrected, Marketplace says installs are unverified, `WithPubKey` kept | **Not wired — fully built this pass.** Five edits: (1) `api.go`'s `PubKeyBase64: ""` comment; (2) `catalog/impl.go`'s `pubKeyBase64` doc; (3) both `harnessClient.ts` "Downloads, verifies, and live-registers" docstrings + `catalog/api.go`'s `Catalog_Install` doc; (4) `MarketplaceView.vue` gained a persistent plain-text notice (`data-testid="marketplace-unverified-notice"`) — not a modal, not a tooltip; (5) `verifyCatalogSignature`'s skip now logs at warn. `WithPubKey` untouched (kept per C-2). | Frontend test suite RAN clean post-edit (`vitest run`, 261 files / 2445 tests pass); `vue-tsc --noEmit` clean. |
+| §1.16 / task #43 `core/fleet.VerifySignature` zero callers | verify `01PMZ909` UNIT-1 rewrote the i10 allowlist entry; only touch it if that mission slipped | **Verified: `01PMZ909` UNIT-1 already landed it.** `scripts/ci/allowlists/i10-unwired-gates.txt`'s entry now reads "UPDATED 2026-08-21 by bundle-download-and-verify-01PMZ909 UNIT-1/UNIT-9... Standing verdict SUPERSEDED", exactly per that mission's own §9.2 commitment (C-14). Not touched here — touching it would have been the rival-infrastructure failure mode AC-029 warns against. | Read-verified (`grep` on the allowlist file). |
+| §7 G-1/G-2 (nil-optional-dep + uncalled-wiring-setter gates, WP10) | new gate(s), planted-violation proofs | **Already built, by a different mission, in a coordinated form.** `check-nil-optional-deps.sh` (I18, built collaboratively per its own header: "THREE MISSIONS SPECCED THIS GATE; NONE BUILT IT... this tool takes the doc-phrase design") subsumes both G-1 (nil optional dep on a Config/Options struct) and G-2 (an uncalled `Set*`/`With*` method) — its clause-3 fix is literally "a Set*-named method whose body assigns the field from its own parameter... with NO call site anywhere" (`gates_can_fail_test.go`'s `setter-defined-but-never-called-still-fires`), which is G-2 verbatim. `check-config-nil-coverage.sh` (built by `trust-surfaces-that-fire-01PMZ202` WP26) covers the sibling "declared, read, never assigned" shape with two planted-violation proofs of its own. This mission's own I13-widening design (`check-cedar-gate-arguments.sh`) was **not** the one that shipped — per CLAUDE.md's coordination rule, whoever lands first owns the gate. Building a second gate for the same class here would be rival infrastructure. | Verified only (read both scripts' headers + `gates_can_fail_test.go`'s planted cases; did not re-run the full gate suite in this pass — see "What was RUN" below for what was). |
+| §1.11/§1.12 Accent inert-and-pushed; sync push-path trace (WP12) | remove `Accent` from the wire; honest row copy; consumer-map enumeration test (G-5) | **Not wired — fully built this pass.** `Accent` removed from `uiThemePayload` (collect + apply); `SyncPanel.vue` rewritten for all four non-`installed_mcp` rows (`model_prefs` now names its real four fields, `ui_theme` claims only color, `provider_profiles`/`mcp_recipes` state "not yet syncing"). | `core/rpc/sync_categories.go` + three test files; AC-024 assertions added to `SyncPanel.spec.ts` (mutation-proven: reverting the `model_prefs` description to "Default model, provider allowlist..." fails the new test). **G-5 enumeration test (AC-022) NOT built** — see "Not done" below. |
+| §1.12 (dup ID, spec's own numbering — remote purge, WP13) | confirm-guarded UI action per surface | **Already wired.** `SessionsView.vue`/`ProjectLandingPage.vue` both call `client.{Session,Project}Sync_DeleteRemote` with confirm dialogs; `SessionsView.remotePurge.spec.ts`/`ProjectLandingPage.fleetSync.spec.ts` exist. | Verified only. |
+| §1.13/§1.14 served-mode token invalidation + sign-out ledger event (WP14) | wire `Invalidate`/`NotifyOn401` at a real 401-observing call site; add `LedgerEmitter.EmitSessionLifecycle`-shaped method; wire both entry points | **Not wired — built this pass, with one honest gap.** New `On401 func()` hook threaded through `core/mcp.ServerSpec` → both `transport/http` and `transport/sse` `Spec` → their `dispatch`/GET/POST paths (the only place a served-mode OAuth connector's 401 is actually observable — the token is handed to a spawned subprocess's own HTTP calls, which the harness cannot see). Supervisor wires `spec.On401 = func(){ tokens.Invalidate(id) }` for OAuth connectors. `LedgerEmitter.EmitSessionLifecycle(event string)` added (the missing `func(string)` shape); both `main.go` and `cmd/harness-served/main.go` now construct their `authbroker.Session` with `WithLedgerEmit(ledgerEmitter.EmitSessionLifecycle)`. **`Session.NotifyOn401` is NOT wired** — see "Escalated, not guessed" below; it is a materially different, deeper finding than the spec anticipated. | Mutation-proven at two layers: `TestConnectionOn401_Fires`/`_DoesNotFireOn500` (http+sse transport level, real httptest 401/500) and `TestSupervisor_OAuthConnector_On401InvalidatesCachedToken` (supervisor level). `main.go`/`cmd/harness-served/main.go` wiring is READ-verified only (package `main`, no test harness). |
+| §1.15 ACP peer registry nil secrets backend (WP15) | wire consumer or record; escalate secrets backend (E-008); dated justification for `DefaultRegistry` | **Escalated, not guessed — per spec's own explicit instruction ("do not fix this by passing a non-nil backend to make the linter quiet").** `core/acp/events` (the package `peers.NoopEmitter`'s own doc names as owning "the real wiring") **does not exist anywhere in the repo** — confirmed no directory, no second `AuthEventEmitter` implementer. Recorded in-code at `api.go`'s `acpReg := acppeers.NewRegistry(...)` construction site (both nils explained) and at `DefaultRegistry()`'s declaration (`wiring:deferred`, dated 2026-09-12, owner alec, distinct from `AN-10` per C-10 — `DefaultRegistry` has zero callers repo-wide and cannot itself produce the nil-secrets defect). | Read-verified (repo-wide grep for `PeerAuthAttempted`, `core/acp/events`). **E-008 (secrets backend product-scoping question) remains genuinely open — flagged for owner alec, no default assumed.** |
+
+**Duplicate-finding note preserved from the first pass**: `fleet-cedar-
+engine-never-wired` and `cedar-bundle-engine-never-set` are the same
+defect (§1.1); both read as closed by the above.
+
+**Frontend-binding deferral (WP06, WP09, WP11) — one blocker, three
+findings.** All three new RPC surfaces (`Compliance_SkipToID`,
+`Sites_EnvSet`/`Sites_EnvList`, `Catalog_Unpublish`) are fully built,
+tested and mutation-proven on the Go side — `Bindings.go` methods exist
+and are `check-binding-names.sh`-clean. **None has its
+`frontend/wailsjs/go/rpc/Bindings.{js,d.ts}` mirror, `harnessClient.ts`
+entry, or UI control**, because this pass's operating constraints
+explicitly forbade hand-editing `frontend/wailsjs/**` (the repo's normal
+path for adding one, absent the DB-opening `wails generate module`
+risk CLAUDE.md documents). Blocker: an agent authorized to hand-mirror
+three small binding stubs following the existing 2870-line mirror's exact
+pattern (`window['go']['rpc']['Bindings']['MethodName'](args)`), plus
+three small UI affordances (a chain-break-recovery input in
+`CompliancePanel.vue`, an env-var form in a Sites settings surface, an
+"Withdraw" action in `MarketplaceView.vue` distinct from "Uninstall" per
+AC-021). Owner: alec. This is the single largest remaining gap between
+this pass and full AC-008/AC-012/AC-020/AC-021 satisfaction — the backend
+halves of all four ACs are proven; only the last-mile frontend wire is
+missing, which is the cheapest-win class CLAUDE.md's disposition rubric
+names explicitly.
+
+**Not done in this pass, named rather than left silent:**
+
+- **AC-022 (WP12 G-5) — the sync-payload consumer-map enumeration test.**
+  The individual findings it would have caught (`Accent`, the three
+  mislabelled rows) are fixed; the machine-checked enumeration itself
+  (`AllSyncCategories()`-driven table test naming a real consumer per
+  payload field) was not built. A future field addition to any
+  `SyncKind`'s payload struct with no consumer is therefore not yet
+  CI-caught for this class — same residual gap `check-knob-coverage.sh`
+  closes for `fleet.Bundle` but not (yet) for `core/fleet.SyncKind`
+  payloads.
+- **AC-023's `Settings.Accent` field disposition (D-7's "wired-down"
+  half).** `Accent` stopped travelling (done); whether the field itself
+  has a future is E-009, unaddressed here (unchanged from the spec's own
+  framing — "cross-reference E-009 for whether the field itself has a
+  future").
+- **The three fleet audit kinds with zero emit call sites**
+  (`KindFleetConfigApplied`/`KindFleetConfigSignatureRejected`/
+  `KindFleetConfigPartialFailure`) — **already recorded above** (2026-09-12,
+  `01NORGX01` WP02 triage entry) as "Owner: unassigned. Blocker: threading
+  an audit emitter through `ConfigPoller`". This mission's spec never
+  named these three kinds as one of its fourteen findings; they were
+  flagged as an adjacent fact for this pass to consider and are recorded
+  here as explicitly NOT this mission's to fix, matching the existing
+  entry's scoping rather than duplicating it.
+- **`config_pull.go`'s stale header claiming a `bundle.json` disk cache**
+  — likewise already recorded in the `01NORGX01` entry above; not
+  re-fixed here for the same cross-cutting-architecture reason that entry
+  gives.
+- **The `CapContextSync`/server-capability-document mismatch** flagged in
+  this pass's brief could not be verified from this repository — the
+  fleet server's capability document is out-of-repo. `core/fleet/
+  capability.go`'s client-side declaration (`CapContextSync = "context_sync"`)
+  is internally consistent and matches `SyncPanel.vue`'s gate key
+  (already corrected 2026-08-14 per that file's own header comment).
+  Recorded as unverifiable-from-here rather than silently dropped.
+
+**Gate-extension rule note:** no new *class* of defect was found this pass
+that an existing gate cannot see — every new behavioural fix (lockdown
+reason storage, retention dead-code deletion, catalog error mapping, sync
+payload honesty, connector-token invalidation) is a single-instance defect
+fix, not a pattern a future author could reintroduce invisibly. No gate
+extension is owed.
 
 Found while implementing WP17 (branch recommender provider hydration,
 closing finding AN-07). WP17's own spec text describes only a narrower

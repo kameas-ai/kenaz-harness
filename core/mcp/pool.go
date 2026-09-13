@@ -6,10 +6,10 @@ import (
 )
 
 type ServerSpec struct {
-	Name      string            `json:"name"`
-	Transport string            `json:"transport"`
-	Command   []string          `json:"command,omitempty"`
-	URL       string            `json:"url,omitempty"`
+	Name      string   `json:"name"`
+	Transport string   `json:"transport"`
+	Command   []string `json:"command,omitempty"`
+	URL       string   `json:"url,omitempty"`
 	// PostURL is the client→server endpoint for SSE recipes. Only
 	// populated when Transport=="sse".
 	PostURL string            `json:"post_url,omitempty"`
@@ -43,6 +43,14 @@ type ServerSpec struct {
 	// one server, in milliseconds. 0 → the pool's configured default.
 	// Populated from recipes.Recipe.PingPeriodMs.
 	PingPeriodMs int `json:"ping_period_ms,omitempty"`
+	// On401, when set, is called synchronously the first time the http
+	// transport observes a 401 response from this server. Used by
+	// served-mode OAuth connectors to invalidate a cached broker token
+	// so the next ConnectorToken call re-fetches rather than re-serving
+	// a token the upstream just rejected (fleet-enforcement-truth-
+	// 01PMZ505 WP14, AC-026). Not JSON-marshaled — a func value would
+	// fail json.Marshal if this struct is ever serialized.
+	On401 func() `json:"-"`
 }
 
 type Tool struct {

@@ -697,6 +697,18 @@ func (a *EngineAdapter) Check(
 
 // DefaultRegistry returns a new peers.Registry seeded with no profiles.
 // Useful for constructing the API in the zero-configuration path.
+//
+// wiring:deferred — zero callers repo-wide as of fleet-enforcement-truth-
+// 01PMZ505 WP15 (2026-09-12, owner alec). The production wiring site
+// (core/rpc/api.go, "ACP peer management + envelope dispatch") always
+// takes the `c != nil && c.DataDir() != ""` branch and constructs
+// peers.NewRegistry directly, never this helper — confirmed distinct
+// from AN-10/acpReg's nil-secrets finding (C-10): that finding is about
+// api.go's live construction site passing a nil secrets.Backend: this
+// finding is that THIS constructor itself is never reached at all. Kept
+// (not deleted, per the A-0 freeze) as the documented zero-config
+// convenience its doc comment describes; blocked on a caller actually
+// wanting the zero-config path, which none does today.
 func DefaultRegistry() RegistryIface {
 	return peers.NewRegistry(nil, peers.NoopEmitter{})
 }

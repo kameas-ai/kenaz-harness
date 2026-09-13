@@ -81,6 +81,11 @@ type Spec struct {
 	// (both the SSE GET and each POST). Nil → a per-Connection
 	// client. Tests inject httptest.Server.Client() here.
 	HTTPClient *stdhttp.Client
+
+	// On401, when set, is invoked the moment either the SSE GET or a
+	// POST observes HTTP 401. Mirrors the http transport's Spec.On401
+	// (fleet-enforcement-truth-01PMZ505 WP14).
+	On401 func()
 }
 
 // Connection is the SSE implementation of transport.Connection.
@@ -273,6 +278,7 @@ func (c *Connection) openStream(ctx context.Context, client *stdhttp.Client, str
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024))
 		_ = resp.Body.Close()
 		c.recordErrBody(string(body))
+		c.notify401(resp.StatusCode)
 		return nil, fmt.Errorf("SSE stream returned HTTP %d %s", resp.StatusCode, stdhttp.StatusText(resp.StatusCode))
 	}
 	return resp, nil
@@ -391,9 +397,26 @@ func (c *Connection) Send(v any) error {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024))
 		c.recordErrBody(string(respBody))
+		c.notify401(resp.StatusCode)
 		return fmt.Errorf("sse: POST returned HTTP %d %s", resp.StatusCode, stdhttp.StatusText(resp.StatusCode))
 	}
 	return nil
+}
+
+// notify401 invokes Spec.On401 exactly when statusCode is 401. Shared by
+// both the SSE GET path and the POST path so a 401 on either channel
+// invalidates the same cached token (fleet-enforcement-truth-01PMZ505
+// WP14, AC-026).
+func (c *Connection) notify401(statusCode int) {
+	if statusCode != stdhttp.StatusUnauthorized {
+		return
+	}
+	c.mu.Lock()
+	on401 := c.spec.On401
+	c.mu.Unlock()
+	if on401 != nil {
+		on401()
+	}
 }
 
 // Recv blocks for the next inbound envelope. Returns io.EOF when the

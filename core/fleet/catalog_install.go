@@ -17,6 +17,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // installBasePath returns the namespaced path for an installed item.
@@ -148,8 +150,14 @@ func InstalledItems(dataDir string) ([]CatalogItem, error) {
 // pubKeyBase64 is the standard (non-URL-safe) base64-encoded 32-byte public key.
 func verifyCatalogSignature(pubKeyBase64 string, payload []byte, sigBase64 string) error {
 	if pubKeyBase64 == "" {
-		// No public key provided — skip verification (useful when server
-		// hasn't yet published per-device keys; tracked for follow-up).
+		// fleet-enforcement-truth-01PMZ505 WP10 (register C-2,
+		// 2026-08-19): logged at warn, not silently, because this skip
+		// means the install about to proceed is UNVERIFIED — no
+		// per-device catalog signing key source exists in or out of
+		// this repo (justify: blocker as above, owner alec). Behaviour
+		// unchanged; the skip is now observable instead of invisible.
+		logging.L().Warn("fleet.catalog_install.signature_verification_skipped",
+			"reason", "no pubkey configured — no per-device catalog signing key source exists yet")
 		return nil
 	}
 	pubBytes, err := base64.StdEncoding.DecodeString(pubKeyBase64)

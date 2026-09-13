@@ -17,10 +17,51 @@ import (
 // RPC middleware without any allocation.
 var lockdownActive atomic.Bool
 
+// lockdownReason holds the admin-supplied reason string alongside
+// lockdownActive. Race-safe under -race: the watcher goroutine and the
+// bootstrap path write it, FleetLockdownStatus reads it from the RPC
+// goroutine. Always holds a string (never nil) so LockdownReason never
+// needs a type assertion guard.
+//
+// (fleet-enforcement-truth-01PMZ505 WP08 — the reason previously reached
+// only the live broker event and was dropped on every other path,
+// including the boot-into-locked-state case the frontend's mount hook
+// exists specifically to handle.)
+var lockdownReason atomic.Value
+
+func init() {
+	lockdownReason.Store("")
+}
+
 // LockdownActive returns true when a fleet-issued emergency lockdown is
 // currently in effect. Safe to call from any goroutine.
 func LockdownActive() bool {
 	return lockdownActive.Load()
+}
+
+// LockdownReason returns the admin-supplied reason for the current
+// lockdown state, or "" when no reason has been recorded (including
+// whenever lockdown is not active — setLockdownState clears it on every
+// active=false transition).
+func LockdownReason() string {
+	v, _ := lockdownReason.Load().(string)
+	return v
+}
+
+// setLockdownState is the single write path for both lockdownActive and
+// lockdownReason, used by the watcher and the bootstrap path alike so the
+// two never drift: a reason is stored only when active is true, and
+// clearing lockdown always clears the reason with it (fleet.go's
+// LockdownStatusView doc: "Reason ... Empty when Active is false").
+// Returns the previous active value so callers can detect a transition.
+func setLockdownState(active bool, reason string) (prev bool) {
+	prev = lockdownActive.Swap(active)
+	if active {
+		lockdownReason.Store(reason)
+	} else {
+		lockdownReason.Store("")
+	}
+	return prev
 }
 
 // ForceSetLockdownForTest directly sets the lockdownActive flag. It is
@@ -29,6 +70,17 @@ func LockdownActive() bool {
 // MUST NOT be called from production code.
 func ForceSetLockdownForTest(active bool) {
 	lockdownActive.Store(active)
+	if !active {
+		lockdownReason.Store("")
+	}
+}
+
+// ForceSetLockdownReasonForTest directly sets both the lockdownActive flag
+// and lockdownReason. Exported for tests outside the fleet package that
+// need to exercise the reason-carrying path without running a Watcher.
+// MUST NOT be called from production code.
+func ForceSetLockdownReasonForTest(active bool, reason string) {
+	setLockdownState(active, reason)
 }
 
 // lockdownBackoffSteps are the retry intervals on network failure:
@@ -208,8 +260,8 @@ func (w *Watcher) run(ctx context.Context) {
 			continue
 		}
 
-		// State-change: update flag and emit broker event.
-		prev := lockdownActive.Swap(status.Lockdown)
+		// State-change: update flag+reason and emit broker event.
+		prev := setLockdownState(status.Lockdown, status.Reason)
 		if prev != status.Lockdown {
 			w.emit(status.Lockdown, status.Reason)
 			log.Printf("fleet.lockdown: state changed lockdown=%v reason=%q", status.Lockdown, status.Reason)
@@ -326,7 +378,7 @@ func BootstrapLockdownStatus(ctx context.Context, client *Client) {
 		return
 	}
 
-	prev := lockdownActive.Swap(status.Lockdown)
+	prev := setLockdownState(status.Lockdown, status.Reason)
 	if prev != status.Lockdown {
 		log.Printf("fleet.lockdown: bootstrap set lockdown=%v reason=%q", status.Lockdown, status.Reason)
 	}

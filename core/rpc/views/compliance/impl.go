@@ -89,6 +89,20 @@ func (a *API) SetRetention(_ context.Context, days int) error {
 	return nil
 }
 
+// SkipToID implements ComplianceAPI. Gated exactly like its siblings
+// (ArchiveNow, SetRetention) — same enabled()/nil-archiver checks — so a
+// disabled-capability caller sees the same ErrComplianceNotEnabled every
+// other mutating Compliance RPC returns.
+func (a *API) SkipToID(ctx context.Context, toID string) error {
+	if !a.enabled() {
+		return ErrComplianceNotEnabled
+	}
+	if a.archiver == nil {
+		return ErrComplianceNotEnabled
+	}
+	return a.archiver.SkipToID(ctx, toID)
+}
+
 func (a *API) enabled() bool {
 	if a.capCheck == nil {
 		return true // unconfigured = unrestricted (tests/dev)

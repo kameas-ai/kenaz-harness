@@ -3384,6 +3384,28 @@ func New(c *core.Core, opts ...Option) *API {
 	// path (c == nil or empty DataDir) so all five verbs return a clear
 	// "not configured" error rather than panicking.
 	if c != nil && c.DataDir() != "" {
+		// Two deliberately-nil arguments, two different dispositions
+		// (fleet-enforcement-truth-01PMZ505 WP15, §1.15/§5.14):
+		//
+		//   - secrets.Backend (1st arg): ESCALATED, not wired — E-008
+		//     (docs/unwired-ledger.md). Every AuthRef peer fails
+		//     credential resolution without it, but whether ACP peers
+		//     should resolve credentials through the same app-wide
+		//     secrets.Backend the rest of the harness uses is a product
+		//     scoping question a mission does not own unilaterally:
+		//     handing a remote-peer registry the app-wide resolver
+		//     silently widens what a remote peer can reach. Under the
+		//     A-0 freeze the options are wire-with-a-real-answer or
+		//     escalate — guessing a value here to quiet a lint would be
+		//     exactly the failure mode the campaign exists to end, aimed
+		//     at a credential path.
+		//   - AuthEventEmitter (2nd arg): peers.NoopEmitter{} is correct
+		//     as-is, not a placeholder for a missing wire. Its own doc
+		//     says "the real wiring comes from core/acp/events" — that
+		//     package does not exist anywhere in this repo (verified:
+		//     no directory, no PeerAuthAttempted implementer outside
+		//     core/acp/peers itself). There is no consumer to hand this
+		//     to yet; recorded in the ledger rather than fabricated.
 		acpReg := acppeers.NewRegistry(nil, acppeers.NoopEmitter{})
 		acpEnv := acpenvelope.New()
 		acpOpts := acpview.Options{
@@ -3908,11 +3930,19 @@ func New(c *core.Core, opts ...Option) *API {
 				return &c
 			}
 			slashAPI.WithSkillDeps(slashview.SkillDeps{
-				SkillStore:   skillStore,
-				FleetClient:  flCl,
-				Signer:       catalogSigner,
-				GetCaps:      getCaps,
-				PubKeyBase64: "",      // fleet-level pub key; empty = skip verify (same as catalog)
+				SkillStore:  skillStore,
+				FleetClient: flCl,
+				Signer:      catalogSigner,
+				GetCaps:     getCaps,
+				// fleet-enforcement-truth-01PMZ505 WP10, register C-2
+				// (2026-08-19, owner alec): SHIP THE HONESTY CHANGE; the
+				// key source is a separate, later decision. This is not
+				// a settled "empty means skip" configuration — it is a
+				// standing blocker: no per-device catalog signing key
+				// source exists in or out of this repo. See
+				// docs/unwired-ledger.md's catalog/skill pubkey entry
+				// and core/rpc/views/catalog/impl.go's pubKeyBase64 doc.
+				PubKeyBase64: "",
 				Emitter:      flAudit, // FR-501: wire audit for skill_published/installed/uninstalled
 			})
 			logging.L().Info("rpc.slashcmd.skill_deps_wired",

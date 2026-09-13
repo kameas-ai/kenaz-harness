@@ -42,4 +42,17 @@ type ComplianceAPI interface {
 	// SetRetention updates the local retention window.
 	// days must be one of 30, 60, 90, or 365.
 	SetRetention(ctx context.Context, days int) error
+
+	// SkipToID is the operator recovery action after a hash-chain
+	// break: it manually advances the archiver's cursor to toID,
+	// clearing the halt so ArchiveNow can proceed again, and emits
+	// fleet.audit_chain_skipped. Returns ErrComplianceNotEnabled when
+	// the archiver is not wired.
+	//
+	// (fleet-enforcement-truth-01PMZ505 WP06 — before this, SkipToID
+	// existed on *fleet.AuditArchiver with zero callers: ArchiveNow's
+	// own error told an operator to resolve the chain break, and there
+	// was no control anywhere — in the app or the console — that did
+	// so.)
+	SkipToID(ctx context.Context, toID string) error
 }
