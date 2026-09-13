@@ -26,14 +26,36 @@
 // and knobcoverage.Uncovered[settings.Settings]() sees the union of
 // both files' registrations.
 //
-// # Bookkeeping, not a wiring proof
+// # Bookkeeping, not a wiring proof — and not a substitute for checking
 //
 // knobcoverage.Register[T] accepts any non-empty description string and
-// verifies nothing about the named consumer — this pass is a bookkeeping
-// forcing function (a future field with no entry here fails CI loudly),
-// not independent re-verification of every consumer cited below. Three
-// known scope limits (spec §5 G-1, "coverage this actually buys — five of
-// eight"):
+// verifies nothing about the named consumer. That is exactly the trap
+// this file's first draft fell into: eleven fields were initially
+// written as Register on the strength of settings.Settings' OWN doc
+// comments ("Matches Settings.X", "read by the MCP health monitor",
+// "rejects negative values") — the same class of unverified claim this
+// entire mission exists to end. Direct verification against the live
+// tree (not the doc comments) before landing found all eleven were
+// false: PermissionMode, MCPAutoRestartDisabled and
+// SkippedUpdateVersions have no reader outside the settings package at
+// all; CedarStrictCredentialMode and CredentialAuditRetentionDays have
+// a real reader, but it lives in core/credstore, a verified I7 orphan
+// package nothing in the running binary imports; and
+// SummarizerProfileID / NarrativePromotionWeights /
+// NarrativePromotionThreshold / NarrativeRetrievalWeight /
+// NarrativePromoterParallelism / NarrativePreludeTopN are mentioned
+// only in comments inside core/memory/narrative, whose actual code
+// paths use hardcoded defaults. All eleven are RegisterDeferred below
+// with the verification evidence and a docs/unwired-ledger.md /
+// escalation-register citation, not silently fixed up as Register —
+// see each one's own comment. This is not exhaustive re-verification of
+// every consumer cited below (see spec §5 G-1's admission that the
+// gate cannot express every defect class), but every citation below was
+// checked against the live tree, not copied from the struct's own
+// doc comment.
+//
+// Three known scope limits remain (spec §5 G-1, "coverage this
+// actually buys — five of eight"):
 //
 //   - SchemaVersion registers clean (three real default-backfill reads)
 //     while its documented defect — no code compares it against any value
@@ -264,10 +286,33 @@ func init() {
 	)
 
 	// ── Permission / Cedar dials ─────────────────────────────────────
-	knobcoverage.Register[settings.Settings](
+	//
+	// PermissionMode was drafted as Register with a description claiming
+	// it gates bash/filesystem/credential/tool authorization. Verified
+	// against the live tree before landing (not just against its own doc
+	// comment, which is what made the claim wrong in the first place):
+	// EffectivePermissionMode()'s only non-test callers are
+	// FileStore.LoadPermissionMode / memoryStore.LoadPermissionMode,
+	// whose only caller in turn is the Settings_GetPermissionMode
+	// binding — the value round-trips to PermissionDialsPanel.vue and
+	// nothing in core/ branches on it. docs/unwired-ledger.md's
+	// "2026-08-14 · Settings fields that are stored, bound, and inert"
+	// entry recorded this independently and escalated it as G-4
+	// (docs/escalation-register-2026-08-19.md Part 8, ruling F-1),
+	// noting it must be ruled together with X-2/B-4 since the documented
+	// "every call prompts" semantics IS the per-call tool authorization
+	// those already ruled wire. Deferred, not falsely registered as
+	// covered — the exact self-catch this WP's own quality bar demands.
+	knobcoverage.RegisterDeferred[settings.Settings](
 		"PermissionMode",
-		"EffectivePermissionMode() read by the universal permission gate "+
-			"across bash/filesystem/credential/tool resource families.",
+		"NOT wired: EffectivePermissionMode()'s only callers are the two "+
+			"store Load accessors, whose only caller is the "+
+			"Settings_GetPermissionMode binding — a pure read/round-trip "+
+			"to PermissionDialsPanel.vue with no branch anywhere in core/. "+
+			"Escalated as G-4 (docs/escalation-register-2026-08-19.md "+
+			"Part 8, ruling F-1); must be ruled together with X-2/B-4. "+
+			"docs/unwired-ledger.md's 2026-08-14 'stored, bound, and "+
+			"inert' entry. Owner: alec.",
 	)
 	knobcoverage.Register[settings.Settings](
 		"PermissionCacheDangerousOps",
@@ -284,12 +329,27 @@ func init() {
 		"read by the permissions-migration one-time toast to avoid "+
 			"re-showing after the user has seen it once.",
 	)
-	knobcoverage.Register[settings.Settings](
+	// CedarStrictCredentialMode's reader is real Go code
+	// (core/credstore/store.go:70), but core/credstore itself is a
+	// verified I7 orphan package: scripts/ci/allowlists/
+	// i7-orphan-packages.txt:61 lists it, and its cross-reference note
+	// (:31-38) is explicit that "credstore's line is NOT 'Cedar
+	// credential gating is off' — live gating runs through
+	// cedar.GateMCPSpawn ... and does not touch core/credstore." No
+	// production import of core/credstore exists outside its own tests
+	// (verified 2026-09-12). A field whose only reader lives in a
+	// package nothing in the running binary imports is not consumed —
+	// deferred, matching docs/unwired-ledger.md's "Consumer lives in an
+	// orphan package" grouping, escalated as G-4.
+	knobcoverage.RegisterDeferred[settings.Settings](
 		"CedarStrictCredentialMode",
-		"read by the credstore Cedar gate to decide whether a "+
-			"NotApplicable outcome is treated as allow (lenient) or deny "+
-			"(strict) for non-mcp_spawn purposes (cedar-credential-policy-"+
-			"01KQ8TDE WP05).",
+		"NOT wired in the running binary: its reader (core/credstore/"+
+			"store.go:70) is real, but core/credstore is a verified I7 "+
+			"orphan package (scripts/ci/allowlists/i7-orphan-packages.txt) "+
+			"with zero production importers — live Cedar credential "+
+			"gating runs through cedar.GateMCPSpawn instead. Escalated "+
+			"as G-4 (docs/escalation-register-2026-08-19.md Part 8, "+
+			"ruling F-1). Owner: alec.",
 	)
 	knobcoverage.Register[settings.Settings](
 		"CedarStrictWorkflowMode",
@@ -304,11 +364,17 @@ func init() {
 			"context.authoring_enabled (model-authored-graphs-01PMGA01 "+
 			"UNIT-4, FR-006).",
 	)
-	knobcoverage.Register[settings.Settings](
+	// Same orphan-package reasoning as CedarStrictCredentialMode just
+	// above: core/credstore/prune.go:64 reads this field, but nothing
+	// in the running binary imports core/credstore.
+	knobcoverage.RegisterDeferred[settings.Settings](
 		"CredentialAuditRetentionDays",
-		"read by the daily credstore sweep goroutine to prune "+
-			"KindCredentialAccessed audit rows older than N days "+
-			"(credential-store-01KQ8TDD WP07).",
+		"NOT wired in the running binary: its reader (core/credstore/"+
+			"prune.go:64) is real, but core/credstore is a verified I7 "+
+			"orphan package (scripts/ci/allowlists/i7-orphan-packages.txt) "+
+			"with zero production importers. Escalated as G-4 "+
+			"(docs/escalation-register-2026-08-19.md Part 8, ruling F-1). "+
+			"Owner: alec.",
 	)
 	knobcoverage.Register[settings.Settings](
 		"BundleSigningPolicy",
@@ -402,40 +468,82 @@ func init() {
 		"read by the embedder construction path to override the "+
 			"per-Kind default embeddings model.",
 	)
+	// MemoryNarrativeEnabled is genuinely live: narrative.SetSettingsGate
+	// is called from core/rpc/api.go:1985 inside api.New, pinned by its
+	// own regression test (core/rpc/api_narrative_gate_boot_test.go,
+	// written after 01PMGX01 WP17 found the wire missing once already).
 	knobcoverage.Register[settings.Settings](
 		"MemoryNarrativeEnabled",
-		"read by the compactor to decide whether the narrative_first "+
-			"strategy runs at all (memory-narrative-layer-01KQ8TD1 WP12).",
+		"narrative.SetSettingsGate(func() bool {...}) called from "+
+			"core/rpc/api.go:1985 inside api.New, gating "+
+			"narrative.Enabled() for the whole memory-narrative-layer-"+
+			"01KQ8TD1 subsystem; regression-pinned by "+
+			"core/rpc/api_narrative_gate_boot_test.go.",
 	)
-	knobcoverage.Register[settings.Settings](
+	// The six fields below (SummarizerProfileID,
+	// NarrativePromotionWeights, NarrativePromotionThreshold,
+	// NarrativeRetrievalWeight, NarrativePromoterParallelism,
+	// NarrativePreludeTopN) were drafted as Register, trusting their
+	// struct doc comments' "Matches Settings.X" / "read by WPnn"
+	// phrasing. Verified against the live tree before landing: every
+	// one of those phrases is a comment-only mention inside
+	// core/memory/narrative — grep for the field name outside the
+	// settings package and tests turns up only doc comments, never a
+	// real selector read. The actual code paths use hardcoded
+	// constants/defaults instead (DefaultRetrievalWeight = 1.5 at
+	// core/memory/narrative/kind.go:55, consumed at promoter.go:228,288;
+	// DefaultPromotionWeights() = {1,3,10} at score.go:21-22 — neither
+	// ever reads the corresponding Settings field). This is precisely
+	// the class this mission exists to end: a doc comment asserting a
+	// consumer that isn't there. docs/unwired-ledger.md's 2026-08-14
+	// "stored, bound, and inert" entry recorded all six independently,
+	// grouped as "Narrative tuning knobs whose code paths use hardcoded
+	// defaults" and ruled by A-4 as a documented product retirement of
+	// the memory-narrative tuning surface (owner: alec) — a scoped
+	// deletion ruling this mission does not implement (A-0 governs
+	// deletions here; A-4 is a separate, already-made ruling for
+	// whichever mission executes it). Deferred, not falsely registered.
+	knobcoverage.RegisterDeferred[settings.Settings](
 		"SummarizerProfileID",
-		"read by the narrative synthesis worker to select the provider "+
-			"profile for per-turn LLM synthesis (WP04).",
+		"NOT wired: core/memory/narrative/synthetic.go:37 only MENTIONS "+
+			"'Settings.SummarizerProfileID' in a doc comment; no code "+
+			"selects the field. Ruled by A-4 as part of a documented "+
+			"product retirement of the narrative tuning surface. "+
+			"docs/unwired-ledger.md 2026-08-14. Owner: alec.",
 	)
-	knobcoverage.Register[settings.Settings](
+	knobcoverage.RegisterDeferred[settings.Settings](
 		"NarrativePromotionWeights",
-		"read by the long-term promotion scorer as the per-signal weight "+
-			"map (retrieval/citation/pin) (WP06).",
+		"NOT wired: core/memory/narrative/score.go:12 only MENTIONS "+
+			"'Settings.NarrativePromotionWeights' in a doc comment; "+
+			"DefaultPromotionWeights() ({1,3,10}, score.go:21-22) is what "+
+			"actually runs. Ruled by A-4. docs/unwired-ledger.md "+
+			"2026-08-14. Owner: alec.",
 	)
-	knobcoverage.Register[settings.Settings](
+	knobcoverage.RegisterDeferred[settings.Settings](
 		"NarrativePromotionThreshold",
-		"read by the long-term promotion scorer as the score floor "+
-			"(WP06).",
+		"NOT wired: zero references anywhere outside the settings "+
+			"package and tests — not even a comment mention. Ruled by "+
+			"A-4. docs/unwired-ledger.md 2026-08-14. Owner: alec.",
 	)
-	knobcoverage.Register[settings.Settings](
+	knobcoverage.RegisterDeferred[settings.Settings](
 		"NarrativeRetrievalWeight",
-		"read by similarity search as the narrative-chunk score "+
-			"multiplier (WP01).",
+		"NOT wired: core/memory/narrative/kind.go:54 only MENTIONS "+
+			"'Settings.NarrativeRetrievalWeight' in a doc comment; "+
+			"DefaultRetrievalWeight (1.5, kind.go:55) is what actually "+
+			"runs at promoter.go:228,288. Ruled by A-4. "+
+			"docs/unwired-ledger.md 2026-08-14. Owner: alec.",
 	)
-	knobcoverage.Register[settings.Settings](
+	knobcoverage.RegisterDeferred[settings.Settings](
 		"NarrativePromoterParallelism",
-		"read by the narrative promoter to size its synthesis worker "+
-			"pool (WP03).",
+		"NOT wired: zero references anywhere outside the settings "+
+			"package and tests — not even a comment mention. Ruled by "+
+			"A-4. docs/unwired-ledger.md 2026-08-14. Owner: alec.",
 	)
-	knobcoverage.Register[settings.Settings](
+	knobcoverage.RegisterDeferred[settings.Settings](
 		"NarrativePreludeTopN",
-		"read at session start to size the long-term-chunk prelude "+
-			"loaded into the system prompt (WP09).",
+		"NOT wired: zero references anywhere outside the settings "+
+			"package and tests — not even a comment mention. Ruled by "+
+			"A-4. docs/unwired-ledger.md 2026-08-14. Owner: alec.",
 	)
 	knobcoverage.Register[settings.Settings](
 		"ShowPerMessageTokenMeter",
@@ -492,16 +600,38 @@ func init() {
 			"BackgroundPoll's interval argument on every SetContext/save "+
 			"cycle.",
 	)
-	knobcoverage.Register[settings.Settings](
+	// SkippedUpdateVersions and MCPAutoRestartDisabled were drafted as
+	// Register on the strength of their struct doc comments ("the
+	// updater's release-check filters these out"; "MCPAutoRestart()
+	// ... decide whether to auto-restart"). Verified against the live
+	// tree before landing: SkippedUpdateVersions has zero references
+	// anywhere outside the settings package — no filter exists.
+	// MCPAutoRestartDisabled's only non-settings hit is the
+	// Settings_GetMCPAutoRestart binding; core/mcp/transport/stdio/
+	// supervisor.go's runSupervisor calls attemptRestart()
+	// UNCONDITIONALLY on every crash (supervisor.go:56) with no
+	// settings gate anywhere nearby — the doc's own claimed reader does
+	// not exist. Both are recorded in docs/unwired-ledger.md's
+	// 2026-08-14 "stored, bound, and inert" entry, "No implementation
+	// at all" grouping, escalated as G-4.
+	knobcoverage.RegisterDeferred[settings.Settings](
 		"SkippedUpdateVersions",
-		"read by the updater's release-check to filter out versions the "+
-			"user explicitly skipped.",
+		"NOT wired: zero references anywhere outside the settings "+
+			"package — no updater filter reads this list despite the "+
+			"doc's claim. Escalated as G-4 "+
+			"(docs/escalation-register-2026-08-19.md Part 8, ruling "+
+			"F-1). docs/unwired-ledger.md 2026-08-14. Owner: alec.",
 	)
-	knobcoverage.Register[settings.Settings](
+	knobcoverage.RegisterDeferred[settings.Settings](
 		"MCPAutoRestartDisabled",
-		"MCPAutoRestart() accessor read by the MCP health monitor to "+
-			"decide whether to auto-restart a server after consecutive "+
-			"ping failures (mcp-server-health-ui-01KQ8TD6 WP06).",
+		"NOT wired: core/mcp/transport/stdio/supervisor.go's "+
+			"runSupervisor calls attemptRestart() unconditionally on "+
+			"every crash (supervisor.go:56) with no settings gate — the "+
+			"doc's claimed 'MCP health monitor' reader does not exist. "+
+			"Only real hit is the Settings_GetMCPAutoRestart binding "+
+			"round-trip. Escalated as G-4 "+
+			"(docs/escalation-register-2026-08-19.md Part 8, ruling "+
+			"F-1). docs/unwired-ledger.md 2026-08-14. Owner: alec.",
 	)
 	knobcoverage.Register[settings.Settings](
 		"AutoTitleDisabled",
