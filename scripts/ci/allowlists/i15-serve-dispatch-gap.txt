@@ -1144,3 +1144,47 @@
 # 2026-09-12. Owner: alec.
 "Sessions_GetKnobsDefault"
 "Sessions_SetKnobsDefault"
+
+# CLASS: untriaged (inherits the family posture) -- release/v0.78.2
+# integration, 2026-09-13. 7 entries across 4 families.
+#
+# All seven are new desktop bindings landed by this release whose OWN
+# FAMILY is already allowlisted here. The disposition below is per family,
+# not blanket: each new method takes the same posture as its siblings,
+# because a family half-ported would be worse than a family consistently
+# deferred.
+#
+# BlockedRequests_{ListPending,Grant,Dismiss} -- model-scheduled-jobs-
+# 01PMSJ01 WP07. The blocked-permission-request surface is the companion
+# to ScheduledChat_*, which has 8 entries above; the mission's own report
+# states the two new broker topics are absent from served mode's
+# passthroughTopics and dispatch switch "matching existing precedent
+# (scheduled-chat's own ScheduledChat_* bindings are absent from both
+# too)". Porting these three without porting ScheduledChat_* would give
+# served mode a way to SEE a blocked request and grant it, but no way to
+# re-run the scheduled job it blocked -- a worse surface than none.
+# Port them together with the ScheduledChat_* family or not at all.
+#
+# Catalog_Unpublish -- joins Catalog_{Install,List,Installed,Publish}
+# already here (5 entries). Publish is deferred; unpublish must not be
+# reachable where publish is not.
+#
+# Compliance_SkipToID -- joins Compliance_{ArchiveNow,SetRetention,
+# Status} (3 entries).
+#
+# Sites_{EnvList,EnvSet} -- join Sites_{Status,Delete,Deploy,List} (5
+# entries). EnvSet writes site environment values; it must not outrun the
+# Sites_* family's own port decision, and it is the most credential-
+# adjacent of the four, so a premature served route is the wrong risk to
+# take first.
+#
+# Blocker: served-mode-is-a-real-mode-01PMZ707's port-or-boundary-panel
+# ruling for each family, none of which has been requested. Dated
+# 2026-09-13. Owner: alec.
+"BlockedRequests_ListPending"
+"BlockedRequests_Grant"
+"BlockedRequests_Dismiss"
+"Catalog_Unpublish"
+"Compliance_SkipToID"
+"Sites_EnvList"
+"Sites_EnvSet"
