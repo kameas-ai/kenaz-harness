@@ -228,11 +228,13 @@ type ServerInstance struct {
 	// so Close can wait for them.
 	supervisorWG sync.WaitGroup
 
-	// mu guards negotiated / tools / initialized fields read from
-	// upstream callers (pool.Tools, status snapshots).
+	// mu guards negotiated / tools / resources / prompts / initialized
+	// fields read from upstream callers (pool.Tools, status snapshots).
 	mu          sync.RWMutex
 	negotiated  InitializeResult
 	tools       []coremcp.Tool
+	resources   []transport.ResourceDefinition
+	prompts     []transport.PromptDefinition
 	initialized bool
 
 	// lifecycleMu guards every spawn-mutated field (conn, cmd,
@@ -568,6 +570,26 @@ func (s *ServerInstance) doInitialize(ctx context.Context, timeout time.Duration
 			s.logger.Warn("stdio.initial_tools_list", "err", err.Error())
 		}
 	}
+	// connector-lifecycle-truth-01PMZ303 UNIT-10 (FR-006): mirror the
+	// tools/list eager-fetch for resources/prompts, gated on the
+	// negotiated capability exactly like tools above. Before this,
+	// RecipeStatus.ResourceCount/PromptCount were hardcoded 0 for every
+	// installed server regardless of what it actually advertised — a
+	// measurement the UI rendered as if a check had run.
+	if result.Capabilities.Resources != nil {
+		resCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		if err := s.refreshResources(resCtx); err != nil {
+			s.logger.Warn("stdio.initial_resources_list", "err", err.Error())
+		}
+	}
+	if result.Capabilities.Prompts != nil {
+		promptCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		if err := s.refreshPrompts(promptCtx); err != nil {
+			s.logger.Warn("stdio.initial_prompts_list", "err", err.Error())
+		}
+	}
 	return nil
 }
 
@@ -605,6 +627,61 @@ func (s *ServerInstance) Tools() []coremcp.Tool {
 	out := make([]coremcp.Tool, len(s.tools))
 	copy(out, s.tools)
 	return out
+}
+
+// refreshResources issues resources/list and caches the result.
+// connector-lifecycle-truth-01PMZ303 UNIT-10: mirrors refreshTools —
+// only called when the server negotiated the resources capability.
+func (s *ServerInstance) refreshResources(ctx context.Context) error {
+	resp, err := s.callRaw(ctx, MethodResourcesList, nil)
+	if err != nil {
+		return err
+	}
+	var result ResourcesListResult
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return fmt.Errorf("stdio: decode resources/list: %w", err)
+	}
+	s.mu.Lock()
+	s.resources = result.Resources
+	s.mu.Unlock()
+	return nil
+}
+
+// ResourceCount returns the cached resources/list count. Zero before
+// the handshake completes or when the server does not advertise the
+// resources capability — the caller (RecipeStatus) is responsible for
+// distinguishing "not yet fetched" from "genuinely zero" if it needs
+// to; today both render as 0, which is honest (the field is absent
+// from the count of things this server has ever reported).
+func (s *ServerInstance) ResourceCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.resources)
+}
+
+// refreshPrompts issues prompts/list and caches the result. Mirrors
+// refreshResources.
+func (s *ServerInstance) refreshPrompts(ctx context.Context) error {
+	resp, err := s.callRaw(ctx, MethodPromptsList, nil)
+	if err != nil {
+		return err
+	}
+	var result PromptsListResult
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return fmt.Errorf("stdio: decode prompts/list: %w", err)
+	}
+	s.mu.Lock()
+	s.prompts = result.Prompts
+	s.mu.Unlock()
+	return nil
+}
+
+// PromptCount returns the cached prompts/list count. See ResourceCount's
+// doc for the "not fetched" vs. "genuinely zero" note.
+func (s *ServerInstance) PromptCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.prompts)
 }
 
 // CallTool issues tools/call and returns the raw result envelope
@@ -869,6 +946,20 @@ func (s *ServerInstance) handleNotification(msg RawMessage) {
 		go func() {
 			if err := s.refreshTools(context.Background()); err != nil {
 				s.logger.Warn("stdio.tools_refresh", "err", err.Error())
+			}
+		}()
+	case NotificationResourcesListChanged:
+		// connector-lifecycle-truth-01PMZ303 UNIT-10: mirrors the
+		// tools/list_changed refresh above, for resources.
+		go func() {
+			if err := s.refreshResources(context.Background()); err != nil {
+				s.logger.Warn("stdio.resources_refresh", "err", err.Error())
+			}
+		}()
+	case NotificationPromptsListChanged:
+		go func() {
+			if err := s.refreshPrompts(context.Background()); err != nil {
+				s.logger.Warn("stdio.prompts_refresh", "err", err.Error())
 			}
 		}()
 	case NotificationProgress:
