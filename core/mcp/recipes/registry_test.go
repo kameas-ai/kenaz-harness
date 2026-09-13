@@ -4386,3 +4386,29 @@ func TestRecipe_FR013Additions(t *testing.T) {
 		}
 	})
 }
+
+// TestNoWarningNamesAnUnreadKAMEASEnvVar is
+// connector-lifecycle-truth-01PMZ303 UNIT-4/AC-003b's catalog-derived
+// regression: no shipped recipe's `warning` copy may instruct the user to
+// "set KAMEAS_X_..." — that describes an environment variable no
+// production code reads. The real bring-your-own-credential seam is the
+// OS keychain, reached via the install modal's env_keys prompt and
+// recipes.ResolveEnv (spec.md §1.2), not an environment variable the
+// operator exports. Six recipes (slack, vercel, bitbucket, smartsheet,
+// wrike, tableau) shipped this exact lie before UNIT-1/UNIT-2/UNIT-4;
+// this asserts none of the 115 registry entries plus the 2 shipped ones
+// still does, so a future recipe addition can't reintroduce it either.
+//
+// Mutation: restore the pre-UNIT-4 slack warning text ("...set
+// KAMEAS_SLACK_OAUTH_CLIENT_ID at build time..."). Must fail.
+func TestNoWarningNamesAnUnreadKAMEASEnvVar(t *testing.T) {
+	all := append(append([]recipes.Recipe{}, recipes.Registry().List()...), recipes.Shipped().List()...)
+	for _, r := range all {
+		if r.Warning == "" {
+			continue
+		}
+		if strings.Contains(r.Warning, "KAMEAS_") {
+			t.Errorf("recipe %q warning names a KAMEAS_* env var no production code reads (the BYO seam is the keychain via the install modal, not an exported env var): %q", r.ID, r.Warning)
+		}
+	}
+}
