@@ -9,12 +9,21 @@ import {
   type AutonomyLayer,
 } from '@/lib/types';
 
-function buildClient(initial: AutonomyLayer) {
+function buildClient(
+  initial: AutonomyLayer,
+  opts: { maxAgentTurns?: number; fsRequestAccessEnabled?: boolean } = {},
+) {
   let layer = initial;
   const setAutonomy = vi.fn(async (l: AutonomyLayer) => {
     layer = l;
   });
   const getAutonomy = vi.fn(async () => layer);
+  const getMaxAgentTurns = vi.fn(async () => opts.maxAgentTurns ?? 0);
+  const setMaxAgentTurns = vi.fn(async () => undefined);
+  const getFSRequestAccessEnabled = vi.fn(
+    async () => opts.fsRequestAccessEnabled ?? true,
+  );
+  const setFSRequestAccessEnabled = vi.fn(async () => undefined);
   return {
     client: createFakeHarnessClient({
       settings: {
@@ -43,8 +52,8 @@ function buildClient(initial: AutonomyLayer) {
         setBash: async () => undefined,
         getSaveArtifact: async () => true,
         setSaveArtifact: async () => undefined,
-        getMaxAgentTurns: async () => 0,
-        setMaxAgentTurns: async () => undefined,
+        getMaxAgentTurns,
+        setMaxAgentTurns,
         getPermissionMode: async () => 'normal' as const,
         setPermissionMode: async () => undefined,
         getPermissionCacheDangerousOps: async () => false,
@@ -55,21 +64,33 @@ function buildClient(initial: AutonomyLayer) {
         setPermissionsMigrationToastShown: async () => undefined,
         getCedarStrictCredentialMode: async () => false,
         setCedarStrictCredentialMode: async () => undefined,
-        getFSRequestAccessEnabled: async () => true,
-        setFSRequestAccessEnabled: async () => undefined,
+        getFSRequestAccessEnabled,
+        setFSRequestAccessEnabled,
         getAutonomy,
         setAutonomy,
       } as any,
     }),
     setAutonomy,
     getAutonomy,
+    getMaxAgentTurns,
+    setMaxAgentTurns,
+    getFSRequestAccessEnabled,
+    setFSRequestAccessEnabled,
   };
 }
 
-function mountWith(initial: AutonomyLayer) {
-  const ctx = buildClient(initial);
+function mountWith(
+  initial: AutonomyLayer,
+  fetchOpts: {
+    skipFetch?: boolean;
+    maxAgentTurns?: number;
+    fsRequestAccessEnabled?: boolean;
+  } = {},
+) {
+  const { skipFetch = true, ...clientOpts } = fetchOpts;
+  const ctx = buildClient(initial, clientOpts);
   const wrapper = mount(AutonomyPanel, {
-    props: { layerOverride: initial, skipFetch: true },
+    props: { layerOverride: initial, skipFetch },
     global: { provide: { [HarnessClientKey as symbol]: ctx.client } },
   });
   return { wrapper, ...ctx };
@@ -124,5 +145,54 @@ describe('AutonomyPanel', () => {
     await flushPromises();
     const last = setAutonomy.mock.calls.at(-1)![0] as AutonomyLayer;
     expect(last.overrides.maxIterations).toBeUndefined();
+  });
+
+  // trust-surfaces-that-fire-01PMZ202 WP25 C2V-04: MaxAgentTurns and
+  // FSRequestAccessEnabled previously had zero .vue callers. These
+  // assert the panel actually calls the real branch-bearing bindings —
+  // not just that a value round-trips through local component state.
+  it('loads and persists the legacy max-agent-turns fallback', async () => {
+    const { wrapper, getMaxAgentTurns, setMaxAgentTurns } = mountWith(
+      emptyAutonomyLayer(),
+      { skipFetch: false, maxAgentTurns: 12 },
+    );
+    await flushPromises();
+    expect(getMaxAgentTurns).toHaveBeenCalled();
+    const input = wrapper.find('[data-testid="autonomy-max-agent-turns"]');
+    expect((input.element as HTMLInputElement).value).toBe('12');
+
+    await input.setValue('7');
+    await flushPromises();
+    expect(setMaxAgentTurns).toHaveBeenCalledWith(7);
+  });
+
+  it('normalises a negative/non-numeric max-agent-turns input to zero', async () => {
+    const { wrapper, setMaxAgentTurns } = mountWith(emptyAutonomyLayer(), {
+      skipFetch: false,
+      maxAgentTurns: 5,
+    });
+    await flushPromises();
+    const input = wrapper.find('[data-testid="autonomy-max-agent-turns"]');
+    await input.setValue('-3');
+    await flushPromises();
+    expect(setMaxAgentTurns).toHaveBeenCalledWith(0);
+  });
+
+  it('loads and persists the FS-request-access permission toggle', async () => {
+    const { wrapper, getFSRequestAccessEnabled, setFSRequestAccessEnabled } =
+      mountWith(emptyAutonomyLayer(), {
+        skipFetch: false,
+        fsRequestAccessEnabled: true,
+      });
+    await flushPromises();
+    expect(getFSRequestAccessEnabled).toHaveBeenCalled();
+    const toggle = wrapper.find(
+      '[data-testid="autonomy-fs-request-access-toggle"]',
+    );
+    expect((toggle.element as HTMLInputElement).checked).toBe(true);
+
+    await toggle.setValue(false);
+    await flushPromises();
+    expect(setFSRequestAccessEnabled).toHaveBeenCalledWith(false);
   });
 });
