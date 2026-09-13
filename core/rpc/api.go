@@ -4061,11 +4061,17 @@ func New(c *core.Core, opts ...Option) *API {
 		}
 	}
 
-	// Sites capability reconciler (sites-mcp-server-01NSITE05 WP04).
-	// Enables the "fleet-sites" recipe when sites_hosting appears and
-	// disables it when it disappears or goes stale (24 h TTL). Wired
-	// here because core/rpc already owns the CapabilityPoller and
-	// recipes.EnabledRecipes — this avoids core/core.go importing fleet.
+	// Capability recipe reconciler (sites-mcp-server-01NSITE05 WP04;
+	// generalized by connector-lifecycle-truth-01PMZ303 UNIT-12 from a
+	// fleet-sites-only reconciler to any recipe declaring
+	// RequiredCapability). Enables a recipe when its declared capability
+	// appears and disables it when that capability disappears or goes
+	// stale (24 h TTL). Wired here because core/rpc already owns the
+	// CapabilityPoller and recipes.EnabledRecipes — this avoids
+	// core/core.go importing fleet. The recipe source is the same
+	// shipped+registry+user merge mergedRecipeCatalog produces, so a
+	// user-authored recipe declaring required_capability is honoured
+	// too, not just the shipped fleet-sites entry.
 	if a.settingsImpl != nil && dataDir != "" {
 		if poller := a.settingsImpl.CapabilityPoller(); poller != nil {
 			enabled, err := recipes.LoadEnabled(dataDir)
@@ -4073,7 +4079,10 @@ func New(c *core.Core, opts ...Option) *API {
 				logging.L().Warn("rpc.sites_reconciler.load_enabled_failed", "err", err.Error())
 				enabled = &recipes.EnabledRecipes{}
 			}
-			corefleet.NewSitesReconciler(poller, enabled, dataDir).Start()
+			capabilityRecipeSource := func() []recipes.Recipe {
+				return mergedRecipeCatalog(mcpUserRecipeSource(a.mcpUserStore)).List()
+			}
+			corefleet.NewSitesReconciler(poller, enabled, dataDir, capabilityRecipeSource).Start()
 		}
 	}
 
