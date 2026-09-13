@@ -28,7 +28,10 @@ type ResolvedKnobs struct {
 	RecapStyle               RecapMode
 	ContinueOnError          ErrorMode
 	DestructiveActionPosture DestructivePosture
-	SourceTrace              map[Knob]Source
+	// RiskThreshold is risk-rated-autonomy-01PMRA01 FR-003's dial: see
+	// KnobRiskThreshold's doc comment (knobs.go) for the full contract.
+	RiskThreshold int
+	SourceTrace   map[Knob]Source
 	// PostureMode is the active named posture mode, or "" when none.
 	PostureMode string
 	// EffectiveTier is the Tier Level in effect for this resolution:
@@ -63,6 +66,7 @@ var allKnobs = []Knob{
 	KnobRecapStyle,
 	KnobContinueOnError,
 	KnobDestructiveActionPosture,
+	KnobRiskThreshold,
 }
 
 // Resolve implements the §Resolution semantics §Key invariant from plan.md:
@@ -236,6 +240,10 @@ func assignKnob(r *ResolvedKnobs, k Knob, v any) {
 	case KnobDestructiveActionPosture:
 		if m, ok := v.(DestructivePosture); ok {
 			r.DestructiveActionPosture = m
+		}
+	case KnobRiskThreshold:
+		if n, ok := v.(int); ok {
+			r.RiskThreshold = n
 		}
 	}
 }

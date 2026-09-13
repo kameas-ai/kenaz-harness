@@ -23,6 +23,10 @@ var planModePreset = map[Knob]any{
 	KnobRecapStyle:               RecapFull,
 	KnobContinueOnError:          ErrorStop,
 	KnobDestructiveActionPosture: DestructiveConfirm,
+	// 0: plan_mode is a locked, conservative posture (AskAlways, no
+	// auto-approve family) — every layer-3 dispatch should ask too,
+	// matching the rest of this preset's stance.
+	KnobRiskThreshold: 0,
 }
 
 // presetTable is the canonical mapping from Tier to the seven knob values, as
@@ -41,6 +45,10 @@ var presetTable = map[Tier]map[Knob]any{
 		KnobRecapStyle:               RecapNone,
 		KnobContinueOnError:          ErrorStop,
 		KnobDestructiveActionPosture: DestructiveConfirm,
+		// risk-rated-autonomy-01PMRA01 FR-003: 0 means every layer-3
+		// dispatch asks and the rater is bypassed entirely (FR-008) —
+		// strict is the tier with no tolerance for an automatic decision.
+		KnobRiskThreshold: 0,
 	},
 	TierCautious: {
 		KnobMaxIterations:            15,
@@ -50,6 +58,7 @@ var presetTable = map[Tier]map[Knob]any{
 		KnobRecapStyle:               RecapBrief,
 		KnobContinueOnError:          ErrorStop,
 		KnobDestructiveActionPosture: DestructiveConfirm,
+		KnobRiskThreshold:            20,
 	},
 	TierDefault: {
 		KnobMaxIterations:            40,
@@ -59,6 +68,7 @@ var presetTable = map[Tier]map[Knob]any{
 		KnobRecapStyle:               RecapBrief,
 		KnobContinueOnError:          ErrorRetryOnce,
 		KnobDestructiveActionPosture: DestructiveConfirm,
+		KnobRiskThreshold:            40,
 	},
 	TierBold: {
 		KnobMaxIterations:            100,
@@ -68,6 +78,7 @@ var presetTable = map[Tier]map[Knob]any{
 		KnobRecapStyle:               RecapFull,
 		KnobContinueOnError:          ErrorAdapt,
 		KnobDestructiveActionPosture: DestructiveCedarOnly,
+		KnobRiskThreshold:            60,
 	},
 	TierAutonomous: {
 		KnobMaxIterations:            0, // 0 == unbounded
@@ -77,6 +88,11 @@ var presetTable = map[Tier]map[Knob]any{
 		KnobRecapStyle:               RecapFull,
 		KnobContinueOnError:          ErrorAdapt,
 		KnobDestructiveActionPosture: DestructiveCedarOnly,
+		// 80: only the destructive/irreversible band asks (spec FR-003).
+		// Never 100 — a threshold above the family floor's ceiling
+		// (WP06) would let the floor's own value pass without asking,
+		// defeating the floor.
+		KnobRiskThreshold: 80,
 	},
 }
 

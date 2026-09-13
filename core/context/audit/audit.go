@@ -685,6 +685,30 @@ const (
 	// so the prompt was never offered and the verdict behaved as
 	// auto-allow (FR-006).
 	ToolConfirmPathToggleOff ToolConfirmPath = "toggle_off"
+
+	// ToolConfirmPathLayer1Forbid — risk-rated-autonomy-01PMRA01 WP02.
+	// Cedar's layer 1 (an explicit forbid policy) denied the call before
+	// any autonomy-posture rung was consulted. Hard: no rating, no
+	// autonomy knob, can ever override this.
+	ToolConfirmPathLayer1Forbid ToolConfirmPath = "layer1_forbid"
+
+	// ToolConfirmPathLayer2Permit — risk-rated-autonomy-01PMRA01 WP02.
+	// Cedar's layer 2 (an explicit permit policy) allowed the call
+	// before any autonomy-posture rung was consulted. Hard, like
+	// ToolConfirmPathLayer1Forbid.
+	ToolConfirmPathLayer2Permit ToolConfirmPath = "layer2_permit"
+
+	// ToolConfirmPathLayer3Confirm — risk-rated-autonomy-01PMRA01 WP02.
+	// Cedar had no opinion (NotApplicable) and layer 3 said a human
+	// decision is required, so the call was routed straight to the
+	// prompt rung, bypassing every autonomy-posture auto-skip mechanism
+	// (skip_set, toggle_off, session/persisted grants, headless policy).
+	// This is the rung this mission exists to add: it converts an
+	// unmatched action from "silently follows whatever the confirm-each
+	// ladder would otherwise have decided" into "always asks", pending
+	// WP03-WP06 giving layer 3 a real score to compare against a
+	// threshold instead of always asking.
+	ToolConfirmPathLayer3Confirm ToolConfirmPath = "layer3_confirm"
 )
 
 // AllToolConfirmPaths is the canonical list. WP06's coverage test walks
@@ -697,6 +721,9 @@ var AllToolConfirmPaths = []ToolConfirmPath{
 	ToolConfirmPathSkipSet,
 	ToolConfirmPathHeadlessPolicy,
 	ToolConfirmPathToggleOff,
+	ToolConfirmPathLayer1Forbid,
+	ToolConfirmPathLayer2Permit,
+	ToolConfirmPathLayer3Confirm,
 }
 
 // ToolConfirmDecisionPayload is the KindToolConfirmDecision payload.
@@ -721,6 +748,23 @@ type ToolConfirmDecisionPayload struct {
 
 	// Path names which branch decided. One of ToolConfirmPath.
 	Path ToolConfirmPath `json:"path"`
+
+	// Layer names which of the three risk-rated-autonomy-01PMRA01 layers
+	// decided (1 = Cedar forbid, 2 = Cedar permit, 3 = the rating
+	// resolver), or 0 for every pre-existing rung this mission did not
+	// touch (skip_set, toggle_off, grants, headless, prompted-via-rung-6).
+	// FR-007 requires the deciding layer be reconstructable from the
+	// audit trail; omitted (0) rather than required so every pre-mission
+	// record — and every path this mission did not touch — keeps
+	// encoding exactly as before.
+	Layer int `json:"layer,omitempty"`
+
+	// Threshold is the resolved autonomy.ResolvedKnobs.RiskThreshold
+	// (WP03) at the time of a Layer 1-3 decision, 0 for every
+	// pre-existing rung. Recorded so a stochastic layer-3 decision
+	// (WP05+) is reproducible after the fact: FR-007 requires the
+	// threshold the score was compared against, not just the outcome.
+	Threshold int `json:"threshold,omitempty"`
 
 	// Approved is the outcome: true when the call dispatched.
 	Approved bool `json:"approved"`

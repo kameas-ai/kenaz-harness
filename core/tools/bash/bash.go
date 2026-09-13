@@ -571,69 +571,107 @@ func (t *Tool) cedarGate(ctx context.Context, argv []string, workingDir string) 
 		})
 		return false, res
 
-	default: // NotApplicable
+	case cedar.NotApplicable:
 		if t.promptRegistry == nil {
 			// No registry — default-allow stance.
 			t.logf("bash.gate.not_applicable.allow_unbooted", "pattern", pattern)
 			return true, nil
 		}
-		surface := cedar.PromptSurface{
-			Bash: &cedar.BashPromptSurface{
-				Pattern:    pattern,
-				Argv:       argv,
-				WorkingDir: workingDir,
-				Dangerous:  isDangerous,
-			},
-		}
-		resolution, err := t.promptRegistry.RequestInteractive(ctx, surface)
-		if err != nil {
-			// Context cancelled or invalid surface — deny.
-			t.logf("bash.gate.prompt_err", "err", err.Error())
+		return t.promptBashGate(ctx, pattern, argv, workingDir, isDangerous)
+
+	case cedar.Confirm:
+		// risk-rated-autonomy-01PMRA01 WP01: no producer sends Confirm
+		// through this gate today — layer 3 (cedar.ThreeLayerResolve)
+		// is wired into the chat kernel tool adapter's confirm-each
+		// ladder, not into t.cedarEngine.Evaluate here. This branch is
+		// explicit and defensive: it reuses the exact same interactive
+		// prompt path NotApplicable uses when a registry is wired, but
+		// UNLIKE NotApplicable it fails CLOSED with no registry.
+		// Confirm means "a human decision is required"; there is no
+		// pre-boot legacy reason to read that as allow the way an
+		// un-evaluated NotApplicable has.
+		if t.promptRegistry == nil {
+			t.logf("bash.gate.confirm.deny_unbooted", "pattern", pattern)
 			res, _ := marshalResult(callResult{
-				Stderr:   "permission prompt error: " + err.Error(),
+				Stderr:   "cedar policy requires confirmation but no prompt channel is available",
 				ExitCode: -1,
 			})
 			return false, res
 		}
+		return t.promptBashGate(ctx, pattern, argv, workingDir, isDangerous)
 
-		switch resolution.Decision {
-		case cedar.DecisionDeny:
-			t.logf("bash.gate.prompt_deny", "pattern", pattern, "reason", resolution.Reason)
-			res, _ := marshalResult(callResult{
-				Stderr:   "permission denied by user: " + resolution.Reason,
-				ExitCode: -1,
-			})
-			return false, res
+	default:
+		// Unreachable for the closed Outcome enum (Allow/Deny/
+		// NotApplicable/Confirm are all handled above); fail closed
+		// rather than silently proceed if that ever stops being true.
+		t.logf("bash.gate.unknown_outcome", "pattern", pattern)
+		res, _ := marshalResult(callResult{
+			Stderr:   "cedar policy: unrecognised outcome",
+			ExitCode: -1,
+		})
+		return false, res
+	}
+}
 
-		case cedar.DecisionAllowOnce:
-			t.logf("bash.gate.allow_once", "pattern", pattern)
-			return true, nil
+// promptBashGate runs the interactive RequestInteractive round trip
+// shared by the NotApplicable and Confirm branches of cedarGate.
+func (t *Tool) promptBashGate(ctx context.Context, pattern string, argv []string, workingDir string, isDangerous bool) (allow bool, result json.RawMessage) {
+	surface := cedar.PromptSurface{
+		Bash: &cedar.BashPromptSurface{
+			Pattern:    pattern,
+			Argv:       argv,
+			WorkingDir: workingDir,
+			Dangerous:  isDangerous,
+		},
+	}
+	resolution, err := t.promptRegistry.RequestInteractive(ctx, surface)
+	if err != nil {
+		// Context cancelled or invalid surface — deny.
+		t.logf("bash.gate.prompt_err", "err", err.Error())
+		res, _ := marshalResult(callResult{
+			Stderr:   "permission prompt error: " + err.Error(),
+			ExitCode: -1,
+		})
+		return false, res
+	}
 
-		case cedar.DecisionAllowAlways:
-			if isDangerous && !t.dangerousOpsCacheAllowed() {
-				// Demote to AllowOnce; emit audit annotation.
-				// The entry is already resolved by RequestInteractive so
-				// we cannot call Resolve again. Log the demotion scope
-				// and proceed — the transient grant from AllowOnce would
-				// require the user to have picked AllowOnce; since they
-				// picked AllowAlways and we demote, the next invocation
-				// re-prompts. This is intentional (§4.3 FR-015).
-				t.logf("bash.gate.allow_always.dangerous_demoted",
-					"pattern", pattern,
-					"scope", "once_dangerous_demoted",
-				)
-				return true, nil
-			}
-			// Non-dangerous AllowAlways (or dangerous + override): write
-			// a .cedar snippet so the next gate query resolves via Allow
-			// without a prompt.
-			t.writePolicySnippet(pattern)
-			return true, nil
+	switch resolution.Decision {
+	case cedar.DecisionDeny:
+		t.logf("bash.gate.prompt_deny", "pattern", pattern, "reason", resolution.Reason)
+		res, _ := marshalResult(callResult{
+			Stderr:   "permission denied by user: " + resolution.Reason,
+			ExitCode: -1,
+		})
+		return false, res
 
-		default:
-			// Unknown decision — allow conservatively.
+	case cedar.DecisionAllowOnce:
+		t.logf("bash.gate.allow_once", "pattern", pattern)
+		return true, nil
+
+	case cedar.DecisionAllowAlways:
+		if isDangerous && !t.dangerousOpsCacheAllowed() {
+			// Demote to AllowOnce; emit audit annotation.
+			// The entry is already resolved by RequestInteractive so
+			// we cannot call Resolve again. Log the demotion scope
+			// and proceed — the transient grant from AllowOnce would
+			// require the user to have picked AllowOnce; since they
+			// picked AllowAlways and we demote, the next invocation
+			// re-prompts. This is intentional (§4.3 FR-015).
+			t.logf("bash.gate.allow_always.dangerous_demoted",
+				"pattern", pattern,
+				"scope", "once_dangerous_demoted",
+			)
 			return true, nil
 		}
+		// Non-dangerous AllowAlways (or dangerous + override): write
+		// a .cedar snippet so the next gate query resolves via Allow
+		// without a prompt.
+		t.writePolicySnippet(pattern)
+		return true, nil
+
+	default:
+		// Unknown decision — allow conservatively.
+		return true, nil
 	}
 }
 

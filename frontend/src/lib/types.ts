@@ -3733,7 +3733,8 @@ export type AutonomyKnob =
   | 'tokenCeilingPerTurn'
   | 'recapStyle'
   | 'continueOnError'
-  | 'destructiveActionPosture';
+  | 'destructiveActionPosture'
+  | 'riskThreshold';
 
 /**
  * AutonomyLayer is the wire shape of one rung in the global → project
@@ -3783,6 +3784,8 @@ export interface AutonomyKnobValues {
   recapStyle: string;
   continueOnError: string;
   destructiveActionPosture: string;
+  /** risk-rated-autonomy-01PMRA01 FR-003 dial, 0-100. */
+  riskThreshold: number;
   sourceTrace: Record<string, string>;
   /** Effective tier label for chat-header chip display. */
   tier: AutonomyTier | string;
@@ -3862,6 +3865,7 @@ export const AUTONOMY_KNOB_ORDER: readonly AutonomyKnob[] = [
   'recapStyle',
   'continueOnError',
   'destructiveActionPosture',
+  'riskThreshold',
 ];
 
 /** Display label for a knob. */
@@ -3873,6 +3877,7 @@ export const AUTONOMY_KNOB_LABELS: Record<AutonomyKnob, string> = {
   recapStyle: 'Recap style',
   continueOnError: 'On tool error',
   destructiveActionPosture: 'Destructive actions',
+  riskThreshold: 'Risk threshold (ask above)',
 };
 
 // ── Elicitation (ask-user-question-interactive-01KZNP3G WP02/WP04) ────
@@ -4047,7 +4052,7 @@ export interface PolicyFile {
  * Used by the audit panel in the policy view.
  */
 export interface PolicyDecision {
-  outcome: 'allow' | 'deny' | 'not_applicable' | 'unknown';
+  outcome: 'allow' | 'deny' | 'not_applicable' | 'confirm' | 'unknown';
   action: string;
   principal: string;
   resource: string;

@@ -14,14 +14,19 @@ import (
 // Concrete typed fields for every knob plus the per-knob source trace.
 // (autonomy-dial-01KR3M2A WP03)
 type AutonomyKnobValues struct {
-	MaxIterations            int               `json:"maxIterations"`
-	AskOnAmbiguity           string            `json:"askOnAmbiguity"`
-	AutoApproveFamilies      []string          `json:"autoApproveFamilies"`
-	TokenCeilingPerTurn      int               `json:"tokenCeilingPerTurn"`
-	RecapStyle               string            `json:"recapStyle"`
-	ContinueOnError          string            `json:"continueOnError"`
-	DestructiveActionPosture string            `json:"destructiveActionPosture"`
-	SourceTrace              map[string]string `json:"sourceTrace"`
+	MaxIterations            int      `json:"maxIterations"`
+	AskOnAmbiguity           string   `json:"askOnAmbiguity"`
+	AutoApproveFamilies      []string `json:"autoApproveFamilies"`
+	TokenCeilingPerTurn      int      `json:"tokenCeilingPerTurn"`
+	RecapStyle               string   `json:"recapStyle"`
+	ContinueOnError          string   `json:"continueOnError"`
+	DestructiveActionPosture string   `json:"destructiveActionPosture"`
+	// RiskThreshold is risk-rated-autonomy-01PMRA01 FR-003's dial (0-100,
+	// see autonomy.KnobRiskThreshold's doc comment). Surfaced here so the
+	// Settings autonomy panel can render it like the other seven knobs
+	// (WP03's "Settings surface" requirement) without a second RPC.
+	RiskThreshold int               `json:"riskThreshold"`
+	SourceTrace   map[string]string `json:"sourceTrace"`
 	// Tier is the effective tier label resolved from the highest-priority
 	// layer that contributed a Level (session > project > global > default).
 	Tier string `json:"tier"`
