@@ -164,3 +164,28 @@ core/update/service.go:51: Config.Swapper (Swapper) is documented optional but n
 # does the real work, it is not a deny-everything default. Blocker: none
 # — Swapper exists for core/update/service_test.go to inject a fake; no
 # product need for an alternate installer exists today. Owner: n/a.
+
+core/rpc/views/agentgraph/chat/chat_runner.go:519: Config.RiskGate (github.com/kameas-ai/kenaz-harness/core/policy/cedar.Gate) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
+# 2026-09-12 — DELIBERATE, and reversible in one line. risk-rated-autonomy-
+# 01PMRA01 WP01-WP04 merged with the wiring OFF: core/rpc/api.go sets
+# `RiskGate: nil` where the intended value is `secretGate` (the same live
+# Cedar engine SecretGate already uses). Blocker: layer 3 (Cedar
+# NotApplicable) resolves to Confirm, and until WP05's rater exists nothing
+# can resolve a below-threshold call back to Allow, so every unmatched
+# action asks. Measured against the real embedded policy set: built-in
+# kenaz__* tools still reach layer 2 Allow, but un-granted MCP tools
+# (filesystem__*, github__*, harness-self__*) move from silent allow to a
+# prompt. That is correct for an ATTENDED session; the blocker is
+# unattended, because core/toolloop/confirm.go:200 has no deadline and
+# kernel_tool_adapter.go says "Do not add a deadline here" (owner decision
+# 1) — so an autonomous unattended run would park forever on the first
+# un-granted MCP tool. WP07 exists to give layer-3 prompts their own
+# deadline. Owner: risk-rated-autonomy-01PMRA01. The change that deletes
+# this line: the PR landing WP05 + WP07, which flips api.go back to
+# `RiskGate: secretGate`. Full reasoning is duplicated at the wiring site.
+
+core/rpc/views/agentgraph/chat/kernel_tool_adapter.go:137: kernelToolAdapter.gate (github.com/kameas-ai/kenaz-harness/core/policy/cedar.Gate) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
+# 2026-09-12 — the same disable, one layer down: chat_runner.go:1098 calls
+# toolAdapter.withGate(r.cfg.RiskGate), so this field is nil for exactly
+# as long as Config.RiskGate is. Deleted by the same PR. Owner:
+# risk-rated-autonomy-01PMRA01.

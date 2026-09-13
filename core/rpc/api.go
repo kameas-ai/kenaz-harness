@@ -7103,10 +7103,39 @@ func buildChatRunner(
 		SecretLookup: secretLookup,
 		SecretGate:   secretGate,
 		SecretBudget: secretBudget,
-		// risk-rated-autonomy-01PMRA01 WP02: the SAME live Cedar engine
-		// as SecretGate immediately above — layers 1-2 of the new
-		// confirm-each rung must see the operator's real policy set.
-		RiskGate: secretGate,
+		// risk-rated-autonomy-01PMRA01 WP02: DELIBERATELY LEFT NIL until
+		// WP05 (the LLM risk rater) and WP07 (the unattended prompt
+		// deadline) land. nil makes rung 0 a byte-identical no-op; the
+		// intended production value is `secretGate`, the SAME live Cedar
+		// engine as SecretGate immediately above, so that layers 1-2 see
+		// the operator's real policy set.
+		//
+		// WHY IT IS OFF (measured 2026-09-12, release/v0.78.2):
+		// layer 3 (Cedar NotApplicable) resolves to Confirm, and until
+		// WP05 exists there is no rater that can resolve a below-
+		// threshold call back to Allow — so EVERY unmatched action asks,
+		// at every tier including autonomous. Built-in kenaz__* tools are
+		// unaffected (default_tool_policy.cedar permits server "kenaz",
+		// verified to reach layer 2 with the nil contextAttrs rung 0
+		// passes). Un-granted MCP-server tools are the affected set:
+		// filesystem__*, github__*, harness-self__* et al all move from
+		// silent allow to a prompt.
+		//
+		// A prompt is the RIGHT answer for an attended session, and is
+		// exactly the "universal prompt flow on first call" that
+		// default_tool_policy.cedar's header already describes. The
+		// blocker is the unattended case: core/toolloop/confirm.go:200
+		// states "There is no deadline", and kernel_tool_adapter.go's
+		// own comment says "Do not add a deadline here" (owner decision
+		// 1). So an agent running unattended at the autonomous tier
+		// would park forever on the first un-granted MCP tool, where
+		// today it proceeds. WP07 exists precisely to give layer-3
+		// prompts their own deadline without breaking that invariant for
+		// organically-reached confirm_each prompts.
+		//
+		// Flip this back to `secretGate` in the same PR as WP05+WP07.
+		// Owner: risk-rated-autonomy-01PMRA01. Do not enable earlier.
+		RiskGate: nil,
 	})
 	if err != nil {
 		logging.L().Error("chat.runner.construct_failed", "err", err.Error())

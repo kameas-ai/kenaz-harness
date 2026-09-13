@@ -296,3 +296,13 @@ core/tools/askuserquestion/askuserquestion.go:298: Options.Enabled (func) is nev
 core/tools/askuserquestion/askuserquestion.go:299: Options.Logger (pointer) is never set to a non-nil value in any non-test composite literal under core/
 core/tools/subagentdispatch/tool.go:179: Options.Tasks (interface) is never set to a non-nil value in any non-test composite literal under core/
 core/tools/subagentdispatch/tool.go:192: Options.SessionResolver (func) is never set to a non-nil value in any non-test composite literal under core/
+
+core/rpc/views/agentgraph/chat/chat_runner.go:519: Config.RiskGate (interface) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 — DELIBERATE. Same finding as the i18 entry for this field;
+# see scripts/ci/allowlists/i18-nil-optional-deps.txt for the full
+# measurement and the re-enable condition. Short version: rung 0 of
+# resolveConfirmEach is merged but switched off in core/rpc/api.go
+# (`RiskGate: nil`) because layer 3 asks about every un-granted MCP tool
+# and there is no prompt deadline yet, so an unattended autonomous run
+# would park forever. Owner: risk-rated-autonomy-01PMRA01. Deleted by the
+# PR landing WP05 (the rater) + WP07 (the unattended deadline).
