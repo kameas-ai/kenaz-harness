@@ -13,6 +13,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 	coreaskuser "github.com/kameas-ai/kenaz-harness/core/tools/askuserquestion"
 	corebash "github.com/kameas-ai/kenaz-harness/core/tools/bash"
+	corefsrequest "github.com/kameas-ai/kenaz-harness/core/tools/fsrequest"
 	coresubagent "github.com/kameas-ai/kenaz-harness/core/tools/subagentdispatch"
 	corewebfetch "github.com/kameas-ai/kenaz-harness/core/tools/webfetch"
 	corewebsearch "github.com/kameas-ai/kenaz-harness/core/tools/websearch"
@@ -132,6 +133,43 @@ func TestBuiltinEnabledPredicate_WebFetchDefaultOff(t *testing.T) {
 
 	if pred(corewebfetch.ToolName) {
 		t.Error("kenaz__web_fetch should be disabled by default (FR-005); got enabled")
+	}
+}
+
+// TestBuiltinEnabledPredicate_FSRequestAccessGatesToolCatalog pins
+// trust-surfaces-that-fire-01PMZ202 WP25 C2V-04: the
+// Settings_{Get,Set}FSRequestAccessEnabled bindings had zero .vue callers,
+// but the underlying FSRequestAccessDisabled field genuinely gates whether
+// kenaz__request_filesystem_access is offered to the model at all, via this
+// predicate (core/rpc/builtins_wiring.go's corefsrequest.ToolName case). This
+// asserts the observable consequence — the tool disappearing from the
+// enabled-set — not merely that the setting round-trips through storage.
+func TestBuiltinEnabledPredicate_FSRequestAccessGatesToolCatalog(t *testing.T) {
+	t.Parallel()
+
+	api := settings.NewAPI(nil) // in-memory store; zero value = enabled (default true)
+	store := api.Store()
+	if store == nil {
+		t.Fatal("settings store is nil")
+	}
+
+	pred := builtinEnabledPredicate(api)
+	if !pred(corefsrequest.ToolName) {
+		t.Error("kenaz__request_filesystem_access should be enabled by default (zero-value FSRequestAccessDisabled == false)")
+	}
+
+	if err := store.SaveFSRequestAccessEnabled(false); err != nil {
+		t.Fatalf("SaveFSRequestAccessEnabled(false): %v", err)
+	}
+	if pred(corefsrequest.ToolName) {
+		t.Error("kenaz__request_filesystem_access should be excluded from the tool catalog once FSRequestAccessEnabled is turned off")
+	}
+
+	if err := store.SaveFSRequestAccessEnabled(true); err != nil {
+		t.Fatalf("SaveFSRequestAccessEnabled(true): %v", err)
+	}
+	if !pred(corefsrequest.ToolName) {
+		t.Error("kenaz__request_filesystem_access should be re-admitted once FSRequestAccessEnabled is turned back on")
 	}
 }
 
