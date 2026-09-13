@@ -19,6 +19,14 @@ const (
 	KnobRecapStyle               Knob = "recapStyle"
 	KnobContinueOnError          Knob = "continueOnError"
 	KnobDestructiveActionPosture Knob = "destructiveActionPosture"
+	// KnobRiskThreshold is risk-rated-autonomy-01PMRA01 WP03's dial: the
+	// 0-100 score (spec FR-002's anchored bands) at or above which a
+	// layer-3 (Cedar had no opinion) tool dispatch must ask a human
+	// rather than being decided automatically. See presetTable for the
+	// per-tier ladder (0/20/40/60/80) and
+	// core/policy/cedar/risk_layer.go / kernel_tool_adapter.go's rung 0
+	// for the consumer.
+	KnobRiskThreshold Knob = "riskThreshold"
 )
 
 // AskMode controls when the loop pauses to ask the user vs. proceeds on its

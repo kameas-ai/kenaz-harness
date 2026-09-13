@@ -154,6 +154,13 @@ function parseKnob(k: AutonomyKnob, raw: string): unknown | undefined {
       if (!Number.isFinite(n)) return undefined;
       return Math.max(0, Math.trunc(n));
     }
+    case 'riskThreshold': {
+      const n = Number(raw);
+      if (!Number.isFinite(n)) return undefined;
+      // 0-100 (spec FR-002's score range); clamp rather than reject so a
+      // stray 150 doesn't silently no-op the override.
+      return Math.min(100, Math.max(0, Math.trunc(n)));
+    }
     case 'autoApproveFamilies': {
       // Accept a comma-separated list.
       const families = raw

@@ -139,7 +139,7 @@ func unmarshalOverrides(data []byte) (map[Knob]any, error) {
 // decodeKnobValue parses a single knob's JSON value into its concrete type.
 func decodeKnobValue(k Knob, raw json.RawMessage) (any, error) {
 	switch k {
-	case KnobMaxIterations, KnobTokenCeilingPerTurn:
+	case KnobMaxIterations, KnobTokenCeilingPerTurn, KnobRiskThreshold:
 		var n int
 		if err := json.Unmarshal(raw, &n); err != nil {
 			return nil, err

@@ -5216,6 +5216,7 @@ export function createFakeHarnessClient(
           recapStyle: 'brief',
           continueOnError: 'retry-once',
           destructiveActionPosture: 'confirm',
+          riskThreshold: 40,
           sourceTrace: {},
           tier: 'default',
         },

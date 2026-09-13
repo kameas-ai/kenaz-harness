@@ -6387,6 +6387,7 @@ export namespace sessions {
 	    recapStyle: string;
 	    continueOnError: string;
 	    destructiveActionPosture: string;
+	    riskThreshold: number;
 	    sourceTrace: Record<string, string>;
 	    tier: string;
 	
@@ -6403,6 +6404,7 @@ export namespace sessions {
 	        this.recapStyle = source["recapStyle"];
 	        this.continueOnError = source["continueOnError"];
 	        this.destructiveActionPosture = source["destructiveActionPosture"];
+	        this.riskThreshold = source["riskThreshold"];
 	        this.sourceTrace = source["sourceTrace"];
 	        this.tier = source["tier"];
 	    }

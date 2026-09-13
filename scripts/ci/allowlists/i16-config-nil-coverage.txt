@@ -148,7 +148,7 @@ core/rpc/views/acp/acp.go:314: Options.Verifier (interface) is never set to a no
 core/rpc/views/agentgraph/chat/chat_runner.go:443: Config.Clock (func) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
-core/rpc/views/agentgraph/chat/chat_runner.go:522: Config.SecretAuditEmitter (interface) is never set to a non-nil value in any non-test composite literal under core/
+core/rpc/views/agentgraph/chat/chat_runner.go:532: Config.SecretAuditEmitter (interface) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
 core/rpc/views/audit/impl.go:120: github.com/kameas-ai/kenaz-harness/core/rpc/views/audit.WithEmitter is never called by any non-test source under core/
