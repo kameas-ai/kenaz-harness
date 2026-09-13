@@ -81,6 +81,7 @@ import type {
   PrimaryAuth,
   RecipeCategory,
   RecipeListing,
+  RecipeSource,
   RecipeState,
   RecipeStatus,
   HealthEntry,
@@ -1177,6 +1178,7 @@ interface WireRecipeListing {
   enabled: boolean;
   status: WireRecipeStatus;
   keysPresent: boolean;
+  source: string;
 }
 
 export function adaptCategory(raw: string): RecipeCategory {
@@ -1385,12 +1387,27 @@ export function adaptHealthEntry(w: WireHealthEntry): HealthEntry {
   };
 }
 
+const KNOWN_RECIPE_SOURCES: readonly RecipeSource[] = [
+  'shipped',
+  'registry',
+  'user',
+  'imported',
+  'org',
+];
+
+function adaptRecipeSource(raw: string): RecipeSource {
+  return (KNOWN_RECIPE_SOURCES as readonly string[]).includes(raw)
+    ? (raw as RecipeSource)
+    : 'shipped';
+}
+
 function adaptRecipeListing(w: WireRecipeListing): RecipeListing {
   return {
     recipe: adaptRecipe(w.recipe),
     enabled: w.enabled,
     status: adaptRecipeStatus(w.status),
     keysPresent: w.keysPresent,
+    source: adaptRecipeSource(w.source),
   };
 }
 

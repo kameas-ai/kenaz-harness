@@ -4,11 +4,17 @@
  * from the recipe catalog. Each row has an "Install" button that calls
  * tools.install via the parent's install prop.
  *
- * BACKEND GAP: The shipped catalog does not currently carry a `source`
- * discriminator field on the wire shape. This tab renders ALL recipes
- * that are NOT currently enabled as candidate registry entries — once the
- * backend surfaces a `source` field (WP10+), this filter should be
- * tightened to `source === 'registry'`.
+ * NOTE (fleet-generic-sync-framework-01NSYNC02 WP03): `RecipeListing.
+ * source` now exists on the wire (it did not when this file's original
+ * "BACKEND GAP" comment was written) — see KenazToolsPanel.vue's
+ * sourceBadge()/isOrgManaged() for the consumer that motivated adding
+ * it. This tab was deliberately NOT changed to filter on
+ * `source === 'registry'`: doing so would hide every plain SHIPPED
+ * recipe from this browse-and-install tab (today it renders ALL
+ * non-enabled recipes as candidates, shipped included), which is a
+ * product decision about what belongs in "the registry browse tab"
+ * versus "everything installable" — not a mechanical wiring fix. Left
+ * as `!l.enabled` pending that call.
  */
 import { ref, computed, onMounted, watch } from 'vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';

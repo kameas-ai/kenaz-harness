@@ -70,6 +70,7 @@ function makeListing(
     enabled: false,
     keysPresent: false,
     status: makeStatus(recipe.id),
+    source: 'shipped',
     ...overrides,
   };
 }
@@ -762,6 +763,94 @@ describe('KenazToolsPanel — row Edit button (custom-recipe authoring, post-WP0
     await flushPromises();
 
     expect(w.find('[data-testid="add-mcp-modal"]').exists()).toBe(true);
+  });
+});
+
+// ── fleet-generic-sync-framework-01NSYNC02 WP03 — org-managed recipe
+// provenance + read-only enforcement ────────────────────────────────────
+//
+// Before WP03, RecipeListing carried no `source` field at all — the
+// backend gap this test file's own `makeListing` helper default
+// ('shipped') now stands in for. These tests are the mutation-proof pair:
+// a `source: 'org'` row must render the badge and hide Edit/Delete; an
+// otherwise-identical `source: 'shipped'` row (the existing
+// 'renders unconditionally' test above) must not.
+
+describe('KenazToolsPanel — org-provisioned recipe read-only badge (WP03)', () => {
+  function oneOrgManagedRecipe() {
+    return [
+      makeListing(makeRecipe('org-slack'), {
+        enabled: true,
+        keysPresent: true,
+        source: 'org',
+        status: makeStatus('org-slack', {
+          enabled: true,
+          state: 'running',
+          keysPresent: true,
+        }),
+      }),
+    ];
+  }
+
+  function oneShippedRecipe() {
+    return [
+      makeListing(makeRecipe('brave-search'), {
+        enabled: true,
+        keysPresent: true,
+        status: makeStatus('brave-search', {
+          enabled: true,
+          state: 'running',
+          keysPresent: true,
+        }),
+      }),
+    ];
+  }
+
+  it('renders the "Provisioned by your org" badge for a source=org row', async () => {
+    const setup = makeClient(oneOrgManagedRecipe());
+    const w = await mountPanel(setup);
+    await flushPromises();
+
+    expect(
+      w.find('[data-testid="recipe-org-badge-org-slack"]').exists(),
+    ).toBe(true);
+    expect(w.text()).toContain('Provisioned by your org');
+  });
+
+  it('does NOT render the org badge for an ordinary shipped row', async () => {
+    const setup = makeClient(oneShippedRecipe());
+    const w = await mountPanel(setup);
+    await flushPromises();
+
+    expect(
+      w.find('[data-testid="recipe-org-badge-brave-search"]').exists(),
+    ).toBe(false);
+  });
+
+  it('hides the Edit and Delete buttons for a source=org row', async () => {
+    const setup = makeClient(oneOrgManagedRecipe());
+    const w = await mountPanel(setup);
+    await flushPromises();
+
+    expect(
+      w.find('[data-testid="recipe-edit-btn-org-slack"]').exists(),
+    ).toBe(false);
+    expect(
+      w.find('[data-testid="recipe-delete-btn-org-slack"]').exists(),
+    ).toBe(false);
+  });
+
+  it('keeps the Edit and Delete buttons for an ordinary shipped row (mutation-proof: not hiding everything)', async () => {
+    const setup = makeClient(oneShippedRecipe());
+    const w = await mountPanel(setup);
+    await flushPromises();
+
+    expect(
+      w.find('[data-testid="recipe-edit-btn-brave-search"]').exists(),
+    ).toBe(true);
+    expect(
+      w.find('[data-testid="recipe-delete-btn-brave-search"]').exists(),
+    ).toBe(true);
   });
 });
 

@@ -38,47 +38,79 @@ const loading = ref(false);
 const errorMsg = ref('');
 const busyCategory = ref<string | null>(null);
 
-// ── category definitions ───────────────────────────────────────────────────
-interface CategoryDef {
-  id: string;
+// ── category display metadata ───────────────────────────────────────────────
+//
+// fleet-generic-sync-framework-01NSYNC02 WP06: this used to be a hardcoded
+// CATEGORIES array of exactly the five original categories, so a kind
+// registered later through the SyncKind registry (slash_commands, WP05)
+// synced correctly on the backend — Sync_Status already returned a row for
+// it — but never rendered here at all: this panel is a Vue array literal
+// scan, not a client.sync.status() scan. The fix is to render one row PER
+// STATUS ROW THE BACKEND RETURNS (`categories` below), not per hardcoded
+// id. CATEGORY_LABELS is now display metadata ONLY — a lookup for the
+// five categories whose copy predates this WP, not the source of truth
+// for which rows exist.
+interface CategoryLabel {
   label: string;
   description: string;
 }
 
-const CATEGORIES: CategoryDef[] = [
-  {
-    id: 'provider_profiles',
+const CATEGORY_LABELS: Record<string, CategoryLabel> = {
+  provider_profiles: {
     label: 'Provider profiles',
     description: 'LLM provider profile metadata (no credentials — API keys stay on-device).',
   },
-  {
-    id: 'model_prefs',
+  model_prefs: {
     label: 'Model preferences',
     description: 'Default model, provider allowlist, and per-task model prefs.',
   },
-  {
-    id: 'mcp_recipes',
+  mcp_recipes: {
     label: 'MCP recipes',
     description: 'Recipe templates (the "how to install" definitions, not secrets).',
   },
-  {
-    // Canonical wire value: corefleet.SyncCategoryInstalledMCP
-    // (core/fleet/sync.go:34), registered under this exact string at
-    // core/rpc/sync_categories.go:146. This id used to read
-    // 'installed_mcp_servers', which never matched a Sync_Status row
-    // (toggle silently no-opped: "Last synced: Never" forever) and
-    // reached the "unknown category" error on toggle
-    // (core/fleet/sync.go:151) — WP07, fleet-enforcement-truth-01PMZ505.
-    id: 'installed_mcp',
+  // Canonical wire value: corefleet.SyncCategoryInstalledMCP
+  // (core/fleet/sync.go:34), registered under this exact string at
+  // core/rpc/sync_categories.go:146. This id used to read
+  // 'installed_mcp_servers', which never matched a Sync_Status row
+  // (toggle silently no-opped: "Last synced: Never" forever) and reached
+  // the "unknown category" error on toggle (core/fleet/sync.go:151) —
+  // WP07, fleet-enforcement-truth-01PMZ505.
+  installed_mcp: {
     label: 'Installed MCP servers',
     description: 'Your installed MCP server list + config overrides. Secrets never leave this device.',
   },
-  {
-    id: 'ui_theme',
+  ui_theme: {
     label: 'UI theme',
     description: 'Color theme, density, and accessibility preferences.',
   },
-];
+  slash_commands: {
+    label: 'Slash commands',
+    description: 'Your custom /slash commands (global scope only).',
+  },
+};
+
+/**
+ * labelFor / descriptionFor — known categories use the curated copy
+ * above; an unrecognized id (any future kind registered through the
+ * SyncKind registry that this panel's copy hasn't caught up with yet)
+ * falls back to a readable title-cased rendering of the wire id rather
+ * than silently not rendering, or rendering a raw snake_case string.
+ */
+function titleCaseFromSnake(id: string): string {
+  return id
+    .split('_')
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
+function labelFor(id: string): string {
+  return CATEGORY_LABELS[id]?.label ?? titleCaseFromSnake(id);
+}
+
+function descriptionFor(id: string): string {
+  return CATEGORY_LABELS[id]?.description ?? '';
+}
 
 // ── helpers ────────────────────────────────────────────────────────────────
 function statusFor(id: string): SyncStatusView | undefined {
@@ -87,6 +119,37 @@ function statusFor(id: string): SyncStatusView | undefined {
 
 function isEnabled(id: string): boolean {
   return statusFor(id)?.enabled ?? false;
+}
+
+/**
+ * isOrgOnly — a kind whose registered Scopes include "org" but NOT
+ * "user" has nothing for a member to toggle personally: the row is
+ * entirely org-managed (FR-007: "org kinds show 'managed'"). No live
+ * kind is org-only yet (every current registration also declares
+ * ScopeUser), but the registry's Scopes are real data, not a guess, so
+ * this renders correctly the moment one exists — including PR review's
+ * forward-compat case, `provider_setups` (fleet-org-config-inheritance-
+ * 01NORGX01 WP04, still gated on the fleet-side blocker).
+ */
+function isOrgOnly(id: string): boolean {
+  const scopes = statusFor(id)?.scopes;
+  if (!scopes || scopes.length === 0) return false;
+  return scopes.includes('org') && !scopes.includes('user');
+}
+
+/**
+ * orgProvenanceLabel — the WP03 generic org-provenance signal
+ * (fleet.KindRegistry.OrgAppliedAt) rendered as human text, or '' when
+ * this kind has never been org-provisioned on this device.
+ */
+function orgProvenanceLabel(id: string): string {
+  const at = statusFor(id)?.org_applied_at;
+  if (!at) return '';
+  try {
+    return `Provisioned by your org — ${new Date(at).toLocaleString()}`;
+  } catch {
+    return `Provisioned by your org — ${at}`;
+  }
 }
 
 function lastSyncLabel(id: string): string {
@@ -235,68 +298,93 @@ function goToMCPTools() {
         Loading sync status…
       </div>
 
-      <!-- Category list -->
+      <!-- Category list — renders one row PER STATUS ROW THE BACKEND
+           RETURNS (fleet-generic-sync-framework-01NSYNC02 WP06), not per
+           a hardcoded id list. This is what makes slash_commands (and
+           any future SyncKind registration) visible here at all. -->
       <ul v-else class="space-y-3" data-testid="sync-category-list">
         <li
-          v-for="cat in CATEGORIES"
-          :key="cat.id"
+          v-for="s in statusList"
+          :key="s.category"
           class="rounded-md border border-border-muted bg-surface-1 p-4"
-          :data-testid="`sync-category-${cat.id}`"
+          :data-testid="`sync-category-${s.category}`"
         >
           <div class="flex items-start gap-3">
-            <!-- Toggle -->
-            <label class="mt-0.5 flex shrink-0 cursor-pointer items-center">
+            <!-- Toggle — hidden for an org-only kind (FR-007: "org kinds
+                 show 'managed'"); every live kind today also declares
+                 ScopeUser, so this branch is forward-compat rather than
+                 currently load-bearing. -->
+            <label
+              v-if="!isOrgOnly(s.category)"
+              class="mt-0.5 flex shrink-0 cursor-pointer items-center"
+            >
               <input
                 type="checkbox"
-                :checked="isEnabled(cat.id)"
-                :disabled="busyCategory === cat.id"
+                :checked="isEnabled(s.category)"
+                :disabled="busyCategory === s.category"
                 class="h-4 w-4 rounded accent-accent"
-                :aria-label="`Toggle ${cat.label} sync`"
-                :data-testid="`sync-toggle-${cat.id}`"
-                @change="toggle(cat.id)"
+                :aria-label="`Toggle ${labelFor(s.category)} sync`"
+                :data-testid="`sync-toggle-${s.category}`"
+                @change="toggle(s.category)"
               />
             </label>
+            <span
+              v-else
+              class="mt-0.5 shrink-0 rounded-sm bg-surface-2 px-1.5 py-0.5 font-ui text-[10px] uppercase tracking-[0.14em] text-ink-dim"
+              :data-testid="`sync-managed-${s.category}`"
+            >
+              Managed
+            </span>
 
             <!-- Labels + actions -->
             <div class="flex-1 min-w-0">
               <div class="flex items-center justify-between gap-2">
-                <span class="text-sm font-medium text-ink">{{ cat.label }}</span>
+                <span class="text-sm font-medium text-ink">{{ labelFor(s.category) }}</span>
                 <!-- Force push/pull — only when enabled -->
-                <div v-if="isEnabled(cat.id)" class="flex items-center gap-1.5 shrink-0">
+                <div v-if="isEnabled(s.category)" class="flex items-center gap-1.5 shrink-0">
                   <button
                     type="button"
                     class="h-6 rounded-sm border border-border-muted px-2 font-ui text-[10px] text-ink-muted hover:bg-surface-2 disabled:opacity-50"
                     :disabled="busyCategory !== null"
-                    :data-testid="`sync-force-push-${cat.id}`"
-                    @click="forcePush(cat.id)"
+                    :data-testid="`sync-force-push-${s.category}`"
+                    @click="forcePush(s.category)"
                   >
-                    {{ busyCategory === `push-${cat.id}` ? '…' : '↑ Push' }}
+                    {{ busyCategory === `push-${s.category}` ? '…' : '↑ Push' }}
                   </button>
                   <button
                     type="button"
                     class="h-6 rounded-sm border border-border-muted px-2 font-ui text-[10px] text-ink-muted hover:bg-surface-2 disabled:opacity-50"
                     :disabled="busyCategory !== null"
-                    :data-testid="`sync-force-pull-${cat.id}`"
-                    @click="forcePull(cat.id)"
+                    :data-testid="`sync-force-pull-${s.category}`"
+                    @click="forcePull(s.category)"
                   >
-                    {{ busyCategory === `pull-${cat.id}` ? '…' : '↓ Pull' }}
+                    {{ busyCategory === `pull-${s.category}` ? '…' : '↓ Pull' }}
                   </button>
                 </div>
               </div>
 
-              <p class="mt-0.5 text-xs text-ink-muted">{{ cat.description }}</p>
+              <p v-if="descriptionFor(s.category)" class="mt-0.5 text-xs text-ink-muted">
+                {{ descriptionFor(s.category) }}
+              </p>
 
-              <!-- Last synced + error -->
+              <!-- Last synced + error + org provenance -->
               <div class="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-[10px]">
                 <span class="text-ink-subtle">
-                  Last sync: <span :data-testid="`sync-last-ts-${cat.id}`">{{ lastSyncLabel(cat.id) }}</span>
+                  Last sync: <span :data-testid="`sync-last-ts-${s.category}`">{{ lastSyncLabel(s.category) }}</span>
                 </span>
                 <span
-                  v-if="lastError(cat.id)"
+                  v-if="lastError(s.category)"
                   class="text-signal-danger"
-                  :data-testid="`sync-last-error-${cat.id}`"
+                  :data-testid="`sync-last-error-${s.category}`"
                 >
-                  Error: {{ lastError(cat.id) }}
+                  Error: {{ lastError(s.category) }}
+                </span>
+                <span
+                  v-if="orgProvenanceLabel(s.category)"
+                  class="text-signal-info"
+                  :data-testid="`sync-org-provenance-${s.category}`"
+                >
+                  {{ orgProvenanceLabel(s.category) }}
                 </span>
               </div>
             </div>
