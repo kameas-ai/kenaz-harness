@@ -295,6 +295,12 @@ type instanceOptions struct {
 	// Used by healthPinger; tests can return a manually-driven
 	// ticker to control the cadence deterministically.
 	NewTicker func(d time.Duration) Ticker
+
+	// AutoRestartEnabled is consulted live by healthPinger before a
+	// two-consecutive-ping-failure trip signals a crash. Nil →
+	// enabled (see transport.PoolOptions.AutoRestartEnabled, which
+	// this mirrors — connector-lifecycle-truth-01PMZ303 UNIT-9).
+	AutoRestartEnabled func() bool
 }
 
 // defaultInstanceOptions returns options wired to wallclock time.

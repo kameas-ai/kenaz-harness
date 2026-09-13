@@ -140,9 +140,10 @@ func (p *Pool) openOne(ctx context.Context, spec coremcp.ServerSpec) error {
 		p.opts.Roots,
 		p.opts.Broker,
 		instanceOptions{
-			Now:       p.opts.Now,
-			Sleep:     p.opts.Sleep,
-			NewTicker: p.opts.NewTicker,
+			Now:                p.opts.Now,
+			Sleep:              p.opts.Sleep,
+			NewTicker:          p.opts.NewTicker,
+			AutoRestartEnabled: p.opts.AutoRestartEnabled,
 		},
 	)
 	sspec := SpawnSpec{

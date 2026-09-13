@@ -106,6 +106,94 @@ func TestHealth_TwoConsecutiveFailedPingsTripRestart(t *testing.T) {
 	}
 }
 
+// TestHealth_AutoRestartDisabled_TwoConsecutiveFailedPingsDoNotRestart is
+// connector-lifecycle-truth-01PMZ303 UNIT-9 / FR-005c / AC-005c's wire-branch
+// assertion: with AutoRestartEnabled returning false, the exact same
+// two-consecutive-ping-failure sequence that TripRestart above proves DOES
+// restart must NOT restart — the server stays up, unresponsive, on its
+// original process, with restartHistory untouched. Before this unit,
+// Settings.MCPAutoRestart had a complete RPC round trip and zero readers
+// under core/mcp/, so this assertion would have failed with the setting
+// "off" restarting exactly as if it were "on".
+//
+// Mutation: revert healthPinger's `if !s.autoRestartEnabled() { ...;
+// continue }` guard (i.e. always fall through to signalCrash). This test
+// must fail — waitForRestartCount would eventually see restartHistory grow
+// past 0 for a toggle that is supposed to suppress it.
+func TestHealth_AutoRestartDisabled_TwoConsecutiveFailedPingsDoNotRestart(t *testing.T) {
+	t.Parallel()
+	bin := buildFakeServer(t)
+
+	tickerHandle := struct {
+		mu sync.Mutex
+		t  *fakeTicker
+	}{}
+	newTicker := func(time.Duration) Ticker {
+		ft := newFakeTicker()
+		tickerHandle.mu.Lock()
+		tickerHandle.t = ft
+		tickerHandle.mu.Unlock()
+		return ft
+	}
+
+	inst := newServerInstance("fake", nil, nil, nil, nil, instanceOptions{
+		Sleep:              func(time.Duration) {},
+		NewTicker:          newTicker,
+		AutoRestartEnabled: func() bool { return false },
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := inst.Spawn(ctx, SpawnSpec{
+		ID:          "fake",
+		Command:     []string{bin, "--ignore-pings"},
+		PingPeriod:  50 * time.Millisecond,
+		PingTimeout: 100 * time.Millisecond,
+	}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	defer inst.Close(context.Background())
+
+	deadline := time.Now().Add(2 * time.Second)
+	var ft *fakeTicker
+	for time.Now().Before(deadline) {
+		tickerHandle.mu.Lock()
+		ft = tickerHandle.t
+		tickerHandle.mu.Unlock()
+		if ft != nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if ft == nil {
+		t.Fatalf("healthPinger never registered its ticker")
+	}
+
+	origPID := inst.statusPIDForTest()
+	if origPID == 0 {
+		t.Fatalf("origPID = 0; expected a running process")
+	}
+
+	// Same two-consecutive-failure sequence as the restart-enabled test.
+	ft.Tick()
+	time.Sleep(200 * time.Millisecond)
+	ft.Tick()
+
+	// Give the (absent) restart cycle as long as the enabled test's
+	// waitForRestartCount would, then assert nothing happened: same PID,
+	// no restart history, and the process is still nominally "running"
+	// from the supervisor's point of view (it was never told to crash).
+	time.Sleep(1 * time.Second)
+	if got := len(inst.restartHistorySnapshot()); got != 0 {
+		t.Fatalf("restartHistory = %d, want 0 — AutoRestartEnabled=false must suppress the trip entirely", got)
+	}
+	if newPID := inst.statusPIDForTest(); newPID != origPID {
+		t.Fatalf("PID changed (%d -> %d) despite AutoRestartEnabled=false", origPID, newPID)
+	}
+	if got := inst.State(); got != StateRunning {
+		t.Fatalf("state = %q, want running (server was never signalled to restart)", got)
+	}
+}
+
 // TestHealth_SuccessfulPingResetsFailureCounter asserts a single
 // ping miss followed by a successful one does not snowball into a
 // restart — the failure count resets.

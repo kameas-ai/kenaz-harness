@@ -5570,6 +5570,21 @@ func newLLMStack(
 		Roots:  stdio.DefaultRoots(mcpRootsDir(c, dataDir), nil),
 		Broker: &poolEventPublisher{broker: broker},
 		Logger: nil, // defaults to slog.Default
+		// AutoRestartEnabled (connector-lifecycle-truth-01PMZ303 UNIT-9):
+		// read live from Settings on every ping-failure trip decision,
+		// mirroring confirmEachEnabled's pattern a few lines above. Before
+		// this, Settings.MCPAutoRestart had a full RPC round trip and no
+		// reader anywhere under core/mcp/ — the toggle governed nothing.
+		AutoRestartEnabled: func() bool {
+			if settingsImpl == nil || settingsImpl.Store() == nil {
+				return true
+			}
+			v, err := settingsImpl.Store().LoadMCPAutoRestart()
+			if err != nil {
+				return true
+			}
+			return v
+		},
 	})
 	// Remote (http/sse) transport sub-pools. The DispatchPool wraps all
 	// three so the tools view and the core MCP seam route recipes to the
