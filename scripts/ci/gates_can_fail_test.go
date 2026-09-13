@@ -137,6 +137,8 @@ var cwdSensitiveGates = []string{
 	"check-bundle-channel-kinds-sync.sh",
 	"check-serve-gap-classification.sh",
 	"check-secret-lookup-wiring.sh",
+	"check-transport-parity.sh",
+	"check-recipe-token-substitution.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -1954,6 +1956,63 @@ func TestAuditStoreBeforeRetentionGate_PlantedStoreRemovalFails(t *testing.T) {
 	if !strings.Contains(out, "NewLocalRetentionScheduler(") {
 		t.Fatalf("gate failed, but its output does not mention the expected defect "+
 			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+}
+
+// TestTransportParityGate_PlantedCommentOnlyArmFails is
+// connector-lifecycle-truth-01PMZ303 UNIT-15's G-1 planted-violation
+// proof. Unlike the gates above, check-transport-parity.sh reads
+// core/mcp/dispatch/pool.go via a test-only overlay env var
+// (TRANSPORT_PARITY_POOL_GO), so this test never touches the real
+// tracked file at all — no read/write/defer-restore cycle, no risk of
+// leaving the working tree dirty on a crash mid-test.
+//
+// Reproduces the exact pre-UNIT-6 shape (spec.md §1.3): the http case's
+// real `d.httpPool.CloseOne(ctx, id)` call replaced by a comment-only
+// body, which would fall through to the function's shared error tail —
+// or, in the pre-UNIT-6 code this mirrors, its shared `return nil`.
+func TestTransportParityGate_PlantedCommentOnlyArmFails(t *testing.T) {
+	root := repoRoot(t)
+	poolPath := filepath.Join(root, "core", "mcp", "dispatch", "pool.go")
+
+	orig, err := os.ReadFile(poolPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", poolPath, err)
+	}
+
+	const target = "\tcase \"http\":\n\t\tif d.httpPool != nil {\n\t\t\treturn d.httpPool.CloseOne(ctx, id)\n\t\t}"
+	if !strings.Contains(string(orig), target) {
+		t.Fatalf("expected http case block not found in pool.go — closeOneByTag's shape may have "+
+			"moved; update this test and the gate together:\n%q", target)
+	}
+	const mutated = "\tcase \"http\":\n\t\t// TODO: http pool does not yet expose CloseOne"
+	newContent := strings.Replace(string(orig), target, mutated, 1)
+
+	scratch := t.TempDir()
+	scratchPool := filepath.Join(scratch, "pool_mutated.go")
+	if err := os.WriteFile(scratchPool, []byte(newContent), 0o644); err != nil {
+		t.Fatalf("writing scratch mutated pool.go: %v", err)
+	}
+
+	code, out := runGateEnv(t, "check-transport-parity.sh", root, map[string]string{
+		"TRANSPORT_PARITY_POOL_GO": scratchPool,
+	})
+	if code == 0 {
+		t.Fatalf("check-transport-parity.sh exited 0 with the http case's CloseOne call replaced "+
+			"by a bare comment — the gate cannot fail on the exact defect class it exists to "+
+			"catch.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, `case "http"`) {
+		t.Fatalf("gate failed, but its output does not name the http case "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+
+	// True-negative companion, same run: the REAL (unmutated) file must
+	// still pass, proving the gate does not fire on everything.
+	realCode, realOut := runGate(t, "check-transport-parity.sh", root)
+	if realCode != 0 {
+		t.Fatalf("check-transport-parity.sh failed against the real, unmutated pool.go — "+
+			"the gate is not correctly scoped:\n%s", realOut)
 	}
 }
 
