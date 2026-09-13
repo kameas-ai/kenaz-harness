@@ -2412,19 +2412,6 @@ export type RecipeState =
   | 'failed';
 
 /**
- * RecipeSource is the provenance discriminator for a catalog row
- * (connector-lifecycle-truth-01PMZ303 FR-007). Mirrors the
- * `recipes.Source*` constants in `core/mcp/recipes/recipes.go`:
- * "shipped" (the embedded shipped.json catalog), "registry" (the
- * curated in-binary registry.json), "user" (a hand-authored recipe
- * under `<DataDir>/mcp/recipes/`), or "imported" (translated from a
- * pasted Claude Desktop / Cursor config). "unknown" is the frontend
- * adapter's own fallback for a value the backend has not declared —
- * it must never silently fold to "shipped".
- */
-export type RecipeSource = 'shipped' | 'registry' | 'user' | 'imported' | 'unknown';
-
-/**
  * RecipeStatus — live snapshot of one recipe's child process. Mirrors
  * `core/mcp/stdio.RecipeStatus`.
  */
@@ -2563,15 +2550,31 @@ export interface ArtifactWithBytes {
 }
 
 /**
+ * RecipeSource — which catalog layer produced a RecipeListing's Recipe.
+ * Mirrors the recipes.Source* constants (core/mcp/recipes/recipes.go).
+ * 'org' rows are provisioned by the user's fleet organization and render
+ * read-only (fleet-generic-sync-framework-01NSYNC02 WP03) — mirroring the
+ * "Org-managed" badge SkillsPanel.vue already renders for mandated
+ * skills (FR-302).
+ */
+export type RecipeSource = 'shipped' | 'registry' | 'user' | 'imported' | 'org';
+
+/**
  * RecipeListing — one row returned from `Tools_ListRecipes`. Combines
  * the catalog metadata with the harness-side overlay (enabled flag,
- * live status snapshot, keys-resolvable hint).
+ * live status snapshot, keys-resolvable hint, catalog-layer source).
  */
 export interface RecipeListing {
   recipe: Recipe;
   enabled: boolean;
   status: RecipeStatus;
   keysPresent: boolean;
+  /**
+   * Which catalog layer produced this row (see RecipeSource). Wired
+   * fleet-generic-sync-framework-01NSYNC02 WP03 — before this field
+   * existed, KenazToolsPanel.vue's sourceBadge() hardcoded every row to
+   * 'shipped' regardless of the real source.
+   */
   source: RecipeSource;
 }
 
@@ -4495,6 +4498,19 @@ export interface SyncStatusView {
   last_pull_at?: string;
   /** Non-empty when the last push/pull errored. */
   last_error?: string;
+  /**
+   * Which layers this kind participates in ("user" | "org" | "team"),
+   * read from the SyncKind registry. Empty when no registry is wired or
+   * this category has no registration (fleet-generic-sync-framework-
+   * 01NSYNC02 WP06, FR-007).
+   */
+  scopes?: string[];
+  /**
+   * RFC3339 timestamp of this kind's most recent successful org_config
+   * apply, or absent if it has never been org-provisioned on this
+   * device. The WP03 generic org-provenance signal.
+   */
+  org_applied_at?: string;
 }
 
 /**

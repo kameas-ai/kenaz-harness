@@ -3707,6 +3707,16 @@ func New(c *core.Core, opts ...Option) *API {
 		if a.settingsImpl != nil {
 			a.settingsImpl.SetSyncKindRegistry(a.syncKindRegistry)
 		}
+		// fleet-generic-sync-framework-01NSYNC02 WP06: wire the same
+		// registry into the Sync view so Sync_Status can enrich each row
+		// with its declared Scopes and org provenance (FR-007). syncAPI
+		// is a *syncview.API concrete type here (constructed a few lines
+		// above), not the SyncAPI interface — SetSyncKindRegistry is not
+		// part of that interface's contract, only this constructor needs
+		// the concrete setter.
+		if syncAPI, ok := a.syncAPI.(*syncview.API); ok {
+			syncAPI.SetSyncKindRegistry(a.syncKindRegistry)
+		}
 
 		// Connect settings mutations to the Syncer's debounced push so a theme
 		// change schedules a push-up (no-op when the category is disabled).

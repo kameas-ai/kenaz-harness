@@ -416,6 +416,7 @@ func (a *API) StopFleetBackground() {
 	a.fleet.telemetryOptIns = nil
 	pipeline := a.fleet.otlpPipeline
 	mcpCatalog := a.fleet.mcpCatalog
+	syncKindRegistry := a.fleet.syncKindRegistry
 	a.fleet.mu.Unlock()
 
 	// Clear the org-provisioned recipe overlay (fleet-org-config-
@@ -425,6 +426,16 @@ func (a *API) StopFleetBackground() {
 	// on the catalog, not fleetState's.
 	if mcpCatalog != nil {
 		mcpCatalog.SetOrgRecipes(nil)
+	}
+
+	// Clear the generic org-provenance tracker (fleet-generic-sync-
+	// framework-01NSYNC02 WP03) — the kind-agnostic counterpart to
+	// SetOrgRecipes(nil) above. Without this, a signed-out device's
+	// Settings → Sync surface (WP06) would keep reporting a kind as
+	// "provisioned by your org" from a stale timestamp forever, even
+	// though FR-008 requires org layers to drop cleanly on sign-out.
+	if syncKindRegistry != nil {
+		syncKindRegistry.ClearOrgProvenance()
 	}
 
 	// Drop the OTLP log lane's narrowing snapshot too: an empty snapshot
@@ -1000,10 +1011,31 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 						id, kind.HasScope(fleet.ScopeOrg), kind.Apply == nil))
 					continue
 				}
+				// fleet-generic-sync-framework-01NSYNC02 WP06 (FR-006): the
+				// org_config path dispatches straight to kind.Apply, bypassing
+				// CategoryConfig()'s ScopeUser adapter (synckind.go) entirely
+				// — so the secret-shape backstop wired there does not cover
+				// this path unless it is also applied here. This is the
+				// ScopeOrg half of the same central check.
+				if kind.SecretPolicy == fleet.SecretPolicyMustNotContainSecrets {
+					if reason := fleet.SecretShapeReason(payload); reason != "" {
+						logging.L().Warn("fleet.config.org_config.secret_shaped_payload_refused", "kind", id, "reason", reason)
+						errs = append(errs, fmt.Errorf("fleet/config: org_config kind %q: refusing a secret-shaped payload (%s)", id, reason))
+						continue
+					}
+				}
 				if err := kind.Apply(ctx, fleet.ScopeOrg, payload); err != nil {
 					logging.L().Warn("fleet.config.org_config.apply_error", "kind", id, "err", err.Error())
 					errs = append(errs, fmt.Errorf("fleet/config: org_config kind %q apply: %w", id, err))
+					continue
 				}
+				// fleet-generic-sync-framework-01NSYNC02 WP03: record generic
+				// org provenance ONLY on a successful apply — mirrors this
+				// loop's own "an apply error must not read applied:true"
+				// posture (see the doc comment above this loop). A kind that
+				// failed to apply must not claim to be currently
+				// org-provisioned.
+				registry.MarkOrgApplied(id, time.Now())
 			}
 		}
 	}

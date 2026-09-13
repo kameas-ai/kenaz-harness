@@ -228,13 +228,25 @@ func mcpRecipesKind(cat *recipes.MergedCatalog) corefleet.SyncKind {
 		},
 		SecretPolicy: corefleet.SecretPolicyMustNotContainSecrets,
 		// org_wins_readonly, not lww: the org arm always wins over a
-		// member's personal entry (mirrored via MergedCatalog's org-layer
-		// precedence in core/mcp/recipes/merged.go, not by this framework's
-		// own conflict machinery — fleet-generic-sync-framework-01NSYNC02
-		// WP03's generic org_wins_readonly enforcement has not landed yet).
-		// This value documents the kind's true org-scope semantics ahead of
-		// that landing rather than leaving the pre-WP03 LWW default, which
-		// never described this kind's org arm correctly.
+		// member's personal entry, mirrored via MergedCatalog's org-layer
+		// precedence in core/mcp/recipes/merged.go.
+		//
+		// fleet-generic-sync-framework-01NSYNC02 WP03 update: the actual
+		// shadow-vs-delete CONFLICT RESOLUTION for this kind still lives in
+		// merged.go, by design — the framework cannot generically shadow an
+		// arbitrary opaque []byte payload without knowing its ID-keyed
+		// shape, so a truly kind-agnostic "conflict engine" was never a
+		// buildable v1 goal (this is unchanged from before WP03). What WP03
+		// DID add generically is the complementary, kind-agnostic half:
+		// provenance TRACKING. compositeConfigApplier.ApplyBundle
+		// (core/rpc/views/settings/fleet.go) now calls
+		// registry.MarkOrgApplied(id, …) after this kind's Apply succeeds,
+		// so "is mcp_recipes currently org-provisioned, and since when" is
+		// answerable without any code here knowing what a Recipe is — the
+		// Settings → Sync surface (WP06) reads that generically, while the
+		// per-recipe "Provisioned by your org" badge continues to read
+		// Recipe.Source (finer-grained: WHICH recipes, not just whether the
+		// kind as a whole has an active org layer).
 		ConflictPolicy: corefleet.ConflictPolicyOrgWinsReadonly,
 	}
 }

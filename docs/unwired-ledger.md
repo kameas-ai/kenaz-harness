@@ -340,6 +340,112 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-09-12 (fleet-generic-sync-framework-01NSYNC02 WP03) · `SyncKind.ConflictPolicy` and `.SecretPolicy` were validated-only dials, never consumed — FIXED
+
+Dials-to-consumer trace (CLAUDE.md unwired-sweep pass 4) on the
+`fleet.SyncKind` registration struct WP01/WP02 introduced. Both
+`ConflictPolicy` and `SecretPolicy` are marked "Required" on the struct
+and `KindRegistry.Register`'s `validate()` rejects a kind that leaves
+either empty — but a repo-wide grep for `.ConflictPolicy` / `.SecretPolicy`
+reads (not just the constant declarations) turned up exactly one call site
+each, and it was the same `validate()` non-empty check. Nothing ever
+branched on *which* value a kind declared: `mcpRecipesKind`
+(`core/rpc/sync_categories.go`)'s own comment said as much — "this
+framework's own conflict machinery [...] has not landed yet" — and every
+kind's `SecretPolicy` was pure documentation of an honor-system rule each
+collector/applier was independently trusted to follow.
+
+Fixed in the same change (not deferred):
+
+- `SecretPolicy`: `core/fleet/secretshape.go`'s new `SecretShapeReason`
+  scans for `@secret:` references, API-key-shaped literals, and a fixed
+  set of exact-match credential field names, walking arbitrary JSON
+  recursively. Wired into BOTH invocation paths — `SyncKind.CategoryConfig()`
+  (the ScopeUser/LWW adapter, `core/fleet/synckind.go`) and
+  `compositeConfigApplier.ApplyBundle`'s org_config dispatch loop
+  (`core/rpc/views/settings/fleet.go`, ScopeOrg) — since the two paths
+  invoke `kind.Apply` through different code and neither previously
+  consulted `SecretPolicy` at all.
+- `ConflictPolicy`: the actual shadow-vs-delete CONFLICT RESOLUTION
+  remains correctly kind-specific (`core/mcp/recipes/merged.go`'s org-layer
+  precedence for `mcp_recipes`) — a framework-generic resolver over an
+  opaque `[]byte` payload was never a buildable goal, so this is not
+  "fixed" in the sense of making the enum drive behavior directly. What
+  IS now real: `KindRegistry.MarkOrgApplied`/`OrgAppliedAt`/
+  `ClearOrgProvenance` (`core/fleet/synckind.go`) track, generically and
+  kind-agnostically, *whether* a kind is currently org-provisioned —
+  the "shared provenance model" WP03's tasks.md acceptance asked for,
+  consumed by the Settings → Sync surface (WP06) and cleared on sign-out
+  (`StopFleetBackground`).
+
+Mutation-proof tests: `core/fleet/secretshape_test.go` (clean payloads
+pass, secret-shaped ones don't, lookalike field names like
+`tokenEnvVar` are NOT flagged), `core/fleet/synckind_test.go`'s
+`TestSyncKind_CategoryConfig_{Collect,Apply}RejectsSecretShapedPayload`
++ `CleanPayloadStillRoundTrips`, and
+`core/rpc/views/settings/fleet_orgconfig_test.go`'s
+`TestApplyBundle_OrgConfig_{RefusesSecretShapedPayload,
+CleanSecretlessPayloadStillApplies, MarksProvenanceOnSuccess,
+DoesNotMarkProvenanceOnFailure}`.
+
+### 2026-09-12 (fleet-generic-sync-framework-01NSYNC02 WP03) · `recipes.Recipe.Source` never reached the frontend — KenazToolsPanel.vue hardcoded every row to 'shipped' — FIXED
+
+`recipes.Recipe.Source` carries `json:"-"` (correctly — it must never
+round-trip through the on-disk YAML/JSON recipe-definition codecs) and
+`tools.RecipeListing` (the `Tools_ListRecipes` wire response) embedded
+`Recipe` by value with no separate field to carry it. The frontend's own
+`sourceBadge()` in `KenazToolsPanel.vue` said so directly: "BACKEND GAP:
+The wire shape does not yet carry a `source` discriminator... [it] returns
+'shipped'" for every row, always — including the org-provisioned MCP
+recipes `fleet-org-config-inheritance-01NORGX01` had already wired
+end-to-end on the backend (`recipes.ApplyProvisionedMCP` → `SourceOrg`).
+There was no way for a member to see "Provisioned by your org" on any
+MCP recipe, because the ONE field that would tell them never reached the
+browser.
+
+**Decision**: add `Source string` as a top-level field on
+`tools.RecipeListing` (`core/rpc/views/tools/api.go`), populated from
+`recipes.Recipe.Source` in `ListRecipes`. This is a dedicated,
+purpose-built wire type ("Wire shapes are deliberately small" per its own
+doc comment) distinct from `recipes.Recipe` itself, so re-exposing the
+value here does not touch the on-disk `json:"-"`/`yaml:"-"` contract or
+any other endpoint that returns a bare `recipes.Recipe` (e.g.
+`SaveCustomRecipe`). The alternative — flipping `Recipe.Source`'s own
+json tag — was rejected because `Recipe` is a shared type serialized in
+multiple contexts with different needs.
+
+Frontend: `KenazToolsPanel.vue`'s `sourceBadge()`/`sourceBadgeClass()`
+now read the real field; a new `isOrgManaged()` hides the Edit/Delete
+buttons and shows a "Provisioned by your org" badge for `source === 'org'`
+rows, mirroring `SkillsPanel.vue`'s existing FR-302 "Org-managed"
+treatment for mandated skills (same rationale: editing an org-provisioned
+row would silently create a lower-precedence personal override the next
+bundle re-shadows without warning).
+
+**Known follow-up, not resolved here**: `tools.RecipeListing` is a
+Wails-bound return type; `scripts/ci/check-codegen.sh` will report
+WAILSJS DRIFT until `frontend/wailsjs/go/models.ts`'s `tools.RecipeListing`
+class is regenerated to include `source: string`. Per this repo's
+`wails generate module` hazard (it opens whatever database `HOME`/
+`KENAZ_HARNESS_ENV` resolve to — see CLAUDE.md's "Tooling footguns"), this
+was deliberately NOT run here; the frontend adapts the new field through
+hand-maintained interfaces (`WireRecipeListing` in `harnessClient.ts`,
+which `Tools_ListRecipes`'s runtime call path never routes through
+`models.ts` for anyway), matching the "hand-declare on WailsBindingsLike"
+pattern this repo uses for binding changes a session can't safely
+regenerate. A `wails generate module` pass (with the documented
+`HOME=$(mktemp -d) KENAZ_HARNESS_ENV=test` override) is needed before the
+codegen-drift gate goes green again.
+
+Mutation-proof: `core/rpc/views/tools/impl_test.go`'s
+`TestListRecipes_SourceField` asserts an org-tagged and a shipped-tagged
+recipe in the SAME catalog produce DIFFERENT `Source` values (a hardcoded
+constant would pass either check alone but fail the inequality assertion).
+`frontend/src/views/tools/__tests__/KenazToolsPanel.test.ts`'s new
+"org-provisioned recipe read-only badge (WP03)" suite asserts the badge
+renders and Edit/Delete are hidden for `source: 'org'`, and — the
+mutation-proof half — still render for an ordinary shipped row.
+
 ### 2026-09-12 (model-settings-reach-the-model-01PMZ101 UNIT-10 / WP17, ESCALATION — not resolved here) · `branchesview.API.parentModel` is a hardcoded `return "", ""` stub; the cross-provider warning can never fire
 
 Found while implementing WP17 (branch recommender provider hydration,

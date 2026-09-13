@@ -25,7 +25,6 @@ import type {
   EnvKey,
   Recipe,
   RecipeListing,
-  RecipeSource,
   RecipeState,
   RecipeStatus,
 } from '@/lib/types';
@@ -560,6 +559,7 @@ function openAddModal() {
 }
 
 function openEditModal(listing: RecipeListing) {
+  if (isOrgManaged(listing)) return; // blocked by UI — guard anyway (FR-302 parity)
   addModalEditRecipe.value = listing.recipe;
   addModalOpen.value = true;
 }
@@ -580,6 +580,12 @@ function onAddModalInstalled() {
 const deleteConfirmId = ref<string | null>(null);
 
 function requestDelete(id: string) {
+  // blocked by UI — guard anyway (FR-302 parity): an org-managed recipe
+  // is re-applied by the next bundle poll regardless of a local
+  // uninstall, so offering "Delete" would be a UI action with no lasting
+  // effect.
+  const listing = recipes.value.find((r) => r.recipe.id === id);
+  if (listing && isOrgManaged(listing)) return;
   deleteConfirmId.value = id;
 }
 
@@ -595,38 +601,48 @@ function cancelDelete() {
 }
 
 /**
- * sourceBadge — human-readable provenance label for a recipe row.
+ * sourceBadge — human-readable label for a recipe row's catalog layer.
  *
- * connector-lifecycle-truth-01PMZ303 FR-007: RecipeListing.source is a
- * real server-side discriminator (recipes.Source* — see
- * core/rpc/views/tools/api.go), tagged by the shipped+registry+user
- * merge at both of its call sites. This used to be a hardcoded
- * "shipped" literal for every row — a provenance badge that lied on
- * 113 of 115 rows on a fresh install, for a server the harness spawns
- * with the user's credentials.
+ * fleet-generic-sync-framework-01NSYNC02 WP03: reads the real
+ * `listing.source` field the backend now populates from
+ * recipes.Recipe.Source (core/rpc/views/tools/api.go's RecipeListing).
+ * Previously this was a hardcoded 'shipped' heuristic because the wire
+ * shape carried no discriminator at all — see git blame for the prior
+ * "BACKEND GAP" comment this replaced.
  */
-const SOURCE_LABELS: Record<RecipeSource, string> = {
-  shipped: 'shipped',
-  registry: 'registry',
-  user: 'user',
-  imported: 'imported',
-  unknown: 'unknown',
-};
-
 function sourceBadge(listing: RecipeListing): string {
-  return SOURCE_LABELS[listing.source] ?? 'unknown';
+  switch (listing.source) {
+    case 'org':
+      return 'org-managed';
+    case 'registry':
+      return 'registry';
+    case 'user':
+      return 'custom';
+    case 'imported':
+      return 'imported';
+    case 'shipped':
+    default:
+      return 'shipped';
+  }
 }
 
-const SOURCE_BADGE_CLASSES: Record<RecipeSource, string> = {
-  shipped: 'text-ink-dim',
-  registry: 'text-ink-dim',
-  user: 'text-accent',
-  imported: 'text-accent',
-  unknown: 'text-signal-warn',
-};
-
 function sourceBadgeClass(listing: RecipeListing): string {
-  return SOURCE_BADGE_CLASSES[listing.source] ?? 'text-signal-warn';
+  return listing.source === 'org' ? 'text-signal-info' : 'text-ink-dim';
+}
+
+/**
+ * isOrgManaged — an org-provisioned recipe (fleet-org-config-inheritance-
+ * 01NORGX01's ApplyProvisionedMCP) renders read-only on the member
+ * device (spec §2.2, mirroring SkillsPanel.vue's FR-302 "Org-managed"
+ * treatment for mandated skills): editing it would silently create a
+ * LOWER-precedence personal override that the next org bundle apply
+ * re-shadows without warning — a save that looks like it worked but
+ * never sticks. Uninstall is likewise disabled, matching FR-302's
+ * precedent, since the org bundle re-applies the entry on every poll
+ * regardless of a local uninstall.
+ */
+function isOrgManaged(listing: RecipeListing): boolean {
+  return listing.source === 'org';
 }
 
 // Whenever the recipes list refreshes, fetch persisted config for any
@@ -1163,6 +1179,15 @@ watch(
               >
                 {{ sourceBadge(listing) }}
               </span>
+              <!-- Org provenance badge (spec §2.2, mirrors SkillsPanel's
+                   FR-302 "Org-managed" badge) -->
+              <span
+                v-if="isOrgManaged(listing)"
+                class="rounded-sm bg-signal-info-soft px-1.5 py-0.5 font-ui text-[10px] font-medium text-signal-info"
+                :data-testid="`recipe-org-badge-${listing.recipe.id}`"
+              >
+                Provisioned by your org
+              </span>
               <span
                 v-if="isWarming(listing.recipe.id, statusOf(listing).state)"
                 class="text-[10px] text-signal-warn"
@@ -1259,8 +1284,13 @@ watch(
                 </li>
               </ul>
             </div>
-            <!-- Edit + Delete row actions -->
-            <div class="mt-2 flex items-center gap-2">
+            <!-- Edit + Delete row actions — hidden for org-managed recipes
+                 (spec §2.2, FR-302 parity): editing would create a
+                 lower-precedence personal override the next org bundle
+                 silently re-shadows, and delete/uninstall has no lasting
+                 effect since the org bundle re-applies the entry on
+                 every poll. -->
+            <div v-if="!isOrgManaged(listing)" class="mt-2 flex items-center gap-2">
               <button
                 type="button"
                 class="rounded-sm border border-border-muted px-2 py-0.5 font-ui text-[10px] uppercase tracking-[0.14em] text-ink-dim hover:text-ink hover:bg-surface-2"

@@ -619,6 +619,52 @@ func TestListRecipes_OverlaysEnabledAndStatus(t *testing.T) {
 	}
 }
 
+// TestListRecipes_SourceField is the WP03 wire-exposure acceptance
+// (fleet-generic-sync-framework-01NSYNC02): RecipeListing.Source must
+// reflect the underlying recipes.Recipe.Source verbatim per row, not a
+// hardcoded constant — the mutation-proof half is that a
+// SourceOrg-tagged recipe and a SourceShipped-tagged recipe in the SAME
+// catalog produce DIFFERENT Source values on their listings, closing the
+// gap KenazToolsPanel.vue's sourceBadge() heuristic was working around
+// ("BACKEND GAP: The wire shape does not yet carry a `source`
+// discriminator").
+func TestListRecipes_SourceField(t *testing.T) {
+	t.Parallel()
+	orgRecipe := testRecipe("org-recipe")
+	orgRecipe.Source = recipes.SourceOrg
+	shippedRecipe := testRecipe("shipped-recipe")
+	shippedRecipe.Source = recipes.SourceShipped
+
+	cat := &recipes.Catalog{Version: 1, Recipes: []recipes.Recipe{orgRecipe, shippedRecipe}}
+	api := New(Config{
+		Catalog: cat,
+		Enabled: &recipes.EnabledRecipes{},
+		Secrets: secrets.NewMemoryBackend(),
+		DataDir: t.TempDir(),
+	})
+
+	listings, err := api.ListRecipes(context.Background())
+	if err != nil {
+		t.Fatalf("ListRecipes: %v", err)
+	}
+	if len(listings) != 2 {
+		t.Fatalf("listings = %d, want 2", len(listings))
+	}
+	got := map[string]string{}
+	for _, l := range listings {
+		got[l.Recipe.ID] = l.Source
+	}
+	if got["org-recipe"] != recipes.SourceOrg {
+		t.Errorf("org-recipe Source = %q, want %q", got["org-recipe"], recipes.SourceOrg)
+	}
+	if got["shipped-recipe"] != recipes.SourceShipped {
+		t.Errorf("shipped-recipe Source = %q, want %q", got["shipped-recipe"], recipes.SourceShipped)
+	}
+	if got["org-recipe"] == got["shipped-recipe"] {
+		t.Fatal("expected different Source values for differently-sourced recipes — a hardcoded constant would pass the individual checks above but collapse both to the same value")
+	}
+}
+
 func TestUninstallRecipe_UnknownIsNonFatal(t *testing.T) {
 	t.Parallel()
 	pool := &fakePool{

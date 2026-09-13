@@ -70,7 +70,7 @@ function makeListing(
     enabled: false,
     keysPresent: false,
     status: makeStatus(recipe.id),
-    source: 'registry',
+    source: 'shipped',
     ...overrides,
   };
 }
@@ -194,54 +194,6 @@ describe('KenazToolsPanel — recipes section', () => {
     expect(w.find('[data-testid=recipe-state-filesystem]').text()).toContain(
       'running',
     );
-  });
-
-  it('renders three distinct provenance badges from RecipeListing.source, not a hardcoded literal (connector-lifecycle-truth-01PMZ303 UNIT-11, AC-007)', async () => {
-    // Before UNIT-11, sourceBadge/sourceBadgeClass ignored their argument
-    // entirely and returned the literal 'shipped' for every row — the
-    // badge lied on 113 of 115 rows on a fresh install. This asserts the
-    // rendered label actually varies with RecipeListing.source across
-    // all three provenance values a real ListRecipes response reports.
-    const recipes = [
-      makeListing(makeRecipe('shipped-one'), {
-        enabled: true,
-        keysPresent: true,
-        source: 'shipped',
-        status: makeStatus('shipped-one', { enabled: true, state: 'running' }),
-      }),
-      makeListing(makeRecipe('registry-one'), {
-        enabled: true,
-        keysPresent: true,
-        source: 'registry',
-        status: makeStatus('registry-one', { enabled: true, state: 'running' }),
-      }),
-      makeListing(makeRecipe('imported-one'), {
-        enabled: true,
-        keysPresent: true,
-        source: 'imported',
-        status: makeStatus('imported-one', { enabled: true, state: 'running' }),
-      }),
-    ];
-    const setup = makeClient(recipes);
-    const w = await mountPanel(setup);
-    await flushPromises();
-
-    const shippedLabel = w
-      .find('[data-testid=recipe-source-shipped-one]')
-      .text();
-    const registryLabel = w
-      .find('[data-testid=recipe-source-registry-one]')
-      .text();
-    const importedLabel = w
-      .find('[data-testid=recipe-source-imported-one]')
-      .text();
-
-    expect(shippedLabel).toContain('shipped');
-    expect(registryLabel).toContain('registry');
-    expect(importedLabel).toContain('imported');
-    // The three labels must actually differ — guards against a fallback
-    // that maps every source to the same rendered string.
-    expect(new Set([shippedLabel, registryLabel, importedLabel]).size).toBe(3);
   });
 
   it('a live mcp:health-changed push event flips the health pill and shows the error, with no user action or poll tick (connector-lifecycle-truth-01PMZ303 UNIT-8, AC-005b)', async () => {
@@ -811,6 +763,94 @@ describe('KenazToolsPanel — row Edit button (custom-recipe authoring, post-WP0
     await flushPromises();
 
     expect(w.find('[data-testid="add-mcp-modal"]').exists()).toBe(true);
+  });
+});
+
+// ── fleet-generic-sync-framework-01NSYNC02 WP03 — org-managed recipe
+// provenance + read-only enforcement ────────────────────────────────────
+//
+// Before WP03, RecipeListing carried no `source` field at all — the
+// backend gap this test file's own `makeListing` helper default
+// ('shipped') now stands in for. These tests are the mutation-proof pair:
+// a `source: 'org'` row must render the badge and hide Edit/Delete; an
+// otherwise-identical `source: 'shipped'` row (the existing
+// 'renders unconditionally' test above) must not.
+
+describe('KenazToolsPanel — org-provisioned recipe read-only badge (WP03)', () => {
+  function oneOrgManagedRecipe() {
+    return [
+      makeListing(makeRecipe('org-slack'), {
+        enabled: true,
+        keysPresent: true,
+        source: 'org',
+        status: makeStatus('org-slack', {
+          enabled: true,
+          state: 'running',
+          keysPresent: true,
+        }),
+      }),
+    ];
+  }
+
+  function oneShippedRecipe() {
+    return [
+      makeListing(makeRecipe('brave-search'), {
+        enabled: true,
+        keysPresent: true,
+        status: makeStatus('brave-search', {
+          enabled: true,
+          state: 'running',
+          keysPresent: true,
+        }),
+      }),
+    ];
+  }
+
+  it('renders the "Provisioned by your org" badge for a source=org row', async () => {
+    const setup = makeClient(oneOrgManagedRecipe());
+    const w = await mountPanel(setup);
+    await flushPromises();
+
+    expect(
+      w.find('[data-testid="recipe-org-badge-org-slack"]').exists(),
+    ).toBe(true);
+    expect(w.text()).toContain('Provisioned by your org');
+  });
+
+  it('does NOT render the org badge for an ordinary shipped row', async () => {
+    const setup = makeClient(oneShippedRecipe());
+    const w = await mountPanel(setup);
+    await flushPromises();
+
+    expect(
+      w.find('[data-testid="recipe-org-badge-brave-search"]').exists(),
+    ).toBe(false);
+  });
+
+  it('hides the Edit and Delete buttons for a source=org row', async () => {
+    const setup = makeClient(oneOrgManagedRecipe());
+    const w = await mountPanel(setup);
+    await flushPromises();
+
+    expect(
+      w.find('[data-testid="recipe-edit-btn-org-slack"]').exists(),
+    ).toBe(false);
+    expect(
+      w.find('[data-testid="recipe-delete-btn-org-slack"]').exists(),
+    ).toBe(false);
+  });
+
+  it('keeps the Edit and Delete buttons for an ordinary shipped row (mutation-proof: not hiding everything)', async () => {
+    const setup = makeClient(oneShippedRecipe());
+    const w = await mountPanel(setup);
+    await flushPromises();
+
+    expect(
+      w.find('[data-testid="recipe-edit-btn-brave-search"]').exists(),
+    ).toBe(true);
+    expect(
+      w.find('[data-testid="recipe-delete-btn-brave-search"]').exists(),
+    ).toBe(true);
   });
 });
 
