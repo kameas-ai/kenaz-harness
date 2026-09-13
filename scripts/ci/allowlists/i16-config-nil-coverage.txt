@@ -157,11 +157,16 @@ core/rpc/views/audit/impl.go:120: github.com/kameas-ai/kenaz-harness/core/rpc/vi
 core/rpc/views/audit/impl.go:99: github.com/kameas-ai/kenaz-harness/core/rpc/views/audit.WithBackend is never called by any non-test source under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
-core/rpc/views/branches/impl.go:115: Config.ModelInfos (slice) is never set to a non-nil value in any non-test composite literal under core/
-# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+core/rpc/views/branches/impl.go:137: Config.ModelInfos (slice) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph. Line
+# renumbered (was :115) by subagent-control-and-background-tasks-01PMZB11
+# UNIT-9's six new Config fields (Tasks/TaskLookup/Cedar/PauseControl/
+# Usage) inserted earlier in the same struct — same field, same finding.
 
-core/rpc/views/branches/impl.go:121: Config.Now (func) is never set to a non-nil value in any non-test composite literal under core/
-# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+core/rpc/views/branches/impl.go:143: Config.Now (func) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph. Line
+# renumbered (was :121) by the same UNIT-9 insertion noted above — same
+# field, same finding.
 
 core/rpc/views/bundle/impl.go:174: github.com/kameas-ai/kenaz-harness/core/rpc/views/bundle.WithSecretsResolver is never called by any non-test source under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.

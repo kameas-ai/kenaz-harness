@@ -194,6 +194,26 @@ jobs:
         # scripts/ci/cmd/checknilopts/main.go's header for the full design.
         run: bash scripts/ci/check-nil-optional-deps.sh
 
+      - name: dead-nil-branch guard (I19, UNIT-12)
+        # A zero-value `var x T` immediately followed, in the SAME block,
+        # by `if x != nil { ... }` with no assignment anywhere in between
+        # — x is provably nil at the check, so the if-block is statically
+        # dead. Shipped as core/rpc/builtins_wiring.go's `var subagentSeam
+        # agentgraph.BranchSeam // nil — no child-run spawner yet` beside
+        # its own `if subagentSeam != nil`, which hid the entire
+        # kenaz__subagent_dispatch registration block from every existing
+        # gate (check-builtin-tool-registration.sh only checks for an
+        # *import*, which was present). UNIT-6 of subagent-control-and-
+        # background-tasks-01PMZB11 fixed that one instance; this gate
+        # exists so the CLASS cannot recur silently. A local-variable
+        # dataflow question distinct from I18 above (a struct FIELD
+        # question) — see scripts/ci/cmd/checkdeadnilbranch/main.go's
+        # header for the full design and its false-positive history
+        # (database/sql's Scan(&ptr) idiom and `if x, err = f(); err !=
+        # nil` both false-positived during development; both are now
+        # correctly excluded).
+        run: bash scripts/ci/check-dead-nil-branch.sh
+
       - name: config-nil-coverage guard (G-1, WP26)
         # trust-surfaces-that-fire-01PMZ202 spec.md §G-1 / WP26. A
         # narrower, structurally different sibling of I18 above: every
