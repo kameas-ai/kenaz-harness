@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/transport"
@@ -146,14 +147,27 @@ func (p *Pool) openOne(ctx context.Context, spec coremcp.ServerSpec) error {
 			AutoRestartEnabled: p.opts.AutoRestartEnabled,
 		},
 	)
+	// connector-lifecycle-truth-01PMZ303 UNIT-12: a per-recipe dial
+	// overrides the pool-wide default when the recipe declares one;
+	// 0 (recipe doesn't declare it, or declares 0 explicitly) falls
+	// through to the existing pool-wide value exactly as before this
+	// unit, so a recipe with no dial keeps today's behaviour.
+	initTimeout := p.opts.InitTimeout
+	if spec.InitTimeoutMs > 0 {
+		initTimeout = time.Duration(spec.InitTimeoutMs) * time.Millisecond
+	}
+	pingPeriod := p.opts.PingPeriod
+	if spec.PingPeriodMs > 0 {
+		pingPeriod = time.Duration(spec.PingPeriodMs) * time.Millisecond
+	}
 	sspec := SpawnSpec{
 		ID:               spec.Name,
 		Command:          spec.Command,
 		Env:              spec.Env,
 		IsolateEnv:       spec.IsolateEnv,
 		FirstByteTimeout: p.opts.FirstByteTimeout,
-		InitTimeout:      p.opts.InitTimeout,
-		PingPeriod:       p.opts.PingPeriod,
+		InitTimeout:      initTimeout,
+		PingPeriod:       pingPeriod,
 		PingTimeout:      p.opts.PingTimeout,
 		// SamplingEnabled is recipe-level state owned by WP03+; the
 		// fixture/test path leaves it false. Pool callers that need

@@ -603,6 +603,13 @@ func (r *Recipe) ToServerSpec(env map[string]string, config map[string]any) mcp.
 		PostURL:         r.PostURL,
 		Env:             envCopy,
 		HeadersTemplate: headers,
+		// connector-lifecycle-truth-01PMZ303 UNIT-12: thread the
+		// declared dials through instead of discarding them. Both are
+		// already milliseconds on both sides (Recipe and ServerSpec),
+		// so this is a straight copy — the pool/transport layer is
+		// responsible for the 0-means-default fallback.
+		InitTimeoutMs: r.InitTimeoutMs,
+		PingPeriodMs:  r.PingPeriodMs,
 	}
 }
 

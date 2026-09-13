@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -160,4 +161,57 @@ func TestPool_GoroutinesReturnToBaseline(t *testing.T) {
 func TestPool_CompileTimeImplementsMcpPool(t *testing.T) {
 	t.Parallel()
 	var _ coremcp.Pool = (*Pool)(nil)
+}
+
+// TestPool_ServerSpecInitTimeoutMs_OverridesPoolDefault is
+// connector-lifecycle-truth-01PMZ303 UNIT-12 / AC-008's wire-branch
+// assertion: a recipe's declared init_timeout_ms must reach the actual
+// initialize deadline the connection applies, not just get copied into
+// another struct field along the way (the "non-consumption" false-pass
+// CLAUDE.md warns about — and spec.md §7 AC-008 warns about explicitly
+// for this exact finding).
+//
+// Drives coremcp.ServerSpec.InitTimeoutMs through the real Pool.Open path
+// (not SpawnSpec directly — that would only prove the field exists, not
+// that the pool wires it) against a --no-init fake server, and asserts
+// the resulting error surfaces the short custom deadline (250ms) rather
+// than the pool-wide default (5s, which the 10s test context would allow
+// to complete uninterrupted — proving the override actually shortened
+// the deadline, not just that SOME timeout eventually fired).
+//
+// Mutation: revert openOne's initTimeout/pingPeriod override so it always
+// uses p.opts.InitTimeout regardless of spec.InitTimeoutMs. Must fail —
+// the pool-wide default of 0 (unset PoolOptions) falls back to
+// transport.DefaultInitTimeout (5s), so Open would not return within this
+// test's shorter deadline.
+func TestPool_ServerSpecInitTimeoutMs_OverridesPoolDefault(t *testing.T) {
+	t.Parallel()
+	bin := buildFakeServer(t)
+	p := NewPool(PoolOptions{})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	start := time.Now()
+	err := p.Open(ctx, []coremcp.ServerSpec{
+		{
+			Name:          "slow",
+			Transport:     "stdio",
+			Command:       []string{bin, "--no-init"},
+			InitTimeoutMs: 250,
+		},
+	})
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatalf("Open: want an initialize-timeout error, got nil")
+	}
+	if !strings.Contains(err.Error(), "initialize timeout") {
+		t.Fatalf("Open err = %v, want an initialize timeout error", err)
+	}
+	// Generous upper bound (1.5s) to absorb CI scheduling jitter while
+	// still being far short of the 5s pool-wide default — if the
+	// override were not applied, this would either hit the 2s test ctx
+	// deadline (a different error) or hang past it.
+	if elapsed > 1500*time.Millisecond {
+		t.Fatalf("Open took %v to fail; want well under the 5s pool default, close to the 250ms override", elapsed)
+	}
 }
