@@ -131,6 +131,23 @@ func (e *LedgerEmitter) EmitToolCall(connectorID, tool string) {
 	e.emit(phaseConnectorToolCall, connectorID, map[string]any{"tool": tool})
 }
 
+// EmitSessionLifecycle records a session-lifecycle event (currently only
+// "session.signed_out") by event name. Distinct from the connector
+// phases above — no connector_id is meaningful here, so the payload
+// carries only the event name and workbench attribution.
+//
+// This is the func(event string) authbroker.WithLedgerEmit needs
+// (fleet-enforcement-truth-01PMZ505 WP14, §1.14/C-12): before this
+// method existed, LedgerEmitter's whole exported surface was
+// EmitEnabled/EmitSpawn/EmitToolCall, none of which has this signature,
+// so WithLedgerEmit(emitter.X) could not compile for any existing X and
+// both served entry points constructed their Session with no ledger
+// option at all — "session.signed_out" never reached the reporter
+// ingest socket.
+func (e *LedgerEmitter) EmitSessionLifecycle(event string) {
+	e.emit(event, "", nil)
+}
+
 func (e *LedgerEmitter) emit(phase, connectorID string, extra map[string]any) {
 	if !e.enabled() {
 		return

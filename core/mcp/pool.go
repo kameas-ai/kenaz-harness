@@ -30,6 +30,14 @@ type ServerSpec struct {
 	// RequestTimeoutMs is the per-POST timeout for the http transport,
 	// in milliseconds. 0 → DefaultRequestTimeout (30 s).
 	RequestTimeoutMs int `json:"request_timeout_ms,omitempty"`
+	// On401, when set, is called synchronously the first time the http
+	// transport observes a 401 response from this server. Used by
+	// served-mode OAuth connectors to invalidate a cached broker token
+	// so the next ConnectorToken call re-fetches rather than re-serving
+	// a token the upstream just rejected (fleet-enforcement-truth-
+	// 01PMZ505 WP14, AC-026). Not JSON-marshaled — a func value would
+	// fail json.Marshal if this struct is ever serialized.
+	On401 func() `json:"-"`
 }
 
 type Tool struct {

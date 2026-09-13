@@ -130,14 +130,15 @@ func (p *Pool) openOne(ctx context.Context, spec coremcp.ServerSpec) error {
 	}
 
 	connSpec := Spec{
-		ID:              spec.Name,
-		URL:             spec.URL,
-		HeadersTemplate: spec.HeadersTemplate,
-		Env:             spec.Env,
+		ID:               spec.Name,
+		URL:              spec.URL,
+		HeadersTemplate:  spec.HeadersTemplate,
+		Env:              spec.Env,
 		FirstByteTimeout: p.opts.FirstByteTimeout,
 		InitTimeout:      p.opts.InitTimeout,
 		PingPeriod:       p.opts.PingPeriod,
 		PingTimeout:      p.opts.PingTimeout,
+		On401:            spec.On401,
 	}
 	// HeadersTemplate is now passed from ServerSpec.HeadersTemplate.
 	// Values may contain ${VAR} tokens that Connection.Open substitutes

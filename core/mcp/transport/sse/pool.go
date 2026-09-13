@@ -134,6 +134,7 @@ func (p *Pool) openOne(ctx context.Context, spec coremcp.ServerSpec) error {
 		InitTimeout:      p.opts.InitTimeout,
 		PingPeriod:       p.opts.PingPeriod,
 		PingTimeout:      p.opts.PingTimeout,
+		On401:            spec.On401,
 	}
 
 	factory := &ConnectionFactory{

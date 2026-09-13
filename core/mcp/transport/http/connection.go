@@ -64,6 +64,13 @@ type Spec struct {
 	// servers do not legitimately 3xx a JSON-RPC POST). Tests
 	// inject httptest.Server.Client() here.
 	HTTPClient *stdhttp.Client
+
+	// On401, when set, is invoked (from the dispatch goroutine) the
+	// moment a POST response carries HTTP 401. Mirrors
+	// coremcp.ServerSpec.On401 — the connector-pool's transport-
+	// routing layer copies it through (fleet-enforcement-truth-
+	// 01PMZ505 WP14).
+	On401 func()
 }
 
 // Connection is the HTTP implementation of transport.Connection.
@@ -323,6 +330,19 @@ func (c *Connection) dispatch(rootCtx context.Context, client *stdhttp.Client, e
 		// the inbound queue keyed by the same id the request carried
 		// (so the router cancels the right call).
 		c.recordErrBody(string(respBody))
+		if resp.StatusCode == stdhttp.StatusUnauthorized {
+			// This is the "response status is visible" seam spec
+			// §5.13 names for connector token invalidation — the
+			// harness's own HTTP transport, not the spawned
+			// subprocess, so it is the only place a served-mode
+			// OAuth connector's 401 is ever observable.
+			c.mu.Lock()
+			on401 := c.spec.On401
+			c.mu.Unlock()
+			if on401 != nil {
+				on401()
+			}
+		}
 		c.pushHTTPError(body, resp.StatusCode, respBody)
 		return
 	}

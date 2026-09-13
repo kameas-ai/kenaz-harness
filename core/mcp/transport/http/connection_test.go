@@ -251,6 +251,97 @@ func TestConnectionHTTPErrorSurfacesInStderrTail(t *testing.T) {
 	}
 }
 
+// TestConnectionOn401_Fires is AC-026's transport-level proof
+// (fleet-enforcement-truth-01PMZ505 WP14): a real HTTP 401 from the
+// server must invoke Spec.On401, and a 500 must NOT — this is the
+// seam spec §5.13 identifies as "where the response status is
+// visible", one layer below the connector supervisor's own On401-
+// wiring test.
+func TestConnectionOn401_Fires(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		stdhttp.Error(w, "unauthorized", stdhttp.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	var mu sync.Mutex
+	fired := 0
+	conn := httptransport.NewConnection(httptransport.Spec{
+		ID:         "needs-auth",
+		URL:        srv.URL,
+		HTTPClient: srv.Client(),
+		On401: func() {
+			mu.Lock()
+			fired++
+			mu.Unlock()
+		},
+	}, nil)
+	if err := conn.Open(context.Background()); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	if err := conn.Send(map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "tools/list",
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if _, err := conn.Recv(); err != nil {
+		t.Fatalf("Recv: %v", err)
+	}
+
+	mu.Lock()
+	got := fired
+	mu.Unlock()
+	if got != 1 {
+		t.Errorf("On401 fired %d times, want 1", got)
+	}
+}
+
+// TestConnectionOn401_DoesNotFireOn500 is the negative half: a gate that
+// fires on every non-2xx is as useless as one that never fires — only
+// 401 should invalidate a cached token.
+func TestConnectionOn401_DoesNotFireOn500(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		stdhttp.Error(w, "boom", stdhttp.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	var mu sync.Mutex
+	fired := 0
+	conn := httptransport.NewConnection(httptransport.Spec{
+		ID:         "flaky",
+		URL:        srv.URL,
+		HTTPClient: srv.Client(),
+		On401: func() {
+			mu.Lock()
+			fired++
+			mu.Unlock()
+		},
+	}, nil)
+	if err := conn.Open(context.Background()); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	if err := conn.Send(map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "tools/list",
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if _, err := conn.Recv(); err != nil {
+		t.Fatalf("Recv: %v", err)
+	}
+
+	mu.Lock()
+	got := fired
+	mu.Unlock()
+	if got != 0 {
+		t.Errorf("On401 fired %d times on a 500, want 0", got)
+	}
+}
+
 func TestConnectionPIDIsZero(t *testing.T) {
 	t.Parallel()
 	conn := httptransport.NewConnection(httptransport.Spec{ID: "x", URL: "http://example.com"}, nil)

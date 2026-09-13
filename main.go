@@ -429,11 +429,15 @@ func runServeMode(listenAddr string) {
 	// token never crosses into the VM.
 	authCfg := authbroker.ReadConfig(os.Getenv)
 	connTokens := authbroker.NewConnectorTokens(authCfg, serveLog)
+	// Named so the same emitter also backs authbroker.WithLedgerEmit below
+	// (fleet-enforcement-truth-01PMZ505 WP14) — one reporter-ingest-socket
+	// emitter for both connector-lifecycle and session-lifecycle events.
+	ledgerEmitter := connectors.NewLedgerEmitterFromEnv(os.Getenv, serveLog)
 	connSup := connectors.NewSupervisor(connectors.SupervisorConfig{
 		Provisioning: mcpProv,
 		Getenv:       os.Getenv,
 		Tokens:       connTokens,
-		Ledger:       connectors.NewLedgerEmitterFromEnv(os.Getenv, serveLog),
+		Ledger:       ledgerEmitter,
 		// D13/US5: include operator-authored user recipes baked under
 		// <dataDir>/mcp/recipes so whitelisted custom connector ids
 		// resolve in served mode. The whitelist still gates every id.
@@ -484,7 +488,11 @@ func runServeMode(listenAddr string) {
 	// disk, same mechanism as SIGIL_INGEST_TOKEN / HARNESS_VM_TOKEN).
 	//
 	// Privacy: broker token and access token bytes are never logged.
-	authSession := authbroker.NewSession(ctx, authCfg, serveLog)
+	// WithLedgerEmit (fleet-enforcement-truth-01PMZ505 WP14): reuse the
+	// connector-lifecycle emitter so "session.signed_out" reaches the
+	// same reporter ingest socket as connector.* events.
+	authSession := authbroker.NewSession(ctx, authCfg, serveLog,
+		authbroker.WithLedgerEmit(ledgerEmitter.EmitSessionLifecycle))
 	serveLog.Info("harness.serve: auth session initialised",
 		"auth_state", authSession.State().String(),
 		"broker_addr", authCfg.BrokerAddr,
