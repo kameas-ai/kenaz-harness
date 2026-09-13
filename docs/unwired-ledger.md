@@ -317,6 +317,70 @@ prose and in a TS union; they do not call `MoveKinds()`.
 
 ## Open — ungated findings
 
+### 2026-09-12 (`automation-actually-runs-01PMZ404` UNIT-17, G-1a widening) · seven interfaces outside this mission's scope, newly surfaced by the widened check-seam-implementers.sh
+
+UNIT-17 widened `scripts/ci/cmd/checkseams` from ONE FILE IN ONE PACKAGE
+(`core/agentgraph/seams.go`) to a DERIVED input set: every exported
+interface under `core/` that is the type of a field on an exported
+`*Config`/`*Options`/`*Deps` struct. Running the widened gate against
+the tree immediately surfaced seven more unimplemented interfaces —
+this mission's own seven findings (`ArtifactsReadWriter`, `ToolCaller`,
+`NetworkAuthorizer`, `corewf.AuditEmitter`, `slashcmd.ToolDispatcher`,
+`catalog.RecipeRegistry`, `wfsched.Dispatcher`) are all now wired and
+do not appear in this list; these seven are in completely unrelated
+subsystems and are out of scope for this mission to fix. Each carries
+its own `wiring:deferred(...)` directive at its declaration (dated
+2026-09-12) rather than being fixed here — A-0-style: the gate stays
+required and does not silently pass on these, but fixing them is a
+separate, unscoped body of work.
+
+- **`storage.SecretsBackend`** (`core/storage/storage.go:26`) — zero
+  non-test implementers of `Resolve()`. The field's own doc names the
+  blocker: `TODO(secrets-keychain mission): switch to
+  core/secrets.Backend`.
+- **`llm.BundleSource`** (`core/rpc/views/llm/impl.go`) — zero
+  non-test implementers of `BundleProfiles()`.
+- **`llm.CredPeeker`** (same file) — zero non-test implementers of
+  `PeekCred()`.
+- **`llm.CredentialInvalidator`** (same file) — zero non-test
+  implementers of `InvalidateCred()`, **contrary to its own doc
+  comment**, which claims "the rpc wiring passes a thin adapter over
+  secrets.Resolver.Invalidate." No such adapter exists anywhere in the
+  tree — a docstring-describes-nothing finding, not just an unwired
+  dependency.
+- **`llm.AuditEmitter`** (same file, distinct from `corewf.AuditEmitter`
+  this mission wired) — zero non-test implementers of `EmitRotated()`,
+  **contrary to its own doc comment**'s claim of "a concrete
+  `*audit.Emitter` (or equivalent)" adapter. None exists.
+- **`hooks.MCPInvoker`** (`core/hooks/runner.go:211`) — zero non-test
+  implementers of `InvokeTool()`. Its own doc comment already
+  documents this as deliberate: *"v1 implementations are stubs."*
+- **`memory.JournalSource`** (`core/rpc/views/memory/impl.go:59`) —
+  zero non-test implementers of `JournalSnapshot()`, **contrary to its
+  own doc comment**'s claim that "the kernel's HookManager satisfies
+  this." `agentgraph.HookManager` has no such method.
+- **`subagentdispatch.TasksRegistry`** (`core/tools/subagentdispatch/
+  tool.go:143`) — zero non-test implementers of `Register()`/
+  `Cancel()`. Its doc comment frames this as blocked on
+  "the not-yet-merged mission" (background-task-monitor-01KZNP3C) —
+  that mission has since merged (this ledger's own 2026-08-14 entry
+  records the background-task subsystem, now producerless for a
+  different reason), so the comment is stale, but the interface itself
+  is still genuinely unimplemented.
+
+Three of the seven (`CredentialInvalidator`, `AuditEmitter`,
+`JournalSource`) are a SECOND finding stacked on the first: not just an
+unwired dependency, but a doc comment actively describing a production
+adapter that does not exist — the exact "comment is itself a lie" shape
+CLAUDE.md's unwired-sweep doctrine calls out.
+
+**Owner:** whoever next touches each respective subsystem
+(secrets-keychain for `SecretsBackend`; the llm view / provider-
+keychain-rotation for the four `llm.*` interfaces; hooks for
+`MCPInvoker`; the memory view for `JournalSource`; subagent dispatch /
+background-task-monitor for `TasksRegistry`). **Blocker:** none of
+these has a scoped mission as of this date. **Date:** 2026-09-12.
+
 ### 2026-09-12 (`automation-actually-runs-01PMZ404` UNIT-15, PARTIAL) · `elicitview.API.OpenWizard` still has zero non-test callers — the deferred-ask leg landed, the wizard leg did not
 
 UNIT-15 was scoped as three pieces the mission's own tasks.md and the

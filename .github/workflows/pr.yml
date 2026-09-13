@@ -153,12 +153,28 @@ jobs:
         run: bash scripts/ci/check-declared-output-ports.sh
 
       - name: seam-implementers guard
-        # Every interface in core/agentgraph/seams.go has >=1 non-test
+        # Every interface in core/agentgraph/seams.go, PLUS (G-1a,
+        # automation-actually-runs-01PMZ404 UNIT-17) every exported
+        # interface under core/ that is the type of a field on an
+        # exported *Config/*Options/*Deps struct, has >=1 non-test
         # implementer or a //wiring:deferred directive. Uses the Go type
         # checker (golang.org/x/tools/go/packages), not grep — interface
         # satisfaction is structural and grep cannot answer it soundly.
         # wiring-integrity-01PMAG04 WP06.
         run: bash scripts/ci/check-seam-implementers.sh
+
+      - name: input-kind coverage guard (G-2)
+        # Every declared corewf.InputKind value reaches an explicit
+        # per-kind control in the workflow run form
+        # (frontend/src/views/workflows/WorkflowsView.vue) — the class
+        # that shipped for five of six kinds before automation-actually-
+        # runs-01PMZ404 UNIT-14 (A-11): an `enum` input with a fixed
+        # option list still rendered a free-text box, silently
+        # discarding the author's constraint at run time. A closed Go
+        # enum reaching the frontend as a v-if/v-else-if discriminator,
+        # checked against the ONE exception the code actually uses
+        # (a verified bare v-else fallback for "string").
+        run: bash scripts/ci/check-input-kind-coverage.sh
 
       - name: nil-optional-dep guard (I18)
         # An interface field on a struct, documented by its own author as

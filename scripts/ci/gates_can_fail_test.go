@@ -1071,6 +1071,59 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				"}\n",
 		},
 		{
+			// automation-actually-runs-01PMZ404 UNIT-17, G-1a. The case
+			// above proves checkseams's IMPLEMENTER CHECK can fail; this
+			// one proves the newer DERIVATION path can too — G-1a's
+			// whole point is that the input set is derived from every
+			// exported *Config/*Options/*Deps struct field under core/,
+			// not a hand-curated list like seams.go. Planted in a
+			// throwaway package the seams.go allowlist (and every other
+			// gate) has never heard of, per spec §8's own requirement
+			// ("plant a field on a struct the allowlist has never heard
+			// of and it must still fire") — a plant inside seams.go
+			// itself would only re-prove the case above, not the
+			// derivation logic.
+			name:       "seam-implementers/derived-config-field-unsatisfiable",
+			wantOutput: "ZzGateProbeDerivedSeam",
+			gate:       "check-seam-implementers.sh",
+			file:       "core/rpc/zz_gate_probe_derived_seam.go",
+			content: "package rpc\n\n" +
+				"// zzGateProbeDerivedParam and ZzGateProbeDerivedSeam are planted by\n" +
+				"// gates_can_fail_test.go's G-1a proof and removed after the test runs.\n" +
+				"// No real type anywhere in core/ can satisfy ZzGateProbeDerivedSeam — its\n" +
+				"// method takes a brand-new unexported param type defined nowhere else.\n" +
+				"type zzGateProbeDerivedParam struct{}\n\n" +
+				"type ZzGateProbeDerivedSeam interface {\n" +
+				"\tZzGateProbeDerivedMethod(zzGateProbeDerivedParam) error\n" +
+				"}\n\n" +
+				"// ZzGateProbeDerivedDeps is the *Deps-suffixed struct G-1a's derivation\n" +
+				"// pass scans for. The field name and struct suffix are what makes this\n" +
+				"// interface part of the DERIVED input set rather than requiring an edit\n" +
+				"// to seams.go or any allowlist.\n" +
+				"type ZzGateProbeDerivedDeps struct {\n" +
+				"\tSeam ZzGateProbeDerivedSeam\n" +
+				"}\n",
+		},
+		{
+			// automation-actually-runs-01PMZ404 UNIT-17, G-2. Plants a
+			// seventh InputKind constant with no matching v-if/v-else-if
+			// arm in WorkflowsView.vue — the exact shape that shipped
+			// for five of six kinds before U14 (a new/changed enum value
+			// silently falls through to the bare v-else plain-text box,
+			// discarding whatever constraint the author declared). The
+			// gate's one-exception budget is already spent on "string"
+			// (verified against the live file at run time, not
+			// hardcoded), so a seventh value with no arm must fire even
+			// though a bare v-else already exists in WorkflowsView.vue —
+			// proving this is a genuine SET check that a stray catch-all
+			// v-else cannot trivially satisfy.
+			name:       "input-kind-coverage/seventh-kind-no-arm",
+			wantOutput: "zzgateprobe",
+			gate:       "check-input-kind-coverage.sh",
+			file:       "core/workflows/types.go",
+			append:     "\n// InputKindZzGateProbe is planted by gates_can_fail_test.go's G-2 proof and removed after the test runs.\nconst InputKindZzGateProbe InputKind = \"zzgateprobe\"\n",
+		},
+		{
 			// entry-points-and-crash-reporting-01PMZD13 UNIT-5.
 			// check-csp.sh's FIRST EVER planted-violation proof (spec §5).
 			// This gate reads a BUILT artifact (frontend/dist/index.html),

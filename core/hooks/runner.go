@@ -208,6 +208,8 @@ func (b *BuiltinRegistry) Describe() []BuiltinDescriptor {
 // MCPInvoker is the seam the runner uses to dispatch kind=mcp hooks.
 // v1 implementations are stubs; the contract is here so wiring an
 // MCP-pool-backed dispatcher later does not touch the runner's API.
+//
+// wiring:deferred(newly surfaced by automation-actually-runs-01PMZ404 UNIT-17's G-1a gate widening, 2026-09-12 — this doc comment already documents the gap as deliberate ("v1 implementations are stubs"); zero non-test implementers confirmed. Pre-existing, intentional, out of scope for this mission; recorded in docs/unwired-ledger.md)
 type MCPInvoker interface {
 	InvokeTool(ctx context.Context, tool string, payload []byte) ([]byte, error)
 }

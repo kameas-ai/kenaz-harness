@@ -23,6 +23,8 @@ type CredentialReference struct {
 // during encryption-key rotation) and immediately zeroes the returned bytes.
 //
 // TODO(secrets-keychain mission): switch to core/secrets.Backend.
+//
+// wiring:deferred(newly surfaced by automation-actually-runs-01PMZ404 UNIT-17's G-1a gate widening, 2026-09-12 — grep for Resolve/BundleProfiles/PeekCred/InvalidateCred/EmitRotated/InvokeTool/JournalSnapshot implementers across core/ confirms zero non-test hits. Pre-existing gap, not introduced by and out of scope for this mission (storage/secrets-keychain, not workflows). Needs its own owner and mission; recorded in docs/unwired-ledger.md)
 type SecretsBackend interface {
 	Resolve(ctx context.Context, ref CredentialReference) ([]byte, error)
 }
