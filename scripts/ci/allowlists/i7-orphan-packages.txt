@@ -89,6 +89,21 @@ core/storage/sqlite/upgradesnap
 #     predate the mechanism, and upgradesnap_test.go is the tested copy.
 #     Owner: release owner. Clears if the chain is ever rebootstrapped
 #     from a tag that already contains the generator.
+#   core/policy/risk — 2026-09-13, risk-rated-autonomy-01PMRA01 WP04.
+#     The RiskRater port: the interface, a race-safe FakeRater, and the
+#     five FR-002 band anchors (Go table + testdata/bands.json,
+#     cross-checked against each other). Genuinely has no production
+#     importer yet — WP05 is the implementation that wires a real rater
+#     into cedar.ThreeLayerResolve's layer-3 branch, and WP05 is not
+#     built. This is the port half of a port-and-adapter pair landing
+#     across two WPs, not abandoned code.
+#     Related: the mission's rung 0 is merged but DELIBERATELY DISABLED
+#     (core/rpc/api.go `RiskGate: nil`) until WP05 + WP07 — see
+#     i18-nil-optional-deps.txt and i13-cedar-gate-arguments.txt, same
+#     date, for the measurement and the re-enable condition. All three
+#     entries clear together in the WP05+WP07 PR.
+#     Owner: risk-rated-autonomy-01PMRA01.
+core/policy/risk
 core/system/resources
 core/trust/backends/software
 core/workflows/builtin

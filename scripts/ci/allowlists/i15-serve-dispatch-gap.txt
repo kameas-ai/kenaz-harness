@@ -1145,8 +1145,11 @@
 "Sessions_GetKnobsDefault"
 "Sessions_SetKnobsDefault"
 
-# CLASS: untriaged (inherits the family posture) -- release/v0.78.2
-# integration, 2026-09-13. 7 entries across 4 families.
+# CLASS: untriaged -- release/v0.78.2 integration, 2026-09-13.
+# 7 entries.
+#
+# Seven new bindings across four families; each inherits its OWN FAMILY's
+# posture rather than a blanket call.
 #
 # All seven are new desktop bindings landed by this release whose OWN
 # FAMILY is already allowlisted here. The disposition below is per family,
