@@ -32,6 +32,29 @@ type Branch struct {
 	SubagentBranch   bool     `json:"subagentBranch,omitempty"`
 	RecommendationID string   `json:"recommendationId,omitempty"`
 	AdvisorSignals   []string `json:"advisorSignals,omitempty"`
+
+	// Dispatched-sub-agent fields (subagent-control-and-background-
+	// tasks-01PMZB11 UNIT-9). Populated only for branches created by
+	// kenaz__subagent_dispatch — NOT the same population as
+	// SubagentBranch above, which is the older branch-advisor flag.
+	// Mirror frontend/src/lib/types.ts's SubagentBranch interface
+	// (subagentStatus/profileId/tokensUsed/budgetTokens/elapsedS/
+	// budgetTimeS); all omitempty so an ordinary branch's JSON simply
+	// omits them (AC-11's negative half).
+	//
+	// SubagentStatus's value set MUST stay a subset of frontend
+	// SubagentStatus's union ("running" | "awaiting-merge" | "paused" |
+	// "complete" | "error" | "aborted") — pinned by
+	// TestSubagentStatusValuesAreInTSUnion in impl_test.go. Go never
+	// emits "awaiting-merge" as of UNIT-9 (that state needs the
+	// profile's MergePolicy, out of this unit's scope) — a value not
+	// yet produced is fine; a value outside the union is not.
+	SubagentStatus string `json:"subagentStatus,omitempty"`
+	ProfileID      string `json:"profileId,omitempty"`
+	TokensUsed     int    `json:"tokensUsed,omitempty"`
+	BudgetTokens   int    `json:"budgetTokens,omitempty"`
+	ElapsedS       int    `json:"elapsedS,omitempty"`
+	BudgetTimeS    int    `json:"budgetTimeS,omitempty"`
 }
 
 // CreateBranchOptions is the request body for CreateBranch.

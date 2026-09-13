@@ -18,6 +18,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 	coretasks "github.com/kameas-ai/kenaz-harness/core/tasks"
+	"github.com/kameas-ai/kenaz-harness/core/usage"
 )
 
 // ErrManagerUnavailable signals the chassis booted without the
@@ -53,14 +54,29 @@ var ErrSubagentTaskNotFound = errors.New("branches: no tracked task for this bra
 // surface.
 type SubagentTaskRegistry interface {
 	Abort(ctx context.Context, id string) error
+	// Get returns the tracked task, when id is known (UNIT-9 — ListBranches
+	// reads Status/StartedAt/EndedAt off it to populate subagentStatus /
+	// elapsedS). Mirrors core/tasks.Registry.Get's exact signature so the
+	// production *coretasks.Registry instance already wired via Tasks
+	// (see AbortSubagent's doc) satisfies this with no adapter.
+	Get(id string) (coretasks.Task, bool)
 }
 
-// SubagentTaskLookup resolves the core/tasks.Registry id backing a
-// branch's spawned child run. Narrow interface over
-// *core/rpc/views/agentgraph.BranchSeamAdapter.TaskIDForBranch so this
-// package does not need to import agentgraph's full surface.
+// SubagentTaskLookup resolves per-branch sub-agent metadata recorded by
+// BranchSeamAdapter.Fork. Narrow interface over
+// *core/rpc/views/agentgraph.BranchSeamAdapter so this package does not
+// need to import agentgraph's full surface.
 type SubagentTaskLookup interface {
+	// TaskIDForBranch returns the core/tasks.Registry id backing
+	// branchID's spawned child run.
 	TaskIDForBranch(branchID string) (string, bool)
+	// SubagentMeta returns the profile id + declared budgets Fork
+	// recorded for branchID (UNIT-9). ok=false for any branch that was
+	// not created by kenaz__subagent_dispatch — this is the
+	// discriminator ListBranches uses to decide whether to enrich a row
+	// at all (AC-11's negative half: an ordinary branch gets none of
+	// the six subagent wire fields).
+	SubagentMeta(branchID string) (profileID string, budgetTokens, budgetTimeS int, ok bool)
 }
 
 // ErrSubagentPauseUnavailable is returned by PauseSubagent /
@@ -90,6 +106,12 @@ var ErrSubagentPauseUnavailable = errors.New("branches: subagent pause control u
 type SubagentPauseControl interface {
 	Pause(sessionID string) (changed bool)
 	Resume(sessionID string) (changed bool)
+	// IsPaused reports whether sessionID currently has an armed pause
+	// signal (UNIT-9 — ListBranches's subagentStatus computation).
+	// Mirrors chat.SubagentPauseRegistry.IsPaused's exact signature so
+	// the production *chat.SubagentPauseRegistry instance already
+	// wired via PauseControl satisfies this with no adapter.
+	IsPaused(sessionID string) bool
 }
 
 // BranchListBroker is the narrow publish surface the branches API needs
@@ -156,6 +178,22 @@ type Config struct {
 	// ErrSubagentPauseUnavailable — matches this file's existing
 	// degraded-boot posture rather than panicking.
 	PauseControl SubagentPauseControl
+	// Usage resolves the per-session cumulative token aggregate
+	// (subagent-control-and-background-tasks-01PMZB11 UNIT-9) — the
+	// SAME *usage.Manager instance the token-cost-telemetry mission
+	// wired into the chat runner, not a second tracker. Read by
+	// ListBranches to populate SubagentBranch.tokensUsed off the
+	// dispatched sub-agent's child session id. nil degrades
+	// tokensUsed to always-omitted (matches this file's existing
+	// degraded-boot posture for every other optional dependency).
+	Usage UsageReader
+}
+
+// UsageReader is the narrow core/usage.Manager surface ListBranches
+// needs (UNIT-9). core/usage.Manager itself satisfies this with no
+// adapter.
+type UsageReader interface {
+	GetSession(ctx context.Context, sessionID string) (usage.Aggregate, error)
 }
 
 // API is the concrete BranchesAPI implementation.
@@ -215,9 +253,102 @@ func (a *API) ListBranches(ctx context.Context, parentSessionID string) ([]Branc
 	}
 	out := make([]Branch, 0, len(rows))
 	for _, b := range rows {
-		out = append(out, toWire(b))
+		wire := toWire(b)
+		a.enrichSubagentFields(ctx, &wire)
+		out = append(out, wire)
 	}
 	return out, nil
+}
+
+// enrichSubagentFields populates out's six dispatched-sub-agent wire
+// fields (subagentStatus/profileId/tokensUsed/budgetTokens/elapsedS/
+// budgetTimeS) when out.ID was created by kenaz__subagent_dispatch
+// (subagent-control-and-background-tasks-01PMZB11 UNIT-9, FR-009). A
+// no-op — leaving every field at its zero value, which json:",omitempty"
+// then drops entirely — for any branch a.cfg.TaskLookup does not
+// recognise, which is both the degraded-boot case (TaskLookup nil) and
+// AC-11's negative half (an ordinary, non-subagent branch).
+func (a *API) enrichSubagentFields(ctx context.Context, out *Branch) {
+	if a == nil || a.cfg.TaskLookup == nil {
+		return
+	}
+	profileID, budgetTokens, budgetTimeS, ok := a.cfg.TaskLookup.SubagentMeta(out.ID)
+	if !ok {
+		return
+	}
+	out.ProfileID = profileID
+	out.BudgetTokens = budgetTokens
+	out.BudgetTimeS = budgetTimeS
+
+	// subagentStatus + elapsedS come off the tracked task, when one is
+	// still resolvable (TaskIDForBranch is evicted once WaitForChildRun
+	// has consumed the branch's outcome — see that method's doc — so a
+	// merged/synchronously-dispatched branch may have profile/budget
+	// info above but no live task snapshot here; that is a documented
+	// degrade, not a bug).
+	if a.cfg.Tasks != nil {
+		if taskID, tok := a.cfg.TaskLookup.TaskIDForBranch(out.ID); tok {
+			if task, gok := a.cfg.Tasks.Get(taskID); gok {
+				paused := a.cfg.PauseControl != nil && out.ChildSessionID != "" &&
+					a.cfg.PauseControl.IsPaused(out.ChildSessionID)
+				out.SubagentStatus = subagentStatusFromTask(task, paused)
+				out.ElapsedS = subagentElapsedSeconds(task, a.now())
+			}
+		}
+	}
+
+	// tokensUsed comes off the child session's cumulative usage
+	// aggregate — the SAME per-turn accounting the token-cost-telemetry
+	// mission already writes for every ordinary session, since a
+	// dispatched sub-agent's child session is chatted through the
+	// ordinary ChatRunner path.
+	if a.cfg.Usage != nil && out.ChildSessionID != "" {
+		if agg, uerr := a.cfg.Usage.GetSession(ctx, out.ChildSessionID); uerr == nil {
+			out.TokensUsed = agg.TotalTokens
+		}
+	}
+}
+
+// subagentStatusFromTask maps a tracked task's lifecycle state (plus
+// the pause side-channel, which the task registry does not itself
+// know about) onto frontend/src/lib/types.ts's SubagentStatus union.
+// Deliberately a strict subset of that union: "awaiting-merge" needs
+// the dispatching profile's MergePolicy, which this unit does not
+// thread through, so Go never emits it — see api.go's field doc and
+// TestSubagentStatusValuesAreInTSUnion, which pins that every value
+// this function CAN return is a member of the union (not that it
+// covers the whole union).
+func subagentStatusFromTask(task coretasks.Task, paused bool) string {
+	switch task.Status {
+	case coretasks.StatusCompleted:
+		return "complete"
+	case coretasks.StatusFailed, coretasks.StatusCrashed:
+		return "error"
+	case coretasks.StatusCancelled:
+		return "aborted"
+	default: // StatusPending, StatusRunning
+		if paused {
+			return "paused"
+		}
+		return "running"
+	}
+}
+
+// subagentElapsedSeconds returns whole seconds between task.StartedAt
+// and either task.EndedAt (terminal) or now (still running). Negative
+// durations (clock skew in a fake clock, or a task ended before it
+// reports having started) clamp to 0 rather than surfacing a
+// nonsensical negative elapsed time.
+func subagentElapsedSeconds(task coretasks.Task, now time.Time) int {
+	end := now
+	if task.EndedAt != nil {
+		end = *task.EndedAt
+	}
+	d := end.Sub(task.StartedAt)
+	if d < 0 {
+		return 0
+	}
+	return int(d.Seconds())
 }
 
 // CreateBranch allocates a new fork. When opts.ParentMessageID is set,
@@ -436,8 +567,10 @@ func (a *API) GetBranchStatus(ctx context.Context, branchID string) (BranchStatu
 	if err != nil {
 		return BranchStatus{}, err
 	}
+	wire := toWire(br)
+	a.enrichSubagentFields(ctx, &wire)
 	out := BranchStatus{
-		Branch:         toWire(br),
+		Branch:         wire,
 		ChildSessionID: br.ChildSessionID,
 	}
 	// Best-effort child activity snapshot.
