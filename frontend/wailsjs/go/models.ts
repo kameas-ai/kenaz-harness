@@ -847,6 +847,12 @@ export namespace branches {
 	    subagentBranch?: boolean;
 	    recommendationId?: string;
 	    advisorSignals?: string[];
+	    subagentStatus?: string;
+	    profileId?: string;
+	    tokensUsed?: number;
+	    budgetTokens?: number;
+	    elapsedS?: number;
+	    budgetTimeS?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new Branch(source);
@@ -870,6 +876,12 @@ export namespace branches {
 	        this.subagentBranch = source["subagentBranch"];
 	        this.recommendationId = source["recommendationId"];
 	        this.advisorSignals = source["advisorSignals"];
+	        this.subagentStatus = source["subagentStatus"];
+	        this.profileId = source["profileId"];
+	        this.tokensUsed = source["tokensUsed"];
+	        this.budgetTokens = source["budgetTokens"];
+	        this.elapsedS = source["elapsedS"];
+	        this.budgetTimeS = source["budgetTimeS"];
 	    }
 	}
 	export class BranchStatus {
