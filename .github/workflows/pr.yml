@@ -560,6 +560,32 @@ jobs:
         # "secret-lookup-wiring/second-literal-omits-field".
         run: bash scripts/ci/check-secret-lookup-wiring.sh
 
+      - name: transport-parity guard (G-1)
+        # connector-lifecycle-truth-01PMZ303 UNIT-15. Before UNIT-6,
+        # dispatch.Pool.closeOneByTag's http/sse cases were comment-only
+        # and fell through to the function's shared tail (then a bare
+        # `return nil`) — reporting success for a close that never
+        # happened, on every http/sse recipe. This gate derives the
+        # transport-tag set from the switch itself and fails naming any
+        # case whose body has no real .CloseOne(ctx, id) call. Planted-
+        # violation proof: scripts/ci/gates_can_fail_test.go
+        # "TestTransportParityGate_PlantedCommentOnlyArmFails".
+        run: bash scripts/ci/check-transport-parity.sh
+
+      - name: recipe-token-substitution guard (G-2)
+        # connector-lifecycle-truth-01PMZ303 UNIT-15. registry.json
+        # shipped 14 recipes with a "${KAMEAS_*_OAUTH_CLIENT_ID}"
+        # placeholder in auth.client_id (and one auth.client_secret) with
+        # ZERO production Substitute* call site touching either field —
+        # for years. Derives which JSON paths carry a "${...}" token
+        # today from the catalogs themselves and cross-checks each
+        # against scripts/ci/allowlists/g2-recipe-substituted-paths.txt,
+        # requiring a real, still-matching call site. Planted-violation
+        # proofs: scripts/ci/gates_can_fail_test.go
+        # "TestRecipeTokenSubstitutionGate_PlantedUnmanifestedTokenFails"
+        # and "...PlantedStaleManifestEntryFails".
+        run: bash scripts/ci/check-recipe-token-substitution.sh
+
       - name: installer-payload guard
         # entry-points-and-crash-reporting-01PMZD13 UNIT-2. Placed here
         # (not release.yml) in the 2026-08-25 unwired sweep: this is a
