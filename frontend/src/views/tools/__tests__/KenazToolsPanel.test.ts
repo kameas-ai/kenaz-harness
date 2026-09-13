@@ -70,6 +70,7 @@ function makeListing(
     enabled: false,
     keysPresent: false,
     status: makeStatus(recipe.id),
+    source: 'registry',
     ...overrides,
   };
 }
@@ -193,6 +194,54 @@ describe('KenazToolsPanel — recipes section', () => {
     expect(w.find('[data-testid=recipe-state-filesystem]').text()).toContain(
       'running',
     );
+  });
+
+  it('renders three distinct provenance badges from RecipeListing.source, not a hardcoded literal (connector-lifecycle-truth-01PMZ303 UNIT-11, AC-007)', async () => {
+    // Before UNIT-11, sourceBadge/sourceBadgeClass ignored their argument
+    // entirely and returned the literal 'shipped' for every row — the
+    // badge lied on 113 of 115 rows on a fresh install. This asserts the
+    // rendered label actually varies with RecipeListing.source across
+    // all three provenance values a real ListRecipes response reports.
+    const recipes = [
+      makeListing(makeRecipe('shipped-one'), {
+        enabled: true,
+        keysPresent: true,
+        source: 'shipped',
+        status: makeStatus('shipped-one', { enabled: true, state: 'running' }),
+      }),
+      makeListing(makeRecipe('registry-one'), {
+        enabled: true,
+        keysPresent: true,
+        source: 'registry',
+        status: makeStatus('registry-one', { enabled: true, state: 'running' }),
+      }),
+      makeListing(makeRecipe('imported-one'), {
+        enabled: true,
+        keysPresent: true,
+        source: 'imported',
+        status: makeStatus('imported-one', { enabled: true, state: 'running' }),
+      }),
+    ];
+    const setup = makeClient(recipes);
+    const w = await mountPanel(setup);
+    await flushPromises();
+
+    const shippedLabel = w
+      .find('[data-testid=recipe-source-shipped-one]')
+      .text();
+    const registryLabel = w
+      .find('[data-testid=recipe-source-registry-one]')
+      .text();
+    const importedLabel = w
+      .find('[data-testid=recipe-source-imported-one]')
+      .text();
+
+    expect(shippedLabel).toContain('shipped');
+    expect(registryLabel).toContain('registry');
+    expect(importedLabel).toContain('imported');
+    // The three labels must actually differ — guards against a fallback
+    // that maps every source to the same rendered string.
+    expect(new Set([shippedLabel, registryLabel, importedLabel]).size).toBe(3);
   });
 
   it('a live mcp:health-changed push event flips the health pill and shows the error, with no user action or poll tick (connector-lifecycle-truth-01PMZ303 UNIT-8, AC-005b)', async () => {

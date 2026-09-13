@@ -25,6 +25,7 @@ import type {
   EnvKey,
   Recipe,
   RecipeListing,
+  RecipeSource,
   RecipeState,
   RecipeStatus,
 } from '@/lib/types';
@@ -594,23 +595,38 @@ function cancelDelete() {
 }
 
 /**
- * sourceBadge — derive a human-readable source label for a recipe row.
+ * sourceBadge — human-readable provenance label for a recipe row.
  *
- * BACKEND GAP: The wire shape does not yet carry a `source` discriminator.
- * When the backend adds it (WP10+), read it directly instead of this
- * heuristic fallback.
- *
- * Current heuristic: all recipes returned by Tools_ListRecipes are
- * considered "shipped" because that is the only catalog the backend
- * exposes today. Registry / user / imported will be distinguishable once
- * the backend surfaces the field.
+ * connector-lifecycle-truth-01PMZ303 FR-007: RecipeListing.source is a
+ * real server-side discriminator (recipes.Source* — see
+ * core/rpc/views/tools/api.go), tagged by the shipped+registry+user
+ * merge at both of its call sites. This used to be a hardcoded
+ * "shipped" literal for every row — a provenance badge that lied on
+ * 113 of 115 rows on a fresh install, for a server the harness spawns
+ * with the user's credentials.
  */
-function sourceBadge(_listing: RecipeListing): string {
-  return 'shipped';
+const SOURCE_LABELS: Record<RecipeSource, string> = {
+  shipped: 'shipped',
+  registry: 'registry',
+  user: 'user',
+  imported: 'imported',
+  unknown: 'unknown',
+};
+
+function sourceBadge(listing: RecipeListing): string {
+  return SOURCE_LABELS[listing.source] ?? 'unknown';
 }
 
-function sourceBadgeClass(_listing: RecipeListing): string {
-  return 'text-ink-dim';
+const SOURCE_BADGE_CLASSES: Record<RecipeSource, string> = {
+  shipped: 'text-ink-dim',
+  registry: 'text-ink-dim',
+  user: 'text-accent',
+  imported: 'text-accent',
+  unknown: 'text-signal-warn',
+};
+
+function sourceBadgeClass(listing: RecipeListing): string {
+  return SOURCE_BADGE_CLASSES[listing.source] ?? 'text-signal-warn';
 }
 
 // Whenever the recipes list refreshes, fetch persisted config for any

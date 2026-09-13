@@ -26,11 +26,23 @@ import (
 // Status is a zero value when the recipe is not enabled. Frontend
 // renderers branch on Enabled to decide whether to surface status
 // fields.
+//
+// Source is the provenance discriminator (connector-lifecycle-truth-
+// 01PMZ303 FR-007): one of recipes.SourceShipped / SourceRegistry /
+// SourceUser, copied from the embedded Recipe's Source field, which
+// the merge in core/rpc/api.go's mergedRecipeCatalog already stamps —
+// but recipes.Recipe.Source itself carries `json:"-"` because it is
+// derived catalog metadata, not authored recipe data, and must never
+// round-trip through registry.json/shipped.json parsing. RecipeListing
+// re-exposes it on the wire so the frontend can render a true
+// provenance badge instead of the hardcoded "shipped" literal
+// KenazToolsPanel.vue used to return unconditionally.
 type RecipeListing struct {
 	Recipe      recipes.Recipe     `json:"recipe"`
 	Enabled     bool               `json:"enabled"`
 	Status      stdio.RecipeStatus `json:"status"`
 	KeysPresent bool               `json:"keysPresent"`
+	Source      string             `json:"source"`
 }
 
 // FSAccessResult is the wire shape returned by RequestAdditionalAllowedDir

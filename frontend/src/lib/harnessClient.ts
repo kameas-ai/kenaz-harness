@@ -81,6 +81,7 @@ import type {
   PrimaryAuth,
   RecipeCategory,
   RecipeListing,
+  RecipeSource,
   RecipeState,
   RecipeStatus,
   HealthEntry,
@@ -1177,6 +1178,15 @@ interface WireRecipeListing {
   enabled: boolean;
   status: WireRecipeStatus;
   keysPresent: boolean;
+  /**
+   * Provenance discriminator (connector-lifecycle-truth-01PMZ303 FR-007):
+   * "shipped" | "registry" | "user" | "imported". Copied server-side from
+   * recipes.Recipe.Source (which itself is never round-tripped through
+   * registry.json/shipped.json — `json:"-"` — because it is derived
+   * catalog metadata, not authored recipe data). Always present on a real
+   * ListRecipes response; may be "" only for a hand-built test fixture.
+   */
+  source: string;
 }
 
 export function adaptCategory(raw: string): RecipeCategory {
@@ -1385,12 +1395,31 @@ export function adaptHealthEntry(w: WireHealthEntry): HealthEntry {
   };
 }
 
+const KNOWN_RECIPE_SOURCES: readonly RecipeSource[] = [
+  'shipped',
+  'registry',
+  'user',
+  'imported',
+];
+
+// Unlike adaptState/adaptCategory's "fold to a plausible default" fallback,
+// an unrecognised source falls to 'unknown' rather than 'shipped' —
+// defaulting a provenance badge to "shipped" on an unexpected value would
+// reintroduce exactly the fabricated-provenance defect this field exists
+// to end (connector-lifecycle-truth-01PMZ303 FR-007).
+function adaptRecipeSource(raw: string): RecipeSource {
+  return (KNOWN_RECIPE_SOURCES as readonly string[]).includes(raw)
+    ? (raw as RecipeSource)
+    : 'unknown';
+}
+
 function adaptRecipeListing(w: WireRecipeListing): RecipeListing {
   return {
     recipe: adaptRecipe(w.recipe),
     enabled: w.enabled,
     status: adaptRecipeStatus(w.status),
     keysPresent: w.keysPresent,
+    source: adaptRecipeSource(w.source),
   };
 }
 
