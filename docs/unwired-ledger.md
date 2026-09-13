@@ -3564,6 +3564,107 @@ currently prove — the field-proven class (an unrelated package importing
 fleet, the shape that really fired on release/v0.78.1 against
 `core/serve`). It does not claim the `core/rpc/views/` hole is closed.
 
+### 2026-09-12 (fleet-org-config-inheritance-01NORGX01 WP02 triage) — `Bundle.ProvisionedMCP`/`ProviderSetups` were signed and transmitted with ZERO apply branch — WIRED for ProvisionedMCP, ProviderSetups stays deferred
+
+**Found**: 2026-09-12, triaging `fleet-org-config-inheritance-01NORGX01`
+against the live tree. `ef43a2f1` (2026-09-10, WP01) added
+`Bundle.ProvisionedMCP` and `Bundle.ProviderSetups`, both signed into
+`bundleSigningPayload` — so a fleet server could push either section and
+the harness would verify and ACK it — but
+`compositeConfigApplier.ApplyBundle` (`core/rpc/views/settings/fleet.go`)
+had no branch reading either field at all. **RAN**, not read:
+`rtk proxy grep -rl "ProvisionedMCP\|ProviderSetup" core/` returned only
+`bundle.go`, `bundle_test.go`, `bundle_knob_coverage.go` — no consumer
+anywhere in the tree. `bundle_knob_coverage.go` already carried
+`RegisterDeferred` entries for both (so `TestKnobCoverage_Bundle` was not
+lying), but the deferral was undocumented here, contrary to CLAUDE.md's
+own release-ritual instruction to record every `RegisterDeferred` with a
+dated blocker+owner.
+
+**Disposition — split, because the two sections have different blockers.**
+
+- **ProvisionedMCP: WIRED, same commit as this finding.**
+  `recipes.ApplyProvisionedMCP` (`core/mcp/recipes/org.go`, new) installs
+  each entry as the highest-precedence ("org_wins_readonly") layer of the
+  shared `*recipes.MergedCatalog` (`merged.go`'s new `SetOrgRecipes`).
+  `compositeConfigApplier.ApplyBundle` now converts `b.ProvisionedMCP` and
+  calls it unconditionally on every apply (not gated on non-empty — see
+  the in-code comment on why a subsequent empty bundle must clear a prior
+  org overlay, not leave it stale). `StopFleetBackground` (sign-out)
+  clears the overlay via the same method. `knobcoverage.Register` replaces
+  the `RegisterDeferred` entry. No architecture change was needed for
+  WP03's "OAuth client_id resolution order" requirement: every OAuth
+  sign-in call site resolves the recipe to use via
+  `MergedCatalog.Get`/`.Recipes()` (e.g.
+  `core/rpc/views/tools/oauth.go:404`'s `recipe.Auth.ClientID` read), so
+  once the org-provisioned recipe wins the merge, its `Auth.ClientID`
+  wins the resolution by construction — spec §3.3's ordering falls out of
+  the merge precedence rather than needing separate resolution code.
+  `docs/unwired-ledger.md` did not previously record `mcp_recipes`'s own
+  near-miss: `core/rpc/sync_categories.go`'s `emptyPayloadKind` declared
+  `ScopeOrg` for the `mcp_recipes` `SyncKind` (registered, no error) with
+  an Apply that was **always** a no-op regardless of scope — an
+  `org_config["mcp_recipes"]` payload would have silently "succeeded"
+  while doing nothing, the exact "gate that cannot fail" shape CLAUDE.md
+  flags. This is now fixed too: `mcpRecipesKind`'s `ScopeOrg` branch
+  parses the payload and calls the identical `ApplyProvisionedMCP`
+  function used by the bespoke-bundle-field path, so the wire shape can
+  migrate later (`fleet-generic-sync-framework-01NSYNC02` WP04, not yet
+  landed) without a second implementation ever existing.
+
+- **ProviderSetups: still deferred, RegisterDeferred entry re-dated with a
+  named blocker.** Owner: alec. Blocker: `kitty-specs/fleet-org-config-
+  inheritance-01NORGX01/plan.md`'s Gates section states explicitly — "no
+  harness WP04 merge before a fleet dev environment can exercise it" —
+  and the dedicated encrypted org-key channel WP04 requires (org-shared
+  provider keys delivered straight into the device credstore, never
+  through any bundle/RPC/frontend path) does not exist yet either. This
+  is the same "kenaz-fleet org endpoints not yet available" blocker ruled
+  at `docs/escalation-register-2026-08-19.md` §F-2 for the mission as a
+  whole — unchanged as of this date. Unlike ProvisionedMCP, WP04's apply
+  target (LLM provider stack wiring in `core/rpc/api.go`+`core/llm/*` plus
+  a not-yet-built credstore-delivery mechanism) has no safe
+  server-independent slice to wire ahead of the blocker clearing.
+
+**Two related, out-of-scope findings surfaced during this triage — recorded
+here because they are also `RegisterDeferred`-shaped gaps this sweep found
+but did not fix (both predate this mission and are cross-cutting to
+`fleet-config-pull-01NDFSEX10`, not `01NORGX01`-specific):**
+
+1. `audit.KindFleetConfigApplied`, `KindFleetConfigSignatureRejected`, and
+   `KindFleetConfigPartialFailure` (`core/context/audit/audit.go:265-286`,
+   payload structs at `:1345-1381`) are declared with full payload types
+   and privacy-invariant doc comments but have **zero emit call sites
+   anywhere in the tree** — **RAN**:
+   `rtk proxy grep -rn "KindFleetConfigApplied\|KindFleetConfigPartialFailure\|KindFleetConfigSignatureRejected" core/`
+   returns only the three declarations plus their payload structs, no
+   `Emit(...)` call. `core/fleet/config_pull.go`'s `ConfigPoller` (the only
+   place that knows verify/apply/ACK outcomes) has no audit-emitter field
+   at all — wiring this is a `ConfigPoller` constructor-signature change
+   touching every call site, not a small patch. This is why this
+   mission's own FR-010 ("applying provisioned sections emits an auditable
+   event naming the org, the recipe/provider ids, and the bundle_id") is
+   **not met** — there is no live `fleet.config.applied` emission for
+   ANY bundle section to extend, not just this mission's new one. Owner:
+   unassigned. Blocker: threading an audit emitter through `ConfigPoller`
+   (cross-cutting to `fleet-config-pull-01NDFSEX10`).
+2. `config_pull.go`'s own header comment (line 12) claims the disk cache
+   is "`<DataDir>/fleet/bundle.json` + `bundle_checksum.txt`", but the
+   actual persisted files are `bundle_id.txt` + `bundle_checksum.txt`
+   (`bundleIDPath`/`bundleChecksumPath`, `:378-385`) — the full bundle
+   body is **never** written to disk. Every section that only lives in an
+   in-process package-level var (`llmview`'s model-prefs store is the
+   clearest case; `recipes.MergedCatalog`'s new org overlay from this WP
+   is now in that same category) is lost on a process restart while
+   offline, contradicting spec NFR-003 / this mission's FR-009
+   ("cached provisioned config stays active when fleet is unreachable").
+   "Offline-safe" today only means "mid-session, don't undo what's
+   applied in memory" — it does not survive a restart. Not fixed here:
+   persisting and replaying the full bundle at boot is an architecture
+   change to `fleet-config-pull-01NDFSEX10`, not an `01NORGX01` patch.
+   Owner: unassigned. Blocker: same as #1 — both are `ConfigPoller`/
+   `config_pull.go` architecture, not this mission's surface.
+
 ## Drained
 
 ### 2026-08-19 · CLOSED — the missing-upgrade-snapshot hole is now gated

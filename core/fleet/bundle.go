@@ -88,9 +88,12 @@ type Bundle struct {
 	// URL it connects to. It MUST be covered by the ed25519 signature
 	// (see bundleSigningPayload below) — an unsigned ProvisionedMCP
 	// section would let anyone who can modify the bundle in transit
-	// dictate what the harness executes. WP01 (this field) only adds the
-	// wire contract; the apply pipeline that actually registers these as
-	// read-only recipes lands in WP02.
+	// dictate what the harness executes. Applied by
+	// compositeConfigApplier.ApplyBundle -> recipes.ApplyProvisionedMCP
+	// (core/rpc/views/settings/fleet.go, core/mcp/recipes/org.go —
+	// fleet-org-config-inheritance-01NORGX01 WP02), which installs each
+	// entry as the highest-precedence ("org_wins_readonly") layer of
+	// core/mcp/recipes' MergedCatalog.
 	//
 	// omitempty: orgs not using this feature keep the signing payload
 	// minimal. Unlike MCPAllowlist there is no "block all" semantic for
@@ -114,7 +117,12 @@ type Bundle struct {
 	// SECURITY: same signing requirement as ProvisionedMCP — this section
 	// steers which provider/model a member's harness talks to, so it must
 	// be covered by the signature. WP01 (this field) only adds the wire
-	// contract; the apply pipeline lands in WP04.
+	// contract; the apply pipeline (WP04) is DEFERRED — see
+	// bundle_knob_coverage.go's RegisterDeferred entry and
+	// docs/unwired-ledger.md. Blocker: kenaz-fleet org endpoints and the
+	// dedicated encrypted org-key channel WP04 requires do not exist yet
+	// (plan.md Gates: "no harness WP04 merge before a fleet dev
+	// environment can exercise it"). Owner: alec.
 	//
 	// omitempty: same nil/empty/absent equivalence as ProvisionedMCP —
 	// there is no meaningful distinction for a push-down-only section.

@@ -305,6 +305,11 @@ const (
 	// <DataDir>/mcp/recipes/_imports/*.yaml — translated from a
 	// clipboard-pasted Claude Desktop / Cursor config.
 	SourceImported = "imported"
+	// SourceOrg marks recipes installed by ApplyProvisionedMCP from a
+	// fleet-signed ProvisionedMCP entry (fleet-org-config-inheritance-
+	// 01NORGX01 WP02). Org entries are MergedCatalog's highest-precedence
+	// layer (ConflictPolicyOrgWinsReadonly) — see org.go.
+	SourceOrg = "org"
 )
 
 // ConfigOption is one user-editable knob the install modal renders.
