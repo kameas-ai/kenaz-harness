@@ -782,6 +782,17 @@ interface WailsBindingsLike {
     preference: string,
   ): Promise<BranchRecommendedModel>;
 
+  // Sub-agent control verbs (subagent-control-and-background-tasks-
+  // 01PMZB11 UNIT-8/UNIT-10). Real, codegenned bindings — NOT the
+  // CompactionOverhead hand-declared-pending-regeneration shape;
+  // `wails generate module` already ran for these (see
+  // core/rpc/bindings.go + frontend/wailsjs/go/rpc/Bindings.{d.ts,js}),
+  // this interface just hadn't been told about them yet.
+  Subagent_Abort(branchID: string): Promise<void>;
+  Subagent_Steer(branchID: string, message: string): Promise<void>;
+  Subagent_Pause(branchID: string): Promise<void>;
+  Subagent_Resume(branchID: string): Promise<void>;
+
   // Search view (cross-session-search mission + unified-search-01KX5R8C).
   Search_Sessions(
     query: string,
@@ -2998,6 +3009,22 @@ export interface BranchesClient {
    * (branching-ux-polish-01KQ8TD7 WP02/WP03)
    */
   listWithBranchTree(projectId: string): Promise<SessionWithBranchPointer[]>;
+  /**
+   * Stop a dispatched sub-agent's underlying run and mark its task
+   * cancelled (subagent-control-and-background-tasks-01PMZB11 UNIT-8,
+   * wired to SubagentTab's Abort button in UNIT-10).
+   */
+  abortSubagent(branchID: string): Promise<void>;
+  /** Append a steering message to a dispatched sub-agent's child session. */
+  steerSubagent(branchID: string, message: string): Promise<void>;
+  /**
+   * Arm a dispatched sub-agent's turn-pause signal — finishes the
+   * current turn, starts no further one (owner ruling E-002; NOT
+   * immediate).
+   */
+  pauseSubagent(branchID: string): Promise<void>;
+  /** Clear a dispatched sub-agent's turn-pause signal. */
+  resumeSubagent(branchID: string): Promise<void>;
 }
 
 /**
@@ -4398,6 +4425,10 @@ export function createHarnessClient(): HarnessClient {
         b().Branches_SetAdvisorDismissed(sessionID, dismissed),
       listWithBranchTree: (projectId) =>
         b().Branches_ListWithBranchTree(projectId),
+      abortSubagent: (branchID) => b().Subagent_Abort(branchID),
+      steerSubagent: (branchID, message) => b().Subagent_Steer(branchID, message),
+      pauseSubagent: (branchID) => b().Subagent_Pause(branchID),
+      resumeSubagent: (branchID) => b().Subagent_Resume(branchID),
     },
     nodes: {
       catalog: () => b().Nodes_Catalog(),
@@ -6069,6 +6100,10 @@ export function createFakeHarnessClient(
         updatedAt: new Date().toISOString(),
       }),
       listWithBranchTree: async () => [],
+      abortSubagent: noop,
+      steerSubagent: noop,
+      pauseSubagent: noop,
+      resumeSubagent: noop,
     },
     nodes: {
       catalog: async () => [],

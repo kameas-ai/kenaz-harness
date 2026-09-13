@@ -3422,6 +3422,22 @@ export interface Branch {
   advisorSignals?: string[];
   /** Parent session id — populated on subagent branches. */
   parentSessionIdRef?: string;
+
+  // Dispatched-sub-agent fields (subagent-control-and-background-
+  // tasks-01PMZB11 UNIT-9). Populated only for branches created by
+  // kenaz__subagent_dispatch — distinct from subagentBranch above,
+  // which is the older branch-advisor flag. Declared optional here
+  // (mirrors the Go wire type's omitempty) so any Branch[] consumer
+  // (BranchSidebar, SessionsView's activeSubagentBranch) can read them
+  // without narrowing to SubagentBranch first; SubagentBranch below
+  // re-declares subagentStatus/profileId as required once a caller
+  // has confirmed the branch is a sub-agent.
+  subagentStatus?: SubagentStatus;
+  profileId?: string;
+  tokensUsed?: number;
+  budgetTokens?: number;
+  elapsedS?: number;
+  budgetTimeS?: number;
 }
 
 /**
