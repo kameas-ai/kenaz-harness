@@ -130,13 +130,10 @@ core/hooks/hooks.go:515: github.com/kameas-ai/kenaz-harness/core/hooks.WithShell
 core/llm/custom/adapter.go:95: github.com/kameas-ai/kenaz-harness/core/llm/custom.WithCapabilityStore is never called by any non-test source under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
-core/llm/registry/registry.go:44: Options.Catalog (pointer) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
-core/llm/registry/registry.go:46: Options.Emitter (pointer) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
-core/llm/registry/registry.go:831: github.com/kameas-ai/kenaz-harness/core/llm/registry.WithSnapshotID is never called by any non-test source under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
 core/rpc/api.go:1506: github.com/kameas-ai/kenaz-harness/core/rpc.WithConnectorTokens is never called by any non-test source under core/
@@ -169,22 +166,16 @@ core/rpc/views/branches/impl.go:121: Config.Now (func) is never set to a non-nil
 core/rpc/views/bundle/impl.go:174: github.com/kameas-ai/kenaz-harness/core/rpc/views/bundle.WithSecretsResolver is never called by any non-test source under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
-core/rpc/views/llm/impl.go:424: Config.Bundles (interface) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
-core/rpc/views/llm/impl.go:465: Config.CredPeeker (interface) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
-core/rpc/views/llm/impl.go:476: Config.CredInvalidator (interface) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
-core/rpc/views/llm/impl.go:480: Config.AuditRotation (interface) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
-core/rpc/views/llm/impl.go:485: Config.CustomAdapter (interface) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
-core/rpc/views/llm/impl.go:492: Config.FallbackStore (pointer) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
 core/rpc/views/mcp/impl.go:101: github.com/kameas-ai/kenaz-harness/core/rpc/views/mcp.WithHealthPool is never called by any non-test source under core/
@@ -193,13 +184,10 @@ core/rpc/views/mcp/impl.go:101: github.com/kameas-ai/kenaz-harness/core/rpc/view
 core/rpc/views/mcp/impl.go:83: github.com/kameas-ai/kenaz-harness/core/rpc/views/mcp.WithRegistry is never called by any non-test source under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
-core/rpc/views/memory/impl.go:124: Config.Journal (interface) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
-core/rpc/views/memory/impl.go:126: Config.NarrativeMetrics (interface) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
-core/rpc/views/memory/impl.go:127: Config.NarrativeJobs (interface) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
 core/rpc/views/permissions/impl.go:65: Config.ConfigTrimmer (interface) is never set to a non-nil value in any non-test composite literal under core/
@@ -217,7 +205,6 @@ core/serve/server.go:213: github.com/kameas-ai/kenaz-harness/core/serve.WithElic
 core/session/manager.go:159: github.com/kameas-ai/kenaz-harness/core/session.WithAudit is never called by any non-test source under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph — spot-checked real, see above.
 
-core/storage/storage.go:153: Config.SecretsBackend (interface) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
 core/tasks/registry.go:130: Options.HookFirer (func) is never set to a non-nil value in any non-test composite literal under core/
@@ -226,10 +213,8 @@ core/tasks/registry.go:130: Options.HookFirer (func) is never set to a non-nil v
 core/telemetry/telemetry.go:56: Config.SpanExporters (slice) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
-core/tools/askuserquestion/askuserquestion.go:247: Options.Enabled (func) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
-core/tools/askuserquestion/askuserquestion.go:248: Options.Logger (pointer) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
 core/tools/bash/bash.go:166: Options.Allowlist (slice) is never set to a non-nil value in any non-test composite literal under core/
@@ -253,10 +238,8 @@ core/tools/saveartifact/saveartifact.go:113: Options.Logger (pointer) is never s
 core/tools/skill/skill.go:87: Options.Enabled (func) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
-core/tools/subagentdispatch/tool.go:177: Options.Tasks (interface) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
-core/tools/subagentdispatch/tool.go:190: Options.SessionResolver (func) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
 core/tools/updateartifact/updateartifact.go:91: Options.SessionResolver (func) is never set to a non-nil value in any non-test composite literal under core/
@@ -280,8 +263,31 @@ core/update/service.go:51: Config.Swapper (interface) is never set to a non-nil 
 core/workflows/scheduler/cron_scheduler.go:88: Config.Dispatcher (interface) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
-core/workflows/types.go:642: Deps.Tools (interface) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph — spot-checked real, see above.
 
-core/workflows/types.go:662: Deps.Audit (interface) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph — spot-checked real, see above.
+
+# 2026-09-12 RE-SEEDED after the v0.79.0 integration merge. These 17 are the
+# SAME findings as before at SHIFTED LINE NUMBERS -- merging eight sibling
+# missions moved code above them. Deps.Tools and Deps.Audit were genuinely
+# FIXED (automation-actually-runs-01PMZ404 U6/U8) and are gone, not shifted.
+# Owner: unassigned. Blocker: this allowlist is keyed on file:line, so ANY
+# edit above an entry invalidates it in both directions at once (stale AND
+# unlisted). Keying on file+symbol would end that; recorded as a finding.
+core/llm/registry/registry.go:45: Options.Catalog (pointer) is never set to a non-nil value in any non-test composite literal under core/
+core/llm/registry/registry.go:47: Options.Emitter (pointer) is never set to a non-nil value in any non-test composite literal under core/
+core/llm/registry/registry.go:851: github.com/kameas-ai/kenaz-harness/core/llm/registry.WithSnapshotID is never called by any non-test source under core/
+core/rpc/views/llm/impl.go:431: Config.Bundles (interface) is never set to a non-nil value in any non-test composite literal under core/
+core/rpc/views/llm/impl.go:472: Config.CredPeeker (interface) is never set to a non-nil value in any non-test composite literal under core/
+core/rpc/views/llm/impl.go:483: Config.CredInvalidator (interface) is never set to a non-nil value in any non-test composite literal under core/
+core/rpc/views/llm/impl.go:487: Config.AuditRotation (interface) is never set to a non-nil value in any non-test composite literal under core/
+core/rpc/views/llm/impl.go:492: Config.CustomAdapter (interface) is never set to a non-nil value in any non-test composite literal under core/
+core/rpc/views/llm/impl.go:499: Config.FallbackStore (pointer) is never set to a non-nil value in any non-test composite literal under core/
+core/rpc/views/memory/impl.go:126: Config.Journal (interface) is never set to a non-nil value in any non-test composite literal under core/
+core/rpc/views/memory/impl.go:128: Config.NarrativeMetrics (interface) is never set to a non-nil value in any non-test composite literal under core/
+core/rpc/views/memory/impl.go:129: Config.NarrativeJobs (interface) is never set to a non-nil value in any non-test composite literal under core/
+core/storage/storage.go:155: Config.SecretsBackend (interface) is never set to a non-nil value in any non-test composite literal under core/
+core/tools/askuserquestion/askuserquestion.go:298: Options.Enabled (func) is never set to a non-nil value in any non-test composite literal under core/
+core/tools/askuserquestion/askuserquestion.go:299: Options.Logger (pointer) is never set to a non-nil value in any non-test composite literal under core/
+core/tools/subagentdispatch/tool.go:179: Options.Tasks (interface) is never set to a non-nil value in any non-test composite literal under core/
+core/tools/subagentdispatch/tool.go:192: Options.SessionResolver (func) is never set to a non-nil value in any non-test composite literal under core/
