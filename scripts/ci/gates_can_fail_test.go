@@ -137,6 +137,14 @@ var cwdSensitiveGates = []string{
 	"check-bundle-channel-kinds-sync.sh",
 	"check-serve-gap-classification.sh",
 	"check-secret-lookup-wiring.sh",
+	// controls-and-readouts-that-tell-the-truth-01PMZ808 WP22, AC-063:
+	// its old `git rev-parse --show-toplevel 2>/dev/null || pwd` fallback
+	// silently used the CALLER's cwd (not the repo root) when invoked
+	// from outside any git repository — proven live from a mktemp'd
+	// /tmp directory (exit 3 there, exit 0 from the repo root, before
+	// the fix). Fixed by switching to lib/ci-gate.sh's BASH_SOURCE[0]
+	// self-location, same as every other gate in this list.
+	"check-knob-coverage.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -3307,5 +3315,144 @@ func zzGateProbeWireDeadClosure(reg *zzGateProbeDeadClosureRegistry, run *Runner
 	if !strings.Contains(out, "zz_gate_probe_deadclosure") {
 		t.Fatalf("%s failed, but its output does not name the planted event — it may be "+
 			"failing for an unrelated reason.\noutput:\n%s", gate, out)
+	}
+}
+
+// TestKnobCoverageGate_UnregisteredSettingsFieldFires is AC-060
+// (controls-and-readouts-that-tell-the-truth-01PMZ808 WP22, spec §5 G-2
+// case (a)). The pre-existing "knob-coverage/unregistered-field" case in
+// the shared table above (structured-output-is-reachable-01PMZE14 WP03)
+// proves the MECHANISM can fail using a synthetic probe struct — it
+// deliberately avoids touching the real ModelAttrs/settings.Settings
+// registrations, for the "tests-are-hermetic" reason its own comment
+// gives. WP22's own AC asks for something that case does not cover:
+// planting a field directly onto the REAL settings.Settings struct with
+// no Register call, and confirming check-knob-coverage.sh's real
+// settings guard (TestKnobCoverage_Settings, core/rpc/
+// settings_knob_coverage_test.go) is what catches it — not just that
+// SOME guard somewhere can fail.
+//
+// Not folded into the shared `cases` table above because the plant
+// needs a target INSIDE the struct body (before its closing brace),
+// which plant()'s append-at-EOF mode cannot express — plantReplace is
+// used instead, following TestCodegenGate_PlantedManifestDriftFires's
+// precedent for the same reason.
+func TestKnobCoverageGate_UnregisteredSettingsFieldFires(t *testing.T) {
+	root := repoRoot(t)
+	apiPath := filepath.Join(root, "core", "rpc", "views", "settings", "api.go")
+
+	const target = "\tBundleSigningPolicy string `json:\"bundleSigningPolicy,omitempty\"`\n}"
+	const mutated = "\tBundleSigningPolicy string `json:\"bundleSigningPolicy,omitempty\"`\n\n" +
+		"\t// ZZGateProbeUnregisteredField is planted by gates_can_fail_test.go\n" +
+		"\t// to prove check-knob-coverage.sh's real settings.Settings guard\n" +
+		"\t// (TestKnobCoverage_Settings) fails when a field has no\n" +
+		"\t// knobcoverage.Register/RegisterDeferred entry. Never a real field.\n" +
+		"\tZZGateProbeUnregisteredField string `json:\"zzGateProbeUnregisteredField,omitempty\"`\n}"
+
+	cleanup := plantReplace(t, apiPath, target, mutated)
+	defer cleanup()
+
+	code, out := runGate(t, "check-knob-coverage.sh", root)
+	if code == 0 {
+		t.Fatalf("check-knob-coverage.sh exited 0 with an unregistered field planted directly "+
+			"on settings.Settings — the real settings guard (TestKnobCoverage_Settings) is not "+
+			"catching an unregistered field on the struct it is supposed to track.\noutput:\n%s", out)
+	}
+	if code != 2 {
+		t.Fatalf("check-knob-coverage.sh exited %d, want 2 (a TestKnobCoverage* test failed) — "+
+			"an unrelated failure mode may be masking the real one.\noutput:\n%s", code, out)
+	}
+	if !strings.Contains(out, "ZZGateProbeUnregisteredField") {
+		t.Fatalf("check-knob-coverage.sh failed, but its output does not name the planted "+
+			"ZZGateProbeUnregisteredField field — it may be failing for an unrelated reason.\noutput:\n%s", out)
+	}
+}
+
+// TestKnobCoverageGate_NoRealGuardStillFires is AC-061
+// (controls-and-readouts-that-tell-the-truth-01PMZ808 WP22, spec §5 G-2
+// case (b)).
+//
+// A literal "rename the real guard test" undercounts what actually
+// exists: as of this WP there are FIVE real guards outside
+// core/wiring/knobcoverage/ — core/rpc/settings_knob_coverage_test.go
+// (this WP's TestKnobCoverage_Settings), core/rpc/views/agentgraph/
+// chat/knob_coverage_guard_test.go (autonomy.ResolvedKnobs,
+// autonomy-knobs-live-01PMAG02), core/agentgraph/
+// knob_coverage_guard_test.go (ModelAttrs, structured-output-is-
+// reachable-01PMZE14), core/fleet/bundle_knob_coverage_test.go, and
+// core/llm/openaiwire/knob_coverage_guard_test.go. The script's exit-3
+// branch triggers only when its static
+// `grep -rlE '^func TestKnobCoverage' | grep -v core/wiring/
+// knobcoverage/` scan finds ZERO files — renaming only one guard while
+// four others survive does not reproduce it, because the check is
+// package-agnostic by design: it does not know settings.Settings
+// exists, only that SOME real guard does.
+//
+// This discovers every real guard the same way the script does (rather
+// than hardcoding a list that would silently go stale the next time a
+// mission adds one), renames every `TestKnobCoverage*` function in each
+// to fall outside the grep pattern, runs the gate expecting exit 3, and
+// restores all of them (LIFO) via defer. This is the shape a future
+// regression that deletes or renames every real guard at once (a bad
+// rebase, an over-eager cleanup) would actually produce, and the shape
+// pr.yml's already-standing claim ("the check-knob-coverage vacuous-pass
+// fix") was written against — see AC-062 below.
+func TestKnobCoverageGate_NoRealGuardStillFires(t *testing.T) {
+	root := repoRoot(t)
+
+	// Mirror the script's own discovery exactly (scripts/ci/
+	// check-knob-coverage.sh's `real_guards` variable) so this test
+	// keeps covering every guard a future mission adds, not a hardcoded
+	// snapshot of today's five.
+	cmd := exec.Command("bash", "-c",
+		`grep -rlE '^func TestKnobCoverage' --include='*_test.go' core 2>/dev/null | grep -v '^core/wiring/knobcoverage/'`)
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("discovering real TestKnobCoverage* guard files: %v", err)
+	}
+	files := strings.Fields(string(out))
+	if len(files) == 0 {
+		t.Fatal("discovered zero real TestKnobCoverage* guard files — either the discovery " +
+			"command drifted from check-knob-coverage.sh's own, or every real guard has already " +
+			"been deleted, which would make this test's premise (there is something to hide) false")
+	}
+
+	funcNameRE := regexp.MustCompile(`(?m)^func TestKnobCoverage`)
+
+	for _, rel := range files {
+		rel := rel
+		full := filepath.Join(root, rel)
+		orig, err := os.ReadFile(full)
+		if err != nil {
+			t.Fatalf("reading %s: %v", full, err)
+		}
+		if !funcNameRE.Match(orig) {
+			t.Fatalf("%s was returned by the discovery grep but does not match "+
+				"^func TestKnobCoverage on a second read — the file changed underneath this test", full)
+		}
+		mutated := funcNameRE.ReplaceAll(orig, []byte("func zzGateProbeRenamed_TestKnobCoverage"))
+		journalPlant(plantRecord{Path: full, Orig: string(orig), Existed: true, Planted: string(mutated)})
+		if err := os.WriteFile(full, mutated, 0o644); err != nil {
+			t.Fatalf("writing %s: %v", full, err)
+		}
+		defer func() {
+			if err := os.WriteFile(full, orig, 0o644); err != nil {
+				t.Errorf("restoring %s: %v — WORKING TREE IS DIRTY", full, err)
+			}
+			journalClear(full)
+		}()
+	}
+
+	code, out2 := runGate(t, "check-knob-coverage.sh", root)
+	if code != 3 {
+		t.Fatalf("check-knob-coverage.sh exited %d with all %d real TestKnobCoverage* guards "+
+			"(%v) renamed out of static-grep reach, want 3 (no real guard found) — the gate "+
+			"should have detected it would be checking only its own mechanism's self-test."+
+			"\noutput:\n%s", code, len(files), files, out2)
+	}
+	if !strings.Contains(out2, "no TestKnobCoverage* test exists outside") {
+		t.Fatalf("check-knob-coverage.sh exited 3 as expected, but its output does not give the "+
+			"expected diagnosis — it may be failing for an unrelated reason.\noutput:\n%s", out2)
 	}
 }
