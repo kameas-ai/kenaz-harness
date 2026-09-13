@@ -26,6 +26,7 @@ import (
 	artifactsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/attachments"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/audit"
+	blockedrequestsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/blockedrequests"
 	branchesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/branches"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/bundle"
 	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
@@ -2758,6 +2759,21 @@ func (b *Bindings) ScheduledChat_History(id string, limit int) ([]scheduledchatv
 func (b *Bindings) ScheduledChat_SetEnabled(id string, enabled bool) error {
 	defer sentry.WrapBinding("ScheduledChat_SetEnabled")()
 	return b.api.ScheduledChat().SetEnabled(b.ctx(), id, enabled)
+}
+
+// ── blocked permission requests (model-scheduled-jobs-01PMSJ01 WP07) ─
+
+func (b *Bindings) BlockedRequests_ListPending() ([]blockedrequestsview.PendingRequest, error) {
+	defer sentry.WrapBinding("BlockedRequests_ListPending")()
+	return b.api.BlockedRequests().ListPending(b.ctx())
+}
+func (b *Bindings) BlockedRequests_Grant(id string) error {
+	defer sentry.WrapBinding("BlockedRequests_Grant")()
+	return b.api.BlockedRequests().Grant(b.ctx(), id)
+}
+func (b *Bindings) BlockedRequests_Dismiss(id string) error {
+	defer sentry.WrapBinding("BlockedRequests_Dismiss")()
+	return b.api.BlockedRequests().Dismiss(b.ctx(), id)
 }
 
 // ── update (mission auto-update, v0.4.0 WP03) ─────────────────────────

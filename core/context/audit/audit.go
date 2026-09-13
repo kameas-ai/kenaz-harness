@@ -611,7 +611,40 @@ const (
 	//
 	// Privacy invariant: ids only, same as KindSubagentPaused.
 	KindSubagentResumed Kind = "subagent.resumed"
+
+	// ── Blocked permission request audit kind
+	// (model-scheduled-jobs-01PMSJ01 WP06, FR-004) ──────────────────
+
+	// KindBlockedPermissionRequest fires once per denied permission
+	// request core/tools/fs.RecordingPrompter observes — the same event
+	// that also writes a durable blocked_permission_requests row
+	// (migration sessions/0338). The audit record and the row are
+	// deliberately BOTH written: the audit log has a real reader
+	// (Audit_ListEntries -> AuditView.vue) but is an append-only fact,
+	// not a work item with a pending -> granted -> dismissed lifecycle a
+	// surfacing UI can query cheaply — see the migration file's "why this
+	// table" doc for the full four-candidate-homes argument.
+	//
+	// Privacy invariant: origin, originID, sessionID, family, action,
+	// resource (a canonical path, not file contents) and reason (a short
+	// policy explanation, never tool arguments or file contents) cross
+	// the boundary. Nothing else does.
+	KindBlockedPermissionRequest Kind = "policy.blocked_permission_request"
 )
+
+// BlockedPermissionRequestPayload is the KindBlockedPermissionRequest
+// payload. Field names mirror core/tools/fs.BlockedRequest /
+// core/policy/blockedrequests.Record 1:1 — this is the audit-log
+// projection of the same fact the durable row records.
+type BlockedPermissionRequestPayload struct {
+	Origin    string `json:"origin"`
+	OriginID  string `json:"origin_id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	Family    string `json:"family"`
+	Action    string `json:"action"`
+	Resource  string `json:"resource"`
+	Reason    string `json:"reason"`
+}
 
 // ToolConfirmPath names which branch of the confirm-each dispatch path
 // produced a decision. Values are stable wire strings.

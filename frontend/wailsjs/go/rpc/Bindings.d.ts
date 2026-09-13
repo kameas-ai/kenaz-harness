@@ -8,6 +8,7 @@ import {artifacts} from '../models';
 import {attachments} from '../models';
 import {log} from '../models';
 import {audit} from '../models';
+import {blockedrequests} from '../models';
 import {branches} from '../models';
 import {bundle} from '../models';
 import {catalog} from '../models';
@@ -133,6 +134,12 @@ export function Audit_VerifyChain(arg1:string,arg2:string):Promise<audit.VerifyC
 export function Audit_VerifyEntry(arg1:string):Promise<boolean>;
 
 export function Bash_Exec(arg1:string,arg2:string):Promise<rpc.BashExecResult>;
+
+export function BlockedRequests_Dismiss(arg1:string):Promise<void>;
+
+export function BlockedRequests_Grant(arg1:string):Promise<void>;
+
+export function BlockedRequests_ListPending():Promise<Array<blockedrequests.PendingRequest>>;
 
 export function BootHealth_Get():Promise<rpc.BootHealthReport>;
 

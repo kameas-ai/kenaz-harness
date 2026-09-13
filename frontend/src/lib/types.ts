@@ -1288,6 +1288,22 @@ export interface MigrationDriftDetectedPayload {
 }
 
 /**
+ * ScheduledChatBannerPayload — the event published on the
+ * `scheduled-chat:banner` broker topic when a scheduled chat run with
+ * `outputSink: "banner"` (the schema default) finishes
+ * (model-scheduled-jobs-01PMSJ01 WP07, FR-007). Mirrors
+ * core/rpc.ScheduledChatBannerPayload exactly.
+ */
+export interface ScheduledChatBannerPayload {
+  chatRunId: string;
+  name: string;
+  sessionId: string;
+  status: 'completed' | 'failed';
+  outputSnippet?: string;
+  error?: string;
+}
+
+/**
  * MarkdownExtensions — controls which rendering features are active in
  * MarkdownBlock. Matches the four-stop dial in SettingsView.
  *   'basic'    — GFM only; KaTeX and Mermaid disabled.

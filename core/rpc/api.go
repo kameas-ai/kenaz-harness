@@ -71,6 +71,7 @@ import (
 	corememory "github.com/kameas-ai/kenaz-harness/core/memory"
 	"github.com/kameas-ai/kenaz-harness/core/memory/narrative"
 	"github.com/kameas-ai/kenaz-harness/core/memory/prune"
+	"github.com/kameas-ai/kenaz-harness/core/policy/blockedrequests"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/a2a"
 	acpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/acp"
@@ -80,6 +81,7 @@ import (
 	artifactsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/attachments"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/audit"
+	blockedrequestsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/blockedrequests"
 	branchesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/branches"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/bundle"
 	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
@@ -134,6 +136,7 @@ import (
 	coretasks "github.com/kameas-ai/kenaz-harness/core/tasks"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 	corebash "github.com/kameas-ai/kenaz-harness/core/tools/bash"
+	corefs "github.com/kameas-ai/kenaz-harness/core/tools/fs"
 	coreplanmode "github.com/kameas-ai/kenaz-harness/core/tools/planmode"
 	coreskill "github.com/kameas-ai/kenaz-harness/core/tools/skill"
 	coretrust "github.com/kameas-ai/kenaz-harness/core/trust"
@@ -277,6 +280,12 @@ type HarnessAPI interface {
 	// Settings → Scheduled Chats panel creates and manages prompt-template
 	// jobs fired by the existing core/scheduler cron engine.
 	ScheduledChat() scheduledchatview.ScheduledChatAPI
+
+	// BlockedRequests exposes the pending-permission-requests surfacing
+	// view (model-scheduled-jobs-01PMSJ01 WP07, FR-004's second half).
+	// The frontend's pending-permissions panel lists denied filesystem
+	// writes/reads and lets the user grant a durable permit or dismiss.
+	BlockedRequests() blockedrequestsview.BlockedRequestsAPI
 
 	// Secrets exposes the model-accessible secrets RPC surface (mission
 	// model-secret-references-01KW7M5A WP10). The frontend's
@@ -470,6 +479,13 @@ type API struct {
 	policyAPI   policy.PolicyAPI
 	auditImpl   *audit.API
 	auditAPI    audit.AuditAPI
+	// scheduledRunOrigins is the session-keyed side channel shared
+	// between LiveChatRunDispatcher (writer, via ChatRunDispatcherDeps
+	// .Origins) and the fs gate's RecordingPrompter (reader, via
+	// registerFSBuiltinTools's originResolve parameter) — see
+	// ScheduledRunOriginRegistry's doc (model-scheduled-jobs-01PMSJ01
+	// WP06).
+	scheduledRunOrigins *ScheduledRunOriginRegistry
 	// logStore + logsAPI back the Settings → Logs panel (mission 01NLOGS01 WP01/WP04).
 	logStore       *logstore.Store
 	logsAPI        logsview.LogsAPI
@@ -772,6 +788,11 @@ type API struct {
 	// a real Core with a DB is available; nil DB path returns ErrStoreUnavailable.
 	scheduledChatAPI scheduledchatview.ScheduledChatAPI
 
+	// blockedRequestsAPI is the pending-permission-requests surfacing RPC
+	// surface (model-scheduled-jobs-01PMSJ01 WP07). Wired in New when a
+	// real Core with a DB is available.
+	blockedRequestsAPI blockedrequestsview.BlockedRequestsAPI
+
 	// chatCronEngine is the cron engine that arms scheduled_chat_runs rows
 	// (mission model-scheduled-jobs-01PMSJ01 WP03). Started on SetContext,
 	// stopped on Shutdown, alongside wfScheduler. nil when there is no DB.
@@ -987,6 +1008,21 @@ func (a *API) SetContext(ctx context.Context) {
 	// that never fires.
 	if a.chatCronEngine != nil {
 		a.chatCronEngine.Start()
+	}
+
+	// Boot-time pending-permission-requests query (model-scheduled-jobs-
+	// 01PMSJ01 WP07, owner decision 2: "surfaced to the user next time
+	// they open the app"). Runs synchronously — NOT in a goroutine — it
+	// is a single bounded local DB read (no network round trip to hide
+	// behind async, unlike the fleet-lockdown bootstrap below). Uses the
+	// AtBoot variant, which stays silent when nothing is pending: AC-013
+	// (WP12, FR-008) requires a zero-schedule build to start "no new
+	// broker emissions", and every existing scheduled_chat_runs producer
+	// of this table means a build with none also has zero pending rows —
+	// publishing an empty slice on every single launch forever would be
+	// a permanent, avoidable regression of that byte-identical claim.
+	if a.blockedRequestsAPI != nil {
+		a.publishPendingBlockedRequestsAtBoot(ctx)
 	}
 
 	// Bootstrap lockdown state before any user-facing surface mounts so
@@ -2336,7 +2372,31 @@ func New(c *core.Core, opts ...Option) *API {
 		Emitter: WailsEmitter{},
 	})
 
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, &acpAuditBridge{impl: a.auditImpl}, a.cedarEngine, taskReg, opt.mcpHTTPPoolOptions)
+	// model-scheduled-jobs-01PMSJ01 WP06: constructed here, BEFORE
+	// newLLMStack (which wires the fs gate's RecordingPrompter deep
+	// inside registerFSBuiltinTools), because the SAME
+	// scheduledRunOrigins instance is also threaded into
+	// ChatRunDispatcherDeps.Origins below — the dispatcher SETS a
+	// session's origin, the gate's origin resolver READS it, and both
+	// sides must share one registry. blockedRequestSink wraps the
+	// durable store (nil-tolerant: a nil db degrades to "record nothing")
+	// and the audit ring (a.auditImpl, already constructed above — see
+	// New()'s own ordering comment on a.elicitAPI for why call order in
+	// this function is load-bearing).
+	a.scheduledRunOrigins = NewScheduledRunOriginRegistry()
+	var blockedRequestStore blockedrequests.Store
+	if db != nil {
+		blockedRequestStore = blockedrequests.NewSQLiteStore(db)
+	}
+	// notify is a closure over `a`, not over a.blockedRequestsAPI's
+	// current (nil) value — a.blockedRequestsAPI is only assigned later
+	// in this function (after a.cedarPolicyAPI exists), but RecordBlocked
+	// is never CALLED until a real chat turn runs, long after New()
+	// returns, so the closure reads the field's final value at call time.
+	blockedSink := newBlockedRequestSink(blockedRequestStore, &acpAuditBridge{impl: a.auditImpl},
+		func(ctx context.Context) { a.publishPendingBlockedRequests(ctx) })
+
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, &acpAuditBridge{impl: a.auditImpl}, a.cedarEngine, taskReg, opt.mcpHTTPPoolOptions, blockedSink, a.scheduledRunOrigins.Resolve)
 	a.llmAPI = stack.api
 	// trust-surfaces-that-fire-01PMZ202 WP24 review finding: fold the
 	// static tool-permission load error (if any) into the boot-health
@@ -3402,6 +3462,18 @@ func New(c *core.Core, opts ...Option) *API {
 		a.acpAPI = acpview.NewAPI(acpReg, acpEnv, acpOpts)
 	}
 
+	// Pending-permission-requests surfacing view (model-scheduled-jobs-
+	// 01PMSJ01 WP07). blockedRequestStore was already constructed above
+	// (before newLLMStack, so RecordingPrompter's Sink could be wired);
+	// a.cedarPolicyAPI is now available (constructed just above this
+	// block) for Grant's WritePolicySnippet call. nil db / nil
+	// cedarPolicyAPI both degrade gracefully — the view's own Config
+	// nil-tolerance handles it.
+	a.blockedRequestsAPI = blockedrequestsview.New(blockedrequestsview.Config{
+		Store:       blockedRequestStore,
+		CedarPolicy: a.cedarPolicyAPI,
+	})
+
 	// Scheduled-chat-runs view (mission scheduled-chat-runs-01KX5R8B, WP04;
 	// cron engine added by model-scheduled-jobs-01PMSJ01 WP03; dispatcher
 	// armed by WP05). Wired with the SQLiteChatStore when a real DB is
@@ -3478,6 +3550,15 @@ func New(c *core.Core, opts ...Option) *API {
 					}
 					return profs[0].ID
 				},
+				// model-scheduled-jobs-01PMSJ01 WP06: the SAME registry
+				// registerFSBuiltinTools's RecordingPrompter reads from
+				// (wired above, before newLLMStack) — this dispatcher is
+				// the writer.
+				Origins: a.scheduledRunOrigins,
+				// model-scheduled-jobs-01PMSJ01 WP07, FR-007: deliver the
+				// "banner" output sink onto the same broker every other
+				// frontend-visible push topic in this file uses.
+				Broker: a.broker,
 			})
 			chatDispatcher = live
 			if chatCronEngine != nil {
@@ -5385,6 +5466,17 @@ func newLLMStack(
 	// options.mcpHTTPPoolOptions's doc comment (PR #336 review MUST
 	// FIX 3 test seam).
 	mcpHTTPPoolOptions *mcphttp.PoolOptions,
+	// blockedSink and originResolve wire the fs gate's RecordingPrompter
+	// (model-scheduled-jobs-01PMSJ01 WP06, FR-004): every PromptDeny the
+	// gate resolves — interactive or an unattended scheduled run's
+	// immediate deny — is persisted as a durable blocked_permission_
+	// requests row + audit record instead of vanishing silently.
+	// blockedSink nil-tolerant (RecordingPrompter itself degrades a nil
+	// Sink to "record nothing"); originResolve nil resolves every
+	// denial to origin="interactive" (ScheduledRunOriginRegistry.Resolve's
+	// own fail-safe default).
+	blockedSink corefs.BlockedRequestSink,
+	originResolve corefs.OriginResolver,
 ) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
@@ -5699,7 +5791,7 @@ func newLLMStack(
 	// in-process filesystem tools. Gated behind per-family settings dials
 	// (FSReadEnabled / FSWriteEnabled) so the Tools panel toggles take effect
 	// on the next chat turn. Uses the same Cedar engine as the bash tool.
-	registerFSBuiltinTools(builtinRegistry, bashCedarEngine, settingsStore, promptRegistry, dataDir)
+	registerFSBuiltinTools(builtinRegistry, bashCedarEngine, settingsStore, promptRegistry, dataDir, blockedSink, originResolve)
 	// unified-context-artifacts-01NCTXU01: register the read_context_file
 	// built-in so the agent can read on-demand files from attached context
 	// modules. Requires both the contexts library AND an attachment manager;
@@ -9182,6 +9274,16 @@ func (a *API) ScheduledChat() scheduledchatview.ScheduledChatAPI {
 		return scheduledchatview.New(scheduledchatview.Config{})
 	}
 	return a.scheduledChatAPI
+}
+
+// BlockedRequests implements HarnessAPI. Returns a graceful-empty
+// surface (ListPending returns nil, Grant/Dismiss return
+// ErrStoreUnavailable) when the DB is not wired.
+func (a *API) BlockedRequests() blockedrequestsview.BlockedRequestsAPI {
+	if a.blockedRequestsAPI == nil {
+		return blockedrequestsview.New(blockedrequestsview.Config{})
+	}
+	return a.blockedRequestsAPI
 }
 
 // Secrets returns the model-accessible secrets RPC surface (mission

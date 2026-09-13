@@ -828,6 +828,43 @@ export namespace autonomy {
 
 }
 
+export namespace blockedrequests {
+	
+	export class PendingRequest {
+	    id: string;
+	    origin: string;
+	    originId: string;
+	    sessionId: string;
+	    family: string;
+	    action: string;
+	    resource: string;
+	    reason: string;
+	    status: string;
+	    createdAt: string;
+	    resolvedAt?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PendingRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.origin = source["origin"];
+	        this.originId = source["originId"];
+	        this.sessionId = source["sessionId"];
+	        this.family = source["family"];
+	        this.action = source["action"];
+	        this.resource = source["resource"];
+	        this.reason = source["reason"];
+	        this.status = source["status"];
+	        this.createdAt = source["createdAt"];
+	        this.resolvedAt = source["resolvedAt"];
+	    }
+	}
+
+}
+
 export namespace branches {
 	
 	export class Branch {
@@ -6028,6 +6065,8 @@ export namespace scheduledchat {
 	    updatedAt: string;
 	    createdBy: string;
 	    toolAllowlist?: string[];
+	    triggerKind: string;
+	    runAt?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ChatRunEntry(source);
@@ -6047,6 +6086,8 @@ export namespace scheduledchat {
 	        this.updatedAt = source["updatedAt"];
 	        this.createdBy = source["createdBy"];
 	        this.toolAllowlist = source["toolAllowlist"];
+	        this.triggerKind = source["triggerKind"];
+	        this.runAt = source["runAt"];
 	    }
 	}
 	export class CreateInput {
@@ -6058,6 +6099,8 @@ export namespace scheduledchat {
 	    outputSink?: string;
 	    enabled: boolean;
 	    toolAllowlist?: string[];
+	    triggerKind?: string;
+	    runAt?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new CreateInput(source);
@@ -6073,6 +6116,8 @@ export namespace scheduledchat {
 	        this.outputSink = source["outputSink"];
 	        this.enabled = source["enabled"];
 	        this.toolAllowlist = source["toolAllowlist"];
+	        this.triggerKind = source["triggerKind"];
+	        this.runAt = source["runAt"];
 	    }
 	}
 	export class RunSummary {
@@ -6131,6 +6176,8 @@ export namespace scheduledchat {
 	    outputSink?: string;
 	    enabled: boolean;
 	    toolAllowlist?: string[];
+	    triggerKind?: string;
+	    runAt?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new UpdateInput(source);
@@ -6147,6 +6194,8 @@ export namespace scheduledchat {
 	        this.outputSink = source["outputSink"];
 	        this.enabled = source["enabled"];
 	        this.toolAllowlist = source["toolAllowlist"];
+	        this.triggerKind = source["triggerKind"];
+	        this.runAt = source["runAt"];
 	    }
 	}
 
