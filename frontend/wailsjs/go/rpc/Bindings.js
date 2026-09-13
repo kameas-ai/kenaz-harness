@@ -234,6 +234,10 @@ export function Catalog_Uninstall(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Catalog_Uninstall'](arg1, arg2, arg3);
 }
 
+export function Catalog_Unpublish(arg1) {
+  return window['go']['rpc']['Bindings']['Catalog_Unpublish'](arg1);
+}
+
 export function CedarPolicy_Delete(arg1) {
   return window['go']['rpc']['Bindings']['CedarPolicy_Delete'](arg1);
 }
@@ -316,6 +320,10 @@ export function Compliance_ArchiveNow() {
 
 export function Compliance_SetRetention(arg1) {
   return window['go']['rpc']['Bindings']['Compliance_SetRetention'](arg1);
+}
+
+export function Compliance_SkipToID(arg1) {
+  return window['go']['rpc']['Bindings']['Compliance_SkipToID'](arg1);
 }
 
 export function Compliance_Status() {
@@ -1552,6 +1560,14 @@ export function Sites_Delete(arg1) {
 
 export function Sites_Deploy(arg1) {
   return window['go']['rpc']['Bindings']['Sites_Deploy'](arg1);
+}
+
+export function Sites_EnvList(arg1) {
+  return window['go']['rpc']['Bindings']['Sites_EnvList'](arg1);
+}
+
+export function Sites_EnvSet(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Sites_EnvSet'](arg1, arg2);
 }
 
 export function Sites_List() {

@@ -174,6 +174,8 @@ export function Catalog_Publish(arg1:catalog.PublishInput):Promise<catalog.Catal
 
 export function Catalog_Uninstall(arg1:string,arg2:string,arg3:string):Promise<void>;
 
+export function Catalog_Unpublish(arg1:string):Promise<void>;
+
 export function CedarPolicy_Delete(arg1:string):Promise<void>;
 
 export function CedarPolicy_Get(arg1:string):Promise<cedarpolicy.PolicyFileDetail>;
@@ -215,6 +217,8 @@ export function Compaction_TriggerManual(arg1:string,arg2:compaction.ManualOpts)
 export function Compliance_ArchiveNow():Promise<void>;
 
 export function Compliance_SetRetention(arg1:number):Promise<void>;
+
+export function Compliance_SkipToID(arg1:string):Promise<void>;
 
 export function Compliance_Status():Promise<compliance.ComplianceStatus>;
 
@@ -833,6 +837,10 @@ export function Shell_ReadFile(arg1:string):Promise<rpc.ShellReadFileResult>;
 export function Sites_Delete(arg1:string):Promise<void>;
 
 export function Sites_Deploy(arg1:string):Promise<sites.SiteSummary>;
+
+export function Sites_EnvList(arg1:string):Promise<Array<sites.SiteEnvEntry>>;
+
+export function Sites_EnvSet(arg1:string,arg2:Record<string, string>):Promise<void>;
 
 export function Sites_List():Promise<Array<sites.SiteSummary>>;
 
