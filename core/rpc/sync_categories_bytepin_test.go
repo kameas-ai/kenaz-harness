@@ -80,7 +80,7 @@ func TestSyncCategories_ByteStabilityPin(t *testing.T) {
 		cat  corefleet.SyncCategory
 		want string
 	}{
-		{corefleet.SyncCategoryUITheme, `{"theme":"dark","accent":"#112233"}`},
+		{corefleet.SyncCategoryUITheme, `{"theme":"dark"}`},
 		{corefleet.SyncCategoryModelPrefs, `{"compactionAggressiveness":"balanced","compactionArchiveDays":14,"compactionRecentWindow":5,"maxAgentTurns":42}`},
 		{corefleet.SyncCategoryProviderProfiles, `{}`},
 		{corefleet.SyncCategoryMCPRecipes, `{}`},
@@ -111,14 +111,25 @@ func TestSyncCategories_ApplyRoundTripPin(t *testing.T) {
 	t.Cleanup(syncer.Stop)
 	registerSyncCategories(context.Background(), syncer, store, mcpCat, nil)
 
-	// ui_theme apply round-trip.
-	themeIn, _ := json.Marshal(uiThemePayload{Theme: "light", Accent: "#abcdef"})
+	// ui_theme apply round-trip. Accent is deliberately absent from the
+	// wire shape (AC-023/D-7) — pre-seed a sentinel value and assert it
+	// survives the apply UNCHANGED, proving the applier no longer
+	// overwrites Accent from an incoming payload.
+	preApply, _ := store.LoadAll()
+	preApply.Accent = "#sentinel"
+	_ = store.SaveAll(preApply)
+
+	themeIn, _ := json.Marshal(uiThemePayload{Theme: "light"})
 	if err := syncer.ApplyCategory(context.Background(), corefleet.SyncCategoryUITheme, themeIn); err != nil {
 		t.Fatalf("apply ui_theme: %v", err)
 	}
 	got, _ := store.LoadAll()
-	if got.Theme != "light" || got.Accent != "#abcdef" {
-		t.Errorf("ui_theme applied = (%q, %q), want (light, #abcdef)", got.Theme, got.Accent)
+	if got.Theme != "light" {
+		t.Errorf("ui_theme applied Theme = %q, want light", got.Theme)
+	}
+	if got.Accent != "#sentinel" {
+		t.Errorf("ui_theme apply changed Accent to %q — Accent is not on the wire "+
+			"(AC-023) and the applier must not touch it", got.Accent)
 	}
 
 	// model_prefs apply round-trip (already covered by

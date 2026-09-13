@@ -42,9 +42,18 @@ import (
 )
 
 // uiThemePayload is the credential-free wire shape for SyncCategoryUITheme.
+//
+// Deliberately does NOT carry Accent (fleet-enforcement-truth-01PMZ505
+// WP12, D-7 / SD-08). settings.Settings.Accent has no reader anywhere in
+// the repo outside this file and the settings package's own default
+// seed — pushing it to the fleet and back onto every other enrolled
+// device synced a value nothing consumes. Settings.Accent itself, its
+// default and its LoadAll/SaveAll round-trip are UNCHANGED (AC-023) —
+// what stops is transmitting it to other people's machines. If Accent
+// grows a real reader in the future, re-add it here alongside that
+// consumer, not before.
 type uiThemePayload struct {
-	Theme  string `json:"theme"`
-	Accent string `json:"accent"`
+	Theme string `json:"theme"`
 }
 
 // modelPrefsPayload is the credential-free wire shape for SyncCategoryModelPrefs.
@@ -71,7 +80,7 @@ func uiThemeKind(store settings.SettingsStore) corefleet.SyncKind {
 			if err != nil {
 				return nil, err
 			}
-			return json.Marshal(uiThemePayload{Theme: s.Theme, Accent: s.Accent})
+			return json.Marshal(uiThemePayload{Theme: s.Theme})
 		},
 		Apply: func(_ context.Context, _ corefleet.Scope, raw []byte) error {
 			var p uiThemePayload
@@ -83,7 +92,6 @@ func uiThemeKind(store settings.SettingsStore) corefleet.SyncKind {
 				return err
 			}
 			s.Theme = p.Theme
-			s.Accent = p.Accent
 			return store.SaveAll(s)
 		},
 		SecretPolicy:   corefleet.SecretPolicyMustNotContainSecrets,

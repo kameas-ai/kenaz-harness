@@ -3,11 +3,19 @@
  * SyncPanel — Settings → Sync panel.
  *
  * Per-category sync toggles for:
- *   - provider_profiles (LLM provider profile metadata — no creds)
- *   - model_prefs       (default model + allowlist + per-task prefs)
- *   - mcp_recipes       (MCP recipe templates)
+ *   - provider_profiles (not yet syncing — no credential-free snapshot
+ *     accessor exists; core/rpc/sync_categories.go's emptyPayloadKind)
+ *   - model_prefs       (compaction aggressiveness/archive-days/
+ *     recent-window + max agent turns — NOT the default model or a
+ *     provider allowlist; see fleet.Bundle.ModelPrefs for that org
+ *     pushdown surface instead)
+ *   - mcp_recipes       (personal sync not yet live; org-provisioned
+ *     recipes apply via fleet-org-config-inheritance-01NORGX01)
  *   - installed_mcp     (installed server list; secrets never synced)
- *   - ui_theme          (color theme + density + a11y)
+ *   - ui_theme          (color theme only — no density/a11y field
+ *     exists on Settings, and Accent was removed from the wire
+ *     payload in fleet-enforcement-truth-01PMZ505 WP12: it had no
+ *     reader anywhere in the repo)
  *
  * Plus:
  *   - "Last synced" timestamp per category (from SyncStatusView)
@@ -47,19 +55,35 @@ interface CategoryDef {
 
 const CATEGORIES: CategoryDef[] = [
   {
+    // core/rpc/sync_categories.go registers this category through
+    // emptyPayloadKind — the collector always returns "{}". No
+    // credential-free provider-profile snapshot accessor exists yet
+    // (justify: blocker "no credential-free provider-profile snapshot
+    // accessor exists", owner alec, 2026-08-19). fleet-enforcement-
+    // truth-01PMZ505 WP12/AC-024: the row must not claim to sync
+    // metadata it does not collect.
     id: 'provider_profiles',
     label: 'Provider profiles',
-    description: 'LLM provider profile metadata (no credentials — API keys stay on-device).',
+    description: 'Not yet syncing provider profile metadata (no credentials either way — API keys always stay on-device).',
   },
   {
+    // core/rpc/sync_categories.go's modelPrefsPayload carries exactly
+    // CompactionAggressiveness, CompactionArchiveDays,
+    // CompactionRecentWindow and MaxAgentTurns — NOT the default model
+    // or a provider allowlist. WP12/AC-024: name what the payload
+    // actually carries.
     id: 'model_prefs',
     label: 'Model preferences',
-    description: 'Default model, provider allowlist, and per-task model prefs.',
+    description: 'Compaction aggressiveness, archive window, recent-window size, and max agent turns.',
   },
   {
+    // Personal mcp_recipes sync is still an emptyPayloadKind no-op
+    // (same justification as provider_profiles above) — only the
+    // fleet-org-config-inheritance-01NORGX01 ORG arm applies real
+    // provisioned-recipe entries. WP12/AC-024.
     id: 'mcp_recipes',
     label: 'MCP recipes',
-    description: 'Recipe templates (the "how to install" definitions, not secrets).',
+    description: 'Personal recipe sync is not yet syncing (org-provisioned recipes still apply from your fleet admin).',
   },
   {
     // Canonical wire value: corefleet.SyncCategoryInstalledMCP
@@ -74,9 +98,14 @@ const CATEGORIES: CategoryDef[] = [
     description: 'Your installed MCP server list + config overrides. Secrets never leave this device.',
   },
   {
+    // core/rpc/sync_categories.go's uiThemePayload carries only Theme.
+    // Settings has no density or accessibility field (WP12/AC-024,
+    // SD-08) and Accent was removed from the payload in the same WP —
+    // it had no reader anywhere and should not travel to other
+    // devices.
     id: 'ui_theme',
     label: 'UI theme',
-    description: 'Color theme, density, and accessibility preferences.',
+    description: 'Color theme only.',
   },
 ];
 
