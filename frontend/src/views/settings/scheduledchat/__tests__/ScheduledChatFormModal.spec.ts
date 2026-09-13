@@ -176,6 +176,68 @@ describe('ScheduledChatFormModal', () => {
     expect(wrapper.text()).toContain('valid 5-field cron');
   });
 
+  // ── one-shot schedules (model-scheduled-jobs-01PMSJ01 WP08, FR-006) ──────
+
+  it('defaults to the cron trigger and shows the cron field', () => {
+    const { wrapper } = mountCreate();
+    expect((wrapper.find('[data-testid="sc-trigger-cron"]').element as HTMLInputElement).checked).toBe(true);
+    expect(wrapper.find('[data-testid="sc-cron-input"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="sc-run-at-input"]').exists()).toBe(false);
+  });
+
+  it('switches to the run-at field and hides cron when "Once" is selected', async () => {
+    const { wrapper } = mountCreate();
+    await wrapper.find('[data-testid="sc-trigger-once"]').trigger('click');
+    expect(wrapper.find('[data-testid="sc-cron-input"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="sc-run-at-input"]').exists()).toBe(true);
+  });
+
+  it('disables Save for a "once" trigger with no run-at chosen', async () => {
+    const { wrapper } = mountCreate();
+    await wrapper.find('[data-testid="sc-trigger-once"]').trigger('click');
+    const saveBtn = wrapper.find('[data-testid="modal-save"]') as any;
+    expect(saveBtn.element.disabled).toBe(true);
+  });
+
+  it('enables Save for a "once" trigger once a run-at is chosen, without requiring a cron expression', async () => {
+    const { wrapper } = mountCreate();
+    await wrapper.find('[data-testid="sc-trigger-once"]').trigger('click');
+    await wrapper.find('[data-testid="sc-run-at-input"]').setValue('2030-01-01T09:00');
+    const saveBtn = wrapper.find('[data-testid="modal-save"]') as any;
+    expect(saveBtn.element.disabled).toBe(false);
+  });
+
+  it('sends triggerKind=once and an empty cron on create for a one-shot schedule', async () => {
+    const createMock = vi.fn().mockResolvedValue({ ...STUB_ENTRY, id: 'new-id', triggerKind: 'once' });
+    const client = createFakeScheduledChatClient({ create: createMock });
+    const wrapper = mount(ScheduledChatFormModal, {
+      props: { client, editing: null },
+      attachTo: document.body,
+    });
+    await wrapper.find('[data-testid="sc-trigger-once"]').trigger('click');
+    await wrapper.find('[data-testid="sc-run-at-input"]').setValue('2030-01-01T09:00');
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+    expect(createMock).toHaveBeenCalledWith(
+      expect.objectContaining({ triggerKind: 'once', cron: '' }),
+    );
+    const call = createMock.mock.calls[0][0];
+    expect(typeof call.runAt).toBe('string');
+    expect(call.runAt).not.toBe('');
+  });
+
+  it('pre-populates the "once" trigger and run-at when editing a one-shot entry', () => {
+    const onceEntry: ScheduledChatEntry = {
+      ...STUB_ENTRY,
+      triggerKind: 'once',
+      runAt: '2030-06-15T13:00:00Z',
+    };
+    const { wrapper } = mountEdit(onceEntry);
+    expect((wrapper.find('[data-testid="sc-trigger-once"]').element as HTMLInputElement).checked).toBe(true);
+    expect(wrapper.find('[data-testid="sc-run-at-input"]').exists()).toBe(true);
+    expect((wrapper.find('[data-testid="sc-run-at-input"]').element as HTMLInputElement).value).not.toBe('');
+  });
+
   it('shows "Save changes" label in edit mode and "Create" in create mode', () => {
     const { wrapper: editWrapper } = mountEdit();
     expect(wrapper_saveBtnText(editWrapper)).toBe('Save changes');

@@ -40,6 +40,14 @@ type ChatRunEntry struct {
 	// CreatedBy=="model" row with an empty ToolAllowlist must never
 	// execute (see core/policy/cedar's GateScheduledChatExecute).
 	ToolAllowlist []string `json:"toolAllowlist,omitempty"`
+	// TriggerKind is "cron" or "once" (model-scheduled-jobs-01PMSJ01
+	// WP08, FR-006). Always populated on read — chatRunEntryFromRecord
+	// resolves the empty/pre-migration case to "cron" via
+	// scheduler.ChatRunRecord.EffectiveTriggerKind.
+	TriggerKind string `json:"triggerKind"`
+	// RunAt is the one-shot fire time (ISO 8601, UTC), populated only
+	// when TriggerKind == "once". Never set for a "cron" row.
+	RunAt string `json:"runAt,omitempty"`
 }
 
 // RunSummary is one row in the History result.
@@ -66,16 +74,26 @@ type RunSummary struct {
 type CreateInput struct {
 	Name           string `json:"name"`
 	PromptTemplate string `json:"promptTemplate"`
-	Cron           string `json:"cron"`
-	Timezone       string `json:"timezone,omitempty"`
-	Model          string `json:"model,omitempty"`
-	OutputSink     string `json:"outputSink,omitempty"`
-	Enabled        bool   `json:"enabled"`
+	// Cron is REQUIRED when TriggerKind == "cron" (the default — see
+	// TriggerKind's doc) and ignored (may be empty) when TriggerKind ==
+	// "once". model-scheduled-jobs-01PMSJ01 WP08, FR-006: "run this once
+	// at T" must not force the caller to fabricate a cron expression.
+	Cron       string `json:"cron"`
+	Timezone   string `json:"timezone,omitempty"`
+	Model      string `json:"model,omitempty"`
+	OutputSink string `json:"outputSink,omitempty"`
+	Enabled    bool   `json:"enabled"`
 	// ToolAllowlist declares the tool-name allowlist enforced against
 	// this schedule's runs. Optional for a user-created schedule
 	// (unrestricted). REQUIRED (non-empty) for CreateAsModel — see that
 	// method's doc.
 	ToolAllowlist []string `json:"toolAllowlist,omitempty"`
+	// TriggerKind is "cron" or "once". Empty defaults to "cron" — every
+	// caller written before this field existed keeps working unchanged.
+	TriggerKind string `json:"triggerKind,omitempty"`
+	// RunAt is the one-shot fire time (ISO 8601). REQUIRED when
+	// TriggerKind == "once"; ignored when TriggerKind == "cron".
+	RunAt string `json:"runAt,omitempty"`
 }
 
 // UpdateInput is the wire shape for Update. ID is required.
@@ -89,6 +107,9 @@ type UpdateInput struct {
 	OutputSink     string   `json:"outputSink,omitempty"`
 	Enabled        bool     `json:"enabled"`
 	ToolAllowlist  []string `json:"toolAllowlist,omitempty"`
+	// TriggerKind / RunAt — see CreateInput's docs on each.
+	TriggerKind string `json:"triggerKind,omitempty"`
+	RunAt       string `json:"runAt,omitempty"`
 }
 
 // Registrar is the cron-arming seam into a chat-run cron engine (mission

@@ -167,11 +167,15 @@ func TestOpen_RegistersSessionMigrations(t *testing.T) {
 	// purges pre-0336 checkpoint pollution from session_messages,
 	// gated on the three-condition discriminator, spec.md §5.3) lands
 	// with chat-turn-integrity-01PMZ606 WP05.
-	// 0340 (scheduled_chat_runs.created_by + .tool_allowlist) lands with
-	// model-scheduled-jobs-01PMSJ01 WP09. 0338-0339 are reserved for
-	// sibling WPs in the chat-turn-integrity mission and were not
-	// registered as of WP09.
-	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 340}
+	// 0338 (blocked_permission_requests table) lands with
+	// model-scheduled-jobs-01PMSJ01 WP06. 0339 (scheduled_chat_runs
+	// .trigger_kind + .run_at) lands with the same mission's WP08. 0340
+	// (scheduled_chat_runs.created_by + .tool_allowlist) lands with WP09
+	// and was registered first, chronologically, even though 0338/0339
+	// are numerically lower — see migrations_blocked_permission_requests.go
+	// / migrations_scheduled_chat_runs_trigger.go for why registering
+	// below an already-applied version is safe on this runner.
+	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340}
 	if len(versions) != len(want) {
 		t.Fatalf("session migrations applied = %v, want %v", versions, want)
 	}
@@ -249,16 +253,21 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	//   model-scheduled-jobs-01PMSJ01 WP09) +
 	// 1 cedar-policy/1300-policy-decisions (finding-58-cedar-decision-
 	//   persistence: the durable backing table for
-	//   cedar.SQLDecisionStore) = 56.
+	//   cedar.SQLDecisionStore) +
+	// 1 blocked_permission_requests (0338, model-scheduled-jobs-01PMSJ01
+	//   WP06) +
+	// 1 scheduled_chat_runs.trigger_kind/.run_at (0339, model-scheduled-
+	//   jobs-01PMSJ01 WP08) = 58.
 	//
 	// ZA10's branch asserted 49: it was cut from a base whose count was 43,
 	// before 0336 and bundle/700 landed, so 43+6. The merged tree had all
 	// three sources at 51 (v0.65.0); UNIT-8 adds one more migration on
 	// top, hence 52; UNIT-2 (01PMZB11) adds one more still, hence 53;
 	// WP09 (0340) adds one more, hence 54; WP05 (0337) adds one more
-	// still, hence 55; cedar-policy/1300 adds one more, hence 56.
-	if count != 56 {
-		t.Errorf("ledger count = %d, want 56", count)
+	// still, hence 55; cedar-policy/1300 adds one more, hence 56; WP06
+	// (0338) and WP08 (0339) add one more each, hence 58.
+	if count != 58 {
+		t.Errorf("ledger count = %d, want 58", count)
 	}
 }
 
