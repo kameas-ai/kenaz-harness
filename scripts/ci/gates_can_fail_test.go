@@ -148,6 +148,17 @@ var cwdSensitiveGates = []string{
 
 	"check-transport-parity.sh",
 	"check-recipe-token-substitution.sh",
+
+	// check-dead-nil-branch.sh (UNIT-12, subagent-control-and-
+	// background-tasks-01PMZB11): its first draft copied check-nil-
+	// optional-deps.sh's `git rev-parse --show-toplevel 2>/dev/null ||
+	// pwd` fallback verbatim and hit this exact class during
+	// development — from /tmp (outside any git repo) it silently fell
+	// back to /tmp itself, then failed with a `go.mod not found` build
+	// error instead of scanning the repo. Fixed by sourcing
+	// lib/ci-gate.sh (BASH_SOURCE[0] self-location) before this line
+	// existed to catch a regression; added here so it stays caught.
+	"check-dead-nil-branch.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -3899,4 +3910,143 @@ forbid (
 				".cedar file, not just unmatchable ones.\noutput:\n%s", out)
 		}
 	})
+}
+
+// TestDeadNilBranchGate_PlantedDeclNilCheckFires is
+// subagent-control-and-background-tasks-01PMZB11 UNIT-12's
+// planted-violation proof for check-dead-nil-branch.sh
+// (scripts/ci/cmd/checkdeadnilbranch), the gate for the class
+// core/rpc/builtins_wiring.go:312-313 shipped:
+//
+//	var subagentSeam agentgraph.BranchSeam // nil — no child-run spawner yet
+//	if subagentSeam != nil { registerSubagentDispatchTool(...) }
+//
+// UNIT-6 already fixed that one instance; this gate exists so the
+// CLASS — a zero-value `var` checked `!= nil` in the same block with no
+// intervening write — cannot recur invisibly. Uses the SAME
+// overlay-only technique as TestNilOptionalDepsGate_* above (never
+// writes to the real tracked file — see checkdeadnilbranch/main.go's
+// overlayEnvVar doc for why a bare os.WriteFile + defer restore is
+// unsafe under a hard `-timeout` kill).
+//
+// One overlay plants THREE functions and one gate run distinguishes
+// all three, which is a stronger proof than three separate runs would
+// be — it shows the gate actually discriminates the defect shape from
+// its two nearest look-alikes in the SAME file, not just that some
+// input makes it fail and some other input does not:
+//
+//  1. zzGateProbeDeadBranch: the real defect shape verbatim (renamed
+//     locals only). Must fire, and the violation line must name
+//     deadProbeSeam.
+//  2. zzGateProbeLiveBranch: identical shape, but liveProbeSeam is
+//     assigned a real value before the check. Must NOT appear in the
+//     gate's violation output.
+//  3. zzGateProbeOptionalDep: the exact two shapes UNIT-12's own task
+//     description calls out as required true negatives —
+//     `opts.Tasks != nil` (a struct-field selector, never a local
+//     `var`) and `if posture != nil` (a function parameter, never a
+//     local `var`) — neither is a candidate by construction, so
+//     neither should appear in the output either.
+func TestDeadNilBranchGate_PlantedDeclNilCheckFires(t *testing.T) {
+	root := repoRoot(t)
+	implPath := filepath.Join(root, "core", "rpc", "builtins_wiring.go")
+
+	orig, err := os.ReadFile(implPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", implPath, err)
+	}
+
+	const probeSuffix = `
+// ZzGateProbeSeam is a planted probe type for
+// TestDeadNilBranchGate_PlantedDeclNilCheckFires. Self-contained (no
+// new import needed) — a non-empty interface is enough to be nilable.
+type ZzGateProbeSeam interface {
+	ZzGateProbe()
+}
+
+// zzGateProbeDeadBranch reproduces core/rpc/builtins_wiring.go's own
+// pre-UNIT-6 shape verbatim (renamed locals only): a zero-value var
+// checked != nil with NO assignment anywhere in the function. The gate
+// must report deadProbeSeam.
+func zzGateProbeDeadBranch() {
+	var deadProbeSeam ZzGateProbeSeam // nil — planted, deliberately never assigned
+	if deadProbeSeam != nil {
+		deadProbeSeam.ZzGateProbe()
+	}
+}
+
+type zzGateProbeSeamImpl struct{}
+
+func (zzGateProbeSeamImpl) ZzGateProbe() {}
+
+// zzGateProbeLiveBranch is the negative control for the SAME shape:
+// liveProbeSeam IS assigned before the check. Must not appear in the
+// gate's output.
+func zzGateProbeLiveBranch() {
+	var liveProbeSeam ZzGateProbeSeam
+	liveProbeSeam = zzGateProbeSeamImpl{}
+	if liveProbeSeam != nil {
+		liveProbeSeam.ZzGateProbe()
+	}
+}
+
+// zzGateProbeOptionalDepArgs + zzGateProbeOptionalDep are UNIT-12's
+// own required true negatives verbatim: a struct-field selector
+// (opts.Tasks) and a function parameter (posture), neither of which is
+// a local var declaration — neither is a candidate for this gate by
+// construction, not by a special-cased exclusion.
+type zzGateProbeOptionalDepArgs struct {
+	Tasks ZzGateProbeSeam
+}
+
+func zzGateProbeOptionalDep(opts zzGateProbeOptionalDepArgs, posture ZzGateProbeSeam) {
+	if opts.Tasks != nil {
+		opts.Tasks.ZzGateProbe()
+	}
+	if posture != nil {
+		posture.ZzGateProbe()
+	}
+}
+`
+
+	scratch := t.TempDir()
+	scratchImpl := filepath.Join(scratch, "builtins_wiring_zz_gate_probe.go")
+	if err := os.WriteFile(scratchImpl, append(append([]byte{}, orig...), []byte(probeSuffix)...), 0o644); err != nil {
+		t.Fatalf("writing scratch mutated builtins_wiring.go: %v", err)
+	}
+	overlay := struct{ Replace map[string]string }{Replace: map[string]string{implPath: scratchImpl}}
+	overlayJSON, err := json.Marshal(overlay)
+	if err != nil {
+		t.Fatalf("marshalling overlay: %v", err)
+	}
+	overlayPath := filepath.Join(scratch, "overlay.json")
+	if err := os.WriteFile(overlayPath, overlayJSON, 0o644); err != nil {
+		t.Fatalf("writing overlay.json: %v", err)
+	}
+
+	// No defer/restore anywhere in this test: implPath is never
+	// written. A kill at any point leaves nothing but an OS-cleaned
+	// scratch dir.
+	code, out := runGateEnv(t, "check-dead-nil-branch.sh", root, map[string]string{
+		"DEAD_NIL_BRANCH_OVERLAY": overlayPath,
+	})
+	if code == 0 {
+		t.Fatalf("check-dead-nil-branch.sh exited 0 with a planted, verbatim reproduction of "+
+			"core/rpc/builtins_wiring.go's pre-UNIT-6 dead-branch shape (deadProbeSeam, never "+
+			"assigned) — the gate cannot fail.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "deadProbeSeam") {
+		t.Fatalf("gate failed, but its output does not name deadProbeSeam "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+	if strings.Contains(out, "liveProbeSeam") {
+		t.Fatalf("gate flagged liveProbeSeam, which IS assigned a real value before its nil check — "+
+			"the gate cannot tell a dead branch from a live one:\n%s", out)
+	}
+	if strings.Contains(out, "opts.Tasks") || strings.Contains(out, "\tTasks ") ||
+		strings.Contains(out, "posture") {
+		t.Fatalf("gate flagged the optional-dependency negative control (opts.Tasks / posture) — "+
+			"these are a struct field and a function parameter, never a local `var`, and must never "+
+			"be candidates:\n%s", out)
+	}
 }

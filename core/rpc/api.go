@@ -2975,6 +2975,11 @@ func New(c *core.Core, opts ...Option) *API {
 		// the same posture every other nil-dependency branch in this
 		// Config takes. Gated by the SAME Config.Cedar field set above.
 		PauseControl: stack.chatRunner.SubagentPause(),
+		// Usage backs SubagentBranch.tokensUsed (UNIT-9) — the SAME
+		// usage.Manager instance the chat runner already writes
+		// per-turn aggregates into (token-cost-telemetry-01KQ8TD7),
+		// not a second tracker.
+		Usage: usageMgr,
 	})
 
 	// Agent-graph view surface — graph manager already built above so

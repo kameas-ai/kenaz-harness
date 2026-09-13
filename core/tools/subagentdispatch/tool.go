@@ -304,6 +304,11 @@ func (t *Tool) Call(ctx context.Context, rawArgs json.RawMessage) (json.RawMessa
 		// all the way down.
 		BudgetTokens: profile.BudgetTokens,
 		BudgetTimeS:  profile.BudgetTimeS,
+		// ProfileID (UNIT-9): recorded by BranchSeamAdapter.Fork against
+		// the new branch id so core/rpc/views/branches can populate
+		// SubagentBranch.profileId later — this is the ONE call site
+		// that knows which persona profile actually drove the dispatch.
+		ProfileID: profile.ID,
 	}
 
 	// Fork the session.

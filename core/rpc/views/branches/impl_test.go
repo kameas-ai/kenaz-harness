@@ -18,6 +18,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 	coretasks "github.com/kameas-ai/kenaz-harness/core/tasks"
+	"github.com/kameas-ai/kenaz-harness/core/usage"
 )
 
 // fakeAuditEmitter records audit.Event emissions in a thread-safe slice.
@@ -682,10 +683,12 @@ type fakeSubagentTasks struct {
 	mu       sync.Mutex
 	terminal map[string]bool
 	aborts   []string
+	// tasks backs Get (UNIT-9) — set via setTask, keyed by task id.
+	tasks map[string]coretasks.Task
 }
 
 func newFakeSubagentTasks() *fakeSubagentTasks {
-	return &fakeSubagentTasks{terminal: map[string]bool{}}
+	return &fakeSubagentTasks{terminal: map[string]bool{}, tasks: map[string]coretasks.Task{}}
 }
 
 func (f *fakeSubagentTasks) Abort(_ context.Context, id string) error {
@@ -707,15 +710,41 @@ func (f *fakeSubagentTasks) abortCalls() []string {
 	return out
 }
 
+// setTask registers/updates the fake's snapshot for id (UNIT-9's
+// Get surface — subagentStatus/elapsedS enrichment).
+func (f *fakeSubagentTasks) setTask(task coretasks.Task) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tasks[task.ID] = task
+}
+
+// Get implements the Get half of SubagentTaskRegistry (UNIT-9).
+func (f *fakeSubagentTasks) Get(id string) (coretasks.Task, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	t, ok := f.tasks[id]
+	return t, ok
+}
+
 // fakeTaskLookup is a race-safe fake SubagentTaskLookup — the test
-// double for BranchSeamAdapter.TaskIDForBranch.
+// double for BranchSeamAdapter.TaskIDForBranch / SubagentMeta.
 type fakeTaskLookup struct {
 	mu sync.Mutex
 	m  map[string]string
+	// meta backs SubagentMeta (UNIT-9), set via setMeta.
+	meta map[string]fakeSubagentMeta
+}
+
+// fakeSubagentMeta mirrors agentgraph.subagentSpawnMeta's shape for
+// the fakeTaskLookup test double.
+type fakeSubagentMeta struct {
+	profileID    string
+	budgetTokens int
+	budgetTimeS  int
 }
 
 func newFakeTaskLookup() *fakeTaskLookup {
-	return &fakeTaskLookup{m: map[string]string{}}
+	return &fakeTaskLookup{m: map[string]string{}, meta: map[string]fakeSubagentMeta{}}
 }
 
 func (f *fakeTaskLookup) set(branchID, taskID string) {
@@ -729,6 +758,24 @@ func (f *fakeTaskLookup) TaskIDForBranch(branchID string) (string, bool) {
 	defer f.mu.Unlock()
 	id, ok := f.m[branchID]
 	return id, ok
+}
+
+// setMeta registers the dispatching profile id + declared budgets for
+// branchID (UNIT-9's SubagentMeta test double).
+func (f *fakeTaskLookup) setMeta(branchID, profileID string, budgetTokens, budgetTimeS int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.meta[branchID] = fakeSubagentMeta{profileID: profileID, budgetTokens: budgetTokens, budgetTimeS: budgetTimeS}
+}
+
+func (f *fakeTaskLookup) SubagentMeta(branchID string) (profileID string, budgetTokens, budgetTimeS int, ok bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m, ok := f.meta[branchID]
+	if !ok {
+		return "", 0, 0, false
+	}
+	return m.profileID, m.budgetTokens, m.budgetTimeS, true
 }
 
 // newSubagentTestStack builds the same real conversation/session stack
@@ -1089,6 +1136,14 @@ func (f *fakeSubagentPauseControl) isPaused(sessionID string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.paused[sessionID]
+}
+
+// IsPaused implements SubagentPauseControl's UNIT-9 addition — the
+// exported mirror of the pre-existing isPaused test helper above (kept
+// for its own existing call sites; IsPaused exists purely to satisfy
+// the interface production's *chat.SubagentPauseRegistry also has).
+func (f *fakeSubagentPauseControl) IsPaused(sessionID string) bool {
+	return f.isPaused(sessionID)
 }
 
 func (f *fakeSubagentPauseControl) pauseCalls() []string {
@@ -1464,5 +1519,205 @@ func TestAPI_ResumeSubagent_InvalidArgs(t *testing.T) {
 	ctx := context.Background()
 	if err := api.ResumeSubagent(ctx, ""); !errors.Is(err, ErrInvalidArg) {
 		t.Errorf("ResumeSubagent(\"\"): got %v, want ErrInvalidArg", err)
+	}
+}
+
+// ── UNIT-9: BranchRow gets the fields SubagentBranch has always
+// declared (subagent-control-and-background-tasks-01PMZB11, FR-009,
+// AC-11) ─────────────────────────────────────────────────────────────
+
+// fakeUsageReader is a race-safe fake UsageReader — the test double for
+// core/usage.Manager.GetSession.
+type fakeUsageReader struct {
+	mu sync.Mutex
+	m  map[string]usage.Aggregate
+}
+
+func newFakeUsageReader() *fakeUsageReader {
+	return &fakeUsageReader{m: map[string]usage.Aggregate{}}
+}
+
+func (f *fakeUsageReader) set(sessionID string, agg usage.Aggregate) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.m[sessionID] = agg
+}
+
+func (f *fakeUsageReader) GetSession(_ context.Context, sessionID string) (usage.Aggregate, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.m[sessionID], nil
+}
+
+// TestAPI_ListBranches_SubagentFieldsPopulatedAndOmitted is AC-11 in
+// full: a dispatched sub-agent branch gets subagentStatus/profileId/
+// tokensUsed/budgetTokens/elapsedS/budgetTimeS from real producers
+// (TaskLookup.SubagentMeta, Tasks.Get, Usage.GetSession), and an
+// ordinary branch — created through the exact same CreateBranch call,
+// the only difference being that nothing ever registered its id with
+// TaskLookup — gets none of the six. The negative half is the point:
+// a hardcoded field would pass the positive assertions alone.
+//
+// Mutation proof (manually verified 2026-09-12, per CLAUDE.md's
+// mutation-prove-every-behavioural-fix bar): commenting out this
+// test's call to a.enrichSubagentFields inside ListBranches (i.e.
+// reverting to the bare `out = append(out, toWire(b))` UNIT-9
+// replaced) turns every assertion in the "sub-agent branch" block red —
+// SubagentStatus/ProfileID/TokensUsed/BudgetTokens/BudgetTimeS/ElapsedS
+// all report their zero value instead of the fake-supplied ones.
+// Reverting the comment-out restores green.
+func TestAPI_ListBranches_SubagentFieldsPopulatedAndOmitted(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, tasks, lookup, _ := newSubagentTestStack(t)
+	pc := newFakeSubagentPauseControl()
+	ur := newFakeUsageReader()
+	api.cfg.PauseControl = pc
+	api.cfg.Usage = ur
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+
+	ordinary, err := api.CreateBranch(ctx, CreateBranchOptions{
+		ParentSessionID: parent.ID, Title: "manual fork",
+	})
+	if err != nil {
+		t.Fatalf("CreateBranch(ordinary): %v", err)
+	}
+
+	sub, err := api.CreateBranch(ctx, CreateBranchOptions{
+		ParentSessionID: parent.ID, Title: "reviewer worker",
+	})
+	if err != nil {
+		t.Fatalf("CreateBranch(sub): %v", err)
+	}
+	// Wire the three UNIT-9 producers exactly the way
+	// BranchSeamAdapter.Fork + the run spawner + the chat runner do in
+	// production — NOT by hand-setting fields on the wire type.
+	lookup.setMeta(sub.ID, "reviewer", 5000, 600)
+	lookup.set(sub.ID, "task-9")
+	tasks.setTask(coretasks.Task{
+		ID:        "task-9",
+		Kind:      coretasks.KindSubagent,
+		Status:    coretasks.StatusRunning,
+		StartedAt: time.Now().Add(-90 * time.Second),
+	})
+	ur.set(sub.ChildSessionID, usage.Aggregate{TotalTokens: 1234})
+
+	rows, err := api.ListBranches(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("ListBranches: %v", err)
+	}
+	var gotOrdinary, gotSub *Branch
+	for i := range rows {
+		switch rows[i].ID {
+		case ordinary.ID:
+			gotOrdinary = &rows[i]
+		case sub.ID:
+			gotSub = &rows[i]
+		}
+	}
+	if gotOrdinary == nil || gotSub == nil {
+		t.Fatalf("ListBranches did not return both rows: %+v", rows)
+	}
+
+	// Negative half (AC-11): an ordinary branch gets none of the six.
+	if gotOrdinary.SubagentStatus != "" || gotOrdinary.ProfileID != "" ||
+		gotOrdinary.TokensUsed != 0 || gotOrdinary.BudgetTokens != 0 ||
+		gotOrdinary.ElapsedS != 0 || gotOrdinary.BudgetTimeS != 0 {
+		t.Errorf("ordinary branch has subagent fields set: %+v", gotOrdinary)
+	}
+
+	// Positive half: the dispatched branch gets all six, off the fakes.
+	if gotSub.SubagentStatus != "running" {
+		t.Errorf("SubagentStatus = %q, want %q", gotSub.SubagentStatus, "running")
+	}
+	if gotSub.ProfileID != "reviewer" {
+		t.Errorf("ProfileID = %q, want %q", gotSub.ProfileID, "reviewer")
+	}
+	if gotSub.BudgetTokens != 5000 {
+		t.Errorf("BudgetTokens = %d, want 5000", gotSub.BudgetTokens)
+	}
+	if gotSub.BudgetTimeS != 600 {
+		t.Errorf("BudgetTimeS = %d, want 600", gotSub.BudgetTimeS)
+	}
+	if gotSub.TokensUsed != 1234 {
+		t.Errorf("TokensUsed = %d, want 1234", gotSub.TokensUsed)
+	}
+	if gotSub.ElapsedS <= 0 {
+		t.Errorf("ElapsedS = %d, want > 0", gotSub.ElapsedS)
+	}
+}
+
+// TestAPI_ListBranches_SubagentStatusReflectsPause is the "paused"
+// branch of AC-11's status mapping: a running task whose child session
+// is armed in PauseControl reports "paused", not "running" — pinned
+// separately because it is the one status value that does not come off
+// coretasks.Task.Status at all.
+func TestAPI_ListBranches_SubagentStatusReflectsPause(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, tasks, lookup, _ := newSubagentTestStack(t)
+	pc := newFakeSubagentPauseControl()
+	api.cfg.PauseControl = pc
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	sub, err := api.CreateBranch(ctx, CreateBranchOptions{ParentSessionID: parent.ID, Title: "worker"})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	lookup.setMeta(sub.ID, "reviewer", 0, 0)
+	lookup.set(sub.ID, "task-p")
+	tasks.setTask(coretasks.Task{ID: "task-p", Kind: coretasks.KindSubagent, Status: coretasks.StatusRunning, StartedAt: time.Now()})
+	pc.Pause(sub.ChildSessionID)
+
+	rows, err := api.ListBranches(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("ListBranches: %v", err)
+	}
+	if len(rows) != 1 || rows[0].SubagentStatus != "paused" {
+		t.Fatalf("rows = %+v, want one row with SubagentStatus=paused", rows)
+	}
+}
+
+// TestSubagentStatusValuesAreInTSUnion pins subagentStatusFromTask's
+// entire output range against frontend/src/lib/types.ts's SubagentStatus
+// union verbatim (UNIT-9: "Every value Go can emit is in SubagentStatus's
+// union"). This is a Go-only table test — the frontend union is
+// duplicated here deliberately (not imported, there is no such
+// mechanism across the wire boundary) so a change to either side that
+// drifts from the other must be caught by a human updating both, not
+// silently pass. If the frontend union changes, update `allowed` here
+// in the same commit.
+func TestSubagentStatusValuesAreInTSUnion(t *testing.T) {
+	t.Parallel()
+	allowed := map[string]bool{
+		"running":        true,
+		"awaiting-merge": true,
+		"paused":         true,
+		"complete":       true,
+		"error":          true,
+		"aborted":        true,
+	}
+	cases := []struct {
+		name   string
+		status string
+		paused bool
+	}{
+		{"pending/not-paused", coretasks.StatusPending, false},
+		{"pending/paused", coretasks.StatusPending, true},
+		{"running/not-paused", coretasks.StatusRunning, false},
+		{"running/paused", coretasks.StatusRunning, true},
+		{"completed", coretasks.StatusCompleted, false},
+		{"completed/paused", coretasks.StatusCompleted, true},
+		{"failed", coretasks.StatusFailed, false},
+		{"crashed", coretasks.StatusCrashed, false},
+		{"cancelled", coretasks.StatusCancelled, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := subagentStatusFromTask(coretasks.Task{Status: c.status}, c.paused)
+			if !allowed[got] {
+				t.Errorf("subagentStatusFromTask(status=%q, paused=%v) = %q, not a member of frontend SubagentStatus's union",
+					c.status, c.paused, got)
+			}
+		})
 	}
 }

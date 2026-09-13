@@ -28,6 +28,7 @@ import SlashArgFill from '@/components/chat/SlashArgFill.vue';
 import ResolvedContextPanel from '@/views/sessions/ResolvedContextPanel.vue';
 import PlanApprovalModal from '@/views/sessions/PlanApprovalModal.vue';
 import BranchSidebar from '@/components/chat/BranchSidebar.vue';
+import SubagentTab from '@/components/chat/SubagentTab.vue';
 import BranchBreadcrumb from '@/components/chat/BranchBreadcrumb.vue';
 import CreateBranchModal from '@/components/chat/CreateBranchModal.vue';
 import AuthFailureToast from '@/components/chat/AuthFailureToast.vue';
@@ -67,6 +68,7 @@ import type {
   SessionUsage,
   Settings,
   SlashExecuteResult,
+  SubagentBranch,
   UserCommand,
 } from '@/lib/types';
 import { flattenChoices, inferFamily } from '@/lib/modelFamily';
@@ -901,6 +903,76 @@ function closeCreateBranchModal() {
 function onBranchOpen(childSessionId: string) {
   if (!childSessionId) return;
   void router.push(`/sessions/${childSessionId}`);
+}
+
+// ── sub-agent live-worker view (subagent-control-and-background-
+// tasks-01PMZB11 UNIT-10) ──────────────────────────────────────────
+//
+// activeSubagentBranch is derived from BranchSidebar's OWN
+// Branches_List rows (defineExpose'd as `branches`) — the same real
+// data the sidebar renders, not a second fetch and not a placeholder.
+// A branch qualifies when its childSessionId matches the session
+// currently open AND UNIT-9 populated subagentStatus (Go omits that
+// field for every branch that was not created by
+// kenaz__subagent_dispatch — see branches/impl.go's
+// enrichSubagentFields), so this check is exactly "is the tab I'm
+// looking at a dispatched sub-agent's own transcript".
+const branchSidebarRef = ref<InstanceType<typeof BranchSidebar> | null>(null);
+const activeSubagentBranch = computed<SubagentBranch | null>(() => {
+  if (servedMode) return null;
+  const rows = branchSidebarRef.value?.branches ?? [];
+  const match = rows.find(
+    (b) => b.childSessionId === sessionId.value && !!b.subagentStatus,
+  );
+  if (!match) return null;
+  return {
+    ...match,
+    isSubagent: true,
+    profileId: match.profileId ?? '',
+    subagentStatus: match.subagentStatus,
+  } as SubagentBranch;
+});
+
+const subagentControlError = ref<string | null>(null);
+
+async function onSubagentAbort(branchId: string) {
+  subagentControlError.value = null;
+  try {
+    await client.branches.abortSubagent(branchId);
+  } catch (err) {
+    subagentControlError.value = err instanceof Error ? err.message : String(err);
+  }
+  await branchSidebarRef.value?.refresh();
+}
+
+async function onSubagentSteer(branchId: string, message: string) {
+  subagentControlError.value = null;
+  try {
+    await client.branches.steerSubagent(branchId, message);
+  } catch (err) {
+    subagentControlError.value = err instanceof Error ? err.message : String(err);
+  }
+  await branchSidebarRef.value?.refresh();
+}
+
+async function onSubagentPause(branchId: string) {
+  subagentControlError.value = null;
+  try {
+    await client.branches.pauseSubagent(branchId);
+  } catch (err) {
+    subagentControlError.value = err instanceof Error ? err.message : String(err);
+  }
+  await branchSidebarRef.value?.refresh();
+}
+
+async function onSubagentResume(branchId: string) {
+  subagentControlError.value = null;
+  try {
+    await client.branches.resumeSubagent(branchId);
+  } catch (err) {
+    subagentControlError.value = err instanceof Error ? err.message : String(err);
+  }
+  await branchSidebarRef.value?.refresh();
 }
 
 // ── "Branch from this turn" handler (branching-ux-polish-01KQ8TD7 WP05) ─────
@@ -1886,7 +1958,56 @@ async function onShared() {
           class="flex-1 min-h-0 grid grid-cols-[minmax(0,1fr)_auto]"
           style="grid-template-rows: minmax(0, 1fr)"
         >
+          <!-- Sub-agent live-worker view (subagent-control-and-background-
+               tasks-01PMZB11 UNIT-10): when the session currently open IS
+               a dispatched sub-agent's child session (activeSubagentBranch
+               is non-null — computed off BranchSidebar's real
+               Branches_List rows, not a placeholder), SubagentTab owns
+               this cell instead of a bare MessageList: same transcript
+               (passed through its #transcript slot, unchanged props), plus
+               the real status pill / budget meter / Abort-Steer-Pause-
+               Resume controls wired to the UNIT-8 RPCs. The standalone
+               ChatInput below is hidden in this mode (see its own
+               v-if) — SubagentTab's composer is the one steering surface. -->
+          <SubagentTab
+            v-if="activeSubagentBranch"
+            :branch="activeSubagentBranch"
+            :child-session-id="sessionId"
+            data-testid="session-subagent-tab"
+            @abort="onSubagentAbort"
+            @steer="onSubagentSteer"
+            @pause="onSubagentPause"
+            @resume="onSubagentResume"
+          >
+            <template #transcript>
+              <MessageList
+                :key="sessionId"
+                :messages="visibleMessages"
+                :focus-message-id="searchFocusMessageId"
+                :streaming-messages="session.streamingMoves.value"
+                :waiting="isWaitingForFirstChunk"
+                :error-message="session.error.value"
+                :error-kind="session.errorKind.value"
+                :rememberable="memoryEnabled"
+                :saveable="true"
+                :project-id="session.session.value?.projectId ?? ''"
+                :artifacts-by-message="artifactsByMessage"
+                :swept-count="session.sweptCount.value"
+                :archive-days="compactionArchiveDays"
+                :show-token-meter="showPerMessageTokenMeter"
+                :initial-scroll-position="messageListInitialScrollPosition"
+                @new-session="onNudgeNewSession"
+                @remember="onRemember"
+                @save-artifact="onSaveArtifactFromMessage"
+                @open-artifact="openArtifactPreview"
+                @branch-from-turn="onBranchFromTurn"
+                @resume="onResumeMessage"
+                @scroll-position="onMessageListScrollPosition"
+              />
+            </template>
+          </SubagentTab>
           <MessageList
+            v-else
             :key="sessionId"
             :messages="visibleMessages"
             :focus-message-id="searchFocusMessageId"
@@ -1910,6 +2031,18 @@ async function onShared() {
             @resume="onResumeMessage"
             @scroll-position="onMessageListScrollPosition"
           />
+          <!-- Sub-agent control-verb failure (UNIT-10) — Abort/Steer/
+               Pause/Resume calls can be denied by Cedar or fail at the
+               task registry; this surfaces that instead of leaving the
+               click silently do nothing. -->
+          <div
+            v-if="subagentControlError"
+            class="mx-4 mb-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+            role="alert"
+            data-testid="subagent-control-error"
+          >
+            {{ subagentControlError }}
+          </div>
           <!-- Branch-from-turn failure — rendered below the chat thread
                (FR-003: the error ref was set but never displayed). -->
           <div
@@ -1960,6 +2093,7 @@ async function onShared() {
           </div>
           <BranchSidebar
             v-if="hasSession && !servedMode"
+            ref="branchSidebarRef"
             :parent-session-id="sessionId"
             class="hidden lg:flex"
             @open="onBranchOpen"
@@ -2184,6 +2318,7 @@ async function onShared() {
           @dismiss="onComposerErrorDismiss"
         />
         <ChatInput
+          v-if="!activeSubagentBranch"
           v-model="session.draft.value"
           :streaming="isStreaming"
           :queue-depth="sendQueue.length"

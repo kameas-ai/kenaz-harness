@@ -2399,6 +2399,17 @@ this commit. `SubagentTab.vue` / `SubagentBudgetMeter.vue` remain unmounted
 (UNIT-10, gated on UNIT-8 + UNIT-9 landing first per the mission's plan.md
 Rule 5) — this paragraph covers only the registration half.
 
+**2026-09-12 · Sub-agent half CLOSED — see Drained.** UNIT-9 gave
+`SubagentBranch`'s six fields real producers and UNIT-10 mounted
+`SubagentTab.vue` + `SubagentBudgetMeter.vue` from `SessionsView.vue`,
+wired to the four control RPCs UNIT-8 landed earlier the same day. This
+row's sub-agent half is fully drained — see the Drained section's
+"Live tools whose only UI is unmounted — sub-agent half" entry for the
+verification detail. **The todo half is UNCHANGED and remains open**
+(different producer, different parent component — out of this
+mission's scope per its spec.md §7 non-goals); do not read this
+correction as closing the row as a whole.
+
 ### 2026-08-14 · The denial UX gap (opened by deleting `DenialNotice`)
 
 `DenialNotice.vue` + `usePolicyDecisions()` + `_emitDenialForTest` were
@@ -2709,6 +2720,15 @@ panel and restore the nav entry in the same PR that wires the producer.
 that ruling background execution ships, so this row's conditional applies:
 remount the panel and restore the nav entry in the same PR that wires the
 producer.
+
+**2026-09-12 · CLOSED — see Drained.** The conditional above fired:
+`subagent-control-and-background-tasks-01PMZB11` shipped the producer
+(migration registration, real `BackgroundSpawn`/`BackgroundEnd`
+assignments, the `HookFirer` wiring, `kenaz__monitor`'s predicate case)
+and, per the ruling, remounted `TasksPanel.vue` + restored the Settings
+nav entry in UNIT-11. See the Drained section's "The background-task
+subsystem has no producer" entry for the full verification detail and
+commit list.
 
 ### 2026-08-14 · `cedar.CheckLLMFallback` — the LLM fallback chain is ungated
 
@@ -4311,6 +4331,107 @@ UNIT-7 (WP10, review gate + router request a real schema, with
 `ErrCapabilityUnsupported`-gated degrade per D-9) were the two units
 still open when this pass started; both landed in the same change that
 added this entry.
+
+### 2026-09-12 · CLOSED — the background-task subsystem has no producer
+
+The original entry (2026-08-14, above) found `core/tasks` fully built
+(SQLite store, ring buffers, boot-time orphan recovery, four RPCs, a
+retained-but-unmounted Settings panel) and structurally unable to run:
+nothing ever called `Registry.Register` because
+`bash.Options.BackgroundSpawn` had no production assignment, and
+`Registry.StdoutWriter`/`StderrWriter` had no callers because
+`spawnBackground` started the process before a task id existed to
+attach them to. A-13/A-7 ruled: build it.
+
+`subagent-control-and-background-tasks-01PMZB11` did, across five units
+verified against the live tree (not copied from spec):
+
+- **UNIT-1** (`1ce7ea13`) recorded A-13's corrections and confirmed
+  which of its premises were still true against the merged base.
+- **UNIT-2** (`ef0eecb7`) registered the `core/tasks` migration through
+  the real `core/storage/migrations` framework with a reserved version
+  block — the `tasks` table now exists on every install, including
+  upgraded ones (FR-001; re-verified by the `upgrade-path` CI job
+  against the `v0.65.0` snapshot, per UNIT-PI above).
+- **UNIT-3** (`44eaf995`) attached the task registry to
+  `core/tools/bash`'s background-spawn path with a restructuring that
+  allocates the task id BEFORE `cmd.Start()`, so `StdoutWriter`/
+  `StderrWriter` can actually attach (FR-002/FR-003) —
+  `run_in_background: true` now produces a real row with real
+  captured output.
+- **UNIT-4** (`766d917b`) wired `Registry.Options.HookFirer` in
+  production, so `hooks.EventBackgroundTaskComplete` fires on every
+  terminal task (FR-004) — closing the exact gap hooks-fire-sites
+  finding #85 (also landed this release) named.
+- **UNIT-5** (`7fbfdc86`) registered `kenaz__monitor` with a real
+  predicate case, removing it from both
+  `i11-unregistered-builtin-tools.txt` and `i7-orphan-packages.txt`
+  (FR-005) — a registered `kenaz__monitor` no longer returns an empty
+  `lines` array forever, because UNIT-3 gave it real output to read.
+- **UNIT-11** (`1062fad1`, squash-merged `v0.71.0` as `620c048c`)
+  restored the Settings → Tasks nav entry and mounted `TasksPanel.vue`,
+  `BackgroundTaskChip.vue` and `TaskOutputViewer.vue` (the last had zero
+  importers at all before this), per A-13's ruling and the parked
+  entry's own conditional above. `SettingsTabsNav.spec.ts`'s pinned
+  absence assertion was inverted, not deleted, per the mission's own
+  convention for that class of test.
+
+**Disposition: Drained**, not narrowed — every producer gap the
+original entry named now has a real assignment, and the parked UI
+(panel + nav entry) was remounted in the same ruling's conditional,
+not left dangling.
+
+### 2026-09-12 · CLOSED — live tools whose only UI is unmounted, sub-agent half
+
+The original entry (2026-08-14, above) found `SubagentTab.vue` +
+`SubagentBudgetMeter.vue` with zero importers and, at the time, no
+backend to import them for either: `kenaz__subagent_dispatch` was
+itself statically unreachable (the `var subagentSeam
+agentgraph.BranchSeam // nil` dead-branch shape UNIT-12 below now has
+a permanent CI gate for), and the tab's four control emits had no RPC
+counterpart at all. A-13 ruled: build, not delete.
+
+Closed by three more units on the same mission, verified against the
+live tree:
+
+- **UNIT-8** (`40f2e2a8`, `4d2ca708`, `fd938980`, `5feeb930`) landed
+  `Subagent_Abort` / `Subagent_Steer` / `Subagent_Pause` /
+  `Subagent_Resume` as real Wails-bound RPCs, each gated by a Cedar
+  action in the `tool.subagent.*` family and each writing exactly one
+  audit record per call that actually changes state (idempotent
+  re-calls write none) — `TestAPI_{Abort,Steer,Pause,Resume}Subagent_
+  DeniedByRealCedarPolicy` pin the negative half against a REAL
+  `cedar.Engine`, not `cedar.AllowAll{}` (FR-008).
+- **UNIT-9** (`41d15cd4`) gave `SubagentBranch`'s six fields
+  (`subagentStatus`, `profileId`, `tokensUsed`, `budgetTokens`,
+  `elapsedS`, `budgetTimeS`) real producers on `Branches_List` /
+  `Branches_GetStatus`: `subagentStatus` off the tracked
+  `core/tasks.Task` (mapped onto a strict subset of the frontend
+  union — pinned by `TestSubagentStatusValuesAreInTSUnion`),
+  `tokensUsed` off the child session's real `usage.Manager` aggregate
+  (the same per-turn accounting token-cost-telemetry already writes),
+  `profileId`/budgets off metadata `BranchSeamAdapter.Fork` now records
+  against the branch id whenever the dispatch carries a `ProfileID`
+  (FR-009). `TestAPI_ListBranches_SubagentFieldsPopulatedAndOmitted`
+  proves both the positive half and AC-11's required negative half (an
+  ordinary branch created through the identical `CreateBranch` call
+  gets none of the six), with a manually-verified mutation proof.
+- **UNIT-10** (`2e920f7e`) mounted `SubagentTab.vue` from
+  `SessionsView.vue` — the natural owner, since it already renders
+  `BranchSidebar` and owns the active session's transcript — gated on
+  a real `activeSubagentBranch` computed derived from `BranchSidebar`'s
+  own `Branches_List` rows (UNIT-9's fields), not a placeholder. The
+  four emits reach UNIT-8's RPCs through new
+  `client.branches.{abort,steer,pause,resume}Subagent` methods.
+  `SubagentTab.spec.ts` asserts the status pill's RENDERED TEXT for all
+  six `SubagentStatus` values and the budget meter's rendered
+  percentage off real `tokensUsed`/`budgetTokens` — not prop
+  pass-through (the `?role=`-blank-pill trap this ledger's 2026-08-14
+  entry on `SearchModal` names).
+
+**Disposition: Drained.** The todo half of the original entry is
+explicitly **not** touched by this closure — see the correction left
+in place on the original 2026-08-14 entry above.
 
 ### 2026-08-19 · CLOSED — the missing-upgrade-snapshot hole is now gated
 
