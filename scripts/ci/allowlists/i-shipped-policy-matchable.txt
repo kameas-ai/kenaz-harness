@@ -1,0 +1,83 @@
+# G-4 — shipped-policy-matchable class (kitty-specs/trust-surfaces-that-
+# fire-01PMZ202 spec.md §G-4, WP18).
+#
+# Enforced by scripts/ci/check-shipped-policy-matchable.sh /
+# scripts/ci/cmd/checkpolicymatch. For every `.cedar` file under
+# core/policy/cedar/policies/, for every rule's action X: (a) X has a
+# non-test evaluator that calls .Evaluate(; (b) a production UID builder
+# reachable from that evaluator emits the rule's declared resource entity
+# type; (c) that evaluator populates every context key the rule's
+# when/unless clause reads. See main.go's header for the full design
+# (this is the gate that would have caught F24 — the shipped filesystem-
+# hardening template whose forbid rules were unmatchable for three
+# independent reasons at once, fixed by WP12).
+#
+# THIS GATE'S ALLOWLIST IS DELIBERATELY MINIMAL, NOT A CASUAL ESCAPE
+# HATCH — see main.go's header ("A DELIBERATELY TINY ALLOWLIST") for the
+# full reasoning. Format: one line per violation, copied verbatim from
+# the gate's stderr, followed by a `#` comment carrying the DATE, the
+# BLOCKER, and the change that will delete the line. Entries shrink
+# monotonically — a line that no longer matches a real violation is
+# STALE and fails the gate.
+#
+# ============================================================
+# 2026-09-12 — this gate's introduction. ONE finding, already
+# investigated (not guessed):
+# ============================================================
+#
+# default_acp_policy.cedar's `acp_receive` permit/forbid rules
+# (including "forbid acp_receive from revoked peers" — the belt-and-
+# suspenders safety rule the file's own header calls out) have NO
+# evaluator anywhere in production. Confirmed by hand:
+#   - `/usr/bin/grep -rn ActionACPReceive core/` (excluding _test.go)
+#     returns only its own declaration + doc comment in types.go.
+#   - No `ACP_Receive` function exists anywhere under core/ — only two
+#     comments describing one that was apparently never built:
+#     core/rpc/api.go:3372 ("acp_receive gates actually enforce
+#     policy") and core/rpc/views/acp/acp.go:654 ("attrs is the context
+#     map built by ACP_Dispatch / ACP_Receive").
+#   - By contrast, `acp_send` (the sibling action in the SAME file) IS
+#     genuinely wired end to end — ACP_Dispatch (acp.go) calls
+#     a.cedarEng.Check(...), which is EngineAdapter.Check's generic
+#     Evaluate(+ACPEnvelopeUID) wrapper — confirmed as a true negative
+#     by this gate's own calibration run before this file was seeded.
+#
+# Net effect: inbound ACP envelope handling is not gated by Cedar today.
+# A revoked peer's inbound envelopes are not denied by the rule that
+# exists specifically to deny them — the exact "silent broken promise"
+# shape this whole gate class exists to end, just on the receive side
+# instead of the send side.
+#
+# Blocker: building the real ACP_Receive gate call is a genuine
+# feature/security task (understand the ACP receive pipeline, decide
+# where in it the Cedar check belongs, wire CheckACPReceive-equivalent
+# the same way ACP_Dispatch wires acp_send) — out of scope for this
+# gate-authoring change, which introduces the DETECTOR, not the fix.
+# Owner: whoever next touches core/rpc/views/acp/ (ACP receive-path
+# work) should wire this and delete all three lines below in the same
+# change, or escalate if there's a reason inbound envelopes are
+# intentionally ungated that this investigation didn't surface.
+
+core/policy/cedar/policies/default_acp_policy.cedar (forbid Action::"acp_receive"): ActionACPReceive has no non-test evaluator (no .Evaluate( call site anywhere under core/ or cmd/ references it) — this rule can never be reached
+# 2026-09-12 — see header. Blocker: build ACP_Receive's Cedar gate call. Owner: next ACP-receive-path change.
+
+core/policy/cedar/policies/default_acp_policy.cedar (forbid Action::"acp_receive"): context.peer_trust_tier is read by a when/unless clause but nothing in ActionACPReceive's own evaluator (or populateFamilyContext, for family actions) ever sets it — Cedar treats a missing context attribute as an evaluation error, which the engine maps to Deny, not to this rule matching
+# 2026-09-12 — see header. Blocker: build ACP_Receive's Cedar gate call. Owner: next ACP-receive-path change.
+
+core/policy/cedar/policies/default_acp_policy.cedar (forbid Action::"acp_receive"): no production UID builder called from ActionACPReceive's own evaluator emits resource type ACPEnvelope — the policy's `resource is/== ACPEnvelope` clause can never match
+# 2026-09-12 — see header. Blocker: build ACP_Receive's Cedar gate call. Owner: next ACP-receive-path change.
+
+core/policy/cedar/policies/default_acp_policy.cedar (permit Action::"acp_receive"): ActionACPReceive has no non-test evaluator (no .Evaluate( call site anywhere under core/ or cmd/ references it) — this rule can never be reached
+# 2026-09-12 — see header. Two permit rules both name acp_receive (verified/pending trust tiers); same root cause, same blocker/owner as above.
+
+core/policy/cedar/policies/default_acp_policy.cedar (permit Action::"acp_receive"): context.peer_trust_tier is read by a when/unless clause but nothing in ActionACPReceive's own evaluator (or populateFamilyContext, for family actions) ever sets it — Cedar treats a missing context attribute as an evaluation error, which the engine maps to Deny, not to this rule matching
+# 2026-09-12 — see header. Same root cause, same blocker/owner as above.
+
+core/policy/cedar/policies/default_acp_policy.cedar (permit Action::"acp_receive"): context.peer_trust_tier is read by a when/unless clause but nothing in ActionACPReceive's own evaluator (or populateFamilyContext, for family actions) ever sets it — Cedar treats a missing context attribute as an evaluation error, which the engine maps to Deny, not to this rule matching
+# 2026-09-12 — see header. Second permit rule (pending tier); same root cause, same blocker/owner as above.
+
+core/policy/cedar/policies/default_acp_policy.cedar (permit Action::"acp_receive"): no production UID builder called from ActionACPReceive's own evaluator emits resource type ACPEnvelope — the policy's `resource is/== ACPEnvelope` clause can never match
+# 2026-09-12 — see header. Same root cause, same blocker/owner as above.
+
+core/policy/cedar/policies/default_acp_policy.cedar (permit Action::"acp_receive"): no production UID builder called from ActionACPReceive's own evaluator emits resource type ACPEnvelope — the policy's `resource is/== ACPEnvelope` clause can never match
+# 2026-09-12 — see header. Second permit rule; same root cause, same blocker/owner as above.

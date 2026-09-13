@@ -3456,3 +3456,275 @@ func TestKnobCoverageGate_NoRealGuardStillFires(t *testing.T) {
 			"expected diagnosis — it may be failing for an unrelated reason.\noutput:\n%s", out2)
 	}
 }
+
+// TestConfigNilCoverageGate_PlantedUnwiredFieldFires is the mandated
+// Tier-1 planted-violation proof for check-config-nil-coverage.sh
+// ("config-nil-coverage/unset-interface-field", trust-surfaces-that-fire-
+// 01PMZ202 spec.md §G-1 / WP26). Uses the same overlay technique as
+// TestNilOptionalDepsGate_PlantedUnwiredFieldFires above
+// (CONFIG_NIL_COVERAGE_OVERLAY, mirroring checknilopts's
+// NIL_OPTIONAL_DEPS_OVERLAY): the plant inserts a field into the MIDDLE
+// of an existing struct declaration (core/rpc/views/permissions/impl.go's
+// Config), which the shared plant() helper's append-at-EOF shape cannot
+// do. Never writes to the real file — a hard kill under -timeout leaves
+// nothing on disk but an OS-cleaned scratch dir.
+func TestConfigNilCoverageGate_PlantedUnwiredFieldFires(t *testing.T) {
+	root := repoRoot(t)
+	implPath := filepath.Join(root, "core", "rpc", "views", "permissions", "impl.go")
+
+	orig, err := os.ReadFile(implPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", implPath, err)
+	}
+
+	const anchor = "\tConfigTrimmer RecipeConfigTrimmer\n}\n"
+	if !strings.Contains(string(orig), anchor) {
+		t.Fatalf("expected Config struct closing shape not found in impl.go — the struct shape "+
+			"may have moved; update this test and the gate together:\n%q", anchor)
+	}
+	const mutatedAnchor = "\tConfigTrimmer RecipeConfigTrimmer\n" +
+		"\tZzGateProbe ZzGateProbeCollaborator\n}\n"
+	const probeType = "\n// ZzGateProbeCollaborator is a planted probe type for\n" +
+		"// TestConfigNilCoverageGate_PlantedUnwiredFieldFires. Overlay-only; never\n" +
+		"// written to the real file.\n" +
+		"type ZzGateProbeCollaborator interface {\n\tZz()\n}\n"
+
+	buildOverlay := func(t *testing.T, extraSuffix string) string {
+		t.Helper()
+		mutated := strings.Replace(string(orig), anchor, mutatedAnchor, 1) + probeType + extraSuffix
+		scratch := t.TempDir()
+		scratchImpl := filepath.Join(scratch, "impl_zz_gate_probe_config.go")
+		if err := os.WriteFile(scratchImpl, []byte(mutated), 0o644); err != nil {
+			t.Fatalf("writing scratch mutated impl.go: %v", err)
+		}
+		overlay := struct{ Replace map[string]string }{Replace: map[string]string{implPath: scratchImpl}}
+		overlayJSON, err := json.Marshal(overlay)
+		if err != nil {
+			t.Fatalf("marshalling overlay: %v", err)
+		}
+		overlayPath := filepath.Join(scratch, "overlay.json")
+		if err := os.WriteFile(overlayPath, overlayJSON, 0o644); err != nil {
+			t.Fatalf("writing overlay.json: %v", err)
+		}
+		return overlayPath
+	}
+
+	t.Run("config-nil-coverage/unset-interface-field", func(t *testing.T) {
+		overlayPath := buildOverlay(t, "")
+		code, out := runGateEnv(t, "check-config-nil-coverage.sh", root, map[string]string{
+			"CONFIG_NIL_COVERAGE_OVERLAY": overlayPath,
+		})
+		if code == 0 {
+			t.Fatalf("check-config-nil-coverage.sh exited 0 with a planted interface field "+
+				"(ZzGateProbe) on permissions.Config that is never set in any composite literal "+
+				"or plain assignment — the gate cannot fail.\noutput:\n%s", out)
+		}
+		if !strings.Contains(out, "ZzGateProbe") {
+			t.Fatalf("gate failed, but its output does not mention ZzGateProbe "+
+				"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+		}
+	})
+
+	// Negative control: the identical planted field, this time genuinely
+	// set in a production (overlay-only, non-test) composite literal.
+	// Proves the gate does not fire unconditionally — it specifically
+	// requires the UNSET case, not merely the field's existence.
+	t.Run("set-interface-field-does-not-fire", func(t *testing.T) {
+		const wiring = "\ntype zzGateProbeConfigImpl struct{}\n\n" +
+			"func (zzGateProbeConfigImpl) Zz() {}\n\n" +
+			"var zzGateProbeConfigWired = Config{ZzGateProbe: zzGateProbeConfigImpl{}}\n"
+		overlayPath := buildOverlay(t, wiring)
+		code, out := runGateEnv(t, "check-config-nil-coverage.sh", root, map[string]string{
+			"CONFIG_NIL_COVERAGE_OVERLAY": overlayPath,
+		})
+		if code != 0 {
+			t.Fatalf("check-config-nil-coverage.sh flagged ZzGateProbe even though this variant "+
+				"assigns it a non-nil value in a production composite literal — the gate fires on "+
+				"everything, not just the real defect class.\noutput:\n%s", out)
+		}
+	})
+}
+
+// TestConfigNilCoverageGate_PlantedOrphanWithOptionFires is the mandated
+// Tier-2 planted-violation proof ("config-nil-coverage/orphan-with-
+// option", trust-surfaces-that-fire-01PMZ202 spec.md §G-1 / WP26).
+//
+// DEVIATION FROM THE SPEC'S LITERAL EXAMPLE, documented here: spec.md's
+// own illustration is `func WithZzGateProbe(x int) Option { return
+// func(*API) {} }` — a concrete `int` parameter. check-config-nil-
+// coverage.sh's Tier 2 deliberately restricts candidates to With*
+// functions/methods whose FIRST parameter is a non-empty INTERFACE (see
+// scripts/ci/cmd/checkconfig/main.go's findWithFuncs — the restriction
+// site carries the full justification: an unrestricted "every With*
+// func" scan found ~213 candidates and ~200 unlisted violations
+// dominated by legitimate test-only mock-injection options
+// (*http.Client, endpoint strings, clock funcs), not this defect class,
+// while every one of the spec's own five named Tier-2 examples
+// (audit.WithBackend, audit.WithSweepableBackend,
+// cedar.WithPermissionHookRunner, session.WithSessionHookRunner,
+// slashcmd.(*Dispatch).WithAuditEmitter) takes an interface-typed first
+// parameter). Planting the spec's literal `int`-typed illustration would
+// land OUTSIDE this gate's documented, deliberately-narrowed scope and
+// would not exercise the implemented property at all — it would silently
+// pass this proof while proving nothing about the gate's real Tier-2
+// logic. This proof therefore uses an interface-typed collaborator
+// parameter instead, matching what the gate actually checks; the case
+// name is unchanged from the spec ("config-nil-coverage/orphan-with-
+// option") since it identifies the SAME defect class (an orphan
+// injector), not the specific parameter type.
+func TestConfigNilCoverageGate_PlantedOrphanWithOptionFires(t *testing.T) {
+	root := repoRoot(t)
+
+	t.Run("config-nil-coverage/orphan-with-option", func(t *testing.T) {
+		probePath := filepath.Join(root, "core", "rpc", "views", "audit", "zz_gate_probe.go")
+		goContent := `package audit
+
+// ZzGateProbeCollaborator is a planted probe type for
+// TestConfigNilCoverageGate_PlantedOrphanWithOptionFires.
+type ZzGateProbeCollaborator interface {
+	Zz()
+}
+
+// WithZzGateProbe is a planted orphan injector: exported, "With"-prefixed,
+// takes a non-empty-interface first parameter (the shape this gate's
+// Tier 2 targets), and is never called anywhere in this file or the rest
+// of the tree.
+func WithZzGateProbe(c ZzGateProbeCollaborator) Option {
+	return func(a *API) {}
+}
+`
+		cleanup := plant(t, probePath, goContent, "")
+		defer cleanup()
+
+		code, out := runGate(t, "check-config-nil-coverage.sh", root)
+		if code == 0 {
+			t.Fatalf("check-config-nil-coverage.sh exited 0 with a planted orphan With* function "+
+				"(WithZzGateProbe) that has zero callers anywhere under core/ — the gate cannot "+
+				"fail.\noutput:\n%s", out)
+		}
+		if !strings.Contains(out, "WithZzGateProbe") {
+			t.Fatalf("gate failed, but its output does not mention WithZzGateProbe "+
+				"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+		}
+	})
+
+	// Negative control: the identical orphan-shaped With* function, but
+	// called once from a real (non-test) call site in the same plant.
+	// Proves the gate does not fire on every With* declaration
+	// unconditionally — only on ones with zero callers.
+	t.Run("called-with-option-does-not-fire", func(t *testing.T) {
+		probePath := filepath.Join(root, "core", "rpc", "views", "audit", "zz_gate_probe_called.go")
+		goContent := `package audit
+
+type zzGateProbeCalledCollaborator interface {
+	Zz()
+}
+
+type zzGateProbeCalledImpl struct{}
+
+func (zzGateProbeCalledImpl) Zz() {}
+
+// WithZzGateProbeCalled is a planted With* function that IS called below —
+// the true-negative companion to WithZzGateProbe above.
+func WithZzGateProbeCalled(c zzGateProbeCalledCollaborator) Option {
+	return func(a *API) {}
+}
+
+var zzGateProbeCalledWired = WithZzGateProbeCalled(zzGateProbeCalledImpl{})
+`
+		cleanup := plant(t, probePath, goContent, "")
+		defer cleanup()
+
+		code, out := runGate(t, "check-config-nil-coverage.sh", root)
+		if code != 0 {
+			t.Fatalf("check-config-nil-coverage.sh flagged WithZzGateProbeCalled even though it "+
+				"is called at package scope in the same plant — the gate fires on every With* "+
+				"declaration, not just uncalled ones.\noutput:\n%s", out)
+		}
+	})
+}
+
+// TestShippedPolicyMatchableGate_PlantedContextMismatchFires is the
+// mandated planted-violation proof for check-shipped-policy-matchable.sh
+// (G-4, trust-surfaces-that-fire-01PMZ202 spec.md §G-4 / WP18): "add a
+// rule keyed on a context attribute the action never populates."
+//
+// Plants a new .cedar file naming a REAL, already-wired action
+// (memory_write / ActionMemoryWrite) and its correct resource type
+// (Memory, matching cedar.MemoryUID) — so legs (a) and (b) both pass —
+// but with a `when` clause reading a context key CheckMemoryWrite
+// (core/policy/cedar/hooks.go) never sets: CheckMemoryWrite calls
+// `g.Evaluate(ctx, UserUID(), ActionMemoryWrite, MemoryUID(scope), nil)`
+// — a literal nil context map, zero keys, ever. This isolates leg (c)
+// specifically, the exact shape the spec's own planted-violation
+// description names.
+func TestShippedPolicyMatchableGate_PlantedContextMismatchFires(t *testing.T) {
+	root := repoRoot(t)
+
+	t.Run("shipped-policy-matchable/context-attribute-never-populated", func(t *testing.T) {
+		probePath := filepath.Join(root, "core", "policy", "cedar", "policies", "zz_gate_probe.cedar")
+		content := `// zz_gate_probe.cedar — planted by
+// TestShippedPolicyMatchableGate_PlantedContextMismatchFires. Action and
+// resource type are both REAL and correctly matched (memory_write /
+// Memory, mirroring default_policy.cedar's own memory_write rule) so
+// legs (a) and (b) pass — only the when-clause's context key is bogus,
+// isolating leg (c).
+forbid (
+    principal == User::"local",
+    action == Action::"memory_write",
+    resource is Memory
+) when {
+    context.zz_gate_probe_key == "x"
+};
+`
+		cleanup := plant(t, probePath, content, "")
+		defer cleanup()
+
+		code, out := runGate(t, "check-shipped-policy-matchable.sh", root)
+		if code == 0 {
+			t.Fatalf("check-shipped-policy-matchable.sh exited 0 with a planted rule reading "+
+				"context.zz_gate_probe_key for memory_write, which CheckMemoryWrite never "+
+				"populates (it passes a literal nil context map) — the gate cannot fail.\n"+
+				"output:\n%s", out)
+		}
+		if !strings.Contains(out, "zz_gate_probe_key") {
+			t.Fatalf("gate failed, but its output does not mention zz_gate_probe_key "+
+				"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+		}
+	})
+
+	// Negative control: the identical rule shape (same action, same
+	// resource type), but with a context key CheckMemoryWrite's sibling
+	// evaluators are known to populate for a DIFFERENT, correctly-matched
+	// action/resource/context triple — read_filesystem's canonical_path.
+	// This does NOT prove read_filesystem's OWN rules are fine (they
+	// already are, per the real tree); it proves THIS gate does not fire
+	// on every planted .cedar file unconditionally by using the exact
+	// action/resource/context triple this gate independently verifies is
+	// wired.
+	t.Run("well-formed-rule-does-not-fire", func(t *testing.T) {
+		probePath := filepath.Join(root, "core", "policy", "cedar", "policies", "zz_gate_probe_healthy.cedar")
+		content := `// zz_gate_probe_healthy.cedar — negative control for
+// TestShippedPolicyMatchableGate_PlantedContextMismatchFires. Same shape
+// as the real, already-matchable filesystem-full-recommended.cedar
+// rules: read_filesystem / FilesystemOp / context.canonical_path.
+forbid (
+    principal == User::"local",
+    action == Action::"read_filesystem",
+    resource is FilesystemOp
+) when {
+    context.canonical_path like "*/zz-gate-probe/*"
+};
+`
+		cleanup := plant(t, probePath, content, "")
+		defer cleanup()
+
+		code, out := runGate(t, "check-shipped-policy-matchable.sh", root)
+		if code != 0 {
+			t.Fatalf("check-shipped-policy-matchable.sh flagged a well-formed rule using the "+
+				"exact action/resource-type/context-key triple its own evaluator (core/tools/fs/"+
+				"gate.go) is known to produce — the gate fires unconditionally on any planted "+
+				".cedar file, not just unmatchable ones.\noutput:\n%s", out)
+		}
+	})
+}
