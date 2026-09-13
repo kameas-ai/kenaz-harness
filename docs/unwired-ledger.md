@@ -3682,6 +3682,49 @@ needed no further action this pass.
     order itself.
   - **Owner:** alec.
 
+### 2026-09-12 (connector-lifecycle-truth-01PMZ303 UNIT-12) — http/sse `Spec.InitTimeout` has no request to gate
+
+`core/mcp/transport/http/connection.go:52` and
+`core/mcp/transport/sse/connection.go:71` declare `InitTimeout` with a doc
+promising it is *"the response deadline once initialize is on the wire"*.
+UNIT-12 wired the stdio half of this finding (`InitTimeoutMs`/
+`PingPeriodMs` now reach `stdio.SpawnSpec` from the recipe, overriding the
+pool-wide default — see git log) but deliberately did not touch http/sse,
+because the premise the doc and the original spec finding both share —
+"the deadline is assigned but not read" — undersells what is actually
+there: **`http.Connection.Open` (and sse's equivalent) performs zero
+network I/O.** There is no `initialize` JSON-RPC round-trip anywhere in
+either transport package at the `Connection` level; `Open` only parses
+and validates the URL, builds header templates, and sets up the HTTP
+client. `MethodInitialize` is dispatched exactly once in the whole
+`core/mcp` tree, from `stdio/server.go:465` — http and sse never send it.
+
+This means `InitTimeout` cannot be "wired" by adding a read of the field
+inside `Open`, because there is no request there to put a deadline
+around. The honest fix is a real design question: either (a) http/sse
+gain an actual stateful handshake step (a real feature — these
+transports may be intentionally stateless-per-POST, matching how MCP
+supports HTTP-transport servers that answer each JSON-RPC call
+independently with no session concept, in which case "the response
+deadline once initialize is on the wire" describes a step these
+transports never perform by design), or (b) `InitTimeout` is repurposed
+to gate the *first* real network call each transport does perform (the
+first `tools/list`, or the health probe's first tick), which changes its
+semantics from what its doc currently claims.
+
+- **Blocker:** whether http/sse are meant to have a stateful handshake at
+  all is a product/protocol-conformance call, not a technical one — it
+  determines whether this is "wire a missing feature" or "the doc
+  describes a step that doesn't apply to this transport shape, narrow
+  it." Either answer closes this differently.
+- **Owner:** alec. Deletes (or resolves) when either a handshake step is
+  added to `http.Connection`/`sse.Connection` and `InitTimeout` gates its
+  response, or the doc on both `Spec.InitTimeout` fields is narrowed to
+  say explicitly that no handshake exists for these transports and the
+  field is retired under a documented protocol-conformance decision
+  (not today's A-0 freeze, since that requires a product ruling this
+  session did not have).
+
 ## Drained
 
 ### 2026-08-19 · CLOSED — the missing-upgrade-snapshot hole is now gated
