@@ -3564,6 +3564,124 @@ currently prove — the field-proven class (an unrelated package importing
 fleet, the shape that really fired on release/v0.78.1 against
 `core/serve`). It does not claim the `core/rpc/views/` hole is closed.
 
+### 2026-09-12 (connector-lifecycle-truth-01PMZ303 UNIT-3/UNIT-4) — E-006: the `oauth` primary_auth arm (Slack + 5 others) has no working sign-in path, and nine Slack-specific symbols are dead until it is resolved
+
+`core/rpc/views/tools/oauth.go`'s `SignInRecipe` fails closed
+unconditionally for every recipe whose `primary_auth == "oauth"` (6
+recipes: slack, zapier, make, pipedream, google-calendar, google-drive),
+citing `E-006` in the returned error string. This is deliberate and
+correct as shipped — none of the six is dynamically-registerable
+(`browser_oauth_dcr`), ships a pre-registered client id
+(`browser_oauth_pkce`), or has a device-code flow — but it leaves real
+dead code behind it:
+
+- `core/mcp/oauth/slack_signin.go`'s nine exported symbols
+  (`SlackSignIn`, `SlackSignInWithDiscovery`, `ResolveSlackClientID`,
+  `SlackSignInConfig`, `SlackAuthorizationEndpoint`, `SlackTokenEndpoint`,
+  `SlackClientIDEnvVar`, `SlackDefaultScopes`, `ErrSlackNoClientID`) have
+  zero production callers. They drag `SlackLoopbackPort`
+  (`loopback.go:32`) and `InteractiveConfig.FixedPort` (`loopback.go:60`)
+  with them — `FixedPort` has no non-Slack, non-test setter.
+- Two dead branches live inside this dead code
+  (`slack_signin.go`'s `SlackSignInWithDiscovery`, MO-06): `:192`
+  returns unconditionally on `err != nil` so the `errors.Is(err,
+  ErrNoChallenge)` fallback a few lines later is unreachable, and
+  `scopes` is already defaulted earlier in the function so the
+  `len(scopes) == 0` branch is a second dead branch in the same
+  function. Both are unreachable regardless of whether the Slack lane
+  is ever wired, but fixing them has zero behavioural value while
+  nothing calls the function they live in — they would need re-review
+  the moment E-006 is resolved anyway, since resolving it means writing
+  (or rewriting) this function's real control flow.
+
+The user-visible half of this — `registry.json`'s slack `warning` telling
+the operator to set an environment variable no code reads — did **not**
+wait on E-006 and is fixed (UNIT-4, this release): the copy now states
+the real limitation and points at the working `slack-tokens` stdio
+fallback, with `warning_severity: "danger"` so it renders as the hard
+blocker it is.
+
+- **Blocker:** whether Slack (and the other 5 `oauth`-arm recipes) moves
+  to a real sign-in path is a product call, not a technical one.
+  `slack_signin.go:22–24`'s own TODO anticipates moving Slack to a baked
+  client id, which would reclassify it as `browser_oauth_pkce` under
+  UNIT-2's bring-your-own posture — that decision (register a real app
+  vs. rely entirely on the BYO posture vs. leave slack-tokens as the only
+  supported path) has not been made.
+- **Owner / deleting change:** alec. Deletes (or rather, resolves) when
+  either (a) a product decision routes the `oauth` arm's recipes to one
+  of the five working arms and this unit's dead Slack symbols get real
+  callers (fixing MO-06 in the same commit, since it would no longer be
+  dead-code-inside-dead-code), or (b) the product decides `oauth`-arm
+  recipes are permanently `keys`/stdio-fallback-only, in which case the
+  nine Slack symbols, `SlackLoopbackPort`, and `InteractiveConfig.FixedPort`
+  become deletable under a documented product retirement (not today's A-0
+  freeze).
+
+### 2026-09-12 (connector-lifecycle-truth-01PMZ303 UNIT-5) — three MO-* OAuth findings justified rather than wired
+
+Three of the sixteen OAuth-cluster findings the 2026-08-18 closing sweep
+assigned to this mission (`spec.md` §1.10) were reviewed this pass and
+found to need either a real per-call clock-injection design or a real
+multi-scheme-header design — neither of which is a one-line wire, and
+inventing one un-reviewed risks landing wrong. MO-07, MO-09, MO-12 and
+MO-13 were wired or pinned by test this same session (see git log —
+`fix(mcp): UNIT-5 (MO-07, MO-09)`, `test(mcp): UNIT-5 (MO-12)`, `fix(mcp):
+UNIT-5 (MO-13)`); the doc naming `LoadedClient` (a type that does not
+exist in the repo) was already corrected by an earlier UNIT-3 commit and
+needed no further action this pass.
+
+- **MO-05** — `ResolveClientIDConfig.Now` (`resolve.go:71-72`) is derived
+  into a local `nowFn` (`:97-99`) that is never invoked; the DCR expiry
+  check that actually runs uses `DCRStore`'s own `s.nowFn` (fixed to
+  `time.Now` at `NewDCRStore` construction, `dcr_store.go:105`, with no
+  setter). Wiring `cfg.Now` to mean anything would require either a
+  per-call clock override on a shared, potentially concurrently-used
+  `*DCRStore` (a real race-safety design question — CI runs `-race`) or a
+  second `DCRStore` constructed per call (defeats the point of the
+  cross-launch cache UNIT-3 3e just wired). No test anywhere sets
+  `cfg.Now` today, including in this package's own test suite, so this is
+  a genuinely orphaned seam, not a live regression risk.
+  - **Blocker:** needs a design decision on whether `DCRStore`'s clock
+    should be mutable per-call (and if so, how that interacts with
+    concurrent `Resolve` calls sharing one store) or whether this field
+    should be retired in favour of constructing a test-only `DCRStore`
+    with a custom `nowFn` directly (which every existing DCR expiry test
+    already does, bypassing this field entirely).
+  - **Owner:** alec.
+
+- **MO-08** — `StoredCredential.AuthorizationHeader` (`store.go`)
+  hardcodes `"Bearer "` under a doc saying `TokenType` defaults to Bearer
+  when unset; `TokenType` is written on every mint path and read nowhere.
+  This has a **live caller** (`core/rpc/views/tools/oauth.go`'s bearer
+  injection at spawn), so a DPoP/MAC-authenticating MCP provider would
+  401 with no diagnostic naming the real cause. No recipe in either
+  catalog uses a non-Bearer scheme today (measured: zero `token_type`
+  overrides anywhere in `registry.json`/`shipped.json`), so this is
+  latent, not field-proven.
+  - **Blocker:** wiring `TokenType` into the header format is a real
+    per-scheme change (Bearer vs. DPoP have different header shapes —
+    DPoP requires a proof-of-possession JWT, not just a different
+    keyword), not a one-line format-string edit, and there is no
+    DPoP/MAC provider in either catalog to test against without
+    inventing one.
+  - **Owner:** alec.
+
+- **`FromDCR`** (`resolve.go:49`, written at `:117`/`:150`) — its doc says
+  *"so callers can track the source for debugging"*; nothing logs or
+  emits it today. Read only in tests.
+  - **Blocker:** none technical — this is the cheapest of the three to
+    close (thread it into the existing `mcp.recipe.*` structured log
+    lines `SignInRecipe`/`ResolveClientID` already emit) but doing so
+    without a concrete downstream consumer (a log line nobody greps for
+    is a different flavor of the same "recorded, unread" defect this
+    mission is about) needs a decision on whether debug-level
+    provenance logging is worth the extra field on every log call, or
+    whether `FromDCR`'s job is fully discharged by
+    `ClientIDResult.FromDCR`'s existing test coverage of the resolution
+    order itself.
+  - **Owner:** alec.
+
 ## Drained
 
 ### 2026-08-19 · CLOSED — the missing-upgrade-snapshot hole is now gated
