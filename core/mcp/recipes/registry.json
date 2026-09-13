@@ -249,7 +249,8 @@
         "default": false
       },
       "primary_auth": "oauth",
-      "warning": "OAuth sign-in requires the Kameas Slack app to be registered (client_id placeholder — set KAMEAS_SLACK_OAUTH_CLIENT_ID at build time or register the app and bake the client_id). Advanced: use the token-based stdio server below (id: slack-tokens)."
+      "warning": "OAuth sign-in is not available for Slack in this version — no client ID is configured for this connector and Slack does not support dynamic client registration. Use the token-based stdio server below (id: slack-tokens) instead.",
+      "warning_severity": "danger"
     },
     {
       "id": "slack-tokens",

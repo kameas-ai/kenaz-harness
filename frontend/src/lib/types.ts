@@ -2412,6 +2412,19 @@ export type RecipeState =
   | 'failed';
 
 /**
+ * RecipeSource is the provenance discriminator for a catalog row
+ * (connector-lifecycle-truth-01PMZ303 FR-007). Mirrors the
+ * `recipes.Source*` constants in `core/mcp/recipes/recipes.go`:
+ * "shipped" (the embedded shipped.json catalog), "registry" (the
+ * curated in-binary registry.json), "user" (a hand-authored recipe
+ * under `<DataDir>/mcp/recipes/`), or "imported" (translated from a
+ * pasted Claude Desktop / Cursor config). "unknown" is the frontend
+ * adapter's own fallback for a value the backend has not declared —
+ * it must never silently fold to "shipped".
+ */
+export type RecipeSource = 'shipped' | 'registry' | 'user' | 'imported' | 'unknown';
+
+/**
  * RecipeStatus — live snapshot of one recipe's child process. Mirrors
  * `core/mcp/stdio.RecipeStatus`.
  */
@@ -2559,6 +2572,7 @@ export interface RecipeListing {
   enabled: boolean;
   status: RecipeStatus;
   keysPresent: boolean;
+  source: RecipeSource;
 }
 
 // ── slash commands ───────────────────────────────────────────────────

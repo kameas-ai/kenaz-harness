@@ -30,6 +30,19 @@ type ServerSpec struct {
 	// RequestTimeoutMs is the per-POST timeout for the http transport,
 	// in milliseconds. 0 → DefaultRequestTimeout (30 s).
 	RequestTimeoutMs int `json:"request_timeout_ms,omitempty"`
+	// InitTimeoutMs overrides the pool-wide post-spawn initialize
+	// deadline for this one server, in milliseconds. 0 → the pool's
+	// configured default (transport.DefaultInitTimeout when that is
+	// also unset). Populated from recipes.Recipe.InitTimeoutMs
+	// (connector-lifecycle-truth-01PMZ303 UNIT-12) — before this, every
+	// recipe's declared init_timeout_ms was discarded and every stdio
+	// server got the same process-wide 5s deadline regardless of what
+	// its own catalog entry declared.
+	InitTimeoutMs int `json:"init_timeout_ms,omitempty"`
+	// PingPeriodMs overrides the pool-wide health-ping cadence for this
+	// one server, in milliseconds. 0 → the pool's configured default.
+	// Populated from recipes.Recipe.PingPeriodMs.
+	PingPeriodMs int `json:"ping_period_ms,omitempty"`
 }
 
 type Tool struct {

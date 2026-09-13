@@ -7630,6 +7630,7 @@ export namespace tools {
 	    enabled: boolean;
 	    status: transport.RecipeStatus;
 	    keysPresent: boolean;
+	    source: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new RecipeListing(source);
@@ -7641,6 +7642,7 @@ export namespace tools {
 	        this.enabled = source["enabled"];
 	        this.status = this.convertValues(source["status"], transport.RecipeStatus);
 	        this.keysPresent = source["keysPresent"];
+	        this.source = source["source"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

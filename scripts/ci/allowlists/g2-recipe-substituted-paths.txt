@@ -1,0 +1,53 @@
+# g2-recipe-substituted-paths.txt — declared substituted-paths manifest
+# for scripts/ci/check-recipe-token-substitution.sh (G-2).
+#
+# One line per (json-path, grep-pattern) pair, pipe-separated. A json-path
+# is satisfied if AT LEAST ONE of its listed patterns matches somewhere in
+# non-test Go code under core/. Every json-path this gate's discovery pass
+# finds carrying a "${...}" token in core/mcp/recipes/registry.json or
+# shipped.json MUST have at least one line here, or the gate fails naming
+# the uncovered path (connector-lifecycle-truth-01PMZ303 UNIT-1's own
+# defect: auth.client_id shipped 14 "${KAMEAS_*}" placeholders for years
+# with zero production Substitute* call site touching Auth at all).
+#
+# A line whose pattern no longer matches ALSO fails the gate — this is
+# what stops the manifest being an opt-out list: deleting the call site
+# without deleting (or fixing) the corresponding line here is caught,
+# not silently rewarded with a clean gate run.
+#
+# Lines starting with # are comments. Blank lines are ignored.
+
+# auth.client_id / auth.client_secret — UNIT-1 (spec.md §1.2). Both route
+# through resolveOAuthClientCredentials in core/rpc/views/tools/oauth.go,
+# which substitutes each field separately.
+auth.client_id|SubstituteString\(clientID
+auth.client_secret|SubstituteString\(clientSecret
+
+# url — http and sse each substitute independently (they are separate
+# transport packages with no shared Connection type).
+url|func substituteURL
+url|recipes\.SubstituteString\(spec\.URL
+
+# headers_template.* — same split: http's HeaderTemplate.Resolve, sse's
+# direct recipes.SubstituteHeaders call.
+headers_template.*|HeaderTemplate\) Resolve
+headers_template.*|SubstituteHeaders
+
+# command[] / args_template[] — (*Recipe).ToServerSpec, core/mcp/recipes/recipes.go.
+command[]|Substitute\(r\.Command
+args_template[]|Substitute\(r\.ArgsTemplate
+
+# config_options[].default[] — the one shipped occurrence today is
+# shipped.json's filesystem recipe ("${DATA_DIR}/agent-workspace"),
+# substituted by expandDataDir in core/rpc/views/tools/impl.go at
+# install-config-resolution time, not inside ToServerSpec.
+config_options[].default[]|func expandDataDir
+
+# env_keys[].display — spec.md §9's "two paths the earlier spec did not
+# enumerate": no registry.json entry carries a "${...}" token in
+# env_keys[].display today (the two examples the spec cited,
+# KAMEAS_QUICKBOOKS_* and KAMEAS_RIPPLING_*, were removed by an earlier
+# unit's copy fix), so this path currently has no discovered tokens and
+# needs no manifest entry. If a future recipe reintroduces one, the gate
+# will fail on the missing entry rather than silently accepting it —
+# that is the point of deriving the input set instead of declaring it.

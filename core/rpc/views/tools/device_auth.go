@@ -83,6 +83,15 @@ func (a *API) BeginDeviceAuth(ctx context.Context, id string) (DeviceAuthBeginRe
 	if recipe.Auth == nil || recipe.Auth.Kind != recipes.AuthKindMCPOAuth {
 		return DeviceAuthBeginResult{}, fmt.Errorf("tools: recipe %q is not an OAuth recipe", id)
 	}
+	// connector-lifecycle-truth-01PMZ303 UNIT-5 (MO-13): the doc above this
+	// function has always asserted PrimaryAuth == "device_code" as a
+	// precondition, but the body never checked it — only Auth.Kind, which
+	// PKCE/DCR/oauth-arm recipes share too. Enforce the doc's own contract:
+	// a recipe using this entry point must actually declare the device-code
+	// arm, or it hits the wrong flow silently.
+	if recipe.PrimaryAuth != recipes.PrimaryAuthDeviceCode {
+		return DeviceAuthBeginResult{}, fmt.Errorf("tools: recipe %q declares primary_auth=%q, not %q — BeginDeviceAuth is not its sign-in entry point", id, recipe.PrimaryAuth, recipes.PrimaryAuthDeviceCode)
+	}
 	// Same ${VAR} substitution seam as SignInRecipe (FR-003). No shipped
 	// device_code recipe carries a placeholder today — github's is a real
 	// baked id — so this currently changes no observable behaviour, but it
@@ -94,6 +103,20 @@ func (a *API) BeginDeviceAuth(ctx context.Context, id string) (DeviceAuthBeginRe
 	}
 	if clientID == "" {
 		return DeviceAuthBeginResult{}, fmt.Errorf("tools: recipe %q has no OAuth client_id configured", id)
+	}
+	// oauth.GitHubDeviceConfig hardcodes GitHub's device-authorization and
+	// token endpoints (device.go:313-320). Of today's 7 device_code
+	// recipes, only github ships an Auth block (spec.md §1.10 MO-13's own
+	// measurement) — but nothing before this guard stopped a future
+	// non-GitHub device_code recipe (outlook/onedrive/teams/sharepoint/
+	// excel/okta, per the finding) from having its client_id POSTed to
+	// GitHub's endpoints instead of its own provider's. Until this package
+	// carries a per-recipe device-authorization endpoint (a real feature,
+	// not a one-line fix — deliberately not invented here), fail closed
+	// for any device_code recipe that is not actually GitHub rather than
+	// silently sending its credentials to the wrong host.
+	if id != "github" {
+		return DeviceAuthBeginResult{}, fmt.Errorf("tools: recipe %q declares the device-code flow but only github's device-authorization endpoints are wired today — BeginDeviceAuth refuses to send its client_id to GitHub's endpoints on its behalf", id)
 	}
 
 	cfg := oauth.GitHubDeviceConfig(clientID, recipe.Auth.Scopes, nil)

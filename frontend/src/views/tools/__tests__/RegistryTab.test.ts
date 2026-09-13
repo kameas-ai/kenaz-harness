@@ -51,6 +51,7 @@ function makeListing(
     enabled: false,
     keysPresent: false,
     status: makeStatus(recipe.id),
+    source: 'registry',
     ...overrides,
   };
 }

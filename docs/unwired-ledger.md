@@ -39,8 +39,10 @@ shipped product boundary, not unwired code. Read that doc before flagging
 | I11 | `check-builtin-tool-registration.sh` | `i11-unregistered-builtin-tools.txt` | builtin tool package no wiring site imports — **added 2026-08-14** |
 | I12 | `check-single-move-writer.sh` | *(none — no allowlist by design)* | second writer of transcript-move metadata, or a seam with 0 / >1 production callers — **added 2026-08-14** |
 | I13 | `check-cedar-gate-arguments.sh` | `i13-cedar-gate-arguments.txt` | a `cedar.Gate` argument or view-`Config` field that resolves to an unconditional permit — **added 2026-08-16, empty** |
-| I14 | `check-broker-topic-consumers.sh` | `i14-unconsumed-broker-topics.txt` | A const under `core/**` whose **identifier contains `Topic`** and whose value is a broker topic, with no frontend subscriber, no Go subscriber, and no `passthroughTopics` entry — **added 2026-08-18; one entry (`mcp:progress`)**. Multi-pass (Go + frontend), same discipline as `check-output-ports.sh`. Wired into `pr.yml`. See "Declined gate" below for why this shipped instead of the gate `docs/dead-code-audit-2026-08-16.md` §5 originally asked for, and the allowlist header for why "contains" rather than "starts with" is the whole gate. |
+| I14 | `check-broker-topic-consumers.sh` | `i14-unconsumed-broker-topics.txt` | A const under `core/**` whose **identifier contains `Topic`** and whose value is a broker topic, with no frontend subscriber, no Go subscriber, and no `passthroughTopics` entry — **added 2026-08-18; one entry (`mcp:progress`)**. Multi-pass (Go + frontend), same discipline as `check-output-ports.sh`. Wired into `pr.yml`. See "Declined gate" below for why this shipped instead of the gate `docs/dead-code-audit-2026-08-16.md` §5 originally asked for, and the allowlist header for why "contains" rather than "starts with" is the whole gate. **G-0 correction (connector-lifecycle-truth-01PMZ303 spec.md §1.12 R-6, landed with UNIT-8):** the gate used to pass vacuously on a topic whose only "consumer" was its own declaring file's `Subscribe` call (exactly `mcp:health-changed`'s pre-UNIT-8 shape — `views/mcp/impl.go:240` both declared `TopicMCPHealthChanged` and subscribed to it, with no publisher and no real reader). The gate now explicitly excludes a Go subscriber in the SAME file as the const's declaration, and additionally requires a real `.Publish*(` call site — see the script's own R-6 citation and `TestGates_PlantedViolationFires/broker-topic-consumers/self-subscribe-only`. |
 | I15 | `check-cedar-engine-singleton.sh` | *(none — no allowlist by design)* | more than one Cedar engine construction (`buildCedarGate`/`buildCedarEngineOrNil` call, or a direct `cedar.NewEngine` call) reachable from `rpc.New` — **added 2026-08-18 (consent-surfaces-truth-01PMTR01 WP05)**. I13 checks the *argument* at a call site; it has no vocabulary for *instance count*, which is why thirteen independent engine constructions (nine `buildCedarGate` + four `buildCedarEngineOrNil`) all passed it clean before the WP05 hoist. Wired into `pr.yml`. |
+| G-1 | `check-transport-parity.sh` | *(none — no allowlist by design)* | a transport tag in `dispatch.Pool.closeOneByTag`'s switch whose case body has no real `.CloseOne(ctx, id)` call — comment-only, empty, or dispatching something else — **added 2026-09-12 (connector-lifecycle-truth-01PMZ303 UNIT-15)**. Hand-scoped to the one production switch this mission found broken (pre-UNIT-6, http/sse's cases were comment-only and fell through to the function's shared tail, then a bare `return nil`); the header states explicitly it is not a general arm-parity gate. Tag set is derived from the switch's own `case` lines, not hardcoded. Wired into `pr.yml`. |
+| G-2 | `check-recipe-token-substitution.sh` | `g2-recipe-substituted-paths.txt` | a `${...}` token in `registry.json`/`shipped.json` on a JSON path with no declared, still-matching production `Substitute*` call site — **added 2026-09-12 (connector-lifecycle-truth-01PMZ303 UNIT-15)**. Path set is derived from the catalogs each run (a path with no token today needs no manifest entry); a manifest entry whose grep pattern stops matching also fails, so the manifest cannot degrade into an opt-out list. Measured clean today over 7 discovered paths. Wired into `pr.yml`. |
 
 Non-allowlist gates that also protect against unwired code:
 `check-output-ports.sh` (output port with no reader),
@@ -3848,6 +3850,166 @@ but did not fix (both predate this mission and are cross-cutting to
    change to `fleet-config-pull-01NDFSEX10`, not an `01NORGX01` patch.
    Owner: unassigned. Blocker: same as #1 — both are `ConfigPoller`/
    `config_pull.go` architecture, not this mission's surface.
+### 2026-09-12 (connector-lifecycle-truth-01PMZ303 UNIT-3/UNIT-4) — E-006: the `oauth` primary_auth arm (Slack + 5 others) has no working sign-in path, and nine Slack-specific symbols are dead until it is resolved
+
+`core/rpc/views/tools/oauth.go`'s `SignInRecipe` fails closed
+unconditionally for every recipe whose `primary_auth == "oauth"` (6
+recipes: slack, zapier, make, pipedream, google-calendar, google-drive),
+citing `E-006` in the returned error string. This is deliberate and
+correct as shipped — none of the six is dynamically-registerable
+(`browser_oauth_dcr`), ships a pre-registered client id
+(`browser_oauth_pkce`), or has a device-code flow — but it leaves real
+dead code behind it:
+
+- `core/mcp/oauth/slack_signin.go`'s nine exported symbols
+  (`SlackSignIn`, `SlackSignInWithDiscovery`, `ResolveSlackClientID`,
+  `SlackSignInConfig`, `SlackAuthorizationEndpoint`, `SlackTokenEndpoint`,
+  `SlackClientIDEnvVar`, `SlackDefaultScopes`, `ErrSlackNoClientID`) have
+  zero production callers. They drag `SlackLoopbackPort`
+  (`loopback.go:32`) and `InteractiveConfig.FixedPort` (`loopback.go:60`)
+  with them — `FixedPort` has no non-Slack, non-test setter.
+- Two dead branches live inside this dead code
+  (`slack_signin.go`'s `SlackSignInWithDiscovery`, MO-06): `:192`
+  returns unconditionally on `err != nil` so the `errors.Is(err,
+  ErrNoChallenge)` fallback a few lines later is unreachable, and
+  `scopes` is already defaulted earlier in the function so the
+  `len(scopes) == 0` branch is a second dead branch in the same
+  function. Both are unreachable regardless of whether the Slack lane
+  is ever wired, but fixing them has zero behavioural value while
+  nothing calls the function they live in — they would need re-review
+  the moment E-006 is resolved anyway, since resolving it means writing
+  (or rewriting) this function's real control flow.
+
+The user-visible half of this — `registry.json`'s slack `warning` telling
+the operator to set an environment variable no code reads — did **not**
+wait on E-006 and is fixed (UNIT-4, this release): the copy now states
+the real limitation and points at the working `slack-tokens` stdio
+fallback, with `warning_severity: "danger"` so it renders as the hard
+blocker it is.
+
+- **Blocker:** whether Slack (and the other 5 `oauth`-arm recipes) moves
+  to a real sign-in path is a product call, not a technical one.
+  `slack_signin.go:22–24`'s own TODO anticipates moving Slack to a baked
+  client id, which would reclassify it as `browser_oauth_pkce` under
+  UNIT-2's bring-your-own posture — that decision (register a real app
+  vs. rely entirely on the BYO posture vs. leave slack-tokens as the only
+  supported path) has not been made.
+- **Owner / deleting change:** alec. Deletes (or rather, resolves) when
+  either (a) a product decision routes the `oauth` arm's recipes to one
+  of the five working arms and this unit's dead Slack symbols get real
+  callers (fixing MO-06 in the same commit, since it would no longer be
+  dead-code-inside-dead-code), or (b) the product decides `oauth`-arm
+  recipes are permanently `keys`/stdio-fallback-only, in which case the
+  nine Slack symbols, `SlackLoopbackPort`, and `InteractiveConfig.FixedPort`
+  become deletable under a documented product retirement (not today's A-0
+  freeze).
+
+### 2026-09-12 (connector-lifecycle-truth-01PMZ303 UNIT-5) — three MO-* OAuth findings justified rather than wired
+
+Three of the sixteen OAuth-cluster findings the 2026-08-18 closing sweep
+assigned to this mission (`spec.md` §1.10) were reviewed this pass and
+found to need either a real per-call clock-injection design or a real
+multi-scheme-header design — neither of which is a one-line wire, and
+inventing one un-reviewed risks landing wrong. MO-07, MO-09, MO-12 and
+MO-13 were wired or pinned by test this same session (see git log —
+`fix(mcp): UNIT-5 (MO-07, MO-09)`, `test(mcp): UNIT-5 (MO-12)`, `fix(mcp):
+UNIT-5 (MO-13)`); the doc naming `LoadedClient` (a type that does not
+exist in the repo) was already corrected by an earlier UNIT-3 commit and
+needed no further action this pass.
+
+- **MO-05** — `ResolveClientIDConfig.Now` (`resolve.go:71-72`) is derived
+  into a local `nowFn` (`:97-99`) that is never invoked; the DCR expiry
+  check that actually runs uses `DCRStore`'s own `s.nowFn` (fixed to
+  `time.Now` at `NewDCRStore` construction, `dcr_store.go:105`, with no
+  setter). Wiring `cfg.Now` to mean anything would require either a
+  per-call clock override on a shared, potentially concurrently-used
+  `*DCRStore` (a real race-safety design question — CI runs `-race`) or a
+  second `DCRStore` constructed per call (defeats the point of the
+  cross-launch cache UNIT-3 3e just wired). No test anywhere sets
+  `cfg.Now` today, including in this package's own test suite, so this is
+  a genuinely orphaned seam, not a live regression risk.
+  - **Blocker:** needs a design decision on whether `DCRStore`'s clock
+    should be mutable per-call (and if so, how that interacts with
+    concurrent `Resolve` calls sharing one store) or whether this field
+    should be retired in favour of constructing a test-only `DCRStore`
+    with a custom `nowFn` directly (which every existing DCR expiry test
+    already does, bypassing this field entirely).
+  - **Owner:** alec.
+
+- **MO-08** — `StoredCredential.AuthorizationHeader` (`store.go`)
+  hardcodes `"Bearer "` under a doc saying `TokenType` defaults to Bearer
+  when unset; `TokenType` is written on every mint path and read nowhere.
+  This has a **live caller** (`core/rpc/views/tools/oauth.go`'s bearer
+  injection at spawn), so a DPoP/MAC-authenticating MCP provider would
+  401 with no diagnostic naming the real cause. No recipe in either
+  catalog uses a non-Bearer scheme today (measured: zero `token_type`
+  overrides anywhere in `registry.json`/`shipped.json`), so this is
+  latent, not field-proven.
+  - **Blocker:** wiring `TokenType` into the header format is a real
+    per-scheme change (Bearer vs. DPoP have different header shapes —
+    DPoP requires a proof-of-possession JWT, not just a different
+    keyword), not a one-line format-string edit, and there is no
+    DPoP/MAC provider in either catalog to test against without
+    inventing one.
+  - **Owner:** alec.
+
+- **`FromDCR`** (`resolve.go:49`, written at `:117`/`:150`) — its doc says
+  *"so callers can track the source for debugging"*; nothing logs or
+  emits it today. Read only in tests.
+  - **Blocker:** none technical — this is the cheapest of the three to
+    close (thread it into the existing `mcp.recipe.*` structured log
+    lines `SignInRecipe`/`ResolveClientID` already emit) but doing so
+    without a concrete downstream consumer (a log line nobody greps for
+    is a different flavor of the same "recorded, unread" defect this
+    mission is about) needs a decision on whether debug-level
+    provenance logging is worth the extra field on every log call, or
+    whether `FromDCR`'s job is fully discharged by
+    `ClientIDResult.FromDCR`'s existing test coverage of the resolution
+    order itself.
+  - **Owner:** alec.
+
+### 2026-09-12 (connector-lifecycle-truth-01PMZ303 UNIT-12) — http/sse `Spec.InitTimeout` has no request to gate
+
+`core/mcp/transport/http/connection.go:52` and
+`core/mcp/transport/sse/connection.go:71` declare `InitTimeout` with a doc
+promising it is *"the response deadline once initialize is on the wire"*.
+UNIT-12 wired the stdio half of this finding (`InitTimeoutMs`/
+`PingPeriodMs` now reach `stdio.SpawnSpec` from the recipe, overriding the
+pool-wide default — see git log) but deliberately did not touch http/sse,
+because the premise the doc and the original spec finding both share —
+"the deadline is assigned but not read" — undersells what is actually
+there: **`http.Connection.Open` (and sse's equivalent) performs zero
+network I/O.** There is no `initialize` JSON-RPC round-trip anywhere in
+either transport package at the `Connection` level; `Open` only parses
+and validates the URL, builds header templates, and sets up the HTTP
+client. `MethodInitialize` is dispatched exactly once in the whole
+`core/mcp` tree, from `stdio/server.go:465` — http and sse never send it.
+
+This means `InitTimeout` cannot be "wired" by adding a read of the field
+inside `Open`, because there is no request there to put a deadline
+around. The honest fix is a real design question: either (a) http/sse
+gain an actual stateful handshake step (a real feature — these
+transports may be intentionally stateless-per-POST, matching how MCP
+supports HTTP-transport servers that answer each JSON-RPC call
+independently with no session concept, in which case "the response
+deadline once initialize is on the wire" describes a step these
+transports never perform by design), or (b) `InitTimeout` is repurposed
+to gate the *first* real network call each transport does perform (the
+first `tools/list`, or the health probe's first tick), which changes its
+semantics from what its doc currently claims.
+
+- **Blocker:** whether http/sse are meant to have a stateful handshake at
+  all is a product/protocol-conformance call, not a technical one — it
+  determines whether this is "wire a missing feature" or "the doc
+  describes a step that doesn't apply to this transport shape, narrow
+  it." Either answer closes this differently.
+- **Owner:** alec. Deletes (or resolves) when either a handshake step is
+  added to `http.Connection`/`sse.Connection` and `InitTimeout` gates its
+  response, or the doc on both `Spec.InitTimeout` fields is narrowed to
+  say explicitly that no handshake exists for these transports and the
+  field is retired under a documented protocol-conformance decision
+  (not today's A-0 freeze, since that requires a product ruling this
+  session did not have).
 
 ## Drained
 
