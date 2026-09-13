@@ -249,6 +249,32 @@ jobs:
         # SavePolicy + ReloadPolicies' reach to that gate.
         run: bash scripts/ci/check-cedar-engine-singleton.sh
 
+      - name: shipped-policy-matchable guard (G-4, WP18)
+        # trust-surfaces-that-fire-01PMZ202 spec.md §G-4 / WP18. The gate
+        # that would have caught F24: filesystem-full-recommended.cedar
+        # shipped, was offered by name in the recipe-install UI, and told
+        # the user its forbid rules protect SSH keys / AWS creds / .git
+        # internals — while every rule was unmatchable for three
+        # independent reasons at once (wrong action name, wrong resource
+        # entity type, an unpopulated context key). For every rule in
+        # every core/policy/cedar/policies/*.cedar file, checks (a) the
+        # action has a real .Evaluate(-calling evaluator, (b) a production
+        # UID builder reachable from that evaluator emits the declared
+        # resource type, (c) that evaluator populates every context key
+        # the rule's when/unless clause reads — using the real cedar-go
+        # parser (not a hand-rolled regex .cedar parser) and function-
+        # level Go-source granularity (file-level would have missed F24:
+        # hooks.go is one file containing two dozen unrelated
+        # action/resource/context triples). Allowlist
+        # (scripts/ci/allowlists/i-shipped-policy-matchable.txt) is
+        # deliberately minimal — see that file's header and
+        # scripts/ci/cmd/checkpolicymatch/main.go's header for why an
+        # unmatchable SHIPPED policy does not get casual allowlist
+        # treatment, and for the one real, already-investigated
+        # pre-existing gap (default_acp_policy.cedar's acp_receive rules)
+        # it is seeded with.
+        run: bash scripts/ci/check-shipped-policy-matchable.sh
+
       - name: no-cred-bytes-in-rpc guard
         # Credential hygiene. CLAUDE.md lists this under "Local dev
         # commands" as though it were enforced; it was running only when a

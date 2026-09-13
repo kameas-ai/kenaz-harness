@@ -3256,3 +3256,88 @@ func zzGateProbeWireDeadClosure(reg *zzGateProbeDeadClosureRegistry, run *Runner
 			"failing for an unrelated reason.\noutput:\n%s", gate, out)
 	}
 }
+
+// TestShippedPolicyMatchableGate_PlantedContextMismatchFires is the
+// mandated planted-violation proof for check-shipped-policy-matchable.sh
+// (G-4, trust-surfaces-that-fire-01PMZ202 spec.md §G-4 / WP18): "add a
+// rule keyed on a context attribute the action never populates."
+//
+// Plants a new .cedar file naming a REAL, already-wired action
+// (memory_write / ActionMemoryWrite) and its correct resource type
+// (Memory, matching cedar.MemoryUID) — so legs (a) and (b) both pass —
+// but with a `when` clause reading a context key CheckMemoryWrite
+// (core/policy/cedar/hooks.go) never sets: CheckMemoryWrite calls
+// `g.Evaluate(ctx, UserUID(), ActionMemoryWrite, MemoryUID(scope), nil)`
+// — a literal nil context map, zero keys, ever. This isolates leg (c)
+// specifically, the exact shape the spec's own planted-violation
+// description names.
+func TestShippedPolicyMatchableGate_PlantedContextMismatchFires(t *testing.T) {
+	root := repoRoot(t)
+
+	t.Run("shipped-policy-matchable/context-attribute-never-populated", func(t *testing.T) {
+		probePath := filepath.Join(root, "core", "policy", "cedar", "policies", "zz_gate_probe.cedar")
+		content := `// zz_gate_probe.cedar — planted by
+// TestShippedPolicyMatchableGate_PlantedContextMismatchFires. Action and
+// resource type are both REAL and correctly matched (memory_write /
+// Memory, mirroring default_policy.cedar's own memory_write rule) so
+// legs (a) and (b) pass — only the when-clause's context key is bogus,
+// isolating leg (c).
+forbid (
+    principal == User::"local",
+    action == Action::"memory_write",
+    resource is Memory
+) when {
+    context.zz_gate_probe_key == "x"
+};
+`
+		cleanup := plant(t, probePath, content, "")
+		defer cleanup()
+
+		code, out := runGate(t, "check-shipped-policy-matchable.sh", root)
+		if code == 0 {
+			t.Fatalf("check-shipped-policy-matchable.sh exited 0 with a planted rule reading "+
+				"context.zz_gate_probe_key for memory_write, which CheckMemoryWrite never "+
+				"populates (it passes a literal nil context map) — the gate cannot fail.\n"+
+				"output:\n%s", out)
+		}
+		if !strings.Contains(out, "zz_gate_probe_key") {
+			t.Fatalf("gate failed, but its output does not mention zz_gate_probe_key "+
+				"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+		}
+	})
+
+	// Negative control: the identical rule shape (same action, same
+	// resource type), but with a context key CheckMemoryWrite's sibling
+	// evaluators are known to populate for a DIFFERENT, correctly-matched
+	// action/resource/context triple — read_filesystem's canonical_path.
+	// This does NOT prove read_filesystem's OWN rules are fine (they
+	// already are, per the real tree); it proves THIS gate does not fire
+	// on every planted .cedar file unconditionally by using the exact
+	// action/resource/context triple this gate independently verifies is
+	// wired.
+	t.Run("well-formed-rule-does-not-fire", func(t *testing.T) {
+		probePath := filepath.Join(root, "core", "policy", "cedar", "policies", "zz_gate_probe_healthy.cedar")
+		content := `// zz_gate_probe_healthy.cedar — negative control for
+// TestShippedPolicyMatchableGate_PlantedContextMismatchFires. Same shape
+// as the real, already-matchable filesystem-full-recommended.cedar
+// rules: read_filesystem / FilesystemOp / context.canonical_path.
+forbid (
+    principal == User::"local",
+    action == Action::"read_filesystem",
+    resource is FilesystemOp
+) when {
+    context.canonical_path like "*/zz-gate-probe/*"
+};
+`
+		cleanup := plant(t, probePath, content, "")
+		defer cleanup()
+
+		code, out := runGate(t, "check-shipped-policy-matchable.sh", root)
+		if code != 0 {
+			t.Fatalf("check-shipped-policy-matchable.sh flagged a well-formed rule using the "+
+				"exact action/resource-type/context-key triple its own evaluator (core/tools/fs/"+
+				"gate.go) is known to produce — the gate fires unconditionally on any planted "+
+				".cedar file, not just unmatchable ones.\noutput:\n%s", out)
+		}
+	})
+}
