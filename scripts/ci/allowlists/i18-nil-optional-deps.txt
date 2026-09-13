@@ -119,10 +119,17 @@ core/tools/monitor/tool.go:160: Options.Offsets (OffsetStore) is documented opti
 # wire Offsets and delete this line in the same change, or explicitly
 # defer it again with a new date.
 
-core/tools/subagentdispatch/tool.go:177: Options.Tasks (TasksRegistry) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
+core/tools/subagentdispatch/tool.go:179: Options.Tasks (TasksRegistry) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
 # 2026-09-10 — already deliberately unwired; the field's own doc comment
 # (tool.go:163-176) records why: UNIT-6 of subagent-control-and-
 # background-tasks-01PMZB11 moved task registration to the RunSpawner
+# Line renumbered 177->179 by automation-actually-runs-01PMZ404 UNIT-17,
+# 2026-09-12: a wiring:deferred(...) directive was added two lines above
+# the TasksRegistry interface declaration itself (a SEPARATE interface,
+# not this Options.Tasks field) for check-seam-implementers.sh's G-1a
+# widening — that comment shifted every line below it in the same file,
+# including this field. No change in the underlying fact this line
+# records: Options.Tasks is still deliberately unwired, same reason.
 # path (core/rpc/subagent_run_spawner.go), and wiring Tasks here too
 # would create a second, competing registration per dispatched sub-agent.
 # Blocker: named in the field's own comment — a future Cancel path that

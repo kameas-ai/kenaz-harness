@@ -16,7 +16,8 @@
  *     returns the full transcript. WP10 will swap to broker-driven
  *     progress once a real model_turn dispatcher is wired.
  */
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import { useServedMode } from '@/lib/useServedMode';
 import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
@@ -38,6 +39,8 @@ import {
   type WorkflowsRunResult,
   type WorkflowsSaveOutput,
   type WorkflowsCatalogEntry,
+  type WorkflowsArtifactOption,
+  type WorkflowsProjectOption,
 } from '@/lib/workflowsClient';
 import {
   createScheduledChatClient,
@@ -109,8 +112,48 @@ async function selectWorkflow(id: string) {
       seeded[inp.name] = inp.default ?? '';
     }
     inputs.value = seeded;
+    await loadPickerOptionsIfNeeded(w);
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : String(err);
+  }
+}
+
+// automation-actually-runs-01PMZ404 UNIT-14 (A-11): the four input
+// pickers. artifact_ref / project_ref need their option lists fetched
+// once per workflow selection (lazily — most workflows use neither);
+// `file` opens the OS-native picker on demand and needs no preloaded
+// list. `enum`'s options already ride on the wire (inp.options).
+const artifactOptions = ref<WorkflowsArtifactOption[]>([]);
+const projectOptions = ref<WorkflowsProjectOption[]>([]);
+const pickerLoadError = ref<string | null>(null);
+const filePicking = ref<Record<string, boolean>>({});
+
+async function loadPickerOptionsIfNeeded(w: WorkflowsWorkflow) {
+  const kinds = new Set((w.inputs ?? []).map((inp) => inp.kind));
+  pickerLoadError.value = null;
+  try {
+    if (kinds.has('artifact_ref')) {
+      artifactOptions.value = await client.listArtifactOptions();
+    }
+    if (kinds.has('project_ref')) {
+      projectOptions.value = await client.listProjectOptions();
+    }
+  } catch (err) {
+    pickerLoadError.value = err instanceof Error ? err.message : String(err);
+  }
+}
+
+async function pickFileForInput(name: string) {
+  filePicking.value = { ...filePicking.value, [name]: true };
+  try {
+    const path = await client.pickFile();
+    if (path) {
+      inputs.value = { ...inputs.value, [name]: path };
+    }
+  } catch (err) {
+    pickerLoadError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    filePicking.value = { ...filePicking.value, [name]: false };
   }
 }
 
@@ -386,6 +429,45 @@ function statusClass(s: string): string {
 }
 
 onMounted(loadCatalog);
+
+// automation-actually-runs-01PMZ404 UNIT-11: WorkflowsView previously
+// never imported useRoute or inspected the query string, so
+// WorkflowRunsSection's `?run=<id>` deep-link (the sidebar's "Workflow
+// Runs" panel) went nowhere — its own comment called it "just a
+// hash-style hint and harmless if ignored." focusRunId below closes
+// that: it switches to the Runs tab and forwards the id to
+// RunsHistoryTab, which expands and scrolls to it.
+const route = (() => {
+  // Defensive, mirroring WorkflowRunsSection.vue's useRouter() guard:
+  // useRoute() throws when there's no active router (every existing
+  // WorkflowsView.spec.ts mount predates this unit and installs none).
+  try {
+    return useRoute();
+  } catch {
+    return null;
+  }
+})();
+
+const focusRunId = ref<string | null>(null);
+
+function applyRunQuery() {
+  const raw = route?.query?.run;
+  const id = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof id === 'string' && id.length > 0) {
+    activeTab.value = 'Runs';
+    focusRunId.value = id;
+  }
+}
+
+// Both orders per AC-012: query present at mount, and navigation to a
+// new ?run=<id> after mount (the sidebar panel is always visible via
+// LeftRail, so a click while already on /workflows only changes the
+// query — Vue Router does not remount the view for a query-only change
+// on the same route).
+onMounted(applyRunQuery);
+if (route) {
+  watch(() => route.query.run, applyRunQuery);
+}
 </script>
 
 <template>
@@ -438,7 +520,7 @@ onMounted(loadCatalog);
 
       <!-- Runs tab (01NBUG04 — execution history + scheduled subsection) -->
       <template v-else-if="activeTab === 'Runs'">
-        <RunsHistoryTab :client="client" :chat-client="chatClient" />
+        <RunsHistoryTab :client="client" :chat-client="chatClient" :focus-run-id="focusRunId" />
       </template>
 
       <!-- Library tab (existing content) -->
@@ -655,13 +737,91 @@ onMounted(loadCatalog);
                   >*</span
                 >
               </label>
+              <!--
+                automation-actually-runs-01PMZ404 UNIT-14 (A-11): each
+                of the six declared InputKind values gets a control
+                that can only produce a value the workflow accepts —
+                a free-text box where an enum/file/artifact_ref/
+                project_ref was declared let a user submit a value the
+                workflow cannot handle. schema.go's InputKind ↔ this
+                v-if/v-else-if chain is G-2's seed case.
+              -->
               <textarea
                 v-if="inp.kind === 'multiline'"
                 :id="`workflow-input-${inp.name}`"
                 v-model="inputs[inp.name]"
                 rows="3"
                 class="w-full rounded-sm border border-border-muted bg-surface-2 px-2 py-1 font-mono text-sm text-ink"
+                :data-testid="`workflow-input-${inp.name}`"
               />
+              <select
+                v-else-if="inp.kind === 'enum'"
+                :id="`workflow-input-${inp.name}`"
+                v-model="inputs[inp.name]"
+                class="w-full rounded-sm border border-border-muted bg-surface-2 px-2 py-1 font-mono text-sm text-ink"
+                :data-testid="`workflow-input-${inp.name}`"
+              >
+                <option
+                  v-for="opt in inp.options ?? []"
+                  :key="opt"
+                  :value="opt"
+                >
+                  {{ opt }}
+                </option>
+              </select>
+              <div
+                v-else-if="inp.kind === 'file'"
+                class="flex items-center gap-2"
+              >
+                <span
+                  class="flex-1 truncate rounded-sm border border-border-muted bg-surface-2 px-2 py-1 font-mono text-sm"
+                  :class="inputs[inp.name] ? 'text-ink' : 'text-ink-subtle'"
+                  :data-testid="`workflow-input-${inp.name}`"
+                >
+                  {{ inputs[inp.name] || 'No file selected' }}
+                </span>
+                <button
+                  type="button"
+                  class="rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-xs text-ink hover:bg-surface-2"
+                  :data-testid="`workflow-input-${inp.name}-pick`"
+                  :disabled="filePicking[inp.name]"
+                  @click="pickFileForInput(inp.name)"
+                >
+                  {{ filePicking[inp.name] ? 'Picking…' : 'Choose file' }}
+                </button>
+              </div>
+              <select
+                v-else-if="inp.kind === 'artifact_ref'"
+                :id="`workflow-input-${inp.name}`"
+                v-model="inputs[inp.name]"
+                class="w-full rounded-sm border border-border-muted bg-surface-2 px-2 py-1 font-mono text-sm text-ink"
+                :data-testid="`workflow-input-${inp.name}`"
+              >
+                <option value="">Select an artifact…</option>
+                <option
+                  v-for="opt in artifactOptions"
+                  :key="opt.id"
+                  :value="opt.id"
+                >
+                  {{ opt.title || opt.id }}
+                </option>
+              </select>
+              <select
+                v-else-if="inp.kind === 'project_ref'"
+                :id="`workflow-input-${inp.name}`"
+                v-model="inputs[inp.name]"
+                class="w-full rounded-sm border border-border-muted bg-surface-2 px-2 py-1 font-mono text-sm text-ink"
+                :data-testid="`workflow-input-${inp.name}`"
+              >
+                <option value="">Select a project…</option>
+                <option
+                  v-for="opt in projectOptions"
+                  :key="opt.id"
+                  :value="opt.id"
+                >
+                  {{ opt.name || opt.id }}
+                </option>
+              </select>
               <input
                 v-else
                 :id="`workflow-input-${inp.name}`"
@@ -671,6 +831,13 @@ onMounted(loadCatalog);
                 :data-testid="`workflow-input-${inp.name}`"
               />
             </div>
+          </div>
+          <div
+            v-if="pickerLoadError"
+            class="font-ui text-xs text-signal-danger"
+            data-testid="workflows-picker-load-error"
+          >
+            {{ pickerLoadError }}
           </div>
 
           <div class="flex items-center gap-2">

@@ -1,5 +1,6 @@
 // Command checkseams is the Go half of scripts/ci/check-seam-implementers.sh
-// (wiring-integrity-01PMAG04 WP06, spec §3.2 item 4).
+// (wiring-integrity-01PMAG04 WP06, spec §3.2 item 4; widened by
+// automation-actually-runs-01PMZ404 UNIT-17, G-1a).
 //
 // It answers a question grep cannot answer reliably: "does any
 // non-test type in this module implement interface X?" Go has no
@@ -8,15 +9,30 @@
 // matching. golang.org/x/tools/go/packages (already a module
 // dependency via core/secrets/lint) gives us that for free.
 //
-// For every interface declared in core/agentgraph/seams.go, checkseams
-// loads every package under ./core/... , and reports the interface as
-// "implemented" if any named, non-test type's method set satisfies it
-// (by value or by pointer — most seam implementers here use pointer
-// receivers). An interface with zero implementers is reported as a
-// violation UNLESS its declaration carries a //wiring:deferred(<reason>)
-// directive on the line immediately above the `type X interface {`
-// line (the same directive scripts/ci/check-output-ports.sh consults —
-// see docs/wiring-audit.md).
+// Two independent sources feed the same implementer check:
+//
+//  1. Every interface declared in core/agentgraph/seams.go (the
+//     original, hand-curated input set).
+//  2. G-1a (DERIVED, UNIT-17): every exported interface declared under
+//     core/ that is the type of an exported field on an exported
+//     struct whose name ends in "Config", "Options" or "Deps" —
+//     automation-actually-runs-01PMZ404's finding was that
+//     ArtifactsReadWriter, ToolCaller, NetworkAuthorizer, AuditEmitter,
+//     slashcmd.ToolDispatcher, catalog.RecipeRegistry and
+//     wfsched.Dispatcher all sat unimplemented on corewf.Deps /
+//     similar structs for a release cycle with nothing watching them,
+//     because #1's input set was scoped to one file in one package.
+//     This source is DERIVED from the struct declarations themselves,
+//     not an allowlist — a brand-new *Config/*Options/*Deps struct
+//     anywhere under core/ is in scope automatically, with no edit to
+//     this file.
+//
+// An interface with zero implementers (by value or by pointer — most
+// seam implementers here use pointer receivers) is reported as a
+// violation UNLESS its own declaration carries a //wiring:deferred
+// (<reason>) directive on the line immediately above its `type X
+// interface {` line (the same directive scripts/ci/check-output-
+// ports.sh consults — see docs/wiring-audit.md).
 package main
 
 import (
@@ -91,12 +107,33 @@ func run() error {
 		return fmt.Errorf("found zero interfaces in seams.go — check the file path match, this is almost certainly a bug in checkseams, not an empty seams.go")
 	}
 
+	// G-1a (UNIT-17): derive a second input set from every exported
+	// *Config/*Options/*Deps struct field under core/, and merge it
+	// with the hand-curated seams.go set. Dedup by the interface's
+	// fully-qualified type (package path + name) so an interface that
+	// happens to satisfy both sources (declared in seams.go AND used on
+	// a *Deps struct) isn't reported twice.
+	decls := allInterfaceDecls(pkgs)
+	derived := derivedInterfaces(pkgs, decls)
+	seen := make(map[string]bool, len(seamInterfaces))
+	for _, si := range seamInterfaces {
+		seen[si.qualifiedName] = true
+	}
+	allInterfaces := seamInterfaces
+	for _, di := range derived {
+		if seen[di.qualifiedName] {
+			continue
+		}
+		seen[di.qualifiedName] = true
+		allInterfaces = append(allInterfaces, di)
+	}
+
 	// Collect every named, non-test type across every loaded package
 	// (structs mostly, but any named type with a method set counts).
 	candidates := collectCandidateTypes(pkgs)
 
 	var violations []string
-	for _, si := range seamInterfaces {
+	for _, si := range allInterfaces {
 		implemented := false
 		for _, c := range candidates {
 			if types.Implements(c, si.iface) || types.Implements(types.NewPointer(c), si.iface) {
@@ -112,8 +149,8 @@ func run() error {
 			continue
 		}
 		violations = append(violations, fmt.Sprintf(
-			"%s: no non-test type in ./core/... implements this interface, and it carries no //wiring:deferred directive (seams.go:%d)",
-			si.name, si.line))
+			"%s: no non-test type in ./core/... implements this interface, and it carries no //wiring:deferred directive (%s:%d)",
+			si.name, si.file, si.line))
 	}
 
 	if len(violations) > 0 {
@@ -128,13 +165,16 @@ func run() error {
 		os.Exit(2)
 	}
 
-	fmt.Printf("checkseams: clean — %d seam interfaces each have an implementer or a wiring:deferred directive.\n", len(seamInterfaces))
+	fmt.Printf("checkseams: clean — %d seam interfaces (%d from seams.go, %d derived from *Config/*Options/*Deps fields) each have an implementer or a wiring:deferred directive.\n",
+		len(allInterfaces), len(seamInterfaces), len(allInterfaces)-len(seamInterfaces))
 	return nil
 }
 
 type seamInterface struct {
-	name           string
+	name           string // display name, e.g. "ToolCaller" or "workflows.ToolCaller"
+	qualifiedName  string // dedup key: full package path + type name
 	iface          *types.Interface
+	file           string
 	line           int
 	deferred       bool
 	deferredReason string
@@ -179,7 +219,9 @@ func seamsInterfaces(pkg *packages.Package) ([]seamInterface, error) {
 			deferred, reason := checkDirectiveAbove(lines, declLine)
 			out = append(out, seamInterface{
 				name:           ts.Name.Name,
+				qualifiedName:  pkg.PkgPath + "." + ts.Name.Name,
 				iface:          iface,
+				file:           seamsFileSuffix,
 				line:           declLine,
 				deferred:       deferred,
 				deferredReason: reason,
@@ -188,6 +230,174 @@ func seamsInterfaces(pkg *packages.Package) ([]seamInterface, error) {
 		})
 	}
 	return out, nil
+}
+
+// ifaceDecl records where an exported interface type is declared and
+// whether its declaration carries a wiring:deferred directive —
+// looked up once for the whole module (allInterfaceDecls) and reused
+// by derivedInterfaces so a *Config/*Options/*Deps field naming an
+// interface declared elsewhere in core/ inherits that interface's own
+// deferral, not a fabricated one.
+type ifaceDecl struct {
+	qualifiedName  string
+	displayName    string
+	file           string
+	line           int
+	deferred       bool
+	deferredReason string
+}
+
+// hasConfigOptionsDepsSuffix reports whether name ends in one of the
+// three struct-name suffixes G-1a scopes to (spec §8: "exported struct
+// named *Config / *Options / *Deps").
+func hasConfigOptionsDepsSuffix(name string) bool {
+	for _, suffix := range []string{"Config", "Options", "Deps"} {
+		if strings.HasSuffix(name, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// allInterfaceDecls walks every non-test file under core/ and records
+// every exported interface type declaration — its file/line and
+// whether the line immediately above carries a wiring:deferred
+// directive — keyed by fully-qualified name. This is a superset of
+// seams.go's interfaces; derivedInterfaces below intersects it against
+// what *Config/*Options/*Deps structs actually reference.
+func allInterfaceDecls(pkgs []*packages.Package) map[string]ifaceDecl {
+	out := map[string]ifaceDecl{}
+	packages.Visit(pkgs, func(p *packages.Package) bool { return true }, func(p *packages.Package) {
+		if !strings.HasPrefix(p.PkgPath, candidatePkgPrefix) && p.PkgPath != candidatePkgExact {
+			return
+		}
+		fset := p.Fset
+		for _, file := range p.Syntax {
+			pos := fset.Position(file.Pos())
+			if strings.HasSuffix(pos.Filename, "_test.go") {
+				continue
+			}
+			lines := fileLines(pos.Filename)
+			ast.Inspect(file, func(n ast.Node) bool {
+				ts, ok := n.(*ast.TypeSpec)
+				if !ok {
+					return true
+				}
+				if !ts.Name.IsExported() {
+					return true
+				}
+				if _, ok := ts.Type.(*ast.InterfaceType); !ok {
+					return true
+				}
+				obj := p.TypesInfo.Defs[ts.Name]
+				if obj == nil {
+					return true
+				}
+				qname := p.PkgPath + "." + ts.Name.Name
+				declLine := fset.Position(ts.Pos()).Line
+				deferred, reason := checkDirectiveAbove(lines, declLine)
+				out[qname] = ifaceDecl{
+					qualifiedName:  qname,
+					displayName:    p.Types.Name() + "." + ts.Name.Name,
+					file:           filepathToSlash(pos.Filename),
+					line:           declLine,
+					deferred:       deferred,
+					deferredReason: reason,
+				}
+				return true
+			})
+		}
+	})
+	return out
+}
+
+// derivedInterfaces implements G-1a: every exported interface under
+// core/ that is the declared type of an exported field on an exported
+// struct whose name ends in Config/Options/Deps. decls supplies each
+// candidate interface's own declaration site and deferral status
+// (looked up by qualified name), so this function only needs to find
+// the FIELD REFERENCES, not re-derive declaration metadata.
+func derivedInterfaces(pkgs []*packages.Package, decls map[string]ifaceDecl) []seamInterface {
+	var out []seamInterface
+	seenQName := map[string]bool{}
+	packages.Visit(pkgs, func(p *packages.Package) bool { return true }, func(p *packages.Package) {
+		if !strings.HasPrefix(p.PkgPath, candidatePkgPrefix) && p.PkgPath != candidatePkgExact {
+			return
+		}
+		fset := p.Fset
+		for _, file := range p.Syntax {
+			pos := fset.Position(file.Pos())
+			if strings.HasSuffix(pos.Filename, "_test.go") {
+				continue
+			}
+			ast.Inspect(file, func(n ast.Node) bool {
+				ts, ok := n.(*ast.TypeSpec)
+				if !ok {
+					return true
+				}
+				if !ts.Name.IsExported() || !hasConfigOptionsDepsSuffix(ts.Name.Name) {
+					return true
+				}
+				structType, ok := ts.Type.(*ast.StructType)
+				if !ok || structType.Fields == nil {
+					return true
+				}
+				for _, field := range structType.Fields.List {
+					if len(field.Names) == 0 {
+						continue // embedded field — out of scope for this pass
+					}
+					fieldExported := false
+					for _, fn := range field.Names {
+						if fn.IsExported() {
+							fieldExported = true
+						}
+					}
+					if !fieldExported {
+						continue
+					}
+					fieldType := p.TypesInfo.TypeOf(field.Type)
+					if fieldType == nil {
+						continue
+					}
+					named, ok := fieldType.(*types.Named)
+					if !ok {
+						continue
+					}
+					if _, isIface := named.Underlying().(*types.Interface); !isIface {
+						continue
+					}
+					obj := named.Obj()
+					if obj == nil || obj.Pkg() == nil || !obj.Exported() {
+						continue
+					}
+					qname := obj.Pkg().Path() + "." + obj.Name()
+					decl, known := decls[qname]
+					if !known {
+						// Declared outside core/ (or somehow missed by
+						// allInterfaceDecls) — G-1a scopes to interfaces
+						// under core/ only.
+						continue
+					}
+					if seenQName[qname] {
+						continue
+					}
+					seenQName[qname] = true
+					iface, _ := named.Underlying().(*types.Interface)
+					out = append(out, seamInterface{
+						name:           decl.displayName,
+						qualifiedName:  qname,
+						iface:          iface,
+						file:           decl.file,
+						line:           decl.line,
+						deferred:       decl.deferred,
+						deferredReason: decl.deferredReason,
+					})
+				}
+				return true
+			})
+		}
+	})
+	return out
 }
 
 // checkDirectiveAbove looks at the source line immediately preceding

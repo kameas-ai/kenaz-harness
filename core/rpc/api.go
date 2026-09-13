@@ -3091,6 +3091,13 @@ func New(c *core.Core, opts ...Option) *API {
 		}
 		if stack.wrappedPool != nil {
 			wfDeps.ToolDispatcher = &wfToolDispatcherAdapter{pool: stack.wrappedPool, gate: wfGate}
+			// automation-actually-runs-01PMZ404 UNIT-6: Tools (ToolCaller)
+			// was never assigned, so a tool_call step always failed with
+			// "no ToolCaller wired" regardless of the pool's state. Same
+			// pool, same wfToolGate ladder as ToolDispatcher above — one
+			// Cedar/permission/confirm-each path for mcp_call, model_turn
+			// and tool_call alike (spec D-5).
+			wfDeps.Tools = &wfToolCallerAdapter{pool: stack.wrappedPool, gate: wfGate}
 		}
 		// FR-001/FR-002 (01NBUG03): wire DefaultProfileFunc so model_turn steps
 		// resolve the active LLM profile lazily at run time. This avoids the
@@ -3114,6 +3121,13 @@ func New(c *core.Core, opts ...Option) *API {
 		// The ctxFn defers ctx resolution to Notify-call time so construction
 		// before OnStartup is safe.
 		wfDeps.Notifier = &wfNotifierAdapter{ctxFn: a.broker.EmitCtx}
+		// automation-actually-runs-01PMZ404 UNIT-8: Audit (corewf's own
+		// narrow, notify-only AuditEmitter) was never assigned, so a
+		// notify step's EmitNotifySent call was always a silent no-op —
+		// notify is the one workflow step kind that reaches outside the
+		// process and it was the one with no audit trail. a.auditImpl is
+		// the same ring every other bridge in this file writes to.
+		wfDeps.Audit = &wfNotifyAuditBridge{impl: a.auditImpl}
 		// automation-actually-runs-01PMZ404 UNIT-5: read_artifact /
 		// write_artifact steps had no ArtifactsReadWriter — the shipped
 		// doc_generator builtin burns a full model turn and then fails on

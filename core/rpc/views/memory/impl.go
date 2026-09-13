@@ -56,6 +56,8 @@ type Message struct {
 // HookManager satisfies this — the rpc layer reaches into core/agentgraph
 // when it has a live kernel to bind, otherwise the JournalTail surface
 // returns an empty slice.
+//
+// wiring:deferred(newly surfaced by automation-actually-runs-01PMZ404 UNIT-17's G-1a gate widening, 2026-09-12 — zero non-test implementers of JournalSnapshot() anywhere in core/, including agentgraph.HookManager, contrary to this doc comment's claim. A docstring-describes-nothing finding, not just an unwired dep. Pre-existing gap, out of scope for this mission; recorded in docs/unwired-ledger.md, needs its own owner)
 type JournalSource interface {
 	JournalSnapshot() []JournalEntry
 }

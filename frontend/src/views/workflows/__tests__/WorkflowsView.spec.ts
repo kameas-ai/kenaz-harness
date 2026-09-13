@@ -11,7 +11,23 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
+import { reactive, nextTick } from 'vue';
 import WorkflowsView from '../WorkflowsView.vue';
+
+// automation-actually-runs-01PMZ404 UNIT-11: WorkflowsView now calls
+// useRoute() to consume `?run=<id>`. mockRoute is `reactive` (not a
+// plain object) so mutating `.query.run` after a test has already
+// mounted the component triggers the component's `watch(() =>
+// route.query.run, ...)` — exercising the "navigation after mount" leg
+// of AC-012, not just "query present at mount". Every OTHER test in
+// this file mounts with mockRoute.query == {}, matching the pre-UNIT-11
+// behaviour of no query at all.
+const mockRoute = reactive<{ query: Record<string, string | undefined> }>({
+  query: {},
+});
+vi.mock('vue-router', () => ({
+  useRoute: () => mockRoute,
+}));
 
 // ScheduledInbox is NOT stubbed here — the real component mounts fine with
 // the fake client's default scheduleList() → [] stub.  We just verify the
@@ -101,6 +117,7 @@ function fakeClient(seed: Partial<WorkflowsClient> = {}): WorkflowsClient {
 describe('WorkflowsView', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRoute.query = {};
   });
 
   it('renders the catalog and auto-selects the first workflow', async () => {
@@ -423,6 +440,223 @@ describe('WorkflowsView — the canvas editor is reachable', () => {
     expect(wrapper.text()).toContain('cedar denied shell workflow');
     expect(wrapper.find('[data-testid="workflows-editor-slot-canvas"]').exists()).toBe(
       true,
+    );
+  });
+});
+
+/*
+ * UNIT-11 (automation-actually-runs-01PMZ404, AC-012): `?run=<id>` deep-link.
+ *
+ * WorkflowRunsSection.vue's sidebar panel (frontend/src/components/
+ * workflows/WorkflowRunsSection.vue) navigates to `/workflows?run=<id>` on
+ * row click. Before this unit, WorkflowsView never imported useRoute and
+ * never inspected the query string, so the navigation was — per that
+ * component's own prior comment — "just a hash-style hint and harmless if
+ * ignored." These tests drive the query end to end: it must switch to the
+ * Runs tab and select the named run there, in BOTH orders (query present
+ * at mount; query arriving via navigation after mount).
+ */
+describe('WorkflowsView — the ?run=<id> deep-link (UNIT-11)', () => {
+  beforeEach(async () => {
+    mockRoute.query = {};
+    const { __resetWorkflowRunsStoreForTests, ingest } = await import(
+      '@/lib/workflowRunsStore'
+    );
+    __resetWorkflowRunsStoreForTests();
+    ingest({
+      runId: 'run-deeplink-target',
+      workflowId: 'plan_implement_review',
+      workflowName: 'Plan → Implement → Review',
+      phase: 'run_completed',
+      ts: '2026-07-01T10:00:00.000Z',
+    });
+    ingest({
+      runId: 'run-deeplink-other',
+      workflowId: 'plan_implement_review',
+      workflowName: 'Plan → Implement → Review',
+      phase: 'run_completed',
+      ts: '2026-07-01T10:00:05.000Z',
+    });
+  });
+
+  it('query present AT MOUNT switches to Runs and selects that run', async () => {
+    mockRoute.query = { run: 'run-deeplink-target' };
+
+    const wrapper = mount(WorkflowsView, { props: { client: fakeClient() } });
+    await flushPromises();
+    await nextTick();
+
+    // Runs tab is active, not Library.
+    expect(wrapper.find('[data-testid="runs-history-tab"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="workflows-catalog"]').exists()).toBe(false);
+
+    // The target run is expanded; the other run is not.
+    expect(
+      wrapper.find('[data-testid="runs-history-steps-run-deeplink-target"]').exists(),
+    ).toBe(true);
+    expect(
+      wrapper.find('[data-testid="runs-history-steps-run-deeplink-other"]').exists(),
+    ).toBe(false);
+  });
+
+  it('query arriving via NAVIGATION AFTER MOUNT switches to Runs and selects that run', async () => {
+    const wrapper = mount(WorkflowsView, { props: { client: fakeClient() } });
+    await flushPromises();
+
+    // Starts on Library (no query yet).
+    expect(wrapper.find('[data-testid="workflows-catalog"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="runs-history-tab"]').exists()).toBe(false);
+
+    // Simulate the sidebar's router.push({ query: { run: ... } }) by
+    // mutating the SAME reactive route object useRoute() returned —
+    // this is what a real Vue Router navigation updates.
+    mockRoute.query = { run: 'run-deeplink-other' };
+    await nextTick();
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="runs-history-tab"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="workflows-catalog"]').exists()).toBe(false);
+    expect(
+      wrapper.find('[data-testid="runs-history-steps-run-deeplink-other"]').exists(),
+    ).toBe(true);
+    expect(
+      wrapper.find('[data-testid="runs-history-steps-run-deeplink-target"]').exists(),
+    ).toBe(false);
+  });
+});
+
+/*
+ * UNIT-14 (automation-actually-runs-01PMZ404, AC-015): the four input
+ * pickers. Before this unit, WorkflowsView.vue rendered exactly one
+ * v-if ('multiline') with a v-else plain text box for the OTHER five
+ * declared InputKind values — a free-text box where an enum/file/
+ * artifact_ref/project_ref was declared let a user submit a value the
+ * workflow's own schema would reject. These tests assert the RENDERED
+ * CONTROL per kind, not merely that some input renders.
+ */
+describe('WorkflowsView — the six input kinds render distinct controls (UNIT-14)', () => {
+  beforeEach(() => {
+    mockRoute.query = {};
+  });
+
+  const sixKindWorkflow: WorkflowsWorkflow = {
+    id: 'six-kinds',
+    name: 'Six input kinds',
+    version: 1,
+    inputs: [
+      { name: 'a_string', kind: 'string' },
+      { name: 'a_multiline', kind: 'multiline' },
+      { name: 'a_enum', kind: 'enum', options: ['fast', 'thorough'] },
+      { name: 'a_file', kind: 'file' },
+      { name: 'a_artifact', kind: 'artifact_ref' },
+      { name: 'a_project', kind: 'project_ref' },
+    ],
+    steps: [{ name: 'noop', kind: 'transform' }],
+  };
+
+  function sixKindClient(seed: Partial<WorkflowsClient> = {}) {
+    return fakeClient({
+      get: () => Promise.resolve(sixKindWorkflow),
+      listArtifactOptions: () =>
+        Promise.resolve([{ id: 'art-1', title: 'Design doc' }]),
+      listProjectOptions: () =>
+        Promise.resolve([{ id: 'proj-1', name: 'Acme' }]),
+      ...seed,
+    });
+  }
+
+  it('string renders a plain text input', async () => {
+    const wrapper = mount(WorkflowsView, { props: { client: sixKindClient() } });
+    await flushPromises();
+    const el = wrapper.find('[data-testid="workflow-input-a_string"]');
+    expect(el.exists()).toBe(true);
+    expect(el.element.tagName).toBe('INPUT');
+  });
+
+  it('multiline renders a textarea', async () => {
+    const wrapper = mount(WorkflowsView, { props: { client: sixKindClient() } });
+    await flushPromises();
+    const el = wrapper.find('[data-testid="workflow-input-a_multiline"]');
+    expect(el.exists()).toBe(true);
+    expect(el.element.tagName).toBe('TEXTAREA');
+  });
+
+  it('enum renders a <select> offering exactly inp.options', async () => {
+    const wrapper = mount(WorkflowsView, { props: { client: sixKindClient() } });
+    await flushPromises();
+    const el = wrapper.find('[data-testid="workflow-input-a_enum"]');
+    expect(el.exists()).toBe(true);
+    expect(el.element.tagName).toBe('SELECT');
+    const optionTexts = wrapper
+      .findAll<HTMLOptionElement>('[data-testid="workflow-input-a_enum"] option')
+      .map((o) => o.element.value);
+    expect(optionTexts).toEqual(['fast', 'thorough']);
+  });
+
+  it('file renders a picker button, not a free-text box, and fills the value from pickFile()', async () => {
+    const pickFile = vi.fn().mockResolvedValue('/Users/alec/report.pdf');
+    const wrapper = mount(WorkflowsView, {
+      props: { client: sixKindClient({ pickFile }) },
+    });
+    await flushPromises();
+
+    // No plain <input type="text"> for this input.
+    const display = wrapper.find('[data-testid="workflow-input-a_file"]');
+    expect(display.exists()).toBe(true);
+    expect(display.element.tagName).not.toBe('INPUT');
+
+    await wrapper.find('[data-testid="workflow-input-a_file-pick"]').trigger('click');
+    await flushPromises();
+
+    expect(pickFile).toHaveBeenCalled();
+    expect(wrapper.find('[data-testid="workflow-input-a_file"]').text()).toContain(
+      '/Users/alec/report.pdf',
+    );
+  });
+
+  it('artifact_ref renders a <select> populated from listArtifactOptions()', async () => {
+    const wrapper = mount(WorkflowsView, { props: { client: sixKindClient() } });
+    await flushPromises();
+    const el = wrapper.find('[data-testid="workflow-input-a_artifact"]');
+    expect(el.exists()).toBe(true);
+    expect(el.element.tagName).toBe('SELECT');
+    expect(wrapper.text()).toContain('Design doc');
+  });
+
+  it('project_ref renders a <select> populated from listProjectOptions()', async () => {
+    const wrapper = mount(WorkflowsView, { props: { client: sixKindClient() } });
+    await flushPromises();
+    const el = wrapper.find('[data-testid="workflow-input-a_project"]');
+    expect(el.exists()).toBe(true);
+    expect(el.element.tagName).toBe('SELECT');
+    expect(wrapper.text()).toContain('Acme');
+  });
+
+  it('AC-015: an enum rejection from the run RPC surfaces as a visible error, not a swallowed failure', async () => {
+    // Client-side validation (the <select> only offering inp.options)
+    // is not the fix on its own per A-11 — the run RPC must also reject
+    // an out-of-set value, which UNIT-14 wires at the single choke
+    // point every caller passes through (Engine.Run's
+    // validateEnumInputs, core/workflows/runtime.go), independent of
+    // this <select>. This test is the OTHER half of that contract:
+    // WorkflowsView must surface whatever the RPC rejects with, rather
+    // than silently discarding it, so a caller that DID get past the
+    // widget (a scripted /wf invocation, or a future picker bug) still
+    // produces a visible failure instead of a silent no-op.
+    const run = vi
+      .fn()
+      .mockRejectedValue(
+        new Error('workflows: input "a_enum": value "sloppy" is not one of the declared options [fast thorough]'),
+      );
+    const wrapper = mount(WorkflowsView, { props: { client: sixKindClient({ run }) } });
+    await flushPromises();
+
+    await wrapper.find('[data-testid="workflows-run-button"]').trigger('click');
+    await flushPromises();
+
+    expect(run).toHaveBeenCalled();
+    expect(wrapper.find('[data-testid="workflows-run-error"]').text()).toContain(
+      'not one of the declared options',
     );
   });
 });

@@ -491,6 +491,190 @@ already tells the AddProvider form the key/host combination doesn't work).
 a probe that doesn't also fetch the model list, or drop this entry to
 "delete: no producer, no consumer, unreachable" if the answer is settled
 as "never." Re-check at the next unwired sweep touching `core/rpc/views/llm`.
+### 2026-09-12 (`automation-actually-runs-01PMZ404` UNIT-17, G-1a widening) · seven interfaces outside this mission's scope, newly surfaced by the widened check-seam-implementers.sh
+
+UNIT-17 widened `scripts/ci/cmd/checkseams` from ONE FILE IN ONE PACKAGE
+(`core/agentgraph/seams.go`) to a DERIVED input set: every exported
+interface under `core/` that is the type of a field on an exported
+`*Config`/`*Options`/`*Deps` struct. Running the widened gate against
+the tree immediately surfaced seven more unimplemented interfaces —
+this mission's own seven findings (`ArtifactsReadWriter`, `ToolCaller`,
+`NetworkAuthorizer`, `corewf.AuditEmitter`, `slashcmd.ToolDispatcher`,
+`catalog.RecipeRegistry`, `wfsched.Dispatcher`) are all now wired and
+do not appear in this list; these seven are in completely unrelated
+subsystems and are out of scope for this mission to fix. Each carries
+its own `wiring:deferred(...)` directive at its declaration (dated
+2026-09-12) rather than being fixed here — A-0-style: the gate stays
+required and does not silently pass on these, but fixing them is a
+separate, unscoped body of work.
+
+- **`storage.SecretsBackend`** (`core/storage/storage.go:26`) — zero
+  non-test implementers of `Resolve()`. The field's own doc names the
+  blocker: `TODO(secrets-keychain mission): switch to
+  core/secrets.Backend`.
+- **`llm.BundleSource`** (`core/rpc/views/llm/impl.go`) — zero
+  non-test implementers of `BundleProfiles()`.
+- **`llm.CredPeeker`** (same file) — zero non-test implementers of
+  `PeekCred()`.
+- **`llm.CredentialInvalidator`** (same file) — zero non-test
+  implementers of `InvalidateCred()`, **contrary to its own doc
+  comment**, which claims "the rpc wiring passes a thin adapter over
+  secrets.Resolver.Invalidate." No such adapter exists anywhere in the
+  tree — a docstring-describes-nothing finding, not just an unwired
+  dependency.
+- **`llm.AuditEmitter`** (same file, distinct from `corewf.AuditEmitter`
+  this mission wired) — zero non-test implementers of `EmitRotated()`,
+  **contrary to its own doc comment**'s claim of "a concrete
+  `*audit.Emitter` (or equivalent)" adapter. None exists.
+- **`hooks.MCPInvoker`** (`core/hooks/runner.go:211`) — zero non-test
+  implementers of `InvokeTool()`. Its own doc comment already
+  documents this as deliberate: *"v1 implementations are stubs."*
+- **`memory.JournalSource`** (`core/rpc/views/memory/impl.go:59`) —
+  zero non-test implementers of `JournalSnapshot()`, **contrary to its
+  own doc comment**'s claim that "the kernel's HookManager satisfies
+  this." `agentgraph.HookManager` has no such method.
+- **`subagentdispatch.TasksRegistry`** (`core/tools/subagentdispatch/
+  tool.go:143`) — zero non-test implementers of `Register()`/
+  `Cancel()`. Its doc comment frames this as blocked on
+  "the not-yet-merged mission" (background-task-monitor-01KZNP3C) —
+  that mission has since merged (this ledger's own 2026-08-14 entry
+  records the background-task subsystem, now producerless for a
+  different reason), so the comment is stale, but the interface itself
+  is still genuinely unimplemented.
+
+Three of the seven (`CredentialInvalidator`, `AuditEmitter`,
+`JournalSource`) are a SECOND finding stacked on the first: not just an
+unwired dependency, but a doc comment actively describing a production
+adapter that does not exist — the exact "comment is itself a lie" shape
+CLAUDE.md's unwired-sweep doctrine calls out.
+
+**Owner:** whoever next touches each respective subsystem
+(secrets-keychain for `SecretsBackend`; the llm view / provider-
+keychain-rotation for the four `llm.*` interfaces; hooks for
+`MCPInvoker`; the memory view for `JournalSource`; subagent dispatch /
+background-task-monitor for `TasksRegistry`). **Blocker:** none of
+these has a scoped mission as of this date. **Date:** 2026-09-12.
+
+### 2026-09-12 (`automation-actually-runs-01PMZ404` UNIT-15, PARTIAL) · `elicitview.API.OpenWizard` still has zero non-test callers — the deferred-ask leg landed, the wizard leg did not
+
+UNIT-15 was scoped as three pieces the mission's own tasks.md and the
+ledger's prior entry (`docs/unwired-ledger.md:592-623`, dated 2026-08-19)
+both insist ship together, because any one alone is "a half-surface that
+reads, in a code review, like a shipped feature":
+
+1. `mode` on `AskArgs`, plumbed to a real producer — **DONE.**
+   `core/tools/askuserquestion/askuserquestion.go` now declares
+   `AskArgs.Mode` (`"blocking"` default / `"deferred"`), advertised in
+   the tool's own JSON schema so the model can actually request it.
+   `askuserquestion.Delegate` gained `Defer(ctx, q) (askID string, err
+   error)`; `core/rpc/views/elicit/api.go`'s `*API` (the production
+   Delegate, wired at `core/rpc/builtins_wiring.go:305-312`) implements
+   it by calling `elicitation.Registry.Register` — never `Park` — so
+   the call never blocks. `Tool.Call` branches on `args.deferredMode()`
+   before ever reaching `OpenDialog`.
+2. **Mounting `DeferredAskPill` / `DeferredAskPanel`** — **DONE.**
+   `frontend/src/components/chat/SessionHeader.vue` now mounts
+   `DeferredAskPill :session-id="session.id"`, the same "chat-header
+   chip" pattern `BackgroundTaskChip` already uses on the line above
+   it. `DeferredAskPill.vue` gained an optional `sessionId` prop that
+   filters `elicit:deferred`'s process-wide broker payloads to the
+   mounted session — without it, a pill on session A's header would
+   have shown session B's pending questions, since the topic carries no
+   inherent scoping of its own. Mounting was safe to do the moment (1)
+   gave the topics a real producer, per the ledger's original
+   objection.
+3. **`OpenWizard`'s missing call site** — **NOT DONE.** Still zero
+   non-test callers (`grep -rn "OpenWizard(" core/` — only the
+   declaration at `core/rpc/views/elicit/api.go:393` and
+   `api_test.go`'s four call sites). Closing this needs two things
+   neither of which exists yet: (a) a model-facing way to submit a
+   *batch* of questions — `AskArgs` has no `questions:` field, so there
+   is no tool call shape that could reach `OpenWizard` even in
+   principle; (b) a wizard renderer in
+   `frontend/src/components/dialogs/AskUserQuestion/AskUserQuestion.vue`
+   — confirmed absent: `grep -in wizard` on that file is zero hits;
+   its two hits for "questions" (singular-vs-plural key-generation
+   comments) are unrelated to a multi-question batch. Building either
+   alone is a bigger, separately-reviewable
+   change than the deferred-mode leg above; scoping both into the same
+   commit as (1)+(2) would have meant shipping neither well or shipping
+   the deferred leg late.
+
+This does **not** repeat the half-surface failure the prior entry
+warned about: (1) and (2) together are a complete, real capability on
+their own terms (a model can defer a question; a human sees it and
+answers it; nothing about that path implies or advertises a wizard).
+`OpenWizard` remains exactly as before — built, zero callers, no new
+lie created by leaving it that way.
+
+**Owner:** whoever next extends `askuserquestion` with a multi-question
+batch shape. **Blocker:** no tool schema exists for a question batch,
+and no wizard UI exists to render one — both need to land together,
+which is a second unit of comparable size to the one this entry closes.
+**Date:** 2026-09-12.
+
+### 2026-09-12 (`automation-actually-runs-01PMZ404` UNIT-11) · `WorkflowRunsSection.vue`'s `workflow-run:focus` emit has zero listeners — dated-justified, not deleted
+
+UNIT-11 wired the OTHER half of this finding (`WorkflowsView.vue` now reads
+`?run=<id>` via `useRoute()` and forwards it to `RunsHistoryTab.vue`, which
+expands and scrolls to the named run — see `spec.md` §1.10 / §5.11). The
+`router.push({ path: '/workflows', query: { run: run.runId } })` call in
+`WorkflowRunsSection.vue`'s `onRowClick` is no longer a "hash-style hint …
+harmless if ignored"; it genuinely navigates.
+
+The sibling `emit('workflow-run:focus', run.runId)` two lines above it,
+declared at `WorkflowRunsSection.vue:33`, still has **zero listeners** —
+the sole mount site, `frontend/src/shell/LeftRail.vue:964`, is bare
+(`<WorkflowRunsSection />`, no `@workflow-run:focus`). A-0 forbids
+resolving that by deleting the emit.
+
+**Why this is left dated-justified rather than wired to a listener:**
+`LeftRail.vue` has no in-place surface of its own that a "run got
+focused" event could sensibly drive — it is the persistent left rail,
+not a panel that shows run detail. `/workflows?run=<id>` (the query
+param path) already *is* the surface that shows run detail, and the
+`router.push` two lines below the emit already reaches it. A listener on
+`LeftRail.vue` would have nothing to do except duplicate that navigation,
+which is not a second capability, just a second name for the same one.
+
+**Owner:** whoever next redesigns the left rail's workflow-runs panel
+into something with its own in-place detail view (at which point the
+emit would have a real consumer). **Blocker:** no such redesign is
+scoped or planned. **Date:** 2026-09-12.
+
+### 2026-09-12 (`automation-actually-runs-01PMZ404` UNIT-16) · five inherited closing-sweep findings, dispositioned
+
+`docs/dead-code-audit-2026-08-18.md:1796` assigned five findings to this
+mission. A-0 forbids resolving any of them by deletion.
+
+- **`C2V-14` `contextBootstrap.resume`** (audit `:1401`) — re-checked
+  2026-09-12: `docs/dead-code-audit-2026-08-18.md`'s own body entry
+  already recorded this as backend-live/UI-missing with no scoped mission
+  claiming the UI mount. Nothing new to add; still open.
+  `justify(blocker: "no mission has scoped the UI mount", owner: alec,
+  date: 2026-09-12)`.
+- **`C2V-35` `Tasks_AbortBySession` / `ListBySession`** (audit `:1419`) —
+  filed under the audit's own "a named live substitute exists (delete)"
+  bucket, but no substitute is named for these two, and the background-
+  task subsystem is already recorded elsewhere in this ledger as
+  producerless. A-0 names it explicitly:
+  `justify(blocker: "background-task subsystem has no producer", owner:
+  alec, date: 2026-09-12)`.
+- **`C2V-01`'s handoff-share prerequisite** (audit `:1397`) — this
+  ledger already records (see the handoff entries elsewhere in this
+  file) that `Handoff_Share` sends a nil payload, so wiring
+  `Handoff_Accept` alone would open an EMPTY session. Recording the
+  prerequisite here per UNIT-16's obligation; `automation-actually-runs`
+  does not own the handoff subsystem and does not wire `Accept`.
+- **`C2V-08`, `C2V-30` — NOT CARRIED.** Per spec.md §1.11 X-12, both
+  appear **only** in `docs/dead-code-audit-2026-08-18.md:1796`'s
+  assignment table — neither has a body entry anywhere else in that
+  file. Escalated as E-007 (spec.md §14): either the audit's author
+  supplies the finding text, or these two are struck from this
+  mission's inventory. **Nobody has acted on them** — inventing a
+  defect to match a label is exactly the failure mode
+  `feedback_verify_agent_citations` exists to prevent. **Owner:** the
+  `docs/dead-code-audit-2026-08-18.md` author. **Date:** 2026-09-12.
 
 ### 2026-09-11 (finding #61 round-2 review, `fix/memory-persist-growth-and-latency-v2`) · served-mode exit never calls `core.Core.Shutdown(ctx)` — only `api.Shutdown()` does
 

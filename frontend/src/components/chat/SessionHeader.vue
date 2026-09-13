@@ -26,6 +26,15 @@ import PlanModeBadge from '@/components/chat/PlanModeBadge.vue';
 // v0.11.0 (background-task-monitor-01KZNP3C WP06). SessionHeader is its
 // documented host ("chat-header chip") and already has session.id.
 import BackgroundTaskChip from '@/components/chat/BackgroundTaskChip.vue';
+// automation-actually-runs-01PMZ404 UNIT-15 (A-12) — DeferredAskPill
+// existed since ask-user-question-interactive-01KZNP3G WP06 with zero
+// non-test mounts, so a model-registered deferred ask (mode:"deferred")
+// had nowhere in the running app to surface: the topics it subscribes
+// to had a producer only after this unit's askuserquestion.Tool.Call
+// wiring, and the component itself had no host. SessionHeader is the
+// same "chat-header chip" pattern BackgroundTaskChip above already
+// uses, and already has session.id.
+import DeferredAskPill from '@/components/dialogs/AskUserQuestion/deferred/DeferredAskPill.vue';
 import { usePlanMode } from '@/lib/planmode';
 
 const props = defineProps<{
@@ -240,6 +249,8 @@ function cancelConfirm() {
     <AutonomyChip :session-id="session.id" />
 
     <BackgroundTaskChip :session-id="session.id" @open-tasks="openTasksPanel" />
+
+    <DeferredAskPill :session-id="session.id" />
 
     <!-- Export dropdown (WP03: replaced window.confirm picker) -->
     <div class="relative shrink-0">

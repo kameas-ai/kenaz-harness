@@ -63,24 +63,24 @@ type PostSendEvent struct {
 // ElicitationOption is one selectable choice in an elicitation event.
 // Mirrors the frontend Option shape so hooks can add/modify choices.
 type ElicitationOption struct {
-	Key             string `json:"key"`
-	Label           string `json:"label"`
-	Description     string `json:"description,omitempty"`
-	DisabledReason  string `json:"disabled_reason,omitempty"`
-	Badge           string `json:"badge,omitempty"`
+	Key            string `json:"key"`
+	Label          string `json:"label"`
+	Description    string `json:"description,omitempty"`
+	DisabledReason string `json:"disabled_reason,omitempty"`
+	Badge          string `json:"badge,omitempty"`
 }
 
 // ElicitationEvent is the payload that fires before the ask dialog renders
 // (EventElicitation). Hooks may add options, change layout, or block the ask.
 // The Decision field in the response signals whether to allow/block.
 type ElicitationEvent struct {
-	SessionID   string              `json:"session_id"`
-	AskID       string              `json:"ask_id"`
-	Kind        string              `json:"kind"`
-	Prompt      string              `json:"prompt"`
-	LayoutHint  string              `json:"layout_hint,omitempty"`
-	Options     []ElicitationOption `json:"options,omitempty"`
-	Extra       map[string]any      `json:"extra,omitempty"`
+	SessionID  string              `json:"session_id"`
+	AskID      string              `json:"ask_id"`
+	Kind       string              `json:"kind"`
+	Prompt     string              `json:"prompt"`
+	LayoutHint string              `json:"layout_hint,omitempty"`
+	Options    []ElicitationOption `json:"options,omitempty"`
+	Extra      map[string]any      `json:"extra,omitempty"`
 }
 
 // ElicitationEventResult is the output a hook returns for EventElicitation.
@@ -88,7 +88,7 @@ type ElicitationEventResult struct {
 	// Decision: "allow" (default) or "block".
 	Decision string `json:"decision,omitempty"`
 	// Reason is populated when Decision == "block".
-	Reason  string              `json:"reason,omitempty"`
+	Reason string `json:"reason,omitempty"`
 	// Options overrides the question's option list when non-nil.
 	Options []ElicitationOption `json:"options,omitempty"`
 	// LayoutHint overrides the layout when non-empty.
