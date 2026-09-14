@@ -630,3 +630,95 @@ func TestAnswerDeferred_StampsSessionIDOntoPayload(t *testing.T) {
 		t.Fatal("should have emitted TopicElicitDeferredAnswered")
 	}
 }
+
+// TestTool_DeferredMode_NeverBlocks_ThroughTheSharedDelegate is UNIT-15's
+// production-path proof (automation-actually-runs-01PMZ404, A-12),
+// mirroring TestTool_ResolvesThroughTheSharedPendingSurface's shape but
+// for the deferred leg: it drives the REAL askuserquestion.Tool wired to
+// the REAL *elicit.API as Delegate — the exact pairing
+// core/rpc/builtins_wiring.go constructs in production — rather than a
+// hand-built fake that would prove nothing about that wiring (CLAUDE.md
+// blind spot #2).
+//
+// The whole point of deferred mode is in the assertion shape: Call MUST
+// return on its own, synchronously, with no SubmitAnswer / AnswerDeferred
+// call from the test at all. A regression that quietly routed
+// mode:"deferred" through OpenDialog/Park would hang this test until its
+// timeout, not merely produce a wrong answer.
+func TestTool_DeferredMode_NeverBlocks_ThroughTheSharedDelegate(t *testing.T) {
+	em := &fakeEmitter{}
+	api := elicit.New(elicit.Config{Emitter: em})
+	api.SetContext(context.Background())
+
+	tool := askuserquestion.New(askuserquestion.Options{Delegate: api})
+
+	type toolResult struct {
+		raw json.RawMessage
+		err error
+	}
+	done := make(chan toolResult, 1)
+	go func() {
+		raw, err := tool.Call(context.Background(), json.RawMessage(`{
+			"question": "Deploy to prod overnight?",
+			"kind": "text",
+			"mode": "deferred"
+		}`))
+		done <- toolResult{raw, err}
+	}()
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("tool.Call: %v", got.err)
+		}
+		var r askuserquestion.DeferredAskResult
+		if err := json.Unmarshal(got.raw, &r); err != nil {
+			t.Fatalf("decode tool result: %v (raw=%s)", err, got.raw)
+		}
+		if !r.Deferred {
+			t.Error("Deferred = false, want true")
+		}
+		if r.AskID == "" {
+			t.Error("AskID is empty")
+		}
+
+		// The deferred ask reached the SAME registry ListDeferred reads —
+		// proof this went through Register, not a side channel.
+		deferred, err := api.ListDeferred(context.Background(), "")
+		if err != nil {
+			t.Fatalf("ListDeferred: %v", err)
+		}
+		var found bool
+		for _, d := range deferred {
+			if d.ID == r.AskID {
+				found = true
+				if d.Question.Text != "Deploy to prod overnight?" {
+					t.Errorf("Question.Text = %q, want the original question", d.Question.Text)
+				}
+				if d.Mode != elicitation.ModeDeferred {
+					t.Errorf("Mode = %q, want deferred", d.Mode)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("ask %q not found via ListDeferred", r.AskID)
+		}
+
+		// Announced on the frontend-facing deferred topic, not the
+		// blocking-dialog one.
+		var announced bool
+		for _, e := range em.snapshot() {
+			if e.topic == elicit.TopicElicitDeferred {
+				announced = true
+			}
+			if e.topic == elicit.TopicElicitPending {
+				t.Error("a deferred ask must not announce on TopicElicitPending")
+			}
+		}
+		if !announced {
+			t.Error("expected an emit on TopicElicitDeferred")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("tool.Call blocked — deferred mode must return immediately without waiting for an answer")
+	}
+}

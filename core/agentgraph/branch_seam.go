@@ -81,6 +81,19 @@ type ForkRequest struct {
 	// ceiling (clamp, never raise).
 	BudgetTokens int
 	BudgetTimeS  int
+
+	// ProfileID is the core/agents.Profile.ID that drove this fork, set
+	// only by kenaz__subagent_dispatch (core/tools/subagentdispatch/
+	// tool.go). Empty for every other Fork caller (the agentgraph
+	// `branch` node, edit-and-resend). Threaded through so
+	// BranchSeamAdapter can record it against the branch id
+	// (subagent-control-and-background-tasks-01PMZB11 UNIT-9) —
+	// core/rpc/views/branches needs it to populate
+	// SubagentBranch.profileId, and an empty value here is exactly the
+	// signal that branch is NOT a dispatched sub-agent (as opposed to
+	// conversation.Branch.SubagentBranch, which is a different, older
+	// flag for the branch-advisor recommendation feature).
+	ProfileID string
 }
 
 // BranchHandle is what BranchSeam.Fork returns. Carries the IDs both

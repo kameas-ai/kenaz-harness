@@ -20,6 +20,12 @@ type PoolOpener interface {
 // *authbroker.ConnectorTokens satisfies it.
 type TokenSource interface {
 	ConnectorToken(ctx context.Context, recipeID string) (string, error)
+	// Invalidate drops the cached token for recipeID, forcing the next
+	// ConnectorToken call to re-fetch from the broker. Wired to the
+	// transport-layer On401 hook below (fleet-enforcement-truth-
+	// 01PMZ505 WP14) so a token the upstream just rejected is not
+	// handed to the next tool call.
+	Invalidate(recipeID string)
 }
 
 // Spawn states surfaced through the Connectors_Status read RPC.
@@ -250,6 +256,11 @@ func (s *Supervisor) Bootstrap(ctx context.Context) error {
 					spec.HeadersTemplate = map[string]string{}
 				}
 				spec.HeadersTemplate["Authorization"] = "Bearer " + tok
+				// AC-026: the NEXT ConnectorToken call must hit the
+				// broker, not return the token that just got
+				// rejected. id is captured per-iteration (Go range
+				// var, not a shared loop var post-1.22).
+				spec.On401 = func() { s.cfg.Tokens.Invalidate(id) }
 			}
 		}
 

@@ -22,6 +22,8 @@ import { SERVED_STREAM_TOPICS } from './servedStreamTopics.gen';
 import type {
   AutonomyLayer,
   ResolvedAutonomy,
+  ReasoningConfig,
+  WireSessionKnobs,
   Session,
   SiteSummary,
   Project,
@@ -79,6 +81,7 @@ import type {
   PrimaryAuth,
   RecipeCategory,
   RecipeListing,
+  RecipeSource,
   RecipeState,
   RecipeStatus,
   HealthEntry,
@@ -318,6 +321,23 @@ interface WailsBindingsLike {
   Sessions_GetAutonomy(sessionID: string): Promise<AutonomyLayer>;
   Sessions_SetAutonomy(sessionID: string, layer: AutonomyLayer): Promise<void>;
   Sessions_ResolveAutonomy(sessionID: string): Promise<ResolvedAutonomy>;
+  /**
+   * Sessions_{Get,Set}KnobsDefault — model-settings-reach-the-model-
+   * 01PMZ101 UNIT-6 / WP10. Hand-declared here (not in
+   * wailsjs/go/rpc/Bindings.d.ts) per the CompactionOverhead precedent
+   * above: `wails generate module` opens a REAL database and was not run
+   * for this change — see core/rpc/bindings.go's matching doc comment.
+   * The wire shape is WireSessionKnobs (snake_case, matching Go
+   * llm.RequestKnobs' own JSON tags), NOT the camelCase ReasoningConfig
+   * SessionTunePanel edits — getKnobsDefault/setKnobsDefault below do
+   * the translation, the same class of fix as cmd_effort.go's
+   * reasoningKnobMetadata.
+   */
+  Sessions_GetKnobsDefault(id: string): Promise<WireSessionKnobs | null>;
+  Sessions_SetKnobsDefault(
+    id: string,
+    knobs: WireSessionKnobs | null,
+  ): Promise<void>;
 
   LLM_ListProviders(): Promise<Provider[]>;
   LLM_StartStream(
@@ -660,7 +680,7 @@ interface WailsBindingsLike {
   // ── fleet skill CRUD (fleet-skills-sync-01NDFSEX18 WP04/WP06) ──────
   /** Returns all fleet-installed skills (catalog + mandated). */
   Slashcmd_SkillList(): Promise<SkillItem[]>;
-  /** Downloads, verifies, and live-registers a skill from the catalog. */
+  /** Downloads and live-registers a skill from the catalog. NOT signature-verified today — no per-device catalog signing key source exists yet (fleet-enforcement-truth-01PMZ505, register C-2). */
   Slashcmd_SkillInstall(catalogID: string, version: string): Promise<void>;
   /** Removes and live-unregisters a skill by its store ID. */
   Slashcmd_SkillUninstall(skillID: string): Promise<void>;
@@ -762,6 +782,17 @@ interface WailsBindingsLike {
     taskHint: string,
     preference: string,
   ): Promise<BranchRecommendedModel>;
+
+  // Sub-agent control verbs (subagent-control-and-background-tasks-
+  // 01PMZB11 UNIT-8/UNIT-10). Real, codegenned bindings — NOT the
+  // CompactionOverhead hand-declared-pending-regeneration shape;
+  // `wails generate module` already ran for these (see
+  // core/rpc/bindings.go + frontend/wailsjs/go/rpc/Bindings.{d.ts,js}),
+  // this interface just hadn't been told about them yet.
+  Subagent_Abort(branchID: string): Promise<void>;
+  Subagent_Steer(branchID: string, message: string): Promise<void>;
+  Subagent_Pause(branchID: string): Promise<void>;
+  Subagent_Resume(branchID: string): Promise<void>;
 
   // Search view (cross-session-search mission + unified-search-01KX5R8C).
   Search_Sessions(
@@ -1158,6 +1189,7 @@ interface WireRecipeListing {
   enabled: boolean;
   status: WireRecipeStatus;
   keysPresent: boolean;
+  source: string;
 }
 
 export function adaptCategory(raw: string): RecipeCategory {
@@ -1366,12 +1398,27 @@ export function adaptHealthEntry(w: WireHealthEntry): HealthEntry {
   };
 }
 
+const KNOWN_RECIPE_SOURCES: readonly RecipeSource[] = [
+  'shipped',
+  'registry',
+  'user',
+  'imported',
+  'org',
+];
+
+function adaptRecipeSource(raw: string): RecipeSource {
+  return (KNOWN_RECIPE_SOURCES as readonly string[]).includes(raw)
+    ? (raw as RecipeSource)
+    : 'shipped';
+}
+
 function adaptRecipeListing(w: WireRecipeListing): RecipeListing {
   return {
     recipe: adaptRecipe(w.recipe),
     enabled: w.enabled,
     status: adaptRecipeStatus(w.status),
     keysPresent: w.keysPresent,
+    source: adaptRecipeSource(w.source),
   };
 }
 
@@ -1531,6 +1578,22 @@ export interface SessionsClient {
    * + per-session panel.
    */
   resolveAutonomy(id: string): Promise<ResolvedAutonomy>;
+
+  // ── model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10 ───────────
+  /**
+   * Read the session-level reasoning-knob default persisted via
+   * setKnobsDefault, or null when none has been set. SessionTunePanel
+   * reads this on mount.
+   */
+  getKnobsDefault(id: string): Promise<ReasoningConfig | null>;
+  /**
+   * Persist the session-level reasoning-knob default. null clears any
+   * existing override (SessionTunePanel's "Reset"). The stored value
+   * merges onto every GenerationRequest.Knobs the session issues —
+   * this is the "reaches the model" half; without it the value only
+   * round-trips through the database.
+   */
+  setKnobsDefault(id: string, knobs: ReasoningConfig | null): Promise<void>;
 
   // ── session-export-01NDFSEX05 WP03 ──────────────────────────────────
   /**
@@ -2748,7 +2811,7 @@ export interface SlashcmdClient {
   // ── fleet skill CRUD (fleet-skills-sync-01NDFSEX18 WP04/WP06) ─────────
   /** Returns all fleet-installed skills (catalog + mandated). */
   skillList(): Promise<SkillItem[]>;
-  /** Downloads, verifies, and live-registers a skill from the catalog. */
+  /** Downloads and live-registers a skill from the catalog. NOT signature-verified today — no per-device catalog signing key source exists yet (fleet-enforcement-truth-01PMZ505, register C-2). */
   skillInstall(catalogID: string, version: string): Promise<void>;
   /** Removes and live-unregisters a skill by its store ID. */
   skillUninstall(skillID: string): Promise<void>;
@@ -2963,6 +3026,22 @@ export interface BranchesClient {
    * (branching-ux-polish-01KQ8TD7 WP02/WP03)
    */
   listWithBranchTree(projectId: string): Promise<SessionWithBranchPointer[]>;
+  /**
+   * Stop a dispatched sub-agent's underlying run and mark its task
+   * cancelled (subagent-control-and-background-tasks-01PMZB11 UNIT-8,
+   * wired to SubagentTab's Abort button in UNIT-10).
+   */
+  abortSubagent(branchID: string): Promise<void>;
+  /** Append a steering message to a dispatched sub-agent's child session. */
+  steerSubagent(branchID: string, message: string): Promise<void>;
+  /**
+   * Arm a dispatched sub-agent's turn-pause signal — finishes the
+   * current turn, starts no further one (owner ruling E-002; NOT
+   * immediate).
+   */
+  pauseSubagent(branchID: string): Promise<void>;
+  /** Clear a dispatched sub-agent's turn-pause signal. */
+  resumeSubagent(branchID: string): Promise<void>;
 }
 
 /**
@@ -3751,6 +3830,48 @@ const ARRAY_RETURNING_BINDINGS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * reasoningConfigToWire / wireToReasoningConfig — the camelCase <->
+ * snake_case translation at the Sessions_{Get,Set}KnobsDefault boundary
+ * (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP11). See
+ * WireSessionKnobs' doc comment in types.ts: Go llm.RequestKnobs.Reasoning
+ * marshals as `openai_effort` / `anthropic_thinking_budget`, not the
+ * camelCase SessionTunePanel.vue edits. Retagging the Go struct was
+ * rejected for the same reason cmd_effort.go's fix rejected it — that
+ * struct is also KnobsToParams' and the send-path merge's wire type, so
+ * changing its tags would silently break both. The translation lives
+ * here instead, the one place both directions cross the RPC boundary.
+ */
+function reasoningConfigToWire(
+  knobs: ReasoningConfig | null,
+): WireSessionKnobs | null {
+  if (!knobs) return null;
+  const reasoning: WireSessionKnobs['reasoning'] = {};
+  if (knobs.openAIEffort) reasoning.openai_effort = knobs.openAIEffort;
+  if (knobs.anthropicThinkingBudget && knobs.anthropicThinkingBudget > 0) {
+    reasoning.anthropic_thinking_budget = knobs.anthropicThinkingBudget;
+  }
+  if (Object.keys(reasoning).length === 0) return null;
+  return { reasoning };
+}
+
+function wireToReasoningConfig(
+  wire: WireSessionKnobs | null | undefined,
+): ReasoningConfig | null {
+  if (!wire?.reasoning) return null;
+  const cfg: ReasoningConfig = {};
+  if (wire.reasoning.openai_effort) {
+    cfg.openAIEffort = wire.reasoning.openai_effort;
+  }
+  if (
+    wire.reasoning.anthropic_thinking_budget &&
+    wire.reasoning.anthropic_thinking_budget > 0
+  ) {
+    cfg.anthropicThinkingBudget = wire.reasoning.anthropic_thinking_budget;
+  }
+  return Object.keys(cfg).length > 0 ? cfg : null;
+}
+
+/**
  * Wraps the raw Wails bindings object so every call listed in
  * ARRAY_RETURNING_BINDINGS resolves `null`/`undefined` to `[]` instead of
  * handing a JS `null` to code that trusts the declared `Promise<T[]>`
@@ -3866,6 +3987,12 @@ export function createHarnessClient(): HarnessClient {
       getAutonomy: (id) => b().Sessions_GetAutonomy(id),
       setAutonomy: (id, layer) => b().Sessions_SetAutonomy(id, layer),
       resolveAutonomy: (id) => b().Sessions_ResolveAutonomy(id),
+      getKnobsDefault: (id) =>
+        b()
+          .Sessions_GetKnobsDefault(id)
+          .then(wireToReasoningConfig),
+      setKnobsDefault: (id, knobs) =>
+        b().Sessions_SetKnobsDefault(id, reasoningConfigToWire(knobs)),
       export: (sessionId, format) => b().Sessions_Export(sessionId, format),
     },
     artifacts: {
@@ -4315,6 +4442,10 @@ export function createHarnessClient(): HarnessClient {
         b().Branches_SetAdvisorDismissed(sessionID, dismissed),
       listWithBranchTree: (projectId) =>
         b().Branches_ListWithBranchTree(projectId),
+      abortSubagent: (branchID) => b().Subagent_Abort(branchID),
+      steerSubagent: (branchID, message) => b().Subagent_Steer(branchID, message),
+      pauseSubagent: (branchID) => b().Subagent_Pause(branchID),
+      resumeSubagent: (branchID) => b().Subagent_Resume(branchID),
     },
     nodes: {
       catalog: () => b().Nodes_Catalog(),
@@ -5116,6 +5247,7 @@ export function createFakeHarnessClient(
           recapStyle: 'brief',
           continueOnError: 'retry-once',
           destructiveActionPosture: 'confirm',
+          riskThreshold: 40,
           sourceTrace: {},
           tier: 'default',
         },
@@ -5123,6 +5255,8 @@ export function createFakeHarnessClient(
         project: { level: null, overrides: {} },
         session: { level: null, overrides: {} },
       }),
+      getKnobsDefault: async () => null,
+      setKnobsDefault: noop,
       export: async (_sessionId, _format) => ({ path: '/fake/export.md', byteCount: 0 }),
     },
     projects: {
@@ -5984,6 +6118,10 @@ export function createFakeHarnessClient(
         updatedAt: new Date().toISOString(),
       }),
       listWithBranchTree: async () => [],
+      abortSubagent: noop,
+      steerSubagent: noop,
+      pauseSubagent: noop,
+      resumeSubagent: noop,
     },
     nodes: {
       catalog: async () => [],

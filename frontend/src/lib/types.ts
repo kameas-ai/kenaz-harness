@@ -1288,6 +1288,22 @@ export interface MigrationDriftDetectedPayload {
 }
 
 /**
+ * ScheduledChatBannerPayload — the event published on the
+ * `scheduled-chat:banner` broker topic when a scheduled chat run with
+ * `outputSink: "banner"` (the schema default) finishes
+ * (model-scheduled-jobs-01PMSJ01 WP07, FR-007). Mirrors
+ * core/rpc.ScheduledChatBannerPayload exactly.
+ */
+export interface ScheduledChatBannerPayload {
+  chatRunId: string;
+  name: string;
+  sessionId: string;
+  status: 'completed' | 'failed';
+  outputSnippet?: string;
+  error?: string;
+}
+
+/**
  * MarkdownExtensions — controls which rendering features are active in
  * MarkdownBlock. Matches the four-stop dial in SettingsView.
  *   'basic'    — GFM only; KaTeX and Mermaid disabled.
@@ -2550,15 +2566,32 @@ export interface ArtifactWithBytes {
 }
 
 /**
+ * RecipeSource — which catalog layer produced a RecipeListing's Recipe.
+ * Mirrors the recipes.Source* constants (core/mcp/recipes/recipes.go).
+ * 'org' rows are provisioned by the user's fleet organization and render
+ * read-only (fleet-generic-sync-framework-01NSYNC02 WP03) — mirroring the
+ * "Org-managed" badge SkillsPanel.vue already renders for mandated
+ * skills (FR-302).
+ */
+export type RecipeSource = 'shipped' | 'registry' | 'user' | 'imported' | 'org';
+
+/**
  * RecipeListing — one row returned from `Tools_ListRecipes`. Combines
  * the catalog metadata with the harness-side overlay (enabled flag,
- * live status snapshot, keys-resolvable hint).
+ * live status snapshot, keys-resolvable hint, catalog-layer source).
  */
 export interface RecipeListing {
   recipe: Recipe;
   enabled: boolean;
   status: RecipeStatus;
   keysPresent: boolean;
+  /**
+   * Which catalog layer produced this row (see RecipeSource). Wired
+   * fleet-generic-sync-framework-01NSYNC02 WP03 — before this field
+   * existed, KenazToolsPanel.vue's sourceBadge() hardcoded every row to
+   * 'shipped' regardless of the real source.
+   */
+  source: RecipeSource;
 }
 
 // ── slash commands ───────────────────────────────────────────────────
@@ -2707,8 +2740,23 @@ export interface SlashExecuteResult {
 
 /**
  * ReasoningConfig — the wire shape returned in SlashExecuteResult.metadata
- * under the `reasoningKnob` key after a successful /effort command.
- * Mirrors the Go llm.ReasoningConfig struct.
+ * under the `reasoningKnob` key after a successful /effort command, and
+ * the shape SessionTunePanel.vue edits.
+ *
+ * CORRECTED (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP11):
+ * this does NOT mirror the Go llm.ReasoningConfig struct's own JSON tags
+ * — that struct marshals as `openai_effort` / `anthropic_thinking_budget`
+ * (snake_case; core/llm/capabilities.go), which is what this camelCase
+ * interface's docstring used to (wrongly) claim it matched. The two were
+ * never byte-compatible: cmd_effort.go marshalled the Go struct directly
+ * into /effort's metadata for years, so `metadata.reasoningKnob` actually
+ * carried snake_case keys this interface's fields could never read.
+ * cmd_effort.go's fix (reasoningKnobMetadata) now builds this exact
+ * camelCase shape by hand instead of marshalling the struct, and
+ * harnessClient's getKnobsDefault/setKnobsDefault do the same
+ * camelCase<->snake_case translation at the Sessions_{Get,Set}KnobsDefault
+ * boundary (see WireSessionKnobs below) — this interface is the one true
+ * frontend shape either path produces or consumes.
  *
  * Exactly one field is set:
  *   - openAIEffort:              "low" | "medium" | "high" | "minimal"
@@ -2717,6 +2765,22 @@ export interface SlashExecuteResult {
 export interface ReasoningConfig {
   openAIEffort?: string;
   anthropicThinkingBudget?: number;
+}
+
+/**
+ * WireSessionKnobs — the Sessions_{Get,Set}KnobsDefault wire shape,
+ * matching Go llm.RequestKnobs' OWN json tags byte-for-byte (snake_case
+ * — core/llm/capabilities.go). Deliberately narrow: only the `reasoning`
+ * sub-object has a frontend surface today (SessionTunePanel.vue). Widen
+ * this type, and harnessClient's translation in getKnobsDefault/
+ * setKnobsDefault, together in the same change when a second RequestKnobs
+ * field gets a UI (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10).
+ */
+export interface WireSessionKnobs {
+  reasoning?: {
+    openai_effort?: string;
+    anthropic_thinking_budget?: number;
+  };
 }
 
 /**
@@ -2979,7 +3043,17 @@ export interface GraphEdgeCheckResult {
 }
 
 /** RunState mirrors the kernel's emitted lifecycle. */
-export type GraphRunState = 'running' | 'paused' | 'completed' | 'failed';
+/**
+ * 'abandoned' (approval-node-01PMZC12 E-002's "abandoned" fallback):
+ * a run a PREVIOUS process paused and never resolved. Durable run
+ * state (rebuilding a resumable Env from the event log — UNIT-6) is
+ * not built, so a process restart cannot bring the run back; Manager
+ * .rehydrateAbandonedRuns reports this instead of "not found" so the
+ * UI never has to render a paused run whose pendingApproval/pendingAsk
+ * will silently never resolve (spec.md §5.5: "Silence is the one
+ * unacceptable outcome").
+ */
+export type GraphRunState = 'running' | 'paused' | 'completed' | 'failed' | 'abandoned';
 
 /** PendingAsk surfaces a parked AskNode question for the resume UI. */
 export interface GraphPendingAsk {
@@ -3381,6 +3455,22 @@ export interface Branch {
   advisorSignals?: string[];
   /** Parent session id — populated on subagent branches. */
   parentSessionIdRef?: string;
+
+  // Dispatched-sub-agent fields (subagent-control-and-background-
+  // tasks-01PMZB11 UNIT-9). Populated only for branches created by
+  // kenaz__subagent_dispatch — distinct from subagentBranch above,
+  // which is the older branch-advisor flag. Declared optional here
+  // (mirrors the Go wire type's omitempty) so any Branch[] consumer
+  // (BranchSidebar, SessionsView's activeSubagentBranch) can read them
+  // without narrowing to SubagentBranch first; SubagentBranch below
+  // re-declares subagentStatus/profileId as required once a caller
+  // has confirmed the branch is a sub-agent.
+  subagentStatus?: SubagentStatus;
+  profileId?: string;
+  tokensUsed?: number;
+  budgetTokens?: number;
+  elapsedS?: number;
+  budgetTimeS?: number;
 }
 
 /**
@@ -3643,7 +3733,8 @@ export type AutonomyKnob =
   | 'tokenCeilingPerTurn'
   | 'recapStyle'
   | 'continueOnError'
-  | 'destructiveActionPosture';
+  | 'destructiveActionPosture'
+  | 'riskThreshold';
 
 /**
  * AutonomyLayer is the wire shape of one rung in the global → project
@@ -3693,6 +3784,8 @@ export interface AutonomyKnobValues {
   recapStyle: string;
   continueOnError: string;
   destructiveActionPosture: string;
+  /** risk-rated-autonomy-01PMRA01 FR-003 dial, 0-100. */
+  riskThreshold: number;
   sourceTrace: Record<string, string>;
   /** Effective tier label for chat-header chip display. */
   tier: AutonomyTier | string;
@@ -3772,6 +3865,7 @@ export const AUTONOMY_KNOB_ORDER: readonly AutonomyKnob[] = [
   'recapStyle',
   'continueOnError',
   'destructiveActionPosture',
+  'riskThreshold',
 ];
 
 /** Display label for a knob. */
@@ -3783,6 +3877,7 @@ export const AUTONOMY_KNOB_LABELS: Record<AutonomyKnob, string> = {
   recapStyle: 'Recap style',
   continueOnError: 'On tool error',
   destructiveActionPosture: 'Destructive actions',
+  riskThreshold: 'Risk threshold (ask above)',
 };
 
 // ── Elicitation (ask-user-question-interactive-01KZNP3G WP02/WP04) ────
@@ -3957,7 +4052,7 @@ export interface PolicyFile {
  * Used by the audit panel in the policy view.
  */
 export interface PolicyDecision {
-  outcome: 'allow' | 'deny' | 'not_applicable' | 'unknown';
+  outcome: 'allow' | 'deny' | 'not_applicable' | 'confirm' | 'unknown';
   action: string;
   principal: string;
   resource: string;
@@ -4440,6 +4535,19 @@ export interface SyncStatusView {
   last_pull_at?: string;
   /** Non-empty when the last push/pull errored. */
   last_error?: string;
+  /**
+   * Which layers this kind participates in ("user" | "org" | "team"),
+   * read from the SyncKind registry. Empty when no registry is wired or
+   * this category has no registration (fleet-generic-sync-framework-
+   * 01NSYNC02 WP06, FR-007).
+   */
+  scopes?: string[];
+  /**
+   * RFC3339 timestamp of this kind's most recent successful org_config
+   * apply, or absent if it has never been org-provisioned on this
+   * device. The WP03 generic org-provenance signal.
+   */
+  org_applied_at?: string;
 }
 
 /**

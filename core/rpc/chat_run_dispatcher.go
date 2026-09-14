@@ -68,8 +68,33 @@ type ChatRunDispatcherDeps struct {
 	// as core/rpc/api.go's wfDeps.DefaultProfileFunc for workflow
 	// model_turn steps. Returns "" when no profile is configured.
 	DefaultProfile func() string
+	// Origins records the (sessionID -> chat-run id) mapping for the
+	// duration of this dispatch (model-scheduled-jobs-01PMSJ01 WP06),
+	// so a filesystem-permission denial mid-run can attribute its
+	// blocked_permission_requests row to the scheduled run that hit it —
+	// see ScheduledRunOriginRegistry's doc for why a session-keyed side
+	// channel, not ctx threading, is the seam. nil is allowed: the denial
+	// still records with origin="interactive", the fail-safe default
+	// ScheduledRunOriginRegistry.Resolve documents for an
+	// unrecognised session.
+	Origins *ScheduledRunOriginRegistry
+	// Broker delivers the "banner" output sink (model-scheduled-jobs-
+	// 01PMSJ01 WP07, FR-007) by publishing TopicScheduledChatBanner once
+	// the run's terminal outcome is known. nil skips delivery (the run
+	// still completes and its history row is still written either way —
+	// banner is a notification, not part of the run's own success/
+	// failure). *StreamBroker satisfies this trivially.
+	Broker BannerPublisher
 	// Timeout overrides defaultDispatchTimeout. Zero uses the default.
 	Timeout time.Duration
+}
+
+// BannerPublisher is the minimal seam LiveChatRunDispatcher needs to
+// deliver the "banner" output sink. *StreamBroker satisfies this
+// trivially; the interface exists so tests can inject a recording stub
+// without constructing a full broker.
+type BannerPublisher interface {
+	Publish(topic string, payload any)
 }
 
 // LiveChatRunDispatcher is the production scheduler.ChatRunDispatcher.
@@ -161,6 +186,17 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 	if cerr != nil {
 		return failedRecord(now, fmt.Sprintf("create session: %v", cerr)), nil
 	}
+	// model-scheduled-jobs-01PMSJ01 WP06: record this session's origin
+	// for the lifetime of the dispatch, so a filesystem-permission denial
+	// mid-run (core/tools/fs.RecordingPrompter, wired at
+	// builtins_wiring.go) can attribute its blocked_permission_requests
+	// row to THIS scheduled run rather than defaulting to "interactive".
+	// Cleared on every return path via defer — the run is over either
+	// way once DispatchChatRun returns.
+	if d.deps.Origins != nil {
+		d.deps.Origins.Set(sess.ID, id)
+		defer d.deps.Origins.Clear(sess.ID)
+	}
 
 	// Step 5: append the rendered prompt as the user turn BEFORE calling
 	// the LLM view's StartStream. Required: llmview.API.StartStream
@@ -223,13 +259,42 @@ func (d *LiveChatRunDispatcher) DispatchChatRun(ctx context.Context, job schedul
 			if payload.SubID != subID {
 				continue // another run's terminal event; keep waiting.
 			}
-			return d.buildRecord(ctx, sess.ID, now, payload), nil
+			histRec := d.buildRecord(ctx, sess.ID, now, payload)
+			if sinkKind == "banner" {
+				d.deliverBanner(id, rec.Name, sess.ID, histRec)
+			}
+			return histRec, nil
 		case <-deadline.C:
-			return failedRecord2(sess.ID, now, fmt.Sprintf("timed out after %s waiting for the run to finish", d.deps.Timeout)), nil
+			histRec := failedRecord2(sess.ID, now, fmt.Sprintf("timed out after %s waiting for the run to finish", d.deps.Timeout))
+			if sinkKind == "banner" {
+				d.deliverBanner(id, rec.Name, sess.ID, histRec)
+			}
+			return histRec, nil
 		case <-ctx.Done():
-			return failedRecord2(sess.ID, now, fmt.Sprintf("context cancelled while awaiting completion: %v", ctx.Err())), nil
+			histRec := failedRecord2(sess.ID, now, fmt.Sprintf("context cancelled while awaiting completion: %v", ctx.Err()))
+			if sinkKind == "banner" {
+				d.deliverBanner(id, rec.Name, sess.ID, histRec)
+			}
+			return histRec, nil
 		}
 	}
+}
+
+// deliverBanner publishes TopicScheduledChatBanner with this run's
+// terminal outcome (model-scheduled-jobs-01PMSJ01 WP07, FR-007). A nil
+// Broker is a silent no-op — see ChatRunDispatcherDeps.Broker's doc.
+func (d *LiveChatRunDispatcher) deliverBanner(chatRunID, name, sessionID string, rec scheduler.ChatRunHistoryRecord) {
+	if d.deps.Broker == nil {
+		return
+	}
+	d.deps.Broker.Publish(TopicScheduledChatBanner, ScheduledChatBannerPayload{
+		ChatRunID:     chatRunID,
+		Name:          name,
+		SessionID:     sessionID,
+		Status:        rec.Status,
+		OutputSnippet: rec.OutputSnippet,
+		Error:         rec.Error,
+	})
 }
 
 // buildRecord translates the terminal payload's Reason/ErrorKind into a

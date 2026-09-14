@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 )
 
 // Scope identifies which layer(s) may carry a SyncKind's payload.
@@ -165,21 +166,44 @@ func (k SyncKind) validate() error {
 // introduced. Apply is always invoked with ScopeUser here because the LWW
 // transport is per-user by construction (org/team application dispatches
 // through the WP02 ConfigBundle applier instead, not through this adapter).
+//
+// fleet-generic-sync-framework-01NSYNC02 WP06 (FR-006): both directions
+// are gated by SecretShapeReason when the kind declares
+// SecretPolicyMustNotContainSecrets (the only v1 value). Before this, a
+// kind's SecretPolicy field was validated for presence at registration
+// (validate(), below) but never actually consulted — the "central,
+// enforced once" guarantee the spec promises did not exist; every kind
+// was independently on the honor system. This closes that gap for every
+// user-scope kind uniformly, since every kind's CategoryConfig() is built
+// through this one function.
 func (k SyncKind) CategoryConfig() CategoryConfig {
 	cfg := CategoryConfig{}
+	enforceSecretShape := k.SecretPolicy == SecretPolicyMustNotContainSecrets
 	if k.Collect != nil {
 		collect := k.Collect
+		id := k.ID
 		cfg.Collector = func(ctx context.Context) (json.RawMessage, error) {
 			raw, err := collect(ctx)
 			if err != nil {
 				return nil, err
+			}
+			if enforceSecretShape {
+				if reason := SecretShapeReason(raw); reason != "" {
+					return nil, fmt.Errorf("fleet/synckind: %s: collect produced a secret-shaped payload, refusing to sync (%s)", id, reason)
+				}
 			}
 			return json.RawMessage(raw), nil
 		}
 	}
 	if k.Apply != nil {
 		apply := k.Apply
+		id := k.ID
 		cfg.Applier = func(ctx context.Context, raw json.RawMessage) error {
+			if enforceSecretShape {
+				if reason := SecretShapeReason(raw); reason != "" {
+					return fmt.Errorf("fleet/synckind: %s: refusing to apply a secret-shaped payload (%s)", id, reason)
+				}
+			}
 			return apply(ctx, ScopeUser, []byte(raw))
 		}
 	}
@@ -191,11 +215,27 @@ func (k SyncKind) CategoryConfig() CategoryConfig {
 type KindRegistry struct {
 	mu    sync.RWMutex
 	kinds map[string]SyncKind
+	// orgApplied is the generic org-provenance tracker
+	// (fleet-generic-sync-framework-01NSYNC02 WP03): the timestamp of the
+	// most recent SUCCESSFUL ScopeOrg Apply per kind ID. It deliberately
+	// knows nothing about any kind's payload shape — that per-kind
+	// shadow-vs-delete conflict logic lives inside each kind's own Apply
+	// (e.g. core/mcp/recipes/merged.go's org-layer precedence). This is
+	// the complementary, kind-agnostic half: "IS this kind currently
+	// org-provisioned, and since when" — the shared provenance model the
+	// WP03 tasks.md acceptance calls for, consumed by the Settings → Sync
+	// surface (WP06) so a kind that has no other way to express
+	// provenance (unlike mcp_recipes' per-recipe Source field) still gets
+	// a "Provisioned by your org" signal.
+	orgApplied map[string]time.Time
 }
 
 // NewKindRegistry constructs an empty registry.
 func NewKindRegistry() *KindRegistry {
-	return &KindRegistry{kinds: make(map[string]SyncKind)}
+	return &KindRegistry{
+		kinds:      make(map[string]SyncKind),
+		orgApplied: make(map[string]time.Time),
+	}
 }
 
 // Register adds a SyncKind to the registry. Returns an error if the kind
@@ -244,4 +284,41 @@ func (r *KindRegistry) IDs() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// MarkOrgApplied records that kind id's org_config entry was successfully
+// applied at t. Called by compositeConfigApplier.ApplyBundle
+// (core/rpc/views/settings/fleet.go) after a registered ScopeOrg kind's
+// Apply returns nil — a failed Apply must NOT mark provenance, mirroring
+// ApplyBundle's own "an error here must not read applied:true" posture
+// (see that file's doc comment on the org_config dispatch loop).
+func (r *KindRegistry) MarkOrgApplied(id string, t time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.orgApplied == nil {
+		r.orgApplied = make(map[string]time.Time)
+	}
+	r.orgApplied[id] = t
+}
+
+// OrgAppliedAt returns the timestamp of kind id's most recent successful
+// ScopeOrg apply, or the zero time and false if it has never been
+// org-provisioned on this device.
+func (r *KindRegistry) OrgAppliedAt(id string) (time.Time, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	t, ok := r.orgApplied[id]
+	return t, ok
+}
+
+// ClearOrgProvenance drops every kind's org-provenance record. Called on
+// fleet sign-out / StopFleetBackground (spec §2.2 / FR-008: "removing
+// fleet cleanly drops org layers") so a signed-out device's Settings →
+// Sync surface stops claiming any kind is still org-provisioned — the
+// generic-provenance counterpart to core/mcp/recipes.MergedCatalog's
+// SetOrgRecipes(nil), which reverts the per-recipe merged view.
+func (r *KindRegistry) ClearOrgProvenance() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.orgApplied = make(map[string]time.Time)
 }

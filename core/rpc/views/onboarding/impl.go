@@ -211,12 +211,17 @@ var ErrNotConfigured = errors.New("onboarding: host dependency not configured")
 // State implements OnboardingAPI.
 func (a *API) State(ctx context.Context) (OnboardingState, error) {
 	out := OnboardingState{}
+	// firstRunRaw is FirstRunChecker's independent signal (provider
+	// count only — see onboardingFirstRunAdapter in
+	// core/rpc/onboarding_wiring.go). It says nothing about whether the
+	// user has already dismissed the dialog.
+	var firstRunRaw bool
 	if a.cfg.FirstRun != nil {
 		fr, err := a.cfg.FirstRun.IsFirstRun(ctx)
 		if err != nil {
 			return out, err
 		}
-		out.FirstRun = fr
+		firstRunRaw = fr
 	}
 	if a.cfg.Completion != nil {
 		c, err := a.cfg.Completion.IsCompleted(ctx)
@@ -225,6 +230,17 @@ func (a *API) State(ctx context.Context) (OnboardingState, error) {
 		}
 		out.Completed = c
 	}
+	// trust-surfaces-that-fire-01PMZ202 WP25 (SD-02): OnboardingState.FirstRun's
+	// own doc comment has always promised "no provider configured AND the
+	// user has never dismissed" — but until this fix the field mirrored
+	// firstRunRaw alone, so a user who explicitly dismissed onboarding
+	// (Completed=true) with zero providers still configured (e.g. they hit
+	// "Skip") saw the dialog reopen on every cold start forever, because
+	// App.vue's boot check (`if (state.firstRun) onboardingOpen.value = true`)
+	// trusted this field's contract at face value. AND-ing with !Completed
+	// here is the fix, not a frontend change, so every FirstRun consumer
+	// (not just App.vue) gets the corrected semantics.
+	out.FirstRun = firstRunRaw && !out.Completed
 	if a.cfg.SettingsDial != nil {
 		dis, err := a.cfg.SettingsDial.IsHarnessSelfMCPDisabled(ctx)
 		if err != nil {

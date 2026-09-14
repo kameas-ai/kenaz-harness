@@ -153,12 +153,28 @@ jobs:
         run: bash scripts/ci/check-declared-output-ports.sh
 
       - name: seam-implementers guard
-        # Every interface in core/agentgraph/seams.go has >=1 non-test
+        # Every interface in core/agentgraph/seams.go, PLUS (G-1a,
+        # automation-actually-runs-01PMZ404 UNIT-17) every exported
+        # interface under core/ that is the type of a field on an
+        # exported *Config/*Options/*Deps struct, has >=1 non-test
         # implementer or a //wiring:deferred directive. Uses the Go type
         # checker (golang.org/x/tools/go/packages), not grep — interface
         # satisfaction is structural and grep cannot answer it soundly.
         # wiring-integrity-01PMAG04 WP06.
         run: bash scripts/ci/check-seam-implementers.sh
+
+      - name: input-kind coverage guard (G-2)
+        # Every declared corewf.InputKind value reaches an explicit
+        # per-kind control in the workflow run form
+        # (frontend/src/views/workflows/WorkflowsView.vue) — the class
+        # that shipped for five of six kinds before automation-actually-
+        # runs-01PMZ404 UNIT-14 (A-11): an `enum` input with a fixed
+        # option list still rendered a free-text box, silently
+        # discarding the author's constraint at run time. A closed Go
+        # enum reaching the frontend as a v-if/v-else-if discriminator,
+        # checked against the ONE exception the code actually uses
+        # (a verified bare v-else fallback for "string").
+        run: bash scripts/ci/check-input-kind-coverage.sh
 
       - name: nil-optional-dep guard (I18)
         # An interface field on a struct, documented by its own author as
@@ -177,6 +193,47 @@ jobs:
         # the seam-implementers guard above — see
         # scripts/ci/cmd/checknilopts/main.go's header for the full design.
         run: bash scripts/ci/check-nil-optional-deps.sh
+
+      - name: dead-nil-branch guard (I19, UNIT-12)
+        # A zero-value `var x T` immediately followed, in the SAME block,
+        # by `if x != nil { ... }` with no assignment anywhere in between
+        # — x is provably nil at the check, so the if-block is statically
+        # dead. Shipped as core/rpc/builtins_wiring.go's `var subagentSeam
+        # agentgraph.BranchSeam // nil — no child-run spawner yet` beside
+        # its own `if subagentSeam != nil`, which hid the entire
+        # kenaz__subagent_dispatch registration block from every existing
+        # gate (check-builtin-tool-registration.sh only checks for an
+        # *import*, which was present). UNIT-6 of subagent-control-and-
+        # background-tasks-01PMZB11 fixed that one instance; this gate
+        # exists so the CLASS cannot recur silently. A local-variable
+        # dataflow question distinct from I18 above (a struct FIELD
+        # question) — see scripts/ci/cmd/checkdeadnilbranch/main.go's
+        # header for the full design and its false-positive history
+        # (database/sql's Scan(&ptr) idiom and `if x, err = f(); err !=
+        # nil` both false-positived during development; both are now
+        # correctly excluded).
+        run: bash scripts/ci/check-dead-nil-branch.sh
+
+      - name: config-nil-coverage guard (G-1, WP26)
+        # trust-surfaces-that-fire-01PMZ202 spec.md §G-1 / WP26. A
+        # narrower, structurally different sibling of I18 above: every
+        # exported Config/Options/GateOptions/Deps struct under core/
+        # constructed in >=1 production composite literal, with a
+        # pointer/interface/func/map/chan/slice field never set to a
+        # non-nil value ANYWHERE (a composite-literal key or a plain
+        # `x.Field = v` assignment outside the struct's own methods —
+        # not gated on a doc-comment phrase, unlike I18) — plus every
+        # exported With* function/method under core/ whose first
+        # parameter is a non-empty interface (the "injected collaborator"
+        # shape, not a test-only mock-injection knob) with zero non-test
+        # callers. Twenty of the finalizing mission's 29 findings were
+        # this exact class. See scripts/ci/cmd/checkconfig/main.go's
+        # header for the interface-arg restriction's justification and
+        # scripts/ci/allowlists/i16-config-nil-coverage.txt's header for
+        # the 2026-09-12 introduction calibration baseline (63 pre-
+        # existing findings, spot-checked, dated, owner-named — not
+        # individually triaged one by one in this change).
+        run: bash scripts/ci/check-config-nil-coverage.sh
 
       - name: knob-coverage guard
         # Generalises the resolved-config coverage check any dial system
@@ -248,6 +305,32 @@ jobs:
         # gate site back to its own construction call, silently breaking
         # SavePolicy + ReloadPolicies' reach to that gate.
         run: bash scripts/ci/check-cedar-engine-singleton.sh
+
+      - name: shipped-policy-matchable guard (G-4, WP18)
+        # trust-surfaces-that-fire-01PMZ202 spec.md §G-4 / WP18. The gate
+        # that would have caught F24: filesystem-full-recommended.cedar
+        # shipped, was offered by name in the recipe-install UI, and told
+        # the user its forbid rules protect SSH keys / AWS creds / .git
+        # internals — while every rule was unmatchable for three
+        # independent reasons at once (wrong action name, wrong resource
+        # entity type, an unpopulated context key). For every rule in
+        # every core/policy/cedar/policies/*.cedar file, checks (a) the
+        # action has a real .Evaluate(-calling evaluator, (b) a production
+        # UID builder reachable from that evaluator emits the declared
+        # resource type, (c) that evaluator populates every context key
+        # the rule's when/unless clause reads — using the real cedar-go
+        # parser (not a hand-rolled regex .cedar parser) and function-
+        # level Go-source granularity (file-level would have missed F24:
+        # hooks.go is one file containing two dozen unrelated
+        # action/resource/context triples). Allowlist
+        # (scripts/ci/allowlists/i-shipped-policy-matchable.txt) is
+        # deliberately minimal — see that file's header and
+        # scripts/ci/cmd/checkpolicymatch/main.go's header for why an
+        # unmatchable SHIPPED policy does not get casual allowlist
+        # treatment, and for the one real, already-investigated
+        # pre-existing gap (default_acp_policy.cedar's acp_receive rules)
+        # it is seeded with.
+        run: bash scripts/ci/check-shipped-policy-matchable.sh
 
       - name: no-cred-bytes-in-rpc guard
         # Credential hygiene. CLAUDE.md lists this under "Local dev
@@ -560,6 +643,32 @@ jobs:
         # "secret-lookup-wiring/second-literal-omits-field".
         run: bash scripts/ci/check-secret-lookup-wiring.sh
 
+      - name: transport-parity guard (G-1)
+        # connector-lifecycle-truth-01PMZ303 UNIT-15. Before UNIT-6,
+        # dispatch.Pool.closeOneByTag's http/sse cases were comment-only
+        # and fell through to the function's shared tail (then a bare
+        # `return nil`) — reporting success for a close that never
+        # happened, on every http/sse recipe. This gate derives the
+        # transport-tag set from the switch itself and fails naming any
+        # case whose body has no real .CloseOne(ctx, id) call. Planted-
+        # violation proof: scripts/ci/gates_can_fail_test.go
+        # "TestTransportParityGate_PlantedCommentOnlyArmFails".
+        run: bash scripts/ci/check-transport-parity.sh
+
+      - name: recipe-token-substitution guard (G-2)
+        # connector-lifecycle-truth-01PMZ303 UNIT-15. registry.json
+        # shipped 14 recipes with a "${KAMEAS_*_OAUTH_CLIENT_ID}"
+        # placeholder in auth.client_id (and one auth.client_secret) with
+        # ZERO production Substitute* call site touching either field —
+        # for years. Derives which JSON paths carry a "${...}" token
+        # today from the catalogs themselves and cross-checks each
+        # against scripts/ci/allowlists/g2-recipe-substituted-paths.txt,
+        # requiring a real, still-matching call site. Planted-violation
+        # proofs: scripts/ci/gates_can_fail_test.go
+        # "TestRecipeTokenSubstitutionGate_PlantedUnmanifestedTokenFails"
+        # and "...PlantedStaleManifestEntryFails".
+        run: bash scripts/ci/check-recipe-token-substitution.sh
+
       - name: installer-payload guard
         # entry-points-and-crash-reporting-01PMZD13 UNIT-2. Placed here
         # (not release.yml) in the 2026-08-25 unwired sweep: this is a
@@ -591,6 +700,19 @@ jobs:
     runs-on: ${{ fromJson(vars.CI_RUNNER_LARGE || '["self-hosted","Linux","ARM64","ci-large"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          # The `gate meta-tests` step below runs gates_can_fail_test.go,
+          # which invokes the real gate scripts -- and
+          # check-manifest-version-bump.sh reads its baseline from
+          # `HEAD~1:core/agentgraph/manifest_versions_gen.go`. At the
+          # default depth of 1 there IS no HEAD~1, so the gate saw an empty
+          # baseline, reported every node kind as "new" rather than
+          # "changed", and exited 0 -- so its planted-violation proof
+          # failed with "the gate cannot see an unbumped version". The gate
+          # itself runs in lint-go, which already sets fetch-depth: 0, so
+          # the gate was never blind where it actually runs; only the job
+          # PROVING it could fail was. Same requirement, same fix.
+          fetch-depth: 0
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:

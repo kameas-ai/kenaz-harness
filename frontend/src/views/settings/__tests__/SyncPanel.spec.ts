@@ -179,6 +179,45 @@ describe('SyncPanel', () => {
     expect(toggleFn).toHaveBeenCalledWith('model_prefs', true);
   });
 
+  // AC-024 (fleet-enforcement-truth-01PMZ505 WP12): each row's description
+  // must name what its payload actually carries, not what a designer once
+  // hoped it would. Asserts the exact strings, not a whole-panel snapshot —
+  // a snapshot goes green on any edit and red on every unrelated one.
+  it('8. model_prefs row names the four fields modelPrefsPayload actually carries, not the default model or an allowlist', async () => {
+    const { client } = buildClient({ statuses: STATUSES });
+    const wrapper = mountPanel(client);
+    await flushPromises();
+
+    const text = wrapper.find('[data-testid="sync-category-model_prefs"]').text();
+    expect(text).toContain('Compaction aggressiveness');
+    expect(text).toContain('max agent turns');
+    expect(text.toLowerCase()).not.toContain('default model');
+    expect(text.toLowerCase()).not.toContain('allowlist');
+  });
+
+  it('9. ui_theme row claims neither density nor accessibility, and drops Accent', async () => {
+    const { client } = buildClient({ statuses: STATUSES });
+    const wrapper = mountPanel(client);
+    await flushPromises();
+
+    const text = wrapper.find('[data-testid="sync-category-ui_theme"]').text().toLowerCase();
+    expect(text).not.toContain('density');
+    expect(text).not.toContain('accessib');
+    expect(text).not.toContain('a11y');
+    expect(text).not.toContain('accent');
+  });
+
+  it('10. provider_profiles and mcp_recipes rows state they are not yet syncing', async () => {
+    const { client } = buildClient({ statuses: STATUSES });
+    const wrapper = mountPanel(client);
+    await flushPromises();
+
+    const providerText = wrapper.find('[data-testid="sync-category-provider_profiles"]').text().toLowerCase();
+    const recipesText = wrapper.find('[data-testid="sync-category-mcp_recipes"]').text().toLowerCase();
+    expect(providerText).toContain('not yet syncing');
+    expect(recipesText).toContain('not yet syncing');
+  });
+
   it('7. installed-MCP toggle sends the canonical backend category id, not the historic installed_mcp_servers id', async () => {
     const { client, toggleFn } = buildClient({ statuses: STATUSES });
     const wrapper = mountPanel(client);
@@ -203,5 +242,81 @@ describe('SyncPanel', () => {
     expect(banner.exists()).toBe(true);
     expect(banner.text()).toContain('1 MCP server need');
     expect(wrapper.find('[data-testid="sync-go-to-mcp-btn"]').exists()).toBe(true);
+  });
+
+  // ── fleet-generic-sync-framework-01NSYNC02 WP06 ──────────────────────────
+  //
+  // Before this WP, the panel iterated a hardcoded CATEGORIES array
+  // instead of the real client.sync.status() response, so a kind
+  // registered through the SyncKind registry AFTER the original five
+  // (slash_commands, WP05) synced correctly on the backend but never
+  // rendered a row here at all — no bug report would ever explain why,
+  // because Sync_Status genuinely returned the row.
+
+  it('8. renders a row for a kind NOT in the five original categories (slash_commands) — the genericity regression this WP fixes', async () => {
+    const { client } = buildClient({
+      statuses: [...STATUSES, { category: 'slash_commands', enabled: true }],
+    });
+    const wrapper = mountPanel(client);
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="sync-category-slash_commands"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="sync-toggle-slash_commands"]').exists()).toBe(true);
+  });
+
+  it('9. an unrecognized future category still renders with a readable fallback label instead of being dropped', async () => {
+    const { client } = buildClient({
+      statuses: [{ category: 'workflow_templates', enabled: false }],
+    });
+    const wrapper = mountPanel(client);
+    await flushPromises();
+
+    const row = wrapper.find('[data-testid="sync-category-workflow_templates"]');
+    expect(row.exists()).toBe(true);
+    expect(row.text()).toContain('Workflow Templates');
+  });
+
+  it('10. shows the org provenance label when org_applied_at is set', async () => {
+    const { client } = buildClient({
+      statuses: [
+        { category: 'mcp_recipes', enabled: true, scopes: ['user', 'org'], org_applied_at: '2026-09-01T12:00:00Z' },
+      ],
+    });
+    const wrapper = mountPanel(client);
+    await flushPromises();
+
+    const badge = wrapper.find('[data-testid="sync-org-provenance-mcp_recipes"]');
+    expect(badge.exists()).toBe(true);
+    expect(badge.text()).toContain('Provisioned by your org');
+  });
+
+  it('11. does NOT show org provenance for a kind that has never been org-applied (mutation-proof)', async () => {
+    const { client } = buildClient({ statuses: STATUSES });
+    const wrapper = mountPanel(client);
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="sync-org-provenance-mcp_recipes"]').exists()).toBe(false);
+  });
+
+  it('12. renders "Managed" instead of a toggle for an org-only kind (scopes=[org], no user scope)', async () => {
+    const { client } = buildClient({
+      statuses: [{ category: 'provider_setups', enabled: false, scopes: ['org'] }],
+    });
+    const wrapper = mountPanel(client);
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="sync-managed-provider_setups"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="sync-toggle-provider_setups"]').exists()).toBe(false);
+  });
+
+  it('13. keeps the toggle for a kind whose scopes include both user and org (mutation-proof for 12)', async () => {
+    const { client } = buildClient({
+      statuses: [{ category: 'mcp_recipes', enabled: false, scopes: ['user', 'org'] }],
+    });
+    const wrapper = mountPanel(client);
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="sync-managed-mcp_recipes"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="sync-toggle-mcp_recipes"]').exists()).toBe(true);
   });
 });

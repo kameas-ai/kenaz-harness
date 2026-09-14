@@ -98,11 +98,10 @@ func TestOpen_RepairsDatabaseMissingLateSessionsMigrations(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = repaired.Close(context.Background()) })
 
-	// 4. The seven missing migrations must be applied (332-337, 340; 0336
-	//    added by chat-turn-integrity-01PMZ606 WP02, 0337 added by WP05,
-	//    0340 added by model-scheduled-jobs-01PMSJ01 WP09 — 0338-0339
-	//    are reserved for sibling WPs and were not registered as of
-	//    WP09).
+	// 4. The nine missing migrations must be applied (332-340; 0336 added
+	//    by chat-turn-integrity-01PMZ606 WP02, 0337 added by WP05, 0338
+	//    added by model-scheduled-jobs-01PMSJ01 WP06, 0339 added by the
+	//    same mission's WP08, 0340 added by WP09).
 	rows, err := repaired.Reader().Query(ctx,
 		"SELECT version FROM harness_migrations WHERE owning_mission='sessions' AND version >= 332 AND action='applied' ORDER BY version")
 	if err != nil {
@@ -117,7 +116,7 @@ func TestOpen_RepairsDatabaseMissingLateSessionsMigrations(t *testing.T) {
 		got = append(got, v)
 	}
 	rows.Close()
-	want := []int{332, 333, 334, 335, 336, 337, 340}
+	want := []int{332, 333, 334, 335, 336, 337, 338, 339, 340}
 	if len(got) != len(want) {
 		t.Fatalf("re-applied sessions migrations = %v, want %v", got, want)
 	}

@@ -178,6 +178,16 @@ const (
 	RunStatePaused    RunState = "paused"
 	RunStateCompleted RunState = "completed"
 	RunStateFailed    RunState = "failed"
+
+	// RunStateAbandoned marks a run a previous process paused and never
+	// resolved: the pending decision (askRouter, an in-memory-only
+	// registry) and the run registry entry (Manager.runs) both died
+	// with that process, and durable run state is not built
+	// (approval-node-01PMZC12 E-002, spec.md §5.5's "abandoned"
+	// fallback). Manager.RehydrateAbandonedRuns synthesizes this state
+	// at boot so GetRunStatus/GetRunTrace report the truth instead of
+	// "not found" for a run whose durable trail still exists.
+	RunStateAbandoned RunState = "abandoned"
 )
 
 // RunStatus is the wire shape for a run status query.

@@ -34,6 +34,12 @@ const model = ref('');
 const outputSink = ref('banner');
 const filePath = ref('');
 const enabled = ref(true);
+// One-shot schedules (model-scheduled-jobs-01PMSJ01 WP08, FR-006).
+// triggerKind "cron" is the pre-existing, only-ever-had behaviour;
+// "once" arms runAt (a <input type="datetime-local"> value, local time)
+// instead of requiring a fabricated cron expression.
+const triggerKind = ref<'cron' | 'once'>('cron');
+const runAt = ref('');
 
 // Populate form when editing entry changes.
 watch(
@@ -54,6 +60,10 @@ watch(
         filePath.value = '';
       }
       enabled.value = entry.enabled;
+      triggerKind.value = entry.triggerKind === 'once' ? 'once' : 'cron';
+      // entry.runAt is ISO 8601 UTC; datetime-local inputs want
+      // "YYYY-MM-DDTHH:mm" in LOCAL time.
+      runAt.value = entry.runAt ? toDatetimeLocal(entry.runAt) : '';
     } else {
       name.value = '';
       promptTemplate.value = '';
@@ -63,21 +73,35 @@ watch(
       outputSink.value = 'banner';
       filePath.value = '';
       enabled.value = true;
+      triggerKind.value = 'cron';
+      runAt.value = '';
     }
   },
   { immediate: true },
 );
+
+/** ISO 8601 (UTC) -> "YYYY-MM-DDTHH:mm" in local time, for a datetime-local input. */
+function toDatetimeLocal(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
 // ── validation ────────────────────────────────────────────────────────────
 
 const isEditMode = computed(() => props.editing !== null);
 const title = computed(() => (isEditMode.value ? 'Edit scheduled chat' : 'New scheduled chat'));
 
-/** Basic 5-field cron validation (not a full parser). */
+const isOnce = computed(() => triggerKind.value === 'once');
+
+/** Basic 5-field cron validation (not a full parser). Only applies to triggerKind=cron. */
 const cronValid = computed(() => {
   const parts = cron.value.trim().split(/\s+/);
   return parts.length === 5 && parts.every((p) => p !== '');
 });
+
+const runAtValid = computed(() => runAt.value.trim() !== '' && !Number.isNaN(new Date(runAt.value).getTime()));
 
 const filePathRequired = computed(() => outputSink.value === 'file');
 const sinkValue = computed(() =>
@@ -85,7 +109,9 @@ const sinkValue = computed(() =>
 );
 
 const canSave = computed(
-  () => cronValid.value && (!filePathRequired.value || filePath.value.trim() !== ''),
+  () =>
+    (isOnce.value ? runAtValid.value : cronValid.value) &&
+    (!filePathRequired.value || filePath.value.trim() !== ''),
 );
 
 // ── form submission ───────────────────────────────────────────────────────
@@ -98,13 +124,20 @@ async function handleSubmit() {
   saving.value = true;
   saveError.value = null;
   try {
+    // A "once" trigger sends runAt as UTC ISO 8601 and an empty cron
+    // (FR-006: no fabricated cron expression); a "cron" trigger sends
+    // the cron expression and no runAt, exactly the pre-WP08 payload
+    // shape so existing callers/tests are unaffected.
+    const triggerFields = isOnce.value
+      ? { cron: '', triggerKind: 'once' as const, runAt: new Date(runAt.value).toISOString() }
+      : { cron: cron.value.trim(), triggerKind: 'cron' as const, runAt: undefined };
     let entry: ScheduledChatEntry;
     if (isEditMode.value && props.editing) {
       entry = await props.client.update({
         id: props.editing.id,
         name: name.value,
         promptTemplate: promptTemplate.value,
-        cron: cron.value.trim(),
+        ...triggerFields,
         timezone: timezone.value || undefined,
         model: model.value || undefined,
         outputSink: sinkValue.value,
@@ -114,7 +147,7 @@ async function handleSubmit() {
       entry = await props.client.create({
         name: name.value,
         promptTemplate: promptTemplate.value,
-        cron: cron.value.trim(),
+        ...triggerFields,
         timezone: timezone.value || undefined,
         model: model.value || undefined,
         outputSink: sinkValue.value,
@@ -188,8 +221,33 @@ async function handleSubmit() {
           </p>
         </div>
 
-        <!-- Cron + timezone row -->
-        <div class="grid grid-cols-2 gap-3">
+        <!-- Trigger kind (model-scheduled-jobs-01PMSJ01 WP08) -->
+        <div>
+          <label class="block font-ui text-xs text-ink-muted mb-1">When</label>
+          <div class="flex items-center gap-4">
+            <label class="flex items-center gap-1.5 font-ui text-sm text-ink cursor-pointer">
+              <input
+                v-model="triggerKind"
+                type="radio"
+                value="cron"
+                data-testid="sc-trigger-cron"
+              />
+              Recurring (cron)
+            </label>
+            <label class="flex items-center gap-1.5 font-ui text-sm text-ink cursor-pointer">
+              <input
+                v-model="triggerKind"
+                type="radio"
+                value="once"
+                data-testid="sc-trigger-once"
+              />
+              Once
+            </label>
+          </div>
+        </div>
+
+        <!-- Cron + timezone row (triggerKind=cron) -->
+        <div v-if="!isOnce" class="grid grid-cols-2 gap-3">
           <div>
             <label class="block font-ui text-xs text-ink-muted mb-1" for="sc-cron">
               Cron expression
@@ -220,6 +278,24 @@ async function handleSubmit() {
               data-testid="sc-tz-input"
             />
           </div>
+        </div>
+
+        <!-- Run-at (triggerKind=once) -->
+        <div v-else>
+          <label class="block font-ui text-xs text-ink-muted mb-1" for="sc-run-at">
+            Run at
+          </label>
+          <input
+            id="sc-run-at"
+            v-model="runAt"
+            type="datetime-local"
+            class="w-full rounded-sm border px-3 py-1.5 font-ui text-sm text-ink focus:outline-none focus:ring-1 focus:ring-accent"
+            :class="runAtValid ? 'border-border-muted bg-surface-1' : 'border-signal-danger bg-signal-danger-soft'"
+            data-testid="sc-run-at-input"
+          />
+          <p v-if="!runAtValid" class="mt-1 font-ui text-xs text-signal-danger">
+            Choose a date and time
+          </p>
         </div>
 
         <!-- Model -->

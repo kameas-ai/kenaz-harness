@@ -39,8 +39,10 @@ shipped product boundary, not unwired code. Read that doc before flagging
 | I11 | `check-builtin-tool-registration.sh` | `i11-unregistered-builtin-tools.txt` | builtin tool package no wiring site imports — **added 2026-08-14** |
 | I12 | `check-single-move-writer.sh` | *(none — no allowlist by design)* | second writer of transcript-move metadata, or a seam with 0 / >1 production callers — **added 2026-08-14** |
 | I13 | `check-cedar-gate-arguments.sh` | `i13-cedar-gate-arguments.txt` | a `cedar.Gate` argument or view-`Config` field that resolves to an unconditional permit — **added 2026-08-16, empty** |
-| I14 | `check-broker-topic-consumers.sh` | `i14-unconsumed-broker-topics.txt` | A const under `core/**` whose **identifier contains `Topic`** and whose value is a broker topic, with no frontend subscriber, no Go subscriber, and no `passthroughTopics` entry — **added 2026-08-18; one entry (`mcp:progress`)**. Multi-pass (Go + frontend), same discipline as `check-output-ports.sh`. Wired into `pr.yml`. See "Declined gate" below for why this shipped instead of the gate `docs/dead-code-audit-2026-08-16.md` §5 originally asked for, and the allowlist header for why "contains" rather than "starts with" is the whole gate. |
+| I14 | `check-broker-topic-consumers.sh` | `i14-unconsumed-broker-topics.txt` | A const under `core/**` whose **identifier contains `Topic`** and whose value is a broker topic, with no frontend subscriber, no Go subscriber, and no `passthroughTopics` entry — **added 2026-08-18; one entry (`mcp:progress`)**. Multi-pass (Go + frontend), same discipline as `check-output-ports.sh`. Wired into `pr.yml`. See "Declined gate" below for why this shipped instead of the gate `docs/dead-code-audit-2026-08-16.md` §5 originally asked for, and the allowlist header for why "contains" rather than "starts with" is the whole gate. **G-0 correction (connector-lifecycle-truth-01PMZ303 spec.md §1.12 R-6, landed with UNIT-8):** the gate used to pass vacuously on a topic whose only "consumer" was its own declaring file's `Subscribe` call (exactly `mcp:health-changed`'s pre-UNIT-8 shape — `views/mcp/impl.go:240` both declared `TopicMCPHealthChanged` and subscribed to it, with no publisher and no real reader). The gate now explicitly excludes a Go subscriber in the SAME file as the const's declaration, and additionally requires a real `.Publish*(` call site — see the script's own R-6 citation and `TestGates_PlantedViolationFires/broker-topic-consumers/self-subscribe-only`. |
 | I15 | `check-cedar-engine-singleton.sh` | *(none — no allowlist by design)* | more than one Cedar engine construction (`buildCedarGate`/`buildCedarEngineOrNil` call, or a direct `cedar.NewEngine` call) reachable from `rpc.New` — **added 2026-08-18 (consent-surfaces-truth-01PMTR01 WP05)**. I13 checks the *argument* at a call site; it has no vocabulary for *instance count*, which is why thirteen independent engine constructions (nine `buildCedarGate` + four `buildCedarEngineOrNil`) all passed it clean before the WP05 hoist. Wired into `pr.yml`. |
+| G-1 | `check-transport-parity.sh` | *(none — no allowlist by design)* | a transport tag in `dispatch.Pool.closeOneByTag`'s switch whose case body has no real `.CloseOne(ctx, id)` call — comment-only, empty, or dispatching something else — **added 2026-09-12 (connector-lifecycle-truth-01PMZ303 UNIT-15)**. Hand-scoped to the one production switch this mission found broken (pre-UNIT-6, http/sse's cases were comment-only and fell through to the function's shared tail, then a bare `return nil`); the header states explicitly it is not a general arm-parity gate. Tag set is derived from the switch's own `case` lines, not hardcoded. Wired into `pr.yml`. |
+| G-2 | `check-recipe-token-substitution.sh` | `g2-recipe-substituted-paths.txt` | a `${...}` token in `registry.json`/`shipped.json` on a JSON path with no declared, still-matching production `Substitute*` call site — **added 2026-09-12 (connector-lifecycle-truth-01PMZ303 UNIT-15)**. Path set is derived from the catalogs each run (a path with no token today needs no manifest entry); a manifest entry whose grep pattern stops matching also fails, so the manifest cannot degrade into an opt-out list. Measured clean today over 7 discovered paths. Wired into `pr.yml`. |
 
 Non-allowlist gates that also protect against unwired code:
 `check-output-ports.sh` (output port with no reader),
@@ -70,6 +72,27 @@ which did not name `check-no-model-family-literals.sh`); see that
 mission's spec §1.4 and its `research/escalations.md` E-004 for the
 corrected list and for why "per gate" overstated the
 coverage this sentence used to claim unconditionally.
+
+**2026-09-11 update (finding #48 closure)**: re-derived from scratch
+(`comm` between `scripts/ci/check-*.sh` filenames and every real `gate:`
+field / `runGate(t, "check-*.sh"` literal / `const gate = "check-*.sh"`
+call in `gates_can_fail_test.go`, **plus** `check-no-model-family-literals_test.go`,
+a separate file the naive single-file `comm` above misses). By then the
+repo had **51** `check-*.sh` scripts, **41** already proved, and exactly
+**10** missing: `check-codegen`, `check-fleet-log-export-fence`,
+`check-manifest-version-bump`, `check-no-cred-bytes-in-rpc`,
+`check-no-fleet-imports`, `check-no-forbidden-compaction-symbols`,
+`check-node-dispatch`, `check-oss-first`, `check-output-ports`,
+`check-release-integrity`. All 10 now have a proof (7 as new
+`TestGates_PlantedViolationFires` table cases; `check-codegen` and
+`check-manifest-version-bump` as standalone functions sharing one plant on
+`core/agentgraph/nodes/manifests/sleep.yaml`; `check-release-integrity` as
+a standalone function that fakes `gh` on PATH rather than hitting the
+network). **51 of 51 now have a planted-violation proof.** One gate
+(`check-no-fleet-imports.sh`) was found to have a real, live scope hole
+while writing its proof — see the dedicated 2026-09-11 entry below; the
+proof itself was adjusted to stay honest about what the *shipped* gate can
+prove rather than silently landing a fix with unassessed blast radius.
 
 ### The draft tool promises a review path served mode does not have
 
@@ -316,6 +339,547 @@ prose and in a TS union; they do not call `MoveKinds()`.
 ---
 
 ## Open — ungated findings
+
+### 2026-09-12 (fleet-generic-sync-framework-01NSYNC02 WP03) · `SyncKind.ConflictPolicy` and `.SecretPolicy` were validated-only dials, never consumed — FIXED
+
+Dials-to-consumer trace (CLAUDE.md unwired-sweep pass 4) on the
+`fleet.SyncKind` registration struct WP01/WP02 introduced. Both
+`ConflictPolicy` and `SecretPolicy` are marked "Required" on the struct
+and `KindRegistry.Register`'s `validate()` rejects a kind that leaves
+either empty — but a repo-wide grep for `.ConflictPolicy` / `.SecretPolicy`
+reads (not just the constant declarations) turned up exactly one call site
+each, and it was the same `validate()` non-empty check. Nothing ever
+branched on *which* value a kind declared: `mcpRecipesKind`
+(`core/rpc/sync_categories.go`)'s own comment said as much — "this
+framework's own conflict machinery [...] has not landed yet" — and every
+kind's `SecretPolicy` was pure documentation of an honor-system rule each
+collector/applier was independently trusted to follow.
+
+Fixed in the same change (not deferred):
+
+- `SecretPolicy`: `core/fleet/secretshape.go`'s new `SecretShapeReason`
+  scans for `@secret:` references, API-key-shaped literals, and a fixed
+  set of exact-match credential field names, walking arbitrary JSON
+  recursively. Wired into BOTH invocation paths — `SyncKind.CategoryConfig()`
+  (the ScopeUser/LWW adapter, `core/fleet/synckind.go`) and
+  `compositeConfigApplier.ApplyBundle`'s org_config dispatch loop
+  (`core/rpc/views/settings/fleet.go`, ScopeOrg) — since the two paths
+  invoke `kind.Apply` through different code and neither previously
+  consulted `SecretPolicy` at all.
+- `ConflictPolicy`: the actual shadow-vs-delete CONFLICT RESOLUTION
+  remains correctly kind-specific (`core/mcp/recipes/merged.go`'s org-layer
+  precedence for `mcp_recipes`) — a framework-generic resolver over an
+  opaque `[]byte` payload was never a buildable goal, so this is not
+  "fixed" in the sense of making the enum drive behavior directly. What
+  IS now real: `KindRegistry.MarkOrgApplied`/`OrgAppliedAt`/
+  `ClearOrgProvenance` (`core/fleet/synckind.go`) track, generically and
+  kind-agnostically, *whether* a kind is currently org-provisioned —
+  the "shared provenance model" WP03's tasks.md acceptance asked for,
+  consumed by the Settings → Sync surface (WP06) and cleared on sign-out
+  (`StopFleetBackground`).
+
+Mutation-proof tests: `core/fleet/secretshape_test.go` (clean payloads
+pass, secret-shaped ones don't, lookalike field names like
+`tokenEnvVar` are NOT flagged), `core/fleet/synckind_test.go`'s
+`TestSyncKind_CategoryConfig_{Collect,Apply}RejectsSecretShapedPayload`
++ `CleanPayloadStillRoundTrips`, and
+`core/rpc/views/settings/fleet_orgconfig_test.go`'s
+`TestApplyBundle_OrgConfig_{RefusesSecretShapedPayload,
+CleanSecretlessPayloadStillApplies, MarksProvenanceOnSuccess,
+DoesNotMarkProvenanceOnFailure}`.
+
+### 2026-09-12 (fleet-generic-sync-framework-01NSYNC02 WP03) · `recipes.Recipe.Source` never reached the frontend — KenazToolsPanel.vue hardcoded every row to 'shipped' — FIXED
+
+`recipes.Recipe.Source` carries `json:"-"` (correctly — it must never
+round-trip through the on-disk YAML/JSON recipe-definition codecs) and
+`tools.RecipeListing` (the `Tools_ListRecipes` wire response) embedded
+`Recipe` by value with no separate field to carry it. The frontend's own
+`sourceBadge()` in `KenazToolsPanel.vue` said so directly: "BACKEND GAP:
+The wire shape does not yet carry a `source` discriminator... [it] returns
+'shipped'" for every row, always — including the org-provisioned MCP
+recipes `fleet-org-config-inheritance-01NORGX01` had already wired
+end-to-end on the backend (`recipes.ApplyProvisionedMCP` → `SourceOrg`).
+There was no way for a member to see "Provisioned by your org" on any
+MCP recipe, because the ONE field that would tell them never reached the
+browser.
+
+**Decision**: add `Source string` as a top-level field on
+`tools.RecipeListing` (`core/rpc/views/tools/api.go`), populated from
+`recipes.Recipe.Source` in `ListRecipes`. This is a dedicated,
+purpose-built wire type ("Wire shapes are deliberately small" per its own
+doc comment) distinct from `recipes.Recipe` itself, so re-exposing the
+value here does not touch the on-disk `json:"-"`/`yaml:"-"` contract or
+any other endpoint that returns a bare `recipes.Recipe` (e.g.
+`SaveCustomRecipe`). The alternative — flipping `Recipe.Source`'s own
+json tag — was rejected because `Recipe` is a shared type serialized in
+multiple contexts with different needs.
+
+Frontend: `KenazToolsPanel.vue`'s `sourceBadge()`/`sourceBadgeClass()`
+now read the real field; a new `isOrgManaged()` hides the Edit/Delete
+buttons and shows a "Provisioned by your org" badge for `source === 'org'`
+rows, mirroring `SkillsPanel.vue`'s existing FR-302 "Org-managed"
+treatment for mandated skills (same rationale: editing an org-provisioned
+row would silently create a lower-precedence personal override the next
+bundle re-shadows without warning).
+
+**Known follow-up, not resolved here**: `tools.RecipeListing` is a
+Wails-bound return type; `scripts/ci/check-codegen.sh` will report
+WAILSJS DRIFT until `frontend/wailsjs/go/models.ts`'s `tools.RecipeListing`
+class is regenerated to include `source: string`. Per this repo's
+`wails generate module` hazard (it opens whatever database `HOME`/
+`KENAZ_HARNESS_ENV` resolve to — see CLAUDE.md's "Tooling footguns"), this
+was deliberately NOT run here; the frontend adapts the new field through
+hand-maintained interfaces (`WireRecipeListing` in `harnessClient.ts`,
+which `Tools_ListRecipes`'s runtime call path never routes through
+`models.ts` for anyway), matching the "hand-declare on WailsBindingsLike"
+pattern this repo uses for binding changes a session can't safely
+regenerate. A `wails generate module` pass (with the documented
+`HOME=$(mktemp -d) KENAZ_HARNESS_ENV=test` override) is needed before the
+codegen-drift gate goes green again.
+
+Mutation-proof: `core/rpc/views/tools/impl_test.go`'s
+`TestListRecipes_SourceField` asserts an org-tagged and a shipped-tagged
+recipe in the SAME catalog produce DIFFERENT `Source` values (a hardcoded
+constant would pass either check alone but fail the inequality assertion).
+`frontend/src/views/tools/__tests__/KenazToolsPanel.test.ts`'s new
+"org-provisioned recipe read-only badge (WP03)" suite asserts the badge
+renders and Edit/Delete are hidden for `source: 'org'`, and — the
+mutation-proof half — still render for an ordinary shipped row.
+
+### 2026-09-12 (model-settings-reach-the-model-01PMZ101 UNIT-10 / WP17, ESCALATION — not resolved here) · `branchesview.API.parentModel` is a hardcoded `return "", ""` stub; the cross-provider warning can never fire
+### 2026-09-12 (fleet-enforcement-truth-01PMZ505, WP01/WP10 decision record — AC-014/AC-015) · disposition of the mission's fourteen handed-over findings, triaged against the live tree
+
+**This mission was triaged, not built from scratch.** Its spec.md was
+written against `origin/main@55029354` (tag `v0.64.0`); the release branch
+this pass landed on (`release/v0.78.2`'s worktree base) already carried 23+
+merged missions from later campaigns. Re-verification against the LIVE tree
+(not the spec's cited state) found five of the spec's sixteen WPs already
+shipped by other missions, and the mission's flagship P0 (§1.3, the audit
+retention backend) already resolved more completely than the spec's own
+"interim honesty change" asked for. Per-finding disposition:
+
+| Finding | Spec's ask | Live-tree status | This pass |
+|---|---|---|---|
+| §1.1 `SetCedarEngine` zero callers (P0) | wire it, WP03 | **Already wired.** `api.go` calls `settingsImpl.SetCedarEngine(a.cedarEngine)`; `fleet_wp03_test.go` pins `TestSetCedarEngine_WiresApplierToLiveEngine` against the real engine. | Verified only (RAN `go test ./core/rpc/views/settings/... -run SetCedarEngine`, PASS). |
+| §1.2 `Bundle.ModelPrefs` stored, never read (WP04) | consumer reaching a branch, WP04 | **Already wired.** `llmview.ApplyFleetModelPrefs` installs `DefaultModel`+`ProviderAllowlist`; `bundle_knob_coverage.go` registers it against `knobcoverage`. | Verified only. |
+| §1.3 retention window confirmed, unenforced (WP05) | interim honesty change ONLY — spec explicitly forbids building the backend here (C-1 hands that to a successor mission) | **Superseded — the successor already shipped.** `audit-that-tells-the-truth-01PMZA10 UNIT-7` built the real event-log-backed `AuditRetentionBackend` (`core/rpc/views/settings/audit_retention_adapter.go`) and wired it at `api.go`'s sweeper construction (`fleetRetentionBackend` is non-nil whenever `auditBackend != nil`, which is the production shape). **RAN**, not read: `TestFleetAuditRetentionBackend_WiredIntoRealSweeper_AC015` passes with a real delete on a real sqlite-backed store (`log="fleet/audit_retention: sweep pass complete deleted=1"`). This mission's WP05 "ship the honesty change because nothing can enforce it" premise is **factually superseded**: something now enforces it. | Deleted the two remaining lies (AC-007): `applyRetentionConfig` (`core/fleet/audit_retention.go`, zero callers, fed a `Bundle.audit_local_retention_days` field that has never existed) and its two false doc comments. Did not add `RetentionEnforced`/`HasBackend()` — the residual nil-backend path is a "defensive fallback... not a production configuration" per ZA10's own in-code comment, not the live shape AC-006 was written against; adding a second honesty layer on top of a real implementation would be gold-plating a closed finding. **Escalation for a future sweep, not resolved here**: `ComplianceStatus` still has no field distinguishing "retention enforced by a real backend" from "retention configured but inert" for the residual `auditBackend == nil` edge case — low severity given it's non-production-shaped, but worth a one-line field if anyone hits it. |
+| §1.4 chain-break recovery, no surface (WP06) | `Compliance_SkipToID` RPC + binding + client + UI | **Backend built and mutation-tested this pass**: `ComplianceAPI.SkipToID`, gated identically to its siblings, delegates to the already-tested `*fleet.AuditArchiver.SkipToID`. `Bindings.Compliance_SkipToID` added. **Frontend NOT wired** — see "Frontend-binding deferral" below. | `core/rpc/views/compliance/{api,impl}.go`, `core/rpc/bindings.go`; `TestComplianceAPI_SkipToID_ClearsChainBreakAndEmits` mutation-proven (reverting the delegation makes it fail). |
+| §1.5 sync arm matched pair (`installed_mcp`, WP07) | id fix + Reader/Writer/SecretKeys, one commit | **Already wired.** `SyncPanel.vue`'s id is `installed_mcp`; `core/rpc/api.go` constructs `NewMCPSyncCategory(mcpRegistry, mcpRegistry, <secretKeys func>, syncPending)` with a real reader/writer over `tools.API.ListRecipes`; `SyncPanel.spec.ts` drives the canonical backend ids, not a hand-built fixture. | Verified only (RAN `go test ./core/rpc/... -run Sync`, PASS; frontend spec RAN, PASS). |
+| §1.6 lockdown reason dropped (WP08) | store + return the reason | **Not wired — fixed this pass.** `lockdownActive` was a bare `atomic.Bool`; both write paths (`Watcher.run`, `BootstrapLockdownStatus`) parsed the reason off the wire and only logged it. | `core/fleet/lockdown.go` (new `lockdownReason atomic.Value` + `setLockdownState` single write path), `core/rpc/views/settings/fleet.go`'s `FleetLockdownStatus`. Mutation-proven: `TestBootstrapLockdownStatus` now asserts `LockdownReason()=="bootstrap-test"` after the BOOT path (no broker replay) — reverting the fix fails it. No frontend change needed: `LockdownStatusView.Reason`/`types.ts`'s `reason` field already existed on the wire type. |
+| §1.7 site env vars unsettable (WP09) | `Sites_EnvSet`/`Sites_EnvList` RPC + binding + surface | **Not wired — backend built this pass.** `SitesAPI.Sites_EnvSet`/`Sites_EnvList`, `FleetSitesClient` interface extended, `Bindings.Sites_{EnvSet,EnvList}` added. **Frontend NOT wired.** | `core/rpc/views/sites/{api,impl}.go`, `core/rpc/bindings.go`; `TestSitesEnvList_NeverReturnsAValue` mutation-proven at the JSON-wire level (a planted `Value` field is caught). No MCP tool added (spec explicitly forbids it in the same WP). |
+| §1.8 four orphans (`Client.SignOut`, `Client.Unpublish`, `SyncKind.HasScope`+friends, `applyRetentionConfig`) | delete/wire/justify per-symbol | `Client.SignOut` **deleted** this pass (D-5 — zero callers, rival to `settings.API.FleetSignOut` which additionally calls `StopFleetBackground` first). `Client.Unpublish` **wired** this pass (WP11, below). `SyncKind.HasScope`+seven siblings — **RULED (register F-2): justified, not deleted** — `fleet-org-config-inheritance-01NORGX01`'s `meta.json`/`spec.md` already carry owner `alec` + blocker "kenaz-fleet org endpoints not yet available" + date 2026-08-19; this entry cross-references it rather than duplicating. `applyRetentionConfig` **deleted** (see §1.3 row). | `core/fleet/client.go` (deletion), `core/fleet/catalog.go`+`impl.go` (WP11 wiring, below). |
+| §1.9 catalog/skill signature verification skipped (WP10, register C-2) | honesty change: comments stop reading as settled, docstrings corrected, Marketplace says installs are unverified, `WithPubKey` kept | **Not wired — fully built this pass.** Five edits: (1) `api.go`'s `PubKeyBase64: ""` comment; (2) `catalog/impl.go`'s `pubKeyBase64` doc; (3) both `harnessClient.ts` "Downloads, verifies, and live-registers" docstrings + `catalog/api.go`'s `Catalog_Install` doc; (4) `MarketplaceView.vue` gained a persistent plain-text notice (`data-testid="marketplace-unverified-notice"`) — not a modal, not a tooltip; (5) `verifyCatalogSignature`'s skip now logs at warn. `WithPubKey` untouched (kept per C-2). | Frontend test suite RAN clean post-edit (`vitest run`, 261 files / 2445 tests pass); `vue-tsc --noEmit` clean. |
+| §1.16 / task #43 `core/fleet.VerifySignature` zero callers | verify `01PMZ909` UNIT-1 rewrote the i10 allowlist entry; only touch it if that mission slipped | **Verified: `01PMZ909` UNIT-1 already landed it.** `scripts/ci/allowlists/i10-unwired-gates.txt`'s entry now reads "UPDATED 2026-08-21 by bundle-download-and-verify-01PMZ909 UNIT-1/UNIT-9... Standing verdict SUPERSEDED", exactly per that mission's own §9.2 commitment (C-14). Not touched here — touching it would have been the rival-infrastructure failure mode AC-029 warns against. | Read-verified (`grep` on the allowlist file). |
+| §7 G-1/G-2 (nil-optional-dep + uncalled-wiring-setter gates, WP10) | new gate(s), planted-violation proofs | **Already built, by a different mission, in a coordinated form.** `check-nil-optional-deps.sh` (I18, built collaboratively per its own header: "THREE MISSIONS SPECCED THIS GATE; NONE BUILT IT... this tool takes the doc-phrase design") subsumes both G-1 (nil optional dep on a Config/Options struct) and G-2 (an uncalled `Set*`/`With*` method) — its clause-3 fix is literally "a Set*-named method whose body assigns the field from its own parameter... with NO call site anywhere" (`gates_can_fail_test.go`'s `setter-defined-but-never-called-still-fires`), which is G-2 verbatim. `check-config-nil-coverage.sh` (built by `trust-surfaces-that-fire-01PMZ202` WP26) covers the sibling "declared, read, never assigned" shape with two planted-violation proofs of its own. This mission's own I13-widening design (`check-cedar-gate-arguments.sh`) was **not** the one that shipped — per CLAUDE.md's coordination rule, whoever lands first owns the gate. Building a second gate for the same class here would be rival infrastructure. | Verified only (read both scripts' headers + `gates_can_fail_test.go`'s planted cases; did not re-run the full gate suite in this pass — see "What was RUN" below for what was). |
+| §1.11/§1.12 Accent inert-and-pushed; sync push-path trace (WP12) | remove `Accent` from the wire; honest row copy; consumer-map enumeration test (G-5) | **Not wired — fully built this pass.** `Accent` removed from `uiThemePayload` (collect + apply); `SyncPanel.vue` rewritten for all four non-`installed_mcp` rows (`model_prefs` now names its real four fields, `ui_theme` claims only color, `provider_profiles`/`mcp_recipes` state "not yet syncing"). | `core/rpc/sync_categories.go` + three test files; AC-024 assertions added to `SyncPanel.spec.ts` (mutation-proven: reverting the `model_prefs` description to "Default model, provider allowlist..." fails the new test). **G-5 enumeration test (AC-022) NOT built** — see "Not done" below. |
+| §1.12 (dup ID, spec's own numbering — remote purge, WP13) | confirm-guarded UI action per surface | **Already wired.** `SessionsView.vue`/`ProjectLandingPage.vue` both call `client.{Session,Project}Sync_DeleteRemote` with confirm dialogs; `SessionsView.remotePurge.spec.ts`/`ProjectLandingPage.fleetSync.spec.ts` exist. | Verified only. |
+| §1.13/§1.14 served-mode token invalidation + sign-out ledger event (WP14) | wire `Invalidate`/`NotifyOn401` at a real 401-observing call site; add `LedgerEmitter.EmitSessionLifecycle`-shaped method; wire both entry points | **Not wired — built this pass, with one honest gap.** New `On401 func()` hook threaded through `core/mcp.ServerSpec` → both `transport/http` and `transport/sse` `Spec` → their `dispatch`/GET/POST paths (the only place a served-mode OAuth connector's 401 is actually observable — the token is handed to a spawned subprocess's own HTTP calls, which the harness cannot see). Supervisor wires `spec.On401 = func(){ tokens.Invalidate(id) }` for OAuth connectors. `LedgerEmitter.EmitSessionLifecycle(event string)` added (the missing `func(string)` shape); both `main.go` and `cmd/harness-served/main.go` now construct their `authbroker.Session` with `WithLedgerEmit(ledgerEmitter.EmitSessionLifecycle)`. **`Session.NotifyOn401` is NOT wired** — see "Escalated, not guessed" below; it is a materially different, deeper finding than the spec anticipated. | Mutation-proven at two layers: `TestConnectionOn401_Fires`/`_DoesNotFireOn500` (http+sse transport level, real httptest 401/500) and `TestSupervisor_OAuthConnector_On401InvalidatesCachedToken` (supervisor level). `main.go`/`cmd/harness-served/main.go` wiring is READ-verified only (package `main`, no test harness). |
+| §1.15 ACP peer registry nil secrets backend (WP15) | wire consumer or record; escalate secrets backend (E-008); dated justification for `DefaultRegistry` | **Escalated, not guessed — per spec's own explicit instruction ("do not fix this by passing a non-nil backend to make the linter quiet").** `core/acp/events` (the package `peers.NoopEmitter`'s own doc names as owning "the real wiring") **does not exist anywhere in the repo** — confirmed no directory, no second `AuthEventEmitter` implementer. Recorded in-code at `api.go`'s `acpReg := acppeers.NewRegistry(...)` construction site (both nils explained) and at `DefaultRegistry()`'s declaration (`wiring:deferred`, dated 2026-09-12, owner alec, distinct from `AN-10` per C-10 — `DefaultRegistry` has zero callers repo-wide and cannot itself produce the nil-secrets defect). | Read-verified (repo-wide grep for `PeerAuthAttempted`, `core/acp/events`). **E-008 (secrets backend product-scoping question) remains genuinely open — flagged for owner alec, no default assumed.** |
+
+**Duplicate-finding note preserved from the first pass**: `fleet-cedar-
+engine-never-wired` and `cedar-bundle-engine-never-set` are the same
+defect (§1.1); both read as closed by the above.
+
+**Frontend-binding deferral (WP06, WP09, WP11) — one blocker, three
+findings.** All three new RPC surfaces (`Compliance_SkipToID`,
+`Sites_EnvSet`/`Sites_EnvList`, `Catalog_Unpublish`) are fully built,
+tested and mutation-proven on the Go side — `Bindings.go` methods exist
+and are `check-binding-names.sh`-clean. **None has its
+`frontend/wailsjs/go/rpc/Bindings.{js,d.ts}` mirror, `harnessClient.ts`
+entry, or UI control**, because this pass's operating constraints
+explicitly forbade hand-editing `frontend/wailsjs/**` (the repo's normal
+path for adding one, absent the DB-opening `wails generate module`
+risk CLAUDE.md documents). Blocker: an agent authorized to hand-mirror
+three small binding stubs following the existing 2870-line mirror's exact
+pattern (`window['go']['rpc']['Bindings']['MethodName'](args)`), plus
+three small UI affordances (a chain-break-recovery input in
+`CompliancePanel.vue`, an env-var form in a Sites settings surface, an
+"Withdraw" action in `MarketplaceView.vue` distinct from "Uninstall" per
+AC-021). Owner: alec. This is the single largest remaining gap between
+this pass and full AC-008/AC-012/AC-020/AC-021 satisfaction — the backend
+halves of all four ACs are proven; only the last-mile frontend wire is
+missing, which is the cheapest-win class CLAUDE.md's disposition rubric
+names explicitly.
+
+**Not done in this pass, named rather than left silent:**
+
+- **AC-022 (WP12 G-5) — the sync-payload consumer-map enumeration test.**
+  The individual findings it would have caught (`Accent`, the three
+  mislabelled rows) are fixed; the machine-checked enumeration itself
+  (`AllSyncCategories()`-driven table test naming a real consumer per
+  payload field) was not built. A future field addition to any
+  `SyncKind`'s payload struct with no consumer is therefore not yet
+  CI-caught for this class — same residual gap `check-knob-coverage.sh`
+  closes for `fleet.Bundle` but not (yet) for `core/fleet.SyncKind`
+  payloads.
+- **AC-023's `Settings.Accent` field disposition (D-7's "wired-down"
+  half).** `Accent` stopped travelling (done); whether the field itself
+  has a future is E-009, unaddressed here (unchanged from the spec's own
+  framing — "cross-reference E-009 for whether the field itself has a
+  future").
+- **The three fleet audit kinds with zero emit call sites**
+  (`KindFleetConfigApplied`/`KindFleetConfigSignatureRejected`/
+  `KindFleetConfigPartialFailure`) — **already recorded above** (2026-09-12,
+  `01NORGX01` WP02 triage entry) as "Owner: unassigned. Blocker: threading
+  an audit emitter through `ConfigPoller`". This mission's spec never
+  named these three kinds as one of its fourteen findings; they were
+  flagged as an adjacent fact for this pass to consider and are recorded
+  here as explicitly NOT this mission's to fix, matching the existing
+  entry's scoping rather than duplicating it.
+- **`config_pull.go`'s stale header claiming a `bundle.json` disk cache**
+  — likewise already recorded in the `01NORGX01` entry above; not
+  re-fixed here for the same cross-cutting-architecture reason that entry
+  gives.
+- **The `CapContextSync`/server-capability-document mismatch** flagged in
+  this pass's brief could not be verified from this repository — the
+  fleet server's capability document is out-of-repo. `core/fleet/
+  capability.go`'s client-side declaration (`CapContextSync = "context_sync"`)
+  is internally consistent and matches `SyncPanel.vue`'s gate key
+  (already corrected 2026-08-14 per that file's own header comment).
+  Recorded as unverifiable-from-here rather than silently dropped.
+
+**Gate-extension rule note:** no new *class* of defect was found this pass
+that an existing gate cannot see — every new behavioural fix (lockdown
+reason storage, retention dead-code deletion, catalog error mapping, sync
+payload honesty, connector-token invalidation) is a single-instance defect
+fix, not a pattern a future author could reintroduce invisibly. No gate
+extension is owed.
+
+Found while implementing WP17 (branch recommender provider hydration,
+closing finding AN-07). WP17's own spec text describes only a narrower
+gap — `core/rpc/branches_wiring.go`'s `knownModelProviders` literal
+covering just `["anthropic", "openai"]` — and that half is fixed in this
+landing (widened to `anthropic, openai, gemini, azure-openai,
+openrouter`, plus a real `agentgraph.BranchRecommender.pickAtTier` fix
+so an unknown provider degrades to the parent's own pair instead of
+silently substituting a different provider's model — see the mutation-
+verified `TestRecommender_UnknownProvider_FallsBackToParentNotCrossProvider`).
+
+**But the recommender was never the whole path**, and this second half
+is NOT fixed here — it needs a product decision, not a technical patch:
+
+`core/rpc/views/branches/impl.go`'s `parentModel(_ context.Context, _
+string) (string, string)` — the function `RecommendModel` calls to learn
+what provider/model the FORK'S PARENT session is actually on — is
+verbatim:
+
+```go
+func (a *API) parentModel(_ context.Context, _ string) (string, string) {
+	// v1: we don't yet thread the parent's active model through
+	// session.Record. The recommender accepts empty parents and uses
+	// the model id heuristic. Future patch: read from the per-session
+	// model dial.
+	return "", ""
+}
+```
+
+It ignores both its `ctx` and `sessionID` arguments, and ignores
+`a.cfg.Sessions` (a real, already-wired `*session.Manager`) — not
+because the wiring is missing, but because **there is nowhere to read
+the answer from**: `session.Record` has no provider/model field at all
+(confirmed by reading `core/session/types.go`'s full struct). The
+session's active (provider, model) selection lives ONLY in the
+frontend's per-session `localStorage`
+(`kenaz.session.config.${sessionID}`, `SessionsView.vue`'s
+`readSessionConfig`) — it is never sent to the backend at all, let alone
+persisted.
+
+**Practical effect, verified by reading the call chain, not run against
+a live app:** every `RecommendModel` call resolves `parentProvider = ""`
+unconditionally. `RecommendModel`'s own cross-provider-warning check —
+
+```go
+if parentProvider != "" && rec.ProviderID != "" && parentProvider != rec.ProviderID {
+    out.CrossProviderWarning = "Cross-provider fork: ..."
+}
+```
+
+— can **never fire**, for any parent, on any provider, today — not
+because same-provider detection works, but because the first operand is
+always false. This mission's own WP17 fix (the recommender degrading
+correctly to the parent's pair for an unknown provider) is invisible
+through this RPC: `Recommend("", "", ...)` always resolves via the
+empty-string branch regardless of which provider the parent is really
+on, so AC-015 as literally written ("assert the recommender returns a
+candidate of the parent's own provider ... with no cross-provider
+warning") is verified in this landing at the `agentgraph.BranchRecommender`
+level (where WP17's actual fix lives) and is **not** observable end to
+end through the live RPC, independent of how correct the recommender
+itself now is.
+
+**Why this is an escalation, not a fix landed here:** closing it needs
+one of two real product decisions, not a guess:
+
+1. Persist an "active (providerID, modelID)" field on `session.Record`
+   (a new migration, a new write path on every model switch, and a
+   decision about whether the tune-panel/`/effort`-style "session
+   default" pattern this same mission's UNIT-6 just built is the right
+   home for it or a separate concept), **or**
+2. Widen the `RecommendModel` RPC signature to accept the frontend's
+   already-known `activeProviderId`/`activeModelId` as explicit
+   parameters (no new persistence, but a live RPC contract change — the
+   same `wails generate module` regeneration blocker this mission's
+   UNIT-6 WP10 hit, at larger blast radius since `RecommendModel` is a
+   live, already-shipped binding, not a new one).
+
+Neither is a WP17-sized change, and picking one without owner input
+would be exactly the "two rival implementations, pick unilaterally"
+mistake CLAUDE.md's escalation guidance warns against.
+
+**Blocker:** an owner ruling on (1) vs (2) above. **Owner:** alec.
+Re-check at the next mission that touches `branchesview.API` or session
+provider/model selection.
+
+### 2026-09-12 (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10) · `session_messages.knobs_override` stays unread — a product decision, not an oversight
+
+Migration `sessions/0330-knobs` shipped two columns:
+`sessions.knobs_default` and `session_messages.knobs_override`. UNIT-6 /
+WP10 gave the first one its first production writer AND reader
+(`Sessions_{Get,Set}KnobsDefault`; `chat.LLMProviderAdapter.Generate`'s
+send-path merge onto `GenerationRequest.Knobs`) — the "reaches the model"
+half spec FR-009 asks for. `session_messages.knobs_override` is
+**deliberately left unwired**, named here per CLAUDE.md's rule that "we'll
+get to it" is not a reason and every disposition needs a stated blocker
+and owner.
+
+**Blocker:** no surface today asks for a PER-MESSAGE knob override
+distinct from the per-session default. `/effort`'s text says the new
+value "takes effect on the next message," but there is no mechanism (and
+no spec) for it to apply to *only* that one message and then revert —
+today it simply updates the session default going forward, same as the
+tune panel. Wiring `knobs_override` needs a product decision about what a
+one-message override means UX-wise before it needs a Go reader; guessing
+at a mechanism here would be inventing a UX nobody asked for, the same
+class of mistake CLAUDE.md's "spec it and finish it" guidance warns
+against for a half-built feature.
+
+**Owner:** alec — whichever mission specs a per-message knob override.
+Re-check at the release after model-settings-reach-the-model-01PMZ101
+UNIT-6 merges. See `core/session/migrations_knobs.go`'s doc comment for
+the same note kept with the column.
+
+### 2026-09-12 (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP11) · `LLM_TestProviderKey` has no `.vue` caller; the interface doc named the wrong substitute
+
+`core/rpc/views/llm/api.go`'s `TestProviderKey` (bound as `LLM_TestProviderKey`
+in `core/rpc/bindings.go`) is a read-only pre-submit key probe with exactly
+one real implementation arm (`azure-openai`, via the `azureTester` duck-typed
+interface in `impl.go`) — every other provider kind falls through to
+`"no adapter registered for provider kind %s"` or a similar stub result. A
+case-insensitive grep for `testProviderKey` over `frontend/src` finds it only
+in `types.ts` and `harnessClient.ts`; **no `.vue` file calls it.**
+
+The interface doc used to compound this by naming the wrong substitute:
+"others are stubs for now" implied more kinds were coming, and nothing
+pointed at what the AddProvider form actually does instead. Corrected here
+(spec C-1): `AddProviderForm.vue:344`'s pre-submit connection-status check
+calls `client.llm.listModels(form.kind, form.apiKey)`, **not**
+`TestProviderKey` and not `TestAndRotateKey` either (`TestAndRotateKey`
+exists because it's the one that WRITES to the keychain, per this same
+interface's adjacent doc comment — a real, different reason to exist,
+which is why this is not simply "delete the rival").
+
+**Class: reachable-but-unconsumed surface, not rival infrastructure.**
+`listModels` and `TestProviderKey` do different jobs (list vs. probe-one-key);
+the AddProviderForm using `listModels` for its pre-submit check does not
+make `TestProviderKey` a duplicate of it. Register A-0 (model-settings-
+reach-the-model-01PMZ101) froze the delete lane for exactly this
+distinction: "a commit whose only justification for a removal is absence
+of callers is rejected at review." **Nothing is deleted** — not the impl
+arm, not `azureTestKeyResult`, not the interface method, not the
+`LLM_TestProviderKey` binding, not `harnessClient.ts`'s `testProviderKey`
+wrapper, not `types.ts`'s `ProviderKeyTestResult`.
+
+**Blocker:** no surface today asks for a non-writing pre-submit key probe
+separate from `listModels`'s implicit one (a failed `listModels` call
+already tells the AddProvider form the key/host combination doesn't work).
+**Owner:** alec — wire a caller if a future AddProviderForm redesign wants
+a probe that doesn't also fetch the model list, or drop this entry to
+"delete: no producer, no consumer, unreachable" if the answer is settled
+as "never." Re-check at the next unwired sweep touching `core/rpc/views/llm`.
+### 2026-09-12 (`automation-actually-runs-01PMZ404` UNIT-17, G-1a widening) · seven interfaces outside this mission's scope, newly surfaced by the widened check-seam-implementers.sh
+
+UNIT-17 widened `scripts/ci/cmd/checkseams` from ONE FILE IN ONE PACKAGE
+(`core/agentgraph/seams.go`) to a DERIVED input set: every exported
+interface under `core/` that is the type of a field on an exported
+`*Config`/`*Options`/`*Deps` struct. Running the widened gate against
+the tree immediately surfaced seven more unimplemented interfaces —
+this mission's own seven findings (`ArtifactsReadWriter`, `ToolCaller`,
+`NetworkAuthorizer`, `corewf.AuditEmitter`, `slashcmd.ToolDispatcher`,
+`catalog.RecipeRegistry`, `wfsched.Dispatcher`) are all now wired and
+do not appear in this list; these seven are in completely unrelated
+subsystems and are out of scope for this mission to fix. Each carries
+its own `wiring:deferred(...)` directive at its declaration (dated
+2026-09-12) rather than being fixed here — A-0-style: the gate stays
+required and does not silently pass on these, but fixing them is a
+separate, unscoped body of work.
+
+- **`storage.SecretsBackend`** (`core/storage/storage.go:26`) — zero
+  non-test implementers of `Resolve()`. The field's own doc names the
+  blocker: `TODO(secrets-keychain mission): switch to
+  core/secrets.Backend`.
+- **`llm.BundleSource`** (`core/rpc/views/llm/impl.go`) — zero
+  non-test implementers of `BundleProfiles()`.
+- **`llm.CredPeeker`** (same file) — zero non-test implementers of
+  `PeekCred()`.
+- **`llm.CredentialInvalidator`** (same file) — zero non-test
+  implementers of `InvalidateCred()`, **contrary to its own doc
+  comment**, which claims "the rpc wiring passes a thin adapter over
+  secrets.Resolver.Invalidate." No such adapter exists anywhere in the
+  tree — a docstring-describes-nothing finding, not just an unwired
+  dependency.
+- **`llm.AuditEmitter`** (same file, distinct from `corewf.AuditEmitter`
+  this mission wired) — zero non-test implementers of `EmitRotated()`,
+  **contrary to its own doc comment**'s claim of "a concrete
+  `*audit.Emitter` (or equivalent)" adapter. None exists.
+- **`hooks.MCPInvoker`** (`core/hooks/runner.go:211`) — zero non-test
+  implementers of `InvokeTool()`. Its own doc comment already
+  documents this as deliberate: *"v1 implementations are stubs."*
+- **`memory.JournalSource`** (`core/rpc/views/memory/impl.go:59`) —
+  zero non-test implementers of `JournalSnapshot()`, **contrary to its
+  own doc comment**'s claim that "the kernel's HookManager satisfies
+  this." `agentgraph.HookManager` has no such method.
+- **`subagentdispatch.TasksRegistry`** (`core/tools/subagentdispatch/
+  tool.go:143`) — zero non-test implementers of `Register()`/
+  `Cancel()`. Its doc comment frames this as blocked on
+  "the not-yet-merged mission" (background-task-monitor-01KZNP3C) —
+  that mission has since merged (this ledger's own 2026-08-14 entry
+  records the background-task subsystem, now producerless for a
+  different reason), so the comment is stale, but the interface itself
+  is still genuinely unimplemented.
+
+Three of the seven (`CredentialInvalidator`, `AuditEmitter`,
+`JournalSource`) are a SECOND finding stacked on the first: not just an
+unwired dependency, but a doc comment actively describing a production
+adapter that does not exist — the exact "comment is itself a lie" shape
+CLAUDE.md's unwired-sweep doctrine calls out.
+
+**Owner:** whoever next touches each respective subsystem
+(secrets-keychain for `SecretsBackend`; the llm view / provider-
+keychain-rotation for the four `llm.*` interfaces; hooks for
+`MCPInvoker`; the memory view for `JournalSource`; subagent dispatch /
+background-task-monitor for `TasksRegistry`). **Blocker:** none of
+these has a scoped mission as of this date. **Date:** 2026-09-12.
+
+### 2026-09-12 (`automation-actually-runs-01PMZ404` UNIT-15, PARTIAL) · `elicitview.API.OpenWizard` still has zero non-test callers — the deferred-ask leg landed, the wizard leg did not
+
+UNIT-15 was scoped as three pieces the mission's own tasks.md and the
+ledger's prior entry (`docs/unwired-ledger.md:592-623`, dated 2026-08-19)
+both insist ship together, because any one alone is "a half-surface that
+reads, in a code review, like a shipped feature":
+
+1. `mode` on `AskArgs`, plumbed to a real producer — **DONE.**
+   `core/tools/askuserquestion/askuserquestion.go` now declares
+   `AskArgs.Mode` (`"blocking"` default / `"deferred"`), advertised in
+   the tool's own JSON schema so the model can actually request it.
+   `askuserquestion.Delegate` gained `Defer(ctx, q) (askID string, err
+   error)`; `core/rpc/views/elicit/api.go`'s `*API` (the production
+   Delegate, wired at `core/rpc/builtins_wiring.go:305-312`) implements
+   it by calling `elicitation.Registry.Register` — never `Park` — so
+   the call never blocks. `Tool.Call` branches on `args.deferredMode()`
+   before ever reaching `OpenDialog`.
+2. **Mounting `DeferredAskPill` / `DeferredAskPanel`** — **DONE.**
+   `frontend/src/components/chat/SessionHeader.vue` now mounts
+   `DeferredAskPill :session-id="session.id"`, the same "chat-header
+   chip" pattern `BackgroundTaskChip` already uses on the line above
+   it. `DeferredAskPill.vue` gained an optional `sessionId` prop that
+   filters `elicit:deferred`'s process-wide broker payloads to the
+   mounted session — without it, a pill on session A's header would
+   have shown session B's pending questions, since the topic carries no
+   inherent scoping of its own. Mounting was safe to do the moment (1)
+   gave the topics a real producer, per the ledger's original
+   objection.
+3. **`OpenWizard`'s missing call site** — **NOT DONE.** Still zero
+   non-test callers (`grep -rn "OpenWizard(" core/` — only the
+   declaration at `core/rpc/views/elicit/api.go:393` and
+   `api_test.go`'s four call sites). Closing this needs two things
+   neither of which exists yet: (a) a model-facing way to submit a
+   *batch* of questions — `AskArgs` has no `questions:` field, so there
+   is no tool call shape that could reach `OpenWizard` even in
+   principle; (b) a wizard renderer in
+   `frontend/src/components/dialogs/AskUserQuestion/AskUserQuestion.vue`
+   — confirmed absent: `grep -in wizard` on that file is zero hits;
+   its two hits for "questions" (singular-vs-plural key-generation
+   comments) are unrelated to a multi-question batch. Building either
+   alone is a bigger, separately-reviewable
+   change than the deferred-mode leg above; scoping both into the same
+   commit as (1)+(2) would have meant shipping neither well or shipping
+   the deferred leg late.
+
+This does **not** repeat the half-surface failure the prior entry
+warned about: (1) and (2) together are a complete, real capability on
+their own terms (a model can defer a question; a human sees it and
+answers it; nothing about that path implies or advertises a wizard).
+`OpenWizard` remains exactly as before — built, zero callers, no new
+lie created by leaving it that way.
+
+**Owner:** whoever next extends `askuserquestion` with a multi-question
+batch shape. **Blocker:** no tool schema exists for a question batch,
+and no wizard UI exists to render one — both need to land together,
+which is a second unit of comparable size to the one this entry closes.
+**Date:** 2026-09-12.
+
+### 2026-09-12 (`automation-actually-runs-01PMZ404` UNIT-11) · `WorkflowRunsSection.vue`'s `workflow-run:focus` emit has zero listeners — dated-justified, not deleted
+
+UNIT-11 wired the OTHER half of this finding (`WorkflowsView.vue` now reads
+`?run=<id>` via `useRoute()` and forwards it to `RunsHistoryTab.vue`, which
+expands and scrolls to the named run — see `spec.md` §1.10 / §5.11). The
+`router.push({ path: '/workflows', query: { run: run.runId } })` call in
+`WorkflowRunsSection.vue`'s `onRowClick` is no longer a "hash-style hint …
+harmless if ignored"; it genuinely navigates.
+
+The sibling `emit('workflow-run:focus', run.runId)` two lines above it,
+declared at `WorkflowRunsSection.vue:33`, still has **zero listeners** —
+the sole mount site, `frontend/src/shell/LeftRail.vue:964`, is bare
+(`<WorkflowRunsSection />`, no `@workflow-run:focus`). A-0 forbids
+resolving that by deleting the emit.
+
+**Why this is left dated-justified rather than wired to a listener:**
+`LeftRail.vue` has no in-place surface of its own that a "run got
+focused" event could sensibly drive — it is the persistent left rail,
+not a panel that shows run detail. `/workflows?run=<id>` (the query
+param path) already *is* the surface that shows run detail, and the
+`router.push` two lines below the emit already reaches it. A listener on
+`LeftRail.vue` would have nothing to do except duplicate that navigation,
+which is not a second capability, just a second name for the same one.
+
+**Owner:** whoever next redesigns the left rail's workflow-runs panel
+into something with its own in-place detail view (at which point the
+emit would have a real consumer). **Blocker:** no such redesign is
+scoped or planned. **Date:** 2026-09-12.
+
+### 2026-09-12 (`automation-actually-runs-01PMZ404` UNIT-16) · five inherited closing-sweep findings, dispositioned
+
+`docs/dead-code-audit-2026-08-18.md:1796` assigned five findings to this
+mission. A-0 forbids resolving any of them by deletion.
+
+- **`C2V-14` `contextBootstrap.resume`** (audit `:1401`) — re-checked
+  2026-09-12: `docs/dead-code-audit-2026-08-18.md`'s own body entry
+  already recorded this as backend-live/UI-missing with no scoped mission
+  claiming the UI mount. Nothing new to add; still open.
+  `justify(blocker: "no mission has scoped the UI mount", owner: alec,
+  date: 2026-09-12)`.
+- **`C2V-35` `Tasks_AbortBySession` / `ListBySession`** (audit `:1419`) —
+  filed under the audit's own "a named live substitute exists (delete)"
+  bucket, but no substitute is named for these two, and the background-
+  task subsystem is already recorded elsewhere in this ledger as
+  producerless. A-0 names it explicitly:
+  `justify(blocker: "background-task subsystem has no producer", owner:
+  alec, date: 2026-09-12)`.
+- **`C2V-01`'s handoff-share prerequisite** (audit `:1397`) — this
+  ledger already records (see the handoff entries elsewhere in this
+  file) that `Handoff_Share` sends a nil payload, so wiring
+  `Handoff_Accept` alone would open an EMPTY session. Recording the
+  prerequisite here per UNIT-16's obligation; `automation-actually-runs`
+  does not own the handoff subsystem and does not wire `Accept`.
+- **`C2V-08`, `C2V-30` — NOT CARRIED.** Per spec.md §1.11 X-12, both
+  appear **only** in `docs/dead-code-audit-2026-08-18.md:1796`'s
+  assignment table — neither has a body entry anywhere else in that
+  file. Escalated as E-007 (spec.md §14): either the audit's author
+  supplies the finding text, or these two are struck from this
+  mission's inventory. **Nobody has acted on them** — inventing a
+  defect to match a label is exactly the failure mode
+  `feedback_verify_agent_citations` exists to prevent. **Owner:** the
+  `docs/dead-code-audit-2026-08-18.md` author. **Date:** 2026-09-12.
 
 ### 2026-09-11 (finding #61 round-2 review, `fix/memory-persist-growth-and-latency-v2`) · served-mode exit never calls `core.Core.Shutdown(ctx)` — only `api.Shutdown()` does
 
@@ -1835,6 +2399,17 @@ this commit. `SubagentTab.vue` / `SubagentBudgetMeter.vue` remain unmounted
 (UNIT-10, gated on UNIT-8 + UNIT-9 landing first per the mission's plan.md
 Rule 5) — this paragraph covers only the registration half.
 
+**2026-09-12 · Sub-agent half CLOSED — see Drained.** UNIT-9 gave
+`SubagentBranch`'s six fields real producers and UNIT-10 mounted
+`SubagentTab.vue` + `SubagentBudgetMeter.vue` from `SessionsView.vue`,
+wired to the four control RPCs UNIT-8 landed earlier the same day. This
+row's sub-agent half is fully drained — see the Drained section's
+"Live tools whose only UI is unmounted — sub-agent half" entry for the
+verification detail. **The todo half is UNCHANGED and remains open**
+(different producer, different parent component — out of this
+mission's scope per its spec.md §7 non-goals); do not read this
+correction as closing the row as a whole.
+
 ### 2026-08-14 · The denial UX gap (opened by deleting `DenialNotice`)
 
 `DenialNotice.vue` + `usePolicyDecisions()` + `_emitDenialForTest` were
@@ -2145,6 +2720,15 @@ panel and restore the nav entry in the same PR that wires the producer.
 that ruling background execution ships, so this row's conditional applies:
 remount the panel and restore the nav entry in the same PR that wires the
 producer.
+
+**2026-09-12 · CLOSED — see Drained.** The conditional above fired:
+`subagent-control-and-background-tasks-01PMZB11` shipped the producer
+(migration registration, real `BackgroundSpawn`/`BackgroundEnd`
+assignments, the `HookFirer` wiring, `kenaz__monitor`'s predicate case)
+and, per the ruling, remounted `TasksPanel.vue` + restored the Settings
+nav entry in UNIT-11. See the Drained section's "The background-task
+subsystem has no producer" entry for the full verification detail and
+commit list.
 
 ### 2026-08-14 · `cedar.CheckLLMFallback` — the LLM fallback chain is ungated
 
@@ -3278,7 +3862,576 @@ documented retirement.
   file with nothing but start/stop markers, and no UI currently exposes even
   that much.
 
+### 2026-09-11 · RESOLVED (import boundary) / STILL OPEN (buildability) — `check-no-fleet-imports.sh`'s bare `core/rpc` allowlist entry exempted its whole subtree, and 7 real view packages relied on the hole
+
+**Found**: 2026-09-11, during the finding-#48 planted-violation-proof sweep
+(11 of 49 CI gates had no proof they could fail — see
+`scripts/ci/gates_can_fail_test.go`'s 2026-09-11 block). Planting a
+`core/fleet` import in a brand-new package under `core/rpc/views/` to prove
+`check-no-fleet-imports.sh` (the OSS-first boundary gate) could fail — it
+didn't. **RAN**, not read: `bash scripts/ci/check-no-fleet-imports.sh` with
+`import _ ".../core/fleet"` planted in a fresh
+`core/rpc/views/zzgateprobefleetimport/probe.go` reported
+`clean — no unauthorized fleet imports found: PASS`, exit 0.
+
+**Root cause** (`scripts/ci/check-no-fleet-imports.sh:79`, unchanged by this
+sweep — see disposition below): the allowlist match is
+`[[ "$pkg" == "$a" || "$pkg" == "${a}/"* ]]` for every entry in `ALLOWLIST`,
+including the bare `"${MODULE}/core/rpc"` entry. The `"${a}/"*` wildcard
+means that entry matches **any** package whose import path starts with
+`core/rpc/` — not just the top-level `core/rpc` chassis-wiring package the
+comment above it describes. `core/rpc` has exactly two subdirectories,
+`middleware` (separately allowlisted) and `views` (dozens of packages, only
+two of which — `settings`, `fleet` — are supposed to be exempt). Every other
+package under `core/rpc/views/` inherits the exemption by accident.
+
+**This is not hypothetical — RAN and confirmed live**: reverting the plant
+and instead running the gate against the unmodified tree with a locally
+tested fix (exact-match the bare `core/rpc` entry, keep prefix matching for
+the other four) turned the gate red against the **real, currently-committed
+tree**, naming 7 packages: `core/rpc/views/{catalog,cedar,compliance,
+contexts,sites,slashcmd,sync}`. Each has a non-test `impl.go` importing
+`core/fleet` (confirmed via `grep -l core/fleet core/rpc/views/<pkg>/*.go`)
+and none is in `ALLOWLIST`. They pass today only because of the prefix hole.
+This sweep did not ship that fix — see disposition.
+
+> **UPDATE 2026-09-11 (same day), v0.78.2.** The classification the escalation
+> below asked for was **done**, and the gate fix **shipped**. Each of the 7
+> packages was checked by reading actual usage rather than import lines: every
+> one holds a `*fleet.Client` / `*fleet.Syncer` / `*fleet.AuditArchiver` (etc.)
+> as a structural field on its API struct, wired with a live fleet object at
+> boot in `core/rpc/api.go`, and none is cheaply decouplable. So reading (a)
+> — legitimately fleet-facing — won for all 7; none was OSS-first drift to
+> unwind. All 7 are now in `PREFIX_ALLOWLIST` with dated justifications, the
+> matcher is split into `EXACT_ALLOWLIST` (equality; the `core/rpc` chassis)
+> and `PREFIX_ALLOWLIST` (named leaves), and a new planted-violation proof
+> plants *inside* `core/rpc/views/` and is named by the gate.
+>
+> **Two corrections to the entry below.** (1) The exemption was larger than
+> recorded: the wildcard exempted not 7-plus-chassis importers but **every
+> package under `core/rpc/` — 53 of them — plus `core/mcp/builtin/sites`,
+> i.e. 54 of 242 checkable packages went unreviewed.** The count of *real*
+> importers (12 = 1 exact + 11 prefix) was right; the count of *exempted*
+> packages was never stated. (2) `core/rpc/middleware` was already in the
+> pre-fix allowlist by name, so it was never "previously unlisted" — the 7
+> genuinely-new entries are `catalog, cedar, compliance, contexts, sites,
+> slashcmd, sync`. Independent review caught this; the PR body and commit
+> message for the fix both said 8 and are wrong.
+>
+> **What is still open is not the gate, it is the architecture.** The property
+> the OSS-first framing implies — *delete `core/fleet/` and `core/rpc` still
+> builds* — is **genuinely not held**: `core/rpc` imports `core/fleet`
+> directly and uses `*fleet.Client` as a bare local type, and all 11 prefix
+> packages hold typed `*fleet.X` fields. **No CI job verifies it**;
+> `check-oss-first.sh` only sets `HARNESS_FLEET_DISABLED=1` with the package
+> still physically present, so it cannot catch this. The gate's header now
+> discloses that its "fork case: PASS" is an import-boundary pass only and
+> says so in the script. Unwinding it (neutral interface, or a build tag)
+> remains an architecture decision with **no owner assigned** — that half of
+> the escalation below stands unchanged.
+
+**Disposition: escalate, not fix-and-ship.** The technically-correct fix
+(exact-match `core/rpc`) is small in diff size but not small in blast
+radius: it immediately fails CI for 7 packages that have apparently been
+fleet-facing for some time without anyone widening the allowlist to say so
+in review. Two readings are equally plausible from here and this sweep has
+no way to distinguish them:
+
+1. These 7 packages have a legitimate, undocumented reason to import fleet
+   (config-pull, capability checks, telemetry — several plausible per their
+   names: `sites`, `sync`, `compliance`), and the allowlist itself is stale
+   — it should be widened to name them explicitly, with the same
+   per-package justification style as the existing 5 entries.
+2. This is exactly the OSS-first drift the gate exists to prevent, and it
+   shipped silently because the prefix bug made the gate incapable of
+   seeing it — the fork/OSS-first contract (`check-oss-first.sh`,
+   `HARNESS_FLEET_DISABLED=1`) may currently be broken for anyone who forks
+   and deletes `core/fleet/`, since 7 RPC view packages would fail to build.
+
+Per CLAUDE.md's "Escalate when the call is genuinely product, not
+technical" — resolving which reading is true requires knowing why each of
+the 7 packages reaches into `core/fleet`, which is a review call, not a
+grep result.
+
+- **Blocker:** someone who knows the fleet-integration roadmap needs to
+  classify each of the 7 packages as (a) legitimately fleet-facing → add to
+  `ALLOWLIST` with a one-line reason matching the existing 5 entries' style,
+  or (b) drift → remove the import / route it through `core/rpc/views/fleet`
+  or `core/rpc/views/settings` instead. Only after that classification
+  should the exact-match fix to `check-no-fleet-imports.sh:79` (tested and
+  ready — see the sweep's PR) land, since landing the gate fix first with no
+  classification done would just turn CI red with no actionable diff.
+- **Owner:** whoever owns the fleet-auth-foundation-01NDFSEX08 boundary
+  (the mission `check-no-fleet-imports.sh`'s own header attributes WP07 to).
+  No owner currently assigned.
+
+The gate's planted-violation proof added by this sweep
+(`no-fleet-imports/unauthorized-package-imports-fleet` in
+`gates_can_fail_test.go`) deliberately plants outside `core/rpc/` (under
+`core/sessions/`) to stay honest about what the **shipped** gate can
+currently prove — the field-proven class (an unrelated package importing
+fleet, the shape that really fired on release/v0.78.1 against
+`core/serve`). It does not claim the `core/rpc/views/` hole is closed.
+
+### 2026-09-12 (fleet-org-config-inheritance-01NORGX01 WP02 triage) — `Bundle.ProvisionedMCP`/`ProviderSetups` were signed and transmitted with ZERO apply branch — WIRED for ProvisionedMCP, ProviderSetups stays deferred
+
+**Found**: 2026-09-12, triaging `fleet-org-config-inheritance-01NORGX01`
+against the live tree. `ef43a2f1` (2026-09-10, WP01) added
+`Bundle.ProvisionedMCP` and `Bundle.ProviderSetups`, both signed into
+`bundleSigningPayload` — so a fleet server could push either section and
+the harness would verify and ACK it — but
+`compositeConfigApplier.ApplyBundle` (`core/rpc/views/settings/fleet.go`)
+had no branch reading either field at all. **RAN**, not read:
+`rtk proxy grep -rl "ProvisionedMCP\|ProviderSetup" core/` returned only
+`bundle.go`, `bundle_test.go`, `bundle_knob_coverage.go` — no consumer
+anywhere in the tree. `bundle_knob_coverage.go` already carried
+`RegisterDeferred` entries for both (so `TestKnobCoverage_Bundle` was not
+lying), but the deferral was undocumented here, contrary to CLAUDE.md's
+own release-ritual instruction to record every `RegisterDeferred` with a
+dated blocker+owner.
+
+**Disposition — split, because the two sections have different blockers.**
+
+- **ProvisionedMCP: WIRED, same commit as this finding.**
+  `recipes.ApplyProvisionedMCP` (`core/mcp/recipes/org.go`, new) installs
+  each entry as the highest-precedence ("org_wins_readonly") layer of the
+  shared `*recipes.MergedCatalog` (`merged.go`'s new `SetOrgRecipes`).
+  `compositeConfigApplier.ApplyBundle` now converts `b.ProvisionedMCP` and
+  calls it unconditionally on every apply (not gated on non-empty — see
+  the in-code comment on why a subsequent empty bundle must clear a prior
+  org overlay, not leave it stale). `StopFleetBackground` (sign-out)
+  clears the overlay via the same method. `knobcoverage.Register` replaces
+  the `RegisterDeferred` entry. No architecture change was needed for
+  WP03's "OAuth client_id resolution order" requirement: every OAuth
+  sign-in call site resolves the recipe to use via
+  `MergedCatalog.Get`/`.Recipes()` (e.g.
+  `core/rpc/views/tools/oauth.go:404`'s `recipe.Auth.ClientID` read), so
+  once the org-provisioned recipe wins the merge, its `Auth.ClientID`
+  wins the resolution by construction — spec §3.3's ordering falls out of
+  the merge precedence rather than needing separate resolution code.
+  `docs/unwired-ledger.md` did not previously record `mcp_recipes`'s own
+  near-miss: `core/rpc/sync_categories.go`'s `emptyPayloadKind` declared
+  `ScopeOrg` for the `mcp_recipes` `SyncKind` (registered, no error) with
+  an Apply that was **always** a no-op regardless of scope — an
+  `org_config["mcp_recipes"]` payload would have silently "succeeded"
+  while doing nothing, the exact "gate that cannot fail" shape CLAUDE.md
+  flags. This is now fixed too: `mcpRecipesKind`'s `ScopeOrg` branch
+  parses the payload and calls the identical `ApplyProvisionedMCP`
+  function used by the bespoke-bundle-field path, so the wire shape can
+  migrate later (`fleet-generic-sync-framework-01NSYNC02` WP04, not yet
+  landed) without a second implementation ever existing.
+
+- **ProviderSetups: still deferred, RegisterDeferred entry re-dated with a
+  named blocker.** Owner: alec. Blocker: `kitty-specs/fleet-org-config-
+  inheritance-01NORGX01/plan.md`'s Gates section states explicitly — "no
+  harness WP04 merge before a fleet dev environment can exercise it" —
+  and the dedicated encrypted org-key channel WP04 requires (org-shared
+  provider keys delivered straight into the device credstore, never
+  through any bundle/RPC/frontend path) does not exist yet either. This
+  is the same "kenaz-fleet org endpoints not yet available" blocker ruled
+  at `docs/escalation-register-2026-08-19.md` §F-2 for the mission as a
+  whole — unchanged as of this date. Unlike ProvisionedMCP, WP04's apply
+  target (LLM provider stack wiring in `core/rpc/api.go`+`core/llm/*` plus
+  a not-yet-built credstore-delivery mechanism) has no safe
+  server-independent slice to wire ahead of the blocker clearing.
+
+**Two related, out-of-scope findings surfaced during this triage — recorded
+here because they are also `RegisterDeferred`-shaped gaps this sweep found
+but did not fix (both predate this mission and are cross-cutting to
+`fleet-config-pull-01NDFSEX10`, not `01NORGX01`-specific):**
+
+1. `audit.KindFleetConfigApplied`, `KindFleetConfigSignatureRejected`, and
+   `KindFleetConfigPartialFailure` (`core/context/audit/audit.go:265-286`,
+   payload structs at `:1345-1381`) are declared with full payload types
+   and privacy-invariant doc comments but have **zero emit call sites
+   anywhere in the tree** — **RAN**:
+   `rtk proxy grep -rn "KindFleetConfigApplied\|KindFleetConfigPartialFailure\|KindFleetConfigSignatureRejected" core/`
+   returns only the three declarations plus their payload structs, no
+   `Emit(...)` call. `core/fleet/config_pull.go`'s `ConfigPoller` (the only
+   place that knows verify/apply/ACK outcomes) has no audit-emitter field
+   at all — wiring this is a `ConfigPoller` constructor-signature change
+   touching every call site, not a small patch. This is why this
+   mission's own FR-010 ("applying provisioned sections emits an auditable
+   event naming the org, the recipe/provider ids, and the bundle_id") is
+   **not met** — there is no live `fleet.config.applied` emission for
+   ANY bundle section to extend, not just this mission's new one. Owner:
+   unassigned. Blocker: threading an audit emitter through `ConfigPoller`
+   (cross-cutting to `fleet-config-pull-01NDFSEX10`).
+2. `config_pull.go`'s own header comment (line 12) claims the disk cache
+   is "`<DataDir>/fleet/bundle.json` + `bundle_checksum.txt`", but the
+   actual persisted files are `bundle_id.txt` + `bundle_checksum.txt`
+   (`bundleIDPath`/`bundleChecksumPath`, `:378-385`) — the full bundle
+   body is **never** written to disk. Every section that only lives in an
+   in-process package-level var (`llmview`'s model-prefs store is the
+   clearest case; `recipes.MergedCatalog`'s new org overlay from this WP
+   is now in that same category) is lost on a process restart while
+   offline, contradicting spec NFR-003 / this mission's FR-009
+   ("cached provisioned config stays active when fleet is unreachable").
+   "Offline-safe" today only means "mid-session, don't undo what's
+   applied in memory" — it does not survive a restart. Not fixed here:
+   persisting and replaying the full bundle at boot is an architecture
+   change to `fleet-config-pull-01NDFSEX10`, not an `01NORGX01` patch.
+   Owner: unassigned. Blocker: same as #1 — both are `ConfigPoller`/
+   `config_pull.go` architecture, not this mission's surface.
+### 2026-09-12 (connector-lifecycle-truth-01PMZ303 UNIT-3/UNIT-4) — E-006: the `oauth` primary_auth arm (Slack + 5 others) has no working sign-in path, and nine Slack-specific symbols are dead until it is resolved
+
+`core/rpc/views/tools/oauth.go`'s `SignInRecipe` fails closed
+unconditionally for every recipe whose `primary_auth == "oauth"` (6
+recipes: slack, zapier, make, pipedream, google-calendar, google-drive),
+citing `E-006` in the returned error string. This is deliberate and
+correct as shipped — none of the six is dynamically-registerable
+(`browser_oauth_dcr`), ships a pre-registered client id
+(`browser_oauth_pkce`), or has a device-code flow — but it leaves real
+dead code behind it:
+
+- `core/mcp/oauth/slack_signin.go`'s nine exported symbols
+  (`SlackSignIn`, `SlackSignInWithDiscovery`, `ResolveSlackClientID`,
+  `SlackSignInConfig`, `SlackAuthorizationEndpoint`, `SlackTokenEndpoint`,
+  `SlackClientIDEnvVar`, `SlackDefaultScopes`, `ErrSlackNoClientID`) have
+  zero production callers. They drag `SlackLoopbackPort`
+  (`loopback.go:32`) and `InteractiveConfig.FixedPort` (`loopback.go:60`)
+  with them — `FixedPort` has no non-Slack, non-test setter.
+- Two dead branches live inside this dead code
+  (`slack_signin.go`'s `SlackSignInWithDiscovery`, MO-06): `:192`
+  returns unconditionally on `err != nil` so the `errors.Is(err,
+  ErrNoChallenge)` fallback a few lines later is unreachable, and
+  `scopes` is already defaulted earlier in the function so the
+  `len(scopes) == 0` branch is a second dead branch in the same
+  function. Both are unreachable regardless of whether the Slack lane
+  is ever wired, but fixing them has zero behavioural value while
+  nothing calls the function they live in — they would need re-review
+  the moment E-006 is resolved anyway, since resolving it means writing
+  (or rewriting) this function's real control flow.
+
+The user-visible half of this — `registry.json`'s slack `warning` telling
+the operator to set an environment variable no code reads — did **not**
+wait on E-006 and is fixed (UNIT-4, this release): the copy now states
+the real limitation and points at the working `slack-tokens` stdio
+fallback, with `warning_severity: "danger"` so it renders as the hard
+blocker it is.
+
+- **Blocker:** whether Slack (and the other 5 `oauth`-arm recipes) moves
+  to a real sign-in path is a product call, not a technical one.
+  `slack_signin.go:22–24`'s own TODO anticipates moving Slack to a baked
+  client id, which would reclassify it as `browser_oauth_pkce` under
+  UNIT-2's bring-your-own posture — that decision (register a real app
+  vs. rely entirely on the BYO posture vs. leave slack-tokens as the only
+  supported path) has not been made.
+- **Owner / deleting change:** alec. Deletes (or rather, resolves) when
+  either (a) a product decision routes the `oauth` arm's recipes to one
+  of the five working arms and this unit's dead Slack symbols get real
+  callers (fixing MO-06 in the same commit, since it would no longer be
+  dead-code-inside-dead-code), or (b) the product decides `oauth`-arm
+  recipes are permanently `keys`/stdio-fallback-only, in which case the
+  nine Slack symbols, `SlackLoopbackPort`, and `InteractiveConfig.FixedPort`
+  become deletable under a documented product retirement (not today's A-0
+  freeze).
+
+### 2026-09-12 (connector-lifecycle-truth-01PMZ303 UNIT-5) — three MO-* OAuth findings justified rather than wired
+
+Three of the sixteen OAuth-cluster findings the 2026-08-18 closing sweep
+assigned to this mission (`spec.md` §1.10) were reviewed this pass and
+found to need either a real per-call clock-injection design or a real
+multi-scheme-header design — neither of which is a one-line wire, and
+inventing one un-reviewed risks landing wrong. MO-07, MO-09, MO-12 and
+MO-13 were wired or pinned by test this same session (see git log —
+`fix(mcp): UNIT-5 (MO-07, MO-09)`, `test(mcp): UNIT-5 (MO-12)`, `fix(mcp):
+UNIT-5 (MO-13)`); the doc naming `LoadedClient` (a type that does not
+exist in the repo) was already corrected by an earlier UNIT-3 commit and
+needed no further action this pass.
+
+- **MO-05** — `ResolveClientIDConfig.Now` (`resolve.go:71-72`) is derived
+  into a local `nowFn` (`:97-99`) that is never invoked; the DCR expiry
+  check that actually runs uses `DCRStore`'s own `s.nowFn` (fixed to
+  `time.Now` at `NewDCRStore` construction, `dcr_store.go:105`, with no
+  setter). Wiring `cfg.Now` to mean anything would require either a
+  per-call clock override on a shared, potentially concurrently-used
+  `*DCRStore` (a real race-safety design question — CI runs `-race`) or a
+  second `DCRStore` constructed per call (defeats the point of the
+  cross-launch cache UNIT-3 3e just wired). No test anywhere sets
+  `cfg.Now` today, including in this package's own test suite, so this is
+  a genuinely orphaned seam, not a live regression risk.
+  - **Blocker:** needs a design decision on whether `DCRStore`'s clock
+    should be mutable per-call (and if so, how that interacts with
+    concurrent `Resolve` calls sharing one store) or whether this field
+    should be retired in favour of constructing a test-only `DCRStore`
+    with a custom `nowFn` directly (which every existing DCR expiry test
+    already does, bypassing this field entirely).
+  - **Owner:** alec.
+
+- **MO-08** — `StoredCredential.AuthorizationHeader` (`store.go`)
+  hardcodes `"Bearer "` under a doc saying `TokenType` defaults to Bearer
+  when unset; `TokenType` is written on every mint path and read nowhere.
+  This has a **live caller** (`core/rpc/views/tools/oauth.go`'s bearer
+  injection at spawn), so a DPoP/MAC-authenticating MCP provider would
+  401 with no diagnostic naming the real cause. No recipe in either
+  catalog uses a non-Bearer scheme today (measured: zero `token_type`
+  overrides anywhere in `registry.json`/`shipped.json`), so this is
+  latent, not field-proven.
+  - **Blocker:** wiring `TokenType` into the header format is a real
+    per-scheme change (Bearer vs. DPoP have different header shapes —
+    DPoP requires a proof-of-possession JWT, not just a different
+    keyword), not a one-line format-string edit, and there is no
+    DPoP/MAC provider in either catalog to test against without
+    inventing one.
+  - **Owner:** alec.
+
+- **`FromDCR`** (`resolve.go:49`, written at `:117`/`:150`) — its doc says
+  *"so callers can track the source for debugging"*; nothing logs or
+  emits it today. Read only in tests.
+  - **Blocker:** none technical — this is the cheapest of the three to
+    close (thread it into the existing `mcp.recipe.*` structured log
+    lines `SignInRecipe`/`ResolveClientID` already emit) but doing so
+    without a concrete downstream consumer (a log line nobody greps for
+    is a different flavor of the same "recorded, unread" defect this
+    mission is about) needs a decision on whether debug-level
+    provenance logging is worth the extra field on every log call, or
+    whether `FromDCR`'s job is fully discharged by
+    `ClientIDResult.FromDCR`'s existing test coverage of the resolution
+    order itself.
+  - **Owner:** alec.
+
+### 2026-09-12 (connector-lifecycle-truth-01PMZ303 UNIT-12) — http/sse `Spec.InitTimeout` has no request to gate
+
+`core/mcp/transport/http/connection.go:52` and
+`core/mcp/transport/sse/connection.go:71` declare `InitTimeout` with a doc
+promising it is *"the response deadline once initialize is on the wire"*.
+UNIT-12 wired the stdio half of this finding (`InitTimeoutMs`/
+`PingPeriodMs` now reach `stdio.SpawnSpec` from the recipe, overriding the
+pool-wide default — see git log) but deliberately did not touch http/sse,
+because the premise the doc and the original spec finding both share —
+"the deadline is assigned but not read" — undersells what is actually
+there: **`http.Connection.Open` (and sse's equivalent) performs zero
+network I/O.** There is no `initialize` JSON-RPC round-trip anywhere in
+either transport package at the `Connection` level; `Open` only parses
+and validates the URL, builds header templates, and sets up the HTTP
+client. `MethodInitialize` is dispatched exactly once in the whole
+`core/mcp` tree, from `stdio/server.go:465` — http and sse never send it.
+
+This means `InitTimeout` cannot be "wired" by adding a read of the field
+inside `Open`, because there is no request there to put a deadline
+around. The honest fix is a real design question: either (a) http/sse
+gain an actual stateful handshake step (a real feature — these
+transports may be intentionally stateless-per-POST, matching how MCP
+supports HTTP-transport servers that answer each JSON-RPC call
+independently with no session concept, in which case "the response
+deadline once initialize is on the wire" describes a step these
+transports never perform by design), or (b) `InitTimeout` is repurposed
+to gate the *first* real network call each transport does perform (the
+first `tools/list`, or the health probe's first tick), which changes its
+semantics from what its doc currently claims.
+
+- **Blocker:** whether http/sse are meant to have a stateful handshake at
+  all is a product/protocol-conformance call, not a technical one — it
+  determines whether this is "wire a missing feature" or "the doc
+  describes a step that doesn't apply to this transport shape, narrow
+  it." Either answer closes this differently.
+- **Owner:** alec. Deletes (or resolves) when either a handshake step is
+  added to `http.Connection`/`sse.Connection` and `InitTimeout` gates its
+  response, or the doc on both `Spec.InitTimeout` fields is narrowed to
+  say explicitly that no handshake exists for these transports and the
+  field is retired under a documented protocol-conformance decision
+  (not today's A-0 freeze, since that requires a product ruling this
+  session did not have).
+
 ## Drained
+
+### 2026-09-12 · CLOSED — `structured-output-is-reachable-01PMZE14`, all six owed ledger entries
+
+The mission's own tasks.md Appendix names six findings this mission owed
+the ledger "on merge." None had been recorded when this mission was
+triaged and finished against `release/v0.78.2` — UNIT-0/UNIT-1/UNIT-2/
+UNIT-4/UNIT-5 had squash-merged via PR #299 (tag `v0.65.0`) and UNIT-6
+via PR #323, but the ledger entry itself was never written by either
+landing. Recorded now, all six, with the disposition each actually got
+(verified against the live tree, not copied from the spec):
+
+- **`ModelAttrs.JsonSchema` — authored end to end, dropped at the
+  executor** (spec §1.2). **Drained.** `core/agentgraph/seams.go`'s
+  `LLMRequest.ResponseSchema`, `exec_compute.go`'s marshal, and
+  `core/rpc/views/agentgraph/chat/llm_provider_adapter.go`'s translation
+  to `GenerationRequest.ResponseFormat` are all live (WP02, commit
+  `ca605714`). `core/wiring/knobcoverage` sees the whole
+  `agentgraph.ModelAttrs` struct (WP03, commit `03b0d68f`) —
+  `TestKnobCoverage_ModelAttrs` is the gate; a planted removal of the
+  `JsonSchema` registration reddens it.
+- **`llm.StructuredOutputAdapter` — no dispatcher; the documented
+  fallback does not exist** (spec §1.4). **Narrowed, not drained** (WP08,
+  commit `6c1480dd`, disposition (b) per E-002's default). The doc
+  comment at `core/llm/llm.go:353-388` now states plainly the interface
+  has no dispatcher and warns against a fifth `var _
+  StructuredOutputAdapter` assertion — verified live;
+  `TestStructuredOutputAdapterInterfaceNarrowing`-shaped coverage pins
+  exactly four implementors (anthropic/openai/openrouter/bedrock),
+  gemini deliberately absent. The fallback path itself remains
+  unbuilt and unowned (E-002 named no owner) — that residual is real
+  but is a design deferral recorded in the interface's own doc comment,
+  not a silent gap.
+- **`structured.SchemaHash` + `audit…SchemaHash` — two orphans, each the
+  other's only reason to exist** (spec §1.4a). **Drained**, in this
+  landing (WP06, below) — `core/llm/registry/structured_stream.go`'s
+  `emitAudit` is `structured.SchemaHash`'s first production caller, and
+  `LLMStructuredResponsePayload.SchemaHash` now has a real assigner.
+- **`RequestKnobs.ResponseFormatMode` / `.JSONMode` +
+  `openaiwire/base.go:77-79`'s false docstring** (spec §1.5). **Dated
+  justification**, not wired (WP07, commit `8a603ce8`; E-003's
+  recommended default). `core/llm/openaiwire/knob_coverage.go` registers
+  both as `RegisterDeferred`, each naming a real blocker and owner —
+  updated again during `model-settings-reach-the-model-01PMZ101` UNIT-6
+  to record that the *writer* half of the original blocker landed
+  (`Sessions_SetKnobsDefault`) but the *consumer* half (an override
+  branch in `openaiwire/body.go`) is still open and is out of scope for
+  this mission specifically because `body.go` is Z101 territory
+  (`CLAUDE.md`/plan.md Rule 2 — a commit here may not touch it). The
+  docstring itself no longer claims a wire that does not exist.
+- **`audit.KindLLMStructuredResponse` — declared, never emitted** (spec
+  §1.6). **Drained** by this landing's WP06: `llmregistry.Options` gained
+  an `Audit contextaudit.Emitter` field, wired at
+  `core/rpc/api.go`'s `newLLMStack` construction site via
+  `&acpAuditBridge{impl: a.auditImpl}`, and
+  `core/llm/registry/structured_stream.go`'s `Final()` emits the kind
+  with the real `Attempts` count, `ValidationOutcome`, and
+  `structured.SchemaHash(schema)` on every call that reaches schema
+  validation. **Correction to the spec's own §1.6/D-6, recorded so the
+  next reader does not carry the stale claim forward:** at spec-writing
+  time (2026-08-19) the audit event log had no durable backend
+  (`MemoryBackend` only, `RegisterMigrations` uncalled) and D-6 required
+  the WP06 commit body to say so. `audit-that-tells-the-truth-01PMZA10`
+  landed on this same release branch since then (`c6f40bb4` through
+  `7b0a95b2`) and wired a real sqlite-backed store
+  (`eventlog.NewSQLBackend` + `audit.WithStore`) into `a.auditImpl`
+  whenever a real `storage.DB` is available. So as of this landing, a
+  `KindLLMStructuredResponse` event genuinely reaches disk in a
+  production build via `audit.API.Push` → `store.AppendComputed` — it is
+  **not** still writing into a ring buffer that evaporates on process
+  exit. See `core/llm/wp_pi_persistence_integrity_test.go`'s addendum
+  for the full citation trail.
+- **`coverage_registry.yaml`'s false bedrock `unsupported:` row** (spec
+  §1.8). **Corrected** (WP05, commit `c20edafc`) — the bedrock
+  `ResponseFormat`/`JSONMode` rows now cite the real wire-shape test
+  functions instead of the false "not wired at generic adapter layer"
+  string; gemini rows were added to the same file. The
+  adapter↔capability-row parity gate itself (G-3) landed separately as
+  WP09 (PR #323, commit `e17b67ad`) — `core/llm/registry/
+  wp09_g3_capability_row_parity_test.go` and
+  `core/llm/bedrock/wp09_g3_row_parity_test.go` are its planted-violation
+  proofs.
+
+Also recorded and **not** fixed, per the mission's own tasks.md
+Appendix (unchanged by this landing, still true): four copies of the
+OpenAI `response_format` translation exist
+(`openaiwire/body.go`, `openai/openai.go`, `openrouter/openrouter.go`,
+`azure/adapter.go`) — consolidating them is a refactor the mission
+explicitly scoped out, not a lie; and `bearer.go` (bedrock's REST
+transport) still has no `JSONMode` handling while the SDK transport
+does.
+
+Mission fully closed with this entry: UNIT-3 (WP06, audit emitter) and
+UNIT-7 (WP10, review gate + router request a real schema, with
+`ErrCapabilityUnsupported`-gated degrade per D-9) were the two units
+still open when this pass started; both landed in the same change that
+added this entry.
+
+### 2026-09-12 · CLOSED — the background-task subsystem has no producer
+
+The original entry (2026-08-14, above) found `core/tasks` fully built
+(SQLite store, ring buffers, boot-time orphan recovery, four RPCs, a
+retained-but-unmounted Settings panel) and structurally unable to run:
+nothing ever called `Registry.Register` because
+`bash.Options.BackgroundSpawn` had no production assignment, and
+`Registry.StdoutWriter`/`StderrWriter` had no callers because
+`spawnBackground` started the process before a task id existed to
+attach them to. A-13/A-7 ruled: build it.
+
+`subagent-control-and-background-tasks-01PMZB11` did, across five units
+verified against the live tree (not copied from spec):
+
+- **UNIT-1** (`1ce7ea13`) recorded A-13's corrections and confirmed
+  which of its premises were still true against the merged base.
+- **UNIT-2** (`ef0eecb7`) registered the `core/tasks` migration through
+  the real `core/storage/migrations` framework with a reserved version
+  block — the `tasks` table now exists on every install, including
+  upgraded ones (FR-001; re-verified by the `upgrade-path` CI job
+  against the `v0.65.0` snapshot, per UNIT-PI above).
+- **UNIT-3** (`44eaf995`) attached the task registry to
+  `core/tools/bash`'s background-spawn path with a restructuring that
+  allocates the task id BEFORE `cmd.Start()`, so `StdoutWriter`/
+  `StderrWriter` can actually attach (FR-002/FR-003) —
+  `run_in_background: true` now produces a real row with real
+  captured output.
+- **UNIT-4** (`766d917b`) wired `Registry.Options.HookFirer` in
+  production, so `hooks.EventBackgroundTaskComplete` fires on every
+  terminal task (FR-004) — closing the exact gap hooks-fire-sites
+  finding #85 (also landed this release) named.
+- **UNIT-5** (`7fbfdc86`) registered `kenaz__monitor` with a real
+  predicate case, removing it from both
+  `i11-unregistered-builtin-tools.txt` and `i7-orphan-packages.txt`
+  (FR-005) — a registered `kenaz__monitor` no longer returns an empty
+  `lines` array forever, because UNIT-3 gave it real output to read.
+- **UNIT-11** (`1062fad1`, squash-merged `v0.71.0` as `620c048c`)
+  restored the Settings → Tasks nav entry and mounted `TasksPanel.vue`,
+  `BackgroundTaskChip.vue` and `TaskOutputViewer.vue` (the last had zero
+  importers at all before this), per A-13's ruling and the parked
+  entry's own conditional above. `SettingsTabsNav.spec.ts`'s pinned
+  absence assertion was inverted, not deleted, per the mission's own
+  convention for that class of test.
+
+**Disposition: Drained**, not narrowed — every producer gap the
+original entry named now has a real assignment, and the parked UI
+(panel + nav entry) was remounted in the same ruling's conditional,
+not left dangling.
+
+### 2026-09-12 · CLOSED — live tools whose only UI is unmounted, sub-agent half
+
+The original entry (2026-08-14, above) found `SubagentTab.vue` +
+`SubagentBudgetMeter.vue` with zero importers and, at the time, no
+backend to import them for either: `kenaz__subagent_dispatch` was
+itself statically unreachable (the `var subagentSeam
+agentgraph.BranchSeam // nil` dead-branch shape UNIT-12 below now has
+a permanent CI gate for), and the tab's four control emits had no RPC
+counterpart at all. A-13 ruled: build, not delete.
+
+Closed by three more units on the same mission, verified against the
+live tree:
+
+- **UNIT-8** (`40f2e2a8`, `4d2ca708`, `fd938980`, `5feeb930`) landed
+  `Subagent_Abort` / `Subagent_Steer` / `Subagent_Pause` /
+  `Subagent_Resume` as real Wails-bound RPCs, each gated by a Cedar
+  action in the `tool.subagent.*` family and each writing exactly one
+  audit record per call that actually changes state (idempotent
+  re-calls write none) — `TestAPI_{Abort,Steer,Pause,Resume}Subagent_
+  DeniedByRealCedarPolicy` pin the negative half against a REAL
+  `cedar.Engine`, not `cedar.AllowAll{}` (FR-008).
+- **UNIT-9** (`41d15cd4`) gave `SubagentBranch`'s six fields
+  (`subagentStatus`, `profileId`, `tokensUsed`, `budgetTokens`,
+  `elapsedS`, `budgetTimeS`) real producers on `Branches_List` /
+  `Branches_GetStatus`: `subagentStatus` off the tracked
+  `core/tasks.Task` (mapped onto a strict subset of the frontend
+  union — pinned by `TestSubagentStatusValuesAreInTSUnion`),
+  `tokensUsed` off the child session's real `usage.Manager` aggregate
+  (the same per-turn accounting token-cost-telemetry already writes),
+  `profileId`/budgets off metadata `BranchSeamAdapter.Fork` now records
+  against the branch id whenever the dispatch carries a `ProfileID`
+  (FR-009). `TestAPI_ListBranches_SubagentFieldsPopulatedAndOmitted`
+  proves both the positive half and AC-11's required negative half (an
+  ordinary branch created through the identical `CreateBranch` call
+  gets none of the six), with a manually-verified mutation proof.
+- **UNIT-10** (`2e920f7e`) mounted `SubagentTab.vue` from
+  `SessionsView.vue` — the natural owner, since it already renders
+  `BranchSidebar` and owns the active session's transcript — gated on
+  a real `activeSubagentBranch` computed derived from `BranchSidebar`'s
+  own `Branches_List` rows (UNIT-9's fields), not a placeholder. The
+  four emits reach UNIT-8's RPCs through new
+  `client.branches.{abort,steer,pause,resume}Subagent` methods.
+  `SubagentTab.spec.ts` asserts the status pill's RENDERED TEXT for all
+  six `SubagentStatus` values and the budget meter's rendered
+  percentage off real `tokensUsed`/`budgetTokens` — not prop
+  pass-through (the `?role=`-blank-pill trap this ledger's 2026-08-14
+  entry on `SearchModal` names).
+
+**Disposition: Drained.** The todo half of the original entry is
+explicitly **not** touched by this closure — see the correction left
+in place on the original 2026-08-14 entry above.
 
 ### 2026-08-19 · CLOSED — the missing-upgrade-snapshot hole is now gated
 

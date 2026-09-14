@@ -80,11 +80,40 @@
 # question for it (mirrors the G-0 self-exclusion precedent in I14: a
 # file's own declaration doesn't count as evidence about itself).
 #
+# PASS 2 (#69): THE REVERSE DIRECTION
+# -----------------------------------------------------------------
+# Pass 1 above asks "does every useEventStream-subscribed topic reach
+# passthroughTopics". It says nothing about the other direction: a topic
+# IN passthroughTopics that NO useEventStream call subscribes to — dead
+# weight forwarded to every served connection's frame stream, and more
+# importantly a passthroughTopics entry that no longer states real
+# intent. This matters more than it used to: passthroughTopics recently
+# became the single hand-authored source of truth (the TS
+# SERVED_STREAM_TOPICS list is generated from it, per
+# wsstream_topics_parity_test.go), so an orphan entry is read as a
+# statement of intent nobody meant, not a harmless leftover.
+#
+# Pass 2 reuses this same file's discovery machinery: PASSTHROUGH_BLOCK /
+# IDENT_TO_VALUE to walk passthroughTopics' own elements (this time
+# keeping the identifier, not collapsing straight to a value set) and
+# FRONTEND_WINDOW to ask the identical "does a real useEventStream call
+# mention this value" question pass 1 already asks — just with the two
+# sides swapped. No new discovery machinery.
+#
+# Legitimate exceptions go in a SEPARATE dated allowlist
+# (served-mode-topic-forwarding-orphans.txt), not the pass-1 one — "not
+# forwarded despite a subscriber" and "forwarded despite no subscriber"
+# are different claims about the same value, and conflating the two
+# files would let a pass-1 exception silently launder a pass-2 violation
+# for an unrelated topic that happens to share a line-matching quirk.
+#
 # Exit codes:
 #   0 — every useEventStream-subscribed Topic* const (outside the
 #       excluded desktop-only/self-referential packages) is forwarded via
-#       passthroughTopics, or explicitly allowlisted.
-#   2 — at least one such topic is missing from both.
+#       passthroughTopics, or explicitly allowlisted (pass 1) AND every
+#       passthroughTopics entry has a real useEventStream consumer, or is
+#       explicitly allowlisted (pass 2).
+#   2 — at least one topic fails either pass.
 set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/ci-gate.sh"
@@ -92,6 +121,37 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/ci-gate.sh"
 GATE="[served-mode-topic-forwarding]"
 ALLOWLIST="scripts/ci/allowlists/served-mode-topic-forwarding-gaps.txt"
 PASSTHROUGH_FILE="core/serve/wsstream.go"
+
+# --- Floor guards on the two discovery steps (2026-09-11 hardening).
+#
+# Before this, a benign zero-match grep (exit 1 — "ran fine, found
+# nothing") from either FRONTEND_WINDOW or PASSTHROUGH_BLOCK was
+# indistinguishable from a legitimately empty result, and both passes
+# treat "no candidates" as "nothing to flag, clean". Reformatting
+# passthroughTopics into a grouped `var (...)` block (a realistic
+# gofmt-adjacent change — the `awk '/var passthroughTopics = \[\]string\{/`
+# anchor stops matching) zeroes PASSTHROUGH_BLOCK; renaming every
+# `useEventStream` call site zeroes FRONTEND_WINDOW. Either alone used to
+# be caught only by incidental coupling (the OTHER pass still failing
+# loudly) rather than by design, and breaking BOTH in the same PR — fully
+# plausible, e.g. a frontend rename landing in the same change as a Go
+# gofmt pass — produced "0 candidates / 0 entries / clean", exit 0.
+#
+# The floor is a bare non-vacuity check (>0), not a sanity floor tracking
+# the live count (13 passthroughTopics entries, ~45 useEventStream call
+# sites as of this writing): tripping ANY positive floor on a repo-wide
+# aggregate count requires the discovery step to find zero real matches,
+# which for either of these two shapes only happens on total breakage
+# (the awk anchor stops matching at all vs. matches every line; every
+# real call site renamed vs. some renamed). A higher threshold would not
+# catch a different, unproven failure mode (a partial rename leaving,
+# say, half the call sites intact) any more precisely than >0 does — it
+# would only add false-fail risk as the two counts naturally drift with
+# ordinary feature work (topics added/retired, call sites added/removed).
+# Catching partial-discovery regressions precisely would need per-topic
+# provenance tracking, not a bigger constant; not attempted here.
+FRONTEND_CALL_FLOOR=1
+PASSTHROUGH_TOKEN_FLOOR=1
 
 REPORT_MODE=0
 if [[ "${1:-}" == "--report" ]]; then
@@ -181,6 +241,24 @@ FRONTEND_WINDOW=$(grep -A3 -E 'useEventStream(<[^>]*>)?\(' "${FRONTEND_FILES[@]}
 }
 FRONTEND_WINDOW=$(grep -A3 -E 'useEventStream(<[^>]*>)?\(' "${FRONTEND_FILES[@]}" 2>/dev/null || true)
 
+# --- Floor guard: a zero-match grep above (exit 1) is legal bash and
+# leaves FRONTEND_WINDOW="" exactly the way a real "no useEventStream
+# calls anywhere" tree would — this check is what tells the two apart.
+# Every production frontend/src Topic* candidate below is gated on
+# frontend_hit, which is computed by substring-matching against this same
+# variable, so an empty FRONTEND_WINDOW does not fail candidates — it
+# silently DISQUALIFIES all of them from candidacy, and pass 2 (which
+# also reads FRONTEND_WINDOW) reports every passthroughTopics entry as an
+# orphan-or-nothing-checked in the same breath. Both passes would report
+# "0 checked, clean" rather than surfacing that discovery itself broke.
+FRONTEND_CALL_COUNT=$(grep -oE 'useEventStream(<[^>]*>)?\(' "${FRONTEND_FILES[@]}" 2>/dev/null | wc -l | tr -d '[:space:]' || true)
+if [[ "${FRONTEND_CALL_COUNT:-0}" -lt "$FRONTEND_CALL_FLOOR" ]]; then
+  echo "" >&2
+  echo "${GATE} FAIL: frontend useEventStream discovery found ${FRONTEND_CALL_COUNT:-0} call site(s) across ${#FRONTEND_FILES[@]} production file(s) (floor: ${FRONTEND_CALL_FLOOR})." >&2
+  echo "  This is a gate malfunction, not a clean tree: either every useEventStream(...) call site was renamed/removed repo-wide, or the discovery regex ('useEventStream(<[^>]*>)?\\(') no longer matches this codebase's call-site shape (e.g. the composable itself was renamed). Both pass 1 and pass 2 depend on this window — a false-zero here reports every candidate as 'nothing to check' instead of failing on the topics it can no longer see. Fix discovery before trusting either pass's verdict." >&2
+  exit 2
+fi
+
 # --- passthroughTopics block, resolved to a VALUE set (not an identifier
 # regex like I14 uses per-topic — matching by value is what makes a
 # topic declared under one name but forwarded under a same-valued alias
@@ -195,14 +273,36 @@ PASSTHROUGH_BLOCK=$(awk '/var passthroughTopics = \[\]string\{/{flag=1} flag{pri
 # against IDENT_TO_VALUE would be harmless-but-wrong noise at best, and
 # at worst a bare "." at a sentence's end reduces to an empty subscript.
 declare -A PASSTHROUGH_VALUES
+PASSTHROUGH_TOKEN_COUNT=0
 while IFS= read -r tok; do
   [[ -z "$tok" ]] && continue
   bare="${tok##*.}"  # strip an optional "pkg." qualifier
   [[ -z "$bare" ]] && continue
   if [[ -n "${IDENT_TO_VALUE[$bare]+set}" ]]; then
     PASSTHROUGH_VALUES["${IDENT_TO_VALUE[$bare]}"]=1
+    PASSTHROUGH_TOKEN_COUNT=$((PASSTHROUGH_TOKEN_COUNT + 1))
   fi
 done < <(printf '%s\n' "$PASSTHROUGH_BLOCK" | grep -vE '^[[:space:]]*//' | grep -oE '[A-Za-z_][A-Za-z0-9_.]*' || true)
+
+# --- Floor guard: PASSTHROUGH_BLOCK itself is a bare awk match on the
+# literal opening line `var passthroughTopics = []string{` through the
+# next line starting with `}`. Reformatting the declaration (e.g. into a
+# grouped `var (...)` block, or renaming the identifier) makes the awk
+# pattern stop matching entirely — PASSTHROUGH_BLOCK becomes "", the loop
+# above resolves zero tokens, and PASSTHROUGH_VALUES stays empty. Pass 1
+# then reports every candidate topic as "not forwarded" — which sounds
+# safe (fail-closed) until every one of those topics ALSO happens to be
+# collaterally saved by an allowlist line or a coincidence, at which
+# point pass 1 goes quiet too. Pass 2's own loop (below) re-derives its
+# walk from this same PASSTHROUGH_BLOCK, so an empty block also makes
+# pass 2 iterate zero entries and report "0 checked, clean" — this is
+# the other half of the total-breakage combination the header describes.
+if [[ "$PASSTHROUGH_TOKEN_COUNT" -lt "$PASSTHROUGH_TOKEN_FLOOR" ]]; then
+  echo "" >&2
+  echo "${GATE} FAIL: passthroughTopics discovery resolved ${PASSTHROUGH_TOKEN_COUNT} real Topic* token(s) out of ${PASSTHROUGH_FILE} (floor: ${PASSTHROUGH_TOKEN_FLOOR})." >&2
+  echo "  This is a gate malfunction, not a clean tree: the 'var passthroughTopics = []string{ ... }' shape this gate's awk pattern anchors on no longer matches ${PASSTHROUGH_FILE} (e.g. reformatted into a grouped 'var (...)' block, or the slice was emptied/renamed). Both pass 1 (forward: subscribed-but-not-forwarded) and pass 2 (reverse: forwarded-but-not-subscribed) depend on this block — a false-zero here reports 'nothing to check' on both instead of failing on what it can no longer see. Fix discovery (or the awk pattern) before trusting either pass's verdict." >&2
+  exit 2
+fi
 
 # --- Allowlist (dated "<value>" DATA lines, comments stripped).
 ALLOWLIST_DATA=""
@@ -281,14 +381,84 @@ done
 
 if [[ $REPORT_MODE -eq 1 ]]; then
   echo ""
-  echo "${GATE} ${candidates} useEventStream-subscribed candidates checked, ${allowlisted_count} allowlisted."
+  echo "${GATE} pass 1: ${candidates} useEventStream-subscribed candidates checked, ${allowlisted_count} allowlisted."
 fi
 
-if [[ $fail -ne 0 ]]; then
+# --- Pass 2 (reverse direction, #69). See header. Reuses PASSTHROUGH_BLOCK
+# and IDENT_TO_VALUE (built above for pass 1) and FRONTEND_WINDOW (built
+# above for pass 1's frontend scan) — no new discovery machinery.
+ORPHAN_ALLOWLIST="scripts/ci/allowlists/served-mode-topic-forwarding-orphans.txt"
+
+ORPHAN_ALLOWLIST_DATA=""
+if [[ -f "$ORPHAN_ALLOWLIST" ]]; then
+  ORPHAN_ALLOWLIST_DATA=$(grep -v '^[[:space:]]*#' "$ORPHAN_ALLOWLIST") || {
+    rc=$?
+    if [[ $rc -ge 2 ]]; then
+      echo "${GATE} ERROR: orphan allowlist read failed (grep exit ${rc})." >&2
+      exit 1
+    fi
+  }
+fi
+
+orphan_fail=0
+forwarded=0
+orphan_allowlisted_count=0
+
+# Walk passthroughTopics' own slice-element tokens (same extraction
+# regex as the PASSTHROUGH_VALUES build above — comments stripped first,
+# then real identifier tokens only), this time keeping the identifier
+# for reporting instead of collapsing straight to a value set.
+while IFS= read -r tok; do
+  [[ -z "$tok" ]] && continue
+  bare="${tok##*.}"
+  [[ -z "$bare" ]] && continue
+  value="${IDENT_TO_VALUE[$bare]:-}"
+  # Not a resolvable Topic* const (e.g. a stray identifier in a comment
+  # the "strip full-comment lines" filter missed) — not a real slice
+  # element, skip rather than false-fail on it.
+  [[ -z "$value" ]] && continue
+
+  forwarded=$((forwarded + 1))
+
+  frontend_hit=0
+  if [[ "$FRONTEND_WINDOW" == *"\"${value}\""* || "$FRONTEND_WINDOW" == *"'${value}'"* ]]; then
+    frontend_hit=1
+  fi
+
+  if [[ $frontend_hit -eq 1 ]]; then
+    if [[ $REPORT_MODE -eq 1 ]]; then
+      printf '  %-32s = %-40s <- consumed (useEventStream)\n' "$tok" "$value"
+    fi
+    continue
+  fi
+
+  if [[ -n "$ORPHAN_ALLOWLIST_DATA" && "$ORPHAN_ALLOWLIST_DATA" == *"\"${value}\""* ]]; then
+    orphan_allowlisted_count=$((orphan_allowlisted_count + 1))
+    if [[ $REPORT_MODE -eq 1 ]]; then
+      printf '  %-32s = %-40s <- ALLOWLISTED (no useEventStream consumer, dated blocker on file)\n' "$tok" "$value"
+    fi
+    continue
+  fi
+
+  orphan_fail=1
+  if [[ $REPORT_MODE -eq 1 ]]; then
+    printf '  %-32s = %-40s <- FAIL (no useEventStream consumer, not allowlisted)\n' "$tok" "$value"
+  fi
   echo "" >&2
-  echo "${GATE} FAIL — see offending topics above." >&2
+  echo "${GATE} FAIL: passthroughTopics entry ${tok} = \"${value}\" (${PASSTHROUGH_FILE}) is forwarded to every served-mode client but no frontend useEventStream(...) call subscribes to it." >&2
+  echo "  This is dead weight on every served connection's frame stream, and passthroughTopics is the single hand-authored source of truth the frontend's SERVED_STREAM_TOPICS list is generated from — an orphan entry reads as a statement of intent nobody meant. Fix: add a real useEventStream(...) subscriber, remove the entry from passthroughTopics if the feature is retired or desktop-only, or add a dated line to ${ORPHAN_ALLOWLIST} naming the blocker and an owner (e.g. the payload is delivered by a mechanism this gate cannot see — see that file's header for why TopicStreamTruncated is NOT an example of this)." >&2
+done < <(printf '%s\n' "$PASSTHROUGH_BLOCK" | grep -vE '^[[:space:]]*//' | grep -oE '[A-Za-z_][A-Za-z0-9_.]*' || true)
+
+if [[ $REPORT_MODE -eq 1 ]]; then
+  echo ""
+  echo "${GATE} pass 2: ${forwarded} passthroughTopics entries checked, ${orphan_allowlisted_count} allowlisted."
+fi
+
+if [[ $fail -ne 0 || $orphan_fail -ne 0 ]]; then
+  echo "" >&2
+  echo "${GATE} FAIL — see offending topics above (pass 1: subscribed but not forwarded; pass 2: forwarded but not subscribed)." >&2
   exit 2
 fi
 
-echo "${GATE} clean — every useEventStream-subscribed Topic* const is forwarded via passthroughTopics or explicitly allowlisted (${candidates} candidates, ${allowlisted_count} allowlisted)."
+echo "${GATE} clean — pass 1: every useEventStream-subscribed Topic* const is forwarded via passthroughTopics or explicitly allowlisted (${candidates} candidates, ${allowlisted_count} allowlisted). pass 2: every passthroughTopics entry has a useEventStream consumer or is explicitly allowlisted (${forwarded} entries, ${orphan_allowlisted_count} allowlisted)."
 exit 0

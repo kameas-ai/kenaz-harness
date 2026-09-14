@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -71,6 +72,23 @@ type fleetState struct {
 	// fleet store is authoritative; this is the harness-side cache populated at
 	// enroll. nil before the first successful fetch.
 	telemetryOptIns []fleet.TelemetryOptInItem
+
+	// syncKindRegistry is the SyncKind registry wired at SetSyncKindRegistry
+	// time (fleet-generic-sync-framework-01NSYNC02 WP02). Used by the
+	// composite ConfigApplier to dispatch a bundle's org_config keyed
+	// section to each entry's registered kind. nil when sync registration
+	// has not run (fleet disabled) — the org_config branch skips cleanly.
+	syncKindRegistry *fleet.KindRegistry
+
+	// mcpCatalog is the shared *recipes.MergedCatalog wired at
+	// SetMCPCatalog time (fleet-org-config-inheritance-01NORGX01 WP02).
+	// Used by the compositeConfigApplier to install/clear the org-
+	// provisioned recipe overlay when a bundle carries a provisioned_mcp
+	// section. nil in the rpc.New(nil) test harness path — the
+	// provisioned_mcp branch turns a missing catalog into a named apply
+	// error rather than a silently-discarded org config (same posture as
+	// the cedar_delta / mandated_skills "ref not wired" branches below).
+	mcpCatalog *recipes.MergedCatalog
 }
 
 // SetFleetClient wires a fleet.Client into the API and starts the capability
@@ -90,19 +108,23 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 	}
 	// Start the capability poller lazily. When c is a nop client the poller
 	// will degrade gracefully on every Refresh call.
-	if a.fleet.poller == nil {
-		p := fleet.NewCapabilityPoller(c, dataDir)
-		a.fleet.poller = p
-		p.Start(context.Background())
-	}
+	//
 	// Background network workers do not run under `go test`.
 	//
-	// The ConfigPoller calls fleet.LoadTokens -> keyring.Get() on a ticker.
-	// go-keyring's mock backend is a package-level global whose provider
-	// pointer AND whose internal map are both unsynchronised, so a poller
-	// alive during a test race any test touching the keyring. That surfaced
-	// for weeks as "TestKeychainDelete/Set...: race detected", which reads
-	// like a keychain flake and is not one.
+	// The CapabilityPoller and the ConfigPoller both call fleet.LoadTokens ->
+	// keyring.Get() — the CapabilityPoller does an immediate Refresh on
+	// Start when its cache is empty/stale (which it always is for a
+	// freshly-constructed test poller), so it hits the keychain even
+	// sooner than the ConfigPoller's first ticker fire. go-keyring's mock
+	// backend is a package-level global whose provider pointer AND whose
+	// internal map are both unsynchronised, so a poller alive during a
+	// test races any test touching the keyring. That surfaced for weeks
+	// as "TestKeychainDelete/Set...: race detected", which reads like a
+	// keychain flake and is not one — and blocked PR #342 on a real CI
+	// run because only the ConfigPoller half of this had been guarded
+	// (keyring-poller-race, WARNING: DATA RACE between
+	// CapabilityPoller.Start -> fetch -> LoadTokens -> keyring.Get and any
+	// sibling test's keyring.Set/keychainSet).
 	//
 	// Three earlier attempts fixed real but insufficient things:
 	//   - t.Cleanup(api.Shutdown) at all 13 construction sites (v0.66.0)
@@ -111,12 +133,23 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 	// None could work. Cleanup runs when a test ENDS, but tests run in
 	// PARALLEL — one test's poller is alive exactly while another test
 	// touches the keyring. And MockInit hoisting removed the pointer race
-	// only to expose the map race beneath it.
+	// only to expose the map race beneath it. The ConfigPoller below got
+	// the right fix (not starting it in tests) but the CapabilityPoller a
+	// few lines up did not, leaving this exact class of leak alive under
+	// its own name.
 	//
-	// The poller has no business running in a unit test at all: it is a
-	// network worker on a ticker. Not starting it removes the whole class
+	// Neither poller has any business running in a unit test at all: both
+	// are network workers on a ticker (or an immediate-fetch-then-ticker,
+	// for the CapabilityPoller). Not starting them removes the whole class
 	// rather than another instance of it. Production is unaffected —
 	// testing.Testing() is false in the shipped binary.
+	if a.fleet.poller == nil {
+		p := fleet.NewCapabilityPoller(c, dataDir)
+		a.fleet.poller = p
+		if !testing.Testing() {
+			p.Start(context.Background())
+		}
+	}
 	if a.fleet.configPoller == nil && !testing.Testing() {
 		applier := &compositeConfigApplier{state: a.fleet}
 		cp := fleet.NewConfigPoller(c, dataDir, applier)
@@ -226,6 +259,46 @@ func (a *API) SetSkillRefs(store *slashcmd.SkillStore, registry *slashcmd.Regist
 	defer a.fleet.mu.Unlock()
 	a.fleet.skillStore = store
 	a.fleet.skillRegistry = registry
+}
+
+// SetMCPCatalog wires the shared *recipes.MergedCatalog into the fleet
+// state so the compositeConfigApplier can install org-provisioned recipes
+// when a bundle carries a provisioned_mcp section
+// (fleet-org-config-inheritance-01NORGX01 WP02).
+//
+// Called from rpc.New() after mergedCat is constructed. Safe to skip —
+// when nil, ApplyBundle's provisioned_mcp branch turns a non-empty
+// section into a named apply error (mirrors SetCedarEngine / SetSkillRefs
+// never being called) rather than silently discarding a signed org
+// config, per fleet-enforcement-truth-01PMZ505 WP02's "must not ack
+// applied:true for a section this device cannot apply" rule.
+func (a *API) SetMCPCatalog(cat *recipes.MergedCatalog) {
+	if a.fleet == nil {
+		a.fleet = &fleetState{}
+	}
+	a.fleet.mu.Lock()
+	defer a.fleet.mu.Unlock()
+	a.fleet.mcpCatalog = cat
+}
+
+// SetSyncKindRegistry wires the SyncKind registry into the fleet state so
+// the compositeConfigApplier can dispatch a bundle's org_config keyed
+// section to each entry's registered kind
+// (fleet-generic-sync-framework-01NSYNC02 WP02).
+//
+// Called from rpc.New() after registerSyncCategories (and, in whichever
+// order, registerSlashCommandsSyncKind — both mutate the same *fleet.
+// KindRegistry pointer in place, so call order relative to this setter does
+// not matter; SetSyncKindRegistry only needs to run once with that pointer).
+// Safe to skip — when nil, ApplyBundle's org_config branch logs and skips
+// every entry rather than applying nothing silently as a false "success".
+func (a *API) SetSyncKindRegistry(registry *fleet.KindRegistry) {
+	if a.fleet == nil {
+		a.fleet = &fleetState{}
+	}
+	a.fleet.mu.Lock()
+	defer a.fleet.mu.Unlock()
+	a.fleet.syncKindRegistry = registry
 }
 
 func (a *API) fleetClient() *fleet.Client {
@@ -342,7 +415,28 @@ func (a *API) StopFleetBackground() {
 	llmview.ClearFleetModelPrefs()
 	a.fleet.telemetryOptIns = nil
 	pipeline := a.fleet.otlpPipeline
+	mcpCatalog := a.fleet.mcpCatalog
+	syncKindRegistry := a.fleet.syncKindRegistry
 	a.fleet.mu.Unlock()
+
+	// Clear the org-provisioned recipe overlay (fleet-org-config-
+	// inheritance-01NORGX01 WP02 / spec §5's "removing fleet cleanly
+	// reverts to local-only" success criterion). Outside the lock, same
+	// as the OTLP pipeline clear below: SetOrgRecipes takes its own lock
+	// on the catalog, not fleetState's.
+	if mcpCatalog != nil {
+		mcpCatalog.SetOrgRecipes(nil)
+	}
+
+	// Clear the generic org-provenance tracker (fleet-generic-sync-
+	// framework-01NSYNC02 WP03) — the kind-agnostic counterpart to
+	// SetOrgRecipes(nil) above. Without this, a signed-out device's
+	// Settings → Sync surface (WP06) would keep reporting a kind as
+	// "provisioned by your org" from a stale timestamp forever, even
+	// though FR-008 requires org layers to drop cleanly on sign-out.
+	if syncKindRegistry != nil {
+		syncKindRegistry.ClearOrgProvenance()
+	}
 
 	// Drop the OTLP log lane's narrowing snapshot too: an empty snapshot
 	// admits nothing, so a signed-out harness cannot keep exporting against a
@@ -733,9 +827,11 @@ func (a *API) FleetHealth(ctx context.Context) (FleetHealthView, error) {
 
 // compositeConfigApplier implements fleet.ConfigApplier. It fans out each
 // section of the bundle to the appropriate sub-system:
-//   - cedar_delta   → cedarpolicy.Engine.SetTeamBundle
-//   - mcp_allowlist → recipes.ApplyFleetAllowlist
-//   - model_prefs   → llmview.ApplyFleetModelPrefs (core/rpc/views/llm)
+//   - cedar_delta     → cedarpolicy.Engine.SetTeamBundle
+//   - mcp_allowlist   → recipes.ApplyFleetAllowlist
+//   - model_prefs     → llmview.ApplyFleetModelPrefs (core/rpc/views/llm)
+//   - provisioned_mcp → recipes.ApplyProvisionedMCP (core/mcp/recipes) —
+//     fleet-org-config-inheritance-01NORGX01 WP02
 //
 // The kameas_ml_weight_urls bundle section is intentionally ignored: the
 // fleet-hosted-LLM / kameas-ml surface was removed
@@ -794,6 +890,49 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 	// Weight URLs (kameas_ml_weight_urls): intentionally ignored — the
 	// fleet-hosted-LLM / kameas-ml surface was removed. See the type doc above.
 
+	// Provisioned MCP (fleet-org-config-inheritance-01NORGX01 WP02).
+	//
+	// Unlike cedar_delta/mandated_skills above, this section is applied
+	// UNCONDITIONALLY on every ApplyBundle call, even when b.ProvisionedMCP
+	// is empty/nil — Bundle.ProvisionedMCP's own doc records that nil, an
+	// empty slice, and an absent key are all equivalent ("no org-
+	// provisioned MCP entries"), which means the field carries the org's
+	// CURRENT complete set on every successful bundle, not a delta. If we
+	// only called ApplyProvisionedMCP when non-empty, an org that
+	// de-provisions every entry (bundle N: 1 entry: bundle N+1: 0 entries)
+	// would leave the stale bundle-N recipe permanently shadowing the
+	// member's own catalog — exactly the "signed but the removal never
+	// applies" shape this mission exists to close.
+	//
+	// A nil mcpCatalog (SetMCPCatalog never called) turns a NON-empty
+	// section into a named apply error, same posture as cedar_delta/
+	// mandated_skills above — but an EMPTY section with no catalog wired is
+	// not an error: there is nothing to apply either way, and erroring on
+	// every bundle for a fleet-disabled/test harness that never carries
+	// provisioned_mcp would fail every apply for no operational reason.
+	if a.state.mcpCatalog != nil {
+		converted := make([]recipes.ProvisionedMCPEntry, 0, len(b.ProvisionedMCP))
+		for _, e := range b.ProvisionedMCP {
+			entry := recipes.ProvisionedMCPEntry{
+				RecipeID:    e.RecipeID,
+				Transport:   e.Transport,
+				URL:         e.URL,
+				PrimaryAuth: e.PrimaryAuth,
+				Config:      e.Config,
+			}
+			if e.OAuth != nil {
+				entry.OAuthClientID = e.OAuth.ClientID
+				entry.OAuthScopes = e.OAuth.Scopes
+			}
+			converted = append(converted, entry)
+		}
+		for _, err := range recipes.ApplyProvisionedMCP(a.state.mcpCatalog, converted) {
+			errs = append(errs, fmt.Errorf("fleet/config: provisioned_mcp: %w", err))
+		}
+	} else if len(b.ProvisionedMCP) > 0 {
+		errs = append(errs, fmt.Errorf("fleet/config: provisioned_mcp present but no MCP catalog wired (SetMCPCatalog never called)"))
+	}
+
 	// Mandated skills (fleet-skills-sync-01NDFSEX18 WP05).
 	// FR-012: all section errors are collected and returned so the ACK
 	// carries the full set and the caller can decide not to advance lastAppliedID.
@@ -814,6 +953,90 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 			}
 		} else {
 			errs = append(errs, fmt.Errorf("fleet/config: mandated_skills present but skill refs not wired (SetSkillRefs never called)"))
+		}
+	}
+
+	// Org config (fleet-generic-sync-framework-01NSYNC02 WP02).
+	//
+	// Each entry in the bundle's keyed org_config map dispatches to its
+	// registered SyncKind's Apply(ctx, ScopeOrg, payload). Three distinct
+	// "cannot apply" cases here get deliberately different treatment,
+	// spelled out because they look similar and are not:
+	//
+	//   - registry is nil (sync registration never ran — fleet disabled,
+	//     or SetSyncKindRegistry not yet called): every entry is skipped
+	//     with a single log line, not an error. This mirrors the offline/
+	//     fleet-disabled posture the whole config-pull path preserves
+	//     elsewhere (registerSyncCategories itself no-ops the same way).
+	//   - kind id has NO registration in this build (registry.Kind returns
+	//     ok=false): a per-entry SKIP, not an error — spec §WP02's
+	//     "unknown kind → logged skip, not fatal". This is the forward-
+	//     compatibility case: a newer fleet server may ship an org_config
+	//     kind an older harness build has never heard of, and treating
+	//     that as a hard apply failure would block every OTHER section in
+	//     the same bundle from advancing lastAppliedID on old binaries.
+	//   - kind IS registered but doesn't declare ScopeOrg, or declares it
+	//     but has a nil Apply: this is a real wiring gap (the kind
+	//     promised org support the code doesn't back), not a forward-
+	//     compat gap, so it gets the same error-not-skip treatment as
+	//     cedar_delta/mandated_skills above — an ACK must not read
+	//     "applied:true" for a section this device cannot actually apply.
+	if len(b.OrgConfig) > 0 {
+		a.state.mu.RLock()
+		registry := a.state.syncKindRegistry
+		a.state.mu.RUnlock()
+		if registry == nil {
+			logging.L().Warn("fleet.config.org_config.registry_unwired",
+				"kind_count", len(b.OrgConfig))
+		} else {
+			// Deterministic order for logging/error-collection readability;
+			// sorted map keys are already what json.Marshal produced on
+			// the wire (see Bundle.OrgConfig's doc comment), but ranging a
+			// Go map directly is not itself ordered, so sort explicitly.
+			ids := make([]string, 0, len(b.OrgConfig))
+			for id := range b.OrgConfig {
+				ids = append(ids, id)
+			}
+			sort.Strings(ids)
+			for _, id := range ids {
+				payload := b.OrgConfig[id]
+				kind, ok := registry.Kind(id)
+				if !ok {
+					logging.L().Warn("fleet.config.org_config.unknown_kind_skipped", "kind", id)
+					continue
+				}
+				if !kind.HasScope(fleet.ScopeOrg) || kind.Apply == nil {
+					errs = append(errs, fmt.Errorf(
+						"fleet/config: org_config kind %q is registered but cannot apply an org-scope payload (HasScope(org)=%v, Apply nil=%v)",
+						id, kind.HasScope(fleet.ScopeOrg), kind.Apply == nil))
+					continue
+				}
+				// fleet-generic-sync-framework-01NSYNC02 WP06 (FR-006): the
+				// org_config path dispatches straight to kind.Apply, bypassing
+				// CategoryConfig()'s ScopeUser adapter (synckind.go) entirely
+				// — so the secret-shape backstop wired there does not cover
+				// this path unless it is also applied here. This is the
+				// ScopeOrg half of the same central check.
+				if kind.SecretPolicy == fleet.SecretPolicyMustNotContainSecrets {
+					if reason := fleet.SecretShapeReason(payload); reason != "" {
+						logging.L().Warn("fleet.config.org_config.secret_shaped_payload_refused", "kind", id, "reason", reason)
+						errs = append(errs, fmt.Errorf("fleet/config: org_config kind %q: refusing a secret-shaped payload (%s)", id, reason))
+						continue
+					}
+				}
+				if err := kind.Apply(ctx, fleet.ScopeOrg, payload); err != nil {
+					logging.L().Warn("fleet.config.org_config.apply_error", "kind", id, "err", err.Error())
+					errs = append(errs, fmt.Errorf("fleet/config: org_config kind %q apply: %w", id, err))
+					continue
+				}
+				// fleet-generic-sync-framework-01NSYNC02 WP03: record generic
+				// org provenance ONLY on a successful apply — mirrors this
+				// loop's own "an apply error must not read applied:true"
+				// posture (see the doc comment above this loop). A kind that
+				// failed to apply must not claim to be currently
+				// org-provisioned.
+				registry.MarkOrgApplied(id, time.Now())
+			}
 		}
 	}
 
@@ -839,7 +1062,7 @@ type LockdownStatusView struct {
 // (fleet-emergency-lockdown-01NDFSEX12 WP02)
 func (a *API) FleetLockdownStatus(_ context.Context) (LockdownStatusView, error) {
 	active := fleet.LockdownActive()
-	return LockdownStatusView{Active: active}, nil
+	return LockdownStatusView{Active: active, Reason: fleet.LockdownReason()}, nil
 }
 
 // ── Telemetry opt-ins (harness-fleet-sync-activation-01NSYNC01 gap #4) ─────────

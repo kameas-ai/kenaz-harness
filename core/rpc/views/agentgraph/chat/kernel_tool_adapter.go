@@ -11,6 +11,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/context/audit"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/runposture"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 	"github.com/kameas-ai/kenaz-harness/core/wiring/knobcoverage"
@@ -125,6 +126,15 @@ type kernelToolAdapter struct {
 
 	// now is the injected clock for audit timestamps. nil → time.Now.
 	now func() time.Time
+
+	// gate is the Cedar gate risk-rated-autonomy-01PMRA01 WP02 consults
+	// BEFORE rungs 1-5 of resolveConfirmEach. nil disables the new rung
+	// entirely — resolveConfirmEach behaves byte-identically to the
+	// pre-WP02 ladder, which is what every existing caller (every test
+	// in this package that does not call withGate) gets. Production
+	// wiring passes the same live Cedar engine already used for
+	// SecretGate (see chat.Config.RiskGate / core/rpc/api.go).
+	gate cedar.Gate
 }
 
 // newKernelToolAdapter wraps the chassis-side pool + resolver.
@@ -149,6 +159,15 @@ func (a *kernelToolAdapter) withMoves(j *turnJournal) *kernelToolAdapter {
 // Returns the same pointer so callers can chain at construction time.
 func (a *kernelToolAdapter) withAutonomy(provider AutonomyKnobsProvider) *kernelToolAdapter {
 	a.autonomy = provider
+	return a
+}
+
+// withGate attaches the Cedar gate risk-rated-autonomy-01PMRA01 WP02
+// consults before the rest of resolveConfirmEach's ladder. Returns the
+// same pointer so callers can chain at construction time. A nil gate
+// (the default) leaves resolveConfirmEach unchanged from before WP02.
+func (a *kernelToolAdapter) withGate(g cedar.Gate) *kernelToolAdapter {
+	a.gate = g
 	return a
 }
 
@@ -403,6 +422,18 @@ func (a *kernelToolAdapter) dispatch(ctx context.Context, call coreag.ToolCall) 
 func init() {
 	knobcoverage.Register[autonomy.ResolvedKnobs]("AutoApproveFamilies", "chat.promptSkipSet")
 	knobcoverage.Register[autonomy.ResolvedKnobs]("DestructiveActionPosture", "chat.promptSkipSet")
+	// risk-rated-autonomy-01PMRA01 WP03: resolveConfirmEach's rung 0
+	// reads RiskThreshold and threads it into cedar.ThreeLayerResolve,
+	// which already branches on threshold<=0 to record the FR-008
+	// rater-bypass reason distinctly (see risk_layer.go); the value is
+	// also persisted on every Layer 1-3 audit record
+	// (audit.ToolConfirmDecisionPayload.Threshold) so a stochastic
+	// layer-3 decision stays reproducible once WP05 lands. WP05 is what
+	// makes the threshold change the OUTCOME (score < threshold ->
+	// Allow); until then this is real, observable consumption (the
+	// audited reason and the persisted record), not a copy into an
+	// otherwise-unread struct.
+	knobcoverage.Register[autonomy.ResolvedKnobs]("RiskThreshold", "chat.kernelToolAdapter.resolveConfirmEach rung 0 + cedar.ThreeLayerResolve")
 }
 
 // promptSkipSet translates resolved autonomy knobs into the set of tool
@@ -449,6 +480,19 @@ func promptSkipSet(knobs autonomy.ResolvedKnobs) toolloop.PromptSkipSet {
 // that decides silently is the defect this mission repaired, and "decides
 // silently on a path nobody thought about" is the same defect.
 //
+// risk-rated-autonomy-01PMRA01 WP02 adds rung 0, consulted BEFORE rung 1
+// when a.gate is wired (nil disables it — byte-identical to pre-WP02):
+//
+//  0. cedar.ThreeLayerResolve — layer 1 (Cedar forbid) denies outright;
+//     layer 2 (Cedar permit) allows outright, skipping every rung below;
+//     layer 3 (Cedar had no opinion) is Confirm, which skips straight to
+//     rung 6's prompt — bypassing rungs 1-5's various auto-skip
+//     mechanisms. This is the property the mission exists for: today,
+//     an autonomy posture whose skip-set includes a tool's family (rung
+//     1) auto-approves it even when NO Cedar policy ever looked at the
+//     specific action. Rung 0 makes an explicit Cedar permit the thing
+//     that grants a skip, not the tool's coarse family classification.
+//
 //  1. Autonomy prompt-skip set — the session's posture auto-approves
 //     this tool's FAMILY. Per-family, per-call: `autoApproveFamilies:
 //     [read]` auto-approves reads and still confirms writes. A tool the
@@ -480,6 +524,66 @@ func (a *kernelToolAdapter) resolveConfirmEach(
 	server, tool, reason string,
 ) (coreag.ToolResult, bool, error) {
 	family := toolloop.ClassifyToolFamily(server, tool)
+
+	// 0. Risk-rated autonomy layer (risk-rated-autonomy-01PMRA01 WP02).
+	//    nil gate -> this rung is a no-op, byte-identical to every
+	//    caller that has not wired one (every pre-WP02 test, and any
+	//    build that predates production wiring).
+	if a.gate != nil {
+		// risk-rated-autonomy-01PMRA01 WP03: the threshold dial. nil
+		// autonomy provider (not wired) fails toward the strict-tier
+		// value (0 -> the rater is bypassed and every unmatched action
+		// asks) rather than defaulting to some permissive value.
+		threshold := 0
+		if a.autonomy != nil {
+			threshold = a.autonomy(ctx, a.sessionID).RiskThreshold
+		}
+		d := cedar.ThreeLayerResolve(ctx, a.gate, cedar.UserUID(), cedar.ActionUseTool, cedar.ToolUID(server, tool), nil, threshold)
+		switch d.Outcome {
+		case cedar.Deny:
+			a.auditConfirm(ctx, audit.ToolConfirmDecisionPayload{
+				SessionID: a.sessionID,
+				Server:    server,
+				Tool:      tool,
+				Family:    family,
+				Path:      audit.ToolConfirmPathLayer1Forbid,
+				Layer:     1,
+				Threshold: threshold,
+				Approved:  false,
+				Reason:    d.Reason,
+			})
+			return coreag.ToolResult{
+				Content: fmt.Sprintf("tool %q denied: %s", call.Name, d.Reason),
+				IsError: true,
+			}, false, nil
+
+		case cedar.Allow:
+			a.auditConfirm(ctx, audit.ToolConfirmDecisionPayload{
+				SessionID: a.sessionID,
+				Server:    server,
+				Tool:      tool,
+				Family:    family,
+				Path:      audit.ToolConfirmPathLayer2Permit,
+				Layer:     2,
+				Threshold: threshold,
+				Approved:  true,
+				Reason:    d.Reason,
+			})
+			return coreag.ToolResult{}, true, nil
+
+		case cedar.Confirm:
+			// Layer 3: Cedar had no opinion. WP02/WP03 stub always
+			// confirms regardless of threshold (no rater exists to
+			// compare a score against yet — see ThreeLayerResolve's doc
+			// comment); WP04-WP06 replace the stub with a real rating
+			// that can resolve below-threshold calls to Allow instead.
+			// Either way, an unmatched action must never reach rungs
+			// 1-5's auto-skip mechanisms — that is exactly the hole
+			// this mission closes: the tool's coarse FAMILY no longer
+			// decides for it when Cedar itself had no opinion.
+			return a.promptConfirmEach(ctx, call, server, tool, d.Reason, family, 3, threshold)
+		}
+	}
 
 	// 1. Autonomy prompt-skip set (WP04). This is what makes the two
 	//    permission branches genuinely different: skipPrompt finally has
@@ -601,10 +705,37 @@ func (a *kernelToolAdapter) resolveConfirmEach(
 	}
 
 	// 6. Prompt.
-	//
-	// One batch per turn: every call dispatched under the same
-	// WithConfirmBatch context shares an ID so the frontend renders one
-	// modal with N rows. Ungrouped callers get a batch of one.
+	return a.promptConfirmEach(ctx, call, server, tool, reason, family, 0, 0)
+}
+
+// promptConfirmEach parks the call on the confirm bus and blocks until
+// the user answers. It is rung 6 of resolveConfirmEach's ladder, and —
+// since risk-rated-autonomy-01PMRA01 WP02 — also the destination a
+// layer-3 Confirm verdict jumps to directly, bypassing rungs 1-5. Both
+// callers share this one implementation so "exactly one audit record per
+// decision" (FR-007) holds regardless of which rung produced the prompt.
+//
+// layer is 0 for the legacy rung-6 call (unchanged encoding — see
+// audit.ToolConfirmDecisionPayload.Layer's doc comment) or 3 when a
+// risk-rated-autonomy layer-3 Confirm verdict routed here. threshold is
+// the resolved autonomy.ResolvedKnobs.RiskThreshold at the time of the
+// decision (0 for the legacy rung-6 call, where the concept does not
+// apply) — recorded on the audit record so FR-007's reproducibility
+// requirement holds once WP05 makes the threshold decision-relevant.
+//
+// One batch per turn: every call dispatched under the same
+// WithConfirmBatch context shares an ID so the frontend renders one
+// modal with N rows. Ungrouped callers get a batch of one.
+//
+// There is no timeout on this rung: an unanswered confirmation parks the
+// run until the user answers, the batch is cancelled, or ctx is
+// cancelled (owner decision 1). Do not add a deadline here.
+func (a *kernelToolAdapter) promptConfirmEach(
+	ctx context.Context,
+	call coreag.ToolCall,
+	server, tool, reason, family string,
+	layer, threshold int,
+) (coreag.ToolResult, bool, error) {
 	batchID := toolloop.ConfirmBatchFromContext(ctx)
 	if batchID == "" {
 		batchID = toolloop.NewConfirmID("batch")
@@ -650,6 +781,8 @@ func (a *kernelToolAdapter) resolveConfirmEach(
 		Tool:            tool,
 		Family:          family,
 		Path:            audit.ToolConfirmPathPrompted,
+		Layer:           layer,
+		Threshold:       threshold,
 		Approved:        decision.Approved,
 		RememberSession: decision.Approved && decision.RememberSession,
 		Persisted:       persisted,

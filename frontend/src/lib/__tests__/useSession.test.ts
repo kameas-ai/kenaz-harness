@@ -702,11 +702,13 @@ function makeSessionsStub(
     getAutonomy: async () => ({ level: null, overrides: {} }),
     setAutonomy: async () => undefined,
     resolveAutonomy: async () => ({
-      resolved: { maxIterations: 0, askOnAmbiguity: '', autoApproveFamilies: [], tokenCeilingPerTurn: 0, recapStyle: '', continueOnError: '', destructiveActionPosture: '', sourceTrace: {}, tier: '' },
+      resolved: { maxIterations: 0, askOnAmbiguity: '', autoApproveFamilies: [], tokenCeilingPerTurn: 0, recapStyle: '', continueOnError: '', destructiveActionPosture: '', riskThreshold: 0, sourceTrace: {}, tier: '' },
       global: { level: null, overrides: {} },
       project: { level: null, overrides: {} },
       session: { level: null, overrides: {} },
     }),
+    getKnobsDefault: async () => null,
+    setKnobsDefault: async () => undefined,
     export: async () => ({ path: '', byteCount: 0 }),
   };
   return { ...stub, ...overrides };

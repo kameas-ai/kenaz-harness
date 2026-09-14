@@ -18,6 +18,9 @@ type fakeCatalogServer struct {
 	published []publishRequest
 	items     map[string]CatalogItem // keyed by catalogID@version
 	deleted   []string
+	// forbidUnpublish, when true, makes every DELETE return 403 — the
+	// "not the owner and not an admin" case AC-020 tests.
+	forbidUnpublish bool
 }
 
 func (f *fakeCatalogServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +75,10 @@ func (f *fakeCatalogServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 	case r.Method == http.MethodDelete && len(r.URL.Path) > len("/api/v1/catalog/"):
+		if f.forbidUnpublish {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
 		id := r.URL.Path[len("/api/v1/catalog/"):]
 		f.deleted = append(f.deleted, id)
 		w.WriteHeader(http.StatusNoContent)
@@ -265,6 +272,95 @@ func TestCatalog_Uninstall(t *testing.T) {
 		if it.ID == item.ID {
 			t.Errorf("item %q still appears in InstalledItems after Uninstall", item.ID)
 		}
+	}
+}
+
+// ── AC-020 (fleet-enforcement-truth-01PMZ505 WP11) ──────────────────────────
+//
+// "a publisher can withdraw, and the refusal is honest." Two assertions:
+// (a) Unpublish on an item the server accepts removes it; (b) a 403 maps
+// to ErrCatalogForbidden, not ErrCatalogNotInTier — the mis-mapping this
+// WP fixes, register C-3/C-8.
+
+func TestCatalog_Unpublish_OK(t *testing.T) {
+	fake := &fakeCatalogServer{}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+
+	stubTokens(t, TokenSet{
+		AccessToken:  "at-cat",
+		RefreshToken: "rt-cat",
+		ExpiresAt:    time.Now().Add(time.Hour),
+	})
+	c := makeTestClient(t, srv.URL)
+
+	signer, _ := NewDeviceSigner(t.TempDir())
+	item, err := c.Publish(context.Background(), signer,
+		CatalogKindWorkflow, "to-withdraw", "1.0.0", "desc", CatalogVisOrgPublic, []byte("data"))
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	if err := c.Unpublish(context.Background(), item.ID); err != nil {
+		t.Fatalf("Unpublish: %v", err)
+	}
+	if len(fake.deleted) != 1 || fake.deleted[0] != item.ID {
+		t.Errorf("server deleted = %v, want [%s]", fake.deleted, item.ID)
+	}
+}
+
+// TestCatalog_Unpublish_ForbiddenMapsToForbiddenNotTier is the mutation
+// this WP exists to fix: before it, a 403 on DELETE mapped to
+// ErrCatalogNotInTier (a billing error) — telling a publisher trying to
+// withdraw someone else's item to upgrade their subscription, when the
+// real reason is that they are not the owner and not an admin.
+func TestCatalog_Unpublish_ForbiddenMapsToForbiddenNotTier(t *testing.T) {
+	fake := &fakeCatalogServer{forbidUnpublish: true}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+
+	stubTokens(t, TokenSet{
+		AccessToken:  "at-cat",
+		RefreshToken: "rt-cat",
+		ExpiresAt:    time.Now().Add(time.Hour),
+	})
+	c := makeTestClient(t, srv.URL)
+
+	err := c.Unpublish(context.Background(), "someone-elses-item")
+	if err == nil {
+		t.Fatal("Unpublish on a 403: want error, got nil")
+	}
+	if !errors.Is(err, ErrCatalogForbidden) {
+		t.Errorf("Unpublish 403 error = %v, want to wrap ErrCatalogForbidden", err)
+	}
+	if errors.Is(err, ErrCatalogNotInTier) {
+		t.Error("Unpublish 403 must NOT map to ErrCatalogNotInTier — that tells " +
+			"a publisher to upgrade their subscription for an item they don't own")
+	}
+}
+
+// TestCatalog_Publish_ForbiddenStillMeansTier is the guard against
+// over-correcting: Publish's own 403 handling (a genuinely different
+// server route/semantics) must be left alone — C-3/C-8 fixes Unpublish
+// only.
+func TestCatalog_Publish_ForbiddenStillMeansTier(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "tier", http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	stubTokens(t, TokenSet{
+		AccessToken:  "at-cat",
+		RefreshToken: "rt-cat",
+		ExpiresAt:    time.Now().Add(time.Hour),
+	})
+	c := makeTestClient(t, srv.URL)
+	signer, _ := NewDeviceSigner(t.TempDir())
+
+	_, err := c.Publish(context.Background(), signer,
+		CatalogKindWorkflow, "x", "1.0.0", "desc", CatalogVisOrgPublic, []byte("data"))
+	if !errors.Is(err, ErrCatalogNotInTier) {
+		t.Errorf("Publish 403 error = %v, want ErrCatalogNotInTier (unchanged by WP11)", err)
 	}
 }
 

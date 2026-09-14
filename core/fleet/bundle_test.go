@@ -37,8 +37,8 @@ func newTestKeyPair(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
 
 func sampleBundle() *Bundle {
 	return &Bundle{
-		BundleID: 42,
-		IssuedAt: time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC),
+		BundleID:     42,
+		IssuedAt:     time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC),
 		MCPAllowlist: []string{"github", "slack"},
 		ModelPrefs: &BundleModelPrefs{
 			DefaultModel:      "anthropic/claude-opus-4",
@@ -220,7 +220,7 @@ func TestVerifyWithKeySet_EmptySet(t *testing.T) {
 // TestVerifyWithKeySet_ForeignKeyRejected verifies that a bundle signed by
 // an unknown key is rejected even when the accept-set is non-empty.
 func TestVerifyWithKeySet_ForeignKeyRejected(t *testing.T) {
-	pub1, _ := newTestKeyPair(t) // the accepted key
+	pub1, _ := newTestKeyPair(t)  // the accepted key
 	_, priv2 := newTestKeyPair(t) // the foreign key used to sign
 
 	b := sampleBundle()
@@ -576,8 +576,157 @@ func mutateFieldForTest(t *testing.T, name string, v reflect.Value) {
 		v.Set(reflect.ValueOf([]ProvisionedMCP{{RecipeID: "mutated-for-test"}}))
 	case []ProviderSetup:
 		v.Set(reflect.ValueOf([]ProviderSetup{{Provider: "mutated-for-test", AccessMode: "byo_key"}}))
+	case map[string]json.RawMessage:
+		v.Set(reflect.ValueOf(map[string]json.RawMessage{"mutated_for_test": json.RawMessage(`{}`)}))
 	default:
 		t.Fatalf("mutateFieldForTest: Bundle field %q has type %s with no mutation rule — extend the switch in mutateFieldForTest (core/fleet/bundle_test.go) instead of letting this subtest vacuously pass", name, v.Type())
+	}
+}
+
+// ─── WP02: org_config keyed section ─────────────────────────────────────────
+// fleet-generic-sync-framework-01NSYNC02 WP02 acceptance: "signature
+// round-trip incl. map ordering canonicalization; unknown-kind tolerance
+// test; replay protection unchanged."
+
+// TestBundle_OrgConfig_RoundTrip proves the keyed map round-trips through
+// JSON with each kind's opaque payload intact.
+func TestBundle_OrgConfig_RoundTrip(t *testing.T) {
+	b := sampleBundle()
+	b.OrgConfig = map[string]json.RawMessage{
+		"provider_profiles": json.RawMessage(`{"provider":"anthropic","default":true}`),
+		"installed_mcp":     json.RawMessage(`{"servers":["slack","github"]}`),
+	}
+
+	raw, err := json.Marshal(b)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got Bundle
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.OrgConfig) != 2 {
+		t.Fatalf("OrgConfig round-trip: got %d entries, want 2 (got=%+v)", len(got.OrgConfig), got.OrgConfig)
+	}
+	if string(got.OrgConfig["provider_profiles"]) != string(b.OrgConfig["provider_profiles"]) {
+		t.Errorf("provider_profiles payload did not round-trip: got %s", got.OrgConfig["provider_profiles"])
+	}
+	if string(got.OrgConfig["installed_mcp"]) != string(b.OrgConfig["installed_mcp"]) {
+		t.Errorf("installed_mcp payload did not round-trip: got %s", got.OrgConfig["installed_mcp"])
+	}
+}
+
+// TestBundle_OrgConfig_EmptyVsAbsentVsNil pins the same omitempty semantics
+// documented for ProvisionedMCP/ProviderSetups: nil, an explicit empty-non-nil
+// map, and an absent key are all equivalent on the wire.
+func TestBundle_OrgConfig_EmptyVsAbsentVsNil(t *testing.T) {
+	b := sampleBundle() // OrgConfig left nil
+	raw, err := json.Marshal(b)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), `"org_config"`) {
+		t.Errorf("expected org_config key absent for nil map, got: %s", raw)
+	}
+
+	b.OrgConfig = map[string]json.RawMessage{}
+	raw, err = json.Marshal(b)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), `"org_config"`) {
+		t.Errorf("expected org_config key absent for empty-non-nil map (omitempty), got: %s", raw)
+	}
+}
+
+// TestSigningPayload_OrgConfig_StableKeyOrder pins the canonicalization
+// claim in Bundle.OrgConfig's doc comment: marshaling the same map twice
+// (including via a differently-ordered map literal) produces byte-identical
+// signing payloads. A signed map payload that were NOT stably ordered would
+// make Verify's re-derived hash nondeterministic and the wire format
+// unreliable across two servers (or two runs of the same server) holding
+// "the same" org_config content in a different map iteration order.
+func TestSigningPayload_OrgConfig_StableKeyOrder(t *testing.T) {
+	b1 := sampleBundle()
+	b1.OrgConfig = map[string]json.RawMessage{
+		"zzz_kind": json.RawMessage(`{"a":1}`),
+		"aaa_kind": json.RawMessage(`{"b":2}`),
+		"mmm_kind": json.RawMessage(`{"c":3}`),
+	}
+	b2 := sampleBundle()
+	// Same content, built via a different insertion order — Go map
+	// literals do not guarantee iteration order, so this alone would catch
+	// an accidental dependency on insertion/iteration order.
+	b2.OrgConfig = map[string]json.RawMessage{}
+	b2.OrgConfig["mmm_kind"] = json.RawMessage(`{"c":3}`)
+	b2.OrgConfig["zzz_kind"] = json.RawMessage(`{"a":1}`)
+	b2.OrgConfig["aaa_kind"] = json.RawMessage(`{"b":2}`)
+
+	p1, err := b1.signingPayload()
+	if err != nil {
+		t.Fatalf("signingPayload b1: %v", err)
+	}
+	p2, err := b2.signingPayload()
+	if err != nil {
+		t.Fatalf("signingPayload b2: %v", err)
+	}
+	if string(p1) != string(p2) {
+		t.Fatalf("signingPayload not stable across map insertion order:\n  p1=%s\n  p2=%s", p1, p2)
+	}
+	// Repeat marshaling the SAME map several times — belt-and-braces check
+	// that json.Marshal itself is deterministic run over run, not just
+	// insensitive to construction order.
+	for i := 0; i < 5; i++ {
+		p, err := b1.signingPayload()
+		if err != nil {
+			t.Fatalf("signingPayload repeat %d: %v", i, err)
+		}
+		if string(p) != string(p1) {
+			t.Fatalf("signingPayload not stable across repeated marshals (run %d)", i)
+		}
+	}
+}
+
+// TestVerify_TamperedOrgConfig verifies that mutating OrgConfig after
+// signing invalidates the signature — the concrete proof that this section
+// is covered by the ed25519 signature, mirroring
+// TestVerify_TamperedProvisionedMCP above. An org_config entry is applied
+// read-only to a member's device by a registered SyncKind's Apply; if this
+// ever passes with ErrInvalidSignature NOT returned, org_config is silently
+// unsigned and attacker-modifiable in transit.
+func TestVerify_TamperedOrgConfig(t *testing.T) {
+	pub, priv := newTestKeyPair(t)
+	b := sampleBundle()
+	b.OrgConfig = map[string]json.RawMessage{
+		"provider_profiles": json.RawMessage(`{"provider":"anthropic"}`),
+	}
+	signBundle(t, priv, b)
+
+	// Tamper with the payload after signing.
+	b.OrgConfig["provider_profiles"] = json.RawMessage(`{"provider":"attacker-controlled"}`)
+
+	if err := Verify(b, pub, 0); !errors.Is(err, ErrInvalidSignature) {
+		t.Errorf("expected ErrInvalidSignature after tampering OrgConfig, got: %v", err)
+	}
+}
+
+// TestVerify_ReplayRejected_WithOrgConfig re-runs the existing replay-
+// protection assertion (TestVerify_ReplayRejected) with OrgConfig populated,
+// pinning WP02's "replay protection unchanged" acceptance criterion: adding
+// the new keyed section must not weaken the monotonic bundle_id guard.
+func TestVerify_ReplayRejected_WithOrgConfig(t *testing.T) {
+	pub, priv := newTestKeyPair(t)
+	b := sampleBundle()
+	b.OrgConfig = map[string]json.RawMessage{"provider_profiles": json.RawMessage(`{}`)}
+	signBundle(t, priv, b)
+
+	if err := Verify(b, pub, 0); err != nil {
+		t.Fatalf("first apply should succeed: %v", err)
+	}
+	// Re-verify against a lastAppliedID equal to this bundle's ID — a
+	// replay of the same bundle_id must be rejected.
+	if err := Verify(b, pub, b.BundleID); !errors.Is(err, ErrBundleIDNonMonotonic) {
+		t.Errorf("expected ErrBundleIDNonMonotonic on replay, got: %v", err)
 	}
 }
 

@@ -53,12 +53,15 @@ func (a *tierSourceAdapter) Tier(providerKind, modelID string) (agentgraph.Model
 	return agentgraph.ModelTier(t), true
 }
 
-// knownModelProviders lists the (providerID, providerKind) pairs the v1
-// recommender enumerates concrete candidates for. providerID and
-// providerKind coincide for the two directly-configured providers
-// covered here; a real multi-connection setup would key providerID off
-// the user's configured connection name instead — tracked below.
-var knownModelProviders = []string{"anthropic", "openai"}
+// knownModelProviders is the provider set the v1 recommender enumerates
+// concrete candidates for, sourced from core/llm rather than restated here.
+//
+// It was a literal until 2026-09-12, when check-no-model-family-literals.sh
+// turned red on it the first time CI saw WP17's widened list. Model-family
+// names belong to core/llm; the rationale for the set -- including why
+// bedrock, custom-openai and ollama are deliberately excluded -- now lives
+// with the data, on capabilities.RecommendableProviderIDs.
+var knownModelProviders = llmcap.RecommendableProviderIDs()
 
 // newBranchRecommender returns the v1 recommender pre-loaded with a
 // known-model table sourced from the LLM capabilities registry

@@ -487,7 +487,7 @@ func llmRegistryOverDataDir(t *testing.T, dataDir string) corellm.Registry {
 	cedarEngine := buildCedarEngineOrNil(dataDir, nil)
 	stack := newLLMStack(c, NewStreamBroker(NewMultiEmitter()), newPersonalStore(c),
 		nil, nil, func() bool { return false }, nil, nil, nil, nil, nil, nil, nil,
-		nil, nil, nil, nil, nil, nil, nil, nil, cedarEngine, nil, nil)
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, cedarEngine, nil, nil, nil, nil)
 	// Blocker 2 follow-up (found by core/rpc/blocker2_goroutine_leak_test.go
 	// under the full package's -race run, 2026-09-11): newLLMStack itself
 	// calls sweepScheduler.Start() when it builds a non-nil compaction

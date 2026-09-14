@@ -234,6 +234,10 @@ describe('ChatInput branch-advisor', () => {
           commitReintegration: vi.fn().mockResolvedValue(undefined),
           setAdvisorDismissed,
           listWithBranchTree: vi.fn(),
+          abortSubagent: vi.fn(),
+          steerSubagent: vi.fn(),
+          pauseSubagent: vi.fn(),
+          resumeSubagent: vi.fn(),
         },
       },
     );

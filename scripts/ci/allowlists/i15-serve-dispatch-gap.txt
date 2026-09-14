@@ -1113,3 +1113,81 @@
 "Subagent_Pause"
 "Subagent_Resume"
 "Subagent_Steer"
+
+# CLASS: untriaged -- model-settings-reach-the-model-01PMZ101 UNIT-6
+# (WP10/WP11), 2026-09-12.
+# 2 entries.
+#
+# Sessions_GetKnobsDefault / Sessions_SetKnobsDefault (core/rpc/
+# bindings.go) give SessionTunePanel.vue a real backend: the session-level
+# RequestKnobs override persisted to sessions.knobs_default (migration
+# sessions/0330-knobs) and merged onto every GenerationRequest.Knobs the
+# session issues. Same untriaged posture as CompactionOverhead above: a
+# live desktop chat-surface control with no NotAvailableInServedMode
+# guard on SessionsView, and this mission's spec (model-settings-reach-
+# the-model-01PMZ101) does not scope core/serve/** work in or out by
+# name the way 01PMZ707/01PMZB11 do above -- port-or-gate is a real open
+# question, deliberately not resolved here.
+#
+# Also true today, and load-bearing for whoever resolves the port
+# question: this worktree could not run `wails generate module` (see
+# CLAUDE.md tooling footguns; this session's dispatch forbade it
+# outright), so the two bindings exist only in core/rpc/bindings.go +
+# a hand-declared frontend/src/lib/harnessClient.ts WailsBindingsLike
+# entry, not yet in the generated frontend/wailsjs/go/rpc/Bindings.{js,d.ts}
+# — a desktop build cannot reach them yet either. Landing the served
+# route and regenerating wailsjs are two independent follow-ups; do not
+# conflate them.
+#
+# Blocker: served-mode-is-a-real-mode-01PMZ707's port-or-boundary-panel
+# ruling for this surface (not yet requested as of this entry). Dated
+# 2026-09-12. Owner: alec.
+"Sessions_GetKnobsDefault"
+"Sessions_SetKnobsDefault"
+
+# CLASS: untriaged -- release/v0.78.2 integration, 2026-09-13.
+# 7 entries.
+#
+# Seven new bindings across four families; each inherits its OWN FAMILY's
+# posture rather than a blanket call.
+#
+# All seven are new desktop bindings landed by this release whose OWN
+# FAMILY is already allowlisted here. The disposition below is per family,
+# not blanket: each new method takes the same posture as its siblings,
+# because a family half-ported would be worse than a family consistently
+# deferred.
+#
+# BlockedRequests_{ListPending,Grant,Dismiss} -- model-scheduled-jobs-
+# 01PMSJ01 WP07. The blocked-permission-request surface is the companion
+# to ScheduledChat_*, which has 8 entries above; the mission's own report
+# states the two new broker topics are absent from served mode's
+# passthroughTopics and dispatch switch "matching existing precedent
+# (scheduled-chat's own ScheduledChat_* bindings are absent from both
+# too)". Porting these three without porting ScheduledChat_* would give
+# served mode a way to SEE a blocked request and grant it, but no way to
+# re-run the scheduled job it blocked -- a worse surface than none.
+# Port them together with the ScheduledChat_* family or not at all.
+#
+# Catalog_Unpublish -- joins Catalog_{Install,List,Installed,Publish}
+# already here (5 entries). Publish is deferred; unpublish must not be
+# reachable where publish is not.
+#
+# Compliance_SkipToID -- joins Compliance_{ArchiveNow,SetRetention,
+# Status} (3 entries).
+#
+# Sites_{EnvList,EnvSet} -- join Sites_{Status,Delete,Deploy,List} (5
+# entries). EnvSet writes site environment values; it must not outrun the
+# Sites_* family's own port decision, and it is the most credential-
+# adjacent of the four, so a premature served route is the wrong risk to
+# take first.
+#
+# Blocker: served-mode-is-a-real-mode-01PMZ707's port-or-boundary-panel
+# ruling for each family, none of which has been requested. Dated
+# 2026-09-13. Owner: alec.
+"BlockedRequests_ListPending"
+"BlockedRequests_Grant"
+"BlockedRequests_Dismiss"
+"Catalog_Unpublish"
+"Compliance_SkipToID"
+"Sites_EnvList"
+"Sites_EnvSet"

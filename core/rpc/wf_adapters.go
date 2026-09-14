@@ -36,6 +36,14 @@ package rpc
 //	                           path for both mcp_call and model_turn
 //	                           (workflow-tool-permission-gate).
 //
+//	wfToolCallerAdapter      — toolloop.MCPPool.Call →
+//	                           corewf.ToolCaller (automation-actually-
+//	                           runs-01PMZ404 UNIT-6). Same pool, same
+//	                           wfToolGate ladder as the two adapters
+//	                           above; serves the standalone tool_call
+//	                           step kind, which map[string]any-encodes
+//	                           its args rather than pre-encoded bytes.
+//
 //	wfToolGate               — the permission-resolve → confirm-each →
 //	                           Cedar ladder shared by wfMCPCallerAdapter
 //	                           and wfToolDispatcherAdapter. An unattended
@@ -48,6 +56,19 @@ package rpc
 //
 //	wfNotifierAdapter        — satisfies corewf.Notifier via the Wails
 //	                           runtime notification call.
+//
+//	wfNotifyAuditBridge      — satisfies corewf.AuditEmitter (Deps.Audit,
+//	                           automation-actually-runs-01PMZ404 UNIT-8)
+//	                           by forwarding EmitNotifySent calls into
+//	                           the rpc/views/audit.API ring, the same
+//	                           Push-based shape acpAuditBridge and
+//	                           searchAuditEmitter use in api.go. A
+//	                           SEPARATE, narrower seam from wfDeps.
+//	                           NetworkAudit (contextaudit.Emitter,
+//	                           general-purpose) — this one exists only
+//	                           because notifyRunner's audit field is
+//	                           corewf's own notify-only AuditEmitter
+//	                           interface, not the general one.
 
 import (
 	"context"
@@ -62,6 +83,7 @@ import (
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/audit"
 	"github.com/kameas-ai/kenaz-harness/core/runposture"
 	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
@@ -471,6 +493,52 @@ func splitToolName(name string) (server, tool string) {
 		return "", name
 	}
 	return name[:idx], name[idx+len(sep):]
+}
+
+// ─── Tool caller adapter (tool_call step) ──────────────────────────────────────
+
+// wfToolCallerAdapter bridges toolloop.MCPPool onto corewf.ToolCaller —
+// the interface tool_call steps dispatch against
+// (automation-actually-runs-01PMZ404 UNIT-6). Distinct from
+// wfToolDispatcherAdapter above: that one satisfies corewf.ToolDispatcher
+// for model_turn's bounded tool loop (Dispatch(ctx, name string, input
+// []byte) (string, bool, error)); this one satisfies corewf.ToolCaller for
+// a standalone tool_call step (Call(ctx, name string, args map[string]any)
+// (corewf.ToolResult, error)) — same underlying pool, same wfToolGate
+// ladder, different call shape because tool_call steps carry args as a
+// map (already expanded via expandArgs), not pre-encoded bytes.
+type wfToolCallerAdapter struct {
+	pool toolloop.MCPPool
+	// gate — the SAME *wfToolGate instance wired into wfMCPCallerAdapter
+	// and wfToolDispatcherAdapter in production, so tool_call shares one
+	// Cedar/permission/confirm-each path with mcp_call and model_turn
+	// rather than opening a fourth, ungated one (spec D-5).
+	gate *wfToolGate
+}
+
+func (a *wfToolCallerAdapter) Call(ctx context.Context, name string, args map[string]any) (corewf.ToolResult, error) {
+	if a.pool == nil {
+		return corewf.ToolResult{}, fmt.Errorf("tool caller not wired (no MCP pool)")
+	}
+	server, tool := splitToolName(name)
+	if err := a.gate.authorize(ctx, toolloop.SessionIDFromContext(ctx), server, tool); err != nil {
+		return corewf.ToolResult{}, err
+	}
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return corewf.ToolResult{}, fmt.Errorf("tool_call %q: encode args: %w", name, err)
+	}
+	result, err := a.pool.Call(ctx, server, tool, json.RawMessage(raw))
+	if err != nil {
+		return corewf.ToolResult{}, err
+	}
+	// Unwrap a JSON string result to plain text, matching
+	// wfToolDispatcherAdapter's convention.
+	var s string
+	if json.Unmarshal(result, &s) == nil {
+		return corewf.ToolResult{Content: s}, nil
+	}
+	return corewf.ToolResult{Content: string(result)}, nil
 }
 
 // ─── Slash-command tool dispatcher adapter ─────────────────────────────────────
@@ -1111,4 +1179,51 @@ func (g *wfToolGate) auditConfirm(ctx context.Context, p contextaudit.ToolConfir
 		return
 	}
 	contextaudit.MustEmit(ctx, g.auditEmitter, contextaudit.KindToolConfirmDecision, p, g.clock())
+}
+
+// ─── Notify audit bridge ────────────────────────────────────────────────────────
+
+// wfNotifyAuditBridge satisfies corewf.AuditEmitter (Deps.Audit) —
+// automation-actually-runs-01PMZ404 UNIT-8. Before this, Deps.Audit was
+// never assigned in production, so notifyRunner.emitSent's call to
+// EmitNotifySent (core/workflows/runners_notify.go:149) was always a
+// silent no-op: `notify` is the only workflow step kind that reaches
+// outside the process (OS notification, Slack, email, push) and it was
+// the only one with no audit trail.
+//
+// Modelled on acpAuditBridge / searchAuditEmitter (core/rpc/api.go):
+// forwards through contextaudit.Emit so the ring entry carries a real
+// Kind (KindWorkflowNotifySent) and a marshalled payload, then renders
+// target+title into Entry.Trailing as a deterministic "k=v k=v" string
+// (searchAuditEmitter's convention) rather than an opaque byte count —
+// target and the CALLER-truncated title are not privacy-sensitive on
+// their own (the body is what must never appear, and EmitNotifySent's
+// signature has no body parameter to leak in the first place).
+type wfNotifyAuditBridge struct {
+	impl *audit.API
+}
+
+// Emit implements contextaudit.Emitter, the shape EmitNotifySent below
+// forwards through so the entry carries a real Kind + marshalled
+// payload rather than a hand-built string.
+func (b *wfNotifyAuditBridge) Emit(_ context.Context, ev contextaudit.Event) error {
+	if b == nil || b.impl == nil {
+		return nil
+	}
+	var p contextaudit.WorkflowNotifySentPayload
+	_ = json.Unmarshal(ev.Payload, &p)
+	b.impl.Push(audit.Entry{
+		ID:        fmt.Sprintf("wf-notify-%d", ev.TS.UnixNano()),
+		Timestamp: ev.TS.UTC().Format(time.RFC3339Nano),
+		Category:  "WORKFLOW",
+		Subject:   string(ev.Kind),
+		Trailing:  fmt.Sprintf("target=%s title=%s", p.Target, p.Title),
+	})
+	return nil
+}
+
+// EmitNotifySent implements corewf.AuditEmitter.
+func (b *wfNotifyAuditBridge) EmitNotifySent(ctx context.Context, target, title string) error {
+	return contextaudit.Emit(ctx, b, contextaudit.KindWorkflowNotifySent,
+		contextaudit.WorkflowNotifySentPayload{Target: target, Title: title}, time.Now().UTC())
 }

@@ -54,6 +54,19 @@ type Managers struct {
 	// them as such.
 	GraphAuthor       GraphAuthorWriter
 	GraphMaterializer GraphMaterializer
+
+	// ScheduledRunWriter (model-scheduled-jobs-01PMSJ01 WP10) backs
+	// harness_write_create_scheduled_run — the model-facing entry point
+	// for owner ruling "the model MAY schedule jobs to run." Hard-blocked
+	// until harness-self-attach-01PMHS01 WP04 (the merged, session-aware
+	// PermissionResolver) landed: per spec.md §6.1 F2, an unenforced tool
+	// allowlist is indistinguishable from an enforced one at every call
+	// site with the session-blind static resolver installed, so shipping
+	// this tool earlier would have been silently unsafe rather than
+	// merely absent. That resolver is live (core/rpc/api.go's
+	// a.toolPermsResolver, wired before this server is attached) — see
+	// core/rpc/harness_wiring.go's scheduledRunWriterAdapter doc comment.
+	ScheduledRunWriter ScheduledRunWriter
 }
 
 // ---- Read-side interfaces (WP04 stubs) ----
@@ -517,3 +530,93 @@ func (m Managers) handleCreateSession(ctx context.Context, args json.RawMessage)
 	return ToolResult{OK: true, Message: fmt.Sprintf("Created session %q (kind=%s)", sum.Name, sum.Kind), Data: sum}, nil
 }
 
+// ---- Scheduled-run authoring interface (model-scheduled-jobs-01PMSJ01
+// WP10) ----
+//
+// Mirrors scheduledchatview types locally (the same convention every
+// other manager interface in this file follows) rather than importing
+// core/rpc/views/scheduledchat directly: this package stays a leaf with
+// no core/rpc/views/* dependency, and the adapter in
+// core/rpc/harness_wiring.go does the translation.
+
+// ScheduledRunCreateInput is the wire shape for
+// harness_write_create_scheduled_run. ToolAllowlist is REQUIRED and
+// non-empty per owner ruling B-3 ("PERMIT ONLY WITHIN A TOOL
+// ALLOWLIST") — a model-created schedule with no declared allowlist
+// must never be creatable, let alone execute. There is deliberately no
+// CreatedBy field: the adapter always calls CreateAsModel, which stamps
+// "model" server-side: nothing here lets a caller claim to be the user.
+type ScheduledRunCreateInput struct {
+	Name           string   `json:"name"`
+	PromptTemplate string   `json:"promptTemplate"`
+	Cron           string   `json:"cron"`
+	Timezone       string   `json:"timezone,omitempty"`
+	Model          string   `json:"model,omitempty"`
+	OutputSink     string   `json:"outputSink,omitempty"`
+	Enabled        bool     `json:"enabled"`
+	ToolAllowlist  []string `json:"toolAllowlist"`
+}
+
+// ScheduledRunSummary is the tool result's Data payload — enough for
+// the model to confirm what it created and reference the job later
+// (e.g. to delete it), never message content or credentials.
+type ScheduledRunSummary struct {
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Cron          string   `json:"cron"`
+	Enabled       bool     `json:"enabled"`
+	CreatedBy     string   `json:"createdBy"`
+	ToolAllowlist []string `json:"toolAllowlist"`
+}
+
+// ScheduledRunWriter exposes scheduledchatview.API.CreateAsModel as a
+// write tool. The one production implementation
+// (core/rpc/harness_wiring.go's scheduledRunWriterAdapter) always calls
+// CreateAsModel, never Create — created_by is a Go call-site choice, not
+// wire data (same pattern as scheduledchat.API.CreateAsModel itself).
+type ScheduledRunWriter interface {
+	CreateScheduledRun(ctx context.Context, in ScheduledRunCreateInput) (ScheduledRunSummary, error)
+}
+
+// handleCreateScheduledRun implements harness_write_create_scheduled_run
+// (model-scheduled-jobs-01PMSJ01 WP10, FR-005). The tool_allowlist
+// requirement is enforced twice on purpose: here (a fast, tool-shaped
+// error before any adapter call) and again inside
+// scheduledchatview.API.CreateAsModel (the authoritative check — see its
+// doc, owner ruling B-3). Duplicating the message here is not
+// redundant: it lets a caller that passes an explicit empty array see
+// exactly why, in the same vocabulary as the tool schema, without
+// depending on the adapter's error text staying stable.
+func (m Managers) handleCreateScheduledRun(ctx context.Context, args json.RawMessage) (any, error) {
+	if m.ScheduledRunWriter == nil {
+		return nil, errNotConfigured
+	}
+	var p ScheduledRunCreateInput
+	if err := json.Unmarshal(args, &p); err != nil {
+		return nil, fmt.Errorf("harness_write_create_scheduled_run: %w", err)
+	}
+	if p.PromptTemplate == "" {
+		return nil, errors.New("harness_write_create_scheduled_run: promptTemplate is required")
+	}
+	if p.Cron == "" {
+		return nil, errors.New("harness_write_create_scheduled_run: cron is required")
+	}
+	if len(p.ToolAllowlist) == 0 {
+		return nil, errors.New(
+			"harness_write_create_scheduled_run: toolAllowlist is required and must be non-empty " +
+				"(owner ruling B-3: a model-created schedule may run only within a declared tool allowlist)")
+	}
+	sum, err := m.ScheduledRunWriter.CreateScheduledRun(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	return ToolResult{
+		OK: true,
+		Message: fmt.Sprintf(
+			"Created scheduled run %q (cron=%q, enabled=%v, tool_allowlist=%v). "+
+				"created_by=%q — this schedule may call only the tools listed in tool_allowlist when it fires.",
+			sum.ID, sum.Cron, sum.Enabled, sum.ToolAllowlist, sum.CreatedBy,
+		),
+		Data: sum,
+	}, nil
+}

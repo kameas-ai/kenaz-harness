@@ -28,6 +28,7 @@ import type {
   CostThresholdCrossedPayload,
   MigrationDriftDetectedPayload,
   RetryAfterRotationFailedPayload,
+  ScheduledChatBannerPayload,
 } from '@/lib/types';
 
 interface MergeSuggestionPayload {
@@ -222,6 +223,30 @@ export function useEventToasts() {
       );
     },
   );
+
+  // ── ScheduledChatBanner (model-scheduled-jobs-01PMSJ01 WP07, FR-007)
+  //    ─────────────────────────────────────────────────────────────────
+  // Delivers the "banner" output_sink (the schema default for a
+  // scheduled chat run) as a toast — a notification, not a modal,
+  // since the run already finished unattended and nobody is waiting on
+  // a response. `scheduled-chat:banner` used to be a string that
+  // appeared exactly once in the whole repository, in a Go comment,
+  // with no emitter and no subscriber at all.
+  useEventStream<ScheduledChatBannerPayload>('scheduled-chat:banner', (payload) => {
+    if (!payload?.chatRunId) return;
+    const label = payload.name || 'Scheduled chat';
+    if (payload.status === 'completed') {
+      const snippet = payload.outputSnippet
+        ? ` — ${payload.outputSnippet.slice(0, 140)}${payload.outputSnippet.length > 140 ? '…' : ''}`
+        : '';
+      push(`${label} finished${snippet}`, { level: 'info', durationMs: 10000 });
+    } else {
+      push(`${label} failed${payload.error ? `: ${payload.error}` : ''}`, {
+        level: 'warn',
+        durationMs: 10000,
+      });
+    }
+  });
 
   // ── MigrationToast ──────────────────────────────────────────────────
   onMounted(async () => {

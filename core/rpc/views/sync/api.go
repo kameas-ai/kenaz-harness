@@ -14,6 +14,20 @@ type SyncStatusView struct {
 	LastPushAt string `json:"last_push_at,omitempty"` // RFC3339
 	LastPullAt string `json:"last_pull_at,omitempty"` // RFC3339
 	LastError  string `json:"last_error,omitempty"`
+	// Scopes lists which layers this kind participates in ("user", "org",
+	// "team" — fleet.Scope values, stringified), read from the SyncKind
+	// registry (fleet-generic-sync-framework-01NSYNC02 WP06, FR-007).
+	// Empty when the registry has no registration for this category
+	// (fleet disabled, or a category the registry-based refactor hasn't
+	// reached) — the frontend treats an empty Scopes the same as
+	// user-only, matching pre-WP01 behavior for the five categories.
+	Scopes []string `json:"scopes,omitempty"`
+	// OrgAppliedAt is the RFC3339 timestamp of this kind's most recent
+	// successful org_config apply (fleet.KindRegistry.OrgAppliedAt), or
+	// empty if this kind has never been org-provisioned on this device.
+	// This is the WP03 generic provenance signal FR-007 asks for
+	// ("... last push/pull, provenance, ...").
+	OrgAppliedAt string `json:"org_applied_at,omitempty"`
 }
 
 // PendingMCPSecret describes an MCP that arrived via sync but needs

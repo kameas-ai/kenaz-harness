@@ -186,6 +186,76 @@ func TestStatus_FailedAfterExhaustedRestarts(t *testing.T) {
 	}
 }
 
+// TestStatus_ResourcePromptCounts_MeasuredWhenAdvertised is
+// connector-lifecycle-truth-01PMZ303 UNIT-10 / AC-006's wire-branch
+// assertion: a server that advertises resources+prompts capabilities and
+// returns a non-zero resources/list + prompts/list must report the real
+// counts, not the hardcoded 0 every installed server used to get
+// regardless of what it actually supported.
+//
+// The fixture deliberately returns non-zero (3 resources, 2 prompts) —
+// per spec.md §7 AC-006's own false-pass warning, a fixture returning
+// zero would be indistinguishable from the bug this fixes.
+//
+// Mutation: restore `ResourceCount: 0, PromptCount: 0` in status.go's
+// RecipeStatus. Must fail.
+func TestStatus_ResourcePromptCounts_MeasuredWhenAdvertised(t *testing.T) {
+	t.Parallel()
+	bin := buildFakeServer(t)
+	inst := newServerInstance("fake", nil, nil, nil, nil, instanceOptions{
+		Sleep: func(time.Duration) {},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := inst.Spawn(ctx, SpawnSpec{
+		ID:         "fake",
+		Command:    []string{bin, "--advertise-resources-prompts"},
+		PingPeriod: -1,
+	}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	defer inst.Close(context.Background())
+
+	st := inst.RecipeStatus()
+	if st.ResourceCount != 3 {
+		t.Fatalf("ResourceCount = %d, want 3", st.ResourceCount)
+	}
+	if st.PromptCount != 2 {
+		t.Fatalf("PromptCount = %d, want 2", st.PromptCount)
+	}
+}
+
+// TestStatus_ResourcePromptCounts_ZeroWhenNotAdvertised asserts a server
+// that does NOT advertise resources/prompts capabilities reports 0 for
+// both — genuinely absent, not a measurement that was never taken. This
+// is the honest-zero case FR-005/FR-006 both require: a field the
+// transport cannot supply is zero, not a fabricated non-zero.
+func TestStatus_ResourcePromptCounts_ZeroWhenNotAdvertised(t *testing.T) {
+	t.Parallel()
+	bin := buildFakeServer(t)
+	inst := newServerInstance("fake", nil, nil, nil, nil, instanceOptions{
+		Sleep: func(time.Duration) {},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := inst.Spawn(ctx, SpawnSpec{
+		ID:         "fake",
+		Command:    []string{bin}, // no --advertise-resources-prompts
+		PingPeriod: -1,
+	}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	defer inst.Close(context.Background())
+
+	st := inst.RecipeStatus()
+	if st.ResourceCount != 0 {
+		t.Fatalf("ResourceCount = %d, want 0 (capability not advertised)", st.ResourceCount)
+	}
+	if st.PromptCount != 0 {
+		t.Fatalf("PromptCount = %d, want 0 (capability not advertised)", st.PromptCount)
+	}
+}
+
 // waitForStderrTail polls until the ring buffer contains want or
 // the deadline passes. Drains race with the pump, which writes
 // asynchronously.

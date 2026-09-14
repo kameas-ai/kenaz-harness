@@ -157,11 +157,18 @@ func main() {
 	// token never crosses into the VM.
 	authCfg := authbroker.ReadConfig(os.Getenv)
 	connTokens := authbroker.NewConnectorTokens(authCfg, log)
+	// Named so the same emitter also backs authbroker.WithLedgerEmit below
+	// (fleet-enforcement-truth-01PMZ505 WP14) — one reporter-ingest-socket
+	// emitter for both connector-lifecycle and session-lifecycle events.
+	// Both served entry points must agree (Spec 078 precedent) — wiring
+	// only main.go and not this binary would reproduce exactly the
+	// SD-11 divergence class this file's own header already warns about.
+	ledgerEmitter := connectors.NewLedgerEmitterFromEnv(os.Getenv, log)
 	connSup := connectors.NewSupervisor(connectors.SupervisorConfig{
 		Provisioning: mcpProv,
 		Getenv:       os.Getenv,
 		Tokens:       connTokens,
-		Ledger:       connectors.NewLedgerEmitterFromEnv(os.Getenv, log),
+		Ledger:       ledgerEmitter,
 		// D13/US5: include operator-authored user recipes baked under
 		// <dataDir>/mcp/recipes so whitelisted custom connector ids
 		// resolve in served mode. The whitelist still gates every id.
@@ -219,7 +226,11 @@ func main() {
 	// disk, same mechanism as SIGIL_INGEST_TOKEN / HARNESS_VM_TOKEN).
 	//
 	// Privacy: broker token and access token bytes are never logged.
-	authSession := authbroker.NewSession(ctx, authCfg, log)
+	// WithLedgerEmit (fleet-enforcement-truth-01PMZ505 WP14): reuse the
+	// connector-lifecycle emitter so "session.signed_out" reaches the
+	// same reporter ingest socket as connector.* events.
+	authSession := authbroker.NewSession(ctx, authCfg, log,
+		authbroker.WithLedgerEmit(ledgerEmitter.EmitSessionLifecycle))
 	log.Info("harness-served: auth session initialised",
 		"auth_state", authSession.State().String(),
 		"broker_addr", authCfg.BrokerAddr,
@@ -279,14 +290,15 @@ func main() {
 		// entry points must agree — see main.go's identical wiring.
 		serve.WithStreamQueueCap(serve.StreamQueueCapFromEnv(os.Getenv)))
 	serveErr := srv.Serve(ctx)
-	// Review finding (Blocker 3, finding #61 follow-up, 2026-09-11):
-	// this binary never called api.Shutdown() either — see main.go's
-	// runServeMode for the full history (the same gap, same fix, "both
-	// served entry points must agree" per this file's own convention
-	// above). Runs on every exit from Serve so a queued post_send embed
-	// and the prune/compaction schedulers are stopped before the
-	// process exits.
-	api.Shutdown()
+	// Two findings, one call: #68 (v0.78.1) -- this binary never called
+	// api.Shutdown(), leaving a queued post_send embed and the
+	// prune/compaction schedulers running; and #70 -- it never called
+	// core.Shutdown(ctx), so storage, MCP and telemetry never closed.
+	// Shared with main.go's runServeMode via serve.ShutdownServedCore
+	// (see that function's doc comment) so both served entry points
+	// cannot drift from each other. Runs even when serveErr is a real
+	// error.
+	serve.ShutdownServedCore(ctx, api, c, log, "harness-served")
 	if serveErr != nil && serveErr != context.Canceled {
 		log.Error("harness-served: server error", "err", serveErr)
 		os.Exit(1)

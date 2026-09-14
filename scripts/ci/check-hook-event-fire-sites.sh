@@ -240,7 +240,9 @@ to_pascal_case() {
 #     (false negative) — and, symmetrically, an unrelated method with the
 #     same short name on a different receiver type can be counted as a
 #     caller when it is not (false positive). Short, common method names
-#     are the likeliest source of either.
+#     are the likeliest source of either. **Partially closed 2026-09-12
+#     for the "closure registered via Set<Name>/With<Name>" shape — see
+#     closure_indirect_reachable() below.**
 #   - build-tag-gated or test-helper-only callers: the caller search
 #     excludes _test.go files by design (a test-only caller is not a
 #     production path) but does not evaluate build tags, so a caller
@@ -268,22 +270,103 @@ one_hop_reachable() {
   fi
   [[ -z "$name" ]] && return 1
 
-  local pattern
+  local pattern search_dir
   if [[ "$is_method" -eq 1 ]]; then
     # Method: only a receiver-dot call counts, same convention leg (a)
-    # itself uses for Run<Pascal>/Fire<Pascal>.
+    # itself uses for Run<Pascal>/Fire<Pascal>. Searched across all of
+    # core/ because a method's caller legitimately lives in any package
+    # holding an instance of the receiver type.
     pattern="\\.${name}\\("
+    search_dir="core"
   else
     # Package-level func: any call not immediately preceded by another
     # identifier char or a dot (which would make it someone else's
-    # method of the same short name).
+    # method of the same short name). An UNQUALIFIED call is only valid
+    # Go from inside the func's own package — a package-external caller
+    # would write `pkgname.${name}(`, which the "not preceded by a dot"
+    # requirement above deliberately excludes. So the search is scoped
+    # to the func's own directory (2026-09-12, finding #85 close-out):
+    # searching all of core/ let `New(` — the enclosing function for
+    # background_task_complete's fire site, `core/rpc.New` — match
+    # `core/event/internal/idgen/ulid.go`'s unrelated package-level
+    # `New()`, an accidental same-name collision this heuristic's own
+    # comment already names as a risk. That gave a pass for the wrong
+    # reason: `rpc.New` genuinely has no *unqualified* same-package
+    # caller (its real callers are all `rpc.New(...)` from outside the
+    # package, which this pattern cannot see by design), so scoping
+    # correctly turns this into a miss here — closure_indirect_reachable
+    # is what actually proves background_task_complete's fire site below.
     pattern="(^|[^.A-Za-z0-9_])${name}\\("
+    search_dir="$(dirname "$file")"
   fi
 
   local hits
-  hits=$(grep -rnE "$pattern" --include='*.go' core 2>/dev/null \
+  hits=$(grep -rnE "$pattern" --include='*.go' "$search_dir" 2>/dev/null \
     | grep -v '_test\.go' \
     | grep -vE '^[^:]+:[0-9]+:[[:space:]]*func ' \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' \
+    || true)
+  [[ -n "$hits" ]]
+}
+
+# ---- closure-indirect reachability (2026-09-12, finding #85 close-out) ----
+#
+# One of the two indirect-invocation blind spots one_hop_reachable's own
+# comment names above: `background_task_complete`'s only fire site
+# (core/rpc/api.go's `New()`) is a `.Fire(` call inside an anonymous
+# closure passed straight to `taskReg.SetHookFirer(func(ctx, payload)
+# {...})`. one_hop_reachable's backward `awk` scan for the nearest
+# preceding `^func ` resolves the "enclosing function" to `New()` itself
+# — the ordinary constructor the closure happens to be defined inside —
+# which says nothing about whether the closure is ever CALLED. Worse:
+# `New(` is common enough that an unqualified caller search across
+# `core/` was found (while wiring this event) to pass on comment text
+# alone (`// so the test harness path (New(Options{})) keeps working`),
+# not a real call site — a false positive one_hop_reachable's own comment
+# exclusion above now also closes.
+#
+# The real invocation is in a different file: `core/tasks/registry.go`'s
+# `End()` snapshots `r.hookFirer` under its lock and calls the local copy
+# (`go hookFirer(ctx, payload)`). This function recognizes that shape by
+# convention rather than a real call-graph walk: if the Fire call sits
+# inside a closure passed to `.Set<Name>(func(` or `.With<Name>(func(`
+# (searching a short window immediately above the match — the shape this
+# codebase's own late-binding options use, see CLAUDE.md's I10 heuristic
+# widening to `With*` options for the same naming convention), it derives
+# the field the setter conventionally assigns (`SetHookFirer` ->
+# `hookFirer`, first letter lower-cased) and requires a real, non-test,
+# non-comment call site for that identifier elsewhere in `core/` — either
+# a bare call (the snapshot-then-call shape above) or a field access
+# (`.hookFirer(`).
+#
+# This is still a heuristic, not a call-graph proof, and it is
+# deliberately narrow: a closure passed to a Set*/With* call whose stored
+# field is genuinely never invoked anywhere still fails (see
+# TestHookEventFireSitesGate_PlantedDeadClosureRegistrationFires) — this
+# function does not treat "shaped like a late-bound setter" as proof by
+# itself, only "shaped like a late-bound setter AND the field is actually
+# called somewhere in production code" together.
+closure_indirect_reachable() {
+  local file="$1" line="$2"
+  local start=$(( line - 15 ))
+  (( start < 1 )) && start=1
+
+  local setter_name
+  setter_name=$(sed -n "${start},${line}p" "$file" 2>/dev/null \
+    | grep -oE '\.(Set|With)[A-Za-z0-9_]+\([[:space:]]*func\(' \
+    | tail -1 \
+    | sed -E 's/^\.(Set|With)([A-Za-z0-9_]+)\(.*/\2/')
+  [[ -z "$setter_name" ]] && return 1
+
+  local field
+  field="$(tr '[:upper:]' '[:lower:]' <<<"${setter_name:0:1}")${setter_name:1}"
+  [[ -z "$field" ]] && return 1
+
+  local hits
+  hits=$(grep -rnE "(\\.${field}\\(|(^|[^.A-Za-z0-9_])${field}\\()" --include='*.go' core 2>/dev/null \
+    | grep -v '_test\.go' \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' \
+    | grep -vE "\\.(Set|With)${setter_name}\\(" \
     || true)
   [[ -n "$hits" ]]
 }
@@ -293,10 +376,17 @@ has_fire_site() {
   # Real method-call site: preceded by a receiver dot, which excludes both
   # `func (r *Runner) Run<Pascal>(` declarations and bare interface method
   # signatures (neither has a preceding '.').
+  # Comment lines (e.g. a doc comment narrating "calls hooks.Runner.Fire(...)")
+  # are excluded from both searches below — they read as a call textually
+  # but execute nothing. core/tasks/hook_firer.go:8 is exactly this shape
+  # (found 2026-09-12 while wiring background_task_complete: it produced a
+  # confusing "unreachable" diagnostic pointing at a comment instead of the
+  # real fire site once the real site was mutated away).
   local method_hits
   method_hits=$(grep -rnE "\.(Run|Fire)${pascal}\(" --include='*.go' core 2>/dev/null \
     | grep -v '_test\.go' \
     | grep -v "^${HOOKS_GO}:" \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' \
     || true)
   # Generic-dispatch call site: a .Fire( / .FireAsync( call on a line that
   # also names the event's own Go constant (core/fswatch/watcher.go's shape).
@@ -304,6 +394,7 @@ has_fire_site() {
   generic_hits=$(grep -rnE '\.(Fire|FireAsync)\(' --include='*.go' core 2>/dev/null \
     | grep -v '_test\.go' \
     | grep -v "^${HOOKS_GO}:" \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' \
     | grep -E "Event${pascal}\b" \
     || true)
 
@@ -321,6 +412,10 @@ has_fire_site() {
     hline="${hit#*:}"
     hline="${hline%%:*}"
     if one_hop_reachable "$hfile" "$hline"; then
+      HAS_FIRE_SITE_REASON=""
+      return 0
+    fi
+    if closure_indirect_reachable "$hfile" "$hline"; then
       HAS_FIRE_SITE_REASON=""
       return 0
     fi

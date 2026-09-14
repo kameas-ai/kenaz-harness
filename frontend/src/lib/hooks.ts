@@ -172,6 +172,53 @@ export type HookEventName = (typeof ALL_HOOK_EVENTS)[number];
  * caller exists would be the exact lie this mission exists to close:
  * a picker entry that claims to fire and does not.
  * See scripts/ci/allowlists/i17-eventless-hook-events.txt.
+ *
+ * Grown 2026-09-12 (subagent-control-and-background-tasks-01PMZB11,
+ * finding #85) by `background_task_complete`: `core/tasks.Registry.End`
+ * (core/tasks/registry.go) snapshots `r.hookFirer` under its lock and
+ * invokes it (`go hookFirer(ctx, payload)`) for every terminal task.
+ * `core/rpc/api.go`'s `New()` late-binds that field via
+ * `taskReg.SetHookFirer(func(ctx, payload) {...})` once the
+ * process-singleton `*hooks.Runner` exists, and the closure body calls
+ * `hookRunnerForTasks.Fire(ctx, hooks.EventBackgroundTaskComplete, ...)`.
+ * This is a genuinely new *shape* for this list — every prior entry's
+ * Fire/Run<X> call sits directly inside a function reachable by an
+ * ordinary caller chain; this one sits inside an anonymous closure
+ * that is stored as a struct field and invoked from a different file
+ * entirely. `scripts/ci/check-hook-event-fire-sites.sh`'s one-hop
+ * reachability check was extended in the same commit to recognize a
+ * closure passed to a `Set<Name>`/`With<Name>` call and to require a
+ * real, non-test, non-comment call site for the field the setter
+ * conventionally assigns (`SetHookFirer` -> `hookFirer`) — see that
+ * script's `closure_indirect_reachable()` and
+ * `TestHookEventFireSitesGate_PlantedDeadClosureRegistrationFires`.
+ * `scripts/ci/allowlists/i17-eventless-hook-events.txt`'s
+ * `background_task_complete` row is deleted in the same commit.
+ *
+ * Grown again 2026-09-12 (same mission, UNIT-7) by `subagent_start`:
+ * `core/rpc/subagent_run_spawner.go`'s production `graphview.RunSpawner`
+ * fires `hooks.EventSubagentStart` immediately before
+ * `deps.LLM.StartStream(...)` — after the task row is registered (so a
+ * hook consumer can correlate `TaskID`) and strictly before the child
+ * run's first turn, which is AC-08's falsifiable ordering claim. Wired
+ * from `core/rpc/api.go`'s `New()` via `SubagentRunSpawnerDeps.HookRunner
+ * = a.hookRunner` — the SAME Runner instance
+ * `background_task_complete` above already fires through, not a second
+ * one. `scripts/ci/allowlists/i17-eventless-hook-events.txt`'s
+ * `subagent_start` row is deleted in the same commit.
+ *
+ * Ordering note (caught by HooksPanel.spec.ts, not by inspection):
+ * `subagent_start`'s EVENT_FAMILY is `'session'`, the same family as
+ * `session_start` earlier in this list — HookEditor.vue's
+ * `firingEventGroups` groups `<option>`s by family, "ordered by first
+ * appearance in FIRING_HOOK_EVENTS, which already keeps same-family
+ * events adjacent" (that file's own comment). Appending
+ * `subagent_start` at the tail, after the unrelated `'task'`-family
+ * `background_task_complete`, would have rendered it pulled backward
+ * into the `session` group next to `session_start` while this raw array
+ * still listed it last — array order and render order silently
+ * diverging. Placed immediately after `session_start` instead, so the
+ * two stay in sync the same way every prior addition to this list did.
  */
 export const FIRING_HOOK_EVENTS = [
   'post_send',
@@ -181,6 +228,8 @@ export const FIRING_HOOK_EVENTS = [
   'permission_request',
   'permission_denied',
   'session_start',
+  'subagent_start',
+  'background_task_complete',
 ] as const;
 
 /**
@@ -210,12 +259,25 @@ export const EVENT_FAMILY: Record<HookEventName, string> = {
 /**
  * HOOK_KINDS is the list of hook kinds offered by the kind picker.
  *
- * 'mcp' is intentionally NOT here (trust-surfaces-that-fire-01PMZ202 WP08 /
- * UNIT-7, A-6): the MCP hook kind is stub-only in the backend today. A
- * saved kind=mcp hook must still load and dispatch through Go's
- * hooks.KindMCP — that machinery is untouched — this only stops the
- * picker from offering a kind that would be a no-op stub if a user chose
- * it new. core/hooks.Kind* constants (including KindMCP) are unchanged.
+ * 'mcp' is intentionally NOT here. Originally (trust-surfaces-that-fire-
+ * 01PMZ202 WP08 / UNIT-7, A-6) because the MCP hook kind was stub-only in
+ * the backend — every kind=mcp dispatch failed with "not configured".
+ *
+ * CORRECTED 2026-09-11 (finding #71): that backend gap is now closed —
+ * core/rpc's mcpHookInvokerAdapter (hooks_mcp_invoker.go) wires
+ * hooks.Config.MCP onto the live MCP dispatch pool, so a saved kind=mcp
+ * hook actually reaches a configured MCP server tool. 'mcp' stays off the
+ * picker for a different, still-open reason: MCPTool must be a
+ * "<server>__<tool>" namespaced identifier (mirroring
+ * core/rpc/views/llm.ToolNameSeparator), and there is no UI surface yet
+ * that lets a user pick from installed servers/tools and compose that
+ * identifier — HookEditor only has a free-text field, which would ship a
+ * kind users can select but can't correctly configure without reading Go
+ * source. That is a frontend-only mission (a tool picker sourced from the
+ * same MCP_ListServers/recipe-tools surface ToolsView.vue already reads),
+ * not a backend gap. core/hooks.Kind* constants (including KindMCP) are
+ * unchanged; a hook saved via direct API/config with a correctly-
+ * namespaced MCPTool dispatches for real today.
  */
 export const HOOK_KINDS = ['builtin', 'shell'] as const;
 export type HookKindName = (typeof HOOK_KINDS)[number];

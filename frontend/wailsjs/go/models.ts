@@ -828,6 +828,43 @@ export namespace autonomy {
 
 }
 
+export namespace blockedrequests {
+	
+	export class PendingRequest {
+	    id: string;
+	    origin: string;
+	    originId: string;
+	    sessionId: string;
+	    family: string;
+	    action: string;
+	    resource: string;
+	    reason: string;
+	    status: string;
+	    createdAt: string;
+	    resolvedAt?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PendingRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.origin = source["origin"];
+	        this.originId = source["originId"];
+	        this.sessionId = source["sessionId"];
+	        this.family = source["family"];
+	        this.action = source["action"];
+	        this.resource = source["resource"];
+	        this.reason = source["reason"];
+	        this.status = source["status"];
+	        this.createdAt = source["createdAt"];
+	        this.resolvedAt = source["resolvedAt"];
+	    }
+	}
+
+}
+
 export namespace branches {
 	
 	export class Branch {
@@ -847,6 +884,12 @@ export namespace branches {
 	    subagentBranch?: boolean;
 	    recommendationId?: string;
 	    advisorSignals?: string[];
+	    subagentStatus?: string;
+	    profileId?: string;
+	    tokensUsed?: number;
+	    budgetTokens?: number;
+	    elapsedS?: number;
+	    budgetTimeS?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new Branch(source);
@@ -870,6 +913,12 @@ export namespace branches {
 	        this.subagentBranch = source["subagentBranch"];
 	        this.recommendationId = source["recommendationId"];
 	        this.advisorSignals = source["advisorSignals"];
+	        this.subagentStatus = source["subagentStatus"];
+	        this.profileId = source["profileId"];
+	        this.tokensUsed = source["tokensUsed"];
+	        this.budgetTokens = source["budgetTokens"];
+	        this.elapsedS = source["elapsedS"];
+	        this.budgetTimeS = source["budgetTimeS"];
 	    }
 	}
 	export class BranchStatus {
@@ -3658,6 +3707,20 @@ export namespace llm {
 	        this.message = source["message"];
 	    }
 	}
+	export class ReasoningConfig {
+	    openai_effort?: string;
+	    anthropic_thinking_budget?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ReasoningConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.openai_effort = source["openai_effort"];
+	        this.anthropic_thinking_budget = source["anthropic_thinking_budget"];
+	    }
+	}
 	export class RecognizeTemplateResult {
 	    matched: boolean;
 	    template?: CustomTemplateSummary;
@@ -3691,6 +3754,60 @@ export namespace llm {
 		}
 	}
 	
+	export class RequestKnobs {
+	    reasoning?: ReasoningConfig;
+	    seed?: number;
+	    response_format_mode?: string;
+	    json_mode?: boolean;
+	    temperature?: number;
+	    top_p?: number;
+	    top_k?: number;
+	    max_tokens?: number;
+	    frequency_penalty?: number;
+	    presence_penalty?: number;
+	    parallel_tool_calls?: boolean;
+	    stop_sequences?: string[];
+	    vendor_extensions?: Record<string, Array<number>>;
+	
+	    static createFrom(source: any = {}) {
+	        return new RequestKnobs(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.reasoning = this.convertValues(source["reasoning"], ReasoningConfig);
+	        this.seed = source["seed"];
+	        this.response_format_mode = source["response_format_mode"];
+	        this.json_mode = source["json_mode"];
+	        this.temperature = source["temperature"];
+	        this.top_p = source["top_p"];
+	        this.top_k = source["top_k"];
+	        this.max_tokens = source["max_tokens"];
+	        this.frequency_penalty = source["frequency_penalty"];
+	        this.presence_penalty = source["presence_penalty"];
+	        this.parallel_tool_calls = source["parallel_tool_calls"];
+	        this.stop_sequences = source["stop_sequences"];
+	        this.vendor_extensions = source["vendor_extensions"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class RotationResult {
 	    success: boolean;
 	    message?: string;
@@ -5960,6 +6077,8 @@ export namespace scheduledchat {
 	    updatedAt: string;
 	    createdBy: string;
 	    toolAllowlist?: string[];
+	    triggerKind: string;
+	    runAt?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ChatRunEntry(source);
@@ -5979,6 +6098,8 @@ export namespace scheduledchat {
 	        this.updatedAt = source["updatedAt"];
 	        this.createdBy = source["createdBy"];
 	        this.toolAllowlist = source["toolAllowlist"];
+	        this.triggerKind = source["triggerKind"];
+	        this.runAt = source["runAt"];
 	    }
 	}
 	export class CreateInput {
@@ -5990,6 +6111,8 @@ export namespace scheduledchat {
 	    outputSink?: string;
 	    enabled: boolean;
 	    toolAllowlist?: string[];
+	    triggerKind?: string;
+	    runAt?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new CreateInput(source);
@@ -6005,6 +6128,8 @@ export namespace scheduledchat {
 	        this.outputSink = source["outputSink"];
 	        this.enabled = source["enabled"];
 	        this.toolAllowlist = source["toolAllowlist"];
+	        this.triggerKind = source["triggerKind"];
+	        this.runAt = source["runAt"];
 	    }
 	}
 	export class RunSummary {
@@ -6063,6 +6188,8 @@ export namespace scheduledchat {
 	    outputSink?: string;
 	    enabled: boolean;
 	    toolAllowlist?: string[];
+	    triggerKind?: string;
+	    runAt?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new UpdateInput(source);
@@ -6079,6 +6206,8 @@ export namespace scheduledchat {
 	        this.outputSink = source["outputSink"];
 	        this.enabled = source["enabled"];
 	        this.toolAllowlist = source["toolAllowlist"];
+	        this.triggerKind = source["triggerKind"];
+	        this.runAt = source["runAt"];
 	    }
 	}
 
@@ -6319,6 +6448,7 @@ export namespace sessions {
 	    recapStyle: string;
 	    continueOnError: string;
 	    destructiveActionPosture: string;
+	    riskThreshold: number;
 	    sourceTrace: Record<string, string>;
 	    tier: string;
 	
@@ -6335,6 +6465,7 @@ export namespace sessions {
 	        this.recapStyle = source["recapStyle"];
 	        this.continueOnError = source["continueOnError"];
 	        this.destructiveActionPosture = source["destructiveActionPosture"];
+	        this.riskThreshold = source["riskThreshold"];
 	        this.sourceTrace = source["sourceTrace"];
 	        this.tier = source["tier"];
 	    }
@@ -7024,6 +7155,41 @@ export namespace settings {
 
 export namespace sites {
 	
+	export class SiteEnvEntry {
+	    name: string;
+	    description?: string;
+	    // Go type: time
+	    setAt?: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new SiteEnvEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.setAt = this.convertValues(source["setAt"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class SiteSummary {
 	    name: string;
 	    kind: string;
@@ -7354,6 +7520,8 @@ export namespace sync {
 	    last_push_at?: string;
 	    last_pull_at?: string;
 	    last_error?: string;
+	    scopes?: string[];
+	    org_applied_at?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new SyncStatusView(source);
@@ -7366,6 +7534,8 @@ export namespace sync {
 	        this.last_push_at = source["last_push_at"];
 	        this.last_pull_at = source["last_pull_at"];
 	        this.last_error = source["last_error"];
+	        this.scopes = source["scopes"];
+	        this.org_applied_at = source["org_applied_at"];
 	    }
 	}
 
@@ -7562,6 +7732,7 @@ export namespace tools {
 	    enabled: boolean;
 	    status: transport.RecipeStatus;
 	    keysPresent: boolean;
+	    source: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new RecipeListing(source);
@@ -7573,6 +7744,7 @@ export namespace tools {
 	        this.enabled = source["enabled"];
 	        this.status = this.convertValues(source["status"], transport.RecipeStatus);
 	        this.keysPresent = source["keysPresent"];
+	        this.source = source["source"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

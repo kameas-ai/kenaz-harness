@@ -42,10 +42,13 @@ import (
 // ---- FirstRunChecker adapter ------------------------------------------------
 
 // onboardingFirstRunAdapter implements onboardingview.FirstRunChecker.
-// IsFirstRun returns true when the provider count is zero.
-// OnboardingCompleted is not yet persisted, so we treat it as always false
-// (i.e. the dialog may appear on every cold start until a provider is
-// configured). A follow-up adds a real completion flag.
+// IsFirstRun returns true when the provider count is zero. This is
+// deliberately an independent signal from completion/dismissal —
+// onboardingCompletionAdapter below persists that half via
+// Settings.FirstRunOnboardingCompleted. API.State() (impl.go) is what
+// combines the two into OnboardingState.FirstRun's documented contract
+// ("no provider configured AND never dismissed"); this adapter must not
+// try to fold completion in itself (trust-surfaces-that-fire-01PMZ202 WP25).
 type onboardingFirstRunAdapter struct {
 	llmAPI llmview.LLMConnectorAPI
 }

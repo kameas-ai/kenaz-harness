@@ -140,6 +140,8 @@ type toolResultError struct {
 // is registered so the Tasks panel UI shows it alongside other background
 // tasks. The interface is intentionally minimal so this package can code
 // against the predicted contract without importing the not-yet-merged mission.
+//
+// wiring:deferred(newly surfaced by automation-actually-runs-01PMZ404 UNIT-17's G-1a gate widening, 2026-09-12 — background-task-monitor-01KZNP3C has since merged (per docs/unwired-ledger.md's own record of the background-task subsystem), but zero non-test implementers of Register()/Cancel() exist for THIS interface specifically — the "not-yet-merged mission" framing in the comment above is stale. Pre-existing gap, out of scope for this mission; recorded in docs/unwired-ledger.md, needs its own owner)
 type TasksRegistry interface {
 	Register(ctx context.Context, kind string, descriptor map[string]any) (taskID string, err error)
 	Cancel(ctx context.Context, taskID string) error
@@ -302,6 +304,11 @@ func (t *Tool) Call(ctx context.Context, rawArgs json.RawMessage) (json.RawMessa
 		// all the way down.
 		BudgetTokens: profile.BudgetTokens,
 		BudgetTimeS:  profile.BudgetTimeS,
+		// ProfileID (UNIT-9): recorded by BranchSeamAdapter.Fork against
+		// the new branch id so core/rpc/views/branches can populate
+		// SubagentBranch.profileId later — this is the ONE call site
+		// that knows which persona profile actually drove the dispatch.
+		ProfileID: profile.ID,
 	}
 
 	// Fork the session.

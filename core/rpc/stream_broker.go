@@ -133,7 +133,58 @@ const (
 	// passthroughTopics entry is now the only edit required; run codegen
 	// (checked by scripts/ci/check-codegen.sh) and commit the diff.
 	TopicMigrationDriftDetected = "storage.migration.drift-detected"
+
+	// TopicBlockedPermissionRequestPending is published (a) once per
+	// pending row found at chassis boot (the "surfaced to the user next
+	// time they open the app" half of owner decision 2) and (b) live,
+	// every time core/rpc.blockedRequestSink records a new denial while
+	// the app is already open — model-scheduled-jobs-01PMSJ01 WP07,
+	// FR-004's second half. The frontend's pending-permissions panel
+	// subscribes here to refresh its list without polling.
+	//
+	// Payload shape: []blockedrequestsview.PendingRequest (the full
+	// current pending set, not a delta — cheap at the sizes this table
+	// realistically reaches, and it means a late-subscribing component
+	// never has to separately fetch an initial snapshot).
+	//
+	// Must be in passthroughTopics (core/serve/wsstream.go) for served
+	// mode.
+	TopicBlockedPermissionRequestPending = "policy:blocked-permission-request-pending"
+
+	// TopicScheduledChatBanner is the "banner" output_sink for a
+	// scheduled chat run (model-scheduled-jobs-01PMSJ01 WP07, FR-007).
+	// Before this const existed the string "scheduled-chat:banner"
+	// appeared exactly once in the repository, in a comment
+	// (core/scheduler/job.go) — no emitter, no subscriber, no
+	// passthroughTopics entry, invisible to
+	// check-broker-topic-consumers.sh by construction (an undeclared
+	// string const is not in that gate's input set at all). FR-007
+	// admits exactly two dispositions, "wired or gone"; this is "wired".
+	//
+	// Emitted by LiveChatRunDispatcher (core/rpc/chat_run_dispatcher.go)
+	// after a scheduled run completes with output_sink="banner" (the
+	// schema default — migrations_scheduled_chat_runs.go). The
+	// frontend's useEventToasts composable subscribes here and renders a
+	// toast; NOT a modal, since output delivery for a run nobody is
+	// watching should not block on user action.
+	//
+	// Payload shape: ScheduledChatBannerPayload.
+	TopicScheduledChatBanner = "scheduled-chat:banner"
 )
+
+// ScheduledChatBannerPayload is the payload published on
+// TopicScheduledChatBanner. Privacy invariant: OutputSnippet is already
+// truncated by the dispatcher (lastAssistantSnippet's maxSnippet) before
+// it reaches here — this type does not re-truncate, it forwards what it
+// is given.
+type ScheduledChatBannerPayload struct {
+	ChatRunID     string `json:"chatRunId"`
+	Name          string `json:"name"`
+	SessionID     string `json:"sessionId"`
+	Status        string `json:"status"` // "completed" | "failed"
+	OutputSnippet string `json:"outputSnippet,omitempty"`
+	Error         string `json:"error,omitempty"`
+}
 
 // MigrationDriftDetectedPayload is the typed payload published on
 // TopicMigrationDriftDetected. Mirrors

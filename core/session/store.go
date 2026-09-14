@@ -179,6 +179,22 @@ type Store interface {
 	// Returns ErrSessionNotFound when the session does not exist.
 	GetLastUsage(ctx context.Context, id string) (LastUsage, error)
 
+	// SetKnobsDefault persists the session-level RequestKnobs override
+	// (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10, migration
+	// sessions/0330-knobs). Passing nil clears any existing override —
+	// SessionTunePanel's "Reset" action round-trips to this. Called by
+	// Sessions_SetKnobsDefault; read back by the chat send path so the
+	// stored default reaches every GenerationRequest the session issues.
+	// Returns ErrSessionNotFound when the session does not exist.
+	SetKnobsDefault(ctx context.Context, id string, k *llm.RequestKnobs) error
+
+	// GetKnobsDefault loads the session-level RequestKnobs override, or
+	// nil (not an error) when none has been set (column is NULL — the
+	// default for every session created before this feature, and for one
+	// that has never opened the tune panel).
+	// Returns ErrSessionNotFound when the session does not exist.
+	GetKnobsDefault(ctx context.Context, id string) (*llm.RequestKnobs, error)
+
 	// UpsertStreamCheckpoint durably persists (or overwrites) the
 	// mid-run checkpoint for one (sessionID, subID) stream subscription
 	// (chat-turn-integrity-01PMZ606 WP02/WP03). Called by the periodic
@@ -208,23 +224,25 @@ type Store interface {
 // guarded by a single RWMutex; appropriate for test scale and as the
 // boot fallback before the SQL store is wired.
 type memStore struct {
-	mu          sync.RWMutex
-	records     map[string]Record
-	messages    map[string][]Message         // session_id -> ordered messages
-	seqByID     map[string]int64             // session_id -> next sequence
-	lastUsage   map[string]*LastUsage        // session_id -> last usage snapshot
-	checkpoints map[string]*StreamCheckpoint // "sessionID\x00subID" -> checkpoint
+	mu           sync.RWMutex
+	records      map[string]Record
+	messages     map[string][]Message         // session_id -> ordered messages
+	seqByID      map[string]int64             // session_id -> next sequence
+	lastUsage    map[string]*LastUsage        // session_id -> last usage snapshot
+	knobsDefault map[string]*llm.RequestKnobs // session_id -> knobs_default override
+	checkpoints  map[string]*StreamCheckpoint // "sessionID\x00subID" -> checkpoint
 }
 
 // NewMemoryStore returns an in-memory Store. Useful for tests and as
 // the manager's default before storage-foundations wires a real DB.
 func NewMemoryStore() Store {
 	return &memStore{
-		records:     map[string]Record{},
-		messages:    map[string][]Message{},
-		seqByID:     map[string]int64{},
-		lastUsage:   map[string]*LastUsage{},
-		checkpoints: map[string]*StreamCheckpoint{},
+		records:      map[string]Record{},
+		messages:     map[string][]Message{},
+		seqByID:      map[string]int64{},
+		lastUsage:    map[string]*LastUsage{},
+		knobsDefault: map[string]*llm.RequestKnobs{},
+		checkpoints:  map[string]*StreamCheckpoint{},
 	}
 }
 
@@ -458,6 +476,34 @@ func (s *memStore) GetLastUsage(_ context.Context, id string) (LastUsage, error)
 		return *u, nil
 	}
 	return LastUsage{}, nil
+}
+
+func (s *memStore) SetKnobsDefault(_ context.Context, id string, k *llm.RequestKnobs) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.records[id]; !ok {
+		return ErrSessionNotFound
+	}
+	if k == nil {
+		delete(s.knobsDefault, id)
+		return nil
+	}
+	dup := *k
+	s.knobsDefault[id] = &dup
+	return nil
+}
+
+func (s *memStore) GetKnobsDefault(_ context.Context, id string) (*llm.RequestKnobs, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, ok := s.records[id]; !ok {
+		return nil, ErrSessionNotFound
+	}
+	if k, ok := s.knobsDefault[id]; ok {
+		dup := *k
+		return &dup, nil
+	}
+	return nil, nil
 }
 
 func (s *memStore) UpsertStreamCheckpoint(_ context.Context, sessionID, subID, text string, hasTool bool, now time.Time) error {
@@ -1135,6 +1181,48 @@ func (s *sqlStore) GetLastUsage(ctx context.Context, id string) (LastUsage, erro
 		return LastUsage{}, nil
 	}
 	return unmarshalLastUsage(*raw)
+}
+
+// SetKnobsDefault persists the session-level RequestKnobs override onto the
+// sessions.knobs_default column (migration sessions/0330-knobs). Passing a
+// nil k writes SQL NULL, clearing any existing override — mirrors
+// SessionTunePanel's "Reset" round-trip.
+func (s *sqlStore) SetKnobsDefault(ctx context.Context, id string, k *llm.RequestKnobs) error {
+	var raw *string
+	if k != nil {
+		encoded, err := marshalKnobsDefault(k)
+		if err != nil {
+			return fmt.Errorf("session: marshal knobs_default: %w", err)
+		}
+		raw = &encoded
+	}
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		res, err := tx.Exec(ctx,
+			"UPDATE sessions SET knobs_default = ? WHERE id = ?", raw, id)
+		if err != nil {
+			return err
+		}
+		return rowsAffectedOrNotFound(res)
+	})
+}
+
+// GetKnobsDefault loads the session-level RequestKnobs override. Returns
+// nil (not an error) when the column is NULL — no override has ever been
+// saved for this session.
+func (s *sqlStore) GetKnobsDefault(ctx context.Context, id string) (*llm.RequestKnobs, error) {
+	row := s.db.Reader().QueryRow(ctx,
+		"SELECT knobs_default FROM sessions WHERE id = ?", id)
+	var raw *string
+	if err := row.Scan(&raw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrSessionNotFound
+		}
+		return nil, err
+	}
+	if raw == nil || *raw == "" {
+		return nil, nil
+	}
+	return unmarshalKnobsDefault(*raw)
 }
 
 // UpsertStreamCheckpoint durably persists (or overwrites) the mid-run
@@ -1973,4 +2061,24 @@ func unmarshalLastUsage(raw string) (LastUsage, error) {
 		return LastUsage{}, fmt.Errorf("session: unmarshal last_usage_json: %w", err)
 	}
 	return u, nil
+}
+
+// marshalKnobsDefault encodes a session's knobs_default override for
+// storage in the sessions.knobs_default TEXT column.
+func marshalKnobsDefault(k *llm.RequestKnobs) (string, error) {
+	b, err := json.Marshal(k)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// unmarshalKnobsDefault decodes the sessions.knobs_default column back
+// into an llm.RequestKnobs value.
+func unmarshalKnobsDefault(raw string) (*llm.RequestKnobs, error) {
+	var k llm.RequestKnobs
+	if err := json.Unmarshal([]byte(raw), &k); err != nil {
+		return nil, fmt.Errorf("session: unmarshal knobs_default: %w", err)
+	}
+	return &k, nil
 }

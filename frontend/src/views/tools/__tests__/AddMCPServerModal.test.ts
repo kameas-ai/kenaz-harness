@@ -56,6 +56,7 @@ function makeListing(recipe: Recipe, overrides: Partial<RecipeListing> = {}): Re
     enabled: false,
     keysPresent: false,
     status: makeStatus(recipe.id),
+    source: 'shipped',
     ...overrides,
   };
 }

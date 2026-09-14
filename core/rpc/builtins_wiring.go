@@ -622,13 +622,20 @@ func saveArtifactEnabledLookup(store settings.SettingsStore) func() bool {
 // PolicyDir, C-16: both land in the same commit because PolicyDir's
 // two call sites are unreachable until a real Prompter exists — a
 // Prompter landing alone makes "Allow always" silently degrade to
-// allow-once, re-prompting forever.)
+// allow-once, re-prompting forever. model-scheduled-jobs-01PMSJ01 WP06
+// adds blockedSink + originResolve: every PromptDeny outcome — whichever
+// path reaches it, interactive or unattended — is now recorded as a
+// durable blocked_permission_requests row instead of vanishing silently.
+// This changes NO decision the gate makes; see corefs.RecordingPrompter's
+// doc.)
 func registerFSBuiltinTools(
 	registry *toolloop.BuiltinRegistry,
 	cedarEngine *cedar.Engine,
 	store settings.SettingsStore,
 	promptRegistry *cedar.Registry,
 	dataDir string,
+	blockedSink corefs.BlockedRequestSink,
+	originResolve corefs.OriginResolver,
 ) {
 	if registry == nil {
 		return
@@ -658,7 +665,19 @@ func registerFSBuiltinTools(
 		// channel is attached, NoOpPrompter otherwise" composite from
 		// the coordination note falls out of that nil-tolerance for
 		// free, with no explicit fallback chain to write here.
-		Prompter: &corefs.CedarPrompter{Registry: promptRegistry},
+		//
+		// model-scheduled-jobs-01PMSJ01 WP06: wrapped in RecordingPrompter
+		// so every PromptDeny this arm resolves to — interactive OR the
+		// immediate deny an unattended run's runposture-aware
+		// RequestInteractive already produces — is persisted as a
+		// blocked_permission_requests row and an audit record. This is a
+		// pure decorator: it changes no decision, only whether the
+		// decision leaves a durable trace (FR-004, owner decision 2).
+		Prompter: &corefs.RecordingPrompter{
+			Inner:   &corefs.CedarPrompter{Registry: promptRegistry},
+			Sink:    blockedSink,
+			Resolve: originResolve,
+		},
 		// C-16: PolicyDir was doubly dead (unset here, and both write
 		// call sites sat inside switch arms NoOpPrompter could never
 		// reach). Wiring the Prompter alone would silently degrade
@@ -764,6 +783,27 @@ func defaultBashSandbox(c *core.Core) string {
 		return c.WorkspaceDir()
 	}
 	return filepath.Join("/tmp", "kenaz-bash")
+}
+
+// mcpRootsDir returns the directory a spawned stdio MCP server's
+// roots/list response advertises to it.
+//
+// connector-lifecycle-truth-01PMZ303 AN-06: this used to be unconditionally
+// dataDir — the harness data directory, which holds the sessions database,
+// the policy bundle and credential locators — so every stdio MCP server was
+// told "here is where the harness keeps its secrets," while the bash
+// sandbox (defaultBashSandbox, above) was anchored at the resolved agent
+// workspace. Two tools, two different answers to "where is the workspace."
+// core.Core.WorkspaceDir's doc says consumers MUST use it instead of
+// joining "agent-workspace" themselves; this mirrors defaultBashSandbox's
+// resolution so both tools agree. Falls back to dataDir only for the
+// nil-core / unresolved-workspace test path, so existing fixtures that
+// construct the pool without a core keep working.
+func mcpRootsDir(c *core.Core, dataDir string) string {
+	if c != nil && c.WorkspaceDir() != "" {
+		return c.WorkspaceDir()
+	}
+	return dataDir
 }
 
 // builtinEnabledPredicate returns a func(name) bool that the toolloop

@@ -112,6 +112,8 @@ type KeychainWriter interface {
 
 // BundleSource exposes the registry's bundle-derived profiles. A nil
 // BundleSource is treated as an empty snapshot.
+//
+// wiring:deferred(newly surfaced by automation-actually-runs-01PMZ404 UNIT-17's G-1a gate widening, 2026-09-12 — zero non-test implementers of BundleProfiles() anywhere in core/. Pre-existing gap in the llm view, out of scope for this mission; recorded in docs/unwired-ledger.md, needs its own owner)
 type BundleSource interface {
 	BundleProfiles() []corellm.ProviderProfile
 }
@@ -153,6 +155,7 @@ type AttachmentLimitsResult struct {
 // CredPeeker resolves a credential reference to a display-safe Redacted
 // value (credstore.Peek). Wire via Config.CredPeeker; nil = no
 // redaction in ListProviders responses (Redaction field stays zero).
+// wiring:deferred(newly surfaced by automation-actually-runs-01PMZ404 UNIT-17's G-1a gate widening, 2026-09-12 — zero non-test implementers of PeekCred() anywhere in core/. Pre-existing gap in the llm view, out of scope for this mission; recorded in docs/unwired-ledger.md, needs its own owner)
 type CredPeeker interface {
 	// PeekCred returns the display string, kind, and locator-safe id for
 	// ref. Display rules: len>12 → "first4…last4"; else "••••••••".
@@ -299,6 +302,8 @@ type ChatRunner interface {
 // backend (core/secrets.Resolver) does — the rpc wiring passes a thin
 // adapter over secrets.Resolver.Invalidate.
 // (provider-keychain-rotation-01KQ8TD9 WP04)
+//
+// wiring:deferred(newly surfaced by automation-actually-runs-01PMZ404 UNIT-17's G-1a gate widening, 2026-09-12 — zero non-test implementers of InvalidateCred() anywhere in core/, contrary to this doc comment's claim that "the rpc wiring passes a thin adapter": no such adapter exists in the tree. A second docstring-describes-nothing finding, not just an unwired dep. Pre-existing gap in the llm view, out of scope for this mission; recorded in docs/unwired-ledger.md, needs its own owner)
 type CredentialInvalidator interface {
 	// InvalidateCred evicts the cached credential for (kind, locator).
 	InvalidateCred(kind, locator string)
@@ -308,6 +313,8 @@ type CredentialInvalidator interface {
 // The rpc wiring passes a concrete *audit.Emitter (or equivalent) that
 // implements this via audit.Emit.
 // (provider-keychain-rotation-01KQ8TD9 WP04)
+//
+// wiring:deferred(newly surfaced by automation-actually-runs-01PMZ404 UNIT-17's G-1a gate widening, 2026-09-12 — zero non-test implementers of EmitRotated() anywhere in core/, contrary to this doc comment's claim of a concrete *audit.Emitter adapter: none exists in the tree. Pre-existing gap in the llm view, out of scope for this mission; recorded in docs/unwired-ledger.md, needs its own owner)
 type AuditEmitter interface {
 	EmitRotated(ctx context.Context, provider, profileID, source string, rotatedAt time.Time) error
 }

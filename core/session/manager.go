@@ -12,6 +12,7 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/event"
+	"github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // Event kinds emitted by the manager. Naming follows the harness
@@ -416,6 +417,21 @@ func (m *Manager) SetLastUsage(ctx context.Context, id string, u LastUsage) erro
 // Returns a zero LastUsage (not an error) when no turn has completed yet.
 func (m *Manager) GetLastUsage(ctx context.Context, id string) (LastUsage, error) {
 	return m.store.GetLastUsage(ctx, id)
+}
+
+// SetKnobsDefault persists the session-level RequestKnobs override
+// (model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10). Called by
+// Sessions_SetKnobsDefault; nil clears the override.
+func (m *Manager) SetKnobsDefault(ctx context.Context, id string, k *llm.RequestKnobs) error {
+	return m.store.SetKnobsDefault(ctx, id, k)
+}
+
+// GetKnobsDefault loads the session-level RequestKnobs override, or nil
+// when none has been set. Read by Sessions_GetKnobsDefault (the tune
+// panel's initial state) and by the chat send path, which merges the
+// result onto every GenerationRequest.Knobs the session issues.
+func (m *Manager) GetKnobsDefault(ctx context.Context, id string) (*llm.RequestKnobs, error) {
+	return m.store.GetKnobsDefault(ctx, id)
 }
 
 // UpsertStreamCheckpoint persists (or overwrites) the mid-run

@@ -139,6 +139,11 @@ function parseKnob(k: AutonomyKnob, raw: string): unknown | undefined {
       if (!Number.isFinite(n)) return undefined;
       return Math.max(0, Math.trunc(n));
     }
+    case 'riskThreshold': {
+      const n = Number(raw);
+      if (!Number.isFinite(n)) return undefined;
+      return Math.min(100, Math.max(0, Math.trunc(n)));
+    }
     case 'autoApproveFamilies': {
       return raw
         .split(',')
@@ -186,6 +191,8 @@ function effectiveKnob(k: AutonomyKnob): string {
       return r.continueOnError;
     case 'destructiveActionPosture':
       return r.destructiveActionPosture;
+    case 'riskThreshold':
+      return String(r.riskThreshold);
   }
 }
 

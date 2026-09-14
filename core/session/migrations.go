@@ -154,8 +154,17 @@ const sqlInitSchema = `
 // 0340 adds created_by and tool_allowlist to scheduled_chat_runs so a
 // model-created schedule is distinguishable from a user-created one at
 // Cedar policy-evaluation time (model-scheduled-jobs-01PMSJ01 WP09 — see
-// migrations_scheduled_chat_runs_provenance.go). 0338/0339 are reserved
-// for this mission's WP06/WP08 and were not registered as of WP09.
+// migrations_scheduled_chat_runs_provenance.go). 0338 and 0339 — reserved
+// but NOT registered as of WP09 — are registered here, BELOW the
+// already-applied 0340, by WP06 (0338, blocked_permission_requests — see
+// migrations_blocked_permission_requests.go) and WP08 (0339, one-shot
+// trigger_kind/run_at columns — see
+// migrations_scheduled_chat_runs_trigger.go). Both files' doc comments
+// argue in full why registering a number below an already-applied one is
+// safe on THIS runner (set-membership Pending(), per-mission
+// VerifyLedger contiguity) rather than the v0.63.0 max-based bug; both
+// are proven against a v0.78.1 snapshot that already carries 0340 in its
+// ledger, not merely argued.
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -225,6 +234,8 @@ func Migrations() []migrations.Migration {
 		migration0335(),
 		migration0336(),
 		migration0337(),
+		migration0338(),
+		migration0339(),
 		migration0340(),
 	}
 }

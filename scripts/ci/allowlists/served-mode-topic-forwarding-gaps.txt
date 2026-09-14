@@ -40,3 +40,36 @@
 # <package-import-path>.<Identifier>, and the blocker + owner (never
 # "we'll get to it" — see CLAUDE.md's "Release ritual: unwired sweep" /
 # "Rules").
+
+# ── 2026-09-13, release/v0.78.2 — this file is no longer empty. ──────────
+#
+# Reopening a deliberately-empty allowlist needs a better reason than "a
+# new topic appeared", so here it is: forwarding these two WITHOUT their
+# RPCs would create a worse served-mode surface than not forwarding them.
+#
+# Both topics come from model-scheduled-jobs-01PMSJ01 WP07. Their entire
+# RPC surface — BlockedRequests_{ListPending,Grant,Dismiss} — is
+# allowlisted as a serve-dispatch gap in i15-serve-dispatch-gap.txt (same
+# date), because the family it belongs to (ScheduledChat_*, 8 entries) is
+# itself deferred. A served client that received these events would be
+# told "a permission request is blocked" or "a scheduled run needs your
+# attention" and then have NO route to list, grant, dismiss, or re-run
+# anything. That is a notification with no remedy: strictly worse than
+# silence, and exactly the kind of half-wired surface the unwired sweep
+# exists to prevent.
+#
+# The gate's preferred fix (add to passthroughTopics + decide session
+# scoping) is therefore deliberately NOT taken here. These two lines must
+# be deleted in the SAME change that lands the served routes for the
+# ScheduledChat_* / BlockedRequests_* families — not before, and not
+# separately.
+#
+# 2026-09-13 — github.com/kameas-ai/kenaz-harness/core/rpc.TopicBlockedPermissionRequestPending
+# Blocker: BlockedRequests_{ListPending,Grant,Dismiss} have no serve
+# dispatch (see i15-serve-dispatch-gap.txt, same date). Owner: alec.
+"policy:blocked-permission-request-pending"
+
+# 2026-09-13 — github.com/kameas-ai/kenaz-harness/core/rpc.TopicScheduledChatBanner
+# Blocker: the ScheduledChat_* family (8 bindings incl. ScheduledChat_RunNow,
+# which is the banner's only action) has no serve dispatch. Owner: alec.
+"scheduled-chat:banner"

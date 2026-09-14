@@ -148,3 +148,54 @@ func TestRecommender_NilTierSource_DefaultsMedium(t *testing.T) {
 		t.Errorf("tier = %q, want medium default (no tier source configured)", got.Tier)
 	}
 }
+
+// TestRecommender_UnknownProvider_FallsBackToParentNotCrossProvider is
+// AN-07's core regression (model-settings-reach-the-model-01PMZ101
+// UNIT-10 / WP17): a parent on a provider the recommender's models
+// table has NO entry for (bedrock/custom-openai/ollama in production,
+// per core/rpc/branches_wiring.go's knownModelProviders) must fall back
+// to the parent's own exact pair, not silently substitute a DIFFERENT
+// provider's model — the caller's cross-provider-warning logic exists
+// to flag exactly that substitution, not to be bypassed by it.
+//
+// Mutation-verified: reverting pickAtTier's hasAnyModelFor guard
+// (removing the `if preferProvider != "" && !r.hasAnyModelFor(...)`
+// branch) makes this test fail with
+// `expected fallback to parent {bedrock some-bedrock-model ...}, got
+// {ProviderID:anthropic ModelID:claude-sonnet-4 ...}` — silently
+// recommending anthropic's model to a bedrock parent, the exact defect
+// this test exists to catch.
+func TestRecommender_UnknownProvider_FallsBackToParentNotCrossProvider(t *testing.T) {
+	t.Parallel()
+	rec := NewBranchRecommender([]ModelInfo{
+		{ProviderID: "anthropic", ModelID: "claude-sonnet-4", Tier: ModelTierMedium},
+		{ProviderID: "anthropic", ModelID: "claude-haiku-4", Tier: ModelTierSmall},
+	})
+	got := rec.Recommend("bedrock", "some-bedrock-model", "", "")
+	if got.ProviderID != "bedrock" || got.ModelID != "some-bedrock-model" {
+		t.Errorf("expected fallback to parent {bedrock some-bedrock-model ...}, got %+v", got)
+	}
+	if got.Reason != ReasonDefault {
+		t.Errorf("reason = %q, want default", got.Reason)
+	}
+}
+
+// TestRecommender_KnownProviderNoModelAtTier_StillFallsBackCrossProvider
+// pins the narrower, UNCHANGED case pickAtTier's doc comment calls out:
+// a provider that IS in the models table but has nothing at the exact
+// target tier still falls back to a different provider's model at that
+// tier (existing behaviour, not touched by this WP's fix — see
+// TestRecommender_FallbackToParentWhenNoCandidate for the "truly no
+// candidate at any provider" case this is NOT).
+func TestRecommender_KnownProviderNoModelAtTier_StillFallsBackCrossProvider(t *testing.T) {
+	t.Parallel()
+	rec := NewBranchRecommender([]ModelInfo{
+		{ProviderID: "anthropic", ModelID: "claude-haiku-4", Tier: ModelTierSmall},
+		{ProviderID: "openai", ModelID: "gpt-4o", Tier: ModelTierMedium},
+	})
+	// openai has no "small" entry; anthropic does.
+	got := rec.Recommend("openai", "gpt-4o", "what's the latest version", "")
+	if got.ProviderID != "anthropic" || got.ModelID != "claude-haiku-4" {
+		t.Errorf("expected cross-provider fallback to anthropic's small model, got %+v", got)
+	}
+}

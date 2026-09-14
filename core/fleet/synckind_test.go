@@ -173,6 +173,116 @@ func TestSyncKind_CategoryConfig_NilCollectApply(t *testing.T) {
 	}
 }
 
+// ── CategoryConfig secret-shape enforcement (WP06, FR-006) ─────────────────
+
+// TestSyncKind_CategoryConfig_CollectRejectsSecretShapedPayload proves the
+// central FR-006 backstop actually gates collect, not just documents an
+// intent: a collector that (by bug) returns a secret-shaped payload must
+// have its output refused, not silently pushed to the wire.
+func TestSyncKind_CategoryConfig_CollectRejectsSecretShapedPayload(t *testing.T) {
+	k := SyncKind{
+		ID:             "leaky",
+		Collect:        func(context.Context) ([]byte, error) { return []byte(`{"api_key":"sk-live-1234567890"}`), nil },
+		SecretPolicy:   SecretPolicyMustNotContainSecrets,
+		ConflictPolicy: ConflictPolicyLWW,
+	}
+	cfg := k.CategoryConfig()
+	if _, err := cfg.Collector(context.Background()); err == nil {
+		t.Fatal("expected Collector to refuse a secret-shaped payload, got nil error")
+	}
+}
+
+// TestSyncKind_CategoryConfig_ApplyRejectsSecretShapedPayload is the apply
+// counterpart: an incoming payload that looks like a credential must be
+// refused before the kind's own Apply ever runs.
+func TestSyncKind_CategoryConfig_ApplyRejectsSecretShapedPayload(t *testing.T) {
+	applyCalled := false
+	k := SyncKind{
+		ID: "leaky",
+		Apply: func(context.Context, Scope, []byte) error {
+			applyCalled = true
+			return nil
+		},
+		SecretPolicy:   SecretPolicyMustNotContainSecrets,
+		ConflictPolicy: ConflictPolicyLWW,
+	}
+	cfg := k.CategoryConfig()
+	err := cfg.Applier(context.Background(), json.RawMessage(`{"password":"hunter2"}`))
+	if err == nil {
+		t.Fatal("expected Applier to refuse a secret-shaped payload, got nil error")
+	}
+	if applyCalled {
+		t.Error("kind.Apply must not run when the payload is refused as secret-shaped")
+	}
+}
+
+// TestSyncKind_CategoryConfig_CleanPayloadStillRoundTrips is the
+// mutation-proof for the two tests above: gating secret-shaped payloads
+// must not turn into gating EVERY payload. A legitimate collect/apply
+// round trip must be unaffected.
+func TestSyncKind_CategoryConfig_CleanPayloadStillRoundTrips(t *testing.T) {
+	var gotPayload []byte
+	k := SyncKind{
+		ID:      "clean",
+		Collect: func(context.Context) ([]byte, error) { return []byte(`{"theme":"dark"}`), nil },
+		Apply: func(_ context.Context, _ Scope, payload []byte) error {
+			gotPayload = append([]byte(nil), payload...)
+			return nil
+		},
+		SecretPolicy:   SecretPolicyMustNotContainSecrets,
+		ConflictPolicy: ConflictPolicyLWW,
+	}
+	cfg := k.CategoryConfig()
+	raw, err := cfg.Collector(context.Background())
+	if err != nil {
+		t.Fatalf("Collector: %v", err)
+	}
+	if string(raw) != `{"theme":"dark"}` {
+		t.Errorf("Collector output = %s, want unmodified payload", raw)
+	}
+	if err := cfg.Applier(context.Background(), json.RawMessage(`{"theme":"light"}`)); err != nil {
+		t.Fatalf("Applier: %v", err)
+	}
+	if string(gotPayload) != `{"theme":"light"}` {
+		t.Errorf("Apply received %s, want unmodified payload", gotPayload)
+	}
+}
+
+// ── KindRegistry org provenance (WP03) ──────────────────────────────────────
+
+func TestKindRegistry_OrgProvenance_MarkAndRead(t *testing.T) {
+	r := NewKindRegistry()
+	if _, ok := r.OrgAppliedAt("mcp_recipes"); ok {
+		t.Fatal("expected no provenance before any MarkOrgApplied call")
+	}
+	when := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	r.MarkOrgApplied("mcp_recipes", when)
+	got, ok := r.OrgAppliedAt("mcp_recipes")
+	if !ok {
+		t.Fatal("expected provenance to be recorded")
+	}
+	if !got.Equal(when) {
+		t.Errorf("OrgAppliedAt = %v, want %v", got, when)
+	}
+	// A different kind is unaffected.
+	if _, ok := r.OrgAppliedAt("provider_profiles"); ok {
+		t.Error("expected provider_profiles to have no provenance recorded")
+	}
+}
+
+func TestKindRegistry_OrgProvenance_ClearRemovesEverything(t *testing.T) {
+	r := NewKindRegistry()
+	r.MarkOrgApplied("mcp_recipes", time.Now())
+	r.MarkOrgApplied("provider_profiles", time.Now())
+	r.ClearOrgProvenance()
+	if _, ok := r.OrgAppliedAt("mcp_recipes"); ok {
+		t.Error("expected mcp_recipes provenance to be cleared")
+	}
+	if _, ok := r.OrgAppliedAt("provider_profiles"); ok {
+		t.Error("expected provider_profiles provenance to be cleared")
+	}
+}
+
 // ── Syncer genericity: a kind registered outside AllSyncCategories() works ──
 
 // TestSyncer_RegisterCategory_UnknownCategoryIsGeneric proves the sync.go

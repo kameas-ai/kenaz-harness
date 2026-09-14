@@ -164,7 +164,42 @@ var expectedChangedTables = map[string][]string{
 	"v0.67.0": {"scheduled_chat_runs"}, // see scheduledChatRunsProvenanceNote
 	"v0.68.0": {"scheduled_chat_runs"}, // see scheduledChatRunsProvenanceNote
 	"v0.69.0": {"scheduled_chat_runs"}, // see scheduledChatRunsProvenanceNote
+	// v0.72.0 through v0.78.1: sessions/0340 (WP09) already shipped inside
+	// these snapshots' own dumps, so scheduled_chat_runs previously needed
+	// no entry here. model-scheduled-jobs-01PMSJ01 WP08's sessions/0339
+	// (scheduledChatRunsTriggerKindNote below) ADDs trigger_kind and
+	// run_at to the SAME table, which is newer than every one of these
+	// snapshots, so every tag now sees the row-content digest change on
+	// Open for the same structural reason 0340 did before it shipped.
+	"v0.72.0": {"scheduled_chat_runs"},
+	"v0.73.0": {"scheduled_chat_runs"},
+	"v0.73.1": {"scheduled_chat_runs"},
+	"v0.73.2": {"scheduled_chat_runs"},
+	"v0.73.3": {"scheduled_chat_runs"},
+	"v0.74.0": {"scheduled_chat_runs"},
+	"v0.75.0": {"scheduled_chat_runs"},
+	"v0.75.1": {"scheduled_chat_runs"},
+	"v0.75.2": {"scheduled_chat_runs"},
+	"v0.76.0": {"scheduled_chat_runs"},
+	"v0.76.1": {"scheduled_chat_runs"},
+	"v0.77.0": {"scheduled_chat_runs"},
+	"v0.77.1": {"scheduled_chat_runs"},
+	"v0.78.0": {"scheduled_chat_runs"},
+	"v0.78.1": {"scheduled_chat_runs"},
 }
+
+// scheduledChatRunsTriggerKindNote documents WHY scheduled_chat_runs is
+// in expectedChangedTables for v0.72.0 onward (and, alongside
+// scheduledChatRunsProvenanceNote, for every earlier tag too):
+// sessions/0339-scheduled-chat-runs-trigger-kind
+// (model-scheduled-jobs-01PMSJ01 WP08) ADDs trigger_kind TEXT NOT NULL
+// DEFAULT 'cron' and run_at INTEGER to scheduled_chat_runs (created by
+// 0325, altered again by 0340). Every pre-existing row gains both
+// columns, changing the row-content digest on every tag that predates
+// this migration — i.e. every tag currently committed.
+const scheduledChatRunsTriggerKindNote = "sessions/0339-scheduled-chat-runs-trigger-kind " +
+	"(model-scheduled-jobs-01PMSJ01 WP08) adds trigger_kind + run_at " +
+	"to scheduled_chat_runs (created by 0325, altered again by 0340)."
 
 // fixedProbeTime is used for the item-4 session INSERT probe so the
 // test's own write doesn't introduce nondeterminism into anything that

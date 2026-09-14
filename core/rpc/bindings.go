@@ -26,6 +26,7 @@ import (
 	artifactsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/attachments"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/audit"
+	blockedrequestsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/blockedrequests"
 	branchesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/branches"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/bundle"
 	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
@@ -280,6 +281,34 @@ func (b *Bindings) Sessions_SetSystemPrompt(id, content, kind string) error {
 func (b *Bindings) Sessions_MoveToProject(id, projectID string) error {
 	defer sentry.WrapBinding("Sessions_MoveToProject")()
 	return b.api.Sessions().MoveToProject(b.ctx(), id, projectID)
+}
+
+// Sessions_GetKnobsDefault returns the session-level RequestKnobs
+// override, or nil when none has been set (model-settings-reach-the-
+// model-01PMZ101 UNIT-6 / WP10). SessionTunePanel reads this on open.
+//
+// NOT YET reflected in frontend/wailsjs/go/rpc/Bindings.{js,d.ts}: this
+// mission's worktree could not run `wails generate module` (it opens a
+// REAL database — CLAUDE.md tooling footguns — and this session's
+// dispatch instructions forbid running it under any circumstance). The
+// method is hand-declared on harnessClient.ts's WailsBindingsLike
+// interface instead, following the CompactionOverhead precedent
+// (chat-turn-integrity-01PMZ606 WP12) — see that interface's doc
+// comment. A real `wails generate module` run (with the documented
+// HOME/KENAZ_HARNESS_ENV override) is required before this binding is
+// reachable at runtime; until then check-codegen.sh's wailsjs-hash gate
+// will correctly report drift.
+func (b *Bindings) Sessions_GetKnobsDefault(id string) (*sessions.SessionKnobs, error) {
+	defer sentry.WrapBinding("Sessions_GetKnobsDefault")()
+	return b.api.Sessions().GetKnobsDefault(b.ctx(), id)
+}
+
+// Sessions_SetKnobsDefault persists the session-level RequestKnobs
+// override; nil clears it. See Sessions_GetKnobsDefault's doc comment
+// for the wailsjs-regeneration caveat.
+func (b *Bindings) Sessions_SetKnobsDefault(id string, knobs *sessions.SessionKnobs) error {
+	defer sentry.WrapBinding("Sessions_SetKnobsDefault")()
+	return b.api.Sessions().SetKnobsDefault(b.ctx(), id, knobs)
 }
 
 // Sessions_SuggestTitle triggers a manual auto-title generation for the
@@ -2732,6 +2761,21 @@ func (b *Bindings) ScheduledChat_SetEnabled(id string, enabled bool) error {
 	return b.api.ScheduledChat().SetEnabled(b.ctx(), id, enabled)
 }
 
+// ── blocked permission requests (model-scheduled-jobs-01PMSJ01 WP07) ─
+
+func (b *Bindings) BlockedRequests_ListPending() ([]blockedrequestsview.PendingRequest, error) {
+	defer sentry.WrapBinding("BlockedRequests_ListPending")()
+	return b.api.BlockedRequests().ListPending(b.ctx())
+}
+func (b *Bindings) BlockedRequests_Grant(id string) error {
+	defer sentry.WrapBinding("BlockedRequests_Grant")()
+	return b.api.BlockedRequests().Grant(b.ctx(), id)
+}
+func (b *Bindings) BlockedRequests_Dismiss(id string) error {
+	defer sentry.WrapBinding("BlockedRequests_Dismiss")()
+	return b.api.BlockedRequests().Dismiss(b.ctx(), id)
+}
+
 // ── update (mission auto-update, v0.4.0 WP03) ─────────────────────────
 //
 // TODO: regenerate via `wails generate module` once the WP04 + WP05 UI
@@ -3480,6 +3524,23 @@ func (b *Bindings) Catalog_Installed() ([]catalogview.CatalogItemView, error) {
 	return b.api.Catalog().Catalog_Installed(b.ctx())
 }
 
+// Catalog_Unpublish withdraws catalogID from the org listing. Distinct
+// from Catalog_Uninstall (local copy only). Server-authorized (register
+// C-3/C-8); returns a distinct forbidden error on a 403, not the tier
+// error.
+//
+// (fleet-enforcement-truth-01PMZ505 WP11.) Go-side surface only as of
+// this commit — see docs/unwired-ledger.md for the frontend-binding
+// deferral this WP records: the operating constraints for this pass
+// disallowed hand-editing frontend/wailsjs/**, which a NEW Wails-bound
+// method's JS/TS mirror requires. The backend is fully wired and
+// tested; wiring the last-mile mirror + a Marketplace action is the
+// smallest possible follow-up.
+func (b *Bindings) Catalog_Unpublish(catalogID string) error {
+	defer sentry.WrapBinding("Catalog_Unpublish")()
+	return b.api.Catalog().Catalog_Unpublish(b.ctx(), catalogID)
+}
+
 // ── Sync bindings (fleet-share-and-sync-01NDFSEX14 WP05) ─────────────────────
 
 // Sync_Toggle enables or disables sync for the given category string
@@ -3560,6 +3621,28 @@ func (b *Bindings) Sites_Logs(site string, tailLines int) (string, error) {
 func (b *Bindings) Sites_Delete(site string) error {
 	defer sentry.WrapBinding("Sites_Delete")()
 	return b.api.Sites().Sites_Delete(b.ctx(), site)
+}
+
+// Sites_EnvSet sets one or more declared environment variable values for
+// site. This is the ONLY way secrets reach a site.
+//
+// (fleet-enforcement-truth-01PMZ505 WP09.) Go-side surface only as of
+// this commit — see docs/unwired-ledger.md for the frontend-binding
+// deferral this WP records: the operating constraints for this pass
+// disallowed hand-editing frontend/wailsjs/**, which a NEW Wails-bound
+// method's JS/TS mirror requires. The backend is fully wired and
+// tested; wiring the last-mile mirror + a settings surface is the
+// smallest possible follow-up.
+func (b *Bindings) Sites_EnvSet(site string, vars map[string]string) error {
+	defer sentry.WrapBinding("Sites_EnvSet")()
+	return b.api.Sites().Sites_EnvSet(b.ctx(), site, vars)
+}
+
+// Sites_EnvList returns declared env var names + metadata for site. Never
+// returns a value (WP09).
+func (b *Bindings) Sites_EnvList(site string) ([]sitesview.SiteEnvEntry, error) {
+	defer sentry.WrapBinding("Sites_EnvList")()
+	return b.api.Sites().Sites_EnvList(b.ctx(), site)
 }
 
 // ── Tasks bindings (background-task-monitor-01KZNP3C WP05) ──────────────────
@@ -3755,4 +3838,19 @@ func (b *Bindings) Compliance_ArchiveNow() error {
 func (b *Bindings) Compliance_SetRetention(days int) error {
 	defer sentry.WrapBinding("Compliance_SetRetention")()
 	return b.api.Compliance().SetRetention(b.ctx(), days)
+}
+
+// Compliance_SkipToID is the operator recovery action after a hash-chain
+// break: advances the archiver's cursor to toID and clears the halt.
+//
+// (fleet-enforcement-truth-01PMZ505 WP06.) Go-side surface only as of
+// this commit — see docs/unwired-ledger.md for the frontend-binding
+// deferral this WP records: the operating constraints for this pass
+// disallowed hand-editing frontend/wailsjs/**, which a NEW Wails-bound
+// method's JS/TS mirror requires. The backend is fully wired and
+// tested; wiring the last-mile mirror + Sync panel control is the
+// smallest possible follow-up.
+func (b *Bindings) Compliance_SkipToID(toID string) error {
+	defer sentry.WrapBinding("Compliance_SkipToID")()
+	return b.api.Compliance().SkipToID(b.ctx(), toID)
 }

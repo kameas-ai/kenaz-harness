@@ -265,6 +265,12 @@ type Config struct {
 	// ordinary session's attached context via NewSessionDialog.vue) is
 	// stored correctly but never reaches the model.
 	Attachments AttachmentsResolver
+	// KnobsDefault resolves the session-level RequestKnobs override onto
+	// each LLMProviderAdapter (model-settings-reach-the-model-01PMZ101
+	// UNIT-6 / WP10). nil disables the layer — every request's Knobs
+	// stays nil, pre-existing behaviour for every session before this
+	// field existed. Production wiring is *session.Manager.
+	KnobsDefault KnobsDefaultResolver
 	// EnvDefaults is an optional callback the runner invokes on the
 	// constructed Env before kernel.Run; production wiring threads
 	// Memory / Policy / Branch / Hooks-journal seams through it.
@@ -501,6 +507,16 @@ type Config struct {
 	// g==nil branch — the same nil-tolerant posture every other
 	// Cedar-gated builtin in this package already has.
 	SecretGate cedar.Gate
+	// RiskGate is the Cedar gate risk-rated-autonomy-01PMRA01 WP02 wires
+	// into the kernel tool adapter's confirm-each ladder (rung 0, ahead
+	// of the autonomy-posture prompt-skip set): layer 1 forbid denies,
+	// layer 2 permit allows, layer 3 (Cedar had no opinion) forces the
+	// prompt rather than letting the tool's coarse family classification
+	// decide. nil disables the rung entirely — byte-identical to the
+	// pre-WP02 ladder. Production wiring passes the SAME live engine as
+	// SecretGate immediately above (core/rpc/api.go) — layers 1-2 must
+	// see the operator's real policy set, not a second, divergent one.
+	RiskGate cedar.Gate
 	// SecretBudget caps resolutions per locator (refs.DefaultBudget==50)
 	// across the process lifetime. nil is unlimited. Production wiring
 	// shares the SAME *refs.Budget the kenaz__list_secrets tool uses to
@@ -1045,6 +1061,7 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	llmAdapter := NewLLMProviderAdapter(r.cfg.Registry, profileID, modelOverride, toolCatalog, imageCapturer).
 		WithSessionID(sessionID).
 		WithAttachments(r.cfg.Attachments).
+		WithKnobsDefault(r.cfg.KnobsDefault).
 		WithEnvContext(r.cfg.Clock, r.cfg.WorkspaceDir, r.cfg.WorkspaceNote).
 		WithCustomInstructions(r.cfg.CustomInstructions).
 		// autonomy-knobs-live-01PMAG02 WP06: recapStyle was resolved
@@ -1076,6 +1093,9 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// bus is still meaningful (it selects the headless policy) and the
 	// deps bundle's zero value is the safe configuration.
 	toolAdapter.withConfirm(r.cfg.Confirm).withConfirmDeps(r.cfg.ConfirmDeps)
+	// risk-rated-autonomy-01PMRA01 WP02: nil RiskGate leaves
+	// resolveConfirmEach's new rung 0 a no-op (pre-WP02 behaviour).
+	toolAdapter.withGate(r.cfg.RiskGate)
 
 	r.mu.Lock()
 	r.nextID++
@@ -2635,13 +2655,62 @@ func (r *ChatRunner) compactionWatermarkPolicy() coreag.CompactionWatermarkPolic
 // Zero on either side means "no opinion": a zero knob leaves the graph
 // value alone, and a zero graph value (no declared cap) lets the knob
 // establish one.
+// UNIT BUG, fixed 2026-09-12: this used to assign the PER-TURN ceiling
+// straight into MaxTokensPerRun, a PER-RUN cumulative cap. The two are
+// different units, and for the chat graph the gap is enormous: chat_default
+// is "a per-session kernel run" that pauses on AskNode between user turns
+// and resumes on the next message, so ONE run spans the WHOLE SESSION.
+// Kernel.checkBudget compares MaxTokensPerRun against the cumulative
+// counter from env.Counters.Snapshot(), and because every turn re-sends the
+// conversation, cumulative spend grows by roughly the context size per turn.
+//
+// Observed live: a session at 262k context died with
+//
+//	"reached the token budget cap (3471969 used of 2097152 allowed) at the
+//	 autonomous autonomy tier"
+//
+// 2_097_152 is TierAutonomous's per-TURN ceiling -- about eight turns of
+// headroom for the WHOLE session, on the most permissive tier there is.
+// The graph's own declared max_tokens_per_run is 20_000_000, a sane per-run
+// number, and the dial was lowering it to a per-turn one. The old error text
+// told the user to raise the graph's declared budget, which could not have
+// helped: the graph was never the binding constraint.
+//
+// The conversion is perTurn * maxIterations, because maxIterations is
+// exactly "how many turns may this run take" -- so their product is the
+// per-run token budget the tier's own two dials already imply. Both ends
+// keep their established conventions:
+//
+//   - maxIterations == 0 means unbounded (see KnobMaxIterations: the
+//     TierAutonomous preset is 0). Unbounded turns cannot yield a bounded
+//     token product, so the knob expresses no per-run opinion and the
+//     graph's declared cap stands alone. That is what makes TierAutonomous
+//     fall back to the graph's 20M instead of dying at 2Mi.
+//   - the result may still only LOWER the graph's ceiling, never raise it.
+//     A graph's budget block is the author's safety cap and a Settings
+//     toggle must not defeat it; raising it remains a graph edit.
+//
+// The knob stays consumed (knobcoverage registers this function as its
+// consumer), so fixing the unit does not re-inert the dial.
 func applyTokenCeilingKnob(b coreag.Budget, knobs autonomy.ResolvedKnobs) coreag.Budget {
 	ceiling := knobs.TokenCeilingPerTurn
 	if ceiling <= 0 {
 		return b
 	}
-	if b.MaxTokensPerRun <= 0 || ceiling < b.MaxTokensPerRun {
-		b.MaxTokensPerRun = ceiling
+	// Unbounded turn count => no per-run opinion from this knob.
+	if knobs.MaxIterations <= 0 {
+		return b
+	}
+	perRun := ceiling * knobs.MaxIterations
+	// Overflow guard: a large ceiling times a large iteration count can wrap
+	// on 32-bit int. A wrapped negative would read as "no cap" below and
+	// silently remove the limit, so treat any non-positive product as
+	// "no opinion" rather than trusting it.
+	if perRun <= 0 {
+		return b
+	}
+	if b.MaxTokensPerRun <= 0 || perRun < b.MaxTokensPerRun {
+		b.MaxTokensPerRun = perRun
 	}
 	return b
 }
@@ -2674,6 +2743,18 @@ func applyBudgetTierDial(b coreag.Budget, tier autonomy.Tier) coreag.Budget {
 	}
 	if ceiling.MaxToolCallsPerRun > 0 && (b.MaxToolCallsPerRun <= 0 || ceiling.MaxToolCallsPerRun < b.MaxToolCallsPerRun) {
 		b.MaxToolCallsPerRun = ceiling.MaxToolCallsPerRun
+	}
+	// Cost ceiling (owner ruling 2026-09-12). The graphs declare no
+	// max_cost_usd_per_run, so below TierAutonomous this ESTABLISHES the
+	// only spend guard there is; at TierAutonomous the table entry is 0,
+	// which lands in the "no opinion" branch and leaves cost capping
+	// DISABLED so an hours-long run is never stopped by spend.
+	//
+	// Kernel.checkBudget already enforces MaxCostUSDPerRun against
+	// RunCounters.AddCost(resp.CostUSD), so this needed a tier value and a
+	// fold, not new enforcement.
+	if ceiling.MaxCostUSDPerRun > 0 && (b.MaxCostUSDPerRun <= 0 || ceiling.MaxCostUSDPerRun < b.MaxCostUSDPerRun) {
+		b.MaxCostUSDPerRun = ceiling.MaxCostUSDPerRun
 	}
 	return b
 }

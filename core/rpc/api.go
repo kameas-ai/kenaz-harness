@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -70,6 +71,7 @@ import (
 	corememory "github.com/kameas-ai/kenaz-harness/core/memory"
 	"github.com/kameas-ai/kenaz-harness/core/memory/narrative"
 	"github.com/kameas-ai/kenaz-harness/core/memory/prune"
+	"github.com/kameas-ai/kenaz-harness/core/policy/blockedrequests"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/a2a"
 	acpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/acp"
@@ -79,6 +81,7 @@ import (
 	artifactsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/attachments"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/audit"
+	blockedrequestsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/blockedrequests"
 	branchesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/branches"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/bundle"
 	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
@@ -133,6 +136,7 @@ import (
 	coretasks "github.com/kameas-ai/kenaz-harness/core/tasks"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 	corebash "github.com/kameas-ai/kenaz-harness/core/tools/bash"
+	corefs "github.com/kameas-ai/kenaz-harness/core/tools/fs"
 	coreplanmode "github.com/kameas-ai/kenaz-harness/core/tools/planmode"
 	coreskill "github.com/kameas-ai/kenaz-harness/core/tools/skill"
 	coretrust "github.com/kameas-ai/kenaz-harness/core/trust"
@@ -276,6 +280,12 @@ type HarnessAPI interface {
 	// Settings → Scheduled Chats panel creates and manages prompt-template
 	// jobs fired by the existing core/scheduler cron engine.
 	ScheduledChat() scheduledchatview.ScheduledChatAPI
+
+	// BlockedRequests exposes the pending-permission-requests surfacing
+	// view (model-scheduled-jobs-01PMSJ01 WP07, FR-004's second half).
+	// The frontend's pending-permissions panel lists denied filesystem
+	// writes/reads and lets the user grant a durable permit or dismiss.
+	BlockedRequests() blockedrequestsview.BlockedRequestsAPI
 
 	// Secrets exposes the model-accessible secrets RPC surface (mission
 	// model-secret-references-01KW7M5A WP10). The frontend's
@@ -469,6 +479,13 @@ type API struct {
 	policyAPI   policy.PolicyAPI
 	auditImpl   *audit.API
 	auditAPI    audit.AuditAPI
+	// scheduledRunOrigins is the session-keyed side channel shared
+	// between LiveChatRunDispatcher (writer, via ChatRunDispatcherDeps
+	// .Origins) and the fs gate's RecordingPrompter (reader, via
+	// registerFSBuiltinTools's originResolve parameter) — see
+	// ScheduledRunOriginRegistry's doc (model-scheduled-jobs-01PMSJ01
+	// WP06).
+	scheduledRunOrigins *ScheduledRunOriginRegistry
 	// logStore + logsAPI back the Settings → Logs panel (mission 01NLOGS01 WP01/WP04).
 	logStore       *logstore.Store
 	logsAPI        logsview.LogsAPI
@@ -771,6 +788,11 @@ type API struct {
 	// a real Core with a DB is available; nil DB path returns ErrStoreUnavailable.
 	scheduledChatAPI scheduledchatview.ScheduledChatAPI
 
+	// blockedRequestsAPI is the pending-permission-requests surfacing RPC
+	// surface (model-scheduled-jobs-01PMSJ01 WP07). Wired in New when a
+	// real Core with a DB is available.
+	blockedRequestsAPI blockedrequestsview.BlockedRequestsAPI
+
 	// chatCronEngine is the cron engine that arms scheduled_chat_runs rows
 	// (mission model-scheduled-jobs-01PMSJ01 WP03). Started on SetContext,
 	// stopped on Shutdown, alongside wfScheduler. nil when there is no DB.
@@ -988,12 +1010,61 @@ func (a *API) SetContext(ctx context.Context) {
 		a.chatCronEngine.Start()
 	}
 
+	// Boot-time pending-permission-requests query (model-scheduled-jobs-
+	// 01PMSJ01 WP07, owner decision 2: "surfaced to the user next time
+	// they open the app"). Runs synchronously — NOT in a goroutine — it
+	// is a single bounded local DB read (no network round trip to hide
+	// behind async, unlike the fleet-lockdown bootstrap below). Uses the
+	// AtBoot variant, which stays silent when nothing is pending: AC-013
+	// (WP12, FR-008) requires a zero-schedule build to start "no new
+	// broker emissions", and every existing scheduled_chat_runs producer
+	// of this table means a build with none also has zero pending rows —
+	// publishing an empty slice on every single launch forever would be
+	// a permanent, avoidable regression of that byte-identical claim.
+	if a.blockedRequestsAPI != nil {
+		a.publishPendingBlockedRequestsAtBoot(ctx)
+	}
+
 	// Bootstrap lockdown state before any user-facing surface mounts so
 	// the harness boots into locked state when fleet says so. Runs in a
 	// goroutine so the SetContext critical path is never delayed by a
 	// network round-trip. The Watcher's long-poll loop catches any state
 	// that changes after boot. (fleet-emergency-lockdown-01NDFSEX12 WP02)
-	if a.settingsImpl != nil {
+	//
+	// Not started under `go test`, for the same reason SetFleetClient does
+	// not start its pollers: BootstrapLockdownStatus -> Client.Get ->
+	// Client.do -> fleet.LoadTokens -> keyring.Get, and go-keyring's MOCK
+	// provider (installed process-wide by testmain_test.go's keyring.MockInit)
+	// mutates a bare map[string]map[string]string with no mutex. Any
+	// background goroutine that reaches the keyring therefore races any
+	// sibling test's keyring.Set -- which is what the "views/sites keyring
+	// flake" always was. The independent review of the CapabilityPoller fix
+	// reproduced the race through THIS call site against the already-fixed
+	// poller, so this is a second live instance, not a hypothetical.
+	//
+	// This guard is a mitigation, not the fix. LoadTokens has ~16 non-test
+	// call sites and is hit by EVERY fleet HTTP request via Client.do, so
+	// guarding call sites one at a time does not close the class -- see the
+	// scar at contextbootstrap_wiring.go:337 for a third instance. The real
+	// fix is a single serialised keyring seam plus a gate forbidding direct
+	// go-keyring imports outside it; go-keyring exposes no way to install a
+	// thread-safe provider (`provider` is package-private and MockInit is
+	// the only door), so it cannot be fixed upstream-side from here.
+	// Tracked as its own mission.
+	//
+	// The under-test check is flag.Lookup("test.v"), NOT testing.Testing(),
+	// and that is deliberate: scripts/ci/cmd/checknilopts's
+	// isTestDoublePackage() treats ANY package with a non-_test.go file that
+	// imports "testing" as a fixture package and drops it from the I18
+	// production-assignment scan. Importing "testing" here silently excluded
+	// all of core/rpc -- the largest wiring site in the repo -- and produced
+	// 25 phantom "documented optional but never assigned" violations across
+	// nine packages. flag.Lookup is the pre-Go1.21 idiom for this and is
+	// equally reliable: testing.Init() registers test.v before TestMain
+	// runs, so it is set for any test binary, including tests in other
+	// packages that construct an API. Do not "modernise" this to
+	// testing.Testing() without first fixing that gate.
+	if a.settingsImpl != nil && flag.Lookup("test.v") == nil {
 		go func() {
 			c := a.settingsImpl.FleetClientForBootstrap()
 			if c != nil {
@@ -1972,6 +2043,14 @@ func New(c *core.Core, opts ...Option) *API {
 		logging.L().Warn("fleet.client.init_error", "err", ferr.Error())
 		bootFleetErr = ferr.Error()
 	}
+	// Wire the shared merged recipe catalog into the fleet state so the
+	// compositeConfigApplier can install org-provisioned recipes when a
+	// bundle carries a provisioned_mcp section
+	// (fleet-org-config-inheritance-01NORGX01 WP02). Independent of
+	// whether the fleet client construction above succeeded — an OSS
+	// build with fleet disabled still wires the catalog; ApplyBundle is
+	// simply never invoked for it in that case.
+	settingsImpl.SetMCPCatalog(mergedCat)
 
 	// Wire the lockdown broker so fleet:lockdown:changed events reach the
 	// frontend banner. Must be called after both a.broker and a.settingsImpl
@@ -2105,7 +2184,13 @@ func New(c *core.Core, opts ...Option) *API {
 	a.secretsAPI = secretsview.NewAPI(a.exposureIdx)
 	logging.L().Info("rpc.boot.exposure_index_created")
 
-	hooksRunner, hookRegistry, hookBuiltins, hookRunnerImpl := newHooksStack(c, retriever, memStore, embedder)
+	// finding #71: constructed empty and backfilled with the real MCP
+	// dispatch pool once newLLMStack builds it (see the a.dispatchPool =
+	// stack.dispatchPool assignment below) — hooks_mcp_invoker.go's
+	// mcpHookInvokerAdapter doc explains why the ordering forces a
+	// backfill rather than a constructor argument here.
+	hookMCPInvoker := &mcpHookInvokerAdapter{}
+	hooksRunner, hookRegistry, hookBuiltins, hookRunnerImpl := newHooksStack(c, retriever, memStore, embedder, hookMCPInvoker)
 	// WP06 / UNIT-5: hold the concrete *hooks.Runner on the stack (see the
 	// a.hookRunner field doc) so future WPs can construct the three hook
 	// adapters without re-plumbing through api.New.
@@ -2287,7 +2372,31 @@ func New(c *core.Core, opts ...Option) *API {
 		Emitter: WailsEmitter{},
 	})
 
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, a.cedarEngine, taskReg, opt.mcpHTTPPoolOptions)
+	// model-scheduled-jobs-01PMSJ01 WP06: constructed here, BEFORE
+	// newLLMStack (which wires the fs gate's RecordingPrompter deep
+	// inside registerFSBuiltinTools), because the SAME
+	// scheduledRunOrigins instance is also threaded into
+	// ChatRunDispatcherDeps.Origins below — the dispatcher SETS a
+	// session's origin, the gate's origin resolver READS it, and both
+	// sides must share one registry. blockedRequestSink wraps the
+	// durable store (nil-tolerant: a nil db degrades to "record nothing")
+	// and the audit ring (a.auditImpl, already constructed above — see
+	// New()'s own ordering comment on a.elicitAPI for why call order in
+	// this function is load-bearing).
+	a.scheduledRunOrigins = NewScheduledRunOriginRegistry()
+	var blockedRequestStore blockedrequests.Store
+	if db != nil {
+		blockedRequestStore = blockedrequests.NewSQLiteStore(db)
+	}
+	// notify is a closure over `a`, not over a.blockedRequestsAPI's
+	// current (nil) value — a.blockedRequestsAPI is only assigned later
+	// in this function (after a.cedarPolicyAPI exists), but RecordBlocked
+	// is never CALLED until a real chat turn runs, long after New()
+	// returns, so the closure reads the field's final value at call time.
+	blockedSink := newBlockedRequestSink(blockedRequestStore, &acpAuditBridge{impl: a.auditImpl},
+		func(ctx context.Context) { a.publishPendingBlockedRequests(ctx) })
+
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib, opt.hostProviders, confirmAuditEmitter{impl: a.auditImpl}, &acpAuditBridge{impl: a.auditImpl}, a.cedarEngine, taskReg, opt.mcpHTTPPoolOptions, blockedSink, a.scheduledRunOrigins.Resolve)
 	a.llmAPI = stack.api
 	// trust-surfaces-that-fire-01PMZ202 WP24 review finding: fold the
 	// static tool-permission load error (if any) into the boot-health
@@ -2344,6 +2453,11 @@ func New(c *core.Core, opts ...Option) *API {
 			LLM:   a.llmAPI,
 			Bus:   a.eventBus,
 			Tasks: taskReg,
+			// UNIT-7 (FR-007): the SAME process-singleton *hooks.Runner
+			// a.hookRunner already holds (set earlier in this function,
+			// above the background_task_complete SetHookFirer block) —
+			// one Runner, fired from two independent sites.
+			HookRunner: a.hookRunner,
 			// Lazy, mirroring ChatRunDispatcherDeps.DefaultProfile
 			// (this file's scheduled-chat wiring, below): first
 			// personal-provider profile wins, re-read on every spawn
@@ -2379,6 +2493,15 @@ func New(c *core.Core, opts ...Option) *API {
 	a.confirmAPI = confirmview.New(confirmview.Config{Bus: stack.confirmBus})
 	a.stdioPool = stack.pool
 	a.dispatchPool = stack.dispatchPool
+	// finding #71: backfill the hooks MCP invoker now that the live pool
+	// exists — see hookMCPInvoker's construction comment above (near
+	// newHooksStack) and hooks_mcp_invoker.go for why this can't be a
+	// constructor argument. This is the SAME *dispatch.Pool that
+	// c.SetMCP(a.dispatchPool) (below) hands to core.Core, so a kind=mcp
+	// hook dispatch and core.Core.Shutdown's MCP teardown share one pool
+	// instance — see mcpHookInvokerAdapter.InvokeTool's doc for the
+	// shutdown-race analysis.
+	hookMCPInvoker.setPool(stack.dispatchPool)
 	a.builtins = stack.builtins
 	// harness-self-attach-01PMHS01 UNIT-4: hold the merged resolver
 	// newLLMStack constructed so tests can exercise the actual
@@ -2912,6 +3035,11 @@ func New(c *core.Core, opts ...Option) *API {
 		// the same posture every other nil-dependency branch in this
 		// Config takes. Gated by the SAME Config.Cedar field set above.
 		PauseControl: stack.chatRunner.SubagentPause(),
+		// Usage backs SubagentBranch.tokensUsed (UNIT-9) — the SAME
+		// usage.Manager instance the chat runner already writes
+		// per-turn aggregates into (token-cost-telemetry-01KQ8TD7),
+		// not a second tracker.
+		Usage: usageMgr,
 	})
 
 	// Agent-graph view surface — graph manager already built above so
@@ -3028,6 +3156,13 @@ func New(c *core.Core, opts ...Option) *API {
 		}
 		if stack.wrappedPool != nil {
 			wfDeps.ToolDispatcher = &wfToolDispatcherAdapter{pool: stack.wrappedPool, gate: wfGate}
+			// automation-actually-runs-01PMZ404 UNIT-6: Tools (ToolCaller)
+			// was never assigned, so a tool_call step always failed with
+			// "no ToolCaller wired" regardless of the pool's state. Same
+			// pool, same wfToolGate ladder as ToolDispatcher above — one
+			// Cedar/permission/confirm-each path for mcp_call, model_turn
+			// and tool_call alike (spec D-5).
+			wfDeps.Tools = &wfToolCallerAdapter{pool: stack.wrappedPool, gate: wfGate}
 		}
 		// FR-001/FR-002 (01NBUG03): wire DefaultProfileFunc so model_turn steps
 		// resolve the active LLM profile lazily at run time. This avoids the
@@ -3051,6 +3186,13 @@ func New(c *core.Core, opts ...Option) *API {
 		// The ctxFn defers ctx resolution to Notify-call time so construction
 		// before OnStartup is safe.
 		wfDeps.Notifier = &wfNotifierAdapter{ctxFn: a.broker.EmitCtx}
+		// automation-actually-runs-01PMZ404 UNIT-8: Audit (corewf's own
+		// narrow, notify-only AuditEmitter) was never assigned, so a
+		// notify step's EmitNotifySent call was always a silent no-op —
+		// notify is the one workflow step kind that reaches outside the
+		// process and it was the one with no audit trail. a.auditImpl is
+		// the same ring every other bridge in this file writes to.
+		wfDeps.Audit = &wfNotifyAuditBridge{impl: a.auditImpl}
 		// automation-actually-runs-01PMZ404 UNIT-5: read_artifact /
 		// write_artifact steps had no ArtifactsReadWriter — the shipped
 		// doc_generator builtin burns a full model turn and then fails on
@@ -3307,6 +3449,28 @@ func New(c *core.Core, opts ...Option) *API {
 	// path (c == nil or empty DataDir) so all five verbs return a clear
 	// "not configured" error rather than panicking.
 	if c != nil && c.DataDir() != "" {
+		// Two deliberately-nil arguments, two different dispositions
+		// (fleet-enforcement-truth-01PMZ505 WP15, §1.15/§5.14):
+		//
+		//   - secrets.Backend (1st arg): ESCALATED, not wired — E-008
+		//     (docs/unwired-ledger.md). Every AuthRef peer fails
+		//     credential resolution without it, but whether ACP peers
+		//     should resolve credentials through the same app-wide
+		//     secrets.Backend the rest of the harness uses is a product
+		//     scoping question a mission does not own unilaterally:
+		//     handing a remote-peer registry the app-wide resolver
+		//     silently widens what a remote peer can reach. Under the
+		//     A-0 freeze the options are wire-with-a-real-answer or
+		//     escalate — guessing a value here to quiet a lint would be
+		//     exactly the failure mode the campaign exists to end, aimed
+		//     at a credential path.
+		//   - AuthEventEmitter (2nd arg): peers.NoopEmitter{} is correct
+		//     as-is, not a placeholder for a missing wire. Its own doc
+		//     says "the real wiring comes from core/acp/events" — that
+		//     package does not exist anywhere in this repo (verified:
+		//     no directory, no PeerAuthAttempted implementer outside
+		//     core/acp/peers itself). There is no consumer to hand this
+		//     to yet; recorded in the ledger rather than fabricated.
 		acpReg := acppeers.NewRegistry(nil, acppeers.NoopEmitter{})
 		acpEnv := acpenvelope.New()
 		acpOpts := acpview.Options{
@@ -3324,6 +3488,18 @@ func New(c *core.Core, opts ...Option) *API {
 		}
 		a.acpAPI = acpview.NewAPI(acpReg, acpEnv, acpOpts)
 	}
+
+	// Pending-permission-requests surfacing view (model-scheduled-jobs-
+	// 01PMSJ01 WP07). blockedRequestStore was already constructed above
+	// (before newLLMStack, so RecordingPrompter's Sink could be wired);
+	// a.cedarPolicyAPI is now available (constructed just above this
+	// block) for Grant's WritePolicySnippet call. nil db / nil
+	// cedarPolicyAPI both degrade gracefully — the view's own Config
+	// nil-tolerance handles it.
+	a.blockedRequestsAPI = blockedrequestsview.New(blockedrequestsview.Config{
+		Store:       blockedRequestStore,
+		CedarPolicy: a.cedarPolicyAPI,
+	})
 
 	// Scheduled-chat-runs view (mission scheduled-chat-runs-01KX5R8B, WP04;
 	// cron engine added by model-scheduled-jobs-01PMSJ01 WP03; dispatcher
@@ -3401,6 +3577,15 @@ func New(c *core.Core, opts ...Option) *API {
 					}
 					return profs[0].ID
 				},
+				// model-scheduled-jobs-01PMSJ01 WP06: the SAME registry
+				// registerFSBuiltinTools's RecordingPrompter reads from
+				// (wired above, before newLLMStack) — this dispatcher is
+				// the writer.
+				Origins: a.scheduledRunOrigins,
+				// model-scheduled-jobs-01PMSJ01 WP07, FR-007: deliver the
+				// "banner" output sink onto the same broker every other
+				// frontend-visible push topic in this file uses.
+				Broker: a.broker,
 			})
 			chatDispatcher = live
 			if chatCronEngine != nil {
@@ -3612,7 +3797,7 @@ func New(c *core.Core, opts ...Option) *API {
 			// tokens of every recipe added after startup.
 			return mcpRecipeSecretKeys(mcpUserRecipeSource(a.mcpUserStore))
 		}, syncPending)
-		a.syncKindRegistry = registerSyncCategories(context.Background(), syncer, syncStore, mcpSyncCat)
+		a.syncKindRegistry = registerSyncCategories(context.Background(), syncer, syncStore, mcpSyncCat, mergedCat)
 
 		// fleet-generic-sync-framework-01NSYNC02 WP05: register slash_commands
 		// as a new user-scoped kind through the same registry — the
@@ -3620,6 +3805,26 @@ func New(c *core.Core, opts ...Option) *API {
 		// endpoint or Syncer changes). slashStore is constructed earlier in
 		// New() (feature-gated by HARNESS_USER_SLASHCMD) so it may be nil.
 		registerSlashCommandsSyncKind(syncer, a.syncKindRegistry, slashStore)
+
+		// fleet-generic-sync-framework-01NSYNC02 WP02: wire the same
+		// registry into settingsImpl's fleetState so compositeConfigApplier
+		// can dispatch a bundle's org_config keyed section to each entry's
+		// registered kind. Safe to call with either registry state — the
+		// registry above is never nil (registerSyncCategories always
+		// returns a *fleet.KindRegistry, empty or populated).
+		if a.settingsImpl != nil {
+			a.settingsImpl.SetSyncKindRegistry(a.syncKindRegistry)
+		}
+		// fleet-generic-sync-framework-01NSYNC02 WP06: wire the same
+		// registry into the Sync view so Sync_Status can enrich each row
+		// with its declared Scopes and org provenance (FR-007). syncAPI
+		// is a *syncview.API concrete type here (constructed a few lines
+		// above), not the SyncAPI interface — SetSyncKindRegistry is not
+		// part of that interface's contract, only this constructor needs
+		// the concrete setter.
+		if syncAPI, ok := a.syncAPI.(*syncview.API); ok {
+			syncAPI.SetSyncKindRegistry(a.syncKindRegistry)
+		}
 
 		// Connect settings mutations to the Syncer's debounced push so a theme
 		// change schedules a push-up (no-op when the category is disabled).
@@ -3811,11 +4016,19 @@ func New(c *core.Core, opts ...Option) *API {
 				return &c
 			}
 			slashAPI.WithSkillDeps(slashview.SkillDeps{
-				SkillStore:   skillStore,
-				FleetClient:  flCl,
-				Signer:       catalogSigner,
-				GetCaps:      getCaps,
-				PubKeyBase64: "",      // fleet-level pub key; empty = skip verify (same as catalog)
+				SkillStore:  skillStore,
+				FleetClient: flCl,
+				Signer:      catalogSigner,
+				GetCaps:     getCaps,
+				// fleet-enforcement-truth-01PMZ505 WP10, register C-2
+				// (2026-08-19, owner alec): SHIP THE HONESTY CHANGE; the
+				// key source is a separate, later decision. This is not
+				// a settled "empty means skip" configuration — it is a
+				// standing blocker: no per-device catalog signing key
+				// source exists in or out of this repo. See
+				// docs/unwired-ledger.md's catalog/skill pubkey entry
+				// and core/rpc/views/catalog/impl.go's pubKeyBase64 doc.
+				PubKeyBase64: "",
 				Emitter:      flAudit, // FR-501: wire audit for skill_published/installed/uninstalled
 			})
 			logging.L().Info("rpc.slashcmd.skill_deps_wired",
@@ -3996,11 +4209,17 @@ func New(c *core.Core, opts ...Option) *API {
 		}
 	}
 
-	// Sites capability reconciler (sites-mcp-server-01NSITE05 WP04).
-	// Enables the "fleet-sites" recipe when sites_hosting appears and
-	// disables it when it disappears or goes stale (24 h TTL). Wired
-	// here because core/rpc already owns the CapabilityPoller and
-	// recipes.EnabledRecipes — this avoids core/core.go importing fleet.
+	// Capability recipe reconciler (sites-mcp-server-01NSITE05 WP04;
+	// generalized by connector-lifecycle-truth-01PMZ303 UNIT-12 from a
+	// fleet-sites-only reconciler to any recipe declaring
+	// RequiredCapability). Enables a recipe when its declared capability
+	// appears and disables it when that capability disappears or goes
+	// stale (24 h TTL). Wired here because core/rpc already owns the
+	// CapabilityPoller and recipes.EnabledRecipes — this avoids
+	// core/core.go importing fleet. The recipe source is the same
+	// shipped+registry+user merge mergedRecipeCatalog produces, so a
+	// user-authored recipe declaring required_capability is honoured
+	// too, not just the shipped fleet-sites entry.
 	if a.settingsImpl != nil && dataDir != "" {
 		if poller := a.settingsImpl.CapabilityPoller(); poller != nil {
 			enabled, err := recipes.LoadEnabled(dataDir)
@@ -4008,7 +4227,10 @@ func New(c *core.Core, opts ...Option) *API {
 				logging.L().Warn("rpc.sites_reconciler.load_enabled_failed", "err", err.Error())
 				enabled = &recipes.EnabledRecipes{}
 			}
-			corefleet.NewSitesReconciler(poller, enabled, dataDir).Start()
+			capabilityRecipeSource := func() []recipes.Recipe {
+				return mergedRecipeCatalog(mcpUserRecipeSource(a.mcpUserStore)).List()
+			}
+			corefleet.NewSitesReconciler(poller, enabled, dataDir, capabilityRecipeSource).Start()
 		}
 	}
 
@@ -4058,6 +4280,11 @@ func New(c *core.Core, opts ...Option) *API {
 			// this point in New(), well before this block.
 			a.graphAPI,
 			a.auditImpl,
+			// model-scheduled-jobs-01PMSJ01 WP10: a.scheduledChatAPI is
+			// assigned above (search "a.scheduledChatAPI = scheduledchatview.New"),
+			// well before this block, so it is already non-nil here
+			// whenever the scheduled-chat surface is wired at all.
+			a.scheduledChatAPI,
 		)
 		srv := harnessmcp.RegisterAll(harnessmcp.NewServer(), hManagers)
 		srv = harnessmcp.WithAudit(srv, &harnessSelfAuditBridge{impl: a.auditImpl})
@@ -5261,6 +5488,14 @@ func newLLMStack(
 	// every path (confirm-each-enforcement-01PMAG05 WP05 / FR-007). nil
 	// silences the trail; the decision itself is unaffected.
 	confirmAudit contextaudit.Emitter,
+	// structuredAudit receives one record per structured-output call
+	// (KindLLMStructuredResponse — structured-output-is-reachable-
+	// 01PMZE14 WP06), regardless of validation outcome. nil silences the
+	// trail; the call itself is unaffected — audit.MustEmit is nil-safe.
+	// A separate parameter from confirmAudit because the two audit a
+	// different Kind through a different bridge type (Category label);
+	// both wrap the same a.auditImpl at the call site.
+	structuredAudit contextaudit.Emitter,
 	// cedarEngine is the process-shared Cedar engine (WP05 hoist,
 	// consent-surfaces-truth-01PMTR01) — a.cedarEngine at this
 	// function's production call site in New(). newLLMStack is the only
@@ -5285,6 +5520,17 @@ func newLLMStack(
 	// options.mcpHTTPPoolOptions's doc comment (PR #336 review MUST
 	// FIX 3 test seam).
 	mcpHTTPPoolOptions *mcphttp.PoolOptions,
+	// blockedSink and originResolve wire the fs gate's RecordingPrompter
+	// (model-scheduled-jobs-01PMSJ01 WP06, FR-004): every PromptDeny the
+	// gate resolves — interactive or an unattended scheduled run's
+	// immediate deny — is persisted as a durable blocked_permission_
+	// requests row + audit record instead of vanishing silently.
+	// blockedSink nil-tolerant (RecordingPrompter itself degrades a nil
+	// Sink to "record nothing"); originResolve nil resolves every
+	// denial to origin="interactive" (ScheduledRunOriginRegistry.Resolve's
+	// own fail-safe default).
+	blockedSink corefs.BlockedRequestSink,
+	originResolve corefs.OriginResolver,
 ) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
@@ -5351,11 +5597,27 @@ func newLLMStack(
 	// shipped binary. Same nil-on-test-chassis degrade as `db` above —
 	// DefaultCache(nil) still returns a safe in-process MemoryCache when
 	// no real storage.DB is available.
+	// Audit: structured-output-is-reachable-01PMZE14 WP06. structuredAudit
+	// is a Shape-1 bridge (acpAuditBridge, already used for
+	// KindMCPHealthChanged and several other kinds — see this
+	// function's parameter doc) constructed at the New() call site,
+	// where a.auditImpl is in scope; newLLMStack itself is a free
+	// function with no `a` receiver. It forwards
+	// KindLLMStructuredResponse into a.auditImpl, which, as of
+	// audit-that-tells-the-truth-01PMZA10 UNIT-4, write-throughs to a
+	// real sqlite-backed event-log store whenever a real storage.DB is
+	// available (see the auditOpts/WithStore block above newLLMStack's
+	// other construction). This is a *different* audit path from the
+	// toolloop AuditEmitter TODO a few hundred lines below (:5541) —
+	// that one is about pre/post tool-use hooks and stays unwired; this
+	// one is the LLM registry's own structured-output outcome audit and
+	// has nothing to do with hooks.
 	reg, err := llmregistry.New(llmregistry.Options{
 		Resolver: credref.New(secretsBackend),
 		Policy:   cedarGuard,
 		Cost:     costReducer,
 		Cache:    llmcap.DefaultCache(db),
+		Audit:    structuredAudit,
 	})
 	if err != nil {
 		// Fall back to the stub on a registry construction failure so
@@ -5444,6 +5706,22 @@ func newLLMStack(
 	// run, just one level down. See harness_session_kind_resolver.go's
 	// Resolve for where this posture is implemented.
 	sessionArm := newCedarSessionKindResolver(sessionMgr, cedarEngine)
+	// harness-self-attach-01PMHS01 UNIT-7 completion (AC-008, finishing
+	// pass 2026-09-12): IsHarnessSelfMCPDisabled was wired to
+	// OnboardingAPI.State()'s read-only display field (the SettingsView.vue
+	// banner) but nothing on the attach/dispatch/listing path ever
+	// consulted it — flipping the persisted value changed the UI banner
+	// and changed nothing else; a direct harness_read_get_status call
+	// still succeeded and the tool still listed. Fold the check into the
+	// resolver that already governs every harness-self tool's
+	// reachability (C-004) and visibility (C-003), so the switch works
+	// with no restart and gains no second enforcement point to drift out
+	// of sync with the first. onboardingSettingsDialAdapter already reads
+	// the real store live per call; reuse it rather than inventing a
+	// second reader.
+	if settingsImpl != nil {
+		sessionArm.SetKillSwitch(onboardingSettingsDialAdapter{store: settingsImpl.Store()})
+	}
 	perms := toolloop.NewMergedResolver(staticPerms, sessionArm)
 	// WP03 — pre/post-tool-use hooks and audit emission. core/hooks
 	// only exposes pre_send / post_send for chat-pipeline events;
@@ -5481,9 +5759,24 @@ func newLLMStack(
 			// owns the explicit selector knob.
 			return "", ""
 		}),
-		Roots:  stdio.DefaultRoots(dataDir, nil),
+		Roots:  stdio.DefaultRoots(mcpRootsDir(c, dataDir), nil),
 		Broker: &poolEventPublisher{broker: broker},
 		Logger: nil, // defaults to slog.Default
+		// AutoRestartEnabled (connector-lifecycle-truth-01PMZ303 UNIT-9):
+		// read live from Settings on every ping-failure trip decision,
+		// mirroring confirmEachEnabled's pattern a few lines above. Before
+		// this, Settings.MCPAutoRestart had a full RPC round trip and no
+		// reader anywhere under core/mcp/ — the toggle governed nothing.
+		AutoRestartEnabled: func() bool {
+			if settingsImpl == nil || settingsImpl.Store() == nil {
+				return true
+			}
+			v, err := settingsImpl.Store().LoadMCPAutoRestart()
+			if err != nil {
+				return true
+			}
+			return v
+		},
 	})
 	// Remote (http/sse) transport sub-pools. The DispatchPool wraps all
 	// three so the tools view and the core MCP seam route recipes to the
@@ -5567,7 +5860,7 @@ func newLLMStack(
 	// in-process filesystem tools. Gated behind per-family settings dials
 	// (FSReadEnabled / FSWriteEnabled) so the Tools panel toggles take effect
 	// on the next chat turn. Uses the same Cedar engine as the bash tool.
-	registerFSBuiltinTools(builtinRegistry, bashCedarEngine, settingsStore, promptRegistry, dataDir)
+	registerFSBuiltinTools(builtinRegistry, bashCedarEngine, settingsStore, promptRegistry, dataDir, blockedSink, originResolve)
 	// unified-context-artifacts-01NCTXU01: register the read_context_file
 	// built-in so the agent can read on-demand files from attached context
 	// modules. Requires both the contexts library AND an attachment manager;
@@ -6758,6 +7051,11 @@ func buildChatRunner(
 		EnvDefaults:        envDefaults,
 		ToolDiscoverer:     chatToolDiscovererAdapter{inner: tools},
 		Attachments:        attachments,
+		// model-settings-reach-the-model-01PMZ101 UNIT-6 / WP10:
+		// *session.Manager satisfies chat.KnobsDefaultResolver directly
+		// (GetKnobsDefault(ctx, sessionID) (*llm.RequestKnobs, error)) —
+		// the same manager already threaded through as sessionMgr above.
+		KnobsDefault:       sessionMgr,
 		Compaction:         compactionDeps,
 		CompactionPipeline: chatCompactionPipeline,
 		PartialPersister:   partialPersister,
@@ -6805,6 +7103,39 @@ func buildChatRunner(
 		SecretLookup: secretLookup,
 		SecretGate:   secretGate,
 		SecretBudget: secretBudget,
+		// risk-rated-autonomy-01PMRA01 WP02: DELIBERATELY LEFT NIL until
+		// WP05 (the LLM risk rater) and WP07 (the unattended prompt
+		// deadline) land. nil makes rung 0 a byte-identical no-op; the
+		// intended production value is `secretGate`, the SAME live Cedar
+		// engine as SecretGate immediately above, so that layers 1-2 see
+		// the operator's real policy set.
+		//
+		// WHY IT IS OFF (measured 2026-09-12, release/v0.78.2):
+		// layer 3 (Cedar NotApplicable) resolves to Confirm, and until
+		// WP05 exists there is no rater that can resolve a below-
+		// threshold call back to Allow — so EVERY unmatched action asks,
+		// at every tier including autonomous. Built-in kenaz__* tools are
+		// unaffected (default_tool_policy.cedar permits server "kenaz",
+		// verified to reach layer 2 with the nil contextAttrs rung 0
+		// passes). Un-granted MCP-server tools are the affected set:
+		// filesystem__*, github__*, harness-self__* et al all move from
+		// silent allow to a prompt.
+		//
+		// A prompt is the RIGHT answer for an attended session, and is
+		// exactly the "universal prompt flow on first call" that
+		// default_tool_policy.cedar's header already describes. The
+		// blocker is the unattended case: core/toolloop/confirm.go:200
+		// states "There is no deadline", and kernel_tool_adapter.go's
+		// own comment says "Do not add a deadline here" (owner decision
+		// 1). So an agent running unattended at the autonomous tier
+		// would park forever on the first un-granted MCP tool, where
+		// today it proceeds. WP07 exists precisely to give layer-3
+		// prompts their own deadline without breaking that invariant for
+		// organically-reached confirm_each prompts.
+		//
+		// Flip this back to `secretGate` in the same PR as WP05+WP07.
+		// Owner: risk-rated-autonomy-01PMRA01. Do not enable earlier.
+		RiskGate: nil,
 	})
 	if err != nil {
 		logging.L().Error("chat.runner.construct_failed", "err", err.Error())
@@ -8249,11 +8580,22 @@ func (a *corpusEmbedderAdapter) Embed(ctx context.Context, texts []string) ([][]
 // llm.HookRunner interface — can be constructed by callers. Before this,
 // the *hooks.Runner was trapped inside the unexported hooksRunnerAdapter.r
 // field and unreachable anywhere else in the binary (WP06 / UNIT-5, R-07).
+//
+// mcpInvoker (finding #71) wires kind=mcp lifecycle hooks onto the live
+// MCP dispatch pool. It is passed in — rather than constructed here —
+// because newHooksStack runs before the pool exists (newLLMStack builds
+// it afterward); the caller backfills the adapter's pool once
+// newLLMStack returns (see hooks_mcp_invoker.go's mcpHookInvokerAdapter
+// doc). A nil mcpInvoker (e.g. the WP06 reachability test's direct call
+// with memStore==nil) leaves hooks.Config.MCP nil, same as before this
+// fix — kind=mcp hooks fail loudly with "not configured" rather than
+// panicking.
 func newHooksStack(
 	c *core.Core,
 	retriever *corememory.Retriever,
 	memStore corememory.Store,
 	embedder corememory.Embedder,
+	mcpInvoker hooks.MCPInvoker,
 ) (llm.HookRunner, *hooks.Registry, *hooks.BuiltinRegistry, *hooks.Runner) {
 	if memStore == nil {
 		return nil, nil, nil, nil
@@ -8275,6 +8617,7 @@ func newHooksStack(
 	runner := hooks.NewRunner(hooks.Config{
 		Registry: registry,
 		Builtins: builtins,
+		MCP:      mcpInvoker,
 	})
 	return &hooksRunnerAdapter{r: runner}, registry, builtins, runner
 }
@@ -9033,6 +9376,16 @@ func (a *API) ScheduledChat() scheduledchatview.ScheduledChatAPI {
 		return scheduledchatview.New(scheduledchatview.Config{})
 	}
 	return a.scheduledChatAPI
+}
+
+// BlockedRequests implements HarnessAPI. Returns a graceful-empty
+// surface (ListPending returns nil, Grant/Dismiss return
+// ErrStoreUnavailable) when the DB is not wired.
+func (a *API) BlockedRequests() blockedrequestsview.BlockedRequestsAPI {
+	if a.blockedRequestsAPI == nil {
+		return blockedrequestsview.New(blockedrequestsview.Config{})
+	}
+	return a.blockedRequestsAPI
 }
 
 // Secrets returns the model-accessible secrets RPC surface (mission

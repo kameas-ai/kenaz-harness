@@ -429,11 +429,15 @@ func runServeMode(listenAddr string) {
 	// token never crosses into the VM.
 	authCfg := authbroker.ReadConfig(os.Getenv)
 	connTokens := authbroker.NewConnectorTokens(authCfg, serveLog)
+	// Named so the same emitter also backs authbroker.WithLedgerEmit below
+	// (fleet-enforcement-truth-01PMZ505 WP14) — one reporter-ingest-socket
+	// emitter for both connector-lifecycle and session-lifecycle events.
+	ledgerEmitter := connectors.NewLedgerEmitterFromEnv(os.Getenv, serveLog)
 	connSup := connectors.NewSupervisor(connectors.SupervisorConfig{
 		Provisioning: mcpProv,
 		Getenv:       os.Getenv,
 		Tokens:       connTokens,
-		Ledger:       connectors.NewLedgerEmitterFromEnv(os.Getenv, serveLog),
+		Ledger:       ledgerEmitter,
 		// D13/US5: include operator-authored user recipes baked under
 		// <dataDir>/mcp/recipes so whitelisted custom connector ids
 		// resolve in served mode. The whitelist still gates every id.
@@ -484,7 +488,11 @@ func runServeMode(listenAddr string) {
 	// disk, same mechanism as SIGIL_INGEST_TOKEN / HARNESS_VM_TOKEN).
 	//
 	// Privacy: broker token and access token bytes are never logged.
-	authSession := authbroker.NewSession(ctx, authCfg, serveLog)
+	// WithLedgerEmit (fleet-enforcement-truth-01PMZ505 WP14): reuse the
+	// connector-lifecycle emitter so "session.signed_out" reaches the
+	// same reporter ingest socket as connector.* events.
+	authSession := authbroker.NewSession(ctx, authCfg, serveLog,
+		authbroker.WithLedgerEmit(ledgerEmitter.EmitSessionLifecycle))
 	serveLog.Info("harness.serve: auth session initialised",
 		"auth_state", authSession.State().String(),
 		"broker_addr", authCfg.BrokerAddr,
@@ -547,13 +555,21 @@ func runServeMode(listenAddr string) {
 		// never had. 0 (absent/invalid) keeps serve.defaultStreamQueueCap.
 		serve.WithStreamQueueCap(serve.StreamQueueCapFromEnv(os.Getenv)))
 	serveErr := srv.Serve(ctx)
-	// Review finding (Blocker 3, finding #61 follow-up, 2026-09-11):
-	// served mode never called api.Shutdown() either — see the OnShutdown
-	// comment above for the full history. Runs on every exit from Serve
-	// (clean SIGTERM/SIGINT via cancel(), or a real server error) so a
-	// queued post_send embed and the prune/compaction schedulers are
-	// stopped before the process exits, not just on the desktop path.
-	api.Shutdown()
+	// Two findings, one call. #68 (v0.78.1): served mode never called
+	// api.Shutdown() at all, so a queued post_send embed and the
+	// prune/compaction schedulers were never stopped -- see the
+	// OnShutdown comment above for that history. #70: it never called
+	// core.Shutdown(ctx) either, so nothing core owns was closed -- no
+	// final WAL checkpoint, no orderly MCP child teardown, no telemetry
+	// flush. serve.ShutdownServedCore does api.Shutdown() THEN
+	// core.Shutdown(), the ordering verified on the desktop path.
+	//
+	// On a real SIGTERM/SIGINT, installServeShutdownSignal's cancel()
+	// unblocks Serve with context.Canceled (verified by SD-11 above), so
+	// this point is genuinely reached on every served exit -- and it runs
+	// even when serveErr is a real error, so the os.Exit(1) below no
+	// longer skips teardown.
+	serve.ShutdownServedCore(ctx, api, c, serveLog, "harness.serve")
 	if serveErr != nil && serveErr != context.Canceled {
 		serveLog.Error("harness.serve: server error", "err", serveErr)
 		os.Exit(1)

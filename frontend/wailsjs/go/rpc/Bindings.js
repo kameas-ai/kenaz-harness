@@ -154,6 +154,18 @@ export function Bash_Exec(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Bash_Exec'](arg1, arg2);
 }
 
+export function BlockedRequests_Dismiss(arg1) {
+  return window['go']['rpc']['Bindings']['BlockedRequests_Dismiss'](arg1);
+}
+
+export function BlockedRequests_Grant(arg1) {
+  return window['go']['rpc']['Bindings']['BlockedRequests_Grant'](arg1);
+}
+
+export function BlockedRequests_ListPending() {
+  return window['go']['rpc']['Bindings']['BlockedRequests_ListPending']();
+}
+
 export function BootHealth_Get() {
   return window['go']['rpc']['Bindings']['BootHealth_Get']();
 }
@@ -232,6 +244,10 @@ export function Catalog_Publish(arg1) {
 
 export function Catalog_Uninstall(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Catalog_Uninstall'](arg1, arg2, arg3);
+}
+
+export function Catalog_Unpublish(arg1) {
+  return window['go']['rpc']['Bindings']['Catalog_Unpublish'](arg1);
 }
 
 export function CedarPolicy_Delete(arg1) {
@@ -316,6 +332,10 @@ export function Compliance_ArchiveNow() {
 
 export function Compliance_SetRetention(arg1) {
   return window['go']['rpc']['Bindings']['Compliance_SetRetention'](arg1);
+}
+
+export function Compliance_SkipToID(arg1) {
+  return window['go']['rpc']['Bindings']['Compliance_SkipToID'](arg1);
 }
 
 export function Compliance_Status() {
@@ -1122,6 +1142,10 @@ export function Sessions_GetAutonomy(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_GetAutonomy'](arg1);
 }
 
+export function Sessions_GetKnobsDefault(arg1) {
+  return window['go']['rpc']['Bindings']['Sessions_GetKnobsDefault'](arg1);
+}
+
 export function Sessions_GetUsage(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_GetUsage'](arg1);
 }
@@ -1188,6 +1212,10 @@ export function Sessions_SendMessageWithBlocks(arg1, arg2) {
 
 export function Sessions_SetAutonomy(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Sessions_SetAutonomy'](arg1, arg2);
+}
+
+export function Sessions_SetKnobsDefault(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Sessions_SetKnobsDefault'](arg1, arg2);
 }
 
 export function Sessions_SetSystemPrompt(arg1, arg2, arg3) {
@@ -1544,6 +1572,14 @@ export function Sites_Delete(arg1) {
 
 export function Sites_Deploy(arg1) {
   return window['go']['rpc']['Bindings']['Sites_Deploy'](arg1);
+}
+
+export function Sites_EnvList(arg1) {
+  return window['go']['rpc']['Bindings']['Sites_EnvList'](arg1);
+}
+
+export function Sites_EnvSet(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Sites_EnvSet'](arg1, arg2);
 }
 
 export function Sites_List() {

@@ -97,6 +97,15 @@ type publishResponse struct {
 // a higher tier than the user's current subscription.
 var ErrCatalogNotInTier = fmt.Errorf("fleet/catalog: capability not available in current tier")
 
+// ErrCatalogForbidden is returned by Unpublish on a 403: the caller is
+// neither the item's owner nor a fleet admin. Distinct from
+// ErrCatalogNotInTier — a 403 on DELETE means "not the owner and not an
+// admin", not "requires a higher tier" (fleet-enforcement-truth-01PMZ505
+// WP11, register C-3/C-8). Before this, Unpublish's 403 mapped to
+// ErrCatalogNotInTier, which would have told a publisher trying to
+// withdraw someone else's item to upgrade their subscription.
+var ErrCatalogForbidden = fmt.Errorf("fleet/catalog: not the item's owner or a fleet admin")
+
 // ErrCatalogSignatureMismatch is returned by Install when signature
 // verification fails.
 var ErrCatalogSignatureMismatch = fmt.Errorf("fleet/catalog: payload signature mismatch")
@@ -220,7 +229,10 @@ func (c *Client) Unpublish(ctx context.Context, catalogID string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusForbidden {
-		return ErrCatalogNotInTier
+		// C-8: on DELETE, 403 means "not the owner and not an admin" —
+		// a different fact than ErrCatalogNotInTier's "needs a higher
+		// tier" (which Publish's 403 correctly means, and is left alone).
+		return ErrCatalogForbidden
 	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		body, _ := io.ReadAll(resp.Body)

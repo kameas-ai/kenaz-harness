@@ -1,0 +1,23 @@
+# I19 — statically-dead-nil-branch class.
+#
+# Enforced by scripts/ci/check-dead-nil-branch.sh /
+# scripts/ci/cmd/checkdeadnilbranch. A zero-value `var x T` declaration
+# immediately followed, in the SAME lexical block, by `if x != nil { ...
+# }` with no assignment to x anywhere in between — x is provably nil at
+# the check, so the if-block is unreachable. Shipped in production as
+# core/rpc/builtins_wiring.go's `var subagentSeam agentgraph.BranchSeam
+# // nil — no child-run spawner yet` beside its own `if subagentSeam !=
+# nil`, which hid the entire kenaz__subagent_dispatch registration block
+# (UNIT-6 of subagent-control-and-background-tasks-01PMZB11 fixed that
+# one instance). See that tool's header for the exact check and its
+# false-positive history.
+#
+# Empty as of this gate's introduction (UNIT-12, 2026-09-12) — the one
+# known instance was already fixed by UNIT-6 before this gate was
+# written, and the scan found zero others under core/+cmd/.
+#
+# Format: one line per violation, exactly matching
+# checkdeadnilbranch's violationString() output, with a DATED
+# justification naming the blocker and owner appended after a " — "
+# separator. Allowlists shrink monotonically; a line with no matching
+# live violation is STALE and fails the gate.

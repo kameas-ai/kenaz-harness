@@ -32,9 +32,11 @@ package ci_test
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -135,6 +137,28 @@ var cwdSensitiveGates = []string{
 	"check-bundle-channel-kinds-sync.sh",
 	"check-serve-gap-classification.sh",
 	"check-secret-lookup-wiring.sh",
+	// controls-and-readouts-that-tell-the-truth-01PMZ808 WP22, AC-063:
+	// its old `git rev-parse --show-toplevel 2>/dev/null || pwd` fallback
+	// silently used the CALLER's cwd (not the repo root) when invoked
+	// from outside any git repository — proven live from a mktemp'd
+	// /tmp directory (exit 3 there, exit 0 from the repo root, before
+	// the fix). Fixed by switching to lib/ci-gate.sh's BASH_SOURCE[0]
+	// self-location, same as every other gate in this list.
+	"check-knob-coverage.sh",
+
+	"check-transport-parity.sh",
+	"check-recipe-token-substitution.sh",
+
+	// check-dead-nil-branch.sh (UNIT-12, subagent-control-and-
+	// background-tasks-01PMZB11): its first draft copied check-nil-
+	// optional-deps.sh's `git rev-parse --show-toplevel 2>/dev/null ||
+	// pwd` fallback verbatim and hit this exact class during
+	// development — from /tmp (outside any git repo) it silently fell
+	// back to /tmp itself, then failed with a `go.mod not found` build
+	// error instead of scanning the repo. Fixed by sourcing
+	// lib/ci-gate.sh (BASH_SOURCE[0] self-location) before this line
+	// existed to catch a regression; added here so it stays caught.
+	"check-dead-nil-branch.sh",
 }
 
 // TestGates_VerdictIsIndependentOfWorkingDirectory is the direct regression
@@ -1071,6 +1095,59 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				"}\n",
 		},
 		{
+			// automation-actually-runs-01PMZ404 UNIT-17, G-1a. The case
+			// above proves checkseams's IMPLEMENTER CHECK can fail; this
+			// one proves the newer DERIVATION path can too — G-1a's
+			// whole point is that the input set is derived from every
+			// exported *Config/*Options/*Deps struct field under core/,
+			// not a hand-curated list like seams.go. Planted in a
+			// throwaway package the seams.go allowlist (and every other
+			// gate) has never heard of, per spec §8's own requirement
+			// ("plant a field on a struct the allowlist has never heard
+			// of and it must still fire") — a plant inside seams.go
+			// itself would only re-prove the case above, not the
+			// derivation logic.
+			name:       "seam-implementers/derived-config-field-unsatisfiable",
+			wantOutput: "ZzGateProbeDerivedSeam",
+			gate:       "check-seam-implementers.sh",
+			file:       "core/rpc/zz_gate_probe_derived_seam.go",
+			content: "package rpc\n\n" +
+				"// zzGateProbeDerivedParam and ZzGateProbeDerivedSeam are planted by\n" +
+				"// gates_can_fail_test.go's G-1a proof and removed after the test runs.\n" +
+				"// No real type anywhere in core/ can satisfy ZzGateProbeDerivedSeam — its\n" +
+				"// method takes a brand-new unexported param type defined nowhere else.\n" +
+				"type zzGateProbeDerivedParam struct{}\n\n" +
+				"type ZzGateProbeDerivedSeam interface {\n" +
+				"\tZzGateProbeDerivedMethod(zzGateProbeDerivedParam) error\n" +
+				"}\n\n" +
+				"// ZzGateProbeDerivedDeps is the *Deps-suffixed struct G-1a's derivation\n" +
+				"// pass scans for. The field name and struct suffix are what makes this\n" +
+				"// interface part of the DERIVED input set rather than requiring an edit\n" +
+				"// to seams.go or any allowlist.\n" +
+				"type ZzGateProbeDerivedDeps struct {\n" +
+				"\tSeam ZzGateProbeDerivedSeam\n" +
+				"}\n",
+		},
+		{
+			// automation-actually-runs-01PMZ404 UNIT-17, G-2. Plants a
+			// seventh InputKind constant with no matching v-if/v-else-if
+			// arm in WorkflowsView.vue — the exact shape that shipped
+			// for five of six kinds before U14 (a new/changed enum value
+			// silently falls through to the bare v-else plain-text box,
+			// discarding whatever constraint the author declared). The
+			// gate's one-exception budget is already spent on "string"
+			// (verified against the live file at run time, not
+			// hardcoded), so a seventh value with no arm must fire even
+			// though a bare v-else already exists in WorkflowsView.vue —
+			// proving this is a genuine SET check that a stray catch-all
+			// v-else cannot trivially satisfy.
+			name:       "input-kind-coverage/seventh-kind-no-arm",
+			wantOutput: "zzgateprobe",
+			gate:       "check-input-kind-coverage.sh",
+			file:       "core/workflows/types.go",
+			append:     "\n// InputKindZzGateProbe is planted by gates_can_fail_test.go's G-2 proof and removed after the test runs.\nconst InputKindZzGateProbe InputKind = \"zzgateprobe\"\n",
+		},
+		{
 			// entry-points-and-crash-reporting-01PMZD13 UNIT-5.
 			// check-csp.sh's FIRST EVER planted-violation proof (spec §5).
 			// This gate reads a BUILT artifact (frontend/dist/index.html),
@@ -1236,6 +1313,222 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 				"\t_, _ = p.PersistPartial(ctx, sessionID, text, \"transient\", true)\n" +
 				"}\n",
 		},
+		// ---- 2026-09-11: closing finding #48 (10 of 51 gates had no
+		// planted-violation proof at all — nothing demonstrated they could
+		// fail). The seven cases below are the grep/test-shaped gates from
+		// that list; the two structural ones (check-codegen,
+		// check-manifest-version-bump) are standalone functions further
+		// down in this file (they share one plant on
+		// core/agentgraph/nodes/manifests/sleep.yaml, since both react to
+		// the same "fingerprint changed without a commensurate commit"
+		// class), and check-release-integrity.sh — which needs REPO set
+		// and hits api.github.com on a real run — has its own standalone
+		// function further down (TestReleaseIntegrityGate_PlantedMissingReleaseFires)
+		// that fakes `gh` on PATH instead of touching the network.
+		//
+		// While investigating the no-fleet-imports case below, this sweep
+		// also found and documented (did NOT silently fix) a real,
+		// currently-live vacuity in check-no-fleet-imports.sh's allowlist
+		// matching — see docs/unwired-ledger.md's 2026-09-11 entry.
+		{
+			// check-fleet-log-export-fence.sh part 3: no un-annotated
+			// OTLP *log* exporter constructor call anywhere under
+			// core/fleet/ — re-opening the lane that once shipped plain
+			// slog bodies to Fleet's /v1/logs requires an explicit
+			// `fleet-log-fence-allow: <reason>` comment on the same or
+			// the two preceding lines (core/fleet/otlp_log_fence_test.go
+			// itself carries exactly one, annotated, for this reason).
+			// Plants a second, deliberately UN-annotated
+			// otlploghttp.New(...) call — a real, compiling call against
+			// the same package the annotated one already imports, so
+			// this is the actual shape a careless re-introduction would
+			// take, not a synthetic string match.
+			name:       "fleet-log-export-fence/unannotated-otlp-log-exporter",
+			wantOutput: "zz_gate_probe_otlp_test.go",
+			gate:       "check-fleet-log-export-fence.sh",
+			file:       "core/fleet/zz_gate_probe_otlp_test.go",
+			content: "package fleet\n\n" +
+				"import (\n" +
+				"\t\"context\"\n" +
+				"\t\"testing\"\n\n" +
+				"\t\"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp\"\n" +
+				")\n\n" +
+				"// TestZZGateProbeReopensLogLane exists only to prove\n" +
+				"// check-fleet-log-export-fence.sh can fail — see\n" +
+				"// gates_can_fail_test.go's fleet-log-export-fence case.\n" +
+				"// Deliberately UN-annotated: no fleet-log-fence-allow comment\n" +
+				"// on this line or the two immediately above it.\n" +
+				"func TestZZGateProbeReopensLogLane(t *testing.T) {\n" +
+				"\tctx := context.Background()\n" +
+				"\t_, _ = otlploghttp.New(ctx)\n" +
+				"}\n",
+		},
+		{
+			// check-no-fleet-imports.sh (OSS-first boundary): only
+			// core/rpc, core/rpc/views/settings, core/rpc/views/fleet,
+			// core/rpc/middleware and core/mcp/builtin/sites may import
+			// core/fleet. This is the exact class that fired FOR REAL on
+			// release/v0.78.1 (core/serve importing core/fleet) — this
+			// plant reproduces that shape in an isolated new package
+			// OUTSIDE core/rpc entirely so it cannot collide with the real
+			// violation's own fix landing in the same release.
+			//
+			// NOT planted under core/rpc/views/ — while investigating this
+			// case (2026-09-11) that shape exposed a REAL vacuity: the
+			// bare "${MODULE}/core/rpc" allowlist entry matches via the
+			// same "${a}/"* prefix wildcard as every other entry, so it
+			// silently exempts EVERY package under core/rpc/ (not just
+			// core/rpc itself), including core/rpc/views/sessions,
+			// core/rpc/views/agentgraph, etc. Confirmed live and NOT
+			// hypothetical: core/rpc/views/{catalog,cedar,compliance,
+			// contexts,sites,slashcmd,sync} all import core/fleet in
+			// impl.go today and are none of them in the ALLOWLIST array —
+			// they pass ONLY because of this prefix hole. A locally-tested
+			// fix (exact-match the bare core/rpc entry, keep prefix
+			// matching for the other four) is technically correct but
+			// turns FAIL for those 7 real, currently-shipping packages,
+			// which is a product/architecture call (are they meant to be
+			// fleet-facing, or is this OSS-first drift that predates
+			// anyone noticing?) this sweep is not positioned to resolve
+			// unilaterally — see docs/unwired-ledger.md's dated entry.
+			// Escalated rather than silently fixed or silently left,
+			// per CLAUDE.md's disposition rules. The gate as shipped
+			// still correctly catches the field-proven class (an
+			// unrelated package importing fleet), which is what this
+			// proof demonstrates.
+			name:       "no-fleet-imports/unauthorized-package-imports-fleet",
+			wantOutput: "core/sessions/zzgateprobefleetimport",
+			gate:       "check-no-fleet-imports.sh",
+			file:       "core/sessions/zzgateprobefleetimport/probe.go",
+			content: "package zzgateprobefleetimport\n\n" +
+				"import _ \"github.com/kameas-ai/kenaz-harness/core/fleet\"\n",
+		},
+		{
+			// check-no-cred-bytes-in-rpc.sh check 1: the literal `cred
+			// []byte` outside core/credstore/, core/secrets/, core/llm/
+			// and *_test.go files. Planted in a brand-new file under
+			// core/rpc/ (not one of the allowlisted directories).
+			name:       "no-cred-bytes-in-rpc/cred-bytes-outside-allowlist",
+			wantOutput: "zz_gate_probe_credbytes.go",
+			gate:       "check-no-cred-bytes-in-rpc.sh",
+			file:       "core/rpc/zz_gate_probe_credbytes.go",
+			content: "package rpc\n\n" +
+				"func zzGateProbeCredBytes(cred []byte) {\n\t_ = cred\n}\n",
+		},
+		{
+			// check-no-forbidden-compaction-symbols.sh (I4): exactly one
+			// compaction entry point. SuppressAutomaticCompaction and
+			// runPreSendCompaction are grep-forbidden outside
+			// scripts/ci/allowlists/i4-forbidden-compaction-symbols.txt's
+			// two allowed (already-tracked) production call sites. This
+			// plants a THIRD, unallowlisted textual occurrence of the
+			// forbidden symbol in a brand-new production file.
+			name:       "no-forbidden-compaction-symbols/symbol-outside-allowlist",
+			wantOutput: "zz_gate_probe_compaction.go",
+			gate:       "check-no-forbidden-compaction-symbols.sh",
+			file:       "core/rpc/zz_gate_probe_compaction.go",
+			content: "package rpc\n\n" +
+				"// zzGateProbeMentionsForbiddenSymbol exists only to prove\n" +
+				"// check-no-forbidden-compaction-symbols.sh can fail — see\n" +
+				"// gates_can_fail_test.go's no-forbidden-compaction-symbols case.\n" +
+				"const zzGateProbeMentionsForbiddenSymbol = \"SuppressAutomaticCompaction\"\n",
+		},
+		{
+			// check-output-ports.sh (I-existing): every agentgraph node
+			// Outputs["k"] write must be read by Go, a shipped/tested YAML
+			// graph, the frontend, or carry a //wiring:deferred directive.
+			// Plants a write-only port with a name unique enough (the
+			// zz_gate_probe_dead_port key) that it cannot accidentally be
+			// "read" by an unrelated quoted-string match anywhere else in
+			// the tree.
+			name:       "output-ports/write-only-no-reader-anywhere",
+			wantOutput: "zz_gate_probe_dead_port",
+			gate:       "check-output-ports.sh",
+			file:       "core/agentgraph/zz_gate_probe_output.go",
+			content: "package agentgraph\n\n" +
+				"// zzGateProbeDeadOutputWrite writes a port nothing ever reads —\n" +
+				"// the write-only defect check-output-ports.sh exists to catch.\n" +
+				"func zzGateProbeDeadOutputWrite(res *Result) {\n" +
+				"\tres.Outputs[\"zz_gate_probe_dead_port\"] = nil\n" +
+				"}\n",
+		},
+		{
+			// check-oss-first.sh: with HARNESS_FLEET_DISABLED=1, every
+			// non-fleet core package it names (including ./core/mcp/...,
+			// which core/mcp/builtin/sites lives under) must pass `go
+			// test`. The gate's whole reason to exist is catching a defect
+			// reachable ONLY in that mode — an ordinary `go test
+			// ./core/mcp/...` run (no env var) would never see it. This
+			// plants exactly that shape: a test that fails if and only if
+			// HARNESS_FLEET_DISABLED=1 is set, which check-oss-first.sh is
+			// the only CI step that ever sets.
+			name:       "oss-first/fails-only-under-fleet-disabled",
+			wantOutput: "TestZZGateProbeOSSFirstRegression",
+			gate:       "check-oss-first.sh",
+			file:       "core/mcp/builtin/sites/zz_gate_probe_test.go",
+			content: "package sites\n\n" +
+				"import (\n" +
+				"\t\"os\"\n" +
+				"\t\"testing\"\n" +
+				")\n\n" +
+				"// TestZZGateProbeOSSFirstRegression exists only to prove\n" +
+				"// check-oss-first.sh can fail — see gates_can_fail_test.go's\n" +
+				"// oss-first case. It reproduces the exact class the gate exists\n" +
+				"// for: a defect reachable ONLY when HARNESS_FLEET_DISABLED=1,\n" +
+				"// which no ordinary 'go test' run (without the env var) would\n" +
+				"// ever catch.\n" +
+				"func TestZZGateProbeOSSFirstRegression(t *testing.T) {\n" +
+				"\tif os.Getenv(\"HARNESS_FLEET_DISABLED\") == \"1\" {\n" +
+				"\t\tt.Fatal(\"zz_gate_probe: planted OSS-first-only regression — check-oss-first.sh should have caught this\")\n" +
+				"\t}\n" +
+				"}\n",
+		},
+		{
+			// check-node-dispatch.sh's manifest-side half
+			// (TestBundledCatalog_DispatchDeclarations): every shipped,
+			// callable manifest's dispatch: value must be "graph" or
+			// "builtin_tool" (paired correctly with tool_name). Plants a
+			// standalone manifest (no extends: chain, so no archetype
+			// inheritance is needed to make it loadable) with a nonsense
+			// dispatch value — the "unknown dispatch value" shape
+			// dispatch_test.go's own synthetic-catalog table already
+			// covers for a throwaway fixture dir; this proves the SAME
+			// validator rejects it when it is a real bundled manifest,
+			// which is what check-node-dispatch.sh actually runs against.
+			name:       "node-dispatch/unknown-dispatch-value-on-bundled-manifest",
+			wantOutput: "zz_gate_probe_dispatch",
+			gate:       "check-node-dispatch.sh",
+			file:       "core/agentgraph/nodes/manifests/zz_gate_probe_dispatch.yaml",
+			content: "schema_version: \"1\"\n" +
+				"manifest_version: \"1.0.0\"\n" +
+				"id: zz_gate_probe_dispatch\n" +
+				"display_name: ZZ Gate Probe Dispatch\n" +
+				"description: \"Planted by gates_can_fail_test.go's node-dispatch case; dispatch value is deliberately invalid.\"\n" +
+				"dispatch: sometimes\n" +
+				"budget: none\n",
+		},
+		{
+			// Finding #72 (2026-09-11): check-no-fleet-imports.sh's
+			// ALLOWLIST held a single entry for the core/rpc chassis
+			// ("${MODULE}/core/rpc") but the matcher applied a
+			// prefix-wildcard to every entry ("$pkg" == "$a" ||
+			// "$pkg" == "${a}/"*), so that one entry silently exempted
+			// every package UNDER core/rpc/ too. Eleven packages relied
+			// on the hole. The ad hoc verification cited in the script's
+			// own comments planted its probe in core/sessions -- outside
+			// core/rpc/ entirely -- so it could never have caught this.
+			// This plants a NEW, unallowlisted package directly under
+			// core/rpc/views/ that imports core/fleet, proving the split
+			// EXACT_ALLOWLIST (core/rpc, exact-match only) /
+			// PREFIX_ALLOWLIST (named subpackages) matcher actually
+			// inspects core/rpc's subpackages instead of waving the whole
+			// subtree through.
+			name:       "no-fleet-imports/unallowlisted-subpackage-of-core-rpc",
+			wantOutput: "core/rpc/views/zzgatefleetprobe",
+			gate:       "check-no-fleet-imports.sh",
+			file:       "core/rpc/views/zzgatefleetprobe/impl.go",
+			content:    "package zzgatefleetprobe\n\nimport _ \"github.com/kameas-ai/kenaz-harness/core/fleet\"\n",
+		},
 	}
 
 	for _, tc := range cases {
@@ -1339,6 +1632,293 @@ func plant(t *testing.T, full, content, appendText string) func() {
 				t.Errorf("removing %s: %v — WORKING TREE IS DIRTY", createdDir, err)
 			}
 		}
+	}
+}
+
+// plantReplace performs a journaled read-mutate-restore on an EXISTING
+// file, replacing the first occurrence of target with mutated. plant()'s
+// append mode can only add content at the very END of a file, which
+// cannot express "an existing slice literal gains a new element in the
+// middle of the file" — the shape check-served-mode-topic-forwarding.sh's
+// reverse-direction proof needs (a new passthroughTopics entry has to
+// land before the slice's closing brace, not after the whole file).
+// Journaled exactly the way plant()'s append branch journals its own
+// mutation, so a `-timeout` kill mid-plant heals on TestMain's next run
+// the same way every other case in this file does — see
+// plantguard_test.go. This intentionally does NOT retrofit the five
+// pre-existing bare-os.WriteFile-plus-defer read-mutate-restore tests
+// noted in TestStructuredOutputRowParityGate_PlantedEncoderDropFires's
+// doc comment; it only avoids adding a sixth one.
+func plantReplace(t *testing.T, full, target, mutated string) func() {
+	t.Helper()
+	orig, err := os.ReadFile(full)
+	if err != nil {
+		t.Fatalf("reading %s: %v", full, err)
+	}
+	if !strings.Contains(string(orig), target) {
+		t.Fatalf("target text not found in %s — the anchor may have moved; update this test:\n%q", full, target)
+	}
+	newContent := strings.Replace(string(orig), target, mutated, 1)
+	// Journal BEFORE touching the file — see plant()'s append branch and
+	// plantguard_test.go for the rationale: a kill after the write but
+	// before cleanup runs is exactly the case the journal exists for.
+	journalPlant(plantRecord{Path: full, Orig: string(orig), Existed: true, Planted: newContent})
+	if err := os.WriteFile(full, []byte(newContent), 0o644); err != nil {
+		t.Fatalf("writing %s: %v", full, err)
+	}
+	return func() {
+		if err := os.WriteFile(full, orig, 0o644); err != nil {
+			t.Errorf("restoring %s: %v — WORKING TREE IS DIRTY", full, err)
+		}
+		journalClear(full)
+	}
+}
+
+// TestServedModeTopicForwardingGate_PlantedOrphanBroadcastFires is the
+// REVERSE-direction planted-violation proof for
+// check-served-mode-topic-forwarding.sh's pass 2 (#69): a topic present
+// in core/serve/wsstream.go's passthroughTopics with NO real frontend
+// useEventStream subscriber. Before pass 2 existed, this shape was
+// invisible: pass 1 only ever asked "does a subscribed topic reach
+// passthroughTopics", never the reverse "does everything in
+// passthroughTopics reach a subscriber" — dead weight forwarded to every
+// served connection, and a passthroughTopics entry that no longer
+// states real intent (the entries are the single hand-authored source
+// of truth the TS list is generated from, so an orphan there is read as
+// a statement of intent nobody meant).
+//
+// Two plants, both journaled so a `-timeout` kill mid-plant heals on the
+// next run (mirrors the two-plant shape of
+// "served-mode-topic-forwarding/subscribed-not-forwarded" above, which
+// proves the FORWARD direction; this proves the reverse):
+//  1. A brand-new Topic* const (plant(), create mode — already
+//     journaled).
+//  2. wsstream.go's passthroughTopics slice gains that const as a new
+//     element (plantReplace, above — inserting into an existing slice
+//     literal is not expressible through plant()'s append-to-end-of-file
+//     mode).
+//
+// No frontend file is planted — the ABSENCE of a subscriber is the
+// violation being proved.
+func TestServedModeTopicForwardingGate_PlantedOrphanBroadcastFires(t *testing.T) {
+	root := repoRoot(t)
+
+	constFile := filepath.Join(root, "core", "rpc", "zz_gate_probe_orphan.go")
+	constContent := "package rpc\n\n" +
+		"// TopicZzGateProbeServedOrphan is planted by gates_can_fail_test.go's\n" +
+		"// check-served-mode-topic-forwarding.sh pass-2 (reverse direction)\n" +
+		"// proof and removed after the test runs. Deliberately has no\n" +
+		"// frontend useEventStream subscriber — that absence is the point.\n" +
+		"const TopicZzGateProbeServedOrphan = \"zzgateprobe:served-orphan\"\n"
+	cleanupConst := plant(t, constFile, constContent, "")
+	defer cleanupConst()
+
+	wsstreamPath := filepath.Join(root, "core", "serve", "wsstream.go")
+	// Anchored to the ENTRY LINE, not to "entry + closing brace". The
+	// original anchor was "\tmcpview.TopicMCPHealthChanged,\n}\n", which
+	// silently assumed that topic was the LAST element of passthroughTopics
+	// -- it stopped being last the moment the #336 follow-up appended five
+	// more, and this proof broke with "target text not found". Finding #67
+	// is the same class (a planted proof depending on file ORDER rather than
+	// content); anchor on content so appending to the slice cannot break it.
+	const target = "\tmcpview.TopicMCPHealthChanged,\n"
+	mutated := "\tmcpview.TopicMCPHealthChanged,\n\trpc.TopicZzGateProbeServedOrphan,\n"
+	cleanupSlice := plantReplace(t, wsstreamPath, target, mutated)
+	defer cleanupSlice()
+
+	code, out := runGate(t, "check-served-mode-topic-forwarding.sh", root)
+	if code == 0 {
+		t.Fatalf("check-served-mode-topic-forwarding.sh exited 0 with a passthroughTopics entry "+
+			"(TopicZzGateProbeServedOrphan) that has no useEventStream consumer — the reverse-direction "+
+			"pass cannot fail.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "TopicZzGateProbeServedOrphan") || !strings.Contains(out, "zzgateprobe:served-orphan") {
+		t.Fatalf("gate failed, but its output does not name the planted orphan topic "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+}
+
+// TestServedModeTopicForwardingGate_PlantedPassthroughDiscoveryFloorFires
+// is the planted-violation proof for the PASSTHROUGH_BLOCK floor guard
+// (2026-09-11 hardening). Before the floor guard existed, reformatting
+// core/serve/wsstream.go's `var passthroughTopics = []string{ ... }`
+// declaration into a grouped `var (...)` block — a realistic
+// gofmt-adjacent change, not a contrived one — silently broke the awk
+// pattern this gate anchors discovery on (`/var passthroughTopics =
+// \[\]string\{/`). PASSTHROUGH_BLOCK went empty, pass 1 (forward
+// direction) fell back to "not forwarded" for every candidate, and pass 2
+// (reverse direction, which reuses the same block) reported "0 entries
+// checked... clean" — a gate malfunction indistinguishable from an
+// actually-empty passthroughTopics list. The only reason the OLD gate
+// still exited non-zero on this shape at all was incidental coupling: as
+// long as pass 1 had at least one non-allowlisted forwarded+consumed
+// topic, it still failed loudly for an unrelated reason. This test
+// proves the NEW, explicit floor guard fires on its own terms, not by
+// relying on that coupling.
+//
+// Two plantReplace calls on the SAME file (core/serve/wsstream.go),
+// applied and cleaned up in sequence: the opening `var passthroughTopics
+// = []string{` line gains a wrapping `var (`, and the closing `}` right
+// after the last real entry (mcpview.TopicMCPHealthChanged) gains a
+// matching `)` — kept syntactically valid Go throughout, mirroring the
+// exact defect class described in BLOCKER 1's repro ("reformat
+// passthroughTopics into a grouped var (...) block").
+func TestServedModeTopicForwardingGate_PlantedPassthroughDiscoveryFloorFires(t *testing.T) {
+	root := repoRoot(t)
+	wsstreamPath := filepath.Join(root, "core", "serve", "wsstream.go")
+
+	const openTarget = "var passthroughTopics = []string{\n"
+	const openMutated = "var (\n\tpassthroughTopics = []string{\n"
+	cleanupOpen := plantReplace(t, wsstreamPath, openTarget, openMutated)
+	defer cleanupOpen()
+
+	// Unlike the proof above, this one genuinely needs the DECLARATION'S
+	// TERMINATOR: it wraps the whole declaration in a grouped var (...)
+	// block, so it must close the slice and then the group. That makes it
+	// inherently coupled to whatever entry is currently last -- it was
+	// anchored on mcpview.TopicMCPHealthChanged and broke when the #336
+	// follow-up appended five topics after it. Kept terminator-anchored on
+	// purpose (the mutation has no other valid form), and the mitigation is
+	// that plantReplace fails LOUDLY with "the anchor may have moved; update
+	// this test" rather than silently planting nothing -- which is exactly
+	// the difference between this and finding #67's silent version.
+	// If you append to passthroughTopics, update the entry named here.
+	const closeTarget = "\ttopicFleetSessionExpired,\n}\n"
+	const closeMutated = "\ttopicFleetSessionExpired,\n\t}\n)\n"
+	cleanupClose := plantReplace(t, wsstreamPath, closeTarget, closeMutated)
+	defer cleanupClose()
+
+	code, out := runGate(t, "check-served-mode-topic-forwarding.sh", root)
+	if code == 0 {
+		t.Fatalf("check-served-mode-topic-forwarding.sh exited 0 after passthroughTopics was "+
+			"reformatted into a grouped var (...) block — PASSTHROUGH_BLOCK discovery silently broke "+
+			"and the gate reported clean instead of a discovery malfunction.\noutput:\n%s", out)
+	}
+	if code != 2 {
+		t.Fatalf("check-served-mode-topic-forwarding.sh exited %d, want 2 (the documented "+
+			"discovery-malfunction exit code).\noutput:\n%s", code, out)
+	}
+	if !strings.Contains(out, "passthroughTopics discovery resolved 0 real Topic* token") {
+		t.Fatalf("gate failed, but its output does not name the passthroughTopics discovery floor "+
+			"failure (a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+}
+
+// TestServedModeTopicForwardingGate_PlantedFrontendDiscoveryFloorFires is
+// the planted-violation proof for the FRONTEND_CALL_COUNT floor guard
+// (2026-09-11 hardening, the other half of the same fix). Before the
+// floor guard existed, renaming every real `useEventStream(...)` call
+// site (a realistic wholesale-rename refactor of the composable, not a
+// contrived one) silently zeroed FRONTEND_WINDOW. Because frontend_hit —
+// computed by substring-matching against FRONTEND_WINDOW — determines
+// CANDIDACY (not just pass/fail) for pass 1, an empty window did not
+// fail every candidate; it disqualified them from candidacy entirely, so
+// pass 1 reported "0 candidates... clean". Pass 2 (which also reads
+// FRONTEND_WINDOW to decide whether a passthroughTopics entry is
+// consumed) was the only thing still failing loudly on this shape,
+// again incidental coupling rather than a guard.
+//
+// This defect class is fundamentally repo-wide (the check aggregates a
+// count across every production frontend/src file), so — unlike the
+// passthrough proof above, which is a two-line change to one file —
+// proving it requires actually renaming every real call site the gate's
+// own discovery would find, run the gate, and restore every file
+// byte-for-byte afterward. That is a larger footprint than this file's
+// usual plant()/plantReplace() single- or dual-file cases, but there is
+// no smaller-footprint mutation that is faithful to what "FRONTEND_WINDOW
+// resolves to zero real matches" actually requires: any topic-count
+// floor on a repo-wide aggregate can only be driven to zero by
+// eliminating every real match, regardless of how low the floor is set.
+//
+// Each touched file is journaled via journalPlant/journalClear (the same
+// primitive plant()/plantReplace() use) before it is mutated, so a
+// `-timeout` kill mid-run heals via TestMain on the next invocation
+// exactly like every other case in this file — see plantguard_test.go.
+func TestServedModeTopicForwardingGate_PlantedFrontendDiscoveryFloorFires(t *testing.T) {
+	root := repoRoot(t)
+	frontendSrc := filepath.Join(root, "frontend", "src")
+
+	callSitePattern := regexp.MustCompile(`useEventStream(<[^>]*>)?\(`)
+
+	type mutatedFile struct {
+		path    string
+		orig    string
+		planted string
+	}
+	var mutated []mutatedFile
+
+	err := filepath.WalkDir(frontendSrc, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		name := d.Name()
+		if !strings.HasSuffix(name, ".ts") && !strings.HasSuffix(name, ".vue") {
+			return nil
+		}
+		if strings.HasSuffix(name, ".spec.ts") || strings.HasSuffix(name, ".test.ts") {
+			return nil
+		}
+		if strings.Contains(filepath.ToSlash(path), "/__tests__/") {
+			return nil
+		}
+		orig, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if !callSitePattern.MatchString(string(orig)) {
+			return nil
+		}
+		planted := callSitePattern.ReplaceAllString(string(orig), "zzGateProbeRenamedUseEventStream${1}(")
+		mutated = append(mutated, mutatedFile{path: path, orig: string(orig), planted: planted})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking %s to find useEventStream call sites: %v", frontendSrc, err)
+	}
+	if len(mutated) == 0 {
+		t.Fatalf("found zero production files containing a useEventStream(...) call site under %s — "+
+			"the walk itself is broken (wrong path, or the pattern no longer matches this codebase); "+
+			"cannot plant the floor-guard violation this test proves", frontendSrc)
+	}
+
+	// Journal every file BEFORE mutating (same discipline as plant()'s
+	// append branch), then write the mutation. Two separate loops so the
+	// journal is complete before any real write happens.
+	for _, mf := range mutated {
+		journalPlant(plantRecord{Path: mf.path, Orig: mf.orig, Existed: true, Planted: mf.planted})
+	}
+	defer func() {
+		for i := len(mutated) - 1; i >= 0; i-- {
+			mf := mutated[i]
+			if err := os.WriteFile(mf.path, []byte(mf.orig), 0o644); err != nil {
+				t.Errorf("restoring %s: %v — WORKING TREE IS DIRTY", mf.path, err)
+				continue
+			}
+			journalClear(mf.path)
+		}
+	}()
+	for _, mf := range mutated {
+		if err := os.WriteFile(mf.path, []byte(mf.planted), 0o644); err != nil {
+			t.Fatalf("planting renamed call sites into %s: %v", mf.path, err)
+		}
+	}
+
+	code, out := runGate(t, "check-served-mode-topic-forwarding.sh", root)
+	if code == 0 {
+		t.Fatalf("check-served-mode-topic-forwarding.sh exited 0 after every real useEventStream(...) "+
+			"call site (%d file(s)) was renamed — FRONTEND_WINDOW discovery silently broke and the gate "+
+			"reported clean instead of a discovery malfunction.\noutput:\n%s", len(mutated), out)
+	}
+	if code != 2 {
+		t.Fatalf("check-served-mode-topic-forwarding.sh exited %d, want 2 (the documented "+
+			"discovery-malfunction exit code).\noutput:\n%s", code, out)
+	}
+	if !strings.Contains(out, "frontend useEventStream discovery found 0 call site") {
+		t.Fatalf("gate failed, but its output does not name the frontend discovery floor failure "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
 	}
 }
 
@@ -1449,6 +2029,175 @@ func TestAuditStoreBeforeRetentionGate_PlantedStoreRemovalFails(t *testing.T) {
 	if !strings.Contains(out, "NewLocalRetentionScheduler(") {
 		t.Fatalf("gate failed, but its output does not mention the expected defect "+
 			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+}
+
+// TestTransportParityGate_PlantedCommentOnlyArmFails is
+// connector-lifecycle-truth-01PMZ303 UNIT-15's G-1 planted-violation
+// proof. Unlike the gates above, check-transport-parity.sh reads
+// core/mcp/dispatch/pool.go via a test-only overlay env var
+// (TRANSPORT_PARITY_POOL_GO), so this test never touches the real
+// tracked file at all — no read/write/defer-restore cycle, no risk of
+// leaving the working tree dirty on a crash mid-test.
+//
+// Reproduces the exact pre-UNIT-6 shape (spec.md §1.3): the http case's
+// real `d.httpPool.CloseOne(ctx, id)` call replaced by a comment-only
+// body, which would fall through to the function's shared error tail —
+// or, in the pre-UNIT-6 code this mirrors, its shared `return nil`.
+func TestTransportParityGate_PlantedCommentOnlyArmFails(t *testing.T) {
+	root := repoRoot(t)
+	poolPath := filepath.Join(root, "core", "mcp", "dispatch", "pool.go")
+
+	orig, err := os.ReadFile(poolPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", poolPath, err)
+	}
+
+	const target = "\tcase \"http\":\n\t\tif d.httpPool != nil {\n\t\t\treturn d.httpPool.CloseOne(ctx, id)\n\t\t}"
+	if !strings.Contains(string(orig), target) {
+		t.Fatalf("expected http case block not found in pool.go — closeOneByTag's shape may have "+
+			"moved; update this test and the gate together:\n%q", target)
+	}
+	const mutated = "\tcase \"http\":\n\t\t// TODO: http pool does not yet expose CloseOne"
+	newContent := strings.Replace(string(orig), target, mutated, 1)
+
+	scratch := t.TempDir()
+	scratchPool := filepath.Join(scratch, "pool_mutated.go")
+	if err := os.WriteFile(scratchPool, []byte(newContent), 0o644); err != nil {
+		t.Fatalf("writing scratch mutated pool.go: %v", err)
+	}
+
+	code, out := runGateEnv(t, "check-transport-parity.sh", root, map[string]string{
+		"TRANSPORT_PARITY_POOL_GO": scratchPool,
+	})
+	if code == 0 {
+		t.Fatalf("check-transport-parity.sh exited 0 with the http case's CloseOne call replaced "+
+			"by a bare comment — the gate cannot fail on the exact defect class it exists to "+
+			"catch.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, `case "http"`) {
+		t.Fatalf("gate failed, but its output does not name the http case "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+
+	// True-negative companion, same run: the REAL (unmutated) file must
+	// still pass, proving the gate does not fire on everything.
+	realCode, realOut := runGate(t, "check-transport-parity.sh", root)
+	if realCode != 0 {
+		t.Fatalf("check-transport-parity.sh failed against the real, unmutated pool.go — "+
+			"the gate is not correctly scoped:\n%s", realOut)
+	}
+}
+
+// TestRecipeTokenSubstitutionGate_PlantedUnmanifestedTokenFails is
+// connector-lifecycle-truth-01PMZ303 UNIT-15's G-2 planted-violation
+// proof, first half: a "${...}" token on a JSON path with NO manifest
+// entry must fail the gate. Reproduces the exact oauth-clientid-not-
+// substituted shape (spec.md §1.2) on a different, deliberately
+// uncovered path (env_keys[].display) so this test cannot accidentally
+// pass just because auth.client_id already has real coverage.
+//
+// Uses the gate's G2_REGISTRY_JSON override so this never touches the
+// real tracked registry.json.
+func TestRecipeTokenSubstitutionGate_PlantedUnmanifestedTokenFails(t *testing.T) {
+	root := repoRoot(t)
+	registryPath := filepath.Join(root, "core", "mcp", "recipes", "registry.json")
+
+	raw, err := os.ReadFile(registryPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", registryPath, err)
+	}
+	var data struct {
+		Recipes []map[string]any `json:"recipes"`
+	}
+	if err := json.Unmarshal(raw, &data); err != nil {
+		t.Fatalf("unmarshal registry.json: %v", err)
+	}
+	planted := false
+	for _, r := range data.Recipes {
+		envKeys, ok := r["env_keys"].([]any)
+		if !ok || len(envKeys) == 0 {
+			continue
+		}
+		first, ok := envKeys[0].(map[string]any)
+		if !ok {
+			continue
+		}
+		first["display"] = "${KAMEAS_TEST_PLANTED}"
+		planted = true
+		break
+	}
+	if !planted {
+		t.Fatal("no registry recipe with a non-empty env_keys array found — cannot plant the violation")
+	}
+	mutated, err := json.Marshal(data)
+	if err != nil {
+		t.Fatalf("marshal mutated registry.json: %v", err)
+	}
+
+	scratch := t.TempDir()
+	scratchRegistry := filepath.Join(scratch, "registry_planted.json")
+	if err := os.WriteFile(scratchRegistry, mutated, 0o644); err != nil {
+		t.Fatalf("writing scratch registry.json: %v", err)
+	}
+
+	code, out := runGateEnv(t, "check-recipe-token-substitution.sh", root, map[string]string{
+		"G2_REGISTRY_JSON": scratchRegistry,
+	})
+	if code == 0 {
+		t.Fatalf("check-recipe-token-substitution.sh exited 0 with a \\${...} token planted on "+
+			"env_keys[].display, a path with no manifest entry — the gate cannot fail.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "env_keys[].display") {
+		t.Fatalf("gate failed, but its output does not name the uncovered path "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+}
+
+// TestRecipeTokenSubstitutionGate_PlantedStaleManifestEntryFails is G-2's
+// second planted-violation proof: a manifest entry whose grep pattern
+// matches nothing (the call site was deleted or renamed) must ALSO fail
+// — this is what stops the manifest degrading into an opt-out list.
+func TestRecipeTokenSubstitutionGate_PlantedStaleManifestEntryFails(t *testing.T) {
+	root := repoRoot(t)
+	manifestPath := filepath.Join(root, "scripts", "ci", "allowlists", "g2-recipe-substituted-paths.txt")
+
+	orig, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", manifestPath, err)
+	}
+	const target = `auth.client_id|SubstituteString\(clientID`
+	if !strings.Contains(string(orig), target) {
+		t.Fatalf("expected manifest line not found — update this test and the manifest together:\n%q", target)
+	}
+	mutated := strings.Replace(string(orig), target,
+		`auth.client_id|ThisFunctionDoesNotExistAnywhereZzGateProbe12345`, 1)
+
+	scratch := t.TempDir()
+	scratchManifest := filepath.Join(scratch, "manifest_stale.txt")
+	if err := os.WriteFile(scratchManifest, []byte(mutated), 0o644); err != nil {
+		t.Fatalf("writing scratch manifest: %v", err)
+	}
+
+	code, out := runGateEnv(t, "check-recipe-token-substitution.sh", root, map[string]string{
+		"G2_MANIFEST": scratchManifest,
+	})
+	if code == 0 {
+		t.Fatalf("check-recipe-token-substitution.sh exited 0 with auth.client_id's manifest "+
+			"pattern pointing at a symbol that does not exist — a deleted call site whose "+
+			"manifest entry survives must fail, not pass.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "auth.client_id") {
+		t.Fatalf("gate failed, but its output does not name the stale path "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+
+	// True-negative companion: the real manifest against the real tree
+	// must still pass.
+	realCode, realOut := runGate(t, "check-recipe-token-substitution.sh", root)
+	if realCode != 0 {
+		t.Fatalf("check-recipe-token-substitution.sh failed against the real manifest + catalogs — "+
+			"the gate is not correctly scoped:\n%s", realOut)
 	}
 }
 
@@ -2452,5 +3201,852 @@ func zzGateProbeDeadFireSite(r *Runner) {
 	if !strings.Contains(out, "zz_gate_probe") || !strings.Contains(out, "one-hop") {
 		t.Fatalf("%s failed, but its output does not name the planted event and the "+
 			"one-hop diagnosis — it may be failing for an unrelated reason.\noutput:\n%s", gate, out)
+	}
+}
+
+// plantSleepManifestFingerprintDrift mutates the REAL, committed
+// core/agentgraph/nodes/manifests/sleep.yaml — adding a new, harmless
+// attr to its `attrs:` block without touching its `manifest_version:`
+// field — and returns a restore func. sleep.yaml was picked because it
+// is a small, self-contained, extends:-tool leaf manifest with no ports
+// and no other gate's fixtures pinned to its exact shape (unlike
+// read_file.yaml, ask.yaml, etc., which several other gates' cases in
+// this file reference by name).
+//
+// check-codegen.sh's ManifestFingerprint is computed over {kind, budget,
+// ports, attrs} (core/agentgraph/nodes/cmd/gen/main.go's
+// computeGenFingerprint) — NOT display_name/description — so a
+// description-only edit would not move the fingerprint at all. Adding a
+// real attr is the minimal edit that both (a) changes the fingerprint
+// and (b) cannot itself alter Sleep's runtime behavior (nothing reads
+// `zz_gate_probe` — the tool only consumes `seconds`), the same
+// non-invasive-plant discipline the table above uses for existing
+// production files.
+//
+// This is the crash-safety-hazardous class already documented at this
+// file's TestStructuredOutputRowParityGate_PlantedEncoderDropFires
+// block comment ("TWO more mutate real agentgraph paths through the
+// JOURNALED plant() helper... but still NOT overlay-safe"): the shared
+// journal covers sleep.yaml itself (this function uses journalPlant/
+// journalClear directly, mirroring plant()'s own append branch, since
+// the edit is a mid-file insertion the shared plant() helper's
+// append-or-create contract cannot express), but NOT the three
+// *_gen.go files check-codegen.sh's own internal `go generate` call
+// mutates as a side effect of running the gate. Both callers below
+// close that gap the same way: `defer` a second `go generate
+// ./core/agentgraph/...` AFTER (LIFO: registered before, so it runs
+// after) the manifest restore, so the generated files are regenerated
+// from the ORIGINAL manifest before the test returns. A kill between
+// the gate's internal generate and that final regenerate would leave
+// the *_gen.go files drifted with no journal entry — a real residual
+// hazard, accepted here on the same terms as the five pre-existing
+// unconverted cases the block comment already lists, not a new class.
+func plantSleepManifestFingerprintDrift(t *testing.T, root string) func() {
+	t.Helper()
+	manifestPath := filepath.Join(root, "core/agentgraph/nodes/manifests/sleep.yaml")
+	orig, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", manifestPath, err)
+	}
+	const marker = "attrs:\n  seconds:"
+	const inserted = "attrs:\n" +
+		"  zz_gate_probe:\n" +
+		"    type: string\n" +
+		"    description: \"gate-probe: planted by gates_can_fail_test.go to change Sleep's fingerprint without bumping manifest_version — never a real attr.\"\n" +
+		"  seconds:"
+	if !strings.Contains(string(orig), marker) {
+		t.Fatalf("sleep.yaml no longer contains %q — this plant needs updating to match its current shape", marker)
+	}
+	mutated := strings.Replace(string(orig), marker, inserted, 1)
+	journalPlant(plantRecord{Path: manifestPath, Orig: string(orig), Existed: true, Planted: mutated})
+	if err := os.WriteFile(manifestPath, []byte(mutated), 0o644); err != nil {
+		t.Fatalf("writing %s: %v", manifestPath, err)
+	}
+	return func() {
+		if err := os.WriteFile(manifestPath, orig, 0o644); err != nil {
+			t.Errorf("restoring %s: %v — WORKING TREE IS DIRTY", manifestPath, err)
+		}
+		journalClear(manifestPath)
+	}
+}
+
+// regenerateAgentgraphCodegen runs `go generate ./core/agentgraph/...`
+// against whatever core/agentgraph/nodes/manifests/ currently holds. The
+// two tests below defer this AFTER (meaning: registered before, so it
+// executes after per Go's LIFO defer order) their manifest restore, so
+// the three committed *_gen.go files check-codegen.sh's own internal
+// `go generate` mutated as a side effect of running the gate get
+// regenerated back to what the UNPLANTED manifest produces — restoring
+// `git status --porcelain` to clean.
+func regenerateAgentgraphCodegen(t *testing.T, root string) {
+	t.Helper()
+	cmd := exec.Command("go", "generate", "./core/agentgraph/...")
+	cmd.Dir = root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("post-test 'go generate ./core/agentgraph/...' to restore the working tree failed: %v\noutput:\n%s", err, out)
+	}
+}
+
+// TestCodegenGate_PlantedManifestDriftFires is check-codegen.sh's
+// planted-violation proof (finding #48). The violation class: a
+// manifest under core/agentgraph/nodes/manifests/ changed without the
+// regenerated *_gen.go files being committed alongside it. check-
+// codegen.sh's own `git diff --exit-code` is against the INDEX (not
+// HEAD~1), so the plant just needs to change what `go generate` outputs
+// relative to what is currently committed — it does not need to touch
+// git history.
+func TestCodegenGate_PlantedManifestDriftFires(t *testing.T) {
+	root := repoRoot(t)
+	cleanup := plantSleepManifestFingerprintDrift(t, root)
+	defer regenerateAgentgraphCodegen(t, root)
+	defer cleanup()
+
+	code, out := runGate(t, "check-codegen.sh", root)
+	if code == 0 {
+		t.Fatalf("check-codegen.sh exited 0 with a manifest attr planted but the regenerated "+
+			"*_gen.go files never committed — the gate cannot see codegen drift.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "DRIFT DETECTED") || !strings.Contains(out, "zz_gate_probe") {
+		t.Fatalf("check-codegen.sh failed, but its output does not both diagnose DRIFT and name "+
+			"the planted zz_gate_probe attr — it may be failing for an unrelated reason.\noutput:\n%s", out)
+	}
+}
+
+// TestManifestVersionBumpGate_PlantedFingerprintDriftFires is
+// check-manifest-version-bump.sh's planted-violation proof (finding
+// #48). Same plant as the codegen case above (they are the same
+// underlying defect class viewed from two different gates), but this
+// gate's comparison is against HEAD~1 via `git show`, not the index —
+// confirmed before writing this test that Sleep's fingerprint AND
+// version are byte-identical at HEAD and HEAD~1 (`git show
+// HEAD~1:core/agentgraph/manifest_versions_gen.go` vs the committed
+// file), so the plant's fingerprint change is real drift relative to
+// BOTH comparison points, not an artifact of whichever commit the
+// worktree happened to branch from.
+func TestManifestVersionBumpGate_PlantedFingerprintDriftFires(t *testing.T) {
+	root := repoRoot(t)
+	cleanup := plantSleepManifestFingerprintDrift(t, root)
+	defer regenerateAgentgraphCodegen(t, root)
+	defer cleanup()
+
+	code, out := runGate(t, "check-manifest-version-bump.sh", root)
+	if code == 0 {
+		t.Fatalf("check-manifest-version-bump.sh exited 0 with Sleep's fingerprint changed and "+
+			"manifest_version left at 2.0.0 — the gate cannot see an unbumped version.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "Sleep: fingerprint changed") {
+		t.Fatalf("check-manifest-version-bump.sh failed, but its output does not name Sleep's "+
+			"unbumped fingerprint change — it may be failing for an unrelated reason.\noutput:\n%s", out)
+	}
+}
+
+// TestReleaseIntegrityGate_PlantedMissingReleaseFires is
+// check-release-integrity.sh's planted-violation proof (finding #48).
+// The gate shells out to `gh api` for two data sources (every vX.Y.Z
+// tag, and every GitHub Release with its draft/asset-count) and
+// reconciles them; a real end-to-end run needs REPO set to a real repo
+// and network access to api.github.com, neither of which this test
+// suite may assume (P-8: no real network calls from a planted-violation
+// proof). Instead this fakes `gh` itself: a throwaway script placed
+// first on PATH that recognises exactly the two `gh api` calls this
+// gate's happy path needs (git/refs/tags and /releases) and returns
+// canned data with one tag (v77.7.7) that has NO release at all — the
+// simplest of the three violation shapes the gate's own header
+// documents (no Release / a draft Release / a Release with zero
+// assets).
+//
+// Every OTHER `gh api` call this gate makes (the tag's ref/sha/date
+// lookups, the release-workflow-runs lookup) is left unimplemented by
+// the fake — deliberately. The gate's own script already treats each of
+// those as best-effort (stderr discarded, falling back to an empty
+// string on failure), and an empty/failed
+// response for the date lookups makes `age_min` fall through to its
+// 999999-minute default, which is what pushes v77.7.7 past
+// GRACE_MINUTES without this test needing to fake a plausible tag
+// timestamp at all.
+func TestReleaseIntegrityGate_PlantedMissingReleaseFires(t *testing.T) {
+	root := repoRoot(t)
+
+	binDir := t.TempDir()
+	fakeGh := filepath.Join(binDir, "gh")
+	fakeGhScript := "#!/usr/bin/env bash\n" +
+		"# Fake gh for TestReleaseIntegrityGate_PlantedMissingReleaseFires.\n" +
+		"# $1=api $2=<path>; every other gh subcommand/path this gate calls\n" +
+		"# is intentionally left to fail (exit 1, empty stdout) — the real\n" +
+		"# script treats those failures as best-effort and tolerates them.\n" +
+		"if [[ \"$1\" == \"api\" ]]; then\n" +
+		"  case \"$2\" in\n" +
+		"    repos/*/git/refs/tags)\n" +
+		"      printf 'refs/tags/v77.7.6\\nrefs/tags/v77.7.7\\n'\n" +
+		"      exit 0\n" +
+		"      ;;\n" +
+		"    repos/*/releases*)\n" +
+		"      # v77.7.6: published, 1 asset (healthy — must NOT be reported).\n" +
+		"      # v77.7.7: intentionally absent — no release row at all.\n" +
+		"      printf 'v77.7.6\\tfalse\\t1\\n'\n" +
+		"      exit 0\n" +
+		"      ;;\n" +
+		"  esac\n" +
+		"fi\n" +
+		"exit 1\n"
+	if err := os.WriteFile(fakeGh, []byte(fakeGhScript), 0o755); err != nil {
+		t.Fatalf("writing fake gh: %v", err)
+	}
+
+	code, out := runGateEnv(t, "check-release-integrity.sh", root, map[string]string{
+		"PATH": binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"REPO": "zzgateprobe/fake-repo",
+	})
+	if code == 0 {
+		t.Fatalf("check-release-integrity.sh exited 0 with a tag (v77.7.7) that has no GitHub "+
+			"Release at all — the gate cannot see an unreleased tag.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "v77.7.7") || !strings.Contains(out, "no GitHub Release exists for this tag") {
+		t.Fatalf("check-release-integrity.sh failed, but its output does not name the planted "+
+			"tag v77.7.7 and diagnose a missing release — it may be failing for an unrelated "+
+			"reason (e.g. a real-network REPO/gh failure this fake was supposed to prevent).\noutput:\n%s", out)
+	}
+	// v77.7.6 (the healthy control tag) must NOT be reported as a gap —
+	// otherwise this "proof" would pass even if the gate flags EVERY tag
+	// unconditionally, which is exactly the false-positive-shaped
+	// non-proof CLAUDE.md's finding #59 warns about.
+	if strings.Contains(out, "v77.7.6") && strings.Contains(out, "v77.7.6` — ") {
+		t.Fatalf("check-release-integrity.sh flagged the healthy control tag v77.7.6 as a gap too — "+
+			"this proof cannot distinguish a real violation from a gate that fails unconditionally.\noutput:\n%s", out)
+	}
+}
+
+// TestHookEventFireSitesGate_PlantedDeadClosureRegistrationFires is the
+// planted-violation proof for the 2026-09-12 extension of
+// check-hook-event-fire-sites.sh (finding #85,
+// subagent-control-and-background-tasks-01PMZB11): closure_indirect_reachable(),
+// which recognizes a Fire call sitting inside an anonymous closure passed to a
+// `Set<Name>(func(...))` / `With<Name>(func(...))` registration — the exact
+// shape `background_task_complete`'s real fire site takes
+// (core/rpc/api.go's `taskReg.SetHookFirer(func(ctx, payload) {
+// hookRunnerForTasks.Fire(ctx, hooks.EventBackgroundTaskComplete, ...) })`,
+// invoked from core/tasks/registry.go's `End()`).
+//
+// Recognizing that SHAPE is not the same as proving the closure is ever
+// CALLED. This test plants a closure of the identical shape — passed to a
+// Set<Name>(func(...)) call — whose stored field genuinely has zero callers
+// anywhere in the tree, and asserts the gate still fails it. Without this
+// case, closure_indirect_reachable() could regress into treating "looks like
+// a late-bound setter" as proof by itself, which would silently readmit the
+// exact defect class this extension exists to close (a picker/allowlist
+// state that says an event fires when nothing ever invokes it).
+func TestHookEventFireSitesGate_PlantedDeadClosureRegistrationFires(t *testing.T) {
+	root := repoRoot(t)
+	const gate = "check-hook-event-fire-sites.sh"
+
+	goPath := filepath.Join(root, "core", "hooks", "zz_gate_probe_deadclosure.go")
+	goContent := `package hooks
+
+// zz_gate_probe_deadclosure.go — planted by
+// TestHookEventFireSitesGate_PlantedDeadClosureRegistrationFires. Registers
+// a fake event whose only fire site sits inside an anonymous closure passed
+// to a Set<Name>(func(...)) call — the same registration shape
+// background_task_complete's real fire site uses — but the field the setter
+// assigns (deadFirer) is never called anywhere in this file or the rest of
+// the tree. closure_indirect_reachable() must not treat "shaped like a
+// late-bound setter" as reachability by itself.
+
+const EventZzGateProbeDeadClosure = "zz_gate_probe_deadclosure"
+
+type zzGateProbeDeadClosureRegistry struct {
+	deadFirer func(ctx interface{}, payload interface{})
+}
+
+// SetDeadFirer stores the callback. Nothing anywhere else in the tree ever
+// invokes r.deadFirer(...) — the field is write-only, which is the defect
+// closure_indirect_reachable's extra "field is actually called" requirement
+// exists to catch.
+func (r *zzGateProbeDeadClosureRegistry) SetDeadFirer(fn func(ctx interface{}, payload interface{})) {
+	r.deadFirer = fn
+}
+
+func zzGateProbeWireDeadClosure(reg *zzGateProbeDeadClosureRegistry, run *Runner) {
+	reg.SetDeadFirer(func(ctx interface{}, payload interface{}) {
+		_, _ = run.Fire(nil, EventZzGateProbeDeadClosure, nil)
+	})
+}
+`
+
+	tsPath := filepath.Join(root, "frontend", "src", "lib", "hooks.ts")
+	tsAppend := "\n" +
+		"export const FIRING_HOOK_EVENTS = [\n" +
+		"  'zz_gate_probe_deadclosure',\n" +
+		"] as const;\n" +
+		"\n" +
+		"export const ALL_HOOK_EVENTS = [\n" +
+		"  'zz_gate_probe_deadclosure',\n" +
+		"] as const;\n"
+
+	cleanupGo := plant(t, goPath, goContent, "")
+	defer cleanupGo()
+	cleanupTs := plant(t, tsPath, "", tsAppend)
+	defer cleanupTs()
+
+	code, out := runGate(t, gate, root)
+	if code == 0 {
+		t.Fatalf("%s exited 0 with a Fire call planted inside a closure registered via "+
+			"Set<Name>(func(...)) whose stored field has zero callers anywhere — "+
+			"closure_indirect_reachable() is treating the registration SHAPE alone as proof "+
+			"of reachability instead of requiring a real call site for the field.\noutput:\n%s",
+			gate, out)
+	}
+	if !strings.Contains(out, "zz_gate_probe_deadclosure") {
+		t.Fatalf("%s failed, but its output does not name the planted event — it may be "+
+			"failing for an unrelated reason.\noutput:\n%s", gate, out)
+	}
+}
+
+// TestKnobCoverageGate_UnregisteredSettingsFieldFires is AC-060
+// (controls-and-readouts-that-tell-the-truth-01PMZ808 WP22, spec §5 G-2
+// case (a)). The pre-existing "knob-coverage/unregistered-field" case in
+// the shared table above (structured-output-is-reachable-01PMZE14 WP03)
+// proves the MECHANISM can fail using a synthetic probe struct — it
+// deliberately avoids touching the real ModelAttrs/settings.Settings
+// registrations, for the "tests-are-hermetic" reason its own comment
+// gives. WP22's own AC asks for something that case does not cover:
+// planting a field directly onto the REAL settings.Settings struct with
+// no Register call, and confirming check-knob-coverage.sh's real
+// settings guard (TestKnobCoverage_Settings, core/rpc/
+// settings_knob_coverage_test.go) is what catches it — not just that
+// SOME guard somewhere can fail.
+//
+// Not folded into the shared `cases` table above because the plant
+// needs a target INSIDE the struct body (before its closing brace),
+// which plant()'s append-at-EOF mode cannot express — plantReplace is
+// used instead, following TestCodegenGate_PlantedManifestDriftFires's
+// precedent for the same reason.
+func TestKnobCoverageGate_UnregisteredSettingsFieldFires(t *testing.T) {
+	root := repoRoot(t)
+	apiPath := filepath.Join(root, "core", "rpc", "views", "settings", "api.go")
+
+	const target = "\tBundleSigningPolicy string `json:\"bundleSigningPolicy,omitempty\"`\n}"
+	const mutated = "\tBundleSigningPolicy string `json:\"bundleSigningPolicy,omitempty\"`\n\n" +
+		"\t// ZZGateProbeUnregisteredField is planted by gates_can_fail_test.go\n" +
+		"\t// to prove check-knob-coverage.sh's real settings.Settings guard\n" +
+		"\t// (TestKnobCoverage_Settings) fails when a field has no\n" +
+		"\t// knobcoverage.Register/RegisterDeferred entry. Never a real field.\n" +
+		"\tZZGateProbeUnregisteredField string `json:\"zzGateProbeUnregisteredField,omitempty\"`\n}"
+
+	cleanup := plantReplace(t, apiPath, target, mutated)
+	defer cleanup()
+
+	code, out := runGate(t, "check-knob-coverage.sh", root)
+	if code == 0 {
+		t.Fatalf("check-knob-coverage.sh exited 0 with an unregistered field planted directly "+
+			"on settings.Settings — the real settings guard (TestKnobCoverage_Settings) is not "+
+			"catching an unregistered field on the struct it is supposed to track.\noutput:\n%s", out)
+	}
+	if code != 2 {
+		t.Fatalf("check-knob-coverage.sh exited %d, want 2 (a TestKnobCoverage* test failed) — "+
+			"an unrelated failure mode may be masking the real one.\noutput:\n%s", code, out)
+	}
+	if !strings.Contains(out, "ZZGateProbeUnregisteredField") {
+		t.Fatalf("check-knob-coverage.sh failed, but its output does not name the planted "+
+			"ZZGateProbeUnregisteredField field — it may be failing for an unrelated reason.\noutput:\n%s", out)
+	}
+}
+
+// TestKnobCoverageGate_NoRealGuardStillFires is AC-061
+// (controls-and-readouts-that-tell-the-truth-01PMZ808 WP22, spec §5 G-2
+// case (b)).
+//
+// A literal "rename the real guard test" undercounts what actually
+// exists: as of this WP there are FIVE real guards outside
+// core/wiring/knobcoverage/ — core/rpc/settings_knob_coverage_test.go
+// (this WP's TestKnobCoverage_Settings), core/rpc/views/agentgraph/
+// chat/knob_coverage_guard_test.go (autonomy.ResolvedKnobs,
+// autonomy-knobs-live-01PMAG02), core/agentgraph/
+// knob_coverage_guard_test.go (ModelAttrs, structured-output-is-
+// reachable-01PMZE14), core/fleet/bundle_knob_coverage_test.go, and
+// core/llm/openaiwire/knob_coverage_guard_test.go. The script's exit-3
+// branch triggers only when its static
+// `grep -rlE '^func TestKnobCoverage' | grep -v core/wiring/
+// knobcoverage/` scan finds ZERO files — renaming only one guard while
+// four others survive does not reproduce it, because the check is
+// package-agnostic by design: it does not know settings.Settings
+// exists, only that SOME real guard does.
+//
+// This discovers every real guard the same way the script does (rather
+// than hardcoding a list that would silently go stale the next time a
+// mission adds one), renames every `TestKnobCoverage*` function in each
+// to fall outside the grep pattern, runs the gate expecting exit 3, and
+// restores all of them (LIFO) via defer. This is the shape a future
+// regression that deletes or renames every real guard at once (a bad
+// rebase, an over-eager cleanup) would actually produce, and the shape
+// pr.yml's already-standing claim ("the check-knob-coverage vacuous-pass
+// fix") was written against — see AC-062 below.
+func TestKnobCoverageGate_NoRealGuardStillFires(t *testing.T) {
+	root := repoRoot(t)
+
+	// Mirror the script's own discovery exactly (scripts/ci/
+	// check-knob-coverage.sh's `real_guards` variable) so this test
+	// keeps covering every guard a future mission adds, not a hardcoded
+	// snapshot of today's five.
+	cmd := exec.Command("bash", "-c",
+		`grep -rlE '^func TestKnobCoverage' --include='*_test.go' core 2>/dev/null | grep -v '^core/wiring/knobcoverage/'`)
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("discovering real TestKnobCoverage* guard files: %v", err)
+	}
+	files := strings.Fields(string(out))
+	if len(files) == 0 {
+		t.Fatal("discovered zero real TestKnobCoverage* guard files — either the discovery " +
+			"command drifted from check-knob-coverage.sh's own, or every real guard has already " +
+			"been deleted, which would make this test's premise (there is something to hide) false")
+	}
+
+	funcNameRE := regexp.MustCompile(`(?m)^func TestKnobCoverage`)
+
+	for _, rel := range files {
+		rel := rel
+		full := filepath.Join(root, rel)
+		orig, err := os.ReadFile(full)
+		if err != nil {
+			t.Fatalf("reading %s: %v", full, err)
+		}
+		if !funcNameRE.Match(orig) {
+			t.Fatalf("%s was returned by the discovery grep but does not match "+
+				"^func TestKnobCoverage on a second read — the file changed underneath this test", full)
+		}
+		mutated := funcNameRE.ReplaceAll(orig, []byte("func zzGateProbeRenamed_TestKnobCoverage"))
+		journalPlant(plantRecord{Path: full, Orig: string(orig), Existed: true, Planted: string(mutated)})
+		if err := os.WriteFile(full, mutated, 0o644); err != nil {
+			t.Fatalf("writing %s: %v", full, err)
+		}
+		defer func() {
+			if err := os.WriteFile(full, orig, 0o644); err != nil {
+				t.Errorf("restoring %s: %v — WORKING TREE IS DIRTY", full, err)
+			}
+			journalClear(full)
+		}()
+	}
+
+	code, out2 := runGate(t, "check-knob-coverage.sh", root)
+	if code != 3 {
+		t.Fatalf("check-knob-coverage.sh exited %d with all %d real TestKnobCoverage* guards "+
+			"(%v) renamed out of static-grep reach, want 3 (no real guard found) — the gate "+
+			"should have detected it would be checking only its own mechanism's self-test."+
+			"\noutput:\n%s", code, len(files), files, out2)
+	}
+	if !strings.Contains(out2, "no TestKnobCoverage* test exists outside") {
+		t.Fatalf("check-knob-coverage.sh exited 3 as expected, but its output does not give the "+
+			"expected diagnosis — it may be failing for an unrelated reason.\noutput:\n%s", out2)
+	}
+}
+
+// TestConfigNilCoverageGate_PlantedUnwiredFieldFires is the mandated
+// Tier-1 planted-violation proof for check-config-nil-coverage.sh
+// ("config-nil-coverage/unset-interface-field", trust-surfaces-that-fire-
+// 01PMZ202 spec.md §G-1 / WP26). Uses the same overlay technique as
+// TestNilOptionalDepsGate_PlantedUnwiredFieldFires above
+// (CONFIG_NIL_COVERAGE_OVERLAY, mirroring checknilopts's
+// NIL_OPTIONAL_DEPS_OVERLAY): the plant inserts a field into the MIDDLE
+// of an existing struct declaration (core/rpc/views/permissions/impl.go's
+// Config), which the shared plant() helper's append-at-EOF shape cannot
+// do. Never writes to the real file — a hard kill under -timeout leaves
+// nothing on disk but an OS-cleaned scratch dir.
+func TestConfigNilCoverageGate_PlantedUnwiredFieldFires(t *testing.T) {
+	root := repoRoot(t)
+	implPath := filepath.Join(root, "core", "rpc", "views", "permissions", "impl.go")
+
+	orig, err := os.ReadFile(implPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", implPath, err)
+	}
+
+	const anchor = "\tConfigTrimmer RecipeConfigTrimmer\n}\n"
+	if !strings.Contains(string(orig), anchor) {
+		t.Fatalf("expected Config struct closing shape not found in impl.go — the struct shape "+
+			"may have moved; update this test and the gate together:\n%q", anchor)
+	}
+	const mutatedAnchor = "\tConfigTrimmer RecipeConfigTrimmer\n" +
+		"\tZzGateProbe ZzGateProbeCollaborator\n}\n"
+	const probeType = "\n// ZzGateProbeCollaborator is a planted probe type for\n" +
+		"// TestConfigNilCoverageGate_PlantedUnwiredFieldFires. Overlay-only; never\n" +
+		"// written to the real file.\n" +
+		"type ZzGateProbeCollaborator interface {\n\tZz()\n}\n"
+
+	buildOverlay := func(t *testing.T, extraSuffix string) string {
+		t.Helper()
+		mutated := strings.Replace(string(orig), anchor, mutatedAnchor, 1) + probeType + extraSuffix
+		scratch := t.TempDir()
+		scratchImpl := filepath.Join(scratch, "impl_zz_gate_probe_config.go")
+		if err := os.WriteFile(scratchImpl, []byte(mutated), 0o644); err != nil {
+			t.Fatalf("writing scratch mutated impl.go: %v", err)
+		}
+		overlay := struct{ Replace map[string]string }{Replace: map[string]string{implPath: scratchImpl}}
+		overlayJSON, err := json.Marshal(overlay)
+		if err != nil {
+			t.Fatalf("marshalling overlay: %v", err)
+		}
+		overlayPath := filepath.Join(scratch, "overlay.json")
+		if err := os.WriteFile(overlayPath, overlayJSON, 0o644); err != nil {
+			t.Fatalf("writing overlay.json: %v", err)
+		}
+		return overlayPath
+	}
+
+	t.Run("config-nil-coverage/unset-interface-field", func(t *testing.T) {
+		overlayPath := buildOverlay(t, "")
+		code, out := runGateEnv(t, "check-config-nil-coverage.sh", root, map[string]string{
+			"CONFIG_NIL_COVERAGE_OVERLAY": overlayPath,
+		})
+		if code == 0 {
+			t.Fatalf("check-config-nil-coverage.sh exited 0 with a planted interface field "+
+				"(ZzGateProbe) on permissions.Config that is never set in any composite literal "+
+				"or plain assignment — the gate cannot fail.\noutput:\n%s", out)
+		}
+		if !strings.Contains(out, "ZzGateProbe") {
+			t.Fatalf("gate failed, but its output does not mention ZzGateProbe "+
+				"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+		}
+	})
+
+	// Negative control: the identical planted field, this time genuinely
+	// set in a production (overlay-only, non-test) composite literal.
+	// Proves the gate does not fire unconditionally — it specifically
+	// requires the UNSET case, not merely the field's existence.
+	t.Run("set-interface-field-does-not-fire", func(t *testing.T) {
+		const wiring = "\ntype zzGateProbeConfigImpl struct{}\n\n" +
+			"func (zzGateProbeConfigImpl) Zz() {}\n\n" +
+			"var zzGateProbeConfigWired = Config{ZzGateProbe: zzGateProbeConfigImpl{}}\n"
+		overlayPath := buildOverlay(t, wiring)
+		code, out := runGateEnv(t, "check-config-nil-coverage.sh", root, map[string]string{
+			"CONFIG_NIL_COVERAGE_OVERLAY": overlayPath,
+		})
+		if code != 0 {
+			t.Fatalf("check-config-nil-coverage.sh flagged ZzGateProbe even though this variant "+
+				"assigns it a non-nil value in a production composite literal — the gate fires on "+
+				"everything, not just the real defect class.\noutput:\n%s", out)
+		}
+	})
+}
+
+// TestConfigNilCoverageGate_PlantedOrphanWithOptionFires is the mandated
+// Tier-2 planted-violation proof ("config-nil-coverage/orphan-with-
+// option", trust-surfaces-that-fire-01PMZ202 spec.md §G-1 / WP26).
+//
+// DEVIATION FROM THE SPEC'S LITERAL EXAMPLE, documented here: spec.md's
+// own illustration is `func WithZzGateProbe(x int) Option { return
+// func(*API) {} }` — a concrete `int` parameter. check-config-nil-
+// coverage.sh's Tier 2 deliberately restricts candidates to With*
+// functions/methods whose FIRST parameter is a non-empty INTERFACE (see
+// scripts/ci/cmd/checkconfig/main.go's findWithFuncs — the restriction
+// site carries the full justification: an unrestricted "every With*
+// func" scan found ~213 candidates and ~200 unlisted violations
+// dominated by legitimate test-only mock-injection options
+// (*http.Client, endpoint strings, clock funcs), not this defect class,
+// while every one of the spec's own five named Tier-2 examples
+// (audit.WithBackend, audit.WithSweepableBackend,
+// cedar.WithPermissionHookRunner, session.WithSessionHookRunner,
+// slashcmd.(*Dispatch).WithAuditEmitter) takes an interface-typed first
+// parameter). Planting the spec's literal `int`-typed illustration would
+// land OUTSIDE this gate's documented, deliberately-narrowed scope and
+// would not exercise the implemented property at all — it would silently
+// pass this proof while proving nothing about the gate's real Tier-2
+// logic. This proof therefore uses an interface-typed collaborator
+// parameter instead, matching what the gate actually checks; the case
+// name is unchanged from the spec ("config-nil-coverage/orphan-with-
+// option") since it identifies the SAME defect class (an orphan
+// injector), not the specific parameter type.
+func TestConfigNilCoverageGate_PlantedOrphanWithOptionFires(t *testing.T) {
+	root := repoRoot(t)
+
+	t.Run("config-nil-coverage/orphan-with-option", func(t *testing.T) {
+		probePath := filepath.Join(root, "core", "rpc", "views", "audit", "zz_gate_probe.go")
+		goContent := `package audit
+
+// ZzGateProbeCollaborator is a planted probe type for
+// TestConfigNilCoverageGate_PlantedOrphanWithOptionFires.
+type ZzGateProbeCollaborator interface {
+	Zz()
+}
+
+// WithZzGateProbe is a planted orphan injector: exported, "With"-prefixed,
+// takes a non-empty-interface first parameter (the shape this gate's
+// Tier 2 targets), and is never called anywhere in this file or the rest
+// of the tree.
+func WithZzGateProbe(c ZzGateProbeCollaborator) Option {
+	return func(a *API) {}
+}
+`
+		cleanup := plant(t, probePath, goContent, "")
+		defer cleanup()
+
+		code, out := runGate(t, "check-config-nil-coverage.sh", root)
+		if code == 0 {
+			t.Fatalf("check-config-nil-coverage.sh exited 0 with a planted orphan With* function "+
+				"(WithZzGateProbe) that has zero callers anywhere under core/ — the gate cannot "+
+				"fail.\noutput:\n%s", out)
+		}
+		if !strings.Contains(out, "WithZzGateProbe") {
+			t.Fatalf("gate failed, but its output does not mention WithZzGateProbe "+
+				"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+		}
+	})
+
+	// Negative control: the identical orphan-shaped With* function, but
+	// called once from a real (non-test) call site in the same plant.
+	// Proves the gate does not fire on every With* declaration
+	// unconditionally — only on ones with zero callers.
+	t.Run("called-with-option-does-not-fire", func(t *testing.T) {
+		probePath := filepath.Join(root, "core", "rpc", "views", "audit", "zz_gate_probe_called.go")
+		goContent := `package audit
+
+type zzGateProbeCalledCollaborator interface {
+	Zz()
+}
+
+type zzGateProbeCalledImpl struct{}
+
+func (zzGateProbeCalledImpl) Zz() {}
+
+// WithZzGateProbeCalled is a planted With* function that IS called below —
+// the true-negative companion to WithZzGateProbe above.
+func WithZzGateProbeCalled(c zzGateProbeCalledCollaborator) Option {
+	return func(a *API) {}
+}
+
+var zzGateProbeCalledWired = WithZzGateProbeCalled(zzGateProbeCalledImpl{})
+`
+		cleanup := plant(t, probePath, goContent, "")
+		defer cleanup()
+
+		code, out := runGate(t, "check-config-nil-coverage.sh", root)
+		if code != 0 {
+			t.Fatalf("check-config-nil-coverage.sh flagged WithZzGateProbeCalled even though it "+
+				"is called at package scope in the same plant — the gate fires on every With* "+
+				"declaration, not just uncalled ones.\noutput:\n%s", out)
+		}
+	})
+}
+
+// TestShippedPolicyMatchableGate_PlantedContextMismatchFires is the
+// mandated planted-violation proof for check-shipped-policy-matchable.sh
+// (G-4, trust-surfaces-that-fire-01PMZ202 spec.md §G-4 / WP18): "add a
+// rule keyed on a context attribute the action never populates."
+//
+// Plants a new .cedar file naming a REAL, already-wired action
+// (memory_write / ActionMemoryWrite) and its correct resource type
+// (Memory, matching cedar.MemoryUID) — so legs (a) and (b) both pass —
+// but with a `when` clause reading a context key CheckMemoryWrite
+// (core/policy/cedar/hooks.go) never sets: CheckMemoryWrite calls
+// `g.Evaluate(ctx, UserUID(), ActionMemoryWrite, MemoryUID(scope), nil)`
+// — a literal nil context map, zero keys, ever. This isolates leg (c)
+// specifically, the exact shape the spec's own planted-violation
+// description names.
+func TestShippedPolicyMatchableGate_PlantedContextMismatchFires(t *testing.T) {
+	root := repoRoot(t)
+
+	t.Run("shipped-policy-matchable/context-attribute-never-populated", func(t *testing.T) {
+		probePath := filepath.Join(root, "core", "policy", "cedar", "policies", "zz_gate_probe.cedar")
+		content := `// zz_gate_probe.cedar — planted by
+// TestShippedPolicyMatchableGate_PlantedContextMismatchFires. Action and
+// resource type are both REAL and correctly matched (memory_write /
+// Memory, mirroring default_policy.cedar's own memory_write rule) so
+// legs (a) and (b) pass — only the when-clause's context key is bogus,
+// isolating leg (c).
+forbid (
+    principal == User::"local",
+    action == Action::"memory_write",
+    resource is Memory
+) when {
+    context.zz_gate_probe_key == "x"
+};
+`
+		cleanup := plant(t, probePath, content, "")
+		defer cleanup()
+
+		code, out := runGate(t, "check-shipped-policy-matchable.sh", root)
+		if code == 0 {
+			t.Fatalf("check-shipped-policy-matchable.sh exited 0 with a planted rule reading "+
+				"context.zz_gate_probe_key for memory_write, which CheckMemoryWrite never "+
+				"populates (it passes a literal nil context map) — the gate cannot fail.\n"+
+				"output:\n%s", out)
+		}
+		if !strings.Contains(out, "zz_gate_probe_key") {
+			t.Fatalf("gate failed, but its output does not mention zz_gate_probe_key "+
+				"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+		}
+	})
+
+	// Negative control: the identical rule shape (same action, same
+	// resource type), but with a context key CheckMemoryWrite's sibling
+	// evaluators are known to populate for a DIFFERENT, correctly-matched
+	// action/resource/context triple — read_filesystem's canonical_path.
+	// This does NOT prove read_filesystem's OWN rules are fine (they
+	// already are, per the real tree); it proves THIS gate does not fire
+	// on every planted .cedar file unconditionally by using the exact
+	// action/resource/context triple this gate independently verifies is
+	// wired.
+	t.Run("well-formed-rule-does-not-fire", func(t *testing.T) {
+		probePath := filepath.Join(root, "core", "policy", "cedar", "policies", "zz_gate_probe_healthy.cedar")
+		content := `// zz_gate_probe_healthy.cedar — negative control for
+// TestShippedPolicyMatchableGate_PlantedContextMismatchFires. Same shape
+// as the real, already-matchable filesystem-full-recommended.cedar
+// rules: read_filesystem / FilesystemOp / context.canonical_path.
+forbid (
+    principal == User::"local",
+    action == Action::"read_filesystem",
+    resource is FilesystemOp
+) when {
+    context.canonical_path like "*/zz-gate-probe/*"
+};
+`
+		cleanup := plant(t, probePath, content, "")
+		defer cleanup()
+
+		code, out := runGate(t, "check-shipped-policy-matchable.sh", root)
+		if code != 0 {
+			t.Fatalf("check-shipped-policy-matchable.sh flagged a well-formed rule using the "+
+				"exact action/resource-type/context-key triple its own evaluator (core/tools/fs/"+
+				"gate.go) is known to produce — the gate fires unconditionally on any planted "+
+				".cedar file, not just unmatchable ones.\noutput:\n%s", out)
+		}
+	})
+}
+
+// TestDeadNilBranchGate_PlantedDeclNilCheckFires is
+// subagent-control-and-background-tasks-01PMZB11 UNIT-12's
+// planted-violation proof for check-dead-nil-branch.sh
+// (scripts/ci/cmd/checkdeadnilbranch), the gate for the class
+// core/rpc/builtins_wiring.go:312-313 shipped:
+//
+//	var subagentSeam agentgraph.BranchSeam // nil — no child-run spawner yet
+//	if subagentSeam != nil { registerSubagentDispatchTool(...) }
+//
+// UNIT-6 already fixed that one instance; this gate exists so the
+// CLASS — a zero-value `var` checked `!= nil` in the same block with no
+// intervening write — cannot recur invisibly. Uses the SAME
+// overlay-only technique as TestNilOptionalDepsGate_* above (never
+// writes to the real tracked file — see checkdeadnilbranch/main.go's
+// overlayEnvVar doc for why a bare os.WriteFile + defer restore is
+// unsafe under a hard `-timeout` kill).
+//
+// One overlay plants THREE functions and one gate run distinguishes
+// all three, which is a stronger proof than three separate runs would
+// be — it shows the gate actually discriminates the defect shape from
+// its two nearest look-alikes in the SAME file, not just that some
+// input makes it fail and some other input does not:
+//
+//  1. zzGateProbeDeadBranch: the real defect shape verbatim (renamed
+//     locals only). Must fire, and the violation line must name
+//     deadProbeSeam.
+//  2. zzGateProbeLiveBranch: identical shape, but liveProbeSeam is
+//     assigned a real value before the check. Must NOT appear in the
+//     gate's violation output.
+//  3. zzGateProbeOptionalDep: the exact two shapes UNIT-12's own task
+//     description calls out as required true negatives —
+//     `opts.Tasks != nil` (a struct-field selector, never a local
+//     `var`) and `if posture != nil` (a function parameter, never a
+//     local `var`) — neither is a candidate by construction, so
+//     neither should appear in the output either.
+func TestDeadNilBranchGate_PlantedDeclNilCheckFires(t *testing.T) {
+	root := repoRoot(t)
+	implPath := filepath.Join(root, "core", "rpc", "builtins_wiring.go")
+
+	orig, err := os.ReadFile(implPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", implPath, err)
+	}
+
+	const probeSuffix = `
+// ZzGateProbeSeam is a planted probe type for
+// TestDeadNilBranchGate_PlantedDeclNilCheckFires. Self-contained (no
+// new import needed) — a non-empty interface is enough to be nilable.
+type ZzGateProbeSeam interface {
+	ZzGateProbe()
+}
+
+// zzGateProbeDeadBranch reproduces core/rpc/builtins_wiring.go's own
+// pre-UNIT-6 shape verbatim (renamed locals only): a zero-value var
+// checked != nil with NO assignment anywhere in the function. The gate
+// must report deadProbeSeam.
+func zzGateProbeDeadBranch() {
+	var deadProbeSeam ZzGateProbeSeam // nil — planted, deliberately never assigned
+	if deadProbeSeam != nil {
+		deadProbeSeam.ZzGateProbe()
+	}
+}
+
+type zzGateProbeSeamImpl struct{}
+
+func (zzGateProbeSeamImpl) ZzGateProbe() {}
+
+// zzGateProbeLiveBranch is the negative control for the SAME shape:
+// liveProbeSeam IS assigned before the check. Must not appear in the
+// gate's output.
+func zzGateProbeLiveBranch() {
+	var liveProbeSeam ZzGateProbeSeam
+	liveProbeSeam = zzGateProbeSeamImpl{}
+	if liveProbeSeam != nil {
+		liveProbeSeam.ZzGateProbe()
+	}
+}
+
+// zzGateProbeOptionalDepArgs + zzGateProbeOptionalDep are UNIT-12's
+// own required true negatives verbatim: a struct-field selector
+// (opts.Tasks) and a function parameter (posture), neither of which is
+// a local var declaration — neither is a candidate for this gate by
+// construction, not by a special-cased exclusion.
+type zzGateProbeOptionalDepArgs struct {
+	Tasks ZzGateProbeSeam
+}
+
+func zzGateProbeOptionalDep(opts zzGateProbeOptionalDepArgs, posture ZzGateProbeSeam) {
+	if opts.Tasks != nil {
+		opts.Tasks.ZzGateProbe()
+	}
+	if posture != nil {
+		posture.ZzGateProbe()
+	}
+}
+`
+
+	scratch := t.TempDir()
+	scratchImpl := filepath.Join(scratch, "builtins_wiring_zz_gate_probe.go")
+	if err := os.WriteFile(scratchImpl, append(append([]byte{}, orig...), []byte(probeSuffix)...), 0o644); err != nil {
+		t.Fatalf("writing scratch mutated builtins_wiring.go: %v", err)
+	}
+	overlay := struct{ Replace map[string]string }{Replace: map[string]string{implPath: scratchImpl}}
+	overlayJSON, err := json.Marshal(overlay)
+	if err != nil {
+		t.Fatalf("marshalling overlay: %v", err)
+	}
+	overlayPath := filepath.Join(scratch, "overlay.json")
+	if err := os.WriteFile(overlayPath, overlayJSON, 0o644); err != nil {
+		t.Fatalf("writing overlay.json: %v", err)
+	}
+
+	// No defer/restore anywhere in this test: implPath is never
+	// written. A kill at any point leaves nothing but an OS-cleaned
+	// scratch dir.
+	code, out := runGateEnv(t, "check-dead-nil-branch.sh", root, map[string]string{
+		"DEAD_NIL_BRANCH_OVERLAY": overlayPath,
+	})
+	if code == 0 {
+		t.Fatalf("check-dead-nil-branch.sh exited 0 with a planted, verbatim reproduction of "+
+			"core/rpc/builtins_wiring.go's pre-UNIT-6 dead-branch shape (deadProbeSeam, never "+
+			"assigned) — the gate cannot fail.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "deadProbeSeam") {
+		t.Fatalf("gate failed, but its output does not name deadProbeSeam "+
+			"(a broken/unrelated failure would still satisfy a bare non-zero exit code):\n%s", out)
+	}
+	if strings.Contains(out, "liveProbeSeam") {
+		t.Fatalf("gate flagged liveProbeSeam, which IS assigned a real value before its nil check — "+
+			"the gate cannot tell a dead branch from a live one:\n%s", out)
+	}
+	if strings.Contains(out, "opts.Tasks") || strings.Contains(out, "\tTasks ") ||
+		strings.Contains(out, "posture") {
+		t.Fatalf("gate flagged the optional-dependency negative control (opts.Tasks / posture) — "+
+			"these are a struct field and a function parameter, never a local `var`, and must never "+
+			"be candidates:\n%s", out)
 	}
 }

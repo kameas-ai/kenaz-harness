@@ -16,6 +16,7 @@ function makeResolved(overrides: Partial<ResolvedAutonomy> = {}): ResolvedAutono
       recapStyle: 'brief',
       continueOnError: 'retry-once',
       destructiveActionPosture: 'confirm',
+      riskThreshold: 60,
       sourceTrace: {
         maxIterations: 'session',
         askOnAmbiguity: 'project',
@@ -24,6 +25,7 @@ function makeResolved(overrides: Partial<ResolvedAutonomy> = {}): ResolvedAutono
         recapStyle: 'tier-default',
         continueOnError: 'tier-default',
         destructiveActionPosture: 'tier-default',
+        riskThreshold: 'tier-default',
       },
       tier: 'bold',
     },
@@ -111,6 +113,8 @@ function mountChip(resolved: ResolvedAutonomy) {
       getAutonomy: async () => resolved.session,
       setAutonomy,
       resolveAutonomy,
+      getKnobsDefault: async () => null,
+      setKnobsDefault: async () => undefined,
       export: async () => ({ path: '', byteCount: 0 }),
     },
   });

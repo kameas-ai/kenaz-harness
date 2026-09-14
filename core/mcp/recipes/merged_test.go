@@ -319,3 +319,80 @@ func TestMergedCatalogSourceFieldDefaultsApplied(t *testing.T) {
 		t.Errorf("Source = %q, want shipped (default)", got[0].Source)
 	}
 }
+
+// ── Org layer (fleet-org-config-inheritance-01NORGX01 WP02) ────────────────
+
+// TestMergedCatalogOrgShadowsUserRegistryShipped proves the org layer wins
+// over EVERY other source — not just user, which TestMergedCatalogUserShadowsShipped
+// already covers for the pre-existing three-source case. ConflictPolicyOrgWinsReadonly
+// requires the org copy to be the one every caller (including OAuth sign-in call
+// sites that read recipe.Auth.ClientID) resolves through Get/Recipes.
+func TestMergedCatalogOrgShadowsUserRegistryShipped(t *testing.T) {
+	mc := recipes.NewMergedCatalog(
+		func() []recipes.Recipe { return []recipes.Recipe{stubRecipe("slack", recipes.SourceShipped, "Shipped Slack")} },
+		func() []recipes.Recipe { return []recipes.Recipe{stubRecipe("slack", recipes.SourceRegistry, "Registry Slack")} },
+		func() []recipes.Recipe { return []recipes.Recipe{stubRecipe("slack", recipes.SourceUser, "User Slack")} },
+	)
+	mc.SetOrgRecipes([]recipes.Recipe{stubRecipe("slack", recipes.SourceOrg, "Org Slack")})
+
+	got := mc.Recipes()
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1 (org shadows, not appends)", len(got))
+	}
+	if got[0].Source != recipes.SourceOrg || got[0].DisplayName != "Org Slack" {
+		t.Errorf("got %+v, want the org copy to win", got[0])
+	}
+	r, ok := mc.Get("slack")
+	if !ok || r.Source != recipes.SourceOrg {
+		t.Errorf("Get(slack) = %+v, %v — want the org copy", r, ok)
+	}
+}
+
+// TestMergedCatalogOrgSourceDefaultsApplied mirrors
+// TestMergedCatalogSourceFieldDefaultsApplied for the org layer: a caller
+// that forgets to stamp Source still gets tagged "org" on the merged view.
+func TestMergedCatalogOrgSourceDefaultsApplied(t *testing.T) {
+	mc := recipes.NewMergedCatalog(nil, nil, nil)
+	mc.SetOrgRecipes([]recipes.Recipe{{ID: "acme-internal", Command: []string{"x"}}})
+	got := mc.Recipes()
+	if len(got) != 1 || got[0].Source != recipes.SourceOrg {
+		t.Fatalf("got %+v, want one recipe stamped SourceOrg", got)
+	}
+}
+
+// TestMergedCatalogSetOrgRecipesNilClears proves the "removing fleet
+// reverts to local-only" success criterion: SetOrgRecipes(nil) drops the
+// overlay entirely and the member's own (never-deleted) recipe reappears
+// in the merged view.
+func TestMergedCatalogSetOrgRecipesNilClears(t *testing.T) {
+	mc := recipes.NewMergedCatalog(
+		nil, nil,
+		func() []recipes.Recipe { return []recipes.Recipe{stubRecipe("slack", recipes.SourceUser, "User Slack")} },
+	)
+	mc.SetOrgRecipes([]recipes.Recipe{stubRecipe("slack", recipes.SourceOrg, "Org Slack")})
+	if r, _ := mc.Get("slack"); r.Source != recipes.SourceOrg {
+		t.Fatalf("precondition: org should be winning, got Source=%q", r.Source)
+	}
+
+	mc.SetOrgRecipes(nil)
+	r, ok := mc.Get("slack")
+	if !ok || r.Source != recipes.SourceUser || r.DisplayName != "User Slack" {
+		t.Errorf("after SetOrgRecipes(nil), Get(slack) = %+v, %v — want the member's own recipe restored", r, ok)
+	}
+}
+
+// TestMergedCatalogSetOrgRecipesDefensiveCopy proves a caller mutating its
+// own slice after SetOrgRecipes cannot retroactively change what was
+// installed — SetOrgRecipes must copy, not alias.
+func TestMergedCatalogSetOrgRecipesDefensiveCopy(t *testing.T) {
+	mc := recipes.NewMergedCatalog(nil, nil, nil)
+	orgRecipes := []recipes.Recipe{stubRecipe("slack", recipes.SourceOrg, "Org Slack")}
+	mc.SetOrgRecipes(orgRecipes)
+
+	orgRecipes[0].DisplayName = "MUTATED"
+
+	r, ok := mc.Get("slack")
+	if !ok || r.DisplayName != "Org Slack" {
+		t.Errorf("Get(slack).DisplayName = %q, ok=%v — want unaffected by post-call mutation of the caller's slice", r.DisplayName, ok)
+	}
+}

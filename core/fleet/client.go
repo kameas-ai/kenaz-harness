@@ -134,21 +134,6 @@ func (c *Client) SignIn(ctx context.Context) (Identity, error) {
 	return Identity{}, ErrNotSignedIn // real impl in WP02
 }
 
-// SignOut clears persisted tokens and identity. Returns ErrFleetDisabled
-// on nop clients.
-func (c *Client) SignOut(ctx context.Context) error {
-	if c == nil || c.isNop {
-		return ErrFleetDisabled
-	}
-	if err := ClearTokens(); err != nil {
-		return err
-	}
-	if c.dataDir != "" {
-		_ = clearIdentityFile(c.dataDir) // best-effort
-	}
-	return nil
-}
-
 // SignedIn reports whether the client has a valid, non-expired session.
 //
 // FR-004: returns false when:

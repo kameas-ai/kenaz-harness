@@ -69,7 +69,7 @@ func (effortCommand) Run(_ context.Context, env Env, args []string) (Result, err
 			Kind: ResultKindInfo,
 			Text: fmt.Sprintf("reasoning effort set to %q — takes effect on the next message", arg),
 			Metadata: map[string]any{
-				MetaKeyReasoningKnob: knob,
+				MetaKeyReasoningKnob: reasoningKnobMetadata(knob),
 			},
 		}, nil
 	}
@@ -93,9 +93,44 @@ func (effortCommand) Run(_ context.Context, env Env, args []string) (Result, err
 		Kind: ResultKindInfo,
 		Text: fmt.Sprintf("reasoning token budget set to %d — takes effect on the next message", budget),
 		Metadata: map[string]any{
-			MetaKeyReasoningKnob: knob,
+			MetaKeyReasoningKnob: reasoningKnobMetadata(knob),
 		},
 	}, nil
+}
+
+// reasoningKnobMetadata converts a llm.ReasoningConfig into the literal
+// camelCase map the frontend's sole consumer
+// (SessionsView.vue's slash-result handler, provider-implementation-
+// uniformity-01KQ8V4F WP07) actually reads (model-settings-reach-the-
+// model-01PMZ101 UNIT-6 / WP11, FR-010).
+//
+// llm.ReasoningConfig's own JSON tags are snake_case
+// (openai_effort/anthropic_thinking_budget — core/llm/capabilities.go),
+// matching the wire contract every OTHER consumer of that struct
+// (KnobsToParams, the RPC/session-knobs surface) needs. Marshalling the
+// struct directly into this Result's Metadata therefore produced
+// {"reasoningKnob":{"openai_effort":"high"}} — verified empirically
+// (spec §13 item 3) — while SessionsView.vue reads
+// knob['openAIEffort'] / knob['anthropicThinkingBudget']. The two never
+// matched, so every /effort call updated the confirmation text but never
+// the frontend's activeReasoningConfig state.
+//
+// Changing llm.ReasoningConfig's struct tags instead would have been the
+// wrong lever: it is the wire type for /effort's OWN Sessions_SetKnobsDefault
+// persistence path too (via llm.RequestKnobs.Reasoning) and for
+// KnobsToParams, so retagging it to camelCase would silently break both
+// of those. This command builds its own literal map instead, the same
+// way cmd_model.go emits plain string metadata keys rather than
+// marshalling a Go struct.
+func reasoningKnobMetadata(knob llm.ReasoningConfig) map[string]any {
+	out := map[string]any{}
+	if knob.OpenAIEffort != "" {
+		out["openAIEffort"] = knob.OpenAIEffort
+	}
+	if knob.AnthropicThinkingBudget > 0 {
+		out["anthropicThinkingBudget"] = knob.AnthropicThinkingBudget
+	}
+	return out
 }
 
 // isEffortString returns true when s is one of the valid effort strings.
