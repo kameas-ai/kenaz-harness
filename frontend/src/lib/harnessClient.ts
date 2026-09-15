@@ -26,6 +26,7 @@ import type {
   WireSessionKnobs,
   Session,
   SiteSummary,
+  SiteEnvEntry,
   Project,
   Provider,
   AddProviderInput,
@@ -990,6 +991,15 @@ interface WailsBindingsLike {
   Sites_Status(site: string): Promise<SiteSummary>;
   Sites_Logs(site: string, tailLines: number): Promise<string>;
   Sites_Delete(site: string): Promise<void>;
+  /**
+   * Sets one or more declared environment variable values for site
+   * (fleet-enforcement-truth-01PMZ505 WP09). Write-only — values are never
+   * returned by Sites_EnvList. This is the ONLY way secrets reach a site;
+   * they must never ride in a deploy/manifest payload.
+   */
+  Sites_EnvSet(site: string, vars: Record<string, string>): Promise<void>;
+  /** Returns declared env var names + metadata for site. Never returns a value. */
+  Sites_EnvList(site: string): Promise<import('./types').SiteEnvEntry[]>;
   // ── plan-mode-posture-01KZNP3F WP06 — plan approval actions ─────────────
   Planmode_Approve(req: { session_id: string; plan_id: string }): Promise<Record<string, unknown>>;
   Planmode_Discard(req: { session_id: string; plan_id: string }): Promise<Record<string, unknown>>;
@@ -3635,6 +3645,15 @@ export interface SitesClient {
   logs(site: string, tailLines: number): Promise<string>;
   /** Delete a site and all its deployments. */
   delete(site: string): Promise<void>;
+  /**
+   * Sets one or more declared environment variable values for site
+   * (fleet-enforcement-truth-01PMZ505 WP09). Write-only: values are
+   * accepted here and never surfaced by envList(). This is the ONLY way
+   * secrets reach a site — they must never ride in a deploy manifest.
+   */
+  envSet(site: string, vars: Record<string, string>): Promise<void>;
+  /** Returns declared env var names + metadata for site. Never returns a value. */
+  envList(site: string): Promise<SiteEnvEntry[]>;
 }
 
 // ── Compliance client (fleet-audit-archival-01NDFSEX13 WP05) ────────────────
@@ -4597,6 +4616,9 @@ export function createHarnessClient(): HarnessClient {
       status: (site) => b().Sites_Status(site),
       logs: (site, tailLines) => b().Sites_Logs(site, tailLines),
       delete: (site) => b().Sites_Delete(site),
+      // fleet-enforcement-truth-01PMZ505 WP09.
+      envSet: (site, vars) => b().Sites_EnvSet(site, vars),
+      envList: (site) => b().Sites_EnvList(site),
     },
     // ── Compliance (fleet-audit-archival-01NDFSEX13 WP05) ────────────────
     compliance: {
@@ -6356,6 +6378,9 @@ export function createFakeHarnessClient(
       }),
       logs: async () => '',
       delete: noop,
+      // fleet-enforcement-truth-01PMZ505 WP09.
+      envSet: noop,
+      envList: async () => [],
     },
     // ── Compliance (fleet-audit-archival-01NDFSEX13 WP05) ────────────────
     compliance: {
