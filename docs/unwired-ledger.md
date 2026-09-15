@@ -520,12 +520,11 @@ names explicitly.
 - **The three fleet audit kinds with zero emit call sites**
   (`KindFleetConfigApplied`/`KindFleetConfigSignatureRejected`/
   `KindFleetConfigPartialFailure`) — **already recorded above** (2026-09-12,
-  `01NORGX01` WP02 triage entry) as "Owner: unassigned. Blocker: threading
-  an audit emitter through `ConfigPoller`". This mission's spec never
-  named these three kinds as one of its fourteen findings; they were
-  flagged as an adjacent fact for this pass to consider and are recorded
-  here as explicitly NOT this mission's to fix, matching the existing
-  entry's scoping rather than duplicating it.
+  `01NORGX01` WP02 triage entry). **UPDATE (2026-09-15, `01NORGX01`
+  WP05):** `KindFleetConfigApplied` is now wired (see the updated entry
+  above) — this mission's own FR-010 is met for the section it owns. The
+  other two kinds remain open, owner alec, same `ConfigPoller`-plumbing
+  blocker.
 - **`config_pull.go`'s stale header claiming a `bundle.json` disk cache**
   — likewise already recorded in the `01NORGX01` entry above; not
   re-fixed here for the same cross-cutting-architecture reason that entry
@@ -4040,7 +4039,38 @@ here because they are also `RegisterDeferred`-shaped gaps this sweep found
 but did not fix (both predate this mission and are cross-cutting to
 `fleet-config-pull-01NDFSEX10`, not `01NORGX01`-specific):**
 
-1. `audit.KindFleetConfigApplied`, `KindFleetConfigSignatureRejected`, and
+1. **UPDATE (2026-09-15, `01NORGX01` WP05):** `KindFleetConfigApplied` is
+   now wired — `compositeConfigApplier.ApplyBundle`
+   (`core/rpc/views/settings/fleet.go`) emits it directly on a fully-clean
+   apply, via a new `auditEmitter` field on `fleetState` +
+   `SetAuditEmitter`, wired from `core/rpc/api.go` reusing the same
+   `fleetAuditEmitter` bridge instance already constructed for the
+   catalog/sync views (no new construction). The payload
+   (`FleetConfigAppliedPayload`) was extended with `OrgID`/`OrgName` (read
+   best-effort from the on-disk `fleet.Identity` cache) and
+   `ProvisionedRecipeIDs`, closing this mission's FR-010 ("naming the org,
+   the recipe/provider ids, and the bundle_id") for the one section this
+   mission owns. Pinned by
+   `core/rpc/views/settings/fleet_wp05_audit_test.go`. The emission point
+   turned out to be `compositeConfigApplier.ApplyBundle` itself, not
+   `ConfigPoller` — every recipe/provider id needed for the payload is
+   already local to that function, so this did NOT require the
+   constructor-signature change originally assumed below; only
+   `ConfigPoller`-level signals (signature rejection, which section failed)
+   still need that plumbing.
+   
+   **Still open, same as before:** `KindFleetConfigSignatureRejected` (needs
+   `ConfigPoller.poll()`'s signature-verify-failure branch, before
+   `ApplyBundle` is ever called) and `KindFleetConfigPartialFailure` (needs
+   per-section failure attribution — today's `errs []error` slice carries
+   section names only inside free-text error strings, not a structured
+   tag). Owner: alec. Blocker: threading an audit emitter through
+   `ConfigPoller` for the signature-rejection case, plus a section-tagged
+   error type for the partial-failure case (cross-cutting to
+   `fleet-config-pull-01NDFSEX10`, not `01NORGX01`-specific — same
+   reasoning as the original entry below).
+   
+   Original entry (2026-09-12), preserved for history: `audit.KindFleetConfigApplied`, `KindFleetConfigSignatureRejected`, and
    `KindFleetConfigPartialFailure` (`core/context/audit/audit.go:265-286`,
    payload structs at `:1345-1381`) are declared with full payload types
    and privacy-invariant doc comments but have **zero emit call sites

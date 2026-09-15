@@ -3751,6 +3751,15 @@ func New(c *core.Core, opts ...Option) *API {
 		}
 		flAudit := &fleetAuditEmitter{impl: a.auditImpl}
 
+		// fleet-org-config-inheritance-01NORGX01 WP05 (FR-010): the same
+		// bridge instance also backs compositeConfigApplier's
+		// fleet.config.applied event — no separate construction needed,
+		// this is exactly the interface shape settings.auditEmitter wants
+		// (EmitFleetEvent(ctx, kind, payload) error).
+		if a.settingsImpl != nil {
+			a.settingsImpl.SetAuditEmitter(flAudit)
+		}
+
 		// Catalog (WP02)
 		var catalogSigner *corefleet.DeviceSigner // kept for SkillDeps wiring below
 		if flDataDir != "" {
