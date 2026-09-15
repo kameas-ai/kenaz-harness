@@ -12,10 +12,25 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/context/audit"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
 	"github.com/kameas-ai/kenaz-harness/core/runposture"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 	"github.com/kameas-ai/kenaz-harness/core/wiring/knobcoverage"
 )
+
+// defaultLayer3PromptTimeout bounds how long a layer-3-originated
+// confirm prompt (risk-rated-autonomy-01PMRA01 WP07) may sit unanswered
+// before it auto-denies. Mirrors core/rpc/views/agentgraph's
+// defaultApprovalTimeout (24h, approval-node-01PMZC12 UNIT-4): both are
+// "someone must eventually decide, but an autonomous run must never
+// park literally forever" backstops, not snappy per-request SLAs — a
+// human working an attended session should not have a real confirm
+// modal spuriously auto-deny out from under them because they stepped
+// away. This is DELIBERATELY separate from confirm.go's rung-6 "no
+// deadline" invariant (owner decision 1): only prompts that reached the
+// confirm bus via layer 3 (an unmatched Cedar action a rater could not
+// resolve to Allow) get this deadline at all.
+const defaultLayer3PromptTimeout = 24 * time.Hour
 
 // AutonomyKnobsProvider is the narrow surface the kernel tool adapter
 // needs to apply the autonomy posture before each tool call. The
@@ -135,6 +150,20 @@ type kernelToolAdapter struct {
 	// wiring passes the same live Cedar engine already used for
 	// SecretGate (see chat.Config.RiskGate / core/rpc/api.go).
 	gate cedar.Gate
+
+	// rater is risk-rated-autonomy-01PMRA01 WP05's RiskRater. Consulted
+	// ONLY when gate is wired AND the resolved threshold > 0 (FR-008: a
+	// call whose result cannot change the answer must not spend a model
+	// call). nil leaves rung 0's layer-3 branch at the WP02/WP03 stub
+	// (always Confirm) — byte-identical to every caller that has not
+	// wired a rater.
+	rater risk.RiskRater
+
+	// layer3PromptTimeout bounds a layer-3-originated confirm prompt
+	// (WP07). Zero (the constructor default before any withRater/test
+	// override) falls back to defaultLayer3PromptTimeout at call time —
+	// see promptConfirmEach.
+	layer3PromptTimeout time.Duration
 }
 
 // newKernelToolAdapter wraps the chassis-side pool + resolver.
@@ -168,6 +197,27 @@ func (a *kernelToolAdapter) withAutonomy(provider AutonomyKnobsProvider) *kernel
 // (the default) leaves resolveConfirmEach unchanged from before WP02.
 func (a *kernelToolAdapter) withGate(g cedar.Gate) *kernelToolAdapter {
 	a.gate = g
+	return a
+}
+
+// withRater attaches the risk-rated-autonomy-01PMRA01 WP05 RiskRater
+// consulted after a layer-3 Confirm verdict, ahead of the prompt. A nil
+// rater (the default) leaves rung 0's layer-3 branch at the WP02/WP03
+// stub. Returns the same pointer so callers can chain at construction
+// time.
+func (a *kernelToolAdapter) withRater(r risk.RiskRater) *kernelToolAdapter {
+	a.rater = r
+	return a
+}
+
+// withLayer3PromptTimeout overrides defaultLayer3PromptTimeout (WP07).
+// d <= 0 is ignored. Test-only escape hatch — production wiring does
+// not call this, mirroring
+// core/rpc/views/agentgraph.WithApprovalTimeout's contract.
+func (a *kernelToolAdapter) withLayer3PromptTimeout(d time.Duration) *kernelToolAdapter {
+	if d > 0 {
+		a.layer3PromptTimeout = d
+	}
 	return a
 }
 
@@ -572,15 +622,22 @@ func (a *kernelToolAdapter) resolveConfirmEach(
 			return coreag.ToolResult{}, true, nil
 
 		case cedar.Confirm:
-			// Layer 3: Cedar had no opinion. WP02/WP03 stub always
-			// confirms regardless of threshold (no rater exists to
-			// compare a score against yet — see ThreeLayerResolve's doc
-			// comment); WP04-WP06 replace the stub with a real rating
-			// that can resolve below-threshold calls to Allow instead.
-			// Either way, an unmatched action must never reach rungs
-			// 1-5's auto-skip mechanisms — that is exactly the hole
-			// this mission closes: the tool's coarse FAMILY no longer
-			// decides for it when Cedar itself had no opinion.
+			// Layer 3: Cedar had no opinion. Either way, an unmatched
+			// action must never reach rungs 1-5's auto-skip mechanisms —
+			// that is exactly the hole this mission closes: the tool's
+			// coarse FAMILY no longer decides for it when Cedar itself
+			// had no opinion.
+			//
+			// risk-rated-autonomy-01PMRA01 WP05: when a rater is wired
+			// AND threshold > 0 (FR-008 — threshold<=0 means every
+			// layer-3 case already always asks, so a rater call could
+			// never change the answer and must be skipped, not spent),
+			// consult it and let a family-floored (WP06) below-threshold
+			// score resolve straight to Allow. A nil rater, or
+			// threshold<=0, keeps the WP02/WP03 stub: always confirm.
+			if a.rater != nil && threshold > 0 {
+				return a.resolveLayer3Rating(ctx, call, server, tool, family, threshold)
+			}
 			return a.promptConfirmEach(ctx, call, server, tool, d.Reason, family, 3, threshold)
 		}
 	}
@@ -708,6 +765,49 @@ func (a *kernelToolAdapter) resolveConfirmEach(
 	return a.promptConfirmEach(ctx, call, server, tool, reason, family, 0, 0)
 }
 
+// resolveLayer3Rating is rung 0's WP05 extension: a rater is wired and
+// threshold > 0 (the caller already checked FR-008's bypass), so a real
+// rating can resolve this layer-3 Confirm to Allow instead of always
+// prompting. Every failure mode (rater error, out-of-range score) falls
+// back to the prompt — never to Allow — per RiskRater's failure
+// contract (spec FR-004: fail closed to the prompt, never fail-open).
+func (a *kernelToolAdapter) resolveLayer3Rating(
+	ctx context.Context,
+	call coreag.ToolCall,
+	server, tool, family string,
+	threshold int,
+) (coreag.ToolResult, bool, error) {
+	rating, rerr := a.rater.Rate(ctx, call.Name, risk.NormalizeArgs(call.Args), risk.SessionContext{SessionID: a.sessionID})
+	if rerr != nil {
+		reason := fmt.Sprintf("layer 3: risk rater failed (%s); asking", rerr.Error())
+		return a.promptConfirmEach(ctx, call, server, tool, reason, family, 3, threshold)
+	}
+
+	// WP06: the family floor the rater cannot lower a score past. Applied
+	// here, in Go, after the model's output has already been parsed and
+	// validated — a successful prompt-injection attack against the
+	// rater's own prompt still cannot escape it.
+	floored := risk.ApplyFamilyFloor(family, rating.Score)
+
+	if floored < threshold {
+		a.auditConfirm(ctx, audit.ToolConfirmDecisionPayload{
+			SessionID: a.sessionID,
+			Server:    server,
+			Tool:      tool,
+			Family:    family,
+			Path:      audit.ToolConfirmPathLayer3RaterAllow,
+			Layer:     3,
+			Threshold: threshold,
+			Approved:  true,
+			Reason:    fmt.Sprintf("risk rating %d (floored %d) below threshold %d: %s", rating.Score, floored, threshold, rating.Rationale),
+		})
+		return coreag.ToolResult{}, true, nil
+	}
+
+	reason := fmt.Sprintf("layer 3: risk rating %d (floored %d) at/above threshold %d: %s", rating.Score, floored, threshold, rating.Rationale)
+	return a.promptConfirmEach(ctx, call, server, tool, reason, family, 3, threshold)
+}
+
 // promptConfirmEach parks the call on the confirm bus and blocks until
 // the user answers. It is rung 6 of resolveConfirmEach's ladder, and —
 // since risk-rated-autonomy-01PMRA01 WP02 — also the destination a
@@ -727,15 +827,59 @@ func (a *kernelToolAdapter) resolveConfirmEach(
 // WithConfirmBatch context shares an ID so the frontend renders one
 // modal with N rows. Ungrouped callers get a batch of one.
 //
-// There is no timeout on this rung: an unanswered confirmation parks the
-// run until the user answers, the batch is cancelled, or ctx is
-// cancelled (owner decision 1). Do not add a deadline here.
+// There is no timeout on the legacy rung-6 call (layer==0): an
+// unanswered confirmation parks the run until the user answers, the
+// batch is cancelled, or ctx is cancelled (owner decision 1). Do not
+// add a deadline to THAT case — it is unchanged by WP07.
+//
+// risk-rated-autonomy-01PMRA01 WP07: a layer==3 call (one that reached
+// here via a Cedar-unmatched action a rater could not resolve to Allow)
+// gets its OWN bounded deadline (layer3PromptTimeout, default
+// defaultLayer3PromptTimeout) on top of ctx cancellation. Expiry always
+// DENIES — never "allow on timeout" — and the run continues rather than
+// parking forever, which is the whole point: an unattended run at the
+// autonomous tier must not hang on the first un-granted MCP tool. This
+// is a NEW, additive deadline scoped to layer==3 only; it does not
+// touch or shorten the rung-6 no-deadline invariant above.
 func (a *kernelToolAdapter) promptConfirmEach(
 	ctx context.Context,
 	call coreag.ToolCall,
 	server, tool, reason, family string,
 	layer, threshold int,
 ) (coreag.ToolResult, bool, error) {
+	// WP07 refinement: a layer-3 prompt reached under an UNATTENDED run
+	// posture denies IMMEDIATELY rather than waiting out
+	// layer3PromptTimeout. Rung 0 bypasses rungs 1-5 entirely on a
+	// layer-3 Confirm (that is the whole point of WP02 — see
+	// resolveConfirmEach's doc comment), so rung 5's own
+	// `unattended -> always deny, no wait` fast path never gets a chance
+	// to fire for this case; without this check, an unattended run would
+	// wait out the FULL bound (minutes to hours, tuned for a human who
+	// might be away from their desk) before self-correcting, on EVERY
+	// layer-3 call in the run — a materially worse outcome than "never
+	// park" implies, since nobody is present to answer regardless of how
+	// long the wait is. Mirrors rung 5's own unattended semantics
+	// exactly (runposture.IsUnattended(ctx) -> deny, unconditionally),
+	// just reached from the layer-3 entry point instead.
+	if layer == 3 && runposture.IsUnattended(ctx) {
+		unattendedReason := "unattended run (scheduled dispatch): a layer-3 risk-rated prompt denies immediately, same as an organic confirm_each verdict (no wait — nobody is present to answer)"
+		a.auditConfirm(ctx, audit.ToolConfirmDecisionPayload{
+			SessionID: a.sessionID,
+			Server:    server,
+			Tool:      tool,
+			Family:    family,
+			Path:      audit.ToolConfirmPathLayer3Timeout,
+			Layer:     layer,
+			Threshold: threshold,
+			Approved:  false,
+			Reason:    unattendedReason,
+		})
+		return coreag.ToolResult{
+			Content: fmt.Sprintf("tool %q denied: %s", call.Name, unattendedReason),
+			IsError: true,
+		}, false, nil
+	}
+
 	batchID := toolloop.ConfirmBatchFromContext(ctx)
 	if batchID == "" {
 		batchID = toolloop.NewConfirmID("batch")
@@ -752,12 +896,54 @@ func (a *kernelToolAdapter) promptConfirmEach(
 		Reason:      reason,
 	}
 
-	decision, err := a.confirm.Pending(ctx, req)
+	waitCtx := ctx
+	if layer == 3 {
+		d := a.layer3PromptTimeout
+		if d <= 0 {
+			d = defaultLayer3PromptTimeout
+		}
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithTimeout(ctx, d)
+		defer cancel()
+	}
+
+	decision, err := a.confirm.Pending(waitCtx, req)
 	if err != nil {
+		if layer == 3 && ctx.Err() == nil {
+			// The layer-3 deadline fired, not the caller's own ctx (that
+			// is still alive — otherwise ctx.Err() would be non-nil
+			// too, since waitCtx is a child of ctx and inherits its
+			// cancellation). Deny, tell the model why, and let the run
+			// continue: never "allow on timeout", at any tier (WP07
+			// owner directive).
+			d := a.layer3PromptTimeout
+			if d <= 0 {
+				d = defaultLayer3PromptTimeout
+			}
+			timeoutReason := fmt.Sprintf("no confirmation received within %s; risk-rated layer-3 prompts deny on deadline rather than parking indefinitely", d)
+			a.auditConfirm(ctx, audit.ToolConfirmDecisionPayload{
+				SessionID: a.sessionID,
+				CallID:    req.CallID,
+				BatchID:   req.BatchID,
+				Server:    server,
+				Tool:      tool,
+				Family:    family,
+				Path:      audit.ToolConfirmPathLayer3Timeout,
+				Layer:     layer,
+				Threshold: threshold,
+				Approved:  false,
+				Reason:    timeoutReason,
+			})
+			return coreag.ToolResult{
+				Content: fmt.Sprintf("tool %q denied: %s", call.Name, timeoutReason),
+				IsError: true,
+			}, false, nil
+		}
 		// Context cancellation (run stopped / session torn down) or a
 		// caller bug. Either way the call must not dispatch. No audit
 		// record: nothing was decided, which is exactly owner decision
-		// 1's "elapsed time resolves to nothing".
+		// 1's "elapsed time resolves to nothing" (still true for the
+		// layer==0 rung-6 case, which never installs a deadline above).
 		return coreag.ToolResult{}, false, fmt.Errorf("chat: tool confirmation: %w", err)
 	}
 

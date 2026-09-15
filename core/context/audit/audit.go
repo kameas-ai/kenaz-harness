@@ -709,6 +709,31 @@ const (
 	// WP03-WP06 giving layer 3 a real score to compare against a
 	// threshold instead of always asking.
 	ToolConfirmPathLayer3Confirm ToolConfirmPath = "layer3_confirm"
+
+	// ToolConfirmPathLayer3RaterAllow — risk-rated-autonomy-01PMRA01
+	// WP05. Cedar had no opinion (layer 3), a RiskRater was wired and
+	// consulted (threshold > 0, per FR-008's bypass rule), and its
+	// family-floored score (WP06's ApplyFamilyFloor) fell BELOW the
+	// resolved autonomy threshold — so the call was allowed WITHOUT a
+	// prompt. This is the new terminal outcome WP05 introduces: before
+	// it, layer 3 could only ever reach ToolConfirmPathPrompted (via
+	// ToolConfirmPathLayer3Confirm's routing). A rater error, or a score
+	// at/above threshold, still routes to the ordinary prompted path
+	// (Layer=3 is recorded there too) — this path is reserved for the
+	// genuinely new "rated safe enough to skip the prompt" decision.
+	ToolConfirmPathLayer3RaterAllow ToolConfirmPath = "layer3_rater_allow"
+
+	// ToolConfirmPathLayer3Timeout — risk-rated-autonomy-01PMRA01 WP07.
+	// A layer-3-originated confirm prompt (one that bypassed rungs 1-5
+	// because Cedar had no opinion and no rater resolved it to Allow)
+	// received no answer within its own bounded deadline. Per owner
+	// directive, expiry always DENIES — never "allow on timeout" — so
+	// the run can continue rather than park forever. This deadline is
+	// new and applies ONLY to layer-3-originated prompts; an organically
+	// reached rung-6 confirm_each prompt (Layer=0) still has no timeout
+	// at all (owner decision 1, confirm-each-enforcement-01PMAG05 §3.1)
+	// and is unaffected.
+	ToolConfirmPathLayer3Timeout ToolConfirmPath = "layer3_timeout"
 )
 
 // AllToolConfirmPaths is the canonical list. WP06's coverage test walks
@@ -724,6 +749,8 @@ var AllToolConfirmPaths = []ToolConfirmPath{
 	ToolConfirmPathLayer1Forbid,
 	ToolConfirmPathLayer2Permit,
 	ToolConfirmPathLayer3Confirm,
+	ToolConfirmPathLayer3RaterAllow,
+	ToolConfirmPathLayer3Timeout,
 }
 
 // ToolConfirmDecisionPayload is the KindToolConfirmDecision payload.

@@ -19,6 +19,7 @@ import (
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
 	artview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
 	"github.com/kameas-ai/kenaz-harness/core/runposture"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
@@ -517,6 +518,15 @@ type Config struct {
 	// SecretGate immediately above (core/rpc/api.go) — layers 1-2 must
 	// see the operator's real policy set, not a second, divergent one.
 	RiskGate cedar.Gate
+	// RiskRater is risk-rated-autonomy-01PMRA01 WP05's LLM implementation
+	// of the layer-3 risk score. Consulted by the kernel tool adapter's
+	// rung 0 ONLY when RiskGate is also wired and the resolved
+	// autonomy.ResolvedKnobs.RiskThreshold > 0 (FR-008: a call whose
+	// result cannot change the answer must not spend a model call). nil
+	// leaves layer 3 at the WP02/WP03 stub (always Confirm) —
+	// byte-identical to every caller that has not wired a rater.
+	// Production wiring is *risk.LLMRater (core/rpc/api.go).
+	RiskRater risk.RiskRater
 	// SecretBudget caps resolutions per locator (refs.DefaultBudget==50)
 	// across the process lifetime. nil is unlimited. Production wiring
 	// shares the SAME *refs.Budget the kenaz__list_secrets tool uses to
@@ -1096,6 +1106,9 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// risk-rated-autonomy-01PMRA01 WP02: nil RiskGate leaves
 	// resolveConfirmEach's new rung 0 a no-op (pre-WP02 behaviour).
 	toolAdapter.withGate(r.cfg.RiskGate)
+	// risk-rated-autonomy-01PMRA01 WP05: nil RiskRater leaves rung 0's
+	// layer-3 branch at the WP02/WP03 stub (always Confirm).
+	toolAdapter.withRater(r.cfg.RiskRater)
 
 	r.mu.Lock()
 	r.nextID++
