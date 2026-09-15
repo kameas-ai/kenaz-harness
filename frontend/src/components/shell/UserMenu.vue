@@ -42,7 +42,35 @@ const signOutError = ref<string | null>(null);
 let pollTimer: number | null = null;
 
 /**
- * startPolling (re)starts the 15s identity-refresh interval. Idempotent —
+ * IDENTITY_POLL_MS is the interval between background identity refreshes.
+ *
+ * Each tick calls fleetRefreshIdentity(), which is NOT a cheap liveness
+ * check — it is a full POST /api/v1/enroll round trip (see fleetEnroll,
+ * core/rpc/views/settings/fleet.go), re-authenticating and re-fetching
+ * telemetry opt-ins as a side effect. Liveness itself is already free:
+ * fleetSignedIn() below is a local, network-free token-expiry check.
+ *
+ * This constant used to be 15000 (15s) — a full re-enroll every 15
+ * seconds, forever, for every signed-in install. Finding #98
+ * (2026-09-14): production logs showed ~5000 enroll round trips in 2
+ * hours from a single running install, ~10x what a lone 15s ticker
+ * would produce on its own, because this poll shares no in-flight
+ * de-duplication with the other fleetRefreshIdentity() call sites
+ * (AccountPanel.vue mount/refresh, CedarEditor.vue mount) — any of them
+ * overlapping with a tick fires as a fully independent network call.
+ * The Go side now collapses concurrent callers via singleflight
+ * (fleet.Client.RefreshIdentity), but this ticker was still firing far
+ * more often than "once per sign-in plus on token refresh" requires.
+ *
+ * 5 minutes matches the cadence core/fleet's own CapabilityPoller and
+ * ConfigPoller already use for "notice server-side drift" polling — the
+ * same class of problem (tier/role changes landing in the enroll
+ * response) this ticker exists to catch.
+ */
+const IDENTITY_POLL_MS = 5 * 60 * 1000;
+
+/**
+ * startPolling (re)starts the identity-refresh interval. Idempotent —
  * a no-op when already running, so it's safe to call after a fresh
  * sign-in that may have followed a stopPolling() call.
  */
@@ -50,7 +78,7 @@ function startPolling() {
   if (pollTimer !== null) return;
   pollTimer = window.setInterval(() => {
     void refresh();
-  }, 15000);
+  }, IDENTITY_POLL_MS);
 }
 
 /**
@@ -90,8 +118,8 @@ async function refresh() {
         // when the subsequent enroll call fails (core/rpc/views/settings/
         // fleet.go FleetSignIn), so fleetSignedIn() (token-expiry based)
         // keeps reporting true forever while enroll keeps 403ing forever.
-        // Without this stop, refresh() re-runs every 15s and re-hits
-        // /api/v1/enroll on a permanently-failing account with no backoff
+        // Without this stop, refresh() re-runs every IDENTITY_POLL_MS and
+        // re-hits /api/v1/enroll on a permanently-failing account with no backoff
         // — confirmed in production as 60+ consecutive
         // fleet.rpc.enroll.start/.failed pairs. A network blip or other
         // transient failure is NOT this condition and keeps polling at the
