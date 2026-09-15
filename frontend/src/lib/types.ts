@@ -884,6 +884,11 @@ export interface WindowSize {
  * process's lifetime, not per session — see the Go-side doc comment for
  * why. `calls === 0` means "no compaction has run since this process
  * started," not "this session never compacted."
+ *
+ * The autoTitle* fields (model-settings-reach-the-model-01PMZ101 WP07)
+ * carry the SAME kind of running tally for the auto-title LLM caller,
+ * reusing this type/RPC rather than adding a parallel binding — both
+ * readouts feed the same cost panel.
  */
 export interface CompactionOverheadInfo {
   total: number;
@@ -894,6 +899,16 @@ export interface CompactionOverheadInfo {
   outputTokens: number;
   /** Aggressiveness tier of up to the last 5 successful compactions, oldest first. */
   recentTiers?: string[];
+  // Optional (rather than mirroring the compaction fields' required-ness)
+  // so the many pre-existing compactionOverhead() test fixtures that
+  // predate WP07 keep type-checking without every one of them being
+  // touched; SessionsView.vue treats a missing value as 0/absent.
+  autoTitleTotal?: number;
+  autoTitleCurrency?: string;
+  autoTitleCalls?: number;
+  autoTitleIndeterminateCalls?: number;
+  autoTitleInputTokens?: number;
+  autoTitleOutputTokens?: number;
 }
 
 export interface Settings {
