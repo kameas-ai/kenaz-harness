@@ -52,6 +52,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/hooks"
+	"github.com/kameas-ai/kenaz-harness/core/keyring"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	llmcap "github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
 	"github.com/kameas-ai/kenaz-harness/core/llm/cost"
@@ -147,7 +148,6 @@ import (
 	corewf "github.com/kameas-ai/kenaz-harness/core/workflows"
 	wfcatalogpkg "github.com/kameas-ai/kenaz-harness/core/workflows/catalog"
 	wfsched "github.com/kameas-ai/kenaz-harness/core/workflows/scheduler"
-	"github.com/zalando/go-keyring"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
@@ -1034,24 +1034,20 @@ func (a *API) SetContext(ctx context.Context) {
 	//
 	// Not started under `go test`, for the same reason SetFleetClient does
 	// not start its pollers: BootstrapLockdownStatus -> Client.Get ->
-	// Client.do -> fleet.LoadTokens -> keyring.Get, and go-keyring's MOCK
-	// provider (installed process-wide by testmain_test.go's keyring.MockInit)
-	// mutates a bare map[string]map[string]string with no mutex. Any
-	// background goroutine that reaches the keyring therefore races any
-	// sibling test's keyring.Set -- which is what the "views/sites keyring
-	// flake" always was. The independent review of the CapabilityPoller fix
-	// reproduced the race through THIS call site against the already-fixed
-	// poller, so this is a second live instance, not a hypothetical.
+	// Client.do -> fleet.LoadTokens -> keyring.Get is a real network call,
+	// and background network workers do not run under `go test` regardless
+	// of the keyring question.
 	//
-	// This guard is a mitigation, not the fix. LoadTokens has ~16 non-test
-	// call sites and is hit by EVERY fleet HTTP request via Client.do, so
-	// guarding call sites one at a time does not close the class -- see the
-	// scar at contextbootstrap_wiring.go:337 for a third instance. The real
-	// fix is a single serialised keyring seam plus a gate forbidding direct
-	// go-keyring imports outside it; go-keyring exposes no way to install a
-	// thread-safe provider (`provider` is package-private and MockInit is
-	// the only door), so it cannot be fixed upstream-side from here.
-	// Tracked as its own mission.
+	// The keyring-race half of this comment's original rationale (go-keyring's
+	// MOCK provider mutates a bare map[string]map[string]string with no
+	// mutex, so any background goroutine reaching it raced any sibling
+	// test's keyring.Set/keychainSet -- the "views/sites keyring flake" and
+	// the CapabilityPoller race were both this) is now fixed structurally by
+	// core/keyring, the single seam every keyring caller routes through:
+	// every Get/Set/Delete takes core/keyring's package-level mutex, and
+	// scripts/ci/check-keyring-seam.sh forbids any other file under core/ or
+	// cmd/ from importing zalando/go-keyring directly. This guard stays for
+	// the network-worker reason above, independent of that fix.
 	//
 	// The under-test check is flag.Lookup("test.v"), NOT testing.Testing(),
 	// and that is deliberate: scripts/ci/cmd/checknilopts's
@@ -9033,8 +9029,8 @@ func (p *registryProber) Probe(ctx context.Context, profile corellm.ProviderProf
 }
 
 // keychainWriter implements llm.KeychainWriter by storing the
-// plaintext in the OS keychain (zalando/go-keyring routes to macOS
-// Keychain, Windows Credential Manager, or libsecret on Linux) AND
+// plaintext in the OS keychain (via core/keyring, the single seam onto
+// macOS Keychain, Windows Credential Manager, or libsecret on Linux) AND
 // in the shared in-memory backend so the credref resolver can read
 // it without an OS-keychain round-trip mid-session.
 //

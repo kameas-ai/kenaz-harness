@@ -18,37 +18,24 @@ package rpc
 // TestMain runs once per test binary, before any individual test's
 // t.TempDir() exists, so the redirect target is a package-scoped temp
 // dir instead.
+//
+// This TestMain no longer calls keyring.MockInit() (keyring-seam-01,
+// 2026-09-15). core/keyring — the single seam every keyring caller now
+// routes through — makes that decision itself, on first call, under
+// `go test` (flag.Lookup("test.v")), before this package's tests or any
+// goroutine they start (e.g. the fleet ConfigPoller ticker) can reach the
+// keychain. The comment this replaced explained exactly the race that
+// motivated hoisting MockInit() into a single TestMain in the first
+// place — that reasoning is preserved and generalised in core/keyring's
+// package doc rather than repeated per package.
 import (
 	"os"
 	"testing"
 
 	"github.com/kameas-ai/kenaz-harness/core/logging"
-	"github.com/zalando/go-keyring"
 )
 
 func TestMain(m *testing.M) {
-	// keyring.MockInit() installs go-keyring's in-memory backend by WRITING
-	// a package-level global. Doing it per-test races every goroutine that
-	// READS that global concurrently — and rpc.New starts one: the fleet
-	// ConfigPoller calls fleet.LoadTokens -> keyring.Get() on a ticker.
-	//
-	// This surfaced repeatedly as "TestKeychainDelete_NotFoundIsSilent:
-	// race detected", which reads like a keychain flake and is not one.
-	// Two earlier fixes attacked the wrong half: t.Cleanup(api.Shutdown)
-	// on every API construction site (v0.66.0) and making Syncer.Stop
-	// idempotent. Both were correct in themselves and neither could work,
-	// because cleanup runs when a test ENDS while tests run in PARALLEL —
-	// one test's poller is alive precisely when another calls MockInit.
-	//
-	// Installing the mock once here, before m.Run and therefore before any
-	// test or goroutine exists, removes the concurrent WRITE entirely.
-	// Afterwards every access is a read.
-	//
-	// Safe for the tests that used to call it per-test: they use distinct
-	// service/key pairs and plant whatever they need, so they require the
-	// mock to be INSTALLED, not RESET.
-	keyring.MockInit()
-
 	dir, err := os.MkdirTemp("", "kenaz-rpc-test-logs-*")
 	if err == nil {
 		logging.Configure(dir)

@@ -26,8 +26,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zalando/go-keyring"
-
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
 )
 
@@ -96,8 +94,12 @@ func TestApplyBundle_MCPAllowlistOnly_CleanApply(t *testing.T) {
 // VerifyWithKeySet must actually run — or the test proves nothing about
 // the integrity claim in spec §1.1.
 func TestConfigPoller_CedarDeltaUnwired_ACKsAppliedFalse(t *testing.T) {
-	keyring.MockInit()
-
+	// No keyring.MockInit() here (keyring-seam-01, 2026-09-15): core/keyring
+	// — the single seam every keyring caller now routes through — selects
+	// the in-memory mock itself, once per test binary, on first call under
+	// `go test`. This test still exercises a real *fleet.ConfigPoller
+	// hitting fleet.SaveTokens/LoadTokens through that seam; it just no
+	// longer needs to install the mock itself.
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatalf("generate signing key: %v", err)
