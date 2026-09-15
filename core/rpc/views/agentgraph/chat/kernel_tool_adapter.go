@@ -779,6 +779,14 @@ func (a *kernelToolAdapter) resolveLayer3Rating(
 ) (coreag.ToolResult, bool, error) {
 	rating, rerr := a.rater.Rate(ctx, call.Name, risk.NormalizeArgs(call.Args), risk.SessionContext{SessionID: a.sessionID})
 	if rerr != nil {
+		if errors.Is(rerr, risk.ErrUnreachable) {
+			// spec.md FR-004's amendment (lines 271-274): TRUE
+			// unreachability — no route to the model at all — degrades
+			// to the offline floor rather than a blanket "always ask".
+			// A transient/malformed failure (below) still prompts, per
+			// FR-004 unchanged.
+			return a.resolveLayer3OfflineFloor(ctx, call, server, tool, family, threshold, rerr)
+		}
 		reason := fmt.Sprintf("layer 3: risk rater failed (%s); asking", rerr.Error())
 		return a.promptConfirmEach(ctx, call, server, tool, reason, family, 3, threshold)
 	}
@@ -805,6 +813,65 @@ func (a *kernelToolAdapter) resolveLayer3Rating(
 	}
 
 	reason := fmt.Sprintf("layer 3: risk rating %d (floored %d) at/above threshold %d: %s", rating.Score, floored, threshold, rating.Rationale)
+	return a.promptConfirmEach(ctx, call, server, tool, reason, family, 3, threshold)
+}
+
+// resolveLayer3OfflineFloor is spec.md FR-004's amendment (lines
+// 271-274): Rate returned TRUE unreachability (errors.Is(err,
+// risk.ErrUnreachable)) — no live rating is possible — so this degrades
+// to the SAME family floor WP06 already computes (floor.go's
+// ApplyFamilyFloor), using a baseline score of 0 (the most permissive
+// value) in place of a live rating. For FamilyDestructive/FamilyUnknown
+// this still yields familyFloorScore (81, above every tier's
+// threshold), so a destructive or unclassifiable call still surfaces;
+// every other family yields 0, which clears any positive threshold and
+// proceeds. This is "degrade to the static policy you already have,"
+// not "stop everything" — an autonomous unattended run with a laptop
+// that just lost its network connection must not deny every
+// un-granted MCP tool for the rest of the run.
+//
+// Always emits ToolConfirmPathLayer3OfflineFloor the moment
+// unreachability is detected, regardless of outcome, so "we are running
+// on the offline floor" is visible in the audit trail rather than
+// inferred from a reused rater-failed reason string. When the floored
+// score does not clear threshold, the call ALSO falls through to
+// promptConfirmEach as normal (which records its own, separate decision
+// once resolved — see that path's own doc comment for why two records
+// for one call is deliberate here).
+func (a *kernelToolAdapter) resolveLayer3OfflineFloor(
+	ctx context.Context,
+	call coreag.ToolCall,
+	server, tool, family string,
+	threshold int,
+	rerr error,
+) (coreag.ToolResult, bool, error) {
+	// The baseline is 0 — no live signal, so no assumed risk beyond
+	// whatever the family itself statically implies. ApplyFamilyFloor is
+	// the exact same function WP06 already tests and mutation-proves;
+	// reusing it here means the offline floor can never drift from the
+	// online floor's own value.
+	offlineScore := risk.ApplyFamilyFloor(family, 0)
+	approved := offlineScore < threshold
+
+	reason := fmt.Sprintf(
+		"risk rater unreachable (%s); running on the offline floor for family %q (score %d) against threshold %d",
+		rerr.Error(), family, offlineScore, threshold,
+	)
+	a.auditConfirm(ctx, audit.ToolConfirmDecisionPayload{
+		SessionID: a.sessionID,
+		Server:    server,
+		Tool:      tool,
+		Family:    family,
+		Path:      audit.ToolConfirmPathLayer3OfflineFloor,
+		Layer:     3,
+		Threshold: threshold,
+		Approved:  approved,
+		Reason:    reason,
+	})
+
+	if approved {
+		return coreag.ToolResult{}, true, nil
+	}
 	return a.promptConfirmEach(ctx, call, server, tool, reason, family, 3, threshold)
 }
 

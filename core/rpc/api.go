@@ -7131,48 +7131,65 @@ func buildChatRunner(
 		SecretLookup: secretLookup,
 		SecretGate:   secretGate,
 		SecretBudget: secretBudget,
-		// risk-rated-autonomy-01PMRA01 WP05+WP07: RE-ENABLED. Was
-		// DELIBERATELY nil from WP02 through v0.79.0, per the reasoning
-		// preserved below (still accurate history — read it before
-		// touching this line again). The two blockers that kept it off
-		// are both closed as of this change:
+		// risk-rated-autonomy-01PMRA01 WP05+WP06+WP07: STILL
+		// DELIBERATELY NIL. Reviewer ruling 2026-09-14 (this exact PR,
+		// same review round the offline-floor fix below landed in):
+		// do NOT flip this to secretGate yet, even though WP05+WP06+WP07
+		// are all implemented and green. Two things remain, both
+		// required before the flip, and BOTH must be true — this is not
+		// an either/or:
 		//
-		//   - WP05 (the LLM risk rater, core/policy/risk/llmrater.go) now
-		//     wires a real RiskRater — the riskRater parameter above,
-		//     built as chatRiskRater in newLLMStack — into rung 0's
-		//     layer-3 branch (kernel_tool_adapter.go's
-		//     resolveLayer3Rating), so a below-threshold score resolves
-		//     to Allow instead of every unmatched action always asking.
-		//   - WP07 (kernel_tool_adapter.go's promptConfirmEach) gives
-		//     layer-3-originated prompts their own bounded deadline
-		//     (defaultLayer3PromptTimeout, 24h) that DENIES on expiry —
-		//     never allows — so an unattended run at the autonomous tier
-		//     no longer parks forever on the first un-granted MCP tool;
-		//     it gets a bounded number of denials and the run continues.
-		//     The pre-existing organic rung-6 confirm_each "no deadline"
-		//     invariant (owner decision 1) is UNCHANGED — WP07's deadline
-		//     applies only to layer==3 prompts.
+		//   (a) DONE, this change: the offline-floor path
+		//       (kernel_tool_adapter.go's resolveLayer3OfflineFloor,
+		//       gated on errors.Is(err, risk.ErrUnreachable)) was
+		//       missing — every rater error, including true
+		//       unreachability (no network, no credentials, a dead
+		//       profile), used to fall through to the ordinary prompt.
+		//       Combined with rung 5's (correct, untouched) "unattended
+		//       -> deny immediately", an offline rater would have turned
+		//       into "deny every un-granted MCP tool for the whole
+		//       run" the instant this flipped on — the exact inversion
+		//       of the owner's stated autonomous-mode goal ("run an
+		//       agent for hours doing work and not stop it"). Fixed:
+		//       true unreachability now degrades to the SAME family
+		//       floor WP06 already computes (a baseline score of 0
+		//       through ApplyFamilyFloor), so a benign un-granted tool
+		//       still proceeds and a destructive/unclassifiable one
+		//       still surfaces — see resolveLayer3OfflineFloor's doc
+		//       comment and spec.md FR-004's amendment (lines 271-274)
+		//       for the full reasoning, and
+		//       ToolConfirmPathLayer3OfflineFloor for how it is logged
+		//       distinctly rather than folded into a reused
+		//       rater-failed path.
 		//
-		// Preserved history (measured 2026-09-12, release/v0.78.2, when
-		// this was first set to nil): layer 3 (Cedar NotApplicable)
-		// resolves to Confirm, and until WP05 existed there was no rater
-		// that could resolve a below-threshold call back to Allow — so
-		// EVERY unmatched action asked, at every tier including
-		// autonomous. Built-in kenaz__* tools were unaffected
-		// (default_tool_policy.cedar permits server "kenaz", verified to
-		// reach layer 2 with the nil contextAttrs rung 0 passes).
-		// Un-granted MCP-server tools were the affected set:
-		// filesystem__*, github__*, harness-self__* et al all moved from
-		// silent allow to a prompt — correct for an attended session, but
-		// an unattended run would have parked forever without WP07.
+		//   (b) STILL OPEN: no real measured median added-latency
+		//       against a LIVE profile. This environment had no LLM
+		//       credentials/network access, so every WP05 test exercises
+		//       a fake LLMRegistry — an honest escalation, not a
+		//       shortcut, but it leaves an UNMEASURED network call on
+		//       the tool-dispatch critical path for every un-granted MCP
+		//       tool once this flips. Escalate above ~300ms median
+		//       rather than flipping quietly (mission brief's own
+		//       instruction). Whoever measures this against a real
+		//       profile: record the number in this comment (or a
+		//       replacement of it) in the same change that flips
+		//       RiskGate.
 		//
-		// Now the SAME live Cedar engine as SecretGate immediately above
-		// governs layers 1-2, matching every other Cedar-gated seam in
-		// this file. Owner: risk-rated-autonomy-01PMRA01.
-		RiskGate: secretGate,
+		// Flip this to `secretGate` — the SAME live Cedar engine as
+		// SecretGate immediately above — only once (b) is done; (a) is
+		// now done. Do not flip on (a) alone. Owner: risk-rated-
+		// autonomy-01PMRA01. The RiskRater field below is left wired
+		// regardless (harmless while RiskGate is nil — rung 0 nil-checks
+		// the GATE, not the rater, before consulting either; see
+		// kernel_tool_adapter.go's `if a.gate != nil` guard), so no
+		// production behaviour differs from pre-WP05 today: the whole
+		// rung is still a no-op end to end until RiskGate itself is
+		// non-nil.
+		RiskGate: nil,
 		// risk-rated-autonomy-01PMRA01 WP05: the LLM rater, built in
 		// newLLMStack alongside chatAutoTitleGen and threaded in as the
-		// riskRater parameter above.
+		// riskRater parameter above. Inert while RiskGate (above) is nil
+		// — see that field's comment.
 		RiskRater: riskRater,
 	})
 	if err != nil {

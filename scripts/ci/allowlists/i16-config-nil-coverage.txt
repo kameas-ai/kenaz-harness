@@ -162,6 +162,16 @@ core/rpc/views/agentgraph/chat/chat_runner.go:542: Config.SecretAuditEmitter (in
 # Line renumbered 532->542 by risk-rated-autonomy-01PMRA01 WP05
 # (2026-09-14), same cause as the Config.Clock entry above.
 
+core/rpc/views/agentgraph/chat/chat_runner.go:520: Config.RiskGate (interface) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-14 — DELIBERATE. Same finding as the i18 and i13 entries for
+# this field; see scripts/ci/allowlists/i18-nil-optional-deps.txt and
+# i13-cedar-gate-arguments.txt for the full, current reasoning (a
+# reviewer ruling held the flip to `secretGate` back pending a real
+# measured median latency against a live profile, after the offline-
+# floor gap that WAS blocking it got fixed in this same PR). Owner:
+# risk-rated-autonomy-01PMRA01. Deleted by whoever measures the
+# remaining latency blocker, in the same change that flips the field.
+
 core/rpc/views/audit/impl.go:120: github.com/kameas-ai/kenaz-harness/core/rpc/views/audit.WithEmitter is never called by any non-test source under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 

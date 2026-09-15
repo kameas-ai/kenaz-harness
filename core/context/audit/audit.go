@@ -711,16 +711,18 @@ const (
 	ToolConfirmPathLayer3Confirm ToolConfirmPath = "layer3_confirm"
 
 	// ToolConfirmPathLayer3RaterAllow — risk-rated-autonomy-01PMRA01
-	// WP05. Cedar had no opinion (layer 3), a RiskRater was wired and
-	// consulted (threshold > 0, per FR-008's bypass rule), and its
-	// family-floored score (WP06's ApplyFamilyFloor) fell BELOW the
-	// resolved autonomy threshold — so the call was allowed WITHOUT a
-	// prompt. This is the new terminal outcome WP05 introduces: before
-	// it, layer 3 could only ever reach ToolConfirmPathPrompted (via
-	// ToolConfirmPathLayer3Confirm's routing). A rater error, or a score
+	// WP05. Cedar had no opinion (layer 3), a RiskRater was wired,
+	// REACHABLE, and consulted (threshold > 0, per FR-008's bypass
+	// rule), and its family-floored score (WP06's ApplyFamilyFloor)
+	// fell BELOW the resolved autonomy threshold — so the call was
+	// allowed WITHOUT a prompt. This is the new terminal outcome WP05
+	// introduces: before it, layer 3 could only ever reach
+	// ToolConfirmPathPrompted (via ToolConfirmPathLayer3Confirm's
+	// routing). A transient/malformed rater failure, or a score
 	// at/above threshold, still routes to the ordinary prompted path
-	// (Layer=3 is recorded there too) — this path is reserved for the
-	// genuinely new "rated safe enough to skip the prompt" decision.
+	// (Layer=3 is recorded there too); TRUE unreachability routes to
+	// ToolConfirmPathLayer3OfflineFloor instead (never this path) — see
+	// that constant's doc comment.
 	ToolConfirmPathLayer3RaterAllow ToolConfirmPath = "layer3_rater_allow"
 
 	// ToolConfirmPathLayer3Timeout — risk-rated-autonomy-01PMRA01 WP07.
@@ -732,8 +734,34 @@ const (
 	// new and applies ONLY to layer-3-originated prompts; an organically
 	// reached rung-6 confirm_each prompt (Layer=0) still has no timeout
 	// at all (owner decision 1, confirm-each-enforcement-01PMAG05 §3.1)
-	// and is unaffected.
+	// and is unaffected. Also fires (with a distinct reason string, same
+	// path) when an UNATTENDED run reaches a layer-3 prompt and denies
+	// immediately rather than waiting out the deadline.
 	ToolConfirmPathLayer3Timeout ToolConfirmPath = "layer3_timeout"
+
+	// ToolConfirmPathLayer3OfflineFloor — risk-rated-autonomy-01PMRA01
+	// WP07 (spec.md FR-004 amendment, lines 271-274). The rater was
+	// wired and consulted, but Rate returned a TRUE UNREACHABILITY error
+	// (errors.Is(err, risk.ErrUnreachable) — no route to the model at
+	// all: no credentials, DNS/dial failure, or a context deadline with
+	// zero bytes ever received), as opposed to a transient provider
+	// fault or a malformed response (which still route to the ordinary
+	// prompted path, FR-004 unchanged). The amendment's whole point:
+	// degrade to the SAME family floor WP06 already computes (using a
+	// baseline score of 0 in place of a live rating) rather than a
+	// blanket stop, so a benign un-granted MCP tool still proceeds while
+	// a destructive/unclassifiable one still surfaces — and log the
+	// degrade distinctly so "we are running on the offline floor" is
+	// visible in the audit trail rather than inferred from a reused
+	// rater-failed path. Always emitted the moment unreachability is
+	// detected (Approved reflects whether the floored score cleared
+	// threshold); when Approved is false the call ALSO still falls
+	// through to the ordinary prompt/timeout machinery, so an unattended
+	// run's eventual immediate denial is additionally recorded under
+	// ToolConfirmPathLayer3Timeout — two records for one call in that
+	// case, deliberately: "we went blind" and "here is what happened
+	// next" are two distinct facts.
+	ToolConfirmPathLayer3OfflineFloor ToolConfirmPath = "layer3_offline_floor"
 )
 
 // AllToolConfirmPaths is the canonical list. WP06's coverage test walks
@@ -751,6 +779,7 @@ var AllToolConfirmPaths = []ToolConfirmPath{
 	ToolConfirmPathLayer3Confirm,
 	ToolConfirmPathLayer3RaterAllow,
 	ToolConfirmPathLayer3Timeout,
+	ToolConfirmPathLayer3OfflineFloor,
 }
 
 // ToolConfirmDecisionPayload is the KindToolConfirmDecision payload.

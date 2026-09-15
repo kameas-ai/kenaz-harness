@@ -23,6 +23,47 @@ import (
 // reason (see cacheKey).
 const llmRaterPromptVersion = "risk-rater-v1"
 
+// ErrUnreachable marks a Rate failure as TRUE UNREACHABILITY — no route
+// to the rating model at all — as distinct from a transient provider
+// error or a malformed response (spec.md FR-004's amendment, lines
+// 271-274: "A transient error or a malformed response still prompts,
+// per FR-004 unchanged; only true unreachability takes the floor path,
+// and it is logged distinctly so 'we are running on the offline floor'
+// is visible rather than inferred").
+//
+// Wrapped into the error Rate returns for exactly three causes, all of
+// which mean the call never had a chance to reach a model at all:
+//
+//   - no rater configured / no registry (defensive; the production call
+//     site already nil-checks before calling Rate).
+//   - no profile resolves (no route — there is no model to call).
+//   - the registry's Stream() call itself errors (DNS/dial failure, no
+//     credentials, auth rejected at connection setup, or the hard
+//     timeout elapsing before a stream was ever established).
+//   - the stream WAS established (Stream() succeeded) but zero events
+//     were ever received before Final() errored — "a context deadline
+//     with zero bytes received," per the amendment's own wording.
+//
+// Every OTHER failure — Final() erroring after at least one event
+// arrived (a mid-stream provider error, a refusal, a 5xx after
+// acceptance), an unparseable response, or an out-of-range score — is
+// deliberately NOT wrapped: those mean the call reached a model and got
+// a real (if bad) answer, which is exactly the "ask, don't guess" case
+// FR-004's original text governs unchanged.
+//
+// Callers (kernel_tool_adapter.go's resolveLayer3Rating) test with
+// errors.Is(err, ErrUnreachable) and route accordingly — see that
+// function's doc comment for the offline-floor path this unlocks.
+var ErrUnreachable = errors.New("risk: rater unreachable")
+
+// wrapUnreachable marks cause as true unreachability. Every wrap site
+// keeps cause reachable via errors.Unwrap (fmt.Errorf's chained %w), so
+// a caller that wants the underlying dial/DNS/auth error for logging
+// can still get it.
+func wrapUnreachable(cause error) error {
+	return fmt.Errorf("%w: %w", ErrUnreachable, cause)
+}
+
 // defaultRaterTimeout is WP05's hard bound on a single rating LLM call.
 // Derived from context.Background() at the call site (never the
 // caller's ctx) — see Rate's doc comment for why forwarding the
@@ -150,7 +191,10 @@ var _ RiskRater = (*LLMRater)(nil)
 // only on a genuinely slow model call.
 func (r *LLMRater) Rate(ctx context.Context, tool, normalizedArgs string, sessCtx SessionContext) (Rating, error) {
 	if r == nil || r.reg == nil {
-		return Rating{}, errors.New("risk: nil LLMRater or registry")
+		// No rater configured at all — the production call site already
+		// nil-checks before calling Rate, so this is defensive, but it
+		// is unambiguously "no route to a model" when it does fire.
+		return Rating{}, wrapUnreachable(errors.New("nil LLMRater or registry"))
 	}
 
 	key := cacheKey{
@@ -165,7 +209,9 @@ func (r *LLMRater) Rate(ctx context.Context, tool, normalizedArgs string, sessCt
 
 	profileID, model, ok := r.resolveProfile(ctx)
 	if !ok {
-		return Rating{}, errors.New("risk: no profile resolved for rater")
+		// No profile resolves — there is no model to even attempt to
+		// call, which is "no route" exactly as much as a DNS failure.
+		return Rating{}, wrapUnreachable(errors.New("no profile resolved for rater"))
 	}
 
 	// Hard timeout derived from Background(), never ctx — see Rate's doc
@@ -193,14 +239,32 @@ func (r *LLMRater) Rate(ctx context.Context, tool, normalizedArgs string, sessCt
 
 	stream, serr := r.reg.Stream(callCtx, req)
 	if serr != nil {
-		return Rating{}, fmt.Errorf("risk: rater call: %w", serr)
+		// The connection was never even established — DNS/dial failure,
+		// missing/rejected credentials, or the hard timeout elapsing
+		// before a stream object ever came back. True unreachability.
+		return Rating{}, wrapUnreachable(fmt.Errorf("risk: rater call: %w", serr))
 	}
+	receivedEvents := 0
 	for range stream.Events() {
 		// Rating is a synchronous backend call; nothing fans deltas
-		// anywhere (mirrors autotitle/wiring.LLMCaller.Call).
+		// anywhere (mirrors autotitle/wiring.LLMCaller.Call). Counted,
+		// not discarded outright, so a Final() error below can tell
+		// "we got a stream object but nothing ever arrived on it" (also
+		// unreachability — "a context deadline with zero bytes
+		// received," per spec.md's FR-004 amendment) apart from "we
+		// exchanged real bytes and THEN it broke" (a transient provider
+		// fault — keep prompting, FR-004 unchanged).
+		receivedEvents++
 	}
 	resp, ferr := stream.Final()
 	if ferr != nil {
+		if receivedEvents == 0 {
+			return Rating{}, wrapUnreachable(fmt.Errorf("risk: rater call (zero events received): %w", ferr))
+		}
+		// A real exchange started and then failed mid-stream — a
+		// transient provider fault (5xx after acceptance, a mid-stream
+		// disconnect, a refusal). NOT unreachability: something WAS
+		// reachable a moment ago. FR-004 unchanged — this still prompts.
 		return Rating{}, fmt.Errorf("risk: rater call: %w", ferr)
 	}
 	r.recordOverhead(resp)

@@ -33,6 +33,31 @@ func newFakeRaterStream(jsonText string) *fakeStream {
 	}
 }
 
+// newFakeRaterStreamZeroEventsThenError simulates a stream that was
+// established (Stream() succeeded) but nothing ever arrived on it
+// before Final() errors — spec.md FR-004's amendment's "a context
+// deadline with zero bytes received," the second of LLMRater's three
+// true-unreachability signals.
+func newFakeRaterStreamZeroEventsThenError(finalErr error) *fakeStream {
+	ch := make(chan corellm.StreamEvent)
+	close(ch) // closes immediately: zero events ever sent
+	return &fakeStream{events: ch, err: finalErr}
+}
+
+// newFakeRaterStreamSomeEventsThenError simulates a stream that
+// exchanged at least one real event before failing mid-stream — a
+// transient provider fault (5xx after acceptance, a mid-stream
+// disconnect), NOT unreachability: something WAS reachable a moment
+// ago.
+func newFakeRaterStreamSomeEventsThenError(n int, finalErr error) *fakeStream {
+	ch := make(chan corellm.StreamEvent, n)
+	for i := 0; i < n; i++ {
+		ch <- corellm.StreamEvent{}
+	}
+	close(ch)
+	return &fakeStream{events: ch, err: finalErr}
+}
+
 func (f *fakeStream) Events() <-chan corellm.StreamEvent { return f.events }
 func (f *fakeStream) Cancel() error                      { return nil }
 func (f *fakeStream) Final() (corellm.Response, error) {
@@ -232,6 +257,102 @@ func TestLLMRater_RegistryErrorPropagates(t *testing.T) {
 	_, err := rater.Rate(context.Background(), "fs__write_file", `{}`, SessionContext{SessionID: "sess-regerr"})
 	if err == nil {
 		t.Fatal("expected an error, got nil")
+	}
+}
+
+// ── spec.md FR-004 amendment: true unreachability vs. transient/malformed ──
+
+// TestLLMRater_StreamCallErrorIsUnreachable: the registry's Stream()
+// call itself erroring means a connection was never established at all
+// — DNS/dial failure, missing credentials, auth rejected at setup.
+// True unreachability.
+func TestLLMRater_StreamCallErrorIsUnreachable(t *testing.T) {
+	reg := &countingRegistry{err: errors.New("dial tcp: connection refused")}
+	rater := NewLLMRater(reg, fixedResolver("p1", "m1"))
+
+	_, err := rater.Rate(context.Background(), "fs__write_file", `{}`, SessionContext{SessionID: "sess-dial"})
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if !errors.Is(err, ErrUnreachable) {
+		t.Errorf("errors.Is(err, ErrUnreachable) = false for a Stream()-call error; want true. err = %v", err)
+	}
+}
+
+// TestLLMRater_NoProfileIsUnreachable: no profile resolves means there
+// is no model to even attempt to call — no route, same as a DNS
+// failure.
+func TestLLMRater_NoProfileIsUnreachable(t *testing.T) {
+	reg := &countingRegistry{stream: newFakeRaterStream(`{"score": 1, "rationale": "x"}`)}
+	rater := NewLLMRater(reg, nil) // no resolver wired
+
+	_, err := rater.Rate(context.Background(), "fs__write_file", `{}`, SessionContext{SessionID: "sess-noprofile-unreachable"})
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if !errors.Is(err, ErrUnreachable) {
+		t.Errorf("errors.Is(err, ErrUnreachable) = false for a no-profile-resolved error; want true. err = %v", err)
+	}
+}
+
+// TestLLMRater_ZeroEventsThenFinalErrorIsUnreachable: the stream WAS
+// established (Stream() succeeded) but nothing ever arrived before
+// Final() errored — spec.md FR-004 amendment's own wording, "a context
+// deadline with zero bytes received." True unreachability.
+func TestLLMRater_ZeroEventsThenFinalErrorIsUnreachable(t *testing.T) {
+	reg := &countingRegistry{stream: newFakeRaterStreamZeroEventsThenError(errors.New("context deadline exceeded"))}
+	rater := NewLLMRater(reg, fixedResolver("p1", "m1"))
+
+	_, err := rater.Rate(context.Background(), "fs__write_file", `{}`, SessionContext{SessionID: "sess-zero-events"})
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if !errors.Is(err, ErrUnreachable) {
+		t.Errorf("errors.Is(err, ErrUnreachable) = false for a zero-events-then-Final()-error; want true. err = %v", err)
+	}
+}
+
+// TestLLMRater_MidStreamFailureAfterEventsIsNotUnreachable: at least one
+// event arrived before Final() errored — a transient provider fault
+// (5xx after acceptance, a mid-stream disconnect). NOT unreachability:
+// something WAS reachable a moment ago. FR-004 UNCHANGED — this must
+// still be classified as a normal (prompting) failure.
+func TestLLMRater_MidStreamFailureAfterEventsIsNotUnreachable(t *testing.T) {
+	reg := &countingRegistry{stream: newFakeRaterStreamSomeEventsThenError(3, errors.New("upstream connection reset"))}
+	rater := NewLLMRater(reg, fixedResolver("p1", "m1"))
+
+	_, err := rater.Rate(context.Background(), "fs__write_file", `{}`, SessionContext{SessionID: "sess-midstream"})
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if errors.Is(err, ErrUnreachable) {
+		t.Errorf("errors.Is(err, ErrUnreachable) = true for a mid-stream failure AFTER events arrived; want false (FR-004 unchanged: this must still prompt, not degrade to the offline floor). err = %v", err)
+	}
+}
+
+// TestLLMRater_UnparseableAndOutOfRangeAreNotUnreachable pins that the
+// two PRE-EXISTING failure modes (malformed JSON, out-of-range score)
+// are unaffected by the amendment — both mean a real response arrived,
+// so both must keep prompting exactly as before.
+func TestLLMRater_UnparseableAndOutOfRangeAreNotUnreachable(t *testing.T) {
+	reg := &countingRegistry{stream: newFakeRaterStream("not json at all")}
+	rater := NewLLMRater(reg, fixedResolver("p1", "m1"))
+	_, err := rater.Rate(context.Background(), "fs__write_file", `{}`, SessionContext{SessionID: "sess-unparseable-unreach"})
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if errors.Is(err, ErrUnreachable) {
+		t.Error("an unparseable response must NOT classify as unreachable")
+	}
+
+	reg2 := &countingRegistry{stream: newFakeRaterStream(`{"score": 999, "rationale": "x"}`)}
+	rater2 := NewLLMRater(reg2, fixedResolver("p1", "m1"))
+	_, err2 := rater2.Rate(context.Background(), "fs__write_file", `{}`, SessionContext{SessionID: "sess-oor-unreach"})
+	if err2 == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if errors.Is(err2, ErrUnreachable) {
+		t.Error("an out-of-range score must NOT classify as unreachable")
 	}
 }
 
