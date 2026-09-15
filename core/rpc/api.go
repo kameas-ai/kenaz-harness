@@ -4424,8 +4424,16 @@ func New(c *core.Core, opts ...Option) *API {
 			// or the settings API is nil, the adapter returns a descriptive
 			// error so the FSM surfaces "sign-in unavailable" to the user.
 			// EventSkipAccount is unaffected — OSS-standalone invariant holds.
-			Signer:  onboardingAccountSignerAdapter{settingsAPI: a.settingsAPI},
-			DataDir: dataDir,
+			Signer: onboardingAccountSignerAdapter{settingsAPI: a.settingsAPI},
+			// Tester + ProviderStore close finding #107 (P0): before these
+			// were wired, the FSM's connection test always used a nil
+			// LLMTester (every key "succeeded") and a successfully-tested
+			// key was never persisted anywhere. Both adapters delegate to
+			// the same live llm view AddProviderForm.vue drives, so
+			// onboarding and Settings share one code path.
+			Tester:        onboardingLLMTesterAdapter{llmAPI: a.llmAPI},
+			ProviderStore: onboardingProviderStoreAdapter{llmAPI: a.llmAPI},
+			DataDir:       dataDir,
 			// fleet-welcome-01NWEL01 seams (WP04/WP07):
 			ProgressSyncer:   &onboardingProgressSyncerAdapter{client: onboardingFleetCl},
 			FleetStateReader: &onboardingFleetStateReaderAdapter{client: onboardingFleetCl},

@@ -7,8 +7,10 @@
 // describes what to render.
 //
 // Isolation contract: this package MUST NOT import core/session, core/storage,
-// or core/agentgraph. The only external dependency is the LLMTester interface
-// (satisfied by core/llm/registry.Registry in production, or a mock in tests).
+// or core/agentgraph. External dependencies are narrow interfaces only —
+// LLMTester and ProviderStorer (satisfied by thin wrappers over the live llm
+// view in production, or mocks in tests), plus AccountSigner and
+// SessionKindTransitioner for the account/handoff steps.
 package onboarding
 
 // ProviderKind is the string tag identifying a supported LLM provider.
