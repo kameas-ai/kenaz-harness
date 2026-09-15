@@ -1027,6 +1027,8 @@ interface WailsBindingsLike {
   Compliance_Status(): Promise<ComplianceStatus>;
   Compliance_ArchiveNow(): Promise<void>;
   Compliance_SetRetention(days: number): Promise<void>;
+  // fleet-enforcement-truth-01PMZ505 WP06.
+  Compliance_SkipToID(toID: string): Promise<void>;
 }
 
 
@@ -3644,6 +3646,13 @@ export interface ComplianceClient {
   archiveNow(): Promise<void>;
   /** Update the local audit retention window. Days must be 30 | 60 | 90 | 365. */
   setRetention(days: number): Promise<void>;
+  /**
+   * Operator recovery action after a hash-chain break: manually advances
+   * the archiver's cursor to toID, clearing the halt so archiveNow() can
+   * proceed again (fleet-enforcement-truth-01PMZ505 WP06). Rejects when
+   * the capability is not enabled or the archiver is not wired.
+   */
+  skipToId(toID: string): Promise<void>;
 }
 
 export interface HarnessClient {
@@ -4594,6 +4603,8 @@ export function createHarnessClient(): HarnessClient {
       status: () => b().Compliance_Status(),
       archiveNow: () => b().Compliance_ArchiveNow(),
       setRetention: (days) => b().Compliance_SetRetention(days),
+      // fleet-enforcement-truth-01PMZ505 WP06.
+      skipToId: (toID) => b().Compliance_SkipToID(toID),
     },
     // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
     Unit_SyncStatus: () => b().Unit_SyncStatus(),
@@ -6358,6 +6369,8 @@ export function createFakeHarnessClient(
       }),
       archiveNow: noop,
       setRetention: noop,
+      // fleet-enforcement-truth-01PMZ505 WP06.
+      skipToId: noop,
     },
     // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
     Unit_SyncStatus: async (): Promise<import('./types').UnitSyncStatusView> => ({
