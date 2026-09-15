@@ -948,6 +948,13 @@ interface WailsBindingsLike {
   Catalog_Uninstall(kind: string, catalogID: string, version: string): Promise<void>;
   /** List all catalog items currently installed in the local DataDir. */
   Catalog_Installed(): Promise<CatalogItemView[]>;
+  /**
+   * Withdraws catalogID from the org listing (fleet-enforcement-truth-01PMZ505
+   * WP11). Distinct from Catalog_Uninstall, which only removes the local
+   * copy. The server enforces "owner or fleet admin only"; a 403 surfaces
+   * as a forbidden error, not a subscription-tier error.
+   */
+  Catalog_Unpublish(catalogID: string): Promise<void>;
 
   // ── Sync (fleet-share-and-sync-01NDFSEX14 WP05) ───────────────────────────
   /** Enable or disable sync for a category. On enable, triggers an immediate push. */
@@ -3596,6 +3603,17 @@ export interface CatalogClient {
    * broken.
    */
   installed(): Promise<CatalogItemView[]>;
+  /**
+   * Withdraws catalogID from the org listing (fleet-enforcement-truth-01PMZ505
+   * WP11). Distinct from uninstall(), which only removes the local copy.
+   * The server enforces the authorization rule (owner or fleet admin) —
+   * the harness has no publisher identity on the wire to evaluate it
+   * itself, so this shows the action on every listed item, sends the
+   * request, and reports the server's answer. A 403 surfaces as a
+   * forbidden error, distinct from the subscription-tier error used
+   * elsewhere in this client.
+   */
+  unpublish(catalogID: string): Promise<void>;
 }
 
 // ── Sync client (fleet-share-and-sync-01NDFSEX14 WP05) ──────────────────────
@@ -4596,6 +4614,8 @@ export function createHarnessClient(): HarnessClient {
       install: (catalogID, version) => b().Catalog_Install(catalogID, version),
       uninstall: (kind, catalogID, version) => b().Catalog_Uninstall(kind, catalogID, version),
       installed: () => b().Catalog_Installed(),
+      // fleet-enforcement-truth-01PMZ505 WP11.
+      unpublish: (catalogID) => b().Catalog_Unpublish(catalogID),
     },
     // ── Sync (fleet-share-and-sync-01NDFSEX14 WP05) ────────────────────────
     sync: {
@@ -6351,6 +6371,8 @@ export function createFakeHarnessClient(
       install: noop,
       uninstall: noop,
       installed: async () => [],
+      // fleet-enforcement-truth-01PMZ505 WP11.
+      unpublish: noop,
     },
     sync: {
       toggle: noop,
