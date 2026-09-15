@@ -497,13 +497,26 @@ while IFS=$'\t' read -r file name; do
       # string constant, so the regex engine receives a properly
       # escaped literal paren regardless of how a given awk handles
       # unrecognised single-backslash escapes.
-      permit=$(awk -v fn="$shortname" '
+      # "Unconditional permit" means EVERY return in the callee body is a
+      # permit — not merely that a permit return exists somewhere. The
+      # distinction is the nil-safe accessor pattern this repo uses
+      # everywhere (e.g. api.go's cedarGate(): `if engine == nil { return
+      # AllowAll{} }; return engine`), which is a guarded FALLBACK, not an
+      # unconditional permit: production passes the real engine. The first
+      # time this clause ever executed (2026-09-15, on CI — see the #104
+      # history above), it flagged exactly that accessor as a false
+      # positive because the old rule was permits>0. The rule is now
+      # permits>0 AND permits==total returns, which still catches PR
+      # #302's motivating shape (a helper whose ONLY return is AllowAll —
+      # the planted proof) while ignoring guarded fallbacks.
+      body=$(awk -v fn="$shortname" '
         $0 ~ ("^func .*[ \t(]" fn "\\(") {inside=1}
         inside {print}
         inside && /^}/ {exit}
-      ' $(find core -name '*.go' ! -name '*_test.go') 2>/dev/null \
-        | grep -cE "return[[:space:]]+(cedar\.)?AllowAll\{\}" || true)
-      if [[ "${permit:-0}" -gt 0 ]]; then
+      ' $(find core -name '*.go' ! -name '*_test.go') 2>/dev/null)
+      permit=$(printf '%s' "$body" | grep -cE "return[[:space:]]+(cedar\.)?AllowAll\{\}" || true)
+      totalret=$(printf '%s' "$body" | grep -cE "^[[:space:]]*return[[:space:]]" || true)
+      if [[ "${permit:-0}" -gt 0 && "${permit:-0}" -eq "${totalret:-0}" ]]; then
         violations="${violations}${file}: ${name} is called as ${impalias}.${name}(${callee}(...)), and ${shortname} returns an unconditional cedar.AllowAll{} — the gate can never deny (clause 4, nested-call permit)"$'\n'
       fi
     fi
