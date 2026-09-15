@@ -57,3 +57,25 @@ core/rpc/views/agentgraph/chat/chat_runner.go: Config.RiskGate is never assigned
 # Owner: risk-rated-autonomy-01PMRA01. The change that deletes this
 # line: whoever measures the latency, in the same change that flips
 # RiskGate to `secretGate`.
+
+core/rpc/views/bundle/impl.go: WithGate is called as bundle.WithGate(a.cedarGate(...)), and cedarGate returns an unconditional cedar.AllowAll{} — the gate can never deny (clause 4, nested-call permit)
+# 2026-09-15 — FALSE POSITIVE, verified, entry deliberately worded as such.
+# cedarGate() (core/rpc/api.go:10155) is the nil-safe accessor: it returns
+# cedar.AllowAll{} ONLY when a.cedarEngine is nil (test posture) and the
+# REAL process-singleton engine otherwise. The production bundle site
+# (api.go:2928) therefore passes the real engine, and the shipped
+# default_bundle_policy.cedar is what keeps a real evaluation from being
+# NotApplicable-allowed (see the comment block above that call site).
+# Clause 4's checker — which EXECUTED FOR THE FIRST TIME EVER on this PR's
+# CI run, after the 2026-09-14 repair of its bash-$# and awk bugs (#104) —
+# matches any `return cedar.AllowAll{}` in the callee body without
+# following the other return arm, so every nil-safe accessor in the
+# codebase will trip it.
+# SECOND defect the same run exposed: clause 4 is STILL inert on macOS
+# (BSD awk) — the same tree passes locally and fails on CI, so the awk
+# repair took on GNU awk only. A gate whose verdict depends on the
+# platform is finding-class #96.
+# Blocker: teach clause 4's matcher to recognise the guarded-nil accessor
+# shape (follow both return arms), and make its awk portable; delete this
+# entry in that same change. Owner: alec. Tracked as the follow-up to
+# #104.
