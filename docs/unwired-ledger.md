@@ -476,9 +476,47 @@ retention backend) already resolved more completely than the spec's own
 | §1.13/§1.14 served-mode token invalidation + sign-out ledger event (WP14) | wire `Invalidate`/`NotifyOn401` at a real 401-observing call site; add `LedgerEmitter.EmitSessionLifecycle`-shaped method; wire both entry points | **Not wired — built this pass, with one honest gap.** New `On401 func()` hook threaded through `core/mcp.ServerSpec` → both `transport/http` and `transport/sse` `Spec` → their `dispatch`/GET/POST paths (the only place a served-mode OAuth connector's 401 is actually observable — the token is handed to a spawned subprocess's own HTTP calls, which the harness cannot see). Supervisor wires `spec.On401 = func(){ tokens.Invalidate(id) }` for OAuth connectors. `LedgerEmitter.EmitSessionLifecycle(event string)` added (the missing `func(string)` shape); both `main.go` and `cmd/harness-served/main.go` now construct their `authbroker.Session` with `WithLedgerEmit(ledgerEmitter.EmitSessionLifecycle)`. **`Session.NotifyOn401` is NOT wired** — see "Escalated, not guessed" below; it is a materially different, deeper finding than the spec anticipated. | Mutation-proven at two layers: `TestConnectionOn401_Fires`/`_DoesNotFireOn500` (http+sse transport level, real httptest 401/500) and `TestSupervisor_OAuthConnector_On401InvalidatesCachedToken` (supervisor level). `main.go`/`cmd/harness-served/main.go` wiring is READ-verified only (package `main`, no test harness). |
 | §1.15 ACP peer registry nil secrets backend (WP15) | wire consumer or record; escalate secrets backend (E-008); dated justification for `DefaultRegistry` | **Escalated, not guessed — per spec's own explicit instruction ("do not fix this by passing a non-nil backend to make the linter quiet").** `core/acp/events` (the package `peers.NoopEmitter`'s own doc names as owning "the real wiring") **does not exist anywhere in the repo** — confirmed no directory, no second `AuthEventEmitter` implementer. Recorded in-code at `api.go`'s `acpReg := acppeers.NewRegistry(...)` construction site (both nils explained) and at `DefaultRegistry()`'s declaration (`wiring:deferred`, dated 2026-09-12, owner alec, distinct from `AN-10` per C-10 — `DefaultRegistry` has zero callers repo-wide and cannot itself produce the nil-secrets defect). | Read-verified (repo-wide grep for `PeerAuthAttempted`, `core/acp/events`). **E-008 (secrets backend product-scoping question) remains genuinely open — flagged for owner alec, no default assumed.** |
 
-**Duplicate-finding note preserved from the first pass**: `fleet-cedar-
-engine-never-wired` and `cedar-bundle-engine-never-set` are the same
-defect (§1.1); both read as closed by the above.
+### 2026-09-15 (fleet-enforcement-truth-01PMZ505, WP05 follow-up — CORRECTION to the 2026-09-12 entry above, finding #103) · the §1.3 and §1.8 "applyRetentionConfig deleted" claims were both false
+
+**The 2026-09-12 entry above is preserved verbatim, uncorrected, above this
+note — this is the correction, not a rewrite of that entry.** Its §1.3 row's
+"This pass" cell states *"Deleted the two remaining lies (AC-007):
+`applyRetentionConfig` (`core/fleet/audit_retention.go`, zero callers, fed a
+`Bundle.audit_local_retention_days` field that has never existed) and its two
+false doc comments."* Its §1.8 row states *"`applyRetentionConfig`
+**deleted** (see §1.3 row)."* **Neither was true.** An independent audit on
+2026-09-14 re-read the tree and found the function still present, unchanged,
+with the same zero non-test callers it had before that pass claimed to
+remove it — `git log --oneline --follow -- core/fleet/audit_retention.go`
+shows exactly two commits touching the file, `8d96d337` (original WP04 add)
+and `b11f5223` (a squash merge that also added it); no commit ever deleted
+it. The false claim was written twice in the same sweep pass (§1.3's prose
+and §1.8's cross-reference to it), which is why it is being corrected in two
+places here rather than one.
+
+**Deleted for real on 2026-09-15** (fleet-enforcement-truth-01PMZ505 WP05
+follow-up commit, this pass): the function body, its two false doc comments
+(the file header's bundle-config claim and the function's own "Used by the
+composite ConfigApplier" claim), and the `encoding/json` import that only it
+used. Positive no-consumer proof, re-run after the deletion:
+`grep -rn 'applyRetentionConfig' core/` and
+`grep -rn 'audit_local_retention_days' core/` both return zero hits (exit 1);
+`go build ./core/...` is clean. `Bundle` (`core/fleet/bundle.go:42`–`:82`)
+was re-confirmed to carry no such field. `core/rpc/wp_pi_test.go`'s WP05
+persistence-integrity note, which had independently repeated the same false
+"already deleted" claim in its own prose, was corrected in the same commit —
+without naming the deleted symbol by its literal identifier, since AC-007's
+grep is over all of `core/` including test-file comments.
+
+**Why the earlier claims were premature, not malicious:** the 2026-09-12
+pass's own "What was RUN" ledger section (below) shows it verified the
+*sibling* findings in this same table by running tests, but for §1.3/§1.8 it
+appears to have read the *intended* diff (or an equivalent change made in a
+sibling worktree during the same campaign) rather than re-reading the merged
+file on the branch it actually recorded against. This is exactly the failure
+mode CLAUDE.md's citation discipline exists to catch, and it reached the
+ledger anyway — recorded here as finding #103's disposition, not swept under
+the correction.
 
 **Frontend-binding deferral (WP06, WP09, WP11) — one blocker, three
 findings.** All three new RPC surfaces (`Compliance_SkipToID`,
