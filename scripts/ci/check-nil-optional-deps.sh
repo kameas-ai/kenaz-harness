@@ -60,6 +60,14 @@
 # monotonically; a line that no longer corresponds to a violation is
 # STALE and fails the gate.
 #
+# ALLOWLIST KEYING (Finding #92, CI-gate-hardening, 2026-09-14): entries
+# are keyed by FULLY-QUALIFIED SYMBOL (pkgPath.Struct.Field), never by
+# file:line — a line-number key self-invalidates on any unrelated edit
+# that shifts lines above the entry. File:line still appears, but only
+# inside an auto-generated `# at ...` locator comment that is printed
+# for humans and never compared. See i18-nil-optional-deps.txt's own
+# header for the incident history and the lossless-migration proof.
+#
 # Exit codes:
 #   0 — every optional-by-doc-comment interface field is wired or allowlisted
 #   1 — the checker itself failed to build, load packages, or read the allowlist

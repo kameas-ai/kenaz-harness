@@ -73,6 +73,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/memory/prune"
 	"github.com/kameas-ai/kenaz-harness/core/policy/blockedrequests"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/a2a"
 	acpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/acp"
 	graphview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph"
@@ -4423,8 +4424,16 @@ func New(c *core.Core, opts ...Option) *API {
 			// or the settings API is nil, the adapter returns a descriptive
 			// error so the FSM surfaces "sign-in unavailable" to the user.
 			// EventSkipAccount is unaffected — OSS-standalone invariant holds.
-			Signer:  onboardingAccountSignerAdapter{settingsAPI: a.settingsAPI},
-			DataDir: dataDir,
+			Signer: onboardingAccountSignerAdapter{settingsAPI: a.settingsAPI},
+			// Tester + ProviderStore close finding #107 (P0): before these
+			// were wired, the FSM's connection test always used a nil
+			// LLMTester (every key "succeeded") and a successfully-tested
+			// key was never persisted anywhere. Both adapters delegate to
+			// the same live llm view AddProviderForm.vue drives, so
+			// onboarding and Settings share one code path.
+			Tester:        onboardingLLMTesterAdapter{llmAPI: a.llmAPI},
+			ProviderStore: onboardingProviderStoreAdapter{llmAPI: a.llmAPI},
+			DataDir:       dataDir,
 			// fleet-welcome-01NWEL01 seams (WP04/WP07):
 			ProgressSyncer:   &onboardingProgressSyncerAdapter{client: onboardingFleetCl},
 			FleetStateReader: &onboardingFleetStateReaderAdapter{client: onboardingFleetCl},
@@ -5961,6 +5970,28 @@ func newLLMStack(
 		chatAutoTitleGen = autotitle.New(llmCaller)
 	}
 
+	// Build the risk-rating LLM caller for risk-rated-autonomy-01PMRA01
+	// WP05. Same registry + profile-resolver-with-store-fallback pattern
+	// as chatAutoTitleGen immediately above: no dedicated "risk rating
+	// model" setting exists yet, so the resolver falls back to the
+	// first configured profile, same as auto-title's own fallback. nil
+	// reg (no registry wired — the nil-core test chassis) leaves
+	// chatRiskRater nil, which leaves rung 0's layer-3 branch at the
+	// WP02/WP03 stub via kernelToolAdapter's own nil-rater guard.
+	var chatRiskRater risk.RiskRater
+	if reg != nil {
+		capturedRaterStore := store
+		chatRiskRater = risk.NewLLMRater(reg, func(_ context.Context) (string, string, bool) {
+			if capturedRaterStore != nil {
+				profs, perr := capturedRaterStore.List()
+				if perr == nil && len(profs) > 0 {
+					return profs[0].ID, profs[0].Model, true
+				}
+			}
+			return "", "", false
+		})
+	}
+
 	// system-prompt-layers WP03 / spec 089: the workspace line renders the
 	// core's RESOLVED agent workspace — the granted /workspace mount in a
 	// workbench, <DataDir>/agent-workspace otherwise — plus an honest note
@@ -6054,7 +6085,7 @@ func newLLMStack(
 	autonomyKnobsProvider := func(ctx context.Context, sessionID string) autonomy.ResolvedKnobs {
 		return computeAutonomyKnobs(ctx, sessionID, c, settingsImpl)
 	}
-	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, chatAttResolver, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatWorkspaceDir, chatWorkspaceNote, confirmBus, confirmDeps, autonomyKnobsProvider, secretLookup, secretGate, secretsBudget, confirmAudit, hooksRunner)
+	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, chatAttResolver, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen, chatRiskRater, chatWorkspaceDir, chatWorkspaceNote, confirmBus, confirmDeps, autonomyKnobsProvider, secretLookup, secretGate, secretsBudget, confirmAudit, hooksRunner)
 	var capCatalog llm.CapCatalog
 	if cat, err := llmcap.LoadDefault(); err == nil {
 		capCatalog = &capCatalogAdapter{cat: cat}
@@ -6631,6 +6662,11 @@ func buildChatRunner(
 	usageMgr usage.Manager,
 	sessionMgr *session.Manager,
 	autoTitleGen chat.AutoTitleGenerator,
+	// riskRater is risk-rated-autonomy-01PMRA01 WP05's LLM implementation
+	// of the layer-3 risk score, built in newLLMStack alongside
+	// autoTitleGen (same registry + profile-resolver-with-store-fallback
+	// pattern). nil leaves rung 0's layer-3 branch at the WP02/WP03 stub.
+	riskRater risk.RiskRater,
 	workspaceDir string,
 	workspaceNote string,
 	// confirmBus + confirmDeps are the confirm-each round trip
@@ -7103,39 +7139,66 @@ func buildChatRunner(
 		SecretLookup: secretLookup,
 		SecretGate:   secretGate,
 		SecretBudget: secretBudget,
-		// risk-rated-autonomy-01PMRA01 WP02: DELIBERATELY LEFT NIL until
-		// WP05 (the LLM risk rater) and WP07 (the unattended prompt
-		// deadline) land. nil makes rung 0 a byte-identical no-op; the
-		// intended production value is `secretGate`, the SAME live Cedar
-		// engine as SecretGate immediately above, so that layers 1-2 see
-		// the operator's real policy set.
+		// risk-rated-autonomy-01PMRA01 WP05+WP06+WP07: STILL
+		// DELIBERATELY NIL. Reviewer ruling 2026-09-14 (this exact PR,
+		// same review round the offline-floor fix below landed in):
+		// do NOT flip this to secretGate yet, even though WP05+WP06+WP07
+		// are all implemented and green. Two things remain, both
+		// required before the flip, and BOTH must be true — this is not
+		// an either/or:
 		//
-		// WHY IT IS OFF (measured 2026-09-12, release/v0.78.2):
-		// layer 3 (Cedar NotApplicable) resolves to Confirm, and until
-		// WP05 exists there is no rater that can resolve a below-
-		// threshold call back to Allow — so EVERY unmatched action asks,
-		// at every tier including autonomous. Built-in kenaz__* tools are
-		// unaffected (default_tool_policy.cedar permits server "kenaz",
-		// verified to reach layer 2 with the nil contextAttrs rung 0
-		// passes). Un-granted MCP-server tools are the affected set:
-		// filesystem__*, github__*, harness-self__* et al all move from
-		// silent allow to a prompt.
+		//   (a) DONE, this change: the offline-floor path
+		//       (kernel_tool_adapter.go's resolveLayer3OfflineFloor,
+		//       gated on errors.Is(err, risk.ErrUnreachable)) was
+		//       missing — every rater error, including true
+		//       unreachability (no network, no credentials, a dead
+		//       profile), used to fall through to the ordinary prompt.
+		//       Combined with rung 5's (correct, untouched) "unattended
+		//       -> deny immediately", an offline rater would have turned
+		//       into "deny every un-granted MCP tool for the whole
+		//       run" the instant this flipped on — the exact inversion
+		//       of the owner's stated autonomous-mode goal ("run an
+		//       agent for hours doing work and not stop it"). Fixed:
+		//       true unreachability now degrades to the SAME family
+		//       floor WP06 already computes (a baseline score of 0
+		//       through ApplyFamilyFloor), so a benign un-granted tool
+		//       still proceeds and a destructive/unclassifiable one
+		//       still surfaces — see resolveLayer3OfflineFloor's doc
+		//       comment and spec.md FR-004's amendment (lines 271-274)
+		//       for the full reasoning, and
+		//       ToolConfirmPathLayer3OfflineFloor for how it is logged
+		//       distinctly rather than folded into a reused
+		//       rater-failed path.
 		//
-		// A prompt is the RIGHT answer for an attended session, and is
-		// exactly the "universal prompt flow on first call" that
-		// default_tool_policy.cedar's header already describes. The
-		// blocker is the unattended case: core/toolloop/confirm.go:200
-		// states "There is no deadline", and kernel_tool_adapter.go's
-		// own comment says "Do not add a deadline here" (owner decision
-		// 1). So an agent running unattended at the autonomous tier
-		// would park forever on the first un-granted MCP tool, where
-		// today it proceeds. WP07 exists precisely to give layer-3
-		// prompts their own deadline without breaking that invariant for
-		// organically-reached confirm_each prompts.
+		//   (b) STILL OPEN: no real measured median added-latency
+		//       against a LIVE profile. This environment had no LLM
+		//       credentials/network access, so every WP05 test exercises
+		//       a fake LLMRegistry — an honest escalation, not a
+		//       shortcut, but it leaves an UNMEASURED network call on
+		//       the tool-dispatch critical path for every un-granted MCP
+		//       tool once this flips. Escalate above ~300ms median
+		//       rather than flipping quietly (mission brief's own
+		//       instruction). Whoever measures this against a real
+		//       profile: record the number in this comment (or a
+		//       replacement of it) in the same change that flips
+		//       RiskGate.
 		//
-		// Flip this back to `secretGate` in the same PR as WP05+WP07.
-		// Owner: risk-rated-autonomy-01PMRA01. Do not enable earlier.
+		// Flip this to `secretGate` — the SAME live Cedar engine as
+		// SecretGate immediately above — only once (b) is done; (a) is
+		// now done. Do not flip on (a) alone. Owner: risk-rated-
+		// autonomy-01PMRA01. The RiskRater field below is left wired
+		// regardless (harmless while RiskGate is nil — rung 0 nil-checks
+		// the GATE, not the rater, before consulting either; see
+		// kernel_tool_adapter.go's `if a.gate != nil` guard), so no
+		// production behaviour differs from pre-WP05 today: the whole
+		// rung is still a no-op end to end until RiskGate itself is
+		// non-nil.
 		RiskGate: nil,
+		// risk-rated-autonomy-01PMRA01 WP05: the LLM rater, built in
+		// newLLMStack alongside chatAutoTitleGen and threaded in as the
+		// riskRater parameter above. Inert while RiskGate (above) is nil
+		// — see that field's comment.
+		RiskRater: riskRater,
 	})
 	if err != nil {
 		logging.L().Error("chat.runner.construct_failed", "err", err.Error())

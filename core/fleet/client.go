@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // tokenExpiryGrace is the window before ExpiresAt in which we consider the
@@ -38,6 +40,22 @@ type Client struct {
 	// TopicFleetSessionExpired on the Wails event bus so the UI
 	// can surface a re-auth banner (FR-005).
 	sessionBroker BrokerSink
+
+	// enrollSF collapses concurrent RefreshIdentity callers into a single
+	// POST /api/v1/enroll round trip (finding #98, 2026-09-14). There are
+	// several independent, uncoordinated frontend call sites that can all
+	// invoke Settings_FleetSignIn / Settings_FleetRefreshIdentity around
+	// the same moment (UserMenu.vue's background poll, AccountPanel.vue's
+	// mount and manual-refresh triggers, CedarEditor.vue's mount) — none
+	// of them know about each other, so without this, every overlap fires
+	// as a fully independent enroll + activateOTLPPipeline + FleetConfig
+	// resolution. This is the same coalescing pattern CapabilityPoller.Refresh
+	// already uses (capability_poller.go), applied to the other fleet
+	// network op with multiple uncoordinated callers. A single key is
+	// correct: there is exactly one identity per Client, so any two
+	// concurrent enroll attempts are always for the same session and can
+	// always share one result.
+	enrollSF singleflight.Group
 }
 
 // SetSessionBroker wires the event broker into the client. When set, a
@@ -191,6 +209,8 @@ func (c *Client) CurrentIdentity(ctx context.Context) (Identity, error) {
 }
 
 // RefreshIdentity calls the fleet enroll endpoint and caches the result.
+// Concurrent callers (see enrollSF's doc comment) share a single in-flight
+// HTTP request via singleflight; every waiter gets the same result.
 func (c *Client) RefreshIdentity(ctx context.Context, nodeID, platform, version string) (Identity, error) {
 	if c == nil || c.isNop {
 		return Identity{}, ErrFleetDisabled
@@ -198,5 +218,13 @@ func (c *Client) RefreshIdentity(ctx context.Context, nodeID, platform, version 
 	if !c.profile.Configured() {
 		return Identity{}, ErrProfileNotConfigured
 	}
-	return c.enrollIdentity(ctx, nodeID, platform, version)
+	v, err, _ := c.enrollSF.Do("enroll", func() (any, error) {
+		return c.enrollIdentity(ctx, nodeID, platform, version)
+	})
+	if err != nil {
+		// v is the zero Identity{} on error (enrollIdentity's own contract);
+		// singleflight forwards it unchanged to every waiter.
+		return Identity{}, err
+	}
+	return v.(Identity), nil
 }

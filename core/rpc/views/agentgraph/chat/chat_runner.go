@@ -19,6 +19,7 @@ import (
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/policy/risk"
 	artview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
 	"github.com/kameas-ai/kenaz-harness/core/runposture"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
@@ -517,6 +518,15 @@ type Config struct {
 	// SecretGate immediately above (core/rpc/api.go) — layers 1-2 must
 	// see the operator's real policy set, not a second, divergent one.
 	RiskGate cedar.Gate
+	// RiskRater is risk-rated-autonomy-01PMRA01 WP05's LLM implementation
+	// of the layer-3 risk score. Consulted by the kernel tool adapter's
+	// rung 0 ONLY when RiskGate is also wired and the resolved
+	// autonomy.ResolvedKnobs.RiskThreshold > 0 (FR-008: a call whose
+	// result cannot change the answer must not spend a model call). nil
+	// leaves layer 3 at the WP02/WP03 stub (always Confirm) —
+	// byte-identical to every caller that has not wired a rater.
+	// Production wiring is *risk.LLMRater (core/rpc/api.go).
+	RiskRater risk.RiskRater
 	// SecretBudget caps resolutions per locator (refs.DefaultBudget==50)
 	// across the process lifetime. nil is unlimited. Production wiring
 	// shares the SAME *refs.Budget the kenaz__list_secrets tool uses to
@@ -1096,6 +1106,9 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// risk-rated-autonomy-01PMRA01 WP02: nil RiskGate leaves
 	// resolveConfirmEach's new rung 0 a no-op (pre-WP02 behaviour).
 	toolAdapter.withGate(r.cfg.RiskGate)
+	// risk-rated-autonomy-01PMRA01 WP05: nil RiskRater leaves rung 0's
+	// layer-3 branch at the WP02/WP03 stub (always Confirm).
+	toolAdapter.withRater(r.cfg.RiskRater)
 
 	r.mu.Lock()
 	r.nextID++
@@ -1962,7 +1975,23 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		partialRecoverable bool
 	)
 	if reason == "backend-error" && r.cfg.PartialPersister != nil {
-		partialText, hasTool := sub.bridge.PartialState()
+		// finding #105: every completed move of this turn is ALREADY a
+		// persisted row (model-moves-transcript-01PMCH01 WP02) — the
+		// same reason interrupt.go's PersistInterrupt persists
+		// bridge.PartialSegment() (the un-persisted tail) rather than
+		// bridge.PartialState()'s whole-turn accumulation. This path
+		// used to call PartialState() for the text too, so a
+		// backend-error after >=1 completed move duplicated every
+		// earlier segment into the new partial row, and the duplicate
+		// then fed the model's own words back to it as context on the
+		// next turn. hasTool is still read from PartialState(): per
+		// the PartialPersister doc above, "recoverable" answers
+		// whether ANY tool_use executed anywhere in the turn (a
+		// continuation prompt would double-bill a tool's side effect),
+		// which is turn-wide by design — unlike the text, it is not
+		// scoped to the tail segment.
+		_, hasTool := sub.bridge.PartialState()
+		partialText := sub.bridge.PartialSegment()
 		if partialText != "" {
 			partialFailureKind = classifyPartialFailureKind(message)
 			partialRecoverable = !hasTool
@@ -2037,6 +2066,21 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	//       session (the overwhelming majority of chat turns).
 	if runTerminatedClean && reason == "completed" && finishReason != "paused" &&
 		env.MergeSuggester != nil && env.Branch != nil {
+		// finding #105 audit: PartialState() (whole-turn accumulation)
+		// is the RIGHT call here, unlike the backend-error site above.
+		// This value never gets persisted — fireMergeSuggestion only
+		// feeds it in-memory to MergeSuggester.Inspect's terminal-token
+		// heuristic ("does this reply read like a conclusion?"), so
+		// there is no duplicate-row hazard. And reason=="completed"
+		// means the turn ended cleanly, so SessionWriteNode already
+		// wrote the real transcript rows; this local variable is a
+		// throwaway copy for one heuristic check, not a second write.
+		// Semantically it also wants the whole-turn text: the heuristic
+		// judges "the reply the user just saw," which for a
+		// multi-segment turn is every segment concatenated, not only
+		// the last move's tail (PartialSegment() would silently drop
+		// earlier segments from the judgment for no reason tied to the
+		// heuristic's intent).
 		lastText, _ := sub.bridge.PartialState()
 		go r.fireMergeSuggestion(sub.sessionID, env.Branch, env.MergeSuggester, lastText)
 	}

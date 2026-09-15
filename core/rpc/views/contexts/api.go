@@ -76,6 +76,11 @@ type ContextsAPI interface {
 	// accepted counts and any version conflicts.
 	// Requires CapSharedTeamGraph. Returns ErrFleetDisabled / ErrCapabilityNotInTier
 	// when the capability is absent — the frontend hides the affordance in that case.
+	//
+	// THROWAWAY team→org fallback (finding #97): when req.Layer == "team" and
+	// req.TeamID == "" the entry publishes to "org" instead — see the block
+	// comment on the implementation in impl.go for why and when to delete it.
+	// The response's EffectiveLayer always reflects what actually happened.
 	Context_Publish(ctx context.Context, req ContextPublishRequest) (ContextPublishResult, error)
 
 	// Context_Promote elevates a team_shared entry to org_shared.
@@ -147,6 +152,13 @@ type ContextPublishResult struct {
 	AcceptedEdges int `json:"accepted_edges"`
 	// Conflicts lists per-node version conflicts (LWW: server version wins).
 	Conflicts []fleet.ContextPushConflict `json:"conflicts"`
+	// EffectiveLayer is the layer the entry actually published to — "team"
+	// or "org". This can differ from the requested layer: see the
+	// team-to-org fallback comment on Context_Publish in impl.go. The
+	// frontend MUST use this (not the request layer) when telling the user
+	// where the entry went; silently widening visibility without saying so
+	// is the exact class of lie this codebase keeps getting bitten by.
+	EffectiveLayer string `json:"effective_layer"`
 }
 
 // ContextPromoteResult is the response from Context_Promote.

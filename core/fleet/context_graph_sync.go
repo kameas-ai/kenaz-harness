@@ -45,6 +45,7 @@ import (
 
 	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
 	contextpack "github.com/kameas-ai/kenaz-harness/core/context/pack"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // ── Layer ↔ classification mapping ────────────────────────────────────────────
@@ -439,11 +440,33 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 		Edges: edgeInputs,
 	}
 
-	resp, err := s.client.PostJSON(ctx, "/api/v1/context/push", req)
+	// Match the fleet.enroll.http.start / fleet.enroll.http.response logging
+	// pattern (core/fleet/identity.go) — this entire publish/promote path
+	// previously emitted nothing, which is what turned finding #97 (team
+	// publish silently broken for every user) into a source-archaeology
+	// exercise instead of a log grep. Sizes and identifiers only — never the
+	// title/body text (context bodies are user content).
+	const pushEndpoint = "/api/v1/context/push"
+	logging.L().Info("fleet.context.push.http.start",
+		"endpoint", pushEndpoint,
+		"node_id", entry.ID,
+		"classification", string(classification),
+		"team_id_present", entry.TeamID != nil,
+		"title_len", len(entry.Title),
+		"body_len", len(entry.Body),
+		"edge_count", len(edgeInputs),
+	)
+
+	resp, err := s.client.PostJSON(ctx, pushEndpoint, req)
 	if err != nil {
 		s.mu.Lock()
 		s.lastPushErr = err.Error()
 		s.mu.Unlock()
+		logging.L().Error("fleet.context.push.http.error",
+			"endpoint", pushEndpoint,
+			"node_id", entry.ID,
+			"err", err.Error(),
+		)
 		return nil, fmt.Errorf("fleet: context push: %w", err)
 	}
 	defer func() {
@@ -455,22 +478,48 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 		s.mu.Lock()
 		s.lastPushErr = "capability_not_in_tier"
 		s.mu.Unlock()
+		logging.L().Warn("fleet.context.push.http.response",
+			"endpoint", pushEndpoint,
+			"node_id", entry.ID,
+			"status", resp.StatusCode,
+		)
 		return nil, fmt.Errorf("%w: server refused push (likely org tier)", ErrCapabilityNotInTier)
 	}
 	if resp.StatusCode != http.StatusOK {
 		s.mu.Lock()
 		s.lastPushErr = fmt.Sprintf("push status %d", resp.StatusCode)
 		s.mu.Unlock()
+		logging.L().Warn("fleet.context.push.http.response",
+			"endpoint", pushEndpoint,
+			"node_id", entry.ID,
+			"status", resp.StatusCode,
+		)
 		return nil, fmt.Errorf("fleet: context push status %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		logging.L().Error("fleet.context.push.http.error",
+			"endpoint", pushEndpoint,
+			"node_id", entry.ID,
+			"err", err.Error(),
+		)
 		return nil, fmt.Errorf("fleet: context push read body: %w", err)
 	}
 
+	logging.L().Info("fleet.context.push.http.response",
+		"endpoint", pushEndpoint,
+		"node_id", entry.ID,
+		"status", resp.StatusCode,
+		"body_bytes", len(body),
+	)
+
 	var result ContextPushResult
 	if err := json.Unmarshal(body, &result); err != nil {
+		logging.L().Error("fleet.context.push.parse_error",
+			"node_id", entry.ID,
+			"err", err.Error(),
+		)
 		return nil, fmt.Errorf("fleet: context push parse response: %w", err)
 	}
 
@@ -698,8 +747,20 @@ func (s *ContextGraphSyncer) Promote(ctx context.Context, nodeID string) (*Conte
 		ToClassification: string(ClassOrgShared),
 	}
 
-	resp, err := s.client.PostJSON(ctx, "/api/v1/context/promote", req)
+	const promoteEndpoint = "/api/v1/context/promote"
+	logging.L().Info("fleet.context.promote.http.start",
+		"endpoint", promoteEndpoint,
+		"node_id", nodeID,
+		"to_classification", string(ClassOrgShared),
+	)
+
+	resp, err := s.client.PostJSON(ctx, promoteEndpoint, req)
 	if err != nil {
+		logging.L().Error("fleet.context.promote.http.error",
+			"endpoint", promoteEndpoint,
+			"node_id", nodeID,
+			"err", err.Error(),
+		)
 		return nil, fmt.Errorf("fleet: context promote: %w", err)
 	}
 	defer func() {
@@ -708,19 +769,45 @@ func (s *ContextGraphSyncer) Promote(ctx context.Context, nodeID string) (*Conte
 	}()
 
 	if resp.StatusCode == http.StatusForbidden {
+		logging.L().Warn("fleet.context.promote.http.response",
+			"endpoint", promoteEndpoint,
+			"node_id", nodeID,
+			"status", resp.StatusCode,
+		)
 		return nil, fmt.Errorf("%w: server refused promote", ErrCapabilityNotInTier)
 	}
 	if resp.StatusCode != http.StatusOK {
+		logging.L().Warn("fleet.context.promote.http.response",
+			"endpoint", promoteEndpoint,
+			"node_id", nodeID,
+			"status", resp.StatusCode,
+		)
 		return nil, fmt.Errorf("fleet: context promote status %d", resp.StatusCode)
 	}
 
 	rawBody, err := io.ReadAll(resp.Body)
 	if err != nil {
+		logging.L().Error("fleet.context.promote.http.error",
+			"endpoint", promoteEndpoint,
+			"node_id", nodeID,
+			"err", err.Error(),
+		)
 		return nil, fmt.Errorf("fleet: context promote read: %w", err)
 	}
 
+	logging.L().Info("fleet.context.promote.http.response",
+		"endpoint", promoteEndpoint,
+		"node_id", nodeID,
+		"status", resp.StatusCode,
+		"body_bytes", len(rawBody),
+	)
+
 	var result ContextPromoteResult
 	if err := json.Unmarshal(rawBody, &result); err != nil {
+		logging.L().Error("fleet.context.promote.parse_error",
+			"node_id", nodeID,
+			"err", err.Error(),
+		)
 		return nil, fmt.Errorf("fleet: context promote parse: %w", err)
 	}
 

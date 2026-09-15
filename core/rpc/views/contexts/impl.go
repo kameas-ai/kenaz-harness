@@ -268,12 +268,42 @@ func toWire(in corecontexts.Node) Node {
 // The request must specify layer = "team" or "org"; personal entries are
 // rejected with ErrPersonalLayerNotSyncable.
 // Requires a wired ContextGraphSyncer; returns ErrFleetDisabled otherwise.
+//
+// THROWAWAY team→org fallback (finding #97, 2026-09-14):
+//
+// The fleet enroll handler (kenaz-fleet service/handlers_v2.go:156)
+// deliberately returns an empty team_id for every client — "teams land
+// in v0.5.0" — so every org is teamless today and a "team" layer publish
+// can never carry a team_id. Rather than let publish fail for 100% of
+// users, an owner ruling says to widen to the "org" layer instead, and to
+// say so out loud rather than silently: the response's EffectiveLayer
+// always reflects what actually happened, and the frontend must surface
+// it (see ContextsView.vue).
+//
+// DELETE THIS BLOCK once the fleet server ships a default "everyone" team
+// per org — at that point req.TeamID is never empty for a team-layer
+// publish and this fallback is dead code. Until then it is the only path
+// that makes "Share to team" do anything at all.
 func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (ContextPublishResult, error) {
 	if a == nil || a.syncer == nil {
 		return ContextPublishResult{}, fleet.ErrFleetDisabled
 	}
 
 	layer := contextpack.Layer(req.Layer)
+	teamID := req.TeamID
+	fellBackToOrg := false
+	if layer == contextpack.LayerTeam && teamID == "" {
+		layer = contextpack.LayerOrg
+		fellBackToOrg = true
+	}
+
+	logging.L().Info("contexts.publish.start",
+		"node_id", req.NodeID,
+		"requested_layer", req.Layer,
+		"effective_layer", string(layer),
+		"team_fallback_to_org", fellBackToOrg,
+		"team_id_present", teamID != "",
+	)
 
 	entry := fleet.ContextNodeEntry{
 		ID:      req.NodeID,
@@ -283,18 +313,31 @@ func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (C
 		Body:    req.Body,
 		Version: req.Version,
 	}
-	if req.TeamID != "" {
-		entry.TeamID = &req.TeamID
+	if teamID != "" {
+		entry.TeamID = &teamID
 	}
 
 	result, err := a.syncer.PushEntry(ctx, entry, nil)
 	if err != nil {
+		logging.L().Warn("contexts.publish.failed",
+			"node_id", req.NodeID,
+			"effective_layer", string(layer),
+			"err", err.Error(),
+		)
 		return ContextPublishResult{}, fmt.Errorf("contexts: publish: %w", err)
 	}
+	logging.L().Info("contexts.publish.done",
+		"node_id", req.NodeID,
+		"effective_layer", string(layer),
+		"accepted_nodes", result.AcceptedNodes,
+		"accepted_edges", result.AcceptedEdges,
+		"conflict_count", len(result.Conflicts),
+	)
 	return ContextPublishResult{
-		AcceptedNodes: result.AcceptedNodes,
-		AcceptedEdges: result.AcceptedEdges,
-		Conflicts:     result.Conflicts,
+		AcceptedNodes:  result.AcceptedNodes,
+		AcceptedEdges:  result.AcceptedEdges,
+		Conflicts:      result.Conflicts,
+		EffectiveLayer: string(layer),
 	}, nil
 }
 
@@ -305,10 +348,20 @@ func (a *API) Context_Promote(ctx context.Context, nodeID string) (ContextPromot
 		return ContextPromoteResult{}, fleet.ErrFleetDisabled
 	}
 
+	logging.L().Info("contexts.promote.start", "node_id", nodeID)
+
 	result, err := a.syncer.Promote(ctx, nodeID)
 	if err != nil {
+		logging.L().Warn("contexts.promote.failed",
+			"node_id", nodeID,
+			"err", err.Error(),
+		)
 		return ContextPromoteResult{}, fmt.Errorf("contexts: promote: %w", err)
 	}
+	logging.L().Info("contexts.promote.done",
+		"node_id", nodeID,
+		"new_classification", string(result.Node.Classification),
+	)
 	return ContextPromoteResult{
 		UpdatedNodeID:     result.Node.ID,
 		NewClassification: string(result.Node.Classification),

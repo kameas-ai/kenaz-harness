@@ -50,6 +50,21 @@
  *     calls `client.contexts.export` (Contexts_ContextExport) and downloads
  *     the decoded payload. Both are disabled-with-a-reason under the same
  *     fleet gate as promote, for the same reason.
+ *
+ * Finding #97 additions (2026-09-14, THROWAWAY — see impl.go):
+ *   - Fleet's enroll response has no team_id for any org today (teams are
+ *     mid-rollout server-side), so a "team"-layer publish was silently
+ *     unreachable. The publish confirm dialog now offers an explicit
+ *     "team" vs. "org" choice (`publishLayer`), and `confirmPublish` never
+ *     sends a team_id — there is no team picker because there are no
+ *     teams to pick. The backend may still resolve a "team" request to
+ *     "org" when it has no team_id to use; `publishResult.effective_layer`
+ *     is the ONLY source of truth for what actually happened, and
+ *     `publishFellBackToOrg` drives an explicit "published org-wide
+ *     instead" notice rather than letting a team request quietly become
+ *     org-wide visibility. Delete this UI layer-choice/fallback messaging
+ *     once fleet always returns a real team_id (see impl.go for the
+ *     exact deletion trigger).
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
@@ -100,6 +115,15 @@ const syncStatus = ref<ContextSyncStatusView | null>(null);
  * dialog. The dialog must be confirmed before the actual publish call.
  */
 const showPublishConfirm = ref(false);
+/**
+ * publishLayer is the user's deliberate layer choice in the confirm
+ * dialog — "team" (default) or "org". This is the only place "org" is
+ * offered as an explicit choice today (finding #97); there is no team
+ * picker because there are no fleet teams to pick yet.
+ */
+const publishLayer = ref<'team' | 'org'>('team');
+/** The layer actually requested for the in-flight/most-recent publish call. */
+const publishRequestedLayer = ref<'team' | 'org'>('team');
 /** Result of the most recent publish call (shown inline). */
 const publishResult = ref<ContextPublishResult | null>(null);
 /** Error string from the last publish call. */
@@ -110,6 +134,20 @@ const publishLoading = ref(false);
 /** teamCapEnabled is true when fleet has the team-graph sharing cap. */
 const teamCapEnabled = computed(
   () => syncStatus.value?.team_cap_enabled ?? false,
+);
+
+/**
+ * publishFellBackToOrg is true when the most recent publish was requested
+ * as "team" but actually landed at "org" — the finding #97 fallback for
+ * when fleet has no team_id to give this org yet. Drives the honest
+ * "published org-wide instead" note; never say "shared with your team"
+ * when this is true.
+ */
+const publishFellBackToOrg = computed(
+  () =>
+    publishResult.value !== null &&
+    publishRequestedLayer.value === 'team' &&
+    publishResult.value.effective_layer === 'org',
 );
 
 /** Stable node ID for the selected file (btoa of path). */
@@ -133,18 +171,26 @@ async function loadSyncStatus() {
 
 /**
  * openPublishConfirm — show the "visible to your org" confirm dialog.
- * Only called when teamCapEnabled and a file is selected.
+ * Only called when teamCapEnabled and a file is selected. Resets the
+ * layer choice to "team" (the default, still-most-common intent) each
+ * time the dialog opens.
  */
 function openPublishConfirm() {
   publishError.value = null;
   publishResult.value = null;
+  publishLayer.value = 'team';
   showPublishConfirm.value = true;
 }
 
 /**
  * confirmPublish — the user clicked "Yes, share" in the confirm dialog.
- * Calls client.contexts.publish with the selected file's metadata.
- * The nodeID is derived from the path (stable cross-session).
+ * Calls client.contexts.publish with the selected file's metadata and the
+ * user's chosen layer. The nodeID is derived from the path (stable
+ * cross-session). No team_id is ever sent — there is no team picker
+ * (finding #97): fleet teams don't exist yet, so a "team" request may
+ * silently resolve to "org" server-side. `result.effective_layer` is
+ * always what actually happened and is what gets shown to the user, not
+ * the requested layer.
  */
 async function confirmPublish() {
   showPublishConfirm.value = false;
@@ -152,10 +198,11 @@ async function confirmPublish() {
   publishLoading.value = true;
   publishError.value = null;
   publishResult.value = null;
+  publishRequestedLayer.value = publishLayer.value;
   try {
     const result = await client.contexts.publish({
       node_id: selectedNodeID.value,
-      layer: 'team',
+      layer: publishLayer.value,
       kind: 'guidance',
       title: selectedPath.value.replace(/.*\//, '').replace(/\.[^.]+$/, ''),
       body: previewContent.value,
@@ -653,11 +700,38 @@ onBeforeUnmount(() => {
         class="bg-surface-1 rounded-xl shadow-xl border border-border-muted p-6 max-w-sm w-full mx-4"
         data-testid="context-publish-confirm-dialog"
       >
-        <h2 class="font-ui font-semibold text-sm text-ink mb-2">Share with your team?</h2>
-        <p class="font-ui text-[12px] text-ink-muted leading-relaxed mb-4">
-          This entry will be visible to everyone in your organisation. Do not share credentials,
-          private keys, or sensitive personal information in shared layers.
+        <h2 class="font-ui font-semibold text-sm text-ink mb-2">Share this entry?</h2>
+        <p class="font-ui text-[12px] text-ink-muted leading-relaxed mb-3">
+          Do not share credentials, private keys, or sensitive personal information in shared
+          layers.
         </p>
+        <!-- Layer choice — "org" is a deliberate, explicit option (finding #97).
+             There is no team picker: fleet doesn't have teams to pick yet, so a
+             "team" choice may itself resolve to org-wide (surfaced honestly
+             after publish via effective_layer, not hidden here). -->
+        <fieldset class="flex flex-col gap-2 mb-4" data-testid="context-publish-layer-choice">
+          <legend class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle mb-1">
+            Visibility
+          </legend>
+          <label class="flex items-center gap-2 font-ui text-[12px] text-ink cursor-pointer">
+            <input
+              v-model="publishLayer"
+              type="radio"
+              value="team"
+              data-testid="context-publish-layer-team"
+            />
+            <span>Share to team</span>
+          </label>
+          <label class="flex items-center gap-2 font-ui text-[12px] text-ink cursor-pointer">
+            <input
+              v-model="publishLayer"
+              type="radio"
+              value="org"
+              data-testid="context-publish-layer-org"
+            />
+            <span>Publish org-wide (visible to everyone in your organisation)</span>
+          </label>
+        </fieldset>
         <div class="flex justify-end gap-3">
           <button
             type="button"
@@ -679,13 +753,23 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- Publish result / error toast -->
+    <!-- Publish result / error toast — always states the EFFECTIVE layer
+         (finding #97), never the requested one, so a team→org fallback is
+         never silent. -->
     <div
       v-if="publishResult"
       class="px-4 py-1 bg-surface-1 border-b border-border-muted font-ui text-[11px] text-signal-success"
       data-testid="context-publish-result"
     >
-      Published ({{ publishResult.accepted_nodes }} node{{ publishResult.accepted_nodes === 1 ? '' : 's' }})
+      <template v-if="publishFellBackToOrg">
+        Published org-wide ({{ publishResult.accepted_nodes }} node{{ publishResult.accepted_nodes === 1 ? '' : 's' }})
+        — team sync isn't available yet, so this went to everyone in your organisation instead
+        of just your team.
+      </template>
+      <template v-else>
+        Published to {{ publishResult.effective_layer === 'org' ? 'your organisation' : 'your team' }}
+        ({{ publishResult.accepted_nodes }} node{{ publishResult.accepted_nodes === 1 ? '' : 's' }})
+      </template>
       <span v-if="publishResult.conflicts && publishResult.conflicts.length > 0" class="text-signal-warning ml-2">
         · {{ publishResult.conflicts.length }} version conflict{{ publishResult.conflicts.length === 1 ? '' : 's' }}
       </span>
@@ -815,7 +899,11 @@ onBeforeUnmount(() => {
           <span class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle flex-1">
             Library
           </span>
-          <!-- Publish affordance — only when team cap enabled and a file is selected -->
+          <!-- Publish affordance — only when team cap enabled and a file is
+               selected. Opens a dialog offering both "team" and the
+               explicit "org" choice (finding #97); label stays generic
+               since the destination is chosen in the dialog, not implied
+               by the button. -->
           <button
             v-if="teamCapEnabled && selectedPath"
             type="button"
@@ -825,7 +913,7 @@ onBeforeUnmount(() => {
             @click="openPublishConfirm"
           >
             <span v-if="publishLoading">Sharing…</span>
-            <span v-else>Share to team</span>
+            <span v-else>Share…</span>
           </button>
           <!-- Promote affordance (WP16) — visible whenever a file is
                selected, disabled (with a reason below) when fleet's team

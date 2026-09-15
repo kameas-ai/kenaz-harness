@@ -603,6 +603,56 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			append2: "\n\nvar zzGateProbeCalledWithNil = graphview.WithZzGateProbeCalledWithNil(nil)\n",
 		},
 		{
+			// Finding #96 (CI-gate-hardening, 2026-09-14): clause 4's
+			// "nested-call permit" sub-check — resolve a With*(cedar.Gate)
+			// option's NESTED-CALL argument one level and flag it if the
+			// callee unconditionally returns cedar.AllowAll{} — had NO
+			// planted-violation proof anywhere in this file before this
+			// commit, despite being the exact mechanism PR #302's review
+			// finding motivated (see this clause's own header comment in
+			// check-cedar-gate-arguments.sh). That gap hid a real bug: the
+			// callee-name extraction sed script was double-quoted with a
+			// bare `$#` inside it — bash's special "argument count"
+			// parameter, not two literal characters — so bash silently
+			// mangled the script before sed ever ran it, and the mangled
+			// script failed identically on both BSD and GNU sed. The
+			// failure was masked by a trailing `|| true`, so `callee` came
+			// back empty and this whole detection branch fell through to
+			// `continue` — the gate reported clean on every nested-call
+			// With* site in the tree, including the real
+			// `bundle.WithGate(a.cedarGate())` production call, without
+			// ever checking what the callee actually returns.
+			//
+			// This plant reproduces the real shape: a With*(cedar.Gate)
+			// option called with `<receiver>.<Method>()` where Method is
+			// a real method (not a free function — see
+			// check-cedar-gate-arguments.sh's own comment on this plant
+			// for why the callee must have a receiver) whose body
+			// unconditionally returns cedar.AllowAll{}. Two files, same
+			// two-plant shape as with-option-called-with-nil above: file
+			// declares the option against the EXISTING graphview alias;
+			// file2 appends both the AllowAll-returning receiver method
+			// AND the call site to core/rpc/api.go, since the callee-body
+			// scan (`find core -name '*.go' ...`) reads real files on
+			// disk, not an overlay.
+			name:       "cedar-gate-arguments/with-option-nested-call-permit",
+			gate:       "check-cedar-gate-arguments.sh",
+			wantOutput: "clause 4, nested-call permit",
+			file:       "core/rpc/views/agentgraph/zz_gate_probe_nested_permit.go",
+			content: "package agentgraph\n\n" +
+				"import \"github.com/kameas-ai/kenaz-harness/core/policy/cedar\"\n\n" +
+				"func WithZzGateProbeNestedPermit(g cedar.Gate) ManagerOption {\n" +
+				"\treturn func(m *Manager) { _ = g }\n" +
+				"}\n",
+			file2: "core/rpc/api.go",
+			append2: "\n\ntype zzGateProbeNestedPermitReceiver struct{}\n\n" +
+				"func (z zzGateProbeNestedPermitReceiver) NestedPermitCallee() cedar.Gate {\n" +
+				"\treturn cedar.AllowAll{}\n" +
+				"}\n\n" +
+				"var zzGateProbeNestedPermitRecv zzGateProbeNestedPermitReceiver\n\n" +
+				"var zzGateProbeNestedPermitCalled = graphview.WithZzGateProbeNestedPermit(zzGateProbeNestedPermitRecv.NestedPermitCallee())\n",
+		},
+		{
 			// B4 (unwired sweep, release/v0.72.0), clause 5's type-widening
 			// half: a Config-struct field whose type is NOT literally
 			// cedar.Gate but IS witnessed as *cedar.Engine-satisfied in the
@@ -1528,6 +1578,26 @@ func TestGates_PlantedViolationFires(t *testing.T) {
 			gate:       "check-no-fleet-imports.sh",
 			file:       "core/rpc/views/zzgatefleetprobe/impl.go",
 			content:    "package zzgatefleetprobe\n\nimport _ \"github.com/kameas-ai/kenaz-harness/core/fleet\"\n",
+		},
+		{
+			// Finding #96 (CI-gate-hardening, 2026-09-14) meta-gate's own
+			// planted-violation proof: reproduces instance 1's exact
+			// shape (check-transport-parity.sh:92, before its fix) —
+			// `\t` spelled as the two literal characters inside a
+			// single-quoted grep -oE pattern, not a real tab via ANSI-C
+			// quoting. Planted as a NEW check-*.sh file under
+			// scripts/ci/ (the meta-gate's own scan root) rather than
+			// editing a real gate, so this proof never touches tracked
+			// gate logic. Not added to cwdSensitiveGates above (a fixed,
+			// curated list, not a live glob), so this planted file
+			// cannot be picked up by that unrelated test.
+			name:       "bsd-gnu-escape-divergence/tab-escape-in-grep-pattern",
+			wantOutput: "check-zz-gate-probe-escape.sh",
+			gate:       "check-bsd-gnu-escape-divergence.sh",
+			file:       "scripts/ci/check-zz-gate-probe-escape.sh",
+			content: "#!/usr/bin/env bash\n" +
+				"# planted probe for TestGates_PlantedViolationFires.\n" +
+				"grep -oE '^\\tcase \"[a-z]+\":' somefile.go\n",
 		},
 	}
 
@@ -2889,6 +2959,66 @@ func TestNoCredentialInUI_BenignFieldsDoNotTrip(t *testing.T) {
 // and why it leaves the WithSessionHookRunner functional-option idiom
 // (core/session/manager.go:185-192, a plain non-method function) exactly
 // as before.
+// TestNilOptionalDepsGate_KeyStableUnderLineShift is checknilopts's own
+// Finding #92 (CI-gate-hardening, 2026-09-14) regression proof, the i18
+// sibling of TestConfigNilCoverageGate_KeyStableUnderLineShift below —
+// same rationale, different target file. i18-nil-optional-deps.txt's
+// own header cites core/agentgraph/executor.go's Env.AttachmentRegistry
+// entry as a LIVE historical instance of the exact failure this proof
+// guards against: its line moved 235->250 during the release/v0.78.0
+// integration sweep with nothing about the finding changing, back when
+// this allowlist was still file:line-keyed.
+func TestNilOptionalDepsGate_KeyStableUnderLineShift(t *testing.T) {
+	root := repoRoot(t)
+	implPath := filepath.Join(root, "core", "agentgraph", "executor.go")
+
+	orig, err := os.ReadFile(implPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", implPath, err)
+	}
+	if !strings.Contains(string(orig), "AttachmentRegistry") {
+		t.Fatalf("core/agentgraph/executor.go no longer mentions AttachmentRegistry — this test's " +
+			"premise (a real, currently-allowlisted i18 violation living in this file) no longer " +
+			"holds; update the test or the allowlist together")
+	}
+
+	var shiftLines strings.Builder
+	for i := 1; i <= 40; i++ {
+		fmt.Fprintf(&shiftLines, "// ZZ_LINE_SHIFT_PROBE %d — Finding #92 regression proof, never written to disk\n", i)
+	}
+	mutated := shiftLines.String() + string(orig)
+
+	scratch := t.TempDir()
+	scratchImpl := filepath.Join(scratch, "executor_zz_line_shift_probe.go")
+	if err := os.WriteFile(scratchImpl, []byte(mutated), 0o644); err != nil {
+		t.Fatalf("writing scratch shifted executor.go: %v", err)
+	}
+	overlay := struct{ Replace map[string]string }{Replace: map[string]string{implPath: scratchImpl}}
+	overlayJSON, err := json.Marshal(overlay)
+	if err != nil {
+		t.Fatalf("marshalling overlay: %v", err)
+	}
+	overlayPath := filepath.Join(scratch, "overlay.json")
+	if err := os.WriteFile(overlayPath, overlayJSON, 0o644); err != nil {
+		t.Fatalf("writing overlay.json: %v", err)
+	}
+
+	code, out := runGateEnv(t, "check-nil-optional-deps.sh", root, map[string]string{
+		"NIL_OPTIONAL_DEPS_OVERLAY": overlayPath,
+	})
+	if code != 0 {
+		t.Fatalf("check-nil-optional-deps.sh exited %d after a 40-line shift ABOVE a real, "+
+			"already-allowlisted entry (Env.AttachmentRegistry) — this is exactly the Finding #92 "+
+			"self-invalidation failure mode.\noutput:\n%s", code, out)
+	}
+	if !strings.Contains(out, "clean") {
+		t.Fatalf("check-nil-optional-deps.sh exited 0 but did not print \"clean\":\n%s", out)
+	}
+	if strings.Contains(out, "FAIL") {
+		t.Fatalf("check-nil-optional-deps.sh printed FAIL despite exiting 0:\n%s", out)
+	}
+}
+
 func TestNilOptionalDepsGate_PlantedUnwiredFieldFires(t *testing.T) {
 	root := repoRoot(t)
 	implPath := filepath.Join(root, "core", "rpc", "views", "scheduledchat", "impl.go")
@@ -3832,6 +3962,81 @@ var zzGateProbeCalledWired = WithZzGateProbeCalled(zzGateProbeCalledImpl{})
 // (G-4, trust-surfaces-that-fire-01PMZ202 spec.md §G-4 / WP18): "add a
 // rule keyed on a context attribute the action never populates."
 //
+// TestConfigNilCoverageGate_KeyStableUnderLineShift is the Finding #92
+// (CI-gate-hardening, 2026-09-14) regression proof: reproduces the EXACT
+// incident the finding names — an unrelated edit adding lines ABOVE an
+// allowlisted entry in core/rpc/api.go, which used to shift
+// WithConnectorTokens 1506->1542 and WithSettingsStore 1523->1559 and
+// make the (then file:line-keyed) allowlist report both entries STALE
+// at their old line AND UNLISTED at their new one simultaneously, with
+// nothing about either finding having changed.
+//
+// This overlay prepends 40 blank-ish comment lines to the REAL
+// core/rpc/api.go (never written to disk — packages.Config.Overlay
+// substitutes content at load time only) and asserts the gate STILL
+// reports clean: WithConnectorTokens and WithSettingsStore are real,
+// currently-allowlisted Tier-2 violations in
+// scripts/ci/allowlists/i16-config-nil-coverage.txt, so if the key were
+// still line-derived this test would fail with exactly the double
+// failure mode described above. Asserts the gate's OWN "clean" text and
+// the absence of "FAIL", not just a non-zero/zero exit code split — a
+// gate broken in a way that prints neither would still pass a bare
+// exit-code check.
+func TestConfigNilCoverageGate_KeyStableUnderLineShift(t *testing.T) {
+	root := repoRoot(t)
+	implPath := filepath.Join(root, "core", "rpc", "api.go")
+
+	orig, err := os.ReadFile(implPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", implPath, err)
+	}
+	if !strings.Contains(string(orig), "WithConnectorTokens") ||
+		!strings.Contains(string(orig), "WithSettingsStore") {
+		t.Fatalf("core/rpc/api.go no longer mentions WithConnectorTokens/WithSettingsStore — " +
+			"this test's premise (two real, currently-allowlisted i16 violations living in this " +
+			"file) no longer holds; update the test or the allowlist together")
+	}
+
+	var shiftLines strings.Builder
+	for i := 1; i <= 40; i++ {
+		fmt.Fprintf(&shiftLines, "// ZZ_LINE_SHIFT_PROBE %d — Finding #92 regression proof, never written to disk\n", i)
+	}
+	mutated := shiftLines.String() + string(orig)
+
+	scratch := t.TempDir()
+	scratchImpl := filepath.Join(scratch, "api_zz_line_shift_probe.go")
+	if err := os.WriteFile(scratchImpl, []byte(mutated), 0o644); err != nil {
+		t.Fatalf("writing scratch shifted api.go: %v", err)
+	}
+	overlay := struct{ Replace map[string]string }{Replace: map[string]string{implPath: scratchImpl}}
+	overlayJSON, err := json.Marshal(overlay)
+	if err != nil {
+		t.Fatalf("marshalling overlay: %v", err)
+	}
+	overlayPath := filepath.Join(scratch, "overlay.json")
+	if err := os.WriteFile(overlayPath, overlayJSON, 0o644); err != nil {
+		t.Fatalf("writing overlay.json: %v", err)
+	}
+
+	code, out := runGateEnv(t, "check-config-nil-coverage.sh", root, map[string]string{
+		"CONFIG_NIL_COVERAGE_OVERLAY": overlayPath,
+	})
+	if code != 0 {
+		t.Fatalf("check-config-nil-coverage.sh exited %d after a 40-line shift ABOVE two real, "+
+			"already-allowlisted Tier-2 entries (WithConnectorTokens, WithSettingsStore) — this is "+
+			"exactly the Finding #92 self-invalidation failure mode: a symbol-keyed allowlist must "+
+			"be indifferent to where the symbol's declaration lands in the file.\noutput:\n%s", code, out)
+	}
+	if !strings.Contains(out, "clean") {
+		t.Fatalf("check-config-nil-coverage.sh exited 0 but did not print \"clean\" — a gate that "+
+			"exits 0 without its own clean-verdict text could be exiting 0 for the wrong reason:\n%s", out)
+	}
+	if strings.Contains(out, "FAIL") {
+		t.Fatalf("check-config-nil-coverage.sh printed FAIL despite exiting 0 — an inconsistent "+
+			"verdict:\n%s", out)
+	}
+}
+
 // Plants a new .cedar file naming a REAL, already-wired action
 // (memory_write / ActionMemoryWrite) and its correct resource type
 // (Memory, matching cedar.MemoryUID) — so legs (a) and (b) both pass —
@@ -3841,6 +4046,44 @@ var zzGateProbeCalledWired = WithZzGateProbeCalled(zzGateProbeCalledImpl{})
 // — a literal nil context map, zero keys, ever. This isolates leg (c)
 // specifically, the exact shape the spec's own planted-violation
 // description names.
+// TestBSDGNUEscapeDivergenceGate_ANSICQuotedTabDoesNotFire is the
+// negative-control companion to the
+// "bsd-gnu-escape-divergence/tab-escape-in-grep-pattern" case in
+// TestGates_PlantedViolationFires's table above: the identical `\t`
+// grep -oE pattern, this time correctly ANSI-C quoted ($'...', a real
+// tab byte) — the canonical fixed form check-transport-parity.sh:92
+// itself uses. Proves the meta-gate distinguishes the two spellings
+// rather than flagging every grep -oE mentioning "case", the same
+// "not just non-zero exit" discipline every other planted-violation
+// proof in this file applies (Finding #59: a check that passes on
+// something ADJACENT to the property it claims to verify). Not part of
+// the shared TestGates_PlantedViolationFires table because that table's
+// runner only asserts non-zero exit — there is no slot for "must stay
+// zero", the same reason TestConfigNilCoverageGate_PlantedUnwiredFieldFires
+// and its sibling proofs carry their own negative-control subtests
+// instead of living in the shared table.
+func TestBSDGNUEscapeDivergenceGate_ANSICQuotedTabDoesNotFire(t *testing.T) {
+	root := repoRoot(t)
+
+	probePath := filepath.Join(root, "scripts", "ci", "check-zz-gate-probe-escape-fixed.sh")
+	content := "#!/usr/bin/env bash\n" +
+		"# planted negative-control probe for TestBSDGNUEscapeDivergenceGate_ANSICQuotedTabDoesNotFire.\n" +
+		"grep -oE $'^\\tcase \"[a-z]+\":' somefile.go\n"
+
+	cleanup := plant(t, probePath, content, "")
+	defer cleanup()
+
+	code, out := runGate(t, "check-bsd-gnu-escape-divergence.sh", root)
+	if code != 0 {
+		t.Fatalf("check-bsd-gnu-escape-divergence.sh flagged an ANSI-C quoted ($'...') grep pattern "+
+			"carrying a REAL tab byte — the meta-gate fires on the presence of \\t-shaped text, not "+
+			"specifically on the unquoted two-character spelling it exists to catch.\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "clean") {
+		t.Fatalf("check-bsd-gnu-escape-divergence.sh exited 0 but did not print \"clean\":\n%s", out)
+	}
+}
+
 func TestShippedPolicyMatchableGate_PlantedContextMismatchFires(t *testing.T) {
 	root := repoRoot(t)
 

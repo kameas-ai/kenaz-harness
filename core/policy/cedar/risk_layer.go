@@ -26,10 +26,16 @@ import (
 // no engine wired, the safe direction is "ask", not "allow everything".
 //
 // This function is a pure re-interpretation of a SINGLE Evaluate call; it
-// does not itself call a rater. WP05 wires a RiskRater into layer 3 by
-// wrapping this function (or replacing the stub in-line here); nothing
-// upstream should reach an unmatched action's disposition any other way
-// once that lands, so both stub and rater share exactly one call site.
+// does not itself call a rater and never will — a blocking LLM call has
+// no business inside the Cedar-evaluation package. WP05 wires a
+// RiskRater by WRAPPING this function's Confirm result at its one
+// caller (core/rpc/views/agentgraph/chat/kernel_tool_adapter.go's
+// resolveConfirmEach / resolveLayer3Rating): a Confirm outcome from here
+// is consulted against the rater ONLY there, so this function's own
+// behaviour — Deny/Allow/Confirm from a single Evaluate call — is
+// unchanged by WP05 landing. Nothing upstream reaches an unmatched
+// action's disposition any other way: resolveConfirmEach is still the
+// one call site for BOTH this function and the rater.
 //
 // threshold is risk-rated-autonomy-01PMRA01 FR-003's autonomy dial
 // (autonomy.ResolvedKnobs.RiskThreshold, 0-100). WP02/WP03 have no rater
@@ -82,11 +88,15 @@ func ThreeLayerResolve(
 			// model call.
 			d.Reason = "layer 3: threshold=0 — every unmatched action asks and the rater is bypassed (FR-008)"
 		} else {
-			// WP02/WP03 stub: always ask. WP05 replaces this branch
-			// with a real rating that can resolve to Allow below
-			// threshold; until then every unmatched action is Confirm,
-			// which is strictly safer than main's NotApplicable -> allow.
-			d.Reason = "layer 3: no Cedar policy matched; rating not yet wired (WP04/WP05) — asking"
+			// This function itself still always returns Confirm here —
+			// see ThreeLayerResolve's doc comment above: WP05's rater is
+			// consulted by the CALLER against this exact Confirm result,
+			// not inside this function. A caller with no rater wired (or
+			// one that hits an error, per RiskRater's fail-closed
+			// contract) leaves every unmatched action at Confirm, which
+			// is strictly safer than main's pre-mission NotApplicable ->
+			// allow.
+			d.Reason = "layer 3: no Cedar policy matched; pending the caller's rating (WP05) — asking"
 		}
 		return d
 	}

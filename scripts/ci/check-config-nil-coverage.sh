@@ -53,6 +53,16 @@
 # the blocker and owner. Allowlists shrink monotonically; a line that
 # no longer corresponds to a violation is STALE and fails the gate.
 #
+# ALLOWLIST KEYING (Finding #92, CI-gate-hardening, 2026-09-14): entries
+# are keyed by FULLY-QUALIFIED SYMBOL (pkgPath.Struct.Field for Tier 1,
+# pkgPath.FuncOrMethod for Tier 2), never by file:line — a line-number
+# key self-invalidates on any unrelated edit that shifts lines above the
+# entry (it goes stale at the old line AND unlisted at the new line
+# simultaneously). File:line still appears, but only inside an
+# auto-generated `# at ...` locator comment that is printed for humans
+# and never compared. See i16-config-nil-coverage.txt's own header for
+# the incident history and the lossless-migration proof.
+#
 # Exit codes:
 #   0 — every Tier-1 field and Tier-2 With*-function is wired, called, or allowlisted
 #   1 — the checker itself failed to build, load packages, read the allowlist,

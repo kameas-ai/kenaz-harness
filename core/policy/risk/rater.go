@@ -75,6 +75,29 @@ type SessionContext struct {
 // wires a RiskRater into cedar.ThreeLayerResolve, any Rate error there
 // maps to Confirm (ask a human), never to Allow (spec FR-004: "fail
 // closed to the prompt, never fail-open").
+//
+// # Unreachability is a distinct failure (spec.md FR-004 amendment)
+//
+// Not every error is equal, though: spec.md's FR-004 amendment (lines
+// 271-274) distinguishes TRUE UNREACHABILITY — no route to the model at
+// all — from a transient provider error or a malformed response. The
+// latter still prompts, per FR-004 unchanged; only true unreachability
+// degrades to the family-floor path (WP07's offline floor, wired in
+// kernel_tool_adapter.go's resolveLayer3OfflineFloor), so an autonomous
+// unattended run with no network to the rater does not turn into a hard
+// stop on every un-granted MCP tool.
+//
+// An implementation that wants a Rate error to engage the offline floor
+// MUST make errors.Is(err, ErrUnreachable) true for that error (wrap it
+// with wrapUnreachable, or produce an error chain containing
+// ErrUnreachable via fmt.Errorf's %w). LLMRater does this for: no rater
+// configured, no profile resolved, the registry's Stream() call itself
+// failing (dial/DNS/auth failure, or the hard timeout elapsing before a
+// stream was ever established), and a stream that was established but
+// received zero events before failing. Every other failure — a
+// mid-stream fault after at least one event arrived, an unparseable
+// response, an out-of-range score — is deliberately left unwrapped, so
+// it keeps prompting exactly as it always has.
 type RiskRater interface {
 	Rate(ctx context.Context, tool string, normalizedArgs string, sessCtx SessionContext) (Rating, error)
 }

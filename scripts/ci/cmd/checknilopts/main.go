@@ -331,38 +331,51 @@ func run() error {
 
 	markAssignments(pkgs, fields)
 
-	var violations []string
+	var violations []violation
 	for _, f := range fields {
 		if f.assigned {
 			continue
 		}
-		violations = append(violations, f.violationString())
+		violations = append(violations, violation{key: f.key(), detail: f.violationString()})
 	}
-	sort.Strings(violations)
+	sort.Slice(violations, func(i, j int) bool { return violations[i].key < violations[j].key })
+	detailByKey := make(map[string]string, len(violations))
+	keys := make([]string, 0, len(violations))
+	for _, v := range violations {
+		if _, dup := detailByKey[v.key]; !dup {
+			keys = append(keys, v.key)
+		}
+		detailByKey[v.key] = v.detail
+	}
 
 	allow, err := loadAllowlist(allowlistPath)
 	if err != nil {
 		return err
 	}
 
-	unlisted := diff(violations, allow)
-	stale := diff(allow, violations)
+	unlisted := diff(keys, allow)
+	stale := diff(allow, keys)
 
 	fmt.Printf("[nil-optional-deps] scanned %d optional-by-doc-comment interface field(s) under core/+cmd/: "+
 		"%d wired in production, %d not wired (%d allowlisted, %d unlisted).\n",
-		len(fields), len(fields)-len(violations), len(violations), len(violations)-len(unlisted), len(unlisted))
+		len(fields), len(fields)-len(keys), len(keys), len(keys)-len(unlisted), len(unlisted))
 
 	fail := false
 	if len(unlisted) > 0 {
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintln(os.Stderr, "[nil-optional-deps] FAIL: interface field documented optional, never assigned in production, not in "+allowlistPath+":")
-		for _, v := range unlisted {
-			fmt.Fprintln(os.Stderr, "    "+v)
+		fmt.Fprintln(os.Stderr, "[nil-optional-deps] Paste the KEY line and the auto-generated locator comment")
+		fmt.Fprintln(os.Stderr, "[nil-optional-deps] directly into the allowlist (the key is what gates; the")
+		fmt.Fprintln(os.Stderr, "[nil-optional-deps] locator comment is for humans and may drift freely):")
+		for _, k := range unlisted {
+			fmt.Fprintln(os.Stderr, "    "+k)
+			fmt.Fprintln(os.Stderr, "    # at "+detailByKey[k])
 		}
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintln(os.Stderr, "[nil-optional-deps] Either wire a real production assignment (a composite-literal")
-		fmt.Fprintln(os.Stderr, "[nil-optional-deps] field or a Set*/With* call reachable from main/rpc.New), or add a")
-		fmt.Fprintln(os.Stderr, "[nil-optional-deps] DATED line to "+allowlistPath+" naming the blocker and owner.")
+		fmt.Fprintln(os.Stderr, "[nil-optional-deps] field or a Set*/With* call reachable from main/rpc.New), or add the")
+		fmt.Fprintln(os.Stderr, "[nil-optional-deps] lines above to "+allowlistPath+" with a DATED justification")
+		fmt.Fprintln(os.Stderr, "[nil-optional-deps] comment naming the blocker and owner.")
 		fail = true
 	}
 	if len(stale) > 0 {
@@ -398,6 +411,28 @@ type triggerField struct {
 func (f *triggerField) violationString() string {
 	return fmt.Sprintf("%s:%d: %s.%s (%s) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value",
 		f.file, f.line, f.owner.Obj().Name(), f.fieldName, f.fieldType)
+}
+
+// key returns the fully-qualified symbol (pkgPath.Struct.Field) this
+// violation is keyed by in the allowlist — see Finding #92
+// (CI-gate-hardening, 2026-09-14): a file:line key self-invalidates on
+// any unrelated edit that shifts lines above the entry. violationString
+// above still carries file:line, but only as a human-facing locator
+// printed alongside the key, never compared.
+func (f *triggerField) key() string {
+	return fmt.Sprintf("%s.%s.%s", f.owner.Obj().Pkg().Path(), f.owner.Obj().Name(), f.fieldName)
+}
+
+// violation pairs a stable KEY (compared against the allowlist) with a
+// human-readable DETAIL (file:line locator + description, printed and
+// recorded as an auto-generated comment, never compared). Mirrors
+// checkconfig/main.go's identical type — the two tools share this
+// pattern deliberately (same defect shape: a nilable field never wired
+// in production) but are not otherwise coupled, so the type is
+// duplicated rather than factored into a shared package.
+type violation struct {
+	key    string
+	detail string
 }
 
 // isTestDoublePackage mirrors checkseams: a package that imports

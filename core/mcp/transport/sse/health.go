@@ -2,6 +2,7 @@ package sse
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -264,12 +265,28 @@ func (p *HealthProbe) Stop() {
 // JSON-RPC request through the given Connection. The supplied id
 // source generates request ids so concurrent probes do not collide on
 // the same envelope id. Mirrors the http package's function of the
-// same name — see its doc comment for the response-snatching caveat,
-// which applies identically here (Send POSTs and returns once the
-// ACK lands; the actual JSON-RPC response arrives asynchronously on
-// the SSE stream and is drained via Recv on the same inboundCh
-// application traffic uses).
-func NewToolsListProbe(conn *Connection, idSource func() int64) func(ctx context.Context) error {
+// same name (Send POSTs and returns once the ACK lands; the actual
+// JSON-RPC response arrives asynchronously on the SSE stream and is
+// drained via Recv on the same inboundCh application traffic uses).
+//
+// dispatchMu, when non-nil, is locked for the full Send+Recv
+// round-trip — the SAME mutex sse.Pool's sseEntry uses to serialise
+// toolsForEntry/Call against each other (pool.go:391,439). Before
+// finding #106, this probe ran against the bare *Connection with no
+// lock: the probe goroutine and a live tools/call could Send
+// concurrently onto the one shared inboundCh, so a probe tick could
+// steal a live tool call's response (reporting spurious success and
+// starving the real caller, which then times out) or hand the tool
+// call goroutine the probe's own tools/list payload. Passing nil (no
+// concurrent traffic expected) preserves that pre-fix shape for
+// isolated-Connection test use only.
+//
+// Even with dispatchMu held, a caller that gives up on ctx.Done()
+// before its Recv observes the reply leaves that reply on the queue
+// for whoever calls Recv next. MatchesID below is what catches that:
+// the probe discards a mismatched envelope and fails cleanly rather
+// than reporting success on someone else's payload.
+func NewToolsListProbe(conn *Connection, idSource func() int64, dispatchMu *sync.Mutex) func(ctx context.Context) error {
 	if idSource == nil {
 		var counter int64
 		idSource = func() int64 {
@@ -278,6 +295,10 @@ func NewToolsListProbe(conn *Connection, idSource func() int64) func(ctx context
 		}
 	}
 	return func(ctx context.Context) error {
+		if dispatchMu != nil {
+			dispatchMu.Lock()
+			defer dispatchMu.Unlock()
+		}
 		id := idSource()
 		req := transport.RequestEnvelope{
 			JSONRPC: transport.JSONRPCVersion,
@@ -296,6 +317,12 @@ func NewToolsListProbe(conn *Connection, idSource func() int64) func(ctx context
 		case res := <-respCh:
 			if res.err != nil {
 				return res.err
+			}
+			if !res.msg.MatchesID(id) {
+				// finding #106: a stale reply from an earlier,
+				// abandoned Send landed on our Recv instead of our
+				// own response.
+				return fmt.Errorf("mcp: health probe response id mismatch (sent %d)", id)
 			}
 			if res.msg.Error != nil {
 				return res.msg.Error

@@ -5437,6 +5437,7 @@ export function createFakeHarnessClient(
         accepted_nodes: 1,
         accepted_edges: 0,
         conflicts: [],
+        effective_layer: _req.layer,
       }),
       promote: async (_nodeID: string) => ({
         updated_node_id: _nodeID,

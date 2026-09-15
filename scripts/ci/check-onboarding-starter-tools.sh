@@ -61,6 +61,23 @@ fi
 # ---- 2. every harness_* token named in a shipped starter ----
 named=$(grep -ohE 'harness_[a-z_]+' "$PROMPTS_DIR"/*.md 2>/dev/null | LC_ALL=C sort -u || true)
 
+# NO DISCOVERY FLOOR HERE, DELIBERATELY (Finding #74, CI-gate-hardening,
+# 2026-09-14 audit): unlike the sibling `registered` discovery above,
+# `named` legitimately empty is TODAY'S REAL, INTENTIONAL state, not a
+# broken pattern. code.md's own engineering-note header records why:
+# every shipped starter is deliberately free of literal harness_* tokens
+# — first-run-onboarding-01PMOB01 WP01/WP02 removed them because the
+# harness-self MCP server they'd have named is unattached in this
+# release (core/rpc/api.go builds a.harnessServer and never reads it
+# again), so naming any harness_* tool here would violate FR-002 ("no
+# prompt promises a capability the session cannot reach") — exactly the
+# defect class this gate exists to catch, just pre-empted by never
+# naming a tool at all rather than by this gate catching a violation.
+# A floor asserting "named must be non-empty" would hard-fail CI on this
+# correct, current tree. If a future starter re-adds tool names (WP05,
+# once the harness-self transport attaches), this comment's premise
+# should be revisited alongside it.
+
 # ---- 3. names in the prompts that are not in the registered set ----
 fail=0
 unregistered=""

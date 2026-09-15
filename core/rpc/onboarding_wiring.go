@@ -31,8 +31,11 @@ import (
 	"os"
 
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
+	"github.com/kameas-ai/kenaz-harness/core/llm/envprovider"
+	"github.com/kameas-ai/kenaz-harness/core/llm/personal"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	harnessmcp "github.com/kameas-ai/kenaz-harness/core/mcp/builtin/harness"
+	coreonboarding "github.com/kameas-ai/kenaz-harness/core/onboarding"
 	llmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
 	onboardingview "github.com/kameas-ai/kenaz-harness/core/rpc/views/onboarding"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
@@ -259,6 +262,100 @@ func (a onboardingAccountSignerAdapter) SignIn(ctx context.Context) (string, err
 		return "", err
 	}
 	return id.Email, nil
+}
+
+// ---- LLMTester adapter (finding #107 P0) ------------------------------------
+
+// onboardingLLMTesterAdapter implements coreonboarding.LLMTester by
+// delegating to the live llm view's ListModels probe — the SAME
+// connection-status check AddProviderForm.vue drives for a manual
+// "Add provider" in Settings (see llmview.LLMConnectorAPI.TestProviderKey's
+// doc comment for why TestProviderKey itself is NOT this path: it is an
+// azure-openai-only stub with zero .vue callers, so reusing it here would
+// make onboarding fail closed for every kind onboarding actually supports —
+// anthropic, openai, openrouter). Reusing ListModels means an onboarding key
+// test and a Settings key test run through the identical adapter code, so
+// they cannot drift apart.
+//
+// Finding #107 (P0): before this adapter existed, core/rpc/views/onboarding's
+// New() always built the FSM with a nil LLMTester (cfg.FSM =
+// coreonboarding.NewFull(nil, nil, cfg.Signer)), so the FSM's
+// "if f.tester != nil" guard was always false and TestProvider was never
+// called — every key, garbage or real, reported "Success".
+//
+// A nil llmAPI (unwired chassis) fails the test rather than silently
+// passing it — the whole point of this adapter is to stop a key test from
+// lying, so an unwired dependency must not quietly re-open the same hole.
+type onboardingLLMTesterAdapter struct {
+	llmAPI llmview.LLMConnectorAPI
+}
+
+// TestProvider implements coreonboarding.LLMTester.
+func (a onboardingLLMTesterAdapter) TestProvider(ctx context.Context, kind coreonboarding.ProviderKind, apiKey string) error {
+	if a.llmAPI == nil {
+		return errors.New("onboarding: provider key test unavailable (llm view not wired)")
+	}
+	_, err := a.llmAPI.ListModels(ctx, string(kind), apiKey)
+	return err
+}
+
+// ---- ProviderStorer adapter (finding #107 P0) -------------------------------
+
+// onboardingProviderStoreAdapter implements coreonboarding.ProviderStorer by
+// delegating to the live llm view's AddProvider path — the exact same
+// persistence Settings' "Add provider" form drives, so a provider onboarding
+// creates and one a user types by hand in Settings are indistinguishable to
+// the registry / ListProviders / chat's provider resolution.
+//
+// Finding #107 (P0): before this adapter existed, a successfully-tested key
+// was discarded. stepEnterAPIKey's comment said "clear the key (it will be
+// stored by the caller)" but onboardingview.Config had no provider-store
+// field of any kind, so no caller ever stored it — the user's pasted key
+// vanished and onboarding finished with zero configured providers.
+//
+// ID and the keychain locator follow AddProviderForm.vue's own convention
+// (derivedId = "<kind>-<model>"; locator = "kenaz-harness/<id>") so an
+// onboarding-created row looks exactly like one the user typed by hand. The
+// default model comes from envprovider.DefaultModelFor — the single source
+// of truth this repo already uses for "what model does kind X get when
+// nobody picked one explicitly" (core/llm/envprovider's package doc).
+type onboardingProviderStoreAdapter struct {
+	llmAPI llmview.LLMConnectorAPI
+}
+
+// StoreProvider implements coreonboarding.ProviderStorer.
+func (a onboardingProviderStoreAdapter) StoreProvider(ctx context.Context, kind coreonboarding.ProviderKind, apiKey string) error {
+	if a.llmAPI == nil {
+		return errors.New("onboarding: provider storage unavailable (llm view not wired)")
+	}
+	k := string(kind)
+	model := envprovider.DefaultModelFor(k)
+	if model == "" {
+		return fmt.Errorf("onboarding: no default model configured for provider kind %q", k)
+	}
+	id := k
+	input := llmview.AddProviderInput{
+		ID:     id,
+		Kind:   k,
+		Model:  model,
+		Models: []string{model},
+		Cred: llmview.CredentialReference{
+			Kind:    "keychain",
+			Locator: "kenaz-harness/" + id,
+		},
+		PlaintextAPIKey: apiKey,
+	}
+	err := a.llmAPI.AddProvider(ctx, input)
+	if err != nil && errors.Is(err, personal.ErrAlreadyExists) {
+		// The user is re-running onboarding (Begin called twice, or they
+		// completed it once already) and a personal profile with this id
+		// already exists. Update in place — the just-tested key replaces
+		// the old one, exactly what re-entering a key in Settings would do
+		// — rather than failing the whole onboarding flow over a row that
+		// already represents "this provider kind is configured".
+		return a.llmAPI.UpdateProvider(ctx, input)
+	}
+	return err
 }
 
 // ---- ProgressSyncer adapter (WP07, 01NWEL01) --------------------------------

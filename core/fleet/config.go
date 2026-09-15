@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
@@ -52,6 +54,27 @@ var (
 	// shared across restarts (the disk cache covers that).
 	configCacheMu sync.RWMutex
 	configCache   = map[string]FleetConfig{}
+
+	// configSF collapses concurrent cache-miss resolutions for the same
+	// spaBaseURL into a single disk-or-network fetch + cache write
+	// (finding #98, 2026-09-14). Every fleet HTTP call — enrollIdentity,
+	// CapabilityPoller.fetch, ConfigPoller.poll, Watcher.poll,
+	// activateOTLPPipeline's direct FleetConfig() call — routes through
+	// ResolveFleetConfig via Client.APIURL/Client.FleetConfig. Without
+	// this, any two of them racing a cold/stale cache (which happens on
+	// EVERY process boot: SetFleetClient starts CapabilityPoller and
+	// ConfigPoller as separate goroutines, and both perform an immediate
+	// first fetch) independently call saveFleetConfigToDisk for the same
+	// dataDir+spaBaseURL — same deterministic tmp path — and the loser's
+	// os.Rename(tmp, path) fails with ENOENT because the winner's rename
+	// already consumed the shared tmp file. Confirmed in production as
+	// fleet.config.cache.save_failed (106 occurrences / 453 fetches);
+	// verified this is reachable from the two-poller boot race alone,
+	// independent of any additional enroll-frequency defect elsewhere —
+	// see TestResolveFleetConfig_ConcurrentCallers_CollapseToOneFetch.
+	// Same coalescing pattern as CapabilityPoller.Refresh's sf field
+	// (capability_poller.go) and Client.enrollSF (client.go).
+	configSF singleflight.Group
 )
 
 // FetchFleetConfig retrieves /config.json from the given SPA base URL.
@@ -144,6 +167,12 @@ func FetchFleetConfig(ctx context.Context, spaBaseURL string) (FleetConfig, erro
 
 // ResolveFleetConfig returns a cached config or fetches a fresh one.
 // Cache check order: in-memory → disk → network.
+//
+// Concurrent callers that miss the in-memory cache for the same spaBaseURL
+// collapse into a single disk-or-network resolution via configSF — see its
+// doc comment for why this is required, not just a throughput nicety: the
+// on-disk write below is only race-free when at most one writer per key
+// runs at a time, and this singleflight join is what guarantees that.
 func ResolveFleetConfig(ctx context.Context, dataDir, spaBaseURL string) (FleetConfig, error) {
 	if spaBaseURL == "" {
 		return FleetConfig{}, errors.New("fleet: spa base URL is empty")
@@ -157,6 +186,21 @@ func ResolveFleetConfig(ctx context.Context, dataDir, spaBaseURL string) (FleetC
 	}
 	configCacheMu.RUnlock()
 
+	v, err, _ := configSF.Do(key, func() (any, error) {
+		return resolveFleetConfigUncached(ctx, dataDir, key)
+	})
+	if err != nil {
+		return FleetConfig{}, err
+	}
+	return v.(FleetConfig), nil
+}
+
+// resolveFleetConfigUncached performs the disk-or-network resolution body.
+// Only ever runs for one caller at a time per key — configSF.Do above
+// guarantees that — so the on-disk write via saveFleetConfigToDisk is
+// single-writer by construction and cannot race its own deterministic
+// tmp path.
+func resolveFleetConfigUncached(ctx context.Context, dataDir, key string) (FleetConfig, error) {
 	if dataDir != "" {
 		if disk, err := loadFleetConfigFromDisk(dataDir, key); err == nil && time.Since(disk.FetchedAt) < fleetConfigTTL {
 			configCacheMu.Lock()
