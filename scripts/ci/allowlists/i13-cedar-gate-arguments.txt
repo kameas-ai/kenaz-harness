@@ -13,40 +13,35 @@
 # STALE and fails the gate — deleting the line is the required follow-up
 # when the site is wired.
 #
-# EMPTY, and it must stay that way. The 2026-08-16 sweep wired all six
-# sites this gate was written for (audit findings A1 + A2, plus
-# tools.Config.Gate which the gate itself surfaced). There is no known
-# reason for a production wiring site to hold an AllowAll: buildCedarGate
-# already returns AllowAll for an empty DataDir, so the nil-core test
-# posture needs no literal at the call.
+# The 2026-08-16 sweep wired all six sites this gate was written for
+# (audit findings A1 + A2, plus tools.Config.Gate which the gate itself
+# surfaced). There is no known reason for a production wiring site to
+# hold an AllowAll: buildCedarGate already returns AllowAll for an empty
+# DataDir, so the nil-core test posture needs no literal at the call.
+# One entry below is a DELIBERATE, dated exception to that otherwise-
+# empty state.
 
 core/rpc/views/agentgraph/chat/chat_runner.go: Config.RiskGate is never assigned a non-nil gate in core/rpc/api.go's chat.Config literal — the zero value is a nil gate, i.e. unconditional permit (clause 3)
-# 2026-09-13 — DELIBERATE, and the gate's clause-3 inference is conservative
-# rather than exactly right here. risk-rated-autonomy-01PMRA01 WP01-WP04
-# merged with the wiring OFF: core/rpc/api.go sets `RiskGate: nil` where the
-# intended value is `secretGate`, the same live *cedar.Engine SecretGate uses.
+# 2026-09-14 — DELIBERATE, and the gate's clause-3 inference is
+# conservative rather than exactly right here, same as the identical
+# entry this mission carried from 2026-09-12 through most of this same
+# review round (restored after a brief flip to secretGate was held back
+# — see core/rpc/api.go's own comment at the RiskGate wiring site and
+# scripts/ci/allowlists/i18-nil-optional-deps.txt for the complete,
+# current reasoning).
 #
 # Why this is NOT an unconditional permit in behaviour: the consumer
 # nil-checks BEFORE calling. kernel_tool_adapter.go's resolveConfirmEach
-# opens rung 0 with `if a.gate != nil`, so a nil gate skips rung 0 entirely
-# and rungs 1-5 decide exactly as they did before WP02 existed. Nothing
-# becomes more permissive than the pre-mission tree. (ThreeLayerResolve DOES
-# map a nil Gate to AllowAll{}, which is what clause 3 keys on — but that
-# function is unreachable from this call site while the field is nil.)
+# opens rung 0 with `if a.gate != nil`, so a nil gate skips rung 0
+# entirely and rungs 1-5 decide exactly as they did before WP02 existed.
+# Nothing becomes more permissive than the pre-mission tree.
+# (ThreeLayerResolve DOES map a nil Gate to AllowAll{}, which is what
+# clause 3 keys on — but that function is unreachable from this call
+# site while the field is nil.)
 #
-# Blocker: layer 3 (Cedar NotApplicable) resolves to Confirm, and until
-# WP05's rater exists nothing can resolve a below-threshold call back to
-# Allow, so every unmatched action asks. Measured against the real embedded
-# policy set: built-in kenaz__* tools still reach layer 2 Allow, but
-# un-granted MCP tools (filesystem__*, github__*, harness-self__*) move from
-# silent allow to a prompt. Correct for an ATTENDED session; the blocker is
-# unattended, because core/toolloop/confirm.go:200 has no deadline and
-# kernel_tool_adapter.go says "Do not add a deadline here" (owner decision
-# 1) — so an autonomous unattended run would park forever on the first
-# un-granted MCP tool. WP07 exists to give layer-3 prompts their own
-# deadline.
-#
-# Owner: risk-rated-autonomy-01PMRA01. The change that deletes this line:
-# the PR landing WP05 + WP07, which flips api.go back to
-# `RiskGate: secretGate`. Full reasoning is duplicated at the wiring site
-# and in scripts/ci/allowlists/i18-nil-optional-deps.txt.
+# Blocker: a real measured median added-latency against a live profile
+# — the offline-floor path that used to be the other blocker
+# (kernel_tool_adapter.go's resolveLayer3OfflineFloor) is now done.
+# Owner: risk-rated-autonomy-01PMRA01. The change that deletes this
+# line: whoever measures the latency, in the same change that flips
+# RiskGate to `secretGate`.

@@ -136,20 +136,41 @@ core/llm/custom/adapter.go:95: github.com/kameas-ai/kenaz-harness/core/llm/custo
 
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
-core/rpc/api.go:1542: github.com/kameas-ai/kenaz-harness/core/rpc.WithConnectorTokens is never called by any non-test source under core/
+core/rpc/api.go:1543: github.com/kameas-ai/kenaz-harness/core/rpc.WithConnectorTokens is never called by any non-test source under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+# Line renumbered 1542->1543 by risk-rated-autonomy-01PMRA01 WP05
+# (2026-09-14): newLLMStack grew a chatRiskRater construction block ahead
+# of this declaration, shifting every following line. No change to the
+# underlying fact this line records.
 
-core/rpc/api.go:1559: github.com/kameas-ai/kenaz-harness/core/rpc.WithSettingsStore is never called by any non-test source under core/
+core/rpc/api.go:1560: github.com/kameas-ai/kenaz-harness/core/rpc.WithSettingsStore is never called by any non-test source under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+# Line renumbered 1559->1560 by risk-rated-autonomy-01PMRA01 WP05
+# (2026-09-14), same cause as the WithConnectorTokens entry above.
 
 core/rpc/views/acp/acp.go:314: Options.Verifier (interface) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
 
-core/rpc/views/agentgraph/chat/chat_runner.go:443: Config.Clock (func) is never set to a non-nil value in any non-test composite literal under core/
+core/rpc/views/agentgraph/chat/chat_runner.go:444: Config.Clock (func) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+# Line renumbered 443->444 by risk-rated-autonomy-01PMRA01 WP05
+# (2026-09-14): a new Config.RiskRater field + doc comment were added
+# above this one. No change to the underlying fact this line records.
 
-core/rpc/views/agentgraph/chat/chat_runner.go:532: Config.SecretAuditEmitter (interface) is never set to a non-nil value in any non-test composite literal under core/
+core/rpc/views/agentgraph/chat/chat_runner.go:542: Config.SecretAuditEmitter (interface) is never set to a non-nil value in any non-test composite literal under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
+# Line renumbered 532->542 by risk-rated-autonomy-01PMRA01 WP05
+# (2026-09-14), same cause as the Config.Clock entry above.
+
+core/rpc/views/agentgraph/chat/chat_runner.go:520: Config.RiskGate (interface) is never set to a non-nil value in any non-test composite literal under core/
+# 2026-09-14 — DELIBERATE. Same finding as the i18 and i13 entries for
+# this field; see scripts/ci/allowlists/i18-nil-optional-deps.txt and
+# i13-cedar-gate-arguments.txt for the full, current reasoning (a
+# reviewer ruling held the flip to `secretGate` back pending a real
+# measured median latency against a live profile, after the offline-
+# floor gap that WAS blocking it got fixed in this same PR). Owner:
+# risk-rated-autonomy-01PMRA01. Deleted by whoever measures the
+# remaining latency blocker, in the same change that flips the field.
 
 core/rpc/views/audit/impl.go:120: github.com/kameas-ai/kenaz-harness/core/rpc/views/audit.WithEmitter is never called by any non-test source under core/
 # 2026-09-12 baseline — see header "CALIBRATION BASELINE" paragraph.
@@ -297,12 +318,3 @@ core/tools/askuserquestion/askuserquestion.go:299: Options.Logger (pointer) is n
 core/tools/subagentdispatch/tool.go:179: Options.Tasks (interface) is never set to a non-nil value in any non-test composite literal under core/
 core/tools/subagentdispatch/tool.go:192: Options.SessionResolver (func) is never set to a non-nil value in any non-test composite literal under core/
 
-core/rpc/views/agentgraph/chat/chat_runner.go:519: Config.RiskGate (interface) is never set to a non-nil value in any non-test composite literal under core/
-# 2026-09-12 — DELIBERATE. Same finding as the i18 entry for this field;
-# see scripts/ci/allowlists/i18-nil-optional-deps.txt for the full
-# measurement and the re-enable condition. Short version: rung 0 of
-# resolveConfirmEach is merged but switched off in core/rpc/api.go
-# (`RiskGate: nil`) because layer 3 asks about every un-granted MCP tool
-# and there is no prompt deadline yet, so an unattended autonomous run
-# would park forever. Owner: risk-rated-autonomy-01PMRA01. Deleted by the
-# PR landing WP05 (the rater) + WP07 (the unattended deadline).

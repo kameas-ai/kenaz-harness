@@ -165,27 +165,83 @@ core/update/service.go:51: Config.Swapper (Swapper) is documented optional but n
 # — Swapper exists for core/update/service_test.go to inject a fake; no
 # product need for an alternate installer exists today. Owner: n/a.
 
-core/rpc/views/agentgraph/chat/chat_runner.go:519: Config.RiskGate (github.com/kameas-ai/kenaz-harness/core/policy/cedar.Gate) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
-# 2026-09-12 — DELIBERATE, and reversible in one line. risk-rated-autonomy-
-# 01PMRA01 WP01-WP04 merged with the wiring OFF: core/rpc/api.go sets
-# `RiskGate: nil` where the intended value is `secretGate` (the same live
-# Cedar engine SecretGate already uses). Blocker: layer 3 (Cedar
-# NotApplicable) resolves to Confirm, and until WP05's rater exists nothing
-# can resolve a below-threshold call back to Allow, so every unmatched
-# action asks. Measured against the real embedded policy set: built-in
-# kenaz__* tools still reach layer 2 Allow, but un-granted MCP tools
-# (filesystem__*, github__*, harness-self__*) move from silent allow to a
-# prompt. That is correct for an ATTENDED session; the blocker is
-# unattended, because core/toolloop/confirm.go:200 has no deadline and
-# kernel_tool_adapter.go says "Do not add a deadline here" (owner decision
-# 1) — so an autonomous unattended run would park forever on the first
-# un-granted MCP tool. WP07 exists to give layer-3 prompts their own
-# deadline. Owner: risk-rated-autonomy-01PMRA01. The change that deletes
-# this line: the PR landing WP05 + WP07, which flips api.go back to
-# `RiskGate: secretGate`. Full reasoning is duplicated at the wiring site.
+core/rpc/views/agentgraph/chat/kernel_tool_adapter.go:152: kernelToolAdapter.gate (github.com/kameas-ai/kenaz-harness/core/policy/cedar.Gate) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
+# 2026-09-14 — a gate BLIND SPOT, independent of Config.RiskGate's
+# current value (which is nil as of this same date — see the entry
+# below and core/rpc/api.go's own comment at the RiskGate wiring site
+# for why: the offline-floor fix landed but a live-profile latency
+# measurement has not, so the flip is still pending). This entry exists
+# regardless of whether RiskGate is nil or secretGate, because the
+# reason it is unwired is STRUCTURAL, not behavioural — see below.
+#
+# Production data flow (true whenever Config.RiskGate IS non-nil, which
+# it was briefly during this same review round before being reverted):
+# chat_runner.go's StartStream calls
+# `toolAdapter.withGate(r.cfg.RiskGate)`, which — once RiskGate is
+# secretGate — is a REAL, reachable, non-nil call in production. Clause
+# 1 correctly does NOT flag chat.Config.RiskGate itself in that state
+# (a composite literal with a non-nil argument); only THIS downstream
+# field is ever reported, and for a reason unrelated to whether RiskGate
+# is currently nil.
+#
+# Why the gate still reports it: clause 2 (markAssignments' *ast.CallExpr
+# case, main.go ~line 799) recognises a wiring call ONLY when the method
+# name starts with the EXPORTED prefix "With" or "Set" (capital first
+# letter — `strings.HasPrefix(name, "With")`, case-sensitive). Every
+# builder method on kernelToolAdapter — withGate, withRater, withConfirm,
+# withAutonomy, withMoves, and so on — is deliberately lowercase:
+# kernelToolAdapter itself is an unexported, package-private type with no
+# external API surface (only *this* package's chat_runner.go ever
+# constructs and chains one), so exporting just withGate to satisfy this
+# gate would be inconsistent with every sibling method for no product
+# reason. Clause 3's setter-body exception (self.owner ==
+# kernelToolAdapter, RHS is the method's own parameter) correctly
+# excludes `a.gate = g` inside withGate's OWN body from counting as
+# evidence — that exception is doing its job here, not misfiring — which
+# leaves clause 2 as the only remaining path, and clause 2 cannot match a
+# lowercase name by construction.
+#
+# This is a real, general class the gate cannot see: any field wired
+# exclusively through an unexported with*/set*-prefixed builder method
+# will report the same false positive, on any type. It predates this
+# mission — the field was already allowlisted (with an inaccurate "clears
+# automatically" note) back when Config.RiskGate itself was nil, so
+# nobody had verified the assumption end-to-end until now. Fixing the
+# gate to also recognise a lowercase with*/set* prefix is the correct
+# long-term fix but is out of scope for this PR (risk-rated-autonomy-
+# 01PMRA01 WP05/WP06/WP07) — it is a change to a shared, carefully
+# calibrated cross-repo checker (scripts/ci/cmd/checknilopts/main.go) and
+# widening its recognition needs its own re-measurement pass across every
+# currently-allowlisted field, matching the discipline the 2026-09-10 and
+# PR #332 calibration rounds documented in this file's header already
+# used. Blocker: that re-measurement pass. Owner: whoever next touches
+# scripts/ci/cmd/checknilopts/main.go — extend clause 2 to accept a
+# lowercase "with"/"set" prefix (mirroring the exported case exactly,
+# including the lowerFirst fallback becoming a no-op for an
+# already-lowercase field name) and re-run the full calibration.
 
-core/rpc/views/agentgraph/chat/kernel_tool_adapter.go:137: kernelToolAdapter.gate (github.com/kameas-ai/kenaz-harness/core/policy/cedar.Gate) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
-# 2026-09-12 — the same disable, one layer down: chat_runner.go:1098 calls
-# toolAdapter.withGate(r.cfg.RiskGate), so this field is nil for exactly
-# as long as Config.RiskGate is. Deleted by the same PR. Owner:
-# risk-rated-autonomy-01PMRA01.
+core/rpc/views/agentgraph/chat/chat_runner.go:520: Config.RiskGate (github.com/kameas-ai/kenaz-harness/core/policy/cedar.Gate) is documented optional but no production site under core/ or cmd/ assigns it a non-nil value
+# 2026-09-14 — DELIBERATE, and reversible in one line. Restored: this
+# entry existed from WP01-04 through v0.79.0, was deleted mid-review
+# when WP05+WP06+WP07 landed and this line briefly flipped to
+# `RiskGate: secretGate`, and is restored here because the SAME review
+# round's reviewer ruling held the flip back — see core/rpc/api.go's own
+# comment at the RiskGate wiring site for the complete, current
+# reasoning; this entry only summarizes it.
+#
+# Two things gate the flip, both required:
+#   (a) DONE (this PR): the offline-floor path
+#       (kernel_tool_adapter.go's resolveLayer3OfflineFloor) — true
+#       rater unreachability now degrades to WP06's family floor
+#       instead of falling through to the ordinary prompt, which
+#       combined with rung 5's unattended-denies-immediately would have
+#       turned an offline rater into "deny every un-granted MCP tool for
+#       the whole run" the moment this flipped on.
+#   (b) STILL OPEN: no real measured median added-latency against a
+#       live profile — this dev environment has no LLM credentials, so
+#       every WP05 test exercises a fake registry.
+#
+# Blocker: (b). Owner: risk-rated-autonomy-01PMRA01. The change that
+# deletes this line: whoever measures (b) against a real profile, in the
+# same change that flips this field to `secretGate`.
+
