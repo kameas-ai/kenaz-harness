@@ -50,6 +50,14 @@ const KindCompaction = "compaction"
 // regular chat and compaction costs.
 const KindAutoTitle = "auto_title"
 
+// KindRiskRating is the cost-tagging kind risk-rated-autonomy-01PMRA01
+// WP05's LLMRater attaches to every layer-3 risk-rating LLM call it
+// issues, mirroring the KindCompaction / KindAutoTitle convention.
+// Dashboards can use this tag to break out risk-rating overhead from
+// regular chat, compaction, and auto-title costs — WP05's "token/cost
+// attribution recorded and separable in the usage readout" requirement.
+const KindRiskRating = "risk_rating"
+
 //go:embed starter_table.yaml
 var starterTable []byte
 
