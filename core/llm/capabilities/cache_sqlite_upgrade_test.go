@@ -193,6 +193,37 @@ func TestDefaultCache_SqliteEnvSelectsRealSQLiteBackend(t *testing.T) {
 	}
 }
 
+// TestDefaultCache_UnsetWithRealDBPrefersSQLite is the WP12/WP14
+// closing-finding proof: HARNESS_LLM_CAPABILITY_CACHE was never SET
+// anywhere in production (no launcher, no default Settings value, no
+// packaging script — verified by repo-wide search), so even after R-4's
+// fix made "sqlite" a real case, the unset DEFAULT still unconditionally
+// chose MemoryCache and provider_capabilities stayed permanently empty
+// on every shipped binary. Deliberately does NOT call t.Setenv — this
+// is the exact "nothing sets the env var" production shape. A regression
+// back to "unset -> always MemoryCache" fails this test the same way
+// TestDefaultCache_SqliteEnvSelectsRealSQLiteBackend catches the
+// explicit-env regression above.
+func TestDefaultCache_UnsetWithRealDBPrefersSQLite(t *testing.T) {
+	db := wp14OpenUpgradedDB(t)
+	cache := capabilities.DefaultCache(db)
+
+	if err := cache.Put(context.Background(), "wp12-unset-default", "m", llm.ProviderCapabilities{Provider: "custom-openai", ToolCalling: true}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	row := db.Reader().QueryRow(context.Background(),
+		`SELECT flags_json FROM provider_capabilities WHERE profile_id = ? AND model_id = ?`,
+		"wp12-unset-default", "m",
+	)
+	var flagsJSON string
+	if err := row.Scan(&flagsJSON); err != nil {
+		t.Fatalf("DefaultCache(db) with HARNESS_LLM_CAPABILITY_CACHE UNSET did not write to real "+
+			"sqlite — it is returning a MemoryCache, reproducing the finding this test exists to "+
+			"close (nothing in production ever sets the env var, so the default itself must prefer "+
+			"the persistent backend when a real db is available): %v", err)
+	}
+}
+
 // TestDefaultCache_SqliteEnvWithNilDBDegradesToMemory covers the
 // documented degrade path: "sqlite" with no DB handle available (e.g.
 // the nil-core test chassis) must not panic — it falls back to
